@@ -516,6 +516,13 @@ describe("block extraction and parsing (in-process tables)", () => {
     docs.forEach(([name, , want], i) => expect([name, got[i]]).toEqual([name, want]));
   });
 
+  test("a closer carrying an info string does not close: it and the lines after it stay in the body", () => {
+    const body: string[][] = harness("out = fc.extract_blocks(chr(10).join(data))", [AC, "```yaml", ...FC, "``` yaml", "  more: x", "```"]);
+    expect(body.length).toBe(1);
+    expect(body[0]).toContain("``` yaml");
+    expect(body[0]).toContain("  more: x");
+  });
+
   test("a tilde closer does not end a backtick fence: its line stays in the block body", () => {
     const body: string[][] = harness("out = fc.extract_blocks(chr(10).join(data))", [AC, "```yaml", ...FC, "~~~", "```"].join("\n").split("\n") as unknown as string[]);
     expect(body[0]).toContain("~~~");
@@ -1900,6 +1907,18 @@ describe("log: the only writer of outcomes", () => {
     expect(r.classify(args).status).toBe(0); // the approved command is accepted (no stdout, so FAILED, not refused)
   });
 
+  test("classify refuses a verify record that carries no command, even with an empty ran-command file (defence in depth)", () => {
+    const { r, file } = FROZEN_V();
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    doc.block.command = "";
+    const f = join(r.scratch, "empty-cmd.json");
+    writeFileSync(f, JSON.stringify(doc));
+    const empty = join(r.scratch, "empty.txt");
+    writeFileSync(empty, "");
+    const c = r.classify(["--verify-json", f, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--command-file", empty]);
+    expect([c.status, c.stderr]).toEqual([2, expect.stringContaining("carries no command")]);
+  });
+
   test("classify embeds the verify record's hash, head sha and own digest", () => {
     const { r, file } = FROZEN_V();
     const c = r.classify(["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]);
@@ -2152,6 +2171,8 @@ describe("wording constants", () => {
     const r = new Repo();
     r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "rm -rf x" }) }));
     expect(r.verify(["--candidate"]).json?.environmental).toBe(false);
+    const base = r.py(["verify", "--base", "origin/nope", "--no-pr"]);
+    expect([base.json?.reason, base.json?.environmental]).toEqual(["base-not-default-branch", true]);
     const crash = runPy(["verify", "--repo", join(TMP, "fc-does-not-exist-" + process.pid)], { cwd: TMP, env: gitFixtureEnv(TMP) });
     expect(crash.json?.environmental).toBe(true);
   });

@@ -35,8 +35,8 @@ The founder never states or approves what proves the work is done. Acceptance cr
 - FR3: A check that already passes before work starts is rejected as vacuous (must-fail baseline). A check too vague to observe is rewritten with the founder or marked "needs your eyes".
 - FR4: Judgement checks are routed to the founder as a yes/no with evidence; an agent never decides them.
 - FR5: A separate step runs the approved check from the committed text, never from agent memory and never in `work`. A failure stops and asks the founder with retry, change the check, or accept anyway; "accept anyway" is recorded as a founder override, never as passed.
-- FR6: The result shows the exact command, the time and the output, shows passes and fails equally, and uses the wording: "Your check passed. This shows only that the check you wrote ran and returned success. It does not confirm the work is correct, complete or safe. Review the result before relying on it." It never says "verified", "proven" or "safe".
-- FR7: A first-use notice tells the founder that a vague, wrong or unsafe check can pass broken work or run actions they did not intend, and to read what will run before it runs.
+- FR6: The result shows the exact command, the time and the output, shows passes and fails equally, and uses the pinned `pass` wording ("Your check passed. This shows only that the check you wrote ran against <sha>, finished without an error and, if you set an expected result, printed it. It does not show that the work is correct or complete, or free of problems this check does not look for. Review the result before relying on it."). It never says "verified", "proven" or "safe".
+- FR7: A first-use notice tells the founder that a vague, wrong or risky check can pass broken work or run actions they did not intend, and to read what will run before it runs.
 
 ## Technical Requirements
 
@@ -59,12 +59,12 @@ Recorded by `knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-che
 - FR1: the prompt is asked in the plan skill only in v1; the brainstorm half is deferred (#9658, brainstorm body ceiling).
 - TR2: a new preflight Check 13 reusing Step 10.5, not a generalised Check 10.
 - TR3: a new suite `preflight-founder-check.test.ts` with fixtures under `fixtures/founder-check/`, registered in the suite-integrity gate; `plan-skeleton-checkpoint.test.ts` gets a compatibility case; `preflight-discoverability-test.test.ts` is not edited.
-- FR2: the block also carries `kind`, `creates` and `pins`; `hash` is an identity and the freeze copy in git history is the control.
+- FR2: the block also carries `kind`, `pins` and `approved_at`; `hash` is an identity and the freeze copy in git history is the control. (A `creates` field was added at plan time and cut in the review round.)
 - FR5: retries are uncapped and logged; accept-anyway is the only override and is interactive only. Multiple checks, headless capture and PR-body surfacing are deferred (#9657).
 
 ## Addendum — 2026-10-06 (#9578, CLO wording review of the built text)
 
-> **Supersedes the wording quoted above where it differs.** The CLO ruled the pass sentence's "complete or safe" negation out (no founder-facing string may contain "verified", "proven" or "safe", with no exemption), and edited the first-use notice (network access, public repository, no secrets), the no-sandbox sentences ("did not run on this computer, so nothing was checked"), the prompts for INVALID, UNTRUSTED, OVERRIDDEN and headless stops, and the roll-up lines. The authority is the `WORDING` constants in `plugins/soleur/skills/preflight/scripts/founder-check.py` (`pass`, `first-use`, `no-sandbox`, `no-sandbox-ask`, `invalid-ask`, `aggregate-judgement`, `overridden-line`, `nosandbox-continued`, `headless-stop`, `untrusted-ask`), pinned by `plugins/soleur/test/preflight-founder-check.test.ts`. Decision-challenge item 7 is resolved by rewrite, not by exemption.
+> **Supersedes the wording quoted above where it differs.** The CLO ruled the pass sentence's "complete or safe" negation out (no founder-facing string may contain "verified", "proven" or "safe", with no exemption), and edited the first-use notice (network access, public repository, no secrets), the no-sandbox sentences ("did not run on this computer, so nothing was checked"), the prompts for INVALID, UNTRUSTED, OVERRIDDEN and headless stops, and the roll-up lines. The authority is the `WORDING` constants in `plugins/soleur/skills/preflight/scripts/founder-check.py` (`text --list` names every key), pinned by `plugins/soleur/test/preflight-founder-check.test.ts`. Decision-challenge item 7 is resolved by rewrite, not by exemption.
 
 ## Addendum — 2026-10-06 (review round; append-only)
 
@@ -77,3 +77,14 @@ Recorded by `knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-che
 - Archival (`plans/archive/<ts>-name.md`) and renames keep the freeze; a re-freeze is an operator commit whose subject starts
   `plan: re-freeze founder-stated check`.
 - Pins fix the named script only, not what it loads.
+
+## Addendum — 2026-10-07 (second review round; append-only)
+
+- `log` records a measurement, not a choice: `classify` binds the verify record (hash, head sha, digest) and the command that ran;
+  an outcome the records do not support is refused.
+- A re-freeze is loud and interactive-only: it needs an earlier freeze and a changed block, headless stops on it, and its baseline
+  reports PASSED or FAILED, never VACUOUS.
+- A plan main already archived is compared with main's freeze, not self-frozen by an unrelated edit.
+- Wording changed after the second CLO review (untrusted-fail, untrusted-unmeasured, changed-ask, headless-stop, rejected-ask,
+  approval-ask, eyes-ask, reason-prompt, first-use, baseline-ok, no-block, and the `opt-*` answer descriptions). The pinned text is
+  `founder-check.py text <key>`; this spec quotes none of it.

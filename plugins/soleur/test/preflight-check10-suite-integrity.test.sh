@@ -601,8 +601,26 @@ else
   shopt -u nocasematch
   pass "Check 13 declares no sandbox-argument array"
 fi
+# Up to four words may sit between the shell and its -c (`bash -e -c`, `bash -O x -c`), the verb may
+# be quoted or carry a /bin/ prefix, and a name that merely ENDS in sh (`ok.sh`, `mybash`) is not one.
+SHELL_INVOKE='(^|[^[:alnum:]_.-])["'"'"']?(ba|z|da)?sh["'"'"']?[[:space:]]+([^[:space:]]+[[:space:]]+){0,4}(-[a-zA-Z]*c([[:space:]]|$)|--command)'
+# The scan's own instrument: it must match every spelling it exists for and none of the near misses,
+# or a green result below says nothing (a regex that matches nothing passes every document).
 cases=$((cases + 1))
-if [[ "$SCAN13" =~ (^|[^[:alnum:]_/.-])(ba|z|da)?sh[[:space:]]+(-[a-zA-Z]*c([[:space:]]|$)|--command) ]]; then
+rx_bad=""
+for t in 'bash -c x' '/bin/bash -c x' 'bash -e -c x' 'bash -O x -c y' '"bash" -c x' "'sh' -c x" 'sh -lc x' 'env bash --command x' 'bash --norc -o pipefail -c x'; do
+  [[ "$t" =~ $SHELL_INVOKE ]] || rx_bad+=" [missed: $t]"
+done
+for t in 'bash scripts/ok.sh' 'scripts/ok.sh -c' 'run mybash -c' 'use python3 or bash' 'bash scripts/ok.sh --flag'; do
+  [[ "$t" =~ $SHELL_INVOKE ]] && rx_bad+=" [false match: $t]"
+done
+if [[ -z "$rx_bad" ]]; then
+  pass "the shell-invocation scan matches every spelling it exists for and none of the near misses"
+else
+  fail "the shell-invocation scan is wrong:$rx_bad"
+fi
+cases=$((cases + 1))
+if [[ "$SCAN13" =~ $SHELL_INVOKE ]]; then
   fail "Check 13 runs a command with a direct shell invocation — it must go through the Step 10.5 fence"
 else
   pass "Check 13 has no direct shell invocation of the command"
@@ -852,8 +870,8 @@ done
 # reads $FAIL, which is the same counter a stubbed fail() stops moving. A floor enforced through
 # the suspect cannot witness the suspect — measured on the previous shape: fail() neutered, the
 # gate printed a clean total and exited 0.
-# 35 = the previous 29, plus 2 per-suite source checks and 4 Check 13 section checks (#9578).
-MIN_CHECKS=37
+# 38 = the previous 29, plus 2 per-suite source checks and 7 Check 13 section checks (#9578).
+MIN_CHECKS=38
 if [[ "$cases" -lt "$MIN_CHECKS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d check(s) dispatched, floor is %d — the gate itself went silent.\n' \
     "$cases" "$MIN_CHECKS" >&2

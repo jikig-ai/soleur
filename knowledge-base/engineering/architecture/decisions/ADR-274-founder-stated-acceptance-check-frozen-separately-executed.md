@@ -38,30 +38,27 @@ the existing Step 10.5 sandbox.** Everything else follows from not adding a mech
    `command` and one literal `expected` substring; the founder approves that exact text. Headless runs ask nothing and write no block.
 2. **Must fail first.** `soleur:preflight --founder-check-baseline` runs the check against the pre-work tree. A check that already
    passes is `VACUOUS` and refused; a tooling failure (timeout, command not found, an unhealthy sandbox) is `INVALID`, never a
-   baseline fail. `creates:` lists data paths the work will produce, so "the new file exists" can be baselined for the right reason.
+   baseline fail.
 3. **Freeze = the earliest reviewed copy.** The freeze is the plan's copy at the merge base when it was already reviewed on main,
    else the earliest branch commit carrying the block. The freeze commit precedes the first commit outside `knowledge-base/`; an
    ordering violation is a stop-and-ask, not a hard FAIL. Check 13 compares the canonical fields (`kind`, `text`, `command`,
-   `expected`, `creates`, `pins`) of HEAD to the freeze, so a reformat passes and any edit stops. `hash:` is an identity shown in the
+   `expected`, `pins`, `approved_by`, `approved_at`) of HEAD to the freeze, so a reformat passes and any edit stops. `hash:` is an identity shown in the
    log, **not** the integrity control: a hash is self-consistent by construction, and editing the block and recomputing the hash in one
    commit passes a hash check while the freeze comparison still reds it.
 4. **A script the work writes is the agent certifying itself.** An interpreter verb (`bash python3 node bun`) is accepted only when
-   every repo-relative script it names already exists at the freeze and is recorded in `pins:` by git blob sha; `creates:` is
-   accepted only with non-interpreter verbs. A pinned script edited after the freeze is a change like any other.
+   every repo-relative script it names already exists at the freeze and is recorded in `pins:` by git blob sha. A pinned script edited after the freeze is a change like any other.
 5. **Run it only through Step 10.5.** Check 13 sets `CMD` and runs the Step 10.5 fence inside a command substitution; it carries no
    sandbox of its own and `founder-check.py` executes nothing. The Step 10.5 sandbox is **unchanged**; ADR-175's Layers 1 and 2
    apply as written and `credentials_required` gets no waiver (a check needing credentials is a `needs-your-eyes` check).
 6. **Authorship anchor.** A block executes without a prompt only when the freeze commit's author email equals the local operator's
-   and, when a PR exists, the PR author's login equals the authenticated login. Otherwise it is `UNTRUSTED`: interactively the exact
-   command is shown and nothing runs before the answer; headless it FAILs and never executes. Check 13 is not path-gated like Check
+   and, when a PR exists, the PR author's login equals the authenticated login. Otherwise it is `UNTRUSTED`: a FAIL in every mode; the exact command and the name on the freeze commit are shown and it never executes. Check 13 is not path-gated like Check
    10, so without this a contributor's PR head carrying a self-consistent plan would run on the operator's machine with no prompt.
 7. **Outcome vocabulary.** `PASSED` (ran, returned success), `FAILED`, `FAILED-AS-EXPECTED` and `VACUOUS` (baseline), `INVALID`,
    `SKIP-NOSANDBOX`, `NEEDS-YOUR-EYES` / `FOUNDER-CONFIRMED` (a judgement check: the founder, not a command, decided), `OVERRIDDEN`,
    `UNTRUSTED`, `CHANGED-SINCE-APPROVAL` and `STOPPED-AWAITING-FOUNDER`. A pass is labelled "ran, returned success against
    `<sha>`", never a bare PASS, and the wording constants are pinned by tests and reviewed by the CLO. Headless mode refuses
    `OVERRIDDEN` and `FOUNDER-CONFIRMED`; a failing check there is `STOPPED-AWAITING-FOUNDER`. An agent never decides for the founder.
-8. **No output text is ever committed.** `founder-check-log.md` records kind, command, rc, outcome, `attempt_n`, `tested_sha`, the
-   block hash, time, `output_sha256` and `expected_matched`. Output is shown in the terminal only: a regex scrubber for secret
+8. **No output text is ever committed.** `founder-check-log.md` records kind, command, rc, outcome, `attempt_n`, `tested_sha`, the block hash, time, `expected_matched` and, for an override, the reason. Output is shown in the terminal only: a regex scrubber for secret
    shapes has false negatives and a false negative is the single-user leak. The founder is told at every capture that `text` and
    `command` are committed to the repository and that one check does not cover everything.
 
@@ -129,7 +126,7 @@ preflight executes; they now say plan-declared probes and checks, with no count.
    same way. The freeze is keyed on the plan's identity with the archive prefix stripped, renames are tracked through history, and the
    log path follows an archived spec directory, so archiving a plan no longer reads as "freeze without block".
 5. **Re-freeze is a real act.** A deliberate change is a commit whose subject starts `plan: re-freeze founder-stated check`, authored
-   by the operator, on a plan that was not already reviewed on main; `verify --candidate --refreeze` baselines it. Candidate mode is
+   by the operator, on a plan that was not already reviewed on main; `verify --candidate --refreeze` baselines it. (Tightened in the second addendum: it must follow an earlier freeze, change the block, and is interactive-only.) Candidate mode is
    refused when a freeze exists without `--refreeze`, and an unresolvable base is `FAIL` when any plan holds a block and `NO-BLOCK`
    when none does.
 6. **Headless is declared by the caller, defaulting to headless.** The script cannot see whether a founder is present; the
@@ -141,5 +138,34 @@ preflight executes; they now say plan-declared probes and checks, with no count.
 8. **What a pin does not cover.** A pin fixes one repository script by blob. What that script imports, reads or calls is not pinned,
    so an interpreter check is only as stable as everything its script loads. Stated in the references so it is not mistaken for a
    guarantee.
-9. **Wording.** Every founder-facing sentence now lives in `founder-check.py` (`text <key>`); the references only name the key. The
-   changed constants are routed for a second CLO review before ship.
+9. **Wording.** Every founder-facing sentence now lives in `founder-check.py` (`text <key>`); the references only name the key. The constants went to a second CLO review (see the second addendum); the final wording check is the plan's acceptance item 16.
+
+## Second addendum — 2026-10-07 (#9578, the second review round)
+
+> Append-only. Source: the verification seats (test design, security, CLO second review) run on #9637 after the first fix round.
+
+1. **`log` records a measurement, it does not choose one.** `classify` embeds the verify record's `hash`, `head_sha` and the sha256 of
+   the record itself, and refuses a ran-command file (`--command-file`, written by the wrapper) that is not byte-for-byte the
+   approved command, so a run of anything else cannot be classified. `log` refuses a classify record that belongs to another verify
+   record or polarity, and any outcome the two records do not support (a PASSED over a FAILED classification, a FOUNDER-CONFIRMED
+   of a command check, an override naming a cause the records do not show, any override of UNTRUSTED). `verify` and `classify`
+   delete the files named by `--out` and `--command-out` before parsing arguments, and an internal error writes a `FAIL` record
+   there, so a stale record can never be read as this run's. The wrapper writes the ran-command and stdout files itself and the
+   sandbox-health control is `CMD=true` in the wrapper text, never a separate call.
+2. **Re-freeze is loud, interactive-only and cannot launder authorship.** It counts only when the plan was frozen earlier on the
+   branch and the block changed (a commit that restates the same block changes nothing, so a stranger's freeze stays `UNTRUSTED`).
+   The record carries `refreeze: true` and `refrozen_from`. `verify --mode` defaults to headless, which stops on a re-freeze
+   (`CHANGED-SINCE-APPROVAL`, reason `refreeze-needs-founder`); an interactive run shows both texts and asks for the approval
+   sentence. The baseline of a re-freeze reports `PASSED` or `FAILED`, never `VACUOUS`: the work usually exists by then, so a pass is
+   the normal case, not a vacuous check.
+3. **Archived plans compare against main's freeze.** The merge-base lookup finds a plan under every name main knew it by, so a
+   docs sweep that edits a plan main already archived is checked against main's block instead of becoming its own freeze.
+4. **Wording after the second CLO review** (PASS-WITH-EDITS). Authorship is no longer asserted: UNTRUSTED says the check "could not
+   be matched to you as its author" and a separate sentence covers the unreadable-GitHub case; `changed-ask` no longer says the
+   text changed (the ordering and a pinned script are also causes, and the row records which); `headless-stop` names only the
+   answers the interactive path offers for that cause; `rejected-ask` prints a plain-language reason; `approval-ask`, `eyes-ask`,
+   `reason-prompt` and `first-use` state their consequences (a yes runs the check once now, the log is public, a check can send
+   what it reads to any address); the answer labels are pinned as `opt-*` constants. `approved_by` is required and secret-scanned.
+   A third check of the changed constants precedes ship.
+5. **Known limit, unchanged.** Headless and interactive are still declared by the caller, and `--mode interactive` on `verify`
+   is as unauthenticated as on `log`. The controls above make a mismatch loud and recorded; they do not prove who is present.

@@ -10,7 +10,7 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
   - grep on a page source (`grep -c Soleur plugins/soleur/docs/index.njk`): rc 0, stdout `34`. A *rendered* `_site` page is not in the repo, so a founder check on rendered output needs a built tree and is a judgement check.
   - `curl -s -o /dev/null -w %{http_code} --max-time 10 https://soleur.ai/`: rc 0, stdout `200`; the `%{…}` does not trip the shell-active reject. Bad host gives rc 6 (INVALID path, curl-only).
   - `jq -r .name plugins/soleur/.claude-plugin/plugin.json`: rc 0, `soleur`.
-  - new-file existence: `ls` and `test` are NOT on the verb list (`ls` is rejected). Working forms: `grep -c . <path>` (rc 2 while absent, with `creates:`) or `git ls-files <path>` (rc 0 and EMPTY stdout while absent, so it needs `expected: <path>` to baseline as a fail).
+  - new-file existence: `ls` and `test` are NOT on the verb list (`ls` is rejected). Working forms: `grep -c . <path>` (rc 2 while absent; the `creates:` field this note once relied on was cut in the review round) or `git ls-files <path>` (rc 0 and EMPTY stdout while absent, so it needs `expected: <path>` to baseline as a fail).
   - "looks right": no command; `kind: judgement`.
   - Findings that shape capture wording: `node` and `bun` return **rc 127 inside the sandbox** (PATH is `/usr/local/bin:/usr/bin:/bin`; both live under `~/.local/share/mise`, and `/home` is a tmpfs), so interpreter verbs `node`/`bun` classify INVALID on mise-installed hosts; `python3`/`bash` work. Test-runner commands (`bun test …`) are therefore a judgement check, as the plan predicted.
   - 15 s cap and read-only repo were not hit by any of the five.
@@ -25,7 +25,7 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 ## Phase 2 — `founder-check.py` (GREEN)
 
 - [x] 2.1 `verify` (resolve, parse, canonical hash, freeze comparison, authorship anchor, `pins`)
-- [x] 2.2 `classify` (pure; INVALID set; `creates` rule; sandbox-health input)
+- [x] 2.2 `classify` (pure; INVALID set; sandbox-health input; the `creates` rule was cut in the review round)
 - [x] 2.3 `log` (`--mode interactive|headless`, append-only, refusals) and `summary`
 - [x] 2.4 Wording constants (pass, judgement, first-use notice, banner, no-sandbox line)
 
@@ -59,3 +59,13 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 - [x] 7.3 Ratchet the integrity suite (section 1c, manifest, floors)
 - [x] 7.4 Append the ADR, plan, spec and decision-challenges addenda; soften the `contributor` wording and regenerate the C4 json
 - [ ] 7.5 Second CLO review of every changed `WORDING` constant (parent)
+
+## Phase 8 — Second review round (2026-10-07)
+
+- [x] 8.1 Bind the records: `classify` embeds hash, head sha and digest and refuses a ran-command file that differs; `log` derives what the records support; `verify`/`classify` clear their outputs first; an internal error writes a FAIL record; the wrapper writes the ran and stdout files
+- [x] 8.2 Re-freeze: needs an earlier freeze and a changed block; headless stops; the baseline never reads VACUOUS
+- [x] 8.3 Archived plans compare against main's freeze
+- [x] 8.4 Apply the second CLO review's wording (untrusted-fail, untrusted-unmeasured, changed-ask, headless-stop, rejected-ask, approval-ask, eyes-ask, reason-prompt, first-use, baseline-ok, no-block, no-sandbox-stop, `opt-*`)
+- [x] 8.5 Tests: behavioural Guard 4 canary, wider AST walk, per-alternative static rows, pin mode and link rows, ordering and refreeze rows, log fidelity, extractor and parser tables, docs calls parsed against the real parser; mutation battery
+- [x] 8.6 Fix ADR-274, plan, spec, tasks and decision-challenges text that the earlier rounds left stale
+- [ ] 8.7 Third CLO check of the changed `WORDING` constants (parent), then tick plan AC 16 and item 7.5

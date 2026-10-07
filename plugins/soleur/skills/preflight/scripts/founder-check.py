@@ -821,8 +821,8 @@ def cmd_verify(a):
                 # A re-freeze is a deliberate CHANGE of a check that was already frozen earlier on
                 # this branch. A commit that restates the same block changes nothing and must not
                 # launder the earlier freeze's authorship; a first freeze is just a freeze.
-                elif (c["subject"].startswith(REFREEZE_PREFIX) and c["email"] == operator and ident in evidence
-                        and evidence[ident]["sha"] != c["sha"]):
+                elif c["subject"].startswith(REFREEZE_PREFIX) and c["email"] == operator:
+                    # (reached only after the plan's first block commit: that commit takes the branch above)
                     cur = _canon_at(repo, c["sha"], p)
                     if cur is not None and cur != prior.get(ident):
                         refrozen_from[ident] = prior.get(ident)
