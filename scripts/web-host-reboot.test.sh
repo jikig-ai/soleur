@@ -3,7 +3,7 @@
 # evidence reader), #9372. Both scripts run for real under the production shell against a fake world (a directory of small
 # files that curl, terraform, gh, date and sleep shims read and write). A mutation battery then breaks each load-bearing
 # check on a COPY of the subject and requires the battery to go red.
-# shellcheck disable=SC2319,SC2034
+# shellcheck disable=SC2319,SC2034,SC2046,SC2086,SC2329
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/.." && pwd)"
@@ -199,6 +199,7 @@ RBASH=(bash); EBASH=(bash); RENV=(); ENVE=()
 # universal checks over one finished run: footer on every path, no claim word, no secret, no unexpected call
 common_checks() { # <name> <stdout> <script-kind: r|e>
   local name="$1" o="$2" kind="$3" err hits
+  echo x >> "$BATTERY_DIR/scanned"
   err="$(grep -v -e '^::add-mask::' -e '^+' "$W/stderr" 2>/dev/null || true)"
   [[ "$o" == *"$FOOTER"* ]] || printf 'FAILED %s (the fixed footer is missing from stdout)\n' "$name"
   hits="$(printf '%s\n%s\n' "$o" "$err" | deny_hits | head -3 | tr '\n' ' ')"
@@ -236,7 +237,7 @@ want_nothing_written() { # <name>
 want_no_api_call() { check "$1: no Hetzner call was made" "$([[ ! -s "$W/calls.log" ]]; echo $?)"; }
 
 battery_reboot() {
-  R_SCRIPT="$1"; BATTERY_DIR="$(mktemp -d "$TMP/br.XXXXXX")"; : > "$BATTERY_DIR/runs"; : > "$BATTERY_DIR/checks"; : > "$BATTERY_DIR/rruns"
+  R_SCRIPT="$1"; BATTERY_DIR="$(mktemp -d "$TMP/br.XXXXXX")"; : > "$BATTERY_DIR/runs"; : > "$BATTERY_DIR/checks"; : > "$BATTERY_DIR/rruns"; : > "$BATTERY_DIR/scanned"
   local CONF="REBOOT-web-2-${SID}" h c
   # ---- the happy path and its must-pass neighbours
   world; runr "reboot: happy path" 0 "reboot request accepted by Hetzner (action 10 success)" reboot web-2 "$CONF"
@@ -352,7 +353,7 @@ graded() { local name="$1" want="$2" reason="$3"; rune "$name" "$want" "reason=$
 no_verdict_misreads() { check "$1: the verdict line is unique" "$([[ "$(printf '%s\n' "$LASTOUT" | grep -c '^verdict: ')" == 1 ]]; echo $?)"; }
 
 battery_evidence() {
-  E_SCRIPT="$1"; BATTERY_DIR="$(mktemp -d "$TMP/be.XXXXXX")"; : > "$BATTERY_DIR/runs"; : > "$BATTERY_DIR/checks"; : > "$BATTERY_DIR/eruns"
+  E_SCRIPT="$1"; BATTERY_DIR="$(mktemp -d "$TMP/be.XXXXXX")"; : > "$BATTERY_DIR/runs"; : > "$BATTERY_DIR/checks"; : > "$BATTERY_DIR/eruns"; : > "$BATTERY_DIR/scanned"
   local i
   # ---- the verdict table, one fixture each (the old boot is CUR; the request is SINCE seconds old; the new boot is NEW)
   world; set_rows ready "$(fx_ready 100 "$NEWD" formatted)"; set_boots "$CUR 45000 20 3000"
@@ -384,6 +385,8 @@ battery_evidence() {
   check "evidence: the step summary carries the verdict and the footer" "$([[ "$(cat "$W/summary")" == *"verdict: PASS"* && "$(cat "$W/summary")" == *"$FOOTER"* ]]; echo $?)"
   world bare; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "${NEWD^^}")"
   rune "evidence: bare-number ages and an uppercase probe boot id still join (the live shape)" 0 "PASS (row presence only)" $(grade_args)
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 28000 "$NEWD")"
+  graded "evidence: an OK probe row older than the request is not evidence even on a matching boot id" 2 new_boot_seen_probe_pending
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe fail 100)"
   graded "evidence: a FAIL row younger than the new boot's first row is a FAIL" 1 probe_fail_row_after_new_boot; no_verdict_misreads "evidence: FAIL"
   check "evidence: a FAIL row names the soak consequence" "$([[ "$LASTOUT" == *"spoil"* ]]; echo $?)"
@@ -523,7 +526,12 @@ srow "static: (positive control) the verb scan catches a planted write" "$([[ "$
 srow "static: the reader is on the census allow-list (READERS)" "$([[ "$(grep -c '"scripts/web-host-reboot-evidence.sh"' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" -ge 1 ]]; echo $?)"
 srow "static: the writer is NOT on the census allow-list" "$([[ "$(grep -c '"scripts/web-host-reboot.sh"' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" == 0 ]]; echo $?)"
 # the one write site: the census over 'actions/reboot' finds exactly the recorded set (tests excepted)
-reboot_set="$(cd "$ROOT" && git ls-files --cached --others --exclude-standard -- scripts .github apps 2>/dev/null | grep -E '\.(sh|yml|py)$' | grep -v '\.test\.' | xargs -r grep -l 'actions/reboot' 2>/dev/null | sort | tr '\n' ' ')"
+if [[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]]; then
+  census_files() { git ls-files --cached --others --exclude-standard -- scripts .github apps 2>/dev/null; }
+else
+  census_files() { find scripts .github apps/web-platform/infra -type f 2>/dev/null; }   # a sandbox copy of this suite is not a git tree
+fi
+reboot_set="$(cd "$ROOT" && census_files | grep -E '\.(sh|yml|py)$' | grep -v '\.test\.' | xargs -r grep -l 'actions/reboot' 2>/dev/null | sort | tr '\n' ' ')"
 srow "static: the 'actions/reboot' census finds exactly the recorded set (${reboot_set})" "$([[ "$reboot_set" == "scripts/web-host-reboot.sh scripts/web2-rebirth.sh " ]]; echo $?)"
 srow "static: the writer's POST site is unique in the script (one occurrence of the reboot path)" "$([[ -f "$RSCRIPT" && "$(grep -c 'actions/reboot' "$RSCRIPT")" == 1 ]]; echo $?)"
 # the copied helper bodies stay equal to the rebirth script's while both exist
@@ -559,15 +567,188 @@ fi
 srow "static: the never-pooled reader the workflow depends on exists" "$([[ -f "$ROOT/scripts/web2-rebirth-never-pooled.sh" ]]; echo $?)"
 
 # ---- floors: direct printf and exit, so a mutant of the guard itself is buildable ---------------------------------------
-REFUSAL_FLOOR=35
+# the dynamic scan is itself live: a planted claim word in a run's output is reported, and a floor of scanned outputs holds
+BATTERY_DIR="$R_BDIR"; world
+planted="$(common_checks "planted" "the volume is Encrypted ${FOOTER}" r 2>&1)"
+srow "static: (positive control) the dynamic scan reports a planted claim word" "$([[ "$planted" == *"denylisted claim word"* ]]; echo $?)"
+planted_ok="$(common_checks "planted-ok" "PASS (row presence only) ${FOOTER}"$'\n'"${FOOTER}" r 2>&1)"
+srow "static: (must-pass) the dynamic scan accepts the fixed wording" "$([[ -z "$planted_ok" ]]; echo $?)"
+scanned_n="$(( $(grep -c . "$R_BDIR/scanned") + $(grep -c . "$E_BDIR/scanned") ))"
+SCAN_FLOOR=104
+if [[ "$scanned_n" -lt "$SCAN_FLOOR" ]]; then printf 'FAILED floor: only %s outputs were scanned for claim words (floor %s)\n' "$scanned_n" "$SCAN_FLOOR"; fails=$((fails + 1)); fi
+REFUSAL_FLOOR=52
 if [[ "$nrefusal_runs" -lt "$REFUSAL_FLOOR" ]]; then printf 'FAILED floor: only %s reboot runs executed (floor %s)\n' "$nrefusal_runs" "$REFUSAL_FLOOR"; fails=$((fails + 1)); fi
-ROWS_FLOOR=200
+ROWS_FLOOR=290
 total_rows=$(( ran_r + ran_e + STATIC ))
 if [[ "$total_rows" -lt "$ROWS_FLOOR" ]]; then printf 'FAILED floor: only %s rows ran (floor %s)\n' "$total_rows" "$ROWS_FLOOR"; fails=$((fails + 1)); fi
-printf 'rows: reboot %s, evidence %s, static %s, total %s (floor %s)\n' "$ran_r" "$ran_e" "$STATIC" "$total_rows" "$ROWS_FLOOR"
+printf 'rows: reboot %s, evidence %s, static %s, total %s (floor %s); reboot runs %s, outputs scanned %s\n' "$ran_r" "$ran_e" "$STATIC" "$total_rows" "$ROWS_FLOOR" "$nrefusal_runs" "$scanned_n"
 
 [[ "${WHR_NO_MUTATE:-}" == 1 ]] && { [[ "$fails" -eq 0 ]] && exit 0; exit 1; }
 # MUTATION_SECTION_BEGIN
+# ======================================================================================================================
+# Mutation battery. Every mutant is an edit to a COPY (a sandbox tree under $TMP that mirrors the repo layout, so the scripts
+# resolve their own helper through BASH_SOURCE); the real files are never touched and their hashes are re-checked at the end.
+# A mutant is killed when the battery that fits it reports at least one red row. Each battery kind is first run against an
+# unmutated sandbox (the CONTROL), so a sandbox that cannot run the battery can never score as a kill.
+# ======================================================================================================================
+MUT_JOBS="${MUT_JOBS:-6}"; MUT_SEQ=0; MUT_DIR="$TMP/mut"; mkdir -p "$MUT_DIR/defs" "$MUT_DIR/res" "$MUT_DIR/sb"
+python3 - "$MUT_DIR/defs" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+R, E, SUITE, CENSUS = "scripts/web-host-reboot.sh", "scripts/web-host-reboot-evidence.sh", "scripts/web-host-reboot.test.sh", "apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh"
+M = []
+def m(name, kind, target, *edits):
+    M.append({"name": name, "kind": kind, "target": target, "edits": [list(e) for e in edits]})
+POST_BLOCK = r"""  anchor="$(date -u +%s)"
+  out anchor_epoch "$anchor"; out server_id "$sid"
+  echo "target: server_id=${sid} name=${name} created=$(clean "$(jq -r '.servers[0].created // "unknown"' "$HBODY")")"
+  echo "anchor_epoch=${anchor}"
+  code="$(hapi POST "/servers/${sid}/actions/reboot" '{}')"
+"""
+STATE_CMP = r"""  [[ "$state_sid" =~ ^[0-9]+$ && "$state_sid" == "$sid" ]] || fail "reboot: the resolved id ${sid} differs from the id in the Terraform state (${state_shown}); nothing is rebooted"
+"""
+CHECK_201 = r"""  [[ "$code" == 201 ]] || fail "reboot -> ${code} (error.code=$(errcode))$(write_hint "$code"); the anchor is ${anchor}; grade with: ${GRADE_CMD} ${anchor} --window-min 0"
+"""
+OUT_LINE = r"""  out anchor_epoch "$anchor"; out server_id "$sid"
+"""
+NO_OUT_BLOCK = r"""  echo "target: server_id=${sid} name=${name} created=$(clean "$(jq -r '.servers[0].created // "unknown"' "$HBODY")")"
+  echo "anchor_epoch=${anchor}"
+  code="$(hapi POST "/servers/${sid}/actions/reboot" '{}')"
+"""
+SECOND_POST = """  hapi POST "/servers/${sid}/actions/reboot" '{}' >/dev/null
+"""
+PASS_OLD = r"""[[ "$v" != PASS ]] || block+="a probe row of the OK class was seen on a boot that began after the request (row presence only)."$'\n'"""
+PASS_NEW = r"""[[ "$v" != PASS ]] || block+="the volume is encrypted"$'\n'"""
+# ---- Guard 1: the reboot target gate
+m("G1.1 the web-1 id refusal is dropped", "r", R, ('[[ "$sid" != "$WEB1_SERVER_ID" ]] || fail', 'true || fail'))
+m("G1.2 the typed-id comparison is dropped", "r", R, ('[[ "$sid" == "${confirm##*-}" ]] || fail', 'true || fail'))
+m("G1.3 the Terraform-state id comparison is dropped", "r", R, ('[[ "$state_sid" =~ ^[0-9]+$ && "$state_sid" == "$sid" ]] || fail', 'true || fail'))
+m("G1.4 the never-pooled requirement is dropped", "r", R, ('[[ "${NEVER_POOLED:-}" == absent ]] || fail', 'true || fail'))
+m("G1.5 REORDER: the POST moves above the state-id comparison", "r", R, (STATE_CMP + POST_BLOCK, POST_BLOCK + STATE_CMP))
+m("G1.6 a SECOND POST site after the compliant first", "r", R, (CHECK_201, CHECK_201 + SECOND_POST))
+m("G1.7 the guard's own dispatch: half the refusal scenarios are skipped (floor on refusal runs)", "suite", SUITE,
+  ("""for h in web-1 web-3 "" "web-2 " WEB-2 "web-2;x" $'web-2\\nweb-1'; do\n    world; runr "reboot: host""", """for h in web-1; do\n    world; runr "reboot: host"""),
+  ("""for c in "REBOOT-web-2-" "REBOOT-web-2-12x" "reboot-web-2-1" "REBOOT-web-1-123931471" "REBOOT-web-2-0123" "REBOOT-web-2-1234567890123" "REBOOT-web-2-1 " "" "REBOOT-web-2-$SID;id"; do\n    world; runr "reboot: confirm""", """for c in "REBOOT-web-2-"; do\n    world; runr "reboot: confirm"""),
+  ("""for c in "" present unreadable "absent " ABSENT; do\n    world "never=$c"; runr""", """for c in ""; do\n    world "never=$c"; runr"""))
+m("G1.8 the allow-list is widened in the script only", "r", R, ('    web-2) name="soleur-web-2" ;;', '    web-2|web-1) name="soleur-web-2" ;;'))
+m("G1.9 the anchor is written after the POST instead of before", "r", R, (OUT_LINE + NO_OUT_BLOCK + CHECK_201, NO_OUT_BLOCK + CHECK_201 + OUT_LINE))
+m("G1.h(a) harness: the curl shim records no write, so the one-write row must go red", "suite", SUITE, ('    echo "REBOOT ${path}" >> "$W/writes.log"\n', ''))
+m("G1.10 a hostile state id is printed before its shape is checked", "r", R, ('  state_shown="absent or not numeric"; [[ "$state_sid" =~ ^[0-9]+$ ]] && state_shown="$state_sid"', '  state_shown="$state_sid"'))
+m("G1.11 the wrong-state-object (web-1 in state) check is dropped", "r", R, ("""[[ "$(jq -r '.web1' <<<"$ident")" == 1 ]] || fail""", 'true || fail'))
+m("G1.12 the server name equality in the lookup is dropped", "r", R, (""" && "$(jq -r '.servers[0].name' "$HBODY")" == "$name" ]]""", ' ]]'))
+m("G1.13 the summary of a failed job reaches the accepted sentence", "r", R, ('    if [[ "$status" == success ]]; then\n      echo "The reboot request was accepted', '    if true; then\n      echo "The reboot request was accepted'))
+m("G1.14 the footer is dropped from the reboot script's exit paths", "r", R, ("""[[ -n "$FOOTER_DONE" ]] || printf '%s\\n' "$FOOTER"; }""", ':; }'))
+m("G1.15 the xtrace refusal is dropped", "r", R, ("""printf '[FATAL] refusing to trace: a Hetzner token and Terraform state are in scope\\n' >&2; exit 78 ;;""", ': ;;'))
+m("G1.16 the token requirement is dropped", "r", R, ('  need_token\n  # 2: the explicit', '  # 2: the explicit'))
+m("G1.17 the action poll is cut to 2 attempts", "r", R, ('for _ in $(seq 1 24); do', 'for _ in $(seq 1 2); do'))
+# ---- Guard 2: claim-free output
+m("G2.1 a claim about the volume is added to the PASS path", "e", E, (PASS_OLD, PASS_NEW))
+m("G2.2 PASS is reworded with a claim word", "e", E, ("""PASS) printf 'PASS (row presence only)' ;;""", """PASS) printf 'PASS (verified)' ;;"""))
+m("G2.3 a claim word is added to the script (static scan)", "static", R, ('FOOTER_DONE=""\n', 'FOOTER_DONE=""\necho "the volume was verified"\n'))
+m("G2.4 the footer is dropped from the NOT YET exit path only", "e", E, ('trap finish EXIT', """trap 'rc=$?; if [[ $rc == 2 ]]; then rm -rf "$tmp"; exit 2; fi; finish' EXIT"""))
+m("G2.5 the raw probe row text is echoed", "e", E, ("""  jq -r 'if . == null then "baseline: readiness row none\"""", """  head -c 200 "$tmp/probe.jsonl"; jq -r 'if . == null then "baseline: readiness row none\""""))
+m("G2.6 the guard's own dispatch: the dynamic scan runs over zero outputs", "suite", SUITE, ('  local name="$1" o="$2" kind="$3" err hits\n', '  return 0\n  local name="$1" o="$2" kind="$3" err hits\n'))
+# ---- Guard 3: reader and writer stay separate
+m("G3.1 the writer sources the rows helper", "static", R, ('FOOTER_DONE=""\n', 'FOOTER_DONE=""\nsource "$(dirname "$0")/lib/web2-luks-rows.sh"\n'))
+m("G3.2 the reader carries a write verb", "static", E, ('now_epoch() { date -u +%s; }', 'now_epoch() { date -u +%s; }\nprobe_ping() { curl -X POST https://example.invalid; }'))
+m("G3.3 the reader is removed from READERS (the new reader becomes unlisted)", "static", CENSUS, ('"scripts/web2-rebirth-ready-poll.sh",\n           "scripts/web-host-reboot-evidence.sh"}', '"scripts/web2-rebirth-ready-poll.sh"}'))
+# ---- the verdict, the deadline and the wire
+m("E.1 PASS no longer needs the boot to have begun after the request", "e", E, (' and any($after[]; .id == $probe.boot)) then', ') then'))
+m("E.2 a FAIL row is no longer compared with the new boot's first row", "e", E, (' and ($probe.age + $margin) < $earliest_after.first) then', ') then'))
+m("E.3 the deadline is an iteration count", "e", E, ('if (( t >= deadline )); then', 'if (( iter >= 3 )); then'))
+m("E.4 the format gate on journald boot ids is dropped", "e", E, (' and (.id | test("^[0-9a-f]{32}$")) and .n != null', ' and .n != null'))
+m("E.5 a junk readiness row counts as evidence", "e", E, ('select(.kind == "row" and (.f.host // "") == $host)', 'select(true)'))
+m("E.6 a read fault no longer stops a verdict", "e", E, ('      elif $fault then res("NOT_YET"; "read_fault"; true; 2)\n', ''))
+m("E.7 the clock is read after the queries", "e", E, ('    t="$(now_epoch)"\n', '    read_all\n    t="$(now_epoch)"\n'))
+m("E.8 PASS no longer needs the probe row to be younger than the request", "e", E, (' and $probe.age < $since and $probe.boot != ""', ' and $probe.boot != ""'))
+m("E.9 a silent new boot is never reported", "e", E, ('elif ($newest_after.newest > $silent) then', 'elif false then'))
+m("E.10 the old boot's liveness test is inverted", "e", E, ('$before.newest < $since', '$before.newest > $since'))
+m("E.11 a re-created instance is never noticed", "e", E, ('if ($ready != null and $ready.age < $since) then', 'if false then'))
+m("E.12 the check that the helper defines every function the reader calls is dropped", "e", E, (' || ! declare -F w2l_fetch_ready >/dev/null', ''))
+m("E.13 the credential check is dropped", "e", E, ('    [[ -n "${!v:-}" ]] || die3 "${v} is not injected. Nothing was read."', '    :'))
+m("E.14 the xtrace refusal is dropped", "e", E, ("""*x*) printf '[FATAL] refusing to trace: Better Stack credentials are in scope\\n' >&2; exit 78 ;;""", '*x*) : ;;'))
+m("E.15 the 120 s margin on a FAIL row is dropped", "e", E, ('($probe.age + $margin) < $earliest_after.first', '$probe.age < $earliest_after.first'))
+m("E.16 an unparseable probe age is ignored instead of a read fault", "e", E, ("""if [[ "$(jq -r '.fault' <<<"$r")" == true ]]; then""", 'if false; then'))
+m("E.17 the dashes are no longer removed from the probe row's boot id", "e", E, (' | gsub("-"; "")', ''))
+m("E.18 a future anchor is accepted", "e", E, ('  (( anchor <= now + 60 )) || die3', '  true || die3'))
+for i, e in enumerate(M, 1):
+    json.dump(e, open(os.path.join(d, "%03d.json" % i), "w"))
+PY
+
+mk_sandbox() { # <dir>
+  local d="$1" f
+  mkdir -p "$d/scripts" "$d/apps/web-platform/infra"
+  cp -r "$ROOT/scripts/lib" "$d/scripts/"
+  cp "$ROOT/scripts/betterstack-query.sh" "$RSCRIPT" "$ESCRIPT" "$DIR/web-host-reboot.test.sh" "$d/scripts/"
+  for f in web2-rebirth.sh web2-rebirth-never-pooled.sh; do [[ -f "$ROOT/scripts/$f" ]] && cp "$ROOT/scripts/$f" "$d/scripts/"; done
+  cp "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh" "$d/apps/web-platform/infra/"
+}
+static_red() { # <sandbox> -> the number of static conditions that are red in it
+  local sb="$1" n=0 f
+  for f in web-host-reboot.sh web-host-reboot-evidence.sh; do [[ -z "$(noncomment "$sb/scripts/$f" | deny_hits)" ]] || n=$((n + 1)); done
+  [[ "$(grep -v '^[[:space:]]*#' "$sb/scripts/web-host-reboot.sh" | grep -ciE -e "$CENSUS_KEY")" == 0 ]] || n=$((n + 1))
+  [[ "$(grep -v '^[[:space:]]*#' "$sb/scripts/web-host-reboot-evidence.sh" | grep -ciE -e "$CENSUS_VERB")" == 0 ]] || n=$((n + 1))
+  [[ "$(grep -v '^[[:space:]]*#' "$sb/scripts/web-host-reboot-evidence.sh" | grep -cE '\bPOST\b')" == 0 ]] || n=$((n + 1))
+  [[ "$(grep -c '"scripts/web-host-reboot-evidence.sh"' "$sb/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" -ge 1 ]] || n=$((n + 1))
+  echo "$n"
+}
+red_count() { # <kind> <sandbox>
+  local kind="$1" sb="$2" o rc=0
+  case "$kind" in
+    r) battery_reboot "$sb/scripts/web-host-reboot.sh" 2>&1 | grep -c '^FAILED' ;;
+    e) battery_evidence "$sb/scripts/web-host-reboot-evidence.sh" 2>&1 | grep -c '^FAILED' ;;
+    static) static_red "$sb" ;;
+    suite) o="$(WHR_NO_MUTATE=1 bash "$sb/scripts/web-host-reboot.test.sh" 2>&1)" || rc=$?; if [[ "$rc" -ne 0 ]]; then grep -c '^FAILED' <<<"$o" || true; else echo 0; fi ;;
+  esac
+}
+# CONTROL FIRST: each battery kind over an unmutated sandbox must be green, or a kill below would mean nothing.
+for kind in r e static suite; do
+  ( mk_sandbox "$MUT_DIR/sb/control.$kind"; n="$(red_count "$kind" "$MUT_DIR/sb/control.$kind")"; printf '%s' "$n" > "$MUT_DIR/res/control.$kind" ) &
+done
+wait
+for kind in r e static suite; do
+  n="$(cat "$MUT_DIR/res/control.$kind" 2>/dev/null || echo missing)"
+  if [[ "$n" == 0 ]]; then echo "  ok   control: the unmutated ${kind} sandbox is green"; else echo "  FAIL control: the unmutated ${kind} sandbox has ${n} red rows (a kill would prove nothing)"; fails=$((fails + 1)); fi
+done
+
+_mutant_run() { # <idx> <def.json>
+  local idx="$1" def="$2" name kind target sb after
+  name="$(jq -r '.name' "$def")"; kind="$(jq -r '.kind' "$def")"; target="$(jq -r '.target' "$def")"
+  sb="$MUT_DIR/sb/m.$idx"; mk_sandbox "$sb"
+  cp -p "$sb/$target" "$sb/$target.pristine"
+  if ! python3 - "$sb/$target" "$def" <<'PY'
+import json, sys
+p, d = sys.argv[1:3]
+s = open(p).read()
+for old, new in json.load(open(d))["edits"]:
+    if s.count(old) != 1:
+        sys.exit(1)
+    s = s.replace(old, new)
+open(p, "w").write(s)
+PY
+  then echo "  FAIL mutation '${name}': the edit did not land exactly once" > "$MUT_DIR/res/$idx"; return; fi
+  if cmp -s "$sb/$target" "$sb/$target.pristine"; then echo "  FAIL mutation '${name}': the edit changed nothing" > "$MUT_DIR/res/$idx"; return; fi
+  case "$target" in *.sh) bash -n "$sb/$target" 2>/dev/null || { echo "  FAIL mutation '${name}': a DEAD mutant (it no longer parses), which would score as a kill" > "$MUT_DIR/res/$idx"; return; } ;; esac
+  after="$(red_count "$kind" "$sb")"
+  if [[ "$after" =~ ^[0-9]+$ && "$after" -gt 0 ]]; then echo "  ok   mutation killed: ${name} (${after} rows red)" > "$MUT_DIR/res/$idx"; else echo "  FAIL mutation SURVIVED: ${name}" > "$MUT_DIR/res/$idx"; fi
+  rm -rf "$sb"
+}
+for def in "$MUT_DIR"/defs/*.json; do
+  MUT_SEQ=$((MUT_SEQ + 1))
+  while [[ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$MUT_JOBS" ]]; do sleep 0.3; done
+  _mutant_run "$(basename "$def" .json)" "$def" &
+done
+wait
+for f in "$MUT_DIR"/res/[0-9]*; do cat "$f"; grep -q '^  FAIL' "$f" && fails=$((fails + 1)); done
+n_res="$(find "$MUT_DIR/res" -type f -name '[0-9]*' | wc -l | tr -d ' ')"
+[[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "  FAIL a mutant did not report ($n_res of ${MUT_SEQ})"; fails=$((fails + 1)); }
+# The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
+MUT_FLOOR=42
+if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then printf '  FAIL mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"; exit 1; fi
+printf 'mutants: %s ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
+# The pristine files are untouched: the real subjects, the helper and the rebirth script hash the same as at the start.
+SUM_AFTER="$(cd "$ROOT" && sha256sum scripts/web-host-reboot.sh scripts/web-host-reboot-evidence.sh scripts/lib/web2-luks-rows.sh scripts/betterstack-query.sh scripts/web2-rebirth.sh 2>/dev/null | sort)"
+if [[ "$SUM_BEFORE" == "$SUM_AFTER" ]]; then echo "  ok   the real files hash the same before and after the battery"; else echo "  FAIL a real file changed during the battery"; fails=$((fails + 1)); fi
 # MUTATION_SECTION_END
 
 # Static rows print their own FAILED lines; recount everything printed by this run.
