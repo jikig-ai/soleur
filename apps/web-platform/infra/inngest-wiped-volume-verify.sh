@@ -249,13 +249,18 @@ execstart="${INNGEST_VERIFY_EXECSTART:-$(systemctl show inngest-server.service -
 # ---- Arm the throwaway marker (unregistered named-check → no comment) --------
 SECRET="$(read_secret)"
 [[ -n "$SECRET" ]] || abort "no_secret" "INNGEST_MANUAL_TRIGGER_SECRET unavailable"
+# Token-shape guard (argv-bearer sweep): the Bearer travels on curl's stdin config channel, so a
+# value that could break out of the config string is refused HERE — at the read, before the arm
+# curl and before any stop/wipe/start — through the abort path with its own reason (secret_shape), so Better Stack can tell it from a missing secret.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_bearer_ok "$SECRET" || abort "secret_shape" "INNGEST_MANUAL_TRIGGER_SECRET has an unusable shape (characters outside the token charset); refusing before arm/stop/wipe"
 MARKER_ID="${INNGEST_VERIFY_MARKER_ID:-${MARKER_PREFIX}$(date +%s%N)__}"
 FIRE_AT=$(date -u -d "+90 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 marker_body=$(jq -nc --arg id "$MARKER_ID" --arg fa "$FIRE_AT" --arg chk "$NOOP_CHECK" \
   '{reminder_id:$id, fire_at:$fa, actor:"platform", action:{type:"named-check", check:$chk, report_to_issue:1}}')
 arm_code=$(curl --disable --noproxy '*' -s --max-time 15 -o /dev/null -w '%{http_code}' \
-  -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ${SECRET}" \
-  --data-binary "$marker_body" "$REARM_URL" || echo "000")
+  -X POST -H "Content-Type: application/json" --config - \
+  --data-binary "$marker_body" "$REARM_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$SECRET") || echo "000")
 [[ "$arm_code" == "202" ]] || abort "marker_arm_failed" "could not arm throwaway marker (HTTP $arm_code)"
 logger -t "$LOG_TAG" "armed throwaway marker_id=$MARKER_ID fire_at=$FIRE_AT" 2>/dev/null || true
 
