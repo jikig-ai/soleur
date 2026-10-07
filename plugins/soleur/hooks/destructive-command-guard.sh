@@ -171,38 +171,68 @@ BOUND_WHY=""
 BOUND_SOFT=""
 
 ISSUES_URL='https://github.com/jikig-ai/soleur/issues'
-REASON_TAIL=" Stop and tell the person what you were about to run and why. Do not retry this command and do not rephrase it to get around the guard. If no person is available to answer, end the task and report it as blocked. The person can run the command themselves in their own terminal, outside the agent, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 set in their own shell. If this was flagged wrongly, report it at ${ISSUES_URL}"
+# A reason has two readers: the person at the prompt (an ask) and the agent. A body written as `<head><AMARK><tail>` is composed by
+# compose() below: the tail is the agent's instructions. An ask opens with a sentence for the person and puts the agent's part under
+# "If you are the agent:"; a deny (and its systemMessage) opens with the not-run sentence, as the person only reads a block.
+AMARK=$'\001'
+ASK_LEAD="The guard paused this command and is asking you. It has not run yet and runs only if you approve."
 PERSON_TAIL=" The person can run the command themselves in their own terminal, outside the agent, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 set in their own shell. If this was flagged wrongly, report it at ${ISSUES_URL}"
-BOUND_TAIL=" Split it into smaller commands and send them one at a time; if you cannot, stop and report the task as blocked.${PERSON_TAIL}"
-# parse-class asks (a command or envelope the guard could not read): the right move is to repair and resend, not to
-# leave a destructive command alone, so they do not carry REASON_TAIL's "do not retry".
-PARSE_TAIL=" If this is a valid command you meant to run, fix its quoting or heredoc and send it again; if you cannot, stop and report the task as blocked.${PERSON_TAIL}"
-FALLBACK_REASON="This command was NOT run. guard-output-fallback: the destructive-command guard could not build its decision output and is asking instead of allowing. Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
+# a matched destructive command: stop, do not retry, do not rephrase
+REASON_TAIL="${AMARK} Stop and tell the person what you were about to run and why. Do not retry this command and do not rephrase it to get around the guard. If no person is available to answer, end the task and report it as blocked.${PERSON_TAIL}"
+# a command too large to check, or a lexer that gave out (depth, budget, alarm, crash): simplify or split
+BOUND_TAIL="${AMARK} Split it into smaller commands and send them one at a time; if you cannot, stop and report the task as blocked.${PERSON_TAIL}"
+# a quoting or heredoc problem in the command (lexer exit 2) is repaired and resent
+PARSE_TAIL="${AMARK} If this is a valid command you meant to run, fix its quoting or heredoc and send it again; if you cannot, stop and report the task as blocked.${PERSON_TAIL}"
+# an envelope the hook cannot read is a fault in the tool call, not in the command
+ENVELOPE_TAIL="${AMARK} This is a fault in the tool call the harness sent, not a problem with the command: stop and tell the person what happened instead of rewriting the command.${PERSON_TAIL}"
+# env -S and too many wrappers hide the command: write it out so it can be checked
+WRAPPER_TAIL="${AMARK} If this is a command you meant to run, write it out without env -S (or with fewer nested wrappers) so the guard can check it, and send it again; if you cannot, stop and tell the person what you were about to run.${PERSON_TAIL}"
 
 # ---- output ---------------------------------------------------------------------------------------
-# emit <ask|deny> <reason>: the full envelope (a bare decision without hookEventName is silently ignored),
-# built with jq; a hand-built fixed string when jq fails. A deny also carries systemMessage. Every reason opens
-# with the sentence that says the command did not run (the agent otherwise has to infer it from the rule id).
+# compose <ask|deny> <body> -> COMPOSED: the reason text (see AMARK).
+COMPOSED=""
+compose() {
+  local head="${2%%"$AMARK"*}" tail=""
+  [[ "$2" == *"$AMARK"* ]] && tail="${2#*"$AMARK"}"
+  if [[ "$1" == deny ]]; then COMPOSED="This command was NOT run. ${head}${tail}"
+  else COMPOSED="${ASK_LEAD} ${head} If you are the agent: This command was NOT run.${tail}"; fi
+}
+# emit <ask|deny> <body>: the full envelope (a bare decision without hookEventName is silently ignored), built with jq; when jq
+# cannot build it, emit_fallback. A deny also carries systemMessage.
 emit() {
-  local out="" reason="This command was NOT run. $2"
+  local out="" reason
+  compose "$1" "$2"; reason="$COMPOSED"
   out="$(jq -nc --arg d "$1" --arg r "$reason" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}
      + (if $d == "deny" then {systemMessage: $r} else {} end)' 2>/dev/null)" || out=""
-  if [[ -z "$out" ]]; then
-    # jq could not build the output: a reason of our own text (no quote, backslash or newline) is sent as it is, a reason that
-    # quotes the command gets the fixed text, so the rule id and the not-run sentence survive in both
-    case "$reason" in *[\"\\]*|*$'\n'*) emit_fixed "$1" "$FALLBACK_REASON" ;; *) emit_fixed "$1" "$reason" ;; esac
-    return
-  fi
+  if [[ -z "$out" ]]; then emit_fallback "$1" "$2"; return; fi
   printf '%s\n' "$out"
 }
-# emit_fixed <ask|deny> <fixed reason without quotes or backslashes>: no jq, no interpolation of input text.
+# emit_fixed <ask|deny> <body without quotes, backslashes or control characters>: no jq, no interpolation of input text.
 emit_fixed() {
+  compose "$1" "$2"
   if [[ "$1" == deny ]]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"},"systemMessage":"%s"}\n' "$2" "$2"
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"},"systemMessage":"%s"}\n' "$COMPOSED" "$COMPOSED"
   else
-    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' "$2"
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' "$COMPOSED"
   fi
+}
+# emit_fallback <ask|deny> <body>: jq could not build the output. A body of our own text (printable ASCII, no quote or backslash) goes
+# out as it is, so the rule id, the lead and the tail survive. A body that quotes the command (it holds a quote, a backslash or a
+# control character) gets a fixed text that keeps the rule id and the decision: a deny stays a deny and says it is blocked.
+emit_fallback() {
+  local fid="${2%%:*}"
+  case "$fid" in ""|*[!a-z0-9-]*) fid=unknown ;; esac
+  compose "$1" "$2"
+  case "$COMPOSED" in
+    *[![:print:]]*|*[\"\\]*)
+      if [[ "$1" == deny ]]; then
+        emit_fixed deny "guard-output-fallback: the destructive-command guard matched rule ${fid} and blocked this command, but jq could not build the full message that quotes it. ${AMARK} Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
+      else
+        emit_fixed ask "guard-output-fallback: the destructive-command guard matched rule ${fid}, but jq could not build the full message that quotes the command, so it is asking instead of allowing. ${AMARK} Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
+      fi ;;
+    *) emit_fixed "$1" "$2" ;;
+  esac
 }
 
 # lead_for <rule id>: the one-sentence statement of what the rule matched.
@@ -273,8 +303,11 @@ redact_text() {
   RTXT="$out"
 }
 
-ask_parse() { # <cause text>: a command the lexer could not read
-  emit ask "command-not-parsed: the destructive-command guard could not parse this command; it was not recognised as destructive, and the guard asks rather than guess (${1}).${PARSE_TAIL}"
+ask_parse() { # <cause text>: a command the lexer could not read. Only a parse failure (exit 2) is repaired by fixing the quoting;
+  # a lexer that gave out (depth, budget, alarm, crash, no result, malformed output) wants a simpler or smaller command.
+  local tail="$BOUND_TAIL"
+  [[ "$1" == "lexer exit2" ]] && tail="$PARSE_TAIL"
+  emit ask "command-not-parsed: the destructive-command guard could not parse this command; it was not recognised as destructive, and the guard asks rather than guess (${1}).${tail}"
   exit 0
 }
 ask_lexer_empty() {
@@ -286,7 +319,7 @@ ask_bound() { # <why>: a command too large to check in full
   exit 0
 }
 ask_envelope() { # <cause text>
-  emit ask "envelope-unreadable: the destructive-command guard could not read this tool call (${1}), and it asks rather than allow what it cannot read.${PARSE_TAIL}"
+  emit ask "envelope-unreadable: the destructive-command guard could not read this tool call (${1}), and it asks rather than allow what it cannot read.${ENVELOPE_TAIL}"
   exit 0
 }
 
@@ -367,7 +400,7 @@ degrade_jq() {
   scan_narrow "$raw"; SCAN_RC=$?
   [[ "$SCAN_RC" -eq 2 ]] && ask_bound "$SCAN_WHY"
   if [[ "$SCAN_RC" -eq 0 ]]; then
-    emit_fixed ask "This command was NOT run. guard-degraded-jq-missing: jq is missing or unusable on this machine, so the destructive-command guard scanned the raw tool input instead of parsing it, and this call looks destructive (a recursive delete of / or home, a destroy, or a force push). Stop and tell the person. Do not retry this command or rephrase it. If no person is available, end the task and report it as blocked. The person can run it in their own terminal, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, or install jq. Report a wrong flag at ${ISSUES_URL}"
+    emit_fixed ask "guard-degraded-jq-missing: jq is missing or unusable on this machine, so the destructive-command guard scanned the raw tool input instead of parsing it, and this call looks destructive (a recursive delete of / or home, a destroy, or a force push).${AMARK} Stop and tell the person. Do not retry this command or rephrase it. If no person is available, end the task and report it as blocked. The person can run it in their own terminal, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, or install jq. Report a wrong flag at ${ISSUES_URL}"
   fi
   exit 0
 }
@@ -1088,6 +1121,9 @@ if [[ -n "$BOUND_WHY" && "$BEST_RANK" -lt 2 ]]; then
 fi
 (( BEST_RANK == 0 )) && exit 0
 lead_for "$BEST_RULE"
-REASON="${BEST_RULE}: ${LEAD} Matched command: [${BEST_QUOTE}].${BOUND_NOTE}${REASON_TAIL}"
+# env -S and too many wrappers hide the command: the repair is to write it out; every other match is a stop
+TAIL="$REASON_TAIL"
+case "$BEST_RULE" in unparsed-wrapper|wrapper-depth) TAIL="$WRAPPER_TAIL" ;; esac
+REASON="${BEST_RULE}: ${LEAD} Matched command: [${BEST_QUOTE}].${BOUND_NOTE}${TAIL}"
 if (( BEST_RANK == 2 )); then emit deny "$REASON"; else emit ask "$REASON"; fi
 exit 0

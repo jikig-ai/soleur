@@ -245,6 +245,12 @@ else
   STUB_BROKEN="$WORK/stub-broken"
 fi
 
+# A jq shim that fails ONLY on `-nc` (the hook's output builder) and hands every other call to the real jq: the hook can read its
+# envelope but cannot build its decision output (the fixed fallback).
+if [[ -z "$FAST" ]]; then
+  mkdir -p "$WORK/shim-jqnc" || harness_die "shim mkdir"
+  printf '#!/bin/sh\ncase "$1" in -nc) exit 3 ;; esac\nexec "%s" "$@"\n' "$JQ_BIN" > "$WORK/shim-jqnc/jq"; chmod +x "$WORK/shim-jqnc/jq"
+fi
 # A symlink farm of every /usr/bin and /bin utility except the removed ones: the jq-less and perl-less PATHs.
 farm_make() { # farm_make <name> <removed...>  -> $WORK/farm-<name>
   local d="$WORK/farm-$1" r t; shift
@@ -743,6 +749,9 @@ reason_has() {
   jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | contains($s)' --arg s "$2"
 }
 
+# The ask reasons open with a sentence for the person reading the prompt; the agent's instructions follow under their own label.
+ASK_LEAD='The guard paused this command and is asking you. It has not run yet and runs only if you approve.'
+ASK_LEAD_RX='The guard paused this command and is asking you\. It has not run yet and runs only if you approve\. '
 # bound_row <label> <want> <cwd-template> <command> [reason ERE] [ENV=VAL ...]: a literal row that ALSO asserts the answer arrived in
 # under 5 s. The hook's own deadline is 6 s of the harness's 10 s timeout. Times are whole-second deltas of `date +%s`,
 # so a delta below 5 proves the real elapsed time was below 5 s. Contention caveat: a machine under heavy load can make
@@ -882,8 +891,7 @@ HOOKS_README="$REPO_ROOT/.claude/hooks/README.md"
 _RID_LABEL="README roster: every rule id the hook can emit is listed on its row (derived from the hook source)"
 if want_row "$_RID_LABEL"; then
   _rids="$( { grep -oE 'note [12] [a-z]+(-[a-z0-9]+)*' "$GUARD_HOOK" | awk '{print $3}'
-              grep -oE 'emit(_fixed)? (ask|deny) "(This command was NOT run\. )?[a-z]+(-[a-z0-9]+)*:' "$GUARD_HOOK" | sed -E 's/^.*"(This command was NOT run\. )?//; s/:$//'
-              grep -oE 'NOT run\. [a-z]+(-[a-z0-9]+)*:' "$GUARD_HOOK" | sed -E 's/^NOT run\. //; s/:$//'
+              grep -oE 'emit(_fixed)? (ask|deny|"\$1") "[a-z]+(-[a-z0-9]+)*:' "$GUARD_HOOK" | sed -E 's/^.*"//; s/:$//'
             } | sort -u )"
   _rrow="$(grep -F '| `destructive-command-guard.sh`' "$HOOKS_README" 2>/dev/null)"
   _rmiss=""; _rn=0
@@ -1596,29 +1604,29 @@ rep ' --' 40; _cmd40dash="ls${REP_OUT} x; terraform destroy"
 _t=""; for _i in $(seq 1 1000); do _t+=" f$_i"; done; _cmd1000rm="rm -rf${_t}; rm -rf ~"
 rep ' a' 30000; _cmdwords="ls \"x\"${REP_OUT}"
 bound_row "bound: 1500 benign commands then rm -rf / still denies, in under 5 s" deny - "$_cmd1500"
-bound_row "bound: 2600 benign commands (above the record cap) then rm -rf / asks with the bound reason, in under 5 s" ask - "$_cmd2600" '^This command was NOT run\. bound: '
+bound_row "bound: 2600 benign commands (above the record cap) then rm -rf / asks with the bound reason, in under 5 s" ask - "$_cmd2600" "^${ASK_LEAD_RX}bound: "
 bound_row "bound: rm -rf / first, then 2600 benign commands (above the record cap) still denies" deny - "$_cmd2600_late"
 rep 'echo x; ' 2600; _cmd2600_mid="echo a; echo b; echo c; rm -rf /; ${REP_OUT}"
 bound_row "bound: rm -rf / after three benign commands, then 2600 more (above the record cap) still denies (the records read are judged)" deny - "$_cmd2600_mid"
 bound_row "bound: rm -rf / after a benign command, then a 30000-word command (above the word cap) still denies" deny - "echo a; rm -rf /; ${_cmdwords}"
 bound_row "bound: 40 -- words then terraform destroy asks, in under 5 s" ask - "$_cmd40dash"
 bound_row "bound: a 1000-target rm line then rm -rf ~ denies, in under 5 s" deny - "$_cmd1000rm"
-bound_row "bound: 30000 words in one command (above the word cap) asks with the bound reason, in under 5 s" ask - "$_cmdwords" '^This command was NOT run\. bound: '
+bound_row "bound: 30000 words in one command (above the word cap) asks with the bound reason, in under 5 s" ask - "$_cmdwords" "^${ASK_LEAD_RX}bound: "
 # A bound that trips AFTER an ask-class rule matched keeps that rule's reason (id, lead, the quoted command) and appends the bound
 # sentence; it never says the command was "not recognised as destructive" (it was).
 rep 'echo "N"; ' 2100; _cmdtf_then_many="terraform destroy; ${REP_OUT}"
 rep 'true; ' 2100; _cmdgit_then_many="git push -f origin main; ${REP_OUT}"
-bound_row "bound: terraform destroy then 2100 more commands asks with the destroy rule id and the bound sentence, in under 5 s" ask - "$_cmdtf_then_many" '^This command was NOT run\. infra-destroy: .*Matched command: \[terraform destroy\].*too large to check in full'
+bound_row "bound: terraform destroy then 2100 more commands asks with the destroy rule id and the bound sentence, in under 5 s" ask - "$_cmdtf_then_many" "^${ASK_LEAD_RX}infra-destroy: .*Matched command: \[terraform destroy\].*too large to check in full"
 jqchk "bound: that ask does not say the command was not recognised as destructive" '.hookSpecificOutput.permissionDecisionReason | contains("not recognised as destructive") | not'
 jqchk "bound: that ask still carries the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
-bound_row "bound: git push -f origin main then 2100 more commands asks with the force-push rule id and the bound sentence, in under 5 s" ask - "$_cmdgit_then_many" '^This command was NOT run\. default-branch-force-push: .*Matched command: \[git push -f origin main\].*too large to check in full'
+bound_row "bound: git push -f origin main then 2100 more commands asks with the force-push rule id and the bound sentence, in under 5 s" ask - "$_cmdgit_then_many" "^${ASK_LEAD_RX}default-branch-force-push: .*Matched command: \[git push -f origin main\].*too large to check in full"
 jqchk "bound: that force-push ask does not say the command was not recognised as destructive" '.hookSpecificOutput.permissionDecisionReason | contains("not recognised as destructive") | not'
 # A deep nonexistent target: the longest existing prefix is looked for once, with a depth cap (no per-level probe that grows with the path).
 rep '/a' 650; _REP650="$REP_OUT"; _cmddeep650="rm -rf /nonexist${REP_OUT}; rm -rf /"
 rep '/a' 100; _cmddeep100="rm -rf /nonexist${REP_OUT}; rm -rf /"
 _t=""; for _i in $(seq 1 300); do _t+=" /nx$_i/a/b/c"; done; _cmd300nx="rm -rf${_t}"
 bound_row "bound: a 650-component nonexistent rm target then rm -rf / still denies (a deny wins over the depth cap), in under 5 s" deny - "$_cmddeep650"
-bound_row "bound: a 650-component nonexistent rm target alone asks with the bound reason, in under 5 s" ask - "rm -rf /nonexist${_REP650}" '^This command was NOT run\. bound: .*more than 128'
+bound_row "bound: a 650-component nonexistent rm target alone asks with the bound reason, in under 5 s" ask - "rm -rf /nonexist${_REP650}" "^${ASK_LEAD_RX}bound: .*more than 128"
 bound_row "bound: a 100-component nonexistent rm target then rm -rf / still denies, in under 5 s" deny - "$_cmddeep100"
 bound_row "bound: 300 distinct nonexistent rm targets are judged within the deadline (no decision), in under 5 s" none - "$_cmd300nx"
 _t=""; for _i in $(seq 1 2400); do _t+=" /nonexist/f$_i"; done; _cmd2400same="rm -rf${_t}"
@@ -1657,7 +1665,7 @@ deadline_row() { # deadline_row <phase> <command> <anchor to neuter>...
   while [[ $# -gt 0 ]]; do hook_edit "$HT_HOOK" "$1" ':'; shift; done
   chk "bound: deadline ($phase): the edits landed in the private hook copy" "$HE_OK"
   tree_row "bound: deadline ($phase): a hook whose time is up asks instead of finishing" ask "$HT_HOOK" "$(mkjson "$cmd" "$TREE")"
-  jqchk "bound: deadline ($phase): the ask carries the bound rule id and says the command was not run" '.hookSpecificOutput.permissionDecisionReason | test("^This command was NOT run\\. bound: ")'
+  jqchk "bound: deadline ($phase): the ask carries the bound rule id and says the command was not run" '.hookSpecificOutput.permissionDecisionReason | test("^The guard paused this command and is asking you\\. It has not run yet and runs only if you approve\\. bound: ")'
 }
 deadline_row reading 'ls "x"; terraform plan' "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM"
 deadline_row judging 'ls "x"; terraform plan' "$_DL_READ" "$_DL_DECIDE" "$_DL_RM"
@@ -1719,19 +1727,43 @@ fi
 # =====================================================================================================
 echo "== the reasons: every one says the command was NOT run; parse-class asks get their own tail =="
 hook_run "$(mkjson "echo 'PARSEMARKER_zq unbalanced" "$TREE")"
-jqchk "reason: a parse failure starts with the not-run sentence" '.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. command-not-parsed: ")'
+jqchk "reason: a parse failure starts with the not-run sentence" '.hookSpecificOutput.permissionDecisionReason | startswith("The guard paused this command and is asking you. It has not run yet and runs only if you approve. command-not-parsed: ")'
 jqchk "reason: a parse failure tells the agent to fix and resend, not to leave the command alone" '.hookSpecificOutput.permissionDecisionReason | (test("send it again") and test("report the task as blocked"))'
 jqchk "reason: a parse failure does not say do not retry or do not rephrase" '.hookSpecificOutput.permissionDecisionReason | (test("(?i)do not retry") or test("(?i)do not rephrase")) | not'
 hook_run 'not json {'
-jqchk "reason: an unreadable envelope starts with the not-run sentence and its rule id" '.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. envelope-unreadable: ")'
-jqchk "reason: an unreadable envelope has the fix-and-resend tail and the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (test("send it again") and contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+jqchk "reason: an unreadable envelope starts with the not-run sentence and its rule id" '.hookSpecificOutput.permissionDecisionReason | startswith("The guard paused this command and is asking you. It has not run yet and runs only if you approve. envelope-unreadable: ")'
+jqchk "reason: an unreadable envelope says the fault is in the tool call (no fix-the-quoting tail) and carries the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (test("fault in the tool call") and (test("fix its quoting") | not) and (test("send it again") | not) and contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
 hook_run "$(mkjson "$_cmd2600" "$TREE")"
 jqchk "reason: a bound ask tells the agent to split the command" '.hookSpecificOutput.permissionDecisionReason | (test("Split it into smaller commands") and contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
 hook_run "$(mkjson 'terraform destroy' "$TREE")"
-jqchk "reason: a destroy ask starts with the not-run sentence" '.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. infra-destroy: ")'
+jqchk "reason: a destroy ask starts with the not-run sentence" '.hookSpecificOutput.permissionDecisionReason | startswith("The guard paused this command and is asking you. It has not run yet and runs only if you approve. infra-destroy: ")'
 hook_run "$(mkjson 'rm -rf ~' "$TREE")"
 jqchk "reason: a deny starts with the not-run sentence in the reason and in the systemMessage" '(.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. ")) and (.systemMessage | startswith("This command was NOT run. "))'
 jqchk "reason: a deny's systemMessage keeps the escape hatch and the issues URL" '.systemMessage | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+
+# =====================================================================================================
+echo "== an ask speaks to the person first; the agent's instructions follow under their own label =="
+hook_run "$(mkjson 'terraform destroy' "$TREE")"
+jqchk "ask wording: the reason opens with the sentence for the person (paused, not run yet, runs only on approval)" '.hookSpecificOutput.permissionDecisionReason | startswith($lead + " ")' --arg lead "$ASK_LEAD"
+jqchk "ask wording: the agent's part is labelled and opens with the not-run sentence" '.hookSpecificOutput.permissionDecisionReason | contains(" If you are the agent: This command was NOT run. Stop and tell the person")'
+jqchk "ask wording: the rule id and the quoted command come BEFORE the agent's label" '.hookSpecificOutput.permissionDecisionReason | (index("infra-destroy: ") < index("If you are the agent:")) and (index("Matched command: [terraform destroy]") < index("If you are the agent:"))'
+jqchk "ask wording: the escape hatch and the issues URL still ride the ask" '.hookSpecificOutput.permissionDecisionReason | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+hook_run "$(mkjson 'rm -rf ~' "$TREE")"
+jqchk "deny wording: a deny is not addressed to a person who can approve (no paused/asking sentence, no agent label)" '.hookSpecificOutput.permissionDecisionReason | (contains("is asking you") | not) and (contains("If you are the agent") | not) and startswith("This command was NOT run. recursive-delete-home: ")'
+# the tail follows the cause: only a quoting problem is fixed by fixing the quoting
+hook_run "$(mkjson "echo 'PARSEMARKER_zq unbalanced" "$TREE")"
+jqchk "tail by cause: a lexer parse failure (unbalanced quote) tells the agent to fix the quoting and resend" '.hookSpecificOutput.permissionDecisionReason | (test("fix its quoting or heredoc") and test("send it again"))'
+_deep20='x'; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do _deep20="echo \$($_deep20)"; done
+hook_run "$(mkjson "$_deep20" "$TREE")"
+jqchk "tail by cause: a nesting-depth failure tells the agent to simplify or split, not to fix the quoting" '.hookSpecificOutput.permissionDecisionReason | (test("command-not-parsed: ") and test("lexer depth") and test("Split it into smaller commands") and (test("fix its quoting") | not))'
+hook_run 'not json {'
+jqchk "tail by cause: an unreadable envelope is a harness fault: stop and report, no rewrite advice" '.hookSpecificOutput.permissionDecisionReason | (test("fault in the tool call") and test("stop and tell the person") and (test("fix its quoting") | not))'
+hook_run "$(mkjson "env -S 'rm -rf /'" "$TREE")"
+jqchk "tail by cause: env -S asks the agent to write the command out so it can be checked, not to leave it alone" '.hookSpecificOutput.permissionDecisionReason | (test("unparsed-wrapper: ") and test("write it out without env -S") and (test("(?i)do not rephrase") | not))'
+hook_run "$(mkjson 'sudo sudo sudo sudo sudo sudo sudo sudo sudo ls "x"' "$TREE")"
+jqchk "tail by cause: too many wrappers asks the agent to use fewer, not to leave it alone" '.hookSpecificOutput.permissionDecisionReason | (test("wrapper-depth: ") and test("fewer nested wrappers") and (test("(?i)do not rephrase") | not))'
+hook_run "$(mkjson 'terraform destroy' "$TREE")"
+jqchk "tail by cause: a destroy still says do not retry and do not rephrase" '.hookSpecificOutput.permissionDecisionReason | (test("(?i)do not retry") and test("(?i)do not rephrase"))'
 
 # =====================================================================================================
 echo "== the lexer seam: a lexer that fails, lies or says nothing never becomes an allow =="
@@ -1752,9 +1784,11 @@ tree_row "lexer seam: a lexer that prints nothing asks" ask "$HT_HOOK" "$_LX_ENV
 stub_lexer alarm 'print "E\0alarm\0"; exit 3;'
 tree_row "lexer seam: E alarm asks" ask "$HT_HOOK" "$_LX_ENV"
 reason_has "lexer seam: E alarm names the cause" 'lexer alarm'
+jqchk "lexer seam: E alarm gets the simplify-or-split tail, not the fix-the-quoting one" '.hookSpecificOutput.permissionDecisionReason | (test("Split it into smaller commands") and (test("fix its quoting") | not))'
 stub_lexer crash 'print "E\0crash\0"; exit 3;'
 tree_row "lexer seam: E crash asks" ask "$HT_HOOK" "$_LX_ENV"
 reason_has "lexer seam: E crash names the cause" 'lexer crash'
+jqchk "lexer seam: E crash gets the simplify-or-split tail, not the fix-the-quoting one" '.hookSpecificOutput.permissionDecisionReason | (test("Split it into smaller commands") and (test("fix its quoting") | not))'
 stub_lexer garbage 'print "XYZ\0QQ\0";'
 tree_row "lexer seam: garbage bytes with no OK ask" ask "$HT_HOOK" "$_LX_ENV"
 stub_lexer garbageok 'print "XYZ\0OK\0";'
@@ -1766,7 +1800,7 @@ stub_lexer truncated 'print "C\0top\0";'
 tree_row "lexer seam: a record cut off before its words and OK asks" ask "$HT_HOOK" "$_LX_ENV"
 stub_lexer okonly 'print "OK\0";'
 tree_row "lexer seam: OK with no record for a command that mentions rm asks (lexer-empty)" ask "$HT_HOOK" "$_LX_RM_ENV"
-reason_has "lexer seam: OK with no record carries the lexer-empty rule id and the fix-and-resend tail" 'This command was NOT run. lexer-empty: '
+reason_has "lexer seam: OK with no record carries the lexer-empty rule id and the fix-and-resend tail" "$ASK_LEAD lexer-empty: "
 tree_row "lexer seam: OK with no record for a keyword-free command (ls) is not an ask" none "$HT_HOOK" "$_LX_ENV"
 tree_row "lexer seam: OK with no record for a comment-only command is not an ask" none "$HT_HOOK" "$(mkjson '# a "comment" only' "$TREE")"
 stub_lexer okone 'print "C\0top\0" . "1\0" . "-\0" . "ls\0" . "OK\0";'
@@ -1801,7 +1835,7 @@ slow_lexer slow-deny "$_SL_RM nap(); print \"C\\0top\\0\" . \"1\\0\" . \"-\\0ech
 tree_row "read bound: rm -rf / read before the deadline passed still denies (the records read are judged)" deny "$HT_HOOK" "$_LX_ENV"
 slow_lexer slow-none 'print "C\0top\0" . "1\0" . "-\0ls\0"; nap(); print "C\0top\0" . "1\0" . "-\0echo\0" . "OK\0";'
 tree_row "read bound: nothing matched before the deadline passed asks with the bound reason" ask "$HT_HOOK" "$_LX_ENV"
-reason_has "read bound: the ask names the time limit and the bound rule id" 'This command was NOT run. bound: '
+reason_has "read bound: the ask names the time limit and the bound rule id" "$ASK_LEAD bound: "
 # one huge record: a frame-count check inside the read loop bounds it. 2046 complete words (the trip lands on a flag frame) are judged.
 slow_lexer slow-rec-flag 'print "C\0top\0" . "2500\0" . "-\0rm\0-\0-rf\0-\0/\0" . ("-\0x\0" x 1497); nap(); print "-\0x\0" x 997; print "OK\0";'
 tree_row "read bound: a single huge record cut mid-record (on a flag frame) still denies on the words read" deny "$HT_HOOK" "$_LX_ENV"
@@ -1810,7 +1844,7 @@ tree_row "read bound: a single huge record cut mid-record (on a text frame) stil
 # a record cut before its first word is complete is dropped, not judged half-read (an unset word under set -u would abort the hook)
 slow_lexer slow-rec-empty 'print(("C\0top\0" . "1\0" . "-\0ls\0") x 201); print "C\0top\0" . "6\0" . ("-\0e\0" x 6); print "C\0top\0" . "40\0"; nap(); print "-\0x\0" x 40; print "OK\0";'
 tree_row "read bound: a record cut before its first word is complete is dropped (the earlier records are judged, the answer is a bound ask)" ask "$HT_HOOK" "$_LX_ENV"
-reason_has "read bound: a dropped half record still ends in the bound reason" 'This command was NOT run. bound: '
+reason_has "read bound: a dropped half record still ends in the bound reason" "$ASK_LEAD bound: "
 
 # =====================================================================================================
 echo "== the envelope (ADR-156/157): an unreadable envelope asks, a non-Bash tool is not decided =="
@@ -1945,11 +1979,11 @@ env_row "jq-less: rm -f ~ && echo -r is not decided (& separates the segments, s
 _t=""; for _i in $(seq 1 8000); do _t+="terraform a "; done; _cmd96k_miss="${_t}; terraform destroy"; _cmd96k_hit="${_t}destroy"
 _t=""; for _i in $(seq 1 5000); do _t+="terraform a "; done; _cmd60k_hit="${_t}destroy"
 _t=""; for _i in $(seq 1 100000); do _t+="abcdefg "; done; _cmd800k="echo ${_t}"; _cmd200k="echo ${_t:0:200000}"
-bound_row "degraded bound: jq-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" '^This command was NOT run\. bound: ' "$FJ"
-bound_row "degraded bound: perl-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" '^This command was NOT run\. bound: ' "$FP"
-bound_row "degraded bound: perl-less, a 60 KB segment that hits asks in under 5 s (the quoted segment is redacted only as far as it is shown)" ask - "$_cmd60k_hit" '^This command was NOT run\. guard-degraded-perl-missing: ' "$FP"
-bound_row "degraded bound: an 800 KB benign command asks (bound) in under 5 s, before the prefilter reads it" ask - "$_cmd800k" '^This command was NOT run\. bound: .*too large to check in full'
-bound_row "degraded bound: an 800 KB command asks (bound) with no jq on the PATH as well" ask - "$_cmd800k" '^This command was NOT run\. bound: ' "$FJ"
+bound_row "degraded bound: jq-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" "^${ASK_LEAD_RX}bound: " "$FJ"
+bound_row "degraded bound: perl-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" "^${ASK_LEAD_RX}bound: " "$FP"
+bound_row "degraded bound: perl-less, a 60 KB segment that hits asks in under 5 s (the quoted segment is redacted only as far as it is shown)" ask - "$_cmd60k_hit" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
+bound_row "degraded bound: an 800 KB benign command asks (bound) in under 5 s, before the prefilter reads it" ask - "$_cmd800k" "^${ASK_LEAD_RX}bound: .*too large to check in full"
+bound_row "degraded bound: an 800 KB command asks (bound) with no jq on the PATH as well" ask - "$_cmd800k" "^${ASK_LEAD_RX}bound: " "$FJ"
 bound_row "degraded bound: a 200 KB benign command (under the envelope cap) is not an ask, in under 5 s" none - "$_cmd200k"
 # the clock is read per segment: a private copy with a 1 s deadline scans 30000 short segments and stops with a bound ask
 mk_hook_tree degraded-clock; HE_OK=ok
@@ -1957,20 +1991,34 @@ hook_edit "$HT_HOOK" $'\nDEADLINE_S=6\n' $'\nDEADLINE_S=1\n'
 chk "degraded bound: the 1 s deadline edit landed in the private copy" "$HE_OK"
 _t=""; for _i in $(seq 1 30000); do _t+="echo x;"; done; _cmd30kseg="${_t} rm -rf /"
 tree_row "degraded bound: jq-less, a hook whose clock is nearly up stops scanning 30000 segments and asks" ask "$HT_HOOK" "$(mkjson "$_cmd30kseg" "$TREE")" "$FJ"
-reason_has "degraded bound: jq-less, that ask is the bound ask, not the scan's hit" 'This command was NOT run. bound: '
+reason_has "degraded bound: jq-less, that ask is the bound ask, not the scan's hit" "$ASK_LEAD bound: "
 tree_row "degraded bound: perl-less, a hook whose clock is nearly up stops scanning 30000 segments and asks" ask "$HT_HOOK" "$(mkjson "$_cmd30kseg" "$TREE")" "$FP"
-reason_has "degraded bound: perl-less, that ask is the bound ask, not the scan's hit" 'This command was NOT run. bound: '
+reason_has "degraded bound: perl-less, that ask is the bound ask, not the scan's hit" "$ASK_LEAD bound: "
+# When jq cannot build the decision output (the shim fails on -nc), a deny stays a deny and an ask stays an ask, the rule id survives, and
+# a deny never says it is "asking instead of allowing".
+JS="PATH=$WORK/shim-jqnc:$PATH"
+env_row "output fallback: a deny stays a deny when jq cannot build the output" deny "$(mkjson 'rm -rf ~' "$TREE")" "$JS"
+jqchk "output fallback: that deny keeps its rule id, the not-run sentence and the same text in the systemMessage" '(.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. recursive-delete-home: ")) and (.systemMessage == .hookSpecificOutput.permissionDecisionReason)'
+env_row "output fallback: an ask stays an ask when jq cannot build the output" ask "$(mkjson 'terraform destroy' "$TREE")" "$JS"
+jqchk "output fallback: that ask keeps its rule id, the person-facing sentence and the matched command" '.hookSpecificOutput.permissionDecisionReason | (startswith($lead + " infra-destroy: ") and contains("Matched command: [terraform destroy]"))' --arg lead "$ASK_LEAD"
+env_row "output fallback: a deny whose quoted command holds a double quote stays a deny" deny "$(mkjson "rm -rf ~ 'x\"y'" "$TREE")" "$JS"
+jqchk "output fallback: that deny names guard-output-fallback and the rule id, says it is blocked, and never says asking instead of allowing" '.hookSpecificOutput.permissionDecisionReason | (contains("guard-output-fallback") and contains("recursive-delete-home") and contains("blocked") and (contains("asking instead of allowing") | not) and startswith("This command was NOT run. "))'
+jqchk "output fallback: that deny repeats the reason in the systemMessage and keeps the escape hatch and the issues URL" '.systemMessage == .hookSpecificOutput.permissionDecisionReason and (.systemMessage | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues")))'
+env_row "output fallback: an ask whose quoted command holds a double quote stays an ask" ask "$(mkjson "terraform destroy 'x\"y'" "$TREE")" "$JS"
+jqchk "output fallback: that ask names guard-output-fallback and the rule id and says it is asking instead of allowing" '.hookSpecificOutput.permissionDecisionReason | (contains("guard-output-fallback") and contains("infra-destroy") and contains("asking instead of allowing") and startswith($lead + " "))' --arg lead "$ASK_LEAD"
+env_row "output fallback: a deny whose quoted command holds a backslash stays a deny" deny "$(mkjson "rm -rf ~ 'x\\y'" "$TREE")" "$JS"
+env_row "output fallback: a deny whose quoted command holds a tab stays a deny with valid JSON" deny "$(mkjson "rm -rf ~ 'x"$'\t'"y'" "$TREE")" "$JS"
 echo "== output shape (D4, Phase 3.4, CPO C4) =="
 _TRUNC_ARGS="$(printf '%0400d' 0 | tr 0 a)"
 hook_run "$(mkjson 'terraform destroy' "$TREE")"
 jqchk "ask: hookEventName rides in the same object as the decision (M8)" '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "ask"'
 jqchk "ask: the reason quotes the matched command" '.hookSpecificOutput.permissionDecisionReason | contains("terraform destroy")'
-jqchk "ask: the reason starts with the not-run sentence, then a rule id (<id>: <prose>)" '.hookSpecificOutput.permissionDecisionReason | test("^This command was NOT run\\. [a-z][a-z0-9]*(-[a-z0-9]+)+: ")'
+jqchk "ask: the reason starts with the person-facing sentence, then a rule id (<id>: <prose>)" '.hookSpecificOutput.permissionDecisionReason | test("^The guard paused this command and is asking you\\. It has not run yet and runs only if you approve\\. [a-z][a-z0-9]*(-[a-z0-9]+)+: ")'
 jqchk "ask: the reason carries the escape hatch" '.hookSpecificOutput.permissionDecisionReason | contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1")'
 jqchk "ask: the reason carries an issues URL" '.hookSpecificOutput.permissionDecisionReason | test("https://[^ ]+/issues")'
 jqchk "ask: the reason tells the agent to stop and not retry, and names the person's own terminal" '.hookSpecificOutput.permissionDecisionReason | (test("(?i)do not retry") and test("(?i)blocked") and test("(?i)terminal"))'
 jqchk "ask: the envelope has no top-level systemMessage (the prompt shows the reason)" 'keys == ["hookSpecificOutput"]'
-_ID_ASK_TF="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^This command was NOT run\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
+_ID_ASK_TF="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^The guard paused this command and is asking you\\. It has not run yet and runs only if you approve\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
 hook_run "$(mkjson 'rm -rf ~' "$TREE")"
 jqchk "deny: hookEventName rides in the same object as the decision (M8)" '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"'
 jqchk "deny: a top-level systemMessage carries the SAME full reason (C4)" '.systemMessage == .hookSpecificOutput.permissionDecisionReason and (.systemMessage | length) > 0'
@@ -1981,7 +2029,7 @@ jqchk "deny: the reason starts with the not-run sentence, then a rule id" '.hook
 jqchk "deny: the envelope has exactly the two top-level keys" 'keys == ["hookSpecificOutput","systemMessage"]'
 _ID_DENY_RM="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^This command was NOT run\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
 hook_run "$(mkjson 'git push --force origin main' "$R1")"
-_ID_ASK_GIT="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^This command was NOT run\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
+_ID_ASK_GIT="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^The guard paused this command and is asking you\\. It has not run yet and runs only if you approve\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
 if [[ -n "$_ID_ASK_TF" && -n "$_ID_DENY_RM" && -n "$_ID_ASK_GIT" && "$_ID_ASK_TF" != "$_ID_DENY_RM" && "$_ID_ASK_TF" != "$_ID_ASK_GIT" && "$_ID_DENY_RM" != "$_ID_ASK_GIT" ]]; then _x=ok; else _x=bad; fi
 chk "the destroy, delete-home and force-push rules carry three distinct rule ids" "$_x" "ids: tf=$_ID_ASK_TF rm=$_ID_DENY_RM git=$_ID_ASK_GIT"
 hook_run "$(mkjson "terraform destroy -target=$_TRUNC_ARGS" "$TREE")"
@@ -2109,7 +2157,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=892
+MIN_CASES=916
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
