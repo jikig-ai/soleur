@@ -84,3 +84,12 @@ two existing records and was rejected atomically. Read back all three targets
 to confirm no partial edit, then apply each patch against its verified absolute
 path. The corrected record links the completed local image while preserving
 the distinction between preparation and an authorized rehearsal.
+
+The preceding evidence head's `lint-bot-statuses` job failed its infra-document
+step: an account-report bullet containing “operator” was adjacent to an automated
+image-proof bullet containing “mount.” The linter deliberately joins adjacent
+non-blank actor/imperative lines. These were distinct factual subjects, with no
+human infrastructure instruction. Separate account evidence from prepared-image
+results with a semantic heading and run the scoped infra-document guard before
+committing. Keep the linter unchanged; blank lines do not break its adjacency
+model, and no waiver or suppression is needed for this correction.
