@@ -1127,6 +1127,15 @@ L @@ an unbalanced single quote @@ ask @@ - @@ echo 'unbalanced
 L @@ an unbalanced double quote @@ ask @@ - @@ echo "unbalanced; terraform destroy
 L @@ an unterminated substitution @@ ask @@ - @@ echo $(ls
 L @@ a heredoc with no delimiter word @@ ask @@ - @@ cat <<
+# ---- decide_argv keeps the caller's state: a `--` or a wrapper must not change what the cd effect or the quote sees
+X @@ state: cd -- ~ then rm -rf * (a `--` after cd must not hide the cd) @@ deny @@ - @@ cd -- ~ && rm -rf *
+X @@ state: pushd -- ~ then rm -rf * @@ deny @@ - @@ pushd -- ~ && rm -rf *
+X @@ state: command cd ~ then rm -rf * (a wrapper before cd still moves the simulated cwd) @@ deny @@ - @@ command cd ~ && rm -rf *
+X @@ state: a -- word in an earlier command, then rm -rf ./* in home (the later cd-looking word is data) @@ deny @@ @HOME@ @@ ls -- cd /tmp; rm -rf ./*
+X @@ state: a bare cd after -- is data, not a cd to home @@ none @@ - @@ ls -- cd; rm -rf ./*
+L @@ state: cd -- .. from a child of home reaches home, then rm -rf * @@ deny @@ @HOME@/proj @@ cd -- .. && rm -rf *
+L @@ state: cd -- "$X" is an unresolved cd, then rm -rf * @@ ask @@ - @@ cd -- "$UNKNOWN_DIR" && rm -rf *
+L @@ state: pushd -- "$X" is an unresolved pushd, then rm -rf out @@ ask @@ - @@ pushd -- "$UNKNOWN_DIR" && rm -rf out
 ROWS
 
 echo "== the ordinary-command corpus (kind C): no decision on any of it =="
@@ -1210,6 +1219,18 @@ LH "rm -rf ~ with a nonexistent home" deny "$_FH" 'rm -rf ~'
 LH "a project under a nonexistent home is not home" none "$_FH" "rm -rf $_FH/projects/x"
 LH "another user's home is not this home" none "$_FH" 'rm -rf /home/other-user-dir'
 LH "a .. through a nonexistent directory is normalized lexically and still reaches an ancestor of home" deny "$_FH" "rm -rf $_FH/nonexistent-dir/../.."
+
+# =====================================================================================================
+echo "== the quoted command in the reason is the whole matched simple command (state is not clobbered) =="
+quote_row() { # <label> <command> <cwd-template> <expected quoted text>
+  want_row_quiet "$1" || return 0
+  subst "$3"; hook_run "$(mkjson "$2" "$SUBST_OUT")"
+  reason_has "$1" "Matched command: [$4]"
+}
+quote_row "quote: a wrapper stays in the quoted command (sudo rm -rf /)" 'sudo rm -rf /' - 'sudo rm -rf /'
+quote_row "quote: the words before a -- stay in the quoted command (rm -rf -- /)" 'rm -rf -- /' - 'rm -rf -- /'
+quote_row "quote: doppler run -- terraform destroy quotes the whole command" 'doppler run -- terraform destroy' - 'doppler run -- terraform destroy'
+quote_row "quote: an env wrapper with an option and an assignment" 'env -i FOO=1 terraform destroy' - 'env -i FOO=1 terraform destroy'
 
 # =====================================================================================================
 echo "== the bash phase is bounded (the harness kills the hook at 10 s and a killed hook is not a decision) =="
@@ -1442,7 +1463,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=506
+MIN_CASES=518
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

@@ -669,9 +669,10 @@ wrap_skip() {
   WJ="$j"
 }
 
-# decide_argv <depth>: the rule table over DA_T/DA_F (the words of one simple command), retried on the
-# command a wrapper hides and on the words after every `--`.
-decide_argv() {
+# decide_walk <depth>: the rule table over DA_T/DA_F (the words of one simple command), retried on the
+# command a wrapper hides and on the words after the first `--`. It hands the words it recurses on to itself
+# through DA_T/DA_F, so it CLOBBERS them: callers use decide_argv, which puts them back.
+decide_walk() {
   local depth="$1" n i k name
   (( depth > 8 )) && return 0
   if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi
@@ -689,24 +690,51 @@ decide_argv() {
         wrap_skip "$name" "$i"
         if (( WJ >= 0 && WJ < n )); then
           DA_T=("${t[@]:$WJ}"); DA_F=("${f[@]:$WJ}")
-          decide_argv $((depth + 1))
+          decide_walk $((depth + 1))
         fi ;;
     esac
   fi
   for ((k = 0; k + 1 < n; k++)); do
     if [[ "${t[$k]}" == -- ]]; then
       DA_T=("${t[@]:$((k + 1))}"); DA_F=("${f[@]:$((k + 1))}")
-      decide_argv $((depth + 1))
+      decide_walk $((depth + 1))
       break  # the recursion retries every later `--` itself; looping on would repeat that work exponentially
     fi
   done
 }
 
+# decide_argv: judge the words in DA_T/DA_F and leave both exactly as found: the main loop reads them again for
+# the quoted text and for the cd effect. A record always has at least one word (the lexer's argc is >= 1), so the
+# copies below are never empty-array expansions.
+decide_argv() {
+  local -a keep_t=("${DA_T[@]}") keep_f=("${DA_F[@]}")
+  decide_walk "$1"
+  DA_T=("${keep_t[@]}"); DA_F=("${keep_f[@]}")
+}
+
+# cd_index: CI = the index in DA_T of a cd/pushd/popd that IS the command (after assignments and a leading
+# `command` or `builtin`, which do not change what cd does), else -1.
+cd_index() {
+  local n=${#DA_T[@]}
+  CI=0
+  while (( CI < n )) && is_assign "${DA_T[$CI]}"; do CI=$((CI + 1)); done
+  while (( CI < n )); do
+    case "${DA_T[$CI]}" in
+      command|builtin) CI=$((CI + 1)); [[ "${DA_T[$CI]:-}" == -p || "${DA_T[$CI]:-}" == -- ]] && CI=$((CI + 1)) ;;
+      *) break ;;
+    esac
+  done
+  if (( CI < n )); then
+    case "${DA_T[$CI]}" in cd|pushd|popd) return 0 ;; esac
+  fi
+  CI=-1
+  return 1
+}
+
 # apply_cd: a literal cd/pushd moves the simulated working directory; an unresolvable one sets UNRES.
-apply_cd() { # reads DA_T/DA_F of the current record (its first non-assignment word is cd/pushd/popd)
+apply_cd() { # reads DA_T/DA_F of the current record; CI (from cd_index) is the index of its cd/pushd/popd word
   local -a t=("${DA_T[@]}") f=("${DA_F[@]}")
-  local n=${#t[@]} i=0 j target="" tf="-" have=0
-  while (( i < n )) && is_assign "${t[$i]}"; do i=$((i + 1)); done
+  local n=${#t[@]} i=$CI j target="" tf="-" have=0
   cwd_ready
   if [[ "${t[$i]}" == popd ]]; then UNRES=1; return 0; fi
   j=$((i + 1))
@@ -742,11 +770,7 @@ for ((r = 0; r < NREC; r++)); do
   fi
   [[ -n "$BOUND_WHY" ]] && break
   # the cd effect of this record, for the commands after it
-  CI=0
-  while (( CI < ${#DA_T[@]} )) && is_assign "${DA_T[$CI]}"; do CI=$((CI + 1)); done
-  if (( CI < ${#DA_T[@]} )); then
-    case "${DA_T[$CI]}" in cd|pushd|popd) apply_cd ;; esac
-  fi
+  if cd_index; then apply_cd; fi
 done
 
 # ---- 6. the decision -------------------------------------------------------------------------------
