@@ -11,6 +11,23 @@ brand_survival_threshold: aggregate pattern
 lane: single-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-07
+**Passes run:** deepen-plan halt gates 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12 (all pass or skip, see below); live verification of every cited issue and PR number and rule id; empirical bash-semantics check of the new fence lines; a read-only re-measurement of #9697. The plan had already been through a four-seat review panel (DHH, Kieran, code-simplicity, CTO devex lens) whose findings are applied above.
+
+**Gate results.** 4.6 User-Brand Impact: present, threshold `aggregate pattern`. 4.7 Observability: present, five fields, probe `curl ... | jq` is an allowlisted verb, no SSH, finishes well inside 15 s, `expected_output` is the literal `1` (and was run live: it prints `1`). 4.8 PAT-shaped variables: none. 4.9 UI wireframe: no UI surface, skipped. 4.10 Encryption posture: no `.tf`, migration, cloud-init or compose file in either Files list and no persistent store introduced (the "merge queue" is GitHub's, not a store this plan creates), skipped. 4.11 Guard Contract: `lint-guard-contract.py` green, one entry, assembly names the chokepoint (the single `if/elif` chain on `$s == "OPEN BEHIND"`) and the out-of-fence pushers it does not cover. 4.12 Scope Check: one unfenced section, every ask mapped, no `unmapped`, no `status: BLOCKED`. 4.4 / 4.45 / 4.5 / 4.55: no precedent-bound SQL or lock pattern, no network-outage trigger, no downtime-inducing operation (a fence edit in a skill file), skipped.
+
+**Verification of cited facts (live, this pass).** #8683, #9454, #9670, #9697, #9482 OPEN; #8474 and #8611 MERGED (they are the two recurrence PRs named inside #8683); #9401 CLOSED (the disjoint-delta skip the hook's own comments cite); #9710 is this PR. Every `knowledge-base/` path in the plan exists. `wg-architecture-decision-is-a-plan-deliverable` is a migrated-but-active rule (`scripts/migrated-rule-ids.txt` line 76, now in plan Phase 2.10); every other rule id is active in `AGENTS.md`. Fence anchors confirmed at `ship/SKILL.md` 2267 / 2448 and `merge-pr/SKILL.md` 371 / 517; `model.c4` has `ship` (line 211) and `github` (line 343).
+
+**Bash semantics, run and observed (scratch script, `set -e`).** `[[ ... ]] && real_behind=1`, `(( real_behind == 1 )) || qidle=0` (keeps the count on a BEHIND tick, zeroes it otherwise), `[[ "$(cmd || true)" =~ ^[1-9][0-9]*$ ]] && QUEUE_RULE=1` (a failing or empty read leaves 0 and the shell alive), a `case ... dequeued*) ...; break ;;` inside `if` inside the loop (breaks the loop), an empty `pend` counted as idle, and a trailing `(( queue_waits == 1 )) && echo` in a list (no errexit). `gh pr checks <n> --json bucket --jq '[...] | length'` exits 0 even with pending checks (measured on #9710: prints `25`, rc 0), and `gh pr view <n> --json autoMergeRequest --jq '.autoMergeRequest != null'` prints exactly `true` or `false`.
+
+### New considerations discovered
+
+1. **The BEHIND reading appears while checks are still pending.** Re-measured on #9697 at 12:33Z: `OPEN BEHIND`, 78 pass / 1 pending / 9 skipping, armed, `--queue-state` = `not_queued OPEN armed removal=none`, head `4b0bb6d78d` two `main` commits behind. So BEHIND is not a "CI is done" signal under the strict policy; it is shown for the whole armed window, which is exactly the window the wait arm covers, and it is why a pending-count (not the mergeStateStatus) is what the idle grace keys on. Earlier (12:14Z, `behind_by` 0) the same PR read `OPEN BLOCKED`.
+2. **#9697 is the live discriminating case and was still unresolved at the end of planning.** If its last check settles and GitHub enqueues it while it is still BEHIND, that is a sixth observation for outcome (a) from the exact PR that motivated this plan (the other session's Phase 7 may sync it first, which is not this plan's concern and which this session never does). If it sits green, BEHIND and un-enqueued, that is outcome (b) and the expiry arm is the carrier. Read-only reads only; the plan's conclusion does not rest on it.
+3. **`--queue-state` consumes the seen-queued marker when it prints `dequeued`** (sync-pr-behind.sh, consume-on-report). Any new caller must therefore treat `dequeued` as terminal, which is why the grace-crossing `case` breaks the poll on it instead of falling through to `--step` (a marker-only dequeue would otherwise read as plain "not queued" and push).
+
 ## Overview
 
 The Phase 7 poll in the ship skill (and its byte-synced mirror in merge-pr section 5.2) pushes a merge of
