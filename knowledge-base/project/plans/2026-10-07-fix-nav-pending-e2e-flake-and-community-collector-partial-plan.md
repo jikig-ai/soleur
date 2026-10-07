@@ -593,7 +593,7 @@ No cross-domain implications detected — CI test determinism, an effect-guard f
 
 #### Findings
 
-`apps/web-platform/components/nav/nav-pending-island.tsx` matches the shared UI-surface glob (`components/**/*.tsx`), which would force a BLOCKING tier and a wireframe. The edit changes no pixel, structure, copy or interaction: it guards a `useEffect` so a watcher mount cannot end an open navigation episode, which restores the behavior the island's own design comment already specifies. `ui-surface-terms.md` § Excluded covers "no structural/layout change", and the bar's rendered markup is untouched. No `.pen` is produced, and none is referenced. This is recorded as a Taste item in `decision-challenges.md` (T4) so the operator sees the glob was judged, not skipped.
+`apps/web-platform/components/nav/nav-pending-island.tsx` matches the shared UI-surface glob (`components/**/*.tsx`), which would force a BLOCKING tier and a wireframe. The edit changes no pixel, structure, copy or interaction: it guards a `useEffect` so a watcher mount cannot end an open navigation episode, which restores the behavior the island's own design comment already specifies. `ui-surface-terms.md` § Excluded covers "no structural/layout change", and the bar's rendered markup is untouched. No `.pen` is produced, and none is referenced. This is recorded as a Taste item in `decision-challenges.md` (T4) so the record shows the glob was judged, not skipped.
 
 ## Dependencies & Risks
 
