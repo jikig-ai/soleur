@@ -90,7 +90,14 @@ trap cleanup_all EXIT
 # and therefore silent either way. Clear it around every case so one case's fallback write cannot
 # bleed into a later case's assertions. Guarded: on a runner /var/lock is root-owned and the write
 # never lands at all, which is fine — this must never be the reason a case fails.
-clean_host_state_slot() { rm -f /var/lock/inngest-cutover-flip.state 2>/dev/null || true; }
+# (#7696) The noop-throttle stamp sits at ${STATE_FILE}.noop-emitted — the SAME host-default path
+# plus suffix — and must be cleared here too: on a runner where /var/lock IS writable, a refusal
+# case's noop emit leaves a fresh stamp that would suppress the NEXT case's authorised emit
+# (measured in CI: canary-absent, then the floor misses the two assertions the suppression ate).
+clean_host_state_slot() {
+  rm -f /var/lock/inngest-cutover-flip.state 2>/dev/null || true
+  rm -f /var/lock/inngest-cutover-flip.state.noop-emitted 2>/dev/null || true
+}
 
 setup_case() {
   clean_host_state_slot
