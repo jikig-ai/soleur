@@ -1681,6 +1681,35 @@ redact_row "redact: a value with spaces is redacted whole" "DB_PASSWD='zq fake p
 redact_row "redact: a deny carries no secret in systemMessage either" 'API_AUTH=zq-fake-auth-7 rm -rf ~' - zq-fake-auth-7 'API_AUTH=<redacted> rm -rf ~'
 redact_row "redact: a name with CRED in lower case" 'cloud_cred=zq-fake-cred-8 terraform destroy' - zq-fake-cred-8 'cloud_cred=<redacted> terraform destroy'
 redact_row "redact: a nested -var=name=value spelling" 'terraform destroy -var=db_secret=zq-fake-sec-9' - zq-fake-sec-9 'terraform destroy -var=db_secret=<redacted>'
+redact_row "redact: an API_KEY assignment (the key name alone)" 'API_KEY=zq-fake-key-11 terraform destroy' - zq-fake-key-11 'API_KEY=<redacted> terraform destroy'
+redact_row "redact: a pass name (-var db_pass=)" 'terraform destroy -var db_pass=zq-fake-pass-12 -var region=us-east-1' - zq-fake-pass-12 'terraform destroy -var db_pass=<redacted> -var region=us-east-1'
+redact_row "redact: a pwd name" 'DB_PWD=zq-fake-pwd-13 terraform destroy' - zq-fake-pwd-13 'DB_PWD=<redacted> terraform destroy'
+redact_row "redact: a pw name (-var pw=)" 'terraform destroy -var pw=zq-fake-pw-14 -target=module.x' - zq-fake-pw-14 'terraform destroy -var pw=<redacted> -target=module.x'
+redact_row "redact: a tok name (-var tok=)" 'terraform destroy -var tok=zq-fake-tok-15 -target=module.x' - zq-fake-tok-15 'terraform destroy -var tok=<redacted> -target=module.x'
+redact_row "redact: a bearer name (-var bearer=)" 'terraform destroy -var bearer=zq-fake-bearer-16 -target=module.x' - zq-fake-bearer-16 'terraform destroy -var bearer=<redacted> -target=module.x'
+for _f in token password passwd secret api-key auth bearer; do
+  redact_row "redact: --$_f takes its value from the NEXT word" "terraform destroy --$_f zq-fake-next-$_f -target=module.x" - "zq-fake-next-$_f" "terraform destroy --$_f <redacted> -target=module.x"
+done
+redact_row "redact: a credential flag followed by another flag masks nothing (--password --target module.x)" 'terraform destroy --password --target module.x' - 'zq-no-secret-in-this-row' 'terraform destroy --password --target module.x'
+redact_row "redact: a credential flag at the end of one command does not mask the first word of the next (state resets per command)" 'terraform destroy --token ; rm -rf ~' - 'zq-no-secret-in-this-row' 'Matched command: [rm -rf ~]'
+redact_row "redact: a header word (Authorization: Bearer value) is masked after the colon" "terraform destroy -H 'Authorization: Bearer zq-fake-hdr-17' -target=module.x" - zq-fake-hdr-17 'terraform destroy -H Authorization: <redacted> -target=module.x'
+redact_row "redact: git -c http.extraheader=Authorization: Basic value is masked after the colon" 'git -c "http.extraheader=Authorization: Basic zq-fake-basic-18" push --force origin main' @R1@ zq-fake-basic-18 'git -c http.extraheader=Authorization: <redacted> push --force origin main'
+redact_row "redact: a Bearer value inside a word without a colon is masked" "terraform destroy -var 'hdr=Bearer zq-fake-bearer-19' -target=module.x" - zq-fake-bearer-19 'terraform destroy -var hdr=Bearer <redacted> -target=module.x'
+redact_row "redact: URL userinfo whose password contains a slash" 'git push --force https://someone:zq/fake/pat-20@example.invalid/o/r.git main' @R1@ 'zq/fake/pat-20' 'https://someone:<redacted>@example.invalid/o/r.git main'
+redact_row "redact: URL userinfo whose password contains an at sign" 'git push --force https://someone:zq-fake@pat-21@example.invalid/o/r.git main' @R1@ 'pat-21' 'https://someone:<redacted>@example.invalid/o/r.git main'
+redact_row "redact: retention, names with no credential word keep their values (WORKSPACE, PLAN_FILE, -var region)" 'WORKSPACE=prod PLAN_FILE=x.tfplan terraform destroy -var region=us-east-1' - 'zq-no-secret-in-this-row' 'WORKSPACE=prod PLAN_FILE=x.tfplan terraform destroy -var region=us-east-1'
+redact_row "redact: retention, a value-taking flag that is not a credential flag keeps the next word (--target)" 'terraform destroy --target module.db --var-file prod.tfvars' - 'zq-no-secret-in-this-row' 'terraform destroy --target module.db --var-file prod.tfvars'
+# the perl-less scan quotes raw text words: a leading quote must not hide the name, and a quoted value with spaces goes whole
+redact_np() { # <label> <command> <secret that must be absent> <quoted text that must be present>
+  want_row_quiet "$1" || return 0
+  hook_run "$(mkjson "$2" "$TREE")" "PATH=$WORK/farm-noperl"
+  jqchk "$1: the secret is absent from the reason" '.hookSpecificOutput.permissionDecisionReason | contains($s) | not' --arg s "$3"
+  jqchk "$1: the rest of the segment is still quoted" '.hookSpecificOutput.permissionDecisionReason | contains($q)' --arg q "$4"
+}
+redact_np "redact (perl-less): a single-quoted -var name=value" "terraform destroy -var 'db_password=zq-fake-pw-22' -var region=us-east-1" zq-fake-pw-22 "db_password=<redacted> -var region=us-east-1"
+redact_np "redact (perl-less): a double-quoted name=value" 'terraform destroy -var "db_secret=zq-fake-sec-23" -var region=us-east-1' zq-fake-sec-23 "db_secret=<redacted> -var region=us-east-1"
+redact_np "redact (perl-less): a quoted value with spaces goes whole" "terraform destroy -var 'db_password=zq fake pw 24 two' -var region=us-east-1" "pw 24 two" "db_password=<redacted> -var region=us-east-1"
+redact_np "redact (perl-less): --token takes the next word" "terraform destroy --token zq-fake-tok-25 -var region=us-east-1" zq-fake-tok-25 "--token <redacted> -var region=us-east-1"
 want_row_quiet "redact: a non-secret assignment is quoted as is" && { hook_run "$(mkjson 'REGION=us-east-1 terraform destroy' "$TREE")"; reason_has "redact: a non-secret assignment is quoted as is" 'REGION=us-east-1 terraform destroy'; }
 if want_row_quiet "redact: the perl-less scan quotes a segment with its secret redacted"; then
   hook_run "$(mkjson 'terraform destroy -var db_password=zq-fake-pw-10' "$TREE")" "PATH=$WORK/farm-noperl"
@@ -2080,7 +2109,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=840
+MIN_CASES=892
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

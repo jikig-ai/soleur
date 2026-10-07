@@ -221,31 +221,52 @@ lead_for() {
 
 # ---- redaction: the matched command goes into the reason, the transcript and (on a deny) the systemMessage -------
 # A word that carries a credential is masked BEFORE the text is joined and cut to 200 characters (so a cut can never
-# leave half of one): NAME=value, --name=value and -var name=value where NAME holds key, token, secret, password,
-# passwd, cred or auth in any case (the whole value is masked, spaces included, because the lexer's word is one
-# argument), and URL userinfo (`://user:pass@` keeps the user, `://token@` masks it). Only the emit path calls this,
-# one word at a time with bash regexes under nocasematch, so it costs no process.
-RE_SECRET_ASSIGN='^(([A-Za-z0-9_.-]*=)?-{0,2}[A-Za-z0-9_.-]*(key|token|secret|password|passwd|cred|auth)[A-Za-z0-9_.-]*=)'
-RE_URL_PW='^(.*://[^/@[:space:]:]*:)[^/@[:space:]]*(@.*)$'
+# leave half of one). Masked: (1) NAME=value, --name=value and -var name=value where NAME holds key, tok, secret, pass, pw (so pwd
+# too), cred, auth or bearer in any case (the whole value, spaces included, because the lexer's word is one argument); (2) the word
+# AFTER --token, --password, --passwd, --secret, --api-key, --auth or --bearer (unless it is itself a flag); (3) the text after
+# `Authorization:` or `Bearer ` inside a word (an -H header, `-c http.extraheader=Authorization: Basic x`); (4) URL userinfo
+# (`://user:pass@` keeps the user, a password may hold / or @; `://token@` masks it). Only the emit path calls this, one word at a
+# time with bash regexes under nocasematch, so it costs no process. The names are a coverage choice, not a boundary: a
+# credential in a word with none of these names (or a bare value) is not masked.
+RE_SECRET_ASSIGN='^(([A-Za-z0-9_.-]*=)?-{0,2}[A-Za-z0-9_.-]*(key|tok|secret|pass|pw|cred|auth|bearer)[A-Za-z0-9_.-]*=)'
+RE_URL_PW='^(.*://[^/@[:space:]:]*:)[^[:space:]]*(@[^@[:space:]]*)$'
 RE_URL_USER='^(.*://)[^/@[:space:]:]+(@.*)$'
-RW=""
-redact_word() { # <word> -> RW
-  local w="$1" had=0
+RE_AUTH_HDR='^(.*authorization:[[:space:]]*)(.+)$'
+RE_BEARER='^(.*bearer[[:space:]]+)(.+)$'
+RE_FLAG_NEXT='^--(token|password|passwd|secret|api-key|auth|bearer)$'
+RW=""; RW_NEXT=0
+redact_word() { # <word> -> RW; RW_NEXT (1 = the word after a credential flag) carries across words: the caller resets it per command
+  local w="$1" had=0 mask=0
+  if (( RW_NEXT )) && [[ "$w" != -* ]]; then RW="<redacted>"; RW_NEXT=0; return; fi
   shopt -q nocasematch && had=1
   shopt -s nocasematch
   if [[ "$w" =~ $RE_SECRET_ASSIGN ]]; then w="${BASH_REMATCH[1]}<redacted>"
   elif [[ "$w" =~ $RE_URL_PW ]]; then w="${BASH_REMATCH[1]}<redacted>${BASH_REMATCH[2]}"
   elif [[ "$w" =~ $RE_URL_USER ]]; then w="${BASH_REMATCH[1]}<redacted>${BASH_REMATCH[2]}"
+  elif [[ "$w" =~ $RE_AUTH_HDR ]]; then w="${BASH_REMATCH[1]}<redacted>"
+  elif [[ "$w" =~ $RE_BEARER ]]; then w="${BASH_REMATCH[1]}<redacted>"
+  elif [[ "$w" =~ $RE_FLAG_NEXT ]]; then mask=1
   fi
   (( had )) || shopt -u nocasematch
+  RW_NEXT="$mask"
   RW="$w"
 }
-# redact_text <text> -> RTXT: the same, over whitespace-separated words (the perl-less scan has text, not words)
+# redact_text <text> -> RTXT: the same, over the blank-separated words of raw text (the perl-less scan has text, not words). A word
+# that opens with a quote is taken with the words after it up to the one that closes it, and the quotes are dropped, so a quoted
+# name=value is read as the word the shell would have made of it. Whole words only, and it stops after the 200 shown characters.
 RTXT=""
 redact_text() {
-  local IFS=$' \t\n' w out=""
-  for w in $1; do
-    (( ${#out} > 200 )) && break   # only the first 200 characters are shown; whole words only, so a cut never leaves half of one
+  local IFS=$' \t\n' w q i=0 n out=""
+  local -a ws
+  ws=($1); n=${#ws[@]}
+  while (( i < n )); do
+    (( ${#out} > 200 )) && break
+    w="${ws[$i]}"; i=$((i + 1)); q=""
+    case "$w" in \'*|\"*) q="${w:0:1}"; w="${w#"$q"}" ;; esac
+    if [[ -n "$q" ]]; then
+      while [[ "$w" != *"$q" ]] && (( i < n )); do w="$w ${ws[$i]}"; i=$((i + 1)); done
+      w="${w%"$q"}"
+    fi
     redact_word "$w"; out="${out:+$out }$RW"
   done
   RTXT="$out"
@@ -1043,7 +1064,7 @@ for ((r = 0; r < NREC; r++)); do
   decide_argv 0
   if (( REC_RANK > BEST_RANK )); then
     BEST_RANK="$REC_RANK"; BEST_RULE="$REC_RULE"
-    REC_TXT=""
+    REC_TXT=""; RW_NEXT=0
     for ((RQ = 0; RQ < ${#DA_T[@]} && ${#REC_TXT} <= 200; RQ++)); do redact_word "${DA_T[RQ]}"; REC_TXT="${REC_TXT:+$REC_TXT }$RW"; done
     BEST_QUOTE="${REC_TXT:0:200}"
     (( ${#REC_TXT} > 200 )) && BEST_QUOTE="${BEST_QUOTE}..."
