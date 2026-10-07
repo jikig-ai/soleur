@@ -242,7 +242,7 @@ every `founder-check.py <word>` mention names a real subcommand
 every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)
 every block parses to the expected fields, or is a ParseError
 every document yields exactly the expected number of blocks
-every documented script call goes through the plugin root with the unresolved-root guard
+every documented script call goes through the plugin root, and each Read-surface doc carries the root-delivery notice
 every documented script call parses against the real argument parser (a renamed flag or subcommand is RED)
 every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling
 every reason a FAIL can carry has a plain-language line, and an unknown one falls back to the detail

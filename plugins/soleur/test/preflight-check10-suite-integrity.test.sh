@@ -67,7 +67,7 @@ MANIFEST="plugins/soleur/test/fixtures/check10-test-manifest.txt"
 # "[ok] all 0 manifest tests still declared", so this floor is what makes the
 # primary identity control non-vacuous.
 MIN_TESTS=447
-MIN_ASSERTIONS=2425
+MIN_ASSERTIONS=2428
 MIN_MANIFEST_LINES=340
 
 PASS=0
