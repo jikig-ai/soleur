@@ -614,8 +614,8 @@ if [[ -n "$DISK_BASE" ]]; then
     && pass "T2e past-TTL worktrees entry drains, inside-TTL scratch entry stays" || fail "T2e: $out"
 
   # T2h: the drain visits EVERY base, not just the first (the entry sits in the last one).
-  reset_fixtures; mkdir -p "$DISK_BASE/second"; rm -rf "$QR" "$DISK_BASE/second/soleur-quarantine.$UID_N"
-  Q2="$DISK_BASE/second/soleur-quarantine.$UID_N"; mkdir -p "$Q2/scratch/lastbase"; chmod 0700 "$Q2"; head -c 2048 /dev/zero > "$Q2/scratch/lastbase/blob"
+  reset_fixtures; assert_fixture_dir "$DISK_BASE"; mkdir -p "$DISK_BASE/second"; rm -rf "$QR" "$DISK_BASE/second/soleur-quarantine.$UID_N"
+  Q2="$DISK_BASE/second/soleur-quarantine.$UID_N"; assert_fixture_dir "$Q2"; mkdir -p "$Q2/scratch/lastbase"; chmod 0700 "$Q2"; head -c 2048 /dev/zero > "$Q2/scratch/lastbase/blob"
   out="$(SWEEP_BASES="$DISK_BASE $DISK_BASE/second" sweep_fx "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0)"
   cases=$((cases + 1)); [[ ! -e "$Q2/scratch/lastbase" ]] && grep -q 'drained=1 ' <<<"$out" \
     && pass "T2h an entry in the last base drains (the loop does not stop after the first base)" || fail "T2h: $out"
