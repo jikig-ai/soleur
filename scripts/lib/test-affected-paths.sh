@@ -542,11 +542,15 @@ AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
 )
 # #9372: the web-host reboot suite walks the tracked tree under scripts/, .github/ and apps/ (its census of reboot-request call sites, so a
 # third such site anywhere in those roots is RED) and reads the workflow, the infra census suite and the rebirth scripts it pins
-# helper bodies against; its verdict is scoped to those three roots, not to the rest of the corpus (plugins/, knowledge-base/).
+# helper bodies against; its verdict is scoped to those three roots plus the three runbooks it reads (copies them into its sandbox and
+# pins the dispatch commands, the Better Stack query and the LUKS cutover cross-reference), not to the rest of the corpus (plugins/).
 AFFECTED_SCRIPTS_WEB_HOST_REBOOT_PATHS=(
   "scripts/"
   ".github/"
   "apps/"
+  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "knowledge-base/engineering/operations/runbooks/web-host-reboot.md"
+  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(

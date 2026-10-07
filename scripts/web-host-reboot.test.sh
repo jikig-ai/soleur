@@ -881,7 +881,7 @@ world; ctl="$(rune "planted-esub" 64 "text-that-is-not-there" 2>&1)"
 srow "static: (positive control) rune reports a missing substring" "$([[ "$ctl" == *"FAILED planted-esub (output lacks"* ]]; echo $?)"
 world; ctl="$(rune "planted-eok" 64 "usage" 2>&1)"
 srow "static: (must-pass) rune is silent when the exit code and the substring match" "$([[ -z "$ctl" ]]; echo $?)"
-world; echo "REBOOT /servers/1/actions/reboot" > "$W/writes.log"; echo "anchor_epoch=1" > "$W/gh_out"; ctl="$(want_nothing_written "planted-w")"
+world; assert_fixture_dir "$W"; echo "REBOOT /servers/1/actions/reboot" > "$W/writes.log"; echo "anchor_epoch=1" > "$W/gh_out"; ctl="$(want_nothing_written "planted-w")"
 srow "static: (positive control) want_nothing_written reports a write and an anchor" "$([[ "$ctl" == *"FAILED planted-w: the write log is empty"* && "$ctl" == *"FAILED planted-w: no anchor was handed out"* ]]; echo $?)"
 world; ctl="$(want_nothing_written "planted-w-ok")"; srow "static: (must-pass) want_nothing_written is silent on an untouched world" "$([[ -z "$ctl" ]]; echo $?)"
 world; echo "GET /servers" > "$W/calls.log"; ctl="$(want_no_api_call "planted-c")"
@@ -1107,7 +1107,9 @@ mk_sandbox() { # <dir>
   cp -r "$ROOT/scripts/lib" "$d/scripts/"
   cp "$ROOT/scripts/betterstack-query.sh" "$RSCRIPT" "$ESCRIPT" "$DIR/web-host-reboot.test.sh" "$d/scripts/"
   for f in web2-rebirth.sh web2-rebirth-never-pooled.sh; do [[ -f "$ROOT/scripts/$f" ]] && cp "$ROOT/scripts/$f" "$d/scripts/"; done
-  cp "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh" "$ROOT/apps/web-platform/infra/web-host-reboot-workflow.test.sh" "$d/apps/web-platform/infra/"
+  assert_fixture_dir "$d/apps/web-platform/infra/"
+  cp "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh" "$d/apps/web-platform/infra/"
+  cp "$ROOT/apps/web-platform/infra/web-host-reboot-workflow.test.sh" "$d/apps/web-platform/infra/"
   mkdir -p "$d/knowledge-base/engineering/operations/runbooks"; cp "$ROOT/knowledge-base/engineering/operations/runbooks/web-host-reboot.md" "$d/knowledge-base/engineering/operations/runbooks/"
 }
 static_red() { # <sandbox> -> the number of static conditions that are red in it

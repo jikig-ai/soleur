@@ -39,7 +39,7 @@ esac
 FOOTER='This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'
 
 tmp="$(mktemp -d)" || { printf 'CANNOT ESTABLISH: mktemp failed.\n'; exit 3; }
-# shellcheck disable=SC2329  # invoked through the EXIT trap
+# shellcheck disable=SC2329,SC2317  # invoked through the EXIT trap
 finish() {
   rm -rf "$tmp"
   printf '%s\n' "$FOOTER"
@@ -216,11 +216,11 @@ cmd_snapshot() {
   read_all
   local block=""
   block+="pre-request context:"$'\n'
-  if printf '%s\n' "${FAULTS[@]-}" | grep -q '^ready'; then block+="  readiness row: unavailable"$'\n'
+  if grep -q '^ready' < <(printf '%s\n' "${FAULTS[@]-}"); then block+="  readiness row: unavailable"$'\n'
   else block+="  $(jq -r 'if . == null then "readiness row: none" else "readiness row: boot_id=\(.boot) age_s=\(.age)" end' <<<"$READY_JSON")"$'\n'; fi
-  if printf '%s\n' "${FAULTS[@]-}" | grep -q '^probe'; then block+="  probe row: unavailable"$'\n'
+  if grep -q '^probe' < <(printf '%s\n' "${FAULTS[@]-}"); then block+="  probe row: unavailable"$'\n'
   else block+="  $(jq -r 'if . == null then "probe row: none" else "probe row: class=\(.kind) boot_id=\(if .boot == "" then "none" else .boot end) age_s=\(.age)" end' <<<"$PROBE_JSON")"$'\n'; fi
-  if printf '%s\n' "${FAULTS[@]-}" | grep -q '^boots'; then block+="  newest boot: unavailable"$'\n'
+  if grep -q '^boots' < <(printf '%s\n' "${FAULTS[@]-}"); then block+="  newest boot: unavailable"$'\n'
   else block+="  $(jq -r '.boots[0] | "newest boot: id=\(.id) rows=\(.n) first_row_age_s=\(.first) newest_row_age_s=\(.newest)"' <<<"$BOOTS_JSON")"$'\n'; fi
   printf '%s' "$block"
   summary_add '```text' "${block%$'\n'}" '```'

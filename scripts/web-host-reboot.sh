@@ -90,6 +90,7 @@ out() { local v="${2//$'\r'/ }"; v="${v//$'\n'/ }"; [[ -z "${GITHUB_OUTPUT:-}" ]
 # with `|`, which a workflow command cannot), no table pipe, bounded.
 clean() { local v="$*"; v="${v//$'\r'/ }"; v="${v//$'\n'/ }"; v="${v//|//}"; printf '%s' "${v:0:300}"; }
 # The loader's legacy arm exports a READ-ONLY Hetzner token first; a write verb answered 403 almost always means that.
+# shellcheck disable=SC2015  # the body is byte-identical to scripts/web2-rebirth.sh (parity row), so it is not rewritten
 write_hint() { [[ "$1" == 403 ]] && printf ' (403: the loader exported a read-only Hetzner token; the write verbs need the Tier-B write token)' || true; }
 
 # shellcheck disable=SC2016  # $h is a jq variable, bound by --arg in state_ident
