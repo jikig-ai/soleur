@@ -702,8 +702,8 @@ chk "the header carries the non-coverage statement (a plain terraform apply is n
 echo "== registration (Guard 1, M7) =="
 _reg() { "$JQ_BIN" -e --arg h destructive-command-guard.sh "$@" "$HOOKS_JSON" >/dev/null 2>&1 && printf ok || printf bad; }
 chk "hooks.json carries a PreToolUse entry that runs the hook" "$(_reg '[.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h)))] | length == 1')"
-chk "that entry's matcher matches Bash" "$(_reg '[.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h))) | select("Bash" | test(.matcher))] | length == 1')"
-chk "that entry's matcher does not match Edit or exec (D9: ^Bash$ only)" "$(_reg '([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h)))] | length == 1) and ([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h))) | select(("Edit" | test(.matcher)) or ("exec" | test(.matcher)))] | length == 0)')"
+chk "that entry's matcher matches Bash" "$(_reg '[.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h))) | select(.matcher as $m | "Bash" | test($m))] | length == 1')"
+chk "that entry's matcher does not match Edit or exec (D9: ^Bash$ only)" "$(_reg '([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h)))] | length == 1) and ([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h))) | select(.matcher as $m | ("Edit" | test($m)) or ("exec" | test($m)))] | length == 0)')"
 chk "the hook entry carries an explicit numeric timeout" "$(_reg '[.hooks.PreToolUse[] | .hooks[] | select(.command | contains($h)) | .timeout | select(type == "number" and . > 0)] | length == 1')"
 chk "the hook is registered after the snapshot guard" "$(_reg '[.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains($h))) | .key][0] > ([.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains("browser-snapshot-credential-guard.sh"))) | .key][0])')"
 
