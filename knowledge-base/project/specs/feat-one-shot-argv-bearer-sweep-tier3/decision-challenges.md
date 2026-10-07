@@ -5,13 +5,11 @@ these are taste calls the plan made that review should confirm.
 
 ## 2026-10-07 plan phase
 
-1. **Whole-section extraction of the review skill's Defect Classes list (taste).** The brief said to
-   extract "a block". The plan extracts the whole 250,787-byte section because bold-lead clustering found
-   only small domain clusters (4.4 KB of SQL/RLS, 1.8 KB of React) and keyword clustering mixes
-   examples with subjects. The cost is a behaviour change: the list moves from ambient context to a
-   read directive at the Findings Synthesis step. Alternative if review objects: a smaller, hand-selected
-   cluster of at least 5 KB by reading the bullets, accepting more editorial risk. The plan's recommended
-   default stands.
+1. **Review skill extraction takes only the migration/RLS cluster (taste).** The first draft moved the
+   whole 250,787-byte Defect Classes section behind an unconditional read; the simplicity review
+   reversed that (it adds about 60k tokens to every review to fix a 1 KB problem). The plan now moves three
+   conditional bullets (4,402 bytes) to `references/defect-classes-migrations.md`, giving about 3 KB of
+   headroom. Alternative if review objects: the whole-section move, accepting the read cost.
 2. **Item 4 bundled in S1 (taste).** The review extraction is independent of the argv sweep. It rides in
    S1 because the brief lists it as one task and it touches no shared file; Phase 3 is a separate commit
    group so it can become its own PR if review asks.
