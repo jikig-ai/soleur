@@ -566,5 +566,192 @@ assert_file_not_matches "$CASE9E/out/stdout" '"interactions"' \
 assert_file_matches "$CASE9E/out/stderr" 'GITHUB_COLLECTOR_CAUSE=issue-comments' \
   "fetch-interactions names issue-comments as the cause"
 
+# --- Test 10: compact mode (#9678) ------------------------------------------
+#
+# The spawned agent has no file tools, so collector output past the Bash tool's inline
+# limit (30,000 characters) is unreadable and the digest row goes `partial`. With
+# SOLEUR_COLLECTOR_COMPACT=1 each command prints ONE line holding only the fields the
+# prompt reads; unset (or any other value) the output is the unchanged interactive shape.
+
+echo "Test 10: compact mode projects to the prompt's fields within the inline budget"
+
+INLINE_LIMIT=30000
+LONG=256
+
+# Runs the collector with extra environment ("NAME=value ..." in $2). Sets RC.
+run_collector_env() {
+  local root="$1" envs="$2" cmd="$3" days="${4:-1}"
+  local -a pairs=()
+  # shellcheck disable=SC2206
+  [[ -n "$envs" ]] && pairs=($envs)
+  (
+    export PATH="$root/stub:$PATH"
+    export GITHUB_REPOSITORY="test-owner/test-repo"
+    export TMPDIR="$root/tmp"
+    env "${pairs[@]}" bash "$COLLECTOR" "$cmd" "$days"
+  ) >"$root/out/stdout" 2>"$root/out/stderr"
+  RC=$?
+}
+
+# Issues/PRs with long titles and distinct, strictly increasing updated_at (item 100
+# is the newest), so "newest first" is observable and the title cap has work to do.
+gen_long_issues() { jq -nc --argjson n "$1" --argjson len "$2" \
+  '[range($n) | {number: (.+1), title: ("T" + (.|tostring) + "-" + ("x" * $len)), state: "open",
+                 user: {login: ("user" + ((. % 3)|tostring))},
+                 created_at: "2099-01-01T00:00:00Z",
+                 updated_at: ("2099-01-01T00:" + ((. / 60 | floor) | tostring | if length < 2 then "0" + . else . end) + ":" + ((. % 60) | tostring | if length < 2 then "0" + . else . end) + "Z"),
+                 pull_request: null, body: ("x" * 100)}]'; }
+gen_long_pulls() { jq -nc --argjson n "$1" --argjson len "$2" \
+  '[range($n) | {number: (.+1), title: ("P" + (.|tostring) + "-" + ("x" * $len)), state: "open",
+                 user: {login: ("user" + ((. % 3)|tostring))},
+                 created_at: "2099-01-01T00:00:00Z",
+                 updated_at: ("2099-01-01T00:" + ((. / 60 | floor) | tostring | if length < 2 then "0" + . else . end) + ":" + ((. % 60) | tostring | if length < 2 then "0" + . else . end) + "Z"),
+                 merged_at: null, body: ("x" * 100)}]'; }
+gen_graphql_discussions() { jq -nc --argjson n "$1" --argjson len "$2" \
+  '{data: {repository: {discussions: {nodes:
+     [range($n) | {number: (.+1), title: ("D" + (.|tostring) + "-" + ("x" * $len)),
+                   author: {login: "someone"}, createdAt: "2099-01-01T00:00:00Z",
+                   updatedAt: ("2099-01-01T00:00:" + ((. % 60) | tostring | if length < 2 then "0" + . else . end) + "Z"),
+                   answerChosenAt: null, comments: {totalCount: 1}, category: {name: "General"}}]}}}}'; }
+
+CASE10="$(new_case compact)"
+gen_long_issues 100 "$LONG" > "$CASE10/fixtures/issues.json"
+gen_long_pulls  100 "$LONG" > "$CASE10/fixtures/pulls.json"
+gen_commits 100 16          > "$CASE10/fixtures/commits.json"
+gen_stargazers 5 16         > "$CASE10/fixtures/stargazers.json"
+gen_repo                    > "$CASE10/fixtures/repo.json"
+gen_graphql_discussions 60 "$LONG" > "$CASE10/fixtures/graphql.json"
+{ gen_comments 3; gen_comments 2; } > "$CASE10/fixtures/issue_comments.json"
+
+# Precondition: the default output really does breach the inline limit, so the
+# budget assertions below are not vacuous.
+run_collector "$CASE10" activity 1
+DEFAULT_ACTIVITY_BYTES=$(wc -c < "$CASE10/out/stdout")
+if [[ "$DEFAULT_ACTIVITY_BYTES" -le "$INLINE_LIMIT" ]]; then
+  echo "  FAIL: default activity output is $DEFAULT_ACTIVITY_BYTES B, not over the $INLINE_LIMIT B limit under test"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: default activity output ($DEFAULT_ACTIVITY_BYTES B) breaches the $INLINE_LIMIT B inline limit"
+  PASS=$((PASS + 1))
+fi
+# Default shape is unchanged (flag unset).
+assert_jq "$CASE10/out/stdout" \
+  '(keys | sort) == ["issues","pull_requests","repo","since"] and (.issues.items[0] | has("user"))' \
+  "default activity shape is unchanged when the flag is unset"
+
+CHAIN_BYTES=0
+for cmd in activity contributors repo-stats discussions fetch-interactions; do
+  run_collector_env "$CASE10" "SOLEUR_COLLECTOR_COMPACT=1" "$cmd" 1
+  assert_rc 0 "$RC" "compact $cmd exits 0"
+  bytes=$(wc -c < "$CASE10/out/stdout")
+  CHAIN_BYTES=$((CHAIN_BYTES + bytes))
+  lines=$(wc -l < "$CASE10/out/stdout" | tr -d ' ')
+  assert_eq "1" "$lines" "compact $cmd prints exactly one line"
+  if [[ "$bytes" -lt "$INLINE_LIMIT" ]]; then
+    echo "  PASS: compact $cmd ($bytes B) is under the $INLINE_LIMIT B inline limit"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: compact $cmd is $bytes B, not under the $INLINE_LIMIT B inline limit"; FAIL=$((FAIL + 1))
+  fi
+  cp "$CASE10/out/stdout" "$CASE10/out.$cmd.json"
+done
+# The agent's reads concatenate: the whole GitHub chain must fit one inline window with margin.
+if [[ "$CHAIN_BYTES" -lt 9800 ]]; then
+  echo "  PASS: worst-case compact chain ($CHAIN_BYTES B) fits well inside the inline limit"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: worst-case compact chain is $CHAIN_BYTES B (budget 9800 B, measured 7840 B)"; FAIL=$((FAIL + 1))
+fi
+
+assert_jq "$CASE10/out.activity.json" \
+  '(keys | sort) == ["issues","pull_requests"]
+   and .issues.count == 100 and .pull_requests.count == 100
+   and (.issues.titles | length) == 40 and (.pull_requests.titles | length) == 40
+   and ([.issues.titles[], .pull_requests.titles[]] | all(length <= 60))' \
+  "compact activity: exact counts, newest 40 titles per list, each title capped at 60"
+assert_jq "$CASE10/out.activity.json" \
+  '(.issues.titles[0] | startswith("T99-")) and (.pull_requests.titles[0] | startswith("P99-"))' \
+  "compact activity: titles are newest-first (sorted by updated_at before the slice)"
+assert_file_not_matches "$CASE10/out.activity.json" 'user[0-9]|"login"|body' \
+  "compact activity carries no login or body text"
+assert_jq "$CASE10/out.contributors.json" '. == {commit_total: 100}' \
+  "compact contributors: commit_total equals the 100 synthesized commits, no logins"
+assert_jq "$CASE10/out.repo-stats.json" \
+  '(keys | sort) == ["forks_count","new_stargazers_count","stargazers_count","stargazers_unavailable","subscribers_count"]
+   and .stargazers_count == 11 and .forks_count == 2 and .new_stargazers_count == 5
+   and .stargazers_unavailable == false' \
+  "compact repo-stats: exactly the prompt's fields, no login list, no watchers_count"
+assert_jq "$CASE10/out.discussions.json" \
+  '(keys == ["titles"]) and (.titles | length) == 40 and (.titles | all(length <= 60)) and (.titles[0] | startswith("D59-"))' \
+  "compact discussions: newest 40 titles, each capped at 60"
+assert_jq "$CASE10/out.fetch-interactions.json" \
+  '. == {external_contributors: 3, interactions_count: 5}' \
+  "compact fetch-interactions: 5 interactions from 3 distinct people, computed in the collector"
+
+# A flag value other than 1 leaves output unchanged and never echoes the raw value.
+run_collector_env "$CASE10" "SOLEUR_COLLECTOR_COMPACT=sekret-value" activity 1
+assert_rc 0 "$RC" "activity exits 0 with a bad flag value"
+assert_jq "$CASE10/out/stdout" '(.issues | has("items"))' "a flag value other than 1 leaves the default shape"
+assert_file_matches "$CASE10/out/stderr" '^SOLEUR_COLLECTOR_COMPACT ignored \(expected 1\)$' \
+  "a bad flag value prints one fixed stderr line"
+assert_file_not_matches "$CASE10/out/stderr" 'sekret-value' "the raw flag value is never echoed"
+
+# Discussions not enabled.
+CASE10N="$(new_case compact_nodiscussions)"
+printf 'Discussions are not enabled for this repository (Not Found)\n' > "$CASE10N/fixtures/graphql.json"
+echo 1 > "$CASE10N/fixtures/graphql.exit"
+run_collector_env "$CASE10N" "SOLEUR_COLLECTOR_COMPACT=1" discussions 1
+assert_rc 0 "$RC" "compact discussions exits 0 when discussions are not enabled"
+assert_jq "$CASE10N/out/stdout" '. == {titles: []}' "compact discussions (not enabled): empty titles"
+
+# The stargazers_unavailable sidecar warn survives compact mode (it is set in the same
+# function scope as the projection; a pipe would have lost it).
+CASE10S="$(new_case compact_sidecar)"
+gen_repo > "$CASE10S/fixtures/repo.json"
+echo '[]' > "$CASE10S/fixtures/stargazers.json"
+printf 'gh: Resource not accessible by integration (HTTP 403)\n' > "$CASE10S/fixtures/stargazers.stderr"
+echo 1 > "$CASE10S/fixtures/stargazers.exit"
+run_collector_env "$CASE10S" "SOLEUR_COLLECTOR_COMPACT=1 SOLEUR_COLLECTOR_STATUS_DIR=$CASE10S/status" repo-stats 1
+assert_rc 0 "$RC" "compact repo-stats exits 0 with unreadable stargazers"
+assert_jq "$CASE10S/out/stdout" '.stargazers_unavailable == true and .new_stargazers_count == null' \
+  "compact repo-stats reports stargazers as unavailable, not zero"
+assert_jq "$CASE10S/status/collector-status.jsonl" '.warn == "stargazers_unavailable" and .exit == 0 and .cause == ""' \
+  "compact mode keeps the stargazers_unavailable sidecar warn (and no cause on success)"
+
+# compact_off: inside the cron (status dir set) but the flag did not arrive.
+CASE10O="$(new_case compact_off)"
+gen_repo > "$CASE10O/fixtures/repo.json"
+gen_stargazers 2 16 > "$CASE10O/fixtures/stargazers.json"
+run_collector_env "$CASE10O" "SOLEUR_COLLECTOR_STATUS_DIR=$CASE10O/status" repo-stats 1
+assert_rc 0 "$RC" "default repo-stats still exits 0 inside the cron"
+assert_jq "$CASE10O/status/collector-status.jsonl" '.warn == "compact_off"' \
+  "a cron run without the flag records warn=compact_off in the sidecar"
+# ...and a status-dir run that DOES carry the flag does not.
+run_collector_env "$CASE10O" "SOLEUR_COLLECTOR_COMPACT=1 SOLEUR_COLLECTOR_STATUS_DIR=$CASE10O/status2" repo-stats 1
+assert_jq "$CASE10O/status2/collector-status.jsonl" 'has("warn") | not' \
+  "a cron run with the flag records no compact warn"
+
+# compact_over_budget: titles that JSON-escape to two bytes per character push one
+# output past the 6,000 B signal threshold.
+CASE10B="$(new_case compact_over_budget)"
+jq -nc '[range(99) | {number: (.+1), title: ("\"" * 60), state: "open", user: {login: "u"},
+         created_at: "2099-01-01T00:00:00Z", updated_at: "2099-01-01T00:00:00Z", pull_request: null}]' \
+  > "$CASE10B/fixtures/issues.json"
+jq -nc '[range(99) | {number: (.+1), title: ("\"" * 60), state: "open", user: {login: "u"},
+         created_at: "2099-01-01T00:00:00Z", updated_at: "2099-01-01T00:00:00Z", merged_at: null}]' \
+  > "$CASE10B/fixtures/pulls.json"
+run_collector_env "$CASE10B" "SOLEUR_COLLECTOR_COMPACT=1 SOLEUR_COLLECTOR_STATUS_DIR=$CASE10B/status" activity 1
+assert_rc 0 "$RC" "compact activity exits 0 on escape-heavy titles"
+assert_jq "$CASE10B/status/collector-status.jsonl" '.warn == "compact_over_budget"' \
+  "an over-budget compact output records warn=compact_over_budget"
+
+# Fail closed: a drifted required field must not print null for the model to read as 0.
+CASE10F="$(new_case compact_failclosed)"
+jq -nc '{stargazers_count: 11, watchers_count: 11, subscribers_count: 1}' > "$CASE10F/fixtures/repo.json"
+gen_stargazers 1 16 > "$CASE10F/fixtures/stargazers.json"
+run_collector_env "$CASE10F" "SOLEUR_COLLECTOR_COMPACT=1 SOLEUR_COLLECTOR_STATUS_DIR=$CASE10F/status" repo-stats 1
+assert_nonzero_rc "$RC" "compact repo-stats exits non-zero when forks_count is missing"
+assert_file_not_matches "$CASE10F/out/stdout" 'forks_count' "no partial compact record is printed on a projection failure"
+assert_jq "$CASE10F/status/collector-status.jsonl" '.cause == "compact-projection-failed" and .exit != 0' \
+  "a projection failure is recorded with cause=compact-projection-failed"
+
 echo ""
 print_results
