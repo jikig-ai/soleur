@@ -324,6 +324,16 @@ if mv_marker "$MU/orig.pl" "$MU/m6o.pl" END 3 -3 && mv_marker "$MU/plug.pl" "$MU
   v1="$(edge_verdict "$MU/m6o.pl")"; v2="$(edge_verdict "$MU/m6p.pl")"
   row "M6: END of span 3 moved 3 lines up in BOTH copies is rejected by the last-line anchors" "$([[ "$v1" == RED:*"span 3 ends with"* && "$v2" == RED:*"span 3 ends with"* ]] && echo ok)" "$v1 / $v2"
 else row "M6: END of span 3 moved in both copies (landed)" no "move did not land"; fi
+# 7/8. the same move for span 1 and span 2 (BEGIN one line down in BOTH copies): byte parity and the size floors can both stay green,
+# so an edge_verdict that looks only at span 3 would let it through; the first-line anchor of THAT span is what must reject it.
+if mv_marker "$MU/orig.pl" "$MU/m7o.pl" BEGIN 1 1 && mv_marker "$MU/plug.pl" "$MU/m7p.pl" BEGIN 1 1; then
+  v3="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m7p.pl" )"; v4="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m7o.pl" )"
+  row "M7: BEGIN of span 1 moved one line down in BOTH copies is rejected by span 1's first-line anchor" "$([[ "$v3" == RED:*"span 1 starts with"* && "$v4" == RED:*"span 1 starts with"* ]] && echo ok)" "$v4 / $v3"
+else row "M7: BEGIN of span 1 moved in both copies (landed)" no "move did not land"; fi
+if mv_marker "$MU/orig.pl" "$MU/m8o.pl" BEGIN 2 1 && mv_marker "$MU/plug.pl" "$MU/m8p.pl" BEGIN 2 1; then
+  v3="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m8p.pl" )"; v4="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m8o.pl" )"
+  row "M8: BEGIN of span 2 moved one line down in BOTH copies is rejected by span 2's first-line anchor" "$([[ "$v3" == RED:*"span 2 starts with"* && "$v4" == RED:*"span 2 starts with"* ]] && echo ok)" "$v4 / $v3"
+else row "M8: BEGIN of span 2 moved in both copies (landed)" no "move did not land"; fi
 # (b) must-PASS: a change OUTSIDE the markers (inside process_command) compares equal, in either file
 if mutate "$MU/plug.pl" "$MU/b1.pl" 's/^(sub process_command \{)/$1  # a change outside the shared spans/m'; then
   expect_ok "HARNESS (b): a change inside process_command of the plugin copy compares equal" "$MU/orig.pl" "$MU/b1.pl"
@@ -402,7 +412,7 @@ echo "cases=$CASES passes=$passes fails=$fails"
 if [[ $((passes + fails)) -ne "$CASES" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((passes + fails))" "$CASES" >&2; exit 1
 fi
-MIN_CASES=97
+MIN_CASES=99
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CASES" "$MIN_CASES" >&2
   exit 1
