@@ -80,11 +80,23 @@ pre-mutation buffer (`s` instead of `s2`), silently no-opping the fix.
    source/destination pair — `grep -o` is line-local and can never span the
    newline. **Prevention:** `grep -A1` then extract the following line.
 5. One transient `RESULT: 337 passed, 1 failed` in
-   `cron-egress-firewall.test.sh` (row unidentified — the buffer was lost
-   before the FAIL line was read); two subsequent runs green at 338/338.
-   **Prevention:** capture failing-suite output to a file (`> out.txt 2>&1`)
-   before grepping, so a one-off row is identifiable.
-6. The MWd behavioural battery's first draft left `$BEHAVE_DIR` unexpanded
+   `cron-egress-firewall.test.sh` — later identified in the CI leg artifact as
+   `echo "$WEB2_BLOCK" | grep -qE` racing grep's early exit into SIGPIPE under
+   `pipefail` (`echo: write error: Broken pipe`), so a WON match reported FAIL.
+   **Prevention:** never feed `grep -q` from a pipe inside `pipefail` — use a
+   herestring (`grep -qE pat <<<"$VAR"`), which this file already does
+   everywhere else; `grep -c` is exempt (reads all input). Capture failing
+   output to a file before grepping so a one-off row is identifiable.
+6. A `.sh` path literal in a COMMENT pulled a suite into
+   `battery-tag-authorship`'s closure: the guard chases `*.sh|py|ts|mjs|cjs`
+   literals with no comment filtering, so naming
+   `mint-inngest-bootstrap-tag.sh` reached the script, whose own comments
+   reach the test, surfacing 16 pre-existing sandbox tag authors (past the
+   ADR-207 ledger ceiling of 12) as a 16-offender red. **Prevention:** in
+   battery-reached files, cite scripts by name minus the executable suffix —
+   and treat every new path literal as a reachability edge, not prose.
+   (ADR-level suite-level-exemption decision filed as #9700.)
+7. The MWd behavioural battery's first draft left `$BEHAVE_DIR` unexpanded
    inside a quoted stub heredoc (the child env does not inherit it). **Prevention:**
    bake the path into the generated stub, and mutation-drive the battery itself
    before trusting it (the polarity-swap drive caught and proved the rows).
