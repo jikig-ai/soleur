@@ -9,7 +9,8 @@ Plan: `knowledge-base/project/plans/2026-10-07-feat-web-host-reboot-workflow-pla
 - 0.3 Re-run the `actions/reboot` census and record the expected file set.
 - 0.4 Confirm the loader still exports `AWS_*` from the Tier-B pair and that `web-platform-infra-apply` still has a required reviewer and a `main`-only branch policy.
 - 0.5 Verify GitHub's concurrency-versus-environment-approval behaviour from its documentation; record the verified sentence or an explicit "unverified" for the runbook.
-- 0.6 Re-measure the readiness rows, probe rows and the journald boot list through the rows helper; keep the real JSON shapes as fixture templates.
+- 0.6 Ask whether a job skipped by its `if:` still claims the concurrency group; re-read `prevent_self_review` and the reviewer list on the environment.
+- 0.7 Re-measure the readiness rows, probe rows and the journald boot list through the rows helper; keep the real JSON shapes as fixture templates.
 
 ## Phase 1: RED (tests first)
 
@@ -19,13 +20,13 @@ Plan: `knowledge-base/project/plans/2026-10-07-feat-web-host-reboot-workflow-pla
 
 ## Phase 2: scripts
 
-- 2.1 `scripts/web-host-reboot.sh`: helpers copied from `scripts/web2-rebirth.sh`; `reboot` with refusals 1 to 10 and the anchor written before the POST; `summary` with no Hetzner call.
-- 2.2 `scripts/web-host-reboot-evidence.sh`: credential and `declare -F` loading checks; `snapshot`; `grade` with the pure verdict function, the three reads per iteration (clock read first), the `next:` line, the fixed footer, exit codes 0, 1, 2, 3 and 78.
+- 2.1 `scripts/web-host-reboot.sh`: helpers copied from `scripts/web2-rebirth.sh`; `reboot` with refusals 1 to 10 (ids shape-checked before printing; a new wrong-state-object check) and the anchor written before the POST; `summary` with no Hetzner call.
+- 2.2 `scripts/web-host-reboot-evidence.sh`: credential and `declare -F` loading checks; `snapshot`; `grade` with the pure verdict function (including `request_not_acted_on`, `host_silent_no_new_boot`, `new_boot_seen_then_silent`), the three reads per iteration (clock read first, `_BOOT_ID` format-gated to 32 lowercase hex in jq), the `next:` line, the fixed footer, exit codes 0, 1, 2, 3, 4 and 78.
 - 2.3 Add the evidence script to `READERS` in `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh`.
 
 ## Phase 3: workflow
 
-- 3.1 `.github/workflows/web-host-reboot.yml` per the plan's contract table (inputs, `run-name`, two jobs, step order, `env -i` snapshot subshell, exit mapping, no forbidden text).
+- 3.1 `.github/workflows/web-host-reboot.yml` per the plan's contract table (inputs, `run-name` without `reason`, three jobs with `validate` first, step order, `env -i` allow-lists on the never-pooled, snapshot and reboot steps, pinned actions, no `inputs` inside `run:`, exit 2 green and exit 4 red, no forbidden text).
 - 3.2 `bash scripts/lint-workflows.sh` and the `lint-workflow-*` linters over the new file.
 
 ## Phase 4: registration and censuses
@@ -55,3 +56,4 @@ Plan: `knowledge-base/project/plans/2026-10-07-feat-web-host-reboot-workflow-pla
 
 - 7.1 First line of the PR body: merging this alone mutates nothing (dispatch-only, no `.tf`, nothing dispatched). Body carries `Ref #9372`, never `Closes`.
 - 7.2 Record the dispatch as the owner's separate go-ahead, tracked on #9372.
+- 7.3 File the follow-up issue on `prevent_self_review` and a distinct agent identity for `web-platform-infra-apply` (verify labels first); link it from the runbook and the PR body.
