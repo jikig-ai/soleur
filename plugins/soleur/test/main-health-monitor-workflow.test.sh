@@ -695,6 +695,83 @@ else:
     bad("(11) verdict is mirrored to an API-retrievable ::notice:: annotation",
         "the $GITHUB_STEP_SUMMARY write is human-only -- no REST field exposes it")
 
+# ---- (MW) the mint-conclusion watch (#9082) ----------------------------------
+# The mint-inngest-bootstrap-tag.yml workflow's own conclusion is a monitor
+# input: a red run otherwise reaches the operator only via its Slack step, which
+# is absent when SLACK_RELEASES_WEBHOOK_URL is unset. The mintwatch step must read
+# the newest completed run on main via `gh run list --json` piped to STANDALONE
+# jq (never `gh --jq`, which does not forward --arg — #9533), count `failure` and
+# `startup_failure` as red, and feed the filer, the closer, and the Sentry
+# check-in. An API failure must be ::error::-visible (fail-open), never a silent
+# green. And the step carries NO timeout-minutes: check (6) pins the job ceiling
+# at sum(step ceilings)+15, so a timed step silently breaks the derivation — the
+# bounded part is the `timeout`-wrapped gh call inside.
+_mw = _step_block("Read newest mint-inngest-bootstrap-tag run (slow-path)")
+_mw_p = []
+if not _mw:
+    _mw_p.append("the mintwatch step is absent")
+else:
+    if "id: mintwatch" not in _mw:
+        _mw_p.append("no `id: mintwatch` — the verdict output is unreferenceable")
+    if "continue-on-error: true" not in _mw:
+        _mw_p.append("no continue-on-error — an API blip could fail the job before the filer")
+    if "timeout-minutes:" in _mw:
+        _mw_p.append("declares timeout-minutes — check (6) pins job >= sum(step ceilings)+15")
+    for tok in ("gh run list", "--workflow=mint-inngest-bootstrap-tag.yml", "--branch main", "--json"):
+        if tok not in _mw:
+            _mw_p.append(f"missing `{tok}` — it must read the newest mint run on main as JSON")
+    if not re.search(r'\|\s*jq\b', _mw):
+        _mw_p.append("the --json output never reaches a standalone jq")
+    if "--jq" in _mw:
+        _mw_p.append("uses `gh --jq` — it does not forward --arg (#9533); standalone jq only")
+    if re.search(r'\|\s*grep -q', _mw):
+        _mw_p.append("a pipe-fed `grep -q` decides a predicate — the banned SIGPIPE class")
+    for concl in ("failure|", "startup_failure"):
+        if concl not in _mw:
+            _mw_p.append(f"conclusion {concl!r} not in the red set")
+    if "::error::" not in _mw:
+        _mw_p.append("no ::error:: — an API failure would be a silent green")
+    if "verdict=" not in _mw or "GITHUB_OUTPUT" not in _mw:
+        _mw_p.append("never emits `verdict=` to $GITHUB_OUTPUT")
+    if "unknown" not in _mw:
+        _mw_p.append("no `unknown` verdict — the fail-open third state is absent")
+if _mw_p:
+    bad("(MW) mintwatch reads the newest mint run, reds on failure|startup_failure, fails open loud",
+        "; ".join(_mw_p))
+else:
+    ok("(MW) mintwatch reads the newest mint run, reds on failure|startup_failure, fails open loud")
+
+# The verdict's THREE consumers — computed but unread is the feature's vacuous form.
+_mw_w = []
+_f_if = step_if(FILER) or ""
+_c_if = step_if(CLOSER) or ""
+# The heartbeat's verdict input is the `status:` expression, not an if: — and
+# BEAT is the job's LAST step, which _step_block's `\Z` lookahead cannot bound on
+# the comment-stripped text (a join ends without a trailing newline). Search the
+# status expression itself.
+_mw_status = re.search(r'^\s*status:\s*\$\{\{.*\}\}\s*$', stripped, re.M)
+_mw_status = _mw_status.group(0) if _mw_status else ""
+if "steps.mintwatch.outputs.verdict == 'red'" not in _f_if:
+    _mw_w.append("the filer if: lacks `steps.mintwatch.outputs.verdict == 'red'` (a red mint never files)")
+if "steps.mintwatch.outputs.verdict != 'red'" not in _c_if:
+    _mw_w.append("the closer if: lacks `steps.mintwatch.outputs.verdict != 'red'` (a green-suite sweep retires a mint tracker)")
+if "steps.mintwatch.outputs.verdict" not in _mw_status:
+    _mw_w.append("the Sentry check-in's status: does not read the verdict (a red mint checks in ok)")
+if _mw_w:
+    bad("(MWb) the verdict reaches filer / closer / heartbeat", "; ".join(_mw_w))
+else:
+    ok("(MWb) the verdict reaches filer / closer / heartbeat")
+
+# The filer's own arm: a mint-red run with green suites must not take the
+# setup-failure arm — AP-021 requires the body to name what was measured.
+_fblk = _step_block(FILER)
+if "MINT_VERDICT" in _fblk and 'TITLE="CI: inngest-bootstrap auto-mint' in _fblk:
+    ok("(MWc) the filer has a mint-red arm that names the measured conclusion")
+else:
+    bad("(MWc) the filer has a mint-red arm that names the measured conclusion",
+        "a mint-red-only run would fall into the setup-failure arm and file a body "
+        "naming nothing this run measured")
+
 for status, msg, detail in results:
     print(f"{status}\t{msg}\t{detail}")
 PY
