@@ -25,7 +25,7 @@
 # counted. Probe row ids carry dashes and journald ids do not: both are compared lowercased with the dashes removed.
 #
 # WHAT IT NEVER DOES. It never echoes a row's text: only classes, boot ids, ages and counts are printed. It makes no statement
-# about the volume (the fixed footer says so, on every exit the shell itself controls; an uncatchable kill excepted). PASS here means "a probe row of the OK class was seen on a
+# about the volume (the fixed footer says so, on every exit the shell itself controls; an uncatchable kill, and a failed mktemp before the trap is installed, excepted). PASS here means "a probe row of the OK class was seen on a
 # boot that began after the request, that row passes the grading helper's own green test (device, mount and escrow fields), and
 # no probe row younger than that boot's first row is a failing one"; the strict grading stays in
 # scripts/followthroughs/web2-luks-live-6931.sh. A read fault is never a verdict. It carries no write verb of any spelling: the census in workspaces-luks-verify-workflow.test.sh holds it.

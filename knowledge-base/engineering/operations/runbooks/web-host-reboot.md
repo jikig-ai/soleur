@@ -84,7 +84,7 @@ The script's refusals all run before the one write, in this order: xtrace, a mis
 
 **An accepted request is a request.** Hetzner's action `success` means the ACPI request was sent. It does not show that the host restarted or came back. If the action ends in `error` or is still running after the poll (a poll answer that is not HTTP 200 counts as no answer), the message says the request was sent and may still happen: **do not re-dispatch**; grade the rows with the command in the log. Likewise a POST that ends in a transport error, an HTTP 5xx or a body with no action id keeps the anchor and says the request may have been sent.
 
-**A definite refusal withdraws the anchor.** If Hetzner answers the POST with a 4xx, the script appends an empty `anchor_epoch=` (the last write wins), the `observe` job is skipped, and the message says that none was sent. A 423 or 429 is such an answer. Fix the cause named in the message and re-dispatch. The log still contains an `anchor_epoch=<digits>` line in this case: read the error message before trusting it, and use no anchor when it says the anchor is withdrawn.
+**A definite refusal withdraws the anchor.** If Hetzner answers the POST with a 4xx, the script appends an empty `anchor_epoch=` (the last write wins: this relies on the Actions runner honouring a repeated key in `GITHUB_OUTPUT`, which the suite models with `tail -n 1` and which was not verified on a real runner; if it did not hold, the only effect is a 40-minute `observe` poll on a request that was never sent, ending red), the `observe` job is skipped, and the message says that none was sent. A 423 or 429 is such an answer. Fix the cause named in the message and re-dispatch. The log still contains an `anchor_epoch=<digits>` line in this case: read the error message before trusting it, and use no anchor when it says the anchor is withdrawn.
 
 ## Reading the result
 
@@ -117,7 +117,7 @@ gh api repos/jikig-ai/soleur/check-runs/<observe job id>/annotations --jq '.[] |
 | 5 (red) | nothing measured | `read_fault` | Better Stack could not be read; nothing was measured | re-grade later. A read fault is never a FAIL and never a green run. |
 | 5 (red) | nothing measured | `instance_recreated_after_request` | a readiness row is newer than the request: the host was re-created, not rebooted | nothing was measured about this request; run again after the new instance, with a new anchor |
 | 4 (red) | NOT YET at the deadline | `request_not_acted_on` | no boot began and the old boot's newest row is recent (inside 10 minutes) and newer than the request: the guest ignored the soft request. Nothing is dark | **Do not replace the host.** Record it on #9372 and let the owner decide: a replace is destructive and restarts the soak. |
-| 4 (red) | NOT YET at the deadline | `host_silent_no_new_boot` | no boot began and the old boot is no longer shipping recent rows (including an old boot whose last rows are only shutdown rows): still booting, or dark | the dark-host path below |
+| 4 (red) | NOT YET at the deadline | `host_silent_no_new_boot` | no boot began and the old boot is no longer shipping recent rows (including an old boot whose last rows are only shutdown rows: those keep reading as `request_not_acted_on` until they are older than 600 seconds, so a `--window-min 0` re-grade within about ten minutes of the request can misread, and the 40-minute window converges): still booting, or dark | the dark-host path below |
 | 4 (red) | NOT YET at the deadline | `new_boot_seen_then_silent` | a boot began and then stopped shipping | the dark-host path below |
 | 1 (red) | FAIL | `probe_fail_row_after_new_boot` | a FAIL-shaped or malformed probe row is younger than the new boot's first row | see the FAIL branch below |
 | 1 (red) | FAIL | `probe_row_not_green_after_new_boot` | a probe row after the new boot is OK-shaped but fails the grading helper's own device, mount and escrow test | see the FAIL branch below |
@@ -135,7 +135,7 @@ The anchor is the `anchor epoch` printed by the `reboot` job (read it with the l
 doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/web-host-reboot-evidence.sh grade --anchor <anchor epoch> --window-min 0
 ```
 
-`--window-min 0` is a single read. Bounds, all enforced by the script (exit 3 with a named reason, nothing read):
+`--window-min 0` is a single read. Bounds. The first is advice. The second and third are enforced by the script (exit 3, nothing read; only `anchor_too_old` is a named reason):
 
 - **Not too early.** A single read taken within a few minutes of the POST usually sees no new boot yet: it reports `host_silent_no_new_boot` or `request_not_acted_on` (exit 4) because the host has not restarted or has not shipped a row, not because the request failed. Within the first minutes either wait or use `--window-min` greater than 0 (the default in the workflow is 40, polled every 60 seconds).
 - **Not too late.** The anchor plus the window must stay inside 47 hours: the boot read looks back 48 hours, and beyond that a boot that began before the request cannot be told from one that began after it, which would make a false PASS. An older anchor is refused as `anchor_too_old`; the daily probe row, up to about 24.5 hours after the boot, still fits inside the bound.

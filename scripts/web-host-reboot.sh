@@ -27,7 +27,7 @@
 # ever piped straight into ONE field-selecting jq program (it holds passphrases): nothing from it is printed or written.
 #
 # Exit: 0 ok, 1 refused or failed (named ::error::), 2 usage, 78 xtrace refused. Every annotation is %/CR/LF-escaped.
-# The fixed footer is printed on every exit the shell itself controls (an uncatchable kill excepted).
+# The fixed footer is printed on every exit the shell itself controls (an uncatchable kill, and a failed mktemp before the trap is installed, excepted).
 set -euo pipefail
 
 case "$-" in
