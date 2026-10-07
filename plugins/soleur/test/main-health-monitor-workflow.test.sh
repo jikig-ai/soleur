@@ -1598,21 +1598,21 @@ for line in raw[j + 1:]:
     body.append(line[10:])
 text = "\n".join(body) + "\n"
 assert len(body) >= 8, f"extracted only {len(body)} lines"
-text = text.replace("${{ steps.tests.outcome }}", "failure").replace("${{ steps.infra.outcome }}", "success")
+text = text.replace("${{ steps.tests.outcome }}", "failure").replace("${{ steps.infra.outcome }}", "success").replace("${{ steps.mintwatch.outputs.verdict }}", "green")
 # Any `${{ }}` still present is an expression the engine would interpolate INTO the script.
-assert "${{" not in text, "Record step body still contains a ${{ }} expression after the two outcome substitutions"
+assert "${{" not in text, "Record step body still contains a ${{ }} expression after the three verdict substitutions"
 sys.stdout.write(text)
 PY
 then
-  fail "(R0) the Record step's run: body extracts with no workflow expression left beyond the two outcomes" "$(head -3 "$BEHAVE_DIR/record.err")"
+  fail "(R0) the Record step's run: body extracts with no workflow expression left beyond the three verdict substitutions" "$(head -3 "$BEHAVE_DIR/record.err")"
 else
-  pass "(R0) the Record step's run: body extracts with no workflow expression left beyond the two outcomes"
+  pass "(R0) the Record step's run: body extracts with no workflow expression left beyond the three verdict substitutions"
 fi
 rec() { # $1 tests-elapsed  $2 infra-elapsed -> the ::notice line
   env TESTS_ELAPSED_S="$1" INFRA_ELAPSED_S="$2" GITHUB_STEP_SUMMARY="$BEHAVE_DIR/summary.txt" \
       bash --noprofile --norc -e "$BEHAVE_DIR/record.sh" 2>&1 | grep -a '^::notice' | head -1
 }
-_N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=failure infra=success'
+_N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=failure infra=success mint=green'
 CASES=$((CASES + 1))
 row "(R1) two numeric figures reach the ::notice annotation" "got: $(rec 4228 2326)" \
   "$([[ "$(rec 4228 2326)" == "$_N tests_elapsed_s=4228 infra_elapsed_s=2326" ]]; echo $?)"
@@ -1625,6 +1625,102 @@ row "(R3) a non-numeric infra figure is dropped and the tests figure survives" "
 CASES=$((CASES + 1))
 row "(R4) empty figures (a killed step wrote none) leave the annotation without elapsed fields" "got: $(rec '' '')" \
   "$([[ "$(rec '' '')" == "$_N" ]]; echo $?)"
+
+# ── (MWd) the mintwatch step body, EXECUTED (#9082) ────────────────────────────
+#
+# The MW static rows pin TOKENS (gh flags, the red-set members, ::error::) — a
+# verdict-polarity swap (`failure|startup_failure) VERDICT="green"`) survives all
+# of them. The convention this suite established for the filer and the Record
+# step applies here too: extract the real run: body and EXECUTE it, with a stub
+# `gh` feeding each fixture, and read the $GITHUB_OUTPUT the step writes. An
+# API-error arm is asserted to emit ::error:: AND verdict=unknown — never a
+# silent green.
+CASES=$((CASES + 1))
+if ! python3 - "$WF" > "$BEHAVE_DIR/mintwatch.sh" 2>"$BEHAVE_DIR/mintwatch.err" <<'PY'
+import sys
+raw = open(sys.argv[1]).read().splitlines()
+start = next(i for i, l in enumerate(raw)
+             if l == "      - name: Read newest mint-inngest-bootstrap-tag run (slow-path)")
+j = start
+while raw[j].strip() != "run: |":
+    j += 1
+body = []
+for line in raw[j + 1:]:
+    if line.strip() == "":
+        body.append("")
+        continue
+    if not line.startswith("          "):
+        break
+    body.append(line[10:])
+text = "\n".join(body) + "\n"
+assert len(body) >= 20, f"extracted only {len(body)} lines"
+assert "${{" not in text, "mintwatch body still contains a ${{ }} expression"
+sys.stdout.write(text)
+PY
+then
+  fail "(MWd0) the mintwatch step's run: body extracts with no workflow expression left" "$(head -3 "$BEHAVE_DIR/mintwatch.err")"
+else
+  pass "(MWd0) the mintwatch step's run: body extracts with no workflow expression left"
+fi
+
+# The stub answers `gh run list` only — every other gh call fails loudly so a new
+# producer sneaking in cannot silently succeed under the fixture. Written once,
+# with the fixture path baked in (the child env does not export BEHAVE_DIR).
+mkdir -p "$BEHAVE_DIR/mintstub"
+GH_STUB="$BEHAVE_DIR/mintstub/gh"
+cat > "$GH_STUB" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "run" && "\$2" == "list" ]]; then
+  fx="\$(cat "$BEHAVE_DIR/mintstub/fx.txt")"
+  if [[ "\$fx" == "@FAIL" ]]; then echo "gh: api error (stub)" >&2; exit 1; fi
+  cat "$BEHAVE_DIR/mintstub/fx.txt"
+else
+  echo "gh stub: unexpected argv: \$*" >&2; exit 2
+fi
+EOF
+chmod +x "$GH_STUB"
+mwv() { # $1 = fixture file (JSON emitted by the stub; a file whose content is
+        # "@FAIL" makes gh exit 1)  -> prints the verdict line the step emitted
+  local fx="$1" out="$BEHAVE_DIR/mintstub/out.txt"
+  : > "$out"
+  cp "$fx" "$BEHAVE_DIR/mintstub/fx.txt"
+  env PATH="$BEHAVE_DIR/mintstub:/usr/bin:/bin" GH_TOKEN=dummy GITHUB_OUTPUT="$out" \
+    bash --noprofile --norc "$BEHAVE_DIR/mintwatch.sh" > "$BEHAVE_DIR/mintstub/stdout.txt" 2>&1
+  grep -oE 'verdict=[a-z]+' "$out" | tail -1
+}
+MWFX="$BEHAVE_DIR/mintstub/fixtures"; mkdir -p "$MWFX"
+printf '%s' '[{"databaseId":1,"conclusion":"failure","status":"completed","createdAt":"2026-10-06T00:00:00Z","headSha":"abc"}]' > "$MWFX/failure.json"
+printf '%s' '[{"databaseId":1,"conclusion":"startup_failure","status":"completed","createdAt":"2026-10-06T00:00:00Z","headSha":"abc"}]' > "$MWFX/startup_failure.json"
+printf '%s' '[{"databaseId":1,"conclusion":"success","status":"completed","createdAt":"2026-10-06T00:00:00Z","headSha":"abc"}]' > "$MWFX/success.json"
+printf '%s' '[]' > "$MWFX/none.json"
+printf '%s' '[{"databaseId":1,"conclusion":null,"status":"in_progress","createdAt":"2026-10-06T00:00:00Z","headSha":"abc"}]' > "$MWFX/inflight.json"
+printf '%s' '[{"databaseId":1,"conclusion":"failure","status":"completed","createdAt":"2026-10-05T00:00:00Z","headSha":"abc"},{"databaseId":2,"conclusion":"success","status":"completed","createdAt":"2026-10-06T00:00:00Z","headSha":"def"}]' > "$MWFX/newest-completed-wins.json"
+printf '%s' 'not-json' > "$MWFX/invalid.json"
+printf '%s' '@FAIL' > "$MWFX/api-error.txt"
+for _fx in failure:red startup_failure:red success:green none:green inflight:green newest-completed-wins:green; do
+  _name="${_fx%%:*}"; _want="${_fx##*:}"
+  CASES=$((CASES + 1))
+  _got="$(mwv "$MWFX/$_name.json")"
+  if [[ "$_got" == "verdict=${_want}" ]]; then
+    pass "(MWd) a $_name completed-run verdict maps to ${_want}"
+  else
+    fail "(MWd) a $_name completed-run verdict maps to ${_want}" "got: $_got stdout: $(tail -2 "$BEHAVE_DIR/mintstub/stdout.txt" | tr '\n' ' ')"
+  fi
+done
+CASES=$((CASES + 1))
+_got="$(mwv "$MWFX/invalid.json")"
+if [[ "$_got" == "verdict=unknown" ]] && grep -q '^::error::' "$BEHAVE_DIR/mintstub/stdout.txt"; then
+  pass "(MWd) unparseable gh output emits ::error:: and verdict=unknown — never a silent green"
+else
+  fail "(MWd) unparseable gh output emits ::error:: and verdict=unknown" "got: $_got stdout: $(tail -2 "$BEHAVE_DIR/mintstub/stdout.txt" | tr '\n' ' ')"
+fi
+CASES=$((CASES + 1))
+_got="$(mwv "$MWFX/api-error.txt")"
+if [[ "$_got" == "verdict=unknown" ]] && grep -q '^::error::' "$BEHAVE_DIR/mintstub/stdout.txt"; then
+  pass "(MWd) a gh failure emits ::error:: and verdict=unknown — never a silent green"
+else
+  fail "(MWd) a gh failure emits ::error:: and verdict=unknown" "got: $_got stdout: $(tail -2 "$BEHAVE_DIR/mintstub/stdout.txt" | tr '\n' ' ')"
+fi
 
 # ACCOUNTING CONSERVATION. Placed BEFORE the positive control on purpose: the
 # control below also trips on a neutered pass()/fail(), and whichever check runs

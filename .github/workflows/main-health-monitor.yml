@@ -414,7 +414,10 @@ jobs:
           # unreadable by anything but a human with a browser.
           # `tests_elapsed_s` / `infra_elapsed_s` are ABSENT when the step ended before the runner
           # returned (killed at its ceiling), which marks that sample as censored.
-          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }}${T_EL}${I_EL}"
+          # `mint=` is the mintwatch verdict (#9082): the annotation is the
+          # machine-readable verdict surface, so the mint conclusion's input belongs
+          # on it too (empty when the step never ran).
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }} mint=${{ steps.mintwatch.outputs.verdict }}${T_EL}${I_EL}"
 
       # #9082 — the auto-mint's own conclusion as a monitor input. A red
       # `mint-inngest-bootstrap-tag.yml` run on main reaches the operator otherwise
