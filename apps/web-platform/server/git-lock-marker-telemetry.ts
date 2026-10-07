@@ -129,7 +129,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     no path. NOT paged — it is a report, not a failure.
 //   - SOLEUR_DOCKER_PRUNE — the opt-in Docker build-cache prune's result or its named
 //     `skipped reason=` (docker-missing, no-timeout, daemon-unreachable, timeout,
-//     no-worktree-removed, invalid-value, remote-daemon, prune-failed). NOT paged — every skip is the
+//     no-worktree-removed, invalid-value, remote-daemon, df-failed, prune-failed). NOT paged — every skip is the
 //     safe outcome of an opt-in step.
 // MIRRORED-NOT-PAGED (#9127, ADR-258): the SOLEUR_REAP_ARCHIVE_* family —
 // COMMITTED / STAGED / DEFERRED — emitted by worktree-manager.sh's reap loop at

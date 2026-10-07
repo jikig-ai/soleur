@@ -280,9 +280,10 @@ The timebox is checked **between** candidates, so it is not a latency ceiling: t
 bounded by the map build, plus one timebox, plus the work of one candidate. Two review measurements
 shaped this. A tmpfs schema-named root is deleted directly, behind an action-time liveness check; the
 full per-process walk used for that check cost 138 s for one candidate on a loaded 739-process host
-(inside the flock), against about 5 s for one map build. The session sweep therefore rebuilds the map
-when it is older than 5 s and consults it (a truncated or unbuilt map still falls back to the walk, so
-the check stays fail-closed); the unattended guard keeps the full walk, where nobody is waiting.
+(inside the flock), against about 5 s for one map build. The session sweep therefore checks the map
+`tc_reap_decide` has just refreshed (at most 120 s old; a truncated or unbuilt map still falls back to
+the walk, so the check stays fail-closed); the unattended guard keeps the full walk, where nobody is
+waiting.
 
 ### A2.2 Opt-in session-start drain
 

@@ -60,7 +60,7 @@ cat > "$SHIMS/docker" <<'STUB'
 printf '%s\n' "$*" >> "${DOCKER_CALLS:?}"
 case "$1 ${2-}" in
   "info "*)         [[ -n "${FAKE_DOCKER_INFO_FAIL:-}" ]] && exit 1; exit 0 ;;
-  "system df"*)     echo "TYPE  TOTAL  ACTIVE  SIZE  RECLAIMABLE"; echo "Build Cache  3  0  1.2GB  1.2GB"; exit 0 ;;
+  "system df"*)     [[ -n "${FAKE_DOCKER_DF_FAIL:-}" ]] && exit 3; echo "TYPE  TOTAL  ACTIVE  SIZE  RECLAIMABLE"; echo "Build Cache  3  0  1.2GB  1.2GB"; exit 0 ;;
   "builder prune")  # an ignored TERM survives exec, so `timeout -k` must escalate to KILL (rc 137)
                     [[ -n "${FAKE_DOCKER_IGNORE_TERM:-}" ]] && { trap '' TERM; exec sleep 30; }
                     [[ -n "${FAKE_DOCKER_SLEEP:-}" ]] && sleep "$FAKE_DOCKER_SLEEP"
@@ -140,6 +140,11 @@ cases=$((cases + 1)); ! calls_file_has 'prune' && calls_file_has '^system df' \
   && pass "D3a =1: reads only (system df), no prune" || fail "D3a calls: $(cat "$CALLS")"
 cases=$((cases + 1)); [[ "$out" == *"mode=dry-run"* && "$out" == *"upper bound"* && "$out" == *'build_cache="Build Cache  3  0  1.2GB  1.2GB"'* ]] \
   && pass "D3b =1: dry-run marker labelled an upper bound, carrying the build-cache row in its field" || fail "D3b marker: $out"
+
+# D3c a failing `system df` is a named skip, not a silent build_cache=unknown.
+out="$(run SOLEUR_DOCKER_PRUNE=1 FAKE_DOCKER_DF_FAIL=1 -- '_SOLEUR_CLEANED_COUNT=1; docker_builder_prune')"
+cases=$((cases + 1)); [[ "$out" == *"skipped reason=df-failed rc=3"* && "$out" != *"mode=dry-run"* ]] \
+  && pass "D3c a failing system df -> skipped reason=df-failed rc=3" || fail "D3c: $out"
 
 # D4 unrecognised values never run docker.
 for v in yes true 0 Apply; do
@@ -293,6 +298,6 @@ cases=$((cases + 1)); [[ "$arm" == "cleanup_merged_run," ]] \
 echo ""
 echo "test-cleanup-merged-space: $pass_n passed, $fails failed ($cases cases)"
 # Instrument check: the suite must have executed its assertions.
-[[ "$cases" -ge 42 ]] || { echo "FAIL: only $cases cases executed (floor 42)" >&2; exit 1; }
+[[ "$cases" -ge 43 ]] || { echo "FAIL: only $cases cases executed (floor 43)" >&2; exit 1; }
 [[ $((pass_n + fails)) -eq "$cases" ]] || { echo "FAIL: pass+fail ($((pass_n + fails))) != cases ($cases) — a verdict was lost" >&2; exit 1; }
 exit $(( fails > 0 ? 1 : 0 ))

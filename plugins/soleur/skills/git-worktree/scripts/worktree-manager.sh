@@ -3262,8 +3262,10 @@ sweep_orphan_scratch_dirs() {
     echo "SOLEUR_TMP_SWEEP skipped reason=bases-empty — SOLEUR_SWEEP_BASES='' disables the sweep"
     return 0
   fi
-  local age_min="${SOLEUR_SWEEP_AGE_MIN:-1440}"
-  local wt_cap="${SOLEUR_SWEEP_WT_CAP:-50}"
+  local age_min wt_cap wt_age
+  age_min="$(_sweep_uint "${SOLEUR_SWEEP_AGE_MIN-}" 1440)"
+  wt_cap="$(_sweep_uint "${SOLEUR_SWEEP_WT_CAP-}" 50)"
+  wt_age="$(_sweep_uint "${SOLEUR_SWEEP_WT_AGE_MIN-}" 4320)"
   local box_s; box_s="$(_sweep_uint "${SOLEUR_SWEEP_TIMEBOX_S-}" 10)"
   local deadline=$(( t0 + box_s ))
   # Amortized clock: EPOCHSECONDS is a bash-5 builtin (zero forks); the
@@ -3298,7 +3300,7 @@ sweep_orphan_scratch_dirs() {
           verdict="$(tc_classify_git_dir "$d")"
           case "$verdict" in
             registered)
-              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+              if (( "$(tc_tree_age_min "$d")" >= wt_age )) \
                  && tc_worktree_safe_to_remove "$d"; then
                 if _tc_git --git-dir="$(tc_git_main_dir "$d")" worktree remove "$d" 2>/dev/null; then
                   tc_ledger_append "worktree-remove" "worktrees" "$d" "-"
@@ -3313,7 +3315,7 @@ sweep_orphan_scratch_dirs() {
               # Same conjuncts the purge applies to this class: age floor +
               # no live handles + no nested mount. Registry-absence alone is
               # not proof the tree is idle.
-              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+              if (( "$(tc_tree_age_min "$d")" >= wt_age )) \
                  && ! tc_entry_is_live "$d" "" \
                  && ! tc_tree_has_mount "$d" \
                  && dest="$(tc_quarantine_move "$d" "$base" "worktrees" 2>/dev/null)"; then
@@ -3374,14 +3376,14 @@ sweep_orphan_scratch_dirs() {
       fstype="$(findmnt -no FSTYPE --target "$base" 2>/dev/null || true)"
       # Direct delete only for schema-NAMED roots on tmpfs (creation-certain
       # attribution + mv frees no RAM); marker-only dirs quarantine on every
-      # base. Terminal deletes get an action-time liveness check — the map is a
-      # snapshot, so it is rebuilt when older than 5 s. The interactive sweep does NOT use the full
+      # base. Terminal deletes get one more liveness check against the map tc_reap_decide just
+      # refreshed (at most TC_INUSE_TTL_S old). The interactive sweep does NOT use the full
       # per-process walk here (tc_tree_has_live_handles_now, which the unattended guard keeps):
       # it was measured at 138 s for one candidate on a loaded 743-process host, inside the flock,
       # against ~5 s for one map build, and a truncated or unbuilt map still falls back to that walk.
       if [[ ( "$fstype" == "tmpfs" || "$fstype" == "ramfs" ) ]] \
          && tc_schema_owner_pid "$name" >/dev/null 2>&1 \
-         && { tc_inuse_map_refresh 5 || true; ! tc_tree_has_live_handles "$d"; }; then
+         && ! tc_tree_has_live_handles "$d"; then
         if find "$d" -xdev -depth -delete 2>/dev/null; then
           reaped=$((reaped + 1))
           tc_ledger_append "delete" "scratch" "$d" "-"
@@ -4121,12 +4123,31 @@ report_cleanup_space() {
   return 0
 }
 
+# One bounded Docker call: sets _DOCKER_RC and _DOCKER_OUT. `timeout -k 5` escalates to KILL for a CLI
+# that ignores TERM, which exits 137 rather than 124.
+_DOCKER_RC=0; _DOCKER_OUT=""; _DOCKER_TOBIN=""
+_docker_run() {
+  local secs="$1"; shift
+  _DOCKER_RC=0
+  _DOCKER_OUT="$("$_DOCKER_TOBIN" -k 5 "$secs" docker "$@" 2>&1)" || _DOCKER_RC=$?
+}
+# After a _docker_run: when it failed, print the named skip (`timeout` for 124/137, else $1) and
+# return 0 so the caller returns; return 1 when the call succeeded.
+_docker_failed() {
+  case "$_DOCKER_RC" in
+    0) return 1 ;;
+    124|137) echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout" ;;
+    *) echo "SOLEUR_DOCKER_PRUNE skipped reason=$1" ;;
+  esac
+  return 0
+}
+
 # Opt-in (SOLEUR_DOCKER_PRUNE=1 dry-run, =apply) prune of OLD Docker build cache and dangling images
 # only, and only when this run removed a worktree. Never `-a`, never volumes, never containers,
 # never `system prune`. `until=24h` keeps a sibling session's active build on the shared daemon
-# safe. Docker's own totals are echoed verbatim — never parsed.
+# safe. Docker's own `Total` lines are echoed verbatim (selected by line, never interpreted).
 docker_builder_prune() {
-  local mode="${SOLEUR_DOCKER_PRUNE-}" tobin="" secs probe rc=0 out_b out_i
+  local mode="${SOLEUR_DOCKER_PRUNE-}" secs
   [[ -n "$mode" ]] || return 0
   case "$mode" in
     1) mode="dry-run" ;;
@@ -4144,34 +4165,29 @@ docker_builder_prune() {
     *) echo "SOLEUR_DOCKER_PRUNE skipped reason=remote-daemon"; return 0 ;;
   esac
   # Same timeout -> gtimeout resolution the install arms use (stock macOS has neither on PATH by default).
-  if command -v timeout >/dev/null 2>&1; then tobin="timeout"
-  elif command -v gtimeout >/dev/null 2>&1; then tobin="gtimeout"
+  if command -v timeout >/dev/null 2>&1; then _DOCKER_TOBIN="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then _DOCKER_TOBIN="gtimeout"
   else echo "SOLEUR_DOCKER_PRUNE skipped reason=no-timeout"; return 0; fi
-  secs="${SOLEUR_DOCKER_TIMEOUT_S:-60}"; probe="${SOLEUR_DOCKER_PROBE_TIMEOUT_S:-5}"
-  [[ "$secs" =~ ^[0-9]+$ && "$secs" -gt 0 ]] || secs=60
-  [[ "$probe" =~ ^[0-9]+$ && "$probe" -gt 0 ]] || probe=5
+  secs="$(_sweep_uint "${SOLEUR_DOCKER_TIMEOUT_S-}" 60)"; (( secs > 0 )) || secs=60
 
-  rc=0; "$tobin" -k 5 "$probe" docker info >/dev/null 2>&1 || rc=$?
-  if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
-  if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=daemon-unreachable"; return 0; fi
+  # The probe separates a down daemon (named, and 5 s) from a hung one (a full prune timeout).
+  _docker_run 5 info
+  if _docker_failed "daemon-unreachable"; then return 0; fi
 
   if [[ "$mode" == "dry-run" ]]; then
     # `docker system df` ignores the until=24h filter, so this is an UPPER BOUND on what apply frees.
-    local df_row df_out; rc=0
-    df_out="$("$tobin" -k 5 "$secs" docker system df 2>/dev/null)" || rc=$?
-    if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
-    df_row="$(printf '%s\n' "$df_out" | grep -i 'build cache' | head -n 1 || true)"
-    echo "SOLEUR_DOCKER_PRUNE mode=dry-run (upper bound; ignores until=24h) build_cache=\"${df_row:-unknown}\""
+    _docker_run "$secs" system df
+    if _docker_failed "df-failed rc=$_DOCKER_RC"; then return 0; fi
+    echo "SOLEUR_DOCKER_PRUNE mode=dry-run (upper bound; ignores until=24h) build_cache=\"$(printf '%s\n' "$_DOCKER_OUT" | grep -i 'build cache' | head -n 1 || true)\""
     return 0
   fi
 
-  rc=0; out_b="$("$tobin" -k 5 "$secs" docker builder prune -f --filter until=24h 2>&1)" || rc=$?
-  if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
-  if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=$rc"; return 0; fi
-  rc=0; out_i="$("$tobin" -k 5 "$secs" docker image prune -f --filter until=24h 2>&1)" || rc=$?
-  if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
-  if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=$rc"; return 0; fi
-  echo "SOLEUR_DOCKER_PRUNE mode=apply builder=\"$(printf '%s\n' "$out_b" | grep '^Total' | tail -n 1)\" images=\"$(printf '%s\n' "$out_i" | grep '^Total' | tail -n 1)\""
+  _docker_run "$secs" builder prune -f --filter until=24h
+  if _docker_failed "prune-failed rc=$_DOCKER_RC"; then return 0; fi
+  local out_b="$_DOCKER_OUT"
+  _docker_run "$secs" image prune -f --filter until=24h
+  if _docker_failed "prune-failed rc=$_DOCKER_RC"; then return 0; fi
+  echo "SOLEUR_DOCKER_PRUNE mode=apply builder=\"$(printf '%s\n' "$out_b" | grep '^Total' | tail -n 1 || true)\" images=\"$(printf '%s\n' "$_DOCKER_OUT" | grep '^Total' | tail -n 1 || true)\""
   return 0
 }
 
