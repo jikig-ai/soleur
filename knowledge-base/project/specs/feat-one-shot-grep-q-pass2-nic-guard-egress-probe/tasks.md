@@ -6,9 +6,9 @@ Series: Ref #9217 (tracker), #7005, #6601, #7376, #7797, #9482, #9638, #9639. Ne
 ## Phase 0 — Characterization rows (green before AND after the conversion)
 
 - 0.1 Read the control line first: run both suites on the unconverted scripts and record totals (56 and 154).
-- 0.2 `cron-egress-enforce-probe.test.sh`: add stub knobs (`STUB_PS_NAMES`, `STUB_NFT_OUT`, both emitted with `printf '%s\n'`).
-- 0.3 Add rows P2-2 (near-miss names), P2-3 (non-canonical must-pass), P2-4 (jump absent), P2-6 (no bare count on stdout).
-- 0.4 `web-private-nic-guard.test.sh`: add section with W-1 (`-w` near-miss), W-2 (`-F` lookalike), W-4 (IMDS near-miss), W-5 (address appears on the second call), W-6 (no bare count on stdout).
+- 0.2 `cron-egress-enforce-probe.test.sh`: add stub knobs (`STUB_PS_NAMES`, `STUB_NFT_OUT`, both emitted with `printf '%s\n'`; `\$` escapes inside the double-quoted `mk_stub` bodies).
+- 0.3 Add rows P2-2 (near-miss names), P2-3 (non-canonical must-pass), P2-4 (jump absent), P2-6 (no bare count on stdout); in the P2-4 `docker exec` check use `grep -c "^docker.exec"` (TAB-separated log).
+- 0.4 `web-private-nic-guard.test.sh`: add section with W-1 (`-w` near-miss), W-2 (`-F` lookalike), W-4 (IMDS near-miss, `imds_nets=1`), W-5 (address appears on the second call; call-counting `ip` stub, exact count 3, counter file created before `run_guard`), W-6 (`-z "$OUT"` in the healthy and the absent-start runs).
 - 0.5 No new row may contain a pipe-fed early-exit grep (the `apps/web-platform/*.test.sh` row has zero slack).
 - 0.6 Run both suites against the UNCONVERTED scripts: all rows green. Record totals.
 - 0.7 Raise both `MIN_CASES` literals (`:288` and `:553`) to the new exact totals, in place, on the line above the `if`.
@@ -32,7 +32,7 @@ Series: Ref #9217 (tracker), #7005, #6601, #7376, #7797, #9482, #9638, #9639. Ne
 
 - 3.1 Both extended suites, the hook suite, the vacuity suite, `private-nic-guard.test.sh`, `betterstack-send-failed-alert-mutation.test.sh`.
 - 3.2 Lints by their own invocation: credential-refusal `--changed --base origin/main`, `lint-shell-capture-exit.py`, repo-wide run.
-- 3.3 Hand-applied mutants on scratch copies after reading the control line: G1-1..G1-3, H1-1, G2-1..G2-8, H2-1.
+- 3.3 Hand-applied mutants on scratch copies after reading the control line: G1-1..G1-3, H1-1, G2-1..G2-9, H2-1.
 - 3.4 Discoverability command prints `0`.
 - 3.5 `bash scripts/test-all.sh --affected` if the host allows; otherwise the PR body states verbatim: "Local `--affected` was skipped on this contended host; CI is the gate."
 - 3.6 Add nothing to `plugins/soleur/skills/work/SKILL.md` (60 bytes of headroom).

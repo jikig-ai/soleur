@@ -19,6 +19,35 @@ The PR body uses `Ref #9217`, `Ref #7005`, `Ref #6601`, `Ref #7376`, `Ref #7797`
 skipped the Phase 0.7 skeleton checkpoint: the research here was a handful of local reads, not the agent fan-out the
 checkpoint protects, and the whole plan was written in one pass.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-07
+**Method:** deepen gates 4.6-4.12 run mechanically (user-brand impact present, threshold `aggregate pattern`; observability
+block complete and its command parsed by `parse-form-a.awk` and run, prints 6 on `origin/main` and 0 on the converted
+prototype; PAT-shape sweep 0 hits; no UI surface; no store or connection so no encryption posture; Guard Contract lint green
+with 2 entries; Scope Check count 1 with a `Recommendation:` line and no `unmapped` row; labels and KB paths verified);
+plan-review panel (DHH, Kieran, code-simplicity, CTO devex) plus two deepen seats (test-design, observability-coverage).
+
+### Key improvements applied
+
+1. Trimmed the first draft's 18 characterization rows to the ones that each kill a distinct mutant, cut the header-clause edit,
+   two of three learnings, the template-residue sections and AC14 (DHH, simplicity, CTO).
+2. Added the rows Kieran and the test-design seat showed were missing: the bounded wait's success arm with an exact call count
+   (kills a deleted `break`), empty-stdout assertions in the absent-start runs (kills a forgotten `>/dev/null` at site 2), and
+   `imds_nets=1` pins (kills mutants of site 4 that the conversion-equivalence argument does not cover).
+3. Corrected the observability claims: a post-merge read cannot detect the silent false-positive direction (a healthy web-1
+   reads the same), the heartbeat route is email-only and exists only once armed, no Sentry alert rule routes the probe event,
+   and the NIC guard also reaches every fresh web host after the next image release.
+4. Fixed stub mechanics before any test exists (escaped `\$` in `mk_stub` bodies, `printf '%s\n'` knobs so an empty pattern
+   cannot survive, TAB in the logged docker line, counter file created before `run_guard`, `EXTRA_ENV` override order).
+
+### New considerations discovered
+
+- `cloud-init-registry.yml` carries the same four shapes for the REGISTRY NIC guard and its suite pins that text
+  (`private-nic-guard.test.sh:499`); it is a different file, so no pin moves, but the two guards now differ by design.
+- Draft #9529 is already DIRTY against `main` (it re-adds an xtrace block pass 1 landed), and both PRs touch the probe suite's
+  exact `MIN_CASES` literal: whichever lands second rebases that one line.
+
 ## Overview
 
 Pass 1 (PR #9632, merge `a0359450dd`, verified an ancestor of `origin/main`) credential-hardened both scripts and
@@ -186,16 +215,17 @@ may contain a pipe-fed early-exit grep (the `apps/web-platform/*.test.sh` row ha
 
 `apps/web-platform/infra/cron-egress-enforce-probe.test.sh` (the `docker` and `nft` stubs are at `:220-227`):
 
-- Stub knobs, added to the existing bodies: `docker` `ps` arm emits `printf '%s\n' "$STUB_PS_NAMES"` when that variable
+- Stub knobs, added to the existing bodies (`mk_stub` bodies are double-quoted strings, so every `$` in the new arms is written `\$`): `docker` `ps` arm emits `printf '%s\n' "$STUB_PS_NAMES"` when that variable
   is SET (even empty, via the `${STUB_PS_NAMES+x}` test) and `soleur-web-platform` otherwise; `nft` emits
   `printf '%s\n' "$STUB_NFT_OUT"` when set, else `jump SOLEUR-EGRESS`. The `printf` newline is load-bearing: with zero
   output lines an empty pattern (`grep -c ''`) would count 0 and survive the always-match mutant. Values travel only
   through `run_probe`'s `envw` words, never exported.
 - **P2-2 near-miss names** (`soleur-web-platform-old` and `soleur-web-platform2`, one per line): rc 1 and stdout names
   `ASSERT-FAILED: container-absent` (the `-x` exact-line property of site 5).
-- **P2-3 non-canonical must-pass** (`other` first, `soleur-web-platform` second): rc 0 and `egress-enforce-ok`.
+- **P2-3 non-canonical must-pass control** (`other` first, `soleur-web-platform` second): rc 0 and `egress-enforce-ok`. A control, not a mutant-killer; it backs no mutant claim.
 - **P2-4 jump absent** (`STUB_NFT_OUT=` empty): rc 1; stdout names `ASSERT-FAILED: docker-user-jump`; no logged `docker`
-  call has `exec` as its first argument (the structure arm precedes the behavioral probes).
+  call has `exec` as its first argument (the structure arm precedes the behavioral probes). The log line is `docker`, a
+  TAB, then the argv, so match with `grep -c "^docker.exec"`; a plain-space pattern passes vacuously.
 - **P2-6 stdout carries no bare count** (healthy run, exact-line match): no stdout line is purely numeric. This is the
   row that kills a conversion that forgot `>/dev/null` (every other stdout assertion is a substring match).
 - About 6 new cases; raise `MIN_CASES=56` (`:288`, directly above its `if` at `:289`) to the measured new total, exact
@@ -209,17 +239,24 @@ their discrimination ---`; `EXTRA_ENV` overrides the per-run stub variables beca
   turns it red.
 - **W-2 `-F` literal**: `ip` stub shows `inet 10a0b1c10/32` while `EXPECTED_IP=10.0.1.10` (dots as wildcards would match
   it) -> `nic_ok=false`, `detect-only`.
-- **W-4 IMDS near-miss**: body `- ip: 10.0.1.100` with `network_id:` lines present -> `imds_has_expected=false` (the closing
-  `$` anchor of site 3).
-- **W-5 wait-loop success arm, non-canonical must-pass**: an `ip` stub that omits the address on its first call and shows it
-  from the second (call counter in a file named by an env knob; the stub is also called for `NIC_ADDRS`, so count only the
-  predicate calls or key the flip on call number >= 2) -> `nic_ok=true`, `converged_by=already`. Without it a site 2 that is
-  always false, or that lost its `break`, stays green (Kieran P1).
-- **W-6 stdout carries no bare count**: no stdout line of a healthy run is purely numeric (kills a forgotten `>/dev/null`).
-- About 8 new cases; raise `MIN_CASES=154` (`:553`) to the measured new total, exact.
-- Site 4 (`IMDS_NETS` fallback) has no driveable RED row: `IMDS_NETS` is the output of `grep -c` at `:74`, always numeric (or
-  empty only if grep itself errors), so the `|| IMDS_NETS=0` arm is unreachable from any stub. Stated plainly as an
-  equivalent mutant; the exit-status equivalence table is its only evidence.
+- **W-4 IMDS near-miss**: body `- ip: 10.0.1.100` followed by one `network_id:` line -> `imds_has_expected=false` (the closing
+  `$` anchor of site 3) and `imds_nets=1` (pins the numeric value, so a mutant that zeroes `imds_nets` at site 4, such as turning
+  its `||` into `&&`, goes red; the emit-contract row only checks the field exists).
+- **W-5 wait-loop success arm, non-canonical must-pass**: an `ip` stub variant, selected by an env knob and a no-op when the
+  knob is unset (the shared stub keeps serving every other row), that omits the address on its first call and shows it from
+  the second; the call counter is a file created fresh in the test shell before `run_guard` (`root` is randomised inside it)
+  and its path travels through `EXTRA_ENV`. Assert `nic_ok=true`, `converged_by=already`, `imds_nets=1` (canonical body), and
+  the recorded call count is EXACTLY 3 (site 1, one site-2 iteration, the `NIC_ADDRS` call at `:104`). The exact count is what
+  kills "delete site 2's `break`" (32 calls), which leaves `nic_ok` unchanged; without the row a site 2 that is always false
+  stays green.
+- **W-6 stdout is empty**: the guard writes nothing to stdout (everything goes to stderr), so assert `[[ -z "$OUT" ]]` in the
+  healthy run AND in the absent-start runs W-1 and W-5 (site 2 runs only when the address is absent, so a healthy run alone
+  never reaches it). Kills a forgotten `>/dev/null` at any of sites 1-3.
+- About 12 new cases; raise `MIN_CASES=154` (`:553`) to the measured new total, exact.
+- Site 4's conversion (`-q` to `-c >/dev/null`) is an equivalent mutant: `IMDS_NETS` is the output of `grep -c` at `:74`, always
+  numeric (or empty only if grep itself errors), so the `|| IMDS_NETS=0` arm is unreachable from any stub and the exit-status
+  equivalence table is the only evidence for the conversion. Other mutants of that line (`||` to `&&`, a never-matching
+  pattern) zero `imds_nets` on every run and ARE killed by the `imds_nets=1` assertions in W-4 and W-5.
 
 Run both suites against the UNCONVERTED scripts: every pre-existing row and every new row GREEN, totals recorded.
 Run `bash scripts/guard-vacuity-floor.test.sh` and `bash .claude/hooks/grep-q-pipe-guard.test.sh` before the first
@@ -369,9 +406,10 @@ scratch tree, is read first).
 | G2-4 | drop the closing `$` from the site 3 regex | W-4: `10.0.1.100` corroborates `10.0.1.10` |
 | G2-5 | drop `x` from site 5 | P2-2: `soleur-web-platform-old` satisfies the readiness loop |
 | G2-6 | remove the `!` at site 6, and separately make site 6's pattern empty | P2-4 (the knob emits at least one line, so an empty pattern counts it) |
-| G2-7 | make site 2 always false, or delete its `break` | W-5 |
-| G2-8 | drop `>/dev/null` at one site per script | P2-6 / W-6 |
-| H2-1 (must-pass, non-canonical) | P2-3 (other container first), W-5 (address appears on the second call) | stay green on the correct conversion; a guard that rejects everything reds them |
+| G2-7 | make site 2 always false; separately delete its `break` | W-5 (`nic_ok`; and the exact call count 3 versus 32 for the `break` deletion) |
+| G2-8 | drop `>/dev/null` at one site per script, including site 2 | P2-6 / W-6 (the empty-stdout assertion runs in the absent-start rows W-1 and W-5, which reach site 2) |
+| G2-9 | at site 4, turn `\|\|` into `&&`, and separately make its pattern never match | W-4 and W-5 (`imds_nets=1`) |
+| H2-1 (must-pass controls) | P2-3 (other container first), W-5 (address appears on the second call) | stay green on the correct conversion; a guard that rejects everything reds them (controls, not mutant-killers) |
 
 **Anchor.** Not a stored-value guard (behavioral rows over live script execution against PATH stubs); the floors are exact
 counts, the pass 1 convention, and the case counter moves in the assert wrappers, never in `_pass`/`_fail` (ADR-193).
@@ -390,13 +428,16 @@ error_reporting:
 failure_modes:
   - mode: a converted predicate reads a present address as absent (false negative)
     detection: SOLEUR_PRIVATE_NIC rows carry nic_ok=false and converged_by=detect-only; the heartbeat lapses
-    alert_route: Better Stack heartbeat absence for web-nic-guard
+    alert_route: Better Stack heartbeat soleur-web-nic-guard-<host> (email only; period 360 s, grace 120 s per web-probe.tf:52-68; created paused and armed by arm-heartbeats.sh in the SSH leg, so the route exists only once armed)
   - mode: a converted predicate reads an absent or near-miss address as present (false positive, the silent direction)
-    detection: no runtime signal can see it by design; Phase 0 rows W-1 and W-2 and the post-merge read of nic_ok in the first post-apply row are the detection
-    alert_route: pre-merge CI red on the suite; post-merge verification fails the merge check
+    detection: no runtime or post-merge signal can see it: a healthy web-1 reports nic_ok=true either way and a false positive also pings the heartbeat, so the pre-merge rows W-1, W-2 and W-5 are the only detection
+    alert_route: pre-merge CI red on the web-private-nic-guard suite (required test shard)
+  - mode: site 3 mis-sets imds_has_expected (telemetry only, drives no action; it discriminates the attach-race hypotheses in the emit)
+    detection: pre-merge row W-4; the field is visible in every SOLEUR_PRIVATE_NIC row
+    alert_route: pre-merge CI red
   - mode: the readiness loop or the jump check mis-verdicts on a fresh host
     detection: probe_result=container_absent or structure_fail in the Sentry event, plus the host's absence
-    alert_route: Sentry issue; the host powering off is the fail-closed outcome
+    alert_route: a Sentry issue with no alert rule routing it (pre-existing, adjacent to #9639 F8); the host powering off is the fail-closed outcome
 logs:
   where: journalctl -t web-nic-guard shipped to Better Stack by Vector (vector.toml, SyslogIdentifier at web-private-nic-guard.service:22); probe output in the cloud-init log and the Sentry event
   retention: unchanged by this change (Better Stack source plan and Sentry project retention)
@@ -441,8 +482,9 @@ None. No `.tf` file is edited, so `apply-deploy-pipeline-fix.yml` does not fire 
 6. No commit message in this PR may contain a line that is exactly `[skip-web-platform-apply]` or `[ack-destroy]`
    (`:335-341`), and `[skip-deploy-fix-apply]` is never used.
 
-**Blast radius.** The NIC guard on web-1 only (a wrong verdict is detect-and-alarm, never a reboot, by ADR-123's design),
-and fresh web hosts only for the probe, where a wrong verdict powers the new host off (`cloud-init.yml:807-809`) and a
+**Blast radius.** The NIC guard on web-1 immediately and on every fresh web host after the next image release (`host_script_files`,
+`server.tf:255-257`; timer enabled at `cloud-init.yml:644`); a wrong verdict is detect-and-alarm, never a reboot, by ADR-123's
+design. The probe affects fresh web hosts only, where a wrong verdict powers the new host off (`cloud-init.yml:807-809`) and a
 wrong-green verdict still leaves the behavioral negative probe (`curl` exit 28) as the independent enforcement proof.
 No running production origin executes the probe.
 
@@ -478,7 +520,7 @@ covered by the carrier census, Guard Contract and apply-path analysis above.)
 ### Pre-merge (PR)
 
 - [ ] AC1 `bash .claude/hooks/grep-q-pipe-guard.test.sh` exits 0, its `DEFERRED:` lines name neither converted file, `grep -c -e 'cron-egress-enforce-probe' -e 'web-private-nic-guard' .claude/hooks/grep-q-pipe-guard.test.sh` prints `0`, and `grep -n '^GATED_PROD_ROWS=' .claude/hooks/grep-q-pipe-guard.test.sh` prints `GATED_PROD_ROWS=6`.
-- [ ] AC2 `bash apps/web-platform/infra/cron-egress-enforce-probe.test.sh` ends `RESULT: <N> passed, 0 failed` and `bash apps/web-platform/infra/web-private-nic-guard.test.sh` ends `=== <M> passed, 0 failed ===`, where `N` and `M` equal the raised `MIN_CASES` literals exactly (about 62 and 162; take the measured values), and `bash scripts/guard-vacuity-floor.test.sh` exits 0 (run before the first commit).
+- [ ] AC2 `bash apps/web-platform/infra/cron-egress-enforce-probe.test.sh` ends `RESULT: <N> passed, 0 failed` and `bash apps/web-platform/infra/web-private-nic-guard.test.sh` ends `=== <M> passed, 0 failed ===`, where `N` and `M` equal the raised `MIN_CASES` literals exactly (about 62 and 166; take the measured values), and `bash scripts/guard-vacuity-floor.test.sh` exits 0 (run before the first commit).
 - [ ] AC3 each gate by its own invocation: `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main` prints `OK`; `python3 scripts/lint-shell-capture-exit.py apps/web-platform/infra/web-private-nic-guard.sh apps/web-platform/infra/cron-egress-enforce-probe.sh` reports `0 new findings`; the repo-wide credential-refusal run (`scripts/test-all.sh`) stays green; `private-nic-guard.test.sh` and the `betterstack-send-failed-alert-mutation` suite pass.
 - [ ] AC4 the discoverability command in `## Observability` prints `0` on the final tree (text shape only: a line-continued pipe would not be seen, which the sweep covers).
 - [ ] AC5 `git diff --name-only origin/main...HEAD` is a subset of the five edited files, this plan, `specs/feat-one-shot-grep-q-pass2-nic-guard-egress-probe/` (`tasks.md`, `session-state.md`), the one learning, and generated `knowledge-base/INDEX.md` if the pipeline rewrites it; `plugins/soleur/skills/work/SKILL.md` is absent from it.
@@ -488,8 +530,8 @@ covered by the carrier census, Guard Contract and apply-path analysis above.)
 
 ### Post-merge (verified by `soleur:postmerge`, automatable)
 
-- [ ] AC9 the `apply-web-platform-infra.yml` run for the merge SHA concludes success and its step `Notify ops — SSH stage skipped, nothing delivered (#7539)` is skipped (read with `gh run view <id> --json jobs`), meaning the SSH leg ran; `terraform_data.private_nic_guard_install` appears as replaced and no `hcloud_server.web` line does.
-- [ ] AC10 the Better Stack heartbeat `soleur-web-nic-guard-web-1` reads `up` after the apply (reader pattern: `scripts/followthroughs/l3-probe-armed-6438.sh:62-68`); the heartbeat-absence alarm is the standing backstop, so this is a confirmation, not the only guard.
+- [ ] AC9 the `apply-web-platform-infra.yml` run for the merge SHA concludes success and its step `Notify ops — SSH stage skipped, nothing delivered (#7539)` is skipped (read with `gh run view <id> --json jobs`), meaning the SSH leg ran (the apply job itself must also have concluded success, since an upstream failure leaves that step skipped too); `terraform_data.private_nic_guard_install` appears as replaced and no `hcloud_server.web` line does.
+- [ ] AC10 the Better Stack heartbeat `soleur-web-nic-guard-web-1` is armed (not paused) and reads `up` after the apply (reader pattern: `scripts/followthroughs/l3-probe-armed-6438.sh:62-68`), and the first post-apply `SOLEUR_PRIVATE_NIC` row's `zot_last_err=` addresses and `imds_has_expected=true` agree with `EXPECTED_IP`. This is a sanity confirmation, not detection of a false positive (a healthy web-1 reads the same either way); the pre-merge rows W-1, W-2 and W-5 are that detection.
 
 ## Test Scenarios
 
