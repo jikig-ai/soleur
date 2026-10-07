@@ -235,9 +235,10 @@ confirm_flip_state() {
 #
 # TRANSITION, NOT "ANY FLIP ROW" — this distinction is the whole correctness of the
 # anchor. inngest-cutover-flip runs on a ~30s on-host timer and re-emits
-# flag:"done" reason:"noop-done" on EVERY tick: ~2,880 rows/day, so a 400-row query
-# spans about four HOURS. Anchoring on "the earliest row returned" would therefore
-# resolve to a few hours ago rather than the cutover instant, silently producing a
+# flag:"done" reason:"noop-done" on every tick (pre-#7696) / once per 300s heartbeat
+# window (post-#7696): still a heartbeat flood against the transition count, so a
+# 400-row query spans hours either way. Anchoring on "the earliest row returned" would
+# therefore resolve to a few hours ago rather than the cutover instant, silently producing a
 # window NARROWER than the coexistence region — the unsafe direction, and precisely
 # the vacuous-clean verdict AC-V3 exists to reject. The transition reasons below are
 # disjoint from the noop-* heartbeat reasons (inngest-cutover-flip.sh emit_state).

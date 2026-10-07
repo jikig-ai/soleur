@@ -524,6 +524,10 @@ emit_state() {
   # rows are throttled (#7696): suppress only the logger row, and only while the stamp
   # is fresh. The stamp is touched on emission (not on suppression), and a write failure
   # simply re-emits next fire — the degrade direction is toward audibility.
+  # The throttle lives INSIDE emit_state rather than in a LUKS-style emit_noop wrapper
+  # because cutover-inngest-workflow.test.sh derives the emitter's reason set from
+  # emit_state call sites by shape — the noop reasons must keep the emit_state call
+  # form for the DRIFT_GREPS/probe parity extraction to keep seeing them.
   if [[ "$reason" == noop-* ]]; then
     noop_emit_due || return 0
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$json" 2>/dev/null || true
