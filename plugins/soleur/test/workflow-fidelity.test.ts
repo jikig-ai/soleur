@@ -31,6 +31,7 @@ import {
   DECLARED_TRANSITIONS,
   DECLARED_SUB_STEPS,
   workflowFidelityInstructions,
+  formatSkillRef,
 } from "../lib/workflow-fidelity";
 import { invokeSkill, routingInstructions, pollInstructions } from "../lib/harness";
 import { dispatchGoRoute, expectedGrokSlashCommand, grokTestEnv } from "../lib/go-routing";
@@ -144,6 +145,27 @@ describe("workflow-fidelity contract", () => {
     expect(pollInstructions("grok")).toContain("FORBIDDEN");
     expect(pollInstructions("claude")).toContain("Monitor tool");
     expect(pollInstructions("claude")).toContain("postmerge");
+  });
+
+  test("formatSkillRef renders cursor names with go and sync bare", () => {
+    expect(formatSkillRef("go", "cursor")).toBe("/go");
+    expect(formatSkillRef("sync", "cursor")).toBe("/sync");
+    expect(formatSkillRef("help", "cursor")).toBe("/soleur-help");
+    expect(formatSkillRef("plan", "cursor")).toBe("/soleur-plan");
+    expect(formatSkillRef("review", "cursor")).toBe("/soleur-review");
+    expect(formatSkillRef("one-shot", "cursor")).toBe("/soleur-one-shot");
+  });
+
+  test("cursor workflow fidelity reads the stub file and skips the shared essay", () => {
+    const md = workflowFidelityInstructions("cursor");
+    expect(md).toContain("canonical file");
+    expect(md).toContain("/go");
+    expect(md).toContain("/soleur-plan");
+    expect(md).not.toContain("/soleur-go");
+    expect(md).not.toContain("Stop hook");
+    expect(md).not.toContain("Skill");
+    expect(md).not.toContain("Task");
+    expect(workflowFidelityInstructions("grok")).toContain("Stop hook");
   });
 
   test("one-shot invokeSkill stresses full pipeline on Grok", () => {
