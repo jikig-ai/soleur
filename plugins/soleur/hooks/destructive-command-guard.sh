@@ -49,16 +49,26 @@
 #   `time -p rm ...` (a pseudo-wrapper). A short-option cluster whose last letter takes a value shifts one more
 #   word (sudo -nu root, env -iu X, timeout -vk 5 10). The rule table is retried on the words after a `--`,
 #   which covers `doppler run --`, `aws-vault exec <profile> --` and `op run --`. An absolute-path binary
-#   matches by basename (/bin/rm) and command names are compared in lower case (RM, Git, Terraform).
+#   matches by basename (/bin/rm) and command names are compared in lower case (RM, Git, Terraform; the fold
+#   starts no process). A wrapper's chdir option (env -C DIR, env --chdir=DIR, sudo -D DIR, sudo --chdir=DIR)
+#   moves the simulated working directory for the command it runs, and for that command only; a directory the
+#   guard cannot resolve (a variable) is an unresolved cd.
 #   ask   env -S, --split-string (any abbreviation) or a cluster with S (rule id `unparsed-wrapper`): the string
 #         it splits into a command is not analysed.
 #   ask   more than 8 nested wrappers or `--` separators (rule id `wrapper-depth`): what they run cannot be checked.
-#   ask   a command too large to check: more than MAX_RECORDS simple commands, more than MAX_WORDS words, or the
-#         DEADLINE_S wall clock reached (rule id `bound`) unless a deny was already found.
-#   ask   the lexer returned no command for input that has text beyond blanks and comments AND that text, with its
-#         comments removed, mentions rm, destroy, push, terraform, tofu, git or eval in any case (rule id
-#         `lexer-empty`: a lexer that silently dropped a command it should have judged). A blank, comment-only
-#         or keyword-free command (a bare redirect such as `> out.log`) is allowed.
+#   ask   a command too large to check (rule id `bound`): a tool call over 256 KiB (checked before anything reads
+#         it), more than MAX_RECORDS simple commands, more than MAX_WORDS words, a target path with more than
+#         MAX_DEPTH components, a segment over 64 KiB in a degraded scan, or the DEADLINE_S wall clock reached.
+#         What was read before the limit is still judged: a deny wins; an ask-class match keeps its own reason
+#         with the bound sentence appended; with nothing matched the ask is the bare `bound` one.
+#   ask   the lexer returned no command for text that names something the guard decides on (rule id `lexer-empty`:
+#         a lexer that silently dropped a command it should have judged). Judged on the text, full-line comments
+#         (first non-blank character #) skipped and a later # not treated as a comment: (1) a whole-word token,
+#         with the line split at blanks and shell metacharacters, that is rm, destroy, push, terraform, tofu, git
+#         or eval in any case; (2) when the line has a quote, backslash, backtick or a $ that is not a plain
+#         variable name, the line with those characters removed (r""m, 'r'm, ev""al) contains one of them. A
+#         blank or comment-only command, and a bare redirect to a file that merely contains one (`> terraform.log`,
+#         `> out.log`), is allowed.
 #
 # NOT DECIDED (stated, not implied). Obfuscation: a variable-built command name, glob or brace expansion of
 # a command name (r[m], r{m,}), brace expansion of a target (`/{bin,usr}`), `xargs rm`, `find -delete` and
@@ -70,10 +80,15 @@
 # a piped SQL string; `drop database`/`dropdb`; MCP delete tools; any non-Bash tool (including Devin's
 # `exec`: the raw tool_name must be Bash); Doppler secret writes and deletes; a plain `terraform apply`;
 # `kubectl delete`; `pulumi destroy`; `terragrunt destroy`; `git push --mirror` without --force; and an
-# unresolvable $VAR target. User-facing statement: the guard does not cover a plain `terraform apply`, secret
-# writes, SQL or non-Bash tools, and is not a substitute for scoped credentials. Residuals of the shared
-# lexer: it lexes an identical `bash -c`/`eval` string once, so the working-directory simulation cannot tell
-# two identical inner strings under different `cd`s apart; a `cd` inside a subshell or a $(...) is treated as
+# unresolvable $VAR target.
+#
+# USER-FACING STATEMENT (the plugin README carries this sentence, word for word; the suite pins both copies):
+# User-facing statement: The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools,
+# `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it
+# does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.
+#
+# RESIDUALS of the shared lexer: it lexes an identical `bash -c`/`eval` string once, so the working-directory
+# simulation cannot tell two identical inner strings under different `cd`s apart; a `cd` inside a subshell or a $(...) is treated as
 # sticky for the later commands (over-asks, never under-asks); a quoted fragment inside a tilde word
 # (`~/"x"`) carries the quoted flag, so the word is read as literal unless it is exactly `~/` or `~/*`
 # (those two are read as home even when quoted: a directory literally named `~` is the cost).
@@ -86,23 +101,41 @@
 # against an allow rule; under `claude -p` it blocks the call with the reason shown, so a headless run
 # degrades to a block, never an allow. On a `deny` the person sees only a collapsed "Ran 1 shell command"
 # unless a top-level `systemMessage` is set, so every deny also carries `systemMessage` with the same full
-# reason (the escape hatch and the issues URL included); an ask does not need it.
+# reason (the escape hatch and the issues URL included); an ask does not need it. The prompt of an ask shows the
+# whole reason to the person, so an ask opens with a sentence written for that person (see REASONS below).
 #
 # FAILURE POSTURE (D6; a stated narrowing of ADR-157's `.claude` row, with reasons). An envelope jq rejects, a
 # non-string .tool_input.command, empty stdin, a lexer parse failure (exit 2: unbalanced quote, unterminated
 # substitution, NUL byte) and a lexer bound trip (exit 3: depth, budget, alarm, crash) all ASK; the parse
 # reasons say "could not parse this command; it was not recognised as destructive" and never quote a command
 # the hook did not match; a command too large to check (`bound`) and a lexer that returns nothing for real text
-# (`lexer-empty`) ask too. Every reason, ask or deny, opens with "This command was NOT run."; the parse-class
-# asks end with a fix-and-resend tail rather than "do not retry"; the quoted command has credentials masked
-# (NAME=value with a key, token, secret, password, passwd, cred or auth name, and URL userinfo). A missing or unusable `jq` does not ask on every call (that would make the plugin
+# (`lexer-empty`) ask too.
+#
+# REASONS. An ask opens with a sentence for the person at the prompt ("The guard paused this command and is
+# asking you. It has not run yet and runs only if you approve."), then the rule id, a one-sentence lead and the
+# quoted command, then the agent's instructions under "If you are the agent: This command was NOT run." A deny
+# opens with "This command was NOT run." (the person reads a block, not a prompt). The agent's tail follows the
+# cause: a matched destructive command says stop, do not retry, do not rephrase; a lexer parse failure (exit 2)
+# says fix the quoting or heredoc and send it again; a lexer that gave out (depth, budget, alarm, crash) and a
+# command too large to check say simplify or split; an unreadable envelope says the fault is in the tool call, so
+# stop and tell the person; env -S and too many wrappers say write the command out so the guard can check it.
+# Every ask and deny carries the escape hatch and the issues URL. The quoted command has credentials masked:
+# NAME=value, --name=value and -var name=value with a key, tok, secret, pass, pw, cred, auth or bearer name; the
+# word after --token, --password, --passwd, --secret, --api-key, --auth or --bearer; the text after
+# `Authorization:` or `Bearer `; URL userinfo. That is a coverage choice, not a boundary. When jq cannot build the
+# output (emit_fallback) the decision and the rule id are kept: a plain body goes out as it is, a body that quotes
+# the command gets a fixed `guard-output-fallback` text, and a deny stays a deny.
+#
+# DEGRADED MODES. A missing or unusable `jq` does not ask on every call (that would make the plugin
 # unusable without jq): the hook scans the RAW envelope for its own narrow patterns (recursive rm of / ~ or
 # $HOME, `destroy`, `push` with a force flag or +), tolerating JSON-escaped whitespace; a hit asks (output
 # hand-built with a fixed reason naming jq, plus a stderr notice naming jq), a miss exits 0. A missing or
-# broken `perl` with a working jq scans the jq-decoded command the same way (stderr notice naming perl). It
-# never DENIES on a dependency failure (the repair is itself a Bash call). A miss on the raw scan is a stated,
-# tested fail-open (the raw-scan-miss residual ADR-165 accepts for its `.openhands` row; ADR-274 records why
-# this hook asks on a hit where that row denies, and why its `.claude` row, which asks on every call, is narrowed).
+# broken `perl` with a working jq scans the jq-decoded command the same way (stderr notice naming perl). Both
+# scans stop with a `bound` ask at a segment over 64 KiB or at the deadline. It never DENIES on a dependency
+# failure (the repair is itself a Bash call). A miss on the raw scan is a stated, tested fail-open (the
+# raw-scan-miss residual ADR-165 accepted for its `.openhands` row, a mirror ADR-245 has since retired; ADR-274
+# records why this hook asks on a hit where that row denied, and why its `.claude` row, which asks on every
+# call, is narrowed).
 #
 # KILL SWITCH (D5). SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 (exactly 1; empty, 0 and anything else leave the
 # guard on) exits 0 with no output, before any dependency probe. It is read from the harness process
@@ -110,12 +143,13 @@
 # (settings.json "env"), which no Bash guard sees and which an agent that can edit a settings file can use:
 # this is a seatbelt, not a boundary. Hosted sessions disable it through AGENT_ENV_OVERRIDES (D8).
 #
-# MECHANISM AND ORDER. Kill switch; read stdin; the zero-spawn prefilter; the raw tool_name (it must be exactly
-# Bash, so Devin's `exec` is not decided); dependency probes by RESULT, not by
-# `command -v` (a jq that is present and exits non-zero fails like an absent one; probed only on failure, so
-# the happy path pays nothing); jq extraction (the command goes through `jq -j` straight into the lexer so
+# MECHANISM AND ORDER. Kill switch; read stdin; a tool call over 256 KiB asks `bound` at once; the zero-spawn
+# prefilter; the raw tool_name (it must be exactly Bash, so Devin's `exec` is not decided); dependency probes by
+# RESULT, not by `command -v` (a jq that is present and exits non-zero fails like an absent one; probed only on
+# failure, so the happy path pays nothing); jq extraction (the command goes through `jq -j` straight into the lexer so
 # NULs and newlines survive; the small fields use a separate jq call); lib/shell-argv.pl; the rule table; the
-# decision. The prefilter skips the lexer only when the envelope holds exactly one `"command"` text and that
+# decision. The prefilter skips the lexer only when the envelope holds exactly one `"command"` text, no backslash
+# followed by u (a key spelled `"\u0063ommand"` is the key command to jq and not the text `"command"`), and that
 # command's raw JSON text has NONE of the keywords rm (also as RM, Rm, rM), destroy, push, eval and none of
 # backslash, single quote, double quote, $, a backtick, `<(`, `>(` or `<<`. It reads the command string only (the
 # text after "command":" up to the first double quote), because the envelope's other fields can spell a keyword
@@ -133,8 +167,8 @@
 #
 # DEPENDENCIES. bash (3.2 or later), jq, perl >= 5.10 with core pragmas only (the lexer), git (read-only,
 # local `symbolic-ref`, only for a force/delete push), POSIX utilities. No `eval`, ever (ADR-156: hook stdin
-# is model-controlled). The hook reads stdin and writes stdout and stderr; it writes no file and sends
-# nothing off the machine.
+# is model-controlled). The hook reads stdin and writes stdout and stderr; it writes no file (no here-string,
+# which bash before 5.1 backs with a temporary file) and sends nothing off the machine.
 #
 # PORTABILITY (bash 3.2 and POSIX only). No bash-4 builtin, associative array or case-conversion expansion,
 # and no GNU-only flag of the path, stream-edit, date or stat utilities. Lexer frames are read with
@@ -142,12 +176,13 @@
 # an exit status lost across a process substitution. Empty-array expansions under `set -u` are guarded
 # (`${x[@]+"${x[@]}"}`) wherever an array can be empty; the unguarded ones (`"${AV[@]}"`, `"${DA_T[@]}"`,
 # `"${keep_t[@]}"`, `"${t[@]:...}"`, `"${defaults[@]}"`) are non-empty by invariant: a lexer record has argc >= 1
-# and every slice or copy is taken only after an index < n check. bash 3.2.57 itself was run only where a container
-# image was available (docker bash:3.2 with the host's jq and perl): `bash -n`, the helper functions, and a
-# 43-command differential against bash 5.3 gave identical decisions; the suites run under the host bash.
-# Path resolution has no canonicalising utility: the physical parent is `cd -P <dir> && pwd -P` plus the
-# literal basename; for a nonexistent target the longest existing prefix is resolved and the rest normalized
-# lexically; HOME is compared in both its literal and physical forms. Inherited GIT_* variables are stripped
+# and every slice or copy is taken only after an index < n check. What was run on bash 3.2.57 itself (docker bash:3.2
+# with the host's jq, perl and git): the whole hook over a 30-command corpus (wrapper chains and case folding, env -C and
+# sudo -D, lexer-empty redirects, redaction shapes, env -S, wrapper depth, a bound ask, a deep path), and the decisions and
+# reason text were identical to bash 5.3. Not run on 3.2: the clock-trip and partial-record paths, the degraded (jq- or
+# perl-less) scans and the output fallback. The suites run under the host bash.
+# Path resolution has no canonicalising utility: one subshell finds the longest existing prefix of a directory
+# (`cd -P`, then `pwd -P`) and the rest is normalized lexically, with the literal basename; HOME is compared in both its literal and physical forms. Inherited GIT_* variables are stripped
 # BY PREFIX before any git call (a lefthook-exported GIT_DIR must not redirect it). The working directory is
 # the envelope's .cwd, then CLAUDE_PROJECT_DIR, then PWD.
 set -uo pipefail
@@ -158,13 +193,18 @@ unset CDPATH
 
 # BOUNDS on the bash side (the harness kills this hook at hooks.json `timeout: 10`, and a killed hook is not a
 # decision). The wall clock is `SECONDS`, reset here: it ticks on whole-second boundaries, so DEADLINE_S=6 trips
-# between 5 and 6 s after this line, comfortably inside the 10 s budget. MAX_RECORDS and MAX_WORDS cap what the
-# lexer output may hold (one record's read time is what MAX_WORDS bounds); a command beyond either, or one that runs
-# out of time, asks with rule id `bound` unless a deny was found in what was read. The lexer has its own 2 s alarm; these bound everything after it.
+# between 5 and 6 s after this line, comfortably inside the 10 s budget. MAX_RECORDS caps the simple commands the
+# rule table judges. MAX_WORDS caps the words of the whole command; its job is to bound the TIME one record takes to read
+# (the frame-read loop costs about 120 us a word under load), not what the rule table can judge. MAX_DEPTH caps the
+# components of a path the guard resolves, MAX_ENVELOPE the tool call and SCAN_MAX_SEG a degraded-scan segment. A command
+# beyond any of them, or one that runs out of time, asks with rule id `bound` unless a deny was found in what was read
+# (BOUND_SOFT: a trip while reading or resolving does not stop the judging of the rest). The lexer has its own 2 s alarm;
+# these bound everything after it.
 SECONDS=0
 DEADLINE_S=6
 MAX_RECORDS=2000
 MAX_WORDS=20000
+MAX_DEPTH=128
 MAX_ENVELOPE=262144   # 256 KiB: a larger tool call asks `bound` before anything reads it (the prefilter and the raw scans are not linear)
 SCAN_MAX_SEG=65536    # 64 KiB: the longest segment the raw/decoded scans will try their patterns on
 BOUND_WHY=""
@@ -564,7 +604,6 @@ lex_norm() {
 # only this final per-directory answer is cached, never a probe of a prefix.
 PW_K=(); PW_V=()
 PW_MAX=256
-MAX_DEPTH=128
 phys_walk() {
   local k n=${#PW_K[@]} out
   for ((k = 0; k < n; k++)); do

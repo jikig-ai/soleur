@@ -777,7 +777,7 @@ bound_row() {
   fi
   chk "$label" "$ok" "$why"
 }
-# rep <text> <count>: the text repeated count times (printf has no repeat; `seq` is POSIX enough for the suite).
+# rep <text> <count>: the text repeated count times, in REP_OUT.
 rep() { local _s="" _i; for ((_i = 0; _i < $2; _i++)); do _s+="$1"; done; REP_OUT="$_s"; }
 # mk_hook_tree <name> -> HT_HOOK: a private copy of the hook directory (hook + lib), so a row can swap the lexer for a
 # stub or change one constant of the hook without touching the live tree. Skipped in the count-only meta copy.
@@ -888,6 +888,11 @@ if grep -qF 'updatedInput' <<<"$_hdr"; then _x=ok; else _x=bad; fi
 chk "the header states the guard judges the original command, not another hook's updatedInput" "$_x"
 if grep -qi 'terraform apply' <<<"$_hdr" && grep -Eqi 'not (a substitute|cover)|does not cover|not decided' <<<"$_hdr"; then _x=ok; else _x=bad; fi
 chk "the header carries the non-coverage statement (a plain terraform apply is not covered)" "$_x"
+# the header's "User-facing statement" is the README's pinned sentence (README_SENT_NONCOVERAGE), word for word: comment markers
+# and line breaks of the header are removed first, so a re-wrapped header still passes and a reworded one does not
+_hdr_flat="$(printf '%s\n' "$_hdr" | sed -E 's/^# ?//' | tr '\n' ' ' | tr -s ' ')"
+if [[ "$_hdr_flat" == *"User-facing statement: $README_SENT_NONCOVERAGE"* ]]; then _x=ok; else _x=bad; fi
+chk "the header's User-facing statement is the README's non-coverage sentence, word for word" "$_x"
 
 # Every rule id the hook can emit is listed in the hooks roster (.claude/hooks/README.md), in backticks, on the hook's own row.
 # The ids are DERIVED from the hook source (a `note <rank> <id>` call or the id that opens an `emit` reason), never hand-copied;
@@ -2224,7 +2229,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=957
+MIN_CASES=958
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
