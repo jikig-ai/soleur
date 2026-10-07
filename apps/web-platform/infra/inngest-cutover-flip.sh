@@ -69,6 +69,19 @@
 # so an unhandled failure inside them still fails LOUD (marker + aborted), never silent.
 set -Eeuo pipefail
 
+# (#7797) Refuse to run under shell tracing while the live credential is set: `set -x`
+# echoes commands AFTER expansion, so a bound password reaches the transcript before it
+# reaches any command. `case "$-" in *x*)` tests whether tracing is ON rather than
+# enumerating the ways to turn it on, two of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${INNGEST_REDIS_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 readonly LOG_TAG="inngest-cutover-flip"
 # DELIVERY DISCRIMINATOR (#7761). Stamped into every emit_state row so the post-replace
 # probe can prove the new script REACHED the host. Without it every observable the probe
