@@ -512,14 +512,14 @@ srow "static: the denylist pattern compiles" "$(printf 'x\n' | grep -iEc "$DENY_
 # G3 census (Guard 3): the writer never names the rows helper or the marker; the reader is on the allow-list and carries no write verb
 CENSUS_KEY='workspaces_luks_cutover["'"'"'_]*at\b|w2l_marker_name|web2-luks-rows'
 CENSUS_VERB='-X[[:space:]]*(POST|PUT|PATCH|DELETE)\b|--request[=[:space:]][[:space:]]*(POST|PUT|PATCH|DELETE)\b|requests\.(post|put|patch|delete)\b|doppler[^#]*secrets[^#]*\b(set|delete|upload)\b|api\.doppler\.com|\bcurl\b[^#]*[[:space:]](-d|--data[a-z-]*|--json|-T|--upload-file)\b'
-srow "static: the census KEY pattern compiles" "$(printf 'x\n' | grep -iEc "$CENSUS_KEY" >/dev/null 2>&1; [[ $? -le 1 ]]; echo $?)"
-srow "static: the census VERB pattern compiles" "$(printf 'x\n' | grep -iEc "$CENSUS_VERB" >/dev/null 2>&1; [[ $? -le 1 ]]; echo $?)"
+srow "static: the census KEY pattern compiles" "$(printf 'x\n' | grep -iEc -e "$CENSUS_KEY" >/dev/null 2>&1; [[ $? -le 1 ]]; echo $?)"
+srow "static: the census VERB pattern compiles" "$(printf 'x\n' | grep -iEc -e "$CENSUS_VERB" >/dev/null 2>&1; [[ $? -le 1 ]]; echo $?)"
 srow "static: the census still holds the KEY and VERB shapes this suite mirrors" "$([[ "$(grep -c 'w2l_marker_name|web2-luks-rows' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" -ge 1 && "$(grep -c 'requests\\.(post|put|patch|delete)' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" -ge 1 ]]; echo $?)"
-srow "static: the writer script never names the rows helper or the marker (outside comments)" "$([[ -f "$RSCRIPT" && "$(grep -v '^[[:space:]]*#' "$RSCRIPT" | grep -ciE "$CENSUS_KEY")" == 0 ]]; echo $?)"
-srow "static: the reader carries no write verb (outside comments)" "$([[ -f "$ESCRIPT" && "$(grep -v '^[[:space:]]*#' "$ESCRIPT" | grep -ciE "$CENSUS_VERB")" == 0 ]]; echo $?)"
+srow "static: the writer script never names the rows helper or the marker (outside comments)" "$([[ -f "$RSCRIPT" && "$(grep -v '^[[:space:]]*#' "$RSCRIPT" | grep -ciE -e "$CENSUS_KEY")" == 0 ]]; echo $?)"
+srow "static: the reader carries no write verb (outside comments)" "$([[ -f "$ESCRIPT" && "$(grep -v '^[[:space:]]*#' "$ESCRIPT" | grep -ciE -e "$CENSUS_VERB")" == 0 ]]; echo $?)"
 srow "static: the reader carries no POST word outside comments (a harmless echo reds the census)" "$([[ -f "$ESCRIPT" && "$(grep -v '^[[:space:]]*#' "$ESCRIPT" | grep -cE '\bPOST\b')" == 0 ]]; echo $?)"
-srow "static: (must-pass) a verb named only in a comment is not counted" "$([[ "$(printf '# curl -X POST x\nok\n' | grep -v '^[[:space:]]*#' | grep -ciE "$CENSUS_VERB")" == 0 ]]; echo $?)"
-srow "static: (positive control) the verb scan catches a planted write" "$([[ "$(printf 'curl -X POST x\n' | grep -ciE "$CENSUS_VERB")" == 1 ]]; echo $?)"
+srow "static: (must-pass) a verb named only in a comment is not counted" "$([[ "$(printf '# curl -X POST x\nok\n' | grep -v '^[[:space:]]*#' | grep -ciE -e "$CENSUS_VERB")" == 0 ]]; echo $?)"
+srow "static: (positive control) the verb scan catches a planted write" "$([[ "$(printf 'curl -X POST x\n' | grep -ciE -e "$CENSUS_VERB")" == 1 ]]; echo $?)"
 srow "static: the reader is on the census allow-list (READERS)" "$([[ "$(grep -c '"scripts/web-host-reboot-evidence.sh"' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" -ge 1 ]]; echo $?)"
 srow "static: the writer is NOT on the census allow-list" "$([[ "$(grep -c '"scripts/web-host-reboot.sh"' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" == 0 ]]; echo $?)"
 # the one write site: the census over 'actions/reboot' finds exactly the recorded set (tests excepted)
