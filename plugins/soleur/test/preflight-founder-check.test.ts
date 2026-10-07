@@ -1089,6 +1089,10 @@ describe("verify: the static rules (in-process table)", () => {
     ["a pipe inside quotes is still refused", cmdBlock({ command: "grep -c 'a$|b*' f" }), "shell-active-token"],
     ["a dollar inside single quotes is a literal", cmdBlock({ command: "grep -c 'a$' f" }), null],
     ["a trailing dollar inside double quotes is a literal", cmdBlock({ command: 'grep -c "a$" f' }), null],
+    ["a positional parameter inside double quotes", cmdBlock({ command: 'grep -c "$1" f' }), "shell-active-token"],
+    ["a status parameter inside double quotes", cmdBlock({ command: 'grep -c "$?" f' }), "shell-active-token"],
+    ["a process-id parameter inside double quotes", cmdBlock({ command: 'grep -c "$$" f' }), "shell-active-token"],
+    ["an all-arguments parameter inside double quotes", cmdBlock({ command: 'grep -c "$@" f' }), "shell-active-token"],
     ["a curl write-out brace with no list is literal", cmdBlock({ command: "curl -s -o /dev/null -w %{http_code} http://example.invalid/x" }), null],
     // option clusters and prefixes, per verb
     ["curl -sSK (bundled)", cmdBlock({ command: "curl -sSK f http://x" }), "dangerous-option"],
@@ -1293,6 +1297,13 @@ describe("verify: outputs and failure modes", () => {
     r.write("src/a.txt", "a\n");
     r.commit("code");
     const v = r.verify();
+    expect([v.json?.outcome, v.json?.plan]).toEqual(["OK", `${PLANS}/p"q é.md`]);
+  });
+
+  test("an UNTRACKED plan whose path git would quote is found through the NUL-separated listing", () => {
+    const r = new Repo();
+    r.plan('p"q é.md', scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    const v = r.verify(["--candidate"]);
     expect([v.json?.outcome, v.json?.plan]).toEqual(["OK", `${PLANS}/p"q é.md`]);
   });
 

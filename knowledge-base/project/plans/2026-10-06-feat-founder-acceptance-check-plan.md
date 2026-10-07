@@ -527,3 +527,14 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 - [x] `founder-check.py text --list` names every constant and the references name each as `text <key>`; no prose in the three references contains "verified", "proven" or "safe" (the docs tests pin both).
 - [x] The `contributor` description in `model.c4` no longer says a foreign check is confirmed before it runs, and `model.likec4.json` is regenerated (`bash plugins/soleur/test/c4-count-parity.test.sh` green).
 - [ ] The CLO has reviewed the **changed** wording constants listed in the review-round report (`first-use`, `no-block`, `headless-stop` changed; `approval-ask`, `baseline-ok`, `baseline-vacuous`, `capture-question`, `changed-ask`, `eyes-ask`, `failed-ask`, `overridden-changed`, `overridden-failed`, `overridden-invalid`, `overridden-rejected`, `reason-prompt`, `rejected-ask`, `untrusted-fail` added; `no-sandbox-ask`, `nosandbox-continued`, `overridden-line`, `untrusted-ask` removed). Criterion 16 above stays unchecked until then.
+
+## Addendum — 2026-10-07 (second review round and the security seat; append-only)
+
+> Each box is ticked only after its literal command ran in this round. Everything CI already runs was deliberately NOT run locally
+> (the machine was contended); the final report lists it.
+
+- [x] `bun test plugins/soleur/test/preflight-founder-check.test.ts` reports 0 failures (the full suite, 235 tests, at the last run).
+- [x] `bash plugins/soleur/test/preflight-check10-suite-integrity.test.sh` is green (38 checks) with the floors at the measured values: tests 437, assertions 2363, manifest 338.
+- [x] Every new guard has a mutant that the suite kills (two batteries of single-guard mutants against copies of the script through the `FOUNDER_CHECK_SCRIPT` seam with `FOUNDER_CHECK_MUTATION_RUN=1`); the survivors are equivalent or redundant by design and are recorded in the final report.
+- [ ] The CLO has checked the third round of changed wording constants (`refrozen-note`, `no-pr-note` are new; the second-round constants are unchanged since the second review). Criterion 16 above stays unchecked until then.
+

@@ -191,6 +191,7 @@ a verify stub that exits 0 does NOT report a changed command (and prints nothing
 abbreviated flags are refused at every subcommand (allow_abbrev is off)
 acceptance: --stdout-file carries the output the expected text is matched against
 an UNCOMMITTED edit of the pinned script is caught too (the run reads the working tree)
+an UNTRACKED plan whose path git would quote is found through the NUL-separated listing
 an archived plan whose block was edited afterwards is still CHANGED-SINCE-APPROVAL
 an empty expected in the record is matched by exit 0 alone (the expected text comes from the record, not argv)
 an internal error is one JSON FAIL line and exit 4, never a traceback
