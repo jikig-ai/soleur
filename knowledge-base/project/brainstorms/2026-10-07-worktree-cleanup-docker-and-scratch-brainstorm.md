@@ -36,7 +36,7 @@ Make the session-start cleanup actually free disk on a dev host, in the smallest
 | Decision | Choice | Source |
 |---|---|---|
 | Docker scope | Builder cache + dangling only, opt-in, dry-run default | User answer; CPO, CTO, CLO converge |
-| Label-scoped prune | Dropped: no local build stamps a worktree label (all 191 `docker build` hits are CI/prod; 1 passes `--label`) | CTO + repo research |
+| Label-scoped prune | Dropped for now: no `docker build` call site stamps a worktree label (the only `--label` is the CI inngest-bootstrap build). Local-host builders do exist (`plugins/soleur/skills/deploy/scripts/deploy.sh`, `apps/web-platform/infra/cloud-init-plugin-seed.test.sh`, `apps/web-platform/scripts/sandbox-canary-regression.test.sh`), so stamping a label there is a possible later step | Re-derived by orchestrator (CTO said "all CI"; that was inexact) |
 | Scratch drain | Session-start drain **and** producer exit-cleanup **and** timer on operator host | User answer ("3 and 4") |
 | PR scope | Core + df/snapper report; defer worktree-stamped markers and unmarked-dir report | User answer |
 | ADR | Amend ADR-250 (drain trigger moves to session start; producer cleanup) | CTO |
@@ -53,7 +53,7 @@ Make the session-start cleanup actually free disk on a dev host, in the smallest
 
 - ADR-250 already governs scratch reclamation; the issue's item 2 is a "why does it not fire" question, not greenfield.
 - Marked dirs now: 71 (66 dead owner, 5 live), not the issue's 131/128 — the operator cleaned up since; 68 of 71 are under the 24 h age gate. Breakdown (CTO): `gdboot.*` 44, `soleur-run.*` 12, `soleur-inc-*` 10, `soleur-sbx.*` 4. All carry the host's pid namespace, so ns mismatch is not the cause here.
-- `/var/tmp/soleur-quarantine.{0,1000}` hold 142 MB; no `tmpfs-guard` timer or crontab exists on this host (matches the 2026-09-24 learning).
+- `/var/tmp/soleur-quarantine.{0,1000}` hold 142 MB across 21,549 nested entries (2,103 + 19,446 by `find -mindepth 1`; repo research's "3,984" did not reproduce); no `tmpfs-guard` timer or crontab exists on this host (matches the 2026-09-24 learning).
 - Docker now: 17 images (317 MB reclaimable), build cache ~0. Operator already pruned.
 - Test coverage of the sweep is only inside `tests/scripts/test-scratch-session.sh`; no fake-shim pattern for `docker`/`findmnt` exists yet.
 - Hook point: after `git worktree remove` at `worktree-manager.sh:3835`; no dedicated post-removal seam.
