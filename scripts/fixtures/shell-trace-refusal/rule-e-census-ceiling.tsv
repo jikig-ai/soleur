@@ -1,14 +1,12 @@
-# Rule E (#9597): curl commands that carry a credential header in their OWN argument
-# list (readable by every local user in /proc/<pid>/cmdline), plus the hazards of
-# the `--config -` form that replaces it. Format: `path<TAB>site-count`.
-# ENFORCED: the repo-wide run compares this file to the live offender set by
-# EQUALITY on path AND count -- a listed file must still offend, its count must
-# match, and an offender not listed here fails the run. NOT ENFORCED: this file is
-# in the same diff as the code, so a PR can edit it; keeping it shrink-only is a
-# REVIEWER gate. A site is a whole curl command (not a header line), so converting
-# one command and adding another in the same file keeps the count equal and passes.
-# `--changed` and explicit paths bypass it. Regenerate with `--write-baseline-e`
-# ONLY after converting sites; a diff that raises or adds a row needs a reviewer.
+# Per-file CEILING for baseline E (#9597 S1), path<TAB>sites, in the baseline's own order
+# (LC_ALL=C sort). It is currently IDENTICAL to scripts/lint-shell-trace-credential-refusal-e.baseline.txt
+# (seeded from the same census), so it is NOT an independent review of the baseline. What it
+# pins, and nothing more: a second file that must be edited in step, so growing baseline E (a new
+# offender row, or a count raised above its row here) cannot be done by `--write-baseline-e`
+# alone -- the suite fails until this table is edited too, which a reviewer then sees in the diff.
+# It is checked in BOTH directions: every baseline row needs a row here at or above its count,
+# and every row here needs a baseline row OR a file that still offends. A converted file must
+# therefore leave this table in the same change that removes it from the baseline.
 .github/actions/anthropic-preflight/action.yml	1
 .github/actions/dispatch-web-redeploy/track.sh	2
 .github/actions/mint-infra-app-token/action.yml	2

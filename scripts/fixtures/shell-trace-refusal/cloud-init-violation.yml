@@ -1,0 +1,13 @@
+#cloud-config
+# A Terraform-templated cloud-init file is NOT valid YAML (the `%{ }` directive below), so it
+# is scanned by the RAW-LINE feeder, not by PyYAML. Rule E must fire ONCE (the offending curl
+# inside write_files content); the stdin-form curl above it is compliant.
+write_files:
+  - path: /usr/local/bin/probe.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+%{ if enable_probe ~}
+      curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+%{ endif ~}
