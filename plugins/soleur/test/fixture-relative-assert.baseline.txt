@@ -289,7 +289,7 @@
 1	plugins/soleur/skills/community/scripts/github-community.sh
 2	plugins/soleur/skills/community/scripts/linkedin-setup.sh
 2	plugins/soleur/skills/community/scripts/x-setup.sh
-66	plugins/soleur/skills/community/test/github-community.test.sh
+86	plugins/soleur/skills/community/test/github-community.test.sh
 7	plugins/soleur/skills/compound/scripts/token-efficiency-report.sh
 23	plugins/soleur/skills/compound/test/phase-16.test.sh
 19	plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh

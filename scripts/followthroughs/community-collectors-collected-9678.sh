@@ -20,7 +20,8 @@
 #                          is a signal: see the FAILED audit issue and the Sentry op
 #                          `community-publication-rejected`.
 #   4 = TRANSIENT          qualifying digests exist but are unrelated-bad (for example Discord
-#                          `partial` for another cause): one such day must not file a false regression
+#                          `partial` for another cause): one such day must not file a false regression;
+#                          past 14 days it becomes 3 (a standing unrelated-bad state is a finding)
 #
 # `--status-line` prints `discord=<status|none> github=<cause-or-status|none>` for the newest digest
 # and always exits 0. It exists because preflight Check 10 runs the declared command on the PR branch
@@ -40,10 +41,10 @@ HANDLER="apps/web-platform/server/inngest/functions/cron-community-monitor.ts"
 MARKER="SOLEUR_COLLECTOR_COMPACT"
 LAG_SECONDS=86400          # merge-to-deploy lag: a digest generated earlier is ignored, not a FAIL
 ABSENCE_SECONDS=604800     # 7 days without a qualifying digest is itself a finding
+UNGRADED_SECONDS=1209600   # 14 days of qualifying digests that never grade clean is a finding too
 
 # Set by parse_row (printf -v); initialised here so no read is ever of an unset name.
-# shellcheck disable=SC2034  # d_line is written by parse_row and read only for symmetry
-d_status=none d_cause=none d_line="" g_status=none g_cause=none g_line=""
+d_status=none d_cause=none g_status=none g_cause=none g_line=""
 
 # The closed vocabulary of failure causes (COMMUNITY_FAILURE_CAUSES in _cron-community-publication.ts).
 is_known_cause() {
@@ -63,19 +64,25 @@ parse_row() { # $1=file $2=Platform $3=var prefix
   if [[ -z "$line" ]]; then
     printf -v "${prefix}_status" '%s' none
     printf -v "${prefix}_cause" '%s' none
-    printf -v "${prefix}_line" '%s' ""
+    [[ "$prefix" == g ]] && g_line=""
     return 0
   fi
   status="$(sed -E 's/^\| [A-Za-z]+ \| ([a-z]+) \|.*/\1/' <<<"$line")"
   if [[ "$line" == *output-too-large* ]]; then
     cause=output-too-large
-  elif [[ "$status" == partial || "$status" == failed ]]; then
-    cause="$(sed -nE 's/^[^|]*\|[^|]*\|[^|]*\| *(partial|failed) \(([a-z-]+)[;)].*/\2/p' <<<"$line")"
+  elif [[ "$status" == partial ]]; then
+    # Renderer: `partial (<cause>; a 0 may mean unavailable): ...`
+    cause="$(sed -nE 's/^[^|]*\|[^|]*\|[^|]*\| *partial \(([a-z-]+)[;)].*/\1/p' <<<"$line")"
+    if [[ -z "$cause" ]] || ! is_known_cause "$cause"; then cause=unknown; fi
+  elif [[ "$status" == failed ]]; then
+    # Renderer: `collection failed: <cause>`
+    cause="$(sed -nE 's/^[^|]*\|[^|]*\|[^|]*\| *collection failed: ([a-z-]+).*/\1/p' <<<"$line")"
     if [[ -z "$cause" ]] || ! is_known_cause "$cause"; then cause=unknown; fi
   fi
   printf -v "${prefix}_status" '%s' "$status"
   printf -v "${prefix}_cause" '%s' "$cause"
-  printf -v "${prefix}_line" '%s' "$line"
+  [[ "$prefix" == g ]] && g_line="$line"
+  return 0
 }
 
 # A digest is a regular, non-symlink file named <date>-digest.md. Prints its path, sorted by name.
@@ -154,23 +161,26 @@ if ((${#QUAL[@]} == 0)); then
   exit 2
 fi
 
-# FAIL: any qualifying digest still reports the old cause on a platform the change targets.
-for f in "${QUAL[@]}"; do
-  parse_row "$f" Discord d
-  parse_row "$f" GitHub g
-  name="$(basename "$f")"
-  if [[ "$d_cause" == output-too-large || "$g_cause" == output-too-large ]]; then
-    echo "FAIL: ${name:0:10} discord=${d_status}/${d_cause} github=${g_status}/${g_cause} (output-too-large persists)"
-    exit 1
-  fi
-done
+# FAIL: the NEWEST qualifying digest still reports the old cause on a platform the change targets.
+# Only the newest: a digest generated between the merge and the deploy (the lag window is a
+# heuristic) legitimately carries the old behaviour, and must not latch a permanent FAIL once
+# later digests are clean.
+NEWEST="${QUAL[${#QUAL[@]} - 1]}"
+parse_row "$NEWEST" Discord d
+parse_row "$NEWEST" GitHub g
+if [[ "$d_cause" == output-too-large || "$g_cause" == output-too-large ]]; then
+  name="$(basename "$NEWEST")"
+  echo "FAIL: ${name:0:10} discord=${d_status}/${d_cause} github=${g_status}/${g_cause} (output-too-large persists)"
+  exit 1
+fi
 
 if ((${#QUAL[@]} < 2)); then
   echo "NOT YET: one qualifying digest so far (${#QUAL[@]} of 2 needed)"
   exit 2
 fi
 
-# PASS: the two newest qualifying digests have Discord collected and a non-zero GitHub count.
+# PASS: the two newest qualifying digests have Discord collected, no output-too-large on either
+# platform, and a non-zero GitHub count across them.
 nonzero=no
 ok=1
 for f in "${QUAL[@]: -2}"; do
@@ -178,6 +188,7 @@ for f in "${QUAL[@]: -2}"; do
   parse_row "$f" GitHub g
   name="$(basename "$f")"
   [[ "$d_status" == collected ]] || ok=0
+  [[ "$d_cause" == output-too-large || "$g_cause" == output-too-large ]] && ok=0
   commits="$(sed -nE 's/.*Commits ([0-9]+).*/\1/p' <<<"$g_line" | head -1)"
   prs="$(sed -nE 's/.*Pull requests touched ([0-9]+).*/\1/p' <<<"$g_line" | head -1)"
   if [[ "${commits:-0}" =~ ^[0-9]+$ && "${commits:-0}" -gt 0 ]] || [[ "${prs:-0}" =~ ^[0-9]+$ && "${prs:-0}" -gt 0 ]]; then nonzero=yes; fi
@@ -187,6 +198,11 @@ done
 if ((ok == 1)) && [[ "$nonzero" == yes ]]; then
   echo "PASS: two consecutive digests with Discord collected, no output-too-large, and measured GitHub counts (#9678)"
   exit 0
+fi
+# An unrelated-bad state must not read as reassurance forever: past the bound it is a finding.
+if ((NOW > CUTOFF + UNGRADED_SECONDS)); then
+  echo "CANNOT ESTABLISH: still not graded clean 14 days after the change (discord_ok=${ok} github_nonzero=${nonzero}); read the newest digests and the Sentry op collector-status-warn"
+  exit 3
 fi
 echo "TRANSIENT: the cause is gone but the digests do not yet show Discord collected with a non-zero GitHub count (discord_ok=${ok} github_nonzero=${nonzero})"
 exit 4

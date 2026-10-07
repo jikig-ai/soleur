@@ -282,7 +282,7 @@ discord_request() {
 # holding only the fields the prompt reads (counts, channel ids). Unset, or any
 # other value, leaves the output byte-identical to the interactive form.
 # `members` is exempt: the cron's containment hook denies it, so it never runs there.
-COMPACT_MAX_ITEMS=40
+readonly COMPACT_MAX_ITEMS=40
 
 compact_on() {
   [[ "${SOLEUR_COLLECTOR_COMPACT:-}" == "1" ]] && return 0

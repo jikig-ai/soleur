@@ -9,11 +9,12 @@ vi.mock("@/lib/client-observability", () => ({
 const nav = vi.hoisted(() => ({
   pathname: "/dashboard",
   search: "?a=1",
+  nullSearch: false,
 }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => nav.pathname,
-  useSearchParams: () => new URLSearchParams(nav.search),
+  useSearchParams: () => (nav.nullSearch ? null : new URLSearchParams(nav.search)),
 }));
 
 import {
@@ -50,6 +51,7 @@ describe("NavPendingIsland", () => {
     vi.useFakeTimers();
     nav.pathname = "/dashboard";
     nav.search = "?a=1";
+    nav.nullSearch = false;
     setLocation("/dashboard?a=1");
   });
 
@@ -138,6 +140,35 @@ describe("NavPendingIsland", () => {
     nav.pathname = "/inbox";
     nav.search = "";
     render(<NavPendingIsland />);
+    act(() => vi.advanceTimersByTime(PENDING_MIN_VISIBLE_MS));
+    expect(getNavPendingSnapshot().pending).toBe(false);
+  });
+
+  // The watcher keeps the store's last location current on EVERY commit, not just its first run:
+  // the popstate gate compares Back's target against that location.
+  it("Back after a committed navigation starts a popstate episode (the watcher kept the last location current)", () => {
+    const { rerender } = render(<NavPendingIsland />);
+    act(() => {
+      window.history.pushState({}, "", "/inbox");
+    });
+    nav.pathname = "/inbox";
+    nav.search = "";
+    rerender(<NavPendingIsland />);
+    act(() => {
+      window.history.pushState({}, "", "/dashboard?a=1");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(getNavPendingSnapshot()).toMatchObject({ pending: true, trigger: "popstate" });
+  });
+
+  // `useSearchParams()` is nullable on prerender paths; the key must not throw on it.
+  it("a null useSearchParams does not throw and still tracks the pathname", () => {
+    nav.nullSearch = true;
+    const { rerender } = render(<NavPendingIsland />);
+    act(() => startNavPending("link"));
+    window.history.pushState({}, "", "/inbox");
+    nav.pathname = "/inbox";
+    rerender(<NavPendingIsland />);
     act(() => vi.advanceTimersByTime(PENDING_MIN_VISIBLE_MS));
     expect(getNavPendingSnapshot().pending).toBe(false);
   });

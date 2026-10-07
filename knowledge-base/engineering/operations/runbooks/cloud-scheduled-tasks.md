@@ -882,14 +882,20 @@ recipe in `betterstack-log-query.md`). Work through these in order, credential-f
 1. Read the rendered row and the Better Stack marker (above). A `partial` github row on its own is
    usually the standing `auth` label (stargazers are unreadable with the read-only token, #9679),
    not this cause.
-2. For github, read the sidecar `warn` the handler reports to Sentry (`collector-status-warn`):
-   `compact_off` means the flag did not reach the collector (check the `buildSpawnEnv` wrapper in
-   `cron-community-monitor.ts` still sets it); `compact_over_budget` means one compact line passed
-   6,000 bytes (the title caps no longer bound it; read the collector's projection).
-3. Only if the first two do not explain it, replay locally with the real credentials:
-   `SOLEUR_COLLECTOR_COMPACT=1 bash plugins/soleur/skills/community/scripts/<collector>.sh <verb>`
-   and compare the byte count with the 30,000 limit. Discord has no sidecar, so its only in-surface
-   evidence is the rendered row.
+2. For github, read the sidecar `warn` the handler reports to Sentry (`op:collector-status-warn`,
+   `feature:cron-community-monitor`; read it with `doppler run -p soleur -c prd -- scripts/sentry-issue.sh`,
+   see `sentry-issue-read.md`): `compact_off` means the flag did not reach the collector (the handler
+   already publishes the github row as `partial` / `script-error` in that case; check the
+   `buildSpawnEnv` wrapper in `cron-community-monitor.ts` still sets it); `compact_over_budget` means
+   one compact line passed 6,000 bytes (read the collector's projection). Either outranks a
+   `truncated_at_per_page` warn on the same run.
+3. Only if the first two do not explain it, replay locally with the real credentials, using the
+   arguments the cron passes: `SOLEUR_COLLECTOR_COMPACT=1 bash plugins/soleur/skills/community/scripts/github-community.sh <verb> 1 | wc -c`
+   (verbs: `repo-stats`, `activity`, `contributors`, `discussions`, `fetch-interactions`) and
+   `... discord-community.sh messages <channel_id> 50 | wc -c`, then compare with the 30,000 limit.
+   Discord has no sidecar and no `compact_off` signal, so its only in-surface evidence is the rendered
+   row, plus the probe in `scripts/followthroughs/community-collectors-collected-9678.sh`
+   (`--status-line` prints the newest digest's row statuses).
 
 A platform shown `failed` or `disabled` renders no metrics at all, by design.
 

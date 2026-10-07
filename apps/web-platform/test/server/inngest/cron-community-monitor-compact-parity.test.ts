@@ -16,7 +16,7 @@
 // It reads plugins/soleur/skills/community/scripts/*.sh, so it is registered in
 // test/repo-wide-suites.ts.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -26,6 +26,7 @@ vi.hoisted(() => {
 });
 
 import { COMMUNITY_MONITOR_PROMPT as PROMPT } from "../../../server/inngest/functions/cron-community-monitor";
+import { COMMUNITY_FAILURE_CAUSES } from "../../../server/inngest/functions/_cron-community-publication";
 
 const SCRIPTS_DIR = join(__dirname, "../../../../../plugins/soleur/skills/community/scripts");
 const INLINE_LIMIT = 30_000;
@@ -138,7 +139,7 @@ beforeAll(() => {
   writeFileSync(
     join(shimDir, "gh"),
     `#!/usr/bin/env bash
-FIX=${JSON.stringify(ghFixtures)}
+FIX="\${GH_FIXTURES:-${ghFixtures}}"
 [[ "\${1:-}" == "auth" ]] && exit 0
 [[ "\${1:-}" == "api" ]] || { echo "gh shim: unhandled $*" >&2; exit 1; }
 shift
@@ -401,6 +402,80 @@ describe("compact collector output parity (#9678)", () => {
     expect(r.stderr).not.toContain("sekret-value");
   });
 
+  it("discord compact values are the measured ones, not just the right keys", () => {
+    const m = JSON.parse(runCollector("discord-community.sh", ["messages", "123456789012345678", "50"], compact).stdout);
+    expect(m).toEqual({ count: 50 });
+    const g = JSON.parse(runCollector("discord-community.sh", ["guild-info"], compact).stdout);
+    expect(g).toEqual({ approximate_member_count: 321 });
+  });
+
+  it("nested compact shapes are exact too (a key added under issues/pull_requests is drift)", () => {
+    const a = JSON.parse(runCollector("github-community.sh", ["activity", "1"], compact).stdout) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(Object.keys(a.issues).sort()).toEqual(["count", "titles"]);
+    expect(Object.keys(a.pull_requests).sort()).toEqual(["count", "titles"]);
+  });
+
+  it("the prompt names each Discord field in the sentence that tells the agent to read it", () => {
+    // `count` also appears in the Hacker News and GitHub sentences, so a bare substring check is
+    // satisfied by unrelated text; anchor each to its own sentence.
+    expect(PROMPT).toMatch(/channels is its\s+`count`/);
+    expect(PROMPT).toMatch(/IDs are\s+in `channel_ids`/);
+    expect(PROMPT).toMatch(/messages is the sum of each call's\s+`count`/);
+    expect(PROMPT).toMatch(/commits is\s+`commit_total`/);
+  });
+
+  it("hostile titles (control characters, quotes, backslashes) cannot push the chain past the inline limit", () => {
+    const hostile = mkdtempSync(join(root, "hostile-"));
+    const nasty = `${"\u0001".repeat(20)}${'"\\'.repeat(20)}${"é".repeat(20)}`;
+    const items = (n: number, extra: Record<string, unknown>) =>
+      Array.from({ length: n }, (_, i) => ({
+        number: i + 1,
+        title: nasty,
+        state: "open",
+        user: { login: "u" },
+        created_at: NOW,
+        updated_at: `2099-01-01T00:${pad2(Math.floor(i / 60))}:${pad2(i % 60)}Z`,
+        ...extra,
+      }));
+    writeJson(hostile, "issues.json", items(99, { pull_request: null }));
+    writeJson(hostile, "pulls.json", items(99, { merged_at: null }));
+    writeJson(hostile, "commits.json", [{ author: { login: "a" }, commit: { author: { name: "A" } } }]);
+    writeJson(hostile, "repo.json", { stargazers_count: 1, forks_count: 1, subscribers_count: 1 });
+    writeJson(hostile, "stargazers.json", []);
+    writeJson(hostile, "issue_comments.json", []);
+    writeJson(hostile, "graphql.json", {
+      data: {
+        repository: {
+          discussions: {
+            nodes: Array.from({ length: 60 }, (_, i) => ({
+              number: i + 1,
+              title: nasty,
+              updatedAt: `2099-01-01T00:00:${pad2(i % 60)}Z`,
+            })),
+          },
+        },
+      },
+    });
+    let total = 0;
+    for (const c of CASES.filter((x) => x.platform === "github" && ["activity", "discussions"].includes(x.verb))) {
+      const r = runCollector(c.script, c.args, { ...compact, GH_FIXTURES: hostile });
+      expect(r.rc, r.stderr).toBe(0);
+      expect(r.stdout).not.toMatch(/\\u00[0-1][0-9a-f]/); // no JSON control-character escapes
+      total += Buffer.byteLength(r.stdout);
+    }
+    expect(total).toBeLessThan(INLINE_LIMIT / 2);
+  });
+
+  it("the probe's cause vocabulary equals COMMUNITY_FAILURE_CAUSES", () => {
+    const src = readFileSync(join(__dirname, "../../../../../scripts/followthroughs/community-collectors-collected-9678.sh"), "utf-8");
+    const m = src.match(/is_known_cause\(\) \{\s*case "\$1" in ([^)]+)\) return 0 ;; esac/);
+    expect(m, "is_known_cause case list not found").not.toBeNull();
+    expect((m?.[1] ?? "").split("|").sort()).toEqual([...COMMUNITY_FAILURE_CAUSES].sort());
+  });
+
   it("the prompt no longer reads fields the compact output dropped", () => {
     expect(PROMPT).not.toContain("watchers_count");
     expect(PROMPT).not.toContain("commit_authors");
@@ -418,7 +493,15 @@ describe("follow-through probe for #9678 (community-collectors-collected-9678.sh
   const iso = (epoch: number) => new Date(epoch * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
   const day = (n: number) => new Date((CUT + 86_400 * n) * 1000).toISOString().slice(0, 10);
 
-  function digest(dir: string, dayN: number, discord: string, discordHeadline: string, commits: number, genOffset = 3600): void {
+  function digest(
+    dir: string,
+    dayN: number,
+    discord: string,
+    discordHeadline: string,
+    commits: number,
+    genOffset = 3600,
+    githubHeadline = "partial (auth; a 0 may mean unavailable)",
+  ): void {
     const date = day(dayN);
     writeFileSync(
       join(dir, `${date}-digest.md`),
@@ -433,7 +516,7 @@ describe("follow-through probe for #9678 (community-collectors-collected-9678.sh
         "| Platform | Status | Headline |",
         "|----------|--------|----------|",
         `| Discord | ${discord} | ${discordHeadline}: Members 13, Channels 10, Messages (latest 50 per channel) 6 |`,
-        `| GitHub | partial | partial (auth; a 0 may mean unavailable): Stars 16, Forks 5, Commits ${commits}, Pull requests touched 0, External contributors 0 |`,
+        `| GitHub | partial | ${githubHeadline}: Stars 16, Forks 5, Commits ${commits}, Pull requests touched 0, External contributors 0 |`,
         "",
       ].join("\n"),
     );
@@ -497,6 +580,55 @@ describe("follow-through probe for #9678 (community-collectors-collected-9678.sh
     digest(dir, 2, "collected", "collected", 0);
     digest(dir, 3, "collected", "collected", 0);
     expect(probe(dir, 4).rc).toBe(4);
+  });
+
+  it("FAIL (1) when the GITHUB row carries output-too-large (the row the evidence came from)", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3, 3600, "partial (output-too-large; a 0 may mean unavailable)");
+    const r = probe(dir, 3);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("github=partial/output-too-large");
+  });
+
+  it("an old bad digest does not latch FAIL once later digests are clean (deploy-lag digest)", () => {
+    const dir = fresh();
+    digest(dir, 2, "partial", "partial (output-too-large; a 0 may mean unavailable)", 0);
+    digest(dir, 3, "collected", "collected", 3);
+    // one clean digest after a bad one: not a FAIL, and not yet a PASS (the bad one is in the pair)
+    expect(probe(dir, 4).rc).toBe(4);
+    digest(dir, 4, "collected", "collected", 5);
+    expect(probe(dir, 5).rc).toBe(0);
+  });
+
+  it("Discord collected is required on BOTH of the two newest digests, not just the newer", () => {
+    const dir = fresh();
+    digest(dir, 2, "partial", "partial (timeout; a 0 may mean unavailable)", 3);
+    digest(dir, 3, "collected", "collected", 5);
+    expect(probe(dir, 4).rc).toBe(4);
+  });
+
+  it("two clean digests days apart still PASS (consecutive means the two newest, not adjacent days)", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3);
+    digest(dir, 6, "collected", "collected", 5);
+    expect(probe(dir, 7).rc).toBe(0);
+  });
+
+  it("a failed row reports its real cause, not unknown", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3);
+    digest(dir, 3, "failed", "collection failed: auth", 5);
+    const r = probe(dir, 4);
+    expect(r.rc).toBe(4);
+    expect(r.out).toContain("discord=failed/auth");
+  });
+
+  it("an unrelated-bad state does not read as reassurance forever: CANNOT ESTABLISH (3) after 14 days", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3);
+    digest(dir, 3, "partial", "partial (timeout; a 0 may mean unavailable)", 5);
+    expect(probe(dir, 10).rc).toBe(4);
+    expect(probe(dir, 20).rc).toBe(3);
   });
 
   it("--status-line always exits 0 and prints enum tokens only; unknown arguments exit 2", () => {

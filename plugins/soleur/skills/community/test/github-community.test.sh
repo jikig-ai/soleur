@@ -519,10 +519,25 @@ STATUS8W="$CASE8W/status"
   export GITHUB_REPOSITORY="test-owner/test-repo"
   export TMPDIR="$CASE8W/tmp"
   export SOLEUR_COLLECTOR_STATUS_DIR="$STATUS8W"
+  export SOLEUR_COLLECTOR_COMPACT=1
   bash "$COLLECTOR" contributors 1
 ) >"$CASE8W/out/stdout" 2>"$CASE8W/out/stderr"
 RC=$?
-assert_rc 0 "$RC" "contributors succeeds at the cap with a status dir set"
+assert_rc 0 "$RC" "contributors succeeds with a status dir set"
+# 100 issues are NOT read in compact mode (the line carries only the commit total), so the
+# truncation signal comes from the commits cap.
+gen_commits 100 16 > "$CASE8W/fixtures/commits.json"
+rm -f "$STATUS8W/collector-status.jsonl"
+(
+  export PATH="$CASE8W/stub:$PATH"
+  export GITHUB_REPOSITORY="test-owner/test-repo"
+  export TMPDIR="$CASE8W/tmp"
+  export SOLEUR_COLLECTOR_STATUS_DIR="$STATUS8W"
+  export SOLEUR_COLLECTOR_COMPACT=1
+  bash "$COLLECTOR" contributors 1
+) >"$CASE8W/out/stdout" 2>"$CASE8W/out/stderr"
+RC=$?
+assert_rc 0 "$RC" "contributors succeeds at the commits cap"
 if [[ -f "$STATUS8W/collector-status.jsonl" ]]; then
   assert_jq "$STATUS8W/collector-status.jsonl" \
     '.warn == "truncated_at_per_page"' \
@@ -530,6 +545,18 @@ if [[ -f "$STATUS8W/collector-status.jsonl" ]]; then
 else
   echo "  FAIL: sidecar missing after capped run"; FAIL=$((FAIL + 1))
 fi
+# The same capped run WITHOUT the flag (a cron whose flag did not arrive): compact_off outranks the
+# truncation warn, so the flag regression is not hidden behind the per_page cap.
+rm -f "$STATUS8W/collector-status.jsonl"
+(
+  export PATH="$CASE8W/stub:$PATH"
+  export GITHUB_REPOSITORY="test-owner/test-repo"
+  export TMPDIR="$CASE8W/tmp"
+  export SOLEUR_COLLECTOR_STATUS_DIR="$STATUS8W"
+  bash "$COLLECTOR" contributors 1
+) >"$CASE8W/out/stdout" 2>"$CASE8W/out/stderr"
+assert_jq "$STATUS8W/collector-status.jsonl" '.warn == "compact_off"' \
+  "compact_off outranks truncated_at_per_page"
 
 # --- Test 9: fetch-interactions -------------------------------------------
 #
@@ -752,6 +779,109 @@ assert_nonzero_rc "$RC" "compact repo-stats exits non-zero when forks_count is m
 assert_file_not_matches "$CASE10F/out/stdout" 'forks_count' "no partial compact record is printed on a projection failure"
 assert_jq "$CASE10F/status/collector-status.jsonl" '.cause == "compact-projection-failed" and .exit != 0' \
   "a projection failure is recorded with cause=compact-projection-failed"
+
+# --- Test 11: compact filters keep their predicates (#9678 review) ----------
+#
+# Every fixture in Test 10 sits on the KEEP side of every filter, so a compact projection that
+# dropped its date, pull-request, bot-association or null-author predicate would still pass. This
+# case puts items on BOTH sides of each predicate and asserts the exact counts.
+
+echo "Test 11: compact projections apply the same filters as the default output"
+
+OLD="2000-01-01T00:00:00Z"
+CASE11="$(new_case compact_filters)"
+# issues: 3 real, 2 pull requests listed by the issues endpoint (must not count as issues)
+jq -nc --arg ts "$NOW" '[range(5) | {number: (.+1), title: ("i" + (.|tostring)), state: "open",
+   user: {login: "u"}, created_at: $ts, updated_at: $ts,
+   pull_request: (if . >= 3 then {url: "x"} else null end)}]' > "$CASE11/fixtures/issues.json"
+# pulls: 4 recent, 2 updated long before `since` (the endpoint over-fetches a fixed page)
+jq -nc --arg ts "$NOW" --arg old "$OLD" '[range(6) | {number: (.+1), title: ("p" + (.|tostring)), state: "open",
+   user: {login: "u"}, created_at: $ts, merged_at: null, updated_at: (if . >= 4 then $old else $ts end)}]' \
+   > "$CASE11/fixtures/pulls.json"
+# commits: 3 attributable, 1 with neither a login nor an author name (must not count)
+jq -nc '[{author: {login: "a"}, commit: {author: {name: "A"}}},
+         {author: {login: "b"}, commit: {author: {name: "B"}}},
+         {author: null, commit: {author: {name: "Anon"}}},
+         {author: null, commit: {author: {name: null}}}]' > "$CASE11/fixtures/commits.json"
+# stargazers: 2 inside the window, 3 long before it
+jq -nc --arg ts "$NOW" --arg old "$OLD" '[range(5) | {starred_at: (if . < 2 then $ts else $old end), user: {login: ("g" + (.|tostring))}}]' \
+   > "$CASE11/fixtures/stargazers.json"
+gen_repo > "$CASE11/fixtures/repo.json"
+# discussions: 5 recent, 3 updated long before `since`
+jq -nc --arg ts "$NOW" --arg old "$OLD" '{data: {repository: {discussions: {nodes:
+   [range(8) | {number: (.+1), title: ("d" + (.|tostring)), author: {login: "x"}, createdAt: $ts,
+                updatedAt: (if . < 5 then $ts else $old end), answerChosenAt: null,
+                comments: {totalCount: 0}, category: {name: "G"}}]}}}}' > "$CASE11/fixtures/graphql.json"
+# comments: 2 external people; a bot account, a [bot] login, an OWNER and a MEMBER are excluded
+jq -nc --arg ts "$NOW" '[
+  {author_association: "NONE",        user: {login: "ext1", type: "User"}},
+  {author_association: "CONTRIBUTOR", user: {login: "ext2", type: "User"}},
+  {author_association: "NONE",        user: {login: "robot", type: "Bot"}},
+  {author_association: "NONE",        user: {login: "dependabot[bot]", type: "User"}},
+  {author_association: "OWNER",       user: {login: "maint", type: "User"}},
+  {author_association: "MEMBER",      user: {login: "maint2", type: "User"}}
+ ] | map(. + {issue_url: "https://api.github.com/repos/o/r/issues/1", body: "b",
+              html_url: "https://github.com/o/r/issues/1", created_at: $ts})' > "$CASE11/fixtures/issue_comments.json"
+
+for cmd in activity contributors repo-stats discussions fetch-interactions; do
+  run_collector_env "$CASE11" "SOLEUR_COLLECTOR_COMPACT=1" "$cmd" 1
+  assert_rc 0 "$RC" "filters case: compact $cmd exits 0"
+  cp "$CASE11/out/stdout" "$CASE11/out.$cmd.json"
+done
+assert_jq "$CASE11/out.activity.json" '.issues.count == 3 and .pull_requests.count == 4' \
+  "compact activity: pull requests are not issues, and PRs older than since are not counted"
+assert_jq "$CASE11/out.contributors.json" '. == {commit_total: 3}' \
+  "compact contributors: a commit with no login and no author name is not counted"
+assert_jq "$CASE11/out.repo-stats.json" '.new_stargazers_count == 2' \
+  "compact repo-stats: only stargazers inside the window count"
+assert_jq "$CASE11/out.discussions.json" '(.titles | length) == 5' \
+  "compact discussions: discussions older than since are not listed"
+assert_jq "$CASE11/out.fetch-interactions.json" '. == {external_contributors: 2, interactions_count: 2}' \
+  "compact fetch-interactions: bots, [bot] logins, OWNER and MEMBER comments are excluded"
+
+# A numeric-looking but wrong field must fail the projection closed, for EVERY compact command:
+# an item that is not an object makes the jq projection error, and the sidecar must carry the cause.
+echo "Test 11b: every compact command fails closed with a recorded cause"
+for cmd in activity contributors discussions fetch-interactions; do
+  C="$(new_case "failclosed_$cmd")"
+  gen_repo > "$C/fixtures/repo.json"
+  case "$cmd" in
+    activity)           jq -nc '[1]' > "$C/fixtures/issues.json"; jq -nc '[1]' > "$C/fixtures/pulls.json" ;;
+    contributors)       jq -nc '[1]' > "$C/fixtures/commits.json"; jq -nc '[]|.+[{}]' > "$C/fixtures/issues.json" ;;
+    discussions)        jq -nc '{data: null}' > "$C/fixtures/graphql.json" ;;
+    fetch-interactions) jq -nc '[1]' > "$C/fixtures/issue_comments.json" ;;
+  esac
+  run_collector_env "$C" "SOLEUR_COLLECTOR_COMPACT=1 SOLEUR_COLLECTOR_STATUS_DIR=$C/status" "$cmd" 1
+  assert_nonzero_rc "$RC" "compact $cmd exits non-zero on a drifted payload"
+  assert_jq "$C/status/collector-status.jsonl" '.cause == "compact-projection-failed"' \
+    "compact $cmd records cause=compact-projection-failed"
+done
+
+# subscribers_count is a published metric too: a payload without it must fail closed, not print null.
+C="$(new_case failclosed_subscribers)"
+jq -nc '{stargazers_count: 11, forks_count: 2, watchers_count: 11}' > "$C/fixtures/repo.json"
+gen_stargazers 1 16 > "$C/fixtures/stargazers.json"
+run_collector_env "$C" "SOLEUR_COLLECTOR_COMPACT=1 SOLEUR_COLLECTOR_STATUS_DIR=$C/status" repo-stats 1
+assert_nonzero_rc "$RC" "compact repo-stats exits non-zero when subscribers_count is missing"
+assert_file_not_matches "$C/out/stdout" 'subscribers_count' "no compact record is printed without subscribers_count"
+
+# Control characters in a title are neutralised before the slice, so JSON escaping cannot inflate
+# a compact line past the inline limit.
+echo "Test 11c: control characters in titles cannot inflate the compact line"
+C="$(new_case ctrl_titles)"
+jq -nc --arg ts "$NOW" '[range(99) | {number: (.+1), title: ("\u0001" * 60), state: "open", user: {login: "u"},
+   created_at: $ts, updated_at: $ts, pull_request: null}]' > "$C/fixtures/issues.json"
+jq -nc --arg ts "$NOW" '[range(99) | {number: (.+1), title: ("\u0001" * 60), state: "open", user: {login: "u"},
+   created_at: $ts, updated_at: $ts, merged_at: null}]' > "$C/fixtures/pulls.json"
+run_collector_env "$C" "SOLEUR_COLLECTOR_COMPACT=1" activity 1
+assert_rc 0 "$RC" "activity exits 0 on control-character titles"
+CTRL_BYTES=$(wc -c < "$C/out/stdout")
+if [[ "$CTRL_BYTES" -lt 6000 ]]; then
+  echo "  PASS: control-character titles stay under the compact budget ($CTRL_BYTES B)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: control-character titles produced $CTRL_BYTES B (budget 6000 B)"; FAIL=$((FAIL + 1))
+fi
+assert_file_not_matches "$C/out/stdout" '\\u00' "no JSON control-character escapes survive in titles"
 
 echo ""
 print_results

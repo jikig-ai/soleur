@@ -690,6 +690,50 @@ describe("publication flow — collector truth is bound into the render", () => 
     expect(text).not.toContain("stargazers_unavailable");
   });
 
+  it("a compact_off warn forces a github row that says collected to partial/script-error with the metrics withheld, and reports a compact-specific warn (#9678)", async () => {
+    // The spawn flag did not reach the collector, so the prompt's compact fields are absent and any
+    // number the model reports for them is an unmeasured zero. The handler must not rely on the
+    // model marking it.
+    writeSidecar([
+      { collector: "github", command: "contributors", exit: 0, cause: "", warn: "compact_off" },
+      { collector: "github", command: "activity", exit: 0 },
+    ]);
+
+    const { out } = await run();
+
+    const exp = expectedRender({ status: "partial", failureCause: "script-error" });
+    expect(out.value).toEqual({ ok: true });
+    expect(issues[0].body).toBe(exp.issueBody);
+    expect(issues[0].body).toMatch(/\| GitHub \| partial \|[^\n]*script-error/);
+    const call = opCall("collector-status-warn");
+    expect(call, "the flag regression must still be reported").toBeDefined();
+    expect(String((call?.[0] as Error | undefined)?.message ?? "")).toContain("contributors(compact_off)");
+    expect(String(call?.[1]?.message ?? "")).not.toContain("per_page");
+    expect(opCall("collector-status-failed")).toBeUndefined();
+  });
+
+  it("a compact_off warn does not soften a github platform the draft itself reports as failed", async () => {
+    writeSidecar([{ collector: "github", command: "activity", exit: 0, cause: "", warn: "compact_off" }]);
+    spawnClaudeEvalSpy.mockResolvedValue(
+      okSpawn({
+        finalMessage: validDraftFinalMessage({ platforms: { github: { status: "failed", failureCause: "rate-limit" } } }),
+      }),
+    );
+
+    await run();
+
+    expect(issues[0].body).toContain("| GitHub | failed | collection failed: rate-limit |");
+  });
+
+  it("a compact_over_budget warn is reported but does not override a collected github row", async () => {
+    writeSidecar([{ collector: "github", command: "activity", exit: 0, cause: "", warn: "compact_over_budget" }]);
+
+    await run();
+
+    expect(opCall("collector-status-warn")).toBeDefined();
+    expect(issues[0].body).not.toContain("| GitHub | partial |");
+  });
+
   it("a MISSING sidecar renders github partial/unknown (never an unverified 'collected') and stays GREEN", async () => {
     rmSync(join(spawnCwd, ".soleur-collector-status"), { recursive: true, force: true });
 

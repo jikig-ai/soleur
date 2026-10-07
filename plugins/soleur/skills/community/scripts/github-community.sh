@@ -142,7 +142,7 @@ _on_exit() {
   # A failure after the compact projection was armed, with no earlier cause, is the projection.
   if ((rc != 0)) && [[ -z "$_CAUSE" ]]; then _CAUSE="$_COMPACT_CAUSE"; fi
   # Inside the cron (status dir set) but the handler flag did not reach us: say so in-surface.
-  if [[ -z "$_CAP_WARN" && "$_COMPACT_OFF" -eq 1 ]]; then _CAP_WARN="compact_off"; fi
+  if [[ "$_COMPACT_OFF" -eq 1 && ( -z "$_CAP_WARN" || "$_CAP_WARN" == truncated_at_per_page ) ]]; then _CAP_WARN="compact_off"; fi
   _record_status "${_COMMAND:-unknown}" "$rc" "$_CAUSE"
 }
 
@@ -186,9 +186,13 @@ compact_on() {
 emit_compact() { # $1=compact JSON
   local bytes
   bytes=$(printf '%s' "$1" | wc -c)
-  if ((bytes > COMPACT_BUDGET_BYTES)) && [[ -z "$_CAP_WARN" ]]; then
+  # Outranks the truncation warn (a data-quality signal about THIS run's output), never the
+  # standing stargazers_unavailable the handler acts on.
+  if ((bytes > COMPACT_BUDGET_BYTES)) && [[ -z "$_CAP_WARN" || "$_CAP_WARN" == truncated_at_per_page ]]; then
     _CAP_WARN="compact_over_budget"
   fi
+  # The projection succeeded: a later failure is not a projection failure.
+  _COMPACT_CAUSE=""
   printf '%s\n' "$1"
 }
 
@@ -277,7 +281,7 @@ cmd_activity() {
       --arg since "$since" \
       --argjson max "$COMPACT_MAX_ITEMS" \
       --argjson tmax "$COMPACT_TITLE_MAX" \
-      'def titles: sort_by(.updated_at) | reverse | .[:$max] | map((.title // "" | tostring)[:$tmax]);
+      'def titles: sort_by(.updated_at) | reverse | .[:$max] | map((.title // "" | tostring | gsub("[[:cntrl:]\u2028\u2029]"; " "))[:$tmax]);
       ($issues | add // [] | map(select(.pull_request == null))) as $iss
       | ($prs | add // [] | map(select(.updated_at >= $since))) as $pr
       | {issues: {count: ($iss | length), titles: ($iss | titles)},
@@ -335,6 +339,17 @@ cmd_contributors() {
   check_array_response "$commits_f" commits
   check_cap "$(_json_len "$commits_f")" commits
 
+  # Compact mode reads only the commit total: the issues fetch below would add a call (and a
+  # failure surface) for a field the compact line never carries.
+  if compact_on; then
+    _COMPACT_CAUSE="compact-projection-failed"
+    local out
+    out=$(jq -nc --slurpfile commits "$commits_f" \
+      '{commit_total: ([($commits | add // [])[] | .author.login // .commit.author.name | select(. != null)] | length)}')
+    emit_compact "$out"
+    return 0
+  fi
+
   # Get contributors from recent issues/PRs
   local issues
   issues=$(gh api "repos/${repo}/issues?state=all&since=${since}&per_page=${PER_PAGE}" 2>&1) || {
@@ -347,15 +362,6 @@ cmd_contributors() {
   printf '%s' "$issues" >"$issues_f"
   check_array_response "$issues_f" issues
   check_cap "$(_json_len "$issues_f")" issues
-
-  if compact_on; then
-    _COMPACT_CAUSE="compact-projection-failed"
-    local out
-    out=$(jq -nc --slurpfile commits "$commits_f" \
-      '{commit_total: ([($commits | add // [])[] | .author.login // .commit.author.name | select(. != null)] | length)}')
-    emit_compact "$out"
-    return 0
-  fi
 
   jq -n \
     --slurpfile commits "$commits_f" \
@@ -433,7 +439,7 @@ cmd_discussions() {
       '{titles: [.data.repository.discussions.nodes
                  | map(select(.updatedAt >= $since))
                  | sort_by(.updatedAt) | reverse | .[:$max][]
-                 | (.title // "" | tostring)[:$tmax]]}' <<<"$result")
+                 | (.title // "" | tostring | gsub("[[:cntrl:]\u2028\u2029]"; " "))[:$tmax]]}' <<<"$result")
     emit_compact "$out"
     return 0
   fi
@@ -539,7 +545,7 @@ cmd_repo_stats() {
       | {
         stargazers_count: ($repo_data.stargazers_count | num),
         forks_count: ($repo_data.forks_count | num),
-        subscribers_count: $repo_data.subscribers_count,
+        subscribers_count: ($repo_data.subscribers_count | num),
         new_stargazers_count: (if $unavailable == 1 then null else $new end),
         stargazers_unavailable: ($unavailable == 1)
       }')
