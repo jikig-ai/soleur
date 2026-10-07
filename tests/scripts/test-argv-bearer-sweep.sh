@@ -1396,7 +1396,7 @@ else row "static: neither bsky script puts the app password in a -d/--data opera
 # dead assertion (a body of `true`, or accepting git's rc 128, would leave every row above green).
 SAR="$TMPD/sa-repo"; SAN="$TMPD/sa-nogit"
 for d in "$SAR" "$SAN"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
-git -C "$SAR" init -q
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$SAR" || exit 1; git -C "$SAR" init -q ) || { echo "FATAL: the static_absent fixture repo could not be created" >&2; exit 2; }
 printf '%s\n' 'echo clean' > "$SAR/clean.sh"
 printf '%s\n' 'echo clean' > "$SAN/clean.sh"
 # Each violating fixture is one line the matching production regex must flag.
