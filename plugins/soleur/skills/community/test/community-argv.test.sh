@@ -78,6 +78,13 @@ for a in "$@"; do
   [[ "$a" == http*://* ]] && url="$a"
 done
 [[ "${SHIM_MODE:-}" == fail7 ]] && exit 7
+[[ "${SHIM_MODE:-}" == fail60 ]] && exit 60
+# SHIM_MODE=badjwt: a hostile/garbled createSession reply whose accessJwt holds a quote, a newline
+# and a `url = ...` config directive (the line-injection shape the bearer guard exists to refuse).
+if [[ "${SHIM_MODE:-}" == badjwt && "$url" == *createSession ]]; then
+  printf '%s\n200\n' '{"accessJwt":"synth\"\nurl = \"https://evil.invalid/x\"","did":"did:plc:synth0001","handle":"synthetic.bsky.social"}'
+  exit 0
+fi
 case "$url" in
   *introspectToken) printf '%s\n200\n' '{"active":true,"expires_at":4102444800,"scope":"openid"}' ;;
   *accessToken)     printf '%s\n200\n' '{"access_token":"synthetic-fixture-token-0002"}' ;;
@@ -170,6 +177,16 @@ argv_has() {
   grep -aqF -e "$1" -- "${files[@]}"
 }
 
+# argv_absent <value> [n]: <value> is NOT on the recorded argv (all calls, or call n) AND curl actually ran.
+# Unlike `argv_absent`, it is FALSE when the argv file is missing, so a row cannot pass because curl
+# never ran (a refused or crashed run records no argv at all).
+argv_absent() {
+  local files=("$MOCK"/argv.*)
+  [[ -n "${2:-}" ]] && files=("$MOCK/argv.$2")
+  [[ -e "${files[0]}" ]] || return 1
+  ! grep -aqF -e "$1" -- "${files[@]}"
+}
+
 # argv_first3 <n>: first three curl arguments, space-joined.
 argv_first3() {
   local -a a=()
@@ -194,6 +211,33 @@ cfg_decode() {
 stdin_text() { cat "$MOCK/stdin.$1" 2>/dev/null; }
 stdin_lines() { local n=0 _l; while IFS= read -r _l; do n=$((n + 1)); done < "$MOCK/stdin.$1"; echo "$n"; }
 
+# --- instrument controls --------------------------------------------------------------
+# The helpers above are what every row trusts. Before row 1, drive check() with a failing command
+# and not() with an always-true one and require the counters / return codes to move. Reported
+# straight through printf + exit 1 (never through the helpers under test), then the counters reset
+# so the controls are not counted as assertions.
+_p0=$PASS; _f0=$FAIL
+{ check "control: failing command" false; } >/dev/null
+if (( FAIL != _f0 + 1 || PASS != _p0 )); then
+  printf 'FAIL: instrument control: check() did not count a failing command (PASS %s->%s, FAIL %s->%s)\n' "$_p0" "$PASS" "$_f0" "$FAIL" >&2
+  exit 1
+fi
+{ check "control: passing command" true; } >/dev/null
+if (( PASS != _p0 + 1 || FAIL != _f0 + 1 )); then
+  printf 'FAIL: instrument control: check() did not count a passing command (PASS %s->%s, FAIL %s->%s)\n' "$_p0" "$PASS" "$_f0" "$FAIL" >&2
+  exit 1
+fi
+if not true; then
+  printf 'FAIL: instrument control: not() returned success for an always-true command\n' >&2
+  exit 1
+fi
+if ! not false; then
+  printf 'FAIL: instrument control: not() returned failure for an always-false command\n' >&2
+  exit 1
+fi
+PASS=$_p0; FAIL=$_f0
+unset _p0 _f0
+
 # ===================================================================================
 echo "== linkedin-setup.sh validate-credentials =="
 LI_SECRET="fixturefixturefixture01"
@@ -204,8 +248,8 @@ LI_ENV=(LINKEDIN_CLIENT_ID=synthetic-fixture-client-0001
 run_sut - "" "${LI_ENV[@]}" -- bash "$LINKEDIN_SETUP" validate-credentials
 check "valid: exits 0" test "$RC" -eq 0
 check "valid: exactly one curl call" test "$(curl_calls)" -eq 1
-check "valid: client secret absent from argv" not argv_has "$LI_SECRET"
-check "valid: introspected token absent from argv" not argv_has "$LI_TOKEN"
+check "valid: client secret absent from argv" argv_absent "$LI_SECRET"
+check "valid: introspected token absent from argv" argv_absent "$LI_TOKEN"
 check "valid: non-secret client_id still on argv (recording works)" argv_has "client_id=synthetic-fixture-client-0001"
 check "valid: --disable --noproxy '*' lead argv" test "$(argv_first3 1)" = "--disable --noproxy *"
 check "valid: stdin carries --config - contract" argv_has "--config"
@@ -232,8 +276,8 @@ echo "== linkedin-setup.sh generate-token =="
 run_sut - $'synthetic-auth-code-0001\n' "${LI_ENV[@]}" -- bash "$LINKEDIN_SETUP" generate-token
 check "generate-token: exits 0" test "$RC" -eq 0
 check "generate-token: two curl calls (accessToken, userinfo)" test "$(curl_calls)" -eq 2
-check "generate-token: client secret absent from argv (both calls)" not argv_has "$LI_SECRET"
-check "generate-token: access token from the reply absent from argv" not argv_has "synthetic-fixture-token-0002"
+check "generate-token: client secret absent from argv (both calls)" argv_absent "$LI_SECRET"
+check "generate-token: access token from the reply absent from argv" argv_absent "synthetic-fixture-token-0002"
 check "generate-token: non-secret code still on argv (recording works)" argv_has "code=synthetic-auth-code-0001" 1
 check "generate-token: --disable --noproxy '*' lead argv" test "$(argv_first3 1)" = "--disable --noproxy *"
 check "generate-token: exact client_secret line on stdin" \
@@ -263,14 +307,14 @@ x_header_checks() {
   raw="$(stdin_text "$n")"
   decoded="${raw#header = \"}"
   decoded="$(cfg_decode "${decoded%\"}")"
-  check "$label: signed header absent from argv" not argv_has "oauth_signature" "$n"
-  check "$label: Authorization header text absent from argv" not argv_has "Authorization: OAuth" "$n"
-  check "$label: consumer key absent from argv" not argv_has "$X_KEY" "$n"
-  check "$label: access token absent from argv" not argv_has "$X_TOK" "$n"
-  check "$label: consumer secret absent from argv" not argv_has "$X_SECRET" "$n"
-  check "$label: token secret absent from argv" not argv_has "$X_TOKSECRET" "$n"
+  check "$label: signed header absent from argv" argv_absent "oauth_signature" "$n"
+  check "$label: Authorization header text absent from argv" argv_absent "Authorization: OAuth" "$n"
+  check "$label: consumer key absent from argv" argv_absent "$X_KEY" "$n"
+  check "$label: access token absent from argv" argv_absent "$X_TOK" "$n"
+  check "$label: consumer secret absent from argv" argv_absent "$X_SECRET" "$n"
+  check "$label: token secret absent from argv" argv_absent "$X_TOKSECRET" "$n"
   check "$label: consumer + token secrets never reach curl at all (argv and stdin)" \
-    bash -c '! grep -aqF -e "$1" -e "$2" -- "$3" "$4"' _ "$X_SECRET" "$X_TOKSECRET" "$MOCK/argv.$n" "$MOCK/stdin.$n"
+    bash -c '[[ -e "$3" && -e "$4" ]] && ! grep -aqF -e "$1" -e "$2" -- "$3" "$4"' _ "$X_SECRET" "$X_TOKSECRET" "$MOCK/argv.$n" "$MOCK/stdin.$n"
   check "$label: --disable --noproxy '*' lead argv" test "$(argv_first3 "$n")" = "--disable --noproxy *"
   check "$label: config is exactly one header line" test "$(stdin_lines "$n")" -eq 1
   check "$label: raw line is an escaped header directive" \
@@ -354,13 +398,25 @@ DISC_BAD_CLASSES=(newline trailing-newline quote space backslash two-segments)
 no_leak()      { ! grep -qF -- "$MARK" <<<"$OUT$ERR"; }
 no_diag()      { ! grep -qF "SOLEUR_TRANSPORT_DIAG" <<<"$OUT$ERR"; }
 refusal_line() { grep -qxF "SOLEUR_CREDENTIAL_REFUSED script=$1 reason=${2:-token_shape}" <<<"$ERR"; }
+# rc1_refusal <script> [reason]: exit 1 AND the exact value-free marker line on stderr.
+rc1_refusal() { [[ "$RC" -eq 1 ]] && refusal_line "$@"; }
+# curl_env_lacks <NAME...>: curl ran AND none of these variable NAMES were in its inherited environment.
+curl_env_lacks() {
+  local f n seen=0
+  for f in "$MOCK"/env.*; do
+    [[ -e "$f" ]] || continue
+    seen=$((seen + 1))
+    for n in "$@"; do grep -qxF -- "$n" "$f" && return 1; done
+  done
+  (( seen >= 1 ))
+}
 chk_bot_stdin() { test "$(stdin_text "$1")" = "header = \"Authorization: Bot $2\""; }
 
 # bot_call_checks <label> <n> <token>: the argv/stdin contract of one Discord call.
 bot_call_checks() {
   local label="$1" n="$2" tok="$3"
-  check "$label: bot token absent from argv" not argv_has "$tok" "$n"
-  check "$label: Authorization header text absent from argv" not argv_has "Authorization" "$n"
+  check "$label: bot token absent from argv" argv_absent "$tok" "$n"
+  check "$label: Authorization header text absent from argv" argv_absent "Authorization" "$n"
   check "$label: --disable --noproxy '*' lead argv" test "$(argv_first3 "$n")" = "--disable --noproxy *"
   check "$label: exact Bot header line on the stdin config" chk_bot_stdin "$n" "$tok"
   check "$label: config is exactly one header line" test "$(stdin_lines "$n")" -eq 1
@@ -394,9 +450,7 @@ disc_bad_val() { BAD_VAL="$(disc_bad "$1"; printf x)"; BAD_VAL="${BAD_VAL%x}"; }
 for cls in "${DISC_BAD_CLASSES[@]}"; do
   disc_bad_val "$cls"
   run_sut - "" "DISCORD_BOT_TOKEN=$BAD_VAL" "DISCORD_GUILD_ID=$GUILD" -- bash "$DISCORD_COMMUNITY" guild-info
-  check "discord-community token ($cls): exit 1 and the exact value-free refusal line on stderr" \
-    bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
-  check "discord-community token ($cls): refusal marker line is exact" refusal_line discord-community.sh
+  check "discord-community token ($cls): exit 1 and the exact value-free refusal line on stderr" rc1_refusal discord-community.sh
   check "discord-community token ($cls): curl never invoked" test "$(curl_calls)" -eq 0
   check "discord-community token ($cls): no leak of the value" no_leak
   check "discord-community token ($cls): not the transport diagnostic" no_diag
@@ -426,8 +480,10 @@ check "discord-setup must-PASS token: exact stdin line on both calls, absent fro
 for cls in "${DISC_BAD_CLASSES[@]}"; do
   disc_bad_val "$cls"
   RUN_CWD="$GITWORK" run_sut - "" "DISCORD_BOT_TOKEN_INPUT=$BAD_VAL" -- bash "$DISCORD_SETUP" validate-token
-  check "discord-setup token ($cls): exit 1" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
-  check "discord-setup token ($cls): refusal marker line is exact" refusal_line discord-setup.sh
+  check "discord-setup token ($cls): exit 1 and the exact value-free refusal line on stderr" rc1_refusal discord-setup.sh
+  check "discord-setup token ($cls): one human line names the expected shape" \
+    grep -qF "three dot-separated base64url segments" <<<"$ERR"
+  check "discord-setup token ($cls): the human line says the value is not shown" grep -qF "The value is not shown." <<<"$ERR"
   check "discord-setup token ($cls): curl never invoked" test "$(curl_calls)" -eq 0
   check "discord-setup token ($cls): no leak of the value" no_leak
   check "discord-setup token ($cls): not the connect-failure report" not grep -qF "Failed to connect" <<<"$ERR"
@@ -442,9 +498,32 @@ RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" HTTPS_PROXY=http://127.0.0.1:1 SH
 check "discord-setup connect failure with a proxy set: exit 1" test "$RC" -eq 1
 check "discord-setup connect failure with a proxy set: names the deliberate proxy bypass" grep -qF "bypasses your proxy" <<<"$ERR"
 check "discord-setup connect failure: token not echoed" bash -c '! grep -qF -e "$1" <<<"$2"' _ "$DISC_TOK" "$OUT$ERR"
+check "discord-setup connect failure with a proxy set: the structured diagnostic marker is on stdout" \
+  grep -qF "SOLEUR_TRANSPORT_DIAG surface=" <<<"$OUT"
 RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" SHIM_MODE=fail7 -- bash "$DISCORD_SETUP" validate-token
 check "discord-setup connect failure without a proxy: exit 1, no proxy claim" \
   bash -c '[[ "$1" -eq 1 ]] && ! grep -qF "bypasses your proxy" <<<"$2"' _ "$RC" "$ERR"
+check "discord-setup connect failure with no proxy and no curlrc: the bare network line is the last resort" \
+  grep -qF "Check your network connection" <<<"$ERR"
+# Transport parity with the sibling scripts (TLS-trust arm, ~/.curlrc arm, the diagnostic marker).
+RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" SHIM_MODE=fail60 -- bash "$DISCORD_SETUP" validate-token
+check "discord-setup curl exit 60: exit 1" test "$RC" -eq 1
+check "discord-setup curl exit 60: the message names TLS trust, not the network" \
+  bash -c 'grep -qF "TLS trust failure" <<<"$1" && ! grep -qF "Check your network connection" <<<"$1"' _ "$ERR"
+check "discord-setup curl exit 60: the diagnostic marker carries curl_exit=60 and the script name" \
+  grep -qF "script=discord-setup.sh curl_exit=60" <<<"$OUT"
+printf 'proxy = "http://127.0.0.1:1"\n' > "$SANDBOX/home/.curlrc"
+RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" SHIM_MODE=fail7 -- bash "$DISCORD_SETUP" validate-token
+rm -f "$SANDBOX/home/.curlrc"
+check "discord-setup connect failure with a ~/.curlrc: the message names the curlrc that --disable dropped" \
+  bash -c 'grep -qF "~/.curlrc" <<<"$1" && grep -qF "(--disable)" <<<"$1" && ! grep -qF "Check your network connection" <<<"$1"' _ "$ERR"
+# The transport-trust variables are unset in the prologue: an exported CURL_CA_BUNDLE must not reach curl.
+TLS_ENV=(CURL_CA_BUNDLE=/nonexistent/ca.pem SSL_CERT_FILE=/nonexistent/c.pem SSL_CERT_DIR=/nonexistent SSLKEYLOGFILE=/nonexistent/k.log CURL_HOME=/nonexistent)
+RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" "${TLS_ENV[@]}" -- bash "$DISCORD_SETUP" discover-guilds
+check "discord-setup with the trust variables exported: exit 0, one call (recording works)" \
+  bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "discord-setup: CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE CURL_HOME never reach curl's environment" \
+  curl_env_lacks CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE CURL_HOME
 
 # --- harness rows: a shim that stops recording stdin turns the Discord stdin row RED -------
 run_sut - "" "${DC_ENV[@]}" SHIM_MUTATE=nostdin -- bash "$DISCORD_COMMUNITY" guild-info
@@ -470,7 +549,19 @@ chk_body_ok() { # <n> <handle> <password>
   [[ -s "$MOCK/body.$1" ]] && jq -e --arg h "$2" --arg p "$3" '.identifier == $h and .password == $p' "$MOCK/body.$1" >/dev/null 2>&1
 }
 jq_argv_has() { local f; for f in "$MOCK"/jqargv.*; do [[ -e "$f" ]] && grep -aqF -e "$1" -- "$f" && return 0; done; return 1; }
+# jq_argv_absent <value>: not on any recorded jq argv AND jq actually ran (FALSE when nothing was recorded).
+jq_argv_absent() {
+  local f seen=0
+  for f in "$MOCK"/jqargv.*; do
+    [[ -e "$f" ]] || continue
+    seen=1
+    grep -aqF -e "$1" -- "$f" && return 1
+  done
+  (( seen ))
+}
 jq_calls() { cat "$MOCK/jqcount" 2>/dev/null || echo 0; }
+# jq_recording_ok: the jq shim recorded >= 2 calls AND one of them is the writer (its program reads $ENV.BSKY_PW).
+jq_recording_ok() { [[ "$(jq_calls)" -ge 2 ]] && jq_argv_has 'ENV.BSKY_PW'; }
 # The writer is the jq call whose program reads $ENV.BSKY_PW; it must inherit the names, every other jq must not.
 jq_writer_env_ok() {
   local f n seen=0
@@ -508,12 +599,12 @@ curl_env_clean() {
 # bsky_body_checks <label> <n> <handle> <password>
 bsky_body_checks() {
   local label="$1" n="$2" h="$3" pw="$4"
-  check "$label: password absent from argv" not argv_has "$pw" "$n"
-  check "$label: handle absent from argv" not argv_has "$h" "$n"
+  check "$label: password absent from argv" argv_absent "$pw" "$n"
+  check "$label: handle absent from argv" argv_absent "$h" "$n"
   check "$label: --disable --noproxy '*' lead argv" test "$(argv_first3 "$n")" = "--disable --noproxy *"
   check "$label: body sent as --data-binary @- (curl's stdin, no file)" test "$(body_arg "$n" || true)" = "@-"
   check "$label: stdin body held exactly the handle and password" chk_body_ok "$n" "$h" "$pw"
-  check "$label: createSession carries no stdin config (the body owns stdin)" not argv_has "--config" "$n"
+  check "$label: createSession carries no stdin config (the body owns stdin)" argv_absent "--config" "$n"
   check "$label: explicit JSON Content-Type" argv_has "Content-Type: application/json" "$n"
 }
 
@@ -522,10 +613,10 @@ check "bsky-community create-session: exit 0" test "$RC" -eq 0
 check "bsky-community create-session: exactly one curl call" test "$(curl_calls)" -eq 1
 check "bsky-community create-session: the session DID still reaches stdout" grep -qF "did:plc:synth0001" <<<"$OUT"
 bsky_body_checks "bsky-community create-session" 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
-check "bsky-community create-session: password absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_PW_FIX"
-check "bsky-community create-session: handle absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_HANDLE_FIX"
+check "bsky-community create-session: password absent from every jq argv (jq shim)" jq_argv_absent "$BSKY_PW_FIX"
+check "bsky-community create-session: handle absent from every jq argv (jq shim)" jq_argv_absent "$BSKY_HANDLE_FIX"
 check "bsky-community create-session: jq shim recorded calls and the writer reads \$ENV.BSKY_PW (recording works)" \
-  bash -c '[[ "$1" -ge 2 ]]' _ "$(jq_calls)"
+  jq_recording_ok
 check "bsky-community create-session: the writer jq inherits both variable names" jq_writer_env_ok
 check "bsky-community create-session: no other jq child inherits them" jq_others_env_clean
 check "bsky-community create-session: the curl child does not inherit them" curl_env_clean
@@ -538,20 +629,30 @@ check "bsky-community handle with a double quote: createSession is still sent ex
 check "bsky-community handle with a double quote: body decodes to exactly that handle (escaped, not injected)" \
   chk_body_ok 1 'syn"thetic.bsky.social' "$BSKY_PW_FIX"
 # a handle or password with a control character is refused BEFORE curl; non-zero, never 0 or 3; marker on stderr
-bsky_refused() { # <label> <handle> <password>
+# bsky_field_line <field> <other-field>: the ONE human line names the refused FIELD (label only) and not the other.
+bsky_field_line() { grep -qF "Error: $1 is empty or contains a control character" <<<"$ERR" && ! grep -qF "$2" <<<"$ERR"; }
+bsky_refused() { # <label> <handle> <password> <refused-field> <other-field>
   run_sut - "" "BSKY_HANDLE=$2" "BSKY_APP_PASSWORD=$3" -- bash "$BSKY_COMMUNITY" create-session
-  check "$1: exit 1 (non-zero, never 0 or 3)" test "$RC" -eq 1
+  check "$1: exit 1 (non-zero, never 0 or 3) and the exact value-free marker, reason=control_char" rc1_refusal bsky-community.sh control_char
   check "$1: curl never invoked" test "$(curl_calls)" -eq 0
-  check "$1: exact value-free refusal marker on stderr" refusal_line bsky-community.sh
   check "$1: value never echoed" no_leak
   check "$1: jq never invoked (the refused value reaches no child process)" test "$(jq_calls)" -eq 0
+  check "$1: one human line names the refused field only" bsky_field_line "$4" "$5"
+  check "$1: not the transport diagnostic" no_diag
 }
-bsky_refused "bsky-community handle with a newline" "$BAD_HANDLE" "$BSKY_PW_FIX"
-bsky_refused "bsky-community password with a control character" "$BSKY_HANDLE_FIX" "$MARK"$'\x01'"x"
-# a failed body build must never read as a successful (empty) POST: pipefail carries jq's status out.
+bsky_refused "bsky-community handle with a newline" "$BAD_HANDLE" "$BSKY_PW_FIX" BSKY_HANDLE BSKY_APP_PASSWORD
+bsky_refused "bsky-community password with a control character" "$BSKY_HANDLE_FIX" "$MARK"$'\x01'"x" BSKY_APP_PASSWORD BSKY_HANDLE
+# a failed body build is classified as a BODY-BUILD failure (exit 1, curl never run, no transport diagnostic).
+bsky_jqfail_rows() { # <label>
+  check "$1: jq failure while building the body: exit 1, no session reported" \
+    bash -c '[[ "$1" -eq 1 ]] && ! grep -qF "did:plc:synth0001" <<<"$2"' _ "$RC" "$OUT"
+  check "$1: jq failure names a body-build failure" grep -qF "could not build the Bluesky createSession request body" <<<"$ERR"
+  check "$1: jq failure is NOT reported as a curl transport failure" \
+    bash -c '! grep -qF -e "SOLEUR_TRANSPORT_DIAG" -e "curl_exit" -e "Failed to connect" <<<"$1"' _ "$OUT$ERR"
+  check "$1: jq failure: curl never invoked (nothing was sent)" test "$(curl_calls)" -eq 0
+}
 run_sut - "" "${BC_ENV[@]}" SHIM_MODE=jqfail -- bash "$BSKY_COMMUNITY" create-session
-check "bsky-community jq failure while building the body: exit non-zero, no session reported" \
-  bash -c '[[ "$1" -ne 0 ]] && ! grep -qF "did:plc:synth0001" <<<"$2"' _ "$RC" "$OUT"
+bsky_jqfail_rows "bsky-community"
 # xtrace refusal with the password bound: exit 78, curl never invoked, the password reaches no output.
 run_sut - "" "${BC_ENV[@]}" -- bash -x "$BSKY_COMMUNITY" create-session
 check "bsky-community under bash -x with the password bound: exit 78" test "$RC" -eq 78
@@ -567,11 +668,24 @@ check "bsky-community get-metrics: the session bearer is the stdin header on the
 run_sut - "" "${BC_ENV[@]}" BSKY_ALLOW_POST=true -- bash "$BSKY_COMMUNITY" post "synthetic post text"
 check "bsky-community post (the hosted path): exit 0, two calls (createSession, createRecord)" bash -c '[[ "$1" -eq 0 && "$2" -eq 2 ]]' _ "$RC" "$(curl_calls)"
 bsky_body_checks "bsky-community post createSession" 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
-check "bsky-community post: the password never reaches the createRecord call either" not argv_has "$BSKY_PW_FIX" 2
+check "bsky-community post: the password never reaches the createRecord call either" argv_absent "$BSKY_PW_FIX" 2
 run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" "BSKY_APP_PASSWORD=$MARK"$'\x01'"x" BSKY_ALLOW_POST=true -- bash "$BSKY_COMMUNITY" post "synthetic post text"
 check "bsky-community post (hosted): a refused credential exits 1, never 0 or 3, curl never invoked" \
   bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
-check "bsky-community post (hosted): the refusal marker reaches stderr, where content-publisher captures it" refusal_line bsky-community.sh
+check "bsky-community post (hosted): the refusal marker (reason=control_char) reaches stderr, where content-publisher captures it" refusal_line bsky-community.sh control_char
+
+# A SERVER-SUPPLIED session token with a quote + newline + `url = ...` directive must be refused by
+# the _bearer_ok guard BEFORE it is formatted into the stdin config: only the createSession call runs.
+badjwt_rows() { # <label>
+  check "$1: a hostile accessJwt is refused (exit 1)" test "$RC" -eq 1
+  check "$1: only createSession ran (zero createRecord / getProfile calls)" test "$(curl_calls)" -eq 1
+  check "$1: the refusal names the unexpected shape" grep -qE "accessJwt.*(unexpected shape|missing)" <<<"$ERR"
+  check "$1: the injected directive never reaches the output" bash -c '! grep -qF "evil.invalid" <<<"$1"' _ "$OUT$ERR"
+}
+run_sut - "" "${BC_ENV[@]}" SHIM_MODE=badjwt -- bash "$BSKY_COMMUNITY" get-metrics
+badjwt_rows "bsky-community get-metrics"
+run_sut - "" "${BC_ENV[@]}" BSKY_ALLOW_POST=true SHIM_MODE=badjwt -- bash "$BSKY_COMMUNITY" post "synthetic post text"
+badjwt_rows "bsky-community post"
 
 # --- harness row: a shim that stops reading the stdin body turns the body rows RED -------------
 run_sut - "" "${BC_ENV[@]}" SHIM_MUTATE=nobody -- bash "$BSKY_COMMUNITY" create-session
@@ -583,16 +697,19 @@ printf 'BSKY_HANDLE=%s\nBSKY_APP_PASSWORD=%s\n' "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX
 RUN_CWD="$GITWORK" run_sut - "" -- bash "$BSKY_SETUP" verify
 check "bsky-setup verify: exit 0, two calls (createSession, getProfile)" bash -c '[[ "$1" -eq 0 && "$2" -eq 2 ]]' _ "$RC" "$(curl_calls)"
 bsky_body_checks "bsky-setup verify createSession" 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
-check "bsky-setup verify: password absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_PW_FIX"
-check "bsky-setup verify: handle absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_HANDLE_FIX"
+check "bsky-setup verify: password absent from every jq argv (jq shim)" jq_argv_absent "$BSKY_PW_FIX"
+check "bsky-setup verify: handle absent from every jq argv (jq shim)" jq_argv_absent "$BSKY_HANDLE_FIX"
 check "bsky-setup verify: the writer jq inherits the variable names" jq_writer_env_ok
 check "bsky-setup verify: no other jq child inherits them" jq_others_env_clean
 check "bsky-setup verify: the curl children do not inherit them" curl_env_clean
+check "bsky-setup verify: the .env credentials are un-exported again (BSKY_HANDLE, BSKY_APP_PASSWORD absent from curl's environment)" \
+  curl_env_lacks BSKY_HANDLE BSKY_APP_PASSWORD
 check "bsky-setup verify: the session bearer is the stdin header on the profile call (unchanged)" \
   test "$(stdin_text 2)" = "header = \"Authorization: Bearer $BSKY_JWT_FIX\""
 RUN_CWD="$GITWORK" run_sut - "" SHIM_MODE=jqfail -- bash "$BSKY_SETUP" verify
-check "bsky-setup jq failure while building the body: exit non-zero, no session reported" \
-  bash -c '[[ "$1" -ne 0 ]] && ! grep -qF "did:plc:synth0001" <<<"$2"' _ "$RC" "$OUT$ERR"
+bsky_jqfail_rows "bsky-setup verify"
+RUN_CWD="$GITWORK" run_sut - "" SHIM_MODE=badjwt -- bash "$BSKY_SETUP" verify
+badjwt_rows "bsky-setup verify"
 RUN_CWD="$GITWORK" run_sut - "" -- bash -x "$BSKY_SETUP" verify
 check "bsky-setup under bash -x: exit 78" test "$RC" -eq 78
 check "bsky-setup under bash -x: curl never invoked" test "$(curl_calls)" -eq 0
@@ -601,9 +718,17 @@ printf 'BSKY_HANDLE=$%s\nBSKY_APP_PASSWORD=%s\n' "'syn\\001thetic${MARK}'" "$BSK
 RUN_CWD="$GITWORK" run_sut - "" -- bash "$BSKY_SETUP" verify
 check "bsky-setup verify with a control character in the handle: exit 1, curl never invoked" \
   bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
-check "bsky-setup verify with a control character in the handle: exact refusal marker on stderr" refusal_line bsky-setup.sh
+check "bsky-setup verify with a control character in the handle: exact refusal marker (reason=control_char) on stderr" refusal_line bsky-setup.sh control_char
 check "bsky-setup verify with a control character in the handle: value not echoed" no_leak
 check "bsky-setup verify with a control character in the handle: jq never invoked" test "$(jq_calls)" -eq 0
+check "bsky-setup verify with a control character in the handle: one human line names BSKY_HANDLE only" bsky_field_line BSKY_HANDLE BSKY_APP_PASSWORD
+printf 'BSKY_HANDLE=%s\nBSKY_APP_PASSWORD=$%s\n' "$BSKY_HANDLE_FIX" "'syn\\001thetic${MARK}'" > "$GITWORK/.env"
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$BSKY_SETUP" verify
+check "bsky-setup verify with a control character in the password: exit 1, exact marker (reason=control_char), curl and jq never invoked" \
+  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 && "$3" -eq 0 ]]' _ "$RC" "$(curl_calls)" "$(jq_calls)"
+check "bsky-setup verify with a control character in the password: the marker line is exact" refusal_line bsky-setup.sh control_char
+check "bsky-setup verify with a control character in the password: one human line names BSKY_APP_PASSWORD only, value not echoed" \
+  bash -c 'grep -qF "Error: BSKY_APP_PASSWORD is empty or contains a control character" <<<"$1" && ! grep -qF "BSKY_HANDLE" <<<"$1" && ! grep -qF "$2" <<<"$1"' _ "$ERR" "$MARK"
 rm -f "$GITWORK/.env"
 
 
@@ -663,7 +788,7 @@ RUN_CWD="$GITWORK" run_sut - "" "DISCORD_BOT_TOKEN_INPUT=$BAD_VAL" -- bash "$M" 
 check "mutant: discord-setup with its guard removed invokes curl on a malformed token (RED on the refusal rows)" test "$(curl_calls)" -ge 1
 
 # 4. The bsky password handed to curl as `-d "$body"`, to jq as `--arg`, or exported; the
-# control-character guard removed; pipefail dropped so a jq failure reads as a good POST.
+# control-character guard removed; the jq body-build failure no longer fatal.
 M="$(mut_make bsky-community.sh '--data-binary @- \' '-d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \')"
 run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
 check "mutant: bsky-community handing the password to curl as -d is RED (password in argv)" argv_has "$BSKY_PW_FIX" 1
@@ -674,38 +799,123 @@ M="$(mut_make bsky-community.sh \
 run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
 check "mutant: bsky-community passing the password to jq as --arg is RED (password on jq argv, jq shim)" jq_argv_has "$BSKY_PW_FIX"
 check "mutant: bsky-community passing the password to jq as --arg is RED (the environment row loses its writer)" not jq_writer_env_ok
-check "mutant: bsky-community passing the password to jq as --arg: the curl shim alone stays blind to it" not argv_has "$BSKY_PW_FIX" 1
-M="$(mut_make bsky-community.sh $'response=$(BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \\\n' $'response=$(export BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD"; \\\n')"
+check "mutant: bsky-community passing the password to jq as --arg: the curl shim alone stays blind to it" argv_absent "$BSKY_PW_FIX" 1
+# An export at function scope: the curl child AND every later jq child inherit the names.
+M="$(mut_make bsky-community.sh $'  local req_body\n' $'  local req_body\n  export BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD"\n')"
 run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
 check "mutant: bsky-community exporting the password is RED (the curl child inherits it)" not curl_env_clean
-M="$(mut_make bsky-community.sh 'if ! _bsky_cred_ok "${BSKY_HANDLE:-}" || ! _bsky_cred_ok "${BSKY_APP_PASSWORD:-}"; then' 'if false; then')"
+check "mutant: bsky-community exporting the password is RED (a later, non-writer jq child inherits it)" not jq_others_env_clean
+M="$(mut_make bsky-community.sh \
+  $'  _bsky_cred_ok "${BSKY_HANDLE:-}" || bsky_refuse control_char BSKY_HANDLE\n' ':
+' \
+  $'  _bsky_cred_ok "${BSKY_APP_PASSWORD:-}" || bsky_refuse control_char BSKY_APP_PASSWORD\n' ':
+')"
 run_sut - "" "BSKY_HANDLE=$BAD_HANDLE" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" -- bash "$M" create-session
 check "mutant: bsky-community with its guard removed invokes curl on a control-character handle (RED on the refusal rows)" test "$(curl_calls)" -ge 1
+# The jq body-build failure no longer fatal: the empty body is POSTed and the session reads as good (RED on the jq-failure rows).
+M="$(mut_make bsky-community.sh "password: \$ENV.BSKY_PW}') || {" "password: \$ENV.BSKY_PW}') || true; false && {")"
+run_sut - "" "${BC_ENV[@]}" SHIM_MODE=jqfail -- bash "$M" create-session
+check "mutant: bsky-community ignoring the jq failure reads a failed body build as a good POST (RC 0, no body-build message)" \
+  bash -c '[[ "$1" -eq 0 ]] && ! grep -qF "could not build" <<<"$2"' _ "$RC" "$ERR"
+# Independence from pipefail: the classification is a command-substitution status, not a pipeline status.
 M="$(mut_make bsky-community.sh 'set -euo pipefail' 'set -eu')"
 run_sut - "" "${BC_ENV[@]}" SHIM_MODE=jqfail -- bash "$M" create-session
-check "mutant: bsky-community without pipefail reads a failed body build as a good POST (RC 0 is what the jq-failure row forbids)" test "$RC" -eq 0
+bsky_jqfail_rows "bsky-community WITHOUT pipefail"
+# The bearer guards: with BOTH removed a hostile server-supplied accessJwt reaches the stdin config.
+M="$(mut_make bsky-community.sh \
+  $'  if ! _bearer_ok "$ACCESS_JWT"; then\n        ACCESS_JWT=""' $'  if false; then\n        ACCESS_JWT=""' \
+  '  _bearer_ok "$ACCESS_JWT" || return 120' '  :')"
+run_sut - "" "${BC_ENV[@]}" SHIM_MODE=badjwt -- bash "$M" get-metrics
+check "mutant: bsky-community with the bearer guards removed sends the hostile token (a getProfile call follows; RED on the refusal rows)" test "$(curl_calls)" -ge 2
+check "mutant: bsky-community with the bearer guards removed: the stdin config carries an injected extra line" test "$(stdin_lines 2)" -gt 1
 M="$(mut_make bsky-setup.sh '--data-binary @- \' '-d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \')"
 printf 'BSKY_HANDLE=%s\nBSKY_APP_PASSWORD=%s\n' "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX" > "$GITWORK/.env"
 RUN_CWD="$GITWORK" run_sut - "" -- bash "$M" verify
 check "mutant: bsky-setup handing the password to curl as -d is RED (password in argv)" argv_has "$BSKY_PW_FIX" 1
 check "mutant: bsky-setup handing the password to curl as -d is RED (no --data-binary @- stdin body)" not chk_body_ok 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
-M="$(mut_make bsky-setup.sh 'if ! _bsky_cred_ok "${BSKY_HANDLE:-}" || ! _bsky_cred_ok "${BSKY_APP_PASSWORD:-}"; then' 'if false; then')"
+M="$(mut_make bsky-setup.sh \
+  $'  _bsky_cred_ok "${BSKY_HANDLE:-}" || bsky_refuse control_char BSKY_HANDLE\n' ':
+' \
+  $'  _bsky_cred_ok "${BSKY_APP_PASSWORD:-}" || bsky_refuse control_char BSKY_APP_PASSWORD\n' ':
+')"
 printf 'BSKY_HANDLE=$%s\nBSKY_APP_PASSWORD=%s\n' "'syn\\001thetic${MARK}'" "$BSKY_PW_FIX" > "$GITWORK/.env"
 RUN_CWD="$GITWORK" run_sut - "" -- bash "$M" verify
 check "mutant: bsky-setup with its guard removed invokes curl on a control-character handle (RED on the refusal rows)" test "$(curl_calls)" -ge 1
-M="$(mut_make bsky-setup.sh 'set -euo pipefail' 'set -eu')"
 printf 'BSKY_HANDLE=%s\nBSKY_APP_PASSWORD=%s\n' "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX" > "$GITWORK/.env"
+M="$(mut_make bsky-setup.sh "password: \$ENV.BSKY_PW}') || {" "password: \$ENV.BSKY_PW}') || true; false && {")"
 RUN_CWD="$GITWORK" run_sut - "" SHIM_MODE=jqfail -- bash "$M" verify
-check "mutant: bsky-setup without pipefail reads a failed body build as a good POST (RC 0 is what the jq-failure row forbids)" test "$RC" -eq 0
+check "mutant: bsky-setup ignoring the jq failure reads a failed body build as a good POST (RC 0, no body-build message)" \
+  bash -c '[[ "$1" -eq 0 ]] && ! grep -qF "could not build" <<<"$2"' _ "$RC" "$ERR"
+M="$(mut_make bsky-setup.sh 'set -euo pipefail' 'set -eu')"
+RUN_CWD="$GITWORK" run_sut - "" SHIM_MODE=jqfail -- bash "$M" verify
+bsky_jqfail_rows "bsky-setup verify WITHOUT pipefail"
+M="$(mut_make bsky-setup.sh '  if ! _bearer_ok "$access_jwt"; then' '  if false; then')"
+RUN_CWD="$GITWORK" run_sut - "" SHIM_MODE=badjwt -- bash "$M" verify
+check "mutant: bsky-setup with the bearer guard removed sends the hostile token (a getProfile call follows; RED on the refusal rows)" test "$(curl_calls)" -ge 2
+check "mutant: bsky-setup with the bearer guard removed: the stdin config carries an injected extra line" test "$(stdin_lines 2)" -gt 1
+M="$(mut_make bsky-setup.sh '  export -n BSKY_HANDLE BSKY_APP_PASSWORD' '  :')"
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$M" verify
+check "mutant: bsky-setup without the un-export hands the .env credentials to curl (RED on the curl-environment row)" not curl_env_lacks BSKY_HANDLE BSKY_APP_PASSWORD
 rm -f "$GITWORK/.env"
+
+# 5. discord-setup transport parity: the prologue unset and the TLS-trust arm, each removed in turn.
+M="$(mut_make discord-setup.sh $'unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \\\n      HOSTALIASES LOCALDOMAIN RES_OPTIONS\n' $':\n')"
+RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" "${TLS_ENV[@]}" -- bash "$M" discover-guilds
+check "mutant: discord-setup without the prologue unset lets CURL_CA_BUNDLE etc. reach curl (RED on the curl-environment row)" \
+  not curl_env_lacks CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE CURL_HOME
+M="$(mut_make discord-setup.sh '"$curl_exit" == "60" ||' '"$curl_exit" == "99" ||')"
+RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" SHIM_MODE=fail60 -- bash "$M" validate-token
+check "mutant: discord-setup without the TLS-trust arm reports exit 60 as a bare network failure (RED on the exit-60 row)" \
+  bash -c '! grep -qF "TLS trust failure" <<<"$1" && grep -qF "Check your network connection" <<<"$1"' _ "$ERR"
+
+# ===================================================================================
+# Negative controls: every helper the rows above trust must be able to say NO. Each control feeds
+# a helper an input that makes its condition false (a shim or a one-literal SUT mutant) and
+# requires the helper to flip, so a helper that quietly became vacuous turns this section RED.
+# ===================================================================================
+echo "== helper negative controls =="
+# no_leak: a refusal that echoes the value
+M="$(mut_make discord-setup.sh 'The value is not shown." >&2' 'The value is ${DISCORD_BOT_TOKEN_INPUT}." >&2')"
+disc_bad_val newline
+RUN_CWD="$GITWORK" run_sut - "" "DISCORD_BOT_TOKEN_INPUT=$BAD_VAL" -- bash "$M" validate-token
+check "negctl: no_leak is false when the refusal echoes the value" not no_leak
+# no_diag: a real transport failure prints the diagnostic marker
+RUN_CWD="$GITWORK" run_sut - "" "${DS_ENV[@]}" SHIM_MODE=fail7 -- bash "$DISCORD_SETUP" validate-token
+check "negctl: no_diag is false when the SOLEUR_TRANSPORT_DIAG line is printed" not no_diag
+# refusal_line: a refusal that omits the marker, and a marker with the wrong reason / script
+M="$(mut_make discord-setup.sh $'  printf \'SOLEUR_CREDENTIAL_REFUSED script=%s reason=token_shape\\n\' "$SOLEUR_TRANSPORT_SCRIPT" >&2\n' $'  :\n')"
+RUN_CWD="$GITWORK" run_sut - "" "DISCORD_BOT_TOKEN_INPUT=$BAD_VAL" -- bash "$M" validate-token
+check "negctl: refusal_line is false when the marker line is omitted" not refusal_line discord-setup.sh
+RUN_CWD="$GITWORK" run_sut - "" "DISCORD_BOT_TOKEN_INPUT=$BAD_VAL" -- bash "$DISCORD_SETUP" validate-token
+check "negctl: refusal_line is false for a different reason" not refusal_line discord-setup.sh control_char
+check "negctl: refusal_line is false for a different script name" not refusal_line bsky-setup.sh
+check "negctl: refusal_line is true for the real marker (control)" refusal_line discord-setup.sh
+# jq_others_env_clean: the function-scope export mutant (above) is the dirty input
+M="$(mut_make bsky-community.sh $'  local req_body\n' $'  local req_body\n  export BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD"\n')"
+run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
+check "negctl: jq_others_env_clean is false when a non-writer jq child inherits the names" not jq_others_env_clean
+# stdin_lines: a two-line stdin config
+M="$(mut_make discord-community.sh $'printf \'header = "Authorization: Bot %s"\\n\' "$DISCORD_BOT_TOKEN")' $'printf \'header = "Authorization: Bot %s"\\nheader = "X-Extra: 1"\\n\' "$DISCORD_BOT_TOKEN")')"
+run_sut - "" "${DC_ENV[@]}" -- bash "$M" guild-info
+check "negctl: stdin_lines counts two lines for a two-line config" test "$(stdin_lines 1)" -eq 2
+check "negctl: the one-line-config row would be RED for a two-line config" not test "$(stdin_lines 1)" -eq 1
+# argv_first3: a call that drops --disable
+M="$(mut_make discord-community.sh "curl --disable --noproxy '*' -s -w" "curl --noproxy '*' -s -w")"
+run_sut - "" "${DC_ENV[@]}" -- bash "$M" guild-info
+check "negctl: argv_first3 no longer reads '--disable --noproxy *' when --disable is dropped" not test "$(argv_first3 1)" = "--disable --noproxy *"
+# argv_absent / jq_argv_absent: FALSE when nothing ran (a refused run records no argv)
+RUN_CWD="$GITWORK" run_sut - "" "DISCORD_BOT_TOKEN_INPUT=$BAD_VAL" -- bash "$DISCORD_SETUP" validate-token
+check "negctl: argv_absent is false when curl never ran (no argv file)" not argv_absent "$DISC_TOK"
+check "negctl: jq_argv_absent is false when jq never ran (no jq argv file)" not jq_argv_absent "$BSKY_PW_FIX"
+check "negctl: curl_env_lacks is false when curl never ran" not curl_env_lacks CURL_CA_BUNDLE
 
 echo
 echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 310 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 310\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 372 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 372\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

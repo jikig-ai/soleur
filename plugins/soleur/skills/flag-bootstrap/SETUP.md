@@ -49,8 +49,14 @@ Sanity-test. Every `curl` below sends the token on curl's stdin config
 (`--config -`), never as a `-H` argument: an argument is readable by every
 local user from `/proc/<pid>/cmdline`.
 
+The `case` line after each `TOKEN=` is the same shape guard the skill scripts carry: the
+config channel is line-oriented, so a token holding a quote or a newline could append a
+`url = ...` directive and make curl issue a second request. A malformed token is unset
+(curl then sends an empty key and gets a 401) rather than formatted into the stream.
+
 ```bash
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain)
+case "$TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) unset TOKEN; echo "token has an unexpected shape; not sending it" >&2 ;; esac
 curl -sS --disable --noproxy '*' --config - \
   "https://api.flagsmith.com/api/v1/projects/?organisation=29821" \
   < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
@@ -64,6 +70,7 @@ Run this once per Flagsmith project. Pre-checked for idempotency by name.
 
 ```bash
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain)
+case "$TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) unset TOKEN; echo "token has an unexpected shape; not sending it" >&2 ;; esac
 PROJECT_ID=39082
 
 # role-prd

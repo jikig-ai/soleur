@@ -199,19 +199,23 @@ bsky_authed_curl() {
 # createSession call has no bearer config, so curl's stdin is free: `jq` builds the body and
 # pipes it to `curl --data-binary @-` (NOT `-d @-`, which strips CR/LF). The values reach
 # `jq` through its ENVIRONMENT as an inline assignment prefix (`$ENV.X`), never `jq --arg`
-# (jq's own argv is world-readable too) and never `export` (every later child would inherit
-# them). No file, no trap: the secret exists only in the two processes' memory and the pipe.
+# (jq's own argv is world-readable too). This script never `export`s them: the BSKY_ID /
+# BSKY_PW aliases live on the one jq child only. (BSKY_HANDLE / BSKY_APP_PASSWORD themselves
+# are whatever the CALLER exported, so later children inherit those regardless.) No file, no
+# trap: the secret exists only in the processes' memory and the pipe.
 
 # A control character can never be part of a handle or an app password. Refusing one
 # before anything is sent keeps garbage off the wire; jq escapes everything else (a handle
 # holding a double quote is escaped, never injected into the JSON).
 _bsky_cred_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
 
-# One fixed, value-free line on stderr (never the handle or the password) and a non-zero
-# exit. `post` also runs HOSTED, from scripts/content-publisher.sh, which captures stderr
-# into its fallback-issue path: the exit is 1, never 0 or 3.
+# A fixed, value-free marker plus ONE human line on stderr, naming only which FIELD was
+# refused (never the handle or the password), and a non-zero exit. $2 is the variable name.
+# `post` also runs HOSTED, from scripts/content-publisher.sh, which captures stderr into its
+# fallback-issue path: the exit is 1, never 0 or 3.
 bsky_refuse() {
   printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: ${2} is empty or contains a control character (for example a stray carriage return or newline from a copy-paste or a CRLF .env file), so nothing was sent. Remove it and retry. The value is not shown." >&2
   exit 1
 }
 
@@ -253,14 +257,21 @@ create_session() {
   local response http_code body
 
   local __curl_rc=0
-  # Refuse BEFORE the jq|curl pipeline so a refused value never reaches a child process.
-  # Under `set -o pipefail` a jq failure fails the pipeline (non-zero __curl_rc below), so
-  # it can never read as a successful empty POST.
-  if ! _bsky_cred_ok "${BSKY_HANDLE:-}" || ! _bsky_cred_ok "${BSKY_APP_PASSWORD:-}"; then
-    bsky_refuse token_shape
-  fi
-  response=$(BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \
-    jq -n '{identifier: $ENV.BSKY_ID, password: $ENV.BSKY_PW}' \
+  # Refuse BEFORE the body is built so a refused value never reaches a child process.
+  _bsky_cred_ok "${BSKY_HANDLE:-}" || bsky_refuse control_char BSKY_HANDLE
+  _bsky_cred_ok "${BSKY_APP_PASSWORD:-}" || bsky_refuse control_char BSKY_APP_PASSWORD
+  # The body is built into a variable FIRST, so a jq failure is classified as what it is (a
+  # body-build failure) and never reaches curl: it does not depend on `pipefail`, and it can
+  # never read as a transport failure or as a successful empty POST. The credentials reach jq
+  # only through its inline environment prefix; `printf` is a builtin, so the body (which holds
+  # the password) is on no argv; curl reads it from stdin.
+  local req_body
+  req_body=$(BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \
+    jq -n '{identifier: $ENV.BSKY_ID, password: $ENV.BSKY_PW}') || {
+    echo "Error: could not build the Bluesky createSession request body (jq failed); nothing was sent." >&2
+    exit 1
+  }
+  response=$(printf '%s' "$req_body" \
     | curl --disable --noproxy '*' -s -w "\n%{http_code}" \
     -X POST \
     -H "Content-Type: application/json" \

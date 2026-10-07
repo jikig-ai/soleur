@@ -170,7 +170,7 @@ _discord_token_ok() {
   [[ "$t" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]
 }
 refuse_token_shape() {
-  printf 'SOLEUR_CREDENTIAL_REFUSED script=discord-community.sh reason=token_shape\n' >&2
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=token_shape\n' "$SOLEUR_TRANSPORT_SCRIPT" >&2
   exit 1
 }
 
