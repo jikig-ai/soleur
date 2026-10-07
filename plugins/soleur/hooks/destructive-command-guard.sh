@@ -137,14 +137,18 @@ ISSUES_URL='https://github.com/jikig-ai/soleur/issues'
 REASON_TAIL=" Stop and tell the person what you were about to run and why. Do not retry this command and do not rephrase it to get around the guard. If no person is available to answer, end the task and report it as blocked. The person can run the command themselves in their own terminal, outside the agent, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 set in their own shell. If this was flagged wrongly, report it at ${ISSUES_URL}"
 PERSON_TAIL=" The person can run the command themselves in their own terminal, outside the agent, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 set in their own shell. If this was flagged wrongly, report it at ${ISSUES_URL}"
 BOUND_TAIL=" Split it into smaller commands and send them one at a time; if you cannot, stop and report the task as blocked.${PERSON_TAIL}"
-FALLBACK_REASON="guard-output-fallback: the destructive-command guard could not build its decision output and is asking instead of allowing. Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
+# parse-class asks (a command or envelope the guard could not read): the right move is to repair and resend, not to
+# leave a destructive command alone, so they do not carry REASON_TAIL's "do not retry".
+PARSE_TAIL=" If this is a valid command you meant to run, fix its quoting or heredoc and send it again; if you cannot, stop and report the task as blocked.${PERSON_TAIL}"
+FALLBACK_REASON="This command was NOT run. guard-output-fallback: the destructive-command guard could not build its decision output and is asking instead of allowing. Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
 
 # ---- output ---------------------------------------------------------------------------------------
 # emit <ask|deny> <reason>: the full envelope (a bare decision without hookEventName is silently ignored),
-# built with jq; a hand-built fixed string when jq fails. A deny also carries systemMessage.
+# built with jq; a hand-built fixed string when jq fails. A deny also carries systemMessage. Every reason opens
+# with the sentence that says the command did not run (the agent otherwise has to infer it from the rule id).
 emit() {
-  local out=""
-  out="$(jq -nc --arg d "$1" --arg r "$2" \
+  local out="" reason="This command was NOT run. $2"
+  out="$(jq -nc --arg d "$1" --arg r "$reason" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}
      + (if $d == "deny" then {systemMessage: $r} else {} end)' 2>/dev/null)" || out=""
   if [[ -z "$out" ]]; then emit_fixed "$1" "$FALLBACK_REASON"; return; fi
@@ -173,16 +177,49 @@ lead_for() {
   esac
 }
 
+# ---- redaction: the matched command goes into the reason, the transcript and (on a deny) the systemMessage -------
+# A word that carries a credential is masked BEFORE the text is joined and cut to 200 characters (so a cut can never
+# leave half of one): NAME=value, --name=value and -var name=value where NAME holds key, token, secret, password,
+# passwd, cred or auth in any case (the whole value is masked, spaces included, because the lexer's word is one
+# argument), and URL userinfo (`://user:pass@` keeps the user, `://token@` masks it). Only the emit path calls this,
+# one word at a time with bash regexes under nocasematch, so it costs no process.
+RE_SECRET_ASSIGN='^(([A-Za-z0-9_.-]*=)?-{0,2}[A-Za-z0-9_.-]*(key|token|secret|password|passwd|cred|auth)[A-Za-z0-9_.-]*=)'
+RE_URL_PW='^(.*://[^/@[:space:]:]*:)[^/@[:space:]]*(@.*)$'
+RE_URL_USER='^(.*://)[^/@[:space:]:]+(@.*)$'
+RW=""
+redact_word() { # <word> -> RW
+  local w="$1" had=0
+  shopt -q nocasematch && had=1
+  shopt -s nocasematch
+  if [[ "$w" =~ $RE_SECRET_ASSIGN ]]; then w="${BASH_REMATCH[1]}<redacted>"
+  elif [[ "$w" =~ $RE_URL_PW ]]; then w="${BASH_REMATCH[1]}<redacted>${BASH_REMATCH[2]}"
+  elif [[ "$w" =~ $RE_URL_USER ]]; then w="${BASH_REMATCH[1]}<redacted>${BASH_REMATCH[2]}"
+  fi
+  (( had )) || shopt -u nocasematch
+  RW="$w"
+}
+# redact_text <text> -> RTXT: the same, over whitespace-separated words (the perl-less scan has text, not words)
+RTXT=""
+redact_text() {
+  local IFS=$' \t\n' w out=""
+  for w in $1; do redact_word "$w"; out="${out:+$out }$RW"; done
+  RTXT="$out"
+}
+
 ask_parse() { # <cause text>: a command the lexer could not read
-  emit ask "command-not-parsed: the destructive-command guard could not parse this command; it was not recognised as destructive, and the guard asks rather than guess (${1}).${REASON_TAIL}"
+  emit ask "command-not-parsed: the destructive-command guard could not parse this command; it was not recognised as destructive, and the guard asks rather than guess (${1}).${PARSE_TAIL}"
+  exit 0
+}
+ask_lexer_empty() {
+  emit ask "lexer-empty: the destructive-command guard's lexer returned no command for this input, which holds text that is neither blank nor a comment; it was not recognised as destructive, and the guard asks rather than guess.${PARSE_TAIL}"
   exit 0
 }
 ask_bound() { # <why>: a command too large to check in full
-  emit ask "This command was NOT run. bound: the destructive-command guard stopped checking this command because it is too large to check in full (${1}); it was not recognised as destructive, and the guard asks rather than guess.${BOUND_TAIL}"
+  emit ask "bound: the destructive-command guard stopped checking this command because it is too large to check in full (${1}); it was not recognised as destructive, and the guard asks rather than guess.${BOUND_TAIL}"
   exit 0
 }
 ask_envelope() { # <cause text>
-  emit ask "envelope-unreadable: the destructive-command guard could not read this tool call (${1}), and it asks rather than allow what it cannot read.${REASON_TAIL}"
+  emit ask "envelope-unreadable: the destructive-command guard could not read this tool call (${1}), and it asks rather than allow what it cannot read.${PARSE_TAIL}"
   exit 0
 }
 
@@ -240,15 +277,6 @@ HOOK_SRC="${BASH_SOURCE[0]}"
 HOOK_DIR="${HOOK_SRC%/*}"; [[ "$HOOK_DIR" == "$HOOK_SRC" ]] && HOOK_DIR=.
 LEXER="$HOOK_DIR/lib/shell-argv.pl"
 
-# Canonical kind map (#8205): the shim degrades to raw-name passthrough when the lib is absent. The RAW
-# tool_name is captured before the map normalizes it, so Devin's `exec` (kind Bash) is NOT decided here (D2).
-# shellcheck source=plugins/soleur/hooks/lib/hook-tool-kind.sh
-. "$HOOK_DIR/lib/hook-tool-kind.sh" 2>/dev/null || true
-if ! type hook_tool_kind >/dev/null 2>&1; then
-  hook_tool_kind() { printf '%s\n' "${1-}"; }
-  echo "WARN: hook-tool-kind.sh missing - kind gates degrade to raw-name passthrough" >&2
-fi
-
 JQ_FIELDS='if type != "object" then "invalid" else
   ((.tool_name // "" | if type == "string" then . else "" end | gsub("[\\n\\r]"; " ")),
    (.cwd // "" | if type == "string" then . else "" end | gsub("[\\n\\r]"; " ")),
@@ -261,7 +289,7 @@ degrade_jq() {
   raw="${raw//\\n/;}"; raw="${raw//\\u000[aA]/;}"; raw="${raw//\\u000[dD]/;}"
   raw="${raw//\\t/ }"; raw="${raw//\\r/ }"; raw="${raw//\\u0009/ }"; raw="${raw//\\u0020/ }"
   if scan_narrow "$raw"; then
-    emit_fixed ask "guard-degraded-jq-missing: jq is missing or unusable on this machine, so the destructive-command guard scanned the raw tool input instead of parsing it, and this call looks destructive (a recursive delete of / or home, a destroy, or a force push). Stop and tell the person. Do not retry this command or rephrase it. If no person is available, end the task and report it as blocked. The person can run it in their own terminal, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, or install jq. Report a wrong flag at ${ISSUES_URL}"
+    emit_fixed ask "This command was NOT run. guard-degraded-jq-missing: jq is missing or unusable on this machine, so the destructive-command guard scanned the raw tool input instead of parsing it, and this call looks destructive (a recursive delete of / or home, a destroy, or a force push). Stop and tell the person. Do not retry this command or rephrase it. If no person is available, end the task and report it as blocked. The person can run it in their own terminal, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, or install jq. Report a wrong flag at ${ISSUES_URL}"
   fi
   exit 0
 }
@@ -278,10 +306,10 @@ fi
 [[ "$FIELDS" == invalid ]] && ask_envelope "the envelope is not a JSON object"
 RAW_TOOL="${FIELDS%%$'\n'*}"; FIELDS_REST="${FIELDS#*$'\n'}"
 CWD_IN="${FIELDS_REST%%$'\n'*}"; CMD_TYPE="${FIELDS_REST#*$'\n'}"
-# Only a Bash call is decided. A missing tool_name is read as Bash (fail toward deciding); the registered
+# Only a Bash call is decided, by the RAW name (Devin's `exec` is not decided: D2). A missing tool_name is read as Bash (fail toward deciding); the registered
 # matcher is ^Bash$, so a real call always carries it.
 if [[ -n "$RAW_TOOL" ]]; then
-  [[ "$RAW_TOOL" == Bash && "$(hook_tool_kind "$RAW_TOOL")" == Bash ]] || exit 0
+  [[ "$RAW_TOOL" == Bash ]] || exit 0
 fi
 [[ "$CMD_TYPE" == string ]] || ask_envelope "tool_input.command is not a string"
 
@@ -316,13 +344,28 @@ if [[ "$SAW_OK" -ne 1 && -z "$BOUND_WHY" ]]; then
     echo "soleur destructive-command-guard: perl (or its lexer) is missing or unusable on this machine; scanning the decoded command with the guard's own narrow patterns instead of lexing it (install perl for full coverage)" >&2
     DEC_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || DEC_CMD=""
     if scan_narrow "$DEC_CMD"; then
-      emit ask "guard-degraded-perl-missing: perl is missing or unusable on this machine, so the destructive-command guard scanned the decoded command with its narrow patterns instead of lexing it, and this call looks destructive. Matched segment: ${SCAN_SEG:0:200}.${REASON_TAIL}"
+      redact_text "$SCAN_SEG"
+      emit ask "guard-degraded-perl-missing: perl is missing or unusable on this machine, so the destructive-command guard scanned the decoded command with its narrow patterns instead of lexing it, and this call looks destructive. Matched segment: ${RTXT:0:200}.${REASON_TAIL}"
     fi
     exit 0
   fi
   ask_parse "the lexer produced no result"
 fi
 [[ "$LEX_BAD" -eq 1 ]] && ask_parse "the lexer output was malformed"
+# OK with no record is the right answer for a blank or comment-only command and nothing else: a command with real
+# text and no record (a bare redirect, or a lexer that silently dropped its input) asks.
+has_code() { # <command text>: 0 when some line is neither blank nor a comment
+  local ln
+  while IFS= read -r ln || [[ -n "$ln" ]]; do
+    ln="${ln#"${ln%%[![:space:]]*}"}"
+    [[ -n "$ln" && "$ln" != '#'* ]] && return 0
+  done <<<"$1"
+  return 1
+}
+if [[ "${#REC_N[@]}" -eq 0 && -z "$BOUND_WHY" ]]; then
+  LX_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || LX_CMD="unreadable"
+  if has_code "$LX_CMD"; then ask_lexer_empty; fi
+fi
 
 # ---- 5. the rule table -----------------------------------------------------------------------------
 BEST_RANK=0; BEST_RULE=""; BEST_QUOTE=""
@@ -877,7 +920,10 @@ for ((r = 0; r < NREC; r++)); do
   REC_RANK=0; REC_RULE=""
   decide_argv 0
   if (( REC_RANK > BEST_RANK )); then
-    BEST_RANK="$REC_RANK"; BEST_RULE="$REC_RULE"; REC_TXT="${DA_T[*]}"; BEST_QUOTE="${REC_TXT:0:200}"
+    BEST_RANK="$REC_RANK"; BEST_RULE="$REC_RULE"
+    REC_TXT=""
+    for ((RQ = 0; RQ < ${#DA_T[@]} && ${#REC_TXT} <= 200; RQ++)); do redact_word "${DA_T[RQ]}"; REC_TXT="${REC_TXT:+$REC_TXT }$RW"; done
+    BEST_QUOTE="${REC_TXT:0:200}"
     (( ${#REC_TXT} > 200 )) && BEST_QUOTE="${BEST_QUOTE}..."
     (( BEST_RANK == 2 )) && break
   fi

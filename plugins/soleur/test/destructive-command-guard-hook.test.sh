@@ -1132,6 +1132,12 @@ L @@ prefilter: an unterminated backtick alone @@ ask @@ - @@ echo `ls
 L @@ prefilter: an unterminated ${ alone @@ ask @@ - @@ echo ${x
 L @@ prefilter: an unterminated <( alone @@ ask @@ - @@ diff <(ls
 L @@ prefilter: an unterminated >( alone @@ ask @@ - @@ tee >(cat
+# ---- the lexer returns OK with no record: a command with real text asks (lexer-empty), a blank or comment-only one does not
+L @@ lexer-empty: a bare redirect (no command word) asks @@ ask @@ - @@ >"out.txt"
+L @@ lexer-empty: a bare fd redirect asks @@ ask @@ - @@ 2>&1 # "c"
+L @@ lexer-empty: a comment line then a bare redirect asks @@ ask @@ - @@ # note@NL@>"out.txt"
+L @@ lexer-empty: a comment-only command is not an ask @@ none @@ - @@ # only a comment, "quoted" so it reaches the lexer
+L @@ lexer-empty: indented comment lines and blank lines are not an ask @@ none @@ - @@ @NL@   # one "q"@NL@@NL@# two
 # ---- decide_argv keeps the caller's state: a `--` or a wrapper must not change what the cd effect or the quote sees
 X @@ state: cd -- ~ then rm -rf * (a `--` after cd must not hide the cd) @@ deny @@ - @@ cd -- ~ && rm -rf *
 X @@ state: pushd -- ~ then rm -rf * @@ deny @@ - @@ pushd -- ~ && rm -rf *
@@ -1420,6 +1426,82 @@ deadline_row deciding 'ls "x"; terraform plan' "$_DL_READ" "$_DL_JUDGE" "$_DL_RM
 deadline_row rm-targets 'rm -rf "build"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE"
 
 # =====================================================================================================
+echo "== a secret in the matched command is redacted from the reason and the systemMessage =="
+redact_row() { # <label> <command> <cwd-template> <secret that must be absent> <quoted text that must be present>
+  want_row_quiet "$1" || return 0
+  subst "$3"; hook_run "$(mkjson "$2" "$SUBST_OUT")"
+  jqchk "$1: the secret is absent from the reason and the systemMessage" '[.hookSpecificOutput.permissionDecisionReason, (.systemMessage // "")] | all(contains($s) | not)' --arg s "$4"
+  jqchk "$1: the rest of the command is still quoted" '.hookSpecificOutput.permissionDecisionReason | contains($q)' --arg q "$5"
+}
+redact_row "redact: -var name=value with a password name" 'terraform destroy -var db_password=zq-fake-pw-1 -var region=us-east-1' - zq-fake-pw-1 'terraform destroy -var db_password=<redacted> -var region=us-east-1'
+redact_row "redact: an assignment prefix with a SECRET name" 'AWS_SECRET_ACCESS_KEY=zq-fake-key-2 terraform destroy' - zq-fake-key-2 'AWS_SECRET_ACCESS_KEY=<redacted> terraform destroy'
+redact_row "redact: --name=value with a token name" 'terraform destroy --api-token=zq-fake-tok-3' - zq-fake-tok-3 'terraform destroy --api-token=<redacted>'
+redact_row "redact: URL userinfo with a password" 'git push --force https://someone:zq-fake-pat-4@example.invalid/o/r.git main' @R1@ zq-fake-pat-4 'https://someone:<redacted>@example.invalid/o/r.git main'
+redact_row "redact: URL userinfo with no colon is the credential" 'git push --force https://zq-fake-user-5@example.invalid/o/r.git main' @R1@ zq-fake-user-5 'https://<redacted>@example.invalid/o/r.git main'
+redact_row "redact: a value with spaces is redacted whole" "DB_PASSWD='zq fake pw 6 two' terraform destroy" - 'pw 6 two' 'DB_PASSWD=<redacted> terraform destroy'
+redact_row "redact: a deny carries no secret in systemMessage either" 'API_AUTH=zq-fake-auth-7 rm -rf ~' - zq-fake-auth-7 'API_AUTH=<redacted> rm -rf ~'
+redact_row "redact: a name with CRED in lower case" 'cloud_cred=zq-fake-cred-8 terraform destroy' - zq-fake-cred-8 'cloud_cred=<redacted> terraform destroy'
+redact_row "redact: a nested -var=name=value spelling" 'terraform destroy -var=db_secret=zq-fake-sec-9' - zq-fake-sec-9 'terraform destroy -var=db_secret=<redacted>'
+want_row_quiet "redact: a non-secret assignment is quoted as is" && { hook_run "$(mkjson 'REGION=us-east-1 terraform destroy' "$TREE")"; reason_has "redact: a non-secret assignment is quoted as is" 'REGION=us-east-1 terraform destroy'; }
+if want_row_quiet "redact: the perl-less scan quotes a segment with its secret redacted"; then
+  hook_run "$(mkjson 'terraform destroy -var db_password=zq-fake-pw-10' "$TREE")" "PATH=$WORK/farm-noperl"
+  jqchk "redact: the perl-less scan quotes a segment with its secret redacted" '(.hookSpecificOutput.permissionDecisionReason | contains("zq-fake-pw-10") | not) and (.hookSpecificOutput.permissionDecisionReason | contains("db_password=<redacted>"))'
+fi
+
+# =====================================================================================================
+echo "== the reasons: every one says the command was NOT run; parse-class asks get their own tail =="
+hook_run "$(mkjson "echo 'PARSEMARKER_zq unbalanced" "$TREE")"
+jqchk "reason: a parse failure starts with the not-run sentence" '.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. command-not-parsed: ")'
+jqchk "reason: a parse failure tells the agent to fix and resend, not to leave the command alone" '.hookSpecificOutput.permissionDecisionReason | (test("send it again") and test("report the task as blocked"))'
+jqchk "reason: a parse failure does not say do not retry or do not rephrase" '.hookSpecificOutput.permissionDecisionReason | (test("(?i)do not retry") or test("(?i)do not rephrase")) | not'
+hook_run 'not json {'
+jqchk "reason: an unreadable envelope starts with the not-run sentence and its rule id" '.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. envelope-unreadable: ")'
+jqchk "reason: an unreadable envelope has the fix-and-resend tail and the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (test("send it again") and contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+hook_run "$(mkjson "$_cmd2600" "$TREE")"
+jqchk "reason: a bound ask tells the agent to split the command" '.hookSpecificOutput.permissionDecisionReason | (test("Split it into smaller commands") and contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+hook_run "$(mkjson 'terraform destroy' "$TREE")"
+jqchk "reason: a destroy ask starts with the not-run sentence" '.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. infra-destroy: ")'
+hook_run "$(mkjson 'rm -rf ~' "$TREE")"
+jqchk "reason: a deny starts with the not-run sentence in the reason and in the systemMessage" '(.hookSpecificOutput.permissionDecisionReason | startswith("This command was NOT run. ")) and (.systemMessage | startswith("This command was NOT run. "))'
+jqchk "reason: a deny's systemMessage keeps the escape hatch and the issues URL" '.systemMessage | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+
+# =====================================================================================================
+echo "== the lexer seam: a lexer that fails, lies or says nothing never becomes an allow =="
+# A private hook copy whose lib/shell-argv.pl is a stub. The command has a quote so the prefilter does not skip it.
+stub_lexer() { # stub_lexer <name> <perl source> -> HT_HOOK
+  mk_hook_tree "lexer-$1"
+  [[ -n "$FAST" ]] && return 0
+  printf '%s\n' "$2" > "$WORK/trees/lexer-$1/lib/shell-argv.pl"
+}
+_LX_ENV="$(mkjson 'ls "x"' "$TREE")"
+stub_lexer die 'exit 255;'
+tree_row "lexer seam: a lexer that dies (exit 255, no output) asks" ask "$HT_HOOK" "$_LX_ENV"
+reason_has "lexer seam: a dead lexer reads as no result" 'the lexer produced no result'
+stub_lexer silent '# prints nothing and exits 0'
+tree_row "lexer seam: a lexer that prints nothing asks" ask "$HT_HOOK" "$_LX_ENV"
+stub_lexer alarm 'print "E\0alarm\0"; exit 3;'
+tree_row "lexer seam: E alarm asks" ask "$HT_HOOK" "$_LX_ENV"
+reason_has "lexer seam: E alarm names the cause" 'lexer alarm'
+stub_lexer crash 'print "E\0crash\0"; exit 3;'
+tree_row "lexer seam: E crash asks" ask "$HT_HOOK" "$_LX_ENV"
+reason_has "lexer seam: E crash names the cause" 'lexer crash'
+stub_lexer garbage 'print "XYZ\0QQ\0";'
+tree_row "lexer seam: garbage bytes with no OK ask" ask "$HT_HOOK" "$_LX_ENV"
+stub_lexer garbageok 'print "XYZ\0OK\0";'
+tree_row "lexer seam: a garbage frame before OK asks (malformed)" ask "$HT_HOOK" "$_LX_ENV"
+reason_has "lexer seam: a garbage frame is reported as malformed" 'the lexer output was malformed'
+stub_lexer badargc 'print "C\0top\0abc\0OK\0";'
+tree_row "lexer seam: a record with a non-numeric word count asks (malformed)" ask "$HT_HOOK" "$_LX_ENV"
+stub_lexer truncated 'print "C\0top\0";'
+tree_row "lexer seam: a record cut off before its words and OK asks" ask "$HT_HOOK" "$_LX_ENV"
+stub_lexer okonly 'print "OK\0";'
+tree_row "lexer seam: OK with no record for a command with text asks (lexer-empty)" ask "$HT_HOOK" "$_LX_ENV"
+reason_has "lexer seam: OK with no record carries the lexer-empty rule id and the fix-and-resend tail" 'This command was NOT run. lexer-empty: '
+tree_row "lexer seam: OK with no record for a comment-only command is not an ask" none "$HT_HOOK" "$(mkjson '# a "comment" only' "$TREE")"
+stub_lexer okone 'print "C\0top\0" . "1\0" . "-\0" . "ls\0" . "OK\0";'
+tree_row "lexer seam: a stub lexer that reports one harmless record is not an ask (the seam is not an always-ask)" none "$HT_HOOK" "$_LX_ENV"
+
+# =====================================================================================================
 echo "== the envelope (ADR-156/157): an unreadable envelope asks, a non-Bash tool is not decided =="
 env_row "garbage stdin asks" ask 'not json at all {'
 env_row "a truncated envelope asks (M2)" ask '{"tool_input":'
@@ -1530,23 +1612,23 @@ _TRUNC_ARGS="$(printf '%0400d' 0 | tr 0 a)"
 hook_run "$(mkjson 'terraform destroy' "$TREE")"
 jqchk "ask: hookEventName rides in the same object as the decision (M8)" '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "ask"'
 jqchk "ask: the reason quotes the matched command" '.hookSpecificOutput.permissionDecisionReason | contains("terraform destroy")'
-jqchk "ask: the reason starts with a rule id (<id>: <prose>)" '.hookSpecificOutput.permissionDecisionReason | test("^[a-z][a-z0-9]*(-[a-z0-9]+)+: ")'
+jqchk "ask: the reason starts with the not-run sentence, then a rule id (<id>: <prose>)" '.hookSpecificOutput.permissionDecisionReason | test("^This command was NOT run\\. [a-z][a-z0-9]*(-[a-z0-9]+)+: ")'
 jqchk "ask: the reason carries the escape hatch" '.hookSpecificOutput.permissionDecisionReason | contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1")'
 jqchk "ask: the reason carries an issues URL" '.hookSpecificOutput.permissionDecisionReason | test("https://[^ ]+/issues")'
 jqchk "ask: the reason tells the agent to stop and not retry, and names the person's own terminal" '.hookSpecificOutput.permissionDecisionReason | (test("(?i)do not retry") and test("(?i)blocked") and test("(?i)terminal"))'
 jqchk "ask: the envelope has no top-level systemMessage (the prompt shows the reason)" 'keys == ["hookSpecificOutput"]'
-_ID_ASK_TF="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^(?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
+_ID_ASK_TF="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^This command was NOT run\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
 hook_run "$(mkjson 'rm -rf ~' "$TREE")"
 jqchk "deny: hookEventName rides in the same object as the decision (M8)" '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"'
 jqchk "deny: a top-level systemMessage carries the SAME full reason (C4)" '.systemMessage == .hookSpecificOutput.permissionDecisionReason and (.systemMessage | length) > 0'
 jqchk "deny: the systemMessage carries the escape hatch" '.systemMessage | contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1")'
 jqchk "deny: the systemMessage carries an issues URL" '.systemMessage | test("https://[^ ]+/issues")'
 jqchk "deny: the reason quotes the matched command" '.hookSpecificOutput.permissionDecisionReason | contains("rm -rf ~")'
-jqchk "deny: the reason starts with a rule id" '.hookSpecificOutput.permissionDecisionReason | test("^[a-z][a-z0-9]*(-[a-z0-9]+)+: ")'
+jqchk "deny: the reason starts with the not-run sentence, then a rule id" '.hookSpecificOutput.permissionDecisionReason | test("^This command was NOT run\\. [a-z][a-z0-9]*(-[a-z0-9]+)+: ")'
 jqchk "deny: the envelope has exactly the two top-level keys" 'keys == ["hookSpecificOutput","systemMessage"]'
-_ID_DENY_RM="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^(?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
+_ID_DENY_RM="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^This command was NOT run\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
 hook_run "$(mkjson 'git push --force origin main' "$R1")"
-_ID_ASK_GIT="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^(?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
+_ID_ASK_GIT="$(printf '%s' "$HOOK_OUT" | "$JQ_BIN" -r '.hookSpecificOutput.permissionDecisionReason | capture("^This command was NOT run\\. (?<id>[a-z][a-z0-9]*(-[a-z0-9]+)+): ").id' 2>/dev/null)"
 if [[ -n "$_ID_ASK_TF" && -n "$_ID_DENY_RM" && -n "$_ID_ASK_GIT" && "$_ID_ASK_TF" != "$_ID_DENY_RM" && "$_ID_ASK_TF" != "$_ID_ASK_GIT" && "$_ID_DENY_RM" != "$_ID_ASK_GIT" ]]; then _x=ok; else _x=bad; fi
 chk "the destroy, delete-home and force-push rules carry three distinct rule ids" "$_x" "ids: tf=$_ID_ASK_TF rm=$_ID_DENY_RM git=$_ID_ASK_GIT"
 hook_run "$(mkjson "terraform destroy -target=$_TRUNC_ARGS" "$TREE")"
@@ -1615,7 +1697,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=648
+MIN_CASES=698
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
