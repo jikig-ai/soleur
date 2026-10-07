@@ -50,6 +50,10 @@
 # from ask to none and the same comparison the rows use reddens against a hook that answers ask;
 # (c) the must-PASS list and the ordinary-command corpus (kind C) drive inputs that are not the canonical
 # destructive spelling, and the ask rate on that corpus is printed and must be 0.
+# (a2) a reduced run prints a REDUCED RUN banner first and a NOT THE FULL GATE line before its summary; (lint) the lint
+# that keeps the oracle from executing a destructive command is fed every unsafe spelling it must refuse (two spaces or a tab in
+# `command -p`, `then exec`, an absolute redirect, a cd to an absolute path) and the look-alikes it must accept, a suite COPY
+# carrying an unsafe row must stop with exit 2, and a COPY whose oracle deletes the canary must stop with exit 2.
 #
 # DOCUMENTED RESIDUALS the rows deliberately do not depend on: an identical `bash -c`/`eval` string is
 # lexed once, so no must-ASK row relies on a second inner occurrence under a different `cd`; a raw-scan
@@ -592,15 +596,29 @@ subst() {
   SUBST_OUT="$s"
 }
 
-# The oracle may only execute a row whose command words are bare names.
-EXEC_LINT_RE='(^|[;&|(`{]|\$\()[[:space:]]*/'
-EXEC_LINT_EXEC_RE='(^|[;&|(`{]|\$\()[[:space:]]*exec[[:space:]]'
+# The oracle may only execute a row whose command words are bare names. The lint is applied to the RAW row template (placeholders such
+# as @TREE@ are not paths yet), so any literal `/` in command position, in a redirect target or after a cd is a real filesystem path.
+LEAD_RE='(^|[;&|(`{!]|\$\(|(^|[[:space:]])(then|do|else|elif|if|while|until|time))[[:space:]]*'
+EXEC_LINT_RE="${LEAD_RE}/"
+EXEC_LINT_EXEC_RE="${LEAD_RE}exec([[:space:]]|\$)"
+EXEC_LINT_CMDP_RE='(^|[^[:alnum:]_-])command[[:space:]]+-[a-zA-Z]*p'
+EXEC_LINT_CD_RE="${LEAD_RE}(builtin[[:space:]]+)?(cd|pushd)([[:space:]]+-[a-zA-Z]+)*[[:space:]]+/"
+EXEC_LINT_REDIR_RE='>[|>]?[[:space:]]*(/[^[:space:];&|)<>]*)'
 safe_to_execute() { # <raw command template>
+  local rest="$1" tgt
   case "$1" in
     *PATH=*|*"command -p"*|*"/bin/"*|*"/sbin/"*|*"/usr/"*|*"hash "*|*"enable "*|*"builtin "*) return 1 ;;
   esac
   [[ "$1" =~ $EXEC_LINT_RE ]] && return 1
   [[ "$1" =~ $EXEC_LINT_EXEC_RE ]] && return 1
+  [[ "$1" =~ $EXEC_LINT_CMDP_RE ]] && return 1
+  [[ "$1" =~ $EXEC_LINT_CD_RE ]] && return 1
+  # a redirect to an absolute path writes outside the fixture world, except /dev/null
+  while [[ "$rest" =~ $EXEC_LINT_REDIR_RE ]]; do
+    tgt="${BASH_REMATCH[1]}"
+    [[ "$tgt" == /dev/null ]] || return 1
+    rest="${rest#*"${BASH_REMATCH[0]}"}"
+  done
   return 0
 }
 
@@ -1860,6 +1878,48 @@ chk "harness (b): the unchanged expectation stays green against a hook that answ
 oracle_derive 'rm -rf ~' "$TREE" "$HOME_W"
 if [[ -n "$FAST" ]]; then _x=ok; elif [[ "$ORC" == deny && "$ORC_N" -ge 1 ]]; then _x=ok; else _x=bad; fi
 chk "harness: the rm stub recorded the invocation and the rule table read it (oracle plumbing is live)" "$_x" "oracle=$ORC records=$ORC_N"
+# The lint that keeps the oracle from running a destructive command can itself fail: every spelling below must be REFUSED (these
+# are the shapes a two-space, tab, `then exec`, or absolute-redirect row would have slipped through), and the ordinary look-alikes accepted.
+_lint_miss=""
+for _s in 'command -p rm -rf ~' 'command  -p rm -rf ~' $'command\t-p rm -rf ~' 'command -pv rm' 'builtin command -p rm' 'env -i /bin/rm -rf ~' \
+          'if true; then exec rm -rf ~; fi' 'true && exec rm -rf ~' 'ls; exec rm -rf ~' 'while true; do exec rm -rf ~; done' 'time exec rm -rf ~' \
+          'export PATH=/usr/bin; rm -rf ~' 'PATH=/usr/bin rm -rf ~' 'hash -p /bin/rm rm; rm -rf ~' \
+          'echo x > /etc/hosts' 'echo x >> /var/tmp/escape' 'echo x >| /var/tmp/escape' 'ls 2>/var/tmp/escape' 'ls &>/var/tmp/escape' \
+          'cd / && rm -rf *' 'cd -P / && rm -rf *' 'ls; pushd /tmp && rm -rf *' 'then cd /tmp' '/bin/rm -rf ~' 'ls | /bin/rm -rf ~' '( /bin/rm -rf ~ )' 'FOO=1 /bin/rm'; do
+  if safe_to_execute "$_s"; then _lint_miss+=" [${_s//$'\t'/<TAB>}]"; fi
+done
+if [[ -z "$_lint_miss" ]]; then _x=ok; else _x=bad; fi
+chk "harness (lint): the executed-row lint refuses every unsafe spelling (a path reset, command -p in any spacing, exec in command position, an absolute redirect, a cd to an absolute path)" "$_x" "NOT refused:$_lint_miss"
+_lint_bad=""
+for _s in 'ls -la' 'aws-vault exec p -- terraform destroy' 'git push --exec x -f origin trunk' 'find src -name x -exec cat {} \;' 'echo "done" > /dev/null' 'ls &> /dev/null' 'pushd .. > /dev/null; rm -rf sub' \
+          'echo x > @TREE@/out.log' 'cd @TREE@ && rm -rf ../../h/home' 'command -v rm' 'command -V rm -rf ~' 'echo exec rm' 'terraform apply -destroy' 'rm -rf $HOME/*' 'cd ~ && rm -rf ./*' 'cat <<< "a > b"'; do
+  safe_to_execute "$_s" || _lint_bad+=" [$_s]"
+done
+if [[ -z "$_lint_bad" ]]; then _x=ok; else _x=bad; fi
+chk "harness (lint): the executed-row lint accepts the ordinary look-alikes (it is not an always-refuse)" "$_x" "wrongly refused:$_lint_bad"
+# The wiring: an unsafe row in a COPY of the suite stops it (exit 2, named), and an oracle that disturbs its fixture world stops it (exit 2, named).
+if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (lint): an unsafe row and a disturbed fixture world each stop the suite"; then
+  assert_fixture_dir "$WORK"
+  "$PY_BIN" -I -c 'import sys
+src, dst, anchor, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(anchor) != 1: sys.exit(1)
+open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/unsafe.test.sh" "run_table 3 3<<'ROWS'"$'\n' "run_table 3 3<<'ROWS'"$'\n'"X @@ lint probe @@ none @@ - @@ command  -p rm -rf ~"$'\n' 2>/dev/null; _u_prep=$?
+  _unsafe_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/unsafe.test.sh" 2>&1 </dev/null)"; _unsafe_rc=$?
+  if [[ "$_u_prep" -eq 0 && "$_unsafe_rc" -eq 2 ]] && grep -q "row 'lint probe' is not safe to execute" <<<"$_unsafe_out"; then _x=ok; else _x=bad; fi
+  chk "harness (lint): a suite copy carrying an unsafe row stops with exit 2 and names the row (rc=$_unsafe_rc)" "$_x" "prep=$_u_prep out: $(tail -n 2 <<<"$_unsafe_out" | tr '\n' ' ')"
+  "$PY_BIN" -I -c 'import sys
+src, dst, anchor, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(anchor) != 1: sys.exit(1)
+open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/disturb.test.sh" $'  # The oracle must never have touched the world it ran in.\n' $'  rm -f -- "$TREE/.canary"\n  # The oracle must never have touched the world it ran in.\n' 2>/dev/null; _d_prep=$?
+  _dist_out="$(env DCG_ROWS='^terraform plan$' GUARD_REPO_ROOT="$REPO_ROOT" GUARD_META_COPY=1 "$BASH" "$WORK/meta/disturb.test.sh" 2>&1 </dev/null)"; _dist_rc=$?
+  if [[ "$_d_prep" -eq 0 && "$_dist_rc" -eq 2 ]] && grep -q 'the oracle disturbed its fixture world' <<<"$_dist_out"; then _x=ok; else _x=bad; fi
+  chk "harness (lint): a suite copy whose oracle deletes the canary stops with exit 2 (the post-row fixture check fires, rc=$_dist_rc)" "$_x" "prep=$_d_prep out: $(tail -n 2 <<<"$_dist_out" | tr '\n' ' ')"
+elif [[ -n "${GUARD_META_COPY:-}" ]]; then
+  chk "harness (lint): a suite copy carrying an unsafe row stops with exit 2 and names the row (not run inside the meta copy)" ok
+  chk "harness (lint): a suite copy whose oracle deletes the canary stops with exit 2 (not run inside the meta copy)" ok
+fi
 # (a) delete one expected-ask row from a COPY of this suite: the floor must fail; the control copy must not trip it.
 _m="META-DELETE-"; _m+="TARGET"
 if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (a): deleting one expected-ask row makes the floor fail"; then
@@ -1916,7 +1976,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=769
+MIN_CASES=773
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
