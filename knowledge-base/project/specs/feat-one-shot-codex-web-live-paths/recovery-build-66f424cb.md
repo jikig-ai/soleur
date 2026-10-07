@@ -2,7 +2,7 @@
 title: Source-current offline recovery image preparation
 date: 2026-10-07
 compiled_source_sha: 66f424cb0a592a54ea33d12cc64a1cbbd627e8c6
-candidate_source_sha: 387e36f75d730c1b8283c245d76263241412dff3
+candidate_source_sha: 27c04a95ca007813847a17e4c765dc37e2d0aeb6
 pr: 9051
 status: local-image-prepared-startup-and-recovery-unqualified
 ---
@@ -119,7 +119,7 @@ hash checking executed no SQL and establish no full-history or real-auth parity.
 If separately authorized, the one-use command is:
 
 ```bash
-python3 .soleur/current-source-recovery-66f424cb/recovery-run.py --authorized-one-synthetic-rehearsal-387e36f7
+python3 .soleur/current-source-recovery-66f424cb/recovery-run.py --authorized-one-synthetic-rehearsal-27c04a95
 ```
 
 The script and raw records are task-owned ignored scratch, not committed
@@ -132,7 +132,7 @@ published port, provider/auth call, real credential, flag or cohort is involved.
 It stops on the first failure and has no automatic retry permission.
 
 The prepared rehearsal script's SHA-256 is
-`9980e4dd78b33fbd67614b14e3a3e3c50ac736376af8d3409a7951cc1d11e44a`.
+`1847a52487434481101985595774c59169a697fe64b89352613b5189679a972e`.
 No `recovery-record.json` exists for this source-current candidate; the command
 above has not run. Authorization for offline preparation does not authorize it.
 
@@ -148,7 +148,7 @@ candidate's refreshed plugin source SHA.
 
 Both plugin files were exported from the merged revision and copied into a
 small local layer over the initial prepared image. Its assembly container was
-never started. The current image ID is
+never started. That first resynced image ID is
 `sha256:a3b7c93d6500b48967b8d71e8d2087de64a849cff455a6e589745d519df92ae2`;
 its source label is the merged revision. A fresh read-only plugin mount passed.
 Independent image verification matched all six unchanged app hashes and both
@@ -166,6 +166,31 @@ were refused. The 13-body/185-file SQL manifest was regenerated statically for
 the merged revision; no SQL ran. The scratch directory retains the original
 compiled SHA in its name, while the command's authorization selector identifies
 the current candidate revision. No prior recovery authorization transfers to it.
+
+### Current renderer/plugin candidate after infrastructure main sync
+
+Main advanced again to `a0359450dddb6640144c712c231fab3e4aaceff4` and merged as
+`27c04a95ca007813847a17e4c765dc37e2d0aeb6`. Its four app changes are the
+`cron-egress-enforce-probe` and `web-private-nic-guard` shell scripts and their
+shell tests. Git proves every other app file, the root compiler helper,
+dependency files and workflows unchanged from compiled `66f424cb`. These four
+files are not inputs to this isolated Node renderer build. The two production
+guard scripts are re-included by the production Docker context; this rehearsal
+image does not include or qualify them. Root lint-fixture/baseline changes also
+remain outside the compiler-input proof. Full runner/infrastructure parity is
+still unqualified.
+
+The changed `skills/work/SKILL.md` was exported from merged `27c04a95` into a
+small local layer. The latest candidate image is
+`sha256:09a90a42a30f5d4f6c7fe335e027da6dbe6e773cf6bd41e922a0e2b6c564ba17`,
+with source label `27c04a95ca007813847a17e4c765dc37e2d0aeb6`. Its new skill hash
+is `8db881c6f52888e1d943db11dcd8db33d5c50d7fcc3992ba57de19dff721fcfa`.
+All six renderer artifact hashes and all three refreshed plugin hashes matched
+in a fresh image probe, and read-only plugin binding passed. The assembly
+container never started; all preparation containers were removed. All twelve
+required stages pass. Static SQL generation now identifies merged `27c04a95`;
+no SQL, app startup or recovery scenario ran. The command above is the current
+one-use proposal and still requires explicit new authorization.
 
 ## Remaining qualification
 

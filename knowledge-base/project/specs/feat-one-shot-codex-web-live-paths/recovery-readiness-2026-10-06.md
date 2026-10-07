@@ -161,3 +161,9 @@ App/compiler/dependency bytes are unchanged; the two changed plugin files were
 refreshed in a local image layer. Fresh image/plugin hashes and read-only mounting
 passed. The linked candidate record identifies the current image, provenance,
 twelve required stages and updated one-use command. No rehearsal has run.
+
+The next main sync merged as `27c04a95ca007813847a17e4c765dc37e2d0aeb6`.
+The candidate record now identifies its current renderer/plugin image and
+explicitly excludes the new deployment-guard shell changes from the synthetic
+proof. Full production runner/infrastructure parity remains unqualified.
+Fresh image/plugin checks and read-only binding passed; no rehearsal ran.
