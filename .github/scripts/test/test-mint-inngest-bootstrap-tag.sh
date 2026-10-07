@@ -1215,6 +1215,31 @@ g3_parity() {
     if [[ "$na" == 1 && "$nm" == 1 && -n "$la" && "$la" == "$lm" ]]; then echo "OK pin-$pin"
     else echo "BAD pin-$pin the ${pin} extraction (found $nm) differs from the build step's (found $na). Authority: $bwf (Read pinned inngest-cli + vector versions); copy: $mint. diff: $(diff <(printf '%s\n' "$la") <(printf '%s\n' "$lm") | tr '\n' '|')"; fi
   done
+  # #9082 — Guard A2's extractors must be token-identical to the mint's: each pin
+  # grep appears twice in the suite (tag side + HEAD side), each normalizing to the
+  # mint's own extractor line. The file operand is normalized away; a
+  # same-intent/different-tokens copy (a drifted regex, a dropped `|| true`) BADs.
+  for pin in inngest_cli_version inngest_cli_sha256 vector_version vector_sha256; do
+    pat="grep -E '^\\s*${pin}\\s*='"
+    nm=$(grep -cF -- "$pat" "$mint" || true)
+    na=$(grep -cF -- "$pat" "$ga" || true)
+    lm=$(grep -F -- "$pat" "$mint" | sed -E -e 's/^[[:space:]]+//' -e 's/^[A-Za-z_]+=\$\(//' -e 's/"\$[A-Za-z0-9_.\/]*"/X/g')
+    la=$(grep -F -- "$pat" "$ga" | sed -E -e 's/^[[:space:]]+//' -e 's/^[A-Za-z_]+=\$\(//' -e 's/"\$[A-Za-z0-9_.\/]*"/X/g' | sort -u)
+    if [[ "$nm" == 1 && "$na" == 2 && "$(grep -c '' <<<"$la")" == 1 && "$la" == "$lm" ]]; then echo "OK ga2-pin-$pin"
+    else echo "BAD ga2-pin-$pin Guard A2's ${pin} extractor (found $na normalized lines) differs from the mint's (found $nm). Authority: $mint (extract_side); copies: $ga Guard A2 (tag + HEAD arms). diff: $(diff <(printf '%s\n' "$lm") <(printf '%s\n' "$la") | tr '\n' '|')"; fi
+  done
+  # The recipe extractor: the suite copies the mint's awk program TWICE (tag side +
+  # HEAD side). Compare the program lines between the two files — operand/out= live
+  # outside the quoted program, so verbatim copies normalize to identical sets.
+  recipe_prog() { # recipe_prog <file> — the awk PROGRAM lines (between `awk -v out=` and the closing quote line), whitespace-normalized
+    awk '/awk -v out=/{on=1; next} on && /^[[:space:]]*'"'"'/ {on=0; next} on {sub(/^[[:space:]]+/, ""); print}' "$1"
+  }
+  lm=$(recipe_prog "$mint" | sort -u)
+  la=$(recipe_prog "$ga" | sort -u)
+  nm=$(recipe_prog "$mint" | grep -c . || true)
+  na=$(recipe_prog "$ga" | grep -c . || true)
+  if [[ "$nm" == 4 && "$na" == 8 && -n "$la" && "$la" == "$lm" ]]; then echo "OK ga2-recipe-awk"
+  else echo "BAD ga2-recipe-awk Guard A2's recipe awk program (found $na lines, expected 8 = 2 sides x 4) differs from the mint's (found $nm, expected 4). Authority: $mint (extract_side); copies: $ga Guard A2. diff: $(diff <(printf '%s\n' "$lm") <(printf '%s\n' "$la") | tr '\n' '|')"; fi
   # The strict tag-name regex is the build's own "Validate dispatch ref" gate: a
   # name the mint accepts but the build refuses would tag and never publish.
   la=$(grep -oE '^[[:space:]]*if \[\[ ! "\$REF" =~ [^ ]+ \]\]' "$bwf" | sed -E 's/.*=~ ([^ ]+) \]\]$/\1/')
@@ -1380,7 +1405,7 @@ PY
 g3_wf() { python3 "$TMP/g3_wf.py" "$1" "$2" "${3:-$SCRIPT}" "${4:-$COMPOSITE}" 2>&1 || echo "BAD python-crashed"; }
 
 report g3.parity < <(g3_parity "$SCRIPT" "$BUMP" "$CONSUMER" "$BUILD_WF")
-a_eq 'g3.parity:row-count' "$REPORTED" 11
+a_eq 'g3.parity:row-count' "$REPORTED" 16
 report g3.wf < <(g3_wf "$MINT_WF" "$BUILD_WF")
 a_eq 'g3.wf:row-count' "$REPORTED" 40
 
@@ -1439,6 +1464,14 @@ g3_mut g3.m8b-no-job-if 'mwf' "    if: github.ref == 'refs/heads/main'" '    # (
 g3_mut g3.m9-pin-pattern 'mint' "grep -E '^\\s*vector_sha256\\s*=' \"\$VTF\"" "grep -E '^\\s*vector_sha256.*=' \"\$VTF\""
 g3_mut g3.m10-unscoped-app 'mwf' "permissions: '{\"actions\":\"write\"}'" "permissions: ''"
 g3_mut g3.m11-strict-re 'mint' "STRICT_TAG_RE='^vinngest-v[0-9]+\.[0-9]+\.[0-9]+\$'" "STRICT_TAG_RE='^vinngest-v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\$'"
+# #9082: a same-intent/different-tokens extractor in Guard A2's HEAD arm must red
+# the ga2-pin-* parity row — the mint's extractor is the authority.
+g3_mut g3.m12-ga2-pin 'ga' "grep -E '^\\s*vector_sha256\\s*=' \"\$SCRIPT_DIR/vector.tf\"" "grep -E '^\\s*vector_sha256.*=' \"\$SCRIPT_DIR/vector.tf\""
+# #9082: the recipe awk program drifted on one side — a missing END guard on the
+# HEAD-side copy must red ga2-recipe-awk.
+g3_mut g3.m13-ga2-recipe 'ga' '    END { if (n != closed) print "unterminated"; else print n + 0 }
+  '"'"' "$GA_WF" > "$GA2_TMP/head-recipe.n"' '    END { print n + 0 }
+  '"'"' "$GA_WF" > "$GA2_TMP/head-recipe.n"'
 # W1-W6: mutants that CONTAIN the right words, which a substring check let live.
 g3_mut g3.w1-decide-or-true 'mwf' 'run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run' 'run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run || true'
 g3_mut g3.w2-tag-if-widened 'mwf' $'        id: tag\n        if: steps.decide.outputs.result == \'would-mint\'' $'        id: tag\n        if: steps.decide.outputs.result == \'would-mint\' || always()'
