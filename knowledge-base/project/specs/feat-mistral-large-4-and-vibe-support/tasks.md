@@ -4,16 +4,16 @@ Derived from `knowledge-base/project/plans/2026-10-06-feat-mistral-large-4-vibe-
 
 ## Phase B-0 — standalone live-defect fixes (first code PR)
 
-- [ ] 0.5 `apps/web-platform/app/api/keys/route.ts` — replace provider ternary at :32 with explicit allowlist + 400
-- [ ] 0.6 `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts:709` — `MODEL_PRICING ?? {zeros}` → fail-closed (latent arm; synthetic-model test)
-- [ ] 0.7 Tests: unrecognized provider → 400; absent pricing → error not $0
+- [x] 0.5 `apps/web-platform/app/api/keys/route.ts` — replace provider ternary at :32 with explicit allowlist + 400 — **shipped #9684**
+- [x] 0.6 `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts:709` — `MODEL_PRICING ?? {zeros}` → fail-closed (latent arm; synthetic-model test) — **shipped #9684** (panel widened: `persistTurnCost`, `?? 0` producers, `credential_type` ternary)
+- [x] 0.7 Tests: unrecognized provider → 400; absent pricing → error not $0 — **shipped #9684** (`api-keys-provider-allowlist.test.ts`, `cost-writer-unpriced.test.ts`)
 
 ## Phase A0 — model dogfood on existing vehicles
 
-- [ ] 1.1 Probe `https://api.mistral.ai/v1/responses` (Codex 0.156.1 requires `wire_api = "responses"`); record result on #9648
-- [ ] 1.2 Mistral Studio account + API key — Playwright attempt first (`automation-status: UNVERIFIED`); key lands in Doppler `soleur/dev` via operator terminal
-- [ ] 1.3 Runbook recipe: `~/.codex/config.toml` `[model_providers.mistral]` on the dogfood host (NOT project `.codex/config.toml` — Codex ignores it there); fallback = #1215 Ollama+claude-code-proxy pattern
-- [ ] 1.4 `scripts/dogfood/mistral-measure.sh` (or `--parse-only` shape adapter) + eval table on #9648 (row schema per plan :60; pass = exit code AND artifact-presence)
+- [x] 1.1 Probe `https://api.mistral.ai/v1/responses` (Codex 0.156.1 requires `wire_api = "responses"`); record result on #9648 — **done 2026-10-07**: endpoint exists (401 vs 404 disambiguation) + codex exec live-fire reaches it and fails only at auth
+- [ ] 1.2 Mistral Studio account + API key — **operator gate (credential entry)**, attempt evidence in `runbooks/mistral-api-dogfood.md`; key lands in Doppler `soleur/dev` via operator terminal
+- [x] 1.3 Runbook recipe: `~/.codex/config.toml` `[model_providers.mistral]` on the dogfood host (NOT project `.codex/config.toml` — Codex ignores it there); fallback = #1215 Ollama+claude-code-proxy pattern — **done**: `knowledge-base/engineering/operations/runbooks/mistral-api-dogfood.md`
+- [ ] 1.4 `scripts/dogfood/mistral-measure.sh` (or `--parse-only` shape adapter) + eval table on #9648 (row schema per plan :60; pass = exit code AND artifact-presence) — **script + suite shipped this PR**; eval table rows pending the key (1.2)
 
 ## Phase A — Vibe harness adapter (Agent Plugins 1.0)
 
