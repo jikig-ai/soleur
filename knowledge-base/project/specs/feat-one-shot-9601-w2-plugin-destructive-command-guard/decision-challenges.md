@@ -39,3 +39,36 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-g
 
 - CPO round 1 required the W2 follow-ups to be a filed tracking issue before merge (C3). The repository's filing gate refuses a roll-up issue without a measured `Fix-Size` (or the `meta/machinery` label, which says "not a user-facing surface" and hides the issue from the operator digest), and a roll-up has no measurable size.
 - Operator decision: record the follow-ups in ADR-274 (section "Open follow-ups") and the plan's Non-Goals, per `wg-when-deferring-a-capability-create-a`; do not file. This deviates from the literal wording of C3 and is stated in the PR body. The decision set D1-D9 is unchanged.
+
+## T8 — Prefilter deletion proposed by the simplicity seat, deferred (Taste)
+
+- Panel (post-review, simplicity seat): delete the zero-spawn prefilter. Measured by that seat: about 25 ms saved on the roughly 8% of calls that skip, about 2 ms mean per Bash call, against two defects the review found in it (an unterminated `<(` skipped yet asked by the lexer path, and a first-key read that a decoy `"command"` field could steer).
+- Decision: keep and fix. The prefilter is D7 in the CPO-signed set; deleting it reopens D7. Both defects are fixed (exactly one `"command"` text; `<(`, `>(`, `<<` and case variants are boundaries) and the invariant is restated in ADR-274 D7 as "no skipped command can be a D1 command".
+- Re-open when: the CPO next reviews the decision set, or a measurement shows the saving is lower than the maintenance cost. Recorded under ADR-274 follow-ups.
+
+## T9 — Wrappers beyond D1 not added, documented as NOT DECIDED (Taste)
+
+- Panel: several seats named command forms that run a destructive command through a word outside D1's wrapper table.
+- Decision: not added. Each is listed as NOT DECIDED in the hook header and under ADR-274 Residuals: `exec`, `builtin`, `setsid`, `ionice`, `stdbuf`, `flock`, `nsenter`, `chroot`, `su -c`, `sudo -s '...'`, `coproc`; trap strings, function bodies and aliases; stdin-fed shells (heredoc, here-string, pipe into `bash` or `sh`) and `source <(...)`; other interpreters (python `shutil.rmtree`); `find -exec rm`, `rsync --delete`; brace expansion of targets; a runner name in another case (`BASH -c`). Reason: each widens the signed set and the false-positive budget; the guard is a seatbelt, not a boundary.
+- One of them is a plausible agent habit: a heredoc, pipe or here-string fed to a shell. Left undecided; the follow-up (treat the body as code when the command is a shell without `-c`) is recorded.
+
+## T10 — Unquoted `${CLAUDE_PLUGIN_ROOT}` command paths in `hooks.json` left as the plugin-wide convention (Taste)
+
+- Finding: the new hook is registered as `${CLAUDE_PLUGIN_ROOT}/hooks/destructive-command-guard.sh` without quotes, so a plugin root containing a space breaks it.
+- Decision: unchanged. `stop-hook.sh`, `welcome-hook.sh`, `unkept-promise-hook.sh`, `browser-snapshot-credential-guard.sh` and `operator-stage-approval.sh` are registered the same way (checked in `plugins/soleur/hooks/hooks.json`); quoting one entry fixes nothing for the plugin. Recorded as a plugin-wide follow-up in ADR-274.
+
+## T11 — Server-side agents load the plugin outside the hosted env helper; guard left active, cron env unchanged (Taste)
+
+- Finding: twelve functions (eleven `cron-*` and `event-ship-merge`) pass `--plugin-dir plugins/soleur` and build their env with their own `buildSpawnEnv`, so `AGENT_ENV_OVERRIDES` never reaches them; the census and the earlier comments only covered the hosted Agent SDK sessions.
+- Decision: no change to any cron env. The guard is active there, an `ask` under `claude -p` blocks, and no D1 command is issued by any of them today (grep of their sources). This is a classification gap, not a demonstrated false positive. Documented in ADR-274 `## Server-side scheduled agents`, the plugin README, the C4 `api` description and the `agent-env.ts` comments. Follow-up: decide per function whether to set the kill switch.
+
+## T12 — The hosted "review gate" claim was false for the autonomous default and was corrected (not a Taste call)
+
+- The plan (D8), the README and the ADR-093 addendum said hosted sessions rely on the sandbox and the review gate. `workspaces.bash_autonomous` defaults to `true` for new workspaces (migration 099) and, after a one-time owner acknowledgement, `permission-callback.ts` auto-approves every Bash command that survived `BLOCKED_BASH_PATTERNS`, which does not match `terraform destroy`, `rm -rf` or `git push -f`. Corrected in the README (and its pinned sentence in the hook suite), ADR-274 D8 and C2, a dated append-only note on ADR-093, the `agent-env.ts` comment and the C4 descriptions. The plan's Decision Set text still carries the old phrase by design (its hash is recorded in the PR body).
+- Not changed: the decision to disable the guard in hosted sessions. The hosted `ask` path is unmeasured; enabling it there is a follow-up. Whether hosted founders should be protected against these commands in autonomous mode is a product question for the operator.
+
+## T13 — CPO two-round cap spent; post-review hardening disclosed, not re-signed (operator decision needed)
+
+- The CPO signed D1-D10 in two rounds (the cap is in the plan's CPO sign-off step, tasks 0.3.2). The review then changed the shipped hook beyond that text (ADR-274 `## Post-review hardening (2026-10-07)`). The plan's Decision Set text was not edited.
+- User-visible changes, in case the operator wants a re-sign-off: four new ask classes (`bound`, `unparsed-wrapper`, `wrapper-depth`, `lexer-empty`), so some commands that used to run silently now ask; case-insensitive command names (`RM`, `Terraform`); glob-only targets (`/**`, `~/**`, `/*/*`) decided as the contents of `/` or home; credential masking in the quoted command; and the reason wording ("This command was NOT run.", a fix-and-resend tail for parse-class asks). Everything else is internal (bound handling, working-directory bookkeeping, prefilter boundaries).
+- Not changed: D1's families, D3's deny set, D5, D6's posture, D8/D9's scope.

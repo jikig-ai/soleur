@@ -452,3 +452,13 @@ PR body uses `Ref #9601`, never `Closes` (the epic stays open for W3).
 ## Non-Goals / Deferrals
 
 Out of scope for this PR and tracked on the epic or its children, not closed here: the image CVE scan (W3, the next PR), the egress credential broker (#9543), per-session containers and Landlock ADRs (#9602), the security/control page (#9603), the filing-gate vocabulary chore (#9604), the in-image canary re-measure and flipping ADR-272 to accepted (the canary fixture defect is tracked at #9614), the pipefail grep sweep, and the operator's decision on holding draft PR #9529. The Sentry token with `event:read` for the `feature:agent-sandbox` check is an operator-side item; nothing here depends on it and it is reported as unverified. W2-adjacent follow-ups (one issue, created at Phase 6.4): hosted enablement, Devin `exec` coverage and `ask` measurement, the D2 candidates (SQL rule, settings-env tripwire), a canonical plugin-side lexer, a session-start posture message, a per-rule allow for headless CI.
+
+## Addendum — 2026-10-07 (post-review)
+
+Appended after the panel review of PR #9653; nothing above this heading was edited, and the CPO-signed Decision Set (D1-D10) is unchanged.
+
+- The shipped hook goes beyond or differs from the Decision Set text in the places listed under ADR-274 `## Post-review hardening (2026-10-07)`, which owns the detail: glob-only targets and `~+`, the working-directory check against both cwds, case-insensitive command names, `time` and option clusters, and four new ask classes (`unparsed-wrapper`, `wrapper-depth`, `bound`, `lexer-empty`).
+- Reasons open "This command was NOT run."; parse-class asks end with a fix-and-resend tail; credentials in the quoted command are masked before the 200-character cut; the prefilter is stricter (exactly one `"command"` text, `<(`, `>(`, `<<` and case variants as boundaries).
+- Three claims in this plan were false or too broad and are corrected in ADR-274 and the plugin README, not here: the hosted "review gate" (D8 and the C2 sentence), `prod-write-defer-gate.sh` deferring "the destroy" (D9), and the transcript as the record of every reason (D10).
+- Server-side scheduled agents that load the plugin outside the hosted env helper keep the guard active (ADR-274 `## Server-side scheduled agents`).
+- The CPO's two-round cap was spent; the hardening has not been re-signed. The operator may take the user-visible changes back to the CPO (decision-challenges T13).
