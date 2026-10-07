@@ -705,8 +705,8 @@ of the seven edited paths; recorded at plan time and re-run at ship.)
 
 ## Files to Create
 
-- `knowledge-base/project/specs/feat-one-shot-a3-credential-hardening-egress-probe-nic-guard/tasks.md`
-- `knowledge-base/project/specs/feat-one-shot-a3-credential-hardening-egress-probe-nic-guard/decision-challenges.md`
+- `knowledge-base/project/specs/archive/20261007-092219-feat-one-shot-a3-credential-hardening-egress-probe-nic-guard/tasks.md`
+- `knowledge-base/project/specs/archive/20261007-092219-feat-one-shot-a3-credential-hardening-egress-probe-nic-guard/decision-challenges.md`
 - Three learnings under `knowledge-base/project/learnings/` (topics fixed in `tasks.md` Phase 4; filenames chosen at write time)
 
 ## Risks and Sharp Edges
