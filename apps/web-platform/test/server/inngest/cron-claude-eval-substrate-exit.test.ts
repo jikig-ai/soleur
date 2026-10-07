@@ -444,6 +444,8 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
         { timeout: 15_000, interval: 25 },
       );
     } catch (e) {
+      // vi.waitFor rethrows the callback's last error on timeout; anything else is a probe bug.
+      if (!(e instanceof Error) || e.message !== "grandchild still alive") throw e;
       expect.fail(
         `the grandchild survived the child's exit: the group kill did not reach it ` +
           `(pid ${pid}; last probe: ${lastProbe}; waited ${Date.now() - t0}ms; ` +
@@ -466,8 +468,8 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     const SLEEP_BIN = ["/bin/sleep", "/usr/bin/sleep"].find((c) => existsSync(c));
     // Only a standalone sleep binary can be copied under another name (a multicall binary
     // such as busybox would reject the unknown applet name).
-    const canCopySleep =
-      SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && existsSync("/proc/self/stat");
+    const hasProc = existsSync("/proc/self/stat");
+    const canCopySleep = SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && hasProc;
     const spawnReal = async (...args: Parameters<typeof import("node:child_process").spawn>) => {
       const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const child = actual.spawn(...args);
@@ -516,7 +518,7 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
 
     // The /proc half of the probe: a killed grandchild whose parent never waits stays a zombie, for
     // which kill(0) still succeeds (containers without a reaping init look like this).
-    it.skipIf(!canCopySleep)(
+    it.skipIf(!hasProc)(
       "an unreaped zombie reads dead while kill(0) still succeeds",
       async () => {
         const parent = await spawnReal("sh", ["-c", "sleep 0 & echo $!; exec sleep 120"], {
