@@ -240,13 +240,13 @@ From `apps/web-platform` in the worktree. Load: `2 x nproc` `yes >/dev/null` loo
 
 ### Pre-merge (PR)
 
-- [ ] AC1: the row calls `vi.waitFor(..., { timeout: 15_000, ... })` and no longer contains the `Date.now() + 3_000` loop; its per-test timeout is >= 40_000 (`git grep -n "3_000" apps/web-platform/test/server/inngest/cron-claude-eval-substrate-exit.test.ts` shows no deadline loop).
-- [ ] AC2: `isAlive` treats `ENOENT`/`ESRCH` stat-read failures as dead when `/proc/self/stat` is readable, `EPERM` from `kill(pid,0)` as alive, and parses the state after the last `)` (verified by reading the diff; there is deliberately no helper unit test, see R1/R11).
-- [ ] AC3 (supporting evidence): a 50-iteration run of the row under >= 2x `nproc` busy loops passes; the PR body records count, load average and wall time.
-- [ ] AC4: the assertion message includes pid, last probe state, waited ms and loadavg (verified from the mutation run's captured output pasted in the PR body).
-- [ ] AC5: with `process.kill(-child.pid, "SIGKILL")` removed from the product `exit` handler the row is RED on the assertion (not the vitest timeout); restored it is GREEN; `git diff origin/main -- apps/web-platform/server` is empty at commit time.
-- [ ] AC6: `cd apps/web-platform && npx tsc --noEmit` and `npx vitest run test/server/inngest/cron-claude-eval-substrate-exit.test.ts` both pass.
-- [ ] AC7: `git diff --stat origin/main` lists exactly the one planned test file plus plan/spec artifacts (no vitest config, setup file or other test touched).
+- [x] AC1: the row calls `vi.waitFor(..., { timeout: 15_000, ... })` and no longer contains the `Date.now() + 3_000` loop; its per-test timeout is >= 40_000 (`git grep -n "3_000" apps/web-platform/test/server/inngest/cron-claude-eval-substrate-exit.test.ts` shows no deadline loop).
+- [x] AC2: `isAlive` treats `ENOENT`/`ESRCH` stat-read failures as dead when `/proc/self/stat` is readable, `EPERM` from `kill(pid,0)` as alive, and parses the state after the last `)` (verified by reading the diff; there is deliberately no helper unit test, see R1/R11).
+- [x] AC3 (supporting evidence): a 50-iteration run of the row under >= 2x `nproc` busy loops passes; the PR body records count, load average and wall time.
+- [x] AC4: the assertion message includes pid, last probe state, waited ms and loadavg (verified from the mutation run's captured output pasted in the PR body).
+- [x] AC5: with `process.kill(-child.pid, "SIGKILL")` removed from the product `exit` handler the row is RED on the assertion (not the vitest timeout); restored it is GREEN; `git diff origin/main -- apps/web-platform/server` is empty at commit time.
+- [x] AC6: `cd apps/web-platform && npx tsc --noEmit` and `npx vitest run test/server/inngest/cron-claude-eval-substrate-exit.test.ts` both pass.
+- [x] AC7: `git diff --stat origin/main` lists exactly the one planned test file plus plan/spec artifacts (no vitest config, setup file or other test touched).
 
 ### Post-merge (operator)
 
