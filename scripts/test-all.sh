@@ -4802,6 +4802,10 @@ if want_scripts; then
   # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
   # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
   run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
+  # #9677: the opt-in Docker builder-cache prune, the effective-space report (df delta + snapper
+  # note) and the cleanup-merged wrapper that places both after the cleanup lock is released.
+  # docker/findmnt/df/snapper are PATH shims; the argv the SUT sends is asserted.
+  run_suite "tests/scripts/cleanup-merged-space" bash tests/scripts/test-cleanup-merged-space.sh
   # Agent sandbox allocator (soleur-sandbox.sh new|rm): disk-only base, owner marker,
   # refusals on unmarked/foreign paths are asserted in both directions.
   run_suite "tests/scripts/soleur-sandbox" bash tests/scripts/test-soleur-sandbox.sh

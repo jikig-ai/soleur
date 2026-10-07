@@ -154,6 +154,24 @@ describe("extractGitLockMarkers", () => {
     }
   });
 
+  // #9677 — cleanup-merged's effective-space line and the opt-in Docker prune. Reports, never pages,
+  // and a lookalike name must not be mirrored (the alternation is word-bounded).
+  test("mirrors SOLEUR_CLEANUP_SPACE and SOLEUR_DOCKER_PRUNE without paging", () => {
+    const lines = [
+      "SOLEUR_CLEANUP_SPACE logical_bytes=4096 df_delta_bytes=512000 fstype=btrfs docker_prune=off snapshots=snapper",
+      "SOLEUR_CLEANUP_SPACE note: freed space can stay pinned by snapper snapshots until they rotate out; Soleur never deletes snapshots.",
+      'SOLEUR_DOCKER_PRUNE mode=apply builder="Total:  1.2GB" images="Total reclaimed space: 300MB"',
+      "SOLEUR_DOCKER_PRUNE skipped reason=remote-daemon",
+      "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=1",
+    ];
+    for (const line of lines) {
+      expect(extractGitLockMarkers(line).length, `${line} must be mirrored`).toBe(1);
+      expect(extractGitLockMarkers(line)[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+    expect(extractGitLockMarkers("SOLEUR_CLEANUP_SPACE_EXTRA x=1").length).toBe(0);
+    expect(extractGitLockMarkers("SOLEUR_DOCKER_PRUNED x=1").length).toBe(0);
+  });
+
   // #7394 — the bare-config polarity markers. Classification is by `branch=`, not by
   // marker name, because one name covers both a recoverable and an unrecoverable outcome.
   test("mirrors both SOLEUR_GIT_BARE_POISON branches without paging (the run proceeded)", () => {
