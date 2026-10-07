@@ -12,7 +12,7 @@
 //         the stdout readline `close` before resolving.
 import { EventEmitter } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -331,6 +331,7 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
 
   beforeEach(() => {
     spawnMock.mockReset();
+    lastProbe = "not probed";
   });
   afterEach(() => {
     // Reaper: never leave the fixture's sleeper behind, whatever the assertion said.
@@ -347,18 +348,35 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     else process.env.CLAUDE_BIN = ORIGINAL_CLAUDE_BIN;
   });
 
+  // The last observed state, quoted in the failure message so a recurrence is classifiable
+  // without reproducing it (a state still `S` after the full wait is the product, not a stall).
+  let lastProbe = "not probed";
+  const errCode = (e: unknown) => (e as NodeJS.ErrnoException).code;
+
   const isAlive = (pid: number): boolean => {
     try {
       process.kill(pid, 0);
-    } catch {
-      return false;
+    } catch (e) {
+      // EPERM = exists but not ours = alive; only ESRCH means gone.
+      lastProbe = `kill(0) ${errCode(e)}`;
+      return errCode(e) === "EPERM";
     }
+    let stat: string;
     try {
-      // A zombie (killed, not yet reaped by init) is dead for this purpose.
-      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
-    } catch {
-      return true;
+      stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    } catch (e) {
+      // The pid can vanish between kill(0) and this read (ENOENT, or ESRCH once open succeeded):
+      // dead, provided /proc itself is readable. Any other failure (EACCES under hidepid, no
+      // /proc off Linux) leaves kill(0) as the only signal: alive.
+      const vanished = (errCode(e) === "ENOENT" || errCode(e) === "ESRCH") && existsSync("/proc/self/stat");
+      lastProbe = `stat read ${errCode(e)}`;
+      return !vanished;
     }
+    // comm may hold spaces and parens, so the state char is the one after the LAST ")".
+    const state = stat.slice(stat.lastIndexOf(")") + 1).trim().charAt(0);
+    lastProbe = `state ${state || "?"}`;
+    // A zombie (killed, not yet reaped by init) is dead for this purpose.
+    return state !== "Z" && state !== "X";
   };
 
   it("kills a SIGTERM-ignoring grandchild that shares the child's group once the child has exited", async () => {
@@ -400,9 +418,27 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     expect(existsSync(pidFile), "the fixture must have started its sleeper").toBe(true);
     sleeperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isInteger(sleeperPid) && sleeperPid > 1).toBe(true);
-    // The kill is delivered before the spawn resolves; allow a moment for the kernel to reap.
-    const deadline = Date.now() + 3_000;
-    while (isAlive(sleeperPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
-    expect(isAlive(sleeperPid), "the grandchild survived the child's exit: the group kill did not reach it").toBe(false);
-  }, 20_000);
+    // The SIGKILL is sent before the spawn resolves but lands asynchronously (measured: the first
+    // post-exit probe still saw the sleeper alive in 391 of 400 runs under load), so poll. The
+    // 15s bound is deliberately above the repo's 10s contended-CI waitFor floor (#5796).
+    const t0 = Date.now();
+    let gone = true;
+    try {
+      await vi.waitFor(
+        () => {
+          if (isAlive(sleeperPid as number)) throw new Error(lastProbe);
+        },
+        { timeout: 15_000, interval: 25 },
+      );
+    } catch {
+      gone = false;
+    }
+    expect(
+      gone,
+      `the grandchild survived the child's exit: the group kill did not reach it ` +
+        `(pid ${sleeperPid}; last probe: ${lastProbe}; waited ${Date.now() - t0}ms; ` +
+        `loadavg ${loadavg().map((n) => n.toFixed(1)).join("/")}). ` +
+        `If this recurs, paste this line on #9670 rather than opening a new issue.`,
+    ).toBe(true);
+  }, 40_000);
 });
