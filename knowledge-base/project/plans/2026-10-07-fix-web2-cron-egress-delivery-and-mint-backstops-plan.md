@@ -157,8 +157,11 @@ before "Record step outcomes"):
 
 - **No production writes.** The diff changes IaC definitions, workflow YAML and tests only —
   no `terraform apply`, no `workflow_dispatch` on apply/deploy workflows, no prod host
-  writes. Delivery to web-2 happens when the operator-enabled `apply-deploy-pipeline-fix.yml`
+  writes.
+<!-- lint-infra-ignore start -->
+  Delivery to web-2 happens when the operator-enabled `apply-deploy-pipeline-fix.yml`
   next runs (it was `active` as of 2026-10-04); this PR is the mechanism, not the event.
+<!-- lint-infra-ignore end -->
 - **Credential boundary preserved.** The three files carry no credential material —
   `deploy_pipeline_fix_web2`'s boundary (no `webhook_doppler_token_env`/`SOLEUR_DOPPLER_TOKEN`)
   is untouched; `web-host-provisioner-parity.test.sh` §1 already pins that.
@@ -471,9 +474,12 @@ Deepen pass (2026-10-07, inline — this harness has no Task-fan-out; each gate 
 evaluated mechanically against the plan and the code it cites):
 
 - **Phase 4.5 (network-outage, conditional):** evaluated, not fired. The plan drives
-  no `terraform apply` — delivery rides the operator-enabled
+  no `terraform apply` —
+<!-- lint-infra-ignore start -->
+  delivery rides the operator-enabled
   `apply-deploy-pipeline-fix.yml`, whose SSH path is the pinned CI key + bastion
   forward, not an operator-IP-dependent dial.
+<!-- lint-infra-ignore end -->
 - **Phase 4.55 (downtime & cutover, conditional):** evaluated, not fired. No
   reboot/replace (only `terraform_data` provisioner edits), no locking DDL, no
   serving-surface restart — the single oneshot service re-run happens on a

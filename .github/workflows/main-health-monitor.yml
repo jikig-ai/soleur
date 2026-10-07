@@ -966,8 +966,14 @@ jobs:
         # must not retire a tracker the mint arm filed. `!= 'red'` (not
         # `== 'green'`) is deliberate fail-open: an `unknown` verdict is an API
         # blip, not a measured red, and the queue-health convention does not let
-        # an unmeasured input block the green path.
-        if: ${{ !inputs.dry_run && steps.tests.outcome == 'success' && steps.infra.outcome == 'success' && steps.mintwatch.outputs.verdict != 'red' }}
+        # an unmeasured input block the green path. `!cancelled() &&` is the
+        # alarm-issue-filing-guard remedy: an `if:` gated on `steps.*.outputs.`
+        # with no status-check function inherits implicit success() and skips —
+        # it never even evaluates — whenever ANY earlier step failed. It is
+        # `!cancelled()` and NOT `always()` for the same reason the filer uses
+        # it: `always()` would close the tracker regardless of the suite
+        # verdict (the (3b) check pins that). The conjuncts still gate the body.
+        if: ${{ !cancelled() && !inputs.dry_run && steps.tests.outcome == 'success' && steps.infra.outcome == 'success' && steps.mintwatch.outputs.verdict != 'red' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
