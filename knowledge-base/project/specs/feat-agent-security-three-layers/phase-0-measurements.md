@@ -174,3 +174,57 @@ The first two rows survived the earlier self-run battery, which mutated the conf
 - **e. Do this repo's own sessions load the plugin hooks?** `.claude/settings.json` has no `enabledPlugins` and no `extraKnownMarketplaces`; its hooks are the `.claude/hooks/*` registrations. Contributors load the plugin explicitly (`CONTRIBUTING.md` "Getting Started": `claude --plugin-dir ./plugins/soleur`, and per-worktree `claude --plugin-dir "$PWD/plugins/soleur"`), and the maintainer's user-level `~/.claude/settings.json` sets `enabledPlugins: {"soleur@soleur": true}`. So YES: a contributor session that loads the plugin runs BOTH the `.claude/settings.json` hooks and `plugins/soleur/hooks/hooks.json`. Consequence for the double-prompt note: on the overlap the decision precedence is deny > defer > ask > allow (recorded in the W2 plan's Research Reconciliation table from ADR-264; not re-measured here), so (1) `rm -rf` of `/`, `$HOME`, repo or worktree roots and ancestors: `guardrails.sh` `block-recursive-delete` already DENIES, the plugin `deny` agrees, no prompt; (2) `terraform|tofu apply -destroy` and `git push [-f|--force|--force-with-lease] origin main|master|HEAD:main|HEAD:master`: `.claude/hooks/prod-write-defer-gate.sh` already DEFERS, which outranks the plugin's `ask`, so the plugin hook is shadowed, not doubled; (3) plain `terraform|tofu destroy`, a force-push to a default branch spelled any other way (`+main`, `--delete`, `-C dir`, a second remote), and the ancestor-of-cwd `rm`: no repo-local hook covers them, so the plugin hook is the SOLE `ask`. There is therefore no double prompt; the note should say the plugin hook adds asks the repo hooks do not have. **Correction to D9's reasoning:** "this repo's own sessions are already covered by `guardrails.sh`" is true only for the recursive-delete deny set; destroy and the non-literal force-push shapes are covered in this repo only when the plugin is loaded.
 
 Probe artifacts (the stub hook, the scripted stand-in, the throwaway settings, the config dir, the parity scratch tree) live under `/var/tmp/w2-probe.*` and `/var/tmp/w2-parity.*` and are disposable; none is committed.
+
+## 1.3 — W2 mutation rows 9-20 (run once at work time)
+
+Method. Rows 9-20 of the Guard 1 mutation matrix in `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md` (rows M1-M8 run in CI by `plugins/soleur/test/destructive-command-guard-mutation.test.sh`). Each row was split into one or more mutants (43 in all), each a content-anchored edit of a COPY of `plugins/soleur/hooks` and `plugins/soleur/test/lib` in a temp dir (never the working tree), proven to have landed (anchor found the stated number of times, the edited file differs from the pristine copy, no other file differs, the mutant still parses with `bash -n` or `perl -c`). The FULL hook suite (`GUARD_REPO_ROOT` pointed at the copy, no `DCG_ROWS`) ran against each; the unedited control ran first and was 479/479 green (485/485 after the rows added below). KILLED = exit 1 with at least one `[FAIL]` row. The harness was a throwaway script, not committed; these rows are not run in CI.
+
+Result: 43 mutants. First run: 35 killed, 6 survived, 2 errored (one malformed edit, one hang). After inspecting each: 5 survivors were fixture-inadequate (six rows added to the hook suite in commit 1542bef499, floor 479 -> 485, and each of those mutants was re-run and is now killed), 1 survivor is an equivalent mutant, the malformed edit was repaired and re-run (killed), and the hang is a kill by timeout. No survivor revealed a gap in the hook, so the hook was not changed.
+
+| Row | Mutant | Result | First `[FAIL]` row (the designed detector) |
+|---|---|---|---|
+| 9 | stop unwrapping `bash -c` and `eval` (lexer) | killed (16 rows) | `bash -c 'rm -rf ~'` want deny, got none |
+| 10 | also scan the raw decoded command text (matches inside quotes and heredoc bodies) | killed (100 rows) | `rm -rf ~` want deny, got ask; the must-PASS quoted-text and heredoc rows |
+| 11 | a mid-word `#` starts a comment | killed (2 rows, both lexer-contract) | `lexer: a mid-word hash is not a comment` |
+| 12 | `&>`, `>\|`, `>&`, `<&` no longer read as redirects | killed (1 row, lexer-contract only) | `lexer: a redirect is not a separator (two commands, not four)`. No hook-level row can see this class: over-splitting never turns a destructive command into an allow, so the lexer-contract row is the only detector, by design |
+| 13a | `rm`: capital `-R` not recursive | killed | `rm -Rf $HOME` |
+| 13b | `rm`: `--recursive` not recognised | killed | `rm --recursive --force ~` |
+| 13c | `rm`: flags after a target ignored | killed | `rm ~ -rf (flags after the target)` |
+| 13d | `rm`: command word not reduced to its basename | killed (6 rows) | `/bin/rm -rf ~` |
+| 13e | `rm`: `--` end-of-options no longer honoured | SURVIVED, fixture-inadequate; killed after the fix | no row put a recursive-looking word after `--`; added `rm -- -rf ~` (none) |
+| 14a | resolver follows a bare symlink | killed | `rm -rf . (rm refuses it)` want none got ask (and the bare-symlink row) |
+| 14b | `$HOME` and `${HOME}` not resolved | killed (9 rows) | `rm -Rf $HOME` |
+| 14c | `~/` forms not expanded | killed | `rm -rf ~/` |
+| 14d | `/*` glob suffix not read as contents | killed (14 rows) | `rm -rf ~/* (contents of home)` |
+| 14e | relative target resolved against the hook's own cwd | killed by TIMEOUT (both runs, rc 124 after 170 s) | a relative path with no `/` makes the longest-existing-prefix walk in `resolve_phys` loop forever. Unreachable in the shipped hook (every target is made absolute against the simulated cwd before the call, and the hook has a 10 s harness timeout), so recorded as a kill by hang, not a gap |
+| 14f | nonexistent-parent walk cut (`RP=""; return 1`) | SURVIVED, fixture-inadequate; killed after the fix | no row reached an ancestor of home through a nonexistent directory with `..`; added the literal row `rm -rf <nonexistent home>/nonexistent-dir/../..` (deny) |
+| 15 | `cd`, `pushd`, `popd` not modelled | killed (14 rows) | `cd ~ && rm -rf ./*` want deny got none |
+| 16a | remote HEAD never read (only `main` and `master` default) | killed (18 rows) | `boundary: git pu\sh -f origin trunk` |
+| 16b | only `origin` consulted | killed | `the second remote's own HEAD` |
+| 16c | `git -C <dir>` not parsed | killed | `git -C dir push -f origin trunk` |
+| 16d | no-refspec current-branch default not checked | killed (6 rows) | `git -C dir push -f with the current branch default` |
+| 17a | `--force-with-lease` and `--force-if-includes` not force | killed (4 rows) | `git push --force-with-lease origin trunk` |
+| 17b | `-f` inside a short cluster (`-fu`) not force | killed (20 rows) | `boundary: git pu\sh -f origin trunk` |
+| 17c | `+refspec` not a force | killed (4 rows) | `git push origin +trunk` |
+| 17d | `HEAD:+main` destination-side `+` not a force | killed | `git push origin HEAD:+trunk` |
+| 17e | `:ref` not a delete | killed | `git push origin :main` |
+| 17f | `refs/heads/` not stripped | killed | `git push --force origin refs/heads/trunk` |
+| 17g | `-o <value>` before the remote not consumed | killed | `git push -o x before the remote` |
+| 17h | `--force --all` and `--mirror --force` not asked | killed (3 rows) | `git push --force --all origin` |
+| 17i | `--delete` not a delete | killed | `git push --delete origin trunk` |
+| 17j | `src:dst` reads the source as the destination | killed (7 rows) | `git push origin feature:trunk -f` |
+| 18a | `sudo` not unwrapped | killed (8 rows) | `sudo -u x rm -rf ~` |
+| 18b | rule table not retried after `--` | killed (6 rows) | `doppler run -- rm -rf ~` |
+| 18c | `command -v` unwrapped like `command` | SURVIVED, fixture-inadequate; killed after the fix | the only `command -v` rows (`command -v rm`, `command -v terraform`) carry no recursive flag or `destroy`, so unwrapping them changes nothing; added `command -v rm -rf ~` (none: a look-up only, `rm` never runs) |
+| 18d | `timeout` duration argument not skipped | killed (4 rows) | `timeout 5 rm -rf ~` |
+| 18e | `sudo -u <user>` value not skipped | killed after repair (the first edit was malformed: a bare `:` where a case pattern belongs) | `sudo -u x rm -rf ~` |
+| 18f | `env`: an assignment (`FOO=1`) not skipped in the wrapper | SURVIVED, EQUIVALENT | the wrapped command is then `FOO=1 terraform destroy`, and `decide_argv` skips leading assignments itself at the next depth, so the wrapper's own assignment skip is redundant. No input distinguishes the two |
+| 18g | leading `VAR=value` prefix not skipped | killed | `an assignment prefix` |
+| 19a | 32-record cap raised as a lexer bound | SURVIVED, fixture-inadequate; killed after the fix | the old "more than 32 benign commands" row carried no keyword and no boundary character, so the zero-spawn prefilter skipped the lexer and the cap was never reached; added a quoted variant that reaches the lexer |
+| 19b | fixed 4096 lexer budget | killed | `a ~90 KB heredoc lexes within the bounds` |
+| 19c | a bound trip (exit 3) read as an allow | killed | `a substitution nested past the depth bound asks` |
+| 20a | kill switch also read from `$CLAUDE_PROJECT_DIR/.claude/settings.json` | killed | `a project settings file that sets the switch is not read by the hook` |
+| 20b | kill switch also read from `./.env` in the process cwd | SURVIVED, fixture-inadequate; killed after the fix (37 rows) | the old decoy `.env` sat in the envelope's `cwd`, not the hook process's working directory, so a hook reading `./.env` never found it; the decoy now sits in the process cwd, plus a `.claude/settings.json` there |
+| 20c | header no longer documents the settings-env route | killed | `the header documents that a settings-level env block can set the kill switch` |
+
+Reading of the survivors. "Fixture-inadequate" means the hook is correct and the mutant is a behaviour the old rows could not distinguish; the fix is a row, not a hook change. The one survivor labelled equivalent (18f) has no distinguishing input. The prefilter finding (19a) is worth keeping in mind for future rows: a benign must-PASS row with no keyword and no boundary character never reaches the lexer, so it proves the prefilter, not the lexer.
