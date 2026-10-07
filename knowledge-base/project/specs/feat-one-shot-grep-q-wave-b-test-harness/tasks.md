@@ -9,7 +9,7 @@ Scope of this task list: S1 only (draft PR #9720; 107 sites in 26 in-scope files
 - [ ] 0.1 Run `bash .claude/hooks/grep-q-pipe-guard.test.sh`; keep the `DEFERRED:` lines (expect ten test rows summing to 804 and six production rows summing to 23).
 - [ ] 0.2 Re-run the unbounded-producer screen over S1's files; record the command and the count (expect 0).
 - [ ] 0.3 Count code versus data lines in S1's files; confirm the hand queue (5 data including the `-m` site `pkill-self-match-guard:280`, 1 demo, 3 `-m` in `test-tag-filter.sh`, 98 mechanical).
-- [ ] 0.4 Intersect S1's files with the path filters of `web-platform-release.yml`, `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` (expect empty).
+- [ ] 0.4 Derive the merge-trigger table: walk every `.github/workflows/*.yml` `on.push|pull_request.paths` or `paths-ignore` (later patterns override, `!` subtracts) over S1's files (expect no match in any); paste the output in the PR body.
 - [ ] 0.5 Run `python3 scripts/lint-shell-trace-credential-refusal.py` on `scripts/test-weekly-analytics.sh`, `scripts/test-jaccard-duplicates.sh`, `scripts/lib/test-contention.sh` (expect rc 0).
 - [ ] 0.6 `uptime`; decide whether local `--affected` is skipped and prepare the PR-body sentence.
 
@@ -44,6 +44,7 @@ Scope of this task list: S1 only (draft PR #9720; 107 sites in 26 in-scope files
 - [ ] 5.1 Learning files, one per non-obvious finding (confirm each is non-obvious).
 - [ ] 5.2 `markdownlint-cli2` on the plan, this file and each learning.
 - [ ] 5.3 Ship notes for `soleur:ship`: first PR-body line says merging fires no release and no apply; `Ref #9217`; NOT-fixed list; tracker comment text with the command behind each number; labels `semver:patch`, `type/chore`, `domain/engineering`.
+- [ ] 5.3b Cut S2 only after S1 has merged; never re-sync a BEHIND branch mid-flight.
 - [ ] 5.4 After merge: `soleur:postmerge` (deploy-arm `find --wait`, then served, must read CONTAINS).
 
 ## Later slices (separate PRs, registered in the plan)

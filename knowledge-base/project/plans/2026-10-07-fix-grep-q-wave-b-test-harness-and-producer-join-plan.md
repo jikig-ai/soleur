@@ -16,6 +16,24 @@ brand_survival_threshold: aggregate pattern
 
 Spec lacks valid lane: no spec.md exists for this branch, so lane defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-07. **Gates run:** 4.6 user-brand impact (pass, `aggregate pattern`), 4.7 observability (pass; the new `discoverability_test` block was run under the 15 s cap, plain and inside a Check 10-shaped `bwrap`), 4.8 PAT-shaped variables (none), 4.9 UI wireframe (no UI surface), 4.10 encryption posture (no store or connection), 4.11 guard contract (`lint-guard-contract.py`: 2 entries, adequacy read done), 4.12 scope check (compliant), 4.4/4.45 verify-the-negative (10 claims re-grepped by a standard-tier agent: all confirm; `work/SKILL.md` is 361,940 bytes against its 362,000 ceiling, untouched).
+**Agents:** test-design-reviewer, architecture-strategist, a standard-tier verify-the-negative sweep, plus the plan-review panel (DHH, Kieran, code-simplicity, CTO devex) and one advisor consult before it.
+
+### Key improvements
+
+1. The merge-trigger matrix was wrong twice and is now derived: walking every `.github/workflows/*.yml` path filter over the 194 files shows S2 fires a plugin release, S5 fires five workflows, S6 six, and S1, S3 and S4 none.
+2. The codemod's population is the guard's own `git grep --column -o` span, with per-line dedupe and right-to-left edits, and `verify` now keys hand edits by exact base-side range.
+3. The partial prototype pair run (64 suites) found two suites whose converted copy failed because the converted line was the thing a row demonstrates; that evidence replaced the second-lexer idea with a demonstration-suspect rule.
+4. Every RED fixture needs a pristine control, a specific rc and a must-PASS twin; the heredoc blank-line hole, the missing refusal clusters and the over-wide hand-edit range each have a scenario or matrix row.
+5. Slices are cut one after another (adjacent table lines conflict, the queue ejects rather than rebases), and the series exit is "no glob row except data pins on wave A3 carriers", because A3 is unscheduled.
+
+### New considerations
+
+- Guard 1 row 1 had the wrong expected verdict (a file under a surviving glob reads "ceiling exceeded"); fixed to a file no glob owns.
+- Plan-review cut the file-exact rows, the Perl lexer, `census`, the committed 1,080-row table and Guard 3; seven items are persisted in `decision-challenges.md`.
+
 ## Overview
 
 Item B of the grep -q pipe-guard series (tracker #9217; also #7376, #6601, #7005). The derived sweep in
@@ -55,7 +73,7 @@ item aimed at a defect that has actually turned a CI check red.
 | "decide per-site whether a conversion is behavior-preserving and whether a row can observe it" | For the mechanical class the transform changes one flag letter and inserts one redirect; everything else is byte-identical, which `verify` proves, so a per-site row would be a test of the test. Rows are owed only where a line is hand-edited | Rows for hand-queue entries only (S1 has four); the codemod's own selftest carries the discrimination rows (drop `-x`, drop `-F`, drop `>/dev/null`, invert `!`) |
 | "umbrella #9482" | #9482 is the merge-queue/CodeQL decision-challenge; its relevant comment (2026-10-05) is the ejection analysis that credits #9525 | Comment there only when a slice changes an ejection-class fact (the join PR); otherwise tracker #9217 only |
 | "28 production pipes into stubbable verbs" (2026-10-05) | 33 candidate lines by the census regex in production roots (one is a lint fixture); **plus 103 test-side lines** piping `printf`/`echo` into a function defined in the same file, 24 files, which is the form behind the live red | Join has two arms: production-to-stub (guard-pinned) and test-side function consumers (measured, confirmed instances fixed, remainder reported) |
-| "Class W deploy files auto-apply on merge" | None of the 194 files is in `apply-deploy-pipeline-fix.yml`'s 31 path entries (empty intersection). But `apply-web-platform-infra.yml` fires on **any** push touching `apps/web-platform/infra/**` (including `*.test.sh`), and `web-platform-release.yml` fires on `apps/web-platform/**` and `plugins/soleur/**` minus `docs/` and `test/` | Per-slice trigger matrix below; S6 isolates the infra test files; S1 to S4 fire neither |
+| "Class W deploy files auto-apply on merge" | None of the 194 files is in `apply-deploy-pipeline-fix.yml`'s 31 path entries (empty intersection). But `apply-web-platform-infra.yml` fires on **any** push touching `apps/web-platform/infra/**` (including `*.test.sh`), and `web-platform-release.yml` fires on `apps/web-platform/**` and `plugins/soleur/**` minus `docs/` and `test/` | Per-slice trigger matrix below, derived over every path-filtered workflow (more fire than the two named here); S6 isolates the infra test files; S1, S3 and S4 fire nothing |
 | "check which touched-file lints in ci.yml fire" | `scripts/lint-shell-trace-credential-refusal.py --changed`, `scripts/lint-orphan-test-suites.sh` and the tempfile-ownership lints all sit in the advisory `lint-bot-statuses` job (`.github/workflows/ci.yml:160`, absent from `scripts/required-checks.txt`). The xtrace lint excludes `*.test.sh` and `tests/`; of the 194 files only `scripts/test-weekly-analytics.sh`, `scripts/test-jaccard-duplicates.sh`, `scripts/test-all.sh` and `scripts/lib/test-contention.sh` are in its scope, and all four exit 0 today | The ratchets that read test text (fixture-relative, fixture-dir-operand, fixture-cd-containment, shell-capture-exit baseline) are the real touched-file risk; see Prototype |
 | A research-agent claim: "lint-orphan-test-suites is required" and "`grep -c` always exits 0" | Both wrong. The lint is in the advisory job; `grep -c` exits 1 when the count is 0, which is exactly why it is exit-status-identical to `grep -q` | Recorded here so no AC leans on either |
 | "new anti-vacuity floors must meet guard-vacuity-floor.test.sh's shape and be in the LIVE PROMOTED_FILES" | `PROMOTED_FILES=` is assigned four times in `scripts/guard-vacuity-floor.test.sh` (lines 721, 734, 742, 801); bash keeps the last, so only the last is live. `.claude/hooks/` is in `DEFERRED_DIRS`, `scripts/` and `plugins/soleur/test/` in `COVERED_DIRS`. The grep-q guard declares no counter (no `X=$((X+1))`), so it is floor-less today | This plan adds **no** counter and no `-lt` floor to the guard (equality pins only, the existing `SWEEP_PROBE_CHECKS` style); AC runs `guard-vacuity-floor.test.sh`. If a floor becomes necessary, the file joins the last `PROMOTED_FILES` assignment in the same commit |
@@ -161,12 +179,20 @@ choice with the J0 numbers.
 
 ### What fires on a merge, per touched path
 
-| Workflow | Path filter | Fires for |
+Derived (deepen pass) by walking every `.github/workflows/*.yml` `on.push|pull_request.paths` / `paths-ignore` filter (GitHub glob semantics; later patterns override earlier ones, `!` patterns subtract) over the 194 files and bucketing the matches by slice. A workflow without a `paths:` filter (CI itself) runs for every slice and is not listed.
+
+| Workflow (event) | Slices it matches (files) | Consequence on merge |
 | --- | --- | --- |
-| `web-platform-release.yml` | push to main on `apps/web-platform/**`, `plugins/soleur/**`, minus `plugins/soleur/docs/**` and `plugins/soleur/test/**` (inner gate in `reusable-release.yml` uses the same pathspecs) | S5 and S6 (version bump from the `semver:*` label, image build, deploy) |
-| `apply-web-platform-infra.yml` | push to main on `apps/web-platform/infra/**` (less two sub-roots) | S6 only (a whole-root plan, so unrelated drift in that plan is applied at that merge) |
-| `apply-deploy-pipeline-fix.yml` | 31 exact host-resident files | none (intersection with the 194 files is empty) |
-| `lint-bot-statuses` (advisory) | every PR | all slices; the lints it carries exclude `*.test.sh` |
+| `version-bump-and-release.yml` (push; `plugins/soleur/**`, no `test/` exclusion) | S2 (48), S5 (13) | a plugin release; needs the `semver:*` label like every PR |
+| `web-platform-release.yml` (push; `apps/web-platform/**` and `plugins/soleur/**` minus `docs/**` and `test/**`) | S5 (24), S6 (26) | version bump, image build, deploy; label `app:web-platform` |
+| `apply-web-platform-infra.yml` (push; `apps/web-platform/infra/**`) | S6 (26) | a whole-root Terraform plan and apply, so unrelated drift in that plan is applied at this merge |
+| `mint-inngest-bootstrap-tag.yml` (push; `apps/web-platform/infra/inngest*`) | S6 (2: `inngest.test.sh`, `inngest-dedicated-host-classify.test.sh`) | the job runs and decides from the image's carrier set; test files are not carriers, so the expected decision is "mint nothing", read from its run |
+| `infra-validation.yml`, `validate-vector-config.yml` (push and pull_request) | S5 (3), S6 (26 and 25) | extra validation jobs on the PR and on main |
+| `deploy-docs.yml` (push; `plugins/soleur/skills/**`) | S5 (10) | a docs-site deploy |
+| `apply-deploy-pipeline-fix.yml` (push; 31 exact host-resident files) | none | empty intersection with the 194 files |
+| `lint-bot-statuses` (advisory job in `ci.yml`) | every PR | the lints it carries exclude `*.test.sh` |
+
+S1, S3 and S4 match no path-filtered workflow. Each slice re-derives this table in its Phase 0 and pastes it in the PR body; the first PR-body line states what fires.
 
 ### Institutional learnings applied
 
@@ -244,12 +270,12 @@ generated script) and data if it is handed to something that parses, matches or 
 
 Rules, each with a selftest check:
 
-- R1 Population is the guard's own: the tool extracts the guard's `SWEEP_*` strings, builds `PATTERN_V2` and runs `git grep --no-index --exclude-standard -anE --column -o -e "$PATTERN_V2"` with the guard's pathspec, so it edits exactly the span the guard matched and never reimplements the regex in another dialect. A selftest check asserts the dry run's total equals the guard's `DEFERRED:` sum before conversion.
-- R2 One bash-aware line tokenizer decides code versus data: quote and heredoc state carried across lines, reset at blank lines, comments and `fi|done|esac|else`; `<<<` is never a heredoc opener; unsure goes to the hand queue with the reason. Two cheap signals back it, because `verify` cannot see a mis-classified data line: (a) a **demonstration-suspect** file is never auto-applied (a file whose text names `sigpipe`, `EPIPE`, `false-FAIL` or `broken pipe` is routed to hand review; the partial prototype pair run found two such suites whose converted copy failed, `iac-plan-write-guard.test.sh` T6 and `supabase-advisor/scan-workflow-mutation.test.sh` D1a/D2, because the converted line was the thing the row demonstrates); (b) the per-suite pair run. A second lexer (the repo's `.claude/hooks/lib/filing-shape.pl`, or `shfmt`, which is installed nowhere in the repo) was considered and cut by three review seats as a local-only opinion nothing durable depends on.
+- R1 Population is the guard's own: the tool extracts the guard's `SWEEP_*` strings, builds `PATTERN_V2` and runs `git grep --no-index --exclude-standard -anE --column -o -e "$PATTERN_V2"` with the guard's pathspec, so it edits exactly the span the guard matched and never reimplements the regex in another dialect. The guard counts lines and the tool sees matches (35 lines carry more than one match in the swept set, e.g. `monitor-supersede-guard.test.sh:172,180,377`), so the parity check dedupes by `path:line` after applying the guard's comment and marker filters, and `apply` edits each line's matches right to left by column because every insertion shifts the later columns. To avoid parsing bash escapes in Python, the tool lets bash evaluate the guard's `SWEEP_*` assignments (the lines are sourced in a subshell and `$PATTERN_V2` printed), then reads that string.
+- R2 One bash-aware line tokenizer decides code versus data: quote state carried across lines and reset at blank lines, comments and `fi|done|esac|else` only OUTSIDE a heredoc; a heredoc body (`<<`, `<<-`, quoted or unquoted delimiter) ends only at its delimiter line, so a blank line inside it resets nothing; `<<<` is never a heredoc opener; unsure goes to the hand queue with the reason. Two cheap signals back it, because `verify` cannot see a mis-classified data line: (a) a **demonstration-suspect** file is never auto-applied (a file whose text names `sigpipe`, `EPIPE`, `false-FAIL` or `broken pipe` is routed to hand review; the partial prototype pair run found two such suites whose converted copy failed, `iac-plan-write-guard.test.sh` T6 and `supabase-advisor/scan-workflow-mutation.test.sh` D1a/D2, because the converted line was the thing the row demonstrates); (b) the per-suite pair run. A second lexer (the repo's `.claude/hooks/lib/filing-shape.pl`, or `shfmt`, which is installed nowhere in the repo) was considered and cut by three review seats as a local-only opinion nothing durable depends on.
 - R3 Cluster parse is left to right and stops at `e f A B C m d D` (they take an operand): `-eq` is refused; `--quiet`/`--silent` map to `-c`.
 - R4 `apply` is one line in, one line out (line numbers and every `# sigpipe-demo` marker survive), idempotent (a second run changes 0 lines), dry-run by default (`--write` to modify). Hand edits are exempt from this rule and are listed to `verify`.
 - R5 No network, no writes outside the named files.
-- R6 `verify --base REF --hand-edits FILE`: pairs the removed and added lines of each `git diff -U0 REF` hunk and requires `transform(removed) == added`. `FILE` lists hand edits keyed by BASE-side line range, `path:OLD[-OLD2]:reason` (the `-a,b` side of the `@@` header); a hunk whose removed range lies wholly inside a listed range is exempt, including a hunk whose added and removed counts differ. A listed range that matches no hunk, a hunk that is neither a transform nor listed, and a transform that changes the line count all fail; zero verified lines exits 3 (`UNRESOLVED`), never 0. It proves the transform, not the classification.
+- R6 `verify --base REF --hand-edits FILE`: pairs the removed and added lines of each `git diff -U0 REF` hunk and requires `transform(removed) == added`. `FILE` lists hand edits keyed by BASE-side line range, `path:OLD[-OLD2]:reason` (the `-a,b` side of the `@@` header); a hunk whose removed range EQUALS a listed range is exempt, including a hunk whose added and removed counts differ (equality, not containment, so an over-wide entry cannot hide neighbouring converted lines). A listed range that matches no hunk, a hunk that is neither a transform nor listed, and a transform that changes the line count all fail; zero verified lines exits 3 (`UNRESOLVED`), never 0. It proves the transform, not the classification.
 - R7 The dry run prints per-row and per-tier counts and the hand queue (`path:line:tier:reason`), which is the PR body's table.
 
 ### Hand queue for S1 (from the census, before the codemod runs)
@@ -287,7 +313,7 @@ the four in-scope-looking files (expect rc 0). `uptime`: if the load average is 
 the PR body says so verbatim.
 
 **Phase 1, instrument and guard first (red).** In the guard, add the codemod selftest checks and the ledger edits first; they fail because
-the tool does not exist (`cq-write-failing-tests-before`). Write `scripts/grep-q-drain-codemod.py` until the checks pass. The selftest fixtures
+the tool does not exist (`cq-write-failing-tests-before`). A missing file is an instrument failure, not evidence, so each check first asserts the tool is present and runs, then asserts its specific rc and message, and a pristine-tree control that must exit 0 runs before any RED fixture. Write `scripts/grep-q-drain-codemod.py` until the checks pass. The selftest fixtures
 are synthesized strings (`cq-test-fixtures-synthesized-only`): one check per flag cluster class, per refusal reason, about a dozen equivalence
 rows in bash (and dash when present), idempotency, and the `verify` RED fixtures. Python3 missing prints `UNRESOLVED` and exits 3, like the existing git check.
 
@@ -313,17 +339,19 @@ is resolved by hand; no mid-flight sync of a BEHIND branch). Verified against `o
 | Slice | Row(s) lowered or deleted | Hits / files | Fires on merge | Notes |
 | --- | --- | --- | --- | --- |
 | S1 (#9720) | `.claude/*.test.sh` (91 to 5), `.github/scripts/test/*`, `scripts/lib/test-*`, `*.test.sh` (deleted), `scripts/test-*` (6 to 2) | 107 in scope / 24 edited | nothing | codemod, selftest, ledger |
-| S2 | `plugins/soleur/test/*` | 140 / 48 | nothing (`plugins/soleur/test/**` is excluded from the release) | nine files overlap #8659; `worktree-manager-bare-in-dotgit-layout` alone is 24 |
+| S2 | `plugins/soleur/test/*` | 140 / 48 | `version-bump-and-release.yml` (plugin release; `plugins/soleur/test/**` is excluded from the web-platform release only) | nine files overlap #8659; `worktree-manager-bare-in-dotgit-layout` alone is 24 |
 | S3 | `scripts/*.test.sh`, the rest of `scripts/test-*` | 130 / 47 | nothing | includes `scripts/followthroughs` (27) and `scripts/test-all.sh` (2; local `--affected` degrades to the full battery for that diff, stated in the PR body) |
 | S4 | `tests/*` | 181 / 23 | nothing | `tests/scripts/test-registry-restore-from-ghcr.sh` (35) and `test-dev-suite-mutex.sh` (30) are the large files; `test-git-data-birth-readiness-gate.sh:2971-2974` are probe functions that pin the guard's own pattern (H-data) |
-| S5 | `plugins/soleur/*.test.sh`, `apps/web-platform/*.test.sh` narrowed to `apps/web-platform/infra/*.test.sh` | 162 / 24 | `web-platform-release.yml` (patch bump; labels `semver:patch`, `app:web-platform`) | `plugins/soleur/skills/*/test` and `plugins/soleur/scripts`; `apps/web-platform/scripts` and `apps/web-platform/test/infra` |
-| S6 | `apps/web-platform/infra/*.test.sh`, plus the Arm F fix in `cutover-inngest-workflow.test.sh` | 84 / 26 | `web-platform-release.yml` and `apply-web-platform-infra.yml` | the workflow plans the whole root, so unrelated drift in that plan is applied at this merge; postmerge reads the apply run for the merge SHA |
+| S5 | `plugins/soleur/*.test.sh`, `apps/web-platform/*.test.sh` lowered to 84 plus S5's own data residual (not narrowed: a residual under `scripts` or `test/infra` would otherwise fall outside every row) | 162 / 24 | `web-platform-release.yml`, `version-bump-and-release.yml`, `deploy-docs.yml`, `infra-validation.yml`, `validate-vector-config.yml` (labels `semver:patch`, `app:web-platform`) | `plugins/soleur/skills/*/test` and `plugins/soleur/scripts`; `apps/web-platform/scripts` and `apps/web-platform/test/infra` |
+| S6 | `apps/web-platform/infra/*.test.sh`, plus the Arm F fix in `cutover-inngest-workflow.test.sh` | 84 / 26 | `web-platform-release.yml`, `apply-web-platform-infra.yml`, `mint-inngest-bootstrap-tag.yml` (expected no mint), `infra-validation.yml`, `validate-vector-config.yml` | the workflow plans the whole root, so unrelated drift in that plan is applied at this merge; postmerge reads the apply run for the merge SHA |
 | S7 | the producer-side join (Arm P and the Arm F remainder), then the cleanup | n/a | depends on the stub edits | starts with its own `soleur:plan` run that uses the section below and the J0 numbers; deletes the codemod and its selftest once no glob row is left |
 
 Demonstration-suspect files already visible in later slices (R2 routes their hits to hand review, never auto-apply): `plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh` (S2), `tests/scripts/test-git-data-birth-readiness-gate.sh` probe functions at lines 2971-2974 (S4), `apps/web-platform/infra/cron-egress-self-heal.test.sh`, `supabase-advisor/scan-workflow-mutation.test.sh` and `workspaces-luks-freeze.test.sh` (S6). Each slice's dry run re-derives the list from the sigpipe/EPIPE/false-FAIL/broken-pipe text signal.
 
 Order is S1 to S7. The join (S7) has no code dependency on S2 to S6 and can move up if a producer-side flake recurs; it sits last
 because its stub fixes land in suites that S2 to S6 also edit, and a late join avoids rebasing those one-line hunks.
+
+Sequencing rule: slice n+1 is cut only after slice n has merged. The table's rows sit on adjacent lines, a merge-queue entry that conflicts is ejected rather than rebased, and a BEHIND branch is not re-synced mid-flight. Only S1 and S7 edit `SWEEP_PROBE_CHECKS`; S2 to S6 must leave it alone.
 
 Per slice, unchanged from S1: `Ref #9217`, never `Closes`; no `[skip-deploy-fix-apply]`; a tracker comment with the command that produced
 each number; one learning per non-obvious finding; an explicit NOT-fixed list; `Filed:` line (and a net-issue-flow override justification if
@@ -407,8 +435,7 @@ discoverability_test:
   expected_output: grep-q-sweep-probe-pass
 ```
 
-Detection note for preflight Check 10: the command is one deterministic file with no build or network and measured 2.2 s on this tree against
-the 15 s cap (`time bash .claude/hooks/grep-q-pipe-guard.test.sh`, rc 0). AC-12 re-measures it after the selftest rows land, since they add python3 calls.
+Detection note for preflight Check 10: the command is one deterministic file with no build or network. Measured on this tree: rc 0 three times under `timeout 15s` at a host load average of 13, and rc 0 inside a read-only `bwrap` with a tmpfs HOME, `env -i` and `PATH=/usr/local/bin:/usr/bin:/bin` (the Check 10 sandbox shape), printing `grep-q-sweep-probe-pass`; an earlier unloaded run took 2.2 s against the 15 s cap. AC-12 re-measures it after the selftest rows land, since they add python3 calls.
 
 ## Guard Contract
 
@@ -426,12 +453,12 @@ exists only as a parity check against it.
 
 | # | Mutation | Expected |
 | --- | --- | --- |
-| 1 | Append `echo "$x" \| grep -q p` to a converted file whose row was deleted (`scripts/test-jaccard-duplicates.sh`) | RED: outside the deferral table |
+| 1 | Append `echo "$x" \| grep -q p` to a file whose row was deleted and that no surviving glob owns (`.github/scripts/test/test-tag-filter.sh`) | RED: outside the deferral table (the first RED line names that file; a file under a surviving glob such as `scripts/test-jaccard-duplicates.sh` would instead read "ceiling exceeded") |
 | 2 | Append one hit to a file under a still-deferred row at its ceiling (`tests/scripts/test-tmp-purge.sh`) | RED: ceiling exceeded |
 | 3 | Append the deleted row `'*.test.sh \| <= \| 2 \| #9217'` after the other test rows (so earlier rows keep their files) | RED: stale deferral |
 | 4 | Revert one converted site in `.claude/hooks/session-rules-loader.test.sh` while the lowered `.claude/*.test.sh` ceiling is 5 | RED: ceiling exceeded (proves slack 0) |
 | 5 | Empty the table (`SWEEP_DEFERRALS=()`) | RED: every residual hit is undeferred (the guard's own dispatch) |
-| 6 | Add a second bad file in another former row's directory after a compliant first | RED: the derived pass reports both |
+| 6 | Add a second bad file in another deleted row's directory (`scripts/lib/test-contention.sh`) after a compliant first | RED: the derived pass reports both |
 
 Harness rows. Suite edit that must go RED: change `SWEEP_PROBE_CHECKS` by one. Must-PASS non-canonical input: a fixture line `x | grep -cE >/dev/null -- "$p"` (flags and redirect in an order no existing probe line used), scanned through `scan_sweep`.
 
@@ -454,8 +481,9 @@ Anchor. Ceilings and checks live in the file they protect, so one commit can rai
 | 5 | Two files in the diff: first compliant, second hand-edited and unlisted | RED: all members are checked, not the first |
 | 6 | A hand edit listed but absent from the diff | RED: stale hand-edit entry |
 | 7 | A converted line that also joins or splits lines (line count changes) | RED |
+| 8 | A hand-edit entry wider than its hunk (covers the hunk plus a neighbouring converted line) | RED: range is not equal to any hunk's removed range |
 
-Harness rows. Suite edit that must go RED: neuter `verify` to exit 0 (the RED fixtures then pass vacuously and the checks fail). Must-PASS non-canonical input: a fixture using the cluster `-Eq`, a `--quiet` spelling and a line that already ends in `2>/dev/null`.
+Harness rows. Every RED fixture asserts its specific rc and message (rc 1 with the named reason; rc 2, 126 and 127 are an instrument failure, not evidence), runs after a pristine-tree control that exits 0, and has a must-PASS twin that differs only in the property under test, so a tool that refuses everything, converts everything or crashes cannot satisfy the set. Suite edit that must go RED: neuter `verify` to exit 0 (the RED fixtures then pass vacuously and the checks fail). Must-PASS non-canonical inputs: a fixture using the cluster `-Eq`, a `--quiet` spelling and a line that already ends in `2>/dev/null`.
 
 Anchor. The base ref must be `origin/main`, not the branch; the independent number is the dry run's parity with the guard's `DEFERRED:` sum before any conversion. Both live in the commit, so the outside anchor is the PR body's `verify` output pasted from the command and a reviewer re-running it.
 
@@ -518,15 +546,15 @@ S1 (this PR). The pre-merge boxes are checkable on the final tree; the post-merg
 
 ### Pre-merge (PR)
 
-- [ ] AC-1 `bash .claude/hooks/grep-q-pipe-guard.test.sh` rc 0 and its `DEFERRED:` lines read: the three file-exact rows `=` 1, `=` 4 and `=` 2, the five untouched test globs unchanged (`tests/*` 181, `plugins/soleur/test/*` 140, `plugins/soleur/*.test.sh` 66, `apps/web-platform/*.test.sh` 180, `scripts/*.test.sh` 128), the five replaced or deleted globs absent, the six production rows unchanged (23 hits); slack 0 on every line.
+- [ ] AC-1 `bash .claude/hooks/grep-q-pipe-guard.test.sh` rc 0 and its `DEFERRED:` lines read: `.claude/*.test.sh` 5/5 and `scripts/test-*` 2/2 (both `<=`, slack 0), the five untouched test globs unchanged (`tests/*` 181, `plugins/soleur/test/*` 140, `plugins/soleur/*.test.sh` 66, `apps/web-platform/*.test.sh` 180, `scripts/*.test.sh` 128), the three deleted rows (`.github/scripts/test/*`, `scripts/lib/test-*`, `*.test.sh`) absent, the six production rows unchanged (23 hits); slack 0 on every line.
 - [ ] AC-2 Test-shaped hits fall from 804 to 702 (command: sum of the `DEFERRED:` hits of the ten test rows before, and of the surviving test rows after, pasted in the PR body).
-- [ ] AC-3 `python3 scripts/grep-q-drain-codemod.py verify --base origin/main --hand-edits <list>` prints `unexplained: 0` with exactly four listed hand-edit ranges (the `test-tag-filter.sh` block and the marker line in `iac-plan-write-guard.test.sh`, base-side line numbers), and `apply` run a second time changes 0 lines.
+- [ ] AC-3 `python3 scripts/grep-q-drain-codemod.py verify --base origin/main --hand-edits <list>` prints `unexplained: 0` after `git fetch origin main` (the base SHA is named in the PR body) with exactly four listed hand-edit ranges (the `test-tag-filter.sh` block and the marker line in `iac-plan-write-guard.test.sh`, base-side line numbers), and `apply` run a second time changes 0 lines.
 - [ ] AC-4 `bash -n` passes on all 24 edited files; the hand-edit rows (first match not on the first line; first-line-only reader) fail under their mutant and pass on the final tree.
-- [ ] AC-5 The PR body carries one table row per edited suite: either identical rc and result line between a pristine worktree and the branch, or `not run locally` with the reason (root, network, Doppler, timeout); a difference blocks the PR until explained.
+- [ ] AC-5 The PR body carries one table row per edited suite: either identical rc and result line between a pristine worktree and the branch, or `not run locally` with the reason (root, network, Doppler, timeout); a difference blocks the PR until explained, and a timeout on both sides is recorded as `inconclusive`, never as identical.
 - [ ] AC-6 `bash scripts/guard-vacuity-floor.test.sh`, `bash scripts/lint-orphan-test-suites.sh` and `bash scripts/pre-push-ratchet-lane.sh` pass; `git diff` adds no `X=$((X+1))` counter or `-lt` floor to the guard; `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main` is clean; `bash scripts/test-all.sh --print-selection` on a diff that touches only the codemod prints `AFFECTED_SELECTED` 1 for the grep-q guard (if it does not, name the missing edge in the PR body rather than editing `scripts/lib/test-affected-paths.sh`).
-- [ ] AC-7 The Guard 1 matrix (six rows) was hand-applied on scratch copies after a green control, each mutant RED with its first failing row recorded from the printed output and the restore check clean (`git status` empty); the Guard 2 matrix is the selftest's committed RED fixtures, which run in CI, not a separate hand run.
-- [ ] AC-8 About a dozen representative equivalence rows (one per flag-cluster class) run in the selftest, bash always and dash when present (absent dash prints `UNRESOLVED` and exits 3, never a silent skip), collected into a string asserted empty; the full 1,080-row result is pasted in the PR body.
-- [ ] AC-9 None of S1's files matches the three workflow path filters (empty intersections, commands in the PR body); the first line of the PR body states that merging this PR fires no release and no apply.
+- [ ] AC-7 The Guard 1 matrix (six rows) was hand-applied on scratch copies (a committed worktree, or `scripts/soleur-sandbox.sh` when the guard's repo scan needs a full tree) after a green control, each mutant RED with its first failing row recorded from the printed output and the restore check clean (`git status` empty); the Guard 2 matrix is the selftest's committed RED fixtures, which run in CI, not a separate hand run.
+- [ ] AC-8 About a dozen representative equivalence rows (one per flag-cluster class) run in the selftest under bash and under `sh` from PATH (when `sh` is bash the second pass proves nothing extra and still holds; no host can fail it for lacking dash), collected into a string asserted empty; the full 1,080-row result under dash is pasted in the PR body.
+- [ ] AC-9 S1's files match none of the path-filtered workflows (the derivation in "What fires on a merge", re-run, with its output in the PR body); the first line of the PR body states that merging this PR fires no release and no apply.
 - [ ] AC-10 The PR body is authored by `soleur:ship` from the diff plus the durable artifacts, so the NOT-fixed list and the Decision notes live in `knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-test-harness/` (`tasks.md` ship notes, `decision-challenges.md`) for it to fold in. The body carries `Ref #9217` (not `Closes`), no `[skip-deploy-fix-apply]`, the NOT-fixed list under a heading that avoids the ship-gate deny tokens, and, if skipped, the sentence "`scripts/test-all.sh --affected` was not run because the host is contended (load average N), so CI is the gate."
 - [ ] AC-11 Learning files, one per non-obvious finding: (a) test-harness hits are about 20 percent data or executed strings and need classification before a transform, with the prototype numbers; (b) a `<=` ceiling at slack 0 is still satisfied by add-one-delete-one, and `_ts_re`/`GATED_PROD_ROWS` classify file-exact test rows as production unless widened; (c) a test replica of production logic (`test-tag-filter.sh`) goes stale when the carrier converts. Confirm each is non-obvious at work time; do not write filler.
 - [ ] AC-12 `markdownlint-cli2` is clean on the plan, `tasks.md` and each learning; the discoverability command is re-measured under the 15 s cap after the selftest rows land.
@@ -539,18 +567,22 @@ S1 (this PR). The pre-merge boxes are checkable on the final tree; the post-merg
 
 NOT fixed by S1 (stated in the PR body and the tracker comment): the other 702 test-shaped sites (S2 to S7); the 23 wave A3 production sites; the five data lines in `.claude`; `scripts/test-all.sh` (S3); the producer-side join (S7); the guard's own blind spots (variable binary, split-line pipes, `| head`, `.md` fences, `.ts`); #9638 and #9639; the add-one-delete-one hole in the five glob rows whose slices have not landed.
 
-Series (checked at S7): the codemod and its selftest gone, no `<=` glob row left, `grep -c -e 'grep-q-drain-codemod' .claude/hooks/grep-q-pipe-guard.test.sh` prints 0, `PRODUCER_JOIN` pins the derived site set.
+Series (checked at S7): the codemod and its selftest gone; no `<=` glob row left except rows whose residual is a data pin on a wave A3 carrier, each named with its carrier (A3 is host-replace gated and unscheduled, so the series cannot be defined as "zero residual"); `grep -c -e 'grep-q-drain-codemod' .claude/hooks/grep-q-pipe-guard.test.sh` prints 0; the S7 plan decides the join's pin.
 
 ## Test Scenarios
 
 - Given `printf '%s' "$o" | grep -qE 'a|b'`, when `apply` runs, then the line is `printf '%s' "$o" | grep -cE >/dev/null 'a|b'` and `verify` accepts it.
 - Given `x | grep -eq y` (`q` is the pattern of `-e`), then `apply` refuses and lists it; the line is unchanged.
 - Given `x | grep -m1 P`, then it is routed to the hand queue as H-m.
-- Given a quoted hook-input line (`run_case "D26" 'while ps | grep -q foo; do ...' deny`), then `apply` refuses it as data.
+- Given a synthesized hook-input line (`run_case "T1" 'while ps | grep -q zz; do :; done' deny`), then `apply` refuses it as data.
+- Given the clusters `-qm1`, `-qe pat`, `-qf file`, `-qA1`, `-q --` and a `-q` placed after the pattern, then `apply` converts only the ones where `q` precedes every operand-taking letter and lists the others as refused.
+- Given a producer text containing `yes`, `tail -f` or `while true`, then `apply` refuses it as unbounded (tier X).
+- Given a file whose text names `sigpipe`, then none of its hits is auto-applied; given a comment-only mention in an otherwise ordinary file, the file is still routed to hand review (the rule is over-inclusive on purpose); given a demonstration file that names none of the four words, its hits convert and only the pair run can catch it (a stated limit).
+- Given a heredoc body that contains a blank line followed by a `grep -q` line, with `<<'EOF'`, `<<EOF` and `<<-EOF` openers, then the line is refused as heredoc text in all three.
 - Given a quoted-delimiter heredoc body and a `<<<` here-string line, then the heredoc body is refused and the here-string line is not mistaken for a heredoc opener.
 - Given a line already converted, when `apply` runs again, then 0 lines change.
 - Given an empty diff, when `verify` runs, then exit 3 and a message that nothing was verified.
-- Given the hand-edit row for `test-tag-filter.sh`, when the first matching tag is on line 2, then the helper returns it (a first-line-only reader fails the row).
+- Given the hand-edit row for `test-tag-filter.sh`, when the first matching tag is on line 2, then the helper returns it (a first-line-only reader fails the row); and when the corpus is empty, then the helper returns empty with rc 0 (the `|| [ $? -eq 1 ]` tolerance).
 - Given a stub of `gh` that drains stdin on `--body-file -` (S7), when a delayed `printf` writes after the stub starts, then the pipeline status is 0 under `pipefail` with SIGPIPE ignored; with the non-draining control it is 1.
 
 ## Risks and Sharp Edges
@@ -559,7 +591,7 @@ Series (checked at S7): the codemod and its selftest gone, no `<=` glob row left
 - **Known surviving mutant: add-one-delete-one.** A `<=` ceiling at slack 0 is satisfied by moving a hit between two files under the same glob row (net count unchanged). It stays open for every `<=` row until its slice lands and for the `.claude` and `scripts/test-all.sh` residuals until S7 decides on file-exact rows; it is listed here, not claimed as covered.
 - **Producers now run to EOF.** Wall time can rise where a producer is a full SUT run. The pair run records per-suite wall time; a suite that grows noticeably is listed in the PR body.
 - **A pinned source text.** Any suite that pins the text of a converted test file would break; the ratchets that read test text (fixture-relative, fixture-dir-operand, fixture-cd-containment, `lint-shell-capture-exit` baseline keyed on path, class and normalized text) are run, and the prototype passed the first three. The capture-exit baseline holds no pipe-fed `grep -q` line from the 194 files (its five `grep -q` rows are file operands).
-- **Merge triggers.** S5 and S6 fire a release, S6 a production apply; S1 to S4 fire neither. Do not use `[skip-deploy-fix-apply]`: it is irrelevant to these paths and the brief forbids it.
+- **Merge triggers.** S2 fires a plugin release; S5 and S6 fire releases, S6 a production apply (see the derived table); S1, S3 and S4 fire nothing. Do not use `[skip-deploy-fix-apply]`: it is irrelevant to these paths and the brief forbids it.
 - **The ledger table is a shared hot spot.** Merge the slices in order; resolve a one-line conflict by hand; never re-sync a BEHIND branch mid-flight; keep pushes minimal while the queue is saturated.
 - **`scripts/test-all.sh`.** A diff to the runner degrades local `--affected` to the full battery (a registration-only diff is exempt, a conversion is not). Stated in S3's body.
 - **Verify the verifiers.** Two research-agent claims were wrong (see the reconciliation table); every `file:line` and every count in this plan was re-read or re-run. Read rc files, not completion notifications; do not start a second `git commit` while a hook is running.
