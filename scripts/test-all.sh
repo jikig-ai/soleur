@@ -4293,6 +4293,20 @@ if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
 # A zombie or reparented-dead parent fires the same way as a dead one:
 # `ps -o stat=` reports Z for an unreaped corpse.
 #
+# Debounce (#9686): the verdict is per-POLL, not per-READ — one anomalous
+# sample (a transient `kill -0` ESRCH, a one-shot `stat==Z` answer, or an
+# `lstart` mismatch under the fork churn a long suite generates) must not
+# reap a live-parent run. Each poll produces a single verdict from the
+# parent legs; only N CONSECUTIVE failed polls (default 3, knob
+# SOLEUR_TEST_ALL_WD_FAILS_N) reach the terminate path — and only after a
+# deciding-poll re-verify of the parent's identity, so a read that recovers
+# on the boundary resets rather than reaps. The counter is consecutive-only,
+# never cumulative: a sustained failure still terminates within ~N polls +
+# the unchanged reap chain. Every failed poll prints a WARN naming the leg
+# so a recurrence is self-describing. The runner-liveness leg above it gets
+# the same consecutive counter — a transient ESRCH there had the identical
+# false-reap blast radius.
+#
 # On fire: in-flight suite children are killed BEFORE the runner — a wedged
 # suite child inherits the lock fd (no CLOEXEC) so terminating the runner
 # alone releases nothing; killing children first is also what keeps the
@@ -4303,6 +4317,10 @@ if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
 _RUN_WD_POLL_S="${SOLEUR_TEST_ALL_WD_POLL_S:-1}"
 # 0 is not a valid floor — `sleep 0` busy-spins the poll into a CPU burn.
 [[ "$_RUN_WD_POLL_S" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_POLL_S >= 1 )) || _RUN_WD_POLL_S=1
+# Consecutive-failure threshold (#9686). Same parse idiom as _RUN_WD_POLL_S;
+# floor 1 preserves the pre-debounce single-poll semantics for tests.
+_RUN_WD_FAILS_N="${SOLEUR_TEST_ALL_WD_FAILS_N:-3}"
+[[ "$_RUN_WD_FAILS_N" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_FAILS_N >= 1 )) || _RUN_WD_FAILS_N=3
 # Opt-out, stated rather than hidden: SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 skips the
 # arm for a caller that deliberately backgrounds this runner (a supervising
 # wrapper that must outlive the launcher). Silence here would make "watchdog
@@ -4325,6 +4343,8 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
     # often already gone on exactly the path that needs the kill.
     trap '' PIPE
     _wd_kids=""
+    _wd_fails=0
+    _wd_top_fails=0
     while :; do
       # Refresh the direct-child snapshot every poll — it is the ONLY record
       # of the runner's suite children once the runner is dead (they
@@ -4335,29 +4355,73 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # stdout/stderr fds — a gone-but-held-pipe deadlock between a dead
       # run's watchdog and a live parent whose pipe reader never sees EOF.
       # The snapshot's children still hold the inherited lock fd — reap
-      # them, then exit: there is no runner left to signal.
+      # them, then exit: there is no runner left to signal. Debounced like
+      # the parent leg (#9686): a transient ESRCH on a live runner had the
+      # same false-reap blast radius.
       if ! kill -0 "$_RUN_WD_TOP_PID" 2>/dev/null; then
-        printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
-        _wd_kids="$(_wd_descendants "$_wd_self" $_wd_kids)"
-        for _wd_kid in $_wd_kids; do
-          kill -TERM "$_wd_kid" 2>/dev/null || true
-        done
-        sleep 2 & _wd_sleep=$!
-        wait "$_wd_sleep" 2>/dev/null || true
-        for _wd_kid in $_wd_kids; do
-          kill -KILL "$_wd_kid" 2>/dev/null || true
-        done
-        exit 0
+        _wd_top_fails=$(( _wd_top_fails + 1 ))
+        printf 'WARN: runner-liveness poll failed (%s/%s consecutive) (#9686)\n' \
+          "$_wd_top_fails" "$_RUN_WD_FAILS_N" >&2 || true
+        if (( _wd_top_fails >= _RUN_WD_FAILS_N )); then
+          printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
+          _wd_kids="$(_wd_descendants "$_wd_self" $_wd_kids)"
+          for _wd_kid in $_wd_kids; do
+            kill -TERM "$_wd_kid" 2>/dev/null || true
+          done
+          sleep 2 & _wd_sleep=$!
+          wait "$_wd_sleep" 2>/dev/null || true
+          for _wd_kid in $_wd_kids; do
+            kill -KILL "$_wd_kid" 2>/dev/null || true
+          done
+          exit 0
+        fi
+      else
+        _wd_top_fails=0
       fi
-      # Parent liveness = alive AND not-zombie AND (when we captured a
-      # baseline) the SAME process — pid reuse after parent death must not
-      # read as "parent still alive".
-      kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null || break
-      _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
-      [[ "$_wd_pstat" == Z* ]] && break
-      if [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
-        _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
-        [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && break
+      # Parent liveness verdict — ONE per poll (#9686): alive AND not-zombie
+      # AND (when we captured a baseline) the SAME process — pid reuse after
+      # parent death must not read as "parent still alive". A failed verdict
+      # increments the consecutive counter; a healthy poll resets it.
+      _wd_bad=""
+      if ! kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null; then
+        _wd_bad=kill0
+      else
+        _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+        if [[ "$_wd_pstat" == Z* ]]; then
+          _wd_bad=zombie
+        elif [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
+          _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+          [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && _wd_bad=lstart
+        fi
+      fi
+      if [[ -z "$_wd_bad" ]]; then
+        _wd_fails=0
+      else
+        _wd_fails=$(( _wd_fails + 1 ))
+        printf 'WARN: parent-liveness poll failed (leg=%s, %s/%s consecutive) (#9686)\n' \
+          "$_wd_bad" "$_wd_fails" "$_RUN_WD_FAILS_N" >&2 || true
+        if (( _wd_fails >= _RUN_WD_FAILS_N )); then
+          # Deciding-poll re-verify (#9686): a run that reached the threshold
+          # gets one fresh probe of the parent's identity before the reap —
+          # a recovered read resets the counter instead of firing, closing
+          # the window between the Nth sample and the kill.
+          _wd_bad=""
+          if ! kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null; then
+            _wd_bad=kill0
+          else
+            _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+            if [[ "$_wd_pstat" == Z* ]]; then
+              _wd_bad=zombie
+            elif [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
+              _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+              [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && _wd_bad=lstart
+            fi
+          fi
+          if [[ -n "$_wd_bad" ]]; then
+            break
+          fi
+          _wd_fails=0
+        fi
       fi
       sleep "$_RUN_WD_POLL_S" & _wd_sleep=$!
       wait "$_wd_sleep" 2>/dev/null || true
@@ -5024,6 +5088,12 @@ if want_scripts; then
   # ACTION REQUIRED correctly — a vacuous or mis-routed verdict would either
   # stall the arm silently or cry wolf daily.
   run_suite "scripts/watchdog-arm-soak-9237" bash scripts/followthroughs/watchdog-arm-soak-9237.test.sh
+  # #9686: exit-code harness for the watchdog-debounce post-merge soak probe. Registered
+  # explicitly (orphan-suite class — scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). The probe is notify-only (never 0/1); its arms drive whether the
+  # sweeper reports NOT YET / CANNOT ESTABLISH / ACTION REQUIRED correctly — a
+  # vacuous PASS would close the soak tracker on an unmeasured window.
+  run_suite "scripts/watchdog-debounce-soak-9686" bash scripts/followthroughs/watchdog-debounce-soak-9686.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides

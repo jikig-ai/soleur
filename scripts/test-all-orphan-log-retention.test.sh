@@ -20,6 +20,18 @@ PASS=0; FAIL=0
 TMP=$(mktemp -d) || exit 2
 trap 'rm -rf "$TMP"' EXIT
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$TMP"
+
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
@@ -118,6 +130,10 @@ printf '#!/usr/bin/env bash\necho MARKER-KILLED-FX\nkill -TERM $$\n' > "$FIXTURE
 # path, so the token is the only discriminator.
 SLEEPTOK="617.$$"
 printf '#!/usr/bin/env bash\necho MARKER-SLEEP-FX\nsleep %s\n' "$SLEEPTOK" > "$FIXTURES/sleepfx.sh"
+# napfx keeps the run alive ~8s so the watchdog poll loop iterates several
+# times against the fixture parent, then lets the run COMPLETE (rc=0) — the
+# completion the debounce-transient arms assert on.
+printf '#!/usr/bin/env bash\necho MARKER-NAP-FX\nsleep 8\n' > "$FIXTURES/napfx.sh"
 
 build_sandbox() {  # build_sandbox <out-dir> <arm>
   local dir="$1" arm="$2"
@@ -147,6 +163,7 @@ calls = {
     "fail":   [("failfx", "failfx.sh")],
     "killed": [("killedfx", "killedfx.sh")],
     "sleep":  [("sleepfx", "sleepfx.sh")],
+    "nap":    [("napfx", "napfx.sh")],
 }[arm]
 body = "\n" + "".join(
     f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
@@ -271,7 +288,7 @@ out="$TMP/out-d.log"
 # parent-death path would never be exercised (measured: the runner died and
 # the watchdog never printed, because it had been disarmed by the runner's
 # own EXIT trap).
-( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_D" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_D/test-all.sh" >"$out" 2>&1; wait ) &
+( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_D" SOLEUR_TEST_ALL_WD_POLL_S=1 SOLEUR_TEST_ALL_WD_FAILS_N=1 bash "$SBX_D/test-all.sh" >"$out" 2>&1; wait ) &
 WRAP_PID=$!
 deadline=$(( SECONDS + 15 ))
 while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
@@ -403,6 +420,257 @@ if [[ -n "$gc_call_line" && -n "$acq_line2" && "$gc_call_line" -gt "$acq_line2" 
 else
   fail "GC call must follow tc_acquire and target the default soleur-test-all-logs namespace (call=${gc_call_line:-none} acq=${acq_line2:-none})"
 fi
+
+# ---------------------------------------------------------------------------
+# Part C: #9686 — parent-death watchdog debounce. A single anomalous poll
+# (transient `kill -0` ESRCH / one-shot `stat==Z` / sampled `lstart` mismatch
+# under fork churn) must not reap a live-parent run; N CONSECUTIVE failed
+# polls still must. `ps` resolves via PATH at every call inside the watchdog
+# subshell, so a shim directory prepended to PATH injects forged answers for
+# the watched parent pid only. `kill -0` is a bash builtin and cannot be
+# shimmed — the recorded seam limit for these arms.
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Part C: #9686 watchdog debounce ---"
+
+# C.1 — source-level pins (plan 1.1). The verdict is ONE per-poll _wd_bad
+# over the three parent legs feeding a consecutive counter — a mutant that
+# kept any `|| break`/`&& break` would still fire on poll 1.
+if grep -qE '^\s*_RUN_WD_FAILS_N="\$\{SOLEUR_TEST_ALL_WD_FAILS_N' "$TARGET"; then
+  pass "debounce knob _RUN_WD_FAILS_N is declared from SOLEUR_TEST_ALL_WD_FAILS_N"
+else
+  fail "missing _RUN_WD_FAILS_N declaration bound to SOLEUR_TEST_ALL_WD_FAILS_N"
+fi
+if grep -qE '^\s*\[\[ "\$_RUN_WD_FAILS_N" =~ \^\[0-9\]\+\$ \]\]' "$TARGET"; then
+  pass "_RUN_WD_FAILS_N carries the same numeric-floor parse idiom as _RUN_WD_POLL_S"
+else
+  fail "_RUN_WD_FAILS_N lacks the ^[0-9]+$ + 10# numeric-floor parse"
+fi
+break_forms="$(printf '%s\n' "$wd_block" | grep -cE '(\|\||&&)[[:space:]]+break' || true)"
+if [[ "$break_forms" == "0" ]]; then
+  pass "no single-poll break forms remain in the watchdog block"
+else
+  fail "watchdog still has $break_forms ||/&&-break forms — single-poll fire path intact"
+fi
+init_counters="$(printf '%s\n' "$wd_block" | grep -cE '^[[:space:]]+_wd_(top_)?fails=0' || true)"
+if [[ "$init_counters" -ge 3 ]]; then
+  pass "consecutive-failure counters _wd_fails/_wd_top_fails init + healthy-poll reset present"
+else
+  fail "watchdog lacks consecutive-failure counters (found $init_counters _wd_*fails=0, want >=3)"
+fi
+if printf '%s\n' "$wd_block" | grep -q 'WARN: parent-liveness poll failed'; then
+  pass "per-failure WARN diagnostic names the failed leg"
+else
+  fail "no 'WARN: parent-liveness poll failed' diagnostic in the watchdog block"
+fi
+
+# C.2 — real parent death under the DEFAULT debounce still reaps (plan 1.3):
+# ~N polls to detect + the unchanged TERM->grace->KILL chain (~8-11s).
+DURABLE_C2="$TMP/durable-c2"
+SBX_C2="$TMP/sbx-c2"
+build_sandbox "$SBX_C2" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
+out="$TMP/out-c2.log"
+( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE SOLEUR_TEST_ALL_LOG_DIR="$DURABLE_C2" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C2/test-all.sh" >"$out" 2>&1; wait ) &
+WRAP_PID=$!
+deadline=$(( SECONDS + 15 ))
+while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
+  sleep 0.2
+done
+RUNNER_PID="$(pgrep -P "$WRAP_PID" 2>/dev/null | head -1)"
+if [[ -z "$RUNNER_PID" ]]; then
+  fail "could not resolve the default-N sandbox runner pid under the wrapper"
+else
+  kill -TERM "$WRAP_PID" 2>/dev/null
+  deadline=$(( SECONDS + 25 ))
+  while kill -0 "$RUNNER_PID" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep 0.2
+  done
+  if kill -0 "$RUNNER_PID" 2>/dev/null; then
+    fail "orphaned runner survived parent death under default debounce (still alive at ${deadline}s)"
+  else
+    pass "orphaned runner is terminated after parent death under default debounce (N=3)"
+  fi
+  leftover="$(pgrep -f "$FIXTURES/sleepfx.sh" 2>/dev/null | head -1)"
+  if [[ -n "$leftover" ]]; then
+    fail "in-flight suite child survived the default-N orphan reap (pid $leftover)"
+    kill -KILL "$leftover" 2>/dev/null || true
+  else
+    pass "in-flight suite children are reaped under default debounce"
+  fi
+  if grep -q 'parent process gone' "$out"; then
+    pass "default-N reap emits the unchanged 'parent process gone' line"
+  else
+    fail "no 'parent process gone' line under the default-N reap"
+  fi
+fi
+pkill -f "sleep $SLEEPTOK" 2>/dev/null || true
+
+# --- ps PATH-shim (#9686) ----------------------------------------------------
+# Forges stat=/lstart= answers for the watched parent pid only; every other
+# query passes through to the real binary. The parent pid reaches the shim
+# through a FILE (not an env var): the wrapper subshell's pid does not exist
+# until after `&`, and env is captured at exec — the wrapper writes it via
+# the nested-bash $PPID idiom (same one the watchdog uses for _wd_self).
+SHIMBIN="$TMP/shimbin"; mkdir -p "$SHIMBIN"
+REAL_PS="$(command -v ps)"
+cat > "$SHIMBIN/ps" <<'SHIM'
+#!/usr/bin/env bash
+mode="${WD_SHIM_MODE:-}"
+dir="${WD_SHIM_DIR:-}"
+real="${WD_SHIM_REAL_PS:-/bin/ps}"
+parent=""
+[[ -n "${WD_SHIM_PIDFILE:-}" && -f "$WD_SHIM_PIDFILE" ]] \
+  && parent="$(cat "$WD_SHIM_PIDFILE" 2>/dev/null)"
+fmt=""; pid=""; prev=""
+for a in "$@"; do
+  case "$prev" in
+    -o) fmt="$a" ;;
+    -p) pid="$a" ;;
+  esac
+  prev="$a"
+done
+bump() {
+  local n
+  n=$(( $(cat "$dir/$1" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$n" > "$dir/$1"
+  printf '%s' "$n"
+}
+if [[ -n "$mode" && -n "$dir" && -n "$parent" && "$pid" == "$parent" ]]; then
+  case "$fmt" in
+    stat=*)
+      n="$(bump stat.count)"
+      case "$mode" in
+        zstat-once) [[ "$n" == "1" ]] && { printf 'Z\n'; : > "$dir/fired.$n"; exit 0; } ;;
+        zstat-alt)  (( n % 2 == 1 )) && { printf 'Z\n'; : > "$dir/fired.$n"; exit 0; } ;;
+        zstat-all)  { printf 'Z\n'; : > "$dir/fired.$n"; exit 0; } ;;
+        zstat-n3)   (( n <= 3 )) && { printf 'Z\n'; : > "$dir/fired.$n"; exit 0; } ;;
+      esac
+      ;;
+    lstart=*)
+      n="$(bump lstart.count)"
+      if [[ "$mode" == "lstart-forge" && "$n" == "2" ]]; then
+        printf 'Thu Jan  1 00:00:00 1970\n'; : > "$dir/fired"; exit 0
+      fi
+      ;;
+  esac
+fi
+exec "$real" "$@"
+SHIM
+chmod +x "$SHIMBIN/ps"
+
+# shim_nap <sbx> <mode> <sdir> <out-log> — launches a nap-armed sandbox run
+# under the ps shim; returns via SHIM_RC the wrapper's exit status.
+shim_nap() {
+  local sbx="$1" mode="$2" sdir="$3" out="$4" wp deadline
+  assert_fixture_dir "$sdir"
+  assert_fixture_dir "$out"
+  mkdir -p "$sdir"
+  ( bash -c 'printf "%s" "$PPID" > "$1"' _ "$sdir/parent.pid"
+    env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE \
+      PATH="$SHIMBIN:$PATH" WD_SHIM_MODE="$mode" WD_SHIM_DIR="$sdir" \
+      WD_SHIM_PIDFILE="$sdir/parent.pid" WD_SHIM_REAL_PS="$REAL_PS" \
+      SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-$mode" SOLEUR_TEST_ALL_WD_POLL_S=1 \
+      bash "$sbx/test-all.sh" >"$out" 2>&1; wait ) &
+  wp=$!
+  deadline=$(( SECONDS + 40 ))
+  while kill -0 "$wp" 2>/dev/null && (( SECONDS < deadline )); do sleep 0.2; done
+  if kill -0 "$wp" 2>/dev/null; then
+    kill -KILL "$wp" 2>/dev/null || true
+    SHIM_RC=124
+  else
+    wait "$wp" 2>/dev/null
+    SHIM_RC=$?
+  fi
+}
+
+# C.4 — a single forged zombie-stat poll is absorbed (plan 1.4).
+SBX_C4="$TMP/sbx-c4"
+build_sandbox "$SBX_C4" nap || { echo "FATAL: sandbox build failed"; exit 2; }
+shim_nap "$SBX_C4" zstat-once "$TMP/shim-zstat-once" "$TMP/out-c4.log"
+if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c4.log"; then
+  pass "a single forged zombie-stat poll does not reap a live-parent run"
+else
+  fail "one anomalous stat read reaped a live-parent run (rc=$SHIM_RC, log $TMP/out-c4.log)"
+fi
+if [[ -f "$TMP/shim-zstat-once/fired.1" ]]; then
+  pass "zstat-once injection marker exists — the transient was actually delivered"
+else
+  fail "zstat-once shim never fired — arm is vacuous"
+fi
+
+# C.5 — a single forged lstart (pid-reuse look-alike) is absorbed (plan 1.5).
+SBX_C5="$TMP/sbx-c5"
+build_sandbox "$SBX_C5" nap || { echo "FATAL: sandbox build failed"; exit 2; }
+shim_nap "$SBX_C5" lstart-forge "$TMP/shim-lstart-forge" "$TMP/out-c5.log"
+if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c5.log"; then
+  pass "a single forged lstart mismatch does not reap a live-parent run"
+else
+  fail "one anomalous lstart read reaped a live-parent run (rc=$SHIM_RC, log $TMP/out-c5.log)"
+fi
+if [[ -f "$TMP/shim-lstart-forge/fired" ]]; then
+  pass "lstart-forge injection marker exists — the transient was actually delivered"
+else
+  fail "lstart-forge shim never fired — arm is vacuous"
+fi
+
+# C.6 — non-consecutive failures never accumulate (plan 1.6): alternating
+# forged stat reads reset the counter every other poll.
+SBX_C6="$TMP/sbx-c6"
+build_sandbox "$SBX_C6" nap || { echo "FATAL: sandbox build failed"; exit 2; }
+shim_nap "$SBX_C6" zstat-alt "$TMP/shim-zstat-alt" "$TMP/out-c6.log"
+if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c6.log"; then
+  pass "alternating forged failures never accumulate into a reap"
+else
+  fail "non-consecutive forged failures reaped the run — counter is cumulative, not consecutive"
+fi
+if [[ -f "$TMP/shim-zstat-alt/fired.1" && -f "$TMP/shim-zstat-alt/fired.3" ]]; then
+  pass "zstat-alt markers prove >=2 non-consecutive injections were delivered"
+else
+  fail "zstat-alt shim delivered <2 injections — arm is vacuous"
+fi
+
+# C.7 — a SUSTAINED forged zombie stat still reaps after >=N polls (plan 1.7):
+# the consecutive-only counter must never dissolve the #8993 guarantee.
+SBX_C7="$TMP/sbx-c7"
+build_sandbox "$SBX_C7" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
+sdir_c7="$TMP/shim-zstat-all"; mkdir -p "$sdir_c7"
+out="$TMP/out-c7.log"
+( bash -c 'printf "%s" "$PPID" > "$1"' _ "$sdir_c7/parent.pid"
+  env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE \
+    PATH="$SHIMBIN:$PATH" WD_SHIM_MODE=zstat-all WD_SHIM_DIR="$sdir_c7" \
+    WD_SHIM_PIDFILE="$sdir_c7/parent.pid" WD_SHIM_REAL_PS="$REAL_PS" \
+    SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-c7" SOLEUR_TEST_ALL_WD_POLL_S=1 \
+    bash "$SBX_C7/test-all.sh" >"$out" 2>&1; wait ) &
+WRAP_PID=$!
+deadline=$(( SECONDS + 25 ))
+while ! grep -q 'parent process gone' "$out" 2>/dev/null && (( SECONDS < deadline )); do
+  sleep 0.2
+done
+if grep -q 'parent process gone' "$out"; then
+  pass "sustained forged zombie stat still reaps the run after consecutive failures"
+else
+  fail "sustained zombie stat never fired — debounce dissolved the orphan guarantee"
+fi
+wait "$WRAP_PID" 2>/dev/null || true
+pkill -f "sleep $SLEEPTOK" 2>/dev/null || true
+
+# C.8 — the deciding-poll re-verify aborts a threshold fire when the parent
+# recovers (plan 1.8): N forged failures, then healthy reads. A mutant that
+# breaks at the counter without the re-verify fires here.
+SBX_C8="$TMP/sbx-c8"
+build_sandbox "$SBX_C8" nap || { echo "FATAL: sandbox build failed"; exit 2; }
+shim_nap "$SBX_C8" zstat-n3 "$TMP/shim-zstat-n3" "$TMP/out-c8.log"
+if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c8.log"; then
+  pass "deciding-poll re-verify aborts a threshold fire on a recovered read"
+else
+  fail "N forged failures fired without a deciding re-verify (rc=$SHIM_RC, log $TMP/out-c8.log)"
+fi
+if [[ -f "$TMP/shim-zstat-n3/fired.1" && -f "$TMP/shim-zstat-n3/fired.2" && -f "$TMP/shim-zstat-n3/fired.3" ]]; then
+  pass "zstat-n3 markers prove all N injections were delivered"
+else
+  fail "zstat-n3 shim delivered <3 injections — arm is vacuous"
+fi
+pkill -f "$FIXTURES/napfx.sh" 2>/dev/null || true
 
 echo ""
 echo "=== RESULT: $PASS passed, $FAIL failed ==="
