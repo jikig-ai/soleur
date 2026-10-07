@@ -951,9 +951,9 @@ soleur:sync project
 
 ## Cursor name map
 
-When a canonical skill or agent file in this repository changes, regenerate the Cursor stubs with `bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts"`.
+When a canonical skill or agent file in this repository changes, regenerate the Cursor stubs by running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts".
 
-`bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts" --check` prints `cursor-name-map ok` when the committed stubs match that walk. This command does not run as part of `all`.
+Running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts" --check prints cursor-name-map ok when the committed stubs match that walk. This command does not run as part of `all`.
 
 ## Limitations
 
