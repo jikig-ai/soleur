@@ -150,7 +150,9 @@ describe("buildAgentSandboxConfig — allowWebEgress (#9534)", () => {
     expect(new Set(names)).toEqual(
       new Set(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
     );
-    expect(cfg.filesystem!.denyRead).not.toContain(`${root}-tokens`);
+    // The shared token dir is denied for EVERY session — it holds other
+    // sessions' live bearer files (existence = the gateway credential).
+    expect(cfg.filesystem!.denyRead).toContain(`${root}-tokens`);
   });
 });
 
@@ -176,6 +178,10 @@ function connectRaw(port: number, head: string): Promise<string> {
 
 describe("egress-forwarder lifecycle (#9534)", () => {
   let tokenDir: string;
+  let gwServer: ReturnType<typeof net.createServer>;
+  let gwPort: number;
+  /** First head-bytes a client delivered upstream through the forwarder. */
+  let gwReceived: Buffer;
   const FORWARDER = join(
     __dirname,
     "..",
@@ -183,18 +189,33 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     "egress-forwarder.mjs",
   );
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tokenDir = mkdtempSync(join(tmpdir(), "egress-tokens-"));
     vi.stubEnv("EGRESS_TOKEN_DIR", tokenDir);
     vi.stubEnv("EGRESS_FORWARDER_PATH", FORWARDER);
-    // The forwarder needs SOME gateway to dial — it only connects on a
-    // client CONNECT, so an unroutable dummy is fine for lifecycle tests.
+    // The spawn-time liveness probe requires a REAL listening gateway —
+    // bind a loopback recorder that captures what each CONNECT forwards.
+    gwReceived = Buffer.alloc(0);
+    gwServer = net.createServer((sock) => {
+      let captured = false;
+      sock.on("data", (d) => {
+        if (!captured) {
+          captured = true;
+          gwReceived = Buffer.from(d);
+        }
+      });
+      // Never answer — lifecycle tests only need the dial to succeed; the
+      // byte-exact test reads gwReceived instead of a 200 reply.
+    });
+    await new Promise<void>((r) => gwServer.listen(0, "127.0.0.1", r));
+    gwPort = (gwServer.address() as { port: number }).port;
     vi.stubEnv("EGRESS_GW_HOST", "127.0.0.1");
-    vi.stubEnv("EGRESS_GW_PORT", "1");
+    vi.stubEnv("EGRESS_GW_PORT", String(gwPort));
   });
 
   afterEach(async () => {
     teardownEgressForwarder("conv-1");
+    await new Promise<void>((r) => gwServer.close(() => r()));
     vi.unstubAllEnvs();
     // The forwarder writes the token file; teardown removes it, but the
     // dir itself is test-owned.
@@ -237,6 +258,29 @@ describe("egress-forwarder lifecycle (#9534)", () => {
       `CONNECT example.com:443 HTTP/1.1\r\nProxy-Authorization: Basic ${Buffer.from(`ws-123:${h.token}`).toString("base64")}\r\n\r\n`,
     );
     expect(ok).not.toContain("407");
+  }, 15000);
+
+  it("upstream head is byte-exact: one Proxy-Authorization (ours), single blank terminator, zero stray bytes", async () => {
+    const h = await spawnEgressForwarder("conv-1", "ws-123");
+    const creds = Buffer.from(`ws-123:${h.token}`).toString("base64");
+    await connectRaw(
+      h.port,
+      `CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic ${creds}\r\nX-Custom: keep\r\n\r\n`,
+    );
+    // The gateway sees exactly: CONNECT + remaining headers (the inbound
+    // Proxy-Authorization stripped, ours re-injected — identical bytes here,
+    // so the distinct assertion is the COUNT) + a single blank terminator,
+    // then NOTHING. A stray delimiter byte before the TLS ClientHello is the
+    // review-P0 framing defect this pins.
+    const text = gwReceived.toString("latin1");
+    expect(text.startsWith("CONNECT example.com:443 HTTP/1.1\r\n")).toBe(true);
+    expect((text.match(/Proxy-Authorization:/g) ?? []).length).toBe(1);
+    const injected = `Proxy-Authorization: Basic ${creds}\r\n`;
+    expect(text.endsWith(`${injected}\r\n`)).toBe(true);
+    expect(text).toContain("X-Custom: keep");
+    // Pre-fix this ended `\r\n\r\n\r\n` — the delimiter was re-emitted
+    // inside the tunnel stream.
+    expect(text).not.toContain("\r\n\r\n\r\n");
   }, 15000);
 
   it("reaper removes stale token files (registry-empty boundary)", async () => {

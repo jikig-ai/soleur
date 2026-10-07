@@ -265,8 +265,10 @@ export function buildAgentEnv(
   // control-plane audit noise as accepted Phase-A posture.
   if (opts?.egressProxy) {
     const proxyUrl = `http://${opts.egressProxy.workspaceId}:${opts.egressProxy.token}@127.0.0.1:${opts.egressProxy.port}`;
+    // Curl-class stacks DO honor this — keep it complete for those even
+    // though the SDK API path ignores it (spec TR7 arm on NO_PROXY).
     const noProxy =
-      "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com";
+      "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com,*.supabase.co,*.supabase.in,api.stripe.com,github.com,*.github.com";
     env.HTTP_PROXY = proxyUrl;
     env.HTTPS_PROXY = proxyUrl;
     env.http_proxy = proxyUrl;

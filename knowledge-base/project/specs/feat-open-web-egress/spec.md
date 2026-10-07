@@ -90,9 +90,11 @@ observed on real traffic before any entitlement can route through it
 
 ### FR4: Tool-surface re-scope
 
-`CANONICAL_DISALLOWED_TOOLS` becomes per-session: `WebFetch`/`WebSearch`
-removed only when the web entitlement is active. Cron sessions unaffected
-(L4 unchanged).
+`CANONICAL_DISALLOWED_TOOLS` becomes per-session: `WebFetch` is removed
+when the web entitlement is active AND the forwarder spawned (fail-closed:
+grant-true + spawn-failure keeps it disallowed). `WebSearch` stays
+disallowed in Phase A for every session (deliberate narrowing — Phase-B
+revisit). Cron sessions unaffected (L4 unchanged).
 
 ### FR5: Observability
 

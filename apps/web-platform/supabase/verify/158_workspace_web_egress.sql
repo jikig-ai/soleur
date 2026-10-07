@@ -1,4 +1,4 @@
--- verify/156_workspace_web_egress.sql
+-- verify/158_workspace_web_egress.sql
 -- Runtime grant-hygiene sentinel for the web-egress RPCs (precedent:
 -- verify/101, verify/097, verify/092). The migration-shape test asserts the
 -- GRANT/REVOKE *text* exists; this sentinel asserts the *live* privilege

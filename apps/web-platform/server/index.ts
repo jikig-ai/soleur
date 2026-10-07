@@ -22,6 +22,12 @@ import {
   drainCcQueriesForShutdown,
   startCcIdleReaper,
 } from "./cc-dispatcher";
+// feat-open-web-egress (#9534) — the orphan-forwarder reaper runs at BOOT,
+// not lazily on first dispatch (getSoleurGoRunner): a dispatcher restart
+// leaves the previous generation's forwarders reparented to init with live
+// token files — waiting for the first dispatch leaves a window where dead
+// sessions' credentials still authenticate at the gateway.
+import { reapOrphanEgressForwarders } from "./egress-forwarder";
 import { handleConversationMessages } from "./api-messages";
 import { releaseAllHeldLeases } from "./worktree-write-lease";
 import { createChildLogger } from "./logger";
@@ -271,6 +277,9 @@ app.prepare().then(() => {
   }
 
   server.listen(port, () => {
+    // #9534 — reap orphaned forwarder processes + their gateway tokens before
+    // serving dispatches (best-effort, never throws).
+    reapOrphanEgressForwarders();
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
     log.info({
       sentryConfigured: !!process.env.SENTRY_DSN,

@@ -2,8 +2,9 @@
 // Per-dispatch egress forwarder (#9534). Spawned by the dispatch layer for an
 // entitled session; bound to the session's lifetime.
 //
-// SRT only speaks `httpProxyPort` = localhost:<port>. This shim listens on
-// 127.0.0.1:<bind-0 port>, requires the per-session token inbound, strips
+// The env proxy URL carries the token end-to-end (spec TR7: `httpProxyPort`
+// cannot carry creds; the in-process fetch honors env too). This shim listens
+// on 127.0.0.1:<bind-0 port>, requires the per-session token inbound, strips
 // whatever Proxy-Authorization the client sent, injects
 // `workspaceId:sessionToken` outbound, and pipes the tunnel to the gateway.
 // The session token is also the gateway credential — the app-side file write
@@ -40,12 +41,17 @@ const server = net.createServer((client) => {
     }
     client.off("data", onData);
     const head = buf.subarray(0, end).toString("latin1");
-    const rest = buf.subarray(end);
+    // `end` is the START of the 4-byte delimiter — the delimiter is ours to
+    // re-emit after INJECT. Skipping it here keeps the tunneled bytes free of
+    // a stray leading \r\n (Squid ends header parsing at the first blank line
+    // and pipes the remainder upstream; a leftover CRLF would corrupt the
+    // client's TLS ClientHello).
+    const rest = buf.subarray(end + HEADER_END.length);
 
     // Inbound auth: the per-session token must be the proxy password.
     const authLine = head.match(/^proxy-authorization:[ \t]*basic[ \t]+(\S+)/im);
     const presented = authLine ? Buffer.from(authLine[1], "base64").toString("latin1") : "";
-    if (!presented.includes(`:${TOKEN}`)) {
+    if (presented !== `${WORKSPACE}:${TOKEN}`) {
       client.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=soleur\r\nContent-Length: 0\r\n\r\n");
       return;
     }

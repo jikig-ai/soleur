@@ -352,14 +352,16 @@ const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
 );
 
 /** Absolute paths denied to the entitled session's sandboxed commands:
- *  the token-dir mount (a readable session token = gateway auth for the
- *  session's whole lifetime) + the conventional credential file locations
+ *  the conventional credential file locations
  *  (`GOOGLE_APPLICATION_CREDENTIALS` holds a PATH, so its target is a file
- *  deny, not an env deny). `~` resolves against the container HOME. */
+ *  deny, not an env deny). `~` resolves against the container HOME.
+ *  The token dir is denied SEPARATELY — for EVERY session, not only the
+ *  entitled one: the dir holds every CONCURRENT session's live token (the
+ *  file's existence is the gateway credential), so an unentitled session
+ *  under `--ro-bind / /` could otherwise harvest a neighbor's bearer. */
 function webEgressDenyReadPaths(): string[] {
   const home = process.env.HOME ?? "/root";
   const paths = [
-    process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     join(home, ".ssh"),
     join(home, ".gnupg"),
     join(home, ".netrc"),
@@ -439,10 +441,12 @@ export function buildAgentSandboxConfig(
       ...siblingDeny,
       c4StagingRoot,
       ...(opts?.denyReadExtra ?? []),
-      // feat-open-web-egress (#9534): credential files + the token-dir mount
-      // are denied ONLY for the entitled session (an unentitled session has
-      // no gateway credential to protect, and the extra denies would just be
-      // dead config there).
+      // feat-open-web-egress (#9534): the shared session-token dir is denied
+      // for EVERY session — a file's existence IS a live gateway credential,
+      // so no session may read another's bearer. Credential files are denied
+      // ONLY for the entitled session (the extra denies would be dead config
+      // where no gateway exists — tracked as a hardening follow-up).
+      process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...(opts?.allowWebEgress ? webEgressDenyReadPaths() : []),
     ]),
   );

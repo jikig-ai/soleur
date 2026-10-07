@@ -101,6 +101,10 @@ model {
         technology "Supabase Auth"
         description "JWT authentication, OAuth providers, session tokens"
       }
+      egressForwarder = component "Per-Dispatch Egress Forwarder" {
+        technology "egress-forwarder.mjs — spawned per entitled dispatch inside the webapp dispatcher process, binds 127.0.0.1:0, ppid watchdog"
+        description "Session-scoped bridge between the spawned-CLI env proxy (HTTP(S)_PROXY=http://<workspaceId>:<sessionToken>@127.0.0.1:<port>) and the egress gateway (ADR-274). Requires the session token inbound, injects workspaceId:token upstream. Lifetime-bound: dies with the dispatch; token file deleted at teardown or toggle-off (warm-path re-resolution). Spawn failure degrades the dispatch to zero-egress — never a dead config — mirrored to Sentry. The token never reaches the sandboxed child's env (SRT substitutes its own creds on the in-netns hop — measured, spec TR7 arm 3)"
+      }
     }
 
     engine = system "Cloud CLI Engine" {
@@ -109,11 +113,6 @@ model {
       claude = container "Agent Runtime" {
         technology "Claude Code"
         description "Executes agent workflows with full orchestration tools"
-        egressForwarder = component "Per-Dispatch Egress Forwarder" {
-          technology "egress-forwarder.mjs — spawned per entitled dispatch, binds 127.0.0.1:0, ppid watchdog"
-          description "Session-scoped bridge between the spawned-CLI env proxy (HTTP(S)_PROXY=http://<workspaceId>:<sessionToken>@127.0.0.1:<port>) and the egress gateway (ADR-274). Requires the session token inbound, injects workspaceId:token upstream. Lifetime-bound: dies with the dispatch; token file deleted at teardown or toggle-off (warm-path re-resolution). Spawn failure degrades the dispatch to zero-egress — never a dead config — mirrored to Sentry. The token never reaches the sandboxed child's env (SRT substitutes its own creds on the in-netns hop — measured, spec TR7 arm 3)"
-        }
-
         registry = component "Engine Registry" {
           technology "Reviewed definitions"
           description "Checks engine availability, authentication modes, capabilities, and qualification evidence"
@@ -539,7 +538,8 @@ model {
   emailSender -> resend "Sends email to the operator address" { technology "SMTP" }
   resend -> webapp "Inbound email webhook (operator inbox ingress)" { technology "HTTPS webhook (svix)" }
   webapp -> resend "Statutory triage notifications (outbound email), incl. the push-failure fallback (ADR-136)" { technology "HTTPS (Resend API)" }
-  platform.engine.claude.egressForwarder -> platform.infra.egressGw "CONNECT tunnel per entitled session — Proxy-Authorization Basic <workspaceId>:<sessionToken>; TLS handshake metadata only, payloads end-to-end" { technology "CONNECT over soleur-egress0 (private bridge)" }
+  platform.engine.claude -> platform.webapp.egressForwarder "Spawned-CLI HTTPS CONNECTs arrive via SRT's upstream chain carrying the env proxy-URL credentials (workspaceId:sessionToken) — in-process WebFetch uses the same env proxy" { technology "HTTP CONNECT on container loopback" }
+  platform.webapp.egressForwarder -> platform.infra.egressGw "CONNECT tunnel per entitled session — Proxy-Authorization Basic <workspaceId>:<sessionToken>; TLS handshake metadata only, payloads end-to-end" { technology "CONNECT over soleur-egress0 (private bridge)" }
   platform.infra.egressGw -> publicInternet "Allow-listed-by-absence-of-deny CONNECT to :443 public hosts only; deny-set refuses private/link-local/metadata ranges; every decision logged" { technology "HTTPS CONNECT" }
   webapp -> pushService "Web Push delivery (VAPID); non-410 failures fall back to Resend email — the WNS egress DROP (#5046 PR-2) is the known trigger" { technology "HTTPS (Web Push / VAPID)" }
 

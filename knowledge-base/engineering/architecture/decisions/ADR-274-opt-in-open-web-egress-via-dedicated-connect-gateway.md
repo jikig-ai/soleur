@@ -126,6 +126,12 @@ vendored binary (full record: spec TR7):
   boolean; the forwarder, token dir, and gateway are inert when no
   workspace opts in.
 
+## Scope notes (review amendments, PR-B)
+
+- **`ws-handler` `pendingLeader` lineage does not receive `webEgress`** (`ws-handler.ts:2553` still routes through legacy `startAgentSession`, which never threads the option). The workspace toggle is silently inert on that path. Recorded rather than fixed: leader sessions are retiring machinery; if they ship user-facing again, the entitlement wiring must be extended — tracked as a Phase-B note.
+- **Prompt coherence under the quarantine**: when a session is entitled, the `GH_TOKEN`/`GIT_*` env vars still reach the CLI process (in-process tools unaffected) while the `credentials.envVars` census denies them to sandboxed commands — in-sandbox `gh`/`git push` therefore fail at auth, not network, and `GH_403_PROMPT_DIRECTIVE` keeps promising a retry that will not succeed. The mint is also functionally wasted for the entitled session (allowDomains widening is moot under the env-proxy chain). Left as-is in Phase A to keep the diff scoped; the credential broker (#9543) is the intended home of a coherent fix.
+- **Revocation granularity**: the gateway's basic-auth helper caches per `credentialsttl` (pinned 30s); the binding revocation mechanism is the forwarder's death — token-file deletion bounds the residual window, it is not instant revocation. The toggle copy says "revokes live access on the session's next dispatch" — accurate for the warm-path re-resolve; a session whose host dispatcher dies AND restarts relies on the boot reaper before the first dispatch.
+
 ## Alternatives considered
 
 | Alternative | Why rejected |
@@ -134,3 +140,4 @@ vendored binary (full record: spec TR7):
 | Flat `allowedDomains` widening | The SDK filter is not a boundary once a proxy chain exists (measurement 1); a flat allowlist gives no token scoping, no revocation, no per-session audit. |
 | Per-request credential broker (Phase B mechanism) shipped in Phase A | Scope: Phase A's quarantine lands the safe half first; the broker is a separate deliverable (#9543). |
 | Audit-log UI in Phase A | No queryable store ships yet; deferred to #9545 rather than shipping a dead link. |
+| In-process `net.Server` forwarder per session | Reviewed (review design pass): an in-process listener would die with the dispatcher, removing the ppid watchdog, the `/proc` orphan sweep, the spawn handshake, and `EGRESS_FORWARDER_PATH` plumbing. Rejected for blast-radius isolation: the forwarder handles arbitrary client bytes for every concurrent session on one dispatcher, and a crash or memory-pinned handler inside the dispatcher takes every session's env-proxy path down with it (the SRT chain transits `api.anthropic.com` control-plane CONNECTs too — spec TR7 arm 3 — so a forwarder fault would stall the model call itself, not just WebFetch). The separate process also keeps the token-material write + the CONNECT piping off the dispatcher's event loop. The trade is recorded honestly: ~150 LOC of lifecycle machinery is the cost of that isolation, and the token-dir sweep in the reaper is needed under either shape (the dir is a shared host volume). |

@@ -183,8 +183,12 @@ import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
 // feat-open-web-egress (#9534) — workspace "Agent web access" grant (member-
 // checked, fail-closed) + the per-session loopback forwarder lifecycle.
-import { resolveWebEgress } from "./resolve-web-egress";
 import {
+  resolveWebEgress,
+  resolveWebEgressStrict,
+} from "./resolve-web-egress";
+import {
+  egressForwarderWorkspaceId,
   reapOrphanEgressForwarders,
   spawnEgressForwarder,
   teardownEgressForwarder,
@@ -3918,17 +3922,32 @@ export async function dispatchSoleurGo(
   // mirrors. Enabling mid-session cannot retro-fit the already-spawned
   // CLI's env — the on-flip applies to the NEXT cold dispatch, matching
   // the toggle copy ("applies to sessions started after enabling").
-  void resolveWebEgress(userId)
-    .then((entitled) => {
-      if (!entitled) teardownEgressForwarder(conversationId);
-    })
-    .catch((err) => {
-      reportSilentFallback(err, {
-        feature: "cc-dispatcher",
-        op: "web-egress-re-resolve",
-        extra: { userId, conversationId },
+  // Only a conversation WITH a live forwarder has anything to revoke —
+  // skip the read entirely when none is registered (an unentitled cold
+  // dispatch must not pay an RPC it never needed, and a post-teardown
+  // dispatch has no grant to kill). The re-resolve keys on the workspace
+  // the forwarder was MINTED for — not the user's current active
+  // workspace — so a mid-session workspace switch can never kill or
+  // spare the wrong session's egress. `resolveWebEgressStrict` rethrows
+  // read faults: an RPC/Supabase blip must not masquerade as an
+  // off-grant and kill a legitimately-entitled session's forwarder —
+  // there is no mid-session re-spawn path, so a revoked-then-recovered
+  // grant would leave the CLI holding a dead proxy URL with WebFetch
+  // still admitted. Only a DEFINITIVE false tears down.
+  const fwdWorkspaceId = egressForwarderWorkspaceId(conversationId);
+  if (fwdWorkspaceId) {
+    void resolveWebEgressStrict(userId, fwdWorkspaceId)
+      .then((entitled) => {
+        if (!entitled) teardownEgressForwarder(conversationId);
+      })
+      .catch((err) => {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "web-egress-re-resolve",
+          extra: { userId, conversationId, workspaceId: fwdWorkspaceId },
+        });
       });
-    });
+  }
 
   // #5340 / #5240 design item #2 — deterministic workspace re-provision on
   // reconnect. After a sandbox/host reclaim the resolved workspace path can be a

@@ -1,4 +1,4 @@
--- 156_workspace_web_egress.down.sql
+-- 158_workspace_web_egress.down.sql
 -- Reverse 156: drop both RPCs and the column. Dropping the column resets all
 -- grant state (no web-egress workspace survives the rollback — the safe
 -- direction: it restores the default zero-egress posture for every

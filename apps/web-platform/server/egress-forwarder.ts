@@ -23,12 +23,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { connect as netConnect } from "node:net";
 import { join } from "node:path";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
@@ -66,6 +68,9 @@ export interface EgressForwarderHandle {
 
 interface RegistryEntry extends EgressForwarderHandle {
   proc: ChildProcess;
+  /** The workspace the entitlement (and token) was minted for — the warm-path
+   *  re-resolve must key on THIS, not the user's current active workspace. */
+  workspaceId: string;
 }
 
 /** conversationId → live forwarder. One forwarder per conversation (a Query
@@ -75,6 +80,42 @@ const egressForwarders = new Map<string, RegistryEntry>();
 /** Test/QA hook: is a forwarder registered for this conversation? */
 export function hasEgressForwarder(conversationId: string): boolean {
   return egressForwarders.has(conversationId);
+}
+
+/** The workspace a live forwarder was minted for (undefined when none). */
+export function egressForwarderWorkspaceId(
+  conversationId: string,
+): string | undefined {
+  return egressForwarders.get(conversationId)?.workspaceId;
+}
+
+/** Gateway dial target — env-overridable so a host whose bridge fell back to
+ *  a non-default subnet (egress-gateway-bootstrap probes 172.31.100-103.0/24
+ *  for a free one) still reaches its gateway. Defaults mirror the .mjs. */
+function egressGwTarget(): { host: string; port: number } {
+  return {
+    host: process.env.EGRESS_GW_HOST ?? "172.31.100.2",
+    port: Number(process.env.EGRESS_GW_PORT ?? 8443),
+  };
+}
+
+/** Fail-fast liveness probe: an entitled session on a host whose gateway is
+ *  down or absent must degrade to zero-egress at spawn, not discover it on
+ *  the first CONNECT (silent dead egress under a paid entitlement). A bare
+ *  TCP connect is enough — the forwarder's own dial is the same transport. */
+function assertGatewayReachable(host: string, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const sock = netConnect({ host, port, timeout: 2_000 }, () => {
+      sock.destroy();
+      resolve();
+    });
+    const fail = () => {
+      sock.destroy();
+      reject(new Error(`egress gateway unreachable at ${host}:${port}`));
+    };
+    sock.once("error", fail);
+    sock.once("timeout", fail);
+  });
 }
 
 /**
@@ -99,18 +140,36 @@ export async function spawnEgressForwarder(
     mode: 0o600,
   });
 
+  // A second spawn for the same conversation (supersede / stale-resume edge)
+  // must not orphan the first child and its still-valid token file.
+  teardownEgressForwarder(conversationId);
+
+  // Dead gateway = fail fast (the caller degrades to zero-egress) instead of
+  // logging "forwarder bound" for a session whose every CONNECT dies at the
+  // gw dial.
+  const gw = egressGwTarget();
+  await assertGatewayReachable(gw.host, gw.port);
+
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     NODE_ENV: process.env.NODE_ENV,
     EGRESS_SESSION_TOKEN: token,
     EGRESS_WORKSPACE_ID: workspaceId,
+    EGRESS_GW_HOST: gw.host,
+    EGRESS_GW_PORT: String(gw.port),
   };
   const proc: ChildProcess = spawn("node", [forwarderPath()], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  const entry: RegistryEntry = { proc, token, port: 0, pid: proc.pid ?? 0 };
+  const entry: RegistryEntry = {
+    proc,
+    token,
+    port: 0,
+    pid: proc.pid ?? 0,
+    workspaceId,
+  };
   egressForwarders.set(conversationId, entry);
 
   // Mid-session forwarder death = live egress silently dead for the
@@ -239,9 +298,14 @@ export function reapOrphanEgressForwarders(): void {
   );
 
   // Kill stray forwarder processes (cmdline match — the platform's own proc
-  // tree, not an in-sandbox /proc read).
+  // tree, not an in-sandbox /proc read). /proc is Linux-only — macOS dev
+  // boots have no reaper to run (the ppid watchdog still covers the local
+  // kill path there). Topology note: this scan assumes ONE dispatcher per
+  // pid namespace — under an in-container rolling restart it would reap a
+  // draining dispatcher's live forwarders (deployment is one app container
+  // per host, and a PID-1 dispatcher death takes the namespace with it).
   try {
-    for (const pidEntry of readdirSync("/proc")) {
+    for (const pidEntry of existsSync("/proc") ? readdirSync("/proc") : []) {
       if (!/^\d+$/.test(pidEntry)) continue;
       const pid = Number(pidEntry);
       if (livePids.has(pid) || pid === process.pid) continue;

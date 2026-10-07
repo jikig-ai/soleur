@@ -44,6 +44,7 @@ const {
   mockGenerateInstallationToken,
   mockResolveBashAutonomous,
   mockResolveWebEgress,
+  mockResolveWebEgressStrict,
   mockResolveAutonomousAck,
   mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
@@ -68,6 +69,7 @@ const {
   mockGenerateInstallationToken: vi.fn(),
   mockResolveBashAutonomous: vi.fn(),
   mockResolveWebEgress: vi.fn(),
+  mockResolveWebEgressStrict: vi.fn(),
   mockResolveAutonomousAck: vi.fn(),
   mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
@@ -131,6 +133,7 @@ vi.mock("@/server/resolve-bash-autonomous", () => ({
 // factory-shape tests dispatch with no forwarder spawn.
 vi.mock("@/server/resolve-web-egress", () => ({
   resolveWebEgress: mockResolveWebEgress,
+  resolveWebEgressStrict: mockResolveWebEgressStrict,
 }));
 
 // feat-open-web-egress (#9534) — never spawn a real forwarder in
@@ -140,6 +143,7 @@ vi.mock("@/server/egress-forwarder", () => ({
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),
   hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
 }));
 
 vi.mock("@/server/resolve-autonomous-ack", () => ({

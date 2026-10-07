@@ -86,12 +86,14 @@ vi.mock("../server/agent-env", async () => {
 // dispatch even when the grant is false.
 vi.mock("@/server/resolve-web-egress", () => ({
   resolveWebEgress: vi.fn(async () => false),
+  resolveWebEgressStrict: vi.fn(async () => false),
 }));
 vi.mock("@/server/egress-forwarder", () => ({
   spawnEgressForwarder: vi.fn(),
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),
   hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
 }));
 
 vi.mock("../server/sandbox-hook", () => ({

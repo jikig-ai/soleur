@@ -102,12 +102,14 @@ vi.mock("@/server/resolve-bash-autonomous", () => ({
 // off — these factory tests never exercise the egress path.
 vi.mock("@/server/resolve-web-egress", () => ({
   resolveWebEgress: vi.fn(async () => false),
+  resolveWebEgressStrict: vi.fn(async () => false),
 }));
 vi.mock("@/server/egress-forwarder", () => ({
   spawnEgressForwarder: vi.fn(),
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),
   hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
 }));
 // feat-bash-autonomous-default-on — soft-gate inputs default to un-acked /
 // non-owner so the prefill-guard factory-shape tests dispatch unaffected.

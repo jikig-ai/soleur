@@ -100,6 +100,7 @@ vi.mock("@/server/egress-forwarder", () => ({
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),
   hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
 }));
 
 vi.mock("../server/sandbox-hook", () => ({

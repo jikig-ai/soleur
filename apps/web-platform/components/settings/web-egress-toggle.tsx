@@ -12,7 +12,8 @@ import { usePendingAction } from "@/hooks/use-pending-action";
  * security boundary for every session, turning it ON is gated behind an
  * explicit risk interstitial (clone of the bash-autonomous consent shape —
  * see agent-web-access.pen). Turning it OFF needs no confirmation — it
- * revokes live web access immediately.
+ * revokes live web access on the session's next dispatch (the warm-path
+ * re-resolution kills its forwarder + gateway token).
  *
  * Owner-only WRITE: the underlying RPC raises for non-owners. A non-owner
  * sees the current state as a disabled (read-only) switch — the debug-mode
@@ -91,7 +92,7 @@ export function WebEgressToggle({
             <span className="text-xs text-soleur-text-secondary">
               On. Sessions run without stored credentials in sandboxed
               commands. Applies to sessions started after enabling; turning
-              off revokes live web access.
+              off revokes live access on the session's next dispatch.
             </span>
           )}
           {/* The wireframe's "Widens the security boundary" risk callout is

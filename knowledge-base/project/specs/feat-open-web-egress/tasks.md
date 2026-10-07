@@ -68,7 +68,7 @@ Derived from `knowledge-base/project/plans/2026-10-05-feat-open-web-egress-plan.
       it honors only process-env `HTTP(S)_PROXY` → task 2.4 must set env
       proxy on the spawned CLI subprocess with NO_PROXY covering the
       platform control plane.
-- [x] 2.1 Migration `156_workspace_web_egress.sql` + `.down.sql` (clone 101):
+- [x] 2.1 Migration `158_workspace_web_egress.sql` + `.down.sql` (clone 101):
       column, member-read RPC (NULL→false), owner-write RPC (P0001),
       `-- LAWFUL_BASIS: consent (Art. 6(1)(a))` annotation
 - [x] 2.2 `server/resolve-web-egress.ts` + `server/set-web-egress.ts`
