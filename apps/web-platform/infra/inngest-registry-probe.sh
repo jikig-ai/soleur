@@ -6,19 +6,27 @@
 # The dedicated Inngest host (10.0.1.40) is deny-all-public and firewall-scoped to
 # the web-host private subnet, so a GitHub runner CANNOT reach :8288 directly — a
 # web host CAN over the private net (SEC-H2). This probe POSTs the top-level
-# `{ functions { id } }` GraphQL query to the dedicated host and REPORTS whether
-# the registry is EMPTY. That is the load-bearing 2.0 gate: the cutover flip must
-# only run against an EMPTY dark registry — a non-empty one means a second scheduler
-# would register + double-fire against prod Postgres.
+# `{ functions { id slug triggers { type value } } }` GraphQL query to the
+# dedicated host and REPORTS whether the registry is EMPTY. That is the
+# load-bearing 2.0 gate: the cutover flip must only run against an EMPTY dark
+# registry — a non-empty one means a second scheduler would register +
+# double-fire against prod Postgres. (#6940: the slug/triggers fields are
+# additive — the zero-run discovery in op=verify reads `triggers[].type` to tell
+# CRON functions from event-driven ones, ADR-146 §Deferred item 1.)
 #
 # It does NOT itself decide abort — it reports; the `op=execute` workflow arm asserts.
 #
-# Output (stdout): a single pure-JSON object — counts + function ids ONLY, never
-# reminder bodies / actors / connection strings (P2-sec-a). The webhook (adnanh/
-# webhook v2.8.2) returns cmd.CombinedOutput() even on 200 and the workflow parses
-# the body as a JSON OBJECT, so on the SUCCESS path this script writes NOTHING
-# non-JSON to EITHER stream (summary → journald via `logger` only):
-#   { "registry_empty": <bool>, "function_count": <int>, "function_ids": [<id>...] }
+# Output (stdout): a single pure-JSON object — counts + function ids/triggers
+# ONLY, never reminder bodies / actors / connection strings (P2-sec-a). The
+# webhook (adnanh/webhook v2.8.2) returns cmd.CombinedOutput() even on 200 and
+# the workflow parses the body as a JSON OBJECT, so on the SUCCESS path this
+# script writes NOTHING non-JSON to EITHER stream (summary → journald via
+# `logger` only):
+#   { "registry_empty": <bool>, "function_count": <int>, "function_ids": [<id>...],
+#     "functions": [{ "id": <id>, "slug": <slug|null>,
+#                     "triggers": [{ "type": "CRON"|"EVENT"|..., "value": <str> }] }] }
+# `functions` is additive (#6940): a `.triggers` field absent per-object degrades
+# to [], never a crash, so an older registry response shape still parses.
 #
 # Fail-LOUD (non-zero exit + stderr) on a non-array `.data.functions` — a fetch
 # failure, a GraphQL error envelope, or any unexpected shape (incl. a bare array).
@@ -48,7 +56,12 @@ PREFLIGHT_HOST="${INNGEST_PREFLIGHT_HOST:-$(hostname 2>/dev/null || echo unknown
 PREFLIGHT_START_S=0
 
 # shellcheck disable=SC2016  # GraphQL query, not a shell expansion
-readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+# #6940: `slug` + `triggers { type value }` are additive selections — the pinned
+# schema (knowledge-base/project/specs/feat-one-shot-inngest-cutover-no-ssh-5450/
+# inngest-graphql-schema.md) has `Function.triggers: [FunctionTrigger!]` with
+# `type`/`value` subfields; a bare `triggers` is a GraphQL validation error.
+# Same selection ci-deploy.sh already runs against this endpoint.
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers { type value } } }'
 
 # Observability markers (#6258 Deepen Finding 8) — journald-ONLY (stdout IS the pure-JSON
 # webhook body). Escape-notation Unicode-separator sanitizer (cq-regex-unicode-separators-
@@ -128,13 +141,20 @@ run_probe() {
   function_count=$(echo "$function_ids" | jq 'length')
   if [[ "$function_count" -eq 0 ]]; then registry_empty=true; else registry_empty=false; fi
 
+  # #6940 — additive per-function projection. Missing `triggers` degrades to []
+  # (`// []`); a malformed ELEMENT (non-object, or triggers non-array non-null)
+  # still fails LOUD under set -e rather than silently un-discovering crons.
+  local functions
+  functions=$(echo "$fn_body" | jq -c \
+    '[ .data.functions[] | {id, slug, triggers: [ ((.triggers // [])[]) | {type, value} ]} ]')
+
   # Observability summary (counts + ids ONLY, never bodies) → journald only.
   logger -t "$LOG_TAG" "registry probe: empty=$registry_empty function_count=$function_count" 2>/dev/null || true
   _pf_marker "SOLEUR_INNGEST_PREFLIGHT_DONE op=$PREFLIGHT_OP pages=1 elapsed_ms=$(( ($(date +%s) - PREFLIGHT_START_S) * 1000 ))"
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
-  jq -nc --argjson empty "$registry_empty" --argjson count "$function_count" --argjson ids "$function_ids" \
-    '{registry_empty:$empty, function_count:$count, function_ids:$ids}'
+  jq -nc --argjson empty "$registry_empty" --argjson count "$function_count" --argjson ids "$function_ids" --argjson fns "$functions" \
+    '{registry_empty:$empty, function_count:$count, function_ids:$ids, functions:$fns}'
 }
 
 # Run only when executed directly — sourcing (unit tests) must NOT hit the network.
