@@ -386,9 +386,11 @@ HOOK_SRC="${BASH_SOURCE[0]}"
 HOOK_DIR="${HOOK_SRC%/*}"; [[ "$HOOK_DIR" == "$HOOK_SRC" ]] && HOOK_DIR=.
 LEXER="$HOOK_DIR/lib/shell-argv.pl"
 
+# (no regex function: a jq built without regex support must still read the envelope; newlines and carriage returns become blanks so the
+# three fields stay three lines)
 JQ_FIELDS='if type != "object" then "invalid" else
-  ((.tool_name // "" | if type == "string" then . else "" end | gsub("[\\n\\r]"; " ")),
-   (.cwd // "" | if type == "string" then . else "" end | gsub("[\\n\\r]"; " ")),
+  ((.tool_name // "" | if type == "string" then . else "" end | split("\n") | join(" ") | split("\r") | join(" ")),
+   (.cwd // "" | if type == "string" then . else "" end | split("\n") | join(" ") | split("\r") | join(" ")),
    (try (.tool_input.command | type) catch "invalid"))
 end'
 

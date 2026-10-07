@@ -251,6 +251,11 @@ if [[ -z "$FAST" ]]; then
   mkdir -p "$WORK/shim-jqnc" || harness_die "shim mkdir"
   printf '#!/bin/sh\ncase "$1" in -nc) exit 3 ;; esac\nexec "%s" "$@"\n' "$JQ_BIN" > "$WORK/shim-jqnc/jq"; chmod +x "$WORK/shim-jqnc/jq"
 fi
+# A jq shim that errors on every regex function (a jq built without Oniguruma) and hands everything else to the real jq.
+if [[ -z "$FAST" ]]; then
+  mkdir -p "$WORK/shim-jqre" || harness_die "shim mkdir"
+  printf '#!/bin/sh\nfor a in "$@"; do\n  case "$a" in *gsub*|*sub\(*|*test\(*|*match\(*|*capture\(*|*scan\(*|*splits\(*|*ascii_downcase*) echo "jq: error: regex support is not built in" >&2; exit 5 ;; esac\ndone\nexec "%s" "$@"\n' "$JQ_BIN" > "$WORK/shim-jqre/jq"; chmod +x "$WORK/shim-jqre/jq"
+fi
 # A symlink farm of every /usr/bin and /bin utility except the removed ones: the jq-less and perl-less PATHs.
 farm_make() { # farm_make <name> <removed...>  -> $WORK/farm-<name>
   local d="$WORK/farm-$1" r t; shift
@@ -2028,6 +2033,19 @@ env_row "output fallback: an ask whose quoted command holds a double quote stays
 jqchk "output fallback: that ask names guard-output-fallback and the rule id and says it is asking instead of allowing" '.hookSpecificOutput.permissionDecisionReason | (contains("guard-output-fallback") and contains("infra-destroy") and contains("asking instead of allowing") and startswith($lead + " "))' --arg lead "$ASK_LEAD"
 env_row "output fallback: a deny whose quoted command holds a backslash stays a deny" deny "$(mkjson "rm -rf ~ 'x\\y'" "$TREE")" "$JS"
 env_row "output fallback: a deny whose quoted command holds a tab stays a deny with valid JSON" deny "$(mkjson "rm -rf ~ 'x"$'\t'"y'" "$TREE")" "$JS"
+# A jq built without regex support: the envelope fields are read without a regex function, so every lexer-path call still decides.
+JR="PATH=$WORK/shim-jqre:$PATH"
+if [[ -n "$FAST" ]]; then _a=5; _b=0; _c=0; else
+  _a=0; "$WORK/shim-jqre/jq" -n '"a" | test("a")' >/dev/null 2>&1 || _a=$?
+  _b=0; "$WORK/shim-jqre/jq" -n '"a" | split("a") | join(" ")' >/dev/null 2>&1 || _b=$?
+  _c=0; "$WORK/shim-jqre/jq" -n '"a" | gsub("a"; "b")' >/dev/null 2>&1 || _c=$?
+fi
+chk "regex-less jq: the shim rejects test() and gsub() (exit 5) and passes split/join (the rows below would pass vacuously otherwise)" "$([[ "$_a" == 5 && "$_c" == 5 && "$_b" == 0 ]] && printf ok || printf bad)" "test=$_a split=$_b gsub=$_c"
+env_row "regex-less jq: a delete of home is still denied" deny "$(mkjson 'rm -rf ~' "$TREE")" "$JR"
+env_row "regex-less jq: terraform destroy still asks as a destroy" ask "$(mkjson 'terraform destroy' "$TREE")" "$JR"
+jqchk "regex-less jq: that ask is the destroy ask, not an unreadable-envelope ask" '.hookSpecificOutput.permissionDecisionReason | (contains("infra-destroy: ") and (contains("envelope-unreadable") | not))'
+env_row "regex-less jq: an ordinary lexed command is no decision" none "$(mkjson 'git commit -m "x"' "$TREE")" "$JR"
+env_row "regex-less jq: a newline in tool_name and cwd is still flattened (a Bash tool_name with a newline is not Bash)" none '{"tool_name":"Bash\nX","tool_input":{"command":"rm -rf ~"},"cwd":"/var/tmp\n/x"}' "$JR"
 echo "== output shape (D4, Phase 3.4, CPO C4) =="
 _TRUNC_ARGS="$(printf '%0400d' 0 | tr 0 a)"
 hook_run "$(mkjson 'terraform destroy' "$TREE")"
@@ -2177,7 +2195,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=935
+MIN_CASES=941
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
