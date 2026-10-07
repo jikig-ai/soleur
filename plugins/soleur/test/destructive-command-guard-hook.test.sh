@@ -1308,6 +1308,26 @@ L @@ lexer-empty: a file name that starts with push (push-notes.md) is not an as
 L @@ lexer-empty: a plain $HOME path with git in a directory name is not an ask @@ none @@ - @@ > $HOME/.config/git/ignore
 L @@ lexer-empty: a redirect to a file that IS a keyword (terraform) asks @@ ask @@ - @@ > terraform
 L @@ lexer-empty: a keyword only in a comment line before the redirect is not an ask @@ none @@ - @@ # rm -rf ~@NL@>"out.txt"
+# ---- a wrapper's chdir option moves the working directory of the command it runs (env -C, --chdir; sudo -D, --chdir), for that command only
+L @@ wrapper chdir: env -C / rm -rf * @@ deny @@ - @@ env -C / rm -rf *
+L @@ wrapper chdir: env --chdir=/ rm -rf ./* @@ deny @@ - @@ env --chdir=/ rm -rf ./*
+L @@ wrapper chdir: env --chdir / rm -rf * (value in the next word) @@ deny @@ - @@ env --chdir / rm -rf *
+L @@ wrapper chdir: env --chd=/ rm -rf * (an abbreviation) @@ deny @@ - @@ env --chd=/ rm -rf *
+L @@ wrapper chdir: env -iC / rm -rf * (C ends a cluster) @@ deny @@ - @@ env -iC / rm -rf *
+L @@ wrapper chdir: env -C/ rm -rf * (value attached) @@ deny @@ - @@ env -C/ rm -rf *
+L @@ wrapper chdir: sudo --chdir=/ rm -rf * @@ deny @@ - @@ sudo --chdir=/ rm -rf *
+L @@ wrapper chdir: sudo --chdir / rm -rf * (value in the next word) @@ deny @@ - @@ sudo --chdir / rm -rf *
+L @@ wrapper chdir: sudo -D / rm -rf * @@ deny @@ - @@ sudo -D / rm -rf *
+L @@ wrapper chdir: sudo -nD / rm -rf * (D ends a cluster) @@ deny @@ - @@ sudo -nD / rm -rf *
+L @@ wrapper chdir: sudo -D/ rm -rf * (value attached) @@ deny @@ - @@ sudo -D/ rm -rf *
+L @@ wrapper chdir: env -C /tmp rm -rf ./x is no decision @@ none @@ - @@ env -C /tmp rm -rf ./x
+L @@ wrapper chdir: env -C /tmp moves the cwd away from home: rm -rf ./* is no decision @@ none @@ @HOME@ @@ env -C /tmp rm -rf ./*
+L @@ wrapper chdir: sudo -D /tmp moves the cwd away from home: rm -rf ./* is no decision @@ none @@ @HOME@ @@ sudo -D /tmp rm -rf ./*
+L @@ wrapper chdir: the move is for the wrapped command only (env -C /tmp true; rm -rf ./* in home still denies) @@ deny @@ @HOME@ @@ env -C /tmp true; rm -rf ./*
+L @@ wrapper chdir: an unresolvable env -C directory before a recursive rm asks @@ ask @@ - @@ env -C "$UNKNOWN_DIR" rm -rf build
+L @@ wrapper chdir: an unresolvable sudo -D directory before a force push asks @@ ask @@ - @@ sudo -D "$UNKNOWN_DIR" git push --force origin feature
+L @@ wrapper chdir: an unresolvable env -C directory before something else is no decision @@ none @@ - @@ env -C "$UNKNOWN_DIR" ls
+L @@ wrapper chdir: an unresolvable directory is for the wrapped command only (the next rm is judged normally) @@ none @@ - @@ env -C "$UNKNOWN_DIR" true; rm -rf build
 # ---- decide_argv keeps the caller's state: a `--` or a wrapper must not change what the cd effect or the quote sees
 X @@ state: cd -- ~ then rm -rf * (a `--` after cd must not hide the cd) @@ deny @@ - @@ cd -- ~ && rm -rf *
 X @@ state: pushd -- ~ then rm -rf * @@ deny @@ - @@ pushd -- ~ && rm -rf *
@@ -2157,7 +2177,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=916
+MIN_CASES=935
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

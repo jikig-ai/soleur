@@ -895,6 +895,23 @@ short_val() {
   return 1
 }
 
+# short_first_val <value-taking letters> <option word> -> SFV SFV_REST: the first value-taking letter of a short-option cluster and
+# what follows it in the word (empty = the value is the NEXT word; non-empty = the value is attached: -D/tmp).
+SFV=""; SFV_REST=""
+short_first_val() {
+  local letters="$1" w="$2" k c
+  SFV=""; SFV_REST=""
+  for ((k = 1; k < ${#w}; k++)); do
+    c="${w:$k:1}"
+    case "$letters" in *"$c"*) SFV="$c"; SFV_REST="${w:$((k + 1))}"; return 0 ;; esac
+  done
+  return 1
+}
+
+# A wrapper's chdir option (env -C DIR, --chdir DIR; sudo -D DIR, --chdir DIR) is reported in WCD (the directory word), WCDF (its
+# lexer flags) and WCD_SET: the wrapped command runs there, and decide_walk judges it with the simulated working directory moved.
+WCD=""; WCDF="-"; WCD_SET=0
+
 # wrap_skip <name> <index of name in t> -> WJ: the index of the wrapped command's first word, or -1 when
 # the wrapper is a look-up only (`command -v`) or its payload is a string the guard does not analyse (env -S).
 # Reads t[] and n of the caller (dynamic scope, by design).
@@ -904,12 +921,21 @@ wrap_skip() {
   case "$name" in
     sudo)
       while (( j < n )) && [[ "${t[$j]}" == -* && "${t[$j]}" != - ]]; do
-        a="${t[$j]}"; j=$((j + 1))
+        a="${t[$j]}"; k=$j; j=$((j + 1))
         [[ "$a" == -- ]] && break
         case "$a" in
-          --user|--group|--host|--prompt|--chdir|--chroot|--role|--type|--close-from|--command-timeout|--other-user) j=$((j + 1)) ;;
+          --chdir) WCD="${t[$j]:-}"; WCDF="${f[$j]:--}"; WCD_SET=1; j=$((j + 1)) ;;
+          --chdir=*) WCD="${a#--chdir=}"; WCDF="${f[$k]:--}"; WCD_SET=1 ;;
+          --user|--group|--host|--prompt|--chroot|--role|--type|--close-from|--command-timeout|--other-user) j=$((j + 1)) ;;
           --*) : ;;
-          *) if short_val ughpCTUDRrt "$a"; then j=$((j + 1)); fi ;;
+          *) if short_first_val ughpCTUDRrt "$a"; then
+               if [[ -z "$SFV_REST" ]]; then
+                 [[ "$SFV" == D ]] && { WCD="${t[$j]:-}"; WCDF="${f[$j]:--}"; WCD_SET=1; }
+                 j=$((j + 1))
+               else
+                 [[ "$SFV" == D ]] && { WCD="$SFV_REST"; WCDF="${f[$k]:--}"; WCD_SET=1; }
+               fi
+             fi ;;
         esac
       done
       while (( j < n )) && is_assign "${t[$j]}"; do j=$((j + 1)); done ;;
@@ -927,6 +953,10 @@ wrap_skip() {
         elif [[ "$a" == --* ]]; then
           lname="${a%%=*}"; lname="${lname#--}"
           if [[ -n "$lname" && "split-string" == "$lname"* ]]; then note 1 unparsed-wrapper; return 0; fi
+          if [[ -n "$lname" && "chdir" == "$lname"* ]]; then
+            if [[ "$a" == *=* ]]; then WCD="${a#*=}"; WCDF="${f[$j]:--}"; WCD_SET=1
+            else WCD="${t[$((j + 1))]:-}"; WCDF="${f[$((j + 1))]:--}"; WCD_SET=1; fi
+          fi
           j=$((j + 1))
           # a value-taking long option with its value in the next word: --unset X, --chdir D, --argv0 A
           if [[ "$a" != *=* && -n "$lname" ]] && { [[ "unset" == "$lname"* ]] || [[ "chdir" == "$lname"* ]] || [[ "argv0" == "$lname"* ]]; }; then j=$((j + 1)); fi
@@ -936,7 +966,14 @@ wrap_skip() {
             c="${a:$k:1}"
             case "$c" in
               S) split=1; break ;;
-              u|C|P|a) (( k == ${#a} - 1 )) && eat=1; break ;;
+              u|C|P|a)
+                if (( k == ${#a} - 1 )); then
+                  eat=1
+                  [[ "$c" == C ]] && { WCD="${t[$((j + 1))]:-}"; WCDF="${f[$((j + 1))]:--}"; WCD_SET=1; }
+                else
+                  [[ "$c" == C ]] && { WCD="${a:$((k + 1))}"; WCDF="${f[$j]:--}"; WCD_SET=1; }
+                fi
+                break ;;
             esac
           done
           if (( split )); then note 1 unparsed-wrapper; return 0; fi
@@ -1000,11 +1037,26 @@ fold_name() {
   (( had )) || shopt -u nocasematch
 }
 
+# walk_in_dir <dir> <flags> <depth>: decide_walk with the simulated working directory moved to a wrapper's chdir directory, for the
+# wrapped command only (the directory and the unresolved-cd state are put back). A directory that cannot be resolved (a variable, an
+# empty word) is an unresolved cd, as for a literal `cd "$X"`.
+walk_in_dir() {
+  local d="$1" dflag="$2" saved_cwd saved_unres="$UNRES" ok=0
+  cwd_ready; saved_cwd="$SIMCWD"
+  if [[ -n "$d" ]] && expand_word "$d" "$dflag"; then
+    d="$EW"; [[ "$d" == /* ]] || d="$SIMCWD/$d"
+    if resolve_phys "$d" 1 && [[ -n "$RP" ]]; then SIMCWD="$RP"; ok=1; fi
+  fi
+  (( ok )) || UNRES=1
+  decide_walk "$3"
+  SIMCWD="$saved_cwd"; UNRES="$saved_unres"
+}
+
 # decide_walk <depth>: the rule table over DA_T/DA_F (the words of one simple command), retried on the
 # command a wrapper hides and on the words after the first `--`. It hands the words it recurses on to itself
 # through DA_T/DA_F, so it CLOBBERS them: callers use decide_argv, which puts them back.
 decide_walk() {
-  local depth="$1" n i k name
+  local depth="$1" n i k name wcd wcdf wset
   if (( depth > 8 )); then note 1 wrapper-depth; return 0; fi
   if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi
   local -a t=("${DA_T[@]}") f=("${DA_F[@]}")
@@ -1020,10 +1072,12 @@ decide_walk() {
       terraform|tofu) rule_tf ;;
       git) rule_git ;;
       sudo|doas|env|command|nohup|time|timeout|nice|-p)  # `-p`: see wrap_skip
+        WCD_SET=0; WCD=""
         wrap_skip "$name" "$i"
+        wcd="$WCD"; wcdf="$WCDF"; wset="$WCD_SET"
         if (( WJ >= 0 && WJ < n )); then
           DA_T=("${t[@]:$WJ}"); DA_F=("${f[@]:$WJ}")
-          decide_walk $((depth + 1))
+          if (( wset )); then walk_in_dir "$wcd" "$wcdf" $((depth + 1)); else decide_walk $((depth + 1)); fi
         fi ;;
     esac
   fi
