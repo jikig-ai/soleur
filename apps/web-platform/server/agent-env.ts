@@ -42,12 +42,10 @@ const AGENT_ENV_ALLOWLIST = Object.freeze([
   "USER",
   "SHELL",
   "TMPDIR",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
+  // HTTP(S)_PROXY/NO_PROXY (both cases) are DELIBERATELY absent: ambient proxy
+  // env on the dispatcher would steer EVERY session outside the egress guard
+  // (#9534 review, structural A8). The only sanctioned carrier is the
+  // entitled-session `egressProxy` injection below.
   // #8752 — the bwrap shim's artifact override. Forwarded so an incident-time
   // override reaches the Agent SDK spawn path symmetrically with the C4
   // prelude (which reads the same var); without it the shim would always

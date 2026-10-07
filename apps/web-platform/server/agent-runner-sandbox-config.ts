@@ -1,7 +1,7 @@
-import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
-import { basename, delimiter, join } from "path";
+import { basename, delimiter, dirname, join, resolve } from "path";
 import * as Sentry from "@sentry/nextjs";
 
 import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
@@ -342,10 +342,21 @@ const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
   Array.from(
     new Set([
       "GH_TOKEN",
+      "GH_ENTERPRISE_TOKEN",
       "GIT_ASKPASS",
       "GIT_INSTALLATION_TOKEN",
       "GIT_USERNAME",
       "GIT_TERMINAL_PROMPT",
+      "GIT_SSH_COMMAND",
+      "SSH_AUTH_SOCK",
+      "SSH_AGENT_PID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      // Proxy steering is denied too — a *sandboxed* override could point
+      // traffic at an attacker listener; the sanctioned proxy path is the
+      // CLI-process env, outside sandbox reach.
+      "ALL_PROXY",
+      "all_proxy",
       ...ALLOWED_SERVICE_ENV_VARS,
     ]),
   ),
@@ -360,20 +371,65 @@ const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
  *  file's existence is the gateway credential), so an unentitled session
  *  under `--ro-bind / /` could otherwise harvest a neighbor's bearer. */
 function webEgressDenyReadPaths(): string[] {
-  const home = process.env.HOME ?? "/root";
-  const paths = [
-    join(home, ".ssh"),
-    join(home, ".gnupg"),
-    join(home, ".netrc"),
-    join(home, ".aws"),
-    join(home, ".git-credentials"),
-    join(home, ".config", "gh"),
-    join(home, ".claude", ".credentials.json"),
+  // Resolve against every plausible child HOME — the sandboxed process's
+  // effective HOME can diverge from the dispatcher's env under bwrap.
+  const homes = Array.from(
+    new Set([process.env.HOME ?? "/root", "/root", "/home/soleur"]),
+  );
+  const relDirs = [
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".docker",
+    ".doppler",
+    ".azure",
+    ".kube",
+    ".config/gh",
+    ".config/git",
+    ".config/gcloud",
+    ".claude",
   ];
+  const relFiles = [
+    ".netrc",
+    ".git-credentials",
+    ".gitconfig",
+    ".npmrc",
+    ".pypirc",
+    ".config/git/credentials",
+    ".claude/.credentials.json",
+    ".claude.json",
+  ];
+  const paths = homes.flatMap((home) =>
+    [...relDirs, ...relFiles].map((r) => join(home, r)),
+  );
   // A GOOGLE_APPLICATION_CREDENTIALS path (when set) is a credential FILE —
-  // deny its target too.
+  // deny its target too (resolve first: a relative value is a dead deny).
   const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (gac) paths.push(gac);
+  if (gac) paths.push(resolve(gac));
+  // Late-create hole: the SDK SKIPS non-existent deny paths, so a credential
+  // file materialized after sandbox start would be readable. Pre-create the
+  // denied paths (0700 dirs / 0600 files — inert to any real consumer).
+  for (const home of homes) {
+    for (const r of relDirs) {
+      try {
+        mkdirSync(join(home, r), { recursive: true, mode: 0o700 });
+      } catch {
+        /* best-effort */
+      }
+    }
+    for (const r of relFiles) {
+      try {
+        const fp = join(home, r);
+        if (existsSync(fp)) continue;
+        mkdirSync(dirname(fp), { recursive: true, mode: 0o700 });
+        // "{}" not "" for JSON config files — an empty .claude.json would
+        // crash the CLI's startup parse before the sandbox even mattered.
+        writeFileSync(fp, r.endsWith(".json") ? "{}" : "", { mode: 0o600 });
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
   return paths;
 }
 

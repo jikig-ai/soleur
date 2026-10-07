@@ -89,14 +89,29 @@ export function egressForwarderWorkspaceId(
   return egressForwarders.get(conversationId)?.workspaceId;
 }
 
-/** Gateway dial target — env-overridable so a host whose bridge fell back to
- *  a non-default subnet (egress-gateway-bootstrap probes 172.31.100-103.0/24
- *  for a free one) still reaches its gateway. Defaults mirror the .mjs. */
+/** Gateway dial target. The bootstrap collision-probes 172.31.100-103.0/24
+ *  and publishes the winner to `<token dir>/.gw-target` ("host:port") — the
+ *  shared dir is already the app's rw / gateway's ro channel, so no new mount
+ *  is needed. Env vars override (tests); the file beats the hardcoded default
+ *  so a fallback-subnet host never dials a phantom. */
 function egressGwTarget(): { host: string; port: number } {
-  return {
-    host: process.env.EGRESS_GW_HOST ?? "172.31.100.2",
-    port: Number(process.env.EGRESS_GW_PORT ?? 8443),
-  };
+  if (process.env.EGRESS_GW_HOST || process.env.EGRESS_GW_PORT) {
+    return {
+      host: process.env.EGRESS_GW_HOST ?? "172.31.100.2",
+      port: Number(process.env.EGRESS_GW_PORT ?? 8443),
+    };
+  }
+  try {
+    const line = readFileSync(
+      join(egressTokenDir(), ".gw-target"),
+      "utf8",
+    ).trim();
+    const m = /^([0-9.]+):([0-9]+)$/.exec(line);
+    if (m) return { host: m[1], port: Number(m[2]) };
+  } catch {
+    /* absent/unreadable → fall through to the pinned default */
+  }
+  return { host: "172.31.100.2", port: 8443 };
 }
 
 /** Fail-fast liveness probe: an entitled session on a host whose gateway is
@@ -128,6 +143,18 @@ export async function spawnEgressForwarder(
   conversationId: string,
   workspaceId: string,
 ): Promise<EgressForwarderHandle> {
+  // A second spawn for the same conversation (supersede / stale-resume edge)
+  // must not orphan the first child and its still-valid token file.
+  teardownEgressForwarder(conversationId);
+
+  // Dead gateway = fail fast (the caller degrades to zero-egress) instead of
+  // logging "forwarder bound" for a session whose every CONNECT dies at the
+  // gw dial. This runs BEFORE the token file is minted — a probe throw must
+  // not orphan a live gateway credential outside the registry (the teardown
+  // path only reaches entries that were registered).
+  const gw = egressGwTarget();
+  await assertGatewayReachable(gw.host, gw.port);
+
   // base64url: filename-safe AND header-safe — the token is a token-dir
   // filename on one side and a proxy-URL password on the other.
   const token = randomBytes(24).toString("base64url");
@@ -140,16 +167,6 @@ export async function spawnEgressForwarder(
     mode: 0o600,
   });
 
-  // A second spawn for the same conversation (supersede / stale-resume edge)
-  // must not orphan the first child and its still-valid token file.
-  teardownEgressForwarder(conversationId);
-
-  // Dead gateway = fail fast (the caller degrades to zero-egress) instead of
-  // logging "forwarder bound" for a session whose every CONNECT dies at the
-  // gw dial.
-  const gw = egressGwTarget();
-  await assertGatewayReachable(gw.host, gw.port);
-
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     NODE_ENV: process.env.NODE_ENV,
@@ -158,10 +175,18 @@ export async function spawnEgressForwarder(
     EGRESS_GW_HOST: gw.host,
     EGRESS_GW_PORT: String(gw.port),
   };
-  const proc: ChildProcess = spawn("node", [forwarderPath()], {
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let proc: ChildProcess;
+  try {
+    proc = spawn(process.execPath, [forwarderPath()], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (err) {
+    // A spawn throw leaves the minted token file un-registered — delete it;
+    // existence IS the gateway credential.
+    rmSync(join(egressTokenDir(), token), { force: true });
+    throw err;
+  }
 
   const entry: RegistryEntry = {
     proc,
@@ -177,6 +202,19 @@ export async function spawnEgressForwarder(
   // same fail-closed shape as a spawn failure, just later).
   proc.on("exit", (code, signal) => {
     if (egressForwarders.get(conversationId)?.proc === proc) {
+      egressForwarders.delete(conversationId);
+      // Delete the orphaned token file too — existence IS the gateway
+      // credential; don't leave it valid for a listener that no longer
+      // exists.
+      try {
+        rmSync(join(egressTokenDir(), entry.token), { force: true });
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "egress-forwarder",
+          op: "exit-token-cleanup",
+          extra: { conversationId },
+        });
+      }
       log.warn(
         {
           feature: "egress-forwarder",
@@ -202,10 +240,24 @@ export async function spawnEgressForwarder(
   try {
     entry.port = await new Promise<number>((resolve, reject) => {
       let settled = false;
+      let buf = "";
+      const onStdout = (d: Buffer) => {
+        buf += d.toString("utf8");
+        const m = /egress-forwarder-listening (\d+)/.exec(buf);
+        if (m && !settled) {
+          settled = true;
+          clearTimeout(timer);
+          // The child emits exactly one line — drop the handler so later
+          // stdout noise doesn't accumulate `buf` for the child's life.
+          proc.stdout!.off("data", onStdout);
+          resolve(Number(m[1]));
+        }
+      };
       const fail = (err: unknown) => {
         if (!settled) {
           settled = true;
           clearTimeout(timer);
+          proc.stdout!.off("data", onStdout);
           reject(err);
         }
       };
@@ -213,16 +265,7 @@ export async function spawnEgressForwarder(
         () => fail(new Error("egress forwarder did not report a bound port")),
         READY_TIMEOUT_MS,
       );
-      let buf = "";
-      proc.stdout!.on("data", (d: Buffer) => {
-        buf += d.toString("utf8");
-        const m = /egress-forwarder-listening (\d+)/.exec(buf);
-        if (m && !settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(Number(m[1]));
-        }
-      });
+      proc.stdout!.on("data", onStdout);
       proc.once("error", fail);
       proc.once("exit", (code) =>
         fail(new Error(`egress forwarder exited before bind (code ${code})`)),
@@ -242,7 +285,11 @@ export async function spawnEgressForwarder(
       });
     });
   } catch (err) {
-    egressForwarders.delete(conversationId);
+    // Identity-guard: a superseded spawn's reject must not delete the newer
+    // registry entry (concurrent-spawn race — same conversationId).
+    if (egressForwarders.get(conversationId)?.proc === proc) {
+      egressForwarders.delete(conversationId);
+    }
     proc.kill();
     rmSync(join(egressTokenDir(), token), { force: true });
     throw err;
@@ -339,10 +386,14 @@ export function reapOrphanEgressForwarders(): void {
 
   // Remove stale token files. The file's existence is the gateway-side
   // validity window — a stale file would keep a dead session's credential
-  // valid until the next cleanup.
+  // valid until the next cleanup. No dir = nothing to reap (dev/test hosts
+  // never create it — skip without emitting a Sentry mirror).
+  if (!existsSync(egressTokenDir())) return;
   try {
     for (const f of readdirSync(egressTokenDir())) {
-      if (liveTokens.has(f)) continue;
+      // Dotfiles are not tokens — `.gw-target` is the bootstrap's published
+      // gateway address and must survive the sweep.
+      if (f.startsWith(".") || liveTokens.has(f)) continue;
       rmSync(join(egressTokenDir(), f), { force: true });
       log.info(
         { feature: "egress-forwarder", op: "reap-token", tokenFile: f.length },

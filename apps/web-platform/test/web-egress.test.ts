@@ -61,16 +61,40 @@ describe("buildAgentEnv — egressProxy (#9534)", () => {
     expect(env.HTTP_PROXY).toBe("http://ws-123:tok-abc@127.0.0.1:28711");
   });
 
-  it("absent egressProxy → ambient proxy vars pass through unchanged (non-entitled parity)", () => {
+  it("absent egressProxy → ambient proxy vars are NOT copied (default-deny)", () => {
+    // Structural-enum A8: ambient proxy env on the dispatcher must never
+    // steer an unentitled session — the allowlist no longer carries the
+    // proxy keys, so there is nothing to "pass through".
     vi.stubEnv("HTTP_PROXY", "http://ambient:9999");
     const env = buildAgentEnv(CREDENTIAL, {});
-    expect(env.HTTP_PROXY).toBe("http://ambient:9999");
+    expect(env.HTTP_PROXY).toBeUndefined();
   });
 
   it("absent egressProxy AND no ambient → no proxy keys at all", () => {
     const env = buildAgentEnv(CREDENTIAL, {});
     expect(env.HTTP_PROXY).toBeUndefined();
     expect(env.http_proxy).toBeUndefined();
+  });
+
+  it("NO_PROXY enumerates the full control-plane set (hard requirement, spec TR7)", () => {
+    const env = buildAgentEnv(CREDENTIAL, {}, { egressProxy: EGRESS });
+    for (const host of [
+      "api.anthropic.com",
+      "mcp-proxy.anthropic.com",
+      "statsig.anthropic.com",
+      "*.sentry.io",
+      "*.datadoghq.com",
+      "*.supabase.co",
+      "*.supabase.in",
+      "api.stripe.com",
+      "github.com",
+      "*.github.com",
+      "localhost",
+      "127.0.0.1",
+      "::1",
+    ]) {
+      expect(env.NO_PROXY).toContain(host);
+    }
   });
 });
 
@@ -197,11 +221,17 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     // bind a loopback recorder that captures what each CONNECT forwards.
     gwReceived = Buffer.alloc(0);
     gwServer = net.createServer((sock) => {
-      let captured = false;
+      let head = Buffer.alloc(0);
+      let done = false;
       sock.on("data", (d) => {
-        if (!captured) {
-          captured = true;
-          gwReceived = Buffer.from(d);
+        if (done) return;
+        head = Buffer.concat([head, d]);
+        // Capture through the header terminator — a segmented head must not
+        // partial-read green (or red-flake); data past it is tunnel payload.
+        const end = head.indexOf("\r\n\r\n");
+        if (end !== -1) {
+          done = true;
+          gwReceived = head.subarray(0, end + 4);
         }
       });
       // Never answer — lifecycle tests only need the dial to succeed; the
@@ -263,9 +293,11 @@ describe("egress-forwarder lifecycle (#9534)", () => {
   it("upstream head is byte-exact: one Proxy-Authorization (ours), single blank terminator, zero stray bytes", async () => {
     const h = await spawnEgressForwarder("conv-1", "ws-123");
     const creds = Buffer.from(`ws-123:${h.token}`).toString("base64");
+    // A duplicate inbound header must ALSO be stripped — the filter removes
+    // every Proxy-Authorization line, not the first.
     await connectRaw(
       h.port,
-      `CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic ${creds}\r\nX-Custom: keep\r\n\r\n`,
+      `CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic ${creds}\r\nProxy-Authorization: Basic dGVzdA==\r\nX-Custom: keep\r\n\r\n`,
     );
     // The gateway sees exactly: CONNECT + remaining headers (the inbound
     // Proxy-Authorization stripped, ours re-injected — identical bytes here,

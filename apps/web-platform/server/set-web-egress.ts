@@ -64,7 +64,7 @@ export async function setWebEgress(
   // audited tenant is targetWorkspaceId, NOT userId (contrast with the
   // scope-grants grant route, whose grant is solo-workspace-scoped).
   emitWorkspaceActionContext({
-    action: "scope-grant",
+    action: value ? "web-egress-grant" : "web-egress-revoke",
     userId,
     workspaceId: targetWorkspaceId,
   });

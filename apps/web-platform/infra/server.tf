@@ -2652,6 +2652,7 @@ resource "terraform_data" "egress_gateway" {
     inline = [
       "set -e",
       "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
     ]
   }
 

@@ -90,9 +90,10 @@ export function WebEgressToggle({
           </span>
           {webEgress && (
             <span className="text-xs text-soleur-text-secondary">
-              On. Sessions run without stored credentials in sandboxed
-              commands. Applies to sessions started after enabling; turning
-              off revokes live access on the session's next dispatch.
+              On. Sandboxed commands run without stored credentials — agents
+              can't push to git remotes or use stored API keys while this is
+              on. Applies to sessions started after enabling; turning off
+              revokes live access on the session's next dispatch.
             </span>
           )}
           {/* The wireframe's "Widens the security boundary" risk callout is
@@ -136,9 +137,9 @@ export function WebEgressToggle({
           <p className="text-xs text-soleur-text-secondary">
             Agents will reach the public internet over HTTPS and could send
             data to external hosts if compromised or prompt-injected.
-            Sessions run without stored credentials in sandboxed commands
-            while this is on. Every outbound request is recorded in the
-            egress audit log.
+            Sandboxed commands run without stored credentials while this is
+            on — agents can't push to git remotes or use stored API keys.
+            Every outbound request is logged with workspace attribution.
           </p>
           <div className="flex justify-end gap-2">
             <Button

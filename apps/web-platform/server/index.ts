@@ -27,6 +27,10 @@ import {
 // leaves the previous generation's forwarders reparented to init with live
 // token files — waiting for the first dispatch leaves a window where dead
 // sessions' credentials still authenticate at the gateway.
+// GATED on SOLEUR_EGRESS_REAPER=1: only the dir-owning app container sets it.
+// A second container sharing the host dir (the deploy canary, ci-deploy.sh)
+// runs this same server — its /proc cannot see the prod forwarders, so an
+// ungated sweep would mass-revoke the prod dispatcher's live tokens.
 import { reapOrphanEgressForwarders } from "./egress-forwarder";
 import { handleConversationMessages } from "./api-messages";
 import { releaseAllHeldLeases } from "./worktree-write-lease";
@@ -278,8 +282,11 @@ app.prepare().then(() => {
 
   server.listen(port, () => {
     // #9534 — reap orphaned forwarder processes + their gateway tokens before
-    // serving dispatches (best-effort, never throws).
-    reapOrphanEgressForwarders();
+    // serving dispatches (best-effort, never throws). Only on the owning
+    // dispatcher — see the import comment.
+    if (process.env.SOLEUR_EGRESS_REAPER === "1") {
+      reapOrphanEgressForwarders();
+    }
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
     log.info({
       sentryConfigured: !!process.env.SENTRY_DSN,

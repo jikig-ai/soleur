@@ -63,6 +63,47 @@ vi.mock("@/server/workspace-action-audit", () => ({
   emitWorkspaceActionContext: mockEmitWorkspaceActionContext,
 }));
 
+describe("resolveWebEgressStrict — revocation-site contract (#9534)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the RPC result verbatim (true / false / null→false)", async () => {
+    const { resolveWebEgressStrict } = await import(
+      "@/server/resolve-web-egress"
+    );
+    mockRpc.mockResolvedValue({ data: true, error: null });
+    expect(await resolveWebEgressStrict("user-1", "ws-1")).toBe(true);
+    mockRpc.mockResolvedValue({ data: false, error: null });
+    expect(await resolveWebEgressStrict("user-1", "ws-1")).toBe(false);
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    expect(await resolveWebEgressStrict("user-1", "ws-1")).toBe(false);
+  });
+
+  it("RETHROWS RPC faults — a blip must never masquerade as an off-grant", async () => {
+    const { resolveWebEgressStrict } = await import(
+      "@/server/resolve-web-egress"
+    );
+    mockRpc.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(resolveWebEgressStrict("user-1", "ws-1")).rejects.toThrow();
+  });
+
+  it("rethrows auth faults too (caller decides — the warm path treats a throw as 'keep alive')", async () => {
+    const { RuntimeAuthError, getFreshTenantClient } = await import(
+      "@/lib/supabase/tenant"
+    );
+    vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
+      throw new RuntimeAuthError("jwt_mint", "token expired");
+    });
+    const { resolveWebEgressStrict } = await import(
+      "@/server/resolve-web-egress"
+    );
+    await expect(resolveWebEgressStrict("user-1", "ws-1")).rejects.toThrow(
+      RuntimeAuthError,
+    );
+  });
+});
+
 describe("resolveWebEgress (workspace-scoped, RPC-only, fail-closed)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -150,6 +191,9 @@ describe("setWebEgress (owner-only RPC write)", () => {
     mockRpc.mockResolvedValue({ data: true, error: null });
     const { setWebEgress } = await import("@/server/set-web-egress");
     const result = await setWebEgress("user-1", true, "ws-active");
+    expect(mockEmitWorkspaceActionContext).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "web-egress-grant" }),
+    );
     expect(result).toBe(true);
     expect(mockRpc).toHaveBeenCalledWith("set_workspace_web_egress", {
       p_workspace_id: "ws-active",
@@ -162,7 +206,7 @@ describe("setWebEgress (owner-only RPC write)", () => {
     const { setWebEgress } = await import("@/server/set-web-egress");
     await setWebEgress("user-1", false, "ws-active");
     expect(mockEmitWorkspaceActionContext).toHaveBeenCalledWith({
-      action: "scope-grant",
+      action: "web-egress-revoke",
       userId: "user-1",
       workspaceId: "ws-active",
     });

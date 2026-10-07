@@ -126,11 +126,22 @@ vendored binary (full record: spec TR7):
   boolean; the forwarder, token dir, and gateway are inert when no
   workspace opts in.
 
+## Boundary mechanics (review amendments, PR-B)
+
+- **Membership gate on `SOLEUR-EGRESS-GW`:** the chain carries a terminal `ct state new ip saddr != <gw-ip> drop` (default-deny whole bridge when no gateway IP is derived). Without it, `docker network connect soleur-egress0 <container>` hands a second member open egress minus the deny set, bypassing Squid auth.
+- **Token dir ACL is the mint boundary:** `/var/lib/soleur/egress-tokens` is `0711` owned by the app container's `soleur` uid (1001) — the dispatcher writes, the gw's `proxy`-uid helper traverses for `-f`, and token filenames (the credentials) are unlistable by others. Residual accepted: any same-uid in-container process could mint or read a token file — the container uid is the trust boundary; the sandboxed agent sits behind `denyRead` + the netns.
+- **Attribution binding:** the auth helper requires the presented username to equal the token file's content (the minting dispatcher writes `<workspaceId>`) — a docker0-resident token holder cannot forge `%un` attribution in the decision log.
+- **Helper cache:** `credentialsttl 30s` — the forwarder's death is the revocation mechanism; file deletion bounds the residual window.
+- **Ambient proxy vars removed from `AGENT_ENV_ALLOWLIST`:** an ambient `HTTP_PROXY` on the dispatcher would otherwise steer every session outside the guard. The `egressProxy` injection is the only sanctioned carrier.
+- **INPUT-side filtering for `soleur-egress0` is deliberately absent** — docker0 shares the same posture (host-local services reachable from containers); a Squid compromise would gain a host dialer on any port. Recorded acceptance, matching the standing container trust model.
+- **Canary isolation:** only the prod container sets `SOLEUR_EGRESS_REAPER=1`; a second consumer of the shared token dir (deploy canary) must never sweep tokens it did not mint — its `/proc` cannot see the prod forwarders.
+
 ## Scope notes (review amendments, PR-B)
 
 - **`ws-handler` `pendingLeader` lineage does not receive `webEgress`** (`ws-handler.ts:2553` still routes through legacy `startAgentSession`, which never threads the option). The workspace toggle is silently inert on that path. Recorded rather than fixed: leader sessions are retiring machinery; if they ship user-facing again, the entitlement wiring must be extended — tracked as a Phase-B note.
 - **Prompt coherence under the quarantine**: when a session is entitled, the `GH_TOKEN`/`GIT_*` env vars still reach the CLI process (in-process tools unaffected) while the `credentials.envVars` census denies them to sandboxed commands — in-sandbox `gh`/`git push` therefore fail at auth, not network, and `GH_403_PROMPT_DIRECTIVE` keeps promising a retry that will not succeed. The mint is also functionally wasted for the entitled session (allowDomains widening is moot under the env-proxy chain). Left as-is in Phase A to keep the diff scoped; the credential broker (#9543) is the intended home of a coherent fix.
 - **Revocation granularity**: the gateway's basic-auth helper caches per `credentialsttl` (pinned 30s); the binding revocation mechanism is the forwarder's death — token-file deletion bounds the residual window, it is not instant revocation. The toggle copy says "revokes live access on the session's next dispatch" — accurate for the warm-path re-resolve; a session whose host dispatcher dies AND restarts relies on the boot reaper before the first dispatch.
+- **No in-session revocation notice (Phase A):** a mid-session toggle-off kills the forwarder but the running `Query`'s tool surface still advertises `WebFetch` — calls then fail at the refused listener. The prompt addendum tells the model to report rather than retry-loop; a client-visible frame (`egress_revoked`) needs a new WSMessage type + client renderer and is deferred — the session user may be a member while the toggler is the owner, so nobody is presently notified in-band.
 
 ## Alternatives considered
 

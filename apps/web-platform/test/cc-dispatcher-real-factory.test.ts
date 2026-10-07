@@ -1711,6 +1711,16 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       // WebFetch stays disallowed; WebSearch too.
       expect(opts.disallowedTools).toContain("WebFetch");
       expect(opts.disallowedTools).toContain("WebSearch");
+      expect(opts.allowedTools).not.toContain("WebFetch");
+      expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ egressProxy: undefined }),
+      );
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ allowWebEgress: false }),
+      );
     });
 
     it("entitled + spawn OK → forwarder spawned for the workspace, handle threaded", async () => {
@@ -1729,6 +1739,24 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       // WebFetch re-enabled; WebSearch stays disallowed (Phase A).
       expect(opts.disallowedTools).not.toContain("WebFetch");
       expect(opts.disallowedTools).toContain("WebSearch");
+      // WebFetch is ask-class: without the auto-approve it would still die at
+      // canUseTool's deny-default (agent-native review critical finding).
+      expect(opts.allowedTools).toContain("WebFetch");
+      // The two security wires the tool-surface change depends on: the
+      // credentialed proxy URL reaches the spawned CLI env, and the sandbox
+      // credential census engages. Deleting either line in the factory is a
+      // silent-bypass regression — pin both.
+      expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({
+          egressProxy: { workspaceId: expect.any(String), token: "tok-abc", port: 28711 },
+        }),
+      );
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ allowWebEgress: true }),
+      );
     });
 
     it("entitled + spawn failure → degrade to zero-egress, mirrored, Query still built", async () => {

@@ -58,8 +58,17 @@ if ! docker network inspect "$NET_NAME" >/dev/null 2>&1; then
 fi
 
 # --- token dir ------------------------------------------------------------------
+# Owner = the app container's `soleur` uid (1001 — Dockerfile `USER soleur`);
+# the dispatcher's writeFileSync mints token files inside it. 0711: the
+# gateway's auth helper runs as the `proxy` uid and needs only TRAVERSE (+x)
+# for `-f "$TOKDIR/$pass"`; nobody else can LIST the dir, so token filenames
+# (the credentials) stay unenumerable. Shared rw mount into the app
+# container is the mint channel; residual (accepted, ADR-274): a same-uid
+# process in the app container could mint a file here — the container uid is
+# the trust boundary; the sandboxed agent is behind denyRead.
 mkdir -p "$TOKEN_DIR"
-chmod 750 "$TOKEN_DIR"
+chown 1001:1001 "$TOKEN_DIR"
+chmod 0711 "$TOKEN_DIR"
 
 # --- gateway container -----------------------------------------------------------
 # Baked files land at their conventional install paths: scripts/config under
@@ -71,6 +80,10 @@ for f in "$CONF_DIR/egress-gateway-squid.conf" "$CONF_DIR/egress-auth-helper.sh"
 done
 
 if docker inspect "$GW_NAME" >/dev/null 2>&1; then
+  # `docker restart` picks up the mounted config only if the baked files were
+  # updated in-place (same inode). The provisioner's file write is in-place;
+  # a rename-replace writer would need `docker rm` + recreate — documented
+  # invariant of this refresh path.
   docker restart "$GW_NAME" >/dev/null
   log "restarted $GW_NAME (mounted config refreshed)"
 else
@@ -85,5 +98,12 @@ else
     "$IMAGE" >/dev/null
   log "started $GW_NAME on $NET_NAME at $GW_IP:$GW_PORT"
 fi
+
+# Publish the derived target for the app-side forwarder. The subnet is
+# collision-probed (172.31.100-103.0/24), so a hardcoded default would dial a
+# phantom on a fallback-subnet host; the shared token dir is already the
+# app<->gw channel. `host:port` single line; the app reads it when
+# EGRESS_GW_HOST/PORT are unset (tests override via env).
+printf '%s:%s\n' "$GW_IP" "$GW_PORT" > "$TOKEN_DIR/.gw-target"
 
 log "OK: gateway up (bridge=$BRIDGE_IF subnet=$SUBNET gw=$GW_IP)"

@@ -245,8 +245,9 @@ export default async function ScopeGrantsPage() {
             Widens the security boundary.
           </strong>{" "}
           A compromised or prompt-injected agent could send workspace data to
-          external hosts. While enabled, sessions run without stored
-          credentials in sandboxed commands.
+          external hosts. While enabled, sandboxed commands run without
+          platform credentials (agents can't push to git remotes or use
+          stored API keys while this is on).
         </p>
       </section>
 

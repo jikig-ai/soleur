@@ -150,7 +150,7 @@ is_valid_ipv4_cidr_format() {
 }
 [[ -s "$DENY_CIDR_FILE" ]] || die "gateway deny file $DENY_CIDR_FILE missing/empty — an empty deny is an open internal network"
 while IFS= read -r line || [[ -n "$line" ]]; do
-  [[ "$line" =~ ^[[:space:]]*(#|$|ip6[[:space:]]) ]] && continue
+  [[ "$line" =~ ^[[:space:]]*(#|$) || "$line" == *:* ]] && continue
   line="${line%%[[:space:]]#*}"
   is_valid_ipv4_cidr_format "$line" \
     || die "invalid CIDR in $DENY_CIDR_FILE: '$line' (reject-whole-file; refusing to build nft elements)"
@@ -218,7 +218,10 @@ CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT" || die "allowlist resolution failed 
 # after the CIDR allowlist and before the default-drop pair.
 GW_ACCEPT_LINE=""
 if [[ -n "$EGRESS_GW_IP" ]]; then
-  GW_ACCEPT_LINE='add rule ip filter SOLEUR-EGRESS ip daddr $EGRESS_GW_IP tcp dport 8443 accept comment "soleur-egress: egress gateway (#9534)"'
+  # Bake the (already ^[0-9.]+$ -validated) IP into the rule — a literal
+  # `$EGRESS_GW_IP` inside the nft -f script is an unknown identifier and
+  # aborts the whole transaction (review B1).
+  GW_ACCEPT_LINE="add rule ip filter SOLEUR-EGRESS ip daddr ${EGRESS_GW_IP} tcp dport 8443 accept comment \"soleur-egress: egress gateway (#9534)\""
 fi
 # One transaction: flush OUR chain + add the ordered rules. First-match-wins,
 # drop LAST. Everything in this chain arrived via the iifname-scoped jump, so
@@ -260,10 +263,19 @@ EOF
 # REPLIES (docker0's 172.17.0.0/16 is inside the deny set's 172.16/12) — an
 # unscoped drop would sever the very tunnel it protects. NEW gw→docker0 dials
 # still die (the one-way invariant), because cold opens are `new`.
+# Bridge membership gate: only the gateway's OWN new connections may leave
+# soleur-egress0. Without this, `docker network connect soleur-egress0 <any>`
+# hands a container open egress minus the deny set — bypassing Squid auth
+# entirely. With no gw IP derived, the whole bridge is default-deny.
+GW_MEMBER_LINE="add rule ip filter SOLEUR-EGRESS-GW ct state new counter drop comment \"soleur-egress-gw: non-gateway member drop\""
+if [[ -n "$EGRESS_GW_IP" ]]; then
+  GW_MEMBER_LINE="add rule ip filter SOLEUR-EGRESS-GW ct state new ip saddr != ${EGRESS_GW_IP} counter drop comment \"soleur-egress-gw: non-gateway member drop\""
+fi
 nft -f - <<EOF
 flush chain ip filter SOLEUR-EGRESS-GW
 add rule ip filter SOLEUR-EGRESS-GW ct state new ip daddr @soleur_egress_gw_deny limit rate 10/minute burst 50 packets log prefix "egress-gw-deny: " level notice comment "soleur-egress-gw: deny log"
 add rule ip filter SOLEUR-EGRESS-GW ct state new ip daddr @soleur_egress_gw_deny counter drop comment "soleur-egress-gw: deny drop"
+$GW_MEMBER_LINE
 EOF
 
 # --- Phase 4: ensure the single DOCKER-USER jump exists -------------------------
@@ -298,15 +310,18 @@ fi
 # 172.17.0.0/16 is inside the deny set) never even reach the `ct state new`
 # denies. NEW gw→docker0 dials fall into SOLEUR-EGRESS-GW and die against the
 # RFC1918 ranges — the one-way property.
-reply_re='iifname "soleur-egress0" oifname "docker0" ct state established,related accept'
+# `nft insert`, not `add`: DOCKER-USER ends in a terminal `return`, so an
+# appended rule is DEAD RULES — never evaluated (review P1). Insert order is
+# LIFO: the jump goes in first, then the reply-accept ahead of it.
+reply_re="iifname \"$EGRESS_BRIDGE_IF\" oifname \"$BRIDGE_IF\" ct state established,related accept"
 gwyjump_re='jump[[:space:]]+SOLEUR-EGRESS-GW([[:space:]]|$)'
-if [[ ! "$docker_user_rules" =~ $reply_re ]]; then
-  nft add rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" oifname "$BRIDGE_IF" ct state established,related accept comment '"soleur-egress: gw reply traffic (#9534)"'
-  log "installed DOCKER-USER gw reply accept"
-fi
 if [[ ! "$docker_user_rules" =~ $gwyjump_re ]]; then
-  nft add rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW comment '"soleur-egress: egress0 jump"'
+  nft insert rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW comment '"soleur-egress: egress0 jump"'
   log "installed DOCKER-USER egress0 jump"
+fi
+if [[ ! "$docker_user_rules" =~ $reply_re ]]; then
+  nft insert rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" oifname "$BRIDGE_IF" ct state established,related accept comment '"soleur-egress: gw reply traffic (#9534)"'
+  log "installed DOCKER-USER gw reply accept"
 fi
 
 log "OK: SOLEUR-EGRESS active (bridge=$BRIDGE_IF gw=$BRIDGE_GW)"

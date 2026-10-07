@@ -203,15 +203,15 @@ expect "happy: census: exactly one DROP names 169.254 (before every accept) and 
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0
 # exactly one DOCKER-USER jump insert across TWO loader runs (the stub's list chain keeps the first run's jump)
 run_loader
-expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -cE "jump SOLEUR-EGRESS([[:space:]]|\$)" "$FX/st/chain.DOCKER-USER")" -eq 1'
+expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -cE "jump SOLEUR-EGRESS([[:space:]]|\$)" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(grep -c "established,related accept" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS-GW" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 3'
 expect "happy: the gw reply accept and the egress0 jump are likewise idempotent across a re-run" all 'test "$(grep -c "established,related accept" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS-GW" "$FX/st/chain.DOCKER-USER")" -eq 1'
 # #9392: a failed DOCKER-USER read must never read as "no jump" (that inserted a DUPLICATE jump on every self-heal)
 echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=0
 run_loader
-expect "jump read: ONE failed DOCKER-USER read is retried and does not insert a duplicate jump (still exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(cat "$FX/st/listfail")" -eq 0'
+expect "jump read: ONE failed DOCKER-USER read is retried and does not insert a duplicate jump (still exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 1' 'test "$(cat "$FX/st/listfail")" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 3'
 echo 9 > "$FX/st/listfail"
 run_loader
-expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain fails toward enforcement (rc 0, WARN naming the cause, the jump IS inserted)" all 'test "$RC" -eq 0' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 2'
+expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain fails toward enforcement (rc 0, WARN naming the cause, the jump IS inserted)" all 'test "$RC" -eq 0' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 2' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 6'
 rm -f "$FX/st/listfail"
 # the retry-sleep seam is clamped to one digit: a non-numeric value must not abort the loader at the fail-open site
 bad=abc
@@ -219,7 +219,7 @@ new_fx
 printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' > "$FX/st/chain.DOCKER-USER"
 echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=$bad
 run_loader
-expect "jump read: NFT_RETRY_SLEEP=$bad is clamped (one failed read still retries, rc 0, no second jump)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 0' 'test "$(cat "$FX/st/listfail")" -eq 0'
+expect "jump read: NFT_RETRY_SLEEP=$bad is clamped (one failed read still retries, rc 0, no second jump)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 0' 'test "$(cat "$FX/st/listfail")" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 2'
 NFT_RETRY_SLEEP=0
 # a two-digit value is oversized: clamped to 1 s (a regex relaxed to `+` would sleep it out)
 new_fx
@@ -231,7 +231,7 @@ expect "jump read: NFT_RETRY_SLEEP=12 (two digits) is clamped to 1 s, not slept 
 new_fx
 printf 'iifname "docker0" counter jump SOLEUR-EGRESS-OLD\n' > "$FX/st/chain.DOCKER-USER"
 run_loader
-expect "jump read: a jump to SOLEUR-EGRESS-OLD is NOT our jump (the real jump is still inserted)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1'
+expect "jump read: a jump to SOLEUR-EGRESS-OLD is NOT our jump (the real jump is still inserted)" all 'test "$RC" -eq 0' 'test "$(calls "nft insert rule ip filter DOCKER-USER iifname docker0")" -eq 1' 'test "$(calls "nft insert rule ip filter DOCKER-USER")" -eq 3'
 
 # ── 2. the CIDR gate: any range that overlaps 169.254.0.0/16 refuses the WHOLE file before nft is touched ──
 # Host-bits-set spellings (169.255.0.0/15, 169.255.255.255/9) are REFUSED: nft masks host bits when it stores an

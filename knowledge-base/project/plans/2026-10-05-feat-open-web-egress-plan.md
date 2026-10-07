@@ -450,6 +450,16 @@ SDK has no per-host injection primitive; the forwarder port is the seam.
   loses all web access mid-task (fails closed — proxy unreachable = today's
   posture, not silent corruption), OR worse: the toggle silently does nothing
   while the UI claims browsing works.
+- **Scope-outs (recorded, deliberate):** the grant is honored only by the
+  cc-soleur-go dispatch lineage — legacy `startAgentSession`/`pendingLeader`
+  and headless auto-sync sessions stay zero-egress by omission (fail-closed,
+  never fail-open); the support persona is excluded (read-only session on the
+  plugin-corpus cwd — `runRepoLifecycle: false`); revocation is
+  dispatch-granular — an in-flight turn finishes with existing egress and an
+  idle warm session revokes on its next dispatch (toggle copy says exactly
+  this); "no readable secrets in-sandbox" bounds to *platform* credentials —
+  user-committed secret files inside the workspace remain readable workspace
+  content and are exfiltratable under the accepted residual.
 - **If this leaks, the user's data is exposed via:** a prompt-injected agent
   session POSTing workspace contents to an arbitrary host; Phase A bounds this
   to workspace content only (no readable secrets in-sandbox). Phase B restores
@@ -510,7 +520,7 @@ failure_modes:
 
 logs:
   where: "journald (container log-driver) → Vector CONTAINER_NAME=soleur-egress-gw → Better Stack; decision+close JSON lines"
-  retention: "same window as the existing Vector→Better Stack pipeline (30d); named in the Art. 30 entry (gdpr-gate DL finding) — CONNECT targets are user-adjacent metadata"
+  retention: "same window as the existing Vector→Better Stack pipeline (measured 90d — the Art. 30 register's PA-8 correction); named in the Art. 30 entry (gdpr-gate DL finding) — CONNECT targets are user-adjacent metadata"
 
 discoverability_test:
   command: "bash scripts/probes/egress-gateway-policy.sh --selftest"

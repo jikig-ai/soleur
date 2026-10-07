@@ -31,7 +31,13 @@ describe("emitWorkspaceActionContext — AC11 wrong-workspace detector", () => {
   });
 
   it("covers all three tenant-sensitive actions and defaults org to null", () => {
-    for (const action of ["invite-member", "api-key-share", "scope-grant"] as const) {
+    for (const action of [
+      "invite-member",
+      "api-key-share",
+      "scope-grant",
+      "web-egress-grant",
+      "web-egress-revoke",
+    ] as const) {
       infoMock.mockClear();
       emitWorkspaceActionContext({ action, userId: "u", workspaceId: "ws" });
       const [payload] = infoMock.mock.calls[0];

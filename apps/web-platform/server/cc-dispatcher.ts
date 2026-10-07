@@ -189,7 +189,6 @@ import {
 } from "./resolve-web-egress";
 import {
   egressForwarderWorkspaceId,
-  reapOrphanEgressForwarders,
   spawnEgressForwarder,
   teardownEgressForwarder,
 } from "./egress-forwarder";
@@ -409,6 +408,20 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
   "the platform will not retry them. If the user asks for GitHub " +
   "operations, tell them to connect a repository first (Workspace settings " +
   "→ Connect repository).";
+
+// feat-open-web-egress (#9534) — appended ONLY to an entitled session (the
+// webEgress handle's presence is the entitled+forwarder-verified condition).
+const WEB_EGRESS_PROMPT_ADDENDUM =
+  "## Web access enabled for this session\n" +
+  "Your workspace owner enabled Agent web access. `WebFetch` is available " +
+  "and reaches the public internet through a dedicated, audited gateway — " +
+  "HTTPS only; destinations that resolve to private/link-local/metadata " +
+  "ranges are refused, and every decision is logged with workspace " +
+  "attribution. Sandboxed commands run without stored credentials: in-sandbox " +
+  "`gh` and git network operations will fail at AUTH (not network) — do not " +
+  "retry them and do not promise the user a retry. If `WebFetch` fails with a " +
+  "proxy/connection error mid-session, report it rather than retrying in a " +
+  "loop — the session's web access may have been revoked.";
 
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
@@ -2924,7 +2937,13 @@ export const realSdkQueryFactory: QueryFactory = async (
         // undefined when no token was minted). The askpass token IS `ghToken`
         // (threaded as gitInstallationToken inside buildAgentEnv).
         gitAskpassScriptPath,
-        systemPrompt: effectiveSystemPrompt,
+        // feat-open-web-egress (#9534): the honest-capability addendum is
+        // gated on the LIVE forwarder handle, not the resolved entitlement —
+        // a spawn-degraded session keeps WebFetch disallowed and gets no
+        // addendum claiming egress.
+        systemPrompt:
+          effectiveSystemPrompt +
+          (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : ""),
         resumeSessionId: safeResumeSessionId,
         // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
         // the entitlement+spawn-verified condition (fail-closed: undefined
@@ -2942,11 +2961,19 @@ export const realSdkQueryFactory: QueryFactory = async (
         // support with no persona belt ever seeing the call. Filter the
         // overlap for support; the read tools support needs (Read/Glob/Grep/
         // LS/NotebookRead, kb-search's corpus path) stay auto-approved.
-        allowedTools: CC_PATH_ALLOWED_TOOLS.filter(
-          (t) =>
-            args.persona !== "support" ||
-            !SUPPORT_EXTRA_DISALLOWED_TOOLS.includes(t),
-        ),
+        allowedTools: [
+          ...CC_PATH_ALLOWED_TOOLS.filter(
+            (t) =>
+              args.persona !== "support" ||
+              !SUPPORT_EXTRA_DISALLOWED_TOOLS.includes(t),
+          ),
+          // feat-open-web-egress (#9534): WebFetch leaves disallowedTools
+          // when the forwarder is live, but it is an ask-class tool and
+          // would still die at createCanUseTool's deny-default — entitled
+          // sessions auto-approve it here (the Squid gateway is the policy
+          // boundary, not a per-URL human review).
+          ...(webEgress ? ["WebFetch"] : []),
+        ],
         // #3338 — HARD-BLOCK Edit/Write at the SDK level so the model
         // cannot emit them. Bash is intentionally NOT in this list — it is
         // sandbox-gated (permission-callback Bash gate / safe-bash /
@@ -3211,7 +3238,6 @@ export function getSoleurGoRunner(
   // left by a previous process (its ppid watchdog can't fire once
   // reparented to init) and delete its stale token files. Best-effort —
   // never throws into runner construction.
-  reapOrphanEgressForwarders();
   _runner = createSoleurGoRunner({
     queryFactory: realSdkQueryFactory,
     pendingPrompts: getPendingPromptRegistry(),

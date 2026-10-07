@@ -82,7 +82,7 @@ assert_grep "CONNECT-only" 'http_access deny !CONNECT' "$SQUID_CONF"
 assert_grep "443-only SSL_ports" 'acl SSL_ports port 443' "$SQUID_CONF"
 assert_grep "deny CONNECT !SSL_ports" 'http_access deny CONNECT !SSL_ports' "$SQUID_CONF"
 assert_grep "proxy auth required" 'http_access deny !auth_ok|proxy_auth REQUIRED' "$SQUID_CONF"
-assert_grep "dns_v4_first (nft layer is ip-only)" 'dns_v4_first on' "$SQUID_CONF"
+assert_not_grep "dns_v4_first directive not set (obsolete + config error under Squid 6)" '^[[:space:]]*dns_v4_first ' "$SQUID_CONF"
 assert_not_grep "no open allow-all" 'http_access allow all' "$SQUID_CONF"
 assert_grep "terminal deny-all" 'http_access deny all' "$SQUID_CONF"
 assert_grep "listener is 8443" 'http_port 8443' "$SQUID_CONF"
@@ -104,8 +104,8 @@ assert_grep "structured decision log (JSON-ish)" 'logformat.*\{|logformat.*decis
 echo "-- egress-deny-cidrs.txt: mandatory ranges --"
 for cidr in '10.0.0.0/8' '172.16.0.0/12' '192.168.0.0/16' '100.64.0.0/10' \
             '169.254.0.0/16' '127.0.0.0/8' 'fc00::/7' 'fe80::/10' \
-            '64:ff9b::/96' '2002::/16' '::ffff:0.0.0.0/96'; do
-  assert_grep "deny file contains $cidr" "^${cidr//./\\.}([[:space:]]|\$)|^ip6 ${cidr//./\\.}([[:space:]]|\$)" "$DENY_FILE"
+            '64:ff9b::/96' '2002::/16' '::ffff:0:0/96'; do
+  assert_grep "deny file contains $cidr" "^${cidr//./\\.}([[:space:]]|\$)" "$DENY_FILE"
 done
 
 echo "-- auth helper: token-file model --"

@@ -31,15 +31,25 @@ const INJECT = `Proxy-Authorization: Basic ${Buffer.from(`${WORKSPACE}:${TOKEN}`
 const HEADER_END = Buffer.from("\r\n\r\n");
 
 const server = net.createServer((client) => {
-  let buf = Buffer.alloc(0);
+  // Incremental delimiter search: concat once at detection, not per chunk —
+  // per-chunk concat of the whole buffer is a bounded O(n²) on a slow-drip
+  // header. `tail` carries the last ≤3 bytes so a delimiter straddling the
+  // chunk boundary is still found.
+  const chunks = [];
+  let bufLen = 0;
+  let tail = Buffer.alloc(0);
   const onData = (chunk) => {
-    buf = Buffer.concat([buf, chunk]);
-    const end = buf.indexOf(HEADER_END);
-    if (end === -1) {
-      if (buf.length > 16 * 1024) { client.destroy(); }
+    chunks.push(chunk);
+    bufLen += chunk.length;
+    const win = tail.length ? Buffer.concat([tail, chunk]) : chunk;
+    if (win.indexOf(HEADER_END) === -1) {
+      if (bufLen > 16 * 1024) { client.destroy(); return; }
+      tail = win.length > 3 ? win.subarray(win.length - 3) : win;
       return;
     }
     client.off("data", onData);
+    const buf = Buffer.concat(chunks);
+    const end = buf.indexOf(HEADER_END);
     const head = buf.subarray(0, end).toString("latin1");
     // `end` is the START of the 4-byte delimiter — the delimiter is ours to
     // re-emit after INJECT. Skipping it here keeps the tunneled bytes free of

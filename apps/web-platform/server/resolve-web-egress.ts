@@ -41,7 +41,13 @@ async function readWebEgressGrant(
   const { data, error } = await tenant.rpc("get_workspace_web_egress", {
     p_workspace_id: targetWorkspaceId,
   });
-  if (error) throw error;
+  if (error) {
+    // Carry the RESOLVED workspace on the fault so the fail-closed wrapper's
+    // Sentry mirror names the tenant that failed, not the (often null) arg.
+    (error as { targetWorkspaceId?: string }).targetWorkspaceId =
+      targetWorkspaceId;
+    throw error;
+  }
   return (data as boolean | null) ?? false;
 }
 
@@ -67,7 +73,13 @@ export async function resolveWebEgress(
       reportSilentFallback(err, {
         feature: "resolve-web-egress",
         op: "rpc-read",
-        extra: { userId, workspaceId: workspaceId ?? null },
+        extra: {
+          userId,
+          workspaceId:
+            (err as { targetWorkspaceId?: string }).targetWorkspaceId ??
+            workspaceId ??
+            null,
+        },
         message: "get_workspace_web_egress read failed; fail-closed false",
       });
       return false;
