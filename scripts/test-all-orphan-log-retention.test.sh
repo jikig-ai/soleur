@@ -750,15 +750,19 @@ else
   else
     fail "untrappable runner death produced no 'runner died untrappably' line within 20s"
   fi
-  # The announce prints BEFORE the TERM → 2s → KILL sweep — wait for the
-  # watchdog's exit (the wrapper's `wait` returns and the subshell closes)
-  # before asserting on leftovers, or the check races the grace window.
+  # The announce prints BEFORE the TERM → 2s → KILL sweep, and the wrapper
+  # exits the instant the dead runner is reaped — neither approximates
+  # "sweep done". Poll for the child's ABSENCE on a bounded budget instead:
+  # a completed sweep clears it inside ~3s; a truncated sweep (watchdog
+  # self-TERM mid-list) leaves it alive for the whole window, so the check
+  # still discriminates correctly (#9686).
   deadline=$(( SECONDS + 10 ))
-  while kill -0 "$WRAP_PID" 2>/dev/null && (( SECONDS < deadline )); do
+  leftover=""
+  while (( SECONDS < deadline )); do
+    leftover="$(pgrep -f "sleep $SLEEPTOK" 2>/dev/null | head -1)"
+    [[ -z "$leftover" ]] && break
     sleep 0.2
   done
-  sleep 0.5
-  leftover="$(pgrep -f "sleep $SLEEPTOK" 2>/dev/null | head -1)"
   if [[ -z "$leftover" ]]; then
     pass "the dead runner's suite children are reaped from the retained snapshot"
   else
