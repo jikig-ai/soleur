@@ -55,5 +55,6 @@ assertion in this PR was run against its own deletion before being kept).
    skill's TDD gate; no new rule.
 
 ## Tags
+
 category: workflow-issues
 module: community-monitor, soleur:review
