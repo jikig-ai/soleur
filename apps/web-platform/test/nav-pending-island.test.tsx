@@ -106,6 +106,42 @@ describe("NavPendingIsland", () => {
     expect(screen.queryByTestId("nav-pending-bar")).toBeNull();
   });
 
+  // #9666 RC3 — the watcher sits in a Suspense boundary that hydrates AFTER the
+  // rail links, so a click can open an episode before the watcher mounts. Its
+  // first effect run must not cancel that episode: nothing has committed.
+  it("mounting the watcher mid-episode does not cancel the episode", () => {
+    act(() => startNavPending("link"));
+    render(<NavPendingIsland />);
+    expect(getNavPendingSnapshot()).toMatchObject({ pending: true, trigger: "link" });
+    act(() => vi.advanceTimersByTime(PENDING_ENTRY_DELAY_MS));
+    expect(screen.getByTestId("nav-pending-bar")).toBeTruthy();
+  });
+
+  it("mounting the watcher mid-episode does not cancel the episode under StrictMode", () => {
+    act(() => startNavPending("link"));
+    render(
+      <React.StrictMode>
+        <NavPendingIsland />
+      </React.StrictMode>,
+    );
+    expect(getNavPendingSnapshot()).toMatchObject({ pending: true, trigger: "link" });
+    act(() => vi.advanceTimersByTime(PENDING_ENTRY_DELAY_MS));
+    expect(screen.getByTestId("nav-pending-bar")).toBeTruthy();
+  });
+
+  // Guard for the other direction: a commit that landed before the watcher
+  // mounted still ends the episode (first run compares to the store's last
+  // noted location), so the fix cannot trade a cancelled episode for a stall.
+  it("a commit that landed before the watcher mounted still ends the episode", () => {
+    act(() => startNavPending("link"));
+    window.history.pushState({}, "", "/inbox");
+    nav.pathname = "/inbox";
+    nav.search = "";
+    render(<NavPendingIsland />);
+    act(() => vi.advanceTimersByTime(PENDING_MIN_VISIBLE_MS));
+    expect(getNavPendingSnapshot().pending).toBe(false);
+  });
+
   it("popstate to a different pathname+search starts a popstate episode", () => {
     render(<NavPendingIsland />);
     // Island's commit watcher seeded lastLocation to /dashboard?a=1 at mount.
