@@ -28,6 +28,17 @@ model {
   founder -> devin "Runs Soleur sessions locally in the CLI or remotely in Devin Cloud"
   devin -> platform.plugin "Loads skills, AGENTS.md rules, and MCP in both substrates; plugin subagents and SessionStart/SessionEnd hooks only on local. Since #8401 all three /soleur:go session gates also resolve the plugin root from the two managed Devin plugin caches by .claude-plugin/plugin.json IDENTITY (never by script basename), so a cloud session with no *_PLUGIN_ROOT exported no longer runs every gate dead; the session-start gate dispatches cleanup-merged from a cache root only when that root's worktree-manager.sh carries the reap-capability token, because the cached copy may predate the #8400 guards (ADR-179 A16)" { technology "File I/O" }
 
+  // External system — local Cursor CLI only (ADR-274). The IDE editor agent and
+  // Cloud Agents are outside this element. Slice 1 loads the plugin with
+  // --plugin-dir and registers no hook events.
+  cursorCli = system "Cursor CLI" {
+    #external
+    description "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
+  }
+
+  founder -> cursorCli "Runs Soleur from the local Cursor CLI"
+  cursorCli -> platform.plugin "Loads generated skill and agent stubs from the plugin root" { technology "File I/O" }
+
   founder = actor "Founder / Operator" {
     description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-073 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
   }

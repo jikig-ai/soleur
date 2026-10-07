@@ -641,7 +641,7 @@ re-asserts a deny only when that resource's `triggers_replace` has moved; there 
 |---|---|---|
 | Registry (`host=soleur-registry`) | cloud-init only | A host replace through `registry-host-replace-dispatch.yml` after `scripts/registry-replace-preflight.sh` is clean. It is an outage window on the fleet's sole pull path ([registry-host-replace-dispatch.md](./registry-host-replace-dispatch.md)) and it dispatches `apply-web-platform-infra.yml`, so it needs that workflow enabled and the operator's approval. For an accident-guard loss, weigh whether the window is proportionate. |
 | web-1 | `terraform_data.zot_consumer_probe_install` (targeted by `apply-web-platform-infra.yml`) | No workflow lever without a trigger change: change `ghcr_deny_sh` or the probe files it hashes in a PR, or ask the operator to dispatch the owning workflow. A resource tainted by a failed deny assertion is re-applied the same way (server.tf's FATAL text names it). |
-| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-v1` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). |
+| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-vN` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). |
 
 Whether an apply workflow can run right now is operator-owned state: read it live (the dated
 note under "Known residual: web-1 until the apply workflow runs" below records one observation).
@@ -666,6 +666,18 @@ verdict, and a non-root process can bind the reserved source ports first, which
 makes the verdict inconclusive (a `ghcr_deny_probe_blind` after about an hour).
 
 ### Known residual: running web-2
+
+*Superseded 2026-10-07 (#9393, delivery mechanism merged): the "rebirth is the delivery
+event" decision below was superseded by the issue's own code arm — the three artifacts it
+names (the carved `cron-egress-allowlist-cidr.txt`, `cron-egress-resolve.sh`, and
+`cron-egress-postapply-assert.sh`) now ride `deploy_pipeline_fix_web2`'s
+`triggers_replace`, file provisioners and a dedicated secret-free remote-exec that runs
+the assert (the probe), targeted by `apply-deploy-pipeline-fix.yml` and re-fired on every
+artifact edit and web-2 replacement. What rebirth still owns is the part OUTSIDE the
+issue's three-artifact scope: the loader (`cron-egress-nftables.sh`), the alarm, and the
+systemd units stay birth-frozen until the #9372 rebirth — along with every other
+web-2 file that has no running-host channel. The text below is the pre-delivery record,
+kept unedited.*
 
 *As of 2026-10-03; this section's removal trigger is the #9372 rebirth run (#9393 also needs the web-1 apply to close).* `terraform_data.cron_egress_firewall`
 is web-1-only, so the running web-2 keeps the old allow list and resolver, and has no
@@ -770,8 +782,8 @@ approval again.
   loader. The loader runs first, under `timeout -k 2 60` (egress is open until it does), then
   the event posts, then the tick fails if the re-run failed: a failed or timed-out re-run
   (`loader_rc` 124) still reports, and only a loader that is killed with the whole unit at 120 s
-  could lose the event (the alarm email still fires). The event now says which cause class fired (a resolver delivered after #9392; an older resolver, web-2
-  until its rebirth, sends the old shape with no `host`):
+  could lose the event (the alarm email still fires). The event now says which cause class fired (a resolver delivered after #9392; an older resolver — web-2
+  until the next `apply-deploy-pipeline-fix.yml` apply re-delivers `cron-egress-resolve.sh` via `deploy_pipeline_fix_web2` (#9393) — sends the old shape with no `host`):
 
   | `extra` field | Reads as |
   |---|---|
@@ -781,7 +793,7 @@ approval again.
   | `log_present=absent` with both other rules `present` | only the default-drop LOG rule is gone: the drop still holds, but the `egress_blocked` page loses its feed, so the heal still runs |
   | `read_retried=true` | the first read failed and a retry was needed; `rc_*` are the LAST attempt's statuses, so `read_retried=true` with both `rc_*` 0 means the first read failed and the second succeeded |
   | `loader_rc` | the loader re-run's exit status: 0 ok, 124 timed out (a wedged loader, usually the same netlink contention), 137 killed after ignoring the TERM (the `-k 2` grace), anything else is the loader's own failure |
-  | `host` | the host that emitted the event (web-1 or web-2); an older resolver (web-2 until its rebirth) sends no `host` and no new fields |
+  | `host` | the host that emitted the event (web-1 or web-2); an older resolver (web-2 until its next `deploy_pipeline_fix_web2` apply, #9393) sends no `host` and no new fields |
   | `docker_since` just before the tick | Docker restarted and reprogrammed `DOCKER-USER` |
   | `loader_since` just before the tick | a loader run finished shortly before the tick (the stamp is when the loader unit last became active, not an overlap detector) |
   | both rules `absent` (statuses 0, or 1 with the ENOENT text), `read_retried=false`, nothing recent | a real external flush |

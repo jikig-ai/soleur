@@ -360,6 +360,15 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
     const allowed = new Set([
       ...TRIGGER_FILES.map((p) => p.split("/").pop()!),
       "web-2-ssh-host-key.pub",
+      // #9393 — the three cron-egress artifacts a RUNNING web-2 gets only through
+      // this resource: the carved CIDR allow list, the resolver, and the
+      // post-apply probe (delivered then executed). They are hashed by
+      // cron_egress_firewall's triggers_replace on the web-1 side, not by
+      // deploy_pipeline_fix, so they are sanctioned here the same way the
+      // host-key pin is — as a named exception, not a TRIGGER_FILES member.
+      "cron-egress-allowlist-cidr.txt",
+      "cron-egress-resolve.sh",
+      "cron-egress-postapply-assert.sh",
     ]);
     const forbidden = new Set([
       "push-infra-config.sh",
@@ -547,6 +556,15 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
       // #9151 — web-2's host-key pin feeds local.web_2_ssh_host_key + the web-2
       // sibling's triggers_replace; a re-capture must re-fire the apply.
       "apps/web-platform/infra/web-2-ssh-host-key.pub",
+      // #9393 — the three cron-egress artifacts are hashed by
+      // deploy_pipeline_fix_web2's OWN triggers_replace (the sibling resource),
+      // not by deploy_pipeline_fix, so like the seccomp/apparmor precedents they
+      // are absent from TRIGGER_FILES. A body-only edit — e.g. the daily
+      // CIDR-refresh regeneration — must still fire this workflow or web-2 never
+      // receives it (the same silent-skip shape #5505 fixed for the web-1 set).
+      "apps/web-platform/infra/cron-egress-allowlist-cidr.txt",
+      "apps/web-platform/infra/cron-egress-resolve.sh",
+      "apps/web-platform/infra/cron-egress-postapply-assert.sh",
     ]);
     expect(new Set(paths)).toEqual(expected);
   });

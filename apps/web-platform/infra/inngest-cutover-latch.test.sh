@@ -333,7 +333,9 @@ teardown_case
 echo "TEST: #7761 the durability gate is bind-mount-immune"
 GATE_LINES="$(grep -nE '^[[:space:]]*if \[\[ -n "\$LATCH_REQUIRE_MOUNT" \]\] &&' "$TARGET" || true)"
 GATE_COUNT="$(printf '%s\n' "$GATE_LINES" | grep -cE '^[0-9]+:' || true)"
-assert_eq "(7b) both durability gate sites are present" "2" "$GATE_COUNT"
+# 2 -> 3 at #7777: record_latch_clear carries the same gate — a clear record on the ephemeral
+# root disk is the same fake-durable failure the gate exists to prevent.
+assert_eq "(7b) all three durability gate sites are present (flush write, pre-flush read, clear write)" "3" "$GATE_COUNT"
 # Anchored on the gate CONSTRUCT, not a bare `mountpoint` token: the file legitimately discusses
 # mountpoint(1) in the comment explaining why it is not used, and a bare-token check would match
 # that prose (cq-assert-anchor-not-bare-token).
@@ -407,10 +409,132 @@ assert_eq "unprovable mount => state reason is latch-unrecordable" \
   "latch-unrecordable" "$(jq -r '.reason' "$STATE")"
 teardown_case
 
+# ============================================================================================
+# #7777 — THE APPEND-ONLY AUTHORIZED CLEAR (the ledger's second record type)
+#
+# The latch is a LEDGER: `flushed_at=` records a FLUSHALL; `cleared_at=` records a later,
+# separately-evidenced authorization (run/actor/boot_id) appended by the `reflush` arm before it
+# re-enters the shared flush path. `flush_already_performed` reads the NEWEST record — a clear
+# supersedes the flush it follows WITHOUT erasing it. Nothing here deletes; the assertions pin
+# both halves — the clear permits a second flush AND the original record survives untouched.
+# ============================================================================================
+
+# --- 10. AUTHORIZED REFLUSH: clear appended, flush runs, latch re-engages -------------------
+echo "TEST: #7777 reflush,run=,by= on a latched host clears + flushes + re-latches"
+setup_case
+run_flip armed CUTOVER_REDIS_DBSIZE=0 >/dev/null          # first authorized flip: flushed_at@t1
+FIRST_LATCH="$(cat "$LATCH")"
+: > "$TRACE"; : > "$LOGTRACE"
+rc=$(run_flip 'reflush,run=42000001,by=octocat' CUTOVER_REDIS_DBSIZE=0 CUTOVER_BOOT_ID=boot-fixture-1)
+assert_eq "(10a) authorized reflush exits 0" "0" "$rc"
+assert_contains "(10a) the second FLUSHALL ran" "$(trace_csv)" "flushall"
+# Append-only: the ORIGINAL flushed_at record is still the FIRST line, untouched.
+assert_eq "(10b) the original flushed_at record survives as line 1" "$FIRST_LATCH" "$(head -n 1 "$LATCH")"
+assert_contains "(10b) a cleared_at record was APPENDED" "$(cat "$LATCH")" "cleared_at="
+assert_contains "(10b) the clear carries the run evidence" "$(cat "$LATCH")" "run=42000001"
+assert_contains "(10b) the clear carries the actor evidence" "$(cat "$LATCH")" "by=octocat"
+assert_contains "(10b) the clear carries the host boot_id evidence" "$(cat "$LATCH")" "boot_id=boot-fixture-1"
+assert_eq "(10c) the ledger holds exactly 3 records (flush, clear, flush)" "3" "$(wc -l < "$LATCH" | tr -d '[:space:]')"
+assert_contains "(10c) the NEWEST record is a flushed_at — the latch re-engaged" "$(tail -n 1 "$LATCH")" "flushed_at="
+assert_contains "(10d) the latch-cleared marker is observable" "$(cat "$LOGTRACE")" "latch-cleared"
+teardown_case
+
+# --- 11. THE REFUSAL: no evidence, no clear, no flush ----------------------------------------
+echo "TEST: #7777 a bare or malformed reflush refuses (no clear, no flush)"
+for badflag in 'reflush' 'reflush,run=42000001' 'reflush,by=octocat' 'reflush,run=,by=octocat' 'reflush,run=abc,by=octocat'; do
+  setup_case
+  run_flip armed CUTOVER_REDIS_DBSIZE=0 >/dev/null
+  BEFORE="$(cat "$LATCH")"
+  : > "$TRACE"; : > "$LOGTRACE"
+  rc=$(run_flip "$badflag" CUTOVER_REDIS_DBSIZE=0)
+  order=$(trace_csv)
+  assert_eq "(11) '$badflag' exits 1" "1" "$rc"
+  assert_absent "(11) '$badflag' ran NO FLUSHALL" "$order" "flushall"
+  assert_contains "(11) '$badflag' flag driven to terminal aborted" "$order" "flag:aborted"
+  assert_contains "(11) '$badflag' emits the evidence refusal" "$(cat "$LOGTRACE")" "reflush-evidence-invalid"
+  assert_eq "(11) '$badflag' left the ledger byte-identical" "$BEFORE" "$(cat "$LATCH")"
+  teardown_case
+done
+
+# --- 12. THE PREDICATE: newest record wins ----------------------------------------------------
+echo "TEST: #7777 armed honors the newest ledger record"
+setup_case
+mkdir -p "$(dirname "$LATCH")"
+printf 'flushed_at=t1 host=h dbsize=0\ncleared_at=t2 run=1 by=x boot_id=b\n' > "$LATCH"
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0)
+assert_eq "(12a) armed over a cleared_at tail proceeds" "0" "$rc"
+assert_contains "(12a) the authorized flush ran" "$(trace_csv)" "flushall"
+teardown_case
+
+echo "TEST: #7777 armed over a malformed tail fails CLOSED"
+setup_case
+mkdir -p "$(dirname "$LATCH")"
+printf 'flushed_at=t1 host=h dbsize=0\ngarbage-not-a-record\n' > "$LATCH"
+rm -f "$STATE"
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0)
+assert_eq "(12b) armed over a malformed tail refuses" "1" "$rc"
+assert_absent "(12b) malformed tail => NO FLUSHALL" "$(trace_csv)" "flushall"
+teardown_case
+
+echo "TEST: #7777 armed over a cleared_at on an otherwise-new ledger proceeds"
+setup_case
+mkdir -p "$(dirname "$LATCH")"
+printf 'cleared_at=t2 run=1 by=x boot_id=b\n' > "$LATCH"
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0)
+assert_eq "(12c) cleared_at alone is not a flush record — the flip proceeds" "0" "$rc"
+assert_contains "(12c) the flush ran" "$(trace_csv)" "flushall"
+teardown_case
+
+# --- 13. IDEMPOTENT RE-ENTRY: the same run does not double-record -----------------------------
+echo "TEST: #7777 a re-fired reflush with the SAME run appends no duplicate clear"
+setup_case
+run_flip armed CUTOVER_REDIS_DBSIZE=0 >/dev/null
+mkdir -p "$(dirname "$LATCH")"
+printf 'cleared_at=t9 run=42000001 by=octocat boot_id=b0\n' >> "$LATCH"
+rc=$(run_flip 'reflush,run=42000001,by=octocat' CUTOVER_REDIS_DBSIZE=0)
+assert_eq "(13) same-run re-entry exits 0" "0" "$rc"
+assert_eq "(13) no duplicate cleared_at for the same run (still 3 records)" \
+  "3" "$(wc -l < "$LATCH" | tr -d '[:space:]')"
+teardown_case
+
+# --- 14. THE CLEAR'S WRITE IS FATAL, NOT BEST-EFFORT -------------------------------------------
+echo "TEST: #7777 an unwritable latch path refuses the CLEAR loudly"
+setup_case
+run_flip armed CUTOVER_REDIS_DBSIZE=0 >/dev/null
+# The ledger file already EXISTS (case 6 relies on dir-500 blocking file CREATION); an append
+# to an existing file ignores the directory mode, so the FILE itself must be read-only here.
+chmod 400 "$LATCH"
+: > "$TRACE"; : > "$LOGTRACE"
+rc=$(run_flip 'reflush,run=42000001,by=octocat' CUTOVER_REDIS_DBSIZE=0)
+assert_eq "(14) unwritable clear => non-zero exit" "1" "$rc"
+assert_contains "(14) unwritable clear => loud latch marker" "$(cat "$LOGTRACE")" "latch"
+assert_absent "(14) unwritable clear => NO FLUSHALL" "$(trace_csv)" "flushall"
+assert_contains "(14) unwritable clear => terminal aborted, not a parked reflush" "$(trace_csv)" "flag:aborted"
+chmod 600 "$LATCH"
+teardown_case
+
+# --- 15. MONOTONICITY STILL HOLDS: no branch erases the ledger --------------------------------
+# Case 8 loops the terminal branches; the reflush arm is asserted separately here because it
+# DOES flush — the property is that even the authorized second flush leaves every prior
+# record intact (the file only ever grows).
+echo "TEST: #7777 the authorized reflush only ever appends (monotone ledger growth)"
+setup_case
+run_flip armed CUTOVER_REDIS_DBSIZE=0 >/dev/null
+BYTES_BEFORE="$(wc -c < "$LATCH")"
+run_flip 'reflush,run=42000001,by=octocat' CUTOVER_REDIS_DBSIZE=0 CUTOVER_BOOT_ID=boot-fixture-2 >/dev/null
+assert_eq "(15) the ledger GREW past the pre-clear size (nothing removed)" "yes" \
+  "$( [[ "$(wc -c < "$LATCH")" -gt "$BYTES_BEFORE" ]] && echo yes || echo no)"
+assert_eq "(15) the original record is still byte-identical at line 1" "flushed_at" \
+  "$(head -n 1 "$LATCH" | cut -d= -f1)"
+teardown_case
+
 # --- assertion-count FLOOR ------------------------------------------------------------------
 # 45 -> 51: +6 for the #7761 bind-mount-immunity block (case 7b). Derived from a green run;
 # raise in lockstep when adding assertions.
-LATCH_MIN_ASSERTIONS=51
+# 51 -> 100: #7777 — case 10 (+10), case 11 (5 flags x 5 asserts = +25), case 12 (+6),
+# case 13 (+2), case 14 (+4), case 15 (+2); the 7b gate-site assertion is a recount of an
+# existing assertion (new expected value), not additive. 51 + 49 = 100.
+LATCH_MIN_ASSERTIONS=100
 if [[ "$PASS" -lt "$LATCH_MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193, and #7695's mutation audit): routing the floor through
   # the counter it exists to protect means one edit disarms both.
