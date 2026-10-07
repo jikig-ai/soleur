@@ -710,11 +710,12 @@ _generation_scoped_count() {
 #      a literal "host_name":"..." grep against the outer row matches NOTHING, EVER — which would
 #      pin H at 0 and refuse every arm. Decode `.raw`, then match the field literal.
 #
-# WINDOW. 15 minutes: wide enough to tolerate both today's ~42s terminal-arm cadence (1.42/min measured) and any
-# future rate-limit, which the follow-up issue constrains to stay under 15 minutes. It must not be
-# tightened below the slower of the two. (Measured 2026-08-25: 170 rows in 2h = 1.42/min ~= one
-# row every 42s. An earlier draft said "~35s cadence" beside "~1.4/min"; those disagree — 35s
-# would be 1.7/min — and 1.42/min is the measured figure.)
+# WINDOW. 15 minutes: wide enough to tolerate both the pre-#7696 ~42s terminal-arm cadence
+# (1.42/min measured 2026-08-25: 170 rows in 2h) and the post-#7696 throttled cadence —
+# emit_state in inngest-cutover-flip.sh emits noop-* rows at most once per 300s, so a healthy
+# terminal host lands ~3 rows per window. It must not be tightened below the slower of the
+# two cadences this gate has seen; an older image emitting every ~42s and a newer one every
+# 300s both answer it.
 # DELIBERATELY A LITERAL, not an env override (#7674 review). Two reasons, and either alone
 # settles it. (1) It is not mapped into cutover-inngest.yml's step env, and GitHub does not
 # export repo vars to a step unless the workflow names them — so an override here would be an
