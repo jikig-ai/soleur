@@ -1,0 +1,14 @@
+# MUST PASS (rc 0). The credential stays on curl's STDIN: a pipeline into `-H @-`, and the
+# `--config -` form fed by a process substitution.
+name: fixture-stdin
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: header on stdin through a pipe
+        run: |
+          printf 'Authorization: Bearer %s\n' "$FIXTURE_TOKEN" | curl --disable --noproxy '*' -sS -H @- "$SINK_URL"
+      - name: header on stdin through a config
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "CF-Access-Client-Id: %s"\n' "$FIXTURE_TOKEN")

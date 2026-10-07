@@ -1,0 +1,20 @@
+# Rule E must fire TWICE: two TEXTUAL sites, each reachable through a YAML alias a second time.
+# A `<<: *common` merge key and a `run: *snip` alias re-walk the same node; reporting it per
+# reference would print four messages (and the second line would be the anchor's, not its own).
+name: fixture-aliased
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - &common
+        name: anchored step
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+      - <<: *common
+        name: merged step
+      - name: anchored scalar
+        run: &snip |
+          curl --disable --noproxy '*' -sS -H "X-API-Key: ${FIXTURE_TOKEN}" "$SINK_URL"
+      - name: aliased scalar
+        run: *snip

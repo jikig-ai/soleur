@@ -1,0 +1,13 @@
+# Rule E must fire ONCE. A WORKFLOW step with NO `shell:` key (GitHub defaults it to bash).
+name: fixture-noshell
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: compliant first
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+      - name: offending step without shell
+        run: |
+          curl --disable --noproxy '*' -sS -H "X-Signature-256: sha256=${FIXTURE_TOKEN}" "$SINK_URL"

