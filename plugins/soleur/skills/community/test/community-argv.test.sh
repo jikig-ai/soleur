@@ -6,8 +6,7 @@
 # (handle + app password) in bsky-community.sh and bsky-setup.sh.
 #
 # A PATH-shim `curl` records its argv NUL-delimited and, when asked for `--config -`,
-# its stdin, and, for `--data-binary @file`, the body file's content and `stat` mode AT
-# CURL TIME (the file is gone by the time the script exits). A PATH-shim `jq` records its
+# its stdin config and, for `--data-binary @-`, its stdin BODY (recorded separately). A PATH-shim `jq` records its
 # argv and the NAMES of its exported variables (never values). Nothing touches the
 # network. Per path the test proves:
 #   1. the credential is absent from curl's argument list (the /proc/<pid>/cmdline surface);
@@ -70,12 +69,10 @@ for a in "$@"; do
   if [[ "$prev" == "--config" && "$a" == "-" ]]; then
     if [[ "${SHIM_MUTATE:-}" == nostdin ]]; then cat > /dev/null; else cat > "$d/stdin.$n"; fi
   fi
-  # `--data-binary @file` keeps CR/LF (real curl); the body file's content and mode are read NOW.
-  if [[ "$prev" == "--data-binary" && "$a" == @* && "${SHIM_MUTATE:-}" != nobody ]]; then
-    f="${a#@}"
-    cp -- "$f" "$d/body.$n" 2>/dev/null
-    { stat -c %a -- "$f" 2>/dev/null || stat -f %Lp -- "$f" 2>/dev/null; } > "$d/bodymode.$n"
-    printf '%s\n' "$f" > "$d/bodypath.$n"
+  # `--data-binary @-` reads the request body from stdin (and keeps CR/LF, like real curl). It is
+  # recorded as body.<n>, SEPARATE from a `--config -` stdin config (stdin.<n>).
+  if [[ "$prev" == "--data-binary" && "$a" == "@-" ]]; then
+    if [[ "${SHIM_MUTATE:-}" == nobody ]]; then cat > /dev/null; else cat > "$d/body.$n"; fi
   fi
   prev="$a"
   [[ "$a" == http*://* ]] && url="$a"
@@ -113,6 +110,8 @@ n=$((n + 1))
 printf '%s\n' "$n" > "$d/jqcount"
 printf '%s\0' "$@" > "$d/jqargv.$n"
 compgen -e > "$d/jqenv.$n"
+# SHIM_MODE=jqfail: the createSession body build (the program that reads $ENV.BSKY_PW) fails.
+[[ "${SHIM_MODE:-}" == jqfail && "$*" == *ENV.BSKY_PW* ]] && exit 5
 exec "@REAL_JQ@" "$@"
 SHIM
 sed -i "s|@REAL_JQ@|$REAL_JQ|" "$MOCK/jq"
@@ -149,8 +148,8 @@ run_sut() {
   local -a envs=()
   while [[ "$1" != "--" ]]; do envs+=("$1"); shift; done
   shift
-  rm -f "$MOCK"/count "$MOCK"/argv.* "$MOCK"/stdin.* "$MOCK"/env.* "$MOCK"/body.* "$MOCK"/bodymode.* \
-    "$MOCK"/bodypath.* "$MOCK"/jqcount "$MOCK"/jqargv.* "$MOCK"/jqenv.*
+  rm -f "$MOCK"/count "$MOCK"/argv.* "$MOCK"/stdin.* "$MOCK"/env.* "$MOCK"/body.* \
+    "$MOCK"/jqcount "$MOCK"/jqargv.* "$MOCK"/jqenv.*
   local p="$MOCK:$SYS_PATH"
   [[ "$extra" != "-" ]] && p="$extra:$p"
   local o="$SANDBOX/out" e="$SANDBOX/err"
@@ -337,7 +336,6 @@ GUILD=123456789012345678
 BSKY_HANDLE_FIX="synthetic.bsky.social"
 BSKY_PW_FIX="SYNTH$(_rep a 4)-$(_rep b 4)-$(_rep c 4)-$(_rep d 4)"
 BSKY_JWT_FIX="synthjwt.synthjwt.synthjwt"
-mkdir -p "$SANDBOX/tmp"
 
 # disc_bad <class>: a Discord token that must be refused (the real shape is [A-Za-z0-9_-]+ x3, dot-joined).
 disc_bad() {
@@ -454,7 +452,9 @@ check "harness: a shim that stops recording stdin makes the Discord stdin row RE
 
 # ===================================================================================
 echo "== bsky-community.sh createSession =="
-BC_ENV=("BSKY_HANDLE=$BSKY_HANDLE_FIX" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" "TMPDIR=$SANDBOX/tmp")
+BC_ENV=("BSKY_HANDLE=$BSKY_HANDLE_FIX" "BSKY_APP_PASSWORD=$BSKY_PW_FIX")
+# A handle holding a real control character (newline): refused, never sent.
+BAD_HANDLE=$'syn\nthetic'"$MARK"
 
 # body_arg <n>: the operand after --data-binary on call n.
 body_arg() {
@@ -465,6 +465,7 @@ body_arg() {
   done
   return 1
 }
+# The createSession body arrives on curl's STDIN (`--data-binary @-`); the shim records it as body.<n>.
 chk_body_ok() { # <n> <handle> <password>
   [[ -s "$MOCK/body.$1" ]] && jq -e --arg h "$2" --arg p "$3" '.identifier == $h and .password == $p' "$MOCK/body.$1" >/dev/null 2>&1
 }
@@ -503,19 +504,16 @@ curl_env_clean() {
   done
   (( seen >= 1 ))
 }
-tmp_empty() { [[ -z "$(ls -A "$SANDBOX/tmp")" ]]; }
 
 # bsky_body_checks <label> <n> <handle> <password>
 bsky_body_checks() {
-  local label="$1" n="$2" h="$3" pw="$4" bp
-  bp="$(body_arg "$n" || true)"
+  local label="$1" n="$2" h="$3" pw="$4"
   check "$label: password absent from argv" not argv_has "$pw" "$n"
   check "$label: handle absent from argv" not argv_has "$h" "$n"
   check "$label: --disable --noproxy '*' lead argv" test "$(argv_first3 "$n")" = "--disable --noproxy *"
-  check "$label: body sent as --data-binary @<file> under TMPDIR" \
-    bash -c '[[ "$1" == "@$2/bsky-body."* ]]' _ "$bp" "$SANDBOX/tmp"
-  check "$label: body file mode is 0600 AT CURL TIME" test "$(cat "$MOCK/bodymode.$n" 2>/dev/null)" = "600"
-  check "$label: body file held exactly the handle and password at curl time" chk_body_ok "$n" "$h" "$pw"
+  check "$label: body sent as --data-binary @- (curl's stdin, no file)" test "$(body_arg "$n" || true)" = "@-"
+  check "$label: stdin body held exactly the handle and password" chk_body_ok "$n" "$h" "$pw"
+  check "$label: createSession carries no stdin config (the body owns stdin)" not argv_has "--config" "$n"
   check "$label: explicit JSON Content-Type" argv_has "Content-Type: application/json" "$n"
 }
 
@@ -524,8 +522,6 @@ check "bsky-community create-session: exit 0" test "$RC" -eq 0
 check "bsky-community create-session: exactly one curl call" test "$(curl_calls)" -eq 1
 check "bsky-community create-session: the session DID still reaches stdout" grep -qF "did:plc:synth0001" <<<"$OUT"
 bsky_body_checks "bsky-community create-session" 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
-check "bsky-community create-session: body file removed on exit" bash -c '[[ ! -e "${1#@}" ]]' _ "$(body_arg 1 || echo @/nonexistent-sentinel-x)"
-check "bsky-community create-session: no body file left under TMPDIR" tmp_empty
 check "bsky-community create-session: password absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_PW_FIX"
 check "bsky-community create-session: handle absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_HANDLE_FIX"
 check "bsky-community create-session: jq shim recorded calls and the writer reads \$ENV.BSKY_PW (recording works)" \
@@ -535,7 +531,7 @@ check "bsky-community create-session: no other jq child inherits them" jq_others
 check "bsky-community create-session: the curl child does not inherit them" curl_env_clean
 
 # handle with a double quote: escaped by jq, never injectable
-run_sut - "" "BSKY_HANDLE=syn\"thetic.bsky.social" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" "TMPDIR=$SANDBOX/tmp" -- bash "$BSKY_COMMUNITY" create-session
+run_sut - "" "BSKY_HANDLE=syn\"thetic.bsky.social" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" -- bash "$BSKY_COMMUNITY" create-session
 # (The script's own session-echo line is not escaped, so its exit status is not asserted: that
 # line is unreachable with a real session, since Bluesky would never mint one for this handle.)
 check "bsky-community handle with a double quote: createSession is still sent exactly once" test "$(curl_calls)" -eq 1
@@ -543,19 +539,24 @@ check "bsky-community handle with a double quote: body decodes to exactly that h
   chk_body_ok 1 'syn"thetic.bsky.social' "$BSKY_PW_FIX"
 # a handle or password with a control character is refused BEFORE curl; non-zero, never 0 or 3; marker on stderr
 bsky_refused() { # <label> <handle> <password>
-  run_sut - "" "BSKY_HANDLE=$2" "BSKY_APP_PASSWORD=$3" "TMPDIR=$SANDBOX/tmp" -- bash "$BSKY_COMMUNITY" create-session
+  run_sut - "" "BSKY_HANDLE=$2" "BSKY_APP_PASSWORD=$3" -- bash "$BSKY_COMMUNITY" create-session
   check "$1: exit 1 (non-zero, never 0 or 3)" test "$RC" -eq 1
   check "$1: curl never invoked" test "$(curl_calls)" -eq 0
   check "$1: exact value-free refusal marker on stderr" refusal_line bsky-community.sh
   check "$1: value never echoed" no_leak
-  check "$1: no body file left behind" tmp_empty
+  check "$1: jq never invoked (the refused value reaches no child process)" test "$(jq_calls)" -eq 0
 }
-bsky_refused "bsky-community handle with a newline" $'syn\nthetic'"$MARK" "$BSKY_PW_FIX"
+bsky_refused "bsky-community handle with a newline" "$BAD_HANDLE" "$BSKY_PW_FIX"
 bsky_refused "bsky-community password with a control character" "$BSKY_HANDLE_FIX" "$MARK"$'\x01'"x"
-run_sut - "" "${BC_ENV[@]/TMPDIR=*/TMPDIR=$SANDBOX/no-such-dir}" -- bash "$BSKY_COMMUNITY" create-session
-check "bsky-community body file cannot be created: exit 1, curl never invoked" \
-  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
-check "bsky-community body file cannot be created: exact refusal marker on stderr" refusal_line bsky-community.sh body_write_failed
+# a failed body build must never read as a successful (empty) POST: pipefail carries jq's status out.
+run_sut - "" "${BC_ENV[@]}" SHIM_MODE=jqfail -- bash "$BSKY_COMMUNITY" create-session
+check "bsky-community jq failure while building the body: exit non-zero, no session reported" \
+  bash -c '[[ "$1" -ne 0 ]] && ! grep -qF "did:plc:synth0001" <<<"$2"' _ "$RC" "$OUT"
+# xtrace refusal with the password bound: exit 78, curl never invoked, the password reaches no output.
+run_sut - "" "${BC_ENV[@]}" -- bash -x "$BSKY_COMMUNITY" create-session
+check "bsky-community under bash -x with the password bound: exit 78" test "$RC" -eq 78
+check "bsky-community under bash -x: curl never invoked" test "$(curl_calls)" -eq 0
+check "bsky-community under bash -x: the password reaches no output" bash -c '! grep -qF -e "$1" <<<"$2"' _ "$BSKY_PW_FIX" "$OUT$ERR"
 
 echo "== bsky-community.sh get-metrics and post =="
 run_sut - "" "${BC_ENV[@]}" -- bash "$BSKY_COMMUNITY" get-metrics
@@ -563,27 +564,25 @@ check "bsky-community get-metrics: exit 0, two calls (createSession, getProfile)
 bsky_body_checks "bsky-community get-metrics createSession" 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
 check "bsky-community get-metrics: the session bearer is the stdin header on the profile call (unchanged)" \
   test "$(stdin_text 2)" = "header = \"Authorization: Bearer $BSKY_JWT_FIX\""
-check "bsky-community get-metrics: no body file left under TMPDIR" tmp_empty
 run_sut - "" "${BC_ENV[@]}" BSKY_ALLOW_POST=true -- bash "$BSKY_COMMUNITY" post "synthetic post text"
 check "bsky-community post (the hosted path): exit 0, two calls (createSession, createRecord)" bash -c '[[ "$1" -eq 0 && "$2" -eq 2 ]]' _ "$RC" "$(curl_calls)"
 bsky_body_checks "bsky-community post createSession" 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
 check "bsky-community post: the password never reaches the createRecord call either" not argv_has "$BSKY_PW_FIX" 2
-run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" "BSKY_APP_PASSWORD=$MARK"$'\x01'"x" BSKY_ALLOW_POST=true "TMPDIR=$SANDBOX/tmp" -- bash "$BSKY_COMMUNITY" post "synthetic post text"
+run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" "BSKY_APP_PASSWORD=$MARK"$'\x01'"x" BSKY_ALLOW_POST=true -- bash "$BSKY_COMMUNITY" post "synthetic post text"
 check "bsky-community post (hosted): a refused credential exits 1, never 0 or 3, curl never invoked" \
   bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
 check "bsky-community post (hosted): the refusal marker reaches stderr, where content-publisher captures it" refusal_line bsky-community.sh
 
-# --- harness row: a shim that stops reading the --data-binary body turns the body rows RED -----
+# --- harness row: a shim that stops reading the stdin body turns the body rows RED -------------
 run_sut - "" "${BC_ENV[@]}" SHIM_MUTATE=nobody -- bash "$BSKY_COMMUNITY" create-session
-check "harness: a shim that stops reading the --data-binary body makes the body-content row RED" not chk_body_ok 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
+check "harness: a shim that stops recording the stdin body makes the body-content row RED" not chk_body_ok 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
 
 echo "== bsky-setup.sh verify =="
 # verify sources $GIT_ROOT/.env; the file is synthesized here and lives in the scratch checkout.
 printf 'BSKY_HANDLE=%s\nBSKY_APP_PASSWORD=%s\n' "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX" > "$GITWORK/.env"
-RUN_CWD="$GITWORK" run_sut - "" "TMPDIR=$SANDBOX/tmp" -- bash "$BSKY_SETUP" verify
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$BSKY_SETUP" verify
 check "bsky-setup verify: exit 0, two calls (createSession, getProfile)" bash -c '[[ "$1" -eq 0 && "$2" -eq 2 ]]' _ "$RC" "$(curl_calls)"
 bsky_body_checks "bsky-setup verify createSession" 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
-check "bsky-setup verify: body file removed and nothing left under TMPDIR" tmp_empty
 check "bsky-setup verify: password absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_PW_FIX"
 check "bsky-setup verify: handle absent from every jq argv (jq shim)" not jq_argv_has "$BSKY_HANDLE_FIX"
 check "bsky-setup verify: the writer jq inherits the variable names" jq_writer_env_ok
@@ -591,12 +590,20 @@ check "bsky-setup verify: no other jq child inherits them" jq_others_env_clean
 check "bsky-setup verify: the curl children do not inherit them" curl_env_clean
 check "bsky-setup verify: the session bearer is the stdin header on the profile call (unchanged)" \
   test "$(stdin_text 2)" = "header = \"Authorization: Bearer $BSKY_JWT_FIX\""
+RUN_CWD="$GITWORK" run_sut - "" SHIM_MODE=jqfail -- bash "$BSKY_SETUP" verify
+check "bsky-setup jq failure while building the body: exit non-zero, no session reported" \
+  bash -c '[[ "$1" -ne 0 ]] && ! grep -qF "did:plc:synth0001" <<<"$2"' _ "$RC" "$OUT$ERR"
+RUN_CWD="$GITWORK" run_sut - "" -- bash -x "$BSKY_SETUP" verify
+check "bsky-setup under bash -x: exit 78" test "$RC" -eq 78
+check "bsky-setup under bash -x: curl never invoked" test "$(curl_calls)" -eq 0
+check "bsky-setup under bash -x: the password reaches no output" bash -c '! grep -qF -e "$1" <<<"$2"' _ "$BSKY_PW_FIX" "$OUT$ERR"
 printf 'BSKY_HANDLE=$%s\nBSKY_APP_PASSWORD=%s\n' "'syn\\001thetic${MARK}'" "$BSKY_PW_FIX" > "$GITWORK/.env"
-RUN_CWD="$GITWORK" run_sut - "" "TMPDIR=$SANDBOX/tmp" -- bash "$BSKY_SETUP" verify
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$BSKY_SETUP" verify
 check "bsky-setup verify with a control character in the handle: exit 1, curl never invoked" \
   bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
 check "bsky-setup verify with a control character in the handle: exact refusal marker on stderr" refusal_line bsky-setup.sh
 check "bsky-setup verify with a control character in the handle: value not echoed" no_leak
+check "bsky-setup verify with a control character in the handle: jq never invoked" test "$(jq_calls)" -eq 0
 rm -f "$GITWORK/.env"
 
 
@@ -655,11 +662,12 @@ M="$(mut_make discord-setup.sh '_discord_token_ok "${DISCORD_BOT_TOKEN_INPUT}" |
 RUN_CWD="$GITWORK" run_sut - "" "DISCORD_BOT_TOKEN_INPUT=$BAD_VAL" -- bash "$M" validate-token
 check "mutant: discord-setup with its guard removed invokes curl on a malformed token (RED on the refusal rows)" test "$(curl_calls)" -ge 1
 
-# 4. The bsky password handed to curl as `-d "$body"`, to jq as `--arg`, or exported.
-M="$(mut_make bsky-community.sh '--data-binary @"$BSKY_BODY_FILE" \' '-d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \')"
+# 4. The bsky password handed to curl as `-d "$body"`, to jq as `--arg`, or exported; the
+# control-character guard removed; pipefail dropped so a jq failure reads as a good POST.
+M="$(mut_make bsky-community.sh '--data-binary @- \' '-d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \')"
 run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
 check "mutant: bsky-community handing the password to curl as -d is RED (password in argv)" argv_has "$BSKY_PW_FIX" 1
-check "mutant: bsky-community handing the password to curl as -d is RED (no --data-binary body file)" not chk_body_ok 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
+check "mutant: bsky-community handing the password to curl as -d is RED (no --data-binary @- stdin body)" not chk_body_ok 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
 M="$(mut_make bsky-community.sh \
   $'BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \\\n    jq -n \'{identifier: $ENV.BSKY_ID, password: $ENV.BSKY_PW}\'' \
   $'jq -n --arg id "$BSKY_HANDLE" --arg pw "$BSKY_APP_PASSWORD" \'{identifier: $id, password: $pw}\'')"
@@ -667,14 +675,28 @@ run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
 check "mutant: bsky-community passing the password to jq as --arg is RED (password on jq argv, jq shim)" jq_argv_has "$BSKY_PW_FIX"
 check "mutant: bsky-community passing the password to jq as --arg is RED (the environment row loses its writer)" not jq_writer_env_ok
 check "mutant: bsky-community passing the password to jq as --arg: the curl shim alone stays blind to it" not argv_has "$BSKY_PW_FIX" 1
-M="$(mut_make bsky-community.sh $'  BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \\\n' $'  export BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD"; \\\n')"
+M="$(mut_make bsky-community.sh $'response=$(BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \\\n' $'response=$(export BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD"; \\\n')"
 run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
 check "mutant: bsky-community exporting the password is RED (the curl child inherits it)" not curl_env_clean
-check "mutant: bsky-community exporting the password is RED (a later jq child inherits it)" not jq_others_env_clean
-M="$(mut_make bsky-setup.sh '--data-binary @"$BSKY_BODY_FILE" \' '-d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \')"
+M="$(mut_make bsky-community.sh 'if ! _bsky_cred_ok "${BSKY_HANDLE:-}" || ! _bsky_cred_ok "${BSKY_APP_PASSWORD:-}"; then' 'if false; then')"
+run_sut - "" "BSKY_HANDLE=$BAD_HANDLE" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" -- bash "$M" create-session
+check "mutant: bsky-community with its guard removed invokes curl on a control-character handle (RED on the refusal rows)" test "$(curl_calls)" -ge 1
+M="$(mut_make bsky-community.sh 'set -euo pipefail' 'set -eu')"
+run_sut - "" "${BC_ENV[@]}" SHIM_MODE=jqfail -- bash "$M" create-session
+check "mutant: bsky-community without pipefail reads a failed body build as a good POST (RC 0 is what the jq-failure row forbids)" test "$RC" -eq 0
+M="$(mut_make bsky-setup.sh '--data-binary @- \' '-d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \')"
 printf 'BSKY_HANDLE=%s\nBSKY_APP_PASSWORD=%s\n' "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX" > "$GITWORK/.env"
-RUN_CWD="$GITWORK" run_sut - "" "TMPDIR=$SANDBOX/tmp" -- bash "$M" verify
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$M" verify
 check "mutant: bsky-setup handing the password to curl as -d is RED (password in argv)" argv_has "$BSKY_PW_FIX" 1
+check "mutant: bsky-setup handing the password to curl as -d is RED (no --data-binary @- stdin body)" not chk_body_ok 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
+M="$(mut_make bsky-setup.sh 'if ! _bsky_cred_ok "${BSKY_HANDLE:-}" || ! _bsky_cred_ok "${BSKY_APP_PASSWORD:-}"; then' 'if false; then')"
+printf 'BSKY_HANDLE=$%s\nBSKY_APP_PASSWORD=%s\n' "'syn\\001thetic${MARK}'" "$BSKY_PW_FIX" > "$GITWORK/.env"
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$M" verify
+check "mutant: bsky-setup with its guard removed invokes curl on a control-character handle (RED on the refusal rows)" test "$(curl_calls)" -ge 1
+M="$(mut_make bsky-setup.sh 'set -euo pipefail' 'set -eu')"
+printf 'BSKY_HANDLE=%s\nBSKY_APP_PASSWORD=%s\n' "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX" > "$GITWORK/.env"
+RUN_CWD="$GITWORK" run_sut - "" SHIM_MODE=jqfail -- bash "$M" verify
+check "mutant: bsky-setup without pipefail reads a failed body build as a good POST (RC 0 is what the jq-failure row forbids)" test "$RC" -eq 0
 rm -f "$GITWORK/.env"
 
 echo
@@ -682,8 +704,8 @@ echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 303 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 303\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 310 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 310\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]
