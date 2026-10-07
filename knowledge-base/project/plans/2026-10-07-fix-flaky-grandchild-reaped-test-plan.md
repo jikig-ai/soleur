@@ -11,6 +11,22 @@ closes: 9670
 
 # fix: de-flake the real-grandchild group-kill test (#9670)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-07
+**Sections enhanced:** 3 (Research Insights verification, Observability, Sharp Edges)
+**Agents / checks used:** plan-review panel (DHH, Kieran, code-simplicity) already folded in; deepen gates 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12 run mechanically; installed-vitest API verification (no extra research fan-out: strong local context, test-only single-file change).
+
+### Key verifications
+1. `vi.waitFor` options `{ timeout, interval }` confirmed in the installed vitest 4.1.x typings (`node_modules/vitest/dist/index.d.ts`, `interface WaitForOptions`); the repo's `installViWaitForFloor` wrapper honors an explicit `timeout` (`options?.timeout ?? 10_000`), so `timeout: 15_000` wins over the 10s floor.
+2. `repeats` is a supported per-test option (`@vitest/runner` `TestOptions.repeats`), so the temporary `{ repeats: 50 }` verification aid is valid; hooks (`beforeEach`/`afterEach`, including the sleeper reaper) must run per repeat - confirm at work time by checking that each iteration gets a fresh `mkdtemp` dir (if not, fall back to the 50x CLI loop).
+3. Cited issues resolved live: #7122 CLOSED (origin of the P2-1 group kill), #5796 CLOSED (the 10s waitFor floor), #9670 OPEN. Gate 4.12 scope-check count = 1, gate 4.8 PAT grep = no hits, `cq-cite-content-anchor-not-line-number` exists in AGENTS.md.
+
+### New considerations
+- vitest `waitFor` runs the callback immediately and then every `interval`; a thrown `Error(lastProbe)` is how the last state reaches the rejection - the plan's `try/catch` converts that into the evidence-bearing `expect` message.
+- No ADR/C4/IaC/encryption/UI/guard-contract trigger fires (single test file under `apps/web-platform/test`).
+
+
 ## Overview
 
 `apps/web-platform/test/server/inngest/cron-claude-eval-substrate-exit.test.ts` has a row
@@ -239,6 +255,34 @@ From `apps/web-platform` in the worktree. Load: `2 x nproc` `yes >/dev/null` loo
 ## Test Scenarios
 
 The edited row itself is the scenario; verification is Phase 2 (50x under load, full file, mutation of the product kill).
+
+## Observability
+
+Test-only change (no runtime surface); declared because the file is code-class under `apps/web-platform`. The "signal" is the CI test result and the failure message.
+
+```yaml
+liveness_signal:
+  what: the vitest row "kills a SIGTERM-ignoring grandchild ..." passes in the required `test-webplat` CI check
+  cadence: every PR run and every merge_group run
+  alert_target: a red required check (merge queue ejection) plus the follow-up count comment on #9670
+  configured_in: .github/workflows/ci.yml (test-webplat job; unchanged by this plan)
+error_reporting:
+  destination: the vitest assertion message in the GitHub Actions job log
+  fail_loud: true - the message carries pid, last /proc state, waited ms and loadavg so a recurrence is classifiable without reproducing
+failure_modes:
+  - mode: runner stall longer than the 15s bound
+    detection: last probe state is S (alive) with a high loadavg and waited ~15000ms
+    alert_route: red check; count on #9670
+  - mode: product regression (group kill removed or detached dropped)
+    detection: same message, but reproducible on every run and in the local mutation run
+    alert_route: red check on every PR
+logs:
+  where: GitHub Actions job logs for test-webplat
+  retention: GitHub default (90 days)
+discoverability_test:
+  command: grep -c "timeout: 15_000" apps/web-platform/test/server/inngest/cron-claude-eval-substrate-exit.test.ts
+  expected_output: 1
+```
 
 ## Domain Review
 
