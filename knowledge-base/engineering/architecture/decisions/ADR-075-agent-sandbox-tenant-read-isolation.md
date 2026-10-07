@@ -99,3 +99,37 @@ measurement of the new pair rides the faithful canary's four derived probes (`sa
 `runHardeningProbes` + `runArgsFdTransportProbe` — the census carries a deliberate unreferenced fd so
 the shim's sweep is observable, and the `--args` probe replays the SDK's real fd transport) and the
 boot self-probe `op:"sandbox-hardening-selfprobe"`.
+
+## Addendum — 2026-10-07 (#5862): Option C shipped via the vendored builder — residual closed
+
+**Status: `accepted` (residual closed).** The exit criterion fired — and the trigger that fired it was
+the *opposite* of what was predicted: dependency-patch infrastructure did not need to be introduced,
+because the SDK bump itself delivered the reorder. The vendored `@anthropic-ai/claude-agent-sdk@0.3.284`
+/ CLI 2.1.284 binary's embedded bwrap builder implements deny-then-restore natively: each `denyRead`
+landing emits `--tmpfs` FIRST, then every covered `allowWrite` path is re-bound rw (`Re-bound write
+path wiped by denyRead tmpfs`) and every covered `allowRead` path re-binds ro (`Re-allowed read access
+within denied region`). Confirmed by reading the binary's embedded builder and by the in-image capture
+audit (`infra/sandbox-canary-argv.json` regenerated via `SANDBOX_CANARY_MODE=capture` on `node:22-slim`,
+`verify_ok`).
+
+What changed:
+
+- `buildAgentSandboxConfig` reverted to the structural shape — `denyRead: [workspacesRoot(),
+  c4StagingRoot, "/proc", ...denyReadExtra]`, a constant list. `enumerateSiblingDenyPaths`, its
+  `degraded` fail-closed arm, and the per-dispatch `readdirSync` are deleted. The `readOnly` support
+  persona (ADR-113) carries `allowRead: [workspacePath]`, which the same builder restores ro inside
+  the masked parent.
+- The TOCTOU is structurally closed: a sibling workspace created after a session's namespace build
+  lives under the parent `--tmpfs` — masked, not merely unlisted. The direct-bwrap TOCTOU regression
+  case in `test/sandbox-isolation.test.ts` pins the property (create sibling mid-session → invisible).
+- The intent-vs-effect gap flagged in Consequences is now covered: the committed-fixture ordering pin
+  (`test/sandbox-canary.test.ts`, "every covering `--tmpfs` precedes an rw `--bind` restore of the
+  workspace") reddens on any SDK drift that re-inverts the ordering, and the capture gate byte-diffs
+  the argv on every capture-input change. The per-dispatch log renamed `op:sibling-deny` →
+  `op:tenant-deny` (`degraded` field retired with the arm it described); prior `sibling-deny` events
+  remain queryable in the log store.
+- The residual-undetectability consequence retires: the ordering is now asserted pre-merge (ordering
+  pin + capture gate), not merely hoped-for at runtime.
+
+Option B (#5863 — per-tenant isolation so an agent cannot observe siblings *exist*) remains the
+longer-term end-state; this amendment closes only the read-side residual.

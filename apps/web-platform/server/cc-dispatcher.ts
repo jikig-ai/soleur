@@ -221,8 +221,9 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
-// (the agent's OWN workspace — read+write in the sandbox because it is NOT in
-// the per-sibling `denyRead`; sibling workspaces stay hidden); the token rides
+// (the agent's OWN workspace — read+write in the sandbox: it sits under the
+// parent `denyRead` tmpfs but the vendored builder re-binds it rw after the
+// mask; sibling workspaces stay hidden); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
 import {
@@ -2043,7 +2044,8 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
     // strands the agent's IN-BWRAP `git rev-parse` when its `gitdir:` target
     // resolves OUTSIDE the agent's own workspace (sibling workspaces are
-    // per-sibling `denyRead`-hidden; #5848 → per-sibling deny). The prompt-driven
+    // hidden by the parent-root `denyRead` tmpfs; #5848 → per-sibling deny,
+    // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
     // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
@@ -2617,9 +2619,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
   // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The only
   // sandbox read+writable dir is `workspacePath` — the agent's OWN workspace
-  // is NOT in the per-sibling `denyRead`, so the base `--ro-bind / /` grants
-  // read and `allowWrite:[workspacePath]` grants write (see
-  // `buildAgentSandboxConfig`; #5848 → per-sibling deny — the earlier
+  // sits under the parent `denyRead` tmpfs and the vendored builder's
+  // deny-then-restore ordering re-binds it rw (see `buildAgentSandboxConfig`;
+  // #5848 → per-sibling deny, #5862 → constant parent deny — the earlier
   // `allowRead:[workspacePath]` re-bind was read-only and shadowed the write
   // bind, breaking writes) plus `createSandboxHook` realpath-containment;
   // `$HOME`/`/tmp` bwrap-visibility is unverifiable. We write the helper into

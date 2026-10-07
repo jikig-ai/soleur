@@ -461,9 +461,11 @@ export function runArgsFdTransportProbe(setupArgv) {
 }
 
 /**
- * Deterministic sort for capture normalization. `enumerateSiblingDenyPaths`
- * returns readdir order, which is not stable across runners; sorting makes the
- * captured argv byte-reproducible so `--verify`'s diff does not false-fail.
+ * Deterministic sort for captured deny lists. Any caller whose deny input
+ * order is not stable across runners MUST sort before capture so the emitted
+ * argv is byte-reproducible and `--verify`'s diff does not false-fail. (Under
+ * the #5862 constant parent deny the list is already stable; this stays for
+ * any future enumerated input.)
  */
 export function sortDenyPaths(paths) {
   return [...paths].sort();
@@ -520,9 +522,12 @@ export function parseShimSetupArgv(rawArgv) {
  * runtime, not here. Given the same `base`, always returns byte-identical
  * paths — the property that makes the captured argv reproducible.
  *
- * The own workspace is the ONLY entry under `root`, so
- * `enumerateSiblingDenyPaths` returns exactly `["/proc"]` and the emitted argv
- * is deterministic by construction (no readdir-order hazard, no sort needed).
+ * The own workspace is the ONLY entry under `root`. Under the #5862 constant
+ * parent deny the deny list is `["/tmp/soleur-sandbox-canary", <c4>, "/proc"]`
+ * regardless of contents; the zero-sibling hermetic invariant still matters
+ * because the vendor's deny-then-restore emits a restore bind PER covered
+ * allowWrite path — extra entries under root would add non-deterministic
+ * restore binds to the captured argv.
  *
  * @param {string} [base]
  * @returns {{ root: string, ownWorkspacePath: string, prepDirs: string[] }}
@@ -1124,7 +1129,8 @@ export async function doCapture({
   const prevC4Staging = process.env.C4_RENDER_STAGING_ROOT;
   // #8623: point the C4 staging root (a denyRead entry) at a throwaway dir so
   // the projection can placeholder it — never under the hermetic workspaces
-  // root, where it would become a sibling and break the zero-sibling invariant.
+  // root, where it would add a second covered path to the vendor's
+  // deny-then-restore set and break byte-determinism.
   const c4StagingDir = realpathSync(mkdtempSync(join(tmpdir(), "soleur-canary-c4-")));
   // #9614/#9618: the bundled CLI derives its bridge-spawn dir as
   // `join(homedir(), ".claude", "bridge-spawn")` — a raw homedir() join with no
@@ -1135,8 +1141,9 @@ export async function doCapture({
 
   try {
     process.env.C4_RENDER_STAGING_ROOT = c4StagingDir;
-    // Hermetic zero-sibling root: own workspace is the ONLY entry under root, so
-    // enumerateSiblingDenyPaths → denyRead:["/proc"] and the argv is byte-det.
+    // Hermetic zero-sibling root: own workspace is the ONLY entry under root,
+    // so the vendor's per-path restore set (deny-then-restore under the #5862
+    // constant parent deny) is deterministic and the argv is byte-det.
     mkdirSync(ownWorkspacePath, { recursive: true });
     const resolvedRoot = realpathSync(root);
     const resolvedOwn = realpathSync(ownWorkspacePath);

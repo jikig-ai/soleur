@@ -185,6 +185,63 @@ export interface SpawnSandboxBOpts extends SpawnBwrapOpts {
   readyTimeoutMs?: number;
 }
 
+export interface SandboxProcessHandle {
+  child: ChildProcess;
+  pid: number;
+  /** Buffered child stdout/stderr, appended as chunks arrive. */
+  stdoutChunks: string[];
+  stderrChunks: string[];
+  kill: () => void;
+  waitExit: () => Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+}
+
+/**
+ * Spawn a long-running bwrap child in `root` running an arbitrary `script`,
+ * capturing its stdio. The hook point for mid-session probes (#5862 TOCTOU
+ * regression): the script can wait on a flag file inside the bind-mounted
+ * `root` while the HOST mutates sibling state, then re-probe the namespace.
+ * Caller must call `kill()` in afterEach.
+ */
+export function spawnSandboxed(
+  root: string,
+  script: string,
+  opts: SpawnBwrapOpts = {},
+): SandboxProcessHandle {
+  const args = buildBwrapArgs(root, script, opts);
+  const child = spawn("bwrap", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: opts.env ?? process.env,
+  });
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  child.stdout?.on("data", (c) => stdoutChunks.push(String(c)));
+  child.stderr?.on("data", (c) => stderrChunks.push(String(c)));
+
+  const waitExit = () =>
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve({ code: child.exitCode, signal: child.signalCode });
+        return;
+      }
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+
+  return {
+    child,
+    pid: child.pid!,
+    stdoutChunks,
+    stderrChunks,
+    kill: () => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // no-op
+      }
+    },
+    waitExit,
+  };
+}
+
 /**
  * Launch a long-running bwrap child in `rootB`, used for FR7 /proc/<pid>/environ
  * cross-read attempts. The child runs `sleep infinity` (or caller-supplied command)
@@ -423,7 +480,7 @@ export function shellQuote(s: string): string {
  */
 export const FS_DENY_RE = /No such file|cannot open|Permission denied/;
 
-async function waitForFile(abs: string, timeoutMs: number): Promise<void> {
+export async function waitForFile(abs: string, timeoutMs: number): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (fs.existsSync(abs)) return;

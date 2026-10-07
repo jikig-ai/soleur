@@ -30,7 +30,10 @@ import {
   shellQuote,
   spawnBwrap,
   spawnSandboxB,
+  spawnSandboxed,
+  waitForFile,
   type SandboxBHandle,
+  type SandboxProcessHandle,
   type WorkspacePair,
 } from "./helpers/sandbox-isolation-fixtures";
 
@@ -45,6 +48,7 @@ const fr9OptIn = process.env.ANTHROPIC_ISOLATION_TEST_OK === "1";
 describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", () => {
   const pairs: WorkspacePair[] = [];
   const sandboxes: SandboxBHandle[] = [];
+  const procHandles: SandboxProcessHandle[] = [];
 
   beforeAll(() => {
     rescueStaleFixtures();
@@ -53,6 +57,12 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
   afterEach(async () => {
     while (sandboxes.length) {
       const handle = sandboxes.pop();
+      if (!handle) continue;
+      handle.kill();
+      await handle.waitExit().catch(() => undefined);
+    }
+    while (procHandles.length) {
+      const handle = procHandles.pop();
       if (!handle) continue;
       handle.kill();
       await handle.waitExit().catch(() => undefined);
@@ -183,6 +193,54 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     // somehow read a legitimate /proc/<pid>/environ and got lucky that the
     // sentinel wasn't there.
     expect(result.stdout + result.stderr).toMatch(FS_DENY_RE);
+  });
+
+  test("TOCTOU regression (#5862): a sibling created AFTER the namespace build stays masked", async () => {
+    // The ADR-075 residual: per-sibling `denyRead` enumeration could never
+    // cover a workspace created between the namespace build and session end.
+    // Under the parent-tmpfs ordering (`--tmpfs <parent>` + rw re-bind of own —
+    // the shape `spawnBwrap`'s `pair` option emits and the vendored CLI 2.1.284
+    // builder produces for `denyRead: [<root>]` + `allowWrite: [own]`), the
+    // late sibling lives under the masked host dir — invisible permanently.
+    //
+    // Drive it live: a long-running sandboxed shell in rootA waits on a flag
+    // file (inside the bind-mounted root, host-visible); the host creates the
+    // sibling WHILE the namespace is already built, then signals; the sandbox
+    // re-lists the parent and attempts the cross-read.
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const late = path.join(pair.parent, "late-sibling");
+    const readyFlag = path.join(pair.rootA, ".sandbox-ready");
+    const goFlag = path.join(pair.rootA, ".probe-go");
+    const script = [
+      `touch ${shellQuote(readyFlag)}`,
+      `while [ ! -f ${shellQuote(goFlag)} ]; do sleep 0.05; done`,
+      `echo "__LS__"; ls ${shellQuote(pair.parent)}`,
+      `echo "__CAT__"; cat ${shellQuote(late + "/secret.md")} 2>&1 || echo "__CAT_RC__$?"`,
+    ].join("; ");
+
+    const handle = spawnSandboxed(pair.rootA, script, { pair });
+    procHandles.push(handle);
+    // The namespace is confirmed built (marker written through the rw bind).
+    await waitForFile(readyFlag, 10_000);
+
+    // The late sibling arrives on the HOST after the namespace exists.
+    const { token } = seedMarker(late, "secret.md");
+    fs.writeFileSync(goFlag, "go");
+    await handle.waitExit();
+
+    const out = handle.stdoutChunks.join("");
+    // Scope to the `ls` output — the `cat` error line legitimately names the
+    // late-sibling PATH, so a whole-output `not.toContain` false-fails.
+    const lsSection = (out.split("__LS__")[1] ?? "").split("__CAT__")[0];
+    expect(lsSection).toContain("rootA");
+    // rootB existed BEFORE the build (masked by the tmpfs); late-sibling
+    // arrived AFTER — both are absent from the namespace's parent listing.
+    expect(lsSection).not.toContain("rootB");
+    expect(lsSection).not.toContain("late-sibling");
+    expect(out).toContain("__CAT_RC__");
+    expect(out).not.toContain(token);
+    expect(out).toMatch(FS_DENY_RE);
   });
 
   test("AC7-positive: two users in the SAME workspace see the same files (shared-workspace happy path)", () => {

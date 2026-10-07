@@ -217,8 +217,9 @@ describe("computeCanaryPaths — pure, IO-free, deterministic zero-sibling path 
     expect(a).toEqual(b);
     expect(a.root).toBe("/fixed/base/soleur-sandbox-canary");
     expect(a.ownWorkspacePath.startsWith(a.root + "/")).toBe(true);
-    // The own workspace is the ONLY entry under root (zero siblings) so
-    // enumerateSiblingDenyPaths returns just ["/proc"].
+    // The own workspace is the ONLY entry under root (zero siblings) so the
+    // captured restore set is deterministic — under the constant parent deny
+    // (#5862) the covering `--tmpfs <root>` is a fixed literal either way.
     expect(a.prepDirs).toContain(a.ownWorkspacePath);
   });
 
@@ -728,6 +729,156 @@ describe("bridge-spawn placeholder (#9614/#9618)", () => {
       }
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// #5862 — deny-before-restore ordering pin on the COMMITTED fixture (the
+// ADR-075 exit criterion). The tenant isolation property is positional: the
+// covering `--tmpfs` on the workspaces root must land BEFORE the vendored
+// builder's rw `--bind` restore of the own workspace. A future SDK drift that
+// re-inverts the ordering (deny last, or deny with no restore) strands or
+// exposes the workspace — this pin turns both into a red suite pre-merge.
+// ---------------------------------------------------------------------------
+
+const CANARY_ROOT_REAL = computeCanaryPaths().root; // "/tmp/soleur-sandbox-canary"
+const WS_REAL = computeCanaryPaths().ownWorkspacePath;
+
+/** Substitute the fixture's placeholders with the canonical capture paths so
+ * covering-class membership is decidable on real paths. */
+function substituteFixtureArgv(argv: string[]): string[] {
+  return substituteCanonicalArgv(argv, {
+    ws: WS_REAL,
+    empty: "/replay/empty",
+    c4Staging: "/replay/c4-staging",
+    bridgeSpawn: "/replay/bridge-spawn",
+  });
+}
+
+/**
+ * The ordering invariant, as a violations list (empty = holds): at least one
+ * `--tmpfs` target must cover `wsDst` (ancestor-or-equal — the deny exists),
+ * AND every covering `--tmpfs` must be followed by a rw `--bind wsDst wsDst`
+ * restore. A tmpfs covering wsDst that lands after the last restore is the
+ * strand-regression class (own workspace masked with nothing re-exposing it).
+ */
+function denyBeforeRestoreViolations(argv: string[], wsDst: string): string[] {
+  const covers = (t: unknown): t is string =>
+    typeof t === "string" && (wsDst === t || wsDst.startsWith(`${t}/`));
+  const coveringTmpfs: number[] = [];
+  const wsBindIdx: number[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--tmpfs" && covers(argv[i + 1])) coveringTmpfs.push(i);
+    if (argv[i] === "--bind" && argv[i + 1] === wsDst && argv[i + 2] === wsDst)
+      wsBindIdx.push(i);
+  }
+  const violations: string[] = [];
+  if (coveringTmpfs.length === 0) {
+    violations.push("no --tmpfs covers the workspace destination — tenant deny absent");
+  }
+  for (const i of coveringTmpfs) {
+    if (!wsBindIdx.some((j) => j > i)) {
+      violations.push(
+        `covering --tmpfs ${argv[i + 1]} (argv[${i}]) has no later rw --bind restore of ${wsDst}`,
+      );
+    }
+  }
+  return violations;
+}
+
+describe("committed-fixture deny-before-restore ordering pin (#5862)", () => {
+  const fx = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+  ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+
+  it("every covering --tmpfs precedes an rw --bind restore of the workspace", () => {
+    const argv = substituteFixtureArgv(fx.bwrapSetupArgv);
+    expect(denyBeforeRestoreViolations(argv, WS_REAL)).toEqual([]);
+  });
+
+  it("the covering deny root is prepped (literal capture root lands in prepDirs)", () => {
+    expect(fx.prepDirs).toContain(CANARY_ROOT_REAL);
+  });
+
+  // Guard Contract mutation matrix — the pin must drive RED on each broken
+  // ordering and PASS the one legal variant. Rows run against a canonical
+  // synthetic argv (covering tmpfs + post-deny restore), so the matrix is
+  // meaningful even before the fixture is re-captured.
+  const CANON: string[] = [
+    "--ro-bind", "/", "/",
+    "--bind", WS_REAL, WS_REAL,
+    "--tmpfs", CANARY_ROOT_REAL,
+    "--tmpfs", "/proc",
+    "--bind", WS_REAL, WS_REAL, // the vendor deny-wipe restore
+    "--dev", "/dev",
+  ];
+  const withoutPair = (a: string[], opt: string, arg: string): string[] => {
+    // Remove the first (opt, arg) pair matching BOTH tokens.
+    const out = [...a];
+    for (let j = 0; j < out.length - 1; j++) {
+      if (out[j] === opt && out[j + 1] === arg) {
+        out.splice(j, 2);
+        return out;
+      }
+    }
+    throw new Error(`mutator setup: (${opt}, ${arg}) not found`);
+  };
+
+  const ROWS: { name: string; mutate: (a: string[]) => string[]; expectRed: boolean }[] = [
+    {
+      // Row 1: deny lands after the write restore → shadows it.
+      name: "covering --tmpfs moved after the last ws bind",
+      mutate: (a) => [...withoutPair(a, "--tmpfs", CANARY_ROOT_REAL), "--tmpfs", CANARY_ROOT_REAL],
+      expectRed: true,
+    },
+    {
+      // Row 2: deny present, post-deny restore missing.
+      name: "post-deny ws restore binds deleted",
+      mutate: (a) => {
+        const cut = a.indexOf("--tmpfs");
+        const out: string[] = [];
+        for (let i = 0; i < a.length; i++) {
+          if (i > cut && a[i] === "--bind" && a[i + 1] === WS_REAL && a[i + 2] === WS_REAL) {
+            i += 2;
+            continue;
+          }
+          out.push(a[i]);
+        }
+        return out;
+      },
+      expectRed: true,
+    },
+    {
+      // Row 3: no covering deny at all — must fail, not vacuously pass.
+      name: "no covering --tmpfs (vacuity guard)",
+      mutate: (a) => withoutPair(a, "--tmpfs", CANARY_ROOT_REAL),
+      expectRed: true,
+    },
+    {
+      // Row 4: a SECOND covering deny after the last restore — every covering
+      // deny is quantified, not just the first.
+      name: "second covering --tmpfs appended after the last ws bind",
+      mutate: (a) => [...a, "--tmpfs", "/tmp"],
+      expectRed: true,
+    },
+    {
+      // Row 5: an unrelated non-covering deny after the restore is legal —
+      // proves the pin does not reject every post-restore tmpfs.
+      name: "non-covering --tmpfs after the last ws bind",
+      mutate: (a) => [...a, "--tmpfs", "/var/spool/other-deny"],
+      expectRed: false,
+    },
+  ];
+
+  for (const row of ROWS) {
+    it(`mutation: ${row.name} → ${row.expectRed ? "RED" : "PASS"}`, () => {
+      const violations = denyBeforeRestoreViolations(row.mutate([...CANON]), WS_REAL);
+      if (row.expectRed) {
+        expect(violations.length, `expected violations, got none on: ${JSON.stringify(row.mutate([...CANON]))}`).toBeGreaterThan(0);
+      } else {
+        expect(violations).toEqual([]);
+      }
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
