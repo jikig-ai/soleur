@@ -61,7 +61,12 @@
 #
 # Run: bash plugins/soleur/test/destructive-command-guard-hook.test.sh
 # Env: GUARD_HOOK (default: the real hook; point at a throwaway stub to prove the rows are not vacuous),
-#      GUARD_REPO_ROOT and GUARD_FAST_COUNT (used only by the in-suite meta copy).
+#      GUARD_REPO_ROOT (the tree the hook, lexer, hooks.json and test lib are read from; the mutation suite
+#      points it at a mutated COPY) and GUARD_FAST_COUNT (used only by the in-suite meta copy),
+#      DCG_ROWS (reduced mode, used only by destructive-command-guard-mutation.test.sh: an ERE matched
+#      against each row LABEL; rows that do not match are not run and not counted, the unlabelled static,
+#      registration and harness checks always run, and the 479-case floor is replaced by the floor of the
+#      selected rows, so a reduced run proves the selected rows and nothing else).
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export LC_ALL=C
 set -uo pipefail
@@ -73,6 +78,14 @@ HOOKS_JSON="$REPO_ROOT/plugins/soleur/hooks/hooks.json"
 LEXER="$REPO_ROOT/plugins/soleur/hooks/lib/shell-argv.pl"
 SELF="$SUITE_DIR/$(basename "${BASH_SOURCE[0]}")"
 FAST="${GUARD_FAST_COUNT:-}"
+ROWSEL="${DCG_ROWS:-}"
+# want_row <label>: always true unless DCG_ROWS (reduced mode) is set; then the label must match it.
+want_row_quiet() { [[ -z "$ROWSEL" ]] || [[ "$1" =~ $ROWSEL ]]; }
+SELECTED=0
+want_row() { # the counter moves here, at the call site, for every row that will run
+  if [[ -z "$ROWSEL" ]] || [[ "$1" =~ $ROWSEL ]]; then SELECTED=$((SELECTED + 1)); return 0; fi
+  return 1
+}
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -614,6 +627,7 @@ ROWS_EXEC=0; ROWS_LIT=0; ROWS_DEAD=0; CORPUS_N=0; CORPUS_ASK=0; CORPUS_ERR=0
 # run_row <kind> <label> <want> <cwd-template> <command-template>
 run_row() {
   local kind="$1" label="$2" want="$3" cwdt="$4" cmdt="$5" cmd cwd
+  want_row "$label" || return 0
   [[ "$cwdt" == - ]] && cwdt='@TREE@'
   CUR_HOME="$HOME_W"; [[ "$kind" == Xh ]] && CUR_HOME="$HOME_LINK"
   subst "$cmdt"; cmd="$SUBST_OUT"; subst "$cwdt"; cwd="$SUBST_OUT"
@@ -665,6 +679,7 @@ run_table() {
 # env_row <label> <want> <stdin-text> [ENV=VAL ...]: a literal row with its own stdin and environment.
 env_row() {
   local label="$1" want="$2" in="$3"; shift 3
+  want_row "$label" || return 0
   ROWS_LIT=$((ROWS_LIT + 1))
   hook_run "$in" "$@"
   classify
@@ -673,6 +688,7 @@ env_row() {
 # jqchk <label> <jq filter> [jq args]: assert on the LAST hook output.
 jqchk() {
   local label="$1" filter="$2"; shift 2
+  want_row "$label" || return 0
   if [[ -n "$FAST" ]]; then chk "$label" bad "fast"; return 0; fi
   if printf '%s' "$HOOK_OUT" | "$JQ_BIN" -e "$@" "$filter" >/dev/null 2>&1; then chk "$label" ok; else chk "$label" bad "output: ${HOOK_OUT:0:240}"; fi
 }
@@ -1111,6 +1127,7 @@ _saved_home="$HOME_W"
 HOME_W_REAL="$HOME_W"
 LH() { # LH <label> <want> <home> <command>
   local label="$1" want="$2" home="$3" cmd="$4"
+  want_row "$label" || return 0
   ROWS_LIT=$((ROWS_LIT + 1))
   CUR_HOME="$home"
   hook_run "$(mkjson "$cmd" "$TREE")"
@@ -1146,7 +1163,7 @@ env_row "a Write tool carrying terraform destroy is not decided (D1: Bash only)"
 env_row "Devin's exec is not decided (D2)" none '{"tool_name":"exec","tool_input":{"command":"rm -rf ~"}}'
 env_row "the hook never evaluates the command (a command that would create a file)" ask "$(mkjson "touch $WORK/EVALUATED; terraform destroy" "$TREE")"
 if [[ -z "$FAST" && "$GOT" == ask && ! -e "$WORK/EVALUATED" ]]; then _x=ok; else _x=bad; fi
-chk "the hook answered and did not execute the command text it was given (ADR-156)" "$_x"
+if want_row_quiet "the hook never evaluates the command (a command that would create a file)"; then chk "the hook answered and did not execute the command text it was given (ADR-156)" "$_x"; fi
 # a bound trip and a deep nesting are parse failures, never allows
 _deep='x'; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do _deep="echo \$($_deep)"; done
 env_row "a substitution nested past the depth bound asks (a bound trip)" ask "$(mkjson "$_deep" "$TREE")"
@@ -1197,7 +1214,7 @@ env_row "jq-less: rm -f jq; rm -rf ~ asks (ADR-165: never an implicit allow)" as
 jqchk "jq-less: the hand-built output is a valid envelope with hookEventName" '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "ask"'
 jqchk "jq-less: the reason names the missing tool" '.hookSpecificOutput.permissionDecisionReason | test("jq")'
 if grep -qi 'jq' <<<"$HOOK_ERR"; then _x=ok; else _x=bad; fi
-chk "jq-less: stderr carries a notice naming jq" "$_x" "stderr: ${HOOK_ERR:0:200}"
+if want_row_quiet "jq-less: rm -f jq; rm -rf ~ asks (ADR-165: never an implicit allow)"; then chk "jq-less: stderr carries a notice naming jq" "$_x" "stderr: ${HOOK_ERR:0:200}"; fi
 env_row "jq-less: terraform destroy asks" ask "$(mkjson 'terraform destroy' "$TREE")" "$FJ"
 env_row "jq-less: a destroy after a JSON-escaped newline asks" ask "$_nl" "$FJ"
 env_row "jq-less: a force push to main asks" ask "$_gp" "$FJ"
@@ -1207,7 +1224,7 @@ env_row "jq-less: rm -rf node_modules is not decided" none "$_rmok" "$FJ"
 env_row "jq-less: the kill switch is honoured" none "$_chain" "$FJ" SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1
 env_row "perl-less: rm -rf ~ asks, never denies (a dependency failure never denies)" ask "$_rmhome" "$FP"
 if grep -qi 'perl' <<<"$HOOK_ERR"; then _x=ok; else _x=bad; fi
-chk "perl-less: stderr carries a notice naming perl" "$_x" "stderr: ${HOOK_ERR:0:200}"
+if want_row_quiet "perl-less: rm -rf ~ asks, never denies (a dependency failure never denies)"; then chk "perl-less: stderr carries a notice naming perl" "$_x" "stderr: ${HOOK_ERR:0:200}"; fi
 env_row "perl-less: terraform destroy asks (the decoded command is scanned)" ask "$(mkjson 'terraform destroy' "$TREE")" "$FP"
 env_row "perl-less: a destroy after a decoded newline asks" ask "$_nl" "$FP"
 env_row "perl-less: a force push to main asks" ask "$_gp" "$FP"
@@ -1270,17 +1287,17 @@ if [[ -n "$FAST" ]]; then _x=ok; elif [[ "$ORC" == deny && "$ORC_N" -ge 1 ]]; th
 chk "harness: the rm stub recorded the invocation and the rule table read it (oracle plumbing is live)" "$_x" "oracle=$ORC records=$ORC_N"
 # (a) delete one expected-ask row from a COPY of this suite: the floor must fail; the control copy must not trip it.
 _m="META-DELETE-"; _m+="TARGET"
-if [[ -z "${GUARD_META_COPY:-}" ]]; then
+if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (a): deleting one expected-ask row makes the floor fail"; then
   assert_fixture_dir "$WORK"
   grep -vF "$_m" "$SELF" > "$WORK/meta/mutant.test.sh"
   cp "$SELF" "$WORK/meta/control.test.sh"
-  _mut_out="$(env GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/mutant.test.sh" 2>&1 </dev/null)"; _mut_rc=$?
-  _ctl_out="$(env GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/control.test.sh" 2>&1 </dev/null)"; _ctl_rc=$?
+  _mut_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/mutant.test.sh" 2>&1 </dev/null)"; _mut_rc=$?
+  _ctl_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/control.test.sh" 2>&1 </dev/null)"; _ctl_rc=$?
   if [[ "$_mut_rc" -eq 1 ]] && grep -q 'assertions ran' <<<"$_mut_out"; then _x=ok; else _x=bad; fi
   chk "harness (a): deleting one expected-ask row makes the floor fail (rc=$_mut_rc)" "$_x" "$(tail -n 2 <<<"$_mut_out" | tr '\n' ' ')"
   if ! grep -q 'assertions ran' <<<"$_ctl_out" && grep -q '^cases=' <<<"$_ctl_out"; then _x=ok; else _x=bad; fi
   chk "harness (a): the unmodified control copy does not trip the floor" "$_x" "$(tail -n 2 <<<"$_ctl_out" | tr '\n' ' ')"
-else
+elif [[ -n "${GUARD_META_COPY:-}" ]]; then
   chk "harness (a): deleting one expected-ask row makes the floor fail (not run inside the meta copy)" ok
   chk "harness (a): the unmodified control copy does not trip the floor (not run inside the meta copy)" ok
 fi
@@ -1289,13 +1306,23 @@ fi
 echo "== summary =="
 echo "rows: executed=$ROWS_EXEC literal=$ROWS_LIT dead-code=$ROWS_DEAD (executed rows take their expectation from the recording-stub oracle)"
 echo "ask-rate on the ordinary-command corpus: ${CORPUS_ASK}/${CORPUS_N} decided (errors=${CORPUS_ERR})"
-if [[ "$CORPUS_N" -ge 40 ]]; then _x=ok; else _x=bad; fi
-chk "the ordinary-command corpus has at least 40 commands (has $CORPUS_N)" "$_x"
-if [[ -n "$FAST" ]]; then _x=ok; elif [[ "$CORPUS_ASK" -eq 0 && "$CORPUS_ERR" -eq 0 ]]; then _x=ok; else _x=bad; fi
-chk "the ask rate on the ordinary-command corpus is 0 (and no row errored)" "$_x" "ask=$CORPUS_ASK errors=$CORPUS_ERR of $CORPUS_N"
+if [[ -z "$ROWSEL" ]]; then
+  if [[ "$CORPUS_N" -ge 40 ]]; then _x=ok; else _x=bad; fi
+  chk "the ordinary-command corpus has at least 40 commands (has $CORPUS_N)" "$_x"
+  if [[ -n "$FAST" ]]; then _x=ok; elif [[ "$CORPUS_ASK" -eq 0 && "$CORPUS_ERR" -eq 0 ]]; then _x=ok; else _x=bad; fi
+  chk "the ask rate on the ordinary-command corpus is 0 (and no row errored)" "$_x" "ask=$CORPUS_ASK errors=$CORPUS_ERR of $CORPUS_N"
+fi
 echo "cases=$CHECKED passes=$PASS_COUNT fails=$FAIL_COUNT"
 if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
+fi
+if [[ -n "$ROWSEL" ]]; then
+  # Reduced mode (DCG_ROWS, the mutation suite only): the 479-case floor below does not apply to a selection.
+  # The selection must have matched at least one row; the verdict is the failure count.
+  echo "selected=$SELECTED"
+  if [[ "$SELECTED" -lt 1 ]]; then printf '[FATAL] anti-vacuity: DCG_ROWS matched no row\n' >&2; exit 1; fi
+  [[ "$FAIL_COUNT" -eq 0 ]]
+  exit
 fi
 MIN_CASES=479
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
