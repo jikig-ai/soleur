@@ -160,6 +160,8 @@ lead_for() {
     recursive-delete-workdir) LEAD="this command recursively deletes the working directory or one of its ancestors." ;;
     infra-destroy) LEAD="this command runs terraform or tofu destroy (or apply -destroy), which tears down infrastructure." ;;
     default-branch-force-push) LEAD="this command force-pushes over, or deletes, a default branch on a remote." ;;
+    wrapper-depth) LEAD="this command nests more than 8 wrappers (sudo, env, timeout, ...) or -- separators, more than the guard unwraps, so the command it finally runs cannot be checked." ;;
+    unparsed-wrapper) LEAD="this command runs env -S (--split-string), which splits a string into the command to run, and the guard does not analyse that string." ;;
     unresolved-cd-before-destructive) LEAD="a cd or pushd that cannot be resolved (a variable, or -) comes before a recursive delete or a force push in the same command, so the directory it acts on cannot be checked." ;;
     *) LEAD="this command matched a destructive-command rule." ;;
   esac
@@ -218,7 +220,7 @@ if [[ "${PF_LEAD:0:1}" == "{" && "${PF_TAIL: -1}" == "}" && "$INPUT" =~ $PF_CMD_
   PF_REST="${INPUT#*"$PF_MARK"}"
   PF_CMD="${PF_REST%%\"*}"
   case "$PF_CMD" in
-    *rm*|*destroy*|*push*|*eval*|*'<<'*|*[\\\'\"\$\`]*) : ;;
+    *rm*|*destroy*|*push*|*eval*|*Rm*|*RM*|*rM*|*'<<'*|*[\\\'\"\$\`]*) : ;;
     *) exit 0 ;;
   esac
 fi
@@ -618,10 +620,23 @@ rule_git() {
   fi
 }
 
+# short_val <value-taking letters> <option word>: 0 when a short-option cluster (-nHu) ENDS in a value-taking
+# letter, so that option's value is the NEXT word. A value-taking letter earlier in the cluster takes the rest of
+# the word as its value (-uroot), which needs no extra word.
+short_val() {
+  local letters="$1" w="$2" k c
+  for ((k = 1; k < ${#w}; k++)); do
+    c="${w:$k:1}"
+    case "$letters" in *"$c"*) (( k == ${#w} - 1 )); return ;; esac
+  done
+  return 1
+}
+
 # wrap_skip <name> <index of name in t> -> WJ: the index of the wrapped command's first word, or -1 when
-# the wrapper is a look-up only (`command -v`). Reads t[] and n of the caller (dynamic scope, by design).
+# the wrapper is a look-up only (`command -v`) or its payload is a string the guard does not analyse (env -S).
+# Reads t[] and n of the caller (dynamic scope, by design).
 wrap_skip() {
-  local name="$1" j=$(($2 + 1)) a
+  local name="$1" j=$(($2 + 1)) a lname k c eat split
   WJ=-1
   case "$name" in
     sudo)
@@ -629,7 +644,9 @@ wrap_skip() {
         a="${t[$j]}"; j=$((j + 1))
         [[ "$a" == -- ]] && break
         case "$a" in
-          -u|-g|-h|-p|-C|-r|-t|-T|-U|-D|-R|--user|--group|--host|--prompt|--chdir|--chroot|--role|--type) j=$((j + 1)) ;;
+          --user|--group|--host|--prompt|--chdir|--chroot|--role|--type|--close-from|--command-timeout|--other-user) j=$((j + 1)) ;;
+          --*) : ;;
+          *) if short_val ughpCTUDRrt "$a"; then j=$((j + 1)); fi ;;
         esac
       done
       while (( j < n )) && is_assign "${t[$j]}"; do j=$((j + 1)); done ;;
@@ -637,34 +654,68 @@ wrap_skip() {
       while (( j < n )) && [[ "${t[$j]}" == -* && "${t[$j]}" != - ]]; do
         a="${t[$j]}"; j=$((j + 1))
         [[ "$a" == -- ]] && break
-        case "$a" in -u|-C) j=$((j + 1)) ;; esac
+        if short_val uC "$a"; then j=$((j + 1)); fi
       done ;;
     env)
       while (( j < n )); do
         a="${t[$j]}"
         if [[ "$a" == -- ]]; then j=$((j + 1)); break
-        elif [[ "$a" == -u || "$a" == --unset || "$a" == -C || "$a" == --chdir ]]; then j=$((j + 2))
-        elif [[ "$a" == -* && "$a" != - ]]; then j=$((j + 1))
+        elif [[ "$a" == - ]]; then j=$((j + 1))
+        elif [[ "$a" == --* ]]; then
+          lname="${a%%=*}"; lname="${lname#--}"
+          if [[ -n "$lname" && "split-string" == "$lname"* ]]; then note 1 unparsed-wrapper; return 0; fi
+          j=$((j + 1))
+          # a value-taking long option with its value in the next word: --unset X, --chdir D, --argv0 A
+          if [[ "$a" != *=* && -n "$lname" ]] && { [[ "unset" == "$lname"* ]] || [[ "chdir" == "$lname"* ]] || [[ "argv0" == "$lname"* ]]; }; then j=$((j + 1)); fi
+        elif [[ "$a" == -?* ]]; then
+          eat=0; split=0
+          for ((k = 1; k < ${#a}; k++)); do
+            c="${a:$k:1}"
+            case "$c" in
+              S) split=1; break ;;
+              u|C|P|a) (( k == ${#a} - 1 )) && eat=1; break ;;
+            esac
+          done
+          if (( split )); then note 1 unparsed-wrapper; return 0; fi
+          j=$((j + 1 + eat))
         elif is_assign "$a"; then j=$((j + 1))
         else break; fi
       done ;;
     timeout)
       while (( j < n )) && [[ "${t[$j]}" == -* ]]; do
         a="${t[$j]}"; j=$((j + 1))
-        case "$a" in -s|-k|--signal|--kill-after) j=$((j + 1)) ;; esac
+        case "$a" in
+          --signal|--kill-after) j=$((j + 1)) ;;
+          --*) : ;;
+          *) if short_val sk "$a"; then j=$((j + 1)); fi ;;
+        esac
       done
       j=$((j + 1)) ;;
     nice)
       while (( j < n )) && [[ "${t[$j]}" == -* ]]; do
         a="${t[$j]}"; j=$((j + 1))
-        case "$a" in -n|--adjustment) j=$((j + 1)) ;; esac
+        case "$a" in
+          --adjustment) j=$((j + 1)) ;;
+          --*) : ;;
+          *) if short_val n "$a"; then j=$((j + 1)); fi ;;
+        esac
+      done ;;
+    time)  # the external time(1) (/usr/bin/time, `command time`, `env time`); the reserved word is the lexer's
+      while (( j < n )) && [[ "${t[$j]}" == -* && "${t[$j]}" != - ]]; do
+        a="${t[$j]}"; j=$((j + 1))
+        [[ "$a" == -- ]] && break
+        case "$a" in
+          --format|--output) j=$((j + 1)) ;;
+          --*) : ;;
+          *) if short_val fo "$a"; then j=$((j + 1)); fi ;;
+        esac
       done ;;
     command)
       while (( j < n )) && [[ "${t[$j]}" == -* ]]; do
         a="${t[$j]}"; j=$((j + 1))
         case "$a" in --) break ;; -v|-V|-[a-zA-Z]*[vV]*) return 0 ;; esac
       done ;;
-    nohup|-p) : ;;
+    nohup|-p) : ;;  # `-p` is `time -p`: the lexer drops the reserved word `time` and leaves -p as the first word
   esac
   WJ="$j"
 }
@@ -674,19 +725,21 @@ wrap_skip() {
 # through DA_T/DA_F, so it CLOBBERS them: callers use decide_argv, which puts them back.
 decide_walk() {
   local depth="$1" n i k name
-  (( depth > 8 )) && return 0
+  if (( depth > 8 )); then note 1 wrapper-depth; return 0; fi
   if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi
   local -a t=("${DA_T[@]}") f=("${DA_F[@]}")
   n=${#t[@]}; i=0
   while (( i < n )) && is_assign "${t[$i]}"; do i=$((i + 1)); done
   if (( i < n )); then
     name="${t[$i]##*/}"
+    # command names are compared in lower case: a case-insensitive filesystem runs RM as rm
+    case "$name" in *[A-Z]*) name="$(printf '%s' "$name" | tr 'A-Z' 'a-z')" ;; esac
     AV=("${t[@]:$i}"); AF=("${f[@]:$i}")
     case "$name" in
       rm) rule_rm ;;
       terraform|tofu) rule_tf ;;
       git) rule_git ;;
-      sudo|doas|env|command|nohup|timeout|nice|-p)
+      sudo|doas|env|command|nohup|time|timeout|nice|-p)  # `-p`: see wrap_skip
         wrap_skip "$name" "$i"
         if (( WJ >= 0 && WJ < n )); then
           DA_T=("${t[@]:$WJ}"); DA_F=("${f[@]:$WJ}")

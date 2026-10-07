@@ -1136,6 +1136,63 @@ X @@ state: a bare cd after -- is data, not a cd to home @@ none @@ - @@ ls -- c
 L @@ state: cd -- .. from a child of home reaches home, then rm -rf * @@ deny @@ @HOME@/proj @@ cd -- .. && rm -rf *
 L @@ state: cd -- "$X" is an unresolved cd, then rm -rf * @@ ask @@ - @@ cd -- "$UNKNOWN_DIR" && rm -rf *
 L @@ state: pushd -- "$X" is an unresolved pushd, then rm -rf out @@ ask @@ - @@ pushd -- "$UNKNOWN_DIR" && rm -rf out
+# ---- wrappers (D1's table: sudo doas env command nohup time timeout nice; literal rows where the oracle's own table has no such member)
+X @@ wrapper: time -p rm -rf ~ (the lexer drops the reserved word and leaves -p, which is a pseudo-wrapper) @@ deny @@ - @@ time -p rm -rf ~
+X @@ wrapper: time -p terraform destroy @@ ask @@ - @@ time -p terraform destroy
+L @@ wrapper: /usr/bin/time rm -rf ~ (time as a command word) @@ deny @@ - @@ /usr/bin/time rm -rf ~
+L @@ wrapper: command time -p rm -rf ~ @@ deny @@ - @@ command time -p rm -rf ~
+L @@ wrapper: env time rm -rf ~ @@ deny @@ - @@ env time rm -rf ~
+L @@ wrapper: sudo time -v rm -rf ~ @@ deny @@ - @@ sudo time -v rm -rf ~
+L @@ wrapper: sudo time -f %e -o out.txt rm -rf ~ (time's value options are skipped) @@ deny @@ - @@ sudo time -f %e -o out.txt rm -rf ~
+L @@ wrapper: /usr/bin/time -o log.txt terraform destroy @@ ask @@ - @@ /usr/bin/time -o log.txt terraform destroy
+L @@ wrapper: /usr/bin/time -p rm -rf build is not a delete of home @@ none @@ - @@ /usr/bin/time -p rm -rf build
+# ---- short-option clusters whose last letter takes a value shift one more word
+L @@ wrapper: sudo -nu root rm -rf / @@ deny @@ - @@ sudo -nu root rm -rf /
+L @@ wrapper: sudo -Eu root rm -rf / @@ deny @@ - @@ sudo -Eu root rm -rf /
+L @@ wrapper: sudo -Hu root rm -rf / @@ deny @@ - @@ sudo -Hu root rm -rf /
+L @@ wrapper: sudo -Su root rm -rf / @@ deny @@ - @@ sudo -Su root rm -rf /
+L @@ wrapper: sudo -nHu root rm -rf / @@ deny @@ - @@ sudo -nHu root rm -rf /
+L @@ wrapper: sudo -nEu root terraform destroy @@ ask @@ - @@ sudo -nEu root terraform destroy
+L @@ wrapper: sudo -uroot rm -rf / (an attached value needs no extra word) @@ deny @@ - @@ sudo -uroot rm -rf /
+L @@ wrapper: sudo -nu root ls / is not a delete @@ none @@ - @@ sudo -nu root ls /
+L @@ wrapper: env -iu X rm -rf / @@ deny @@ - @@ env -iu X rm -rf /
+L @@ wrapper: env -P /usr/bin rm -rf / (-P takes a value) @@ deny @@ - @@ env -P /usr/bin rm -rf /
+L @@ wrapper: env - rm -rf ~ (a lone - is -i) @@ deny @@ - @@ env - rm -rf ~
+L @@ wrapper: doas -nu root rm -rf / @@ deny @@ - @@ doas -nu root rm -rf /
+L @@ wrapper: timeout -vk 5 10 rm -rf ~ @@ deny @@ - @@ timeout -vk 5 10 rm -rf ~
+L @@ wrapper: timeout -vs KILL 5 terraform destroy @@ ask @@ - @@ timeout -vs KILL 5 terraform destroy
+# ---- env -S runs a string the guard does not analyse: an ask with its own rule id
+L @@ wrapper: env -S 'rm -rf /' asks (unparsed) @@ ask @@ - @@ env -S 'rm -rf /'
+L @@ wrapper: env -iS 'rm -rf /' asks (a cluster ending in S) @@ ask @@ - @@ env -iS 'rm -rf /'
+L @@ wrapper: env --split-string='rm -rf /' asks @@ ask @@ - @@ env --split-string='rm -rf /'
+L @@ wrapper: env --split-string 'terraform destroy' asks @@ ask @@ - @@ env --split-string 'terraform destroy'
+L @@ wrapper: env --spl 'rm -rf /' asks (an abbreviation of --split-string) @@ ask @@ - @@ env --spl 'rm -rf /'
+# ---- the value-taking options of the rewritten wrappers still shift the right number of words
+L @@ wrapper: env --unset X rm -rf ~ @@ deny @@ - @@ env --unset X rm -rf ~
+L @@ wrapper: env --unset=X rm -rf ~ @@ deny @@ - @@ env --unset=X rm -rf ~
+L @@ wrapper: env --chdir /tmp rm -rf ~ @@ deny @@ - @@ env --chdir /tmp rm -rf ~
+L @@ wrapper: env -C /tmp rm -rf ~ @@ deny @@ - @@ env -C /tmp rm -rf ~
+L @@ wrapper: sudo -g wheel rm -rf ~ @@ deny @@ - @@ sudo -g wheel rm -rf ~
+L @@ wrapper: sudo --user root rm -rf ~ @@ deny @@ - @@ sudo --user root rm -rf ~
+L @@ wrapper: sudo --user=root rm -rf ~ @@ deny @@ - @@ sudo --user=root rm -rf ~
+L @@ wrapper: doas -C /etc/doas.conf rm -rf ~ @@ deny @@ - @@ doas -C /etc/doas.conf rm -rf ~
+L @@ wrapper: timeout --signal KILL 5 rm -rf ~ @@ deny @@ - @@ timeout --signal KILL 5 rm -rf ~
+L @@ wrapper: timeout -k 5 10 rm -rf ~ @@ deny @@ - @@ timeout -k 5 10 rm -rf ~
+L @@ wrapper: nice --adjustment 5 rm -rf ~ @@ deny @@ - @@ nice --adjustment 5 rm -rf ~
+L @@ wrapper: nice -n5 rm -rf ~ (an attached value) @@ deny @@ - @@ nice -n5 rm -rf ~
+# ---- more wrappers than the guard unwraps is an ask, never a silent allow
+L @@ wrapper: eight nested sudo are still unwrapped (deny) @@ deny @@ - @@ sudo sudo sudo sudo sudo sudo sudo sudo rm -rf /
+L @@ wrapper: nine nested sudo before rm -rf / ask (wrapper-depth) @@ ask @@ - @@ sudo sudo sudo sudo sudo sudo sudo sudo sudo rm -rf /
+L @@ wrapper: twelve nested env before rm -rf / ask (wrapper-depth) @@ ask @@ - @@ env env env env env env env env env env env env rm -rf /
+# ---- command names are compared case-insensitively (a case-insensitive filesystem runs RM as rm)
+L @@ case: RM -rf ~ @@ deny @@ - @@ RM -rf ~
+L @@ case: Rm -rf / @@ deny @@ - @@ Rm -rf /
+L @@ case: rM -rf ~ @@ deny @@ - @@ rM -rf ~
+L @@ case: Sudo -u x RM -rf ~ @@ deny @@ - @@ Sudo -u x RM -rf ~
+L @@ case: GIT push --force origin main @@ ask @@ @R1@ @@ GIT push --force origin main
+L @@ case: Terraform destroy @@ ask @@ - @@ Terraform destroy
+X @@ case: an argument named RM is not a command (rm -rf RM) @@ none @@ - @@ rm -rf RM
+X @@ case: echo RM -rf ~ (arguments, not a command) @@ none @@ - @@ echo RM -rf ~
 ROWS
 
 echo "== the ordinary-command corpus (kind C): no decision on any of it =="
@@ -1231,6 +1288,14 @@ quote_row "quote: a wrapper stays in the quoted command (sudo rm -rf /)" 'sudo r
 quote_row "quote: the words before a -- stay in the quoted command (rm -rf -- /)" 'rm -rf -- /' - 'rm -rf -- /'
 quote_row "quote: doppler run -- terraform destroy quotes the whole command" 'doppler run -- terraform destroy' - 'doppler run -- terraform destroy'
 quote_row "quote: an env wrapper with an option and an assignment" 'env -i FOO=1 terraform destroy' - 'env -i FOO=1 terraform destroy'
+rule_row() { # <label> <command> <cwd-template> <rule id>: the reason starts (after the not-run sentence) with the rule id
+  want_row_quiet "$1" || return 0
+  subst "$3"; hook_run "$(mkjson "$2" "$SUBST_OUT")"
+  jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | test("(^|\\. )" + $id + ": ")' --arg id "$4"
+}
+rule_row "rule id: env -S asks with its own rule id" "env -S 'rm -rf /'" - unparsed-wrapper
+rule_row "rule id: env -iS asks with its own rule id" "env -iS 'rm -rf /'" - unparsed-wrapper
+rule_row "rule id: nine nested sudo ask with the wrapper-depth rule id" 'sudo sudo sudo sudo sudo sudo sudo sudo sudo ls "x"' - wrapper-depth
 
 # =====================================================================================================
 echo "== the bash phase is bounded (the harness kills the hook at 10 s and a killed hook is not a decision) =="
@@ -1463,7 +1528,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=518
+MIN_CASES=572
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
