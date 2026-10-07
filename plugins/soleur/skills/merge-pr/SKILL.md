@@ -410,6 +410,13 @@ fi
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
   --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
   2>/dev/null || true)
+# Merge-queue mode (#9710; see ship/SKILL.md Phase 7): queue rule on the base branch AND auto-merge armed → wait, do
+# not sync. Fail toward today's behaviour: any unreadable answer leaves QUEUE_RULE=0.
+QUEUE_RULE=0; QUEUE_GRACE_TICKS=5; queue_waits=0; qidle=0; qwait_expired=0; queued_reported=0
+if [[ "$sync_ok" -eq 1 && -n "$SYNC_SNAP" ]]; then
+  [[ "$(gh api 'repos/{owner}/{repo}/rules/branches/main' \
+    --jq '[.[] | select(.type == "merge_queue")] | length' 2>/dev/null || true)" =~ ^[1-9][0-9]*$ ]] && QUEUE_RULE=1
+fi
 while true; do
   i=$((i+1))
   s=$(gh pr view "$PR" --json state,mergeStateStatus \
@@ -423,6 +430,7 @@ while true; do
   if (( i % 5 == 0 )) && [[ "$s" == OPEN* && -n "$SYNC_SNAP" ]]; then
     qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
     [[ "$qs" == dequeued* ]] && { echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break; }
+    [[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* && "$queued_reported" -eq 0 ]] && { queued_reported=1; echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queued] PR $PR is in the merge queue ($qs) — no sync from here (a push would dequeue it); waiting for MERGED or removal"; }
   fi
 
   if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
@@ -441,6 +449,9 @@ while true; do
       fi
     fi
   fi
+
+  real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1
+  (( real_behind == 1 )) || qidle=0
 
   if [[ "$s" == *DIRTY* ]]; then
     mt_out=""; fetch_rc=0
@@ -467,7 +478,26 @@ while true; do
     fi
   fi
 
-  if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+  qwait=0
+  if (( real_behind == 1 && QUEUE_RULE == 1 && qwait_expired == 0 )) \
+     && [[ "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest != null' 2>/dev/null || true)" == true ]]; then
+    qwait=1
+    pend="$(gh pr checks "$PR" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || true)"
+    if [[ "$pend" =~ ^[1-9][0-9]*$ ]]; then qidle=0; else qidle=$((qidle+1)); fi
+    if (( qidle > QUEUE_GRACE_TICKS )); then
+      qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
+      case "$qs" in
+        queued*)   qidle=0 ;;
+        dequeued*) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break ;;
+        *)         qwait=0; qwait_expired=1
+                   echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait_expired] PR $PR has been BEHIND with auto-merge armed and no check pending for ${qidle} ticks and is not in the merge queue — the queue is not picking it up. Falling back to the BEHIND auto-sync for the rest of this poll." ;;
+      esac
+    fi
+  fi
+  if [[ "$qwait" -eq 1 ]]; then
+    queue_waits=$((queue_waits+1))
+    (( queue_waits == 1 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait] PR $PR is BEHIND with auto-merge armed and the base branch has a merge queue: no sync (a push restarts CI and dequeues a queued PR); waiting for GitHub to enqueue it"
+  elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     # ci_cycles cap gate (#9403): STOP writes the budget-capped artifact to
     # specs/<branch>/session-state.md and breaks the WHOLE poll.
     if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then

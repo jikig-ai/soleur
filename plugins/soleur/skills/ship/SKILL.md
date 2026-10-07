@@ -2319,6 +2319,17 @@ fi
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
   --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
   2>/dev/null || true)
+# Merge-queue mode (#9710): a `merge_queue` rule on the base branch AND auto-merge armed (read per tick below) means
+# the queue, not a push, makes the PR current — a BEHIND reading is then not a reason to push (each push restarts
+# the whole required-check set). Fail toward today's behaviour: only a numeric >= 1 answer from the rules endpoint
+# turns this on, so an API error, an empty answer or a repo with no queue leaves QUEUE_RULE=0. Only with auto-sync
+# usable (sync_ok and a snapshot): without SYNC_SNAP neither the dequeue read nor the enqueue report can run, and
+# today's behaviour there is the named behind_no_sync stop.
+QUEUE_RULE=0; QUEUE_GRACE_TICKS=5; queue_waits=0; qidle=0; qwait_expired=0; queued_reported=0
+if [[ "$sync_ok" -eq 1 && -n "$SYNC_SNAP" ]]; then
+  [[ "$(gh api 'repos/{owner}/{repo}/rules/branches/main' \
+    --jq '[.[] | select(.type == "merge_queue")] | length' 2>/dev/null || true)" =~ ^[1-9][0-9]*$ ]] && QUEUE_RULE=1
+fi
 while true; do
   i=$((i+1))
   s=$(gh pr view "$PR" --json state,mergeStateStatus \
@@ -2332,6 +2343,7 @@ while true; do
   if (( i % 5 == 0 )) && [[ "$s" == OPEN* && -n "$SYNC_SNAP" ]]; then
     qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
     [[ "$qs" == dequeued* ]] && { echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break; }
+    [[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* && "$queued_reported" -eq 0 ]] && { queued_reported=1; echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queued] PR $PR is in the merge queue ($qs) — no sync from here (a push would dequeue it); waiting for MERGED or removal"; }
   fi
 
   # Required-check failure scan: if a required check has transitioned to
@@ -2357,6 +2369,11 @@ while true; do
       fi
     fi
   fi
+
+  # A BEHIND that GitHub itself reported (not one the DIRTY block derives below): only that one may wait in queue
+  # mode. The idle count is CONSECUTIVE, so any tick that is not a real BEHIND resets it.
+  real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1
+  (( real_behind == 1 )) || qidle=0
 
   # DIRTY: GitHub computed a conflict. A clean local `git merge-tree --write-tree` means the
   # server saw something local git does not; treat as BEHIND and fall through to auto-sync.
@@ -2387,13 +2404,39 @@ while true; do
     fi
   fi
 
+  # Queue mode (#9710): GitHub reports BEHIND, auto-merge is armed and the base branch has a merge queue: wait for
+  # GitHub to enqueue the PR instead of pushing (a push restarts CI and dequeues a queued PR). A positive pending
+  # count is the only thing that resets the idle count; zero, "no checks" or an unreadable answer all count as idle,
+  # so a broken read walks toward the fallback (a sync), never toward waiting forever.
+  qwait=0
+  if (( real_behind == 1 && QUEUE_RULE == 1 && qwait_expired == 0 )) \
+     && [[ "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest != null' 2>/dev/null || true)" == true ]]; then
+    qwait=1
+    pend="$(gh pr checks "$PR" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || true)"
+    if [[ "$pend" =~ ^[1-9][0-9]*$ ]]; then qidle=0; else qidle=$((qidle+1)); fi
+    if (( qidle > QUEUE_GRACE_TICKS )); then
+      # A PR already IN the queue also shows no pending PR check, so ask before calling it un-enqueued. A dequeue is
+      # reported here exactly as the every-5th-tick read does (--queue-state consumes the seen-queued marker, so
+      # falling through to --step after it would read "not queued" and push).
+      qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
+      case "$qs" in
+        queued*)   qidle=0 ;;
+        dequeued*) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break ;;
+        *)         qwait=0; qwait_expired=1
+                   echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait_expired] PR $PR has been BEHIND with auto-merge armed and no check pending for ${qidle} ticks and is not in the merge queue — the queue is not picking it up. Falling back to the BEHIND auto-sync for the rest of this poll." ;;
+      esac
+    fi
+  fi
+  if [[ "$qwait" -eq 1 ]]; then
+    queue_waits=$((queue_waits+1))
+    (( queue_waits == 1 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait] PR $PR is BEHIND with auto-merge armed and the base branch has a merge queue: no sync (a push restarts CI and dequeues a queued PR); waiting for GitHub to enqueue it"
   # Auto-sync on BEHIND: GitHub auto-merge will not fire while the head
   # ref is behind base. sync-pr-behind.sh --step merges origin/main and pushes
   # so the queued auto-merge can re-evaluate; its `[pr-behind-sync] kind=…` line
   # says why an attempt stopped. Capped at MAX_BEHIND_SYNCS so a pathological
   # merge-loop does not consume the whole poll budget. `|| sync_rc=$?`, not a
   # bare `cmd; rc=$?`, which dies under an errexit host shell (#8339).
-  if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+  elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     # ci_cycles cap gate (#9403): STOP writes the budget-capped artifact to
     # specs/<branch>/session-state.md and breaks the WHOLE poll.
     if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
