@@ -208,7 +208,11 @@ echo "-- deploy_pipeline_fix_web2 cron-egress delivery parity (#9393) --"
 # would satisfy (the 2026-06-02 drift-guard learning this file already encodes).
 WEB2_BLOCK="$(awk '/resource "terraform_data" "deploy_pipeline_fix_web2"/,/^}/' "$SERVER_TF")"
 w2_assert() { # w2_assert <description> <ERE pattern>
-  if echo "$WEB2_BLOCK" | grep -qE -- "$2"; then
+  # Herestring, NOT `echo | grep -q`: `grep -q` exits on first match, the writer
+  # dies on SIGPIPE mid-block, and `set -o pipefail` then reports the WON match
+  # as a FAIL — a measured 1-in-N flake (rc=1 on the destination row in CI).
+  # grep -c below is exempt (it reads all input; no early exit).
+  if grep -qE -- "$2" <<<"$WEB2_BLOCK"; then
     PASS=$((PASS + 1)); echo "  PASS: $1"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $1 (pattern not found in deploy_pipeline_fix_web2 block: $2)"
@@ -234,8 +238,8 @@ for spec in \
   # Cross-block destination parity: the web-1 resource and the web-2 sibling must
   # write the SAME absolute path for the same artifact — a destination typo puts
   # the file where no consumer reads it, with every delivery row still green.
-  W1_DEST="$(echo "$SERVER_BLOCK" | grep -A1 "source *= *\"\\\${path.module}/$f\"" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
-  W2_DEST="$(echo "$WEB2_BLOCK" | grep -A1 "source *= *\"\\\${path.module}/$f\"" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  W1_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$SERVER_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  W2_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$WEB2_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
   if [[ -n "$W1_DEST" && "$W1_DEST" == "$W2_DEST" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: $f destination parity web-1 == web-2 ($W2_DEST)"
   else

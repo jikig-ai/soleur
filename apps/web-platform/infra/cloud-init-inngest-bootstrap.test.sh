@@ -1379,9 +1379,14 @@ assert "GuardA anti-vacuity: the section ran its full inventory (expected 11, ra
 # comparing each input at the pinned tag to HEAD byte-for-byte.
 #
 # EXTRACTOR REUSE. Every extractor below is token-identical to
-# .github/scripts/mint-inngest-bootstrap-tag.sh extract_side modulo the variable and file
+# .github/scripts/mint-inngest-bootstrap-tag's extract_side modulo the variable and file
 # operand — the ga2-pin-*/ga2-recipe-awk parity rows in
-# .github/scripts/test/test-mint-inngest-bootstrap-tag.sh pin that shape, so a
+# the mint suite's own test battery (`.github/scripts/test/test-mint-inngest-bootstrap-tag`,
+# named without the executable suffix deliberately: a `.sh` path literal would pull that
+# file into `scripts/battery-tag-authorship`'s closure, where its sandbox tag-fixture
+# commands exceed the ADR-207 per-line exemption-ledger ceiling — an ADR-level decision
+# that needs a suite-level class, tracked in #9700) pin that
+# shape, so a
 # same-intent/different-tokens copy reds there.
 #
 # SAME KNOWN CAVEAT AS GUARD A. A PR that legitimately bumps a pin or the recipe reds this
