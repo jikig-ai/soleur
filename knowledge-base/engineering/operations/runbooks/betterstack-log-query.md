@@ -879,6 +879,21 @@ SQL
 `auth_broken` above 0 is a credential fault (the probe exits 3), not an outage. For a web-2 page,
 also check `soleur-web-nic-guard-web-2`. When both page together, the whole host was dark, not zot.
 
+**A `soleur-web-nic-guard-<host>` beat that stops is not always a NIC fault.** The web NIC guard also withholds
+its beat when it cannot report at all (#9632): `BETTERSTACK_LOGS_TOKEN` or `BETTERSTACK_INGEST_URL` unset, the
+ingest URL differing from the pinned literal, or a token outside the token alphabet. Read the guard's own rows,
+which share one `SYSLOG_IDENTIFIER`, and tell the two causes apart by the line itself:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m \
+  --grep 'web-nic-guard' --limit 20
+```
+
+`unpinned_url`, `bad_token` or `WARN: BETTERSTACK_LOGS_TOKEN/BETTERSTACK_INGEST_URL unset` means the guard refused to
+ship (fix the Doppler value or the pin); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
+really absent. A malformed token can blind Vector too (it reads the same secret), in which case the absence of
+rows is the only off-box signal. The monitor alerts only once the arm step has un-paused it.
+
 **Step 3: why the registry withheld beats.** Since #7270, every 5-minute `SOLEUR_ZOT_DISK` row
 carries the liveness feeder's per-boot counters. Read the rows around the incident. The window
 below is the last 2 hours; widen it as needed.

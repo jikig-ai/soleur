@@ -209,6 +209,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    docstring records the four ways an inline case was defeated and why it was dropped); and read the ratchet's rc from
    `rc=$?` on its own line — `echo "$(basename $t) RC=$?"` prints `basename`'s status and reported this ratchet green
    while its log carried `FAIL` (#7968).
+6.7. **A new anti-vacuity floor ⇒ build to `guard-vacuity-floor.test.sh`'s shape and run it first** (see learning `2026-10-06-a-new-anti-vacuity-floor-joins-the-meta-guard…`).
 
 **Design artifact checks:**
 
