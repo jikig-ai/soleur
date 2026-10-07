@@ -65,7 +65,7 @@
 #      points it at a mutated COPY) and GUARD_FAST_COUNT (used only by the in-suite meta copy),
 #      DCG_ROWS (reduced mode, used only by destructive-command-guard-mutation.test.sh: an ERE matched
 #      against each row LABEL; rows that do not match are not run and not counted, the unlabelled static,
-#      registration and harness checks always run, and the 488-case floor is replaced by the floor of the
+#      registration and harness checks always run, and the MIN_CASES floor (see its definition) is replaced by the floor of the
 #      selected rows, so a reduced run proves the selected rows and nothing else).
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export LC_ALL=C
@@ -692,6 +692,52 @@ jqchk() {
   if [[ -n "$FAST" ]]; then chk "$label" bad "fast"; return 0; fi
   if printf '%s' "$HOOK_OUT" | "$JQ_BIN" -e "$@" "$filter" >/dev/null 2>&1; then chk "$label" ok; else chk "$label" bad "output: ${HOOK_OUT:0:240}"; fi
 }
+# reason_has <label> <literal substring>: assert the last hook output's reason holds the substring (and says so on failure).
+reason_has() {
+  jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | contains($s)' --arg s "$2"
+}
+
+# bound_row <label> <want> <cwd-template> <command> [reason ERE]: a literal row that ALSO asserts the answer arrived in
+# under 5 s. The hook's own deadline is 6 s of the harness's 10 s timeout. Times are whole-second deltas of `date +%s`,
+# so a delta below 5 proves the real elapsed time was below 5 s. Contention caveat: a machine under heavy load can make
+# a correct hook read as slow here; that is the signal the row exists to give, not a flake to widen away.
+bound_row() {
+  local label="$1" want="$2" cwdt="$3" cmd="$4" rx="${5:-}" t0 t1 el ok=ok why=""
+  want_row "$label" || return 0
+  ROWS_LIT=$((ROWS_LIT + 1))
+  subst "$cwdt"
+  t0="$(date +%s)"
+  hook_run "$(mkjson "$cmd" "$SUBST_OUT")"
+  t1="$(date +%s)"; el=$((t1 - t0))
+  classify
+  [[ "$GOT" == "$want" ]] || { ok=bad; why="want=$want got=$GOT"; }
+  if [[ -z "$FAST" && "$el" -ge 5 ]]; then ok=bad; why="$why elapsed=${el}s (limit 5 s)"; fi
+  if [[ -n "$rx" ]] && ! printf '%s' "$HOOK_OUT" | "$JQ_BIN" -e --arg rx "$rx" '.hookSpecificOutput.permissionDecisionReason | test($rx)' >/dev/null 2>&1; then
+    ok=bad; why="$why reason does not match /$rx/: ${HOOK_OUT:0:160}"
+  fi
+  chk "$label" "$ok" "$why"
+}
+# rep <text> <count>: the text repeated count times (printf has no repeat; `seq` is POSIX enough for the suite).
+rep() { local _s="" _i; for ((_i = 0; _i < $2; _i++)); do _s+="$1"; done; REP_OUT="$_s"; }
+# mk_hook_tree <name> -> HT_HOOK: a private copy of the hook directory (hook + lib), so a row can swap the lexer for a
+# stub or change one constant of the hook without touching the live tree. Skipped in the count-only meta copy.
+mk_hook_tree() {
+  local src d; src="$(dirname "$GUARD_HOOK")"; d="$WORK/trees/$1"
+  HT_HOOK="$d/destructive-command-guard.sh"
+  [[ -n "$FAST" ]] && return 0
+  assert_fixture_dir "$d"
+  mkdir -p "$d/lib" || harness_die "mk_hook_tree mkdir"
+  cp "$GUARD_HOOK" "$HT_HOOK" && cp "$src"/lib/shell-argv.pl "$d/lib/" || harness_die "mk_hook_tree cp"
+  cp "$src"/lib/hook-tool-kind.sh "$d/lib/" 2>/dev/null || true
+  chmod +x "$HT_HOOK"
+}
+# tree_row <label> <want> <hook path> <stdin text> [ENV=VAL ...]: env_row against a hook other than the live one.
+tree_row() {
+  local label="$1" want="$2" hk="$3" in="$4" saved="$GUARD_HOOK"; shift 4
+  GUARD_HOOK="$hk"
+  env_row "$label" "$want" "$in" "$@"
+  GUARD_HOOK="$saved"
+}
 
 # =====================================================================================================
 echo "== static: the hook file, its header and its portability =="
@@ -1166,6 +1212,51 @@ LH "another user's home is not this home" none "$_FH" 'rm -rf /home/other-user-d
 LH "a .. through a nonexistent directory is normalized lexically and still reaches an ancestor of home" deny "$_FH" "rm -rf $_FH/nonexistent-dir/../.."
 
 # =====================================================================================================
+echo "== the bash phase is bounded (the harness kills the hook at 10 s and a killed hook is not a decision) =="
+rep 'echo x; ' 1500; _cmd1500="${REP_OUT}rm -rf /"
+rep 'echo x; ' 2600; _cmd2600="${REP_OUT}rm -rf /"
+rep 'echo x; ' 2600; _cmd2600_late="rm -rf /; ${REP_OUT}"
+rep ' --' 40; _cmd40dash="ls${REP_OUT} x; terraform destroy"
+_t=""; for _i in $(seq 1 1000); do _t+=" f$_i"; done; _cmd1000rm="rm -rf${_t}; rm -rf ~"
+rep ' a' 30000; _cmdwords="ls \"x\"${REP_OUT}"
+bound_row "bound: 1500 benign commands then rm -rf / still denies, in under 5 s" deny - "$_cmd1500"
+bound_row "bound: 2600 benign commands (above the record cap) then rm -rf / asks with the bound reason, in under 5 s" ask - "$_cmd2600" '^This command was NOT run\. bound: '
+bound_row "bound: rm -rf / first, then 2600 benign commands (above the record cap) still denies" deny - "$_cmd2600_late"
+bound_row "bound: 40 -- words then terraform destroy asks, in under 5 s" ask - "$_cmd40dash"
+bound_row "bound: a 1000-target rm line then rm -rf ~ denies, in under 5 s" deny - "$_cmd1000rm"
+bound_row "bound: 30000 words in one command (above the word cap) asks with the bound reason, in under 5 s" ask - "$_cmdwords" '^This command was NOT run\. bound: '
+# The deadline branches: a private copy of the hook whose deadline is 0 s asks with the bound reason at the FIRST check it
+# reaches. There is one check per phase (reading the lexer output, judging the records, deciding one command, walking
+# the targets of one rm), so each row neuters the OTHER three in its copy: a row that stays green with its own check
+# removed would be covered by a later one.
+hook_edit() { # hook_edit <file> <literal anchor> <replacement>: the anchor must occur exactly once; HE_OK turns bad if not
+  [[ -n "$FAST" ]] && return 0
+  "$PY_BIN" -I -c 'import sys
+p, a, r = sys.argv[1:4]
+s = open(p).read()
+if s.count(a) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(a, r))' "$1" "$2" "$3" 2>/dev/null || HE_OK=bad
+}
+_DL_READ='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi'
+_DL_JUDGE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the commands"; break; fi'
+_DL_DECIDE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi'
+_DL_RM='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the targets of rm"; return 0; fi'
+deadline_row() { # deadline_row <phase> <command> <anchor to neuter>...
+  local phase="$1" cmd="$2"; shift 2
+  mk_hook_tree "deadline-$phase"; HE_OK=ok
+  hook_edit "$HT_HOOK" $'\nDEADLINE_S=6\n' $'\nDEADLINE_S=0\n'
+  while [[ $# -gt 0 ]]; do hook_edit "$HT_HOOK" "$1" ':'; shift; done
+  chk "bound: deadline ($phase): the edits landed in the private hook copy" "$HE_OK"
+  tree_row "bound: deadline ($phase): a hook whose time is up asks instead of finishing" ask "$HT_HOOK" "$(mkjson "$cmd" "$TREE")"
+  jqchk "bound: deadline ($phase): the ask carries the bound rule id and says the command was not run" '.hookSpecificOutput.permissionDecisionReason | test("^This command was NOT run\\. bound: ")'
+}
+deadline_row reading 'ls "x"; terraform plan' "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM"
+deadline_row judging 'ls "x"; terraform plan' "$_DL_READ" "$_DL_DECIDE" "$_DL_RM"
+deadline_row deciding 'ls "x"; terraform plan' "$_DL_READ" "$_DL_JUDGE" "$_DL_RM"
+deadline_row rm-targets 'rm -rf "build"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE"
+
+# =====================================================================================================
 echo "== the envelope (ADR-156/157): an unreadable envelope asks, a non-Bash tool is not decided =="
 env_row "garbage stdin asks" ask 'not json at all {'
 env_row "a truncated envelope asks (M2)" ask '{"tool_input":'
@@ -1344,14 +1435,14 @@ if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
 fi
 if [[ -n "$ROWSEL" ]]; then
-  # Reduced mode (DCG_ROWS, the mutation suite only): the 488-case floor below does not apply to a selection.
+  # Reduced mode (DCG_ROWS, the mutation suite only): the MIN_CASES floor below does not apply to a selection.
   # The selection must have matched at least one row; the verdict is the failure count.
   echo "selected=$SELECTED"
   if [[ "$SELECTED" -lt 1 ]]; then printf '[FATAL] anti-vacuity: DCG_ROWS matched no row\n' >&2; exit 1; fi
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=488
+MIN_CASES=506
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

@@ -116,8 +116,21 @@ set -f
 export LC_ALL=C
 unset CDPATH
 
+# BOUNDS on the bash side (the harness kills this hook at hooks.json `timeout: 10`, and a killed hook is not a
+# decision). The wall clock is `SECONDS`, reset here: it ticks on whole-second boundaries, so DEADLINE_S=6 trips
+# between 5 and 6 s after this line, comfortably inside the 10 s budget. MAX_RECORDS and MAX_WORDS cap what the
+# rule table judges; a command beyond either, or one that runs out of time, asks with rule id `bound` unless a
+# deny was already found. The lexer has its own 2 s alarm; these bound everything after it.
+SECONDS=0
+DEADLINE_S=6
+MAX_RECORDS=2000
+MAX_WORDS=20000
+BOUND_WHY=""
+
 ISSUES_URL='https://github.com/jikig-ai/soleur/issues'
 REASON_TAIL=" Stop and tell the person what you were about to run and why. Do not retry this command and do not rephrase it to get around the guard. If no person is available to answer, end the task and report it as blocked. The person can run the command themselves in their own terminal, outside the agent, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 set in their own shell. If this was flagged wrongly, report it at ${ISSUES_URL}"
+PERSON_TAIL=" The person can run the command themselves in their own terminal, outside the agent, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 set in their own shell. If this was flagged wrongly, report it at ${ISSUES_URL}"
+BOUND_TAIL=" Split it into smaller commands and send them one at a time; if you cannot, stop and report the task as blocked.${PERSON_TAIL}"
 FALLBACK_REASON="guard-output-fallback: the destructive-command guard could not build its decision output and is asking instead of allowing. Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
 
 # ---- output ---------------------------------------------------------------------------------------
@@ -154,6 +167,10 @@ lead_for() {
 
 ask_parse() { # <cause text>: a command the lexer could not read
   emit ask "command-not-parsed: the destructive-command guard could not parse this command; it was not recognised as destructive, and the guard asks rather than guess (${1}).${REASON_TAIL}"
+  exit 0
+}
+ask_bound() { # <why>: a command too large to check in full
+  emit ask "This command was NOT run. bound: the destructive-command guard stopped checking this command because it is too large to check in full (${1}); it was not recognised as destructive, and the guard asks rather than guess.${BOUND_TAIL}"
   exit 0
 }
 ask_envelope() { # <cause text>
@@ -259,13 +276,16 @@ fi
 # ---- 4. lex ----------------------------------------------------------------------------------------
 # Frames: C \0 ctx \0 argc \0 (flags \0 arg \0){argc} ... then OK \0 (or E \0 cause \0 on failure).
 W_TXT=(); W_FLG=(); REC_OFF=(); REC_N=()
-SAW_OK=0; SAW_E=""; LEX_BAD=0
+SAW_OK=0; SAW_E=""; LEX_BAD=0; BOUND_READ=0
 LEX_ST=0; LEX_LEFT=0; LEX_KIND=0; NW=0
 while IFS= read -r -d '' F; do
   case "$LEX_ST" in
     0) case "$F" in C) LEX_ST=1 ;; OK) SAW_OK=1 ;; E) LEX_ST=9 ;; *) LEX_BAD=1 ;; esac ;;
     1) LEX_ST=2 ;;                                   # the ctx field
     2) if [[ "$F" =~ ^[1-9][0-9]{0,6}$ ]]; then
+         if (( ${#REC_N[@]} >= MAX_RECORDS )); then BOUND_WHY="more than ${MAX_RECORDS} simple commands"; break; fi
+         if (( NW + F > MAX_WORDS )); then BOUND_WHY="more than ${MAX_WORDS} words"; break; fi
+         if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi
          REC_OFF[${#REC_OFF[@]}]="$NW"; REC_N[${#REC_N[@]}]="$F"; LEX_LEFT=$((F * 2)); LEX_KIND=0; LEX_ST=3
        else LEX_BAD=1; LEX_ST=0; fi ;;
     3) if [[ "$LEX_KIND" -eq 0 ]]; then W_FLG[${#W_FLG[@]}]="$F"; LEX_KIND=1
@@ -275,7 +295,8 @@ while IFS= read -r -d '' F; do
   esac
 done < <({ printf '%s' "$INPUT" | jq -j '.tool_input.command' | perl "$LEXER"; } 2>/dev/null)
 
-if [[ "$SAW_OK" -ne 1 ]]; then
+[[ "$BOUND_READ" -eq 1 ]] && ask_bound "$BOUND_WHY"
+if [[ "$SAW_OK" -ne 1 && -z "$BOUND_WHY" ]]; then
   if [[ -n "$SAW_E" ]]; then ask_parse "lexer ${SAW_E}"; fi
   # No OK and no E: the lexer was killed, crashed, or perl is missing/unusable. Probe by RESULT.
   PERL_PROBE="$(perl -e 'print "ok"' 2>/dev/null)" || PERL_PROBE=""
@@ -328,6 +349,16 @@ phys_cd() { # <dir>: the physical path of an existing directory, else nothing
 # resolve_phys <abs path> <follow 0|1> -> RP (empty = no decision: rm refuses `.`)
 # follow=1: the path itself is resolved through symlinks (a trailing slash or a glob suffix); follow=0: a
 # bare final name stays literal (`rm -rf link` only unlinks the link).
+PC_K=(); PC_V=()
+phys_memo() { # <dir> -> PCR: phys_cd, one subshell per distinct directory (a long target list shares its parents)
+  local k n=${#PC_K[@]}
+  for ((k = 0; k < n; k++)); do
+    if [[ "${PC_K[$k]}" == "$1" ]]; then PCR="${PC_V[$k]}"; return 0; fi
+  done
+  PCR="$(phys_cd "$1")"
+  PC_K[n]="$1"; PC_V[n]="$PCR"
+}
+
 resolve_phys() {
   local p="$1" follow="$2" last dir r rest probe
   RP=""
@@ -336,18 +367,18 @@ resolve_phys() {
   last="${p##*/}"
   if [[ "$follow" == 0 && "$last" == . ]]; then return 1; fi
   if [[ "$follow" == 1 || "$last" == .. ]]; then
-    r="$(phys_cd "$p")"
+    phys_memo "$p"; r="$PCR"
     if [[ -n "$r" ]]; then RP="$r"; return 0; fi
   fi
   dir="${p%/*}"; [[ -z "$dir" ]] && dir=/
-  r="$(phys_cd "$dir")"
+  phys_memo "$dir"; r="$PCR"
   if [[ -n "$r" ]]; then
     lex_norm "${r%/}/$last"; RP="$LN"; return 0
   fi
   # the parent does not exist either: resolve the longest existing prefix, normalize the rest lexically
   rest="$last"; probe="$dir"
   while :; do
-    r="$(phys_cd "$probe")"
+    phys_memo "$probe"; r="$PCR"
     [[ -n "$r" ]] && break
     rest="${probe##*/}/$rest"; probe="${probe%/*}"
     [[ -z "$probe" ]] && probe=/
@@ -449,6 +480,7 @@ rule_rm() {
   cwd_ready; home_ready
   if (( UNRES )); then note 1 unresolved-cd-before-destructive; fi
   for k in ${tix[@]+"${tix[@]}"}; do
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the targets of rm"; return 0; fi
     expand_word "${a[$k]}" "${fl[$k]}" || continue
     T="$EW"; glob=0; follow=0
     if [[ "$T" == '*' && "$EW_Q" -eq 0 ]]; then glob=1; follow=1; D="$SIMCWD"
@@ -642,6 +674,7 @@ wrap_skip() {
 decide_argv() {
   local depth="$1" n i k name
   (( depth > 8 )) && return 0
+  if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi
   local -a t=("${DA_T[@]}") f=("${DA_F[@]}")
   n=${#t[@]}; i=0
   while (( i < n )) && is_assign "${t[$i]}"; do i=$((i + 1)); done
@@ -664,6 +697,7 @@ decide_argv() {
     if [[ "${t[$k]}" == -- ]]; then
       DA_T=("${t[@]:$((k + 1))}"); DA_F=("${f[@]:$((k + 1))}")
       decide_argv $((depth + 1))
+      break  # the recursion retries every later `--` itself; looping on would repeat that work exponentially
     fi
   done
 }
@@ -695,8 +729,10 @@ apply_cd() { # reads DA_T/DA_F of the current record (its first non-assignment w
 
 NREC=${#REC_N[@]}
 for ((r = 0; r < NREC; r++)); do
-  DA_T=("${W_TXT[@]:${REC_OFF[$r]}:${REC_N[$r]}}")
-  DA_F=("${W_FLG[@]:${REC_OFF[$r]}:${REC_N[$r]}}")
+  if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the commands"; break; fi
+  # one record's words by index: an array slice is O(offset) in bash and made the loop quadratic
+  RO="${REC_OFF[$r]}"; RC="${REC_N[$r]}"; DA_T=(); DA_F=()
+  for ((RQ = 0; RQ < RC; RQ++)); do DA_T[RQ]="${W_TXT[RO + RQ]}"; DA_F[RQ]="${W_FLG[RO + RQ]}"; done
   REC_RANK=0; REC_RULE=""
   decide_argv 0
   if (( REC_RANK > BEST_RANK )); then
@@ -704,6 +740,7 @@ for ((r = 0; r < NREC; r++)); do
     (( ${#REC_TXT} > 200 )) && BEST_QUOTE="${BEST_QUOTE}..."
     (( BEST_RANK == 2 )) && break
   fi
+  [[ -n "$BOUND_WHY" ]] && break
   # the cd effect of this record, for the commands after it
   CI=0
   while (( CI < ${#DA_T[@]} )) && is_assign "${DA_T[$CI]}"; do CI=$((CI + 1)); done
@@ -713,6 +750,8 @@ for ((r = 0; r < NREC; r++)); do
 done
 
 # ---- 6. the decision -------------------------------------------------------------------------------
+# a bound trip (record or word cap, or the deadline) is an ask unless a deny was already found
+if [[ -n "$BOUND_WHY" && "$BEST_RANK" -lt 2 ]]; then ask_bound "$BOUND_WHY"; fi
 (( BEST_RANK == 0 )) && exit 0
 lead_for "$BEST_RULE"
 REASON="${BEST_RULE}: ${LEAD} Matched command: [${BEST_QUOTE}].${REASON_TAIL}"
