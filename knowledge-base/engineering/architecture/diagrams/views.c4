@@ -70,7 +70,11 @@ views {
       // were [] (the same mechanism that leaves connectedRepoKb boxed above). So the
       // guard component is included as well, at the same nesting depth as skills/agents/kb,
       // and the three edges (claude/hooks -> snapshotGuard -> playwrightMcp) render (#7332).
-      platform.plugin.snapshotGuard, playwrightMcp
+      platform.plugin.snapshotGuard, playwrightMcp,
+      // W2 / ADR-274: the destructive-command guard is a plugin component at the same depth as
+      // snapshotGuard; the compound-node rule above applies, so the engine.hooks -> destructiveGuard
+      // edge renders only when its descendant endpoint is listed. It has no external counterpart.
+      platform.plugin.destructiveGuard
 
     style element.tag == #external {
       color muted
@@ -96,6 +100,8 @@ views {
       // #7980: both endpoints of the three guard edges (claude/hooks -> snapshotGuard ->
       // playwrightMcp) must be listed or the edges do not render (#7332).
       platform.plugin.snapshotGuard, playwrightMcp,
+      // W2 / ADR-274: both endpoints of engine.hooks -> destructiveGuard are listed here, so the edge renders.
+      platform.plugin.destructiveGuard,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb,
       platform.engine.claude.registry, platform.engine.claude.binding, platform.engine.claude.adapter,
       platform.engine.claude.factory, platform.engine.claude.composition,

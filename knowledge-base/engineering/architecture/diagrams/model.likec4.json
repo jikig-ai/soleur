@@ -589,7 +589,7 @@
 "shape": "rectangle"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "title": "Soleur Plugin",
 "kind": "system",
@@ -639,7 +639,7 @@
 },
 "technology": "Next.js API",
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD), other plugin hooks have no web override yet (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-274; #9289)."
 },
 "title": "API Routes",
 "kind": "container",
@@ -969,6 +969,19 @@
 "title": "browser-snapshot credential guard",
 "kind": "component",
 "id": "platform.plugin.snapshotGuard"
+},
+"platform.plugin.destructiveGuard": {
+"notation": "Component",
+"style": {
+"shape": "component"
+},
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"description": {
+"txt": "ADR-274 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the decision reason in the customer's own harness transcript is the record. HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders (ADR-093 amendment 2026-10-07)."
+},
+"title": "destructive-command guard",
+"kind": "component",
+"id": "platform.plugin.destructiveGuard"
 },
 "platform.infra.supabase": {
 "notation": "Data store",
@@ -3153,7 +3166,18 @@
 },
 "id": "umlx56"
 },
-"8wkuqw": {
+"1qsj0z1": {
+"title": "PreToolUse ask/deny on destructive commands; no egress",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-274)",
+"source": {
+"model": "platform.engine.hooks"
+},
+"target": {
+"model": "platform.plugin.destructiveGuard"
+},
+"id": "1qsj0z1"
+},
+"1ehaxpl": {
 "title": "cron-ux-audit per-fire overlay: UNWRAPPED @playwright/mcp@0.0.75, --snapshot-mode none only; holds no tree- or value-returning tool (PA-31 §(g))",
 "technology": "stdio JSON-RPC (claude -p child)",
 "source": {
@@ -3162,7 +3186,7 @@
 "target": {
 "model": "playwrightMcp"
 },
-"id": "8wkuqw"
+"id": "1ehaxpl"
 }
 },
 "globals": {
@@ -6427,7 +6451,7 @@
 "parent": null,
 "relations": [
 "5akxs7",
-"8wkuqw"
+"1ehaxpl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -10207,7 +10231,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -10980,7 +11004,8 @@
 "tu8e9h",
 "1svgvlu",
 "9qq8g2",
-"umlx56"
+"umlx56",
+"1qsj0z1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14647,7 +14672,7 @@
 },
 "parent": null,
 "relations": [
-"8wkuqw"
+"1ehaxpl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14799,7 +14824,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 16320,
+"width": 16321,
 "height": 2667
 },
 "nodes": [
@@ -15166,7 +15191,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD), other plugin hooks have no web override yet (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-274; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -15252,7 +15277,8 @@
 "9tpwtk",
 "yudi63",
 "rjq4wu",
-"12qyu50"
+"12qyu50",
+"1e7sm50"
 ],
 "title": "Cloud CLI Engine",
 "modelRef": "platform.engine",
@@ -15579,7 +15605,8 @@
 "vdbrj4",
 "rspfp0",
 "yudi63",
-"12qyu50"
+"12qyu50",
+"1e7sm50"
 ],
 "title": "Hook Engine",
 "modelRef": "platform.engine.hooks",
@@ -15694,7 +15721,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__stripe",
-"x": 7373,
+"x": 7374,
 "y": 1262,
 "width": 331,
 "height": 180,
@@ -15771,7 +15798,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__publicReader",
-"x": 9912,
+"x": 9913,
 "y": 1262,
 "width": 361,
 "height": 180,
@@ -15809,7 +15836,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_grokBuild",
-"x": 14426,
+"x": 14427,
 "y": 1262,
 "width": 359,
 "height": 180,
@@ -15848,7 +15875,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 9230,
+"x": 9231,
 "y": 1262,
 "width": 349,
 "height": 180,
@@ -15889,7 +15916,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 8758,
+"x": 8759,
 "y": 1262,
 "width": 362,
 "height": 180,
@@ -15926,7 +15953,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__projectZot",
-"x": 10384,
+"x": 10385,
 "y": 1262,
 "width": 364,
 "height": 180,
@@ -16001,7 +16028,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__devin",
-"x": 12993,
+"x": 12994,
 "y": 1262,
 "width": 362,
 "height": 180,
@@ -16134,6 +16161,7 @@
 "platform.plugin.skills",
 "platform.plugin.agents",
 "platform.plugin.snapshotGuard",
+"platform.plugin.destructiveGuard",
 "platform.plugin.kb"
 ],
 "inEdges": [
@@ -16144,7 +16172,8 @@
 "rspfp0",
 "be72gy",
 "rjq4wu",
-"12qyu50"
+"12qyu50",
+"1e7sm50"
 ],
 "outEdges": [
 "wip0go"
@@ -16158,16 +16187,16 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 9012,
+"x": 8730,
 "y": 1620,
-"width": 1344,
+"width": 1882,
 "height": 743,
 "labelBBox": {
 "x": 6,
@@ -16292,7 +16321,7 @@
 "technology": "Markdown SKILL.md",
 "kind": "container",
 "navigateTo": "__platform_plugin_skills",
-"x": 9482,
+"x": 9738,
 "y": 1703,
 "width": 336,
 "height": 180,
@@ -16330,7 +16359,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 9052,
+"x": 9308,
 "y": 1703,
 "width": 320,
 "height": 180,
@@ -16369,7 +16398,7 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 9928,
+"x": 10184,
 "y": 1703,
 "width": 387,
 "height": 180,
@@ -16377,6 +16406,42 @@
 "x": 38,
 "y": 17,
 "width": 312,
+"height": 139
+}
+},
+{
+"id": "platform.plugin.destructiveGuard",
+"parent": "platform.plugin",
+"level": 1,
+"children": [],
+"inEdges": [
+"1e7sm50"
+],
+"outEdges": [],
+"title": "destructive-command guard",
+"modelRef": "platform.plugin.destructiveGuard",
+"shape": "component",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "ADR-274 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the decision reason in the customer's own harness transcript is the record. HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders (ADR-093 amendment 2026-10-07)."
+},
+"tags": [],
+"notation": "Component",
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"kind": "component",
+"navigateTo": "__platform_plugin_destructiveGuard",
+"x": 8770,
+"y": 1703,
+"width": 427,
+"height": 180,
+"labelBBox": {
+"x": 38,
+"y": 17,
+"width": 352,
 "height": 139
 }
 },
@@ -16527,7 +16592,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 7883,
+"x": 7884,
 "y": 1703,
 "width": 331,
 "height": 180,
@@ -16566,7 +16631,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 9476,
+"x": 9732,
 "y": 2123,
 "width": 348,
 "height": 200,
@@ -16604,7 +16669,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 14643,
+"x": 14771,
 "y": 2133,
 "width": 372,
 "height": 180,
@@ -16648,7 +16713,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__doppler",
-"x": 7815,
+"x": 7816,
 "y": 1262,
 "width": 345,
 "height": 180,
@@ -16737,7 +16802,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__zotRegistry",
-"x": 11681,
+"x": 12593,
 "y": 1703,
 "width": 354,
 "height": 180,
@@ -16773,7 +16838,7 @@
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 1450,
+"x": 1401,
 "y": 2123,
 "width": 335,
 "height": 200,
@@ -16809,7 +16874,7 @@
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 1896,
+"x": 1847,
 "y": 2133,
 "width": 366,
 "height": 180,
@@ -16847,7 +16912,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__ghcr",
-"x": 13188,
+"x": 13444,
 "y": 2133,
 "width": 356,
 "height": 180,
@@ -16885,7 +16950,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__inngestReleases",
-"x": 11415,
+"x": 11671,
 "y": 2132,
 "width": 344,
 "height": 182,
@@ -16928,7 +16993,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sentry",
-"x": 8218,
+"x": 8219,
 "y": 2133,
 "width": 325,
 "height": 180,
@@ -16973,7 +17038,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 12689,
+"x": 12945,
 "y": 2133,
 "width": 388,
 "height": 180,
@@ -17012,7 +17077,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__slack",
-"x": 14352,
+"x": 14481,
 "y": 2487,
 "width": 345,
 "height": 180,
@@ -17074,44 +17139,44 @@
 493
 ],
 [
-12310,
-518
+12311,
+517
 ],
 [
-12991,
+12992,
 585
 ],
 [
-13542,
+13543,
 749
 ],
 [
-13913,
+13914,
 859
 ],
 [
-14021,
+14022,
 876
 ],
 [
-14342,
+14343,
 1091
 ],
 [
-14410,
+14411,
 1137
 ],
 [
-14475,
+14476,
 1201
 ],
 [
-14524,
+14525,
 1254
 ]
 ],
 "labelBBox": {
-"x": 14243,
+"x": 14244,
 "y": 909,
 "width": 169,
 "height": 39
@@ -17284,12 +17349,12 @@
 630
 ],
 [
-4704,
-634
+4429,
+658
 ],
 [
-4080,
-736
+4341,
+644
 ],
 [
 4043,
@@ -17526,52 +17591,52 @@
 1493
 ],
 [
-11108,
+11109,
 1467
 ],
 [
-11143,
+11144,
 1502
 ],
 [
-11178,
+11179,
 1537
 ],
 [
-11178,
+11179,
 1577
 ],
 [
-11143,
+11144,
 1612
 ],
 [
-11131,
-1625
+11134,
+1622
 ],
 [
-9890,
-1614
+10142,
+1616
 ],
 [
-9873,
+10129,
 1620
 ],
 [
-9827,
+10083,
 1636
 ],
 [
-9782,
+10038,
 1666
 ],
 [
-9746,
+10002,
 1696
 ]
 ],
 "labelBBox": {
-"x": 11170,
+"x": 11171,
 "y": 1535,
 "width": 94,
 "height": 39
@@ -17608,32 +17673,44 @@
 1482
 ],
 [
-4104,
-1514
+4082,
+1508
 ],
 [
-8737,
-1455
+7914,
+1496
 ],
 [
-8865,
+8026,
 1502
 ],
 [
-8971,
-1540
+8573,
+1529
 ],
 [
-9067,
-1627
+8745,
+1415
 ],
 [
-9131,
-1695
+9253,
+1620
+],
+[
+9296,
+1638
+],
+[
+9338,
+1667
+],
+[
+9373,
+1696
 ]
 ],
 "labelBBox": {
-"x": 9043,
+"x": 9224,
 "y": 1535,
 "width": 99,
 "height": 39
@@ -17682,92 +17759,104 @@
 1031
 ],
 [
-11344,
+11345,
 1105
 ],
 [
-14173,
+14174,
 1061
 ],
 [
-14346,
+14347,
 1091
 ],
 [
-14575,
+14576,
 1132
 ],
 [
-14706,
+14707,
 1072
 ],
 [
-14841,
+14842,
 1262
 ],
 [
-14898,
+14899,
 1341
 ],
 [
-14905,
-1408
+14904,
+1406
 ],
 [
-14841,
+14842,
 1482
 ],
 [
-14701,
-1643
+14635,
+1732
 ],
 [
-14100,
-1588
+14442,
+1551
 ],
 [
-13889,
+14125,
 1620
 ],
 [
-13830,
-1629
+13623,
+1729
 ],
 [
-11818,
-1927
+13510,
+1816
 ],
 [
-11764,
+13002,
+1893
+],
+[
+12786,
+1925
+],
+[
+12221,
+1867
+],
+[
+12020,
 1953
 ],
 [
-11699,
-1984
+11953,
+1981
 ],
 [
-11710,
+11966,
 2034
 ],
 [
-11644,
+11900,
 2063
 ],
 [
-11481,
+11737,
 2134
 ],
 [
-10299,
+10555,
 2194
 ],
 [
-9836,
+10092,
 2214
 ]
 ],
 "labelBBox": {
-"x": 14887,
+"x": 14888,
 "y": 1339,
 "width": 25,
 "height": 18
@@ -17804,80 +17893,80 @@
 1482
 ],
 [
-3565,
-1501
+3610,
+1512
 ],
 [
-9091,
-1499
+7902,
+1479
 ],
 [
-9170,
+8026,
 1502
 ],
 [
-9874,
-1528
+8165,
+1527
 ],
 [
-10047,
-1579
+8186,
+1587
 ],
 [
-10751,
+8325,
 1612
 ],
 [
-10760,
-1613
+8342,
+1615
 ],
 [
-11075,
-1614
+10834,
+1608
 ],
 [
-11081,
+10846,
 1620
 ],
 [
-11166,
-1707
+10932,
+1706
 ],
 [
-11163,
-1803
+10918,
+1795
 ],
 [
-11081,
+10846,
 1893
 ],
 [
-11029,
-1949
+10792,
+1966
 ],
 [
-10470,
-1936
+10737,
+1924
 ],
 [
-10395,
+10651,
 1953
 ],
 [
-10199,
-1996
+10459,
+2017
 ],
 [
-9983,
-2078
+10241,
+2096
 ],
 [
-9835,
-2140
+10091,
+2152
 ]
 ],
 "labelBBox": {
-"x": 11144,
+"x": 10906,
 "y": 1762,
 "width": 200,
 "height": 56
@@ -17898,24 +17987,24 @@
 "label": "Reads/writes",
 "points": [
 [
-9650,
+9906,
 1882
 ],
 [
-9650,
+9906,
 1949
 ],
 [
-9650,
+9906,
 2041
 ],
 [
-9650,
+9906,
 2112
 ]
 ],
 "labelBBox": {
-"x": 9651,
+"x": 9907,
 "y": 1986,
 "width": 85,
 "height": 39
@@ -17936,24 +18025,24 @@
 "label": "Reads/writes",
 "points": [
 [
-9303,
+9559,
 1882
 ],
 [
-9372,
+9628,
 1950
 ],
 [
-9468,
+9724,
 2044
 ],
 [
-9541,
+9797,
 2116
 ]
 ],
 "labelBBox": {
-"x": 9484,
+"x": 9740,
 "y": 1986,
 "width": 85,
 "height": 39
@@ -18226,32 +18315,32 @@
 1248
 ],
 [
-4334,
-1229
+4331,
+1225
 ],
 [
 4291,
 1262
 ],
 [
-4114,
-1396
+4152,
+1390
 ],
 [
-4141,
-1528
+4217,
+1524
 ],
 [
-3936,
+4049,
 1612
 ],
 [
-3908,
-1624
+4021,
+1627
 ],
 [
-1792,
-1611
+1793,
+1610
 ],
 [
 1763,
@@ -18724,36 +18813,36 @@
 "label": "Config + run history",
 "points": [
 [
-1873,
-1883
+1843,
+1882
 ],
 [
-1847,
+1813,
 1904
 ],
 [
-1821,
-1928
+1783,
+1927
 ],
 [
-1799,
+1757,
 1953
 ],
 [
-1755,
-2002
+1709,
+2000
 ],
 [
-1713,
+1665,
 2062
 ],
 [
-1681,
-2113
+1632,
+2114
 ]
 ],
 "labelBBox": {
-"x": 1800,
+"x": 1758,
 "y": 1986,
 "width": 197,
 "height": 39
@@ -18774,24 +18863,36 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-2009,
-1882
+1984,
+1883
 ],
 [
-2024,
-1953
+1982,
+1935
 ],
 [
-2044,
-2051
+1981,
+2003
 ],
 [
-2059,
+1989,
+2063
+],
+[
+1991,
+2083
+],
+[
+1996,
+2103
+],
+[
+2000,
 2123
 ]
 ],
 "labelBBox": {
-"x": 2046,
+"x": 1990,
 "y": 1986,
 "width": 167,
 "height": 39
@@ -19124,28 +19225,28 @@
 1612
 ],
 [
-5666,
-1619
-],
-[
-3345,
-1619
-],
-[
-3329,
+5665,
 1620
 ],
 [
-3080,
-1644
+3116,
+1618
 ],
 [
-2797,
-1705
+3098,
+1620
 ],
 [
-2619,
-1747
+2933,
+1642
+],
+[
+2749,
+1692
+],
+[
+2618,
+1732
 ]
 ],
 "labelBBox": {
@@ -19210,28 +19311,28 @@
 1612
 ],
 [
-4164,
-1626
-],
-[
-3112,
-1616
-],
-[
-3081,
-1620
+4159,
+1628
 ],
 [
 2922,
-1642
+1613
 ],
 [
-2746,
-1691
+2886,
+1620
 ],
 [
-2619,
-1731
+2795,
+1637
+],
+[
+2698,
+1672
+],
+[
+2618,
+1706
 ]
 ],
 "labelBBox": {
@@ -19314,52 +19415,40 @@
 634
 ],
 [
-4013,
-623
+4012,
+626
 ],
 [
-3921,
+3919,
 630
 ],
 [
-3590,
-656
+3363,
+658
 ],
 [
-3514,
-714
-],
-[
-3183,
-741
-],
-[
-3155,
-743
-],
-[
-2698,
-740
+3190,
+547
 ],
 [
 2671,
 749
 ],
 [
-2624,
-765
+2626,
+766
 ],
 [
-2579,
-794
+2581,
+795
 ],
 [
-2541,
-824
+2543,
+825
 ]
 ],
 "labelBBox": {
-"x": 3922,
+"x": 3920,
 "y": 664,
 "width": 130,
 "height": 39
@@ -19548,7 +19637,7 @@
 1136
 ],
 [
-9323,
+9324,
 1200
 ],
 [
@@ -19611,7 +19700,7 @@
 ],
 [
 8321,
-1162
+1163
 ],
 [
 8602,
@@ -19622,23 +19711,23 @@
 1237
 ],
 [
-8926,
+8927,
 1202
 ],
 [
-9175,
+9176,
 1262
 ],
 [
-9190,
+9191,
 1265
 ],
 [
-9205,
+9206,
 1270
 ],
 [
-9220,
+9221,
 1275
 ]
 ],
@@ -19949,35 +20038,35 @@
 "points": [
 [
 10527,
-990
+991
 ],
 [
-10462,
+10463,
 1016
 ],
 [
-10391,
+10392,
 1050
 ],
 [
-10332,
+10333,
 1091
 ],
 [
-10297,
+10298,
 1116
 ],
 [
-10229,
+10230,
 1191
 ],
 [
-10174,
+10175,
 1254
 ]
 ],
 "labelBBox": {
-"x": 10333,
+"x": 10334,
 "y": 1101,
 "width": 257,
 "height": 85
@@ -20017,52 +20106,52 @@
 1147
 ],
 [
-13082,
+13083,
 1001
 ],
 [
-13679,
+13680,
 1091
 ],
 [
-13856,
+13857,
 1118
 ],
 [
-13892,
+13893,
 1158
 ],
 [
-14066,
+14067,
 1202
 ],
 [
-14188,
+14189,
 1233
 ],
 [
-14222,
+14223,
 1228
 ],
 [
-14344,
+14345,
 1262
 ],
 [
-14368,
+14369,
 1268
 ],
 [
-14392,
+14393,
 1276
 ],
 [
-14416,
+14417,
 1284
 ]
 ],
 "labelBBox": {
-"x": 14067,
+"x": 14068,
 "y": 1099,
 "width": 251,
 "height": 90
@@ -20083,64 +20172,76 @@
 "label": "Management API health probe + bounded \nauto-restart \n(scheduled-supabase-watchdog.yml, \n#9168): GET \n/v1/projects/{ref}/health?services=… ",
 "points": [
 [
-10878,
+10879,
 1021
 ],
 [
-10902,
+10903,
 1041
 ],
 [
-10924,
+10925,
 1064
 ],
 [
-10938,
+10939,
 1091
 ],
 [
-11010,
-1228
+10962,
+1135
 ],
 [
-10806,
-1480
+10950,
+1154
 ],
 [
-10803,
+10939,
+1202
+],
+[
+10908,
+1336
+],
+[
+10918,
+1404
+],
+[
+10804,
 1482
 ],
 [
-10779,
-1498
+10756,
+1514
 ],
 [
-10572,
-1500
+10597,
+1479
 ],
 [
-10543,
+10544,
 1502
 ],
 [
-9933,
-1550
+10478,
+1531
 ],
 [
-9782,
-1587
+10492,
+1586
 ],
 [
-9170,
+10424,
 1612
 ],
 [
-9144,
-1613
+10368,
+1634
 ],
 [
-1787,
-1612
+1820,
+1601
 ],
 [
 1763,
@@ -20160,7 +20261,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10933,
+"x": 10927,
 "y": 1296,
 "width": 264,
 "height": 106
@@ -20325,7 +20426,7 @@
 1040
 ],
 [
-11097,
+11096,
 1084
 ],
 [
@@ -20333,68 +20434,68 @@
 1091
 ],
 [
-11260,
-1198
+11261,
+1197
 ],
 [
-11391,
+11392,
 1348
 ],
 [
-11261,
+11262,
 1482
 ],
 [
-11238,
+11239,
 1506
 ],
 [
-10691,
+10692,
 1489
 ],
 [
-10660,
+10661,
 1502
 ],
 [
-10593,
+10594,
 1529
 ],
 [
-10608,
+10609,
 1586
 ],
 [
-10540,
+10541,
 1612
 ],
 [
 10517,
-1621
+1622
 ],
 [
-3354,
-1618
+3124,
+1617
 ],
 [
-3329,
+3098,
 1620
 ],
 [
-3080,
-1644
+2932,
+1642
 ],
 [
-2797,
-1705
+2749,
+1692
 ],
 [
-2619,
-1747
+2618,
+1732
 ]
 ],
 "labelBBox": {
-"x": 11315,
+"x": 11316,
 "y": 1296,
 "width": 284,
 "height": 106
@@ -20459,12 +20560,12 @@
 1232
 ],
 [
-9634,
+9635,
 1258
 ],
 [
-9589,
-1280
+9590,
+1279
 ]
 ],
 "labelBBox": {
@@ -20577,15 +20678,15 @@
 1612
 ],
 [
-6426,
+6427,
 1726
 ],
 [
-7454,
+7455,
 1772
 ],
 [
-7873,
+7874,
 1786
 ]
 ],
@@ -20612,59 +20713,59 @@
 "points": [
 [
 2243,
-1399
+1398
 ],
 [
 2363,
-1428
+1427
 ],
 [
 2525,
-1464
+1463
 ],
 [
 2671,
 1482
 ],
 [
-2945,
-1515
+2767,
+1494
 ],
 [
-3020,
-1454
+3015,
+1469
 ],
 [
-3291,
+3106,
 1502
 ],
 [
-3446,
+3183,
 1529
 ],
 [
-3472,
-1584
+3176,
+1585
 ],
 [
-3627,
+3254,
 1612
 ],
 [
-4463,
-1764
+3365,
+1651
 ],
 [
-7156,
-1787
+7022,
+1761
 ],
 [
-7873,
-1791
+7874,
+1786
 ]
 ],
 "labelBBox": {
-"x": 3628,
+"x": 3255,
 "y": 1501,
 "width": 280,
 "height": 107
@@ -20705,76 +20806,76 @@
 1091
 ],
 [
-11298,
+11299,
 998
 ],
 [
-11537,
+11538,
 1091
 ],
 [
-11725,
+11726,
 1164
 ],
 [
-11908,
+11909,
 1338
 ],
 [
-11767,
+11768,
 1482
 ],
 [
-11729,
+11730,
 1521
 ],
 [
-10828,
+10829,
 1481
 ],
 [
-10777,
+10778,
 1502
 ],
 [
-10710,
+10711,
 1529
 ],
 [
-10724,
+10725,
 1586
 ],
 [
-10657,
+10658,
 1612
 ],
 [
-10633,
-1622
+10630,
+1623
 ],
 [
-8829,
-1617
+8550,
+1615
 ],
 [
-8803,
+8521,
 1620
 ],
 [
-8602,
-1643
+8420,
+1638
 ],
 [
-8376,
-1699
+8312,
+1676
 ],
 [
-8225,
-1740
+8226,
+1711
 ]
 ],
 "labelBBox": {
-"x": 11818,
+"x": 11819,
 "y": 1296,
 "width": 255,
 "height": 106
@@ -20823,16 +20924,16 @@
 1202
 ],
 [
-8225,
-1228
+8226,
+1227
 ],
 [
 8198,
 1250
 ],
 [
-8169,
-1269
+8170,
+1268
 ]
 ],
 "labelBBox": {
@@ -20858,27 +20959,27 @@
 "points": [
 [
 2609,
-1734
+1710
 ],
 [
-2736,
-1693
+2690,
+1675
 ],
 [
-2918,
-1642
+2791,
+1638
 ],
 [
-3081,
+2886,
 1620
 ],
 [
-3188,
-1606
+2942,
+1610
 ],
 [
-6875,
-1621
+6926,
+1617
 ],
 [
 6983,
@@ -20889,28 +20990,28 @@
 1583
 ],
 [
-7430,
+7431,
 1599
 ],
 [
-7760,
+7761,
 1482
 ],
 [
-7787,
+7788,
 1472
 ],
 [
-7814,
+7815,
 1460
 ],
 [
-7839,
+7840,
 1447
 ]
 ],
 "labelBBox": {
-"x": 7686,
+"x": 7687,
 "y": 1501,
 "width": 311,
 "height": 107
@@ -20971,7 +21072,7 @@
 1202
 ],
 [
-8656,
+8657,
 1286
 ],
 [
@@ -20979,19 +21080,19 @@
 1195
 ],
 [
-8244,
+8245,
 1262
 ],
 [
-8220,
+8221,
 1267
 ],
 [
-8195,
+8196,
 1274
 ],
 [
-8170,
+8171,
 1281
 ]
 ],
@@ -21018,19 +21119,19 @@
 "label": "Injects secrets",
 "points": [
 [
-7815,
+7816,
 1280
 ],
 [
-7797,
+7798,
 1273
 ],
 [
-7778,
+7779,
 1267
 ],
 [
-7760,
+7761,
 1262
 ],
 [
@@ -21104,23 +21205,23 @@
 "label": "Injects the web-host boot credential. \nThe LUKS-at-rest passphrase \n(WORKSPACES_LUKS_KEY, ADR-119) is \ndeliberately scoped to a DEDICATED \nprd_workspaces_luks config read by a ",
 "points": [
 [
-7816,
+7817,
 1277
 ],
 [
-7797,
+7798,
 1271
 ],
 [
-7778,
+7779,
 1266
 ],
 [
-7760,
+7761,
 1262
 ],
 [
-6731,
+6732,
 1034
 ],
 [
@@ -21178,23 +21279,23 @@
 "label": "Injects secrets — dedicated host's boot \ncredential is scoped to the SEPARATE \nDoppler project `soleur-inngest` (its \nown `prd` root holds only inngest \nsecrets: Postgres URI, freshly-rotated ",
 "points": [
 [
-7856,
+7857,
 1442
 ],
 [
-7826,
+7827,
 1458
 ],
 [
-7793,
+7794,
 1473
 ],
 [
-7760,
+7761,
 1482
 ],
 [
-7647,
+7648,
 1513
 ],
 [
@@ -21316,27 +21417,27 @@
 1202
 ],
 [
-8095,
+8096,
 1269
 ],
 [
-7845,
-1238
+7846,
+1239
 ],
 [
-7760,
+7761,
 1262
 ],
 [
-7745,
+7746,
 1266
 ],
 [
-7730,
+7731,
 1271
 ],
 [
-7714,
+7715,
 1276
 ]
 ],
@@ -21407,7 +21508,7 @@
 ],
 [
 7144,
-1229
+1230
 ],
 [
 7291,
@@ -21418,11 +21519,11 @@
 1267
 ],
 [
-7339,
+7340,
 1274
 ],
 [
-7363,
+7365,
 1282
 ]
 ],
@@ -21706,8 +21807,8 @@
 1245
 ],
 [
-9129,
-1265
+9131,
+1264
 ]
 ],
 "labelBBox": {
@@ -21736,7 +21837,7 @@
 1262
 ],
 [
-9065,
+9064,
 1242
 ],
 [
@@ -21908,56 +22009,56 @@
 1893
 ],
 [
-2478,
-1947
+2485,
+1949
 ],
 [
-11516,
-1852
+11765,
+1850
 ],
 [
-11761,
+12017,
 1953
 ],
 [
-11826,
+12082,
 1979
 ],
 [
-11810,
+12066,
 2035
 ],
 [
-11875,
+12131,
 2063
 ],
 [
-12132,
+12388,
 2174
 ],
 [
-12859,
+13115,
 2061
 ],
 [
-13132,
+13388,
 2123
 ],
 [
-13147,
+13403,
 2127
 ],
 [
-13163,
+13419,
 2131
 ],
 [
-13178,
+13434,
 2136
 ]
 ],
 "labelBBox": {
-"x": 11876,
+"x": 12132,
 "y": 1952,
 "width": 281,
 "height": 107
@@ -21994,44 +22095,68 @@
 1031
 ],
 [
-11140,
+11141,
 1067
 ],
 [
-12430,
-1007
+12429,
+1014
 ],
 [
-12590,
+12593,
 1091
 ],
 [
-12696,
-1147
+12803,
+1190
 ],
 [
-13170,
-1851
+12751,
+1346
 ],
 [
-13232,
+12939,
+1482
+],
+[
+13065,
+1573
+],
+[
+13142,
+1519
+],
+[
+13261,
+1620
+],
+[
+13395,
+1734
+],
+[
+13384,
+1802
+],
+[
+13474,
 1953
 ],
 [
-13266,
-2008
+13507,
+2009
 ],
 [
-13298,
-2072
+13543,
+2073
 ],
 [
-13322,
+13570,
 2124
 ]
 ],
 "labelBBox": {
-"x": 12998,
+"x": 13251,
 "y": 1544,
 "width": 25,
 "height": 18
@@ -22060,11 +22185,11 @@
 1089
 ],
 [
-10621,
+10622,
 1182
 ],
 [
-10598,
+10599,
 1252
 ]
 ],
@@ -22106,44 +22231,44 @@
 1893
 ],
 [
-2441,
-1940
-],
-[
-10176,
-1860
-],
-[
-10383,
-1953
-],
-[
-10444,
-1980
+2448,
+1941
 ],
 [
 10425,
+1858
+],
+[
+10639,
+1953
+],
+[
+10700,
+1980
+],
+[
+10681,
 2032
 ],
 [
-10484,
+10740,
 2063
 ],
 [
-10640,
+10896,
 2146
 ],
 [
-11134,
+11390,
 2191
 ],
 [
-11405,
+11661,
 2211
 ]
 ],
 "labelBBox": {
-"x": 10485,
+"x": 10741,
 "y": 1952,
 "width": 259,
 "height": 107
@@ -22184,64 +22309,52 @@
 1048
 ],
 [
-12406,
+12407,
 1033
 ],
 [
-12466,
+12467,
 1091
 ],
 [
-12632,
+12633,
 1254
 ],
 [
-12598,
-1407
+12655,
+1447
 ],
 [
-12491,
+12492,
 1612
 ],
 [
-12391,
-1805
+12469,
+1635
 ],
 [
-12291,
-1810
+11931,
+1598
 ],
 [
-12090,
-1893
+11907,
+1620
 ],
 [
-11942,
-1954
+11769,
+1746
 ],
 [
-11865,
-1860
+11792,
+1987
 ],
 [
-11734,
-1953
-],
-[
-11677,
-1994
-],
-[
-11639,
-2064
-],
-[
-11617,
-2123
+11818,
+2122
 ]
 ],
 "labelBBox": {
-"x": 12543,
+"x": 12573,
 "y": 1501,
 "width": 254,
 "height": 107
@@ -22294,52 +22407,88 @@
 1118
 ],
 [
-4605,
-1165
+4603,
+1175
 ],
 [
 4751,
 1202
 ],
 [
-5532,
-1396
+4983,
+1244
 ],
 [
-5738,
-1418
+6665,
+1154
 ],
 [
-6540,
+6875,
+1262
+],
+[
+6985,
+1318
+],
+[
+6933,
+1427
+],
+[
+7044,
 1482
 ],
 [
-6671,
-1492
+7097,
+1508
 ],
 [
-11164,
-1471
+11235,
+1491
 ],
 [
-11292,
+11293,
 1502
 ],
 [
-11448,
-1540
+11432,
+1527
 ],
 [
-11609,
-1628
+11453,
+1587
 ],
 [
-11720,
-1697
+11592,
+1612
+],
+[
+11619,
+1617
+],
+[
+12540,
+1611
+],
+[
+12565,
+1620
+],
+[
+12609,
+1636
+],
+[
+12649,
+1666
+],
+[
+12683,
+1696
 ]
 ],
 "labelBBox": {
-"x": 6541,
+"x": 7045,
 "y": 1296,
 "width": 273,
 "height": 106
@@ -22376,56 +22525,56 @@
 1482
 ],
 [
-2985,
-1516
+3040,
+1522
 ],
 [
-8034,
-1465
+8980,
+1486
 ],
 [
-8347,
+9351,
 1502
 ],
 [
-8558,
+9963,
 1527
 ],
 [
-8601,
-1587
+10113,
+1586
 ],
 [
-8811,
+10725,
 1612
 ],
 [
-8885,
-1621
+10749,
+1613
 ],
 [
-11430,
-1603
+12457,
+1614
 ],
 [
-11503,
+12480,
 1620
 ],
 [
-11572,
+12537,
 1636
 ],
 [
-11642,
-1667
+12595,
+1666
 ],
 [
-11702,
-1698
+12644,
+1697
 ]
 ],
 "labelBBox": {
-"x": 8812,
+"x": 10726,
 "y": 1544,
 "width": 25,
 "height": 18
@@ -22466,76 +22615,52 @@
 1057
 ],
 [
-13205,
+13206,
 1023
 ],
 [
-13317,
+13318,
 1091
 ],
 [
-13391,
-1136
+13470,
+1184
 ],
 [
-13389,
-1178
+13530,
+1349
 ],
 [
-13410,
-1262
-],
-[
-13434,
-1357
-],
-[
-13478,
-1411
-],
-[
-13410,
+13411,
 1482
 ],
 [
-13377,
-1516
+13385,
+1511
 ],
 [
-13026,
-1483
+13275,
+1489
 ],
 [
-12982,
+13238,
 1502
 ],
 [
-12915,
-1530
+13109,
+1545
 ],
 [
-12927,
-1580
+12979,
+1630
 ],
 [
-12862,
-1612
-],
-[
-12599,
-1743
-],
-[
-12255,
-1779
-],
-[
-12046,
-1789
+12889,
+1696
 ]
 ],
 "labelBBox": {
-"x": 13447,
+"x": 13475,
 "y": 1296,
 "width": 253,
 "height": 106
@@ -22556,48 +22681,72 @@
 "label": "Injects the registry-host boot \ncredential (scoped to the isolated \nsoleur-registry project's prd root — the \n4 admitted secrets ZOT_PULL/PUSH_TOKEN + \nBETTERSTACK_LOGS_TOKEN + ",
 "points": [
 [
-8136,
+8137,
 1442
 ],
 [
-8170,
+8171,
 1458
 ],
 [
-8208,
+8209,
 1473
 ],
 [
-8244,
+8245,
 1482
 ],
 [
-8335,
-1504
+8427,
+1526
 ],
 [
-11529,
-1462
+11435,
+1451
 ],
 [
-11614,
+11615,
 1502
 ],
 [
-11699,
-1542
+11706,
+1528
 ],
 [
-11765,
-1626
+11707,
+1586
 ],
 [
-11806,
-1694
+11798,
+1612
+],
+[
+11871,
+1633
+],
+[
+12407,
+1600
+],
+[
+12480,
+1620
+],
+[
+12537,
+1636
+],
+[
+12595,
+1667
+],
+[
+12643,
+1697
 ]
 ],
 "labelBBox": {
-"x": 11748,
+"x": 11799,
 "y": 1501,
 "width": 304,
 "height": 107
@@ -22618,87 +22767,87 @@
 "label": "Fetches its OWN zot image at first boot \nas the pinned release asset \nzot-image-<version>-<D12> (a prerelease \nof this repo) - NEVER from itself \n(bootstrap paradox) and NEVER from ",
 "points": [
 [
-12035,
-1755
+12880,
+1703
 ],
 [
-12233,
-1715
+12926,
+1671
 ],
 [
-12562,
-1654
+12981,
+1638
 ],
 [
-12848,
+13037,
 1620
 ],
 [
-12906,
-1613
+13073,
+1609
 ],
 [
-12923,
-1628
+13172,
+1621
 ],
 [
-12979,
+13209,
 1612
 ],
 [
-13081,
+13322,
 1584
 ],
 [
-13088,
-1529
+13333,
+1531
 ],
 [
-13190,
+13446,
 1502
 ],
 [
-13219,
-1494
+13479,
+1493
 ],
 [
-13707,
-1503
+13732,
+1507
 ],
 [
-13728,
+13756,
 1482
 ],
 [
-13796,
-1411
+13823,
+1410
 ],
 [
-13777,
-1347
+13805,
+1346
 ],
 [
-13728,
+13756,
 1262
 ],
 [
-13710,
-1229
+13751,
+1254
 ],
 [
-13475,
-1102
+13468,
+1094
 ],
 [
-13439,
+13459,
 1091
 ],
 [
-12910,
-940
+12925,
+942
 ],
 [
-11503,
+11507,
 1138
 ],
 [
@@ -22719,7 +22868,7 @@
 ]
 ],
 "labelBBox": {
-"x": 13773,
+"x": 13801,
 "y": 1296,
 "width": 265,
 "height": 106
@@ -22741,107 +22890,107 @@
 "points": [
 [
 2243,
-1400
+1399
 ],
 [
 2363,
-1430
+1429
 ],
 [
 2525,
-1466
+1465
 ],
 [
 2671,
 1482
 ],
 [
-2819,
-1498
+2949,
+1514
 ],
 [
-7879,
-1475
+3653,
+1472
 ],
 [
-8025,
+3932,
 1502
 ],
 [
-8164,
-1527
+4182,
+1528
 ],
 [
-8185,
+4236,
 1587
 ],
 [
-8324,
+4486,
 1612
 ],
 [
-8358,
-1618
+4507,
+1614
 ],
 [
-10803,
-1604
+10621,
+1609
 ],
 [
-10834,
+10639,
 1620
 ],
 [
-10966,
-1689
+10759,
+1690
 ],
 [
-10897,
-1821
+10673,
+1820
 ],
 [
-11027,
+10792,
 1893
 ],
 [
-11271,
-2026
+10946,
+1987
 ],
 [
-12020,
-1846
+12248,
+1884
 ],
 [
-12276,
+12415,
 1953
 ],
 [
-12343,
-1981
+12482,
+1980
 ],
 [
-12333,
-2026
+12471,
+2028
 ],
 [
-12396,
+12535,
 2063
 ],
 [
-12483,
-2114
+12659,
+2131
 ],
 [
-12588,
-2151
+12813,
+2171
 ],
 [
-12679,
-2176
+12935,
+2194
 ]
 ],
 "labelBBox": {
-"x": 11028,
+"x": 10793,
 "y": 1780,
 "width": 25,
 "height": 18
@@ -22878,56 +23027,56 @@
 1893
 ],
 [
-2451,
-1942
+2458,
+1943
 ],
 [
-10554,
-1849
+10804,
+1846
 ],
 [
-10768,
+11024,
 1953
 ],
 [
-10825,
+11081,
 1980
 ],
 [
-10800,
+11056,
 2034
 ],
 [
-10856,
+11112,
 2063
 ],
 [
-10951,
+11207,
 2112
 ],
 [
-11708,
+11964,
 2115
 ],
 [
-11814,
+12070,
 2123
 ],
 [
-12115,
+12371,
 2146
 ],
 [
-12464,
+12720,
 2180
 ],
 [
-12679,
+12935,
 2201
 ]
 ],
 "labelBBox": {
-"x": 10857,
+"x": 11113,
 "y": 1952,
 "width": 278,
 "height": 107
@@ -22949,59 +23098,59 @@
 "points": [
 [
 2609,
-1826
+1840
 ],
 [
-2737,
-1850
+2691,
+1860
 ],
 [
-2920,
-1880
+2793,
+1882
 ],
 [
-3081,
+2886,
 1893
 ],
 [
-3529,
-1929
+3357,
+1946
 ],
 [
-10720,
-1878
+10952,
+1874
 ],
 [
-11163,
+11419,
 1953
 ],
 [
-11314,
+11570,
 1978
 ],
 [
-11340,
+11596,
 2030
 ],
 [
-11489,
+11745,
 2063
 ],
 [
-11711,
+11967,
 2113
 ],
 [
-12348,
+12604,
 2174
 ],
 [
-12679,
+12935,
 2204
 ]
 ],
 "labelBBox": {
-"x": 11490,
+"x": 11746,
 "y": 1952,
 "width": 247,
 "height": 107
@@ -23054,88 +23203,100 @@
 1254
 ],
 [
-9925,
+9926,
 1175
 ],
 [
-9857,
+9858,
 1262
 ],
 [
-9797,
+9798,
 1339
 ],
 [
-9788,
+9789,
 1412
 ],
 [
-9857,
+9858,
 1482
 ],
 [
-9879,
-1504
+9902,
+1527
 ],
 [
-12051,
-1491
+12070,
+1474
 ],
 [
-12080,
+12127,
 1502
 ],
 [
-12152,
-1528
+12183,
+1529
 ],
 [
-12147,
-1574
+12158,
+1585
 ],
 [
-12214,
+12215,
 1612
 ],
 [
-12594,
-1830
+12254,
+1631
 ],
 [
-12888,
-1593
+12961,
+1605
 ],
 [
-13139,
+13002,
+1620
+],
+[
+13212,
+1700
+],
+[
+13290,
+1748
+],
+[
+13383,
 1953
 ],
 [
-13167,
-1993
+13403,
+1997
 ],
 [
-13163,
+13406,
 2020
 ],
 [
-13139,
+13383,
 2063
 ],
 [
-13125,
+13370,
 2087
 ],
 [
-13107,
+13351,
 2109
 ],
 [
-13085,
+13330,
 2127
 ]
 ],
 "labelBBox": {
-"x": 12215,
+"x": 12216,
 "y": 1501,
 "width": 248,
 "height": 107
@@ -23156,48 +23317,36 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-12035,
-1853
-],
-[
-12086,
-1868
-],
-[
-12141,
+12945,
 1882
 ],
 [
-12193,
-1893
+12974,
+1903
 ],
 [
-12319,
-1918
+13002,
+1926
 ],
 [
-12666,
-1876
-],
-[
-12769,
+13025,
 1953
 ],
 [
-12823,
-1993
+13067,
+2002
 ],
 [
-12852,
-2064
+13095,
+2069
 ],
 [
-12867,
-2123
+13113,
+2124
 ]
 ],
 "labelBBox": {
-"x": 12847,
+"x": 13091,
 "y": 1952,
 "width": 264,
 "height": 107
@@ -23218,43 +23367,43 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-13077,
+13333,
 2143
 ],
 [
-13096,
+13352,
 2136
 ],
 [
-13115,
+13371,
 2129
 ],
 [
-13133,
+13389,
 2123
 ],
 [
-15728,
-1267
+15400,
+1427
 ],
 [
-15920,
-1849
+15888,
+1797
 ],
 [
-15545,
+15546,
 1262
 ],
 [
-15000,
+15001,
 407
 ],
 [
-14362,
+14363,
 734
 ],
 [
-13353,
+13354,
 630
 ],
 [
@@ -23262,16 +23411,16 @@
 580
 ],
 [
-12293,
+12294,
 526
 ],
 [
-12001,
+12002,
 499
 ]
 ],
 "labelBBox": {
-"x": 15681,
+"x": 15647,
 "y": 1296,
 "width": 262,
 "height": 106
@@ -23292,88 +23441,88 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-12689,
-2196
+12945,
+2179
 ],
 [
-12566,
-2173
+12852,
+2154
 ],
 [
-12406,
-2133
+12742,
+2116
 ],
 [
-12279,
+12652,
 2063
 ],
 [
-12215,
-2028
+12589,
+2026
 ],
 [
-12226,
-1980
+12596,
+1986
 ],
 [
-12159,
+12532,
 1953
 ],
 [
-11992,
-1884
+12425,
+1897
 ],
 [
-10690,
-1987
+12385,
+1920
 ],
 [
-10536,
+12267,
 1893
 ],
 [
-10418,
-1820
+11763,
+1775
 ],
 [
-10503,
-1690
+11648,
+1683
 ],
 [
-10383,
+11134,
 1620
 ],
 [
-10364,
-1609
+11075,
+1613
 ],
 [
-4073,
-1620
+10128,
+1614
 ],
 [
-4052,
+10069,
 1612
 ],
 [
-3985,
-1586
+9160,
+1584
 ],
 [
-3999,
-1529
+8935,
+1528
 ],
 [
-3932,
+8026,
 1502
 ],
 [
-3867,
-1476
+7729,
+1493
 ],
 [
-2741,
-1490
+2967,
+1514
 ],
 [
 2671,
@@ -23384,8 +23533,8 @@
 1466
 ],
 [
-2372,
-1431
+2371,
+1432
 ],
 [
 2253,
@@ -23393,7 +23542,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10537,
+"x": 12268,
 "y": 1737,
 "width": 269,
 "height": 106
@@ -23415,47 +23564,47 @@
 "points": [
 [
 2243,
-1393
+1403
 ],
 [
-2477,
-1446
+2444,
+1459
 ],
 [
-2908,
-1541
+2785,
+1551
 ],
 [
-3278,
+3083,
 1612
 ],
 [
-4465,
-1839
+4350,
+1873
 ],
 [
-4759,
-1923
+4673,
+1920
 ],
 [
 5959,
 2063
 ],
 [
-6799,
-2161
+6800,
+2156
 ],
 [
-7810,
-2203
+7811,
+2201
 ],
 [
-8208,
-2217
+8209,
+2216
 ]
 ],
 "labelBBox": {
-"x": 4739,
+"x": 4568,
 "y": 1737,
 "width": 237,
 "height": 106
@@ -23476,48 +23625,48 @@
 "label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
-2132,
-1883
+2102,
+1882
 ],
 [
-2168,
+2129,
 1905
 ],
 [
-2206,
-1930
+2156,
+1929
 ],
 [
-2242,
+2181,
 1953
 ],
 [
-2318,
-2001
+2229,
+1999
 ],
 [
-2326,
+2222,
 2036
 ],
 [
-2412,
+2282,
 2063
 ],
 [
-2696,
-2151
+2559,
+2189
 ],
 [
-7258,
-2209
+7244,
+2217
 ],
 [
-8208,
-2220
+8209,
+2221
 ]
 ],
 "labelBBox": {
-"x": 2413,
+"x": 2283,
 "y": 1952,
 "width": 261,
 "height": 107
@@ -23538,48 +23687,36 @@
 "label": "Boot-stage fatals and stage markers from \na BAKED DSN, with NO Doppler fallback — \nso the channel still works when Doppler \nis itself the broken stage, which on \nthis host is the most likely one. This ",
 "points": [
 [
-2597,
-1887
+2521,
+1894
 ],
 [
-2632,
-1908
+2580,
+1968
 ],
 [
-2669,
-1931
+2654,
+2058
 ],
 [
-2702,
-1953
-],
-[
-2773,
-1999
-],
-[
-2778,
-2036
-],
-[
-2859,
+2664,
 2063
 ],
 [
-3119,
-2149
+2919,
+2188
 ],
 [
-7301,
-2208
+7281,
+2217
 ],
 [
-8208,
-2220
+8209,
+2221
 ]
 ],
 "labelBBox": {
-"x": 2860,
+"x": 2665,
 "y": 1952,
 "width": 274,
 "height": 107
@@ -23620,88 +23757,88 @@
 1105
 ],
 [
-11388,
+11389,
 1010
 ],
 [
-11712,
+11713,
 1091
 ],
 [
-11895,
+11896,
 1137
 ],
 [
-11998,
+11999,
 1104
 ],
 [
-12101,
+12102,
 1262
 ],
 [
-12155,
+12156,
 1344
 ],
 [
-12170,
+12171,
 1412
 ],
 [
-12101,
+12102,
 1482
 ],
 [
-12077,
+12078,
 1506
 ],
 [
-10893,
+10894,
 1487
 ],
 [
-10862,
+10863,
 1502
 ],
 [
-10806,
+10807,
 1529
 ],
 [
-10831,
+10832,
 1585
 ],
 [
-10774,
+10775,
 1612
 ],
 [
-10729,
-1634
+10749,
+1625
 ],
 [
-9031,
-1601
+8728,
+1605
 ],
 [
-8985,
+8703,
 1620
 ],
 [
-8737,
-1723
+8697,
+1624
 ],
 [
-8537,
-1983
+8523,
+1955
 ],
 [
-8442,
-2125
+8433,
+2124
 ]
 ],
 "labelBBox": {
-"x": 10863,
+"x": 10864,
 "y": 1501,
 "width": 252,
 "height": 107
@@ -23722,28 +23859,28 @@
 "label": "Pages the operator — the LARGER of two \nindependent exits (betterstack is the \nother; a Sentry outage is survivable BY \nDESIGN). Issue alerts route to email → \ntarget_type issue owners with ",
 "points": [
 [
-8365,
+8366,
 2133
 ],
 [
-8337,
+8338,
 1957
 ],
 [
-8295,
-1554
+8296,
+1555
 ],
 [
-8436,
+8437,
 1262
 ],
 [
-8503,
-1123
+8504,
+1124
 ],
 [
 8596,
-1150
+1149
 ],
 [
 8694,
@@ -23787,7 +23924,7 @@
 ]
 ],
 "labelBBox": {
-"x": 8437,
+"x": 8438,
 "y": 1296,
 "width": 265,
 "height": 106
@@ -24006,36 +24143,36 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-13022,
+13279,
 2313
 ],
 [
-13057,
+13314,
 2332
 ],
 [
-13096,
-2351
+13352,
+2350
 ],
 [
-13133,
+13389,
 2363
 ],
 [
-13551,
-2506
+13760,
+2493
 ],
 [
-14071,
-2553
+14221,
+2545
 ],
 [
-14342,
-2568
+14471,
+2564
 ]
 ],
 "labelBBox": {
-"x": 13317,
+"x": 13590,
 "y": 2383,
 "width": 214,
 "height": 39
@@ -24056,39 +24193,39 @@
 "label": "Mobile push notification",
 "points": [
 [
-14697,
-2575
+14826,
+2572
 ],
 [
-15119,
-2568
+15223,
+2558
 ],
 [
-16168,
-2523
+16169,
+2497
 ],
 [
-16168,
+16169,
 2224
 ],
 [
-16168,
+16169,
 930
 ],
 [
-16168,
+16169,
 930
 ],
 [
-16168,
+16169,
 930
 ],
 [
-16168,
+16169,
 505
 ],
 [
-12842,
+12843,
 480
 ],
 [
@@ -24097,7 +24234,7 @@
 ]
 ],
 "labelBBox": {
-"x": 16169,
+"x": 16170,
 "y": 1535,
 "width": 150,
 "height": 39
@@ -24172,44 +24309,44 @@
 493
 ],
 [
-12322,
+12321,
 524
 ],
 [
-13015,
+13016,
 643
 ],
 [
-13317,
+13318,
 1091
 ],
 [
-13344,
+13345,
 1132
 ],
 [
-13335,
+13336,
 1156
 ],
 [
-13317,
+13318,
 1202
 ],
 [
-13310,
+13311,
 1220
 ],
 [
-13299,
+13300,
 1238
 ],
 [
-13286,
+13287,
 1254
 ]
 ],
 "labelBBox": {
-"x": 13268,
+"x": 13269,
 "y": 911,
 "width": 246,
 "height": 35
@@ -24249,28 +24386,28 @@
 1074
 ],
 [
-12711,
+12712,
 1006
 ],
 [
-12910,
+12911,
 1091
 ],
 [
-12989,
+12990,
 1125
 ],
 [
-13058,
+13059,
 1195
 ],
 [
-13106,
+13107,
 1254
 ]
 ],
 "labelBBox": {
-"x": 13056,
+"x": 13057,
 "y": 1091,
 "width": 234,
 "height": 106
@@ -24323,88 +24460,76 @@
 1119
 ],
 [
-6090,
-1173
+6098,
+1158
 ],
 [
 6156,
 1202
 ],
 [
-6436,
-1325
+6350,
+1347
 ],
 [
-6561,
-1141
+6390,
+1417
 ],
 [
-6842,
-1262
-],
-[
-6977,
-1320
-],
-[
-6952,
-1429
-],
-[
-7089,
+6623,
 1482
 ],
 [
-7144,
-1503
+6655,
+1491
 ],
 [
-11251,
-1460
+11270,
+1479
 ],
 [
-11292,
+11293,
 1502
 ],
 [
-11327,
+11328,
 1537
 ],
 [
-11327,
+11328,
 1577
 ],
 [
-11292,
+11293,
 1612
 ],
 [
-11283,
-1621
+11281,
+1625
 ],
 [
-10411,
-1617
+10672,
+1615
 ],
 [
-10399,
+10655,
 1620
 ],
 [
-10344,
+10600,
 1636
 ],
 [
-10289,
+10545,
 1666
 ],
 [
-10243,
+10499,
 1697
 ]
 ],
 "labelBBox": {
-"x": 7090,
+"x": 6624,
 "y": 1313,
 "width": 227,
 "height": 73
@@ -24425,15 +24550,15 @@
 "label": "Bash-path deny routes agent-browser \nsnapshot through the same predicate",
 "points": [
 [
-3386,
+3384,
 1442
 ],
 [
-3418,
+3417,
 1458
 ],
 [
-3454,
+3453,
 1473
 ],
 [
@@ -24441,23 +24566,23 @@
 1482
 ],
 [
-3584,
-1508
+3598,
+1510
 ],
 [
-3837,
-1496
+4399,
+1494
 ],
 [
-3936,
+4513,
 1502
 ],
 [
-4593,
-1541
+4915,
+1530
 ],
 [
-4756,
+5011,
 1587
 ],
 [
@@ -24465,27 +24590,27 @@
 1612
 ],
 [
-5445,
-1613
+5446,
+1614
 ],
 [
-9843,
-1611
+10098,
+1610
 ],
 [
-9873,
+10129,
 1620
 ],
 [
-9924,
+10180,
 1636
 ],
 [
-9973,
+10229,
 1666
 ],
 [
-10014,
+10270,
 1696
 ]
 ],
@@ -24555,47 +24680,47 @@
 1110
 ],
 [
-14475,
+14476,
 1042
 ],
 [
-14650,
+14651,
 1091
 ],
 [
-14794,
+14795,
 1132
 ],
 [
 14866,
-1132
+1133
 ],
 [
-14940,
+14941,
 1262
 ],
 [
-15100,
-1541
+15102,
+1538
 ],
 [
-14958,
-1941
+15031,
+1939
 ],
 [
-14877,
-2124
+14985,
+2123
 ]
 ],
 "labelBBox": {
-"x": 15009,
+"x": 15022,
 "y": 1296,
 "width": 264,
 "height": 106
 },
 "parent": null,
 "relations": [
-"8wkuqw"
+"1ehaxpl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24609,72 +24734,72 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
-10316,
+10572,
 1871
 ],
 [
-10343,
+10599,
 1880
 ],
 [
-10372,
+10628,
 1887
 ],
 [
-10399,
+10655,
 1893
 ],
 [
-11179,
+11435,
 2042
 ],
 [
-11406,
+11662,
 1799
 ],
 [
-12185,
+12441,
 1953
 ],
 [
-12323,
+12579,
 1980
 ],
 [
-12343,
+12599,
 2034
 ],
 [
-12481,
+12737,
 2063
 ],
 [
-12968,
+13224,
 2165
 ],
 [
-13102,
-2090
+13359,
+2087
 ],
 [
-13599,
+13855,
 2123
 ],
 [
-13964,
-2148
+14172,
+2146
 ],
 [
-14390,
-2184
+14540,
+2181
 ],
 [
-14633,
-2205
+14761,
+2202
 ]
 ],
 "labelBBox": {
-"x": 12482,
+"x": 12738,
 "y": 1961,
 "width": 259,
 "height": 89
@@ -24687,6 +24812,80 @@
 "line": "dashed",
 "head": "normal",
 "technology": "stdio JSON-RPC over pipes (child process group)"
+},
+{
+"id": "1e7sm50",
+"source": "platform.engine.hooks",
+"target": "platform.plugin.destructiveGuard",
+"label": "PreToolUse ask/deny on destructive \ncommands; no egress",
+"points": [
+[
+3393,
+1442
+],
+[
+3424,
+1457
+],
+[
+3456,
+1471
+],
+[
+3488,
+1482
+],
+[
+3817,
+1593
+],
+[
+3913,
+1583
+],
+[
+4259,
+1612
+],
+[
+4370,
+1622
+],
+[
+8160,
+1607
+],
+[
+8271,
+1620
+],
+[
+8437,
+1640
+],
+[
+8621,
+1685
+],
+[
+8760,
+1724
+]
+],
+"labelBBox": {
+"x": 4260,
+"y": 1527,
+"width": 229,
+"height": 55
+},
+"parent": null,
+"relations": [
+"1qsj0z1"
+],
+"color": "gray",
+"line": "dashed",
+"head": "normal",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-274)"
 },
 {
 "id": "3adhpg",
@@ -24703,55 +24902,55 @@
 1458
 ],
 [
-14381,
+14382,
 1473
 ],
 [
-14344,
+14345,
 1482
 ],
 [
-14222,
-1511
+14251,
+1505
 ],
 [
-13340,
-1480
+13569,
+1492
 ],
 [
-13216,
+13472,
 1502
 ],
 [
-13064,
-1528
+13210,
+1529
 ],
 [
-13040,
+13152,
 1587
 ],
 [
-12888,
+12889,
 1612
 ],
 [
-12848,
-1619
+12852,
+1616
 ],
 [
-10077,
-1607
+10325,
+1608
 ],
 [
-9883,
+10139,
 1619
 ]
 ],
 "labelBBox": {
-"x": 11861,
-"y": 1504,
+"x": 12168,
+"y": 1502,
 "width": 301,
-"height": 106
+"height": 107
 },
 "parent": null,
 "relations": [
@@ -24773,45 +24972,45 @@
 610
 ],
 [
-7151,
-640
+7138,
+643
 ],
 [
-3274,
-623
+2801,
+615
 ],
 [
-3160,
+2675,
 630
 ],
 [
-2730,
-658
+2458,
+657
 ],
 [
-2594,
-580
+2393,
+651
 ],
 [
 2197,
 749
 ],
 [
-2155,
-767
+2157,
+769
 ],
 [
-2114,
-795
+2118,
+797
 ],
 [
-2079,
-824
+2083,
+825
 ]
 ],
 "labelBBox": {
-"x": 4410,
-"y": 628,
+"x": 4412,
+"y": 549,
 "width": 256,
 "height": 73
 },
@@ -24901,19 +25100,19 @@
 647
 ],
 [
-2334,
+2333,
 612
 ],
 [
-2194,
+2193,
 630
 ],
 [
-1992,
+1991,
 657
 ],
 [
-1932,
+1931,
 656
 ],
 [
@@ -25109,11 +25308,11 @@
 1923
 ],
 [
-7745,
+7746,
 2131
 ],
 [
-8209,
+8210,
 2199
 ]
 ],
@@ -25139,63 +25338,63 @@
 "label": "Loads skills, AGENTS.md rules, and MCP \nin both substrates; plugin subagents and \nSessionStart/SessionEnd hooks only on \nlocal. Since #8401 all three /soleur:go \nsession gates also resolve the plugin ",
 "points": [
 [
-12993,
+12994,
 1394
 ],
 [
-12850,
+12851,
 1424
 ],
 [
-12647,
+12648,
 1463
 ],
 [
-12466,
+12467,
 1482
 ],
 [
-12298,
+12299,
 1499
 ],
 [
-11874,
+11875,
 1472
 ],
 [
-11708,
+11709,
 1502
 ],
 [
-11557,
+11558,
 1529
 ],
 [
-11532,
+11533,
 1587
 ],
 [
-11380,
+11381,
 1612
 ],
 [
-11340,
-1619
+11348,
+1618
 ],
 [
-10019,
-1608
+10262,
+1610
 ],
 [
-9883,
+10139,
 1619
 ]
 ],
 "labelBBox": {
-"x": 11114,
-"y": 1501,
+"x": 11311,
+"y": 1432,
 "width": 265,
-"height": 107
+"height": 106
 },
 "parent": null,
 "relations": [
@@ -25261,7 +25460,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 7394,
+"width": 7433,
 "height": 2371
 },
 "nodes": [
@@ -25274,6 +25473,7 @@
 "platform.plugin.constraintscaffold",
 "platform.plugin.go",
 "platform.plugin.snapshotGuard",
+"platform.plugin.destructiveGuard",
 "platform.plugin.sync",
 "platform.plugin.brainstorm",
 "platform.plugin.oneshot",
@@ -25294,6 +25494,7 @@
 "fk0vnj",
 "rjq4wu",
 "12qyu50",
+"1e7sm50",
 "rspfp0"
 ],
 "outEdges": [
@@ -25311,7 +25512,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -25319,7 +25520,7 @@
 "depth": 1,
 "x": 2767,
 "y": 386,
-"width": 3954,
+"width": 3994,
 "height": 1599,
 "labelBBox": {
 "x": 6,
@@ -25351,8 +25552,8 @@
 "technology": "Entry Point",
 "kind": "component",
 "navigateTo": "__platform_plugin_help",
-"x": 2828,
-"y": 1458,
+"x": 2848,
+"y": 1185,
 "width": 345,
 "height": 180,
 "labelBBox": {
@@ -25385,8 +25586,8 @@
 "technology": "Constraint Generator",
 "kind": "component",
 "navigateTo": "__platform_plugin_constraintscaffold",
-"x": 3576,
-"y": 1458,
+"x": 3616,
+"y": 1185,
 "width": 388,
 "height": 180,
 "labelBBox": {
@@ -25434,7 +25635,7 @@
 "depth": 1,
 "navigateTo": "__platform_engine_claude",
 "x": 8,
-"y": 1128,
+"y": 940,
 "width": 2471,
 "height": 591,
 "labelBBox": {
@@ -25471,7 +25672,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_registry",
 "x": 62,
-"y": 1479,
+"y": 1291,
 "width": 354,
 "height": 180,
 "labelBBox": {
@@ -25507,7 +25708,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_binding",
 "x": 48,
-"y": 1189,
+"y": 1001,
 "width": 382,
 "height": 180,
 "labelBBox": {
@@ -25527,6 +25728,7 @@
 ],
 "outEdges": [
 "12qyu50",
+"1e7sm50",
 "vdbrj4",
 "rspfp0"
 ],
@@ -25547,7 +25749,7 @@
 "kind": "container",
 "navigateTo": "__platform_engine_hooks",
 "x": 2064,
-"y": 1759,
+"y": 1571,
 "width": 382,
 "height": 180,
 "labelBBox": {
@@ -25585,7 +25787,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_factory",
 "x": 700,
-"y": 1479,
+"y": 1291,
 "width": 330,
 "height": 180,
 "labelBBox": {
@@ -25623,7 +25825,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_composition",
 "x": 1375,
-"y": 1479,
+"y": 1291,
 "width": 366,
 "height": 180,
 "labelBBox": {
@@ -25661,8 +25863,8 @@
 "technology": "Entry Point",
 "kind": "component",
 "navigateTo": "__platform_plugin_go",
-"x": 2831,
-"y": 1147,
+"x": 2851,
+"y": 895,
 "width": 339,
 "height": 180,
 "labelBBox": {
@@ -25700,14 +25902,50 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 2807,
-"y": 1759,
+"x": 2827,
+"y": 1475,
 "width": 387,
 "height": 180,
 "labelBBox": {
 "x": 38,
 "y": 17,
 "width": 312,
+"height": 139
+}
+},
+{
+"id": "platform.plugin.destructiveGuard",
+"parent": "platform.plugin",
+"level": 1,
+"children": [],
+"inEdges": [
+"1e7sm50"
+],
+"outEdges": [],
+"title": "destructive-command guard",
+"modelRef": "platform.plugin.destructiveGuard",
+"shape": "component",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "ADR-274 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the decision reason in the customer's own harness transcript is the record. HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders (ADR-093 amendment 2026-10-07)."
+},
+"tags": [],
+"notation": "Component",
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"kind": "component",
+"navigateTo": "__platform_plugin_destructiveGuard",
+"x": 2807,
+"y": 1765,
+"width": 427,
+"height": 180,
+"labelBBox": {
+"x": 38,
+"y": 17,
+"width": 352,
 "height": 139
 }
 },
@@ -25736,7 +25974,7 @@
 "technology": "Entry Point",
 "kind": "component",
 "navigateTo": "__platform_plugin_sync",
-"x": 2826,
+"x": 2846,
 "y": 447,
 "width": 349,
 "height": 180,
@@ -25775,7 +26013,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_adapter",
 "x": 2071,
-"y": 1278,
+"y": 1090,
 "width": 367,
 "height": 180,
 "labelBBox": {
@@ -25815,8 +26053,8 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_brainstorm",
-"x": 4143,
-"y": 567,
+"x": 4183,
+"y": 562,
 "width": 360,
 "height": 180,
 "labelBBox": {
@@ -25857,8 +26095,8 @@
 "technology": "Orchestrator",
 "kind": "component",
 "navigateTo": "__platform_plugin_oneshot",
-"x": 3580,
-"y": 1147,
+"x": 3620,
+"y": 895,
 "width": 379,
 "height": 180,
 "labelBBox": {
@@ -25894,12 +26132,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 3584,
+"x": 3624,
 "y": 2025,
 "width": 372,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 337,
 "height": 120
@@ -25930,7 +26168,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cmo",
-"x": 4907,
+"x": 4947,
 "y": 737,
 "width": 377,
 "height": 180,
@@ -25966,7 +26204,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cpo",
-"x": 4931,
+"x": 4971,
 "y": 447,
 "width": 330,
 "height": 180,
@@ -26005,8 +26243,8 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_plan",
-"x": 4137,
-"y": 1437,
+"x": 4177,
+"y": 1432,
 "width": 371,
 "height": 180,
 "labelBBox": {
@@ -26043,12 +26281,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_work",
-"x": 5590,
+"x": 5630,
 "y": 1475,
 "width": 383,
 "height": 180,
 "labelBBox": {
-"x": 39,
+"x": 38,
 "y": 44,
 "width": 307,
 "height": 85
@@ -26081,12 +26319,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_review",
-"x": 4131,
-"y": 857,
+"x": 4171,
+"y": 852,
 "width": 384,
 "height": 180,
 "labelBBox": {
-"x": 38,
+"x": 37,
 "y": 35,
 "width": 308,
 "height": 103
@@ -26120,7 +26358,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_compound",
-"x": 5617,
+"x": 5657,
 "y": 1765,
 "width": 330,
 "height": 180,
@@ -26156,8 +26394,8 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_ship",
-"x": 4148,
-"y": 1147,
+"x": 4188,
+"y": 1142,
 "width": 350,
 "height": 180,
 "labelBBox": {
@@ -26195,7 +26433,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cto",
-"x": 4901,
+"x": 4941,
 "y": 1027,
 "width": 390,
 "height": 180,
@@ -26233,7 +26471,7 @@
 "technology": "Review Agent",
 "kind": "component",
 "navigateTo": "__platform_plugin_archstrat",
-"x": 4909,
+"x": 4949,
 "y": 1429,
 "width": 374,
 "height": 180,
@@ -26271,12 +26509,12 @@
 "technology": "Validation Gate",
 "kind": "component",
 "navigateTo": "__platform_plugin_evalharness",
-"x": 6325,
+"x": 6365,
 "y": 1745,
 "width": 355,
 "height": 180,
 "labelBBox": {
-"x": 39,
+"x": 38,
 "y": 44,
 "width": 279,
 "height": 85
@@ -26311,7 +26549,7 @@
 "technology": "Documentation",
 "kind": "component",
 "navigateTo": "__platform_plugin_architecture",
-"x": 5604,
+"x": 5644,
 "y": 961,
 "width": 355,
 "height": 180,
@@ -26349,7 +26587,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 7044,
+"x": 7084,
 "y": 827,
 "width": 349,
 "height": 180,
@@ -26390,7 +26628,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 6329,
+"x": 6369,
 "y": 1264,
 "width": 348,
 "height": 200,
@@ -26428,7 +26666,7 @@
 "notation": "Data store",
 "kind": "database",
 "navigateTo": "__connectedRepoKb",
-"x": 6330,
+"x": 6370,
 "y": 166,
 "width": 346,
 "height": 180,
@@ -26448,25 +26686,25 @@
 "label": "Routes explore/generate",
 "points": [
 [
-3170,
-1163
+3190,
+943
 ],
 [
-3417,
-1054
+3441,
+881
 ],
 [
-3876,
-853
+3911,
+764
 ],
 [
-4134,
-740
+4173,
+699
 ]
 ],
 "labelBBox": {
-"x": 3691,
-"y": 793,
+"x": 3731,
+"y": 720,
 "width": 157,
 "height": 18
 },
@@ -26485,25 +26723,25 @@
 "label": "Routes build",
 "points": [
 [
-3170,
-1237
+3190,
+985
 ],
 [
-3288,
-1237
+3313,
+985
 ],
 [
-3446,
-1237
+3480,
+985
 ],
 [
-3570,
-1237
+3610,
+985
 ]
 ],
 "labelBBox": {
-"x": 3344,
-"y": 1214,
+"x": 3384,
+"y": 962,
 "width": 82,
 "height": 18
 },
@@ -26522,25 +26760,49 @@
 "label": "Step 1",
 "points": [
 [
-3942,
-1327
+3943,
+1075
 ],
 [
-4005,
-1360
+3965,
+1092
 ],
 [
-4078,
-1398
+3986,
+1111
 ],
 [
-4142,
-1432
+4004,
+1130
+],
+[
+4095,
+1226
+],
+[
+4080,
+1281
+],
+[
+4170,
+1377
+],
+[
+4186,
+1394
+],
+[
+4205,
+1410
+],
+[
+4223,
+1426
 ]
 ],
 "labelBBox": {
-"x": 4025,
-"y": 1350,
+"x": 4065,
+"y": 1189,
 "width": 44,
 "height": 18
 },
@@ -26559,73 +26821,73 @@
 "label": "Step 2",
 "points": [
 [
-3887,
-1327
+3953,
+1075
 ],
 [
-3914,
-1350
+3972,
+1091
 ],
 [
-3941,
-1376
+3990,
+1110
 ],
 [
-3964,
-1403
+4004,
+1130
 ],
 [
-4056,
-1510
+4076,
+1232
 ],
 [
-4011,
-1599
+4073,
+1589
 ],
 [
-4131,
-1672
+4170,
+1667
 ],
 [
-4351,
-1806
+4372,
+1829
 ],
 [
-5034,
-1732
+5073,
+1729
 ],
 [
-5291,
-1713
+5331,
+1712
 ],
 [
-5399,
+5438,
 1705
 ],
 [
-5427,
-1707
+5467,
+1710
 ],
 [
-5531,
-1677
+5570,
+1680
 ],
 [
-5549,
-1672
+5591,
+1674
 ],
 [
-5567,
-1665
+5612,
+1667
 ],
 [
-5585,
+5632,
 1659
 ]
 ],
 "labelBBox": {
-"x": 4686,
-"y": 1722,
+"x": 4726,
+"y": 1726,
 "width": 44,
 "height": 18
 },
@@ -26644,25 +26906,25 @@
 "label": "Step 3",
 "points": [
 [
-3942,
-1147
+3999,
+970
 ],
 [
-4005,
-1114
+4051,
+966
 ],
 [
-4078,
-1076
+4107,
+962
 ],
 [
-4142,
-1042
+4160,
+958
 ]
 ],
 "labelBBox": {
-"x": 4025,
-"y": 1060,
+"x": 4065,
+"y": 939,
 "width": 44,
 "height": 18
 },
@@ -26681,61 +26943,49 @@
 "label": "Step 4",
 "points": [
 [
-3899,
-1327
+3958,
+1075
 ],
 [
-3923,
-1349
+3976,
+1091
 ],
 [
-3947,
-1375
+3992,
+1110
 ],
 [
-3964,
-1403
+4004,
+1130
 ],
 [
-4023,
-1498
+4156,
+1389
 ],
 [
-3974,
-1547
+3918,
+1622
 ],
 [
-4024,
-1646
+4170,
+1784
 ],
 [
-4058,
-1712
+4633,
+2081
 ],
 [
-4064,
-1741
+5327,
+1973
 ],
 [
-4131,
-1775
-],
-[
-4618,
-2022
-],
-[
-5293,
-1946
-],
-[
-5607,
-1891
+5647,
+1900
 ]
 ],
 "labelBBox": {
-"x": 4686,
-"y": 1893,
+"x": 4726,
+"y": 1930,
 "width": 44,
 "height": 18
 },
@@ -26754,25 +27004,25 @@
 "label": "Step 5",
 "points": [
 [
-3959,
-1237
+3999,
+1069
 ],
 [
-4017,
-1237
+4057,
+1095
 ],
 [
-4080,
-1237
+4120,
+1124
 ],
 [
-4137,
-1237
+4178,
+1150
 ]
 ],
 "labelBBox": {
-"x": 4025,
-"y": 1214,
+"x": 4065,
+"y": 1078,
 "width": 44,
 "height": 18
 },
@@ -26791,37 +27041,37 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4463,
-747
+4500,
+742
 ],
 [
-4499,
-770
+4537,
+766
 ],
 [
-4538,
-795
+4577,
+792
 ],
 [
-4575,
-817
+4615,
+815
 ],
 [
-4691,
-887
+4731,
+886
 ],
 [
-4824,
-964
+4864,
+963
 ],
 [
-4926,
+4967,
 1022
 ]
 ],
 "labelBBox": {
-"x": 4635,
-"y": 794,
+"x": 4675,
+"y": 792,
 "width": 146,
 "height": 18
 },
@@ -26840,25 +27090,25 @@
 "label": "Phase 2.5 domain review",
 "points": [
 [
-4493,
-1437
+4535,
+1432
 ],
 [
-4619,
-1370
+4659,
+1367
 ],
 [
-4789,
-1280
+4828,
+1278
 ],
 [
-4917,
+4954,
 1212
 ]
 ],
 "labelBBox": {
-"x": 4627,
-"y": 1238,
+"x": 4667,
+"y": 1236,
 "width": 161,
 "height": 18
 },
@@ -26877,24 +27127,24 @@
 "label": "Recommends ADR creation",
 "points": [
 [
-5291,
+5331,
 1098
 ],
 [
-5386,
+5426,
 1089
 ],
 [
-5500,
+5540,
 1078
 ],
 [
-5595,
+5634,
 1069
 ]
 ],
 "labelBBox": {
-"x": 5352,
+"x": 5392,
 "y": 1053,
 "width": 178,
 "height": 18
@@ -26914,25 +27164,25 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4503,
-696
+4543,
+693
 ],
 [
-4621,
-722
+4661,
+719
 ],
 [
-4776,
-757
+4815,
+754
 ],
 [
-4897,
-783
+4937,
+782
 ]
 ],
 "labelBBox": {
-"x": 4635,
-"y": 694,
+"x": 4675,
+"y": 690,
 "width": 146,
 "height": 18
 },
@@ -26951,25 +27201,25 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4503,
-629
+4543,
+625
 ],
 [
-4629,
-610
+4668,
+607
 ],
 [
-4796,
-583
+4836,
+582
 ],
 [
-4921,
-564
+4961,
+563
 ]
 ],
 "labelBBox": {
-"x": 4635,
-"y": 556,
+"x": 4675,
+"y": 554,
 "width": 146,
 "height": 18
 },
@@ -26988,49 +27238,49 @@
 "label": "Parallel review agent",
 "points": [
 [
-4468,
-1037
+4508,
+1032
 ],
 [
-4486,
-1053
+4526,
+1048
 ],
 [
-4503,
-1072
+4542,
+1067
 ],
 [
-4515,
-1092
+4555,
+1087
 ],
 [
-4595,
-1223
+4635,
+1219
 ],
 [
-4466,
-1325
+4506,
+1320
 ],
 [
-4575,
-1433
+4615,
+1429
 ],
 [
-4659,
-1515
+4698,
+1512
 ],
 [
-4789,
-1537
+4829,
+1534
 ],
 [
-4898,
-1538
+4939,
+1536
 ]
 ],
 "labelBBox": {
-"x": 4641,
-"y": 1410,
+"x": 4681,
+"y": 1406,
 "width": 134,
 "height": 18
 },
@@ -27049,49 +27299,49 @@
 "label": "Checks ADR coverage",
 "points": [
 [
-5283,
-1512
+5323,
+1524
 ],
 [
-5365,
-1502
+5405,
+1517
 ],
 [
-5459,
-1478
+5499,
+1498
 ],
 [
-5531,
-1429
+5570,
+1447
 ],
 [
-5571,
-1401
+5616,
+1414
 ],
 [
-5564,
-1377
+5601,
+1384
 ],
 [
-5591,
+5630,
 1336
 ],
 [
-5632,
-1274
-],
-[
-5678,
-1204
+5669,
+1273
 ],
 [
 5715,
-1150
+1204
+],
+[
+5752,
+1149
 ]
 ],
 "labelBBox": {
-"x": 5368,
-"y": 1406,
+"x": 5408,
+"y": 1424,
 "width": 146,
 "height": 18
 },
@@ -27110,24 +27360,24 @@
 "label": "Validates classifier-skill edits before \napplying",
 "points": [
 [
-5947,
+5987,
 1850
 ],
 [
-6057,
+6096,
 1847
 ],
 [
-6201,
+6241,
 1843
 ],
 [
-6316,
+6355,
 1840
 ]
 ],
 "labelBBox": {
-"x": 6037,
+"x": 6077,
 "y": 1802,
 "width": 225,
 "height": 35
@@ -27147,24 +27397,24 @@
 "label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-244)",
 "points": [
 [
-6574,
+6614,
 1745
 ],
 [
-6708,
+6748,
 1572
 ],
 [
-7003,
+7042,
 1194
 ],
 [
-7142,
+7182,
 1015
 ]
 ],
 "labelBBox": {
-"x": 6742,
+"x": 6782,
 "y": 1163,
 "width": 241,
 "height": 73
@@ -27185,25 +27435,49 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
-3194,
-1916
+3157,
+1655
 ],
 [
-3310,
-1956
+3183,
+1673
 ],
 [
-3458,
-2007
+3210,
+1692
 ],
 [
-3574,
-2047
+3234,
+1710
+],
+[
+3408,
+1838
+],
+[
+3435,
+1894
+],
+[
+3616,
+2012
+],
+[
+3619,
+2015
+],
+[
+3623,
+2017
+],
+[
+3627,
+2020
 ]
 ],
 "labelBBox": {
-"x": 3256,
-"y": 1849,
+"x": 3295,
+"y": 1666,
 "width": 259,
 "height": 89
 },
@@ -27224,26 +27498,26 @@
 "points": [
 [
 2446,
-1849
+1637
 ],
 [
-2553,
-1849
+2559,
+1623
 ],
 [
-2687,
-1849
+2702,
+1605
 ],
 [
-2796,
-1849
+2816,
+1591
 ]
 ],
 "labelBBox": {
 "x": 2507,
-"y": 1789,
+"y": 1541,
 "width": 238,
-"height": 55
+"height": 56
 },
 "parent": null,
 "relations": [
@@ -27255,66 +27529,104 @@
 "technology": "PreToolUse hook (deny disposition, ADR-162)"
 },
 {
+"id": "1e7sm50",
+"source": "platform.engine.hooks",
+"target": "platform.plugin.destructiveGuard",
+"label": "PreToolUse ask/deny on destructive \ncommands; no egress",
+"points": [
+[
+2446,
+1709
+],
+[
+2553,
+1736
+],
+[
+2686,
+1770
+],
+[
+2797,
+1798
+]
+],
+"labelBBox": {
+"x": 2512,
+"y": 1669,
+"width": 229,
+"height": 56
+},
+"parent": null,
+"relations": [
+"1qsj0z1"
+],
+"color": "gray",
+"line": "dashed",
+"head": "normal",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-274)"
+},
+{
 "id": "1omh1gi",
 "source": "platform.plugin.brainstorm",
 "target": "platform.plugin.kb",
 "label": "Writes brainstorms",
 "points": [
 [
-4464,
-747
+4504,
+742
 ],
 [
-4483,
-763
+4523,
+758
 ],
 [
-4501,
-782
+4541,
+777
 ],
 [
-4515,
-802
+4555,
+797
 ],
 [
-4566,
-875
+4607,
+872
 ],
 [
-4525,
-920
+4564,
+917
 ],
 [
-4575,
-994
+4615,
+993
 ],
 [
-4680,
-1150
+4719,
+1149
 ],
 [
-4727,
+4766,
 1193
 ],
 [
-4901,
+4941,
 1262
 ],
 [
-4934,
+4973,
 1275
 ],
 [
-5904,
+5944,
 1331
 ],
 [
-6318,
+6358,
 1354
 ]
 ],
 "labelBBox": {
-"x": 5381,
+"x": 5420,
 "y": 1274,
 "width": 121,
 "height": 18
@@ -27334,85 +27646,85 @@
 "label": "Writes plans and specs",
 "points": [
 [
-4509,
-1582
+4548,
+1580
 ],
 [
-4621,
-1613
+4661,
+1611
 ],
 [
-4768,
+4807,
 1648
 ],
 [
-4901,
+4941,
 1664
 ],
 [
-5073,
-1684
+5113,
+1685
 ],
 [
-5122,
-1702
+5161,
+1698
 ],
 [
-5291,
+5331,
 1664
 ],
 [
-5406,
-1638
+5444,
+1642
 ],
 [
-5448,
-1634
+5489,
+1646
 ],
 [
-5531,
-1550
+5570,
+1565
 ],
 [
-5575,
-1505
+5620,
+1516
 ],
 [
-5539,
-1456
+5574,
+1461
 ],
 [
-5591,
+5630,
 1420
 ],
 [
-5753,
-1307
+5790,
+1304
 ],
 [
-5837,
+5877,
 1397
 ],
 [
-6034,
+6074,
 1385
 ],
 [
-6128,
+6167,
 1379
 ],
 [
-6232,
+6271,
 1374
 ],
 [
-6318,
+6358,
 1371
 ]
 ],
 "labelBBox": {
-"x": 5367,
-"y": 1527,
+"x": 5406,
+"y": 1542,
 "width": 149,
 "height": 18
 },
@@ -27431,24 +27743,24 @@
 "label": "Reads plans, writes code",
 "points": [
 [
-5974,
+6013,
 1512
 ],
 [
-6080,
+6120,
 1482
 ],
 [
-6213,
+6252,
 1445
 ],
 [
-6318,
+6358,
 1415
 ]
 ],
 "labelBBox": {
-"x": 6070,
+"x": 6109,
 "y": 1412,
 "width": 160,
 "height": 18
@@ -27468,36 +27780,36 @@
 "label": "Writes learnings, promotes to \nconstitution",
 "points": [
 [
-5944,
+5983,
 1765
 ],
 [
-6039,
+6079,
 1710
 ],
 [
-6162,
+6202,
 1635
 ],
 [
-6266,
+6305,
 1561
 ],
 [
-6305,
+6345,
 1533
 ],
 [
-6346,
+6385,
 1500
 ],
 [
-6382,
+6422,
 1470
 ]
 ],
 "labelBBox": {
-"x": 6057,
+"x": 6097,
 "y": 1521,
 "width": 186,
 "height": 34
@@ -27517,36 +27829,36 @@
 "label": "Writes ADRs and diagrams",
 "points": [
 [
-5960,
+6000,
 1105
 ],
 [
-6053,
+6092,
 1136
 ],
 [
-6167,
+6207,
 1178
 ],
 [
-6266,
+6305,
 1224
 ],
 [
-6291,
+6331,
 1236
 ],
 [
-6317,
+6357,
 1250
 ],
 [
-6342,
+6382,
 1264
 ]
 ],
 "labelBBox": {
-"x": 6064,
+"x": 6103,
 "y": 1111,
 "width": 173,
 "height": 18
@@ -27566,72 +27878,72 @@
 "label": "Reads context_queries artifacts \n(skill-scoped injection)",
 "points": [
 [
-2322,
-1939
+2299,
+1751
 ],
 [
-2440,
-2088
+2398,
+1942
 ],
 [
-2702,
+2659,
 2371
 ],
 [
-3000,
+3020,
 2371
 ],
 [
-3000,
+3020,
 2371
 ],
 [
-3000,
+3020,
 2371
 ],
 [
-5783,
+5823,
 2371
 ],
 [
-6091,
+6131,
 2371
 ],
 [
-6107,
+6147,
 2138
 ],
 [
-6266,
+6305,
 1875
 ],
 [
-6310,
+6350,
 1801
 ],
 [
-6292,
+6331,
 1769
 ],
 [
-6326,
+6365,
 1690
 ],
 [
-6358,
+6397,
 1616
 ],
 [
-6401,
+6440,
 1536
 ],
 [
-6436,
+6476,
 1474
 ]
 ],
 "labelBBox": {
-"x": 4223,
+"x": 4263,
 "y": 2311,
 "width": 200,
 "height": 55
@@ -27653,36 +27965,36 @@
 "points": [
 [
 416,
-1501
+1313
 ],
 [
 501,
-1472
+1284
 ],
 [
 604,
-1440
+1252
 ],
 [
 699,
-1424
+1236
 ],
 [
 955,
-1380
+1192
 ],
 [
 1704,
-1370
+1182
 ],
 [
 2061,
-1368
+1180
 ]
 ],
 "labelBBox": {
 "x": 1118,
-"y": 1358,
+"y": 1170,
 "width": 169,
 "height": 18
 },
@@ -27702,36 +28014,36 @@
 "points": [
 [
 430,
-1281
+1093
 ],
 [
 754,
-1285
+1097
 ],
 [
 1432,
-1298
+1110
 ],
 [
 2004,
-1340
+1152
 ],
 [
 2022,
-1341
+1153
 ],
 [
 2042,
-1343
+1155
 ],
 [
 2061,
-1345
+1157
 ]
 ],
 "labelBBox": {
 "x": 1091,
-"y": 1272,
+"y": 1084,
 "width": 223,
 "height": 18
 },
@@ -27751,24 +28063,24 @@
 "points": [
 [
 416,
-1569
+1381
 ],
 [
 502,
-1569
+1381
 ],
 [
 604,
-1569
+1381
 ],
 [
 689,
-1569
+1381
 ]
 ],
 "labelBBox": {
 "x": 492,
-"y": 1546,
+"y": 1358,
 "width": 146,
 "height": 18
 },
@@ -27788,24 +28100,24 @@
 "points": [
 [
 1030,
-1569
+1381
 ],
 [
 1130,
-1569
+1381
 ],
 [
 1259,
-1569
+1381
 ],
 [
 1365,
-1569
+1381
 ]
 ],
 "labelBBox": {
 "x": 1105,
-"y": 1546,
+"y": 1358,
 "width": 195,
 "height": 18
 },
@@ -27825,24 +28137,24 @@
 "points": [
 [
 1741,
-1516
+1328
 ],
 [
 1839,
-1488
+1300
 ],
 [
 1961,
-1453
+1265
 ],
 [
 2061,
-1424
+1236
 ]
 ],
 "labelBBox": {
 "x": 1802,
-"y": 1421,
+"y": 1233,
 "width": 201,
 "height": 18
 },
@@ -27861,49 +28173,49 @@
 "label": "Writes conventions, learnings, component \ndocs, generated C4 \n(generated-components.c4 + \nmodel.likec4.json + c4-model.md), \ndomain-model rows, and kb-coverage.md",
 "points": [
 [
-3159,
+3183,
 447
 ],
 [
-3311,
+3338,
 369
 ],
 [
-3548,
-269
+3582,
+268
 ],
 [
-3769,
-269
+3809,
+268
 ],
 [
-3769,
-269
+3809,
+268
 ],
 [
-3769,
-269
+3809,
+268
 ],
 [
-5783,
-269
+5823,
+268
 ],
 [
-5966,
-269
+6005,
+268
 ],
 [
-6174,
-265
+6213,
+264
 ],
 [
-6319,
+6358,
 261
 ]
 ],
 "labelBBox": {
-"x": 4576,
-"y": 158,
+"x": 4616,
+"y": 157,
 "width": 264,
 "height": 106
 },
@@ -27923,49 +28235,49 @@
 "label": "Writes spec.c4 / model.c4 / views.c4 \ncwd-relative — same directory sync \ngenerates into (ADR-171 two-writer \nprecedence)",
 "points": [
 [
-5858,
+5897,
 961
 ],
 [
-5955,
+5994,
 844
 ],
 [
-6127,
-633
+6166,
+632
 ],
 [
-6266,
-446
+6305,
+445
 ],
 [
-6294,
-408
+6333,
+407
 ],
 [
-6291,
-391
+6331,
+390
 ],
 [
-6326,
+6365,
 359
 ],
 [
-6330,
+6370,
 355
 ],
 [
-6334,
+6374,
 351
 ],
 [
-6339,
+6378,
 348
 ]
 ],
 "labelBBox": {
-"x": 6035,
-"y": 352,
+"x": 6075,
+"y": 351,
 "width": 230,
 "height": 89
 },
@@ -27986,24 +28298,24 @@
 "points": [
 [
 2479,
-1329
+1123
 ],
 [
-2588,
-1309
+2594,
+1094
 ],
 [
-2718,
-1287
+2733,
+1058
 ],
 [
-2821,
-1268
+2841,
+1031
 ]
 ],
 "labelBBox": {
-"x": 2504,
-"y": 1297,
+"x": 2513,
+"y": 1075,
 "width": 150,
 "height": 18
 },
@@ -28022,48 +28334,48 @@
 "label": "LLM calls",
 "points": [
 [
-2278,
-1128
+2300,
+940
 ],
 [
-2329,
-736
+2377,
+595
 ],
 [
-2492,
+2576,
 0
 ],
 [
-3000,
+3020,
 0
 ],
 [
-3000,
+3020,
 0
 ],
 [
-3000,
+3020,
 0
 ],
 [
-6504,
+6544,
 0
 ],
 [
-6915,
+6955,
 0
 ],
 [
-7124,
+7163,
 580
 ],
 [
-7192,
+7232,
 817
 ]
 ],
 "labelBBox": {
-"x": 3374,
+"x": 3396,
 "y": 0,
 "width": 63,
 "height": 39
@@ -28085,24 +28397,24 @@
 "points": [
 [
 2479,
-1512
+1292
 ],
 [
-2600,
-1590
+2591,
+1349
 ],
 [
-2745,
-1685
+2725,
+1417
 ],
 [
-2852,
-1754
+2832,
+1471
 ]
 ],
 "labelBBox": {
-"x": 2443,
-"y": 1636,
+"x": 2433,
+"y": 1383,
 "width": 227,
 "height": 73
 },
@@ -28123,24 +28435,24 @@
 "points": [
 [
 2255,
-1719
+1531
 ],
 [
 2255,
-1729
+1541
 ],
 [
 2255,
-1739
+1551
 ],
 [
 2255,
-1749
+1561
 ]
 ],
 "labelBBox": {
 "x": 1931,
-"y": 1739,
+"y": 1551,
 "width": 323,
 "height": 106
 },
@@ -28161,24 +28473,24 @@
 "points": [
 [
 2064,
-1846
+1658
 ],
 [
 1776,
-1838
+1650
 ],
 [
 1213,
-1812
+1624
 ],
 [
 735,
-1721
+1533
 ]
 ],
 "labelBBox": {
 "x": 1080,
-"y": 1808,
+"y": 1620,
 "width": 311,
 "height": 106
 },
@@ -34715,7 +35027,7 @@
 "parent": null,
 "relations": [
 "5akxs7",
-"8wkuqw"
+"1ehaxpl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39015,7 +39327,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD), other plugin hooks have no web override yet (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-274; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -39382,7 +39694,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -39954,7 +40266,7 @@
 },
 "parent": null,
 "relations": [
-"8wkuqw"
+"1ehaxpl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40899,7 +41211,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -41729,7 +42041,8 @@
 "relations": [
 "1qwupyp",
 "tu8e9h",
-"umlx56"
+"umlx56",
+"1qsj0z1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41903,7 +42216,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -46161,7 +46474,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD), other plugin hooks have no web override yet (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-274; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -46487,7 +46800,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD), other plugin hooks have no web override yet (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-274; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -46816,7 +47129,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -47216,7 +47529,7 @@
 },
 "parent": null,
 "relations": [
-"8wkuqw"
+"1ehaxpl"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48536,7 +48849,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -48853,7 +49166,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -49017,7 +49330,8 @@
 "relations": [
 "1qwupyp",
 "tu8e9h",
-"umlx56"
+"umlx56",
+"1qsj0z1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -50788,7 +51102,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -50976,7 +51290,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -54672,7 +54986,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -54896,7 +55210,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -55065,6 +55379,194 @@
 "line": "dashed",
 "head": "normal",
 "technology": "stdio JSON-RPC over pipes (child process group)"
+}
+]
+},
+"__platform_plugin_destructiveGuard": {
+"_stage": "layouted",
+"_type": "element",
+"id": "__platform_plugin_destructiveGuard",
+"viewOf": "platform.plugin.destructiveGuard",
+"title": "Auto / destructive-command guard",
+"description": null,
+"autoLayout": {
+"direction": "TB"
+},
+"notation": {
+"nodes": [
+{
+"title": "Component",
+"shape": "component",
+"color": "primary",
+"kinds": [
+"component"
+]
+},
+{
+"title": "System",
+"shape": "rectangle",
+"color": "primary",
+"kinds": [
+"system"
+]
+}
+]
+},
+"hash": "",
+"bounds": {
+"x": 0,
+"y": 0,
+"width": 508,
+"height": 581
+},
+"nodes": [
+{
+"id": "platform.engine",
+"parent": null,
+"level": 0,
+"children": [],
+"inEdges": [],
+"outEdges": [
+"tdw5xm"
+],
+"title": "Cloud CLI Engine",
+"modelRef": "platform.engine",
+"shape": "rectangle",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "Claude Code instances executing agent workflows"
+},
+"tags": [],
+"notation": "System",
+"kind": "system",
+"navigateTo": "__platform_engine",
+"x": 94,
+"y": 0,
+"width": 320,
+"height": 180,
+"labelBBox": {
+"x": 25,
+"y": 54,
+"width": 269,
+"height": 66
+}
+},
+{
+"id": "platform.plugin",
+"parent": null,
+"level": 0,
+"children": [
+"platform.plugin.destructiveGuard"
+],
+"inEdges": [
+"tdw5xm"
+],
+"outEdges": [],
+"title": "Soleur Plugin",
+"modelRef": "platform.plugin",
+"shape": "rectangle",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-274 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and the web runtime opts it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD, so it protects customer-machine users, not hosted founders."
+},
+"tags": [],
+"notation": "System",
+"kind": "system",
+"depth": 1,
+"navigateTo": "components",
+"x": 8,
+"y": 308,
+"width": 492,
+"height": 265,
+"labelBBox": {
+"x": 6,
+"y": 0,
+"width": 94,
+"height": 15
+}
+},
+{
+"id": "platform.plugin.destructiveGuard",
+"parent": "platform.plugin",
+"level": 1,
+"children": [],
+"inEdges": [
+"tdw5xm"
+],
+"outEdges": [],
+"title": "destructive-command guard",
+"modelRef": "platform.plugin.destructiveGuard",
+"shape": "component",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "ADR-274 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the decision reason in the customer's own harness transcript is the record. HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders (ADR-093 amendment 2026-10-07)."
+},
+"tags": [],
+"notation": "Component",
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"kind": "component",
+"x": 40,
+"y": 361,
+"width": 427,
+"height": 180,
+"labelBBox": {
+"x": 38,
+"y": 17,
+"width": 352,
+"height": 140
+}
+}
+],
+"edges": [
+{
+"id": "tdw5xm",
+"source": "platform.engine",
+"target": "platform.plugin.destructiveGuard",
+"label": "PreToolUse ask/deny on destructive \ncommands; no egress",
+"points": [
+[
+254,
+180
+],
+[
+254,
+232
+],
+[
+254,
+298
+],
+[
+254,
+351
+]
+],
+"labelBBox": {
+"x": 255,
+"y": 240,
+"width": 229,
+"height": 55
+},
+"parent": null,
+"relations": [
+"1qsj0z1"
+],
+"color": "gray",
+"line": "dashed",
+"head": "normal",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-274)"
 }
 ]
 },
