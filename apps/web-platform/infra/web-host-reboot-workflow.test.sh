@@ -8,10 +8,14 @@
 # THE PROPERTIES (plan Guard 1 anchor, Guard 2 static scan, Guard 4 whole):
 #   - three jobs, exactly: `validate` (no secrets, no environment) -> `reboot` (the environment approval, `web-1-swap`, main
 #     only) -> `observe` (no environment, no Hetzner token, no Doppler, Better Stack read credentials only);
-#   - the one step that can reach the Hetzner write runs after every refusal step and only once; the three steps that run
-#     code beyond the credential loader (never-pooled, snapshot, reboot) each run under an `env -i` allow-list;
+#   - the one step that can reach the Hetzner write runs after every refusal step and only once; the four steps of the reboot
+#     job that run repo code beyond the credential loader (never-pooled, snapshot, reboot, summary) each run under an `env -i`
+#     allow-list (the observe job's one code step holds the three read credentials and the anchor, no other secret);
+#   - a re-run is refused: `validate` and the reboot job's re-check step require github.run_attempt == 1 (via env:);
+#   - no job and no step sets continue-on-error, nothing sets `defaults` (a `shell:` override drops `-e`), `confirm` has no default;
 #   - values reach shell only through `env:` (no `${{ ... }}` in any run body); every `uses:` is a 40-hex SHA pin;
-#   - exit 2 (NOT YET) of the grade step is a green job with a notice, exit 4 and everything unexpected is red;
+#   - exit 2 (NOT YET) of the grade step is a green job with a notice; exit 4, exit 5 (unmeasured / instance re-created) and
+#     everything unexpected is red; observe runs unless the run was cancelled (`!cancelled()`, never `always()`);
 #   - no claim word in any non-comment text or in any output a behavioral row produced.
 #
 # Row families: S1..S12 are the contract rows (the plan's acceptance list), P* the step-order and classification rows, E* the
@@ -147,7 +151,7 @@ def _():
     i = on["workflow_dispatch"]["inputs"]
     return (sorted(i) == ["confirm", "host", "reason"] and i["host"].get("type") == "choice" and i["host"].get("options") == EXPECTED_HOSTS
             and i["confirm"].get("type") == "string" and i["reason"].get("type") == "string"
-            and all(i[k].get("required") is True for k in i) and "default" not in i["host"])
+            and all(i[k].get("required") is True for k in i) and "default" not in i["host"] and "default" not in i["confirm"])
 
 @row("S3 run-name names the host and the typed confirm and never the reason")
 def _():
@@ -178,11 +182,11 @@ def _():
             and r.get("concurrency") == {"group": "web-1-swap", "cancel-in-progress": False} and r.get("timeout-minutes") == 25
             and r.get("outputs") == {"server_id": "${{ steps.reboot.outputs.server_id }}", "anchor_epoch": "${{ steps.reboot.outputs.anchor_epoch }}"})
 
-@row("S8 observe: needs reboot, runs on the anchor (always, main only, non-empty), no environment, its own mutex, 55 minutes")
+@row("S8 observe: needs reboot, runs on the anchor (unless cancelled, main only, non-empty), no environment, its own mutex, 55 minutes")
 def _():
     o = jobs["observe"]
     return (o.get("needs") in ("reboot", ["reboot"])
-            and o.get("if") == "${{ always() && github.ref == 'refs/heads/main' && needs.reboot.outputs.anchor_epoch != '' }}"
+            and o.get("if") == "${{ !cancelled() && github.ref == 'refs/heads/main' && needs.reboot.outputs.anchor_epoch != '' }}"
             and "environment" not in o and o.get("concurrency") == {"group": "web-host-reboot-observe", "cancel-in-progress": False}
             and o.get("timeout-minutes") == 55)
 
@@ -199,6 +203,13 @@ def _():
     mine = wf.get("env", {})
     return (str(mine.get("TERRAFORM_VERSION")) == str(other["env"]["TERRAFORM_VERSION"]) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', str(mine.get("TERRAFORM_VERSION")))
             is not None and mine.get("INFRA_DIR") == "apps/web-platform/infra", mine)
+
+@row("S13 no job sets continue-on-error (a failed reboot job must fail the run), no job or workflow sets `defaults` (a `shell:` override drops -e), and no step sets a shell")
+def _():
+    coe = [j for j in jobs if jobs[j].get("continue-on-error") not in (None, False)]
+    dfl = [j for j in jobs if "defaults" in jobs[j]] + ["workflow"] * ("defaults" in wf)
+    shl = [(j, s.get("name")) for j in jobs for s in steps_of(j) if "shell" in s]
+    return (len(jobs) == 3 and not coe and not dfl and not shl, (coe, dfl, shl))
 
 USES_LINES = [l for l in NONCOMMENT.splitlines() if re.match(r'^\s*-?\s*uses:\s', l)]
 @row("S11 every uses: is a 40-hex SHA pin with a version comment (only the local credential loader is unpinned)")
@@ -305,7 +316,7 @@ def _():
 def _():
     s = find("reboot", "Run summary")
     e = s.get("env", {})
-    return (s["run"].strip() == "bash scripts/web-host-reboot.sh summary" and e.get("JOB_STATUS") == "${{ job.status }}"
+    return ("bash scripts/web-host-reboot.sh summary" in flat(s["run"]) and e.get("JOB_STATUS") == "${{ job.status }}"
             and e.get("SERVER_ID") == "${{ steps.reboot.outputs.server_id }}" and e.get("ANCHOR_EPOCH") == "${{ steps.reboot.outputs.anchor_epoch }}"
             and e.get("REASON") == "${{ inputs.reason }}" and "HCLOUD_TOKEN" not in e and "DOPPLER_TOKEN" not in e, sorted(e))
 
@@ -326,6 +337,8 @@ ALLOW = {
     "Never-pooled evidence": (["DOPPLER_TOKEN", "HOME", "PATH", "TMPDIR"], "bash scripts/web2-rebirth-never-pooled.sh"),
     "Evidence snapshot": (["BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_PASSWORD", "BETTERSTACK_QUERY_USERNAME", "HOME", "PATH", "TMPDIR"],
                           "bash scripts/web-host-reboot-evidence.sh snapshot"),
+    "Run summary": (["ACTOR", "ANCHOR_EPOCH", "GH_TOKEN", "GITHUB_STEP_SUMMARY", "HOME", "HOST", "JOB_STATUS", "PATH", "REASON", "REPO", "RUN_ID", "RUN_URL",
+                     "SERVER_ID", "SHA", "STARTED_AT", "TMPDIR"], "bash scripts/web-host-reboot.sh summary"),
     "Reboot request": (["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "HCLOUD_TOKEN", "HOME", "INFRA_DIR",
                         "NEVER_POOLED", "PATH", "TMPDIR"], 'bash scripts/web-host-reboot.sh reboot "$HOST" "$CONFIRM"'),
 }
@@ -409,15 +422,16 @@ def _():
 
 # ================= B: behavioral rows: the extracted run bodies, executed ===================================================
 OK_REASON = "owner go-ahead on #9372 (web-2 reboot), step 1: soak."
-def vrun(host, confirm, reason, **kw):
+def vrun(host, confirm, reason, attempt="1", **kw):
     d = sandbox()
     s = find("validate", "Validate dispatch inputs")
-    rc, out = run_logged(d, s["run"], {"HOST_RAW": host, "CONFIRM_RAW": confirm, "REASON_RAW": reason}, **kw)
+    rc, out = run_logged(d, s["run"], {"HOST_RAW": host, "CONFIRM_RAW": confirm, "REASON_RAW": reason, "RUN_ATTEMPT": attempt}, **kw)
     return rc, out, d
 
-@row("B0 the validate step reads exactly HOST_RAW, CONFIRM_RAW and REASON_RAW from the three inputs")
+@row("B0 the validate step reads exactly HOST_RAW, CONFIRM_RAW and REASON_RAW from the three inputs, and RUN_ATTEMPT from github.run_attempt")
 def _():
-    return find("validate", "Validate dispatch inputs").get("env") == {"HOST_RAW": "${{ inputs.host }}", "CONFIRM_RAW": "${{ inputs.confirm }}", "REASON_RAW": "${{ inputs.reason }}"}
+    return find("validate", "Validate dispatch inputs").get("env") == {"HOST_RAW": "${{ inputs.host }}", "CONFIRM_RAW": "${{ inputs.confirm }}", "REASON_RAW": "${{ inputs.reason }}",
+                                                                    "RUN_ATTEMPT": "${{ github.run_attempt }}"}
 
 @row("B1 validate accepts the canonical dispatch and the boundary shapes, echoes no raw input and writes nothing to GITHUB_ENV or GITHUB_OUTPUT")
 def _():
@@ -459,12 +473,12 @@ def _():
 @row("B6 the re-check step in the reboot job refuses a bad host or confirm, accepts the canonical pair, and writes only a timestamp to GITHUB_ENV")
 def _():
     s = find("reboot", "Re-check the typed host")
-    if s.get("env") != {"HOST": "${{ inputs.host }}", "CONFIRM": "${{ inputs.confirm }}"}: return (False, s.get("env"))
+    if s.get("env") != {"HOST": "${{ inputs.host }}", "CONFIRM": "${{ inputs.confirm }}", "RUN_ATTEMPT": "${{ github.run_attempt }}"}: return (False, s.get("env"))
     res = []
     for h, c, want in (("web-2", "REBOOT-web-2-169095540", 0), ("web-1", "REBOOT-web-2-169095540", 1), ("web-2", "REBOOT-web-1-123931471", 1),
                        ("web-2", "REBOOT-web-2-0169095540", 1), ("web-2", "REBOOT-web-2-1\n", 1), ("", "", 1)):
         d = sandbox()
-        rc, out = run_logged(d, s["run"], {"HOST": h, "CONFIRM": c})
+        rc, out = run_logged(d, s["run"], {"HOST": h, "CONFIRM": c, "RUN_ATTEMPT": "1"})
         envf = slurp(d, "gh_env")
         ok = (rc == 0) if want == 0 else (rc != 0 and not envf)
         if want == 0: ok = ok and re.fullmatch(r'STARTED_AT=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n', envf) is not None
@@ -529,6 +543,56 @@ def _():
     rc, out = run_body(d, s["run"], {"HCLOUD_TOKEN": "hc-sentinel", "HOST": "web-2", "CONFIRM": "REBOOT-web-2-1", "NEVER_POOLED": "absent"}, flags="-exo")
     return (rc == 78 and not os.path.exists(os.path.join(d, "dump.rb")), rc)
 
+
+@row("B11 a re-run is refused: validate goes red for RUN_ATTEMPT 2 and for every value that is not exactly 1, with the named error, and green for 1")
+def _():
+    res = []
+    for a in ("2", "3", "10", "", "0", "01", "1 ", " 1", "1\n", "1;id", "one"):
+        rc, out, d = vrun("web-2", "REBOOT-web-2-169095540", OK_REASON, attempt=a)
+        if rc == 0 or "::error::a re-run is refused" not in out or "no approval was requested" not in out: res.append((a, rc))
+    rc, out, d = vrun("web-2", "REBOOT-web-2-169095540", OK_REASON, attempt="1")
+    if rc != 0 or "re-run is refused" in out: res.append(("attempt 1", rc))
+    return (not res, res)
+
+@row("B12 a re-run is refused in the reboot job's re-check step too (red, nothing written to GITHUB_ENV), and the first attempt passes")
+def _():
+    s = find("reboot", "Re-check the typed host"); res = []
+    for a, want in (("1", 0), ("2", 1), ("3", 1), ("", 1), ("0", 1), ("1\n", 1), ("01", 1)):
+        d = sandbox()
+        rc, out = run_logged(d, s["run"], {"HOST": "web-2", "CONFIRM": "REBOOT-web-2-169095540", "RUN_ATTEMPT": a})
+        envf = slurp(d, "gh_env")
+        ok = (rc == 0 and envf.startswith("STARTED_AT=")) if want == 0 else (rc != 0 and not envf and "::error::a re-run is refused" in out)
+        if not ok: res.append((a, rc))
+    return (not res, res)
+
+SUMMARY_ENV = {"JOB_STATUS": "success", "HOST": "web-2", "SERVER_ID": "169095540", "ANCHOR_EPOCH": "1780000000", "REASON": "r", "SHA": "abc", "RUN_ID": "1",
+               "REPO": "o/r", "GH_TOKEN": "gh-sentinel-3b", "RUN_URL": "https://example.invalid/run", "ACTOR": "a", "STARTED_AT": "2026-10-07T00:00:00Z"}
+@row("B13 the summary step: the child sees exactly the allow-list (no loader export, no step-output or GITHUB_ENV path), the argv `summary`, and a failing summary fails the step")
+def _():
+    s = find("reboot", "Run summary"); res = []
+    d = sandbox(); stub_script(d, "web-host-reboot.sh", "sm")
+    env = dict(JUNK); env.update(SUMMARY_ENV); env.update({"HCLOUD_TOKEN": "hc-sentinel", "AWS_ACCESS_KEY_ID": "ak", "DOPPLER_TOKEN": "junk-dp"})
+    rc, out = run_logged(d, s["run"], env)
+    want = sorted(SUMMARY_ENV) + ["GITHUB_STEP_SUMMARY", "HOME", "PATH", "TMPDIR"]
+    if rc != 0: res.append(("rc0", rc))
+    if dumped_names(d, "sm") != sorted(set(want)): res.append(("names", dumped_names(d, "sm")))
+    if slurp(d, "args.sm").split() != ["summary"]: res.append(("argv", slurp(d, "args.sm")))
+    if "gh-sentinel" in out or "GH_TOKEN=gh-sentinel-3b" not in slurp(d, "dump.sm"): res.append("token plumbing")
+    # STARTED_AT unset (the re-check step never ran) must not abort the step under set -u
+    env2 = {k: v for k, v in env.items() if k != "STARTED_AT"}
+    d2 = sandbox(); stub_script(d2, "web-host-reboot.sh", "sm")
+    if run_logged(d2, s["run"], env2)[0] != 0: res.append("unset STARTED_AT aborted the step")
+    set_rc(d, 1)
+    if run_logged(d, s["run"], env)[0] == 0: res.append("a failing summary did not fail the step")
+    return (not res, res)
+
+@row("B14 the summary step refuses to run under xtrace (the token is in scope)")
+def _():
+    s = find("reboot", "Run summary"); d = sandbox(); stub_script(d, "web-host-reboot.sh", "sm")
+    env = dict(SUMMARY_ENV)
+    rc, out = run_body(d, s["run"], env, flags="-exo")
+    return (rc == 78 and not os.path.exists(os.path.join(d, "dump.sm")), rc)
+
 # ---- observe -----------------------------------------------------------------------------------------------------------------
 @row("O1 observe's first step validates both job outputs by regex from env, and accepts only a numeric id and a 1-to-10-digit anchor")
 def _():
@@ -569,15 +633,21 @@ def _():
     if rc2 != 0 or "::notice::" not in out2 or "::error::" in out2 or "new_boot_seen_probe_pending" not in out2: res.append(("exit2", rc2, out2[-160:]))
     return (not res, res)
 
-@row("O4 exit 4 is red with an ::error:: naming the reason, exit 1 (FAIL) is red, and exits 3, 64, 78, 5, 127 and 255 are red (an unexpected outcome never reads green)")
+@row("O4 exit 4 is red with an ::error:: naming the reason, exit 1 (FAIL) is red, and exits 3, 64, 78, 127 and 255 are red (an unexpected outcome never reads green)")
 def _():
     res = []
     rc4, out4, _d = grade_run(4, "reason=request_not_acted_on\n")
     if rc4 == 0 or "::error::" not in out4 or "request_not_acted_on" not in out4 or "::notice::" in out4: res.append(("exit4", rc4, out4[-160:]))
-    for r in (1, 3, 5, 64, 78, 127, 255):
+    for r in (1, 3, 64, 78, 127, 255):
         rc, out, _d = grade_run(r, "reason=read_fault\n")
         if rc == 0 or "::error::" not in out: res.append((r, rc))
     return (not res, res)
+
+@row("O8 exit 5 (nothing measured, or the instance was re-created) is red with its own ::error:: naming the reason and no notice, never the generic arm, and is not NOT YET")
+def _():
+    rc, out, _d = grade_run(5, "reason=instance_recreated_after_request\n")
+    return (rc != 0 and "::error::nothing was measured, or the instance was re-created" in out and "instance_recreated_after_request" in out
+            and "::notice::" not in out and "could not reach a verdict" not in out and "NOT YET" not in out, out[-200:])
 
 @row("O5 a hostile or missing reason in the step output is never printed (the reason must match ^[a-z_]{1,64}$)")
 def _():
@@ -708,7 +778,7 @@ while IFS= read -r line; do
 done <<<"$report"
 printf 'real workflow: %s rows, %s failed\n' "$ran" "$fails"
 # Floors are reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
-ROW_FLOOR=71
+ROW_FLOOR=78
 if [[ "${ran:-0}" -lt "$ROW_FLOOR" ]]; then
   printf 'FAIL - row floor: only %s rows ran (floor %s)\n' "$ran" "$ROW_FLOOR"
   exit 1
@@ -919,8 +989,11 @@ PY
 mutpy red "G4 observe loses its anchor condition" <<'PY'
 rep(" && needs.reboot.outputs.anchor_epoch != ''", "")
 PY
-mutpy red "G4 observe loses always()" <<'PY'
-rep("always() && github.ref == 'refs/heads/main' && needs", "github.ref == 'refs/heads/main' && needs")
+mutpy red "G4 observe loses !cancelled()" <<'PY'
+rep("!cancelled() && github.ref == 'refs/heads/main' && needs", "github.ref == 'refs/heads/main' && needs")
+PY
+mutpy red "G4 observe reverts to always() (a cancelled run would start the 40-minute poll)" <<'PY'
+rep("!cancelled() && github.ref == 'refs/heads/main' && needs", "always() && github.ref == 'refs/heads/main' && needs")
 PY
 mutpy red "G4 the marker token is also bound at workflow level" <<'PY'
 rep("  INFRA_DIR: apps/web-platform/infra\n\njobs:", "  INFRA_DIR: apps/web-platform/infra\n  DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}\n\njobs:")
@@ -1019,6 +1092,69 @@ PY
 mutpy red "O a summary-verb step is added to observe (the writer script named in observe)" <<'PY'
 s = s.rstrip("\n") + "\n\n      - name: Observe summary\n        if: always()\n        run: bash scripts/web-host-reboot.sh summary\n"
 PY
+mutpy red "G4 the summary step loses its env -i allow-list" <<'PY'
+rep('''          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \\
+            JOB_STATUS="$JOB_STATUS" HOST="$HOST" SERVER_ID="$SERVER_ID" ANCHOR_EPOCH="$ANCHOR_EPOCH" REASON="$REASON" SHA="$SHA" \\
+            RUN_ID="$RUN_ID" REPO="$REPO" GH_TOKEN="$GH_TOKEN" RUN_URL="$RUN_URL" ACTOR="$ACTOR" STARTED_AT="${STARTED_AT:-}" \\
+            GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \\
+            bash scripts/web-host-reboot.sh summary''', '''          bash scripts/web-host-reboot.sh summary''')
+PY
+mutpy red "G4 the summary allow-list is widened by one name" <<'PY'
+rep('''            GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \\
+            bash scripts/web-host-reboot.sh summary''', '''            GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" \\
+            bash scripts/web-host-reboot.sh summary''')
+PY
+mutpy red "G4 the summary allow-list drops the token the approvals lookup needs" <<'PY'
+rep(''' GH_TOKEN="$GH_TOKEN" RUN_URL=''', ''' RUN_URL=''')
+PY
+mutpy red "G4 the xtrace refusal is dropped from the summary step" <<'PY'
+rep('''          case $- in *x*) echo "::error::refusing to run under xtrace (a token is in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          # STARTED_AT''', '''          set -euo pipefail
+          # STARTED_AT''')
+PY
+mutpy red "G1 validate drops the run_attempt guard" <<'PY'
+rep('''          [[ "$RUN_ATTEMPT" == "1" ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew; no approval was requested"; exit 1; }
+''', '')
+PY
+mutpy red "G1 the re-check step drops the run_attempt guard" <<'PY'
+rep('''          [[ "$RUN_ATTEMPT" == "1" ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew"; exit 1; }
+''', '')
+PY
+mutpy red "G1 validate's run_attempt guard accepts any non-empty attempt" <<'PY'
+rep('''[[ "$RUN_ATTEMPT" == "1" ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew; no''', '''[[ -n "$RUN_ATTEMPT" ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew; no''')
+PY
+mutpy red "G1 the re-check step's run_attempt guard accepts attempt 2" <<'PY'
+rep('''[[ "$RUN_ATTEMPT" == "1" ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew"; exit 1; }''', '''[[ "$RUN_ATTEMPT" =~ ^[12]$ ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew"; exit 1; }''')
+PY
+mutpy red "G1 validate's RUN_ATTEMPT is a literal instead of github.run_attempt" <<'PY'
+rep("          REASON_RAW: ${{ inputs.reason }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n", "          REASON_RAW: ${{ inputs.reason }}\n          RUN_ATTEMPT: \"1\"\n")
+PY
+mutpy red "G1 the re-check step's RUN_ATTEMPT is a literal instead of github.run_attempt" <<'PY'
+rep("          CONFIRM: ${{ inputs.confirm }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n", "          CONFIRM: ${{ inputs.confirm }}\n          RUN_ATTEMPT: \"1\"\n")
+PY
+mutpy red "G4 the reboot job gains continue-on-error" <<'PY'
+rep("    timeout-minutes: 25\n", "    timeout-minutes: 25\n    continue-on-error: true\n")
+PY
+mutpy red "G4 the observe job gains continue-on-error" <<'PY'
+rep("    timeout-minutes: 55\n", "    timeout-minutes: 55\n    continue-on-error: true\n")
+PY
+mutpy red "G4 the workflow gains a defaults block that overrides the shell" <<'PY'
+rep("env:\n  # Equal to apply", "defaults:\n  run:\n    shell: bash {0}\nenv:\n  # Equal to apply")
+PY
+mutpy red "G4 the validate job gains a defaults block" <<'PY'
+rep("    timeout-minutes: 3\n    steps:\n", "    timeout-minutes: 3\n    defaults:\n      run:\n        shell: sh\n    steps:\n")
+PY
+mutpy red "G1 the confirm input gains a prefilled default" <<'PY'
+rep("        required: true\n        type: string\n      reason:", "        required: true\n        type: string\n        default: \"REBOOT-web-2-1\"\n      reason:")
+PY
+mutpy red "O exit 5 (unmeasured or instance re-created) is made green" <<'PY'
+rep('exit 5): this is not a pending state; see the verdict and next lines above."; exit 1 ;;', 'exit 5): this is not a pending state; see the verdict and next lines above." ;;')
+PY
+mutpy red "O the exit 5 arm is removed (it would fall to the generic red arm with the wrong words)" <<'PY'
+rep('''            5) echo "::error::nothing was measured, or the instance was re-created after the request (reason ${reason}, exit 5): this is not a pending state; see the verdict and next lines above."; exit 1 ;;
+''', '')
+PY
 mutpy green "must-pass: a read-only validation step before the credential loader" <<'PY'
 rep("      - name: Load infra credentials (tiered)\n", '''      - name: Validate an extra input shape
         run: echo "extra shape ok"
@@ -1035,13 +1171,16 @@ PY
 mutpy green "must-pass: the validate error text is reworded" <<'PY'
 rep("no approval was requested\"; exit 1; }\n          confirm_re", "no approval will be requested\"; exit 1; }\n          confirm_re")
 PY
+mutpy green "must-pass: the exit 5 error text is reworded after its reason" <<'PY'
+rep("this is not a pending state; see the verdict", "this is not pending; see the verdict")
+PY
 # MUTATIONS_END
 wait
 for f in "$TMP"/mres/*; do [[ -e "$f" ]] || continue; cat "$f"; grep -q '^FAIL' "$f" && fails=$((fails + 1)); done
 n_res="$(find "$TMP/mres" -type f | wc -l | tr -d ' ')"
 [[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "FAIL - a mutant did not report (${n_res} of ${MUT_SEQ})"; fails=$((fails + 1)); }
 # The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
-MUT_FLOOR=65
+MUT_FLOOR=90
 if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then
   printf 'FAIL - mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
   exit 1

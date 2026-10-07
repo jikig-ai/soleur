@@ -9,7 +9,8 @@
 #             the live id, the Terraform state id) all run before the one write; the anchor epoch is written first.
 #   observe   no environment, no Hetzner token, no Doppler: it reads Better Stack rows through scripts/web-host-reboot-evidence.sh
 #             for up to 40 minutes and reports PASS, FAIL or NOT YET as ROW PRESENCE ONLY. Exit 2 (NOT YET, the expected
-#             pending state) is a green job with a notice; exit 4 and every unexpected outcome are red.
+#             pending state) is a green job with a notice; exit 4, exit 5 (nothing was measured, or the instance was
+#             re-created after the request) and every unexpected outcome are red. It runs unless the run was cancelled.
 #
 # THE MERGE OF THIS FILE IS INERT: it has no push or schedule trigger and nothing is dispatched by the change that adds it.
 # Every dispatch needs the owner's explicit go-ahead naming the production write (hr-menu-option-ack-not-prod-write-auth):
@@ -21,11 +22,17 @@
 # scripts/followthroughs/web2-luks-live-6931.sh.
 #
 # ONE-TRUST-BOUNDARY RULES (pinned by apps/web-platform/infra/web-host-reboot-workflow.test.sh): values reach shell only
-# through `env:` (no expression in any run body); the three steps that run code beyond the credential loader run under an
-# `env -i` allow-list; every `uses:` is a 40-hex SHA pin; nothing here plans or applies Terraform, or names a Terraform target.
+# through `env:` (no expression in any run body); the four steps of the `reboot` job that run repo code beyond the credential
+# loader (never-pooled, snapshot, reboot, summary) each run under an `env -i` allow-list, and the observe job's one code step
+# holds only the three Better Stack read credentials and the anchor; every `uses:` is a 40-hex SHA pin; nothing here plans or
+# applies Terraform, or names a Terraform target. A RE-RUN IS REFUSED (`validate` and the reboot job's re-check step both
+# require github.run_attempt == 1): a second attempt would re-run the guards at the original commit and could send a second
+# request. Read the evidence, then dispatch anew.
 #
 # RETIREMENT: this workflow depends on scripts/web2-rebirth-never-pooled.sh and shares helpers with scripts/web2-rebirth.sh.
-# The rebirth closing change retires all of them together, with their tests (or keeps this one by a recorded owner decision).
+# The rebirth closing change retires all of them together, with their tests. Keeping this workflow past their retirement means
+# editing the tombstone rows (A5 and A5b in apps/web-platform/infra/web-host-reboot-workflow.test.sh, and the TOMBSTONE row in
+# scripts/web-host-reboot.test.sh) in the same PR: until then those rows demand that every web-host-reboot* file go too.
 
 name: web host reboot (#9372)
 
@@ -71,10 +78,12 @@ jobs:
           HOST_RAW: ${{ inputs.host }}
           CONFIRM_RAW: ${{ inputs.confirm }}
           REASON_RAW: ${{ inputs.reason }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
           export LC_ALL=C
+          [[ "$RUN_ATTEMPT" == "1" ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew; no approval was requested"; exit 1; }
           [[ "$HOST_RAW" == "web-2" ]] || { echo "::error::host is not on the reboot allow-list (web-2 only); no approval was requested"; exit 1; }
           confirm_re='^REBOOT-web-2-[1-9][0-9]{0,11}$'
           [[ "$CONFIRM_RAW" =~ $confirm_re ]] || { echo "::error::confirm must be REBOOT-web-2-<server id> (digits only, no leading zero, at most 12); no approval was requested"; exit 1; }
@@ -100,14 +109,16 @@ jobs:
       server_id: ${{ steps.reboot.outputs.server_id }}
       anchor_epoch: ${{ steps.reboot.outputs.anchor_epoch }}
     steps:
-      - name: Re-check the typed host and confirm (defence in depth; the validate job already ran)
+      - name: Re-check the typed host, confirm and attempt number (defence in depth; the validate job already ran)
         env:
           HOST: ${{ inputs.host }}
           CONFIRM: ${{ inputs.confirm }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
           export LC_ALL=C
+          [[ "$RUN_ATTEMPT" == "1" ]] || { echo "::error::a re-run is refused: a second attempt would send a second reboot request. Read the evidence rows, then dispatch anew"; exit 1; }
           [[ "$HOST" == "web-2" ]] || { echo "::error::host is not on the reboot allow-list (web-2 only)"; exit 1; }
           confirm_re='^REBOOT-web-2-[1-9][0-9]{0,11}$'
           [[ "$CONFIRM" =~ $confirm_re ]] || { echo "::error::confirm must be REBOOT-web-2-<server id> (digits only, no leading zero, at most 12)"; exit 1; }
@@ -217,12 +228,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTOR: ${{ github.actor }}
-        run: bash scripts/web-host-reboot.sh summary
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (a token is in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          # STARTED_AT comes from GITHUB_ENV (the re-check step), so it may be unset when that step never ran.
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \
+            JOB_STATUS="$JOB_STATUS" HOST="$HOST" SERVER_ID="$SERVER_ID" ANCHOR_EPOCH="$ANCHOR_EPOCH" REASON="$REASON" SHA="$SHA" \
+            RUN_ID="$RUN_ID" REPO="$REPO" GH_TOKEN="$GH_TOKEN" RUN_URL="$RUN_URL" ACTOR="$ACTOR" STARTED_AT="${STARTED_AT:-}" \
+            GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
+            bash scripts/web-host-reboot.sh summary
 
   observe:
     needs: reboot
     # The anchor exists only once the POST was about to be sent: a refusal skips this job, a failure after the request does not.
-    if: ${{ always() && github.ref == 'refs/heads/main' && needs.reboot.outputs.anchor_epoch != '' }}
+    # `!cancelled()`, not `always()`: a cancelled run must not start a 40-minute poll that holds a runner after the cancel.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.reboot.outputs.anchor_epoch != '' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -251,7 +271,8 @@ jobs:
 
       # The grade script writes its own step summary on every path (verdict, boots seen, next line, fixed footer), so this job
       # has no separate summary step. Exit mapping: 0 PASS and 2 NOT YET are green (2 with a notice: it is the expected pending
-      # state); 4 (no boot seen, the old boot still shipping, or a new boot gone silent) and everything else are red.
+      # state); 4 (no boot seen, the old boot still shipping, or a new boot gone silent), 5 (nothing was measured, or the
+      # instance was re-created after the request) and everything else are red.
       - name: Grade the rows (PASS, FAIL or NOT YET, as row presence only)
         id: grade
         env:
@@ -272,5 +293,6 @@ jobs:
             2) echo "::notice::NOT YET (reason ${reason}): a pending state, not a failure. Do not re-dispatch to force a row; re-grade later with the command in the next line of the log." ;;
             1) echo "::error::FAIL (reason ${reason}): see the verdict and next lines above."; exit 1 ;;
             4) echo "::error::no usable boot signal after the request (reason ${reason}, exit 4): see the verdict and next lines above."; exit 1 ;;
+            5) echo "::error::nothing was measured, or the instance was re-created after the request (reason ${reason}, exit 5): this is not a pending state; see the verdict and next lines above."; exit 1 ;;
             *) echo "::error::the grade step could not reach a verdict (exit ${rc}, reason ${reason})."; exit 1 ;;
           esac
