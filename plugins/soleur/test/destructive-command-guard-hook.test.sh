@@ -1591,6 +1591,9 @@ rep ' a' 30000; _cmdwords="ls \"x\"${REP_OUT}"
 bound_row "bound: 1500 benign commands then rm -rf / still denies, in under 5 s" deny - "$_cmd1500"
 bound_row "bound: 2600 benign commands (above the record cap) then rm -rf / asks with the bound reason, in under 5 s" ask - "$_cmd2600" '^This command was NOT run\. bound: '
 bound_row "bound: rm -rf / first, then 2600 benign commands (above the record cap) still denies" deny - "$_cmd2600_late"
+rep 'echo x; ' 2600; _cmd2600_mid="echo a; echo b; echo c; rm -rf /; ${REP_OUT}"
+bound_row "bound: rm -rf / after three benign commands, then 2600 more (above the record cap) still denies (the records read are judged)" deny - "$_cmd2600_mid"
+bound_row "bound: rm -rf / after a benign command, then a 30000-word command (above the word cap) still denies" deny - "echo a; rm -rf /; ${_cmdwords}"
 bound_row "bound: 40 -- words then terraform destroy asks, in under 5 s" ask - "$_cmd40dash"
 bound_row "bound: a 1000-target rm line then rm -rf ~ denies, in under 5 s" deny - "$_cmd1000rm"
 bound_row "bound: 30000 words in one command (above the word cap) asks with the bound reason, in under 5 s" ask - "$_cmdwords" '^This command was NOT run\. bound: '
@@ -1627,7 +1630,7 @@ if s.count(a) != 1:
     sys.exit(1)
 open(p, "w").write(s.replace(a, r))' "$1" "$2" "$3" 2>/dev/null || HE_OK=bad
 }
-_DL_READ='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi'
+_DL_READ='if (( SECONDS >= DEADLINE_S )); then BOUND_SOFT="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi'
 _DL_JUDGE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the commands"; break; fi'
 _DL_DECIDE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi'
 _DL_RM='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the targets of rm"; return 0; fi'
@@ -1723,6 +1726,30 @@ tree_row "lexer seam: OK with no record for a keyword-free command (ls) is not a
 tree_row "lexer seam: OK with no record for a comment-only command is not an ask" none "$HT_HOOK" "$(mkjson '# a "comment" only' "$TREE")"
 stub_lexer okone 'print "C\0top\0" . "1\0" . "-\0" . "ls\0" . "OK\0";'
 tree_row "lexer seam: a stub lexer that reports one harmless record is not an ask (the seam is not an always-ask)" none "$HT_HOOK" "$_LX_ENV"
+# A read-time bound (the deadline reached while the lexer's output is still arriving) must not discard the records already read:
+# the rule table judges them, a deny wins, and only when nothing matched does the answer become a bound ask. The private copy has a
+# 2 s deadline and its stub lexer stops for 2.1 s mid-output (whole-second SECONDS: the deadline is crossed after 1 to 2 s).
+# Stubs print C records "C\0top\0<argc>\0" then <flag>\0<word>\0 per word.
+slow_lexer() { # slow_lexer <name> <perl source>: a stub lexer under a 2 s deadline
+  stub_lexer "$1" "\$| = 1; sub nap { select(undef, undef, undef, 2.1); } $2"
+  HE_OK=ok; hook_edit "$HT_HOOK" $'\nDEADLINE_S=6\n' $'\nDEADLINE_S=2\n'
+  chk "read bound: the 2 s deadline edit landed in the private copy ($1)" "$HE_OK"
+}
+_SL_RM='print "C\0top\0" . "3\0" . "-\0rm\0-\0-rf\0-\0/\0";'
+slow_lexer slow-deny "$_SL_RM nap(); print \"C\\0top\\0\" . \"1\\0\" . \"-\\0echo\\0\" . \"OK\\0\";"
+tree_row "read bound: rm -rf / read before the deadline passed still denies (the records read are judged)" deny "$HT_HOOK" "$_LX_ENV"
+slow_lexer slow-none 'print "C\0top\0" . "1\0" . "-\0ls\0"; nap(); print "C\0top\0" . "1\0" . "-\0echo\0" . "OK\0";'
+tree_row "read bound: nothing matched before the deadline passed asks with the bound reason" ask "$HT_HOOK" "$_LX_ENV"
+reason_has "read bound: the ask names the time limit and the bound rule id" 'This command was NOT run. bound: '
+# one huge record: a frame-count check inside the read loop bounds it. 2046 complete words (the trip lands on a flag frame) are judged.
+slow_lexer slow-rec-flag 'print "C\0top\0" . "2500\0" . "-\0rm\0-\0-rf\0-\0/\0" . ("-\0x\0" x 1497); nap(); print "-\0x\0" x 997; print "OK\0";'
+tree_row "read bound: a single huge record cut mid-record (on a flag frame) still denies on the words read" deny "$HT_HOOK" "$_LX_ENV"
+slow_lexer slow-rec-text 'print "C\0top\0" . "1\0" . "-\0ls\0"; print "C\0top\0" . "2500\0" . "-\0rm\0-\0-rf\0-\0/\0" . ("-\0x\0" x 1497); nap(); print "-\0x\0" x 997; print "OK\0";'
+tree_row "read bound: a single huge record cut mid-record (on a text frame) still denies on the words read" deny "$HT_HOOK" "$_LX_ENV"
+# a record cut before its first word is complete is dropped, not judged half-read (an unset word under set -u would abort the hook)
+slow_lexer slow-rec-empty 'print(("C\0top\0" . "1\0" . "-\0ls\0") x 201); print "C\0top\0" . "6\0" . ("-\0e\0" x 6); print "C\0top\0" . "40\0"; nap(); print "-\0x\0" x 40; print "OK\0";'
+tree_row "read bound: a record cut before its first word is complete is dropped (the earlier records are judged, the answer is a bound ask)" ask "$HT_HOOK" "$_LX_ENV"
+reason_has "read bound: a dropped half record still ends in the bound reason" 'This command was NOT run. bound: '
 
 # =====================================================================================================
 echo "== the envelope (ADR-156/157): an unreadable envelope asks, a non-Bash tool is not decided =="
@@ -1997,7 +2024,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=786
+MIN_CASES=800
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

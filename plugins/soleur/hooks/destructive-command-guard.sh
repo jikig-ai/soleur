@@ -159,8 +159,8 @@ unset CDPATH
 # BOUNDS on the bash side (the harness kills this hook at hooks.json `timeout: 10`, and a killed hook is not a
 # decision). The wall clock is `SECONDS`, reset here: it ticks on whole-second boundaries, so DEADLINE_S=6 trips
 # between 5 and 6 s after this line, comfortably inside the 10 s budget. MAX_RECORDS and MAX_WORDS cap what the
-# rule table judges; a command beyond either, or one that runs out of time, asks with rule id `bound` unless a
-# deny was already found. The lexer has its own 2 s alarm; these bound everything after it.
+# lexer output may hold (one record's read time is what MAX_WORDS bounds); a command beyond either, or one that runs
+# out of time, asks with rule id `bound` unless a deny was found in what was read. The lexer has its own 2 s alarm; these bound everything after it.
 SECONDS=0
 DEADLINE_S=6
 MAX_RECORDS=2000
@@ -352,15 +352,27 @@ fi
 # Frames: C \0 ctx \0 argc \0 (flags \0 arg \0){argc} ... then OK \0 (or E \0 cause \0 on failure).
 W_TXT=(); W_FLG=(); REC_OFF=(); REC_N=()
 SAW_OK=0; SAW_E=""; LEX_BAD=0; BOUND_READ=0
-LEX_ST=0; LEX_LEFT=0; LEX_KIND=0; NW=0
+LEX_ST=0; LEX_LEFT=0; LEX_KIND=0; NW=0; FRN=0
 while IFS= read -r -d '' F; do
+  # a clock check every 1024 frames, so one huge record is bounded too (the per-record check below sees only record starts)
+  FRN=$((FRN + 1))
+  if (( (FRN & 1023) == 0 && SECONDS >= DEADLINE_S )); then
+    BOUND_SOFT="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1
+    if (( LEX_ST == 3 )); then
+      # a record cut mid-way keeps the words it has: they are judged; with none complete it is dropped (its words are not all there)
+      LEX_DONE=$((NW - REC_OFF[${#REC_OFF[@]} - 1]))
+      if (( LEX_DONE > 0 )); then REC_N[${#REC_N[@]} - 1]="$LEX_DONE"
+      else unset 'REC_OFF[${#REC_OFF[@]} - 1]' 'REC_N[${#REC_N[@]} - 1]'; fi
+    fi
+    break
+  fi
   case "$LEX_ST" in
     0) case "$F" in C) LEX_ST=1 ;; OK) SAW_OK=1 ;; E) LEX_ST=9 ;; *) LEX_BAD=1 ;; esac ;;
     1) LEX_ST=2 ;;                                   # the ctx field
     2) if [[ "$F" =~ ^[1-9][0-9]{0,6}$ ]]; then
-         if (( ${#REC_N[@]} >= MAX_RECORDS )); then BOUND_WHY="more than ${MAX_RECORDS} simple commands"; break; fi
-         if (( NW + F > MAX_WORDS )); then BOUND_WHY="more than ${MAX_WORDS} words"; break; fi
-         if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi
+         if (( ${#REC_N[@]} >= MAX_RECORDS )); then BOUND_SOFT="more than ${MAX_RECORDS} simple commands"; break; fi
+         if (( NW + F > MAX_WORDS )); then BOUND_SOFT="more than ${MAX_WORDS} words"; break; fi
+         if (( SECONDS >= DEADLINE_S )); then BOUND_SOFT="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi
          REC_OFF[${#REC_OFF[@]}]="$NW"; REC_N[${#REC_N[@]}]="$F"; LEX_LEFT=$((F * 2)); LEX_KIND=0; LEX_ST=3
        else LEX_BAD=1; LEX_ST=0; fi ;;
     3) if [[ "$LEX_KIND" -eq 0 ]]; then W_FLG[${#W_FLG[@]}]="$F"; LEX_KIND=1
@@ -370,8 +382,11 @@ while IFS= read -r -d '' F; do
   esac
 done < <({ printf '%s' "$INPUT" | jq -j '.tool_input.command' | perl "$LEXER"; } 2>/dev/null)
 
-[[ "$BOUND_READ" -eq 1 ]] && ask_bound "$BOUND_WHY"
-if [[ "$SAW_OK" -ne 1 && -z "$BOUND_WHY" ]]; then
+# A read-time trip (a record or word cap, or the clock: BOUND_SOFT) does not discard the records already read: the rule table
+# judges them, and the decision below is a deny if one matched, else a bound ask. After a clock trip the judging gets 2 more
+# seconds (the harness kills the hook at 10 s).
+[[ "$BOUND_READ" -eq 1 ]] && DEADLINE_S=$((DEADLINE_S + 2))
+if [[ "$SAW_OK" -ne 1 && -z "$BOUND_SOFT" ]]; then
   if [[ -n "$SAW_E" ]]; then ask_parse "lexer ${SAW_E}"; fi
   # No OK and no E: the lexer was killed, crashed, or perl is missing/unusable. Probe by RESULT.
   PERL_PROBE="$(perl -e 'print "ok"' 2>/dev/null)" || PERL_PROBE=""
@@ -414,7 +429,7 @@ has_keyword() {
   (( had )) || shopt -u nocasematch
   return "$found"
 }
-if [[ "${#REC_N[@]}" -eq 0 && -z "$BOUND_WHY" ]]; then
+if [[ "${#REC_N[@]}" -eq 0 && -z "$BOUND_SOFT" ]]; then
   LX_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || ask_lexer_empty
   if has_code "$LX_CMD" && has_keyword "$LX_CMD"; then ask_lexer_empty; fi
 fi
