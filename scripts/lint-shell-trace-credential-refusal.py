@@ -1145,7 +1145,8 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # curl command: curl is not in command position) and a YAML step whose `shell:` is not bash.
 #
 # SCOPE (decision D1 of the argv-bearer sweep, tier 3). `rule_e_files()` is tracked `*.sh`
-# PLUS `.github/**/*.yml|*.yaml` (workflows and composite actions) PLUS
+# PLUS `.github/**/*.yml|*.yaml` and the direct `.github/*.yml|*.yaml` spellings (workflows,
+# composite actions, FUNDING.yml) PLUS
 # `apps/**/cloud-init*.yml`. Rules A to D key on a shebang/preamble and stay `*.sh`-only,
 # and so does `--changed`: if YAML were in `--changed`, any unrelated edit to a baselined
 # workflow (apply-web-platform-infra.yml sits under a byte gate) would force that workflow's
@@ -2178,7 +2179,9 @@ def _yaml_runs(node, default_shell: str | None = None, _seen: set | None = None)
     per reference (the second report would also carry the anchor's line, not its own).
     """
     if _seen is None:
-        _seen = set()  # ids of `run` scalar nodes already yielded (see the alias note above)
+        # Two kinds of key: `(id(container), inherited default shell)` for every sequence/mapping
+        # already walked, and `id(run scalar)` for every `run` already yielded (see the alias notes).
+        _seen = set()
     kind = _node_kind(node)
     if kind != "ScalarNode":
         # A CONTAINER is walked once per (node, inherited default shell). The composed graph is a
@@ -2253,14 +2256,13 @@ def check_yaml_file(path: Path, rel: str) -> tuple[int, list]:
               file=sys.stderr)
         sys.exit(2)
     loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    out: list[str] = []
+    # ONE guard over the compose AND the walk: PyYAML's composer (the pure-Python loader, used
+    # whenever libyaml is absent) recurses on a deep flow nest just as the walk does, so a
+    # RecursionError from either is the same "cannot evaluate" (exit 2, ADR-157), never a
+    # traceback that exits 1 and reads as "violations found".
     try:
         docs = list(yaml.compose_all(text, Loader=loader))
-    except yaml.YAMLError as exc:
-        first = (str(exc).strip().splitlines() or ["?"])[0]
-        print(f"{rel}: cannot evaluate (YAML did not parse: {first})", file=sys.stderr)
-        return 2, []
-    out: list[str] = []
-    try:
         for doc in docs:
             if doc is None:
                 continue
@@ -2277,9 +2279,11 @@ def check_yaml_file(path: Path, rel: str) -> tuple[int, list]:
                         return start + 1
                 where = f' (step "{run.name}")' if run.name else " (unnamed step)"
                 out += check_rule_e(rel, run.text.splitlines(), line_of, where)
+    except yaml.YAMLError as exc:
+        first = (str(exc).strip().splitlines() or ["?"])[0]
+        print(f"{rel}: cannot evaluate (YAML did not parse: {first})", file=sys.stderr)
+        return 2, []
     except RecursionError:
-        # A pathologically deep (not cyclic) flow nest. Without this the traceback exits 1,
-        # indistinguishable from "violations found"; ADR-157 says cannot-evaluate is exit 2.
         print(f"{rel}: cannot evaluate (YAML nesting too deep to walk)", file=sys.stderr)
         return 2, []
     return (1 if out else 0), [("e", v) for v in out]

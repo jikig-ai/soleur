@@ -574,6 +574,28 @@ _hs_want() { # <what the scenario isolates> <fail-delta> <pass-delta> <E_ROWS-de
 # The helpers read the global $LINT: shadow it for ONE call (dynamic scope), never reassign it.
 _hs_lint() { local LINT="$1"; shift; "$@"; }
 
+# _hs_want is the comparator EVERY scenario below routes through, so a comparison dropped from it
+# (any one of the four deltas) disarms that whole dimension for all of them at once. Drive it
+# directly, in a subshell, against recorded deltas of 0/1/1/1: the matching want must return 0 and a
+# want that differs in exactly ONE of the four positions must exit 1. Reported with printf + exit 1,
+# never through a helper under test.
+_hsw_probe() { ( HS_DF=0 HS_DP=1 HS_DE=1 HS_DY=1; _hs_want 'comparator probe' "$@" ) >/dev/null 2>&1; }
+_hsw_probe 0 1 1 1
+if [ "$?" != "0" ]; then
+  printf '[FATAL] instrument self-test: _hs_want rejected deltas that match the recorded ones\n' >&2; exit 1
+fi
+for _hsw_want in '1 1 1 1' '0 0 1 1' '0 1 0 1' '0 1 1 0'; do
+  # shellcheck disable=SC2086
+  _hsw_probe $_hsw_want
+  _hsw_rc=$?
+  if [ "$_hsw_rc" != "1" ]; then
+    printf '[FATAL] instrument self-test: _hs_want with want %s (one delta wrong) exited %s, not 1 -- a dropped comparison disarms every scenario routed through it\n' "$_hsw_want" "$_hsw_rc" >&2
+    exit 1
+  fi
+done
+unset _hsw_want _hsw_rc
+pass "instrument self-test: _hs_want accepts matching deltas and exits 1 when exactly one of fail/pass/E_ROWS/Y_ROWS differs"
+
 _ST_MSG='f.sh:3: credential header on curl argv -- x.\n'
 _ST_FXV="$FIX/violation-argv-bearer-literal.sh"
 _ST_FXY="$FIX/violation-yaml-literal.yml"
@@ -586,6 +608,7 @@ mk_fake st-se 1 "${_ST_MSG}1 violation(s)\nSyntaxError: invalid syntax\n"
 mk_fake st-en 1 "1 violation(s)\n"                              # rc 1, total 1, NO Rule E message
 mk_fake st-tot 1 "${_ST_MSG}2 violation(s)\n"                   # one Rule E message, but a second (non-E) violation
 mk_fake st-en0 0 "$_ST_MSG"                                     # rc 0 yet a Rule E message is printed
+mk_fake st-rc2-silent 2 ''                                      # cannot-evaluate (rc 2), prints nothing: not a must-PASS
 
 # e_row: rc (both branches), Traceback/SyntaxError, the Rule E message count (both branches) and
 # the lint's own total (the "no other rule fired" half of a violation row).
@@ -599,6 +622,7 @@ _hs e_row 'st' "$WORK/st-se.py" "$_ST_FXV" 1;   _hs_want 'e_row SyntaxError chec
 _hs e_row 'st' "$WORK/st-en.py" "$_ST_FXV" 1;   _hs_want 'e_row Rule E message count (violation branch)' 1 0 1 0
 _hs e_row 'st' "$WORK/st-tot.py" "$_ST_FXV" 1;  _hs_want 'e_row total-violation count (a non-E rule fired too)' 1 0 1 0
 _hs e_row 'st' "$WORK/st-en0.py" "$_ST_FXY" 0;  _hs_want 'e_row Rule E message count (must-PASS branch)' 1 0 1 0
+_hs e_row 'st' "$WORK/st-rc2-silent.py" "$_ST_FXY" 0; _hs_want 'e_row rc (must-PASS branch): rc 2 with no Rule E message is NOT a pass (only rc 0 is)' 1 0 1 0
 pass "instrument self-test: e_row scores rc, crash, Rule E message count and total in both directions (counter deltas pinned)"
 
 # y_row and fx_mut_row delegate to e_row. A stand-in that exits 0 on a violation row must make
@@ -828,7 +852,8 @@ fx_mut_row 'E1 canonical compliant with the --config - call replaced by -H "Auth
 
 # --- Rule E widened (#9597 S1, decision D1): credential vocabulary ------------------
 # The vocabulary is ONE named constant (E_CREDENTIAL: any `Authorization:` scheme,
-# CF-Access-Client-Id/-Secret, X-Signature-256, X-API-Key) read at FIVE sites. Each site gets
+# CF-Access-Client-Id/-Secret, X-Signature-256, X-Soleur-Kb-Drift-Signature, X-API-Key: six
+# header names) read at FIVE sites. Each site gets
 # a fixture that ONLY that site can report, so re-narrowing exactly one of them to the legacy
 # `Authorization: Bearer` reddens exactly one row (mutation rows V-S1..V-S5 below).
 
@@ -881,10 +906,10 @@ e_row 'Rule E xfail: -b "session=$T", -H "Cookie: s=$T" and x-gitlab-token are N
 # POSITIVE CONTROL: the copied fixture corpus must hold the YAML fixtures. A guard that
 # scans no YAML cannot then pass the must-PASS set unnoticed.
 Y_FIXTURES="$(find "$FIX" -maxdepth 1 -name '*.yml' | wc -l)"
-if [ "$Y_FIXTURES" -lt 31 ]; then
-  fail "YAML positive control: only $Y_FIXTURES .yml fixtures were copied, anti-vacuity floor is 31"
+if [ "$Y_FIXTURES" -lt 33 ]; then
+  fail "YAML positive control: only $Y_FIXTURES .yml fixtures were copied, anti-vacuity floor is 33"
 else
-  pass "YAML positive control: $Y_FIXTURES .yml fixtures present in the fixture copy (anti-vacuity floor 31)"
+  pass "YAML positive control: $Y_FIXTURES .yml fixtures present in the fixture copy (anti-vacuity floor 33)"
 fi
 # (y_row is defined with the helpers above.)
 
@@ -909,6 +934,8 @@ y_row 'Rule E YAML: a <<: *anchor merge key and a run: *alias are each reported 
 # fan-out row is bounded by RC_TIMEOUT so a regression reads rc 124 instead of hanging the suite.
 y_row 'Rule E YAML: a cyclic alias graph terminates and the one offending run: is reported once' "$LINT" "$FIX/violation-yaml-cyclic-alias.yml" 1
 RC_TIMEOUT=5 y_row 'Rule E YAML: a fan-out alias DAG (nine aliases per level, forty levels) terminates under 5s and reports the one run: once' "$LINT" "$FIX/violation-yaml-fanout-alias.yml" 1
+y_row 'Rule E YAML: a step list anchored under a python default and aliased under a bash default is reported ONCE (the aliased visit is a new (node, shell) state)' "$LINT" "$FIX/violation-yaml-anchor-python-then-bash.yml" 1
+y_row 'Rule E YAML: the same list anchored under a bash default and aliased under a python default is reported ONCE (reverse order)' "$LINT" "$FIX/violation-yaml-anchor-bash-then-python.yml" 1
 y_row 'Rule E YAML must-PASS: echo/printf of a runbook curl line and a comment inside run: are not executed curl commands' "$LINT" "$FIX/compliant-yaml-echo-only.yml" 0
 y_row 'Rule E YAML must-PASS: printf | curl -H @- and curl --config - < <(printf ...) inside run: pass' "$LINT" "$FIX/compliant-yaml-stdin.yml" 0
 y_row 'Rule E YAML must-PASS: a step whose shell: is python is not bash and is skipped' "$LINT" "$FIX/compliant-yaml-nonbash-shell.yml" 0
@@ -985,6 +1012,36 @@ else
   fail "Rule E YAML: the shell-only path must not need PyYAML, got rc=$rc: $(head -c 300 "$WORK/err")"
 fi
 
+# Without libyaml PyYAML falls back to its pure-Python loader (`getattr(yaml, "CSafeLoader",
+# yaml.SafeLoader)`), whose COMPOSER recurses on a deep flow nest just as the walk does. The
+# RecursionError guard must therefore cover the compose too, or the traceback exits 1 and reads
+# as "violations found". The suite's own PyYAML has libyaml, so this wrapper removes CSafeLoader
+# (when present) and runs the lint under runpy: argv[1] is the lint, the rest are its targets.
+NOCSAFE="$WORK/no-csafeloader.py"
+cat > "$NOCSAFE" <<'PYSHIM'
+import runpy, sys, yaml
+if hasattr(yaml, "CSafeLoader"):
+    delattr(yaml, "CSafeLoader")
+lint = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(lint, run_name="__main__")
+PYSHIM
+Y_ROWS=$((Y_ROWS + 1))
+rc="$(rc_env "" "$NOCSAFE" "$LINT" "$FIX/violation-yaml-literal.yml")"
+if [ "$rc" = "1" ] && [ "$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")" = "1" ] && ! grep -q 'Traceback' "$WORK/err"; then
+  pass "Rule E YAML: the CSafeLoader-less wrapper runs the lint on the pure-Python loader (control: a violation fixture reads rc=1 with 1 Rule E message)"
+else
+  fail "Rule E YAML: the no-CSafeLoader wrapper control should read rc=1 with 1 Rule E message, got rc=$rc: $(head -c 300 "$WORK/err")"
+fi
+Y_ROWS=$((Y_ROWS + 1))
+rc="$(rc_env "" "$NOCSAFE" "$LINT" "$FIX/cannot-evaluate-yaml-deep-nest.yml")"
+if [ "$rc" = "2" ] && grep -q 'cannot evaluate (YAML nesting too deep to walk)' "$WORK/err" \
+  && ! grep -qE "$E_MSG_RE|Traceback" "$WORK/out" "$WORK/err"; then
+  pass "Rule E YAML: on the pure-Python loader (no libyaml) a too-deeply nested flow document still exits exactly 2 with the pinned note -- the guard covers the compose"
+else
+  fail "Rule E YAML: deep-nest fixture under the pure-Python loader should exit 2 with the pinned note, got rc=$rc: $(tail -c 300 "$WORK/err")"
+fi
+
 # Only yaml.YAMLError is the unparseable path. A loader that fails any OTHER way is a broken
 # instrument and must surface as a crash, never as "this file did not parse".
 BROKENYAML="$WORK/brokenyaml"
@@ -1018,7 +1075,7 @@ print(sum(1 for p in files if p.suffix in (".yml", ".yaml")))
 PY
 )"
 if [ "${YAML_TARGETS:-0}" -lt 104 ]; then
-  fail "Rule E discovery: rule_e_files() lists ${YAML_TARGETS:-0} YAML files, anti-vacuity floor is 104 (99 .github, including .github/FUNDING.yml reached only by the `.github/*.yml` pathspec, + 5 cloud-init; grow-only)"
+  fail "Rule E discovery: rule_e_files() lists ${YAML_TARGETS:-0} YAML files, anti-vacuity floor is 104 (99 .github, including .github/FUNDING.yml reached only by the .github/*.yml pathspec, + 5 cloud-init; grow-only)"
 else
   pass "Rule E discovery: rule_e_files() lists $YAML_TARGETS YAML files (anti-vacuity floor 104)"
 fi
@@ -1073,7 +1130,7 @@ fi
 #     leave the table, so the table cannot keep a ceiling a later edit could silently re-raise to).
 # census_ceiling_check <baseline> <ceiling> sets CC_LISTED / CC_BAD / CC_STALE and reports on stderr.
 census_ceiling_check() {
-  local base="$1" ceil="$2" bp bn cl cp cn en rc
+  local base="$1" ceil="$2" bp bn cl cp en rc
   CC_LISTED=0
   CC_BAD=0
   CC_STALE=0
@@ -1086,7 +1143,7 @@ census_ceiling_check() {
       printf 'baseline E entry above its census ceiling or absent from it: %s (listed %s, ceiling %s)\n' "$bp" "$bn" "${cl:-none}" >&2
     fi
   done < "$base"
-  while IFS=$'\t' read -r cp cn; do
+  while IFS=$'\t' read -r cp _; do
     case "$cp" in '' | '#'*) continue ;; esac
     awk -F'\t' -v p="$cp" '$1 == p { f = 1 } END { exit !f }' "$base" && continue
     if [ ! -e "$REPO_ROOT/$cp" ]; then
@@ -1771,6 +1828,16 @@ else
   fail "Y-M8b: mutation did not land"
 fi
 unset _guard
+# The visited-container key carries the inherited shell. Keyed on the node alone, an anchor first
+# walked under a python default and aliased under a bash default loses its one finding (1 -> 0);
+# the reverse order is unaffected (the first, bash, visit already yielded it), which pins the
+# loss to the key and not to the walk.
+mutate_row 'Y-M9a visited-container key without the shell: python-then-bash anchor loses its finding (rc 1 -> 0)' \
+  's/key = \(id\(node\), default_shell\)/key = (id(node), None)/' \
+  "$FIX/violation-yaml-anchor-python-then-bash.yml" 1 0 0
+mutate_row 'Y-M9b visited-container key without the shell: the reverse order is unaffected (control, rc 1 -> 1, one message)' \
+  's/key = \(id\(node\), default_shell\)/key = (id(node), None)/' \
+  "$FIX/violation-yaml-anchor-bash-then-python.yml" 1 1 1
 # Without the RecursionError arm the deep nest is an uncaught traceback (exit 1): the very
 # misreading the arm exists to prevent. Not through mutate_row, which refuses Tracebacks.
 if mutant_copy 's/^(\s*)except RecursionError:$/${1}except ZeroDivisionError:/m'; then
@@ -1782,6 +1849,18 @@ if mutant_copy 's/^(\s*)except RecursionError:$/${1}except ZeroDivisionError:/m'
   fi
 else
   fail "Y-M8c: mutation did not land"
+fi
+# Y-M8d: the compose moved back OUTSIDE the guard (the lint as first written). The libyaml run
+# above cannot see it (the C composer does not recurse); the pure-Python wrapper does.
+if mutant_copy 's/    try:\n        docs = (list\(yaml\.compose_all\(text, Loader=loader\)\))\n/    docs = $1\n    try:\n/'; then
+  rc="$(rc_env "" "$NOCSAFE" "$WORK/mut2.py" "$FIX/cannot-evaluate-yaml-deep-nest.yml")"
+  if [ "$rc" = "1" ] && grep -q 'RecursionError' "$WORK/err" && ! grep -q 'too deep to walk' "$WORK/err"; then
+    pass "Y-M8d compose_all outside the RecursionError guard: the pure-Python loader's deep nest is an uncaught traceback, exit 1 (2 -> 1)"
+  else
+    fail "Y-M8d: compose-outside-the-guard mutant should exit 1 with a RecursionError traceback on the pure-Python loader, got rc=$rc: $(tail -c 200 "$WORK/err")"
+  fi
+else
+  fail "Y-M8d: mutation did not land"
 fi
 
 
@@ -2045,15 +2124,15 @@ unset SKIPSH_PY SIBLING _na _nb
 # reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
 # `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
 # can see and mutation-test them.
-if [ "$E_ROWS" -lt 97 ]; then
-  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 97"
+if [ "$E_ROWS" -lt 99 ]; then
+  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 99"
 else
-  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 97)"
+  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 99)"
 fi
-if [ "$Y_ROWS" -lt 44 ]; then
-  fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 44"
+if [ "$Y_ROWS" -lt 48 ]; then
+  fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 48"
 else
-  pass "Rule E YAML arm: $Y_ROWS rows executed (anti-vacuity floor 44)"
+  pass "Rule E YAML arm: $Y_ROWS rows executed (anti-vacuity floor 48)"
 fi
 
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
@@ -2126,7 +2205,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=355
+MIN_ASSERTIONS=363
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

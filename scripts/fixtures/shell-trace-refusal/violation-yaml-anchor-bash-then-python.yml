@@ -1,0 +1,22 @@
+# Rule E must fire ONCE (the reverse order of violation-yaml-anchor-python-then-bash.yml): the
+# anchored step list is walked first under job `first` (defaults.run.shell: bash, scanned), then
+# through the alias under job `second` (defaults.run.shell: python, skipped). The one textual
+# site is reported once, whichever default is met first.
+name: fixture-anchor-bash-then-python
+on: workflow_dispatch
+jobs:
+  first:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps: &steps
+      - name: shared steps
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+  second:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: python
+    steps: *steps
