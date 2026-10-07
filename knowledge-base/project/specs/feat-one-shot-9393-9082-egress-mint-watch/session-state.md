@@ -25,3 +25,29 @@ skill documents read-and-execute as the invocation for this pipeline).
 soleur:plan (inline), gh collision probes, lint-guard-contract.py (guard
 contract validation — 3 entries OK), worktree-manager create + draft-pr,
 pipeline-tally init/gate/incr
+
+## Work + Review + Ship Phase (resumed 2026-10-07)
+- Status: ship pending (Phase 4 --affected queued at position 4 behind 3 sibling
+  full-gate runs; all affected suites already green individually).
+- #9393 merged-scope delivered in d0b0d9952a; #9082 in 3e25f9feaa; review fix
+  217590ab63; trailers 2cbf50572e (Reviewed-By-Soleur inline-fallback 0/11) +
+  49e10ffafd (Reviewed-Fix-Round); compound 028bc60a87 (learning + _step_block fix).
+- Review ran inline-fallback (no agent surface): 2 findings (MWd polarity battery,
+  mint= notice token), fixed inline, mutation-driven red.
+- Preflight: Check 4 PASS (dev mlwiodleouzwniehynfz != prd ifsccnjhymdmidffkzhl),
+  Check 10 PASS (id: mintwatch found), Check 12 PASS (0 unledgered); rest SKIP.
+- Phase 5.5: review-findings exit gate clean; undeferred-operator-step 0 matches;
+  vendor-expense no signal; net-issue-flow -2.
+- PR #9680 ready; body carries Closes lines, plan link, User-Brand Impact,
+  Test Plan, Changelog; semver:patch applied.
+- Observed flake: cron-egress-firewall.test.sh one transient 337/1 (row
+  unidentified), 338/338 on both re-runs — recorded in the compound learning.
+
+### Errors (this phase)
+- scripts/test-all.sh --affected invoked without `bash` prefix: Permission
+  denied (rc=126) — the runner is not +x in this worktree; re-invoked via bash.
+- _step_block last-step extraction returned "" for Sentry check-in (final):
+  \Z lookahead cannot bound a join-built string tail — fixed inline.
+
+Remaining: wait for --affected gate + PR CI green -> gh pr merge --squash --auto
+-> poll MERGED -> postmerge verify issues #9393/#9082 closed + workflows.
