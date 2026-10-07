@@ -176,7 +176,7 @@ check_array_response() { # $1=file  $2=what
 compact_on() {
   [[ "${SOLEUR_COLLECTOR_COMPACT:-}" == "1" ]] && return 0
   if [[ -n "${SOLEUR_COLLECTOR_COMPACT:-}" ]]; then
-    echo "SOLEUR_COLLECTOR_COMPACT ignored (expected 1)" >&2
+    echo "compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1" >&2
   fi
   return 1
 }

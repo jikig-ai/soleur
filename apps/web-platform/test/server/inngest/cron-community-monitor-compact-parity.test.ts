@@ -398,7 +398,7 @@ describe("compact collector output parity (#9678)", () => {
     const r = runCollector("discord-community.sh", ["channels"], { SOLEUR_COLLECTOR_COMPACT: "sekret-value" });
     expect(r.rc).toBe(0);
     expect(Array.isArray(JSON.parse(r.stdout))).toBe(true);
-    expect(r.stderr).toContain("SOLEUR_COLLECTOR_COMPACT ignored (expected 1)");
+    expect(r.stderr).toContain("compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1");
     expect(r.stderr).not.toContain("sekret-value");
   });
 

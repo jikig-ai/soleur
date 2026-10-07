@@ -275,7 +275,7 @@ function, never inside an `if` or after `||`, so `set -e` and the EXIT trap beha
 `error()`), so a drifted field fails closed instead of printing `null`, which the model could read
 as 0. The discussions "not enabled" early `echo` return and every other early return get the same
 treatment. A non-empty value other than `1` prints one fixed stderr line
-(`SOLEUR_COLLECTOR_COMPACT ignored (expected 1)`, never the raw value) and leaves output unchanged.
+(`compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1`, never the raw value) and leaves output unchanged.
 Caps are constants at the top of each script (`COMPACT_MAX_ITEMS=40`, `COMPACT_TITLE_MAX=60`) passed
 to `jq` with `--argjson`.
 

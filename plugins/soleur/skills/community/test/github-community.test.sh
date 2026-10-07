@@ -736,7 +736,7 @@ assert_jq "$CASE10/out.fetch-interactions.json" \
 run_collector_env "$CASE10" "SOLEUR_COLLECTOR_COMPACT=sekret-value" activity 1
 assert_rc 0 "$RC" "activity exits 0 with a bad flag value"
 assert_jq "$CASE10/out/stdout" '(.issues | has("items"))' "a flag value other than 1 leaves the default shape"
-assert_file_matches "$CASE10/out/stderr" '^SOLEUR_COLLECTOR_COMPACT ignored \(expected 1\)$' \
+assert_file_matches "$CASE10/out/stderr" '^compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1$' \
   "a bad flag value prints one fixed stderr line"
 assert_file_not_matches "$CASE10/out/stderr" 'sekret-value' "the raw flag value is never echoed"
 

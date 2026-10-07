@@ -209,5 +209,5 @@ if ((NOW > CUTOFF + UNGRADED_SECONDS)); then
   echo "CANNOT ESTABLISH: still not graded clean 14 days after the change (discord_ok=${ok} github_nonzero=${nonzero}); read the newest digests and the Sentry op collector-status-warn"
   exit 3
 fi
-echo "TRANSIENT: the cause is gone but the digests do not yet show Discord collected with a non-zero GitHub count (discord_ok=${ok} github_nonzero=${nonzero})"
+echo "TRANSIENT: output-too-large is absent from the newest digest, but the digests do not yet show Discord collected with a non-zero GitHub count (discord_ok=${ok} github_nonzero=${nonzero})"
 exit 4
