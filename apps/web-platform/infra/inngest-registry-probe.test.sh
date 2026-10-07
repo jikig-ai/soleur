@@ -437,7 +437,7 @@ test_rp_query_carries_triggers() {
 # --- #6940 T2: full fixture — .functions carries id/slug/triggers losslessly ---
 test_rp_functions_field_cron() {
   echo "TEST: registry-probe — CRON trigger type/value preserved in .functions"
-  local fixture; fixture=$(mktemp)
+  local fixture; fixture=$(mktemp)  # lint-trap-ownership: ok rm'd at test end; an abort leaks one TMPDIR fixture, same bounded shape as this suite's other sites
   make_functions_full '[
     {"id":"fn-cron","slug":"cron/daily-triage","triggers":[{"type":"CRON","value":"0 8 * * *"}]},
     {"id":"fn-ev","slug":"events/signup","triggers":[{"type":"EVENT","value":"user/signup"}]}
@@ -461,7 +461,7 @@ test_rp_functions_field_cron() {
 # --- #6940 T3: BOTH functions' trigger sets survive (per-element projection) ---
 test_rp_functions_projection_per_element() {
   echo "TEST: registry-probe — .functions projects EVERY element, not just the first"
-  local fixture; fixture=$(mktemp)
+  local fixture; fixture=$(mktemp)  # lint-trap-ownership: ok rm'd at test end; an abort leaks one TMPDIR fixture, same bounded shape as this suite's other sites
   make_functions_full '[
     {"id":"fn-a","slug":"a","triggers":[{"type":"CRON","value":"0 0 * * 0"}]},
     {"id":"fn-b","slug":"b","triggers":[{"type":"CRON","value":"0 11 1 1,4,7,10 *"},{"type":"EVENT","value":"audit/manual"}]}
@@ -479,7 +479,7 @@ test_rp_functions_projection_per_element() {
 # skip-discovery, not a failed op=verify.
 test_rp_id_only_degrades_to_empty_triggers() {
   echo "TEST: registry-probe — id-only response shape yields functions[].triggers:[]"
-  local fixture; fixture=$(mktemp)
+  local fixture; fixture=$(mktemp)  # lint-trap-ownership: ok rm'd at test end; an abort leaks one TMPDIR fixture, same bounded shape as this suite's other sites
   make_functions '["fn-a","fn-b"]' > "$fixture"
 
   local out; out=$(INNGEST_PROBE_FUNCTIONS_FIXTURE="$fixture" bash "$TARGET")
