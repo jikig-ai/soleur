@@ -248,11 +248,13 @@ fi
 # A jq shim that fails ONLY on `-nc` (the hook's output builder) and hands every other call to the real jq: the hook can read its
 # envelope but cannot build its decision output (the fixed fallback).
 if [[ -z "$FAST" ]]; then
+  assert_fixture_dir "$WORK/shim-jqnc"
   mkdir -p "$WORK/shim-jqnc" || harness_die "shim mkdir"
   printf '#!/bin/sh\ncase "$1" in -nc) exit 3 ;; esac\nexec "%s" "$@"\n' "$JQ_BIN" > "$WORK/shim-jqnc/jq"; chmod +x "$WORK/shim-jqnc/jq"
 fi
 # A jq shim that errors on every regex function (a jq built without Oniguruma) and hands everything else to the real jq.
 if [[ -z "$FAST" ]]; then
+  assert_fixture_dir "$WORK/shim-jqre"
   mkdir -p "$WORK/shim-jqre" || harness_die "shim mkdir"
   printf '#!/bin/sh\nfor a in "$@"; do\n  case "$a" in *gsub*|*sub\(*|*test\(*|*match\(*|*capture\(*|*scan\(*|*splits\(*|*ascii_downcase*) echo "jq: error: regex support is not built in" >&2; exit 5 ;; esac\ndone\nexec "%s" "$@"\n' "$JQ_BIN" > "$WORK/shim-jqre/jq"; chmod +x "$WORK/shim-jqre/jq"
 fi
@@ -922,11 +924,13 @@ chk "the hook's registered command is the shell-quoted form (bash \"\${CLAUDE_PL
 # whose path holds a space: an unquoted ${CLAUDE_PLUGIN_ROOT} splits there, exits 127 and the call runs with no decision.
 if [[ -z "$FAST" ]]; then
   SPROOT="$WORK/sp ace"; assert_fixture_dir "$SPROOT"
-  mkdir -p "$SPROOT/hooks" && cp -R "$(dirname "$GUARD_HOOK")/." "$SPROOT/hooks/" || harness_die "cannot copy the hooks to a path with a space"
+  _hksrc="$(dirname "$GUARD_HOOK")"; assert_fixture_dir "$_hksrc"
+  mkdir -p "$SPROOT/hooks" && cp -R "$_hksrc/." "$SPROOT/hooks/" || harness_die "cannot copy the hooks to a path with a space"
   _regcmd="$("$JQ_BIN" -r --arg h destructive-command-guard.sh '[.hooks.PreToolUse[].hooks[] | select(.command | contains($h)) | .command][0] // ""' "$HOOKS_JSON")"
 else _regcmd=x; fi
 if want_row "registration: the registered command runs the hook when the plugin root contains a space"; then
   if [[ -n "$FAST" ]]; then GOT=ask; else
+    assert_fixture_dir "$INF"
     printf '%s' "$(mkjson 'terraform destroy' "$TREE")" > "$INF"
     HOOK_OUT="$(env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} -u SOLEUR_DISABLE_DESTRUCTIVE_GUARD -u CLAUDE_PROJECT_DIR "HOME=$CUR_HOME" "CLAUDE_PLUGIN_ROOT=$SPROOT" "$TIMEOUT_BIN" 30 sh -c "$_regcmd" <"$INF" 2>"$ERRF")"; HOOK_RC=$?
     classify
