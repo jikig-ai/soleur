@@ -117,20 +117,22 @@ else
   no "the secret must be visibility=masked with ignore_changes=[value]"
 fi
 
-# (f) Task 1 of #8516: the issue is cited inside the wrong-volume alert's own comment block.
-#     Window = the comment lines immediately preceding the resource (position-free — the
-#     citation may sit anywhere in that block).
+# (f) Task 1 of #8516: the issue is cited inside the wrong-volume alert's own region — the
+#     contiguous comment block immediately preceding the resource plus the resource body itself
+#     (both placements are "inside the alert"; the check is position-free within that region).
 res_line="$(grep -n '^resource "logtail_exploration_alert" "inngest_luks_wrong_volume"' "$ALERTS" | cut -d: -f1)"
 cite_window=""
+alert_block="$(awk '/^resource "logtail_exploration_alert" "inngest_luks_wrong_volume"/{p=1} p{print} p&&/^}/{exit}' "$ALERTS")"
 if [ -n "$res_line" ]; then
   cite_window="$(head -n "$((res_line - 1))" "$ALERTS" | awk '/^[[:space:]]*#/{buf=buf $0 ORS; next} /^[[:space:]]*$/{next} {buf=""} END{printf "%s", buf}')"
 fi
-if has "$cite_window" '#8516' && has "$cite_window" 'treat_as_zero' && has "$cite_window" 'inngest_server_probe'; then
+cite_region="$cite_window
+$alert_block"
+if has "$cite_region" '#8516' && has "$cite_region" 'treat_as_zero' && has "$cite_region" 'inngest_server_probe'; then
   ok "inngest_luks_wrong_volume cites #8516 and names the treat_as_zero blind spot + heartbeat sibling"
 else
-  no "the comment block above logtail_exploration_alert.inngest_luks_wrong_volume must cite #8516, treat_as_zero, and the heartbeat sibling"
+  no "logtail_exploration_alert.inngest_luks_wrong_volume must cite #8516, treat_as_zero, and the heartbeat sibling (inside its comment block or resource body)"
 fi
-alert_block="$(awk '/^resource "logtail_exploration_alert" "inngest_luks_wrong_volume"/{p=1} p{print} p&&/^}/{exit}' "$ALERTS")"
 if has "$alert_block" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"'; then
   ok "the alert still carries on_missing_data = \"treat_as_zero\" (the property the citation documents)"
 else
