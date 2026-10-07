@@ -530,7 +530,7 @@ rm -rf "${FAKE_PROC:?}/$LIVE"
 argprobe() { # VAR=val ... -> the ARGS line the library would have received
   reset_fixtures; mkdir -p "$SWEEP_STATE/soleur"; : > "$FX_LOG"
   sweep_fx FX_MODE=argprobe SOLEUR_QUARANTINE_DRAIN=1 "$@" >/dev/null
-  grep '^ARGS' "$FX_LOG" | head -n 1
+  grep '^ARGS' "$FX_LOG" | head -n 1 || true      # no ARGS line = a named T4 failure, not a silent abort
 }
 a="$(argprobe)"
 cases=$((cases + 1)); [[ "$a" == "ARGS dry=0 sttl=10080 wttl=43200 box="[45]" cap=200" ]] \
@@ -599,7 +599,7 @@ if [[ -n "$DISK_BASE" ]]; then
   cases=$((cases + 1)); [[ ! -e "$QR/scratch/old-scratch" && -d "$QR/worktrees/keep-wt" ]] \
     && pass "T2a drain removes the past-TTL class and keeps the inside-TTL class" || fail "T2a: $out"
   cases=$((cases + 1)); grep -qE 'drained=1 drained_bytes=[0-9]{4,}' <<<"$out" \
-    && pass "T2b summary reports drained=1 with a measured drained_bytes (du -sk based)" || fail "T2b summary: $out"
+    && pass "T2b summary reports drained=1 with a measured drained_bytes (du -skx based)" || fail "T2b summary: $out"
   cases=$((cases + 1)); db="$(sed -n 's/.*drained_bytes=\([0-9]*\) .*/\1/p' <<<"$out" | head -n 1)"; sl="$(sed -n 's/^SPACE_LOGICAL=//p' <<<"$out" | head -n 1)"
   [[ -n "$db" && "$db" -gt 0 && "$sl" == "$db" ]] \
     && pass "T2b2 drained bytes reach the report's logical_bytes accumulator ($sl)" || fail "T2b2 drained_bytes=$db SPACE_LOGICAL=$sl"

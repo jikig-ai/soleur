@@ -755,7 +755,7 @@ tc_drain_quarantine() {
       # `|| true` is load-bearing: du exits 1 on any unreadable subtree or a file that vanishes mid-walk,
       # and under pipefail that fails the assignment — the guard and the purge call this function bare
       # under `set -e`, so without it one such entry would abort them on every run (#9677 review).
-      kb="$(du -sk -- "$e" 2>/dev/null | cut -f1)" || true
+      kb="$(du -skx -- "$e" 2>/dev/null | cut -f1)" || true
       [[ "$kb" =~ ^[0-9]+$ ]] || kb=0
       if find "$e" -xdev -depth -delete 2>/dev/null; then
         tc_ledger_append "drain" "${cls##*/}" "$e" "-"

@@ -4106,6 +4106,7 @@ report_cleanup_space() {
   p="$(_space_path)"
   if command -v findmnt >/dev/null 2>&1; then
     fstype="$(findmnt -no FSTYPE --target "$p" 2>/dev/null | head -n 1 || true)"
+    fstype="${fstype//[^A-Za-z0-9._+-]/_}"      # the field sits before others in a parsed marker row
     [[ -n "$fstype" ]] || fstype="unknown"
   fi
   case "$fstype" in
