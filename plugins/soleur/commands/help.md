@@ -42,6 +42,7 @@ Detect the active harness before printing commands:
   with Codex skill mentions and skill-loading instructions substituted. Omit the
   `(type /soleur:<name>)` user-invoked marker: Codex ignores the key (ADR-236).
   Render the HOW THE SKILLS FIT TOGETHER map verbatim.
+- **Cursor CLI:** `/go` and `/sync` stay bare. Every other skill is `/soleur-<name>`, including `/soleur-help`, `/soleur-plan`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins; do not type them for Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. Use the Cursor CLI column in Step 3 for this harness. Read [Cursor compatibility instructions](../cursor/INSTRUCTIONS.md).
 
 Use the matching column in Step 3 below.
 
@@ -205,6 +206,42 @@ MCP SERVERS:
 
 Quick start: /go <what you want to do>
 Full docs:   See plugins/soleur/README.md and knowledge-base/engineering/grok-onboarding.md
+```
+
+### Cursor CLI
+
+```text
+Soleur - The Company-as-a-Service Platform
+
+COMMANDS:
+  /go <what you want>         The recommended way to use Soleur
+  /sync                       Populate knowledge-base from existing codebase
+  /soleur-help                This help listing
+
+Do not type Cursor's built-ins /plan, /help, /review, or /shell for Soleur.
+Do not call the Skill tool, the Task tool, run_subagent, or AwaitShell.
+
+WORKFLOW SKILLS (read the canonical file the stub names):
+  /soleur-brainstorm          Explore requirements and approaches
+  /soleur-plan                Create an implementation plan
+  /soleur-work                Execute the plan systematically
+  /soleur-review              Run multi-agent code review
+  /soleur-compound            Capture learnings from solved problems
+  /soleur-one-shot            Full autonomous engineering workflow
+
+HOW THE SKILLS FIT TOGETHER:
+  Main flow:   /go -> /soleur-brainstorm -> /soleur-plan -> /soleur-work -> /soleur-review -> /soleur-ship -> /soleur-postmerge
+
+AGENTS: [N] agents across [M] categories
+  Invoke each as /soleur-<stem>, for example /soleur-engineering-cto.
+
+SKILLS: [N] skills
+  Start here: /go <what you want> picks the right skill for you.
+  /go and /sync stay bare. Every other skill is /soleur-<name>.
+  Slice 1 does not run hooks and does not classify the session as cursor.
+
+Quick start: /go <what you want to do>
+Full docs:   See plugins/soleur/cursor/INSTRUCTIONS.md
 ```
 
 Replace all `[N]`, `[M]`, and `[count]` placeholders with actual values from Step 2. List all skills found, not just a subset.
