@@ -751,7 +751,7 @@ if [[ -f "$GUARD_HOOK" && "$(grep -cE '(declare -A|mapfile|readarray|readlink -f
 chk "the hook uses no bash-4 feature and no GNU-only flag (count is 0)" "$_x"
 if [[ -f "$LEXER" && -r "$LEXER" ]]; then _x=ok; else _x=bad; fi
 chk "the vendored lexer is present" "$_x"
-_hdr=""; [[ -f "$GUARD_HOOK" ]] && _hdr="$(head -n 120 "$GUARD_HOOK")"
+_hdr=""; [[ -f "$GUARD_HOOK" ]] && _hdr="$(head -n 200 "$GUARD_HOOK")"
 if grep -qF 'SOLEUR_DISABLE_DESTRUCTIVE_GUARD' <<<"$_hdr" && grep -qi 'restart' <<<"$_hdr"; then _x=ok; else _x=bad; fi
 chk "the header documents the kill switch and that it needs a session restart" "$_x"
 if grep -qi 'settings' <<<"$_hdr" && grep -Eqi 'env (block|setting)|`env`|"env"' <<<"$_hdr"; then _x=ok; else _x=bad; fi

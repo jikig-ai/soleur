@@ -18,32 +18,56 @@
 # destroy"`, a heredoc body and `git commit -m "rm -rf /"` are not commands).
 #   deny  rm with a recursive flag (-r, -R, -rf, --recursive, any cluster or spelling, flags before or after
 #         the targets) whose target is /, an ancestor of the home directory, the home directory (~, $HOME,
-#         ${HOME}, a relative path resolving there) or the contents of those (/*, ~/*, and a bare * or ./*
-#         when the working directory is home or an ancestor). A trailing slash or a glob suffix follows a
+#         ${HOME}, a relative path resolving there) or the contents of those: /*, ~/*, and any target whose
+#         every component after the glob-free root is only glob syntax (/** /*/* /*/ /? /[a-z]* ~/**), and a
+#         bare * ** or ./* when the working directory is home or an ancestor. A component that mixes literal
+#         text with a glob (~/*/node_modules, /home/*/x, /*.log, ~/.*) is another set of files and is not
+#         decided. `~+` is the working directory; with HOME unset or empty `~` is the passwd entry's home
+#         (the same lookup bash makes) and `$HOME/` is `/`. A trailing slash or a glob suffix follows a
 #         symlink; a bare symlink name does not (`rm -rf link` only unlinks it).
 #   ask   rm with a recursive flag whose target is the working directory or an ancestor of it (.. , ../.. ,
-#         an absolute path above it; `.` alone is not asked because rm refuses it).
-#   ask   terraform|tofu destroy, and terraform|tofu apply -destroy (global options such as -chdir= skipped).
+#         an absolute path above it; `.` alone is not asked because rm refuses it). The working directory is
+#         BOTH the envelope's cwd and the one a literal cd/pushd earlier in the command moved to.
+#   ask   terraform|tofu destroy, and terraform|tofu apply -destroy (global options such as -chdir= skipped;
+#         -destroy=<value> is a destroy unless the value is one of 0 f F false FALSE False, the Go bool "off").
 #   ask   git push that force-pushes (-f, --force, --force-with-lease[=..], --force-if-includes, a +refspec,
-#         in any short-flag cluster, or --force with --all/--mirror) or deletes (--delete, -d, :ref) a
-#         default branch. Default branches are the union of `git symbolic-ref --short
+#         in any short-flag cluster, --force with --all/--mirror or their unique abbreviations --al, --m...) or
+#         deletes (--delete, -d, :ref) a default branch; a destination spelled heads/main or refs/heads/main, a
+#         glob destination (refs/heads/*:refs/heads/*) and the matching refspec `:` count under a force flag.
+#         Default branches are the union of `git symbolic-ref --short
 #         refs/remotes/<named remote>/HEAD` (read LOCALLY, no network), `main` and `master`; the value-taking
-#         flags -o, --push-option, --repo, --receive-pack and `git -C <dir>` are parsed so positions and the
-#         repository path are right.
+#         flags -o, --push-option, --repo, --receive-pack, `git -C <dir>` and the global options that take a
+#         separate word (-c, --config-env, --git-dir, --work-tree, --namespace, --attr-source) are parsed so
+#         positions and the repository path are right. A `git -c alias.p=push p ...` alias is NOT DECIDED.
 #   ask   an unresolvable `cd`/`pushd` (a variable, `-`) followed in the same command by a recursive rm or
 #         by a force/delete git push: the working directory the later command sees is unknown.
-#   A literal `cd`/`pushd` earlier in the same command moves the simulated working directory for the later
-#   commands (`cd ~ && rm -rf ./*` is a delete of home).
+#   A literal `cd`/`pushd` earlier in the same command (also behind `command` or `builtin`) moves the
+#   simulated working directory for the later commands (`cd ~ && rm -rf ./*` is a delete of home).
 #   Wrappers are unwrapped with a small option table: sudo doas env command (not -v/-V) nohup time timeout
-#   nice; xargs is NOT unwrapped; and the rule table is retried on the words after a `--`, which covers
-#   `doppler run --`, `aws-vault exec <profile> --` and `op run --`. An absolute-path binary matches by
-#   basename (/bin/rm).
+#   nice; xargs is NOT unwrapped. `time` is a wrapper as a command word (/usr/bin/time, `command time`, `env
+#   time`); as a reserved word it is the lexer's, which drops it, and the first word `-p` then recovers
+#   `time -p rm ...` (a pseudo-wrapper). A short-option cluster whose last letter takes a value shifts one more
+#   word (sudo -nu root, env -iu X, timeout -vk 5 10). The rule table is retried on the words after a `--`,
+#   which covers `doppler run --`, `aws-vault exec <profile> --` and `op run --`. An absolute-path binary
+#   matches by basename (/bin/rm) and command names are compared in lower case (RM, Git, Terraform).
+#   ask   env -S, --split-string (any abbreviation) or a cluster with S (rule id `unparsed-wrapper`): the string
+#         it splits into a command is not analysed.
+#   ask   more than 8 nested wrappers or `--` separators (rule id `wrapper-depth`): what they run cannot be checked.
+#   ask   a command too large to check: more than MAX_RECORDS simple commands, more than MAX_WORDS words, or the
+#         DEADLINE_S wall clock reached (rule id `bound`) unless a deny was already found.
+#   ask   the lexer returned no command for input that has text beyond blanks and comments (a bare redirect;
+#         rule id `lexer-empty`). A blank or comment-only command is allowed.
 #
 # NOT DECIDED (stated, not implied). Obfuscation: a variable-built command name, glob or brace expansion of
-# a command name (r[m], r{m,}), `xargs rm`, `find -delete`, zsh-only expansions (=rm); a script written and
-# then run; a piped SQL string; `drop database`/`dropdb`; MCP delete tools; any non-Bash tool (including
-# Devin's `exec`: the raw tool_name must be Bash); Doppler secret writes and deletes; a plain `terraform
-# apply`; `kubectl delete`; `pulumi destroy`; `terragrunt destroy`; `git push --mirror` without --force; and an
+# a command name (r[m], r{m,}), brace expansion of a target (`/{bin,usr}`), `xargs rm`, `find -delete` and
+# `find -exec rm`, `rsync --delete`, other interpreters and tools (python shutil.rmtree), zsh-only expansions
+# (=rm); wrappers outside the table (exec, builtin, setsid, ionice, stdbuf, flock, nsenter, chroot, `su -c`,
+# `sudo -s '...'`, coproc); strings run later (trap strings, function bodies, aliases including `git -c
+# alias.x=push`); shells fed on stdin (heredocs, here-strings, a pipe into bash or sh) and `source <(...)`; a
+# runner name in another case (`BASH -c ...`, the lexer is case-sensitive there); a script written and then run;
+# a piped SQL string; `drop database`/`dropdb`; MCP delete tools; any non-Bash tool (including Devin's
+# `exec`: the raw tool_name must be Bash); Doppler secret writes and deletes; a plain `terraform apply`;
+# `kubectl delete`; `pulumi destroy`; `terragrunt destroy`; `git push --mirror` without --force; and an
 # unresolvable $VAR target. User-facing statement: the guard does not cover a plain `terraform apply`, secret
 # writes, SQL or non-Bash tools, and is not a substitute for scoped credentials. Residuals of the shared
 # lexer: it lexes an identical `bash -c`/`eval` string once, so the working-directory simulation cannot tell
@@ -66,7 +90,10 @@
 # non-string .tool_input.command, empty stdin, a lexer parse failure (exit 2: unbalanced quote, unterminated
 # substitution, NUL byte) and a lexer bound trip (exit 3: depth, budget, alarm, crash) all ASK; the parse
 # reasons say "could not parse this command; it was not recognised as destructive" and never quote a command
-# the hook did not match. A missing or unusable `jq` does not ask on every call (that would make the plugin
+# the hook did not match; a command too large to check (`bound`) and a lexer that returns nothing for real text
+# (`lexer-empty`) ask too. Every reason, ask or deny, opens with "This command was NOT run."; the parse-class
+# asks end with a fix-and-resend tail rather than "do not retry"; the quoted command has credentials masked
+# (NAME=value with a key, token, secret, password, passwd, cred or auth name, and URL userinfo). A missing or unusable `jq` does not ask on every call (that would make the plugin
 # unusable without jq): the hook scans the RAW envelope for its own narrow patterns (recursive rm of / ~ or
 # $HOME, `destroy`, `push` with a force flag or +), tolerating JSON-escaped whitespace; a hit asks (output
 # hand-built with a fixed reason naming jq, plus a stderr notice naming jq), a miss exits 0. A missing or
@@ -81,8 +108,8 @@
 # (settings.json "env"), which no Bash guard sees and which an agent that can edit a settings file can use:
 # this is a seatbelt, not a boundary. Hosted sessions disable it through AGENT_ENV_OVERRIDES (D8).
 #
-# MECHANISM AND ORDER. Kill switch; read stdin; the zero-spawn prefilter; the raw tool_name (captured before
-# lib/hook-tool-kind.sh normalizes it, so Devin's `exec` is not decided); dependency probes by RESULT, not by
+# MECHANISM AND ORDER. Kill switch; read stdin; the zero-spawn prefilter; the raw tool_name (it must be exactly
+# Bash, so Devin's `exec` is not decided); dependency probes by RESULT, not by
 # `command -v` (a jq that is present and exits non-zero fails like an absent one; probed only on failure, so
 # the happy path pays nothing); jq extraction (the command goes through `jq -j` straight into the lexer so
 # NULs and newlines survive; the small fields use a separate jq call); lib/shell-argv.pl; the rule table; the
@@ -110,7 +137,12 @@
 # PORTABILITY (bash 3.2 and POSIX only). No bash-4 builtin, associative array or case-conversion expansion,
 # and no GNU-only flag of the path, stream-edit, date or stat utilities. Lexer frames are read with
 # `read -d ''` (a $(...) would strip the NULs); the decision is made from the `OK\0` terminator, never from
-# an exit status lost across a process substitution; every empty-array expansion is guarded for `set -u`.
+# an exit status lost across a process substitution. Empty-array expansions under `set -u` are guarded
+# (`${x[@]+"${x[@]}"}`) wherever an array can be empty; the unguarded ones (`"${AV[@]}"`, `"${DA_T[@]}"`,
+# `"${keep_t[@]}"`, `"${t[@]:...}"`, `"${defaults[@]}"`) are non-empty by invariant: a lexer record has argc >= 1
+# and every slice or copy is taken only after an index < n check. bash 3.2.57 itself was run only where a container
+# image was available (docker bash:3.2 with the host's jq and perl): `bash -n`, the helper functions, and a
+# 43-command differential against bash 5.3 gave identical decisions; the suites run under the host bash.
 # Path resolution has no canonicalising utility: the physical parent is `cd -P <dir> && pwd -P` plus the
 # literal basename; for a nonexistent target the longest existing prefix is resolved and the rest normalized
 # lexically; HOME is compared in both its literal and physical forms. Inherited GIT_* variables are stripped
