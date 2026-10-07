@@ -433,6 +433,12 @@
 - Main advanced again to `cf2c01f0a08b68fe460587511fee015decab56d8`; it merged without conflicts in `3ac2cb3be79d6b724416b51ff307b1e342212f50`. The prior exact-head monitor for `a5870b8bd4781ad44b6fbf2db6b13e84fd22b8da` had not settled and was stopped when this newer main commit was discovered. Fresh CI for the current merge head must settle before recording a verdict or refreshing the PR checks summary.
 - Main advanced through six more commits to `ed6083309f2c769c50396f7521d4d47741ca8da6`, including the Anthropic credential sandbox-deny change. They merged without conflicts in `72d8125afe4497da51a1bde1fa4f6711582b226c`. The prior head `75f5eaeb37b120ebfcfb57ab8426fb564b3e222b` had 84 passes, six skips and no failures/cancellations/pending; this new merge head still needs exact-head CI. The PR description still points at `75f5eaeb` and must be refreshed after the new verdict.
 
+## Continuation update — 2026-10-07 latest-main resync
+
+- The recovery evidence commit `371fecb3e6d938db3171e2377f76eb19baf057be` was pushed. The push-time notice of 18 default-branch vulnerabilities was checked against GitHub's open Dependabot alert API; the current count is 18.
+- GitHub reported PR #9051 BEHIND. Main advanced from `ed6083309f2c769c50396f7521d4d47741ca8da6` to `e4cd9bd48cdf529f8ef50fee6f917df32bd076f6`; the current `origin/main` merged without conflicts. This merge and the new evidence commit still need push and exact-head checks. Refresh the PR body only after recording the pushed head.
+- A separately authorized synthetic recovery attempt is documented above. It ended before app process launch and did not qualify recovery. No further rehearsal is authorized. Local suites remain held; authenticated screenshots, eligible routine consumer, permitted Web matrices, attributable CLO dispositions, full-branch review and promotion remain incomplete. Keep draft/default-off/customer content blocked.
+
 ## Continuation update — 2026-10-06 separately authorized recovery attempt
 
 - The user separately authorized one new synthetic recovery attempt after the first harness assertion failure. The corrected runner passed Docker's normalized container-ID check. On a fresh disposable `--network=none` PostgreSQL instance, database creation, all 13 scoped migration bodies, synthetic setup assertions and the pre-replacement snapshot passed. PostgREST and its local REST proxy started inside the isolated namespace.
