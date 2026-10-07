@@ -521,7 +521,11 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     it.skipIf(!hasProc)(
       "an unreaped zombie reads dead while kill(0) still succeeds",
       async () => {
-        const parent = await spawnReal("sh", ["-c", "sleep 0 & echo $!; exec sleep 120"], {
+        // The child must exit only AFTER the shell has exec'd into `sleep` (whose comm then reads
+        // "sleep"); a child that exits earlier is reaped by the shell itself and no zombie forms.
+        // The wait uses builtins only, so it forks nothing while it spins.
+        const script = 'p=$$; ( until { read -r c < /proc/$p/comm; [ "$c" = sleep ]; }; do :; done ) & echo $!; exec sleep 120';
+        const parent = await spawnReal("sh", ["-c", script], {
           stdio: ["ignore", "pipe", "ignore"],
         });
         try {
