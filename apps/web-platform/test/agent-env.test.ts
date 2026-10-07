@@ -57,6 +57,8 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   // Plugin PreToolUse hook `operator-stage-approval.sh` (ADR-264): no web approval adapter yet, so it
   // must be a no-op in the web runtime and a staged write fails closed at exit 75.
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
+  // Plugin PreToolUse hook `destructive-command-guard.sh` (ADR-093/ADR-274): hosted Bash is sandboxed and gated, so it is a no-op here.
+  SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 };
 
 describe("buildAgentEnv", () => {

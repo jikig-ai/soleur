@@ -74,6 +74,8 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // writes nothing. Rides the overrides for the same reason as the line above: an ambient value
   // cannot re-enable it, and `buildAgentEnv` is the only place that decides a web agent's env.
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
+  // `destructive-command-guard.sh` (PreToolUse, ADR-093/ADR-274): hosted Bash is sandboxed and gated already, so it is a no-op here.
+  SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 } as const);
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed
