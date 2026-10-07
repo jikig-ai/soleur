@@ -1025,9 +1025,15 @@ done
 # ---- 6. the decision -------------------------------------------------------------------------------
 # a bound trip (record or word cap, or the deadline) is an ask unless a deny was already found
 [[ -z "$BOUND_WHY" ]] && BOUND_WHY="$BOUND_SOFT"
-if [[ -n "$BOUND_WHY" && "$BEST_RANK" -lt 2 ]]; then ask_bound "$BOUND_WHY"; fi
+# A bound with nothing matched is a bare `bound` ask. A bound AFTER an ask-class match keeps that rule's reason (the command WAS
+# recognised) with the bound sentence appended: the person sees what matched and that the rest was not checked.
+BOUND_NOTE=""
+if [[ -n "$BOUND_WHY" && "$BEST_RANK" -lt 2 ]]; then
+  (( BEST_RANK == 0 )) && ask_bound "$BOUND_WHY"
+  BOUND_NOTE=" The guard also stopped checking the rest of this command because it is too large to check in full (${BOUND_WHY}), so other parts of it were not checked."
+fi
 (( BEST_RANK == 0 )) && exit 0
 lead_for "$BEST_RULE"
-REASON="${BEST_RULE}: ${LEAD} Matched command: [${BEST_QUOTE}].${REASON_TAIL}"
+REASON="${BEST_RULE}: ${LEAD} Matched command: [${BEST_QUOTE}].${BOUND_NOTE}${REASON_TAIL}"
 if (( BEST_RANK == 2 )); then emit deny "$REASON"; else emit ask "$REASON"; fi
 exit 0

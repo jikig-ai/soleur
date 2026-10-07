@@ -1597,6 +1597,15 @@ bound_row "bound: rm -rf / after a benign command, then a 30000-word command (ab
 bound_row "bound: 40 -- words then terraform destroy asks, in under 5 s" ask - "$_cmd40dash"
 bound_row "bound: a 1000-target rm line then rm -rf ~ denies, in under 5 s" deny - "$_cmd1000rm"
 bound_row "bound: 30000 words in one command (above the word cap) asks with the bound reason, in under 5 s" ask - "$_cmdwords" '^This command was NOT run\. bound: '
+# A bound that trips AFTER an ask-class rule matched keeps that rule's reason (id, lead, the quoted command) and appends the bound
+# sentence; it never says the command was "not recognised as destructive" (it was).
+rep 'echo "N"; ' 2100; _cmdtf_then_many="terraform destroy; ${REP_OUT}"
+rep 'true; ' 2100; _cmdgit_then_many="git push -f origin main; ${REP_OUT}"
+bound_row "bound: terraform destroy then 2100 more commands asks with the destroy rule id and the bound sentence, in under 5 s" ask - "$_cmdtf_then_many" '^This command was NOT run\. infra-destroy: .*Matched command: \[terraform destroy\].*too large to check in full'
+jqchk "bound: that ask does not say the command was not recognised as destructive" '.hookSpecificOutput.permissionDecisionReason | contains("not recognised as destructive") | not'
+jqchk "bound: that ask still carries the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+bound_row "bound: git push -f origin main then 2100 more commands asks with the force-push rule id and the bound sentence, in under 5 s" ask - "$_cmdgit_then_many" '^This command was NOT run\. default-branch-force-push: .*Matched command: \[git push -f origin main\].*too large to check in full'
+jqchk "bound: that force-push ask does not say the command was not recognised as destructive" '.hookSpecificOutput.permissionDecisionReason | contains("not recognised as destructive") | not'
 # A deep nonexistent target: the longest existing prefix is looked for once, with a depth cap (no per-level probe that grows with the path).
 rep '/a' 650; _REP650="$REP_OUT"; _cmddeep650="rm -rf /nonexist${REP_OUT}; rm -rf /"
 rep '/a' 100; _cmddeep100="rm -rf /nonexist${REP_OUT}; rm -rf /"
@@ -2024,7 +2033,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=800
+MIN_CASES=805
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
