@@ -21,8 +21,12 @@
 #      and harness rows (a) and (b)). The live tree is never mutated.
 #
 # MINIMUM SPAN SIZES were measured on the tree that introduced them (span 1: 269 bytes, span 2: 751,
-# span 3: 13456; marker lines excluded) and set about a quarter below that. A legitimate edit that
-# shrinks a span under its floor is a loud signal to re-measure, not a flake.
+# span 3: 13456; marker lines excluded) and set at about 90% of that. A legitimate edit that shrinks a
+# span under its floor is a loud signal to re-measure, not a flake. The floors alone cannot pin WHERE a
+# span starts and ends (moving a BEGIN down inside the span, in both files, keeps parity green and only
+# shrinks the span), so the first non-blank line of every span, and its last (the last two for span 3,
+# whose last line is a bare `}`), are asserted against literal anchors taken from the original
+# filing-shape.pl: content anchors, never line numbers.
 #
 # Anti-vacuity: the case counter is moved at the call site (never by pass/fail), pass+fail must equal
 # the case count, an instrument self-test drives both helpers, and the row-count floor is a literal
@@ -83,9 +87,9 @@ new_dir() {
 # The checker under test
 # ---------------------------------------------------------------------------------------------
 WANT_SPANS=3
-MIN_SPAN_1=200
-MIN_SPAN_2=600
-MIN_SPAN_3=10000
+MIN_SPAN_1=242
+MIN_SPAN_2=676
+MIN_SPAN_3=12110
 BEGIN_RE='^# BEGIN SHARED-LEXER$'
 END_RE='^# END SHARED-LEXER$'
 
@@ -132,6 +136,31 @@ parity_verdict() {
   span_extract "$a" "$da"; span_extract "$b" "$db"
   for i in 1 2 3; do cmp -s "$da/span.$i" "$db/span.$i" || diffs="$diffs $i"; done
   if [[ -z "$diffs" ]]; then printf 'OK\n'; else printf 'RED:spans differ:%s\n' "$diffs"; fi
+}
+
+# The literal first and last lines of each span (from the original filing-shape.pl). Span 3 ends in a bare `}`, so its
+# last TWO non-blank lines are the anchor.
+EDGE_FIRST_1='my %RUNNER     = map { $_ => 1 } qw(bash sh zsh dash ksh);'
+EDGE_LAST_1='my $ALARM_S     = 2;'
+EDGE_FIRST_2='my ($BUDGET, $USED, $DEPTH, $INVIS, $RELEX) = (0, 0, 0, 0, 0);'
+EDGE_LAST_2="sub new_word { { t => '', lit => '', x => 0, q => 0, hd => [] } }"
+EDGE_FIRST_3='sub lex_string {'
+EDGE_LAST_3=$'  return $t->[$j];\n}'
+# edge_verdict <file> -> OK | RED:<reasons>
+edge_verdict() {
+  local f="$1" d i first last k want_first want_last reasons=""
+  new_dir; d="$NEWDIR"
+  if ! span_extract "$f" "$d"; then printf 'RED:%s\n' "$SPAN_ERR"; return 0; fi
+  if [[ "$SPAN_N" -ne "$WANT_SPANS" ]]; then printf 'RED:%s spans, want exactly %s\n' "$SPAN_N" "$WANT_SPANS"; return 0; fi
+  for i in 1 2 3; do
+    case "$i" in 1) want_first="$EDGE_FIRST_1"; want_last="$EDGE_LAST_1" ;; 2) want_first="$EDGE_FIRST_2"; want_last="$EDGE_LAST_2" ;; *) want_first="$EDGE_FIRST_3"; want_last="$EDGE_LAST_3" ;; esac
+    k=1; [[ "$i" -eq 3 ]] && k=2
+    first="$(awk 'NF { print; exit }' "$d/span.$i")"
+    last="$(awk -v k="$k" 'NF { a[++n] = $0 } END { for (j = n - k + 1; j <= n; j++) if (j >= 1) print a[j] }' "$d/span.$i")"
+    [[ "$first" == "$want_first" ]] || reasons="$reasons span $i starts with [$first];"
+    [[ "$last" == "$want_last" ]] || reasons="$reasons span $i ends with [${last//$'\n'/ / }];"
+  done
+  if [[ -n "$reasons" ]]; then printf 'RED:%s\n' "$reasons"; else printf 'OK\n'; fi
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -198,6 +227,8 @@ for pair in "original:$ORIG_PL" "plugin:$PLUGIN_PL"; do
   row "$tag: no near-miss BEGIN spelling (every mention is a marker line)" "$([[ "${nl:-0}" -eq "${nb:-0}" ]] && echo ok)" "loose ${nl:-0} vs exact ${nb:-0}"
   v="$(span_verdict "$file")"
   row "$tag: $WANT_SPANS well-formed spans, each at least its minimum size" "$([[ "$v" == OK ]] && echo ok)" "$v"
+  v="$(edge_verdict "$file")"
+  row "$tag: the first and last lines of every span are the literal anchors" "$([[ "$v" == OK ]] && echo ok)" "$v"
 done
 v="$(parity_verdict "$ORIG_PL" "$PLUGIN_PL")"
 row "every span is byte-identical between the two lexers" "$([[ "$v" == OK ]] && echo ok)" "$v"
@@ -270,6 +301,29 @@ else
   row "M4: divergence in the LAST span only, after two matching spans" no "edit did not change the copy"
   row "M4: a divergence in span 2 AND span 3 reports both (every span is compared)" no "mutation did not land"
 fi
+# 5. a marker MOVED, in both copies alike (a plugin-only move shows as a span difference; the same move in both is invisible to byte parity)
+mv_marker() { # mv_marker <in> <out> <BEGIN|END> <occurrence> <lines>: moves that marker line by <lines> (positive = down), same text
+  perl -e 'my ($kind, $occ, $by) = @ARGV; my @l = <STDIN>; my ($n, $idx) = (0, -1);
+    for my $i (0 .. $#l) { if ($l[$i] =~ /^# \Q$kind\E SHARED-LEXER$/) { $n++; if ($n == $occ) { $idx = $i; last } } }
+    exit 3 if $idx < 0; my $m = splice(@l, $idx, 1); splice(@l, $idx + $by, 0, $m); print @l;' "$3" "$4" "$5" < "$1" > "$2" 2>/dev/null
+  ! cmp -s "$1" "$2"
+}
+if mv_marker "$MU/orig.pl" "$MU/m5o.pl" BEGIN 3 100 && mv_marker "$MU/plug.pl" "$MU/m5p.pl" BEGIN 3 100; then
+  v0="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; parity_verdict "$MU/m5o.pl" "$MU/m5p.pl" )"
+  row "M5: BEGIN of span 3 moved 100 lines down in BOTH copies is invisible to byte parity with the floors at zero (so the floors and anchors are the only guard)" "$([[ "$v0" == OK ]] && echo ok)" "$v0"
+  v1="$(span_verdict "$MU/m5o.pl")"; v2="$(span_verdict "$MU/m5p.pl")"
+  row "M5: ...the size floors reject both moved copies" "$([[ "$v1" == RED:* && "$v2" == RED:* ]] && echo ok)" "$v1 / $v2"
+  v3="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m5p.pl" )"
+  row "M5: ...and with every floor at zero the first-line anchor alone rejects the moved copy" "$([[ "$v3" == RED:*"span 3 starts with"* ]] && echo ok)" "$v3"
+else
+  row "M5: BEGIN of span 3 moved in both copies (landed)" no "move did not land"
+  row "M5: the size floors reject both moved copies" no "move did not land"
+  row "M5: the first-line anchor rejects the moved copy" no "move did not land"
+fi
+if mv_marker "$MU/orig.pl" "$MU/m6o.pl" END 3 -3 && mv_marker "$MU/plug.pl" "$MU/m6p.pl" END 3 -3; then
+  v1="$(edge_verdict "$MU/m6o.pl")"; v2="$(edge_verdict "$MU/m6p.pl")"
+  row "M6: END of span 3 moved 3 lines up in BOTH copies is rejected by the last-line anchors" "$([[ "$v1" == RED:*"span 3 ends with"* && "$v2" == RED:*"span 3 ends with"* ]] && echo ok)" "$v1 / $v2"
+else row "M6: END of span 3 moved in both copies (landed)" no "move did not land"; fi
 # (b) must-PASS: a change OUTSIDE the markers (inside process_command) compares equal, in either file
 if mutate "$MU/plug.pl" "$MU/b1.pl" 's/^(sub process_command \{)/$1  # a change outside the shared spans/m'; then
   expect_ok "HARNESS (b): a change inside process_command of the plugin copy compares equal" "$MU/orig.pl" "$MU/b1.pl"
@@ -348,7 +402,7 @@ echo "cases=$CASES passes=$passes fails=$fails"
 if [[ $((passes + fails)) -ne "$CASES" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((passes + fails))" "$CASES" >&2; exit 1
 fi
-MIN_CASES=91
+MIN_CASES=97
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CASES" "$MIN_CASES" >&2
   exit 1
