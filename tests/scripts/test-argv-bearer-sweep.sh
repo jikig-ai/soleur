@@ -115,7 +115,7 @@ for d in "$REALBIN" "$SHIMDIR" "$SYN" "$BODIES" "$ROWS"; do
   assert_fixture_dir "$d"
   mkdir -p "$d"
 done
-for t in bash cat date grep egrep head tail jq sed tr awk sort uniq wc mktemp rm mkdir env dirname basename cut tee expr sleep readlink ls cp mv xargs true false id uname paste openssl; do
+for t in bash cat date grep egrep head tail jq sed tr awk sort uniq wc mktemp rm mkdir env dirname basename cut tee expr sleep readlink ls cp mv xargs true false id uname paste openssl stat; do
   p="$(type -P "$t" || true)"
   [[ -n "$p" ]] && ln -s "$p" "$REALBIN/$t"
 done
@@ -161,7 +161,18 @@ apply_value() { # $1 flag, $2 value
     -o|--output) out="$2" ;;
     -D|--dump-header) dump="$2" ;;
     -d|--data|--data-binary|--data-raw|--data-urlencode)
-      if [[ "$2" == "@-" ]]; then unmodelled "$1 @- (body on stdin)"; fi ;;
+      if [[ "$2" == "@-" ]]; then unmodelled "$1 @- (body on stdin)"; fi
+      # A body FILE is read and its mode stat-ed NOW (the script removes it after the call).
+      # `--data-binary @file` keeps CR/LF; `-d/--data @file` strips them, exactly as real curl does
+      # (calibrated by control C4 against `curl --libcurl`).
+      if [[ "$2" == @* && "${SHIM_MUTATE:-}" != nobody ]]; then
+        case "$1" in
+          --data-binary) cp -- "${2#@}" "$C.body" 2>/dev/null
+            { stat -c %a -- "${2#@}" 2>/dev/null || stat -f %Lp -- "${2#@}" 2>/dev/null; } > "$C.bodymode" ;;
+          -d|--data) tr -d '\r\n' < "${2#@}" > "$C.body" 2>/dev/null
+            { stat -c %a -- "${2#@}" 2>/dev/null || stat -f %Lp -- "${2#@}" 2>/dev/null; } > "$C.bodymode" ;;
+        esac
+      fi ;;
     -X|--request|-m|--max-time|--connect-timeout|--max-redirs|--proto|--proto-redir|--retry|--retry-delay|--retry-max-time|-A|--user-agent|-u|--user|-e|--referer|--noproxy) : ;;
     --url) urls+=("$2") ;;
     *) unmodelled "$1" ;;
@@ -202,7 +213,7 @@ while (( i < ${#args[@]} )); do
 done
 
 mode="${SHIM_MODE:-auth}"
-case "$mode" in auth|deny|noauth|noread) : ;; *) unmodelled "SHIM_MODE=$mode" ;; esac
+case "$mode" in auth|deny|noauth|noread|fail7) : ;; *) unmodelled "SHIM_MODE=$mode" ;; esac
 
 # stdin is read ONLY for the forms real curl reads it for.
 if (( use_cfg_stdin || use_hdr_stdin )); then
@@ -236,10 +247,12 @@ fi
 url="${urls[0]:-}"
 hostpart="${url#*://}"; hostpart="${hostpart%%[/?#]*}"; hostpart="${hostpart##*@}"; hostpart="${hostpart%%:*}"
 printf '%s\n' "$hostpart" > "$C.host"
+# fail7: a transport failure (curl exit 7, connection refused), calibrated against real curl (control C4).
+if [[ "$mode" == fail7 ]]; then printf 'curl: (7) Failed to connect\n' >&2; exit 7; fi
 
 have_auth=0
 for h in "${hdrs[@]:-}"; do
-  [[ -n "${SHIM_FIXTURE_TOKEN:-}" && "$h" == "Authorization: Bearer ${SHIM_FIXTURE_TOKEN}" ]] && have_auth=1
+  [[ -n "${SHIM_FIXTURE_TOKEN:-}" && "$h" == "Authorization: ${SHIM_SCHEME:-Bearer} ${SHIM_FIXTURE_TOKEN}" ]] && have_auth=1
 done
 
 case "$mode" in
@@ -299,6 +312,22 @@ exit 0
 SHIM_EOF
 sed -i "1s|.*|#!${BASH_BIN}|" "$SHIMDIR/curl"
 chmod +x "$SHIMDIR/curl"
+# `jq` shim: records its argv (a `jq --arg pw "$PW"` regression is invisible to the curl shim: jq's own
+# argv is world-readable too) and then runs the real jq. Passthrough, so every probe is unchanged.
+REAL_JQ="$(type -P jq)"
+cat > "$SHIMDIR/jq" <<'JQ_EOF'
+#!/usr/bin/env bash
+D="${SHIM_DIR:-}"
+if [[ -n "$D" ]]; then
+  mkdir -p "$D/jq"; n=0
+  [[ -r "$D/jq/counter" ]] && read -r n < "$D/jq/counter"
+  n=$((n + 1)); printf '%s\n' "$n" > "$D/jq/counter"
+  printf '%s\0' "$@" > "$D/jq/$n.argv"
+fi
+exec "@REAL_JQ@" "$@"
+JQ_EOF
+sed -i "1s|.*|#!${BASH_BIN}|; s|@REAL_JQ@|${REAL_JQ}|" "$SHIMDIR/jq"
+chmod +x "$SHIMDIR/jq"
 for t in gh doppler ssh; do
   printf '#!%s\nset -u\nprintf "%%s\\n" "%s" >> "${SHIM_DIR:-/dev/null}/unexpected"\nprintf "UNEXPECTED CALL to %s (fail-closed stub)\\n" >&2\nexit 97\n' "$BASH_BIN" "$t" "$t" > "$SHIMDIR/$t"
   chmod +x "$SHIMDIR/$t"
@@ -331,6 +360,7 @@ run_probe() {
 #   calls-below-min      fewer calls to the manifest hosts than min_calls
 #   bearer-not-on-stdin  a call to a manifest host whose stdin did not carry the bearer
 #   token-in-argv        the token marker appears in ANY recorded argv
+#   token-in-jq-argv     the token marker appears in ANY recorded jq argv (the jq shim)
 #   injected             the shim recorded an INJECTED stdin line
 #   unexpected-host      a call to a host outside the manifest
 #   unexpected-tool      a gh/doppler/ssh stub was called
@@ -344,8 +374,8 @@ count_calls() { # <rowdir> -> sets EV_CALLS
   for f in "$1"/shim/calls/*.argv; do [[ -e "$f" ]] && EV_CALLS=$((EV_CALLS + 1)); done
   return 0
 }
-evaluate() { # <rowdir> <hosts-regex> <min_calls> <token-or-marker>
-  local row="$1" hosts="$2" min="$3" tok="$4" f c h
+evaluate() { # <rowdir> <hosts-regex> <min_calls> <token-or-marker> [scheme, default Bearer]
+  local row="$1" hosts="$2" min="$3" tok="$4" scheme="${5:-Bearer}" f c h
   EV_FAILED=""; EV_HOST_CALLS=0; count_calls "$row"
   for f in "$row"/shim/calls/*.argv; do
     [[ -e "$f" ]] || continue
@@ -353,7 +383,7 @@ evaluate() { # <rowdir> <hosts-regex> <min_calls> <token-or-marker>
     [[ -r "$c.host" ]] && h="$(<"$c.host")"
     if [[ "$h" =~ ^(${hosts})$ ]]; then
       EV_HOST_CALLS=$((EV_HOST_CALLS + 1))
-      if ! { [[ -r "$c.stdin" ]] && { grep -qxF -- "header = \"Authorization: Bearer $tok\"" "$c.stdin" || grep -qxF -- "Authorization: Bearer $tok" "$c.stdin"; }; }; then
+      if ! { [[ -r "$c.stdin" ]] && { grep -qxF -- "header = \"Authorization: $scheme $tok\"" "$c.stdin" || grep -qxF -- "Authorization: $scheme $tok" "$c.stdin"; }; }; then
         EV_FAILED+=" bearer-not-on-stdin"
       fi
     else
@@ -361,6 +391,10 @@ evaluate() { # <rowdir> <hosts-regex> <min_calls> <token-or-marker>
     fi
     grep -aqF -- "$tok" "$f" && EV_FAILED+=" token-in-argv"
     [[ -s "$c.injected" ]] && EV_FAILED+=" injected"
+  done
+  for f in "$row"/shim/jq/*.argv; do
+    [[ -e "$f" ]] || continue
+    grep -aqF -- "$tok" "$f" && EV_FAILED+=" token-in-jq-argv"
   done
   (( EV_HOST_CALLS < min )) && EV_FAILED+=" calls-below-min"
   [[ -e "$row/shim/unexpected" ]] && EV_FAILED+=" unexpected-tool"
@@ -466,6 +500,13 @@ FIRST=\$(curl --disable --noproxy '*' -sS -o /dev/null -w '%{http_code}' \\
   < <(printf 'header = "Authorization: Bearer %s"\n' "\${SYNTH_TOKEN}"))
 RESP=\$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \\
   -H "Authorization: Bearer \${SYNTH_TOKEN}" "$SYN_URL")
+EOF
+    ;;
+    bot) cat <<EOF
+RESP=\$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \\
+  --config - -H "Accept: application/json" \\
+  "$SYN_URL" \\
+  < <(printf 'header = "Authorization: Bot %s"\n' "\${SYNTH_TOKEN}"))
 EOF
     ;;
     *) echo "FATAL: unknown synth variant $1" >&2; exit 2 ;;
@@ -734,11 +775,20 @@ if [[ -n "$POP" && -z "$DUP" && -z "$UNCLASSIFIED" && -z "$STALE_ENTRY" ]]; then
 else
   row "population: every followthrough probe holding a credentialed curl is classified exactly once (dynamic, static-only or delegated)" fail "unclassified='${UNCLASSIFIED//$'\n'/,}' stale='${STALE_ENTRY//$'\n'/,}' duplicated='${DUP//$'\n'/,}' derived=$(printf '%s\n' "$POP" | grep -c . || true)"
 fi
-# No followthrough probe may sit in baseline E: they are all converted, so a listed one is an
-# argv bearer that crept back (or an exclusion nobody examined).
-BE_FOLLOWTHROUGH="$(awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$BASE_E")"
-if [[ -z "$BE_FOLLOWTHROUGH" ]]; then row "population: no followthrough probe is listed in baseline E" ok
-else row "population: no followthrough probe is listed in baseline E" fail "listed='${BE_FOLLOWTHROUGH//$'\n'/,}'"; fi
+# Baseline E may list followthrough probes ONLY for the S2-owned set (they still carry a credential
+# header outside the Bearer vocabulary and are converted in S2); every other followthrough is converted,
+# so a listed one is an argv bearer that crept back. The row asserts the listed set EQUALS the S2 list
+# (a shrink in S2 updates this list in the same diff), and a floor row keeps it from being vacuous.
+S2_OWNED="canary-promotion-5875
+infra-config-activation-7220
+infra-config-fatal-channel-7220
+inngest-soak-6178"
+BE_FOLLOWTHROUGH="$(awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$BASE_E" | sed 's|^scripts/followthroughs/||; s|\.sh$||' | sort -u)"
+if [[ "$BE_FOLLOWTHROUGH" == "$S2_OWNED" ]]; then row "population: the followthrough probes listed in baseline E equal the S2-owned list" ok
+else row "population: the followthrough probes listed in baseline E equal the S2-owned list" fail "listed='${BE_FOLLOWTHROUGH//$'\n'/,}' want='${S2_OWNED//$'\n'/,}'"; fi
+BE_FT_N="$(printf '%s\n' "$BE_FOLLOWTHROUGH" | grep -c . || true)"
+if [[ "$BE_FT_N" -lt 4 ]]; then row "population: anti-vacuity floor, baseline E lists at least the 4 S2-owned followthroughs" fail "anti-vacuity floor: only $BE_FT_N listed"
+else row "population: anti-vacuity floor, baseline E lists at least the 4 S2-owned followthroughs" ok; fi
 
 # --- DYNAMIC rows ----------------------------------------------------------------------------
 N_DYN=0
@@ -1056,6 +1106,180 @@ else row "verify-tunnel-ingress-origin: removing the header-value guard is RED (
 echo "=== stage 3: fresh-host-boot-trail + verify-tunnel-ingress-origin transport rows done ==="
 
 # =====================================================================================
+# STAGE 4: SHIM EXTENSIONS for the community-script conversions (#9597, S1 Phase 2). Each
+# extension is proven on SYNTHETIC probes first, so a shim that accepts too much cannot make
+# the later per-script rows (plugins/soleur/skills/community/test/community-argv.test.sh)
+# vacuous:
+#   (a) the shim and `evaluate` are parameterised by auth SCHEME (Discord sends `Bot`, and
+#       rejects `Bearer`): a Bot-to-Bearer mutation must go RED;
+#   (b) the shim records a `--data-binary @file` body's content and `stat` mode AT CURL TIME
+#       (the script removes the file afterwards), models `-d @file` stripping CR/LF as real curl
+#       does, and has a `fail7` transport-failure mode, calibrated against real curl;
+#   (c) a `jq` shim records jq's argv (jq's own argv is world-readable too);
+#   (d) static rows over the converted sources and docs.
+# =====================================================================================
+# C4: the real-curl oracle for the body semantics and the transport-failure exit code.
+CR_FILE="$ORA/crlf.txt"
+printf 'SYNTHA\r\nSYNTHB\n' > "$CR_FILE"
+"$REAL_CURL" --disable --noproxy '*' -sS --max-time 3 --libcurl "$ORA/bin.c" --data-binary @"$CR_FILE" http://127.0.0.1:9/ >/dev/null 2>&1; REAL_RC7=$?
+"$REAL_CURL" --disable --noproxy '*' -sS --max-time 3 --libcurl "$ORA/d.c" -d @"$CR_FILE" http://127.0.0.1:9/ >/dev/null 2>&1 || true
+[[ -s "$ORA/bin.c" && -s "$ORA/d.c" ]] || fatal "C4 real curl did not write --libcurl output for a body file"
+grep -qF 'SYNTHA\r\nSYNTHB\n' "$ORA/bin.c" || fatal "C4 oracle: --data-binary @file did not keep CR/LF"
+grep -qF 'SYNTHASYNTHB' "$ORA/d.c" || fatal "C4 oracle: -d @file did not strip CR/LF"
+[[ "$REAL_RC7" -eq 7 ]] || fatal "C4 oracle: real curl against a refused connection exited $REAL_RC7, the shim's fail7 models 7"
+row "control C4: real curl keeps CR/LF for --data-binary @file, strips them for -d @file, and exits 7 on a refused connection" ok
+
+# (a) scheme rows ----------------------------------------------------------------------
+P_BOT="$(make_synth bot)"
+run_probe s1-bot "$P_BOT" "SYNTH_TOKEN=$FIXTURE_TOKEN" SHIM_SCHEME=Bot
+rc=$RUN_RC; evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN" Bot
+if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -q '^PASS' "$RUN_ROW/stdout" \
+   && grep -qxF -- "header = \"Authorization: Bot $FIXTURE_TOKEN\"" "$RUN_ROW/shim/calls/1.stdin"; then
+  row "scheme: a Bot probe sends exactly the line header = \"Authorization: Bot <tok>\" on stdin and is GREEN under the Bot-aware shim" ok
+else row "scheme: a Bot probe sends exactly the line header = \"Authorization: Bot <tok>\" on stdin and is GREEN under the Bot-aware shim" fail "rc=$rc failed='$EV_FAILED'"; fi
+P_BOT_AS_BEARER="$SYN/synth-bot-as-bearer.sh"; sed 's/Authorization: Bot /Authorization: Bearer /' "$P_BOT" > "$P_BOT_AS_BEARER"
+grep -q 'Authorization: Bearer' "$P_BOT_AS_BEARER" || fatal "scheme mutation did not land"
+run_probe s2-bearer "$P_BOT_AS_BEARER" "SYNTH_TOKEN=$FIXTURE_TOKEN" SHIM_SCHEME=Bot
+rc=$RUN_RC; evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN" Bot
+if has_check bearer-not-on-stdin && transient_outcome "$RUN_ROW" "$rc"; then
+  row "scheme: swapping Bot for Bearer is RED (the exact-line check fires, and the Bot-aware shim answers 401, never PASS)" ok
+else row "scheme: swapping Bot for Bearer is RED (the exact-line check fires, and the Bot-aware shim answers 401, never PASS)" fail "rc=$rc failed='$EV_FAILED'"; fi
+evaluate "$ROWS/s1-bot" "$SYN_HOST" 1 "$FIXTURE_TOKEN"
+if has_check bearer-not-on-stdin; then row "scheme: evaluating the Bot probe as a Bearer probe is RED (the default scheme did not loosen)" ok
+else row "scheme: evaluating the Bot probe as a Bearer probe is RED (the default scheme did not loosen)" fail "failed='$EV_FAILED'"; fi
+run_probe s3-bot-default-shim "$P_BOT" "SYNTH_TOKEN=$FIXTURE_TOKEN"
+if transient_outcome "$RUN_ROW" "$RUN_RC"; then row "scheme: a default (Bearer) shim rejects a Bot probe with 401, TRANSIENT (the auth gate is scheme-aware)" ok
+else row "scheme: a default (Bearer) shim rejects a Bot probe with 401, TRANSIENT (the auth gate is scheme-aware)" fail "rc=$RUN_RC"; fi
+
+# (b)+(c) body-file rows ----------------------------------------------------------------
+make_body_probe() { # <variant: file|dfile|argv|jqarg> -> path
+  local v="$1" p="$SYN/synth-body-$1.sh"
+  {
+    cat <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${SYNTH_PW:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SYNTH_PW).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+EOF
+    case "$1" in
+      file|dfile|jqarg) cat <<'EOF'
+BFILE=$(mktemp "${TMPDIR:-/tmp}/synth-body.XXXXXXXX") || exit 2
+trap 'rm -f -- "$BFILE"' EXIT
+EOF
+      ;;
+    esac
+    case "$1" in
+      file|dfile) cat <<'EOF'
+SYNTH_ID_E="$SYNTH_ID" SYNTH_PW_E="$SYNTH_PW" jq -n '{identifier:$ENV.SYNTH_ID_E,password:$ENV.SYNTH_PW_E}' > "$BFILE" || exit 2
+EOF
+      ;;
+      jqarg) cat <<'EOF'
+jq -n --arg id "$SYNTH_ID" --arg pw "$SYNTH_PW" '{identifier:$id,password:$pw}' > "$BFILE" || exit 2
+EOF
+      ;;
+    esac
+    case "$1" in
+      file|jqarg) printf '%s\n' "RESP=\$(curl --disable --noproxy '*' -sS -w '\\nHTTP_STATUS:%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @\"\$BFILE\" '$SYN_URL')" ;;
+      dfile) printf '%s\n' "RESP=\$(curl --disable --noproxy '*' -sS -w '\\nHTTP_STATUS:%{http_code}' -X POST -H 'Content-Type: application/json' -d @\"\$BFILE\" '$SYN_URL')" ;;
+      argv) printf '%s\n' "RESP=\$(curl --disable --noproxy '*' -sS -w '\\nHTTP_STATUS:%{http_code}' -X POST -H 'Content-Type: application/json' -d \"{\\\"identifier\\\":\\\"\$SYNTH_ID\\\",\\\"password\\\":\\\"\$SYNTH_PW\\\"}\" '$SYN_URL')" ;;
+    esac
+    synth_tail
+  } > "$p"
+  printf '%s\n' "$p"
+}
+BODY_PW="SYNTHPW""-aaaa-bbbb-cccc"
+BODY_ID="synthetic.bsky.social"
+evaluate_body() { # <rowdir> -> EV_FAILED names: pw-in-argv, pw-in-jq-argv, body-not-recorded, body-mode, body-content, no-calls
+  local row="$1" f c
+  EV_FAILED=""; count_calls "$row"
+  [[ "$EV_CALLS" -ge 1 ]] || EV_FAILED+=" no-calls"
+  for f in "$row"/shim/calls/*.argv; do
+    [[ -e "$f" ]] || continue
+    c="${f%.argv}"
+    grep -aqF -- "$BODY_PW" "$f" && EV_FAILED+=" pw-in-argv"
+    [[ -s "$c.body" ]] || EV_FAILED+=" body-not-recorded"
+    [[ "$(cat "$c.bodymode" 2>/dev/null)" == "600" ]] || EV_FAILED+=" body-mode"
+    jq -e --arg i "$BODY_ID" --arg p "$BODY_PW" '.identifier == $i and .password == $p' "$c.body" >/dev/null 2>&1 || EV_FAILED+=" body-content"
+  done
+  for f in "$row"/shim/jq/*.argv; do
+    [[ -e "$f" ]] || continue
+    grep -aqF -- "$BODY_PW" "$f" && EV_FAILED+=" pw-in-jq-argv"
+  done
+  EV_FAILED="$(printf '%s\n' $EV_FAILED | awk '!s[$0]++' | paste -sd' ' -)"
+  return 0
+}
+body_env=("SYNTH_PW=$BODY_PW" "SYNTH_ID=$BODY_ID" SHIM_MODE=noauth)
+
+P_BF="$(make_body_probe file)"
+run_probe b1-file "$P_BF" "${body_env[@]}"
+rc=$RUN_RC; evaluate_body "$RUN_ROW"
+if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -q '^PASS' "$RUN_ROW/stdout" && [[ -z "$(ls -A "$RUN_ROW/tmp")" ]]; then
+  row "body: a --data-binary @file probe is GREEN (0600 file, exact content at curl time, password in no curl or jq argv, file removed)" ok
+else row "body: a --data-binary @file probe is GREEN (0600 file, exact content at curl time, password in no curl or jq argv, file removed)" fail "rc=$rc failed='$EV_FAILED' pass-line=$(grep -c '^PASS' "$RUN_ROW/stdout" || true) leftover=$(ls -A "$RUN_ROW/tmp" | tr "\n" ",")"; fi
+if [[ -s "$ROWS/b1-file/shim/jq/counter" ]] && grep -aqF 'ENV.SYNTH_PW_E' "$ROWS/b1-file/shim/jq/1.argv"; then
+  row "jq shim: records jq's argv (the body writer's program text is on file; recording works)" ok
+else row "jq shim: records jq's argv (the body writer's program text is on file; recording works)" fail "no jq argv recorded"; fi
+
+P_BA="$(make_body_probe argv)"
+run_probe b2-argv "$P_BA" "${body_env[@]}"
+evaluate_body "$RUN_ROW"
+if has_check pw-in-argv; then row "body: handing the password to curl as -d \"\$body\" is RED on pw-in-argv" ok
+else row "body: handing the password to curl as -d \"\$body\" is RED on pw-in-argv" fail "failed='$EV_FAILED'"; fi
+
+P_BJ="$(make_body_probe jqarg)"
+run_probe b3-jqarg "$P_BJ" "${body_env[@]}"
+evaluate_body "$RUN_ROW"
+if has_check pw-in-jq-argv && ! has_check pw-in-argv; then
+  row "body: passing the password to jq as --arg is RED on pw-in-jq-argv, which the curl shim alone cannot see" ok
+else row "body: passing the password to jq as --arg is RED on pw-in-jq-argv, which the curl shim alone cannot see" fail "failed='$EV_FAILED'"; fi
+
+run_probe b4-nobody "$P_BF" "${body_env[@]}" SHIM_MUTATE=nobody
+evaluate_body "$RUN_ROW"
+if has_check body-not-recorded && has_check body-content; then row "body: a shim that stops reading the --data-binary body turns the body rows RED" ok
+else row "body: a shim that stops reading the --data-binary body turns the body rows RED" fail "failed='$EV_FAILED'"; fi
+
+P_BD="$(make_body_probe dfile)"
+run_probe b5-dfile "$P_BD" "${body_env[@]}"
+nl_bin="$(wc -l < "$ROWS/b1-file/shim/calls/1.body")"; nl_d="$(wc -l < "$ROWS/b5-dfile/shim/calls/1.body")"
+if [[ "$nl_bin" -ge 2 && "$nl_d" -eq 0 ]]; then
+  row "body: the shim keeps CR/LF for --data-binary @file and strips them for -d @file, as real curl does (control C4)" ok
+else row "body: the shim keeps CR/LF for --data-binary @file and strips them for -d @file, as real curl does (control C4)" fail "binary-lines=$nl_bin d-lines=$nl_d"; fi
+
+# fail7: the transport-failure mode, calibrated to real curl's exit 7 by control C4.
+run_probe b6-fail7 "$P_CANON" "SYNTH_TOKEN=$FIXTURE_TOKEN" SHIM_MODE=fail7
+count_calls "$RUN_ROW"
+if [[ "$RUN_RC" -eq 7 && "$EV_CALLS" -eq 1 ]] && ! grep -q '^PASS' "$RUN_ROW/stdout" && grep -q 'TRANSIENT' "$RUN_ROW/stderr"; then
+  row "fail7: a transport failure (curl exit 7) reaches the probe's TRANSIENT path with the call recorded, never PASS" ok
+else row "fail7: a transport failure (curl exit 7) reaches the probe's TRANSIENT path with the call recorded, never PASS" fail "rc=$RUN_RC calls=$EV_CALLS"; fi
+
+# (d) static rows over the converted sources and docs. git grep reads TRACKED files: on an
+# uncommitted tree a new file is invisible, so the row also asserts the file is tracked or exists.
+COMM="plugins/soleur/skills/community/scripts"
+SETUP_MD="plugins/soleur/skills/flag-bootstrap/SETUP.md"
+n_apikey_argv="$(grep -cE -e '-H +"?Authorization: *Api-Key' "$SETUP_MD" || true)"
+n_apikey_cfg="$(grep -cF 'header = "Authorization: Api-Key %s"' "$SETUP_MD" || true)"
+if [[ "$n_apikey_argv" -eq 0 && "$n_apikey_cfg" -ge 5 ]]; then
+  row "static: flag-bootstrap/SETUP.md has no -H Authorization: Api-Key curl example left and carries five stdin-config forms" ok
+else row "static: flag-bootstrap/SETUP.md has no -H Authorization: Api-Key curl example left and carries five stdin-config forms" fail "argv=$n_apikey_argv stdin-config=$n_apikey_cfg"; fi
+if ! git grep -nE -e '-H +"Authorization: *Bot' -- "$COMM/discord-community.sh" "$COMM/discord-setup.sh" >/dev/null 2>&1 \
+   && grep -qF 'header = "Authorization: Bot %s"' "$COMM/discord-community.sh" "$COMM/discord-setup.sh"; then
+  row "static: neither Discord script carries a -H \"Authorization: Bot ...\" argument (array-held or inline), both build the stdin config line" ok
+else row "static: neither Discord script carries a -H \"Authorization: Bot ...\" argument (array-held or inline), both build the stdin config line" fail "an argv Bot header is back, or the stdin config line is gone"; fi
+# A password variable inside a -d/--data* operand of the two bsky scripts (lint equality says nothing about
+# a body: it is not a header, so these two files are not in baseline E).
+if ! grep -nE -e '(-d|--data[a-z-]*)[ =]+"[^"]*\$\{?BSKY_(APP_PASSWORD|PW)' -e '--arg +[a-z_]+ +"\$\{?BSKY_(APP_PASSWORD|PW)' "$COMM/bsky-community.sh" "$COMM/bsky-setup.sh" >/dev/null 2>&1 \
+   && [[ "$(grep -c -e '--data-binary @"\$BSKY_BODY_FILE"' "$COMM/bsky-community.sh" "$COMM/bsky-setup.sh" | awk -F: '{s+=$2} END {print s}')" -ge 2 ]]; then
+  row "static: neither bsky script puts the app password in a -d/--data operand or a jq --arg, both send --data-binary @\$BSKY_BODY_FILE" ok
+else row "static: neither bsky script puts the app password in a -d/--data operand or a jq --arg, both send --data-binary @\$BSKY_BODY_FILE" fail "the password is back on an argv, or the body-file form is gone"; fi
+echo "=== stage 4: shim extensions (scheme, body file, fail7, jq shim, static rows) done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -1070,7 +1294,7 @@ fi
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=153
+EXPECTED_TESTS=169
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

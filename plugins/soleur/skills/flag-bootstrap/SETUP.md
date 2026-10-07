@@ -45,12 +45,15 @@ printf '<paste-token-here>' | doppler secrets set FLAGSMITH_MANAGEMENT_API_KEY \
   -p soleur -c cli_ops --silent
 ```
 
-Sanity-test:
+Sanity-test. Every `curl` below sends the token on curl's stdin config
+(`--config -`), never as a `-H` argument: an argument is readable by every
+local user from `/proc/<pid>/cmdline`.
 
 ```bash
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain)
-curl -sS -H "Authorization: Api-Key $TOKEN" \
+curl -sS --disable --noproxy '*' --config - \
   "https://api.flagsmith.com/api/v1/projects/?organisation=29821" \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
   | python3 -c 'import json,sys; print([p["name"] for p in json.load(sys.stdin)])'
 # Expected: ['web-platform']
 ```
@@ -64,23 +67,26 @@ TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --
 PROJECT_ID=39082
 
 # role-prd
-curl -sS -X POST -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" \
+curl -sS --disable --noproxy '*' --config - -X POST -H "Content-Type: application/json" \
   "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/segments/" \
   -d '{"name":"role-prd","project":'${PROJECT_ID}',"description":"Users with role=prd (default for all users; matches anonymous via ANON_IDENTITY).","rules":[{"type":"ALL","rules":[{"type":"ANY","rules":[],"conditions":[{"operator":"EQUAL","property":"role","value":"prd"}]}],"conditions":[]}]}' \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
   | python3 -m json.tool | head -5
 
 # role-dev
-curl -sS -X POST -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" \
+curl -sS --disable --noproxy '*' --config - -X POST -H "Content-Type: application/json" \
   "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/segments/" \
   -d '{"name":"role-dev","project":'${PROJECT_ID}',"description":"Users with role=dev (beta/internal testers cohort).","rules":[{"type":"ALL","rules":[{"type":"ANY","rules":[],"conditions":[{"operator":"EQUAL","property":"role","value":"dev"}]}],"conditions":[]}]}' \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
   | python3 -m json.tool | head -5
 ```
 
 Verify both exist:
 
 ```bash
-curl -sS -H "Authorization: Api-Key $TOKEN" \
+curl -sS --disable --noproxy '*' --config - \
   "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/segments/" \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
   | python3 -c 'import json,sys; [print(s["id"], s["name"]) for s in json.load(sys.stdin)["results"]]'
 # Expected:
 #   1129194 role-dev
@@ -93,9 +99,10 @@ Retired in PR #3270 (the cc-soleur-go runner now runs unconditionally) but
 left as an orphan in Flagsmith. Archive to keep the feature list clean:
 
 ```bash
-curl -sS -X PATCH -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" \
+curl -sS --disable --noproxy '*' --config - -X PATCH -H "Content-Type: application/json" \
   "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/features/209130/" \
-  -d '{"is_archived":true}'
+  -d '{"is_archived":true}' \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN")
 ```
 
 ## Step 6 — Smoke-test the three skills

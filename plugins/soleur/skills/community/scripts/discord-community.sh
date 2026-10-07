@@ -155,6 +155,25 @@ report_transport_failure() {
 # exists to close, one layer up. readonly makes the destination non-rebindable.
 readonly DISCORD_API="https://discord.com/api/v10"
 
+# --- Token-shape guard (#9597) ------------------------------------------------
+# The Bot token rides curl's STDIN config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote or a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside
+# the base64url.base64url.base64url shape BEFORE the value is formatted into the
+# stream (the check validate_env always ran, now also the guard in front of the
+# config stream; the `=~` runs in the C locale so the ranges are ASCII). The refusal line is fixed and value-free (never the token), goes to
+# stderr, and exits 1: it is NOT a transport failure, so it must not go through
+# report_transport_failure, whose text blames ~/.curlrc and proxies.
+_discord_token_ok() {
+  local LC_ALL=C t="${1:-}"
+  [[ "$t" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]
+}
+refuse_token_shape() {
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=discord-community.sh reason=token_shape\n' >&2
+  exit 1
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -179,10 +198,10 @@ validate_env() {
   fi
 
   # Bot tokens follow the pattern: base64.base64.base64
-  if [[ ! "${DISCORD_BOT_TOKEN}" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
+  if ! _discord_token_ok "${DISCORD_BOT_TOKEN}"; then
     echo "Error: DISCORD_BOT_TOKEN has invalid format." >&2
     echo "Expected format: base64.base64.base64" >&2
-    exit 1
+    refuse_token_shape
   fi
 
   if [[ -z "${DISCORD_GUILD_ID:-}" ]]; then
@@ -214,12 +233,17 @@ discord_request() {
 
   local response http_code body
 
-  # Suppress stderr to prevent token leakage in curl debug output
+  # The guard sits IMMEDIATELY before the call it protects, so no later edit to
+  # validate_env can leave a malformed token reaching the config stream.
+  _discord_token_ok "${DISCORD_BOT_TOKEN}" || refuse_token_shape
+
+  # Suppress stderr to prevent token leakage in curl debug output. The token rides
+  # curl's stdin config channel, never its argument list.
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
     -H "Content-Type: application/json" \
-    "${DISCORD_API}${endpoint}" 2>/dev/null) || __curl_rc=$?
+    "${DISCORD_API}${endpoint}" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bot %s"\n' "$DISCORD_BOT_TOKEN")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Discord API (endpoint: ${endpoint})."
     exit 1

@@ -1196,7 +1196,7 @@ t24_strip_comments() {
 
 # Keyed on the ACT of obtaining or presenting a credential. `read -[a-z]*s` (not `read -s`)
 # because the real sites write `read -rs`; that exact miss cost a false-clean during the ruling.
-t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|read -[a-z]*s |Authorization: *Bearer|-H .Authorization|process\.env\.[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)|env\("[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)'
+t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|read -[a-z]*s |Authorization: *(Bearer|Bot)|-H .Authorization|process\.env\.[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)|env\("[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)'
 
 t24_acquirers=()
 while IFS= read -r t24_f; do

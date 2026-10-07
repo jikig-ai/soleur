@@ -284,7 +284,8 @@
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
 1	plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh
 1	plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh
-2	plugins/soleur/skills/community/scripts/bsky-setup.sh
+1	plugins/soleur/skills/community/scripts/bsky-community.sh
+3	plugins/soleur/skills/community/scripts/bsky-setup.sh
 4	plugins/soleur/skills/community/scripts/discord-setup.sh
 1	plugins/soleur/skills/community/scripts/github-community.sh
 2	plugins/soleur/skills/community/scripts/linkedin-setup.sh

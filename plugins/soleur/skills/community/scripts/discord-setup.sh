@@ -28,6 +28,28 @@
 
 set -euo pipefail
 
+# (#7797) Xtrace refusal -- the FIRST thing after `set …`, so nothing above it is
+# traced. This script ships to installed Soleur CLIs: the terminal it runs in
+# belongs to the founder, and `bash -x` would print their live Discord bot token.
+# The `:+x` form tests non-emptiness WITHOUT expanding the value, so the guard
+# cannot leak the thing it is refusing over. CONDITIONAL, and that is measured
+# rather than inherited: the token is bound BEFORE the prologue runs (it arrives in
+# DISCORD_BOT_TOKEN_INPUT, or DISCORD_BOT_TOKEN for a caller that already holds it),
+# so the guard can never be empty while one is live. The one runtime acquisition is
+# `verify`, which sources the repo's .env -- cmd_verify carries its own refusal for
+# that path. A founder tracing with none set keeps full tracing.
+# Refusal goes to STDOUT, not stderr: agent runtimes surface stdout and swallow
+# stderr (constitution.md > Code Style > Always), and a swallowed security refusal
+# leaves the user with a bare `exit 78` and no text at all.
+case "$-" in
+  *x*)
+    if [ -n "${DISCORD_BOT_TOKEN_INPUT:+x}${DISCORD_BOT_TOKEN:+x}" ]; then
+      printf 'Refusing to run under `bash -x`: a Discord bot token is set, and tracing would print it to your terminal. To trace safely, unset it and re-run.\n'
+      exit 78
+    fi
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
 
@@ -51,6 +73,44 @@ require_jq() {
   fi
 }
 
+# (#9597) The Bot token rides curl's STDIN config channel (`--config -`), never its
+# argument list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote or a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside
+# the base64url.base64url.base64url shape BEFORE the value is formatted into the stream.
+# (The same check discord-community.sh's validate_env runs; the `=~` runs in the C locale
+# so the ranges are ASCII.) The refusal line is fixed and value-free (never the
+# token), goes to stderr, and exits 1; it is not a connect failure.
+_discord_token_ok() {
+  local LC_ALL=C t="${1:-}"
+  [[ "$t" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]
+}
+refuse_token_shape() {
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=discord-setup.sh reason=token_shape\n' >&2
+  exit 1
+}
+
+# A failed connect has competing causes the user cannot tell apart. Every credentialed
+# request carries `--disable --noproxy '*'` (a proxy or a ~/.curlrc can redirect a request
+# carrying the bot token), so when a proxy IS configured the message names that bypass
+# instead of blaming the user's network for a choice made here.
+report_connect_failure() {
+  local endpoint="$1" n names=""
+  echo "Error: Failed to connect to Discord API (endpoint: ${endpoint})." >&2
+  # NO_PROXY alone is not a proxy: it only ever narrows proxying.
+  for n in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+    if [[ -n "${!n-}" ]]; then
+      names="${names:+${names},}${n}"
+    fi
+  done
+  if [[ -n "$names" ]]; then
+    echo "This request deliberately bypasses your proxy (${names}), because a proxy can redirect a request carrying your Discord token." >&2
+    echo "If you need Soleur to reach Discord through your proxy, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  else
+    echo "Check your network connection and try again." >&2
+  fi
+}
+
 # Make a Discord API request. Suppresses curl stderr to prevent token leakage
 # in debug output. Returns body on 2xx, handles errors.
 #
@@ -67,11 +127,17 @@ discord_request() {
     exit 2
   fi
 
+  # The guard sits IMMEDIATELY before the call it protects.
+  _discord_token_ok "${DISCORD_BOT_TOKEN_INPUT}" || refuse_token_shape
+
   local response http_code body
+  # The bot token is NOT in this array (an array on argv is the same /proc/<pid>/cmdline
+  # surface) -- it is fed to `--config -` below. `--disable --noproxy '*'` stay literal on
+  # the call, first, where the transport-confinement lint (Rule D) can see them.
   local curl_args=(
     -s -w "\n%{http_code}"
+    --config -
     -X "$method"
-    -H "Authorization: Bot ${DISCORD_BOT_TOKEN_INPUT}"
     -H "Content-Type: application/json"
   )
 
@@ -80,9 +146,9 @@ discord_request() {
   fi
 
   # Suppress stderr to prevent token leakage in curl debug output
-  if ! response=$(curl "${curl_args[@]}" "${DISCORD_API}${endpoint}" 2>/dev/null); then
-    echo "Error: Failed to connect to Discord API (endpoint: ${endpoint})." >&2
-    echo "Check your network connection and try again." >&2
+  if ! response=$(curl --disable --noproxy '*' "${curl_args[@]}" "${DISCORD_API}${endpoint}" 2>/dev/null \
+      < <(printf 'header = "Authorization: Bot %s"\n' "$DISCORD_BOT_TOKEN_INPUT")); then
+    report_connect_failure "$endpoint"
     exit 1
   fi
 
@@ -261,6 +327,15 @@ cmd_verify() {
     echo "Error: .env file not found at ${env_file}" >&2
     exit 1
   fi
+
+  # `source` binds DISCORD_BOT_TOKEN at runtime, AFTER the prologue's guard ran, so the
+  # prologue cannot see it. Refuse tracing here, before the credential is bound.
+  case "$-" in
+    *x*)
+      printf 'Refusing to run under `bash -x`: sourcing %s would bind a Discord bot token and tracing would print it to your terminal. To trace safely, re-run without -x.\n' "$env_file"
+      exit 78
+      ;;
+  esac
 
   # shellcheck disable=SC1090
   set -a

@@ -170,6 +170,47 @@ readonly BSKY_API="https://bsky.social/xrpc"
 # JWT/base64url alphabet BEFORE the value is formatted into the stream, and never echoes it.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
+# --- createSession body transport (#9597) ---
+# The createSession body carries the app password and a user-supplied handle. Neither may
+# ride curl's argument list (readable by every local user in /proc/<pid>/cmdline), and
+# stdin is not free for it here (the bearer config owns it on the other calls), so the
+# body travels in a 0600 file sent with `--data-binary @file` (NOT `-d @file`, which strips
+# CR/LF). The values reach `jq` through its ENVIRONMENT as an inline assignment prefix
+# (`$ENV.X`), never `jq --arg` (jq's own argv is world-readable too) and never `export`
+# (every later child would inherit them). One owning EXIT trap, installed where the script
+# is executed, removes the file on every exit path; the request helper also removes it as
+# soon as curl has returned, so a secret does not outlive the request that needed it.
+# Same precedent as apps/web-platform/supabase/scripts/configure-auth.sh.
+BSKY_BODY_FILE=""
+_bsky_cleanup_body() { [[ -n "${BSKY_BODY_FILE:-}" ]] && rm -f -- "$BSKY_BODY_FILE"; return 0; }
+
+# A control character can never be part of a handle or an app password. Refusing one
+# before the body is written keeps garbage off the wire; jq escapes everything else
+# (a handle holding a double quote is escaped, never injected into the JSON).
+_bsky_cred_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+
+# One fixed, value-free line on stderr (never the handle or the password) and a non-zero
+# exit. `post` also runs HOSTED, from scripts/content-publisher.sh, which captures stderr
+# into its fallback-issue path: the exit is 1, never 0 or 3.
+bsky_refuse() {
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  exit 1
+}
+
+# Writes the createSession body into a fresh 0600 file and sets BSKY_BODY_FILE. Call it
+# DIRECTLY: inside `$(...)` the `exit` in bsky_refuse would be swallowed and BSKY_BODY_FILE
+# would be set in a subshell the trap cannot see.
+_bsky_write_body() {
+  if ! _bsky_cred_ok "${BSKY_HANDLE:-}" || ! _bsky_cred_ok "${BSKY_APP_PASSWORD:-}"; then
+    bsky_refuse token_shape
+  fi
+  BSKY_BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/bsky-body.XXXXXXXX" 2>/dev/null) || bsky_refuse body_write_failed
+  chmod 600 -- "$BSKY_BODY_FILE" || bsky_refuse body_write_failed
+  BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \
+    jq -n '{identifier: $ENV.BSKY_ID, password: $ENV.BSKY_PW}' > "$BSKY_BODY_FILE" \
+    || bsky_refuse body_write_failed
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -261,12 +302,15 @@ cmd_verify() {
 
   # Create session to verify credentials
   local response http_code body
+  _bsky_write_body
   local __curl_rc=0
   response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
     -X POST \
     -H "Content-Type: application/json" \
-    -d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \
+    --data-binary @"$BSKY_BODY_FILE" \
     "${BSKY_API}/com.atproto.server.createSession" 2>/dev/null) || __curl_rc=$?
+  rm -f -- "$BSKY_BODY_FILE"
+  BSKY_BODY_FILE=""
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Bluesky API."
     exit 1
@@ -379,4 +423,7 @@ main() {
   esac
 }
 
+trap _bsky_cleanup_body EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 main "$@"
