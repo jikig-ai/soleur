@@ -136,6 +136,10 @@ while IFS= read -r ROW; do
   # escape sequences, and the health-check `run:`-block echo always carries
   # them. timeout bounds the fetch; a temp file bounds memory.
   LOG="$(mktemp -t wd-soak-9686-log.XXXXXXXX)" || { echo "CANNOT ESTABLISH: mktemp failed" >&2; exit 3; }
+  # Owning trap (#6734): every early exit inside the loop (break-on-verdict,
+  # a set -e abort between the explicit rm -f sites) must still reap the
+  # tempfile — the rm -f calls below stay for promptness between iterations.
+  trap 'rm -f "$LOG"' EXIT
   LOG_RC=0
   timeout 120 gh run view --job "$JOB_ID" --repo "$GH_REPO" --log > "$LOG" 2>/dev/null || LOG_RC=$?
   if [[ "$LOG_RC" != "0" ]] || [[ ! -s "$LOG" ]]; then

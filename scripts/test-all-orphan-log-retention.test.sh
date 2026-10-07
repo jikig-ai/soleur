@@ -344,7 +344,11 @@ build_sandbox "$SBX_E" clean || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-e.log"
 rc=0
 env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-e" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_E/test-all.sh" >"$out" 2>&1 || rc=$?
-if [[ "$rc" == "0" ]] && ! grep -q 'orphaned' "$out"; then
+# Pin the WATCHDOG's reap line (`orphaned test-all run ...`), never the bare
+# word 'orphaned' — the orphan-process-reaper epilogue's `look orphaned`
+# report (unrelated subsystem, fires whenever the box carries stale
+# processes) false-trips the looser pattern on a dirty box.
+if [[ "$rc" == "0" ]] && ! grep -q 'orphaned test-all run' "$out"; then
   pass "live-parent run completes normally — watchdog never fires"
 else
   fail "live-parent run broke (rc=$rc) or emitted an orphan line"
@@ -475,12 +479,12 @@ if [[ "$init_counters" == "5" ]]; then
 else
   fail "counter-reset sites changed: found $init_counters _wd_*fails=0 lines, want exactly 5"
 fi
-if printf '%s\n' "$wd_block" | grep -q "printf 'WARN: parent-liveness poll failed"; then
+if grep -q "printf 'WARN: parent-liveness poll failed" <<<"$wd_block"; then
   pass "per-failure WARN diagnostic is a real printf naming the failed leg"
 else
   fail "no 'WARN: parent-liveness poll failed' printf in the watchdog block"
 fi
-if printf '%s\n' "$wd_block" | grep -q "printf 'WARN: runner-liveness poll failed"; then
+if grep -q "printf 'WARN: runner-liveness poll failed" <<<"$wd_block"; then
   pass "runner-liveness leg participates in the same counter+WARN shape"
 else
   fail "no 'WARN: runner-liveness poll failed' printf — runner leg not debounced"

@@ -4340,27 +4340,34 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
   _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
   (
     _wd_sleep=""
-    # Own-pid discovery via a spawned child's PPID: `sleep`'s parent is
-    # unambiguously THIS subshell on every bash version — the nested-bash
-    # `echo $PPID` cmdsub idiom is unreliable here because bash may fork
-    # rather than exec the inner command, reporting the cmdsub's own pid.
-    # A wrong _wd_self is worse than none: it lets the watchdog's own pid
-    # stay in the reap list, where the first `kill -TERM` self-terminates
-    # the watchdog mid-reap (#9686).
-    # The probe child must outlive the ps read: a `sleep 0.01` races the
-    # fork+exec of ps and loses on a loaded box, and a failing ps under
-    # pipefail makes this cmdsub nonzero — which is why `|| true` is
-    # load-bearing: an unguarded read aborts this subshell under set -e
-    # and the watchdog never polls at all (#9686).
-    sleep 0.5 & _wd_probe=$!
-    # ps column output is padded — ` 691177` breaks BOTH consumers: the
-    # _wd_descendants `a == excl` ancestor break (string compare) and the
-    # grep -vxF whole-line filters. Strip all whitespace so _wd_self is a
-    # bare pid (#9686).
-    _wd_self="$(ps -o ppid= -p "$_wd_probe" 2>/dev/null | tr -d '[:space:]' || true)"
-    # Fallback if the probe child exited before ps could read it: the
-    # nested-bash PPID idiom (same one the enumerate watchdog uses).
-    [[ -n "$_wd_self" ]] || _wd_self="$(bash -c 'echo "$PPID"' || true)"
+    # Own-pid discovery: $BASHPID reports THIS subshell's pid directly
+    # (subshells share $$) — no fork, no ps, and no spawned child that can
+    # outlive the watchdog and leak a `tr: write error` onto the run's
+    # stderr if the disarm TERM lands mid-startup (measured in CI: the
+    # probe+ps+tr startup raced disarm under shard load and the orphaned
+    # tr printed EPIPE into the clean-run tail, breaking AC8's byte-shape
+    # baseline, #9686).
+    # bash 3.2 lacks BASHPID (var unset, not wrong) → the spawned-child
+    # probe stays as the fallback path.
+    _wd_self="${BASHPID:-}"
+    if [[ -z "$_wd_self" || "$_wd_self" == "$$" ]]; then
+      # A spawned child's PPID names THIS subshell unambiguously on every
+      # bash version — the nested-bash `echo $PPID` cmdsub idiom is
+      # unreliable because bash may fork rather than exec the inner
+      # command, reporting the cmdsub's own pid. The probe child must
+      # outlive the ps read (0.5s, not 0.01 — a near-zero sleep races the
+      # fork+exec and loses on a loaded box); `|| true` is load-bearing
+      # under pipefail or a failing ps aborts this subshell under set -e
+      # before the first poll; ps column output is padded (` 691177`),
+      # which silently no-ops both exact-match consumers (the
+      # _wd_descendants `a == excl` ancestor break and the grep -vxF
+      # whole-line filters) — a wrong _wd_self lets the watchdog's own
+      # pid stay in the reap list, where the first `kill -TERM`
+      # self-terminates it mid-reap (#9686).
+      sleep 0.5 & _wd_probe=$!
+      _wd_self="$(ps -o ppid= -p "$_wd_probe" 2>/dev/null | tr -d '[:space:]' || true)"
+      [[ -n "$_wd_self" ]] || _wd_self="$(bash -c 'echo "$PPID"' || true)"
+    fi
     trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
     # SIGPIPE must not kill the watchdog mid-fire: the run's stderr reader is
     # often already gone on exactly the path that needs the kill.

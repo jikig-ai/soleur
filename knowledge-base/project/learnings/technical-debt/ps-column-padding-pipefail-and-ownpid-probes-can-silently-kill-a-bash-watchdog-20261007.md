@@ -132,3 +132,30 @@ looks healthy in both cases.
 - Probe: `scripts/followthroughs/watchdog-debounce-soak-9686.sh` —
   `gh run view --job --log` (the jobs/<id>/logs API endpoint fails on
   ANSI-bearing logs), timestamp-anchored emitted-line matching.
+
+## Post-ship CI addendum
+
+Two further instances of the same class surfaced in CI that local runs
+masked:
+
+- **The `tr` in the `$(ps | tr)` probe raced the disarm TERM.** On a loaded
+  CI shard the watchdog's startup cmdsub was still in flight when the run's
+  EXIT trap TERM'd the watchdog; the orphaned `tr` (inheriting the ignored
+  SIGPIPE disposition) wrote to the dead cmdsub pipe and printed
+  `tr: write error: Broken pipe` onto the run's stderr — which landed in the
+  clean-run tail and broke AC8's byte-identical baseline in
+  test-all-killed-classification. **Fix:** discover the watchdog pid via
+  `$BASHPID` (zero forks, zero children, no race window); the spawned-child
+  probe stays only as the bash-3.2 fallback. Any spawned diagnostic child
+  whose output consumer is the same process that disarm kills is an EPIPE
+  site under `trap '' PIPE`.
+- **A bare-word grep is an integration test.** The live-parent arm's
+  `grep 'orphaned'` matched the *orphan-process-reaper epilogue's*
+  `look orphaned` report (unrelated subsystem firing on a dirty box) — pin
+  the emitter's exact phrase (`orphaned test-all run`), not a vocabulary
+  word another subsystem shares.
+- **Sanctioned-grep debt:** `printf | grep -q` pipes count against the
+  `grep -q` early-exit deferral ceiling even in test files — the guard's
+  form table (`grep -q P <<<"$V"`) applies in `scripts/*.test.sh` too, and
+  `lint-trap-tempfile-ownership` requires a `trap ... EXIT` owner for every
+  `mktemp`, including per-iteration files with explicit `rm -f` paths.
