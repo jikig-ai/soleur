@@ -29,6 +29,8 @@ A library function has as many contracts as it has caller contexts. Errexit stat
 - **`core.hooksPath` is `/dev/null` and `lefthook` is not installed here, so the `c4-model-regenerate` pre-commit step never ran and `model.likec4.json` was missing from the commit that edited `model.c4`.** Recovery: ran `scripts/regenerate-c4-model.sh` and committed the artifact; the CI freshness test backstops a skipped hook. Prevention: after editing any `.c4` file, run the regenerate script by hand when git hooks are disabled.
 - **My own fix for a latency finding introduced a new overrun (`tc_inuse_map_refresh 5`).** Recovery: dropped it for the map `tc_reap_decide` already refreshed. Prevention: grade a fix commit as its own change (review skill's first bullet); ask "what does this cost per candidate" before adding a rebuild inside a loop.
 
+- **Routed the insight as a bullet into `review/SKILL.md`, which `lint-skill-body-budget.py --base <merge-base>` rejected (the file sat 3 bytes under its 477,000-byte ceiling).** Recovery: reverted the bullet; this learning is the record, findable by `kb-search`. Prevention: before routing a bullet into a skill body, run `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` and read the headroom; a skill at its ceiling needs a `references/` extraction in a dedicated PR, not a side edit.
+
 ## Tags
 
 category: logic-errors
