@@ -1,10 +1,11 @@
 /**
- * Harness adapter — maps Soleur workflow invocations to Claude Code, Grok Build, Codex, or Devin CLI.
+ * Harness adapter — maps Soleur workflow invocations to Claude Code, Grok Build, Codex, Devin CLI, or the Cursor CLI.
  *
  * Claude: Skill tool (`soleur:<skill>`), Task tool (agents), `/soleur:<command>` slash commands.
  * Grok:   slash commands (`/<skill>`, `/go`), spawn_subagent (agents).
  * Codex:  $soleur:<skill> skill mentions, spawn_agent (agents).
  * Devin:  Skill tool (`soleur:<skill>`), run_subagent (agents), `/soleur:<command>` slash commands.
+ * Cursor: `/go` and `/sync` stay bare; every other skill and agent is `/soleur-<name>`. Slice 1 does not detect this harness.
  *
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
@@ -16,10 +17,11 @@ import {
   pathToAgentId,
   PLUGIN_ROOT,
 } from "./agent-registry";
+import { cursorAgentSlash, cursorSkillSlash } from "../scripts/sync-cursor-name-map";
 import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
-export type Harness = "claude" | "grok" | "codex" | "devin" | "unknown";
+export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "unknown";
 
 /** Env vars set by Grok Build (see https://docs.x.ai/build/settings/reference). */
 const GROK_ENV_MARKERS = [
@@ -321,6 +323,12 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
  * Cite in ship Phase 7, postmerge Phase 2, one-shot Step 7–8.
  */
 export function pollInstructions(harness: Harness): string {
+  // Cursor returns the behind-sync stop immediately. Without this return the call
+  // falls through to the default poll essay and then appends the stop.
+  if (harness === "cursor") {
+    return behindSyncInstructions("cursor");
+  }
+
   const behind = behindSyncInstructions(harness);
 
   switch (harness) {
@@ -487,6 +495,20 @@ export function routingInstructions(harness: Harness): string {
         "- Commands: `/soleur:go`, `/soleur:sync`, `/soleur:help`.",
         "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke the slash command or subagent.",
         "- Read devin/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",
+        "",
+        fidelity,
+        "",
+        polling,
+      ].join("\n");
+
+    case "cursor":
+      return [
+        "**Harness: Cursor CLI**",
+        `- Entry points: \`${cursorSkillSlash("go")}\` and \`${cursorSkillSlash("sync")}\`. Other skills use the prefixed form, including \`${cursorSkillSlash("plan")}\`, \`${cursorSkillSlash("help")}\`, and \`${cursorSkillSlash("review")}\`.`,
+        `- Agents use the prefixed stem, for example \`${cursorAgentSlash("engineering/cto.md")}\`.`,
+        "- Read the canonical file the stub names, relative to the plugin root.",
+        "- Read cursor/INSTRUCTIONS.md in the installed plugin.",
+        "- Slice 1 does not classify the session as cursor, does not run hooks, and does not block a commit.",
         "",
         fidelity,
         "",
