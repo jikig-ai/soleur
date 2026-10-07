@@ -451,6 +451,8 @@ case "${FX_MODE:-}" in
   slowdecide) eval "$(declare -f tc_reap_decide | sed '1s/tc_reap_decide/_orig_tc_reap_decide/')"
               tc_reap_decide() { sleep 1; _orig_tc_reap_decide "$@"; } ;;
   argprobe)   tc_drain_quarantine() { echo "ARGS dry=$2 sttl=$3 wttl=$4 box=$(( $5 - $(date +%s) )) cap=$6" >> "${FX_LOG:?}"; TC_DRAINED=0; TC_DRAINED_BYTES=0; } ;;
+  handleflip) eval "$(declare -f tc_tree_has_live_handles | sed '1s/tc_tree_has_live_handles/_orig_tc_tree_has_live_handles/')"
+              tc_tree_has_live_handles() { echo x >> "${FX_LOG:?}.flip"; (( $(wc -l < "${FX_LOG:?}.flip") >= 2 )) && return 0; _orig_tc_tree_has_live_handles "$@"; } ;;  # tc_reap_decide runs in a $(...) subshell: count in a file
   drainprobe) eval "$(declare -f tc_drain_quarantine | sed '1s/tc_drain_quarantine/_orig_tc_drain_quarantine/')"
               tc_drain_quarantine() {
                 if ( exec 8<"${XDG_STATE_HOME}/soleur/tmp-guard.lock"; flock -n 8 ); then echo DRAIN-LOCK-FREE >> "${FX_LOG:?}"
@@ -496,6 +498,21 @@ out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=slowmap)"
 cases=$((cases + 1)); grep -qE 'map_s=0 ' <<<"$out" && [[ -d "$FAKE_TMP/soleur-run.${LIVE}.liveonly1" ]] \
   && pass "T8 a live-owner-only sweep builds no map (map_s=0) and keeps the dir" || fail "T8: $out"
 rm -rf "${FAKE_PROC:?}/$LIVE"
+
+# T9: the action-time liveness check before a tmpfs DIRECT delete. The first check (inside
+# tc_reap_decide) reads the map as not-live; a handle appearing before the delete is simulated by the
+# second call reading live. The dir must then NOT be deleted — it takes the reversible quarantine path.
+reset_fixtures; mkdir -p "$SWEEP_STATE/soleur"
+mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.handleflip1"; : > "$FAKE_TMP/soleur-run.${DEAD}.handleflip1/x"
+rm -f "$FX_LOG.flip"
+out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=handleflip)"
+cases=$((cases + 1)); fst="$(findmnt -no FSTYPE --target "$FAKE_TMP" 2>/dev/null || true)"
+if [[ "$fst" == "tmpfs" || "$fst" == "ramfs" ]]; then
+  [[ ! -d "$FAKE_TMP/soleur-run.${DEAD}.handleflip1" && -e "$FAKE_TMP/soleur-quarantine.$(id -u)/scratch/soleur-run.${DEAD}.handleflip1/x" ]] && grep -q 'reaped=0 quarantined=1' <<<"$out" \
+    && pass "T9 a handle that appears before the tmpfs direct delete diverts the dir to quarantine, not deletion" || fail "T9: $out"
+else
+  pass "T9 [skip] the fixture base is not tmpfs ($fst): the direct-delete arm is not reachable here"
+fi
 
 # T12: a FAILING map build falls back to the per-candidate walk (fail closed): the live owner survives.
 reset_fixtures
@@ -643,8 +660,8 @@ if [[ -n "$DISK_BASE" ]]; then
 fi
 
 # --- Conservation ----------------------------------------------------------------------
-MIN_ASSERTIONS_NODISK=58    # measured with SCRATCH_TEST_NO_DISK=1 (the unconditional assertions)
-MIN_ASSERTIONS_DISK=74        # measured with a disk-class base: the disk-class block adds the rest
+MIN_ASSERTIONS_NODISK=59    # measured with SCRATCH_TEST_NO_DISK=1 (the unconditional assertions)
+MIN_ASSERTIONS_DISK=75        # measured with a disk-class base: the disk-class block adds the rest
 MIN_ASSERTIONS="$MIN_ASSERTIONS_NODISK"; [[ -n "$DISK_BASE" ]] && MIN_ASSERTIONS="$MIN_ASSERTIONS_DISK"
 # anti-vacuity floor — a truncated run can't pass at 0/0; set to the FULL current count so a deleted
 # assertion is a failure, not slack.
