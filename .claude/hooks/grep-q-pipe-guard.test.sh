@@ -1094,8 +1094,21 @@ eqv_sh="$(_eqv sh)"
 [[ -z "$eqv_sh" ]] || sweep_probe_fail+=("codemod-equivalence-sh: rows whose exit status differs under sh: $eqv_sh")
 
 # verify: a git repo whose HEAD holds the base, the tool converts it, and each RED fixture breaks exactly one property.
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires the verbatim body; see plugins/soleur/test/test-helpers.sh).
+# _vrepo removes and writes under its argument, so a relative or `..`-bearing root would aim `rm -rf` and the writes somewhere other than $probe.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 _vrepo() { # <dir>
   local d="$1"
+  assert_fixture_dir "$d"
   rm -rf "$d"; mkdir -p "$d/scripts"
   cat > "$d/scripts/v.test.sh" <<'CM_V'
 echo "$a" | grep -q 'FALLBACK'
