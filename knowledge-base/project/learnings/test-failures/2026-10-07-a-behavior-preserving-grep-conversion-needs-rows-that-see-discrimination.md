@@ -44,7 +44,8 @@ forgotten `>/dev/null` and an inverted `!` all keep every pre-existing row green
   | drop the closing `$`, site 3 | remove `$` before the closing quote | W-4 |
   | drop `x`, site 5 | `-cx` to `-c` | P2-2 |
   | remove `!`, site 6 | `if nft` | P-X1c |
-  | empty pattern, site 6 | `grep -c ''` | P2-4 lookalike chain |
+  | empty pattern, site 6 | `grep -c ''` | P2-4 (empty chain) |
+  | jump pattern shrunk to `jump`, `SOLEUR` or `SOLEUR-EGRESS` | shorten the literal | P2-4 lookalike chain (`goto SOLEUR-EGRESS` carries the name without a jump) |
   | site 2 always false / delete its `break` | `if false` / drop `break` | W-5 / W-5 (count 32, not 3) |
   | wait loop cut to one iteration | `seq 1 30` to `seq 1 1` | W-5b |
   | wait-loop bound shortened / lengthened | `seq 1 29`, `seq 1 2` / `seq 1 31` | W-5c / W-5d (32 calls either way) |
@@ -57,7 +58,6 @@ forgotten `>/dev/null` and an inverted `!` all keep every pre-existing row green
   | site 4 `\|\|` to `&&`, or a never-matching pattern | edit the line | W-4 (`imds_nets=1`) |
   | `-1`-style readers (`head -1`, `tail -1`) in front of site 5 | insert a pipe stage | P2-3 (match is mid-list) |
   | trigger never matches (`"__none__"`) | change the pattern | W-7 (exactly two `ip` calls) |
-  | jump pattern shrunk to `jump` / `SOLEUR` | shorten the literal | P2-4 lookalike chain |
   | append a pipe-fed early-exit `grep`, revert one site, leave `GATED_PROD_ROWS` at its pre-retirement 8 | three edits | the hook suite |
 
   Two review rounds each found survivors the author's own battery had missed. Round one: loop retry population of
