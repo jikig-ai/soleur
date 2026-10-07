@@ -912,6 +912,22 @@ chk "that entry's matcher matches Bash" "$(_reg '[.hooks.PreToolUse[] | select(.
 chk "that entry's matcher does not match Edit or exec (D9: ^Bash$ only)" "$(_reg '([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h)))] | length == 1) and ([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h))) | select(.matcher as $m | ("Edit" | test($m)) or ("exec" | test($m)))] | length == 0)')"
 chk "the hook entry carries an explicit numeric timeout" "$(_reg '[.hooks.PreToolUse[] | .hooks[] | select(.command | contains($h)) | .timeout | select(type == "number" and . > 0)] | length == 1')"
 chk "the hook is registered after the snapshot guard" "$(_reg '[.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains($h))) | .key][0] > ([.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains("browser-snapshot-credential-guard.sh"))) | .key][0])')"
+chk "the hook's registered command is the shell-quoted form (bash \"\${CLAUDE_PLUGIN_ROOT}/hooks/destructive-command-guard.sh\"), as the plugin's session-start hooks are" "$(_reg --arg c 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/destructive-command-guard.sh"' '[.hooks.PreToolUse[].hooks[] | select(.command | contains($h)) | .command] == [$c]')"
+# The registered command string, run the way the harness runs it (a shell, CLAUDE_PLUGIN_ROOT in the environment), with a plugin root
+# whose path holds a space: an unquoted ${CLAUDE_PLUGIN_ROOT} splits there, exits 127 and the call runs with no decision.
+if [[ -z "$FAST" ]]; then
+  SPROOT="$WORK/sp ace"; assert_fixture_dir "$SPROOT"
+  mkdir -p "$SPROOT/hooks" && cp -R "$(dirname "$GUARD_HOOK")/." "$SPROOT/hooks/" || harness_die "cannot copy the hooks to a path with a space"
+  _regcmd="$("$JQ_BIN" -r --arg h destructive-command-guard.sh '[.hooks.PreToolUse[].hooks[] | select(.command | contains($h)) | .command][0] // ""' "$HOOKS_JSON")"
+else _regcmd=x; fi
+if want_row "registration: the registered command runs the hook when the plugin root contains a space"; then
+  if [[ -n "$FAST" ]]; then GOT=ask; else
+    printf '%s' "$(mkjson 'terraform destroy' "$TREE")" > "$INF"
+    HOOK_OUT="$(env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} -u SOLEUR_DISABLE_DESTRUCTIVE_GUARD -u CLAUDE_PROJECT_DIR "HOME=$CUR_HOME" "CLAUDE_PLUGIN_ROOT=$SPROOT" "$TIMEOUT_BIN" 30 sh -c "$_regcmd" <"$INF" 2>"$ERRF")"; HOOK_RC=$?
+    classify
+  fi
+  chk "registration: the registered command runs the hook when the plugin root contains a space" "$(verdict_of ask "$GOT")" "want=ask got=$GOT command: ${_regcmd:0:120}"
+fi
 
 echo "== the plugin README states the scope and the hosted gap (CPO round 1, C1/C2) =="
 # Read from the real tree (REPO_ROOT), and skipped in reduced mode: the mutation suite's copy holds no README.
@@ -2208,7 +2224,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=955
+MIN_CASES=957
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

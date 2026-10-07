@@ -70,11 +70,19 @@ function bash(command: string): Envelope {
   return { tool_name: "Bash", tool_input: { command } };
 }
 
+// A registered command is either the bare path (`${CLAUDE_PLUGIN_ROOT}/hooks/x.sh`) or the shell-quoted form
+// (`bash "${CLAUDE_PLUGIN_ROOT}/hooks/x.sh"`, which survives a plugin root that contains a space): the file is the basename of the
+// path inside, never of the whole command string.
+function hookFile(command: string): string {
+  const quoted = /^bash\s+"([^"]+)"$/.exec(command.trim());
+  return basename(quoted ? quoted[1] : command.trim());
+}
+
 function preToolUseBasenames(): string[] {
   const parsed = JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
     hooks: { PreToolUse?: Array<{ hooks: Array<{ command: string }> }> };
   };
-  const names = (parsed.hooks.PreToolUse ?? []).flatMap((g) => g.hooks.map((h) => basename(h.command)));
+  const names = (parsed.hooks.PreToolUse ?? []).flatMap((g) => g.hooks.map((h) => hookFile(h.command)));
   return [...new Set(names)];
 }
 
