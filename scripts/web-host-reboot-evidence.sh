@@ -10,9 +10,12 @@
 #                                              read the rows until a wall-clock deadline (default 40 min, 60 s apart) or until a
 #                                              PASS, FAIL or a re-created instance ends it. --window-min 0 is a single read.
 #
-# Exit: 0 PASS (row presence only), 1 FAIL, 2 NOT YET (the expected pending state, or a read fault), 3 cannot establish
-# (credentials, helper, arguments), 4 the deadline passed with no boot seen, with the old boot still shipping, or with a
-# new boot that went silent, 64 usage, 78 xtrace refused.
+# Exit: 0 PASS (row presence only), 1 FAIL, 2 NOT YET and nothing else: reason=new_boot_seen_probe_pending, the one expected
+# pending state (a boot began after the request and the daily probe row has not landed), 3 cannot establish (credentials,
+# helper, arguments, an anchor too old to grade), 4 the deadline passed with no boot seen, with the old boot still shipping or
+# silent, or with a new boot that went silent, 5 UNMEASURED: reason=read_fault (Better Stack could not be read) or
+# reason=instance_recreated_after_request (a re-created instance is not a reboot, so nothing was measured about this
+# request): both are red for a caller, never a green notice; 64 usage, 78 xtrace refused.
 #
 # WHAT IT READS. Three reads per iteration, all through the shared rows helper's own query function (the same hot-plus-cold
 # union): (1) the newest well-formed readiness row for the host, of any verdict, for its boot id and age; (2) the probe rows,
@@ -22,9 +25,10 @@
 # counted. Probe row ids carry dashes and journald ids do not: both are compared lowercased with the dashes removed.
 #
 # WHAT IT NEVER DOES. It never echoes a row's text: only classes, boot ids, ages and counts are printed. It makes no statement
-# about the volume (the fixed footer says so, on every exit path). PASS here means "a probe row of the OK class was seen on a
-# boot that began after the request"; the strict grading stays in scripts/followthroughs/web2-luks-live-6931.sh. A read fault
-# is never a verdict. It carries no write verb of any spelling: the census in workspaces-luks-verify-workflow.test.sh holds it.
+# about the volume (the fixed footer says so, on every exit the shell itself controls; an uncatchable kill excepted). PASS here means "a probe row of the OK class was seen on a
+# boot that began after the request, that row passes the grading helper's own green test (device, mount and escrow fields), and
+# no probe row younger than that boot's first row is a failing one"; the strict grading stays in
+# scripts/followthroughs/web2-luks-live-6931.sh. A read fault is never a verdict. It carries no write verb of any spelling: the census in workspaces-luks-verify-workflow.test.sh holds it.
 set -uo pipefail
 
 # Refuse to run under xtrace: tracing prints expanded commands, and the query credentials are in scope (#7797).
@@ -48,6 +52,7 @@ BOOT_LOOKBACK_H=48
 SILENT_S=600          # a boot whose newest row is older than this has gone silent
 FAIL_MARGIN_S=120     # a probe row this close to the new boot's first row is resolved toward NOT YET
 PROBE_LIMIT=50
+ANCHOR_MAX_S=$(( BOOT_LOOKBACK_H * 3600 - 3600 ))   # beyond this the boot read cannot see a boot that began before the request
 GRADE_HINT='bash scripts/web-host-reboot-evidence.sh grade'
 DOPPLER_HINT='under doppler run --preserve-env -p soleur -c prd_terraform --'
 
@@ -111,12 +116,19 @@ read_probe() {
         | if ($r.host_name != $host or $r.ident != $ident or $r.unit != $unit) then empty
           elif $a == null then {kind: "agefault"}
           else ($r | classify_probe($host; $ident; $unit)) as $c
-            | if $c.kind == "ok" then {kind: "ok", age: $a, boot: ((($c.f.boot_id // "") | ascii_downcase | gsub("-"; "")) | if test("^[0-9a-f]{32}$") then . else "" end)}
+            | if $c.kind == "ok" then
+                (if ($c | row_green)
+                 then {kind: "ok", age: $a, boot: ((($c.f.boot_id // "") | ascii_downcase | gsub("-"; "")) | if (test("^[0-9a-f]{32}$") and (length == 32)) then . else "" end)}
+                 else {kind: "notgreen", age: $a, boot: ""} end)
               elif $c.kind == "fail" then {kind: "fail", age: $a, boot: ""}
               else {kind: "malformed", age: $a, boot: ""} end
-          end ]
-      | {fault: any(.[]; .kind == "agefault"),
-         row: ([ .[] | select(.kind != "agefault") ] | sort_by([.age, (if .kind == "ok" then 1 else 0 end)]) | .[0])}' "$f" 2>/dev/null)" || [[ -z "$r" ]]; then
+          end ] as $all
+      | ([ $all[] | select(.kind != "agefault") ]) as $rows
+      | {fault: any($all[]; .kind == "agefault"),
+         row: ($rows | sort_by([.age, (if .kind == "ok" then 1 else 0 end)]) | .[0]
+               | if . == null then null
+                 else . + {bf: ([ $rows[] | select(.kind == "fail" or .kind == "malformed") | .age ] | min),
+                           bn: ([ $rows[] | select(.kind == "notgreen") | .age ] | min)} end)}' "$f" 2>/dev/null)" || [[ -z "$r" ]]; then
     note_fault probe jq; return 1
   fi
   if [[ "$(jq -r '.fault' <<<"$r")" == true ]]; then note_fault probe age_unparseable; return 1; fi
@@ -131,7 +143,7 @@ read_boots() {
   if ! r="$(jq -c -s '
       def num: if type == "number" then . elif type == "string" and test("^[0-9]+$") then tonumber else null end;
       [ .[] | {id: (.bid // ""), n: (.n | num), first: (.first_age_s | num), newest: (.newest_age_s | num)} ] as $all
-      | ($all | map(select((.id | type) == "string" and (.id | test("^[0-9a-f]{32}$")) and .n != null and .first != null and .newest != null))) as $ok
+      | ($all | map(select((.id | type) == "string" and (.id | test("^[0-9a-f]{32}$")) and ((.id | length) == 32) and .n != null and .first != null and .newest != null))) as $ok
       | {dropped: (($all | length) - ($ok | length)), boots: ($ok | sort_by(.first))}' "$f" 2>/dev/null)" || [[ -z "$r" ]]; then
     note_fault boots jq; return 1
   fi
@@ -142,22 +154,28 @@ read_all() { FAULTS=(); read_ready || true; read_probe || true; read_boots || tr
 
 # --- the verdict: a pure function over (seconds since the request, readiness row, probe row, boots, fault) ---------------------
 # first match wins; ages are seconds before the query, and a boot BEGAN after the request when its first row is younger than that.
+# The probe row carries the newest row's class plus `bf` and `bn`: the age of the youngest FAIL-shaped row and of the youngest
+# OK-shaped row that is not green by the grading helper's own test (null when there is none).
 verdict_json() { # since ready probe boots fault
   jq -cn --argjson since "$1" --argjson ready "$2" --argjson probe "$3" --argjson boots "$4" --argjson fault "$5" \
     --argjson silent "$SILENT_S" --argjson margin "$FAIL_MARGIN_S" '
     def res($v; $r; $poll; $dl): {v: $v, reason: $r, poll: $poll, dexit: $dl};
-    ($boots.boots | map(select(.first < $since))) as $after
-    | ($boots.boots | map(select(.first >= $since)) | .[0]) as $before
+    ($boots.boots | map(select(.first != null and .newest != null))) as $bs
+    | ($bs | map(select(.first < $since))) as $after
+    | ($bs | map(select(.first >= $since)) | .[0]) as $before
     | ($after | .[0]) as $newest_after
     | ($after | .[-1]) as $earliest_after
-    | if ($ready != null and $ready.age < $since) then res("NOT_YET"; "instance_recreated_after_request"; false; 2)
-      elif $fault then res("NOT_YET"; "read_fault"; true; 2)
+    | if ($ready != null and $ready.age < $since) then res("NOT_YET"; "instance_recreated_after_request"; false; 5)
+      elif $fault then res("NOT_YET"; "read_fault"; true; 5)
       elif ($after | length) == 0 then
-        (if ($before != null and $before.newest < $since) then res("NOT_YET"; "request_not_acted_on"; true; 4)
+        (if ($before != null and $before.newest < $since and $before.newest <= $silent) then res("NOT_YET"; "request_not_acted_on"; true; 4)
          else res("NOT_YET"; "host_silent_no_new_boot"; true; 4) end)
-      elif ($probe != null and ($probe.kind == "fail" or $probe.kind == "malformed") and ($probe.age + $margin) < $earliest_after.first) then
+      elif ($probe != null and $probe.bf != null and ($probe.bf + $margin) < $earliest_after.first) then
         res("FAIL"; "probe_fail_row_after_new_boot"; false; 1)
-      elif ($probe != null and $probe.kind == "ok" and $probe.age < $since and $probe.boot != "" and any($after[]; .id == $probe.boot)) then
+      elif ($probe != null and $probe.bn != null and ($probe.bn + $margin) < $earliest_after.first) then
+        res("FAIL"; "probe_row_not_green_after_new_boot"; false; 1)
+      elif ($probe != null and $probe.kind == "ok" and $probe.age < $since and $probe.boot != "" and any($after[]; .id == $probe.boot)
+            and ($probe.bf == null or $probe.bf >= $earliest_after.first) and ($probe.bn == null or $probe.bn >= $earliest_after.first)) then
         res("PASS"; "probe_row_on_a_boot_that_began_after_the_request"; false; 0)
       elif ($newest_after.newest > $silent) then res("NOT_YET"; "new_boot_seen_then_silent"; true; 4)
       else res("NOT_YET"; "new_boot_seen_probe_pending"; true; 2) end'
@@ -167,11 +185,12 @@ label_of() { case "$1" in PASS) printf 'PASS (row presence only)' ;; FAIL) print
 next_line() { # <reason> <anchor>
   local anchor="$2"
   case "$1" in
-    instance_recreated_after_request) printf 'next: the readiness row is newer than the request, so the instance was re-created, not rebooted; run again after the new instance, with a new anchor.' ;;
-    read_fault) printf 'next: Better Stack could not be read, so the rows say nothing yet; re-grade later with: %s --anchor %s --window-min 0 (%s).' "$GRADE_HINT" "$anchor" "$DOPPLER_HINT" ;;
+    instance_recreated_after_request) printf 'next: nothing was measured about this request (exit 5, red): the readiness row is newer than the request, so the instance was re-created, not rebooted; run again after the new instance, with a new anchor.' ;;
+    read_fault) printf 'next: nothing was measured (exit 5, red): Better Stack could not be read, so the rows say nothing yet; re-grade later with: %s --anchor %s --window-min 0 (%s).' "$GRADE_HINT" "$anchor" "$DOPPLER_HINT" ;;
     request_not_acted_on) printf 'next: nothing is dark: the old boot keeps shipping rows, so the guest did not act on the request. Do not replace the host; record this on #9372 and let the owner decide.' ;;
     host_silent_no_new_boot|new_boot_seen_then_silent) printf "next: the host stopped shipping rows: follow the runbook's dark-host path (web_host_replace, image_tag without a leading v, #9669); the owner approves it." ;;
     probe_fail_row_after_new_boot) printf "next: a FAIL row after the new boot also spoils the #6931 soak by the grader's rule; recovery is a web_host_replace and a re-grade from the new instance's readiness row (see the runbook)." ;;
+    probe_row_not_green_after_new_boot) printf "next: a probe row after the new boot looks like an OK row but does not pass the grading helper's own device, mount and escrow test; by the grader's rule it spoils the #6931 soak. Triage host-side versus volume-side with the runbook before any web_host_replace; the strict grading stays with scripts/followthroughs/web2-luks-live-6931.sh." ;;
     probe_row_on_a_boot_that_began_after_the_request) printf 'next: nothing further for this run; the stricter grading of the soak stays with scripts/followthroughs/web2-luks-live-6931.sh.' ;;
     *) printf 'next: a boot began after the request; the daily probe row lands in the 00:00 to 00:30 UTC window (up to about 24.5 h after a boot). Re-grade later with: %s --anchor %s --window-min 0 (%s). Do not re-dispatch to force a row.' "$GRADE_HINT" "$anchor" "$DOPPLER_HINT" ;;
   esac
@@ -218,22 +237,28 @@ cmd_grade() {
       *) printf 'usage: web-host-reboot-evidence.sh grade --anchor <epoch> [--window-min <n>] [--poll-s <n>] | snapshot\n' >&2; exit 64 ;;
     esac
   done
-  [[ "$anchor" =~ ^[0-9]{1,10}$ ]] || die3 "grade needs --anchor <epoch> (digits only, got '$(printf '%s' "$anchor" | tr -cd '[:alnum:]-' | head -c 40)')."
-  [[ "$window" =~ ^[0-9]{1,4}$ ]] || die3 "--window-min must be a whole number of minutes."
-  [[ "$poll" =~ ^[0-9]{1,5}$ && "$poll" -ge 1 ]] || die3 "--poll-s must be a whole number of seconds, at least 1."
+  [[ "$anchor" =~ ^(0|[1-9][0-9]{0,9})$ ]] || die3 "grade needs --anchor <epoch> (whole digits, no leading zero, got '$(printf '%s' "$anchor" | tr -cd '[:alnum:]-' | head -c 40)')."
+  [[ "$window" =~ ^(0|[1-9][0-9]{0,3})$ ]] || die3 "--window-min must be a whole number of minutes (no leading zero)."
+  [[ "$poll" =~ ^[1-9][0-9]{0,4}$ ]] || die3 "--poll-s must be a whole number of seconds, at least 1 (no leading zero)."
+  anchor=$((10#$anchor)); window=$((10#$window)); poll=$((10#$poll))   # decimal, whatever the spelling (no octal reading)
   now="$(now_epoch)"
   (( anchor <= now + 60 )) || die3 "the anchor ${anchor} is in the future; it must be the request time."
+  # the boot read looks back BOOT_LOOKBACK_H hours: past that a boot that began before the request is no longer visible, and every boot
+  # left would read as one that began after it (a false PASS). Counted to the END of the window, which is when the last read happens.
+  (( now - anchor + window * 60 <= ANCHOR_MAX_S )) || die3 "anchor_too_old: the anchor is $(( now - anchor )) s old (plus a ${window} min window); the boot read looks back ${BOOT_LOOKBACK_H} h, so beyond ${ANCHOR_MAX_S} s a boot that began before the request cannot be told from one that began after it. Nothing was read."
   load_helper
   printf 'web-host-reboot-evidence grade: anchor=%s window_min=%s poll_s=%s\n' "$anchor" "$window" "$poll"
   local iter=0 start="" deadline=0 t since vj v reason pollmore dexit rem step rc ended=""
   while :; do
-    # the runner clock is read BEFORE this iteration's queries, so a slow read can only make the request look older
+    # the runner clock is read BEFORE this iteration's queries, so every row age (taken by the server at query time, later than this read)
+    # is a little larger than it was at `since`: a slow read makes the request look younger than it is, which can only delay a verdict
+    # (a boot that began after the request may read as before it), never create a boot "after the request" that is not
     t="$(now_epoch)"
     if [[ -z "$start" ]]; then start="$t"; deadline=$(( start + window * 60 )); fi
     iter=$((iter + 1)); since=$(( t - anchor )); (( since >= 0 )) || since=0
     read_all
     if ! vj="$(verdict_json "$since" "$READY_JSON" "$PROBE_JSON" "$BOOTS_JSON" "$([[ ${#FAULTS[@]} -gt 0 ]] && echo true || echo false)")" || [[ -z "$vj" ]]; then
-      vj='{"v":"NOT_YET","reason":"read_fault","poll":true,"dexit":2}'
+      vj='{"v":"NOT_YET","reason":"read_fault","poll":true,"dexit":5}'
       FAULTS+=("verdict class=jq")
     fi
     v="$(jq -r '.v' <<<"$vj")"; reason="$(jq -r '.reason' <<<"$vj")"; pollmore="$(jq -r '.poll' <<<"$vj")"; dexit="$(jq -r '.dexit' <<<"$vj")"
@@ -246,9 +271,10 @@ cmd_grade() {
   case "$v" in PASS) rc=0 ;; FAIL) rc=1 ;; *) rc="$dexit" ;; esac
   local block=""
   [[ "$reason" != read_fault ]] || block+="Nothing was measured: Better Stack could not be read."$'\n'
+  [[ "$reason" != instance_recreated_after_request ]] || block+="Nothing was measured about a reboot: the instance was re-created."$'\n'
   block+="$(describe)"$'\n'"$(describe_after "$since")"$'\n'
-  block+="verdict: $(label_of "$v") reason=${reason}${ended}$([[ "$rc" == 4 ]] && printf ' (exit 4)')"$'\n'
-  [[ "$v" != PASS ]] || block+="a probe row of the OK class was seen on a boot that began after the request (row presence only)."$'\n'
+  block+="verdict: $(label_of "$v") reason=${reason}${ended}$([[ "$rc" == 4 || "$rc" == 5 ]] && printf ' (exit %s)' "$rc")"$'\n'
+  [[ "$v" != PASS ]] || block+="a probe row of the OK class, passing the grading helper's own device, mount and escrow test, was seen on a boot that began after the request, and no probe row after that boot began failed (row presence only)."$'\n'
   block+="$(next_line "$reason" "$anchor")"
   printf '%s\n' "$block"
   out verdict "$v"; out reason "$reason"; out exit_code "$rc"

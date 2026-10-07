@@ -31,7 +31,8 @@ FOOTER='This run reports rows only. It makes no statement about the volume or it
 DENY_RE='(^|[^a-z0-9])(luks-backed|encrypted|reborn|reopen|proof|verified|confirmed|proves|crypto_luks|/dev/mapper|luks=1|escrow=ok)($|[^a-z0-9])'
 CUR=479cd3f318da4a5d85068d3382a8723f; CURD=479cd3f3-18da-4a5d-8506-8d3382a8723f
 NEW=a1b2c3d4e5f60718293a4b5c6d7e8f90; NEWD=a1b2c3d4-e5f6-0718-293a-4b5c6d7e8f90
-OTH=0f0e0d0c0b0a09080706050403020100
+OTH=0f0e0d0c0b0a09080706050403020100; OTHD=0f0e0d0c-0b0a-0908-0706-050403020100
+NEW2=00112233445566778899aabbccddeeff; NEW2D=00112233-4455-6677-8899-aabbccddeeff
 SINCE_DEFAULT=600
 export LC_ALL=C
 
@@ -161,6 +162,10 @@ fx_probe() { # kind(ok|fail|malformed) age boot_dashed -> the two journal copies
     ok) msg="OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=/dev/mapper/workspaces escrow=ok header=readable boot_id=${boot})" ;;
     fail) msg="FAIL (header_unreadable): the header could not be read" ;;
     malformed) msg="OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source" ;;
+    # OK-shaped, but not green by the grading helper's own test (device, mount source, escrow): never a PASS
+    okdev) msg="OK: /mnt/data is LUKS-backed (device_type=ext4 mount_source=/dev/mapper/workspaces escrow=ok header=readable boot_id=${boot})" ;;
+    okmnt) msg="OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=/dev/sdb1 escrow=ok header=readable boot_id=${boot})" ;;
+    okesc) msg="OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=/dev/mapper/workspaces escrow=missing header=readable boot_id=${boot})" ;;
   esac
   for m in "$msg" "[luks-monitor] $msg"; do
     jq -cn --argjson a "$(fx_age "$age")" --arg m "$m" '{ts:"2026-10-07 00:18:57.117005",age_s:$a,message:$m,host_name:"soleur-web-2",ident:"luks-monitor",unit:"luks-monitor.service"}'
@@ -460,6 +465,7 @@ rune() { # <name> <want-rc> <want-substring|-> <args...>
 grade_args() { printf 'grade --anchor %s --window-min 0' "$(anchor_now)"; }
 # graded <name> <want-rc> <want-reason> [extra]   (a single read at the world's anchor)
 graded() { local name="$1" want="$2" reason="$3"; rune "$name" "$want" "reason=${reason}" $(grade_args); }
+sql_for() { awk -v RS='\n---\n' -v pat="$1" 'index($0, pat) { print; exit }' "$W/sql.log"; }   # the recorded query text containing <pat>
 no_verdict_misreads() { check "$1: the verdict line is unique" "$([[ "$(printf '%s\n' "$LASTOUT" | grep -c '^verdict: ')" == 1 ]]; echo $?)"; }
 
 battery_evidence() {
@@ -467,9 +473,9 @@ battery_evidence() {
   local i
   # ---- the verdict table, one fixture each (the old boot is CUR; the request is SINCE seconds old; the new boot is NEW)
   world; set_rows ready "$(fx_ready 100 "$NEWD" formatted)"; set_boots "$CUR 45000 20 3000"
-  graded "evidence: a readiness row younger than the request means the instance was re-created" 2 instance_recreated_after_request; no_verdict_misreads "evidence: recreated"
+  graded "evidence: a readiness row younger than the request means the instance was re-created" 5 instance_recreated_after_request; no_verdict_misreads "evidence: recreated"
   check "evidence: a re-created instance says so in the next line" "$([[ "$LASTOUT" == *"next:"*"re-created"* ]]; echo $?)"
-  world; set_rows ready "$(fx_ready 45000 "$CURD")" "junk row that is not json at all"; graded "evidence: an unparseable readiness body is a read fault, never a verdict" 2 read_fault
+  world; set_rows ready "$(fx_ready 45000 "$CURD")" "junk row that is not json at all"; graded "evidence: an unparseable readiness body is a read fault, never a verdict" 5 read_fault
   world; set_rows ready "$(fx_ready 100 "$NEWD" | sed 's/ready=1/ready=1 ready=1/')"; set_boots "$CUR 45000 20 3000"
   graded "evidence: a malformed readiness row younger than the request is not a re-creation" 4 request_not_acted_on
   world; graded "evidence: the old boot still shipping and no new boot: the request was not acted on (exit 4)" 4 request_not_acted_on; no_verdict_misreads "evidence: not acted on"
@@ -507,7 +513,7 @@ battery_evidence() {
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe malformed 100)"
   graded "evidence: a malformed probe row after the new boot is a FAIL" 1 probe_fail_row_after_new_boot
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok abc "$NEWD")"
-  graded "evidence: a probe row with an unparseable age is a read fault, not a verdict" 2 read_fault
+  graded "evidence: a probe row with an unparseable age is a read fault, not a verdict" 5 read_fault
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD" | sed 's/soleur-web-2/other-host/')"
   graded "evidence: a probe row of another host is ignored" 2 new_boot_seen_probe_pending
   world since=3000; set_boots "$CUR 45000 3100 3000" "$NEW 2000 900 40"
@@ -520,18 +526,18 @@ battery_evidence() {
   graded "evidence: hostile or malformed journald boot ids are dropped" 2 new_boot_seen_probe_pending
   check "evidence: no hostile id was printed" "$([[ "$LASTOUT" != *pwn* && "$LASTOUT" != *"${NEW^^}"* && "$LASTOUT" != *abcd* && "$LASTOUT" != *"${NEW}00"* ]]; echo $?)"
   check "evidence: the dropped ids are counted" "$([[ "$LASTOUT" == *"dropped_ids=4"* ]]; echo $?)"
-  world; set_boots "::error::pwn 200 10 5" "${NEW^^} 200 10 5"; graded "evidence: a boot list with no readable id is a read fault" 2 read_fault
-  world; set_rows boots ""; graded "evidence: an empty boot list is a read fault, never a verdict" 2 read_fault
-  world; set_rows boots "not json"; graded "evidence: an unparseable boot body is a read fault" 2 read_fault
+  world; set_boots "::error::pwn 200 10 5" "${NEW^^} 200 10 5"; graded "evidence: a boot list with no readable id is a read fault" 5 read_fault
+  world; set_rows boots ""; graded "evidence: an empty boot list is a read fault, never a verdict" 5 read_fault
+  world; set_rows boots "not json"; graded "evidence: an unparseable boot body is a read fault" 5 read_fault
   # read faults per read, with the old boot in a state that would otherwise be a verdict
   for i in ready probe boots; do
     world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")"; bsfail "$i"
-    graded "evidence: a 503 on the ${i} read is NOT YET read_fault, never a PASS or FAIL" 2 read_fault
+    graded "evidence: a 503 on the ${i} read is NOT YET read_fault, never a PASS or FAIL" 5 read_fault
     check "evidence: a ${i} read fault says nothing was measured" "$([[ "$LASTOUT" == *"Nothing was measured"* ]]; echo $?)"
   done
-  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; bsfail boots 99 timeout; graded "evidence: a timeout on the boot read is a read fault" 2 read_fault
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; bsfail boots 99 timeout; graded "evidence: a timeout on the boot read is a read fault" 5 read_fault
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe fail 100)"; bsfail probe
-  graded "evidence: a failed probe read never yields FAIL" 2 read_fault
+  graded "evidence: a failed probe read never yields FAIL" 5 read_fault
   # credentials, loading, tracing, arguments
   world; touch "$W/no_creds"; rune "evidence: absent credentials are exit 3 and nothing is queried" 3 "CANNOT ESTABLISH" $(grade_args)
   check "evidence: no query was issued without credentials" "$([[ ! -s "$W/queries.log" ]]; echo $?)"
@@ -587,7 +593,105 @@ battery_evidence() {
   world clock; a="$(anchor_now)"; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe fail 100)"
   rune "evidence: a FAIL ends the poll at once" 1 "reason=probe_fail_row_after_new_boot" grade --anchor "$a" --window-min 30 --poll-s 60
   world clock; a="$(anchor_now)"; bsfail ready 99
-  rune "evidence: a read fault that never clears ends NOT YET read_fault at the deadline (exit 2)" 2 "reason=read_fault" grade --anchor "$a" --window-min 2 --poll-s 60
+  rune "evidence: a read fault that never clears ends NOT YET read_fault at the deadline (exit 5, unmeasured)" 5 "reason=read_fault" grade --anchor "$a" --window-min 2 --poll-s 60
+  # ======== review round 1: boundary states of the verdict (S8-S13) and the fixtures that pin them (T2) ========
+  # S8: the old boot's newest row after the request is not "still shipping" once it is older than SILENT_S (a shutdown row, then silence)
+  world since=3000; set_boots "$CUR 45000 2390 3000"
+  graded "evidence: an old boot whose newest row is a shutdown row shortly after the request, then silence, is a silent host" 4 host_silent_no_new_boot
+  check "evidence: that silent host points at the dark-host path and never says nothing is dark" "$([[ "$LASTOUT" == *"dark-host"* && "$LASTOUT" != *"nothing is dark"* ]]; echo $?)"
+  world since=3000; set_boots "$CUR 45000 600 3000"; graded "evidence: an old boot whose newest row is exactly SILENT_S old is still shipping" 4 request_not_acted_on
+  world since=3000; set_boots "$CUR 45000 601 3000"; graded "evidence: one second past SILENT_S the old boot is silent" 4 host_silent_no_new_boot
+  world since=3000; set_boots "$CUR 45000 20 3000" "$OTH 90000 50000 4000"; graded "evidence: with two old boots the youngest decides (still shipping)" 4 request_not_acted_on
+  world since=3000; set_boots "$CUR 45000 900 3000" "$OTH 90000 20 4000"; graded "evidence: with two old boots the youngest decides (silent, though the older one ships)" 4 host_silent_no_new_boot
+  # SILENT_S for the new boot, and which of two new boots decides
+  world since=3000; set_boots "$CUR 45000 3100 3000" "$NEW 2000 600 40"; set_rows probe ""; graded "evidence: a new boot whose newest row is exactly SILENT_S old has not gone silent" 2 new_boot_seen_probe_pending
+  world since=3000; set_boots "$CUR 45000 3100 3000" "$NEW 2000 601 40"; set_rows probe ""; graded "evidence: one second past SILENT_S the new boot is silent" 4 new_boot_seen_then_silent
+  world since=3000; set_boots "$CUR 45000 3100 3000" "$NEW 2000 900 40" "$NEW2 1500 15 20"; set_rows probe ""
+  graded "evidence: the newest of two new boots is alive: the earlier one going quiet is not a silent host" 2 new_boot_seen_probe_pending
+  world since=3000; set_boots "$CUR 45000 3100 3000" "$NEW 2000 15 40" "$NEW2 1500 900 20"; set_rows probe ""
+  graded "evidence: the newest of two new boots is silent though the earlier one ships" 4 new_boot_seen_then_silent
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40" "$NEW2 150 10 20"; set_rows probe "$(fx_probe ok 100 "$NEWD")"
+  graded "evidence: with two new boots (a reboot loop) a probe row on the EARLIER one is a PASS" 0 probe_row_on_a_boot_that_began_after_the_request
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40" "$NEW2 150 10 20"; set_rows probe "$(fx_probe ok 100 "$NEW2D")"
+  graded "evidence: with two new boots a probe row on the LATER one is a PASS" 0 probe_row_on_a_boot_that_began_after_the_request
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40" "$NEW2 150 10 20"; set_rows probe "$(fx_probe ok 100 "$OTHD")"
+  graded "evidence: with two new boots a probe row on neither is not a PASS" 2 new_boot_seen_probe_pending
+  world; set_boots "$CUR 45000 700 3000"; for i in 1 2 3 4 5 6; do fx_boot "$(printf '%032x' "$((i + 4096))")" "$((300 - i))" 15 40 >> "$W/bs.boots"; done; set_rows probe ""
+  graded "evidence: six new boots are all counted and only five are listed" 2 new_boot_seen_probe_pending
+  check "evidence: six boots began after the request, five lines list them" "$([[ "$LASTOUT" == *"boots began after the request: 6"* && "$(printf '%s\n' "$LASTOUT" | grep -c '^boot after the request: ')" == 5 ]]; echo $?)"
+  # S12: PASS needs the grading helper's own green test on the newest row and no failing row after the new boot began
+  for i in okdev okmnt okesc; do
+    world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe "$i" 100 "$NEWD")"
+    graded "evidence: an OK-shaped probe row that is not green by the helper's own test (${i}) after the new boot is a FAIL" 1 probe_row_not_green_after_new_boot; no_verdict_misreads "evidence: not green ${i}"
+    check "evidence: a not-green row is never echoed (${i}) and the next line names the triage" "$([[ "$LASTOUT" != *ext4* && "$LASTOUT" != *sdb1* && "$LASTOUT" != *missing* && "$LASTOUT" == *"host-side versus volume-side"* ]]; echo $?)"
+  done
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe okdev 28000 "$NEWD")"
+  graded "evidence: a not-green row older than the new boot's first row is not evidence" 2 new_boot_seen_probe_pending
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe okdev 250 "$NEWD")"
+  graded "evidence: a not-green row inside the margin blocks the PASS and is resolved toward NOT YET" 2 new_boot_seen_probe_pending
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe okdev 300 "$NEWD")"
+  graded "evidence: a not-green row exactly as old as the new boot's first row is not after it: PASS" 0 probe_row_on_a_boot_that_began_after_the_request
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe okdev 299 "$NEWD")"
+  graded "evidence: a not-green row one second younger than the new boot's first row blocks the PASS" 2 new_boot_seen_probe_pending
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe fail 150)"
+  graded "evidence: an earlier FAIL row on the new boot is not hidden by a later OK row" 1 probe_fail_row_after_new_boot
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe fail 28000)"
+  graded "evidence: a FAIL row older than the new boot's first row does not block the PASS" 0 probe_row_on_a_boot_that_began_after_the_request
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe fail 300)"
+  graded "evidence: a FAIL row exactly as old as the new boot's first row is not after it: PASS" 0 probe_row_on_a_boot_that_began_after_the_request
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe fail 299)"
+  graded "evidence: a FAIL row one second younger than the new boot's first row blocks the PASS" 2 new_boot_seen_probe_pending
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe fail 179)"; graded "evidence: the margin boundary: a FAIL row 179 s old is a FAIL (179 + 120 < 300)" 1 probe_fail_row_after_new_boot
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe fail 180)"; graded "evidence: the margin boundary: a FAIL row 180 s old is NOT YET (180 + 120 is not < 300)" 2 new_boot_seen_probe_pending
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")" "$(fx_probe fail 100)"
+  graded "evidence: an OK row and a FAIL row of equal age on the new boot grade FAIL" 1 probe_fail_row_after_new_boot
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40" "$NEW2 150 10 20"; set_rows probe "$(fx_probe fail 170)"
+  graded "evidence: with two new boots a FAIL row is compared with the EARLIEST one's first row (170 + 120 < 300)" 1 probe_fail_row_after_new_boot
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "$NEWD")"
+  rune "evidence: a PASS says what it measured and nothing about the volume" 0 "no probe row after that boot began failed" $(grade_args)
+  # S11: exit 5 is unmeasured; exit 2 is only the expected pending state
+  world; set_boots "$CUR 45000 700 3000"; bsfail boots; rune "evidence: a read fault prints its exit code next to the verdict" 5 "(exit 5)" $(grade_args)
+  check "evidence: the read fault exit code is an output" "$([[ "$(sed -n 's/^exit_code=//p' "$W/gh_out")" == 5 ]]; echo $?)"
+  world; set_rows ready "$(fx_ready 100 "$NEWD" formatted)"; rune "evidence: a re-created instance is unmeasured (exit 5) and says so" 5 "Nothing was measured about a reboot" $(grade_args)
+  check "evidence: the re-created next line says exit 5, red" "$([[ "$LASTOUT" == *"exit 5, red"* && "$LASTOUT" == *"reason=instance_recreated_after_request (exit 5)"* ]]; echo $?)"
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe ""; rune "evidence: the pending state is still exit 2 and never mentions exit 5" 2 "reason=new_boot_seen_probe_pending" $(grade_args)
+  check "evidence: pending carries no unmeasured wording" "$([[ "$LASTOUT" != *"exit 5"* && "$LASTOUT" != *"Nothing was measured"* ]]; echo $?)"
+  # S13: ids and ages are gated before they are compared: a trailing newline is not a 32-hex id, an unreadable age is not "after the request"
+  world; set_boots "$CUR 45000 20 3000"; fx_boot "${NEW}"$'\n' 300 15 40 >> "$W/bs.boots"
+  graded "evidence: a journald boot id with a trailing newline is dropped, not read as a new boot" 4 request_not_acted_on
+  check "evidence: the newline id is counted as dropped" "$([[ "$LASTOUT" == *"dropped_ids=1"* ]]; echo $?)"
+  for i in "$NEW abc 15 40" "$NEW 300 abc 40" "$NEW 300 15 abc"; do
+    world; set_boots "$CUR 45000 20 3000" "$i"; graded "evidence: a boot with an unreadable age or count ('${i#* }') is dropped and counted, never a boot after the request" 4 request_not_acted_on
+    check "evidence: the unreadable boot is counted as dropped ('${i#* }')" "$([[ "$LASTOUT" == *"dropped_ids=1"* ]]; echo $?)"
+  done
+  world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "${NEWD}"$'\n')"
+  graded "evidence: a probe boot id with a trailing newline is no id: it never joins a boot" 2 new_boot_seen_probe_pending
+  check "evidence: the newline probe id is printed as none" "$([[ "$LASTOUT" == *"latest probe row: class=ok boot_id=none"* ]]; echo $?)"
+  # S9: an anchor older than the boot read's reach is refused before anything is read (the clock is fixed, so the bound is exact)
+  world clock; now="$(now_in_world)"
+  rune "evidence: an anchor exactly at the bound (47 h) is graded" 5 "reason=instance_recreated_after_request" grade --anchor $(( now - 169200 )) --window-min 0
+  world clock; rune "evidence: an anchor one second past the bound is refused by name" 3 "anchor_too_old" grade --anchor $(( now - 169201 )) --window-min 0
+  check "evidence: a refused old anchor read nothing" "$([[ ! -s "$W/queries.log" ]]; echo $?)"
+  world clock; rune "evidence: the window counts toward the bound (60 min at 165600 s old is on it)" 5 "reason=instance_recreated_after_request" grade --anchor $(( now - 165600 )) --window-min 60
+  world clock; rune "evidence: the window counts toward the bound (61 min is past it)" 3 "anchor_too_old" grade --anchor $(( now - 165600 )) --window-min 61
+  world clock; rune "evidence: anchor 0 is far too old" 3 "anchor_too_old" grade --anchor 0 --window-min 0
+  # anchors in the future: 60 s of skew is tolerated, 61 is not
+  world clock; rune "evidence: an anchor 60 s in the future is tolerated" 4 "reason=host_silent_no_new_boot" grade --anchor $(( now + 60 )) --window-min 0
+  world clock; rune "evidence: an anchor 61 s in the future is refused" 3 "in the future" grade --anchor $(( now + 61 )) --window-min 0
+  # S10: leading zeros are refused (no octal reading), and so is a zero poll interval
+  world; rune "evidence: an anchor with a leading zero is refused (10 digits, so only the pattern can refuse it)" 3 "no leading zero" grade --anchor 0123456789 --window-min 0
+  world; rune "evidence: a window with a leading zero is refused" 3 "no leading zero" grade --anchor "$(anchor_now)" --window-min 08
+  world; rune "evidence: a double-zero window is refused" 3 "no leading zero" grade --anchor "$(anchor_now)" --window-min 00
+  world; rune "evidence: a poll interval with a leading zero is refused" 3 "no leading zero" grade --anchor "$(anchor_now)" --window-min 0 --poll-s 010
+  world; rune "evidence: a zero poll interval is refused" 3 "poll-s" grade --anchor "$(anchor_now)" --window-min 0 --poll-s 0
+  world; rune "evidence: a plain zero window is a single read" 4 "reason=request_not_acted_on" grade --anchor "$(anchor_now)" --window-min 0
+  # T2: the queries the reader sends carry the host filter, the lookbacks and the limits (the fake backend records the text)
+  world; graded "evidence: (queries) a normal read" 4 request_not_acted_on
+  sqlb="$(sql_for _BOOT_ID)"; sqlp="$(sql_for luks-monitor)"; sqlr="$(sql_for SOLEUR_FRESH_BOOT_READY)"
+  check "evidence: the boots query filters on the host, the 48 h lookback and a non-empty boot id" "$([[ "$sqlb" == *"JSONExtractString(raw,'host_name') = 'soleur-web-2'"* && "$sqlb" == *"INTERVAL 48 HOUR"* && "$sqlb" == *"JSONExtractString(raw,'_BOOT_ID') != ''"* && "$sqlb" == *"LIMIT 50"* ]]; echo $?)"
+  check "evidence: the probe query filters on host, identifier and unit, the 48 h lookback and 50 rows" "$([[ "$sqlp" == *"JSONExtractString(raw,'host_name') = 'soleur-web-2'"* && "$sqlp" == *"'luks-monitor'"* && "$sqlp" == *"'luks-monitor.service'"* && "$sqlp" == *"INTERVAL 48 HOUR"* && "$sqlp" == *"LIMIT 50"* ]]; echo $?)"
+  check "evidence: the readiness query anchors the marker, filters on the host, the 90 day lookback and 20 rows" "$([[ "$sqlr" == *"startsWith(JSONExtractString(raw,'message'), 'SOLEUR_FRESH_BOOT_READY ')"* && "$sqlr" == *"' host=soleur-web-2 '"* && "$sqlr" == *"INTERVAL 90 DAY"* && "$sqlr" == *"LIMIT 20"* ]]; echo $?)"
+  check "evidence: exactly three queries per read" "$([[ "$(grep -c . "$W/queries.log")" == 3 ]]; echo $?)"
 }
 
 # ======================================================================================================================
@@ -696,6 +800,31 @@ bearer_psub_ok() { [[ -f "$1" && "$(grep -v '^[[:space:]]*#' "$1" | grep -c '< <
 bearer_guard_ok() { [[ -f "$1" && "$(grep -c "^_bearer_ok() { local LC_ALL=C; case \"\${1:-}\" in ''|\*\[!A-Za-z0-9._~+/=-\]\*) return 1 ;; esac; }\$" "$1")" == 1 && "$(grep -c '^  _bearer_ok "\$HCLOUD_TOKEN" || fail' "$1")" == 1 ]]; }
 srow "static: the writer sends the bearer by process substitution, never a pipe (outside comments)" "$(bearer_psub_ok "$RSCRIPT"; echo $?)"
 srow "static: the writer carries the canonical token-shape guard _bearer_ok (the one body the repo census compares) and applies it to the token" "$(bearer_guard_ok "$RSCRIPT"; echo $?)"
+# S17: the copied literals are pinned to each other (the fixed footer, the grade command, the claim denylist, out()). Each of these is the
+# kind of copy that drifts silently: a reworded footer in one place would reach a customer-facing surface unnoticed.
+footer_lits() { python3 -c '
+import re, sys
+for m in re.finditer(r"\x27(This run reports rows only[^\x27]*)\x27", open(sys.argv[1]).read()):
+    print(m.group(1))' "$1"; }
+for f in "$RSCRIPT" "$ESCRIPT"; do
+  b="$(basename "$f")"; lits="$(footer_lits "$f")"
+  srow "static: footer parity: ${b} spells the footer at least twice (constant and inline xtrace arm) and every spelling equals this suite's copy" "$([[ "$(grep -c . <<<"$lits")" -ge 2 && -z "$(grep -vxF -- "$FOOTER" <<<"$lits")" ]]; echo $?)"
+done
+RUNBOOK="$ROOT/knowledge-base/engineering/operations/runbooks/web-host-reboot.md"
+srow "static: footer parity: the runbook quotes the same footer sentence" "$([[ -f "$RUNBOOK" && "$(grep -cF -- "\"${FOOTER}\"" "$RUNBOOK")" -ge 1 ]]; echo $?)"
+srow "static: (positive control) the footer extractor sees a planted drifted spelling" "$([[ -n "$(printf "x='This run reports rows only. It makes no statement.'\n" > "$TMP/fp.txt"; footer_lits "$TMP/fp.txt" | grep -vxF -- "$FOOTER")" ]]; echo $?)"
+shell_const() { sed -n "s/^$2='\\(.*\\)'\$/\\1/p" "$1" | head -1; }
+gc="$(shell_const "$RSCRIPT" GRADE_CMD)"; gh="$(shell_const "$ESCRIPT" GRADE_HINT)"
+srow "static: grade command parity: the writer's GRADE_CMD is the reader's GRADE_HINT plus ' --anchor' (${gc} / ${gh})" "$([[ -n "$gc" && -n "$gh" && "$gc" == "${gh} --anchor" ]]; echo $?)"
+srow "static: the grade command names the reader script that exists" "$([[ "$gh" == "bash scripts/web-host-reboot-evidence.sh grade" && -f "$ROOT/scripts/web-host-reboot-evidence.sh" ]]; echo $?)"
+WF_SUITE="$ROOT/apps/web-platform/infra/web-host-reboot-workflow.test.sh"
+wf_deny="$(python3 -c '
+import re, sys
+m = re.search(r"DENY_RE = re.compile\(r\x27(.*?)\x27, re\.I\)", open(sys.argv[1]).read())
+print(m.group(1) if m else "")' "$WF_SUITE" 2>/dev/null)"
+srow "static: denylist parity: the workflow suite's DENY_RE equals this suite's (the two suites scan the same words)" "$([[ -f "$WF_SUITE" && -n "$wf_deny" && "$wf_deny" == "$DENY_RE" ]]; echo $?)"
+srow "static: out() parity: the writer's and the reader's out() are the same function" "$([[ -n "$(python3 -c "$py_fn" "$RSCRIPT" out)" && "$(python3 -c "$py_fn" "$RSCRIPT" out)" == "$(python3 -c "$py_fn" "$ESCRIPT" out)" ]]; echo $?)"
+
 # tombstone: the subjects retire together with the two scripts they depend on
 leftover="$(cd "$ROOT" && find scripts .github apps/web-platform/infra -maxdepth 2 -name 'web-host-reboot*' 2>/dev/null | sort | tr '\n' ' ')"
 if [[ ! -f "$ROOT/scripts/web2-rebirth.sh" || ! -f "$ROOT/scripts/web2-rebirth-never-pooled.sh" ]]; then
@@ -712,12 +841,58 @@ planted="$(common_checks "planted" "the volume is Encrypted ${FOOTER}" r 2>&1)"
 srow "static: (positive control) the dynamic scan reports a planted claim word" "$([[ "$planted" == *"denylisted claim word"* ]]; echo $?)"
 planted_ok="$(common_checks "planted-ok" "PASS (row presence only) ${FOOTER}"$'\n'"${FOOTER}" r 2>&1)"
 srow "static: (must-pass) the dynamic scan accepts the fixed wording" "$([[ -z "$planted_ok" ]]; echo $?)"
+# ---- controls for the instruments themselves (T1): every verdict-owning helper is shown able to reject, and to stay silent on a pass
+BATTERY_DIR="$R_BDIR"; world
+# (srow's own controls print directly: a row that is reported through srow cannot show that srow works)
+ctl="$(STATIC=0; fails=0; srow "planted-srow" 1; echo "fails=${fails} static=${STATIC}")"
+if [[ "$ctl" != *"FAILED planted-srow"* || "$ctl" != *"fails=1 static=1"* ]]; then printf 'FAILED static: (positive control) srow reports a failing condition and counts it\n'; fails=$((fails + 1)); fi
+ctl="$(STATIC=0; fails=0; srow "planted-ok" 0; echo "fails=${fails} static=${STATIC}")"
+if [[ "$ctl" != "fails=0 static=1" ]]; then printf 'FAILED static: (must-pass) srow stays silent on a passing condition\n'; fails=$((fails + 1)); fi
+ctl="$(check "planted-check" 1)"; srow "static: (positive control) check reports a failing condition" "$([[ "$ctl" == "FAILED planted-check" ]]; echo $?)"
+ctl="$(check "planted-check-ok" 0)"; srow "static: (must-pass) check stays silent on a passing condition" "$([[ -z "$ctl" ]]; echo $?)"
+world; ctl="$(runr "planted-rc" 0 - reboot web-2 BAD 2>&1)"
+srow "static: (positive control) runr reports a wrong exit code" "$([[ "$ctl" == *"FAILED planted-rc (rc=1 want=0)"* ]]; echo $?)"
+world; ctl="$(runr "planted-sub" 1 "text-that-is-not-there" reboot web-2 BAD 2>&1)"
+srow "static: (positive control) runr reports a missing substring" "$([[ "$ctl" == *"FAILED planted-sub (output lacks"* ]]; echo $?)"
+world; ctl="$(runr "planted-ok" 1 "confirm must be" reboot web-2 BAD 2>&1)"
+srow "static: (must-pass) runr is silent when the exit code and the substring match" "$([[ -z "$ctl" ]]; echo $?)"
+E_SCRIPT="$ESCRIPT"; world; ctl="$(rune "planted-erc" 0 - 2>&1)"
+srow "static: (positive control) rune reports a wrong exit code" "$([[ "$ctl" == *"FAILED planted-erc (rc=64 want=0)"* ]]; echo $?)"
+world; ctl="$(rune "planted-esub" 64 "text-that-is-not-there" 2>&1)"
+srow "static: (positive control) rune reports a missing substring" "$([[ "$ctl" == *"FAILED planted-esub (output lacks"* ]]; echo $?)"
+world; ctl="$(rune "planted-eok" 64 "usage" 2>&1)"
+srow "static: (must-pass) rune is silent when the exit code and the substring match" "$([[ -z "$ctl" ]]; echo $?)"
+world; echo "REBOOT /servers/1/actions/reboot" > "$W/writes.log"; echo "anchor_epoch=1" > "$W/gh_out"; ctl="$(want_nothing_written "planted-w")"
+srow "static: (positive control) want_nothing_written reports a write and an anchor" "$([[ "$ctl" == *"FAILED planted-w: the write log is empty"* && "$ctl" == *"FAILED planted-w: no anchor was handed out"* ]]; echo $?)"
+world; ctl="$(want_nothing_written "planted-w-ok")"; srow "static: (must-pass) want_nothing_written is silent on an untouched world" "$([[ -z "$ctl" ]]; echo $?)"
+world; echo "GET /servers" > "$W/calls.log"; ctl="$(want_no_api_call "planted-c")"
+srow "static: (positive control) want_no_api_call reports a Hetzner call" "$([[ "$ctl" == *"FAILED planted-c: no Hetzner call was made"* ]]; echo $?)"
+world; ctl="$(want_no_api_call "planted-c-ok")"; srow "static: (must-pass) want_no_api_call is silent on an untouched world" "$([[ -z "$ctl" ]]; echo $?)"
+LASTOUT=$'verdict: a\nverdict: b'; ctl="$(no_verdict_misreads "planted-v")"
+srow "static: (positive control) no_verdict_misreads reports two verdict lines" "$([[ "$ctl" == *"FAILED planted-v: the verdict line is unique"* ]]; echo $?)"
+LASTOUT=$'verdict: a'; ctl="$(no_verdict_misreads "planted-v-ok")"; srow "static: (must-pass) no_verdict_misreads is silent on one verdict line" "$([[ -z "$ctl" ]]; echo $?)"
+miss=""; for t in luks-backed encrypted reborn reopen proof verified confirmed proves crypto_luks /dev/mapper 'luks=1' 'escrow=ok'; do
+  [[ -n "$(printf 'x %s y\n' "$t" | deny_hits)" ]] || miss+="${t} "
+done
+srow "static: (positive control) the claim denylist catches every one of its tokens (missed: ${miss:-none})" "$([[ -z "$miss" ]]; echo $?)"
+# the mutant grader's decision is a function, so it is itself under control (and mutated through the suite kind)
+mutant_outcome() { # <expect: kill|survive> <red rows after the edit>
+  local expect="$1" after="$2" verdict=survived
+  [[ "$after" =~ ^[0-9]+$ && "$after" -gt 0 ]] && verdict=killed
+  case "${expect}:${verdict}" in kill:killed|survive:survived) echo "ok ${verdict}" ;; *) echo "FAIL ${verdict}" ;; esac
+}
+srow "static: (grader) an edit that reds rows is a kill" "$([[ "$(mutant_outcome kill 3)" == "ok killed" ]]; echo $?)"
+srow "static: (grader) an edit that reds no row is a survivor, and a failure for a normal mutant" "$([[ "$(mutant_outcome kill 0)" == "FAIL survived" ]]; echo $?)"
+srow "static: (grader) a non-numeric or empty red count is a survivor, never a kill" "$([[ "$(mutant_outcome kill abc)" == "FAIL survived" && "$(mutant_outcome kill '')" == "FAIL survived" ]]; echo $?)"
+srow "static: (grader) the known-survivor canary is ok when it survives" "$([[ "$(mutant_outcome survive 0)" == "ok survived" ]]; echo $?)"
+srow "static: (grader) the known-survivor canary fails when it is killed (the grader could not report a survivor)" "$([[ "$(mutant_outcome survive 2)" == "FAIL killed" ]]; echo $?)"
+
 scanned_n="$(( $(grep -c . "$R_BDIR/scanned") + $(grep -c . "$E_BDIR/scanned") ))"
-SCAN_FLOOR=151
+SCAN_FLOOR=208
 if [[ "$scanned_n" -lt "$SCAN_FLOOR" ]]; then printf 'FAILED floor: only %s outputs were scanned for claim words (floor %s)\n' "$scanned_n" "$SCAN_FLOOR"; fails=$((fails + 1)); fi
 REFUSAL_FLOOR=97
 if [[ "$nrefusal_runs" -lt "$REFUSAL_FLOOR" ]]; then printf 'FAILED floor: only %s reboot runs executed (floor %s)\n' "$nrefusal_runs" "$REFUSAL_FLOOR"; fails=$((fails + 1)); fi
-ROWS_FLOOR=420
+ROWS_FLOOR=520
 total_rows=$(( ran_r + ran_e + STATIC ))
 if [[ "$total_rows" -lt "$ROWS_FLOOR" ]]; then printf 'FAILED floor: only %s rows ran (floor %s)\n' "$total_rows" "$ROWS_FLOOR"; fails=$((fails + 1)); fi
 printf 'rows: reboot %s, evidence %s, static %s, total %s (floor %s); reboot runs %s, outputs scanned %s\n' "$ran_r" "$ran_e" "$STATIC" "$total_rows" "$ROWS_FLOOR" "$nrefusal_runs" "$scanned_n"
@@ -735,9 +910,11 @@ python3 - "$MUT_DIR/defs" <<'PY'
 import json, os, sys
 d = sys.argv[1]
 R, E, SUITE, CENSUS = "scripts/web-host-reboot.sh", "scripts/web-host-reboot-evidence.sh", "scripts/web-host-reboot.test.sh", "apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh"
+ESCR = E
+WFSUITE = "apps/web-platform/infra/web-host-reboot-workflow.test.sh"
 M = []
-def m(name, kind, target, *edits):
-    M.append({"name": name, "kind": kind, "target": target, "edits": [list(e) for e in edits]})
+def m(name, kind, target, *edits, expect="kill"):
+    M.append({"name": name, "kind": kind, "target": target, "edits": [list(e) for e in edits], "expect": expect})
 POST_BLOCK = r"""  anchor="$(date -u +%s)"
   out anchor_epoch "$anchor"; out server_id "$sid"
   echo "target: server_id=${sid} name=${name} created=$(clean "$(jq -r '.servers[0].created // "unknown"' "$HBODY")")"
@@ -759,7 +936,7 @@ NO_OUT_BLOCK = r"""  echo "target: server_id=${sid} name=${name} created=$(clean
 """
 SECOND_POST = """  hapi POST "/servers/${sid}/actions/reboot" '{}' >/dev/null
 """
-PASS_OLD = r"""[[ "$v" != PASS ]] || block+="a probe row of the OK class was seen on a boot that began after the request (row presence only)."$'\n'"""
+PASS_OLD = r"""[[ "$v" != PASS ]] || block+="a probe row of the OK class, passing the grading helper's own device, mount and escrow test, was seen on a boot that began after the request, and no probe row after that boot began failed (row presence only)."$'\n'"""
 PASS_NEW = r"""[[ "$v" != PASS ]] || block+="the volume is encrypted"$'\n'"""
 # ---- Guard 1: the reboot target gate
 m("G1.1 the web-1 id refusal is dropped", "r", R, ('[[ "$sid" != "$WEB1_SERVER_ID" ]] || fail', 'true || fail'))
@@ -819,12 +996,13 @@ m("G3.1 the writer sources the rows helper", "static", R, ('FOOTER_DONE=""\n', '
 m("G3.2 the reader carries a write verb", "static", E, ('now_epoch() { date -u +%s; }', 'now_epoch() { date -u +%s; }\nprobe_ping() { curl -X POST https://example.invalid; }'))
 m("G3.3 the reader is removed from READERS (the new reader becomes unlisted)", "static", CENSUS, ('"scripts/web2-rebirth-ready-poll.sh",\n           "scripts/web-host-reboot-evidence.sh"}', '"scripts/web2-rebirth-ready-poll.sh"}'))
 # ---- the verdict, the deadline and the wire
-m("E.1 PASS no longer needs the boot to have begun after the request", "e", E, (' and any($after[]; .id == $probe.boot)) then', ') then'))
-m("E.2 a FAIL row is no longer compared with the new boot's first row", "e", E, (' and ($probe.age + $margin) < $earliest_after.first) then', ') then'))
+m("E.1 PASS no longer needs the boot to have begun after the request", "e", E, (' and any($after[]; .id == $probe.boot)\n', '\n'))
+m("E.2 a FAIL row is no longer compared with the new boot's first row", "e", E, (' and ($probe.bf + $margin) < $earliest_after.first) then', ') then'))
 m("E.3 the deadline is an iteration count", "e", E, ('if (( t >= deadline )); then', 'if (( iter >= 3 )); then'))
-m("E.4 the format gate on journald boot ids is dropped", "e", E, (' and (.id | test("^[0-9a-f]{32}$")) and .n != null', ' and .n != null'))
+m("E.4 the format gate on journald boot ids is dropped", "e", E, (' and (.id | test("^[0-9a-f]{32}$")) and ((.id | length) == 32) and .n != null', ' and .n != null'))
+m("E.4b the length gate on journald boot ids is dropped (a trailing newline passes the anchored test)", "e", E, (' and ((.id | length) == 32) and .n != null', ' and .n != null'))
 m("E.5 a junk readiness row counts as evidence", "e", E, ('select(.kind == "row" and (.f.host // "") == $host)', 'select(true)'))
-m("E.6 a read fault no longer stops a verdict", "e", E, ('      elif $fault then res("NOT_YET"; "read_fault"; true; 2)\n', ''))
+m("E.6 a read fault no longer stops a verdict", "e", E, ('      elif $fault then res("NOT_YET"; "read_fault"; true; 5)\n', ''))
 m("E.7 the clock is read after the queries", "e", E, ('    t="$(now_epoch)"\n', '    read_all\n    t="$(now_epoch)"\n'))
 m("E.8 PASS no longer needs the probe row to be younger than the request", "e", E, (' and $probe.age < $since and $probe.boot != ""', ' and $probe.boot != ""'))
 m("E.9 a silent new boot is never reported", "e", E, ('elif ($newest_after.newest > $silent) then', 'elif false then'))
@@ -833,10 +1011,64 @@ m("E.11 a re-created instance is never noticed", "e", E, ('if ($ready != null an
 m("E.12 the check that the helper defines every function the reader calls is dropped", "e", E, (' || ! declare -F w2l_fetch_ready >/dev/null', ''))
 m("E.13 the credential check is dropped", "e", E, ('    [[ -n "${!v:-}" ]] || die3 "${v} is not injected. Nothing was read."', '    :'))
 m("E.14 the xtrace refusal is dropped", "e", E, ("""*x*) printf '[FATAL] refusing to trace: Better Stack credentials are in scope\\n' >&2; printf '%s\\n' 'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78 ;;""", '*x*) : ;;'))
-m("E.15 the 120 s margin on a FAIL row is dropped", "e", E, ('($probe.age + $margin) < $earliest_after.first', '$probe.age < $earliest_after.first'))
+m("E.15 the 120 s margin on a FAIL row is dropped", "e", E, ('($probe.bf + $margin) < $earliest_after.first', '$probe.bf < $earliest_after.first'))
 m("E.16 an unparseable probe age is ignored instead of a read fault", "e", E, ("""if [[ "$(jq -r '.fault' <<<"$r")" == true ]]; then""", 'if false; then'))
 m("E.17 the dashes are no longer removed from the probe row's boot id", "e", E, (' | gsub("-"; "")', ''))
 m("E.18 a future anchor is accepted", "e", E, ('  (( anchor <= now + 60 )) || die3', '  true || die3'))
+m("E.19 the old boot's recency bound is dropped (a shutdown row then silence reads as a guest that ignored the request)", "e", E, (' and $before.newest <= $silent)', ')'))
+m("E.20 the old boot's recency bound is exclusive at SILENT_S", "e", E, ('$before.newest <= $silent', '$before.newest < $silent'))
+m("E.21 the too-old anchor check is dropped", "e", E, ('  (( now - anchor + window * 60 <= ANCHOR_MAX_S )) || die3', '  true || die3'))
+m("E.22 the window no longer counts toward the anchor bound", "e", E, ('now - anchor + window * 60 <= ANCHOR_MAX_S', 'now - anchor <= ANCHOR_MAX_S'))
+m("E.23 the 1 h margin on the anchor bound is dropped", "e", E, ('ANCHOR_MAX_S=$(( BOOT_LOOKBACK_H * 3600 - 3600 ))', 'ANCHOR_MAX_S=$(( BOOT_LOOKBACK_H * 3600 ))'))
+m("E.24 the anchor accepts a leading zero", "e", E, ('=~ ^(0|[1-9][0-9]{0,9})$ ]] || die3', '=~ ^[0-9]{1,10}$ ]] || die3'))
+m("E.25 the window accepts a leading zero", "e", E, ('=~ ^(0|[1-9][0-9]{0,3})$ ]] || die3', '=~ ^[0-9]{1,4}$ ]] || die3'))
+m("E.26 the poll interval accepts zero and a leading zero", "e", E, ('=~ ^[1-9][0-9]{0,4}$ ]] || die3', '=~ ^[0-9]{1,5}$ ]] || die3'))
+m("E.27 a re-created instance exits 2 again", "e", E, ('res("NOT_YET"; "instance_recreated_after_request"; false; 5)', 'res("NOT_YET"; "instance_recreated_after_request"; false; 2)'))
+m("E.28 a read fault exits 2 again", "e", E, ('elif $fault then res("NOT_YET"; "read_fault"; true; 5)', 'elif $fault then res("NOT_YET"; "read_fault"; true; 2)'))
+m("E.29 PASS no longer needs the grading helper's own green test", "e", E, ('(if ($c | row_green)', '(if true'))
+m("E.30 an earlier failing row no longer blocks the PASS", "e", E, (' and ($probe.bf == null or $probe.bf >= $earliest_after.first) and ($probe.bn == null or $probe.bn >= $earliest_after.first)) then', ') then'))
+m("E.31 a failing row exactly as old as the new boot's first row blocks the PASS", "e", E, ('$probe.bf >= $earliest_after.first', '$probe.bf > $earliest_after.first'))
+m("E.32 a not-green row after the new boot is no longer a FAIL", "e", E, ('''      elif ($probe != null and $probe.bn != null and ($probe.bn + $margin) < $earliest_after.first) then
+        res("FAIL"; "probe_row_not_green_after_new_boot"; false; 1)
+''', ''))
+m("E.33 the margin on a not-green row is dropped", "e", E, ('($probe.bn + $margin) < $earliest_after.first', '$probe.bn < $earliest_after.first'))
+m("E.34 the length gate on the probe row's boot id is dropped", "e", E, ('(test("^[0-9a-f]{32}$") and (length == 32))', 'test("^[0-9a-f]{32}$")'))
+m("E.35 an unreadable boot age is no longer dropped (both guards)", "e", E, (' and .n != null and .first != null and .newest != null))', '))'), ('($boots.boots | map(select(.first != null and .newest != null))) as $bs', '$boots.boots as $bs'))
+m("E.36 the boots query loses its host filter", "e", E, ("  AND JSONExtractString(raw,'host_name') = '${W2L_HOST_NAME}'\n  AND JSONExtractString(raw,'_BOOT_ID') != ''", "  AND JSONExtractString(raw,'_BOOT_ID') != ''"))
+m("E.37 the boots lookback is stretched", "e", E, ('WHERE dt > now() - INTERVAL ${BOOT_LOOKBACK_H} HOUR', 'WHERE dt > now() - INTERVAL 480000 HOUR'))
+m("E.38 the readiness read asks for one row over one day", "e", E, ('w2l_fetch_ready "$f" 90 20', 'w2l_fetch_ready "$f" 1 1'))
+m("E.39 the probe read asks for one row", "e", E, ('PROBE_LIMIT=50\n', 'PROBE_LIMIT=1\n'))
+m("E.40 only one boot after the request is listed", "e", E, ('($a | .[:5][] |', '($a | .[:1][] |'))
+m("E.41 the youngest old boot no longer decides (the oldest does)", "e", E, ('($bs | map(select(.first >= $since)) | .[0]) as $before', '($bs | map(select(.first >= $since)) | .[-1]) as $before'))
+m("E.42 the earliest new boot decides liveness", "e", E, ('| ($after | .[0]) as $newest_after', '| ($after | .[-1]) as $newest_after'))
+m("E.43 PASS joins the probe row to the youngest new boot only", "e", E, ('any($after[]; .id == $probe.boot)', '($after[0].id == $probe.boot)'))
+m("E.44 the boot list is sorted oldest-first", "e", E, ('boots: ($ok | sort_by(.first))', 'boots: ($ok | sort_by(-.first))'))
+m("E.45 the FAIL margin is widened to 190 s", "e", E, ('FAIL_MARGIN_S=120 ', 'FAIL_MARGIN_S=190 '))
+m("E.46 the silence bound is widened to 880 s", "e", E, ('SILENT_S=600 ', 'SILENT_S=880 '))
+m("E.47 a future anchor is tolerated for a day", "e", E, ('  (( anchor <= now + 60 )) || die3', '  (( anchor <= now + 86400 )) || die3'))
+m("E.48 the exit code is no longer printed for exit 5", "e", E, ('[[ "$rc" == 4 || "$rc" == 5 ]]', '[[ "$rc" == 4 ]]'))
+# ---- the harness's own instruments (T1): graded through the suite kind (a rerun of this file without the battery)
+m("H.1 srow is neutered", "suite", SUITE, ('  STATIC=$((STATIC + 1)); if [[ "$2" -ne 0 ]]; then printf \'FAILED %s\\n\' "$1"; fails=$((fails + 1)); fi', '  STATIC=$((STATIC + 1)); if false; then printf \'FAILED %s\\n\' "$1"; fails=$((fails + 1)); fi'))
+m("H.2 runr's exit-code compare is neutered", "suite", SUITE, ('''  if [[ "$rc" -ne "$want" ]]; then printf 'FAILED %s (rc=%s want=%s) %s\\n' "$name" "$rc" "$want" "${o:0:240}${e:0:160}"; return; fi''', '''  if false; then printf 'FAILED %s (rc=%s want=%s) %s\\n' "$name" "$rc" "$want" "${o:0:240}${e:0:160}"; return; fi'''))
+m("H.3 runr's substring check is neutered", "suite", SUITE, ('''  if [[ "$sub" != "-" && "$o$e" != *"$sub"* ]]; then printf 'FAILED %s (output lacks %q) %s\\n' "$name" "$sub" "${o:0:240}"; fi
+}
+writes()''', '''  :
+}
+writes()'''))
+m("H.4 rune's substring check is neutered", "suite", SUITE, ('''  if [[ "$sub" != "-" && "$o$e" != *"$sub"* ]]; then printf 'FAILED %s (output lacks %q) %s\\n' "$name" "$sub" "${o:0:300}"; fi''', '  :'))
+m("H.5 want_nothing_written is neutered", "suite", SUITE, ('want_nothing_written() { # <name>\n', 'want_nothing_written() { # <name>\n  return 0\n'))
+m("H.6 want_no_api_call is neutered", "suite", SUITE, ('want_no_api_call() { check "$1: no Hetzner call was made" "$([[ ! -s "$W/calls.log" ]]; echo $?)"; }\n', 'want_no_api_call() { return 0; }\n'))
+m("H.7 no_verdict_misreads is neutered", "suite", SUITE, ('no_verdict_misreads() { check "$1: the verdict line is unique" "$([[ "$(printf \'%s\\n\' "$LASTOUT" | grep -c \'^verdict: \')" == 1 ]]; echo $?)"; }\n', 'no_verdict_misreads() { return 0; }\n'))
+m("H.8 check is neutered", "suite", SUITE, ('  if [[ "$2" -ne 0 ]]; then printf \'FAILED %s\\n\' "$1"; fi\n}\ncond()', '  :\n}\ncond()'))
+m("H.9 the denylist loses a token", "suite", SUITE, ("DENY_RE='(^|[^a-z0-9])(luks-backed|encrypted|reborn|reopen|proof|verified|confirmed|proves|crypto_luks|/dev/mapper|luks=1|escrow=ok)($|[^a-z0-9])'\n", "DENY_RE='(^|[^a-z0-9])(luks-backed|encrypted|reborn|proof|verified|confirmed|proves|crypto_luks|/dev/mapper|luks=1|escrow=ok)($|[^a-z0-9])'\n"))
+m("H.10 the grader counts every edit as a kill", "suite", SUITE, ('[[ "$after" =~ ^[0-9]+$ && "$after" -gt 0 ]] && verdict=killed\n', '[[ "$after" =~ ^[0-9]+$ && "$after" -ge 0 ]] && verdict=killed\n'))
+m("H.11 the grader treats a killed canary as fine", "suite", SUITE, ('kill:killed|survive:survived) echo "ok ${verdict}" ;; *) echo "FAIL ${verdict}" ;; esac\n', 'kill:killed|survive:survived|survive:killed) echo "ok ${verdict}" ;; *) echo "FAIL ${verdict}" ;; esac\n'))
+m("F.1 the evidence script's inline xtrace footer drifts from the constant", "suite", ESCR, ("'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78", "'This run reports rows alone. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78"))
+m("F.2 the writer's inline xtrace footer drifts from the constant", "suite", R, ("'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78", "'This run reports rows alone. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78"))
+m("P.1 the reader's GRADE_HINT drifts from the writer's GRADE_CMD", "suite", E, ("GRADE_HINT='bash scripts/web-host-reboot-evidence.sh grade'", "GRADE_HINT='bash scripts/web-host-reboot-evidence.sh regrade'"))
+m("P.2 the workflow suite's DENY_RE copy loses a token", "suite", WFSUITE, ("DENY_RE = re.compile(r'(^|[^a-z0-9])(luks-backed|encrypted|reborn|reopen|", "DENY_RE = re.compile(r'(^|[^a-z0-9])(luks-backed|encrypted|reborn|"))
+m("P.3 the writer's out() drifts from the reader's", "suite", R, ("""v="${v//$'\\n'/ }"; [[ -z "${GITHUB_OUTPUT:-}" ]]""", """[[ -z "${GITHUB_OUTPUT:-}" ]]"""))
+m("CANARY a comment-only edit must be graded SURVIVED (the grader can report a survivor)", "r", R, ("# --- constants. The allow-list is a case arm below", "# --- constants (canary edit). The allow-list is a case arm below"), expect="survive")
 for i, e in enumerate(M, 1):
     json.dump(e, open(os.path.join(d, "%03d.json" % i), "w"))
 PY
@@ -848,7 +1080,8 @@ mk_sandbox() { # <dir>
   cp -r "$ROOT/scripts/lib" "$d/scripts/"
   cp "$ROOT/scripts/betterstack-query.sh" "$RSCRIPT" "$ESCRIPT" "$DIR/web-host-reboot.test.sh" "$d/scripts/"
   for f in web2-rebirth.sh web2-rebirth-never-pooled.sh; do [[ -f "$ROOT/scripts/$f" ]] && cp "$ROOT/scripts/$f" "$d/scripts/"; done
-  cp "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh" "$d/apps/web-platform/infra/"
+  cp "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh" "$ROOT/apps/web-platform/infra/web-host-reboot-workflow.test.sh" "$d/apps/web-platform/infra/"
+  mkdir -p "$d/knowledge-base/engineering/operations/runbooks"; cp "$ROOT/knowledge-base/engineering/operations/runbooks/web-host-reboot.md" "$d/knowledge-base/engineering/operations/runbooks/"
 }
 static_red() { # <sandbox> -> the number of static conditions that are red in it
   local sb="$1" n=0 f
@@ -881,8 +1114,8 @@ for kind in r e static suite; do
 done
 
 _mutant_run() { # <idx> <def.json>
-  local idx="$1" def="$2" name kind target sb after
-  name="$(jq -r '.name' "$def")"; kind="$(jq -r '.kind' "$def")"; target="$(jq -r '.target' "$def")"
+  local idx="$1" def="$2" name kind target sb after expect res
+  name="$(jq -r '.name' "$def")"; kind="$(jq -r '.kind' "$def")"; target="$(jq -r '.target' "$def")"; expect="$(jq -r '.expect // "kill"' "$def")"
   sb="$MUT_DIR/sb/m.$idx"; mk_sandbox "$sb"
   cp -p "$sb/$target" "$sb/$target.pristine"
   if ! python3 - "$sb/$target" "$def" <<'PY'
@@ -899,7 +1132,13 @@ PY
   if cmp -s "$sb/$target" "$sb/$target.pristine"; then echo "  FAIL mutation '${name}': the edit changed nothing" > "$MUT_DIR/res/$idx"; return; fi
   case "$target" in *.sh) bash -n "$sb/$target" 2>/dev/null || { echo "  FAIL mutation '${name}': a DEAD mutant (it no longer parses), which would score as a kill" > "$MUT_DIR/res/$idx"; return; } ;; esac
   after="$(red_count "$kind" "$sb")"
-  if [[ "$after" =~ ^[0-9]+$ && "$after" -gt 0 ]]; then echo "  ok   mutation killed: ${name} (${after} rows red)" > "$MUT_DIR/res/$idx"; else echo "  FAIL mutation SURVIVED: ${name}" > "$MUT_DIR/res/$idx"; fi
+  res="$(mutant_outcome "$expect" "$after")"
+  case "$res" in
+    "ok killed") echo "  ok   mutation killed: ${name} (${after} rows red)" > "$MUT_DIR/res/$idx" ;;
+    "ok survived") echo "  ok   canary survived as expected (a no-op edit is reported as a survivor): ${name}" > "$MUT_DIR/res/$idx" ;;
+    "FAIL survived") echo "  FAIL mutation SURVIVED: ${name}" > "$MUT_DIR/res/$idx" ;;
+    *) echo "  FAIL the known-survivor canary was KILLED (${after} rows red): the grader cannot report a survivor: ${name}" > "$MUT_DIR/res/$idx" ;;
+  esac
   rm -rf "$sb"
 }
 for def in "$MUT_DIR"/defs/*.json; do
@@ -912,7 +1151,7 @@ for f in "$MUT_DIR"/res/[0-9]*; do cat "$f"; grep -q '^  FAIL' "$f" && fails=$((
 n_res="$(find "$MUT_DIR/res" -type f -name '[0-9]*' | wc -l | tr -d ' ')"
 [[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "  FAIL a mutant did not report ($n_res of ${MUT_SEQ})"; fails=$((fails + 1)); }
 # The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
-MUT_FLOOR=67
+MUT_FLOOR=115
 if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then
   printf '  FAIL mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
   exit 1
