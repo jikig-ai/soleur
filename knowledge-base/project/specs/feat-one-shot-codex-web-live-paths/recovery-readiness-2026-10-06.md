@@ -140,3 +140,18 @@ permitted Web matrices and attributable mode-specific CLO dispositions remain
 distinct subsequent gates. API-key stays PENDING without live permission,
 key or deadline; managed hosted-auth stays BLOCKED. PR #9051 remains draft,
 Codex default-off and customer content blocked.
+
+## Source-current preparation — 2026-10-07
+
+The [new local candidate record](recovery-build-66f424cb.md) supersedes the earlier
+candidate identification for source `66f424cb0a592a54ea33d12cc64a1cbbd627e8c6`.
+All eleven preparation stages passed, including locked offline dependencies,
+full Next compilation, local image assembly, read-only nested plugin mounting
+and independent image/runtime artifact checks. The image and parent runtime
+bind source both contain the plugin mountpoint. Raw preparation failures and
+deadline interruptions are preserved and described in that record.
+
+This resolves candidate preparation only. No application startup, SQL setup,
+snapshot comparison or recovery scenario ran for this source. The two historical
+recovery attempts remain incomplete. A new one-use synthetic rehearsal still
+requires fresh explicit authorization; all later qualification holds remain.

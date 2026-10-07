@@ -234,3 +234,14 @@ inspection, inference request, authenticated account inspection, shared write
 or cohort change occurred. External counsel escalation retains the audit's
 existing triggers; unresolved substantive vendor-term interpretation has the
 existing [AI vendor terms route](../../../legal/recommended-tools.md#ai-vendor-terms).
+
+## Operator control evidence intake — 2026-10-07
+
+The operator reports no custom contract override and supplied organization
+settings screenshots. The [sanitized intake](api-control-evidence-2026-10-07.md#api-account-control-evidence-intake)
+records visible sharing, logging, visibility and hosted-tool selections, their
+operator-reported persistence after reload, the retention panel's storage-load
+error, and unconfirmed project scope/region/retention. The operator reports no
+provider approval for hosted integration. This is additional factual evidence,
+not a new CLO disposition;
+the mode holds above remain in force.
