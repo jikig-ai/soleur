@@ -90,6 +90,18 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(md).toContain("sync-pr-behind.sh");
     expect(md).toContain("do NOT ask");
   });
+
+  test("cursor behind-sync is one stop with no plugin root and no wait tool", () => {
+    const stop = behindSyncInstructions("cursor");
+    expect(pollInstructions("cursor")).toBe(stop);
+    expect(stop).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(stop).not.toContain("AwaitShell");
+    expect(stop).not.toContain("Monitor");
+    expect(stop).not.toContain("run_subagent");
+    expect(stop).toContain("or stop");
+    expect(stop).toContain("harness that already has a wait");
+    expect(stop).toContain("does not make the plugin supported");
+  });
 });
 
 describe("pr-merge-poll sentinel markers", () => {
