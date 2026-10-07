@@ -1,7 +1,7 @@
 # web-2 SSH host key pin (#9151, ADR-237). ECDSA-P256: the algorithm Terraform's Go client
 # negotiates. Consumed by local.web_2_ssh_host_key and the deploy_pipeline_fix_web2 sibling.
-# captured: 2026-10-06T19:37:27Z by scripts/capture-web-2-host-key.sh (ssh-keyscan -T 10 -t ecdsa, direct to
+# captured: 2026-10-07T20:11:48Z by scripts/capture-web-2-host-key.sh (ssh-keyscan -T 10 -t ecdsa, direct to
 #   web-2's public :22 from an ADMIN_IPS egress, not via Cloudflare)
-# fingerprint: SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ
+# fingerprint: SHA256:prjbMlCCSCqiA/C03Ww4VZK1jcB+fx8/wG3Dp4rfZhE
 # cross-check: no prior known_hosts entry for this IP
-ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHvCtUW4wToHlpb+xg6A1EvViQNamtNfREEF3BupkjRvFKhyMCwFc7MU7vwelMKOKUAUXMqzdiPXbLy8rECtCZo=
+ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBGMxVwOAGQePS+kdP2iK+wwXtreCUWESUarYoIdjQQib0bCnqI6EFBW3YKjzxR91ZDANQ9cpLsWk1yiDXd+aXOM=
