@@ -23,6 +23,19 @@ case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
 
+# Credentials ride curl's STDIN config channel (`--config -`), never its argument list, which
+# every local user can read via /proc/<pid>/cmdline (#9597). Two guards, because the two value
+# classes differ: a bearer TOKEN has a closed charset; a header VALUE (CF Access id/secret, the
+# HMAC) only needs to be unable to break out of the config string or start a new directive.
+# A value failing its guard means the check could not run: that is a gate failure (exit 1),
+# exactly like a missing credential, never a skip.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*'"'*|*'\'*|*[[:cntrl:]]*) return 1 ;; esac; }
+# Script-owned scratch for the deploy-status body (was the fixed /tmp/deploy-status-verify.json:
+# a fixed name is shared by every concurrent run of this script).
+DEPLOY_STATUS_TMP="$(mktemp)"
+trap 'rm -f "$DEPLOY_STATUS_TMP"' EXIT
+
 # Resolve the infra dir from THIS script's own location — absolute and
 # CWD-independent. Do NOT honor a relative $INFRA_DIR override (#6595): the workflow
 # exports INFRA_DIR=apps/web-platform/infra AND runs this step with
@@ -66,9 +79,13 @@ fi
 # position is too late), then `--noproxy '*'`. Without them a runner-level ~/.curlrc or an
 # ALL_PROXY/HTTPS_PROXY variable redirects this request — bearer token intact — to a host
 # of the attacker's choosing, with the destination URL below still reading correctly.
-CFG=$(curl --disable --noproxy '*' -sS --max-time 20 \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
-  "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations")
+if ! _bearer_ok "$CF_API_TOKEN"; then
+  echo "::error::CF_API_TOKEN failed the token-shape check — the ingress verification could NOT run. This is a gate failure, not a skip."
+  exit 1
+fi
+CFG=$(curl --disable --noproxy '*' -sS --max-time 20 --config - \
+  "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$CF_API_TOKEN"))
 
 if [[ "$(jq -r '.success // false' <<<"$CFG")" != "true" ]]; then
   echo "::error::CF API configurations read failed — cannot verify the live ingress."
@@ -124,15 +141,18 @@ CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET "${DOPPLER_ARGS[@
 [[ -n "$CF_ACCESS_SECRET" ]] && echo "::add-mask::$CF_ACCESS_SECRET"
 
 HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+if ! { _cfg_ok "$HMAC" && _cfg_ok "$CF_ACCESS_ID" && _cfg_ok "$CF_ACCESS_SECRET"; }; then
+  echo "::error::a deploy-status credential (webhook HMAC, CF Access id or secret) failed the header-value check — the data-plane verification could NOT run. This is a gate failure, not a skip."
+  exit 1
+fi
 HTTP_CODE="000"
 for attempt in 1 2 3 4 5; do
   # --disable/--noproxy as above (#7797): this call carries the webhook HMAC and both
   # CF Access client credentials.
-  HTTP_CODE=$(curl --disable --noproxy '*' -s -o /tmp/deploy-status-verify.json -w '%{http_code}' --max-time 15 \
-    -H "X-Signature-256: sha256=${HMAC}" \
-    -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
-    -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
-    "https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status" 2>/dev/null || echo "000")
+  HTTP_CODE=$(curl --disable --noproxy '*' -s -o "$DEPLOY_STATUS_TMP" -w '%{http_code}' --max-time 15 --config - \
+    "https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status" 2>/dev/null \
+    < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' \
+          "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") || echo "000")
   [[ "$HTTP_CODE" == "200" ]] && break
   # Retrying a REACHABILITY probe is sound — the CF edge propagates a new config
   # asynchronously. This is NOT the #6594 retry defect: that loop retried a CONTENT
@@ -151,8 +171,8 @@ CF's edge-generated 502 does not name the origin it failed to reach, so check, i
   2. webhook.service is running and bound to 0.0.0.0:9000.
 Recovery: revert the ingress pin and merge. tunnel.tf applies via the Cloudflare API, NOT through the deploy. tunnel, so the revert lands even with deploy. and ssh. both dead.
 EOF
-  cat /tmp/deploy-status-verify.json >&2 2>/dev/null || true
+  cat "$DEPLOY_STATUS_TMP" >&2 2>/dev/null || true
   exit 1
 fi
 
-echo "ok: deploy.${APP_DOMAIN_BASE} is serving from the pinned origin (host_id=$(jq -r '.host_id // "unknown"' /tmp/deploy-status-verify.json 2>/dev/null || echo unknown))"
+echo "ok: deploy.${APP_DOMAIN_BASE} is serving from the pinned origin (host_id=$(jq -r '.host_id // "unknown"' "$DEPLOY_STATUS_TMP" 2>/dev/null || echo unknown))"

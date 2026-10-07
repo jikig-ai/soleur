@@ -1447,11 +1447,16 @@ check("G3 xtrace is refused on the credential-bearing step",
 check("G3 no token on any command line: no `DOPPLER_TOKEN=` assignment and no --token flag in the body",
       "DOPPLER_TOKEN=" not in body and "--token" not in body, "")
 check("G3 the Doppler write and delete discard the CLI's stdout (it prints every remaining secret)",
-      bool(re.search(r"doppler secrets set [^\n]*>/dev/null", body)) and bool(re.search(r"doppler secrets delete [^\n]*>/dev/null", body)), "")
+      bool(re.search(r"doppler_call secrets set [^\n]*>/dev/null", body)) and bool(re.search(r"doppler_call secrets delete [^\n]*>/dev/null", body)), "")
 check("G3 the marker is written only through the dedicated config (-c via W2L_MARKER_CONFIG), never prd",
       '-c "$W2L_MARKER_CONFIG"' in body and not re.search(r"-c\s+prd\b|--config\s+prd\b", body), "")
 check("G3 write-if-absent is by a read of the key, never an unconditional set",
-      bool(re.search(r'doppler secrets get "\$W2L_MARKER_NAME" --plain', body)), "")
+      bool(re.search(r'doppler_call secrets get "\$W2L_MARKER_NAME" --plain', body)), "")
+check("G3 doppler_call() is defined exactly once and carries the redact + [doppler-stderr] prefix (#9613)",
+      body.count("doppler_call()") == 1 and '[REDACTED-DOPPLER-TOKEN]' in body and '[doppler-stderr] ' in body, "")
+check("G3 every secrets call routes through doppler_call — no bare `doppler secrets` remains (#9613)",
+      not re.search(r'(?<!_)\bdoppler\s+secrets\b', body),
+      [l.strip() for l in body.split("\n") if re.search(r'(?<!_)\bdoppler\s+secrets\b', l)][:2])
 check("G3 the timestamp is ISO-8601 UTC", "date -u +%Y-%m-%dT%H:%M:%SZ" in body, "")
 
 # (2) the alarm: one issue step, evaluated over the outcome x class x event grid
@@ -1826,8 +1831,12 @@ EOS
     scn S24-doppler-read-fault-on-green p_ok r_ok "$P" nz 0 0 same query_failed marker_read FIXTURE_DOPPLER_GET_FAIL=1
     scn S45-doppler-read-fault-on-red p_stale27h r_ok "$P" nz 0 0 same query_failed marker_read FIXTURE_DOPPLER_GET_FAIL=1
     # S55 — #9429: the fault arm must say WHY. The needle is the stub's own stderr line; without the
-    # sanitized print in marker_state() the run log names only the wrapper's "could not read" text.
+    # sanitized print in doppler_call() the run log names only the wrapper's "could not read" text.
     G3_NEEDLE='unable to reach the API' scn S55-marker-read-fault-is-self-describing p_ok r_ok "$P" nz 0 0 same query_failed marker_read FIXTURE_DOPPLER_GET_FAIL=1
+    # S57/S58 — #9613: the helper wraps EVERY call, so the set and delete faults must reach the run
+    # log sanitized too (the needle is each stub's own stderr line, carried by [doppler-stderr]).
+    G3_NEEDLE='write refused' scn S57-set-fault-logs-the-sanitized-why p_ok r_ok none nz 1 0 none query_failed marker_write FIXTURE_DOPPLER_SET_FAIL=1
+    G3_NEEDLE='delete refused' scn S58-delete-fault-logs-the-sanitized-why p_stale27h r_ok "$P" nz 0 1 same red_delete_failed probe_stale FIXTURE_DOPPLER_DELETE_FAIL=1
     # S56 — a key that EXISTS but carries an empty value must read absent: the gate downstream reads
     # empty as absent too, and 'present' here would freeze the soak at marker_kept forever.
     scn S56-empty-marker-value-reads-absent p_ok r_ok "" 0 1 0 iso green marker_written
@@ -1839,7 +1848,7 @@ EOS
     scn S42-doppler-set-fails    p_ok r_ok none nz 1 0 none query_failed marker_write FIXTURE_DOPPLER_SET_FAIL=1
     scn S43-read-back-mismatch   p_ok r_ok none nz 1 0 any  query_failed marker_readback FIXTURE_DOPPLER_SET_DIVERGE=1
   }
-  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54 S55 S56"
+  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54 S55 S56 S57 S58"
 
   # ---- PRISTINE: the battery must be clean on the code as shipped, and every scenario is its OWN assertion ----
   G3_SB="$(g3_sandbox pristine)"
@@ -1850,7 +1859,7 @@ EOS
   done
   g3_got_ids="$(printf '%s\n' "${G3_RAN[@]}" | cut -c1-3 | sort -u | tr '\n' ' ')"
   g3_want_ids="$(tr ' ' '\n' <<<"$G3_EXPECTED_IDS" | sort -u | tr '\n' ' ')"
-  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 56 ]]; then ok "G3 the registered scenario set ran exactly (56 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
+  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 58 ]]; then ok "G3 the registered scenario set ran exactly (58 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
 
   # the green scenario's two reads: host-scoped, unit-pinned, archive arm present, server-side age, no LIKE wildcard
   g3_scn "$G3_SB" "$FX/p_ok" "$FX/r_ok" none
@@ -1896,7 +1905,7 @@ READERS = {"scripts/lib/web2-luks-rows.sh", "apps/web-platform/infra/lb-weight-g
            ".github/workflows/infra-validation.yml", "scripts/followthroughs/web2-luks-live-6931.sh",
            "scripts/lib/test-affected-paths.sh", "scripts/web2-rebirth-emptiness.sh", "scripts/web2-rebirth-never-pooled.sh", "scripts/web2-rebirth-ready-poll.sh"}
 KEY = re.compile(r"workspaces_luks_cutover[\"'_]*at\b|w2l_marker_name|web2-luks-rows", re.I)
-VERB = re.compile(r"doppler\b[^\n]*\bsecrets\b[^\n]*\b(set|delete|upload)\b|resource\s+[\"']doppler_secret[\"']|api\.doppler\.com"
+VERB = re.compile(r"doppler(?:_call)?\b[^\n]*\bsecrets\b[^\n]*\b(set|delete|upload)\b|resource\s+[\"']doppler_secret[\"']|api\.doppler\.com"
                   r"|/secrets?/(set|delete|upload)\b|/configs/config/secrets\b"
                   r"|-X\s*(POST|PUT|PATCH|DELETE)\b|--request[=\s]\s*(POST|PUT|PATCH|DELETE)\b"
                   r"|requests\.(post|put|patch|delete)\b|method[\"']?\s*[:=]\s*[\"'](POST|PUT|PATCH|DELETE)"
@@ -1959,7 +1968,7 @@ PY
   g3_mut "2a non-crypto_LUKS backing still writes"   "S05" $LIB $'        elif ($r.f.device_type // "") != "crypto_LUKS" then "RED reason=probe_not_luks"\n' ''
   g3_mut "2b readiness luks=0 still writes"          "S06" $LIB $'        elif ($r.f.luks // "") != "1" then "RED reason=ready_not_luks"\n' ''
   g3_mut "2c wrong mount source still writes"        "S07" $LIB $'        elif ($r.f.mount_source // "") != "/dev/mapper/workspaces" then "RED reason=probe_mount_source"\n' ''
-  g3_mut "3 delete skipped on negative evidence"     "S04" marker.sh $'doppler secrets delete "$W2L_MARKER_NAME" --yes "${marker_args[@]}" >/dev/null \\' 'true \'
+  g3_mut "3 delete skipped on negative evidence"     "S04" marker.sh $'doppler_call secrets delete "$W2L_MARKER_NAME" --yes "${marker_args[@]}" >/dev/null \\' 'true \'
   g3_mut "4 writes every run (first-green start overwritten)" "S02" marker.sh $'if [[ "$state" == present ]]; then\n      echo "marker already present' $'if false; then\n      echo "marker already present'
   g3_mut "6 empty body read as a query failure"      "S11" marker.sh $'if [[ "$qfail" -ne 0 ]]; then' $'[[ -s "$tmp/probe.jsonl" ]] || qfail=1\nif [[ "$qfail" -ne 0 ]]; then'
   g3_mut "7a failed query falls through and deletes" "S19" marker.sh $'if [[ "$qfail" -ne 0 ]]; then' 'if false; then'
@@ -2012,7 +2021,7 @@ PY
   g3_mut "17f a judge fault is treated as negative evidence" "S52" marker.sh \
     $'if [[ "$reason" == *_judge_error ]]; then' 'if false; then'
   g3_mut "17g a marker read fault logs nothing about why" "S55" marker.sh \
-    $'  diag="${out//$DOPPLER_TOKEN/[REDACTED-DOPPLER-TOKEN]}"\n  printf \'%s\' "${diag:0:8192}" | LC_ALL=C tr -cd \'\\12\\40-\\176\' \\\n    | sed -E \'s/dp\\.[a-z]+\\.[A-Za-z0-9._-]+/[REDACTED-TOKEN]/g; s/^/[doppler-stderr] /\' >&2\n  printf \'\\n\' >&2' '  :'
+    $'  printf \'%s\\n\' "$diag" | sed \'s/^/[doppler-stderr] /\' >&2' '  :'
   # 17h — the stub's flag model is load-bearing: folding the set-only flag back into
   # marker_args is the exact #9429 defect shape. It can't go through g3_mut (the defect
   # reds the control S01, which the harness would score as a dead mutant), so: land the
