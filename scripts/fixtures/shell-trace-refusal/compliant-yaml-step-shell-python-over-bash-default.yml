@@ -1,0 +1,15 @@
+# MUST PASS (rc 0). The job's defaults.run.shell is bash, but THIS step names `shell: python`: the
+# step's own shell wins over the default, so the body is not bash and must be skipped.
+name: fixture-step-python-over-bash-default
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: python step under a bash default
+        shell: python
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

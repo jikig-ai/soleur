@@ -1,0 +1,16 @@
+# MUST PASS (rc 0). The JOB's defaults.run.shell is python and the step names no shell of its
+# own, so its `run` string is NOT bash. The curl line is deliberately not valid python: it is
+# text the lint must NOT scan.
+name: fixture-defaults-nonbash
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: python
+    steps:
+      - name: python step under a python default
+        run: |
+          import os
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

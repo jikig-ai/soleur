@@ -1,0 +1,10 @@
+#cloud-config
+# Rule E must fire ONCE: a plain `runcmd` list item. The leading `- ` of a list item would
+# otherwise take command position and hide the curl (measured 0 before the marker strip). The raw
+# feeder strips the marker (`_cloud_init_lines`); this file is Terraform-templated, so it does
+# not parse as YAML. Folded, flow-list and quoted items are NOT read (census-only blind spots).
+runcmd:
+  - echo start
+%{ if enable_probe ~}
+  - curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+%{ endif ~}
