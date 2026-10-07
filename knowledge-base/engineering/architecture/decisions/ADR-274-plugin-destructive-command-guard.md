@@ -230,4 +230,6 @@ customer's machine and changes no register row.
 - `plugins/soleur/test/shell-argv-parity.test.sh`: the three shared lexer spans are byte-identical to `filing-shape.pl`'s.
 - The registry parity tests (`devin-matcher-parity.test.sh`) and `scripts/guard-vacuity-floor.test.sh`.
 - `apps/web-platform/test/server/agent-env-allowlist.test.ts` and the PreToolUse classification census: the hosted override.
-- `scripts/verify-agent-security-slice1.sh`: the registration and a functional probe of the three canonical decisions.
+- `scripts/verify-agent-security-slice1.sh`: the registration and a functional probe of the three canonical decisions, run from a
+  temp HOME and cwd; `scripts/verify-agent-security-slice1.test.sh` drives copies of the plugin hooks through the probe's seam and
+  turns it red for a non-Bash matcher, an unregistered hook, a silent hook, a hook that asks for `ls` and a missing `jq` or `perl`.

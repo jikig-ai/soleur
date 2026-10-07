@@ -6009,6 +6009,10 @@ if want_scripts; then
   # so it never takes the real advisory lock.
   run_suite "scripts/test-all-group-affected" bash scripts/test-all-group-affected.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
+  # W2 (#9601): the agent-security discoverability probe's own suite. Registered explicitly for the
+  # reason its neighbours state (repo-root `scripts/*.test.sh` is not auto-globbed). It drives COPIES of
+  # the plugin hooks through the probe's SLICE1_PLUGIN_ROOT seam and never writes the live hook.
+  run_suite "scripts/verify-agent-security-slice1" bash scripts/verify-agent-security-slice1.test.sh
   # MOVED: scripts/battery-tag-authorship-mutations now registers under want_scripts_heavy
   # in the carve-out near the end of this file (#8006).
   # The patterns are declared ONCE, at the top of this file, and published by
