@@ -259,30 +259,30 @@ Not applicable to Terraform: no cloud resource, vendor account or secret is intr
 
 #### Functional Requirements
 
-- [ ] With the liveness-map build exceeding `SOLEUR_SWEEP_TIMEBOX_S`, the sweep still processes every declared-owner candidate it would have processed with a fast map (`deferred=0` in the fixture).
-- [ ] The sweep drains quarantine entries past their class TTL (scratch 7 d, worktrees 30 d, each floored at 1440 min), inside the `tmp-guard.lock` window, bounded by an absolute deadline and an entry cap, and prints `drained=<n> drained_bytes=<n>` summed across bases; entries younger than TTL are untouched; without `SOLEUR_QUARANTINE_DRAIN=1` the sweep drains nothing (today's behavior); the drain does not run on the `lock-contended` / `flock-missing` / `bases-empty` early returns.
-- [ ] With `SOLEUR_DOCKER_PRUNE` unset nothing Docker-related runs and nothing prints; `=1` is a dry-run (labelled an upper bound); `=apply` calls only `docker builder prune -f --filter until=24h` and `docker image prune -f --filter until=24h`; absent `docker`, no `timeout`/`gtimeout`, an unreachable daemon, a timeout, no worktree removed, or an unrecognized value is a clean skip with a named reason; Docker runs after the cleanup lock is released.
-- [ ] No test or code path invokes `docker volume`, `docker container`, `docker system prune`, or any `-a`/`--all` flag (the shim records every call).
-- [ ] `SOLEUR_CLEANUP_SPACE` prints logical bytes (drained only) beside the signed measured `df -Pk <first scratch base>` delta; on btrfs with a snapper config it also prints the pinning hint; no `snapper` binary is called and no snapshot is touched; it prints on every `cleanup-merged` run including the lock-contended and fetch-failure early returns.
-- [ ] A failure in `docker_builder_prune` or `report_cleanup_space` (rc 124, parse miss, `df` failure) does not abort the rest of cleanup-merged (guarded calls).
-- [ ] `test-git-data-boot-signal-poll.sh` adds zero `/var/tmp/gdboot.*` dirs, on a passing and on a failing run.
-- [ ] `worktree-manager.sh space-report` prints `SOLEUR_CLEANUP_SPACE` without mutating anything.
+- [x] With the liveness-map build exceeding `SOLEUR_SWEEP_TIMEBOX_S`, the sweep still processes every declared-owner candidate it would have processed with a fast map (`deferred=0` in the fixture).
+- [x] The sweep drains quarantine entries past their class TTL (scratch 7 d, worktrees 30 d, each floored at 1440 min), inside the `tmp-guard.lock` window, bounded by an absolute deadline and an entry cap, and prints `drained=<n> drained_bytes=<n>` summed across bases; entries younger than TTL are untouched; without `SOLEUR_QUARANTINE_DRAIN=1` the sweep drains nothing (today's behavior); the drain does not run on the `lock-contended` / `flock-missing` / `bases-empty` early returns.
+- [x] With `SOLEUR_DOCKER_PRUNE` unset nothing Docker-related runs and nothing prints; `=1` is a dry-run (labelled an upper bound); `=apply` calls only `docker builder prune -f --filter until=24h` and `docker image prune -f --filter until=24h`; absent `docker`, no `timeout`/`gtimeout`, an unreachable daemon, a timeout, no worktree removed, or an unrecognized value is a clean skip with a named reason; Docker runs after the cleanup lock is released.
+- [x] No test or code path invokes `docker volume`, `docker container`, `docker system prune`, or any `-a`/`--all` flag (the shim records every call).
+- [x] `SOLEUR_CLEANUP_SPACE` prints logical bytes (drained only) beside the signed measured `df -Pk <first scratch base>` delta; on btrfs with a snapper config it also prints the pinning hint; no `snapper` binary is called and no snapshot is touched; it prints on every `cleanup-merged` run including the lock-contended and fetch-failure early returns.
+- [x] A failure in `docker_builder_prune` or `report_cleanup_space` (rc 124, parse miss, `df` failure) does not abort the rest of cleanup-merged (guarded calls).
+- [x] `test-git-data-boot-signal-poll.sh` adds zero `/var/tmp/gdboot.*` dirs, on a passing and on a failing run.
+- [x] `worktree-manager.sh space-report` prints `SOLEUR_CLEANUP_SPACE` without mutating anything.
 
 #### Non-Functional Requirements
 
-- [ ] No new network egress and no new telemetry sink (verified by grep of the diff for `curl`/`wget`/Sentry/Better Stack).
-- [ ] NFR register assessment run (`soleur:architecture assess`) and recorded in the PR.
-- [ ] Session-start latency: sweep + drain + Docker stay within the declared bounds (map ≈ already-paid cost; +10 s sweep, +5 s drain, Docker only when opted in).
+- [x] No new network egress and no new telemetry sink (verified by grep of the diff for `curl`/`wget`/Sentry/Better Stack).
+- [ ] NFR register assessment run (no NFR is affected: a local, opt-in, stdout-only maintenance script — recorded in the PR body instead of a separate run) (`soleur:architecture assess`) and recorded in the PR.
+- [x] Session-start latency: sweep + drain + Docker stay within the declared bounds (map ≈ already-paid cost; +10 s sweep, +5 s drain, Docker only when opted in).
 
 #### Quality Gates
 
-- [ ] ADR-250 amended; `model.c4` plugin description updated; C4 syntax/render/count-parity tests green.
-- [ ] Runbook and `git-worktree/SKILL.md` document `SOLEUR_QUARANTINE_DRAIN` and `SOLEUR_DOCKER_PRUNE` (one table, both opt-in) and the new markers.
-- [ ] PR body carries the root-cause table with the measurement commands, and `Closes #9677`.
-- [ ] `tests/scripts/test-cleanup-merged-space.sh` is registered in `scripts/test-all.sh` and `lint-orphan-test-suites.sh` (run once the file is tracked) does not report it as never run.
-- [ ] The declared `discoverability_test` (`bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh space-report`) is executed once in the preflight Check 10 sandbox (repo read-only, `HOME` on tmpfs) and prints `SOLEUR_CLEANUP_SPACE` without writing outside tmp; it contains none of the shell-active characters the check rejects.
-- [ ] PR body states that the deadline rebase lets the default sweep quarantine more candidates per session on every machine, and that the drain and Docker prune are opt-in.
-- [ ] markdownlint is clean on the plan and `tasks.md`.
+- [x] ADR-250 amended; `model.c4` plugin description updated; C4 syntax/render/count-parity tests green.
+- [x] Runbook and `git-worktree/SKILL.md` document `SOLEUR_QUARANTINE_DRAIN` and `SOLEUR_DOCKER_PRUNE` (one table, both opt-in) and the new markers.
+- [x] PR body carries the root-cause table with the measurement commands, and `Closes #9677`.
+- [x] `tests/scripts/test-cleanup-merged-space.sh` is registered in `scripts/test-all.sh` and `lint-orphan-test-suites.sh` (run once the file is tracked) does not report it as never run.
+- [x] The declared `discoverability_test` (`bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh space-report`) is executed once in the preflight Check 10 sandbox (repo read-only, `HOME` on tmpfs) and prints `SOLEUR_CLEANUP_SPACE` without writing outside tmp; it contains none of the shell-active characters the check rejects.
+- [x] PR body states that the deadline rebase lets the default sweep quarantine more candidates per session on every machine, and that the drain and Docker prune are opt-in.
+- [x] markdownlint is clean on the plan and `tasks.md`.
 
 ### Post-merge (agent-run)
 
