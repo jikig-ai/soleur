@@ -50,6 +50,25 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/betterstack-read-classify.sh" || {
 }
 BASE="https://deploy.soleur.ai/hooks"
 
+# Bearer-on-stdin transport (#7797). A bearer token passed as `-H "Authorization: Bearer ..."` is an
+# argument of the transfer process, readable by every local user in /proc/<pid>/cmdline and `ps`.
+# This wrapper owns the transport flags, the token-shape guard and the header: the caller names the
+# VARIABLE that holds the token ($1; read by indirect expansion only here), and the header reaches
+# the transfer on its stdin config channel (`--config -`), never its argument list. A default
+# 60s time bound precedes the caller's arguments, so a caller's own bound (the last one wins) still
+# governs and a call site that forgot one stays bounded. The shape guard also
+# closes the injection a newline in the token would open on that channel (a second config
+# directive); a failing guard returns 2 with the variable NAME only (never the value), so a caller's
+# existing `|| ...` / `if ...` failure path handles it exactly like a transport failure. `printf`
+# is the shell builtin (not an exec), so the token is on no argv at any point.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_bearer_curl() {
+  local _tokvar="${1:-}"
+  shift
+  _bearer_ok "${!_tokvar:-}" || { echo "_bearer_curl: ${_tokvar} unusable" >&2; return 2; }
+  curl --disable --noproxy '*' --max-time 60 "$@" --config - < <(printf 'header = "Authorization: Bearer %s"\n' "${!_tokvar}")
+}
+
 # Shared no-SSH confirm of the on-host inngest-cutover-flip FSM terminal state via Better
 # Stack Logs (source 2457081), used by op=arm (G6) and op=rollback (#6369). The emitter
 # (apps/web-platform/infra/inngest-cutover-flip.sh:125-137, `emit_state exit_code dbsize
@@ -1769,9 +1788,8 @@ case "$OP" in
     HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
     TS=$(date -u +%Y%m%dT%H%M%SZ)
     rm -f /tmp/backup-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/backup-body -w '%{http_code}' \
+    CODE=$(_bearer_curl HCLOUD_TOKEN -s --max-time 30 -o /tmp/backup-body -w '%{http_code}' \
       -X POST \
-      -H "Authorization: Bearer $HCLOUD_TOKEN" \
       -H "Content-Type: application/json" \
       -d "{\"type\":\"snapshot\",\"description\":\"inngest-cutover-pre-$TS\",\"labels\":{\"purpose\":\"inngest-cutover-pre\",\"ts\":\"$TS\"}}" \
       "https://api.hetzner.cloud/v1/servers/123931471/actions/create_image" || echo "000")
@@ -1784,8 +1802,7 @@ case "$OP" in
     # Poll the action to terminal (snapshot of a running server takes minutes).
     for i in $(seq 1 60); do
       rm -f /tmp/backup-action
-      curl --disable --noproxy '*' -s --max-time 15 -o /tmp/backup-action \
-        -H "Authorization: Bearer $HCLOUD_TOKEN" \
+      _bearer_curl HCLOUD_TOKEN -s --max-time 15 -o /tmp/backup-action \
         "https://api.hetzner.cloud/v1/actions/$ACTION_ID" >/dev/null || true
       ST=$(jq -r '.action.status // "running"' < /tmp/backup-action 2>/dev/null || echo running)
       case "$ST" in
@@ -1896,10 +1913,9 @@ case "$OP" in
     # would let `set -e` abort at the assignment on a non-zero exit BEFORE the rc read,
     # making the failure branch dead (still fail-closed via the abort, but non-diagnostic).
     POOL_RC=0
-    POOL_RESP="$(curl --disable --noproxy '*' --silent --show-error \
+    POOL_RESP="$(_bearer_curl SUPABASE_ACCESS_TOKEN --silent --show-error \
       --request POST \
       --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
-      --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
       --header "Content-Type: application/json" \
       --data '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' \
       --max-time 15 \
@@ -3136,12 +3152,12 @@ case "$OP" in
     if [[ -z "$BS_API" ]]; then
       echo "::warning::op=rollback: BETTERSTACK_API_TOKEN unreadable from prd_terraform — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. Pause 'soleur-inngest-consumer-prd' manually if it pages, or re-dispatch once the token reads."
     else
-      HB_ID=$(curl --disable --noproxy '*' -fsS --max-time 20 -H "Authorization: Bearer $BS_API" \
+      HB_ID=$(_bearer_curl BS_API -fsS --max-time 20 \
         'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' 2>/dev/null \
         | jq -r '.data[] | select(.attributes.name == "soleur-inngest-consumer-prd") | .id' 2>/dev/null | head -1 || true)
       if [[ -z "$HB_ID" ]]; then
         echo "::warning::op=rollback: could not resolve the 'soleur-inngest-consumer-prd' heartbeat id from the Better Stack API — NOT pausing it. It will alarm ~4min after the dedicated scheduler stops. NOT blocking the web re-enable."
-      elif curl --disable --noproxy '*' -fsS --max-time 20 -X PATCH -H "Authorization: Bearer $BS_API" -H 'Content-Type: application/json' \
+      elif _bearer_curl BS_API -fsS --max-time 20 -X PATCH -H 'Content-Type: application/json' \
              --data-binary '{"paused":true}' \
              "https://uptime.betterstack.com/api/v2/heartbeats/$HB_ID" >/dev/null 2>&1; then
         echo "::notice::op=rollback: paused the consumer heartbeat (soleur-inngest-consumer-prd) — its feeder is deliberately silenced by this rollback, so pausing prevents a page for an intended state. The ADR-117 measured-beat arm gate re-arms it on the first apply after the host serves again."

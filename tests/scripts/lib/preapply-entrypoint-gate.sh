@@ -56,8 +56,8 @@
 # =============================================================================
 set -euo pipefail
 
-# REFUSE TO RUN UNDER XTRACE (#7797). This gate binds PREAPPLY_CF_TOKEN onto a
-# `-H "Authorization: Bearer ..."` argv, and tracing echoes commands AFTER
+# REFUSE TO RUN UNDER XTRACE (#7797). This gate binds PREAPPLY_CF_TOKEN (sent to curl
+# on its stdin config channel, never its argv), and tracing echoes commands AFTER
 # expansion. `apply-web-platform-infra.yml` captures this script's combined
 # output (`--audit --live 2>&1`) and posts it VERBATIM inside a fenced block in
 # a public issue comment on #6767.
@@ -98,12 +98,22 @@ readonly CF_MAX_TIME="${PREAPPLY_CF_MAX_TIME:-20}"
 # decision.
 _default_curl() {
   local path="$1" resp code body
+  # An unusable token makes ZERO requests and reads as a transport failure (000), which the
+  # default-deny catch-all turns into a fail-closed refusal -- never a pass.
+  if ! _bearer_ok "${PREAPPLY_CF_TOKEN:-}"; then
+    printf '000\n'
+    return 0
+  fi
+  # `--disable` (first argument: skip ~/.curlrc) and `--noproxy '*'` confine the transport; the
+  # bearer rides curl's stdin config channel (`--config -`) fed by a process substitution whose
+  # `printf` is the shell builtin, so it is in no argument list (/proc/<pid>/cmdline, `ps`).
   # `-w '\n%{http_code}'` appends the code on its own trailing line; `-s`
   # silences the progress meter; `-S` still surfaces hard errors to stderr.
-  if ! resp=$(curl -sS --max-time "$CF_MAX_TIME" \
-        -H "Authorization: Bearer ${PREAPPLY_CF_TOKEN}" \
+  if ! resp=$(curl --disable --noproxy '*' -sS --max-time "$CF_MAX_TIME" \
         -w $'\n%{http_code}' \
-        "${CF_API_BASE}/${path}" 2>/dev/null); then
+        --config - \
+        "${CF_API_BASE}/${path}" 2>/dev/null \
+        < <(printf 'header = "Authorization: Bearer %s"\n' "$PREAPPLY_CF_TOKEN")); then
     printf '000\n'
     return 0
   fi
@@ -114,6 +124,11 @@ _default_curl() {
 }
 
 # --- Small helpers -----------------------------------------------------------
+# Token-shape guard for the stdin config channel: a newline or quote in the token would inject
+# a curl config directive. Cloudflare API tokens are alphanumeric plus `_-`, inside this set.
+# Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # A value is "present" iff non-empty AND not the literal jq null string.
 _present() { [[ -n "${1:-}" && "$1" != "null" ]]; }
 
@@ -136,6 +151,10 @@ run_gate() {
   # 1. TOKEN GUARD (distinct message; NOT a target finding). Before any read.
   if [[ -z "${PREAPPLY_CF_TOKEN:-}" ]]; then
     _err "gate environment: CF token empty/unreadable from Doppler (PREAPPLY_CF_TOKEN) — refusing to probe. This is a gate-environment failure, not a target finding."
+    return 1
+  fi
+  if ! _bearer_ok "$PREAPPLY_CF_TOKEN"; then
+    _err "gate environment: CF token has an unexpected shape (PREAPPLY_CF_TOKEN) — refusing to probe. This is a gate-environment failure, not a target finding."
     return 1
   fi
 
@@ -433,6 +452,10 @@ run_audit() {
   echo "PREAPPLY-AUDIT-LIVE"
   if [[ -z "${PREAPPLY_CF_TOKEN:-}" ]]; then
     _err "audit --live: CF token empty/unreadable (PREAPPLY_CF_TOKEN). Fail-closed."
+    return 1
+  fi
+  if ! _bearer_ok "$PREAPPLY_CF_TOKEN"; then
+    _err "audit --live: CF token has an unexpected shape (PREAPPLY_CF_TOKEN). Fail-closed."
     return 1
   fi
   local zone acct fetch

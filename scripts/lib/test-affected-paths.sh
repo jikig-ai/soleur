@@ -103,6 +103,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-anthropic-content-position-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
+  "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
   "scripts/lint-legal-registers-live"
@@ -161,6 +162,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-diagnosis-claims"
   "scripts/lint-dual-lockfile"
   "scripts/lint-encryption-posture"
+  "scripts/lint-gh-argv-arg"
   "scripts/lint-infra-no-human-steps"
   "scripts/lint-legal-mirror-drift-baseline-unit"
   "scripts/lint-legal-registers-unit"
@@ -877,6 +879,15 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
   "tests/scripts/test-betterstack-roundtrip-latency.sh"
 )
 
+# tests/scripts/argv-bearer-sweep (#7843) — derived edges could not reach its subject: the population is
+# DISCOVERED (every tracked scripts/followthroughs probe holding a credentialed curl, run under a PATH-shim
+# curl), so the edge is the directory prefix, and the rows are keyed off the Rule E baseline.
+AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
+  "scripts/followthroughs/"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+)
+
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_RULE_ID_REGEX_PARITY_PATHS=(
@@ -1155,6 +1166,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_DETACH_SHARED_TEST_SH_PATHS=(
   "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
   "plugins/soleur/test/flag-detach-shared.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/flagsmith-stdin-config.test.sh — extracts the shipped `_bearer_ok` + `fs_api` text out of each
+# Flagsmith operator script at run time, so no derived import edge reaches its subjects; declared from the four
+# scripts it names.
+AFFECTED_PLUGINS_SOLEUR_TEST_FLAGSMITH_STDIN_CONFIG_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-create/scripts/create.sh"
+  "plugins/soleur/skills/flag-delete/scripts/delete.sh"
+  "plugins/soleur/skills/flag-list/scripts/list.sh"
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/test/flagsmith-stdin-config.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

@@ -162,6 +162,14 @@ source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
 # exists to close, one layer up. readonly makes the destination non-rebindable.
 readonly BSKY_API="https://bsky.social/xrpc"
 
+# (#7843) The session token is parsed out of an API reply, so it is RESPONSE-DERIVED:
+# untrusted bytes. It rides curl's STDIN config channel (`--config -`), never its
+# argument list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote and a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside the
+# JWT/base64url alphabet BEFORE the value is formatted into the stream, and never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -285,13 +293,18 @@ cmd_verify() {
 
       # Fetch profile to confirm identity
       local access_jwt
-      access_jwt=$(echo "$body" | jq -r '.accessJwt')
+      access_jwt=$(echo "$body" | jq -r '.accessJwt // empty')
+      if ! _bearer_ok "$access_jwt"; then
+        echo "Error: Session response carried an accessJwt that is missing or has an unexpected shape; refusing to use it." >&2
+        exit 1
+      fi
 
       local profile_response profile_code profile_body
       local __curl_rc=0
-      profile_response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-        -H "Authorization: Bearer ${access_jwt}" \
-        "${BSKY_API}/app.bsky.actor.getProfile?actor=${did}" 2>/dev/null) || __curl_rc=$?
+      # The bearer rides curl's stdin config channel, never its argument list.
+      profile_response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+        "${BSKY_API}/app.bsky.actor.getProfile?actor=${did}" 2>/dev/null \
+        < <(printf 'header = "Authorization: Bearer %s"\n' "$access_jwt")) || __curl_rc=$?
       if (( __curl_rc != 0 )); then
         # A WARNING, not a failure -- the session was created, so the credentials
         # are proven and this path still exits 0. It gets the marker and the

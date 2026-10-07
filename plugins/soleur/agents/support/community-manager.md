@@ -168,6 +168,18 @@ Digest markdown files follow this heading contract. Downstream tools depend on t
 
 **File naming:** `YYYY-MM-DD-digest.md`
 
+> **Interactive vs unattended digest (#7122).** The contract above, including `## Top Contributors` as Required, governs the
+> **interactive** digest this agent writes when an operator runs `soleur:community digest`. The unattended Inngest cron
+> (`cron-community-monitor`) does not follow this contract: its digest is rendered by the handler from a closed schema, in a
+> fixed, counts-and-statuses-only format that **omits** Top Contributors, Community Interactions and stargazer usernames
+> (and quotes and free-text Trending prose). That richness exists only in the interactive digest, by design; downstream
+> tools that read both must not assume the cron's file carries these headings.
+>
+> **Filename collision.** Both writers use the same `YYYY-MM-DD-digest.md` name in `knowledge-base/support/community/`. An
+> interactive run on a day the cron also publishes will **overwrite** the cron's file (and the reverse on a later merge). Check
+> `knowledge-base/support/community/` for today's file before writing, and confirm the overwrite with the operator when it
+> exists.
+
 **Frontmatter fields:**
 
 ```yaml

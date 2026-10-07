@@ -107,6 +107,63 @@ export function countFilingDenials(
   return { count: commands.length, commands };
 }
 
+// #7122 — the all-tools sibling of countFilingDenials. A hook deny of ANY tool
+// lands in `permission_denials[]`, but the filing counter above only recognises a
+// `gh issue create`-shaped Bash entry, so a denied `Write`, `Grep`, `gh issue
+// comment` or router posting verb was invisible. The tool names below are the
+// classes the cron hook knows about plus `other` for everything else (mcp__*, a
+// future tool, a missing or non-string name). The output carries NEITHER the entry's
+// `tool_input` NOR the raw name: both are model-influenced, and collapsing to a
+// closed vocabulary is what lets the list ride a Sentry extra with no scrub.
+const DENIED_TOOL_VOCABULARY: readonly string[] = [
+  "Bash",
+  "Read",
+  "Glob",
+  "Grep",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+  "Task",
+  "Agent",
+  "Skill",
+  "WebFetch",
+  "WebSearch",
+  "ToolSearch",
+  "TodoWrite",
+];
+
+/**
+ * Upper bound on distinct names reported: the vocabulary plus `other`. DERIVED, never
+ * a literal below that size, so a run that denied every class still reports `other`
+ * (a tool the hook did not know about) instead of dropping it at the cap.
+ */
+export const MAX_DENIED_TOOLS = DENIED_TOOL_VOCABULARY.length + 1;
+
+/**
+ * Count EVERY denied tool call in a result event's `permission_denials` and name
+ * the denied tool classes. Pure; tolerant of a missing/malformed array (→ 0 and
+ * []). Each object entry is one denial (an entry without a usable `tool_name` is
+ * still a denial, of class `other`); non-object entries are not. `deniedTools` is
+ * deduplicated in first-seen order and capped at MAX_DENIED_TOOLS.
+ */
+export function countPermissionDenials(
+  denials: unknown,
+): { permissionDenialCount: number; deniedTools: string[] } {
+  if (!Array.isArray(denials)) return { permissionDenialCount: 0, deniedTools: [] };
+  let permissionDenialCount = 0;
+  const deniedTools: string[] = [];
+  for (const d of denials) {
+    if (!d || typeof d !== "object") continue;
+    permissionDenialCount += 1;
+    const raw = (d as { tool_name?: unknown }).tool_name;
+    // Array.includes on a fixed list: a prototype-ish name (`__proto__`, `constructor`) is not a member.
+    const name = typeof raw === "string" && DENIED_TOOL_VOCABULARY.includes(raw) ? raw : "other";
+    if (!deniedTools.includes(name) && deniedTools.length < MAX_DENIED_TOOLS) deniedTools.push(name);
+  }
+  return { permissionDenialCount, deniedTools };
+}
+
 /**
  * Emit one `SOLEUR_CRON_FILING_DENY` WARN marker. NEVER throws — observability
  * must never break a run. Emits nothing at count 0 with a healthy capture:

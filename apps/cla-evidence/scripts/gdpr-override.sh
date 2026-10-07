@@ -19,11 +19,14 @@
 #
 # Runbook: knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md §7
 
-# Suppress xtrace immediately — protects secrets if invoked with `bash -x`
-# (see TS-OVERRIDE.j). Redirect silences the `set +x` echo itself.
-{ set +x; } 2>/dev/null
-
 set -euo pipefail
+
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797),
+# and this script holds a live Cloudflare admin token. Placed before any credential is read
+# (TS-OVERRIDE.j asserts the refusal and that no fingerprint reaches the trace).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 # ── Color + log helpers ──────────────────────────────────────────────────────
 GREEN='\033[32m'; RED='\033[31m'; YELLOW='\033[33m'; NC='\033[0m'
@@ -34,8 +37,11 @@ step()   { printf '\n→ %s\n' "$*"; }
 
 usage_err() { red "::error::usage: $*"; exit 64; }
 
-# ── Shared CF-admin-token helpers (verify + self-revoke) ─────────────────────
+# ── Shared CF-admin-token helpers (verify + self-revoke + _cf_admin_curl) ────
 # Sourced AFTER red/green/yellow are defined (helper sourcing precondition).
+# _cf_admin_curl owns every credentialed curl below: --disable first, --noproxy '*',
+# the token-shape guard, the pin to the Cloudflare v4 API base, and the bearer on
+# curl's stdin config channel (never argv).
 # shellcheck source=_cf-admin-token.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_cf-admin-token.sh"
 # shellcheck source=_r2-endpoint.sh disable=SC1091
@@ -181,11 +187,9 @@ _cleanup_partial_override() {
   trap - ERR INT TERM
   if [[ "$MUTATED" == "1" ]] && [[ "$RESTORED" != "1" ]] && [[ -s "$WORK/snapshot.json" ]]; then
     red "::error::CRITICAL: lock-rule mutation in flight at interrupt; attempting best-effort restore"
-    if curl --max-time 30 -fsS -X PUT \
-        -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
+    if _cf_admin_curl "$CF_ADMIN_TOKEN" "$LOCK_URL" --max-time 30 -fsS -X PUT \
         -H "Content-Type: application/json" \
-        --data-binary "@$WORK/snapshot.json" \
-        "$LOCK_URL" >/dev/null 2>&1; then
+        --data-binary "@$WORK/snapshot.json" >/dev/null 2>&1; then
       red "::error::best-effort restore SUCCEEDED — verify with main.test.sh --live"
     else
       red "::error::CRITICAL: best-effort restore FAILED — manual restore required immediately"
@@ -218,10 +222,8 @@ green "  token verified (id captured for self-revoke)"
 # ─────────────────────────────────────────────────────────────────────────────
 step "[2/8] GET lock rules + snapshot"
 get_resp="$WORK/lock-get.json"
-if ! curl --max-time 30 -fsS \
-    -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
-    -o "$get_resp" \
-    "$LOCK_URL" 2>/dev/null; then
+if ! _cf_admin_curl "$CF_ADMIN_TOKEN" "$LOCK_URL" --max-time 30 -fsS \
+    -o "$get_resp" 2>/dev/null; then
   red "::error::GET $LOCK_URL failed (HTTP error)"
   _self_revoke
   exit 1
@@ -274,11 +276,9 @@ trap '_cleanup_partial_override' ERR INT TERM
 # Step 3 — PUT modified lock rules
 # ─────────────────────────────────────────────────────────────────────────────
 step "[3/8] PUT modified lock rules (shape=$SHAPE)"
-if ! curl --max-time 30 -fsS -X PUT \
-    -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
+if ! _cf_admin_curl "$CF_ADMIN_TOKEN" "$LOCK_URL" --max-time 30 -fsS -X PUT \
     -H "Content-Type: application/json" \
-    --data-binary "@$modified" \
-    "$LOCK_URL" >/dev/null 2>&1; then
+    --data-binary "@$modified" >/dev/null 2>&1; then
   red "::error::PUT modified rules failed; lock state unchanged"
   trap - ERR INT TERM
   _self_revoke
@@ -311,11 +311,9 @@ env -u CF_ADMIN_TOKEN doppler run -p soleur -c prd_cla -- \
 
 if [[ "$delete_rc" -ne 0 ]]; then
   red "::error::DELETE object failed (rc=$delete_rc); attempting best-effort restore (no tombstone)"
-  if curl --max-time 30 -fsS -X PUT \
-      -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
+  if _cf_admin_curl "$CF_ADMIN_TOKEN" "$LOCK_URL" --max-time 30 -fsS -X PUT \
       -H "Content-Type: application/json" \
-      --data-binary "@$WORK/snapshot.json" \
-      "$LOCK_URL" >/dev/null 2>&1; then
+      --data-binary "@$WORK/snapshot.json" >/dev/null 2>&1; then
     RESTORED=1
     green "  best-effort restore succeeded"
   else
@@ -331,11 +329,9 @@ green "  object deleted from R2"
 # Step 5 — PUT-restore canonical rules (byte-equal snapshot)
 # ─────────────────────────────────────────────────────────────────────────────
 step "[5/8] PUT-restore canonical lock rules"
-if ! curl --max-time 30 -fsS -X PUT \
-    -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
+if ! _cf_admin_curl "$CF_ADMIN_TOKEN" "$LOCK_URL" --max-time 30 -fsS -X PUT \
     -H "Content-Type: application/json" \
-    --data-binary "@$WORK/snapshot.json" \
-    "$LOCK_URL" >/dev/null 2>&1; then
+    --data-binary "@$WORK/snapshot.json" >/dev/null 2>&1; then
   red "::error::CRITICAL: PUT-restore FAILED after successful DELETE; bucket WORM may be void; manual restore required immediately"
   # Per plan §Sharp Edges: do NOT self-revoke (operator needs token).
   # Do NOT write tombstone (bucket state degraded).

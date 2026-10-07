@@ -58,7 +58,11 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$FIXTURES/ok.sh" || exit 2
 # as a file write rather than a variable. `:?` keeps a harness that forgets the
 # env var loud instead of silently writing nowhere.
 printf '#!/usr/bin/env bash\necho 120 > "${SOLEUR_TC_BUMP_FILE:?SOLEUR_TC_BUMP_FILE unset}"\nexit 0\n' > "$FIXTURES/bump.sh" || exit 2
-chmod +x "$FIXTURES/slow.sh" "$FIXTURES/ok.sh" "$FIXTURES/bump.sh" || exit 2
+# bump360.sh is the same deterministic tick at 5x magnitude: the three-suite
+# arm asserts a DECLINE COUNT, so it runs against ceiling 300 (see M7) and its
+# bump must still exceed the ceiling. The other bump arms keep 120.
+printf '#!/usr/bin/env bash\necho 360 > "${SOLEUR_TC_BUMP_FILE:?SOLEUR_TC_BUMP_FILE unset}"\nexit 0\n' > "$FIXTURES/bump360.sh" || exit 2
+chmod +x "$FIXTURES/slow.sh" "$FIXTURES/ok.sh" "$FIXTURES/bump.sh" "$FIXTURES/bump360.sh" || exit 2
 
 # --- Sandbox ----------------------------------------------------------------
 # Mirrors the splice idiom of scripts/test-all-killed-classification.test.sh:
@@ -98,9 +102,11 @@ assert s.count(end_anchor) == 1, "end anchor not unique"
 i = s.index(start_anchor) + len(start_anchor)
 j = s.index(end_anchor)
 
-# A *_bump arm leads with bump.sh: it writes 120 into the bump file, so the
-# NEXT suite entry reads elapsed >= 120 -- deterministically past a 60s ceiling
-# wherever the one-second EPOCHSECONDS boundary lands. Non-bump arms keep
+# A *_bump arm leads with a bump fixture: it writes into the bump file, so the
+# NEXT suite entry reads elapsed >= the bump -- deterministically past the
+# arm's ceiling wherever the one-second EPOCHSECONDS boundary lands.
+# three_bump leads with bump360.sh (360 > its 300s ceiling — see M7 for why
+# that arm runs a wider real-elapsed margin). Non-bump arms keep
 # slow.sh: their ceilings are far above (or disabled), so a real sleep stays
 # the right fixture there.
 if arm in ("infra", "infra_bump"):
@@ -122,7 +128,7 @@ else:
     calls = {
         "two":        [("slowfixture", "slow.sh"), ("after1", "ok.sh")],
         "two_bump":   [("bumpfixture", "bump.sh"), ("after1", "ok.sh")],
-        "three_bump": [("bumpfixture", "bump.sh"), ("after1", "ok.sh"), ("after2", "ok.sh")],
+        "three_bump": [("bumpfixture", "bump360.sh"), ("after1", "ok.sh"), ("after2", "ok.sh")],
     }[arm]
     body = "\n" + "".join(
         f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
@@ -296,13 +302,35 @@ else
 fi
 
 # --- M7: EVERY later suite is declined, not just the first ------------------
-THREE="$(run_arm three_bump none 60 || true)"
-THREE_LOG="$(arm_log "$THREE")"
+# Ceiling 300 + bump 360 (not 60/120 like the other bump arms): the ONLY
+# wall-clock-dependent window in the arm is the runner preamble between
+# _RUN_START_EPOCH and bumpfixture's own elapsed read — if REAL elapsed ever
+# reached the ceiling there, bumpfixture itself would decline, the bump would
+# never be written, and the arm would read declined_suites=3. The 5x margin
+# keeps the property (every later suite declined, counter not saturated at 1)
+# while closing the one contention window that could produce a spurious
+# count (#9475: 100 loaded iterations reproduced zero failures at 60/120 —
+# the margin is hardening, and the dump below is the evidence if it ever
+# fails for another reason).
+THREE="$(run_arm three_bump none 300 || true)"
+THREE_LOG="$(arm_log "$THREE")"; THREE_RC="$(arm_rc "$THREE")"
 cases=$((cases + 1))
 if [[ "$(grep -cE 'declined_suites=2' "$THREE_LOG" || true)" -ge 1 ]]; then
   pass "M7 both post-ceiling suites declined (counter does not saturate at 1)"
 else
-  fail "M7 expected declined_suites=2; got: $(grep -E 'RUNTIME_CEILING|declined' "$THREE_LOG" || true)"
+  # Self-describing failure (#9475): the arm log lives under TESTROOT and is
+  # deleted at exit, so a failed M7 must dump its own evidence HERE — the arm
+  # rc (a kill reads 137+, not a clean 3), the bump-file state (did the tick
+  # get written?), and the log tail (banner, epilogue, the last suite line).
+  {
+    echo "M7 expected declined_suites=2; arm rc=${THREE_RC:-?}"
+    echo "--- bump file ($TESTROOT/sb-three_bump-none-300/bump.txt) ---"
+    cat "$TESTROOT/sb-three_bump-none-300/bump.txt" 2>/dev/null \
+      || echo "(absent — bump360.sh never wrote it)"
+    echo "--- arm log (tail -80) ---"
+    tail -80 "$THREE_LOG" 2>/dev/null || echo "(no log captured)"
+  } >&2
+  fail "M7 expected declined_suites=2 (arm rc + bump state + log tail dumped above)"
 fi
 
 # --- M4: an unusable ceiling must NOT curtail the run -----------------------

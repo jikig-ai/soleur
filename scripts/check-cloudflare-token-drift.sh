@@ -127,6 +127,15 @@
 
 set -uo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). Tracing echoes commands AFTER expansion, so the Doppler
+# credential -- and every Cloudflare token value this script ACQUIRES from Doppler at runtime and
+# presents to Cloudflare -- would be printed the moment it is used. The refusal is unconditional
+# because the credentials this script handles do not exist yet at this line: a conditional on a
+# variable that is empty here would open the hatch and the acquisition would then be traced.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 PROJECT="${DOPPLER_PROJECT:-soleur}"
 JSON_OUT=0
 # --only <SUBSTRING> narrows the scan to keys containing SUBSTRING. It exists for the
@@ -1023,20 +1032,32 @@ fi
 
 declare -A VERDICT=()   # token value -> LIVE|DEAD  (verify each distinct value once)
 
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel in verify_value). Never echoes the value. A Cloudflare
+# API token is [A-Za-z0-9_-], so a value outside the allowlist cannot be a live token: it is graded
+# DEAD with ZERO curl calls, never LIVE.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*|*'"'*|*\\*) return 1 ;; esac; }   # config-string guard: reject empty, control chars, quote, backslash
+
 # Sets REPLY, for the same subshell reason as verify_access_pair below: called as
 # `state=$(verify_value ...)` the VERDICT writes never reached the parent, so the
 # "verify each distinct value once" promise in the --only rationale was not being kept.
 verify_value() {
   local v="$1"
   if [[ -z "${VERDICT[$v]:-}" ]]; then
-    local ok
-    ok=$(curl -s --max-time 20 -H "Authorization: Bearer $v" \
-      "https://api.cloudflare.com/client/v4/user/tokens/verify" |
-      python3 -c 'import json,sys
+    local ok=""
+    if _bearer_ok "$v"; then
+      # The bearer rides curl's stdin config channel, never its argument list. `--disable` is
+      # first (no ~/.curlrc) and `--noproxy '*'` (no proxy redirection of a bearer request).
+      ok=$(curl --disable --noproxy '*' -s --max-time 20 \
+        --config - "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+        < <(printf 'header = "Authorization: Bearer %s"\n' "$v") |
+        python3 -c 'import json,sys
 try: print("LIVE" if json.load(sys.stdin).get("success") else "DEAD")
 except Exception: print("DEAD")' 2>/dev/null)
+      PROBES_MADE=$((PROBES_MADE + 1))
+    fi
     VERDICT[$v]="${ok:-DEAD}"
-    PROBES_MADE=$((PROBES_MADE + 1))
   fi
   REPLY="${VERDICT[$v]}"
 }
@@ -1283,13 +1304,37 @@ access_probe() {
   # the file's reuse obviously safe if either of those ever changes.
   : > "$PROBE_HDR" || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
   local hdr="$PROBE_HDR"
-  local -a args=(-s -o /dev/null -D "$hdr" -w '%{http_code}' --max-time 20)
-  [[ -n "$id" ]] && args+=(-H "CF-Access-Client-Id: $id" -H "CF-Access-Client-Secret: $secret")
+  local -a args=(--disable --noproxy '*' -s -o /dev/null -D "$hdr" -w '%{http_code}' --max-time 20)
+  # The Access pair rides curl's STDIN config channel, never its argument list (argv is
+  # world-readable via /proc/<pid>/cmdline). `--config -` is added ONLY for a credentialed
+  # probe: the no-credential control probe must not read stdin. Each value is written inside
+  # a config string, so a quote, backslash or control character would inject a directive —
+  # refuse before any curl runs. Refusal grades UNVERIFIABLE:probe-failed (no request was
+  # sent, nothing is known about the credential, never LIVE and never the destructive DEAD).
+  if [[ -n "$id" ]]; then
+    if ! _cfg_ok "$id" || ! _cfg_ok "$secret"; then
+      # Names WHICH half is malformed (never its value) so a reader of the CI log knows what to fix:
+      # a permanent shape fault, so re-running cannot clear it — re-set the Doppler value.
+      local bad_half=""
+      _cfg_ok "$id" || bad_half="id"
+      _cfg_ok "$secret" || bad_half="${bad_half:+$bad_half and }secret"
+      printf '[WARN] refusing to present the Access client %s for %s: it is empty or contains a quote, backslash or control character (re-set the value in Doppler; re-running cannot clear this); no request sent\n' \
+        "$bad_half" "$host" >&2
+      PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0
+      return 0
+    fi
+    args+=(--config -)
+  fi
   # Assigned then normalised, NOT `$(curl ... || printf '000')`. curl prints its -w output
   # AND exits non-zero on a transport failure, so the `||` form CONCATENATES: measured
   # `000000` on a DNS failure, and `200000` when a healthy 200 hits a post-header timeout —
   # which the old three-character `200)` arm then graded DEAD.
-  PROBE_CODE=$(curl "${args[@]}" "https://${host}/" 2>/dev/null) || rc=$?
+  if [[ -n "$id" ]]; then
+    PROBE_CODE=$(curl "${args[@]}" "https://${host}/" 2>/dev/null \
+      < <(printf 'header = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$id" "$secret")) || rc=$?
+  else
+    PROBE_CODE=$(curl "${args[@]}" "https://${host}/" 2>/dev/null) || rc=$?
+  fi
   (( rc != 0 )) && PROBE_CODE=000
   [[ "$PROBE_CODE" =~ ^[0-9]{3}$ ]] || PROBE_CODE=000
   if grep -qiE '^cf-access-(aud|domain):' "$hdr" 2>/dev/null; then PROBE_STAMPED=1; else PROBE_STAMPED=0; fi

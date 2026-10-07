@@ -616,6 +616,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.sandbox.failIfUnavailable).toBe(true);
     expect(opts.sandbox.allowUnsandboxedCommands).toBe(false);
+    // W1 (#9601): the dispatcher passes the builder's object through UNCHANGED.
+    // The builder is mocked here, so its `credentials` content is not the point;
+    // identity is: a spread or override at the call site (which would drop the
+    // credential deny the real builder returns) makes a new object.
+    expect(opts.sandbox).toBe(mockBuildAgentSandboxConfig.mock.results[0].value);
     // Helper was called with the workspace path AND fail-closed egress —
     // this dispatch has no connected repo, so no GitHub egress (#5041
     // follow-up).

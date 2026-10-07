@@ -129,7 +129,8 @@ const READ_ONLY_PROBES = [
 // git, no PR, covered by invariant 1's directory walk.
 // `cron-merge-queue-stall-dispatch` (#9482) is the same dispatch-hybrid
 // class: a token narrowed to `actions:write` + repositories:[soleur], one
-// `workflow_dispatch` POST to merge-queue-stall-check.yml, no git, no PR,
+// `workflow_dispatch` POST to merge-queue-stall-check.yml plus a read-only
+// runs-list GET for the executor-visibility check (#9513), no git, no PR,
 // covered by invariant 1's directory walk.
 // `cron-bot-pr-reaper` (#9274) is the `cron-action-required-sla` class: it
 // mutates PR/issue state through the GitHub API (update-branch, dedup issue
@@ -674,5 +675,42 @@ describe("#6750 AC6b — the existence probe is only used where it can actually 
       }
     }
     expect(inspected).toBe(6);
+  });
+});
+
+// #7122 Guard 3 row 2 — the community monitor persists ONE handler-authored dated
+// digest, so its safeCommitAndPr call must pass `exactPaths` and must NOT allow
+// the digest DIRECTORY as a prefix (a dir-wide prefix lets an injected run edit or
+// add any file under knowledge-base/support/community/, and the auto-merged PR
+// publishes it). Source-text check, fail-closed on parse: a call the regex cannot
+// find turns this RED instead of skipping.
+describe("#7122 — cron-community-monitor persists by exactPaths, not the digest directory", () => {
+  const src = readFileSync(join(FUNCTIONS_DIR, "cron-community-monitor.ts"), "utf-8");
+  const calls = [...src.matchAll(/safeCommitAndPr\(\{([\s\S]*?)\n\s*\}\)/g)];
+
+  it("stays in the migrated prompt cohort (the parity gates above still cover it)", () => {
+    expect(MIGRATED_PROMPT).toContain("cron-community-monitor.ts");
+    expect(MIGRATED_ALL).toContain("cron-community-monitor.ts");
+  });
+
+  it("has exactly one safeCommitAndPr call and the gate parsed it", () => {
+    expect(calls, "could not parse the safeCommitAndPr call — gate DISENGAGED").toHaveLength(1);
+  });
+
+  it("the call passes exactPaths", () => {
+    const [, body] = calls[0] ?? [];
+    expect(body).toMatch(/^\s+exactPaths:\s*\S/m);
+  });
+
+  it("the call's allowedPaths is NOT the community directory (empty list only)", () => {
+    const [, body] = calls[0] ?? [];
+    const allowed = /^\s+allowedPaths:\s*([^\n]+?),?\s*$/m.exec(body ?? "");
+    expect(allowed, "no allowedPaths argument found in the call body").not.toBeNull();
+    expect(allowed![1].replace(/,\s*$/, "").trim()).toMatch(/^\[\s*\](?:\s+as\s+const)?$/);
+    expect(body).not.toMatch(/COMMUNITY_DIGEST_DIR|COMMUNITY_MONITOR_ALLOWED_PATHS|knowledge-base\/support\/community/);
+  });
+
+  it("no module-level allowlist constant reintroduces the directory as a persistence prefix", () => {
+    expect(src).not.toMatch(/COMMUNITY_MONITOR_ALLOWED_PATHS\s*=\s*\[\s*COMMUNITY_DIGEST_DIR/);
   });
 });

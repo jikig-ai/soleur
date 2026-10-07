@@ -157,6 +157,7 @@ ALLOWLIST=(
   'apps/web-platform/test/server/inngest/supabase-watchdog-workflow-parity.test.ts|2026-09-29|assertion strings on the workflow file (monitor slug, sentinel literal, SUPABASE_ACCESS_TOKEN env name); makes no HTTP call'
   'apps/web-platform/test/server/inngest/cron-supabase-watchdog-dispatch.test.ts|2026-09-29|negative-assertion strings (the HARD NON-GOAL test asserts the dispatcher does NOT reference SUPABASE_ACCESS_TOKEN or api.supabase.com); makes no HTTP call'
   'scripts/supabase-watchdog-classify.sh|2026-09-29|pure classifier (#9168): the /v1/projects restart path appears only in a # comment; the script consumes HTTP codes and bodies as arguments and makes no network call'
+  'tests/scripts/test-argv-bearer-sweep.sh|2026-10-06|shim battery for the argv-bearer sweep (#7843): names SUPABASE_ACCESS_TOKEN and the escaped host regex api\.supabase\.com as manifest data for the followthrough probes it exercises; its curl is a PATH shim that records argv and stdin to files and makes no HTTP call'
 )
 
 # ── Assemblies ──────────────────────────────────────────────────────────────────────────

@@ -751,6 +751,8 @@ reader can interpret (anything else is a refusal). Web-2's serving weight is NOT
 at this SHA, and the summary says so instead of asserting weight 0. (4) The escrow preflight runs before any Terraform command or Hetzner call; a missing escrow does NOT refuse the
 format (the volume is empty; the readiness verdict goes RED and the soak marker is withheld).
 
+> **Superseded 2026-10-06 (#9372), in part:** "the printed used-bytes values are what the owner approves on" and "the first live query is the first measurement of the real empty baseline" no longer hold; see the addendum at the end of this ADR.
+
 **What this change altered outside the workflow.** The reboot proof is now REQUIRED where it was only diagnostic:
 `scripts/lib/web2-luks-rows.sh` gains `w2l_reboot_seen`, which compares the `boot_id` tokens of the GREEN probe and readiness
 verdicts (known and different), and both the marker-absent branch of `w2l_judge` (so `WORKSPACES_LUKS_CUTOVER_AT`, and with it any
@@ -767,6 +769,8 @@ volume opens, that the backup matches the live volume, that either copy survives
 workspace data until those and #7992 are done. The marker config's only token is read/write today (#9358), bound to one
 names-only step that a census holds to that. Authorization is process, not mechanism: the typed confirm is a typo guard.
 
+> **Superseded 2026-10-06 (#9372), in part:** the Better Stack JSON paths are now confirmed (the `dm-*` exclusion is still unconfirmed); see the addendum at the end of this ADR.
+
 **Single use and retirement.** The workflow, `scripts/web2-rebirth*.sh`, `tests/scripts/lib/web-host-rebirth-gate.sh` and
 `tests/scripts/lib/web2-rebirth-classify.sh` are deleted after use in the closing change (runbook
 `web2-luks-rebirth-9372.md`, "Closing checklist"), together with the retirement of `apply-web-escrow-create.yml` and the flip of the
@@ -776,3 +780,15 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 > `apply-web-escrow-create.yml` and the flip of the HALT's `create` arm merge together as PR #9569. The deletion of the rebirth
 > workflow, its scripts, gate and fixtures is a later change made after use (runbook `web2-luks-rebirth-9372.md`, closing
 > row 5).
+
+> **Superseded 2026-10-06 (#9372), in part — the emptiness evidence's paths and who reads its numbers.** Two sentences above no longer
+> hold. (1) "the first live query is the first measurement of the real empty baseline" and "unverified until the first live query": the
+> first live plan-only run (run 37463995633) read the flat paths `host_name`, `source_kind`, `metric.name` and `metric.value`, which no
+> stored row carries, matched zero rows and went RED `used_bytes_absent_or_host_dark`. A read-only control against the stored rows then
+> confirmed the native shape (`tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value`) and read the level for
+> soleur-web-2 `/mnt/data` (one device, `/dev/sdb` ext4, 7 days): 169 hours, used 15,556,608 to 16,027,648 bytes (spread 471,040),
+> total 20,957,446,144. The query now reads those paths, requires a single non-empty device per metric group and rows no later than now; whether `dm-*` drops the LUKS mapper
+> device in `vector.toml` remains unconfirmed. (2) "the printed used-bytes values are what the owner approves on": the environment
+> approval is a job-level gate, so it comes before the evidence step. The numbers are readable in a plan-only run, and an apply
+> dispatch's PASS flows into `delete-volume` in the same approved job. The thresholds, the verdict function and the `heal:detach_done`
+> arm are unchanged; the 1 GiB ceiling is about 65 to 70 times the observed level, and tightening it is an owner decision.
