@@ -779,6 +779,7 @@ rule_git() {
   local force=0 del=0 allf=0 mirror=0 repoopt=0 risk=0 r f dele src dst mt=0 mtf=0
   cwd_ready; repo="$SIMCWD"
   while (( i < n )); do
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the options of git"; return 0; fi
     case "${a[$i]}" in
       -C) if (( i + 1 < n )); then
             case "${a[$((i + 1))]}" in /*) repo="${a[$((i + 1))]}" ;; *) repo="$repo/${a[$((i + 1))]}" ;; esac
@@ -793,6 +794,7 @@ rule_git() {
   [[ "${a[$i]:-}" == push ]] || return 0
   j=$((i + 1))
   while (( j < n )); do
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the flags of git push"; return 0; fi
     x="${a[$j]}"
     if (( end )); then pos[${#pos[@]}]="$x"
     elif [[ "$x" == -- ]]; then end=1
@@ -828,6 +830,7 @@ rule_git() {
   named="${remote:-origin}"
   # The destinations, flagged: +refspec / +dst (force) and :dst (delete) are risky on their own.
   for r in ${refs[@]+"${refs[@]}"}; do
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the refs of git push"; return 0; fi
     f=0; dele=0
     if [[ "$r" == +* ]]; then f=1; r="${r#+}"; fi
     if [[ "$r" == : ]]; then
@@ -852,6 +855,7 @@ rule_git() {
   head=""; cur=""; local have_head=0 have_cur=0
   local -a defaults=(main master)
   for ((k = 0; k < ${#D_DST[@]}; k++)); do
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the destinations of git push"; return 0; fi
     dst="${D_DST[$k]}"
     if [[ "$dst" == HEAD ]]; then
       if (( ! have_cur )); then cur="$(git_ro "$repo" symbolic-ref --short HEAD)"; have_cur=1; fi

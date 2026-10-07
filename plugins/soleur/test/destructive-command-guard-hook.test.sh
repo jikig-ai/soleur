@@ -1696,6 +1696,19 @@ deadline_row reading 'ls "x"; terraform plan' "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_R
 deadline_row judging 'ls "x"; terraform plan' "$_DL_READ" "$_DL_DECIDE" "$_DL_RM"
 deadline_row deciding 'ls "x"; terraform plan' "$_DL_READ" "$_DL_JUDGE" "$_DL_RM"
 deadline_row rm-targets 'rm -rf "build"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE"
+# git has four loops (its global options, the flags of push, its refs, its destinations), each with its own clock check: each row keeps ONE of them
+_DL_GO='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the options of git"; return 0; fi'
+_DL_GF='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the flags of git push"; return 0; fi'
+_DL_GR='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the refs of git push"; return 0; fi'
+_DL_GD='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the destinations of git push"; return 0; fi'
+deadline_row git-options 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GF" "$_DL_GR" "$_DL_GD"
+deadline_row git-flags 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GR" "$_DL_GD"
+deadline_row git-refs 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GF" "$_DL_GD"
+deadline_row git-dests 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GF" "$_DL_GR"
+# and a very wide push is decided in time (the real clock): 15000 refs, a force push to main last, and the same without force
+_t=""; for _i in $(seq 1 15000); do _t+=" r$_i"; done; _cmdgit15k="git push -f origin${_t} main"; _cmdgit15kp="git push origin${_t}"
+bound_row "bound: git push -f with 15000 refs ending in main is decided (ask) in under 5 s" ask @R1@ "$_cmdgit15k"
+bound_row "bound: git push (no force) with 15000 refs is decided (no decision) in under 5 s" none @R1@ "$_cmdgit15kp"
 
 # =====================================================================================================
 echo "== a secret in the matched command is redacted from the reason and the systemMessage =="
@@ -2195,7 +2208,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=941
+MIN_CASES=955
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
