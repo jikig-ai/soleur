@@ -41,7 +41,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -134,10 +134,10 @@ export function validateFixture(obj) {
     : [];
   return {
     status: "captured",
-    // `canonical-bwrap-v1` argv carries ${CANARY_WS}/${CANARY_EMPTY}
-    // placeholders that runReplay substitutes to real container paths before
-    // the bwrap spawn (ADR-079 amendment / CTO Option A). Absent → a legacy
-    // verbatim fixture (no placeholders), replayed as-is.
+    // `canonical-bwrap-v1` argv carries ${CANARY_*} placeholders that
+    // runReplay substitutes to real container paths before the bwrap spawn
+    // (ADR-079 amendment / CTO Option A). Absent → a legacy verbatim fixture
+    // (no placeholders), replayed as-is.
     schema: typeof obj.schema === "string" ? obj.schema : null,
     bwrapSetupArgv: argv,
     prepDirs,
@@ -587,6 +587,12 @@ export const CANARY_EMPTY_PLACEHOLDER = "${CANARY_EMPTY}";
 // (capture-host-specific), so capture points it at a mkdtemp dir via
 // C4_RENDER_STAGING_ROOT and the projection replaces that path with this token.
 export const CANARY_C4_STAGING_PLACEHOLDER = "${CANARY_C4_STAGING}";
+// #9614/#9618: the SDK-internal bridge-spawn dir — the bundled CLI computes it
+// as `join(homedir(), ".claude", "bridge-spawn")` with NO env override, so
+// capture derives the identical expression (ADR-079 2026-10-06 amendment:
+// SDK-internal HOME-derived dirs get named placeholders via a capture-computed
+// root). The dir is HOME-based, so without this the host_path census throws.
+export const CANARY_BRIDGE_SPAWN_PLACEHOLDER = "${CANARY_BRIDGE_SPAWN}";
 
 // bwrap option arities for the projection parser. `null` = classify as a
 // bind-like 2-arg (src, dest). An unrecognized `--option` throws (fail loud →
@@ -600,7 +606,7 @@ const BWRAP_ZERO_ARG = new Set([
   "--as-pid-1",
 ]);
 // 1-arg options whose single arg is a PATH we may normalize/keep.
-const BWRAP_ONE_ARG_PATH = new Set([
+export const BWRAP_ONE_ARG_PATH = new Set([
   "--dev",
   "--proc",
   "--tmpfs",
@@ -645,11 +651,22 @@ const BWRAP_TWO_ARG_BIND = new Set([
   "--bind-data",
   "--ro-bind-data",
 ]);
+// Bind opts whose first arg is a real filesystem SOURCE that must pre-exist at
+// replay. --symlink's target may dangle and --file/--*-data carry an FD, not a
+// path — neither belongs in prepDirs.
+export const BWRAP_BIND_SRC_OPTS = new Set([
+  "--bind",
+  "--bind-try",
+  "--dev-bind",
+  "--dev-bind-try",
+  "--ro-bind",
+  "--ro-bind-try",
+]);
 
 const RANDOM_SOCKET_RE = /\/claude-http-[0-9a-f]+\.sock$/;
 const RANDOM_EMPTY_RE = /\/claude-empty-[A-Za-z0-9]+$/;
 
-function isDeterministicConstPath(p) {
+export function isDeterministicConstPath(p) {
   return (
     p === "/" ||
     p === "/dev/null" ||
@@ -675,19 +692,33 @@ function isDeterministicConstPath(p) {
  * against the pre-#5874 profile, ADR-079 §2d proof obligation).
  *
  * @param {string[]} rawArgv
- * @param {{ wsRoot: string, c4StagingRoot?: string }} opts - the realpath'd hermetic own-workspace path, and the capture's C4 staging root (#8623).
+ * @param {{ wsRoot: string, c4StagingRoot?: string, bridgeSpawnRoot?: string }} opts - the realpath'd hermetic own-workspace path, the capture's C4 staging root (#8623), and the capture's SDK-internal bridge-spawn root (#9614).
  * @returns {{ bwrapSetupArgv: string[], prepDirs: string[],
  *   dropped: { setenv: number, hostBind: number, randomSocket: number, randomEmptyDirBind: number } }}
  */
-export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
+export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSpawnRoot }) {
   const norm = (p) => {
     if (typeof p !== "string") return p;
+    // A `..` segment inside a mapped subpath would survive the host_path
+    // census (the token starts with `${`) and substitute at replay into a
+    // mkdir/bind target outside the mkdtemp roots — refuse to project it.
+    const checkNoTraversal = (mapped) => {
+      if (mapped.split("/").includes("..")) {
+        throw new Error(
+          `normalizeCapturedArgv: traversal in mapped path '${p}' — refusing to project (projection error)`,
+        );
+      }
+      return mapped;
+    };
     if (p === wsRoot) return CANARY_WS_PLACEHOLDER;
     if (p.startsWith(`${wsRoot}/`)) {
-      return CANARY_WS_PLACEHOLDER + p.slice(wsRoot.length);
+      return checkNoTraversal(CANARY_WS_PLACEHOLDER + p.slice(wsRoot.length));
     }
     if (c4StagingRoot && (p === c4StagingRoot || p.startsWith(`${c4StagingRoot}/`))) {
-      return CANARY_C4_STAGING_PLACEHOLDER + p.slice(c4StagingRoot.length);
+      return checkNoTraversal(CANARY_C4_STAGING_PLACEHOLDER + p.slice(c4StagingRoot.length));
+    }
+    if (bridgeSpawnRoot && (p === bridgeSpawnRoot || p.startsWith(`${bridgeSpawnRoot}/`))) {
+      return checkNoTraversal(CANARY_BRIDGE_SPAWN_PLACEHOLDER + p.slice(bridgeSpawnRoot.length));
     }
     return p;
   };
@@ -701,6 +732,9 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     randomSocket: 0,
     randomEmptyDirBind: 0,
   };
+  // Replay-precondition collectors — see the prepDirs comment below.
+  const subPrepDirs = new Set();
+  const literalPrepDirs = new Set();
 
   for (let i = 0; i < rawArgv.length; ) {
     const tok = rawArgv[i];
@@ -713,7 +747,23 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     } else if (tok === "--args") {
       i += 2; // FD — never persisted; parseShimSetupArgv already resolved it
     } else if (BWRAP_ONE_ARG_PATH.has(tok)) {
-      out.push(tok, norm(rawArgv[i + 1]));
+      const n = norm(rawArgv[i + 1]);
+      out.push(tok, n);
+      // Literal mount targets (--tmpfs /tmp/claude-0/bash-edit-diff, --dir …)
+      // must pre-exist at replay: bwrap cannot mkdir a target whose parent
+      // chain lies under the ro-bound root. Image-guaranteed consts (/, /proc,
+      // /dev, /sys) are exempt; anything else lands in prepDirs (mkdir -p is
+      // idempotent where the dir already exists).
+      if (typeof n === "string" && n.startsWith("/") && !isDeterministicConstPath(n)) {
+        literalPrepDirs.add(n);
+      }
+      // A mount target that is a placeholder SUBPATH (${CANARY_WS}/probe)
+      // needs the exact dir prepped: bwrap applies mounts in argv order, so a
+      // tmpfs target under a not-yet-bound parent fails the same as a missing
+      // source — prefix coverage under the root is not sufficient.
+      if (typeof n === "string" && /\$\{CANARY_[A-Z0-9_]*\}\//.test(n)) {
+        subPrepDirs.add(n);
+      }
       i += 2;
     } else if (BWRAP_ONE_ARG_OPAQUE.has(tok)) {
       out.push(tok, rawArgv[i + 1]);
@@ -731,7 +781,19 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
         (isWs(src) || isDeterministicConstPath(src)) &&
         (isWs(dst) || isDeterministicConstPath(dst))
       ) {
-        out.push(tok, norm(src), norm(dst));
+        const ns = norm(src);
+        // A bind SOURCE must pre-exist — bwrap never creates it. A source that
+        // is a subpath under a placeholder root (${CANARY_WS}/.claude) is a
+        // dir the SDK self-binds; prep it. File sources (/dev/null → file dsts)
+        // are consts, and bind DSTS are auto-created once their parent exists.
+        // ASSUMPTION (pinned in tests): every placeholder-subpath source is a
+        // DIRECTORY — a future file source would be mkdir'd as a dir at replay
+        // (fails loud ENOTDIR, never silently). --symlink/--file/--*-data srcs
+        // are excluded via BWRAP_BIND_SRC_OPTS (dangling target / FD arg).
+        if (BWRAP_BIND_SRC_OPTS.has(tok) && typeof ns === "string" && /\$\{CANARY_[A-Z0-9_]*\}\//.test(ns)) {
+          subPrepDirs.add(ns);
+        }
+        out.push(tok, ns, norm(dst));
       } else {
         // Host-specific bind (e.g. /home/<user>/.npm/_logs) — not in the prod
         // canary container; dropping it is what makes the replay run off-host.
@@ -750,9 +812,14 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     }
   }
 
-  // prepDirs: the placeholder directories runReplay must mkdir before binding.
-  // Only directory roots — bwrap auto-creates nested mount points; file-mount
-  // dsts (/dev/null → …/.gitconfig) must NOT be pre-created as dirs.
+  // prepDirs: every path runReplay must mkdir before the bwrap spawn. Three
+  // classes: (a) placeholder ROOTS the argv mounts onto (${CANARY_WS} always;
+  // others only when referenced); (b) placeholder SUBPATHS used as bind
+  // sources — bwrap auto-creates nested DSTs under a prepped root but never a
+  // source; (c) literal mount targets a fresh replay host may lack
+  // (--tmpfs /tmp/claude-0/bash-edit-diff — its parent cannot be created
+  // under the ro-bound root). File-mount dsts (/dev/null → …/.gitconfig) must
+  // NOT be pre-created as dirs.
   // A literal capture-host HOME path would fail the prod replay (a different
   // HOME, a read-only root) — fail loud rather than bake one into the fixture
   // (#8623; ADR-079 amendment "server-private deny roots are placeholdered").
@@ -772,6 +839,12 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     // bwrap cannot --tmpfs a path it cannot create under a read-only root.
     prepDirs.push(CANARY_C4_STAGING_PLACEHOLDER);
   }
+  if (out.some((t) => typeof t === "string" && t.startsWith(CANARY_BRIDGE_SPAWN_PLACEHOLDER))) {
+    // bwrap cannot --tmpfs a path it cannot create under a read-only root.
+    prepDirs.push(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  }
+  for (const d of subPrepDirs) prepDirs.push(d);
+  for (const d of literalPrepDirs) prepDirs.push(d);
 
   return { bwrapSetupArgv: out, prepDirs, dropped };
 }
@@ -781,14 +854,15 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
  * Applied to `bwrapSetupArgv` AND `prepDirs` before the bwrap spawn.
  *
  * @param {string[]} argv
- * @param {{ ws: string, empty: string, c4Staging?: string }} paths
+ * @param {{ ws: string, empty: string, c4Staging?: string, bridgeSpawn?: string }} paths
  * @returns {string[]}
  */
-export function substituteCanonicalArgv(argv, { ws, empty, c4Staging }) {
+export function substituteCanonicalArgv(argv, { ws, empty, c4Staging, bridgeSpawn }) {
   return argv.map((t) => {
     if (typeof t !== "string") return t;
     let out = t.split(CANARY_WS_PLACEHOLDER).join(ws).split(CANARY_EMPTY_PLACEHOLDER).join(empty);
     if (c4Staging !== undefined) out = out.split(CANARY_C4_STAGING_PLACEHOLDER).join(c4Staging);
+    if (bridgeSpawn !== undefined) out = out.split(CANARY_BRIDGE_SPAWN_PLACEHOLDER).join(bridgeSpawn);
     return out;
   });
 }
@@ -865,7 +939,7 @@ function runReplay(fixtureUrl) {
     return 0;
   }
 
-  // Canonical fixtures (canonical-bwrap-v1) carry ${CANARY_WS}/${CANARY_EMPTY}
+  // Canonical fixtures (canonical-bwrap-v1) carry ${CANARY_*}
   // placeholders — substitute real container paths before mkdir + spawn. A
   // legacy verbatim fixture has no placeholders, so substitution is a no-op.
   let replayFixture = fixture;
@@ -873,14 +947,16 @@ function runReplay(fixtureUrl) {
     const ws = mkdtempSync(join(tmpdir(), "canary-replay-ws-"));
     const empty = mkdtempSync(join(tmpdir(), "canary-replay-empty-"));
     const c4Staging = mkdtempSync(join(tmpdir(), "canary-replay-c4-"));
+    const bridgeSpawn = mkdtempSync(join(tmpdir(), "canary-replay-bridge-spawn-"));
     replayFixture = {
       ...fixture,
       bwrapSetupArgv: substituteCanonicalArgv(fixture.bwrapSetupArgv, {
         ws,
         empty,
         c4Staging,
+        bridgeSpawn,
       }),
-      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty, c4Staging }),
+      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty, c4Staging, bridgeSpawn }),
     };
     // A placeholder this replay does not know would reach bwrap as a literal
     // path — say so instead of spawning.
@@ -897,7 +973,8 @@ function runReplay(fixtureUrl) {
     }
   }
 
-  // Best-effort prep of the bind-source dirs the captured argv references.
+  // Best-effort prep of every dir the captured argv needs to pre-exist:
+  // placeholder roots, subpath bind sources, and literal mount targets.
   for (const dir of replayFixture.prepDirs) {
     try {
       mkdirSync(dir, { recursive: true });
@@ -1014,7 +1091,7 @@ function readCapturedInvocations(captureFile) {
  * runs the secret-scrub then `normalizeCapturedArgv` (CTO Option A). The raw
  * argv is NOT written anywhere (it carries host paths + env forwarding).
  *
- * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, sdkVersion: string, sdkPackage: string }
+ * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, bridgeSpawnRoot: string, sdkVersion: string, sdkPackage: string }
  *                  | { ok: false, reason: string }>}
  */
 export async function doCapture({
@@ -1049,6 +1126,12 @@ export async function doCapture({
   // the projection can placeholder it — never under the hermetic workspaces
   // root, where it would become a sibling and break the zero-sibling invariant.
   const c4StagingDir = realpathSync(mkdtempSync(join(tmpdir(), "soleur-canary-c4-")));
+  // #9614/#9618: the bundled CLI derives its bridge-spawn dir as
+  // `join(homedir(), ".claude", "bridge-spawn")` — a raw homedir() join with no
+  // env override. Compute the identical expression (no realpath — match the
+  // SDK byte-for-byte) so the projection can map that token to
+  // ${CANARY_BRIDGE_SPAWN}.
+  const bridgeSpawnRoot = join(homedir(), ".claude", "bridge-spawn");
 
   try {
     process.env.C4_RENDER_STAGING_ROOT = c4StagingDir;
@@ -1132,6 +1215,7 @@ export async function doCapture({
           rawSetupArgv: setupArgv,
           wsRoot: resolvedOwn,
           c4StagingRoot: c4StagingDir,
+          bridgeSpawnRoot,
           sdkVersion,
           sdkPackage: SDK_PACKAGE,
         };
@@ -1234,6 +1318,7 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
     projected = normalizeCapturedArgv(result.rawSetupArgv, {
       wsRoot: result.wsRoot,
       c4StagingRoot: result.c4StagingRoot,
+      bridgeSpawnRoot: result.bridgeSpawnRoot,
     });
   } catch (err) {
     // Unrecognized bwrap option → SDK argv shape changed; fail loud (ack-fallback).
@@ -1247,7 +1332,7 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
 
   const captured = {
     _comment:
-      "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_WS}/${CANARY_EMPTY}/${CANARY_C4_STAGING} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
+      "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_*} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
     status: "captured",
     schema: "canonical-bwrap-v1",
     sdkPackage: result.sdkPackage,

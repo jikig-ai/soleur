@@ -587,3 +587,28 @@ a second in-image run (`--verify`) returned `verify_ok`. The only change: one
 `--tmpfs ${CANARY_C4_STAGING}` after `--tmpfs /proc`, plus the new `prepDirs` entry. The real-bwrap
 replay proof (`SDK_SANDBOX_REGRESSION_DOCKER=1 sandbox-canary-regression.test.sh`) passed.
 Status stays `adopting`.
+
+## Amendment — 2026-10-06 (#9614/#9618): SDK-internal HOME-derived dirs are placeholdered via a capture-computed root
+
+SDK 0.3.284 emits `--tmpfs <homedir>/.claude/bridge-spawn` — an SDK-internal dir
+(`join(homedir(), ".claude", "bridge-spawn")` in the bundled CLI; no env
+override exists, so the 2026-09-24 rule's sub-clauses (a) env-overridable and
+(b) mkdtemp-redirected cannot apply). The projection gains a fourth named
+placeholder, `${CANARY_BRIDGE_SPAWN}`, mapped from a `bridgeSpawnRoot` that
+`doCapture` derives with the same `homedir()` expression the SDK evaluates and
+passes into `normalizeCapturedArgv`. The host_path fail-loud guard is
+unchanged: any OTHER `/root`|`/home` token still throws, including the
+bridge-spawn dir itself when `bridgeSpawnRoot` is not supplied. Clauses (c)
+and (d) of the 2026-09-24 rule carry over unchanged: the placeholder is listed
+in `prepDirs` and substituted at replay, and the derivation already lives in
+`sandbox-canary.mjs`, a capture-input trigger path.
+
+The same re-capture surfaced a second replay-precondition class the "directory
+roots only" prepDirs rule missed: placeholder-subpath bind **sources**
+(`${CANARY_WS}/.claude`, `…/.cc-writes` — bwrap never creates sources) and
+literal mount targets a fresh replay host may lack (`--tmpfs
+/tmp/claude-0/bash-edit-diff` — uid-derived, `claude-${process.getuid()}`,
+byte-stable only because capture and verify both run as uid 0 in the pinned
+image). `prepDirs` now carries both; a structural test pins "every mount
+target and placeholder-subpath bind source resolves under a prepDirs entry".
+Status stays `adopting` (Deferral A).
