@@ -336,7 +336,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (Codex)**",
         "- Use exec_command for bounded status probes; resume yielded shell sessions with write_stdin.",
-        "- Poll PR state and mergeStateStatus, resolve BEHIND in the PR worktree before continuing (except while the poll prints `[ship.phase7.queue_wait]`: a merge-queue PR waits for GitHub to enqueue it).",
+        "- Poll PR state and mergeStateStatus, resolve BEHIND in the PR worktree before continuing (except once the poll has printed `[ship.phase7.queue_wait]`: a merge-queue PR then waits for GitHub to enqueue it).",
         "- Keep waiting through merge and release completion; load $soleur:postmerge before declaring completion.",
         behind,
       ].join("\n");
@@ -385,7 +385,7 @@ export function pollInstructions(harness: Harness): string {
         "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `Merge poll timed out`, `\\[ship\\.phase7\\.`, `\\[pr-behind-sync\\] kind=`, `postmerge verification complete`.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/ship` merge: poll release workflows, invoke `/postmerge <PR>`, then emit `<promise>DONE</promise>`.",
-        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except while the poll prints `[ship.phase7.queue_wait]` (merge-queue repo, auto-merge armed: GitHub enqueues the PR; never sync it by hand before `[ship.phase7.queue_wait_expired]`).",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except once the poll has printed `[ship.phase7.queue_wait]` (`main` has a merge queue and the PR is armed: GitHub enqueues it; never sync it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED or a dequeue).",
         "",
         behind,
       ].join("\n");
@@ -426,7 +426,7 @@ export function pollInstructions(harness: Harness): string {
         "- Mutations (`gh pr update-branch`, the merge itself) stay in the foreground — never inside the waiting subagent.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/soleur:ship` merge: poll release workflows, invoke `/soleur:postmerge <PR>`, then emit `<promise>DONE</promise>`.",
-        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except while the poll prints `[ship.phase7.queue_wait]` (merge-queue repo, auto-merge armed: GitHub enqueues the PR; never sync it by hand before `[ship.phase7.queue_wait_expired]`).",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except once the poll has printed `[ship.phase7.queue_wait]` (`main` has a merge queue and the PR is armed: GitHub enqueues it; never sync it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED or a dequeue).",
         "",
         behind,
       ].join("\n");
@@ -434,7 +434,7 @@ export function pollInstructions(harness: Harness): string {
     default:
       return [
         "**Merge/deploy polling**",
-        "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks (except while the poll prints `[ship.phase7.queue_wait]`: a merge-queue PR waits for GitHub to enqueue it).",
+        "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks (except once the poll has printed `[ship.phase7.queue_wait]`: a merge-queue PR then waits for GitHub to enqueue it).",
         "- Invoke postmerge verification before declaring done.",
         "",
         behind,

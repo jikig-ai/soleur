@@ -564,3 +564,14 @@ nothing, so `QUEUE_RULE` stays 0 for all of them.
   verbatim from the existing every-5th-tick line (same recovery pointer, same loader substitution); the other new echo lines carry none.
 - **If the idle grace ever fires in production** that is outcome (b) or a stalled queue: the line says so. Surface the
   `strict_required_status_checks_policy` question to the operator; this plan does not change the ruleset.
+
+## Review-round amendments (2026-10-07, appended; the plan above records the design at plan time)
+
+The panel review and one fix round changed the design in these ways. The code, fixtures and ADR amendment are authoritative.
+
+- **No `--queue-state` read at the grace crossing.** Expiry is `qwait=0; qwait_expired=1`: the fallback `--step` runs `sync-pr-behind.sh`'s own queue gate, which skips a queued PR (exit 11), stops on a dequeue (exit 13) and fails closed on an unreadable read (exit 4). A queued reading on the every-5th-tick `--queue-state` read restarts the idle count instead, so a PR the queue holds never expires. Mutation row 9 and the `dequeued*` arm are gone; Q9 pins the queued case, Q9b the unreadable-read expiry.
+- **The idle count counts only pending REQUIRED checks** (names intersected with `REQUIRED_CHECKS`) and is exactly consecutive: `(( qwait == 1 )) || qidle=0` after the wait block restarts it on any non-wait tick, including a disarmed armed-read.
+- **Queue mode needs a non-empty required-check set** (`(( ${#REQUIRED_CHECKS[@]} > 0 )) || QUEUE_RULE=0`): with none, or a failed read of it, the poll syncs as today (Q1n).
+- **Guard 1 wording:** after the first expiry the fallback holds for the rest of the poll, so "has not been idle for more than 5 consecutive ticks" applies only until an expiry has occurred.
+- **Agent-instruction sites** (`pr-merge-poll.ts`, `harness.ts`, codex and devin `INSTRUCTIONS.md`, ship rule 6, `drain-prs`, the dequeue reference) carry the queue-mode exception with pins for every harness; `monitor-pr-checks.sh`, the standalone `sync-pr-behind.sh <n>` loop and the pre-merge hook are deferred (tracked on #8683).
+- **Fixtures:** the verdict floor is ratcheted and the Q row set is pinned (`RANQ`/`WANTQ`); the armed read runs its jq; added rows Q1m, Q1n, Q2e, Q3b, Q6d, Q6e, Q6f, Q6g, Q6h, Q9b.

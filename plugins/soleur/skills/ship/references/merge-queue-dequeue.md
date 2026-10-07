@@ -31,3 +31,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" "$N" --queue-state   # <q
 4. A second dequeue of the same PR: stop and report it to the operator with the failing run URL. Do not loop.
 
 Never `gh pr update-branch`, push, or `--admin` a PR that is IN the queue. A push dequeues it, and `--admin` skips the `merge_group` verification the queue exists to run.
+
+## Armed and green but never enqueued (`[ship.phase7.queue_wait_expired]`)
+
+The Phase 7 poll waited for GitHub to enqueue an armed BEHIND PR, saw no required check pending for more than 5 consecutive ticks, and fell back to the BEHIND auto-sync. The PR is not dequeued, so none of the recovery above applies. Read, in this order: the PR timeline (`gh api repos/{owner}/{repo}/issues/<N>/timeline --paginate --jq '.[] | select(.event | test("queue|auto_merge"; "i")) | {event, created_at}'`), the live rules (`gh api repos/{owner}/{repo}/rules/branches/main --jq '[.[] | .type]'` must list `merge_queue`), and that every required context has reported on the head. The strict up-to-date policy was measured once not to block enqueue (ADR-270 canary addendum 2026-10-07), so do not change the ruleset on this evidence alone; the fallback sync already restarts the PR toward the queue.

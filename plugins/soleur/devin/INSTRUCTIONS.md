@@ -303,7 +303,7 @@ Devin's model pricing in harness-specific billing disclosures. Soleur disclaims
 warranty for runtime cost.
 
 For asynchronous CI and merge work, own the wait, report changes, resolve
-`BEHIND` (not while the poll prints `[ship.phase7.queue_wait]`: a merge-queue PR waits for GitHub to enqueue it), and finish the prescribed postmerge checks before claiming success.
+`BEHIND` (not once the poll has printed `[ship.phase7.queue_wait]`: a merge-queue PR then waits for GitHub to enqueue it), and finish the prescribed postmerge checks before claiming success.
 Arm the watch as a background `run_subagent` exit-coded loop (see **Polling /
 watches** below) rather than burning foreground turns on `sleep`-and-poll
 cycles.

@@ -48,13 +48,14 @@
 #       loader's literal wins; the row set is pinned; plus prose pins: the paragraph
 #       above each fence says where the root may come from
 #
-#   Q1..Q11 (#9710) merge-queue mode: a `merge_queue` rule on the base branch + auto-merge armed + a BEHIND reading
+#   Q1..Q11 (#9710) merge-queue mode: a `merge_queue` rule on main + auto-merge armed + a BEHIND reading
 #       the fence itself reported = no sync, one queue_wait line, expiry after more than 5 CONSECUTIVE idle ticks (no
 #       pending REQUIRED check) falling back to today's sync. Rows: Q1/Q1e/Q1m wait (plain, errexit, two-member checks),
-#       Q2/Q2e/Q3/Q3b/Q4 queue absent / rules error / disarmed = today's behaviour, Q6/Q6b/Q6c/Q6d/Q6e/Q6f expiry (grace
-#       boundary, latch + budget, consecutive reset, pending-then-settled, errexit, advisory pending), Q7 DIRTY-derived
-#       BEHIND still syncs, Q8 dequeue while waiting, Q9 a queued PR is reported once and never pushed to, Q10 required
-#       failure, Q11 sync disabled. (Q5 was folded into Q4's armed-error loop.) The row set is pinned by WANTQ.
+#       Q1n/Q2/Q2e/Q3/Q3b/Q4 queue absent / no required checks / rules error / disarmed = today's behaviour,
+#       Q6/Q6b/Q6c/Q6d/Q6e/Q6f/Q6g/Q6h expiry (grace boundary, latch + budget, consecutive reset, pending-then-settled,
+#       errexit, advisory pending, idle-pending-idle, armed flap), Q7 DIRTY-derived BEHIND still syncs, Q8 dequeue while
+#       waiting, Q9 a queued PR is reported once and never expires, Q9b an unreadable queue read at expiry stops the poll,
+#       Q10 required failure, Q11 sync disabled. (Q5 was folded into Q4's armed-error loop.) The row set is pinned by WANTQ.
 #
 # Every run_scenario row also asserts: no git call fell through to the mock catch-all, and no
 # temp file (the per-poll snapshot) outlived the block. CLAUDE_PLUGIN_ROOT is a
@@ -227,6 +228,19 @@ else
     fi
   done
   [[ "$FAIL" -eq 0 ]] && pass "merge-pr mirror skeleton matches canonical block"
+  # Queue-mode vocabulary (#9710) must exist in BOTH fences: the rows run both blocks, but a one-line revert of a line no
+  # row's observable depends on (a ship-only edit, the required-intersection read) is caught here.
+  for token in 'select(.type == "merge_queue")' 'QUEUE_GRACE_TICKS=5' '.autoMergeRequest != null' \
+               '(( ${#REQUIRED_CHECKS[@]} > 0 )) || QUEUE_RULE=0' '.[] | select(.bucket == "pending") | .name' \
+               '(( qidle > QUEUE_GRACE_TICKS ))' '[[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* ]] && qidle=0' \
+               '(( qwait == 1 )) || qidle=0' 'real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1' \
+               '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]'; do
+    for qf in "$BLOCK_FILE" "$MIRROR_FILE"; do
+      if ! grep -qF -- "$token" "$qf"; then
+        fail "queue-mode token missing from $([[ "$qf" == "$BLOCK_FILE" ]] && echo ship || echo merge-pr): $token"
+      fi
+    done
+  done
   if bash -n "$MIRROR_FILE" 2>"$MIRROR_FILE.err"; then
     pass "Phase 7 mirror passes bash -n"
   else
@@ -1631,19 +1645,20 @@ else
   fail "sync_step() git calls without a mock arm: ${missing:-none} (calls found: $nkeys, want >= 10)"
 fi
 # ---------------------------------------------------------------------------
-# Scenarios Q — merge-queue mode (#9710). On a base branch with a `merge_queue` rule, an auto-merge-armed PR that
+# Scenarios Q — merge-queue mode (#9710). On main with a `merge_queue` rule, an auto-merge-armed PR that
 # reads BEHIND is not pushed to: the queue, not a push, makes it current. QGH layers three arms over GQL_GH
 # (the real sync-pr-behind.sh --step child still answers `api graphql` through it):
-#   rules/branches/main  $MOCK_RULES   queue | noqueue | error   (queue = a merge_queue entry in the MIDDLE of the
+#   rules/branches/main  $MOCK_RULES   queue | queue_nochecks | noqueue | error   (queue = a merge_queue entry in the MIDDLE of the
 #                                      array, behind an unrelated rule and ahead of required_status_checks, so a
 #                                      first-index or last-index reader fails)
 #   pr view autoMergeRequest  $MOCK_ARMED   true | false | error   (serves the JSON the real call asks for and runs
-#                                      the handed --jq through real jq, like the other two arms)
+#                                      the handed --jq through real jq, like the other two arms;
+#                                      MOCK_ARMED_FALSE_AT=N reads disarmed on tick N only)
 #   pr checks  $MOCK_CHECKS   pending | pending_optional | mixed | green | none | required_fail | error
 #                                      (the handed --jq runs through real jq, because the same arm also feeds the
 #                                      required-check failure scan; `mixed` and `pending_optional` carry TWO members
 #                                      so a first-element-only reader or a count over non-required checks is visible;
-#                                      MOCK_PENDING_UNTIL=N turns `pending` into `green` after tick N)
+#                                      MOCK_PENDING_FROM=N / MOCK_PENDING_UNTIL=M bound the ticks on which `pending` is pending)
 # `gh pr view` state: MOCK_MERGED_AT=N merges from tick N; MOCK_BLOCKED_AT=N reads BLOCKED on tick N only;
 # MOCK_NO_MERGE_ON_PUSH=1 keeps the PR OPEN after a push (the saturation shape); MOCK_MSS defaults BEHIND.
 # MOCK_GQL_SEQ defaults to not_queued: the Q rows that do not set it still run the child's queue read.
@@ -1655,12 +1670,14 @@ export -f _gql_gh
 _q_jqx() { local a prev=""; for a in "$@"; do if [[ "$prev" == --jq ]]; then printf '%s' "$a"; return 0; fi; prev="$a"; done; }
 export -f _q_jqx
 gh() {
-  local data mode
+  local data mode armed
   case "$1 $2" in
     "pr view")
       case "$*" in
         *"--json autoMergeRequest"*)
-          case "${MOCK_ARMED:-true}" in
+          armed="${MOCK_ARMED:-true}"
+          if [[ -n "${MOCK_ARMED_FALSE_AT:-}" ]] && (( i == MOCK_ARMED_FALSE_AT )); then armed=false; fi
+          case "$armed" in
             true)  data='{"autoMergeRequest":{"enabledAt":"2026-10-07T00:00:00Z","mergeMethod":"SQUASH"}}' ;;
             false) data='{"autoMergeRequest":null}' ;;
             *) echo "gh: HTTP 502 from fixture (pr view autoMergeRequest)" >&2; return 1 ;;
@@ -1674,11 +1691,14 @@ gh() {
       esac ;;
     "pr checks")
       mode="${MOCK_CHECKS:-green}"
-      if [[ "$mode" == pending && -n "${MOCK_PENDING_UNTIL:-}" ]] && (( i > MOCK_PENDING_UNTIL )); then mode=green; fi
+      if [[ "$mode" == pending ]]; then
+        if [[ -n "${MOCK_PENDING_FROM:-}" ]] && (( i < MOCK_PENDING_FROM )); then mode=green; fi
+        if [[ -n "${MOCK_PENDING_UNTIL:-}" ]] && (( i > MOCK_PENDING_UNTIL )); then mode=green; fi
+      fi
       case "$mode" in
         pending)          data='[{"name":"test","bucket":"pending"}]' ;;
-        pending_optional) data='[{"name":"test","bucket":"pass"},{"name":"codeql-advisory","bucket":"pending"}]' ;;
-        mixed)            data='[{"name":"lint","bucket":"pass"},{"name":"test","bucket":"pending"}]' ;;
+        pending_optional) data='[{"name":"test","bucket":"pass"},{"name":"test-e2e","bucket":"pending"}]' ;;
+        mixed)            data='[{"name":"lint","bucket":"pass"},{"name":"test","bucket":"pending"},{"name":"docs","bucket":"pass"}]' ;;
         green)            data='[{"name":"test","bucket":"pass"}]' ;;
         none)             data='[]' ;;
         required_fail)    data='[{"name":"test","bucket":"fail"}]' ;;
@@ -1688,6 +1708,7 @@ gh() {
     "api repos/{owner}/{repo}/rules/branches/main")
       case "${MOCK_RULES:-noqueue}" in
         queue)   data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]' ;;
+        queue_nochecks) data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}}]' ;;
         noqueue) data='[{"type":"deletion"},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]' ;;
         *) echo "gh: HTTP 502 from fixture (rules)" >&2; return 1 ;;
       esac
@@ -1729,13 +1750,23 @@ MERGED CLEAN
   "BEHIND detected|auto-sync|Merge made by|queue_wait_expired|$Q_FORBID"
 rm -f "$QF"
 
-# Q1m — two members (lint passed, test pending): the pending REQUIRED check holds the wait. A reader that looks only at
-# the first element, or at the whole list, reads this as settled and expires on tick 6.
+# Q1m — three members (lint passed, test pending, docs passed): the pending REQUIRED check holds the wait. A reader that
+# looks only at the first or the last element, or at the whole list, reads this as settled and expires on tick 6.
+# MOCK_MERGED_AT=9 ends the poll after the tick (6) on which that mutant would have expired.
 q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=mixed MOCK_MERGED_AT=9
 ONCE='\[ship\.phase7\.queue_wait\]' q_both "Q1m-mixed-members-pending-required-holds-the-wait" "$QF" \
   "MERGED CLEAN
 \[scenario exit rc=0\]" \
   "BEHIND detected|auto-sync|queue_wait_expired|$Q_FORBID"
+rm -f "$QF"
+
+# Q1n — a queue rule but NO required status checks (or that read failed): nothing to wait on, so queue mode stays off and
+# the first BEHIND tick syncs as today (the pend loop would otherwise count any pending check, advisory included).
+q_mocks MOCK_RULES=queue_nochecks MOCK_ARMED=true MOCK_CHECKS=pending
+q_both "Q1n-queue-rule-without-required-checks-syncs-as-today" "$QF" \
+  "BEHIND detected .* auto-sync attempt 1/6
+$Q_SYNCED" \
+  "queue_wait|ship\.phase7\.queued|$Q_FORBID"
 rm -f "$QF"
 
 # Q2 — no merge_queue entry in the rules: exactly today's behaviour (sync on the first BEHIND tick), also under errexit.
@@ -1760,7 +1791,7 @@ rm -f "$QF"
 
 # Q3b — the enqueue report is gated on the queue rule: with the rules read failing and the PR actually queued (the child
 # skips it every tick, kind=queued), the 5th-tick read sees `queued` and must still print nothing (Q2/Q3 default to
-# not_queued, so their forbid on the queued line cannot discriminate).
+# not_queued, so their forbid on the queued line cannot discriminate). MOCK_MERGED_AT=8 ends the poll after the 5th-tick read.
 q_mocks MOCK_RULES=error MOCK_ARMED=true MOCK_CHECKS=pending MOCK_GQL_SEQ=queued MOCK_MERGED_AT=8
 q_both "Q3b-rules-error-with-a-queued-pr-prints-no-queued-line" "$QF" \
   "kind=queued rc=11
@@ -1824,8 +1855,29 @@ q_both "Q6d-pending-then-settled-expires-six-idle-ticks-after-the-last-pending" 
   "\[[1-9]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
 rm -f "$QF"
 
-# Q6f — only REQUIRED checks hold the wait: the required `test` check passed and an advisory one is still pending, so
-# the wait expires on tick 6 instead of waiting out the advisory check.
+# Q6g — idle, then pending, then idle: a pending required check RESETS the count (checks green on ticks 1-2, pending on
+# 3-4, green from 5: the idle ticks are 5-10, expiry on tick 10). A pending check that merely paused the count would
+# expire on tick 8.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending MOCK_PENDING_FROM=3 MOCK_PENDING_UNTIL=4
+q_both "Q6g-idle-then-pending-then-idle-resets-the-count" "$QF" \
+  "\[10/90\] \[ship\.phase7\.queue_wait_expired\]
+\[10/90\] $Q_SYNCED" \
+  "\[[1-9]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q6h — the idle count is exactly CONSECUTIVE across an armed-read flap: checks green, a disarmed read on tick 4 (that tick
+# syncs as today and restarts the count), then idle ticks 5-10, expiry on tick 10 with the second sync. A reset keyed on
+# `real_behind` alone would not restart on tick 4 and would expire on tick 7. The PR stays BEHIND after each push.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_ARMED_FALSE_AT=4 MOCK_NO_MERGE_ON_PUSH=1 MOCK_MERGED_AT=12
+ONCE='queue_wait_expired\]' q_both "Q6h-armed-flap-restarts-the-idle-count" "$QF" \
+  "\[4/90\] auto-sync 1(/6)? pushed
+\[10/90\] \[ship\.phase7\.queue_wait_expired\]
+\[10/90\] auto-sync 2(/6)? pushed" \
+  "\[[5-9]/90\] \[ship\.phase7\.queue_wait_expired\]|$Q_FORBID"
+rm -f "$QF"
+
+# Q6f — only REQUIRED checks hold the wait: the required `test` check passed and an advisory one (`test-e2e`, whose name
+# starts with the required name) is still pending, so the wait expires on tick 6 instead of waiting out the advisory check.
 q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending_optional
 ONCE='queue_wait_expired\]' q_both "Q6f-pending-advisory-check-does-not-hold-the-wait" "$QF" \
   "\[6/90\] \[ship\.phase7\.queue_wait_expired\]
@@ -1851,15 +1903,24 @@ q_both "Q8-dequeue-while-waiting-stops" "$QF" \
 rm -f "$QF"
 
 # Q9 — a PR the queue holds while it still reads BEHIND and armed (a defensive state: a queued PR was measured as
-# disarmed): the enqueue is reported exactly once although the queue is read at ticks 5 and 10, and the grace expiry on
-# tick 6 falls back to `--step`, whose own queue gate skips the PR (kind=queued, rc 11) — never a push.
+# disarmed): the enqueue is reported exactly once although the queue is read on ticks 5 and 10, and each queued reading
+# restarts the idle count, so the PR never expires (it has no pending PR check) and `--step` is never called.
 q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_GQL_SEQ=queued MOCK_MERGED_AT=12
-ONCE='\[ship\.phase7\.queued\]' q_both "Q9-queued-pr-reported-once-and-never-pushed-to" "$QF" \
+ONCE='\[ship\.phase7\.queued\]' q_both "Q9-queued-pr-reported-once-and-never-expired" "$QF" \
   "\[5/90\] \[ship\.phase7\.queued\] PR 4387 is in the merge queue
-\[6/90\] \[ship\.phase7\.queue_wait_expired\]
-kind=queued rc=11
 MERGED CLEAN" \
-  "auto-sync [0-9/]+ pushed|Merge made by|$Q_FORBID"
+  "queue_wait_expired|kind=queued|sync_noop|auto-sync|Merge made by|$Q_FORBID"
+rm -f "$QF"
+
+# Q9b — expiry with an UNREADABLE queue read: the queue reads fail (no `queued` sighting resets the count), the idle count
+# expires on tick 6 and the fallback `--step` fails closed on the same unreadable read (kind=gh, exit 4), stopping the poll
+# loudly; nothing is ever pushed.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=green MOCK_GQL_SEQ=fail
+q_both "Q9b-expiry-with-an-unreadable-queue-read-stops-and-never-pushes" "$QF" \
+  "\[6/90\] \[ship\.phase7\.queue_wait_expired\]
+kind=gh rc=4
+\[6/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 4 \(see its line above\)\. Stopping the poll\." \
+  "auto-sync [0-9/]+ pushed|\[7/90\]|$Q_FORBID"
 rm -f "$QF"
 
 # Q10 — a required check failing still exits the poll on its own tick under queue mode.
@@ -1884,7 +1945,7 @@ q_both "Q11-queue-rule-with-sync-disabled-keeps-the-named-stop" "$QF" \
 rm -f "$QF"
 Q_TAIL=""
 
-WANTQ="Q1-queue-armed-pending-waits-no-sync Q1e-queue-wait-under-errexit Q1m-mixed-members-pending-required-holds-the-wait Q2-no-queue-rule-syncs-as-today Q2e-no-queue-rule-under-errexit Q3-rules-api-error-syncs-as-today Q3b-rules-error-with-a-queued-pr-prints-no-queued-line Q4-queue-but-armed-is-false-syncs-as-today Q4-queue-but-armed-is-error-syncs-as-today Q6-settled-green-expires-and-syncs Q6-settled-none-expires-and-syncs Q6-settled-error-expires-and-syncs Q6e-expiry-under-errexit Q6b-expiry-latches-then-budget-exhausts Q6c-idle-count-is-consecutive Q6d-pending-then-settled-expires-six-idle-ticks-after-the-last-pending Q6f-pending-advisory-check-does-not-hold-the-wait Q7-dirty-derived-behind-still-syncs Q8-dequeue-while-waiting-stops Q9-queued-pr-reported-once-and-never-pushed-to Q10-required-check-failure-exits Q11-queue-rule-with-sync-disabled-keeps-the-named-stop"
+WANTQ="Q1-queue-armed-pending-waits-no-sync Q1e-queue-wait-under-errexit Q1m-mixed-members-pending-required-holds-the-wait Q1n-queue-rule-without-required-checks-syncs-as-today Q2-no-queue-rule-syncs-as-today Q2e-no-queue-rule-under-errexit Q3-rules-api-error-syncs-as-today Q3b-rules-error-with-a-queued-pr-prints-no-queued-line Q4-queue-but-armed-is-false-syncs-as-today Q4-queue-but-armed-is-error-syncs-as-today Q6-settled-green-expires-and-syncs Q6-settled-none-expires-and-syncs Q6-settled-error-expires-and-syncs Q6e-expiry-under-errexit Q6b-expiry-latches-then-budget-exhausts Q6c-idle-count-is-consecutive Q6d-pending-then-settled-expires-six-idle-ticks-after-the-last-pending Q6g-idle-then-pending-then-idle-resets-the-count Q6h-armed-flap-restarts-the-idle-count Q6f-pending-advisory-check-does-not-hold-the-wait Q7-dirty-derived-behind-still-syncs Q8-dequeue-while-waiting-stops Q9-queued-pr-reported-once-and-never-expired Q9b-expiry-with-an-unreadable-queue-read-stops-and-never-pushes Q10-required-check-failure-exits Q11-queue-rule-with-sync-disabled-keeps-the-named-stop"
 if [[ "${RANQ[*]}" == "$WANTQ" ]]; then
   pass "[Q-rows] merge-queue row set is exactly: ${#RANQ[@]} rows"
 else
@@ -2149,7 +2210,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=923
+MIN_VERDICTS=973
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

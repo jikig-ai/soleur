@@ -138,9 +138,9 @@ armed PR in the window BEFORE enqueue, which is where a PR spends its whole CI c
 PR #9697 was enqueued 12:39:57Z with its head (`4b0bb6d78d`, last commit dated 11:53:47Z) missing 2 `main` commits and no push
 in between (the plan records it reading BEHIND only while a check was pending). So the right behaviour on a queue repo is to wait, not to sync.
 
-**Fix (#9710).** Phase 7 (ship and the merge-pr mirror) enters queue mode when the base branch has a `merge_queue` rule
+**Fix (#9710).** Phase 7 (ship and the merge-pr mirror) enters queue mode when `main` has a `merge_queue` rule
 and auto-merge is armed: no sync on a BEHIND that GitHub reported, one `[ship.phase7.queue_wait]` line, one
-`[ship.phase7.queued]` line on enqueue, and a fall-back to today's sync after more than 5 consecutive idle ticks (the 6th)
+`[ship.phase7.queued]` line (at the first 5th-tick read that finds the PR queued), and a fall-back to today's sync after more than 5 consecutive idle ticks (the 6th)
 (`[ship.phase7.queue_wait_expired]`). Every unreadable answer falls toward the sync. A repo with no merge queue runs the
 old code unchanged. Decision record: ADR-270 Decision 5 (amendment 2026-10-07).
 

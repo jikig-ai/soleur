@@ -159,27 +159,29 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      covered only a PR already IN the queue, and an armed PR spends its whole CI cycle
      before enqueue, which is where the sync loop restarted CI on every `main` merge.
      Queue mode (`QUEUE_RULE=1`, read once from `gh api repos/{owner}/{repo}/rules/branches/main`
-     by `.type == "merge_queue"`, never by position; the fence reads `main`'s rules, as its
-     required-check read does) applies only to a BEHIND reading GitHub
-     itself reported (not one the DIRTY block derived), with auto-merge armed (read per tick)
-     and auto-sync usable. It waits for GitHub to enqueue the PR (measured, see the canary
+     by `.type == "merge_queue"`, never by position, and only with a non-empty required-check set;
+     the fence reads `main`'s rules, as its required-check read does) applies only to a BEHIND
+     reading GitHub itself reported (not one the DIRTY block derived), with auto-merge armed (read
+     per tick) and auto-sync usable. It waits for GitHub to enqueue the PR (measured, see the canary
      addendum: GitHub enqueues an armed PR whose head is behind `main` on its own under the strict
      policy, so no explicit enqueue and no ruleset change), reports the enqueue once
-     (`[ship.phase7.queued]`, at the first 5th-tick read that finds the PR queued), and is bounded:
-     more than 5 CONSECUTIVE wait ticks (the 6th) with no pending REQUIRED check latches back to
-     today's sync for the rest of that poll (`[ship.phase7.queue_wait_expired]`), and that
-     sync's `--step` still skips a queued PR through its own queue gate; `MAX_POLL_MIN` still caps a
-     PR whose required checks never settle. Every unreadable answer (rules read, armed read, checks
-     read) leaves queue mode off or walks toward the sync, never toward waiting forever. A
-     repo with no `merge_queue` rule runs today's code unchanged. `sync-pr-behind.sh` and the
-     `pre-merge-rebase.sh` hook are not changed (the hook runs once per `gh pr merge`, not per
-     poll tick). Accepted residuals: (1) several required contexts carry their PR-head pass onto
-     `merge_group` by design (`tenant-integration-required` and `vendor-pin-required` do not re-run
-     their suites there; see each workflow's `merge_group` comment), so in queue mode their only
-     real run is at the PR-time base, where the sync used to re-run the PR-event versions on a
-     fresher base; (2) a wait tick makes no `--step` call, so the seen-queued marker is not written
-     during the wait and a dequeue is found by a current removal event or the disarmed-and-not-queued
-     read, on the next 5th-tick read.
+     (`[ship.phase7.queued]`, at the first 5th-tick read that finds the PR queued; that reading also
+     restarts the idle count, so a PR the queue holds never expires), and is bounded: more than 5
+     CONSECUTIVE wait ticks (the 6th) with no pending REQUIRED check latches back to today's sync for
+     the rest of that poll (`[ship.phase7.queue_wait_expired]`), and that sync's `--step` still skips
+     a queued PR through its own queue gate and stops on an unreadable queue read; `MAX_POLL_MIN` still
+     caps a PR whose required checks never settle or whose state keeps flapping (any tick that is not
+     a wait tick restarts the idle count). Every unreadable answer falls toward today's sync: a failed
+     rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
+     ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
+     rule runs today's code unchanged. `sync-pr-behind.sh` and the `pre-merge-rebase.sh` hook are not
+     changed (the hook runs once per `gh pr merge`, not per poll tick). Accepted residuals: (1) some
+     required contexts post a PASS on `merge_group` without re-running their suites
+     (`tenant-integration-required` and `vendor-pin-required`; see each workflow's `merge_group`
+     comment), so in queue mode their only real run is the PR-time one against the PR-time base,
+     where the sync used to re-run the PR-event versions on a fresher base; (2) a wait tick makes no
+     `--step` call, so the seen-queued marker is not written during the wait, and a dequeue is found
+     only by a current removal event, on the next 5th-tick read.
    - The `pre-merge-rebase.sh` hook reads the same state and skips its origin/main
      merge-and-push for an already queued PR. It resolves the PR from the bare number,
      the number plus flags in any order, `#N`, `-R/--repo` forms and a `cd <wt> &&` or
@@ -619,7 +621,7 @@ Definitions, commands and caveats are in [the #9482 measurement comment](https:/
 
 ### Addendum 2026-10-07 (#9710): enqueue while BEHIND
 
-Measured read-only for the queue-mode design. Question: does GitHub enqueue an armed PR that is BEHIND once its
+Measured read-only for the queue-mode design. Question: does GitHub enqueue an armed PR whose head is behind `main` once its
 checks are green, under `strict_required_status_checks_policy = true`? Answer: yes.
 
 - PR #9697: `auto_merge_enabled` 2026-10-07T11:02:22Z; last commit dated 11:53:47Z (head `4b0bb6d78d`, merge-base
