@@ -321,7 +321,7 @@ note() { # <rank 1|2> <rule id>
   if (( $1 > REC_RANK )); then REC_RANK="$1"; REC_RULE="$2"; fi
 }
 
-SIMCWD=""; CWD_READY=0; UNRES=0
+SIMCWD=""; ORIGCWD=""; CWD_READY=0; UNRES=0; EH=""; EH_READY=0
 HL=""; HP=""; HOME_READY=0
 GIT_SCRUBBED=0
 AV=(); AF=(); DA_T=(); DA_F=()
@@ -405,13 +405,22 @@ cwd_ready() {
   local base="${CWD_IN:-${CLAUDE_PROJECT_DIR:-${PWD:-/}}}"
   [[ "$base" == /* ]] || base="${PWD:-/}/$base"
   resolve_phys "$base" 1 || RP="$base"
-  SIMCWD="$RP"
+  SIMCWD="$RP"; ORIGCWD="$RP"
+}
+
+# eff_home -> EH: HOME when it is set, else the directory bash itself would use for ~ (the passwd entry), else
+# empty. The lookup is one subshell, and only when HOME is empty or unset.
+eff_home() {
+  [[ "$EH_READY" -eq 1 ]] && return 0
+  EH_READY=1
+  if [[ -n "${HOME:-}" ]]; then EH="$HOME"; else EH="$( ( unset HOME; cd ~ 2>/dev/null && pwd -P ) 2>/dev/null )"; fi
 }
 
 home_ready() {
   [[ "$HOME_READY" -eq 1 ]] && return 0
   HOME_READY=1
-  local h="${HOME:-}"
+  eff_home
+  local h="$EH"
   if [[ "$h" != /* ]]; then HL="/nonexistent-home-unset"; HP="$HL"; return 0; fi
   lex_norm "$h"; HL="$LN"
   resolve_phys "$h" 1 || RP="$HL"
@@ -446,14 +455,15 @@ expand_word() {
   EW_Q="$qd"
   if (( qd == 0 )) || [[ "$t" == '~/' || "$t" == '~/*' ]]; then
     case "$t" in
-      '~'|'~/'*) [[ -n "${HOME:-}" ]] || return 1; P='~'; t="$HOME${t#"$P"}" ;;
+      '~'|'~/'*) eff_home; [[ -n "$EH" ]] || return 1; P='~'; t="$EH${t#"$P"}" ;;
+      '~+'|'~+/'*) cwd_ready; P='~+'; t="$SIMCWD${t#"$P"}" ;;
       '~'*) return 1 ;;
     esac
   fi
   if (( xd )); then
     case "$t" in
-      '$HOME'|'$HOME/'*) [[ -n "${HOME:-}" ]] || return 1; P='$HOME'; t="$HOME${t#"$P"}" ;;
-      '${HOME}'|'${HOME}/'*) [[ -n "${HOME:-}" ]] || return 1; P='${HOME}'; t="$HOME${t#"$P"}" ;;
+      '$HOME'|'$HOME/'*) P='$HOME'; t="${HOME:-}${t#"$P"}" ;;  # an unset HOME expands to nothing: $HOME/* is /*
+      '${HOME}'|'${HOME}/'*) P='${HOME}'; t="${HOME:-}${t#"$P"}" ;;
       '$PWD'|'$PWD/'*) cwd_ready; P='$PWD'; t="$SIMCWD${t#"$P"}" ;;
       '${PWD}'|'${PWD}/'*) cwd_ready; P='${PWD}'; t="$SIMCWD${t#"$P"}" ;;
     esac
@@ -461,6 +471,35 @@ expand_word() {
   fi
   [[ -n "$t" ]] || return 1
   EW="$t"
+  return 0
+}
+
+# glob_contents <text> <quoted 0|1> -> GD: 0 when the target names the CONTENTS of a directory, i.e. every path
+# component after the glob-free root is only glob syntax (`*`, `**`, `?`, `[a-z]`, in any run): /** /*/* /*/ /?
+# /[a-z]* ~/** and a bare * or ./*. A component that mixes literal text with a glob (`*.log`, `.*`, `node_modules`
+# after a `*`) is a different set of files and is not matched. A quoted target is a glob only in the old
+# trailing-/* spelling (see the header: `~/*` is read as home even when quoted).
+RE_GLOB_ONLY='^(\*|\?|\[[^]]+\])+$'
+glob_contents() {
+  local t="$1" qd="$2" comp="" root="" seen=0 IFS=/ lead=""
+  GD=""
+  if (( qd )); then
+    if [[ "$t" == */'*' ]]; then GD="${t%/\*}"; [[ -z "$GD" ]] && GD=/; return 0; fi
+    return 1
+  fi
+  [[ "$t" == /* ]] && lead=/
+  for comp in $t; do
+    if (( seen )); then
+      [[ -z "$comp" ]] && continue
+      [[ "$comp" =~ $RE_GLOB_ONLY ]] || return 1
+    elif [[ "$comp" =~ $RE_GLOB_ONLY ]]; then seen=1
+    else
+      case "$comp" in *'*'*|*'?'*|*'['*) return 1 ;; esac
+      [[ -n "$comp" ]] && root="${root:+$root/}$comp"
+    fi
+  done
+  (( seen )) || return 1
+  if [[ -n "$lead" ]]; then GD="/$root"; else GD="${root:-.}"; fi
   return 0
 }
 
@@ -485,7 +524,7 @@ rule_rm() {
     if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the targets of rm"; return 0; fi
     expand_word "${a[$k]}" "${fl[$k]}" || continue
     T="$EW"; glob=0; follow=0
-    if [[ "$T" == '*' && "$EW_Q" -eq 0 ]]; then glob=1; follow=1; D="$SIMCWD"
+    if glob_contents "$T" "$EW_Q"; then glob=1; follow=1; D="$GD"
     elif [[ "$T" == */'*' ]]; then glob=1; follow=1; D="${T%/\*}"; [[ -z "$D" ]] && D=/
     elif [[ "$T" == */ ]]; then
       follow=1; D="$T"
@@ -496,7 +535,7 @@ rule_rm() {
     resolve_phys "$D" "$follow" || continue
     [[ -n "$RP" ]] || continue
     if anc_or_eq "$RP" "$HL" || anc_or_eq "$RP" "$HP"; then note 2 recursive-delete-home
-    elif (( glob == 0 )) && anc_or_eq "$RP" "$SIMCWD"; then note 1 recursive-delete-workdir; fi
+    elif (( glob == 0 )) && { anc_or_eq "$RP" "$SIMCWD" || anc_or_eq "$RP" "$ORIGCWD"; }; then note 1 recursive-delete-workdir; fi
   done
 }
 
@@ -510,7 +549,11 @@ rule_tf() {
   if [[ "$sub" == apply ]]; then
     for ((i = i + 1; i < n; i++)); do
       x="${a[$i]}"
-      case "$x" in -destroy|--destroy|-destroy=true|--destroy=true) note 1 infra-destroy; return 0 ;; esac
+      case "$x" in
+        -destroy|--destroy) note 1 infra-destroy; return 0 ;;
+        -destroy=*|--destroy=*)  # a Go bool: 0 f F false FALSE False turn it off, every other value is on (or an error)
+          case "${x#*=}" in 0|f|F|false|FALSE|False) : ;; *) note 1 infra-destroy; return 0 ;; esac ;;
+      esac
     done
   fi
 }
@@ -518,7 +561,7 @@ rule_tf() {
 rule_git() {
   local -a a=("${AV[@]}") pos=() refs=() D_DST=() D_F=() D_DEL=()
   local n=${#a[@]} i=1 j k c x name end=0 repo cur head remote named
-  local force=0 del=0 allf=0 mirror=0 repoopt=0 risk=0 r f dele src dst
+  local force=0 del=0 allf=0 mirror=0 repoopt=0 risk=0 r f dele src dst mt=0 mtf=0
   cwd_ready; repo="$SIMCWD"
   while (( i < n )); do
     case "${a[$i]}" in
@@ -526,7 +569,8 @@ rule_git() {
             case "${a[$((i + 1))]}" in /*) repo="${a[$((i + 1))]}" ;; *) repo="$repo/${a[$((i + 1))]}" ;; esac
           fi
           i=$((i + 2)) ;;
-      -c|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path) i=$((i + 2)) ;;
+      # the separate-argument forms take the next word; `--opt=value` and every other flag take none
+      -c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix|--attr-source) i=$((i + 2)) ;;
       -*) i=$((i + 1)) ;;
       *) break ;;
     esac
@@ -542,8 +586,8 @@ rule_git() {
       case "$name" in
         --force*) force=1 ;;
         --de|--del|--dele|--delet|--delete) del=1 ;;
-        --all) allf=1 ;;
-        --mirror) mirror=1 ;;
+        --al|--all) allf=1 ;;                                  # --al is the shortest unique abbreviation (--a is ambiguous)
+        --m|--mi|--mir|--mirr|--mirro|--mirror) mirror=1 ;;
         --repo) repoopt=1; [[ "$x" == *=* ]] || j=$((j + 1)) ;;
         --push-option|--receive-pack|--exec) [[ "$x" == *=* ]] || j=$((j + 1)) ;;
       esac
@@ -571,7 +615,10 @@ rule_git() {
   for r in ${refs[@]+"${refs[@]}"}; do
     f=0; dele=0
     if [[ "$r" == +* ]]; then f=1; r="${r#+}"; fi
-    if [[ "$r" == *:* ]]; then
+    if [[ "$r" == : ]]; then
+      mt=1; (( f )) && mtf=1  # the matching refspec: every branch both sides have
+      dst=""
+    elif [[ "$r" == *:* ]]; then
       src="${r%%:*}"; dst="${r#*:}"
       if [[ "$dst" == +* ]]; then f=1; dst="${dst#+}"; fi
       [[ -z "$src" ]] && dele=1
@@ -586,6 +633,7 @@ rule_git() {
   # The directory the push acts on depends on the working directory: an unresolvable cd decides it here.
   if (( UNRES )); then note 1 unresolved-cd-before-destructive; return 0; fi
   if (( (allf || mirror) && force )); then note 1 default-branch-force-push; return 0; fi
+  if (( mt && (force || mtf) )); then note 1 default-branch-force-push; return 0; fi
   head=""; cur=""; local have_head=0 have_cur=0
   local -a defaults=(main master)
   for ((k = 0; k < ${#D_DST[@]}; k++)); do
@@ -594,9 +642,11 @@ rule_git() {
       if (( ! have_cur )); then cur="$(git_ro "$repo" symbolic-ref --short HEAD)"; have_cur=1; fi
       dst="$cur"
     fi
-    dst="${dst#refs/heads/}"
+    dst="${dst#refs/heads/}"; dst="${dst#heads/}"
     [[ -n "$dst" ]] || continue
     if (( force || D_F[k] || del || D_DEL[k] )); then
+      # a destination with glob syntax can name a default branch (refs/heads/*:refs/heads/*)
+      case "$dst" in *'*'*|*'?'*|*'['*) note 1 default-branch-force-push; return 0 ;; esac
       if [[ "$dst" == main || "$dst" == master ]]; then note 1 default-branch-force-push; return 0; fi
       if (( ! have_head )); then
         head="$(git_ro "$repo" symbolic-ref --short "refs/remotes/$named/HEAD")"; have_head=1

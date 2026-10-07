@@ -1193,6 +1193,69 @@ L @@ case: GIT push --force origin main @@ ask @@ @R1@ @@ GIT push --force origi
 L @@ case: Terraform destroy @@ ask @@ - @@ Terraform destroy
 X @@ case: an argument named RM is not a command (rm -rf RM) @@ none @@ - @@ rm -rf RM
 X @@ case: echo RM -rf ~ (arguments, not a command) @@ none @@ - @@ echo RM -rf ~
+# ---- spellings inside D1's rules: terraform apply -destroy=<bool> (a Go bool: 1 t T TRUE true True and 0 f F FALSE false False)
+L @@ spelling: terraform apply -destroy=1 @@ ask @@ - @@ terraform apply -destroy=1
+L @@ spelling: terraform apply -destroy=t @@ ask @@ - @@ terraform apply -destroy=t
+L @@ spelling: terraform apply -destroy=T @@ ask @@ - @@ terraform apply -destroy=T
+L @@ spelling: terraform apply -destroy=TRUE @@ ask @@ - @@ terraform apply -destroy=TRUE
+L @@ spelling: terraform apply -destroy=True @@ ask @@ - @@ terraform apply -destroy=True
+L @@ spelling: tofu apply --destroy=1 -auto-approve @@ ask @@ - @@ tofu apply --destroy=1 -auto-approve
+L @@ spelling: terraform apply -destroy=true @@ ask @@ - @@ terraform apply -destroy=true
+L @@ spelling: terraform apply -destroy=maybe (not a bool: terraform refuses it, the guard asks) @@ ask @@ - @@ terraform apply -destroy=maybe
+L @@ spelling: terraform apply -destroy=false @@ none @@ - @@ terraform apply -destroy=false
+L @@ spelling: terraform apply -destroy=0 @@ none @@ - @@ terraform apply -destroy=0
+L @@ spelling: terraform apply -destroy=f @@ none @@ - @@ terraform apply -destroy=f
+L @@ spelling: terraform apply -destroy=F @@ none @@ - @@ terraform apply -destroy=F
+L @@ spelling: terraform apply -destroy=FALSE @@ none @@ - @@ terraform apply -destroy=FALSE
+L @@ spelling: terraform apply -destroy=False @@ none @@ - @@ terraform apply -destroy=False
+L @@ spelling: tofu apply --destroy=false @@ none @@ - @@ tofu apply --destroy=false
+# ---- spellings inside D1's rules: git push
+L @@ spelling: git push --force --al origin (--al is the unique abbreviation of --all) @@ ask @@ @R1@ @@ git push --force --al origin
+L @@ spelling: git push --force --mir origin (an abbreviation of --mirror) @@ ask @@ @R1@ @@ git push --force --mir origin
+L @@ spelling: git push --al origin (no force) @@ none @@ @R1@ @@ git push --al origin
+L @@ spelling: git push -f origin heads/main @@ ask @@ @R1@ @@ git push -f origin heads/main
+L @@ spelling: git push -f origin HEAD:heads/main @@ ask @@ @R1@ @@ git push -f origin HEAD:heads/main
+L @@ spelling: git push -f origin heads/trunk (origin's own default) @@ ask @@ @R1@ @@ git push -f origin heads/trunk
+L @@ spelling: git push -f origin a glob refspec whose destination is a glob @@ ask @@ @R1@ @@ git push -f origin 'refs/heads/*:refs/heads/*'
+L @@ spelling: git push origin +glob:glob @@ ask @@ @R1@ @@ git push origin '+refs/heads/*:refs/heads/*'
+L @@ spelling: git push -f origin : (the matching refspec) @@ ask @@ @R1@ @@ git push -f origin :
+L @@ spelling: git push origin +: (the forced matching refspec) @@ ask @@ @R1@ @@ git push origin +:
+L @@ spelling: git push origin glob:glob (no force) @@ none @@ @R1@ @@ git push origin 'refs/heads/*:refs/heads/*'
+L @@ spelling: git push origin : (the matching refspec, no force) @@ none @@ @R1@ @@ git push origin :
+L @@ spelling: git push -f origin heads/feature-x @@ none @@ @R1@ @@ git push -f origin heads/feature-x
+L @@ spelling: git --config-env x=Y push -f origin main (a separate-argument global option) @@ ask @@ @R1@ @@ git --config-env x=Y push -f origin main
+L @@ spelling: git --config-env=x=Y push -f origin main @@ ask @@ @R1@ @@ git --config-env=x=Y push -f origin main
+L @@ spelling: git --git-dir=.git push -f origin main (an attached global option takes no extra word) @@ ask @@ @R1@ @@ git --git-dir=.git push -f origin main
+L @@ spelling: git --git-dir .git push -f origin main @@ ask @@ @R1@ @@ git --git-dir .git push -f origin main
+L @@ spelling: git --exec-path=/x push -f origin main @@ ask @@ @R1@ @@ git --exec-path=/x push -f origin main
+L @@ spelling: git -c user.name=x push -f origin main @@ ask @@ @R1@ @@ git -c user.name=x push -f origin main
+L @@ spelling: git -c alias.p=push p -f origin main (an alias is NOT DECIDED) @@ none @@ @R1@ @@ git -c alias.p=push p -f origin main
+# ---- spellings inside D1's rules: rm targets that are only glob syntax are the contents of / or home
+L @@ spelling: rm -rf /** @@ deny @@ - @@ rm -rf /**
+L @@ spelling: rm -rf /*/* @@ deny @@ - @@ rm -rf /*/*
+L @@ spelling: rm -rf /*/ @@ deny @@ - @@ rm -rf /*/
+L @@ spelling: rm -rf /? @@ deny @@ - @@ rm -rf /?
+L @@ spelling: rm -rf /[a-z]* @@ deny @@ - @@ rm -rf /[a-z]*
+L @@ spelling: rm -rf ~/** @@ deny @@ - @@ rm -rf ~/**
+L @@ spelling: rm -rf $HOME/** @@ deny @@ - @@ rm -rf $HOME/**
+L @@ spelling: rm -rf ${HOME}/*/* @@ deny @@ - @@ rm -rf ${HOME}/*/*
+L @@ spelling: rm -rf ~/*/ @@ deny @@ - @@ rm -rf ~/*/
+L @@ spelling: rm -rf ** with home as the working directory @@ deny @@ @HOME@ @@ rm -rf **
+L @@ spelling: rm -rf ./*/* with home as the working directory @@ deny @@ @HOME@ @@ rm -rf ./*/*
+L @@ spelling: rm -rf ~/*/node_modules (a literal component after the glob) @@ none @@ - @@ rm -rf ~/*/node_modules
+L @@ spelling: rm -rf /home/*/x (a literal component after the glob) @@ none @@ - @@ rm -rf /home/*/x
+L @@ spelling: rm -rf /*.log (a glob with a literal part is not the contents of /) @@ none @@ - @@ rm -rf /*.log
+L @@ spelling: rm -rf ~/.* (a partial glob, a stated residual) @@ none @@ - @@ rm -rf ~/.*
+L @@ spelling: rm -rf ~/*.tmp @@ none @@ - @@ rm -rf ~/*.tmp
+L @@ spelling: rm -rf ./** outside home is routine @@ none @@ - @@ rm -rf ./**
+L @@ spelling: rm -rf '/**' (a quoted ** is a file name) @@ none @@ - @@ rm -rf '/**'
+X @@ spelling: rm -rf ~+ is the working directory @@ ask @@ @SUB@ @@ rm -rf ~+
+X @@ spelling: rm -rf ~+/build is a child of the working directory @@ none @@ @SUB@ @@ rm -rf ~+/build
+# ---- spellings inside D1's rules: the cwd rule compares against the envelope's cwd as well as the simulated one
+L @@ spelling: cd .. && rm -rf sub from sub asks (the target is the original working directory) @@ ask @@ @SUB@ @@ cd .. && rm -rf sub
+L @@ spelling: cd ~ && rm -rf proj from home/proj asks @@ ask @@ @HOME@/proj @@ cd ~ && rm -rf proj
+L @@ spelling: pushd .. then rm -rf sub from sub asks @@ ask @@ @SUB@ @@ pushd .. > /dev/null; rm -rf sub
+L @@ spelling: cd .. && rm -rf other from sub is not the working directory @@ none @@ @SUB@ @@ cd .. && rm -rf other
 ROWS
 
 echo "== the ordinary-command corpus (kind C): no decision on any of it =="
@@ -1276,6 +1339,15 @@ LH "rm -rf ~ with a nonexistent home" deny "$_FH" 'rm -rf ~'
 LH "a project under a nonexistent home is not home" none "$_FH" "rm -rf $_FH/projects/x"
 LH "another user's home is not this home" none "$_FH" 'rm -rf /home/other-user-dir'
 LH "a .. through a nonexistent directory is normalized lexically and still reaches an ancestor of home" deny "$_FH" "rm -rf $_FH/nonexistent-dir/../.."
+
+# an empty or unset HOME: bash resolves ~ through the passwd entry (and $HOME/ is /), so the guard must too
+_pwhome="$( ( unset HOME; cd ~ 2>/dev/null && pwd -P ) 2>/dev/null )"
+_pw_want=none; [[ -n "$_pwhome" ]] && _pw_want=deny
+env_row "unset HOME: rm -rf ~ resolves ~ through the passwd entry (deny when the account has a home directory)" "$_pw_want" "$(mkjson 'rm -rf ~' "$TREE")" HOME=
+env_row "unset HOME: rm -rf ~/ resolves ~ through the passwd entry" "$_pw_want" "$(mkjson 'rm -rf ~/' "$TREE")" HOME=
+env_row "unset HOME: rm -rf \"\$HOME/\" is rm -rf / and is denied" deny "$(mkjson 'rm -rf "$HOME/"' "$TREE")" HOME=
+env_row "unset HOME: rm -rf \$HOME/* is rm -rf /* and is denied" deny "$(mkjson 'rm -rf $HOME/*' "$TREE")" HOME=
+env_row "unset HOME: rm -rf \$HOME alone is rm -rf with no operand: no decision" none "$(mkjson 'rm -rf $HOME' "$TREE")" HOME=
 
 # =====================================================================================================
 echo "== the quoted command in the reason is the whole matched simple command (state is not clobbered) =="
@@ -1528,7 +1600,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=572
+MIN_CASES=636
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
