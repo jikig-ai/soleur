@@ -106,7 +106,7 @@ The first two rows survived the earlier self-run battery, which mutated the conf
 
 **Date:** 2026-10-06. **CC version:** 2.1.291 (`claude --version`). **Consumer:** the W2 destructive-command guard (`plan: knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`, Phase 0.1 and 0.2). Nothing here touched production, read a credential or reached the network.
 
-### 0.2 — probe method
+### 1.2.1 — probe method
 
 - **Stub hook (throwaway, never committed).** A tiny bash script under a `mktemp -d /var/tmp/w2-probe.XXXXXX` directory. It appends its stdin to a file and answers a fixed envelope: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"<ask|allow|deny>","permissionDecisionReason":"probe"}}`, optionally with a top-level `systemMessage`. A `PostToolUse(Bash)` sentinel hook appends a line when the command actually executes, so "executed" is observed, not inferred. Both are wired through a throwaway `--settings` file.
 - **Scripted Anthropic stand-in.** `apps/web-platform/test/helpers/anthropic-stub.ts` was read; its behaviour was reproduced in a throwaway Node script (one `Bash` tool_use per tool-carrying request without a `tool_result`, plain text otherwise; the repo helper is TypeScript and takes one fixed command). One extension was needed and is the only deviation: for the subagent rows, a main-thread request that carries an `Agent` tool answers with an `Agent` tool_use whose prompt contains a marker, and the subagent's own request (marker in its first message) then answers with the `Bash` tool_use. The model is out of the assertion path: every row observes the harness, never a model's compliance.
@@ -114,7 +114,7 @@ The first two rows survived the earlier self-run battery, which mutated the conf
 - **Headless rows:** `claude -p "run it" --settings <stub settings> --output-format stream-json --verbose --permission-mode <mode> </dev/null`. **Interactive rows:** the same `claude --settings <stub settings> --permission-mode <mode>` in a detached `tmux` (200x50) inside the same namespace, `run it` typed, the pane captured at 8, 18 and 23 s. The fresh config dir is seeded with a `.claude.json` (`hasCompletedOnboarding`, the project trust flag, the placeholder key approved) because first-run onboarding otherwise opens a connectivity check against `api.anthropic.com` and stalls.
 - **Controls run and read before the rows:** `allow` executes (sentinel fired, `permission_denials` 0, tool_result `probe-allow`); `deny` blocks (sentinel absent). So the sentinel can distinguish the cases.
 
-### 0.2 — customer hook-decision matrix (CC 2.1.291)
+### 1.2.2 — customer hook-decision matrix (CC 2.1.291)
 
 | Row | Result | CC version | Command shape |
 |---|---|---|---|
@@ -140,7 +140,7 @@ The first two rows survived the earlier self-run battery, which mutated the conf
 - **D4's conditional clause fires.** The plan says: "If Phase 0.2 shows `systemMessage` renders to the person on a deny, it is added so the person sees the reason without the agent relaying it." It does render, and it is the ONLY way an interactive person sees why a deny happened. D4 therefore adds a top-level `systemMessage` carrying the rule id and the quoted command on every `deny` (the `rm` of `/`, home or an ancestor). On `ask` the prompt already shows the full reason, so no `systemMessage` is needed there.
 - **D9's subagent coverage holds.** The hook fires for subagent Bash calls, the envelope carries `agent_id` and `agent_type`, and an `ask` reaches the person interactively (and auto-denies headless).
 
-### 0.2 — UNMEASURED rows
+### 1.2.3 — UNMEASURED rows
 
 - **Hosted Agent SDK `ask` path:** dropped by the plan (D8 disables the hook there); needs a measured hosted `ask` path before it is enabled.
 - **A real model's reaction to a block** (whether it obeys "do not retry or rephrase", or tries a rephrased command): needs a paid turn and a credential; the stand-in cannot answer it. Not measured and not claimed.
@@ -220,7 +220,8 @@ Result: 43 mutants. First run: 35 killed, 6 survived, 2 errored (one malformed e
 | 18e | `sudo -u <user>` value not skipped | killed after repair (the first edit was malformed: a bare `:` where a case pattern belongs) | `sudo -u x rm -rf ~` |
 | 18f | `env`: an assignment (`FOO=1`) not skipped in the wrapper | SURVIVED, EQUIVALENT | the wrapped command is then `FOO=1 terraform destroy`, and `decide_argv` skips leading assignments itself at the next depth, so the wrapper's own assignment skip is redundant. No input distinguishes the two |
 | 18g | leading `VAR=value` prefix not skipped | killed | `an assignment prefix` |
-| 19a | 32-record cap raised as a lexer bound | SURVIVED, fixture-inadequate; killed after the fix | the old "more than 32 benign commands" row carried no keyword and no boundary character, so the zero-spawn prefilter skipped the lexer and the cap was never reached; added a quoted variant that reaches the lexer |
+| 19a | 32-record cap raised as a lexer bound | SURVIVED when run, and not killable as worded; superseded by 19a-hook | the row mutated the lexer's `$MAX_RECORDS = 32`. The shipped lexer declares that variable and never reads it (the header of `shell-argv.pl` calls it inert), so no input can tell the edit from the original, and the "killed after the fix" this row used to carry named no edit. What the run did show is real and kept: the old "more than 32 benign commands" row carried no keyword and no boundary character, so the zero-spawn prefilter skipped the lexer and a cap in the lexer path was never reached (a quoted variant was added then) |
+| 19a-hook | the record cap in the hook (`MAX_RECORDS=2000`) raised to 200000, and lowered to 1000 (measured fix round 2, 2026-10-07, on a copy of the tree, each edit proved landed with a cmp against a pristine copy and exactly one differing file) | killed, both directions | raised: `bound: 2600 benign commands (above the record cap) then rm -rf / asks with the bound reason, in under 5 s` want ask got deny; lowered: `bound: 1500 benign commands then rm -rf / still denies, in under 5 s` want deny got ask |
 | 19b | fixed 4096 lexer budget | killed | `a ~90 KB heredoc lexes within the bounds` |
 | 19c | a bound trip (exit 3) read as an allow | killed | `a substitution nested past the depth bound asks` |
 | 20a | kill switch also read from `$CLAUDE_PROJECT_DIR/.claude/settings.json` | killed | `a project settings file that sets the switch is not read by the hook` |

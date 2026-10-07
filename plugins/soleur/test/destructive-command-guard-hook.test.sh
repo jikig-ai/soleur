@@ -64,8 +64,9 @@
 # reported by a direct printf + exit 1 and never through the helpers it backstops.
 #
 # Run: bash plugins/soleur/test/destructive-command-guard-hook.test.sh
-# Time: 35 s on a quiet machine, ~110 s under load (every executed row spawns the hook, a shell and the oracle). The 60 s budget
-#      in the mutation suite's header is the quiet figure.
+# Time: CPU-bound (every executed row spawns the hook, a shell and the oracle). Measured 2026-10-07 on a 16-core machine at a load
+#      average of 6-8: 1018 cases in 123 s wall (70 s user + 44 s system). Wall time scales with machine load; a review run at load 44-51
+#      took about 5 minutes. The mutation suite runs it only in reduced DCG_ROWS mode (see its header for its own figure).
 # A run that is narrowed or redirected by a seam below says so on its FIRST line ([REDUCED RUN: ...], [COUNT-ONLY RUN: ...],
 # [REDIRECTED RUN: ...]) and again before its summary ([NOT THE FULL GATE: ...]); the exit status is unchanged.
 # Env: GUARD_HOOK (default: the real hook; point at a throwaway stub to prove the rows are not vacuous),

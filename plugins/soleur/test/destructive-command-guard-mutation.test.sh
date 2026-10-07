@@ -5,13 +5,13 @@
 # of the plugin tree. The other matrix rows (9-20) were run once at work time and are recorded in
 # knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md (section 1.6).
 #
-# WALL-TIME BUDGET: 60 s total for this file when the machine is quiet (measured at work time and reported in the PR;
-# the hook suite alone takes 35 s quiet, ~110 s under load, so every mutant runs it in REDUCED mode: DCG_ROWS=<ERE>
-# selects only the rows that kill that mutant, plus the always-on static, registration, lexer-contract and harness
-# checks; the suite's own MIN_CASES floor does not apply to a selection and is replaced there by a selected-row count).
+# WALL-TIME. Measured 2026-10-07 on a 16-core machine at a load average of 4-6: 105 s wall (67 s user + 43 s system), of which the
+# control run is 13 s. The full hook suite alone is about 2 minutes of wall time at that load (1018 cases, see its header), so every
+# mutant runs it in REDUCED mode: DCG_ROWS=<ERE> selects only the rows that kill that mutant, plus the always-on static,
+# registration, lexer-contract and harness checks; the suite's own MIN_CASES floor does not apply to a selection and is replaced
+# there by a selected-row count. WALL_BUDGET_S below is that measurement with margin, not a target.
 # Time is handled in two separate ways, and neither one scores a mutant:
-#   * a whole-battery overrun of the 60 s figure is only a [WARN] (measured: 31-41 s on a quiet box, 136 s once with five
-#     sibling worktrees running suites; a slow runner is not a defect);
+#   * a whole-battery overrun of WALL_BUDGET_S is only a [WARN] (a slow runner is not a defect);
 #   * each reduced hook-suite run has its own timeout, 50 s scaled by (load average / cores) with a 50 s floor and a 200 s
 #     cap (scaled_timeout below). A single run that still exceeds it is UNRESOLVED: the battery is INCONCLUSIVE (exit 3),
 #     and that mutant is counted neither as killed nor as survived, because a killed run and a survived run both need a
@@ -70,6 +70,7 @@ SELF="$SUITE_DIR/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$SUITE_DIR/../../.." && pwd)"
 HOOK_SUITE="$SUITE_DIR/destructive-command-guard-hook.test.sh"
 T0="$SECONDS"
+WALL_BUDGET_S=150   # the measured 105 s (see the header) with margin; over it is a [WARN], never a failure
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -486,8 +487,8 @@ chk "no source file under test changed (cksum of the hook, the lexer, hooks.json
 # =====================================================================================================
 echo "== summary =="
 WALL="$((SECONDS - T0))"
-echo "wall-time: ${WALL}s (control ${CONTROL_WALL}s; budget 60s)"
-if [[ "$WALL" -gt 60 ]]; then echo "[WARN] wall time ${WALL}s is over the 60s budget"; fi
+echo "wall-time: ${WALL}s (control ${CONTROL_WALL}s; budget ${WALL_BUDGET_S}s)"
+if [[ "$WALL" -gt "$WALL_BUDGET_S" ]]; then echo "[WARN] wall time ${WALL}s is over the ${WALL_BUDGET_S}s budget"; fi
 echo "cases=$CHECKED passes=$PASS_COUNT fails=$FAIL_COUNT"
 if [[ "$UNRESOLVED_N" -gt 0 ]]; then
   printf '[UNRESOLVED] %s mutant run(s) timed out (%s): the battery is INCONCLUSIVE (exit 3): not green, and no mutant is scored as survived or killed on a run that never finished.\n' "$UNRESOLVED_N" "$UNRESOLVED_WHO" >&2
