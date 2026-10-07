@@ -2359,7 +2359,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Capture cost data from SDK result (per-turn delta). Cache
           // tokens flow through too (NULL-coerced) — schema 041 added
           // the columns; RPC v2 (migration 042) accepts the 5-arg shape.
-          const costDelta = message.total_cost_usd ?? 0;
+          // #9648 B-0 — absent/non-finite SDK cost rides NaN into the
+          // cost-writer (which fails closed + alerts) instead of a silent 0.
+          const costDelta = message.total_cost_usd ?? Number.NaN;
           const inputDelta = message.usage?.input_tokens ?? 0;
           const outputDelta = message.usage?.output_tokens ?? 0;
           const cacheReadDelta = message.usage?.cache_read_input_tokens ?? 0;
@@ -2369,11 +2371,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // accumulator. The SDK can yield multiple `result` events
           // in a single session (multi-turn agents), and the abort
           // marker should reflect the cumulative cost the user paid
-          // for, not just the last turn's delta.
+          // for, not just the last turn's delta. An unpriced delta
+          // contributes nothing to the sum — its signal is the NaN
+          // that reaches the cost-writer below, not this accumulator.
           accumulatedUsage = {
             input_tokens: accumulatedUsage.input_tokens + inputDelta,
             output_tokens: accumulatedUsage.output_tokens + outputDelta,
-            cost_usd: accumulatedUsage.cost_usd + costDelta,
+            cost_usd:
+              accumulatedUsage.cost_usd +
+              (Number.isFinite(costDelta) ? costDelta : 0),
           };
 
           // Delegate to the shared cost-writer helper so both this
