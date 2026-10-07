@@ -606,7 +606,7 @@ const BWRAP_ZERO_ARG = new Set([
   "--as-pid-1",
 ]);
 // 1-arg options whose single arg is a PATH we may normalize/keep.
-const BWRAP_ONE_ARG_PATH = new Set([
+export const BWRAP_ONE_ARG_PATH = new Set([
   "--dev",
   "--proc",
   "--tmpfs",
@@ -651,11 +651,22 @@ const BWRAP_TWO_ARG_BIND = new Set([
   "--bind-data",
   "--ro-bind-data",
 ]);
+// Bind opts whose first arg is a real filesystem SOURCE that must pre-exist at
+// replay. --symlink's target may dangle and --file/--*-data carry an FD, not a
+// path — neither belongs in prepDirs.
+export const BWRAP_BIND_SRC_OPTS = new Set([
+  "--bind",
+  "--bind-try",
+  "--dev-bind",
+  "--dev-bind-try",
+  "--ro-bind",
+  "--ro-bind-try",
+]);
 
 const RANDOM_SOCKET_RE = /\/claude-http-[0-9a-f]+\.sock$/;
 const RANDOM_EMPTY_RE = /\/claude-empty-[A-Za-z0-9]+$/;
 
-function isDeterministicConstPath(p) {
+export function isDeterministicConstPath(p) {
   return (
     p === "/" ||
     p === "/dev/null" ||
@@ -688,15 +699,26 @@ function isDeterministicConstPath(p) {
 export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSpawnRoot }) {
   const norm = (p) => {
     if (typeof p !== "string") return p;
+    // A `..` segment inside a mapped subpath would survive the host_path
+    // census (the token starts with `${`) and substitute at replay into a
+    // mkdir/bind target outside the mkdtemp roots — refuse to project it.
+    const checkNoTraversal = (mapped) => {
+      if (mapped.split("/").includes("..")) {
+        throw new Error(
+          `normalizeCapturedArgv: traversal in mapped path '${p}' — refusing to project (projection error)`,
+        );
+      }
+      return mapped;
+    };
     if (p === wsRoot) return CANARY_WS_PLACEHOLDER;
     if (p.startsWith(`${wsRoot}/`)) {
-      return CANARY_WS_PLACEHOLDER + p.slice(wsRoot.length);
+      return checkNoTraversal(CANARY_WS_PLACEHOLDER + p.slice(wsRoot.length));
     }
     if (c4StagingRoot && (p === c4StagingRoot || p.startsWith(`${c4StagingRoot}/`))) {
-      return CANARY_C4_STAGING_PLACEHOLDER + p.slice(c4StagingRoot.length);
+      return checkNoTraversal(CANARY_C4_STAGING_PLACEHOLDER + p.slice(c4StagingRoot.length));
     }
     if (bridgeSpawnRoot && (p === bridgeSpawnRoot || p.startsWith(`${bridgeSpawnRoot}/`))) {
-      return CANARY_BRIDGE_SPAWN_PLACEHOLDER + p.slice(bridgeSpawnRoot.length);
+      return checkNoTraversal(CANARY_BRIDGE_SPAWN_PLACEHOLDER + p.slice(bridgeSpawnRoot.length));
     }
     return p;
   };
@@ -735,6 +757,13 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSp
       if (typeof n === "string" && n.startsWith("/") && !isDeterministicConstPath(n)) {
         literalPrepDirs.add(n);
       }
+      // A mount target that is a placeholder SUBPATH (${CANARY_WS}/probe)
+      // needs the exact dir prepped: bwrap applies mounts in argv order, so a
+      // tmpfs target under a not-yet-bound parent fails the same as a missing
+      // source — prefix coverage under the root is not sufficient.
+      if (typeof n === "string" && /\$\{CANARY_[A-Z0-9_]*\}\//.test(n)) {
+        subPrepDirs.add(n);
+      }
       i += 2;
     } else if (BWRAP_ONE_ARG_OPAQUE.has(tok)) {
       out.push(tok, rawArgv[i + 1]);
@@ -757,7 +786,11 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSp
         // is a subpath under a placeholder root (${CANARY_WS}/.claude) is a
         // dir the SDK self-binds; prep it. File sources (/dev/null → file dsts)
         // are consts, and bind DSTS are auto-created once their parent exists.
-        if (typeof ns === "string" && /\$\{CANARY_[A-Z0-9_]*\}\//.test(ns)) {
+        // ASSUMPTION (pinned in tests): every placeholder-subpath source is a
+        // DIRECTORY — a future file source would be mkdir'd as a dir at replay
+        // (fails loud ENOTDIR, never silently). --symlink/--file/--*-data srcs
+        // are excluded via BWRAP_BIND_SRC_OPTS (dangling target / FD arg).
+        if (BWRAP_BIND_SRC_OPTS.has(tok) && typeof ns === "string" && /\$\{CANARY_[A-Z0-9_]*\}\//.test(ns)) {
           subPrepDirs.add(ns);
         }
         out.push(tok, ns, norm(dst));
@@ -940,7 +973,8 @@ function runReplay(fixtureUrl) {
     }
   }
 
-  // Best-effort prep of the bind-source dirs the captured argv references.
+  // Best-effort prep of every dir the captured argv needs to pre-exist:
+  // placeholder roots, subpath bind sources, and literal mount targets.
   for (const dir of replayFixture.prepDirs) {
     try {
       mkdirSync(dir, { recursive: true });

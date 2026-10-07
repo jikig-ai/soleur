@@ -12,11 +12,14 @@ import {
   argvSecretRejection,
   assessCaptureOutcome,
   buildBwrapInvocation,
+  BWRAP_BIND_SRC_OPTS,
+  BWRAP_ONE_ARG_PATH,
   CANARY_BRIDGE_SPAWN_PLACEHOLDER,
   CANARY_C4_STAGING_PLACEHOLDER,
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
   hasUnsubstitutedPlaceholder,
+  isDeterministicConstPath,
   classifyFdCensusProbe,
   classifyForkProbe,
   classifyReplayVerdict,
@@ -613,13 +616,29 @@ describe("bridge-spawn placeholder (#9614/#9618)", () => {
 
   it("still throws host_path on other HOME paths when bridgeSpawnRoot IS supplied", () => {
     for (const bad of ["/root/.ssh", `${BSP}-evil`, `${BSP}x`]) {
-      expect(() =>
-        normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", bad], {
-          wsRoot: WS,
-          bridgeSpawnRoot: BSP,
-        }),
+      expect(
+        () =>
+          normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", bad], {
+            wsRoot: WS,
+            bridgeSpawnRoot: BSP,
+          }),
+        `expected host_path throw for '${bad}'`,
       ).toThrow(/host_path/);
     }
+  });
+
+  it("rejects `..` segments inside mapped subpaths (traversal would reach mkdir outside the roots)", () => {
+    expect(() =>
+      normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", `${WS}/../escape`], {
+        wsRoot: WS,
+      }),
+    ).toThrow(/traversal/);
+    expect(() =>
+      normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", `${BSP}/../escape`], {
+        wsRoot: WS,
+        bridgeSpawnRoot: BSP,
+      }),
+    ).toThrow(/traversal/);
   });
 
   it("preps placeholder-subpath bind sources and literal tmpfs targets (replay precondition)", () => {
@@ -640,6 +659,23 @@ describe("bridge-spawn placeholder (#9614/#9618)", () => {
     expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/.claude/settings.json`);
     // Image-guaranteed consts are exempt.
     expect(prepDirs).not.toContain("/proc");
+  });
+
+  it("preps placeholder-subpath MOUNT targets exactly (mount order makes prefix coverage unsound)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--tmpfs", `${WS}/probe`, "--bind", WS, WS],
+      { wsRoot: WS },
+    );
+    expect(prepDirs).toContain(`${CANARY_WS_PLACEHOLDER}/probe`);
+  });
+
+  it("does NOT prep symlink targets or file/file-data sources (not real source dirs)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--bind", WS, WS, "--symlink", `${WS}/tgt`, `${WS}/lnk`],
+      { wsRoot: WS },
+    );
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/tgt`);
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/lnk`);
   });
 
   it("substitutes ${CANARY_BRIDGE_SPAWN} at replay, and flags it when unsubstituted", () => {
@@ -663,29 +699,28 @@ describe("bridge-spawn placeholder (#9614/#9618)", () => {
   });
 
   // The hole that let a non-replayable fixture ship: every dir the real bwrap
-  // spawn needs must resolve under a prepDirs entry. Pinned structurally so a
-  // future SDK argv shape cannot reintroduce it silently.
-  it("the COMMITTED fixture preps every bind-source subpath and literal mount target", () => {
+  // spawn needs must resolve EXACTLY in prepDirs — a placeholder-root prefix
+  // is not sufficient for subpath targets, because bwrap applies mounts in
+  // argv order and a target under a not-yet-bound parent fails like a missing
+  // source. Pinned structurally so a future SDK argv shape cannot
+  // reintroduce it silently. Opt vocab + const predicate are imported from
+  // the implementation — a parser addition updates this test automatically.
+  it("the COMMITTED fixture preps every bind-source subpath and mount target", () => {
     const fx = JSON.parse(
       readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
     ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
     const argv = fx.bwrapSetupArgv;
     const prepped = new Set(fx.prepDirs);
-    const IMG_CONST = (p: string) =>
-      p === "/" || p.startsWith("/proc") || p.startsWith("/dev") || p.startsWith("/sys");
-    const covered = (p: string) =>
-      [...prepped].some((d) => p === d || p.startsWith(`${d}/`));
-    const MOUNT_TARGET_OPTS = new Set(["--tmpfs", "--dir", "--mqueue", "--dev", "--proc", "--remount-ro", "--chdir"]);
     for (let i = 0; i < argv.length; i++) {
       const t = argv[i];
       const next = argv[i + 1];
-      if (MOUNT_TARGET_OPTS.has(t) && typeof next === "string" && !IMG_CONST(next)) {
-        expect(covered(next), `mount target ${t} ${next} not in prepDirs`).toBe(true);
+      if (BWRAP_ONE_ARG_PATH.has(t) && typeof next === "string" && !isDeterministicConstPath(next)) {
+        expect(prepped.has(next), `mount target ${t} ${next} not in prepDirs`).toBe(true);
       }
-      // Any two-arg bind option whose SOURCE is a placeholder subpath must be
-      // prepped (bwrap never creates sources).
+      // Any bind option whose SOURCE is a placeholder subpath must be prepped
+      // (bwrap never creates sources).
       if (
-        ["--bind", "--bind-try", "--dev-bind", "--dev-bind-try", "--ro-bind", "--ro-bind-try"].includes(t) &&
+        BWRAP_BIND_SRC_OPTS.has(t) &&
         typeof next === "string" &&
         /\$\{CANARY_[A-Z0-9_]*\}\//.test(next)
       ) {
