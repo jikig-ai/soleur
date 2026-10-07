@@ -19,7 +19,7 @@ brand_survival_threshold: aggregate pattern
 **Deepened on:** 2026-10-07. **Agents used:** repo-research-analyst, learnings-researcher, CTO (lever 5 and devex), DHH, Kieran, code-simplicity (plan review); architecture-strategist and spec-flow-analyzer (deepen pass).
 
 1. Measurement corrected: runner-bound job-minutes are 7,456 (an unfiltered pass said 9,392); cancelled jobs that held a runner are only 4%.
-2. Stage 1 left this PR; the ranking now states net or gross per lever; S2 push-main dedupe (up to 1,018) leads.
+2. Stage 1 left this PR; the ranking now states net or gross per lever; S2 push-main dedupe (up to 1,018 gross) and lever 2 (about 600 net, range 180 to 1,280) tie within window noise.
 3. New S3 risks found by the deepen pass: the agent `--admin` merge path bypasses the queue, the arm-after-ready window, and an all-skipped run concludes `skipped` (so S2 must keep a real job). Option R (red draft `test`) is the preferred design.
 4. ADR-276 gains a staged-acceptance rule so one stage cannot activate the others.
 
@@ -38,11 +38,11 @@ Spec note: no `spec.md` exists for this branch, so `lane:` defaults to `cross-do
 
 | Brief claim | Reality (checked on this branch) | Plan response |
 |---|---|---|
-| 59 running / 289 queued, `CI` 35/194 | Reproduced only as a peak. Over the 6h window 13:04Z to 19:04Z: mean 21.4, p90 57, peak 60 concurrent; 77 of 349 minutes at 55+. Right now 14 runs in progress and 2 queued. | State saturation as bursty (22% of minutes at the cap), not constant. |
+| 59 running / 289 queued, `CI` 35/194 | Reproduced only as a peak. Over the 6h window 13:04Z to 19:04Z: mean 21.4, p90 57, peak 60 concurrent; 77 of 349 minutes at 55+. Right now 14 runs in progress and 2 queued. | State saturation as bursty (22% of minutes at 55 or more concurrent jobs; the 60-job cap itself was reached in 0.6% of minutes on a re-run), not constant. |
 | 478 PR runs, "count JOBS not runs" | Runs overstate: 514 of 661 cancelled jobs never got a runner (`runner_id` 0) and their start-to-finish span is queue time. An unfiltered pass reported 9,392 job-minutes; runner-bound is 7,456. | Every number below is runner-bound; the census script (Stage 1) bakes the filter in. |
 | "Light checks on DRAFT PRs" is untried | No workflow filters on `draft`; only `board-status-sync.yml` and `claude-code-review.yml` (disabled on GitHub's side since 2026-02-12, 0 minutes in the window) list `ready_for_review`. `ci.yml` uses default `pull_request` types, so marking ready triggers nothing today. | Lever 2 must add `ready_for_review` to `ci.yml` types, or a drafted-then-readied PR would merge-queue on light results. |
 | Lever 3 is greenfield | ADR-262 already path-gates five batteries on PRs (shipped, #9323 follow-through due 2026-10-09). `--print-selection` (#9307) and ADR-242 `--affected` exist. | Lever 3 extends the ADR-262 call-site opt-in to the affected set; it does not re-do the battery gate. |
-| Fan-out of ~12 workflows per push | Median 10 workflows per PR head (max 14, 54 heads). Infra Validation is already workflow-level path-gated (18 of ~54 heads trigger it); Tenant integration has a detect job. | Drop "path-gate Infra Validation" from lever 4. |
+| Fan-out of ~12 workflows per push | A first-pass figure of median 10 workflows per PR head (max 14, 54 heads) did not reproduce on the fixed window (re-run: median 9, max 11, 41 heads), so read fan-out as roughly 9 to 10. Infra Validation is already workflow-level path-gated (18 of ~54 heads trigger it); Tenant integration has a detect job. | Drop "path-gate Infra Validation" from lever 4. |
 | `cancel-superseded-pr-runs.yml` handles superseded heads | Confirmed: cancelled jobs that held a runner cost 304 of 7,456 job-minutes (4%). The loss from cancellation is queue time, not minutes. | Out of scope; do not re-solve. |
 | #9512 is a low-priority duplicate-run item | Push-main `CI` is 1,018 job-minutes (13.7%), the largest single removable duplicate, and gate-neutral for merging. | Rank it first by measured minutes; keep it a separate PR owned by #9512. |
 
@@ -65,7 +65,7 @@ docs.github.com `actions/reference/limits` on 2026-10-07: Team 60, Enterprise 50
 1. A PR that is still a draft consumes materially fewer hosted-runner minutes per push.
 2. A PR cannot enter the merge queue, or merge, without the full battery having run on the candidate.
 3. A required context always reports; none is left pending on the PR head or on `merge_group`, and no consumer treats a light result as a full one.
-4. Every reduction is reversible by one switch and fails closed to full CI when state is unknown.
+4. Every reduction has a kill-switch (the parts it cannot undo are listed per stage under Rollback) and fails closed to full CI when state is unknown.
 5. Every claimed saving has a before and after job-minute figure from one committed measurement.
 6. Supply changes are decided separately, after demand has been re-measured.
 
@@ -82,12 +82,18 @@ docs.github.com `actions/reference/limits` on 2026-10-07: Team 60, Enterprise 50
 
 ### Measured state (re-measured 2026-10-07, window 13:04Z to 19:04Z)
 
-Method (reproducible; Stage 1 commits it as `scripts/ci-demand-census.sh`):
-`gh api --paginate "repos/jikig-ai/soleur/actions/runs?created=>=<since>&per_page=100"` to a file,
-`jq -s` to flatten (955 runs), `gh api "repos/jikig-ai/soleur/actions/runs/<id>/jobs?per_page=100&filter=latest"`
-for each of 745 completed runs (736 returned), then aggregate runner-bound, non-skipped jobs
-(`runner_id > 0`). PR draft state at each run time was reconstructed from the issue timeline
-`ready_for_review` / `convert_to_draft` events (20 PRs). Never `--paginate` with `--jq` aggregates.
+Method (reproducible once Stage 1 commits it as `scripts/ci-demand-census.sh`; until then reconstruct it from
+this paragraph): `gh api --paginate "repos/jikig-ai/soleur/actions/runs?created=<start>..<end>&per_page=100"`
+with both endpoints (this window: `2026-10-07T13:04:00Z..2026-10-07T19:04:00Z`) to a file, `jq -s` to
+flatten, `gh api "repos/jikig-ai/soleur/actions/runs/<id>/jobs?per_page=100&filter=latest"` for each
+completed run, then aggregate. A job-minute is `completed_at - started_at` in raw minutes (not
+billing-rounded) of a job with `runner_id > 0` and `conclusion != skipped`. Concurrency is sampled at
+minute midpoints across the window (mean, p90, peak and minutes at 55+ come from that series). The
+first pass used an open-ended `>=` bound, so its 955-run listing (745 completed, 736 returning jobs) is
+not reproducible; the fixed window is re-run in the re-measure below. PR draft state at each run time was
+reconstructed from the issue timeline `ready_for_review` / `convert_to_draft` events (20 PRs). The
+queue-wait medians and the per-family split use the same job set; their exact definitions are fixed
+when Stage 1 commits the script. Never `--paginate` with `--jq` aggregates.
 
 | Bucket | Runner job-min | Share |
 |---|---|---|
@@ -95,7 +101,7 @@ for each of 745 completed runs (736 returned), then aggregate runner-bound, non-
 | `CI` pull_request (31 runs, 99.8 per run) | 3,094 | 41.5% |
 | `CI` merge_group (8 runs, 147.9 per run) | 1,183 | 15.9% |
 | `CI` push main (7 runs, 145.4 per run) | 1,018 | 13.7% |
-| CodeQL default setup (dynamic, advisory) | 601 | 8.1% |
+| Dynamic CodeQL-family runs (code scanning, advisory per ADR-270, plus GitHub Code Quality; split in the re-measure) | 601 | 8.1% |
 | Infra Validation (pull_request, 18 runs) | 441 | 5.9% |
 | PR quality guards (pull_request) | 227 | 3.0% |
 | secret-scan (pull_request; smoke matrix 134) | 203 | 2.7% |
@@ -105,38 +111,86 @@ for each of 745 completed runs (736 returned), then aggregate runner-bound, non-
 `CI` job families per run (pull_request / merge_group / push): `test-scripts` 64.3 / 92.9 / 90.3,
 `test-webplat` 7.9 / 11.2 / 11.6, `shard-totality-mutations` 7.3 / 9.0 / 9.3, `test-scripts-heavy`
 6.3 / 17.4 / 16.8, `e2e` 3.1 / 3.6 / 4.2; the light set (everything not in those families, including
-`web-platform-build`, `lint-webplat` and the cheap gates) is 8.2 / 9.3. PR-event minutes by PR state:
+`web-platform-build`, `lint-webplat` and the cheap gates) is 8.2 / 9.3 (pull_request / merge_group; the push value was not recorded).
+The columns are approximate and exclude an "other" remainder, so a run's families sum to a little less than
+its per-run total (PR 97.1 of 99.8, merge_group 143.4 of 147.9, push 141.5 of 145.4). PR-event minutes by PR state:
 draft 1,814 (43%), ready 2,404; `CI` alone draft 1,319 over 18 runs on 7 PRs. Median 10 workflows per
 PR head; median PR job queue wait 297 s, p90 855 s; merge_group `CI` queue wait median 329 s.
 
 Affected selection probes (`bash scripts/test-all.sh --print-selection --paths=<p>`, durations from
 `scripts/suite-durations.tsv`, 79.0 suite-minutes registered): a docs diff selects 148 of 576 suites
 (27% of suite time), a web-platform UI file 163 (29%), a skill plus script 236 (36%), `ci.yml` plus
-`required-checks.txt` 171 (51%). The always-on floor is 148 suites / 21.7 suite-minutes. The pre-pass
+`required-checks.txt` 171 (51%). The four probes are unweighted single diffs (not weighted by how often each diff shape occurs), and the
+"about 28 selected" used for lever 3 is a rounded estimate near the three lighter probes, not a weighted
+mean. The always-on floor is 148 suites / 21.7 suite-minutes. The pre-pass
 costs 86 s wall per invocation, so it must run once per run, not once per shard leg.
 
 Two caveats on the totals. (1) 7,456 is a lower bound: the census covers completed runs only (about 210
 queued or in-progress runs are excluded, the survivorship bias the queue-health learning warns about) and
 9 of 745 completed runs returned no jobs. (2) Mean concurrency is 21 against a cap of 60 and the pool sits
-at the cap 22% of the minutes, so demand cuts lower the mean more than they lower the peaks; S5's
+at 55 or more concurrent jobs 22% of the minutes (at the 60-job cap itself, 0.6% on a re-run), so demand cuts lower the mean more than they lower the peaks; S5's
 re-measure should judge queue wait at peak, not only job-minutes.
+
+#### Review re-measure 2026-10-07T19:40Z
+
+A reviewer re-ran the SAME window (13:04Z to 19:04Z, now closed): 934 runs, 931 completed, no fetch
+failures, 35 runs with no jobs. The figures above are kept as first measured.
+
+| Quantity | First pass | Re-measure |
+|---|---|---|
+| Total runner-bound job-minutes | 7,456 | 8,414 (+12.8%: later-finishing runs now counted, the lower-bound caveat) |
+| `CI` pull_request / merge_group / push | 3,094 (31 runs) / 1,183 (8) / 1,018 (7) | 3,652 (34) / 1,363 (9) / 1,018 (7) |
+| Mean / p90 / peak concurrency | 21.4 / 57 / 60 | 22.3 / 58 / 60 |
+| Minutes at 55+ concurrent / at 60+ (the cap) | 77 of 349 (22%) / not measured | 82 of 360 (22.8%) / 2 of 360 (0.6%) |
+| Draft `CI` | 18 runs, 1,319 min | 18 runs, 1,743 min |
+| Ready `CI` | 13 runs, about 1,775 min | 20 runs, 1,909 min (95.5 per run) |
+| Ready transitions in window | 4 | 3 |
+| CodeQL-family runs on PR heads | 521 of 601 | 533 of 613 = code scanning 294 + Code Quality 239 |
+| `test-scripts` share of a PR `CI` run | 64% | 65% |
+
+Order of magnitude and the top-line shares hold. The draft-versus-ready cost split is unstable (73 versus
+137 per run on the first pass, 96.8 versus 95.5 on the re-run), so lever 2 is stated below as a
+sensitivity range, not a point.
 
 ### Lever ranking by measured saving (window totals; do not add the rows)
 
 | Rank | Lever | Basis | Window saving (job-min) | Merge-gate effect | Owner |
 |---|---|---|---|---|---|
-| 1 | Elide the duplicate push-main run when `merge_group` already passed that SHA | gross upper bound | up to 1,018 (13.7%) | None to merging; touches the deploy `workflow_run` trust ladder | #9512 (S2) |
-| 2 | Lever 2: draft PRs run the light set; full set on `ready_for_review` | net | about 600 (range 350 to 850): draft `CI` 1,319 (18 runs, 73 each) replaced by about 18 light runs of 10, less 4 ready-transition full runs at about 137 | None: `merge_group` stays full | S3 |
-| 3 | Lever 3: PR runs run the affected set | gross | about 300 to 700: roughly 23 suite-minutes off a PR `test-scripts` run (51 derived from ADR-262's 28-of-39 battery saving against 79.0 registered, to about 28 selected), shrunk by the 13 job-minutes of shard overhead that do not scale with selection; about 300 after lever 2 removes draft runs | Amends ADR-262 and ADR-183; escape risk | S4 (parked) |
+| 1 (tie) | Lever 3b: elide the duplicate push-main run when `merge_group` already passed that SHA | gross upper bound; net is 1,018 minus the keyed attestation job (unmeasured) | up to 1,018 (13.7%) | None to merging; touches the deploy `workflow_run` trust ladder (ADR-217) | #9512 (S2) |
+| 2 (tie) | Lever 2: draft PRs run the light set; full set on `ready_for_review` | net | about 600 at 4 ready transitions; 180 to 730 for 7 to 3 on first-pass inputs, 800 to 1,280 on the re-measure inputs (formula and table below) | None: `merge_group` stays full | S3 |
+| 3 | Lever 3: PR runs run the affected set | gross | about 300 to 700: roughly 23 suite-minutes off a PR `test-scripts` run (51 derived from ADR-262's 28-of-39 battery saving against 79.0 registered, to about 28 selected), shrunk by the 13 job-minutes of shard overhead that do not scale with selection; about 300 after lever 2 removes draft runs. 31 runs x 23 = 713 and 13 x 23 = 299 give the ends | Amends ADR-262 and ADR-183; escape risk | S4 (parked) |
 | 4a | Lever 4: path-gate the secret-scan smoke matrix (PR-only, non-required) | gross upper bound (assumes no PR touches the subject paths) | up to 134 (1.8%) | None | S1 |
-| 4b | Lever 4: CodeQL cost | gross | up to 521 on PR heads (7.0%) of 601 | Advisory per ADR-270; a security-posture decision | S5 |
+| 4b-i | Lever 4: CodeQL code scanning cost | gross | up to 294 on PR heads (re-measure) | Advisory per ADR-270; a security-posture decision | S5, CLO/CTO sign-off |
+| 4b-ii | Lever 4: GitHub Code Quality (run names "Code Quality: PR #N", path `dynamic/github-code-quality/codeql`) | gross | up to 239 on PR heads (re-measure) | Not covered by ADR-270: a different feature with its own switch | S5 (owner CTO; CLO if posture changes) |
 
-Break-even for lever 2: draft pushes in the window averaged 2.6 per draft PR (18 runs over 7 PRs) and a
-draft run averaged 73 job-minutes (many were cancelled part-way), against about 137 for a full ready run.
-A PR therefore saves minutes only above about 3 draft pushes (saving per draft push about 63, less one
-ready run), so lever 2 is marginal on cancelled-heavy drafts and strongest where drafts finish full runs.
-Cheaper alternative to check first: stop the pipeline pushing a draft before a local `--affected` run
-passes, which removes draft pushes at the source with no aggregator change. Break-even for lever 3's
+Basis: rows 1, 3, 4a, 4b are gross; row 2 is net of its own ready runs. On a gross basis row 2 is 1,139
+(1,319 less 18 light runs of 10) against row 1's 1,018, so rows 1 and 2 are a tie within window noise (the
+re-measure moved lever 2 by more than their gap). Rows 4a, 4b-i and 4b-ii sit below lever 3 because each upper
+bound (134, 294, 239) is below lever 3's floor of 300; the first-pass combined 521 was above it, and
+splitting the two CodeQL-family features removes that inversion.
+
+Lever 2 formula: `net = D - (L x n) - (r x F)`, with D the draft `CI` minutes, n the draft runs (18), L the
+light-run cost (10), F the full ready-run cost and r the ready transitions charged. The first pass charged
+the 4 `ready_for_review` events inside the window; the other draft PRs had not yet gone ready, but every draft PR
+is eventually readied, so the steady state is the r = 7 row.
+
+| Inputs | D | n | L | F | r | Net |
+|---|---|---|---|---|---|---|
+| First pass | 1,319 | 18 | 10 | 137 | 3 | 728 |
+| First pass | 1,319 | 18 | 10 | 137 | 4 | 591 |
+| First pass | 1,319 | 18 | 10 | 137 | 7 | 180 |
+| Re-measure | 1,743 | 18 | 10 | 95.5 | 3 | 1,277 |
+| Re-measure | 1,743 | 18 | 10 | 95.5 | 8 | 799 |
+
+Break-even for lever 2: draft pushes in the window averaged 2.6 per draft PR (18 runs over 7 PRs), next to
+the "about 600" headline. A draft run averaged 73 job-minutes on the first pass (many were cancelled
+part-way), so the saving per draft push is about 63 against one full ready run of about 137: a PR saves
+minutes only above about 2.2 draft pushes (2.2 on the first-pass inputs, kept at "2.2 to 3" as the
+conservative end; the re-measure inputs put it near 1.1). The measured mean of 2.6 sits inside that range, so
+lever 2 is marginal on cancelled-heavy drafts and strongest where drafts finish full runs. Cheaper
+alternative to check first, as a numeric S3 entry gate: stop the pipeline pushing a draft before a local
+`--affected` run passes, which removes draft pushes at the source with no aggregator change; S3 proceeds only
+if the measured post-policy mean is at least 3 draft pushes per PR. Break-even for lever 3's
 escape cost: a missed failure costs a ~148 job-minute candidate run plus a re-queue, and ejects the
 entries queued behind it, against about 23 saved per PR run, so the escape rate must stay well below
 12 to 16 percent; the stage's exit criterion is set far below that.
@@ -188,23 +242,24 @@ different concern and none sits on the lines the stages edit; they stay open. No
 ## Staged rollout (one lever per PR, dark-launch and non-blocking first)
 
 Plan review verdict on Stage 1: DHH, code-simplicity, the CTO devex lens and Kieran all advised against
-implementing it in this PR (it breaks the plan phase's "no workflow edit" line for a 1.5% saving, drags a
+implementing it in this PR (it breaks the plan phase's "no workflow edit" line for an up-to-1.8% (gross) saving, drags a
 `test-scripts` suite and a ledger bump into the ADR PR, and one of its premises was false), so **this PR
 ships plan, ADR-276, memo, tasks and follow-up issues only**. Stage 1 keeps its own PR.
 
 | Stage | Lever | PR | Entry gate, dark launch and exit criterion | Rollback |
 |---|---|---|---|---|
 | S0 | Plan, ADR-276 (`proposed`), lever-5 memo | this PR (#9722) | n/a | revert |
-| S1 | Small census script (the Measured-state method, runner-bound filter, one job-count self-check) plus, optionally, the secret-scan smoke path gate (lever 4a) | own PR | No required context or merge authority touched. The smoke job runs only on `pull_request` today (no `schedule` arm exists), so S1 either adds a weekly arm with its own test or drops the "full coverage weekly" claim; it must gate on `event_name == 'pull_request'` and run unconditionally on other events (no diff base there); adding `smoke-relevance` raises the declared job count and needs a `scripts/pr-fanout-ledger.txt` bump. Exit: census attached to #9721; smoke minutes down at least 80% on PRs that miss the subject paths | revert (non-required, PR-only job) |
-| S2 | Push-run dedupe (#9512, lever 3b) | own PR | Entry gate, already answered by the census data: a run whose jobs are ALL skipped concludes `skipped`, not `success` (8 `Post-Merge Monitor` `workflow_run` runs and 7 `Cleanup unmerged bot branches` runs in the window), and the deploy arm needs `success`, so the elision must keep at least one real job (a keyed attestation job) in the push run. Reuse the precedent `scripts/main-push-duplicate-skip.sh` (used by tenant, vendor-pin, infra-validation, validate-vector-config and skill-security-scan-corpus) but not as-is: its coverage proof (latest `pull_request` run at the head succeeded) would be satisfied by a light draft run once S3 lands, so for `ci.yml` it must read the `test` job conclusion and a non-draft guard. A second named tolerance arm (keyed on a green `merge_group` run for the exact head SHA) needs its own Guard Contract in S2's plan; it is not covered by Guard 1. Dark launch behind a repository variable (unset means run), 7 days. Exit: zero SHAs elided without a green `merge_group` run | variable unset |
-| S3 | Draft light checks (lever 2) | own PR | **Variable name: `CI_DRAFT_LIGHT` (value `on`).** **Entry gates, resolved on a throwaway PR before any `ci.yml` edit:** (1) how the required-status rollup treats two same-name check runs on one SHA (draft light green, then ready pending); (2) a `gh pr ready` issued with an ordinary user token versus `GITHUB_TOKEN` (the latter triggers no workflow, leaving the draft-run green on the ready head); (3) a fork PR sees or does not see the variable (fork PRs always run full regardless: compare `head.repo.full_name` with the repository, as `ci.yml` already does); (4) the arm-then-register window: ship Phase 6 runs `gh pr ready` then `gh pr merge --squash --auto` within seconds, and the head already carries green required contexts from the draft run. Then dark launch: variable default unset (merge is a no-op), canary on one draft PR (draft, ready, queue entry, merge_group), then on for 7 days. Design choice, decided by the entry gates: **Option R** (preferred): the draft aggregator concludes red with a plain message (`draft: full battery owed at ready`), so no consumer can read a light `test` as green, `battery-owed.sh` already returns OWED, `admin-merge-ready.sh` reads RED/PENDING, and no tolerance arm exists; its cost is a red `test` on drafts, so first check that `monitor-pr-checks.sh`, `drain-prs` triage and ship Phase 7 do not misread it. **Option T**: a tolerance arm plus a distinct non-required marker check-run that `battery-owed.sh` and `admin-merge-ready.sh` also require. Either way ship Phase 6 gains a step between `gh pr ready` and arming auto-merge: wait for a non-draft `CI` run on HEAD created after the ready call, fail closed (do not arm) if none appears, and the same wait goes into `drain-prs` and `merge-pr`; every `gh pr ready` caller must use a non-`GITHUB_TOKEN` identity. The variable has a removal trigger: delete it, keeping only the draft-input arm, after 30 days with zero escapes. Exit: draft `CI` minutes per draft push down at least 80%, zero queue stalls | variable unset |
-| S4 | PR affected-only (lever 3) | own PR, parked | Re-decide after S2 and S3 have post-merge censuses; then the replay is the evidence: `--print-selection` over the last 300 first-parent commits against suite failures, replay escape rate under 2%, no live shadow window. The pre-pass (86 s) runs once per run, not per shard leg. The escape metric must also count agent `--admin` merges, which skip the queue: those get only the affected set, and the metric "merge_group red with a green PR run" never sees them | variable unset |
-| S5 | Re-measure, then decide CodeQL cost (lever 4b) and supply (lever 5) | one decision issue, no code | Census on a 30-day window after S2 to S4; the CTO memo's measure-first list; CodeQL query suite or event scope needs CLO/CTO sign-off | n/a |
+| S1 | Small census script (the Measured-state method, runner-bound filter, one job-count self-check) plus, optionally, the secret-scan smoke path gate (lever 4a) | own PR | No required context or merge authority touched. The smoke job runs only on `pull_request` today (no `schedule` arm exists), so S1 either adds a weekly arm with its own test or drops the "full coverage weekly" claim; it must gate on `event_name == 'pull_request'` and run unconditionally on other events (no diff base there); adding `smoke-relevance` raises the declared job count and needs a `scripts/pr-fanout-ledger.txt` bump. Exit: census attached to #9727 (the stage's own tracking issue); smoke minutes down at least 80% on PRs that miss the subject paths | revert (non-required, PR-only job) |
+| S2 | Push-run dedupe (#9512, lever 3b) | own PR | Entry gate, already answered by the census data: a run whose jobs are ALL skipped concludes `skipped`, not `success` (8 `Post-Merge Monitor` `workflow_run` runs and 7 `Cleanup unmerged bot branches` runs in the window), and the deploy arm needs `success`, so the elision must keep at least one real job (a keyed attestation job) in the push run. Reuse the precedent `scripts/main-push-duplicate-skip.sh` (used by tenant, vendor-pin, infra-validation, validate-vector-config and skill-security-scan-corpus) but not as-is: its coverage proof (latest `pull_request` run at the head succeeded) would be satisfied by a light draft run once S3 lands, so for `ci.yml` it must read the `test` job conclusion and a non-draft guard. A second named tolerance arm (keyed on a green `merge_group` run for the exact head SHA) needs its own Guard Contract in S2's plan; it is not covered by Guard 1. ADR-217 ("the verdict never crosses as a value") is narrowed by this stage: S2's plan must compare the attestation-job design with keying the deploy `workflow_run` arm on the `merge_group` run for that head SHA and dropping the push run, before choosing (ADR-276 Decision 2). Dark launch behind a repository variable (accepted value exactly `on`; unset means run), 7 days, after appending its ADR-276 amendment. Exit: zero SHAs elided without a green `merge_group` run, and push-main `CI` minutes on queue-merged SHAs down at least 80% net of the attestation job (ADR-276 Decision 3(e)) | variable unset |
+| S3 | Draft light checks (lever 2) | own PR | **Variable `CI_DRAFT_LIGHT`; the accepted value is exactly `on`** (unset, empty or any other string, case or whitespace variant means full CI, compared in the step shell). **Preconditions:** ADR-270 `accepted` and the stage's own ADR-276 amendment (ADR-276 Decision 3(g), (h)). **Entry gates (six), resolved on a throwaway PR before any `ci.yml` edit:** (1) how the required-status rollup treats two same-name check runs on one SHA (draft light red, then ready pending); (2) a `gh pr ready` with an ordinary user token versus `GITHUB_TOKEN` (the latter triggers no workflow); (3) whether repository variables reach a fork `pull_request` run (fork PRs run full regardless: compare `head.repo.full_name` with the repository, as `ci.yml` already does); (4) the arm-then-register window: ship Phase 6 runs `gh pr ready` then `gh pr merge --squash --auto` within seconds on the draft run's state; (5) the `--admin` path: `admin-merge-ready.sh` and its wiring test read the newest `test` row, which is the draft run's until the ready run's aggregator starts; (6) the cheaper alternative, with its pass criterion: the measured distribution of draft pushes per PR, after the policy "no draft push before a local `--affected` run passes" is applied first, has a mean of at least 3. Then dark launch: variable default unset, canary on one draft PR (draft, ready, queue entry, merge_group), then on for 7 days. **Option R is the decision** (ADR-276 Decision 4): the draft aggregator concludes red with a plain message (`draft: full battery owed at ready`), so `battery-owed.sh` already returns OWED, `admin-merge-ready.sh` reads RED/PENDING and no tolerance arm exists. **Option T is rejected** (the ruleset cannot enforce a marker; a required marker would land in `required-checks.txt` and be posted green for bot PRs by `bot-pr-with-synthetic-checks` and `SYNTHETIC_CHECK_NAMES` in `_cron-safe-commit.ts`). Consumers (`monitor-pr-checks.sh`, ship Phase 7 `required_failed`, `drain-prs` triage, `gh pr checks` readers, `admin-merge-ready.sh --wait`) must, for a non-draft head with a red `test` and the newest `CI` `pull_request` run still in progress, resolve the verdict from the newest non-draft run at HEAD, not the check row; a signal fires for a PR whose ready run is never created. Ship Phase 6 gains a step between `gh pr ready` and arming auto-merge: wait for a non-draft `CI` run on HEAD created after the ready call, fail closed (do not arm) if none appears, and the same wait goes into `drain-prs` and `merge-pr`; every `gh pr ready` caller must use a non-`GITHUB_TOKEN` identity. The variable has a removal trigger: delete it, keeping only the draft-input arm, after 30 days with zero escapes. Exit: (1) draft `CI` minutes per draft push down at least 80%; (2) zero queue stalls; (3) zero PRs entering the queue with a heavy family unrun on a non-draft head; (4) net: total `CI` minutes on PRs that went draft then ready, before versus after, down at least 25% (threshold confirmed from the S1 census); stop rule: if pushes per draft PR fall below 3, turn the variable off and close the stage | variable unset restores full draft CI but does NOT undo: the `ready_for_review` entry in `types` (one extra full run of about 95 to 137 job-minutes per drafted-then-readied PR while unset), the Phase 6 / `drain-prs` / `merge-pr` wait step, and the `admin-merge-ready.sh`, `battery-owed.sh` and consumer changes; those need a revert |
+| S4 | PR affected-only (lever 3) | own PR, parked | Re-decide after S2 and S3 have post-merge censuses; then the replay is the evidence: `--print-selection` over the last 300 first-parent commits against suite failures, replay escape rate under 2%, no live shadow window. The pre-pass (86 s) runs once per run, not per shard leg. Entry gates: (i) `admin-merge-ready.sh` demands a full-battery marker at the head before treating an affected-set `test` success as green, because agent `--admin` merges skip the queue and the metric "merge_group red with a green PR run" never sees them (the escape metric also counts them); (ii) the "runner changed means full battery" detector and the affected-selection index are evaluated from a trusted base-ref copy, not the PR's own tree. Appends its ADR-276 amendment, the ADR-262 and ADR-183 pointer amendments and `amends:` frontmatter in the same PR | variable unset |
+| S5 | Re-measure, then decide CodeQL code scanning and Code Quality cost (levers 4b-i, 4b-ii) and supply (lever 5) | one decision issue, no code | Census on a 30-day window once S2 and S3 each have a post-merge census (S4 is parked and does not gate S5); the CTO memo's measure-first list; CodeQL query suite or event scope, and the Code Quality switch, need CLO/CTO sign-off | n/a |
 
-Ordering: S1 first (it makes every before/after number reproducible). S3's entry gates run in parallel
-with S2's experiment, since the two touch disjoint files; if S2's all-skipped question stays open for about
-a week, S3 goes first. S2 is the largest removable duplicate and gate-neutral for merging, but it is the
-stage with the most unknowns (the deploy trust ladder).
+Ordering: S1 first (it makes every before/after number reproducible); no stage is "done" before its census is
+attached to its own tracking issue (ADR-276 Decision 7), and S3 never precedes S1. S3's entry gates run in
+parallel with S2's experiment, since the two touch disjoint files; if S2's all-skipped question stays open
+for about a week, S3 goes before S2. S2 is the largest removable duplicate and gate-neutral for merging, but
+it is the stage with the most unknowns (the deploy trust ladder).
 
 ## Guard Contract
 
@@ -214,22 +269,25 @@ particular is a second skip reason that Guard 1 deliberately does not cover).
 
 ### Guard 1 - Draft-light aggregator (S3, the `test` context)
 
-**Property.** On a draft `pull_request`, confirmed live and with `CI_DRAFT_LIGHT` on, the `test` context is never success-equivalent for a head whose heavy families did not run (Option R: it concludes red; Option T: it is success only with a distinct marker that every consumer requires); on every other event or state it reflects the real results, and no consumer or merge path reads a light `test` as proof of the full battery.
+**Property.** On a draft `pull_request`, confirmed live and with `CI_DRAFT_LIGHT` on, the `test` context is never success-equivalent for a head whose heavy families did not run (Option R: it concludes red; Option T was rejected, ADR-276 Decision 4); on every other event or state it reflects the real results, and no consumer or merge path reads a light `test` as proof of the full battery.
 
-**Assembly.** The chokepoint is the `test` aggregator job in `.github/workflows/ci.yml` (its `needs:` list, which today is `test-webplat`, `test-bun`, `test-scripts`, `test-scripts-heavy`, `web-platform-build`, `encryption-posture`; its `env:` result strings and its loop body, which the repo already extracts and executes over synthetic result triples). Mutation rows for "needed families" are generated from the live `needs:` list, not a remembered one; `shard-totality-mutations` and `e2e` sit outside it. Every consumer of the context must see the same truth, and the consumer list is a census, not a recollection: the ruleset required-context list (`scripts/required-checks.txt`, `infra/github/ruleset-ci-required.tf`, the canonical JSON); `web-platform-release.yml`'s `workflow_run` arm; `post-merge-monitor.yml`; `plugins/soleur/skills/ship/scripts/battery-owed.sh` (newest completed `success` per name reads as satisfied); `plugins/soleur/scripts/admin-merge-ready.sh` and `plugins/soleur/test/admin-merge-ready-wiring.test.sh` (the agent `--admin` path skips the merge queue, takes the highest check-run id per name, and the `test` aggregator is created only after every shard ends, so after a ready transition the draft run's `test` is the newest row until the ready run's aggregator starts); the `gh pr checks` and `statusCheckRollup` readers (`plugins/soleur/skills/ship/SKILL.md`, `plugins/soleur/skills/merge-pr/SKILL.md`, `plugins/soleur/scripts/monitor-pr-checks.sh`, `plugins/soleur/skills/drain-prs/scripts/triage-prs.sh`, `scripts/audit-bot-codeql-coverage.sh`); and the measurement probe `scripts/followthroughs/pr-battery-gate-saving-9323.sh`, whose baseline averages all successful `pull_request` runs and is contaminated once light runs exist. `e2e` is a required context and keeps its existing step-level gating (the #8450 pattern, a skipped required check posts green): it still runs on drafts, so lever 2 does not save its ~3 job-minutes, and it is named here so a job-level `if:` is not added to it by analogy. Event shapes: `pull_request` (draft, ready, reopened, a re-run whose payload still says draft, a fork), `merge_group`, `push`, `workflow_dispatch`.
+**Assembly.** The chokepoint is the `test` aggregator job in `.github/workflows/ci.yml` (its `needs:` list, which today is `test-webplat`, `test-bun`, `test-scripts`, `test-scripts-heavy`, `web-platform-build`, `encryption-posture`; its `env:` result strings and its loop body, which the repo already extracts and executes over synthetic result triples). Mutation rows for "needed families" are generated from the live `needs:` list, not a remembered one; `shard-totality-mutations` and `e2e` sit outside it. Every consumer of the context must see the same truth, and the consumer list is a census, not a recollection: the ruleset required-context list (`scripts/required-checks.txt`, `infra/github/ruleset-ci-required.tf`, the canonical JSON); `web-platform-release.yml`'s `workflow_run` arm; `post-merge-monitor.yml`; `plugins/soleur/skills/ship/scripts/battery-owed.sh` (newest completed `success` per name reads as satisfied); `plugins/soleur/scripts/admin-merge-ready.sh` and `plugins/soleur/test/admin-merge-ready-wiring.test.sh` (the agent `--admin` path skips the merge queue, takes the highest check-run id per name, and the `test` aggregator is created only after every shard ends, so after a ready transition the draft run's `test` is the newest row until the ready run's aggregator starts); the `gh pr checks` and `statusCheckRollup` readers (`plugins/soleur/skills/ship/SKILL.md`, `plugins/soleur/skills/merge-pr/SKILL.md`, `plugins/soleur/scripts/monitor-pr-checks.sh`, `plugins/soleur/skills/drain-prs/scripts/triage-prs.sh`, `scripts/audit-bot-codeql-coverage.sh`); `.github/actions/bot-pr-with-synthetic-checks` and `apps/web-platform/server/inngest/functions/_cron-safe-commit.ts` (`SYNTHETIC_CHECK_NAMES`), which post any required name green for bot PRs and must never be handed a draft marker; the rule for the `gh pr checks`, `monitor-pr-checks.sh`, `triage-prs.sh` and `admin-merge-ready.sh --wait` readers is that a non-draft head with a red `test` and the newest `CI` `pull_request` run still in progress resolves from that run, not the check row; and the measurement probe `scripts/followthroughs/pr-battery-gate-saving-9323.sh`, whose baseline averages all successful `pull_request` runs and is contaminated once light runs exist. `e2e` is a required context and keeps its existing step-level gating (the #8450 pattern, a skipped required check posts green): it still runs on drafts, so lever 2 does not save its ~3 job-minutes, and it is named here so a job-level `if:` is not added to it by analogy. Event shapes: `pull_request` (draft, ready, reopened, a re-run whose payload still says draft, a fork), `merge_group`, `push`, `workflow_dispatch`.
 
 **Mutation matrix.**
 
 | Mutation (must go RED) | Targets |
 |---|---|
-| Make the aggregator treat any `skipped` result as success | the tolerance arm is too wide (Option T) |
+| Make the draft aggregator conclude success, or tolerate any `skipped` result | Option R: a draft `test` must stay red |
 | On `merge_group` or `push`, feed it `skipped` for `test-scripts` with draft true | draft input must be ignored off the pull_request event |
 | Add a further needed family after a compliant first and leave it out of the loop | a check that stops at the first member |
-| Unset `CI_DRAFT_LIGHT` | unset must mean full CI |
+| Unset `CI_DRAFT_LIGHT`, or set it to empty, `ON`, `on` with surrounding whitespace, or `true` | only the exact value `on` enables light mode; every other value means full CI |
 | Feed an empty `needs` map (0 families checked) | the guard's own dispatch must refuse 0 checked and exit non-zero |
 | Resolve the draft input before it is set (empty string) or make the live read error | an unresolved or failed read must fail closed to full |
 | Payload says draft true while the PR is live-ready (a re-run after ready) | a stale event payload must not skip heavy families on a ready head |
-| A fork PR with `CI_DRAFT_LIGHT` on | forks must run full |
+| A fork PR with `CI_DRAFT_LIGHT` on, or a PR whose head repo is null (deleted fork) | forks must run full |
+| A live draft read right after `gh pr ready` that still says draft (API lag) | must not conclude success; a stall is the accepted direction and the Phase 6 wait must not arm |
+| A non-draft head with a red `test` while the newest `CI` run is in progress | `monitor-pr-checks.sh` and `admin-merge-ready.sh --wait` must report PENDING from the newest run, not FAILED |
+| A ready transition that creates no ready `CI` run | the owner-visible stall signal must fire |
 | Feed `admin-merge-ready.sh` a draft-run `test` row and no ready-run `test` row | it must return ABSENT or PENDING, not READY |
 | Feed `battery-owed.sh` a light `test` row on a ready head whose full run never started or was cancelled | it must return OWED, not SKIPPABLE |
 | Arm auto-merge with no non-draft `CI` run on HEAD created after `gh pr ready` | the ship step must refuse to arm |
@@ -237,7 +295,7 @@ particular is a second skip reason that Guard 1 deliberately does not cover).
 
 Harness rows: replace the extracted aggregator body with a stub that prints success (the suite must fail); must-PASS non-canonical input: a draft run with `CI_DRAFT_LIGHT` on where the light families succeed and heavy families are `skipped`, in a different order from the canonical fixture, producing the Option R or Option T verdict exactly.
 
-**Anchor.** The aggregator compares results, not a stored value, so no stored-value anchor applies; the independent anchor for "the full battery still ran" is the `merge_group` run for queue merges, which this change does not alter. It is NOT an anchor for the agent `--admin` path (that path skips the queue, so `admin-merge-ready.sh` is the only gate and is in the assembly above) and not for the contexts the queue trusts the PR run for (`rename-guard`, `allowlist-diff`, the vendor-pin and tenant rows), which live in other workflows that S3 leaves unchanged.
+**Anchor.** The aggregator compares results, not a stored value, so no stored-value anchor applies; the independent anchor for "the full battery still ran" is the `merge_group` run for queue merges, which this change does not alter. It is NOT an anchor for the agent `--admin` path (that path skips the queue, so `admin-merge-ready.sh` is the only gate and is in the assembly above) and not for the contexts the queue trusts the PR run for (`rename-guard`, `allowlist-diff`, the vendor-pin and tenant rows), which live in other workflows that S3 leaves unchanged. S4, which extends this chokepoint, evaluates the "runner changed means full battery" detector and the affected-selection index from a trusted base-ref copy, not the PR's own tree (ADR-276 Decision 5).
 
 ## Architecture Decision (ADR/C4)
 
@@ -257,15 +315,17 @@ Read in full: `model.c4`, `views.c4`, `spec.c4`. Checked and already modeled: th
 doppler`, `github -> hetzner`, `github -> tunnel` and `github -> sentry` CI edges, and the hetzner
 `platform.infra.hetzner` container. Hosted runners are not modeled as an element today (the word
 appears only inside edge text) and the demand stages add no actor, system, data store or
-access relationship, so **no C4 edit in this PR**. If lever 5 option A is ever adopted its ADR adds a
+access relationship, so **no C4 edit in this PR**. If lever 5 option S-A (ephemeral Hetzner runners) is ever adopted its ADR adds a
 `ciRunners` container and a `github -> hetzner` runner edge with a `view include` line; that is that
 ADR's deliverable. `plugins/soleur/test/c4-count-parity.test.sh` was run on this branch: "ALL TESTS
 PASSED", 0 failed.
 
 ### Sequencing
 
-ADR-276 describes the target state and carries `status: proposed`; it flips to `active` per stage as
-each stage's dark-launch exit criterion passes (stated in its Status section).
+ADR-276 describes the target state and carries `status: proposed`; its file `status:` stays within `proposed`,
+`adopting` and `accepted`. Per-stage state (`not started`, then dated lines for `amended` and `active` as each
+stage's dark-launch exit criterion passes) lives in the ADR's append-only Stage status table, and each stage's
+own PR, stage 2 included, appends its dated `## Amendment` before any switch is flipped.
 
 ## Observability
 
@@ -273,7 +333,7 @@ Plan-phase files are docs; the stages carry code. The observability contract the
 
 ```yaml
 liveness_signal:
-  what: weekly census report attached to the stage tracking issue, plus the S3 follow-through probe
+  what: weekly census report attached to the stage tracking issue, plus the S3 follow-through probe (including the no-ready-run stall signal)
   cadence: weekly during rollout, then monthly
   alert_target: the stage tracking issue (follow-through label) and the main-health monitor
   configured_in: scripts/ci-demand-census.sh and scripts/followthroughs/ (S3, S4)
@@ -311,8 +371,8 @@ in its tracking issue, because that script does not exist on this branch yet.
 
 **Status:** reviewed
 **Assessment:** The CTO agent reviewed lever 5 and the rollout framing. Recommendation order: demand
-levers first (D), price-check an Enterprise quote second (C, price unknown), larger runners as a
-spend-capped hybrid third (B), ephemeral Hetzner runners last and gated (A). Blocking concerns recorded
+levers first (S-D), price-check an Enterprise quote second (S-C, price unknown), larger runners as a
+spend-capped hybrid third (S-B), ephemeral Hetzner runners last and gated (S-A). Blocking concerns recorded
 in the memo: public-repo code execution on owned hardware with agent-authored PRs, unverified Hetzner
 quota and stock, an autoscaler is a new service needing observability, required contexts must never go
 missing, runner image drift, and that "larger runner" may not mean more cores below 8-core. Full memo:
@@ -353,7 +413,7 @@ CFO note applies only if lever 5 is pursued: larger runners are metered and need
 | 11 | "a staged rollout (one lever per PR, dark-launch/non-blocking first per wg-dark-launch-deploy-gates)" [brief] | Staged rollout table | mapped |
 | 12 | "Stage 1 of the rollout must be defined so it is safely implementable in this PR only if the plan review panel signs off" [brief] | Staged rollout (S1 row and the verdict paragraph above it) | mapped |
 | 13 | "New ADR must use the next free ADR number" [brief] | ADR-276 | mapped |
-| 14 | "with follow-up issues per stage (milestone required; body needs `User-Impact:` + `Fix-Size:` lines or label meta/machinery)" [brief] | Phase 4 | mapped |
+| 14 | "with follow-up issues per stage (milestone required; body needs `User-Impact:` + `Fix-Size:` lines or label meta/machinery)" [brief] | Phase 2 | mapped |
 | 15 | "Do NOT touch the worktree .worktrees/feat-one-shot-merge-queue-aware-behind-sync" [brief] | Constraint: no file in that tree is read or written | mapped |
 | 16 | "Do NOT write product code or edit workflows: plan-only phase" [brief] | Phases 0 to 2 write docs only | mapped |
 
@@ -372,7 +432,7 @@ CFO note applies only if lever 5 is pursued: larger runners are metered and need
 ### Split Assessment
 
 - Subsystems touched: 2 (`knowledge-base/project`, `knowledge-base/engineering`)
-- Planned files: 9 | Estimated changed lines: about 900 (prose; no code)
+- Planned files: 10 | Estimated changed lines: about 900 (prose; no code)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR for the plan phase. The line count is prose, not code, and stages S1 to S5
   are separate PRs by design.
@@ -406,6 +466,8 @@ Each is its own PR per the staged table; none starts in this PR.
 
 - `knowledge-base/project/plans/2026-10-07-ci-reduce-hosted-runner-demand-plan.md` (this file)
 - `knowledge-base/project/specs/feat-one-shot-ci-hosted-runner-demand/tasks.md`
+- `knowledge-base/project/specs/feat-one-shot-ci-hosted-runner-demand/decision-challenges.md`
+- `knowledge-base/project/specs/feat-one-shot-ci-hosted-runner-demand/session-state.md`
 - `knowledge-base/project/specs/feat-one-shot-ci-hosted-runner-demand/lever5-runner-supply-memo.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-276-demand-first-hosted-runner-budget-merge-group-is-the-full-battery-authority.md`
 - `knowledge-base/project/specs/feat-one-shot-ci-hosted-runner-demand/issues/*.md` (follow-up issue bodies)
@@ -416,9 +478,13 @@ None in this plan phase. Later stages edit (listed in their issues, with the fan
 job is added): S1 `.github/workflows/secret-scan.yml`, `scripts/pr-fanout-ledger.txt`; S2
 `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.yml` only if the attestation form
 needs it, `scripts/pr-fanout-ledger.txt`; S3 `.github/workflows/ci.yml`,
-`plugins/soleur/skills/ship/scripts/battery-owed.sh`, the aggregator harness, `scripts/pr-fanout-ledger.txt`
+`plugins/soleur/skills/ship/scripts/battery-owed.sh` (and its test), `plugins/soleur/scripts/admin-merge-ready.sh` and
+`plugins/soleur/test/admin-merge-ready-wiring.test.sh`, `plugins/soleur/scripts/monitor-pr-checks.sh`, ship Phase 6/7
+(`plugins/soleur/skills/ship/SKILL.md`), `plugins/soleur/skills/drain-prs/`, `plugins/soleur/skills/merge-pr/SKILL.md`,
+the Guard 1 aggregator harness, a `scripts/followthroughs/` probe (the stall signal), `scripts/pr-fanout-ledger.txt`
 if a job is added (`ci.yml` is at its declared ceiling of 24); S4 `scripts/test-all.sh`,
-`scripts/lib/test-relevance-paths.sh`, ADR-262 and ADR-183 amendments.
+`scripts/lib/test-relevance-paths.sh`, `plugins/soleur/scripts/admin-merge-ready.sh`, and the ADR-276 amendment
+plus ADR-262 and ADR-183 pointer amendments.
 
 ## Acceptance Criteria
 
@@ -441,7 +507,7 @@ if a job is added (`ci.yml` is at its declared ceiling of 24); S4 `scripts/test-
 
 ### Post-merge (operator-visible follow-through)
 
-- [ ] S5 runs only after S2 to S4 have a post-merge census; each stage attaches its own before and after.
+- [ ] S5 runs only once S2 and S3 each have a post-merge census (S4 is parked); each stage attaches its own before and after to its own tracking issue.
 
 ## Test Scenarios
 
@@ -462,17 +528,20 @@ Per-stage, owned by the stage's PR (this PR changes no behavior):
 - A required context left pending is the worst failure; the `ci.yml` header forbids event gates on
   required jobs, so S3 gates heavy jobs on the draft input and edits the aggregator, never the event.
 - Marking a PR ready triggers nothing today; S3 must add `ready_for_review` to `ci.yml` types, and a
-  `gh pr ready` issued with `GITHUB_TOKEN` triggers no workflow at all (an S3 entry gate).
+  `gh pr ready` issued with `GITHUB_TOKEN` triggers no workflow at all (an S3 entry gate). The `types`
+  entry is NOT gated by the kill-switch: while the variable is unset every drafted-then-readied PR gets
+  one extra full run (about 95 to 137 job-minutes), so the dark phase raises demand and "variable unset"
+  is not a full rollback (the S3 Rollback column lists what stays).
 - The agent `--admin` merge path skips the queue entirely (the ruleset grants an organization-admin and a repository-role bypass), so `merge_group` is NOT the authority there; `admin-merge-ready.sh` is the only gate and it reads the highest check-run id per name. Because the `test` aggregator is created only after every shard ends, a draft run's light `test` is the newest row in the window after `gh pr ready`. Guard 1 covers it; Option R (a red draft `test`) closes the window without a tolerance arm.
 - `gh pr ready` followed within seconds by `gh pr merge --squash --auto` can enqueue a PR on the draft run's greens before the ready run registers any check; ship Phase 6 must wait for a non-draft `CI` run on HEAD created after the ready call, and fail closed.
-- Smaller journeys (spec-flow): `converted_to_draft` is not a trigger, so ready-draft-ready with no new push reruns full on a head that may already be green (skip when a full-mode marker exists, Option T); converting a queued PR to draft dequeues it (ship Phase 7 reads it as dequeued); a light run cancelled by the per-ref concurrency group leaves `cancelled` rows on the SHA that Phase 7 polling must ignore in favour of the newest row per name; `fix-constraints-stage-b.yml` opens drafts with `github.token`, which trigger no CI, so the human ready click is that PR's first run; `reopened` takes the live draft state; labels are inert for `ci.yml`.
+- Smaller journeys (spec-flow): `converted_to_draft` is not a trigger, so ready-draft-ready with no new push reruns full on a head that may already be green (accepted cost under Option R: the repeated ready run is full); converting a queued PR to draft dequeues it (ship Phase 7 reads it as dequeued); a light run cancelled by the per-ref concurrency group leaves `cancelled` rows on the SHA that Phase 7 polling must ignore in favour of the newest row per name; `fix-constraints-stage-b.yml` opens drafts with `github.token`, which trigger no CI, so the human ready click is that PR's first run; `reopened` takes the live draft state; labels are inert for `ci.yml`.
 - A stale green `test` from the draft light run sits on the same SHA as the pending ready run. The
   merge_group full battery bounds this for contexts it re-runs; it does not bound the contexts the queue
   trusts the PR run for (`rename-guard`, `allowlist-diff`, vendor-pin, tenant), which S3 leaves untouched.
   Which same-name check run feeds the required rollup is unmeasured and is an S3 entry gate.
 - `battery-owed.sh` reads a context as `ok` when its newest completed row is `success`; a light draft
   green would make it return SKIPPABLE and skip the local gate (a wrong SKIP, the failure class its own
-  comments name). S3 must make a light `test` distinguishable and carry a mutation row for it.
+  comments name). Under Option R the draft `test` is red so it returns OWED; S3 still carries a mutation row for it.
 - A re-run reuses the original event payload, so a light job re-run after ready would still read
   `draft == true`; the draft state is confirmed live, not read only from the payload.
 - Whether repository `vars` reach a fork `pull_request` run is unverified (an S3 canary item). The outcome
@@ -486,7 +555,8 @@ Per-stage, owned by the stage's PR (this PR changes no behavior):
   SHA, so the ready run on the same head is not reaped, while `ci.yml`'s own per-ref concurrency group
   cancels the in-progress light run when the ready run starts (intended).
 - The kill-switch is a repository variable set with `gh variable set` (no `github_actions_variable`
-  resource exists in `infra/github`); each stage names a removal trigger so it does not become a permanent
+  resource exists in `infra/github`; an accepted AP-001 carve-out, ADR-276 Principle Alignment); its
+  accepted value is exactly `on`; each stage names a removal trigger so it does not become a permanent
   fork in the workflow.
 - The affected pre-pass (86 s) must not run per shard leg or it consumes the saving.
 - Window bias: 6 hours of one working day, completed runs only. S5 requires a 30-day census before any
@@ -501,14 +571,14 @@ threshold is `aggregate pattern`, so the three-agent baseline plus the named dev
 
 | Finding | Source | Class | Disposition |
 |---|---|---|---|
-| Do not implement Stage 1 in this PR (1.5% saving, breaks the docs-only line) | DHH, simplicity, CTO, Kieran | mechanical | Applied: S1 is its own PR; Guard 2 moved out of this plan |
+| Do not implement Stage 1 in this PR (up to 1.8% gross saving, breaks the docs-only line) | DHH, simplicity, CTO, Kieran | mechanical | Applied: S1 is its own PR; Guard 2 moved out of this plan |
 | Stage 1 premises false: no `schedule` arm exists; ledger count would redden; non-PR events have no diff base | Kieran, simplicity | mechanical | Recorded in the S1 row and its issue |
 | `battery-owed.sh` reads a light green as full (wrong SKIP) | CTO | mechanical | Applied: Guard 1 assembly and mutation row, S3 entry gate |
 | Same-name rollup, `GITHUB_TOKEN` ready, stale payload, `e2e` skip, fork `vars` need entry gates | Kieran, DHH | mechanical | Applied: S3 entry gates and Guard 1 rows; the false fork claim removed |
 | S2 needs a second named tolerance arm and a hard all-skipped-conclusion precondition; drop the 14-day shadow | Kieran, simplicity | mechanical | Applied in the S2 row |
 | S4: replay instead of live shadow; park until S2 and S3 are measured | simplicity, DHH | mechanical | Applied in the S4 row |
 | Fold CodeQL and supply into one decision issue (S5) | simplicity | mechanical | Applied |
-| Arithmetic: net/gross basis, break-even about 3 draft pushes, lever 3 baseline derivation, lower-bound window | Kieran | mechanical | Applied in the ranking section |
+| Arithmetic: net/gross basis, break-even about 2.2 to 3 draft pushes, lever 3 baseline derivation, lower-bound window | Kieran | mechanical | Applied in the ranking section |
 | Kill-switch needs a removal trigger; no Terraform management of the variable | CTO, DHH | taste | Applied (30-day removal trigger; `gh variable set`) |
 | Cut ADR-276, or write it only when S3 lands | DHH | user-challenge | Not applied: the brief explicitly requires the ADR proposal ("New ADR must use the next free ADR number"); recorded in `decision-challenges.md` |
 | Shrink the lever-5 memo; drop the Observability block and `tasks.md` | DHH, simplicity | taste | Not applied: the memo is the asked deliverable and was CTO-reviewed; the Observability schema is a plan-skill gate; `tasks.md` is the plan skill's output |
