@@ -13,6 +13,11 @@ lane: cross-domain
 
 # Deliver cron-egress artifacts to running web-2 via deploy_pipeline_fix_web2 + inngest-bootstrap auto-mint backstops
 
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- The systemctl restart named below is executed BY the terraform_data
+     deploy_pipeline_fix_web2 provisioner (the delivered assert script) — every
+     state change is routed through Terraform; no operator-manual step exists. -->
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 Two sibling cron/scheduling pipeline fixes in one PR:
@@ -459,6 +464,56 @@ consumers plus the step's `gh --json`→standalone-jq shape.
 - **Supersession note:** #9393's 2026-10-03 comment recorded "rebirth-only" as the decision;
   the dispatch's chosen option supersedes it (code-only arm). `cron-egress-blocked.md` and
   the PR body carry the supersession so the next reader does not resurrect the stale arm.
+
+## Enhancement Summary
+
+Deepen pass (2026-10-07, inline — this harness has no Task-fan-out; each gate was
+evaluated mechanically against the plan and the code it cites):
+
+- **Phase 4.5 (network-outage, conditional):** evaluated, not fired. The plan drives
+  no `terraform apply` — delivery rides the operator-enabled
+  `apply-deploy-pipeline-fix.yml`, whose SSH path is the pinned CI key + bastion
+  forward, not an operator-IP-dependent dial.
+- **Phase 4.55 (downtime & cutover, conditional):** evaluated, not fired. No
+  reboot/replace (only `terraform_data` provisioner edits), no locking DDL, no
+  serving-surface restart — the single oneshot service re-run happens on a
+  weight-0 standby host. A `## Downtime & Cutover` section is not required.
+- **Phase 4.6 (user-brand):** PASS — section present, `none` threshold with the
+  required sensitive-path scope-out reason (`apps/web-platform/infra/` and the
+  deploy workflow match `SENSITIVE_PATH_RE`).
+- **Phase 4.7 (observability):** PASS — all 5 fields populated; probe verb `grep`
+  is allowlisted and the expected literal is matchable.
+- **Phase 4.8 (PAT halt):** PASS — regex sweep returned zero matches.
+- **Phase 4.9 (UI wireframe):** N/A — no UI surface.
+- **Phase 4.10 (encryption posture):** N/A — no new store or connection; declared
+  in-plan.
+- **Phase 4.11 (guard contract):** PASS — `scripts/lint-guard-contract.py`
+  scanned the plan: 3 guard entries, valid.
+- **Phase 4.12 (scope check):** PASS — Ask Mapping / Provenance / Split present.
+- **Ordering constraint confirmed:** `deploy_pipeline_fix_web2`'s last provisioner
+  MUST stay the #9169 ghcr-deny block (secret-free, after the webhook restart);
+  the cron-egress deliveries + assert execution land in the delivery/verify block
+  before it.
+- **Knock-on surfaces confirmed:** `web-host-provisioner-parity.test.sh` sweeps
+  destination-keyed and all three new destinations have `soleur-host-bootstrap.sh`
+  counterparts (no allowlist edit); `ship-deploy-pipeline-fix-gate.test.ts` pins
+  the paths set + web2 `allowed` set (both must grow); the suite-count floors are
+  `>=`, so added destinations cannot red them.
+
+### Key Improvements (deepen pass)
+
+- Named the provisioner-ordering rule (ghcr deny stays LAST) as an implementation
+  constraint rather than leaving it to be rediscovered at review.
+- Named the exact consumers of `steps.mintwatch.outputs.verdict` (filer / closer /
+  heartbeat) so the wiring is checkable, and fixed the discoverability probe to a
+  literal `id: mintwatch` match.
+
+### New Considerations Discovered
+
+- `apply-deploy-pipeline-fix.yml`'s `paths:` is an explicit list that does NOT
+  include the three artifact files — a daily CIDR-refresh regeneration PR would
+  silently not re-fire delivery. The paths additions are therefore required, not
+  optional (recorded as an inferred plan item in Provenance).
 
 ## Sharp Edges
 
