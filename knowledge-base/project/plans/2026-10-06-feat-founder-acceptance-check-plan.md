@@ -526,7 +526,7 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 - [x] `python3 scripts/lint-skill-body-budget.py --base <merge-base>` and `python3 scripts/lint-rule-bodies.py --check --base <merge-base>` are green, and `plugins/soleur/skills/plan/SKILL.md` is unchanged by this round.
 - [x] `founder-check.py text --list` names every constant and the references name each as `text <key>`; no prose in the three references contains "verified", "proven" or "safe" (the docs tests pin both).
 - [x] The `contributor` description in `model.c4` no longer says a foreign check is confirmed before it runs, and `model.likec4.json` is regenerated (`bash plugins/soleur/test/c4-count-parity.test.sh` green).
-- [ ] The CLO has reviewed the **changed** wording constants listed in the review-round report (`first-use`, `no-block`, `headless-stop` changed; `approval-ask`, `baseline-ok`, `baseline-vacuous`, `capture-question`, `changed-ask`, `eyes-ask`, `failed-ask`, `overridden-changed`, `overridden-failed`, `overridden-invalid`, `overridden-rejected`, `reason-prompt`, `rejected-ask`, `untrusted-fail` added; `no-sandbox-ask`, `nosandbox-continued`, `overridden-line`, `untrusted-ask` removed). Criterion 16 above stays unchecked until then.
+- [x] The CLO has reviewed the **changed** wording constants listed in the review-round report; superseded by the second and third CLO reviews (see the later addenda), the last of which landed in `202a5d9d16`.
 
 ## Addendum — 2026-10-07 (second review round and the security seat; append-only)
 
