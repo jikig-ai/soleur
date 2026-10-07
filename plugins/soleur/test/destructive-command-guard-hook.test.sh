@@ -1291,7 +1291,14 @@ L @@ lexer-empty: a bare redirect whose text mentions push asks @@ ask @@ - @@ >
 L @@ lexer-empty: a bare redirect whose text mentions tofu asks @@ ask @@ - @@ >"tofu.log"
 L @@ lexer-empty: a bare redirect whose text mentions eval asks @@ ask @@ - @@ >"eval.log"
 L @@ lexer-empty: a bare redirect whose text mentions RM in upper case asks (case-insensitive) @@ ask @@ - @@ >"RM.log"
-L @@ lexer-empty: a keyword only in a trailing comment is not an ask @@ none @@ - @@ >"out.txt" # git push
+L @@ lexer-empty: a keyword after a mid-line # is still read (only a full-line comment is skipped: "a #b" is not a comment) @@ ask @@ - @@ >"out.txt" # git push
+L @@ lexer-empty: a file name that merely contains a keyword (terraform.log) is not an ask @@ none @@ - @@ > terraform.log
+L @@ lexer-empty: a file name that merely contains rm (format.log) is not an ask @@ none @@ - @@ > format.log
+L @@ lexer-empty: a file name that merely contains rm (confirm.md, appended) is not an ask @@ none @@ - @@ >> confirm.md
+L @@ lexer-empty: an input redirect from a file name that starts with rm (rm.txt) is not an ask @@ none @@ - @@ < rm.txt
+L @@ lexer-empty: a file name that starts with push (push-notes.md) is not an ask @@ none @@ - @@ > push-notes.md
+L @@ lexer-empty: a plain $HOME path with git in a directory name is not an ask @@ none @@ - @@ > $HOME/.config/git/ignore
+L @@ lexer-empty: a redirect to a file that IS a keyword (terraform) asks @@ ask @@ - @@ > terraform
 L @@ lexer-empty: a keyword only in a comment line before the redirect is not an ask @@ none @@ - @@ # rm -rf ~@NL@>"out.txt"
 # ---- decide_argv keeps the caller's state: a `--` or a wrapper must not change what the cd effect or the quote sees
 X @@ state: cd -- ~ then rm -rf * (a `--` after cd must not hide the cd) @@ deny @@ - @@ cd -- ~ && rm -rf *
@@ -1734,6 +1741,22 @@ reason_has "lexer seam: OK with no record carries the lexer-empty rule id and th
 tree_row "lexer seam: OK with no record for a keyword-free command (ls) is not an ask" none "$HT_HOOK" "$_LX_ENV"
 tree_row "lexer seam: OK with no record for a comment-only command is not an ask" none "$HT_HOOK" "$(mkjson '# a "comment" only' "$TREE")"
 stub_lexer okone 'print "C\0top\0" . "1\0" . "-\0" . "ls\0" . "OK\0";'
+# A lexer that silently drops a command must not turn quoting into an allow: with quotes, escapes and $ removed the line is read again,
+# so each spelling below (a stub lexer that returns OK and no record stands for the defective lexer) asks, and a plain-variable path does not.
+stub_lexer okonly2 'print "OK\0";'
+tree_row "lexer-empty (stub): r\"\"m -rf ~ (quotes split the word) asks" ask "$HT_HOOK" "$(mkjson 'r""m -rf ~' "$TREE")"
+tree_row "lexer-empty (stub): 'r'm -rf / asks" ask "$HT_HOOK" "$(mkjson "'r'm -rf /" "$TREE")"
+tree_row "lexer-empty (stub): a quoted # is not a comment: echo \"a #b\"; rm -rf ~ asks" ask "$HT_HOOK" "$(mkjson 'echo "a #b"; rm -rf ~' "$TREE")"
+tree_row "lexer-empty (stub): ev\"\"al x asks" ask "$HT_HOOK" "$(mkjson 'ev""al x' "$TREE")"
+tree_row "lexer-empty (stub): a backslash inside the word (r\\m -rf ~) asks" ask "$HT_HOOK" "$(mkjson 'r\m -rf ~' "$TREE")"
+tree_row "lexer-empty (stub): an ANSI-C quoted word ($'r''m' -rf ~) asks" ask "$HT_HOOK" "$(mkjson "\$'r''m' -rf ~" "$TREE")"
+tree_row "lexer-empty (stub): a \$ that is not a plain variable name joins the word (\${IFS}rm -rf ~) and asks" ask "$HT_HOOK" "$(mkjson '${IFS}rm -rf ~' "$TREE")"
+tree_row "lexer-empty (stub): upper case behind a quote (T\"\"ERRAFORM destroy) asks" ask "$HT_HOOK" "$(mkjson 'T""ERRAFORM destroy' "$TREE")"
+tree_row "lexer-empty (stub): a whole-word keyword with no quote at all (rm -rf ~, comment text before it) asks" ask "$HT_HOOK" "$(mkjson '# note'$'\n''rm -rf ~' "$TREE")"
+tree_row "lexer-empty (stub): a keyword only inside a full-line comment is not an ask" none "$HT_HOOK" "$(mkjson '  # rm -rf ~'$'\n''>"out.txt"' "$TREE")"
+tree_row "lexer-empty (stub): a plain \$VAR path with a keyword in a directory name is not an ask" none "$HT_HOOK" "$(mkjson '> $HOME/.config/git/ignore' "$TREE")"
+tree_row "lexer-empty (stub): a keyword inside a longer word (platform.log, no quote) is not an ask" none "$HT_HOOK" "$(mkjson '> platform.log' "$TREE")"
+tree_row "lexer-empty (stub): a quote with no keyword anywhere is not an ask" none "$HT_HOOK" "$(mkjson '>"out.txt"' "$TREE")"
 tree_row "lexer seam: a stub lexer that reports one harmless record is not an ask (the seam is not an always-ask)" none "$HT_HOOK" "$_LX_ENV"
 # A read-time bound (the deadline reached while the lexer's output is still arriving) must not discard the records already read:
 # the rule table judges them, a deny wins, and only when nothing matched does the answer become a bound ask. The private copy has a
@@ -2057,7 +2080,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=820
+MIN_CASES=840
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

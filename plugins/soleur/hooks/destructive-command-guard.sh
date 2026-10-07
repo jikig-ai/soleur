@@ -425,36 +425,45 @@ if [[ "$SAW_OK" -ne 1 && -z "$BOUND_SOFT" ]]; then
   ask_parse "the lexer produced no result"
 fi
 [[ "$LEX_BAD" -eq 1 ]] && ask_parse "the lexer output was malformed"
-# OK with no record is the right answer for a blank or comment-only command and for a keyword-free one (a bare
-# redirect, `> out.log`): there is nothing here the guard decides on. Text that mentions a word the guard decides on
-# and yields no record is a lexer that silently dropped its input, and asks.
-has_code() { # <command text>: 0 when some line is neither blank nor a comment
-  local ln
-  while IFS= read -r ln || [[ -n "$ln" ]]; do
-    ln="${ln#"${ln%%[![:space:]]*}"}"
-    [[ -n "$ln" && "$ln" != '#'* ]] && return 0
-  done <<<"$1"
-  return 1
-}
-# has_keyword <command text>: 0 when some non-comment line, minus its trailing comment, mentions a word the guard decides on (any case).
-has_keyword() {
-  local ln had=0 found=1
+# OK with no record is the right answer for a blank or comment-only command and for a command whose text names nothing the
+# guard decides on (a bare redirect, `> out.log`): there is nothing here for the guard to judge. A lexer that returned nothing
+# for text that DOES name something the guard decides on has silently dropped its input, and asks. The test is on the text, in
+# two parts: (1) a whole-word token (the line split on blanks and shell metacharacters) that is rm, destroy, push, terraform, tofu,
+# git or eval in any case, so a file NAME that merely contains one (terraform.log, format.log, rm.txt) is not a hit; and (2)
+# when the line has a quote, a backslash, a backtick or a $ that is not a plain variable name, the line read again with those
+# characters removed (r""m, 'r'm, r\m, $'r''m', ev""al) contains one of them as a substring. A line whose first non-blank character
+# is # is a comment and is skipped; a # later in a line is not a comment ("a #b" is a quoted string), so nothing after it is
+# dropped. No process and no here-string (bash before 5.1 writes a temporary file for <<<).
+RE_DOLLAR_X='\$([^A-Za-z0-9_]|$)'
+lexer_empty_hit() { # <command text>: 0 when the text mentions what the guard decides on
+  local rest="$1" ln j w had=0 hit=1 fin=0
   shopt -q nocasematch && had=1
   shopt -s nocasematch
-  while IFS= read -r ln || [[ -n "$ln" ]]; do
+  while :; do
+    case "$rest" in
+      *$'\n'*) ln="${rest%%$'\n'*}"; rest="${rest#*$'\n'}" ;;
+      *) ln="$rest"; rest=""; fin=1 ;;
+    esac
     ln="${ln#"${ln%%[![:space:]]*}"}"
-    [[ -z "$ln" || "$ln" == '#'* ]] && continue
-    ln="${ln%%[[:space:]]\#*}"
-    # (`terraform` contains `rm`, so `*rm*` already covers it)
-    # (this order differs from the prefilter's on purpose: the mutation suite anchors on the prefilter's pattern run, which must stay unique in this file)
-    case "$ln" in *git*|*tofu*|*eval*|*destroy*|*push*|*rm*) found=0; break ;; esac
-  done <<<"$1"
+    if [[ -n "$ln" && "$ln" != '#'* ]]; then
+      j="${ln//[;&|()<>\$\"\'\`\\]/ }"
+      for w in $j; do
+        case "$w" in rm|destroy|push|terraform|tofu|git|eval) hit=0; break 2 ;; esac
+      done
+      if [[ "$ln" == *[\'\"\\\`]* || "$ln" =~ $RE_DOLLAR_X ]]; then
+        j="${ln//[\'\"\\\`\$]/}"
+        # (`terraform` contains `rm`, so `*rm*` already covers it; this order differs from the prefilter's on purpose: the mutation suite anchors on the prefilter's pattern run, which must stay unique in this file)
+        case "$j" in *git*|*tofu*|*eval*|*destroy*|*push*|*rm*) hit=0; break ;; esac
+      fi
+    fi
+    (( fin )) && break
+  done
   (( had )) || shopt -u nocasematch
-  return "$found"
+  return "$hit"
 }
 if [[ "${#REC_N[@]}" -eq 0 && -z "$BOUND_SOFT" ]]; then
   LX_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || ask_lexer_empty
-  if has_code "$LX_CMD" && has_keyword "$LX_CMD"; then ask_lexer_empty; fi
+  if lexer_empty_hit "$LX_CMD"; then ask_lexer_empty; fi
 fi
 
 # ---- 5. the rule table -----------------------------------------------------------------------------
