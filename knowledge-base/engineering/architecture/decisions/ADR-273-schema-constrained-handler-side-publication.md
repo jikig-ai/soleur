@@ -4,7 +4,7 @@ status: accepted
 date: 2026-10-06
 supersedes: none
 issue: 7122
-related: [7119, 7121, 7124, 9606, 6695, 6714]
+related: [7119, 7121, 7124, 9606, 6695, 6714, 9678, 9679]
 related_adrs: [ADR-033, ADR-054, ADR-058, ADR-126, ADR-216]
 tags: [claude-eval, prompt-injection, publication, containment-hook, credentials, community-monitor, gdpr]
 brand_survival_threshold: single-user incident
@@ -240,7 +240,7 @@ below for that reason.
   third-party platform variables (8 are credentials, 4 are identifiers: `DISCORD_GUILD_ID`, `BSKY_HANDLE`,
   `LINKEDIN_PERSON_URN`, `LINKEDIN_ORG_ID`), plus `ANTHROPIC_API_KEY`, the READ-scoped `GH_TOKEN`, and `PATH`, `HOME`,
   `NODE_ENV`; the handler wrapper adds `SOLEUR_COLLECTOR_STATUS_DIR` and the substrate adds
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, so the child sees 19. With no write primitive, no posting verb, no code-execution
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, so the child sees 19 (20 since the 2026-10-07 addendum: the wrapper also sets the non-secret `SOLEUR_COLLECTOR_COMPACT`). With no write primitive, no posting verb, no code-execution
   path and no network egress verb they cannot be used to publish, but a covert encoding of one into the free integers or the
   one agent-chosen token, a numeric Discord channel id (the HN query word is pinned; see (e)), would be a permanent public leak or a third-party disclosure. Containment rests on the hook's
   `/proc` and secret-read denies, the argument grammar, and the router scripts not echoing env (a source test asserts no
@@ -308,3 +308,17 @@ The first run on the read-only spawn token showed `github` as failed. GitHub ans
 Resolution: `repo-stats` treats exactly that response (the message and `HTTP 403` together; any other stargazers failure is still a hard failure) as an unavailable count: `new_stargazers_count: null`, `stargazers_unavailable: true`, exit 0, and a closed `stargazers_unavailable` warn in the collector-status sidecar. The handler, not the model, acts on that warn: a draft that reports github `collected` is forced to `partial` / `auth` with its other numbers kept, so an unmeasured `New stargazers 0` is never published as a measurement. The prompt also tells the model to do this, as a second layer. The warn is not reported to Sentry (it is a standing fact about the token, and a daily event for it would stop the signal being read).
 
 Consequence: the digest's `New stargazers` value is not a measured count while the spawn token stays read-only, and the github row carries the `partial (auth; a 0 may mean unavailable)` label on every run. Options for a later change: derive new stars from the delta in `stargazers_count` against the previous digest (no extra permission), or drop the metric from the schema.
+
+## Addendum (2026-10-07): compact collector output (#9678)
+
+**Problem.** Spike S3 accepted `partial` / `output-too-large` for "a Discord message listing". The 2026-10-06 digest showed it on both Discord and GitHub: the agent has no file tools, so any collector line past the Bash tool's inline limit (30,000 characters) is unreadable, and the prompt forces the row to `partial`. GitHub `activity` alone is 77,599 bytes compact on a worst-case window.
+
+**Decision.** Shrink what the agent reads, at the collector, with a handler-controlled switch. The cron handler sets one non-secret spawn env key, `SOLEUR_COLLECTOR_COMPACT=1`, in the same wrapper that already adds `SOLEUR_COLLECTOR_STATUS_DIR`. With it set, each collector command the prompt runs prints ONE line of JSON holding only the fields the prompt reads: counts, the first 40 text-channel ids (digits only), and the newest 40 titles per list capped at 60 characters. Unset, or any other value, leaves the output byte-identical to the interactive form. The agent cannot set the flag itself (the containment hook denies `NAME=value` prefixes and has no `env` or `export` verb). `discord members` is not projected: the hook denies it, so the cron never runs it.
+
+**What does not change.** The closed schema, the containment hook's allowlist (no command literal changed), the agent's tools (still no file tool), the posting and read credentials in the spawn env (residual (g) is unchanged apart from the child-env count, 19 to 20), the publication path and the handler-authored metrics. The projection strictly narrows what reaches the model: logins, message bodies, comment snippets and URLs are dropped, so it also reduces the input that #7124 is about without closing it. A drifted required field fails closed (`compact-projection-failed`) instead of printing a `null` the model could read as 0.
+
+**Alternatives rejected.** A file or handoff path for the full output needs `Read`/`Glob`, which this ADR removed (the `read-root` fallback was declined in Spike S3), and a handler-side collector run would move credentials. Raising the Bash output cap is a clamped bump, not a bound, and feeds more third-party text to the model. Computing the metrics in the handler from raw collector output is a larger rewrite that moves metric authorship, and is not needed to remove the cause.
+
+**Signals.** Two closed warn values ride the existing collector-status sidecar `warn` field (GitHub only; Discord has no sidecar, and its outputs are about 1 KB by construction): `compact_off` (a cron run whose flag did not reach the collector) and `compact_over_budget` (one compact output over 6,000 bytes). The prompt keeps its `output-too-large` rule as the residual fallback.
+
+**Residual, unchanged in kind.** GitHub still renders `partial` / `auth` on every run while the read-only spawn token cannot list stargazers (the 2026-10-06 addendum); this change removes only the `output-too-large` cause, so Discord can now render `collected` and GitHub's other counts are measured rather than truncated. The standing `auth` label is tracked as #9679.

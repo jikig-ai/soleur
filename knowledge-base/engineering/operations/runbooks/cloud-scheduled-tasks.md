@@ -868,16 +868,30 @@ quoted excerpts, narrative Trending prose) are gone by design; digests dated bef
 cutover keep their old format. The interactive `/soleur:community digest` skill still
 shows full detail on demand. This is not a regression.
 
-**A Discord day that shows `partial` with cause `output-too-large`.** The Discord message
-listing can exceed the Bash tool's inline output limit, and the prompt tells the agent to
-mark that platform `partial` rather than guess. An accepted draft raises **no Sentry event**
-(only a rejection or a collector failure does, and the collector sidecar covers github only),
-so for such a day the evidence is the rendered row itself (status `partial`, cause
-`output-too-large`, with the "a 0 may mean unavailable" label) in the digest and the issue,
-plus the `SOLEUR_COMMUNITY_DIGEST_FILE` marker in Better Stack (`verdict`, `present`,
-`writer: handler`; query recipe in `betterstack-log-query.md`). Read `denialCount` on any run that did reject; there is no
-per-platform Sentry field to query for an accepted partial day. A platform shown `failed` or
-`disabled` renders no metrics at all, by design.
+**A day that shows `partial` with cause `output-too-large`.** Since #9678 the cron handler sets
+`SOLEUR_COLLECTOR_COMPACT=1`, so each collector prints one compact line (counts, at most 40 channel
+ids, the newest 40 titles per list) and this cause should no longer appear on a normal day. The
+prompt keeps the rule as a fallback: if a collector's output still exceeds the Bash tool's inline
+limit (30,000 characters) the agent marks that platform `partial` rather than guess. An accepted
+draft raises **no Sentry event** (only a rejection or a collector failure does, and the collector
+sidecar covers github only), so the evidence is the rendered row itself (status `partial`, cause
+`output-too-large`, with the "a 0 may mean unavailable" label) in the digest and the issue, plus the
+`SOLEUR_COMMUNITY_DIGEST_FILE` marker in Better Stack (`verdict`, `present`, `writer: handler`; query
+recipe in `betterstack-log-query.md`). Work through these in order, credential-free first:
+
+1. Read the rendered row and the Better Stack marker (above). A `partial` github row on its own is
+   usually the standing `auth` label (stargazers are unreadable with the read-only token, #9679),
+   not this cause.
+2. For github, read the sidecar `warn` the handler reports to Sentry (`collector-status-warn`):
+   `compact_off` means the flag did not reach the collector (check the `buildSpawnEnv` wrapper in
+   `cron-community-monitor.ts` still sets it); `compact_over_budget` means one compact line passed
+   6,000 bytes (the title caps no longer bound it; read the collector's projection).
+3. Only if the first two do not explain it, replay locally with the real credentials:
+   `SOLEUR_COLLECTOR_COMPACT=1 bash plugins/soleur/skills/community/scripts/<collector>.sh <verb>`
+   and compare the byte count with the 30,000 limit. Discord has no sidecar, so its only in-surface
+   evidence is the rendered row.
+
+A platform shown `failed` or `disabled` renders no metrics at all, by design.
 
 **Related ops** (queried the same way):
 
