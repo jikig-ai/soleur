@@ -50,3 +50,24 @@ Additional root causes found during fix verification:
 Final state: orphan-retention suite 54/54, soak harness all-green,
 killed-classification 77/77, runtime-ceiling 23/23, fixture ratchet 62/62
 (baseline 1908 sites), followthrough-varq-ban clean, orphan-suites none.
+
+## Ship status (auto-merge armed)
+
+- PR #9687 ready, body+labels set (semver:patch), net-issue-flow +0 PASS.
+- Merged origin/main (e143734c56) — suite re-verified 54/54 post-merge.
+- Auto-merge ARMED (`autoMergeRequest` set, method=MERGE — repo merge queue
+  handles squash). mergeStateStatus=BLOCKED = checks pending only.
+- Follow-through enrollment DONE on #9686: `follow-through` label +
+  column-0 unfenced directive
+  `script=scripts/followthroughs/watchdog-debounce-soak-9686.sh earliest=2026-10-07T20:00:00Z secrets=GH_TOKEN`.
+- Deferred scope-out filed: #9701 (enumerate watchdog sibling hazard).
+- Review trailer: `Reviewed-By-Soleur` + `Reviewed-Coverage: full 6/6 agents`
+  (commit ebd0a55ed9).
+
+## Remaining after the queue lands the merge
+
+1. `gh pr view 9687 --json mergedAt` → confirm merged.
+2. Post-merge verification per ship skill (probe file present on main,
+   directive still live on #9686 — closed-set sweeper pass keeps probing
+   while the label stays).
+3. Tally show + worktree cleanup (ship skill Phase 7).
