@@ -70,6 +70,7 @@ export function behindSyncInstructions(harness: Harness): string {
         `- When \`gh pr view --jq '.mergeStateStatus'\` returns \`BEHIND\` or \`DIRTY\`, **STOP** CI-only polling.`,
         `- From the PR worktree: \`${script} <PR-number>\` (fetch → merge origin/main → push).`,
         `- \`DIRTY\` auto-syncs only when the local merge is clean; a real conflict exits for manual resolution.`,
+        `- Exception: while the Phase 7 loop prints \`[ship.phase7.queue_wait]\` (merge-queue repo, auto-merge armed) the PR is waiting for GitHub to enqueue it — keep polling; never run the sync script, update-branch or --admin it before \`[ship.phase7.queue_wait_expired]\`, MERGED or a dequeue.`,
         `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged|merge conflict|\\[pr-behind-sync\\] kind=|\\[ship\\.phase7\\.\`.`,
         `- Exit 11 is a no-op: \`kind=noop\` is GitHub state lag. \`kind=queued\` means the PR is IN the merge queue and nothing was pushed (a push dequeues it): it exits 0 here and 11 only with \`--step\` — keep polling for MERGED, never push, update-branch or --admin it; re-poll, then re-run. Exit 13 (\`kind=dequeued\`) means it left the queue unmerged (a failed merge_group run or a removal; auto-merge may still read armed) — follow the recovery on that line. Exit 12 (\`kind=wrong_branch\`) means this worktree is not the PR's branch — cd to it. Any other \`kind=\` line names its next action.`,
         `- Re-poll after push; do NOT ask the operator to update the branch.`,
@@ -79,7 +80,7 @@ export function behindSyncInstructions(harness: Harness): string {
       return [
         "**BEHIND/DIRTY resync (Claude Code)**",
         `- When mergeStateStatus is \`BEHIND\` or \`DIRTY\`, the ship Phase 7 Monitor loop calls \`sync-pr-behind.sh <PR-number> --step\` once per attempt; outside that loop run \`${script} <PR-number>\` from the worktree (DIRTY auto-syncs only when locally clean).`,
-        `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked — unless the script reported \`kind=queued\` (exit 11 with \`--step\`): a PR in the merge queue is not blocked, the queue merges it, so keep heartbeating and never sync it; \`kind=dequeued\` (exit 13) stops the poll with the recovery.`,
+        `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked — unless the script reported \`kind=queued\` (exit 11 with \`--step\`): a PR in the merge queue is not blocked, the queue merges it, so keep heartbeating and never sync it; likewise while the poll prints \`[ship.phase7.queue_wait]\` (merge-queue repo, auto-merge armed: GitHub enqueues the PR; sync only after \`[ship.phase7.queue_wait_expired]\`); \`kind=dequeued\` (exit 13) stops the poll with the recovery.`,
       ].join("\n");
 
     case "cursor":

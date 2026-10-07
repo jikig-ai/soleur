@@ -27,7 +27,7 @@ description: "This skill should be used when preparing a feature for production 
 3. Step 3.8: invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) **before** Step 4 cleanup.
 4. **FORBIDDEN:** Ending the session at merge, at a red release run you did not investigate, or with "want me to watch CI?"
 5. **Harness polling:** `plugins/soleur/lib/harness.ts` → `pollInstructions()` — Claude uses **Monitor tool**; Grok uses **AwaitShell** (`pattern` for `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `\[ship\.phase7\.`, `\[pr-behind-sync\] kind=`, `postmerge verification complete`) or blocking Shell with `block_until_ms`.
-6. **BEHIND stop-and-sync:** When `mergeStateStatus` is `BEHIND`, **stop** CI-only polling and resync before continuing. Grok/ad-hoc polls: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" <PR>` from the feature worktree (the Phase 7 Monitor loop runs the same script with `--step`). Canonical spec: `plugins/soleur/lib/pr-merge-poll.ts`.
+6. **BEHIND stop-and-sync:** When `mergeStateStatus` is `BEHIND`, **stop** CI-only polling and resync before continuing. Grok/ad-hoc polls: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" <PR>` from the feature worktree (the Phase 7 Monitor loop runs the same script with `--step`). Canonical spec: `plugins/soleur/lib/pr-merge-poll.ts`. **Exception (queue mode):** while the poll prints `[ship.phase7.queue_wait]` (merge-queue repo, auto-merge armed) BEHIND is expected until GitHub enqueues the PR — keep polling and never sync, update-branch or merge it by hand before `[ship.phase7.queue_wait_expired]`.
 
 See `workflow-fidelity.ts` (`SHIP_MERGE_DEPLOY_SENTINEL`, `POST_MERGE_VERIFICATION_SKILLS`) and `wg-after-a-pr-merges-to-main-verify-all`.
 <!-- ship-merge-deploy-protocol:end -->
@@ -2370,10 +2370,8 @@ while true; do
     fi
   fi
 
-  # A BEHIND that GitHub itself reported (not one the DIRTY block derives below): only that one may wait in queue
-  # mode. The idle count is CONSECUTIVE, so any tick that is not a real BEHIND resets it.
+  # A BEHIND that GitHub itself reported (not one the DIRTY block derives below): only that one may wait in queue mode.
   real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1
-  (( real_behind == 1 )) || qidle=0
 
   # DIRTY: GitHub computed a conflict. A clean local `git merge-tree --write-tree` means the
   # server saw something local git does not; treat as BEHIND and fall through to auto-sync.
@@ -2405,38 +2403,44 @@ while true; do
   fi
 
   # Queue mode (#9710): GitHub reports BEHIND, auto-merge is armed and the base branch has a merge queue: wait for
-  # GitHub to enqueue the PR instead of pushing (a push restarts CI and dequeues a queued PR). A positive pending
-  # count is the only thing that resets the idle count; zero, "no checks" or an unreadable answer all count as idle,
-  # so a broken read walks toward the fallback (a sync), never toward waiting forever.
+  # GitHub to enqueue the PR instead of pushing (a push restarts CI and dequeues a queued PR). While waiting, only a
+  # positive count of pending REQUIRED checks resets the idle count (a pending advisory check must not hold the wait);
+  # zero, "no checks" or an unreadable answer all count as idle, so a broken read walks toward the fallback (a sync),
+  # never toward waiting forever. Any tick that is not a wait tick restarts the count below.
   qwait=0
   if (( real_behind == 1 && QUEUE_RULE == 1 && qwait_expired == 0 )) \
      && [[ "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest != null' 2>/dev/null || true)" == true ]]; then
     qwait=1
-    pend="$(gh pr checks "$PR" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || true)"
-    if [[ "$pend" =~ ^[1-9][0-9]*$ ]]; then qidle=0; else qidle=$((qidle+1)); fi
+    pend=0
+    mapfile -t pend_names < <(gh pr checks "$PR" --json name,bucket \
+      --jq '.[] | select(.bucket == "pending") | .name' 2>/dev/null || true)
+    if (( ${#pend_names[@]} > 0 )); then
+      for n in "${pend_names[@]}"; do
+        if (( ${#REQUIRED_CHECKS[@]} == 0 )); then pend=$((pend+1)); continue; fi
+        for r in "${REQUIRED_CHECKS[@]}"; do
+          [[ "$n" == "$r" ]] && { pend=$((pend+1)); break; }
+        done
+      done
+    fi
+    if (( pend > 0 )); then qidle=0; else qidle=$((qidle+1)); fi
     if (( qidle > QUEUE_GRACE_TICKS )); then
-      # A PR already IN the queue also shows no pending PR check, so ask before calling it un-enqueued. A dequeue is
-      # reported here exactly as the every-5th-tick read does (--queue-state consumes the seen-queued marker, so
-      # falling through to --step after it would read "not queued" and push).
-      qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
-      case "$qs" in
-        queued*)   qidle=0 ;;
-        dequeued*) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break ;;
-        *)         qwait=0; qwait_expired=1
-                   echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait_expired] PR $PR has been BEHIND with auto-merge armed and no check pending for ${qidle} ticks and is not in the merge queue — the queue is not picking it up. Falling back to the BEHIND auto-sync for the rest of this poll." ;;
-      esac
+      # Expiry needs no queue read: the sync arm below runs `--step`, whose own queue gate skips a PR that IS in the
+      # queue (kind=queued, exit 11, nothing pushed) and stops on a dequeue (exit 13), so falling back is safe.
+      qwait=0; qwait_expired=1
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait_expired] PR $PR has been BEHIND with auto-merge armed and no required check pending for ${qidle} ticks and GitHub has not enqueued it. Falling back to the BEHIND auto-sync for the rest of this poll (a PR already in the merge queue is skipped by it, never pushed to). Diagnose before changing anything: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md; the strict policy was measured NOT to block enqueue, so do not change the ruleset."
     fi
   fi
+  (( qwait == 1 )) || qidle=0   # CONSECUTIVE: any tick that is not a wait tick restarts the idle count
   if [[ "$qwait" -eq 1 ]]; then
     queue_waits=$((queue_waits+1))
     (( queue_waits == 1 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queue_wait] PR $PR is BEHIND with auto-merge armed and the base branch has a merge queue: no sync (a push restarts CI and dequeues a queued PR); waiting for GitHub to enqueue it"
-  # Auto-sync on BEHIND: GitHub auto-merge will not fire while the head
-  # ref is behind base. sync-pr-behind.sh --step merges origin/main and pushes
-  # so the queued auto-merge can re-evaluate; its `[pr-behind-sync] kind=…` line
-  # says why an attempt stopped. Capped at MAX_BEHIND_SYNCS so a pathological
-  # merge-loop does not consume the whole poll budget. `|| sync_rc=$?`, not a
-  # bare `cmd; rc=$?`, which dies under an errexit host shell (#8339).
   elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+    # Auto-sync on BEHIND: GitHub auto-merge will not fire while the head
+    # ref is behind base. sync-pr-behind.sh --step merges origin/main and pushes
+    # so the queued auto-merge can re-evaluate; its `[pr-behind-sync] kind=…` line
+    # says why an attempt stopped. Capped at MAX_BEHIND_SYNCS so a pathological
+    # merge-loop does not consume the whole poll budget. `|| sync_rc=$?`, not a
+    # bare `cmd; rc=$?`, which dies under an errexit host shell (#8339).
     # ci_cycles cap gate (#9403): STOP writes the budget-capped artifact to
     # specs/<branch>/session-state.md and breaks the WHOLE poll.
     if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
@@ -2503,7 +2507,7 @@ done
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report it and investigate why the PR has not merged (OPEN, not queued: see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md).
 
-**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop` state lag, or `kind=queued`: in the merge queue, a push would dequeue it) as uncounted and keeps polling, and stops on every other non-zero exit (13 `kind=dequeued`, or `[ship.phase7.dequeued]` on any OPEN tick: left the queue unmerged, recovery on the line); `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
+**Auto-sync on BEHIND.** (Queue mode, below, waits instead for an armed PR when `main` has a merge queue.) When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop` state lag, or `kind=queued`: in the merge queue, a push would dequeue it) as uncounted and keeps polling, and stops on every other non-zero exit (13 `kind=dequeued`, or `[ship.phase7.dequeued]` on any OPEN tick: left the queue unmerged, recovery on the line); `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
 
 The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→BEHIND→BEHIND (every sync triggering a new commit on main) cannot spend the whole `MAX_POLL_MIN`-minute budget making no progress. After 6 syncs the loop emits a `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the diagnosis lands at the inflection point rather than at the timeout. At `fetch_failures=6/6` it names a network/credential failure instead of a fast-moving main.
 
@@ -2524,7 +2528,7 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→
 
 Do NOT invert this into "ignore failures that look transient". The discriminator is the failing step's **command** and whether your diff touches what it fetches — never the step's name, which is author-chosen prose the API returns verbatim. This is not hypothetical: measured on this repo's `ci.yml`, `Install root dependencies` and `Install web-platform dependencies` run `bun install --frozen-lockfile` and `npm ci`, so any name-shaped rule reads five of six dependency-install steps as tool downloads and classifies lockfile drift as a CDN outage. The step name narrows where to look; it never decides. **Why:** PR #7470 — one GitHub release-CDN outage broke the Doppler CLI download (`cla-evidence`), `gitleaks.tgz`'s sha (three `smoke` jobs) and `actionlint`'s sha (`lint-bot-statuses`) simultaneously. Every failure was at setup, none in a gate, and the merge still cost three rerun cycles because the loop keyed on check names.
 
-**Queue mode (#9710).** When the base branch has a `merge_queue` rule (read once at loop entry by `.type == "merge_queue"`, never by position) AND auto-merge is armed (read each BEHIND tick), a BEHIND reading that GitHub itself reported is not a reason to push: each push restarts the whole required-check set, and the queue builds every candidate against the projected `main`, so an armed PR is made current by the queue. GitHub enqueues an armed BEHIND PR on its own (measured, ADR-270 canary addendum 2026-10-07), so the poll prints `[ship.phase7.queue_wait]` once and keeps polling, prints `[ship.phase7.queued]` once when the PR enters the queue, and stops on a dequeue as above. The wait is bounded two ways: more than 5 CONSECUTIVE ticks with no pending PR check, while `--queue-state` does not read `queued` or `dequeued`, prints `[ship.phase7.queue_wait_expired]` and falls back to the BEHIND auto-sync for the rest of that poll (the queue is not picking the PR up: surface the `strict_required_status_checks_policy` question to the operator, do not change the ruleset); and `MAX_POLL_MIN` caps a PR whose checks never settle. Every unreadable answer (rules API, armed read, checks read) leaves queue mode off or counts as idle, so the fail direction is always toward today's sync, never toward waiting forever; a DIRTY-derived BEHIND, a repo with no queue rule and a poll with auto-sync disabled behave exactly as before. Waiting does not consume `MAX_BEHIND_SYNCS`.
+**Queue mode (#9710).** When `main` has a `merge_queue` rule (read once at loop entry by `.type == "merge_queue"`, never by position; this reads `main`'s rules, as the required-check read already does) AND auto-merge is armed (read each BEHIND tick), a BEHIND reading that GitHub itself reported is not a reason to push: each push restarts the whole required-check set, and the queue builds every candidate against the projected `main`, so an armed PR is made current by the queue. GitHub enqueues an armed PR whose head is behind `main` on its own (measured, ADR-270 canary addendum 2026-10-07), so the poll prints `[ship.phase7.queue_wait]` once and keeps polling (informational: take no action, and never sync, update-branch or merge it by hand), prints `[ship.phase7.queued]` once, at the first every-5th-tick read that finds the PR in the queue, and stops on a dequeue as above. The wait is bounded two ways. More than 5 consecutive wait ticks (the 6th) with no pending REQUIRED check print `[ship.phase7.queue_wait_expired]` and fall back to the BEHIND auto-sync for the rest of that poll (GitHub has not enqueued the PR: keep the Monitor running, diagnose with the dequeue reference and the PR timeline, record the strict up-to-date question in the final report, and do not change the ruleset; the fallback `--step` itself skips a PR that is in the queue). `MAX_POLL_MIN` caps a PR whose required checks never settle. Every unreadable answer (rules API, armed read, checks read) leaves queue mode off or counts as idle, so the fail direction is always toward today's sync, never toward waiting forever; a DIRTY-derived BEHIND, a repo with no queue rule and a poll with auto-sync disabled behave exactly as before. Waiting does not consume `MAX_BEHIND_SYNCS`. Accepted residual (ADR-270 amendment 2026-10-07): several required contexts (`tenant-integration-required` and `vendor-pin-required`, among others) carry their PR-head pass onto `merge_group` by design, so in queue mode their only real run is at the PR-time base; the sync used to re-run the PR-event versions on a fresher base.
 
 **Required-check failure exit.** Each tick the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection it exits, naming the failing check plus a pointer to `gh pr checks <number>` / `gh run view --log-failed` — replacing the silent heartbeat-to-timeout when a required check fails mid-poll while auto-merge waits for a transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo) the scan is a no-op and the CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 

@@ -84,6 +84,17 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(behindSyncInstructions("claude")).toMatch(/exit 11 with `--step`/);
   });
 
+  test("behindSyncInstructions agrees with queue mode: a queue_wait heartbeat on BEHIND is not a reason to sync (#9710)", () => {
+    for (const h of ["grok", "claude"] as const) {
+      const md = behindSyncInstructions(h);
+      expect(md).toContain("[ship.phase7.queue_wait]");
+      expect(md).toContain("[ship.phase7.queue_wait_expired]");
+    }
+    // The Grok text says STOP on BEHIND; the exception must sit beside it, naming what waits and when syncing resumes.
+    expect(behindSyncInstructions("grok")).toMatch(/Exception: while the Phase 7 loop prints `\[ship\.phase7\.queue_wait\]`[^\n]*never run the sync script/);
+    expect(behindSyncInstructions("claude")).toMatch(/likewise while the poll prints `\[ship\.phase7\.queue_wait\]`/);
+  });
+
   test("behindSyncInstructions forbids operator handoff on Grok", () => {
     const md = behindSyncInstructions("grok");
     expect(md).toContain("STOP");

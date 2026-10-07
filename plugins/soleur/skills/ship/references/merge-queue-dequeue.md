@@ -10,7 +10,7 @@ A red **advisory** job (a `merge_group` job that is not in `scripts/required-che
 
 **Who sees it.** One read (`sync-pr-behind.sh <N> --queue-state`) says `dequeued` when the PR is `OPEN`, out of the queue, and either has a CURRENT removal event (newer than the last auto-merge re-arm and than the head commit, so a fixed-and-pushed or re-armed PR does not count) or was seen queued earlier (a marker the script leaves in the worktree's git dir). A confirming re-read follows a short nap, so the queue's own merge landing is never reported. A dequeue reached through the marker alone is reported ONCE: printing `dequeued` consumes the marker (as `--step` does on exit 13), so a PR you fixed and re-armed (CI running, not queued yet) reads `not_queued` afterwards, not `dequeued` again; a removal event is current only until the re-arm or the next push. Three callers use it:
 
-- the Phase 7 fence, on every 5th OPEN tick of any `mergeStateStatus` (prints `[ship.phase7.dequeued]` and stops) and on the poll timeout (`Queue: …`), and `--step` on each BEHIND tick (`kind=dequeued rc=13`);
+- the Phase 7 fence, on every 5th OPEN tick of any `mergeStateStatus` (prints `[ship.phase7.dequeued]` and stops) and on the poll timeout (`Queue: …`), and `--step` on each BEHIND tick that is not waiting in queue mode (`kind=dequeued rc=13`; a queue-mode wait tick makes no `--step` call, so a dequeue shows on the next 5th-tick read);
 - `monitor-pr-checks.sh <N>` (drain-prs), which ends `LEFT THE MERGE QUEUE UNMERGED` on a `dequeued` read and never on an unreadable one;
 - the pre-merge hook, which only skips the sync for a queued PR (a dequeued one is exactly the recipe's step 2).
 
