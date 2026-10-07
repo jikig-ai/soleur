@@ -20,8 +20,14 @@ and [ADR-165](./ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md)** (bot
 the relation is stated here and carried in `related_adrs`). It narrows one row of ADR-157's `.claude` failure table on purpose (D6) and
 is the first ADR to apply that table to a hook that ships to customers rather than to this repository's own sessions.
 
-The product owner (CPO) signed off the decision set below before any implementation commit, on a named revision SHA and section hash
-recorded in the PR body; the four conditions the sign-off attached are listed with their satisfaction under "CPO conditions".
+The product owner (CPO) signed the **plan's** Decision Set (`## Final W2 Decision Set` in
+`knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`) before any implementation commit, on
+revision `3a60924ebd6ff3b3482b9e8972c0d9b890c4f92e` and section SHA-256
+`39593c04ced72bc4a7e6a768408cef4baaa6b22d52069b4836566bb00385d81a`, both recorded in the body of PR #9653; the four conditions the
+sign-off attached are listed with their satisfaction under "CPO conditions". **This record is not that signed text.** D6-D10 and the
+Considered Options here were rewritten after the sign-off, and the shipped hook goes beyond D1-D10 in the places listed under
+"Post-review hardening" (the list a re-sign-off would decide on, with what the CPO has not seen). The plan's Decision Set itself was
+not edited.
 
 ## Context
 
@@ -83,9 +89,12 @@ reference for the rule table; this section records the decisions and why.
   `drop database`/`dropdb`; MCP delete tools; any non-Bash tool, Devin's `exec` included; Doppler secret writes and deletes; a plain
   `terraform apply`; `kubectl delete`; `pulumi destroy`; `terragrunt destroy`; `git push --mirror` without `--force`; and an
   unresolvable `$VAR` target. **The kill switch can also be set through a settings-level `env` block, which no Bash guard sees**, so an
-  agent that can edit a settings file can disarm the guard: this is a seatbelt, not a boundary. The user-facing sentence (plugin README
-  and hook header) says the guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools and is not a
-  substitute for scoped credentials. **Dropped from the spec's FR2:** Doppler secret writes and a plain `terraform apply`. Both are
+  agent that can edit a settings file can disarm the guard: this is a seatbelt, not a boundary. The user-facing sentence sits in the
+  plugin README and the hook header, **word for word the same in both** (the hook suite pins the README copy and a row compares the
+  header's). It is **longer than the sentence the CPO signed**, which named only a plain `terraform apply`, secret writes, SQL or
+  non-Bash tools and scoped credentials: the README commit widened it to `terragrunt` or `pulumi` destroy and indirect command
+  forms (scripts or heredocs fed to a shell, wrappers the guard does not unwrap, obfuscated command names), because the short
+  sentence let a reader assume those were covered. **Dropped from the spec's FR2:** Doppler secret writes and a plain `terraform apply`. Both are
   routine and ambiguous, so asking on them would spend the false-positive budget that makes the unambiguous asks credible; this
   repository's own sessions already defer a plain `terraform apply` through `prod-write-defer-gate.sh`, so the drop costs nothing here.
 - **D3 — Ask versus deny.** `deny` only where no legitimate use exists (delete of `/`, home or an ancestor); everything else `ask`.
@@ -95,12 +104,14 @@ reference for the rule table; this section records the decisions and why.
   retry or rephrase, and names the two human routes (run it in their own terminal, or start the session with the kill switch) plus an
   issues URL for a false-positive report. A lexer failure uses a distinct reason ("could not parse this command; it was not
   recognised as destructive") so the person is never shown a command that was not matched. Every `deny` also carries a top-level
-  `systemMessage` with the same reason (Measurements).
+  `systemMessage` with the same reason (Measurements). This is the wording for a matched destructive command as signed; how an ask
+  opens for the person and which tail each other cause gets are under Post-review hardening, "Reasons".
 - **D5 — Kill switch.** `SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` (exactly `1`; empty, `0` and anything else leave the guard on) exits 0
   silently as the hook's first executable statement, before any dependency probe. It is read from the harness process environment,
   so it needs a session restart.
 - **D6 — Failure posture (a stated narrowing of ADR-157's `.claude` row).** An envelope `jq` rejects, empty stdin, a non-string
-  `.tool_input.command`, a lexer parse failure and a lexer bound trip all `ask` with the D4 parse reason. A missing or unusable `jq`
+  `.tool_input.command`, a lexer parse failure and a lexer bound trip all `ask` with the D4 parse reason (the further inability asks,
+  `bound`, `lexer-empty`, `unparsed-wrapper` and `wrapper-depth`, and the reasons by cause, are under Post-review hardening). A missing or unusable `jq`
   does not ask on every call (that would make the plugin unusable without `jq`): the hook scans the RAW envelope for its own narrow
   patterns, asks on a hit with a hand-built fixed reason and exits 0 on a miss. A missing `perl` with a working `jq` scans the
   `jq`-decoded command the same way. It never denies on a dependency failure, because the repair is itself a Bash call. ADR-157's `.claude`
@@ -114,13 +125,19 @@ reference for the rule table; this section records the decisions and why.
   read as home) pushed onto `@RECORDS` (the lexer's rollback depends on it), and the original's 32-record cap is dropped (a script
   with more than 32 commands would otherwise ask on every call). The depth, 8x-input budget and 2 s alarm bounds stay. External
   binaries are `bash` (3.2 or later), `jq`, `perl`, `git` (read-only and local) and POSIX utilities. A zero-spawn prefilter skips the
-  lexer only when the command's raw JSON text has none of `rm`, `destroy`, `push`, `eval` and none of backslash, single quote, `$`,
-  a backtick or `<<`. Double quote needs no character of its own: inside the JSON string it is always escaped with a backslash, so
-  the backslash test sees it. `<<` is in the set because a heredoc whose delimiter word is missing is the one unparseable command
-  spelled with none of the other characters, and the lexer path asks on it. No skipped command can be a D1 command (every D1
-  command spells `rm`, `destroy` or `push` as a plain substring and every other spelling carries a boundary character); the lexer
-  path can still add a parse or wrapper-depth ask to a skipped command, so "every skipped class is allowed by the lexer path" is NOT
-  claimed. Every boundary character has a must-ask row. The prefilter's current boundary set is under Post-review hardening.
+  lexer only when every one of these holds, and each is a rule that fails toward the lexer path, never toward an allow: the tool call
+  is at most 256 KiB (a larger one asks `bound` before anything reads it); the envelope holds exactly one `"command"` text (a decoy
+  or duplicate key goes to `jq`, which reads `.tool_input.command`); the envelope holds no backslash followed by `u` anywhere (a key
+  spelled `"\u0063ommand"` is the key `command` to `jq` but not the text `"command"` to the count, so any `\u` goes to `jq`); and the
+  command's raw JSON text has none of `rm` (also `Rm`, `RM`, `rM`), `destroy`, `push`, `eval` and none of backslash, single quote,
+  `$`, a backtick, `<(`, `>(` or `<<`. Double quote needs no character of its own: inside the JSON string it is always escaped with a
+  backslash, so the backslash test sees it. `<<` is in the set because a heredoc whose delimiter word is missing is the one
+  unparseable command spelled with none of the other characters, and the lexer path asks on it; `<(` and `>(` because an
+  unterminated process substitution is skipped by a keyword-only test yet asks on the lexer path. No skipped command can be a D1
+  command (every D1 command spells `rm`, `destroy` or `push` as a plain substring and every other spelling carries a boundary
+  character); the lexer path can still add a parse or wrapper-depth ask to a skipped command, so "every skipped class is allowed by
+  the lexer path" is NOT claimed. Every boundary character has a must-ask row. The hook header (MECHANISM AND ORDER) is the
+  reference for the prefilter.
 - **D8 — Hosted sessions.** The plugin's `hooks.json` loads into hosted sessions even with `settingSources: []` (ADR-093's
   2026-09-30 amendment establishes that; its 2026-10-07 amendment records this guard's override), so
   `SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1"` joins `AGENT_ENV_OVERRIDES`. A web-platform census derives every
@@ -182,11 +199,24 @@ mention the flag in a comment and do not pass it). Every one spawns through `_cr
 override does not reach them (ADR-093's 2026-09-30 amendment already records that headless cron spawns receive no
 `AGENT_ENV_OVERRIDES`; #9289 tracks classifying non-Stop plugin hooks for the web runtime). The guard is therefore ACTIVE in those
 runs, an `ask` under `claude -p` blocks the call (Measurements), and each spawn also carries the deny-by-default
-`cron-bash-allowlist-hook.mjs`. No D1 command is issued by any of them today: a grep of the twelve sources for `terraform`, `tofu`,
-`destroy`, a recursive `rm` and a forced or deleting `git push` finds only "Do NOT run git push" prompt prohibitions and Node-side
-`rm` of the temporary workspace (not an agent Bash call). This is a classification gap, not a demonstrated false positive; the cost
-today is a `jq` and `perl` spawn on lexed Bash calls. Follow-up: decide per function whether to set the kill switch in its
-`buildSpawnEnv`, or to leave the guard on and accept ask-as-block.
+`cron-bash-allowlist-hook.mjs`. No D1 command is issued by any of them today. The twelve TypeScript sources hold only "Do NOT run
+git push" prompt prohibitions and Node-side `rm` of the temporary workspace (not an agent Bash call). Because the crons run
+skills, not only prompts, the skill texts were grepped as well, for `terraform|tofu` with `destroy`, `apply -destroy`, a recursive
+`rm` of `/`, `~`, `$HOME`, `..` or the working directory, and a forced or deleting `git push`: the skills the sources invoke
+(`ship`, `fix-issue`, `ux-audit`, `agent-native-audit`, `campaign-calendar`, `competitive-analysis`, `content-writer`, `growth`,
+`social-distribute`, `seo-aeo`, `legal-audit`; `cron-architecture-diagram-sync` names none), `merge-pr`, `work`, `architecture`
+and the skills `ship` names (`deploy`, `postmerge`, `one-shot`, `plan`, `review`, `preflight`, `compound`, `test-fix-loop`,
+`reproduce-bug`, `release-announce`, `operator-bootstrap`, `incident`, `gdpr-gate`, `schedule`, `go`). The only command match is
+`merge-pr`, which force-pushes a feature branch (`git push --force-with-lease origin <branch-name>`, twice) and is not a D1
+command; the other matches are prose or false matches of the pattern (`review` mentions `terraform destroy` while describing a guard; `one-shot` forbids asking the operator to `git push origin --delete` a stale branch by hand). The grep reads text,
+so a command a skill assembles at run time is not covered. **"No D1 command" does not bound what can block a cron:** the asks that
+fire on non-D1 input (`bound`, `lexer-empty`, `wrapper-depth`, `unparsed-wrapper`, and the parse and envelope asks) block a
+headless run the same way, on any command that trips them. The classification is pinned by a census in
+`apps/web-platform/test/plugin-pretooluse-hooks-web-parity.test.ts`: exactly twelve functions pass `--plugin-dir` (comments do not
+count), none of them nor the shared substrate names the kill switch, and none reaches `buildAgentEnv` or `AGENT_ENV_OVERRIDES`.
+This is a classification gap, not a demonstrated false positive; the cost today is a `jq` and `perl` spawn on lexed Bash calls.
+Follow-up: decide per function whether to set the kill switch in its `buildSpawnEnv`, or to leave the guard on and accept
+ask-as-block.
 
 ## Consequences
 
@@ -195,8 +225,9 @@ today is a `jq` and `perl` spawn on lexed Bash calls. Follow-up: decide per func
 - The cost is a Perl dependency for full fidelity (present on macOS, nearly every Linux and Git for Windows; absent on minimal
   Alpine-style images, where D6 keeps the guard on narrowly) and a second copy of the lexer, bound to the original by the parity test
   rather than by being one file.
-- Added latency per Bash call is bounded by the zero-spawn prefilter for ordinary commands and measured once for the lexed path (the
-  figures are in the PR body, not here, so they are not stale in a record).
+- Added latency per Bash call is avoided by the zero-spawn prefilter only for commands that spell none of its keywords or boundary
+  characters (`rm` is a substring of `terraform`, `format`, `confirm` and `platform`, so `npm run format` is lexed) and measured
+  once for the lexed path (the figures are in the PR body, not here, so they are not stale in a record).
 - A headless run that legitimately needs `terraform destroy` has no per-rule allow; the kill switch is all-or-nothing (follow-up).
 - The decision set is code in the same diff as its suite, so a weakening that edits both passes the suite. The independent anchors are
   the oracle (it runs real bash against recording stubs and can never execute a destructive command), the registry parity tests and
@@ -205,8 +236,9 @@ today is a `jq` and `perl` spawn on lexed Bash calls. Follow-up: decide per func
 
 ## Residuals (as shipped; none is hidden)
 
-- **A raw-scan miss with `jq` missing is an allow.** The one implicit allow in the hook's own failure paths, stated and tested. It is the
-  raw-scan-miss residual ADR-165 accepts for its `.openhands` row.
+- **A raw-scan miss with `jq` missing is an allow.** The one implicit allow in the hook's own failure paths (a miss in the decoded scan with
+  `perl` missing is the same), stated and tested. It has the shape of the raw-scan-miss residual ADR-165 accepted for its retired
+  `.openhands` row.
 - **The shared lexer lexes identical `bash -c` / `eval` strings once**, so the working-directory simulation cannot tell two identical
   inner strings under different `cd`s apart.
 - **A `cd` inside a subshell or `$(…)` is sticky** for the later commands: it over-asks, never under-asks.
@@ -214,52 +246,102 @@ today is a `jq` and `perl` spawn on lexed Bash calls. Follow-up: decide per func
 - **A directory literally named `~` is also denied when written `~/`** (and `~/*`); a quoted bare `'~'` is read as the literal directory
   and is not.
 - **An unresolvable `cd` before a plain `git push` is not asked**; only the force and delete forms are (a plain push is routine).
-- **The prefilter includes `<<`** because a heredoc with no delimiter word would otherwise be skipped and never reach the lexer
-  path that asks on it (D7).
-- **Not decided, as the shipped hook header lists it (NOT DECIDED):** `exec`, `builtin`, `setsid`, `ionice`, `stdbuf`, `flock`,
-  `nsenter`, `chroot`, `su -c` and `sudo -s '...'`, `coproc`; trap strings, function bodies and aliases (including `git -c
-  alias.x=push`); stdin-fed shells (a heredoc, here-string or pipe into `bash` or `sh`) and `source <(...)`; brace-expanded targets
-  such as `/{bin,usr}` and brace or glob expansion of a command name; `xargs rm`, `find -delete` and `find -exec rm`, `rsync
-  --delete`; other interpreters and tools (python `shutil.rmtree`); a runner name in another case (`BASH -c`); `terragrunt` and
-  `pulumi destroy`; and the D2 list above. Each was considered and left out; none is hidden.
+- **Not decided:** the hook header's NOT DECIDED list is the single list of what the guard does not judge (wrappers and interpreters
+  outside the table, strings run later, stdin-fed shells, expansions it cannot read, other tools); D2 above adds the product-level
+  items. Each was considered and left out; none is hidden.
 - **Seatbelt, not boundary:** the settings-env route to the kill switch and everything in D2.
 
 ## Post-review hardening (2026-10-07)
 
-The panel review of PR #9653 changed the shipped hook beyond, or differently from, the text of D1-D10 above. The plan's Decision Set
-text (the CPO-signed section, whose hash is recorded in the PR body) was NOT edited. The CPO's two-round cap was spent before the
-review, so none of this has been put back to the CPO. These are refinements of the signed set; the operator may choose to take them
-back to the CPO. The hook header is the reference for each rule; the list below says what differs, once.
+The panel review of PR #9653 and two fix rounds changed the shipped hook beyond, or differently from, the text of D1-D10 above. The
+plan's Decision Set text (the CPO-signed section, whose hash is recorded in the PR body) was NOT edited. The CPO's two-round cap was
+spent before the review, so none of this has been put back to the CPO. These are refinements of the signed set; the operator may
+choose to take them back to the CPO. The hook header is the reference for each rule. **This section is the one list** of what
+differs from the signed text: the plan addendum and `decision-challenges.md` (T13) point here instead of repeating it.
 
 - **Targets.** A target whose every component after the glob-free root is only glob syntax (`/**`, `/*/*`, `~/**`) counts as the
   contents of `/` or home; `~+` is the working directory; with `HOME` unset or empty `~` is the passwd entry's home and `$HOME/` is `/`.
   A component that mixes literal text with a glob (`~/*/node_modules`, `/*.log`) is still not decided.
 - **Working directory.** The check runs against BOTH the envelope's `cwd` and the one a literal `cd`/`pushd` earlier in the command
-  moved to. A decision made while handling one simple command no longer leaks into the next (`cd -- ~ && rm -rf *` is a deny).
+  moved to. A decision made while handling one simple command no longer leaks into the next (`cd -- ~ && rm -rf *` is a deny). A
+  wrapper's own chdir option (`env -C DIR`, `env --chdir=DIR`, `sudo -D DIR`, `sudo --chdir=DIR`) moves the simulated directory for
+  the command it runs, for that command only; a directory the guard cannot resolve is an unresolved `cd`.
+- **A narrowing of signed D1.** The signed text asks on "an unresolvable `cd` followed by a recursive `rm` or a `git push`". The
+  shipped hook asks only when that `git push` is a force or delete push (a plain push after an unresolvable `cd` is routine and is
+  not asked; `cd $X && git push origin feat` gets no decision, `cd $X && git push -f origin feat` asks).
 - **Names and wrappers.** Command names are compared in lower case (`RM`, `Git`, `Terraform`); a runner name is not (`BASH -c` is NOT
-  DECIDED). `time` is a wrapper as a command word and `time -p` is recovered; short-option clusters whose last letter takes a value are
-  parsed (`sudo -nu root`, `env -iu X`, `timeout -vk 5 10`). `-destroy=<value>` is a destroy unless the value is a Go false;
-  `git` option abbreviations (`--al`, `--m`), a `heads/` destination, a glob destination and `--config-env` are read.
+  DECIDED), and neither is the case of a `git` or `terraform` SUBCOMMAND (`git PUSH -f`, `terraform DESTROY` get no decision; see the
+  follow-ups). `time` is a wrapper as a command word and `time -p` is recovered; short-option clusters whose last letter takes a
+  value are parsed (`sudo -nu root`, `env -iu X`, `timeout -vk 5 10`). `-destroy=<value>` is a destroy unless the value is a Go
+  false; `git` option abbreviations (`--al`, `--m`), a `heads/` destination, a glob destination and `--config-env` are read.
 - **New ask classes, each with its own rule id.** `unparsed-wrapper` (`env -S`, `--split-string` and its abbreviations: the string it
-  splits is not analysed); `wrapper-depth` (more than 8 nested wrappers or `--` separators); `bound` (more than 2000 simple commands,
-  more than 20000 words, or the 6 second `DEADLINE_S` wall clock reached, unless a deny was already found); `lexer-empty` (the lexer
-  returned no command for text that, minus comments, mentions `rm`, `destroy`, `push`, `terraform`, `tofu`, `git` or `eval` in any
-  case; a blank, comment-only or keyword-free command such as `> out.log` is allowed).
-- **Reasons.** Every reason opens "This command was NOT run." Parse-class asks (`command-not-parsed`, `envelope-unreadable`,
-  `lexer-empty`) end with a fix-and-resend tail instead of "do not retry"; `bound` ends with a split-it tail. The quoted command has
-  credentials masked (`NAME=value` where the name holds key, token, secret, password, passwd, cred or auth; URL userinfo) BEFORE the
-  200-character cut. D4's "do not retry or rephrase" therefore holds for the destructive-command asks only.
-- **Prefilter.** It decides only when the envelope holds exactly one `"command"` text; `<(`, `>(`, `<<` and the case variants
-  `Rm`, `RM`, `rM` are boundaries. A dead `hook_tool_kind` sourcing (a per-call stderr warning if its library was missing) was removed; the raw `tool_name` must still be exactly `Bash`.
-- **Not changed:** D1's families, D3's deny set, D5, D6's posture and D8/D9's scope. A wrapper outside the table is still NOT DECIDED
-  (Residuals), by decision, not by omission.
+  splits is not analysed); `wrapper-depth` (more than 8 nested wrappers or `--` separators: the two share one counter, so nine `--`
+  words ask even with no wrapper once the command reaches the lexer path); `bound` (a command too large to check: a tool call over
+  256 KiB, checked before anything reads it; more than 2000 simple commands; more than 20000 words; a target path of more than 128
+  components; a segment over 64 KiB in a degraded scan; or the 6 second `DEADLINE_S` wall clock reached; what was read before the
+  limit is still judged, so a deny already found wins, and an ask-class match keeps its own rule id and reason with a sentence
+  saying the rest was not checked); `lexer-empty` (the lexer returned no command for text that names something the guard decides on:
+  a whole-word `rm`, `destroy`, `push`, `terraform`, `tofu`, `git` or `eval` in any case, also after quote, backslash and backtick
+  removal so that `r""m` is read; full-line comments are skipped; a blank or comment-only command, and a bare redirect to a file that
+  merely contains one, such as `> terraform.log`, is allowed). `unparsed-wrapper` and `wrapper-depth` fire only on a command the
+  prefilter lets reach the lexer path (D7), so `env -S ls` is not asked.
+- **Degraded scans.** The raw (`jq` missing) and decoded (`perl` missing) scans read a run of blanks between the words of
+  `terraform`, `tofu` and `git` commands as one gap, and ask `bound` at a segment over 64 KiB or at the deadline.
+- **Reasons.** An ask opens with a sentence for the person at the prompt ("The guard paused this command and is asking you. It has
+  not run yet and runs only if you approve."), then the rule id, a one-sentence lead and the quoted command, then the agent's
+  instructions under "If you are the agent: This command was NOT run."; a deny opens "This command was NOT run." and also goes in
+  `systemMessage`. The agent's tail follows the cause: a matched destructive command (`infra-destroy`, `default-branch-force-push`,
+  `recursive-delete-home`, `recursive-delete-workdir`, `unresolved-cd-before-destructive`) says stop, do not retry, do not
+  rephrase; a lexer parse failure (`command-not-parsed`, exit 2) and `lexer-empty` say fix the quoting or heredoc and send it again;
+  a lexer that gave out (depth, budget, alarm, crash) and `bound` say split it; `envelope-unreadable` says the fault is in the tool
+  call, so stop and tell the person; `unparsed-wrapper` and `wrapper-depth` say write the command out so the guard can check it.
+  Every ask and deny carries the kill-switch route and the issues URL. The quoted command has credentials masked BEFORE the
+  200-character cut: `NAME=value`, `--name=value` and `-var name=value` where the name holds key, tok, secret, pass, pw, cred, auth
+  or bearer; the word after `--token`, `--password`, `--passwd`, `--secret`, `--api-key`, `--auth` or `--bearer`; the text after
+  `Authorization:` or after the word `Bearer`; URL userinfo. That is a coverage choice, not a boundary. When `jq` cannot build the output the
+  decision and the rule id are kept (a deny stays a deny).
+- **Prefilter.** The rules are in D7: exactly one `"command"` text, any `\u` goes to `jq`, the 256 KiB cap, and `<(`, `>(`, `<<` and
+  the case variants `Rm`, `RM`, `rM` as boundaries. The raw `tool_name` must still be exactly `Bash`.
+- **Registration.** `hooks.json` registers `bash "${CLAUDE_PLUGIN_ROOT}/hooks/destructive-command-guard.sh"`, quoted, so a plugin root
+  containing a space does not break it; the census derives the file name through the `bash "..."` wrapper. Four of the ten command
+  strings in `hooks.json` were already written that way (`codex-session-start`, `devin-session-start`, `compaction-state` twice);
+  the unquoted ones that remain are a plugin-wide follow-up.
+- **Fix rounds.** The commits whose subject ends `(fix round 1, R<n>)` and `(fix round 2, T<n>)` carry the rest. Hook: R1 path
+  resolution bounded (one subshell per directory, a cache, a 128-component cap); R2 command-name case fold without a process; R3 a
+  read-time bound trip still judges what was read; R4 the bound note appended to a matched rule's reason; R5 the degraded scans and the
+  oversize envelope bounded; R6 any `\u` to `jq`; R7 `lexer-empty` as a word test; R8 the redaction shapes above; R9 reasons by
+  cause and the output fallback; R10 wrapper chdir options; R11 the envelope fields read without a `jq` regex function; R12 the
+  clock checked in the `git push` loops; R13 the quoted registration; R14 the header rewritten to what the hook does. Tests (T1-T10; T8 is a hook change, the run of blanks in
+  the degraded scans): the hook suite's instrument self-test drives the verdict layer, every rule id is asserted by exact id and the roster is an exact
+  set, the README rows compare whole lines and hide an unclosed comment, length controls on the stress rows, the executed-row lint
+  refuses more escape shapes, the lexer parity suite rows the first line of spans 1 and 2, the mutation suite drives its wiring, and
+  a census pins that the twelve server-side agents leave the guard active.
+- **Not changed:** D1's families, D3's deny set, D5, D6's posture, and the scope of D8 and D9. D8's premise was corrected (below),
+  not its decision. A wrapper outside the table is still NOT DECIDED (the hook header's list), by decision, not by omission.
 
-User-visible differences from the signed text, for a re-sign-off decision: the four new ask classes, case-insensitive command names,
-glob-only targets, credential masking, and the reason wording.
+**User-visible differences from the signed text, for a re-sign-off decision:**
+
+1. **The D8 premise.** The signed D8 and its README line said hosted Bash is "already sandboxed and gated by `permission-callback.ts`".
+   In the autonomous default (`workspaces.bash_autonomous` defaults to `true`, migration 099) it is not gated for these commands:
+   `BLOCKED_BASH_PATTERNS` does not match `terraform destroy`, `rm -rf` or `git push -f`. The decision (guard disabled in hosted
+   sessions) is kept; the stated reason changed. Whether hosted founders should be protected against these commands in autonomous
+   mode is a product question for the operator (`decision-challenges.md` T12).
+2. **Two README sentences the CPO's conditions C1 and C2 are about were rewritten:** the non-coverage sentence is longer (D2) and the
+   hosted line now says what hosted Bash runs under (D8). A third sentence is new: the guard also asks, rather than allows, when it
+   cannot read a command it was given.
+3. **The narrowing of D1's `cd` rule** to force and delete pushes (above).
+4. **Broader behaviour:** a wrapper's chdir option is applied; case-insensitive command names; glob-only targets; the four new ask
+   classes with their triggers (some commands that used to run silently now ask, and a headless run blocks on them); the new size
+   bounds; credential masking in the quoted command, in the shapes above; the degraded scans reading a run of blanks.
+5. **Wording:** an ask opens with a sentence for the person, the agent's tail follows the cause, and "do not retry or rephrase" is
+   the tail of a matched destructive command only; a deny already found wins after a bound trip.
+6. **Registration:** the quoted `bash "${CLAUDE_PLUGIN_ROOT}/..."` form.
 
 ## CPO conditions and how each is satisfied
 
-- **C1 — an honest scope statement where users read it.** The plugin README and the hook header carry the one sentence from D2.
+- **C1 — an honest scope statement where users read it.** The plugin README and the hook header carry the same non-coverage
+  sentence, word for word; it is longer than the sentence signed in D2 (see D2 for what it adds and why), which is listed for
+  re-sign-off above.
 - **C2 — the hosted gap stated outside this ADR.** The plugin README carries one line that the guard is not active in Soleur-hosted
   sessions and says what hosted Bash runs under (D8 is the single statement of why; the README sentence is pinned verbatim by the hook
   suite). The ADR-093 amendment of 2026-10-07 records it for the hosted path and carries a dated correction of the first wording.
@@ -283,16 +365,51 @@ the parity test currently tolerates); and a README note, now added, that where `
 `/proc`) the hook reads the lexer output through process substitution and so asks with the parse reason instead of denying (fail-safe,
 but noisy for every lexed command).
 
-Added by the 2026-10-07 post-review pass: a per-cron decision on the kill switch for the server-side agents (see Server-side scheduled
-agents); the plugin-wide unquoted `${CLAUDE_PLUGIN_ROOT}` command paths in `hooks.json` (a plugin root containing a space breaks every
-such hook, not only this one; left as the plugin's convention); a hosted-visible statement of the gap (a hosted founder or agent cannot
-see the plugin README, so nothing in the hosted prompt says the guard is off); a heredoc, pipe or here-string fed to a shell as a
-plausible agent pattern left undecided (follow-up: treat the body as code when the command is a shell without `-c`); the record of an
-answered Yes/No prompt and the expanded view of a deny (unmeasured; the transcript claim is scoped to `hook_success` rows); shard-manifest
-rows for the two heavy suites (without them the hash fallback can stack both on one CI leg); deleting the prefilter (the simplicity
-review estimated about 2 ms of average saving against two defects; deferred because the prefilter is D7 and its deletion reopens the
-signed set); and a real run of the suites under bash 3.2 (the hook itself was run under 3.2.57 on a 43-command corpus with identical
-decisions to bash 5.3; the suites ran under the host bash only).
+Added by the 2026-10-07 post-review pass:
+
+- A per-cron decision on the kill switch for the server-side agents (see Server-side scheduled agents).
+- The unquoted `${CLAUDE_PLUGIN_ROOT}` command paths that remain in `hooks.json` (five of the ten command strings: a plugin root
+  containing a space breaks each such hook). This hook's own entry is now quoted (Post-review hardening, "Registration").
+- A hosted-visible statement of the gap (a hosted founder or agent cannot see the plugin README, so nothing in the hosted prompt says
+  the guard is off).
+- A heredoc, pipe or here-string fed to a shell is a plausible agent pattern left undecided (follow-up: treat the body as code when
+  the command is a shell without `-c`).
+- The record of an answered Yes/No prompt and the expanded view of a deny (unmeasured; the transcript claim is scoped to
+  `hook_success` rows).
+- Shard-manifest rows for the two heavy suites (without them the hash fallback can stack both on one CI leg).
+- Deleting the prefilter (the simplicity review estimated about 2 ms of average saving against two defects; deferred because the
+  prefilter is D7 and its deletion reopens the signed set).
+- A real run of the SUITES under bash 3.2 (the hook header states what was run on 3.2.57: the hook over a 30-command corpus with
+  decisions identical to bash 5.3; the clock-trip, partial-record, degraded-scan and output-fallback paths were not run there, and
+  the suites ran under the host bash only).
+- Case-folding of git and terraform SUBCOMMANDS (`git PUSH -f origin main`, `terraform DESTROY` get no decision): undecided, and
+  whether the tools accept an upper-case subcommand is unverified.
+- The `--` hops share the wrapper-depth counter, so nine `--` words ask even with no wrapper (once the command reaches the lexer
+  path); the two counters could be separate.
+- The wrapper option loops (`wrap_skip`) could be one table.
+- Some bound checks (the read loop, the main loop, the record cap) are redundant with the rest: simplification candidates.
+- The harness-of-harness tests (the meta-copy rows) overlap the vacuity-floor gate.
+- `lexer-empty` adds little over `command-not-parsed` (a candidate to merge into it).
+- The ADR ordinal collision (see the note below).
+
+**Ordinal note (re-verified 2026-10-07 after `git fetch origin`).** This record keeps the number 274 and is NOT renumbered here.
+`origin/main` already holds `ADR-274-add-a-cursor-cli-plugin-adapter.md` (and `ADR-275-founder-stated-acceptance-check-...`), so the
+two files collide on the ordinal, and `scripts/check-adr-ordinals.sh` reds the merge ref until one is renumbered. Of the remote
+refs (the `gh-readonly-queue` refs hold nothing above main's ADR-275), two other branches claim ADR-276 with different slugs
+(`feat-one-shot-ci-hosted-runner-demand` and `feat-open-web-egress`), so that pair collides with each other and 276 is not free.
+**The next free ordinal is 277** as of this fetch. It must be re-derived over `refs/remotes/origin/*` at ship time, because the
+answer moves while branches land. `soleur:ship` renumbers by `git mv` of this file (the slug links in ADR-093, the plan and
+`feat-agent-security-three-layers/spec.md` follow the file name) and by editing every `ADR-274` mention in the files that
+`git grep -l 'ADR-274' HEAD -- . ':!*.likec4.json'` lists on this branch (counts rot, so none are recorded here): `.claude/hooks/README.md`,
+`.claude/hooks/devin-dispositions.tsv`, `apps/web-platform/server/agent-env.ts`, `apps/web-platform/test/agent-env.test.ts`,
+`apps/web-platform/test/plugin-pretooluse-hooks-web-parity.test.ts`,
+`ADR-093-sdk-plugin-source-is-platform-deployed-not-connected-repo.md`, this ADR's heading, `diagrams/model.c4` and
+`diagrams/views.c4` (only the plugin guard's lines), the W2 plan, `feat-agent-security-three-layers/phase-0-measurements.md` and
+`spec.md`, this feature's `decision-challenges.md` and `tasks.md`, `plugins/soleur/README.md`, the hook header and
+`destructive-command-guard-hook.test.sh`. `model.likec4.json` is regenerated with `plugins/soleur/scripts/render-c4-model.sh`, never edited by hand. Two traps: on
+`origin/main` `model.c4` and `views.c4` cite ADR-274 for the Cursor element (the lines naming `cursorCli`), so a blanket replace
+after merging main renumbers the wrong ADR's citations, and a search for `#274` also hits archived issue numbers, which are not ADR
+citations.
 
 ## Cost Impacts
 
