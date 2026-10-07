@@ -41,7 +41,7 @@
 # THE ROW TABLE is a QUOTED heredoc, one row per line: `kind @@ label @@ want @@ cwd @@ command`. The
 # command is the rest of the line, raw (no shell expansion, so quotes, `$`, backticks and backslashes
 # are exactly what the agent would send). `@NL@` and `@TAB@` stand for a newline and a tab, `@TREE@`
-# `@SUB@` `@HOME@` `@HOMEPARENT@` `@ROOT@` `@LINK@` `@R1@`..`@R4@` for fixture paths, and a `-` cwd is
+# `@SUB@` `@HOME@` `@HOMEPARENT@` `@ROOT@` `@LINK@` `@R1@`..`@R5@` for fixture paths, and a `-` cwd is
 # the working tree.
 #
 # HARNESS ROWS (Guard 1): (a) delete one expected-ask row from a COPY of this suite -> the floor fails
@@ -145,7 +145,7 @@ mkdir -p "$HOME_W" "$TREE/sub" "$TREE/build" "$TREE/node_modules" "$WORK/stub" "
   || harness_die "mkdir failed"
 ln -s "$HOME_W" "$HOME_LINK" && ln -s "$HOME_W" "$TREE/link" || harness_die "symlink failed"
 : > "$TREE/.canary"
-R1="$WORK/repos/r1"; R2="$WORK/repos/r2"; R3="$WORK/repos/r3"; R4="$WORK/repos/r4"
+R1="$WORK/repos/r1"; R2="$WORK/repos/r2"; R3="$WORK/repos/r3"; R4="$WORK/repos/r4"; R5="$WORK/repos/r5"
 STUB="$WORK/stub"
 CUR_HOME="$HOME_W"
 
@@ -180,7 +180,7 @@ mkrepo() { # mkrepo <dir> <current-branch> <origin-head-branch|-> <upstream-head
 # --- the recording stubs -----------------------------------------------------------------------------
 # Every stub records `argc NUL cwd NUL name NUL arg NUL ...` (one file per invocation: a pipeline runs its
 # members concurrently) and exits 0. They call no external program.
-STUB_NAMES="rm terraform tofu git sudo doas env timeout nice nohup doppler aws-vault op xargs ls cat grep find docker npm wc tee sort head tail sed awk curl jq tar python3 diff mkdir cp mv date make node touch sleep chmod kubectl psql"
+STUB_NAMES="rm terraform tofu terragrunt pulumi git sudo doas env timeout nice nohup doppler aws-vault op xargs ls cat grep find docker npm wc tee sort head tail sed awk curl jq tar python3 diff mkdir cp mv date make node touch sleep chmod kubectl psql"
 if [[ -z "$FAST" ]]; then
   assert_fixture_dir "$STUB"
   cat > "$STUB/rm" <<'STUBEOF'
@@ -210,6 +210,7 @@ STUBEOF
   mkrepo "$R2" trunk trunk - || harness_die "fixture repo r2"
   mkrepo "$R3" main trunk - || harness_die "fixture repo r3"
   mkrepo "$R4" trunk - - || harness_die "fixture repo r4"
+  mkrepo "$R5" master - - || harness_die "fixture repo r5"
 else
   STUB_BROKEN="$WORK/stub-broken"
 fi
@@ -560,7 +561,7 @@ subst() {
   local s="$1"
   s="${s//@HOMEPARENT@/$HOMEPARENT}"; s="${s//@HOMEPHYS@/$HOME_W}"; s="${s//@HOME@/$CUR_HOME}"
   s="${s//@ROOT@/$ROOT}"; s="${s//@SUB@/$TREE/sub}"; s="${s//@TREE@/$TREE}"; s="${s//@LINK@/$TREE/link}"
-  s="${s//@R1@/$R1}"; s="${s//@R2@/$R2}"; s="${s//@R3@/$R3}"; s="${s//@R4@/$R4}"
+  s="${s//@R1@/$R1}"; s="${s//@R2@/$R2}"; s="${s//@R3@/$R3}"; s="${s//@R4@/$R4}"; s="${s//@R5@/$R5}"
   s="${s//@NL@/$'\n'}"; s="${s//@TAB@/$'\t'}"
   SUBST_OUT="$s"
 }
@@ -1339,6 +1340,50 @@ L @@ spelling: cd .. && rm -rf sub from sub asks (the target is the original wor
 L @@ spelling: cd ~ && rm -rf proj from home/proj asks @@ ask @@ @HOME@/proj @@ cd ~ && rm -rf proj
 L @@ spelling: pushd .. then rm -rf sub from sub asks @@ ask @@ @SUB@ @@ pushd .. > /dev/null; rm -rf sub
 L @@ spelling: cd .. && rm -rf other from sub is not the working directory @@ none @@ @SUB@ @@ cd .. && rm -rf other
+# ---- member rows: one row per member of a wrapper / flag / table the hook handles (a member with no row can be deleted unseen)
+X @@ member: terraform apply --destroy @@ ask @@ - @@ terraform apply --destroy
+X @@ member: terraform apply --destroy=true @@ ask @@ - @@ terraform apply --destroy=true
+X @@ member: command -V is a look-up, rm never runs @@ none @@ - @@ command -V rm -rf ~
+L @@ member: command -pv is a look-up cluster (literal: command -p resets PATH) @@ none @@ - @@ command -pv rm -rf ~
+X @@ member: git push -f origin develop (develop is not a default branch of any fixture remote) @@ none @@ @R1@ @@ git push -f origin develop
+X @@ member: a repo on master with no origin/HEAD: git push --force @@ ask @@ @R5@ @@ git push --force
+X @@ member: a repo on master with no origin/HEAD: git push --force-with-lease origin HEAD @@ ask @@ @R5@ @@ git push --force-with-lease origin HEAD
+X @@ member: a repo on master with no origin/HEAD: git push (no force) @@ none @@ @R5@ @@ git push
+L @@ member: git --work-tree /tmp push -f origin main (a separate-argument global option) @@ ask @@ @R1@ @@ git --work-tree /tmp push -f origin main
+L @@ member: git --namespace n push -f origin main @@ ask @@ @R1@ @@ git --namespace n push -f origin main
+L @@ member: git --super-prefix p/ push -f origin main @@ ask @@ @R1@ @@ git --super-prefix p/ push -f origin main
+L @@ member: git --attr-source HEAD push -f origin main @@ ask @@ @R1@ @@ git --attr-source HEAD push -f origin main
+X @@ member: git push --receive-pack x -f origin trunk @@ ask @@ @R1@ @@ git push --receive-pack x -f origin trunk
+X @@ member: git push --exec x -f origin trunk @@ ask @@ @R1@ @@ git push --exec x -f origin trunk
+X @@ member: git push --receive-pack=x -f origin trunk @@ ask @@ @R1@ @@ git push --receive-pack=x -f origin trunk
+L @@ member: git push --del origin main (an abbreviation of --delete) @@ ask @@ @R1@ @@ git push --del origin main
+L @@ member: git push --dele origin main @@ ask @@ @R1@ @@ git push --dele origin main
+L @@ member: git push --delet origin main @@ ask @@ @R1@ @@ git push --delet origin main
+L @@ member: rm --recur ~ (an abbreviation of --recursive) @@ deny @@ - @@ rm --recur ~
+L @@ member: rm --rec -f ~ @@ deny @@ - @@ rm --rec -f ~
+X @@ member: rm -rf $PWD is the working directory @@ ask @@ @SUB@ @@ rm -rf $PWD
+X @@ member: rm -rf ${PWD} is the working directory @@ ask @@ @SUB@ @@ rm -rf ${PWD}
+X @@ member: rm -rf "$PWD" is the working directory @@ ask @@ @SUB@ @@ rm -rf "$PWD"
+L @@ member: popd && rm -rf build (the directory popd returns to is unknown) @@ ask @@ - @@ popd && rm -rf build
+L @@ member: popd; rm -rf build @@ ask @@ - @@ popd; rm -rf build
+X @@ member: a bare cd goes to home, then rm -rf ./* @@ deny @@ - @@ cd && rm -rf ./*
+X @@ member: cd -P ~ then rm -rf ./* (the -P flag is skipped) @@ deny @@ - @@ cd -P ~ && rm -rf ./*
+X @@ member: cd -L ~ then rm -rf ./* @@ deny @@ - @@ cd -L ~ && rm -rf ./*
+# ---- stated non-coverage (NOT DECIDED in the header and ADR-274): each is pinned so a change that starts to decide it is a visible choice
+X @@ NOT DECIDED: terragrunt destroy @@ none @@ - @@ terragrunt destroy
+X @@ NOT DECIDED: pulumi destroy @@ none @@ - @@ pulumi destroy
+X @@ NOT DECIDED: xargs rm -rf ~ (xargs is not a wrapper) @@ none @@ - @@ xargs rm -rf ~
+# ---- the lexer's quoting forms, decoded: octal, \u, $'..' of a plain name and $"..." in command position
+X @@ lexer: octal escape in the command word ($'\162m') @@ deny @@ - @@ $'\162m' -rf ~
+X @@ lexer: octal escape in the subcommand word @@ ask @@ - @@ terraform $'\144estroy'
+X @@ lexer: \u escape in the command word @@ deny @@ - @@ $'\u0072m' -rf ~
+X @@ lexer: \u escape in the subcommand word @@ ask @@ - @@ terraform $'\u0064estroy'
+X @@ lexer: $'rm' of a plain name @@ deny @@ - @@ $'rm' -rf ~
+X @@ lexer: a locale-quoted command word ($"rm") @@ deny @@ - @@ $"rm" -rf ~
+X @@ lexer: a locale-quoted subcommand word ($"destroy") @@ ask @@ - @@ terraform $"destroy"
+# ---- a glob in a NON-terminal component: the hook runs with the glob switch off, or these would expand against its own working directory
+L @@ glob: rm -rf ~/*/.. reaches home through a glob component @@ deny @@ - @@ rm -rf ~/*/..
+L @@ glob: rm -rf */.. from the working tree reaches the working tree @@ ask @@ - @@ rm -rf */..
 ROWS
 
 echo "== the ordinary-command corpus (kind C): no decision on any of it =="
@@ -1613,6 +1658,18 @@ if [[ -z "$HOOK_ERR" ]]; then _x=ok; else _x=bad; fi
 if want_row_quiet "prefilter: one command key and no keyword is skipped without jq or perl (no notice on stderr)"; then chk "prefilter: that skip printed nothing on stderr (no spawn, no probe)" "$_x" "stderr: ${HOOK_ERR:0:120}"; fi
 env_row "a ~90 KB heredoc followed by a real destroy asks" ask "$(mkjson "cat ${_HD}EOF"$'\n'"$_body"$'\n'"EOF"$'\n'"terraform destroy" "$TREE")"
 
+env_row "a JSON array envelope asks (valid JSON that is not an object)" ask '[]'
+env_row "a JSON string envelope asks" ask '"x"'
+env_row "a JSON number envelope asks" ask '42'
+env_row "an envelope with no tool_name is read as Bash (fail toward deciding): terraform destroy asks" ask '{"tool_input":{"command":"terraform destroy"}}'
+env_row "an envelope with no cwd uses CLAUDE_PROJECT_DIR (rm -rf .. from a project subdirectory asks for the working directory)" ask '{"tool_name":"Bash","tool_input":{"command":"rm -rf .."}}' "CLAUDE_PROJECT_DIR=$TREE/sub"
+# An inherited GIT_DIR must not redirect the hook's own git calls: hook_run strips GIT_* before it starts the hook, so these two rows
+# hand GIT_DIR THROUGH (an assignment after the -u list reaches the hook). Repo r1 is on a feature branch, r3 is on main.
+env_row "GIT_DIR leak: cwd on a feature branch, GIT_DIR naming a repo on main: git push --force is not decided" none "$(mkjson 'git push --force' "$R1")" "GIT_DIR=$R3/.git"
+env_row "GIT_DIR leak (mirror): cwd on main, GIT_DIR naming a repo on a feature branch: git push --force still asks" ask "$(mkjson 'git push --force' "$R3")" "GIT_DIR=$R1/.git"
+env_row "GIT_DIR leak (control): the same two pushes with no GIT_DIR decide as before (feature: none)" none "$(mkjson 'git push --force' "$R1")"
+env_row "GIT_DIR leak (control): the same two pushes with no GIT_DIR decide as before (main: ask)" ask "$(mkjson 'git push --force' "$R3")"
+
 echo "== the kill switch (D5, Guard 1 M6/row 20) =="
 _destroy="$(mkjson 'terraform destroy' "$TREE")"
 _rmhome="$(mkjson 'rm -rf ~' "$TREE")"
@@ -1680,6 +1737,12 @@ env_row "perl-less: a push without force is not decided" none "$_gok" "$FP"
 env_row "perl-less: the kill switch is honoured" none "$_rmhome" "$FP" SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1
 env_row "a perl that exists but dies never turns a delete of home into an implicit allow" ask "$_rmhome" "PATH=$WORK/farm-badperl"
 env_row "a perl that dies never turns a destroy into an implicit allow" ask "$(mkjson 'terraform destroy' "$TREE")" "PATH=$WORK/farm-badperl"
+# every alternative of the raw-scan table has its own row (jq missing: the command is only a JSON string)
+env_row "jq-less: terraform apply -destroy asks (the apply alternative)" ask "$(mkjson 'terraform apply -destroy' "$TREE")" "$FJ"
+env_row "jq-less: git push origin +main asks (the +refspec alternative)" ask "$(mkjson 'git push origin +main' "$TREE")" "$FJ"
+env_row "jq-less: rm -rf / asks (the root target alternative)" ask "$(mkjson 'rm -rf /' "$TREE")" "$FJ"
+env_row "jq-less: rm --recursive ~ asks (the long flag alternative)" ask "$(mkjson 'rm --recursive ~' "$TREE")" "$FJ"
+env_row "jq-less: rm -f ~ && echo -r is not decided (& separates the segments, so the -r belongs to echo)" none "$(mkjson 'rm -f ~ && echo -r' "$TREE")" "$FJ"
 
 echo "== output shape (D4, Phase 3.4, CPO C4) =="
 _TRUNC_ARGS="$(printf '%0400d' 0 | tr 0 a)"
@@ -1771,7 +1834,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=699
+MIN_CASES=753
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
