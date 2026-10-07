@@ -55,8 +55,10 @@
 #   ask   more than 8 nested wrappers or `--` separators (rule id `wrapper-depth`): what they run cannot be checked.
 #   ask   a command too large to check: more than MAX_RECORDS simple commands, more than MAX_WORDS words, or the
 #         DEADLINE_S wall clock reached (rule id `bound`) unless a deny was already found.
-#   ask   the lexer returned no command for input that has text beyond blanks and comments (a bare redirect;
-#         rule id `lexer-empty`). A blank or comment-only command is allowed.
+#   ask   the lexer returned no command for input that has text beyond blanks and comments AND that text, with its
+#         comments removed, mentions rm, destroy, push, terraform, tofu, git or eval in any case (rule id
+#         `lexer-empty`: a lexer that silently dropped a command it should have judged). A blank, comment-only
+#         or keyword-free command (a bare redirect such as `> out.log`) is allowed.
 #
 # NOT DECIDED (stated, not implied). Obfuscation: a variable-built command name, glob or brace expansion of
 # a command name (r[m], r{m,}), brace expansion of a target (`/{bin,usr}`), `xargs rm`, `find -delete` and
@@ -243,7 +245,7 @@ ask_parse() { # <cause text>: a command the lexer could not read
   exit 0
 }
 ask_lexer_empty() {
-  emit ask "lexer-empty: the destructive-command guard's lexer returned no command for this input, which holds text that is neither blank nor a comment; it was not recognised as destructive, and the guard asks rather than guess.${PARSE_TAIL}"
+  emit ask "lexer-empty: the destructive-command guard's lexer returned no command for this input, which mentions a word the guard decides on (rm, destroy, push, terraform, tofu, git or eval); it was not recognised as destructive, and the guard asks rather than guess.${PARSE_TAIL}"
   exit 0
 }
 ask_bound() { # <why>: a command too large to check in full
@@ -384,8 +386,9 @@ if [[ "$SAW_OK" -ne 1 && -z "$BOUND_WHY" ]]; then
   ask_parse "the lexer produced no result"
 fi
 [[ "$LEX_BAD" -eq 1 ]] && ask_parse "the lexer output was malformed"
-# OK with no record is the right answer for a blank or comment-only command and nothing else: a command with real
-# text and no record (a bare redirect, or a lexer that silently dropped its input) asks.
+# OK with no record is the right answer for a blank or comment-only command and for a keyword-free one (a bare
+# redirect, `> out.log`): there is nothing here the guard decides on. Text that mentions a word the guard decides on
+# and yields no record is a lexer that silently dropped its input, and asks.
 has_code() { # <command text>: 0 when some line is neither blank nor a comment
   local ln
   while IFS= read -r ln || [[ -n "$ln" ]]; do
@@ -394,9 +397,24 @@ has_code() { # <command text>: 0 when some line is neither blank nor a comment
   done <<<"$1"
   return 1
 }
+# has_keyword <command text>: 0 when some non-comment line, minus its trailing comment, mentions a word the guard decides on (any case).
+has_keyword() {
+  local ln had=0 found=1
+  shopt -q nocasematch && had=1
+  shopt -s nocasematch
+  while IFS= read -r ln || [[ -n "$ln" ]]; do
+    ln="${ln#"${ln%%[![:space:]]*}"}"
+    [[ -z "$ln" || "$ln" == '#'* ]] && continue
+    ln="${ln%%[[:space:]]\#*}"
+    # (`terraform` contains `rm`, so `*rm*` already covers it)
+    case "$ln" in *rm*|*destroy*|*push*|*tofu*|*git*|*eval*) found=0; break ;; esac
+  done <<<"$1"
+  (( had )) || shopt -u nocasematch
+  return "$found"
+}
 if [[ "${#REC_N[@]}" -eq 0 && -z "$BOUND_WHY" ]]; then
-  LX_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || LX_CMD="unreadable"
-  if has_code "$LX_CMD"; then ask_lexer_empty; fi
+  LX_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || ask_lexer_empty
+  if has_code "$LX_CMD" && has_keyword "$LX_CMD"; then ask_lexer_empty; fi
 fi
 
 # ---- 5. the rule table -----------------------------------------------------------------------------

@@ -1257,12 +1257,23 @@ L @@ prefilter: an unterminated backtick alone @@ ask @@ - @@ echo `ls
 L @@ prefilter: an unterminated ${ alone @@ ask @@ - @@ echo ${x
 L @@ prefilter: an unterminated <( alone @@ ask @@ - @@ diff <(ls
 L @@ prefilter: an unterminated >( alone @@ ask @@ - @@ tee >(cat
-# ---- the lexer returns OK with no record: a command with real text asks (lexer-empty), a blank or comment-only one does not
-L @@ lexer-empty: a bare redirect (no command word) asks @@ ask @@ - @@ >"out.txt"
-L @@ lexer-empty: a bare fd redirect asks @@ ask @@ - @@ 2>&1 # "c"
-L @@ lexer-empty: a comment line then a bare redirect asks @@ ask @@ - @@ # note@NL@>"out.txt"
-L @@ lexer-empty: a comment-only command is not an ask @@ none @@ - @@ # only a comment, "quoted" so it reaches the lexer
+# ---- the lexer returns OK with no record: a command whose text (comments removed) mentions a word the guard decides on asks (lexer-empty); a blank, comment-only or keyword-free one does not
+L @@ lexer-empty: a bare redirect with no guard keyword is not an ask @@ none @@ - @@ >"out.txt"
+L @@ lexer-empty: a bare fd redirect with no guard keyword is not an ask @@ none @@ - @@ 2>&1 # "c"
+L @@ lexer-empty: a comment line then a bare redirect with no guard keyword is not an ask @@ none @@ - @@ # note@NL@>"out.txt"
+L @@ lexer-empty: > out.log (no quote: the prefilter skips it) is not an ask @@ none @@ - @@ > out.log
+L @@ lexer-empty: >> out.log is not an ask @@ none @@ - @@ >> out.log
+L @@ lexer-empty: a comment-only command is not an ask @@ none @@ - @@ # just a comment
+L @@ lexer-empty: a quoted comment-only command is not an ask @@ none @@ - @@ # only a comment, "quoted" so it reaches the lexer
 L @@ lexer-empty: indented comment lines and blank lines are not an ask @@ none @@ - @@ @NL@   # one "q"@NL@@NL@# two
+L @@ lexer-empty: a bare redirect whose text mentions git asks @@ ask @@ - @@ >"git.log"
+L @@ lexer-empty: a bare redirect whose text mentions destroy asks @@ ask @@ - @@ >"destroy.log"
+L @@ lexer-empty: a bare redirect whose text mentions push asks @@ ask @@ - @@ >"push.log"
+L @@ lexer-empty: a bare redirect whose text mentions tofu asks @@ ask @@ - @@ >"tofu.log"
+L @@ lexer-empty: a bare redirect whose text mentions eval asks @@ ask @@ - @@ >"eval.log"
+L @@ lexer-empty: a bare redirect whose text mentions RM in upper case asks (case-insensitive) @@ ask @@ - @@ >"RM.log"
+L @@ lexer-empty: a keyword only in a trailing comment is not an ask @@ none @@ - @@ >"out.txt" # git push
+L @@ lexer-empty: a keyword only in a comment line before the redirect is not an ask @@ none @@ - @@ # rm -rf ~@NL@>"out.txt"
 # ---- decide_argv keeps the caller's state: a `--` or a wrapper must not change what the cd effect or the quote sees
 X @@ state: cd -- ~ then rm -rf * (a `--` after cd must not hide the cd) @@ deny @@ - @@ cd -- ~ && rm -rf *
 X @@ state: pushd -- ~ then rm -rf * @@ deny @@ - @@ pushd -- ~ && rm -rf *
@@ -1645,6 +1656,7 @@ stub_lexer() { # stub_lexer <name> <perl source> -> HT_HOOK
   printf '%s\n' "$2" > "$WORK/trees/lexer-$1/lib/shell-argv.pl"
 }
 _LX_ENV="$(mkjson 'ls "x"' "$TREE")"
+_LX_RM_ENV="$(mkjson 'rm -rf ~' "$TREE")"
 stub_lexer die 'exit 255;'
 tree_row "lexer seam: a lexer that dies (exit 255, no output) asks" ask "$HT_HOOK" "$_LX_ENV"
 reason_has "lexer seam: a dead lexer reads as no result" 'the lexer produced no result'
@@ -1666,8 +1678,9 @@ tree_row "lexer seam: a record with a non-numeric word count asks (malformed)" a
 stub_lexer truncated 'print "C\0top\0";'
 tree_row "lexer seam: a record cut off before its words and OK asks" ask "$HT_HOOK" "$_LX_ENV"
 stub_lexer okonly 'print "OK\0";'
-tree_row "lexer seam: OK with no record for a command with text asks (lexer-empty)" ask "$HT_HOOK" "$_LX_ENV"
+tree_row "lexer seam: OK with no record for a command that mentions rm asks (lexer-empty)" ask "$HT_HOOK" "$_LX_RM_ENV"
 reason_has "lexer seam: OK with no record carries the lexer-empty rule id and the fix-and-resend tail" 'This command was NOT run. lexer-empty: '
+tree_row "lexer seam: OK with no record for a keyword-free command (ls) is not an ask" none "$HT_HOOK" "$_LX_ENV"
 tree_row "lexer seam: OK with no record for a comment-only command is not an ask" none "$HT_HOOK" "$(mkjson '# a "comment" only' "$TREE")"
 stub_lexer okone 'print "C\0top\0" . "1\0" . "-\0" . "ls\0" . "OK\0";'
 tree_row "lexer seam: a stub lexer that reports one harmless record is not an ask (the seam is not an always-ask)" none "$HT_HOOK" "$_LX_ENV"
@@ -1903,7 +1916,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=757
+MIN_CASES=769
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
