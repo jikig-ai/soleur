@@ -638,7 +638,7 @@ m("G1.11 the wrong-state-object (web-1 in state) check is dropped", "r", R, ("""
 m("G1.12 the server name equality in the lookup is dropped", "r", R, (""" && "$(jq -r '.servers[0].name' "$HBODY")" == "$name" ]]""", ' ]]'))
 m("G1.13 the summary of a failed job reaches the accepted sentence", "r", R, ('    if [[ "$status" == success ]]; then\n      echo "The reboot request was accepted', '    if true; then\n      echo "The reboot request was accepted'))
 m("G1.14 the footer is dropped from the reboot script's exit paths", "r", R, ("""[[ -n "$FOOTER_DONE" ]] || printf '%s\\n' "$FOOTER"; }""", ':; }'))
-m("G1.15 the xtrace refusal is dropped", "r", R, ("""printf '[FATAL] refusing to trace: a Hetzner token and Terraform state are in scope\\n' >&2; exit 78 ;;""", ': ;;'))
+m("G1.15 the xtrace refusal is dropped", "r", R, ("""*x*) printf '[FATAL] refusing to trace: a Hetzner token and Terraform state are in scope\\n' >&2; printf '%s\\n' 'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78 ;;""", '*x*) : ;;'))
 m("G1.16 the token requirement is dropped", "r", R, ('  need_token\n  # 2: the explicit', '  # 2: the explicit'))
 m("G1.17 the action poll is cut to 2 attempts", "r", R, ('for _ in $(seq 1 24); do', 'for _ in $(seq 1 2); do'))
 # ---- Guard 2: claim-free output
@@ -666,7 +666,7 @@ m("E.10 the old boot's liveness test is inverted", "e", E, ('$before.newest < $s
 m("E.11 a re-created instance is never noticed", "e", E, ('if ($ready != null and $ready.age < $since) then', 'if false then'))
 m("E.12 the check that the helper defines every function the reader calls is dropped", "e", E, (' || ! declare -F w2l_fetch_ready >/dev/null', ''))
 m("E.13 the credential check is dropped", "e", E, ('    [[ -n "${!v:-}" ]] || die3 "${v} is not injected. Nothing was read."', '    :'))
-m("E.14 the xtrace refusal is dropped", "e", E, ("""*x*) printf '[FATAL] refusing to trace: Better Stack credentials are in scope\\n' >&2; exit 78 ;;""", '*x*) : ;;'))
+m("E.14 the xtrace refusal is dropped", "e", E, ("""*x*) printf '[FATAL] refusing to trace: Better Stack credentials are in scope\\n' >&2; printf '%s\\n' 'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78 ;;""", '*x*) : ;;'))
 m("E.15 the 120 s margin on a FAIL row is dropped", "e", E, ('($probe.age + $margin) < $earliest_after.first', '$probe.age < $earliest_after.first'))
 m("E.16 an unparseable probe age is ignored instead of a read fault", "e", E, ("""if [[ "$(jq -r '.fault' <<<"$r")" == true ]]; then""", 'if false; then'))
 m("E.17 the dashes are no longer removed from the probe row's boot id", "e", E, (' | gsub("-"; "")', ''))

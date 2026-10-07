@@ -25,15 +25,16 @@
 # The fixed footer is printed on every exit path.
 set -euo pipefail
 
+case "$-" in
+  *x*) printf '[FATAL] refusing to trace: a Hetzner token and Terraform state are in scope\n' >&2; printf '%s\n' 'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78 ;;
+esac
+
 FOOTER='This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'
+
 HBODY="$(mktemp)"
 FOOTER_DONE=""
 finish() { rm -f "$HBODY"; [[ -n "$FOOTER_DONE" ]] || printf '%s\n' "$FOOTER"; }
 trap finish EXIT
-
-case "$-" in
-  *x*) printf '[FATAL] refusing to trace: a Hetzner token and Terraform state are in scope\n' >&2; exit 78 ;;
-esac
 
 # --- constants. The allow-list is a case arm below; the workflow's `host` options and the suite's expected set must agree. ---
 WEB1_SERVER_ID="123931471"

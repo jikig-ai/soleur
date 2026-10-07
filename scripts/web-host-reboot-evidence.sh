@@ -27,7 +27,13 @@
 # is never a verdict. It carries no write verb of any spelling: the census in workspaces-luks-verify-workflow.test.sh holds it.
 set -uo pipefail
 
+# Refuse to run under xtrace: tracing prints expanded commands, and the query credentials are in scope (#7797).
+case "$-" in
+  *x*) printf '[FATAL] refusing to trace: Better Stack credentials are in scope\n' >&2; printf '%s\n' 'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78 ;;
+esac
+
 FOOTER='This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'
+
 tmp="$(mktemp -d)" || { printf 'CANNOT ESTABLISH: mktemp failed.\n'; exit 3; }
 # shellcheck disable=SC2329  # invoked through the EXIT trap
 finish() {
@@ -37,18 +43,13 @@ finish() {
 }
 trap finish EXIT
 
-# Refuse to run under xtrace: tracing prints expanded commands, and the query credentials are in scope (#7797).
-case "$-" in
-  *x*) printf '[FATAL] refusing to trace: Better Stack credentials are in scope\n' >&2; exit 78 ;;
-esac
-
 _ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOOT_LOOKBACK_H=48
 SILENT_S=600          # a boot whose newest row is older than this has gone silent
 FAIL_MARGIN_S=120     # a probe row this close to the new boot's first row is resolved toward NOT YET
 PROBE_LIMIT=50
 GRADE_HINT='bash scripts/web-host-reboot-evidence.sh grade'
-DOPPLER_HINT='under doppler run -p soleur -c prd_terraform --'
+DOPPLER_HINT='under doppler run --preserve-env -p soleur -c prd_terraform --'
 
 out() { local v="${2//$'\r'/ }"; v="${v//$'\n'/ }"; [[ -z "${GITHUB_OUTPUT:-}" ]] || printf '%s=%s\n' "$1" "$v" >> "$GITHUB_OUTPUT"; }
 summary_add() { [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] || printf '%s\n' "$@" >> "$GITHUB_STEP_SUMMARY"; }
