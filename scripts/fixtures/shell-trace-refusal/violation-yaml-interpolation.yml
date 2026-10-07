@@ -1,0 +1,14 @@
+# Rule E must fire ONCE. The token is a `${{ }}` expression inside the header: GitHub
+# substitutes it before bash runs, so the secret is on the curl argv of the runner.
+name: fixture-interpolation
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: compliant first
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+      - name: offending expression interpolation
+        run: |
+          curl --disable --noproxy '*' -sS -H "CF-Access-Client-Secret: ${{ secrets.FIXTURE_SECRET }}" "$SINK_URL"
