@@ -1,0 +1,1619 @@
+#!/usr/bin/env python3
+"""preflight Check 13 -- founder-stated check helper (#9578, ADR-275).
+
+A founder states, in plain words, what proves a piece of work is done. The plan stores it as a
+`founder_check:` block under `## Acceptance Criteria`; a freeze commit pins it; a step other than
+`work` runs it. This file holds every DECISION in that flow so the decisions are testable and
+exist in exactly one place. It never executes the founder's command and carries no sandbox:
+the command runs only inside preflight Step 10.5, driven by the Check 13 wrapper.
+
+File-based interface. Text a plan author controls (the command, the expected text, the override
+reason) is never typed into a host shell word: `verify` writes its decision record to a file
+(`--out`) and the command to another (`--command-out`); `classify` and `log` read the record back
+(`--verify-json`) and take only MEASURED inputs (an rc, a stdout file, the health-control rc).
+The one free-text value a founder types, an override reason, arrives on stdin through a quoted
+heredoc (`--reason-stdin`).
+
+Subcommands
+  verify      resolve the plan, parse the block, compare it with its freeze copy, anchor authorship
+  classify    pure verdict over (verify record, rc, stdout file, health-control rc, polarity)
+  log         append one row to the founder-check log (the only writer of outcomes)
+  commit-log  stage and commit the log in one commit (`founder-check: log`)
+  summary     print `founder-check: <N> rows` (the layer-7 probe)
+  text        print one pinned wording constant (`text --list` names them all)
+
+Honest limits, restated where they matter and in ADR-275: this is tamper-EVIDENT, not
+tamper-proof. The authorship anchor compares identity strings the operator's own agent can also
+write, `--mode headless` is declared by the caller, and history rewriting is not stopped. A pin
+fixes the bytes of the script a command names, never what that script loads. `hash:` is an
+identity shown in the log; the freeze-commit comparison is the integrity control.
+"""
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import re
+import shlex
+import stat
+import subprocess
+import sys
+from typing import NamedTuple
+
+PLANS_DIR = "knowledge-base/project/plans"
+SPECS_DIR = "knowledge-base/project/specs"
+LOG_NAME = "founder-check-log.md"
+MAX_PLAN_BYTES = 1 << 20
+MAX_COMMITS = 5000                 # a branch longer than this is not scanned, it is refused
+MAX_TEXT, MAX_COMMAND, MAX_EXPECTED, MAX_APPROVED = 2000, 1000, 500, 500
+REFREEZE_PREFIX = "plan: re-freeze founder-stated check"
+LOG_COMMIT_MESSAGE = "founder-check: log"
+
+CANONICAL_FIELDS = ("kind", "text", "command", "expected", "pins", "approved_by", "approved_at")
+ALLOWED_KEYS = frozenset(CANONICAL_FIELDS) | {"hash"}
+KINDS = ("command", "judgement")
+INTERPRETERS = ("bash", "python3", "node", "bun")
+SCRIPT_EXTS = (".sh", ".py", ".js", ".mjs", ".cjs", ".ts", ".awk")
+# Options that make a non-interpreter verb run a program the work could have written. Long options
+# are matched by unique prefix too (git and getopt-style parsers accept `--ext-d` for `--ext-diff`).
+DENIED_OPTIONS = {
+    "git": ("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--exec", "--ext-diff",
+            "--textconv", "--open-files-in-pager", "-O", "--output"),
+    "rg": ("--pre", "--hostname-bin"),
+    "curl": ("-K", "--config"),
+}
+# git is a read-only allowlist: every other subcommand can run a program (rebase -x, difftool,
+# bisect run, submodule foreach, ls-remote --upload-pack, any alias) and the list cannot be a denylist.
+GIT_READ_ONLY = frozenset({
+    "status", "log", "show", "diff", "rev-parse", "rev-list", "ls-files", "ls-tree", "cat-file", "grep",
+    "describe", "blame", "shortlog", "name-rev", "merge-base", "show-ref", "for-each-ref", "diff-tree",
+    "diff-files", "diff-index", "count-objects", "var",
+})
+
+# Outcomes only an interactive founder can produce. The headless log refuses them.
+HEADLESS_REFUSED = frozenset({"OVERRIDDEN", "FOUNDER-CONFIRMED"})
+# Outcomes that stop a headless run: nobody is there to ask, and an agent never decides.
+HEADLESS_STOPS = frozenset(
+    {"FAILED", "INVALID", "CHANGED-SINCE-APPROVAL", "UNTRUSTED", "NEEDS-YOUR-EYES", "BLOCK-REJECTED"}
+)
+# What an override can be overriding. Strict, so a row always names its cause.
+OVERRIDE_CAUSES = ("FAILED", "INVALID", "CHANGED-SINCE-APPROVAL", "BLOCK-REJECTED")
+
+OUTCOMES = (
+    "PASSED", "FAILED", "FAILED-AS-EXPECTED", "VACUOUS", "INVALID", "SKIP-NOSANDBOX",
+    "NEEDS-YOUR-EYES", "FOUNDER-CONFIRMED", "OVERRIDDEN", "UNTRUSTED", "CHANGED-SINCE-APPROVAL",
+    "BLOCK-REJECTED", "STOPPED-AWAITING-FOUNDER",
+)
+STOP_CAUSES = {
+    "FAILED": ("it did not pass", "Run this step again with you present to retry, change the check or continue anyway."),
+    "INVALID": ("it could not run properly", "Run this step again with you present to retry, change the check or continue anyway."),
+    "CHANGED-SINCE-APPROVAL": (
+        "it does not match what you approved, or was not approved before the work began",
+        "Run this step again with you present. Depending on what changed, you will be offered to confirm "
+        "the changed check, restore the approved one, change the check or continue anyway.",
+    ),
+    "UNTRUSTED": (
+        "it could not be matched to you as its author",
+        "Run this step again with you present and state your own check.",
+    ),
+    "NEEDS-YOUR-EYES": (
+        "it needs your own eyes on the result",
+        "Run this step again with you present so you can look and answer.",
+    ),
+    "BLOCK-REJECTED": (
+        "it could not be used as written",
+        "Run this step again with you present. You will be offered to change the check or continue anyway "
+        "or, if the problem is this computer or repository rather than the check, to try again or "
+        "continue anyway.",
+    ),
+    "SKIP-NOSANDBOX": (
+        "it could not run on this computer",
+        "This check cannot run on this computer. Fix the cause shown, or change the check to one you "
+        "confirm by looking, then run this step again.",
+    ),
+}
+STOP_DEFAULT = ("it could not be used", "Run this step again with you present.")
+# What a verify FAIL says in plain words. Anything missing falls back to the record's own detail.
+REJECT_REASONS = {
+    "secret-shape": "it looks like it holds a password, key or token, which would be saved in this repository",
+    "shell-active-token": "the command uses a pipe, redirect, variable or substitution, which is not allowed",
+    "verb-gate": "the command starts with a program that is not on the allowed list",
+    "unpinned-script": "the command runs a script that was not recorded with the check",
+    "no-freeze": "the check was not saved as approved before the work began",
+    "freeze-without-block": "a check was saved as approved earlier on this branch and it is no longer in the plan",
+    "credentials-required": "the check needs a password or key, so it cannot run on its own",
+    "unknown-field": "the check has a field that is not part of the check format",
+    "invalid-kind": "the check must be either a command or something you confirm by looking",
+    "unparseable": "the check could not be read as written",
+    "missing-field": "a required part of the check is empty",
+    "control-character": "the check contains a hidden control character",
+    "verb-gate-unavailable": "the tool that checks the command is not available on this computer",
+    "script-operand-required": "the command must name a script file in this project",
+    "interpreter-option": "the command passes an option to its interpreter, which is not allowed",
+    "absolute-script-path": "the command names a script outside this project",
+    "script-path-traversal": "the command names a script outside this project",
+    "dangerous-option": "the command uses an option that makes a program run other programs",
+    "hash-mismatch": "the saved fingerprint does not match the check as written",
+    "pin-not-at-freeze": "a script the check runs was not recorded with it as approved",
+    "multiple-blocks": "more than one founder check was found in the plan",
+    "multiple-plans": "more than one plan carries a founder check",
+    "no-block-candidate": "no founder check was found in the plan",
+    "candidate-refused-frozen": "this check was already approved, so changing it needs a re-freeze",
+    "base-not-default-branch": "the branch it is compared with is not this repository's main branch",
+    "base-unresolvable": "this repository's main branch could not be found",
+    "not-a-repository": "this is not a git repository",
+    "symlinked-plan": "the plan file is a link, so it was not read",
+    "plan-not-regular": "the plan file is not an ordinary file, so it was not read",
+    "plan-outside-plans-dir": "the plan file is outside the plans folder, so it was not read",
+    "plan-unreadable": "the plan file could not be read",
+    "internal-error": "the check could not be examined because of an internal error",
+    "too-long": "the check, its description, its expected text or the approval answer is longer than a check should be",
+    "unlisted-git-subcommand": "the command uses a git command that is not on the read-only list",
+    "history-too-long": "this branch has too many commits to scan for the approved check",
+}
+# A FAIL that says nothing about the check itself: the computer or the repository is the problem,
+# so "change the check" is not an answer and the founder is offered a retry instead.
+ENVIRONMENTAL_REASONS = frozenset(
+    {"verb-gate-unavailable", "base-not-default-branch", "base-unresolvable", "not-a-repository",
+     "plan-unreadable", "internal-error", "history-too-long"}
+)
+
+# Wording is a contract (CLO-reviewed, pinned by tests). Never claim more than "ran against the
+# sha, finished without an error and printed the expected text". No string uses the words
+# "verified", "proven" or "safe" (the CLO ruled the old negation exemption out, #9578). Every
+# founder-facing sentence the references print lives here; the references only name the key.
+WORDING = {
+    "pass": (
+        "Your check passed. This shows only that the check you wrote ran against {sha}, "
+        "finished without an error and, if you set an expected result, printed it. It does not "
+        "show that the work is correct or complete, or free of problems this check does not look "
+        "for. Review the result before relying on it."
+    ),
+    "judgement": "You confirmed this by looking. No command ran for it.",
+    "first-use": (
+        "A vague, wrong or risky check can pass broken work or run actions you did not intend. Read what "
+        "will run before it runs. The check runs on this computer in a limited environment that can still"
+        " use your network connection, reach this computer's own services, read every file in this "
+        "project folder and its history, including files you have not committed, and send what it reads "
+        "to any address on the internet. One check does not cover everything. The text and command you "
+        "approve are committed to this repository, which may be public, so do not put passwords, keys or "
+        "other people's personal details in them."
+    ),
+    "capture-question": "What would you check to know this is done?",
+    "approval-ask": (
+        "Approve exactly this check as written? What will run is the command shown, not the description "
+        "beside it. If you say yes, the check is saved in this repository, which may be public, and runs "
+        "once now against the project as it stands, where it should fail. It runs again before you ship. "
+        "Say yes to approve it, or tell me what to change (no passwords or keys)."
+    ),
+    "no-block": "No founder-stated check was found for this ship, so none was run.",
+    "no-sandbox": "Your check did not run on this computer, so nothing was checked.",
+    "failed-ask": "Your check did not pass. How should this proceed?",
+    "invalid-ask": (
+        "Your check could not run properly, so it says nothing about your work. How should this "
+        "proceed?"
+    ),
+    "changed-ask": (
+        "The check that would run now does not match the one you approved, or it was not approved before "
+        "the work began. The reason is shown above. How should this proceed?"
+    ),
+    "rejected-ask": "Your check could not be used as written.\nReason: {detail}\nHow should this proceed?",
+    "untrusted-fail": (
+        "This check could not be matched to you as its author, so it was not run. The command and the "
+        "name on the commit that saved it are shown above. To use a check here, state your own. Do not "
+        "run the one above yourself unless you know and trust who wrote it."
+    ),
+    "eyes-ask": (
+        "Looking at what is shown above, does the work meet what you stated? Yes: this is recorded in the"
+        " repository log as your confirmation, no command ran for it, and this check no longer stops the "
+        "ship. No: this counts as a failed check, and you will be asked how to proceed."
+    ),
+    "reason-prompt": (
+        "In one line, why are you continuing? Your answer is saved in the repository log, marked as an "
+        "override. The log may be public, so do not put passwords, keys or other people's personal "
+        "details in it."
+    ),
+    "overridden-failed": "Founder check did not pass and you chose to continue: {reason}",
+    "overridden-invalid": (
+        "Founder check could not run properly, so it checked nothing, and you chose to continue: {reason}"
+    ),
+    "overridden-changed": (
+        "Founder check did not match what you approved, or was not approved before the work began, so it "
+        "was not run, and you chose to continue: {reason}"
+    ),
+    "overridden-rejected": (
+        "Founder check could not be used as written, so it was not run, and you chose to continue: {reason}"
+    ),
+    "headless-stop": "Your check was stopped because {cause}, and an unattended run cannot decide that for you. {next}",
+    "baseline-ok": (
+        "Your check fails today, as it should before the work. This shows only that the check can fail. "
+        "It does not show that it can pass, or that it checks what you care about."
+    ),
+    "baseline-vacuous": (
+        "Your check already passes before any work is done, so it cannot tell you whether the new work is"
+        " done."
+    ),
+    "untrusted-unmeasured": (
+        "We could not read the GitHub account details needed to compare this check's author with you, so "
+        "it was not run. Sign in to GitHub on this computer and run this step again, or state your own "
+        "check."
+    ),
+    "no-sandbox-stop": (
+        "Because your check could not run, this stops the ship. Fix the cause shown above, or change "
+        "the check to one you confirm by looking, then run this step again."
+    ),
+    "opt-retry": "Run the check again.",
+    "opt-restore": (
+        "Put the approved check back as it was. This undoes later edits to the check or to a script it runs."
+    ),
+    "opt-change": (
+        "Approve a different check. You will be shown the earlier version and the new one. The new check "
+        "runs once now against the work as it stands. The work may already exist, so a pass is allowed "
+        "here."
+    ),
+    "opt-continue": (
+        "Let the ship go ahead anyway. This is recorded in the repository log as an override, with "
+        "your reason. The check is not marked as passed."
+    ),
+    "approval-ask-eyes": (
+        "Approve exactly this check as written? It is a check you confirm by looking, so no command will "
+        "run. If you say yes, it is saved in this repository, which may be public. Before you ship, you "
+        "will be shown what the work produced and asked whether it meets what you stated. Say yes to "
+        "approve it, or tell me what to change (no passwords or keys)."
+    ),
+    "approval-ask-change": (
+        "Approve this changed check exactly as written? What will run is the command shown, not the "
+        "description beside it, and the earlier version is shown for comparison. If you say yes, the new "
+        "version is saved in this repository, which may be public, and runs once now against the work as "
+        "it stands. The work may already exist, so it passing is expected. It runs again before you ship."
+        " Say yes to approve it, or tell me what to change (no passwords or keys)."
+    ),
+    "refrozen-ship-ask": (
+        "This check was changed after it was first approved, and the change was saved in this repository,"
+        " which may be public. The earlier version and the current one are shown above. What will run is "
+        "the command shown, not the description beside it. Run the current version now? Yes: it runs once"
+        " now. No: this ship stops on a check that changed since it was first approved, and you will be "
+        "asked how to proceed."
+    ),
+    "opt-change-new": (
+        "Approve a different check. It must fail on the work as it stands today, or be one you confirm by"
+        " looking."
+    ),
+    "opt-retry-fixed": (
+        "Run the check again once you have fixed the cause shown above. If nothing has changed, it stops "
+        "the same way."
+    ),
+    "opt-strengthen": "Write a stronger check. It runs once now and must fail on the work as it stands today.",
+    "opt-eyes": (
+        "Make this a check you confirm by looking. Nothing will run for it. Before you ship, you will be "
+        "shown the work and asked whether it meets what you stated."
+    ),
+    "opt-drop": (
+        "Record that this already holds and drop the check. No founder check will run at ship, and the "
+        "ship will say so."
+    ),
+    "refrozen-note": (
+        "This check was changed after it was first approved. The new text was saved with an approval "
+        "recorded under your name, and the earlier text is shown above."
+    ),
+    "no-pr-note": (
+        "No pull request was checked, so who wrote this check was not compared with a GitHub account."
+    ),
+    "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
+    "aggregate-pass": "Founder check: ran, returned success against {sha}",
+}
+
+LOG_COLUMNS = (
+    "kind", "polarity", "command", "rc", "outcome", "underlying", "attempt_n", "tested_sha",
+    "block_hash", "time_utc", "expected_matched", "reason", "freeze_source", "no_pr",
+)
+
+# Step 10.5's shell-active reject set, applied at verify so a block carrying one is refused before
+# anything is shown or run. The sandbox is the control; this is the early, legible refusal.
+_SHELL_ACTIVE = re.compile(r"\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_]")
+_SUBSTITUTION = re.compile(r"\$\(|`|\$\{|<\(|>\(")
+_CONTROL = re.compile("[\x00-\x1f\x7f\u2028\u2029]")
+# text may keep \t and \n. Listed one code point at a time: a hand-written \x0b-\x1f range reads to CodeQL as a suspicious one.
+_HARD_CONTROL = re.compile(
+    "[" + "".join(f"\\x{c:02x}" for c in (*range(0x00, 0x09), *range(0x0B, 0x20), 0x7F)) + "\\u2028\\u2029]"
+)
+_KW = r"(?:password|passwd|passphrase|secret|api[_-]?key|apikey|token|credential|auth)"
+_SECRET_SHAPES = (
+    re.compile(r"(?i)(?<![A-Za-z0-9])bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"(?i)(?<![A-Za-z0-9])authorization[ \t]*:"),
+    re.compile(r"(?<![A-Za-z0-9])(?:ghp|gho|ghs|ghu|github_pat|glpat|sk|pk|rk|xox[abpr])[_-][A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"://[^/\s:@]+:[^/\s@]+@"),
+    re.compile(r"(?:^|\s)-u[ \t]*\S+:\S+"),
+    # a name that merely CONTAINS the keyword counts: GITHUB_TOKEN, DB_PASSWORD, client_secret, access_token
+    re.compile(r"(?i)(?<![A-Za-z0-9])[A-Za-z0-9_.-]*" + _KW + r"[A-Za-z0-9_.-]*[ \t]*[=:][ \t]*\S{6,}"),
+    re.compile(r"(?i)(?<![A-Za-z0-9-])--(?:password|passwd|oauth2-bearer|proxy-password)(?:=|[ \t]+)\S{3,}"),
+    re.compile(r"(?i)(?<![A-Za-z0-9-])--(?:user|proxy-user)(?:=|[ \t]+)\S+:\S+"),
+    re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"),
+)
+_HEX = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+class ParseError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------------------------
+# git. The two subprocess call sites in this file are _git and _verb_gate; Guard 4 pins them by
+# walking the AST, not by grepping spellings.
+# ---------------------------------------------------------------------------------------------
+_LAST_ERR = ""
+
+
+def _git(args, cwd):
+    global _LAST_ERR
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, errors="replace")
+    _LAST_ERR = (r.stderr or "").strip()
+    return r.returncode, r.stdout
+
+
+def _verb_gate(command):
+    """The Step 10.4 verb gate, handed the command as DATA. It is a validator and does not run it."""
+    gate = os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe-verb-gate.sh")
+    r = subprocess.run(["bash", gate, command], capture_output=True, text=True, errors="replace")
+    return r.returncode, (r.stdout or "").strip()
+
+
+def _nul_list(args, cwd):
+    """A path list read with -z: a path that git would quote ('a"b.md', a newline in a name) stays one exact path."""
+    rc, out = _git([args[0], "-z", *args[1:]], cwd)
+    return [p for p in out.split("\0") if p] if rc == 0 else []
+
+
+def _out(args, cwd):
+    rc, out = _git(args, cwd)
+    return out if rc == 0 else None
+
+
+# ---------------------------------------------------------------------------------------------
+# Block extraction and parsing (stdlib only; the block shape is fixed and small).
+# ---------------------------------------------------------------------------------------------
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_AC_HEADING = re.compile(r"^##[ \t]+Acceptance Criteria(?:[ \t].*)?$", re.I)
+
+
+def extract_blocks(text):
+    """Return the `founder_check:` fences found INSIDE an `## Acceptance Criteria` section.
+
+    A heading that merely STARTS with "Acceptance Criteria" counts (`## Acceptance Criteria
+    (testable)`), so a suffixed heading cannot hide a block. A block quoted under any other
+    heading (a Design section, an ADR excerpt) is ignored, and so is any heading that sits inside a
+    fence: only structure outside fences decides the section.
+    """
+    blocks = []
+    in_fence = None  # (char, length)
+    in_ac = False
+    cur = None
+    for line in text.splitlines():
+        m = _FENCE.match(line)
+        if in_fence is None:
+            if m:
+                in_fence = (m.group(1)[0], len(m.group(1)))
+                cur = []
+                continue
+            if re.match(r"^##(?!#)[ \t]+", line):
+                in_ac = bool(_AC_HEADING.match(line))
+        else:
+            if m and m.group(1)[0] == in_fence[0] and len(m.group(1)) >= in_fence[1] and not m.group(2).strip():
+                body = cur or []
+                first = next((x for x in body if x.strip()), "")
+                if in_ac and re.match(r"^founder_check:[ \t]*$", first):
+                    blocks.append(body)
+                in_fence = None
+                cur = None
+            else:
+                cur.append(line)
+    return blocks
+
+
+def _strip_comment(v):
+    quote = None
+    for i, ch in enumerate(v):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or v[i - 1] in " \t"):
+            return v[:i].rstrip()
+    return v.rstrip()
+
+
+def _scalar(v):
+    v = v.strip()
+    if v.startswith('"'):
+        if len(v) < 2 or not v.endswith('"'):
+            raise ParseError("unterminated double-quoted scalar")
+        try:
+            return json.loads(v)
+        except ValueError as e:
+            raise ParseError(f"bad double-quoted scalar: {e}")
+    if v.startswith("'"):
+        if len(v) < 2 or not v.endswith("'"):
+            raise ParseError("unterminated single-quoted scalar")
+        return v[1:-1].replace("''", "'")
+    if v.startswith("[") or v.startswith("{"):
+        raise ParseError("nested collection where a scalar is required")
+    return v
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip(" "))
+
+
+def parse_block(lines):
+    """Parse a `founder_check:` block into a dict of its fields. Raises ParseError.
+
+    Collections are accepted in block form only; the literal `[]` and `{}` stand for "none".
+    """
+    body = [ln.rstrip() for ln in lines]
+    first = next((i for i, x in enumerate(body) if x.strip()), None)
+    if first is None or not re.match(r"^founder_check:[ \t]*$", body[first]):
+        raise ParseError("block does not start with founder_check:")
+    rest = [x for x in body[first + 1:] if x.strip() and not x.lstrip().startswith("#")]
+    if not rest:
+        raise ParseError("empty block")
+    base = _indent(rest[0])
+    if base == 0:
+        raise ParseError("block fields must be indented")
+    fields, i = {}, 0
+    while i < len(rest):
+        ln = rest[i]
+        if _indent(ln) != base:
+            raise ParseError(f"unexpected indentation: {ln.strip()[:40]}")
+        m = re.match(r"^ *([A-Za-z_][A-Za-z0-9_]*):(?:[ \t]+(.*))?$", ln)
+        if not m:
+            raise ParseError(f"not a key: value line: {ln.strip()[:40]}")
+        key, val = m.group(1), _strip_comment(m.group(2) or "")
+        if key in fields:
+            raise ParseError(f"duplicate key {key}")
+        i += 1
+        if val == "":
+            kids = []
+            while i < len(rest) and _indent(rest[i]) > base:
+                kids.append(rest[i])
+                i += 1
+            if not kids:
+                fields[key] = ""
+            else:
+                mp = {}
+                for k in kids:
+                    km = re.match(r"^ *([^\s:][^:]*?):[ \t]+(.*)$", k)
+                    if not km:
+                        raise ParseError(f"not a mapping entry: {k.strip()[:40]}")
+                    mp[km.group(1).strip()] = _scalar(_strip_comment(km.group(2)))
+                fields[key] = mp
+        elif val == "[]":
+            fields[key] = []
+        elif val == "{}":
+            fields[key] = {}
+        elif val.startswith("[") or val.startswith("{"):
+            raise ParseError("only the literal [] and {} are accepted; write collections in block form")
+        else:
+            fields[key] = _scalar(val)
+    return fields
+
+
+def canonical(block):
+    out = {}
+    for k in CANONICAL_FIELDS:
+        v = block.get(k)
+        if k == "pins":
+            v = dict(v) if isinstance(v, dict) else ({} if v in (None, "", []) else v)
+        else:
+            v = "" if v is None else v
+        out[k] = v
+    return out
+
+
+def canonical_hash(canon):
+    pins = canon["pins"]
+    obj = dict(canon)
+    if isinstance(pins, dict):
+        obj["pins"] = {k: pins[k] for k in sorted(pins)}
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _tokens(command):
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return None
+
+
+def first_token(command):
+    """The verb as bash resolves it: quotes and backslashes removed, as probe-verb-gate.sh does."""
+    toks = _tokens(command)
+    return toks[0] if toks else ""
+
+
+def _secret_shaped(*values):
+    return any(rx.search(v) for v in values if isinstance(v, str) for rx in _SECRET_SHAPES)
+
+
+def _bash_differs(cmd):
+    """True when bash would read `cmd` differently from shlex (the tokenizer every rule below uses).
+
+    Step 10.5 runs the command under bash, the rules judge shlex's tokens, and the two disagree on
+    ANSI-C quoting (`$'a'`), globs, brace lists, tilde and history words: `bash $'a.sh'` names a file
+    shlex calls `$a.sh`. Anything outside single quotes that bash would expand is refused, so what
+    shlex saw is what bash runs.
+    """
+    quote, i, n = None, 0, len(cmd)
+    word_start = True
+    while i < n:
+        ch = cmd[i]
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            word_start = False
+            continue
+        if quote == '"':
+            if ch == '"':
+                quote = None
+            elif ch == "$" and re.match(r"[A-Za-z0-9_{(@*#?$!-]", cmd[i + 1:i + 2] or " "):
+                return True
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch in "$*?[]~!":
+            return True
+        elif ch == "{":
+            end = cmd.find("}", i)
+            body = cmd[i + 1:end] if end != -1 else cmd[i + 1:]
+            if "," in body or ".." in body or end == -1:
+                return True
+        elif ch in " \t":
+            word_start = True
+            i += 1
+            continue
+        word_start = False
+        i += 1
+    return quote is not None
+
+
+def _option_denied(verb, toks):
+    """The denied option a token names, spelled any way a parser accepts (cluster, prefix, `=`)."""
+    for t in toks:
+        if not t.startswith("-") or t == "-":
+            continue
+        for opt in DENIED_OPTIONS.get(verb, ()):
+            if opt.startswith("--"):
+                name = t[2:].split("=", 1)[0] if t.startswith("--") else None
+                if name and (t == opt or t.startswith(opt + "=") or (len(name) >= 2 and opt[2:].startswith(name))):
+                    return opt
+            elif not t.startswith("--"):
+                # a short option: alone, glued to its value, or inside a cluster (`-sSK f`, `-calias.x=y`)
+                letter = opt[1:]
+                cluster = t[1:]
+                if verb == "git":
+                    if cluster.startswith(letter):
+                        return opt
+                elif letter in cluster:
+                    return opt
+    return None
+
+
+def static_problem(block):
+    """A reason code when the block is not acceptable as written, else None. Never runs anything."""
+    if "credentials_required" in block:
+        return "credentials-required"
+    for k in block:
+        if k not in ALLOWED_KEYS:
+            return "unknown-field"
+    kind = block.get("kind", "")
+    if kind not in KINDS:
+        return "invalid-kind"
+    for k in ("kind", "text", "command", "expected", "approved_by", "approved_at"):
+        if not isinstance(block.get(k, ""), str):
+            return "unparseable"
+    pins = block.get("pins", {})
+    if not isinstance(pins, dict):
+        return "unparseable"
+    for k, v in pins.items():
+        if not isinstance(k, str) or not isinstance(v, str) or not _HEX.fullmatch(v):
+            return "unparseable"
+        key = k[2:] if k.startswith("./") else k
+        if key.startswith("/") or ".." in key.split("/") or not key:
+            return "unparseable"
+    text, cmd, expected = block.get("text", ""), block.get("command", ""), block.get("expected", "")
+    if not text.strip() or not block.get("approved_by", "").strip() or not block.get("approved_at", "").strip():
+        return "missing-field"
+    if _HARD_CONTROL.search(text) or _CONTROL.search(expected) or _CONTROL.search(block.get("approved_by", "")):
+        return "control-character"
+    if (len(text) > MAX_TEXT or len(cmd) > MAX_COMMAND or len(expected) > MAX_EXPECTED
+            or len(block.get("approved_by", "")) > MAX_APPROVED):
+        return "too-long"
+    if _secret_shaped(text, cmd, expected, block.get("approved_by", "")):
+        return "secret-shape"
+    if kind == "judgement":
+        return None
+    if not cmd.strip():
+        return "missing-field"
+    if _CONTROL.search(cmd):
+        return "control-character"
+    if _SHELL_ACTIVE.search(cmd) or _SUBSTITUTION.search(expected) or _bash_differs(cmd):
+        return "shell-active-token"
+    rc, _msg = _verb_gate(cmd)
+    if rc == 1:
+        return "verb-gate"
+    if rc != 0:
+        return "verb-gate-unavailable"
+    toks = _tokens(cmd)
+    if not toks:
+        return "unparseable"
+    verb = toks[0]
+    if verb in INTERPRETERS:
+        operands = toks[1:]
+        if not operands:
+            return "script-operand-required"
+        first = operands[0]
+        if first.startswith("-"):
+            return "interpreter-option"
+        if first.startswith("/"):
+            return "absolute-script-path"
+        if ".." in first.split("/"):
+            return "script-path-traversal"
+        if "/" not in first and not first.endswith(SCRIPT_EXTS):
+            return "script-operand-required"
+        key = first[2:] if first.startswith("./") else first
+        normalised = {(k[2:] if k.startswith("./") else k) for k in pins}
+        if key not in normalised:
+            return "unpinned-script"
+    else:
+        if _option_denied(verb, toks[1:]):
+            return "dangerous-option"
+        if verb == "git" and (len(toks) < 2 or toks[1] not in GIT_READ_ONLY):
+            return "unlisted-git-subcommand"
+    return None
+
+
+# ---------------------------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------------------------
+def _escape(text):
+    """A copy that is safe to print: control characters and line separators become visible escapes."""
+    out = []
+    for ch in str(text):
+        o = ord(ch)
+        if o < 0x20 or o == 0x7F or ch in "\u2028\u2029":
+            out.append("\\x%02x" % o if o < 0x100 else "\\u%04x" % o)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+class _Emitter:
+    def __init__(self, a):
+        self.command_out = a.command_out
+        self.display_out = a.display_out
+        self.out = a.out
+        self.extra = {}
+
+    def __call__(self, outcome, **kw):
+        doc = {"outcome": outcome}
+        doc.update(self.extra)
+        doc.update(kw)
+        if outcome == "NO-BLOCK":
+            doc["banner"] = WORDING["no-block"]
+        if outcome == "FAIL":
+            doc["environmental"] = doc.get("reason") in ENVIRONMENTAL_REASONS
+        block = doc.get("block")
+        if isinstance(block, dict):
+            doc["kind"] = block.get("kind", "")
+            doc["first_token"] = first_token(block.get("command", "")) if block.get("kind") == "command" else ""
+            if self.command_out and outcome == "OK":
+                # The raw command goes to a FILE so the Check 13 wrapper never has to quote it into
+                # a shell word. Written ONLY for an OK verdict, so the file's existence is a go
+                # signal and no other outcome can leave a command behind for the wrapper to read.
+                with open(self.command_out, "w", encoding="utf-8") as fh:
+                    fh.write(block.get("command", ""))
+            if self.display_out:
+                # What an UNTRUSTED, CHANGED or rejected block is SHOWN as: escaped, never executable.
+                with open(self.display_out, "w", encoding="utf-8") as fh:
+                    fh.write(_escape(block.get("command", "")) + "\n")
+        line = json.dumps(doc, sort_keys=True)
+        if self.out:
+            with open(self.out, "w", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        print(line)
+        return 0 if outcome in ("OK", "NO-BLOCK") else 1
+
+
+def _blocks_at(repo, rev, path):
+    size = (_out(["cat-file", "-s", f"{rev}:{path}"], repo) or "").strip()
+    if not size.isdigit() or int(size) > MAX_PLAN_BYTES:
+        return []  # absent, or too large to read: never pulled into memory
+    text = _out(["show", f"{rev}:{path}"], repo)
+    if text is None or len(text) > MAX_PLAN_BYTES:
+        return []
+    return extract_blocks(text)
+
+
+def _operator_email(repo):
+    out = _out(["var", "GIT_AUTHOR_IDENT"], repo)
+    m = re.search(r"<([^>]*)>", out or "")
+    return m.group(1).strip().lower() if m else ""
+
+
+def _read_plan(top, rel):
+    """Read a plan the safe way: lstat first, never follow a link, never open a non-regular file,
+    stay inside the plans directory, and cap the read. Returns (status, text)."""
+    full = os.path.join(top, rel)
+    plans_root = os.path.realpath(os.path.join(top, PLANS_DIR))
+    try:
+        st = os.lstat(full)
+    except FileNotFoundError:
+        return "missing", ""
+    except OSError:
+        return "unreadable", ""
+    if stat.S_ISLNK(st.st_mode):
+        return "symlink", ""
+    if not stat.S_ISREG(st.st_mode):
+        return "not-regular", ""
+    if not os.path.realpath(full).startswith(plans_root + os.sep):
+        return "outside", ""
+    if st.st_size > MAX_PLAN_BYTES:
+        return "too-large", ""
+    try:
+        fd = os.open(full, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read(MAX_PLAN_BYTES + 1)
+    except OSError:
+        return "unreadable", ""
+    if len(data) > MAX_PLAN_BYTES:
+        return "too-large", ""
+    return "ok", data.decode("utf-8", errors="replace")
+
+
+_ARCHIVE_PREFIX = re.compile(r"^\d{8}-\d{6}-")
+
+
+def _plan_key(path):
+    """A plan archived by compound (`plans/archive/<ts>-<name>.md`) is the SAME plan as `plans/<name>.md`."""
+    arch = PLANS_DIR + "/archive/"
+    if path.startswith(arch):
+        return PLANS_DIR + "/" + _ARCHIVE_PREFIX.sub("", path[len(arch):])
+    return path
+
+
+def _branch(repo):
+    b = (_out(["rev-parse", "--abbrev-ref", "HEAD"], repo) or "").strip()
+    return b if b and b != "HEAD" else ""
+
+
+def _safe_branch(b):
+    return bool(b) and all(re.fullmatch(r"[A-Za-z0-9._-]+", s) and s not in (".", "..") for s in b.split("/"))
+
+
+def _spec_dirs(top, branch):
+    """The live spec directory, then any archived copy (compound moves it after the feature)."""
+    live = os.path.join(top, SPECS_DIR, branch)
+    arch_root = os.path.join(top, SPECS_DIR, "archive")
+    archived = []
+    if os.path.isdir(arch_root):
+        archived = sorted(
+            (os.path.join(arch_root, d) for d in os.listdir(arch_root) if _ARCHIVE_PREFIX.sub("", d) == branch),
+            reverse=True,
+        )
+    return [live, *archived]
+
+
+def _log_path(top, branch):
+    if not _safe_branch(branch):
+        return None
+    dirs = _spec_dirs(top, branch)
+    for d in dirs:
+        if os.path.isfile(os.path.join(d, LOG_NAME)):
+            return os.path.join(d, LOG_NAME)
+    for d in dirs[1:]:
+        if os.path.isdir(d):
+            return os.path.join(d, LOG_NAME)
+    return os.path.join(dirs[0], LOG_NAME)
+
+
+def _tasks_plan(top, branch):
+    """The plan a branch's tasks.md names (`Plan: <path>`), so a plan already merged to main is found."""
+    if not _safe_branch(branch):
+        return None
+    for d in _spec_dirs(top, branch):
+        status, text = "missing", ""
+        p = os.path.join(d, "tasks.md")
+        if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= MAX_PLAN_BYTES:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            m = re.search(r"^[ \t]*(?:[-*][ \t]+)?\*{0,2}Plan:\*{0,2}[ \t]*`?(knowledge-base/project/plans/[^\s`]+\.md)`?", text, re.M)
+            if m:
+                return m.group(1)
+    return None
+
+
+def _history(repo, merge_base):
+    """One `git log -z` pass: every branch commit with its author, subject and name-status changes.
+
+    Returns the commits, or None when the branch is longer than MAX_COMMITS (it is refused, not
+    sampled: a freeze hidden past the cap must not read as no freeze).
+    """
+    rc, out = _git(
+        ["log", "-z", "--reverse", "--topo-order", "--name-status", "-M", f"--max-count={MAX_COMMITS + 1}",
+         "--format=%x01%H%x01%ae%x01%s", f"{merge_base}..HEAD"],
+        repo,
+    )
+    commits = []
+    if rc != 0:
+        return commits
+    toks = out.split("\0")
+    i = 0
+    while i < len(toks):
+        t = toks[i].lstrip("\n")
+        if toks[i].startswith("\x01"):
+            _, sha, email, subj = (toks[i].split("\x01") + ["", "", "", ""])[:4]
+            commits.append({"sha": sha, "email": email.strip().lower(), "subject": subj, "changes": []})
+            i += 1
+        elif re.fullmatch(r"[A-Z][0-9]*", t) and commits:
+            if t[0] in ("R", "C") and i + 2 < len(toks) + 1:
+                commits[-1]["changes"].append((t[0], toks[i + 1], toks[i + 2] if i + 2 < len(toks) else ""))
+                i += 3
+            else:
+                commits[-1]["changes"].append((t[0], "", toks[i + 1] if i + 1 < len(toks) else ""))
+                i += 2
+        else:
+            i += 1
+    return None if len(commits) > MAX_COMMITS else commits
+
+
+def _plans_at(repo, rev):
+    """Every plan path at `rev`, grouped by plan identity: an archived plan and its live name are one plan."""
+    by_key = {}
+    for pth in _nul_list(["ls-tree", "-r", "--name-only", rev, "--", PLANS_DIR], repo):
+        if pth.endswith(".md"):
+            by_key.setdefault(_plan_key(pth), []).append(pth)
+    return by_key
+
+
+def _canon_at(repo, sha, path):
+    """The canonical block a commit holds for `path`, or None when it holds none or cannot parse."""
+    blocks = _blocks_at(repo, sha, path)
+    if not blocks:
+        return None
+    try:
+        return canonical(parse_block(blocks[0]))
+    except ParseError:
+        return None
+
+
+def _pin_blob(repo, rev, path):
+    """(mode, blob) of `path` at `rev`, or ("", "") when absent."""
+    out = _out(["ls-tree", rev, "--", path], repo) or ""
+    m = re.match(r"^(\d+) \w+ ([0-9a-f]+)\t", out)
+    return (m.group(1), m.group(2)) if m else ("", "")
+
+
+def _head_dirty(repo):
+    out = _out(["status", "--porcelain", "--untracked-files=all"], repo) or ""  # "normal" collapses a new directory, hiding the log inside it
+    return any(not ln[3:].strip('"').endswith(LOG_NAME) for ln in out.splitlines() if ln.strip())
+
+
+def _default_bases(repo):
+    ok = {"origin/main", "origin/master"}
+    head = (_out(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repo) or "").strip()
+    if head:
+        ok.add(head)
+    return ok
+
+
+def _verify_candidate(emit, repo, path, lines, frozen):
+    """Baseline mode: the block is not frozen yet, so there is no freeze to compare with.
+
+    Everything that can be decided from the block and the CURRENT tree still is: parse, the static
+    rules, every pin against HEAD's blob. The freeze commit follows a valid baseline run, never
+    precedes it.
+    """
+    try:
+        block = parse_block(lines)
+    except ParseError as e:
+        return emit("FAIL", reason="unparseable", plan=path, detail=str(e)[:120])
+    canon = canonical(block)
+    info = {"plan": path, "freeze_sha": "", "freeze_source": "candidate", "hash": canonical_hash(canon),
+            "block": canon, "refreeze": bool(frozen)}
+    problem = static_problem(block)
+    if problem:
+        return emit("FAIL", reason=problem, **info, detail="the candidate block is not acceptable as written")
+    declared = block.get("hash")
+    if declared and declared != info["hash"]:
+        return emit("FAIL", reason="hash-mismatch", **info, detail="hash: does not match the block's own fields")
+    for pth, sha in canon["pins"].items():
+        pth = pth[2:] if pth.startswith("./") else pth
+        mode, blob = _pin_blob(repo, "HEAD", pth)
+        if mode not in ("100644", "100755") or blob != sha:
+            return emit("FAIL", reason="pin-not-at-freeze", **info, detail=f"{pth} is not pinned to its blob in HEAD")
+    return emit("OK", reason="candidate", **info, changed_fields=[], reasons=[], flags=[])
+
+
+def cmd_verify(a):
+    emit = _Emitter(a)
+    repo = a.repo or os.getcwd()
+    top = (_out(["rev-parse", "--show-toplevel"], repo) or "").strip()
+    if not top:
+        return emit("FAIL", reason="not-a-repository", detail="verify must run inside the repository")
+    repo = top
+    head_sha = (_out(["rev-parse", "HEAD"], repo) or "").strip()
+    emit.extra.update({"head_sha": head_sha, "dirty": _head_dirty(repo) if head_sha else False,
+                       "pr_author_checked": False, "no_pr": bool(a.no_pr)})
+    branch = _branch(repo)
+
+    base = a.base[len("refs/remotes/"):] if a.base.startswith("refs/remotes/") else a.base
+    if base not in _default_bases(repo):
+        return emit("FAIL", reason="base-not-default-branch",
+                    detail=f"--base {a.base} is not the remote default branch, so it cannot anchor a freeze")
+    merge_base = (_out(["merge-base", base, "HEAD"], repo) or "").strip()
+
+    cands = set()
+    for p in (a.plan or []):
+        full = p if os.path.isabs(p) else os.path.join(repo, p)
+        rel = os.path.relpath(full, repo) if os.path.commonpath([os.path.realpath(repo), os.path.dirname(os.path.realpath(full)) or "/"]) == os.path.realpath(repo) else full
+        cands.add(rel)
+    tp = _tasks_plan(repo, branch) if branch else None
+    if tp:
+        cands.add(tp)
+
+    commits, evidence, refreeze, back, prior, refrozen_from = [], {}, {}, {}, {}, {}
+    operator = _operator_email(repo)
+    if merge_base:
+        for args in (
+            ["diff", "--name-only", merge_base, "HEAD", "--", PLANS_DIR],
+            ["diff", "--name-only", "HEAD", "--", PLANS_DIR],
+            ["ls-files", "--others", "--exclude-standard", "--", PLANS_DIR],
+        ):
+            cands.update(p for p in _nul_list(args, repo) if p.endswith(".md"))
+
+        def resolve(p):
+            for _ in range(1000):
+                if p not in back:
+                    break
+                p = back[p]
+            return _plan_key(p)
+
+        commits = _history(repo, merge_base)
+        if commits is None:
+            return emit("FAIL", reason="history-too-long",
+                        detail=f"the branch has more than {MAX_COMMITS} commits since {a.base}")
+        for c in commits:
+            for st, old, new in c["changes"]:
+                if st == "R" and old:
+                    back[new] = old
+            for st, old, p in c["changes"]:
+                if st == "D" or not (p.startswith(PLANS_DIR + "/") and p.endswith(".md")):
+                    continue
+                ident = resolve(p)
+                if ident not in evidence and _blocks_at(repo, c["sha"], p):
+                    evidence[ident] = {"sha": c["sha"], "path": p}
+                    prior[ident] = _canon_at(repo, c["sha"], p)
+                # A re-freeze is a deliberate CHANGE of a check that was already frozen earlier on
+                # this branch. A commit that restates the same block changes nothing and must not
+                # launder the earlier freeze's authorship; a first freeze is just a freeze.
+                elif c["subject"].startswith(REFREEZE_PREFIX) and c["email"] == operator:
+                    # (reached only after the plan's first block commit: that commit takes the branch above)
+                    cur = _canon_at(repo, c["sha"], p)
+                    if cur is not None and cur != prior.get(ident):
+                        refrozen_from[ident] = prior.get(ident)
+                        refreeze[ident] = {"sha": c["sha"], "path": p}
+                        prior[ident] = cur
+        cands.update(v["path"] for v in evidence.values() if os.path.lexists(os.path.join(repo, v["path"])))
+    else:
+        resolve = _plan_key  # noqa: F811 -- no history to follow
+        # No merge-base: nothing names the plan, so look at every plan on disk. A block found this
+        # way is FAIL base-unresolvable below; finding none is NO-BLOCK, so a repo that never used
+        # the feature still ships.
+        for args in (["ls-files", "--", PLANS_DIR], ["ls-files", "--others", "--exclude-standard", "--", PLANS_DIR]):
+            cands.update(p for p in _nul_list(args, repo) if p.endswith(".md"))
+
+    freeze_of = {}
+    on_main = _plans_at(repo, merge_base) if merge_base else {}
+    for p in cands:
+        ident = resolve(p)
+        # Look the plan up at the merge base under EVERY name it had there: an unrelated edit to a
+        # plan that main already archived must compare against main's frozen block, not become
+        # its own freeze.
+        main_path = next((q for q in sorted(on_main.get(ident, [])) if _blocks_at(repo, merge_base, q)), None)
+        if main_path:
+            freeze_of[ident] = {"sha": merge_base, "path": main_path, "source": "merge-base"}
+        elif ident in refreeze:
+            freeze_of[ident] = {**refreeze[ident], "source": "refreeze"}
+        elif ident in evidence:
+            freeze_of[ident] = {**evidence[ident], "source": "branch"}
+    for ident, ev in evidence.items():
+        if ident not in freeze_of:
+            freeze_of[ident] = {**(refreeze.get(ident) or ev), "source": "refreeze" if ident in refreeze else "branch"}
+
+    heads = {}
+    for p in sorted(cands):
+        status, text = _read_plan(repo, p)
+        if status == "missing":
+            continue
+        if status != "ok":
+            reason = {
+                "symlink": "symlinked-plan", "not-regular": "plan-not-regular", "outside": "plan-outside-plans-dir",
+                "too-large": "unparseable", "unreadable": "plan-unreadable",
+            }[status]
+            return emit("FAIL", reason=reason, plan=p, detail=f"the plan is not read: {status.replace('-', ' ')}")
+        blocks = extract_blocks(text)
+        if len(blocks) > 1:
+            return emit("FAIL", reason="multiple-blocks", plan=p, detail="more than one founder_check block under Acceptance Criteria")
+        if blocks:
+            heads[p] = blocks[0]
+
+    if len(heads) > 1:
+        return emit("FAIL", reason="multiple-plans", detail="more than one plan carries a founder_check block: " + ", ".join(sorted(heads)))
+
+    if not merge_base:
+        if heads:
+            return emit("FAIL", reason="base-unresolvable",
+                        detail=f"cannot resolve {a.base}, so a freeze cannot be located for the block in " + ", ".join(sorted(heads)))
+        if a.candidate:
+            return emit("FAIL", reason="no-block-candidate", detail="no founder_check block was found")
+        return emit("NO-BLOCK", reason="no-block", base_note="base-unresolvable")
+
+    if not heads:
+        if a.candidate:
+            return emit("FAIL", reason="no-block-candidate",
+                        detail="no founder_check block under an Acceptance Criteria heading; check the heading and the fence")
+        if freeze_of:
+            return emit(
+                "FAIL", reason="freeze-without-block",
+                detail="a freeze exists in history for " + ", ".join(sorted(freeze_of)) + " but no block resolves at HEAD",
+            )
+        return emit("NO-BLOCK", reason="no-block")
+
+    (path, lines), = heads.items()
+    ident = resolve(path)
+    if a.candidate:
+        if ident in freeze_of and not a.refreeze:
+            return emit("FAIL", reason="candidate-refused-frozen", plan=path,
+                        detail="a freeze exists for this plan; a candidate run is only for a block that is not frozen (use --refreeze to re-freeze a changed check)")
+        return _verify_candidate(emit, repo, path, lines, ident in freeze_of)
+    stale = sorted(p for p in freeze_of if p != ident)
+    if stale:
+        return emit("FAIL", reason="freeze-without-block", plan=path, detail="a block was frozen at " + ", ".join(stale) + " and is not there at HEAD")
+    if ident not in freeze_of:
+        return emit("FAIL", reason="no-freeze", plan=path, detail="the block has no freeze commit; commit it before any code")
+    fz = freeze_of[ident]
+    freeze_sha, source = fz["sha"], fz["source"]
+
+    try:
+        head_block = parse_block(lines)
+    except ParseError as e:
+        return emit("FAIL", reason="unparseable", plan=path, detail=str(e)[:120])
+    flines = (_blocks_at(repo, freeze_sha, fz["path"]) or [[]])[0]
+    try:
+        frozen_block = parse_block(flines)
+    except ParseError as e:
+        return emit("FAIL", reason="unparseable", plan=path, detail="freeze copy: " + str(e)[:120])
+
+    head_c, frozen_c = canonical(head_block), canonical(frozen_block)
+    head_hash, frozen_hash = canonical_hash(head_c), canonical_hash(frozen_c)
+    freeze_author = (_out(["log", "-1", "--format=%ae", freeze_sha], repo) or "").strip().lower()
+    base_info = {"plan": path, "freeze_sha": freeze_sha, "freeze_source": source, "hash": head_hash,
+                 "block": head_c, "frozen": {k: frozen_c[k] for k in ("kind", "text", "command", "expected", "approved_by", "approved_at")},
+                 "freeze_author": freeze_author, "refreeze": source == "refreeze",
+                 "refrozen_from": ({k: refrozen_from[ident][k] for k in ("kind", "text", "command", "expected", "approved_by", "approved_at")}
+                                   if source == "refreeze" and refrozen_from.get(ident) else None)}
+
+    problem = static_problem(frozen_block)
+    if problem:
+        return emit("FAIL", reason=problem, **base_info, detail="the frozen block is not acceptable as written")
+    for blk, h in ((head_block, head_hash), (frozen_block, frozen_hash)):
+        declared = blk.get("hash")
+        if declared and declared != h:
+            return emit("FAIL", reason="hash-mismatch", **base_info, detail="hash: does not match the block's own fields")
+
+    # Pins are facts about the FREEZE tree: a regular file at exactly the pinned blob, never a link.
+    for pth, sha in frozen_c["pins"].items():
+        pth = pth[2:] if pth.startswith("./") else pth
+        mode, blob = _pin_blob(repo, freeze_sha, pth)
+        if mode not in ("100644", "100755") or blob != sha:
+            return emit("FAIL", reason="pin-not-at-freeze", **base_info, detail=f"{pth} is not pinned to a regular file at its blob at the freeze")
+
+    reasons, flags = [], []
+
+    # Authorship anchor (Guard 3). A freeze reviewed on main needs none.
+    if source in ("branch", "refreeze"):
+        if not operator or freeze_author != operator:
+            flags.append("freeze-author")
+        if a.pr_author and a.operator_login:
+            emit.extra["pr_author_checked"] = True
+            if a.pr_author.lower() != a.operator_login.lower():
+                flags.append("pr-author")
+        elif not a.no_pr:
+            flags.append("pr-author-unmeasurable")
+
+    changed = [k for k in CANONICAL_FIELDS if head_c[k] != frozen_c[k]]
+    if changed:
+        reasons.append("field-changed")
+    for pth, sha in frozen_c["pins"].items():
+        pth = pth[2:] if pth.startswith("./") else pth
+        full = os.path.join(repo, pth)
+        if os.path.islink(full):
+            reasons.append("pinned-script-changed")
+            break
+        rc, h = _git(["hash-object", "--no-filters", "--", pth], repo)
+        if rc != 0 or h.strip() != sha:
+            reasons.append("pinned-script-changed")
+            break
+    if source == "branch":
+        idx = {c["sha"]: n for n, c in enumerate(commits)}
+        if freeze_sha in idx:
+            for n, c in enumerate(commits):
+                paths = [x for ch in c["changes"] for x in (ch[1], ch[2]) if x]
+                if any(not x.startswith("knowledge-base/") for x in paths):
+                    if idx[freeze_sha] >= n:
+                        reasons.append("ordering")
+                    break
+
+    info = {**base_info, "changed_fields": changed, "reasons": reasons, "flags": flags}
+    if flags:
+        return emit("UNTRUSTED", reason="authorship", **info, detail="the freeze does not anchor to the local operator; the command is shown, never run")
+    if reasons:
+        return emit("CHANGED-SINCE-APPROVAL", reason=reasons[0], **info, detail="the approved text, a pinned script or the freeze ordering changed")
+    if source == "refreeze" and a.mode != "interactive":
+        # A re-freeze replaces what the founder first approved. Only a present founder can say yes
+        # to that, so an unattended run stops on it instead of running the replacement.
+        return emit("CHANGED-SINCE-APPROVAL", reason="refreeze-needs-founder", **info,
+                    detail="the approved check was replaced by a re-freeze; an unattended run does not decide that")
+    return emit("OK", reason="ok", **info)
+
+
+# ---------------------------------------------------------------------------------------------
+# classify
+# ---------------------------------------------------------------------------------------------
+class Result(NamedTuple):
+    outcome: str
+    expected_matched: bool
+    reason: str
+
+
+def classify(rc, stdout, expected, polarity, first="", sandbox_healthy=True, refreeze=False):
+    """The one decision chokepoint, shared by baseline and acceptance polarity."""
+    matched = (expected == "") or (expected in stdout)
+    if not sandbox_healthy:
+        return Result("INVALID", matched, "sandbox-unhealthy")
+    if rc in (124, 126, 127):
+        return Result("INVALID", matched, f"tooling-rc-{rc}")
+    if first == "curl" and rc in (6, 7, 28):
+        return Result("INVALID", matched, f"curl-rc-{rc}")
+    if polarity == "baseline" and refreeze:
+        # A deliberate change made after the work exists: a pass is the normal case, not a vacuous
+        # check, so this run reports what happened and the founder decides.
+        if rc == 0 and matched:
+            return Result("PASSED", matched, "refreeze-baseline-passes")
+        return Result("FAILED", matched, "refreeze-baseline-fails")
+    if polarity == "baseline":
+        if rc == 0 and matched:
+            return Result("VACUOUS", matched, "baseline-passes")
+        return Result("FAILED-AS-EXPECTED", matched, "baseline-fails")
+    if rc == 0 and matched:
+        return Result("PASSED", matched, "ran-returned-success")
+    return Result("FAILED", matched, "non-zero-or-expected-absent")
+
+
+def _read_capped(path):
+    with open(path, "rb") as fh:
+        data = fh.read(MAX_PLAN_BYTES + 1)
+    if len(data) > MAX_PLAN_BYTES:
+        raise ValueError("file larger than 1 MiB")
+    return data.decode("utf-8", errors="replace")
+
+
+def _load_json(path, what, digest=None):
+    """Read a record file. `digest`, a list, receives the sha256 of exactly the text that was parsed."""
+    try:
+        text = _read_capped(path)
+        doc = json.loads(text)
+    except (OSError, ValueError) as e:
+        print(f"refused: cannot read {what} {path}: {e}", file=sys.stderr)
+        return None
+    if not isinstance(doc, dict):
+        print(f"refused: {what} {path} is not a JSON object", file=sys.stderr)
+        return None
+    if digest is not None:
+        digest.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
+    return doc
+
+
+def cmd_classify(a):
+    dg = []
+    v = _load_json(a.verify_json, "the verify record", dg)
+    if v is None:
+        return 2
+    block = v.get("block") if isinstance(v.get("block"), dict) else {}
+    if v.get("outcome") != "OK" or block.get("kind") != "command":
+        print(f"refused: classify only runs on an OK verify of a command check (outcome={v.get('outcome')!s:.40}, kind={block.get('kind')!s:.20})", file=sys.stderr)
+        return 2
+    candidate = v.get("reason") == "candidate"
+    if (a.polarity == "baseline") != candidate:
+        print("refused: baseline polarity needs a --candidate verify record, acceptance needs a frozen one", file=sys.stderr)
+        return 2
+    approved = block.get("command", "")
+    if not approved:
+        print("refused: the verify record carries no command to classify a run of", file=sys.stderr)
+        return 2
+    try:
+        ran = _read_capped(a.command_file)
+    except (OSError, ValueError) as e:
+        print(f"refused: cannot read --command-file: {e}", file=sys.stderr)
+        return 2
+    if ran != approved:
+        print("refused: the command that ran is not the approved command in the verify record", file=sys.stderr)
+        return 2
+    stdout = ""
+    if a.stdout_file:
+        try:
+            stdout = _read_capped(a.stdout_file)
+        except (OSError, ValueError) as e:
+            print(f"refused: cannot read --stdout-file: {e}", file=sys.stderr)
+            return 2
+    r = classify(a.rc, stdout, block.get("expected", ""), a.polarity, str(v.get("first_token", "")), a.control_rc == 0, bool(v.get("refreeze")))
+    doc = {"outcome": r.outcome, "expected_matched": r.expected_matched, "reason": r.reason,
+           "rc": a.rc, "polarity": a.polarity, "hash": str(v.get("hash", "")),
+           "head_sha": str(v.get("head_sha", "")), "verify_sha256": dg[0]}
+    line = json.dumps(doc, sort_keys=True)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    print(line)
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# log / commit-log / summary / text
+# ---------------------------------------------------------------------------------------------
+def _cell(v):
+    s = _CONTROL.sub(" ", str(v))
+    return re.sub(r"\s+", " ", s).replace("\\", "\\\\").replace("|", "\\|").strip()
+
+
+def _resolve_log(a):
+    if a.log:
+        return os.path.abspath(a.log)
+    top = (_out(["rev-parse", "--show-toplevel"], os.getcwd()) or "").strip()
+    return _log_path(top, _branch(top)) if top else None
+
+
+CLASSIFY_OUTCOMES = frozenset({"PASSED", "FAILED", "INVALID", "FAILED-AS-EXPECTED", "VACUOUS"})
+
+
+def _derivable(v, cl, polarity):
+    """The outcomes the records allow a row to carry. `log` records a measurement, it does not
+    choose one: an outcome no record supports is refused, whoever asks for it."""
+    block = v.get("block") if isinstance(v.get("block"), dict) else {}
+    vo = v.get("outcome")
+    if vo == "UNTRUSTED":
+        return {"UNTRUSTED"}
+    if vo == "CHANGED-SINCE-APPROVAL":
+        return {"CHANGED-SINCE-APPROVAL"}
+    if vo == "FAIL":
+        return {"BLOCK-REJECTED"}
+    if vo != "OK":
+        return set()
+    if (polarity == "baseline") != (v.get("reason") == "candidate"):
+        return set()
+    if cl:
+        return {cl["outcome"]}
+    if block.get("kind") == "judgement":
+        return {"NEEDS-YOUR-EYES", "FOUNDER-CONFIRMED", "FAILED"} if polarity == "acceptance" else {"NEEDS-YOUR-EYES"}
+    # a command that never produced an rc: no sandbox, a refused token, or an unreadable wrapper result
+    return {"SKIP-NOSANDBOX", "INVALID", "BLOCK-REJECTED"}
+
+
+def _unsafe_log_path(path):
+    """Why `path` may not be written, or None. A link anywhere below the repository root (the spec
+    directory, an ancestor, the log itself) would let a committed symlink send the append outside
+    the repository, or make `commit-log` commit the link."""
+    top = (_out(["rev-parse", "--show-toplevel"], os.path.dirname(path) if os.path.isdir(os.path.dirname(path)) else os.getcwd()) or "").strip()
+    real_top = os.path.realpath(top) if top else ""
+    cur = os.path.abspath(path)
+    chain = [cur]
+    if not top:  # outside any repository: the file and its own directory are all this can vouch for
+        chain.append(os.path.dirname(cur))
+    while top:
+        parent = os.path.dirname(cur)
+        if parent == cur or (real_top and os.path.realpath(parent) == real_top) or (top and parent == top):
+            break
+        chain.append(parent)
+        cur = parent
+    for part in chain:
+        if os.path.islink(part):
+            return f"{os.path.relpath(part)} is a symbolic link; the log is never written through a link"
+    if os.path.lexists(path) and not os.path.isfile(path):
+        return "the log path exists and is not a regular file"
+    return None
+
+
+def cmd_log(a):
+    dg = []
+    v = _load_json(a.verify_json, "the verify record", dg)
+    if v is None:
+        return 2
+    cl = {}
+    if a.classify_json:
+        cl = _load_json(a.classify_json, "the classify record")
+        if cl is None:
+            return 2
+        if (cl.get("outcome") not in CLASSIFY_OUTCOMES or cl.get("polarity") != a.polarity
+                or cl.get("verify_sha256") != dg[0] or cl.get("hash") != str(v.get("hash", ""))
+                or cl.get("head_sha") != str(v.get("head_sha", ""))):
+            print("refused: the classify record does not belong to this verify record and polarity", file=sys.stderr)
+            return 3
+    block = v.get("block") if isinstance(v.get("block"), dict) else {}
+    h = str(v.get("hash", ""))
+    sha = str(v.get("head_sha", ""))
+    if (h and not re.fullmatch(r"[0-9a-f]{64}", h)) or (sha and not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha)):
+        print("refused: the verify record carries a hash or sha that is not hex", file=sys.stderr)
+        return 3
+    outcome, underlying = a.outcome, a.underlying or ""
+    reason = ""
+    if a.reason_stdin:
+        reason = sys.stdin.read(600).strip()
+    if a.mode == "headless":
+        if outcome in HEADLESS_REFUSED:
+            print(f"refused: {outcome} is an interactive-only outcome; a headless run cannot record it", file=sys.stderr)
+            return 3
+        if outcome in HEADLESS_STOPS or outcome == "SKIP-NOSANDBOX":
+            underlying, outcome = outcome, "STOPPED-AWAITING-FOUNDER"
+    allowed = _derivable(v, cl, a.polarity)
+    measured = underlying if outcome in ("OVERRIDDEN", "STOPPED-AWAITING-FOUNDER") else outcome
+    if measured not in allowed:
+        print(f"refused: the records do not support recording {measured or 'this outcome'} here", file=sys.stderr)
+        return 3
+    if outcome == "OVERRIDDEN":
+        if not reason:
+            print("refused: an override needs a one-line reason", file=sys.stderr)
+            return 3
+        if underlying not in OVERRIDE_CAUSES:
+            print(f"refused: an override names what it overrides: --underlying {'|'.join(OVERRIDE_CAUSES)}", file=sys.stderr)
+            return 3
+    if reason and _secret_shaped(reason):
+        print("refused: the reason looks like it holds a secret; the log is committed and may be public", file=sys.stderr)
+        return 3
+    frozen = v.get("frozen") if isinstance(v.get("frozen"), dict) else {}
+    cmd = str(block.get("command", ""))
+    if frozen.get("command") and frozen.get("command") != cmd:
+        reason = (reason + " | frozen command: " + str(frozen["command"])).strip(" |")
+    if isinstance(v.get("reasons"), list) and v["reasons"]:
+        # CHANGED-SINCE-APPROVAL is three different things (a field, a pinned script, the ordering);
+        # the row names which, so an override is never read as one cause when it was another.
+        reason = (reason + " | reasons: " + ",".join(str(x)[:40] for x in v["reasons"][:5])).strip(" |")
+    tested = sha[:12] + ("+uncommitted" if v.get("dirty") else "") if sha else ""
+    row = {
+        "kind": block.get("kind", ""), "polarity": a.polarity, "command": cmd,
+        "rc": "" if cl.get("rc") is None else cl.get("rc"), "outcome": outcome, "underlying": underlying,
+        "attempt_n": a.attempt_n if a.attempt_n is not None else "", "tested_sha": tested, "block_hash": h,
+        "time_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expected_matched": "" if cl.get("expected_matched") is None else str(bool(cl.get("expected_matched"))).lower(),
+        "reason": reason,
+        "freeze_source": str(v.get("freeze_source", ""))[:20],
+        "no_pr": "true" if v.get("no_pr") else "false",
+    }
+    path = _resolve_log(a)
+    if not path:
+        print("refused: no log path (detached HEAD or an unsafe branch name); pass --log", file=sys.stderr)
+        return 3
+    problem = _unsafe_log_path(path)
+    if problem:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 3
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    problem = _unsafe_log_path(path)  # again, now that the directories exist
+    if problem:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 3
+    try:
+        # O_NOFOLLOW: a link planted at the log path (dangling or not) is refused, never written through
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as e:
+        print(f"refused: cannot open the log without following a link: {e.strerror}", file=sys.stderr)
+        return 3
+    with os.fdopen(fd, "a", encoding="utf-8") as fh:
+        if fh.tell() == 0:
+            fh.write("| " + " | ".join(LOG_COLUMNS) + " |\n")
+            fh.write("| " + " | ".join("---" for _ in LOG_COLUMNS) + " |\n")
+        fh.write("| " + " | ".join(_cell(row[c]) for c in LOG_COLUMNS) + " |\n")
+    print(f"SOLEUR_FOUNDER_CHECK_RESULT outcome={outcome} hash={h} tested_sha={sha[:12]}")
+    return 0
+
+
+def cmd_commit_log(a):
+    top = (_out(["rev-parse", "--show-toplevel"], os.getcwd()) or "").strip()
+    path = _resolve_log(a) if (a.log or top) else None
+    if not top or not path or not os.path.isfile(path):
+        print("founder-check: no log to commit")
+        return 0
+    rel = os.path.relpath(path, top)
+    problem = _unsafe_log_path(path)
+    if problem:
+        print(f"founder-check: {problem}", file=sys.stderr)
+        return 1
+    if _branch(top) in {b.rsplit("/", 1)[-1] for b in _default_bases(top)}:
+        # Hooks are kept (they are the repository's own gates and the log may be public), so the one
+        # thing refused is committing the log straight onto the default branch.
+        print("founder-check: refusing to commit the log on the default branch", file=sys.stderr)
+        return 1
+    rc, status = _git(["status", "--porcelain", "--", rel], top)
+    if rc == 0 and not status.strip():
+        print("founder-check: log already committed")
+        return 0
+    rc, _o = _git(["add", "--", rel], top)
+    if rc == 0:
+        rc, _o = _git(["commit", "-q", "-m", LOG_COMMIT_MESSAGE, "--", rel], top)
+    if rc != 0:
+        print(f"founder-check: could not commit the log: {_LAST_ERR[:200]}", file=sys.stderr)
+        return 1
+    print(f"founder-check: committed {rel}")
+    return 0
+
+
+def _log_rows(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        lines = [ln.rstrip("\n") for ln in fh if ln.startswith("|")]
+    sep = re.compile(r"^\|[\s:|-]*$")
+    rows = []
+    for i, ln in enumerate(lines):
+        if sep.match(ln):
+            continue
+        if i + 1 < len(lines) and sep.match(lines[i + 1]):
+            continue
+        rows.append(ln)
+    return rows
+
+
+def cmd_summary(a):
+    path = a.log if a.log else _resolve_log(a)
+    if not path or not os.path.isfile(path):
+        if a.log:
+            print(f"founder-check: log not found: {_cell(a.log)}", file=sys.stderr)
+            return 1
+        print("founder-check: no log")
+        return 0
+    print(f"founder-check: {len(_log_rows(path))} rows")
+    return 0
+
+
+def cmd_text(a):
+    if a.list:
+        print("\n".join(sorted(WORDING)))
+        return 0
+    if not a.name:
+        print("text: a name or --list is required", file=sys.stderr)
+        return 2
+    v = {}
+    if a.verify_json:
+        v = _load_json(a.verify_json, "the verify record") or {}
+    sha = a.sha
+    if v.get("head_sha"):
+        sha = str(v["head_sha"])[:12] + (" plus uncommitted changes" if v.get("dirty") else "")
+    detail = REJECT_REASONS.get(str(v.get("reason", ""))) or _CONTROL.sub(" ", str(v.get("detail", "")))
+    cause, nxt = STOP_CAUSES.get(a.underlying, STOP_DEFAULT)
+    print(WORDING[a.name].format(sha=sha, reason=a.reason, cause=cause, detail=detail, next=nxt))
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+def build_parser():
+    p = argparse.ArgumentParser(prog="founder-check.py", description=__doc__.split("\n")[0], allow_abbrev=False)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    v = sub.add_parser("verify", allow_abbrev=False)
+    v.add_argument("--base", default="origin/main")
+    v.add_argument("--repo")
+    v.add_argument("--plan", action="append")
+    v.add_argument("--pr-author")
+    v.add_argument("--operator-login")
+    v.add_argument("--no-pr", action="store_true", help="no pull request exists yet, so there is no PR author to compare")
+    v.add_argument("--out", help="write the decision record (one JSON line) to this file")
+    v.add_argument("--command-out", help="write the block's raw command text to this file, only for an OK verdict")
+    v.add_argument("--display-out", help="write an escaped, display-only copy of the command here, for every outcome that parsed a block")
+    v.add_argument("--mode", choices=("interactive", "headless"), default="headless",
+                   help="only an interactive run may run a re-frozen check; the default is headless")
+    v.add_argument("--candidate", action="store_true", help="baseline mode: validate a block that has no freeze commit yet")
+    v.add_argument("--refreeze", action="store_true", help="with --candidate: baseline a deliberately changed check")
+    v.set_defaults(fn=cmd_verify)
+
+    c = sub.add_parser("classify", allow_abbrev=False)
+    c.add_argument("--verify-json", required=True)
+    c.add_argument("--polarity", choices=("baseline", "acceptance"), required=True)
+    c.add_argument("--rc", type=int, required=True)
+    c.add_argument("--control-rc", type=int, required=True, help="rc of the `true` health-control run through the same wrapper")
+    c.add_argument("--command-file", required=True, help="the command text the wrapper actually ran; it must equal the approved command")
+    c.add_argument("--stdout-file")
+    c.add_argument("--out")
+    c.set_defaults(fn=cmd_classify)
+
+    g = sub.add_parser("log", allow_abbrev=False)
+    g.add_argument("--log")
+    g.add_argument("--mode", choices=("interactive", "headless"), required=True)
+    g.add_argument("--outcome", choices=OUTCOMES, required=True)
+    g.add_argument("--polarity", choices=("baseline", "acceptance"), required=True)
+    g.add_argument("--verify-json", required=True)
+    g.add_argument("--classify-json")
+    g.add_argument("--attempt-n", type=int)
+    g.add_argument("--underlying", choices=OVERRIDE_CAUSES)
+    g.add_argument("--reason-stdin", action="store_true", help="read the founder's one-line reason from stdin")
+    g.set_defaults(fn=cmd_log)
+
+    k = sub.add_parser("commit-log", allow_abbrev=False)
+    k.add_argument("--log")
+    k.set_defaults(fn=cmd_commit_log)
+
+    s = sub.add_parser("summary", allow_abbrev=False)
+    s.add_argument("--log")
+    s.set_defaults(fn=cmd_summary)
+
+    t = sub.add_parser("text", allow_abbrev=False)
+    t.add_argument("name", nargs="?", choices=sorted(WORDING))
+    t.add_argument("--list", action="store_true")
+    t.add_argument("--verify-json")
+    t.add_argument("--sha", default="<sha>")
+    t.add_argument("--reason", default="<reason>")
+    t.add_argument("--underlying", choices=tuple(STOP_CAUSES))
+    t.set_defaults(fn=cmd_text)
+    return p
+
+
+_OUTPUT_FLAGS = ("--out", "--command-out", "--display-out")
+
+
+def _clear_outputs(argv):
+    """Remove the files a run is about to write, BEFORE argument parsing. A stale decision record or
+    command file from an earlier run must never survive a run that dies early (a usage error, a
+    crash): an absent file is a refusal downstream, a stale one is somebody else's verdict."""
+    if not argv or argv[0] not in ("verify", "classify"):
+        return
+    paths = []
+    for i, tok in enumerate(argv[1:], 1):
+        for flag in _OUTPUT_FLAGS:
+            if tok == flag and i + 1 < len(argv):
+                paths.append(argv[i + 1])
+            elif tok.startswith(flag + "="):
+                paths.append(tok[len(flag) + 1:])
+    for p in paths:
+        try:
+            if os.path.islink(p) or os.path.isfile(p):
+                os.unlink(p)
+        except OSError:
+            pass
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    _clear_outputs(argv)
+    args = build_parser().parse_args(argv)
+    try:
+        return args.fn(args)
+    except Exception as e:  # a traceback is an unreadable verdict: print a one-line FAIL and a distinct rc
+        line = json.dumps({"outcome": "FAIL", "reason": "internal-error", "environmental": True,
+                           "detail": f"{type(e).__name__}: {str(e)[:120]}"})
+        out = getattr(args, "out", None)
+        if out:
+            try:
+                with open(out, "w", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except OSError:
+                pass
+        print(line)
+        return 4
+
+
+if __name__ == "__main__":
+    sys.exit(main())
