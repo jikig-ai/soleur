@@ -100,7 +100,7 @@ are kept, so the `merge_queue` entry is not derived today.
 
 **Institutional learnings applied.** `2026-06-02-auto-merge-livelock-fast-moving-main.md` (the livelock and its
 recurrences; append only). `2026-10-04-a-queue-candidate-trust-check-premised-on-an-unmeasured-commit-shape.md` (a
-push to a queued PR dequeues it; dequeue must be readable on every tick). `2026-06-30-merge-queue-iac-...positional-rule-readers.md`
+push to a queued PR dequeues it; dequeue must be readable on every tick). `2026-06-30-merge-queue-iac-provider-schema-probe-and-positional-rule-readers.md`
 (select the rule by `.type`, never by index; a `merge_queue` entry can sit anywhere in the array).
 `2026-05-25-ship-phase-7-state-machine-extension.md` (required-check scan is fail-open on purpose; fixtures execute both
 blocks). ADR-270 Decision 5 (the queue reads and the 5th-tick dequeue read this plan builds on). The `settle-then-admin-merge`
@@ -534,7 +534,7 @@ nothing, so `QUEUE_RULE` stays 0 for all of them.
   Monitor only read that file; never host the run in the Monitor (`2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md`).
   After adding rows, check the suite against `scripts/suite-durations.tsv` / `scripts-shard-runtime-coverage.test.sh`.
 - **Edit both fences in one commit and cross-grep both** (`plugins/soleur/skills/ship/SKILL.md`, `plugins/soleur/skills/merge-pr/SKILL.md`);
-  the mirror trims comments but not logic. Do not add new `${CLAUDE_PLUGIN_ROOT}` path references to the new echo lines (the
-  loader substitutes them in delivered text and the fixtures run the literal).
+  the mirror trims comments but not logic. The only `${CLAUDE_PLUGIN_ROOT}` reference in the new lines is the dequeued echo copied
+  verbatim from the existing every-5th-tick line (same recovery pointer, same loader substitution); the other new echo lines carry none.
 - **If the idle grace ever fires in production** that is outcome (b) or a stalled queue: the line says so. Surface the
   `strict_required_status_checks_policy` question to the operator; this plan does not change the ruleset.
