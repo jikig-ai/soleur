@@ -2755,8 +2755,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   }
 
   function handleResultMessage(state: ActiveQuery, msg: SDKResultMessage): void {
-    const delta = msg.total_cost_usd ?? 0;
-    state.totalCostUsd += delta;
+    // #9648 B-0 — absent/non-finite SDK cost rides NaN into onResult →
+    // persistTurnCost (fail-closed + Sentry) instead of a silent 0.
+    // Only finite deltas touch the accumulator, which cap checks read.
+    const delta = msg.total_cost_usd ?? Number.NaN;
+    if (Number.isFinite(delta)) state.totalCostUsd += delta;
     const incomingSessionId = msg.session_id || null;
     // #3266 — fire `onSessionIdCaptured` on any rebind (null → value, or
     // value → different value). Warm-resume cold-Query construction
