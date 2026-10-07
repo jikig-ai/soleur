@@ -2838,7 +2838,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // the shape the gate's SQL reads, which the fixture suite can model but not observe, and the warehouse
   // has no unauthenticated read path. Genuine. The waiver's own hazard applies: Check 10 skips this
   // command without executing it, so the live read was run by hand during the PR (PASS) instead.
-  const BASELINE_DECLARED_PROBES = 47;
+  // #9372 (2026-10-07): +1 (47 -> 48) for `2026-10-07-feat-web-host-reboot-workflow-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/web-host-reboot-evidence.sh snapshot`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) alone and prints web-2's newest
+  // readiness, probe and journald boot rows as ids and ages. NO SUBSTITUTE: those rows land only in the Logs
+  // warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 48;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
