@@ -51,8 +51,9 @@ PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
 # (1) Trigger predicate — the LOCAL FACT ALONE. IMDS is telemetry and corroboration, NEVER the
 # trigger. -w + -F: exact word, fixed string — so 10.0.1.1 can never match inside 10.0.1.10, and
 # dots are not treated as regex wildcards.
-# The predicates below read the whole stream (grep -c, count discarded) so the producer never takes
-# EPIPE; see the header of .claude/hooks/grep-q-pipe-guard.test.sh.
+# The grep predicates in this script read the whole stream (grep -c, count discarded) so a producer never takes
+# EPIPE. It sets no pipefail today; this keeps the exit status identical if one is added or inherited via
+# SHELLOPTS. See the header of .claude/hooks/grep-q-pipe-guard.test.sh.
 ip_present=false
 if [ "$PROBE_OK" = true ] && "$IP_BIN" -4 -o addr show 2>/dev/null | grep -cwF -- "$EXPECTED_IP" >/dev/null; then ip_present=true; fi
 # (2) Bounded wait — the attach can land AFTER boot (the registry guard's H2). Only runs when the

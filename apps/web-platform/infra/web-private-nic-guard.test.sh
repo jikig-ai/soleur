@@ -549,6 +549,7 @@ assert "X4 non-vacuity: the baseline file is readable and non-empty" \
 # --- pass 2 (#9217): converted predicates keep their discrimination -------------------------------
 # The happy path (canonical address, canonical IMDS body) is satisfiable by an always-true grep. These rows put a
 # near-miss through each converted predicate, observe the wait loop's success arm, and pin stdout cleanliness.
+# Row ids keep the plan's numbering (W-3 was cut at plan review; W-5b and W-7 were added by review).
 echo "--- pass 2 (#9217): converted predicates keep their discrimination ---"
 run_guard true 0 true
 assert "W-6 healthy run writes nothing to stdout (every converted predicate discards the count it reads)" "[[ -z \"\$OUT\" ]]"
@@ -560,8 +561,7 @@ assert "W-6 absent-start run (wait loop reached) writes nothing to stdout" "[[ -
 EXTRA_ENV=("STUB_IP_OUT=3: enp7s0    inet 10a0b1c10/32 scope global enp7s0")
 run_guard false 0 true
 assert "W-2 -F literal: dots are not wildcards (10a0b1c10 is not 10.0.1.10)" "[[ \"\$(field nic_ok)\" == false && \"\$(field converged_by)\" == detect-only ]]"
-EXTRA_ENV=("STUB_IMDS_BODY=- ip: ${TEST_IP}0
-  network_id: 1001")
+EXTRA_ENV=("STUB_IMDS_BODY=- ip: ${TEST_IP}0"$'\n  network_id: 1001')
 run_guard true 0 true
 assert "W-4 IMDS near-miss: an address with a longer tail does not corroborate (imds_has_expected=false)" "[[ \"\$(field imds_has_expected)\" == false ]]"
 assert "W-4 the network_id line is still counted (imds_nets=1 pins the numeric value)" "[[ \"\$(field imds_nets)\" == 1 ]]"
@@ -570,10 +570,23 @@ EXTRA_ENV=("STUB_IP_COUNTER=$W5_CTR" STUB_IP_APPEAR_AT=2)
 run_guard true 0 true
 assert "W-5 the address appearing on the second probe is found by the wait loop (nic_ok=true, already)" \
   "[[ \"\$(field nic_ok)\" == true && \"\$(field converged_by)\" == already ]]"
-assert "W-5 imds_nets=1 on the canonical body" "[[ \"\$(field imds_nets)\" == 1 ]]"
-assert "W-5 exactly three ip calls: the trigger, ONE wait-loop iteration, the emit (a lost break would make 32)" \
+# The count is trigger + ONE wait-loop iteration + the emit's single NIC_ADDRS call (a lost break would make 32).
+assert "W-5 exactly three ip calls: the trigger, one wait-loop iteration, the emit" \
   "[[ \"\$(cat '$W5_CTR')\" -eq 3 ]]"
-assert "W-6 wait-loop success run writes nothing to stdout" "[[ -z \"\$OUT\" ]]"
+W5B_CTR="$TMP/ip-calls.w5b"; printf '0' > "$W5B_CTR"
+EXTRA_ENV=("STUB_IP_COUNTER=$W5B_CTR" STUB_IP_APPEAR_AT=3)
+run_guard true 0 true
+assert "W-5b the address appearing on the THIRD probe is still found: the wait loop retries (nic_ok=true, already)" \
+  "[[ \"\$(field nic_ok)\" == true && \"\$(field converged_by)\" == already ]]"
+assert "W-5b exactly four ip calls: the trigger, TWO wait-loop iterations, the emit (a loop cut to one iteration would not find it)" \
+  "[[ \"\$(cat '$W5B_CTR')\" -eq 4 ]]"
+W7_CTR="$TMP/ip-calls.w7"; printf '0' > "$W7_CTR"
+EXTRA_ENV=("STUB_IP_COUNTER=$W7_CTR" STUB_IP_APPEAR_AT=1)
+run_guard true 0 true
+assert "W-7 an address present at the first probe is found by the trigger itself (nic_ok=true, already)" \
+  "[[ \"\$(field nic_ok)\" == true && \"\$(field converged_by)\" == already ]]"
+assert "W-7 exactly two ip calls: the trigger and the emit, so the wait loop did not run" \
+  "[[ \"\$(cat '$W7_CTR')\" -eq 2 ]]"
 
 # --- every run, one verdict ------------------------------------------------------------------
 assert "no run anywhere issued a curl missing --disable-first or --noproxy '*' (ALL_TA_BAD=$ALL_TA_BAD)" "[[ \"\$ALL_TA_BAD\" -eq 0 ]]"
@@ -585,7 +598,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=165
+MIN_CASES=167
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

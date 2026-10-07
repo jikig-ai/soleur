@@ -82,8 +82,9 @@ trap emit_fail EXIT
 
 # 1. Container readiness — bounded wait (the container starts moments before this runs;
 #    a missing container is itself a failure, not a skip, on this path).
-# The predicates below read the whole stream (grep -c, count discarded) so the producer never takes
-# EPIPE; see the header of .claude/hooks/grep-q-pipe-guard.test.sh.
+# The grep predicates in this script read the whole stream (grep -c, count discarded) so a producer never takes
+# EPIPE. It sets no pipefail today; this keeps the exit status identical if one is added or inherited via
+# SHELLOPTS. See the header of .claude/hooks/grep-q-pipe-guard.test.sh.
 N=0
 until docker ps --format '{{.Names}}' | grep -cx "$CONTAINER" >/dev/null; do
   N=$((N + 1))
