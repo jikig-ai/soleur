@@ -307,3 +307,11 @@ UI, schema, infra, credential, legal or GDPR surface touched.
 - The probe-race fix has no deterministic RED test by design (R1/R11 trade-off after panel review);
   do not reintroduce a helper + DI unit file without new evidence.
 - `{ repeats: 50 }` is a temporary verification aid: it must not be present in the committed diff.
+
+## Addendum — 2026-10-07 (review round on #9697)
+
+Supersedes parts of R11, AC2 and the Sharp Edge "no deterministic RED test" above (those are kept as written):
+
+- The review panel's test-design seat measured that an always-false oracle, an `S`-is-dead oracle and a first-paren parser all passed the file with the product kill removed. Three inline control rows (`isAlive oracle controls`: a live process with comm `sleep`, one with comm `x) Z y`, and an unreaped zombie) now give those a deterministic RED. Mutants killed: always-false, S-is-dead, first-paren `indexOf`, Z-blind, `kill(0)`-only. No helper file or injected-deps unit file was added, so the R1 decision stands.
+- Still unpinned, by design: the EPERM branch (needs a process of another uid; equivalent for a same-uid fixture), the `/proc` vanished-between-calls branch (race only), and `procIsOurs` (needs a foreign pid namespace).
+- The real-process row bounds only that the group is eventually dead; that the kill was issued before the spawn resolves is owned by the mocked P2-1 rows.

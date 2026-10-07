@@ -324,8 +324,8 @@ describe("spawnClaudeEval — child end (#7122 P2-1, P2-2)", () => {
 // SIGTERM-ignoring sleeper in its own group, prints a result line and exits 0. The group
 // kill on exit is the only thing that ends the sleeper; with `detached` removed `-pid` is
 // ESRCH (the child is not a group leader), the sleeper survives, and the row goes red.
-// This row bounds only that the group is EVENTUALLY dead; the "kill is sent synchronously,
-// before the spawn resolves" property is owned by the mocked P2-1 rows above.
+// This row bounds only that the group is EVENTUALLY dead; that the group kill was ISSUED by
+// the time the spawn resolves is owned by the mocked P2-1 rows above.
 describe("spawnClaudeEval — a real grandchild in the child's process group is reaped on exit (#7122 P2-1, test-design P2-3)", () => {
   const ORIGINAL_CLAUDE_BIN = process.env.CLAUDE_BIN;
   const dirs: string[] = [];
@@ -341,7 +341,7 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     lastProbe = "not probed";
   });
   afterEach(() => {
-    // Reaper: never leave the fixture's sleeper behind, whatever the assertion said.
+    // Reaper: once the sleeper's pid is known, never leave it behind, whatever the assertion said.
     if (sleeperPid) {
       try {
         process.kill(sleeperPid, "SIGKILL");
@@ -455,46 +455,91 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     sleeperPid = null;
   }, 40_000);
 
-  // Negative control for the probe: the row above only ever watches it answer "gone", so an
-  // always-false oracle, an `S`-is-dead oracle or a first-paren parser would pass it with the
-  // product kill removed. A live, unkilled process must read alive whatever its comm holds
-  // (the second name carries a ")" and a fake zombie state), and the same pid must then read
-  // dead once killed.
-  const SLEEP_BIN = ["/bin/sleep", "/usr/bin/sleep"].find((c) => existsSync(c));
-  const canCopySleep = SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && existsSync("/proc/self/stat");
-  for (const name of ["sleep", "x) Z y"]) {
-    it.skipIf(!canCopySleep)(`isAlive control: a live process reads alive and a killed one dead (comm "${name}")`, async () => {
+  // Probe self-test, not the product: negative controls for `isAlive`. The row above only ever
+  // watches it answer "gone", so an always-false oracle, an `S`-is-dead oracle or a Z-blind
+  // oracle would pass it with the product kill removed; a first-paren parser would misread any
+  // comm containing ")", which only the second row below exercises. A live, unkilled process
+  // must read alive (the second name carries a ")" and a fake zombie state), the same pid must
+  // read dead once killed, and a zombie that is NOT reaped must read dead while kill(0) still
+  // succeeds.
+  describe("isAlive oracle controls", () => {
+    const SLEEP_BIN = ["/bin/sleep", "/usr/bin/sleep"].find((c) => existsSync(c));
+    // Only a standalone sleep binary can be copied under another name (a multicall binary
+    // such as busybox would reject the unknown applet name).
+    const canCopySleep =
+      SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && existsSync("/proc/self/stat");
+    const spawnReal = async (...args: Parameters<typeof import("node:child_process").spawn>) => {
       const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-      const dir = mkdtempSync(join(tmpdir(), "claude-eval-probe-"));
-      dirs.push(dir);
-      const exe = join(dir, name);
-      copyFileSync(SLEEP_BIN as string, exe);
-      chmodSync(exe, 0o755);
-      const child = actual.spawn(exe, ["120"], { stdio: "ignore" });
-      try {
-        const pid = child.pid as number;
-        expect(Number.isInteger(pid) && pid > 1).toBe(true);
-        // comm is the copy's name only once exec has replaced the forked parent.
-        await vi.waitFor(() => expect(readFileSync(`/proc/${pid}/stat`, "utf8")).toContain(`(${name})`), {
-          timeout: 5_000,
-          interval: 10,
+      const child = actual.spawn(...args);
+      child.on("error", () => {}); // a failed exec must surface as the pid assertion, not an uncaught error
+      return child;
+    };
+
+    for (const name of ["sleep", "x) Z y"]) {
+      it.skipIf(!canCopySleep)(
+        `a live process reads alive and a killed one dead (comm "${name}")`,
+        async () => {
+          const dir = mkdtempSync(join(tmpdir(), "claude-eval-probe-"));
+          dirs.push(dir);
+          const exe = join(dir, name);
+          copyFileSync(SLEEP_BIN as string, exe);
+          chmodSync(exe, 0o755);
+          const child = await spawnReal(exe, ["120"], { stdio: "ignore" });
+          try {
+            const pid = child.pid as number;
+            expect(Number.isInteger(pid) && pid > 1).toBe(true);
+            // comm is the copy's name only once exec has replaced the forked parent.
+            await vi.waitFor(() => expect(readFileSync(`/proc/${pid}/stat`, "utf8")).toContain(`(${name})`), {
+              timeout: 5_000,
+              interval: 10,
+            });
+            // Right after exec the state can be transiently D or R; wait for it to settle to sleeping.
+            await vi.waitFor(
+              () => {
+                expect(isAlive(pid), `a live process must read alive (last probe: ${lastProbe})`).toBe(true);
+                expect(lastProbe).toBe("state S");
+              },
+              { timeout: 5_000, interval: 10 },
+            );
+            child.kill("SIGKILL");
+            await vi.waitFor(
+              () => expect(isAlive(pid), `a killed process must read dead (last probe: ${lastProbe})`).toBe(false),
+              { timeout: 5_000, interval: 10 },
+            );
+          } finally {
+            child.kill("SIGKILL");
+          }
+        },
+        30_000,
+      );
+    }
+
+    // The /proc half of the probe: a killed grandchild whose parent never waits stays a zombie, for
+    // which kill(0) still succeeds (containers without a reaping init look like this).
+    it.skipIf(!canCopySleep)(
+      "an unreaped zombie reads dead while kill(0) still succeeds",
+      async () => {
+        const parent = await spawnReal("sh", ["-c", "sleep 0 & echo $!; exec sleep 120"], {
+          stdio: ["ignore", "pipe", "ignore"],
         });
-        // Right after exec the state can be transiently D or R; wait for it to settle to sleeping.
-        await vi.waitFor(
-          () => {
-            expect(isAlive(pid), `a live process must read alive (last probe: ${lastProbe})`).toBe(true);
-            expect(lastProbe).toBe("state S");
-          },
-          { timeout: 5_000, interval: 10 },
-        );
-        child.kill("SIGKILL");
-        await vi.waitFor(() => expect(isAlive(pid), `a killed process must read dead (last probe: ${lastProbe})`).toBe(false), {
-          timeout: 5_000,
-          interval: 10,
-        });
-      } finally {
-        child.kill("SIGKILL");
-      }
-    });
-  }
+        try {
+          let out = "";
+          parent.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+          await vi.waitFor(() => expect(out).toMatch(/^\d+\n/), { timeout: 5_000, interval: 10 });
+          const zpid = Number(out.trim());
+          expect(Number.isInteger(zpid) && zpid > 1).toBe(true);
+          await vi.waitFor(() => expect(readFileSync(`/proc/${zpid}/stat`, "utf8")).toMatch(/\) Z /), {
+            timeout: 5_000,
+            interval: 10,
+          });
+          expect(() => process.kill(zpid, 0), "a zombie still answers kill(0)").not.toThrow();
+          expect(isAlive(zpid), `a zombie must read dead (last probe: ${lastProbe})`).toBe(false);
+          expect(lastProbe).toBe("state Z");
+        } finally {
+          parent.kill("SIGKILL");
+        }
+      },
+      30_000,
+    );
+  });
 });
