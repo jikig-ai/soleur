@@ -89,12 +89,15 @@ LEXER="$REPO_ROOT/plugins/soleur/hooks/lib/shell-argv.pl"
 SELF="$SUITE_DIR/$(basename "${BASH_SOURCE[0]}")"
 FAST="${GUARD_FAST_COUNT:-}"
 ROWSEL="${DCG_ROWS:-}"
-# The plugin README sentences the doc rows below require, each at the START of a line inside the `## Destructive-Command Guard`
-# section (HTML comments and fenced code stripped first), exactly once. They live HERE and nowhere else in the suite: rewriting
-# a sentence in the README is a one-edit change to the matching variable. The kill-switch sentence is the same kind of anchor.
+# The plugin README sentences the doc rows below require, each as a WHOLE LINE inside the `## Destructive-Command Guard` section
+# (HTML comments, an unclosed comment to the end of the file, and fenced code stripped first), exactly once: a sentence followed by
+# a retraction on the same line is a different line. The kill-switch sentence opens a longer line, so the only text allowed after it
+# is the continuation pinned in README_KILL_REST. They live HERE and nowhere else in the suite: rewriting a sentence in the README is
+# a one-edit change to the matching variable.
 README_SENT_NONCOVERAGE='The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools, `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.'
 README_SENT_HOSTED="Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt; this guard does not add one."
 README_SENT_KILL='`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
+README_KILL_REST=' Set it in your own shell before you start the session; the'
 # Loud first line for any run that is not the full gate. NOTFULL is repeated before the summary.
 NOTFULL=""
 if [[ -n "$ROWSEL" ]]; then
@@ -1045,11 +1048,11 @@ echo "== the plugin README states the scope and the hosted gap (CPO round 1, C1/
 # Read from the real tree (REPO_ROOT), and skipped in reduced mode: the mutation suite's copy holds no README.
 # Exact-sentence anchors with an exact count of 1; never a negated grep.
 PLUGIN_README="$REPO_ROOT/plugins/soleur/README.md"
-# readme_section: the `## Destructive-Command Guard` section of the plugin README with HTML comments (single and multi-line) and
-# fenced code removed, so neither can hold a sentence the rows then count.
+# readme_section: the `## Destructive-Command Guard` section of the plugin README with HTML comments (single and multi-line, and an
+# unclosed `<!--`, which a renderer hides to the end of the file) and fenced code removed, so none of them can hold a sentence the rows count.
 readme_section() {
   [[ -f "$PLUGIN_README" ]] || return 0
-  "$PERL_BIN" -0777 -ne 'my $t = $_; $t =~ s/<!--.*?-->//gs; my ($o, $in, $fence) = ("", 0, 0);
+  "$PERL_BIN" -0777 -ne 'my $t = $_; $t =~ s/<!--.*?-->//gs; $t =~ s/<!--.*\z//s; my ($o, $in, $fence) = ("", 0, 0);
     for my $l (split /\n/, $t) {
       if ($l =~ /^\s*(?:```|~~~)/) { $fence = !$fence; next }
       next if $fence;
@@ -1058,14 +1061,15 @@ readme_section() {
     }
     print $o;' "$PLUGIN_README"
 }
-# _readme_count <sentence>: the number of section lines that START with the sentence (a negating prefix or a mid-line mention does not count).
-_readme_count() { readme_section | S="$1" awk 'index($0, ENVIRON["S"]) == 1 { c++ } END { print c + 0 }'; }
-_readme_row() { # <label> <literal sentence>
+# _readme_count <sentence> [rest]: the number of section lines that ARE the sentence, or the sentence followed by exactly <rest>. A
+# negating prefix, a mid-line mention, or text after the sentence (a retraction) does not count.
+_readme_count() { readme_section | S="$1" R="${2:-}" awk 'BEGIN { s = ENVIRON["S"]; r = ENVIRON["R"] } $0 == s || (r != "" && $0 == s r) { c++ } END { print c + 0 }'; }
+_readme_row() { # <label> <literal sentence> [text allowed after the sentence on its line]
   want_row "$1" || return 0
   local n sec
-  n="$(_readme_count "$2")"; sec="$(readme_section | grep -c . || true)"
+  n="$(_readme_count "$2" "${3:-}")"; sec="$(readme_section | grep -c . || true)"
   if [[ "$n" == 1 && "$sec" -ge 5 ]]; then _x=ok; else _x=bad; fi
-  chk "$1" "$_x" "expected exactly one line STARTING with the sentence in the '## Destructive-Command Guard' section of $PLUGIN_README (found $n; section has $sec non-blank lines)"
+  chk "$1" "$_x" "expected exactly one line in the '## Destructive-Command Guard' section of $PLUGIN_README that is the sentence${3:+ (followed only by the pinned continuation)} (found $n; section has $sec non-blank lines)"
 }
 # _readme_row self-test: fixture READMEs (a section with the sentence once; with none; twice; hidden in a comment; inside a fence)
 # drive the row's own verdict, so a row that reads "ok" whatever the README holds is stopped before the real README is judged.
@@ -1075,9 +1079,9 @@ mkdir -p "$WORK/selftest" || harness_die "selftest mkdir"
 _st_rm_fixture() { # <name> <payload printed inside the section>
   printf '# Plugin\n\n## Destructive-Command Guard\n\nfiller one\nfiller two\nfiller three\nfiller four\n\n%s\n\n## Next section\n\nmore\n' "$2" > "$WORK/selftest/readme-$1.md"
 }
-_st_rm_case() { # <ok|bad> <fixture name> <sentence> <what>
+_st_rm_case() { # <ok|bad> <fixture name> <sentence> <what> [allowed continuation]
   local p0="$PASS_COUNT" f0="$FAIL_COUNT" saved="$PLUGIN_README"
-  PLUGIN_README="$WORK/selftest/readme-$2.md"; { _readme_row "self-test: _readme_row" "$3"; } >/dev/null 2>&1; PLUGIN_README="$saved"
+  PLUGIN_README="$WORK/selftest/readme-$2.md"; { _readme_row "self-test: _readme_row" "$3" "${5:-}"; } >/dev/null 2>&1; PLUGIN_README="$saved"
   if [[ "$1" == ok ]]; then [[ "$PASS_COUNT" -eq $((p0 + 1)) && "$FAIL_COUNT" -eq "$f0" ]] || _st_fatal "_readme_row failed $4"
   else [[ "$PASS_COUNT" -eq "$p0" && "$FAIL_COUNT" -eq $((f0 + 1)) ]] || _st_fatal "_readme_row passed $4"; fi
 }
@@ -1086,15 +1090,26 @@ _st_rm_fixture none 'A sentence that is not the one the row requires.'
 _st_rm_fixture twice "$README_SENT_NONCOVERAGE"$'\n\n'"$README_SENT_NONCOVERAGE"
 _st_rm_fixture comment "<!-- $README_SENT_NONCOVERAGE -->"
 _st_rm_fixture fence $'```\n'"$README_SENT_NONCOVERAGE"$'\n```'
+_st_rm_fixture retract "$README_SENT_NONCOVERAGE (This is no longer true: the guard covers everything.)"
+_st_rm_fixture openc $'<!-- a note that is never closed\n\n'"$README_SENT_NONCOVERAGE"
+_st_rm_fixture kill "$README_SENT_KILL$README_KILL_REST"$'\nwrapped continuation of the paragraph'
+_st_rm_fixture killretract "$README_SENT_KILL Except it does not.$README_KILL_REST"
+_st_rm_fixture killbare "$README_SENT_KILL"
+_st_rm_fixture killmid "Note: $README_SENT_KILL$README_KILL_REST"
 _st_rm_case ok one "$README_SENT_NONCOVERAGE" "a README that states the sentence once"
 _st_rm_case bad none "$README_SENT_NONCOVERAGE" "a README with no matching sentence"
 _st_rm_case bad twice "$README_SENT_NONCOVERAGE" "a README that states the sentence twice"
 _st_rm_case bad comment "$README_SENT_NONCOVERAGE" "a README whose only copy of the sentence is inside an HTML comment"
 _st_rm_case bad fence "$README_SENT_NONCOVERAGE" "a README whose only copy of the sentence is inside a code fence"
+_st_rm_case bad retract "$README_SENT_NONCOVERAGE" "a README whose sentence is followed on its line by a retraction"
+_st_rm_case bad openc "$README_SENT_NONCOVERAGE" "a README whose only copy of the sentence sits under an unclosed HTML comment (hidden to the end of the file)"
+_st_rm_case ok kill "$README_SENT_KILL" "a kill-switch line that carries exactly the pinned continuation" "$README_KILL_REST"
+_st_rm_case bad killretract "$README_SENT_KILL" "a kill-switch line with a retraction after the sentence" "$README_KILL_REST"
+_st_rm_case bad killmid "$README_SENT_KILL" "a kill-switch sentence that does not start its line" "$README_KILL_REST"
 _st_load
 _readme_row "README: the non-coverage sentence appears exactly once" "$README_SENT_NONCOVERAGE"
 _readme_row "README: the hosted-gap line appears exactly once" "$README_SENT_HOSTED"
-_readme_row "README: the kill switch is documented exactly once as an assignment" "$README_SENT_KILL"
+_readme_row "README: the kill switch is documented exactly once as an assignment" "$README_SENT_KILL" "$README_KILL_REST"
 
 echo "== the lexer contract the hook relies on (records, once each) =="
 lex_dump() { printf '%s' "$1" | "$PERL_BIN" "$LEXER" 2>/dev/null | "$PY_BIN" -I -S "$WORK/oracle.py" lex 2>/dev/null; }
