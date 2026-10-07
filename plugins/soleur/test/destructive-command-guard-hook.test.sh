@@ -1367,6 +1367,8 @@ X @@ state: a bare cd after -- is data, not a cd to home @@ none @@ - @@ ls -- c
 L @@ state: cd -- .. from a child of home reaches home, then rm -rf * @@ deny @@ @HOME@/proj @@ cd -- .. && rm -rf *
 L @@ state: cd -- "$X" is an unresolved cd, then rm -rf * @@ ask @@ - @@ cd -- "$UNKNOWN_DIR" && rm -rf *
 L @@ state: pushd -- "$X" is an unresolved pushd, then rm -rf out @@ ask @@ - @@ pushd -- "$UNKNOWN_DIR" && rm -rf out
+L @@ state: builtin cd ~ then rm -rf ./* (a literal row: the executed-row lint refuses the word builtin) @@ deny @@ - @@ builtin cd ~ && rm -rf ./*
+X @@ state: command cd ~ then rm -rf ./* @@ deny @@ - @@ command cd ~ && rm -rf ./*
 # ---- wrappers (D1's table: sudo doas env command nohup time timeout nice; literal rows where the oracle's own table has no such member)
 X @@ wrapper: time -p rm -rf ~ (the lexer drops the reserved word and leaves -p, which is a pseudo-wrapper) @@ deny @@ - @@ time -p rm -rf ~
 X @@ wrapper: time -p terraform destroy @@ ask @@ - @@ time -p terraform destroy
@@ -1406,6 +1408,32 @@ L @@ wrapper: env -C /tmp rm -rf ~ @@ deny @@ - @@ env -C /tmp rm -rf ~
 L @@ wrapper: sudo -g wheel rm -rf ~ @@ deny @@ - @@ sudo -g wheel rm -rf ~
 L @@ wrapper: sudo --user root rm -rf ~ @@ deny @@ - @@ sudo --user root rm -rf ~
 L @@ wrapper: sudo --user=root rm -rf ~ @@ deny @@ - @@ sudo --user=root rm -rf ~
+# ---- every value-taking sudo short option shifts one word (-u and -g are rowed above)
+L @@ wrapper: sudo -h host rm -rf ~ (-h takes a value) @@ deny @@ - @@ sudo -h host rm -rf ~
+L @@ wrapper: sudo -p prompt rm -rf ~ (-p takes a value) @@ deny @@ - @@ sudo -p prompt rm -rf ~
+L @@ wrapper: sudo -C 3 rm -rf ~ (-C takes a value) @@ deny @@ - @@ sudo -C 3 rm -rf ~
+L @@ wrapper: sudo -r role rm -rf ~ (-r takes a value) @@ deny @@ - @@ sudo -r role rm -rf ~
+L @@ wrapper: sudo -t type rm -rf ~ (-t takes a value) @@ deny @@ - @@ sudo -t type rm -rf ~
+L @@ wrapper: sudo -T 5 rm -rf ~ (-T takes a value) @@ deny @@ - @@ sudo -T 5 rm -rf ~
+L @@ wrapper: sudo -U user rm -rf ~ (-U takes a value) @@ deny @@ - @@ sudo -U user rm -rf ~
+L @@ wrapper: sudo -D /tmp rm -rf ~ (-D takes a value) @@ deny @@ - @@ sudo -D /tmp rm -rf ~
+L @@ wrapper: sudo -R /r rm -rf ~ (-R takes a value) @@ deny @@ - @@ sudo -R /r rm -rf ~
+# ---- and every value-taking sudo long option, value in the next word
+L @@ wrapper: sudo --group w rm -rf ~ (--group takes a value) @@ deny @@ - @@ sudo --group w rm -rf ~
+L @@ wrapper: sudo --host h rm -rf ~ (--host takes a value) @@ deny @@ - @@ sudo --host h rm -rf ~
+L @@ wrapper: sudo --prompt p rm -rf ~ (--prompt takes a value) @@ deny @@ - @@ sudo --prompt p rm -rf ~
+L @@ wrapper: sudo --chdir /tmp rm -rf ~ (--chdir takes a value) @@ deny @@ - @@ sudo --chdir /tmp rm -rf ~
+L @@ wrapper: sudo --chroot /r rm -rf ~ (--chroot takes a value) @@ deny @@ - @@ sudo --chroot /r rm -rf ~
+L @@ wrapper: sudo --role r rm -rf ~ (--role takes a value) @@ deny @@ - @@ sudo --role r rm -rf ~
+L @@ wrapper: sudo --type t rm -rf ~ (--type takes a value) @@ deny @@ - @@ sudo --type t rm -rf ~
+L @@ wrapper: sudo --close-from 5 rm -rf ~ (--close-from takes a value) @@ deny @@ - @@ sudo --close-from 5 rm -rf ~
+L @@ wrapper: sudo --command-timeout 5 rm -rf ~ (--command-timeout takes a value) @@ deny @@ - @@ sudo --command-timeout 5 rm -rf ~
+L @@ wrapper: sudo --other-user u rm -rf ~ (--other-user takes a value) @@ deny @@ - @@ sudo --other-user u rm -rf ~
+L @@ wrapper: env -a x rm -rf ~ (-a takes a value) @@ deny @@ - @@ env -a x rm -rf ~
+L @@ wrapper: env --argv0 x rm -rf ~ (--argv0 takes a value) @@ deny @@ - @@ env --argv0 x rm -rf ~
+L @@ wrapper: timeout --kill-after 5 10 rm -rf ~ (--kill-after takes a value) @@ deny @@ - @@ timeout --kill-after 5 10 rm -rf ~
+L @@ wrapper: sudo time --format %e rm -rf ~ (time's long value option is skipped) @@ deny @@ - @@ sudo time --format %e rm -rf ~
+L @@ wrapper: sudo time --output out.txt rm -rf ~ (time's other long value option is skipped) @@ deny @@ - @@ sudo time --output out.txt rm -rf ~
 L @@ wrapper: doas -C /etc/doas.conf rm -rf ~ @@ deny @@ - @@ doas -C /etc/doas.conf rm -rf ~
 L @@ wrapper: timeout --signal KILL 5 rm -rf ~ @@ deny @@ - @@ timeout --signal KILL 5 rm -rf ~
 L @@ wrapper: timeout -k 5 10 rm -rf ~ @@ deny @@ - @@ timeout -k 5 10 rm -rf ~
@@ -1524,6 +1552,7 @@ X @@ NOT DECIDED: xargs rm -rf ~ (xargs is not a wrapper) @@ none @@ - @@ xargs 
 X @@ lexer: octal escape in the command word ($'\162m') @@ deny @@ - @@ $'\162m' -rf ~
 X @@ lexer: octal escape in the subcommand word @@ ask @@ - @@ terraform $'\144estroy'
 X @@ lexer: \u escape in the command word @@ deny @@ - @@ $'\u0072m' -rf ~
+X @@ lexer: \U escape (eight hex digits) in the command word @@ deny @@ - @@ $'\U00000072m' -rf ~
 X @@ lexer: \u escape in the subcommand word @@ ask @@ - @@ terraform $'\u0064estroy'
 X @@ lexer: $'rm' of a plain name @@ deny @@ - @@ $'rm' -rf ~
 X @@ lexer: a locale-quoted command word ($"rm") @@ deny @@ - @@ $"rm" -rf ~
@@ -1946,6 +1975,9 @@ env_row "prefilter: a \u escape after the command (destroy behind an escaped dup
 env_row "prefilter: a \u escape elsewhere in a benign envelope is decided by jq and allowed" none '{"tool_name":"Bash","tool_input":{"command":"ls -la"},"cwd":"/var/tmp/caf\u00e9"}'
 env_row "prefilter: a destroy hidden behind a decoy command key is not skipped" ask '{"tool_name":"Bash","tool_input":{"y":{"command":"ls"},"command":"terraform destroy"}}'
 env_row "prefilter: the text command as a value is not a second key (still decided by jq, no decision for ls)" none '{"tool_name":"Bash","description":"command","tool_input":{"command":"ls"}}'
+# the prefilter skips only an envelope that opens with { and ends with }: anything else is an unreadable envelope (ask), not a skip
+env_row "prefilter: text before the opening brace is an unreadable envelope (ask), not a skip" ask 'x{"tool_input":{"command":"ls"}}'
+env_row "prefilter: an envelope cut off before its closing brace is an unreadable envelope (ask), not a skip" ask '{"tool_name":"Bash","tool_input":{"command":"ls"'
 env_row "prefilter: one command key and no keyword is skipped without jq or perl (no notice on stderr)" none '{"tool_name":"Bash","tool_input":{"command":"ls -la"},"cwd":"/var/tmp"}' "PATH=$WORK/farm-none"
 if [[ -z "$HOOK_ERR" ]]; then _x=ok; else _x=bad; fi
 if want_row_quiet "prefilter: one command key and no keyword is skipped without jq or perl (no notice on stderr)"; then chk "prefilter: that skip printed nothing on stderr (no spawn, no probe)" "$_x" "stderr: ${HOOK_ERR:0:120}"; fi
@@ -2014,6 +2046,13 @@ if grep -qi 'jq' <<<"$HOOK_ERR"; then _x=ok; else _x=bad; fi
 if want_row_quiet "jq-less: rm -f jq; rm -rf ~ asks (ADR-165: never an implicit allow)"; then chk "jq-less: stderr carries a notice naming jq" "$_x" "stderr: ${HOOK_ERR:0:200}"; fi
 env_row "jq-less: terraform destroy asks" ask "$(mkjson 'terraform destroy' "$TREE")" "$FJ"
 env_row "jq-less: a destroy after a JSON-escaped newline asks" ask "$_nl" "$FJ"
+# the raw scan reads the JSON escapes of a blank as a blank: a tab, a carriage return, \u0009 and   each separate the words of rm -rf ~
+env_row "jq-less: rm, tab, -rf, tab, ~ asks (a JSON-escaped tab is a blank)" ask "$(mkjson $'rm\t-rf\t~' "$TREE")" "$FJ"
+env_row "jq-less: rm, carriage return, -rf, carriage return, ~ asks (a JSON-escaped CR is a blank)" ask "$(mkjson $'rm\r-rf\r~' "$TREE")" "$FJ"
+env_row "jq-less: rm\u0009-rf\u0009~ asks (a \u0009 escape is a blank)" ask '{"tool_name":"Bash","tool_input":{"command":"rm\u0009-rf\u0009~"},"cwd":"/var/tmp"}' "$FJ"
+# the escape is spelled through a variable so no tool layer between the author and this file can decode it into a blank
+_BS='\'
+env_row "jq-less: rm\u0020-rf\u0020~ asks (a \u0020 escape is a blank)" ask "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm${_BS}u0020-rf${_BS}u0020~\"},\"cwd\":\"/var/tmp\"}" "$FJ"
 env_row "jq-less: a force push to main asks" ask "$_gp" "$FJ"
 env_row "jq-less: ls exits 0 with no decision" none "$_ls" "$FJ"
 env_row "jq-less: a push without force is not decided" none "$_gok" "$FJ"
@@ -2233,7 +2272,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=958
+MIN_CASES=991
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
