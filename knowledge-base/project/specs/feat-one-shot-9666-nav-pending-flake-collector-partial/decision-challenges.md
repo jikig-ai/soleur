@@ -17,3 +17,8 @@ Headless plan-review (one-shot) persisted these Taste items. They are not auto-a
 
 - CTO devex review: two hold helpers duplicate the prefetch-abort and non-RSC fallback rules; migrate the back-nav test and delete `delayRoute`.
 - Plan: leaves `delayRoute` for the one test that still uses it to avoid widening the flake fix beyond the two failing tests; unify later if a second flake touches it.
+
+## T4 - UI-surface glob match on `nav-pending-island.tsx` treated as exempt (Taste)
+
+- Rule: the shared UI-surface glob (`components/**/*.tsx`) forces the Product/UX gate to BLOCKING and requires a committed `.pen` wireframe.
+- Judgment: the one component edit is an effect guard with no visible change (no markup, copy, layout or interaction change), which `ui-surface-terms.md` § Excluded covers. The plan records the reasoning in its Domain Review and does not produce a wireframe. Operator can overrule at review.
