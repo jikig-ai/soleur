@@ -365,14 +365,15 @@ ask_envelope() { # <cause text>
 
 # ---- the narrow raw/decoded scan used by the degraded paths (D6) -----------------------------------
 # One anchored pattern per case, each tested on ONE segment (a list is split on ; & | and newlines first),
-# never independent greps ANDed over the whole text.
+# never independent greps ANDed over the whole text. A blank between two words of terraform, tofu or git is a RUN of blanks
+# (`[[:space:]]+`): `terraform  destroy` is `terraform destroy` to a shell; the scan already reads a JSON tab as a blank.
 SC_B='(^|[^[:alnum:]_.-])'
 RE_RM_WORD="${SC_B}rm[[:space:]]"
 RE_RM_REC='[[:space:]](-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)([^[:alnum:]_-]|$)'
 RE_RM_TGT='(^|[^[:alnum:]_./~$-])((/+\*?)|((~|\$HOME|\$\{HOME\})(/+\*?)?))([^[:alnum:]_./~$*-]|$)'
-RE_TF_DESTROY="${SC_B}(terraform|tofu)[[:space:]]([^[:space:]].*[[:space:]])?destroy([^[:alnum:]_.-]|\$)"
-RE_TF_APPLY="${SC_B}(terraform|tofu)[[:space:]]([^[:space:]].*[[:space:]])?apply[[:space:]]([^[:space:]].*[[:space:]])?-{1,2}destroy([^[:alnum:]_.-]|\$)"
-RE_GIT_PUSH="${SC_B}git[[:space:]]([^[:space:]].*[[:space:]])?push[[:space:]]([^[:space:]].*[[:space:]])?(-[a-zA-Z]*f[a-zA-Z]*|--force[^[:space:]]*|\\+[^[:space:]+])"
+RE_TF_DESTROY="${SC_B}(terraform|tofu)[[:space:]]+([^[:space:]].*[[:space:]])?destroy([^[:alnum:]_.-]|\$)"
+RE_TF_APPLY="${SC_B}(terraform|tofu)[[:space:]]+([^[:space:]].*[[:space:]])?apply[[:space:]]+([^[:space:]].*[[:space:]])?-{1,2}destroy([^[:alnum:]_.-]|\$)"
+RE_GIT_PUSH="${SC_B}git[[:space:]]+([^[:space:]].*[[:space:]])?push[[:space:]]+([^[:space:]].*[[:space:]])?(-[a-zA-Z]*f[a-zA-Z]*|--force[^[:space:]]*|\\+[^[:space:]+])"
 SCAN_SEG=""
 # scan_narrow <text>: 0 on a hit (SCAN_SEG = the matched segment), 1 on a miss, 2 when a bound tripped (SCAN_WHY): a segment
 # longer than SCAN_MAX_SEG (the patterns are not linear in a segment's length) or the clock reached DEADLINE_S.

@@ -2254,6 +2254,20 @@ env_row "jq-less: git push origin +main asks (the +refspec alternative)" ask "$(
 env_row "jq-less: rm -rf / asks (the root target alternative)" ask "$(mkjson 'rm -rf /' "$TREE")" "$FJ"
 env_row "jq-less: rm --recursive ~ asks (the long flag alternative)" ask "$(mkjson 'rm --recursive ~' "$TREE")" "$FJ"
 env_row "jq-less: rm -f ~ && echo -r is not decided (& separates the segments, so the -r belongs to echo)" none "$(mkjson 'rm -f ~ && echo -r' "$TREE")" "$FJ"
+# a run of blanks (a space run or a tab run, which the scan reads as spaces) between the words of a raw-scanned command is still the same command:
+# the three patterns that need a blank between words take a RUN of blanks
+env_row "jq-less: terraform, two blanks, destroy asks (a run of blanks between words)" ask "$(mkjson 'terraform  destroy' "$TREE")" "$FJ"
+env_row "jq-less: terraform, three blanks, destroy asks" ask "$(mkjson 'terraform   destroy' "$TREE")" "$FJ"
+env_row "jq-less: tofu, three blanks, destroy asks" ask "$(mkjson 'tofu   destroy' "$TREE")" "$FJ"
+env_row "jq-less: terraform, tab, tab, destroy asks (a tab run is a blank run)" ask "$(mkjson $'terraform\t\tdestroy' "$TREE")" "$FJ"
+env_row "jq-less: git push with two blanks around every word asks (force push to main)" ask "$(mkjson 'git  push  --force origin main' "$TREE")" "$FJ"
+env_row "jq-less: terraform -chdir=x with runs of blanks, then destroy asks" ask "$(mkjson 'terraform  -chdir=x   destroy' "$TREE")" "$FJ"
+env_row "jq-less: terraform apply -destroy with runs of blanks asks" ask "$(mkjson 'terraform  apply  -destroy' "$TREE")" "$FJ"
+env_row "jq-less: terraform, two blanks, plan is not decided" none "$(mkjson 'terraform  plan' "$TREE")" "$FJ"
+env_row "jq-less: git, two blanks, push with no force is not decided" none "$(mkjson 'git  push  origin feature' "$TREE")" "$FJ"
+env_row "perl-less: terraform, two blanks, destroy asks (a run of blanks between words)" ask "$(mkjson 'terraform  destroy' "$TREE")" "$FP"
+env_row "perl-less: git push with two blanks around every word asks (force push to main)" ask "$(mkjson 'git  push  --force origin main' "$TREE")" "$FP"
+env_row "perl-less: terraform, two blanks, plan is not decided" none "$(mkjson 'terraform  plan' "$TREE")" "$FP"
 
 # The degraded scans are bounded too: a segment is capped at 64 KiB and the clock is read per segment (ask bound), the envelope is
 # capped at 256 KiB before anything else runs, and the quoted segment is redacted only as far as the 200 characters that are shown.
@@ -2265,6 +2279,14 @@ bound_row "degraded bound: perl-less, a 96 KB first segment then terraform destr
 bound_row "degraded bound: perl-less, a 60 KB segment that hits asks in under 5 s (the quoted segment is redacted only as far as it is shown)" ask - "$_cmd60k_hit" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
 bound_row "degraded bound: an 800 KB benign command asks (bound) in under 5 s, before the prefilter reads it" ask - "$_cmd800k" "^${ASK_LEAD_RX}bound: .*too large to check in full"
 bound_row "degraded bound: an 800 KB command asks (bound) with no jq on the PATH as well" ask - "$_cmd800k" "^${ASK_LEAD_RX}bound: " "$FJ"
+# a long run of blanks is not a ReDoS: a 100 KB run is over the 64 KiB segment cap (a bound ask before any pattern runs), a 60 KB run is under it and is scanned
+# in linear time, and the segment after it is still read
+_t=""; for _i in $(seq 1 100000); do _t+=" "; done; _cmd100kblank="terraform${_t}x"
+_t=""; for _i in $(seq 1 60000); do _t+=" "; done; _cmd60kblank="terraform${_t}x; terraform destroy"
+bound_row "degraded bound: jq-less, a 100 KB run of blanks after terraform asks (bound) in under 5 s" ask - "$_cmd100kblank" "^${ASK_LEAD_RX}bound: " "$FJ"
+bound_row "degraded bound: perl-less, a 100 KB run of blanks after terraform asks (bound) in under 5 s" ask - "$_cmd100kblank" "^${ASK_LEAD_RX}bound: " "$FP"
+bound_row "degraded bound: jq-less, a 60 KB run of blanks is scanned in time and the destroy after it is still found, in under 5 s" ask - "$_cmd60kblank" "^${ASK_LEAD_RX}guard-degraded-jq-missing: " "$FJ"
+bound_row "degraded bound: perl-less, a 60 KB run of blanks is scanned in time and the destroy after it is still found, in under 5 s" ask - "$_cmd60kblank" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
 bound_row "degraded bound: a 200 KB benign command (under the envelope cap) is not an ask, in under 5 s" none - "$_cmd200k"
 # the clock is read per segment: a private copy with a 1 s deadline scans 30000 short segments and stops with a bound ask
 mk_hook_tree degraded-clock; HE_OK=ok
@@ -2466,7 +2488,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1002
+MIN_CASES=1018
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
