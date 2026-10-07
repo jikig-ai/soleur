@@ -166,7 +166,7 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      addendum: GitHub enqueues an armed PR whose head is behind `main` on its own under the strict
      policy, so no explicit enqueue and no ruleset change), reports the enqueue once
      (`[ship.phase7.queued]`, at the first 5th-tick read that finds the PR queued; that reading also
-     restarts the idle count, so a PR the queue holds never expires), and is bounded: more than 5
+     restarts the idle count, so while each 5th-tick read answers queued the PR does not expire), and is bounded: more than 5
      CONSECUTIVE wait ticks (the 6th) with no pending REQUIRED check latches back to today's sync for
      the rest of that poll (`[ship.phase7.queue_wait_expired]`), and that sync's `--step` still skips
      a queued PR through its own queue gate and stops on an unreadable queue read; `MAX_POLL_MIN` still

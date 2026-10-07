@@ -50,7 +50,7 @@
 #
 #   Q1..Q11 (#9710) merge-queue mode: a `merge_queue` rule on main + auto-merge armed + a BEHIND reading
 #       the fence itself reported = no sync, one queue_wait line, expiry after more than 5 CONSECUTIVE idle ticks (no
-#       pending REQUIRED check) falling back to today's sync. Rows: Q1/Q1e/Q1m wait (plain, errexit, two-member checks),
+#       pending REQUIRED check) falling back to today's sync. Rows: Q1/Q1e/Q1m wait (plain, errexit, three-member checks),
 #       Q1n/Q2/Q2e/Q3/Q3b/Q4 queue absent / no required checks / rules error / disarmed = today's behaviour,
 #       Q6/Q6b/Q6c/Q6d/Q6e/Q6f/Q6g/Q6h expiry (grace boundary, latch + budget, consecutive reset, pending-then-settled,
 #       errexit, advisory pending, idle-pending-idle, armed flap), Q7 DIRTY-derived BEHIND still syncs, Q8 dequeue while
@@ -1656,7 +1656,7 @@ fi
 #                                      MOCK_ARMED_FALSE_AT=N reads disarmed on tick N only)
 #   pr checks  $MOCK_CHECKS   pending | pending_optional | mixed | green | none | required_fail | error
 #                                      (the handed --jq runs through real jq, because the same arm also feeds the
-#                                      required-check failure scan; `mixed` and `pending_optional` carry TWO members
+#                                      required-check failure scan; `mixed` (three members) and `pending_optional` (two) carry several members
 #                                      so a first-element-only reader or a count over non-required checks is visible;
 #                                      MOCK_PENDING_FROM=N / MOCK_PENDING_UNTIL=M bound the ticks on which `pending` is pending)
 # `gh pr view` state: MOCK_MERGED_AT=N merges from tick N; MOCK_BLOCKED_AT=N reads BLOCKED on tick N only;

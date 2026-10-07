@@ -85,7 +85,7 @@ describe("pr-merge-poll BEHIND contract", () => {
   });
 
   test("behindSyncInstructions agrees with queue mode: a queue_wait heartbeat on BEHIND is not a reason to sync (#9710)", () => {
-    // Every harness gets the exception: the default case is appended for codex, devin, cursor and unknown, and without it the
+    // Every harness gets the exception: the default case is appended for codex, devin and unknown, and without it the
     // amended FORBIDDEN/resolve lines sit above an unconditional "BEHIND -> merge origin/main and push".
     for (const h of ["grok", "claude", "codex", "devin", "cursor", "unknown"] as const) {
       const md = behindSyncInstructions(h);
