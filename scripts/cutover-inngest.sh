@@ -2034,7 +2034,8 @@ case "$OP" in
     echo "::notice::2.-1 pool pre-check CLEAN — inngest_conns=$INNGEST_CONNS ≤ readiness ceiling $READINESS_CEILING (burst headroom OK). breakdown: ${POOL_BREAKDOWN}"
 
     # ---- 2.0 empty-registry pre-flight (P1-6). GET the web-host registry probe
-    # (HMAC over empty body); it forwards the { functions { id } } query to the
+    # (HMAC over empty body); it forwards the
+    # { functions { id slug triggers { type value } } } query (#6940) to the
     # dedicated host GQL over the private net. registry_empty MUST be true — a
     # non-empty dark registry means a second scheduler would register + double-fire
     # against prod Postgres, the exact failure this cutover exists to prevent.

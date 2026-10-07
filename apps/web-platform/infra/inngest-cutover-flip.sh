@@ -272,7 +272,7 @@ CUTOVER_VERIFY_INTERVAL_S="${CUTOVER_VERIFY_INTERVAL_S:-3}"
 # not exist. Sourcing a file that is not there would make the `done` gate fail-closed on an
 # asset-delivery problem — i.e. wedge a cutover for a reason unrelated to whether the host serves.
 # shellcheck disable=SC2016  # GraphQL query, not a shell expansion
-readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers { type value } } }'
 
 # --- curl: fixture seam CUTOVER_CURL_CMD else the real binary. Seamed at the COMMAND, not at
 # the verdict, so the bounded-window logic below stays under test rather than stubbed away.

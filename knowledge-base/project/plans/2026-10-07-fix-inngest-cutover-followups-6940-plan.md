@@ -290,6 +290,14 @@ Engineering implications.
    - Emit `functions: [{id, slug, triggers: [{type, value}]}]` alongside the existing three
      fields; project with `.triggers[]?` / `// []` tolerance so a registry field absence
      degrades to an empty list, not a crash.
+   - DRIFT-PIN CONSEQUENCE (found in CI): the constant is pinned byte-identical across
+     `inngest-cutover-flip.sh` (#7228) and `inngest-bootstrap.sh` (#8015) by
+     `inngest-cutover-flip.test.sh`'s three-way guard — widen both to the same literal.
+     The two baked consumers ignore `slug`/`triggers`. This drifts GuardA
+     (baked-carriers vs `vinngest-$PIN`) until the next bake+pin cycle — the same
+     advisory-red window `vinngest-v1.1.45`/PR #9716 is already inside (main is
+     already 237/240 there). The fourth, UNPINNED copy (`inngest-luks-cutover.sh`'s
+     inline serving check, needs only `id`) stays as-is.
 
 ### Phase 2 — zero-run discovery in `op=verify` (TDD)
 
