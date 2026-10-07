@@ -14,7 +14,7 @@ brand_survival_threshold: aggregate pattern
 
 **Proposed, 2026-10-07 (#9721).** The file `status:` moves `proposed` to `adopting` when the CTO
 approves this ADR in a review comment on a PR that edits the line, and no stage PR that changes CI
-behaviour (S2, S3, S4) may merge while it reads `proposed`. On that edit the guardrail decisions (1, 2,
+behaviour (S2, S3, S4; S1 exempt below) may merge while it reads `proposed`. On that edit the guardrail decisions (1, 2,
 3, 6, 7 and 8) become `adopting`; Decisions 4 and 5 stay the proposed shape of stages 3 and 4. It moves
 `adopting` to `accepted` when S5 closes with a post-merge census for S2 and S3, or with each closed by
 its entry gate or stop rule. Every stage that changes CI behaviour (S2, S3, S4) takes effect only when
@@ -123,7 +123,8 @@ S-A to S-C and the chosen Option C corresponds to S-D.
    `success` manufactures a push verdict from another run's value, against ADR-217's "the verdict never
    crosses as a value". Keying the deploy `workflow_run` arm on the `merge_group` run for that head SHA
    and dropping the push run (no run then asserts a success it did not earn) changes the trigger that
-   ADR-217 Decision 2 establishes. S2's plan compares the two before choosing.
+   ADR-217 Decision 2 establishes. S2's plan compares the two before choosing; S2's stop rule: stop and close the stage if the
+   keyed-attestation design cannot keep the deploy gate's verdict per SHA.
 
    **Named residual, owner S4's plan with the repository admins: the admin-merge route.** It is the
    only route that skips the queue (`gh pr merge --admin` or "merge without waiting" by an
@@ -131,11 +132,14 @@ S-A to S-C and the chosen Option C corresponds to S-D.
    PR is still required and direct pushes are closed). `admin-merge-ready.sh` is an agent-side
    convention, not a hook or a ruleset rule; any admin token merges without it. The full-battery
    marker (S4 entry gate, Decision 5) is a completed `CI` run on the head SHA that ran the full
-   battery and concluded `success`, produced by an on-demand full-battery run that S4 adds (a
-   `workflow_dispatch` input, or a label-triggered run) and by any full-mode PR run, so after a
-   rollback (variable unset, full PR runs) the marker is still emitted and the admin route does not
-   stall. `admin-merge-ready.sh` reads it from the runs API on head SHA, event and run conclusion, not
-   by check name, because any `checks: write` token can post a check run under any name (KNOWN LIMIT
+   battery and concluded `success`. A full-mode and an affected-mode PR run share head SHA, event and conclusion, so
+   S4 adds a `run-name` suffix `[full]` to `ci.yml` that only full-battery runs carry (readable as
+   `display_title`); affected-mode PR runs never do. The producer exists: a `workflow_dispatch` of
+   `ci.yml` (ADR-262's force-full lever) and any full-mode PR run, so after a rollback (variable unset,
+   full PR runs) the marker is still emitted and the admin route does not stall. S4 teaches
+   `admin-merge-ready.sh` to read it from the runs API on head SHA, event, display_title and run
+   conclusion (a completed run with conclusion `success` whose display_title ends in `[full]`, or event
+   `workflow_dispatch` with the full input), not by check name, because any `checks: write` token can post a check run under any name (KNOWN LIMIT
    (b) in the script). The marker stops accidents by agents, not an adversary. The residual is reduced,
    not closed: a human or other-token `--admin` merge, and a bypass actor editing the ruleset, still
    land an affected-only-green PR. S4 therefore also needs an admin-side control decided with the
@@ -181,15 +185,15 @@ S-A to S-C and the chosen Option C corresponds to S-D.
    - **Option R is the decision:** the draft `test` aggregator concludes red ("full battery owed at
      ready"), so a PR cannot be enqueued until the ready run replaces the row and no consumer can read
      a light result as green. It fails toward stall (safe). The red row stays on the head for the whole
-     ready run (the aggregator is created only after the shards end: up to about 35 minutes, since 12
-     PR `CI` runs in the window took 14 to 37, median about 28), so for a
+     ready run (the aggregator is created only after the shards end: up to about 38 minutes, since the 12
+     successful PR `CI` runs in the window took 14 to 38, median about 28, and failed runs up to 51), so for a
      non-draft head with a red `test` and the newest `CI` `pull_request` run still in progress, the
      consumers (`monitor-pr-checks.sh`, ship Phase 7 `required_failed`, `drain-prs` triage, `gh pr
      checks` readers, `admin-merge-ready.sh --wait`) must resolve the verdict from the newest non-draft
      run at HEAD, never from the check row. A PR whose ready run is never created (wrong token,
      dropped event) or ran light because the live draft read lagged stalls with `test` red; stage 3
      adds an owner-visible signal keyed on a non-draft head whose newest `test` is draft-mode red for
-     more than N minutes (N above the 35-minute run lifetime, fixed in S3's plan), not only on a
+     more than N minutes (N above the observed maximum (about 38 min success, 51 min failed), fixed in S3's plan), not only on a
      missing ready run, because the ADR-270 stall probe watches queue entries only.
    - **Option T is REJECTED** (a success marker plus a tolerance arm). The ruleset cannot enforce a
      marker; a marker made a required context would land in `scripts/required-checks.txt`, from which the
@@ -198,8 +202,8 @@ S-A to S-C and the chosen Option C corresponds to S-D.
      `_cron-safe-commit.ts` is hard-coded and needs a manual add); and it fails open on the admin
      route.
    - **Dark-launch cost.** The `ready_for_review` entry in `types` is not gated by the variable: while
-     the variable is unset every drafted-then-readied PR gets one extra full run (about 95 to 137
-     job-minutes), so the dark phase raises demand and "variable unset" is not a full rollback. The
+     the variable is unset every drafted-then-readied PR gets up to one extra full run (about 95 to 137
+     job-minutes; the skip arm below may avoid it), so the dark phase raises demand and "variable unset" is not a full rollback. The
      ready-triggered run must NOT be gated on the kill-switch variable: a variable flipped between the
      draft push and the ready transition would skip the ready run or post a skipped or tolerated row
      newer than the red one, and a skipped required check posts green (the #8450 pattern). The only

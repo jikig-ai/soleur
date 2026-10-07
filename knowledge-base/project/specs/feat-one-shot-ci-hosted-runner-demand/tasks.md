@@ -30,5 +30,5 @@ Plan: `knowledge-base/project/plans/2026-10-07-ci-reduce-hosted-runner-demand-pl
 
 ## Phase 5: Stage 4 and 5 (#9729, #9730)
 
-- [ ] 5.1 Re-decide S4 after S2 and S3 censuses; replay evidence; the `admin-merge-ready.sh` full-battery marker (run-level, with an on-demand full run as producer), an admin-side control and trusted base-ref selection are entry gates
+- [ ] 5.1 Re-decide S4 once S2 and S3 each have a census, or are closed by their entry gate or stop rule; replay evidence; the `admin-merge-ready.sh` full-battery marker (run-level: `[full]` run-name discriminator; the on-demand `workflow_dispatch` producer exists), an admin-side control and trusted base-ref selection are entry gates
 - [ ] 5.2 Decision issue for CodeQL code scanning, Code Quality and runner supply, once S2 and S3 each have a census or are closed by their entry gate or stop rule

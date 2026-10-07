@@ -62,7 +62,7 @@ ADR-276's chosen Option C corresponds to S-D here, and its Option A spans S-A to
 4. Routing is derived from each workflow's triggers, not from a named list: a workflow may use
    self-hosted only if its `on:` is a subset of {`merge_group`, `push` limited to `main`, `schedule`,
    `workflow_dispatch`}. The boundary is the runner-group workflow restriction pinned to
-   `refs/heads/main` (condition 3), which also stops a `workflow_dispatch` run from a non-default ref;
+   `refs/heads/main` (unverified, condition 3: a pin to `refs/heads/main` would also exclude `merge_group` runs unless the `gh-readonly-queue/main/...` ref shape is accepted), which also stops a `workflow_dispatch` run from a non-default ref;
    a test that fails any self-hosted `runs-on` in a workflow with another trigger is hygiene, not the
    boundary, because a PR can edit both the workflow and the test. The test also covers
    `workflow_call` workflows (`reusable-release.yml` today), whose `runs-on` follows the caller's
@@ -73,8 +73,9 @@ ADR-276's chosen Option C corresponds to S-D here, and its Option A spans S-A to
    `board-status-sync.yml`, `follow-through-closure-guard.yml`,
    `inngest-watchdog-restart-dispatch.yml`), `issue_comment` 2 and `workflow_run` 4. Anyone on GitHub
    can fire the `issue_comment` workflows and `auto-label-security.yml` (opened or edited issues);
-   the other `issues` triggers need triage or write access and `workflow_run` follows main-branch
-   workflows. Fork PRs never route to self-hosted. The fork-PR approval policy is currently
+   an issue author can also fire `closed` and `reopened` (`follow-through-closure-guard.yml`,
+   `board-status-sync.yml`); only `labeled` and `unlabeled` need triage; `workflow_run` follows
+   main-branch workflows. Fork PRs never route to self-hosted. The fork-PR approval policy is currently
    `first_time_contributors` and must be set to `all_external_contributors`, verified through the
    API, before any routing change.
 5. A separate Hetzner project and token, no attachment to the prod private network, egress deny to
