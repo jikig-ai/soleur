@@ -4,12 +4,7 @@ Moved verbatim out of `ship/SKILL.md` Phase 5.5 to stay under the SKILL.md body 
 
 Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is already taken on `origin/main` by a DIFFERENT file. The ordinal was free when the ADR was authored at plan/brainstorm time, but a sibling PR claimed it during the pipeline. A collision cannot reach `main` through the queued auto-merge (the `--admin` hatch in Phase 7 bypasses the whole `required_status_checks` rule, which is why its step 2 exists): `adr-ordinals` is a required status check and `main` is strict-up-to-date, so a sibling's ADR arriving through a Phase 7 sync reds the PR's own `adr-ordinals` job and the poll loop's required-check-failure exit stops there (Phase 7, "ADR-ordinal collision after a sync", cites the SSOT). This gate is defense-in-depth: catching the collision at PR-ready costs one commit, while catching it in Phase 7 costs a sync plus a full CI cycle (the ~35-minute figure the settle paragraph measures), and a renumber done inside the poll loop is the one most likely to leave the plan/tasks sweep undone.
 
-**Detection.** Run the canonical sentinel from the branch root:
-
-```bash
-git fetch origin main -q
-bash scripts/check-adr-ordinals.sh
-```
+**Detection.** Run the canonical sentinel named on the Trigger line in `ship/SKILL.md` (fetch `origin/main` first, run from the branch root).
 
 `check-adr-ordinals.sh` exits 1 with `NEW ADR ordinal collision (not in pre-existing allowlist): ADR-NNN` when two files share ordinal `NNN` (it does NOT heading-check a new ADR — its layer-3 heading check is pinned to ADR-041/ADR-042 only, per the script header; ADR-210 shipped without a `## Status` heading and it passed). Exit 0 → pass silently.
 
