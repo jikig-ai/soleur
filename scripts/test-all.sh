@@ -4318,9 +4318,15 @@ _RUN_WD_POLL_S="${SOLEUR_TEST_ALL_WD_POLL_S:-1}"
 # 0 is not a valid floor — `sleep 0` busy-spins the poll into a CPU burn.
 [[ "$_RUN_WD_POLL_S" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_POLL_S >= 1 )) || _RUN_WD_POLL_S=1
 # Consecutive-failure threshold (#9686). Same parse idiom as _RUN_WD_POLL_S;
-# floor 1 preserves the pre-debounce single-poll semantics for tests.
+# floor 1 preserves the pre-debounce single-poll semantics for tests; the
+# ceiling bounds a garbage digit-string rather than letting the threshold
+# become unreachable (which would silently disarm the #8993 guarantee).
+# The 10# re-assignment matters: `10#` appears in the GUARD only, while the
+# consumer `(( _wd_fails >= _RUN_WD_FAILS_N ))` re-parses the raw string —
+# `08`/`09` would fail as octal there and turn `(( ))` permanently false.
 _RUN_WD_FAILS_N="${SOLEUR_TEST_ALL_WD_FAILS_N:-3}"
-[[ "$_RUN_WD_FAILS_N" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_FAILS_N >= 1 )) || _RUN_WD_FAILS_N=3
+[[ "$_RUN_WD_FAILS_N" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_FAILS_N >= 1 && 10#$_RUN_WD_FAILS_N <= 3600 )) || _RUN_WD_FAILS_N=3
+_RUN_WD_FAILS_N=$(( 10#${_RUN_WD_FAILS_N} ))
 # Opt-out, stated rather than hidden: SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 skips the
 # arm for a caller that deliberately backgrounds this runner (a supervising
 # wrapper that must outlive the launcher). Silence here would make "watchdog
@@ -4330,14 +4336,31 @@ if [[ "${SOLEUR_TEST_ALL_ALLOW_ORPHAN:-}" == "1" ]]; then
 elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
   _RUN_WD_TOP_PID=$$
   _RUN_WD_PARENT_PID=$PPID
-  _RUN_WD_PARENT_LSTART="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
-  _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+  _RUN_WD_PARENT_LSTART="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
+  _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
   (
     _wd_sleep=""
-    # Nested bash's $PPID is THIS subshell's pid — the portable spelling
-    # (bash 3.2 lacks $BASHPID; the enumerate watchdog above uses the same
-    # idiom). Needed to exclude the watchdog itself from the child sweep.
-    _wd_self="$(bash -c 'echo "$PPID"')"
+    # Own-pid discovery via a spawned child's PPID: `sleep`'s parent is
+    # unambiguously THIS subshell on every bash version — the nested-bash
+    # `echo $PPID` cmdsub idiom is unreliable here because bash may fork
+    # rather than exec the inner command, reporting the cmdsub's own pid.
+    # A wrong _wd_self is worse than none: it lets the watchdog's own pid
+    # stay in the reap list, where the first `kill -TERM` self-terminates
+    # the watchdog mid-reap (#9686).
+    # The probe child must outlive the ps read: a `sleep 0.01` races the
+    # fork+exec of ps and loses on a loaded box, and a failing ps under
+    # pipefail makes this cmdsub nonzero — which is why `|| true` is
+    # load-bearing: an unguarded read aborts this subshell under set -e
+    # and the watchdog never polls at all (#9686).
+    sleep 0.5 & _wd_probe=$!
+    # ps column output is padded — ` 691177` breaks BOTH consumers: the
+    # _wd_descendants `a == excl` ancestor break (string compare) and the
+    # grep -vxF whole-line filters. Strip all whitespace so _wd_self is a
+    # bare pid (#9686).
+    _wd_self="$(ps -o ppid= -p "$_wd_probe" 2>/dev/null | tr -d '[:space:]' || true)"
+    # Fallback if the probe child exited before ps could read it: the
+    # nested-bash PPID idiom (same one the enumerate watchdog uses).
+    [[ -n "$_wd_self" ]] || _wd_self="$(bash -c 'echo "$PPID"' || true)"
     trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
     # SIGPIPE must not kill the watchdog mid-fire: the run's stderr reader is
     # often already gone on exactly the path that needs the kill.
@@ -4349,7 +4372,14 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # Refresh the direct-child snapshot every poll — it is the ONLY record
       # of the runner's suite children once the runner is dead (they
       # reparent to init and pgrep -P on a dead pid enumerates nothing).
-      _wd_kids="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+      # Keep the LAST NON-EMPTY snapshot: after the runner dies pgrep -P
+      # returns empty on every poll, and an unconditional overwrite would
+      # drain the record before the debounce's N-poll threshold can reap it.
+      # grep -vxF strips the watchdog itself: it is a direct child of the
+      # runner, so pgrep -P returns it on every live poll, and a reap list
+      # carrying it self-TERMs the watchdog mid-sweep (#9686).
+      _wd_kids_new="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null | grep -vxF "$_wd_self" || true)"
+      [[ -n "$_wd_kids_new" ]] && _wd_kids="$_wd_kids_new"
       # Runner liveness FIRST: a runner-side untrappable death (SIGKILL/OOM)
       # while the parent lives leaves this subshell holding the inherited
       # stdout/stderr fds — a gone-but-held-pipe deadlock between a dead
@@ -4358,13 +4388,35 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # them, then exit: there is no runner left to signal. Debounced like
       # the parent leg (#9686): a transient ESRCH on a live runner had the
       # same false-reap blast radius.
+      _wd_top_bad=""
       if ! kill -0 "$_RUN_WD_TOP_PID" 2>/dev/null; then
+        _wd_top_bad=kill0
+      elif [[ -n "$_RUN_WD_TOP_LSTART" ]]; then
+        # Identity check (#9686): a recycled runner pid still answers
+        # kill -0 — only lstart tells "same pid, new process" apart. An
+        # unreadable lstart is inconclusive (empty), never a failure.
+        _wd_tlstart="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+        [[ -n "$_wd_tlstart" && "$_wd_tlstart" != "$_RUN_WD_TOP_LSTART" ]] && _wd_top_bad=lstart
+      fi
+      if [[ -n "$_wd_top_bad" ]]; then
         _wd_top_fails=$(( _wd_top_fails + 1 ))
-        printf 'WARN: runner-liveness poll failed (%s/%s consecutive) (#9686)\n' \
-          "$_wd_top_fails" "$_RUN_WD_FAILS_N" >&2 || true
+        printf 'WARN: runner-liveness poll failed (leg=%s, %s/%s consecutive) (#9686)\n' \
+          "$_wd_top_bad" "$_wd_top_fails" "$_RUN_WD_FAILS_N" >&2 || true
         if (( _wd_top_fails >= _RUN_WD_FAILS_N )); then
+          # No deciding-poll re-verify here — kill -0 on a LIVE pid does not
+          # produce transient ESRCH the way a ps read produces transient
+          # answers, and each extra poll costs a _RUN_WD_POLL_S delay to a
+          # leg whose only job is fd release + child reap. Asymmetry with
+          # the parent leg is deliberate (#9686).
           printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
-          _wd_kids="$(_wd_descendants "$_wd_self" $_wd_kids)"
+          # Union the retained direct-children snapshot with their
+          # descendants — _wd_descendants emits only the descendants, and
+          # the lock-fd holders are the direct children themselves. Then
+          # strip this watchdog's own pid: `for ... kill` hits list members
+          # in order and a self-TERM exits mid-sweep, leaving every later
+          # member alive (#9686).
+          _wd_kids="$_wd_kids $(_wd_descendants "$_wd_self" $_wd_kids || true)"
+          _wd_kids="$(printf '%s\n' $_wd_kids | grep -vxF "$_wd_self" || true)"
           for _wd_kid in $_wd_kids; do
             kill -TERM "$_wd_kid" 2>/dev/null || true
           done
@@ -4383,14 +4435,17 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # parent death must not read as "parent still alive". A failed verdict
       # increments the consecutive counter; a healthy poll resets it.
       _wd_bad=""
+      # `|| true` on every ps read: a non-zero ps (pid dying in the
+      # kill-0→ps gap, fork/exec failure under churn) would otherwise abort
+      # this subshell under set -e — a silent, permanent fail-open (#9686).
       if ! kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null; then
         _wd_bad=kill0
       else
-        _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+        _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
         if [[ "$_wd_pstat" == Z* ]]; then
           _wd_bad=zombie
         elif [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
-          _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+          _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
           [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && _wd_bad=lstart
         fi
       fi
@@ -4404,16 +4459,19 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
           # Deciding-poll re-verify (#9686): a run that reached the threshold
           # gets one fresh probe of the parent's identity before the reap —
           # a recovered read resets the counter instead of firing, closing
-          # the window between the Nth sample and the kill.
+          # the window between the Nth sample and the kill. Keep the three
+          # leg shapes IDENTICAL to the poll verdict above — a leg added to
+          # one site only would accumulate to the threshold, then always be
+          # erased here, and could never fire.
           _wd_bad=""
           if ! kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null; then
             _wd_bad=kill0
           else
-            _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+            _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
             if [[ "$_wd_pstat" == Z* ]]; then
               _wd_bad=zombie
             elif [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
-              _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+              _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
               [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && _wd_bad=lstart
             fi
           fi
@@ -4428,7 +4486,7 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
     done
     # Parent is gone (or unverifiably recycled). Runner identity check before
     # the kill — same pid-reuse discipline as the enumerate watchdog.
-    _wd_now="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+    _wd_now="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
     if [[ -z "$_RUN_WD_TOP_LSTART" || -z "$_wd_now" \
         || "$_wd_now" == "$_RUN_WD_TOP_LSTART" ]]; then
       # Announce FIRST: the runner's own EXIT trap disarms this watchdog,
@@ -4439,7 +4497,11 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # so a runner-TERM sent first lets a TERM-resistant suite child (the
       # wedge class the reap exists for) survive holding the inherited lock
       # fd — the disarm would land mid-grace and the -9 leg would never run.
-      _wd_kids="$(_wd_descendants "$_wd_self" "$_RUN_WD_TOP_PID")"
+      # _wd_descendants excludes pids whose ancestor chain reaches
+      # _wd_self — but defence in depth: strip the watchdog pid itself too,
+      # since a self-TERM mid-loop truncates the rest of the reap (#9686).
+      _wd_kids="$(_wd_descendants "$_wd_self" "$_RUN_WD_TOP_PID" || true)"
+      _wd_kids="$(printf '%s\n' $_wd_kids | grep -vxF "$_wd_self" || true)"
       for _wd_kid in $_wd_kids; do
         kill -TERM "$_wd_kid" 2>/dev/null || true
       done
@@ -4452,6 +4514,13 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       sleep 5 & _wd_sleep=$!
       wait "$_wd_sleep" 2>/dev/null || true
       kill -KILL "$_RUN_WD_TOP_PID" 2>/dev/null || true
+    else
+      # The runner pid was recycled between the Nth failure and now: the
+      # verdict fired but the pid no longer names the run it would kill.
+      # Say so — a silent skip leaves reparented children holding the lock
+      # fd with no trace of why nobody reaped them (#9686).
+      printf 'WARN: parent-death reap skipped — runner pid %s no longer names this run (identity changed) (#9686)\n' \
+        "$_RUN_WD_TOP_PID" >&2 || true
     fi
   ) &
   _RUN_WD_PID=$!

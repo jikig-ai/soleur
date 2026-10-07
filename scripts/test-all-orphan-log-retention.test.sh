@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # scripts/test-all-orphan-log-retention.test.sh — Guard 2 + Guard 3 for
-# #8993 (orphaned run holds the repo flock forever) and #8940 (suite output
-# lost when the scratch root is cleaned on run exit).
+# #8993 (orphaned run holds the repo flock forever), #8940 (suite output
+# lost when the scratch root is cleaned on run exit), and #9686 (the same
+# watchdog must not fire on a transient single-poll anomaly — Part C drives
+# forged ps answers through a PATH shim and pins the consecutive-failure
+# verdict, the deciding-poll re-verify, and the runner-death arm).
 #
 # HOW IT TESTS. Sandbox copies of the runner, spliced the same way as
 # test-all-killed-classification.test.sh: fixture run_suite calls replace the
@@ -132,7 +135,9 @@ SLEEPTOK="617.$$"
 printf '#!/usr/bin/env bash\necho MARKER-SLEEP-FX\nsleep %s\n' "$SLEEPTOK" > "$FIXTURES/sleepfx.sh"
 # napfx keeps the run alive ~8s so the watchdog poll loop iterates several
 # times against the fixture parent, then lets the run COMPLETE (rc=0) — the
-# completion the debounce-transient arms assert on.
+# completion the debounce-transient arms assert on. The bare `sleep 8` needs
+# no SLEEPTOK: it is self-limiting, so a leaked copy reaps itself; sweeps
+# only need the token where a fixture could otherwise wedge forever.
 printf '#!/usr/bin/env bash\necho MARKER-NAP-FX\nsleep 8\n' > "$FIXTURES/napfx.sh"
 
 build_sandbox() {  # build_sandbox <out-dir> <arm>
@@ -301,8 +306,11 @@ if [[ -z "$RUNNER_PID" ]]; then
 else
   SUITE_CHILD="$(pgrep -P "$RUNNER_PID" 2>/dev/null | wc -l | tr -d ' ')"
   kill -TERM "$WRAP_PID" 2>/dev/null
-  # Parent dead → watchdog fires within ~1 poll + TERM + grace(~5s) + KILL.
-  deadline=$(( SECONDS + 12 ))
+  # Parent dead → watchdog fires within ~1 poll (FAILS_N=1 pins the
+  # pre-debounce detection bound) + deciding-poll re-verify + the TERM →
+  # grace(~5s) → KILL chain. 25s, not 12s: the chain is ~10s post-debounce
+  # and this arm shares the box with concurrent suites.
+  deadline=$(( SECONDS + 25 ))
   while kill -0 "$RUNNER_PID" 2>/dev/null && (( SECONDS < deadline )); do
     sleep 0.2
   done
@@ -448,20 +456,34 @@ else
 fi
 break_forms="$(printf '%s\n' "$wd_block" | grep -cE '(\|\||&&)[[:space:]]+break' || true)"
 if [[ "$break_forms" == "0" ]]; then
-  pass "no single-poll break forms remain in the watchdog block"
+  pass "no single-poll ||/&&-break forms remain in the watchdog block"
 else
   fail "watchdog still has $break_forms ||/&&-break forms — single-poll fire path intact"
 fi
-init_counters="$(printf '%s\n' "$wd_block" | grep -cE '^[[:space:]]+_wd_(top_)?fails=0' || true)"
-if [[ "$init_counters" -ge 3 ]]; then
-  pass "consecutive-failure counters _wd_fails/_wd_top_fails init + healthy-poll reset present"
+# Totality, not spelling: there is exactly ONE break in the whole block —
+# the threshold `if … then break`. A rogue `if …; then break; fi` or `exit`
+# added outside the counter escapes the spelling pin above, not this count.
+break_total="$(printf '%s\n' "$wd_block" | grep -cE '^[[:space:]]+break;?[[:space:]]*$' || true)"
+if [[ "$break_total" == "1" ]]; then
+  pass "exactly one break statement exists in the watchdog block (the threshold fire)"
 else
-  fail "watchdog lacks consecutive-failure counters (found $init_counters _wd_*fails=0, want >=3)"
+  fail "watchdog block has $break_total break statements, want exactly 1 — an uncountered fire path exists"
 fi
-if printf '%s\n' "$wd_block" | grep -q 'WARN: parent-liveness poll failed'; then
-  pass "per-failure WARN diagnostic names the failed leg"
+init_counters="$(printf '%s\n' "$wd_block" | grep -cE '^[[:space:]]+_wd_(top_)?fails=0' || true)"
+if [[ "$init_counters" == "5" ]]; then
+  pass "all 5 counter-reset sites present (_wd_fails/_wd_top_fails init, both healthy-poll resets, re-verify recovery)"
 else
-  fail "no 'WARN: parent-liveness poll failed' diagnostic in the watchdog block"
+  fail "counter-reset sites changed: found $init_counters _wd_*fails=0 lines, want exactly 5"
+fi
+if printf '%s\n' "$wd_block" | grep -q "printf 'WARN: parent-liveness poll failed"; then
+  pass "per-failure WARN diagnostic is a real printf naming the failed leg"
+else
+  fail "no 'WARN: parent-liveness poll failed' printf in the watchdog block"
+fi
+if printf '%s\n' "$wd_block" | grep -q "printf 'WARN: runner-liveness poll failed"; then
+  pass "runner-liveness leg participates in the same counter+WARN shape"
+else
+  fail "no 'WARN: runner-liveness poll failed' printf — runner leg not debounced"
 fi
 
 # C.2 — real parent death under the DEFAULT debounce still reaps (plan 1.3):
@@ -515,6 +537,7 @@ SHIMBIN="$TMP/shimbin"; mkdir -p "$SHIMBIN"
 REAL_PS="$(command -v ps)"
 cat > "$SHIMBIN/ps" <<'SHIM'
 #!/usr/bin/env bash
+set -uo pipefail
 mode="${WD_SHIM_MODE:-}"
 dir="${WD_SHIM_DIR:-}"
 real="${WD_SHIM_REAL_PS:-/bin/ps}"
@@ -570,16 +593,22 @@ shim_nap() {
       PATH="$SHIMBIN:$PATH" WD_SHIM_MODE="$mode" WD_SHIM_DIR="$sdir" \
       WD_SHIM_PIDFILE="$sdir/parent.pid" WD_SHIM_REAL_PS="$REAL_PS" \
       SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-$mode" SOLEUR_TEST_ALL_WD_POLL_S=1 \
-      bash "$sbx/test-all.sh" >"$out" 2>&1; wait ) &
+      bash "$sbx/test-all.sh" >"$out" 2>&1
+    # The trailing `wait` is load-bearing (kills the exec-optimisation that
+    # would make this subshell become the runner) — but a bare `wait`'s rc
+    # is always 0, so the runner's real exit goes to a file instead.
+    printf '%s' "$?" > "$sdir/runner.rc"; wait ) &
   wp=$!
   deadline=$(( SECONDS + 40 ))
   while kill -0 "$wp" 2>/dev/null && (( SECONDS < deadline )); do sleep 0.2; done
   if kill -0 "$wp" 2>/dev/null; then
     kill -KILL "$wp" 2>/dev/null || true
     SHIM_RC=124
+  elif [[ -f "$sdir/runner.rc" ]]; then
+    wait "$wp" 2>/dev/null || true
+    SHIM_RC="$(cat "$sdir/runner.rc" 2>/dev/null || echo 126)"
   else
-    wait "$wp" 2>/dev/null
-    SHIM_RC=$?
+    SHIM_RC=125  # runner died before writing its rc — a reap class, not a pass
   fi
 }
 
@@ -587,7 +616,7 @@ shim_nap() {
 SBX_C4="$TMP/sbx-c4"
 build_sandbox "$SBX_C4" nap || { echo "FATAL: sandbox build failed"; exit 2; }
 shim_nap "$SBX_C4" zstat-once "$TMP/shim-zstat-once" "$TMP/out-c4.log"
-if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c4.log"; then
+if [[ "$SHIM_RC" == "0" ]] && ! grep -qE 'parent process gone|runner died untrappably' "$TMP/out-c4.log"; then
   pass "a single forged zombie-stat poll does not reap a live-parent run"
 else
   fail "one anomalous stat read reaped a live-parent run (rc=$SHIM_RC, log $TMP/out-c4.log)"
@@ -597,12 +626,17 @@ if [[ -f "$TMP/shim-zstat-once/fired.1" ]]; then
 else
   fail "zstat-once shim never fired — arm is vacuous"
 fi
+if grep -q 'leg=zombie, 1/' "$TMP/out-c4.log"; then
+  pass "the forged read is consumed as a zombie-leg WARN at count 1"
+else
+  fail "no 'leg=zombie, 1/N' WARN — the verdict never saw the injected read"
+fi
 
 # C.5 — a single forged lstart (pid-reuse look-alike) is absorbed (plan 1.5).
 SBX_C5="$TMP/sbx-c5"
 build_sandbox "$SBX_C5" nap || { echo "FATAL: sandbox build failed"; exit 2; }
 shim_nap "$SBX_C5" lstart-forge "$TMP/shim-lstart-forge" "$TMP/out-c5.log"
-if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c5.log"; then
+if [[ "$SHIM_RC" == "0" ]] && ! grep -qE 'parent process gone|runner died untrappably' "$TMP/out-c5.log"; then
   pass "a single forged lstart mismatch does not reap a live-parent run"
 else
   fail "one anomalous lstart read reaped a live-parent run (rc=$SHIM_RC, log $TMP/out-c5.log)"
@@ -614,11 +648,15 @@ else
 fi
 
 # C.6 — non-consecutive failures never accumulate (plan 1.6): alternating
-# forged stat reads reset the counter every other poll.
+# forged stat reads reset the counter every other poll. The WARN counter is
+# the discriminator — outcome alone CANNOT separate consecutive from
+# cumulative (a cumulative mutant reaches N on a forged poll, then the
+# deciding-poll re-verify reads healthy and resets: same no-fire result,
+# but the log carries the counter's own arithmetic).
 SBX_C6="$TMP/sbx-c6"
 build_sandbox "$SBX_C6" nap || { echo "FATAL: sandbox build failed"; exit 2; }
 shim_nap "$SBX_C6" zstat-alt "$TMP/shim-zstat-alt" "$TMP/out-c6.log"
-if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c6.log"; then
+if [[ "$SHIM_RC" == "0" ]] && ! grep -qE 'parent process gone|runner died untrappably' "$TMP/out-c6.log"; then
   pass "alternating forged failures never accumulate into a reap"
 else
   fail "non-consecutive forged failures reaped the run — counter is cumulative, not consecutive"
@@ -627,6 +665,11 @@ if [[ -f "$TMP/shim-zstat-alt/fired.1" && -f "$TMP/shim-zstat-alt/fired.3" ]]; t
   pass "zstat-alt markers prove >=2 non-consecutive injections were delivered"
 else
   fail "zstat-alt shim delivered <2 injections — arm is vacuous"
+fi
+if grep -q 'leg=zombie, 1/' "$TMP/out-c6.log" && ! grep -qE 'leg=zombie, [2-9]/' "$TMP/out-c6.log"; then
+  pass "WARN counter stays at 1/N on alternating failures — resets are consecutive-only"
+else
+  fail "WARN counter reached >=2/N on alternating failures — cumulative counter survived (measured mutant class)"
 fi
 
 # C.7 — a SUSTAINED forged zombie stat still reaps after >=N polls (plan 1.7):
@@ -660,7 +703,7 @@ pkill -f "sleep $SLEEPTOK" 2>/dev/null || true
 SBX_C8="$TMP/sbx-c8"
 build_sandbox "$SBX_C8" nap || { echo "FATAL: sandbox build failed"; exit 2; }
 shim_nap "$SBX_C8" zstat-n3 "$TMP/shim-zstat-n3" "$TMP/out-c8.log"
-if [[ "$SHIM_RC" == "0" ]] && ! grep -q 'parent process gone' "$TMP/out-c8.log"; then
+if [[ "$SHIM_RC" == "0" ]] && ! grep -qE 'parent process gone|runner died untrappably' "$TMP/out-c8.log"; then
   pass "deciding-poll re-verify aborts a threshold fire on a recovered read"
 else
   fail "N forged failures fired without a deciding re-verify (rc=$SHIM_RC, log $TMP/out-c8.log)"
@@ -670,6 +713,57 @@ if [[ -f "$TMP/shim-zstat-n3/fired.1" && -f "$TMP/shim-zstat-n3/fired.2" && -f "
 else
   fail "zstat-n3 shim delivered <3 injections — arm is vacuous"
 fi
+if grep -q 'leg=zombie, 3/' "$TMP/out-c8.log"; then
+  pass "counter reaches the threshold under consecutive forged reads (the re-verify is what stops the fire)"
+else
+  fail "no 'leg=zombie, 3/N' WARN — the counter never reached the threshold; the no-fire is unexplained"
+fi
+
+# C.9 — behavioral runner-death arm: kill -KILL the RUNNER while the PARENT
+# stays alive — the one leg no shim could reach (kill -0 is a builtin).
+# The watchdog must detect it after ~N polls, reap the retained-snapshot
+# children, print the untrappably-died line, and exit.
+SBX_C9="$TMP/sbx-c9"
+build_sandbox "$SBX_C9" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
+out="$TMP/out-c9.log"
+( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-c9" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C9/test-all.sh" >"$out" 2>&1; wait ) &
+WRAP_PID=$!
+deadline=$(( SECONDS + 15 ))
+while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
+  sleep 0.2
+done
+RUNNER_PID="$(pgrep -P "$WRAP_PID" 2>/dev/null | head -1)"
+if [[ -z "$RUNNER_PID" ]]; then
+  fail "could not resolve the runner pid for the untrappable-death arm"
+else
+  kill -KILL "$RUNNER_PID" 2>/dev/null
+  deadline=$(( SECONDS + 20 ))
+  while ! grep -q 'runner died untrappably' "$out" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep 0.2
+  done
+  if grep -q 'runner died untrappably' "$out"; then
+    pass "an untrappable (SIGKILL) runner death is detected and announced under the debounce"
+  else
+    fail "untrappable runner death produced no 'runner died untrappably' line within 20s"
+  fi
+  # The announce prints BEFORE the TERM → 2s → KILL sweep — wait for the
+  # watchdog's exit (the wrapper's `wait` returns and the subshell closes)
+  # before asserting on leftovers, or the check races the grace window.
+  deadline=$(( SECONDS + 10 ))
+  while kill -0 "$WRAP_PID" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep 0.2
+  done
+  sleep 0.5
+  leftover="$(pgrep -f "sleep $SLEEPTOK" 2>/dev/null | head -1)"
+  if [[ -z "$leftover" ]]; then
+    pass "the dead runner's suite children are reaped from the retained snapshot"
+  else
+    fail "suite child survived an untrappable runner death (pid $leftover) — retained-snapshot reap failed"
+    kill -KILL "$leftover" 2>/dev/null || true
+  fi
+fi
+wait "$WRAP_PID" 2>/dev/null || true
+pkill -f "sleep $SLEEPTOK" 2>/dev/null || true
 pkill -f "$FIXTURES/napfx.sh" 2>/dev/null || true
 
 echo ""

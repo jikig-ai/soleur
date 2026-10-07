@@ -122,9 +122,9 @@ Phase ordering follows `cq-write-failing-tests-before`: Phase 1 lands the new as
 ```yaml
 liveness_signal:
   what: "main-health-monitor workflow run verdict (tests= pass/fail) + per-run absence of the `ERROR: parent process gone` watchdog line"
-  cadence: "every 6h (cron `0 */6 * * *`)"
+  cadence: "every 6h on the hour UTC (Inngest cron `cron-main-health-monitor`, ≤2-min jitter — the GHA `schedule:` trigger was removed in PR #4799; the issue body's `0 */6 * * *` quote refers to that function)"
   alert_target: "Sentry `main-health-monitor` issue + tracker #9457 comment append"
-  configured_in: ".github/workflows/main-health-monitor.yml"
+  configured_in: "apps/web-platform/server/inngest/functions/cron-main-health-monitor.ts (+ `cron-monitors.tf` for the Sentry monitor)"
 
 error_reporting:
   destination: "workflow step log + appended comment on #9457"
@@ -246,7 +246,7 @@ The deliverable's verification surface — the new debounce arms and structural 
 - [ ] AC4: Real parent death still terminates the run within a bounded window — proved under both `SOLEUR_TEST_ALL_WD_FAILS_N=1` (existing B1 semantics, ~12s deadline) and the default N=3 (~25s deadline); runner AND transitive suite children are reaped and the `ERROR: parent process gone` line prints.
 - [ ] AC5: On the deciding poll the parent identity is re-verified (fresh `kill -0` + `stat` + `lstart`); a recovered/alive read on that probe resets the counter instead of breaking — asserted structurally (re-verify block between the threshold check and `break`) and behaviorally (shim that fails N-1 consecutive then recovers does not fire).
 - [ ] AC6: Terminate-path order, the `parent process gone` message text, `SOLEUR_TEST_ALL_ALLOW_ORPHAN=1` opt-out banner, `_run_wd_disarm`, and the runner-identity lstart re-check are byte-identical — existing structural pins in `test-all-orphan-log-retention.test.sh` stay green and `plugins/soleur/test/main-health-monitor-workflow.test.sh` fixture expectations are unaffected.
-- [ ] AC7: The runner-liveness leg (`kill -0 "$_RUN_WD_TOP_PID"` reap arm) applies the same consecutive-failure discipline — a transient runner-side anomaly does not reap healthy children (structural pin on `_wd_top_fails`; behavioral coverage via the existing real-runner-death path remaining green).
+- [ ] AC7: The runner-liveness leg (`kill -0 "$_RUN_WD_TOP_PID"` reap arm) applies the same consecutive-failure discipline — a transient runner-side anomaly does not reap healthy children (structural pin on `_wd_top_fails` + the Part C behavioral arm that SIGKILLs the sandbox runner while the parent stays alive).
 - [ ] AC8: Each failed poll emits `WARN: parent-liveness poll failed (leg=<kill0|zombie|lstart>, k/N consecutive) (#9686)` on stderr — asserted present in shim-armed runs and absent in clean runs.
 - [ ] AC9: `scripts/followthroughs/watchdog-debounce-soak-9686.sh` + `.test.sh` exist, the suite is registered via an explicit `run_suite` line, and #9686 carries the `<!-- soleur:followthrough … -->` directive + `follow-through` label (the directive is added to the PR body / issue comment at ship time).
 - [ ] AC10: `bash scripts/test-all-orphan-log-retention.test.sh` passes end-to-end on macOS-bash-3.2-safe idioms and Linux CI; no `set -e` arithmetic-abort idioms (`(( x++ ))`) introduced inside the watchdog subshell.

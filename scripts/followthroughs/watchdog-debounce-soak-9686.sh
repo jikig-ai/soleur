@@ -63,7 +63,16 @@ command -v gh  >/dev/null || { echo "CANNOT ESTABLISH: gh not on PATH" >&2; exit
 command -v jq  >/dev/null || { echo "CANNOT ESTABLISH: jq not on PATH" >&2; exit 3; }
 command -v timeout >/dev/null || { echo "CANNOT ESTABLISH: timeout not on PATH" >&2; exit 3; }
 
-# ── 1. The merge commit: the first (only) main commit touching this file. ────
+# ── 1. The merge commit: the NEWEST main commit touching this file. ──────────
+# `commits?path=` returns newest-first — today that IS the debounce merge
+# (this file is new in this PR). Caveat, named not hidden: a later probe
+# edit on main re-anchors the window to the amendment — earlier post-merge
+# runs read `behind` and the soak degrades toward NOT YET, never toward a
+# false clean. Harmless at RETIREMENT (probe + tracker retire together).
+# ts_re: `gh run view --log` prefixes every line with a timestamp — emitted
+# lines match `^<ts> <content>`; the runner's ANSI-wrapped `run:`-block echo
+# does NOT (e.g. `Z <ESC>[36;1m gone_hits=$(grep … 'ERROR: parent process gone'`).
+ts_re='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z'
 MERGE_RC=0
 # --jq keeps gh's own rc visible to `||`; the emitted JSON string is unquoted
 # in a SECOND statement — a `| tr` inside the same $(...) would mask gh's rc.
@@ -86,12 +95,16 @@ fi
 QUALIFYING=0       # qualifying runs measured (tests step demonstrably armed)
 CLEAN=0            # consecutive qualifying runs with zero watchdog kills
 DIRTY_RUN=""       # first qualifying run carrying a watchdog-kill line
+KILLED_TOTAL=0     # [KILLED] suite lines across qualifying runs (any cause)
 EXAMINED=0         # candidates inspected (post-merge ancestors only)
 
 while IFS= read -r ROW; do
   [[ "$EXAMINED" -ge "$MAX_CANDIDATES" ]] && break
   RID="$(jq -r '.id' <<<"$ROW")"
   HEAD="$(jq -r '.head_sha' <<<"$ROW")"
+  if [[ ! "$RID" =~ ^[0-9]+$ ]] || [[ ! "$HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "CANNOT ESTABLISH: malformed run row (id='${RID}' head_sha='${HEAD}') — API contract drift" >&2; exit 3
+  fi
   # Post-merge? compare merge...head — ahead|identical means the run's main
   # already carried the debounce. 'behind' means it predates the fix; skip
   # silently (not a qualifying denominator member either way).
@@ -117,25 +130,38 @@ while IFS= read -r ROW; do
     echo "CANNOT ESTABLISH: health-check job read failed for run ${RID}" >&2; exit 3
   fi
 
-  # One log fetch feeds both greps. `gh api .../logs` follows the redirect
-  # and streams the job's plain-text log; timeout bounds the fetch, a temp
-  # file bounds memory, and grep -c counts without a second download.
+  # One log fetch feeds all greps. `gh run view --job --log` — NOT
+  # `gh api …/jobs/<id>/logs`: measured 2026-09-18 on gh 2.101.0 (see
+  # git-data-boot-poll-8178.sh), `gh api` exits 1 on logs carrying terminal
+  # escape sequences, and the health-check `run:`-block echo always carries
+  # them. timeout bounds the fetch; a temp file bounds memory.
   LOG="$(mktemp -t wd-soak-9686-log.XXXXXXXX)" || { echo "CANNOT ESTABLISH: mktemp failed" >&2; exit 3; }
   LOG_RC=0
-  timeout 120 gh api "repos/${GH_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG" 2>/dev/null || LOG_RC=$?
+  timeout 120 gh run view --job "$JOB_ID" --repo "$GH_REPO" --log > "$LOG" 2>/dev/null || LOG_RC=$?
   if [[ "$LOG_RC" != "0" ]] || [[ ! -s "$LOG" ]]; then
     rm -f "$LOG"
     echo "CANNOT ESTABLISH: job-log read failed for run ${RID} (rc=${LOG_RC})" >&2; exit 3
   fi
 
-  # Emitter-armed? A suite dispatch banner or the suites terminal line —
-  # without one, "zero watchdog lines" proves nothing.
-  if ! grep -qE '^--- .+ ---$|=== [0-9]+/[0-9]+ suites passed ===|=== [0-9]+ suites:' "$LOG"; then
+  # Watchdog-kill evidence FIRST — the emitted form `^<ts> ERROR: <text>` is
+  # dispositive proof the emitter was armed AND that it fired. The raw
+  # phrases alone are NOT a dirty signal: main-health-monitor.yml's verdict
+  # classifier greps the literal `^ERROR: parent process gone` inside its
+  # own run: block, so every job log contains an ANSI-wrapped echo of that
+  # source line — counting bare phrases would read every run as dirty.
+  WD_KILLS="$(grep -cE "^${ts_re}[[:space:]]+ERROR: (parent process gone|runner died untrappably)" "$LOG" || true)"
+
+  # Emitter-armed? A suite dispatch banner (` <ts> --- name ---` — banner
+  # shape unanchored at the front because the timestamp sits before it), the
+  # suites terminal line, or the dispositive watchdog emit itself. A reaped
+  # run can lack a terminal `===` line AND carry the reap — the emit is the
+  # one marker that can never be absent exactly where DIRTY lives. Without
+  # one, "zero watchdog lines" proves nothing.
+  if ! grep -qE ' --- .+ ---$|=== [0-9]+/[0-9]+ suites passed ===|=== [0-9]+ suites:|^'"${ts_re}"'[[:space:]]+ERROR: ' "$LOG"; then
     rm -f "$LOG"
     continue   # never reached the tests step: excluded, not clean
   fi
-  WD_KILLS="$(grep -cE 'parent process gone|runner died untrappably' "$LOG" || true)"
-  KILLED_SUITES="$(grep -c '\[KILLED\]' "$LOG" || true)"
+  KILLED_TOTAL=$(( KILLED_TOTAL + $(grep -c '\[KILLED\]' "$LOG" || true) ))
   rm -f "$LOG"
   QUALIFYING=$(( QUALIFYING + 1 ))
 
@@ -148,8 +174,8 @@ while IFS= read -r ROW; do
   # stop early once the verdict is decidable either way
 done < <(jq -c '.[]' <<<"$RUNS_JSON")
 
-printf 'soak: merge=%s | examined=%s qualifying=%s clean-streak=%s dirty=%s\n' \
-  "${MERGE_SHA:0:12}" "$EXAMINED" "$QUALIFYING" "$CLEAN" "${DIRTY_RUN:-none}"
+printf 'soak: merge=%s | examined=%s qualifying=%s clean-streak=%s dirty=%s | killed-suites=%s\n' \
+  "${MERGE_SHA:0:12}" "$EXAMINED" "$QUALIFYING" "$CLEAN" "${DIRTY_RUN:-none}" "$KILLED_TOTAL"
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
 if [[ -n "$DIRTY_RUN" ]]; then
