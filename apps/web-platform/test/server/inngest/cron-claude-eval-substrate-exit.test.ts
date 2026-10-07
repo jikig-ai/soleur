@@ -11,9 +11,9 @@
 //         draft; a lost line is a rejected day. The spawn now also waits (bounded) for
 //         the stdout readline `close` before resolving.
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { loadavg, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -324,16 +324,24 @@ describe("spawnClaudeEval — child end (#7122 P2-1, P2-2)", () => {
 // SIGTERM-ignoring sleeper in its own group, prints a result line and exits 0. The group
 // kill on exit is the only thing that ends the sleeper; with `detached` removed `-pid` is
 // ESRCH (the child is not a group leader), the sleeper survives, and the row goes red.
+// This row bounds only that the group is EVENTUALLY dead; that the group kill was ISSUED by
+// the time the spawn resolves is owned by the mocked P2-1 rows above.
 describe("spawnClaudeEval — a real grandchild in the child's process group is reaped on exit (#7122 P2-1, test-design P2-3)", () => {
   const ORIGINAL_CLAUDE_BIN = process.env.CLAUDE_BIN;
   const dirs: string[] = [];
   let sleeperPid: number | null = null;
+  // The last observed state, quoted in the failure message so a recurrence is classifiable
+  // without reproducing it (a state still `S` after the full wait most likely means the kill
+  // was never sent, i.e. the product; a `D` state or a high loadavg points at a stall).
+  let lastProbe = "not probed";
+  const errCode = (e: unknown) => (e as NodeJS.ErrnoException).code;
 
   beforeEach(() => {
     spawnMock.mockReset();
+    lastProbe = "not probed";
   });
   afterEach(() => {
-    // Reaper: never leave the fixture's sleeper behind, whatever the assertion said.
+    // Reaper: once the sleeper's pid is known, never leave it behind, whatever the assertion said.
     if (sleeperPid) {
       try {
         process.kill(sleeperPid, "SIGKILL");
@@ -347,18 +355,41 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     else process.env.CLAUDE_BIN = ORIGINAL_CLAUDE_BIN;
   });
 
-  const isAlive = (pid: number): boolean => {
+  // /proc is only trusted to say "gone" when it demonstrably shows THIS pid namespace
+  // (a bind-mounted foreign /proc can still resolve /proc/self).
+  const procIsOurs = (): boolean => {
     try {
-      process.kill(pid, 0);
+      return readFileSync("/proc/self/stat", "utf8").startsWith(`${process.pid} `);
     } catch {
       return false;
     }
+  };
+
+  const isAlive = (pid: number): boolean => {
     try {
-      // A zombie (killed, not yet reaped by init) is dead for this purpose.
-      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
-    } catch {
-      return true;
+      process.kill(pid, 0);
+    } catch (e) {
+      // EPERM = exists but not ours = alive; only ESRCH means gone.
+      lastProbe = `kill(0) ${errCode(e)}`;
+      return errCode(e) === "EPERM";
     }
+    let stat: string;
+    try {
+      stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    } catch (e) {
+      // The pid can vanish between kill(0) and this read (ENOENT, or ESRCH once open succeeded):
+      // dead, provided /proc itself is readable. Any other failure (EACCES under hidepid, no
+      // /proc off Linux) leaves kill(0) as the only signal: alive.
+      const vanished = (errCode(e) === "ENOENT" || errCode(e) === "ESRCH") && procIsOurs();
+      lastProbe = `stat read ${errCode(e)}`;
+      return !vanished;
+    }
+    // comm may hold spaces and parens, so the state char is the one after the LAST ")".
+    const close = stat.lastIndexOf(")");
+    const state = close < 0 ? "" : stat.slice(close + 1).trim().charAt(0);
+    lastProbe = `state ${state || "?"}`;
+    // A zombie (killed, not yet reaped by init) is dead for this purpose.
+    return state !== "Z" && state !== "X";
   };
 
   it("kills a SIGTERM-ignoring grandchild that shares the child's group once the child has exited", async () => {
@@ -398,11 +429,123 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     });
     expect(res.ok).toBe(true);
     expect(existsSync(pidFile), "the fixture must have started its sleeper").toBe(true);
-    sleeperPid = Number(readFileSync(pidFile, "utf8").trim());
-    expect(Number.isInteger(sleeperPid) && sleeperPid > 1).toBe(true);
-    // The kill is delivered before the spawn resolves; allow a moment for the kernel to reap.
-    const deadline = Date.now() + 3_000;
-    while (isAlive(sleeperPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
-    expect(isAlive(sleeperPid), "the grandchild survived the child's exit: the group kill did not reach it").toBe(false);
-  }, 20_000);
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    expect(Number.isInteger(pid) && pid > 1).toBe(true);
+    sleeperPid = pid;
+    // The SIGKILL is sent before the spawn resolves but lands asynchronously (measured under
+    // load: the first post-exit probe usually still sees the sleeper alive), so poll. The 15s
+    // bound is deliberately above the repo's 10s contended-CI waitFor floor (#5796).
+    const t0 = Date.now();
+    try {
+      await vi.waitFor(
+        () => {
+          if (isAlive(pid)) throw new Error("grandchild still alive");
+        },
+        { timeout: 15_000, interval: 25 },
+      );
+    } catch (e) {
+      // vi.waitFor rethrows the callback's last error on timeout; anything else is a probe bug.
+      if (!(e instanceof Error) || e.message !== "grandchild still alive") throw e;
+      expect.fail(
+        `the grandchild survived the child's exit: the group kill did not reach it ` +
+          `(pid ${pid}; last probe: ${lastProbe}; waited ${Date.now() - t0}ms; ` +
+          `loadavg ${loadavg().map((n) => n.toFixed(1)).join("/")}; ${e instanceof Error ? e.message : String(e)}). ` +
+          `If this recurs, paste this line on #9670 rather than opening a new issue.`,
+      );
+    }
+    // Observed dead: do not let the reaper signal a pid the kernel may since have recycled.
+    sleeperPid = null;
+  }, 40_000);
+
+  // Probe self-test, not the product: negative controls for `isAlive`. The row above only ever
+  // watches it answer "gone", so an always-false oracle, an `S`-is-dead oracle or a Z-blind
+  // oracle would pass it with the product kill removed; a first-paren parser would misread any
+  // comm containing ")", which only the second row below exercises. A live, unkilled process
+  // must read alive (the second name carries a ")" and a fake zombie state), the same pid must
+  // read dead once killed, and a zombie that is NOT reaped must read dead while kill(0) still
+  // succeeds.
+  describe("isAlive oracle controls", () => {
+    const SLEEP_BIN = ["/bin/sleep", "/usr/bin/sleep"].find((c) => existsSync(c));
+    // Only a standalone sleep binary can be copied under another name (a multicall binary
+    // such as busybox would reject the unknown applet name).
+    const hasProc = existsSync("/proc/self/stat");
+    const canCopySleep = SLEEP_BIN !== undefined && basename(realpathSync(SLEEP_BIN)) === "sleep" && hasProc;
+    const spawnReal = async (...args: Parameters<typeof import("node:child_process").spawn>) => {
+      const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const child = actual.spawn(...args);
+      child.on("error", () => {}); // a failed exec must surface as the pid assertion, not an uncaught error
+      return child;
+    };
+
+    for (const name of ["sleep", "x) Z y"]) {
+      it.skipIf(!canCopySleep)(
+        `a live process reads alive and a killed one dead (comm "${name}")`,
+        async () => {
+          const dir = mkdtempSync(join(tmpdir(), "claude-eval-probe-"));
+          dirs.push(dir);
+          const exe = join(dir, name);
+          copyFileSync(SLEEP_BIN as string, exe);
+          chmodSync(exe, 0o755);
+          const child = await spawnReal(exe, ["120"], { stdio: "ignore" });
+          try {
+            const pid = child.pid as number;
+            expect(Number.isInteger(pid) && pid > 1).toBe(true);
+            // comm is the copy's name only once exec has replaced the forked parent.
+            await vi.waitFor(() => expect(readFileSync(`/proc/${pid}/stat`, "utf8")).toContain(`(${name})`), {
+              timeout: 5_000,
+              interval: 10,
+            });
+            // Right after exec the state can be transiently D or R; wait for it to settle to sleeping.
+            await vi.waitFor(
+              () => {
+                expect(isAlive(pid), `a live process must read alive (last probe: ${lastProbe})`).toBe(true);
+                expect(lastProbe).toBe("state S");
+              },
+              { timeout: 5_000, interval: 10 },
+            );
+            child.kill("SIGKILL");
+            await vi.waitFor(
+              () => expect(isAlive(pid), `a killed process must read dead (last probe: ${lastProbe})`).toBe(false),
+              { timeout: 5_000, interval: 10 },
+            );
+          } finally {
+            child.kill("SIGKILL");
+          }
+        },
+        30_000,
+      );
+    }
+
+    // The /proc half of the probe: a killed grandchild whose parent never waits stays a zombie, for
+    // which kill(0) still succeeds (containers without a reaping init look like this).
+    it.skipIf(!hasProc)(
+      "an unreaped zombie reads dead while kill(0) still succeeds",
+      async () => {
+        // The child must exit only AFTER the shell has exec'd into `sleep` (whose comm then reads
+        // "sleep"); a child that exits earlier is reaped by the shell itself and no zombie forms.
+        // The wait uses builtins only, so it forks nothing while it spins.
+        const script = 'p=$$; ( until { read -r c < /proc/$p/comm; [ "$c" = sleep ]; }; do :; done ) & echo $!; exec sleep 120';
+        const parent = await spawnReal("sh", ["-c", script], {
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        try {
+          let out = "";
+          parent.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+          await vi.waitFor(() => expect(out).toMatch(/^\d+\n/), { timeout: 5_000, interval: 10 });
+          const zpid = Number(out.trim());
+          expect(Number.isInteger(zpid) && zpid > 1).toBe(true);
+          await vi.waitFor(() => expect(readFileSync(`/proc/${zpid}/stat`, "utf8")).toMatch(/\) Z /), {
+            timeout: 5_000,
+            interval: 10,
+          });
+          expect(() => process.kill(zpid, 0), "a zombie still answers kill(0)").not.toThrow();
+          expect(isAlive(zpid), `a zombie must read dead (last probe: ${lastProbe})`).toBe(false);
+          expect(lastProbe).toBe("state Z");
+        } finally {
+          parent.kill("SIGKILL");
+        }
+      },
+      30_000,
+    );
+  });
 });
