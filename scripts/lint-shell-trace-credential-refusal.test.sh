@@ -68,11 +68,13 @@ fi
 # --- helpers -----------------------------------------------------------------
 # rc_of <lint-path> <target...> -> echoes the exit code. Never pipes into
 # grep -q (a producer feeding grep -q takes SIGPIPE under pipefail and the
-# guard fails OPEN on every negative assertion).
+# guard fails OPEN on every negative assertion). RC_TIMEOUT (seconds), when set
+# for ONE call (`RC_TIMEOUT=5 y_row ...`), bounds the run: a non-terminating lint reads rc 124
+# instead of hanging the suite.
 rc_of() {
   local lint="$1"
   shift
-  python3 "$lint" "$@" >"$WORK/out" 2>"$WORK/err"
+  ${RC_TIMEOUT:+timeout "$RC_TIMEOUT"} python3 "$lint" "$@" >"$WORK/out" 2>"$WORK/err"
   printf '%s' "$?"
 }
 
@@ -452,7 +454,7 @@ mutate_row() { # <label> <perl-expr> <fixture> <baseline-rc> <expected-mutant-rc
 # "the walker resolved nothing" into an explicit refusal rather than a silent
 # clean report. A row expecting 0 here would now fail for the RIGHT reason.
 # INSTRUMENT SELF-TEST for mutate_row (#7898 review). It is the only helper that
-# owns its own pass/fail decision, and ALL 17 mutation rows route through it, so
+# owns its own pass/fail decision, and EVERY mutation row routes through it, so
 # neutering it disarms every one of them at once: measured, inserting
 # `pass "$1: DISARMED"; return 0` as its first line left this suite at
 # "=== 61 passed, 0 failed ===", exit 0, floor satisfied. pass()/fail() are
@@ -465,7 +467,7 @@ _mr_p="$PASS" _mr_f="$FAIL"
 mutate_row "instrument self-test (expected; not a real failure)" \
   's/NOTHING_MATCHES_THIS_TOKEN/x/' "$FIX/violation-no-preamble.sh" 1 2 >/dev/null 2>&1
 if [ "$FAIL" -eq "$_mr_f" ]; then
-  printf '[FATAL] instrument self-test: mutate_row did not report a failure for a no-op mutation (FAIL %d -> %d). The mutation harness is disarmed; all 17 rows below are meaningless.\n' \
+  printf '[FATAL] instrument self-test: mutate_row did not report a failure for a no-op mutation (FAIL %d -> %d). The mutation harness is disarmed; every mutation row below is meaningless.\n' \
     "$_mr_f" "$FAIL" >&2
   exit 1
 fi
@@ -735,10 +737,10 @@ e_row 'Rule E xfail: -b "session=$T", -H "Cookie: s=$T" and x-gitlab-token are N
 # POSITIVE CONTROL: the copied fixture corpus must hold the YAML fixtures. A guard that
 # scans no YAML cannot then pass the must-PASS set unnoticed.
 Y_FIXTURES="$(find "$FIX" -maxdepth 1 -name '*.yml' | wc -l)"
-if [ "$Y_FIXTURES" -lt 17 ]; then
-  fail "YAML positive control: only $Y_FIXTURES .yml fixtures were copied, anti-vacuity floor is 17"
+if [ "$Y_FIXTURES" -lt 23 ]; then
+  fail "YAML positive control: only $Y_FIXTURES .yml fixtures were copied, anti-vacuity floor is 23"
 else
-  pass "YAML positive control: $Y_FIXTURES .yml fixtures present in the fixture copy (anti-vacuity floor 17)"
+  pass "YAML positive control: $Y_FIXTURES .yml fixtures present in the fixture copy (anti-vacuity floor 23)"
 fi
 y_row() { Y_ROWS=$((Y_ROWS + 1)); e_row "$@"; }
 
@@ -756,6 +758,13 @@ y_row 'Rule E cloud-init: a Terraform-templated cloud-init file (not valid YAML)
 
 y_row 'Rule E cloud-init: a plain runcmd list item (- curl ...) is reported (the list marker no longer hides the curl)' "$LINT" "$FIX/cloud-init-violation-runcmd.yml" 1
 y_row 'Rule E YAML: a <<: *anchor merge key and a run: *alias are each reported ONCE per textual site' "$LINT" "$FIX/violation-yaml-aliased-run.yml" 2
+# The composed YAML graph is a graph, not a tree. A cyclic alias (`a: &a [*a]`) recursed until
+# RecursionError (a traceback = exit 1, read as "violations found" for the wrong reason); a
+# fan-out DAG (each anchor aliased nine times, forty levels deep) walks 9**40 paths and never
+# returns. Both must read as ONE offending site (the walk visits each container once), and the
+# fan-out row is bounded by RC_TIMEOUT so a regression reads rc 124 instead of hanging the suite.
+y_row 'Rule E YAML: a cyclic alias graph terminates and the one offending run: is reported once' "$LINT" "$FIX/violation-yaml-cyclic-alias.yml" 1
+RC_TIMEOUT=5 y_row 'Rule E YAML: a fan-out alias DAG (nine aliases per level, forty levels) terminates under 5s and reports the one run: once' "$LINT" "$FIX/violation-yaml-fanout-alias.yml" 1
 y_row 'Rule E YAML must-PASS: echo/printf of a runbook curl line and a comment inside run: are not executed curl commands' "$LINT" "$FIX/compliant-yaml-echo-only.yml" 0
 y_row 'Rule E YAML must-PASS: printf | curl -H @- and curl --config - < <(printf ...) inside run: pass' "$LINT" "$FIX/compliant-yaml-stdin.yml" 0
 y_row 'Rule E YAML must-PASS: a step whose shell: is python is not bash and is skipped' "$LINT" "$FIX/compliant-yaml-nonbash-shell.yml" 0
@@ -794,6 +803,17 @@ if [ "$rc" = "2" ] && grep -q 'violation-yaml-unparseable.yml: cannot evaluate (
   pass "Rule E YAML: an unparseable YAML file exits exactly 2 with the pinned note, not a skip and not a raw-line fallback"
 else
   fail "Rule E YAML: unparseable fixture should exit 2 with the pinned note and no Rule E message, got rc=$rc: $(head -c 300 "$WORK/err")"
+fi
+
+# A pathologically DEEP (not cyclic) flow nest overflows the recursive walk. That is "cannot
+# evaluate" (exit 2, ADR-157), never a traceback that exits 1 and reads as "violations found".
+Y_ROWS=$((Y_ROWS + 1))
+rc="$(rc_of "$LINT" "$FIX/cannot-evaluate-yaml-deep-nest.yml")"
+if [ "$rc" = "2" ] && grep -q 'cannot evaluate (YAML nesting too deep to walk)' "$WORK/err" \
+  && ! grep -qE "$E_MSG_RE|Traceback" "$WORK/out" "$WORK/err"; then
+  pass "Rule E YAML: a too-deeply nested flow document exits exactly 2 with the pinned note, no traceback and no Rule E message"
+else
+  fail "Rule E YAML: deep-nest fixture should exit 2 with the pinned note, got rc=$rc: $(head -c 300 "$WORK/err")"
 fi
 
 # PyYAML is imported LAZILY (the `--changed` path is stdlib-only) and a missing PyYAML is exit
@@ -871,10 +891,10 @@ files = m.rule_e_files()
 print(sum(1 for p in files if p.suffix in (".yml", ".yaml")))
 PY
 )"
-if [ "${YAML_TARGETS:-0}" -lt 103 ]; then
-  fail "Rule E discovery: rule_e_files() lists ${YAML_TARGETS:-0} YAML files, anti-vacuity floor is 103 (98 .github + 5 cloud-init at implementation time; grow-only)"
+if [ "${YAML_TARGETS:-0}" -lt 104 ]; then
+  fail "Rule E discovery: rule_e_files() lists ${YAML_TARGETS:-0} YAML files, anti-vacuity floor is 104 (99 .github, including .github/FUNDING.yml reached only by the `.github/*.yml` pathspec, + 5 cloud-init; grow-only)"
 else
-  pass "Rule E discovery: rule_e_files() lists $YAML_TARGETS YAML files (anti-vacuity floor 103)"
+  pass "Rule E discovery: rule_e_files() lists $YAML_TARGETS YAML files (anti-vacuity floor 104)"
 fi
 # Every `git ls-files` pathspec the discovery uses must match at least one real file
 # (hr-when-a-plan-specifies-relative-paths-e-g), except the `.yaml` spelling, which GitHub
@@ -894,8 +914,8 @@ s.loader.exec_module(m)
 print("\n".join(m.E_YAML_PATHSPECS))
 PY
 )
-if [ "$_nps" -lt 3 ]; then
-  fail "Rule E discovery: read only $_nps YAML pathspec(s) from the lint, anti-vacuity floor is 3"
+if [ "$_nps" -lt 5 ]; then
+  fail "Rule E discovery: read only $_nps YAML pathspec(s) from the lint, anti-vacuity floor is 5"
 elif [ "$_dead" != "0" ]; then
   fail "Rule E discovery: $_dead YAML pathspec(s) match no tracked file"
 else
@@ -908,15 +928,15 @@ unset _dead _ps _nps
 # reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
 # `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
 # can see and mutation-test them.
-if [ "$E_ROWS" -lt 47 ]; then
-  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 47"
+if [ "$E_ROWS" -lt 52 ]; then
+  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 52"
 else
-  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 47)"
+  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 52)"
 fi
-if [ "$Y_ROWS" -lt 26 ]; then
-  fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 26"
+if [ "$Y_ROWS" -lt 32 ]; then
+  fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 32"
 else
-  pass "Rule E YAML arm: $Y_ROWS rows executed (anti-vacuity floor 26)"
+  pass "Rule E YAML arm: $Y_ROWS rows executed (anti-vacuity floor 32)"
 fi
 
 # --census must agree with baseline E: a dispatch that never runs Rule E reports
@@ -930,29 +950,107 @@ if [ -n "$census_e" ] && [ "$census_e" = "$base_e" ]; then
 else
   fail "Rule E: --census offenders_e='$census_e' does not equal baseline E length '$base_e'"
 fi
-# HARNESS ROW (d): baseline E vs the hand-reviewed census ceiling. `--write-baseline-e` seeds
-# the baseline from the tool under test, so a false positive would otherwise be certified by
-# its own output. Every baseline path must be in the ceiling table with a count at or below it.
+# HARNESS ROW (d): baseline E vs the census ceiling table. `--write-baseline-e` seeds the baseline
+# from the tool under test, so a false positive would otherwise be certified by its own output.
+# WHAT THIS PINS, and nothing more: the ceiling table is a SECOND file, so growing the baseline (a
+# new offender, a raised count) needs an independent second edit -- it is a tripwire for an edit
+# made in one place only, NOT an independent review (the table was seeded from the same census and
+# is today identical to the baseline). Both directions are enforced:
+#   - every baseline path is in the table with a count at or below its ceiling;
+#   - every table row either has a baseline row or its file STILL offends (a converted file must
+#     leave the table, so the table cannot keep a ceiling a later edit could silently re-raise to).
+# census_ceiling_check <baseline> <ceiling> sets CC_LISTED / CC_BAD / CC_STALE and reports on stderr.
+census_ceiling_check() {
+  local base="$1" ceil="$2" bp bn cl cp cn en rc
+  CC_LISTED=0
+  CC_BAD=0
+  CC_STALE=0
+  while IFS=$'\t' read -r bp bn; do
+    case "$bp" in '' | '#'*) continue ;; esac
+    CC_LISTED=$((CC_LISTED + 1))
+    cl="$(awk -F'\t' -v p="$bp" '$1 == p { print $2 }' "$ceil")"
+    if [ -z "$cl" ] || [ "$bn" -gt "$cl" ]; then
+      CC_BAD=$((CC_BAD + 1))
+      printf 'baseline E entry above its census ceiling or absent from it: %s (listed %s, ceiling %s)\n' "$bp" "$bn" "${cl:-none}" >&2
+    fi
+  done < "$base"
+  while IFS=$'\t' read -r cp cn; do
+    case "$cp" in '' | '#'*) continue ;; esac
+    awk -F'\t' -v p="$cp" '$1 == p { f = 1 } END { exit !f }' "$base" && continue
+    if [ ! -e "$REPO_ROOT/$cp" ]; then
+      CC_STALE=$((CC_STALE + 1))
+      printf 'stale census ceiling row: %s is not in baseline E and no longer exists\n' "$cp" >&2
+      continue
+    fi
+    # An explicit path bypasses the baselines, so this reads the file's own verdict.
+    rc="$(rc_of "$LINT" "$REPO_ROOT/$cp")"
+    en="$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")"
+    if [ "$rc" = "0" ] && [ "$en" = "0" ]; then
+      CC_STALE=$((CC_STALE + 1))
+      printf 'stale census ceiling row: %s is not in baseline E and no longer offends -- remove it from the table\n' "$cp" >&2
+    fi
+  done < "$ceil"
+}
 CEIL_FILE="$FIX/rule-e-census-ceiling.tsv"
-_bad=0
-_listed=0
-while IFS=$'\t' read -r _bp _bn; do
-  case "$_bp" in '' | '#'*) continue ;; esac
-  _listed=$((_listed + 1))
-  _ceil="$(awk -F'\t' -v p="$_bp" '$1 == p { print $2 }' "$CEIL_FILE")"
-  if [ -z "$_ceil" ] || [ "$_bn" -gt "$_ceil" ]; then
-    _bad=$((_bad + 1))
-    printf 'baseline E entry above its census ceiling or absent from it: %s (listed %s, ceiling %s)\n' "$_bp" "$_bn" "${_ceil:-none}" >&2
-  fi
-done < "$BASE_E_FILE"
-if [ "$_listed" -lt 1 ]; then
+census_ceiling_check "$BASE_E_FILE" "$CEIL_FILE"
+if [ "$CC_LISTED" -lt 1 ]; then
   fail "Rule E baseline vs census ceiling: baseline E lists no entries, anti-vacuity floor is 1"
-elif [ "$_bad" != "0" ]; then
-  fail "Rule E baseline vs census ceiling: $_bad baseline E entr(ies) exceed or are missing from the hand-reviewed census table"
+elif [ "$CC_BAD" != "0" ]; then
+  fail "Rule E baseline vs census ceiling: $CC_BAD baseline E entr(ies) exceed or are missing from the census table"
 else
-  pass "Rule E baseline vs census ceiling: all $_listed baseline E entries are in the census table at or below their ceiling"
+  pass "Rule E baseline vs census ceiling: all $CC_LISTED baseline E entries are in the census table at or below their ceiling"
 fi
-unset _bad _listed _ceil _bp _bn
+if [ "$CC_STALE" != "0" ]; then
+  fail "Rule E census ceiling: $CC_STALE table row(s) have no baseline row and their file no longer offends -- a converted file must leave the table"
+else
+  pass "Rule E census ceiling: every table row has a baseline row or a file that still offends (no stale ceilings)"
+fi
+
+# Mutation rows for the check itself (each starts from the REAL pair, adds one defect, asserts it
+# LANDED, and must read RED; the control below must stay GREEN or the RED rows prove nothing).
+# (1) a ceiling row left behind for an existing file that is absent from the baseline and clean.
+{ cat "$CEIL_FILE"; printf 'scripts/lint-orphan-test-suites.sh\t1\n'; } > "$WORK/ceil-stale.tsv"
+if ! cmp -s "$CEIL_FILE" "$WORK/ceil-stale.tsv"; then
+  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-stale.tsv" 2>/dev/null
+  [ "$CC_STALE" = "1" ] && [ "$CC_BAD" = "0" ] \
+    && pass "Rule E census ceiling M-stale: a table row for a clean file absent from the baseline fails (stale=$CC_STALE)" \
+    || fail "Rule E census ceiling M-stale: a stale row on a clean file should give stale=1 bad=0, got stale=$CC_STALE bad=$CC_BAD"
+else
+  fail "Rule E census ceiling M-stale: the stale row did not land"
+fi
+# (2) ...and for a file that no longer exists at all.
+{ cat "$CEIL_FILE"; printf 'scripts/no-such-converted-file.sh\t1\n'; } > "$WORK/ceil-gone.tsv"
+if ! cmp -s "$CEIL_FILE" "$WORK/ceil-gone.tsv"; then
+  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-gone.tsv" 2>/dev/null
+  [ "$CC_STALE" = "1" ] && [ "$CC_BAD" = "0" ] \
+    && pass "Rule E census ceiling M-stale: a table row for a deleted file fails (stale=$CC_STALE)" \
+    || fail "Rule E census ceiling M-stale: a stale row on a deleted file should give stale=1 bad=0, got stale=$CC_STALE bad=$CC_BAD"
+else
+  fail "Rule E census ceiling M-stale: the deleted-file row did not land"
+fi
+# (3) CONTROL: a baseline row removed while its file STILL offends is not stale (the lint itself
+# reports an unbaselined offender); without this the stale check could be "every unlisted row fails".
+_first="$(grep -vE '^(#|[[:space:]]*$)' "$BASE_E_FILE" | head -1 | cut -f1)"
+grep -vE "^${_first//./\\.}"$'\t' "$BASE_E_FILE" > "$WORK/base-minus-one.txt"
+if [ -n "$_first" ] && ! cmp -s "$BASE_E_FILE" "$WORK/base-minus-one.txt"; then
+  census_ceiling_check "$WORK/base-minus-one.txt" "$CEIL_FILE" 2>/dev/null
+  [ "$CC_STALE" = "0" ] && [ "$CC_BAD" = "0" ] \
+    && pass "Rule E census ceiling control: a table row whose baseline row was removed but whose file still offends is NOT stale" \
+    || fail "Rule E census ceiling control: still-offending '$_first' must not read stale, got stale=$CC_STALE bad=$CC_BAD"
+else
+  fail "Rule E census ceiling control: could not remove a baseline row"
+fi
+# (4) the baseline side: a baseline row above its ceiling reads RED.
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = $2 + 1; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-raised.txt"
+if ! cmp -s "$BASE_E_FILE" "$WORK/base-raised.txt"; then
+  census_ceiling_check "$WORK/base-raised.txt" "$CEIL_FILE" 2>/dev/null
+  [ "$CC_BAD" = "1" ] \
+    && pass "Rule E census ceiling M-raise: a baseline count raised above its ceiling fails" \
+    || fail "Rule E census ceiling M-raise: a raised baseline count should give bad=1, got bad=$CC_BAD"
+else
+  fail "Rule E census ceiling M-raise: the raised count did not land"
+fi
+unset _first
 
 grep -qx -- '--- rule E ---' "$WORK/census" \
   && pass "Rule E: --census carries a '--- rule E ---' list" \
@@ -1012,7 +1110,7 @@ mutate_row 'E6c Rule E: here-string/heredoc hazard dropped' \
 SBX_N=0
 SBX=""
 SBX_GIT=(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git)
-sbx_repo() { # <baseline-E body (printf-escaped)> [<perl-expr applied to the lint copy>] [<yaml fixture -> .github/workflows/offender.yml>] [<yaml fixture -> .github/workflows/offender2.yaml>]
+sbx_repo() { # <baseline-E body (printf-escaped)> [<perl-expr applied to the lint copy>] [<yaml fixture -> .github/workflows/offender.yml>] [<yaml fixture -> .github/workflows/offender2.yaml>] [<yaml fixture -> .github/direct.yml>]
   SBX_N=$((SBX_N + 1))
   SBX="$WORK/sbx$SBX_N"
   local lintc="$SBX/scripts/lint-shell-trace-credential-refusal.py"
@@ -1037,6 +1135,10 @@ sbx_repo() { # <baseline-E body (printf-escaped)> [<perl-expr applied to the lin
     if [ -n "${4:-}" ]; then
       cp "$4" "$SBX/.github/workflows/offender2.yaml" || return 1
     fi
+  fi
+  if [ -n "${5:-}" ]; then
+    mkdir -p "$SBX/.github" || return 1
+    cp "$5" "$SBX/.github/direct.yml" || return 1
   fi
   "${SBX_GIT[@]}" -C "$SBX" init -q >/dev/null 2>&1 && "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
 }
@@ -1206,7 +1308,7 @@ if sbx_repo 'scripts/offender.sh\t1\n.github/workflows/offender.yml\t1\n.github/
     fail "Rule E YAML: .yaml sandbox expected rc=0 and '3 site(s)', got rc=$rc: $(head -c 300 "$WORK/err") $(head -c 200 "$WORK/out")"
   fi
 fi
-if sbx_repo 'scripts/offender.sh\t1\n.github/workflows/offender.yml\t1\n.github/workflows/offender2.yaml\t1\n' 's/"\.github\/\*\*\/\*\.yaml", //' "$YAML_LIT" "$YAML_LIT"; then
+if sbx_repo 'scripts/offender.sh\t1\n.github/workflows/offender.yml\t1\n.github/workflows/offender2.yaml\t1\n' 's/"\.github\/\*\*\/\*\.yaml",\s*//; s/"\.github\/\*\.yaml",\s*//' "$YAML_LIT" "$YAML_LIT"; then
   rc="$(sbx_run)"
   if [ "$rc" = "1" ] && grep -q 'offender2.yaml' "$WORK/err" && sbx_clean_run; then
     pass "Rule E YAML M2c: the .yaml pathspec removed -> the listed .yaml workflow reads RED"
@@ -1215,6 +1317,31 @@ if sbx_repo 'scripts/offender.sh\t1\n.github/workflows/offender.yml\t1\n.github/
   fi
 else
   fail "Rule E YAML M2c: could not build the mutated sandbox (mutation did not land?)"
+fi
+
+# A workflow-config file sitting DIRECTLY under `.github/` (the tree has `.github/FUNDING.yml`):
+# `.github/**/*.yml` needs a second slash and does not match it, so it is reachable only through
+# the `.github/*.yml` pathspec. Listed with its count it is GREEN (discovered, scanned, equal);
+# with that one pathspec removed the listed file is no longer discovered -> 'no longer carries'.
+if sbx_repo 'scripts/offender.sh\t1\n.github/direct.yml\t1\n' '' '' '' "$YAML_LIT"; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "0" ] && grep -q '2 site(s)' "$WORK/out" && sbx_clean_run; then
+    pass "Rule E YAML: a .yml directly under .github/ is discovered and scanned (listed with its count -> GREEN)"
+  else
+    fail "Rule E YAML: direct-under-.github sandbox expected rc=0 and '2 site(s)', got rc=$rc: $(head -c 300 "$WORK/err") $(head -c 200 "$WORK/out")"
+  fi
+else
+  fail "Rule E YAML: could not build the direct-under-.github sandbox repo"
+fi
+if sbx_repo 'scripts/offender.sh\t1\n.github/direct.yml\t1\n' 's/"\.github\/\*\.yml", //' '' '' "$YAML_LIT"; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q '.github/direct.yml' "$WORK/err" && grep -q 'no longer carries' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E YAML M2d: the .github/*.yml pathspec removed -> the listed direct-under-.github file reads RED"
+  else
+    fail "Rule E YAML M2d: dropped .github/*.yml pathspec should report rc=1 naming .github/direct.yml, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+else
+  fail "Rule E YAML M2d: could not build the mutated sandbox (mutation did not land?)"
 fi
 
 # D1: `--changed` stays *.sh-only. Touching a baselined workflow must NOT pull it into the
@@ -1351,6 +1478,34 @@ else
   fail "Y-M7d: mutation did not land"
 fi
 
+# 8: the visited-container guard and the RecursionError arm of the graph walk. Each mutant is
+# the lint as first written (before the guard existed).
+_guard='s/^(\s*)if key in _seen:$/${1}if False:/m'
+mutate_row 'Y-M8a visited-container guard removed: the cyclic alias recurses to RecursionError (rc 1 -> 2)' \
+  "$_guard" "$FIX/violation-yaml-cyclic-alias.yml" 1 2 0
+# The fan-out mutant never returns, so it cannot go through mutate_row (no timeout): it is
+# bounded here and must be KILLED by the timeout (rc 124), not merely wrong.
+if mutant_copy "$_guard"; then
+  rc="$(RC_TIMEOUT=5 rc_of "$WORK/mut2.py" "$FIX/violation-yaml-fanout-alias.yml")"
+  [ "$rc" = "124" ] && pass "Y-M8b visited-container guard removed: the fan-out alias DAG does not terminate (timeout rc 124)" \
+    || fail "Y-M8b: guard-less fan-out mutant should time out (rc 124), got rc=$rc -- the fan-out fixture does not exercise the guard"
+else
+  fail "Y-M8b: mutation did not land"
+fi
+unset _guard
+# Without the RecursionError arm the deep nest is an uncaught traceback (exit 1): the very
+# misreading the arm exists to prevent. Not through mutate_row, which refuses Tracebacks.
+if mutant_copy 's/^(\s*)except RecursionError:$/${1}except ZeroDivisionError:/m'; then
+  rc="$(rc_of "$WORK/mut2.py" "$FIX/cannot-evaluate-yaml-deep-nest.yml")"
+  if [ "$rc" = "1" ] && grep -q 'RecursionError' "$WORK/err" && ! grep -q 'too deep to walk' "$WORK/err"; then
+    pass "Y-M8c except RecursionError removed: the deep nest is an uncaught traceback, exit 1 (2 -> 1)"
+  else
+    fail "Y-M8c: RecursionError-arm mutant should exit 1 with a RecursionError traceback, got rc=$rc: $(tail -c 200 "$WORK/err")"
+  fi
+else
+  fail "Y-M8c: mutation did not land"
+fi
+
 
 # --- Guard 2 (#7946): Rule C empty-predicate hardening ------------------------
 # A single-credential file whose only `${VAR:+x}` limb was deleted leaves `[ -n "" ]`,
@@ -1444,6 +1599,68 @@ mutate_row 'G2-M8 Rule C: arm window keeps comment lines' \
   's/line = strip_comment\(raw\)\n        out\.append\(line\)/line = raw\n        out.append(line)/' \
   "$FIX/violation-guard-in-comment.sh" 1 0
 
+# --- SKIP_SHELLS parity ---------------------------------------------------------
+# The interpreter set that makes a workflow `run:` body non-bash is defined TWICE: here and in
+# scripts/lint-workflow-run-body-syntax.py (which parses the same bodies with `bash -n`). If the
+# copies drift, one lint scans a python body as bash or skips a bash-like shell the other checks.
+# Both are read BY NAME with ast (the sibling's filename is not importable, and executing it just
+# to read a constant is needless); the extraction must yield a non-empty set from each, or an
+# assignment that moved/was renamed would compare two empty sets and pass.
+SKIPSH_PY='import ast, sys
+def members(path):
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "SKIP_SHELLS" for t in node.targets):
+            v = node.value
+            if isinstance(v, ast.Call) and v.args:
+                v = v.args[0]
+            return sorted(ast.literal_eval(v))
+    return []
+a, b = members(sys.argv[1]), members(sys.argv[2])
+print(len(a), len(b))
+sys.exit(0 if a and b and a == b else 1)'
+SIBLING="$REPO_ROOT/scripts/lint-workflow-run-body-syntax.py"
+python3 -c "$SKIPSH_PY" "$LINT" "$SIBLING" >"$WORK/skipsh.out" 2>"$WORK/skipsh.err"
+rc=$?
+_na="$(cut -d' ' -f1 "$WORK/skipsh.out")"
+_nb="$(cut -d' ' -f2 "$WORK/skipsh.out")"
+if [ "$rc" = "0" ] && [ "${_na:-0}" -ge 1 ] && [ "${_nb:-0}" -ge 1 ]; then
+  pass "SKIP_SHELLS parity: the lint and lint-workflow-run-body-syntax.py name the same ${_na} interpreters"
+else
+  fail "SKIP_SHELLS parity: rc=$rc sizes=${_na:-?}/${_nb:-?} -- the two copies differ or an extraction found nothing: $(head -c 200 "$WORK/skipsh.err")"
+fi
+# Mutation: one member added to the SIBLING copy (a sandbox copy; the repo file is untouched) must redden it.
+cp "$SIBLING" "$WORK/sibling-mut.py"
+perl -0pi -e 's/^(SKIP_SHELLS = \{"python", )/$1"zsh", /m' "$WORK/sibling-mut.py"
+if cmp -s "$SIBLING" "$WORK/sibling-mut.py"; then
+  fail "SKIP_SHELLS parity mutation: the added member did not land"
+else
+  python3 -c "$SKIPSH_PY" "$LINT" "$WORK/sibling-mut.py" >"$WORK/skipsh.out" 2>"$WORK/skipsh.err"
+  rc=$?
+  [ "$rc" = "1" ] && ! grep -q 'Traceback' "$WORK/skipsh.err" \
+    && pass "SKIP_SHELLS parity mutation: a member added to one copy reddens the row (rc=1)" \
+    || fail "SKIP_SHELLS parity mutation: a divergent copy should read rc=1 without a traceback, got rc=$rc: $(head -c 200 "$WORK/skipsh.err")"
+fi
+# ...and the same in the LINT's copy, so neither side's extraction is the one-sided half.
+cp "$LINT" "$WORK/lint-skipmut.py"
+perl -0pi -e 's/^(SKIP_SHELLS = frozenset\(\{"python", )/$1"zsh", /m' "$WORK/lint-skipmut.py"
+if cmp -s "$LINT" "$WORK/lint-skipmut.py"; then
+  fail "SKIP_SHELLS parity mutation (lint side): the added member did not land"
+else
+  python3 -c "$SKIPSH_PY" "$WORK/lint-skipmut.py" "$SIBLING" >"$WORK/skipsh.out" 2>"$WORK/skipsh.err"
+  rc=$?
+  [ "$rc" = "1" ] && ! grep -q 'Traceback' "$WORK/skipsh.err" \
+    && pass "SKIP_SHELLS parity mutation (lint side): a member added to the lint's copy reddens the row (rc=1)" \
+    || fail "SKIP_SHELLS parity mutation (lint side): a divergent copy should read rc=1 without a traceback, got rc=$rc: $(head -c 200 "$WORK/skipsh.err")"
+fi
+# Non-vacuity: a file with no SKIP_SHELLS assignment yields an empty set and must NOT read as parity.
+printf 'X = 1\n' > "$WORK/no-skipshells.py"
+python3 -c "$SKIPSH_PY" "$WORK/no-skipshells.py" "$WORK/no-skipshells.py" >"$WORK/skipsh.out" 2>"$WORK/skipsh.err"
+rc=$?
+[ "$rc" = "1" ] && pass "SKIP_SHELLS parity non-vacuity: two empty extractions do not read as parity (rc=1)" \
+  || fail "SKIP_SHELLS parity non-vacuity: an empty extraction must fail the row, got rc=$rc"
+unset SKIPSH_PY SIBLING _na _nb
+
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
 # H1: assert the floor by DRIVING it, not by grepping for its name -- the old
 # check searched for a literal its own grep line contains, so deleting the floor
@@ -1490,10 +1707,10 @@ _CANON_BODY='{ local LC_ALL=C; case "${1:-}" in '"''"'|*[!A-Za-z0-9._~+/=-]*) re
 _copies="$(git grep -hE '_bearer_ok\(\) *\{' -- '*.sh' ':!*.test.sh' ':!tests/scripts/test-*' ':!scripts/fixtures' | sed -E 's/^[[:space:]]*[A-Za-z0-9_]*_bearer_ok\(\) *//')"
 _n_copies="$(printf '%s\n' "$_copies" | grep -c . || true)"
 _n_off="$(printf '%s\n' "$_copies" | grep -vcxF -- "$_CANON_BODY" || true)"
-if [ "$_n_copies" -ge 40 ] && [ "$_n_off" = "0" ]; then
+if [ "$_n_copies" -ge 63 ] && [ "$_n_off" = "0" ]; then
   pass "token-shape guard: all $_n_copies inline copies of _bearer_ok carry the one canonical body"
 else
-  fail "token-shape guard drift: copies=$_n_copies off-canonical=$_n_off (expected >= 40 copies, 0 off-canonical)"
+  fail "token-shape guard drift: copies=$_n_copies off-canonical=$_n_off (anti-vacuity floor: >= 63 copies, the measured population, and 0 off-canonical)"
 fi
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
@@ -1510,9 +1727,10 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
+# Re-measured at 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
+# SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=198
+MIN_ASSERTIONS=219
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

@@ -1,11 +1,14 @@
-# Per-file CEILING for baseline E (#9597 S1), recorded from the Phase 0 census (widened vocabulary,
-# YAML extraction + raw-line feeders). path<TAB>sites. The suite fails when baseline E lists a
-# path that is not here or a count ABOVE its ceiling: `--write-baseline-e` seeds the baseline from
-# the tool under test and would otherwise certify its own false positives. Ceilings only ever
-# shrink in spirit (a conversion lowers the live count); never raise one without re-classifying
-# the site by hand.
-apps/web-platform/infra/cloud-init-registry.yml	4
+# Per-file CEILING for baseline E (#9597 S1), path<TAB>sites, in the baseline's own order
+# (LC_ALL=C sort). It is currently IDENTICAL to scripts/lint-shell-trace-credential-refusal-e.baseline.txt
+# (seeded from the same census), so it is NOT an independent review of the baseline. What it
+# pins, and nothing more: a second file that must be edited in step, so growing baseline E (a new
+# offender row, or a count raised above its row here) cannot be done by `--write-baseline-e`
+# alone -- the suite fails until this table is edited too, which a reviewer then sees in the diff.
+# It is checked in BOTH directions: every baseline row needs a row here at or above its count,
+# and every row here needs a baseline row OR a file that still offends. A converted file must
+# therefore leave this table in the same change that removes it from the baseline.
 .github/actions/anthropic-preflight/action.yml	1
+.github/actions/dispatch-web-redeploy/track.sh	2
 .github/actions/mint-infra-app-token/action.yml	2
 .github/actions/notify-ops-email/action.yml	1
 .github/workflows/apply-deploy-pipeline-fix.yml	6
@@ -26,8 +29,8 @@ apps/web-platform/infra/cloud-init-registry.yml	4
 .github/workflows/sentry-audit-gate.yml	1
 .github/workflows/web-platform-release.yml	5
 .github/workflows/workspaces-luks-cutover.yml	1
-.github/actions/dispatch-web-redeploy/track.sh	2
 apps/web-platform/infra/ci-deploy.sh	1
+apps/web-platform/infra/cloud-init-registry.yml	4
 apps/web-platform/infra/infra-config-verify.sh	1
 apps/web-platform/infra/push-infra-config.sh	1
 apps/web-platform/infra/web-private-nic-guard.sh	1

@@ -29,11 +29,11 @@ invariant:
       five hand-written `set -x` warnings across three workflows are warning
       about exactly this shape.
   Rules C and D are documented at their definitions below. Rule E (#9597) is the
-  argv-credential ratchet: no curl command carries a credential header (any
-  `Authorization:` scheme, CF-Access-Client-Id/-Secret, X-Signature-256, X-API-Key) in its
-  own argument list, in tracked shell, workflow/composite-action YAML or cloud-init YAML (see
-  the Rule E block for the members, safe forms, scope and blind spots), with its own
-  `path<TAB>site-count` baseline compared by equality in the repo-wide run.
+  argv-credential ratchet: no curl command carries a credential header (the six names in
+  `E_CREDENTIAL_HEADERS`; any `Authorization:` scheme) in its own argument list, in tracked
+  shell, workflow/composite-action YAML or cloud-init YAML (see the Rule E block for the
+  members, safe forms, scope and blind spots), with its own `path<TAB>site-count` baseline
+  compared by equality in the repo-wide run.
 
 SCOPE EXCLUSIONS, each with a reason:
   *.test.sh / tests/  -- suites synthesize fake tokens per
@@ -751,7 +751,9 @@ def _inline_config_file(cmd: str, lines: list[str]) -> str:
 # `local curl_args=(` in discord-setup.sh lost its declaration (only the later `+=(`
 # append was inlined) and an `Authorization: Bot` header in it went unreported, while a
 # compliant `local x=(--disable ...)` read as a FALSE Rule D finding. Shared by Rule D, Rule E
-# and the wrapper analysis; the Rule D census before/after this change is recorded in the PR.
+# and the wrapper analysis. To reproduce the Rule D census over the tracked tree, run
+# `python3 scripts/lint-shell-trace-credential-refusal.py --census` (it prints the offender
+# set per rule); the before/after of this change is not kept as a repo artifact.
 _ARRAY_DECL_PREFIX = r"^\s*(?:(?:local|declare|readonly|typeset)(?:\s+-[A-Za-z]+)*\s+)?"
 
 
@@ -1117,10 +1119,13 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 #   * VOCABULARY: ONE constant, `E_CREDENTIAL`, read at five sites (held-name capture, array
 #     capture, `_e_scan`, the call-level check, the wrapper-site check). It matches the header
 #     NAME, never a scheme list: ANY `Authorization:` value (Bearer, Bot, Basic, Digest, Token,
-#     `${SCHEME}`), `CF-Access-Client-Id:`, `CF-Access-Client-Secret:`, `X-Signature-256:` and
-#     `X-API-Key:`, in any case. `apikey:` keeps its own semantics (below). `-u`/`--user`
-#     detection is NOT here: it is deferred to the slice that converts
-#     scripts/betterstack-query.sh, its only real site;
+#     `${SCHEME}`), plus the other five names listed in `E_CREDENTIAL_HEADERS` (six in all;
+#     that tuple is the source of truth, this prose is not), in any case. `apikey:` keeps its
+#     own semantics (below). `-u`/`--user` detection is NOT here: it is deferred to the slice
+#     that converts scripts/betterstack-query.sh, its only real site. NAMING: the locals
+#     `bearer_*` / `f["bearer"]` / `_e_bearer_arrays` predate the six-name vocabulary and mean
+#     "any E_CREDENTIAL header", not "an Authorization: Bearer one"; the suite seds two of them
+#     (`bearer_in_call`, `bearer_ctx`), so they are not renamed;
 #   * the short `-H` and long `--header` flags, with or without a space (`-H"..."`),
 #     double- or single-quoted, any case, the header before OR after the URL, and any
 #     number of curl commands per script;
@@ -1144,9 +1149,10 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # `apps/**/cloud-init*.yml`. Rules A to D key on a shebang/preamble and stay `*.sh`-only,
 # and so does `--changed`: if YAML were in `--changed`, any unrelated edit to a baselined
 # workflow (apply-web-platform-infra.yml sits under a byte gate) would force that workflow's
-# FULL remediation in the same PR. Growth in YAML is still blocked: the repo-wide run
-# compares baseline E by equality on path AND count, and an explicit path bypasses the
-# baseline, so a conversion PR proves its files clean by naming them. An explicit YAML path
+# FULL remediation in the same PR. Growth in YAML is blocked by the repo-wide run's equality
+# on path AND count (subject to the limits stated at "Baseline E" below: reviewer-gated, a
+# diff can edit the baseline), and an explicit path bypasses the baseline, so a conversion PR
+# proves its files clean by naming them. An explicit YAML path
 # runs Rule E only. TWO FEEDERS (see check_yaml_file): workflows and composite actions are
 # parsed with PyYAML and every `run` string value is scanned (reporting the step name and a
 # best-effort line: exact for `run: |`, the first content line for a folded scalar, the key
@@ -1156,13 +1162,14 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # and so is a missing PyYAML (imported lazily, only when a workflow is about to be parsed).
 #
 # KNOWN BLIND SPOTS (census-only; a reviewer, not this lint, judges them): message BODIES
-# that carry a secret (`-d` operands, a bsky password JSON); a secret in a URL (heartbeat
+# that carry a secret (`-d` operands; the bsky password JSON moved to stdin in this sweep,
+# the generic point stands); a secret in a URL (heartbeat
 # path secrets, `x-access-token:` userinfo in git remotes); `doppler --token`; `jq --arg`
 # (a value on jq's argv); `openssl dgst -hmac "$KEY"` (about 30 sites, no stdin form);
 # header VALUES held in `env:` and passed as `-H "$H"` (the assignment is not in the scanned
 # body); `env -i`; `wget`; `gh api -H`; `-K file` configs written with the default umask;
 # cookies (`-b`, `Cookie:`) and vendor-specific custom headers (`x-gitlab-token`), pinned by
-# an xfail row in the suite; and `-u`/`--user` operands (deferred, see VOCABULARY). Two
+# an xfail row in the suite. Two
 # populations carry argv credentials, are not scanned, and are owned by no S2-S5 slice (tracked
 # on the #9597 restatement): `apps/cla-evidence/infra/object_lock.tf` (a `local-exec` curl with
 # an `Authorization` header) and Markdown that agents EXECUTE (`infra-security.md`,
@@ -1170,9 +1177,55 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # converted by hand and nothing now protects it). Cloud-init folded, flow-list and quoted
 # `runcmd` items are census-only too (see `_cloud_init_lines`).
 #
+# VOCABULARY GAPS (measured E=0 on a synthesized one-line `curl ... -H "<name>: $TOK" "$URL"`;
+# NOT added to the vocabulary because the baseline impact of adding them is unmeasured; Rule D
+# still classifies some of them): `--oauth2-bearer` and `-u`/`--user` operands (Rule D's
+# CURL_CRED_FLAGS lists both, Rule E does not; deferred, see VOCABULARY), and the header names
+# `x-hub-signature-256`, `X-Auth-Token`, `X-Auth-Key`, `PRIVATE-TOKEN` (Rule D's
+# CURL_AUTH_HEADER lists `Private-Token`, Rule E does not), `Doppler-Token`,
+# `CF-Access-Jwt-Assertion` and `x-amz-security-token`.
+#
+# EVASION SHAPES (each measured E=0 on a synthesized file; pre-existing and S3 scope, detection
+# is NOT changed here, so a reviewer must read for them):
+#   * an interpreter fed a heredoc (`bash <<'EOF'`, `python3 - <<'EOF'`) is masked unless the
+#     heredoc is written to a file (`cat > f <<EOF`, which IS scanned); `node -e "...curl..."`
+#     and `python3 -c "...curl..."` never have curl in command position;
+#   * only the LAST curl of a logical command is judged (inherited from Rule D):
+#     `curl -H "Authorization: ..." a; curl b`, `... && curl b` and `... | curl b` all pass,
+#     while the same two commands on separate lines are each judged;
+#   * curl inside `<(...)` or `>(...)` (`diff <(curl ...)`, `tee >(curl ...)`); `$(...)` is read;
+#   * command-word spellings that are not the literal word `curl` (or an absolute path to
+#     it): `\curl`, `"curl"`, `$CURL_BIN`, `"$CURL_BIN"`. Two live `x-api-key` argv sites hide
+#     behind the last one (scripts/compound-promote.sh, scripts/learning-retrieval-bench.sh),
+#     tracked under #7898's CURL_BIN scope gap;
+#   * launcher prefixes that take an option ARGUMENT or run curl indirectly: `sudo -n`,
+#     `sudo -u U`, `timeout -s SIG N`, `env -u NAME`, `command -p`, `stdbuf -oL`, `xargs`,
+#     `ssh host`, `bash -c '...'`, `eval "..."`, `docker run IMG` and a retry wrapper (a bare
+#     `sudo`, `timeout N`, `env`, `command`, `nohup`, `exec`, `time` and `nice -n N` are read);
+#   * held-header capture limits (`_e_held_names`): a header NAME assembled from parts
+#     (`k=Authorization; -H "$k: ..."`), a value read in (`read -r h < <(printf ...)`), produced
+#     by a function (`-H "$(auth_header)"`), supplied by the environment, or defined in a
+#     sourced file;
+#   * flag spellings: `-sSH"..."` (a bundle with the value glued on; `-sSH "..."` IS read),
+#     `--expand-header` and `--proxy-header` (a different flag carrying a header), and the
+#     `--oauth2-bearer` credential flag above;
+#   * YAML keys other than `run:`: `with: script:` (actions/github-script) and `with: args:`
+#     (a docker action's command line) are never read, only `run` scalars are;
+#   * `run:` bodies that are not bash: `shell: python` / `shell: node ...` steps are skipped on
+#     purpose (SKIP_SHELLS), and a `python3 -c` / `node -e` / `python3 - <<EOF` body inside a
+#     bash step falls under the first bullet;
+#   * paths excluded by EXCLUDE_PATTERNS: `*.test.sh` and anything under a `test/`, `tests/`,
+#     `fixture/` or `fixtures/` directory; and Markdown, which is never scanned (354 tracked
+#     `.md` files hold both `curl` and a vocabulary header name, 14 of them outside
+#     knowledge-base/; reproduce with a Python walk of `git ls-files '*.md'`);
+#   * `apps/cla-evidence/infra/object_lock.tf` (a `local-exec` curl, see above): `.tf` is not
+#     a scanned suffix.
+#
 # HEADER RULINGS (measured with `git grep -il`, 2026-10-07): `X-Soleur-Kb-Drift-Signature`
 # (1 site, kb-drift-walker.yml; a body HMAC, the same class as `X-Signature-256`) IS in the
-# vocabulary; `X-Sentry-Auth` (20 files) is NOT: it carries the Sentry DSN PUBLIC key
+# vocabulary; `X-Sentry-Auth` (22 files, measured as
+# `git grep -il x-sentry-auth -- . ':!*.md' ':!knowledge-base' | wc -l`, this lint's own files
+# included) is NOT: it carries the Sentry DSN PUBLIC key
 # (`sentry_key=`), public by design; `X-Environment-Key` (flip.sh) is NOT: it is the Flagsmith
 # CLIENT-side environment key, shipped to browsers, and flip.sh's own comment says so.
 # `Proxy-Authorization:` matches the unanchored `authorization` alternate on purpose.
@@ -1194,8 +1247,15 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # multi-line quoted strings that print a curl command.
 #
 # Baseline E is `path<TAB>site-count`. Unlike the other baselines it is compared by
-# EQUALITY in the repo-wide run: a listed file must still offend and its live count
-# must match, so the baseline can only shrink in the same diff as the code it excuses.
+# EQUALITY in the repo-wide run. WHAT IS ENFORCED, precisely: for each listed file the live
+# site count must equal the listed count (a file that stops offending, or whose count moves
+# either way, fails until the row is regenerated), and an offending file with no row fails.
+# WHAT IS NOT: the baseline is an ordinary file in the same diff, so a PR can lower a row,
+# raise one or add one (`--write-baseline-e`) and stay green; keeping it shrink-only is a
+# REVIEWER gate, not a machine one. Equality also cannot see a net-zero swap: a SITE is a
+# whole curl command (not a header line), so converting one command and adding another in the
+# same file leaves the count equal and passes. Keying rows on a per-site fingerprint instead
+# of a count is an S3 decision (not built here).
 BASELINE_E_FILE = Path(__file__).resolve().parent / "lint-shell-trace-credential-refusal-e.baseline.txt"
 
 # The credential-header vocabulary, ONE constant read at five sites (held-name capture,
@@ -1289,7 +1349,9 @@ def _heredoc_body_lines(lines: list[str]) -> set[int]:
 
 
 def _e_held_names(lines: list[str]) -> set[str]:
-    """Variables the file assigns an `Authorization: Bearer ...` string, file-wide."""
+    """Variables the file assigns a string containing ANY `E_CREDENTIAL` header name
+    (`Authorization: ...` of any scheme, `X-API-Key: ...`, ...), file-wide. Matched on the
+    assignment's right-hand side as written: a name assembled from parts is not seen."""
     held: set[str] = set()
     for raw in lines:
         line = strip_trailing_comment(strip_comment(raw))
@@ -1559,7 +1621,8 @@ def _e_header_value(args: list[str], i: int) -> tuple[str | None, int]:
 
 
 def _e_bearer_arrays(lines: list[str], held_re: re.Pattern | None) -> set[str]:
-    """Arrays any assignment of which (`=(` or `+=(`, anywhere in a line) holds a bearer header."""
+    """Arrays any assignment of which (`=(` or `+=(`, anywhere in a line) holds a credential
+    header (any `E_CREDENTIAL` name; the `bearer` in the name is historical)."""
     text = "\n".join(strip_trailing_comment(strip_comment(x)) for x in lines)
     names: set[str] = set()
     for m in re.finditer(r"(?<![\w$])([A-Za-z_]\w*)\+?=\(", text):
@@ -2059,7 +2122,11 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
 # is exit 2 as well, and ONLY yaml.YAMLError is the unparseable-file path (a blanket
 # `except Exception` would turn a broken loader into "this file did not parse").
 YAML_SUFFIXES = (".yml", ".yaml")
-E_YAML_PATHSPECS = (".github/**/*.yml", ".github/**/*.yaml", "apps/**/cloud-init*.yml")
+# `.github/**/*.yml` needs a second slash, so a file DIRECTLY under `.github/` (FUNDING.yml)
+# matches only the `.github/*.yml` spellings; git's `*` also crosses `/`, so those two also match
+# the deep files and `rule_e_files` dedupes. Measured: 103 -> 104 discovered YAML files.
+E_YAML_PATHSPECS = (".github/**/*.yml", ".github/**/*.yaml", ".github/*.yml", ".github/*.yaml",
+                    "apps/**/cloud-init*.yml")
 SKIP_SHELLS = frozenset({"python", "pwsh", "powershell", "cmd", "node", "ruby"})
 _YAML_STR_TAG = "tag:yaml.org,2002:str"
 YamlRun = namedtuple("YamlRun", "text line style name")
@@ -2092,12 +2159,19 @@ def _yaml_default_shell(node) -> str | None:
 
 
 def _yaml_runs(node, default_shell: str | None = None, _seen: set | None = None):
-    """Yield a YamlRun for every `run` string value at ANY depth that bash would execute.
+    """Yield a YamlRun for every `run` string scalar at ANY depth, unless a non-bash shell is declared.
 
-    Workflow steps (`jobs.<id>.steps[*]`) and composite-action steps (`runs.steps[*]`) are
-    both just mappings holding a `run` scalar, so the walk is structural, not path-keyed. A
-    step whose `shell:` (or the enclosing `defaults.run.shell`) is not bash/sh is skipped,
-    as lint-workflow-run-body-syntax.py does; no `shell:` at all means bash.
+    The walk is structural, not path-keyed and not semantic: a `run:` scalar anywhere in the
+    tree is scanned, whether or not GitHub would execute it as a step (a `run:` key under
+    `with:` or a matrix value is read too), unless the mapping's own `shell:` (or the
+    enclosing `defaults.run.shell`) names a SKIP_SHELLS interpreter, as
+    lint-workflow-run-body-syntax.py does; no `shell:` at all means bash. Workflow steps
+    (`jobs.<id>.steps[*]`) and composite-action steps (`runs.steps[*]`) are just mappings
+    holding a `run` scalar. Keys other than `run` (`with: script:`, `args:`) are never read.
+
+    The composed node graph can be cyclic or a fan-out DAG (aliases), so each CONTAINER is
+    walked once per inherited default shell; an unbounded-depth flow nest still exceeds the
+    recursion limit, which `check_yaml_file` turns into exit 2 (cannot evaluate).
 
     A `run` scalar is yielded ONCE per node: a `<<: *common` merge key or a `run: *snip` alias
     makes the composer hand back the SAME node object, and one textual site must not be reported
@@ -2106,6 +2180,15 @@ def _yaml_runs(node, default_shell: str | None = None, _seen: set | None = None)
     if _seen is None:
         _seen = set()  # ids of `run` scalar nodes already yielded (see the alias note above)
     kind = _node_kind(node)
+    if kind != "ScalarNode":
+        # A CONTAINER is walked once per (node, inherited default shell). The composed graph is a
+        # graph, not a tree: a cyclic alias (`a: &a [*a]`) would recurse forever and a fan-out DAG
+        # (each anchor aliased nine times, forty levels deep) would walk 9**40 paths. The shell is
+        # part of the key because a shared anchor can sit under a bash and a non-bash default.
+        key = (id(node), default_shell)
+        if key in _seen:
+            return
+        _seen.add(key)
     if kind == "SequenceNode":
         for item in node.value:
             yield from _yaml_runs(item, default_shell, _seen)
@@ -2177,22 +2260,28 @@ def check_yaml_file(path: Path, rel: str) -> tuple[int, list]:
         print(f"{rel}: cannot evaluate (YAML did not parse: {first})", file=sys.stderr)
         return 2, []
     out: list[str] = []
-    for doc in docs:
-        if doc is None:
-            continue
-        for run in _yaml_runs(doc):
-            start = run.line
-            if run.style == "|":
-                def line_of(n: int, start=start) -> int:
-                    return start + 2 + n
-            elif run.style == ">":
-                def line_of(n: int, start=start) -> int:
-                    return start + 2
-            else:
-                def line_of(n: int, start=start) -> int:
-                    return start + 1
-            where = f' (step "{run.name}")' if run.name else " (unnamed step)"
-            out += check_rule_e(rel, run.text.splitlines(), line_of, where)
+    try:
+        for doc in docs:
+            if doc is None:
+                continue
+            for run in _yaml_runs(doc):
+                start = run.line
+                if run.style == "|":
+                    def line_of(n: int, start=start) -> int:
+                        return start + 2 + n
+                elif run.style == ">":
+                    def line_of(n: int, start=start) -> int:
+                        return start + 2
+                else:
+                    def line_of(n: int, start=start) -> int:
+                        return start + 1
+                where = f' (step "{run.name}")' if run.name else " (unnamed step)"
+                out += check_rule_e(rel, run.text.splitlines(), line_of, where)
+    except RecursionError:
+        # A pathologically deep (not cyclic) flow nest. Without this the traceback exits 1,
+        # indistinguishable from "violations found"; ADR-157 says cannot-evaluate is exit 2.
+        print(f"{rel}: cannot evaluate (YAML nesting too deep to walk)", file=sys.stderr)
+        return 2, []
     return (1 if out else 0), [("e", v) for v in out]
 
 
@@ -2418,12 +2507,14 @@ def main() -> int:
             "# Rule E (#9597): curl commands that carry a credential header in their OWN argument\n"
             "# list (readable by every local user in /proc/<pid>/cmdline), plus the hazards of\n"
             "# the `--config -` form that replaces it. Format: `path<TAB>site-count`.\n"
-            "# SHRINK-ONLY: the repo-wide run compares this file to the live offender set by\n"
+            "# ENFORCED: the repo-wide run compares this file to the live offender set by\n"
             "# EQUALITY on path AND count -- a listed file must still offend, its count must\n"
-            "# match, and an offender not listed here fails the run. So an entry can only be\n"
-            "# lowered or deleted in the same diff that converts the call site; it can never\n"
-            "# be raised or added to excuse a new one. `--changed` and explicit paths bypass it.\n"
-            "# Regenerate with `--write-baseline-e` ONLY after converting sites.\n"
+            "# match, and an offender not listed here fails the run. NOT ENFORCED: this file is\n"
+            "# in the same diff as the code, so a PR can edit it; keeping it shrink-only is a\n"
+            "# REVIEWER gate. A site is a whole curl command (not a header line), so converting\n"
+            "# one command and adding another in the same file keeps the count equal and passes.\n"
+            "# `--changed` and explicit paths bypass it. Regenerate with `--write-baseline-e`\n"
+            "# ONLY after converting sites; a diff that raises or adds a row needs a reviewer.\n"
             + "".join(f"{o}\t{e_counts[o]}\n" for o in sorted(e_counts)),
             encoding="utf-8",
         )
