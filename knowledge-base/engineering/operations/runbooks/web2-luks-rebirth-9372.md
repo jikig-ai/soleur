@@ -183,8 +183,10 @@ In this checklist "the closing change" is the later change made after the rebirt
 - the `"scripts/web-host-reboot-evidence.sh"` entry in `READERS` in `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh`
 - the two `web-host-reboot.yml` rows in `infra-credential-tiers-8209.md` (mark them retired) and the matching half-sentences in the `github -> hetzner` and `github -> betterstack` edge prose of `model.c4` (then `bash scripts/regenerate-c4-model.sh`)
 - a dated line in the ADR-263 addendum of 2026-10-07 recording the retirement
+- a dated line under the ADR-241 section "2026-10-07 (#9372): `web-host-reboot.yml::reboot` is a new Tier-B consumer" recording that the consumer is retired (append; never rewrite the dated body)
+- the section "The reboot and its evidence: a separate workflow (2026-10-07)" in this runbook (the pointer to `web-host-reboot.md`)
 
-`BASELINE_DECLARED_PROBES` stays (the declaring plan stays). **Retire versus keep: RETIRE.** The workflow depends on `scripts/web2-rebirth-never-pooled.sh` and shares helper bodies with `scripts/web2-rebirth.sh`, both deleted by row 5, and a tombstone row in its suite fails CI on a half retirement. Keeping it needs a recorded owner decision naming a new home for the never-pooled gate, made in the closing change.
+`BASELINE_DECLARED_PROBES` stays (the declaring plan stays). **Retire versus keep: RETIRE.** The workflow depends on `scripts/web2-rebirth-never-pooled.sh` and shares helper bodies with `scripts/web2-rebirth.sh`, both deleted by row 5, and a tombstone row in its suite fails CI on a half retirement. Keeping it needs a recorded owner decision naming a new home for the never-pooled gate, made in the closing change, and the same change must edit the tombstone rows in both suites (`apps/web-platform/infra/web-host-reboot-workflow.test.sh` A5 and the TOMBSTONE row in `scripts/web-host-reboot.test.sh`): they are hard red once the rebirth scripts are gone, so a kept workflow with unedited tombstone rows fails CI by design.
 
 ## References
 

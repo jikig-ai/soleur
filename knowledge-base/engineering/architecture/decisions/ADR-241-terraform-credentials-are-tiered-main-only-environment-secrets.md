@@ -977,6 +977,8 @@ Run: <https://github.com/jikig-ai/soleur/actions/runs/37222544138>.
 
 One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `reboot` consumes the Tier-B Hetzner write token through the loader behind `web-platform-infra-apply` (one soft reboot of the allow-listed web-2 server), and its `observe` job holds Better Stack read credentials only. Inventory rows: `infra-credential-tiers-8209.md` (Group 3). It retires with the rebirth workflow.
 
+**The approval gate on this consumer is a rule, not a platform separation (measured 2026-10-07).** `web-platform-infra-apply` has a custom deployment branch policy that lists exactly `main`, a single required reviewer whose login is `deruelle` (the owner), and `prevent_self_review` false. The dispatching agent's `gh` identity is that same login, so the platform enforces only the branch (a run from another ref never starts the gated job) and does not separate dispatching from approving. The separation is the owner's explicit per-dispatch go-ahead naming the production write (`hr-menu-option-ack-not-prod-write-auth`) and the owner doing the approving; an agent never approves its own dispatch. The issue records the same property for the other gated environments. Whether destructive dispatches should be two-party (`prevent_self_review` and a distinct agent identity, a `.tf` change) is tracked on #8044 and is not decided here. A re-run of the workflow is refused by design (a `github.run_attempt` guard), so an approval is never silently reused for a second request.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
