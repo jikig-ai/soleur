@@ -151,8 +151,12 @@ if have '-target=doppler_secret\.inngest_server_probe_heartbeat_url' "$WORKFLOW"
 else
   no "the merge-push apply allow-list must carry -target=doppler_secret.inngest_server_probe_heartbeat_url"
 fi
-if have '-target=.*inngest_server_probe' "$WORKFLOW" \
-  && ! grep -q 'OPERATOR_APPLIED_EXCLUSIONS.*inngest_server_probe' "$WORKFLOW"; then
+#     The OPERATOR_APPLIED_EXCLUSIONS set lives in terraform-target-parity.test.ts as a
+#     Set<string> constant (one quoted address per line) — an address parked there is the
+#     #5566-inverse: excluded from the per-merge apply, so it would never be created.
+excl_block="$(awk '/const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>\(/{p=1} p{print} p&&/^\]\)/{exit}' "$DIR/../../../plugins/soleur/test/terraform-target-parity.test.ts")"
+if ! has "$excl_block" '"betteruptime_heartbeat\.inngest_server_probe"' \
+  && ! has "$excl_block" '"doppler_secret\.inngest_server_probe_heartbeat_url"'; then
   ok "neither new address hides in OPERATOR_APPLIED_EXCLUSIONS (exclusion = never applied)"
 else
   no "inngest_server_probe must ride -target, not OPERATOR_APPLIED_EXCLUSIONS"
