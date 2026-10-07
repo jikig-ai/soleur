@@ -1054,7 +1054,7 @@ detail() { # <stage> <text>: the per-stage detail channel soleur-boot-emit reads
 }
 BS_WHY=""
 if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
-  post() { curl --disable --noproxy '*' -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+  post() { curl --disable --noproxy '*' -fsS -m 10 --config - "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1 < <(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$TOKEN"); }
   post || post || { BS_WHY=post_failed; echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2; }
 elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
   BS_WHY=unpinned_url
