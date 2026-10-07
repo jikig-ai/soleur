@@ -219,12 +219,12 @@ mk_stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$STUBS/$1"; chmod +x "$ST
 LOGLINE='printf "%s\t%s\n" "$(basename "$0")" "$*" >> "$STUB_CALLS"'
 mk_stub docker "$LOGLINE
 case \"\$1\" in
-  ps) echo soleur-web-platform ;;
+  ps) if [ -n \"\${STUB_PS_NAMES+x}\" ]; then printf '%s\n' \"\$STUB_PS_NAMES\"; else echo soleur-web-platform; fi ;;
   exec) case \"\$*\" in *api.github.com*) exit 0 ;; *example.com*) exit 28 ;; esac; echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
   *) echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
 esac"
 mk_stub nft "$LOGLINE
-echo 'jump SOLEUR-EGRESS'"
+if [ -n \"\${STUB_NFT_OUT+x}\" ]; then printf '%s\n' \"\$STUB_NFT_OUT\"; else echo 'jump SOLEUR-EGRESS'; fi"
 mk_stub systemctl "$LOGLINE
 exit 0"
 mk_stub sleep "exit 0"
@@ -274,6 +274,28 @@ check "P-X1c the call log WORKS (instrument control): the healthy run logged doc
   '[[ "$(grep -c "^docker" "$STUB_CALLS" || true)" -ge 1 && "$(grep -c "^nft" "$STUB_CALLS" || true)" -ge 1 ]]'
 check "P-X1c no stub refused an unexpected argv" '[[ "$(grep -c "^REFUSED" "$STUB_CALLS" || true)" -eq 0 ]]'
 
+# --- pass 2 (#9217): the converted predicates keep their discrimination -----------------------------
+# The healthy run above only proves the happy path, which an always-true predicate also satisfies. These rows
+# observe the discrimination: an exact-line container match, a missing jump, and a clean stdout.
+echo "-- pass 2 (#9217): converted predicates keep their discrimination --"
+run_probe "STUB_PS_NAMES=soleur-web-platform-old
+soleur-web-platform2" --
+check "P2-2 near-miss container names are not the container: rc 1 and container-absent named" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: container-absent"* ]]'
+run_probe "STUB_PS_NAMES=other
+soleur-web-platform" --
+check "P2-3 the container found on a later line still passes (non-canonical must-pass control): rc 0 and egress-enforce-ok" \
+  '[[ "$RC" -eq 0 && "$OUT" == *egress-enforce-ok* ]]'
+run_probe STUB_NFT_OUT= --
+check "P2-4 a DOCKER-USER chain with no SOLEUR-EGRESS jump fails the structure step: rc 1 and docker-user-jump named" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: docker-user-jump"* ]]'
+check "P2-4 the structure step precedes the behavioural probes (no docker exec ran)" \
+  '[[ "$(grep -c "^docker.exec" "$STUB_CALLS" || true)" -eq 0 ]]'
+run_probe --
+check "P2-6 stdout carries no bare count line (every converted predicate discards the count it reads)" \
+  '[[ "$(grep -cE "^[0-9]+$" <<<"$OUT" || true)" -eq 0 ]]'
+check "P2-6 non-vacuity: that healthy run did print egress-enforce-ok" '[[ "$RC" -eq 0 && "$OUT" == *egress-enforce-ok* ]]'
+
 echo "-- drawdown (#7797): not grandfathered in the credential-refusal baseline --"
 check "P-L the probe's repo path is absent from the A/B/C baseline" \
   '[[ "$(grep -cxF "apps/web-platform/infra/cron-egress-enforce-probe.sh" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt")" -eq 0 ]]'
@@ -285,7 +307,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). A call site recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=56
+MIN_CASES=62
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1
