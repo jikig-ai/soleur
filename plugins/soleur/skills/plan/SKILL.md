@@ -808,7 +808,7 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 **Why:** the preflight Check 10 execution-boundary work (merged 2026-08-10) absorbed FIVE adversarial review rounds; every round found real defects in the previous round's fixes, and ~20 findings reduced to the one class above. Instances: a mount-set closure assertion scoped to `BWRAP_ARGS=( … )` while `GIT_BIND`, `BWRAP_PROC` and the exec line also injected mounts (three separate one-line edits each re-opened the operator's credential surface with the whole suite green — verified against live bwrap reaching the Doppler token, `~/.ssh` and the gh token store); a parity floor counting ITERATIONS rather than distinct shapes; a suppression grep anchored on `test`/`it`/`describe`, which are rebindable; and an anti-vacuity gate with NO floor on its own dispatch. Those were not five discoveries — they were ONE enumeration nobody performed, found five times by different means, at ~880k subagent tokens and five CI cycles. The root cause was at plan time: that plan specified CONTROLS and 13 Test Scenarios all of the shape "command X -> terminal Y", and ZERO of the shape "mutation M -> guard G reddens". For a change whose deliverable WAS guards, the scenarios tested the thing being guarded. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
 <!-- lint-infra-ignore end -->
 
-**2.13 Founder check (interactive):** [plan-founder-check.md](./references/plan-founder-check.md).
+**2.13 Founder check (interactive):** [plan-founder-check.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-founder-check.md).
 
 ### 3. SpecFlow Analysis
 

@@ -1,5 +1,7 @@
 # Founder-stated check (plan capture)
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
+
 Linked from `plan/SKILL.md` step 2.13. Lets a founder state, in their own words and before work
 starts, what shows a piece of work is done. The plan stores it as a `founder_check:` block under
 `## Acceptance Criteria`; `soleur:preflight` Check 13 runs it later, in a step separate from the
@@ -7,8 +9,8 @@ work. Decision record: ADR-274. This file is the only place the block's YAML sha
 
 **Wording is a contract.** Print the pinned constants with `founder-check.py text <key>` (the
 script, not this prose, is the source) and never paraphrase them. Every call below is
-`python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py"`; start each Bash block
-with the guard shown, which stops the call when the plugin root is unresolved. Never describe a
+`python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py"`; the
+root-delivery notice at the top of this file governs the root, and an unresolved root fails the call closed. Never describe a
 check more strongly than the pinned sentences do.
 
 ## When it runs
@@ -21,7 +23,6 @@ check more strongly than the pinned sentences do.
 - **Never twice.** Before asking, run:
 
   ```bash
-  : "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
   PREFLIGHT_TMP="$(git rev-parse --git-dir)"
   python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" verify --base origin/main --no-pr --out "$PREFLIGHT_TMP/founder-check-verify.json"
   ```
@@ -116,7 +117,7 @@ then add the `hash` that `verify --candidate` prints. One block per plan.
    ```
 
    The commit carries the baseline log row. A later change is a deliberate `work → plan` step the
-   founder confirms (see `preflight/references/check-13-founder-check.md` section 8): a new freeze
+   founder confirms (see `${CLAUDE_PLUGIN_ROOT}/skills/preflight/references/check-13-founder-check.md` section 8): a new freeze
    commit whose subject starts `plan: re-freeze founder-stated check`. Anything else surfaces at
    ship as CHANGED-SINCE-APPROVAL.
 

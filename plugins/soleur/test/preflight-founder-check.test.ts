@@ -271,7 +271,7 @@ function harness(code: string, data: unknown, script = SCRIPT): any {
     code,
     "print(json.dumps(out))",
   ].join("\n");
-  const r = spawnSync("python3", ["-I", "-c", prog, script], { input: JSON.stringify(data), encoding: "utf8", timeout: 60_000 });
+  const r = spawnSync("python3", ["-I", "-c", prog, script], { input: JSON.stringify(data), encoding: "utf8", timeout: 60_000, env: process.env });
   if (r.status !== 0) throw new Error(`harness failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }
@@ -297,7 +297,7 @@ function mutate(anchor: string, replacement: string): string {
   const p = join(dir, "founder-check.py");
   writeFileSync(p, text.replace(anchor, replacement));
   writeFileSync(join(dir, "probe-verb-gate.sh"), readFileSync(GATE, "utf8"), { mode: 0o755 });
-  const c = spawnSync("python3", ["-I", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", p], { encoding: "utf8" });
+  const c = spawnSync("python3", ["-I", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", p], { encoding: "utf8", env: process.env });
   if (c.status !== 0) throw new Error(`the mutant does not compile (a crash is not a kill): ${c.stderr}`);
   return p;
 }
@@ -396,7 +396,7 @@ describe("verify: resolution", () => {
     expect(z.json?.reason).toBe("plan-not-regular");
     mkdirSync(join(r.dir, PLANS), { recursive: true });
     const fifo = join(r.dir, PLANS, "fifo.md");
-    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    expect(spawnSync("mkfifo", [fifo], { env: process.env }).status).toBe(0);
     const f = r.verify(["--plan", `${PLANS}/fifo.md`]);
     expect(f.status).not.toBe(-1);
     expect(f.json?.reason).toBe("plan-not-regular");
@@ -2536,11 +2536,16 @@ describe("docs: the references say what the script does", () => {
     for (const k of WORDS()) expect([k, all.includes(`text ${k}`)]).toEqual([k, true]);
   });
 
-  test("every documented script call goes through the plugin root with the unresolved-root guard", () => {
+  test("every documented script call goes through the plugin root, and each Read-surface doc carries the root-delivery notice", () => {
     const calls = (REF + PLANREF + SEC13).match(/python3 \S*founder-check\.py"?/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(6);
     for (const c of calls) expect(c).toBe('python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py"');
-    expect(REF).toContain("CLAUDE_PLUGIN_ROOT is unset");
+    // The unset-root guard line (a default or error arm on the variable) is not an allowed form in a payload doc; the
+    // notice at the top of the file is what governs an unresolved root, and a root-anchored path fails closed.
+    for (const [name, doc] of [["reference", REF], ["plan reference", PLANREF]]) {
+      expect([name, doc.includes("**Plugin root in this file:**")]).toEqual([name, true]);
+      expect([name, /\$\{CLAUDE_PLUGIN_ROOT:[-?=+]/.test(doc)]).toEqual([name, false]);
+    }
     expect(REF).not.toMatch(/python3 plugins\/soleur\/skills\/preflight/);
   });
 
@@ -2700,7 +2705,7 @@ walk(tree, None)
 print(json.dumps({"funcs": sorted(funcs), "bad": bad}))
 `;
 function astWalk(file: string): { funcs: string[]; bad: string[] } {
-  const r = spawnSync("python3", ["-I", "-c", AST_WALK, file], { encoding: "utf8" });
+  const r = spawnSync("python3", ["-I", "-c", AST_WALK, file], { encoding: "utf8", env: process.env });
   if (r.status !== 0) throw new Error(`ast walk failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }

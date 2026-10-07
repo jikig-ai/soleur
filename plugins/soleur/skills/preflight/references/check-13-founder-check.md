@@ -1,5 +1,7 @@
 # Check 13 — founder-stated check: wrapper, outcome table, prompts
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
+
 Linked from the `### Check 13` section of [SKILL.md](../SKILL.md). Decision record: ADR-274.
 Every verdict is made by [founder-check.py](../scripts/founder-check.py); this file says how to
 drive it and what to print. Nothing here re-derives a verdict in prose, and every founder-facing
@@ -8,9 +10,10 @@ sentence is printed from `founder-check.py text <key>`, never typed from this fi
 Rules that apply to every call below:
 
 - **Script path.** Every call is `python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py"`.
-  Start each Bash block with the guard line shown; when `CLAUDE_PLUGIN_ROOT` is unset the guard
-  stops the call. Resolve the plugin root first (by `.claude-plugin/plugin.json` identity), never
-  by a repo-relative path: in a customer's repository that path is a different file or no file.
+  The root-delivery notice at the top of this file governs the root: unresolved, the path starts
+  with `/skills/` and the call fails closed. Resolve the plugin root first (by
+  `.claude-plugin/plugin.json` identity), never by a repo-relative path: in a customer's repository
+  that path is a different file or no file.
 - **`PREFLIGHT_TMP` is derived inside each Bash block that reads it.** Shell state does not
   survive between Bash calls.
 - **Nothing from the plan is ever typed into a shell word.** `verify` writes the approved command
@@ -26,7 +29,6 @@ Rules that apply to every call below:
 Run as its own Bash call, from the repository root:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" verify --base origin/main --out "$PREFLIGHT_TMP/founder-check-verify.json" --command-out "$PREFLIGHT_TMP/founder-check-cmd.txt" --display-out "$PREFLIGHT_TMP/founder-check-display.txt"
 ```
@@ -74,7 +76,6 @@ writes the two files `classify` reads (what it ran, and what it printed) itself,
 transcribes either:
 
 ```text
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # 1. Step 10.5 calls sanitize before it defines it on its failure branches, so define it first.
 sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
@@ -118,7 +119,6 @@ text and first word come from the verify record, and `classify` refuses a ran-co
 not byte-for-byte the approved command, so a run of anything else cannot be classified:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" classify --verify-json "$PREFLIGHT_TMP/founder-check-verify.json" --polarity acceptance --rc <rc> --control-rc <control rc> --command-file "$PREFLIGHT_TMP/founder-check-ran.txt" --stdout-file "$PREFLIGHT_TMP/founder-check-stdout.txt" --out "$PREFLIGHT_TMP/founder-check-classify.json"
 ```
@@ -190,7 +190,6 @@ One call per attempt. The reason, when there is one, comes through a heredoc wit
 delimiter, so nothing in it is expanded:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" log --verify-json "$PREFLIGHT_TMP/founder-check-verify.json" --classify-json "$PREFLIGHT_TMP/founder-check-classify.json" --polarity acceptance --mode <interactive|headless> --outcome <OUTCOME> --attempt-n <n> --underlying <cause> --reason-stdin <<'FC_REASON_7f3a'
 <the founder's one-line reason>
@@ -213,7 +212,6 @@ outcome into `STOPPED-AWAITING-FOUNDER`.
 After the last row of a run, commit the log, which stages and commits that one file:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" commit-log
 ```
 

@@ -204,7 +204,7 @@ describe("plan skeleton checkpoint — the completion predicate matches the temp
   });
 
   test("plan/SKILL.md links the founder-check reference, which exists", () => {
-    expect(has(read(PLAN_SKILL), "[plan-founder-check.md](./references/plan-founder-check.md)")).toBe(true);
+    expect(has(read(PLAN_SKILL), "[plan-founder-check.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-founder-check.md)")).toBe(true);
     expect(read(resolve(SKILLS, "plan/references/plan-founder-check.md")).length).toBeGreaterThan(500);
   });
 

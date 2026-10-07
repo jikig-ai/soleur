@@ -1470,7 +1470,7 @@ python3 scripts/lint-encryption-posture.py --repo-sweep > "$PREFLIGHT_TMP/encryp
 
 ### Check 13: Founder-Stated Check
 
-Runs the check a founder wrote in their own words, approved as an exact command, and froze before work started (ADR-274). The decisions live in [founder-check.py](./scripts/founder-check.py); this check relays them and never re-derives a verdict in prose. The wrapper, the outcome tables and the prompts are in [check-13-founder-check.md](./references/check-13-founder-check.md).
+Runs the check a founder wrote in their own words, approved as an exact command, and froze before work started (ADR-274). The decisions live in [founder-check.py](./scripts/founder-check.py); this check relays them and never re-derives a verdict in prose. The wrapper, the outcome tables and the prompts are in [check-13-founder-check.md](${CLAUDE_PLUGIN_ROOT}/skills/preflight/references/check-13-founder-check.md).
 
 1. **Resolve.** Run `founder-check.py verify` (reference section 1). `NO-BLOCK` is SKIP with the pinned banner; a missing block with freeze evidence is FAIL, never SKIP; a `FAIL` outcome is `BLOCK-REJECTED`; `UNTRUSTED` is a FAIL that never runs (the command and its author are shown); `CHANGED-SINCE-APPROVAL` stops and is decided in Phase 2.
 2. **Run only through Step 10.5.** The approved command runs in the Step 10.5 sandbox via the reference's wrapper, which reads it from a file `verify` wrote and runs `true` first as the sandbox-health control. Check 13 declares no sandbox of its own and never executes the command any other way. Output the wrapper does not map is INVALID, never a pass.
