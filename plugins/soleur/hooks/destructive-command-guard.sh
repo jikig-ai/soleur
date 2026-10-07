@@ -407,7 +407,8 @@ has_keyword() {
     [[ -z "$ln" || "$ln" == '#'* ]] && continue
     ln="${ln%%[[:space:]]\#*}"
     # (`terraform` contains `rm`, so `*rm*` already covers it)
-    case "$ln" in *rm*|*destroy*|*push*|*tofu*|*git*|*eval*) found=0; break ;; esac
+    # (this order differs from the prefilter's on purpose: the mutation suite anchors on the prefilter's pattern run, which must stay unique in this file)
+    case "$ln" in *git*|*tofu*|*eval*|*destroy*|*push*|*rm*) found=0; break ;; esac
   done <<<"$1"
   (( had )) || shopt -u nocasematch
   return "$found"
