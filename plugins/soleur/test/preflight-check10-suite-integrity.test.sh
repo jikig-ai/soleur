@@ -37,6 +37,7 @@ SUITES=(
   plugins/soleur/test/preflight-discoverability-test.test.ts
   plugins/soleur/test/observability-schema-parity.test.ts
   plugins/soleur/test/fullsuite-merge-gate.test.ts
+  plugins/soleur/test/preflight-founder-check.test.ts
 )
 
 # QUANTITY floors are a secondary tripwire only. On their own they were defeated
@@ -65,9 +66,9 @@ MANIFEST="plugins/soleur/test/fixtures/check10-test-manifest.txt"
 # same rule. An EMPTY manifest previously passed vacuously as
 # "[ok] all 0 manifest tests still declared", so this floor is what makes the
 # primary identity control non-vacuous.
-MIN_TESTS=202
-MIN_ASSERTIONS=1266
-MIN_MANIFEST_LINES=152
+MIN_TESTS=447
+MIN_ASSERTIONS=2428
+MIN_MANIFEST_LINES=340
 
 PASS=0
 FAIL=0
@@ -556,6 +557,81 @@ else
   fi
 fi
 
+# --- 1c. Check 13 declares no sandbox of its own (Guard 4, #9578) ------------
+# Check 13 runs a founder-approved command, and the ONLY place a command may run is the Step 10.5
+# fence. A second sandbox-argument array inside the Check 13 section would fork that boundary: the
+# `BWRAP_ARGS=(` single-occurrence pin in preflight-discoverability-test.test.ts would catch a
+# duplicate array in the file, but not one that REPLACES the Step 10.5 fence in the wrapper, so the
+# section itself is asserted. The anchor is the ASSIGNMENT syntax (`NAME=(`) and the `bash -c` call
+# form, never a bare word: a section that mentions bwrap in prose is fine and must stay fine
+# (cq-assert-anchor-not-bare-token).
+PREFLIGHT_SKILL="plugins/soleur/skills/preflight/SKILL.md"
+SEC13="$(awk '/^### Check 13: /{f=1; next} f && /^(## |### )/{exit} f' "$PREFLIGHT_SKILL" 2>/dev/null)"
+cases=$((cases + 1))
+if [[ -n "$SEC13" ]]; then
+  pass "preflight/SKILL.md has a Check 13 section"
+else
+  fail "preflight/SKILL.md has no Check 13 section — the assertions below would run over nothing"
+fi
+cases=$((cases + 1))
+if [[ "$SEC13" == *"Step 10.5"* ]]; then
+  pass "Check 13 runs the approved command through Step 10.5"
+else
+  fail "Check 13 does not name Step 10.5 as the place the command runs"
+fi
+# The wrapper itself lives in the reference, and is where a second fence would actually be written, so
+# the reference is scanned with the section. The array test is case-insensitive (`bwrap_args=(` is the
+# same array) and the shell-invocation test covers every spelling that runs a string as a program:
+# `bash -c`, `sh -c`, `bash -lc`, `bash -ec`, `bash --command` and an `env`-prefixed form.
+REF13_FILE="plugins/soleur/skills/preflight/references/check-13-founder-check.md"
+REF13="$(cat "$REF13_FILE" 2>/dev/null)"
+cases=$((cases + 1))
+if [[ -n "$REF13" && "$REF13" == *"Step 10.5"* && "$REF13" == *"OUT=\$("* ]]; then
+  pass "the Check 13 reference carries the Step 10.5 wrapper"
+else
+  fail "the Check 13 reference is missing or carries no Step 10.5 wrapper — the scans below would run over nothing"
+fi
+SCAN13="$SEC13"$'\n'"$REF13"
+cases=$((cases + 1))
+shopt -s nocasematch
+if [[ "$SCAN13" =~ (BWRAP_ARGS|BWRAP_PROC|GIT_BIND)[[:space:]]*=\( ]]; then
+  shopt -u nocasematch
+  fail "Check 13 declares a sandbox-argument array of its own — the sandbox is Step 10.5's alone"
+else
+  shopt -u nocasematch
+  pass "Check 13 declares no sandbox-argument array"
+fi
+# Up to four words may sit between the shell and its -c (`bash -e -c`, `bash -O x -c`), the verb may
+# be quoted or carry a /bin/ prefix, and a name that merely ENDS in sh (`ok.sh`, `mybash`) is not one.
+SHELL_INVOKE='(^|[^[:alnum:]_.-])["'"'"']?(ba|z|da)?sh["'"'"']?[[:space:]]+([^[:space:]]+[[:space:]]+){0,4}(-[a-zA-Z]*c([[:space:]]|$)|--command)'
+# The scan's own instrument: it must match every spelling it exists for and none of the near misses,
+# or a green result below says nothing (a regex that matches nothing passes every document).
+cases=$((cases + 1))
+rx_bad=""
+for t in 'bash -c x' '/bin/bash -c x' 'bash -e -c x' 'bash -O x -c y' '"bash" -c x' "'sh' -c x" 'sh -lc x' 'env bash --command x' 'bash --norc -o pipefail -c x'; do
+  [[ "$t" =~ $SHELL_INVOKE ]] || rx_bad+=" [missed: $t]"
+done
+for t in 'bash scripts/ok.sh' 'scripts/ok.sh -c' 'run mybash -c' 'use python3 or bash' 'bash scripts/ok.sh --flag'; do
+  [[ "$t" =~ $SHELL_INVOKE ]] && rx_bad+=" [false match: $t]"
+done
+if [[ -z "$rx_bad" ]]; then
+  pass "the shell-invocation scan matches every spelling it exists for and none of the near misses"
+else
+  fail "the shell-invocation scan is wrong:$rx_bad"
+fi
+cases=$((cases + 1))
+if [[ "$SCAN13" =~ $SHELL_INVOKE ]]; then
+  fail "Check 13 runs a command with a direct shell invocation — it must go through the Step 10.5 fence"
+else
+  pass "Check 13 has no direct shell invocation of the command"
+fi
+cases=$((cases + 1))
+if [[ "$REF13" == *"sed 's/SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX/SOLEUR_FOUNDER_CHECK_NOSANDBOX/g'"* ]]; then
+  pass "the wrapper renames Check 10's fleet marker so Check 13's dark runs are not counted as Check 10's"
+else
+  fail "the wrapper no longer renames SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX — a dark Check 13 would be counted as a dark Check 10"
+fi
+
 # --- 2. The suites actually execute, and clear the floor --------------------
 # Reading the runner's own summary rather than trusting its exit code: a suite
 # that skipped everything exits 0 too.
@@ -794,7 +870,8 @@ done
 # reads $FAIL, which is the same counter a stubbed fail() stops moving. A floor enforced through
 # the suspect cannot witness the suspect — measured on the previous shape: fail() neutered, the
 # gate printed a clean total and exited 0.
-MIN_CHECKS=29
+# 38 = the previous 29, plus 2 per-suite source checks and 7 Check 13 section checks (#9578).
+MIN_CHECKS=38
 if [[ "$cases" -lt "$MIN_CHECKS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d check(s) dispatched, floor is %d — the gate itself went silent.\n' \
     "$cases" "$MIN_CHECKS" >&2

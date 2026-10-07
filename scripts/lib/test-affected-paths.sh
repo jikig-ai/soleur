@@ -540,6 +540,19 @@ AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
   "scripts/web2-rebirth-recovery-check.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #9372: the web-host reboot suite walks the tracked tree under scripts/, .github/ and apps/ (its census of reboot-request call sites, so a
+# third such site anywhere in those roots is RED) and reads the workflow, the infra census suite and the rebirth scripts it pins
+# helper bodies against; its verdict is scoped to those three roots plus the three runbooks it reads (copies them into its sandbox and
+# pins the dispatch commands, the Better Stack query and the LUKS cutover cross-reference), not to the rest of the corpus (plugins/).
+AFFECTED_SCRIPTS_WEB_HOST_REBOOT_PATHS=(
+  "scripts/"
+  ".github/"
+  "apps/"
+  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "knowledge-base/engineering/operations/runbooks/web-host-reboot.md"
+  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
@@ -1577,7 +1590,16 @@ AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
 )
 
 # tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
-# (#7004/ADR-250); declared from the repo paths its suite file names.
+# (#7004/ADR-250) is ALWAYS_ON (above), so it declares no array here.
+
+# tests/scripts/cleanup-merged-space — opt-in Docker prune, space report and the
+# cleanup-merged wrapper (#9677); declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_CLEANUP_MERGED_SPACE_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cleanup-merged-space.sh"
+)
 
 # tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
 # declared from the repo paths its suite file names.
