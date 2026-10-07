@@ -808,7 +808,6 @@ mk_hook_tree() {
   assert_fixture_dir "$d"
   mkdir -p "$d/lib" || harness_die "mk_hook_tree mkdir"
   cp "$GUARD_HOOK" "$d/destructive-command-guard.sh" && cp "$src"/lib/shell-argv.pl "$d/lib/shell-argv.pl" || harness_die "mk_hook_tree cp"
-  cp "$src"/lib/hook-tool-kind.sh "$d/lib/" 2>/dev/null || true
   chmod +x "$HT_HOOK"
 }
 # tree_row <label> <want> <hook path> <stdin text> [ENV=VAL ...]: env_row against a hook other than the live one.
@@ -905,6 +904,10 @@ ASKEOF
   _st_call ask.sh ok LH "self-test: LH" ask /home/st-fixture 'terraform destroy' || _st_fatal "LH did not pass a hook that answers the literal ask"
   _st_call silent.sh bad LH "self-test: LH" ask /home/st-fixture 'terraform destroy' || _st_fatal "LH passed a hook that is silent where the literal ask is wanted"
   _st_call ask.sh bad LH "self-test: LH" none /home/st-fixture 'ls' || _st_fatal "LH passed a hook that asks where none is wanted"
+  # bound_row hands the hook the working tree for a `-` cwd (as run_row does), never the literal `-`
+  { printf '#!/bin/sh\ncat > "%s/selftest/cwd.in"\n' "$WORK"; tail -n +2 "$WORK/selftest/ask.sh"; } > "$WORK/selftest/cwd.sh"; chmod +x "$WORK/selftest/cwd.sh"
+  _st_call cwd.sh ok bound_row "self-test: bound_row cwd" ask - 'ls' || _st_fatal "bound_row did not pass a hook that asks"
+  [[ "$("$JQ_BIN" -r .cwd "$WORK/selftest/cwd.in" 2>/dev/null)" == "$TREE" ]] || _st_fatal "bound_row handed the hook the cwd '$("$JQ_BIN" -r .cwd "$WORK/selftest/cwd.in" 2>/dev/null)', not the working tree, for a - cwd"
   # bound_row: the decision, the reason pattern and the 5 s limit are three separate checks, each with a stub that fails only it
   _st_call ask.sh ok bound_row "self-test: bound_row" ask - 'ls' '^r$' || _st_fatal "bound_row did not pass a fast hook with the right decision and reason"
   _st_call silent.sh bad bound_row "self-test: bound_row" ask - 'ls' || _st_fatal "bound_row passed a hook that is silent where an ask is wanted (the decision check)"
@@ -914,6 +917,9 @@ ASKEOF
     _st_call slow.sh bad bound_row "self-test: bound_row" ask - 'ls' || _st_fatal "bound_row passed a hook that answers correctly after 6 s (the 5 s limit)"
   fi
 fi
+# rep (builds the stress inputs of the bound rows): the text repeated count times
+rep ab 3; [[ "$REP_OUT" == ababab ]] || _st_fatal "rep did not repeat the text three times"
+rep ab 0; [[ -z "$REP_OUT" ]] || _st_fatal "rep did not return nothing for a count of 0"
 ROWSEL="$_st_rowsel"; HOOK_OUT="$_st_out"; GOT=""
 PASS_COUNT=0; FAIL_COUNT=0; CHECKED=0; ROWS_LIT=0; SELECTED=0; ROWS_EXEC=0; ROWS_DEAD=0; CORPUS_N=0; CORPUS_ASK=0; CORPUS_ERR=0
 
@@ -1827,8 +1833,14 @@ echo "== the bash phase is bounded (the harness kills the hook at 10 s and a kil
 rep 'echo x; ' 1500; _cmd1500="${REP_OUT}rm -rf /"
 rep 'echo x; ' 2600; _cmd2600="${REP_OUT}rm -rf /"
 rep 'echo x; ' 2600; _cmd2600_late="rm -rf /; ${REP_OUT}"
-rep ' --' 40; _cmd40dash="ls${REP_OUT} x; terraform destroy"
+rep ' --' 40; _REP_DASH40="$REP_OUT"; _cmd40dash="ls${REP_OUT} x; terraform destroy"
 _t=""; for _i in $(seq 1 1000); do _t+=" f$_i"; done; _cmd1000rm="rm -rf${_t}; rm -rf ~"
+# Length controls: both stress commands decide the same way without their stress input (`terraform destroy` asks and `rm -rf ~` denies on
+# their own), so each row below is vacuous unless the input really holds what its label says. Checked before the hook runs.
+read -ra _w1000 <<<"$_t"
+chk "bound: the 1000-target stress input holds 1000 targets (the row is meaningless without them)" "$([[ ${#_w1000[@]} -eq 1000 && "$_cmd1000rm" == "rm -rf f1 f2 "* && "$_cmd1000rm" == *" f1000; rm -rf ~" ]] && echo ok)" "targets=${#_w1000[@]}"
+_dash_only="${_cmd40dash#ls}"; _dash_only="${_dash_only%% x;*}"
+chk "bound: the 40 -- stress input holds exactly 40 -- words (the row is meaningless without them)" "$([[ "$_dash_only" == "$_REP_DASH40" && "${#_dash_only}" -eq 120 && "$_cmd40dash" == "ls -- -- "*" -- x; terraform destroy" ]] && echo ok)" "dash run length=${#_dash_only}"
 rep ' a' 30000; _cmdwords="ls \"x\"${REP_OUT}"
 bound_row "bound: 1500 benign commands then rm -rf / still denies, in under 5 s" deny - "$_cmd1500"
 bound_row "bound: 2600 benign commands (above the record cap) then rm -rf / asks with the bound reason, in under 5 s" ask - "$_cmd2600" "^${ASK_LEAD_RX}bound: "
@@ -2422,7 +2434,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1000
+MIN_CASES=1002
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
