@@ -210,4 +210,3 @@ preflight executes; they now say plan-declared probes and checks, with no count.
 6. **Accepted, not changed.** `first-use` lists what the check can read, as a floor and not an "only" (the sandbox also exposes
    `/etc`, `/usr` and, in a worktree, the shared git directory). `pass` says "the check you wrote" even when the freeze came from
    main and no author comparison ran, which `no-pr-note` does not cover; accepted for the single-founder v1 posture.
-
