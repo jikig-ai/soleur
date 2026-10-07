@@ -27,6 +27,8 @@ A registration-only runner edit takes the bounded selection (ADR-242 decision 20
 
 Reopen when at least 3 registration-only runs have been observed after #9552 with recorded wall time AND the two PR-gated batteries (~10.9 min) exceed 20% of the median observed wait, OR the gate is again the slowest step of a suite-adding PR. The 20% and 3-run numbers are proposed; revise them with the first measurement. The best case FR1 + FR2 can save is ~11.8 min (49 s + ~10.9 min), not the full 13.6, because `orphan-process-reaper-mutations` must stay.
 
+Watched mechanically (part (a) only): `scripts/watch-registration-narrowing-9564.sh`, run weekly by `.github/workflows/registration-narrowing-watch.yml`, counts qualifying runner commits and posts one notice on #9564 at 3. Its threshold and the part (b) arithmetic are literals in that script, so revising the numbers above means editing it too.
+
 ## Functional Requirements (if built)
 
 - FR1: remove the stale `"scripts/test-all.sh"` entry from the registry-delivery declared array in `scripts/lib/test-affected-paths.sh` (the declared arrays are hand-committed; there is no generator). Verify with a dry-run enumeration that exactly that label drops out of a registration-only selection.
