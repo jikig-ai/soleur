@@ -4,6 +4,9 @@ Derived from `knowledge-base/project/plans/2026-10-07-fix-test-all-parent-death-
 Failing fixtures first (cq-write-failing-tests-before): Phase 1 arms are written
 against the CURRENT single-poll watchdog — the transient/non-consecutive/reverify
 arms MUST redden before the debounce lands; sustained/real-death arms stay green.
+Merge-blocking invariant: the counter resets ONLY on a healthy poll or a recovered
+deciding-poll re-verify — never cumulative, never an N-of-M window (deepen pass,
+2026-10-07). Empty `ps` reads stay inconclusive, not failed.
 
 ## 1. Test coverage first — RED (scripts/test-all-orphan-log-retention.test.sh)
 

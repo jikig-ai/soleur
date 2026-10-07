@@ -15,6 +15,27 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed; no spec.md exists — no brainstorm ran on this branch).
 
+## Enhancement Summary (deepen-plan pass, 2026-10-07)
+
+Deepen ran inline (no Task subagent in this harness — same constraint recorded by sibling one-shot plans). Halts evaluated and results:
+
+- 4.6 User-Brand Impact: present, threshold `none`, zero sensitive-path matches in Files lists — PASS.
+- 4.7 Observability: present, all 5 fields non-placeholder; `discoverability_test.command` first token `grep` (allowlisted), `expected_output: "ok"` literal — PASS.
+- 4.8 PAT-shaped variable sweep: zero hits — PASS.
+- 4.9 UI wireframe: no UI-surface files — N/A.
+- 4.10 Encryption posture: no new store or cross-component connection — N/A.
+- 4.11 Guard Contract: present; `python3 scripts/lint-guard-contract.py` green (1 entry, 7-row matrix) — PASS.
+- 4.12 Scope Check: exactly one unfenced section, all three subsections, no unmapped/descoped-bare rows, `Recommendation: single PR` — PASS.
+- 4.4 precedent-diff: the pattern being changed IS the precedent — the `_RUN_WD` watchdog block is the canonical repo shape for parent-death supervision (sibling `_ENUM_WATCHDOG` reviewed and deliberately excluded, different blast radius). Numeric-floor knob idiom precedented verbatim by `_RUN_WD_POLL_S` and `TC_RUNTIME_CEILING_S`.
+- 4.5 network-outage gate: fired on the `timeout` substring; Hypotheses section records all four layers as not-applicable-by-shape with reasons — PASS (telemetry emitted).
+- Citations verified live: #9686 OPEN (target), #8993 CLOSED 2026-09-28 (origin, PR #9034 = commit `36272b43ed` confirmed via `git log --grep`), #8940/#9117 CLOSED, #9457 OPEN, `follow-through` label exists, rule IDs `cq-write-failing-tests-before`/`hr-observability-as-plan-quality-gate` active, `SUITE_GLOBS` confirmed to exclude `scripts/*.test.sh` and `scripts/followthroughs/*.test.sh` (explicit `run_suite` registration required — test-all.sh:96).
+
+### Key improvements applied during deepen
+
+1. **Absolute-bound invariant** (from learning `2026-06-12-idle-watchdog-reset-on-sdk-heartbeat…`): reset-on-healthy-poll may defuse the consecutive counter, but must never extend the bound on *sustained* failure — a dead/zombie parent fails every poll and still reaps within N×poll + the unchanged reap chain. The alternating-failure arm (Phase 1.6) is the pin for this: it proves the reset is consecutive-scoped, not cumulative-erasing.
+2. **Emitter-armed precondition for the soak probe** (proof-by-absence sharp edge): Phase 3.1 now requires the probe to count only monitor runs whose tests step actually dispatched `test-all.sh`.
+3. **Anti-vacuity on every shim arm**: each transient arm asserts the injection marker exists, so a shim that never fired cannot green the arm.
+
 ## Overview
 
 The every-6h `main-health-monitor` run reports `tests=failure` on every recent run: `scripts/test-all.sh`'s `_RUN_WD` parent-death watchdog (the #8993 orphan-guard, added in PR #9034) declares the parent gone on a **single** anomalous poll — `kill -0` ESRCH, `stat==Z*`, or an `lstart` mismatch — and SIGTERMs a healthy run mid-suite. Four consecutive monitor runs show a `[KILLED]` suite at 68–413s elapsed with `exit=143` preceded by `ERROR: parent process gone`, while the step's parent shell demonstrably survived. The fix debounces the verdict: require N>=3 **consecutive** failed polls (at `_RUN_WD_POLL_S=1`) before the terminate path, re-verify parent `lstart` identity on the deciding poll, and emit a per-poll diagnostic naming the failed leg. Real orphaning still reaps within ~N+grace seconds; a transient `kill -0`/`ps` anomaly under fork churn no longer kills a run.
@@ -53,6 +74,8 @@ Debounce the `_RUN_WD` parent-liveness verdict inside the existing watchdog subs
 - **Fixture-baseline coupling.** `plugins/soleur/test/fixture-relative-assert.baseline.txt` pins a count of `3` for `scripts/test-all-orphan-log-retention.test.sh`. If the new arms introduce relative-operand fixture writes matching that scanner's rules, regenerate with `bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline` — do not hand-edit.
 - **Generated TSVs.** `scripts/suite-durations.tsv` / `scripts/suite-shard-legs.tsv` are `regenerate-shard-manifest.py` output — never hand-edited (scripts/test-all.sh:4778). The new followthrough suite gets a `run_suite` line; its TSV rows regenerate in the next manifest pass (absent row falls back to `default-weight-ms` — verify at work time that no freshness gate reds on a missing row).
 - **Suite runtime growth.** New live-process arms add ~15–25s to `test-all-orphan-log-retention` (currently ~3s measured). Acceptable inside its leg budget; the `measured` duration row drifts until the next manifest regeneration — recorded, not blocking.
+- **Consecutive-only, never absolute (the merge-blocking invariant).** Per `knowledge-base/project/learnings/best-practices/2026-06-12-idle-watchdog-reset-on-sdk-heartbeat-and-upstream-fix-exposes-downstream-timeout.md` Insight 1: a reset signal may defuse the per-poll counter but must NEVER dissolve detection of a sustained failure. The counter resets ONLY on a healthy poll (or a recovered deciding-poll re-verify); a genuinely dead/zombie/recycled parent fails every poll consecutively and still reaches the threshold. Arm 1.6 (alternating failures) + arm 1.7 (sustained failures) pin both directions — relaxing "consecutive" to "cumulative" or "N-of-M-window" would silently weaken the #8993 guarantee and is a reject condition.
+- **Empty `ps` reads stay inconclusive, not failed.** The current lstart leg already treats an empty `ps -o lstart=` read as "no evidence" (`[[ -n "$_wd_plstart" && … ]]`) — keep that semantic inside the verdict: an empty read is not a failed poll, so a brief `ps` outage cannot manufacture consecutive failures, and a sustained one still fails the `kill -0`/`stat` legs if the parent is actually gone.
 
 ## Implementation Phases
 
