@@ -312,9 +312,11 @@ PF_TAIL="${INPUT%"${INPUT##*[![:space:]]}"}"
 PF_CMD_RE='"command"[[:space:]]*:[[:space:]]*"'
 # Exactly one `"command"` text in the whole envelope, or the prefilter does not decide: it reads the FIRST key
 # while jq reads .tool_input.command, so a decoy key before the real one (nested, in an array, at the top level, or
-# a duplicate) must go to jq. Nine characters are the text `"command"`.
+# a duplicate) must go to jq. Nine characters are the text `"command"`. A key can also be spelled with a \u escape
+# (`"\u0063ommand"` is the key command to jq and not the text `"command"` to the count), so an envelope that holds a
+# backslash followed by u anywhere goes to jq.
 PF_ONCE="${INPUT//\"command\"/}"
-if [[ "${PF_LEAD:0:1}" == "{" && "${PF_TAIL: -1}" == "}" && $(( ${#INPUT} - ${#PF_ONCE} )) -eq 9 && "$INPUT" =~ $PF_CMD_RE ]]; then
+if [[ "${PF_LEAD:0:1}" == "{" && "${PF_TAIL: -1}" == "}" && $(( ${#INPUT} - ${#PF_ONCE} )) -eq 9 && "$INPUT" != *'\u'* && "$INPUT" =~ $PF_CMD_RE ]]; then
   PF_MARK="${BASH_REMATCH[0]}"
   PF_REST="${INPUT#*"$PF_MARK"}"
   PF_CMD="${PF_REST%%\"*}"

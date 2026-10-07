@@ -1791,6 +1791,10 @@ env_row "prefilter: a nested decoy command key before the real one is not skippe
 env_row "prefilter: an array decoy command key before the real one is not skipped" deny '{"tool_name":"Bash","tool_input":{"x":[{"command":"ls"}],"command":"rm -rf ~"},"cwd":"/var/tmp"}'
 env_row "prefilter: a top-level decoy command key before tool_input is not skipped" deny '{"command":"ls","tool_name":"Bash","tool_input":{"command":"rm -rf ~"},"cwd":"/var/tmp"}'
 env_row "prefilter: a duplicate command key (jq reads the last) is not skipped" deny '{"tool_name":"Bash","tool_input":{"command":"ls","command":"rm -rf ~"},"cwd":"/var/tmp"}'
+env_row "prefilter: a duplicate command key spelled with a \u escape (jq reads the last) is not skipped" deny '{"tool_name":"Bash","tool_input":{"command":"ls","\u0063ommand":"rm -rf ~"},"cwd":"/var/tmp"}'
+env_row "prefilter: a command key spelled with a \u escape only is not skipped" deny '{"tool_name":"Bash","tool_input":{"\u0063ommand":"rm -rf ~"},"cwd":"/var/tmp"}'
+env_row "prefilter: a \u escape after the command (destroy behind an escaped duplicate) is not skipped" ask '{"tool_name":"Bash","tool_input":{"command":"ls","comman\u0064":"terraform destroy"}}'
+env_row "prefilter: a \u escape elsewhere in a benign envelope is decided by jq and allowed" none '{"tool_name":"Bash","tool_input":{"command":"ls -la"},"cwd":"/var/tmp/caf\u00e9"}'
 env_row "prefilter: a destroy hidden behind a decoy command key is not skipped" ask '{"tool_name":"Bash","tool_input":{"y":{"command":"ls"},"command":"terraform destroy"}}'
 env_row "prefilter: the text command as a value is not a second key (still decided by jq, no decision for ls)" none '{"tool_name":"Bash","description":"command","tool_input":{"command":"ls"}}'
 env_row "prefilter: one command key and no keyword is skipped without jq or perl (no notice on stderr)" none '{"tool_name":"Bash","tool_input":{"command":"ls -la"},"cwd":"/var/tmp"}' "PATH=$WORK/farm-none"
@@ -2053,7 +2057,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=816
+MIN_CASES=820
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
