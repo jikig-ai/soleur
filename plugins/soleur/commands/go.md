@@ -432,8 +432,67 @@ if [ "$DO_RESTORE" = true ]; then
   # before forking `git show`, so every failure mode leaves a 0-byte .mcp.json. Measured:
   # 67 bytes -> 0, silently, with `2>/dev/null || true` swallowing the status and reporting
   # rc 0. On a customer machine that file is their MCP server registry, commonly holding
-  # per-server tokens, and it is untracked — so the loss is unrecoverable.
-  if git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
+  # per-server tokens, and it is usually untracked there — so the loss is unrecoverable.
+  #
+  # `main:./.mcp.json`, not `main:.mcp.json`: inside a work tree the path is relative to the CWD like every
+  # other path in this block, so a run from a subdirectory reads sub/.mcp.json instead of writing the root
+  # file's bytes there. A bare repo refuses the `./` form, and the documented bare-root refresh must keep
+  # working there, so it keeps the root-relative spelling.
+  IN_WT="$(git rev-parse --is-inside-work-tree 2>/dev/null)"
+  MAIN_MCP="main:.mcp.json"
+  if [ "$IN_WT" = true ]; then MAIN_MCP="main:./.mcp.json"; fi
+  #
+  # In this repo .mcp.json is TRACKED, and an uncommitted edit to it is the operator's work, not
+  # stale state (#9622).
+  # KEEP when: the path is a symlink (mv would replace the link itself); or it is tracked and either
+  # not a plain cached entry (skip-worktree `S` / assume-unchanged `h` hide edits from git diff, and an
+  # unmerged entry is tagged `M`) or differs from HEAD. Compared to HEAD, not the index: `git diff --quiet`
+  # without HEAD reads a staged-only change as clean. ANY probe failure (an unreadable index, a diff status
+  # above 1 such as an unborn branch) keeps the file: an error probing it must fail toward keeping it, so
+  # the status of every probe is read, never folded into "untracked". A bare repo has no index, so nothing
+  # in it is tracked (git 2.55 answers ls-files there with rc 0 and no output, but older versions refuse, and a
+  # refusal would read as probe-failed and block the bare-root refresh, so the work-tree check stays). An untracked regular file, or a tracked-plain one equal to HEAD, falls through to the
+  # restore below. `cause=` names the measured reason, like the sibling markers' verdict=/source=/rc= fields.
+  KEEP=false
+  KEEP_CAUSE=""
+  KEEP_RC=""
+  if [ -L .mcp.json ]; then
+    KEEP=true; KEEP_CAUSE=symlink
+  elif [ "$IN_WT" != true ]; then
+    :
+  else
+    # ONE probe answers tracked-or-not AND the index tag; its status separates "untracked" (empty
+    # output, rc 0) from "could not read the index" (rc != 0), which must keep the file.
+    LS_RC=0
+    LS_TAG="$(git ls-files -v -- .mcp.json 2>/dev/null)" || LS_RC=$?
+    if [ "$LS_RC" -ne 0 ]; then
+      KEEP=true; KEEP_CAUSE=probe-failed; KEEP_RC=$LS_RC
+    else
+      case "$LS_TAG" in
+        "") ;;
+        "H "*)
+          DIFF_RC=0
+          git diff --quiet HEAD -- .mcp.json 2>/dev/null || DIFF_RC=$?
+          if [ "$DIFF_RC" -eq 1 ]; then
+            KEEP=true; KEEP_CAUSE=differs-from-head
+          elif [ "$DIFF_RC" -ne 0 ]; then
+            KEEP=true; KEEP_CAUSE=probe-failed; KEEP_RC=$DIFF_RC
+          fi ;;
+        *) KEEP=true; KEEP_CAUSE=index-flag ;;
+      esac
+    fi
+  fi
+  if [ "$KEEP" = true ]; then
+    # Already main's bytes: nothing to protect and nothing to restore, so say nothing. Without this a
+    # file the gate itself refreshed reads as "dirty" on every later session start. A symlink is the
+    # operator's own wiring and is always reported: it is never compared, since opening its target
+    # would follow a link the repository chose.
+    if [ "$KEEP_CAUSE" != symlink ] && git show "$MAIN_MCP" 2>/dev/null | cmp -s - .mcp.json 2>/dev/null; then
+      :
+    else
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=${KEEP_CAUSE}${KEEP_RC:+ rc=${KEEP_RC}}"
+    fi
+  elif { rm -f .mcp.json.soleur-tmp 2>/dev/null; git show "$MAIN_MCP" > .mcp.json.soleur-tmp 2>/dev/null; }; then
     if mv .mcp.json.soleur-tmp .mcp.json; then
       :
     else
@@ -447,12 +506,13 @@ if [ "$DO_RESTORE" = true ]; then
     # `git show main:.mcp.json` fails for at least three distinct reasons and the previous
     # single `reason=mcp-json-absent-on-main` asserted the first of them for all three, which
     # is the same defect as `reason=cloud-session` before it learned to print its verdict.
-    # $? here is the `if` condition's status, so it is captured before `rm` overwrites it.
+    # $? here is the `elif` group's status (its last command, `git show`), so it is captured before `rm`
+    # overwrites it.
     SHOW_RC=$?
     rm -f .mcp.json.soleur-tmp
     if ! git rev-parse --verify -q main >/dev/null 2>&1; then
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-no-local-main"
-    elif ! git cat-file -e main:.mcp.json 2>/dev/null; then
+    elif ! git cat-file -e "$MAIN_MCP" 2>/dev/null; then
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main"
     else
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-read-failed rc=${SHOW_RC}"
@@ -461,7 +521,7 @@ if [ "$DO_RESTORE" = true ]; then
 fi
 ```
 
-The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree (file gets overwritten on next session-start from the new CWD). Skip silently on first error — do not block routing on session-start hygiene.
+The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree for a clean or untracked file (it is overwritten on next session-start from the new CWD). A `.mcp.json` that is a symlink, or is tracked and differs from HEAD or carries a non-plain index entry (`skip-worktree`, `assume-unchanged`, unmerged), is left alone and reported as `SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=<symlink|index-flag|differs-from-head|probe-failed>`; a kept file already equal to `main` stays silent. A stale tracked copy the gate refreshed on an earlier session is not refreshed again once `main` has moved on: the marker prints until the file is dropped or committed. An agent must NOT run `git checkout -- .mcp.json` or `git update-index` in response. For `differs-from-head` show the operator `git diff HEAD -- .mcp.json`; for `index-flag` (where that diff is unreliable) and `symlink`, report the cause and show `git ls-files -v -- .mcp.json` or `ls -l .mcp.json`; for `probe-failed` (the index or the HEAD diff could not be read, with the git exit status as `rc=`), report that the file could not be inspected. In every case keep routing. Operator remedies: commit the file, drop it with `git checkout -- .mcp.json` (a stale tracked copy is refreshed again next session), or pin an intentional local variant with `git update-index --skip-worktree .mcp.json` (the marker still prints for it unless its bytes equal `main`'s). The restore reads `main:./.mcp.json` relative to the current directory inside a work tree, so a run from a subdirectory never writes the root file's bytes; a bare repo keeps the root-relative form. Skip silently on first error — do not block routing on session-start hygiene.
 
 See `knowledge-base/project/learnings/2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record.md` Session Errors #1-#2 for the gap this closes.
 
@@ -488,6 +548,7 @@ Before applying the routing table, detect the active harness and use the correct
 | Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
 | Codex | Load `$soleur:<skill>` through `skills.read` or the installed SKILL.md | **spawn_agent** with canonical instructions | `$soleur:go` |
 | Devin CLI | **Slash command** — `/soleur:<skill>` | **run_subagent** with agent id | `/soleur:go` |
+| Cursor CLI | Read the canonical file the stub names. Soleur names are `/go`, `/sync`, `/soleur-plan`, `/soleur-help`, and `/soleur-review` | Prefixed stem, for example `/soleur-engineering-cto` | `/go` |
 
 **Codex harness:** read [Codex compatibility instructions](../codex/INSTRUCTIONS.md).
 Use the installed plugin root for plugin-owned paths. Reading the full named
@@ -502,6 +563,8 @@ Devin exposes Soleur skills as slash commands: `/soleur:<skill>` (e.g. `/soleur:
 **Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Invoke a skill by Reading `plugins/soleur/skills/<name>/SKILL.md` in this process (`/<skill>` names the skill; it is not a nested tool_use). **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
 **Devin CLI harness:** entry is `/soleur:go` (slash command); agents via `run_subagent`. Invoke routed skills with the `/soleur:<skill>` slash command. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
+
+**Cursor CLI harness:** Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins, not Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. A Cursor CLI session uses this row. The unknown-harness stop below is a different case. Read [Cursor compatibility instructions](../cursor/INSTRUCTIONS.md).
 
 **Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
@@ -536,7 +599,7 @@ Analyze the user input and classify intent using semantic assessment:
 When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:brainstorm`, `soleur:drain-labeled-backlog`, `soleur:drain-prs`):
 
 0. **You are still in `soleur:go`, not in the pipeline skill.** Routing is classification + dispatch only. The `soleur:go` handler does **not** run pipeline phases, create worktrees for implementation, or write product code — even if you "know what the skill would do next."
-1. **Your very next action** MUST invoke that skill via the harness adapter (`plugins/soleur/lib/harness.ts` `invokeSkill()`). **Grok:** Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion — slash `/<name>` names the skill; it is not a nested tool_use. **Claude:** Skill tool (`soleur:brainstorm`, `soleur:one-shot`, …). **Devin:** the slash command for `soleur:brainstorm`, `soleur:one-shot`, … as the Step 2.0 table gives it, with `<args>`. Do **not** execute a subset of the skill's steps with Write/Edit/Shell yourself. (Claude must not substitute Read for the Skill tool.)
+1. **Your very next action** MUST invoke that skill via the harness adapter (`plugins/soleur/lib/harness.ts` `invokeSkill()`). **Grok:** Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion — slash `/<name>` names the skill; it is not a nested tool_use. **Claude:** Skill tool (`soleur:brainstorm`, `soleur:one-shot`, …). **Devin:** the slash command for `soleur:brainstorm`, `soleur:one-shot`, … as the Step 2.0 table gives it, with `<args>`. **Cursor CLI:** Read `plugins/soleur/skills/<name>/SKILL.md` and follow that file. Do not call the Skill tool or the Task tool. Do not strip a `soleur:` name down to a bare slash. The Cursor CLI row in the harness table names the entry commands and the prefixed forms. Do **not** execute a subset of the skill's steps with Write/Edit/Shell yourself. (Claude must not substitute Read for the Skill tool.)
 2. **Do NOT end your turn** after routing, worktree creation, brainstorm artifacts, or a pushed draft PR. Those are mid-pipeline checkpoints, not deliverables.
 3. **`brainstorm` deliverable:** brainstorm doc + spec + handoff to `soleur:plan` (or `soleur:one-shot` shortcut when requirements are clear). **FORBIDDEN:** product code during brainstorm.
 4. **`one-shot` deliverable:** merged PR + `<promise>DONE</promise>` (Step 8). Pushed code on a draft PR without review/ship is a **protocol violation**, not completion.
@@ -550,9 +613,10 @@ If intent is clear, route without confirmation:
 - **Claude Code:** invoke via the **Skill tool** (`soleur:<skill>`, args = original user input). Agents: **Task tool** with `subagent_type` and prompt = original user input.
 - **Grok Build:** Read `plugins/soleur/skills/<skill>/SKILL.md` in this process and run it to completion (`/<skill>` names the skill; it is not a nested tool_use). Agents: **spawn_subagent** with the agent id and prompt = original user input.
 - **Devin CLI:** invoke via the **`/soleur:<skill>` slash command** with args = original user input. Agents: **run_subagent** with the agent id and prompt = original user input.
+- **Cursor CLI:** read the canonical file the stub names. `/go` and `/sync` stay bare. Every other skill uses the prefixed form, including `/soleur-plan`, `/soleur-help`, and `/soleur-review`. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. A Cursor CLI session uses this bullet. The unknown-harness stop in Step 2.0 is not this bullet.
 <!-- harness-forms:end -->
 
-Map `soleur:<skill>` cells in the table to the Grok skill name `/<skill>` (strip the `soleur:` prefix) and Read that SKILL.md — do not nested-invoke slash. **Exception:** rows whose `Routes To` cell names an agent (e.g., `soleur:legal:clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
+On Grok Build only. Map `soleur:<skill>` cells in the table to the Grok skill name `/<skill>` (strip the `soleur:` prefix) and Read that SKILL.md — do not nested-invoke slash. **Exception:** rows whose `Routes To` cell names an agent (e.g., `soleur:legal:clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. On Cursor CLI, do not apply that Grok mapping and do not call the Task tool; use the prefixed stem from the Cursor CLI row. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 
 **PR-vs-issue type resolution (when `#N` or a bare number is the input):** Before evaluating the `clo-attestation` and `review` rows, run `gh issue view N --json body,title,state 2>/dev/null` to determine whether `N` is an issue. If `gh issue view` succeeds AND the body satisfies the `clo-attestation` predicate, route to soleur:legal:clo. If `gh issue view` succeeds but no `clo-attestation` match, route to `soleur:review` only after confirming `gh pr view N` ALSO succeeds (otherwise the input is a non-attestation issue — route to default/brainstorm with the issue body as context). This ordering closes the gap that caused `soleur:go #3998` to mis-route an issue to PR review. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
 
@@ -568,6 +632,7 @@ If intent is truly ambiguous, use the **AskUserQuestion tool** with 4 options: B
 - **Worktree-plan-vs-issue alignment (`#N` entry → "Continue in that worktree").** When the input is an issue `#N` and a topically-named worktree already exists, NAME-relevance is NOT issue-relevance. Before offering "Continue in that worktree", grep the worktree's planning artifact (`knowledge-base/project/plans/*`, `specs/feat-*/spec.md` frontmatter `closes:`) for the input issue number. If the worktree's plan targets a DIFFERENT (sibling) issue, surface that mismatch in the `AskUserQuestion` options (offer a fresh worktree for `#N` vs. continuing the existing one for `#M`). Issues that a body explicitly splits into a "separate PR" / "follow-up PR" must not be silently co-located. See `knowledge-base/project/learnings/2026-05-29-brand-hex-commit-gate-and-go-worktree-plan-mismatch.md`.
 <!-- harness-forms:start -->
 - **Grok entry is `/go`, not `/soleur:go`.** If the operator typed `/soleur:go`, continue — that is Claude's slash; Grok's is `/go`. Do not refuse or re-prompt.
+- **Cursor CLI entry is `/go` and `/sync`.** Soleur plan, help, and review are `/soleur-plan`, `/soleur-help`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins. Slice 1 does not run hooks and does not classify the session as cursor.
 <!-- harness-forms:end -->
 - **Grok Build bypass guard (#6325 class).** If you routed to `soleur:one-shot` and find yourself writing product code or running `git commit` before `soleur:review` and `soleur:ship` ran, STOP — you inlined the pipeline. Invoke `soleur:one-shot <args>` (or continue the active one-shot Steps 3–8), never "implement then report done."
 - **Brainstorm / plan / work bypass guard (#6320 lifecycle).** If you routed to `soleur:brainstorm` and wrote product code, or finished brainstorm/plan artifacts without invoking `soleur:plan` or `soleur:work`, or pushed from `soleur:work` without `soleur:review` → `soleur:ship`, STOP — invoke the mandated successor from `workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`, `IMPLEMENTATION_TAIL`).

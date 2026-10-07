@@ -1384,7 +1384,7 @@ describe("plugin slash-name uniqueness", () => {
     // "all manifests", and narrowing the dirent regex to `.claude-plugin` (the
     // one manifest that structurally cannot fail clause (a)) would drop both
     // real rows while a >= 1 floor stayed green.
-    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".devin-plugin"]);
+    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".cursor-plugin", ".devin-plugin"]);
 
     // Identity, not just count: three WRONG stems satisfy a length floor, and
     // clause (b) would then compare against names no command has.

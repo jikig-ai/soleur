@@ -144,6 +144,15 @@ on:
       # apply (the sibling is the only resource that re-provisions web-2 over the bastion
       # forward this workflow opens).
       - "apps/web-platform/infra/web-2-ssh-host-key.pub"
+      # #9393 — the three cron-egress artifacts deploy_pipeline_fix_web2 delivers to a
+      # running web-2 (the carved CIDR allow list, the resolver, the post-apply probe).
+      # They hash into the sibling's triggers_replace, so a body-only edit — e.g. the
+      # daily CIDR-refresh regeneration PR — must fire this apply or web-2 keeps the
+      # stale allow list until its next replace. Kept in sync with the #5505
+      # paths-union test in ship-deploy-pipeline-fix-gate.test.ts.
+      - "apps/web-platform/infra/cron-egress-allowlist-cidr.txt"
+      - "apps/web-platform/infra/cron-egress-resolve.sh"
+      - "apps/web-platform/infra/cron-egress-postapply-assert.sh"
   workflow_dispatch:
     inputs:
       reason:

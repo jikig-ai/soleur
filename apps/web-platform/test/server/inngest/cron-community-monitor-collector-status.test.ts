@@ -274,9 +274,14 @@ describe("readCollectorStatus — hostile sidecar (#7122)", () => {
     );
     const dispatch = [...script.matchAll(/^\s{4}([a-z][a-z-]*)\)\s+cmd_/gm)].map((m) => m[1]);
     const warns = [...script.matchAll(/_CAP_WARN="([a-z_]+)"/g)].map((m) => m[1]);
-    // Non-vacuity: the script's five verbs and its two warn values are really found.
+    // Non-vacuity: the script's five verbs and its four warn values are really found.
     expect(dispatch.sort()).toEqual(["activity", "contributors", "discussions", "fetch-interactions", "repo-stats"]);
-    expect([...new Set(warns)].sort()).toEqual(["stargazers_unavailable", "truncated_at_per_page"]);
+    expect([...new Set(warns)].sort()).toEqual([
+      "compact_off",
+      "compact_over_budget",
+      "stargazers_unavailable",
+      "truncated_at_per_page",
+    ]);
     for (const command of dispatch) {
       for (const warn of new Set(warns)) {
         const report = await readCollectorStatus(
@@ -498,7 +503,7 @@ describe("repo-stats under a read-scoped installation token (#7122 postmerge)", 
   // and status on STDERR, the JSON body on stdout.
   const REAL_GH_403 = "gh: Resource not accessible by integration (HTTP 403)";
 
-  function runRepoStats(stargazersStderr: string | null) {
+  function runRepoStats(stargazersStderr: string | null, extraEnv: Record<string, string> = {}) {
     const dir = mkdtempSync(join(tmpdir(), "soleur-fake-gh-"));
     const statusDir = join(dir, "status");
     const gh = join(dir, "gh");
@@ -528,6 +533,7 @@ describe("repo-stats under a read-scoped installation token (#7122 postmerge)", 
           GITHUB_REPOSITORY: "o/r",
           SOLEUR_COLLECTOR_STATUS_DIR: statusDir,
           FAKE_GH_CALLS: calls,
+          ...extraEnv,
           ...(stargazersStderr === null ? {} : { FAKE_STARGAZERS_STDERR: stargazersStderr }),
         } as unknown as NodeJS.ProcessEnv,
         encoding: "utf8",
@@ -586,11 +592,20 @@ describe("repo-stats under a read-scoped installation token (#7122 postmerge)", 
   });
 
   it("when stargazers ARE readable the count is a number and nothing is flagged (control)", () => {
-    const { result, record } = runRepoStats(null);
+    // The handler always sets the compact flag (#9678); without it a status-dir run would
+    // (correctly) record warn=compact_off, which is not the condition under test here.
+    const { result, record } = runRepoStats(null, { SOLEUR_COLLECTOR_COMPACT: "1" });
     expect(result.status).toBe(0);
     const out = JSON.parse(result.stdout);
     expect(out.new_stargazers_count).toBe(1);
     expect(out.stargazers_unavailable).toBe(false);
     expect(record?.warn).toBeUndefined();
+  });
+
+  it("a status-dir run that did not receive the compact flag records warn=compact_off (default shape kept)", () => {
+    const { result, record } = runRepoStats(null);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).new_stargazers_count).toBe(1);
+    expect(record).toMatchObject({ exit: 0, cause: "", warn: "compact_off" });
   });
 });

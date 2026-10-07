@@ -1510,6 +1510,61 @@ assert "#7674 resume) reads liveness BEFORE writing flushed (got read=$RSL_RD wr
 assert "#7674 resume) routes through resume_liveness_decide exactly once" \
   "[[ \$(grep -cF 'resume_liveness_decide \"\$RS_LIVE_N\"' '$RESUME_FILE') -eq 1 ]]"
 
+# --- (b4) op=resume's G4 BOOTSTRAP-DONE GATE (#9177) ------------------------------------------
+# `flushed` starts a PROD scheduler on THIS host generation, so the generation's provisioning
+# must be PROVEN finished first: the unit-side quiesce in soleur-inngest-provision.service is
+# primary, and this row is the gate-side defense in depth the runbook's "resume only after
+# bootstrap-done for the NEW cloud-init instance-id" always assumed. The evidence path is the
+# followthrough probe itself — its iid- join already scopes PASS to the CURRENT generation and
+# treats bootstrap-done-DEGRADED as FAIL — and resume_bootstrap_decide maps its verdict onto
+# proceed / distinct refusals. FAIL-CLOSED by construction: only literal `verdict=PASS` + rc 0
+# proceeds; every other shape, including an EMPTY verdict, refuses.
+RSB_FN="$(mktemp)"; SCRATCH+=("$RSB_FN")
+awk '/^resume_bootstrap_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$RSB_FN"
+RSB_N=$(wc -l < "$RSB_FN" | tr -d '[:space:]')
+assert "#9177 resume_bootstrap_decide extraction is non-vacuous (>5 lines, got $RSB_N)" "[[ '$RSB_N' -gt 5 ]]"
+# shellcheck disable=SC1090
+. "$RSB_FN"
+assert "#9177 resume_bootstrap_decide() is defined after sourcing" "declare -F resume_bootstrap_decide >/dev/null"
+RSB_EVALS=0
+rsb_case() { local got; got="$(resume_bootstrap_decide "$2" "$3")"; RSB_EVALS=$((RSB_EVALS + 1))
+  assert "resume_bootstrap_decide: $1 (rc=$2 verdict='$3') -> $4" "[[ '$got' == '$4' ]]"; }
+rsb_case "rc0 + verdict=PASS proceeds"                                        "0" "verdict=PASS" "proceed"
+rsb_case "a bare PASS is not verdict=PASS — fails closed"                     "0" "PASS" "refuse-unreadable"
+rsb_case "verdict=PASS with rc=1 fails closed (rc is checked, not implied)"    "1" "verdict=PASS" "refuse-unreadable"
+rsb_case "FAIL reason=degraded gets its OWN refusal"                           "1" "verdict=FAIL reason=degraded cause=sqlite-only" "refuse-degraded"
+rsb_case "FAIL reason=no-bootstrap-done is a generic refusal"                  "1" "verdict=FAIL reason=no-bootstrap-done cause=none-matching-iid" "refuse-failed"
+rsb_case "FAIL reason=never-started is a generic refusal"                      "1" "verdict=FAIL reason=never-started cause=stale" "refuse-failed"
+rsb_case "TRANSIENT reason=in-progress names its own refusal"                  "2" "verdict=TRANSIENT reason=in-progress" "refuse-in-progress"
+rsb_case "TRANSIENT reason=not-delivered names its own refusal"                "2" "verdict=TRANSIENT reason=not-delivered" "refuse-not-delivered"
+rsb_case "TRANSIENT reason=probe-fault is UNREADABLE (the question could not be asked)" "3" "verdict=TRANSIENT reason=probe-fault" "refuse-unreadable"
+rsb_case "an EMPTY verdict fails closed"                                       "0" "" "refuse-unreadable"
+rsb_case "a garbage verdict fails closed"                                      "0" "garbage" "refuse-unreadable"
+rsb_case "verdict=PASS trailing text is not literal PASS — fails closed"       "0" "verdict=PASS extra" "refuse-unreadable"
+assert "#9177 resume_bootstrap_decide scenarios dispatched (>=12)" "[[ '$RSB_EVALS' -ge 12 ]]"
+# ASSEMBLY — a refusal that does not abort BEFORE the write is a logger, not a gate.
+assert "#9177 resume) invokes the provisioning probe via doppler run prd_terraform" \
+  "grep -qF 'doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh' '$RESUME_FILE'"
+# Anchored on the CALL (the `*)` refusal arm's message also names the function, so a bare
+# `resume_bootstrap_decide` grep counts 2 — measured).
+assert "#9177 resume) routes through resume_bootstrap_decide exactly once" \
+  "[[ \$(grep -cF 'resume_bootstrap_decide \"\$RS_G4_RC\"' '$RESUME_FILE') -eq 1 ]]"
+RSB_PROBE_LN=$(grep -nF 'inngest-provision-unit-8562.sh' "$RESUME_FILE" | sed -n '1p' | cut -d: -f1) || true
+RSB_WR_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$RESUME_FILE" | sed -n '1p' | cut -d: -f1) || true
+assert "#9177 resume) probes the bootstrap evidence BEFORE writing flushed (got probe=$RSB_PROBE_LN write=$RSB_WR_LN)" \
+  "[[ -n '$RSB_PROBE_LN' && -n '$RSB_WR_LN' && '$RSB_PROBE_LN' -lt '$RSB_WR_LN' ]]"
+# The probe's detail lines (counts + iid) must reach the run log — a `2>&1` merge into the
+# captured stdout would swallow them before the refusal messages that reference them.
+assert "#9177 resume) does NOT merge the probe's stderr into the verdict capture (detail rides stderr to the log)" \
+  "! grep -qF 'inngest-provision-unit-8562.sh 2>&1' '$RESUME_FILE'"
+# The degraded completion is the refusal that exists BECAUSE of this gate: the unit reached
+# bootstrap-done-DEGRADED (SQLite-only), so its own quiesce holds it — the gate must not
+# authorize a resume over it anyway.
+assert "#9177 resume) names the degraded refusal distinctly (bootstrap-done-DEGRADED is never a pass)" \
+  "grep -qF 'refuse-degraded' '$RESUME_FILE'"
+assert "#9177 resume) names bootstrap-done (the precondition it enforces)" \
+  "grep -qF 'bootstrap-done' '$RESUME_FILE'"
+
 # --- (c) EMITTER PARITY (cross-file), in the SUBSET direction. -------------------------------
 # The two reasons this gate keys on are a vocabulary owned by inngest-cutover-flip.sh. If either
 # is renamed there, the grep silently matches nothing and the gate reports CLEAR forever — a
@@ -1826,7 +1881,7 @@ assert "#6617 probe arms add NO retry loop (the one emit-file read loop is allow
 ENV_EXPR=$(grep -E '^[[:space:]]+environment:' "$WF" | sed -n '1p' || true)
 assert "#7228 the environment: expression was located (else these pins are vacuous)" \
   "[[ -n \"\$ENV_EXPR\" ]]"
-for _op in arm rollback resume; do
+for _op in arm rollback resume reflush; do
   assert "#7228 prod-writing op '\$_op' is INSIDE the required-reviewer gate" \
     "printf '%s' \"\$ENV_EXPR\" | grep -cF \"inputs.op == '\$_op'\" >/dev/null"
 done
@@ -4216,6 +4271,72 @@ _RM_TOTAL=$(grep -c '::error::' <<<"$BS_REMEDY_FN" || true)
 assert "#8079 _bs_read_remedy census: 0 hardcoded '2.0 ' prefixes and all $_RM_TOTAL ::error:: lines carry \$step (hardcoded=$_RM_HARDCODED param=$_RM_PARAM)" \
   "[[ '$_RM_HARDCODED' -eq 0 && '$_RM_PARAM' -eq '$_RM_TOTAL' && '$_RM_TOTAL' -gt 0 ]]"
 
+# =============================================================================================
+# #7777 — op=reflush, the AUTHORIZED second FLUSHALL. One Doppler write of
+# `reflush,run=<gha-run-id>,by=<actor>` to INNGEST_CUTOVER_FLIP; the on-host FSM's reflush arm
+# validates the evidence, APPENDS a cleared_at authorization record to the append-only latch
+# ledger (the prior flushed_at is never erased), and re-enters the shared flush path, which
+# re-engages the latch with a fresh flushed_at. The verb is gated four ways — terminal flag,
+# latch-must-EXIST (the inverse of op=arm's G3.7), host audibility, well-formed evidence — and
+# every refusal precedes the write. The reviewer-gated environment + conditional token are the
+# same as arm's, pinned by the shared set-parity row and the membership loop above.
+# =============================================================================================
+assert "#7777 choice includes reflush" "grep -qE '^[[:space:]]+-[[:space:]]*reflush\$' '$WF_YAML'"
+assert "#7777 case arm: reflush)" "grep -qE '^[[:space:]]+reflush\\)' '$WF'"
+RFL_FILE="$(mktemp)"; SCRATCH+=("$RFL_FILE")
+awk '/^            reflush\)$/,/^              ;;$/' "$WF" > "$RFL_FILE"
+RFL_N=$(wc -l < "$RFL_FILE" | tr -d '[:space:]')
+assert "#7777 reflush) case body is a real block (non-vacuity for every row below, got $RFL_N)" \
+  "[[ '$RFL_N' -gt 40 ]]"
+RF_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "reflush,run=$RF_RUN,by=$RF_BY" | DOPPLER_TOKEN=' "$RFL_FILE" && RF_STDIN=1
+RF_ARGV=0;   grep -qE 'secrets set INNGEST_CUTOVER_FLIP=' "$RFL_FILE" && RF_ARGV=1
+RF_SILENT=0; grep -E 'doppler secrets set INNGEST_CUTOVER_FLIP' "$RFL_FILE" | grep -c '>/dev/null' >/dev/null && RF_SILENT=1
+RF_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_CUTOVER_FLIP' "$RFL_FILE" | sed -n '1p' | cut -d: -f1) || true
+RF_LASTG_LN=$(grep -n 'REFUSING' "$RFL_FILE" | tail -1 | cut -d: -f1) || true
+RF_TS_LN=$(grep -n 'RF_TS=' "$RFL_FILE" | sed -n '1p' | cut -d: -f1) || true
+RF_ISO=0;    grep -qF 'RF_ISO=$(date -u -d "@$RF_TS"' "$RFL_FILE" && RF_ISO=1
+RF_G1READ=0; grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain' "$RFL_FILE" && RF_G1READ=1
+RF_G1FC=0;   grep -qF '__READ_FAILED__' "$RFL_FILE" && grep -qE '^[[:space:]]*done\|aborted\|rolled-back\)' "$RFL_FILE" && RF_G1FC=1
+RF_G2=0;     grep -qF 'RF_LATCH_N="$(_flush_latch_count)"' "$RFL_FILE" && grep -qF 'flush_latch_decide "$RF_LATCH_N" "$RF_LIVE_N"' "$RFL_FILE" && grep -qF 'latched)' "$RFL_FILE" && RF_G2=1
+RF_G3=0;     grep -qF 'RF_LIVE_N="$(_flip_liveness_count)"' "$RFL_FILE" && grep -qF 'resume_liveness_decide "$RF_LIVE_N"' "$RFL_FILE" && RF_G3=1
+RF_G4=0;     grep -qF 'RF_RUN="${GITHUB_RUN_ID:-}"' "$RFL_FILE" && grep -qF 'RF_BY="${GITHUB_TRIGGERING_ACTOR' "$RFL_FILE" && grep -qF '=~ ^[0-9]+$' "$RFL_FILE" && RF_G4=1
+RF_CONF=0;   grep -qF 'RF_STATE=$(confirm_flip_state "$RF_ISO")' "$RFL_FILE" && RF_CONF=1
+RF_EV=0;     grep -qF 'reflush,run=' "$RFL_FILE" && RF_EV=1
+RF_ERRS=$(grep -cE '::error::op=reflush' "$RFL_FILE" || true)
+assert "#7777 writes the reflush evidence value on STDIN, never on argv (/proc is world-readable)" \
+  "[[ '$RF_STDIN' -eq 1 && '$RF_ARGV' -eq 0 ]]"
+assert "#7777 the write discards stdout (doppler secrets set prints every remaining secret of the config)" \
+  "[[ '$RF_SILENT' -eq 1 ]]"
+assert "#7777 the write is LAST-ish: every gate refusal is above it (write line $RF_WRITE_LN > last refusal $RF_LASTG_LN)" \
+  "[[ -n '$RF_WRITE_LN' && -n '$RF_LASTG_LN' && '$RF_WRITE_LN' -gt '$RF_LASTG_LN' ]]"
+assert "#7777 G1 reads the flag, fails closed on the read sentinel, and admits terminal states only" \
+  "[[ '$RF_G1READ' -eq 1 && '$RF_G1FC' -eq 1 ]]"
+assert "#7777 G2 routes the latch EXISTS check through flush_latch_decide + _flush_latch_count, latched=>proceed" \
+  "[[ '$RF_G2' -eq 1 ]]"
+assert "#7777 G3 routes audibility through resume_liveness_decide + _flip_liveness_count" \
+  "[[ '$RF_G3' -eq 1 ]]"
+assert "#7777 G4 validates the dispatch-supplied evidence (run=digits, by=token) before the write" \
+  "[[ '$RF_G4' -eq 1 ]]"
+assert "#7777 the authorization evidence RIDES the flag value (no new secret name — the config is an exact set)" \
+  "[[ '$RF_EV' -eq 1 ]]"
+assert "#7777 the on-host FSM is CONFIRMED from Better Stack, anchored at the write" \
+  "[[ -n '$RF_TS_LN' && -n '$RF_WRITE_LN' && '$RF_TS_LN' -lt '$RF_WRITE_LN' && '$RF_ISO' -eq 1 && '$RF_CONF' -eq 1 ]]"
+assert "#7777 a failed dispatch is reported, never a silent green (got $RF_ERRS ::error:: arms)" \
+  "[[ '$RF_ERRS' -ge 6 ]]"
+# EMITTER PARITY (the other direction of the G3.7 emitter rows): the transition grep this op
+# depends on must key on reasons the emitter actually writes, and the reflush arm must exist in
+# the FSM for the flag value to mean anything.
+assert "#7777 EMITTER PARITY: latch-cleared is a real emit_state literal in the FSM" \
+  "grep -qF '\"latch-cleared\"' '$FL_EMITTER_SH'"
+assert "#7777 EMITTER PARITY: reflush-evidence-invalid is a real emit_state literal in the FSM" \
+  "grep -qF '\"reflush-evidence-invalid\"' '$FL_EMITTER_SH'"
+assert "#7777 the FSM carries the reflush arm (the flag value would otherwise be refused as unknown)" \
+  "grep -qE 'reflush\|reflush,\*\)' '$FL_EMITTER_SH'"
+assert "#7777 the FSM's clear writer exists (record_latch_clear, append-only)" \
+  "grep -qF 'record_latch_clear() {' '$FL_EMITTER_SH'"
+assert "#7777 the off-host transition reader keys on the new emit reasons (parity with _flip_transition_dt)" \
+  "grep -cF '\"reason\":\"latch-cleared\"' '$BODY_SH' >/dev/null && grep -cF '\"reason\":\"reflush-evidence-invalid\"' '$BODY_SH' >/dev/null"
+
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
@@ -4273,7 +4394,11 @@ _DISPATCHED=$((PASS + FAIL))
 #   longer greps the raw row (+2), _flip_transition_dt derives no anchor from doppler or LUKS-FSM rows
 #   (+2), _fsm_own_rows keeps only the flip FSM's own row and emits only the projection (+2), and the
 #   exact-tag liveness rows: the other FSM's rows and a prefix-sharing tag count 0 (+2).
-_EXACT_FLOOR=1000
+# 1000 -> 1040 (+40), measured on the tree: the #9177 resume G4 bootstrap-done block (+21: extraction
+#   + define + 12 rsb_case rows + counter + 7 assembly rows), the #7777 op=reflush block (+18: choice
+#   + case arm + non-vacuity + 10 wiring rows + 5 emitter-parity rows), and the reviewer-gate
+#   membership loop's fourth iteration (+1).
+_EXACT_FLOOR=1040
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

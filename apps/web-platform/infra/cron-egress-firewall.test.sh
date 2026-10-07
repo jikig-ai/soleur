@@ -192,6 +192,86 @@ fi
 echo "-- apply workflow SSH -target --"
 assert_grep "workflow -targets cron_egress_firewall" 'target=terraform_data\.cron_egress_firewall' "$WORKFLOW"
 
+echo "-- deploy_pipeline_fix_web2 cron-egress delivery parity (#9393) --"
+# A RUNNING web-2 receives host-script content only through the SSH sibling
+# terraform_data.deploy_pipeline_fix_web2: the web-1 provisioners never dial it
+# (parity guard's premise), and cloud-init/image-bake covers fresh hosts only.
+# The issue's three artifacts — the carved CIDR file, the resolver, and the
+# post-apply probe — must therefore ride that sibling with the SAME destinations
+# the web-1 resource uses, each hashed in triggers_replace (an artifact edit
+# re-fires delivery), each byte-asserted after scp (a truncated transfer fails
+# the provisioner rather than latching silent drift), and the assert script
+# EXECUTED last (delivering the probe without running it runs no probe).
+#
+# Anchored on the delivery constructs inside the resource's own block — never a
+# bare filename grep, which a comment or a same-named file in ANOTHER resource
+# would satisfy (the 2026-06-02 drift-guard learning this file already encodes).
+WEB2_BLOCK="$(awk '/resource "terraform_data" "deploy_pipeline_fix_web2"/,/^}/' "$SERVER_TF")"
+w2_assert() { # w2_assert <description> <ERE pattern>
+  # Herestring, NOT `echo | grep -q`: `grep -q` exits on first match, the writer
+  # dies on SIGPIPE mid-block, and `set -o pipefail` then reports the WON match
+  # as a FAIL — a measured 1-in-N flake (rc=1 on the destination row in CI).
+  # grep -c below is exempt (it reads all input; no early exit).
+  if grep -qE -- "$2" <<<"$WEB2_BLOCK"; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 (pattern not found in deploy_pipeline_fix_web2 block: $2)"
+  fi
+}
+# Non-vacuity floor on the slice itself: a renamed or restructured resource must
+# red here, not pass over an empty block.
+if echo "$WEB2_BLOCK" | grep -c 'provisioner "file"' >/dev/null; then
+  PASS=$((PASS + 1)); echo "  PASS: deploy_pipeline_fix_web2 block extracted (non-empty slice)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: deploy_pipeline_fix_web2 block not found in server.tf"
+fi
+for spec in \
+  "cron-egress-allowlist-cidr.txt /etc/soleur/cron-egress-allowlist-cidr.txt" \
+  "cron-egress-resolve.sh /usr/local/bin/cron-egress-resolve.sh" \
+  "cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-postapply-assert.sh"; do
+  f="${spec%% *}"
+  dest="${spec##* }"
+  w2_assert "web2 delivers $f (source=)" "source += +\"\\\$\\{path\\.module\\}/$f\""
+  w2_assert "web2 delivers $f to $dest (destination=)" "destination += +\"$(printf '%s' "$dest" | sed 's/[.[\*^$/]/\\&/g')\""
+  w2_assert "web2 trigger folds $f hash" "file\\(\"\\\$\\{path\\.module\\}/$f\"\\)"
+  w2_assert "web2 remote-exec byte-asserts $f" "filesha256\\(\"\\\$\\{path\\.module\\}/$f\"\\)"
+  # Cross-block destination parity: the web-1 resource and the web-2 sibling must
+  # write the SAME absolute path for the same artifact — a destination typo puts
+  # the file where no consumer reads it, with every delivery row still green.
+  W1_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$SERVER_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  W2_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$WEB2_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  if [[ -n "$W1_DEST" && "$W1_DEST" == "$W2_DEST" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $f destination parity web-1 == web-2 ($W2_DEST)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $f destination drift: web-1='$W1_DEST' web-2='$W2_DEST' (expected identical, and web-1's extraction must be non-empty)"
+  fi
+done
+w2_assert "web2 creates /etc/soleur before file provisioners (scp does not mkdir)" 'mkdir -p [^"]*/etc/soleur'
+w2_assert "web2 marks cron-egress-resolve.sh executable" 'chmod 0755 [^"]*cron-egress-resolve\.sh'
+w2_assert "web2 marks cron-egress-postapply-assert.sh executable" 'chmod 0755 [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 lands the carved CIDR file at mode 0644" 'chmod 0644 [^"]*cron-egress-allowlist-cidr\.txt'
+w2_assert "web2 asserts root ownership of cron-egress-resolve.sh" 'chown root:root [^"]*cron-egress-resolve\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-postapply-assert.sh" 'chown root:root [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-allowlist-cidr.txt" 'chown root:root [^"]*cron-egress-allowlist-cidr\.txt'
+# The probe is the point of the issue — a delivered-but-never-run assert script
+# leaves web-2 with the carve on disk and no proof of enforcement.
+w2_assert "web2 EXECUTES the post-apply assert (the probe)" 'bash /usr/local/bin/cron-egress-postapply-assert\.sh'
+# The web-1 resource's assert run is its provisioner's terminal step; on web-2 it
+# must likewise run AFTER the deliveries+asserts, inside the same remote-exec
+# script (provisioner ordering is declaration order — the ghcr deny block stays
+# last either way).
+W2_EXEC_LN="$(echo "$WEB2_BLOCK" | grep -nE 'bash /usr/local/bin/cron-egress-postapply-assert\.sh' | cut -d: -f1 | tail -1)"
+W2_SHA_LN="$(echo "$WEB2_BLOCK" | grep -nE 'filesha256\("\$\{path\.module\}/cron-egress-postapply-assert\.sh"\)' | cut -d: -f1 | tail -1)"
+if [[ -n "$W2_EXEC_LN" && -n "$W2_SHA_LN" && "$W2_EXEC_LN" -gt "$W2_SHA_LN" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: assert-execution ordered after the content assertions (line $W2_EXEC_LN > $W2_SHA_LN)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: assert-execution must come after the sha256 content assertions (exec=$W2_EXEC_LN sha=$W2_SHA_LN)"
+fi
+# The trigger sentinel must still exist (the lockstep rule requires a bump with
+# any inline edit; pin PRESENCE not a version — a future legitimate bump must not
+# red this guard).
+w2_assert "web2 inline sentinel present (bumped in lockstep with the inline edit)" 'dpf-web2-remote-exec-v[0-9]+'
+
 echo "-- loader safety invariants --"
 # Availability ordering: the resolve (set population) line must precede the
 # default-drop install (flush chain + add rules) — proven by line order.
@@ -1994,8 +2074,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 312 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 312. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 338 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 338. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

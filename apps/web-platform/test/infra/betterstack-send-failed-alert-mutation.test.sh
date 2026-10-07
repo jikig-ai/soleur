@@ -153,7 +153,10 @@ expect_green_added() {
 # marker (reason=token_shape) and disk-monitor / resource-monitor add a paging REFUSED marker for the same
 # refusal (their Resend email is the ONLY channel, so a malformed key must page exactly as the 401 it
 # replaced did); the guard classifies each by needle, so no mutation row changes.
-BASELINE_PASSES=65
+# 65 -> 66 at #7777: NON_PAGING_MARKERS gains SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED — a bare
+# `logger -t` user.notice evidence-validation refusal (same class as the SEAM_REFUSED entry),
+# adding one census row. The case count is unchanged.
+BASELINE_PASSES=66
 BASELINE_CASES=9
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"

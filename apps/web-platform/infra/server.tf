@@ -2133,14 +2133,19 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # web-2 replacement (cattle), re-delivering the full set post-boot.
 #
 # Scope boundary (named so it does not read as an omission): this resource covers the
-# deploy-pipeline FILE_MAP set, plus ONE non-file duty: the #9169 ghcr.io hosts-file
+# deploy-pipeline FILE_MAP set, plus TWO non-FILE_MAP duties: the #9169 ghcr.io hosts-file
 # deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
-# web-ghcr-deny.test.sh). docker_seccomp_config and apparmor_bwrap_profile stay
-# web-1-only — a seccomp-bwrap.json/apparmor profile merge still leaves web-2 birth-frozen
-# on those files until #7103's wider pass. Same for the CI ssh pubkey: a
-# DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf but not web-2's
-# birth-frozen authorized_keys (recovery: operator ADMIN_IPS append or a web-2 replace —
-# ADR-237 consequence note).
+# web-ghcr-deny.test.sh) and, since #9393, the three cron-egress artifacts a RUNNING
+# web-2 otherwise gets only at rebirth — the carved CIDR allow list, the resolver, and
+# the post-apply probe script, delivered then EXECUTED exactly as
+# terraform_data.cron_egress_firewall's terminal step does on web-1. The loader
+# (cron-egress-nftables.sh), alarm, and systemd units stay birth-frozen until the
+# #9372 rebirth — the issue's stated scope. docker_seccomp_config and
+# apparmor_bwrap_profile stay web-1-only — a seccomp-bwrap.json/apparmor profile merge
+# still leaves web-2 birth-frozen on those files until #7103's wider pass. Same for
+# the CI ssh pubkey: a DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf
+# but not web-2's birth-frozen authorized_keys (recovery: operator ADMIN_IPS append or
+# a web-2 replace — ADR-237 consequence note).
 resource "terraform_data" "deploy_pipeline_fix_web2" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
@@ -2165,11 +2170,16 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
     file("${path.module}/10-inngest-server-doppler-token.conf"),
     file("${path.module}/10-inngest-redis-doppler-token.conf"),
+    # #9393 — the three cron-egress artifacts a running web-2 gets nowhere else:
+    # the carved CIDR allow list, the resolver, and the post-apply probe.
+    file("${path.module}/cron-egress-allowlist-cidr.txt"),
+    file("${path.module}/cron-egress-resolve.sh"),
+    file("${path.module}/cron-egress-postapply-assert.sh"),
     hcloud_server.web["web-2"].id,
     local.ghcr_deny_sh,
     local.ghcr_deny_assert_sh,
     file("${path.module}/web-2-ssh-host-key.pub"),
-    "dpf-web2-remote-exec-v1",
+    "dpf-web2-remote-exec-v2",
   ]))
 
   connection {
@@ -2186,11 +2196,13 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
   }
 
   # The four drop-in parents may not exist on web-2 (they are running-host deliveries with
-  # no cloud-init writer); a file provisioner cannot create parent directories.
+  # no cloud-init writer); a file provisioner cannot create parent directories. /etc/soleur
+  # exists from birth (the bootstrap installs the allowlists there) — the mkdir is
+  # idempotent and mirrors the web-1 resource's own first step.
   provisioner "remote-exec" {
     inline = [
       "set -e",
-      "mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d",
+      "mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d",
     ]
   }
 
@@ -2284,6 +2296,23 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
   }
 
+  # ── #9393 cron-egress artifacts — the carved CIDR allow list, the resolver, and the ──
+  # ── post-apply probe. Same destinations the web-1 resource (cron_egress_firewall)    ──
+  # ── writes; the remote-exec below byte-asserts each and runs the probe — the          ──
+  # ── restart+live-probe is the point of the delivery.                                  ──
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-allowlist-cidr.txt"
+    destination = "/etc/soleur/cron-egress-allowlist-cidr.txt"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-resolve.sh"
+    destination = "/usr/local/bin/cron-egress-resolve.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-postapply-assert.sh"
+    destination = "/usr/local/bin/cron-egress-postapply-assert.sh"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "set -e",
@@ -2298,6 +2327,11 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "chmod 0644 /etc/systemd/system/webhook.service /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf",
       "chown root:deploy /etc/webhook/hooks.json",
       "chmod 0640 /etc/webhook/hooks.json",
+      # #9393 — the three cron-egress artifacts land root:root; the two scripts get
+      # the same 0755 the web-1 resource gives them, the carved CIDR file 0644.
+      "chown root:root /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /etc/soleur/cron-egress-allowlist-cidr.txt",
+      "chmod 0755 /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh",
+      "chmod 0644 /etc/soleur/cron-egress-allowlist-cidr.txt",
       "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
       "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
       "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
@@ -2326,6 +2360,9 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "[ \"$(sha256sum /usr/local/bin/infra-config-install | cut -d' ' -f1)\" = \"${filesha256("${path.module}/infra-config-install.sh")}\" ]",
       "[ \"$(sha256sum /etc/webhook/hooks.json | cut -d' ' -f1)\" = \"${sha256(local.hooks_json)}\" ]",
       "[ \"$(sha256sum /etc/sudoers.d/deploy-inngest-bootstrap | cut -d' ' -f1)\" = \"${filesha256("${path.module}/deploy-inngest-bootstrap.sudoers")}\" ]",
+      "[ \"$(sha256sum /etc/soleur/cron-egress-allowlist-cidr.txt | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-allowlist-cidr.txt")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cron-egress-resolve.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-resolve.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cron-egress-postapply-assert.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-postapply-assert.sh")}\" ]",
       # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
@@ -2349,6 +2386,19 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       # running webhook is sub-second; the assert catches a dead one).
       "systemctl try-restart webhook",
       "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+  # #9393 — run the delivered cron-egress probe: restarts cron-egress-firewall.service
+  # so the newly delivered carved CIDR file is loaded into the live nft set, enables the
+  # resolver timer, asserts the nft structure, and runs the GHCR-carve +
+  # positive/negative container probes. Same duty as the web-1 resource's terminal
+  # inline. Its OWN block, before ghcr-deny and secret-free for the same reason
+  # ghcr-deny is: the delivery block interpolates local.hooks_json's sensitive webhook
+  # secret, which would suppress the assert's FAIL/FATAL lines from apply output.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "bash /usr/local/bin/cron-egress-postapply-assert.sh",
     ]
   }
   # #9169 ghcr.io deny: LAST and secret-free (the block above references local.hooks_json, whose
