@@ -619,10 +619,18 @@ subst() {
 # as @TREE@ are not paths yet), so any literal `/` in command position, in a redirect target or after a cd is a real filesystem path.
 LEAD_RE='(^|[;&|(`{!]|\$\(|(^|[[:space:]])(then|do|else|elif|if|while|until|time))[[:space:]]*'
 EXEC_LINT_RE="${LEAD_RE}/"
-EXEC_LINT_EXEC_RE="${LEAD_RE}exec([[:space:]]|\$)"
+EXEC_LINT_EXEC_RE="${LEAD_RE}[\\\\'\"]*exec[\\\\'\"]*([[:space:]]|\$)"
 EXEC_LINT_CMDP_RE='(^|[^[:alnum:]_-])command[[:space:]]+-[a-zA-Z]*p'
-EXEC_LINT_CD_RE="${LEAD_RE}(builtin[[:space:]]+)?(cd|pushd)([[:space:]]+-[a-zA-Z]+)*[[:space:]]+/"
-EXEC_LINT_REDIR_RE='>[|>]?[[:space:]]*(/[^[:space:];&|)<>]*)'
+EXEC_LINT_CD_RE="${LEAD_RE}(builtin[[:space:]]+)?(cd|pushd)([[:space:]]+-[-a-zA-Z]*)*[[:space:]]+[\"']*/"
+# a redirect target (an optional opening quote first) that is absolute, or climbs with `..` (so "$HOME/../escape" is one)
+EXEC_LINT_REDIR_RE='>[|>]?[[:space:]]*["'"'"']?(/[^[:space:];&|)<>"'"'"']*|[^[:space:];&|)<>"'"'"']*\.\.[^[:space:];&|)<>"'"'"']*)'
+# PATH removed or un-exported (bash then searches its compiled-in default path and reaches the real binaries), anywhere in the text
+# (so bash -c 'unset PATH; ...' is caught too)
+EXEC_LINT_UNSETPATH_RE='(^|[^[:alnum:]_])(unset|export|declare|typeset|readonly|local)[[:space:]]+([^;&|]*[[:space:]])?PATH([^[:alnum:]_]|$)'
+# a slash spelled as an escape (octal 057, \x2f, \u002f, \U0000002f) in an ANSI-C word or a printf: an absolute path the literal-text patterns cannot see
+EXEC_LINT_SLASHESC_RE='\\(0?57|x0?2[fF]|u0*2[fF]|U0*2[fF])'
+# an external writer given an absolute path (the recording stubs write nothing, but a PATH reset or a typo would reach the real one)
+EXEC_LINT_WRITER_RE='(^|[^[:alnum:]_./-])(tee|cp|mv|dd|install|ln|touch|mkdir|chmod|chown|truncate)[[:space:]]+([^;&|]*[[:space:]])?((of|--target-directory)=)?["'"'"']?(/[^[:space:];&|)<>"'"'"']*)'
 safe_to_execute() { # <raw command template>
   local rest="$1" tgt
   case "$1" in
@@ -632,9 +640,18 @@ safe_to_execute() { # <raw command template>
   [[ "$1" =~ $EXEC_LINT_EXEC_RE ]] && return 1
   [[ "$1" =~ $EXEC_LINT_CMDP_RE ]] && return 1
   [[ "$1" =~ $EXEC_LINT_CD_RE ]] && return 1
+  [[ "$1" =~ $EXEC_LINT_UNSETPATH_RE ]] && return 1
+  [[ "$1" =~ $EXEC_LINT_SLASHESC_RE ]] && return 1
   # a redirect to an absolute path writes outside the fixture world, except /dev/null
   while [[ "$rest" =~ $EXEC_LINT_REDIR_RE ]]; do
     tgt="${BASH_REMATCH[1]}"
+    [[ "$tgt" == /dev/null ]] || return 1
+    rest="${rest#*"${BASH_REMATCH[0]}"}"
+  done
+  # an external writer to an absolute path, except /dev/null
+  rest="$1"
+  while [[ "$rest" =~ $EXEC_LINT_WRITER_RE ]]; do
+    tgt="${BASH_REMATCH[6]}"
     [[ "$tgt" == /dev/null ]] || return 1
     rest="${rest#*"${BASH_REMATCH[0]}"}"
   done
@@ -2343,14 +2360,22 @@ for _s in 'command -p rm -rf ~' 'command  -p rm -rf ~' $'command\t-p rm -rf ~' '
           'if true; then exec rm -rf ~; fi' 'true && exec rm -rf ~' 'ls; exec rm -rf ~' 'while true; do exec rm -rf ~; done' 'time exec rm -rf ~' \
           'export PATH=/usr/bin; rm -rf ~' 'PATH=/usr/bin rm -rf ~' 'hash -p /bin/rm rm; rm -rf ~' \
           'echo x > /etc/hosts' 'echo x >> /var/tmp/escape' 'echo x >| /var/tmp/escape' 'ls 2>/var/tmp/escape' 'ls &>/var/tmp/escape' \
-          'cd / && rm -rf *' 'cd -P / && rm -rf *' 'ls; pushd /tmp && rm -rf *' 'then cd /tmp' '/bin/rm -rf ~' 'ls | /bin/rm -rf ~' '( /bin/rm -rf ~ )' 'FOO=1 /bin/rm'; do
+          'cd / && rm -rf *' 'cd -P / && rm -rf *' 'ls; pushd /tmp && rm -rf *' 'then cd /tmp' '/bin/rm -rf ~' 'ls | /bin/rm -rf ~' '( /bin/rm -rf ~ )' 'FOO=1 /bin/rm' \
+          'cd -- / && rm -rf *' 'cd -P -- / && rm -rf *' 'cd -- "/" && rm -rf *' 'echo x > "/etc/hosts"' "echo x > '/etc/hosts'" 'echo x > "$HOME/../escape"' 'echo x > ../../../escape' \
+          'unset PATH; rm -rf ~' 'unset -v PATH; rm -rf ~' 'export -n PATH; rm -rf ~' 'declare +x PATH; rm -rf ~' "bash -c 'unset PATH; rm -rf ~'" \
+          "$'\057bin\057rm' -rf ~" "$'\x2fbin\x2frm' -rf ~" "$(printf '\057bin\057rm') -rf ~" \
+          '\exec rm -rf ~' '"exec" rm -rf ~' "'exec' rm -rf ~" 'ls; \exec rm -rf ~' \
+          'tee /etc/hosts' 'cp a /etc/hosts' 'mv a /etc/hosts' 'dd of=/etc/x' 'ls | tee /etc/hosts' 'ls | tee -a "/etc/hosts"'; do
   if safe_to_execute "$_s"; then _lint_miss+=" [${_s//$'\t'/<TAB>}]"; fi
 done
 if [[ -z "$_lint_miss" ]]; then _x=ok; else _x=bad; fi
 chk "harness (lint): the executed-row lint refuses every unsafe spelling (a path reset, command -p in any spacing, exec in command position, an absolute redirect, a cd to an absolute path)" "$_x" "NOT refused:$_lint_miss"
 _lint_bad=""
 for _s in 'ls -la' 'aws-vault exec p -- terraform destroy' 'git push --exec x -f origin trunk' 'find src -name x -exec cat {} \;' 'echo "done" > /dev/null' 'ls &> /dev/null' 'pushd .. > /dev/null; rm -rf sub' \
-          'echo x > @TREE@/out.log' 'cd @TREE@ && rm -rf ../../h/home' 'command -v rm' 'command -V rm -rf ~' 'echo exec rm' 'terraform apply -destroy' 'rm -rf $HOME/*' 'cd ~ && rm -rf ./*' 'echo "a > b"'; do
+          'echo x > @TREE@/out.log' 'cd @TREE@ && rm -rf ../../h/home' 'command -v rm' 'command -V rm -rf ~' 'echo exec rm' 'terraform apply -destroy' 'rm -rf $HOME/*' 'cd ~ && rm -rf ./*' 'echo "a > b"' \
+          'cd -- @TREE@ && rm -rf ./*' 'cd -P .. && rm -rf *' 'cd -- "$UNKNOWN_DIR" && rm -rf build' 'echo x > "out.txt"' "echo x > '@TREE@/out.log'" 'echo x > "/dev/null"' \
+          'export FOO=1; terraform destroy' 'unset FOO; terraform destroy' 'declare -x FOO=1' 'echo $PATH' "$'\x72m' -rf ~" "terraform $'destr\x6fy'" \
+          'tee log' 'cp a b' 'tee /dev/null' 'cp a /dev/null' 'dd if=/dev/zero of=out.bin' 'ls | tee @TREE@/out.log' 'echo exec rm' 'aws-vault exec p -- terraform destroy'; do
   safe_to_execute "$_s" || _lint_bad+=" [$_s]"
 done
 if [[ -z "$_lint_bad" ]]; then _x=ok; else _x=bad; fi
@@ -2358,14 +2383,21 @@ chk "harness (lint): the executed-row lint accepts the ordinary look-alikes (it 
 # The wiring: an unsafe row in a COPY of the suite stops it (exit 2, named), and an oracle that disturbs its fixture world stops it (exit 2, named).
 if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (lint): an unsafe row and a disturbed fixture world each stop the suite"; then
   assert_fixture_dir "$WORK"
-  "$PY_BIN" -I -c 'import sys
+  # one copy per unsafe spelling, one per lint class (each dies at its first table row, so a copy costs under a second): the wiring
+  # from run_row to the lint is proved for every class, not just the first one the lint grew
+  _u_miss=""; _u_n=0
+  for _u_cmd in 'command  -p rm -rf ~' 'cd -- / && rm -rf *' 'echo x > "/etc/hosts"' 'unset PATH; rm -rf ~' '\exec rm -rf ~' 'tee /etc/hosts' "\$'\\057bin\\057rm' -rf ~" '/bin/rm -rf ~'; do
+    _u_n=$((_u_n + 1))
+    "$PY_BIN" -I -c 'import sys
 src, dst, anchor, new = sys.argv[1:5]
 s = open(src).read()
 if s.count(anchor) != 1: sys.exit(1)
-open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/unsafe.test.sh" "run_table 3 3${_HD}'ROWS'"$'\n' "run_table 3 3${_HD}'ROWS'"$'\n'"X @@ lint probe @@ none @@ - @@ command  -p rm -rf ~"$'\n' 2>/dev/null; _u_prep=$?
-  _unsafe_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/unsafe.test.sh" 2>&1 </dev/null)"; _unsafe_rc=$?
-  if [[ "$_u_prep" -eq 0 && "$_unsafe_rc" -eq 2 ]] && grep -q "row 'lint probe' is not safe to execute" <<<"$_unsafe_out"; then _x=ok; else _x=bad; fi
-  chk "harness (lint): a suite copy carrying an unsafe row stops with exit 2 and names the row (rc=$_unsafe_rc)" "$_x" "prep=$_u_prep out: $(tail -n 2 <<<"$_unsafe_out" | tr '\n' ' ')"
+open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/unsafe.test.sh" "run_table 3 3${_HD}'ROWS'"$'\n' "run_table 3 3${_HD}'ROWS'"$'\n'"X @@ lint probe @@ none @@ - @@ ${_u_cmd}"$'\n' 2>/dev/null; _u_prep=$?
+    _unsafe_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/unsafe.test.sh" 2>&1 </dev/null)"; _unsafe_rc=$?
+    if [[ "$_u_prep" -eq 0 && "$_unsafe_rc" -eq 2 ]] && grep -q "row 'lint probe' is not safe to execute" <<<"$_unsafe_out"; then :; else _u_miss+=" [${_u_cmd}: prep=$_u_prep rc=$_unsafe_rc]"; fi
+  done
+  if [[ -z "$_u_miss" ]]; then _x=ok; else _x=bad; fi
+  chk "harness (lint): a suite copy carrying an unsafe row stops with exit 2 and names the row, for each of $_u_n spellings (one per lint class)" "$_x" "did not stop:$_u_miss"
   "$PY_BIN" -I -c 'import sys
 src, dst, anchor, new = sys.argv[1:5]
 s = open(src).read()
