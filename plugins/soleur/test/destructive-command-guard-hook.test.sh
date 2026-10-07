@@ -65,7 +65,7 @@
 #      points it at a mutated COPY) and GUARD_FAST_COUNT (used only by the in-suite meta copy),
 #      DCG_ROWS (reduced mode, used only by destructive-command-guard-mutation.test.sh: an ERE matched
 #      against each row LABEL; rows that do not match are not run and not counted, the unlabelled static,
-#      registration and harness checks always run, and the 485-case floor is replaced by the floor of the
+#      registration and harness checks always run, and the 488-case floor is replaced by the floor of the
 #      selected rows, so a reduced run proves the selected rows and nothing else).
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export LC_ALL=C
@@ -723,6 +723,23 @@ chk "that entry's matcher does not match Edit or exec (D9: ^Bash$ only)" "$(_reg
 chk "the hook entry carries an explicit numeric timeout" "$(_reg '[.hooks.PreToolUse[] | .hooks[] | select(.command | contains($h)) | .timeout | select(type == "number" and . > 0)] | length == 1')"
 chk "the hook is registered after the snapshot guard" "$(_reg '[.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains($h))) | .key][0] > ([.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains("browser-snapshot-credential-guard.sh"))) | .key][0])')"
 
+echo "== the plugin README states the scope and the hosted gap (CPO round 1, C1/C2) =="
+# Read from the real tree (REPO_ROOT), and skipped in reduced mode: the mutation suite's copy holds no README.
+# Exact-sentence anchors with an exact count of 1; never a negated grep.
+PLUGIN_README="$REPO_ROOT/plugins/soleur/README.md"
+_readme_count() { [[ -f "$PLUGIN_README" ]] && grep -cF -- "$1" "$PLUGIN_README" || printf 0; }
+_readme_row() { # <label> <literal sentence>
+  want_row "$1" || return 0
+  if [[ "$(_readme_count "$2")" == 1 ]]; then _x=ok; else _x=bad; fi
+  chk "$1" "$_x" "expected exactly one line containing the sentence in $PLUGIN_README"
+}
+_readme_row "README: the non-coverage sentence appears exactly once" \
+  'The guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools, and is not a substitute for scoped credentials.'
+_readme_row "README: the hosted-gap line appears exactly once" \
+  'Not active in Soleur-hosted sessions; hosted sessions rely on the sandbox and review gate.'
+_readme_row "README: the kill switch is documented exactly once as an assignment" \
+  '`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
+
 echo "== the lexer contract the hook relies on (records, once each) =="
 lex_dump() { printf '%s' "$1" | "$PERL_BIN" "$LEXER" 2>/dev/null | "$PY_BIN" -I -S "$WORK/oracle.py" lex 2>/dev/null; }
 _cases_lex() {
@@ -1327,14 +1344,14 @@ if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
 fi
 if [[ -n "$ROWSEL" ]]; then
-  # Reduced mode (DCG_ROWS, the mutation suite only): the 485-case floor below does not apply to a selection.
+  # Reduced mode (DCG_ROWS, the mutation suite only): the 488-case floor below does not apply to a selection.
   # The selection must have matched at least one row; the verdict is the failure count.
   echo "selected=$SELECTED"
   if [[ "$SELECTED" -lt 1 ]]; then printf '[FATAL] anti-vacuity: DCG_ROWS matched no row\n' >&2; exit 1; fi
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=485
+MIN_CASES=488
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

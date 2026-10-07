@@ -518,6 +518,26 @@ degrade to **silence**, never to a false claim that the behaviour is present.
 | Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
 | Grok Build | No | Same as Codex |
 
+## Destructive-Command Guard
+
+`plugins/soleur/hooks/destructive-command-guard.sh` is a `PreToolUse` hook on the Bash tool. It asks you before
+`terraform|tofu destroy` or `apply -destroy`, a force-push or deletion of a default branch, and a recursive delete of
+the working directory or one of its ancestors. It denies a recursive delete of `/`, your home directory or an
+ancestor of it.
+
+The guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools, and is not a substitute for scoped credentials.
+
+Not active in Soleur-hosted sessions; hosted sessions rely on the sandbox and review gate.
+
+It is a seatbelt, not a boundary: an agent that can edit your settings can switch it off.
+
+`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off. Set it in your own shell before you start the session; the
+harness reads it at startup, so a running session needs a restart. Any other value, including `0` and empty, leaves
+the guard on.
+
+It needs `bash`, `jq`, `perl` and `git`. Without `jq` or `perl` it scans the raw tool input with a narrower
+set of patterns and says so on stderr; it is never silently off.
+
 ## Known Issues
 
 ### Updating the Marketplace Does Not Update the Installed Plugin
