@@ -4,30 +4,38 @@
 # environment approval. Retires together with scripts/web2-rebirth.sh and scripts/web2-rebirth-never-pooled.sh.
 #
 #   reboot <host> <confirm>   refusals, in this order (each a named ::error:: and each leaves the world untouched):
-#                               1 xtrace, or no HCLOUD_TOKEN                 2 host not on the allow-list
+#                               1 xtrace, no HCLOUD_TOKEN, or a token of an unusable shape   2 host not on the allow-list
 #                               3 confirm is not REBOOT-<host>-<digits>      4 NEVER_POOLED is not `absent`
 #                               5 not exactly one server by that name        6 id not numeric, or web-1's id
-#                               7 id differs from the one typed in confirm   8 Terraform state does not agree
+#                               7 id differs from the one typed in confirm   8 Terraform state does not agree, or holds
+#                                                                              the resolved id for web-1
 #                             then the anchor epoch is written to GITHUB_OUTPUT (immediately before the POST, never earlier
 #                             and never after), the one POST is sent, and the action is polled:
-#                               9 the POST is not HTTP 201 or returns no action id
-#                              10 the action ends in error or has not ended after 24 polls
+#                               9 the POST is not HTTP 201 or returns no action id (a definite 4xx withdraws the anchor: an
+#                                 empty `anchor_epoch=` is appended, last write wins, because Hetzner refused the request; any
+#                                 other answer, or none, keeps it and says the request may have been sent)
+#                              10 the action ends in error or has not ended after 24 polls (a poll that is not HTTP 200, or
+#                                 whose body is not JSON, is not an answer: it is retried, and the end is still unconfirmed)
 #   summary                   the run summary (names, ids and measured values only). It makes no Hetzner call.
 #
 # The accepted request is a request: Hetzner's `success` for the action means the ACPI request was sent, not that the host
 # restarted. The evidence reader (scripts/web-host-reboot-evidence.sh) reports what the rows show. This file never names the
 # rows helper: the census in workspaces-luks-verify-workflow.test.sh keeps writers and readers apart.
 #
-# Reads Hetzner with `-w`, never `-f` (a 404 is an ANSWER), the token on stdin (`--config -`), never in argv. The state is only
+# Reads Hetzner with `-w`, never `-f` (a 404 is an ANSWER), the token on stdin (`--config - < <(printf ...)`, the #9594 form: a
+# process substitution, not a pipe, after a token-shape check), never in argv. The state is only
 # ever piped straight into ONE field-selecting jq program (it holds passphrases): nothing from it is printed or written.
 #
 # Exit: 0 ok, 1 refused or failed (named ::error::), 2 usage, 78 xtrace refused. Every annotation is %/CR/LF-escaped.
-# The fixed footer is printed on every exit path.
+# The fixed footer is printed on every exit the shell itself controls (an uncatchable kill excepted).
 set -euo pipefail
 
 case "$-" in
   *x*) printf '[FATAL] refusing to trace: a Hetzner token and Terraform state are in scope\n' >&2; printf '%s\n' 'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78 ;;
 esac
+
+# A UTF-8 locale would let `[0-9]` match non-ASCII digits in the confirm regex below: pin the byte locale for this script.
+export LC_ALL=C
 
 FOOTER='This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'
 
@@ -40,16 +48,19 @@ trap finish EXIT
 WEB1_SERVER_ID="123931471"
 INFRA_DIR="${INFRA_DIR:-apps/web-platform/infra}"
 ACTION_POLL_S="${WEB_HOST_REBOOT_ACTION_POLL_S:-5}"
+[[ "$ACTION_POLL_S" =~ ^[0-9]{1,3}$ ]] || ACTION_POLL_S=5   # a seam for the suite only: anything but 1-3 digits is the default
 GRADE_CMD='bash scripts/web-host-reboot-evidence.sh grade --anchor'
 
 # hapi <METHOD> <path> [json] -> prints the HTTP status ("000" on a transport error); the body goes to $HBODY.
+# (`extra=()` is a line-start assignment of its own on purpose: the credentialed-curl lint reads a never-assigned name as environment-settable.)
 hapi() {
   local code rc=0
-  local -a extra=()
+  local -a extra
+  extra=()
   [[ -n "${3:-}" ]] && extra=(-H 'Content-Type: application/json' --data "$3")
   : > "$HBODY"   # a transport error must not leave the PREVIOUS call's body to be read as this one's
-  code="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" \
-    | curl --disable --noproxy '*' -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
+  code="$(curl --disable --noproxy '*' -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN"))" || rc=$?
   [[ "$rc" -eq 0 ]] || code="000"
   printf '%s' "$code"
 }
@@ -65,7 +76,13 @@ fail() {
   echo "::error::$m"
   exit 1
 }
-need_token() { [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"; printf '::add-mask::%s\n' "$HCLOUD_TOKEN" >&2; }
+# A token outside the bearer alphabet could carry a second curl-config directive (newline, quote): refused before any curl, by name only.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+need_token() {
+  [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"
+  _bearer_ok "$HCLOUD_TOKEN" || fail "the infra-credentials loader exported an HCLOUD_TOKEN of an unusable shape; nothing is rebooted"
+  printf '::add-mask::%s\n' "$HCLOUD_TOKEN" >&2
+}
 # (the mask goes to STDERR: a workflow step that captures this script's stdout to a file must never capture a masked value; the runner reads commands from both streams)
 # One line per output: a value with a newline (a Hetzner name, an API field) must not be able to start a second `key=value` line.
 out() { local v="${2//$'\r'/ }"; v="${v//$'\n'/ }"; [[ -z "${GITHUB_OUTPUT:-}" ]] || printf '%s=%s\n' "$1" "$v" >> "$GITHUB_OUTPUT"; }
@@ -76,15 +93,31 @@ clean() { local v="$*"; v="${v//$'\r'/ }"; v="${v//$'\n'/ }"; v="${v//|//}"; pri
 write_hint() { [[ "$1" == 403 ]] && printf ' (403: the loader exported a read-only Hetzner token; the write verbs need the Tier-B write token)' || true; }
 
 # shellcheck disable=SC2016  # $h is a jq variable, bound by --arg in state_ident
-# state_ident <host key> — the ONLY read of the state: the web-2 server id selected by EXACT type, name and index, and whether web-1 is there.
+# state_ident <host key> — the ONLY read of the state: the web-2 server id selected by EXACT type, name and index, whether web-1 is there,
+# and web-1's own id (the live id must never equal it).
 STATE_JQ='{server: ([.resources[] | select(.mode == "managed" and .type == "hcloud_server" and .name == "web") | .instances[] | select(.index_key == $h) | (.attributes.id | tostring)] | first // "none"),
-  web1: ([.resources[] | select(.mode == "managed" and .type == "hcloud_server" and .name == "web") | .instances[] | select(.index_key == "web-1")] | length)}'
+  web1: ([.resources[] | select(.mode == "managed" and .type == "hcloud_server" and .name == "web") | .instances[] | select(.index_key == "web-1")] | length),
+  web1id: ([.resources[] | select(.mode == "managed" and .type == "hcloud_server" and .name == "web") | .instances[] | select(.index_key == "web-1") | (.attributes.id | tostring)] | first // "none")}'
 state_ident() { (cd "$INFRA_DIR" && terraform state pull | jq -c --arg h "$1" "$STATE_JQ"); }
 
+# post_failed <http code> <anchor> — the POST was not HTTP 201. Only a definite 4xx means Hetzner refused the request: the anchor is
+# then withdrawn (an empty line wins over the earlier one in GITHUB_OUTPUT), so the observe job does not poll 40 minutes for a reboot
+# nobody asked for. Anything else (000, 5xx, a 2xx that is not 201) may have been accepted: the anchor stays and the message says so.
+post_failed() {
+  local code="$1" anchor="$2" base
+  base="reboot -> ${code} (error.code=$(errcode))$(write_hint "$code")"
+  if [[ "$code" =~ ^4[0-9][0-9]$ ]]; then
+    out anchor_epoch ""
+    fail "${base}; Hetzner refused the request, so none was sent and the anchor is withdrawn; fix the cause and re-dispatch"
+  fi
+  fail "${base}; the request may have been sent: DO NOT re-dispatch; the anchor is ${anchor}; grade with: ${GRADE_CMD} ${anchor} --window-min 0"
+}
+
 cmd_reboot() {
-  local host="${1:-}" confirm="${2:-}" name sid state_sid state_shown code action_id st ident anchor
+  local host="${1:-}" confirm="${2:-}" name sid state_sid state_shown web1_sid code action_id st ident anchor
   need_token
   # 2: the explicit allow-list. A new host is a reviewable edit here, in the workflow's options and in the suite together.
+  name=""
   case "$host" in
     web-2) name="soleur-web-2" ;;
     *) fail "reboot: host '$(clean "$host")' is not on the reboot allow-list (web-2 only); nothing is rebooted" ;;
@@ -108,27 +141,27 @@ cmd_reboot() {
   state_sid="$(jq -r '.server' <<<"$ident")"
   state_shown="absent or not numeric"; [[ "$state_sid" =~ ^[0-9]+$ ]] && state_shown="$state_sid"
   [[ "$state_sid" =~ ^[0-9]+$ && "$state_sid" == "$sid" ]] || fail "reboot: the resolved id ${sid} differs from the id in the Terraform state (${state_shown}); nothing is rebooted"
+  web1_sid="$(jq -r '.web1id' <<<"$ident")"
+  [[ ! "$web1_sid" =~ ^[0-9]+$ || "$web1_sid" != "$sid" ]] || fail "reboot: the server named ${name} carries the id the Terraform state holds for web-1; refusing to reboot the live origin; nothing is rebooted"
   anchor="$(date -u +%s)"
   out anchor_epoch "$anchor"; out server_id "$sid"
   echo "target: server_id=${sid} name=${name} created=$(clean "$(jq -r '.servers[0].created // "unknown"' "$HBODY")")"
   echo "anchor_epoch=${anchor}"
   code="$(hapi POST "/servers/${sid}/actions/reboot" '{}')"
-  [[ "$code" == 201 ]] || fail "reboot -> ${code} (error.code=$(errcode))$(write_hint "$code"); the anchor is ${anchor}; grade with: ${GRADE_CMD} ${anchor} --window-min 0"
-  action_id="$(jq -r '.action.id | tostring' "$HBODY")"
+  [[ "$code" == 201 ]] || post_failed "$code" "$anchor"
+  action_id="$(jq -r '.action.id | tostring' "$HBODY" 2>/dev/null)" || action_id=""
   [[ "$action_id" =~ ^[0-9]+$ ]] || fail "reboot -> ${code} returned no numeric action id; the request may have been sent, DO NOT re-dispatch; grade with: ${GRADE_CMD} ${anchor} --window-min 0"
   for _ in $(seq 1 24); do
     code="$(hapi GET "/actions/${action_id}")"
     if [[ "$code" == 200 ]]; then
-      st="$(jq -r '.action.status' "$HBODY")"
+      st="$(jq -r '.action.status' "$HBODY" 2>/dev/null)" || st=unknown
       if [[ "$st" == success ]]; then
         echo "action: id=${action_id} status=success"
         echo "reboot request accepted by Hetzner (action ${action_id} success). That means the request was sent; it does not show that the host restarted or came back."
         return 0
       fi
       [[ "$st" == error ]] && break
-    else
-      break
-    fi
+    fi   # a poll that is not HTTP 200 is not an answer: retry, and the end is still unconfirmed
     sleep "$ACTION_POLL_S"
   done
   fail "reboot request outcome unconfirmed: action ${action_id} did not end in success. The request was sent and the reboot may still happen. DO NOT re-dispatch; grade the rows with: ${GRADE_CMD} ${anchor} --window-min 0"
@@ -138,7 +171,7 @@ cmd_summary() {
   # The run summary: names, ids and measured values only. It claims only what THIS run measured (JOB_STATUS and the anchor decide
   # which sentence is true). EVERY value is passed through clean(): `reason` is free text from the dispatcher and the API fields
   # come from outside, so none may start a workflow command or break the table. Printed to the run log as well as the step summary.
-  local approvers="unavailable (not queried)" status="${JOB_STATUS:-unknown}" now_utc anchor="${ANCHOR_EPOCH:-}" sid="${SERVER_ID:-}"
+  local approvers="unavailable (not queried)" status="${JOB_STATUS:-unknown}" now_utc reason_shown sq="'" anchor="${ANCHOR_EPOCH:-}" sid="${SERVER_ID:-}"
   now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   [[ "$anchor" =~ ^[0-9]{1,10}$ ]] || anchor=""
   [[ "$sid" =~ ^[0-9]{1,12}$ ]] || sid=""
@@ -149,6 +182,7 @@ cmd_summary() {
       approvers="unavailable (the approvals API did not answer)"
     fi
   fi
+  reason_shown="$(clean "${REASON:-n/a}")"; reason_shown="${reason_shown//\`/$sq}"   # a code span, so the free text is never live markdown
   {
     echo "## web host reboot (#9372)"
     echo ""
@@ -158,13 +192,15 @@ cmd_summary() {
     echo "| host | $(clean "${HOST:-n/a}") |"
     echo "| server id | $(clean "${sid:-n/a}") |"
     echo "| anchor epoch (the request time) | $(clean "${anchor:-none}") |"
-    echo "| reason | $(clean "${REASON:-n/a}") |"
+    echo "| reason | \`${reason_shown}\` |"
     echo "| commit / run | $(clean "${SHA:-n/a}") / $(clean "${RUN_URL:-n/a}") |"
     echo "| dispatcher / approver(s) | $(clean "${ACTOR:-n/a}") / $(clean "$approvers") |"
     echo "| started / summarised (UTC) | $(clean "${STARTED_AT:-n/a}") / ${now_utc} |"
     echo ""
     if [[ "$status" == success ]]; then
       echo "The reboot request was accepted by Hetzner. That means the request was sent; it does not show that the host restarted or came back. The evidence job reads the rows that follow."
+    elif [[ "$status" == cancelled ]]; then
+      echo "**The reboot step was cancelled (job status $(clean "$status")).** It is unknown whether a request was sent: do not re-dispatch until the run log has been read.${anchor:+ Grade the rows with: ${GRADE_CMD} ${anchor} --window-min 0}"
     elif [[ -n "$anchor" ]]; then
       echo "**The reboot step did not complete (job status $(clean "$status")).** The request may have been sent: do not re-dispatch. Grade the rows with: ${GRADE_CMD} ${anchor} --window-min 0"
     else

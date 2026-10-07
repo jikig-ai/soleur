@@ -85,11 +85,16 @@ case "$method $path" in
     echo "REBOOT ${path}" >> "$W/writes.log"
     if grep -q '^anchor_epoch=' "$W/gh_out" 2>/dev/null; then echo yes >> "$W/anchor_at_post"; else echo no >> "$W/anchor_at_post"; fi
     pc="$(cat "$W/post_code" 2>/dev/null || echo 201)"
-    if [[ "$pc" == 201 ]]; then
-      if [[ -f "$W/post_noid" ]]; then reply 201 '{"action":{"status":"running"}}'; else reply 201 '{"action":{"id":10,"status":"running"}}'; fi
+    if [[ "$pc" == 000 ]]; then exit 7   # a transport error: curl exits non-zero and the script's hapi reports 000
+    elif [[ "$pc" =~ ^2[0-9][0-9]$ ]]; then   # a 2xx that is not 201 carries a good body too: only the status line can refuse it
+      if [[ -f "$W/post_noid" ]]; then reply "$pc" '{"action":{"status":"running"}}'
+      elif [[ -f "$W/post_html" ]]; then reply "$pc" '<html><body>502 bad gateway</body></html>'
+      else reply "$pc" '{"action":{"id":10,"status":"running"}}'; fi
     else reply "$pc" '{"error":{"code":"locked"}}'; fi ;;
   "GET /actions/10")
-    reply "$(cat "$W/action_get_code" 2>/dev/null || echo 200)" "$(jq -cn --arg st "$(cat "$W/action_status" 2>/dev/null || echo success)" '{action:{id:10,status:$st,error:{code:"x"}}}')" ;;
+    if [[ -f "$W/action_flaky" && "$(cat "$W/action_flaky")" -gt 0 ]]; then echo $(( $(cat "$W/action_flaky") - 1 )) > "$W/action_flaky"; reply 500 '{"error":{"code":"boom"}}'
+    elif [[ -f "$W/poll_html" ]]; then reply 200 '<html><body>502 bad gateway</body></html>'
+    else reply "$(cat "$W/action_get_code" 2>/dev/null || echo 200)" "$(jq -cn --arg st "$(cat "$W/action_status" 2>/dev/null || echo success)" '{action:{id:10,status:$st,error:{code:"x"}}}')"; fi ;;
   *) echo "UNEXPECTED $method $path" >> "$W/unexpected.log"; reply 599 '{"error":{"code":"unexpected"}}' ;;
 esac
 SH
@@ -98,10 +103,18 @@ cat > "$TMP/bin/terraform" <<'SH'
 W="${WORLD:?}"
 case "$1 $2" in
   "state pull")
+    # the one integration that only works inside the init'd root: a run from anywhere else is an unexpected call
+    if [[ "$(pwd -P)" != "$(cd "$W" && pwd -P)" ]]; then echo "terraform ran outside INFRA_DIR: $(pwd -P)" >> "$W/unexpected.log"; exit 1; fi
     [[ -f "$W/state_fail" ]] && exit 1
-    jq -cn --argjson w1 "$(cat "$W/state_web1")" --arg w2 "$(cat "$W/state_web2")" '{serial:5,lineage:"L1",resources:[
-      {mode:"managed",type:"hcloud_server",name:"web",instances:((if $w1 == 1 then [{index_key:"web-1",attributes:{id:123931471}}] else [] end)
-        + (if $w2 == "none" then [] else [{index_key:"web-2",attributes:{id:(if ($w2|test("^[0-9]+$")) then ($w2|tonumber) else $w2 end)}}] end))}]}' ;;
+    # decoys come FIRST: a selector that loosens mode, type, name or index picks one of them and the id comparison reds
+    jq -cn --argjson w1 "$(cat "$W/state_web1")" --arg w2 "$(cat "$W/state_web2")" --arg w1id "$(cat "$W/state_web1id")" --argjson str "$([[ -f "$W/state_str" ]] && echo true || echo false)" '
+      def idv($s): if ($s|test("^[0-9]+$")) and ($str|not) then ($s|tonumber) else $s end;
+      {serial:5,lineage:"L1",resources:[
+      {mode:"managed",type:"hcloud_volume",name:"web",instances:[{index_key:"web-2",attributes:{id:111}},{index_key:"web-1",attributes:{id:112}}]},
+      {mode:"data",type:"hcloud_server",name:"web",instances:[{index_key:"web-2",attributes:{id:222}},{index_key:"web-1",attributes:{id:223}}]},
+      {mode:"managed",type:"hcloud_server",name:"other",instances:[{index_key:"web-2",attributes:{id:444}},{index_key:"web-1",attributes:{id:445}}]},
+      {mode:"managed",type:"hcloud_server",name:"web",instances:((if $w1 == 1 then [{index_key:"web-1",attributes:{id:idv($w1id)}}] else [] end)
+        + (if $w2 == "none" then [] else [{index_key:"web-2",attributes:{id:idv($w2)}}] end))}]}' ;;
   *) echo "unexpected terraform $*" >> "$W/unexpected.log"; exit 1 ;;
 esac
 SH
@@ -130,7 +143,7 @@ SH
 cat > "$TMP/bin/sleep" <<'SH'
 #!/usr/bin/env bash
 W="${WORLD:-}"
-[[ -n "$W" ]] && echo S >> "$W/order.log"
+[[ -n "$W" ]] && { echo S >> "$W/order.log"; echo "${1:-}" >> "$W/sleep.log"; }
 if [[ -n "$W" && -f "$W/clock" && "${1:-}" =~ ^[0-9]+$ ]]; then echo $(( $(cat "$W/clock") + $1 )) > "$W/clock"; fi
 exit 0
 SH
@@ -161,9 +174,9 @@ fx_boot() { # id first_age newest_age n
 WN=0
 world() { # flags...   (builds the reboot AND evidence world; every file is one small fact)
   WN=$((WN + 1)); W="${BATTERY_DIR:-$TMP}/w.${WN}"; assert_fixture_dir "$W"; rm -rf "$W"; mkdir -p "$W"; export WORLD="$W"
-  : > "$W/calls.log"; : > "$W/writes.log"; : > "$W/order.log"; : > "$W/queries.log"; : > "$W/argv.log"
+  : > "$W/calls.log"; : > "$W/writes.log"; : > "$W/order.log"; : > "$W/queries.log"; : > "$W/argv.log"; : > "$W/sleep.log"
   echo "$SID" > "$W/server_id"; echo ok > "$W/servers_mode"; echo 2026-10-06T19:32:09+00:00 > "$W/server_created"
-  echo 1 > "$W/state_web1"; echo "$SID" > "$W/state_web2"; echo absent > "$W/never"
+  echo 1 > "$W/state_web1"; echo "$SID" > "$W/state_web2"; echo 123931471 > "$W/state_web1id"; echo absent > "$W/never"
   SINCE="$SINCE_DEFAULT"; FX_BARE=""
   fx_ready 45000 "$CURD" > "$W/bs.ready"
   fx_probe ok 28000 "$CURD" > "$W/bs.probe"
@@ -176,12 +189,18 @@ world() { # flags...   (builds the reboot AND evidence world; every file is one 
       servers=*) echo "${f#*=}" > "$W/servers_mode" ;;
       state_web1=*) echo "${f#*=}" > "$W/state_web1" ;;
       state_web2=*) echo "${f#*=}" > "$W/state_web2" ;;
+      state_web1id=*) echo "${f#*=}" > "$W/state_web1id" ;;
+      state_str) touch "$W/state_str" ;;
+      token=*) printf '%s\n' "${f#*=}" > "$W/token" ;;
       state_fail) touch "$W/state_fail" ;;
       never=*) echo "${f#*=}" > "$W/never" ;;
       never_unset) touch "$W/never_unset" ;;
       no_token) touch "$W/no_token" ;;
       post_code=*) echo "${f#*=}" > "$W/post_code" ;;
       post_noid) touch "$W/post_noid" ;;
+      post_html) touch "$W/post_html" ;;
+      poll_html) touch "$W/poll_html" ;;
+      action_flaky=*) echo "${f#*=}" > "$W/action_flaky" ;;
       action_status=*) echo "${f#*=}" > "$W/action_status" ;;
       action_get_code=*) echo "${f#*=}" > "$W/action_get_code" ;;
       approvals_fail) touch "$W/approvals_fail" ;;
@@ -196,6 +215,7 @@ world() { # flags...   (builds the reboot AND evidence world; every file is one 
 set_rows() { local k="$1"; shift; assert_fixture_dir "$W"; printf '%s\n' "$@" > "$W/bs.$k"; }
 set_boots() { assert_fixture_dir "$W"; : > "$W/bs.boots"; local b; for b in "$@"; do fx_boot ${b} >> "$W/bs.boots"; done; }   # each arg: "id first newest n"
 bsfail() { assert_fixture_dir "$W"; echo "${2:-99}" > "$W/bsfail.$1"; echo "${3:-503}" > "$W/bsfail_mode.$1"; }
+last_anchor() { grep '^anchor_epoch=' "$W/gh_out" 2>/dev/null | tail -n 1; }   # GITHUB_OUTPUT is last-write-wins
 now_in_world() { if [[ -f "$W/clock" ]]; then cat "$W/clock"; else "$REAL_DATE" -u +%s; fi; }
 anchor_now() { echo $(( $(now_in_world) - SINCE )); }
 
@@ -232,7 +252,7 @@ runr() { # <name> <want-rc> <want-substring|-> <args...>
   assert_fixture_dir "$BATTERY_DIR"; echo x >> "$BATTERY_DIR/runs"; echo r >> "$BATTERY_DIR/rruns"
   local -a envv=(PATH="$TMP/bin:/usr/bin:/bin" HOME="$W" WORLD="$W" INFRA_DIR="$W" GITHUB_OUTPUT="$W/gh_out" GITHUB_STEP_SUMMARY="$W/summary"
                  WEB_HOST_REBOOT_ACTION_POLL_S=0 REPO=o/r GH_TOKEN=x)
-  [[ -f "$W/no_token" ]] || envv+=(HCLOUD_TOKEN="$TOK")
+  if [[ -f "$W/no_token" ]]; then :; elif [[ -f "$W/token" ]]; then envv+=(HCLOUD_TOKEN="$(cat "$W/token")"); else envv+=(HCLOUD_TOKEN="$TOK"); fi
   [[ -f "$W/never_unset" ]] || envv+=(NEVER_POOLED="$(cat "$W/never")")
   o="$(env -i "${envv[@]}" ${RENV[@]+"${RENV[@]}"} "${RBASH[@]}" "$R_SCRIPT" "$@" 2>"$W/stderr")" || rc=$?
   LASTOUT="$o"; e="$(cat "$W/stderr" 2>/dev/null)"
@@ -261,9 +281,11 @@ battery_reboot() {
   check "reboot: every output is one key=value line" "$([[ "$(grep -vc '^[a-z_]*=[^ ]*$' "$W/gh_out")" == 0 ]]; echo $?)"
   check "reboot: the success sentence says the request was sent and nothing more" "$([[ "$LASTOUT" == *"it does not show that the host restarted or came back"* ]]; echo $?)"
   check "reboot: the output names the server id, the name and the anchor" "$([[ "$LASTOUT" == *"$SID"* && "$LASTOUT" == *soleur-web-2* && "$LASTOUT" == *anchor_epoch=* ]]; echo $?)"
+  check "reboot: the fixed footer is printed exactly once on a successful run" "$([[ "$(grep -cF -- "$FOOTER" <<<"$LASTOUT")" == 1 ]]; echo $?)"
   check "reboot: the token travelled on stdin" "$([[ "$(cat "$W/stdin.last")" == *"$TOK"* ]]; echo $?)"
   check "reboot: stderr carries only the mask line and (when traced) nothing else" "$([[ "$(grep -vc '^::add-mask::' "$W/stderr")" == 0 ]]; echo $?)"
   world "created=2026-10-06T21:32:09+02:00"; runr "reboot: a non-UTC creation time does not matter" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  world "server_id=123456789012" "state_web2=123456789012"; runr "reboot: a 12-digit id (the upper bound of the confirm pattern) is accepted when all three agree" 0 "accepted by Hetzner" reboot web-2 REBOOT-web-2-123456789012
   world "server_id=12345678" "state_web2=12345678"; runr "reboot: an 8-digit id shaped like no live one is accepted when all three agree" 0 "accepted by Hetzner" reboot web-2 REBOOT-web-2-12345678
   # ---- refusal 2: the allow-list
   for h in web-1 web-3 "" "web-2 " WEB-2 "web-2;x" $'web-2\nweb-1'; do
@@ -275,6 +297,28 @@ battery_reboot() {
   for c in "REBOOT-web-2-" "REBOOT-web-2-12x" "reboot-web-2-1" "REBOOT-web-1-123931471" "REBOOT-web-2-0123" "REBOOT-web-2-1234567890123" "REBOOT-web-2-1 " "" "REBOOT-web-2-$SID;id"; do
     world; runr "reboot: confirm '${c}' is refused" 1 "confirm must be" reboot web-2 "$c"
     want_no_api_call "reboot confirm '${c}'"; want_nothing_written "reboot confirm '${c}'"
+  done
+  # a UTF-8 locale reads non-ASCII digits as [0-9] in a bash regex: the script pins LC_ALL=C itself (the digits below are Arabic-Indic and fullwidth)
+  loc=""; for c in en_US.utf8 en_US.UTF-8 C.utf8; do
+    if (export LC_ALL="$c"; [[ $'٢١' =~ ^[1-9][0-9]{0,11}$ || $'１' =~ ^[1-9][0-9]*$ ]]) 2>/dev/null; then loc="$c"; break; fi
+  done
+  if [[ -n "$loc" ]]; then
+    for c in $'٢١' $'１２' "${SID}"$'٣'; do
+      world; RENV=(LC_ALL="$loc"); runr "reboot: a non-ASCII digit in confirm is refused even under ${loc}" 1 "confirm must be" reboot web-2 "REBOOT-web-2-${c}"; RENV=()
+      want_no_api_call "reboot non-ASCII confirm"; want_nothing_written "reboot non-ASCII confirm"
+    done
+  else
+    check "reboot: (control) a UTF-8 locale that reads a non-ASCII digit as [0-9] exists here; none does, so the locale rows cannot go red on this host" 0
+    echo "note: no UTF-8 locale reading non-ASCII digits as [0-9] on this host; the S5 rows ran as no-ops" >&2
+  fi
+  # ---- refusal 1 (shape): a token outside the bearer alphabet is refused by name before any curl; its value is never printed
+  for c in "tok en" 'tok"x' "tok;x" 'tok$x' $'tok\nheader = "X: y"' "tok&x"; do
+    world "token=$c"; runr "reboot: a token of an unusable shape is refused before any call" 1 "unusable shape" reboot web-2 "$CONF"
+    want_no_api_call "reboot token shape"; want_nothing_written "reboot token shape"
+    check "reboot: the unusable token value was not printed" "$([[ "$LASTOUT" != *"tok en"* && "$LASTOUT" != *'header = "X'* && "$(cat "$W/stderr")" != *"header = "* && "$(cat "$W/stderr")" != *"::add-mask::tok"* ]]; echo $?)"
+  done
+  for c in "a.b_c~d+e/f=g-h" "0" "Z"; do
+    world "token=$c"; runr "reboot: every character of the bearer alphabet is accepted (${c})" 0 "accepted by Hetzner" reboot web-2 "$CONF"
   done
   # ---- refusal 4: the never-pooled evidence
   for c in "" present unreadable "absent " ABSENT; do
@@ -300,16 +344,40 @@ battery_reboot() {
   world state_fail; runr "reboot: a failing state pull is refused" 1 "could not read the Terraform state" reboot web-2 "$CONF"; want_nothing_written "reboot state pull fails"
   world "state_web2=::error::pwn"; runr "reboot: a hostile state id is refused and never printed" 1 "differs from the id in the Terraform state" reboot web-2 "$CONF"
   check "reboot: the hostile state id is not in the output" "$([[ "$LASTOUT" != *pwn* ]]; echo $?)"; want_nothing_written "reboot hostile state id"
+  # the state selector: decoys (a volume, a data source, another server resource, each with a web-2 and a web-1 index) come first in the
+  # fixture, so a selector that loosens mode, type, name or index picks a decoy and the happy path reds; ids may be strings (the real producer's shape)
+  world state_str; runr "reboot: string-typed ids in the state are the same ids" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  world; runr "reboot: number-typed ids in the state are the same ids (decoy resources ahead of the real one)" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  # web-1's own id in the state: the live id must never equal it, whatever the constant says
+  world "state_web1id=${SID}"; runr "reboot: a live id equal to the id the state holds for web-1 is refused" 1 "carries the id the Terraform state holds for web-1" reboot web-2 "$CONF"; want_nothing_written "reboot web-1 state id"
+  world "state_web1id=${SID}" state_str; runr "reboot: the same, with string-typed ids" 1 "carries the id the Terraform state holds for web-1" reboot web-2 "$CONF"; want_nothing_written "reboot web-1 state id (strings)"
+  world "state_web1id=987654321"; runr "reboot: a web-1 id in the state that differs from the live id is fine" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  world "state_web1id=::error::x"; runr "reboot: a non-numeric web-1 id in the state does not refuse (the constant and the numeric compare are the checks)" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  check "reboot: terraform ran inside INFRA_DIR (the shim records a run from any other directory as an unexpected call)" "$([[ ! -s "$W/unexpected.log" ]]; echo $?)"
   # ---- refusal 9: the POST
   world post_code=403; runr "reboot: a 403 names the read-only token" 1 "reboot -> 403" reboot web-2 "$CONF"
   check "reboot: a 403 adds the read-only token hint" "$([[ "$LASTOUT" == *"read-only Hetzner token"* ]]; echo $?)"
-  check "reboot: the anchor survives a refused POST" "$([[ "$(grep -c '^anchor_epoch=' "$W/gh_out")" == 1 ]]; echo $?)"
+  check "reboot: a definite 4xx withdraws the anchor (the last anchor_epoch line is empty)" "$([[ "$(last_anchor)" == "anchor_epoch=" ]]; echo $?)"
+  check "reboot: a definite 4xx says none was sent and invites a re-dispatch" "$([[ "$LASTOUT" == *"none was sent"* && "$LASTOUT" == *"re-dispatch"* && "$LASTOUT" != *"DO NOT re-dispatch"* ]]; echo $?)"
+  check "reboot: a refused POST leaves the earlier anchor line and the withdrawal (two lines)" "$([[ "$(grep -c '^anchor_epoch=' "$W/gh_out")" == 2 ]]; echo $?)"
   world post_code=422; runr "reboot: a 422 fails with Hetzner's code" 1 "reboot -> 422 (error.code=locked)" reboot web-2 "$CONF"
+  check "reboot: a 422 withdraws the anchor" "$([[ "$(last_anchor)" == "anchor_epoch=" ]]; echo $?)"
   world post_code=423; runr "reboot: a 423 fails" 1 "reboot -> 423" reboot web-2 "$CONF"
+  world post_code=499; runr "reboot: the top of the 4xx band is definite" 1 "reboot -> 499" reboot web-2 "$CONF"
+  check "reboot: a 499 withdraws the anchor" "$([[ "$(last_anchor)" == "anchor_epoch=" ]]; echo $?)"
+  for c in 500 502 000 200 202 399; do
+    world "post_code=$c"; runr "reboot: a POST answered ${c} may have been sent" 1 "the request may have been sent" reboot web-2 "$CONF"
+    check "reboot: a ${c} keeps the anchor (the last anchor_epoch line is the epoch)" "$([[ "$(last_anchor)" =~ ^anchor_epoch=[0-9]{10}$ ]]; echo $?)"
+    check "reboot: a ${c} says DO NOT re-dispatch and hands over the grade command" "$([[ "$LASTOUT" == *"DO NOT re-dispatch"* && "$LASTOUT" == *"web-host-reboot-evidence.sh grade --anchor"* ]]; echo $?)"
+  done
   world post_noid; runr "reboot: a 201 without an action id fails" 1 "no numeric action id" reboot web-2 "$CONF"
-  check "reboot: the anchor survives a POST that returned no action id" "$([[ "$(grep -c '^anchor_epoch=' "$W/gh_out")" == 1 ]]; echo $?)"
+  check "reboot: the anchor survives a POST that returned no action id" "$([[ "$(last_anchor)" =~ ^anchor_epoch=[0-9]{10}$ ]]; echo $?)"
+  world post_html; runr "reboot: a 201 whose body is not JSON reaches the named failure, not a bare jq abort" 1 "no numeric action id" reboot web-2 "$CONF"
+  check "reboot: a non-JSON 201 body says do not re-dispatch" "$([[ "$LASTOUT" == *"DO NOT re-dispatch"* ]]; echo $?)"
+  check "reboot: a non-JSON 201 body keeps the anchor" "$([[ "$(last_anchor)" =~ ^anchor_epoch=[0-9]{10}$ ]]; echo $?)"
   # ---- refusal 10: the action outcome
   world action_status=error; runr "reboot: an action that ends in error is unconfirmed, not success" 1 "reboot request outcome unconfirmed" reboot web-2 "$CONF"
+  check "reboot: an action that ends in error stops the polling at once (one poll)" "$([[ "$(grep -c '^GET /actions/10' "$W/calls.log")" == 1 ]]; echo $?)"
   check "reboot: the unconfirmed message says not to re-dispatch" "$([[ "$LASTOUT" == *"DO NOT re-dispatch"* ]]; echo $?)"
   check "reboot: the unconfirmed message hands over the grade command" "$([[ "$LASTOUT" == *"web-host-reboot-evidence.sh grade --anchor"* ]]; echo $?)"
   check "reboot: the anchor is already out after an unconfirmed action" "$([[ "$(grep -c '^anchor_epoch=' "$W/gh_out")" == 1 ]]; echo $?)"
@@ -317,6 +385,24 @@ battery_reboot() {
   world action_status=running; runr "reboot: an action still running after 24 polls is unconfirmed" 1 "reboot request outcome unconfirmed" reboot web-2 "$CONF"
   check "reboot: exactly 24 polls were made" "$([[ "$(grep -c '^GET /actions/10' "$W/calls.log")" == 24 ]]; echo $?)"
   world action_get_code=500; runr "reboot: an action poll that answers 500 is unconfirmed" 1 "reboot request outcome unconfirmed" reboot web-2 "$CONF"
+  check "reboot: a 500 poll does not end the loop (all 24 polls were made)" "$([[ "$(grep -c '^GET /actions/10' "$W/calls.log")" == 24 ]]; echo $?)"
+  world action_flaky=3; runr "reboot: a few failed polls followed by success is accepted (Hetzner accepted the action)" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  check "reboot: the flaky polls were retried (4 polls)" "$([[ "$(grep -c '^GET /actions/10' "$W/calls.log")" == 4 ]]; echo $?)"
+  world action_flaky=23; runr "reboot: success on the 24th poll is accepted" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  world action_flaky=24; runr "reboot: 24 failed polls are unconfirmed" 1 "reboot request outcome unconfirmed" reboot web-2 "$CONF"
+  world poll_html; runr "reboot: a poll body that is not JSON is unconfirmed after 24 polls, not a bare jq abort" 1 "reboot request outcome unconfirmed" reboot web-2 "$CONF"
+  check "reboot: a non-JSON poll body says do not re-dispatch and keeps the anchor" "$([[ "$LASTOUT" == *"DO NOT re-dispatch"* && "$(last_anchor)" =~ ^anchor_epoch=[0-9]{10}$ ]]; echo $?)"
+  check "reboot: a non-JSON poll body was polled 24 times" "$([[ "$(grep -c '^GET /actions/10' "$W/calls.log")" == 24 ]]; echo $?)"
+  # the poll interval is a seam: 1-3 digits or the default 5
+  RENV=(WEB_HOST_REBOOT_ACTION_POLL_S=7); world action_status=running; runr "reboot: a 1-digit poll interval is honoured" 1 "unconfirmed" reboot web-2 "$CONF"
+  check "reboot: every poll sleeps the configured 7 s" "$([[ "$(sort -u "$W/sleep.log" | tr '\n' ' ')" == "7 " && "$(grep -c . "$W/sleep.log")" == 24 ]]; echo $?)"
+  RENV=(WEB_HOST_REBOOT_ACTION_POLL_S=120); world action_status=running; runr "reboot: a 3-digit poll interval is honoured" 1 "unconfirmed" reboot web-2 "$CONF"
+  check "reboot: a 3-digit interval is used as given" "$([[ "$(sort -u "$W/sleep.log" | tr '\n' ' ')" == "120 " ]]; echo $?)"
+  for c in abc "" 1000 "5;x" -1 "1 2" 1.5; do
+    RENV=(WEB_HOST_REBOOT_ACTION_POLL_S="$c"); world action_status=running; runr "reboot: a poll interval of '${c}' falls back to 5" 1 "unconfirmed" reboot web-2 "$CONF"
+    check "reboot: a poll interval of '${c}' sleeps 5 s, never the raw value" "$([[ "$(sort -u "$W/sleep.log" | tr '\n' ' ')" == "5 " ]]; echo $?)"
+  done
+  RENV=()
   # ---- refusal 1: xtrace and the token
   world; RBASH=(bash -x); runr "reboot: a traced run is refused" 78 "refusing to trace" reboot web-2 "$CONF"; RBASH=(bash)
   want_no_api_call "reboot xtrace"
@@ -328,6 +414,7 @@ battery_reboot() {
   world; RENV=(JOB_STATUS=success HOST=web-2 SERVER_ID="$SID" ANCHOR_EPOCH=1800000000 REASON="soak step 1" SHA=abc123 RUN_URL=https://example.invalid/run/1 ACTOR=dispatcher-one RUN_ID=1 STARTED_AT=2026-10-07T08:00:00Z)
   runr "summary: a green job" 0 "approver-one" summary
   check "summary: a green job says the request was sent and nothing more" "$([[ "$(cat "$W/summary")" == *"does not show that the host restarted or came back"* ]]; echo $?)"
+  check "summary: the footer is printed exactly once on stdout" "$([[ "$(grep -cF -- "$FOOTER" <<<"$LASTOUT")" == 1 ]]; echo $?)"
   check "summary: the footer is in the step summary" "$([[ "$(cat "$W/summary")" == *"$FOOTER"* ]]; echo $?)"
   check "summary: the anchor and server id are in the step summary" "$([[ "$(cat "$W/summary")" == *1800000000* && "$(cat "$W/summary")" == *"$SID"* ]]; echo $?)"
   check "summary: no Hetzner call is made" "$([[ ! -s "$W/calls.log" ]]; echo $?)"
@@ -337,6 +424,17 @@ battery_reboot() {
   check "summary: a failed job never says accepted" "$([[ "$(cat "$W/summary")" != *"accepted by Hetzner"* ]]; echo $?)"
   world; RENV=(JOB_STATUS=failure HOST=web-2 REASON=x)
   runr "summary: a refused run has no anchor and says nothing was sent" 0 "no anchor" summary
+  check "summary: a refused run says no request was sent" "$([[ "$(cat "$W/summary")" == *"no request was sent"* ]]; echo $?)"
+  world; RENV=(JOB_STATUS=cancelled HOST=web-2 REASON=x)
+  runr "summary: a cancelled run with no anchor does not claim that nothing was sent" 0 "unknown whether a request was sent" summary
+  check "summary: a cancelled run never says no request was sent" "$([[ "$(cat "$W/summary")" != *"no request was sent"* && "$(cat "$W/summary")" != *"no anchor was written"* ]]; echo $?)"
+  world; RENV=(JOB_STATUS=cancelled HOST=web-2 SERVER_ID="$SID" ANCHOR_EPOCH=1800000000 REASON=x)
+  runr "summary: a cancelled run with an anchor hands over the grade command" 0 "unknown whether a request was sent" summary
+  check "summary: a cancelled run with an anchor says do not re-dispatch and prints the grade command" "$([[ "$(cat "$W/summary")" == *"do not re-dispatch"* && "$(cat "$W/summary")" == *"grade --anchor 1800000000"* ]]; echo $?)"
+  world; RENV=(JOB_STATUS=success HOST=web-2 SERVER_ID="$SID" ANCHOR_EPOCH=1800000000 REASON='a [link](https://e.invalid) **b** <img src=x> `c` ```d')
+  runr "summary: the reason is a code span, never live markdown" 0 "-" summary
+  want_reason='| reason | `a [link](https://e.invalid) **b** <img src=x> '"'c'"' '"'''d"'` |'
+  check "summary: the reason row is one code span with no inner backtick" "$([[ "$(grep '^| reason |' "$W/summary")" == "$want_reason" ]]; echo $?)"
   world; RENV=(JOB_STATUS=success HOST=web-2 SERVER_ID="$SID" ANCHOR_EPOCH=1800000000 REASON=$'x\n::error::boom|y' RUN_ID=1 ACTOR=$'a\n::stop-commands::z')
   runr "summary: free text cannot start a line of its own or break the table" 0 "-" summary
   check "summary: no line of the step summary starts a workflow command" "$([[ "$(grep -c '^::' "$W/summary")" == 0 ]]; echo $?)"
@@ -567,12 +665,37 @@ for i, l in enumerate(src):
         break
 print(re.sub(r"\s+", " ", " ".join(out)).strip())
 '
+# hapi() and need_token() DIVERGE from web2-rebirth.sh by design since #9594's sweep: this script sends the bearer header with a process
+# substitution (`--config - < <(printf ...)`, not a pipe: a pipe can die of SIGPIPE under pipefail) after a token-shape check, and the
+# rebirth script still pipes. The parity row for those two therefore compares the copies with the bearer plumbing and the shape check
+# normalised away; every other helper stays byte-equal (whitespace-normalised).
+norm_bearer() { python3 -c '
+import re, sys
+t = re.sub(r"\s*\\(?=\s|$)", " ", sys.stdin.read())   # line continuations
+t = re.sub(r"""printf \x27header = "Authorization: Bearer %s"\\n\x27 "\$HCLOUD_TOKEN"\s*\|\s*""", "", t)
+t = re.sub(r"""\s*< <\(printf \x27header = "Authorization: Bearer %s"\\n\x27 "\$HCLOUD_TOKEN"\)""", "", t)
+t = re.sub(r"""\s*_bearer_ok "\$HCLOUD_TOKEN" \|\| fail "[^"]*"\s*;?""", " ", t)
+t = re.sub(r"local -a extra\s+extra=\(\)", "local -a extra=()", t)   # the lint wants a line-start assignment
+t = re.sub(r"\s*;\s*", " ", t)
+print(re.sub(r"\s+", " ", t).strip())'; }
 if [[ -f "$ROOT/scripts/web2-rebirth.sh" ]]; then
-  for fn in hapi errcode fail need_token out clean write_hint; do
+  for fn in errcode fail out clean write_hint; do
     a="$(python3 -c "$py_fn" "$RSCRIPT" "$fn" 2>/dev/null)"; b="$(python3 -c "$py_fn" "$ROOT/scripts/web2-rebirth.sh" "$fn")"
     srow "static: parity: ${fn}() equals web2-rebirth.sh's copy" "$([[ -n "$a" && "$a" == "$b" ]]; echo $?)"
   done
+  for fn in hapi need_token; do
+    a="$(python3 -c "$py_fn" "$RSCRIPT" "$fn" 2>/dev/null | norm_bearer)"; b="$(python3 -c "$py_fn" "$ROOT/scripts/web2-rebirth.sh" "$fn" | norm_bearer)"
+    srow "static: parity: ${fn}() equals web2-rebirth.sh's copy with the bearer plumbing normalised (intended divergence, #9594)" "$([[ -n "$a" && "$a" == "$b" ]]; echo $?)"
+  done
+  # the normaliser is live: it does not hide a real difference (a changed curl flag), and it does reduce this script's hapi to the rebirth's
+  a="$(python3 -c "$py_fn" "$RSCRIPT" hapi | sed 's/--max-time 15/--max-time 16/' | norm_bearer)"; b="$(python3 -c "$py_fn" "$ROOT/scripts/web2-rebirth.sh" hapi | norm_bearer)"
+  srow "static: (positive control) the bearer normaliser still reports a changed curl flag" "$([[ "$a" != "$b" ]]; echo $?)"
 fi
+# (functions of a path, shared by the static rows and by the mutation grader's static_red)
+bearer_psub_ok() { [[ -f "$1" && "$(grep -v '^[[:space:]]*#' "$1" | grep -c '< <(printf .header = "Authorization: Bearer')" == 1 && "$(grep -v '^[[:space:]]*#' "$1" | grep -cE 'printf .header = "Authorization: Bearer[^)]*\|')" == 0 ]]; }
+bearer_guard_ok() { [[ -f "$1" && "$(grep -c "^_bearer_ok() { local LC_ALL=C; case \"\${1:-}\" in ''|\*\[!A-Za-z0-9._~+/=-\]\*) return 1 ;; esac; }\$" "$1")" == 1 && "$(grep -c '^  _bearer_ok "\$HCLOUD_TOKEN" || fail' "$1")" == 1 ]]; }
+srow "static: the writer sends the bearer by process substitution, never a pipe (outside comments)" "$(bearer_psub_ok "$RSCRIPT"; echo $?)"
+srow "static: the writer carries the canonical token-shape guard _bearer_ok (the one body the repo census compares) and applies it to the token" "$(bearer_guard_ok "$RSCRIPT"; echo $?)"
 # tombstone: the subjects retire together with the two scripts they depend on
 leftover="$(cd "$ROOT" && find scripts .github apps/web-platform/infra -maxdepth 2 -name 'web-host-reboot*' 2>/dev/null | sort | tr '\n' ' ')"
 if [[ ! -f "$ROOT/scripts/web2-rebirth.sh" || ! -f "$ROOT/scripts/web2-rebirth-never-pooled.sh" ]]; then
@@ -590,11 +713,11 @@ srow "static: (positive control) the dynamic scan reports a planted claim word" 
 planted_ok="$(common_checks "planted-ok" "PASS (row presence only) ${FOOTER}"$'\n'"${FOOTER}" r 2>&1)"
 srow "static: (must-pass) the dynamic scan accepts the fixed wording" "$([[ -z "$planted_ok" ]]; echo $?)"
 scanned_n="$(( $(grep -c . "$R_BDIR/scanned") + $(grep -c . "$E_BDIR/scanned") ))"
-SCAN_FLOOR=104
+SCAN_FLOOR=151
 if [[ "$scanned_n" -lt "$SCAN_FLOOR" ]]; then printf 'FAILED floor: only %s outputs were scanned for claim words (floor %s)\n' "$scanned_n" "$SCAN_FLOOR"; fails=$((fails + 1)); fi
-REFUSAL_FLOOR=52
+REFUSAL_FLOOR=97
 if [[ "$nrefusal_runs" -lt "$REFUSAL_FLOOR" ]]; then printf 'FAILED floor: only %s reboot runs executed (floor %s)\n' "$nrefusal_runs" "$REFUSAL_FLOOR"; fails=$((fails + 1)); fi
-ROWS_FLOOR=290
+ROWS_FLOOR=420
 total_rows=$(( ran_r + ran_e + STATIC ))
 if [[ "$total_rows" -lt "$ROWS_FLOOR" ]]; then printf 'FAILED floor: only %s rows ran (floor %s)\n' "$total_rows" "$ROWS_FLOOR"; fails=$((fails + 1)); fi
 printf 'rows: reboot %s, evidence %s, static %s, total %s (floor %s); reboot runs %s, outputs scanned %s\n' "$ran_r" "$ran_e" "$STATIC" "$total_rows" "$ROWS_FLOOR" "$nrefusal_runs" "$scanned_n"
@@ -621,9 +744,12 @@ POST_BLOCK = r"""  anchor="$(date -u +%s)"
   echo "anchor_epoch=${anchor}"
   code="$(hapi POST "/servers/${sid}/actions/reboot" '{}')"
 """
+WEB1_CHK = r"""  web1_sid="$(jq -r '.web1id' <<<"$ident")"
+  [[ ! "$web1_sid" =~ ^[0-9]+$ || "$web1_sid" != "$sid" ]] || fail "reboot: the server named ${name} carries the id the Terraform state holds for web-1; refusing to reboot the live origin; nothing is rebooted"
+"""
 STATE_CMP = r"""  [[ "$state_sid" =~ ^[0-9]+$ && "$state_sid" == "$sid" ]] || fail "reboot: the resolved id ${sid} differs from the id in the Terraform state (${state_shown}); nothing is rebooted"
 """
-CHECK_201 = r"""  [[ "$code" == 201 ]] || fail "reboot -> ${code} (error.code=$(errcode))$(write_hint "$code"); the anchor is ${anchor}; grade with: ${GRADE_CMD} ${anchor} --window-min 0"
+CHECK_201 = r"""  [[ "$code" == 201 ]] || post_failed "$code" "$anchor"
 """
 OUT_LINE = r"""  out anchor_epoch "$anchor"; out server_id "$sid"
 """
@@ -640,7 +766,8 @@ m("G1.1 the web-1 id refusal is dropped", "r", R, ('[[ "$sid" != "$WEB1_SERVER_I
 m("G1.2 the typed-id comparison is dropped", "r", R, ('[[ "$sid" == "${confirm##*-}" ]] || fail', 'true || fail'))
 m("G1.3 the Terraform-state id comparison is dropped", "r", R, ('[[ "$state_sid" =~ ^[0-9]+$ && "$state_sid" == "$sid" ]] || fail', 'true || fail'))
 m("G1.4 the never-pooled requirement is dropped", "r", R, ('[[ "${NEVER_POOLED:-}" == absent ]] || fail', 'true || fail'))
-m("G1.5 REORDER: the POST moves above the state-id comparison", "r", R, (STATE_CMP + POST_BLOCK, POST_BLOCK + STATE_CMP))
+m("G1.5 REORDER: the POST moves above the state-id comparison", "r", R, (STATE_CMP + WEB1_CHK + POST_BLOCK, POST_BLOCK + STATE_CMP + WEB1_CHK))
+m("G1.5b REORDER: the POST moves above the web-1 state-id comparison", "r", R, (WEB1_CHK + POST_BLOCK, POST_BLOCK + WEB1_CHK))
 m("G1.6 a SECOND POST site after the compliant first", "r", R, (CHECK_201, CHECK_201 + SECOND_POST))
 m("G1.7 the guard's own dispatch: half the refusal scenarios are skipped (floor on refusal runs)", "suite", SUITE,
   ("""for h in web-1 web-3 "" "web-2 " WEB-2 "web-2;x" $'web-2\\nweb-1'; do\n    world; runr "reboot: host""", """for h in web-1; do\n    world; runr "reboot: host"""),
@@ -657,6 +784,29 @@ m("G1.14 the footer is dropped from the reboot script's exit paths", "r", R, (""
 m("G1.15 the xtrace refusal is dropped", "r", R, ("""*x*) printf '[FATAL] refusing to trace: a Hetzner token and Terraform state are in scope\\n' >&2; printf '%s\\n' 'This run reports rows only. It makes no statement about the volume or its encryption; grading belongs to scripts/followthroughs/web2-luks-live-6931.sh.'; exit 78 ;;""", '*x*) : ;;'))
 m("G1.16 the token requirement is dropped", "r", R, ('  need_token\n  # 2: the explicit', '  # 2: the explicit'))
 m("G1.17 the action poll is cut to 2 attempts", "r", R, ('for _ in $(seq 1 24); do', 'for _ in $(seq 1 2); do'))
+# ---- the POST boundary, the poll, the helpers and the summary (review round 1)
+m("R.1 a definite 4xx no longer withdraws the anchor", "r", R, ('    out anchor_epoch ""\n', ''))
+m("R.2 every non-201 answer withdraws the anchor (a 5xx or a transport error too)", "r", R, ('  if [[ "$code" =~ ^4[0-9][0-9]$ ]]; then', '  if true; then'))
+m("R.3 any 2xx is accepted as the POST answer", "r", R, (CHECK_201, '  [[ "$code" =~ ^2[0-9][0-9]$ ]] || post_failed "$code" "$anchor"\n'))
+m("R.4 a non-JSON 201 body aborts under set -e instead of reaching the named failure", "r", R, ('"$HBODY" 2>/dev/null)" || action_id=""', '"$HBODY")"'))
+m("R.5 a non-JSON poll body aborts under set -e", "r", R, ('2>/dev/null)" || st=unknown', ')"'))
+m("R.6 one poll that is not HTTP 200 ends the loop", "r", R, ('    fi   # a poll that is not HTTP 200 is not an answer: retry, and the end is still unconfirmed', '    else break\n    fi'))
+m("R.7 an action that ends in error no longer stops the polling", "r", R, ('      [[ "$st" == error ]] && break\n', '      :\n'))
+m("R.8 the poll sleep is dropped", "r", R, ('    sleep "$ACTION_POLL_S"\n', ''))
+m("R.9 the poll interval is no longer validated", "r", R, ('[[ "$ACTION_POLL_S" =~ ^[0-9]{1,3}$ ]] || ACTION_POLL_S=5', ':'))
+m("R.10 the locale pin is dropped (a UTF-8 locale then reads non-ASCII digits as [0-9])", "r", R, ('\nexport LC_ALL=C\n', '\n'))
+m("R.11 the confirm id bound is cut to 11 digits", "r", R, ('[1-9][0-9]{0,11}$ ]] || fail', '[1-9][0-9]{0,10}$ ]] || fail'))
+m("R.12 the web-1 id the state holds is no longer compared with the live id", "r", R, ("""[[ ! "$web1_sid" =~ ^[0-9]+$ || "$web1_sid" != "$sid" ]] || fail""", 'true || fail'))
+m("R.13 the state selector no longer pins mode, type and name (a decoy resource is picked)", "r", R, ('.resources[] | select(.mode == "managed" and .type == "hcloud_server" and .name == "web") | .instances[] | select(.index_key == $h)', '.resources[] | .instances[] | select(.index_key == $h)'))
+m("R.14 the state selector drops string-typed ids", "r", R, ('select(.index_key == $h) | (.attributes.id | tostring)]', 'select(.index_key == $h) | (.attributes.id | numbers | tostring)]'))
+m("R.15 terraform runs outside INFRA_DIR (the cd is dropped)", "r", R, ('(cd "$INFRA_DIR" && terraform state pull', '(terraform state pull'))
+m("R.16 the token-shape check is dropped", "r", R, ("""  _bearer_ok "$HCLOUD_TOKEN" || fail "the infra-credentials loader exported an HCLOUD_TOKEN of an unusable shape; nothing is rebooted"\n""", ''))
+m("R.17 the bearer goes back to a pipe", "static", R, ("""  code="$(curl --disable --noproxy '*' -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2" \\
+    < <(printf 'header = "Authorization: Bearer %s"\\n' "$HCLOUD_TOKEN"))" || rc=$?""", """  code="$(printf 'header = "Authorization: Bearer %s"\\n' "$HCLOUD_TOKEN" | curl --disable --noproxy '*' -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?"""))
+m("R.18 a cancelled job is summarised as nothing sent", "r", R, ('    elif [[ "$status" == cancelled ]]; then', '    elif false; then'))
+m("R.19 the summary prints the reason as live markdown", "r", R, ('    echo "| reason | \\`${reason_shown}\\` |"', '    echo "| reason | ${reason_shown} |"'))
+m("R.20 backticks in the reason are not neutralised", "r", R, ('; reason_shown="${reason_shown//\\`/$sq}"', ''))
+m("R.21 the summary prints the footer twice", "r", R, ('  FOOTER_DONE=1\n}', '}'))
 # ---- Guard 2: claim-free output
 m("G2.1 a claim about the volume is added to the PASS path", "e", E, (PASS_OLD, PASS_NEW))
 m("G2.2 PASS is reworded with a claim word", "e", E, ("""PASS) printf 'PASS (row presence only)' ;;""", """PASS) printf 'PASS (verified)' ;;"""))
@@ -707,6 +857,8 @@ static_red() { # <sandbox> -> the number of static conditions that are red in it
   [[ "$(grep -v '^[[:space:]]*#' "$sb/scripts/web-host-reboot-evidence.sh" | grep -ciE -e "$CENSUS_VERB")" == 0 ]] || n=$((n + 1))
   [[ "$(grep -v '^[[:space:]]*#' "$sb/scripts/web-host-reboot-evidence.sh" | grep -cE '\bPOST\b')" == 0 ]] || n=$((n + 1))
   [[ "$(grep -c '"scripts/web-host-reboot-evidence.sh"' "$sb/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" -ge 1 ]] || n=$((n + 1))
+  bearer_psub_ok "$sb/scripts/web-host-reboot.sh" || n=$((n + 1))
+  bearer_guard_ok "$sb/scripts/web-host-reboot.sh" || n=$((n + 1))
   echo "$n"
 }
 red_count() { # <kind> <sandbox>
@@ -760,7 +912,7 @@ for f in "$MUT_DIR"/res/[0-9]*; do cat "$f"; grep -q '^  FAIL' "$f" && fails=$((
 n_res="$(find "$MUT_DIR/res" -type f -name '[0-9]*' | wc -l | tr -d ' ')"
 [[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "  FAIL a mutant did not report ($n_res of ${MUT_SEQ})"; fails=$((fails + 1)); }
 # The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
-MUT_FLOOR=42
+MUT_FLOOR=67
 if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then
   printf '  FAIL mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
   exit 1
