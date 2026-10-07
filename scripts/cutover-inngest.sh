@@ -69,6 +69,24 @@ _bearer_curl() {
   curl --disable --noproxy '*' --max-time 60 "$@" --config - < <(printf 'header = "Authorization: Bearer %s"\n' "${!_tokvar}")
 }
 
+# Three-credential-header transport for the deploy.soleur.ai webhook calls (#9597
+# drawdown): the X-Signature-256 HMAC and the CF-Access client pair are credentials too,
+# and an argv `-H` exposes them in /proc/<pid>/cmdline. They ride the same stdin config
+# channel as _bearer_curl's bearer. $1 names the VARIABLE holding the raw hex signature
+# (read by indirect expansion; the `sha256=` prefix is part of the header line, not the
+# variable). All three values pass _bearer_ok before the config is built — a value with a
+# quote or newline would escape the `header = "..."` line, so a bad value fails closed
+# (rc=2, names the variable, never the value). The caller's own time bound stays
+# authoritative: it lands after the wrapper's 60s default and last-wins.
+_sig_curl() {
+  local _sigvar="${1:-}"
+  shift
+  _bearer_ok "${!_sigvar:-}" || { echo "_sig_curl: ${_sigvar} unusable" >&2; return 2; }
+  _bearer_ok "${CF_ACCESS_CLIENT_ID:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_ID unusable" >&2; return 2; }
+  _bearer_ok "${CF_ACCESS_CLIENT_SECRET:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_SECRET unusable" >&2; return 2; }
+  curl --disable --noproxy '*' --max-time 60 "$@" --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "${!_sigvar}" "${CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET}")
+}
+
 # Shared no-SSH confirm of the on-host inngest-cutover-flip FSM terminal state via Better
 # Stack Logs (source 2457081), used by op=arm (G6) and op=rollback (#6369). The emitter
 # (apps/web-platform/infra/inngest-cutover-flip.sh:125-137, `emit_state exit_code dbsize
@@ -1265,11 +1283,8 @@ case "$OP" in
     # (mirrors the deploy-status GET signature).
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/enum-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-enumerate-reminders" || echo "000")
     BODY=$(cat /tmp/enum-body 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -1311,11 +1326,8 @@ case "$OP" in
     # `CODE`. Everything the gate branch reads is bound inside the region.
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/registry-probe-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-registry-probe" || echo "000")
     BODY=$(cat /tmp/registry-probe-body 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -1505,11 +1517,8 @@ case "$OP" in
     DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
     echo "::notice::doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     rm -f /tmp/doublefire-probe-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$DF_URL" || echo "000")
     BODY=$(cat /tmp/doublefire-probe-body 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -1621,11 +1630,8 @@ case "$OP" in
     # registry probe (HMAC over empty body); require function_count > 0.
     RSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rearm-probe
-    RCODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
+    RCODE=$(_sig_curl RSIG -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$RSIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-registry-probe" || echo "000")
     RPROBE=$(cat /tmp/rearm-probe 2>/dev/null || echo "")
     if [[ "$RCODE" != "200" ]]; then
@@ -1667,12 +1673,9 @@ case "$OP" in
     PAYLOAD='{"mode":"rearm-from-capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rearm-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
     echo "re-arm response:"; cat /tmp/rearm-body 2>/dev/null || true; echo
@@ -1730,12 +1733,9 @@ case "$OP" in
     PAYLOAD='{"mode":"capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/capture-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
     BODY=$(cat /tmp/capture-body 2>/dev/null || echo "")
@@ -1763,12 +1763,9 @@ case "$OP" in
     # the CF 120s edge timeout, so it MUST be async + poll (not synchronous).
     PAYLOAD='{}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /dev/null -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /dev/null -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-wiped-volume-verify" || echo "000")
     if [[ "$CODE" != "202" ]]; then
@@ -1783,11 +1780,8 @@ case "$OP" in
     POLL_INTERVAL=10
     for i in $(seq 1 "$MAX_POLLS"); do
       rm -f /tmp/verify-body
-      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/verify-body -w '%{http_code}' \
+      _sig_curl GSIG -s --max-time 10 -o /tmp/verify-body -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-verify-status" >/dev/null || true
       BODY=$(cat /tmp/verify-body 2>/dev/null || echo "")
       if [[ -z "$BODY" ]] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
@@ -1865,11 +1859,8 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/inv-body
-      CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
+      CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$SIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-inventory" || echo "000")
       BODY=$(cat /tmp/inv-body 2>/dev/null || echo "")
       [[ "$CODE" == "200" ]] && break
@@ -1998,11 +1989,8 @@ case "$OP" in
     # against prod Postgres, the exact failure this cutover exists to prevent.
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/exec-probe
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-registry-probe" || echo "000")
     BODY=$(cat /tmp/exec-probe 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -2192,11 +2180,8 @@ case "$OP" in
     PAYLOAD='{"mode":"capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/exec-capture
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
     BODY=$(cat /tmp/exec-capture 2>/dev/null || echo "")
@@ -2271,11 +2256,8 @@ case "$OP" in
     INV_BAD_BODY=""
     for _probe in $(seq 1 "$QUIESCE_PROBES"); do
       rm -f /tmp/exec-inv
-      ICODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/exec-inv -w '%{http_code}' \
+      ICODE=$(_sig_curl GSIG -s --max-time 30 -o /tmp/exec-inv -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-inventory" || echo "000")
       INV_BODY=$(cat /tmp/exec-inv 2>/dev/null || echo "")
       if [[ -n "$INV_BODY" ]]; then
@@ -2686,11 +2668,8 @@ case "$OP" in
     # deploy-status polls below (HMAC over the empty body + CF-Access).
     PF_SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-preflight
-    PF_CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/quiesce-preflight -w '%{http_code}' \
+    PF_CODE=$(_sig_curl PF_SIG -s --max-time 30 -o /tmp/quiesce-preflight -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$PF_SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/infra-config-status" || echo "000")
     PF_CODE="${PF_CODE:0:3}"
     PF_REMEDY="Dispatch 'gh workflow run apply-deploy-pipeline-fix.yml' for the merged commit, wait for its verify to go green (it adjudicates the same per-file sha256), then re-dispatch op=quiesce-web. NOTHING was stopped — production scheduling is unchanged. Do NOT SSH the host."
@@ -2724,11 +2703,8 @@ case "$OP" in
     PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/deploy" || echo "000")
     if [[ "$CODE" != "202" ]]; then
@@ -2757,11 +2733,8 @@ case "$OP" in
     LAST_REASON=""
     for i in $(seq 1 "$QMAX_POLLS"); do
       rm -f /tmp/quiesce-status
-      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/quiesce-status -w '%{http_code}' \
+      _sig_curl GSIG -s --max-time 10 -o /tmp/quiesce-status -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/deploy-status" >/dev/null || true
       BODY=$(cat /tmp/quiesce-status 2>/dev/null || echo "")
       if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
@@ -2820,11 +2793,8 @@ case "$OP" in
     # verify, stronger than the inventory read).
     GSIG2=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-inv
-    ICODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
+    ICODE=$(_sig_curl GSIG2 -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$GSIG2" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-inventory" || echo "000")
     # It also reports whether the body carried the anchored QUIESCED sentinel — the exact
     # signal op=execute 2.2 certifies, so a missing sentinel here predicts 2.2's UNKNOWN.
@@ -2859,11 +2829,8 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/verify-probe
-      CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
+      CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$SIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-registry-probe" || echo "000")
       BODY=$(cat /tmp/verify-probe 2>/dev/null || echo "")
       [[ "$CODE" == "200" ]] && break
@@ -2955,11 +2922,8 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/verify-runs
-      CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-runs -w '%{http_code}' \
+      CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/verify-runs -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$SIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$DF_URL" || echo "000")
       BODY=$(cat /tmp/verify-runs 2>/dev/null || echo "")
       [[ "$CODE" == "200" ]] && break
@@ -3217,11 +3181,8 @@ case "$OP" in
     PAYLOAD=$(printf '{"command":"enable inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rollback-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/deploy" || echo "000")
     if [[ "$CODE" != "202" ]]; then
@@ -3241,11 +3202,8 @@ case "$OP" in
     ENABLED=0
     for i in $(seq 1 "$RMAX_POLLS"); do
       rm -f /tmp/rollback-status
-      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/rollback-status -w '%{http_code}' \
+      _sig_curl GSIG -s --max-time 10 -o /tmp/rollback-status -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/deploy-status" >/dev/null || true
       BODY=$(cat /tmp/rollback-status 2>/dev/null || echo "")
       if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then

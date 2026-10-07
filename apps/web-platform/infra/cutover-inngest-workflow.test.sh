@@ -110,10 +110,13 @@ assert "no-op on the registration push (workflow_dispatch guard)" "grep -qE \"gi
 
 # Rule D (#7873 / ADR-202, paid down at #8054 when this file left the lint's baseline): EVERY
 # credentialed curl is transport-confined — `--disable` as the LITERAL FIRST argument, then
-# `--noproxy '*'`. Counted against the curl count so a new call site cannot land unconfined.
+# `--noproxy '*'`. Two transport forms count: raw curls (each must carry the confinement
+# flags in its own argv) and `_sig_curl` call sites (the wrapper owns the confined argv,
+# and its credential headers ride `--config -` stdin, never argv — #9597 drawdown).
 BODY_CURLS=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE '\bcurl ' || true)
 BODY_CONFINED=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE "\bcurl --disable --noproxy '\*' " || true)
-assert "#8054 every curl in the body is transport-confined (curl=$BODY_CURLS confined=$BODY_CONFINED)" "[[ '$BODY_CURLS' -ge 20 && '$BODY_CURLS' -eq '$BODY_CONFINED' ]]"
+BODY_SIG_WRAPPED=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE '\b_sig_curl ' || true)
+assert "#8054 every transfer is transport-confined — raw curls confined in argv, webhook calls wrapped (curl=$BODY_CURLS confined=$BODY_CONFINED sig_wrapped=$BODY_SIG_WRAPPED)" "[[ '$BODY_CURLS' -eq '$BODY_CONFINED' && '$BODY_SIG_WRAPPED' -ge 20 ]]"
 assert "#8054 the body refuses to run under xtrace (it binds live credentials)" "grep -qE '^[[:space:]]*\*x\*\) printf .*refusing to run under xtrace.*exit 78' '$BODY_SH'"
 
 # every curl carries --max-time (no unbounded network call)
@@ -358,9 +361,10 @@ assert "doublefire SUM bound airtight: deadline + PAGE_MIN < 120 (#6919)" "[[ -n
 assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-starvation, #6919)" "grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\\\$PREFLIGHT_PAGE_MIN_S' '$DF_SH'"
 assert "inventory clamps per-page curl to the remaining budget (not a fixed const)" "grep -qE 'max-time \"\\\$max_time\"' '$INV_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$INV_SH'"
 assert "doublefire clamps per-page curl to the remaining budget" "grep -qE 'max-time \"\\\$max_time\"' '$DF_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$DF_SH'"
-# outer curl budgets present (the ceiling the sum must stay under).
-assert "inventory outer curl --max-time 30 present" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 30 -o /tmp/inv-body' '$WF'"
-assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 120 -o /tmp/verify-runs' '$WF'"
+# outer transfer budgets present (the ceiling the sum must stay under). The calls are
+# `_sig_curl` sites — the wrapper owns the confinement flags, the caller owns the bound.
+assert "inventory outer --max-time 30 present" "grep -qE '_sig_curl [A-Z_0-9]+ -s --max-time 30 -o /tmp/inv-body' '$WF'"
+assert "doublefire outer --max-time 120 present (#6919)" "grep -qE '_sig_curl [A-Z_0-9]+ -s --max-time 120 -o /tmp/verify-runs' '$WF'"
 
 # ============================================================================
 # #6919 — the op=verify HTTP 500 fix's plumbing: the doublefire hook reads a
@@ -2820,6 +2824,14 @@ assert "#8054 render driver: the REAL reader and remedy functions extract non-va
 # string, which would inline cleanly and leave the arm dying exactly as it would have
 # without this change — a silent regression wearing a green suite.
 assert "#8178 render driver: bs_read_classify extracts non-vacuously" "[[ \$(printf '%s\n' \"\$BS_CLASSIFY_FN\" | wc -l) -gt 5 ]]"
+# (#9597) The regions' webhook calls now go through _sig_curl (the #9597 drawdown wrapper —
+# credentials on --config stdin, never argv), defined at file top and so NOT inside any
+# extracted region. Splice the wrapper and its _bearer_ok shape guard into every render
+# driver below; without them each sourced region dies on an unbound command and every
+# render grades refusal arms it never measured. `_bearer_ok` is a one-line function — the
+# awk range pattern would run past its `}` — so it is extracted by single-line match.
+SIG_CURL_FNS="$( { awk '/^_bearer_ok\(\) \{/{print; exit}' "$BODY_SH"; awk '/^_sig_curl\(\) \{$/,/^\}$/' "$BODY_SH"; } )"
+assert "#9597 render driver: _bearer_ok + _sig_curl extract non-vacuously" "[[ \$(printf '%s\n' \"\$SIG_CURL_FNS\" | grep -cE '_bearer_ok\(\)|_sig_curl\(\)') -eq 2 ]]"
 RENDER_TMPDS="$(mktemp)"
 render_2_0() {
   local region="$1" code="$2" body="$3" pmode="$4" hmode="$5" tmpd driver rc=0
@@ -2840,6 +2852,7 @@ render_2_0() {
     printf '%s\n' "$BS_CLASSIFY_FN"
     printf '%s\n' "$BS_READER_FN"
     printf '%s\n' "$BS_REMEDY_FN"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 curl() { local o=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done; printf '%s' "$STUB_BODY" > "$o"; printf '%s' "$STUB_CODE"; }
 # doppler <run args…> -- bash scripts/betterstack-query.sh --since S --grep T --limit N : the process
@@ -3521,6 +3534,7 @@ render_2_2() { # $1 region  $2 SOURCE  $3 STUB_SEQ → stdout+stderr, __RC=, __C
       "$R22_QUIESCED" "$R22_QUIESCED_MULTI" "$R22_FATAL" "$R22_NOT_QUIESCED"
     printf 'UNATTR_BODY=%q; FORBIDDEN_BODY=%q; NOTFOUND_BODY=%q; GATEWAY_BODY=%q\n' \
       "$R22_UNATTRIBUTED" "$R22_FORBIDDEN" "$R22_NOTFOUND" "$R22_GATEWAY"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 curl() {
   local o="" n entry code name
@@ -3725,6 +3739,7 @@ render_qw_pf() { # $1 HTTP code  $2 body  $3 checkout file to REMOVE from the sa
     printf 'set -euo pipefail\n'
     printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
     printf 'STUB_CODE=%q; STUB_BODY=%q; TMPD=%q\n' "$code" "$body" "$tmpd"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 curl() {
   local o="" a
@@ -3800,6 +3815,7 @@ render_qw_poll() { # $1 QSEQ `reason:exit,…` → output, __RC=, __CALLS=
     printf 'set -euo pipefail\n'
     printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
     printf 'QSEQ=%q; TMPD=%q\n' "$seq" "$tmpd"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 sleep() { :; }
 curl() {
@@ -4398,7 +4414,10 @@ _DISPATCHED=$((PASS + FAIL))
 #   + define + 12 rsb_case rows + counter + 7 assembly rows), the #7777 op=reflush block (+18: choice
 #   + case arm + non-vacuity + 10 wiring rows + 5 emitter-parity rows), and the reviewer-gate
 #   membership loop's fourth iteration (+1).
-_EXACT_FLOOR=1040
+# 1040 -> 1041 (+1) at the #9597 drawdown in #9736: the `_bearer_ok` + `_sig_curl` render-splice
+#   non-vacuity row. The confinement and outer-budget rows were rewritten for the wrapper shape
+#   (same assertion count).
+_EXACT_FLOOR=1041
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
