@@ -35,3 +35,24 @@ None.
 
 ### Components Invoked
 - soleur:plan (read-and-execute, inline)
+
+## Work Phase
+- Status: complete
+- inngest-registry-probe.test.sh: 92 passed / 0 failed (+17 assertions)
+- cutover-inngest-workflow.test.sh: 1028 passed / 0 failed (floor 1000 -> 1028)
+- inngest-soak-6178.test.sh: 155/0 (registry-body consumer, backward-compat)
+- cloud-init-inngest-bootstrap.test.sh: 230/230 (the #7632 Guard-B evidence)
+
+## Review Phase
+- Status: complete (inline — no Task fan-out; deviation)
+- Findings fixed inline: (a) unpinned discovery wire — added call-site +
+  merge-assignment pins; (b) plan discoverability_test matched the probe's
+  header comment too — re-anchored on FUNCTIONS_GQL_QUERY.
+- Mutation check executed: dropping the CRON select() leaks event/null-trigger
+  ids (mutant emits c-slow,e-ev,n-none vs expected c-slow) — RED.
+- No code-review issues filed (inline review resolves, does not file).
+
+## QA Phase
+- Status: complete — all six plan Test Scenarios verified via suite rows +
+  direct helper invocation (hook itself is runner-side by design; scenario 5's
+  transport-failure path is covered by the warns/no-exit structural pins).
