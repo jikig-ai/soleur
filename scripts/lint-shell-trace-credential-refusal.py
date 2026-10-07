@@ -1150,8 +1150,9 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # runs Rule E only. TWO FEEDERS (see check_yaml_file): workflows and composite actions are
 # parsed with PyYAML and every `run` string value is scanned (reporting the step name and a
 # best-effort line: exact for `run: |`, the first content line for a folded scalar, the key
-# line otherwise); cloud-init files are scanned as RAW LINES because they are
-# Terraform-templated and do not parse. A `.github` YAML file PyYAML cannot parse is exit 2,
+# line otherwise); cloud-init files are scanned as RAW LINES (list markers stripped; only
+# `cloud-init.yml` is Terraform-templated and fails to parse, but one feeder serves all five).
+# A `.github` YAML file PyYAML cannot parse is exit 2,
 # and so is a missing PyYAML (imported lazily, only when a workflow is about to be parsed).
 #
 # KNOWN BLIND SPOTS (census-only; a reviewer, not this lint, judges them): message BODIES
@@ -1161,7 +1162,20 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # header VALUES held in `env:` and passed as `-H "$H"` (the assignment is not in the scanned
 # body); `env -i`; `wget`; `gh api -H`; `-K file` configs written with the default umask;
 # cookies (`-b`, `Cookie:`) and vendor-specific custom headers (`x-gitlab-token`), pinned by
-# an xfail row in the suite; and `-u`/`--user` operands (deferred, see VOCABULARY).
+# an xfail row in the suite; and `-u`/`--user` operands (deferred, see VOCABULARY). Two
+# populations carry argv credentials, are not scanned, and are owned by no S2-S5 slice (tracked
+# on the #9597 restatement): `apps/cla-evidence/infra/object_lock.tf` (a `local-exec` curl with
+# an `Authorization` header) and Markdown that agents EXECUTE (`infra-security.md`,
+# `api-security.md`, the postmerge/ship/preflight skill docs; `flag-bootstrap/SETUP.md` was
+# converted by hand and nothing now protects it). Cloud-init folded, flow-list and quoted
+# `runcmd` items are census-only too (see `_cloud_init_lines`).
+#
+# HEADER RULINGS (measured with `git grep -il`, 2026-10-07): `X-Soleur-Kb-Drift-Signature`
+# (1 site, kb-drift-walker.yml; a body HMAC, the same class as `X-Signature-256`) IS in the
+# vocabulary; `X-Sentry-Auth` (20 files) is NOT: it carries the Sentry DSN PUBLIC key
+# (`sentry_key=`), public by design; `X-Environment-Key` (flip.sh) is NOT: it is the Flagsmith
+# CLIENT-side environment key, shipped to browsers, and flip.sh's own comment says so.
+# `Proxy-Authorization:` matches the unanchored `authorization` alternate on purpose.
 #
 # WHY THE STDIN CONFIG FORM (measured, curl 8.22, bash 5.3): (1) `printf ... | curl --config -`
 # returns 141 under `set -o pipefail` when the consumer never reads stdin (a 100 KB payload
@@ -1193,6 +1207,7 @@ E_CREDENTIAL_HEADERS = (
     r"cf-access-client-id",
     r"cf-access-client-secret",
     r"x-signature-256",
+    r"x-soleur-kb-drift-signature",
     r"x-api-key",
 )
 E_CREDENTIAL = re.compile(r"(?:" + "|".join(E_CREDENTIAL_HEADERS) + r")\s*:", re.I)
@@ -1911,7 +1926,8 @@ def _e_scan(args: list[str], held_re, bearer_arrays: set[str]) -> dict:
 # `<path>:<LINE>: credential header on curl argv<where> -- <reasons>`. Change the wording
 # only together with E_MSG_RE in scripts/lint-shell-trace-credential-refusal.test.sh.
 E_FINDING = "credential header on curl argv"
-E_HEADER_NAMES = "`Authorization:`, `CF-Access-Client-Id/-Secret:`, `X-Signature-256:`, `X-API-Key:`"
+# Derived from the vocabulary tuple (one source of truth); the names print as the tuple spells them.
+E_HEADER_NAMES = ", ".join(f"`{h}:`" for h in E_CREDENTIAL_HEADERS)
 
 
 def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> list[str]:
@@ -2030,8 +2046,11 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
 #     `run: "curl ..."` step reach `check_rule_e` exactly as bash will see them. Raw YAML
 #     lines are blind to both (measured 0 of 4 flagged, against 3 of 3 literal blocks).
 #   * cloud-init files (`#cloud-config`, `cloud-init*.yml`) are scanned by RAW LINES:
-#     they are Terraform-templated (`%{ if }`, `${...}`) and do not parse as YAML, and
-#     their embedded scripts are literal blocks by construction.
+#     `cloud-init.yml` is Terraform-templated (`%{ if }`, `${...}`) and does not parse as YAML
+#     (the other four parse), their embedded scripts are literal blocks (`content: |`,
+#     `- |`) EXCEPT plain `runcmd` items (`- curl ...`), whose list marker is stripped first
+#     (`_cloud_init_lines`); one raw feeder serves all of them so a templated file is never
+#     a special case.
 # Dispatch keys on SUFFIX and CONTENT, never on a repo-relative `.github/` prefix: explicit
 # paths (the suite's out-of-repo fixture copies) are absolute.
 # A YAML file PyYAML cannot parse is exit 2 (cannot evaluate, ADR-157) -- never a skip and
@@ -2072,18 +2091,24 @@ def _yaml_default_shell(node) -> str | None:
     return None
 
 
-def _yaml_runs(node, default_shell: str | None = None):
+def _yaml_runs(node, default_shell: str | None = None, _seen: set | None = None):
     """Yield a YamlRun for every `run` string value at ANY depth that bash would execute.
 
     Workflow steps (`jobs.<id>.steps[*]`) and composite-action steps (`runs.steps[*]`) are
     both just mappings holding a `run` scalar, so the walk is structural, not path-keyed. A
     step whose `shell:` (or the enclosing `defaults.run.shell`) is not bash/sh is skipped,
     as lint-workflow-run-body-syntax.py does; no `shell:` at all means bash.
+
+    A `run` scalar is yielded ONCE per node: a `<<: *common` merge key or a `run: *snip` alias
+    makes the composer hand back the SAME node object, and one textual site must not be reported
+    per reference (the second report would also carry the anchor's line, not its own).
     """
+    if _seen is None:
+        _seen = set()  # ids of `run` scalar nodes already yielded (see the alias note above)
     kind = _node_kind(node)
     if kind == "SequenceNode":
         for item in node.value:
-            yield from _yaml_runs(item, default_shell)
+            yield from _yaml_runs(item, default_shell, _seen)
     elif kind == "MappingNode":
         default_shell = _yaml_default_shell(node) or default_shell
         run_node = shell_node = name_node = None
@@ -2095,18 +2120,34 @@ def _yaml_runs(node, default_shell: str | None = None):
                 shell_node = v_node
             elif k == "name":
                 name_node = v_node
-        if run_node is not None and _node_kind(run_node) == "ScalarNode" and run_node.tag == _YAML_STR_TAG:
+        if (run_node is not None and _node_kind(run_node) == "ScalarNode" and run_node.tag == _YAML_STR_TAG
+                and id(run_node) not in _seen):
             shell = (_scalar_text(shell_node) or default_shell or "bash")
             if (shell.split() or [""])[0] not in SKIP_SHELLS:
                 name = (_scalar_text(name_node) or "").strip().splitlines()
+                _seen.add(id(run_node))
                 yield YamlRun(run_node.value, run_node.start_mark.line, run_node.style,
                               name[0][:80] if name else "")
         for key_node, val_node in node.value:
-            yield from _yaml_runs(val_node, default_shell)
+            yield from _yaml_runs(val_node, default_shell, _seen)
+
+
+# Cloud-init list items. A `runcmd` item is `- <command>`: the marker puts `-` in command
+# position, so a raw line `- curl -H "Authorization: ..."` would never be read as a curl call.
+# The raw feeder therefore strips a leading list-item marker from every line (line numbers are
+# unchanged). Deliberately NOT read: a folded item (`- >-` plus continuation lines), a
+# flow-list item (`- [curl, -H, ...]`), a quoted item (`- "curl ..."`) and a `sh -c '...'`
+# payload -- each needs a YAML-ish parser for a templated file that does not parse as YAML,
+# and a heuristic one is where fresh bypasses come from. They are census-only blind spots.
+_CI_ITEM_MARK = re.compile(r"^\s*(?:-\s+)+")
+
+
+def _cloud_init_lines(text: str) -> list[str]:
+    return [_CI_ITEM_MARK.sub("", ln) for ln in text.splitlines()]
 
 
 def _check_yaml_raw(rel: str, text: str) -> tuple[int, list]:
-    e = check_rule_e(rel, text.splitlines())
+    e = check_rule_e(rel, _cloud_init_lines(text))
     return (1 if e else 0), [("e", v) for v in e]
 
 

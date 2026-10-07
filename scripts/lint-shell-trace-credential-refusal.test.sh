@@ -706,7 +706,7 @@ e_row 'Rule E vocab: an X-Signature-256 header passed to a file-local wrapper is
 e_row 'Rule E vocab: a stdin Authorization: Bot header plus an argv apikey: is reported as a second credential [call-level read site]' "$LINT" "$FIX/violation-argv-cred-second-credential.sh" 1
 e_row 'Rule E vocab: a wrapper keeping Authorization: Bot on stdin, called with an argv apikey:, is reported [wrapper-site read site]' "$LINT" "$FIX/violation-argv-cred-second-wrapper.sh" 1
 e_row 'Rule E vocab: ANY Authorization scheme is a credential (Bot, Digest, a ${SCHEME} variable, a glued lower-case authorization:): one message each' "$LINT" "$FIX/violation-argv-cred-schemes.sh" 4
-e_row 'Rule E vocab: one site per alternate of the constant (Authorization, CF-Access-Client-Id, CF-Access-Client-Secret, X-Signature-256, X-API-Key): five messages' "$LINT" "$FIX/violation-argv-cred-alternates.sh" 5
+e_row 'Rule E vocab: one site per alternate of the constant (Authorization, CF-Access-Client-Id, CF-Access-Client-Secret, X-Signature-256, X-Soleur-Kb-Drift-Signature, X-API-Key): six messages' "$LINT" "$FIX/violation-argv-cred-alternates.sh" 6
 
 # Known miss (discord-setup.sh): the Authorization: Bot header lives in a MULTI-LINE
 # `local curl_args=(` array (no `-a`). The declaration regex only knew `local -a`, so the
@@ -754,10 +754,13 @@ y_row 'Rule E YAML: a step under defaults.run.shell: bash is reported' "$LINT" "
 y_row 'Rule E YAML: two offending steps are two messages' "$LINT" "$FIX/violation-yaml-second-site.yml" 2
 y_row 'Rule E cloud-init: a Terraform-templated cloud-init file (not valid YAML) is scanned by raw lines and its curl is reported' "$LINT" "$FIX/cloud-init-violation.yml" 1
 
+y_row 'Rule E cloud-init: a plain runcmd list item (- curl ...) is reported (the list marker no longer hides the curl)' "$LINT" "$FIX/cloud-init-violation-runcmd.yml" 1
+y_row 'Rule E YAML: a <<: *anchor merge key and a run: *alias are each reported ONCE per textual site' "$LINT" "$FIX/violation-yaml-aliased-run.yml" 2
 y_row 'Rule E YAML must-PASS: echo/printf of a runbook curl line and a comment inside run: are not executed curl commands' "$LINT" "$FIX/compliant-yaml-echo-only.yml" 0
 y_row 'Rule E YAML must-PASS: printf | curl -H @- and curl --config - < <(printf ...) inside run: pass' "$LINT" "$FIX/compliant-yaml-stdin.yml" 0
 y_row 'Rule E YAML must-PASS: a step whose shell: is python is not bash and is skipped' "$LINT" "$FIX/compliant-yaml-nonbash-shell.yml" 0
 y_row 'Rule E YAML must-PASS: a step with no shell: under defaults.run.shell: python is not bash and is skipped' "$LINT" "$FIX/compliant-yaml-defaults-nonbash.yml" 0
+y_row 'Rule E cloud-init must-PASS: runcmd items with stdin-fed, commented-out, folded and flow-list shapes pass' "$LINT" "$FIX/cloud-init-compliant-runcmd.yml" 0
 y_row 'Rule E cloud-init must-PASS: a templated cloud-init file with only the stdin forms passes' "$LINT" "$FIX/cloud-init-compliant.yml" 0
 
 # Violating TWIN of each must-PASS (harness row c): the minimal edit that makes the same
@@ -1273,10 +1276,10 @@ mutate_row 'V-S5 ONLY the wrapper-site bearer_ctx re-narrowed to the legacy cons
 # (a hand-copied list would survive someone adding or dropping an alternate). The fixture
 # holds one site per alternate, so each mutant must keep rc 1 and print exactly N-1 messages.
 _nalt="$(awk '/^E_CREDENTIAL_HEADERS = \(/{f=1;next} f&&/^\)/{f=0} f' "$LINT" | grep -c .)"
-if [ "$_nalt" -lt 5 ]; then
-  fail "V-ALT: derived only $_nalt alternates from E_CREDENTIAL_HEADERS, anti-vacuity floor is 5"
+if [ "$_nalt" -lt 6 ]; then
+  fail "V-ALT: derived only $_nalt alternates from E_CREDENTIAL_HEADERS, anti-vacuity floor is 6"
 else
-  pass "V-ALT: $_nalt alternates derived from E_CREDENTIAL_HEADERS (anti-vacuity floor 5)"
+  pass "V-ALT: $_nalt alternates derived from E_CREDENTIAL_HEADERS (anti-vacuity floor 6)"
 fi
 for ((_k = 1; _k <= _nalt; _k++)); do
   _expr="s/(^E_CREDENTIAL_HEADERS = \\(\\n(?:[^\\n]*\\n){$((_k - 1))})[^\\n]*\\n/\${1}    r\"(?!x)x\",\\n/m"

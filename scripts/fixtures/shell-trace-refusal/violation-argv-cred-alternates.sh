@@ -10,10 +10,10 @@ case "$-" in
     ;;
 esac
 
-# Rules A/B/C/D are clean; Rule E must fire FIVE times, one site per ALTERNATE of the
+# Rules A/B/C/D are clean; Rule E must fire SIX times, one site per ALTERNATE of the
 # credential-header constant (authorization, cf-access-client-id, cf-access-client-secret,
-# x-signature-256, x-api-key). The suite deletes one alternate at a time and expects exactly
-# four messages from each mutant.
+# x-signature-256, x-soleur-kb-drift-signature, x-api-key). The suite deletes one alternate at a
+# time and expects exactly five messages from each mutant.
 readonly SINK_URL_PINNED="https://pinned.example/ingest"
 SINK_URL="${FIXTURE_SINK_URL:-$SINK_URL_PINNED}"
 if [ "$SINK_URL" != "https://pinned.example/ingest" ]; then
@@ -25,4 +25,5 @@ curl --disable --noproxy '*' -sS -H "Authorization: Basic ${SENTRY_AUTH_TOKEN}" 
 curl --disable --noproxy '*' -sS -H "CF-Access-Client-Id: ${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
 curl --disable --noproxy '*' -sS -H "CF-Access-Client-Secret: ${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
 curl --disable --noproxy '*' -sS -H "X-Signature-256: sha256=${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
+curl --disable --noproxy '*' -sS -H "X-Soleur-Kb-Drift-Signature: sha256=${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
 curl --disable --noproxy '*' -sS -H "X-API-Key: ${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
