@@ -881,6 +881,23 @@ wrap_skip() {
   WJ="$j"
 }
 
+# fold_name <name> -> FN: the command name in lower case when it is one the table knows, else the name as it is. No process is
+# started (a `tr` per record cost 3 ms each and, with no `tr` on the PATH, silently allowed RM): the case statement runs under
+# nocasematch, which is restored.
+FN=""
+fold_name() {
+  local had=0
+  FN="$1"
+  shopt -q nocasematch && had=1
+  shopt -s nocasematch
+  case "$1" in
+    rm) FN="rm" ;; terraform) FN="terraform" ;; tofu) FN="tofu" ;; git) FN="git" ;;
+    sudo) FN="sudo" ;; doas) FN="doas" ;; env) FN="env" ;; command) FN="command" ;; nohup) FN="nohup" ;;
+    time) FN="time" ;; timeout) FN="timeout" ;; nice) FN="nice" ;;
+  esac
+  (( had )) || shopt -u nocasematch
+}
+
 # decide_walk <depth>: the rule table over DA_T/DA_F (the words of one simple command), retried on the
 # command a wrapper hides and on the words after the first `--`. It hands the words it recurses on to itself
 # through DA_T/DA_F, so it CLOBBERS them: callers use decide_argv, which puts them back.
@@ -894,7 +911,7 @@ decide_walk() {
   if (( i < n )); then
     name="${t[$i]##*/}"
     # command names are compared in lower case: a case-insensitive filesystem runs RM as rm
-    case "$name" in *[A-Z]*) name="$(printf '%s' "$name" | tr 'A-Z' 'a-z')" ;; esac
+    case "$name" in *[A-Z]*) fold_name "$name"; name="$FN" ;; esac
     AV=("${t[@]:$i}"); AF=("${f[@]:$i}")
     case "$name" in
       rm) rule_rm ;;

@@ -258,6 +258,7 @@ farm_make() { # farm_make <name> <removed...>  -> $WORK/farm-<name>
 if [[ -z "$FAST" ]]; then
   farm_make nojq jq
   farm_make noperl perl
+  farm_make notr tr
   farm_make none jq perl
   # a perl that exists but dies without printing anything
   farm_make badperl perl
@@ -1603,6 +1604,16 @@ bound_row "bound: a 100-component nonexistent rm target then rm -rf / still deni
 bound_row "bound: 300 distinct nonexistent rm targets are judged within the deadline (no decision), in under 5 s" none - "$_cmd300nx"
 _t=""; for _i in $(seq 1 2400); do _t+=" /nonexist/f$_i"; done; _cmd2400same="rm -rf${_t}"
 bound_row "bound: 2400 nonexistent rm targets under one parent are judged within the deadline (the parent is resolved once), in under 5 s" none - "$_cmd2400same"
+# Command-name case folding is fork-free: 1999 capitalised no-op commands then rm -rf / still deny (a `tr` per record turned this into a bound ask), and a PATH with no `tr` still decides RM.
+rep "Make 'x'; " 1999; _cmd1999Make="${REP_OUT}rm -rf /"
+bound_row "bound: 1999 capitalised commands (Make) then rm -rf / still denies, in under 5 s" deny - "$_cmd1999Make"
+env_row "case fold: a PATH with no tr still denies RM -rf ~" deny "$(mkjson 'RM -rf ~' "$TREE")" "PATH=$WORK/farm-notr"
+env_row "case fold: a PATH with no tr still asks on TERRAFORM destroy" ask "$(mkjson 'TERRAFORM destroy' "$TREE")" "PATH=$WORK/farm-notr"
+env_row "case fold: a PATH with no tr still asks on Git push --force origin main" ask "$(mkjson 'Git push --force origin main' "$R3")" "PATH=$WORK/farm-notr"
+env_row "case fold: a PATH with no tr still unwraps Sudo and Env (Sudo Env Terraform destroy)" ask "$(mkjson 'Sudo Env Terraform destroy' "$TREE")" "PATH=$WORK/farm-notr"
+env_row "case fold: Doas / NOHUP / Timeout / Nice / Time / Command wrappers with an upper-case name are unwrapped" ask "$(mkjson 'DOAS NOHUP Timeout 5 NICE TIME Command Tofu destroy' "$TREE")" "PATH=$WORK/farm-notr"
+env_row "case fold: only the command name is folded (Terraform DESTROY is not terraform destroy: nocasematch is restored)" none "$(mkjson 'Terraform DESTROY' "$TREE")"
+env_row "case fold: an unrelated capitalised command (Make with a quoted word, a lexed command) is still no decision" none "$(mkjson 'Make "clean"' "$TREE")" "PATH=$WORK/farm-notr"
 # The deadline branches: a private copy of the hook whose deadline is 0 s asks with the bound reason at the FIRST check it
 # reaches. There is one check per phase (reading the lexer output, judging the records, deciding one command, walking
 # the targets of one rm), so each row neuters the OTHER three in its copy: a row that stays green with its own check
@@ -1986,7 +1997,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=778
+MIN_CASES=786
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
