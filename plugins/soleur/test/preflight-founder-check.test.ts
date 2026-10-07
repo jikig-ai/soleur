@@ -1049,6 +1049,73 @@ describe("verify: the static rules (in-process table)", () => {
     ["curl -u user:pass", cmdBlock({ command: "curl -u me:hunter2 http://x" }), "secret-shape"],
     ["an api_key assignment", cmdBlock({ text: "api_key=abcdef123456" }), "secret-shape"],
     ["a plain word 'token' with no value is not a secret", cmdBlock({ text: "the token page loads" }), null],
+    ["a plain 'secret garden' is not a secret", cmdBlock({ text: "the secret garden page loads" }), null],
+    // secret FORMS: a name that merely contains the keyword, a flag, a JWT (\\b fails between _ and a keyword)
+    ["GITHUB_TOKEN=", cmdBlock({ text: "run with GITHUB_TOKEN=abcdefgh1234" }), "secret-shape"],
+    ["AWS_SECRET_ACCESS_KEY=", cmdBlock({ text: "AWS_SECRET_ACCESS_KEY=abcdefghij12" }), "secret-shape"],
+    ["DB_PASSWORD=", cmdBlock({ text: "DB_PASSWORD=hunter2abc" }), "secret-shape"],
+    ["SLACK_BOT_TOKEN=", cmdBlock({ text: "SLACK_BOT_TOKEN=xoxb-1234-abcd" }), "secret-shape"],
+    ["NPM_TOKEN=", cmdBlock({ text: "NPM_TOKEN=npm_abcdef12" }), "secret-shape"],
+    ["client_secret=", cmdBlock({ text: "client_secret=abcdefgh" }), "secret-shape"],
+    ["access_token= inside a URL in the command", cmdBlock({ command: "curl http://x/p?access_token=abcdef123" }), "secret-shape"],
+    ["access_token= inside a URL (founder's words)", cmdBlock({ text: "open http://x/p?access_token=abcdef123" }), "secret-shape"],
+    ["curl --password", cmdBlock({ command: "curl --password hunter2 http://x" }), "secret-shape"],
+    ["curl --password=", cmdBlock({ command: "curl --password=hunter2 http://x" }), "secret-shape"],
+    ["curl --user u:p", cmdBlock({ command: "curl --user me:pw http://x" }), "secret-shape"],
+    ["a JWT", cmdBlock({ text: "token eyJhbGciOiJI.eyJzdWIiOiIx.SflKxwRJSMeKKF2QT4fwpM" }), "secret-shape"],
+    ["a JWT with no keyword near it", cmdBlock({ expected: "eyJhbGciOiJI.eyJzdWIiOiIx.SflKxwRJSMeKKF2QT4fwpM" }), "secret-shape"],
+    // length caps
+    ["a text over 2000 characters", cmdBlock({ text: "x".repeat(2001) }), "too-long"],
+    ["a command over 1000 characters", cmdBlock({ command: "grep " + "a".repeat(1000) + " f" }), "too-long"],
+    ["an expected over 500 characters", cmdBlock({ expected: "x".repeat(501) }), "too-long"],
+    ["an approved_by over 500 characters", cmdBlock({ approved_by: "x".repeat(501) }), "too-long"],
+    ["a text of exactly 2000 characters is fine", cmdBlock({ text: "x".repeat(2000) }), null],
+    // shlex sees what bash runs: every word bash would expand or re-read is refused
+    ["an ANSI-C quoted script name", cmdBlock({ command: "bash $'a.sh'", pins: { "$a.sh": SHA40 } }), "shell-active-token"],
+    ["a glob class in a script name", cmdBlock({ command: "bash [a].sh", pins: { "[a].sh": SHA40 } }), "shell-active-token"],
+    ["a brace list in a script name", cmdBlock({ command: "bash {a,b}.sh", pins: { "{a,b}.sh": SHA40 } }), "shell-active-token"],
+    ["a brace range", cmdBlock({ command: "grep a f{1..3}" }), "shell-active-token"],
+    ["an unquoted star", cmdBlock({ command: "grep a *.md" }), "shell-active-token"],
+    ["an unquoted question mark", cmdBlock({ command: "grep a f?" }), "shell-active-token"],
+    ["a leading tilde", cmdBlock({ command: "grep a ~/f" }), "shell-active-token"],
+    ["a history bang", cmdBlock({ command: "grep a !x" }), "shell-active-token"],
+    ["an unclosed brace", cmdBlock({ command: "grep a {x" }), "shell-active-token"],
+    ["an ANSI-C quoted git option", cmdBlock({ command: "git $'-c' alias.x=y x" }), "shell-active-token"],
+    ["an ANSI-C quoted rg option", cmdBlock({ command: "rg $'--pre' cmd f" }), "shell-active-token"],
+    ["an ANSI-C quoted curl option", cmdBlock({ command: "curl $'-K' f" }), "shell-active-token"],
+    ["a locale-quoted word", cmdBlock({ command: 'grep $"a" f' }), "shell-active-token"],
+    ["an unterminated quote", cmdBlock({ command: "grep 'a f" }), "shell-active-token"],
+    ["a star inside single quotes is a literal", cmdBlock({ command: "grep -c 'a*' f" }), null],
+    ["a pipe inside quotes is still refused", cmdBlock({ command: "grep -c 'a$|b*' f" }), "shell-active-token"],
+    ["a dollar inside single quotes is a literal", cmdBlock({ command: "grep -c 'a$' f" }), null],
+    ["a trailing dollar inside double quotes is a literal", cmdBlock({ command: 'grep -c "a$" f' }), null],
+    ["a curl write-out brace with no list is literal", cmdBlock({ command: "curl -s -o /dev/null -w %{http_code} http://example.invalid/x" }), null],
+    // option clusters and prefixes, per verb
+    ["curl -sSK (bundled)", cmdBlock({ command: "curl -sSK f http://x" }), "dangerous-option"],
+    ["curl -Kfile (glued)", cmdBlock({ command: "curl -Kfile http://x" }), "dangerous-option"],
+    ["curl --conf (unique prefix)", cmdBlock({ command: "curl --conf f http://x" }), "dangerous-option"],
+    ["curl -sS is fine", cmdBlock({ command: "curl -sS http://x" }), null],
+    ["rg --hostname-bin", cmdBlock({ command: "rg --hostname-bin x foo f" }), "dangerous-option"],
+    ["rg --hostname-bin=", cmdBlock({ command: "rg --hostname-bin=x foo f" }), "dangerous-option"],
+    ["rg --pretty is not --pre", cmdBlock({ command: "rg --pretty foo f" }), null],
+    ["git diff --ext-diff", cmdBlock({ command: "git diff --ext-diff" }), "dangerous-option"],
+    ["git diff --ext-d (prefix)", cmdBlock({ command: "git diff --ext-d" }), "dangerous-option"],
+    ["git log --textconv", cmdBlock({ command: "git log --textconv" }), "dangerous-option"],
+    ["git grep -O", cmdBlock({ command: "git grep -O less foo" }), "dangerous-option"],
+    ["git ls-remote --upload-pack", cmdBlock({ command: "git ls-remote --upload-pack=x origin" }), "dangerous-option"],
+    ["git --exec-path (global)", cmdBlock({ command: "git --exec-path=/tmp status" }), "dangerous-option"],
+    // git is a read-only allowlist
+    ["git status", cmdBlock({ command: "git status" }), null],
+    ["git log -1", cmdBlock({ command: "git log -1 --format=%H" }), null],
+    ["git ls-files", cmdBlock({ command: "git ls-files" }), null],
+    ["git grep -e", cmdBlock({ command: "git grep -e foo" }), null],
+    ["git rebase", cmdBlock({ command: "git rebase main" }), "unlisted-git-subcommand"],
+    ["git difftool", cmdBlock({ command: "git difftool" }), "unlisted-git-subcommand"],
+    ["git bisect run", cmdBlock({ command: "git bisect run x" }), "unlisted-git-subcommand"],
+    ["git submodule foreach", cmdBlock({ command: "git submodule foreach x" }), "unlisted-git-subcommand"],
+    ["git ls-remote", cmdBlock({ command: "git ls-remote origin" }), "unlisted-git-subcommand"],
+    ["git -C dir status", cmdBlock({ command: "git -C dir status" }), "unlisted-git-subcommand"],
+    ["a bare git", cmdBlock({ command: "git" }), "unlisted-git-subcommand"],
   ];
 
   test("every row yields exactly the expected reason", () => {
@@ -1161,15 +1228,160 @@ describe("verify: authorship (Guard 3)", () => {
 });
 
 describe("verify: outputs and failure modes", () => {
-  test("--command-out writes the exact command bytes, with no trailing newline, even for an UNTRUSTED block", () => {
+  test("--command-out is written ONLY for an OK verdict (exact bytes, no newline); any other outcome leaves it absent", () => {
+    const ok = new Repo();
+    ok.freeze();
+    ok.write("src/a.txt", "a\n");
+    ok.commit("code");
+    const good = join(ok.scratch, "cmd.txt");
+    expect(ok.verify(["--command-out", good]).json?.outcome).toBe("OK");
+    expect(readFileSync(good, "utf8")).toBe(BASE.command);
+    for (const [name, build] of [
+      ["UNTRUSTED", (r: Repo) => r.freeze(BASE, "p.md", STRANGER)],
+      ["CHANGED-SINCE-APPROVAL", (r: Repo) => { r.freeze(); r.write("src/a.txt", "a\n"); r.commit("code"); r.freeze({ ...BASE, expected: "9" }); }],
+      ["FAIL", (r: Repo) => r.freeze({ ...BASE, command: "echo a; echo b" })],
+    ] as const) {
+      const r = new Repo();
+      build(r);
+      if (name === "UNTRUSTED" || name === "FAIL") { r.write("src/a.txt", "a\n"); r.commit("code"); }
+      const f = join(r.scratch, "cmd.txt");
+      const v = r.verify(["--command-out", f]);
+      expect([name, v.json?.outcome, existsSync(f)]).toEqual([name, name === "FAIL" ? "FAIL" : name, false]);
+    }
+  });
+
+  test("--display-out carries an escaped, display-only copy for every outcome that parsed a block (no raw control bytes)", () => {
     const r = new Repo();
-    r.freeze(BASE, "p.md", STRANGER);
+    r.freeze({ ...BASE, command: "grep a\u001b[2J f" }, "p.md", STRANGER); // an ESC in the command: FAIL control-character
     r.write("src/a.txt", "a\n");
     r.commit("code");
-    const f = join(r.scratch, "cmd.txt");
-    const v = r.verify(["--command-out", f]);
-    expect(v.json?.outcome).toBe("UNTRUSTED");
-    expect(readFileSync(f, "utf8")).toBe(BASE.command);
+    const f = join(r.scratch, "disp.txt");
+    const v = r.verify(["--display-out", f]);
+    expect(v.json?.outcome).toBe("FAIL");
+    const shown = readFileSync(f, "utf8");
+    expect(shown).toContain("grep a\\x1b[2J f");
+    expect(shown).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u2028\u2029]/);
+    // and for a clean UNTRUSTED block it shows the command as written
+    const u = new Repo();
+    u.freeze(BASE, "p.md", STRANGER);
+    u.write("src/a.txt", "a\n");
+    u.commit("code");
+    const g = join(u.scratch, "disp.txt");
+    expect(u.verify(["--display-out", g]).json?.outcome).toBe("UNTRUSTED");
+    expect(readFileSync(g, "utf8").trimEnd()).toBe(BASE.command);
+  });
+
+  test("hash-object ignores .gitattributes filters: a CRLF copy of a pinned script is a changed script", () => {
+    const r = new Repo();
+    r.git(["checkout", "-q", "main"]);
+    r.write(".gitattributes", "*.sh text eol=lf\n");
+    r.write("scripts/ok.sh", "#!/bin/bash\necho 1\n");
+    r.commit("main: a script under an eol filter");
+    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    r.git(["checkout", "-q", "feat-x"]);
+    r.git(["rebase", "-q", "main"]);
+    r.freeze({ ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") } });
+    r.write("scripts/ok.sh", "#!/bin/bash\r\necho 1\r\n"); // different bytes, equal after the eol filter
+    const v = r.verify();
+    expect([v.json?.outcome, v.json?.reasons]).toEqual(["CHANGED-SINCE-APPROVAL", ["pinned-script-changed"]]);
+  });
+
+  test("a plan whose path git would quote (a double quote, non-ASCII) is found, never a silent NO-BLOCK", () => {
+    const r = new Repo();
+    r.plan('p"q é.md', scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.commit("plan: freeze");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const v = r.verify();
+    expect([v.json?.outcome, v.json?.plan]).toEqual(["OK", `${PLANS}/p"q é.md`]);
+  });
+
+  test("a block frozen in a plan renamed outside the archive follows the rename even with rename detection off", () => {
+    const r = new Repo();
+    r.git(["config", "diff.renames", "false"]);
+    r.freeze(BASE, "p.md");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.git(["mv", `${PLANS}/p.md`, `${PLANS}/q.md`]);
+    r.commit("rename the plan");
+    const v = r.verify();
+    expect([v.json?.outcome, v.json?.plan]).toEqual(["OK", `${PLANS}/q.md`]);
+  });
+
+  test("an oversized blob is never read: _blocks_at asks for its size first and does not `show` it", () => {
+    const r = new Repo();
+    const big = scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }) + "x".repeat(1_200_000);
+    r.plan("big.md", big);
+    r.plan("small.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.commit("plans");
+    const code = [
+      "calls = []",
+      "orig = fc._out",
+      "def spy(args, cwd):",
+      "    calls.append(args[0])",
+      "    return orig(args, cwd)",
+      "fc._out = spy",
+      "big = fc._blocks_at(data, 'HEAD', 'knowledge-base/project/plans/big.md')",
+      "n_show = calls.count('show')",
+      "small = fc._blocks_at(data, 'HEAD', 'knowledge-base/project/plans/small.md')",
+      "out = {'big': big, 'shown_for_big': n_show, 'small_blocks': len(small), 'sized': calls.count('cat-file') >= 2}",
+    ].join("\n");
+    const got = harness(code, r.dir);
+    expect(got).toEqual({ big: [], shown_for_big: 0, small_blocks: 1, sized: true });
+  });
+
+  test("a branch longer than the commit cap is refused, not sampled", () => {
+    const r = new Repo();
+    for (let i = 0; i < 5; i++) {
+      r.write(`src/f${i}.txt`, "x\n");
+      r.commit(`c${i}`);
+    }
+    const code = [
+      "fc.MAX_COMMITS = 3",
+      "out = {'cap3': fc._history(data, 'main'), 'cap100': len(fc._history(data, 'main') if False else [])}",
+    ].join("\n");
+    expect(harness(code, r.dir).cap3).toBeNull();
+    const ok = harness("fc.MAX_COMMITS = 100\nout = len(fc._history(data, 'main'))", r.dir);
+    expect(ok).toBe(5);
+  });
+
+  test("a parse error never echoes a long line back (the detail is capped)", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE).replace("  kind: command", "  " + "x".repeat(5000)) }));
+    const v = r.verify(["--candidate"]);
+    expect(v.json?.reason).toBe("unparseable");
+    expect(String(v.json?.detail).length).toBeLessThanOrEqual(120);
+  });
+
+  test("a --no-pr declaration is visible in the verify record, and a PR check clears it", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    expect(r.verify().json?.no_pr).toBe(true);
+    expect(r.verify(["--pr-author", "octocat", "--operator-login", "octocat"]).json?.no_pr).toBe(false);
+  });
+
+  test("a re-freeze commit whose block does not parse is ignored (the earlier freeze stays the freeze)", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE).replace("  kind: command", '  kind: command\n  text: "dup"') }));
+    r.commit("plan: re-freeze founder-stated check");
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "2" }) }));
+    r.commit("plan: tidy the check");
+    const v = r.verify(["--mode", "interactive"]);
+    expect([v.json?.outcome, v.json?.freeze_source]).toEqual(["CHANGED-SINCE-APPROVAL", "branch"]);
+  });
+
+  test("an operator email configured in upper case is the same operator", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const v = r.py(["verify", "--base", "origin/main", "--no-pr"], { GIT_AUTHOR_EMAIL: OPERATOR.toUpperCase() });
+    expect(v.json?.outcome).toBe("OK");
   });
 
   test("a hash: that disagrees with the block's own fields is FAIL, whether the wrong one is at the freeze or at HEAD", () => {
@@ -1263,6 +1475,9 @@ describe("verify: outputs and failure modes", () => {
     const r = new Repo();
     expect(r.py(["verify", "--bas", "origin/main"]).status).toBe(2);
     expect(r.py(["log", "--outc", "PASSED"]).status).toBe(2);
+    const j = r.freeze({ ...BASE, kind: "judgement", command: "" }) && r.verifyFile();
+    const abbr = r.py(["log", "--verify-j", j.file, "--polarity", "acceptance", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect([abbr.status, abbr.stderr]).toEqual([2, expect.stringContaining("required: --verify-json")]);
     expect(r.py(["text", "--lis"]).status).toBe(2);
     expect(r.py(["summar"]).status).toBe(2);
   });
@@ -1605,7 +1820,7 @@ describe("log: the only writer of outcomes", () => {
       .filter((l) => l.startsWith("|"))
       .slice(2)
       .map((l) => l.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim()));
-  const COLS = ["kind", "polarity", "command", "rc", "outcome", "underlying", "attempt_n", "tested_sha", "block_hash", "time_utc", "expected_matched", "reason"];
+  const COLS = ["kind", "polarity", "command", "rc", "outcome", "underlying", "attempt_n", "tested_sha", "block_hash", "time_utc", "expected_matched", "reason", "freeze_source", "no_pr"];
 
   test("a row carries every column; the path is derived from the branch; the marker is metadata only", () => {
     const r = FROZEN();
@@ -2025,6 +2240,70 @@ describe("log: the only writer of outcomes", () => {
     expect(src).toContain("\\u2028\\u2029");
   });
 
+  test("the log row records the freeze source and whether a PR was checked", () => {
+    const { r, file } = JUDGED();
+    log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    const a = Object.fromEntries(COLS.map((c, i) => [c, cells(r)[0][i]]));
+    expect([a.freeze_source, a.no_pr]).toEqual(["branch", "true"]);
+    const pr = r.verifyFile(["--pr-author", "octocat", "--operator-login", "octocat"], "pr.json");
+    log(r, pr.file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect(cells(r)[1][COLS.indexOf("no_pr")]).toBe("false");
+    // a re-freeze shows as one
+    const f = new Repo();
+    f.freeze({ ...BASE, kind: "judgement", command: "" });
+    f.write("src/a.txt", "a\n");
+    f.commit("code");
+    f.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, kind: "judgement", command: "", text: "looks different now" }) }));
+    f.commit("plan: re-freeze founder-stated check");
+    const rv = f.verifyFile(["--mode", "interactive"], "rf.json");
+    expect([rv.run.json?.outcome, rv.run.json?.freeze_source]).toEqual(["OK", "refreeze"]);
+    log(f, rv.file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect(cells(f)[0][COLS.indexOf("freeze_source")]).toBe("refreeze");
+  });
+
+  test("a symlinked log, a dangling one and a symlinked spec directory are refused and nothing is written through them", () => {
+    const outside = (r: Repo, n: string) => join(r.scratch, n);
+    // a link AT the log path (target absent: a dangling link would be created through)
+    const a = JUDGED();
+    mkdirSync(join(a.r.dir, LOGDIR), { recursive: true });
+    symlinkSync(outside(a.r, "victim.md"), logPath(a.r));
+    const la = log(a.r, a.file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect([la.status, la.stderr, existsSync(outside(a.r, "victim.md"))]).toEqual([3, expect.stringContaining("symbolic link"), false]);
+    // a link at the log path whose target exists
+    const b = JUDGED();
+    mkdirSync(join(b.r.dir, LOGDIR), { recursive: true });
+    writeFileSync(outside(b.r, "target.md"), "keep\n");
+    symlinkSync(outside(b.r, "target.md"), logPath(b.r));
+    expect(log(b.r, b.file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]).status).toBe(3);
+    expect(readFileSync(outside(b.r, "target.md"), "utf8")).toBe("keep\n");
+    // the spec directory is a link out of the repository
+    const c = JUDGED();
+    mkdirSync(outside(c.r, "elsewhere"));
+    mkdirSync(join(c.r.dir, "knowledge-base/project/specs"), { recursive: true });
+    symlinkSync(outside(c.r, "elsewhere"), join(c.r.dir, LOGDIR));
+    expect(log(c.r, c.file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]).status).toBe(3);
+    expect(existsSync(join(outside(c.r, "elsewhere"), "founder-check-log.md"))).toBe(false);
+  });
+
+  test("commit-log refuses a symlinked log, so a link is never committed", () => {
+    const { r } = JUDGED();
+    mkdirSync(join(r.dir, LOGDIR), { recursive: true });
+    writeFileSync(join(r.scratch, "t.md"), "x\n");
+    symlinkSync(join(r.scratch, "t.md"), logPath(r));
+    const before = r.git(["rev-parse", "HEAD"]).trim();
+    const c = r.py(["commit-log"]);
+    expect([c.status, c.stderr, r.git(["rev-parse", "HEAD"]).trim()]).toEqual([1, expect.stringContaining("symbolic link"), before]);
+  });
+
+  test("commit-log refuses to commit the log onto the default branch", () => {
+    const { r, file } = JUDGED();
+    r.git(["checkout", "-q", "main"]);
+    expect(log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]).status).toBe(0);
+    const before = r.git(["rev-parse", "HEAD"]).trim();
+    const c = r.py(["commit-log"]);
+    expect([c.status, c.stderr, r.git(["rev-parse", "HEAD"]).trim()]).toEqual([1, expect.stringContaining("default branch"), before]);
+  });
+
   test("commit-log with no log is a no-op", () => {
     const r = FROZEN();
     const c = r.py(["commit-log"]);
@@ -2090,6 +2369,8 @@ describe("wording constants", () => {
     "opt-restore": "Put the approved check back as it was. This undoes later edits to the check or to a script it runs.",
     "opt-change": "Approve a different check. It must fail on the work as it stands today, or be one you confirm by looking.",
     "opt-continue": "Let the ship go ahead anyway. This is recorded in the repository log as an override, with your reason. The check is not marked as passed.",
+    "refrozen-note": "This check was changed after it was first approved, and you approved the new text. The earlier text is shown above.",
+    "no-pr-note": "No pull request was checked, so who wrote this check was not compared with a GitHub account.",
     "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
     pass: "Your check passed. This shows only that the check you wrote ran against <sha>, finished without an error and, if you set an expected result, printed it. It does not show that the work is correct or complete, or free of problems this check does not look for. Review the result before relying on it.",
     "aggregate-pass": "Founder check: ran, returned success against <sha>",
@@ -2167,7 +2448,7 @@ describe("wording constants", () => {
 
   test("a FAIL carries `environmental` for reasons that say nothing about the check itself", () => {
     const env: string[] = harness("out = sorted(fc.ENVIRONMENTAL_REASONS)", null);
-    expect(env).toEqual(["base-not-default-branch", "base-unresolvable", "internal-error", "not-a-repository", "plan-unreadable", "verb-gate-unavailable"]);
+    expect(env).toEqual(["base-not-default-branch", "base-unresolvable", "history-too-long", "internal-error", "not-a-repository", "plan-unreadable", "verb-gate-unavailable"]);
     const r = new Repo();
     r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "rm -rf x" }) }));
     expect(r.verify(["--candidate"]).json?.environmental).toBe(false);

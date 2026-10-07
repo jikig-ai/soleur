@@ -28,7 +28,7 @@ Run as its own Bash call, from the repository root:
 ```bash
 : "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" verify --base origin/main --out "$PREFLIGHT_TMP/founder-check-verify.json" --command-out "$PREFLIGHT_TMP/founder-check-cmd.txt"
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" verify --base origin/main --out "$PREFLIGHT_TMP/founder-check-verify.json" --command-out "$PREFLIGHT_TMP/founder-check-cmd.txt" --display-out "$PREFLIGHT_TMP/founder-check-display.txt"
 ```
 
 Add `--no-pr` when no pull request exists yet. When one does, add
@@ -41,7 +41,11 @@ to name a plan the script cannot find itself (it also reads the `Plan:` line of
 Pass `--mode interactive` under the same condition as `log` (the founder is present in this session);
 the default is headless, and a headless run stops on a re-frozen check (section 8) instead of
 running it. `verify` and `classify` delete the files named by `--out` and `--command-out` before they
-do anything else, so a record on disk is always from the run that just made it.
+do anything else, so a record on disk is always from the run that just made it. `--command-out` is
+written **only for an `OK` verdict**, so the file's existence is the go signal and no other outcome
+leaves a command for the wrapper to read. Whenever a block was parsed, `--display-out` holds an
+escaped, display-only copy (control characters shown as `\x1b`, never raw): that file, not the
+command file, is what an UNTRUSTED, CHANGED or rejected check is shown from.
 
 Read the JSON line. `outcome` is one of:
 
@@ -122,7 +126,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" classi
 `outcome` is `PASSED`, `FAILED` or `INVALID`. Record it (section 6), then print:
 
 - `PASSED`: `founder-check.py text pass --verify-json "$PREFLIGHT_TMP/founder-check-verify.json"`, the
-  exact command, the UTC time, the rc and the full output **in the terminal only**. The aggregate
+  exact command, the UTC time, the rc and the full output **in the terminal only**. When the record
+  says `refreeze: true` also print `founder-check.py text refrozen-note`, and when it says
+  `no_pr: true` also print `founder-check.py text no-pr-note`: a pass that rests on a re-approved
+  check, or on no author comparison at all, must say so. The aggregate
   row is `founder-check.py text aggregate-pass --verify-json …`. It never reads a bare PASS.
 - `FAILED` and `INVALID` carry equal prominence: the same command, time, rc and output. `INVALID`
   means the tooling failed (a timeout, `command not found`, a DNS or connect error for `curl`, an
@@ -163,7 +170,7 @@ never decides for the founder.
 | INVALID | `founder-check.py text invalid-ask` | the same three answers |
 | CHANGED-SINCE-APPROVAL | `founder-check.py text changed-ask`, with the approved text and command (`frozen` in the record), the current ones, `changed_fields` and `reasons`. Say which it was: a field, a pinned script, or the freeze ordering (the check was saved after work had begun) | **Restore the approved check** (`text opt-restore`; leave it out when `reasons` is exactly `ordering`, because nothing changed and there is nothing to restore) · **Change the check** (`text opt-change`) · **Continue anyway** (`text opt-continue`) |
 | BLOCK-REJECTED | `founder-check.py text rejected-ask --verify-json …` | `environmental: false`: **Change the check** · **Continue anyway**. `environmental: true` (the computer or repository is the problem, not the check): **Retry** · **Continue anyway**, because changing the check would not help |
-| UNTRUSTED | No question. Show the exact command, `freeze_author`, the operator's email (`git config user.email`) and `flags`. When `flags` is exactly `pr-author-unmeasurable`, print `founder-check.py text untrusted-unmeasured`; otherwise `founder-check.py text untrusted-fail` | FAIL. Nothing runs. The founder states their own check (section 8), or signs in to GitHub and re-runs when the author could not be measured. There is no continue-anyway for a check nobody could match to the founder |
+| UNTRUSTED | No question. Show the escaped command from the display file, `freeze_author`, the operator's email (`git config user.email`) and `flags`. When `flags` is exactly `pr-author-unmeasurable`, print `founder-check.py text untrusted-unmeasured`; otherwise `founder-check.py text untrusted-fail` | FAIL. Nothing runs. The founder states their own check (section 8), or signs in to GitHub and re-runs when the author could not be measured. There is no continue-anyway for a check nobody could match to the founder |
 | NEEDS-YOUR-EYES (`kind: judgement`) | Show the founder's `text` and the evidence the work produced: the diff summary (`git diff --stat origin/main...HEAD`), the acceptance criteria and any test result already printed this session. Then `founder-check.py text eyes-ask` | **Yes** → `FOUNDER-CONFIRMED`, print `founder-check.py text judgement` · **No** → the FAILED row, then `failed-ask` |
 | SKIP-NOSANDBOX with a block | none | FAIL: `founder-check.py text no-sandbox`, then `founder-check.py text no-sandbox-stop`. A check that did not run is never a pass, interactive or not |
 

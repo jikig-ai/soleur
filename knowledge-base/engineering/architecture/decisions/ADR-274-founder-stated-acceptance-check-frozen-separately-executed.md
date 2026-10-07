@@ -167,5 +167,20 @@ preflight executes; they now say plan-declared probes and checks, with no count.
    `reason-prompt` and `first-use` state their consequences (a yes runs the check once now, the log is public, a check can send
    what it reads to any address); the answer labels are pinned as `opt-*` constants. `approved_by` is required and secret-scanned.
    A third check of the changed constants precedes ship.
-5. **Known limit, unchanged.** Headless and interactive are still declared by the caller, and `--mode interactive` on `verify`
-   is as unauthenticated as on `log`. The controls above make a mismatch loud and recorded; they do not prove who is present.
+5. **Known limits, unchanged and stated plainly.** Headless and interactive are declared by the caller, and `--mode interactive`
+   on `verify` is as unauthenticated as on `log`. `--no-pr` is a declaration the caller makes: under it, a freeze whose commit email
+   was forged to equal the operator's is **not** `UNTRUSTED`, because nothing else is compared. Only when both PR logins are supplied
+   does a forged email meet an independent check. The verify record and the log row therefore carry `no_pr` and `freeze_source`, and
+   the pass is followed by a note when either applies, so a pass that rests on an uncompared author or a re-approved check says so.
+   The controls above make a mismatch loud and recorded; they do not prove who is present.
+6. **The security seat's findings (second round).** (a) The rules judged the command with Python's shlex while Step 10.5 runs it under
+   bash, so `bash $'a.sh'`, `bash [a].sh`, `bash {a,b}.sh` and `git $'-c' …` slipped past the pin and denied-option checks. A command
+   is now refused when bash would expand or re-read anything outside single quotes (`$`, globs, tilde, `!`, brace lists), so what
+   shlex saw is what bash runs. (b) git is a read-only subcommand allowlist (`rebase -x`, `difftool`, `bisect run`,
+   `submodule foreach`, `ls-remote --upload-pack` and every alias can run a program); denied options are matched in bundled clusters
+   (`curl -sSK`) and by unique long prefix. (c) The log is never written through a symbolic link at the log, its spec directory or
+   any ancestor inside the repository (`O_NOFOLLOW|O_APPEND`), and `commit-log` refuses a link and refuses the default branch; hooks
+   stay on, because they are the repository's own gates and the log may be public. (d) The secret scan matches names that merely
+   contain a keyword (`GITHUB_TOKEN=`, `DB_PASSWORD=`), `--password`, `--user u:p` and JWTs. (e) `--command-out` exists only for an
+   `OK` verdict; other outcomes are shown from an escaped `--display-out` copy. (f) Pins hash with `--no-filters`; git path lists
+   are read with `-z`; a blob is size-checked before it is read; a branch over 5000 commits is refused; field lengths are capped.

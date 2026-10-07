@@ -44,6 +44,8 @@ PLANS_DIR = "knowledge-base/project/plans"
 SPECS_DIR = "knowledge-base/project/specs"
 LOG_NAME = "founder-check-log.md"
 MAX_PLAN_BYTES = 1 << 20
+MAX_COMMITS = 5000                 # a branch longer than this is not scanned, it is refused
+MAX_TEXT, MAX_COMMAND, MAX_EXPECTED, MAX_APPROVED = 2000, 1000, 500, 500
 REFREEZE_PREFIX = "plan: re-freeze founder-stated check"
 LOG_COMMIT_MESSAGE = "founder-check: log"
 
@@ -52,8 +54,21 @@ ALLOWED_KEYS = frozenset(CANONICAL_FIELDS) | {"hash"}
 KINDS = ("command", "judgement")
 INTERPRETERS = ("bash", "python3", "node", "bun")
 SCRIPT_EXTS = (".sh", ".py", ".js", ".mjs", ".cjs", ".ts", ".awk")
-# Options that make a non-interpreter verb run a program the work could have written.
-DENIED_OPTIONS = {"git": ("-c", "--config-env", "--exec-path"), "rg": ("--pre",), "curl": ("-K", "--config")}
+# Options that make a non-interpreter verb run a program the work could have written. Long options
+# are matched by unique prefix too (git and getopt-style parsers accept `--ext-d` for `--ext-diff`).
+DENIED_OPTIONS = {
+    "git": ("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--exec", "--ext-diff",
+            "--textconv", "--open-files-in-pager", "-O", "--output"),
+    "rg": ("--pre", "--hostname-bin"),
+    "curl": ("-K", "--config"),
+}
+# git is a read-only allowlist: every other subcommand can run a program (rebase -x, difftool,
+# bisect run, submodule foreach, ls-remote --upload-pack, any alias) and the list cannot be a denylist.
+GIT_READ_ONLY = frozenset({
+    "status", "log", "show", "diff", "rev-parse", "rev-list", "ls-files", "ls-tree", "cat-file", "grep",
+    "describe", "blame", "shortlog", "name-rev", "merge-base", "show-ref", "for-each-ref", "diff-tree",
+    "diff-files", "diff-index", "count-objects", "var",
+})
 
 # Outcomes only an interactive founder can produce. The headless log refuses them.
 HEADLESS_REFUSED = frozenset({"OVERRIDDEN", "FOUNDER-CONFIRMED"})
@@ -129,12 +144,15 @@ REJECT_REASONS = {
     "plan-outside-plans-dir": "the plan file is outside the plans folder, so it was not read",
     "plan-unreadable": "the plan file could not be read",
     "internal-error": "the check could not be examined because of an internal error",
+    "too-long": "the check or the words around it are longer than a check should be",
+    "unlisted-git-subcommand": "the command uses a git command that is not on the read-only list",
+    "history-too-long": "this branch has too many commits to scan for the approved check",
 }
 # A FAIL that says nothing about the check itself: the computer or the repository is the problem,
 # so "change the check" is not an answer and the founder is offered a retry instead.
 ENVIRONMENTAL_REASONS = frozenset(
     {"verb-gate-unavailable", "base-not-default-branch", "base-unresolvable", "not-a-repository",
-     "plan-unreadable", "internal-error"}
+     "plan-unreadable", "internal-error", "history-too-long"}
 )
 
 # Wording is a contract (CLO-reviewed, pinned by tests). Never claim more than "ran against the
@@ -233,13 +251,20 @@ WORDING = {
         "Let the ship go ahead anyway. This is recorded in the repository log as an override, with "
         "your reason. The check is not marked as passed."
     ),
+    "refrozen-note": (
+        "This check was changed after it was first approved, and you approved the new text. The "
+        "earlier text is shown above."
+    ),
+    "no-pr-note": (
+        "No pull request was checked, so who wrote this check was not compared with a GitHub account."
+    ),
     "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
     "aggregate-pass": "Founder check: ran, returned success against {sha}",
 }
 
 LOG_COLUMNS = (
     "kind", "polarity", "command", "rc", "outcome", "underlying", "attempt_n", "tested_sha",
-    "block_hash", "time_utc", "expected_matched", "reason",
+    "block_hash", "time_utc", "expected_matched", "reason", "freeze_source", "no_pr",
 )
 
 # Step 10.5's shell-active reject set, applied at verify so a block carrying one is refused before
@@ -248,15 +273,20 @@ _SHELL_ACTIVE = re.compile(r"\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_]")
 _SUBSTITUTION = re.compile(r"\$\(|`|\$\{|<\(|>\(")
 _CONTROL = re.compile("[\x00-\x1f\x7f\u2028\u2029]")
 _HARD_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f\u2028\u2029]")  # text may keep \t and \n
+_KW = r"(?:password|passwd|passphrase|secret|api[_-]?key|apikey|token|credential|auth)"
 _SECRET_SHAPES = (
-    re.compile(r"(?i)\bbearer[ \t]+[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(r"(?i)\bauthorization[ \t]*:"),
-    re.compile(r"\b(?:ghp|gho|ghs|ghu|github_pat|glpat|sk|pk|rk|xox[abpr])[_-][A-Za-z0-9_-]{16,}"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"(?i)(?<![A-Za-z0-9])bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"(?i)(?<![A-Za-z0-9])authorization[ \t]*:"),
+    re.compile(r"(?<![A-Za-z0-9])(?:ghp|gho|ghs|ghu|github_pat|glpat|sk|pk|rk|xox[abpr])[_-][A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"://[^/\s:@]+:[^/\s@]+@"),
     re.compile(r"(?:^|\s)-u[ \t]*\S+:\S+"),
-    re.compile(r"(?i)\b(?:password|passwd|secret|api[_-]?key|token)\b[ \t]*[=:][ \t]*\S{6,}"),
+    # a name that merely CONTAINS the keyword counts: GITHUB_TOKEN, DB_PASSWORD, client_secret, access_token
+    re.compile(r"(?i)(?<![A-Za-z0-9])[A-Za-z0-9_.-]*" + _KW + r"[A-Za-z0-9_.-]*[ \t]*[=:][ \t]*\S{6,}"),
+    re.compile(r"(?i)(?<![A-Za-z0-9-])--(?:password|passwd|oauth2-bearer|proxy-password)(?:=|[ \t]+)\S{3,}"),
+    re.compile(r"(?i)(?<![A-Za-z0-9-])--(?:user|proxy-user)(?:=|[ \t]+)\S+:\S+"),
+    re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"),
 )
 _HEX = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
@@ -284,6 +314,12 @@ def _verb_gate(command):
     gate = os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe-verb-gate.sh")
     r = subprocess.run(["bash", gate, command], capture_output=True, text=True, errors="replace")
     return r.returncode, (r.stdout or "").strip()
+
+
+def _nul_list(args, cwd):
+    """A path list read with -z: a path that git would quote ('a"b.md', a newline in a name) stays one exact path."""
+    rc, out = _git([args[0], "-z", *args[1:]], cwd)
+    return [p for p in out.split("\0") if p] if rc == 0 else []
 
 
 def _out(args, cwd):
@@ -458,6 +494,74 @@ def _secret_shaped(*values):
     return any(rx.search(v) for v in values if isinstance(v, str) for rx in _SECRET_SHAPES)
 
 
+def _bash_differs(cmd):
+    """True when bash would read `cmd` differently from shlex (the tokenizer every rule below uses).
+
+    Step 10.5 runs the command under bash, the rules judge shlex's tokens, and the two disagree on
+    ANSI-C quoting (`$'a'`), globs, brace lists, tilde and history words: `bash $'a.sh'` names a file
+    shlex calls `$a.sh`. Anything outside single quotes that bash would expand is refused, so what
+    shlex saw is what bash runs.
+    """
+    quote, i, n = None, 0, len(cmd)
+    word_start = True
+    while i < n:
+        ch = cmd[i]
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            word_start = False
+            continue
+        if quote == '"':
+            if ch == '"':
+                quote = None
+            elif ch == "$" and re.match(r"[A-Za-z0-9_{(@*#?$!-]", cmd[i + 1:i + 2] or " "):
+                return True
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch in "$*?[]~!":
+            return True
+        elif ch == "{":
+            end = cmd.find("}", i)
+            body = cmd[i + 1:end] if end != -1 else cmd[i + 1:]
+            if "," in body or ".." in body or end == -1:
+                return True
+        elif ch in " \t":
+            word_start = True
+            i += 1
+            continue
+        word_start = False
+        i += 1
+    return quote is not None
+
+
+def _option_denied(verb, toks):
+    """The denied option a token names, spelled any way a parser accepts (cluster, prefix, `=`)."""
+    for t in toks:
+        if not t.startswith("-") or t == "-":
+            continue
+        for opt in DENIED_OPTIONS.get(verb, ()):
+            if opt.startswith("--"):
+                name = t[2:].split("=", 1)[0] if t.startswith("--") else None
+                if name and (t == opt or t.startswith(opt + "=") or (len(name) >= 2 and opt[2:].startswith(name))):
+                    return opt
+            elif not t.startswith("--"):
+                # a short option: alone, glued to its value, or inside a cluster (`-sSK f`, `-calias.x=y`)
+                letter = opt[1:]
+                cluster = t[1:]
+                if verb == "git":
+                    if cluster.startswith(letter):
+                        return opt
+                elif letter in cluster:
+                    return opt
+    return None
+
+
 def static_problem(block):
     """A reason code when the block is not acceptable as written, else None. Never runs anything."""
     if "credentials_required" in block:
@@ -485,6 +589,9 @@ def static_problem(block):
         return "missing-field"
     if _HARD_CONTROL.search(text) or _CONTROL.search(expected) or _CONTROL.search(block.get("approved_by", "")):
         return "control-character"
+    if (len(text) > MAX_TEXT or len(cmd) > MAX_COMMAND or len(expected) > MAX_EXPECTED
+            or len(block.get("approved_by", "")) > MAX_APPROVED):
+        return "too-long"
     if _secret_shaped(text, cmd, expected, block.get("approved_by", "")):
         return "secret-shape"
     if kind == "judgement":
@@ -493,7 +600,7 @@ def static_problem(block):
         return "missing-field"
     if _CONTROL.search(cmd):
         return "control-character"
-    if _SHELL_ACTIVE.search(cmd) or _SUBSTITUTION.search(expected):
+    if _SHELL_ACTIVE.search(cmd) or _SUBSTITUTION.search(expected) or _bash_differs(cmd):
         return "shell-active-token"
     rc, _msg = _verb_gate(cmd)
     if rc == 1:
@@ -522,19 +629,32 @@ def static_problem(block):
         if key not in normalised:
             return "unpinned-script"
     else:
-        for opt in DENIED_OPTIONS.get(verb, ()):
-            for t in toks[1:]:
-                if t == opt or t.startswith(opt + "=") or (verb == "git" and opt == "-c" and t.startswith("-c") and not t.startswith("--")):
-                    return "dangerous-option"
+        if _option_denied(verb, toks[1:]):
+            return "dangerous-option"
+        if verb == "git" and (len(toks) < 2 or toks[1] not in GIT_READ_ONLY):
+            return "unlisted-git-subcommand"
     return None
 
 
 # ---------------------------------------------------------------------------------------------
 # verify
 # ---------------------------------------------------------------------------------------------
+def _escape(text):
+    """A copy that is safe to print: control characters and line separators become visible escapes."""
+    out = []
+    for ch in str(text):
+        o = ord(ch)
+        if o < 0x20 or o == 0x7F or ch in "\u2028\u2029":
+            out.append("\\x%02x" % o if o < 0x100 else "\\u%04x" % o)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 class _Emitter:
     def __init__(self, a):
         self.command_out = a.command_out
+        self.display_out = a.display_out
         self.out = a.out
         self.extra = {}
 
@@ -550,12 +670,16 @@ class _Emitter:
         if isinstance(block, dict):
             doc["kind"] = block.get("kind", "")
             doc["first_token"] = first_token(block.get("command", "")) if block.get("kind") == "command" else ""
-            if self.command_out:
+            if self.command_out and outcome == "OK":
                 # The raw command goes to a FILE so the Check 13 wrapper never has to quote it into
-                # a shell word. Written for every outcome that parsed a block: an UNTRUSTED or
-                # CHANGED block must be SHOWN to the founder before anyone decides.
+                # a shell word. Written ONLY for an OK verdict, so the file's existence is a go
+                # signal and no other outcome can leave a command behind for the wrapper to read.
                 with open(self.command_out, "w", encoding="utf-8") as fh:
                     fh.write(block.get("command", ""))
+            if self.display_out:
+                # What an UNTRUSTED, CHANGED or rejected block is SHOWN as: escaped, never executable.
+                with open(self.display_out, "w", encoding="utf-8") as fh:
+                    fh.write(_escape(block.get("command", "")) + "\n")
         line = json.dumps(doc, sort_keys=True)
         if self.out:
             with open(self.out, "w", encoding="utf-8") as fh:
@@ -565,6 +689,9 @@ class _Emitter:
 
 
 def _blocks_at(repo, rev, path):
+    size = (_out(["cat-file", "-s", f"{rev}:{path}"], repo) or "").strip()
+    if not size.isdigit() or int(size) > MAX_PLAN_BYTES:
+        return []  # absent, or too large to read: never pulled into memory
     text = _out(["show", f"{rev}:{path}"], repo)
     if text is None or len(text) > MAX_PLAN_BYTES:
         return []
@@ -670,34 +797,43 @@ def _tasks_plan(top, branch):
 
 
 def _history(repo, merge_base):
-    """One `git log` pass: every branch commit with its author, subject and name-status changes."""
+    """One `git log -z` pass: every branch commit with its author, subject and name-status changes.
+
+    Returns the commits, or None when the branch is longer than MAX_COMMITS (it is refused, not
+    sampled: a freeze hidden past the cap must not read as no freeze).
+    """
     rc, out = _git(
-        ["-c", "core.quotepath=false", "log", "--reverse", "--topo-order", "--name-status", "-M",
+        ["log", "-z", "--reverse", "--topo-order", "--name-status", "-M", f"--max-count={MAX_COMMITS + 1}",
          "--format=%x01%H%x01%ae%x01%s", f"{merge_base}..HEAD"],
         repo,
     )
     commits = []
     if rc != 0:
         return commits
-    for ln in out.splitlines():
-        if ln.startswith("\x01"):
-            _, sha, email, subj = (ln.split("\x01") + ["", "", "", ""])[:4]
+    toks = out.split("\0")
+    i = 0
+    while i < len(toks):
+        t = toks[i].lstrip("\n")
+        if toks[i].startswith("\x01"):
+            _, sha, email, subj = (toks[i].split("\x01") + ["", "", "", ""])[:4]
             commits.append({"sha": sha, "email": email.strip().lower(), "subject": subj, "changes": []})
-        elif ln.strip() and commits:
-            parts = ln.split("\t")
-            st = parts[0]
-            if st[:1] in ("R", "C") and len(parts) >= 3:
-                commits[-1]["changes"].append((st[:1], parts[1], parts[2]))
-            elif len(parts) >= 2:
-                commits[-1]["changes"].append((st[:1], "", parts[1]))
-    return commits
+            i += 1
+        elif re.fullmatch(r"[A-Z][0-9]*", t) and commits:
+            if t[0] in ("R", "C") and i + 2 < len(toks) + 1:
+                commits[-1]["changes"].append((t[0], toks[i + 1], toks[i + 2] if i + 2 < len(toks) else ""))
+                i += 3
+            else:
+                commits[-1]["changes"].append((t[0], "", toks[i + 1] if i + 1 < len(toks) else ""))
+                i += 2
+        else:
+            i += 1
+    return None if len(commits) > MAX_COMMITS else commits
 
 
 def _plans_at(repo, rev):
     """Every plan path at `rev`, grouped by plan identity: an archived plan and its live name are one plan."""
-    out = _out(["-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", rev, "--", PLANS_DIR], repo) or ""
     by_key = {}
-    for pth in out.splitlines():
+    for pth in _nul_list(["ls-tree", "-r", "--name-only", rev, "--", PLANS_DIR], repo):
         if pth.endswith(".md"):
             by_key.setdefault(_plan_key(pth), []).append(pth)
     return by_key
@@ -744,7 +880,7 @@ def _verify_candidate(emit, repo, path, lines, frozen):
     try:
         block = parse_block(lines)
     except ParseError as e:
-        return emit("FAIL", reason="unparseable", plan=path, detail=str(e))
+        return emit("FAIL", reason="unparseable", plan=path, detail=str(e)[:120])
     canon = canonical(block)
     info = {"plan": path, "freeze_sha": "", "freeze_source": "candidate", "hash": canonical_hash(canon),
             "block": canon, "refreeze": bool(frozen)}
@@ -771,7 +907,7 @@ def cmd_verify(a):
     repo = top
     head_sha = (_out(["rev-parse", "HEAD"], repo) or "").strip()
     emit.extra.update({"head_sha": head_sha, "dirty": _head_dirty(repo) if head_sha else False,
-                       "pr_author_checked": False})
+                       "pr_author_checked": False, "no_pr": bool(a.no_pr)})
     branch = _branch(repo)
 
     base = a.base[len("refs/remotes/"):] if a.base.startswith("refs/remotes/") else a.base
@@ -797,7 +933,7 @@ def cmd_verify(a):
             ["diff", "--name-only", "HEAD", "--", PLANS_DIR],
             ["ls-files", "--others", "--exclude-standard", "--", PLANS_DIR],
         ):
-            cands.update(p for p in (_out(args, repo) or "").splitlines() if p.endswith(".md"))
+            cands.update(p for p in _nul_list(args, repo) if p.endswith(".md"))
 
         def resolve(p):
             for _ in range(1000):
@@ -807,6 +943,9 @@ def cmd_verify(a):
             return _plan_key(p)
 
         commits = _history(repo, merge_base)
+        if commits is None:
+            return emit("FAIL", reason="history-too-long",
+                        detail=f"the branch has more than {MAX_COMMITS} commits since {a.base}")
         for c in commits:
             for st, old, new in c["changes"]:
                 if st == "R" and old:
@@ -835,7 +974,7 @@ def cmd_verify(a):
         # way is FAIL base-unresolvable below; finding none is NO-BLOCK, so a repo that never used
         # the feature still ships.
         for args in (["ls-files", "--", PLANS_DIR], ["ls-files", "--others", "--exclude-standard", "--", PLANS_DIR]):
-            cands.update(p for p in (_out(args, repo) or "").splitlines() if p.endswith(".md"))
+            cands.update(p for p in _nul_list(args, repo) if p.endswith(".md"))
 
     freeze_of = {}
     on_main = _plans_at(repo, merge_base) if merge_base else {}
@@ -912,12 +1051,12 @@ def cmd_verify(a):
     try:
         head_block = parse_block(lines)
     except ParseError as e:
-        return emit("FAIL", reason="unparseable", plan=path, detail=str(e))
+        return emit("FAIL", reason="unparseable", plan=path, detail=str(e)[:120])
     flines = (_blocks_at(repo, freeze_sha, fz["path"]) or [[]])[0]
     try:
         frozen_block = parse_block(flines)
     except ParseError as e:
-        return emit("FAIL", reason="unparseable", plan=path, detail="freeze copy: " + str(e))
+        return emit("FAIL", reason="unparseable", plan=path, detail="freeze copy: " + str(e)[:120])
 
     head_c, frozen_c = canonical(head_block), canonical(frozen_block)
     head_hash, frozen_hash = canonical_hash(head_c), canonical_hash(frozen_c)
@@ -965,7 +1104,7 @@ def cmd_verify(a):
         if os.path.islink(full):
             reasons.append("pinned-script-changed")
             break
-        rc, h = _git(["hash-object", "--", pth], repo)
+        rc, h = _git(["hash-object", "--no-filters", "--", pth], repo)
         if rc != 0 or h.strip() != sha:
             reasons.append("pinned-script-changed")
             break
@@ -1134,6 +1273,30 @@ def _derivable(v, cl, polarity):
     return {"SKIP-NOSANDBOX", "INVALID", "BLOCK-REJECTED"}
 
 
+def _unsafe_log_path(path):
+    """Why `path` may not be written, or None. A link anywhere below the repository root (the spec
+    directory, an ancestor, the log itself) would let a committed symlink send the append outside
+    the repository, or make `commit-log` commit the link."""
+    top = (_out(["rev-parse", "--show-toplevel"], os.path.dirname(path) if os.path.isdir(os.path.dirname(path)) else os.getcwd()) or "").strip()
+    real_top = os.path.realpath(top) if top else ""
+    cur = os.path.abspath(path)
+    chain = [cur]
+    if not top:  # outside any repository: the file and its own directory are all this can vouch for
+        chain.append(os.path.dirname(cur))
+    while top:
+        parent = os.path.dirname(cur)
+        if parent == cur or (real_top and os.path.realpath(parent) == real_top) or (top and parent == top):
+            break
+        chain.append(parent)
+        cur = parent
+    for part in chain:
+        if os.path.islink(part):
+            return f"{os.path.relpath(part)} is a symbolic link; the log is never written through a link"
+    if os.path.lexists(path) and not os.path.isfile(path):
+        return "the log path exists and is not a regular file"
+    return None
+
+
 def cmd_log(a):
     dg = []
     v = _load_json(a.verify_json, "the verify record", dg)
@@ -1163,7 +1326,7 @@ def cmd_log(a):
         if outcome in HEADLESS_REFUSED:
             print(f"refused: {outcome} is an interactive-only outcome; a headless run cannot record it", file=sys.stderr)
             return 3
-        if outcome in HEADLESS_STOPS or (outcome == "SKIP-NOSANDBOX" and block):
+        if outcome in HEADLESS_STOPS or outcome == "SKIP-NOSANDBOX":
             underlying, outcome = outcome, "STOPPED-AWAITING-FOUNDER"
     allowed = _derivable(v, cl, a.polarity)
     measured = underlying if outcome in ("OVERRIDDEN", "STOPPED-AWAITING-FOUNDER") else outcome
@@ -1196,15 +1359,30 @@ def cmd_log(a):
         "time_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "expected_matched": "" if cl.get("expected_matched") is None else str(bool(cl.get("expected_matched"))).lower(),
         "reason": reason,
+        "freeze_source": str(v.get("freeze_source", ""))[:20],
+        "no_pr": "true" if v.get("no_pr") else "false",
     }
     path = _resolve_log(a)
     if not path:
         print("refused: no log path (detached HEAD or an unsafe branch name); pass --log", file=sys.stderr)
         return 3
+    problem = _unsafe_log_path(path)
+    if problem:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 3
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fresh = not os.path.exists(path) or os.path.getsize(path) == 0
-    with open(path, "a", encoding="utf-8") as fh:
-        if fresh:
+    problem = _unsafe_log_path(path)  # again, now that the directories exist
+    if problem:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 3
+    try:
+        # O_NOFOLLOW: a link planted at the log path (dangling or not) is refused, never written through
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    except OSError as e:
+        print(f"refused: cannot open the log without following a link: {e.strerror}", file=sys.stderr)
+        return 3
+    with os.fdopen(fd, "a", encoding="utf-8") as fh:
+        if fh.tell() == 0:
             fh.write("| " + " | ".join(LOG_COLUMNS) + " |\n")
             fh.write("| " + " | ".join("---" for _ in LOG_COLUMNS) + " |\n")
         fh.write("| " + " | ".join(_cell(row[c]) for c in LOG_COLUMNS) + " |\n")
@@ -1219,6 +1397,15 @@ def cmd_commit_log(a):
         print("founder-check: no log to commit")
         return 0
     rel = os.path.relpath(path, top)
+    problem = _unsafe_log_path(path)
+    if problem:
+        print(f"founder-check: {problem}", file=sys.stderr)
+        return 1
+    if _branch(top) in {b.rsplit("/", 1)[-1] for b in _default_bases(top)}:
+        # Hooks are kept (they are the repository's own gates and the log may be public), so the one
+        # thing refused is committing the log straight onto the default branch.
+        print("founder-check: refusing to commit the log on the default branch", file=sys.stderr)
+        return 1
     rc, status = _git(["status", "--porcelain", "--", rel], top)
     if rc == 0 and not status.strip():
         print("founder-check: log already committed")
@@ -1291,7 +1478,8 @@ def build_parser():
     v.add_argument("--operator-login")
     v.add_argument("--no-pr", action="store_true", help="no pull request exists yet, so there is no PR author to compare")
     v.add_argument("--out", help="write the decision record (one JSON line) to this file")
-    v.add_argument("--command-out", help="write the block's raw command text to this file")
+    v.add_argument("--command-out", help="write the block's raw command text to this file, only for an OK verdict")
+    v.add_argument("--display-out", help="write an escaped, display-only copy of the command here, for every outcome that parsed a block")
     v.add_argument("--mode", choices=("interactive", "headless"), default="headless",
                    help="only an interactive run may run a re-frozen check; the default is headless")
     v.add_argument("--candidate", action="store_true", help="baseline mode: validate a block that has no freeze commit yet")
@@ -1339,7 +1527,7 @@ def build_parser():
     return p
 
 
-_OUTPUT_FLAGS = ("--out", "--command-out")
+_OUTPUT_FLAGS = ("--out", "--command-out", "--display-out")
 
 
 def _clear_outputs(argv):
