@@ -4152,16 +4152,16 @@ docker_builder_prune() {
 # step and the report AFTER it has returned — i.e. after the cleanup-merged lock was released by its
 # RETURN trap, so a slow Docker call never holds the lock siblings give up on after 5 s, and the
 # report prints on every early return (lock contended, fetch failure). The inner function is called
-# bare on purpose: an `||` would switch errexit off inside it. Under `set -e` an inner failure still
-# aborts exactly as before.
+# bare on purpose: an `||`/`if` would switch errexit off inside it. So an inner FAILURE aborts the
+# script under `set -e` exactly as it did when the dispatch called it directly — the Docker step and
+# the report are skipped on that path, and no status read follows the call (it could never run).
 cleanup_merged_run() {
   _SOLEUR_CLEANED_COUNT=0
   space_begin || true
   cleanup_merged_worktrees
-  local rc=$?
   docker_builder_prune || headless_or_stderr warn "cleanup-merged: docker builder prune step failed; continuing"
   report_cleanup_space || headless_or_stderr warn "cleanup-merged: space report failed; continuing"
-  return "$rc"
+  return 0
 }
 
 # Clean up stale Claude Code temp files to reclaim RAM.

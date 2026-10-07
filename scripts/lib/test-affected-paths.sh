@@ -1579,6 +1579,15 @@ AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
 # tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
 # (#7004/ADR-250); declared from the repo paths its suite file names.
 
+# tests/scripts/cleanup-merged-space — opt-in Docker prune, space report and the
+# cleanup-merged wrapper (#9677); declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_CLEANUP_MERGED_SPACE_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cleanup-merged-space.sh"
+)
+
 # tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
 # declared from the repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_SOLEUR_SANDBOX_PATHS=(

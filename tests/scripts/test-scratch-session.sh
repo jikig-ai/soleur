@@ -443,7 +443,7 @@ assert_fixture_dir "$FX"; mkdir -p "$FX_SD" "$FX/scripts/lib"
 cat > "$FX/scripts/lib/tmp-classify.sh" <<'WRAP'
 source "${REAL_TC:?}"
 case "${FX_MODE:-}" in
-  slowmap)    tc_build_inuse_map() { sleep 2; } ;;
+  slowmap)    tc_build_inuse_map() { sleep 4; } ;;
   badmap)     tc_build_inuse_map() { return 1; } ;;
   slowdecide) eval "$(declare -f tc_reap_decide | sed '1s/tc_reap_decide/_orig_tc_reap_decide/')"
               tc_reap_decide() { sleep 1; _orig_tc_reap_decide "$@"; } ;;
@@ -463,13 +463,15 @@ sweep_fx() {
     bash -c "source '$WM' >/dev/null 2>&1 || true; SCRIPT_DIR='$FX_SD'; sweep_orphan_scratch_dirs" 2>&1 || true
 }
 
-# T1: a map build slower than the timebox must not starve every later candidate.
+# T1: a map build slower than the timebox must not starve every later candidate. now_s has 1 s
+# granularity, so the margins are whole seconds wide (4 s build vs 3 s timebox) — a 1 s timebox would
+# flake whenever the clock ticked while the three candidates were being decided.
 reset_fixtures; mkdir -p "$SWEEP_STATE/soleur"
 for i in 1 2 3; do mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.slowmap$i"; : > "$FAKE_TMP/soleur-run.${DEAD}.slowmap$i/x"; done
-out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=slowmap SOLEUR_SWEEP_TIMEBOX_S=1)"
+out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=slowmap SOLEUR_SWEEP_TIMEBOX_S=3)"
 left=0; for i in 1 2 3; do [[ -d "$FAKE_TMP/soleur-run.${DEAD}.slowmap$i" ]] && left=$((left + 1)); done
 cases=$((cases + 1)); [[ "$left" == "0" ]] && printf '%s' "$out" | grep -q 'deferred=0' \
-  && pass "T1 map build (2s) over the 1s timebox: all 3 dead roots still reclaimed, deferred=0" || fail "T1 left=$left out=$out"
+  && pass "T1 map build (4s) over the 3s timebox: all 3 dead roots still reclaimed, deferred=0" || fail "T1 left=$left out=$out"
 cases=$((cases + 1)); printf '%s' "$out" | grep -qE 'drained=0 drained_bytes=0 map_s=[0-9]+' \
   && pass "T1s summary carries drained=, drained_bytes=, map_s=" || fail "T1s summary shape: $out"
 
@@ -524,7 +526,7 @@ if [[ -n "$DISK_BASE" ]]; then
 
   # T2d: restore after a drain reports the entry gone instead of failing.
   reset_fixtures; assert_fixture_dir "$QR"; rm -rf "$QR"
-  mkdir -p "$DISK_BASE/soleur-run.${DEAD}.restoreme"; : > "$DISK_BASE/soleur-run.${DEAD}.restoreme/x"
+  assert_fixture_dir "$DISK_BASE"; mkdir -p "$DISK_BASE/soleur-run.${DEAD}.restoreme"; : > "$DISK_BASE/soleur-run.${DEAD}.restoreme/x"
   SWEEP_BASES="$DISK_BASE" TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx >/dev/null
   SWEEP_BASES="$DISK_BASE" TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0 >/dev/null
   rout="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" SOLEUR_PURGE_BASES="$DISK_BASE" XDG_STATE_HOME="$SWEEP_STATE" bash "$REPO_ROOT/scripts/soleur-tmp-purge.sh" --restore all 2>&1 || true)"

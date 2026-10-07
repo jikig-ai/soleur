@@ -261,6 +261,79 @@ residue named in Consequences (d) is measured per family rather than guessed.
   `soleur-quarantine.<uid>/` is ever a scan or reap candidate (the root is a
   protected name and the scans exclude it by name).
 
+## Amendment 2 (2026-10-07, #9677)
+
+Measured on the operator host (2026-10-07), the session-start sweep did not reclaim marked dirs for
+three separate reasons, none of which the original decision named.
+
+### A2.1 The timebox excludes the one-time liveness map
+
+`sweep_orphan_scratch_dirs` bounds every arm by `SOLEUR_SWEEP_TIMEBOX_S` (10 s). Its liveness map is
+built lazily at the first declared-owner candidate and took 12.7 s on a 739-process host
+(`tc_build_inuse_map /tmp /var/tmp`), so the clock expired during the build and every later candidate
+was `deferred`, on every session start. The timebox now restarts when the map is built and bounds the
+per-candidate work that remains. The map cost is reported as `map_s` in the `SOLEUR_TMP_SWEEP` line.
+A host with no declared-owner candidate still pays nothing for the map.
+
+### A2.2 Opt-in session-start drain
+
+A marker-only dir on a disk base is quarantined, and only a TTL drain deletes it. The drain ran only
+from the optional systemd timer, which was not installed on the measured host (no crontab, no
+`tmpfs-guard.timer`), so 142 MB sat in quarantine with no trigger. The Trigger section's "installation
+is deliberately manual" stays true as the default; this amendment adds an explicit alternative that
+needs no install: with `SOLEUR_QUARANTINE_DRAIN=1` the sweep drains quarantine entries past their class
+TTL (scratch 7 days, worktrees 30 days) before it releases the `tmp-guard.lock`, so it is serialised
+against the guard and the purge. Boundaries:
+
+- **Opt-in.** The session sweep is unchanged by default (Amendment 1's "the session sweep is
+  unchanged" holds unless the variable is set). The script runs on machines Soleur does not own and
+  the drain is a terminal delete, so the consent model is the user's choice (CPO and CLO assessments,
+  plan review of #9677). Where the timer is installed it drains every five minutes and does not need
+  the variable.
+- **Floors.** Each TTL is floored (`SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN`, default 1440 min), so an exported
+  0 cannot make a session start empty the quarantine it just filled. The sweep does not read the
+  `SOLEUR_PURGE_QUAR_*` recovery seams.
+- **Bounds.** A 5 s drain timebox (`SOLEUR_SWEEP_DRAIN_TIMEBOX_S`) and a 200-entry cap
+  (`SOLEUR_SWEEP_DRAIN_MAX_ENTRIES`), enforced between top-level entries by an optional deadline and
+  cap on `tc_drain_quarantine`. One very large entry can overrun the bound because `find -delete`
+  cannot be interrupted; it stays in place and is retried next session, since the ledger row is written
+  only after a completed delete. Restore after a drain reports "already gone".
+- **No drain on the early returns** (`lock-contended`, `flock-missing`, `bases-empty`).
+- The sweep line gains `drained`, `drained_bytes` (`du -sk` before the delete) and `map_s`.
+
+### A2.3 Producer fix: the test, not the library
+
+44 of 71 marked dirs on the measured host were `gdboot.*`, created by
+`tests/scripts/test-git-data-boot-signal-poll.sh`. The sourced library
+`scripts/lib/git-data-boot-signal-poll.sh` calls `mktemp -t gdboot.*` and cannot own a trap (ADR-129).
+The suite now points `TMPDIR` at the sandbox it already removes on exit, so the library's scratch dies
+with the suite. The library is unchanged, and no marker-schema change is made (worktree-stamped markers
+are tracked in #9693).
+
+### A2.4 Effective-space report and the Docker carve-out
+
+`cleanup-merged` prints `SOLEUR_CLEANUP_SPACE` with the bytes it logically drained next to the measured
+`df -Pk` delta, and names btrfs snapper pinning when `findmnt` reports btrfs and the snapper `root`
+config exists (a read-only file check, never the `snapper` binary and never a snapshot). A snapshot pins
+every deleted block, so the two numbers can differ by design; the operator-host measurement was 17.6 GiB
+returned only after the snapshots were deleted.
+
+An opt-in `SOLEUR_DOCKER_PRUNE=1` (dry run) or `apply` prunes old Docker build cache and dangling images
+(`--filter until=24h`) once per `cleanup-merged` run, after the cleanup lock is released, and only when
+the run removed a worktree. An age-filtered prune over a shared daemon is the heuristic this ADR rejects
+for scratch, so it is admitted only as an explicit exception in the style of A1.3's durable-log GC:
+regenerable cache, opt-in, dry-run first, never `-a`, never a volume or container. Label-scoped pruning
+was considered and cut: no local `docker build` call site stamps a worktree label.
+
+### Consequences of Amendment 2
+
+- A1's "the session sweep is unchanged" now reads "unchanged by default"; the "weaker-evidence marker
+  moves are drained only by the timer's unattended drain" note also covers the opt-in session drain.
+- The default sweep reclaims more candidates per session on every machine (the A2.1 rebase), which is a
+  behaviour change that needs no opt-in because it only lets the existing, already-shipped conjuncts run.
+- Phase 7 of the #9677 plan installs the existing timer on the operator host; that is host
+  configuration, not plugin behaviour.
+
 ## Alternatives Considered
 
 | Alternative | Rejected because |
@@ -269,3 +342,7 @@ residue named in Consequences (d) is measured per family rather than guessed.
 | Heuristic size/age reaper over the shared bases | Measured and rejected in this ADR's Context: a heuristic dry run over shared `/tmp` marked ~1,500 authored files for deletion. Age and size are not ownership. |
 | Hardlink or worktree-based agent sandboxes instead of an owned copy | Rejected per #8800: a hardlinked or symlinked tree writes tool caches and installs through to the live checkout, and a worktree enters the registry that the reapers must not move. An owned copy has neither failure. |
 | Operator-attested glob rung (`--attest GLOB`) in the classifier and purge (A1.2, number reserved) | Rejected for this change. It is the only mechanism that could quarantine content with no machine-verifiable owner, it needs its own safety conjunction (disk-only bases, no `.git`, no live handle, age, glob guard), and the backlog it would serve is already tracked (#8786). The task needs a size-reporting view, which A1.5 provides. A documented one-off procedure in the runbook covers the operator's immediate need; it is weaker than a classifier rung (it is operator-typed and single-sourced only through the sourced library predicates), so its strictness is a runbook obligation, not a code-enforced one. Revisit only if the one-off procedure proves repeatedly necessary. |
+| Timer-only drain (status quo) | Not installed on the measured host; every installed machine would need the same manual step (A2.2) |
+| Raise `SOLEUR_SWEEP_TIMEBOX_S` instead of rebasing the deadline | The map cost scales with process count, so a larger constant is a guess; restarting the clock after the map is structural (A2.1) |
+| Detached background drain | The marker line leaves the session and the `flock` outlives it (A2.2) |
+| Label-scoped Docker prune; global `docker image prune -a` on a disk threshold | No local build stamps a worktree label; `-a` on a shared daemon deletes images other sessions need (A2.4) |

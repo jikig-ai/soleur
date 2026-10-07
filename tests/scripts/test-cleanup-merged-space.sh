@@ -7,7 +7,7 @@
 # TESTROOT is touched. Fixtures are synthesized (cq-test-fixtures-synthesized-only).
 #
 # MUTATION ROWS this suite must redden (checked by hand when the suite is edited):
-#   M1 drop the `|| warn` guard on docker_builder_prune        -> D5-timeout / W3 redden
+#   M1 make docker_builder_prune `return 1` on timeout AND drop the wrapper's `|| warn` -> W3 reddens (set -e)
 #   M2 add `--all` to the image prune call                      -> D2 reddens
 #   M3 print the Docker marker when the opt-in is unset         -> D1 reddens
 #   M4 call `snapper` for the snapshot hint                     -> S4 reddens
@@ -213,10 +213,10 @@ out="$(run -- 'cleanup_merged_worktrees() { echo INNER-EARLY-RETURN; return 0; }
 cases=$((cases + 1)); n="$(printf '%s\n' "$out" | grep -c 'SOLEUR_CLEANUP_SPACE' || true)"
 [[ "$n" == "1" && "$out" == *"RC=0"* ]] \
   && pass "W1 early inner return -> exactly one SOLEUR_CLEANUP_SPACE, rc preserved" || fail "W1 n=$n out=$out"
-# W2 the inner failure code propagates.
-out="$(run -- 'set +e; cleanup_merged_worktrees() { return 7; }; cleanup_merged_run; echo RC=$?')"
-cases=$((cases + 1)); [[ "$out" == *"RC=7"* ]] \
-  && pass "W2 the inner rc propagates through the wrapper" || fail "W2: $out"
+# W2 an inner FAILURE aborts under set -e exactly as the bare dispatch did: nothing after it runs.
+out="$(run -- 'cleanup_merged_worktrees() { return 7; }; cleanup_merged_run; echo AFTER-INNER-FAILURE')"
+cases=$((cases + 1)); [[ "$out" != *"AFTER-INNER-FAILURE"* && "$out" != *"SOLEUR_CLEANUP_SPACE"* ]] \
+  && pass "W2 an inner failure aborts under set -e (errexit semantics preserved, report skipped)" || fail "W2: $out"
 # W3 a failing Docker step does not abort the report (guarded).
 out="$(run SOLEUR_DOCKER_PRUNE=apply FAKE_DOCKER_SLEEP=3 SOLEUR_DOCKER_TIMEOUT_S=1 -- 'set -euo pipefail; cleanup_merged_worktrees() { _SOLEUR_CLEANED_COUNT=1; return 0; }; cleanup_merged_run; echo RC=$?')"
 cases=$((cases + 1)); [[ "$out" == *"reason=timeout"* && "$out" == *"SOLEUR_CLEANUP_SPACE"* && "$out" == *"RC=0"* ]] \

@@ -22,7 +22,10 @@ systemctl --user enable --now tmpfs-guard.timer
 systemctl --user list-timers tmpfs-guard.timer   # verify
 ```
 
-The shipped unit assumes the checkout is `~/soleur`. If it lives elsewhere:
+The shipped unit assumes the checkout is `~/soleur`. If it lives elsewhere
+(for example a bare-repo layout such as `/data/git-repositories/<org>/soleur`),
+point the drop-in at the **main checkout**, never at a `.worktrees/` entry — a
+worktree is removed when its branch merges and the unit would then fail:
 
 ```bash
 systemctl --user edit tmpfs-guard.service
@@ -54,6 +57,25 @@ not, which is exactly how the original guard silently never ran.
 session start, before the repo lock and the fetch gate. It covers the Reaper 3
 surface (dead `soleur-run.*`/marker dirs + a bounded worktree batch) but NOT
 Reaper 2's large-entry reap — the timer/cron remains the only trigger for that.
+
+By default the sweep only **quarantines** marker-only dirs on a disk base; it
+does not delete them. To have the session-start sweep also drain quarantine
+entries past their TTL on a host that cannot or does not install the timer,
+set `SOLEUR_QUARANTINE_DRAIN=1` in the session environment (ADR-250 Amendment
+2, #9677). It is opt-in because it is a terminal delete on a machine Soleur
+does not own. Tunables, all with safe defaults: `SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN`
+(10080), `SOLEUR_SWEEP_QUAR_WT_TTL_MIN` (43200), `SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN`
+(1440, a floor under both TTLs), `SOLEUR_SWEEP_DRAIN_TIMEBOX_S` (5) and
+`SOLEUR_SWEEP_DRAIN_MAX_ENTRIES` (200). The sweep line then reports `drained=`
+and `drained_bytes=`. With the timer installed (Option 1) the variable is not
+needed: the timer drains every run.
+
+`cleanup-merged` also prints a `SOLEUR_CLEANUP_SPACE` line: the bytes it
+logically drained next to the measured `df` delta of `/var/tmp`, and a note
+when the filesystem is btrfs with a snapper `root` config — freed blocks stay
+pinned by snapshots until they rotate out, and Soleur never deletes snapshots.
+`bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh space-report`
+prints the current state without running any cleanup.
 
 ## Verification
 

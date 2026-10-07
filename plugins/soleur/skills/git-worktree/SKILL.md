@@ -176,6 +176,17 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cle
 3. Removes selected worktrees
 4. Cleans up empty directories
 
+### `cleanup-merged` and `space-report`
+
+`cleanup-merged` runs at every session start: it removes worktrees whose branch merged, sweeps dead-owner scratch under `/tmp` and `/var/tmp` (ADR-250), and prints what it freed. `space-report` prints the same `SOLEUR_CLEANUP_SPACE` state line without running any cleanup (read-only).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SOLEUR_QUARANTINE_DRAIN=1` | off | Also delete scratch-quarantine entries past their TTL (scratch 7 d, worktrees 30 d; each floored at 1440 min), inside the sweep's lock, bounded to 5 s and 200 entries. Opt-in: a terminal delete on your machine. |
+| `SOLEUR_DOCKER_PRUNE=1` / `apply` | off | After a run that removed a worktree, prune Docker build cache and dangling images older than 24 h (`1` is a dry run, an upper bound). Never `-a`, volumes or containers. Any other value is ignored with `reason=invalid-value`. |
+
+Markers (stdout only, nothing leaves your machine): `SOLEUR_TMP_SWEEP` (adds `drained`, `drained_bytes`, `map_s`), `SOLEUR_DOCKER_PRUNE` (a `skipped reason=` names every no-op), and `SOLEUR_CLEANUP_SPACE logical_bytes=… df_delta_bytes=… fstype=… snapshots=…`. `logical_bytes` counts drained bytes only; `df_delta_bytes` is the signed change in free space on `/var/tmp` and can be smaller, or negative, because other processes write too and, on btrfs with snapper, snapshots keep deleted blocks pinned (`snapshots=snapper`; Soleur never deletes snapshots). `snapshots=none` also covers a differently named snapper config, Timeshift, or a `/var/tmp` outside a snapshotted subvolume. The sweep needs `flock`, so on stock macOS the sweep and drain skip with `flock-missing`; the Docker step and the report still run. Set `SOLEUR_DOCKER_PRUNE` in your shell profile or the session environment.
+
 ### `sync-bare-files` or `sync`
 
 Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the repo uses `core.bare=true` — on-disk files at the bare root become stale after merges since git never updates them. Auto-called after `cleanup-merged` cleans branches in bare repo context.
