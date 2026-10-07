@@ -28,6 +28,13 @@ make_functions() {
   jq -nc --argjson ids "$1" '{data:{functions:[ $ids[] | {id:.} ]}}'
 }
 
+# #6940 — build a /v0/gql `functions` response from FULL function objects
+# ({id, slug, triggers:[{type,value}]}), the post-extension response shape.
+# $1 = JSON array of function objects.
+make_functions_full() {
+  jq -nc --argjson fns "$1" '{data:{functions:$fns}}'
+}
+
 # --- Test 1: empty registry → registry_empty:true, function_count:0 ---
 test_empty_registry() {
   echo "TEST: registry-probe — empty registry reports registry_empty:true count:0"
@@ -411,7 +418,83 @@ test_pf_scrub_bodies_byte_identical() {
   else echo "  FAIL: extracted only $n of ${#files[@]} copies"; FAIL=$((FAIL+1)); fi
 }
 
+# ===========================================================================
+# #6940 item 1 (ADR-146 §Deferred item 1) — the probe emits per-function trigger
+# data ({id, slug, triggers:[{type,value}]}) in a `functions` array alongside the
+# legacy three fields, so op=verify's zero-run discovery can tell CRON functions
+# from event-driven ones. Backward compatible: `function_ids`, `function_count`
+# and `registry_empty` are unchanged; `functions` is additive.
+# ===========================================================================
+
+# --- #6940 T1: the GQL query carries triggers { type value } ---
+test_rp_query_carries_triggers() {
+  echo "TEST: registry-probe — FUNCTIONS_GQL_QUERY requests triggers { type value }"
+  if grep -qF 'functions { id slug triggers { type value } }' "$TARGET"; then
+    echo "  PASS: query requests id slug triggers{type,value}"; PASS=$((PASS+1));
+  else echo "  FAIL: query does not request trigger subfields"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6940 T2: full fixture — .functions carries id/slug/triggers losslessly ---
+test_rp_functions_field_cron() {
+  echo "TEST: registry-probe — CRON trigger type/value preserved in .functions"
+  local fixture; fixture=$(mktemp)
+  make_functions_full '[
+    {"id":"fn-cron","slug":"cron/daily-triage","triggers":[{"type":"CRON","value":"0 8 * * *"}]},
+    {"id":"fn-ev","slug":"events/signup","triggers":[{"type":"EVENT","value":"user/signup"}]}
+  ]' > "$fixture"
+
+  local out; out=$(INNGEST_PROBE_FUNCTIONS_FIXTURE="$fixture" bash "$TARGET")
+  assert_eq "stdout still a single JSON object" "object" "$(echo "$out" | jq -r 'type')"
+  assert_eq ".functions is an array of 2" "2" "$(echo "$out" | jq '.functions | length')"
+  assert_eq ".functions[0].id" "fn-cron" "$(echo "$out" | jq -r '.functions[0].id')"
+  assert_eq ".functions[0].slug" "cron/daily-triage" "$(echo "$out" | jq -r '.functions[0].slug')"
+  assert_eq ".functions[0].triggers[0].type is CRON" "CRON" "$(echo "$out" | jq -r '.functions[0].triggers[0].type')"
+  assert_eq ".functions[0].triggers[0].value is the cron expr" "0 8 * * *" "$(echo "$out" | jq -r '.functions[0].triggers[0].value')"
+  assert_eq ".functions[1] EVENT trigger preserved (not coerced)" "EVENT" "$(echo "$out" | jq -r '.functions[1].triggers[0].type')"
+  # Backward compat — the legacy fields are untouched by the additive field.
+  assert_eq "function_ids unchanged" "fn-cron,fn-ev" "$(echo "$out" | jq -r '.function_ids | join(",")')"
+  assert_eq "function_count unchanged" "2" "$(echo "$out" | jq -r '.function_count')"
+  assert_eq "registry_empty unchanged" "false" "$(echo "$out" | jq -r '.registry_empty')"
+  rm -f "$fixture"
+}
+
+# --- #6940 T3: BOTH functions' trigger sets survive (per-element projection) ---
+test_rp_functions_projection_per_element() {
+  echo "TEST: registry-probe — .functions projects EVERY element, not just the first"
+  local fixture; fixture=$(mktemp)
+  make_functions_full '[
+    {"id":"fn-a","slug":"a","triggers":[{"type":"CRON","value":"0 0 * * 0"}]},
+    {"id":"fn-b","slug":"b","triggers":[{"type":"CRON","value":"0 11 1 1,4,7,10 *"},{"type":"EVENT","value":"audit/manual"}]}
+  ]' > "$fixture"
+
+  local out; out=$(INNGEST_PROBE_FUNCTIONS_FIXTURE="$fixture" bash "$TARGET")
+  assert_eq "second element's first trigger preserved" "0 11 1 1,4,7,10 *" "$(echo "$out" | jq -r '.functions[1].triggers[0].value')"
+  assert_eq "second element carries BOTH triggers" "2" "$(echo "$out" | jq '.functions[1].triggers | length')"
+  rm -f "$fixture"
+}
+
+# --- #6940 T4: pre-extension (id-only) registry response degrades to triggers:[] ---
+# A host still serving the pre-push response shape (or an older inngest that omits
+# the field per-object) must not crash the probe — the consumer degrades to
+# skip-discovery, not a failed op=verify.
+test_rp_id_only_degrades_to_empty_triggers() {
+  echo "TEST: registry-probe — id-only response shape yields functions[].triggers:[]"
+  local fixture; fixture=$(mktemp)
+  make_functions '["fn-a","fn-b"]' > "$fixture"
+
+  local out; out=$(INNGEST_PROBE_FUNCTIONS_FIXTURE="$fixture" bash "$TARGET")
+  assert_eq "function_count still 2" "2" "$(echo "$out" | jq -r '.function_count')"
+  assert_eq ".functions[0].id survives" "fn-a" "$(echo "$out" | jq -r '.functions[0].id')"
+  assert_eq ".functions[0].triggers is an empty array" "0" "$(echo "$out" | jq '.functions[0].triggers | length')"
+  assert_eq ".functions[0].triggers is present (not absent)" "true" "$(echo "$out" | jq '.functions[0] | has("triggers")')"
+  rm -f "$fixture"
+}
+
 echo "=== inngest-registry-probe.sh test suite ==="
+test_rp_query_carries_triggers
+test_rp_functions_field_cron
+test_rp_functions_projection_per_element
+test_rp_id_only_degrades_to_empty_triggers
 test_empty_registry
 test_nonempty_registry
 test_malformed_fails_loud

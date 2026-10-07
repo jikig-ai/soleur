@@ -209,4 +209,25 @@ jobs:
           # with all three unset, op=verify FAILS CLOSED rather than scanning an unanchored window.
           CUTOVER_WINDOW_FROM: ${{ vars.CUTOVER_WINDOW_FROM }}
           CUTOVER_WINDOW_UNTIL: ${{ vars.CUTOVER_WINDOW_UNTIL }}
+          # #6940 item 1 (ADR-146 §Deferred 1, landed 2026-10-07) — the lookback for
+          # op=verify's zero-run discovery re-probe: registry cron functions with
+          # zero runs in the fsm-anchored window are re-scanned over
+          # [now - this, now] via a function_ids-scoped doublefire call. Default
+          # 15897600 s (~184 d) ≈ 2x the quarterly slowest registered cron
+          # (cron-legal-audit, `0 11 1 1,4,7,10 *`). OPTIONAL repo var; empty ⇒
+          # the script default.
+          CUTOVER_DISCOVERY_LOOKBACK_S: ${{ vars.CUTOVER_DISCOVERY_LOOKBACK_S }}
+          # #6940 item 2 — DEFERRED 2026-10-07: CUTOVER_REGISTRY_BASELINE and
+          # CUTOVER_QUIESCE_PROBES are intentionally NOT mapped here. The script
+          # reads them (the P3-c registry-fullness precondition and the
+          # quiesce-probe loop), and mapping the baseline ACTIVATES a dormant
+          # `exit 1` upstream of the 2.6 doublefire check — so per ADR-146
+          # §Deferred 3 the mapping lands ONLY after AC-V4 (a green
+          # exactly-once verify) is proven. Latest op=verify runs: DOUBLE-FIRE
+          # detected (35415585389, 2026-09-19) and VERIFIED (QUALIFIED) on
+          # 2026-09-15 — AC-V4 is NOT green. When it lands, add the env
+          # completeness guard anchored `(?<![A-Za-z0-9_])CUTOVER_[A-Z_]+`
+          # (unanchored grep matches the Doppler secret names
+          # INNGEST_CUTOVER_FLIP/INNGEST_CUTOVER_QUIESCE, which must never be
+          # mapped).
         run: bash "${GITHUB_WORKSPACE}/scripts/cutover-inngest.sh"
