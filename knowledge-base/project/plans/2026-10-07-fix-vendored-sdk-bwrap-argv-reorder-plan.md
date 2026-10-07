@@ -14,6 +14,31 @@ refs: [5862, 5863, 5733, 5848, 5864, 5913, 5875, 8623, 8752, 9595, 9601, 9614, 9
 
 # fix: broad /workspaces deny on the vendored SDK's deny-then-restore ordering — closes the ADR-075 tenant-isolation TOCTOU
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-07 (deepen-plan, sequential-fallback — no Task fan-out in this harness)
+**Sections enhanced:** Proposed Solution (fixture-diff expectation), Technical Considerations, Phase 3 audit, Dependencies & Risks, References
+**Research basis:** installed-binary builder inspection (`claude-agent-sdk-linux-x64` 2.1.284 embedded JS), ADR-075/ADR-079, capture/projection source, committed fixture, live `gh` issue/PR verification, `lint-guard-contract.py` + Scope-Check gate runs.
+
+### Key Improvements
+
+1. Substituted the issue's patch-mechanism prerequisite with the verified
+   vendored-builder ordering at 2.1.284 (cut, pending Phase-3 audit).
+2. Identified and closed the readOnly (support-persona) regression: broad
+   deny without an `allowRead` restore would blind support sessions.
+3. Corrected the dispatch's "token-order-only" fixture-diff expectation to
+   the additive shape a covering `--tmpfs` landing produces.
+4. Phase-3 audit broadened from `/dev/null` masks to ALL pre-tmpfs
+   ws-internal mounts (`.claude` self-binds, `.cc-writes`) — same shadow class.
+
+### New Considerations Discovered
+
+- The vendor's per-landing restore loop also emits `--ro-bind` restores for
+  `allowWithinDeny` paths — the readOnly arm reuses that, not a new mechanism.
+- The production bwrap shim preserves `--args` fds but never inspects argv
+  content — a contingency argv-rewrite would change that contract (flagged,
+  not planned).
+
 ## Overview
 
 ADR-075 is `accepted` with a bounded residual TOCTOU: the agent sandbox hides
@@ -215,6 +240,17 @@ Every path that reaches the agent sandbox's filesystem boundary:
   trigger list already includes `server/agent-runner-sandbox-config.ts`.
 - `knowledge-base/engineering/architecture/decisions/ADR-075-…md` — the ADR
   whose residual this closes.
+- Test-compatibility audit (deepen §4, tunable-semantic sweep): every
+  `denyRead` reference under `test/` was enumerated —
+  `agent-runner-query-options.test.ts` (`toContain` on the KB deny path —
+  compatible), `cc-dispatcher-real-factory.test.ts` /
+  `cc-dispatcher-warm-presandbox-mkdir.test.ts` /
+  `cc-dispatcher-prefill-guard.test.ts` (mock fixtures already carrying the
+  broad `["/workspaces","/proc"]` shape — compatible, and evidence the shape
+  is well-formed), `server/git-worktree-validity.test.ts` (comment only).
+  Only `agent-runner-helpers.test.ts`, `agent-sandbox-sibling-deny.test.ts`,
+  and `sandbox-canary.test.ts` pin the enumerated-set contract and need
+  updates.
 
 **Premise validation (Phase 0.6):** issue #5862 OPEN (`gh issue view` —
 verified); every cited artifact exists on this branch (`agent-runner-sandbox-config.ts`,
@@ -334,9 +370,14 @@ enumeration-era invariant.
 2. **Audit the diff before accepting** — never hand-edit (#4932 trap):
    - `--tmpfs /tmp/soleur-sandbox-canary` present;
    - at least one `--bind ${CANARY_WS} ${CANARY_WS}` after it (the restore);
-   - the `/dev/null` file-mask set still present **and positioned so it is not
-     shadowed by the workspace restore bind** (if masks are emitted before
-     the restore `--bind`, they are wiped — STOP → contingency below);
+   - **every** ws-internal mount from the prior fixture still lands in a
+     position that survives the workspace restore bind — that means the
+     `/dev/null` file-mask set AND the `${CANARY_WS}/.claude` /
+     `${CANARY_WS}/.claude/.cc-writes` ro self-binds. Any pre-tmpfs ws-internal
+     mount emitted only before the covering tmpfs is shadowed by the restore
+     `--bind` (e.g., a ro-pinned `.claude` would silently become writable
+     inside the sandbox). Each must be re-emitted post-restore or confirmed
+     intentionally shadowed — STOP → contingency below;
    - `prepDirs` includes the literal root;
    - `droppedForDeterminism` changes are audit-only.
 3. `SANDBOX_CANARY_MODE=verify` → `{"verdict":"verify_ok","reason":"ok"}`.

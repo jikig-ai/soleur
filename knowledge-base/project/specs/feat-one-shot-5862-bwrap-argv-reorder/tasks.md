@@ -29,7 +29,7 @@ the plan's `## Acceptance Criteria`.
 ## Phase 3 — In-image re-capture + audit (merge-blocker)
 
 - [ ] T3.1 `ANTHROPIC_API_KEY="$(doppler secrets get ANTHROPIC_API_KEY --project soleur --config ci --plain)" SANDBOX_CANARY_MODE=capture bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh` → fixture regenerated (capture-emitted bytes only). (AC4)
-- [ ] T3.2 Audit the diff: covering `--tmpfs` on the capture root present; ≥1 `--bind ${CANARY_WS} ${CANARY_WS}` after it; `/dev/null` mask set still effective (not shadowed by the restore); `prepDirs` gained the literal root. If falsified → STOP, contingency path per plan (shim rewrite → re-plan). (AC4, AC5)
+- [ ] T3.2 Audit the diff: covering `--tmpfs` on the capture root present; ≥1 `--bind ${CANARY_WS} ${CANARY_WS}` after it; EVERY ws-internal mount from the prior fixture (`/dev/null` file masks AND `${CANARY_WS}/.claude` / `.cc-writes` ro self-binds) still effective — i.e., re-emitted in a position that survives the ws restore bind, or confirmed intentionally shadowed; `prepDirs` gained the literal root. If falsified → STOP, contingency path per plan (shim rewrite → re-plan). (AC4, AC5)
 - [ ] T3.3 `SANDBOX_CANARY_MODE=verify bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh` → `verify_ok`. (AC4)
 
 ## Phase 4 — ADR-075 amendment
