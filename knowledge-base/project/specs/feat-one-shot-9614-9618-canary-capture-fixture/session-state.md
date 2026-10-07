@@ -24,3 +24,8 @@ None. (Non-blocking notes: the `soleur:deepen-plan` Post-Enhancement AskUserQues
 - Coverage: `Reviewed-Coverage: inline-fallback 0/8` — all 8 panel seats failed at spawn on the free-model rate limit (reset ~16:01 UTC); inline review covered security/architecture/performance/simplicity + test-design + data-integrity + git-history, 0 findings.
 - Optional resume: re-run `soleur:review` with the real panel after the limit resets — the diff is small and already proven end-to-end (in-image capture `captured` + `verify_ok` at 0.3.284), so this is belt-and-suspenders, not a gap.
 - Trailer commit: 736cd33553.
+
+## Fix-Round 1 (post-panel)
+- Panel re-ran at full coverage after the rate-limit reset: 8/8 seats. Findings: P1×2 (fixture non-replayable — unprepped subpath bind sources + literal tmpfs target; fixture stale vs #9599 `--unsetenv`), P2×2 (no structural invariant test; doCapture JSDoc), P3×~10 (stale enumerations, test vocab drift, traversal, mount-order coverage).
+- Fixes: commits 7563b6aa, aec5907e (synced main + in-image re-capture: --unsetenv names only), 288a4291, 6d1a490f.
+- Fix-round seats 7/7: 0 P1 / 0 P2. data-integrity empirically replayed the new fixture under real bwrap 0.12.0 — exit 0. In-image --verify: verify_ok (twice).
