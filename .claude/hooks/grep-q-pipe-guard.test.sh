@@ -1058,14 +1058,14 @@ printf '%s\n' '# a comment that names SIGPIPE' 'echo "$x" | grep -c >/dev/null p
   || sweep_probe_fail+=("codemod-clusters: --write did not turn the control fixture (-qE, -iEq, --quiet, -F -x -q --, -qe, a V-cluster behind an env prefix, an if-condition) into its expected -c >/dev/null form, or exited ${cm_write_rc:-<err>}")
 cmp -s "$cmr/scripts/t.test.sh" "$probe/t.want" \
   || sweep_probe_fail+=("codemod-twins: the must-PASS twins (2>/dev/null is not stdout, a here-string is not a heredoc, << in arithmetic, > inside a quoted pattern) did not all convert")
-cm_queue="$(grep '^QUEUE scripts/r.test.sh:' <<<"$cm_dry" | cut -d: -f3,4 | LC_ALL=C sort | tr '\n' ' ')"
+cm_queue="$({ grep '^QUEUE scripts/r.test.sh:' <<<"$cm_dry" || true; } | cut -d: -f3,4 | LC_ALL=C sort | tr '\n' ' ')"
 [[ "$cm_queue" == "H-m:-m H-m:-m X:operand-q X:stdout-redirected X:unbounded-producer data:heredoc data:heredoc data:heredoc data:quoted " ]] && cmp -s "$cmr/scripts/r.test.sh" "$probe/r.want" \
   || sweep_probe_fail+=("codemod-refusals: the refusal fixture queued [${cm_queue:-<none>}] (want -eq, -m, -qm1, an unbounded producer, a redirected stdout, a quoted hook input and three heredoc bodies, all unchanged)")
-cm_susp="$(grep '^QUEUE scripts/s.test.sh:' <<<"$cm_dry" | cut -d: -f3,4)"
+cm_susp="$({ grep '^QUEUE scripts/s.test.sh:' <<<"$cm_dry" || true; } | cut -d: -f3,4)"
 [[ "$cm_susp" == "suspect:file-names-sigpipe" ]] && cmp -s "$cmr/scripts/s.test.sh" "$probe/s.conv" \
   || sweep_probe_fail+=("codemod-suspect: a file naming SIGPIPE queued [${cm_susp:-<none>}] (want suspect:file-names-sigpipe) and --reviewed-suspect did not convert it")
 [[ "$cm_again_rc" == 0 && "$cm_again" == *"CHANGED: 0 lines"* ]] \
-  || sweep_probe_fail+=("codemod-idempotent: a second --write run exited ${cm_again_rc:-<err>} and reported [$(grep -o 'CHANGED: [0-9]* lines' <<<"$cm_again")] (want CHANGED: 0 lines)")
+  || sweep_probe_fail+=("codemod-idempotent: a second --write run exited ${cm_again_rc:-<err>} and reported [$(grep -o 'CHANGED: [0-9]* lines' <<<"$cm_again" || true)] (want CHANGED: 0 lines)")
 # The tool's population equals this file's own scan on the same scratch root (the real-repo parity, 827 = 827, is read once in the PR body).
 cm_pop="$(_cm apply --root "$sr" 2>&1 | sed -n 's/^POPULATION: \([0-9]*\) lines.*/\1/p')"
 [[ "$cm_pop" == "$sw_hits" ]] \
@@ -1148,8 +1148,13 @@ printf '%s\n' 'scripts/w.test.sh:1:not in the diff' > "$vr/stale.list"
 _vrun "$vr/ok" --hand-edits "$vr/stale.list"; vr_stale_rc="$vr_rc"; vr_stale_out="$vr_out"
 printf '%s\n' 'scripts/w.test.sh:1-2:wider than the hunk' > "$vr/wide.list"
 _vrun "$vr/two" --hand-edits "$vr/wide.list"; vr_wide_rc="$vr_rc"; vr_wide_out="$vr_out"
-[[ "$vr_ctl_rc" == 0 && "$vr_stale_rc" == 1 && "$vr_stale_out" == *"stale hand-edit entry"* && "$vr_wide_rc" == 1 && "$vr_wide_out" == *"hand-edit entry covers"* ]] \
-  || sweep_probe_fail+=("verify-stale: a listed edit absent from the diff exited ${vr_stale_rc:-<err>} and an over-wide entry exited ${vr_wide_rc:-<err>} (want 1 and 1: 'stale hand-edit entry' and 'hand-edit entry covers')")
+# an entry that runs past the changed lines into UNCHANGED ones is caught only by the final range check (no per-line visit reaches it)
+_vrepo "$vr/edge"; _cm apply --root "$vr/edge" --write >/dev/null 2>&1; sed -i "6s/.*/echo HAND/" "$vr/edge/scripts/w.test.sh"
+printf '%s\n' 'scripts/w.test.sh:6-7:runs into the unchanged last line' > "$vr/edge.list"
+_vrun "$vr/edge" --hand-edits "$vr/edge.list"; vr_edge_rc="$vr_rc"; vr_edge_out="$vr_out"
+[[ "$vr_ctl_rc" == 0 && "$vr_stale_rc" == 1 && "$vr_stale_out" == *"stale hand-edit entry"* && "$vr_wide_rc" == 1 && "$vr_wide_out" == *"hand-edit entry covers"* \
+   && "$vr_edge_rc" == 1 && "$vr_edge_out" == *"covers lines that are not hand edits"* ]] \
+  || sweep_probe_fail+=("verify-stale: a listed edit absent from the diff exited ${vr_stale_rc:-<err>}, an over-wide entry ${vr_wide_rc:-<err>} and an entry running into unchanged lines ${vr_edge_rc:-<err>} (want 1, 1 and 1: 'stale hand-edit entry', 'hand-edit entry covers', 'covers lines that are not hand edits')")
 
 # A probe check that is DELETED cannot fail, so the number of checks is pinned: every check above ends in
 # `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
