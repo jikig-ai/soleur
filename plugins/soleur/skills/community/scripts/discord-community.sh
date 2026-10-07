@@ -51,11 +51,11 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 # --- Transport-confinement diagnostics (#7873) --------------------------------
 # Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
 # curl's own stderr (which can carry the URL). A failed request then has four
-# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
-# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
-# ordinary network failure. So each failure emits ONE structured marker carrying
-# all four discriminators, beside a human line that names the bypass instead of
-# blaming the founder's connectivity.
+# competing causes the founder cannot tell apart: the proxy this script
+# deliberately bypassed, a ~/.curlrc that `--disable` dropped, a TLS trust
+# variable it cleared, or an ordinary network failure. So each failure emits ONE
+# structured marker carrying the discriminators, beside a human line that names
+# the bypass instead of blaming the founder's connectivity.
 SOLEUR_TRANSPORT_SCRIPT="discord-community.sh"
 SOLEUR_TRANSPORT_PLATFORM="Discord"
 
@@ -96,7 +96,8 @@ proxy_bypassed() {
 # claiming it was applied. It now reports whether a proxy was actually configured
 # for this request to bypass, which is the fact a reader needs. `refusal` was the
 # constant "none" at every call site, so the cause it exists to discriminate could
-# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+# never appear; the field stays for a caller that can refuse for a named cause, and
+# this script has none, so it passes "none".
 #
 # `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
 # which is correct against an attacker and BREAKS a founder whose corporate CA
@@ -162,8 +163,9 @@ readonly DISCORD_API="https://discord.com/api/v10"
 # directive and make curl issue a second request. This guard refuses anything outside
 # the base64url.base64url.base64url shape BEFORE the value is formatted into the
 # stream (the check validate_env always ran, now also the guard in front of the
-# config stream; the `=~` runs in the C locale so the ranges are ASCII). The refusal line is fixed and value-free (never the token), goes to
-# stderr, and exits 1: it is NOT a transport failure, so it must not go through
+# config stream; the `=~` runs in the C locale so the ranges are ASCII).
+# The refusal line is fixed and value-free (never the token), goes to stderr,
+# and exits 1: it is NOT a transport failure, so it must not go through
 # report_transport_failure, whose text blames ~/.curlrc and proxies.
 _discord_token_ok() {
   local LC_ALL=C t="${1:-}"
@@ -171,6 +173,7 @@ _discord_token_ok() {
 }
 refuse_token_shape() {
   printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=token_shape\n' "$SOLEUR_TRANSPORT_SCRIPT" >&2
+  echo "Error: DISCORD_BOT_TOKEN is not shaped like a Discord bot token, so nothing was sent. Expected three dot-separated base64url segments (letters, digits, '-' and '_'), with no 'Bot ' prefix, quotes, spaces, or line breaks (including a trailing CR or newline). The value is not shown." >&2
   exit 1
 }
 
@@ -197,10 +200,8 @@ validate_env() {
     exit 1
   fi
 
-  # Bot tokens follow the pattern: base64.base64.base64
+  # Bot tokens follow the pattern: base64url.base64url.base64url
   if ! _discord_token_ok "${DISCORD_BOT_TOKEN}"; then
-    echo "Error: DISCORD_BOT_TOKEN has invalid format." >&2
-    echo "Expected format: base64.base64.base64" >&2
     refuse_token_shape
   fi
 

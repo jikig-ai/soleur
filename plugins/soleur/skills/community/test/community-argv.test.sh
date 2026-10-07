@@ -178,7 +178,7 @@ argv_has() {
 }
 
 # argv_absent <value> [n]: <value> is NOT on the recorded argv (all calls, or call n) AND curl actually ran.
-# Unlike `argv_absent`, it is FALSE when the argv file is missing, so a row cannot pass because curl
+# Unlike `! argv_has`, it is FALSE when the argv file is missing, so a row cannot pass because curl
 # never ran (a refused or crashed run records no argv at all).
 argv_absent() {
   local files=("$MOCK"/argv.*)
@@ -454,6 +454,11 @@ for cls in "${DISC_BAD_CLASSES[@]}"; do
   check "discord-community token ($cls): curl never invoked" test "$(curl_calls)" -eq 0
   check "discord-community token ($cls): no leak of the value" no_leak
   check "discord-community token ($cls): not the transport diagnostic" no_diag
+  check "discord-community token ($cls): one human line names the expected shape" \
+    grep -qF "three dot-separated base64url segments" <<<"$ERR"
+  check "discord-community token ($cls): the human line says the value is not shown" grep -qF "The value is not shown." <<<"$ERR"
+  check "discord-community token ($cls): not the old base64.base64.base64 wording" \
+    bash -c '! grep -qF -e "invalid format" -e "base64.base64.base64" <<<"$1"' _ "$ERR"
 done
 
 echo "== discord-setup.sh =="
@@ -528,6 +533,8 @@ check "discord-setup: CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE CU
 # --- harness rows: a shim that stops recording stdin turns the Discord stdin row RED -------
 run_sut - "" "${DC_ENV[@]}" SHIM_MUTATE=nostdin -- bash "$DISCORD_COMMUNITY" guild-info
 check "harness: a shim that stops recording stdin makes the Discord stdin row RED" not chk_bot_stdin 1 "$DISC_TOK"
+check "harness: that control is RED because of the shim: curl ran and no stdin file was recorded (not a refused credential)" \
+  bash -c '[[ "$1" -ge 1 && ! -e "$2" ]]' _ "$(curl_calls)" "$MOCK/stdin.1"
 
 # ===================================================================================
 echo "== bsky-community.sh createSession =="
@@ -690,6 +697,8 @@ badjwt_rows "bsky-community post"
 # --- harness row: a shim that stops reading the stdin body turns the body rows RED -------------
 run_sut - "" "${BC_ENV[@]}" SHIM_MUTATE=nobody -- bash "$BSKY_COMMUNITY" create-session
 check "harness: a shim that stops recording the stdin body makes the body-content row RED" not chk_body_ok 1 "$BSKY_HANDLE_FIX" "$BSKY_PW_FIX"
+check "harness: that control is RED because of the shim: curl ran and no body file was recorded (not a refused credential)" \
+  bash -c '[[ "$1" -ge 1 && ! -e "$2" ]]' _ "$(curl_calls)" "$MOCK/body.1"
 
 echo "== bsky-setup.sh verify =="
 # verify sources $GIT_ROOT/.env; the file is synthesized here and lives in the scratch checkout.
@@ -909,13 +918,75 @@ check "negctl: argv_absent is false when curl never ran (no argv file)" not argv
 check "negctl: jq_argv_absent is false when jq never ran (no jq argv file)" not jq_argv_absent "$BSKY_PW_FIX"
 check "negctl: curl_env_lacks is false when curl never ran" not curl_env_lacks CURL_CA_BUNDLE
 
+# rc1_refusal: the marker is on stderr but the exit code is NOT 1 (a refusal that exits 0 or 3 must not read as one)
+M="$(mut_make discord-community.sh $'The value is not shown." >&2\n  exit 1' $'The value is not shown." >&2\n  exit 0')"
+disc_bad_val newline
+run_sut - "" "DISCORD_BOT_TOKEN=$BAD_VAL" "DISCORD_GUILD_ID=$GUILD" -- bash "$M" guild-info
+check "negctl: rc1_refusal is false when the marker is present but the refusal exits 0 (discord-community 1->0)" \
+  bash -c '[[ "$1" -eq 0 ]] && grep -qxF "SOLEUR_CREDENTIAL_REFUSED script=discord-community.sh reason=token_shape" <<<"$2"' _ "$RC" "$ERR"
+check "negctl: rc1_refusal is false for that exit-0 refusal" not rc1_refusal discord-community.sh
+M="$(mut_make bsky-community.sh $'The value is not shown." >&2\n  exit 1' $'The value is not shown." >&2\n  exit 3')"
+run_sut - "" "BSKY_HANDLE=$BAD_HANDLE" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" -- bash "$M" create-session
+check "negctl: the bsky exit-3 refusal mutant keeps the marker and returns 3" \
+  bash -c '[[ "$1" -eq 3 ]] && grep -qxF "SOLEUR_CREDENTIAL_REFUSED script=bsky-community.sh reason=control_char" <<<"$2"' _ "$RC" "$ERR"
+check "negctl: rc1_refusal is false when the marker is present but the refusal exits 3 (bsky 1->3)" not rc1_refusal bsky-community.sh control_char
+run_sut - "" "BSKY_HANDLE=$BAD_HANDLE" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" -- bash "$BSKY_COMMUNITY" create-session
+check "negctl: rc1_refusal is true for the real refusal (control)" rc1_refusal bsky-community.sh control_char
+# bsky_field_line: the human line names the wrong field, or names the other field too
+check "negctl: bsky_field_line is true when the line names the refused field only (control)" bsky_field_line BSKY_HANDLE BSKY_APP_PASSWORD
+check "negctl: bsky_field_line is false when the line names a different field than the one expected" not bsky_field_line BSKY_APP_PASSWORD BSKY_HANDLE
+check "negctl: bsky_field_line is false when the other field also appears on stderr" not bsky_field_line BSKY_HANDLE BSKY_HANDLE
+# jq_recording_ok / jq_argv_has: jq never ran (a refused run), and a run whose jq argv lacks the value
+check "negctl: jq_recording_ok is false when jq never ran (refused credential, nothing recorded)" not jq_recording_ok
+check "negctl: jq_argv_has is false when jq never ran" not jq_argv_has "$BSKY_HANDLE_FIX"
+run_sut - "" "${BC_ENV[@]}" -- bash "$BSKY_COMMUNITY" create-session
+check "negctl: jq_recording_ok is true for a real createSession run (control)" jq_recording_ok
+check "negctl: jq_argv_has is false for a value that is not on any jq argv (the password, in a real run)" not jq_argv_has "$BSKY_PW_FIX"
+M="$(mut_make bsky-community.sh \
+  $'BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \\\n    jq -n \'{identifier: $ENV.BSKY_ID, password: $ENV.BSKY_PW}\'' \
+  $'jq -n --arg id "$BSKY_HANDLE" --arg pw "$BSKY_APP_PASSWORD" \'{identifier: $id, password: $pw}\'')"
+run_sut - "" "${BC_ENV[@]}" -- bash "$M" create-session
+check "negctl: jq_recording_ok is false when no jq call reads \$ENV.BSKY_PW (the --arg mutant)" not jq_recording_ok
+
+# --- transport-block drift guard ------------------------------------------------------------
+# discord-setup.sh carries a verbatim copy of discord-community.sh's transport block. Extract both
+# (from the `unset SSLKEYLOGFILE ...` line through the closing brace of report_transport_failure)
+# and require byte equality, normalising ONLY the two per-script assignments.
+echo "== transport-block drift =="
+transport_block() { # <file>
+  awk '/^unset SSLKEYLOGFILE /{p=1} p{print} p && /^report_transport_failure\(\) \{/{r=1} r && /^}$/{exit}' "$1" |
+    sed -e 's/^SOLEUR_TRANSPORT_SCRIPT=.*/SOLEUR_TRANSPORT_SCRIPT=<normalised>/' \
+        -e 's/^SOLEUR_TRANSPORT_PLATFORM=.*/SOLEUR_TRANSPORT_PLATFORM=<normalised>/'
+}
+DRIFT="$SANDBOX/drift"
+mkdir -p "$DRIFT"
+transport_block "$DISCORD_COMMUNITY" > "$DRIFT/community.blk"
+transport_block "$DISCORD_SETUP" > "$DRIFT/setup.blk"
+blk_sane() { # <block-file>: non-empty, spans the whole block, and is long enough not to be a truncated extraction
+  [[ -s "$1" ]] && grep -qxF 'report_transport_failure() {' "$1" && grep -qF 'echo "Check your network connection and try again." >&2' "$1" \
+    && [[ "$(wc -l < "$1")" -ge 80 ]]
+}
+check "drift: the discord-community.sh transport block extracted whole (non-vacuous)" blk_sane "$DRIFT/community.blk"
+check "drift: the discord-setup.sh transport block extracted whole (non-vacuous)" blk_sane "$DRIFT/setup.blk"
+check "drift: the discord-setup.sh transport block is byte-identical to discord-community.sh's (bar the two per-script literals)" \
+  cmp -s "$DRIFT/community.blk" "$DRIFT/setup.blk"
+# Mutation: one character changed in discord-setup's copy of the block must turn the comparison RED.
+sed 's/eight fields, on the saved stdout/eight fieldz, on the saved stdout/' "$DISCORD_SETUP" > "$DRIFT/setup-mut.sh"
+check "drift: the one-character mutation landed in the sandbox copy" not cmp -s "$DISCORD_SETUP" "$DRIFT/setup-mut.sh"
+transport_block "$DRIFT/setup-mut.sh" > "$DRIFT/setup-mut.blk"
+check "drift: a one-character edit to discord-setup's copy makes the comparison RED" not cmp -s "$DRIFT/community.blk" "$DRIFT/setup-mut.blk"
+# Normalisation is limited to the two literals: changing them stays GREEN, changing a third literal does not.
+sed -e 's/^SOLEUR_TRANSPORT_SCRIPT=.*/SOLEUR_TRANSPORT_SCRIPT="other.sh"/' -e 's/^SOLEUR_TRANSPORT_PLATFORM=.*/SOLEUR_TRANSPORT_PLATFORM="Other"/' "$DISCORD_SETUP" > "$DRIFT/setup-lit.sh"
+transport_block "$DRIFT/setup-lit.sh" > "$DRIFT/setup-lit.blk"
+check "drift: the two per-script literals are the only normalised difference" cmp -s "$DRIFT/community.blk" "$DRIFT/setup-lit.blk"
+
 echo
 echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 372 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 372\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 411 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 411\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]
