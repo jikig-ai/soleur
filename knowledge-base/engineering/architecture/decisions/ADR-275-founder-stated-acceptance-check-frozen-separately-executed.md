@@ -10,7 +10,7 @@ tags: [preflight, plan, acceptance, founder, sandbox, freeze, self-hosted, check
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-274: Founder-stated acceptance check, frozen and separately executed
+# ADR-275: Founder-stated acceptance check, frozen and separately executed
 
 ## Status
 

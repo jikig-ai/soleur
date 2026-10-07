@@ -5,7 +5,7 @@
 Linked from `plan/SKILL.md` step 2.13. Lets a founder state, in their own words and before work
 starts, what shows a piece of work is done. The plan stores it as a `founder_check:` block under
 `## Acceptance Criteria`; `soleur:preflight` Check 13 runs it later, in a step separate from the
-work. Decision record: ADR-274. This file is the only place the block's YAML shape lives.
+work. Decision record: ADR-275. This file is the only place the block's YAML shape lives.
 
 **Wording is a contract.** Print the pinned constants with `founder-check.py text <key>` (the
 script, not this prose, is the source) and never paraphrase them. Every call below is

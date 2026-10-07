@@ -66,7 +66,7 @@ The distinction matters because layers 2 and 3 are not security controls.
 
 > **2026-10-06 amendment (#9578).** Layers 1 and 2 apply **unchanged** to a founder-approved
 > command: preflight Check 13 runs it through this same Step 10.5 fence and declares no sandbox
-> of its own (ADR-274). Approval is a **consent step, not an authority grant** — the founder
+> of its own (ADR-275). Approval is a **consent step, not an authority grant** — the founder
 > reading and approving the exact text widens nothing the sandbox forbids, and Layer 3's
 > `credentials_required` waiver does **not** extend to Check 13: a check that needs credentials
 > is a `needs-your-eyes` judgement check, never a waived run.

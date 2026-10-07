@@ -31,7 +31,7 @@ Recorded at plan time 2026-10-06 from plan-review (taste and user-challenge item
 ## Addendum — 2026-10-06 (the 12-seat review round; supersedes items above where it differs)
 
 10. **UNTRUSTED no longer prompts.** Item "Applied" above said a block whose freeze or PR author is not the local operator needs
-    show-before-run interactively. It is now a FAIL that shows the command and its author and runs nothing (ADR-274 addendum, item 2).
+    show-before-run interactively. It is now a FAIL that shows the command and its author and runs nothing (ADR-275 addendum, item 2).
     Operator's call if a founder-confirmed run of someone else's command is wanted after all; the cost is that the confirmation is
     the founder approving a command they did not write.
 11. **`creates:` is cut** (the work can satisfy a path-exists check by writing the file); baselines of "the new file exists" are not

@@ -3,7 +3,7 @@ title: "A helper that runs nothing still has to parse like the shell that will"
 date: 2026-10-07
 category: workflow-patterns
 module: preflight
-tags: [preflight, founder-check, static-parse, mutation-testing, legal-wording, ratchet, ADR-274]
+tags: [preflight, founder-check, static-parse, mutation-testing, legal-wording, ratchet, ADR-275]
 ---
 
 # Learning: a helper that runs nothing still has to parse like the shell that will
@@ -23,7 +23,7 @@ PR #9637 (issue #9578) added preflight Check 13: a founder-stated acceptance che
 - Keep every founder-facing sentence in one `WORDING` map in `founder-check.py`. The references and ADR cite the constant, and the exact-string tests read it. The legal constraint (no "verified", "proven" or "safe" in a founder-facing string) is then one assertion over the map rather than a sweep.
 - Run the mutation battery in a sandbox from `scripts/soleur-sandbox.sh`: control first and green, assert each mutation landed, and treat a crash as neither a kill nor a survivor.
 - Regenerate the integrity floors from the measured run (`448792fd50`, `3f7315f085`) rather than editing numbers.
-- Record what is only a declaration (`--no-pr`, `--mode interactive` are unauthenticated) in ADR-274 as a limit, not as a control.
+- Record what is only a declaration (`--no-pr`, `--mode interactive` are unauthenticated) in ADR-275 as a limit, not as a control.
 
 ## Key Insight
 

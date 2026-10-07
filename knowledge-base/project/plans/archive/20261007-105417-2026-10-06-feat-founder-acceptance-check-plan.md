@@ -55,7 +55,7 @@ Properties the feature must buy:
 - ADR-229 is a skill-level lifecycle FSM (`DECLARED_TRANSITIONS` in `plugins/soleur/lib/workflow-fidelity.ts`). `preflight` and `qa` are non-node skills, dropped by the offline classifier before pairing. It models no "stopped awaiting operator" state.
 - Lifecycle body ceilings (`plugins/soleur/test/skill-body-budget.json`, ratchet down only): brainstorm 140,875/141,000 B, plan 119,864/120,000 B, qa 36,992/37,000 B, work 361,760/362,000 B, ship 273,995/274,000 B. `preflight` has no ceiling row (113,570 B).
 - `SKILL_DESCRIPTION_WORD_BUDGET` is 2413 with 2413 used (headroom 0, measured through the same `discoverSkills()` path by `bun test … -t "cumulative description word count"`, passing). It counts only `description:` frontmatter, so body prompt text does not spend it, and this plan edits no description.
-- Next free ADR ordinal on `origin/main` is **ADR-274** (ADR-273 is the highest). Provisional; `soleur:ship` re-verifies.
+- Next free ADR ordinal on `origin/main` is **ADR-275** (ADR-273 is the highest). Provisional; `soleur:ship` re-verifies.
 - Layer-7 observability rule: a self-hosted CLI surface has **no Soleur-side sink, by design**; it needs a stdout marker plus a durable committed artifact and a discoverability test that reads that artifact (`observability-coverage-reviewer.md` layer 7).
 
 ### Institutional learnings applied
@@ -86,7 +86,7 @@ One open `code-review` issue touches planned files: **#4133** (schema parity tes
 
 **Q(b) — how the frozen text survives plan amendment.** Four rules.
 
-1. *Find the block narrowly.* Check 13 reads only the first fenced block inside the `## Acceptance Criteria` section of plans touched by this branch (`git diff --name-only origin/main...HEAD -- knowledge-base/project/plans/`, plus a plan already present at `git merge-base origin/main HEAD`). It never matches by `branch:` frontmatter (813 of 1,690 plans carry no `branch:` key) and never reads the plan path from the PR body. A `founder_check:` quoted under any other heading (this plan's own `## Design`, ADR-274, the reference file, fixtures) is ignored. Two plans each carrying a block, or a plan whose realpath leaves `knowledge-base/project/plans/`, is FAIL. Check 13 has its own resolver; the shared plan-file resolution strips fenced blocks and cannot be reused.
+1. *Find the block narrowly.* Check 13 reads only the first fenced block inside the `## Acceptance Criteria` section of plans touched by this branch (`git diff --name-only origin/main...HEAD -- knowledge-base/project/plans/`, plus a plan already present at `git merge-base origin/main HEAD`). It never matches by `branch:` frontmatter (813 of 1,690 plans carry no `branch:` key) and never reads the plan path from the PR body. A `founder_check:` quoted under any other heading (this plan's own `## Design`, ADR-275, the reference file, fixtures) is ignored. Two plans each carrying a block, or a plan whose realpath leaves `knowledge-base/project/plans/`, is FAIL. Check 13 has its own resolver; the shared plan-file resolution strips fenced blocks and cannot be reused.
 2. *Freeze = the earliest reviewed copy.* If the plan already carries the block at `git merge-base origin/main HEAD`, that copy is the freeze (it was reviewed on main). Otherwise the freeze is the earliest commit in `origin/main..HEAD` whose plan carries the block under that heading. The freeze should precede the first commit that touches anything outside `knowledge-base/`. A violation (a plugin edit that precedes the plan commit, as on this very branch) is **not a hard FAIL**: it takes the same stop-and-ask path as a change, so a legitimate mixed history is answered by the founder instead of by a heuristic.
 3. *Compare canonical fields, not bytes.* HEAD's `kind`, `text`, `command`, `expected`, `pins`, `approved_by`, `approved_at` are compared to the freeze. Reformatting passes. Any edit, or an ordering violation, is `CHANGED-SINCE-APPROVAL` and stops to ask: restore the frozen text, or accept anyway (`OVERRIDDEN`, one-line reason, both texts logged). Headless it is FAIL. Freeze exists but no block at HEAD is FAIL, never SKIP. A deliberate mid-work change of the check is therefore an override, never a silent edit; re-running `soleur:plan` on a branch that already carries a freeze **imports the block verbatim and does not re-ask**.
 4. *Who wrote it.* A block executes without a prompt only when its authorship anchors to the local operator: the freeze commit's author email equals `git config user.email`, and, when a PR exists, the PR author's login equals `gh api user --jq .login`. Otherwise the block is `UNTRUSTED`: interactively Check 13 shows the exact command and asks before running; headless it is FAIL and never executes. This closes the path where a contributor's PR head carries a self-consistent plan, hash and freeze, and the operator's own preflight would run it (Check 10 is path-gated to sensitive diffs; Check 13 is not).
@@ -182,7 +182,7 @@ Edit `plugins/soleur/skills/preflight/SKILL.md` (uncapped, but 113 KB and read o
 
 ### Phase 5 — Decision record and architecture
 
-- 5.1 ADR-274 (provisional) and the inline ADR-175 amendment (Architecture Decision, below).
+- 5.1 ADR-275 (provisional) and the inline ADR-175 amendment (Architecture Decision, below).
 - 5.2 `model.c4` and the generated `model.likec4.json`: edit the `contributor` description and the adjacent comment (Architecture Decision, C4 views), regenerate the JSON with `scripts/regenerate-c4-model.sh`; run `apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts` and `plugins/soleur/test/c4-count-parity.test.sh`.
 
 ### Phase 6 — Verification
@@ -199,7 +199,7 @@ Edit `plugins/soleur/skills/preflight/SKILL.md` (uncapped, but 113 KB and read o
 - `plugins/soleur/skills/preflight/references/check-13-founder-check.md`
 - `plugins/soleur/test/preflight-founder-check.test.ts`
 - `plugins/soleur/test/fixtures/founder-check/` (fixture set, ~14 files; counted as one entry)
-- `knowledge-base/engineering/architecture/decisions/ADR-274-founder-stated-acceptance-check-frozen-separately-executed.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-275-founder-stated-acceptance-check-frozen-separately-executed.md`
 
 ## Files to Edit
 
@@ -245,13 +245,13 @@ Edit `plugins/soleur/skills/preflight/SKILL.md` (uncapped, but 113 KB and read o
 | `preflight/SKILL.md` Check 13 | "a separate step runs it" | asked |
 | freeze commit + `hash` | "it is frozen with a hash" | asked |
 | baseline mode | "must fail before work starts" | asked |
-| ADR-274 + ADR-175 amendment | "An ADR amending ADR-175 is required." | asked |
+| ADR-275 + ADR-175 amendment | "An ADR amending ADR-175 is required." | asked |
 | `work/SKILL.md` rule line | "`work` must not edit the frozen block" [spec TR1] | asked |
 | `founder-check.py` | — | inferred — justification: parse, canonical hash, history ancestry and classification are deterministic decisions that need a testable implementation; spec TR3 requires "mutation proof that a founder-approved check cannot be edited, weakened or satisfied vacuously", which prose in a SKILL.md cannot supply |
 | `pins:` and the interpreter-verb rule | — | inferred — justification: a check that runs a script the agent writes during work is the agent certifying itself, the failure ADR-175 names; the hash alone cannot see it (plan-review P0) |
 | authorship anchor and `UNTRUSTED` | — | inferred — justification: Check 13 is not path-gated, so a contributor's PR head carrying a self-consistent block would otherwise run on the operator's machine with no prompt (plan-review P0, security) |
 | Step 10.5 wrapper and sandbox-health control | "Extend the plan acceptance field and the preflight Check 10 sandbox path." [brief] | asked |
-| `creates:` field | — | cut in the review round: a path that is absent now and present later is a check the work can satisfy by writing the file, so it certifies nothing about the founder's intent (ADR-274 addendum item 1) |
+| `creates:` field | — | cut in the review round: a path that is absent now and present later is a check the work can satisfy by writing the file, so it certifies nothing about the founder's intent (ADR-275 addendum item 1) |
 | INVALID classification | — | inferred — justification: a tooling failure (timeout, command not found) would otherwise count as a valid baseline fail, certifying a check that can never pass |
 | per-attempt log (`attempt_n`) | — | inferred — justification: a pass after failures must be visible to the reader as such; retries themselves are uncapped because the founder and the agent control both |
 | `founder-check-log.md` | "Show the exact command, the time and the output, and show passes and fails equally" [brainstorm] | asked |
@@ -281,7 +281,7 @@ Edit `plugins/soleur/skills/preflight/SKILL.md` (uncapped, but 113 KB and read o
 - [x] `founder-check-log.md` is append-only per `log`, holds only rc, outcome, `attempt_n`, `tested_sha`, hash, time, `expected_matched` and an override's reason, and no output text; a no-bwrap host reports "your check did not run on this host" and baseline capture is refused (judgement only).
 - [x] `founder-check.py summary` prints `founder-check: <N> rows` over a populated log and `founder-check: no log` otherwise, each with its own test.
 - [x] `python3 scripts/lint-skill-body-budget.py` is green against the merge base; `plan/SKILL.md` grew by at most 136 bytes; `work`, `qa`, `ship`, `brainstorm` and every `description:` are unchanged; the `components.test.ts` budget test still passes at 2413/2413; `preflight-founder-check.test.ts` is registered in the suite-integrity gate.
-- [x] ADR-274 exists (ordinal re-verified against `origin/main`), the ADR-175 amendment is present, ADR-229 and `workflow-fidelity.ts` are unmodified, and the `model.c4` and regenerated `model.likec4.json` edits pass `c4-code-syntax`, `c4-render` and `c4-count-parity`.
+- [x] ADR-275 exists (ordinal re-verified against `origin/main`), the ADR-175 amendment is present, ADR-229 and `workflow-fidelity.ts` are unmodified, and the `model.c4` and regenerated `model.likec4.json` edits pass `c4-code-syntax`, `c4-render` and `c4-count-parity`.
 - [x] `python3 scripts/lint-guard-contract.py` reports 4 entries for this plan.
 - [x] The CLO has reviewed the final prompt, notice, banner and result wording (three reviews; the third, PASS-WITH-EDITS, landed as drafted in `202a5d9d16`); no marketing, changelog or demo copy claims the feature.
 
@@ -383,9 +383,9 @@ discoverability_test:
 
 ### ADR
 
-- **Create ADR-274** (provisional ordinal) "Founder-stated acceptance check: frozen, separately executed", terse shape, `related_adrs: [ADR-175, ADR-229]`. One ADR carries everything: the freeze-copy anchor and why the hash alone is self-certification; the pinned-script rule and why a script the agent writes is the agent certifying itself; the authorship anchor and what it does and does not authenticate; the outcome vocabulary (VACUOUS, INVALID, FAILED, PASSED, FOUNDER-CONFIRMED, OVERRIDDEN, UNTRUSTED, STOPPED-AWAITING-FOUNDER); the ADR-229 full-read verification (and that "change the check" mid-ship is the declared `work → plan` edge); the Linux-first statement; the stale-pass window; the headless reach gap; and the named residuals (history rewriting, the operator's own agent forging identity strings, shared host loopback #7412). Alternatives are cited from this plan's Cut List, not restated.
-- **Amend ADR-175** with a short inline blockquote under its Layer 1 heading, in that file's `> **YYYY-MM-DD amendment (#N).**` convention, pointing to ADR-274: Layers 1 and 2 apply unchanged to a founder-approved command; approval is a consent step, not an authority grant; credentialed checks get no waiver path.
-- **ADR-229: no change** (Q(e)); the ADR-274 text says so with the evidence.
+- **Create ADR-275** (provisional ordinal) "Founder-stated acceptance check: frozen, separately executed", terse shape, `related_adrs: [ADR-175, ADR-229]`. One ADR carries everything: the freeze-copy anchor and why the hash alone is self-certification; the pinned-script rule and why a script the agent writes is the agent certifying itself; the authorship anchor and what it does and does not authenticate; the outcome vocabulary (VACUOUS, INVALID, FAILED, PASSED, FOUNDER-CONFIRMED, OVERRIDDEN, UNTRUSTED, STOPPED-AWAITING-FOUNDER); the ADR-229 full-read verification (and that "change the check" mid-ship is the declared `work → plan` edge); the Linux-first statement; the stale-pass window; the headless reach gap; and the named residuals (history rewriting, the operator's own agent forging identity strings, shared host loopback #7412). Alternatives are cited from this plan's Cut List, not restated.
+- **Amend ADR-175** with a short inline blockquote under its Layer 1 heading, in that file's `> **YYYY-MM-DD amendment (#N).**` convention, pointing to ADR-275: Layers 1 and 2 apply unchanged to a founder-approved command; approval is a consent step, not an authority grant; credentialed checks get no waiver path.
+- **ADR-229: no change** (Q(e)); the ADR-275 text says so with the evidence.
 
 ### C4 views
 
@@ -424,7 +424,7 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 
 **Harness rows.** Suite edit: replace `verify` with a stub that always exits 0 — the suite must go RED (a count floor on RED and on must-PASS fixtures means `0 passed, 0 failed` cannot exit 0). Must-PASS non-canonical inputs: a YAML-reformatted block with equal canonical fields; a rebased branch with new SHAs; a learnings-only commit before the freeze; a plan already on `main`.
 
-**Anchor.** `hash:` is self-consistent by construction and proves nothing alone (it is an identity shown in the log). What lives outside the HEAD tree is the freeze copy in git history, which a one-commit edit of block-plus-hash cannot rewrite (row 4), and the authorship anchor (Guard 3). History rewriting and the operator's own agent forging identity strings are not stopped; ADR-274 names them. Tamper-evident, not tamper-proof.
+**Anchor.** `hash:` is self-consistent by construction and proves nothing alone (it is an identity shown in the log). What lives outside the HEAD tree is the freeze copy in git history, which a one-commit edit of block-plus-hash cannot rewrite (row 4), and the authorship anchor (Guard 3). History rewriting and the operator's own agent forging identity strings are not stopped; ADR-275 names them. Tamper-evident, not tamper-proof.
 
 ### Guard 2 — Must-fail baseline
 
@@ -463,7 +463,7 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 
 **Harness rows.** Suite edit: delete the `--mode` refusal — the suite must go RED. Must-PASS: an interactive OVERRIDDEN with a reason; a block authored by the local identity.
 
-**Anchor.** None outside the commit: the operator's own agent can pass `--mode interactive` and can write identity strings, so this control makes an override legible, attributable and visible in the PR diff; it does not authenticate the founder, and ADR-274 must not describe it as authentication. Its real protective value is against a *contributor's* PR head.
+**Anchor.** None outside the commit: the operator's own agent can pass `--mode interactive` and can write identity strings, so this control makes an override legible, attributable and visible in the PR diff; it does not authenticate the founder, and ADR-275 must not describe it as authentication. Its real protective value is against a *contributor's* PR head.
 
 ### Guard 4 — Single sandbox chokepoint
 
@@ -490,7 +490,7 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 - **Contributor PR heads.** Check 13 is not path-gated like Check 10, so it widens the execution trigger on a checked-out PR head. Guard 3's authorship anchor and the interactive show-before-run close the headless and no-prompt paths; the shared host network namespace (#7412) is unchanged and is not claimed closed.
 - **Stale-pass window** between preflight (Phase 5.4) and Phase 5.5's code-mutating gates and the Phase 7 behind-sync: the pass wording, the aggregate row and the log row name the commit tested.
 - **One-shot gives no founder to ask.** Headless runs never create a block and never override; a headless run whose plan already carries a block stops on failure, on `UNTRUSTED` and on no-sandbox. The most common autonomous path therefore skips Check 13 unless an interactive plan session captured a check earlier. The banner and the ADR say so plainly. Reach is a deferral issue (below), not hidden.
-- **Linux-first.** bwrap is Linux-only (ADR-175 Consequences), so on macOS the check cannot run and capture is refused except as a judgement check. ADR-274 states this; an un-sandboxed run on those hosts would contradict ADR-175's fail-closed posture and is not offered.
+- **Linux-first.** bwrap is Linux-only (ADR-175 Consequences), so on macOS the check cannot run and capture is refused except as a judgement check. ADR-275 states this; an un-sandboxed run on those hosts would contradict ADR-175's fail-closed posture and is not offered.
 - **Hosted path.** `plugins/soleur/` is also vendored into the hosted image. Check 13's marker is metadata-only (outcome, hash, `tested_sha`), safe for the Bash marker extractor; hosted capture and any hosted claim are out of scope and wait on #9620. A hosted agent that reaches Check 13 finds no block (capture is interactive plan only) and prints the SKIP banner.
 - **Step 10.5 reuse is textual, by wrapper.** Step 10.5 is a fenced block an agent follows, not a callable. Check 13's wrapper sets `CMD`, defines `sanitize`, runs the fence inside `OUT=$( … )` so the `exit 0` branches end only the subshell, appends `DT_RC` and `DT_STDOUT_SAFE` to the subshell output, and then maps that output (a table in the reference file) to Check 13 outcomes while dropping the Check 10-labelled sentinel lines, so fleet telemetry does not count Check 13's dark runs as Check 10's. The alternative — extracting the sandbox into a script — conflicts with the pinned inline `BWRAP_ARGS` and `lint-window-closure-assertion.py` and is **not** taken here; it is the operator's call if the wrapper proves brittle in Phase 0.3 or Phase 3.
 - **Most real checks may be judgement checks.** The verb list has ten entries, no pipes, a read-only repo and a 15-second cap; `npm test | tail`, `pytest` and `make` are rejected or hit those limits. Phase 0.3 measures this before building, and capture warns the founder before approval.
@@ -518,7 +518,7 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 > **Supersedes the Acceptance Criteria above where it differs.** The criteria above are kept as written, ticked at the time they were
 > true. Four are no longer true as written: `creates` in the edit-after-freeze list is cut; "interactive shows the exact command and
 > runs nothing before the answer" is now "shown and never run" (UNTRUSTED is a FAIL); the log no longer holds `output_sha256`; and the
-> `plan/SKILL.md` growth bound is unchanged. See ADR-274's addendum for the decisions. Each box below is ticked only after its literal
+> `plan/SKILL.md` growth bound is unchanged. See ADR-275's addendum for the decisions. Each box below is ticked only after its literal
 > command was run in this round.
 
 - [x] `bun test plugins/soleur/test/preflight-founder-check.test.ts` reports 0 failures, and the mutation battery (every new guard, run in an allocated sandbox with an unmutated control first) kills every mutant that is not recorded below as equivalent.

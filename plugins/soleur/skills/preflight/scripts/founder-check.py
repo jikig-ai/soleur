@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""preflight Check 13 -- founder-stated check helper (#9578, ADR-274).
+"""preflight Check 13 -- founder-stated check helper (#9578, ADR-275).
 
 A founder states, in plain words, what proves a piece of work is done. The plan stores it as a
 `founder_check:` block under `## Acceptance Criteria`; a freeze commit pins it; a step other than
@@ -22,7 +22,7 @@ Subcommands
   summary     print `founder-check: <N> rows` (the layer-7 probe)
   text        print one pinned wording constant (`text --list` names them all)
 
-Honest limits, restated where they matter and in ADR-274: this is tamper-EVIDENT, not
+Honest limits, restated where they matter and in ADR-275: this is tamper-EVIDENT, not
 tamper-proof. The authorship anchor compares identity strings the operator's own agent can also
 write, `--mode headless` is declared by the caller, and history rewriting is not stopped. A pin
 fixes the bytes of the script a command names, never what that script loads. `hash:` is an

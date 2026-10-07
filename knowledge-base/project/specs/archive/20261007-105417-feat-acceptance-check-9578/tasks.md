@@ -4,7 +4,7 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 
 ## Phase 0 — Preconditions
 
-- [x] 0.1 Re-verify the next free ADR ordinal against `origin/main` — highest is ADR-273, so ADR-274 stands (provisional; ship re-verifies)
+- [x] 0.1 Re-verify the next free ADR ordinal against `origin/main` — highest is ADR-273, so ADR-275 stands (provisional; ship re-verifies)
 - [x] 0.2 Re-measure body ceilings and the description budget — plan 119,864/120,000 B, brainstorm 140,875/141,000, qa 36,992/37,000, work 361,760/362,000, ship 273,995/274,000, preflight 113,570 (no row); description word budget test passes at its cap
 - [x] 0.3 Dogfood five realistic founder checks through Step 10.5 (replayed verbatim under bwrap 0.12.0, scratch harness): **4 of 5 expressible as runnable commands, so the stop threshold (more than 3 of 5 not expressible) is NOT met; proceeding to Phase 1.**
   - grep on a page source (`grep -c Soleur plugins/soleur/docs/index.njk`): rc 0, stdout `34`. A *rendered* `_site` page is not in the repo, so a founder check on rendered output needs a built tree and is a judgement check.
@@ -43,7 +43,7 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 
 ## Phase 5 — Decision record and architecture
 
-- [x] 5.1 ADR-274 and the ADR-175 amendment
+- [x] 5.1 ADR-275 and the ADR-175 amendment
 - [x] 5.2 `model.c4` + regenerated `model.likec4.json`; c4 tests green
 
 ## Phase 6 — Verification
@@ -67,5 +67,5 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 - [x] 8.3 Archived plans compare against main's freeze
 - [x] 8.4 Apply the second CLO review's wording (untrusted-fail, untrusted-unmeasured, changed-ask, headless-stop, rejected-ask, approval-ask, eyes-ask, reason-prompt, first-use, baseline-ok, no-block, no-sandbox-stop, `opt-*`)
 - [x] 8.5 Tests: behavioural Guard 4 canary, wider AST walk, per-alternative static rows, pin mode and link rows, ordering and refreeze rows, log fidelity, extractor and parser tables, docs calls parsed against the real parser; mutation battery
-- [x] 8.6 Fix ADR-274, plan, spec, tasks and decision-challenges text that the earlier rounds left stale
+- [x] 8.6 Fix ADR-275, plan, spec, tasks and decision-challenges text that the earlier rounds left stale
 - [x] 8.7 Third CLO check of the changed `WORDING` constants (parent), then tick plan AC 16 and item 7.5
