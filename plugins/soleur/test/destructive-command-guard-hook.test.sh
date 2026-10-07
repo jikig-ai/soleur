@@ -79,6 +79,12 @@ LEXER="$REPO_ROOT/plugins/soleur/hooks/lib/shell-argv.pl"
 SELF="$SUITE_DIR/$(basename "${BASH_SOURCE[0]}")"
 FAST="${GUARD_FAST_COUNT:-}"
 ROWSEL="${DCG_ROWS:-}"
+# The plugin README sentences the doc rows below require, each at the START of a line inside the `## Destructive-Command Guard`
+# section (HTML comments and fenced code stripped first), exactly once. They live HERE and nowhere else in the suite: rewriting
+# a sentence in the README is a one-edit change to the matching variable. The kill-switch sentence is the same kind of anchor.
+README_SENT_NONCOVERAGE='The guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools, and is not a substitute for scoped credentials.'
+README_SENT_HOSTED='Not active in Soleur-hosted sessions; hosted sessions rely on the sandbox and review gate.'
+README_SENT_KILL='`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
 # want_row <label>: always true unless DCG_ROWS (reduced mode) is set; then the label must match it.
 want_row_quiet() { [[ -z "$ROWSEL" ]] || [[ "$1" =~ $ROWSEL ]]; }
 SELECTED=0
@@ -803,8 +809,21 @@ if [[ -f "$GUARD_HOOK" && "$(head -n 1 "$GUARD_HOOK")" == '#!/usr/bin/env bash' 
 chk "the hook starts with the bash shebang" "$_x"
 if [[ -f "$GUARD_HOOK" ]] && "$BASH" -n "$GUARD_HOOK" 2>/dev/null; then _x=ok; else _x=bad; fi
 chk "the hook parses (bash -n)" "$_x"
-if [[ -f "$GUARD_HOOK" && "$(grep -cE '(declare -A|mapfile|readarray|readlink -f|realpath|sed -i|date -d|stat -c)' "$GUARD_HOOK")" == 0 ]]; then _x=ok; else _x=bad; fi
-chk "the hook uses no bash-4 feature and no GNU-only flag (count is 0)" "$_x"
+# The bash-4 / GNU-only token list. `;&` counts only as a case terminator (not when a `|` follows it, as in the IFS string `$';&|\n'`).
+BASH4_RE='(declare -A|declare -n|local -n|mapfile|readarray|\$\{[A-Za-z_][A-Za-z0-9_]*(,,|\^\^|,|\^)\}|\[\[ -v |;;&|;&([^|]|$)|\|&|printf( -v +[A-Za-z_]+)? +[^ ]*%q|sort -z|xargs -r|find [^|;]*-printf|grep -P|sed +-[a-zA-Z]*r|readlink -f|realpath|sed -i|date -d|stat -c)'
+_b4=1; [[ -f "$GUARD_HOOK" ]] && _b4="$(grep -cE -- "$BASH4_RE" "$GUARD_HOOK")"
+if [[ "$_b4" == 0 ]]; then _x=ok; else _x=bad; fi
+chk "the hook uses no bash-4 feature and no GNU-only flag (count is 0)" "$_x" "hits: $_b4"
+# the pattern itself can fail: every known-bad spelling is a hit and the known-good look-alikes are not
+_b4_miss=""
+for _s in 'x=${v,,}' 'x=${v^^}' 'x=${v,}' 'declare -n r=x' 'local -n r=x' '[[ -v X ]]' 'case x in a) ls ;;& b) ;; esac' 'case x in a) ls ;& b) ;; esac' 'a |& b' 'printf %q x' 'printf -v o %q x' 'readarray -t a' 'mapfile a' 'declare -A m' 'sort -z' 'xargs -r ls' 'find . -printf x' 'grep -P x' 'sed -r s/a/b/' 'sed -nr s/a/b/' 'readlink -f x' 'realpath x'; do
+  printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE" || _b4_miss+=" [$_s]"
+done
+for _s in "IFS=\$';&|\\n'" 'sed -E s/a/b/' 'x=${v:-,,}' 'printf %s x' 'find . -name x' 'grep -E x' 'sort -u'; do
+  if printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE"; then _b4_miss+=" false-hit[$_s]"; fi
+done
+if [[ -z "$_b4_miss" ]]; then _x=ok; else _x=bad; fi
+chk "the bash-4 token pattern flags every known-bad spelling and none of the look-alikes" "$_x" "wrong:$_b4_miss"
 if [[ -f "$LEXER" && -r "$LEXER" ]]; then _x=ok; else _x=bad; fi
 chk "the vendored lexer is present" "$_x"
 _hdr=""; [[ -f "$GUARD_HOOK" ]] && _hdr="$(head -n 200 "$GUARD_HOOK")"
@@ -846,18 +865,31 @@ echo "== the plugin README states the scope and the hosted gap (CPO round 1, C1/
 # Read from the real tree (REPO_ROOT), and skipped in reduced mode: the mutation suite's copy holds no README.
 # Exact-sentence anchors with an exact count of 1; never a negated grep.
 PLUGIN_README="$REPO_ROOT/plugins/soleur/README.md"
-_readme_count() { [[ -f "$PLUGIN_README" ]] && grep -cF -- "$1" "$PLUGIN_README" || printf 0; }
+# readme_section: the `## Destructive-Command Guard` section of the plugin README with HTML comments (single and multi-line) and
+# fenced code removed, so neither can hold a sentence the rows then count.
+readme_section() {
+  [[ -f "$PLUGIN_README" ]] || return 0
+  "$PERL_BIN" -0777 -ne 'my $t = $_; $t =~ s/<!--.*?-->//gs; my ($o, $in, $fence) = ("", 0, 0);
+    for my $l (split /\n/, $t) {
+      if ($l =~ /^\s*(?:```|~~~)/) { $fence = !$fence; next }
+      next if $fence;
+      if ($l =~ /^## /) { $in = ($l eq "## Destructive-Command Guard") ? 1 : 0; next }
+      $o .= "$l\n" if $in;
+    }
+    print $o;' "$PLUGIN_README"
+}
+# _readme_count <sentence>: the number of section lines that START with the sentence (a negating prefix or a mid-line mention does not count).
+_readme_count() { readme_section | S="$1" awk 'index($0, ENVIRON["S"]) == 1 { c++ } END { print c + 0 }'; }
 _readme_row() { # <label> <literal sentence>
   want_row "$1" || return 0
-  if [[ "$(_readme_count "$2")" == 1 ]]; then _x=ok; else _x=bad; fi
-  chk "$1" "$_x" "expected exactly one line containing the sentence in $PLUGIN_README"
+  local n sec
+  n="$(_readme_count "$2")"; sec="$(readme_section | grep -c . || true)"
+  if [[ "$n" == 1 && "$sec" -ge 5 ]]; then _x=ok; else _x=bad; fi
+  chk "$1" "$_x" "expected exactly one line STARTING with the sentence in the '## Destructive-Command Guard' section of $PLUGIN_README (found $n; section has $sec non-blank lines)"
 }
-_readme_row "README: the non-coverage sentence appears exactly once" \
-  'The guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools, and is not a substitute for scoped credentials.'
-_readme_row "README: the hosted-gap line appears exactly once" \
-  'Not active in Soleur-hosted sessions; hosted sessions rely on the sandbox and review gate.'
-_readme_row "README: the kill switch is documented exactly once as an assignment" \
-  '`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
+_readme_row "README: the non-coverage sentence appears exactly once" "$README_SENT_NONCOVERAGE"
+_readme_row "README: the hosted-gap line appears exactly once" "$README_SENT_HOSTED"
+_readme_row "README: the kill switch is documented exactly once as an assignment" "$README_SENT_KILL"
 
 echo "== the lexer contract the hook relies on (records, once each) =="
 lex_dump() { printf '%s' "$1" | "$PERL_BIN" "$LEXER" 2>/dev/null | "$PY_BIN" -I -S "$WORK/oracle.py" lex 2>/dev/null; }
@@ -1834,7 +1866,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=753
+MIN_CASES=754
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

@@ -137,6 +137,16 @@ describe("buildAgentEnv", () => {
     expect(oauthEnv.SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK).toBe("1");
   });
 
+  test("the destructive-command guard opt-out is set for both schemes, ambient 0 loses, and only the exact value 1 is ever emitted (ADR-093/ADR-274)", () => {
+    // If buildAgentEnv stops setting this, or lets an ambient value win, the web Concierge would load the plugin's
+    // destructive-command guard, whose `ask` has no prompt to reach in a hosted session. Rides AGENT_ENV_OVERRIDES, not the allowlist.
+    vi.stubEnv("SOLEUR_DISABLE_DESTRUCTIVE_GUARD", "0");
+    const apiKeyEnv = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+    const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
+    expect(apiKeyEnv.SOLEUR_DISABLE_DESTRUCTIVE_GUARD).toBe("1");
+    expect(oauthEnv.SOLEUR_DISABLE_DESTRUCTIVE_GUARD).toBe("1");
+  });
+
   test("omits allowlisted vars not present in process.env", () => {
     const mutableEnv = process.env as Record<string, string | undefined>;
     delete mutableEnv.LANG;

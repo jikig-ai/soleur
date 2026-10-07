@@ -176,9 +176,15 @@ describe("plugin PreToolUse hooks are classified for the web runtime", () => {
   for (const [name, c] of Object.entries(REGISTRY)) {
     if (c.kind !== "web-disabled") continue;
 
-    it(`${name} (web-disabled): the hook reads ${c.optOutVar}`, () => {
-      const text = readFileSync(join(HOOKS_DIR, name), "utf8");
-      expect(text.split(c.optOutVar).length - 1, `${name} must read ${c.optOutVar}`).toBeGreaterThanOrEqual(1);
+    it(`${name} (web-disabled): the hook reads ${c.optOutVar} on an executable kill-switch line`, () => {
+      // Comment lines are removed first: a header sentence that names the variable is not a read of it. The line
+      // must be the guard clause itself, `[[ "${VAR...}" == "1" ]] && exit 0` (an optional trailing comment aside).
+      const executable = readFileSync(join(HOOKS_DIR, name), "utf8")
+        .split("\n")
+        .filter((l) => !/^\s*#/.test(l))
+        .join("\n");
+      const guardLine = new RegExp(String.raw`^\s*\[\[ "\$\{${c.optOutVar}(:?-[^}]*)?\}" == "1" \]\] && exit 0\s*(#.*)?$`, "m");
+      expect(guardLine.test(executable), `${name} must read ${c.optOutVar} on an executable \`[[ "\${VAR-}" == "1" ]] && exit 0\` line`).toBe(true);
     });
 
     for (const s of SCHEMES) {
