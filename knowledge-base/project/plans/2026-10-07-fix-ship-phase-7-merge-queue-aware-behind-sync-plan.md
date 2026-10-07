@@ -235,7 +235,7 @@ budget and the hatch counter are exactly where today's code leaves them. Waiting
 
 | Branch | Fires when | If it is wrong | Direction |
 |---|---|---|---|
-| `QUEUE_RULE` fetch | rules API returns `>= 1` merge_queue rule | rules API error, empty, non-numeric, or a repo with no queue: stays 0, today's code path runs untouched | toward syncing (today) |
+| `QUEUE_RULE` fetch | rules API returns `>= 1` merge_queue rule | rules API error, empty, non-numeric, or a repo with no queue: is left at 0, today's code path runs untouched | toward syncing (today) |
 | | a rule exists but the queue is not operating | armed BEHIND PR waits; leaves the wait on the idle grace below | bounded wait, then syncing |
 | `real_behind` | GitHub itself reports `OPEN BEHIND` | a DIRTY-derived `OPEN BEHIND` is never a wait: it syncs as today | toward syncing |
 | armed read | prints exactly `true` | `false` (disarmed), error, empty, anything else: arm not taken | toward syncing |
@@ -534,7 +534,7 @@ All run through `run_scenario_both` (ship fence and merge-pr mirror), with `QGH`
 | Q11 | queue | true | pending | not inside a worktree (`sync_ok=0`) | `behind_no_sync` | `queue_wait` |
 
 Regression anchors: every pre-existing scenario stays unchanged and green because the default `gh api` mock answers
-nothing, so `QUEUE_RULE` stays 0 for all of them.
+nothing, so `QUEUE_RULE` is left at 0 for all of them.
 
 ## Risks and Sharp Edges
 
