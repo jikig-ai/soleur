@@ -17,7 +17,11 @@
 # where it must deny, a hook that denies where it must ask, a missing hook file and an unreadable hooks.json.
 # C: missing jq / missing perl are named FAILs (a PATH of symlinks without that one tool). D: the probe
 # ignores an ambient kill switch and ambient GIT_* variables (it strips both), stays inside the observability
-# gate's 15 s cap, and contains no negated grep.
+# gate's 15 s cap, and contains no negated grep. E: the probe's own setup is observable. A stub hook judges the
+# environment it is run in (no GIT_*, no kill switch, HOME equal to the working directory and to the envelope's cwd) and
+# answers only when it is clean, so a probe that drops its GIT_* strip, its HOME= or its cd turns red (mutated COPIES of
+# the probe, driven through the SLICE1_SCRIPT_UNDER_TEST seam). F: a bash that cannot do process substitution (a PATH
+# whose `bash` fails `-c`) is a named FAIL ("needs /dev/fd (process substitution)"), not an "answered 'ask', want deny".
 #
 # Anti-vacuity: the case counter moves at the call site (never in pass/fail), pass+fail must equal it, an
 # instrument self-test drives both helpers, and the row-count floor is a literal directly above its `if`,
@@ -50,12 +54,34 @@ command -v jq >/dev/null 2>&1 || { echo "[FATAL] jq required" >&2; exit 1; }
 command -v perl >/dev/null 2>&1 || { echo "[FATAL] perl required" >&2; exit 1; }
 [[ -f "$SCRIPT" && -d "$LIVE_HOOKS" ]] || { echo "[FATAL] probe or live hooks directory missing" >&2; exit 1; }
 
+# The body below is the CANONICAL copy, asserted byte-for-byte against every other copy by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 OUT=""; RC=0
 run_probe() { # run_probe [VAR=value ...] -> OUT (stdout+stderr), RC
   OUT="$(env "$@" "$BASH_BIN" "$SCRIPT" 2>&1)"; RC=$?
+}
+run_probe_with() { # run_probe_with <probe script> [VAR=value ...] -> OUT, RC
+  local script="$1"; shift
+  OUT="$(env "$@" "$BASH_BIN" "$script" 2>&1)"; RC=$?
+}
+replace_once() { # replace_once <src> <dst> <literal anchor> <replacement>: the anchor must occur exactly once (perl, \Q..\E)
+  A="$3" R="$4" perl -0e 'my ($src, $dst) = @ARGV; open(my $in, "<", $src) or exit 2; local $/; my $s = <$in>; close $in;
+    my $a = $ENV{A}; my $r = $ENV{R}; my $n = () = $s =~ /\Q$a\E/g; exit 3 unless $n == 1;
+    $s =~ s/\Q$a\E/$r/; open(my $out, ">", $dst) or exit 2; print $out $s; close $out;' "$1" "$2"
 }
 mk_plugin() { # mk_plugin <name> -> a fresh copy of the live hooks directory under $WORK/<name>/hooks
   mkdir -p "$WORK/$1" && cp -R "$LIVE_HOOKS" "$WORK/$1/hooks"
@@ -139,19 +165,76 @@ red "a PATH without perl is a named FAIL, not a pass" "guard check needs perl on
 run_probe SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1
 row "an ambient kill switch does not blind the probe (it unsets it)" "$([[ "$RC" -eq 0 && "$OUT" == "slice1-security: ok" ]] && echo ok)" "rc=$RC out=$OUT"
 run_probe GIT_DIR=/nonexistent/dir GIT_INDEX_FILE=/nonexistent/index GIT_WORK_TREE=/nonexistent
-row "ambient GIT_* variables do not leak into the probe (stripped by prefix)" "$([[ "$RC" -eq 0 && "$OUT" == "slice1-security: ok" ]] && echo ok)" "rc=$RC out=$OUT"
+row "ambient GIT_* variables do not break the real-hook probe (smoke; section E proves the strip with a stub that sees them)" "$([[ "$RC" -eq 0 && "$OUT" == "slice1-security: ok" ]] && echo ok)" "rc=$RC out=$OUT"
 row "the probe finishes well inside the observability gate's 15 s cap" "$([[ $((t1 - t0)) -lt 15 ]] && echo ok)" "took $((t1 - t0)) s"
 neg="$(grep -c -E '^[^#]*(! *grep|grep +-[a-zA-Z]*[vL])' "$SCRIPT" || true)"
 row "the probe contains no negated grep" "$([[ "$neg" == 0 ]] && echo ok)" "count=$neg"
 ok_lines="$(grep -c -E '^  echo "slice1-security: ok"$' "$SCRIPT" || true)"
 row "the probe prints its ok line from exactly one place" "$([[ "$ok_lines" == 1 ]] && echo ok)" "count=$ok_lines"
 
+# ---- E. the probe's setup lines are load-bearing (observable through a stub that judges its own environment) ---------------
+# The stub answers like the real guard (ask for terraform destroy, deny for rm -rf ~, nothing otherwise) ONLY when it runs in the
+# environment the probe promises: no GIT_* variable, no kill switch, HOME the probe's temp dir, the working directory that same
+# dir and the envelope's cwd. In any other environment it answers nothing, which the probe reports as three named FAILs.
+mk_plugin env
+cat > "$WORK/env/hooks/destructive-command-guard.sh" <<'STUBEOF'
+#!/usr/bin/env bash
+in="$(cat)"
+clean=1
+[ -z "${SOLEUR_DISABLE_DESTRUCTIVE_GUARD+x}" ] || clean=0
+for v in $(compgen -e); do case "$v" in GIT_*) clean=0 ;; esac; done
+[ "$HOME" = "$PWD" ] || clean=0
+case "$in" in *"\"cwd\":\"$PWD\""*) : ;; *) clean=0 ;; esac
+[ "$clean" = 1 ] || exit 0
+case "$in" in
+  *"terraform destroy"*) printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"stub"}}' ;;
+  *"rm -rf ~"*) printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"stub"}}' ;;
+esac
+STUBEOF
+chmod +x "$WORK/env/hooks/destructive-command-guard.sh"
+run_probe SLICE1_PLUGIN_ROOT="$WORK/env" GIT_DIR=/nonexistent/dir GIT_INDEX_FILE=/nonexistent/index GIT_WORK_TREE=/nonexistent SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1
+row "control: an environment-judging stub agrees through the unedited probe even with ambient GIT_* and the kill switch set" "$([[ "$RC" -eq 0 && "$OUT" == "slice1-security: ok" ]] && echo ok)" "rc=$RC out=${OUT//$'\n'/ | }"
+mk_probe_copy() { # mk_probe_copy <name> <anchor> <replacement> -> PROBE_COPY (a probe whose root is a scratch dir that links the live apps tree)
+  local d="$WORK/pc-$1"
+  PROBE_COPY="$d/scripts/verify-agent-security-slice1.sh"
+  mkdir -p "$d/scripts" && ln -s "$REPO_ROOT/apps" "$d/apps" || return 1
+  replace_once "$SCRIPT" "$PROBE_COPY" "$2" "$3" || return 1
+  ! cmp -s "$SCRIPT" "$PROBE_COPY" && "$BASH_BIN" -n "$PROBE_COPY"
+}
+V_OK="slice1-security: ok"
+# a mutated copy must still be green against the REAL guard (the edit changes only the setup), or the red below would be the edit's fault
+setup_row() { # setup_row <name> <desc> <anchor> <replacement> [VAR=value ...]
+  local name="$1" desc="$2" a="$3" r="$4"; shift 4
+  if ! mk_probe_copy "$name" "$a" "$r"; then row "$desc (the edit landed in the probe copy)" "" "anchor not found exactly once, or the copy does not parse"; return 0; fi
+  run_probe_with "$PROBE_COPY" SLICE1_PLUGIN_ROOT="$WORK/env" "$@"
+  row "$desc" "$([[ "$RC" -eq 1 && "$OUT" == *"slice1-security: FAIL guard probe"* && "$OUT" != *"$V_OK"* ]] && echo ok)" "rc=$RC out=${OUT//$'\n'/ | }"
+}
+setup_row v1 "the probe's GIT_* strip is load-bearing: a probe that keeps GIT_* goes red against the environment-judging stub" \
+  'case "$v" in GIT_*) unset "$v" ;; esac' ':' GIT_DIR=/nonexistent/dir
+setup_row v3 "the probe's HOME= is load-bearing: a probe that keeps the caller's HOME goes red" \
+  '| HOME="$tmp" bash "$guard"' '| bash "$guard"'
+setup_row v4 "the probe's cd into its temp dir is load-bearing: a probe that stays in the caller's directory goes red" \
+  'cd "$tmp" && printf' 'printf'
+
+# ---- F. a bash without process substitution is a named failure --------------------------------------------------------
+d="$(farm_without bash)"
+assert_fixture_dir "$d"
+cat > "$d/bash" <<BASHEOF
+#!/bin/sh
+if [ "\$1" = -c ]; then echo "bash: /dev/fd/63: No such file or directory" >&2; exit 1; fi
+exec "$BASH_BIN" "\$@"
+BASHEOF
+chmod +x "$d/bash"
+run_probe PATH="$d"
+red "a bash that cannot do process substitution is a named FAIL (needs /dev/fd)" "guard check needs /dev/fd (process substitution)"
+row "that failure does not read as a wrong answer from the guard (no 'answered' line)" "$([[ "$OUT" != *"answered"* ]] && echo ok)" "out=${OUT//$'\n'/ | }"
+
 # ---- summary and the vacuity floor --------------------------------------------------------------
 echo "cases=$CASES passes=$passes fails=$fails"
 if [[ $((passes + fails)) -ne "$CASES" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((passes + fails))" "$CASES" >&2; exit 1
 fi
-MIN_CASES=18
+MIN_CASES=24
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CASES" "$MIN_CASES" >&2
   exit 1

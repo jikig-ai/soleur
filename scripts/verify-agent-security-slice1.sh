@@ -98,25 +98,32 @@ $matchers
 EOF
     check "guard registered under a PreToolUse matcher that reads Bash" "$bash_hits" 1
 
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
-    guard_says() { # guard_says <command> -> the permissionDecision, or empty when the hook is silent
-      env_json="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"},\"cwd\":\"$tmp\"}"
-      out="$(
-        for v in $(compgen -e); do
-          case "$v" in GIT_*) unset "$v" ;; esac
-        done
-        unset SOLEUR_DISABLE_DESTRUCTIVE_GUARD
-        cd "$tmp" && printf '%s' "$env_json" | HOME="$tmp" bash "$guard" 2>/dev/null
-      )" || out=""
-      printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null || true
-    }
-    d1="$(guard_says 'terraform destroy')"
-    d2="$(guard_says 'rm -rf ~')"
-    d3="$(guard_says 'ls')"
-    [ "$d1" = ask ] || { echo "slice1-security: FAIL guard probe 'terraform destroy' answered '$d1', want ask"; fail=1; }
-    [ "$d2" = deny ] || { echo "slice1-security: FAIL guard probe 'rm -rf ~' answered '$d2', want deny"; fail=1; }
-    [ -z "$d3" ] || { echo "slice1-security: FAIL guard probe 'ls' answered '$d3', want silence"; fail=1; }
+    # The hook reads the lexer's output through a process substitution (`< <(...)`), which needs /dev/fd. Probe the
+    # bash that will run the hook (the one on PATH) so a box without it fails by NAME, not as "answered 'ask', want deny".
+    if ! bash -c ': < <(:)' >/dev/null 2>&1; then
+      echo "slice1-security: FAIL guard check needs /dev/fd (process substitution)"
+      fail=1
+    else
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      guard_says() { # guard_says <command> -> the permissionDecision, or empty when the hook is silent
+        env_json="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"},\"cwd\":\"$tmp\"}"
+        out="$(
+          for v in $(compgen -e); do
+            case "$v" in GIT_*) unset "$v" ;; esac
+          done
+          unset SOLEUR_DISABLE_DESTRUCTIVE_GUARD
+          cd "$tmp" && printf '%s' "$env_json" | HOME="$tmp" bash "$guard" 2>/dev/null
+        )" || out=""
+        printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null || true
+      }
+      d1="$(guard_says 'terraform destroy')"
+      d2="$(guard_says 'rm -rf ~')"
+      d3="$(guard_says 'ls')"
+      [ "$d1" = ask ] || { echo "slice1-security: FAIL guard probe 'terraform destroy' answered '$d1', want ask"; fail=1; }
+      [ "$d2" = deny ] || { echo "slice1-security: FAIL guard probe 'rm -rf ~' answered '$d2', want deny"; fail=1; }
+      [ -z "$d3" ] || { echo "slice1-security: FAIL guard probe 'ls' answered '$d3', want silence"; fail=1; }
+    fi
   fi
 fi
 
