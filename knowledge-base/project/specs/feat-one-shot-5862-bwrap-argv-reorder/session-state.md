@@ -36,3 +36,6 @@ None blocking. Non-blocking notes: (a) an early candidate-plan selector returned
 
 ## Affected-gate result
 `test-all.sh --affected` (175 selected): 6 failures, 1 attributable — `lint-window-closure-assertion-live` flagged the `lsSection` window (fixed with `// window-assembly:` declaration). The other 5 are contention/environmental (orphan-process-reaper sees sibling worktrees' procs; orphan-log-retention live-parent check; sweep-followthroughs T18 probe starved; infra apt budget exhausted in docker; run-migrations-unmerged-gate spawn timeouts at -1 under load). Deferred: #9723, #9724, #9725.
+
+## QA
+Skipped per skill rule — Test Scenarios are Given/When/Then prose only (no Browser:/API verify: steps); coverage is the unit/regression suite + in-image capture/verify. No dashboard/layout diff → Step 2.6 nav-states gate N/A.
