@@ -449,10 +449,15 @@ else
   no "AC13c: the not-bound sentence must reach GITHUB_STEP_SUMMARY as \`echo \"_\${msg}_\" | tee -a \"\$GITHUB_STEP_SUMMARY\"\`"
 fi
 # (b2) The bearer is the NEW name and the retired one appears nowhere in the reader.
-if grep -qF 'Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}' "$TRAIL"; then
-  ok "AC13b2: the Sentry read bears SENTRY_ACTIONS_RO_TOKEN"
+# The bearer rides curl's STDIN config channel (`--config -` fed by process substitution), never
+# argv (#9597): BOTH Sentry reads (the org events query and the polled project read) carry it, and
+# no `-H "Authorization: Bearer ...` remains on any curl line.
+_ac13_stdin_form="$(grep -cF "printf 'header = \"Authorization: Bearer %s\"\\n' \"\$SENTRY_ACTIONS_RO_TOKEN\"" "$TRAIL" || true)"
+_ac13_argv_form="$(grep -cE -e '-H "Authorization: Bearer' "$TRAIL" || true)"
+if [[ "$_ac13_stdin_form" == "2" && "$_ac13_argv_form" == "0" ]]; then
+  ok "AC13b2: both Sentry reads bear SENTRY_ACTIONS_RO_TOKEN on the stdin config channel, none on argv"
 else
-  no "AC13b2: the Sentry read must send \`Authorization: Bearer \${SENTRY_ACTIONS_RO_TOKEN}\`"
+  no "AC13b2: both Sentry reads must send the bearer via \`--config -\` stdin (found stdin-form=$_ac13_stdin_form, argv-form=$_ac13_argv_form)"
 fi
 if ! grep -q 'SENTRY_AUTH_TOKEN' "$TRAIL"; then
   ok "AC13b3: the retired name SENTRY_AUTH_TOKEN appears nowhere in the reader"

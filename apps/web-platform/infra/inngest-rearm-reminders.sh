@@ -338,6 +338,15 @@ if [[ -z "$SECRET" ]]; then
   echo "ERROR: INNGEST_MANUAL_TRIGGER_SECRET unavailable (env + doppler both empty)" >&2
   exit 1
 fi
+# Token-shape guard (argv-bearer sweep): the Bearer travels on curl's stdin config channel, so a
+# value that could break out of the config string (quote, newline, space, backslash) is refused
+# here — same FATAL/exit-1 path as an unavailable secret — before any curl runs.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$SECRET"; then
+  logger -t "$LOG_TAG" "FATAL: INNGEST_MANUAL_TRIGGER_SECRET has an unusable shape — refusing to re-arm" 2>/dev/null || true
+  echo "ERROR: INNGEST_MANUAL_TRIGGER_SECRET has an unusable shape (characters outside the token charset); refusing to re-arm" >&2
+  exit 1
+fi
 
 # Records source by mode. stdin (test/manual) overrides everything.
 FROM_CAPTURE=0
@@ -487,9 +496,9 @@ for i in "${send_idx[@]}"; do
     -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${SECRET}" \
+    --config - \
     --data-binary "$body" \
-    "$REARM_URL" || echo "000")
+    "$REARM_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$SECRET") || echo "000")
 
   case "$http_code" in
     202)
