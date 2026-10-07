@@ -535,8 +535,13 @@ else:
 # -> env mapping of the RIGHT step's output in BOTH consumers -> numeric guard per variable.
 # The behavioural rows inject the env value directly, so they cannot see any of the first three.
 def _step_block(name):
+    # `stripped` is a "\n".join — it never ends in a newline, so `(?:.*\n)*?`
+    # cannot consume the file's LAST line and the `\Z` arm of the lookahead
+    # never fires: asking for the LAST step (Sentry check-in) returned "".
+    # Search the newline-completed text so the last step is extractable too
+    # (#9082's MWb row caught this on its first run).
     m = re.search(r'^      - name: ' + re.escape(name) + r'\s*$(?P<b>(?:.*\n)*?)(?=^      - (?:name|uses):|\Z)',
-                  stripped, re.M)
+                  stripped + "\n", re.M)
     return m.group("b") if m else ""
 _kproblems = []
 for _sid, _sname in (("tests", "Run test suite"), ("infra", "Run infra suites")):
@@ -745,10 +750,10 @@ else:
 _mw_w = []
 _f_if = step_if(FILER) or ""
 _c_if = step_if(CLOSER) or ""
-# The heartbeat's verdict input is the `status:` expression, not an if: — and
-# BEAT is the job's LAST step, which _step_block's `\Z` lookahead cannot bound on
-# the comment-stripped text (a join ends without a trailing newline). Search the
-# status expression itself.
+# The heartbeat's verdict input is the `status:` expression, not an if: — check
+# the expression itself. (_step_block now searches newline-completed text, so it
+# can bound BEAT despite it being the job's LAST step; the direct regex stays
+# because it names the exact input this row guards.)
 _mw_status = re.search(r'^\s*status:\s*\$\{\{.*\}\}\s*$', stripped, re.M)
 _mw_status = _mw_status.group(0) if _mw_status else ""
 if "steps.mintwatch.outputs.verdict == 'red'" not in _f_if:
