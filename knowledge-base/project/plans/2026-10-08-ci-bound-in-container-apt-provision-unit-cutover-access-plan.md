@@ -14,7 +14,6 @@ lane: cross-domain
 
 # ci(infra): bound the in-container apt cycle in the provision-unit and cutover-access suites
 
-
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-08
