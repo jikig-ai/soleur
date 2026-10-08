@@ -25,6 +25,18 @@
 # scheduled-followthrough-sweeper.yml): WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID,
 # CF_ACCESS_CLIENT_SECRET.
 
+# #7797: refuse to run under xtrace while a live credential is bound. `$-` is tested FIRST and the
+# bindings ONLY with `${VAR:+x}` (expands to a literal `x`): a `-n "$VAR"` test would itself print
+# the value under `-x` before the refusal fires. HMAC_KEY is the signing key's per-command name.
+case "$-" in
+  *x*)
+    if [ -n "${WEBHOOK_DEPLOY_SECRET:+x}" ] || [ -n "${CF_ACCESS_CLIENT_ID:+x}" ] || [ -n "${CF_ACCESS_CLIENT_SECRET:+x}" ] || [ -n "${HMAC_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 set -uo pipefail
 
 if [[ -z "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then echo "TRANSIENT: WEBHOOK_DEPLOY_SECRET not set" >&2; exit 2; fi
@@ -35,16 +47,27 @@ STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"
 REQUIRED_GREENS=5
 MIN_SPAN_SECS=$((3 * 24 * 3600)) # ≥3 days
 
+# (#9597, S2) The three credentials ride curl's STDIN as `header = "..."` config lines (a process substitution,
+# never a pipe: `printf | curl --config -` dies with 141 under pipefail when curl does not read stdin), not its
+# argument list, which every local user reads from /proc/<pid>/cmdline. A config line is a quoted string, so each
+# VALUE is checked first: the Cloudflare Access pair against the cutover's `_bearer_ok` class, and the signature
+# must be exactly 64 lowercase hex (python3 missing or an empty key leaves SIGNATURE empty, and an unsigned request
+# must never be sent). A refusal is TRANSIENT (exit 2, never 1: exit 1 is the FAIL verdict that flags a tracker),
+# sends no request and prints one value-free marker.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_refuse() { echo "TRANSIENT: $1 is unusable; no request was sent" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=canary-promotion-5875 reason=token_shape" >&2; exit 2; }
+_bearer_ok "$CF_ACCESS_CLIENT_ID" || _refuse "the Cloudflare Access client id"
+_bearer_ok "$CF_ACCESS_CLIENT_SECRET" || _refuse "the Cloudflare Access client secret"
+
 # /hooks/deploy-status is a GET whose HMAC is computed over an EMPTY body
 # (mirrors the deploy-inngest-image.yml status poll), plus CF-Access headers.
-SIGNATURE="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
+SIGNATURE="$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' 2>/dev/null)" || SIGNATURE=""
+[[ "$SIGNATURE" =~ ^[0-9a-f]{64}$ ]] || _refuse "the request signature (python3 missing or the webhook key empty)"
 
-RESP="$(curl -sS --max-time 15 -w '\nHTTP_STATUS:%{http_code}' \
+RESP="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\nHTTP_STATUS:%{http_code}' \
   -X GET \
-  -H "X-Signature-256: sha256=$SIGNATURE" \
-  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-  "$STATUS_URL" 2>/dev/null)"
+  "$STATUS_URL" \
+  --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIGNATURE" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") 2>/dev/null)"
 
 HTTP_STATUS="$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')"
 BODY="$(printf '%s' "$RESP" | sed '$d')"

@@ -214,6 +214,7 @@ done
 
 mode="${SHIM_MODE:-auth}"
 case "$mode" in auth|deny|noauth|noread|fail7) : ;; *) unmodelled "SHIM_MODE=$mode" ;; esac
+case "${SHIM_AUTH:-bearer}" in bearer|hmac-cf) : ;; *) unmodelled "SHIM_AUTH=${SHIM_AUTH}" ;; esac
 
 # stdin is read ONLY for the forms real curl reads it for.
 if [[ -n "$body_stdin" ]]; then
@@ -260,6 +261,23 @@ have_auth=0
 for h in "${hdrs[@]:-}"; do
   [[ -n "${SHIM_FIXTURE_TOKEN:-}" && "$h" == "Authorization: ${SHIM_SCHEME:-Bearer} ${SHIM_FIXTURE_TOKEN}" ]] && have_auth=1
 done
+# Auth profile `hmac-cf` (S2-C): the deploy-webhook request shape. It is NOT shape-only: the digest is RECOMPUTED here over
+# the recorded request body (empty when none was recorded) with SHIM_HMAC_KEY through the REAL openssl, and both Cloudflare
+# Access values are compared exactly, so a hard-coded 64-zero digest, a wrong key, a body mismatch or a stale value is a 401.
+if [[ "${SHIM_AUTH:-bearer}" == hmac-cf ]]; then
+  have_auth=0; sig=""; cfid=""; cfsec=""
+  for h in "${hdrs[@]:-}"; do
+    case "$h" in
+      "X-Signature-256: sha256="*) sig="${h#X-Signature-256: sha256=}" ;;
+      "CF-Access-Client-Id: "*) cfid="${h#CF-Access-Client-Id: }" ;;
+      "CF-Access-Client-Secret: "*) cfsec="${h#CF-Access-Client-Secret: }" ;;
+    esac
+  done
+  bodyf="$C.body"; [[ -e "$bodyf" ]] || bodyf=/dev/null
+  want="$("@REAL_OSSL@" dgst -sha256 -hmac "${SHIM_HMAC_KEY:-}" < "$bodyf" | sed 's/.*= //')"
+  [[ -n "${SHIM_HMAC_KEY:-}" && -n "$want" && "$sig" == "$want" && -n "$cfid" && -n "$cfsec" \
+     && "$cfid" == "${SHIM_CF_ID:-}" && "$cfsec" == "${SHIM_CF_SECRET:-}" ]] && have_auth=1
+fi
 
 case "$mode" in
   deny) status=401 ;;
@@ -873,6 +891,16 @@ cwv-field-rum-9178|scripts/followthroughs/cwv-field-rum-9178.test.sh
 send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097.test.sh
 betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh'
 
+# HMAC (S2-C): the four probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
+# config channel: name | kind | hosts (regex) | min_calls | canned 200 body | owning test (delegated only). `dynamic` probes have
+# no owning suite and run under `probe_rows_hmac` and the `hmac-cf` shim profile; `delegated` probes keep their own suite, and
+# the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot pass while sending
+# no credential).
+HMAC_MANIFEST='canary-promotion-5875|dynamic|deploy\.soleur\.ai|1|canary_pass|
+infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
+infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
+inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh'
+
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
 derive_population() {
   local f
@@ -883,7 +911,7 @@ derive_population() {
   done | sort -u
 }
 POP="$(derive_population)"
-CLASSIFIED="$({ printf '%s\n' "$DYN_MANIFEST" | cut -d'|' -f1; printf '%s\n' "$STATIC_MANIFEST" | cut -d'|' -f1; printf '%s\n' "$DELEGATED_MANIFEST" | cut -d'|' -f1; } | sort)"
+CLASSIFIED="$({ printf '%s\n' "$DYN_MANIFEST" | cut -d'|' -f1; printf '%s\n' "$STATIC_MANIFEST" | cut -d'|' -f1; printf '%s\n' "$DELEGATED_MANIFEST" | cut -d'|' -f1; printf '%s\n' "$HMAC_MANIFEST" | cut -d'|' -f1; } | sort)"
 DUP="$(printf '%s\n' "$CLASSIFIED" | uniq -d)"
 UNCLASSIFIED="$(comm -23 <(printf '%s\n' "$POP") <(printf '%s\n' "$CLASSIFIED" | sort -u))"
 STALE_ENTRY="$(comm -13 <(printf '%s\n' "$POP") <(printf '%s\n' "$CLASSIFIED" | sort -u))"
@@ -892,18 +920,29 @@ if [[ -n "$POP" && -z "$DUP" && -z "$UNCLASSIFIED" && -z "$STALE_ENTRY" ]]; then
 else
   row "population: every followthrough probe holding a credentialed curl is classified exactly once (dynamic, static-only or delegated)" fail "unclassified='${UNCLASSIFIED//$'\n'/,}' stale='${STALE_ENTRY//$'\n'/,}' duplicated='${DUP//$'\n'/,}' derived=$(printf '%s\n' "$POP" | grep -c . || true)"
 fi
-# Baseline E may list followthrough probes ONLY for the S2-owned set (they still carry a credential
-# header outside the Bearer vocabulary and are converted in S2); every other followthrough is converted,
-# so a listed one is an argv bearer that crept back. The row asserts the listed set EQUALS the S2 list
-# (a shrink in S2 updates this list in the same diff). The list is a non-empty literal, so equality
-# already bounds the listed count from below; no separate floor row is needed.
-S2_OWNED="canary-promotion-5875
-infra-config-activation-7220
-infra-config-fatal-channel-7220
-inngest-soak-6178"
-BE_FOLLOWTHROUGH="$(awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$BASE_E" | sed 's|^scripts/followthroughs/||; s|\.sh$||' | sort -u)"
-if [[ "$BE_FOLLOWTHROUGH" == "$S2_OWNED" ]]; then row "population: the followthrough probes listed in baseline E equal the S2-owned list" ok
-else row "population: the followthrough probes listed in baseline E equal the S2-owned list" fail "listed='${BE_FOLLOWTHROUGH//$'\n'/,}' want='${S2_OWNED//$'\n'/,}'"; fi
+# DISJOINTNESS (replaces "baseline E followthrough rows equal the S2-owned list", which only held in the commit that emptied
+# the list). A followthrough probe converted to the BEARER form (classified in the dynamic, static-only or delegated manifest
+# above) must not also be listed in baseline E: a listed one is an argv bearer that crept back. The HMAC manifest is the
+# S2 set; those probes may be listed (before the baseline-only commit) or absent (after it), so this invariant holds in BOTH
+# states and every commit between stays green and bisectable. The extractor is a function so a positive control can drive it.
+be_followthrough_rows() { # <baseline file> -> followthrough probe names listed in it, one per line
+  awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$1" | sed 's|^scripts/followthroughs/||; s|\.sh$||' | sort -u
+}
+BEARER_CONVERTED="$({ printf '%s\n' "$DYN_MANIFEST" | cut -d'|' -f1; printf '%s\n' "$STATIC_MANIFEST" | cut -d'|' -f1; printf '%s\n' "$DELEGATED_MANIFEST" | cut -d'|' -f1; } | sort -u)"
+BE_FOLLOWTHROUGH="$(be_followthrough_rows "$BASE_E")"
+BE_OVERLAP="$(comm -12 <(printf '%s\n' "$BE_FOLLOWTHROUGH") <(printf '%s\n' "$BEARER_CONVERTED") | grep . || true)"
+if [[ -z "$BE_OVERLAP" && -n "$BEARER_CONVERTED" ]]; then row "population: no followthrough probe is both listed in baseline E and classified as converted (disjointness)" ok
+else row "population: no followthrough probe is both listed in baseline E and classified as converted (disjointness)" fail "listed AND converted='${BE_OVERLAP//$'\n'/,}'"; fi
+# positive control: the extractor really returns a followthrough row from a synthetic baseline (an empty overlap cannot be a broken extractor)
+printf '# header\nscripts/followthroughs/synthetic-probe-0001.sh\t2\nscripts/other/not-a-probe.sh\t1\n' > "$TMPD/synthetic-baseline-e.txt"
+SYN_BE="$(be_followthrough_rows "$TMPD/synthetic-baseline-e.txt")"
+if [[ "$SYN_BE" == "synthetic-probe-0001" ]]; then row "population control: the baseline-E extractor returns the followthrough row of a synthetic baseline and ignores a non-followthrough row" ok
+else row "population control: the baseline-E extractor returns the followthrough row of a synthetic baseline and ignores a non-followthrough row" fail "extracted='${SYN_BE//$'\n'/,}'"; fi
+# the disjointness check can fire: a synthetic overlap (a bearer-converted probe listed in a synthetic baseline) is reported
+SYN_FIRST="$(printf '%s\n' "$BEARER_CONVERTED" | head -n1)"
+SYN_OV="$(comm -12 <(printf '%s\n' "$SYN_FIRST") <(printf '%s\n' "$BEARER_CONVERTED") | grep . || true)"
+if [[ -n "$SYN_FIRST" && "$SYN_OV" == "$SYN_FIRST" ]]; then row "population control: the overlap comparison reports a converted probe that is listed (it can fire)" ok
+else row "population control: the overlap comparison reports a converted probe that is listed (it can fire)" fail "overlap='$SYN_OV'"; fi
 
 # --- DYNAMIC rows ----------------------------------------------------------------------------
 N_DYN=0
@@ -1766,16 +1805,20 @@ open(out, "w").write(s[:i] + repl + s[i + len(needle):])
 ' "$1" "$2" "$3" "$4" "$5"
 }
 HM_PFX='HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c'
-for idx in 1 9 17; do
+# hm_touched <original> <mutant>: the changed line RANGES of the mutant (diff normal format, e.g. "1328c1328"); a mutant must touch
+# exactly the line it claims to, so a mutation that landed somewhere else cannot satisfy its row.
+hm_touched() { diff "$1" "$2" | grep -E '^[0-9,]+c[0-9,]+$' | paste -sd' ' -; }
+hm_nth_line() { grep -n -F -e "$3" "$2" | sed -n "${1}p" | cut -d: -f1; } # <n> <file> <literal> -> line number of the n-th match
+for idx in $(seq 1 17); do
   nth_replace "$CUT" "$BKDIR/hm-mut-$idx.sh" "$HM_PFX" 'HMAC_KEY="$WEBHOOK_SECRET" python3 -c' "$idx" || fatal "parity mutation $idx did not land"
-  hm_audit "$BKDIR/hm-mut-$idx.sh"
-  if [[ "$HM_BAD" == " $idx" ]] && ! hm_audit_ok; then row "mutation: dropping -I from copy $idx alone is caught as exactly copy $idx (parity is per copy, not first copy)" ok
-  else row "mutation: dropping -I from copy $idx alone is caught as exactly copy $idx (parity is per copy, not first copy)" fail "bad:$HM_BAD"; fi
+  hm_audit "$BKDIR/hm-mut-$idx.sh"; hm_ln="$(hm_nth_line "$idx" "$CUT" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+  if [[ "$HM_BAD" == " $idx" && "$(hm_touched "$CUT" "$BKDIR/hm-mut-$idx.sh")" == "${hm_ln}c${hm_ln}" ]] && ! hm_audit_ok; then row "mutation: dropping -I from copy $idx alone (line $hm_ln only) is caught as exactly copy $idx (parity is per copy, not first copy)" ok
+  else row "mutation: dropping -I from copy $idx alone (line $hm_ln only) is caught as exactly copy $idx (parity is per copy, not first copy)" fail "bad:$HM_BAD touched:$(hm_touched "$CUT" "$BKDIR/hm-mut-$idx.sh") want:${hm_ln}c${hm_ln}"; fi
 done
 nth_replace "$CUT" "$BKDIR/hm-mut-emptykey.sh" 'k or sys.exit(1);' '' 7 || fatal "parity mutation emptykey did not land"
-hm_audit "$BKDIR/hm-mut-emptykey.sh"
-if [[ "$HM_BAD" == " 7" ]]; then row "mutation: dropping the empty-key exit from copy 7 alone is caught as exactly copy 7" ok
-else row "mutation: dropping the empty-key exit from copy 7 alone is caught as exactly copy 7" fail "bad:$HM_BAD"; fi
+hm_audit "$BKDIR/hm-mut-emptykey.sh"; hm_ln="$(hm_nth_line 7 "$CUT" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+if [[ "$HM_BAD" == " 7" && "$(hm_touched "$CUT" "$BKDIR/hm-mut-emptykey.sh")" == "${hm_ln}c${hm_ln}" ]]; then row "mutation: dropping the empty-key exit from copy 7 alone (line $hm_ln only) is caught as exactly copy 7" ok
+else row "mutation: dropping the empty-key exit from copy 7 alone (line $hm_ln only) is caught as exactly copy 7" fail "bad:$HM_BAD touched:$(hm_touched "$CUT" "$BKDIR/hm-mut-emptykey.sh")"; fi
 nth_replace "$CUT" "$BKDIR/hm-mut-argvback.sh" "$HM_CANON" "openssl dgst -sha256 -hmac \"\$WEBHOOK_SECRET\" | sed 's/.*= //'" 5 || fatal "parity mutation argvback did not land"
 hm_audit "$BKDIR/hm-mut-argvback.sh"
 if [[ "$HM_NCOPY" == 16 && "$HM_NOLD" == 3 ]] && ! hm_audit_ok; then row "mutation: the key put back on openssl's argv in copy 5 is caught (16 copies, a third -hmac operand outside the held-back arms)" ok
@@ -1786,8 +1829,12 @@ if [[ "$HM_NCOPY" == 18 && " $HM_BAD " == *" 18 "* ]] && ! hm_audit_ok; then row
 else row "mutation: an 18th inline copy that differs by one byte is caught (copy count and byte comparison)" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
 nth_replace "$CUT" "$BKDIR/hm-mut-heldpy.sh" 'openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed '"'"'s/.*= //'"'"')' "$HM_CANON)" 1 || fatal "parity mutation heldpy did not land"
 hm_audit "$BKDIR/hm-mut-heldpy.sh"
-if [[ "$HM_NOLD" == 1 && "$HM_PYARMS" -ge 1 ]] && ! hm_audit_ok; then row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught" ok
-else row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught" fail "-hmac=$HM_NOLD python3-in-arms=$HM_PYARMS"; fi
+if [[ "$HM_NOLD" == 1 && "$HM_RP" == 0 && "$HM_DP" == 1 && "$HM_PYARMS" -ge 1 ]] && ! hm_audit_ok; then row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught, pinned by its arm anchor (registry-probe) count 0, doublefire-probe) count 1)" ok
+else row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught, pinned by its arm anchor (registry-probe) count 0, doublefire-probe) count 1)" fail "-hmac=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS"; fi
+nth_replace "$CUT" "$BKDIR/hm-mut-heldpy2.sh" 'openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed '"'"'s/.*= //'"'"')' "$HM_CANON)" 2 || fatal "parity mutation heldpy2 did not land"
+hm_audit "$BKDIR/hm-mut-heldpy2.sh"
+if [[ "$HM_NOLD" == 1 && "$HM_RP" == 1 && "$HM_DP" == 0 && "$HM_PYARMS" -ge 1 ]] && ! hm_audit_ok; then row "mutation: converting the held-back doublefire-probe) site is caught, pinned by its arm anchor (registry-probe) count 1, doublefire-probe) count 0)" ok
+else row "mutation: converting the held-back doublefire-probe) site is caught, pinned by its arm anchor (registry-probe) count 1, doublefire-probe) count 0)" fail "-hmac=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS"; fi
 
 # --- the refusal marker on the _sig_curl / _bearer_curl refusal arms ---------------------------------
 SC_DRV="$BKDIR/sigdriver.sh"; assert_fixture_dir "$SC_DRV"
@@ -2226,6 +2273,401 @@ BS_SCRIPT="$REPO_ROOT/$BSQ"
 echo "=== stage S2-B: Better Stack reader (basic auth off argv) done ==="
 
 # =====================================================================================
+# STAGE S2-C: the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) off curl argv in
+# scripts/check-deploy-script-parity.sh and the four followthrough probes. Same canonical HMAC snippet as the
+# cutover copies (key on the python3 child's ENVIRONMENT only), `_bearer_ok` (a copy of the cutover function) on both
+# Cloudflare Access values, `--disable --noproxy '*'` first, `--config -` with three `header = "..."` lines on a
+# process substitution. A refusal sends nothing and prints the value-free marker; the exit code is the SURFACE'S
+# non-verdict code (2 for the parity script and the two probes whose contract reads 2 as TRANSIENT; 3 for the soak
+# probe, whose contract reserves 2 for a reading), never 1 (a FAIL verdict, a tracker reopen).
+#
+# The instrument is the `hmac-cf` auth profile of the shared curl shim. It is NOT shape-only: it RECOMPUTES the digest
+# over the recorded request body with the fixture key through the real openssl (the independent oracle) and compares both
+# Cloudflare Access values exactly, so a hard-coded 64-zero digest, a wrong key or a stale value returns 401 and the probe
+# cannot reach its success outcome. Controls CHM1..CHM6 prove that before any probe is judged by it.
+# =====================================================================================
+sed -i "s|@REAL_OSSL@|${REAL_OSSL}|" "$SHIMDIR/curl"
+HMX="$TMPD/hmx"; assert_fixture_dir "$HMX"; mkdir -p "$HMX"
+HMX_RAND="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+HMX_KEY="whkey-$HMX_RAND"
+HMX_CFID="cfid-$HMX_RAND"
+HMX_CFSEC="cfsec-$HMX_RAND"
+HM_PROG="${HM_CANON#*python3 -I -c \'}"; HM_PROG="${HM_PROG%\'}"            # the python program, byte for byte
+HM_CANON_DEPLOY="HMAC_KEY=\"\$WEBHOOK_DEPLOY_SECRET\" python3 -I -c '${HM_PROG}'"   # the probe form: the key variable differs, the program does not
+HM_BEARER_FN="$(grep -m1 '^_bearer_ok() {' "$CUT")"
+[[ -n "$HM_PROG" && "$HM_CANON_DEPLOY" == *"hashlib.sha256"* && -n "$HM_BEARER_FN" ]] || fatal "stage S2-C: could not derive the canonical program or the _bearer_ok function"
+HMX_FMT='header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n'
+
+# ---- the HMAC shim controls -------------------------------------------------------------------------------
+hmx_status() { # <rowname> <sig> <cfid> <cfsec> [SHIM_HMAC_KEY] -> HMX_ST (the shim's status for that request)
+  local row="$ROWS/$1"; assert_fixture_dir "$row"; mkdir -p "$row/shim"
+  HMX_ST="$( cd "$row" && env -i PATH="$SHIMDIR:$REALBIN" SHIM_DIR="$row/shim" SHIM_AUTH=hmac-cf SHIM_HMAC_KEY="${5:-$HMX_KEY}" SHIM_CF_ID="$HMX_CFID" SHIM_CF_SECRET="$HMX_CFSEC" \
+      "$SHIMDIR/curl" -sS -o "$row/body" -w '%{http_code}' --config - https://deploy.soleur.ai/hooks/x < <(printf "$HMX_FMT" "$2" "$3" "$4") 2>/dev/null )"
+}
+hmx_sig() { printf '%s' "$2" | "$REAL_OSSL" dgst -sha256 -hmac "$1" | sed 's/.*= //'; }  # <key> <body>
+HMX_GOOD="$(hmx_sig "$HMX_KEY" '')"
+hmx_status chm1 "$HMX_GOOD" "$HMX_CFID" "$HMX_CFSEC"
+[[ "$HMX_ST" == 200 ]] || fatal "CHM1 the hmac-cf profile rejected a correct digest and Cloudflare Access pair (status $HMX_ST)"
+row "control CHM1: the hmac-cf shim profile answers 200 for the digest recomputed over the empty body with the fixture key and the exact Cloudflare Access pair" ok
+hmx_status chm2 "$(hmx_sig "other-key-$HMX_RAND" '')" "$HMX_CFID" "$HMX_CFSEC"
+[[ "$HMX_ST" == 401 ]] || fatal "CHM2 a digest made with the wrong key was accepted (status $HMX_ST): the profile is shape-only"
+row "control CHM2: a digest computed with the wrong key is 401 (the profile recomputes, it does not check shape)" ok
+hmx_status chm3 "$(printf '%064d' 0)" "$HMX_CFID" "$HMX_CFSEC"
+[[ "$HMX_ST" == 401 ]] || fatal "CHM3 a hard-coded 64-zero digest was accepted (status $HMX_ST)"
+row "control CHM3: a hard-coded 64-zero digest is 401" ok
+hmx_status chm4 "$(hmx_sig "$HMX_KEY" 'a body the request does not carry')" "$HMX_CFID" "$HMX_CFSEC"
+[[ "$HMX_ST" == 401 ]] || fatal "CHM4 a digest over a different body was accepted (status $HMX_ST)"
+row "control CHM4: a digest computed over a different body than the request's own (empty) body is 401" ok
+hmx_status chm5 "$HMX_GOOD" "${HMX_CFID}x" "$HMX_CFSEC"; hmx_st5="$HMX_ST"
+hmx_status chm6 "$HMX_GOOD" "$HMX_CFID" "${HMX_CFSEC}x"; hmx_st6="$HMX_ST"
+[[ "$hmx_st5" == 401 && "$hmx_st6" == 401 ]] || fatal "CHM5/6 a wrong Cloudflare Access value was accepted (id $hmx_st5, secret $hmx_st6)"
+row "control CHM5: a wrong Cloudflare Access client id or secret is 401 (both compared exactly)" ok
+
+# ---- the audit of the five converted files: ONE function, so the real rows and the mutant rows judge identically ----
+# HM5_BAD names the failed facets: snippet (the HMAC line is not the canonical program with the deploy key, exactly once),
+# guard (no `|| VAR=""` after it), hexcheck (no ^[0-9a-f]{64}$ test), openssl (an openssl/-hmac token on a non-comment line),
+# bearer (the _bearer_ok function differs from the cutover's, or is not applied to exactly two values), config (the curl command
+# is not `curl --disable --noproxy '*'` ... `--config -` fed by the three-line process substitution, or a -H credential header
+# is left), preamble (no `case "$-"` xtrace refusal).
+hm5_audit() { # <file>
+  local f="$1" code line n
+  HM5_BAD=""
+  code="$(grep -vE '^[[:space:]]*#' "$f")"
+  n="$(grep -cF -- "$HM_CANON_DEPLOY" <<< "$code" || true)"
+  [[ "$n" == 1 && "$(grep -cF 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' <<< "$code" || true)" == 1 ]] || HM5_BAD+=" snippet"
+  line="$(grep -F -e 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' <<< "$code" | head -n1)"
+  [[ "$line" =~ \|\|\ [A-Za-z_]+=\"\"[[:space:]]*$ ]] || HM5_BAD+=" guard"
+  [[ "$(grep -cF -e '^[0-9a-f]{64}$' <<< "$code" || true)" == 1 ]] || HM5_BAD+=" hexcheck"
+  [[ "$(grep -cE -e 'openssl|-hmac|-macopt' <<< "$code" || true)" == 0 ]] || HM5_BAD+=" openssl"
+  [[ "$(sed 's/^[[:space:]]*//' "$f" | grep -cxF -- "$HM_BEARER_FN" || true)" == 1 && "$(grep -oE '_bearer_ok "' <<< "$code" | grep -c . || true)" == 2 ]] || HM5_BAD+=" bearer"
+  [[ "$(grep -cF -e "curl --disable --noproxy '*'" <<< "$code" || true)" -ge 1 && "$(grep -cF -e "--config - < <(printf 'header = \"X-Signature-256: sha256=%s\"\\nheader = \"CF-Access-Client-Id: %s\"\\nheader = \"CF-Access-Client-Secret: %s\"\\n'" <<< "$code" || true)" == 1 \
+     && "$(grep -cE -e '-H "(X-Signature-256|CF-Access-Client)' <<< "$code" || true)" == 0 ]] || HM5_BAD+=" config"
+  [[ "$(grep -cF -e 'case "$-" in' <<< "$code" || true)" -ge 1 ]] || HM5_BAD+=" preamble"
+  return 0
+}
+HM5_FILES="scripts/check-deploy-script-parity.sh
+scripts/followthroughs/canary-promotion-5875.sh
+scripts/followthroughs/infra-config-activation-7220.sh
+scripts/followthroughs/infra-config-fatal-channel-7220.sh
+scripts/followthroughs/inngest-soak-6178.sh"
+while IFS= read -r hf; do
+  hm5_audit "$hf"
+  if [[ -z "$HM5_BAD" ]]; then row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" ok
+  else row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" fail "failed facets:$HM5_BAD"; fi
+done <<< "$HM5_FILES"
+hm_hmacflag="$(git grep -nE -- '-hmac' -- scripts/check-deploy-script-parity.sh scripts/followthroughs/canary-promotion-5875.sh scripts/followthroughs/infra-config-activation-7220.sh scripts/followthroughs/infra-config-fatal-channel-7220.sh scripts/followthroughs/inngest-soak-6178.sh | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
+if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the four probes (the key is on no openssl argv)" ok
+else row "census: no -hmac operand remains in the parity script or the four probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
+
+# ---- per-script mutants of the audit: one mutant per script and kind, each asserting WHICH facet fails and WHICH LINE it touched ----
+hm5_mut() { # <file> <label> <from> <to> -> HM5_MUT (path); fatal when the literal is absent
+  HM5_MUT="$HMX/mut-$(basename "$1" .sh)-$2.sh"; mutated_copy "$REPO_ROOT/$1" "$HM5_MUT" "$3" "$4"
+}
+while IFS= read -r hf; do
+  base="$(basename "$hf" .sh)"
+  hm_ln="$(grep -n -F 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' "$hf" | head -n1 | cut -d: -f1)"
+  hm5_mut "$hf" noi 'python3 -I -c' 'python3 -c'; hm5_audit "$HM5_MUT"
+  if [[ "$HM5_BAD" == " snippet" && "$(hm_touched "$hf" "$HM5_MUT")" == "${hm_ln}c${hm_ln}" ]]; then row "mutation ($base): dropping -I from the HMAC line (line $hm_ln only) fails exactly the snippet facet" ok
+  else row "mutation ($base): dropping -I from the HMAC line (line $hm_ln only) fails exactly the snippet facet" fail "facets:$HM5_BAD touched:$(hm_touched "$hf" "$HM5_MUT") want:${hm_ln}c${hm_ln}"; fi
+  hm_ln="$(grep -n -F -e '^[0-9a-f]{64}$' "$hf" | head -n1 | cut -d: -f1)"
+  hm5_mut "$hf" nohex '^[0-9a-f]{64}$' '^[0-9a-f]*$'; hm5_audit "$HM5_MUT"
+  if [[ "$HM5_BAD" == " hexcheck" && "$(hm_touched "$hf" "$HM5_MUT")" == "${hm_ln}c${hm_ln}" ]]; then row "mutation ($base): weakening the 64-hex signature check (line $hm_ln only) fails exactly the hexcheck facet" ok
+  else row "mutation ($base): weakening the 64-hex signature check (line $hm_ln only) fails exactly the hexcheck facet" fail "facets:$HM5_BAD touched:$(hm_touched "$hf" "$HM5_MUT") want:${hm_ln}c${hm_ln}"; fi
+  hm_ln="$(grep -n -F -- "$HM_BEARER_FN" "$hf" | head -n1 | cut -d: -f1)"
+  hm5_mut "$hf" bearer '*[!A-Za-z0-9._~+/=-]*) return 1' '*[!A-Za-z0-9._~+/=\"-]*) return 1'; hm5_audit "$HM5_MUT"
+  if [[ "$HM5_BAD" == " bearer" && "$(hm_touched "$hf" "$HM5_MUT")" == "${hm_ln}c${hm_ln}" ]]; then row "mutation ($base): admitting the double quote in _bearer_ok (line $hm_ln only) fails exactly the bearer facet" ok
+  else row "mutation ($base): admitting the double quote in _bearer_ok (line $hm_ln only) fails exactly the bearer facet" fail "facets:$HM5_BAD touched:$(hm_touched "$hf" "$HM5_MUT") want:${hm_ln}c${hm_ln}"; fi
+done <<< "$HM5_FILES"
+
+# ---- running the probes under the hmac-cf profile ------------------------------------------------------------
+PARBIN="$HMX/parbin"; PYSEL="$HMX/pysel"; PYBAD="$HMX/pybad"; PYGARB="$HMX/pygarb"
+for d in "$PARBIN" "$PYSEL" "$PYBAD" "$PYGARB"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+ln -s "$(type -P sha256sum)" "$PARBIN/sha256sum"                        # the parity script hashes ci-deploy.sh; not added to REALBIN
+printf '#!%s\nexit 1\n' "$BASH_BIN" > "$PYBAD/python3"                                # python3 that fails
+printf '#!%s\nprintf "not-a-digest"\n' "$BASH_BIN" > "$PYGARB/python3"                # python3 that prints a non-digest
+printf '#!%s\n[[ "${1:-}" == "-I" ]] && exit 1\nexec "%s" "$@"\n' "$BASH_BIN" "$REAL_PY" > "$PYSEL/python3"   # fails ONLY the HMAC call (-I -c), runs the host-key parse
+chmod +x "$PYBAD/python3" "$PYGARB/python3" "$PYSEL/python3"
+printf '%s' '{"sandbox_canary":{"verdict":"pass","consecutive_pass":6,"first_pass_at":1700000000,"checked_at":1700345600,"sdk_version":"0.0.0-synthetic"}}' > "$BODIES/canary_pass.json"
+printf '%s' '{"schema_version":2,"start_ts":1700000000,"end_ts":1700000100,"fatal_rc":0}' > "$BODIES/fatal_frame.json"
+HMX_ENV=("WEBHOOK_DEPLOY_SECRET=$HMX_KEY" "CF_ACCESS_CLIENT_ID=$HMX_CFID" "CF_ACCESS_CLIENT_SECRET=$HMX_CFSEC"
+  "BETTERSTACK_QUERY_HOST=bs.example.test" "BETTERSTACK_QUERY_USERNAME=bsu" "BETTERSTACK_QUERY_PASSWORD=bsp"
+  "SHIM_AUTH=hmac-cf" "SHIM_HMAC_KEY=$HMX_KEY" "SHIM_CF_ID=$HMX_CFID" "SHIM_CF_SECRET=$HMX_CFSEC")
+HMX_PATH="$HMBIN:$PYDIR:$PARBIN"   # recording python3/openssl (real tool behind them), then the real python3, then sha256sum
+# hmx_sandbox <name> <source script> -> prints the path of the copy inside a sandbox repo root that also holds a stub betterstack-query.sh
+hmx_sandbox() {
+  local sb="$HMX/sb-$1"; assert_fixture_dir "$sb"; mkdir -p "$sb/scripts/followthroughs"
+  cp "$2" "$sb/scripts/followthroughs/$(basename "$2")"
+  printf '#!%s\nexit 0\n' "$BASH_BIN" > "$sb/scripts/betterstack-query.sh"; chmod +x "$sb/scripts/betterstack-query.sh"
+  printf '%s' "$sb/scripts/followthroughs/$(basename "$2")"
+}
+hmx_run() { # <rowname> <script> [extra NAME=value ...]   (HMX_ENV first, extras after so they win; HMX_RUN_PATH overrides the extra PATH)
+  local name="$1" script="$2"; shift 2
+  RUN_EXTRA_PATH="${HMX_RUN_PATH-$HMX_PATH}"
+  run_probe "$name" "$script" "BK_SHIM=$ROWS/$name/shim" "${HMX_ENV[@]}" "$@"
+  RUN_EXTRA_PATH=""
+}
+# evaluate_hmac <rowdir> <hosts-regex> <min_calls> -> EV_FAILED (space-separated check names, empty = GREEN)
+#   headers-not-on-stdin  a call to a manifest host whose stdin is not EXACTLY the three header lines (a 64-hex digest, then the id, then the secret)
+#   secret-in-argv        the webhook key, the Cloudflare Access id or secret, or the digest is in any recorded curl argv
+#   secret-in-tool-argv   the same markers in any recorded python3/openssl argv, or an openssl -hmac/-macopt operand
+#   key-not-in-env        no recorded python3 call carried HMAC_KEY in its environment
+#   injected / unexpected-host / unexpected-tool / unmodelled-flag / calls-below-min / secret-in-output / bash-error  (as `evaluate`)
+evaluate_hmac() {
+  local row="$1" hosts="$2" min="$3" f c h digest m; local -a L
+  EV_FAILED=""; EV_HOST_CALLS=0; count_calls "$row"
+  for f in "$row"/shim/calls/*.argv; do
+    [[ -e "$f" ]] || continue
+    c="${f%.argv}"; h=""; digest=""
+    [[ -r "$c.host" ]] && h="$(<"$c.host")"
+    if [[ "$h" =~ ^(${hosts})$ ]]; then
+      EV_HOST_CALLS=$((EV_HOST_CALLS + 1))
+      mapfile -t L < <(grep -v '^$' "$c.stdin" 2>/dev/null)
+      if [[ "${#L[@]}" == 3 && "${L[0]}" =~ ^header\ =\ \"X-Signature-256:\ sha256=([0-9a-f]{64})\"$ \
+            && "${L[1]}" == "header = \"CF-Access-Client-Id: $HMX_CFID\"" && "${L[2]}" == "header = \"CF-Access-Client-Secret: $HMX_CFSEC\"" ]]; then
+        digest="${BASH_REMATCH[1]}"
+      else EV_FAILED+=" headers-not-on-stdin"; fi
+    else EV_FAILED+=" unexpected-host"; fi
+    for m in "$HMX_KEY" "$HMX_CFID" "$HMX_CFSEC" ${digest:+"$digest"}; do
+      grep -aqF -- "$m" "$f" && EV_FAILED+=" secret-in-argv"
+    done
+    [[ -s "$c.injected" ]] && EV_FAILED+=" injected"
+  done
+  for f in "$row"/shim/tools/*.argv; do
+    [[ -e "$f" ]] || continue
+    for m in "$HMX_KEY" "$HMX_CFID" "$HMX_CFSEC"; do grep -aqF -- "$m" "$f" && EV_FAILED+=" secret-in-tool-argv"; done
+    case "${f##*/}" in openssl-*) grep -aqE -e '-hmac|-macopt' "$f" && EV_FAILED+=" secret-in-tool-argv" ;; esac
+  done
+  if (( min > 0 )) && ! ls "$row"/shim/tools/python3-*.hmackey >/dev/null 2>&1; then EV_FAILED+=" key-not-in-env"; fi
+  (( EV_HOST_CALLS < min )) && EV_FAILED+=" calls-below-min"
+  [[ -e "$row/shim/unexpected" ]] && EV_FAILED+=" unexpected-tool"
+  [[ -e "$row/shim/unmodelled" ]] && EV_FAILED+=" unmodelled-flag"
+  for m in "$HMX_KEY" "$HMX_CFID" "$HMX_CFSEC"; do grep -aqF -- "$m" "$row/stdout" "$row/stderr" 2>/dev/null && EV_FAILED+=" secret-in-output"; done
+  grep -aqE ': line [0-9]+: ' "$row/stderr" 2>/dev/null && EV_FAILED+=" bash-error"
+  EV_FAILED="$(printf '%s\n' $EV_FAILED | awk '!s[$0]++' | paste -sd' ' -)"
+  return 0
+}
+# hmx_refused <rowdir> <rc-want> <script-name> -> HMX_BAD: zero calls, the rc, the value-free marker exactly once, the surface's own line, nothing echoed
+hmx_refused() {
+  local row="$1" want_rc="$2" sname="$3"
+  HMX_BAD=""
+  [[ "$RUN_RC" -eq "$want_rc" ]] || HMX_BAD+=" rc=$RUN_RC"
+  count_calls "$row"; [[ "$EV_CALLS" -eq 0 ]] || HMX_BAD+=" curl-called"
+  [[ "$(grep -cxF -- "SOLEUR_CREDENTIAL_REFUSED script=$sname reason=token_shape" "$row/stderr" || true)" == 1 ]] || HMX_BAD+=" marker-line"
+  [[ "$(grep -cF -- 'SOLEUR_CREDENTIAL_REFUSED' "$row/stderr" "$row/stdout" | awk -F: '{n+=$NF} END {print n+0}')" == 1 ]] || HMX_BAD+=" marker-count"
+  if grep -aqE 'SYNTHMARK000|'"$HMX_KEY"'|'"$HMX_CFID"'|'"$HMX_CFSEC" "$row/stdout" "$row/stderr" 2>/dev/null; then HMX_BAD+=" value-in-output"; fi
+  [[ ! -e "$row/shim/unexpected" && ! -e "$row/shim/unmodelled" ]] || HMX_BAD+=" stub-called"
+  grep -aqE ': line [0-9]+: ' "$row/stderr" 2>/dev/null && HMX_BAD+=" bash-error"
+  return 0
+}
+# hmx_classes: the hostile CF value classes (a quoted config line is broken by a quote, a newline, a second directive; the class also refuses space and non-ASCII)
+HMX_CLASSES="quote-newline-url newline-only non-ascii quote space"
+
+HMX_ENV_SAVED=()
+hmx_env_without() { local e; HMX_ENV_SAVED=("${HMX_ENV[@]}"); HMX_ENV=(); for e in "${HMX_ENV_SAVED[@]}"; do [[ "$e" == "$1="* ]] || HMX_ENV+=("$e"); done; }
+hmx_env_restore() { HMX_ENV=("${HMX_ENV_SAVED[@]}"); }
+
+# probe_rows_hmac <name> <hosts> <min> <body> <refusal rc> <PASS regex>
+probe_rows_hmac() {
+  local name="$1" hosts="$2" min="$3" body="$4" refrc="$5" okre="$6"
+  local src="$REPO_ROOT/scripts/followthroughs/$name.sh" script cls v rc bad
+  N_DYN=$((N_DYN + 1))
+  [[ -f "$src" ]] || { row "$name: manifest entry names an existing probe" fail "missing"; return 0; }
+  script="$(hmx_sandbox "$name" "$src")"
+  local -a bodyenv=("SHIM_BODY_FILE=$BODIES/$body.json")
+
+  # A. the full contract: the success outcome is reachable ONLY through the recomputed digest and the exact Cloudflare Access pair
+  hmx_run "$name-A" "$script" "${bodyenv[@]}"; rc=$RUN_RC; evaluate_hmac "$RUN_ROW" "$hosts" "$min"
+  if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -qE -e "$okre" "$RUN_ROW/stdout"; then
+    row "$name: full contract (the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv; HMAC_KEY in python3's environment only)" ok
+  else row "$name: full contract (the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv; HMAC_KEY in python3's environment only)" fail "rc=$rc calls=$EV_HOST_CALLS failed='$EV_FAILED'"; fi
+  # A2. must-PASS, not the canonical: a key holding a quote, a newline, a dollar and a backslash still signs correctly (the key has no shape guard)
+  v=$'wh"key\n$x\\y-'"$HMX_RAND"
+  hmx_run "$name-A2" "$script" "${bodyenv[@]}" "WEBHOOK_DEPLOY_SECRET=$v" "SHIM_HMAC_KEY=$v"; rc=$RUN_RC
+  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout" && ! grep -aqF -- "$HMX_RAND" "$RUN_ROW"/shim/calls/*.argv; then
+    row "$name: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly (the shim's recomputed digest agrees) and reaches no argv" ok
+  else row "$name: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly (the shim's recomputed digest agrees) and reaches no argv" fail "rc=$rc"; fi
+  # B. a 401 never reaches the success outcome
+  hmx_run "$name-B" "$script" "${bodyenv[@]}" SHIM_MODE=deny; rc=$RUN_RC
+  if [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ ! -e "$RUN_ROW/shim/unexpected" && ! -e "$RUN_ROW/shim/unmodelled" ]]; then
+    row "$name: a 401 never reaches the success outcome" ok
+  else row "$name: a 401 never reaches the success outcome" fail "rc=$rc"; fi
+  # B2. the digest check is real: a probe signing with a different key than the shim's, and a hard-coded 64-zero digest, are both 401
+  hmx_run "$name-B2key" "$script" "${bodyenv[@]}" "SHIM_HMAC_KEY=other-$HMX_RAND"; rc=$RUN_RC
+  bad=""; [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" || bad+=" wrong-key-reached-success"
+  hm5_mut "scripts/followthroughs/$name.sh" zero "$HM_CANON_DEPLOY" "printf '%064d' 0"
+  local zsrc; zsrc="$(hmx_sandbox "$name-zero" "$HM5_MUT")"
+  hmx_run "$name-B2zero" "$zsrc" "${bodyenv[@]}"; rc=$RUN_RC
+  [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] || bad+=" zero-digest-reached-success"
+  if [[ -z "$bad" ]]; then row "$name: a signing key different from the shim's, and a hard-coded 64-zero digest (a mutant that still sends a call), are both 401 and never reach the success outcome" ok
+  else row "$name: a signing key different from the shim's, and a hard-coded 64-zero digest (a mutant that still sends a call), are both 401 and never reach the success outcome" fail "$bad"; fi
+  # C. the signature header stripped by a mutated COPY of the real probe
+  hm5_mut "scripts/followthroughs/$name.sh" strip 'header = "X-Signature-256: sha256=%s"' 'header = "X-Stripped: sha256=%s"'
+  local csrc; csrc="$(hmx_sandbox "$name-strip" "$HM5_MUT")"
+  hmx_run "$name-C" "$csrc" "${bodyenv[@]}"; rc=$RUN_RC
+  if [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout"; then row "$name: a header-stripped copy never reaches the success outcome" ok
+  else row "$name: a header-stripped copy never reaches the success outcome" fail "rc=$rc"; fi
+  # D. each credential unset or empty: zero calls, the non-verdict outcome (rc 2, TRANSIENT), no bash error
+  bad=""
+  for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+    hmx_run "$name-D-$v-empty" "$script" "${bodyenv[@]}" "$v="; rc=$RUN_RC; count_calls "$RUN_ROW"
+    [[ "$EV_CALLS" -eq 0 ]] && transient_outcome "$RUN_ROW" "$rc" || bad+=" [$v empty: rc=$rc calls=$EV_CALLS]"
+    hmx_env_without "$v"
+    hmx_run "$name-D-$v-unset" "$script" "${bodyenv[@]}"; rc=$RUN_RC; count_calls "$RUN_ROW"
+    hmx_env_restore
+    [[ "$EV_CALLS" -eq 0 ]] && transient_outcome "$RUN_ROW" "$rc" || bad+=" [$v unset: rc=$rc calls=$EV_CALLS]"
+  done
+  if [[ -z "$bad" ]]; then row "$name: each of the three credentials unset or empty produces zero calls and a TRANSIENT rc 2" ok
+  else row "$name: each of the three credentials unset or empty produces zero calls and a TRANSIENT rc 2" fail "$bad"; fi
+  # E1. hostile Cloudflare Access values: refused BEFORE curl (zero calls), the marker once, the value not echoed, rc $refrc
+  bad=""
+  for v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+    for cls in $HMX_CLASSES; do
+      hmx_run "$name-E1-$v-$cls" "$script" "${bodyenv[@]}" "$v=$(tok_for "$cls")"; hmx_refused "$RUN_ROW" "$refrc" "$name"
+      [[ -z "$HMX_BAD" ]] || bad+=" [$v $cls:$HMX_BAD]"
+    done
+  done
+  if [[ -z "$bad" ]]; then row "$name: hostile Cloudflare Access values (quote+newline+url, newline, non-ASCII, quote, space) in the id and in the secret: zero calls, rc $refrc, the marker once, nothing echoed" ok
+  else row "$name: hostile Cloudflare Access values (quote+newline+url, newline, non-ASCII, quote, space) in the id and in the secret: zero calls, rc $refrc, the marker once, nothing echoed" fail "$bad"; fi
+  # E1b. an unusable signature (python3 fails, prints a non-digest, or is absent) is refused BEFORE curl, not sent unsigned
+  bad=""
+  for cls in bad garbage absent; do
+    case "$cls" in bad) HMX_RUN_PATH="$PYBAD:$PYDIR" ;; garbage) HMX_RUN_PATH="$PYGARB:$PYDIR" ;; absent) HMX_RUN_PATH="$PARBIN" ;; esac
+    hmx_run "$name-E1b-$cls" "$script" "${bodyenv[@]}"; hmx_refused "$RUN_ROW" "$refrc" "$name"
+    [[ -z "$HMX_BAD" ]] || bad+=" [python3 $cls:$HMX_BAD]"
+  done
+  unset HMX_RUN_PATH
+  if [[ -z "$bad" ]]; then row "$name: python3 failing, printing a non-digest or missing is refused before curl (zero calls, rc $refrc, the marker once), never an unsigned request" ok
+  else row "$name: python3 failing, printing a non-digest or missing is refused before curl (zero calls, rc $refrc, the marker once), never an unsigned request" fail "$bad"; fi
+  # E2. xtrace refusal (both forms) with each credential set alone: rc 78, zero calls, nothing on output
+  for mode in env flag; do
+    bad=""
+    for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+      if xtrace_check "$script" "$v" "$name-E2-$v-$mode" "$mode"; then :; else bad+=" [$v: $XT_DETAIL]"; fi
+    done
+    if [[ -z "$bad" ]]; then row "$name: refuses xtrace ($mode form) with each of the three credentials set: rc 78, zero calls, no token on output" ok
+    else row "$name: refuses xtrace ($mode form) with each of the three credentials set: rc 78, zero calls, no token on output" fail "$bad"; fi
+  done
+  # E4. a 100,000-byte (class-clean) Cloudflare Access secret with a never-reading shim under pipefail: the process-substitution writer dies silently
+  hmx_run "$name-E4" "$script" "${bodyenv[@]}" SHIM_MODE=noread "CF_ACCESS_CLIENT_SECRET=$BIGTOK"; rc=$RUN_RC
+  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] && ! grep -aqi 'broken pipe' "$RUN_ROW/stderr"; then
+    row "$name: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" ok
+  else row "$name: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" fail "rc=$rc"; fi
+  # E5/E6. harness mutations against the real converted probe
+  hmx_run "$name-E5" "$script" "${bodyenv[@]}" SHIM_MUTATE=nostdin; evaluate_hmac "$RUN_ROW" "$hosts" "$min"
+  if [[ " $EV_FAILED " == *" headers-not-on-stdin "* ]]; then row "$name: a shim that stops recording stdin turns the full-contract row RED (headers-not-on-stdin)" ok
+  else row "$name: a shim that stops recording stdin turns the full-contract row RED (headers-not-on-stdin)" fail "failed='$EV_FAILED'"; fi
+  hmx_run "$name-E6" "$csrc" "${bodyenv[@]}" SHIM_MUTATE=noauth; rc=$RUN_RC
+  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout"; then row "$name: a shim that stops being auth-gated lets the stripped copy reach the success outcome, and the check sees it" ok
+  else row "$name: a shim that stops being auth-gated lets the stripped copy reach the success outcome, and the check sees it" fail "stripped copy still not reaching success (rc=$rc)"; fi
+  # M. per-script mutants of the real probe, run: the guards must be what stops the request
+  hm5_mut "scripts/followthroughs/$name.sh" bearer '*[!A-Za-z0-9._~+/=-]*) return 1' '*[!A-Za-z0-9._~+/=\"-]*) return 1'
+  local msrc; msrc="$(hmx_sandbox "$name-mbearer" "$HM5_MUT")"
+  hmx_run "$name-Mbearer" "$msrc" "${bodyenv[@]}" "CF_ACCESS_CLIENT_SECRET=$(tok_for quote)"; evaluate_hmac "$RUN_ROW" "$hosts" 0
+  if [[ "$(bk_calls "$RUN_ROW")" -ge 1 && " $EV_FAILED " == *" injected "* ]]; then row "$name: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED (the E1 row goes RED)" ok
+  else row "$name: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED (the E1 row goes RED)" fail "calls=$(bk_calls "$RUN_ROW") failed='$EV_FAILED'"; fi
+  hm5_mut "scripts/followthroughs/$name.sh" nohex '^[0-9a-f]{64}$' '^[0-9a-f]*$'
+  msrc="$(hmx_sandbox "$name-mnohex" "$HM5_MUT")"
+  HMX_RUN_PATH="$PYBAD:$PYDIR"; hmx_run "$name-Mnohex" "$msrc" "${bodyenv[@]}"; unset HMX_RUN_PATH
+  if [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]]; then row "$name: mutant weakening the 64-hex check sends an UNSIGNED request when python3 fails (the E1b row goes RED)" ok
+  else row "$name: mutant weakening the 64-hex check sends an UNSIGNED request when python3 fails (the E1b row goes RED)" fail "calls=$(bk_calls "$RUN_ROW")"; fi
+}
+
+while IFS='|' read -r h_name h_kind h_hosts h_min h_body h_test; do
+  [[ -n "$h_name" ]] || continue
+  case "$h_kind" in
+    dynamic)
+      refrc=2; okre='^PASS'
+      probe_rows_hmac "$h_name" "$h_hosts" "$h_min" "$h_body" "$refrc" "$okre" ;;
+    delegated)
+      # The delegation row is NOT "the suite names the probe": the suite must RECORD the curl stdin and assert the exact three header lines
+      # (the id and secret values and a 64-hex signature), so a delegated probe cannot pass while sending no credential. A mutant copy of the
+      # suite without those assertions must turn the same check RED.
+      N_DELEGATED=$((N_DELEGATED + 1))
+      hmx_del() { # <test file> -> 0 when it records stdin and asserts the three lines + a 64-hex digest + the refusal marker
+        local t="$1" code
+        code="$(grep -vE '^[[:space:]]*#' "$t")"
+        [[ "$(grep -cF -e 'header = "X-Signature-256: sha256=' <<< "$code" || true)" -ge 1 && "$(grep -cF -e 'header = "CF-Access-Client-Id: ' <<< "$code" || true)" -ge 1 \
+           && "$(grep -cF -e 'header = "CF-Access-Client-Secret: ' <<< "$code" || true)" -ge 1 && "$(grep -cF -e '[0-9a-f]{64}' <<< "$code" || true)" -ge 1 \
+           && "$(grep -cF -e 'SOLEUR_CREDENTIAL_REFUSED script=' <<< "$code" || true)" -ge 1 && "$(grep -cE -e 'curl[._-]stdin|stdin[._-](log|rec)' <<< "$code" || true)" -ge 1 ]]
+      }
+      if [[ -f "$h_test" ]] && git ls-files --error-unmatch -- "$h_test" >/dev/null 2>&1 && grep -qF -- "$h_name" "$h_test" && hmx_del "$h_test"; then
+        row "delegated $h_name (HMAC): owning test $h_test is tracked, names the probe, RECORDS curl's stdin and asserts the three header lines, a 64-hex digest and the refusal marker" ok
+      else row "delegated $h_name (HMAC): owning test $h_test is tracked, names the probe, RECORDS curl's stdin and asserts the three header lines, a 64-hex digest and the refusal marker" fail "missing, untracked, or it does not assert recorded stdin"; fi
+      if [[ -f "$h_test" ]]; then
+        grep -vF -e 'header = "CF-Access-Client-Secret: ' "$h_test" > "$HMX/del-mut-$h_name.sh" || true
+        if ! hmx_del "$HMX/del-mut-$h_name.sh"; then row "delegated $h_name (HMAC): a copy of the owning test without its CF-Access-Client-Secret stdin assertion fails the delegation check (it can fire)" ok
+        else row "delegated $h_name (HMAC): a copy of the owning test without its CF-Access-Client-Secret stdin assertion fails the delegation check (it can fire)" fail "the check accepted a suite that no longer asserts the secret header on stdin"; fi
+      else row "delegated $h_name (HMAC): a copy of the owning test without its CF-Access-Client-Secret stdin assertion fails the delegation check (it can fire)" fail "no owning test"; fi ;;
+    *) row "HMAC manifest $h_name: known kind" fail "unknown kind '$h_kind'" ;;
+  esac
+done <<< "$HMAC_MANIFEST"
+
+# ---- the parity script's LIVE status arm (its owning suite reads fixtures; this is the only row that reaches the transport) ----
+PAR="scripts/check-deploy-script-parity.sh"
+PAR_SHA="$(sha256sum apps/web-platform/infra/ci-deploy.sh | cut -d' ' -f1)"
+printf '{"ci_deploy_sha256":"%s","host_id":"hetzner-1"}' "$PAR_SHA" > "$BODIES/parity_status.json"
+par_run() { # <rowname> [extra NAME=value ...]  (script: the real one, at its repo location, --status-only)
+  local name="$1"; shift
+  RUN_ARGS=(--status-only); RUN_EXTRA_PATH="${HMX_RUN_PATH-$HMX_PATH}"
+  run_probe "$name" "${PAR_SCRIPT:-$REPO_ROOT/$PAR}" "BK_SHIM=$ROWS/$name/shim" "${HMX_ENV[@]}" "SHIM_BODY_FILE=$BODIES/parity_status.json" "$@"
+  RUN_ARGS=(); RUN_EXTRA_PATH=""
+}
+par_run par-A; rc=$RUN_RC; evaluate_hmac "$RUN_ROW" 'deploy\.soleur\.ai' 1
+if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -qF 'PARITY(status)' "$RUN_ROW/stdout"; then
+  row "check-deploy-script-parity (live status arm): the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv" ok
+else row "check-deploy-script-parity (live status arm): the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv" fail "rc=$rc failed='$EV_FAILED'"; fi
+v=$'wh"key\n$x\\y-'"$HMX_RAND"
+par_run par-A2 "WEBHOOK_DEPLOY_SECRET=$v" "SHIM_HMAC_KEY=$v"; rc=$RUN_RC
+if [[ "$rc" -eq 0 ]] && grep -qF 'PARITY(status)' "$RUN_ROW/stdout"; then row "check-deploy-script-parity: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly" ok
+else row "check-deploy-script-parity: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly" fail "rc=$rc"; fi
+par_run par-B SHIM_MODE=deny; rc=$RUN_RC
+if [[ "$rc" -eq 1 ]] && grep -qF 'DRIFT(status)' "$RUN_ROW/stderr" && ! grep -qF 'PARITY(status)' "$RUN_ROW/stdout"; then row "check-deploy-script-parity: a 401 is DRIFT(status), never PARITY" ok
+else row "check-deploy-script-parity: a 401 is DRIFT(status), never PARITY" fail "rc=$rc"; fi
+par_run par-B2 "SHIM_HMAC_KEY=other-$HMX_RAND"; rc=$RUN_RC
+if [[ "$rc" -eq 1 ]] && ! grep -qF 'PARITY(status)' "$RUN_ROW/stdout"; then row "check-deploy-script-parity: a signing key different from the shim's is 401, DRIFT(status), never PARITY (the digest check is real)" ok
+else row "check-deploy-script-parity: a signing key different from the shim's is 401, DRIFT(status), never PARITY (the digest check is real)" fail "rc=$rc"; fi
+bad=""
+for v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+  for cls in $HMX_CLASSES; do
+    par_run "par-E1-$v-$cls" "$v=$(tok_for "$cls")"; hmx_refused "$RUN_ROW" 2 check-deploy-script-parity
+    [[ -z "$HMX_BAD" ]] || bad+=" [$v $cls:$HMX_BAD]"
+  done
+done
+if [[ -z "$bad" ]]; then row "check-deploy-script-parity: hostile Cloudflare Access values in the id and in the secret: zero calls, exit 2, the marker once, nothing echoed" ok
+else row "check-deploy-script-parity: hostile Cloudflare Access values in the id and in the secret: zero calls, exit 2, the marker once, nothing echoed" fail "$bad"; fi
+bad=""
+# the parity script's host-key parse also needs a working python3, so both shims fail ONLY the HMAC call (-I -c) and pass the rest through
+printf '#!%s\n[[ "${1:-}" == "-I" ]] && { printf "not-a-digest"; exit 0; }\nexec "%s" "$@"\n' "$BASH_BIN" "$REAL_PY" > "$PYGARB/python3"
+for cls in bad garbage; do
+  case "$cls" in bad) HMX_RUN_PATH="$PYSEL:$PARBIN" ;; garbage) HMX_RUN_PATH="$PYGARB:$PARBIN" ;; esac
+  par_run "par-E1b-$cls"; hmx_refused "$RUN_ROW" 2 check-deploy-script-parity
+  [[ -z "$HMX_BAD" ]] || bad+=" [python3 $cls:$HMX_BAD]"
+done
+unset HMX_RUN_PATH
+if [[ -z "$bad" ]]; then row "check-deploy-script-parity: a failing or non-digest HMAC python3 is refused before curl (zero calls, exit 2, the marker once), never an unsigned request" ok
+else row "check-deploy-script-parity: a failing or non-digest HMAC python3 is refused before curl (zero calls, exit 2, the marker once), never an unsigned request" fail "$bad"; fi
+bad=""
+for mode in env flag; do
+  for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_SECRET; do
+    if [[ "$mode" == env ]]; then RUN_ARGS=(--status-only); RUN_EXTRA_PATH="$HMX_PATH"; run_probe "par-xt-$v-$mode" "$REPO_ROOT/$PAR" "$v=$FIXTURE_TOKEN" SHELLOPTS=xtrace
+    else RUN_ARGS=(--status-only); RUN_FLAGS=(-x); RUN_EXTRA_PATH="$HMX_PATH"; run_probe "par-xt-$v-$mode" "$REPO_ROOT/$PAR" "$v=$FIXTURE_TOKEN"; RUN_FLAGS=(); fi
+    RUN_ARGS=(); RUN_EXTRA_PATH=""; count_calls "$RUN_ROW"
+    [[ "$RUN_RC" -eq 78 && "$EV_CALLS" -eq 0 ]] && ! grep -aqF -- "$FIXTURE_TOKEN" "$RUN_ROW/stdout" "$RUN_ROW/stderr" || bad+=" [$v $mode: rc=$RUN_RC calls=$EV_CALLS]"
+  done
+done
+if [[ -z "$bad" ]]; then row "check-deploy-script-parity: refuses xtrace (env and flag forms) with a live credential: rc 78, zero calls, no token on output" ok
+else row "check-deploy-script-parity: refuses xtrace (env and flag forms) with a live credential: rc 78, zero calls, no token on output" fail "$bad"; fi
+hm5_mut "$PAR" bearer '*[!A-Za-z0-9._~+/=-]*) return 1' '*[!A-Za-z0-9._~+/=\"-]*) return 1'
+PARSB="$HMX/sb-par"; assert_fixture_dir "$PARSB"; mkdir -p "$PARSB/scripts"; ln -sfn "$REPO_ROOT/apps" "$PARSB/apps"   # ROOT = the sandbox; the infra files it reads come through the symlink
+cp "$HM5_MUT" "$PARSB/scripts/check-deploy-script-parity.sh"
+PAR_SCRIPT="$PARSB/scripts/check-deploy-script-parity.sh"
+par_run par-Mbearer "CF_ACCESS_CLIENT_SECRET=$(tok_for quote)"; evaluate_hmac "$RUN_ROW" 'deploy\.soleur\.ai' 0
+PAR_SCRIPT=""
+if [[ "$(bk_calls "$RUN_ROW")" -ge 1 && " $EV_FAILED " == *" injected "* ]]; then row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" ok
+else row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" fail "calls=$(bk_calls "$RUN_ROW") failed='$EV_FAILED'"; fi
+echo "=== stage S2-C: deploy-webhook triple (parity script and four probes) done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -2253,7 +2695,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=284
+EXPECTED_TESTS=369
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

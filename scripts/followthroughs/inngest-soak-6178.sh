@@ -73,7 +73,8 @@
 #
 # EXIT CONTRACT (scripts/sweep-followthroughs.sh) — NEVER 0, NEVER 1:
 #   2  = NOT YET            a complete, non-vacuous reading taken before SOAK_END.
-#   3  = CANNOT ESTABLISH   credentials unset, population/registry/slice unreadable, vacuous,
+#   3  = CANNOT ESTABLISH   credentials unset or REFUSED (a malformed Cloudflare Access value or no usable
+#                           signature: one SOLEUR_CREDENTIAL_REFUSED line, no request), population/registry/slice unreadable, vacuous,
 #                           incomplete, thin, eroded, a failing jq, past the horizon, or ANY
 #                           unmapped exit.
 #   5  = ACTION REQUIRED    at/after SOAK_END: "SOAK CLEAN … flip, re-read, release, close" or
@@ -110,7 +111,7 @@
 # the value under `-x` before the refusal fires.
 case "$-" in
   *x*)
-    if [ -n "${WEBHOOK_DEPLOY_SECRET:+x}" ] || [ -n "${CF_ACCESS_CLIENT_ID:+x}" ] || [ -n "${CF_ACCESS_CLIENT_SECRET:+x}" ]; then
+    if [ -n "${WEBHOOK_DEPLOY_SECRET:+x}" ] || [ -n "${CF_ACCESS_CLIENT_ID:+x}" ] || [ -n "${CF_ACCESS_CLIENT_SECRET:+x}" ] || [ -n "${HMAC_KEY:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -256,7 +257,19 @@ printf '%s\n' "$pop_lines" > "$WORK/population.txt"
 LC_ALL=C sort -u "$WORK/population.txt" > "$WORK/population.sorted"
 
 # ── one request shape (canary-promotion-5875.sh: HMAC over the empty GET body) ───────────────
-SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
+# (#9597, S2) The three credentials ride curl's STDIN as `header = "..."` config lines (a process substitution,
+# never a pipe: `printf | curl --config -` dies with 141 under pipefail when curl does not read stdin), not its
+# argument list, which every local user reads from /proc/<pid>/cmdline. A config line is a quoted string, so each
+# VALUE is checked first: the Cloudflare Access pair against the cutover's `_bearer_ok` class, and the signature
+# must be exactly 64 lowercase hex (python3 missing or an empty key leaves SIG empty, and an unsigned request must
+# never be sent). A refusal is CANNOT ESTABLISH (exit 3, NEVER 2: this probe reserves 2 for a reading, and never 0
+# or 1), sends no request and prints one value-free marker.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_refuse() { printf 'SOLEUR_CREDENTIAL_REFUSED script=inngest-soak-6178 reason=token_shape\n' >&2; cannot_establish "credential_refused what=$1" "nothing about the host was measured and no request was sent; the credential value is not shown. Fix the secret named in what= (the repo secret the sweeper forwards) and re-run next sweep"; }
+_bearer_ok "$CF_ACCESS_CLIENT_ID" || _refuse "cf_access_client_id"
+_bearer_ok "$CF_ACCESS_CLIENT_SECRET" || _refuse "cf_access_client_secret"
+SIG="$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' 2>/dev/null)" || SIG=""
+[[ "$SIG" =~ ^[0-9a-f]{64}$ ]] || _refuse "request_signature python3_missing_or_webhook_key_empty"
 # hook_get <url> <body-file> → sets HTTP_CODE and CURL_RC (globals — called DIRECTLY, never via
 # `$(…)`, which would run it in a subshell and discard both). The body file is created first so a
 # transport failure leaves an EMPTY file, never a missing one (a missing file makes every later
@@ -269,10 +282,8 @@ HTTP_CODE=""; CURL_RC=0
 hook_get() {
   : > "$2"
   HTTP_CODE="$(curl --disable --noproxy '*' --proto '=https' -sS --connect-timeout 10 --max-time 105 -o "$2" -w '%{http_code}' -X GET \
-    -H "X-Signature-256: sha256=$SIG" \
-    -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-    -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-    "$1" 2>/dev/null)"
+    "$1" \
+    --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") 2>/dev/null)"
   CURL_RC=$?
 }
 # classify_body <file> → body_class token. Never prints the body.
