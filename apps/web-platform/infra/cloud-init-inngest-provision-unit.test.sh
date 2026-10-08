@@ -1389,7 +1389,10 @@ fi
 # =================================================================================================
 echo ""
 echo "--- Tier B: systemd as PID 1 in the pinned ubuntu:24.04 image ---"
-UBUNTU_BASE='ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55'
+# The pin is owned by git-data-runcmd-rehearsal.test.sh (rule-audit.yml watches that copy); read it
+# from there so a bump cannot leave this tier on a stale image.
+UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${SCRIPT_DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
+[ -n "$UBUNTU_BASE" ] || { echo "FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh" >&2; exit 1; }
 TIERB_RESULT=""
 TB_FAIL=0
 tb_skip() { echo "  SKIP (Tier B): $1"; TIERB_RESULT="skipped: $1"; }

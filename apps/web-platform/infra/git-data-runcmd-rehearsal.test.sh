@@ -55,15 +55,17 @@ fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:
 #
 #   docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'
 #
-# resolved 2026-10-08 (the previous pin was resolved 2026-09-02), reported by that command as
+# resolved 2026-10-08 (previous pin: 2026-09-02); that command reported
 # `MediaType: application/vnd.oci.image.index.v1+json` — the index media type is what makes it
 # the manifest list rather than a platform manifest. The tag is kept alongside the digest
 # because Docker still reports it and a bare digest reads as unattributed.
 #
-# RE-MEASURED 2026-10-08 on this bump: `mke2fs -V` inside the new image still reports 1.47.0
-# (5-Feb-2023), dpkg e2fsprogs 1.47.0-2.4~exp1ubuntu4.1, and the plain, `-O project` and
+# RE-MEASURED 2026-10-08, on the 2026-10-08 bump: `mke2fs -V` inside the pinned image still reports
+# 1.47.0 (5-Feb-2023), dpkg e2fsprogs 1.47.0-2.4~exp1ubuntu4.1, and the plain, `-O project` and
 # `-O casefold` feature sets are identical to the previous image. R1's allowlist needed no row
-# added, removed or changed; the fixture file was deliberately not touched (#9252).
+# added, removed or changed; the fixture file was deliberately not touched (#9252). Only the pinned
+# image was re-measured: the sibling baseline and `expires_on` in the fixture are unchanged, and R1's
+# host-kernel half is not re-measured by an image move.
 #
 # WHY THIS IS NOT COSMETIC. R1 fingerprints the birth filesystem's ext4 features and classifies
 # each against an allowlist, and that classification is version-sensitive: mke2fs measures

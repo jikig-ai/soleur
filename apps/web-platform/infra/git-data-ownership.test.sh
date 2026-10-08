@@ -25,8 +25,11 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="${DIR}/cloud-init-git-data.yml"
 BOOTSTRAP="${DIR}/git-data-bootstrap.sh"
-# Pinned base image — the same digest git-data-runcmd-rehearsal.test.sh spins (#7544).
-UBUNTU_BASE='ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55'
+# Pinned base image — the digest git-data-runcmd-rehearsal.test.sh owns and spins (#7544;
+# rule-audit.yml watches that copy). Read it from there, as git-data-cutover-access.test.sh does,
+# so a pin bump cannot leave this suite on a stale image.
+UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
+[ -n "$UBUNTU_BASE" ] || { printf 'FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh\n' >&2; exit 1; }
 # Bounded apt (#9379): one budget of apt seconds on the runtime arm's in-container apt cycle, armed at
 # its docker site. 180 s is ~1.7x the slowest healthy apt cost measured on a slow box (32-104 s for the whole
 # suite, ~55 s of it apt) and well inside the 300 s suite bound. Expiry exits 100 with a FIXTURE_APT_CAUSE
