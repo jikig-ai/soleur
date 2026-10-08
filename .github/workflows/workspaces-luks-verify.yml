@@ -1181,9 +1181,7 @@ jobs:
               # be noise. The gate is unchanged (the marker stays absent); the moment a row exists any defect in
               # it is RED as before, and rows going missing AFTER the marker was written still delete it and
               # fail. The follow-through (web2-luks-live-6931.sh) FAILS a conversion that never produces a soak.
-              # reboot_not_seen (#9372): a GREEN probe row from the SAME boot as the readiness row is the state between
-              # a rebirth and its first reboot; the marker (and with it any weight) waits for the reboot proof.
-              if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready || "$reason" == reboot_not_seen ) ]]; then
+              if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready ) ]]; then
                 echo "::notice title=web-2 not live yet::${reason}: no web-2 evidence certifies this instance and the soak marker is absent. The gate stays closed; this run is not an error until web-2 has been converted (#9372; runbook web-host-replace.md, section web-2 boot failed)."
                 emit not_live "$reason"
                 exit 0

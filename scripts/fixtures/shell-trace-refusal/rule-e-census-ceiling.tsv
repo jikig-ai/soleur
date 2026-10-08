@@ -35,7 +35,6 @@ apps/web-platform/infra/infra-config-verify.sh	1
 apps/web-platform/infra/push-infra-config.sh	1
 apps/web-platform/scripts/github-app-key-status.sh	1
 scripts/check-deploy-script-parity.sh	1
-scripts/cutover-inngest.sh	20
 scripts/followthroughs/canary-promotion-5875.sh	1
 scripts/followthroughs/infra-config-activation-7220.sh	1
 scripts/followthroughs/infra-config-fatal-channel-7220.sh	1

@@ -342,6 +342,12 @@ describe("routingInstructions", () => {
 });
 
 describe("pollInstructions", () => {
+  test("every harness carries the queue-mode exception beside its BEHIND instruction (#9710)", () => {
+    for (const h of ["claude", "grok", "codex", "devin", "unknown"] as const) {
+      expect(pollInstructions(h)).toContain("[ship.phase7.queue_wait]");
+    }
+  });
+
   test("grok documents AwaitShell merge-deploy polling and BEHIND resync", () => {
     const md = pollInstructions("grok");
     expect(md).toContain("AwaitShell");

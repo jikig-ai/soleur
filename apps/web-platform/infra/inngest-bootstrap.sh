@@ -550,7 +550,7 @@ LOG_TAG="inngest-server-probe"
 # and must be ABSENT from every OCI bake surface, which is exactly why the query text is inlined
 # here rather than sourced. The guard is a `grep -qF` over this file, so writing the filename even
 # in a COMMENT trips it -- which it did, on the first draft of this block.
-readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers { type value } } }'
 
 # --- gather (never branch on the results before the emit below) ---
 # `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl

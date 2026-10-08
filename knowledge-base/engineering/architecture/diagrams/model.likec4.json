@@ -604,7 +604,7 @@
 "shape": "rectangle"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "title": "Soleur Plugin",
 "kind": "system",
@@ -654,7 +654,7 @@
 },
 "technology": "Next.js API",
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start and compaction-state, which is registered under both events) are unclassified with no web override. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "title": "API Routes",
 "kind": "container",
@@ -985,6 +985,19 @@
 "kind": "component",
 "id": "platform.plugin.snapshotGuard"
 },
+"platform.plugin.destructiveGuard": {
+"notation": "Component",
+"style": {
+"shape": "component"
+},
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"description": {
+"txt": "ADR-277 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the hook's output is persisted as a hook_success row in the customer's own harness transcript (the record of an answered Yes/No prompt is unmeasured). HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders; hosted Bash is not gated for these commands in the default autonomous mode, where only a short blocklist that does not match terraform destroy, rm -rf or git push -f stands between the agent and the sandbox (ADR-093 amendment 2026-10-07, ADR-277 D8). The twelve server-side agent functions that spawn claude --plugin-dir plugins/soleur outside buildAgentEnv keep the guard ACTIVE (ADR-277, Server-side scheduled agents)."
+},
+"title": "destructive-command guard",
+"kind": "component",
+"id": "platform.plugin.destructiveGuard"
+},
 "platform.infra.supabase": {
 "notation": "Data store",
 "style": {
@@ -1096,7 +1109,7 @@
 },
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily (a probe pipeline that goes silent reads as healthy to the alert; #8516). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "title": "Inngest Redis",
 "kind": "container",
@@ -3189,7 +3202,18 @@
 },
 "id": "kupj67"
 },
-"1v01xkb": {
+"caec3y": {
+"title": "PreToolUse ask/deny on destructive commands; no egress",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-277)",
+"source": {
+"model": "platform.engine.hooks"
+},
+"target": {
+"model": "platform.plugin.destructiveGuard"
+},
+"id": "caec3y"
+},
+"1e64cys": {
 "title": "cron-ux-audit per-fire overlay: UNWRAPPED @playwright/mcp@0.0.75, --snapshot-mode none only; holds no tree- or value-returning tool (PA-31 §(g))",
 "technology": "stdio JSON-RPC (claude -p child)",
 "source": {
@@ -3198,7 +3222,7 @@
 "target": {
 "model": "playwrightMcp"
 },
-"id": "1v01xkb"
+"id": "1e64cys"
 }
 },
 "globals": {
@@ -6651,7 +6675,7 @@
 "parent": null,
 "relations": [
 "ctgrr4",
-"1v01xkb"
+"1e64cys"
 ],
 "color": "gray",
 "line": "dashed",
@@ -10521,7 +10545,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -11222,7 +11246,8 @@
 "pacu1m",
 "1vsceh3",
 "f47zaf",
-"kupj67"
+"kupj67",
+"caec3y"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14880,7 +14905,7 @@
 },
 "parent": null,
 "relations": [
-"1v01xkb"
+"1e64cys"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15462,7 +15487,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start and compaction-state, which is registered under both events) are unclassified with no web override. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -15548,7 +15573,8 @@
 "9tpwtk",
 "yudi63",
 "rjq4wu",
-"12qyu50"
+"12qyu50",
+"1e7sm50"
 ],
 "title": "Cloud CLI Engine",
 "modelRef": "platform.engine",
@@ -15875,7 +15901,8 @@
 "vdbrj4",
 "rspfp0",
 "yudi63",
-"12qyu50"
+"12qyu50",
+"1e7sm50"
 ],
 "title": "Hook Engine",
 "modelRef": "platform.engine.hooks",
@@ -16395,6 +16422,7 @@
 "platform.plugin.skills",
 "platform.plugin.agents",
 "platform.plugin.snapshotGuard",
+"platform.plugin.destructiveGuard",
 "platform.plugin.kb"
 ],
 "inEdges": [
@@ -16406,7 +16434,8 @@
 "be72gy",
 "a520la",
 "rjq4wu",
-"12qyu50"
+"12qyu50",
+"1e7sm50"
 ],
 "outEdges": [
 "wip0go"
@@ -16420,16 +16449,16 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 9801,
+"x": 9263,
 "y": 1620,
-"width": 1344,
+"width": 1882,
 "height": 743,
 "labelBBox": {
 "x": 6,
@@ -16639,6 +16668,42 @@
 "x": 38,
 "y": 17,
 "width": 312,
+"height": 139
+}
+},
+{
+"id": "platform.plugin.destructiveGuard",
+"parent": "platform.plugin",
+"level": 1,
+"children": [],
+"inEdges": [
+"1e7sm50"
+],
+"outEdges": [],
+"title": "destructive-command guard",
+"modelRef": "platform.plugin.destructiveGuard",
+"shape": "component",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "ADR-277 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the hook's output is persisted as a hook_success row in the customer's own harness transcript (the record of an answered Yes/No prompt is unmeasured). HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders; hosted Bash is not gated for these commands in the default autonomous mode, where only a short blocklist that does not match terraform destroy, rm -rf or git push -f stands between the agent and the sandbox (ADR-093 amendment 2026-10-07, ADR-277 D8). The twelve server-side agent functions that spawn claude --plugin-dir plugins/soleur outside buildAgentEnv keep the guard ACTIVE (ADR-277, Server-side scheduled agents)."
+},
+"tags": [],
+"notation": "Component",
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"kind": "component",
+"navigateTo": "__platform_plugin_destructiveGuard",
+"x": 9303,
+"y": 1703,
+"width": 427,
+"height": 180,
+"labelBBox": {
+"x": 38,
+"y": 17,
+"width": 352,
 "height": 139
 }
 },
@@ -16866,7 +16931,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 15117,
+"x": 15116,
 "y": 2133,
 "width": 372,
 "height": 180,
@@ -17064,7 +17129,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily (a probe pipeline that goes silent reads as healthy to the alert; #8516). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -17387,43 +17452,43 @@
 ],
 [
 12398,
-450
+451
 ],
 [
 10069,
-366
+369
 ],
 [
 8148,
 308
 ],
 [
-8111,
-307
+7943,
+302
 ],
 [
-7465,
-203
+7416,
+231
 ],
 [
 7226,
 308
 ],
 [
-7184,
+7183,
 326
 ],
 [
-7143,
+7141,
 355
 ],
 [
-7108,
+7106,
 384
 ]
 ],
 "labelBBox": {
-"x": 7341,
+"x": 7400,
 "y": 248,
 "width": 153,
 "height": 39
@@ -17460,32 +17525,32 @@
 308
 ],
 [
-7389,
-246
+7320,
+273
 ],
 [
-7445,
-267
+7582,
+257
 ],
 [
-7617,
+7676,
 291
 ],
 [
-7689,
-300
+7730,
+310
 ],
 [
-7756,
-342
+7780,
+347
 ],
 [
-7809,
+7820,
 384
 ]
 ],
 "labelBBox": {
-"x": 7560,
+"x": 7619,
 "y": 248,
 "width": 57,
 "height": 39
@@ -17768,60 +17833,60 @@
 "label": "Discovers",
 "points": [
 [
-3914,
+3902,
 1442
 ],
 [
-3945,
-1457
+3936,
+1458
 ],
 [
-3978,
-1471
+3973,
+1473
 ],
 [
 4010,
 1482
 ],
 [
-4297,
-1580
+4165,
+1519
 ],
 [
-4378,
-1583
+9575,
+1482
 ],
 [
-4679,
-1612
+9733,
+1502
 ],
 [
-4717,
-1616
+9952,
+1529
 ],
 [
-10180,
-1608
+10017,
+1524
 ],
 [
 10216,
 1620
 ],
 [
-10263,
-1636
+10257,
+1640
 ],
 [
-10307,
-1666
+10298,
+1668
 ],
 [
-10344,
+10334,
 1696
 ]
 ],
 "labelBBox": {
-"x": 4680,
+"x": 10194,
 "y": 1535,
 "width": 94,
 "height": 39
@@ -17842,48 +17907,60 @@
 "label": "Discovers",
 "points": [
 [
-3692,
+3914,
 1442
 ],
 [
-3660,
-1498
+3945,
+1457
 ],
 [
-3638,
-1568
+3978,
+1471
 ],
 [
-3683,
+4010,
+1482
+],
+[
+4295,
+1579
+],
+[
+4375,
+1583
+],
+[
+4675,
 1612
 ],
 [
-3689,
-1618
+4710,
+1616
 ],
 [
-8771,
+9753,
+1608
+],
+[
+9786,
 1620
-],
-[
-8780,
-1620
-],
-[
-9157,
-1647
-],
-[
-9596,
-1718
 ],
 [
 9831,
-1760
+1636
+],
+[
+9874,
+1666
+],
+[
+9909,
+1696
 ]
 ],
 "labelBBox": {
-"x": 3684,
+"x": 4676,
 "y": 1535,
 "width": 99,
 "height": 39
@@ -18066,80 +18143,68 @@
 1482
 ],
 [
-3593,
-1498
+3659,
+1515
 ],
 [
-8402,
-1500
+8335,
+1481
 ],
 [
 8471,
 1502
 ],
 [
-9651,
-1529
+8638,
+1527
 ],
 [
-9944,
-1578
+8667,
+1587
 ],
 [
-11124,
+8834,
 1612
 ],
 [
-11152,
-1613
+8855,
+1615
 ],
 [
-11597,
-1609
+11853,
+1608
 ],
 [
-11623,
+11870,
 1620
 ],
 [
-11629,
-1623
+12040,
+1736
 ],
 [
-11953,
-1947
+12141,
+1911
 ],
 [
-11955,
-1953
-],
-[
-11974,
-1998
-],
-[
-11988,
-2027
-],
-[
-11955,
+12003,
 2063
 ],
 [
-11867,
-2160
+11912,
+2164
 ],
 [
-11009,
-2202
+11019,
+2204
 ],
 [
 10624,
-2216
+2217
 ]
 ],
 "labelBBox": {
-"x": 11898,
+"x": 12068,
 "y": 1762,
 "width": 200,
 "height": 56
@@ -18517,38 +18582,38 @@
 "points": [
 [
 3914,
-984
+996
 ],
 [
-3967,
-1008
+3963,
+1021
 ],
 [
-4021,
-1043
+4016,
+1053
 ],
 [
 4057,
 1091
 ],
 [
-4196,
-1279
+4152,
+1179
 ],
 [
-4300,
-1446
+4404,
+1521
 ],
 [
-4135,
+4313,
 1612
 ],
 [
-4123,
-1624
+4301,
+1625
 ],
 [
-1779,
+1780,
 1615
 ],
 [
@@ -18569,7 +18634,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4221,
+"x": 4317,
 "y": 1330,
 "width": 121,
 "height": 39
@@ -18828,32 +18893,44 @@
 741
 ],
 [
-3195,
+3194,
 751
 ],
 [
-5310,
-742
+5243,
+743
 ],
 [
-5323,
+5256,
 749
 ],
 [
-5432,
-806
+5438,
+833
 ],
 [
-5548,
-1123
+5420,
+938
+],
+[
+5550,
+1091
+],
+[
+5591,
+1140
+],
+[
+5591,
+1163
 ],
 [
 5642,
 1202
 ],
 [
-5690,
-1242
+5692,
+1240
 ],
 [
 5736,
@@ -18988,36 +19065,24 @@
 1612
 ],
 [
-5998,
-1503
+6191,
+1312
 ],
 [
-5923,
-1414
+5858,
+912
 ],
 [
-5889,
-1262
-],
-[
-5827,
-984
-],
-[
-5765,
-866
-],
-[
-5506,
+5463,
 749
 ],
 [
-5492,
-742
+5449,
+743
 ],
 [
 3312,
-752
+751
 ],
 [
 3301,
@@ -19061,7 +19126,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5876,
+"x": 5972,
 "y": 1091,
 "width": 265,
 "height": 106
@@ -19082,36 +19147,36 @@
 "label": "Config + run history",
 "points": [
 [
-1839,
-1882
+1826,
+1883
 ],
 [
-1810,
+1797,
 1903
 ],
 [
-1782,
+1768,
 1927
 ],
 [
-1758,
+1744,
 1953
 ],
 [
-1715,
-2000
+1702,
+1999
 ],
 [
-1679,
-2061
+1669,
+2060
 ],
 [
-1653,
+1646,
 2113
 ]
 ],
 "labelBBox": {
-"x": 1759,
+"x": 1745,
 "y": 1986,
 "width": 197,
 "height": 39
@@ -19132,36 +19197,36 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-1984,
+1975,
 1882
 ],
 [
-1982,
-1935
+1969,
+1936
 ],
 [
-1984,
+1966,
 2004
 ],
 [
-1997,
+1981,
 2063
 ],
 [
-2001,
-2083
+1986,
+2084
 ],
 [
-2009,
-2104
+1995,
+2105
 ],
 [
-2017,
+2004,
 2124
 ]
 ],
 "labelBBox": {
-"x": 1998,
+"x": 1982,
 "y": 1986,
 "width": 167,
 "height": 39
@@ -19450,24 +19515,24 @@
 1619
 ],
 [
-3165,
+3138,
 1619
 ],
 [
-3154,
+3127,
 1620
 ],
 [
-2969,
+2951,
 1642
 ],
 [
-2761,
-1696
+2756,
+1694
 ],
 [
 2618,
-1737
+1735
 ]
 ],
 "labelBBox": {
@@ -19520,44 +19585,44 @@
 1091
 ],
 [
-4642,
-1264
+4546,
+1149
 ],
 [
-4568,
-1437
+4561,
+1501
 ],
 [
-4278,
+4430,
 1612
 ],
 [
-4262,
-1622
+4414,
+1626
 ],
 [
-2918,
-1617
+2893,
+1616
 ],
 [
-2899,
+2872,
 1620
 ],
 [
-2803,
-1638
+2786,
+1637
 ],
 [
-2702,
-1674
+2694,
+1671
 ],
 [
 2618,
-1709
+1704
 ]
 ],
 "labelBBox": {
-"x": 4570,
+"x": 4534,
 "y": 1296,
 "width": 312,
 "height": 106
@@ -19846,32 +19911,32 @@
 1121
 ],
 [
-9980,
+9979,
 1038
 ],
 [
-9879,
+9878,
 1091
 ],
 [
-9815,
+9814,
 1125
 ],
 [
-9819,
+9818,
 1161
 ],
 [
-9759,
+9758,
 1202
 ],
 [
-9718,
+9717,
 1229
 ],
 [
 9671,
-1255
+1254
 ],
 [
 9626,
@@ -20230,32 +20295,32 @@
 990
 ],
 [
-10407,
+10406,
 1054
 ],
 [
-10343,
+10342,
 1091
 ],
 [
-10289,
+10288,
 1123
 ],
 [
-10305,
+10304,
 1164
 ],
 [
-10255,
+10254,
 1202
 ],
 [
-10228,
+10227,
 1223
 ],
 [
 10164,
-1252
+1251
 ],
 [
 10099,
@@ -20263,7 +20328,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10344,
+"x": 10343,
 "y": 1101,
 "width": 257,
 "height": 85
@@ -20357,23 +20422,23 @@
 "label": "Management API health probe + bounded \nauto-restart \n(scheduled-supabase-watchdog.yml, \n#9168): GET \n/v1/projects/{ref}/health?services=… ",
 "points": [
 [
-11203,
+11202,
 1021
 ],
 [
-11154,
-1081
+11153,
+1080
 ],
 [
-11083,
+11082,
 1156
 ],
 [
-11004,
+11003,
 1202
 ],
 [
-10916,
+10915,
 1253
 ],
 [
@@ -20389,32 +20454,32 @@
 1330
 ],
 [
-10726,
-1424
+10714,
+1406
 ],
 [
 10618,
 1482
 ],
 [
-10408,
-1595
+10503,
+1572
 ],
 [
-8710,
-1605
+10459,
+1583
 ],
 [
-8471,
+10316,
 1612
 ],
 [
-8448,
-1613
+10258,
+1624
 ],
 [
-1785,
-1613
+1819,
+1602
 ],
 [
 1763,
@@ -20607,23 +20672,23 @@
 1482
 ],
 [
-11452,
-1508
+11454,
+1506
 ],
 [
-11186,
-1494
+11208,
+1495
 ],
 [
-11150,
+11175,
 1502
 ],
 [
-11018,
+11032,
 1531
 ],
 [
-10999,
+11010,
 1587
 ],
 [
@@ -20631,28 +20696,28 @@
 1612
 ],
 [
-10813,
-1622
+10760,
+1631
 ],
 [
-3207,
-1614
+3234,
+1607
 ],
 [
-3154,
+3127,
 1620
 ],
 [
-2969,
+2951,
 1642
 ],
 [
-2761,
-1695
+2756,
+1694
 ],
 [
 2618,
-1737
+1735
 ]
 ],
 "labelBBox": {
@@ -20697,31 +20762,31 @@
 1048
 ],
 [
-10083,
+10082,
 1026
 ],
 [
-9964,
+9963,
 1091
 ],
 [
-9909,
+9908,
 1121
 ],
 [
-9928,
+9927,
 1167
 ],
 [
-9876,
+9875,
 1202
 ],
 [
-9798,
-1255
+9797,
+1254
 ],
 [
-9762,
+9761,
 1231
 ],
 [
@@ -20742,7 +20807,7 @@
 ]
 ],
 "labelBBox": {
-"x": 9965,
+"x": 9964,
 "y": 1099,
 "width": 262,
 "height": 90
@@ -20877,44 +20942,44 @@
 1482
 ],
 [
-2889,
-1512
+2793,
+1496
 ],
 [
-2942,
-1457
+3013,
+1469
 ],
 [
-3119,
+3092,
 1502
 ],
 [
-3229,
+3159,
 1530
 ],
 [
-3239,
+3145,
 1585
 ],
 [
-3349,
+3212,
 1612
 ],
 [
-3846,
-1734
+3273,
+1637
 ],
 [
-7530,
-1781
+7466,
+1760
 ],
 [
 8383,
-1790
+1787
 ]
 ],
 "labelBBox": {
-"x": 3350,
+"x": 3213,
 "y": 1501,
 "width": 280,
 "height": 107
@@ -20963,28 +21028,28 @@
 1612
 ],
 [
-10832,
-1622
+10818,
+1626
 ],
 [
-9627,
-1617
+9104,
+1612
 ],
 [
-9592,
+9054,
 1620
 ],
 [
-9289,
-1646
+8945,
+1639
 ],
 [
-8940,
-1712
+8828,
+1678
 ],
 [
 8735,
-1754
+1715
 ]
 ],
 "labelBBox": {
@@ -21096,22 +21161,22 @@
 "points": [
 [
 2609,
-1712
+1708
 ],
 [
-2694,
-1677
+2687,
+1673
 ],
 [
-2800,
+2782,
 1638
 ],
 [
-2899,
+2872,
 1620
 ],
 [
-2917,
+2890,
 1617
 ],
 [
@@ -21181,11 +21246,11 @@
 981
 ],
 [
-8892,
+8891,
 1091
 ],
 [
-8747,
+8746,
 1113
 ],
 [
@@ -21210,7 +21275,7 @@
 ]
 ],
 "labelBBox": {
-"x": 8893,
+"x": 8892,
 "y": 1134,
 "width": 25,
 "height": 18
@@ -21680,7 +21745,7 @@
 1031
 ],
 [
-9293,
+9292,
 1058
 ],
 [
@@ -21688,19 +21753,19 @@
 1043
 ],
 [
-9129,
+9128,
 1091
 ],
 [
-9041,
+9040,
 1126
 ],
 [
-9033,
+9032,
 1163
 ],
 [
-8946,
+8945,
 1202
 ],
 [
@@ -21717,7 +21782,7 @@
 ],
 [
 8730,
-1269
+1270
 ],
 [
 8706,
@@ -21729,7 +21794,7 @@
 ]
 ],
 "labelBBox": {
-"x": 9130,
+"x": 9129,
 "y": 1125,
 "width": 230,
 "height": 39
@@ -21848,24 +21913,24 @@
 1031
 ],
 [
-9589,
+9588,
 1091
 ],
 [
-9489,
+9488,
 1120
 ],
 [
-9483,
+9482,
 1172
 ],
 [
-9384,
+9383,
 1202
 ],
 [
-9115,
-1284
+9114,
+1283
 ],
 [
 9029,
@@ -21889,7 +21954,7 @@
 ]
 ],
 "labelBBox": {
-"x": 9590,
+"x": 9589,
 "y": 1091,
 "width": 258,
 "height": 106
@@ -22054,40 +22119,40 @@
 1944
 ],
 [
-10945,
-1852
+10938,
+1869
 ],
 [
 11172,
 1953
 ],
 [
-11233,
-1980
+11246,
+1979
 ],
 [
-11214,
-2033
+11237,
+2032
 ],
 [
-11273,
+11309,
 2063
 ],
 [
-11459,
-2159
+11495,
+2142
 ],
 [
-12054,
-2200
+12063,
+2190
 ],
 [
-12362,
-2215
+12363,
+2211
 ]
 ],
 "labelBBox": {
-"x": 11274,
+"x": 11310,
 "y": 1952,
 "width": 281,
 "height": 107
@@ -22124,32 +22189,44 @@
 1262
 ],
 [
-12813,
-1304
+12810,
+1298
 ],
 [
-12832,
-1729
+12825,
+1718
 ],
 [
 12784,
 1893
 ],
 [
-12758,
-1981
+12765,
+1975
 ],
 [
-12698,
-2065
+12749,
+1994
 ],
 [
-12646,
+12701,
+2063
+],
+[
+12686,
+2085
+],
+[
+12669,
+2106
+],
+[
+12651,
 2126
 ]
 ],
 "labelBBox": {
-"x": 12814,
+"x": 12810,
 "y": 1544,
 "width": 25,
 "height": 18
@@ -22182,36 +22259,36 @@
 1018
 ],
 [
-10721,
+10720,
 1091
 ],
 [
-10667,
+10666,
 1126
 ],
 [
-10677,
+10676,
 1160
 ],
 [
-10629,
+10628,
 1202
 ],
 [
-10607,
+10606,
 1221
 ],
 [
-10581,
+10580,
 1239
 ],
 [
-10556,
+10555,
 1256
 ]
 ],
 "labelBBox": {
-"x": 10722,
+"x": 10721,
 "y": 1091,
 "width": 258,
 "height": 106
@@ -22248,36 +22325,36 @@
 1893
 ],
 [
-2728,
-2000
+2730,
+2001
 ],
 [
-11064,
-1880
+11098,
+1878
 ],
 [
-11579,
+11615,
 1953
 ],
 [
-11759,
+11789,
 1978
 ],
 [
-11793,
+11822,
 2032
 ],
 [
-11972,
+11996,
 2063
 ],
 [
-12328,
+12341,
 2126
 ],
 [
-12433,
-2036
+12443,
+2039
 ],
 [
 12784,
@@ -22297,7 +22374,7 @@
 ]
 ],
 "labelBBox": {
-"x": 11973,
+"x": 11997,
 "y": 1952,
 "width": 259,
 "height": 107
@@ -22326,7 +22403,7 @@
 953
 ],
 [
-12471,
+12472,
 994
 ],
 [
@@ -22335,7 +22412,7 @@
 ],
 [
 13070,
-1261
+1262
 ],
 [
 13049,
@@ -22408,75 +22485,75 @@
 1202
 ],
 [
-4424,
-1247
+4538,
+1288
 ],
 [
-4794,
-1188
+4649,
+1134
 ],
 [
-4910,
+4874,
 1262
 ],
 [
-5005,
-1323
+4980,
+1322
 ],
 [
-4941,
-1425
+4930,
+1427
 ],
 [
 5039,
 1482
 ],
 [
-5120,
-1528
-],
-[
-11688,
-1468
-],
-[
-11775,
+5079,
 1502
 ],
 [
-11843,
-1528
+11496,
+1494
 ],
 [
-11828,
-1585
+11541,
+1502
 ],
 [
-11895,
+11691,
+1527
+],
+[
+11715,
+1586
+],
+[
+11865,
 1612
 ],
 [
-11936,
-1629
-],
-[
-12250,
-1607
-],
-[
-12292,
+11912,
 1620
 ],
 [
-12344,
+12250,
+1606
+],
+[
+12296,
+1620
+],
+[
+12347,
 1636
 ],
 [
-12395,
+12398,
 1666
 ],
 [
-12438,
+12440,
 1697
 ]
 ],
@@ -22518,36 +22595,36 @@
 1482
 ],
 [
-2830,
-1499
+2867,
+1505
 ],
 [
-11397,
-1472
+8311,
+1494
 ],
 [
-11516,
+8471,
 1502
 ],
 [
-11618,
+9010,
 1527
 ],
 [
-11623,
-1586
+9141,
+1587
 ],
 [
-11725,
+9679,
 1612
 ],
 [
-11786,
-1628
+9715,
+1614
 ],
 [
-12232,
-1602
+12257,
+1610
 ],
 [
 12292,
@@ -22558,7 +22635,7 @@
 1636
 ],
 [
-12395,
+12396,
 1666
 ],
 [
@@ -22567,7 +22644,7 @@
 ]
 ],
 "labelBBox": {
-"x": 11726,
+"x": 9680,
 "y": 1544,
 "width": 25,
 "height": 18
@@ -22823,75 +22900,75 @@
 "points": [
 [
 2440,
-1416
+1415
 ],
 [
 2521,
-1442
+1441
 ],
 [
 2619,
-1469
+1468
 ],
 [
 2709,
 1482
 ],
 [
-2867,
-1505
+3036,
+1531
 ],
 [
-8311,
-1498
+3867,
+1468
 ],
 [
-8471,
+4196,
 1502
 ],
 [
-9651,
+4455,
 1528
 ],
 [
-9944,
-1583
+4513,
+1587
 ],
 [
-11124,
+4772,
 1612
 ],
 [
-11138,
-1613
+4796,
+1614
 ],
 [
-12112,
-1613
+11602,
+1609
 ],
 [
-12124,
+11623,
 1620
 ],
 [
-12248,
-1690
+11755,
+1688
 ],
 [
-12170,
-1821
+11685,
+1823
 ],
 [
-12293,
+11816,
 1893
 ],
 [
-12461,
-1990
+12034,
+2009
 ],
 [
-13863,
-1879
+13814,
+1860
 ],
 [
 14043,
@@ -22923,7 +23000,7 @@
 ]
 ],
 "labelBBox": {
-"x": 12294,
+"x": 11817,
 "y": 1780,
 "width": 25,
 "height": 18
@@ -22964,32 +23041,32 @@
 1950
 ],
 [
-11998,
+12021,
 1847
 ],
 [
-12256,
+12280,
 1953
 ],
 [
-12321,
+12345,
 1979
 ],
 [
-12306,
+12330,
 2034
 ],
 [
-12370,
+12394,
 2063
 ],
 [
-12547,
-2142
+12566,
+2140
 ],
 [
-13046,
-2109
+13051,
+2110
 ],
 [
 13239,
@@ -22997,11 +23074,11 @@
 ],
 [
 13650,
-2152
+2153
 ],
 [
 14130,
-2187
+2188
 ],
 [
 14397,
@@ -23009,7 +23086,7 @@
 ]
 ],
 "labelBBox": {
-"x": 12371,
+"x": 12395,
 "y": 1952,
 "width": 278,
 "height": 107
@@ -23031,38 +23108,38 @@
 "points": [
 [
 2609,
-1839
+1841
 ],
 [
-2695,
-1859
+2688,
+1861
 ],
 [
-2802,
+2784,
 1882
 ],
 [
-2899,
+2872,
 1893
 ],
 [
-3979,
-2012
+3957,
+2019
 ],
 [
-11597,
-1833
+11616,
+1827
 ],
 [
-12677,
+12701,
 1953
 ],
 [
-12906,
+12919,
 1978
 ],
 [
-12956,
+12966,
 2026
 ],
 [
@@ -23070,16 +23147,16 @@
 2063
 ],
 [
-13613,
-2134
+13612,
+2136
 ],
 [
 14120,
-2182
+2184
 ],
 [
 14397,
-2206
+2207
 ]
 ],
 "labelBBox": {
@@ -23366,36 +23443,36 @@
 1620
 ],
 [
-11153,
-1609
+11149,
+1607
 ],
 [
-4793,
-1614
+3661,
+1622
 ],
 [
-4771,
+3637,
 1612
 ],
 [
-4434,
-1587
+3570,
+1586
 ],
 [
-4355,
+3584,
 1529
 ],
 [
-4018,
+3517,
 1502
 ],
 [
-3728,
-1478
+3434,
+1468
 ],
 [
-2997,
-1525
+2798,
+1496
 ],
 [
 2709,
@@ -23403,7 +23480,7 @@
 ],
 [
 2622,
-1469
+1468
 ],
 [
 2529,
@@ -23437,35 +23514,35 @@
 "points": [
 [
 2440,
-1417
+1419
 ],
 [
-2606,
-1475
+2601,
+1478
 ],
 [
-2865,
-1561
+2848,
+1562
 ],
 [
-3096,
+3069,
 1612
 ],
 [
-5279,
-2095
+5261,
+2107
 ],
 [
-8011,
-2199
+8010,
+2202
 ],
 [
 8718,
-2218
+2219
 ]
 ],
 "labelBBox": {
-"x": 4671,
+"x": 4561,
 "y": 1737,
 "width": 237,
 "height": 106
@@ -23486,40 +23563,40 @@
 "label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
-2107,
+2097,
 1882
 ],
 [
-2134,
+2122,
 1905
 ],
 [
-2163,
+2149,
 1929
 ],
 [
-2189,
+2173,
 1953
 ],
 [
-2239,
+2220,
 1999
 ],
 [
-2233,
+2213,
 2036
 ],
 [
-2295,
+2273,
 2063
 ],
 [
-2597,
-2196
+2575,
+2201
 ],
 [
-7708,
-2219
+7706,
+2220
 ],
 [
 8718,
@@ -23527,7 +23604,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2296,
+"x": 2274,
 "y": 1952,
 "width": 261,
 "height": 107
@@ -23548,28 +23625,28 @@
 "label": "Boot-stage fatals and stage markers from \na BAKED DSN, with NO Doppler fallback — \nso the channel still works when Doppler \nis itself the broken stage, which on \nthis host is the most likely one. This ",
 "points": [
 [
-2528,
+2515,
 1894
 ],
 [
-2594,
-1970
+2571,
+1968
 ],
 [
-2674,
-2062
+2640,
+2058
 ],
 [
-2677,
+2650,
 2063
 ],
 [
-2958,
-2195
+2928,
+2204
 ],
 [
-7743,
-2218
+7740,
+2220
 ],
 [
 8718,
@@ -23577,7 +23654,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2678,
+"x": 2651,
 "y": 1952,
 "width": 274,
 "height": 107
@@ -23619,63 +23696,63 @@
 ],
 [
 11905,
-1412
+1411
 ],
 [
 11837,
 1482
 ],
 [
-11814,
-1506
+11816,
+1504
 ],
 [
-11267,
-1491
+11315,
+1493
 ],
 [
-11235,
+11286,
 1502
 ],
 [
-11159,
+11195,
 1529
 ],
 [
-11167,
-1586
+11195,
+1587
 ],
 [
-11091,
+11104,
 1612
 ],
 [
-11056,
-1624
+11079,
+1619
 ],
 [
-9809,
-1609
+9258,
+1607
 ],
 [
-9774,
+9236,
 1620
 ],
 [
-9451,
-1721
+9211,
+1635
 ],
 [
-9140,
-1983
+9034,
+1958
 ],
 [
-8988,
-2126
+8944,
+2125
 ]
 ],
 "labelBBox": {
-"x": 11236,
+"x": 11287,
 "y": 1501,
 "width": 252,
 "height": 107
@@ -23700,7 +23777,7 @@
 2133
 ],
 [
-8870,
+8871,
 1961
 ],
 [
@@ -23716,15 +23793,15 @@
 1179
 ],
 [
-8972,
+8971,
 1145
 ],
 [
-9040,
+9039,
 1091
 ],
 [
-9118,
+9117,
 1030
 ],
 [
@@ -24330,7 +24407,7 @@
 974
 ],
 [
-3992,
+3991,
 993
 ],
 [
@@ -24342,23 +24419,23 @@
 1031
 ],
 [
-4366,
-1068
+4359,
+1067
 ],
 [
-4421,
-1043
+4411,
+1046
 ],
 [
-4612,
+4596,
 1091
 ],
 [
-4747,
+4738,
 1126
 ],
 [
-4771,
+4764,
 1167
 ],
 [
@@ -24378,39 +24455,51 @@
 1482
 ],
 [
-7252,
-1508
+6938,
+1484
 ],
 [
-8123,
-1490
+11544,
+1479
 ],
 [
-8471,
+11567,
 1502
 ],
 [
-8958,
-1518
+11602,
+1537
 ],
 [
-10200,
-1463
+11601,
+1577
 ],
 [
-10662,
+11567,
+1612
+],
+[
+11552,
+1627
+],
+[
+11208,
+1614
+],
+[
+11188,
 1620
 ],
 [
-10711,
-1637
+11133,
+1636
 ],
 [
-10760,
-1667
+11079,
+1666
 ],
 [
-10801,
+11033,
 1697
 ]
 ],
@@ -24456,19 +24545,19 @@
 1499
 ],
 [
-4727,
+4728,
 1498
 ],
 [
-4798,
+4799,
 1502
 ],
 [
-5310,
+5311,
 1530
 ],
 [
-5434,
+5435,
 1587
 ],
 [
@@ -24566,11 +24655,11 @@
 1259
 ],
 [
-15280,
+15279,
 1879
 ],
 [
-15298,
+15297,
 2123
 ]
 ],
@@ -24582,7 +24671,7 @@
 },
 "parent": null,
 "relations": [
-"1v01xkb"
+"1e64cys"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24652,11 +24741,11 @@
 2135
 ],
 [
-15028,
+15027,
 2154
 ],
 [
-15107,
+15106,
 2172
 ]
 ],
@@ -24674,6 +24763,68 @@
 "line": "dashed",
 "head": "normal",
 "technology": "stdio JSON-RPC over pipes (child process group)"
+},
+{
+"id": "1e7sm50",
+"source": "platform.engine.hooks",
+"target": "platform.plugin.destructiveGuard",
+"label": "PreToolUse ask/deny on destructive \ncommands; no egress",
+"points": [
+[
+3428,
+1442
+],
+[
+3552,
+1515
+],
+[
+3709,
+1608
+],
+[
+3726,
+1612
+],
+[
+3760,
+1621
+],
+[
+8745,
+1616
+],
+[
+8780,
+1620
+],
+[
+8955,
+1640
+],
+[
+9148,
+1686
+],
+[
+9293,
+1726
+]
+],
+"labelBBox": {
+"x": 3727,
+"y": 1527,
+"width": 229,
+"height": 55
+},
+"parent": null,
+"relations": [
+"caec3y"
+],
+"color": "gray",
+"line": "dashed",
+"head": "normal",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-277)"
 },
 {
 "id": "3adhpg",
@@ -25118,36 +25269,36 @@
 1482
 ],
 [
-12658,
-1492
+12560,
+1502
 ],
 [
-11964,
-1477
+12063,
+1465
 ],
 [
 11869,
 1502
 ],
 [
-11767,
+11729,
 1528
 ],
 [
-11761,
+11708,
 1587
 ],
 [
-11658,
+11567,
 1612
 ],
 [
-11606,
-1625
+11520,
+1621
 ],
 [
-10784,
-1604
+10778,
+1605
 ],
 [
 10672,
@@ -25156,7 +25307,7 @@
 ],
 "labelBBox": {
 "x": 11705,
-"y": 1381,
+"y": 1379,
 "width": 265,
 "height": 106
 },
@@ -25298,7 +25449,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 7394,
+"width": 7433,
 "height": 2371
 },
 "nodes": [
@@ -25311,6 +25462,7 @@
 "platform.plugin.constraintscaffold",
 "platform.plugin.go",
 "platform.plugin.snapshotGuard",
+"platform.plugin.destructiveGuard",
 "platform.plugin.sync",
 "platform.plugin.brainstorm",
 "platform.plugin.oneshot",
@@ -25331,6 +25483,7 @@
 "fk0vnj",
 "rjq4wu",
 "12qyu50",
+"1e7sm50",
 "rspfp0"
 ],
 "outEdges": [
@@ -25348,7 +25501,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -25356,7 +25509,7 @@
 "depth": 1,
 "x": 2767,
 "y": 386,
-"width": 3954,
+"width": 3994,
 "height": 1599,
 "labelBBox": {
 "x": 6,
@@ -25388,8 +25541,8 @@
 "technology": "Entry Point",
 "kind": "component",
 "navigateTo": "__platform_plugin_help",
-"x": 2828,
-"y": 1458,
+"x": 2848,
+"y": 1185,
 "width": 345,
 "height": 180,
 "labelBBox": {
@@ -25422,8 +25575,8 @@
 "technology": "Constraint Generator",
 "kind": "component",
 "navigateTo": "__platform_plugin_constraintscaffold",
-"x": 3576,
-"y": 1458,
+"x": 3616,
+"y": 1185,
 "width": 388,
 "height": 180,
 "labelBBox": {
@@ -25471,7 +25624,7 @@
 "depth": 1,
 "navigateTo": "__platform_engine_claude",
 "x": 8,
-"y": 1128,
+"y": 940,
 "width": 2471,
 "height": 591,
 "labelBBox": {
@@ -25508,7 +25661,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_registry",
 "x": 62,
-"y": 1479,
+"y": 1291,
 "width": 354,
 "height": 180,
 "labelBBox": {
@@ -25544,7 +25697,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_binding",
 "x": 48,
-"y": 1189,
+"y": 1001,
 "width": 382,
 "height": 180,
 "labelBBox": {
@@ -25564,6 +25717,7 @@
 ],
 "outEdges": [
 "12qyu50",
+"1e7sm50",
 "vdbrj4",
 "rspfp0"
 ],
@@ -25584,7 +25738,7 @@
 "kind": "container",
 "navigateTo": "__platform_engine_hooks",
 "x": 2064,
-"y": 1759,
+"y": 1571,
 "width": 382,
 "height": 180,
 "labelBBox": {
@@ -25622,7 +25776,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_factory",
 "x": 700,
-"y": 1479,
+"y": 1291,
 "width": 330,
 "height": 180,
 "labelBBox": {
@@ -25660,7 +25814,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_composition",
 "x": 1375,
-"y": 1479,
+"y": 1291,
 "width": 366,
 "height": 180,
 "labelBBox": {
@@ -25698,8 +25852,8 @@
 "technology": "Entry Point",
 "kind": "component",
 "navigateTo": "__platform_plugin_go",
-"x": 2831,
-"y": 1147,
+"x": 2851,
+"y": 895,
 "width": 339,
 "height": 180,
 "labelBBox": {
@@ -25737,14 +25891,50 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 2807,
-"y": 1759,
+"x": 2827,
+"y": 1475,
 "width": 387,
 "height": 180,
 "labelBBox": {
 "x": 38,
 "y": 17,
 "width": 312,
+"height": 139
+}
+},
+{
+"id": "platform.plugin.destructiveGuard",
+"parent": "platform.plugin",
+"level": 1,
+"children": [],
+"inEdges": [
+"1e7sm50"
+],
+"outEdges": [],
+"title": "destructive-command guard",
+"modelRef": "platform.plugin.destructiveGuard",
+"shape": "component",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "ADR-277 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the hook's output is persisted as a hook_success row in the customer's own harness transcript (the record of an answered Yes/No prompt is unmeasured). HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders; hosted Bash is not gated for these commands in the default autonomous mode, where only a short blocklist that does not match terraform destroy, rm -rf or git push -f stands between the agent and the sandbox (ADR-093 amendment 2026-10-07, ADR-277 D8). The twelve server-side agent functions that spawn claude --plugin-dir plugins/soleur outside buildAgentEnv keep the guard ACTIVE (ADR-277, Server-side scheduled agents)."
+},
+"tags": [],
+"notation": "Component",
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"kind": "component",
+"navigateTo": "__platform_plugin_destructiveGuard",
+"x": 2807,
+"y": 1765,
+"width": 427,
+"height": 180,
+"labelBBox": {
+"x": 38,
+"y": 17,
+"width": 352,
 "height": 139
 }
 },
@@ -25773,7 +25963,7 @@
 "technology": "Entry Point",
 "kind": "component",
 "navigateTo": "__platform_plugin_sync",
-"x": 2826,
+"x": 2846,
 "y": 447,
 "width": 349,
 "height": 180,
@@ -25812,7 +26002,7 @@
 "kind": "component",
 "navigateTo": "__platform_engine_claude_adapter",
 "x": 2071,
-"y": 1278,
+"y": 1090,
 "width": 367,
 "height": 180,
 "labelBBox": {
@@ -25852,8 +26042,8 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_brainstorm",
-"x": 4143,
-"y": 567,
+"x": 4183,
+"y": 562,
 "width": 360,
 "height": 180,
 "labelBBox": {
@@ -25894,8 +26084,8 @@
 "technology": "Orchestrator",
 "kind": "component",
 "navigateTo": "__platform_plugin_oneshot",
-"x": 3580,
-"y": 1147,
+"x": 3620,
+"y": 895,
 "width": 379,
 "height": 180,
 "labelBBox": {
@@ -25931,12 +26121,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 3584,
+"x": 3624,
 "y": 2025,
 "width": 372,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 337,
 "height": 120
@@ -25967,7 +26157,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cmo",
-"x": 4907,
+"x": 4947,
 "y": 737,
 "width": 377,
 "height": 180,
@@ -26003,7 +26193,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cpo",
-"x": 4931,
+"x": 4971,
 "y": 447,
 "width": 330,
 "height": 180,
@@ -26042,8 +26232,8 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_plan",
-"x": 4137,
-"y": 1437,
+"x": 4177,
+"y": 1432,
 "width": 371,
 "height": 180,
 "labelBBox": {
@@ -26080,12 +26270,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_work",
-"x": 5590,
+"x": 5630,
 "y": 1475,
 "width": 383,
 "height": 180,
 "labelBBox": {
-"x": 39,
+"x": 38,
 "y": 44,
 "width": 307,
 "height": 85
@@ -26118,12 +26308,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_review",
-"x": 4131,
-"y": 857,
+"x": 4171,
+"y": 852,
 "width": 384,
 "height": 180,
 "labelBBox": {
-"x": 38,
+"x": 37,
 "y": 35,
 "width": 308,
 "height": 103
@@ -26157,7 +26347,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_compound",
-"x": 5617,
+"x": 5657,
 "y": 1765,
 "width": 330,
 "height": 180,
@@ -26193,8 +26383,8 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_ship",
-"x": 4148,
-"y": 1147,
+"x": 4188,
+"y": 1142,
 "width": 350,
 "height": 180,
 "labelBBox": {
@@ -26232,7 +26422,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cto",
-"x": 4901,
+"x": 4941,
 "y": 1027,
 "width": 390,
 "height": 180,
@@ -26270,7 +26460,7 @@
 "technology": "Review Agent",
 "kind": "component",
 "navigateTo": "__platform_plugin_archstrat",
-"x": 4909,
+"x": 4949,
 "y": 1429,
 "width": 374,
 "height": 180,
@@ -26308,12 +26498,12 @@
 "technology": "Validation Gate",
 "kind": "component",
 "navigateTo": "__platform_plugin_evalharness",
-"x": 6325,
+"x": 6365,
 "y": 1745,
 "width": 355,
 "height": 180,
 "labelBBox": {
-"x": 39,
+"x": 38,
 "y": 44,
 "width": 279,
 "height": 85
@@ -26348,7 +26538,7 @@
 "technology": "Documentation",
 "kind": "component",
 "navigateTo": "__platform_plugin_architecture",
-"x": 5604,
+"x": 5644,
 "y": 961,
 "width": 355,
 "height": 180,
@@ -26386,7 +26576,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 7044,
+"x": 7084,
 "y": 827,
 "width": 349,
 "height": 180,
@@ -26427,7 +26617,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 6329,
+"x": 6369,
 "y": 1264,
 "width": 348,
 "height": 200,
@@ -26465,7 +26655,7 @@
 "notation": "Data store",
 "kind": "database",
 "navigateTo": "__connectedRepoKb",
-"x": 6330,
+"x": 6370,
 "y": 166,
 "width": 346,
 "height": 180,
@@ -26485,25 +26675,25 @@
 "label": "Routes explore/generate",
 "points": [
 [
-3170,
-1163
+3190,
+943
 ],
 [
-3417,
-1054
+3441,
+881
 ],
 [
-3876,
-853
+3911,
+764
 ],
 [
-4134,
-740
+4173,
+699
 ]
 ],
 "labelBBox": {
-"x": 3691,
-"y": 793,
+"x": 3731,
+"y": 720,
 "width": 157,
 "height": 18
 },
@@ -26522,25 +26712,25 @@
 "label": "Routes build",
 "points": [
 [
-3170,
-1237
+3190,
+985
 ],
 [
-3288,
-1237
+3313,
+985
 ],
 [
-3446,
-1237
+3480,
+985
 ],
 [
-3570,
-1237
+3610,
+985
 ]
 ],
 "labelBBox": {
-"x": 3344,
-"y": 1214,
+"x": 3384,
+"y": 962,
 "width": 82,
 "height": 18
 },
@@ -26559,25 +26749,49 @@
 "label": "Step 1",
 "points": [
 [
-3942,
-1327
+3943,
+1075
 ],
 [
-4005,
-1360
+3965,
+1092
 ],
 [
-4078,
-1398
+3986,
+1111
 ],
 [
-4142,
-1432
+4004,
+1130
+],
+[
+4095,
+1226
+],
+[
+4080,
+1281
+],
+[
+4170,
+1377
+],
+[
+4186,
+1394
+],
+[
+4205,
+1410
+],
+[
+4223,
+1426
 ]
 ],
 "labelBBox": {
-"x": 4025,
-"y": 1350,
+"x": 4065,
+"y": 1189,
 "width": 44,
 "height": 18
 },
@@ -26596,73 +26810,73 @@
 "label": "Step 2",
 "points": [
 [
-3887,
-1327
+3953,
+1075
 ],
 [
-3914,
-1350
+3972,
+1091
 ],
 [
-3941,
-1376
+3990,
+1110
 ],
 [
-3964,
-1403
+4004,
+1130
 ],
 [
-4056,
-1510
+4076,
+1232
 ],
 [
-4011,
-1599
+4073,
+1589
 ],
 [
-4131,
-1672
+4170,
+1667
 ],
 [
-4351,
-1806
+4372,
+1829
 ],
 [
-5034,
-1732
+5073,
+1729
 ],
 [
-5291,
-1713
+5331,
+1712
 ],
 [
-5399,
+5438,
 1705
 ],
 [
-5427,
-1707
+5467,
+1710
 ],
 [
-5531,
-1677
+5570,
+1680
 ],
 [
-5549,
-1672
+5591,
+1674
 ],
 [
-5567,
-1665
+5612,
+1667
 ],
 [
-5585,
+5632,
 1659
 ]
 ],
 "labelBBox": {
-"x": 4686,
-"y": 1722,
+"x": 4726,
+"y": 1726,
 "width": 44,
 "height": 18
 },
@@ -26681,25 +26895,25 @@
 "label": "Step 3",
 "points": [
 [
-3942,
-1147
+3999,
+970
 ],
 [
-4005,
-1114
+4051,
+966
 ],
 [
-4078,
-1076
+4107,
+962
 ],
 [
-4142,
-1042
+4160,
+958
 ]
 ],
 "labelBBox": {
-"x": 4025,
-"y": 1060,
+"x": 4065,
+"y": 939,
 "width": 44,
 "height": 18
 },
@@ -26718,61 +26932,49 @@
 "label": "Step 4",
 "points": [
 [
-3899,
-1327
+3958,
+1075
 ],
 [
-3923,
-1349
+3976,
+1091
 ],
 [
-3947,
-1375
+3992,
+1110
 ],
 [
-3964,
-1403
+4004,
+1130
 ],
 [
-4023,
-1498
+4156,
+1389
 ],
 [
-3974,
-1547
+3918,
+1622
 ],
 [
-4024,
-1646
+4170,
+1784
 ],
 [
-4058,
-1712
+4633,
+2081
 ],
 [
-4064,
-1741
+5327,
+1973
 ],
 [
-4131,
-1775
-],
-[
-4618,
-2022
-],
-[
-5293,
-1946
-],
-[
-5607,
-1891
+5647,
+1900
 ]
 ],
 "labelBBox": {
-"x": 4686,
-"y": 1893,
+"x": 4726,
+"y": 1930,
 "width": 44,
 "height": 18
 },
@@ -26791,25 +26993,25 @@
 "label": "Step 5",
 "points": [
 [
-3959,
-1237
+3999,
+1069
 ],
 [
-4017,
-1237
+4057,
+1095
 ],
 [
-4080,
-1237
+4120,
+1124
 ],
 [
-4137,
-1237
+4178,
+1150
 ]
 ],
 "labelBBox": {
-"x": 4025,
-"y": 1214,
+"x": 4065,
+"y": 1078,
 "width": 44,
 "height": 18
 },
@@ -26828,37 +27030,37 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4463,
-747
+4500,
+742
 ],
 [
-4499,
-770
+4537,
+766
 ],
 [
-4538,
-795
+4577,
+792
 ],
 [
-4575,
-817
+4615,
+815
 ],
 [
-4691,
-887
+4731,
+886
 ],
 [
-4824,
-964
+4864,
+963
 ],
 [
-4926,
+4967,
 1022
 ]
 ],
 "labelBBox": {
-"x": 4635,
-"y": 794,
+"x": 4675,
+"y": 792,
 "width": 146,
 "height": 18
 },
@@ -26877,25 +27079,25 @@
 "label": "Phase 2.5 domain review",
 "points": [
 [
-4493,
-1437
+4535,
+1432
 ],
 [
-4619,
-1370
+4659,
+1367
 ],
 [
-4789,
-1280
+4828,
+1278
 ],
 [
-4917,
+4954,
 1212
 ]
 ],
 "labelBBox": {
-"x": 4627,
-"y": 1238,
+"x": 4667,
+"y": 1236,
 "width": 161,
 "height": 18
 },
@@ -26914,24 +27116,24 @@
 "label": "Recommends ADR creation",
 "points": [
 [
-5291,
+5331,
 1098
 ],
 [
-5386,
+5426,
 1089
 ],
 [
-5500,
+5540,
 1078
 ],
 [
-5595,
+5634,
 1069
 ]
 ],
 "labelBBox": {
-"x": 5352,
+"x": 5392,
 "y": 1053,
 "width": 178,
 "height": 18
@@ -26951,25 +27153,25 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4503,
-696
+4543,
+693
 ],
 [
-4621,
-722
+4661,
+719
 ],
 [
-4776,
-757
+4815,
+754
 ],
 [
-4897,
-783
+4937,
+782
 ]
 ],
 "labelBBox": {
-"x": 4635,
-"y": 694,
+"x": 4675,
+"y": 690,
 "width": 146,
 "height": 18
 },
@@ -26988,25 +27190,25 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4503,
-629
+4543,
+625
 ],
 [
-4629,
-610
+4668,
+607
 ],
 [
-4796,
-583
+4836,
+582
 ],
 [
-4921,
-564
+4961,
+563
 ]
 ],
 "labelBBox": {
-"x": 4635,
-"y": 556,
+"x": 4675,
+"y": 554,
 "width": 146,
 "height": 18
 },
@@ -27025,49 +27227,49 @@
 "label": "Parallel review agent",
 "points": [
 [
-4468,
-1037
+4508,
+1032
 ],
 [
-4486,
-1053
+4526,
+1048
 ],
 [
-4503,
-1072
+4542,
+1067
 ],
 [
-4515,
-1092
+4555,
+1087
 ],
 [
-4595,
-1223
+4635,
+1219
 ],
 [
-4466,
-1325
+4506,
+1320
 ],
 [
-4575,
-1433
+4615,
+1429
 ],
 [
-4659,
-1515
+4698,
+1512
 ],
 [
-4789,
-1537
+4829,
+1534
 ],
 [
-4898,
-1538
+4939,
+1536
 ]
 ],
 "labelBBox": {
-"x": 4641,
-"y": 1410,
+"x": 4681,
+"y": 1406,
 "width": 134,
 "height": 18
 },
@@ -27086,49 +27288,49 @@
 "label": "Checks ADR coverage",
 "points": [
 [
-5283,
-1512
+5323,
+1524
 ],
 [
-5365,
-1502
+5405,
+1517
 ],
 [
-5459,
-1478
+5499,
+1498
 ],
 [
-5531,
-1429
+5570,
+1447
 ],
 [
-5571,
-1401
+5616,
+1414
 ],
 [
-5564,
-1377
+5601,
+1384
 ],
 [
-5591,
+5630,
 1336
 ],
 [
-5632,
-1274
-],
-[
-5678,
-1204
+5669,
+1273
 ],
 [
 5715,
-1150
+1204
+],
+[
+5752,
+1149
 ]
 ],
 "labelBBox": {
-"x": 5368,
-"y": 1406,
+"x": 5408,
+"y": 1424,
 "width": 146,
 "height": 18
 },
@@ -27147,24 +27349,24 @@
 "label": "Validates classifier-skill edits before \napplying",
 "points": [
 [
-5947,
+5987,
 1850
 ],
 [
-6057,
+6096,
 1847
 ],
 [
-6201,
+6241,
 1843
 ],
 [
-6316,
+6355,
 1840
 ]
 ],
 "labelBBox": {
-"x": 6037,
+"x": 6077,
 "y": 1802,
 "width": 225,
 "height": 35
@@ -27184,24 +27386,24 @@
 "label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-244)",
 "points": [
 [
-6574,
+6614,
 1745
 ],
 [
-6708,
+6748,
 1572
 ],
 [
-7003,
+7042,
 1194
 ],
 [
-7142,
+7182,
 1015
 ]
 ],
 "labelBBox": {
-"x": 6742,
+"x": 6782,
 "y": 1163,
 "width": 241,
 "height": 73
@@ -27222,25 +27424,49 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
-3194,
-1916
+3157,
+1655
 ],
 [
-3310,
-1956
+3183,
+1673
 ],
 [
-3458,
-2007
+3210,
+1692
 ],
 [
-3574,
-2047
+3234,
+1710
+],
+[
+3408,
+1838
+],
+[
+3435,
+1894
+],
+[
+3616,
+2012
+],
+[
+3619,
+2015
+],
+[
+3623,
+2017
+],
+[
+3627,
+2020
 ]
 ],
 "labelBBox": {
-"x": 3256,
-"y": 1849,
+"x": 3295,
+"y": 1666,
 "width": 259,
 "height": 89
 },
@@ -27261,26 +27487,26 @@
 "points": [
 [
 2446,
-1849
+1637
 ],
 [
-2553,
-1849
+2559,
+1623
 ],
 [
-2687,
-1849
+2702,
+1605
 ],
 [
-2796,
-1849
+2816,
+1591
 ]
 ],
 "labelBBox": {
 "x": 2507,
-"y": 1789,
+"y": 1541,
 "width": 238,
-"height": 55
+"height": 56
 },
 "parent": null,
 "relations": [
@@ -27292,66 +27518,104 @@
 "technology": "PreToolUse hook (deny disposition, ADR-162)"
 },
 {
+"id": "1e7sm50",
+"source": "platform.engine.hooks",
+"target": "platform.plugin.destructiveGuard",
+"label": "PreToolUse ask/deny on destructive \ncommands; no egress",
+"points": [
+[
+2446,
+1709
+],
+[
+2553,
+1736
+],
+[
+2686,
+1770
+],
+[
+2797,
+1798
+]
+],
+"labelBBox": {
+"x": 2512,
+"y": 1669,
+"width": 229,
+"height": 56
+},
+"parent": null,
+"relations": [
+"caec3y"
+],
+"color": "gray",
+"line": "dashed",
+"head": "normal",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-277)"
+},
+{
 "id": "1omh1gi",
 "source": "platform.plugin.brainstorm",
 "target": "platform.plugin.kb",
 "label": "Writes brainstorms",
 "points": [
 [
-4464,
-747
+4504,
+742
 ],
 [
-4483,
-763
+4523,
+758
 ],
 [
-4501,
-782
+4541,
+777
 ],
 [
-4515,
-802
+4555,
+797
 ],
 [
-4566,
-875
+4607,
+872
 ],
 [
-4525,
-920
+4564,
+917
 ],
 [
-4575,
-994
+4615,
+993
 ],
 [
-4680,
-1150
+4719,
+1149
 ],
 [
-4727,
+4766,
 1193
 ],
 [
-4901,
+4941,
 1262
 ],
 [
-4934,
+4973,
 1275
 ],
 [
-5904,
+5944,
 1331
 ],
 [
-6318,
+6358,
 1354
 ]
 ],
 "labelBBox": {
-"x": 5381,
+"x": 5420,
 "y": 1274,
 "width": 121,
 "height": 18
@@ -27371,85 +27635,85 @@
 "label": "Writes plans and specs",
 "points": [
 [
-4509,
-1582
+4548,
+1580
 ],
 [
-4621,
-1613
+4661,
+1611
 ],
 [
-4768,
+4807,
 1648
 ],
 [
-4901,
+4941,
 1664
 ],
 [
-5073,
-1684
+5113,
+1685
 ],
 [
-5122,
-1702
+5161,
+1698
 ],
 [
-5291,
+5331,
 1664
 ],
 [
-5406,
-1638
+5444,
+1642
 ],
 [
-5448,
-1634
+5489,
+1646
 ],
 [
-5531,
-1550
+5570,
+1565
 ],
 [
-5575,
-1505
+5620,
+1516
 ],
 [
-5539,
-1456
+5574,
+1461
 ],
 [
-5591,
+5630,
 1420
 ],
 [
-5753,
-1307
+5790,
+1304
 ],
 [
-5837,
+5877,
 1397
 ],
 [
-6034,
+6074,
 1385
 ],
 [
-6128,
+6167,
 1379
 ],
 [
-6232,
+6271,
 1374
 ],
 [
-6318,
+6358,
 1371
 ]
 ],
 "labelBBox": {
-"x": 5367,
-"y": 1527,
+"x": 5406,
+"y": 1542,
 "width": 149,
 "height": 18
 },
@@ -27468,24 +27732,24 @@
 "label": "Reads plans, writes code",
 "points": [
 [
-5974,
+6013,
 1512
 ],
 [
-6080,
+6120,
 1482
 ],
 [
-6213,
+6252,
 1445
 ],
 [
-6318,
+6358,
 1415
 ]
 ],
 "labelBBox": {
-"x": 6070,
+"x": 6109,
 "y": 1412,
 "width": 160,
 "height": 18
@@ -27505,36 +27769,36 @@
 "label": "Writes learnings, promotes to \nconstitution",
 "points": [
 [
-5944,
+5983,
 1765
 ],
 [
-6039,
+6079,
 1710
 ],
 [
-6162,
+6202,
 1635
 ],
 [
-6266,
+6305,
 1561
 ],
 [
-6305,
+6345,
 1533
 ],
 [
-6346,
+6385,
 1500
 ],
 [
-6382,
+6422,
 1470
 ]
 ],
 "labelBBox": {
-"x": 6057,
+"x": 6097,
 "y": 1521,
 "width": 186,
 "height": 34
@@ -27554,36 +27818,36 @@
 "label": "Writes ADRs and diagrams",
 "points": [
 [
-5960,
+6000,
 1105
 ],
 [
-6053,
+6092,
 1136
 ],
 [
-6167,
+6207,
 1178
 ],
 [
-6266,
+6305,
 1224
 ],
 [
-6291,
+6331,
 1236
 ],
 [
-6317,
+6357,
 1250
 ],
 [
-6342,
+6382,
 1264
 ]
 ],
 "labelBBox": {
-"x": 6064,
+"x": 6103,
 "y": 1111,
 "width": 173,
 "height": 18
@@ -27603,72 +27867,72 @@
 "label": "Reads context_queries artifacts \n(skill-scoped injection)",
 "points": [
 [
-2322,
-1939
+2299,
+1751
 ],
 [
-2440,
-2088
+2398,
+1942
 ],
 [
-2702,
+2659,
 2371
 ],
 [
-3000,
+3020,
 2371
 ],
 [
-3000,
+3020,
 2371
 ],
 [
-3000,
+3020,
 2371
 ],
 [
-5783,
+5823,
 2371
 ],
 [
-6091,
+6131,
 2371
 ],
 [
-6107,
+6147,
 2138
 ],
 [
-6266,
+6305,
 1875
 ],
 [
-6310,
+6350,
 1801
 ],
 [
-6292,
+6331,
 1769
 ],
 [
-6326,
+6365,
 1690
 ],
 [
-6358,
+6397,
 1616
 ],
 [
-6401,
+6440,
 1536
 ],
 [
-6436,
+6476,
 1474
 ]
 ],
 "labelBBox": {
-"x": 4223,
+"x": 4263,
 "y": 2311,
 "width": 200,
 "height": 55
@@ -27690,36 +27954,36 @@
 "points": [
 [
 416,
-1501
+1313
 ],
 [
 501,
-1472
+1284
 ],
 [
 604,
-1440
+1252
 ],
 [
 699,
-1424
+1236
 ],
 [
 955,
-1380
+1192
 ],
 [
 1704,
-1370
+1182
 ],
 [
 2061,
-1368
+1180
 ]
 ],
 "labelBBox": {
 "x": 1118,
-"y": 1358,
+"y": 1170,
 "width": 169,
 "height": 18
 },
@@ -27739,36 +28003,36 @@
 "points": [
 [
 430,
-1281
+1093
 ],
 [
 754,
-1285
+1097
 ],
 [
 1432,
-1298
+1110
 ],
 [
 2004,
-1340
+1152
 ],
 [
 2022,
-1341
+1153
 ],
 [
 2042,
-1343
+1155
 ],
 [
 2061,
-1345
+1157
 ]
 ],
 "labelBBox": {
 "x": 1091,
-"y": 1272,
+"y": 1084,
 "width": 223,
 "height": 18
 },
@@ -27788,24 +28052,24 @@
 "points": [
 [
 416,
-1569
+1381
 ],
 [
 502,
-1569
+1381
 ],
 [
 604,
-1569
+1381
 ],
 [
 689,
-1569
+1381
 ]
 ],
 "labelBBox": {
 "x": 492,
-"y": 1546,
+"y": 1358,
 "width": 146,
 "height": 18
 },
@@ -27825,24 +28089,24 @@
 "points": [
 [
 1030,
-1569
+1381
 ],
 [
 1130,
-1569
+1381
 ],
 [
 1259,
-1569
+1381
 ],
 [
 1365,
-1569
+1381
 ]
 ],
 "labelBBox": {
 "x": 1105,
-"y": 1546,
+"y": 1358,
 "width": 195,
 "height": 18
 },
@@ -27862,24 +28126,24 @@
 "points": [
 [
 1741,
-1516
+1328
 ],
 [
 1839,
-1488
+1300
 ],
 [
 1961,
-1453
+1265
 ],
 [
 2061,
-1424
+1236
 ]
 ],
 "labelBBox": {
 "x": 1802,
-"y": 1421,
+"y": 1233,
 "width": 201,
 "height": 18
 },
@@ -27898,49 +28162,49 @@
 "label": "Writes conventions, learnings, component \ndocs, generated C4 \n(generated-components.c4 + \nmodel.likec4.json + c4-model.md), \ndomain-model rows, and kb-coverage.md",
 "points": [
 [
-3159,
+3183,
 447
 ],
 [
-3311,
+3338,
 369
 ],
 [
-3548,
-269
+3582,
+268
 ],
 [
-3769,
-269
+3809,
+268
 ],
 [
-3769,
-269
+3809,
+268
 ],
 [
-3769,
-269
+3809,
+268
 ],
 [
-5783,
-269
+5823,
+268
 ],
 [
-5966,
-269
+6005,
+268
 ],
 [
-6174,
-265
+6213,
+264
 ],
 [
-6319,
+6358,
 261
 ]
 ],
 "labelBBox": {
-"x": 4576,
-"y": 158,
+"x": 4616,
+"y": 157,
 "width": 264,
 "height": 106
 },
@@ -27960,49 +28224,49 @@
 "label": "Writes spec.c4 / model.c4 / views.c4 \ncwd-relative — same directory sync \ngenerates into (ADR-171 two-writer \nprecedence)",
 "points": [
 [
-5858,
+5897,
 961
 ],
 [
-5955,
+5994,
 844
 ],
 [
-6127,
-633
+6166,
+632
 ],
 [
-6266,
-446
+6305,
+445
 ],
 [
-6294,
-408
+6333,
+407
 ],
 [
-6291,
-391
+6331,
+390
 ],
 [
-6326,
+6365,
 359
 ],
 [
-6330,
+6370,
 355
 ],
 [
-6334,
+6374,
 351
 ],
 [
-6339,
+6378,
 348
 ]
 ],
 "labelBBox": {
-"x": 6035,
-"y": 352,
+"x": 6075,
+"y": 351,
 "width": 230,
 "height": 89
 },
@@ -28023,24 +28287,24 @@
 "points": [
 [
 2479,
-1329
+1123
 ],
 [
-2588,
-1309
+2594,
+1094
 ],
 [
-2718,
-1287
+2733,
+1058
 ],
 [
-2821,
-1268
+2841,
+1031
 ]
 ],
 "labelBBox": {
-"x": 2504,
-"y": 1297,
+"x": 2513,
+"y": 1075,
 "width": 150,
 "height": 18
 },
@@ -28059,48 +28323,48 @@
 "label": "LLM calls",
 "points": [
 [
-2278,
-1128
+2300,
+940
 ],
 [
-2329,
-736
+2377,
+595
 ],
 [
-2492,
+2576,
 0
 ],
 [
-3000,
+3020,
 0
 ],
 [
-3000,
+3020,
 0
 ],
 [
-3000,
+3020,
 0
 ],
 [
-6504,
+6544,
 0
 ],
 [
-6915,
+6955,
 0
 ],
 [
-7124,
+7163,
 580
 ],
 [
-7192,
+7232,
 817
 ]
 ],
 "labelBBox": {
-"x": 3374,
+"x": 3396,
 "y": 0,
 "width": 63,
 "height": 39
@@ -28122,24 +28386,24 @@
 "points": [
 [
 2479,
-1512
+1292
 ],
 [
-2600,
-1590
+2591,
+1349
 ],
 [
-2745,
-1685
+2725,
+1417
 ],
 [
-2852,
-1754
+2832,
+1471
 ]
 ],
 "labelBBox": {
-"x": 2443,
-"y": 1636,
+"x": 2433,
+"y": 1383,
 "width": 227,
 "height": 73
 },
@@ -28160,24 +28424,24 @@
 "points": [
 [
 2255,
-1719
+1531
 ],
 [
 2255,
-1729
+1541
 ],
 [
 2255,
-1739
+1551
 ],
 [
 2255,
-1749
+1561
 ]
 ],
 "labelBBox": {
 "x": 1931,
-"y": 1739,
+"y": 1551,
 "width": 323,
 "height": 106
 },
@@ -28198,24 +28462,24 @@
 "points": [
 [
 2064,
-1846
+1658
 ],
 [
 1776,
-1838
+1650
 ],
 [
 1213,
-1812
+1624
 ],
 [
 735,
-1721
+1533
 ]
 ],
 "labelBBox": {
 "x": 1080,
-"y": 1808,
+"y": 1620,
 "width": 311,
 "height": 106
 },
@@ -35037,7 +35301,7 @@
 "parent": null,
 "relations": [
 "ctgrr4",
-"1v01xkb"
+"1e64cys"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39337,7 +39601,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start and compaction-state, which is registered under both events) are unclassified with no web override. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -39704,7 +39968,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -40276,7 +40540,7 @@
 },
 "parent": null,
 "relations": [
-"1v01xkb"
+"1e64cys"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41221,7 +41485,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -42051,7 +42315,8 @@
 "relations": [
 "fhlnjw",
 "pacu1m",
-"kupj67"
+"kupj67",
+"caec3y"
 ],
 "color": "gray",
 "line": "dashed",
@@ -42225,7 +42490,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -43314,7 +43579,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily (a probe pipeline that goes silent reads as healthy to the alert; #8516). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -46483,7 +46748,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start and compaction-state, which is registered under both events) are unclassified with no web override. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -46809,7 +47074,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start and compaction-state, which is registered under both events) are unclassified with no web override. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -47138,7 +47403,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -47538,7 +47803,7 @@
 },
 "parent": null,
 "relations": [
-"1v01xkb"
+"1e64cys"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48858,7 +49123,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -49175,7 +49440,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -49339,7 +49604,8 @@
 "relations": [
 "fhlnjw",
 "pacu1m",
-"kupj67"
+"kupj67",
+"caec3y"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51110,7 +51376,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -51298,7 +51564,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -54994,7 +55260,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -55218,7 +55484,7 @@
 "size": "md"
 },
 "description": {
-"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker)."
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
 },
 "tags": [],
 "notation": "System",
@@ -55387,6 +55653,194 @@
 "line": "dashed",
 "head": "normal",
 "technology": "stdio JSON-RPC over pipes (child process group)"
+}
+]
+},
+"__platform_plugin_destructiveGuard": {
+"_stage": "layouted",
+"_type": "element",
+"id": "__platform_plugin_destructiveGuard",
+"viewOf": "platform.plugin.destructiveGuard",
+"title": "Auto / destructive-command guard",
+"description": null,
+"autoLayout": {
+"direction": "TB"
+},
+"notation": {
+"nodes": [
+{
+"title": "Component",
+"shape": "component",
+"color": "primary",
+"kinds": [
+"component"
+]
+},
+{
+"title": "System",
+"shape": "rectangle",
+"color": "primary",
+"kinds": [
+"system"
+]
+}
+]
+},
+"hash": "",
+"bounds": {
+"x": 0,
+"y": 0,
+"width": 508,
+"height": 581
+},
+"nodes": [
+{
+"id": "platform.engine",
+"parent": null,
+"level": 0,
+"children": [],
+"inEdges": [],
+"outEdges": [
+"tdw5xm"
+],
+"title": "Cloud CLI Engine",
+"modelRef": "platform.engine",
+"shape": "rectangle",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "Claude Code instances executing agent workflows"
+},
+"tags": [],
+"notation": "System",
+"kind": "system",
+"navigateTo": "__platform_engine",
+"x": 94,
+"y": 0,
+"width": 320,
+"height": 180,
+"labelBBox": {
+"x": 25,
+"y": 54,
+"width": 269,
+"height": 66
+}
+},
+{
+"id": "platform.plugin",
+"parent": null,
+"level": 0,
+"children": [
+"platform.plugin.destructiveGuard"
+],
+"inEdges": [
+"tdw5xm"
+],
+"outEdges": [],
+"title": "Soleur Plugin",
+"modelRef": "platform.plugin",
+"shape": "rectangle",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders."
+},
+"tags": [],
+"notation": "System",
+"kind": "system",
+"depth": 1,
+"navigateTo": "components",
+"x": 8,
+"y": 308,
+"width": 492,
+"height": 265,
+"labelBBox": {
+"x": 6,
+"y": 0,
+"width": 94,
+"height": 15
+}
+},
+{
+"id": "platform.plugin.destructiveGuard",
+"parent": "platform.plugin",
+"level": 1,
+"children": [],
+"inEdges": [
+"tdw5xm"
+],
+"outEdges": [],
+"title": "destructive-command guard",
+"modelRef": "platform.plugin.destructiveGuard",
+"shape": "component",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "ADR-277 (#9601, W2). plugins/soleur/hooks/destructive-command-guard.sh on `^Bash$`: lexes the command (bash -c, eval, $(...) and every list operator each yield their own simple command; quoted text and heredoc bodies are not commands) and answers DENY for a recursive rm of /, the home directory or an ancestor, and ASK for a recursive rm of the working directory or an ancestor, terraform/tofu destroy and apply -destroy, and a force-push or delete of a default branch (a small wrapper table plus the `--` suffix covers sudo, env, timeout, doppler run --). An unreadable envelope, a lexer failure or a bound trip asks; a missing jq or perl scans the raw envelope and asks on a hit (a raw-scan miss is an allow, stated). It never denies on a dependency failure. A deny also carries a top-level systemMessage because the person sees only a collapsed `Ran 1 shell command` otherwise (measured, CC 2.1.291). Kill switch SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, read from the harness environment (a settings env block can also set it: a seatbelt, not a boundary). Deliberately NOT decided: obfuscated or variable-built command names, xargs/find -delete, a script written then run, SQL, MCP delete tools, any non-Bash tool including Devin exec, Doppler secret writes, a plain terraform apply. NO EGRESS and no log: Soleur receives nothing and the hook writes nothing; the hook's output is persisted as a hook_success row in the customer's own harness transcript (the record of an answered Yes/No prompt is unmeasured). HOSTED POSTURE DIFFERS: it loads into hosted sessions like every plugin hook (settingSources:[] does not exclude hooks.json) and is disabled there by SOLEUR_DISABLE_DESTRUCTIVE_GUARD in AGENT_ENV_OVERRIDES, so W2 protects customer-machine plugin users, not hosted founders; hosted Bash is not gated for these commands in the default autonomous mode, where only a short blocklist that does not match terraform destroy, rm -rf or git push -f stands between the agent and the sandbox (ADR-093 amendment 2026-10-07, ADR-277 D8). The twelve server-side agent functions that spawn claude --plugin-dir plugins/soleur outside buildAgentEnv keep the guard ACTIVE (ADR-277, Server-side scheduled agents)."
+},
+"tags": [],
+"notation": "Component",
+"technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
+"kind": "component",
+"x": 40,
+"y": 361,
+"width": 427,
+"height": 180,
+"labelBBox": {
+"x": 38,
+"y": 17,
+"width": 352,
+"height": 140
+}
+}
+],
+"edges": [
+{
+"id": "tdw5xm",
+"source": "platform.engine",
+"target": "platform.plugin.destructiveGuard",
+"label": "PreToolUse ask/deny on destructive \ncommands; no egress",
+"points": [
+[
+254,
+180
+],
+[
+254,
+232
+],
+[
+254,
+298
+],
+[
+254,
+351
+]
+],
+"labelBBox": {
+"x": 255,
+"y": 240,
+"width": 229,
+"height": 55
+},
+"parent": null,
+"relations": [
+"caec3y"
+],
+"color": "gray",
+"line": "dashed",
+"head": "normal",
+"technology": "PreToolUse hook (ask/deny dispositions, ADR-277)"
 }
 ]
 },
@@ -58701,7 +59155,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily (a probe pipeline that goes silent reads as healthy to the alert; #8516). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -59446,7 +59900,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily (a probe pipeline that goes silent reads as healthy to the alert; #8516). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
