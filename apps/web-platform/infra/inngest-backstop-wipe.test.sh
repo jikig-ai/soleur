@@ -154,14 +154,16 @@ census_guard_before_wipe() {
   [ -n "$g" ] && [ -n "$w" ] && [ "$g" -lt "$w" ]
 }
 census_no_other_writers() {
-  ! code_lines "$1" | grep -qE 'wipefs|shred|sgdisk|sfdisk|parted|mkfs|cryptsetup|truncate|dd[[:space:]][^|]*of=|>[[:space:]]*("?\$REAL|/dev/(sd|vd|nvme|disk|loop|mapper|xvd))|tee[[:space:]]+/dev/(sd|vd|nvme|disk|loop|mapper|xvd)'
+  local c; c="$(code_lines "$1")"
+  ! grep -qE 'wipefs|shred|sgdisk|sfdisk|parted|mkfs|cryptsetup|truncate|dd[[:space:]][^|]*of=|>[[:space:]]*("?\$REAL|/dev/(sd|vd|nvme|disk|loop|mapper|xvd))|tee[[:space:]]+/dev/(sd|vd|nvme|disk|loop|mapper|xvd)' <<<"$c"
 }
-census_no_cmp_l_or_b() { ! code_lines "$1" | grep -qE 'cmp[[:space:]]+(-[a-z]*[lb]|--list|--print-bytes)'; }
-census_readback_o_direct() { code_lines "$1" | grep -q 'iflag=direct' && code_lines "$1" | grep -qE 'cmp -n "?\$EXPECTED_SIZE"? - /dev/zero'; }
+census_no_cmp_l_or_b() { local c; c="$(code_lines "$1")"; ! grep -qE 'cmp[[:space:]]+(-[a-z]*[lb]|--list|--print-bytes)' <<<"$c"; }
+census_readback_o_direct() { local c; c="$(code_lines "$1")"; grep -q 'iflag=direct' <<<"$c" && grep -qE 'cmp -n "?\$EXPECTED_SIZE"? - /dev/zero' <<<"$c"; }
 census_token_not_on_argv() {
-  code_lines "$1" | grep -q 'curl -q -K -' && ! code_lines "$1" | grep -qE 'curl[^|]*(Authorization|Bearer|\$TOKEN)'
+  local c; c="$(code_lines "$1")"
+  grep -q 'curl -q -K -' <<<"$c" && ! grep -qE 'curl[^|]*(Authorization|Bearer|\$TOKEN)' <<<"$c"
 }
-census_no_set_e() { ! code_lines "$1" | grep -qE '^[[:space:]]*set[[:space:]]+-[a-z]*e'; }
+census_no_set_e() { local c; c="$(code_lines "$1")"; ! grep -qE '^[[:space:]]*set[[:space:]]+-[a-z]*e' <<<"$c"; }
 
 check "census: exactly ONE blkdiscard call site"                        census_single_blkdiscard "$GOOD"
 check "census: that call site is inside wipe_device()"                  census_blkdiscard_in_wipe_fn "$GOOD"
@@ -369,21 +371,21 @@ prop_refused() { # $1 name, $2 reason : refused row names the reason, nothing wr
   f="$(last_row "$n")"
   [ "$(fld "$f" result)" = refused ] && [ "$(fld "$f" reason)" = "$2" ] || return 1
   [ "$(fld "$f" nonce)" = "$NONCE" ] || return 1
-  ! rows_of "$n" | grep -q 'result=wiped' || return 1
+  ! grep -q 'result=wiped' <<<"$(rows_of "$n")" || return 1
   [ "$(n_discards "$n")" = 0 ] && dev_unchanged "$n"
 }
 prop_no_write() { # nothing written at all, no wiped row, non-zero exit
   local n="$1"
   [ "$(rc_of "$n")" != 0 ] || return 1
   [ "$(n_discards "$n")" = 0 ] && dev_unchanged "$n" || return 1
-  ! rows_of "$n" | grep -q 'result=wiped'
+  ! grep -q 'result=wiped' <<<"$(rows_of "$n")"
 }
 prop_refused_after_write() { # zero/readback/signature failure: a write happened, but no wiped claim
   local n="$1" f
   [ "$(rc_of "$n")" != 0 ] || return 1
   f="$(last_row "$n")"
   [ "$(fld "$f" result)" = refused ] && [ "$(fld "$f" reason)" = "$2" ] || return 1
-  ! rows_of "$n" | grep -q 'result=wiped'
+  ! grep -q 'result=wiped' <<<"$(rows_of "$n")"
 }
 
 # ---- scenarios: the canonical happy path and every refusal ------------------------------------------
@@ -578,6 +580,19 @@ mutate "M12 token moved onto curl's argv" 's/curl -q -K -/curl -q -K - -H "Autho
   check_not "M12 (token on argv): the token-not-on-argv census is RED" census_token_not_on_argv "$MUT_PATH"
   check "M12: and the run really put the token on curl's argv (behavioural proof the row can fail)" grep -q "$TOKEN_VALUE" "$(sdir m12)/curl.argv"
 }
+# M12b: SIGPIPE-proof (deterministic). A token-on-argv curl sits EARLY in a script padded far past the
+# 64 KiB pipe buffer, and the legitimate `curl -q -K -` line sits LAST. A predicate that pipes the script
+# into `grep -q` then sees the second grep exit on the early bad line while the producer is still
+# writing: under pipefail that is 141, and the negated predicate reads it as "no match" and fails OPEN
+# (measured 30/30 with the pipe form, 0/30 with the herestring form). The census must stay RED.
+mutate "M12b placeholder to reuse the landed-mutation accounting" 's/curl -q -K -/curl -q -K - -H "Authorization: Bearer $TOKEN"/' && {
+  _big="$W/mut/m12b-big.sh"
+  { printf '#!/usr/bin/env bash\ncurl -q -H "Authorization: Bearer $TOKEN" x\n'
+    _i=0; while [ "$_i" -lt 4000 ]; do printf ': padding line %s to push the script past the pipe buffer padding padding\n' "$_i"; _i=$((_i + 1)); done
+    printf 'curl -q -K - x\n'; } > "$_big"
+  check "M12b: the padded script really exceeds the 64 KiB pipe buffer" bash -c "[ \"\$(wc -c < '$_big')\" -gt 70000 ]"
+  check_not "M12b (token on argv early, legitimate curl last, padded): the census is still RED" census_token_not_on_argv "$_big"
+}
 # M13: the signature check removed.
 mutate "M13 post-zero signature check dropped" 's/^g_sig_after\(\) \{$/g_sig_after() { return 0/' && {
   BLKID_FORCE_TYPE=ext4 scenario m13 "$MUT_PATH" || exit 2
@@ -605,7 +620,7 @@ check_not "T1 (count gate removed): the count-gate scan is RED on the mutated co
   bash -c "[ \"\$(grep -vE '^[[:space:]]*#' '$TFM' | grep -c 'count *= *var.inngest_backstop_wipe_enabled ? 1 : 0')\" = 2 ]"
 
 # ---- floor, reported with printf + exit (not through the helper it back-stops) --------------------------
-FLOOR=115
+FLOOR=122
 printf '\n%s passed, %s failed, %s executed (floor %s)\n' "$passes" "$fails" "$executed" "$FLOOR"
 if [ "$executed" -lt "$FLOOR" ]; then
   printf 'FAIL - assertion-count floor: executed %s < %s (a vacuous or truncated run)\n' "$executed" "$FLOOR" >&2

@@ -675,7 +675,10 @@ grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT
 #      to hcloud_volume.inngest_redis (the `_luks` sibling is a different resource and is allowed).
 d1_violations() { # d1_violations <dir>
   local dir="$1" f stripped n
-  stripped="$(for f in "$dir"/*.tf; do [ -f "$f" ] && grep -vE '^[[:space:]]*(#|//)' "$f"; done)"
+  # Comment lines and `description = "..."` lines are prose, not references (a variable description may
+  # name the retired address to explain what it pins); a depends_on, attribute access or resource header
+  # is what v1/v4 are after.
+  stripped="$(for f in "$dir"/*.tf; do [ -f "$f" ] && grep -vE '^[[:space:]]*(#|//|description[[:space:]]*=)' "$f"; done)"
   [[ -n "$stripped" ]] || { echo "no .tf content scanned (fail closed)"; return 0; }
   grep -qE '^[[:space:]]*resource[[:space:]]+"hcloud_volume(_attachment)?"[[:space:]]+"inngest_redis"' <<<"$stripped" \
     && echo "v1: hcloud_volume(_attachment).inngest_redis is declared again"
@@ -714,6 +717,8 @@ d1_row() { # d1_row <PASS|RED> <label> <dir> [<needle>]
   fi
 }
 d1_row PASS "canonical pinned local" "$(d1_fixture ok 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" '# hcloud_volume.inngest_redis is only named in this comment')"
+d1_row PASS "D1-H1 a variable description may name the retired address" "$(d1_fixture h1 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'variable "x" {\n  description = "pins hcloud_volume.inngest_redis (retired)"\n}')"
+d1_row RED "D1-M5b a depends_on reference is not a description" "$(d1_fixture m5b 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'resource "terraform_data" "y" {\n  depends_on = [hcloud_volume.inngest_redis]\n}')" "v4:"
 d1_row RED "D1-M1 the volume is re-declared" "$(d1_fixture m1 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'resource "hcloud_volume" "inngest_redis" {\n  size = 10\n}')" "v1:"
 d1_row RED "D1-M1b the attachment is re-declared" "$(d1_fixture m1b 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'resource "hcloud_volume_attachment" "inngest_redis" {\n  volume_id = 1\n}')" "v1:"
 d1_row RED "D1-M2 the input is re-pointed at the volume resource" "$(d1_fixture m2 'hcloud_volume.inngest_redis.id' "$_D1_PIN")" "not the pinned local"
@@ -727,7 +732,7 @@ d1_row RED "D1-M7 an empty root scans nothing" "$(mkdir -p "${_G1_TMP}/d1-empty"
 
 # ANTI-VACUITY FLOOR. Reported by printf + exit, never through fail()/pass(), so neutering those
 # cannot disarm it. The bound is the exact passing count; raise it with every added assertion.
-INNGEST_HOST_MIN_ASSERTIONS=97
+INNGEST_HOST_MIN_ASSERTIONS=99
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1
