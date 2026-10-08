@@ -71,3 +71,13 @@ the wrong tier produces confident green tests against a leak that stays open.
    **Prevention:** existing `brainstorm` Phase 1.1 guidance already covers this
    — independently `ls`/`gh` any subagent existence/state claim before it
    propagates into artifacts.
+
+## Plan-review addendum (2026-10-08)
+
+Load-bearing corrections the review panel surfaced for the outer-wrap design:
+
+- **`spawnClaudeCodeProcess` (sdk.d.ts:2431) is the supported interpose** — strictly better than `pathToClaudeCodeExecutable`+wrapper script; but `SpawnedProcess` carries NO stderr channel (capture into a ring buffer yourself) and spawn-ENOENT can hang `query()` (sdk-ts#255 → `accessSync` preflight + synthetic failed process).
+- **`bwrap --clearenv` wipes the spawn env entirely** — secrets passed via `spawn(env)` never reach the child; the only way back is `--setenv KEY=val`, which lands on `/proc/<pid>/cmdline` (same-uid readable — worse than environ). Compose the child env server-side instead; never put secrets on argv.
+- **A procfs superblock is pid-ns-keyed at mount time** — `--bind /proc /proc` under `--unshare-pid` does NOT scope `/proc`. Only a fresh `--proc` (or empty tmpfs) mounts scoped; and empty procfs starves the repo's own bwrap-shim fd sweep (`/proc/self/fd`), so masked-paths EPERM genuinely narrows the honest fallback space.
+- **Detached pgid teardown**: `kill(-pgid)` needs `detached:true` or it hits the runner's own process group; bare-PID kill orphans the CLI inside the namespace.
+- **Bind mounts pin inodes** — a reprovision that swaps the workspace dir under the same path leaves the session on a deleted inode; serialize reprovision before spawn.
