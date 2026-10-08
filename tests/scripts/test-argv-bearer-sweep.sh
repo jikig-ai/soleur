@@ -1630,6 +1630,256 @@ else row "mutation: the shape check removed lets a hostile value reach the mask 
 echo "=== stage S2-A part 1: backup arm (#8767) done ==="
 
 # =====================================================================================
+# STAGE S2-A part 2: the HMAC key of the deploy webhook off `openssl`'s argument list (D1/D3).
+# 17 of the 19 `openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"` sites become the CANONICAL SNIPPET: the key rides
+# the python3 child's ENVIRONMENT only (per-command prefix). The two sites in the `registry-probe)` and
+# `doublefire-probe)` arms are HELD BACK (plan decision D1: the infra suite's tool census counts a python3 token
+# in those arms; the suite edit is tracked with S4/S5). The committed oracle is the OTHER implementation,
+# `openssl dgst -hmac`, only ever run here with a synthetic key.
+# =====================================================================================
+HM_CANON="$(cat <<'HM_EOF'
+HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())'
+HM_EOF
+)"
+PYDIR="$TMPD/pybin"; HMBIN="$TMPD/hmbin"
+for d in "$PYDIR" "$HMBIN"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+REAL_PY="$(type -P python3 || true)"; REAL_OSSL="$(type -P openssl || true)"
+[[ -n "$REAL_PY" && -n "$REAL_OSSL" ]] || fatal "stage S2-A part 2: python3 and openssl are both required (canonical snippet + oracle)"
+ln -s "$REAL_PY" "$PYDIR/python3"
+# Recording tool shim: argv (NUL-delimited), whether HMAC_KEY was present in the tool's own environment, then the REAL tool.
+cat > "$HMBIN/rec" <<'REC_EOF'
+#!/usr/bin/env bash
+D="${BK_SHIM:-}"; tool="${0##*/}"
+if [[ -n "$D" ]]; then
+  mkdir -p "$D/tools"; n=0
+  [[ -r "$D/tools/$tool.n" ]] && read -r n < "$D/tools/$tool.n"
+  n=$((n + 1)); printf '%s\n' "$n" > "$D/tools/$tool.n"
+  printf '%s\0' "$@" > "$D/tools/$tool-$n.argv"
+  [[ -n "${HMAC_KEY+x}" ]] && printf 'present\n' > "$D/tools/$tool-$n.hmackey"
+fi
+exec "@REAL@" "$@"
+REC_EOF
+for t in python3 openssl; do
+  real="$REAL_PY"; [[ "$t" == openssl ]] && real="$REAL_OSSL"
+  sed "1s|.*|#!${BASH_BIN}|; s|@REAL@|${real}|" "$HMBIN/rec" > "$HMBIN/$t"; chmod +x "$HMBIN/$t"
+done
+rm -f "$HMBIN/rec"
+
+# hm_sign <key> <bodyfile>: the canonical snippet under a clean environment (no inherited HMAC_KEY / PYTHON*).
+hm_sign() { env -i PATH="$PYDIR:$REALBIN" WEBHOOK_SECRET="$1" "$BASH_BIN" -c "$HM_CANON" < "$2" 2>/dev/null; }
+hm_oracle() { "$REAL_OSSL" dgst -sha256 -hmac "$1" < "$2" | sed 's/.*= //'; }
+
+# --- the canonical snippet ---------------------------------------------------------------------
+if [[ "$(LC_ALL=C; printf '%s' "${#HM_CANON}")" == 198 ]]; then row "canonical snippet: 198 bytes, as measured and oracle-checked in Phase 0" ok
+else row "canonical snippet: 198 bytes, as measured and oracle-checked in Phase 0" fail "length=$(LC_ALL=C; printf '%s' "${#HM_CANON}")"; fi
+printf '' > "$BKDIR/body-empty"
+printf '%s' '{"tenant":"synthetic","n":[1,2,3],"s":"a\"b"}' > "$BKDIR/body-json"
+printf '%s\n' '{"x":1}' > "$BKDIR/body-nl"
+head -c 100000 /dev/zero | tr '\0' 'x' > "$BKDIR/body-big"
+HM_KEYS=("k" "$(printf '%*s' 20 '' | tr ' ' 'a')" "$(printf '%*s' 63 '' | tr ' ' 'b')" "$(printf '%*s' 64 '' | tr ' ' '6')" \
+  "$(printf '%*s' 65 '' | tr ' ' 'c')" "$(printf '%*s' 96 '' | tr ' ' 'd')" "$(printf '%*s' 200 '' | tr ' ' 'e')" 'a"b\c $d '"'"'e;f|g&h')
+hm_bad=""; hm_n=0
+for k in "${HM_KEYS[@]}"; do
+  for b in empty json nl big; do
+    hm_n=$((hm_n + 1))
+    got="$(hm_sign "$k" "$BKDIR/body-$b")"; want="$(hm_oracle "$k" "$BKDIR/body-$b")"
+    [[ -n "$want" && "$got" == "$want" && "${#got}" == 64 ]] || hm_bad+=" ${#k}/$b"
+  done
+done
+if [[ -z "$hm_bad" && "$hm_n" == 32 ]]; then row "canonical snippet oracle: equals openssl dgst -hmac for 8 synthetic keys (1, 20, 63, 64, 65, 96, 200 bytes and shell-hostile characters) x 4 bodies (empty, JSON, trailing newline, 100 KB)" ok
+else row "canonical snippet oracle: equals openssl dgst -hmac for 8 synthetic keys (1, 20, 63, 64, 65, 96, 200 bytes and shell-hostile characters) x 4 bodies (empty, JSON, trailing newline, 100 KB)" fail "n=$hm_n mismatched (keylen/body):$hm_bad"; fi
+hm_out="$(env -i PATH="$PYDIR:$REALBIN" "$BASH_BIN" -c "$HM_CANON" < "$BKDIR/body-empty" 2>/dev/null)"; hm_rc=$?
+hm_out2="$(env -i PATH="$PYDIR:$REALBIN" WEBHOOK_SECRET= "$BASH_BIN" -c "$HM_CANON" < "$BKDIR/body-empty" 2>/dev/null)"; hm_rc2=$?
+hm_out3="$(env -i PATH="$PYDIR:$REALBIN" "$BASH_BIN" -c "set -u; $HM_CANON" < "$BKDIR/body-empty" 2>/dev/null)"; hm_rc3=$?
+if [[ "$hm_rc" -ne 0 && -z "$hm_out" && "$hm_rc2" -ne 0 && -z "$hm_out2" && "$hm_rc3" -ne 0 && -z "$hm_out3" ]]; then
+  row "canonical snippet: an unset key, an empty key and an unset key under set -u each exit non-zero and print nothing (no silent signature over an empty key)" ok
+else row "canonical snippet: an unset key, an empty key and an unset key under set -u each exit non-zero and print nothing (no silent signature over an empty key)" fail "rc unset=$hm_rc empty=$hm_rc2 set-u=$hm_rc3"; fi
+hm_leak="$(env -i PATH="$PYDIR:$REALBIN" WEBHOOK_SECRET=synthetic-key "$BASH_BIN" -c "X=\$(printf '' | $HM_CANON); [[ -z \"\${HMAC_KEY+x}\" ]] && printf clean" 2>/dev/null)"
+if [[ "$hm_leak" == clean ]]; then row "canonical snippet: HMAC_KEY is a per-command prefix and does not exist in the calling shell afterwards" ok
+else row "canonical snippet: HMAC_KEY is a per-command prefix and does not exist in the calling shell afterwards" fail "out=$hm_leak"; fi
+# The key reaches python3 through its environment only: recording python3 shim (argv + HMAC_KEY presence), real python3 behind it.
+HM_SK="synthetic-argv-key-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+mkdir -p "$ROWS/hm-argv"
+env -i PATH="$HMBIN:$PYDIR:$REALBIN" BK_SHIM="$ROWS/hm-argv" WEBHOOK_SECRET="$HM_SK" "$BASH_BIN" -c "$HM_CANON" < "$BKDIR/body-json" > "$ROWS/hm-argv/out" 2>&1
+if [[ -e "$ROWS/hm-argv/tools/python3-1.argv" && -e "$ROWS/hm-argv/tools/python3-1.hmackey" ]] \
+   && ! grep -aqF -- "$HM_SK" "$ROWS/hm-argv/tools/python3-1.argv"; then
+  row "canonical snippet: the key is in python3's environment (HMAC_KEY present) and in no recorded argument of python3" ok
+else row "canonical snippet: the key is in python3's environment (HMAC_KEY present) and in no recorded argument of python3" fail "argv/env evidence missing or key in argv"; fi
+
+# --- parity: every converted copy equals the canonical string; the -hmac operand lives only at the two held-back arms ---
+hm_arm_count() { # <from-arm-regex> <to-arm-regex> <ere> <file> -> count of lines matching <ere> inside the arm range [from, to)
+  awk -v from="$1" -v to="$2" -v re="$3" '$0 ~ from {f=1; next} $0 ~ to {f=0} f && $0 ~ re {n++} END {print n+0}' "$4"
+}
+# hm_audit <script>: ONE function reads the parity facts, so the real rows and the mutation rows below judge with the same code.
+#   HM_BAD    space-separated copy indices that differ from the canonical snippet or lost the SIG=$(printf <body> | ...) shape
+#   HM_NCOPY  converted copies; HM_NOLD lines carrying the -hmac operand; HM_RP / HM_DP of those inside the registry-probe) /
+#   doublefire-probe) arms; HM_PYARMS python3 tokens inside the registry-probe) .. rearm) range
+hm_audit() {
+  local f="$1" ln rest seg i=0 shape
+  HM_BAD=""
+  while IFS= read -r ln; do
+    i=$((i + 1)); rest="${ln#*| }"; seg="${rest%)}"; shape=0
+    case "$ln" in
+      '    '[A-Z]*'=$(printf '"''"' | HMAC_KEY='*|'    '[A-Z]*'=$(printf '"'%s'"' "$PAYLOAD" | HMAC_KEY='*) shape=1 ;;
+    esac
+    [[ "$seg" == "$HM_CANON" && "$shape" == 1 ]] || HM_BAD+=" $i"
+  done < <(grep -F 'HMAC_KEY="$WEBHOOK_SECRET" python3' "$f")
+  HM_NCOPY=$i
+  HM_NOLD="$(grep -cF -e '-hmac' "$f" || true)"
+  HM_RP="$(hm_arm_count '^[[:space:]]+registry-probe[)]$' '^[[:space:]]+doublefire-probe[)]$' 'openssl dgst -sha256 -hmac "[$]WEBHOOK_SECRET"' "$f")"
+  HM_DP="$(hm_arm_count '^[[:space:]]+doublefire-probe[)]$' '^[[:space:]]+rearm[)]$' 'openssl dgst -sha256 -hmac "[$]WEBHOOK_SECRET"' "$f")"
+  HM_PYARMS="$(hm_arm_count '^[[:space:]]+registry-probe[)]$' '^[[:space:]]+rearm[)]$' 'python3' "$f")"
+}
+# hm_audit_ok: the whole parity contract at once (17 identical copies, -hmac only at the two held-back arm anchors).
+hm_audit_ok() { [[ -z "$HM_BAD" && "$HM_NCOPY" == 17 && "$HM_NOLD" == 2 && "$HM_RP" == 1 && "$HM_DP" == 1 && "$HM_PYARMS" == 0 ]]; }
+hm_audit "$CUT"
+for hm_i in $(seq 1 17); do
+  if [[ " $HM_BAD " != *" $hm_i "* && "$hm_i" -le "$HM_NCOPY" ]]; then row "cutover HMAC copy $hm_i equals the canonical snippet and keeps the SIG=\$(printf <body> | ...) shape" ok
+  else row "cutover HMAC copy $hm_i equals the canonical snippet and keeps the SIG=\$(printf <body> | ...) shape" fail "copy missing or differs from the canonical string (bad:$HM_BAD copies=$HM_NCOPY)"; fi
+done
+if [[ "$HM_NCOPY" == 17 && -z "$HM_BAD" ]]; then row "cutover HMAC: exactly 17 converted copies (19 sites minus the 2 held back by plan decision D1), no extra or divergent copy" ok
+else row "cutover HMAC: exactly 17 converted copies (19 sites minus the 2 held back by plan decision D1), no extra or divergent copy" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
+if [[ "$HM_NOLD" == 2 && "$HM_RP" == 1 && "$HM_DP" == 1 && "$HM_PYARMS" == 0 ]]; then
+  row "cutover HMAC: the -hmac operand appears exactly twice, once in the registry-probe) arm and once in the doublefire-probe) arm, and no python3 token is in those arms" ok
+else row "cutover HMAC: the -hmac operand appears exactly twice, once in the registry-probe) arm and once in the doublefire-probe) arm, and no python3 token is in those arms" fail "file=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS"; fi
+hm_cm=0
+while IFS= read -r ln; do
+  n="${ln%%:*}"; prev="$(sed -n "$((n - 1))p" "$CUT" | sed 's/^[[:space:]]*//')"
+  [[ "$prev" == '#'* && "$prev" == *D1* && "$prev" == *S4/S5* ]] && hm_cm=$((hm_cm + 1))
+done < <(grep -n -F -e '-hmac' "$CUT")
+if [[ "$hm_cm" == 2 ]]; then row "cutover HMAC: each held-back site carries a one-line comment naming plan decision D1 and the S4/S5 suite edit" ok
+else row "cutover HMAC: each held-back site carries a one-line comment naming plan decision D1 and the S4/S5 suite edit" fail "commented=$hm_cm"; fi
+
+# MUTATIONS of the parity contract: one mutant per copy index and per kind, each judged by the SAME hm_audit. A suite that
+# only ever audits the first copy, or counts instead of comparing bytes, leaves one of these green.
+nth_replace() { # <src> <out> <needle> <repl> <n>: replace the n-th occurrence only; rc 3 when there are fewer than n
+  assert_fixture_dir "$2"
+  "$REAL_PY" -I -c '
+import sys
+src, out, needle, repl, n = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+s = open(src).read(); i = -1
+for _ in range(n):
+    i = s.find(needle, i + 1)
+    if i < 0:
+        sys.exit(3)
+open(out, "w").write(s[:i] + repl + s[i + len(needle):])
+' "$1" "$2" "$3" "$4" "$5"
+}
+HM_PFX='HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c'
+for idx in 1 9 17; do
+  nth_replace "$CUT" "$BKDIR/hm-mut-$idx.sh" "$HM_PFX" 'HMAC_KEY="$WEBHOOK_SECRET" python3 -c' "$idx" || fatal "parity mutation $idx did not land"
+  hm_audit "$BKDIR/hm-mut-$idx.sh"
+  if [[ "$HM_BAD" == " $idx" ]] && ! hm_audit_ok; then row "mutation: dropping -I from copy $idx alone is caught as exactly copy $idx (parity is per copy, not first copy)" ok
+  else row "mutation: dropping -I from copy $idx alone is caught as exactly copy $idx (parity is per copy, not first copy)" fail "bad:$HM_BAD"; fi
+done
+nth_replace "$CUT" "$BKDIR/hm-mut-emptykey.sh" 'k or sys.exit(1);' '' 7 || fatal "parity mutation emptykey did not land"
+hm_audit "$BKDIR/hm-mut-emptykey.sh"
+if [[ "$HM_BAD" == " 7" ]]; then row "mutation: dropping the empty-key exit from copy 7 alone is caught as exactly copy 7" ok
+else row "mutation: dropping the empty-key exit from copy 7 alone is caught as exactly copy 7" fail "bad:$HM_BAD"; fi
+nth_replace "$CUT" "$BKDIR/hm-mut-argvback.sh" "$HM_CANON" "openssl dgst -sha256 -hmac \"\$WEBHOOK_SECRET\" | sed 's/.*= //'" 5 || fatal "parity mutation argvback did not land"
+hm_audit "$BKDIR/hm-mut-argvback.sh"
+if [[ "$HM_NCOPY" == 16 && "$HM_NOLD" == 3 ]] && ! hm_audit_ok; then row "mutation: the key put back on openssl's argv in copy 5 is caught (16 copies, a third -hmac operand outside the held-back arms)" ok
+else row "mutation: the key put back on openssl's argv in copy 5 is caught (16 copies, a third -hmac operand outside the held-back arms)" fail "copies=$HM_NCOPY -hmac=$HM_NOLD"; fi
+{ cat "$CUT"; printf '%s\n' "    SIGX=\$(printf '' | ${HM_CANON/sha256/sha1})"; } > "$BKDIR/hm-mut-extra.sh"
+hm_audit "$BKDIR/hm-mut-extra.sh"
+if [[ "$HM_NCOPY" == 18 && " $HM_BAD " == *" 18 "* ]] && ! hm_audit_ok; then row "mutation: an 18th inline copy that differs by one byte is caught (copy count and byte comparison)" ok
+else row "mutation: an 18th inline copy that differs by one byte is caught (copy count and byte comparison)" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
+nth_replace "$CUT" "$BKDIR/hm-mut-heldpy.sh" 'openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed '"'"'s/.*= //'"'"')' "$HM_CANON)" 1 || fatal "parity mutation heldpy did not land"
+hm_audit "$BKDIR/hm-mut-heldpy.sh"
+if [[ "$HM_NOLD" == 1 && "$HM_PYARMS" -ge 1 ]] && ! hm_audit_ok; then row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught" ok
+else row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught" fail "-hmac=$HM_NOLD python3-in-arms=$HM_PYARMS"; fi
+
+# --- the refusal marker on the _sig_curl / _bearer_curl refusal arms ---------------------------------
+SC_DRV="$BKDIR/sigdriver.sh"; assert_fixture_dir "$SC_DRV"
+{
+  printf 'set -euo pipefail\n'
+  grep -m1 '^_bearer_ok() {' "$CUT"
+  awk '/^_bearer_curl\(\) \{$/,/^}$/' "$CUT"
+  awk '/^_sig_curl\(\) \{$/,/^}$/' "$CUT"
+  printf 'case "$SC_CALL" in\n  sig) _sig_curl SIG http://127.0.0.1:9/x ;;\n  bearer) _bearer_curl TOK http://127.0.0.1:9/x ;;\nesac\n'
+} > "$SC_DRV"
+sc_run() { # <rowname> <SIG> <ID> <SECRET> <call> [TOK]
+  local row="$ROWS/$1"; assert_fixture_dir "$row"; mkdir -p "$row/shim"
+  ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" BK_SHIM="$row/shim" SC_CALL="$5" SIG="$2" CF_ACCESS_CLIENT_ID="$3" CF_ACCESS_CLIENT_SECRET="$4" TOK="${6:-}" \
+      "$BASH_BIN" "$SC_DRV" < /dev/null > "$row/stdout" 2> "$row/stderr" )
+  SC_RC=$?
+}
+SC_MARK='SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape'
+SC_HOT="hostile\"value-$BK_CANARY"
+sc_ok_sig="$(printf '%*s' 64 '' | tr ' ' 'a')"
+for case_spec in "sig-var:sig:$SC_HOT:cfid:cfsecret:" "cf-id:sig:$sc_ok_sig:$SC_HOT:cfsecret:" "cf-secret:sig:$sc_ok_sig:cfid:$SC_HOT:" "bearer-var:bearer:$sc_ok_sig:cfid:cfsecret:$SC_HOT"; do
+  IFS=: read -r cname ccall csig cid csecret ctok <<< "$case_spec"
+  sc_run "sc-$cname" "$csig" "$cid" "$csecret" "$ccall" "$ctok"
+  scbad=""
+  [[ "$SC_RC" -eq 2 ]] || scbad+=" rc=$SC_RC"
+  [[ "$(bk_calls "$ROWS/sc-$cname")" == 0 ]] || scbad+=" curl-called"
+  [[ "$(bk_count "$ROWS/sc-$cname/stderr" "$SC_MARK")" == 1 ]] || scbad+=" marker-count=$(bk_count "$ROWS/sc-$cname/stderr" "$SC_MARK")"
+  [[ "$(bk_count "$ROWS/sc-$cname/stderr" "$BK_CANARY")" == 0 && "$(bk_count "$ROWS/sc-$cname/stdout" "$BK_CANARY")" == 0 ]] || scbad+=" value-in-output"
+  if [[ -z "$scbad" ]]; then row "refusal arm $cname: a hostile value returns 2 with zero requests, exactly one value-free SOLEUR_CREDENTIAL_REFUSED marker on stderr, the value absent" ok
+  else row "refusal arm $cname: a hostile value returns 2 with zero requests, exactly one value-free SOLEUR_CREDENTIAL_REFUSED marker on stderr, the value absent" fail "$scbad"; fi
+done
+sc_run sc-valid "$sc_ok_sig" cfid cfsecret sig
+if [[ "$SC_RC" -eq 0 && "$(bk_calls "$ROWS/sc-valid")" == 1 && "$(bk_count "$ROWS/sc-valid/stderr" SOLEUR_CREDENTIAL_REFUSED)" == 0 ]] \
+   && grep -qxF "header = \"X-Signature-256: sha256=$sc_ok_sig\"" "$ROWS/sc-valid/shim/calls/1.stdin"; then
+  row "refusal arm control: a well-formed signature and Cloudflare Access pair reach curl on stdin with no marker" ok
+else row "refusal arm control: a well-formed signature and Cloudflare Access pair reach curl on stdin with no marker" fail "rc=$SC_RC"; fi
+n_sigfn_end="$(awk '/^_sig_curl\(\) \{$/,/^}$/' "$CUT" | grep -c '^}$' || true)"
+if [[ "$n_sigfn_end" == 1 ]] && "$BASH_BIN" -n "$SC_DRV" 2>/dev/null; then row "_sig_curl stays one ^_sig_curl() {\$ ... ^}\$ range (the infra suite's awk splice extracts it whole) and the driver parses" ok
+else row "_sig_curl stays one ^_sig_curl() {\$ ... ^}\$ range (the infra suite's awk splice extracts it whole) and the driver parses" fail "closers=$n_sigfn_end"; fi
+
+# --- canary sweep: the real script, op=enumerate (the first converted site), shims in failure modes ----
+CUTSB="$TMPD/cutsb"; assert_fixture_dir "$CUTSB"; mkdir -p "$CUTSB/scripts"
+sed 's|/tmp/|${TMPDIR}/|g' "$CUT" > "$CUTSB/scripts/cutover-inngest.sh"   # same code; scratch paths instead of the shared /tmp
+ln -s "$REPO_ROOT/scripts/lib" "$CUTSB/scripts/lib"
+printf '%s' '[{"reminder_id":"r1"}]' > "$BODIES/enum_array.json"
+printf '%s' '{not json' > "$BODIES/enum_malformed.json"
+HM_WH="whcanary-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+HM_CFID="cfid-canary-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+HM_CFSEC="cfsec-canary-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+cs_run() { # <rowname> <SHIM_MODE> <SHIM_STATUS or empty> <bodyfile>
+  local row="$ROWS/$1"; assert_fixture_dir "$row"; mkdir -p "$row/home" "$row/tmp" "$row/shim"
+  ( cd "$row" && env -i PATH="$HMBIN:$SHIMDIR:$REALBIN:$PYDIR" HOME="$row/home" TMPDIR="$row/tmp" SHIM_DIR="$row/shim" BK_SHIM="$row/shim" SHIM_FIXTURE_TOKEN="none" \
+      SHIM_MODE="$2" SHIM_STATUS="$3" SHIM_BODY_FILE="$4" OP=enumerate WEBHOOK_SECRET="$HM_WH" CF_ACCESS_CLIENT_ID="$HM_CFID" CF_ACCESS_CLIENT_SECRET="$HM_CFSEC" \
+      "$BASH_BIN" "$CUTSB/scripts/cutover-inngest.sh" < /dev/null > "$row/stdout" 2> "$row/stderr" )
+  CS_RC=$?
+}
+cs_leaks() { # <rowname> -> names of the places the canaries appear (empty = none): output, curl argv, openssl argv, python3 argv
+  local row="$ROWS/$1" c f out=""
+  for c in "$HM_WH" "$HM_CFID" "$HM_CFSEC"; do
+    grep -aqF -- "$c" "$row/stdout" "$row/stderr" 2>/dev/null && out+=" output"
+    for f in "$row"/shim/calls/*.argv "$row"/shim/tools/*.argv; do [[ -e "$f" ]] && grep -aqF -- "$c" "$f" && out+=" argv:${f##*/}"; done
+  done
+  printf '%s' "$out" | tr ' ' '\n' | awk 'NF && !s[$0]++' | paste -sd' ' -
+}
+cs_run cs-200 noauth "" "$BODIES/enum_array.json"
+cs_expect="$(printf '' | "$REAL_OSSL" dgst -sha256 -hmac "$HM_WH" | sed 's/.*= //')"
+cs_bad=""
+[[ "$CS_RC" -eq 0 ]] || cs_bad+=" rc=$CS_RC"
+[[ "$(bk_calls "$ROWS/cs-200")" -ge 1 ]] || cs_bad+=" no-curl-call"
+grep -qxF "header = \"X-Signature-256: sha256=$cs_expect\"" "$ROWS/cs-200/shim/calls/1.stdin" 2>/dev/null || cs_bad+=" signature-on-stdin-differs-from-oracle"
+[[ -n "$(cs_leaks cs-200)" ]] && cs_bad+=" leak:$(cs_leaks cs-200)"
+if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate, shim 200: the real script signs the request (stdin signature equals the openssl oracle) and the webhook key and Cloudflare Access values are in no argv or output" ok
+else row "canary sweep op=enumerate, shim 200: the real script signs the request (stdin signature equals the openssl oracle) and the webhook key and Cloudflare Access values are in no argv or output" fail "$cs_bad"; fi
+for mode in "401:401:$BODIES/enum_array.json" "500:500:$BODIES/enum_array.json" "malformed-200::$BODIES/enum_malformed.json"; do
+  IFS=: read -r mname mstat mbody <<< "$mode"
+  cs_run "cs-$mname" noauth "$mstat" "$mbody"
+  cs_bad=""
+  [[ "$(bk_calls "$ROWS/cs-$mname")" -ge 1 ]] || cs_bad+=" no-curl-call"
+  [[ "$CS_RC" -eq 1 ]] || cs_bad+=" rc=$CS_RC"
+  [[ -n "$(cs_leaks "cs-$mname")" ]] && cs_bad+=" leak:$(cs_leaks "cs-$mname")"
+  if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate, shim $mname: the script fails closed (rc 1, a recorded call) with no canary in any argv or output" ok
+  else row "canary sweep op=enumerate, shim $mname: the script fails closed (rc 1, a recorded call) with no canary in any argv or output" fail "$cs_bad"; fi
+done
+cs_run cs-fail7 fail7 "" "$BODIES/enum_array.json"
+cs_bad=""
+[[ "$(bk_calls "$ROWS/cs-fail7")" -ge 1 ]] || cs_bad+=" no-curl-call"
+[[ "$CS_RC" -eq 1 ]] || cs_bad+=" rc=$CS_RC"
+[[ -n "$(cs_leaks cs-fail7)" ]] && cs_bad+=" leak:$(cs_leaks cs-fail7)"
+if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate, shim transport failure (curl exit 7): the script fails closed (rc 1) with no canary in any argv or output" ok
+else row "canary sweep op=enumerate, shim transport failure (curl exit 7): the script fails closed (rc 1) with no canary in any argv or output" fail "$cs_bad"; fi
+echo "=== stage S2-A part 2: cutover HMAC copies, refusal marker, canary sweep done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -1657,7 +1907,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=204
+EXPECTED_TESTS=247
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
