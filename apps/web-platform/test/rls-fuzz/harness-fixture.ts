@@ -24,6 +24,7 @@
 
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
+import { sqlStateFromError } from "../../lib/postgres-errors";
 import { assertLocalDsn } from "./local-dsn-guard";
 import { buildAuthenticatedClaims } from "./claim";
 import type { Ctx } from "./targets";
@@ -31,6 +32,43 @@ import type { RpcCtx } from "./rpc-cases";
 
 type Sql = postgres.Sql<{}>;
 type Txn = postgres.TransactionSql<{}>;
+
+/** Transient Postgres SQLSTATES that warrant a bounded retry of the whole
+ *  unit of work: 40P01 deadlock_detected, 55P03 lock_not_available.
+ *  Mirrors apps/web-platform/server/concurrency.ts's TRANSIENT_SQLSTATES. */
+const TRANSIENT_SQLSTATES = new Set(["40P01", "55P03"]);
+const TRANSIENT_MAX_ATTEMPTS = 3;
+
+/**
+ * Retry `fn` on a transient Postgres lock error (40P01 deadlock_detected,
+ * 55P03 lock_not_available) with 80–120 ms jitter — the same bound and cadence
+ * as server/concurrency.ts's acquireSlot. Parallel vitest workers share ONE
+ * disposable Postgres, so any statement can be elected deadlock victim — the
+ * victim is picked nondeterministically, which is why the retry lives here at
+ * the `Sql`-handle level rather than at the DDL call site (#9779).
+ *
+ * NEVER wrap a transaction-scoped `t` handle: a statement issued on an aborted
+ * txn re-raises 25P02, which is not transient and would mask the real 40P01
+ * from the outer retry. Retry only ever replays a complete unit of work.
+ */
+export async function withTransientRetry<T>(
+  fn: () => Promise<T>,
+  opts?: { sleep?: (ms: number) => Promise<void> },
+): Promise<T> {
+  const sleep =
+    opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const code = sqlStateFromError(e);
+      if (code === undefined || !TRANSIENT_SQLSTATES.has(code) || attempt >= TRANSIENT_MAX_ATTEMPTS) {
+        throw e;
+      }
+      await sleep(80 + Math.random() * 40); // 80–120 ms jitter, same as concurrency.ts
+    }
+  }
+}
 
 /**
  * Connect to the LOCAL disposable Postgres after the fail-closed DSN guard.
@@ -57,10 +95,12 @@ const ROLLBACK = Symbol("rls-fuzz-rollback");
 export async function rolledBackRaw<T>(sql: Sql, fn: (t: Txn) => Promise<T>): Promise<T> {
   let out: T;
   try {
-    await sql.begin(async (t) => {
-      out = await fn(t as Txn);
-      return Promise.reject(ROLLBACK); // discard everything the attack touched
-    });
+    await withTransientRetry(() =>
+      sql.begin(async (t) => {
+        out = await fn(t as Txn);
+        return Promise.reject(ROLLBACK); // discard everything the attack touched
+      }),
+    );
   } catch (e) {
     if (e !== ROLLBACK) throw e;
   }
@@ -110,26 +150,33 @@ export function asTenant<T>(sql: Sql, sub: string, fn: (t: Txn) => Promise<T>): 
  * failure is a beforeAll false-green (treat any vitest `skipped > 0` as a crash trap).
  */
 export async function seedTwoTenant(sql: Sql): Promise<Ctx> {
+  // ONE committed txn under the transient-retry wrapper: a mid-seed deadlock
+  // rolls the whole seed back, so the retry replays on a clean state and a
+  // multi-statement seed can never leave a half-provisioned fixture.
+  return withTransientRetry(() => sql.begin((t) => seedTwoTenantTx(t as Txn)));
+}
+
+async function seedTwoTenantTx(t: Txn): Promise<Ctx> {
   const userA = randomUUID();
   const userB = randomUUID();
   const userC = randomUUID();
-  await sql`insert into auth.users (id, email) values
+  await t`insert into auth.users (id, email) values
     (${userA}, ${`a-${userA}@example.test`}),
     (${userB}, ${`b-${userB}@example.test`}),
     (${userC}, ${`c-${userC}@example.test`})`;
-  const [a] = await sql`select workspace_id, (select organization_id from workspaces where id = workspace_id) as org from workspace_members where user_id = ${userA} limit 1`;
-  const [b] = await sql`select workspace_id from workspace_members where user_id = ${userB} limit 1`;
+  const [a] = await t`select workspace_id, (select organization_id from workspaces where id = workspace_id) as org from workspace_members where user_id = ${userA} limit 1`;
+  const [b] = await t`select workspace_id from workspace_members where user_id = ${userB} limit 1`;
   const wsA = a.workspace_id as string;
   const wsB = b.workspace_id as string;
   const orgA = a.org as string;
   // userC joins wsA as a co-member (co-member attacker + byok_delegations grantee).
-  await sql`insert into workspace_members (workspace_id, user_id, role) values (${wsA}, ${userC}, 'member')`;
+  await t`insert into workspace_members (workspace_id, user_id, role) values (${wsA}, ${userC}, 'member')`;
   const convA = randomUUID();
   const convA2 = randomUUID();
-  await sql`insert into conversations (id, user_id, workspace_id, status, visibility) values
+  await t`insert into conversations (id, user_id, workspace_id, status, visibility) values
     (${convA}, ${userA}, ${wsA}, 'active', 'workspace'),
     (${convA2}, ${userA}, ${wsA}, 'active', 'workspace')`;
-  const [engineRun] = await sql<{ id: string }[]>`
+  const [engineRun] = await t<{ id: string }[]>`
     insert into agent_engine_runs (
       workspace_id, execution_kind, conversation_id, engine_id, auth_mode,
       adapter_version, status, created_by
@@ -138,16 +185,16 @@ export async function seedTwoTenant(sql: Sql): Promise<Ctx> {
       'rls-fuzz-fixture', 'queued', ${userA}
     ) returning id`;
   const ctx: Ctx = { userA, userB, userC, wsA, wsB, orgA, convA, convA2, engineRunA: engineRun.id };
-  await assertTwoTenant(sql, ctx);
+  await assertTwoTenant(t, ctx);
   return ctx;
 }
 
 /** Fixture self-check: wsA≠wsB, orgA present, userC is a wsA member. */
-async function assertTwoTenant(sql: Sql, c: Ctx): Promise<void> {
+async function assertTwoTenant(t: Txn, c: Ctx): Promise<void> {
   if (!c.wsA || !c.wsB || c.wsA === c.wsB || !c.orgA) {
     throw new Error(`fixture seed failed: wsA=${c.wsA} wsB=${c.wsB} orgA=${c.orgA}`);
   }
-  const [m] = await sql<{ n: number }[]>`
+  const [m] = await t<{ n: number }[]>`
     select count(*)::int as n from workspace_members where workspace_id = ${c.wsA} and user_id = ${c.userC}`;
   if (m.n !== 1) throw new Error(`fixture seed failed: userC is not a wsA member (n=${m.n})`);
 }
@@ -158,8 +205,8 @@ async function assertTwoTenant(sql: Sql, c: Ctx): Promise<void> {
  * set_email_triage_status RPC attack — built ONCE here (the exact divergence Item 8
  * exists to prevent). Returns the new row id. `claim_key` is UNIQUE NOT NULL.
  */
-export async function seedEmailTriageItem(sql: Sql | Txn, c: Ctx): Promise<string> {
-  const [row] = await sql<{ id: string }[]>`
+export async function seedEmailTriageItem(h: Sql | Txn, c: Ctx): Promise<string> {
+  const [row] = await h<{ id: string }[]>`
     insert into email_triage_items (workspace_id, claim_key, resend_email_id, subject, received_at, received_at_source)
     values (${c.wsA}, ${`claim-${randomUUID()}`}, ${`re-${randomUUID()}`}, 'rls-fuzz triage', now(), 'payload')
     returning id`;
@@ -175,22 +222,27 @@ export async function seedEmailTriageItem(sql: Sql | Txn, c: Ctx): Promise<strin
  * the poison landed before returning.
  */
 export async function seedRpcCtx(sql: Sql): Promise<RpcCtx> {
-  const base = await seedTwoTenant(sql);
-  const [kb] = await sql`insert into kb_files (workspace_id, user_id, file_path, filename, visibility)
+  // Same committed-txn + retry contract as seedTwoTenant.
+  return withTransientRetry(() => sql.begin((t) => seedRpcCtxTx(t as Txn)));
+}
+
+async function seedRpcCtxTx(t: Txn): Promise<RpcCtx> {
+  const base = await seedTwoTenantTx(t);
+  const [kb] = await t`insert into kb_files (workspace_id, user_id, file_path, filename, visibility)
     values (${base.wsA}, ${base.userA}, ${`/a/${randomUUID()}`}, 'a', 'workspace') returning id`;
-  const [msg] = await sql`insert into messages (workspace_id, template_id, conversation_id, role, content)
+  const [msg] = await t`insert into messages (workspace_id, template_id, conversation_id, role, content)
     values (${base.wsA}, 'work', ${base.convA}, 'user', 'x') returning id`;
-  const [del] = await sql`insert into byok_delegations (grantor_user_id, grantee_user_id, workspace_id, created_by_user_id, daily_usd_cap_cents, hourly_usd_cap_cents)
+  const [del] = await t`insert into byok_delegations (grantor_user_id, grantee_user_id, workspace_id, created_by_user_id, daily_usd_cap_cents, hourly_usd_cap_cents)
     values (${base.userA}, ${base.userC}, ${base.wsA}, ${base.userA}, 1000, 100) returning id`;
   // Poison A's workspace flags to NON-sentinel values (see docstring).
-  await sql`update workspaces set debug_mode = true, autonomous_disclosure_ack_at = now(), github_installation_id = 424242 where id = ${base.wsA}`;
-  const [contact] = await sql`insert into beta_contacts (user_id) values (${base.userA}) returning id`;
-  const [inbox] = await sql`insert into inbox_item (user_id, workspace_id, severity, source, title)
+  await t`update workspaces set debug_mode = true, autonomous_disclosure_ack_at = now(), github_installation_id = 424242 where id = ${base.wsA}`;
+  const [contact] = await t`insert into beta_contacts (user_id) values (${base.userA}) returning id`;
+  const [inbox] = await t`insert into inbox_item (user_id, workspace_id, severity, source, title)
     values (${base.userA}, ${base.wsA}, 'info', 'system', 'rls-fuzz') returning id`;
-  const emailTriageA = await seedEmailTriageItem(sql, base);
-  const [grant] = await sql`insert into scope_grants (founder_id, workspace_id, action_class, tier)
+  const emailTriageA = await seedEmailTriageItem(t, base);
+  const [grant] = await t`insert into scope_grants (founder_id, workspace_id, action_class, tier)
     values (${base.userA}, ${base.wsA}, ${`general.${randomUUID().slice(0, 8)}`}, 'auto') returning id`;
-  const [poison] = await sql<{ debug_mode: boolean }[]>`select debug_mode from workspaces where id = ${base.wsA}`;
+  const [poison] = await t<{ debug_mode: boolean }[]>`select debug_mode from workspaces where id = ${base.wsA}`;
   if (poison?.debug_mode !== true) throw new Error("fixture seed failed: workspace flag poison did not land");
   return {
     ...base,

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { classifyWriteOutcome, classifySelectOutcome, isPass, type Verdict } from "./verdict";
 import { type Ctx } from "./targets";
-import { connect, seedTwoTenant, seedEmailTriageItem, asTenant } from "./harness-fixture";
+import { connect, seedTwoTenant, seedEmailTriageItem, asTenant, withTransientRetry } from "./harness-fixture";
 
 // Deepened EXCLUDED_ISOLATION tables (#6307 Item 1, ADR-111, AC4). These carry
 // workspace_id (so AC1b tracks them) but are isolated by a NON-is_workspace_member
@@ -30,30 +30,36 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — deepened excluded tables (co-membe
     sql = connect(DSN); // assertLocalDsn + max:1 pinned in the shared fixture
     ctx = await seedTwoTenant(sql);
 
-    ids.email_triage_items = await seedEmailTriageItem(sql, ctx);
+    ids.email_triage_items = await withTransientRetry(() => seedEmailTriageItem(sql, ctx));
 
-    const [inbox] = await sql`insert into inbox_item (user_id, workspace_id, severity, source, title)
-      values (${ctx.userA}, ${ctx.wsA}, 'info', 'system', 'rls-fuzz') returning id`;
-    ids.inbox_item = inbox.id as string;
+    // One committed txn under the retry wrapper: a mid-seed deadlock replay is
+    // only safe because the whole cluster rolls back together.
+    await withTransientRetry(() =>
+      sql.begin(async (t) => {
+        const [inbox] = await t`insert into inbox_item (user_id, workspace_id, severity, source, title)
+          values (${ctx.userA}, ${ctx.wsA}, 'info', 'system', 'rls-fuzz') returning id`;
+        ids.inbox_item = inbox.id as string;
 
-    const [dsar] = await sql`insert into dsar_export_jobs (workspace_id, user_id)
-      values (${ctx.wsA}, ${ctx.userA}) returning id`;
-    ids.dsar_export_jobs = dsar.id as string;
+        const [dsar] = await t`insert into dsar_export_jobs (workspace_id, user_id)
+          values (${ctx.wsA}, ${ctx.userA}) returning id`;
+        ids.dsar_export_jobs = dsar.id as string;
 
-    // action_sends carries NOT-NULL FKs (message_id → messages, grant_id → scope_grants);
-    // constraints fire BEFORE the RLS WITH CHECK, so the forge MUST use A-owned FK rows
-    // or it would 23503 (test-error) instead of exercising the user_id=auth.uid() gate.
-    const [m] = await sql`insert into messages (workspace_id, template_id, conversation_id, role, content)
-      values (${ctx.wsA}, 'work', ${ctx.convA}, 'user', 'x') returning id`;
-    msgA = m.id as string;
-    const [g] = await sql`insert into scope_grants (founder_id, workspace_id, action_class, tier)
-      values (${ctx.userA}, ${ctx.wsA}, ${`general.${randomUUID().slice(0, 8)}`}, 'auto') returning id`;
-    grantA = g.id as string;
-    const [as] = await sql`insert into action_sends
-      (user_id, message_id, action_class, tier_at_send, template_hash, per_send_body_sha256, recipient_id_hash, grant_id)
-      values (${ctx.userA}, ${msgA}, 'general', 'auto', ${`h-${randomUUID()}`}, ${`s-${randomUUID()}`}, ${`r-${randomUUID()}`}, ${grantA})
-      returning id`;
-    ids.action_sends = as.id as string;
+        // action_sends carries NOT-NULL FKs (message_id → messages, grant_id → scope_grants);
+        // constraints fire BEFORE the RLS WITH CHECK, so the forge MUST use A-owned FK rows
+        // or it would 23503 (test-error) instead of exercising the user_id=auth.uid() gate.
+        const [m] = await t`insert into messages (workspace_id, template_id, conversation_id, role, content)
+          values (${ctx.wsA}, 'work', ${ctx.convA}, 'user', 'x') returning id`;
+        msgA = m.id as string;
+        const [g] = await t`insert into scope_grants (founder_id, workspace_id, action_class, tier)
+          values (${ctx.userA}, ${ctx.wsA}, ${`general.${randomUUID().slice(0, 8)}`}, 'auto') returning id`;
+        grantA = g.id as string;
+        const [as] = await t`insert into action_sends
+          (user_id, message_id, action_class, tier_at_send, template_hash, per_send_body_sha256, recipient_id_hash, grant_id)
+          values (${ctx.userA}, ${msgA}, 'general', 'auto', ${`h-${randomUUID()}`}, ${`s-${randomUUID()}`}, ${`r-${randomUUID()}`}, ${grantA})
+          returning id`;
+        ids.action_sends = as.id as string;
+      }),
+    );
   });
   afterAll(async () => {
     if (sql) await sql.end({ timeout: 5 });
@@ -65,12 +71,12 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — deepened excluded tables (co-membe
   for (const table of ["email_triage_items", "inbox_item", "dsar_export_jobs", "action_sends"]) {
     test(`deepened-excluded SELECT isolation: ${table}`, async () => {
       const id = ids[table];
-      expect(await countById(sql, table, id), `${table}: seed precondition`).toBe(1);
+      expect(await withTransientRetry(() => countById(sql, table, id)), `${table}: seed precondition`).toBe(1);
       const aSees = await asTenant(sql, ctx.userA, (t) => countById(t, table, id));
       expect(aSees, `${table}: positive control (owner userA self-read)`).toBe(1);
       const cSees = await asTenant(sql, ctx.userC, (t) => countById(t, table, id));
       expect(isPass(classifySelectOutcome(cSees)), `${table}: co-member userC SELECT (saw ${cSees})`).toBe(true);
-      expect(await countById(sql, table, id), `${table}: row intact after read attacks`).toBe(1);
+      expect(await withTransientRetry(() => countById(sql, table, id)), `${table}: row intact after read attacks`).toBe(1);
     });
   }
 

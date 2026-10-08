@@ -6,7 +6,7 @@ import { classifyRpcOutcome, type Verdict } from "./verdict";
 import { securityDefinerAuthenticatedFns, securityDefinerAnonFns, allSecurityDefinerFns, type SecDefFn } from "./catalog";
 import { staticallyUndetectedDefinerFns, loadForwardCorpus } from "../migration-lint/definer-grants";
 import { ATTACK_SQL, EXCLUDED, KNOWN_EXPOSURES, type RpcCtx } from "./rpc-cases";
-import { connect, seedRpcCtx, rolledBackRaw } from "./harness-fixture";
+import { connect, seedRpcCtx, rolledBackRaw, withTransientRetry } from "./harness-fixture";
 
 // SECURITY DEFINER RPC-bypass dimension (#6256, ADR-111, AC8). Drives every
 // authenticated-EXECUTE definer fn with tenant-B claims + tenant-A params and
@@ -258,9 +258,9 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
   // persist. After the guard-strip self-test's rollback, the scratch definer fn must
   // be ABSENT (so a guard-stripped fn cannot silently survive into a later run).
   test("AC14: the scratch self-test definer fn does not persist after rollback", async () => {
-    const [{ n }] = await sql<{ n: number }[]>`
+    const [{ n }] = await withTransientRetry(() => sql<{ n: number }[]>`
       select count(*)::int as n from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
-      where ns.nspname = 'public' and p.proname = '_rls_fuzz_selftest'`;
+      where ns.nspname = 'public' and p.proname = '_rls_fuzz_selftest'`);
     expect(n, "scratch self-test fn must not persist past its rolled-back txn").toBe(0);
   });
 
