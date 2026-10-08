@@ -1002,6 +1002,7 @@ roster_ids() { # <hook file>: the derived ids, one per line. CODE only: a full-l
 roster_verdict() { # <hook file> <hooks README> <expected ids, space separated>  -> RV (ok|bad); RV_WHY says why (no subshell: both are globals)
   local ids exp rrow r rmiss="" rn=0
   ids="$(roster_ids "$1" | tr '\n' ' ')"; ids="${ids% }"
+  # shellcheck disable=SC2086  # $3 is a space-separated id list, split on purpose (set -f is on)
   exp="$(printf '%s\n' $3 | sort -u | tr '\n' ' ')"; exp="${exp% }"
   rrow="$(grep -F '| `destructive-command-guard.sh`' "$2" 2>/dev/null)"
   for r in $ids; do rn=$((rn + 1)); grep -qF -- "\`$r\`" <<<"$rrow" || rmiss+=" $r"; done
@@ -2343,7 +2344,7 @@ env_row "jq-less: rm, tab, -rf, tab, ~ asks (a JSON-escaped tab is a blank)" ask
 env_row "jq-less: rm, carriage return, -rf, carriage return, ~ asks (a JSON-escaped CR is a blank)" ask "$(mkjson $'rm\r-rf\r~' "$TREE")" "$FJ"
 env_row "jq-less: rm\u0009-rf\u0009~ asks (a \u0009 escape is a blank)" ask '{"tool_name":"Bash","tool_input":{"command":"rm\u0009-rf\u0009~"},"cwd":"/var/tmp"}' "$FJ"
 # the escape is spelled through a variable so no tool layer between the author and this file can decode it into a blank
-_BS='\'
+_BS=$'\\'
 env_row "jq-less: rm\u0020-rf\u0020~ asks (a \u0020 escape is a blank)" ask "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm${_BS}u0020-rf${_BS}u0020~\"},\"cwd\":\"/var/tmp\"}" "$FJ"
 env_row "jq-less: a force push to main asks" ask "$_gp" "$FJ"
 env_row "jq-less: ls exits 0 with no decision" none "$_ls" "$FJ"
