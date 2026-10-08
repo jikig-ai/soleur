@@ -50,9 +50,9 @@ export const LEADER_MAX_TOKENS = 4096;
 /**
  * Anthropic model ids. Both tiers are fixed ids with no date suffix and no separate
  * alias (alias == id), so the constant is also the string the API and the pinned
- * claude-code CLI resolve. Haiku moved from claude-haiku-4-5-20251001 to 5.5 on
- * 2026-10-08: the CLI pin had to reach 2.1.293 first (earlier bundles do not know
- * the id), which claude-cli-pin-knows-models.test.ts enforces.
+ * claude-code CLI resolve. Haiku moved from the dated 4.5 id to 5.5 on 2026-10-08:
+ * the CLI pin had to reach 2.1.293 first (earlier bundles do not know the id),
+ * which claude-cli-pin-knows-models.test.ts enforces.
  */
 export const SONNET_MODEL = "claude-sonnet-5-5" as const;
 export const HAIKU_MODEL = "claude-haiku-5-5" as const;

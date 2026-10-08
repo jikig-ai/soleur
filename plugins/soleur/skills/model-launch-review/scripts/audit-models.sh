@@ -52,6 +52,13 @@ AUTOFIX_PAIRS=(
   "claude-sonnet-4-6=claude-sonnet-5-5"
   "claude-sonnet-4-5=claude-sonnet-5-5"
   "claude-fable-5=claude-fable-5-1"
+  # Haiku 5.5 launch, 2026-10-08. BOTH Haiku 4.5 spellings: the id boundary defined
+  # below makes the undated id a different token from the dated one, so one pair alone
+  # leaves the other spelling stale forever. Both RHS are the current id, so the
+  # single-hop invariant holds. No closing paren in comments here: the test parser
+  # reads this array up to the first one.
+  "claude-haiku-4-5-20251001=claude-haiku-5-5"
+  "claude-haiku-4-5=claude-haiku-5-5"
 )
 
 # SINGLE-HOP INVARIANT (fail-fast). A convergent map rewrites every stale id
@@ -119,7 +126,29 @@ DELETION_GUARD=20   # abort --fix if any file would lose more than this many lin
 # generator that reads the TS registry (eval-harness/scripts/gen-models.sh), and
 # a blind sed here would make the generator no longer the sole writer — exactly
 # the second-SSOT the generator's own header promises does not exist.
-EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/|/community/|\.test\.|\.spec\.|\.generated\.|/model-launch-review/)'
+# SDK-PATH CARVE-OUT (Haiku 5.5 launch, 2026-10-08; #8643). These two scripts drive the
+# Agent SDK `query()`, whose model resolution lives in the SDK's BUNDLED CLI — pinned at
+# @anthropic-ai/claude-agent-sdk 0.3.284, which does not know `claude-haiku-5-5` (an
+# unknown id silently halves max_tokens, #6934). Auto-fixing them to the new id would
+# break two paid scripts, and leaving them selectable would make `--detect` exit 10
+# forever. They stay on `claude-haiku-4-5` until the SDK pin reaches 0.3.293, the first
+# release whose bundle carries the id. EXACT paths, never a directory: widening this to
+# apps/web-platform/scripts/ would hide a genuinely stale sibling. It is SELF-EXPIRING:
+# model-launch-review.test.ts fails once the SDK pin reaches 0.3.293 and says to delete
+# this array and swap the two scripts.
+SDK_PATH_CARVEOUT=(
+  "apps/web-platform/scripts/sandbox-canary.mjs"
+  "apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs"
+)
+sdk_carveout_re() {
+  local p out=""
+  for p in "${SDK_PATH_CARVEOUT[@]}"; do
+    p="${p//./\\.}"
+    out="${out:+$out|}/${p}\$"
+  done
+  printf '%s' "$out"
+}
+EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/|/community/|\.test\.|\.spec\.|\.generated\.|/model-launch-review/|'"$(sdk_carveout_re)"')'
 
 # Collect config-class files containing any auto-fixable stale ID.
 # Returns 2 (and prints to stderr) if the scan itself failed. That distinction
