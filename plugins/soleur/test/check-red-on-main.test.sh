@@ -232,7 +232,7 @@ run() { # <dir> <sut-args...> ; RUN_PATH overrides PATH
 why() { echo "      why: $*" >&2; return 1; }
 rc_is()   { [[ "$(cat "$1/rc")" == "$2" ]] || why "rc=$(cat "$1/rc"), want $2; out: $(tail -3 "$1/out" | tr '\n' '|') err: $(tail -2 "$1/err" | tr '\n' '|')"; }
 outis()   { [[ "$(cat "$1/out")" == "$2" ]] || why "stdout is not exactly: $2 -- got: $(cat "$1/out")"; }
-verdict() { tail -1 "$1/out" | grep -q "^SOLEUR_RED_ON_MAIN verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
+verdict() { tail -1 "$1/out" | grep -c >/dev/null "^SOLEUR_RED_ON_MAIN verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
 onemarker() { [[ "$(grep -c '^SOLEUR_RED_ON_MAIN ' "$1/out")" == 1 ]] || why "want exactly 1 marker line, got: $(cat "$1/out")"; }
 nomiss()  { ! grep -q '^STUB-MISS' "$1/log" || why "stub refused: $(grep '^STUB-MISS' "$1/log" | head -1)"; }
 logs()    { grep -Fq -- "$2" "$1/log" || why "stub log lacks request: $2"; }
