@@ -177,7 +177,20 @@ landed() { ! diff -rq "$FIXTURE" "$1" >/dev/null 2>&1; }   # 0 when the copy dif
 # jq_edit <file> <filter> [jq args...]: apply the filter to every document of the file, in place
 jq_edit() {
   local f="$1" flt="$2"; shift 2
+  assert_fixture_dir "$f"
   jq -c "$@" "$flt" "$f" >"$f.new" && mv "$f.new" "$f"
+}
+
+# Canonical fixture-dir guard (copied byte-for-byte from plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh pins every copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
 }
 
 CUR_S="$CENSUS"   # the script rows() is currently exercising (the real one, or the H1 stub)

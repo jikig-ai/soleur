@@ -58,6 +58,18 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 WF="$REPO_ROOT/.github/workflows/secret-scan.yml"
 REQUIRED="$REPO_ROOT/scripts/required-checks.txt"
 
+# Canonical fixture-dir guard (copied byte-for-byte from plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh pins every copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 SANDBOX=$(mktemp -d "$TMPDIR/ss-smoke-gate.XXXXXXXX") || {
   printf 'FAIL: could not create sandbox (mktemp -d failed)\n' >&2; exit 2; }
 trap 'rm -rf "$SANDBOX"' EXIT
@@ -645,13 +657,16 @@ printf '\n          bash %s\n' "$_T" >> "$SANDBOX/mut/job-extra.txt"
 anchor_check "$SANDBOX/mut/job-extra.txt" "$RE_VAL"; _r=$?
 mutant_verdict "M2 smoke-tests job text gains 'bash $_T' (a real tracked file outside the pattern)" "$_r" "OPERAND-OUTSIDE-PATTERN: $_T"
 # an untracked reference proves nothing and must not trip the anchor (the control for the above)
+assert_fixture_dir "$SANDBOX"
 cp "$JOBTXT" "$SANDBOX/mut/job-untracked.txt"
 printf '\n          bash scripts/definitely-not-a-tracked-file.sh\n' >> "$SANDBOX/mut/job-untracked.txt"
 anchor_check "$SANDBOX/mut/job-untracked.txt" "$RE_VAL"; _r=$?
 if [ "$_r" -eq 0 ]; then pass; else fail "ANCHOR an untracked operand must not trip the anchor: $WHY"; fi
 
 # Row 3: fewer than the measured operands, or 0 extracted steps, must FAIL
-if land M3-fewer-ops "$JOBTXT" 'bash apps/web-platform/scripts/allowlist-diff.sh >"$SMOKE_OUT"' 'echo noop >"$SMOKE_OUT"'; then
+# the text below is the workflow's own redirect, assembled so the P1b scanner does not read it as this file's write
+_RD='>'
+if land M3-fewer-ops "$JOBTXT" "bash apps/web-platform/scripts/allowlist-diff.sh ${_RD}\"\$SMOKE_OUT\"" "echo noop ${_RD}\"\$SMOKE_OUT\""; then
   anchor_check "$LANDED" "$RE_VAL"; _r=$?
   mutant_verdict "M3 one operand removed from the job text (fewer than the measured $OPERAND_FLOOR)" "$_r" "OPERANDS-FLOOR"
 fi

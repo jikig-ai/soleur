@@ -80,10 +80,25 @@ set -uo pipefail
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# Canonical fixture-dir guard (copied byte-for-byte from plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh pins every copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 FETCH_DIR=""
 SCRATCH=""
 cleanup() {
-  [ -n "$SCRATCH" ] && [ -d "$SCRATCH" ] && rm -rf "$SCRATCH"
+  if [ -n "$SCRATCH" ] && [ -d "$SCRATCH" ]; then
+    assert_fixture_dir "$SCRATCH"
+    rm -rf "$SCRATCH"
+  fi
   # last stderr line of a live run: how to delete the fetched data
   if [ -n "$FETCH_DIR" ]; then printf 'census: remove fetched data with: rm -rf %s\n' "$FETCH_DIR" >&2; fi
   return 0
@@ -181,6 +196,7 @@ c1_check() { # <file>
 # ── live fetch: sub-windows, C1 before any jobs call, then jobs per completed run ─
 gh_get() { # <endpoint> <outfile> <label>   (3 attempts, then exit 2 naming the label)
   local ep="$1" out="$2" label="$3" attempt=1 gerr="$SCRATCH/gh-stderr.txt"
+  assert_fixture_dir "$out"
   while :; do
     if gh api --paginate "$ep" >"$out" 2>"$gerr"; then return 0; fi
     if [ "$attempt" -ge 3 ]; then
