@@ -235,7 +235,7 @@ inngest_backstop_live_store_gate() {
     dt="${line%%$'\t'*}"; msg="${line#*$'\t'}"; dt="${dt/T/ }"
     if [[ ! "$dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then echo "${_g}: ABORT reason=probe_unusable — a probe row has no readable timestamp"; return 1; fi
     dt="${dt:0:19}"; n=$((n + 1))
-    if [[ -z "$newest_dt" || "$dt" > "$newest_dt" || "$dt" == "$newest_dt" ]]; then newest_dt="$dt"; newest_msg="$msg"; fi
+    if [[ -z "$newest_dt" || ! "$dt" < "$newest_dt" ]]; then newest_dt="$dt"; newest_msg="$msg"; fi
   done < "$probe"
   if [[ "$n" -lt 1 ]]; then echo "${_g}: ABORT reason=probe_unusable — no probe rows (a silent producer is not a healthy store)"; return 1; fi
   local ep age

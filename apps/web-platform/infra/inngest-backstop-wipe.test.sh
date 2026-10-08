@@ -68,15 +68,28 @@ REAL_BLKID="$(command -v blkid)"
 # The read-back is O_DIRECT, so the fixture directory must support it (tmpfs does not). Try the
 # candidates and ABORT loudly if none does; a silent fallback to buffered reads would test a
 # different property.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 W=""
 for base in "$TMPDIR" /var/tmp "$SCRIPT_DIR"; do
   [ -d "$base" ] || continue
   cand="$(mktemp -d "$base/backstop-wipe-test.XXXXXXXX")" || continue
+  assert_fixture_dir "$cand"
   head -c 8192 /dev/zero > "$cand/probe" 2>/dev/null
   if dd if="$cand/probe" iflag=direct bs=4096 count=1 of=/dev/null status=none 2>/dev/null; then W="$cand"; break; fi
   rm -rf "$cand"
 done
 [ -n "$W" ] || { printf 'FIXTURE_UNAVAILABLE: no scratch directory supports O_DIRECT reads\n' >&2; exit 2; }
+assert_fixture_dir "$W"
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/s" "$W/mut" || { printf 'FATAL: scratch setup failed\n' >&2; exit 2; }
 
@@ -99,6 +112,7 @@ code_lines() { grep -vE '^[[:space:]]*#' "$1"; }
 # render_script <out> <volume_id> <size> <nonce>: Terraform's interpolation, then its `$${` escape.
 render_script() {
   local out="$1" vid="$2" size="$3" nonce="$4"
+  assert_fixture_dir "$out"
   extract_script \
     | sed -E -e "s/(^|[^\$])\\\$\\{volume_id\\}/\\1$vid/g" \
             -e "s/(^|[^\$])\\\$\\{expected_size_bytes\\}/\\1$size/g" \
@@ -108,6 +122,7 @@ render_script() {
 }
 
 RAW="$W/raw.sh"
+assert_fixture_dir "$RAW"
 extract_script > "$RAW"
 check "extraction: the script body was recovered from write_files (non-empty, shebang)" \
   bash -c "[ -s '$RAW' ] && head -1 '$RAW' | grep -q '^#!/usr/bin/env bash'"
@@ -129,7 +144,7 @@ fi
 # The sed render above is the harness's own model of templatefile(). Where terraform is available,
 # prove the model against the real thing: the script rendered by terraform must be byte-identical.
 if command -v terraform >/dev/null 2>&1 && python3 -I -c "import yaml" >/dev/null 2>&1; then
-  TFR="$W/tf-render"; mkdir -p "$TFR"
+  TFR="$W/tf-render"; assert_fixture_dir "$TFR"; mkdir -p "$TFR"
   ( cd "$TFR" && printf 'jsonencode(templatefile("%s", {volume_id=%s, expected_size_bytes=%s, nonce="%s", betterstack_logs_token="synthTok123"}))\n' \
       "$YML" "$PINNED_ID" "$SIZE_A" "$NONCE" | terraform console 2>/dev/null \
     | python3 -I -c 'import sys,json,yaml; d=yaml.safe_load(json.loads(json.loads(sys.stdin.read().strip()))); sys.stdout.write([f for f in d["write_files"] if f["path"].endswith(".sh")][0]["content"])' > "$TFR/script.sh" )
@@ -222,6 +237,7 @@ check_not "vars: no new secret variable was added for the wipe (sensitive = true
 
 # ---- fixture machinery ----------------------------------------------------------------------------
 # stubs ----------------------------------------------------------------------------------------------
+assert_fixture_dir "$W"
 cat > "$W/bin/lsblk" <<'EOF'
 #!/bin/sh
 echo "lsblk $*" >> "$STUB_DIR/lsblk.log"
@@ -300,7 +316,7 @@ mkfixture() {
 scenario() {
   local script="$2" d="$W/s/$1"
   local kind="${FX_KIND:-ext4}" size="${FX_SIZE:-$SIZE_A}"
-  rm -rf "$d"; mkdir -p "$d/byid" "$d/sys/block/dev0/holders" "$d/sys/block/dev0/slaves" || return 1
+  assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d/byid" "$d/sys/block/dev0/holders" "$d/sys/block/dev0/slaves" || return 1
   local dev="$d/dev0"
   case "$kind" in
     ext4)  mkfixture "$dev" "$size" || return 1 ;;
@@ -504,6 +520,7 @@ mutate() {
   local label="$1" expr="$2" out before after
   MUT_N=$((MUT_N + 1))
   out="$W/mut/m$MUT_N.sh"
+  assert_fixture_dir "$out"
   cp "$GOOD" "$out" || return 1
   before="$(md5sum < "$out")"
   sed -E -i "$expr" "$out" || return 1
@@ -559,6 +576,7 @@ mutate "M8 g_single guard dropped" 's/^g_single\(\) \{$/g_single() { return 0/' 
 mutate "M9 pinned-id comparison dropped" 's/^(\[ "\$VOLUME_ID" = "\$PINNED_ID" \]) \|\| /true || /' && {
   # re-render the mutated script with the live id (the mutation was applied to the pinned-id render)
   RENDER_M9="$W/mut/m9-live.sh"
+  assert_fixture_dir "$RENDER_M9"
   sed -E 's/^VOLUME_ID='"'$PINNED_ID'"'/VOLUME_ID='"'$LIVE_LUKS_ID'"'/' "$MUT_PATH" > "$RENDER_M9"
   check "M9: the live-id re-render of the mutated script differs from the mutated script" bash -c "! cmp -s '$MUT_PATH' '$RENDER_M9'"
   FX_BYID_ID=$LIVE_LUKS_ID scenario m9 "$RENDER_M9" || exit 2
@@ -587,6 +605,7 @@ mutate "M12 token moved onto curl's argv" 's/curl -q -K -/curl -q -K - -H "Autho
 # (measured 30/30 with the pipe form, 0/30 with the herestring form). The census must stay RED.
 mutate "M12b placeholder to reuse the landed-mutation accounting" 's/curl -q -K -/curl -q -K - -H "Authorization: Bearer $TOKEN"/' && {
   _big="$W/mut/m12b-big.sh"
+  assert_fixture_dir "$_big"
   { printf '#!/usr/bin/env bash\ncurl -q -H "Authorization: Bearer $TOKEN" x\n'
     _i=0; while [ "$_i" -lt 4000 ]; do printf ': padding line %s to push the script past the pipe buffer padding padding\n' "$_i"; _i=$((_i + 1)); done
     printf 'curl -q -K - x\n'; } > "$_big"
@@ -614,6 +633,7 @@ mutate "M16 an extra dd of= writer appended" 's/^(wipe_device\(\) \{)$/\1 dd if=
 
 # ---- Terraform-side mutation rows (static scans must be able to fail) -------------------------------------
 TFM="$W/mut/tf-mutated.tf"
+assert_fixture_dir "$TFM"
 cp "$TF" "$TFM" && b="$(md5sum < "$TFM")" && sed -E -i 's/count *= *var\.inngest_backstop_wipe_enabled \? 1 : 0/count = 1/' "$TFM" && a="$(md5sum < "$TFM")"
 check "T1 mutation LANDED: count gate removed from the .tf copy" test "$b" != "$a"
 check_not "T1 (count gate removed): the count-gate scan is RED on the mutated copy" \
