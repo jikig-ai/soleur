@@ -34,3 +34,7 @@ default the plan took and the alternative the operator may choose. None blocks t
 ## 6. Exit code 1 versus 2 per surface (applied, deviates from the brief)
 
 - Refusals exit 2 in the Better Stack reader, the parity script and the follow-through probes because exit 1 means FAIL (probes) or "blame DOPPLER_TOKEN" (reader classifier).
+
+## 7. Follow-up issues consolidated from five to three (mechanical, applied at work time)
+
+- The plan listed five filings. Under the net-issue-flow gate (this PR closes one issue) the related infra-path and small items were consolidated: #9755 (`op=backup` environment gate and O10 re-plumb), #9756 (the two cla-evidence R2 `--user` sites), #9757 (held-back cutover HMAC sites with the census-regex suite edit, heartbeat-URL path secrets, `linkedin-setup.sh` write-env validation, Better Stack reader stderr discarded by two S3 workflows). Each item keeps its own checkbox, owner and trigger.
