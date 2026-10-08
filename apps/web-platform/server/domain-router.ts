@@ -1,5 +1,6 @@
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { createChildLogger } from "./logger";
+import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("domain");
 
@@ -132,6 +133,10 @@ async function classifyMessage(
     ? `\nThe user is viewing: ${context.path} (${context.type ?? "unknown"})`
     : "";
 
+  // Hoisted so the catch below can say HOW the turn ended: an end_turn with
+  // unparseable JSON and a truncated or refused turn are different defects.
+  let stopReason = "no-response";
+
   try {
     // NOTE: this inline Anthropic Messages request mirrors the shared
     // `postAnthropicMessage` helper in `inngest/functions/_cron-shared.ts`.
@@ -151,7 +156,9 @@ async function classifyMessage(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        // Literal on purpose (this module stays leaf-light); domain-router.test.ts pins
+        // it equal to HAIKU_MODEL, the tier SSOT the pricing table keys on.
+        model: "claude-haiku-5-5",
         max_tokens: 200,
         messages: [
           {
@@ -169,7 +176,18 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
         ],
         // Structured output (#5186): guarantees a schema-valid {leaders:[...]}
         // object so the response needs no fence-stripping.
-        output_config: { format: { type: "json_schema", schema: LEADERS_OUTPUT_SCHEMA } },
+        //
+        // effort "low" (Haiku 5.5): the model runs adaptive thinking by default and
+        // thinking tokens count against max_tokens. At 200 tokens a default-effort
+        // request was seen (2026-10-08 probe) emitting `thinking` + text at up to 148
+        // output tokens; at effort low it emitted text only, 17-21 tokens. The probe also
+        // showed effort and json_schema are accepted together. Do NOT add
+        // `thinking: {type: "disabled"}` (capability flag unresolved), a `fallbacks`
+        // field (Haiku has no server-side fallback), or assistant prefill (400).
+        output_config: {
+          effort: "low",
+          format: { type: "json_schema", schema: LEADERS_OUTPUT_SCHEMA },
+        },
       }),
     });
 
@@ -179,6 +197,8 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
 
     const data = (await response.json()) as {
       content: Array<{ type: string; text?: string }>;
+      stop_reason?: string;
+      stop_details?: { category?: string };
     };
     // First TEXT block, not a fixed position: a thinking-by-default model puts a
     // thinking block first (#8392). Selection is an ALLOWLIST of `text` — a
@@ -189,6 +209,26 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
     const text = Array.isArray(data.content)
       ? (data.content.find((b) => b.type === "text")?.text ?? "")
       : "";
+    // Make the silent ["cpo"] fallback visible (cq-silent-fallback-must-mirror-to-sentry).
+    // No usable text means the budget was spent on thinking, the turn was cut at
+    // max_tokens, or the model refused. Message path with err = null: an Error argument
+    // is captured by the pino mirror first and the tagged Sentry event is deduplicated
+    // away (#8629). `extra` is a closed set of enum-like values; the user's message, the
+    // context and the key never ride along.
+    stopReason = typeof data.stop_reason === "string" ? data.stop_reason : "unknown";
+    if (text === "" || stopReason === "max_tokens" || stopReason === "refusal") {
+      const category = data.stop_details?.category;
+      reportSilentFallback(null, {
+        feature: "domain-router",
+        op: "no-text-block",
+        message: "domain router got no usable text block from the classifier — falling back to cpo",
+        extra: {
+          stop_reason: stopReason,
+          ...(typeof category === "string" ? { category } : {}),
+          model: "claude-haiku-5-5",
+        },
+      });
+    }
     // Structured output guarantees schema-valid JSON — parse directly, no fence strip.
     const parsed = JSON.parse(text) as { leaders?: unknown };
     const leaders = Array.isArray(parsed.leaders) ? parsed.leaders : [];
@@ -205,7 +245,7 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
 
     return validated.slice(0, MAX_LEADERS_PER_MESSAGE);
   } catch (err) {
-    log.error({ err }, "Classification failed, falling back to CPO");
+    log.error({ err, stop_reason: stopReason }, "Classification failed, falling back to CPO");
     return ["cpo"]; // Fallback on any error
   }
 }

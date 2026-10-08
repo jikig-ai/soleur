@@ -242,6 +242,13 @@ export function resolveTurnCostUsd(
   );
 }
 
+/** `{ category }` for a refusal turn that names one, else `{}`. */
+function refusalCategoryExtra(turn: unknown): { category?: string } {
+  const t = turn as { stop_reason?: unknown; stop_details?: { category?: unknown } | null };
+  const category = t.stop_details?.category;
+  return t.stop_reason === "refusal" && typeof category === "string" ? { category } : {};
+}
+
 interface AgentSpawnRequestedEvent {
   name: "agent.spawn.requested";
   data: {
@@ -856,7 +863,10 @@ export async function agentOnSpawnRequestedHandler({
         actionClass,
         sourceRef,
         logger,
-        extra: { turn: n, model: leaderModule.model },
+        // A refusal names its category (cyber | bio | frontier_llm | general_harms): an
+        // enum from the API, never model- or user-authored text. Haiku has no server-side
+        // fallback, so the dead letter is the only place this refusal is visible.
+        extra: { turn: n, model: leaderModule.model, ...refusalCategoryExtra(turnResult) },
       });
     }
 

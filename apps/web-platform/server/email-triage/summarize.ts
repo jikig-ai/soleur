@@ -108,11 +108,21 @@ export async function summarizeEmail(input: {
   const cleanSender = sanitizePromptString(input.sender);
 
   const client = new Anthropic({ apiKey });
-  let response: { content: { type: string; text?: string }[] };
+  let response: {
+    content: { type: string; text?: string }[];
+    stop_reason?: string | null;
+    stop_details?: { category?: string | null } | null;
+  };
   try {
     response = (await client.messages.create({
       model: HAIKU_MODEL,
       max_tokens: SUMMARIZE_MAX_TOKENS,
+      // Haiku 5.5 runs adaptive thinking by default and thinking tokens count against
+      // max_tokens. effort "low" keeps the 256 budget for the answer (2026-10-08 probe:
+      // 87-105 output tokens either way; this is headroom for longer bodies). Do NOT add
+      // `thinking: {type: "disabled"}`, `fallbacks` (no server-side fallback on Haiku),
+      // or assistant prefill (400).
+      output_config: { effort: "low" },
       system: SYSTEM_PROMPT,
       messages: [
         {
@@ -123,7 +133,11 @@ export async function summarizeEmail(input: {
             `Body:\n${cleanBody}`,
         },
       ],
-    })) as unknown as { content: { type: string; text?: string }[] };
+    })) as unknown as {
+      content: { type: string; text?: string }[];
+      stop_reason?: string | null;
+      stop_details?: { category?: string | null } | null;
+    };
   } catch (err) {
     // #8505: this is the only SDK caller of the operator key, so it is the second
     // credit-marker chokepoint. Report, then rethrow unchanged so the caller's
@@ -138,6 +152,25 @@ export async function summarizeEmail(input: {
 
   const textBlock = response.content?.find((b) => b.type === "text");
   const raw = (textBlock?.text ?? "").trim();
+  // No usable text (budget spent on thinking, cut at max_tokens, or refused) used to
+  // store an empty summary silently. Mirror it on the message path with err = null (an
+  // Error argument is captured by the pino mirror first and the tagged event is
+  // deduplicated away, #8629). `extra` is a closed set of enum-like values — TR3: never
+  // the subject, sender, body, or the SDK error object.
+  const stopReason = typeof response.stop_reason === "string" ? response.stop_reason : "unknown";
+  if (raw === "" || stopReason === "max_tokens" || stopReason === "refusal") {
+    const category = response.stop_details?.category;
+    reportSilentFallback(null, {
+      feature: "email-triage",
+      op: "no-text-block",
+      message: "email summarizer got no usable text block — stored summary may be empty",
+      extra: {
+        stop_reason: stopReason,
+        ...(typeof category === "string" ? { category } : {}),
+        model: HAIKU_MODEL,
+      },
+    });
+  }
   // Tolerate a fenced JSON block; otherwise parse as-is.
   const jsonText = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
 

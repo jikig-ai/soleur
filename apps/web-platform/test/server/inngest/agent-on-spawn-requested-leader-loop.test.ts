@@ -1796,4 +1796,37 @@ describe("stop_reason other than end_turn/tool_use is terminal", () => {
     expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
     expect(deadletterTags()).toEqual({ reason });
   });
+
+  // Haiku 5.5 can end a turn with stop_reason "refusal" and a stop_details.category
+  // (cyber | bio | frontier_llm | general_harms); there is no server-side fallback on
+  // Haiku. triage.p0p1_issue reads issue bodies that can be security-flavored, so a
+  // refusal on a legitimate report is newly possible. It must dead-letter VISIBLY
+  // (a Sentry issue naming the category), never drop silently or retry blindly.
+  it("a Haiku-class (triage.p0p1_issue) refusal dead-letters as leader_refused with the category in extra", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: "refusal",
+      stop_details: { type: "refusal", category: "cyber", explanation: null },
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({
+        sourceRef: "issue-acme:repo:31",
+        actionClass: "triage.p0p1_issue",
+      }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_refused" });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    expect(deadletterTags()).toEqual({ reason: "leader_refused" });
+    // The model on the request is the Haiku tier and no `fallbacks` field is sent.
+    const req = anthropicCreateSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(req.model).toBe("claude-haiku-5-5");
+    expect(req).not.toHaveProperty("fallbacks");
+    const extra = (deadletterCall()![1] as { extra?: Record<string, unknown> }).extra;
+    expect(extra).toMatchObject({ category: "cyber", model: "claude-haiku-5-5", turn: 1 });
+  });
 });
