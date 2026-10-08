@@ -188,7 +188,7 @@ _bs_read_remedy() {
           *) echo "::error::$step $label read: the ClickHouse read path returned an HTTP error (transport rc=22 under --fail-with-body; body ${body_len:-?} bytes, not printed). Re-dispatch later; if it persists, file an issue with this run URL. stderr: ${err1:-<none>}" ;;
         esac ;;
     6|7|28|35) echo "::error::$step $label read: the transport could not reach the read path (rc=$rc: DNS / connect / timeout / TLS from the runner) — a transient network fault on the RUNNER side, not a host state. Re-dispatch later. stderr: ${err1:-<none>}" ;;
-    2|64|78) echo "::error::$step $label read: betterstack-query.sh refused (rc=$rc: destination pin / usage / trace) — a reader misconfiguration, not a host state. File an issue with this run URL. stderr: ${err1:-<none>}" ;;
+    2|64|78) echo "::error::$step $label read: betterstack-query.sh refused (rc=$rc: destination pin / usage / trace / credential shape) — a reader misconfiguration or an unusable credential value, not a host state. If stderr below names BETTERSTACK_QUERY_USERNAME or BETTERSTACK_QUERY_PASSWORD (marker SOLEUR_CREDENTIAL_REFUSED), re-mint that credential in prd_terraform: a quote, a backslash or a control character is unusable, and so is a colon in the username. Otherwise file an issue with this run URL. stderr: ${err1:-<none>}" ;;
     *)  echo "::error::$step $label read: betterstack-query.sh rc=$rc (unclassified). File an issue with this run URL. stderr: ${err1:-<none>}" ;;
   esac
   echo "::error::$step $label read failed — NOTHING about the dedicated host was measured. This is a read-path fault, not a host verdict; do not proceed and do not SSH the host."
@@ -1325,7 +1325,7 @@ case "$OP" in
   enumerate)
     # GET hook → records JSON in the response body. HMAC over empty body
     # (mirrors the deploy-status GET signature).
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/enum-body
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
       -X GET \
@@ -1368,7 +1368,7 @@ case "$OP" in
     # Region start is BEFORE `SIG=` deliberately: the render driver sources this region
     # under `set -u`, and a region starting after `BODY=$(cat …)` would die on an unbound
     # `CODE`. Everything the gate branch reads is bound inside the region.
-    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5.
+    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5 (#9757).
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/registry-probe-body
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
@@ -1542,7 +1542,7 @@ case "$OP" in
       echo "::error::doublefire-probe CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
     fi
     echo "::warning::doublefire-probe CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster, re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered period before trusting the result."
-    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5.
+    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5 (#9757).
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     # Forward the window lower bound + optional functionIDs scope as URL query params
     # (HMAC is over the empty GET body, so params don't affect the sig).
@@ -1674,7 +1674,7 @@ case "$OP" in
     # (app-repoint → functions re-synced onto 10.0.1.40) has not landed and a
     # re-arm would target a backend with no registered functions. GET the web-host
     # registry probe (HMAC over empty body); require function_count > 0.
-    RSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    RSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || RSIG=""
     rm -f /tmp/rearm-probe
     RCODE=$(_sig_curl RSIG -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
       -X GET \
@@ -1717,7 +1717,7 @@ case "$OP" in
     fi
 
     PAYLOAD='{"mode":"rearm-from-capture"}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/rearm-body
     CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
       -X POST \
@@ -1777,7 +1777,7 @@ case "$OP" in
     # backend and would lose every reminder (#5542). Records stay on-host
     # (P2-sec-a) — only counts + reminder_ids surface here.
     PAYLOAD='{"mode":"capture"}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/capture-body
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
       -X POST \
@@ -1808,7 +1808,7 @@ case "$OP" in
     # for a fresh terminal exit_code. The stop+wipe+restart+settle exceeds
     # the CF 120s edge timeout, so it MUST be async + poll (not synchronous).
     PAYLOAD='{}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     CODE=$(_sig_curl SIG -s --max-time 30 -o /dev/null -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
@@ -1821,7 +1821,7 @@ case "$OP" in
     # terminal state written at/after this trigger (minus clock skew).
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     MAX_POLLS=120
     POLL_INTERVAL=10
     for i in $(seq 1 "$MAX_POLLS"); do
@@ -1866,7 +1866,10 @@ case "$OP" in
     HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
     # #8767: shape-check, THEN mask, BEFORE the first request. The check comes first so a value
     # holding a newline can never inject a second `::` workflow command through the mask line (and an
-    # empty read never emits a bare directive). stderr: stdout inside `$(...)` would swallow it.
+    # empty read never emits a bare directive). The directive goes to stderr to match the shared
+    # token-reading helper above (there stdout IS a caller's `$(...)` capture, so stderr is required);
+    # in this arm nothing captures stdout, so stdout would work as well. The battery pins the mask
+    # line as the first output event, once, ahead of the first request.
     if ! _bearer_ok "$HCLOUD_TOKEN"; then
       echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
       echo "::error::backup: the HCLOUD_TOKEN read from Doppler is empty or has an unusable shape; refusing before any request"; exit 1
@@ -1911,7 +1914,7 @@ case "$OP" in
     # {functions, event_names, armed_reminders} in the response body. Run
     # ONCE before the cutover and ONCE after; diff the payload-free
     # projections (the runbook documents the expected diff).
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     # #6258 bounded TRANSPORT retry (Deepen Finding 11): the in-script scan is now
     # abandon-safe (the deadline halts the loop that drives the PG load → releases the
     # pool), so a transient two-writer 500 / a 000 stall clears on attempt-2. This wraps
@@ -2048,7 +2051,7 @@ case "$OP" in
     # dedicated host GQL over the private net. registry_empty MUST be true — a
     # non-empty dark registry means a second scheduler would register + double-fire
     # against prod Postgres, the exact failure this cutover exists to prevent.
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/exec-probe
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
       -X GET \
@@ -2239,7 +2242,7 @@ case "$OP" in
     # A serving host whose enumeration fails still fails here (never a stale-file fallback).
     # SOURCE is kept for 2.2: its UNKNOWN remedy branches on it.
     PAYLOAD='{"mode":"capture"}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/exec-capture
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
@@ -2302,7 +2305,7 @@ case "$OP" in
     # second prod scheduler on a dedicated-host restart — but it does NOT stop a surviving
     # WEB-host scheduler, so this gate + the no-SSH op=quiesce-web stop+disable are what
     # cover the web host.
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     QUIESCE_PROBES="${CUTOVER_QUIESCE_PROBES:-3}"
     STILL_RUNNING=0
     UNKNOWN_COUNT=0
@@ -2727,7 +2730,7 @@ case "$OP" in
     # infra-config-verify.sh adjudicates) and require each script to equal this checkout's bytes.
     # Unreadable, missing or different → refuse, nothing stopped. Same signed-GET shape as the
     # deploy-status polls below (HMAC over the empty body + CF-Access).
-    PF_SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    PF_SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || PF_SIG=""
     rm -f /tmp/quiesce-preflight
     PF_CODE=$(_sig_curl PF_SIG -s --max-time 30 -o /tmp/quiesce-preflight -w '%{http_code}' \
       -X GET \
@@ -2762,7 +2765,7 @@ case "$OP" in
     echo "::warning::quiesce-web: this STOPS production scheduling (every user's crons and reminders) on host-set [$CUTOVER_HOSTS] — the maintenance window opens NOW. The quiesce handler captures the still-armed reminders BEFORE it stops the unit (a failed or timed-out capture stops nothing and reports quiesce_capture_failed), so a second op=execute resumes 2.1 from the persisted capture taken at the quiesce boundary. scheduled-inngest-health.yml reads the stopped+disabled unit as QUIESCED and leaves a quiesced unit alone — nothing restarts it until op=rollback. If you did not mean to open the window, dispatch op=rollback."
     echo "::notice::quiesce-web: stop+disabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — no-SSH remediation for the 2.2 gate"
     PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/quiesce-body
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
@@ -2782,7 +2785,7 @@ case "$OP" in
     # green isn't read (deploy-state is a single slot).
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     # Poll window ≥ the host worst case (capture bound + kill-after + stop + verify + peer fan-out)
     # — drift-guarded by ci-deploy.test.sh (#6178), which computes the total from the live
     # literals, so no total is restated here. The terms: the 120 s quiesce capture bound and its
@@ -2852,7 +2855,7 @@ case "$OP" in
     # SECONDARY confirm (web-1, DI-C3): an inventory read mirrors the 2.2 gate's classification.
     # The deploy-status `quiesced` reason above is the PRIMARY gate (host-side synchronous
     # verify, stronger than the inventory read).
-    GSIG2=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    GSIG2=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG2=""
     rm -f /tmp/quiesce-inv
     ICODE=$(_sig_curl GSIG2 -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
       -X GET \
@@ -2883,7 +2886,7 @@ case "$OP" in
     # app-repoint must have re-synced functions onto 10.0.1.40; a still-empty
     # registry means 2.4 did not land and there is nothing to verify. This is the
     # post-2.4 NON-empty mirror of the 2.0 gate. GET the web-host registry probe.
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the registry-probe transport
     # request (000/5xx) — NOT the registry_empty precondition VERDICT below (a still-empty
     # dark registry is a legitimate verdict, not a transient, and must NOT be retried).
@@ -3265,6 +3268,11 @@ case "$OP" in
     [[ -n "$BS_API" ]] && printf '::add-mask::%s\n' "$BS_API"
     if [[ -z "$BS_API" ]]; then
       echo "::warning::op=rollback: BETTERSTACK_API_TOKEN unreadable from prd_terraform — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. Pause 'soleur-inngest-consumer-prd' manually if it pages, or re-dispatch once the token reads."
+    elif ! _bearer_ok "$BS_API"; then
+      # The request below would be refused by the bearer wrapper's own shape guard (its marker rides stderr, which the lookup discards), and the generic
+      # "could not resolve the heartbeat id" would then name the wrong cause: say the real one, value-free.
+      echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
+      echo "::warning::op=rollback: BETTERSTACK_API_TOKEN read from prd_terraform has an unusable shape (a quote, backslash, control character or space) — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops. Re-mint the token, or pause 'soleur-inngest-consumer-prd' manually if it pages. NOT blocking the web re-enable."
     else
       HB_ID=$(_bearer_curl BS_API -fsS --max-time 20 \
         'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' 2>/dev/null \
@@ -3291,7 +3299,7 @@ case "$OP" in
     # web scheduler survives a reboot — no operator systemctl step. The peers fan-out
     # forwards it to every host over the private net.
     PAYLOAD=$(printf '{"command":"enable inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/rollback-body
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
@@ -3308,7 +3316,7 @@ case "$OP" in
     # verdict is reachable from the run (not a fire-and-forget 202). FRESH_FLOOR-anchored.
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     RMAX_POLLS=120
     RPOLL_INTERVAL=5
     ENABLED=0
