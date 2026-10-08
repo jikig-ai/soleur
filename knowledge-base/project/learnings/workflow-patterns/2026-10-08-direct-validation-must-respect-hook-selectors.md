@@ -75,3 +75,13 @@ then needed network escalation before succeeding. Apply the hook's explicit
 filing metadata rather than treating a refusal or network error as a created
 issue. A full canonical go-command read was truncated; use bounded sections
 when retrieving a long workflow after compaction.
+
+A PR-body JSON fetch used too small an output budget; the shell tool inserted
+a truncation warning and the subsequent JSON parse failed. Retrieve structured
+data with enough budget before parsing, then display only selected fields.
+The corrected full fetch succeeded; no malformed description was written.
+
+The push reported 24 default-branch Dependabot alerts. A read-only API summary
+confirmed one critical, ten high, ten medium and three low existing alerts.
+The maintenance diagnostic patch changes no dependency manifests; the alert
+summary is neither a new dependency audit nor a promotion clearance.
