@@ -32,8 +32,13 @@ hosted tenants are coming; the re-evaluation trigger has effectively fired.
 
 - G1: No sibling workspace is present — content, existence, or mount-table
   entry — on **any** agent filesystem surface (sandboxed Bash AND file tools).
-- G2: Session `/proc` shows only the session's own processes (closes the
-  cross-tenant environ channel; #9723).
+- G2: ~~Session `/proc` shows only the session's own processes~~ —
+  **rescinded by Phase-0 spike (2026-10-08)**: a scoped `/proc` needs an
+  outer pidns, and the vendored inner sandbox cannot nest under an outer
+  userns (its unconditional `--unshare-pid`/`--unshare-net` require
+  outer-owned namespaces + matching procfs, which Docker's masked `/proc`
+  refuses). `/proc` stays shared; #9723 remains an open residual tracked to
+  #9773.
 - G3: Isolation derives the mount table from `workspacePathForWorkspaceId` /
   `getWorkspaceWorktreeRoot()` — correct under both `WORKSPACES_ROOT` and the
   post-cutover `WORKTREE_ROOT` layout (closes #9725).
@@ -61,25 +66,34 @@ hosted tenants are coming; the re-evaluation trigger has effectively fired.
 
 ## Functional Requirements
 
-- FR1: `Options.pathToClaudeCodeExecutable` points at a repo-owned wrapper that
-  `exec`s the real `bwrap` binary **by absolute path** (never PATH-resolved —
-  the #8752 shim's NEWUSER filter must not inject into the outer namespace)
-  around the vendored `claude` executable.
+- FR1: `Options.spawnClaudeCodeProcess` interpose spawns `/usr/bin/bwrap`
+  **by absolute path** (never PATH-resolved — the #8752 shim's NEWUSER filter
+  must not inject into the outer namespace) around the vendored `claude`
+  executable. (Supersedes the `pathToClaudeCodeExecutable` wrapper —
+  `spawnClaudeCodeProcess` is the documented interpose, sdk.d.ts:2431.)
 - FR2: The outer mount table contains the tenant's own workspace at its real
   resolved path and **no other entry under the workspaces parent** — no
   `--ro-bind / /`-style whole-fs base that could expose siblings or
   future-created siblings.
-- FR3: The outer wrap creates a new PID namespace (`--unshare-pid`) so any
-  procfs visible inside is scoped to the session's own processes.
+- FR3: ~~PID namespace~~ — rescinded (see G2). Arm F: the outer wrap is a
+  **mount namespace only**, built by a file-cap'd bwrap
+  (`cap_sys_admin,cap_setuid,cap_setgid+ep`; needs `SYS_ADMIN` in the
+  container bounding set via `--cap-add SYS_ADMIN` at `docker run`, app drops
+  it from effective/permitted/ambient at entrypoint). Zero `--unshare-*`
+  flags — measured requirement, not taste: any outer userns kills the
+  vendored inner sandbox.
 - FR4: Per-session private `/tmp` and `$HOME` scratch — no cross-tenant shared
   scratch (`/tmp/claude-1001`, `~/.npm/_logs`, `~/.claude` session dirs).
 - FR5: The inner SDK sandbox (`buildAgentSandboxConfig` + inner bwrap) keeps
   working unchanged inside the outer namespace, including `--unshare-net` +
   socat egress proxying and the #8752 PATH-shim (fd hygiene + nested-userns
-  filter) on the *inner* layer.
-- FR6: An in-sandbox realized-state probe asserts no sibling-bearing mount and
-  session-scoped `/proc` — emitted via the `feature:agent-sandbox` Sentry
-  channel; dark-launched (non-blocking) before it can gate a deploy.
+  filter) on the *inner* layer. Under arm F this holds because the outer wrap
+  creates no namespaces at all — the inner sandbox runs at the same nesting
+  level as today (spike-verified).
+- FR6: An in-sandbox realized-state probe asserts no sibling-bearing mount —
+  filesystem surfaces only (`ls`/`stat`/`mountinfo`; `/proc` unscoped under
+  arm F) — emitted via the `feature:agent-sandbox` Sentry channel;
+  dark-launched (non-blocking) before it can gate a deploy.
 - FR7: Failure to construct the outer namespace fails the session loudly
   (fail-closed, `sdk-startup` classifier path) — never a degraded
   less-isolated spawn.
@@ -89,10 +103,12 @@ hosted tenants are coming; the re-evaluation trigger has effectively fired.
 
 ## Technical Requirements
 
-- TR1: Container envelope respected — no CAP_SYS_ADMIN assumed;
-  `unshare(NEWUSER)`, post-userns `NEWNS`/`NEWPID`, `mount`/`umount`/
-  `pivot_root` permitted by `infra/seccomp-bwrap.json`; `clone3`, `setns`,
-  `open_tree`/`move_mount`/`fsopen` are EPERM and must not be required.
+- TR1: Container envelope — arm F changes this deliberately: `docker run`
+  gains `--cap-add SYS_ADMIN` (bounding set only; app drops
+  effective/permitted/ambient) and `bwrap` carries file caps
+  `cap_sys_admin,cap_setuid,cap_setgid+ep`. Outer wrap needs NO `unshare`
+  calls at all; mount/umount permitted by `infra/seccomp-bwrap.json`.
+  The privilege-carrier surface is audited (single file-cap'd binary).
 - TR2: Outer argv is self-authored and version-checked against the prod bwrap
   version (re-measure — 0.8.0 vs 0.12.0 evidence conflicts across issues).
 - TR3: CLI filesystem footprint fully enumerated before the minimal table
@@ -116,8 +132,8 @@ hosted tenants are coming; the re-evaluation trigger has effectively fired.
 - AC1: Inside an agent session (Bash AND file tools), no path under the
   workspaces parent other than the session's own workspace exists or is
   stat-able; `/proc/self/mounts` shows no sibling-derived mount.
-- AC2: `/proc` inside the session lists only session processes; another
-  tenant's concurrent agent process is absent.
+- AC2: ~~`/proc` session-scoped~~ — rescinded; `/proc` remains the shared
+  container procfs (#9723 residual, open follow-up).
 - AC3: A sibling workspace created *after* session start is never observable.
 - AC4: Shared-scratch audit: no cross-tenant readable/writable path under
   `/tmp` or `$HOME` beyond the session's own.
