@@ -220,7 +220,7 @@ No product code, hook, lexer, test suite, registry row or ADR is written until 0
 - `plugins/soleur/hooks/lib/shell-argv.pl` (ask 1; replaces the slice-1 plan's lifted `lib/tokenize.sh`, which cannot read a list).
 - `plugins/soleur/test/destructive-command-guard-hook.test.sh`, `plugins/soleur/test/destructive-command-guard-mutation.test.sh`, `plugins/soleur/test/shell-argv-parity.test.sh` (ask 1: the guard's tests).
 - `knowledge-base/engineering/architecture/decisions/ADR-274-plugin-destructive-command-guard.md` — ordinal provisional (inferred: the plan skill makes the ADR a deliverable).
-- `knowledge-base/project/specs/feat-one-shot-9601-w2-plugin-destructive-command-guard/tasks.md` — this branch's task list (the plan skill's output).
+- `knowledge-base/project/specs/archive/20261008-163000-feat-one-shot-9601-w2-plugin-destructive-command-guard/tasks.md` — this branch's task list (the plan skill's output).
 
 ## Open Code-Review Overlap
 

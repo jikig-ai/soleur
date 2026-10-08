@@ -41,7 +41,7 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-agent-security-hardening-sli
 
 ## PR 2 — W2 destructive-command guard (customer plugin)
 
-The items below are the slice-1 sketch and were superseded by the W2 plan, which is the source of truth for PR 2 (the vendored lexer replaced the lifted `tokenize()`, the matcher is `^Bash$`, a missing `jq` scans the raw envelope): `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`; this branch's own task list is `knowledge-base/project/specs/feat-one-shot-9601-w2-plugin-destructive-command-guard/tasks.md`.
+The items below are the slice-1 sketch and were superseded by the W2 plan, which is the source of truth for PR 2 (the vendored lexer replaced the lifted `tokenize()`, the matcher is `^Bash$`, a missing `jq` scans the raw envelope): `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`; this branch's own task list is `knowledge-base/project/specs/archive/20261008-163000-feat-one-shot-9601-w2-plugin-destructive-command-guard/tasks.md`.
 
 ### 5. Preconditions
 
