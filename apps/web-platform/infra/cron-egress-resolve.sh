@@ -18,6 +18,16 @@
 #     tick — INCLUDING an expected-but-absent dynamic env var (a Doppler
 #     rename must never prune the live Supabase/Sentry IPs) — skip ALL
 #     deletes.
+#   - TOTAL-TICK DNS BUDGET: each name burns up to `timeout 10` in a serial
+#     loop, so a mass upstream flap (~100 CNAME chains at once) can starve a
+#     tick past TimeoutStartSec=120 and the nft -f transaction never runs
+#     (measured 2026-10-08: Traffic Manager NXDOMAIN flap killed every tick
+#     for 22+ min). Cumulative resolution is capped at
+#     RESOLVE_TICK_BUDGET_SECS; unattempted names count as FAILED_HOSTS
+#     (additive-only — prior + grace-pool addresses kept) without bumping
+#     their per-host failcount, which stays honest for tried-and-failed
+#     answers, and the tick emits one journal WARN + one deduped Sentry
+#     event (cleared on the first within-budget tick).
 #   - BOTH RESOLVER VIEWS: the container resolves via ITS resolv.conf
 #     (Docker substitutes 8.8.8.8/8.8.4.4 when the host's stub is
 #     loopback-only) while this script runs on the HOST; CDN/geo answers can
@@ -65,7 +75,7 @@ CONTAINER="soleur-web-platform"
 SENTRY_SLUG="cron-egress-resolve"
 LOG_TAG="cron-egress-resolve"
 LOADER="${LOADER:-/usr/local/bin/cron-egress-nftables.sh}"
-LOCK_FILE="/run/cron-egress-resolve.lock"
+LOCK_FILE="${CRON_EGRESS_LOCK_FILE:-/run/cron-egress-resolve.lock}"
 FAILCOUNT_DIR="${FAILCOUNT_DIR:-/run/cron-egress-resolve-failcount}"
 assert_fixture_dir() {
   case "${1-}" in
@@ -272,18 +282,44 @@ done
 HOSTS_SORTED="$(printf '%s\n' "${HOSTS[@]}" | sort -u)"
 
 # --- Resolve (host view + container view) --------------------------------------
+# RESOLVE_TICK_BUDGET_SECS is the cumulative DNS ceiling for the whole tick
+# (SECONDS is the script's own elapsed clock, so heal/probe time already spent
+# counts against it). 90 leaves ~30s under TimeoutStartSec=120 for the nft -f
+# transaction, seen-pool write, drop sampler and the Sentry check-in; the GHCR
+# and egress-gw probes skip themselves past their own smaller budgets.
+RESOLVE_TICK_BUDGET_SECS="${RESOLVE_TICK_BUDGET_SECS:-90}"
+[[ "$RESOLVE_TICK_BUDGET_SECS" =~ ^[0-9]{1,3}$ ]] || RESOLVE_TICK_BUDGET_SECS=90
+DNS_SKIPPED=0
+
 # Container view: ONE docker exec resolving the full host list with the
-# container's OWN resolvers — the answers it will actually dial.
+# container's OWN resolvers — the answers it will actually dial. Its own
+# timeout shrinks to whatever the tick budget still affords (a flapping
+# in-container serial getent would otherwise burn a fixed 60s before the
+# host loop starts).
 CONTAINER_VIEW=""
 if container_running; then
-  CONTAINER_VIEW="$(printf '%s\n' "$HOSTS_SORTED" \
-    | timeout 60 docker exec -i "$CONTAINER" sh -c \
-        'while read -r h; do getent ahostsv4 "$h" 2>/dev/null | awk "{print \$1}"; done' \
-    2>/dev/null || true)"
+  CV_CAP=$(( RESOLVE_TICK_BUDGET_SECS - SECONDS - 10 ))
+  (( CV_CAP > 60 )) && CV_CAP=60
+  if (( CV_CAP >= 5 )); then
+    CONTAINER_VIEW="$(printf '%s\n' "$HOSTS_SORTED" \
+      | timeout "$CV_CAP" docker exec -i "$CONTAINER" sh -c \
+          'while read -r h; do getent ahostsv4 "$h" 2>/dev/null | awk "{print \$1}"; done' \
+      2>/dev/null || true)"
+  else
+    log "WARN: DNS tick budget nearly spent (${SECONDS}s of ${RESOLVE_TICK_BUDGET_SECS}s) — skipping the container resolver view this tick"
+  fi
 fi
 
 DESIRED_ALLOW=""
 for host in $HOSTS_SORTED; do
+  if (( SECONDS >= RESOLVE_TICK_BUDGET_SECS )); then
+    # Budget exhausted: never attempted, so the name's existing set/grace
+    # entries are kept (additive-only) but its failcount is NOT bumped —
+    # that counter means "tried and failed", not "starved".
+    DNS_SKIPPED=$((DNS_SKIPPED + 1))
+    FAILED_HOSTS=$((FAILED_HOSTS + 1))
+    continue
+  fi
   ips="$(timeout 10 getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u || true)"
   # Link-local answers are dropped HERE so that "every record was link-local" reads as a resolution failure of
   # this host (additive-only tick); the merged sets are scrubbed again below, for every feeder.
@@ -315,6 +351,21 @@ for host in $HOSTS_SORTED; do
   DESIRED_ALLOW+="$ips"$'\n'
 done
 DESIRED_ALLOW+="$CONTAINER_VIEW"$'\n'
+if (( DNS_SKIPPED > 0 )); then
+  log "WARN: DNS tick budget (${RESOLVE_TICK_BUDGET_SECS}s) exhausted — $DNS_SKIPPED host(s) unattempted this tick (additive-only; prior/grace addresses kept)"
+  # Deduped Sentry: first starved tick posts, the marker suppresses repeats
+  # until a tick resolves within budget again (same doctrine as ll_report).
+  if [[ ! -e "$FAILCOUNT_DIR/.budget-skip" ]]; then
+    SENTRY_EVENT_SENT=0
+    sentry_event \
+      "cron-egress-resolve: DNS tick budget exhausted — $DNS_SKIPPED host(s) never attempted (upstream resolution slower than the tick budget; allowlist additive-only until it recovers)" \
+      "resolve_tick_budget" \
+      "$(jq -nc --argjson n "$DNS_SKIPPED" --argjson budget "$RESOLVE_TICK_BUDGET_SECS" '{skipped_hosts: $n, budget_secs: $budget, remediation: "upstream resolver flap or too many slow names in cron-egress-allowlist.txt — check resolver health; the 24h grace pool covers retained addresses"}')"
+    if (( SENTRY_EVENT_SENT )); then : > "$FAILCOUNT_DIR/.budget-skip"; fi
+  fi
+else
+  rm -f "$FAILCOUNT_DIR/.budget-skip"
+fi
 DESIRED_ALLOW="$(echo "$DESIRED_ALLOW" | strict_ipv4_lines | sort -u || true)"
 # The container's own getent view is a second feeder: scrub it before anything is recorded in SEEN_DIR.
 cv_ll="$(printf '%s\n' "$CONTAINER_VIEW" | ll_only)"
