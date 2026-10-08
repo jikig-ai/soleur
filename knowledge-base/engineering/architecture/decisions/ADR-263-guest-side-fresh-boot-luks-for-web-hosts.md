@@ -35,7 +35,6 @@ by #9372, because its `earliest` date is the rebirth plus three days; the workfl
 
 > **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
 
-
 ## Context
 
 web-1 runs on LUKS (the additive volume `hcloud_volume.workspaces_luks`, ADR-119), but only because a
@@ -253,7 +252,6 @@ untouched. #9372 also owns the ledger flip (D6), the follow-through enrollment's
 escalation if web-2 never produces rows.
 
 > **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
-
 
 ## Consequences
 
@@ -767,7 +765,6 @@ weight, cannot be written on the readiness row alone) and the follow-through req
 
 > **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
 
-
 **Known limits and what is unconfirmed.** The Better Stack JSON paths for the used-bytes series and whether `dm-*` excludes the
 mapper device in `vector.toml` are unverified until the first live query (an absent field fails closed). `cryptsetup open
 --test-passphrase` against a header-image file is covered by shims only. The birth-time recovery check (the escrowed header
@@ -818,6 +815,6 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 
 **What the marker gates (coupling #2).** `WORKSPACES_LUKS_CUTOVER_AT` is the fence in `lb-weight-gate.sh` (B.6-B.10, ADR-143 D3 coupling #2): a weight flip is the only way user data reaches web-2, and a flip requires the marker aged at least 3 days. The check is shape-only (ISO shape and soak age, not provenance). After this addendum web-2 can earn the marker on the first `web2_marker` run without a reboot, from one fresh green probe row and the readiness arm, and the 3-day age runs from the write. A marker that is already present keeps its original write time, so a replacement that inherits it (see above) arrives with the predecessor's age already met: marker age must never stand in for the new instance's soak. That is a loosening of what earns the marker, made on purpose. **A present marker is not a #6931 PASS** (no three distinct days, no scan for non-green rows) **and no longer evidences that the volume reopens after a reboot.** The flip orchestrator (#9358) must require the grader's PASS and the on-host runtime-bind probe, and ADR-263 "Known limits" still holds web-2 at weight 0 with no workspace data until the recovery acceptance and #7992 are done. Nothing calls the gate today. Once the marker is present, the never-pooled gate of the `web-host-reboot` workflow refuses reboots of web-2 by design.
 
-**What is unchanged.** Every other judge and grader arm, the 72 h minimum, the 26 h freshness, the window rule, deletion of the marker on RED, and the #6931 directive. The operator-facing text of `scripts/web2-rebirth.sh` and `web2-luks-rebirth.yml` that named the reboot proof is corrected in the same PR; the rebirth workflow still issues its own reboot step, which the cleanup PR retires together with the `web-host-reboot` workflow (closing row 5 of the rebirth runbook).
+**What is unchanged.** Every other judge and grader arm, the 72 h minimum, the 26 h freshness, the window rule, deletion of the marker on RED, and the #6931 directive. The wording in `scripts/web2-rebirth.sh` and `web2-luks-rebirth.yml` that named the old boot-id proof is corrected in the same PR; the restart step inside the rebirth workflow stays until the cleanup PR retires it together with the `web-host-reboot` workflow (closing row 5 of the rebirth runbook).
 
 **Status of the claim.** The rule is not yet met by graded rows. web-2 remains *provisioned, proof pending* until the #6931 grader reports PASS. Nothing in this addendum is evidence for the encryption-posture ledger, Article 30 or any customer-facing sentence.
