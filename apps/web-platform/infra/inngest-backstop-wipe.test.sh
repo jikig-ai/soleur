@@ -620,8 +620,14 @@ check_not "T1 (count gate removed): the count-gate scan is RED on the mutated co
   bash -c "[ \"\$(grep -vE '^[[:space:]]*#' '$TFM' | grep -c 'count *= *var.inngest_backstop_wipe_enabled ? 1 : 0')\" = 2 ]"
 
 # ---- floor, reported with printf + exit (not through the helper it back-stops) --------------------------
+printf '\n%s passed, %s failed, %s executed\n' "$passes" "$fails" "$executed"
+# Conservation: every verdict is counted exactly once. A neutered pass()/fail() that still moved `executed`
+# (or the reverse) breaks the equality and is reported here, not through the helpers it back-stops.
+if [ "$((passes + fails))" -ne "$executed" ]; then
+  printf 'FAIL - accounting: passes %s + fails %s != executed %s (a verdict was discarded or double-counted)\n' "$passes" "$fails" "$executed" >&2
+  exit 1
+fi
 FLOOR=122
-printf '\n%s passed, %s failed, %s executed (floor %s)\n' "$passes" "$fails" "$executed" "$FLOOR"
 if [ "$executed" -lt "$FLOOR" ]; then
   printf 'FAIL - assertion-count floor: executed %s < %s (a vacuous or truncated run)\n' "$executed" "$FLOOR" >&2
   exit 1
