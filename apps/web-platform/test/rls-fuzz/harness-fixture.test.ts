@@ -95,7 +95,7 @@ describe("rolledBackRaw", () => {
     expect(begin).toHaveBeenCalledTimes(1);
   });
 
-  test("AC1: a 40P01 raised mid-callback (inside fn) replays the WHOLE unit — fn runs twice", async () => {
+  test("AC1 replay: a 40P01 raised mid-callback (inside fn) replays the WHOLE unit — fn runs twice", async () => {
     // The observed #9779 shape: the deadlock victim is a statement inside the
     // txn, not the begin call — the retry must replay the complete unit.
     const begin = vi.fn(async (cb: (t: Txn) => Promise<unknown>) => cb(fakeTxn));

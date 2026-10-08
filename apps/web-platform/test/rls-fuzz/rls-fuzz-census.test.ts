@@ -4,12 +4,13 @@ import path from "node:path";
 
 // Standing guard for the plan's AC6 census (#9779): every bare `sql`-handle
 // statement in this directory must ride withTransientRetry — parallel vitest
-// workers share ONE disposable Postgres, so an unwrapped `await sql` is an
-// unretried deadlock victim that only ever surfaces as an intermittent CI
-// flake (every spec here is describe.skipIf(!RLS_FUZZ_LOCAL), so nothing local
-// reddens it). This file pins the two census greps so a new bare `sql` call
-// fails deterministically instead. Anchored on call forms a comment cannot
-// produce once comments are stripped.
+// workers share ONE disposable Postgres, so an unwrapped statement on the raw
+// handle is an unretried deadlock victim that only ever surfaces as an
+// intermittent CI flake (every spec here is describe.skipIf(!RLS_FUZZ_LOCAL),
+// so nothing local reddens it). This file pins the two census greps so a new
+// bare `sql` call fails deterministically instead. Anchored on call forms a
+// comment cannot produce once comments are stripped, and each check carries a
+// seeded-offender self-test so the guard cannot pass vacuously.
 
 const DIR = __dirname;
 
@@ -32,7 +33,6 @@ const ALLOWED_BARE_SQL_CALLS = new Set([
   "rolledBackRaw",
   "seedTwoTenant",
   "seedRpcCtx",
-  "assertTwoTenant",
   "connect",
   "assertLocalDsn",
   "isolationSet",
@@ -46,18 +46,22 @@ const ALLOWED_BARE_SQL_CALLS = new Set([
 ]);
 
 // `sql.end` is teardown, not a statement — exempt. A bare `await sql.begin` or
-// `await sql.savepoint` is NOT exempt: the retryable form puts `sql.begin` on a
+// `return sql.begin` is NOT exempt: the retryable form puts `sql.begin` on a
 // line of its own inside `withTransientRetry(() => …)` (or shares a line that
-// then carries the `withTransientRetry` token), so a line matching `await
-// sql.begin` is by construction the unwrapped shape.
-const UNWRAPPED_SQL_OK = /await sql\.end\b/;
+// then carries the `withTransientRetry` token), so a line matching
+// `<await|return> sql.begin` is by construction the unwrapped shape.
+const UNWRAPPED_SQL_OK = /\b(?:await|return)\s+sql\.end\b/;
+const BARE_SQL_STMT = /\b(?:await|return)\s+sql\b/;
+const BARE_SQL_ARG = /\b(\w+)\(sql[),]/;
+
+type Line = { file: string; line: string; n: number };
 
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
 
-function lines(): Array<{ file: string; line: string; n: number }> {
-  const out: Array<{ file: string; line: string; n: number }> = [];
+function scannedLines(): Line[] {
+  const out: Line[] = [];
   for (const f of readdirSync(DIR)) {
     if (!f.endsWith(".ts") || EXEMPT_FILES.has(f)) continue;
     const src = stripComments(readFileSync(path.join(DIR, f), "utf8"));
@@ -66,28 +70,61 @@ function lines(): Array<{ file: string; line: string; n: number }> {
   return out;
 }
 
+function censusAOffenders(ls: Line[]): Line[] {
+  return ls.filter(
+    ({ line }) =>
+      BARE_SQL_STMT.test(line) && !UNWRAPPED_SQL_OK.test(line) && !line.includes("withTransientRetry"),
+  );
+}
+
+function censusBOffenders(ls: Line[]): Line[] {
+  return ls.filter(({ line }) => {
+    const m = line.match(BARE_SQL_ARG);
+    return m != null && !ALLOWED_BARE_SQL_CALLS.has(m[1]) && !line.includes("withTransientRetry");
+  });
+}
+
 describe("rls-fuzz bare-sql census (#9779)", () => {
-  test("no bare `await sql` statement outside withTransientRetry", () => {
-    const offenders = lines().filter(
-      ({ line }) =>
-        /await sql\b/.test(line) &&
-        !UNWRAPPED_SQL_OK.test(line) &&
-        !line.includes("withTransientRetry"),
-    );
+  const ls = scannedLines();
+  const fmt = (o: Line[]) => o.map((l) => `${l.file}:${l.n}: ${l.line.trim()}`);
+
+  test("guard sanity: scanned population is non-trivial", () => {
+    // Totality pin: an empty scan set would satisfy both assertions vacuously.
+    expect(ls.length).toBeGreaterThan(200);
+    expect(new Set(ls.map((l) => l.file)).size).toBeGreaterThanOrEqual(10);
+  });
+
+  test("no bare `await sql`/`return sql` statement outside withTransientRetry", () => {
     expect(
-      offenders.map((o) => `${o.file}:${o.n}: ${o.line.trim()}`),
-      "bare `await sql` sites — wrap in withTransientRetry or justify an allowlist entry",
+      fmt(censusAOffenders(ls)),
+      "bare sql-handle statements — wrap in withTransientRetry or justify an allowlist entry",
     ).toEqual([]);
   });
 
+  test("census A self-test: seeded offenders are detected", () => {
+    const seeded: Line[] = [
+      { file: "x.ts", line: "    await sql`select 1`;", n: 1 },
+      { file: "x.ts", line: "    await sql.begin(async (t) => {});", n: 2 },
+      { file: "x.ts", line: "    return sql.begin((t) => seed(t));", n: 3 },
+      { file: "x.ts", line: "    await sql.end({ timeout: 5 });", n: 4 }, // exempt teardown
+      { file: "x.ts", line: "    await withTransientRetry(() => sql`select 1`);", n: 5 }, // wrapped
+    ];
+    expect(censusAOffenders(seeded).map((l) => l.n)).toEqual([1, 2, 3]);
+  });
+
   test("no bare `sql` handle passed to retry-relevant helpers outside withTransientRetry", () => {
-    const offenders = lines().filter(({ line }) => {
-      const m = line.match(/\b(\w+)\(sql[),]/);
-      return m != null && !ALLOWED_BARE_SQL_CALLS.has(m[1]) && !line.includes("withTransientRetry");
-    });
     expect(
-      offenders.map((o) => `${o.file}:${o.n}: ${o.line.trim()}`),
+      fmt(censusBOffenders(ls)),
       "bare `sql` helper call sites — wrap in withTransientRetry or justify an allowlist entry",
     ).toEqual([]);
+  });
+
+  test("census B self-test: seeded offenders are detected", () => {
+    const seeded: Line[] = [
+      { file: "x.ts", line: "    await someHelper(sql, ctx);", n: 1 },
+      { file: "x.ts", line: "    return seedTwoTenant(sql);", n: 2 }, // allowlisted
+      { file: "x.ts", line: "    await withTransientRetry(() => countRows(sql, t, loc));", n: 3 }, // wrapped
+    ];
+    expect(censusBOffenders(seeded).map((l) => l.n)).toEqual([1]);
   });
 });

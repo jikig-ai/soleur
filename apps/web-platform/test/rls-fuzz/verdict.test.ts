@@ -76,11 +76,17 @@ describe("transient lock SQLSTATES never classify as verdicts (#9779)", () => {
     expect(() => classifyRpcOutcome(err, 0)).toThrow(err);
   });
 
-  test.each(["42501", "25P02", "23505", "unknown"])("non-transient %s still classifies, never rethrows", (code) => {
+  test.each(["25P02", "23505", "unknown"])("non-transient %s still classifies to test-error, never rethrows", (code) => {
     const err = pgErr(code);
-    expect(classifyWriteOutcome(err).kind).not.toBe("leaked");
-    expect(classifyMutationOutcome(err, 0).kind).not.toBe("leaked");
-    expect(classifyRpcOutcome(err, 0).kind).not.toBe("leaked");
+    expect(classifyWriteOutcome(err)).toEqual({ kind: "test-error", sqlstate: code });
+    expect(classifyMutationOutcome(err, 0)).toEqual({ kind: "test-error", sqlstate: code });
+    expect(classifyRpcOutcome(err, 0)).toEqual({ kind: "test-error", sqlstate: code });
+  });
+  test("42501 still classifies denied in all three classifiers (never rethrown)", () => {
+    const err = pgErr("42501");
+    expect(classifyWriteOutcome(err)).toEqual({ kind: "denied" });
+    expect(classifyMutationOutcome(err, 0)).toEqual({ kind: "denied" });
+    expect(classifyRpcOutcome(err, 0)).toEqual({ kind: "denied" }); // 42501 ∈ RPC_DENIAL_SQLSTATES
   });
 
   test("rethrowIfTransient: transient propagates, everything else is left to the classifier", () => {
