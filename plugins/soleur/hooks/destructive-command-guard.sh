@@ -59,7 +59,7 @@
 #   ask   a command too large to check (rule id `bound`): a tool call over 256 KiB (checked before the prefilter or
 #         any parser reads it), more than MAX_RECORDS simple commands, more than MAX_WORDS words, a word over
 #         MAX_WORD_BYTES (4096 bytes: bash's expansions on one word are quadratic in its length), a target path
-#         with more than MAX_DEPTH components, a segment over 64 KiB in a degraded scan, or the DEADLINE_S wall
+#         with more than MAX_DEPTH components, a segment over 16 KiB (or 64 KiB of segments in all) in a degraded scan, or the DEADLINE_S wall
 #         clock reached.
 #         What was read before the limit is still judged: a deny wins; an ask-class match keeps its own reason
 #         with the bound sentence appended; with nothing matched the ask is the bare `bound` one.
@@ -133,7 +133,7 @@
 # $HOME, `destroy`, `push` with a force flag or +), tolerating JSON-escaped whitespace; a hit asks (output
 # hand-built with a fixed reason naming jq, plus a stderr notice naming jq), a miss exits 0. A missing or
 # broken `perl` with a working jq scans the jq-decoded command the same way (stderr notice naming perl). Both
-# scans stop with a `bound` ask at a segment over 64 KiB or at the deadline. It never DENIES on a dependency
+# scans stop with a `bound` ask at a segment over 16 KiB, at 64 KiB of segments in all, or at the deadline. It never DENIES on a dependency
 # failure (the repair is itself a Bash call). A miss on the raw scan is a stated, tested fail-open (the
 # raw-scan-miss residual ADR-165 accepted for its `.openhands` row, a mirror ADR-245 has since retired; ADR-274
 # records why this hook asks on a hit where that row denied, and why its `.claude` row, which asks on every
@@ -145,7 +145,7 @@
 # (settings.json "env"), which no Bash guard sees and which an agent that can edit a settings file can use:
 # this is a seatbelt, not a boundary. Hosted sessions disable it through AGENT_ENV_OVERRIDES (D8).
 #
-# MECHANISM AND ORDER. Kill switch; read stdin; a tool call over 256 KiB asks `bound` at once; the zero-spawn
+# MECHANISM AND ORDER. Kill switch; read stdin; a tool call over 256 KiB asks `bound` before the prefilter or any parser; the zero-spawn
 # prefilter; the raw tool_name (it must be exactly Bash, so Devin's `exec` is not decided); dependency probes by
 # RESULT, not by `command -v` (a jq that is present and exits non-zero fails like an absent one; probed only on
 # failure, so the happy path pays nothing); jq extraction (the command goes through `jq -j` straight into the lexer so
@@ -200,7 +200,8 @@ unset CDPATH
 # (the frame-read loop costs about 120 us a word under load), not what the rule table can judge. MAX_WORD_BYTES caps one word
 # (the frame reader swaps a longer one for a placeholder): bash's own expansions on a word, ${p##*/} and a per-character loop,
 # are quadratic in its length and no clock check can interrupt one, while the 256 KiB and 128-component caps bound neither.
-# MAX_DEPTH caps the components of a path the guard resolves, MAX_ENVELOPE the tool call and SCAN_MAX_SEG a degraded-scan segment. A command
+# MAX_DEPTH caps the components of a path the guard resolves, MAX_ENVELOPE the tool call, SCAN_MAX_SEG a degraded-scan segment and
+# SCAN_MAX_TOTAL all the segments of one degraded scan. A command
 # beyond any of them, or one that runs out of time, asks with rule id `bound` unless a deny was found in what was read
 # (BOUND_SOFT: a trip while reading or resolving does not stop the judging of the rest). The lexer has its own 2 s alarm;
 # these bound everything after it.
@@ -210,8 +211,9 @@ MAX_RECORDS=2000
 MAX_WORDS=20000
 MAX_WORD_BYTES=4096   # PATH_MAX: a longer word is not judged. bash's own expansions on one word (${p##*/}, a per-character loop over a dash word) are quadratic in its length
 MAX_DEPTH=128
-MAX_ENVELOPE=262144   # 256 KiB: a larger tool call asks `bound` before anything reads it (the prefilter and the raw scans are not linear)
-SCAN_MAX_SEG=65536    # 64 KiB: the longest segment the raw/decoded scans will try their patterns on
+MAX_ENVELOPE=262144   # 256 KiB: a larger tool call asks `bound` before the prefilter or any parser reads it (the prefilter and the raw scans are not linear)
+SCAN_MAX_SEG=16384    # 16 KiB: the longest segment the raw/decoded scans will try their patterns on (their cost is quadratic in it: about 0.3 s at the cap)
+SCAN_MAX_TOTAL=65536  # 64 KiB: the bytes of all the segments of one command the scans will try (the clock is read only between segments)
 BOUND_WHY=""
 BOUND_SOFT=""
 
@@ -340,7 +342,7 @@ redact_text() {
     w="${ws[$i]}"; i=$((i + 1)); q=""
     case "$w" in \'*|\"*) q="${w:0:1}"; w="${w#"$q"}" ;; esac
     if [[ -n "$q" ]]; then
-      while [[ "$w" != *"$q" ]] && (( i < n )); do w="$w ${ws[$i]}"; i=$((i + 1)); done
+      while [[ "$w" != *"$q" ]] && (( i < n && ${#w} <= 200 )); do w="$w ${ws[$i]}"; i=$((i + 1)); done
       w="${w%"$q"}"
     fi
     redact_word "$w"; out="${out:+$out }$RW"
@@ -381,12 +383,15 @@ RE_TF_APPLY="${SC_B}(terraform|tofu)[[:space:]]+([^[:space:]].*[[:space:]])?appl
 RE_GIT_PUSH="${SC_B}git[[:space:]]+([^[:space:]].*[[:space:]])?push[[:space:]]+([^[:space:]].*[[:space:]])?(-[a-zA-Z]*f[a-zA-Z]*|--force[^[:space:]]*|\\+[^[:space:]+])"
 SCAN_SEG=""
 # scan_narrow <text>: 0 on a hit (SCAN_SEG = the matched segment), 1 on a miss, 2 when a bound tripped (SCAN_WHY): a segment
-# longer than SCAN_MAX_SEG (the patterns are not linear in a segment's length) or the clock reached DEADLINE_S.
+# longer than SCAN_MAX_SEG or more than SCAN_MAX_TOTAL bytes of segments (the patterns are not linear in a segment's length, and
+# the clock is read only between segments) or the clock reached DEADLINE_S.
 SCAN_WHY=""
 scan_narrow() {
-  local seg IFS=$';&|\n'
+  local seg IFS=$';&|\n' total=0
   for seg in $1; do
-    if (( ${#seg} > SCAN_MAX_SEG )); then SCAN_WHY="a command segment longer than 64 KiB"; return 2; fi
+    total=$((total + ${#seg}))
+    if (( ${#seg} > SCAN_MAX_SEG )); then SCAN_WHY="a command segment longer than $((SCAN_MAX_SEG / 1024)) KiB"; return 2; fi
+    if (( total > SCAN_MAX_TOTAL )); then SCAN_WHY="more than $((SCAN_MAX_TOTAL / 1024)) KiB of command text to scan"; return 2; fi
     if (( SECONDS >= DEADLINE_S )); then SCAN_WHY="the ${DEADLINE_S} s time limit was reached while scanning"; return 2; fi
     if [[ "$seg" =~ $RE_RM_WORD && "$seg" =~ $RE_RM_REC && "$seg" =~ $RE_RM_TGT ]]; then SCAN_SEG="$seg"; return 0; fi
     if [[ "$seg" =~ $RE_TF_DESTROY || "$seg" =~ $RE_TF_APPLY ]]; then SCAN_SEG="$seg"; return 0; fi
@@ -403,7 +408,7 @@ case "$INPUT" in
 esac
 
 # An oversize tool call asks before anything reads it (the prefilter below and the raw scans are not linear in its size).
-if (( ${#INPUT} > MAX_ENVELOPE )); then ask_bound "the tool call is larger than 256 KiB"; fi
+if (( ${#INPUT} > MAX_ENVELOPE )); then ask_bound "the tool call is larger than $((MAX_ENVELOPE / 1024)) KiB"; fi
 
 # ---- 2. the zero-spawn prefilter (D7) --------------------------------------------------------------
 # Skip the lexer only for a `{...}` envelope with a STRING command that has no keyword and no boundary

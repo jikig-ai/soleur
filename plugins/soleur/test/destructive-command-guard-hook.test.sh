@@ -2325,25 +2325,52 @@ env_row "perl-less: terraform, two blanks, destroy asks (a run of blanks between
 env_row "perl-less: git push with two blanks around every word asks (force push to main)" ask "$(mkjson 'git  push  --force origin main' "$TREE")" "$FP"
 env_row "perl-less: terraform, two blanks, plan is not decided" none "$(mkjson 'terraform  plan' "$TREE")" "$FP"
 
-# The degraded scans are bounded too: a segment is capped at 64 KiB and the clock is read per segment (ask bound), the envelope is
-# capped at 256 KiB before anything else runs, and the quoted segment is redacted only as far as the 200 characters that are shown.
+# The degraded scans are bounded too: a segment is capped at 16 KiB (the patterns are quadratic in a segment's length: about 0.3 s each at the cap),
+# the segments of one command share a 64 KiB budget, the clock is read per segment (ask bound), the envelope is capped at 256 KiB before
+# anything else runs, and the quoted segment is redacted only as far as the 200 characters that are shown.
 _t=""; for _i in $(seq 1 8000); do _t+="terraform a "; done; _cmd96k_miss="${_t}; terraform destroy"; _cmd96k_hit="${_t}destroy"
-_t=""; for _i in $(seq 1 5000); do _t+="terraform a "; done; _cmd60k_hit="${_t}destroy"
+_t=""; for _i in $(seq 1 1200); do _t+="terraform a "; done; _cmd60k_hit="${_t}destroy"
 _t=""; for _i in $(seq 1 100000); do _t+="abcdefg "; done; _cmd800k="echo ${_t}"; _cmd200k="echo ${_t:0:200000}"
 bound_row "degraded bound: jq-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" "^${ASK_LEAD_RX}bound: " "$FJ"
 bound_row "degraded bound: perl-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" "^${ASK_LEAD_RX}bound: " "$FP"
-bound_row "degraded bound: perl-less, a 60 KB segment that hits asks in under 5 s (the quoted segment is redacted only as far as it is shown)" ask - "$_cmd60k_hit" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
+bound_row "degraded bound: perl-less, a 14 KB segment that hits asks in under 5 s (the quoted segment is redacted only as far as it is shown)" ask - "$_cmd60k_hit" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
 bound_row "degraded bound: an 800 KB benign command asks (bound) in under 5 s, before the prefilter reads it" ask - "$_cmd800k" "^${ASK_LEAD_RX}bound: .*too large to check in full"
 bound_row "degraded bound: an 800 KB command asks (bound) with no jq on the PATH as well" ask - "$_cmd800k" "^${ASK_LEAD_RX}bound: " "$FJ"
-# a long run of blanks is not a ReDoS: a 100 KB run is over the 64 KiB segment cap (a bound ask before any pattern runs), a 60 KB run is under it and is scanned
+# a long run of blanks is not a ReDoS: a 100 KB run is over the 16 KiB segment cap (a bound ask before any pattern runs), a 14 KB run is under it and is scanned
 # in linear time, and the segment after it is still read
 _t=""; for _i in $(seq 1 100000); do _t+=" "; done; _cmd100kblank="terraform${_t}x"
-_t=""; for _i in $(seq 1 60000); do _t+=" "; done; _cmd60kblank="terraform${_t}x; terraform destroy"
+_t=""; for _i in $(seq 1 14000); do _t+=" "; done; _cmd60kblank="terraform${_t}x; terraform destroy"
 bound_row "degraded bound: jq-less, a 100 KB run of blanks after terraform asks (bound) in under 5 s" ask - "$_cmd100kblank" "^${ASK_LEAD_RX}bound: " "$FJ"
 bound_row "degraded bound: perl-less, a 100 KB run of blanks after terraform asks (bound) in under 5 s" ask - "$_cmd100kblank" "^${ASK_LEAD_RX}bound: " "$FP"
-bound_row "degraded bound: jq-less, a 60 KB run of blanks is scanned in time and the destroy after it is still found, in under 5 s" ask - "$_cmd60kblank" "^${ASK_LEAD_RX}guard-degraded-jq-missing: " "$FJ"
-bound_row "degraded bound: perl-less, a 60 KB run of blanks is scanned in time and the destroy after it is still found, in under 5 s" ask - "$_cmd60kblank" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
+bound_row "degraded bound: jq-less, a 14 KB run of blanks is scanned in time and the destroy after it is still found, in under 5 s" ask - "$_cmd60kblank" "^${ASK_LEAD_RX}guard-degraded-jq-missing: " "$FJ"
+bound_row "degraded bound: perl-less, a 14 KB run of blanks is scanned in time and the destroy after it is still found, in under 5 s" ask - "$_cmd60kblank" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
 bound_row "degraded bound: a 200 KB benign command (under the envelope cap) is not an ask, in under 5 s" none - "$_cmd200k"
+# two near-cap segments used to cost ~5 s EACH (the clock is read only between segments): the 64 KiB budget over all segments of one command
+# stops that, and a segment's own cap is 16 KiB (16384 bytes exactly is scanned, 16385 is a bound ask)
+_t=""; for _i in $(seq 1 1250); do _t+="terraform a "; done; _SEG15K="${_t}"
+_cmd5seg="${_SEG15K}; ${_SEG15K}; ${_SEG15K}; ${_SEG15K}; ${_SEG15K}; terraform destroy"; _cmd3seg="${_SEG15K}; ${_SEG15K}; ${_SEG15K}; terraform destroy"
+rep a 16384; _SEG16384="$REP_OUT"; rep a 16385; _SEG16385="$REP_OUT"; rep a 16000; _SEG16000="$REP_OUT"
+bound_row "degraded bound: jq-less, five 15 KB segments then terraform destroy ask bound (the 64 KiB budget over all segments), in under 5 s" ask - "$_cmd5seg" "^${ASK_LEAD_RX}bound: .*more than 64 KiB" "$FJ"
+bound_row "degraded bound: perl-less, five 15 KB segments then terraform destroy ask bound (the 64 KiB budget over all segments), in under 5 s" ask - "$_cmd5seg" "^${ASK_LEAD_RX}bound: .*more than 64 KiB" "$FP"
+bound_row "degraded bound: jq-less, three 15 KB segments (under the budget) then terraform destroy is still found, in under 5 s" ask - "$_cmd3seg" "^${ASK_LEAD_RX}guard-degraded-jq-missing: " "$FJ"
+bound_row "degraded bound: perl-less, three 15 KB segments (under the budget) then terraform destroy is still found, in under 5 s" ask - "$_cmd3seg" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
+bound_row "degraded bound: jq-less, a 16000-byte segment (the raw scan also reads the envelope text before it) is scanned and the destroy after it is found" ask - "${_SEG16000}; terraform destroy" "^${ASK_LEAD_RX}guard-degraded-jq-missing: " "$FJ"
+bound_row "degraded bound: perl-less, a segment of exactly 16384 bytes is scanned and the destroy after it is found" ask - "${_SEG16384}; terraform destroy" "^${ASK_LEAD_RX}guard-degraded-perl-missing: " "$FP"
+bound_row "degraded bound: jq-less, a segment of 16385 bytes asks bound" ask - "${_SEG16385}; terraform destroy" "^${ASK_LEAD_RX}bound: .*longer than 16 KiB" "$FJ"
+bound_row "degraded bound: perl-less, a segment of 16385 bytes asks bound" ask - "${_SEG16385}; terraform destroy" "^${ASK_LEAD_RX}bound: .*longer than 16 KiB" "$FP"
+# the perl-less quote-gather loop stops at the 200 shown characters: with the segment cap raised back to 64 KiB in a private copy, `terraform destroy "`
+# plus 30000 words (an unclosed quote) used to take 20 s to redact
+mk_hook_tree degraded-gather; HE_OK=ok
+hook_edit "$HT_HOOK" $'\nSCAN_MAX_SEG=16384' $'\nSCAN_MAX_SEG=65536'
+chk "degraded bound: the 64 KiB segment cap edit landed in the private copy" "$HE_OK"
+rep 'a ' 30000; _cmdgather="terraform destroy \"${REP_OUT}"
+_g0="$(date +%s)"
+tree_row "degraded bound: perl-less, an unclosed quote followed by 30000 words is redacted as far as it is shown, in time" ask "$HT_HOOK" "$(mkjson "$_cmdgather" "$TREE")" "$FP"
+_g1="$(date +%s)"
+if want_row "degraded bound: perl-less, that redaction took under 5 s"; then
+  chk "degraded bound: perl-less, that redaction took under 5 s" "$([[ -n "$FAST" || $((_g1 - _g0)) -lt 5 ]] && echo ok)" "elapsed=$((_g1 - _g0))s"
+fi
+reason_has "degraded bound: perl-less, that ask is the scan's hit (the unclosed quote did not stall the redaction)" "$ASK_LEAD guard-degraded-perl-missing: "
 # the clock is read per segment: a private copy with a 1 s deadline scans 30000 short segments and stops with a bound ask
 mk_hook_tree degraded-clock; HE_OK=ok
 hook_edit "$HT_HOOK" $'\nDEADLINE_S=6\n' $'\nDEADLINE_S=1\n'
