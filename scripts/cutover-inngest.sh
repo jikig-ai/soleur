@@ -69,6 +69,24 @@ _bearer_curl() {
   curl --disable --noproxy '*' --max-time 60 "$@" --config - < <(printf 'header = "Authorization: Bearer %s"\n' "${!_tokvar}")
 }
 
+# Three-credential-header transport for the deploy.soleur.ai webhook calls (#9597
+# drawdown): the X-Signature-256 HMAC and the CF-Access client pair are credentials too,
+# and an argv `-H` exposes them in /proc/<pid>/cmdline. They ride the same stdin config
+# channel as _bearer_curl's bearer. $1 names the VARIABLE holding the raw hex signature
+# (read by indirect expansion; the `sha256=` prefix is part of the header line, not the
+# variable). All three values pass _bearer_ok before the config is built — a value with a
+# quote or newline would escape the `header = "..."` line, so a bad value fails closed
+# (rc=2, names the variable, never the value). The caller's own time bound stays
+# authoritative: it lands after the wrapper's 60s default and last-wins.
+_sig_curl() {
+  local _sigvar="${1:-}"
+  shift
+  _bearer_ok "${!_sigvar:-}" || { echo "_sig_curl: ${_sigvar} unusable" >&2; return 2; }
+  _bearer_ok "${CF_ACCESS_CLIENT_ID:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_ID unusable" >&2; return 2; }
+  _bearer_ok "${CF_ACCESS_CLIENT_SECRET:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_SECRET unusable" >&2; return 2; }
+  curl --disable --noproxy '*' --max-time 60 "$@" --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "${!_sigvar}" "${CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET}")
+}
+
 # Shared no-SSH confirm of the on-host inngest-cutover-flip FSM terminal state via Better
 # Stack Logs (source 2457081), used by op=arm (G6) and op=rollback (#6369). The emitter
 # (apps/web-platform/infra/inngest-cutover-flip.sh:125-137, `emit_state exit_code dbsize
@@ -235,9 +253,10 @@ confirm_flip_state() {
 #
 # TRANSITION, NOT "ANY FLIP ROW" — this distinction is the whole correctness of the
 # anchor. inngest-cutover-flip runs on a ~30s on-host timer and re-emits
-# flag:"done" reason:"noop-done" on EVERY tick: ~2,880 rows/day, so a 400-row query
-# spans about four HOURS. Anchoring on "the earliest row returned" would therefore
-# resolve to a few hours ago rather than the cutover instant, silently producing a
+# flag:"done" reason:"noop-done" on every tick (pre-#7696) / once per 300s heartbeat
+# window (post-#7696): still a heartbeat flood against the transition count, so a
+# 400-row query spans hours either way. Anchoring on "the earliest row returned" would
+# therefore resolve to a few hours ago rather than the cutover instant, silently producing a
 # window NARROWER than the coexistence region — the unsafe direction, and precisely
 # the vacuous-clean verdict AC-V3 exists to reject. The transition reasons below are
 # disjoint from the noop-* heartbeat reasons (inngest-cutover-flip.sh emit_state).
@@ -287,6 +306,11 @@ _flip_transition_dt() {
     --grep '"reason":"flushall-failed"' \
     --grep '"reason":"refuse-rearm-after-done"' \
     --grep '"reason":"latch-unrecordable"' \
+    `# --- #7777: the authorized-clear transitions. latch-cleared fires on the reflush arm's` \
+    `# clear append (a start_server follows it on the forward path, so it can only move the` \
+    `# anchor EARLIER — the safe direction); reflush-evidence-invalid is the evidence refusal.` \
+    --grep '"reason":"latch-cleared"' \
+    --grep '"reason":"reflush-evidence-invalid"' \
     `# --- #7228: the probe-derived done refusals. These fire on the path where start_server` \
     `# SUCCEEDED and the host then failed to serve — i.e. squarely inside the coexistence` \
     `# region, which is exactly what this anchor must not start after. Omitting them would` \
@@ -705,11 +729,12 @@ _generation_scoped_count() {
 #      a literal "host_name":"..." grep against the outer row matches NOTHING, EVER — which would
 #      pin H at 0 and refuse every arm. Decode `.raw`, then match the field literal.
 #
-# WINDOW. 15 minutes: wide enough to tolerate both today's ~42s terminal-arm cadence (1.42/min measured) and any
-# future rate-limit, which the follow-up issue constrains to stay under 15 minutes. It must not be
-# tightened below the slower of the two. (Measured 2026-08-25: 170 rows in 2h = 1.42/min ~= one
-# row every 42s. An earlier draft said "~35s cadence" beside "~1.4/min"; those disagree — 35s
-# would be 1.7/min — and 1.42/min is the measured figure.)
+# WINDOW. 15 minutes: wide enough to tolerate both the pre-#7696 ~42s terminal-arm cadence
+# (1.42/min measured 2026-08-25: 170 rows in 2h) and the post-#7696 throttled cadence —
+# emit_state in inngest-cutover-flip.sh emits noop-* rows at most once per 300s, so a healthy
+# terminal host lands ~3 rows per window. It must not be tightened below the slower of the
+# two cadences this gate has seen; an older image emitting every ~42s and a newer one every
+# 300s both answer it.
 # DELIBERATELY A LITERAL, not an env override (#7674 review). Two reasons, and either alone
 # settles it. (1) It is not mapped into cutover-inngest.yml's step env, and GitHub does not
 # export repo vars to a step unless the workflow names them — so an override here would be an
@@ -1037,6 +1062,37 @@ resume_liveness_decide() {
   esac
 }
 
+# op=resume's G4 decision (#9177): may the post-flush re-entry write proceed on the evidence
+# scripts/followthroughs/inngest-provision-unit-8562.sh just produced? Same extraction contract
+# as the siblings: signature and closing brace at column 0, no column-0 `}` in the body.
+#
+#   $1  rc — the probe's exit code
+#   $2  verdict line — the probe's one-line stdout (`verdict=PASS`, `verdict=FAIL reason=…`,
+#       `verdict=TRANSIENT reason=…`), or whatever its stdout actually was
+#
+# Outcomes: proceed | refuse-degraded | refuse-failed | refuse-in-progress |
+#           refuse-not-delivered | refuse-unreadable
+#
+# FAIL-CLOSED BY CONSTRUCTION. `proceed` requires BOTH rc 0 AND the literal `verdict=PASS` —
+# the only evidence shape that proves the CURRENT host generation's cloud-init instance-id
+# reached bootstrap-done. `bootstrap-done-DEGRADED` is a FAIL on the probe (SQLite-only, no
+# durable backend) and can never authorize the write; TRANSIENT means "not yet proven", which
+# is not "proven"; an unreadable or empty verdict means the question could not be asked at
+# all, which is not a statement about the host — each names a DISTINCT remediation.
+resume_bootstrap_decide() {
+  case "$2" in
+    "verdict=PASS")
+      [[ "$1" == "0" ]] && { printf '%s' 'proceed'; return 0; }
+      printf '%s' 'refuse-unreadable'; return 0 ;;
+    "verdict=FAIL reason=degraded"*)        printf '%s' 'refuse-degraded' ;;
+    "verdict=FAIL"*)                        printf '%s' 'refuse-failed' ;;
+    "verdict=TRANSIENT reason=in-progress")     printf '%s' 'refuse-in-progress' ;;
+    "verdict=TRANSIENT reason=not-delivered")   printf '%s' 'refuse-not-delivered' ;;
+    "verdict=TRANSIENT"*)                   printf '%s' 'refuse-unreadable' ;;
+    *)                                      printf '%s' 'refuse-unreadable' ;;
+  esac
+}
+
 # G3's terminal ACTION, separated from its message text (#7462 review). The dispatcher used to
 # carry `exit 1` inside each refusal arm, which meant nothing tested that a refusal actually
 # aborts: stripping `exit 1` from all four arms turned G3 into a pure logger — every refusal
@@ -1221,17 +1277,58 @@ missed_tick_report() {
   return 0
 }
 
+# #6940 item 1 (ADR-146 §Deferred item 1) — registry-sourced missed-tick
+# discovery. missed_tick_report enumerates empty (function, bucket) pairs only
+# for ids OBSERVED in the primary doublefire body — a live cron with zero runs
+# in the fsm-anchored window (e.g. a quarterly schedule) is invisible to it. The
+# registry probe's additive `functions` field supplies the full population: the
+# zero-run set is registry_cron_ids − observed, and only THAT set is re-probed.
+#
+# args: $1 registry-probe body-json ({functions:[{id,slug,triggers:[{type,value}]}]})
+#       $2 doublefire runs body-json ({runs:[{functionID,startedAt,...}]})
+# stdout: one line — CSV of ids that are (a) registry functions carrying a CRON
+#   trigger, (b) absent from $2's .runs[].functionID, (c) shape-checked against
+#   \A[A-Za-z0-9._-]{1,128}\z (same rule as missed_tick_report — \A..\z, not
+#   ^..$: jq's $ also matches before a trailing newline).
+# stderr: a diagnostic line counting shape-skipped candidates (never on stdout —
+#   the caller consumes stdout as a URL query value).
+# DEGRADES, never fails: unparseable or missing fields yield an empty csv and rc
+#   0 — a failed derivation must not redden a verdict that already printed.
+# Same extraction contract as missed_tick_report: signature and closing brace at
+# column 0, and no column-0 `}` inside the body (the suite awk-extracts it).
+zero_run_cron_ids() {
+  local res
+  if ! res=$(jq -nc --arg r "$1" --arg b "$2" '
+    def okid: type == "string" and test("\\A[A-Za-z0-9._-]{1,128}\\z");
+    ($r | fromjson? // {}) as $reg
+    | ($b | fromjson? // {}) as $runs
+    | ([ $runs.runs[]?.functionID ] | unique) as $obs
+    | ([ $reg.functions[]?
+         | select(any(.triggers[]?; .type == "CRON"))
+         | .id ]) as $cron_ids
+    | [ $cron_ids[] | select(. as $id | ($obs | index($id)) == null) ] as $cand
+    | { csv: ([ $cand[] | select(okid) ] | unique | join(",")),
+        skipped: ([ $cand[] | select(okid | not) ] | unique | length) }
+  '); then
+    echo "zero_run_cron_ids: derivation failed (unparseable input) — discovery skipped" >&2
+    return 0
+  fi
+  local skipped
+  skipped=$(jq -r '.skipped' <<<"$res")
+  if [[ "$skipped" != "0" ]]; then
+    echo "zero_run_cron_ids: $skipped registry CRON id value(s) failed the shape check and were skipped" >&2
+  fi
+  jq -r '.csv' <<<"$res"
+}
+
 case "$OP" in
   enumerate)
     # GET hook → records JSON in the response body. HMAC over empty body
     # (mirrors the deploy-status GET signature).
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/enum-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-enumerate-reminders" || echo "000")
     BODY=$(cat /tmp/enum-body 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -1273,11 +1370,8 @@ case "$OP" in
     # `CODE`. Everything the gate branch reads is bound inside the region.
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/registry-probe-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-registry-probe" || echo "000")
     BODY=$(cat /tmp/registry-probe-body 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -1467,11 +1561,8 @@ case "$OP" in
     DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
     echo "::notice::doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     rm -f /tmp/doublefire-probe-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$DF_URL" || echo "000")
     BODY=$(cat /tmp/doublefire-probe-body 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -1583,11 +1674,8 @@ case "$OP" in
     # registry probe (HMAC over empty body); require function_count > 0.
     RSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rearm-probe
-    RCODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
+    RCODE=$(_sig_curl RSIG -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$RSIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-registry-probe" || echo "000")
     RPROBE=$(cat /tmp/rearm-probe 2>/dev/null || echo "")
     if [[ "$RCODE" != "200" ]]; then
@@ -1629,12 +1717,9 @@ case "$OP" in
     PAYLOAD='{"mode":"rearm-from-capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rearm-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
     echo "re-arm response:"; cat /tmp/rearm-body 2>/dev/null || true; echo
@@ -1692,12 +1777,9 @@ case "$OP" in
     PAYLOAD='{"mode":"capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/capture-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
     BODY=$(cat /tmp/capture-body 2>/dev/null || echo "")
@@ -1725,12 +1807,9 @@ case "$OP" in
     # the CF 120s edge timeout, so it MUST be async + poll (not synchronous).
     PAYLOAD='{}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /dev/null -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /dev/null -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-wiped-volume-verify" || echo "000")
     if [[ "$CODE" != "202" ]]; then
@@ -1745,11 +1824,8 @@ case "$OP" in
     POLL_INTERVAL=10
     for i in $(seq 1 "$MAX_POLLS"); do
       rm -f /tmp/verify-body
-      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/verify-body -w '%{http_code}' \
+      _sig_curl GSIG -s --max-time 10 -o /tmp/verify-body -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-verify-status" >/dev/null || true
       BODY=$(cat /tmp/verify-body 2>/dev/null || echo "")
       if [[ -z "$BODY" ]] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
@@ -1827,11 +1903,8 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/inv-body
-      CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
+      CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$SIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-inventory" || echo "000")
       BODY=$(cat /tmp/inv-body 2>/dev/null || echo "")
       [[ "$CODE" == "200" ]] && break
@@ -1954,17 +2027,15 @@ case "$OP" in
     echo "::notice::2.-1 pool pre-check CLEAN — inngest_conns=$INNGEST_CONNS ≤ readiness ceiling $READINESS_CEILING (burst headroom OK). breakdown: ${POOL_BREAKDOWN}"
 
     # ---- 2.0 empty-registry pre-flight (P1-6). GET the web-host registry probe
-    # (HMAC over empty body); it forwards the { functions { id } } query to the
+    # (HMAC over empty body); it forwards the
+    # { functions { id slug triggers { type value } } } query (#6940) to the
     # dedicated host GQL over the private net. registry_empty MUST be true — a
     # non-empty dark registry means a second scheduler would register + double-fire
     # against prod Postgres, the exact failure this cutover exists to prevent.
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/exec-probe
-    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-registry-probe" || echo "000")
     BODY=$(cat /tmp/exec-probe 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
@@ -2154,11 +2225,8 @@ case "$OP" in
     PAYLOAD='{"mode":"capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/exec-capture
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
     BODY=$(cat /tmp/exec-capture 2>/dev/null || echo "")
@@ -2233,11 +2301,8 @@ case "$OP" in
     INV_BAD_BODY=""
     for _probe in $(seq 1 "$QUIESCE_PROBES"); do
       rm -f /tmp/exec-inv
-      ICODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/exec-inv -w '%{http_code}' \
+      ICODE=$(_sig_curl GSIG -s --max-time 30 -o /tmp/exec-inv -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-inventory" || echo "000")
       INV_BODY=$(cat /tmp/exec-inv 2>/dev/null || echo "")
       if [[ -n "$INV_BODY" ]]; then
@@ -2375,7 +2440,7 @@ case "$OP" in
       ""|unset|aborted|rolled-back)
         echo "::notice::op=arm: G1 pre-write FSM-state guard passed (config readability proven; INNGEST_CUTOVER_FLIP is a safe pre-arm state: '${CUR_FLIP:-unset}')" ;;
       *)
-        echo "::error::op=arm: G1 REFUSING — INNGEST_CUTOVER_FLIP is already '$CUR_FLIP' on soleur-inngest/prd (armed/flipping/flushed/done). Re-arming would re-drive stop -> FLUSHALL against the PROD Redis and wipe the live cron queue (DI-C2). If a prior arm is mid-flight, let it reach done; if it aborted, drive it via op=rollback to rolled-back before re-arming. Do NOT SSH the host."; exit 1 ;;
+        echo "::error::op=arm: G1 REFUSING — INNGEST_CUTOVER_FLIP is already '$CUR_FLIP' on soleur-inngest/prd (armed/flipping/flushed/reflush/done). Re-arming would re-drive stop -> FLUSHALL against the PROD Redis and wipe the live cron queue (DI-C2). If a prior arm is mid-flight, let it reach done; if it aborted, drive it via op=rollback to rolled-back before re-arming. If a flush already ran and a SECOND flush is the intent, the verb is op=reflush (#7777), never a re-arm. Do NOT SSH the host."; exit 1 ;;
     esac
 
     # G2 — read the two SOURCE values read-through from prd_terraform (existing DOPPLER_TOKEN),
@@ -2553,7 +2618,7 @@ case "$OP" in
       clear)
         echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
       latched)
-        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). CORRECTED #6894: `apply_target=inngest-volume-recut` DOES exist (it shipped in #7695) and is the dispatch that clears this latch — but it is refused while the store is populated, and this store measures 442 keys, so it is not available here. The route for a populated store is the ADDITIVE cutover (op=luks-cutover), which PRESERVES /mnt/data and therefore preserves this latch too: it does not clear it either. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch records can never be deleted, but a SECOND flush can be deliberately authorized: op=reflush (#7777) appends a cleared_at authorization record to the latch ledger — the prior flushed_at is NOT erased — and the on-host FSM then re-enters the flush path and re-engages the latch. Use op=reflush when the operator intent is 'this host may be flushed again'; use op=luks-cutover for the ADDITIVE path that preserves the store, or the inngest-volume-recut apply target when the whole volume goes. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). CORRECTED #6894: `apply_target=inngest-volume-recut` DOES exist (it shipped in #7695) and removes the latch file WITH the volume — but it is refused while the store is populated, which is exactly the case a reflush exists to empty. If a recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)
         echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count; the generation ::notice:: above gives the server's age, and any ::warning:: under it says whether it is young, clock-skewed or shipping malformed rows) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND SYSLOG_IDENTIFIER=inngest-cutover-flip (the FSM's own emitter tag, #8846), so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) or that the shipper renamed or dropped the SYSLOG_IDENTIFIER field — check both before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
       unreadable)
@@ -2648,11 +2713,8 @@ case "$OP" in
     # deploy-status polls below (HMAC over the empty body + CF-Access).
     PF_SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-preflight
-    PF_CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/quiesce-preflight -w '%{http_code}' \
+    PF_CODE=$(_sig_curl PF_SIG -s --max-time 30 -o /tmp/quiesce-preflight -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$PF_SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/infra-config-status" || echo "000")
     PF_CODE="${PF_CODE:0:3}"
     PF_REMEDY="Dispatch 'gh workflow run apply-deploy-pipeline-fix.yml' for the merged commit, wait for its verify to go green (it adjudicates the same per-file sha256), then re-dispatch op=quiesce-web. NOTHING was stopped — production scheduling is unchanged. Do NOT SSH the host."
@@ -2686,11 +2748,8 @@ case "$OP" in
     PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/deploy" || echo "000")
     if [[ "$CODE" != "202" ]]; then
@@ -2719,11 +2778,8 @@ case "$OP" in
     LAST_REASON=""
     for i in $(seq 1 "$QMAX_POLLS"); do
       rm -f /tmp/quiesce-status
-      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/quiesce-status -w '%{http_code}' \
+      _sig_curl GSIG -s --max-time 10 -o /tmp/quiesce-status -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/deploy-status" >/dev/null || true
       BODY=$(cat /tmp/quiesce-status 2>/dev/null || echo "")
       if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
@@ -2782,11 +2838,8 @@ case "$OP" in
     # verify, stronger than the inventory read).
     GSIG2=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-inv
-    ICODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
+    ICODE=$(_sig_curl GSIG2 -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
       -X GET \
-      -H "X-Signature-256: sha256=$GSIG2" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-inventory" || echo "000")
     # It also reports whether the body carried the anchored QUIESCED sentinel — the exact
     # signal op=execute 2.2 certifies, so a missing sentinel here predicts 2.2's UNKNOWN.
@@ -2821,11 +2874,8 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/verify-probe
-      CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
+      CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$SIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-registry-probe" || echo "000")
       BODY=$(cat /tmp/verify-probe 2>/dev/null || echo "")
       [[ "$CODE" == "200" ]] && break
@@ -2861,6 +2911,9 @@ case "$OP" in
     else
       echo "::warning::verify precondition (P3-c): function_count=$REG_COUNT is NON-EMPTY but that only proves the re-sync STARTED. Confirm $REG_COUNT matches the pre-cutover op=inventory 'functions' count (or set CUTOVER_REGISTRY_BASELINE) before trusting an exactly-once verdict over a possibly-incomplete function-set."
     fi
+    # #6940 — keep the registry-probe body for the zero-run discovery below. BODY
+    # is overwritten by the 2.6 doublefire fetch, so the capture MUST happen here.
+    REG_BODY="$BODY"
 
     # ---- 2.6 exactly-once double-fire check. GET the web-host doublefire probe
     # (it forwards the runs(first, filter: RunsFilterV2!, orderBy) query with
@@ -2917,11 +2970,8 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/verify-runs
-      CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-runs -w '%{http_code}' \
+      CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/verify-runs -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$SIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$DF_URL" || echo "000")
       BODY=$(cat /tmp/verify-runs 2>/dev/null || echo "")
       [[ "$CODE" == "200" ]] && break
@@ -3021,9 +3071,57 @@ case "$OP" in
     fi
     echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-host double-fire detector — a surviving web-host (colocated) scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The web scheduler host (web-1) is the only colocated scheduler (web-2 scope: see op=execute SEAM 2.2a); op=quiesce-web + the op=execute 2.2 QUIESCED gate are the control against a web-host double-fire — op=verify cannot substitute for it."
 
+    # #6940 item 1 (ADR-146 §Deferred 1) — REGISTRY-SOURCED ZERO-RUN DISCOVERY.
+    # missed_tick_report enumerates only ids OBSERVED in $BODY, so a live cron
+    # with zero runs in the fsm-anchored window (e.g. the quarterly
+    # cron-legal-audit) is invisible to it. When the report is armed AND the gap
+    # window is set, derive registry_cron_ids − observed from the registry probe's
+    # additive `functions` field (REG_BODY, captured before BODY was overwritten)
+    # and re-probe JUST that set over a ~2x-max-cron-period lookback — the
+    # function_ids scope is what makes a 184d window affordable (ADR-146). The
+    # merged body feeds the enumeration. ONE bounded call, never retried, never
+    # exit 1 — discovery is advisory and must not redden the verdict above.
+    MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"
+    MTR_BODY="$BODY"
+    if [[ "$MTR_GATE" == "true" && -n "${CUTOVER_WINDOW_FROM:-}" && -n "${CUTOVER_WINDOW_UNTIL:-}" ]]; then
+      if ! echo "$REG_BODY" | jq -e 'has("functions")' >/dev/null 2>&1; then
+        echo "::warning::2.6 zero-run discovery skipped: the registry-probe body has no 'functions' field — the on-host probe predates #6940 (the infra-config push has not landed on the web host). Re-run after the push lands. The missed-tick enumeration below covers only functions observed in the verify window. The exactly-once verdict above STANDS."
+      else
+        ZERO_RUN_IDS=$(zero_run_cron_ids "$REG_BODY" "$BODY")
+        if [[ -n "$ZERO_RUN_IDS" ]]; then
+          DISC_LOOKBACK="${CUTOVER_DISCOVERY_LOOKBACK_S:-15897600}"
+          if [[ "$DISC_LOOKBACK" =~ ^[1-9][0-9]*$ ]]; then
+            DISC_FROM=$(date -u -d "@$(( $(date -u +%s) - DISC_LOOKBACK ))" +%Y-%m-%dT%H:%M:%SZ)
+            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}"
+            echo "::notice::2.6 zero-run discovery: re-probing registry cron function(s) with zero runs in the verify window over a ${DISC_LOOKBACK}s (~2x max cron period) lookback — function_ids=[$ZERO_RUN_IDS]"
+            rm -f /tmp/verify-zero-run
+            # Credential headers ride curl's stdin config channel (--config -), never argv —
+            # lint-shell-trace-credential-refusal's per-file baseline is shrink-only and this
+            # call is a NEW site; /proc/<pid>/cmdline must not carry the secrets.
+            DISC_CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-zero-run -w '%{http_code}' \
+              -X GET \
+              --config - \
+              "$DISC_URL" < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") || echo "000")
+            DISC_BODY=$(cat /tmp/verify-zero-run 2>/dev/null || echo "")
+            if [[ "$DISC_CODE" == "200" ]] && echo "$DISC_BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
+              DISC_N=$(echo "$DISC_BODY" | jq '.runs | length')
+              MTR_BODY=$(jq -nc --argjson a "$MTR_BODY" --argjson b "$DISC_BODY" '{runs:($a.runs + $b.runs)}')
+              echo "::notice::2.6 zero-run discovery: merged $DISC_N run(s) from the scoped re-scan into the missed-tick enumeration body — live-but-slow crons are now visible to the enumeration"
+            else
+              echo "::warning::2.6 zero-run discovery probe failed (HTTP $DISC_CODE) — the missed-tick enumeration below covers only the primary-window population; live-but-slow crons with zero recent runs are not enumerated. The exactly-once verdict above STANDS."
+            fi
+          else
+            echo "::warning::2.6 zero-run discovery skipped: CUTOVER_DISCOVERY_LOOKBACK_S='$DISC_LOOKBACK' is not a positive integer. The exactly-once verdict above STANDS."
+          fi
+        else
+          echo "::notice::2.6 zero-run discovery: every registered cron function has a run in the verify window — nothing to re-probe"
+        fi
+      fi
+    fi
+
     # #6939 — the missed-tick report runs AFTER the verdict above and cannot change it (OFF, the
     # default, never fails; ON fails only on an invalid window). See missed_tick_report().
-    missed_tick_report "${CUTOVER_MISSED_TICK_CANDIDATES:-}" "$BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"
+    missed_tick_report "$MTR_GATE" "$MTR_BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"
     echo "::notice::op=verify complete"
     ;;
 
@@ -3179,11 +3277,8 @@ case "$OP" in
     PAYLOAD=$(printf '{"command":"enable inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rollback-body
-    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
+    CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=$SIG" \
-      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       -d "$PAYLOAD" \
       "$BASE/deploy" || echo "000")
     if [[ "$CODE" != "202" ]]; then
@@ -3203,11 +3298,8 @@ case "$OP" in
     ENABLED=0
     for i in $(seq 1 "$RMAX_POLLS"); do
       rm -f /tmp/rollback-status
-      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/rollback-status -w '%{http_code}' \
+      _sig_curl GSIG -s --max-time 10 -o /tmp/rollback-status -w '%{http_code}' \
         -X GET \
-        -H "X-Signature-256: sha256=$GSIG" \
-        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/deploy-status" >/dev/null || true
       BODY=$(cat /tmp/rollback-status 2>/dev/null || echo "")
       if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
@@ -3344,8 +3436,149 @@ case "$OP" in
         echo "::error::op=resume: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
     esac
 
+    # G4 — BOOTSTRAP-DONE GATE (#9177, defense in depth). `flushed` starts a PROD scheduler on
+    # THIS host generation, so the generation must have finished provisioning: the unit-side
+    # quiesce in soleur-inngest-provision.service (#9159/ADR-257) is the primary control, and
+    # this row is the gate-side proof the runbook has always required — "run op=resume only
+    # after bootstrap-done for the NEW cloud-init instance-id". The evidence path is the
+    # followthrough probe itself: it anchors on the newest `provision-unit-armed` row's iid=
+    # (one per host LIFE, so a predecessor's bootstrap-done can never count) and PASSes only
+    # when that iid emitted a real `bootstrap-done` — `bootstrap-done-DEGRADED` (SQLite-only,
+    # no durable backend) is a FAIL, never a pass. Missing/fallback iids and query failures
+    # are probe-fault, a distinct token from not-delivered. The probe's detail lines ride
+    # stderr straight into this run's log (counts + iid only, its standing purity contract);
+    # stdout is exactly one `verdict=` line. Everything but `proceed` refuses BEFORE the write.
+    # stderr is deliberately NOT captured: the probe's detail lines (counts + iid, its purity
+    # contract) flow straight into this run's log where the refusal messages reference them,
+    # while stdout is captured whole and the one verdict= line extracted from it. RS_G4_RC is
+    # the PROBE's rc (doppler run propagates it); the verdict extraction cannot mask it.
+    RS_G4_RAW=""; RS_G4_RC=0
+    RS_G4_RAW="$(doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh)" || RS_G4_RC=$?
+    RS_G4_OUT="$(printf '%s\n' "$RS_G4_RAW" | grep -E '^verdict=' | tail -n 1 || true)"
+    case "$(resume_bootstrap_decide "$RS_G4_RC" "$RS_G4_OUT")" in
+      proceed)
+        echo "::notice::op=resume: G4 — the current host generation's cloud-init instance-id reached bootstrap-done ($RS_G4_OUT); the post-flush re-entry may proceed." ;;
+      refuse-degraded)
+        echo "::error::op=resume: G4 REFUSING — the current host generation's provisioning completed only DEGRADED ($RS_G4_OUT): soleur-inngest-provision.service reached bootstrap-done-DEGRADED (SQLite-only; Redis inactive or no durable ExecStart) for this iid, so it wrote no latch and retries only at the next boot. Starting a prod scheduler here would adopt a queue on a host that is NOT durably provisioned. Read the inngest-luks-* and post-boot-health stages for the same iid (runbook: inngest-server.md, Provision unit), then replace the host if the cause is not transient. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      refuse-failed)
+        echo "::error::op=resume: G4 REFUSING — provisioning for the current host generation did NOT reach bootstrap-done ($RS_G4_OUT; the probe's stderr detail above gives the per-stage counts). Starting a prod scheduler against an unprovisioned host risks a cutover-flip / bootstrap collision the unit's own quiesce was built to prevent — and this gate exists so a regression there cannot flip traffic onto it. Read the named stages for the same iid (runbook: inngest-server.md, Provision unit). Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      refuse-in-progress)
+        echo "::error::op=resume: G4 REFUSING — provisioning for the current host generation is still IN PROGRESS ($RS_G4_OUT): the unit is retrying inside its bounds and has not emitted bootstrap-done for this iid yet. 'flushed' written now would start the prod scheduler mid-provision. Re-dispatch op=resume once the probe reads PASS. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      refuse-not-delivered)
+        echo "::error::op=resume: G4 REFUSING — no provision-unit-armed row exists for host=$INNGEST_HOST in the probe's window ($RS_G4_OUT): the current host generation never armed soleur-inngest-provision.service, so its provisioning state is UNPROVEN. On a host life predating #8562's template this is the expected reading — the named recovery is an inngest-host-replace (which re-arms the unit on the new life), not a resume. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      refuse-unreadable)
+        echo "::error::op=resume: G4 REFUSING FAIL-CLOSED — the provisioning-evidence READ failed (rc=$RS_G4_RC verdict='${RS_G4_OUT:-<none>}'). This is NOT a statement about the host: the Better Stack credentials in prd_terraform, the probe's own xtrace/credential preflight, or an armed row whose iid= is absent/'unknown'/the hostname fallback (a value every host life SHARES, so no join is safe) all land here. Fix the read the probe's stderr names, then re-dispatch. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      *)
+        echo "::error::op=resume: G4 — resume_bootstrap_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
+    esac
+
     printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
     echo "::notice::op=resume: wrote INNGEST_CUTOVER_FLIP=flushed to soleur-inngest/prd. The enabled 30s on-host timer takes the post-flush resume arm: start -> verify it SERVES -> record the done-owner marker -> done, with NO re-FLUSHALL."
+    ;;
+
+  reflush)
+    # --- #7777: the AUTHORIZED second FLUSHALL — the append-only latch clear ------------------
+    # WHY THIS VERB EXISTS. The monotonic latch on /mnt/data correctly refuses a second
+    # FLUSHALL, and the recut gate's `redis_keys > 0` refusal told the operator to empty the
+    # store — through a FLUSHALL the latch then refused. Both were right; what was missing is a
+    # way to record a NEW authorization WITHOUT erasing the record of the old one. The latch is
+    # an append-only LEDGER: this verb writes `reflush,run=<gha-run-id>,by=<actor>` to
+    # INNGEST_CUTOVER_FLIP; the on-host FSM's `reflush` arm validates the evidence, APPENDS a
+    # `cleared_at` record (the authorization — the prior `flushed_at` is never removed), then
+    # re-enters the normal flush path, which appends a fresh `flushed_at` and re-engages the
+    # latch. A second flush is therefore deliberately authorized, never merely inconvenient.
+    #
+    # THE EVIDENCE RIDES THE FLAG VALUE, NOT A SECOND KEY. soleur-inngest/prd's boot-isolation
+    # self-check is an EXACT-SET match on the config — any new secret name FATALs every
+    # re-provision (the same constraint that kept the done-owner marker out of Doppler). The
+    # flag is the one no-SSH channel that already exists, so the authorization rides inside it.
+    #
+    # GATED, because reflush authorizes the SAME irreversible FLUSHALL as arm:
+    #  G1 the flag must be TERMINAL (done/aborted/rolled-back). A reflush over an in-flight
+    #     flip races the running FSM; a bare `reflush` parked in the flag is in-flight too.
+    #  G2 the latch must EXIST off-host (L>=1 flip-complete/refuse-rearm-after-done rows) —
+    #     the INVERSE of op=arm's G3.7. A reflush with no recorded flush is the wrong verb:
+    #     that is a FIRST flush, and its verb is op=arm.
+    #  G3 the host must be audible — `reflush` is consumed ONLY by the on-host 30s timer, so
+    #     writing it to a dark host strands the flag in a state every consumer refuses.
+    #  G4 the authorization evidence must be well-formed: run=<digits>, by=<token>, both
+    #     supplied by this dispatch's GitHub environment — the host stamps cleared_at + its own
+    #     boot_id; it can never fabricate who authorized.
+    # then ONE stdin-fed write, then a Better Stack confirm that the FSM reached `done` —
+    # identical in shape to op=arm's G6.
+    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+      echo "::error::op=reflush: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the authorized-clear write."; exit 1
+    fi
+    RF_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "__READ_FAILED__")
+    case "$RF_CUR" in
+      __READ_FAILED__)
+        echo "::error::op=reflush: cannot read INNGEST_CUTOVER_FLIP from soleur-inngest/prd. Refusing FAIL-CLOSED — a swallowed read must not be mistaken for a terminal state. Do NOT SSH the host."; exit 1 ;;
+      done|aborted|rolled-back)
+        echo "::notice::op=reflush: G1 — flag is '$RF_CUR', a terminal state; the authorized re-flush may be dispatched." ;;
+      armed|flipping|flushed|reflush|reflush,*)
+        echo "::error::op=reflush: G1 REFUSING — INNGEST_CUTOVER_FLIP is '$RF_CUR', an IN-FLIGHT state. The on-host FSM is mid-flip; writing another reflush now would race it. Let it reach a terminal state, then re-dispatch."; exit 1 ;;
+      *)
+        echo "::error::op=reflush: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RF_CUR:-unset}', not a terminal state. op=reflush exists for ONE case: a host whose durable latch correctly refuses a second FLUSHALL that an operator has deliberately authorized. From unset, op=arm is the verb for a first cutover."; exit 1 ;;
+    esac
+    # G2 — the latch must EXIST (inverse of arm's G3.7, which requires it absent). Reuse the
+    # same off-host reader and the same decide function: `latched` is THIS verb's pass —
+    # evidence a FLUSHALL was already recorded for this host. `clear`/`silent`/`unreadable`
+    # each refuse with their own remediation.
+    RF_LATCH_N="$(_flush_latch_count)"
+    RF_LIVE_N="$(_flip_liveness_count)"
+    case "$(flush_latch_decide "$RF_LATCH_N" "$RF_LIVE_N")" in
+      latched)
+        echo "::notice::op=reflush: G2 — $RF_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE evidence a recorded flush; the durable latch stands, which is exactly the state this verb exists to supersede." ;;
+      clear)
+        echo "::error::op=reflush: G2 REFUSING — ZERO flip-complete / refuse-rearm-after-done rows within $FLUSH_LATCH_SINCE, while the host IS audible: no FLUSHALL is recorded for this host, so there is nothing to clear and nothing to re-flush. A reflush is a SECOND flush; the verb for a first one is op=arm. If a recut already wiped the evidence and you still need a flush, narrow FLUSH_LATCH_SINCE is NOT the answer here — the on-host latch remains the authority and an empty window would have authorised an UNNEEDED second verb anyway. Do NOT SSH the host."; exit 1 ;;
+      silent)
+        echo "::error::op=reflush: G2 REFUSING — the latch window is empty AND the host's liveness window is empty (ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server within $FLIP_LIVENESS_SINCE). A silent host proves nothing either way; writing 'reflush' to it strands the flag in a state every reader refuses. Do NOT SSH the host."; exit 1 ;;
+      unreadable)
+        echo "::error::op=reflush: G2 REFUSING FAIL-CLOSED — the latch READ PATH failed (the ::warning:: above names which read: Better Stack, the Hetzner generation anchor, or the local row filter). An unanswered 'has this host been flushed?' must never be read as 'yes'. Fix the read and re-dispatch. Do NOT SSH the host."; exit 1 ;;
+      *)
+        echo "::error::op=reflush: G2 — flush_latch_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
+    esac
+    # G3 — HOST-AUDIBILITY GATE (same shape as op=resume's G3; the count was already read for
+    # G2's decide, and resume_liveness_decide is the honest mapping of it for this verb).
+    case "$(resume_liveness_decide "$RF_LIVE_N")" in
+      audible)
+        echo "::notice::op=reflush: G3 — host is audible ($RF_LIVE_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
+      silent)
+        echo "::error::op=reflush: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. 'reflush' is acted on ONLY by the on-host 30s timer, so writing it now authorizes nothing AND parks the flag in a state G1 of every verb refuses. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      unreadable)
+        echo "::error::op=reflush: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names the failed read. Fix it, then re-dispatch. Do NOT SSH the host."; exit 1 ;;
+      *)
+        echo "::error::op=reflush: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
+    esac
+    # G4 — the authorization evidence, stamped by THIS dispatch. `run` ties the clear to the
+    # GitHub run that authorized it; `by` names the dispatching actor. The host stamps
+    # cleared_at and its own boot_id at append time. Both fields are VALIDATED here — the
+    # on-host arm refuses a malformed value anyway, and catching it before the write keeps
+    # the flag out of a state that only this verb can leave.
+    RF_RUN="${GITHUB_RUN_ID:-}"
+    RF_BY="${GITHUB_TRIGGERING_ACTOR:-${GITHUB_ACTOR:-}}"
+    if ! [[ "$RF_RUN" =~ ^[0-9]+$ ]]; then
+      echo "::error::op=reflush: G4 REFUSING — GITHUB_RUN_ID is '${RF_RUN:-unset}', not a run id. The authorization evidence is mandatory: without a run id the clear cannot name which run authorized the second FLUSHALL. This should be impossible under workflow_dispatch — file an issue with this run URL."; exit 1
+    fi
+    if ! [[ "$RF_BY" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "::error::op=reflush: G4 REFUSING — the dispatching actor is '${RF_BY:-unset}', not a usable token. The authorization evidence is mandatory: without an actor the clear cannot name who authorized the second FLUSHALL. This should be impossible under workflow_dispatch — file an issue with this run URL."; exit 1
+    fi
+    RF_TS=$(date +%s)
+    printf '%s' "reflush,run=$RF_RUN,by=$RF_BY" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=reflush: writing INNGEST_CUTOVER_FLIP=reflush FAILED. Re-dispatch op=reflush. Do NOT SSH the host."; exit 1; }
+    echo "::notice::op=reflush: wrote INNGEST_CUTOVER_FLIP=reflush,run=$RF_RUN,by=$RF_BY to soleur-inngest/prd. The on-host FSM's reflush arm appends a cleared_at authorization record to the append-only latch ledger — the prior flushed_at is NOT removed — then re-enters the normal stop -> FLUSHALL -> assert -> flushed -> start -> done path, which appends a fresh flushed_at and re-engages the latch."
+    # Confirm the on-host FSM reached `done` via Better Stack — same confirm shape as op=arm's
+    # G6, anchored at the write moment so a stale terminal row cannot false-succeed.
+    RF_ISO=$(date -u -d "@$RF_TS" +'%Y-%m-%d %H:%M:%S')
+    RF_STATE=$(confirm_flip_state "$RF_ISO")
+    case "$RF_STATE" in
+      done)
+        echo "::notice::op=reflush: confirm — FSM reached done (flag:done) since $RF_ISO. The latch ledger now reads cleared_at superseded by a fresh flushed_at; the re-flush latch is re-engaged." ;;
+      aborted|rolled-back)
+        echo "::error::op=reflush: confirm — the on-host FSM reached terminal '$RF_STATE' (NOT done) since $RF_ISO. Read the reason field on the inngest-cutover-flip Better Stack line: latch-unrecordable means the clear could not be durably appended; dbsize-nonzero / FLUSHALL-failed / unexpected-exit is a genuine flip fault; verify-* means the post-flush serve check failed. Do NOT proceed. Do NOT SSH the host."; exit 1 ;;
+      *)
+        echo "::error::op=reflush: confirm — no terminal FSM flag (done/aborted) within the window since $RF_ISO (the reflush WAS written and the cleared_at authorization may already be appended — it is idempotent on the same run id). If the timer looks healthy, re-run scripts/betterstack-query.sh to rule out a confirm-path failure. Do NOT SSH the host."; exit 1 ;;
+    esac
+    echo "::notice::op=reflush complete — authorized clear recorded + FSM confirmed done. The store is empty again and the latch stands against any further flush. NO secret value was echoed (AC-NOBODY)."
     ;;
 
   luks-cutover|luks-rollback)

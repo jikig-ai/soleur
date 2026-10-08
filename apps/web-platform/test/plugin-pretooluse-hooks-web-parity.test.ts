@@ -17,7 +17,7 @@ import { buildAgentEnv, type AgentCredential, type BuildAgentEnvOptions } from "
 // hook author classify theirs, and the behavioural runs prove the override really silences it.
 // SCOPE: it covers the hosted Agent SDK sessions only. The server-side scheduled agents that spawn
 // `claude --plugin-dir plugins/soleur` build their own env (`buildSpawnEnv` in each cron function,
-// `_cron-claude-eval-substrate.ts`), never call `buildAgentEnv`, and are outside this census (ADR-274).
+// `_cron-claude-eval-substrate.ts`), never call `buildAgentEnv`, and are outside this census (ADR-277).
 //
 // The population is DERIVED from hooks.json; the registry below classifies it. An unlisted
 // hook fails. Behaviour, not the label, is the anchor: a `web-disabled` hook is spawned with
@@ -243,8 +243,8 @@ describe("plugin PreToolUse hooks are classified for the web runtime", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// The server-side scheduled agents (ADR-274). They spawn `claude --plugin-dir plugins/soleur`, so the destructive guard
-// is registered for them, and the decision recorded in ADR-274 is to leave it ACTIVE there (an `ask` blocks headlessly, which is
+// The server-side scheduled agents (ADR-277). They spawn `claude --plugin-dir plugins/soleur`, so the destructive guard
+// is registered for them, and the decision recorded in ADR-277 is to leave it ACTIVE there (an `ask` blocks headlessly, which is
 // fail-closed for an agent that ingests untrusted issue and web content). That disposition is a negative: nothing in their spawn
 // env sets the kill switch. This census pins it, so the day a function starts passing SOLEUR_DISABLE_DESTRUCTIVE_GUARD (or a
 // thirteenth function starts loading the plugin) the record is re-read instead of drifting.
@@ -297,7 +297,7 @@ function namesKillSwitch(code: string): boolean {
   return joined(code).includes(KILL_SWITCH);
 }
 
-describe("server-side scheduled agents that load the plugin keep the destructive guard active (ADR-274)", () => {
+describe("server-side scheduled agents that load the plugin keep the destructive guard active (ADR-277)", () => {
   const sources = walkTs(FUNCTIONS_DIR).map((file) => ({ file, name: basename(file), code: stripComments(readFileSync(file, "utf8")) }));
   const spawners = sources.filter((s) => loadsPlugin(s.code));
 
@@ -346,14 +346,14 @@ describe("server-side scheduled agents that load the plugin keep the destructive
   });
 
   it("exactly twelve functions pass --plugin-dir (a comment that only mentions the flag does not count)", () => {
-    expect(spawners.map((s) => s.name).sort(), "the set of server-side functions that load the plugin changed: re-read the disposition in ADR-274 and update this count").toHaveLength(12);
+    expect(spawners.map((s) => s.name).sort(), "the set of server-side functions that load the plugin changed: re-read the disposition in ADR-277 and update this count").toHaveLength(12);
   });
 
   it("none of them, nor the shared eval substrate, names the kill switch (the guard stays active for them)", () => {
     const substrate = sources.find((s) => s.name === "_cron-claude-eval-substrate.ts");
     expect(substrate, "the shared substrate must exist").toBeTruthy();
     for (const s of [...spawners, substrate!]) {
-      expect(namesKillSwitch(s.code), `${s.name} sets or mentions ${KILL_SWITCH}: the ADR-274 disposition (guard active in server-side scheduled agents) no longer holds`).toBe(false);
+      expect(namesKillSwitch(s.code), `${s.name} sets or mentions ${KILL_SWITCH}: the ADR-277 disposition (guard active in server-side scheduled agents) no longer holds`).toBe(false);
     }
   });
 

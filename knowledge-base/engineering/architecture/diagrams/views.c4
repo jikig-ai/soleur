@@ -25,6 +25,9 @@ views {
       // endpoints (founder, platform.plugin) are already in this view so the
       // edges render rather than leaving a disconnected box.
       devin,
+      // ADR-274: cursorCli is the local Cursor CLI. founder and platform.plugin
+      // are already in this view, so both edges render (#7332).
+      cursorCli,
       anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, inngestReleases, zotRegistry, betterstack, sentry, flagsmith, sigstore, letsencrypt, publicResolvers, systemdUser,
       // #9168/ADR-260: slack is an L1 external; both its edge endpoints
       // (betterstack, founder) are already in this view so the
@@ -63,6 +66,8 @@ views {
       // #8205: devin -> platform.plugin delivery edge needs both endpoints in
       // the view (#7332 rule — same mechanism as playwrightMcp below).
       devin,
+      // ADR-274: cursorCli -> platform.plugin needs both endpoints here too.
+      cursorCli,
       // #7980: playwrightMcp is an L1 external and belongs here like every other one. BUT
       // `platform.plugin` is a COMPOUND node in this view (skills/agents/kb are included),
       // and LikeC4 does not lift an edge from a non-included descendant onto a compound
@@ -71,7 +76,7 @@ views {
       // guard component is included as well, at the same nesting depth as skills/agents/kb,
       // and the three edges (claude/hooks -> snapshotGuard -> playwrightMcp) render (#7332).
       platform.plugin.snapshotGuard, playwrightMcp,
-      // W2 / ADR-274: the destructive-command guard is a plugin component at the same depth as
+      // W2 / ADR-277: the destructive-command guard is a plugin component at the same depth as
       // snapshotGuard; the compound-node rule above applies, so the engine.hooks -> destructiveGuard
       // edge renders only when its descendant endpoint is listed. It has no external counterpart.
       platform.plugin.destructiveGuard
@@ -100,7 +105,7 @@ views {
       // #7980: both endpoints of the three guard edges (claude/hooks -> snapshotGuard ->
       // playwrightMcp) must be listed or the edges do not render (#7332).
       platform.plugin.snapshotGuard, playwrightMcp,
-      // W2 / ADR-274: both endpoints of engine.hooks -> destructiveGuard are listed here, so the edge renders.
+      // W2 / ADR-277: both endpoints of engine.hooks -> destructiveGuard are listed here, so the edge renders.
       platform.plugin.destructiveGuard,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb,
       platform.engine.claude.registry, platform.engine.claude.binding, platform.engine.claude.adapter,

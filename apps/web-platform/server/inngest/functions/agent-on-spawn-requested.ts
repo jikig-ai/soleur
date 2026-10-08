@@ -148,12 +148,13 @@ interface ModelPricing {
 }
 // Keys are computed properties referencing the SSOT model-ID constants
 // (leader-prompts/constants.ts) so a key can never drift out of byte-identity
-// with `leaderModule.model` — the `?? {all-zeros}` fallback at the lookup
-// below would otherwise silently bill at zero. Parity is CI-guarded by
+// with `leaderModule.model` — a lookup miss silently billed at zero before
+// #9648 B-0 (the `?? {all-zeros}` fallback). Parity is CI-guarded by
 // model-tiers.test.ts (#5106). Opus is intentionally absent: `leaderModule
 // .model` is `AnthropicModelId` (sonnet|haiku), the only value flowing
 // through `MODEL_PRICING[…]`, so opus never reaches this lookup.
-export const MODEL_PRICING: Record<string, ModelPricing> = {
+// The `Partial<>` typing keeps the miss arm type-meaningful, not comment-guarded.
+export const MODEL_PRICING: Partial<Record<string, ModelPricing>> = {
   // Claude Sonnet 5.5: $2 input / $10 output / $0.20 cache-read / $2.50 5m cache-write.
   // Rates carried over unchanged from Sonnet 5 at the 5.5 launch (2026-09-28;
   // verified 2026-09-29 against
@@ -176,6 +177,30 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     cacheCreatePerToken: 1.25 / 1_000_000,
   },
 };
+
+/**
+ * #9648 B-0 — price a turn against MODEL_PRICING. A model absent from the
+ * map returns NaN: the "unpriced" sentinel that makes both cost writers
+ * fail closed (no $0 WORM row) and alert Sentry. Never substitutes 0.
+ */
+export function resolveTurnCostUsd(
+  model: string,
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+  },
+): number {
+  const pricing = MODEL_PRICING[model];
+  if (!pricing) return Number.NaN;
+  return (
+    usage.input_tokens * pricing.inputPerToken +
+    usage.output_tokens * pricing.outputPerToken +
+    usage.cache_read_input_tokens * pricing.cacheReadPerToken +
+    usage.cache_creation_input_tokens * pricing.cacheCreatePerToken
+  );
+}
 
 interface AgentSpawnRequestedEvent {
   name: "agent.spawn.requested";
@@ -706,19 +731,14 @@ export async function agentOnSpawnRequestedHandler({
             }
 
             const usage = sdkResult.usage;
-            const pricing = MODEL_PRICING[leaderModule.model] ?? {
-              inputPerToken: 0,
-              outputPerToken: 0,
-              cacheReadPerToken: 0,
-              cacheCreatePerToken: 0,
-            };
             const cacheRead = usage.cache_read_input_tokens ?? 0;
             const cacheCreate = usage.cache_creation_input_tokens ?? 0;
-            const totalCostUsd =
-              usage.input_tokens * pricing.inputPerToken +
-              usage.output_tokens * pricing.outputPerToken +
-              cacheRead * pricing.cacheReadPerToken +
-              cacheCreate * pricing.cacheCreatePerToken;
+            const totalCostUsd = resolveTurnCostUsd(leaderModule.model, {
+              input_tokens: usage.input_tokens,
+              output_tokens: usage.output_tokens,
+              cache_read_input_tokens: cacheRead,
+              cache_creation_input_tokens: cacheCreate,
+            });
 
             await persistTurnCostAwaitable(
               founderId,

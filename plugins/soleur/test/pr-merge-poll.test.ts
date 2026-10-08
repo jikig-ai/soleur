@@ -84,11 +84,37 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(behindSyncInstructions("claude")).toMatch(/exit 11 with `--step`/);
   });
 
+  test("behindSyncInstructions agrees with queue mode: a queue_wait heartbeat on BEHIND is not a reason to sync (#9710)", () => {
+    // Every harness gets the exception: the default case is appended for codex, devin and unknown, and without it the
+    // amended FORBIDDEN/resolve lines sit above an unconditional "BEHIND -> merge origin/main and push".
+    for (const h of ["grok", "claude", "codex", "devin", "cursor", "unknown"] as const) {
+      const md = behindSyncInstructions(h);
+      if (h === "cursor") continue; // cursor prescribes no wait primitive and no sync at all
+      expect(md).toContain("[ship.phase7.queue_wait]");
+      expect(md).toContain("[ship.phase7.queue_wait_expired]");
+    }
+    expect(behindSyncInstructions("grok")).toMatch(/Exception: once the Phase 7 loop has printed `\[ship\.phase7\.queue_wait\]`[^\n]*never run the sync script/);
+    expect(behindSyncInstructions("claude")).toMatch(/likewise once the poll has printed `\[ship\.phase7\.queue_wait\]`/);
+    expect(behindSyncInstructions("codex")).toMatch(/Exception: once the poll has printed `\[ship\.phase7\.queue_wait\]`[^\n]*never merge origin\/main into it/);
+  });
+
   test("behindSyncInstructions forbids operator handoff on Grok", () => {
     const md = behindSyncInstructions("grok");
     expect(md).toContain("STOP");
     expect(md).toContain("sync-pr-behind.sh");
     expect(md).toContain("do NOT ask");
+  });
+
+  test("cursor behind-sync is one stop with no plugin root and no wait tool", () => {
+    const stop = behindSyncInstructions("cursor");
+    expect(pollInstructions("cursor")).toBe(stop);
+    expect(stop).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(stop).not.toContain("AwaitShell");
+    expect(stop).not.toContain("Monitor");
+    expect(stop).not.toContain("run_subagent");
+    expect(stop).toContain("or stop");
+    expect(stop).toContain("harness that already has a wait");
+    expect(stop).toContain("does not make the plugin supported");
   });
 });
 

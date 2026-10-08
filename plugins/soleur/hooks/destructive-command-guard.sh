@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2088  # the single-quoted `$HOME`/`~` strings are LITERAL patterns matched against lexer text, never expanded
-# PreToolUse hook on Bash: a narrow destructive-command guard for the Soleur plugin (W2, #9601, ADR-274).
+# PreToolUse hook on Bash: a narrow destructive-command guard for the Soleur plugin (W2, #9601, ADR-277).
 # The kill switch below is the first executable statement; the rest follows the order under MECHANISM.
 [[ "${SOLEUR_DISABLE_DESTRUCTIVE_GUARD-}" == "1" ]] && exit 0
 #
@@ -145,7 +145,7 @@
 # broken `perl` with a working jq scans the jq-decoded command the same way (stderr notice naming perl). Both
 # scans stop with a `bound` ask at a segment over 16 KiB, at 64 KiB of segments in all, or at the deadline. It never DENIES on a dependency
 # failure (the repair is itself a Bash call). A miss on the raw scan is a stated, tested fail-open (the
-# raw-scan-miss residual ADR-165 accepted for its `.openhands` row, a mirror ADR-245 has since retired; ADR-274
+# raw-scan-miss residual ADR-165 accepted for its `.openhands` row, a mirror ADR-245 has since retired; ADR-277
 # records why this hook asks on a hit where that row denied, and why its `.claude` row, which asks on every
 # call, is narrowed).
 #

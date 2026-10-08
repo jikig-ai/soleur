@@ -51,11 +51,11 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 # --- Transport-confinement diagnostics (#7873) --------------------------------
 # Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
 # curl's own stderr (which can carry the URL). A failed request then has four
-# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
-# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
-# ordinary network failure. So each failure emits ONE structured marker carrying
-# all four discriminators, beside a human line that names the bypass instead of
-# blaming the founder's connectivity.
+# competing causes the founder cannot tell apart: the proxy this script
+# deliberately bypassed, a ~/.curlrc that `--disable` dropped, a TLS trust
+# variable it cleared, or an ordinary network failure. So each failure emits ONE
+# structured marker carrying the discriminators, beside a human line that names
+# the bypass instead of blaming the founder's connectivity.
 SOLEUR_TRANSPORT_SCRIPT="discord-community.sh"
 SOLEUR_TRANSPORT_PLATFORM="Discord"
 
@@ -96,7 +96,8 @@ proxy_bypassed() {
 # claiming it was applied. It now reports whether a proxy was actually configured
 # for this request to bypass, which is the fact a reader needs. `refusal` was the
 # constant "none" at every call site, so the cause it exists to discriminate could
-# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+# never appear; the field stays for a caller that can refuse for a named cause, and
+# this script has none, so it passes "none".
 #
 # `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
 # which is correct against an attacker and BREAKS a founder whose corporate CA
@@ -155,6 +156,27 @@ report_transport_failure() {
 # exists to close, one layer up. readonly makes the destination non-rebindable.
 readonly DISCORD_API="https://discord.com/api/v10"
 
+# --- Token-shape guard (#9597) ------------------------------------------------
+# The Bot token rides curl's STDIN config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote or a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside
+# the base64url.base64url.base64url shape BEFORE the value is formatted into the
+# stream (the check validate_env always ran, now also the guard in front of the
+# config stream; the `=~` runs in the C locale so the ranges are ASCII).
+# The refusal line is fixed and value-free (never the token), goes to stderr,
+# and exits 1: it is NOT a transport failure, so it must not go through
+# report_transport_failure, whose text blames ~/.curlrc and proxies.
+_discord_token_ok() {
+  local LC_ALL=C t="${1:-}"
+  [[ "$t" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]
+}
+refuse_token_shape() {
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=token_shape\n' "$SOLEUR_TRANSPORT_SCRIPT" >&2
+  echo "Error: DISCORD_BOT_TOKEN is not shaped like a Discord bot token, so nothing was sent. Expected three dot-separated base64url segments (letters, digits, '-' and '_'), with no 'Bot ' prefix, quotes, spaces, or line breaks (including a trailing CR or newline). The value is not shown." >&2
+  exit 1
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -178,11 +200,9 @@ validate_env() {
     exit 1
   fi
 
-  # Bot tokens follow the pattern: base64.base64.base64
-  if [[ ! "${DISCORD_BOT_TOKEN}" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
-    echo "Error: DISCORD_BOT_TOKEN has invalid format." >&2
-    echo "Expected format: base64.base64.base64" >&2
-    exit 1
+  # Bot tokens follow the pattern: base64url.base64url.base64url
+  if ! _discord_token_ok "${DISCORD_BOT_TOKEN}"; then
+    refuse_token_shape
   fi
 
   if [[ -z "${DISCORD_GUILD_ID:-}" ]]; then
@@ -214,12 +234,17 @@ discord_request() {
 
   local response http_code body
 
-  # Suppress stderr to prevent token leakage in curl debug output
+  # The guard sits IMMEDIATELY before the call it protects, so no later edit to
+  # validate_env can leave a malformed token reaching the config stream.
+  _discord_token_ok "${DISCORD_BOT_TOKEN}" || refuse_token_shape
+
+  # Suppress stderr to prevent token leakage in curl debug output. The token rides
+  # curl's stdin config channel, never its argument list.
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
     -H "Content-Type: application/json" \
-    "${DISCORD_API}${endpoint}" 2>/dev/null) || __curl_rc=$?
+    "${DISCORD_API}${endpoint}" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bot %s"\n' "$DISCORD_BOT_TOKEN")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Discord API (endpoint: ${endpoint})."
     exit 1
@@ -271,6 +296,25 @@ discord_request() {
       exit 1
       ;;
   esac
+}
+
+# --- Compact output (#9678) ---
+#
+# The spawned community-monitor agent has no file tools, so any collector output
+# past the Bash tool's inline limit (30,000 characters) is unreadable and the digest row
+# is forced to `partial` / `output-too-large`. The cron handler therefore sets
+# SOLEUR_COLLECTOR_COMPACT=1 and each command prints ONE line of compact JSON
+# holding only the fields the prompt reads (counts, channel ids). Unset, or any
+# other value, leaves the output byte-identical to the interactive form.
+# `members` is exempt: the cron's containment hook denies it, so it never runs there.
+readonly COMPACT_MAX_ITEMS=40
+
+compact_on() {
+  [[ "${SOLEUR_COLLECTOR_COMPACT:-}" == "1" ]] && return 0
+  if [[ -n "${SOLEUR_COLLECTOR_COMPACT:-}" ]]; then
+    echo "compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1" >&2
+  fi
+  return 1
 }
 
 # --- Commands ---
@@ -336,6 +380,11 @@ cmd_messages() {
     fi
   done
 
+  if compact_on; then
+    # Only the count is read; bodies, authors and attachments never reach the model.
+    jq -ce 'if type == "array" then {count: length} else error("compact: messages not an array") end' <<<"$all_messages"
+    return
+  fi
   echo "$all_messages"
 }
 
@@ -379,10 +428,25 @@ cmd_members() {
 }
 
 cmd_guild_info() {
+  if compact_on; then
+    discord_request "/guilds/${DISCORD_GUILD_ID}?with_counts=true" | \
+      jq -ce '{approximate_member_count: (.approximate_member_count | if type == "number" then . else error("compact: approximate_member_count missing") end)}'
+    return
+  fi
   discord_request "/guilds/${DISCORD_GUILD_ID}?with_counts=true"
 }
 
 cmd_channels() {
+  if compact_on; then
+    # `count` stays exact so more than COMPACT_MAX_ITEMS channels is still detectable; ids
+    # are filtered to digits because they feed the next Bash call.
+    discord_request "/guilds/${DISCORD_GUILD_ID}/channels" | \
+      jq -ce --argjson max "$COMPACT_MAX_ITEMS" \
+        '[.[] | select(.type == 0)] as $t
+         | {count: ($t | length),
+            channel_ids: [$t[] | .id | strings | select(test("^[0-9]{1,20}$"))][:$max]}'
+    return
+  fi
   discord_request "/guilds/${DISCORD_GUILD_ID}/channels" | \
     jq '[.[] | select(.type == 0)]'  # type 0 = text channels
 }

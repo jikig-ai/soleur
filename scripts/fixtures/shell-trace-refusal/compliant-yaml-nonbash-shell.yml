@@ -1,0 +1,15 @@
+# MUST PASS (rc 0). The step's `shell:` is python, so its `run` string is NOT bash (the
+# precedent lint-workflow-run-body-syntax.py skips it the same way). The curl line below is
+# deliberately not valid python: it is only text the lint must NOT scan. The twin row turns
+# `shell: python` into `shell: bash` and the same text must then read RED.
+name: fixture-nonbash-shell
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: python step
+        shell: python
+        run: |
+          import os
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

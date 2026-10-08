@@ -74,9 +74,9 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // writes nothing. Rides the overrides for the same reason as the line above: an ambient value
   // cannot re-enable it. `buildAgentEnv` decides the env of the hosted Concierge sessions only: the
   // server-side scheduled agents that load the plugin through their own `--plugin-dir` spawn build their
-  // env with a per-function `buildSpawnEnv` allowlist and never receive these overrides (ADR-274).
+  // env with a per-function `buildSpawnEnv` allowlist and never receive these overrides (ADR-277).
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
-  // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-274), which also states what actually gates hosted Bash.
+  // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-277), which also states what actually gates hosted Bash.
   SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 } as const);
 

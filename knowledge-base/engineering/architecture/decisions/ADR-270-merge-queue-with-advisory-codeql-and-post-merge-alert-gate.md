@@ -154,6 +154,34 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      queued PR shows, and the removal-event payload (`reason`, timestamp ordering against
      the re-arm and the head commit) on a real ejection. The detection rule does not depend
      on the first; the "current event" test depends on the second.
+   - Amendment 2026-10-07 (#9710): the Phase 7 fences do not sync an armed PR that reads
+     BEHIND when `main` has a `merge_queue` rule. Before this the queued-skip
+     covered only a PR already IN the queue, and an armed PR spends its whole CI cycle
+     before enqueue, which is where the sync loop restarted CI on every `main` merge.
+     Queue mode (`QUEUE_RULE=1`, read once from `gh api repos/{owner}/{repo}/rules/branches/main`
+     by `.type == "merge_queue"`, never by position, and only with a non-empty required-check set;
+     the fence reads `main`'s rules, as its required-check read does) applies only to a BEHIND
+     reading GitHub itself reported (not one the DIRTY block derived), with auto-merge armed (read
+     per tick) and auto-sync usable. It waits for GitHub to enqueue the PR (measured, see the canary
+     addendum: GitHub enqueues an armed PR whose head is behind `main` on its own under the strict
+     policy, so no explicit enqueue and no ruleset change), reports the enqueue once
+     (`[ship.phase7.queued]`, at the first 5th-tick read that finds the PR queued; that reading also
+     restarts the idle count, so while each 5th-tick read answers queued the PR does not expire), and is bounded: more than 5
+     CONSECUTIVE wait ticks (the 6th) with no pending REQUIRED check latches back to today's sync for
+     the rest of that poll (`[ship.phase7.queue_wait_expired]`), and that sync's `--step` still skips
+     a queued PR through its own queue gate and stops on an unreadable queue read; `MAX_POLL_MIN` still
+     caps a PR whose required checks never settle or whose state keeps flapping (any tick that is not
+     a wait tick restarts the idle count). Every unreadable answer falls toward today's sync: a failed
+     rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
+     ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
+     rule runs today's code unchanged. `sync-pr-behind.sh` and the `pre-merge-rebase.sh` hook are not
+     changed (the hook runs once per `gh pr merge`, not per poll tick). Accepted residuals: (1) some
+     required contexts post a PASS on `merge_group` without re-running their suites
+     (`tenant-integration-required` and `vendor-pin-required`; see each workflow's `merge_group`
+     comment), so in queue mode their only real run is the PR-time one against the PR-time base,
+     where the sync used to re-run the PR-event versions on a fresher base; (2) a wait tick makes no
+     `--step` call, so the seen-queued marker is not written during the wait, and a dequeue is found
+     only by a current removal event, on the next 5th-tick read.
    - The `pre-merge-rebase.sh` hook reads the same state and skips its origin/main
      merge-and-push for an already queued PR. It resolves the PR from the bare number,
      the number plus flags in any order, `#N`, `-R/--repo` forms and a `cd <wt> &&` or
@@ -590,6 +618,30 @@ Definitions, commands and caveats are in [the #9482 measurement comment](https:/
 - Item 9: sync merges (proxy for sync pushes) per merged human PR: 2.50 before (n=40), 0.83 after (n=12, about 17 h), a delta of 1.67 against the 1.3 break-even; first reading, small after-window.
 - Item 10: dispatched runs of `merge-queue-stall-check.yml` start 10.0 min apart (within 10 s) with 4 to 5 s runner start (n=5, quiet window); no executor heartbeat. A red executor run alerts nobody (tracked in #9513).
 - Item 3 (partial): push SHA equals `merge_group.head_sha` for 13 of the 15 completed push runs on `main` (snapshot 2026-10-05 ~09:50Z); the other 2 are the adoption merge and the admin-bypass canary (Follow-up (c), tracked in #9512).
+
+### Addendum 2026-10-07 (#9710): enqueue while BEHIND
+
+Measured read-only for the queue-mode design. Question: does GitHub enqueue an armed PR whose head is behind `main` once its
+checks are green, under `strict_required_status_checks_policy = true`? Answer: yes.
+
+- PR #9697: `auto_merge_enabled` 2026-10-07T11:02:22Z; last commit dated 11:53:47Z (head `4b0bb6d78d`, merge-base
+  `8b43d09caa`); `added_to_merge_queue` 12:39:57Z with no push in between. Two `main` commits landed between the
+  merge-base and the enqueue, not counting the PR's own squash commit (the queue dates that commit at the enqueue
+  instant, so a `--before <enqueue>` date filter run after the merge counts 3). The one queued reading taken (#9697 after
+  the enqueue) was `OPEN CLEAN` with auto-merge disarmed (n=1).
+- Five further PRs merged through the queue that day were enqueued with a single enqueue event while 1 to 14 `main`
+  commits behind, 9 to 47 minutes after auto-merge was armed; method and table in
+  `knowledge-base/project/plans/2026-10-07-fix-ship-phase-7-merge-queue-aware-behind-sync-plan.md`.
+- The plan records BEHIND showing only while a check was pending; that reading is why the idle count keys on
+  pending REQUIRED checks and not on `mergeStateStatus`. Not measured: the last-green-to-enqueue latency over more
+  than one sample. The 5-tick grace is a chosen margin, to be re-derived from that latency.
+- Dogfood finding (PR #9710's own poll, same day): the idle count keyed on pending REQUIRED checks *present in the list*, but
+  the aggregate required context `test` does not exist until its shards finish, so 24 of 25 required contexts were
+  complete (last at 20:45:17Z) while the shards ran and the count expired on tick 6, syncing mid-CI (push at 20:50:54Z).
+  The expiry fallback did its job (a sync, today's behaviour) but defeated the wait for the whole shard window. Fixed in
+  the same PR: a required context that is absent counts as pending while any check is pending, and as idle when nothing
+  is (fixtures Q12, Q12b). This run therefore says nothing about enqueue latency: it expired before the required set could
+  complete.
 
 ## Cost Impacts
 

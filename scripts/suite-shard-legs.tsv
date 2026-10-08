@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=996
-# generated-at=2026-10-06T22:29:02Z
+# generated-at=2026-10-08T14:23:56Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -157,6 +157,8 @@ plugins/soleur/test/concurrent-ship.test.sh	3
 plugins/soleur/test/debug-probe-residue.test.sh	6
 plugins/soleur/test/deploy-arm.test.sh	5
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	5
+plugins/soleur/test/destructive-command-guard-hook.test.sh	3
+plugins/soleur/test/destructive-command-guard-mutation.test.sh	8
 plugins/soleur/test/digest-scrub.test.sh	4
 plugins/soleur/test/domain-model-headless-append.test.sh	1
 plugins/soleur/test/domain-model-init.test.sh	5
@@ -242,6 +244,7 @@ plugins/soleur/test/scripts-shard-manifest.test.sh	4
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	8
 plugins/soleur/test/scripts-shard-totality.test.sh	7
 plugins/soleur/test/session-state.test.sh	7
+plugins/soleur/test/shell-argv-parity.test.sh	7
 plugins/soleur/test/ship-battery-owed.test.sh	3
 plugins/soleur/test/ship-followthrough-directive.test.sh	7
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	6
@@ -464,13 +467,16 @@ scripts/test-all-webplat-gate	4
 scripts/test-contention	6
 scripts/tmpfs-guard	2
 scripts/tunnel-connector-census	3
+scripts/verify-agent-security-slice1	1
 scripts/verify-lockfile-guards	2
 scripts/verify-marketplace-ruleset	3
 scripts/watch-live-verify-pass	7
 scripts/watch-registration-narrowing-9564	3
 scripts/watchdog-arm-soak-9237	5
+scripts/watchdog-debounce-soak-9686	3
 scripts/web-fresh-boot-zot-8651	7
 scripts/web-host-escrow-preflight	3
+scripts/web-host-reboot	1
 scripts/web2-luks-live-6931	4
 scripts/web2-rebirth	5
 scripts/web2-rebirth-emptiness	4
@@ -499,6 +505,7 @@ tests/scripts/betterstack-ingest-probe	2
 tests/scripts/betterstack-query-archive	2
 tests/scripts/betterstack-read-classify	8
 tests/scripts/betterstack-roundtrip-latency	2
+tests/scripts/cleanup-merged-space	8
 tests/scripts/destroy-guard-counter-github	4
 tests/scripts/destroy-guard-counter-sentry	7
 tests/scripts/destroy-guard-counter-web-platform	5

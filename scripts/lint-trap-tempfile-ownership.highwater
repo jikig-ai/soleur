@@ -1,4 +1,11 @@
-69  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+70  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 70th entrant (2026-10-06, #9510 / PR #9634): tests/scripts/lib/stock-preflight-gate.sh —
+# stock_recovery_report allocates a `terraform show -json` dump file under RUNNER_TEMP.
+# The library is SOURCED into the workflow step's shell, so a `trap ... EXIT` here would
+# REPLACE the caller's trap (the same reason the 80th entrant, git-data-boot-signal-poll.sh,
+# carries an annotation). Every return path removes the file explicitly (failure arm on
+# terraform-show error, tail rm on normal exit); the residual leak is a hard kill, which no
+# trap would survive either. Site carries `lint-trap-ownership: ok` with that reason.
 # 79th entrant (2026-09-17, #8160): scripts/file-upstream-ask-8160.sh — its
 # mktemp -d output directory IS the deliverable (email/bug bodies the operator
 # sends after the run), so it must outlive the process by design; annotated

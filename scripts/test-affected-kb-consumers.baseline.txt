@@ -24,6 +24,7 @@ apps/web-platform/scripts/dev-ledger-parity.test.sh	knowledge-base/project/learn
 apps/web-platform/test/parse-gitleaks-allowlists	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur	knowledge-base	dir-operand-tests	false-positive: c4-canonical.test.ts names the knowledge-base root as a path base; the file it reads (model.likec4.json) is covered by the diagrams/ edge
 plugins/soleur	knowledge-base/engineering/policies/content-vendoring.md	dir-operand-tests	false-positive: gdpr-gate.test.ts writes this path as the `registry:` line of a synthetic NOTICE it creates in a mkdtemp directory (a template literal, lines 391 and 752); it never reads the policy file
+plugins/soleur	knowledge-base/project	dir-operand-tests	false-positive: preflight-founder-check.test.ts writes these paths into a scratch repo it builds (r.write, the PLANS constant) and reads no knowledge-base file of the real tree
 plugins/soleur	knowledge-base/project/learnings	dir-operand-tests	false-positive: ship-learning-probe.test.ts builds this relative path inside a scratch work tree (join(work, ...)); it reads no repo learning
 plugins/soleur	knowledge-base/project/plans	dir-operand-tests	false-positive: ship-deploy-pipeline-fix-gate, ship-incident-pir-gate and workflow-fidelity use the path as fixture text or inside a scratch tree
 plugins/soleur	knowledge-base/project/plans/archive	dir-operand-tests	false-positive: model-launch-review.test.ts creates this directory inside a scratch root

@@ -1,4 +1,4 @@
-import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
 import { basename, delimiter, join } from "path";
@@ -36,24 +36,27 @@ const log = createChildLogger("agent-sandbox");
 //     no outbound network by default; `opts.allowGithubEgress` widens
 //     the allowlist to exactly `ENTITLED_EGRESS_DOMAINS` (entitled-token
 //     sessions only — derived from `ghToken` presence at the consumer).
-//   - `filesystem.allowWrite: [workspacePath]` + PER-SIBLING `denyRead` —
+//   - `filesystem.allowWrite: [workspacePath]` + broad PARENT `denyRead` —
 //     the agent gets full READ+WRITE of its OWN `/workspaces/<uuid>` while
-//     every OTHER tenant workspace is hidden. Critical history (#5733):
-//     the `@anthropic-ai/claude-agent-sdk` (v0.2.85) bwrap builder emits
-//     the write-plane binds FIRST, then the read-plane LAST (`--tmpfs
-//     <denyRead-dir>`, then `--ro-bind` for each `allowRead` child). So a
-//     broad `denyRead: ["/workspaces"]` `--tmpfs`-obscures the whole tree
-//     AFTER the `allowWrite --bind`, and the ONLY post-tmpfs re-bind the
-//     SDK offers (`allowRead`) is READ-ONLY — which shadows the rw bind and
-//     makes the workspace read-only (PR #5848 shipped exactly that and
-//     turned the "not a git repository" strand into "read-only file
-//     system"; verified locally with bwrap 0.11.1). There is no
-//     "allowWrite-within-deny" knob. The only SDK-expressible config that
-//     is simultaneously writable-own AND tenant-isolated is to deny each
-//     SIBLING individually (so the own workspace is never under a `--tmpfs`
-//     and its `allowWrite --bind` survives), computed at dispatch by
-//     `enumerateSiblingDenyPaths`. ADR-075; durable TOCTOU closer is
-//     the vendored SDK bwrap-arg reorder (tracked follow-up).
+//     every OTHER tenant workspace (present AND future) is masked. History
+//     (#5733): the SDK at v0.2.85 emitted write-plane binds FIRST, then
+//     `--tmpfs <denyRead-dir>` LAST — a broad `/workspaces` deny obscured the
+//     own workspace and the only post-tmpfs re-bind (`allowRead`) was
+//     READ-ONLY, shadowing the rw bind (PR #5848's read-only regression). So
+//     the interim fix denied each sibling individually via dispatch-time
+//     `readdirSync` — which carried a residual TOCTOU (a sibling created
+//     after namespace build was never enumerated).
+//     The vendored CLI 2.1.284 builder closes that gap (#5862, ADR-075 exit
+//     criterion): per covering `denyRead` landing, the builder emits
+//     `--tmpfs <landing>` BEFORE re-binding each covered `allowWrite` path rw
+//     (`Re-bound write path wiped by denyRead tmpfs`) and each covered
+//     `allowRead` path ro (`Re-allowed read access within denied region`).
+//     Broad `denyRead: [workspacesRoot()]` is
+//     therefore expressible AND safe — the parent tmpfs masks the whole tree
+//     at namespace build, so a sibling created mid-session is never visible.
+//     The committed argv fixture pins this ordering; a future SDK drift that
+//     re-inverts it fails `test/sandbox-canary.test.ts`'s ordering pin and the
+//     capture gate's byte-diff.
 //
 // #8752 — the two hardening layers this config cannot express through the SDK
 // (the vendored builder owns the whole bwrap argv, transported on `--args
@@ -70,74 +73,6 @@ const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 /** Resolve WORKSPACES_ROOT at call time so tests can stub the env per-case. */
 function workspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
-}
-
-/** Canonicalize a path, tolerating a missing target (returns the input). */
-function safeRealpath(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
-}
-
-/**
- * Compute the sandbox `denyRead` list for the agent whose workspace is
- * `workspacePath`: every OTHER entry under `WORKSPACES_ROOT` (each tenant
- * workspace, plus infra siblings like `.cron` / `.orphaned-*` the agent has
- * no business reading) is denied, PLUS `/proc`. The agent's OWN workspace is
- * deliberately NOT in the deny set — so the SDK never `--tmpfs`-obscures it
- * and its `allowWrite --bind` keeps it read+write (see the module header for
- * why a broad `denyRead: ["/workspaces"]` cannot do this).
- *
- * Own-vs-sibling is decided on CANONICALIZED paths (`realpathSync`), never a
- * basename string, so a symlinked workspace cannot be misclassified as a
- * sibling (which would deny the agent its own repo) or vice-versa.
- *
- * FAIL-CLOSED (strand-over-leak): if the root cannot be enumerated, fall back
- * to the BROAD parent deny `[root, "/proc"]`. That makes the workspace
- * read-only (the agent strands) but CANNOT leak a sibling — the correct
- * security failure mode. A non-ENOENT error (permissions, I/O) is always
- * `degraded` + Sentry-mirrored. ENOENT is benign ONLY outside production
- * (local dev / CI / fresh provisioning — no mounted volume, no siblings to
- * leak); in PRODUCTION the volume is bind-mounted at boot, so ENOENT means it
- * VANISHED at runtime — a real fault that also flags `degraded` + pages,
- * instead of masking the strand as expected local-dev absence.
- */
-export function enumerateSiblingDenyPaths(workspacePath: string): {
-  denyRead: string[];
-  degraded: boolean;
-} {
-  const root = workspacesRoot();
-  const ownReal = safeRealpath(workspacePath);
-  try {
-    const siblings = readdirSync(root)
-      .map((name) => join(root, name))
-      .filter((p) => safeRealpath(p) !== ownReal);
-    return { denyRead: [...siblings, "/proc"], degraded: false };
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    // ENOENT is benign ONLY in dev/CI (no mounted volume). In production the
-    // volume is bind-mounted at boot, so ENOENT means it vanished at runtime —
-    // a real fault. Any other error is always a real fault. Both fail closed to
-    // the broad parent deny + `degraded` + Sentry mirror
-    // (cq-silent-fallback-must-mirror-to-sentry); strand-over-leak. `workspace`
-    // (the own UUID) is the join key back to the #5733 strand telemetry so an
-    // operator can attribute the degraded event to the session it stranded.
-    const benignEnoent =
-      code === "ENOENT" && process.env.NODE_ENV !== "production";
-    if (!benignEnoent) {
-      reportSilentFallback(err, {
-        feature: "agent-sandbox",
-        op: "enumerateSiblingDenyPaths",
-        extra: { workspacesRoot: root, workspace: basename(ownReal) },
-      });
-      return { denyRead: [root, "/proc"], degraded: true };
-    }
-    // Benign ENOENT (dev/CI): no siblings exist; deny the root broadly as the
-    // safe default. Not `degraded` — it is an expected env.
-    return { denyRead: [root, "/proc"], degraded: false };
-  }
 }
 
 // SDK's `SandboxSettings` is a Zod-inferred type with `[x: string]: unknown`
@@ -158,6 +93,9 @@ export type AgentSandboxConfig = {
   filesystem: {
     allowWrite: string[];
     denyRead: string[];
+    /** ADR-113 support persona only: ro re-bind of `workspacePath` inside the
+     * denied parent (the vendor's allowWithinDeny restore). */
+    allowRead?: string[];
   };
   // W1 (#9601, ADR-272): unset the owner's Anthropic credential for every
   // sandboxed Bash command. Typed (not left to the index signature) so a test
@@ -304,7 +242,7 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
 /**
  * Build the canonical sandbox options block. Drift here propagates to BOTH
  * the legacy domain-leader runner AND the cc-soleur-go factory (they both
- * call this helper), so the per-sibling deny stays byte-identical across
+ * call this helper), so the constant tenant deny stays byte-identical across
  * paths automatically.
  *
  * `opts.allowGithubEgress` widens ONLY `network.allowedDomains` to the
@@ -317,19 +255,20 @@ export function buildAgentSandboxConfig(
   workspacePath: string,
   opts?: { allowGithubEgress?: boolean; readOnly?: boolean; denyReadExtra?: readonly string[] },
 ): AgentSandboxConfig {
-  const { denyRead: siblingDeny, degraded } = enumerateSiblingDenyPaths(workspacePath);
   // ADR-113 — support-persona containment: additional absolute paths to obscure
   // (`--tmpfs`) from the read-only support session. The support agent runs under
-  // `--ro-bind / /` (whole FS readable) with Bash (kb-search greps), so the
+  // `--ro-bind / /` (whole FS readable) with Bash retained as the
+  // deny+escalate tripwire (kb-search itself is Read/Grep/Glob-only, #9559), so the
   // internal `knowledge-base/` (confidential operator post-mortems/roadmap/ADRs)
   // is denied here at the tool/root level — NOT by prompt. Deduped with the
-  // sibling deny set. NOTE: this is defense-in-depth; the LIVE `support-live` flag
+  // constant deny set. NOTE: this is defense-in-depth; the LIVE `support-live` flag
   // stays OFF until a deployed-env QA confirms no internal-KB content leaks.
   //
   // #8623: the C4 re-render stages OTHER tenants' committed `.c4` sources
   // under this server-private root for the length of a render. Deny it so no
-  // agent can read a concurrent render's stage. The SDK SKIPS a deny path that
-  // does not exist yet ("Skipping non-existent read deny path"), so create it
+  // agent can read a concurrent render's stage. The SDK SKIPS a deny landing
+  // that does not exist or cannot be mounted ("mounts nothing this wrap can
+  // place (absent, or uninspectable, …)" in the vendored builder), so create it
   // first (0700, best-effort) — otherwise the first render after boot would
   // create an undenied root under a sandbox that started earlier.
   const c4StagingRoot = c4RenderStagingRoot();
@@ -346,27 +285,69 @@ export function buildAgentSandboxConfig(
       message: "agent-sandbox: C4 staging root could not be created; its read-deny may not apply",
     });
   }
+  // #5862 (ADR-075 exit criterion): the CONSTANT parent deny. The vendored
+  // CLI 2.1.284 builder emits `--tmpfs <landing>` per denyRead entry, then
+  // re-binds each covered `allowWrite`/`allowRead` path after the covering
+  // landing — so masking the whole workspaces root also masks every sibling
+  // created after the namespace build (the enumeration-era TOCTOU). A deny
+  // landing that does not exist mounts nothing and is skipped by the builder,
+  // which reproduces the old benign-ENOENT posture on dev hosts with no
+  // /workspaces volume — but in PRODUCTION the volume is bind-mounted at
+  // boot, so a missing root is a vanished-mount fault worth paging on
+  // (the signal the deleted `degraded` arm carried; restored here as a
+  // cheap existence bit, not enumeration).
+  const wsRoot = workspacesRoot();
+  const wsRootExists = existsSync(wsRoot);
+  if (process.env.NODE_ENV === "production" && !wsRootExists) {
+    reportSilentFallback(new Error(`WORKSPACES_ROOT missing: ${wsRoot}`), {
+      feature: "agent-sandbox",
+      op: "tenant-deny",
+      extra: { workspacesRoot: wsRoot, workspace: basename(workspacePath) },
+    });
+  }
+  // Guard the catastrophic misconfiguration: a workspacePath that IS or
+  // CONTAINS the deny root would make the vendor's restore re-bind the whole
+  // root after the tmpfs — unmasking every sibling rw. Impossible under the
+  // uuid layout (join(root, uuid)); fail loud if it ever drifts.
+  const wsNorm = workspacePath.replace(/\/+$/, "");
+  const rootNorm = wsRoot.replace(/\/+$/, "");
+  if (wsNorm === rootNorm || rootNorm.startsWith(`${wsNorm}/`)) {
+    throw new Error(
+      `buildAgentSandboxConfig: workspacePath ${workspacePath} equals/contains deny root ${wsRoot} — refusing to build a sandbox that would unmask every tenant`,
+    );
+  }
+  // denyReadExtra contract: absolute paths to existing DIRECTORIES (a file →
+  // `--tmpfs` → spawn failure). An extra under the own workspace only masks
+  // if the vendor emits it after the ws restore — do not rely on that order.
+  //
+  // KNOWN TAIL CAVEAT (pre-existing, not this change): the vendored builder's
+  // `enableWeakerNestedSandbox` handling re-binds the real `--bind /proc /proc`
+  // at the END of the argv — shadowing this `/proc` tmpfs deny. The `/proc`
+  // entry stays as intent + future-proofing, but do not treat it as realized
+  // isolation today; see the follow-up issue on the fixture's trailing bind.
   const denyRead = Array.from(
-    new Set([...siblingDeny, c4StagingRoot, ...(opts?.denyReadExtra ?? [])]),
+    new Set([wsRoot, c4StagingRoot, "/proc", ...(opts?.denyReadExtra ?? [])]),
   );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
-  // agent sandbox). `degraded: true` is the fail-closed broad-deny path a
-  // reviewer/operator can alert on; `deniedCount` makes the deny-set size
-  // queryable per session.
+  // agent sandbox). `deniedCount` is now constant (3 + extras) per session —
+  // a drift in it is a config diff, not live directory state.
   log.info(
     {
       feature: "agent-sandbox",
-      op: "sibling-deny",
+      op: "tenant-deny",
       workspacesRoot: workspacesRoot(),
       // Own workspace UUID — the join key so this isolation decision is
       // attributable to a session (every sibling shares `workspacesRoot`).
       workspace: basename(workspacePath),
       deniedCount: denyRead.length,
-      degraded,
       c4StagingRootReady,
+      // Detection surface for the vanished-volume fault (replaces the deleted
+      // enumeration arm's `degraded`): emitted per dispatch, always.
+      workspacesRootExists: wsRootExists,
+      workspaceUnderDenyRoot: wsNorm.startsWith(`${rootNorm}/`),
     },
-    "agent-sandbox: computed per-sibling denyRead",
+    "agent-sandbox: computed tenant denyRead",
   );
   return {
     enabled: true,
@@ -389,9 +370,14 @@ export function buildAgentSandboxConfig(
       allowManagedDomainsOnly: true,
     },
     filesystem: {
-      // Full read+write of the agent's OWN workspace: it is NOT in denyRead,
-      // so the base `--ro-bind / /` grants read and this `--bind` grants
-      // write — no read-only `--ro-bind` shadow (the PR #5848 regression).
+      // Full read+write of the agent's OWN workspace: it sits UNDER the
+      // denied parent root, but the vendored builder (CLI 2.1.284) re-binds
+      // every covered `allowWrite` path rw AFTER the `--tmpfs` landing
+      // (deny-then-restore — see module header), so the bind survives the
+      // mask. PR #5848's read-only regression cannot recur under this
+      // ordering, and the committed-fixture ordering pin
+      // (test/sandbox-canary.test.ts) reddens on any SDK drift that
+      // re-inverts it.
       //
       // feat-wire-concierge-support-chat (ADR-113): `readOnly` (support persona)
       // sets `allowWrite: []` — the whole session is read-only. This is
@@ -401,9 +387,14 @@ export function buildAgentSandboxConfig(
       // read-only invariant is enforced HERE (a sandbox-write fact), not merely by
       // the cwd or the disallowedTools list.
       allowWrite: opts?.readOnly ? [] : [workspacePath],
-      // Per-sibling deny (NOT the broad "/workspaces" parent) so the own
-      // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,
+      // readOnly arm: if `workspacePath` ever lands under the denied parent
+      // (a root-resident read-only session), `allowRead` → the vendor's
+      // `allowWithinDeny` re-binds it `--ro-bind` after the tmpfs. Today's
+      // support persona sets workspacePath=pluginPath (outside the root), so
+      // the arm is inert — kept as the forward-declared contract so a future
+      // root-resident read-only caller doesn't silently blank.
+      ...(opts?.readOnly ? { allowRead: [workspacePath] } : {}),
     },
     // W1 (#9601, ADR-272): a prompt-injected session cannot read the owner's
     // Anthropic key out of its shell. `deny` unsets the variable for

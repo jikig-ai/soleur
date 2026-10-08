@@ -11,6 +11,9 @@
 #
 #   armed       set flipping -> STOP inngest-server -> Redis FLUSHALL -> assert
 #               DBSIZE==0 -> set flushed -> START inngest-server -> set done  (P1-4 order)
+#   reflush,run=,by=  the AUTHORIZED second flush (#7777): append a `cleared_at`
+#               record (run/actor/boot_id evidence) to the append-only latch LEDGER,
+#               then take the same armed path. Bare/malformed evidence refuses.
 #   flipping    PRE-flush resume (crash before the flush completed; server still dark):
 #               re-run the FULL STOP -> FLUSHALL -> assert -> flushed -> start -> done.
 #               SAFE to re-FLUSHALL — nothing is on prod yet (#5450).
@@ -45,6 +48,14 @@
 #     marker rides the on-host Vector->Better Stack journald shipper (commit c890464ce),
 #     the no-SSH state channel the operator reads; and writes a host-path state slot for
 #     cat-inngest-cutover-state.sh (on-host debug aid ONLY, never the operator gate).
+#     ONE EXCEPTION (#7696): the terminal noop-* arms fire on every 30s timer tick for
+#     the host's whole life — unthrottled that was ~2,040 rows/day of "nothing happened".
+#     noop-* rows are throttled to once per NOOP_THROTTLE_S (300s default) via an mtime
+#     stamp, mirroring the sibling FSM's emit_noop in inngest-luks-cutover.sh. The cadence
+#     stays strictly under 15 minutes because those rows ARE the liveness witness G3.7's H
+#     signal counts (scripts/cutover-inngest.sh, FLIP_LIVENESS_SINCE): a silent window is
+#     `silent` and REFUSES the arm, so the heartbeat must never drop to zero — slower, not
+#     silent.
 #   * Purity (P2-sec-a / AC-NOBODY): log lines + the state slot carry state + counts
 #     ONLY — never the Redis password, the Postgres URI, or any connection string.
 #
@@ -55,15 +66,29 @@
 # path). Real sources: the env-delivered flag, `systemctl`, `redis-cli`, `doppler`.
 #
 # EVERY ONE OF THOSE IS INERT UNLESS THE SCRIPT IS INVOKED WITH `--fixture-seams` (#7761). The
-# gate below unsets all FIFTEEN seam names — the seven listed above plus CUTOVER_CURL_CMD,
-# CUTOVER_DONE_OWNER_MARKER, CUTOVER_GQL_URL, CUTOVER_HEALTH_URL, CUTOVER_VERIFY_INTERVAL_S,
-# CUTOVER_VERIFY_WINDOW_S, INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT — when the flag
+# gate below unsets all SEVENTEEN seam names — the seven listed above plus CUTOVER_BOOT_ID,
+# CUTOVER_CURL_CMD, CUTOVER_DONE_OWNER_MARKER, CUTOVER_GQL_URL, CUTOVER_HEALTH_URL,
+# CUTOVER_NOOP_THROTTLE_S (#7696), CUTOVER_VERIFY_INTERVAL_S, CUTOVER_VERIFY_WINDOW_S,
+# INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT — when the flag
 # is absent, which is how production always runs. This list is prose and the gate's list is the
 # contract: the suite derives the seam set from this file by shape and asserts it equals the
 # gate's, so if the two disagree the gate wins and the suite reds.
 # -E (errtrace): the ERR trap in run_flip must be inherited by the shared flip functions
 # so an unhandled failure inside them still fails LOUD (marker + aborted), never silent.
 set -Eeuo pipefail
+
+# (#7797) Refuse to run under shell tracing while the live credential is set: `set -x`
+# echoes commands AFTER expansion, so a bound password reaches the transcript before it
+# reaches any command. `case "$-" in *x*)` tests whether tracing is ON rather than
+# enumerating the ways to turn it on, two of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${INNGEST_REDIS_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 readonly LOG_TAG="inngest-cutover-flip"
 # DELIVERY DISCRIMINATOR (#7761). Stamped into every emit_state row so the post-replace
@@ -108,7 +133,7 @@ readonly SERVER_UNIT="inngest-server.service"
 # short-circuit, and a `|| true` on the logger call.
 if [[ "${1:-}" != "--fixture-seams" ]]; then
   _seams_present=0
-  # THE SEAM LIST — fifteen names, and its completeness is not trusted to review.
+  # THE SEAM LIST — sixteen names, and its completeness is not trusted to review.
   # inngest-cutover-flip.test.sh derives the seam set from THIS FILE by shape and asserts it equals
   # this list plus INNGEST_CUTOVER_FLIP, so adding a seam read without adding it here reds the
   # suite. Keep one name per line and keep `do` on its own line — the tripwire extracts this list
@@ -123,6 +148,7 @@ if [[ "${1:-}" != "--fixture-seams" ]]; then
   # (the real Redis credential — unsetting it would send `redis-cli -a ""` at a password-protected
   # Redis). Both are real inputs delivered by --only-secrets, not seams.
   for _seam in \
+    CUTOVER_BOOT_ID \
     CUTOVER_CURL_CMD \
     CUTOVER_DONE_OWNER_MARKER \
     CUTOVER_FLAG_SET_CMD \
@@ -130,6 +156,7 @@ if [[ "${1:-}" != "--fixture-seams" ]]; then
     CUTOVER_GQL_URL \
     CUTOVER_HEALTH_URL \
     CUTOVER_LOGGER_CMD \
+    CUTOVER_NOOP_THROTTLE_S \
     CUTOVER_REDIS_CLI_CMD \
     CUTOVER_REDIS_DBSIZE \
     CUTOVER_SYSTEMCTL_CMD \
@@ -162,6 +189,45 @@ fi
 
 STATE_FILE="${INNGEST_CUTOVER_STATE:-/var/lock/inngest-cutover-flip.state}"
 START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+
+# --- #7696: the terminal no-op heartbeat is THROTTLED, transitions are not -------------
+# The noop-* arms run on every 30s timer fire for the host's whole life — at that cadence
+# `emit_state` was shipping ~2,040 Better Stack rows/day of "nothing happened" on a channel
+# vector.toml defends as quota-constrained. The sibling LUKS FSM (inngest-luks-cutover.sh
+# emit_noop) solved the same defect with a 300s mtime stamp; this mirrors it.
+#
+# WHY 300s AND NOT LONGER — the noop row is the liveness WITNESS, not noise to zero out:
+# scripts/cutover-inngest.sh's G3.7 gates (op=arm, op=resume, op=reflush) count
+# inngest-cutover-flip rows inside FLIP_LIVENESS_SINCE="15m" and read an empty window as
+# `silent` — an unconditional REFUSAL. An absent host row and a throttled-to-death host
+# are indistinguishable to that gate, so the heartbeat must stay strictly under 15
+# minutes. At 300s a healthy terminal host still lands ~3 rows per window (~288/day,
+# ~7x quieter) and any future slowing requires touching that literal in the same change.
+#
+# WHY THE STAMP SITS NEXT TO THE STATE SLOT. It is DERIVED from the already-seamed
+# INNGEST_CUTOVER_STATE rather than being its own seam, so the test workdir gets it for
+# free and prod lands it in /var/lock — a tmpfs that is both in the unit's
+# ReadWritePaths and self-clearing on boot, which is exactly the desired semantics: the
+# first post-boot fire always emits.
+NOOP_EMIT_STAMP="${STATE_FILE}.noop-emitted"
+NOOP_THROTTLE_S="${CUTOVER_NOOP_THROTTLE_S:-300}"
+# A garbage interval must not silently disable the throttle (a hole a mis-set seam would
+# open) nor crash the emit path under `set -u` arithmetic — fail CLOSED to the default.
+case "$NOOP_THROTTLE_S" in ''|*[!0-9]*) NOOP_THROTTLE_S=300 ;; esac
+
+# noop_emit_due — the throttle predicate. Fails toward EMITTING, never silence: an
+# absent/unreadable stamp or an unmeasurable clock answers "emit" so a broken stamp can
+# only ever restore the old noisy behaviour, never manufacture a `silent` reading for
+# the liveness gate.
+noop_emit_due() {
+  local now mtime
+  now="$(date +%s 2>/dev/null || true)"
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  [[ -f "$NOOP_EMIT_STAMP" ]] || return 0
+  mtime="$(stat -c %Y "$NOOP_EMIT_STAMP" 2>/dev/null || true)"
+  case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
+  (( now - mtime >= NOOP_THROTTLE_S ))
+}
 
 # --- Flag read: fixture seam CUTOVER_FLIP_FLAG else the env-delivered Doppler value.
 # `${VAR+x}` distinguishes set-but-empty (an explicit "unset" test case) from absent.
@@ -254,7 +320,7 @@ CUTOVER_VERIFY_INTERVAL_S="${CUTOVER_VERIFY_INTERVAL_S:-3}"
 # not exist. Sourcing a file that is not there would make the `done` gate fail-closed on an
 # asset-delivery problem — i.e. wedge a cutover for a reason unrelated to whether the host serves.
 # shellcheck disable=SC2016  # GraphQL query, not a shell expansion
-readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers { type value } } }'
 
 # --- curl: fixture seam CUTOVER_CURL_CMD else the real binary. Seamed at the COMMAND, not at
 # the verdict, so the bounded-window logic below stays under test rather than stubbed away.
@@ -451,8 +517,23 @@ emit_state() {
     --arg guard "$GUARD_REV" \
     '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts, guard:$guard}')"
   # Debug-aid state slot (cat-inngest-cutover-state.sh) — best-effort, never fatal.
+  # Written on EVERY fire including throttled no-ops: the slot answers "what does the
+  # FSM see NOW" and costs nothing off-box.
   printf '%s\n' "$json" > "$STATE_FILE" 2>/dev/null || true
-  # No-SSH state channel: journald -> Vector -> Better Stack (P0-2).
+  # No-SSH state channel: journald -> Vector -> Better Stack (P0-2). Terminal noop-*
+  # rows are throttled (#7696): suppress only the logger row, and only while the stamp
+  # is fresh. The stamp is touched on emission (not on suppression), and a write failure
+  # simply re-emits next fire — the degrade direction is toward audibility.
+  # The throttle lives INSIDE emit_state rather than in a LUKS-style emit_noop wrapper
+  # because cutover-inngest-workflow.test.sh derives the emitter's reason set from
+  # emit_state call sites by shape — the noop reasons must keep the emit_state call
+  # form for the DRIFT_GREPS/probe parity extraction to keep seeing them.
+  if [[ "$reason" == noop-* ]]; then
+    noop_emit_due || return 0
+    "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$json" 2>/dev/null || true
+    : > "$NOOP_EMIT_STAMP" 2>/dev/null || true
+    return 0
+  fi
   "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$json" 2>/dev/null || true
 }
 
@@ -471,13 +552,17 @@ emit_state() {
 # first draft of this plan proposed — would have made it strictly WORSE by PERSISTING the erasure,
 # converting a latch that fails safe by amnesia into one that fails unsafe by false memory.
 #
-# The predicate is therefore MONOTONIC — "has a FLUSHALL EVER been performed?" — and answered by
-# a DISJUNCTION over two independent records:
+# The predicate is therefore MONOTONIC — "has a FLUSHALL EVER been performed without a later
+# authorization?" — and answered by a DISJUNCTION over two independent records:
 #
-#   (a) the durable latch file. Existence-based and never rewritten, so no branch can erase it,
-#       and it lives on /mnt/data, the volume that SURVIVES a host replace. Survival is the whole
-#       point: the replace is the operation that disarms the old latch, which is why Phase 3 has
-#       to land before any replace is dispatched.
+#   (a) the durable latch file — an append-only LEDGER (#7777). Records are appended with `>>`
+#       and never edited or truncated, so no branch can erase it, and it lives on /mnt/data,
+#       the volume that SURVIVES a host replace. Survival is the whole point: the replace is
+#       the operation that disarms the old latch, which is why Phase 3 has to land before any
+#       replace is dispatched. Each record is one line: `flushed_at=…` (a FLUSHALL happened)
+#       or `cleared_at=… run=… by=… boot_id=…` (a reviewer-gated op=reflush authorized a
+#       second flush). The NEWEST record decides — a `cleared_at` supersedes the `flushed_at`
+#       it follows without erasing it, which is the same monotonicity one level up.
 #   (b) the legacy state slot recording `done`. The COMPATIBILITY arm: a host that already
 #       completed a flip before this change ships has no latch file, only a slot. Dropping this
 #       arm would silently disarm the guard on exactly those hosts until their next flip. It is
@@ -541,7 +626,21 @@ flush_already_performed() {
   # lives at the top of run_preflush_flip instead, before anything destructive, where it has its
   # own `latch-unrecordable` reason. That placement covers the same hazard (a FLUSHALL authorised
   # by a latch we cannot read) with one unambiguous signal.
-  [[ -e "$LATCH_FILE" ]] && return 0
+  if [[ -e "$LATCH_FILE" ]]; then
+    # LEDGER SEMANTICS (#7777): the latch is an append-only ledger of flush + clear RECORDS, not
+    # an existence flag. The NEWEST non-empty line decides — `flushed_at=` means a FLUSHALL was
+    # performed and never superseded; a newer `cleared_at=` means an authorized re-flush was
+    # dispatched after it (the `reflush` arm appends the authorization BEFORE re-entering the
+    # flush path). The same monotonicity one level up: a record can only ever be superseded by a
+    # LATER record, never edited or erased. ANY other tail — malformed, truncated, a record type
+    # this build does not know — is not proof the latch is clear, so it fails CLOSED: latched.
+    local newest
+    newest="$(awk 'NF { line=$0 } END { print line }' "$LATCH_FILE" 2>/dev/null || true)"
+    case "$newest" in
+      cleared_at=*) return 1 ;;   # the newest record is a later authorization — flush permitted
+      *)            return 0 ;;   # flushed_at=, malformed, empty: latched, fail closed
+    esac
+  fi
   [[ -f "$STATE_FILE" ]] || return 1
   local recorded
   recorded="$(jq -r '.flag // ""' "$STATE_FILE" 2>/dev/null || printf '')"
@@ -583,6 +682,61 @@ record_flush_latch() {
         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
         "$(hostname 2>/dev/null || echo unknown)" "$dbsize" >> "$LATCH_FILE" 2>/dev/null; then
     emit_state 1 "$dbsize" "latch-unrecordable" aborted
+    logger -t "$LOG_TAG" "latch-unrecordable detail=write-failed path=${LATCH_FILE}" 2>/dev/null || true
+    flag_set aborted
+    exit 1
+  fi
+}
+
+# --- Record the AUTHORIZED CLEAR (#7777): the ledger's second record type. -------------------
+#
+# THE MODEL. The latch is an append-only LEDGER, never a flag file. `cleared_at` is appended —
+# the prior `flushed_at` stays in place forever — and `flush_already_performed` reads the
+# NEWEST record, so a clear supersedes the flush it follows without erasing it. That is the
+# only sense in which the latch can be "cleared": there is no delete, no truncate, no rewrite.
+#
+# THE EVIDENCE IS THE AUTHORIZATION. `run`/`by` arrive in the flag value from op=reflush —
+# the reviewer-gated workflow dispatch that is the ONLY no-SSH write path — so the record
+# answers who authorized the second FLUSHALL and which run carried it. `cleared_at` and
+# `boot_id` are stamped HERE, on the host, so a clear can never be attributed to a boot that
+# did not record it.
+#
+# SAME WRITE CONTRACT AS record_flush_latch — mount gate, mkdir, `>>`, FATAL on failure —
+# because a clear record that lands on the ephemeral root disk is precisely the fake-durable
+# failure the mount gate exists to prevent: it would authorize a flush on this host and then
+# vanish on the replace, leaving the NEXT host's ledger showing only an old `flushed_at` —
+# correct refusal, but with the authorization silently lost from the audit trail.
+#
+# IDEMPOTENT ON THE SAME RUN: a crash between this append and flag_set(flipping) re-fires
+# `reflush` on the next poll, and the same authorization must not be recorded twice.
+record_latch_clear() {
+  local run="$1"
+  local by="$2"
+  local dir
+  local newest
+  local boot_id
+  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! is_real_mount "$LATCH_REQUIRE_MOUNT"; then
+    emit_state 1 "" "latch-unrecordable" aborted
+    logger -t "$LOG_TAG" "latch-unrecordable detail=not-a-mountpoint path=${LATCH_REQUIRE_MOUNT} — a clear record written here would sit on the ephemeral root disk and NOT survive a host replace" 2>/dev/null || true
+    flag_set aborted
+    exit 1
+  fi
+  dir="$(dirname "$LATCH_FILE")"
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    emit_state 1 "" "latch-unrecordable" aborted
+    logger -t "$LOG_TAG" "latch-unrecordable detail=mkdir-failed path=${dir}" 2>/dev/null || true
+    flag_set aborted
+    exit 1
+  fi
+  newest="$(awk 'NF { line=$0 } END { print line }' "$LATCH_FILE" 2>/dev/null || true)"
+  case "$newest" in
+    cleared_at=*" run=${run} "*|cleared_at=*" run=${run}") return 0 ;;
+  esac
+  boot_id="${CUTOVER_BOOT_ID:-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)}"
+  if ! printf 'cleared_at=%s run=%s by=%s boot_id=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
+        "$run" "$by" "$boot_id" >> "$LATCH_FILE" 2>/dev/null; then
+    emit_state 1 "" "latch-unrecordable" aborted
     logger -t "$LOG_TAG" "latch-unrecordable detail=write-failed path=${LATCH_FILE}" 2>/dev/null || true
     flag_set aborted
     exit 1
@@ -677,6 +831,51 @@ run_flip() {
       fi
       # Transition BEFORE touching Redis so a mid-flip reboot resumes via `flipping` and
       # RE-RUNS the full flush (server still dark — safe), never skipping it (P1-5 / #5450).
+      flag_set flipping
+      run_preflush_flip
+      ;;
+    reflush|reflush,*)
+      # #7777 — the AUTHORIZED second flush. The ONLY arm that appends a `cleared_at` record to
+      # the latch ledger, and it requires its authorization evidence to ride the flag value as
+      # `reflush,run=<gha-run-id>,by=<actor>` — written by op=reflush, a prod-write behind the
+      # same reviewer-gated environment as `armed`. A bare or malformed `reflush` carries no
+      # authorization and is refused loudly: nothing is appended, nothing is flushed. This is
+      # deliberately NOT a general reset — the clear is inseparable from the re-flush it
+      # authorizes, and the ledger keeps both records forever.
+      # One `local x=` per line: the command-position sweep in inngest-cutover-flip.test.sh
+      # derives its in-file-assigned suppressor from `(local )?NAME=` at line start, so a
+      # multi-assignment `local a= b=` leaves every name after the first looking UNGOVERNED.
+      local rfr_run=""
+      local rfr_by=""
+      local rfr_ok=1
+      local kv
+      case "$flag" in
+        reflush) rfr_ok=0 ;;
+        reflush,*)
+          local -a rfr_parts=()
+          IFS=',' read -ra rfr_parts <<< "${flag#reflush,}"
+          for kv in "${rfr_parts[@]}"; do
+            case "$kv" in
+              run=*) [[ "$kv" =~ ^run=[0-9]+$ ]]            && rfr_run="${kv#run=}" ;;
+              by=*)  [[ "$kv" =~ ^by=[A-Za-z0-9._-]+$ ]]    && rfr_by="${kv#by=}" ;;
+            esac
+          done
+          [[ -n "$rfr_run" && -n "$rfr_by" ]] || rfr_ok=0
+          ;;
+      esac
+      if [[ "$rfr_ok" -ne 1 ]]; then
+        "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" \
+          "SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED reason=reflush-evidence-invalid flag=${flag} — an authorized clear requires run=<gha-run-id> + by=<actor> in the flag value (op=reflush writes both); a bare or malformed reflush carries no authorization and is refused. Nothing was appended to the latch and nothing was flushed. #7777" 2>/dev/null || true
+        emit_state 1 "" "reflush-evidence-invalid" aborted
+        flag_set aborted
+        exit 1
+      fi
+      # Record the authorization FIRST — while the flag still reads `reflush` — so a crash
+      # re-enters this arm (same-run skip in record_latch_clear keeps it idempotent) rather
+      # than stranding the ledger half-transitioned. The clear supersedes the last
+      # `flushed_at`; the shared PRE-flush path appends the next one and re-engages the latch.
+      record_latch_clear "$rfr_run" "$rfr_by"
+      emit_state 0 "" "latch-cleared" "reflush"
       flag_set flipping
       run_preflush_flip
       ;;

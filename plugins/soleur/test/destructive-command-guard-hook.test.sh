@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2015,SC2034,SC1091  # `A && B || C` is the row idiom; the row table is a QUOTED heredoc of shell text and the python oracle is single-quoted on purpose; a few globals are read by sourced-in-place helpers
 # Guard 1 of the W2 plan (knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
-# the destructive-command PreToolUse hook (plugins/soleur/hooks/destructive-command-guard.sh, ADR-274).
+# the destructive-command PreToolUse hook (plugins/soleur/hooks/destructive-command-guard.sh, ADR-277).
 #
 # PROPERTY. A Bash tool call whose command, after lexing and wrapper unwrapping, runs a command in the
 # D1 set receives `ask` or `deny`, never an implicit allow, in every spelling bash reads as that command
@@ -57,7 +57,7 @@
 #
 # DOCUMENTED RESIDUALS the rows deliberately do not depend on: an identical `bash -c`/`eval` string is
 # lexed once, so no must-ASK row relies on a second inner occurrence under a different `cd`; a raw-scan
-# miss with jq missing is an allow (stated in the hook header and ADR-274).
+# miss with jq missing is an allow (stated in the hook header and ADR-277).
 #
 # Anti-vacuity: `CHECKED` moves at the call site (never in pass/fail), pass + fail must equal it, an
 # instrument self-test drives both helpers, and the row floor is a literal directly above its `if`,
@@ -1810,7 +1810,7 @@ L @@ member: popd; rm -rf build @@ ask @@ - @@ popd; rm -rf build
 X @@ member: a bare cd goes to home, then rm -rf ./* @@ deny @@ - @@ cd && rm -rf ./*
 X @@ member: cd -P ~ then rm -rf ./* (the -P flag is skipped) @@ deny @@ - @@ cd -P ~ && rm -rf ./*
 X @@ member: cd -L ~ then rm -rf ./* @@ deny @@ - @@ cd -L ~ && rm -rf ./*
-# ---- stated non-coverage (NOT DECIDED in the header and ADR-274): each is pinned so a change that starts to decide it is a visible choice
+# ---- stated non-coverage (NOT DECIDED in the header and ADR-277): each is pinned so a change that starts to decide it is a visible choice
 X @@ NOT DECIDED: terragrunt destroy @@ none @@ - @@ terragrunt destroy
 X @@ NOT DECIDED: pulumi destroy @@ none @@ - @@ pulumi destroy
 X @@ NOT DECIDED: xargs rm -rf ~ (xargs is not a wrapper) @@ none @@ - @@ xargs rm -rf ~

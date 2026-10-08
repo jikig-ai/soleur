@@ -185,6 +185,78 @@ export interface SpawnSandboxBOpts extends SpawnBwrapOpts {
   readyTimeoutMs?: number;
 }
 
+export interface SandboxProcessHandle {
+  child: ChildProcess;
+  pid: number;
+  /** Buffered child stdout/stderr, appended as chunks arrive. */
+  stdoutChunks: string[];
+  stderrChunks: string[];
+  kill: () => void;
+  waitExit: () => Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+}
+
+/**
+ * Spawn a long-running bwrap child in `root` running an arbitrary `script`,
+ * capturing its stdio. The hook point for mid-session probes (#5862 TOCTOU
+ * regression): the script can wait on a flag file inside the bind-mounted
+ * `root` while the HOST mutates sibling state, then re-probe the namespace.
+ * Caller must call `kill()` in afterEach.
+ */
+export function spawnSandboxed(
+  root: string,
+  script: string,
+  opts: SpawnBwrapOpts = {},
+): SandboxProcessHandle {
+  const args = buildBwrapArgs(root, script, opts);
+  const child = spawn("bwrap", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: opts.env ?? process.env,
+  });
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  child.stdout?.on("data", (c) => stdoutChunks.push(String(c)));
+  child.stderr?.on("data", (c) => stderrChunks.push(String(c)));
+  // Without a listener an async spawn failure (ENOENT/EACCES/EMFILE) crashes
+  // the vitest worker instead of failing the test; surface it on stderrChunks.
+  child.on("error", (err) => stderrChunks.push(`spawn error: ${err.message}`));
+  // Honor the documented timeoutMs contract (spawnSync enforces it for
+  // spawnBwrap; the async path arms its own SIGKILL deadline).
+  const killer = setTimeout(
+    () => child.kill("SIGKILL"),
+    opts.timeoutMs ?? 10_000,
+  );
+  killer.unref();
+
+  const waitExit = () =>
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+        clearTimeout(killer);
+        resolve({ code, signal });
+      };
+      if (child.exitCode !== null || child.signalCode !== null) {
+        finish(child.exitCode, child.signalCode);
+        return;
+      }
+      child.once("exit", (code, signal) => finish(code, signal));
+      child.once("error", () => finish(null, null));
+    });
+
+  return {
+    child,
+    pid: child.pid!,
+    stdoutChunks,
+    stderrChunks,
+    kill: () => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // no-op
+      }
+    },
+    waitExit,
+  };
+}
+
 /**
  * Launch a long-running bwrap child in `rootB`, used for FR7 /proc/<pid>/environ
  * cross-read attempts. The child runs `sleep infinity` (or caller-supplied command)
@@ -423,7 +495,7 @@ export function shellQuote(s: string): string {
  */
 export const FS_DENY_RE = /No such file|cannot open|Permission denied/;
 
-async function waitForFile(abs: string, timeoutMs: number): Promise<void> {
+export async function waitForFile(abs: string, timeoutMs: number): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (fs.existsSync(abs)) return;

@@ -39,6 +39,7 @@ const {
   mockResolveActiveWorkspacePath,
   mockResolveActiveWorkspace,
   mockGetCurrentRepoUrl,
+  mockReadCurrentRepoUrlResult,
   mockGetCurrentRepoStatus,
   mockGetInstallationAccount,
   mockFindRepoOwnerInstallationForUser,
@@ -70,6 +71,7 @@ const {
   mockResolveActiveWorkspacePath: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
+  mockReadCurrentRepoUrlResult: vi.fn(),
   mockGetCurrentRepoStatus: vi.fn(),
   mockGetInstallationAccount: vi.fn(),
   mockFindRepoOwnerInstallationForUser: vi.fn(),
@@ -193,6 +195,7 @@ vi.mock("@/server/workspace-resolver", async () => {
 
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
+  readCurrentRepoUrlResult: mockReadCurrentRepoUrlResult,
   getCurrentRepoStatus: mockGetCurrentRepoStatus,
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
@@ -445,6 +448,15 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // the self-heal branch is skipped for every pre-existing test. The
     // dedicated describe block overrides these per-test.
     mockGetCurrentRepoUrl.mockResolvedValue(null);
+    // #9556 — the SUT calls the degrade-aware variant; delegate to the same
+    // spy so the suite's existing url fixtures keep working (degraded=false;
+    // the degraded arm's ccDeps emission is pinned in T15b below).
+    mockReadCurrentRepoUrlResult.mockImplementation(
+      async (userId: string, workspaceId: string) => ({
+        url: await mockGetCurrentRepoUrl(userId, workspaceId),
+        degraded: false,
+      }),
+    );
     // #5394 — default repo readiness is `ready` so the gate never blocks the
     // pre-existing factory-shape tests; the dedicated gate describe overrides it.
     mockGetCurrentRepoStatus.mockResolvedValue({
@@ -718,6 +730,33 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(ctx.leaderId).toBe("cc_router");
     expect(ctx.userId).toBe("user-1");
     expect(ctx.conversationId).toBe("conv-1");
+  });
+
+  // -------------------------------------------------------------------------
+  // T15b: ccDeps.repoConnected — url/degraded tri-state (#9556)
+  // -------------------------------------------------------------------------
+  it('T15b: ccDeps.repoConnected is true/false on the honest arms and undefined on a degraded read', async () => {
+    const readDep = async () => {
+      (createCanUseTool as unknown as { mockClear(): void }).mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const ctx = (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+        deps: { repoConnected?: boolean };
+      };
+      return ctx.deps.repoConnected;
+    };
+    const REPO = "https://github.com/jikig-ai/soleur";
+
+    mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: REPO, degraded: false });
+    expect(await readDep()).toBe(true);
+
+    mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: null, degraded: false });
+    expect(await readDep()).toBe(false);
+
+    // A transient resolve failure is NOT "not connected": the dep must be
+    // undefined so the frame omits the field (legacy caveat arm) rather than
+    // rendering connect-repo copy to a connected user.
+    mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: null, degraded: true });
+    expect(await readDep()).toBeUndefined();
   });
 
   // -------------------------------------------------------------------------

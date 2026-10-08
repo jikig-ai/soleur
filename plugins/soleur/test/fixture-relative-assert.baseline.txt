@@ -176,9 +176,9 @@
 2	apps/web-platform/infra/inngest-config-bundle-pack.sh
 1	apps/web-platform/infra/inngest-config-bundle-pack.test.sh
 2	apps/web-platform/infra/inngest-consumer-probe.sh
-3	apps/web-platform/infra/inngest-cutover-flip.sh
+5	apps/web-platform/infra/inngest-cutover-flip.sh
 2	apps/web-platform/infra/inngest-cutover-flip.test.sh
-2	apps/web-platform/infra/inngest-cutover-latch.test.sh
+6	apps/web-platform/infra/inngest-cutover-latch.test.sh
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
@@ -265,6 +265,7 @@
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
 58	.github/scripts/test/fixtures-validate-infra-templates.sh
+2	.github/scripts/test/test-mint-inngest-bootstrap-tag.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh
@@ -289,7 +290,7 @@
 1	plugins/soleur/skills/community/scripts/github-community.sh
 2	plugins/soleur/skills/community/scripts/linkedin-setup.sh
 2	plugins/soleur/skills/community/scripts/x-setup.sh
-45	plugins/soleur/skills/community/test/github-community.test.sh
+102	plugins/soleur/skills/community/test/github-community.test.sh
 7	plugins/soleur/skills/compound/scripts/token-efficiency-report.sh
 23	plugins/soleur/skills/compound/test/phase-16.test.sh
 19	plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh

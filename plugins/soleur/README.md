@@ -544,7 +544,7 @@ notice on stderr, which a person may never see, and a command that scan misses r
 Headless and CI: under `claude -p` an ask blocks the call and the agent is told why (measured on Claude Code 2.1.291). There is
 no per-rule allow, and the kill switch is all-or-nothing and is read when the process starts. Soleur's own server-side scheduled
 agents that load this plugin outside the hosted session environment are covered by the guard too, and an ask there blocks the
-same way (ADR-274).
+same way (ADR-277).
 
 ## Known Issues
 

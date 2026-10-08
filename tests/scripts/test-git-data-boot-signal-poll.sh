@@ -42,6 +42,12 @@ pass=0; fail=0; FAILURES=()
 
 SANDBOX="$(mktemp -d -t gdbootpoll.XXXXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT
+# The library under test calls `mktemp -d -t gdboot.XXXXXXXX` and, being SOURCED, cannot own a trap
+# (ADR-129) — so every poll left one marker-bearing dir in the shared TMPDIR (44 of 71 marked dirs
+# on the measured operator host, #9677). Point TMPDIR at the sandbox this suite already removes on
+# exit: the library's scratch lands inside it, on success and on failure alike. The library itself
+# is unchanged (CI runs it on ephemeral runners, where the leak is one dir per call).
+export TMPDIR="$SANDBOX"
 
 # The doppler stand-in: records its argv, then runs whatever follows `--`.
 mkdir -p "$SANDBOX/bin"
@@ -571,6 +577,15 @@ sed -E 's/(^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete info "")/\1 "plaintext_
 g2_mut "S21h MUTATION a terminal emitted as a literal other than yes/no -> RED" \
   'grep -qF "plaintext_empty=maybe" "$G2_TMP/boot-third.sh"' "$G2_TMP/boot-third.sh" "$LIB" "$G2_CAP"
 
+# S22 the library's scratch dirs land under the suite sandbox, not the shared TMPDIR. Each poll above
+# makes exactly one `gdboot.*` dir, and this suite makes 44 polls (measured), so the count must be AT
+# LEAST that: a deleted `export TMPDIR="$SANDBOX"` leaves 0, and one moved below the first polls leaves
+# only the later ones (38 measured). Raise the floor when polls are added.
+_GD_POLLS_MIN=44
+_gd_n="$(find "$SANDBOX" -maxdepth 1 -type d -name 'gdboot.*' | grep -c . || true)"
+if (( _gd_n >= _GD_POLLS_MIN )); then _report "S22 every gdboot scratch dir ($_gd_n) lands under the suite sandbox, not the shared TMPDIR" ok
+else _report "S22 gdboot scratch dirs land under the suite sandbox" bad "only $_gd_n of >= $_GD_POLLS_MIN found under $SANDBOX"; fi
+
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))
 # RAISED 146 -> 184 (#8211), ITEMISED:
@@ -584,7 +599,8 @@ _total=$((pass + fail))
 #   ----
 #    38
 # RAISED 184 -> 185 (#5274): S20i, plaintext_journal=clean does not gate the poll.
-_EXACT=185
+# RAISED 185 -> 186 (#9677): S22, the library's gdboot scratch lands under the suite sandbox.
+_EXACT=186
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1
