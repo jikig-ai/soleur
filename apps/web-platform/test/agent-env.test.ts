@@ -53,6 +53,9 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   // Plugin PreToolUse hook `operator-stage-approval.sh` (ADR-264): no web approval adapter yet, so it
   // must be a no-op in the web runtime and a staged write fails closed at exit 75.
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
+  // Plugin PreToolUse hook `destructive-command-guard.sh` (ADR-093/ADR-277): switched off for hosted sessions by decision D8 (the hosted
+  // `ask` path is unmeasured; see the comment at the override in agent-env.ts for what actually gates hosted Bash).
+  SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 };
 
 describe("buildAgentEnv", () => {
@@ -129,6 +132,16 @@ describe("buildAgentEnv", () => {
     const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
     expect(apiKeyEnv.SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK).toBe("1");
     expect(oauthEnv.SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK).toBe("1");
+  });
+
+  test("the destructive-command guard opt-out is set for both schemes, ambient 0 loses, and only the exact value 1 is ever emitted (ADR-093/ADR-277)", () => {
+    // If buildAgentEnv stops setting this, or lets an ambient value win, the web Concierge would load the plugin's
+    // destructive-command guard, whose `ask` has no prompt to reach in a hosted session. Rides AGENT_ENV_OVERRIDES, not the allowlist.
+    vi.stubEnv("SOLEUR_DISABLE_DESTRUCTIVE_GUARD", "0");
+    const apiKeyEnv = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+    const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
+    expect(apiKeyEnv.SOLEUR_DISABLE_DESTRUCTIVE_GUARD).toBe("1");
+    expect(oauthEnv.SOLEUR_DISABLE_DESTRUCTIVE_GUARD).toBe("1");
   });
 
   test("omits allowlisted vars not present in process.env", () => {

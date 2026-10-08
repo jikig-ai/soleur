@@ -96,6 +96,12 @@ my @API_VAL = qw(--cache -F --field -H --header --hostname --input -q --jq
   -X --method -p --preview -f --raw-field -t --template);
 my %CREATE_VAL = map { $_ => 1 } @CREATE_VAL;
 my %API_VAL    = map { $_ => 1 } @API_VAL;
+# The three marker pairs below delimit the lexer code shared byte for byte with
+# plugins/soleur/hooks/lib/shell-argv.pl (the plugin's destructive-command guard lexer). Edit a
+# span in BOTH files; plugins/soleur/test/shell-argv-parity.test.sh fails on any divergence.
+# Span 1 also holds %FIND_ACT and $MAX_RECORDS, which only this file uses: they sit between
+# lexer constants and moving them would not be a comment-only change.
+# BEGIN SHARED-LEXER
 my %RUNNER     = map { $_ => 1 } qw(bash sh zsh dash ksh);
 my %FIND_ACT   = map { $_ => 1 } qw(-exec -execdir -ok -okdir);
 my %RESERVED   = map { $_ => 1 } qw(! { then do else elif if while until time);
@@ -103,6 +109,7 @@ my %RESERVED   = map { $_ => 1 } qw(! { then do else elif if while until time);
 my $MAX_DEPTH   = 16;
 my $MAX_RECORDS = 32;
 my $ALARM_S     = 2;
+# END SHARED-LEXER
 
 # The predicate (same spec as filingShape(); `\z` where JS uses `$`).
 my $ISSUES_COLLECTION_RE = qr~(?<![A-Za-z0-9_])(?:repos/[^/?#\s]+(?:/[^/?#\s]+)?|repositories/[0-9]+)/issues(?:/?(?:[?#].*)?|[\$})][^/]*)\z~;
@@ -111,6 +118,7 @@ my $PARTIAL_TAIL_RE = qr~(?:^|/)issues/?(?:[?#].*)?\z~;
 my $V = qr~(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]*\})?~;
 
 # ---- state --------------------------------------------------------------------
+# BEGIN SHARED-LEXER
 my ($BUDGET, $USED, $DEPTH, $INVIS, $RELEX) = (0, 0, 0, 0, 0);
 my (@RECORDS, @HD_LOG, @PATH, %SEEN_SUBST, %SEEN_STR, %VARS);
 my $TRACE = 0;
@@ -125,6 +133,7 @@ sub peek   { my ($sr, $n) = @_; substr($$sr, pos($$sr) // 0, $n // 1) }
 sub new_state { my $t = shift; my $st = { s => \$t, hq => [] }; pos(${ $st->{s} }) = 0; $st }
 sub basename_of { my $b = shift; $b =~ s{.*/}{}s; $b }
 sub new_word { { t => '', lit => '', x => 0, q => 0, hd => [] } }
+# END SHARED-LEXER
 
 # ---- predicate ----------------------------------------------------------------
 sub post_signal {
@@ -323,6 +332,7 @@ sub fields_of {
 }
 
 # ---- lexer --------------------------------------------------------------------
+# BEGIN SHARED-LEXER
 sub lex_string {
   my ($text, $ctx) = @_;
   return if $SEEN_STR{$text}++;          # memoized: a string is lexed once
@@ -724,6 +734,7 @@ sub runner_script {
   return undef unless $seen_c && $j < @$t;
   return $t->[$j];
 }
+# END SHARED-LEXER
 
 sub process_command {
   my ($words, $ctx, $cmd) = @_;

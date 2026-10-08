@@ -822,8 +822,9 @@ newest row (#8846; it filed false P1s #8833/#8834).
 
 `server_active=inactive` together with `cutover_flag=rollback` or `cutover_flag=rolled-back` means
 the host was **told to stop and obeyed**: `inngest-cutover-flip.sh`'s `rollback` arm calls
-`stop_server`, writes the terminal `rolled-back`, and then emits `noop-rolled-back` on every 30s
-tick thereafter. The host is not broken and there is nothing to repair on it.
+`stop_server`, writes the terminal `rolled-back`, and then emits `noop-rolled-back` — on every
+30s tick pre-#7696, throttled to once per 300s since. The host is not broken and there is nothing
+to repair on it.
 
 **`inactive` is not `failed`.** That distinction is the whole diagnosis. A crash or a restart loop
 leaves the unit `failed` and the `boot_id` churning; a deliberate stop leaves it `inactive` on an

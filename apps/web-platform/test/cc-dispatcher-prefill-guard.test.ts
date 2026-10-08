@@ -121,14 +121,23 @@ vi.mock("@/server/resolve-workspace-owner", () => ({
 }));
 
 // Session-start ensure-repo self-heal (cold-path deps) — default no-op.
-vi.mock("@/server/current-repo-url", () => ({
-  getCurrentRepoUrl: vi.fn(async () => null),
-  // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
-  getCurrentRepoStatus: vi.fn(async () => ({
-    repoStatus: "ready",
-    repoError: null,
-  })),
-}));
+vi.mock("@/server/current-repo-url", () => {
+  // One shared impl keeps the two views of the same read from diverging
+  // (#9556 — the SUT calls the degrade-aware variant).
+  const nullRepoUrl = async () => null;
+  return {
+    getCurrentRepoUrl: vi.fn(nullRepoUrl),
+    readCurrentRepoUrlResult: vi.fn(async () => ({
+      url: await nullRepoUrl(),
+      degraded: false,
+    })),
+    // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
+    getCurrentRepoStatus: vi.fn(async () => ({
+      repoStatus: "ready",
+      repoError: null,
+    })),
+  };
+});
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
   ensureWorkspaceDirExists: vi.fn(async () => undefined),

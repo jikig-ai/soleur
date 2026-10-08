@@ -178,7 +178,7 @@
 2	apps/web-platform/infra/inngest-config-bundle-pack.sh
 1	apps/web-platform/infra/inngest-config-bundle-pack.test.sh
 2	apps/web-platform/infra/inngest-consumer-probe.sh
-4	apps/web-platform/infra/inngest-cutover-flip.sh
+5	apps/web-platform/infra/inngest-cutover-flip.sh
 2	apps/web-platform/infra/inngest-cutover-flip.test.sh
 6	apps/web-platform/infra/inngest-cutover-latch.test.sh
 2	apps/web-platform/infra/inngest-doublefire-probe.sh

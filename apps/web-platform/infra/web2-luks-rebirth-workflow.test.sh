@@ -194,6 +194,7 @@ PY3
   cp "$REPO/tests/scripts/lib/web-host-rebirth-gate.sh" "$REPO/tests/scripts/lib/plan-gate-preamble.sh" "$sb/tests/scripts/lib/"
   cat > "$sb/tests/scripts/lib/stock-preflight-gate.sh" <<'SH'
 stock_preflight_gate() { [[ -z "${STOCK_FAIL:-}" ]]; }
+stock_recovery_report() { echo "stub recovery-report invoked: $*"; return 0; }
 SH
   cat > "$sb/bin/doppler" <<'SH'
 #!/usr/bin/env bash
@@ -336,9 +337,9 @@ mutate "the APPLY guard is removed from the delete step" "        id: delete
         if: \${{ env.APPLY == 'yes' }}
 " "        id: delete
 "
-mutate "the APPLY guard is removed from the reboot step" "      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+mutate "the APPLY guard is removed from the reboot step" "      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
         if: \${{ env.APPLY == 'yes' }}
-" "      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+" "      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
 "
 mutate "the APPLY guard is removed from the post plan" "      - name: Terraform plan \`post\` (graded; the raw volume is created, or on resume only missing siblings are added) + stock preflight
         if: \${{ env.APPLY == 'yes' }}

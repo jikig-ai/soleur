@@ -131,7 +131,7 @@ import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
-import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
+import { readCurrentRepoUrlResult, getCurrentRepoStatus } from "./current-repo-url";
 import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
@@ -232,8 +232,9 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
-// (the agent's OWN workspace — read+write in the sandbox because it is NOT in
-// the per-sibling `denyRead`; sibling workspaces stay hidden); the token rides
+// (the agent's OWN workspace — read+write in the sandbox: it sits under the
+// parent `denyRead` tmpfs but the vendored builder re-binds it rw after the
+// mask; sibling workspaces stay hidden); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
 import {
@@ -1841,7 +1842,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       bashAutonomous,
       autonomousAckAt,
       isWorkspaceOwner,
-      repoUrl,
+      repoUrlResult,
       repoReadinessRow,
       webEgressEntitled,
     ] =
@@ -1871,7 +1872,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
-        getCurrentRepoUrl(args.userId, activeWorkspaceId),
+        // The degrade-aware variant is used so the support deny→handoff flag
+        // can distinguish "no repo" from a transient resolve failure.
+        readCurrentRepoUrlResult(args.userId, activeWorkspaceId),
         // #5394 — active workspace repo readiness (repo_status from workspaces,
         // sanitized reason from users.repo_error). Joins the Promise.all so it
         // adds ZERO sequential await on the cold-start hot path. Fail-open
@@ -1885,6 +1888,12 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Keyed on the unified activeWorkspaceId (repoUrl precedent).
         resolveWebEgress(args.userId, activeWorkspaceId),
       ]);
+
+    // #9556 — every existing consumer below reads the bare url; the support
+    // deny→handoff flag additionally reads `repoUrlResult.degraded` so a
+    // transient resolve failure emits `undefined` (legacy caveat arm) rather
+    // than a false "not connected" verdict.
+    const repoUrl = repoUrlResult.url;
 
     // #5394 Layer A — the single Concierge dispatch readiness gate. Runs AFTER
     // repoUrl/repo_status resolve and BEFORE ensureWorkspaceDirExists /
@@ -2080,7 +2089,8 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
     // strands the agent's IN-BWRAP `git rev-parse` when its `gitdir:` target
     // resolves OUTSIDE the agent's own workspace (sibling workspaces are
-    // per-sibling `denyRead`-hidden; #5848 → per-sibling deny). The prompt-driven
+    // hidden by the parent-root `denyRead` tmpfs; #5848 regression → #5864 per-sibling deny,
+    // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
     // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
@@ -2654,9 +2664,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
   // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The only
   // sandbox read+writable dir is `workspacePath` — the agent's OWN workspace
-  // is NOT in the per-sibling `denyRead`, so the base `--ro-bind / /` grants
-  // read and `allowWrite:[workspacePath]` grants write (see
-  // `buildAgentSandboxConfig`; #5848 → per-sibling deny — the earlier
+  // sits under the parent `denyRead` tmpfs and the vendored builder's
+  // deny-then-restore ordering re-binds it rw (see `buildAgentSandboxConfig`;
+  // #5848 regression → #5864 per-sibling deny → #5862 constant parent deny — the earlier
   // `allowRead:[workspacePath]` re-bind was read-only and shadowed the write
   // bind, breaking writes) plus `createSandboxHook` realpath-containment;
   // `$HOME`/`/tmp` bwrap-visibility is unverifiable. We write the helper into
@@ -2730,6 +2740,21 @@ export const realSdkQueryFactory: QueryFactory = async (
     // auto-running.
     autonomousAckAt: autonomousAckAtMs,
     isOwner: isWorkspaceOwner,
+    // #9556 — support deny→handoff flag. `repoUrl` was already resolved in the
+    // unconditional Promise.all fan-out above (every dispatch, support persona
+    // included), so recording it on the escalation costs ZERO extra DB reads.
+    // Deliberately `repoUrl !== null`, not repoStatus: `cloning`/`error` still
+    // means a repo IS connected — the destination surface explains its own
+    // state. `degraded` (a transient tenant-mint/query blip, not an honest
+    // "no repo") emits `undefined` → the legacy caveat arm rather than telling
+    // a connected user to connect. Snapshot scope: resolved once at cold
+    // dispatch — a warm-turn Query reuse keeps this value for the Query's
+    // lifetime (bounded by the idle reaper), so mid-conversation connect or
+    // disconnect events are not re-read; both stale arms self-correct at the
+    // destination. The deny() wrapper in permission-callback.ts stamps this
+    // onto the escalation record; the route emits it on the `support_handoff`
+    // frame.
+    repoConnected: repoUrlResult.degraded ? undefined : repoUrl !== null,
     // P1 stale-snapshot — read the LIVE in-session ack posture (flipped by the
     // ws-handler on a successful ack) so command #2 after an ack is friction-free
     // instead of re-holding on the frozen cold-start snapshot.

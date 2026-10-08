@@ -16,7 +16,9 @@
 #     terminal `aborted` — never a silent exit, never a false `done` (#5934 class);
 #   * done/rolled-back/aborted/unset are idempotent no-ops;
 #   * the timer is NEVER disabled by the script (P0-1);
-#   * EVERY branch emits a `logger -t inngest-cutover-flip` line (P0-2).
+#   * EVERY branch emits a `logger -t inngest-cutover-flip` line (P0-2) — except the
+#     terminal noop-* arms, which throttle to once per CUTOVER_NOOP_THROTTLE_S (#7696)
+#     to stay under the G3.7 15-minute liveness window without flooding it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,7 +90,14 @@ trap cleanup_all EXIT
 # and therefore silent either way. Clear it around every case so one case's fallback write cannot
 # bleed into a later case's assertions. Guarded: on a runner /var/lock is root-owned and the write
 # never lands at all, which is fine — this must never be the reason a case fails.
-clean_host_state_slot() { rm -f /var/lock/inngest-cutover-flip.state 2>/dev/null || true; }
+# (#7696) The noop-throttle stamp sits at ${STATE_FILE}.noop-emitted — the SAME host-default path
+# plus suffix — and must be cleared here too: on a runner where /var/lock IS writable, a refusal
+# case's noop emit leaves a fresh stamp that would suppress the NEXT case's authorised emit
+# (measured in CI: canary-absent, then the floor misses the two assertions the suppression ate).
+clean_host_state_slot() {
+  rm -f /var/lock/inngest-cutover-flip.state 2>/dev/null || true
+  rm -f /var/lock/inngest-cutover-flip.state.noop-emitted 2>/dev/null || true
+}
 
 setup_case() {
   clean_host_state_slot
@@ -422,6 +431,60 @@ for state in "done" rolled-back aborted ""; do
   assert_logger "logger line emitted (no-op '$label')"
   teardown_case
 done
+
+# --- Test 5z (#7696): the terminal noop heartbeat is THROTTLED, transitions are not ---
+# The defect: emit_state called logger unconditionally on EVERY arm, so a terminal host
+# shipped ~2,040 rows/day of noop-* rows. The fix keeps the noop heartbeat under the G3.7
+# 15-minute liveness window (H) — it must stay AUDIBLE, just slower — while transitions
+# remain unconditional. The stamp derives from the INNGEST_CUTOVER_STATE seam so a fresh
+# $WORK per case means a fresh stamp.
+echo "TEST: #7696 noop-* logger rows throttle to once per CUTOVER_NOOP_THROTTLE_S"
+setup_case
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=3600)
+assert_eq "exit 0 on the first noop-unset fire" "0" "$rc"
+assert_eq "the first noop-unset emits one logger row" \
+  "1" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+assert_eq "the throttle stamp was recorded" \
+  "yes" "$([[ -f "${STATE}.noop-emitted" ]] && echo yes || echo no)"
+# A second fire inside the window emits NOTHING to the logger — but the state SLOT write
+# is unconditional: delete it first so the suppressed fire proves it still lands.
+rm -f "$STATE"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=3600)
+assert_eq "exit 0 on the in-window second fire" "0" "$rc"
+assert_eq "the in-window noop emits NO second logger row" \
+  "1" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+assert_eq "the state slot was still written on the suppressed fire" \
+  "noop-unset" "$(jq -r '.reason' "$STATE" 2>/dev/null || echo MISSING)"
+# A NON-noop arm is never throttled: the rolled-back transition lands on a fresh stamp.
+rc=$(run_flip rollback)
+assert_eq "exit 0 on rollback while the noop stamp is fresh" "0" "$rc"
+assert_contains "the transition row reached the logger unthrottled" \
+  "$(cat "$LOGTRACE")" '"reason":"rolled-back"'
+# A STALE stamp re-opens the window — the heartbeat must resume (never stay silent).
+touch -d '1 hour ago' "${STATE}.noop-emitted" 2>/dev/null || touch -d '@1' "${STATE}.noop-emitted"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=300)
+assert_eq "exit 0 on the aged-stamp fire" "0" "$rc"
+assert_eq "the heartbeat re-emits once the window has passed" \
+  "2" "$(grep -c 'noop-unset' "$LOGTRACE" || true)"
+teardown_case
+
+echo "TEST: #7696 the throttle seam is honoured — interval 0 emits every fire"
+setup_case
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=0)
+assert_eq "exit 0 (interval 0, first fire)" "0" "$rc"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=0)
+assert_eq "interval 0 emits on every fire" \
+  "2" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+teardown_case
+
+echo "TEST: #7696 non-numeric interval falls back to the 300s default (fail-safe)"
+setup_case
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=banana)
+assert_eq "exit 0 (non-numeric interval, first fire)" "0" "$rc"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=banana)
+assert_eq "non-numeric interval still throttles (default applies)" \
+  "1" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+teardown_case
 
 # --- Test 6: the script NEVER disables the flip timer (P0-1, static guard) ---
 echo "TEST: script never disables inngest-cutover-flip.timer (P0-1)"
@@ -1206,7 +1269,9 @@ fi
 # allowlist) that op=execute 2.0 consumes.
 # 150 -> 163: +13 for the #7777 reflush arm — the authorized-clear ordering case (4e, 6
 # assertions) and the evidence-less refusal case (4f, 7 assertions).
-MIN_ASSERTIONS=163
+# 163 -> 177: +14 for the #7696 noop-throttle block — the cadence case (10), the
+# interval-0 seam case (2), and the non-numeric-interval fallback case (2).
+MIN_ASSERTIONS=177
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

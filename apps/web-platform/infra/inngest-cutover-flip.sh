@@ -48,6 +48,14 @@
 #     marker rides the on-host Vector->Better Stack journald shipper (commit c890464ce),
 #     the no-SSH state channel the operator reads; and writes a host-path state slot for
 #     cat-inngest-cutover-state.sh (on-host debug aid ONLY, never the operator gate).
+#     ONE EXCEPTION (#7696): the terminal noop-* arms fire on every 30s timer tick for
+#     the host's whole life — unthrottled that was ~2,040 rows/day of "nothing happened".
+#     noop-* rows are throttled to once per NOOP_THROTTLE_S (300s default) via an mtime
+#     stamp, mirroring the sibling FSM's emit_noop in inngest-luks-cutover.sh. The cadence
+#     stays strictly under 15 minutes because those rows ARE the liveness witness G3.7's H
+#     signal counts (scripts/cutover-inngest.sh, FLIP_LIVENESS_SINCE): a silent window is
+#     `silent` and REFUSES the arm, so the heartbeat must never drop to zero — slower, not
+#     silent.
 #   * Purity (P2-sec-a / AC-NOBODY): log lines + the state slot carry state + counts
 #     ONLY — never the Redis password, the Postgres URI, or any connection string.
 #
@@ -58,10 +66,10 @@
 # path). Real sources: the env-delivered flag, `systemctl`, `redis-cli`, `doppler`.
 #
 # EVERY ONE OF THOSE IS INERT UNLESS THE SCRIPT IS INVOKED WITH `--fixture-seams` (#7761). The
-# gate below unsets all SIXTEEN seam names — the seven listed above plus CUTOVER_BOOT_ID,
+# gate below unsets all SEVENTEEN seam names — the seven listed above plus CUTOVER_BOOT_ID,
 # CUTOVER_CURL_CMD, CUTOVER_DONE_OWNER_MARKER, CUTOVER_GQL_URL, CUTOVER_HEALTH_URL,
-# CUTOVER_VERIFY_INTERVAL_S, CUTOVER_VERIFY_WINDOW_S, INNGEST_CUTOVER_LATCH and
-# INNGEST_CUTOVER_LATCH_MOUNT — when the flag
+# CUTOVER_NOOP_THROTTLE_S (#7696), CUTOVER_VERIFY_INTERVAL_S, CUTOVER_VERIFY_WINDOW_S,
+# INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT — when the flag
 # is absent, which is how production always runs. This list is prose and the gate's list is the
 # contract: the suite derives the seam set from this file by shape and asserts it equals the
 # gate's, so if the two disagree the gate wins and the suite reds.
@@ -148,6 +156,7 @@ if [[ "${1:-}" != "--fixture-seams" ]]; then
     CUTOVER_GQL_URL \
     CUTOVER_HEALTH_URL \
     CUTOVER_LOGGER_CMD \
+    CUTOVER_NOOP_THROTTLE_S \
     CUTOVER_REDIS_CLI_CMD \
     CUTOVER_REDIS_DBSIZE \
     CUTOVER_SYSTEMCTL_CMD \
@@ -180,6 +189,45 @@ fi
 
 STATE_FILE="${INNGEST_CUTOVER_STATE:-/var/lock/inngest-cutover-flip.state}"
 START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+
+# --- #7696: the terminal no-op heartbeat is THROTTLED, transitions are not -------------
+# The noop-* arms run on every 30s timer fire for the host's whole life — at that cadence
+# `emit_state` was shipping ~2,040 Better Stack rows/day of "nothing happened" on a channel
+# vector.toml defends as quota-constrained. The sibling LUKS FSM (inngest-luks-cutover.sh
+# emit_noop) solved the same defect with a 300s mtime stamp; this mirrors it.
+#
+# WHY 300s AND NOT LONGER — the noop row is the liveness WITNESS, not noise to zero out:
+# scripts/cutover-inngest.sh's G3.7 gates (op=arm, op=resume, op=reflush) count
+# inngest-cutover-flip rows inside FLIP_LIVENESS_SINCE="15m" and read an empty window as
+# `silent` — an unconditional REFUSAL. An absent host row and a throttled-to-death host
+# are indistinguishable to that gate, so the heartbeat must stay strictly under 15
+# minutes. At 300s a healthy terminal host still lands ~3 rows per window (~288/day,
+# ~7x quieter) and any future slowing requires touching that literal in the same change.
+#
+# WHY THE STAMP SITS NEXT TO THE STATE SLOT. It is DERIVED from the already-seamed
+# INNGEST_CUTOVER_STATE rather than being its own seam, so the test workdir gets it for
+# free and prod lands it in /var/lock — a tmpfs that is both in the unit's
+# ReadWritePaths and self-clearing on boot, which is exactly the desired semantics: the
+# first post-boot fire always emits.
+NOOP_EMIT_STAMP="${STATE_FILE}.noop-emitted"
+NOOP_THROTTLE_S="${CUTOVER_NOOP_THROTTLE_S:-300}"
+# A garbage interval must not silently disable the throttle (a hole a mis-set seam would
+# open) nor crash the emit path under `set -u` arithmetic — fail CLOSED to the default.
+case "$NOOP_THROTTLE_S" in ''|*[!0-9]*) NOOP_THROTTLE_S=300 ;; esac
+
+# noop_emit_due — the throttle predicate. Fails toward EMITTING, never silence: an
+# absent/unreadable stamp or an unmeasurable clock answers "emit" so a broken stamp can
+# only ever restore the old noisy behaviour, never manufacture a `silent` reading for
+# the liveness gate.
+noop_emit_due() {
+  local now mtime
+  now="$(date +%s 2>/dev/null || true)"
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  [[ -f "$NOOP_EMIT_STAMP" ]] || return 0
+  mtime="$(stat -c %Y "$NOOP_EMIT_STAMP" 2>/dev/null || true)"
+  case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
+  (( now - mtime >= NOOP_THROTTLE_S ))
+}
 
 # --- Flag read: fixture seam CUTOVER_FLIP_FLAG else the env-delivered Doppler value.
 # `${VAR+x}` distinguishes set-but-empty (an explicit "unset" test case) from absent.
@@ -272,7 +320,7 @@ CUTOVER_VERIFY_INTERVAL_S="${CUTOVER_VERIFY_INTERVAL_S:-3}"
 # not exist. Sourcing a file that is not there would make the `done` gate fail-closed on an
 # asset-delivery problem — i.e. wedge a cutover for a reason unrelated to whether the host serves.
 # shellcheck disable=SC2016  # GraphQL query, not a shell expansion
-readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers { type value } } }'
 
 # --- curl: fixture seam CUTOVER_CURL_CMD else the real binary. Seamed at the COMMAND, not at
 # the verdict, so the bounded-window logic below stays under test rather than stubbed away.
@@ -469,8 +517,23 @@ emit_state() {
     --arg guard "$GUARD_REV" \
     '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts, guard:$guard}')"
   # Debug-aid state slot (cat-inngest-cutover-state.sh) — best-effort, never fatal.
+  # Written on EVERY fire including throttled no-ops: the slot answers "what does the
+  # FSM see NOW" and costs nothing off-box.
   printf '%s\n' "$json" > "$STATE_FILE" 2>/dev/null || true
-  # No-SSH state channel: journald -> Vector -> Better Stack (P0-2).
+  # No-SSH state channel: journald -> Vector -> Better Stack (P0-2). Terminal noop-*
+  # rows are throttled (#7696): suppress only the logger row, and only while the stamp
+  # is fresh. The stamp is touched on emission (not on suppression), and a write failure
+  # simply re-emits next fire — the degrade direction is toward audibility.
+  # The throttle lives INSIDE emit_state rather than in a LUKS-style emit_noop wrapper
+  # because cutover-inngest-workflow.test.sh derives the emitter's reason set from
+  # emit_state call sites by shape — the noop reasons must keep the emit_state call
+  # form for the DRIFT_GREPS/probe parity extraction to keep seeing them.
+  if [[ "$reason" == noop-* ]]; then
+    noop_emit_due || return 0
+    "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$json" 2>/dev/null || true
+    : > "$NOOP_EMIT_STAMP" 2>/dev/null || true
+    return 0
+  fi
   "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$json" 2>/dev/null || true
 }
 

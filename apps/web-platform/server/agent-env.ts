@@ -70,8 +70,12 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // operator script's production write. The web runtime has no such prompt yet (the web approval
   // adapter is a tracked follow-up), so the hook must be a no-op here and a staged write exits 75 and
   // writes nothing. Rides the overrides for the same reason as the line above: an ambient value
-  // cannot re-enable it, and `buildAgentEnv` is the only place that decides a web agent's env.
+  // cannot re-enable it. `buildAgentEnv` decides the env of the hosted Concierge sessions only: the
+  // server-side scheduled agents that load the plugin through their own `--plugin-dir` spawn build their
+  // env with a per-function `buildSpawnEnv` allowlist and never receive these overrides (ADR-277).
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
+  // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-277), which also states what actually gates hosted Bash.
+  SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 } as const);
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed
