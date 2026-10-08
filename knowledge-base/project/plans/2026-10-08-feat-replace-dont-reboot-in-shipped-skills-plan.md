@@ -33,8 +33,8 @@ Brainstorm: `knowledge-base/project/brainstorms/2026-10-08-immutable-infra-repla
 
 **Cut List.**
 
-- New AGENTS rule → buys P1-P3 only for this repo, none for users; the existing hard rule already covers the repo (CTO, CPO, learnings agree).
-- Deterministic grep check / hook (Approach B) → P2 is bought by the sharp-edges verification pass; false-positive tuning cost; deferred in the brainstorm.
+- New AGENTS rule → buys Properties 1-3 only for this repo, none for users; the existing hard rule already covers the repo (CTO, CPO, learnings agree).
+- Deterministic grep check / hook (Approach B) → Property 2 is bought by the sharp-edges verification pass; false-positive tuning cost; deferred in the brainstorm.
 - `deepen-plan` Phase 4.55 clause (spec FR4, second half) → `deepen-plan/SKILL.md` is 79897 B against a 80000 B ceiling (`plugins/soleur/test/skill-body-budget.json`), and 4.55 is a HALT gate, so adding "reboot as recovery step" to its trigger would make the advisory default blocking, contradicting TR2.
 - Plan §2.8 *pointer* to the sharp-edges bullet → Step 6.5 already loads the whole catalogue. (The §2.8 *Apply path default* is a different edit and is in scope: Phase 2.)
 - `plan-review` standing-check line → operator decision 2026-10-08: skip; Step 6.5 covers plan authoring and the review trigger covers PRs.
@@ -112,7 +112,7 @@ Byte budget: `plan/SKILL.md` is 119996 B against 120000 B. The old line is repla
 
 ### Phase 3 — Plan-time check and review lens
 
-**3a. `plan-sharp-edges.md`.** Append one bullet (about 850 B, trigger phrase in the lead-in):
+**3a. `plan-sharp-edges.md`.** Append one bullet (trigger phrase in the lead-in; shipped at about 1.15 KB after review):
 
 > - **A plan that names "reboot the host" as its recovery or proof step, or "survives a reboot" as an acceptance criterion, has chosen the wrong unit of recovery.** A fresh instance built from declared config is the recovery path, and a host-property proof (volume unlocked and mounted, service up at boot, NIC converged) must be satisfiable by that instance with stateful data on a persistent volume. Ask whether a replace can do the step. If yes, rewrite it. If a reboot is genuinely needed (first-boot NIC bring-up, a chosen kernel update, a drained cutover reboot, a stateless single host), name which and cite measured boot-time safety, not intent. Replace is itself downtime on a serving host, so the zero-downtime evaluation still applies. Advisory, does not block. **Why:** #9372 — a soft reboot left a web host dark with no recovery path but a replace, while "survives a reboot" had become an acceptance criterion. See `knowledge-base/project/learnings/2026-07-07-immutable-redeploy.md`.
 
@@ -151,7 +151,7 @@ Run the checks after committing (or use two-dot `git diff origin/main -- plugins
 - [x] AC1: `terraform-architect.md` has the section and its preconditions. Check: `grep -c "Replace, Don't Reboot" plugins/soleur/agents/engineering/infra/terraform-architect.md` returns 1, and `grep -c "not a reservation" plugins/soleur/agents/engineering/infra/terraform-architect.md` returns 1.
 - [x] AC2: `platform-strategist.md` Reproducibility First has the bullet. Check: `grep -c "Replace, don't reboot" plugins/soleur/agents/engineering/infra/platform-strategist.md` returns 1, and the text "(see §4)" is absent.
 - [x] AC3: `plan/SKILL.md` §2.8 default flipped. Check: `grep -c "default for a running host with state on a persistent volume" plugins/soleur/skills/plan/SKILL.md` returns 1 and `grep -c "the default for existing infra" plugins/soleur/skills/plan/SKILL.md` returns 0.
-- [x] AC4: `plan-sharp-edges.md` ends with the new bullet, at most 1100 B. Check: `grep -c "chosen the wrong unit of recovery" plugins/soleur/skills/plan/references/plan-sharp-edges.md` returns 1 and `tail -n 1 plugins/soleur/skills/plan/references/plan-sharp-edges.md | wc -c` is at most 1100.
+- [x] AC4: `plan-sharp-edges.md` ends with the new bullet, at most 1200 B. Check: `grep -c "chosen the wrong unit of recovery" plugins/soleur/skills/plan/references/plan-sharp-edges.md` returns 1 and `tail -n 1 plugins/soleur/skills/plan/references/plan-sharp-edges.md | wc -c` is at most 1200.
 - [x] AC5: `review/SKILL.md` carries the trigger extension and the in-quote clause. Check: `grep -c "plan or runbook whose recovery or proof step is a host reboot" plugins/soleur/skills/review/SKILL.md` returns 1.
 - [x] AC6: Gates are green. `python3 scripts/lint-skill-body-budget.py --base origin/main` exits 0 (fetch `origin/main` first), `bun test plugins/soleur/test/components.test.ts` passes, and `npx markdownlint-cli2` on the plan, spec, tasks and the five edited plugin files reports 0 issues.
 - [x] AC7: No `description:` line changed and no provider resource names added: `git diff origin/main -- plugins/soleur | grep -E '^[+-]description:'` and `git diff origin/main -- plugins/soleur | grep -E '^\+.*hcloud_'` both print nothing.
@@ -198,7 +198,17 @@ CPO sign-off: carried forward from the brainstorm CPO assessment. `soleur:engine
 - The byte ceilings are the binding constraint: `plan/SKILL.md` has 4 B of headroom (Phase 2 must be net-neutral), `review/SKILL.md` 1404 B, `deepen-plan/SKILL.md` 103 B (untouched). Any later wish to extend those bodies needs its own ceiling PR.
 - The repo's hard rule `hr-prod-host-config-change-immutable-redeploy` is the mandatory form of this default; the shipped text is the advisory form for users who do not have that rule. If either changes, change the other.
 - Keep the plan, spec and tasks prose free of literal service-control and remote-shell command strings; `iac-plan-write-guard.sh` denies the write on prose alone (hit once on this branch's spec).
-- The sharp-edges catalogue has 230 bullets and is read once at Step 6.5. The new bullet leads with its trigger phrase and stays near 850 B so it is noticed.
+- The sharp-edges catalogue has 230 bullets and is read once at Step 6.5. The new bullet leads with its trigger phrase and stays near 1.1 KB so it is noticed.
 - The terraform-architect section is the single canonical statement of the preconditions and the named cases. The other surfaces are shorter on purpose; do not copy the full list into them.
 - Invocation surfaces for the two agents (grep, 2026-10-08): terraform-architect is spawned from plan §2.8, the `provision-hetzner` skill and `infra-security`; platform-strategist from brainstorm. The new text has no output template, so no non-diff fallback string is required.
 - Cite anchors by content, not line number (`cq-cite-content-anchor-not-line-number`).
+
+## Review Amendments (2026-10-08, post-implementation review)
+
+The five-seat review of the implemented diff changed the shipped text beyond what Phases 1-3 above quote; the shipped files are authoritative.
+
+- `terraform-architect.md`: the section now also covers root-disk state inventory (snapshot first, or do not replace), host-identity re-keying (IP and DNS, allowlists, `known_hosts`, registrations, secret delivery), the LUKS rule (open, never format; branch on `blkid -o value -s TYPE`; key escrow; `prevent_destroy`), explicit operator authorization of a prod destroy, `-replace` described as destroying first *by default*, and scopes "advisory" to the choice between replace paths and the named reboots (an in-place edit of a prod host is not an option, and a project rule against it binds). The stateless exception no longer says "with no declared config".
+- `platform-strategist.md` and the sharp-edges bullet point to terraform-architect for the named cases instead of restating them; the bullet cites #9750 for the incident.
+- `plan/SKILL.md` section 2.8: line ~630 (the paragraph above the Apply path) no longer prefers the bootstrap script, "taint +" is dropped, and (b) carries "else snapshot first" plus a pointer to the preconditions; the Why paragraph lost one sentence to stay under the byte ceiling (119972 of 120000 B).
+- `review/SKILL.md`: inner double quotes removed from the quoted reviewer instruction; "(drain-gated on a serving host)" added.
+- Not changed, with reasons: the `incident` skill's rescue-mode diagnosis ladder contains a `reboot` step, but it diagnoses an already-unreachable host and is neither a plan's recovery nor its proof step; no test pins the new text (advisory prose, ceilings are enforced by `skill-body-budget.json`).

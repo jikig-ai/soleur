@@ -6,7 +6,7 @@ Issue #9750 asked to encode immutable infrastructure in the skills, agents and g
 
 ## Solution
 
-Brainstorm with the CTO, CPO and CLO plus repo and learnings research converged on advisory text only. The edits go to the two infra agents, one plan sharp-edges bullet, and one clause each in review and deepen-plan. They add no AGENTS rule and no blocking gate. Reasons: the rule budget (ADR-151), `cq-agents-md-tier-gate` (domain-scoped IaC content belongs to its owning skill or agent), the rule's repo-only reach, and legitimate reboots (fresh-host NIC bring-up, drained cutover).
+Brainstorm with the CTO, CPO and CLO plus repo and learnings research converged on advisory text only. The edits go to the two infra agents, one plan sharp-edges bullet, and one clause in review (the deepen-plan clause was cut at plan time, see below). They add no AGENTS rule and no blocking gate. Reasons: the rule budget (ADR-151), `cq-agents-md-tier-gate` (domain-scoped IaC content belongs to its owning skill or agent), the rule's repo-only reach, and legitimate reboots (fresh-host NIC bring-up, drained cutover).
 
 ## Key Insight
 

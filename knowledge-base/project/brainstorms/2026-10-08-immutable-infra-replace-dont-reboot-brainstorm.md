@@ -2,6 +2,8 @@
 
 **Date:** 2026-10-08 · **Issue:** #9750 · **Branch:** feat-immutable-infra-replace-dont-reboot · **Draft PR:** #9754 · **Lane:** cross-domain
 
+> **Superseded at plan time (2026-10-08):** the `deepen-plan` clause, the `plan/SKILL.md` pointer and the `restart` trigger below were cut or changed in the plan (byte ceilings; `deepen-plan` 4.55 is a HALT gate). The plan's Research Reconciliation and Review Amendments sections are authoritative.
+
 ## What We're Building
 
 Make "replace, don't reboot" (immutable infrastructure) the advisory default in the surfaces a Soleur user receives, not only in this repo's AGENTS rules. All edits are body text. No description lines change, so there is no skill-description budget cost.
@@ -40,12 +42,15 @@ Make "replace, don't reboot" (immutable infrastructure) the advisory default in 
 **Assessed:** Marketing, Engineering, Operations, Product, Legal, Sales, Finance, Support
 
 ### Engineering (CTO)
+
 No new rule. Place the text in the agents, the plan sharp-edges file and the review/deepen-plan bullets. Key the triggers on intent, not on provider resource names. Main risks: false positives on legitimate reboots, and over-claiming replace.
 
 ### Product (CPO)
+
 The gap is real and the benefit lands on solo founders, who have no second reviewer. Ship the advisory layer only. A blocking gate would punish a single VPS where a reboot is fine. Out of scope: hook, blocking gate, new skills.
 
 ### Legal (CLO)
+
 No legal impact for a guidance-only change. Watch-items if later work performs real replacements: new LUKS-header escrow and secret scope per replaced host, the open Art. 32(1)(c) restore gap (#7992), and destroying superseded snapshots (#8734 class). Evidence rules must cite measured state, not intent.
 
 ## Open Questions

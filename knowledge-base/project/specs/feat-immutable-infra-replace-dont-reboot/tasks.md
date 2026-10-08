@@ -18,14 +18,14 @@ Plan: `knowledge-base/project/plans/2026-10-08-feat-replace-dont-reboot-in-shipp
   - 2.3.1 Replace the `### Apply path` bullet with the exact new text in plan Phase 2.
   - 2.3.2 Run the ratchet lint; if it reds, trim an equal number of bytes inside that same line. Never raise the ceiling.
 - 2.4 Edit `plugins/soleur/skills/plan/references/plan-sharp-edges.md`.
-  - 2.4.1 Append the Phase 3a bullet at the end of the file; keep it at most 1100 B.
+  - 2.4.1 Append the Phase 3a bullet at the end of the file; keep it at most 1200 B.
 - 2.5 Edit `plugins/soleur/skills/review/SKILL.md`.
   - 2.5.1 Extend the downtime bullet trigger list with the plan-or-runbook case.
   - 2.5.2 Append the clause inside the quoted `MUST instruct` text; total added bytes under 400.
 
 ## Phase 3: Testing and verification
 
-- 3.1 Run the plan's AC1-AC5 greps (after committing).
+- 3.1 Run the plan's AC1-AC5, AC7 and AC8 checks (after committing).
 - 3.2 Run `python3 scripts/lint-skill-body-budget.py --base origin/main` (exit 0).
 - 3.3 Run `bun test plugins/soleur/test/components.test.ts`.
 - 3.4 Run `npx markdownlint-cli2` on the plan, spec, tasks and the five edited plugin files.

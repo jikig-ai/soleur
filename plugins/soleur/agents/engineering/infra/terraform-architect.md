@@ -112,15 +112,17 @@ For each finding, include the file and resource reference, explain the risk, and
 
 ## Replace, Don't Reboot
 
-For a running host, the unit of change and of recovery is a fresh instance built from declared config (cloud-init or image, applied through the IaC tool's replace: Terraform `-replace`, Pulumi replace, CloudFormation replacement). It is not an in-place edit and not a reboot, and a reboot is not proof of a host property. This is about host-config drift (the running host differs from its declared config), not Terraform state drift. Advisory: state the trade-off and let the user decide.
+For a running host, the unit of change and of recovery is a fresh instance built from declared config (cloud-init or image, applied through the IaC tool's replace: Terraform `-replace`, Pulumi replace, CloudFormation replacement). It is not an in-place edit and not a reboot, and a reboot is not proof of a host property. This is about host-config drift (the running host differs from its declared config), not Terraform state drift. The choice between replace paths and the named reboots below is advisory: state the trade-off and let the user decide. An in-place edit of a prod host is not an option, and a project rule against it (for example `hr-prod-host-config-change-immutable-redeploy` in this repo) binds.
 
 Preconditions before recommending a replace:
 
-- The host has declared config (otherwise replace loses it: declare it first) and its state lives on a persistent volume or managed store.
-- Replace destroys before it creates, with no rollback. Re-probe target capacity at apply time (a dated "available" reading is not a reservation; no stock means do not replace) and include dependent attachments (network, volume, firewall) in the `-target` scope.
-- A serving or stateful host needs a drain-gated, volume-preserving path, one host at a time; the zero-downtime evaluation still applies.
+- The host has declared config (otherwise replace loses it: declare it first). List what lives only on the root disk (local databases, container data, host keys, tokens minted at first boot, unlock keyfiles); durable state belongs on a persistent volume or managed store. With no such store, snapshot and restore first, or do not replace.
+- Replace changes host identity. Check what is keyed to the old host (public IP and DNS records with their TTL, floating IPs, firewall and access allowlists, `known_hosts`, tunnel, runner and monitoring registrations) and how secrets reach the new host (the declared path, never copied from the old one).
+- A data volume that is LUKS-encrypted: the new host's cloud-init must open it, never format it. Branch on `blkid -o value -s TYPE` (empty: format; `crypto_LUKS`: open; anything else: stop with no writes), because an `isLuks`-only guard formats a populated volume whose header is damaged. The unlock key must reach the new host by its declared path with escrow verified, and the volume needs `prevent_destroy` or a detach before the replace.
+- Terraform `-replace` destroys before it creates by default, with no rollback. Re-probe target capacity at apply time (a dated "available" reading is not a reservation; no stock means relocate, see Sharp Edges) and include dependent attachments (network, volume, firewall) in the `-target` scope. A prod destroy needs the operator's explicit authorization, not a menu acknowledgement.
+- A serving or stateful host needs a drain-gated, volume-preserving path, one host at a time; the plan's Downtime & Cutover evaluation still applies.
 
-A reboot is fine when named: first-boot NIC bring-up on a fresh host, a kernel update the user chose, a drained reboot inside a cutover, or a stateless single host with no declared config. Cite measured boot-time safety (unlock, mount gates), not intent.
+A reboot is fine when named: first-boot NIC bring-up on a fresh host, a kernel update the user chose, a drained reboot inside a cutover, or a stateless single host (a reboot only; config changes still replace). Cite measured boot-time safety (unlock, mount gates), not intent.
 
 ## State Management Advisory
 
