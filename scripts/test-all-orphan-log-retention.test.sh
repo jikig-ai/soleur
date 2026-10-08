@@ -79,7 +79,7 @@ fi
 # The poll loop actually polls: a `sleep` inside a `while` in the watchdog
 # subshell is what makes liveness re-checked rather than evaluated once.
 if printf '%s\n' "$wd_block" | grep -c >/dev/null 'while :; do' \
-   && printf '%s\n' "$wd_block" | grep -q 'sleep "$_RUN_WD_POLL_S"'; then
+   && printf '%s\n' "$wd_block" | grep -c >/dev/null 'sleep "$_RUN_WD_POLL_S"'; then
   pass "watchdog liveness loop polls on _RUN_WD_POLL_S"
 else
   fail "watchdog block must contain a polling loop (while + sleep _RUN_WD_POLL_S)"

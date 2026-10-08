@@ -442,7 +442,6 @@ SWEEP_DEFERRALS=(
   'plugins/soleur/test/* | = | 5 | #9217'
   'plugins/soleur/*.test.sh | <= | 66 | #9217'
   'apps/web-platform/*.test.sh | <= | 180 | #9217'
-  'scripts/*.test.sh | <= | 22 | #9217'
   # Wave A2 (this table's last production rows) converted .github/, lefthook.yml, the drain workflow prompt and every other
   # apps/web-platform/infra file. These four stay, file-exact and tight (`=`), because their bytes feed `user_data` of
   # `hcloud_server.{registry,inngest,git_data}`, which carry NO `ignore_changes = [user_data]` (ADR-100, ADR-169): any edit is a

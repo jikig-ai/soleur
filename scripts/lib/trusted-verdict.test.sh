@@ -54,8 +54,8 @@ case "${1:-}" in
   issue)
     [[ "${2:-}" == "view" ]] || note_unexpected "$@"
     [[ "${3:-}" == "$STUB_EXPECT_ISSUE" ]] || note_unexpected "$@"
-    printf '%s' "$*" | grep -q -- '--json comments' || note_unexpected "$@"
-    printf '%s' "$*" | grep -q -- "--repo $STUB_EXPECT_REPO" || note_unexpected "$@"
+    printf '%s' "$*" | grep -c >/dev/null -- '--json comments' || note_unexpected "$@"
+    printf '%s' "$*" | grep -c >/dev/null -- "--repo $STUB_EXPECT_REPO" || note_unexpected "$@"
     jq_expr=""
     for a in "$@"; do if [[ "$prev_was_jq" == 1 ]]; then jq_expr="$a"; prev_was_jq=0; fi
       if [[ "$a" == "--jq" ]]; then prev_was_jq=1; fi; done

@@ -1688,13 +1688,13 @@ mutate_and_assert_red() {
     if printf '%s' "$child_out" | grep -c >/dev/null "FAIL: ${expect_label}"; then
       if [[ -n "$expect_re" ]] && ! printf '%s' "$child_out" | grep -Ec >/dev/null -- "$expect_re"; then
         fail "C-$axis caught by ${expect_label} at the expected figure" "a line matching /${expect_re}/" \
-          "B9 red at a different figure: $(printf '%s' "$child_out" | grep -m2 -E '^    (expected|actual):' | tr '\n' ';')"
+          "B9 red at a different figure: $(grep -m2 -E '^    (expected|actual):' <<<"$child_out" | tr '\n' ';')"
         return 0
       fi
       pass "C-$axis caught by ${expect_label}, the assertion it targets"
     else
       fail "C-$axis caught by ${expect_label}" "a FAIL line naming ${expect_label}" \
-        "child failed on something else: $(printf '%s' "$child_out" | grep -m3 '^  FAIL' | tr '\n' ';')"
+        "child failed on something else: $(grep -m3 '^  FAIL' <<<"$child_out" | tr '\n' ';')"
     fi
   else
     pass "C-$axis $rel sabotage is caught (child exit $rc)"
@@ -1720,7 +1720,7 @@ mutate_and_assert_green() {
   else
     fail "C-$row $rel must-PASS mutation stays green with B9 at the expected ${expect_crit}m" \
       "child exit 0 and a line matching /${want}/" \
-      "exit $rc: $(printf '%s' "$child_out" | grep -m3 -E '^  (FAIL|PASS: B9 threshold)' | tr '\n' ';')"
+      "exit $rc: $(grep -m3 -E '^  (FAIL|PASS: B9 threshold)' <<<"$child_out" | tr '\n' ';')"
   fi
 }
 
@@ -1785,7 +1785,7 @@ run_part_c() {
     pass "C0 unmutated control is GREEN (the battery's results are meaningful)"
   else
     fail "C0 unmutated control is GREEN" "exit 0" \
-      "exit $crc — battery VOID, fix the baseline first: $(printf '%s' "$cout" | grep -m3 '^  FAIL' | tr '\n' ';')"
+      "exit $crc — battery VOID, fix the baseline first: $(grep -m3 '^  FAIL' <<<"$cout" | tr '\n' ';')"
     return 0
   fi
 
