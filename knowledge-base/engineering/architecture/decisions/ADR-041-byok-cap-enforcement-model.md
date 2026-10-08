@@ -265,3 +265,59 @@ dissented, correctly — the premise dissolves once the window lands.
 
 Residual, unchanged and out of scope: the ceiling read fails closed on a transient Postgres error,
 so a database blip fails the spawn rather than admitting it.
+
+## Addendum — 2026-10-08: Haiku 5.5 rate cards and the sub-cent Layer 2 gap
+
+Claude Haiku 5.5 (`claude-haiku-5-5`) replaced Haiku 4.5 as the Haiku-class model in
+`MODEL_PRICING`. Three consequences for the ledger and the layers. The amendment above is left as
+recorded.
+
+### A second, prompt-length-selected rate card
+
+Haiku 5.5 bills two cards: up to 100,000 prompt tokens, $0.10 input / $0.50 output / $0.01 cache
+read / $0.125 five-minute cache write per MTok; over 100,000, $0.50 / $2.50 / $0.05 / $0.625. A
+`MODEL_PRICING` row may therefore carry an optional second card (`longPrompt`), selected when the
+turn's prompt tokens, `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`, are
+strictly greater than 100,000. The pricing page does not define whether cached tokens count toward
+the threshold, so the sum is a **superset** of any reading of "prompt length". The ambiguity can
+therefore only over-attribute, which is the safe direction for a cap input. With a 1M-token window
+the long card is reachable, not theoretical. A model with no second card, and an unpriced model
+(which still fails closed to NaN), behave as before.
+
+### The Sonnet 5.5 cache-read regime boundary: 2026-10-08
+
+The same change corrected `MODEL_PRICING[SONNET_MODEL]` cache read from $0.20 to **$0.10** per MTok
+(0.05× base input, per Anthropic's pricing page). This is a second undated boundary of the kind the
+2026-09-03 amendment describes ("The WORM boundary is undated in the data"), and the same reasoning
+applies. `audit_byok_use` has no model or rate column and its rows are permanent, so earlier rows
+are **not** restated, and the only partition key is `created_at` against 2026-10-08. The exact
+boundary is the UTC time of the merge commit that changed the row, recoverable with
+`git log -S'cacheReadPerToken: 0.1 / 1_000_000' -- apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts`
+(the merge SHA cannot be written into the row comment by the PR that creates it). Rolling cap windows straddling
+the boundary blend the two rates. Rows written before it over-attribute Sonnet cache reads, so a
+Layer 1 or Layer 2 trip can only be early, and lifetime aggregates (`workspace_cost_aggregate`, the
+Today cost route, the audit page) carry a permanent over-attributed segment bounded by the
+pre-boundary Sonnet cache-read cents. Those totals still must not be presented as reconcilable
+against the founder's Anthropic invoice.
+
+### Layer 2 does not bound a Haiku class in practice
+
+The Consequences section above says the $2.60 ceiling bounds worst-case spend "even on a misbehaving
+Haiku-routed class", and the Layer 3 text says Layer 2 does not fire on Haiku classes that never
+converge. At Haiku 5.5 rates the first claim no longer holds in practice. A representative leader
+turn (20K uncached input plus 1K output) costs about $0.0025, and a mostly-cache-read turn about
+$0.0007. Both round to **0 cents** under the `Math.round(x * 100)` in the cost writers, so Layer 2's
+`SUM(unit_cost_cents)` never accumulates a Haiku turn and the per-spawn ceiling cannot trip. A 0-cent
+row is also permanent in the WORM ledger, so delegated hourly and daily caps never see that spend.
+**Only Layer 3 bounds a Haiku class**: 8 turns × 4096 `max_tokens` is about $0.016 of output on the
+short card and about $0.082 on the long card, plus input. The single-click dollar promise is
+therefore held by Layer 3's physical bound for these classes, not by Layer 2's accumulator.
+
+The tracked fix is #6945 (the cost writers multiply tokens by cents and compare the sum to a cents
+budget, so the quantization and the dimension are wrong together). It is **deliberately not fixed
+here**: a 1-cent floor (`Math.max(1, ceil())`) without fixing the cents-times-tokens product would
+make every Haiku turn contribute its full token count, and a single 20K-token turn would trip a
+2000-point cap. Fixing quantization without fixing the product is worse than the status quo.
+
+`PER_SPAWN_COST_CEILING_CENTS` stays **260**. It is a dollar promise (see the 2026-09-03 ruling),
+and Haiku 5.5 turns sit far below it.
