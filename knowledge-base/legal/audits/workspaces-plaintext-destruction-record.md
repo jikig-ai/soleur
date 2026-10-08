@@ -119,7 +119,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | **Escrowed passphrase opens the live header** | yes, at rehearsal 36769782488 (2026-09-30): the `result=rehearsal_ok` row is emitted only after W3, W4 and W5 pass | W4 |
 | **Off-host header restorable and current** | `hdr_bytes=16777216`, `hdr_sha256=ac3447ec55082340d8de0e6a84a51439db1110464216dcb4e2f14df1c60dc98f`, at rehearsal 36769782488 (2026-09-30) | W5 |
 | **Same-day verify baseline** | run `36770448813` (2026-09-30T20:07:45Z, `success`): `ready=true workspace_count=9 expected=8` | `workspaces-luks-verify.yml` |
-| **Post-dispatch verify** | PENDING-EVIDENCE(post-dispatch-verify) (run id, `ready=true`, `workspace_count` vs the baseline of 9; any drop explained) | `workspaces-luks-verify.yml` |
+| **Post-dispatch verify** | run `37804427597` (`workflow_dispatch`, 2026-10-08T15:53:24Z, `success`, about 11 minutes after the delete at 15:42:04Z): `SOLEUR_WORKSPACES_READYZ ready=true writable=true populated=true workspace_count=9 expected=8`, `device_type=crypto_LUKS mount_source=/dev/mapper/workspaces escrow=ok header=readable`, app `/health` 200, "workspaces-luks re-assert PASSED". `workspace_count` 9 equals the same-day baseline of 9: no drop to explain | `workspaces-luks-verify.yml` |
 
 ### Hetzner deletion and state
 
