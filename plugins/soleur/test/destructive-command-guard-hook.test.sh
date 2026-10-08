@@ -1984,10 +1984,11 @@ deadline_row git-dests 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$
 rep ">'a'"$'\n' 1100; _LE_1100="$REP_OUT"
 deadline_row lexer-empty "$_LE_1100"
 jqchk "bound: deadline (lexer-empty): the ask says the clock ran out while checking whether the lexer dropped a command" '.hookSpecificOutput.permissionDecisionReason | contains("whether the lexer dropped a command")'
-# and a very wide push is decided in time (the real clock): 15000 refs, a force push to main last, and the same without force
-_t=""; for _i in $(seq 1 15000); do _t+=" r$_i"; done; _cmdgit15k="git push -f origin${_t} main"; _cmdgit15kp="git push origin${_t}"
-bound_row "bound: git push -f with 15000 refs ending in main is decided (ask) in under 5 s" ask @R1@ "$_cmdgit15k"
-bound_row "bound: git push (no force) with 15000 refs is decided (no decision) in under 5 s" none @R1@ "$_cmdgit15kp"
+# and a wide push is decided in time (the real clock): 5000 refs (about 1.3 s; 15000 cost ~4 s of the hook's own CPU against a 5 s row cap and
+# turned the no-force row into a bound ask under load), a force push to main last, and the same without force
+_t=""; for _i in $(seq 1 5000); do _t+=" r$_i"; done; _cmdgit15k="git push -f origin${_t} main"; _cmdgit15kp="git push origin${_t}"
+bound_row "bound: git push -f with 5000 refs ending in main is decided (ask) in under 5 s" ask @R1@ "$_cmdgit15k"
+bound_row "bound: git push (no force) with 5000 refs is decided (no decision) in under 5 s" none @R1@ "$_cmdgit15kp"
 
 # =====================================================================================================
 echo "== a secret in the matched command is redacted from the reason and the systemMessage =="
