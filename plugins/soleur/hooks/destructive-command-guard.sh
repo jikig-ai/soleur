@@ -250,7 +250,7 @@ WRAPPER_TAIL="${AMARK} If this is a command you meant to run, write it out witho
 # a lexer that produced nothing or garbage is a fault on this machine: no piece of the command can be checked either, so splitting does not help
 LEXER_TAIL="${AMARK} The guard's parser is not working on this machine, so no command can be checked here and splitting this one will not help: stop and tell the person what happened instead of rewriting the command.${PERSON_TAIL}"
 # an unresolvable cd: the repair is a literal directory
-CD_TAIL="${AMARK} If this is a command you meant to run, put a literal directory in the cd (not a variable or -) so the guard can check where the command runs, and send it again; if you cannot, stop and tell the person what you were about to run.${PERSON_TAIL}"
+CD_TAIL="${AMARK} If this is a command you meant to run, put a literal directory in the cd (not a variable or -) so the guard can check where the command runs (for a directory option such as env -C DIR in front of sh -c, do the cd inside the inner command instead), and send it again; if you cannot, stop and tell the person what you were about to run.${PERSON_TAIL}"
 
 # ---- output ---------------------------------------------------------------------------------------
 # compose <ask|deny> <body> -> COMPOSED: the reason text (see AMARK).
@@ -308,7 +308,7 @@ lead_for() {
     default-branch-force-push) LEAD="this command force-pushes over, or deletes, a default branch on a remote." ;;
     wrapper-depth) LEAD="this command nests more than ${MAX_WRAP} wrappers (sudo, env, timeout, ...) or -- separators, more than the guard unwraps, so the command it finally runs cannot be checked." ;;
     unparsed-wrapper) LEAD="this command runs env -S (--split-string), which splits a string into the command to run, and the guard does not analyse that string." ;;
-    unresolved-cd-before-destructive) LEAD="a cd, pushd or wrapper directory option (env -C, sudo -D) that cannot be resolved (a variable, -, or a path too deep to resolve) comes before a recursive delete or a force push in the same command, so the guard cannot tell which directory the later command runs in." ;;
+    unresolved-cd-before-destructive) LEAD="a cd, pushd or wrapper directory option (env -C, sudo -D) that cannot be resolved (a variable, -, a path too deep to resolve, or a directory option in front of a shell command, whose inner commands the guard cannot place in it) comes before a recursive delete or a force push in the same command, so the guard cannot tell which directory the later command runs in." ;;
     *) LEAD="this command matched a destructive-command rule." ;;
   esac
 }
@@ -334,7 +334,7 @@ redact_word() { # <word> -> RW; RW_NEXT (1 = the word after a credential flag) c
   if (( RW_NEXT )) && [[ "$w" != -* ]]; then
     case "$w" in
       # a command word or a destructive operand is not a credential: the person reads the quote to see WHAT was about to run
-      /*|'~'*|'$HOME'*|'${HOME}'*|rm|git|terraform|tofu|sudo|doas|env|command|nohup|time|timeout|nice|origin|main|master) : ;;
+      /|'/*'|'~'|'~/'|'~/*'|'$HOME'|'${HOME}'|'$HOME/*'|'${HOME}/*'|rm|git|terraform|tofu|sudo|doas|env|command|nohup|time|timeout|nice|origin|main|master) : ;;
       *) RW="<redacted>"; RW_NEXT=0; return ;;
     esac
   fi
@@ -574,7 +574,10 @@ done < <({ printf '%s' "$INPUT" | jq -j '.tool_input.command' | perl "$LEXER"; }
 # A read-time trip (a record or word cap, or the clock: BOUND_SOFT) does not discard the records already read: the rule table
 # judges them, and the decision below is a deny if one matched, else a bound ask. After a clock trip the judging gets 2 more
 # seconds counted from the trip (the harness kills the hook at 10 s; a trip detected late must not leave the judging no time at all).
-[[ "$BOUND_READ" -eq 1 ]] && DEADLINE_S=$((SECONDS + 2))
+if [[ "$BOUND_READ" -eq 1 ]]; then
+  DEADLINE_S=$((SECONDS + 2))
+  (( DEADLINE_S > 9 )) && DEADLINE_S=9   # inside the harness's 10 s kill: a trip detected at 8 s or later leaves the judging one second or none
+fi
 if [[ "$SAW_OK" -ne 1 && -z "$BOUND_SOFT" ]]; then
   if [[ -n "$SAW_E" ]]; then ask_parse "lexer ${SAW_E}"; fi
   # No OK and no E: the lexer was killed, crashed, or perl is missing/unusable. Probe by RESULT.

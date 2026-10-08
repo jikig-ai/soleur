@@ -315,8 +315,7 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
   not run yet and runs only if you approve."), then the rule id, a one-sentence lead and the quoted command, then the agent's
   instructions under "If you are the agent: This command was NOT run."; a deny opens "This command was NOT run." and also goes in
   `systemMessage`. The agent's tail follows the cause: a matched destructive command (`infra-destroy`, `default-branch-force-push`,
-  `recursive-delete-home`, `recursive-delete-workdir`, `unresolved-cd-before-destructive`) says stop, do not retry, do not
-  rephrase; a lexer parse failure (`command-not-parsed`, exit 2) and `lexer-empty` say fix the quoting or heredoc and send it again;
+  `recursive-delete-home`, `recursive-delete-workdir`) says stop, do not retry, do not rephrase; a lexer parse failure (`command-not-parsed`, exit 2) and `lexer-empty` say fix the quoting or heredoc and send it again;
   a lexer that gave out (depth, budget, alarm, crash) and `bound` say split it; a lexer that produced no result or malformed output
   (an environment fault: every piece of a split command fails the same way) and `envelope-unreadable` say stop and tell the person;
   `unparsed-wrapper` and `wrapper-depth` say write the command out so the guard can check it; `unresolved-cd-before-destructive` says
@@ -340,7 +339,11 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
   F: the judge extension counted from the trip, sudo long options read by unique prefix, an absolute wrapper chdir clearing an earlier
   unresolved `cd`, a chdir wrapper around a shell, the masking and the marker byte. G: the bash-4 gate widened, the limits named
   (`MAX_WRAP`, `QUOTE_MAX`, `MAX_PATH_COMPONENTS`). H: the test-design seat's survivors as rows, the verdict-owning wrappers driven with a
-  bad input, a narrowed run refused in CI. I: this section. The verification pass after it is recorded in the PR body.
+  bad input, a narrowed run refused in CI, and one hook change the rows found (`cd_index` skips any run of `-p`/`--` after `command` or
+  `builtin`: `command -p -- cd /tmp && rm -rf ./*` in home was read as no cd and denied). I: this section. The verification pass after
+  it found two under-asks and seven smaller defects in the fix commits themselves, fixed inline: a shell behind any wrapper under a
+  chdir wrapper, `timeout`/`nice`/`time` long options by prefix, the word cap asking about prose it never expands, a judge-extension
+  ceiling, the reason text for a chdir wrapper around a shell, masking by position, and the reporter probe.
 - **Fix rounds.** The commits whose subject ends `(fix round 1, R<n>)` and `(fix round 2, T<n>)` carry the rest. Hook: R1 path
   resolution bounded (one subshell per directory, a cache, a 128-component cap); R2 command-name case fold without a process; R3 a
   read-time bound trip still judges what was read; R4 the bound note appended to a matched rule's reason; R5 the degraded scans and the

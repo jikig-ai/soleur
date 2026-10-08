@@ -848,7 +848,8 @@ tree_row() {
 # helper that always reads "ok" would otherwise turn every row green: nothing else in the suite drives them with a bad input.
 _st_fatal() { printf '[FATAL] instrument self-test: %s\n' "$1" >&2; exit 1; }
 # the failure reporter itself must fail: a `_st_fatal` that returns would let every probe below fail silently (checked in a subshell, reported by a direct printf + exit)
-if ( _st_fatal "reporter probe" ) >/dev/null 2>&1; then printf '[FATAL] instrument self-test: _st_fatal returned instead of exiting\n' >&2; exit 1; fi
+_st_probe_out="$( ( _st_fatal "reporter probe"; echo SURVIVED ) 2>&1 )"
+if [[ "$_st_probe_out" == *SURVIVED* ]]; then printf '[FATAL] instrument self-test: _st_fatal returned instead of exiting\n' >&2; exit 1; fi
 # A later self-test runs after rows have counted: it snapshots the counters, ignores DCG_ROWS, and puts everything back.
 _st_save() { _sv_p="$PASS_COUNT"; _sv_f="$FAIL_COUNT"; _sv_c="$CHECKED"; _sv_s="$SELECTED"; _sv_rs="$ROWSEL"; ROWSEL=""; }
 _st_load() { PASS_COUNT="$_sv_p"; FAIL_COUNT="$_sv_f"; CHECKED="$_sv_c"; SELECTED="$_sv_s"; ROWSEL="$_sv_rs"; }
@@ -984,6 +985,7 @@ _hcode=""; [[ -f "$GUARD_HOOK" ]] && _hcode="$(grep -v '^[[:space:]]*#' "$GUARD_
 chk "constants: the wrapper-depth limit, the quote length and the path-component cap are named (MAX_WRAP, QUOTE_MAX, MAX_PATH_COMPONENTS)" "$([[ "$_hcode" == *$'\nMAX_WRAP=8'* && "$_hcode" == *$'\nQUOTE_MAX=200'* && "$_hcode" == *$'\nMAX_PATH_COMPONENTS=128'* && "$_hcode" != *MAX_DEPTH* ]] && echo ok)"
 chk "constants: no bare 8 or 200 stands in for MAX_WRAP / QUOTE_MAX in a comparison or a cut" "$([[ "$_hcode" != *'depth > 8'* && "$_hcode" != *':0:200}'* && "$_hcode" != *'> 200 )'* && "$_hcode" != *'<= 200'* ]] && echo ok)"
 chk "constants: the size texts are built from MAX_ENVELOPE / SCAN_MAX_SEG / SCAN_MAX_TOTAL, not typed (no literal '64 KiB' or '256 KiB' in the code)" "$([[ "$_hcode" != *'64 KiB'* && "$_hcode" != *'256 KiB'* && "$_hcode" == *'MAX_ENVELOPE / 1024'* && "$_hcode" == *'SCAN_MAX_SEG / 1024'* && "$_hcode" == *'SCAN_MAX_TOTAL / 1024'* ]] && echo ok)"
+chk "constants: the read-time judge extension is capped (DEADLINE_S never above 9 s, inside the harness's 10 s kill)" "$([[ "$_hcode" == *'DEADLINE_S=$((SECONDS + 2))'* && "$_hcode" == *'(( DEADLINE_S > 9 )) && DEADLINE_S=9'* ]] && echo ok)"
 chk "constants: no message names DEADLINE_S as the limit (the read-time extension moves it); the messages name LIMIT_S" "$([[ "$_hcode" != *'${DEADLINE_S} s time limit'* && "$_hcode" == *'${LIMIT_S} s time limit'* ]] && echo ok)"
 _hdr=""; [[ -f "$GUARD_HOOK" ]] && _hdr="$(head -n 200 "$GUARD_HOOK")"
 if grep -qF 'SOLEUR_DISABLE_DESTRUCTIVE_GUARD' <<<"$_hdr" && grep -qi 'restart' <<<"$_hdr"; then _x=ok; else _x=bad; fi
@@ -1934,6 +1936,8 @@ quote_row "quote: a credential flag does not mask the destructive operand (rm -r
 quote_row "quote: a credential flag does not mask a home operand (rm -rf --token ~)" 'rm -rf --token ~' - 'rm -rf --token ~'
 quote_row "quote: a credential flag does not mask the command word that follows (sudo --auth rm -rf /)" 'sudo --auth rm -rf /' - 'sudo --auth rm -rf /'
 quote_row "quote: a credential flag does not mask the remote or the branch (git push --force --auth origin main)" 'git push --force --auth origin main' @R1@ 'git push --force --auth origin main'
+quote_row "quote: a base64 secret that starts with a slash is still masked (--token /Q29uZmlkZW50aWFsVG9rZW4=)" 'terraform destroy --token /Q29uZmlkZW50aWFsVG9rZW4=' - 'terraform destroy --token <redacted>'
+quote_row "quote: a secret that starts with a tilde is still masked (--password ~hunter2)" 'terraform destroy --password ~hunter2' - 'terraform destroy --password <redacted>'
 quote_row "quote: a credential flag still masks a real secret value after it (terraform destroy --password s3cr3t-value)" 'terraform destroy --password s3cr3t-value' - 'terraform destroy --password <redacted>'
 # the quote never carries the byte the reason uses to split the person's text from the agent's (U+0001): a raw one in the command would end the
 # quote early and present the model's own words as the guard's instructions
@@ -1965,16 +1969,18 @@ rule_row "rule id: rm -rf ~ denies with the recursive-delete-home rule id" 'rm -
 rule_row "rule id: rm -rf of the working directory asks with the recursive-delete-workdir rule id" "${_RMRF} \"\$PWD\"" @SUB@ recursive-delete-workdir
 rule_row "rule id: terraform destroy asks with the infra-destroy rule id" 'terraform destroy' - infra-destroy
 rule_row "rule id: a force push to main asks with the default-branch-force-push rule id" 'git push --force origin main' @R1@ default-branch-force-push
-reason_has "lead: the force-push lead says what was matched" "force-pushes over, or deletes, a default branch"
+reason_has "rule id: lead: the force-push lead says what was matched" "force-pushes over, or deletes, a default branch"
 rule_row "rule id: a recursive delete after an unresolvable cd asks with the unresolved-cd-before-destructive rule id" 'cd "$UNKNOWN_DIR" && rm -rf build' - unresolved-cd-before-destructive
 # the repair for an unresolvable cd is a literal directory, so the tail says that instead of "do not rephrase"; the lead does not claim the directory
 # "cannot be checked" (an absolute target is checkable, the rule asks anyway)
-jqchk "tail: an unresolved cd tells the agent to use a literal directory and does not forbid rephrasing" '.hookSpecificOutput.permissionDecisionReason | contains("literal directory in the cd") and contains("stop and tell the person") and (contains("rephrase it to get around") | not)'
-jqchk "tail: an unresolved cd still carries the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+jqchk "rule id: tail: an unresolved cd tells the agent to use a literal directory and does not forbid rephrasing" '.hookSpecificOutput.permissionDecisionReason | contains("literal directory in the cd") and contains("stop and tell the person") and (contains("rephrase it to get around") | not)'
+jqchk "rule id: tail: an unresolved cd still carries the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+rule_row "rule id: env -C /tmp bash -c 'rm -rf ./x' asks the unresolved-cd rule (a chdir wrapper around a shell)" "env -C /tmp bash -c 'rm -rf ./x'" - unresolved-cd-before-destructive
+jqchk "rule id: tail: a chdir wrapper around a shell is told to do the cd inside the inner command (a literal directory is already there)" '.hookSpecificOutput.permissionDecisionReason | contains("inside the inner command") and contains("directory option")'
 rule_row "rule id: a recursive delete of an ABSOLUTE target after an unresolvable cd asks with the same rule id" 'cd "$UNKNOWN_DIR" && rm -rf /tmp/x/build' - unresolved-cd-before-destructive
-jqchk "lead: an unresolved cd before an absolute target does not claim the directory cannot be checked" '.hookSpecificOutput.permissionDecisionReason | (contains("cannot be checked") | not) and contains("cannot tell which directory")'
+jqchk "rule id: lead: an unresolved cd before an absolute target does not claim the directory cannot be checked" '.hookSpecificOutput.permissionDecisionReason | (contains("cannot be checked") | not) and contains("cannot tell which directory")'
 rule_row "rule id: a force push after an unresolvable cd asks with the same rule id and the literal-directory tail" 'cd "$UNKNOWN_DIR" && git push --force origin feat' @R1@ unresolved-cd-before-destructive
-jqchk "tail: that force push after an unresolved cd also gets the literal-directory tail" '.hookSpecificOutput.permissionDecisionReason | contains("literal directory in the cd")'
+jqchk "rule id: tail: that force push after an unresolved cd also gets the literal-directory tail" '.hookSpecificOutput.permissionDecisionReason | contains("literal directory in the cd")'
 rule_row "rule id: an unbalanced quote asks with the command-not-parsed rule id" "echo 'unbalanced" - command-not-parsed
 rule_env "rule id: garbage stdin asks with the envelope-unreadable rule id" envelope-unreadable 'not json at all {'
 
@@ -2813,7 +2819,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1206
+MIN_CASES=1232
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
