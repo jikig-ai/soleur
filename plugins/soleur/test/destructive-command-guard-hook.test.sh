@@ -970,10 +970,10 @@ chk "the hook uses no bash-4 feature and no GNU-only flag (count is 0)" "$_x" "h
 # the pattern itself can fail: every known-bad spelling is a hit and the known-good look-alikes are not
 _b4_miss=""
 for _s in 'x=${v,,}' 'x=${v^^}' 'x=${v,}' 'declare -n r=x' 'local -n r=x' '[[ -v X ]]' 'case x in a) ls ;;& b) ;; esac' 'case x in a) ls ;& b) ;; esac' 'a |& b' 'printf %q x' 'printf -v o %q x' 'readarray -t a' 'mapfile a' 'declare -A m' 'sort -z' 'xargs -r ls' 'find src -printf x' 'grep -P x' 'sed -r s/a/b/' 'sed -nr s/a/b/' 'readlink -f x' 'realpath x' 'x=${v,,[A-Z]}' 'x=${v^^pat}' 'x=${v,pat}' 'x=${a[-1]}' 'x=${v@Q}' 'x=${v@U}' 'declare -g X=1' 'echo $BASHPID' 'wait -n' 'a &>> f' 'read -t 0.5 x' 'read -r -t 0.25 x'; do
-  printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE" || _b4_miss+=" [$_s]"
+  grep -qE -- "$BASH4_RE" <<<"$_s" || _b4_miss+=" [$_s]"
 done
 for _s in "IFS=\$';&|\\n'" 'sed -E s/a/b/' 'x=${v:-,,}' 'x=${v:-^^}' 'x=${a[@]}' 'x=${#a[@]}' 'x=${PF_TAIL: -1}' 'x=${a[${#a[@]} - 1]}' 'printf %s x' 'find src -name x' 'grep -E x' 'sort -u' 'read -r -d x' 'read -t 5 x' 'wait $pid' 'a >> f 2>&1' 'declare -a x' 'declare -r x=1'; do
-  if printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE"; then _b4_miss+=" false-hit[$_s]"; fi
+  if grep -qE -- "$BASH4_RE" <<<"$_s"; then _b4_miss+=" false-hit[$_s]"; fi
 done
 if [[ -z "$_b4_miss" ]]; then _x=ok; else _x=bad; fi
 chk "the bash-4 token pattern flags every known-bad spelling and none of the look-alikes" "$_x" "wrong:$_b4_miss"
@@ -1837,7 +1837,7 @@ C @@ corpus: git log --oneline -5 @@ none @@ @R1@ @@ git log --oneline -5
 C @@ corpus: git commit -m with a destructive word in the message @@ none @@ @R1@ @@ git commit -m "fix: rm -rf handling and terraform destroy docs"
 C @@ corpus: git push origin feature-branch @@ none @@ @R1@ @@ git push origin feature-branch
 C @@ corpus: git push -u origin HEAD on a feature branch @@ none @@ @R1@ @@ git push -u origin HEAD
-C @@ corpus: git pull --rebase origin trunk @@ none @@ @R1@ @@ git pull --rebase origin trunk
+C @@ corpus: git pull --rebase --no-tags origin trunk @@ none @@ @R1@ @@ git pull --rebase --no-tags origin trunk
 C @@ corpus: git branch -D old-feature @@ none @@ @R1@ @@ git branch -D old-feature
 C @@ corpus: git stash list @@ none @@ @R1@ @@ git stash list
 C @@ corpus: npm install && npm test @@ none @@ - @@ npm install && npm test
@@ -2189,6 +2189,7 @@ redact_np() { # <label> <command> <secret that must be absent> <quoted text that
 # nothing else drives them with a bad input. Reported by printf + exit 1, never through the helpers it backstops.
 if [[ -z "$FAST" ]]; then
   _st_save
+  assert_fixture_dir "$WORK"
   cat > "$WORK/selftest/canned.sh" <<'CANEOF'
 #!/bin/sh
 echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"The guard. infra-destroy: a lead. Matched command: [x y z=<redacted>]. tail"}}'

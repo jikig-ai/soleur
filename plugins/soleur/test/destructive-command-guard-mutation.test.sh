@@ -267,7 +267,7 @@ is_killed() {
   [[ "$RS_RC" -eq 1 && -n "$RS_CASES" && -n "$RS_FAILS" && "$RS_FAILS" -ge 1 && "$RS_CASES" -eq $((RS_PASS + RS_FAILS)) \
     && -n "$RS_SEL" && "$RS_SEL" -ge "$1" ]] || return 1
   grep -qE '^\[FATAL\]|^HARNESS:' <<<"$RS_OUT" && return 1
-  grep -E '^  \[FAIL\]' <<<"$RS_OUT" | grep -qE "$2"
+  grep -E '^  \[FAIL\]' <<<"$RS_OUT" | grep -cE "$2" >/dev/null
 }
 
 # --- the judge is itself driven once: a canned green and a canned red ------------------------------------
