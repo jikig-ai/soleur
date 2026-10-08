@@ -5,6 +5,8 @@
   "bwrapSetupArgv": [
     "--die-with-parent",
     "--new-session",
+    "--cap-drop",
+    "ALL",
     "--symlink",
     "usr/bin",
     "/bin",

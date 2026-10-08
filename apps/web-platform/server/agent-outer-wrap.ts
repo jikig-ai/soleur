@@ -116,7 +116,13 @@ function req(p: string, what: string): string {
  */
 export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   const exists = inputs.exists ?? existsSync;
-  const argv: string[] = ["--die-with-parent", "--new-session"];
+    // --cap-drop ALL: `--cap-add SYS_ADMIN` on the container put it in the
+  // bounding set (the file cap needs it there); on a non-root-USER image
+  // Docker may also carry it ambient, which survives exec of any binary
+  // without file caps — including the CLI we are about to wrap. Drop the
+  // full set so the session can never setns/mount its way back out (the
+  // inner sandbox re-acquires whatever it needs inside ITS own userns).
+  const argv: string[] = ["--die-with-parent", "--new-session", "--cap-drop", "ALL"];
 
   // Merged-usr layout + system image (ro). The minimal /etc set covers
   // resolver + TLS + user lookups; directories go via --ro-bind, files via
