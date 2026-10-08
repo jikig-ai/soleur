@@ -7,7 +7,6 @@ import {
   classifyMutationOutcome,
   classifySelectOutcome,
   isPass,
-  RLS_VIOLATION_SQLSTATE,
   type Verdict,
 } from "./verdict";
 import { isolationSet, workspaceTenancyTables } from "./catalog";
@@ -95,8 +94,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
           try {
             return classifySelectOutcome(await countRows(t, target.table, loc));
           } catch (err) {
-            const code = (err as { code?: string }).code;
-            return code === RLS_VIOLATION_SQLSTATE ? { kind: "denied" } : { kind: "test-error", sqlstate: code ?? "unknown" };
+            return classifyWriteOutcome(err as { code?: string });
           }
         });
         expect(bBlocked, `${target.table}: B SELECT must be denied (grant-blocked or filtered)`).toEqual({ kind: "denied" });

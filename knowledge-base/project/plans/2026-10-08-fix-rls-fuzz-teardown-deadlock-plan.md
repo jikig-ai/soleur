@@ -396,7 +396,7 @@ schema for any non-pure-docs Files-to-Edit):
   emit: none new — failures surface through vitest's existing test output
 - **discoverability_test:**
   command: rg -l TRANSIENT_SQLSTATES apps/web-platform
-  expected_output: harness-fixture.ts
+  expected_output: harness-fixture.ts and verdict.ts (the set lives in verdict.ts › TRANSIENT_SQLSTATES alongside rethrowIfTransient; server/concurrency.ts and server/worktree-write-lease.ts are the pre-existing mirrored copies)
 
 ## Open Code-Review Overlap
 
@@ -479,7 +479,7 @@ census while sitting on the wrong handle) is forbidden by rule 4 anyway.
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
 | `withTransientRetry` + `rolledBackRaw` wrap (FR-1) | "serialize the trigger drop (retry on 40P01)" | asked |
-| Seed/catalog/bare-statement coverage: `seedTwoTenant`/`seedRpcCtx` committed-txn restructure, `catalog.ts` self-wraps, and the five spec files' bare `await sql` + bare-`sql`-handle call sites (FR-2) | — | inferred — justification: Postgres elects the deadlock victim nondeterministically; a bare seed/catalog/precondition statement is a legal victim, so leaving them unwrapped re-opens the same flake class under a different signature |
+| Seed/catalog/bare-statement coverage: `seedTwoTenant`/`seedRpcCtx` committed-txn restructure, `catalog.ts` self-wraps, and the six spec files' bare `await sql` + bare-`sql`-handle call sites (FR-2) | — | inferred — justification: Postgres elects the deadlock victim nondeterministically; a bare seed/catalog/precondition statement is a legal victim, so leaving them unwrapped re-opens the same flake class under a different signature |
 | `harness-fixture.test.ts` unit test (FR-3) | — | inferred — justification: constitution "new modules and source files must have corresponding test files" + `cq-write-failing-tests-before`; the retry predicate must be proven to pass non-transient errors through |
 | 55P03 in the transient set | — | inferred — justification: identical lock-wait failure class (`lock_not_available` is the lock_timeout/deadlock-adjacent sibling); matches the repo's own `TRANSIENT_SQLSTATES` in `server/concurrency.ts` |
 

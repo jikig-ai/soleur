@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import path from "node:path";
 import type postgres from "postgres";
 import { buildAuthenticatedClaims } from "./claim";
-import { classifyRpcOutcome, type Verdict } from "./verdict";
+import { classifyRpcOutcome, rethrowIfTransient, type Verdict } from "./verdict";
 import { securityDefinerAuthenticatedFns, securityDefinerAnonFns, allSecurityDefinerFns, type SecDefFn } from "./catalog";
 import { staticallyUndetectedDefinerFns, loadForwardCorpus } from "../migration-lint/definer-grants";
 import { ATTACK_SQL, EXCLUDED, KNOWN_EXPOSURES, type RpcCtx } from "./rpc-cases";
@@ -192,6 +192,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
           sp.unsafe(`select authorize_template('h-${ctx.messageA}', 'general.attack', '${ctx.scopeGrantA}')`),
         );
       } catch (e) {
+        rethrowIfTransient(e); // a deadlock victim must reach the sql-level retry, not be stored as a verdict input
         caught = e as { code?: string };
       }
       const r = await t.unsafe(

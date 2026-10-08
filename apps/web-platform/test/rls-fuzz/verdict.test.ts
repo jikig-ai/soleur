@@ -1,6 +1,14 @@
 import { describe, test, expect } from "vitest";
 import { buildAuthenticatedClaims, buildAnonClaims } from "./claim";
-import { classifyWriteOutcome, classifySelectOutcome, isPass, RLS_VIOLATION_SQLSTATE } from "./verdict";
+import {
+  classifyWriteOutcome,
+  classifyMutationOutcome,
+  classifyRpcOutcome,
+  classifySelectOutcome,
+  isPass,
+  rethrowIfTransient,
+  RLS_VIOLATION_SQLSTATE,
+} from "./verdict";
 
 describe("buildAuthenticatedClaims", () => {
   test("sub becomes auth.uid(); role is authenticated", () => {
@@ -55,5 +63,30 @@ describe("classifySelectOutcome", () => {
   });
   test(">0 rows → leaked (tenant B saw tenant A's row)", () => {
     expect(isPass(classifySelectOutcome(1))).toBe(false);
+  });
+});
+
+describe("transient lock SQLSTATES never classify as verdicts (#9779)", () => {
+  const pgErr = (code: string) => Object.assign(new Error(`pg ${code}`), { code });
+
+  test.each(["40P01", "55P03"])("%s rethrows from every err-classifier — it must reach the sql-level retry", (code) => {
+    const err = pgErr(code);
+    expect(() => classifyWriteOutcome(err)).toThrow(err);
+    expect(() => classifyMutationOutcome(err, 0)).toThrow(err);
+    expect(() => classifyRpcOutcome(err, 0)).toThrow(err);
+  });
+
+  test.each(["42501", "25P02", "23505", "unknown"])("non-transient %s still classifies, never rethrows", (code) => {
+    const err = pgErr(code);
+    expect(classifyWriteOutcome(err).kind).not.toBe("leaked");
+    expect(classifyMutationOutcome(err, 0).kind).not.toBe("leaked");
+    expect(classifyRpcOutcome(err, 0).kind).not.toBe("leaked");
+  });
+
+  test("rethrowIfTransient: transient propagates, everything else is left to the classifier", () => {
+    const dead = pgErr("40P01");
+    expect(() => rethrowIfTransient(dead)).toThrow(dead);
+    expect(() => rethrowIfTransient(pgErr("42501"))).not.toThrow();
+    expect(() => rethrowIfTransient(new Error("assertion failure"))).not.toThrow();
   });
 });

@@ -27,7 +27,7 @@ export async function isolationSet(sql: Sql): Promise<string[]> {
       and permissive = 'PERMISSIVE'
       and 'authenticated' = any(roles)
       and (qual ilike '%is_workspace_member%' or with_check ilike '%is_workspace_member%')
-    order by tablename`)
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -52,7 +52,7 @@ export async function workspaceTenancyTables(sql: Sql): Promise<string[]> {
       and c.relkind = 'r'
       and c.relrowsecurity
       and col.column_name in ('workspace_id', 'message_id')
-    order by tablename`)
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -100,7 +100,7 @@ export async function userIsolationTables(sql: Sql): Promise<string[]> {
     select tablename from uid_keyed
     where tablename not in (select tablename from ws_member)
       and tablename not in (select tablename from ws_tenancy)
-    order by tablename`)
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -124,7 +124,7 @@ export async function rowHijackTables(sql: Sql): Promise<string[]> {
     where pol.schemaname = 'public' and pol.permissive = 'PERMISSIVE'
       and ('authenticated' = any(pol.roles) or 'public' = any(pol.roles))
       and pol.cmd in ('UPDATE', 'ALL')
-    order by pol.tablename`)
+    order by pol.tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -136,7 +136,7 @@ export async function jtiDenySet(sql: Sql): Promise<string[]> {
     where schemaname = 'public'
       and permissive = 'RESTRICTIVE'
       and policyname ilike '%jti_not_denied%'
-    order by tablename`)
+    order by tablename`);
   return rows.map((r) => r.tablename);
 }
 
@@ -161,7 +161,7 @@ export async function securityDefinerAuthenticatedFns(sql: Sql): Promise<SecDefF
     where n.nspname = 'public'
       and p.prosecdef
       and has_function_privilege('authenticated', p.oid, 'EXECUTE')
-    order by p.proname, args`)
+    order by p.proname, args`);
 }
 
 /**
@@ -179,7 +179,7 @@ export async function allSecurityDefinerFns(sql: Sql): Promise<SecDefFn[]> {
     join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.prosecdef
-    order by p.proname, args`)
+    order by p.proname, args`);
 }
 
 /**
@@ -187,7 +187,7 @@ export async function allSecurityDefinerFns(sql: Sql): Promise<SecDefFn[]> {
  * (unauthenticated) role may EXECUTE. A DISTINCT dimension from the authenticated
  * set: under anon `auth.uid()` is NULL, so every `founder_id = auth.uid()` /
  * `is_workspace_member(param, auth.uid())` premise a definer fn relies on
- * evaporates, and a caller-override param (`COALESCE(p_caller, auth.uid())`)
+ * evaporates, and a caller-override param (`COALESCE(p_caller, auth.uid())`);
  * becomes fully attacker-controlled. The #6306 exposure was exactly a residual
  * CREATE-time default EXECUTE grant to anon that migration 037 failed to revoke;
  * this enumerator is the FORWARD tripwire — any future anon-granted definer fn
@@ -205,5 +205,5 @@ export async function securityDefinerAnonFns(sql: Sql): Promise<SecDefFn[]> {
     where n.nspname = 'public'
       and p.prosecdef
       and has_function_privilege('anon', p.oid, 'EXECUTE')
-    order by p.proname, args`)
+    order by p.proname, args`);
 }

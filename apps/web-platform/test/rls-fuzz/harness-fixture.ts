@@ -21,22 +21,27 @@
 //  3. seedRpcCtx flag-poisoning (debug_mode=true, ack=now(), installation_id=424242)
 //     is preserved: a leaked getter read returns identically to a denial (null)
 //     unless A's flags are poisoned to non-sentinel values.
+//  4. Every bare `sql`-handle statement MUST ride withTransientRetry — a new
+//     unwrapped statement on the raw handle is an unretried deadlock victim
+//     waiting to resurface as a CI flake (#9779). The wrap census is pinned by
+//     rls-fuzz-census.test.ts, and transient codes caught in a probe's own
+//     catch arm are re-thrown by verdict.ts › rethrowIfTransient() before they
+//     can classify as test-error.
 
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { sqlStateFromError } from "../../lib/postgres-errors";
 import { assertLocalDsn } from "./local-dsn-guard";
 import { buildAuthenticatedClaims } from "./claim";
+import { TRANSIENT_SQLSTATES } from "./verdict";
 import type { Ctx } from "./targets";
 import type { RpcCtx } from "./rpc-cases";
 
 type Sql = postgres.Sql<{}>;
 type Txn = postgres.TransactionSql<{}>;
 
-/** Transient Postgres SQLSTATES that warrant a bounded retry of the whole
- *  unit of work: 40P01 deadlock_detected, 55P03 lock_not_available.
- *  Mirrors apps/web-platform/server/concurrency.ts's TRANSIENT_SQLSTATES. */
-const TRANSIENT_SQLSTATES = new Set(["40P01", "55P03"]);
+// Transient set lives in verdict.ts › TRANSIENT_SQLSTATES (the catch-arm
+// classifiers there rethrow the same codes so they can reach this retry).
 const TRANSIENT_MAX_ATTEMPTS = 3;
 
 /**
@@ -65,7 +70,10 @@ export async function withTransientRetry<T>(
       if (code === undefined || !TRANSIENT_SQLSTATES.has(code) || attempt >= TRANSIENT_MAX_ATTEMPTS) {
         throw e;
       }
-      await sleep(80 + Math.random() * 40); // 80–120 ms jitter, same as concurrency.ts
+      // Keep the flake visible in CI logs — a green run that silently absorbed
+      // three deadlocks must not read identically to a run with none.
+      console.warn(`[rls-fuzz] transient ${code} — retrying (attempt ${attempt + 1}/${TRANSIENT_MAX_ATTEMPTS})`);
+      await sleep(80 + Math.random() * 40); // 80–120 ms jitter, same as concurrency.ts › acquireSlot()
     }
   }
 }
@@ -91,6 +99,11 @@ const ROLLBACK = Symbol("rls-fuzz-rollback");
  * Does NOT set role — callers that need to observe as superuser first (disable RLS,
  * `reset role` mid-txn to re-read a poisoned row) rely on this. attackAs/asTenant
  * layer role+claims on top.
+ *
+ * `fn` may be invoked up to TRANSIENT_MAX_ATTEMPTS times (each in a fresh txn)
+ * when a transient lock error propagates out of it — keep it replay-safe:
+ * DB statements + idempotent local-variable writes only, no external side
+ * effects that must run exactly once.
  */
 export async function rolledBackRaw<T>(sql: Sql, fn: (t: Txn) => Promise<T>): Promise<T> {
   let out: T;

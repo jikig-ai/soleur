@@ -30,12 +30,11 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — deepened excluded tables (co-membe
     sql = connect(DSN); // assertLocalDsn + max:1 pinned in the shared fixture
     ctx = await seedTwoTenant(sql);
 
-    ids.email_triage_items = await withTransientRetry(() => seedEmailTriageItem(sql, ctx));
-
     // One committed txn under the retry wrapper: a mid-seed deadlock replay is
     // only safe because the whole cluster rolls back together.
     await withTransientRetry(() =>
       sql.begin(async (t) => {
+        ids.email_triage_items = await seedEmailTriageItem(t, ctx);
         const [inbox] = await t`insert into inbox_item (user_id, workspace_id, severity, source, title)
           values (${ctx.userA}, ${ctx.wsA}, 'info', 'system', 'rls-fuzz') returning id`;
         ids.inbox_item = inbox.id as string;
