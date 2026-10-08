@@ -438,7 +438,7 @@ for need in "$JOB" "$FIXED_JOB"; do
   # Boundary = "not a job-name char" — `[`, space, `-`-bullet, `]`, `,` all
   # qualify, while a longer name containing the needle does not.
   if ! grep -A3 -E '^[[:space:]]+needs:' <<< "$DONE_RAW" \
-       | grep -qE "(^|[^a-zA-Z0-9_-])${need}([^a-zA-Z0-9_-]|$)"; then
+       | grep -cE >/dev/null "(^|[^a-zA-Z0-9_-])${need}([^a-zA-Z0-9_-]|$)"; then
     err "\`$DONE_JOB\` does not list \`$need\` in its needs: — a leg can go red or"
     err "  be cancelled without the aggregator ever seeing it."
     fails=$((fails + 1))
