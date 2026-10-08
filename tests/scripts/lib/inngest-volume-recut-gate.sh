@@ -250,17 +250,18 @@ inngest_volume_recut_gate() {
             | length
           ),
           old_volume_touched: (
-            # hcloud_volume.workspaces["web-1"] is the LIVE sole-copy /workspaces volume holding
-            # every user repository tree. #6593 shipped NO prevent_destroy; this counter is its
-            # sole protection from a mis-scoped apply reachable from this menu option.
+            # hcloud_volume.workspaces["web-1"] WAS the sole-copy /workspaces volume holding every
+            # user repository tree when this gate was written. HISTORICAL: it later gained
+            # prevent_destroy (#6459) and was retired, out of state, by #6604 step 7 — the counter
+            # stays as a backstop against a re-introduced address from this menu option.
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.workspaces[\"web-1\"]")
               | select(positive) ]
             | length
           ),
           old_attachment_touched: (
-            # Detaching the live /workspaces volume strands sole-copy data just as surely as
-            # deleting it.
+            # Detaching the then-serving /workspaces volume stranded sole-copy data just as surely
+            # as deleting it (HISTORICAL; retired with the volume by #6604 step 7).
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume_attachment.workspaces[\"web-1\"]")
               | select(positive) ]

@@ -1339,11 +1339,12 @@ t43_bad() {  # <text> -> count of `exit 0` lines not preceded (same or previous 
 t43_n="$(grep -cE '(^|[;[:space:]])exit 0([[:space:]]|;|$)' "$T25BODY.main" || true)"
 t43_real="$(t43_bad "$t41_main")"
 t43_ctl="$(t43_bad "$(printf '%s\n' 'if x; then' '  rollback' '  exit 0' 'fi')")"
-# #6604 step 7 took this 3 -> 4: the CONFIRM_WIPE mode block ends `RUN_COMPLETE=1; exit 0` too.
-if [ "$t43_n" -eq 4 ] && [ "$t43_real" -eq 0 ] && [ "$t43_ctl" -eq 1 ]; then
-  ok "T43 all 4 intentional exit-0 paths (ROLLBACK end, CLEAN_STRAY end, CONFIRM_WIPE end, the normal/dry-run end) set RUN_COMPLETE=1 (control caught)"
+# #6604 step 7 took this 3 -> 4 (the CONFIRM_WIPE mode block ended `RUN_COMPLETE=1; exit 0` too) and
+# PR B took it back to 3: that block is now a tombstone that always dies, never an exit-0 path.
+if [ "$t43_n" -eq 3 ] && [ "$t43_real" -eq 0 ] && [ "$t43_ctl" -eq 1 ]; then
+  ok "T43 all 3 intentional exit-0 paths (ROLLBACK end, CLEAN_STRAY end, the normal/dry-run end) set RUN_COMPLETE=1 (control caught)"
 else
-  no "T43 exit-0 paths: count=$t43_n (want 4) missing RUN_COMPLETE=$t43_real (want 0) control=$t43_ctl (want 1)"
+  no "T43 exit-0 paths: count=$t43_n (want 3) missing RUN_COMPLETE=$t43_real (want 0) control=$t43_ctl (want 1)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1652,9 +1653,14 @@ echo
 echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # #9098 D1 — PASS FLOOR, set to the measured count. `fail -eq 0` alone is satisfied by a suite whose
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
-# still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
+# still exit 0. It reports through printf + exit 1, never through no() (ADR-193). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=187
-[ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
-harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
+# Both bindings are SIMPLE assignments directly above the `if` (arithmetic, never a command
+# substitution), so guard-vacuity-floor can build and mutation-test the floor.
+FREEZE_SELF_CHECK=$(( ${WL_SELF_CHECK:-0} == 1 ))
+FREEZE_MIN_PASS=$(( 187 - 3 * FREEZE_SELF_CHECK ))
+if [ "$pass" -lt "$FREEZE_MIN_PASS" ]; then
+  printf 'FAIL - workspaces-luks-freeze.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$pass" "$FREEZE_MIN_PASS" >&2
+  exit 1
+fi
 [ "$fail" -eq 0 ]
