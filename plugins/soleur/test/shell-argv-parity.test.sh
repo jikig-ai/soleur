@@ -54,6 +54,16 @@ if [[ "$passes" -ne $((_iv_p + 1)) || "$fails" -ne $((_iv_f + 1)) ]]; then
   printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 1
 fi
 passes=0; fails=0
+# The verdict helper that OWNS the result of every case, row(), is driven too: the pass()/fail() probe above cannot see a row() that always
+# says ok. Reported by printf + exit 1, never through the helpers it backstops.
+_st_fatal() { printf '[FATAL] instrument self-test: %s\n' "$1" >&2; exit 1; }
+{ row "probe: ok" ok; } >/dev/null 2>&1
+[[ "$passes" -eq 1 && "$fails" -eq 0 && "$CASES" -eq 1 ]] || _st_fatal "row() did not record a pass for ok"
+{ row "probe: no" no; } >/dev/null 2>&1
+[[ "$passes" -eq 1 && "$fails" -eq 1 && "$CASES" -eq 2 ]] || _st_fatal "row() did not record a fail for no"
+{ row "probe: okay" okay; } >/dev/null 2>&1
+[[ "$passes" -eq 1 && "$fails" -eq 2 && "$CASES" -eq 3 ]] || _st_fatal "row() did not record a fail for a value that is not exactly ok"
+passes=0; fails=0; CASES=0
 
 command -v perl >/dev/null 2>&1 || { echo "[FATAL] perl required" >&2; exit 1; }
 command -v awk >/dev/null 2>&1 || { echo "[FATAL] awk required" >&2; exit 1; }
@@ -254,18 +264,40 @@ mutate() {
   ! cmp -s "$1" "$2"
 }
 # expect_red <desc> <orig> <plug> [needle]: the control must be green, the verdict red (and name the needle).
+PV=parity_verdict   # the verdict function the two wrappers judge with (the self-test below swaps in canned ones)
 expect_red() {
   local v
   if [[ "$CONTROL" != OK ]]; then row "$1" no "control is not green"; return 0; fi
-  v="$(parity_verdict "$2" "$3")"
+  v="$("$PV" "$2" "$3")"
   if [[ "$v" == RED:* && ( -z "${4:-}" || "$v" == *"$4"* ) ]]; then row "$1" ok; else row "$1" no "$v"; fi
 }
 expect_ok() {
   local v
   if [[ "$CONTROL" != OK ]]; then row "$1" no "control is not green"; return 0; fi
-  v="$(parity_verdict "$2" "$3")"
+  v="$("$PV" "$2" "$3")"
   if [[ "$v" == OK ]]; then row "$1" ok; else row "$1" no "$v"; fi
 }
+# expect_red and expect_ok are the verdict owners of every mutation row: each is driven with a canned verdict that must pass it and one that
+# must fail it (a wrapper that always reads ok would turn all of C2 green).
+_pv_green() { printf 'OK\n'; }
+_pv_red() { printf 'RED:spans differ: 2\n'; }
+_st_wrap() { # <expected pass delta> <expected fail delta> <message> <function> <args...>
+  local ep="$1" ef="$2" msg="$3" p0="$passes" f0="$fails" c0="$CASES"; shift 3
+  { "$@"; } >/dev/null 2>&1
+  [[ $((passes - p0)) -eq "$ep" && $((fails - f0)) -eq "$ef" && $((CASES - c0)) -eq 1 ]] || _st_fatal "$msg"
+  passes="$p0"; fails="$f0"; CASES="$c0"
+}
+_pv_saved="$PV"; _control_saved="$CONTROL"; CONTROL=OK
+PV=_pv_red;   _st_wrap 1 0 "expect_red failed a red verdict" expect_red "probe" a b
+PV=_pv_red;   _st_wrap 0 1 "expect_red passed a red verdict that lacks the needle" expect_red "probe" a b "differ: 3"
+PV=_pv_red;   _st_wrap 1 0 "expect_red failed a red verdict that holds the needle" expect_red "probe" a b "differ: 2"
+PV=_pv_green; _st_wrap 0 1 "expect_red passed a green verdict" expect_red "probe" a b
+PV=_pv_green; _st_wrap 1 0 "expect_ok failed a green verdict" expect_ok "probe" a b
+PV=_pv_red;   _st_wrap 0 1 "expect_ok passed a red verdict" expect_ok "probe" a b
+CONTROL=bad
+PV=_pv_red;   _st_wrap 0 1 "expect_red passed with a control that is not green" expect_red "probe" a b
+PV=_pv_green; _st_wrap 0 1 "expect_ok passed with a control that is not green" expect_ok "probe" a b
+PV="$_pv_saved"; CONTROL="$_control_saved"
 
 # 1. one character inside a span, plugin copy only (span 2: `sub charge`)
 if mutate "$MU/plug.pl" "$MU/m1.pl" 's/\$USED > \$BUDGET/\$USED >= \$BUDGET/'; then
@@ -334,6 +366,15 @@ if mv_marker "$MU/orig.pl" "$MU/m8o.pl" BEGIN 2 1 && mv_marker "$MU/plug.pl" "$M
   v3="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m8p.pl" )"; v4="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m8o.pl" )"
   row "M8: BEGIN of span 2 moved one line down in BOTH copies is rejected by span 2's first-line anchor" "$([[ "$v3" == RED:*"span 2 starts with"* && "$v4" == RED:*"span 2 starts with"* ]] && echo ok)" "$v4 / $v3"
 else row "M8: BEGIN of span 2 moved in both copies (landed)" no "move did not land"; fi
+# 9/10. the same for the END of span 1 and span 2 (moved one line UP in BOTH copies): the last line of THAT span is what must reject it.
+if mv_marker "$MU/orig.pl" "$MU/m9o.pl" END 1 -1 && mv_marker "$MU/plug.pl" "$MU/m9p.pl" END 1 -1; then
+  v3="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m9p.pl" )"; v4="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m9o.pl" )"
+  row "M9: END of span 1 moved one line up in BOTH copies is rejected by span 1's last-line anchor" "$([[ "$v3" == RED:*"span 1 ends with"* && "$v4" == RED:*"span 1 ends with"* ]] && echo ok)" "$v4 / $v3"
+else row "M9: END of span 1 moved in both copies (landed)" no "move did not land"; fi
+if mv_marker "$MU/orig.pl" "$MU/m10o.pl" END 2 -1 && mv_marker "$MU/plug.pl" "$MU/m10p.pl" END 2 -1; then
+  v3="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m10p.pl" )"; v4="$( MIN_SPAN_1=0; MIN_SPAN_2=0; MIN_SPAN_3=0; edge_verdict "$MU/m10o.pl" )"
+  row "M10: END of span 2 moved one line up in BOTH copies is rejected by span 2's last-line anchor" "$([[ "$v3" == RED:*"span 2 ends with"* && "$v4" == RED:*"span 2 ends with"* ]] && echo ok)" "$v4 / $v3"
+else row "M10: END of span 2 moved in both copies (landed)" no "move did not land"; fi
 # (b) must-PASS: a change OUTSIDE the markers (inside process_command) compares equal, in either file
 if mutate "$MU/plug.pl" "$MU/b1.pl" 's/^(sub process_command \{)/$1  # a change outside the shared spans/m'; then
   expect_ok "HARNESS (b): a change inside process_command of the plugin copy compares equal" "$MU/orig.pl" "$MU/b1.pl"
@@ -412,7 +453,7 @@ echo "cases=$CASES passes=$passes fails=$fails"
 if [[ $((passes + fails)) -ne "$CASES" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((passes + fails))" "$CASES" >&2; exit 1
 fi
-MIN_CASES=99
+MIN_CASES=101
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CASES" "$MIN_CASES" >&2
   exit 1
