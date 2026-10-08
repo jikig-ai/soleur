@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # hmac-sha1-b64.sh -- RFC 2104 HMAC-SHA1 in bash, for OAuth 1.0a request signing.
-# Sourced by x-community.sh and x-setup.sh. Defines ONE function and runs nothing.
+# Sourced by x-community.sh (lazily, at its first signature, so a trace-safe run with no credentials
+# set is never refused over this file) and by x-setup.sh (at load; its own prologue refuses
+# `bash -x` unconditionally). Defines ONE function and runs nothing.
 #
 # WHY THIS EXISTS (#9597). The signing key (the API secret and the token secret, joined
 # with an ampersand) used to be handed to `openssl dgst` as the operand of its key option,
@@ -9,12 +11,14 @@
 # community crons), so the python route the rest of the sweep uses is not available here;
 # the plugin depends only on bash, openssl, jq and curl, and this keeps it that way.
 #
-# HOW. The key lives only in bash builtins and pipes. The two 64-byte pads are emitted by
-# the printf builtin as byte escapes straight into a pipe, never held in a variable (a pad
-# can hold a NUL byte, which a bash variable cannot). `openssl dgst -sha1 -binary` reads
-# stdin only; its argument list is the constant `dgst -sha1 -binary`. No temp file, no
-# here-string and no heredoc is used on key-derived data (bash older than 5.1, including
-# macOS 3.2, writes those to a temp file).
+# HOW. The key lives only in bash builtins and pipes, never on an exec argument. The two 64-byte
+# pads are built as printf byte-ESCAPE TEXT (`\x36...`) in function-local variables (_hs_ip,
+# _hs_op, the key hex _hs_kh, the inner digest _hs_ih/_hs_oh) and emitted by the printf builtin
+# straight into a pipe; the variables hold escape text rather than raw bytes because a pad can
+# hold a NUL byte, which a bash variable cannot. `openssl dgst -sha1 -binary` reads stdin only;
+# its argument list is the constant `dgst -sha1 -binary`. No temp file, no here-string and no
+# heredoc is used on key-derived data (bash older than 5.1, including macOS 3.2, writes those to
+# a temp file).
 #
 # USAGE: the message arrives on STDIN; the KEY is passed by the NAME of the variable that
 # holds it (never as an expansion, so a traced call line shows only the name). The
@@ -28,10 +32,15 @@
 #       1  a tool failed (openssl, od, tr, base64 missing or erroring)
 #   - never calls the shell's exit builtin, and never prints the credential-refusal marker:
 #     the caller decides its own exit code and its own diagnostics.
-#   - the work runs in a subshell. Inside it allexport is turned off and the key variable is
-#     unexported, so under a caller's `set -a` (a sourced .env) neither the key nor this
-#     file's own working variables (all prefixed with _hs_) reach the environment of
-#     openssl, od, tr or base64. The caller's shell options are untouched.
+#   - the work runs in a subshell. Inside it allexport is turned off and the variable the caller
+#     NAMED (the derived signing key) is unexported, and this file's own working variables (all
+#     prefixed with _hs_) are never exported, so under a caller's `set -a` (a sourced .env)
+#     neither the derived key variable nor a _hs_ variable reaches the environment of openssl,
+#     od, tr or base64. What the function does NOT control: a variable the caller exported
+#     earlier. The raw API secret and token secret the key is built from stay in those children's
+#     environment when the caller exported them (a sourced .env, the hosted environment); that is
+#     readable by the same user and root only, and on no argument list. The caller's shell
+#     options are untouched.
 #   - LC_ALL=C inside, so every byte is one character.
 #   - portable to bash 3.2 and BSD od/base64: the shell features used are printf -v,
 #     substring expansion, indirect expansion and arithmetic; the external tools are
@@ -41,10 +50,14 @@
 case "$-" in
   *x*)
     # Load-time refusal, first in the file (the xtrace lint's prologue rule, #7797): sourcing
-    # this under `bash -x` and then calling it would print the key. A sourced file returns; the
-    # `|| exit` arm runs only if the file is EXECUTED instead of sourced. The refusal goes to
-    # STDOUT here, like the other prologues: agent runtimes surface stdout and swallow stderr,
-    # and this top-level line is not inside a command substitution.
+    # this under `bash -x` and then calling it would print the key. It is UNCONDITIONAL because
+    # this file names its key indirectly (`${!1}`), so there is no literal credential name for a
+    # conditional `${VAR:+x}` hatch to test. That is why x-community.sh sources it lazily, at its
+    # first signature, after its own conditional prologue has already allowed the run. A sourced
+    # file returns; the `|| exit` arm runs only if the file is EXECUTED instead of sourced. The
+    # refusal goes to STDOUT here, like the other prologues: agent runtimes surface stdout and
+    # swallow stderr. A caller that sources this inside a command substitution redirects the
+    # source command's stdout to its saved real stdout.
     printf 'Refusing to load the HMAC helper under `bash -x`: tracing would print the signing key. Re-run without `bash -x`.\n'
     return 78 2>/dev/null || exit 78
     ;;

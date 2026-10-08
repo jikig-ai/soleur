@@ -165,8 +165,12 @@ report_transport_failure() {
 readonly X_API="https://api.x.com"
 
 # (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# The helper library is sourced LAZILY, inside oauth_sign at the first signature, not here: it
+# refuses `bash -x` unconditionally at load time (it names its key indirectly, so it has no
+# literal credential name to test), and loading it up here would make `bash -x x-community.sh`
+# with no credentials set exit 78 instead of printing usage -- the case this file's conditional
+# prologue above promises to keep working.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh"
 
 # --- Dependency checks ---
 
@@ -299,6 +303,14 @@ oauth_sign() {
   # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
   # lives only in bash builtins and pipes: it is on no process's argument list. A failed
   # computation yields no signature and the request is never sent unsigned.
+  # oauth_sign runs inside `$(...)`, so the load's stdout (the library's xtrace refusal text) goes
+  # to the saved real stdout (fd 3), where the founder sees it, not into the captured header.
+  if ! declare -F hmac_sha1_b64 >/dev/null; then
+    source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {
+      echo "Error: could not load the OAuth signing helper; refusing to send an unsigned request." >&2
+      return 1
+    }
+  fi
   local signature
   signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
   if [[ -z "$signature" ]]; then

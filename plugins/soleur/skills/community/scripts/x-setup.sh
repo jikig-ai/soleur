@@ -18,10 +18,13 @@
 #
 # Exit codes:
 #   0 - Success
-#   1 - General error
+#   1 - General error, including missing credentials and a write-env value outside the .env
+#       allow-list. The two are told apart by the stderr marker: an allow-list refusal prints
+#       `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free); its one human
+#       line is on stdout.
 #
 # Output: JSON or plain text to stdout
-# Errors: Messages to stderr, exit 1
+# Errors: Messages to stderr, exit 1 (the write-env allow-list line: stdout)
 
 set -euo pipefail
 
@@ -186,8 +189,8 @@ _wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds
   return 0
 }
 _wenv_refuse() { # <reason> <VARIABLE>
-  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
-  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand." >&2
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=%s phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand."
   exit 1
 }
 # _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
