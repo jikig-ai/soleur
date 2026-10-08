@@ -89,7 +89,16 @@ _iv_p="$PASS_COUNT"; _iv_f="$FAIL_COUNT"
 if [[ "$PASS_COUNT" -ne $((_iv_p + 1)) || "$FAIL_COUNT" -ne $((_iv_f + 1)) ]]; then
   printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 1
 fi
-PASS_COUNT=0; FAIL_COUNT=0
+# chk() owns the verdict of every check below: ok records a pass and only a pass, anything else a fail and only a fail, and CHECKED moves for
+# each. The pass()/fail() probe above cannot see a chk() that always says ok (60/60 stayed green with one). Reported by printf + exit 1.
+PASS_COUNT=0; FAIL_COUNT=0; CHECKED=0
+{ chk "self-test: chk ok" ok; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq 1 && "$FAIL_COUNT" -eq 0 && "$CHECKED" -eq 1 ]] || { printf '[FATAL] instrument self-test: chk did not record a pass for ok\n' >&2; exit 1; }
+{ chk "self-test: chk bad" bad; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq 1 && "$FAIL_COUNT" -eq 1 && "$CHECKED" -eq 2 ]] || { printf '[FATAL] instrument self-test: chk did not record a fail for bad\n' >&2; exit 1; }
+{ chk "self-test: chk other" okay; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq 1 && "$FAIL_COUNT" -eq 2 && "$CHECKED" -eq 3 ]] || { printf '[FATAL] instrument self-test: chk did not record a fail for a value that is not exactly ok\n' >&2; exit 1; }
+PASS_COUNT=0; FAIL_COUNT=0; CHECKED=0
 
 harness_die() { printf 'HARNESS: %s\n' "$1" >&2; exit 2; }
 
