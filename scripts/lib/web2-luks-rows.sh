@@ -264,6 +264,7 @@ w2l_ready_newest_age() {
 # wrote the readiness row must have FORMATTED a raw volume or OPENED an existing LUKS container. `noop` (which
 # w2l_ready_verdict still tolerates) is NOT accepted, nor is a row with no arm. Prints the arm when it is a known
 # value so a caller can name it; fails closed (rc 1) on an unparseable body, no row, or a row that is not this host's.
+# Two rows with the same age_s are resolved by input order (the verdict does the same); the row is written once per instance.
 w2l_ready_arm() {
   local arm
   _w2l_body_ok "$1" || return 1

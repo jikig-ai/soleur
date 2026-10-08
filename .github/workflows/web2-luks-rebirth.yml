@@ -439,7 +439,7 @@ jobs:
           if [[ -s "$facts" ]]; then printf 'facts=%s\n' "$(head -c 600 "$facts" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"; fi
           exit "$rc"
 
-      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
         if: ${{ env.APPLY == 'yes' }}
         env:
           # The script REFUSES to reboot without the never-pooled proof: with the soak marker present web-2 may already hold data.

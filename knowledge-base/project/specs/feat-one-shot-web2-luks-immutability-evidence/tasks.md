@@ -1,7 +1,7 @@
 # Tasks: web-2 LUKS evidence rule, immutability not reboot (#9372, Ref only)
 
 Plan: knowledge-base/project/plans/2026-10-08-fix-web2-luks-evidence-immutability-not-reboot-plan.md
-Scope (owner decision 2026-10-08): the #6931 grader AND the soak-marker writer (`w2l_judge`) use the same rule, defined once in `w2l_ready_arm`.
+Scope (owner decision 2026-10-08, on the 2026-10-07 principle): the #6931 grader AND the soak-marker writer (`w2l_judge`) use the same rule, defined once in `w2l_ready_arm`.
 
 ## 1. Lib, judge, grader, workflow condition
 

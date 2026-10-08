@@ -327,6 +327,7 @@ battery() {
   world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=proceed RUN_ID=77 EMPTINESS=PASS-x" run "summary: a successful apply run" 0 "Nothing is claimed until the #6931 grader reports PASS" summary
   check "summary: success prints the reborn host, the approver and the update-not-enrol instruction" "$([[ "$LASTOUT" == *"server_id=1001"* && "$LASTOUT" == *approver-one* && "$LASTOUT" == *"already enrolled"* ]]; echo $?)"
   check "summary: the step summary file received the same text" "$(grep -q 'Nothing is claimed until the #6931 grader reports PASS' "$WORLD/summary"; echo $?)"
+  check "summary: success states the rule without a reboot and not the old boot_id proof" "$([[ "$LASTOUT" == *"no reboot is required"* && "$LASTOUT" == *"luks_arm formatted|opened"* && "$LASTOUT" != *"boot_id other than"* ]]; echo $?)"
   world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=resume:post_apply RUN_ID=77" run "summary: a RESUME run says nothing was replaced" 0 "This was a RESUME" summary
   local want_earliest; want_earliest="$(date -u -d "@$(( $(date -u +%s) - 7200 + 259200 ))" +%Y-%m-%d)"
   check "summary: a resume run does not claim the rebirth applied, and the follow-through date is the server's creation + 3 days" "$([[ "$LASTOUT" != *"The rebirth applied"* && "$LASTOUT" == *"to ${want_earliest} (rebirth + 3 days)"* ]]; echo $?)"

@@ -339,7 +339,7 @@ The join is instance-level (ADR-263 D5; `boot_id` is printed for diagnosis and n
 **earned** only when the newest probe row is green and fresh AND the newest readiness row is green, not newer
 than that probe row, and reports `luks_arm` `formatted` or `opened` (`noop` is refused as `ready_luks_arm`). It is **kept** by the newest probe row alone, unless a readiness row is newer than the probe
 row (a rebirth), which is RED `probe_predates_ready`. A RED run on a held marker deletes it (the gate fails closed);
-a fault of the judge itself or of the query leaves the marker exactly as it is. A scheduled run that is RED or
+a fault of the judge itself or of the query leaves the marker exactly as it is. The marker is shape-only: it is NOT a #6931 PASS, it no longer evidences that the volume reopens after a reboot, and a replacement can inherit a present marker with its age (ADR-263 addendum 2026-10-08). A scheduled run that is RED or
 could not judge files a `[ci/luks-verify-web2]` GitHub issue, one per class, deduped by title and commented only
 when the reason changes: `web-2 LUKS evidence is RED` (labels `luks/class-web2-red`, `priority/p1-high`) or
 `could not judge web-2 - nothing proven` (`luks/class-web2-unavailable`, `priority/p2-medium`). The job's last

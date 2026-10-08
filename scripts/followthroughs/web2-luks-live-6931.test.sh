@@ -141,8 +141,8 @@ reset_fx; rdy $((SOAK + 60)) | ready; soak_probes $((SOAK + 60)) | probe
 run 0 PASS "T03 readiness one minute past 72 h with three daily buckets: the soak is met"
 
 # No reboot is required (owner decision 2026-10-07, ADR-263 addendum 2026-10-08): the soak is met on the instance's readiness row
-# (luks_arm formatted|opened) plus three GREEN days, whatever boot_id the probe rows carry. The four cases below used to
-# need a boot_id that differed from the readiness row's; they now pass, and T04f/T04g pin the arm that replaced it.
+# (luks_arm formatted|opened) plus three GREEN days, whatever boot_id the probe rows carry. The five cases below used to
+# need a boot_id that differed from the readiness row's; they now pass, and T04f-T04h pin the arm that replaced it.
 reset_fx; rdy $((4 * D)) "boot_id=unknown" | ready; { row $H "$(okmsg crypto_LUKS ok unknown)"; row $((H + D)) "$(okmsg crypto_LUKS ok unknown)"; row $((H + 2 * D)) "$(okmsg crypto_LUKS ok $UB)"; } | probe
 run 0 PASS "T04 an unknown readiness boot_id no longer blocks the soak (a reboot is not required)"
 reset_fx; rdy $((4 * D)) | ready; { row $H "$(okmsg crypto_LUKS ok $UA)"; row $((H + D)) "$(okmsg crypto_LUKS ok $UA)"; row $((H + 2 * D)) "$(okmsg crypto_LUKS ok $UA)"; } | probe

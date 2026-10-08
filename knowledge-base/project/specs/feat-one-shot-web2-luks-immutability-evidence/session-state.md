@@ -10,7 +10,7 @@ None blocking. One scratch shell command was refused by the safety check and re-
 ### Decisions
 - Arm 4 of the #6931 grader and the soak-marker writer (`w2l_judge`) share one predicate, `w2l_ready_arm` in `scripts/lib/web2-luks-rows.sh`: the newest readiness row's `luks_arm` is `formatted` or `opened` (`noop` not accepted).
 - `w2l_reboot_seen` and the `reboot_not_seen` reason are deleted; the workflow's not-live condition drops it.
-- Owner decision 2026-10-08: the marker writer is in scope, so the new rule works end to end (web-2 can earn `WORKSPACES_LUKS_CUTOVER_AT` without a reboot, on the grader's evidence).
+- Owner decision 2026-10-08 (scope of this PR; the principle was decided 2026-10-07): the marker writer is in scope, so the new rule works end to end (web-2 can earn `WORKSPACES_LUKS_CUTOVER_AT` without a reboot, on the grader's evidence).
 - ADR-263 gets an append-only dated addendum; the rebirth runbook and `web-host-reboot.md` get amendment blocks.
 - Brand-survival threshold: single-user incident.
 

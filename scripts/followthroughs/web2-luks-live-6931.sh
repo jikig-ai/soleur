@@ -102,7 +102,7 @@ fi
 # opened the volume. w2l_ready_verdict also tolerates `noop`; this is the stricter, shared rule (w2l_judge uses it too).
 # The row is written once per instance, so waiting or rebooting cannot repair it: replacing the host does.
 if ! rarm="$(w2l_ready_arm "$tmp/ready.jsonl")"; then
-  unmet "the newest readiness row reports luks_arm=${rarm:-none}, not formatted or opened: nothing shows the boot brought the volume up, and waiting will not change it (the row is written once per instance); only replacing web-2 produces a new one (readiness: ${rverdict})."
+  unmet "the newest readiness row reports luks_arm=${rarm:-none}, not formatted or opened: nothing shows the boot brought the volume up. This stays NOT YET until the window closes and then FAILs, because the row is written once per instance; only replacing web-2 produces a new one (readiness: ${rverdict})."
 fi
 ready_age="${rverdict##* age_s=}"
 if [[ ! "$ready_age" =~ ^[0-9]+$ ]]; then
