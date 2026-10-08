@@ -34,7 +34,8 @@ is the prod-write ack; the token that can write the flag is injected only for th
      --since 30m --grep inngest-luks-cutover --limit 20
    ```
 
-   Expect `noop-unset` rows roughly every 30s. **Zero rows is a finding, not a quiet host** — either
+   Expect `noop-unset` rows roughly every 300s (the LUKS FSM's `emit_noop` throttles the terminal
+   heartbeat; an older copy said 30s, from before that throttle landed). **Zero rows is a finding, not a quiet host** — either
    the host is dark or the cutover trio never installed (`inngest-bootstrap.sh` emits
    `reason=install_missing` on that path). The dispatch refuses on this condition anyway (G3), before
    writing anything. G3 counts only rows from the **current** `soleur-inngest` server (stamped and
