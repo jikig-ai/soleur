@@ -83,22 +83,22 @@ env_json() { printf '{"tool_name":"Skill","tool_input":{"skill":%s}}' "$(jq -Rn 
 # --- AC3: happy path (block form) -> Read-directive naming the artifact ---
 out="$(env_json "with-query" | run_hook)"; rc=$?
 ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)"
-printf '%s' "$ctx" | grep -qF 'knowledge-base/marketing/brand-guide.md' && pass "AC3 block-form emits Read-directive naming artifact" || fail "AC3 no directive (ctx=$ctx)"
-printf '%s' "$ctx" | grep -qiE 'read' && pass "AC3 directive says Read" || fail "AC3 directive missing Read verb"
+printf '%s' "$ctx" | grep -cF >/dev/null 'knowledge-base/marketing/brand-guide.md' && pass "AC3 block-form emits Read-directive naming artifact" || fail "AC3 no directive (ctx=$ctx)"
+printf '%s' "$ctx" | grep -ciE >/dev/null 'read' && pass "AC3 directive says Read" || fail "AC3 directive missing Read verb"
 [[ "$rc" -eq 0 ]] && pass "AC3 exits 0" || fail "AC3 non-zero exit"
 ev="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty' 2>/dev/null || true)"
 [[ "$ev" == "PostToolUse" ]] && pass "AC3 hookEventName=PostToolUse" || fail "AC3 bad hookEventName ($ev)"
 # POINTER not inline: artifact BODY content must NOT be echoed
-printf '%s' "$ctx" | grep -qF 'Brand tokens here.' && fail "POINTER violated: artifact body content leaked" || pass "pointer-only: no artifact body content in output"
+printf '%s' "$ctx" | grep -cF >/dev/null 'Brand tokens here.' && fail "POINTER violated: artifact body content leaked" || pass "pointer-only: no artifact body content in output"
 
 # --- inline [a,b] form parses (reuse full parser, not block-only) ---
 out="$(env_json "inline-query" | run_hook)"
-printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -qF 'brand-guide.md' && pass "inline-array context_queries parses (no parse-to-empty trap)" || fail "inline-array parsed to empty (parse-to-empty trap)"
+printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -cF >/dev/null 'brand-guide.md' && pass "inline-array context_queries parses (no parse-to-empty trap)" || fail "inline-array parsed to empty (parse-to-empty trap)"
 
 # --- glob form: sorted, both tracked matches named ---
 out="$(env_json "glob-query" | run_hook)"
 ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null || true)"
-{ printf '%s' "$ctx" | grep -qF 'knowledge-base/deep/a.md' && printf '%s' "$ctx" | grep -qF 'knowledge-base/deep/b.md'; } && pass "glob resolves tracked matches" || fail "glob did not resolve (ctx=$ctx)"
+{ printf '%s' "$ctx" | grep -cF >/dev/null 'knowledge-base/deep/a.md' && printf '%s' "$ctx" | grep -cF >/dev/null 'knowledge-base/deep/b.md'; } && pass "glob resolves tracked matches" || fail "glob did not resolve (ctx=$ctx)"
 
 # --- AC6: no context_queries key -> exit 0, empty output (fast-path) ---
 out="$(env_json "no-query" | run_hook)"; rc=$?
@@ -118,18 +118,18 @@ printf '%s' "$out" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>
 out="$(env_json "missing-art" | run_hook)"; rc=$?
 ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)"
 [[ "$rc" -eq 0 ]] && pass "AC2 missing-artifact exits 0" || fail "AC2 missing-artifact non-zero"
-printf '%s' "$ctx" | grep -qi 'skip' && pass "AC2 missing-artifact emits skip note" || fail "AC2 missing-artifact no skip note (ctx=$ctx)"
-printf '%s' "$ctx" | grep -qi 'tell the user' && pass "AC2 skip note instructs the agent to surface skips to the operator (FINDING 2)" || fail "AC2 skip note has no operator-surface instruction (ctx=$ctx)"
+printf '%s' "$ctx" | grep -ci >/dev/null 'skip' && pass "AC2 missing-artifact emits skip note" || fail "AC2 missing-artifact no skip note (ctx=$ctx)"
+printf '%s' "$ctx" | grep -ci >/dev/null 'tell the user' && pass "AC2 skip note instructs the agent to surface skips to the operator (FINDING 2)" || fail "AC2 skip note has no operator-surface instruction (ctx=$ctx)"
 
 # --- AC4: traversal query rejected, no /etc/passwd, exit 0 ---
 out="$(env_json "traversal" | run_hook)"; rc=$?
 [[ "$rc" -eq 0 ]] && pass "AC4 traversal exits 0" || fail "AC4 traversal non-zero"
-printf '%s' "$out" | grep -qF 'passwd' && fail "AC4 traversal LEAKED out-of-tree path" || pass "AC4 traversal rejected (no passwd)"
+printf '%s' "$out" | grep -cF >/dev/null 'passwd' && fail "AC4 traversal LEAKED out-of-tree path" || pass "AC4 traversal rejected (no passwd)"
 
 # --- AC5: untracked artifact not emitted ---
 out="$(env_json "untracked-art" | run_hook)"
 ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)"
-printf '%s' "$ctx" | grep -qF 'Read these' && fail "AC5 untracked artifact was emitted as loadable" || pass "AC5 untracked artifact not loaded"
+printf '%s' "$ctx" | grep -cF >/dev/null 'Read these' && fail "AC5 untracked artifact was emitted as loadable" || pass "AC5 untracked artifact not loaded"
 
 # --- AC7: other-plugin namespaced skill -> exit 0, nothing ---
 out="$(env_json "commit-commands:commit" | run_hook)"; rc=$?
@@ -139,7 +139,7 @@ out="$(env_json "commit-commands:commit" | run_hook)"; rc=$?
 rm -f /tmp/ctxq_pwn
 out="$(env_json 'with-query";injected$(touch /tmp/ctxq_pwn)' | run_hook)"; rc=$?
 [[ ! -f /tmp/ctxq_pwn ]] && pass "adversarial skill name executes no command" || { fail "COMMAND INJECTION"; rm -f /tmp/ctxq_pwn; }
-printf '%s' "$out" | grep -qF 'injected' && fail "adversarial substring leaked" || pass "adversarial substring absent"
+printf '%s' "$out" | grep -cF >/dev/null 'injected' && fail "adversarial substring leaked" || pass "adversarial substring absent"
 [[ "$rc" -eq 0 ]] && pass "adversarial exits 0" || fail "adversarial non-zero"
 
 # --- AC13: kill-switch ---
@@ -153,7 +153,7 @@ if [[ -f "$REPO_ROOT/plugins/soleur/skills/frontend-design/SKILL.md" ]] \
   # run against the REAL repo root (no CONTEXT_QUERIES_REPO_ROOT override)
   real_out="$(printf '{"tool_input":{"skill":"soleur:frontend-design"}}' | bash "$HOOK" 2>/dev/null)"
   real_ctx="$(printf '%s' "$real_out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)"
-  printf '%s' "$real_ctx" | grep -qF 'knowledge-base/' && pass "AC14 real pilot resolves >=1 committed artifact" || fail "AC14 real pilot did not resolve (ctx=$real_ctx)"
+  printf '%s' "$real_ctx" | grep -cF >/dev/null 'knowledge-base/' && pass "AC14 real pilot resolves >=1 committed artifact" || fail "AC14 real pilot did not resolve (ctx=$real_ctx)"
 else
   fail "AC14 pilot frontend-design SKILL.md missing context_queries (Phase 3 not applied)"
 fi
@@ -161,7 +161,7 @@ fi
 # --- NEGATIVE (foot-gun c): verify the traversal guard actually rejects ---
 # inject a real-shaped out-of-tree path and assert the hook never names it
 neg_out="$(env_json "traversal" | run_hook)"
-if printf '%s' "$neg_out" | grep -qF '/etc/passwd'; then fail "NEGATIVE: traversal guard did not reject /etc/passwd"; else pass "NEGATIVE: traversal guard rejects out-of-tree"; fi
+if printf '%s' "$neg_out" | grep -cF >/dev/null '/etc/passwd'; then fail "NEGATIVE: traversal guard did not reject /etc/passwd"; else pass "NEGATIVE: traversal guard rejects out-of-tree"; fi
 
 rm -rf "$FIX"; rm -f /tmp/ctxq_pwn
 printf '\n%d failure(s)\n' "$fails"

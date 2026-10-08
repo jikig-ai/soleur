@@ -43,7 +43,7 @@ jq -e . "$MAP" >/dev/null 2>&1 || { fail "map is not valid JSON"; printf '\n%d f
 out="$(printf '{"tool_name":"Skill","tool_input":{"skill":"soleur:work"}}' | run_hook)"
 if printf '%s' "$out" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1; then
   ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
-  if printf '%s' "$ctx" | grep -qi 'work'; then pass "mapped skill (soleur:work) emits work-phase hint"
+  if printf '%s' "$ctx" | grep -ci >/dev/null 'work'; then pass "mapped skill (soleur:work) emits work-phase hint"
   else fail "mapped skill hint does not name the work phase"; fi
   # hookEventName must be PostToolUse
   ev="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty')"
@@ -74,7 +74,7 @@ mal='soleur:work";injected\n$(touch /tmp/phase_surface_pwn)'
 rm -f /tmp/phase_surface_pwn
 out="$(printf '{"tool_input":{"skill":%s}}' "$(jq -Rn --arg s "$mal" '$s')" | run_hook)"; rc=$?
 [[ ! -f /tmp/phase_surface_pwn ]] && pass "adversarial skill name executes no command" || { fail "COMMAND INJECTION: /tmp/phase_surface_pwn created"; rm -f /tmp/phase_surface_pwn; }
-if printf '%s' "$out" | grep -qF 'injected'; then fail "adversarial substring leaked into output"; else pass "adversarial substring absent from output"; fi
+if printf '%s' "$out" | grep -cF >/dev/null 'injected'; then fail "adversarial substring leaked into output"; else pass "adversarial substring absent from output"; fi
 # output must be empty (unmapped -> fail-open) OR a single valid hookSpecificOutput object
 if [[ -z "$out" ]]; then pass "adversarial input -> empty (fail-open)"
 elif printf '%s' "$out" | jq -e '.hookSpecificOutput' >/dev/null 2>&1; then pass "adversarial input -> valid single hookSpecificOutput"
@@ -125,7 +125,7 @@ dangling_neg="$(jq -r '
   | .skill_to_phase | to_entries[]
   | select((.value as $v | $phases | index($v)) | not)
   | "\(.key)->\(.value)"' "$neg" 2>/dev/null || true)"
-if printf '%s' "$dangling_neg" | grep -qF 'soleur:__probe__->nonexistent_phase'; then
+if printf '%s' "$dangling_neg" | grep -cF >/dev/null 'soleur:__probe__->nonexistent_phase'; then
   pass "NEGATIVE: dangling-phase injection is detected"
 else
   fail "NEGATIVE: verifier failed to detect injected dangling phase"

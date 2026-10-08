@@ -69,7 +69,7 @@ WORK="$(mktemp -d -t devinparity.XXXXXXXX)"
 #   python3 "<root>/.claude/hooks/foo.py"
 canon() {
   local cmd="$1" p
-  if printf '%s' "$cmd" | grep -q 'PLUGIN_ROOT'; then
+  if printf '%s' "$cmd" | grep -c >/dev/null 'PLUGIN_ROOT'; then
     p="$(printf '%s' "$cmd" | grep -oE 'hooks/[A-Za-z0-9_.-]+\.(sh|py)' | head -1)"
     [[ -n "$p" ]] && printf 'plugins/soleur/%s' "$p" && return 0
   else
@@ -116,7 +116,7 @@ matches() { # $1 = matcher regex, $2 = tool name
   # under both harnesses — treating either as never-dispatching would let a
   # matcherless PreToolUse entry evade T4 while dispatching everywhere.
   [[ "$1" == "(none)" || "$1" == '""' ]] && return 0
-  jq -n --arg t "$2" --arg m "$1" '$t | test($m)' 2>/dev/null | grep -q true
+  jq -n --arg t "$2" --arg m "$1" '$t | test($m)' 2>/dev/null | grep -c >/dev/null true
 }
 
 # Ledger rows as emitted by grep — comments and blank lines stripped.
@@ -198,7 +198,7 @@ done < <(cat "$WORK/settings.tsv" "$WORK/devin.tsv" "$WORK/plugin.tsv")
 # flag while still inside the double-quoted span.
 while IFS= read -r cmd; do
   [[ -n "$cmd" ]] || continue
-  if printf '%s' "$cmd" | grep -qE '\.(sh|py)[[:space:]]+-[^"]*"'; then
+  if printf '%s' "$cmd" | grep -cE >/dev/null '\.(sh|py)[[:space:]]+-[^"]*"'; then
     echo "  flag glued inside the quoted script path (bash would treat it as a filename): $cmd" >&2
     t1_fail=1
   fi
@@ -418,7 +418,7 @@ done < "$WORK/lifecycle-double.tsv"
 # must-fail control: the awk above must actually flag a duplicated pair.
 printf 'Stop\tplugins/soleur/hooks/stop-hook.sh\tdup\nStop\tplugins/soleur/hooks/stop-hook.sh\tdup2\n' \
   | awk -F'\t' '{k=$1"|"$2; cnt[k]++} END {for (k in cnt) if (cnt[k] > 1) print k}' \
-  | grep -q 'stop-hook' || { echo "  T8 control: dedup awk failed to flag a known duplicate" >&2; t8_fail=1; }
+  | grep -c >/dev/null 'stop-hook' || { echo "  T8 control: dedup awk failed to flag a known duplicate" >&2; t8_fail=1; }
 
 # Sentinel invariant (review P1): devin-session-start.sh MUST be plugin-bound,
 # never .devin-bound — only plugin dispatch exports CLAUDE_PLUGIN_ROOT, and a
@@ -427,7 +427,7 @@ printf 'Stop\tplugins/soleur/hooks/stop-hook.sh\tdup\nStop\tplugins/soleur/hooks
 # catch a single-registration .devin binding, so assert placement directly.
 grep -F $'SessionStart\t""\tplugins/soleur/hooks/devin-session-start.sh' "$WORK/plugin.tsv" >/dev/null \
   || { echo "  devin-session-start.sh missing plugin '' SessionStart binding" >&2; t8_fail=1; }
-if grep -F $'plugins/soleur/hooks/devin-session-start.sh' "$WORK/devin.tsv" | grep -q '^SessionStart'; then
+if grep -F $'plugins/soleur/hooks/devin-session-start.sh' "$WORK/devin.tsv" | grep -c >/dev/null '^SessionStart'; then
   echo "  devin-session-start.sh is .devin-bound — writes hook_source:repo sentinels, breaking cloud-detect local classification" >&2; t8_fail=1
 fi
 

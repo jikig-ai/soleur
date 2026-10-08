@@ -265,7 +265,7 @@ F=$(fx s13 "$(r '{id:31, name:"evil\tname\nskip\t32\tforged"}')" "$(r '{id:33, n
 out=$(sel "$F")
 [[ "$(wc -l <<< "$out" | tr -d ' ')" == "2" ]] && pass "S13 one row per run" || fail "S13 one row per run" "$out"
 expect "S13 crafted name still decided" "$out" 31 "cancel superseded"
-if awk -F '\t' '$2 == 33 && NF == 6 && $5 == "-"' <<< "$out" | grep -q .; then pass "S13 empty name sentinelled"; else fail "S13 empty name sentinelled" "$out"; fi
+if awk -F '\t' '$2 == 33 && NF == 6 && $5 == "-"' <<< "$out" | grep -c >/dev/null .; then pass "S13 empty name sentinelled"; else fail "S13 empty name sentinelled" "$out"; fi
 
 # H7 — non-canonical input (extra fields, reordered keys) decides identically.
 F=$(fx h7 '{"zzz":1,"status":"queued","pull_requests":[{"number":12,"x":1}],"path":".github/workflows/ci.yml","head_repository":{"full_name":"acme/widgets","x":2},"created_at":"2026-09-24T10:00:00Z","head_sha":"'"$OLD"'","head_branch":"feat-x","event":"pull_request","name":"CI","id":41,"extra":{"a":[1]}}')
@@ -791,7 +791,7 @@ fc_line=${fc_code%%:*}
 if [[ "$(grep -c . <<< "$fc_code")" == 1 && -n "$fc_pass" && -n "$fc_sum" && "$fc_line" -gt "$fc_pass" && "$fc_line" -lt "$fc_sum" ]]; then
   pass "W4 force-cancel is issued from exactly one code line, inside the 5b pass"
 else fail "W4 force-cancel is issued from exactly one code line, inside the 5b pass" "code=[$fc_code] pass=$fc_pass summary=$fc_sum"; fi
-grep -qv '^[[:space:]]*#' "$WORKFLOW" && ! grep -v '^[[:space:]]*#' "$WORKFLOW" | grep -q 'force-cancel' \
+grep -qv '^[[:space:]]*#' "$WORKFLOW" && ! grep -v '^[[:space:]]*#' "$WORKFLOW" | grep -c >/dev/null 'force-cancel' \
   && pass "W4 the workflow itself never force-cancels" || fail "W4 the workflow itself never force-cancels" "found"
 
 # ---------------------------------------------------------------------------
