@@ -120,7 +120,9 @@
 # cause: a matched destructive command says stop, do not retry, do not rephrase; a lexer parse failure (exit 2)
 # says fix the quoting or heredoc and send it again; a lexer that gave out (depth, budget, alarm, crash) and a
 # command too large to check say simplify or split; an unreadable envelope says the fault is in the tool call, so
-# stop and tell the person; env -S and too many wrappers say write the command out so the guard can check it.
+# stop and tell the person; a lexer that produced no result or malformed output says the parser is not working on this machine, so stop
+# and tell the person (splitting cannot help); env -S and too many wrappers say write the command out so the guard can check it; an
+# unresolvable cd says put a literal directory in the cd.
 # Every ask and deny carries the escape hatch and the issues URL. The quoted command has credentials masked:
 # NAME=value, --name=value and -var name=value with a key, tok, secret, pass, pw, cred, auth or bearer name; the
 # word after --token, --password, --passwd, --secret, --api-key, --auth or --bearer; the text after
@@ -234,6 +236,10 @@ PARSE_TAIL="${AMARK} If this is a valid command you meant to run, fix its quotin
 ENVELOPE_TAIL="${AMARK} This is a fault in the tool call the harness sent, not a problem with the command: stop and tell the person what happened instead of rewriting the command.${PERSON_TAIL}"
 # env -S and too many wrappers hide the command: write it out so it can be checked
 WRAPPER_TAIL="${AMARK} If this is a command you meant to run, write it out without env -S (or with fewer nested wrappers) so the guard can check it, and send it again; if you cannot, stop and tell the person what you were about to run.${PERSON_TAIL}"
+# a lexer that produced nothing or garbage is a fault on this machine: no piece of the command can be checked either, so splitting does not help
+LEXER_TAIL="${AMARK} The guard's parser is not working on this machine, so no command can be checked here and splitting this one will not help: stop and tell the person what happened instead of rewriting the command.${PERSON_TAIL}"
+# an unresolvable cd: the repair is a literal directory
+CD_TAIL="${AMARK} If this is a command you meant to run, put a literal directory in the cd (not a variable or -) so the guard can check where the command runs, and send it again; if you cannot, stop and tell the person what you were about to run.${PERSON_TAIL}"
 
 # ---- output ---------------------------------------------------------------------------------------
 # compose <ask|deny> <body> -> COMPOSED: the reason text (see AMARK).
@@ -291,7 +297,7 @@ lead_for() {
     default-branch-force-push) LEAD="this command force-pushes over, or deletes, a default branch on a remote." ;;
     wrapper-depth) LEAD="this command nests more than 8 wrappers (sudo, env, timeout, ...) or -- separators, more than the guard unwraps, so the command it finally runs cannot be checked." ;;
     unparsed-wrapper) LEAD="this command runs env -S (--split-string), which splits a string into the command to run, and the guard does not analyse that string." ;;
-    unresolved-cd-before-destructive) LEAD="a cd or pushd that cannot be resolved (a variable, or -) comes before a recursive delete or a force push in the same command, so the directory it acts on cannot be checked." ;;
+    unresolved-cd-before-destructive) LEAD="a cd, pushd or wrapper directory option (env -C, sudo -D) that cannot be resolved (a variable, -, or a path too deep to resolve) comes before a recursive delete or a force push in the same command, so the guard cannot tell which directory the later command runs in." ;;
     *) LEAD="this command matched a destructive-command rule." ;;
   esac
 }
@@ -353,7 +359,11 @@ redact_text() {
 ask_parse() { # <cause text>: a command the lexer could not read. Only a parse failure (exit 2) is repaired by fixing the quoting;
   # a lexer that gave out (depth, budget, alarm, crash, no result, malformed output) wants a simpler or smaller command.
   local tail="$BOUND_TAIL"
-  [[ "$1" == "lexer exit2" ]] && tail="$PARSE_TAIL"
+  case "$1" in
+    "lexer exit2") tail="$PARSE_TAIL" ;;
+    "lexer depth"|"lexer budget"|"lexer alarm"|"lexer crash") : ;;
+    *) tail="$LEXER_TAIL" ;;   # no result, malformed output, a cause the hook does not know
+  esac
   emit ask "command-not-parsed: the destructive-command guard could not parse this command; it was not recognised as destructive, and the guard asks rather than guess (${1}).${tail}"
   exit 0
 }
@@ -1252,9 +1262,12 @@ if [[ -n "$BOUND_WHY" && "$BEST_RANK" -lt 2 ]]; then
 fi
 (( BEST_RANK == 0 )) && exit 0
 lead_for "$BEST_RULE"
-# env -S and too many wrappers hide the command: the repair is to write it out; every other match is a stop
+# env -S and too many wrappers hide the command (write it out) and an unresolvable cd hides the directory (use a literal one); every other match is a stop
 TAIL="$REASON_TAIL"
-case "$BEST_RULE" in unparsed-wrapper|wrapper-depth) TAIL="$WRAPPER_TAIL" ;; esac
+case "$BEST_RULE" in
+  unparsed-wrapper|wrapper-depth) TAIL="$WRAPPER_TAIL" ;;
+  unresolved-cd-before-destructive) TAIL="$CD_TAIL" ;;
+esac
 REASON="${BEST_RULE}: ${LEAD} Matched command: [${BEST_QUOTE}].${BOUND_NOTE}${TAIL}"
 if (( BEST_RANK == 2 )); then emit deny "$REASON"; else emit ask "$REASON"; fi
 exit 0

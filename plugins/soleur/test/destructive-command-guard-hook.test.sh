@@ -1862,6 +1862,14 @@ rule_row "rule id: rm -rf of the working directory asks with the recursive-delet
 rule_row "rule id: terraform destroy asks with the infra-destroy rule id" 'terraform destroy' - infra-destroy
 rule_row "rule id: a force push to main asks with the default-branch-force-push rule id" 'git push --force origin main' @R1@ default-branch-force-push
 rule_row "rule id: a recursive delete after an unresolvable cd asks with the unresolved-cd-before-destructive rule id" 'cd "$UNKNOWN_DIR" && rm -rf build' - unresolved-cd-before-destructive
+# the repair for an unresolvable cd is a literal directory, so the tail says that instead of "do not rephrase"; the lead does not claim the directory
+# "cannot be checked" (an absolute target is checkable, the rule asks anyway)
+jqchk "tail: an unresolved cd tells the agent to use a literal directory and does not forbid rephrasing" '.hookSpecificOutput.permissionDecisionReason | contains("literal directory in the cd") and contains("stop and tell the person") and (contains("rephrase it to get around") | not)'
+jqchk "tail: an unresolved cd still carries the escape hatch and the issues URL" '.hookSpecificOutput.permissionDecisionReason | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues"))'
+rule_row "rule id: a recursive delete of an ABSOLUTE target after an unresolvable cd asks with the same rule id" 'cd "$UNKNOWN_DIR" && rm -rf /tmp/x/build' - unresolved-cd-before-destructive
+jqchk "lead: an unresolved cd before an absolute target does not claim the directory cannot be checked" '.hookSpecificOutput.permissionDecisionReason | (contains("cannot be checked") | not) and contains("cannot tell which directory")'
+rule_row "rule id: a force push after an unresolvable cd asks with the same rule id and the literal-directory tail" 'cd "$UNKNOWN_DIR" && git push --force origin feat' @R1@ unresolved-cd-before-destructive
+jqchk "tail: that force push after an unresolved cd also gets the literal-directory tail" '.hookSpecificOutput.permissionDecisionReason | contains("literal directory in the cd")'
 rule_row "rule id: an unbalanced quote asks with the command-not-parsed rule id" "echo 'unbalanced" - command-not-parsed
 rule_env "rule id: garbage stdin asks with the envelope-unreadable rule id" envelope-unreadable 'not json at all {'
 
@@ -2112,10 +2120,14 @@ tree_row "lexer seam: garbage bytes with no OK ask" ask "$HT_HOOK" "$_LX_ENV"
 stub_lexer garbageok 'print "XYZ\0OK\0";'
 tree_row "lexer seam: a garbage frame before OK asks (malformed)" ask "$HT_HOOK" "$_LX_ENV"
 reason_has "lexer seam: a garbage frame is reported as malformed" 'the lexer output was malformed'
+# A lexer that produced nothing or garbage is a fault on this machine: splitting the command cannot help (every piece fails the same way), so the
+# agent is told to stop and tell the person, not to split it.
+jqchk "lexer seam: a malformed lexer output does not tell the agent to split the command" '.hookSpecificOutput.permissionDecisionReason | (contains("Split it") | not) and contains("not working on this machine") and contains("stop and tell the person")'
 stub_lexer badargc 'print "C\0top\0abc\0OK\0";'
 tree_row "lexer seam: a record with a non-numeric word count asks (malformed)" ask "$HT_HOOK" "$_LX_ENV"
 stub_lexer truncated 'print "C\0top\0";'
 tree_row "lexer seam: a record cut off before its words and OK asks" ask "$HT_HOOK" "$_LX_ENV"
+jqchk "lexer seam: a lexer that produced no result does not tell the agent to split the command" '.hookSpecificOutput.permissionDecisionReason | contains("the lexer produced no result") and (contains("Split it") | not) and contains("not working on this machine") and contains("stop and tell the person")'
 stub_lexer okonly 'print "OK\0";'
 tree_row "lexer seam: OK with no record for a command that mentions rm asks (lexer-empty)" ask "$HT_HOOK" "$_LX_RM_ENV"
 reason_has "lexer seam: OK with no record carries the lexer-empty rule id and the fix-and-resend tail" "$ASK_LEAD lexer-empty: "
