@@ -27,15 +27,16 @@ revision `3a60924ebd6ff3b3482b9e8972c0d9b890c4f92e` and section SHA-256
 sign-off attached are listed with their satisfaction under "CPO conditions". **This record is not that signed text.** D1 (the `cd` rule
 narrowed to force and delete pushes), D2 (the longer non-coverage sentence), D4 (measured detail dropped, a caveat added) and D6-D10 differ
 from it, the Considered Options were rewritten, and the shipped hook goes beyond D1-D10 in the places listed under "Post-review hardening"
-(the list a re-sign-off would decide on, with what the CPO has not seen). The plan's Decision Set itself was not edited.
+(the list a re-sign-off decides on; the CPO's verdict on it is under "Addendum: CPO third pass"). The plan's Decision Set itself was not edited.
 
 **The plan's own re-run rule was not followed, and nobody has waived it.** The plan says any change to D1-D9 after sign-off, from any later
 phase, re-runs Phase 0.3. The CPO's cap of two rounds was spent (round 2 of 2) before the review found what changed D1, D7 and D8, so the
 re-run did not happen and the hash gate stays green only because the signed section was left as it was. This is a recorded deviation, not a
-decision: the operator may take the list under "Post-review hardening" back to the CPO (`decision-challenges.md` T13).
+decision (`decision-challenges.md` T13). The operator took the list back to the CPO on 2026-10-08; see the next paragraph.
 
-**Closed on 2026-10-08 by a third CPO pass, which the operator asked for after the merge.** Verdict: APPROVED WITH REQUIRED CHANGES, no
-change to the merged hook; see "CPO third pass" below. The deviation above stays on the record as it happened.
+**Re-signed on 2026-10-08, with conditions still open.** The operator asked for a third CPO pass after the merge. Verdict: APPROVED WITH
+REQUIRED CHANGES, no change to the merged hook; see "Addendum: CPO third pass" below. The rule breach is repaired by that pass; the
+required changes CPO3-R1 (#9776), CPO3-R2 and CPO3-R3 are NOT done. The deviation above stays on the record as it happened.
 
 ## Context
 
@@ -275,8 +276,8 @@ ask-as-block.
 
 The panel review of PR #9653 and two fix rounds changed the shipped hook beyond, or differently from, the text of D1-D10 above. The
 plan's Decision Set text (the CPO-signed section, whose hash is recorded in the PR body) was NOT edited. The CPO's two-round cap was
-spent before the review, so none of this has been put back to the CPO. These are refinements of the signed set; the operator may
-choose to take them back to the CPO. The hook header is the reference for each rule. **This section is the one list** of what
+spent before the review, so none of this was put back to the CPO at merge; the CPO ruled on it on 2026-10-08 ("Addendum: CPO third
+pass"). These are refinements of the signed set. The hook header is the reference for each rule. **This section is the one list** of what
 differs from the signed text: the plan addendum and `decision-challenges.md` (T13) point here instead of repeating it.
 
 - **Targets.** A target whose every component after the glob-free root is only glob syntax (`/**`, `/*/*`, `~/**`) counts as the
@@ -368,7 +369,7 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
    In the autonomous default (`workspaces.bash_autonomous` defaults to `true`, migration 099) it is not gated for these commands:
    `BLOCKED_BASH_PATTERNS` does not match `terraform destroy`, `rm -rf` or `git push -f`. The decision (guard disabled in hosted
    sessions) is kept; the stated reason changed. Whether hosted founders should be protected against these commands in autonomous
-   mode is a product question for the operator (`decision-challenges.md` T12).
+   mode was a product question for the operator (`decision-challenges.md` T12); the CPO's answer is under "Addendum: CPO third pass".
 2. **Two README sentences the CPO's conditions C1 and C2 are about were rewritten:** the non-coverage sentence is longer (D2) and the
    hosted line now says what hosted Bash runs under (D8). A third sentence is new: the guard also asks, rather than allows, when it
    cannot read a command it was given.
@@ -383,8 +384,8 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
 ## CPO conditions and how each is satisfied
 
 - **C1 — an honest scope statement where users read it.** The plugin README and the hook header carry the same non-coverage
-  sentence, word for word; it is longer than the sentence signed in D2 (see D2 for what it adds and why), which is listed for
-  re-sign-off above.
+  sentence, word for word; it is longer than the sentence signed in D2 (see D2 for what it adds and why), which the CPO
+  accepted in the third pass (item 2 of the verdict table).
 - **C2 — the hosted gap stated outside this ADR.** The plugin README carries one line that the guard is not active in Soleur-hosted
   sessions and says what hosted Bash runs under (D8 is the single statement of why; the README sentence is pinned verbatim by the hook
   suite). The ADR-093 amendment of 2026-10-07 records it for the hosted path and carries a dated correction of the first wording.
@@ -392,55 +393,68 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
   (`guardrails:require-filing-justification`) refuses a roll-up issue unless it carries a measured fix size, and a roll-up has none; the
   operator therefore decided on 2026-10-07 to record the list here, in the section below, and in the plan's Non-Goals, which is what
   `wg-when-deferring-a-capability-create-a` prescribes. This is a recorded deviation from the literal wording of C3, not a silent one;
-  the PR body states it. Each item becomes its own issue when someone picks it up with a measured size.
+  the PR body states it. Each item becomes its own issue when someone picks it up with a measured size; the third CPO pass filed the one
+that was a single deliverable (#9776).
 - **C4 — a deny the person can read.** Every `deny` carries `systemMessage` with the full reason, the escape hatch and the issues URL;
   a suite row asserts it.
 
-## CPO third pass (2026-10-08, after merge of 425ea0fc1f)
+## Addendum: CPO third pass (2026-10-08, after the merge)
 
-The operator asked for the re-sign-off the plan's rule called for, after the merge. The CPO read the code before answering and approved
-every user-visible item in "Post-review hardening", two of them conditionally (items 1 and 4b below), and recommended one product change.
+The operator asked for the re-sign-off the plan's rule called for. The CPO ruled on the items under "Post-review hardening" and read the
+code behind the hosted-default claim: `BLOCKED_BASH_PATTERNS` in `apps/web-platform/server/permission-callback.ts` (curl, wget, nc,
+eval, sudo, inline `-e`/`-c`, `base64 -d`, `/dev/tcp`; it matches none of `rm -rf`, `terraform destroy`, `git push -f`), and migration
+099 (`workspaces.bash_autonomous` defaults to `true` for NEW workspaces; there is no backfill, so existing workspaces keep their
+value, and an owner who has not yet acknowledged the disclosure is held once). Every user-visible item was approved or accepted in
+spirit; two were approved only on conditions (items 1 and 4b); one product change is recommended.
 
-| Item in "Post-review hardening" | Verdict |
+Verdict vocabulary: **Approved** means the CPO decided on it explicitly; **In spirit** means it stays inside the intent of the signed
+D1-D10 and needed no explicit approval. Rows 1-6 are the numbered re-sign-off list under "Post-review hardening". Letters 4a-4c are this
+table's grouping of item 4's clauses (the numbered list has no letters): 4a the spelling, target and wrapper rules, 4b the new ask
+classes and size bounds, 4c the degraded scans (the "Degraded scans" bullet). The last row is D7, which sits outside the numbered list
+(`decision-challenges.md` T8).
+
+| Item | Verdict |
 |---|---|
-| 1. D8 premise corrected (hosted autonomous default) | Approved on the conditions R1 and R2; the decision stands, the risk accepted was larger than the signed text said |
-| 2. Longer README C1/C2 sentences | In spirit |
+| 1. D8 premise corrected (hosted autonomous default) | Approved on conditions CPO3-R1 and CPO3-R2; the decision stands, the risk accepted was larger than the signed text said |
+| 2. README: longer C1/C2 sentences, plus the new sentence that the guard asks when it cannot read a command | In spirit |
 | 3. `cd` rule narrowed to force and delete pushes | In spirit; fewer false positives, matches D3 |
 | 4a. Wrapper chdir, case folding, glob-only targets, bound blank runs, credential masking | In spirit |
-| 4b. New ask classes (`unparsed-wrapper`, `wrapper-depth`, `bound`, `lexer-empty`) and size bounds | Approved on condition R3: commands outside D1 now interrupt, headless runs block, and the false-positive rate is unmeasured |
+| 4b. New ask classes (`unparsed-wrapper`, `wrapper-depth`, `bound`, `lexer-empty`) and size bounds | Approved on condition CPO3-R3: commands outside D1 now interrupt, headless runs block, and the false-positive rate is unmeasured |
 | 4c. Degraded scans ask on every force push | In spirit (D6 signed "force flag or +") |
 | 5. Reason wording by cause; "do not rephrase" only on matched destructive commands | Approved; a deliberate, bounded relaxation of D4's universal "no rephrase" |
 | 6. Quoted `hooks.json` registration | Approved |
 | D7 prefilter boundary growth (T8) | In spirit; keep the prefilter |
 
-**Hosted default (T12).** Keep-as-is was rejected: a hosted founder in autonomous mode can have a force-push over the default branch or
-an infrastructure teardown approved without a prompt, the consent copy promises "backed up in git" and never names it, and that is a
-single-user incident. Changing the `bash_autonomous` default was also rejected (autonomous-on is a deliberate activation, and the narrow
-risk is fixable narrowly). The recommendation is that hosted autonomous mode asks for the D1 destroy families only.
+**Hosted default (T12).** Keep-as-is was rejected: a hosted founder in autonomous mode (a new workspace, or an existing one that opted
+in) can have a force-push over the default branch or an infrastructure teardown approved without a prompt once the disclosure is
+acknowledged, the consent copy promises "backed up in git" and never names it, and a force-push over the default branch can destroy the
+remote history that promise rests on. The CPO rated that a single-user incident. Changing the `bash_autonomous` default was also
+rejected (autonomous-on is a deliberate activation, and the narrow risk is fixable narrowly). The recommendation is that hosted
+autonomous mode asks for the D1 destroy families only.
 
-**Required changes.**
+**Required changes.** The ids are prefixed `CPO3-` so they do not collide with the fix-round labels R1-R14 above.
 
-- **R1 (P1, before any broadening of the hosted rollout):** the hosted ask path for default-branch force-push/delete and
-  `terraform|tofu` destroy under `bash_autonomous`. Tracked as #9776 (the one follow-up the CPO did not accept as ADR-only).
-- **R2 (small):** the autonomous disclosure copy (`autonomous-disclosure-banner.tsx`, counsel-reviewed text) names a default-branch
-  force-push and infrastructure teardown as things Soleur may run without asking, until R1 ships. Needs CLO review; whether existing
-  acknowledgements stay valid is a CLO question.
-- **R3 (small):** measure the rate of the 4b ask classes outside D1 on real agent transcripts, per rule id, tune if it is more than rare,
-  and record the number here. Not started; it needs transcripts.
-- **R4 (small, done by this record):** two claims in the plan's Observability block outrun the shipped behaviour, and the plan's own
-  addendum already says so. Stated here so the durable record carries it: (1) `alert_route: the person at the harness prompt (layer 7,
-  in-session)` for a missing `jq` or `perl` is not guaranteed, because the notice is on stderr, which the person may never see; a hit
-  asks, and a command the narrow raw scan misses runs without a prompt. (2) `cadence: ... after merge on main` for the slice-1 probe is
-  not true: no workflow calls `scripts/verify-agent-security-slice1.sh`; only `scripts/test-all.sh` runs its suite
-  (`scripts/verify-agent-security-slice1.test.sh`), so no scheduled post-merge probe runs. The probe has no scheduled caller; a caller
-  is a follow-up, not a claim.
+- **CPO3-R1 (P1, before any broadening of the hosted rollout):** the hosted ask path for default-branch force-push/delete and
+  `terraform|tofu` destroy under `bash_autonomous`. Tracked as #9776 (the one follow-up the CPO did not accept as ADR-only). Open.
+- **CPO3-R2 (small, open):** the autonomous disclosure copy (`autonomous-disclosure-banner.tsx`, counsel-reviewed text) names a
+  default-branch force-push and infrastructure teardown as things Soleur may run without asking, until CPO3-R1 ships. Needs CLO
+  review; whether existing acknowledgements stay valid is a CLO question. No issue yet: the fix is expected to be under the repository's
+  inline threshold (the filing gate refuses an issue below it), so it ships as a PR.
+- **CPO3-R3 (small, open):** measure the rate of the 4b ask classes outside D1 on real agent transcripts, per rule id, tune if it is
+  more than rare, and record the number in this addendum. Not started; it needs transcripts. Becomes its own issue when someone picks
+  it up with a measured size (C3).
+- **CPO3-R4 (done by this record):** two claims in the plan's Observability block outrun the shipped behaviour. The plan's own
+  addendum states both; they are repeated here only so this record carries them. The jq/perl-missing `alert_route` is not guaranteed
+  (stderr may never be seen); and the probe `scripts/verify-agent-security-slice1.sh` has no scheduled caller: only `scripts/test-all.sh`
+  runs its suite (`scripts/verify-agent-security-slice1.test.sh`), so no post-merge probe runs. A caller is a follow-up, not a claim.
 
 Process note from the CPO: a post-review change to a signed decision should reopen the sign-off by default, whether or not the round cap
 is spent.
 
-## Open follow-ups (recorded here; no tracking issue by operator decision, see C3)
+## Open follow-ups (recorded here; no roll-up tracking issue by operator decision, see C3; #9776 is filed)
 
-Enabling the guard in hosted sessions (needs a measured hosted `ask` path; the narrower autonomous-mode ask for the D1 destroy families is #9776); Devin `exec` coverage and Devin `ask` measurement; a
+Enabling the guard in hosted sessions (needs a measured hosted `ask` path; the narrower autonomous-mode ask for the D1 destroy
+families is #9776); Devin `exec` coverage and Devin `ask` measurement; a
 per-rule allow for headless CI teardown; a settings-env tripwire; a session-start message stating full or degraded dependency
 posture (the stderr notice for a missing `jq` or `perl` is likely invisible to the person); the D2 candidates (the SQL rule, a plain
 `terraform apply`, secret writes, `kubectl delete`, `pulumi`/`terragrunt destroy`, `git push --mirror`, `find -delete`); a canonical
