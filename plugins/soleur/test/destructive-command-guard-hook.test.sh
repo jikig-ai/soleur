@@ -1892,6 +1892,24 @@ bound_row "bound: a 100-component nonexistent rm target then rm -rf / still deni
 bound_row "bound: 300 distinct nonexistent rm targets are judged within the deadline (no decision), in under 5 s" none - "$_cmd300nx"
 _t=""; for _i in $(seq 1 2400); do _t+=" /nonexist/f$_i"; done; _cmd2400same="rm -rf${_t}"
 bound_row "bound: 2400 nonexistent rm targets under one parent are judged within the deadline (the parent is resolved once), in under 5 s" none - "$_cmd2400same"
+# A word over MAX_WORD_BYTES (4096) asks `bound` at the frame reader: bash's own expansions on one word (${p##*/}, a per-character loop over a
+# dash word) are quadratic in its length and nothing else bounds them, so a 40000-component target ahead of a destructive command used to
+# run the hook into the harness's 10 s kill. A deny elsewhere in the command still wins; an ask-class match keeps its own reason.
+rep '/a' 40000; _PAD40K="$REP_OUT"
+rep a 3000; _W3000="$REP_OUT"
+rep a 4090; _W4090="$REP_OUT"
+rep a 4097; _W4097="$REP_OUT"
+rep a 60000; _W60K="$REP_OUT"
+bound_row "bound: a 40000-component rm target then rm -rf ~ denies (the overlong word asks bound only when nothing denies), in under 5 s" deny - "rm -rf ${_PAD40K}; rm -rf ~"
+bound_row "bound: rm -rf ~ then a 40000-component rm target denies, in under 5 s" deny - "rm -rf ~; rm -rf ${_PAD40K}"
+bound_row "bound: terraform destroy then a 40000-component rm target asks with the destroy rule id and the bound sentence, in under 5 s" ask - "terraform destroy; rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}infra-destroy: .*Matched command: \[terraform destroy\].*too large to check in full"
+bound_row "bound: a 40000-component rm target alone asks with the bound reason and names the word limit, in under 5 s" ask - "rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
+bound_row "bound: a 60000-byte dash word on git push asks bound (a per-character loop over it is quadratic), in under 5 s" ask - "git push -${_W60K} origin feat \"x\"" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
+bound_row "bound: a 96000-byte command word then rm -rf ~ denies, in under 5 s" deny - "rm${_W60K}${_W60K:0:36000} x; rm -rf ~"
+bound_row "bound: a relative rm target of 3000 bytes is judged normally (no decision)" none - "rm -rf ${_W3000}"
+bound_row "bound: a 4090-byte relative rm target is a word under the cap but a path over it once the working directory is joined: asks bound" ask - "rm -rf ${_W4090}" "^${ASK_LEAD_RX}bound: .*path longer than 4096"
+bound_row "bound: a relative rm target of 4097 bytes asks bound" ask - "rm -rf ${_W4097}" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
+bound_row "bound: an echo argument of 4097 bytes asks bound too (the cap is on every word of a lexed command, not only on paths)" ask - "echo \"${_W4097}\"; git status" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
 # Command-name case folding is fork-free: 1999 capitalised no-op commands then rm -rf / still deny (a `tr` per record turned this into a bound ask), and a PATH with no `tr` still decides RM.
 rep "Make 'x'; " 1999; _cmd1999Make="${REP_OUT}rm -rf /"
 bound_row "bound: 1999 capitalised commands (Make) then rm -rf / still denies, in under 5 s" deny - "$_cmd1999Make"

@@ -56,9 +56,11 @@
 #   ask   env -S, --split-string (any abbreviation) or a cluster with S (rule id `unparsed-wrapper`): the string
 #         it splits into a command is not analysed.
 #   ask   more than 8 nested wrappers or `--` separators (rule id `wrapper-depth`): what they run cannot be checked.
-#   ask   a command too large to check (rule id `bound`): a tool call over 256 KiB (checked before anything reads
-#         it), more than MAX_RECORDS simple commands, more than MAX_WORDS words, a target path with more than
-#         MAX_DEPTH components, a segment over 64 KiB in a degraded scan, or the DEADLINE_S wall clock reached.
+#   ask   a command too large to check (rule id `bound`): a tool call over 256 KiB (checked before the prefilter or
+#         any parser reads it), more than MAX_RECORDS simple commands, more than MAX_WORDS words, a word over
+#         MAX_WORD_BYTES (4096 bytes: bash's expansions on one word are quadratic in its length), a target path
+#         with more than MAX_DEPTH components, a segment over 64 KiB in a degraded scan, or the DEADLINE_S wall
+#         clock reached.
 #         What was read before the limit is still judged: a deny wins; an ask-class match keeps its own reason
 #         with the bound sentence appended; with nothing matched the ask is the bare `bound` one.
 #   ask   the lexer returned no command for text that names something the guard decides on (rule id `lexer-empty`:
@@ -195,8 +197,10 @@ unset CDPATH
 # decision). The wall clock is `SECONDS`, reset here: it ticks on whole-second boundaries, so DEADLINE_S=6 trips
 # between 5 and 6 s after this line, comfortably inside the 10 s budget. MAX_RECORDS caps the simple commands the
 # rule table judges. MAX_WORDS caps the words of the whole command; its job is to bound the TIME one record takes to read
-# (the frame-read loop costs about 120 us a word under load), not what the rule table can judge. MAX_DEPTH caps the
-# components of a path the guard resolves, MAX_ENVELOPE the tool call and SCAN_MAX_SEG a degraded-scan segment. A command
+# (the frame-read loop costs about 120 us a word under load), not what the rule table can judge. MAX_WORD_BYTES caps one word
+# (the frame reader swaps a longer one for a placeholder): bash's own expansions on a word, ${p##*/} and a per-character loop,
+# are quadratic in its length and no clock check can interrupt one, while the 256 KiB and 128-component caps bound neither.
+# MAX_DEPTH caps the components of a path the guard resolves, MAX_ENVELOPE the tool call and SCAN_MAX_SEG a degraded-scan segment. A command
 # beyond any of them, or one that runs out of time, asks with rule id `bound` unless a deny was found in what was read
 # (BOUND_SOFT: a trip while reading or resolving does not stop the judging of the rest). The lexer has its own 2 s alarm;
 # these bound everything after it.
@@ -204,6 +208,7 @@ SECONDS=0
 DEADLINE_S=6
 MAX_RECORDS=2000
 MAX_WORDS=20000
+MAX_WORD_BYTES=4096   # PATH_MAX: a longer word is not judged. bash's own expansions on one word (${p##*/}, a per-character loop over a dash word) are quadratic in its length
 MAX_DEPTH=128
 MAX_ENVELOPE=262144   # 256 KiB: a larger tool call asks `bound` before anything reads it (the prefilter and the raw scans are not linear)
 SCAN_MAX_SEG=65536    # 64 KiB: the longest segment the raw/decoded scans will try their patterns on
@@ -495,7 +500,11 @@ while IFS= read -r -d '' F; do
          REC_OFF[${#REC_OFF[@]}]="$NW"; REC_N[${#REC_N[@]}]="$F"; LEX_LEFT=$((F * 2)); LEX_KIND=0; LEX_ST=3
        else LEX_BAD=1; LEX_ST=0; fi ;;
     3) if [[ "$LEX_KIND" -eq 0 ]]; then W_FLG[${#W_FLG[@]}]="$F"; LEX_KIND=1
-       else W_TXT[${#W_TXT[@]}]="$F"; LEX_KIND=0; NW=$((NW + 1)); fi
+       else
+         # a word over MAX_WORD_BYTES is replaced by a placeholder and the command asks `bound` unless something denies: the rule table's
+         # expansions on it are quadratic, the lexer's 2 s alarm does not cover them, and the clock is read only between records
+         if (( ${#F} > MAX_WORD_BYTES )); then F="(overlong word)"; BOUND_SOFT="a word longer than ${MAX_WORD_BYTES} bytes"; fi
+         W_TXT[${#W_TXT[@]}]="$F"; LEX_KIND=0; NW=$((NW + 1)); fi
        LEX_LEFT=$((LEX_LEFT - 1)); [[ "$LEX_LEFT" -le 0 ]] && LEX_ST=0 ;;
     9) SAW_E="$F"; LEX_ST=0 ;;
   esac
@@ -619,6 +628,7 @@ phys_walk() {
 resolve_phys() {
   local p="$1" follow="$2" last dir rest probe slashes k
   RP=""
+  if (( ${#p} > MAX_WORD_BYTES )); then BOUND_SOFT="a path longer than ${MAX_WORD_BYTES} bytes"; return 1; fi
   while [[ "$p" == */ && "$p" != / ]]; do p="${p%/}"; done
   if [[ "$p" == / ]]; then RP=/; return 0; fi
   slashes="${p//[!\/]/}"
