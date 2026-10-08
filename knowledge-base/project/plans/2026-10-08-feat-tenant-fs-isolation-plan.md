@@ -1,5 +1,5 @@
 ---
-title: "agent-sandbox: true per-tenant filesystem isolation for the Concierge (ADR-075 Option B; not capacity #4891)"
+title: "agent-sandbox: per-session process-level filesystem isolation covering both agent tool tiers (ADR-075 Option B; not capacity #4891)"
 date: 2026-10-08
 slug: feat-tenant-fs-isolation
 branch: feat-5863-tenant-fs-isolation
