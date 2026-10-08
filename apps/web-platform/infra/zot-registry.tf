@@ -145,8 +145,8 @@ locals {
 # line a `name = <expr>` over literals and local.zot_image_amd64 only.
 locals {
   # zot-mirror:begin
-  zot_mirror_asset_sha256_amd64 = "05b171f2bd500dc84f532ef7736d1550ffaf7464f0d655c86b8238b443568cb2"
-  zot_config_digest_amd64       = "2d7fee5603dfd88b2b90cffd07e6b97e6d7ba5e3d6bd5472e66b23bd5ad59114"
+  zot_mirror_asset_sha256_amd64 = "126c18a4ac0643a3c0c80ba46503593f02f92750303d2728c7cc0012b7d1c599"
+  zot_config_digest_amd64       = "5a8db63c9fae93403c39376052e205c41a469dbd84b3d1ea37ee497cb08318ef"
   zot_mirror_repo               = "jikig-ai/soleur"
   zot_version                   = regex(":(v[0-9]+\\.[0-9]+\\.[0-9]+)@sha256:", local.zot_image_amd64)[0]
   zot_manifest_digest           = regex("@sha256:([0-9a-f]{64})$", local.zot_image_amd64)[0]
