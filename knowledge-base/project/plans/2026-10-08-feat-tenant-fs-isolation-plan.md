@@ -30,20 +30,22 @@ returns `spawn("/usr/bin/bwrap", <outer argv> -- command ...args)` — no wrappe
 script, no vendored-argv surgery, and the isolation property is authored by us
 and therefore immune to SDK-bump argv drift (#5849 class).
 
-Closes #5863; folds in #9723 (`/proc` cross-tenant environ channel) and #9725
-(deny-root divergence) **contingent on the Phase-0 `/proc` gate**; leaves #9724
-(canary machinery gaps on the *current* argv path) and #9773 (per-tenant
-executor end-state) open.
+Closes #5863; folds in #9725 (deny-root divergence) by construction. Leaves
+open: #9723 (`/proc` cross-tenant environ channel — **measured unclosable in
+the current container posture**, see Spike Results; needs a pidns, and a pidns
+kills the vendored inner sandbox — named residual), #9724 (canary machinery
+gaps on the *current* argv path), #9773 (per-tenant executor end-state).
 
 **Claims & named residuals.** The bounded claim this design supports is
 *process-level filesystem isolation covering both agent tool tiers* — it is
 not unqualified "tenant isolation". Named residuals it does not close:
-container loopback (including delegated-egress cross-use through a sibling
-session's socat proxy allowlist — an authorization bypass, not merely a
-covert channel, and other-tenant listeners on `127.0.0.1`), abstract unix
-sockets / `connect(2)` to known paths, nested-userns inside the wrap
-(deliberate — the inner shim needs it), the server process's own
-cross-tenant fs access, and the shared in-process heap (→ #9773).
+shared `/proc` (sibling PIDs and their `/proc/<pid>/environ` remain
+visible — the #9723 credential channel stays open), container loopback
+(including delegated-egress cross-use through a sibling session's socat proxy
+allowlist — an authorization bypass, not merely a covert channel, and
+other-tenant listeners on `127.0.0.1`), abstract unix sockets / `connect(2)`
+to known paths, the server process's own cross-tenant fs access, and the
+shared in-process heap (→ #9773).
 
 ## Research Insights
 
@@ -63,7 +65,7 @@ split-unshare discriminator" resolves to the #5873 incident / #5941 probe gap
 
 - P1: no sibling workspace present — content, existence, or mount entry — on
   any agent fs surface (Bash AND file tools).
-- P2: session `/proc` shows only session processes.
+- P2: ~~session `/proc` shows only session processes~~ — measured unclosable (spike); /proc stays shared, #9723 residual.
 - P3: mount table derives from the workspace resolver root (survives the
   git-data cutover).
 - P4: isolation argv authored by Soleur (SDK-drift-immune).
@@ -122,14 +124,15 @@ split-unshare discriminator" resolves to the #5873 incident / #5941 probe gap
   secrets could only return via `--setenv` (argv → `/proc/.../cmdline` leak).
   Instead the spawner composes the child env server-side: `options.env` per
   the S0.2 measurement + derived overrides injected into the map.
-- `/proc`: fresh `--proc /proc` inside the new pid ns is the correct close for
-  #9723 — but Docker's masked `/proc` can make `mount proc` EPERM inside a
-  userns (bubblewrap#284; the repo's own `enableWeakerNestedSandbox` exists
-  because of this — #1557). **Binding the container's `/proc` after
-  `--unshare-pid` does NOT scope it** — a procfs superblock is pid-ns-keyed at
-  mount time, so a bind still exposes the container pid set. If fresh proc is
-  EPERM, the only honest fallback is `--tmpfs /proc` (empty; CLI tolerance
-  measured at spike) — never a host-proc bind.
+- `/proc` — MEASURED (Phase 0, docker + soleur seccomp): fresh `--proc`
+  EPERMs under Docker's masked-paths and the masked mounts cannot be
+  umounted from inside a userns (`must be superuser to unmount` —
+  init-userns-owned). A bound container procfs never scopes (pid-ns-keyed
+  at mount). Worse, the vendored inner sandbox cannot nest under ANY outer
+  userns: its unconditional `--unshare-pid`/`--unshare-net` require the
+  outer to own both namespaces, and an outer pidns starves the inner's
+  `/proc` reads. Arm F drops all `--unshare-*` and relies on a file-cap'd
+  bwrap for a mountns-only wrap; `/proc` stays shared → #9723 residual.
 - Signals: released bwrap has no `--forward-signals`; monitor does not relay
   SIGTERM. Teardown = `detached: true` at spawn + `process.kill(-pgid)` on the
   bwrap process group (asserts the *server's* pgid is untouched), plus
@@ -146,9 +149,12 @@ split-unshare discriminator" resolves to the #5873 incident / #5941 probe gap
   env is intersected with the known-key allowlist before use.
 - Never `--ro-bind /run` or `$XDG_RUNTIME_DIR` — ro binds do NOT block
   `connect(2)` on socket inodes (delegated-authority escape).
-- No `--unshare-net` on the outer wrap (inner SDK sandbox owns egress);
-  loopback stays shared container-wide → record as residual (cross-tenant
-  127.0.0.1 channel incl. other sessions' socat bridges).
+- **Zero `--unshare-*` on the outer wrap** (arm F, measured): any outer
+  userns breaks the vendored inner sandbox — its unconditional
+  `--unshare-pid`/`--unshare-net` require the outer userns to *own* the
+  pidns/netns, and an outer pidns has no mountable scoped procfs. The outer
+  wrap is a pure mount namespace built by file-cap'd bwrap; loopback and
+  `/proc` stay shared container-wide → named residuals.
 - Bound mounts pin the *inode*: a workspace reprovision/re-clone that swaps
   the directory under the same path leaves the session bound to a deleted
   inode (split-brain). Canonicalize (`realpathSync`) once at dispatch — one
@@ -168,7 +174,7 @@ split-unshare discriminator" resolves to the #5873 incident / #5941 probe gap
 |---|---|---|
 | "`pathToClaudeCodeExecutable` wrapper" (spec FR1) | Works, but `spawnClaudeCodeProcess` is the documented interpose and strictly less fragile | Plan adopts `spawnClaudeCodeProcess`; FR1 mechanism updated |
 | "exec the real bwrap by absolute path" (spec FR1) | Still correct at the spawn layer — spawn `/usr/bin/bwrap` directly, bypassing the PATH shim | Kept |
-| "`--unshare-pid` scopes bound /proc to session processes" (spec FR3) | A procfs superblock is pid-ns-keyed at mount time — a `--bind` of the container's `/proc` never scopes, whatever order it lands in. Only a *fresh* procfs (or empty tmpfs) in the new pid ns is scoped | Phase 0 spike measures the masked-path EPERM (likely present — `enableWeakerNestedSandbox` exists for it, #1557) and picks `--proc` vs `--tmpfs /proc`; if neither is viable, G2/#9723 cannot close in this design and the finding surfaces, not silently descoped |
+| "`--unshare-pid` scopes bound /proc to session processes" (spec FR3) | MEASURED dead: fresh `--proc` EPERMs (masked paths unremovable), bound procfs never scopes (pid-ns-keyed), tmpfs starves the inner shim — and an outer pidns is itself fatal because the inner's unconditional `--unshare-pid`/`--unshare-net` need an outer-owned pidns/netns + matching procfs | Arm F: mountns-only wrap via file-cap'd bwrap, zero `--unshare-*`; #9723 recorded as an open residual, spec FR3/G2/AC2 rewritten |
 | Fresh per-session `$HOME`/`~/.claude` | `~/.claude/projects/` holds resume transcripts — a bare tmpfs breaks `resume`/`continue`; a new `.agent-home` root adds a state-root lifecycle + DSAR sweep obligations AND lands on ephemeral host NVMe under the `WORKTREE_ROOT` arm | Default: narrow-bind the existing `~/.claude/projects/<encoded-cwd>` (already cwd-keyed = already tenant-scoped) + enumerated config files onto a `--dir` `$HOME` — zero new state roots, resume continuity preserved both directions, tenant=workspace sharing model affirmed. `.agent-home` remains the contingency if S0.6 shows the narrow set insufficient |
 | "`--clearenv` + `--setenv` allowlist" (spec FR4) | `--clearenv` wipes the spawn env wholesale — secrets could only return via `--setenv`, landing on `/proc/<bwrap>/cmdline` (worse than the environ channel #9723 closes) | No `--clearenv`; env composed server-side (options.env per S0.2 + derived overrides); argv carries no secrets |
 
@@ -193,26 +199,30 @@ runs at review time per the review-skill conditional block.
 
 ## Implementation Phases
 
-### Phase 0 — Spike gates (pre-merge evidence, no prod change)
+### Phase 0 — Spike results (measured, 2026-10-08, docker+soleur-seccomp)
 
-- S0.0 **`/proc` decision gate (runs first, gates Phase 2).** In a container
-  matching prod's masked-/proc posture: `bwrap --unshare-user --unshare-pid
-  --proc /proc -- true`. If EPERM (likely — `enableWeakerNestedSandbox` exists
-  for exactly this, #1557), then note the fallback space narrows to nearly
-  nothing: `--tmpfs /proc` starves the inner shim (`infra/bwrap-shim/bwrap`
-  hard-requires `/proc/self/fd` to sweep fds → every inner Bash call exits
-  65), and `--bind /proc /proc` never scopes (procfs is pid-ns-keyed at mount
-  time). If fresh `--proc` EPERMs, G2/#9723 cannot close in this design —
-  a surfacing event, not a silent descope.
-- S0.1 Same container: spawn `bwrap` with the full minimal mount table
-  wrapping the vendored `claude` binary; confirm session startup AND nested
-  inner-sandbox bwrap still works (the split-unshare discriminator class),
-  including the inner shim's bpf artifact path under `/app/infra/` and the
-  fd sweep's `/proc/self/fd` dependency. Enumerate real-`$HOME` dependents
-  (`~/.npm/_logs`, `gh` config, `~/.claude/*` reads) and socat/proxy socket
-  ownership (CLI-created under session `/tmp`, or host-side dir needing a
-  bind — and whether proxies can move to per-session sockets under a
-  session-bound dir to shrink the loopback residual).
+Spike ran inside `docker run --security-opt seccomp=soleur-bwrap.json
+ubuntu:24.04` (Docker's default masked `/proc`, same masking as prod —
+cloud-init.yml:789 sets seccomp+apparmor, no `systempaths` override, so
+masked paths apply).
+
+| Probe | Result |
+|---|---|
+| `bwrap --unshare-user --unshare-pid --proc /proc` | **EPERM** `Can't mount proc` — bubblewrap#284 masked-paths |
+| helper umounts masked `/proc/*` mounts then `mount -t proc` | **EPERM** — `must be superuser to unmount` (masked mounts are init-userns-owned; unremovable inside) |
+| outer userns only + inner SDK argv | **dead** — inner unconditionally `unshare(pid,net)`; a child pidns/netns requires the outer userns to *own* the current pidns/netns |
+| outer pidns + bound container `/proc` + inner | **dead** — `open /proc/<outer-pid>/ns/ns` ENOENT (bound procfs indexes container pids) |
+| outer pidns + `--tmpfs /proc` + inner | **dead** — shim fd sweep needs `/proc/self/fd`; bwrap reads `/proc/sys/kernel/overflowuid` |
+| **arm F**: `setcap cap_sys_admin,cap_setuid,cap_setgid+ep bwrap` + outer wrap with **zero `--unshare-*`** + inner captured-argv | **WORKS** — `stat`/`ls` deny sibling; inner `INNER-OK`; caps cleared on child |
+
+Consequence (operator decision): the wrap is **mount-namespace only** —
+no pidns, no netns, no userns. `#9723` cannot close here; it requires a
+pidns, which requires `systempaths=unconfined` + netns egress plumbing —
+a container-posture widening deferred to #9773's topology discussion.
+
+
+Remaining Phase-0 items (still open under arm F):
+
 - S0.2 Verify `spawnClaudeCodeProcess` round-trip against a stubbed API
   (`test/helpers/hermetic-cli-env.ts` pattern): SDK calls it once per session
   spawn including resume; stdin/stdout protocol flows through bwrap fds 0-2;
@@ -228,39 +238,58 @@ runs at review time per the review-skill conditional block.
   untouched (without `detached`, `kill(-pgid)` hits the runner). ESRCH on
   already-exited group is caught; the `options.signal` path must not
   double-kill.
-- S0.4 Re-measure the prod bwrap version and the container's masked-/proc
-  state (evidence conflicts between 0.8.0 and 0.12.0 across issues). Prefer
-  ONE argv valid on the deployed floor over version-conditional argv (a
-  variant matrix doubles the fixture pin).
 - S0.5 Prove `tenant-isolation-probe.sh` executes under preflight Step 10.5's
-  bwrap sandbox (bwrap-in-bwrap on the operator host) — if Step 10.5's userns
-  posture denies the inner `--unshare-user`, the founder check reads INVALID
-  forever and must be reshaped before relying on the pin.
-- S0.6 Config/transcript strategy experiment: narrow-bind the existing
-  `~/.claude` surface (`projects/<encoded-cwd>` rw for resume + the config
-  files the CLI reads) vs a new per-tenant state root. Narrow-bind is the
-  default (no new state root, no DSAR delta, preserves resume continuity
-  across the flag flip); a new root is justified only if the spike shows the
-  narrow set insufficient.
+  bwrap sandbox. NOTE: arm F's probe needs a **file-cap'd bwrap** inside the
+  preflight sandbox — file caps are masked by the caller's bounding set, so
+  this likely requires `bwrap` to also work via its non-privileged userns
+  path there, OR the probe runs privileged on the host. Measure; if
+  impossible under Step 10.5 the founder check is reshaped to `judgement`.
+- S0.6 Config/transcript strategy: narrow-bind the existing `~/.claude`
+  surface (`projects/<encoded-cwd>` rw for resume + the config files the CLI
+  reads) onto a `--dir` `$HOME` vs a new per-tenant state root. Narrow-bind
+  is the default (no new state root, no DSAR delta, preserves resume
+  continuity across the flag flip); a new root is justified only if the
+  spike shows the narrow set insufficient.
+- S0.7 Arm-F privilege mechanics, end-to-end in a prod-posture container:
+  `setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap` requires
+  `cap_sys_admin` in the container **bounding set** (`--cap-add SYS_ADMIN`
+  on `docker run`) — the app then drops it from effective/permitted/ambient
+  (NOT bounding — a bounding drop is inherited and would permanently
+  neuter the file cap) so the server process itself never carries it, and
+  any exec of `bwrap` elevates transiently through the file cap alone.
+  Verify: (a) the drop mechanism at entrypoint; (b) no OTHER binary in the
+  image carries file caps (`getcap -r /` audit — every file-cap'd binary
+  becomes an app-side SYS_ADMIN carrier); (c) the session process's cap
+  sets post-exec contain no `sys_admin`; (d) the inner canary argv is
+  byte-identical under file-cap bwrap (privileged path may alter flag
+  semantics — `sandbox-canary` replay is the check).
+- S0.8 `$HOME` dependents + socat/proxy socket ownership enumeration under
+  the arm-F table (`~/.npm/_logs`, `gh` config, `~/.claude/*` reads; whether
+  the CLI-created socket dir lands under the session `/tmp` or needs a
+  host-side bind).
 
 ### Phase 1 — Failing tests (contract first)
 
 - T1.1 Unit: `buildOuterWrapArgv({workspacePath, sessionId, cwd, command})`
   produces a table with NO mount **target** under the workspaces parent
-  except the own workspace bind; contains `--unshare-pid`; `/proc` per the
-  S0.0 outcome; **no `--clearenv`** (it would wipe the spawn env — env is
-  composed server-side instead); no secret value appears anywhere in argv
-  (credentials ride the spawn env; argv carries paths only); never binds
-  `/run` or `$XDG_RUNTIME_DIR`; binds `realpath(options.command)` + its
-  package dir; workspace path derived from the resolver root (both
-  `WORKSPACES_ROOT` and `WORKTREE_ROOT` arms). A separate env-composition
-  test pins: emitted child env == `options.env` (per S0.2) + derived
-  overrides {HOME, TMPDIR, XDG_*} with `undefined` dropped — a drift test,
-  not argv shape.
+  except the own workspace bind; **contains ZERO `--unshare-*` flags**
+  (mountns-only — any userns breaks the inner sandbox, measured); `/proc`
+  bound through as-is (shared — #9723 residual); **no `--clearenv`** (it
+  would wipe the spawn env — env is composed server-side instead); no
+  secret value appears anywhere in argv (credentials ride the spawn env;
+  argv carries paths only); never binds `/run` or `$XDG_RUNTIME_DIR`;
+  binds `realpath(options.command)` + its package dir; workspace path
+  derived from the resolver root (both `WORKSPACES_ROOT` and
+  `WORKTREE_ROOT` arms). A separate env-composition test pins: emitted
+  child env == `options.env` (per S0.2) + derived overrides {HOME, TMPDIR,
+  XDG_*} with `undefined` dropped — a drift test, not argv shape.
 - T1.2 Integration (direct-bwrap, `sandbox-isolation-fixtures.ts` style):
   inside a spawned outer wrap, sibling dirs under a stub workspaces root are
-  absent from `ls`, `stat`, and `/proc/self/mounts`; `/proc` shows only
-  session processes; `/proc/<other-pid>/environ` absent.
+  absent from `ls`, `stat`, and `/proc/self/mounts`. `/proc` is intentionally
+  unscoped (arm F) — the suite asserts only fs surfaces, and documents #9723
+  as the tracked residual. Requires the file-cap'd bwrap path; in the test
+  env, cap grant via `setcap` on a copied fixture binary or `bwrap`'s
+  userns path — pin whichever the fixture uses.
 - T1.3 Mid-session sibling creation stays invisible (the TOCTOU regression
   shape from `sandbox-isolation.test.ts`, re-pointed at the outer wrap).
 - T1.4 Fail-closed: missing bwrap/binary/mount-source → session refuses to
@@ -283,7 +312,8 @@ runs at review time per the review-skill conditional block.
     against an allowlist.
   - `spawn(..., { detached: true, env: <composed env> })`; `kill()` sends
     `process.kill(-child.pid, sig)` with ESRCH caught; `options.signal` wires
-    the same teardown without double-kill.
+    the same teardown without double-kill; `--die-with-parent` stays as the
+    belt.
   - `stdio: [pipe, pipe, pipe]` — stderr continuously drained into a ring
     buffer (a paused fd-2 blocks the child at ~64 kB) and attached to emitted
     `error`/`exit` payloads + the `op:tenant-outer-wrap` log.
@@ -304,22 +334,29 @@ runs at review time per the review-skill conditional block.
   - Options drift: flag-off serialization stays byte-identical to today's
     `agent-runner-query-options` snapshot; flag-on adds the key in a second
     pinned shape.
-- T2.2 Mount table: `--unshare-user --unshare-pid --unshare-ipc` (SysV/mqueue
-  are same-uid cross-tenant channels; hostname UTS isolation buys nothing —
-  omitted). Broad ro-bind of the system image (`/usr`, merged-usr links,
-  ld.so cache/conf); minimal `/etc` — regular files via `--file`
-  (resolv.conf, hosts, nsswitch.conf, passwd/group), directories via
-  `--ro-bind` (`/etc/ssl`, terminfo); `--dev /dev`; proc handling per S0.0;
-  `--tmpfs /tmp` + `TMPDIR` pointed there. Derived state roots (each
-  realpath'd + `accessSync`'d, fail-closed): own workspace bind; plugin root;
-  `realpath(options.command)` + its package dir (the vendored CLI tree —
-  without it every flag-on spawn fails closed at exec); `$HOME` =
-  `--dir /home/soleur` + narrow binds of `~/.claude/projects/<encoded-cwd>`
-  (rw — resume transcripts, already cwd-keyed hence already tenant-scoped)
-  and the CLI config files S0.6 enumerates (no new state root by default);
+- T2.2 Mount table (arm F — **mountns only, no `--unshare-*`**): privileged
+  bwrap (`setcap` file caps — needs `SYS_ADMIN` in the container bounding
+  set via `--cap-add SYS_ADMIN` on `docker run`, with the app dropping it
+  from effective/permitted/ambient at entrypoint; bounding stays so the
+  file cap can elevate). Broad ro-bind of the system image (`/usr`,
+  merged-usr links, ld.so cache/conf); minimal `/etc` — regular files via
+  `--file` (resolv.conf, hosts, nsswitch.conf, passwd/group), directories
+  via `--ro-bind` (`/etc/ssl`, terminfo); `--dev /dev`; `--bind /proc /proc`
+  (shared procfs — #9723 residual, accepted); `--tmpfs /tmp` + `TMPDIR`
+  pointed there. Derived state roots (each realpath'd + `accessSync`'d,
+  fail-closed): own workspace bind; plugin root; `realpath(options.command)`
+  + its package dir (the vendored CLI tree — without it every flag-on spawn
+  fails closed at exec); `$HOME` = `--dir /home/soleur` + narrow binds of
+  `~/.claude/projects/<encoded-cwd>` (rw — resume transcripts, already
+  cwd-keyed hence already tenant-scoped) and the CLI config files S0.6
+  enumerates (no new state root by default);
   `/app/infra/bwrap-userns-clone3-deny.bpf` + the socat/proxy socket dir per
-  S0.1; worktree `.git` gitfile targets under `WORKTREE_ROOT`. The spawn env
-  carries the credential set per S0.2's measurement — never argv.
+  S0.8; worktree `.git` gitfile targets under `WORKTREE_ROOT`. The spawn
+  env carries the credential set per S0.2's measurement — never argv.
+  **Privilege hygiene**: the CLI child post-exec carries only the caller's
+  cap set (no `sys_admin`) — bwrap's privileged path clears file caps after
+  setup; assert `CapEff`/`CapBnd` of the session process against the app's
+  dropped baseline in a test.
 - T2.3 Wire `spawnClaudeCodeProcess` into `buildAgentQueryOptions` — behind a
   rollout flag (env, read at dispatch not module load, default off in the
   same image; dark-launch per `wg-dark-launch-deploy-gates`). In-flight
@@ -352,7 +389,7 @@ runs at review time per the review-skill conditional block.
   (`wg-dark-launch-deploy-gates`).
 - T3.2 In-sandbox realized-state probe (FR6), **dual vantage**: (a) inside the
   outer wrap via Bash — `/proc/self/mounts` carries no sibling-bearing path,
-  `/proc` pid set is session-scoped; (b) **CLI-process vantage** — a file-tool
+  `/proc` is unscoped under arm F — assert only the mount table; (b) **CLI-process vantage** — a file-tool
   Read attempt on a sibling path returns ENOENT (an inner-Bash probe alone
   cannot see the file-tool tier — it would stay green while siblings remain
   readable to Read/Edit). Emits `feature:agent-sandbox` structured event +
@@ -421,8 +458,13 @@ runs at review time per the review-skill conditional block.
 - `apps/web-platform/test/helpers/sandbox-isolation-fixtures.ts` — outer-wrap
   spawn helper.
 - `apps/web-platform/test/sandbox-canary.test.ts` — fixture pin extension.
-- `apps/web-platform/Dockerfile` — only if the canary needs it (no wrapper
-  script to COPY under the `spawnClaudeCodeProcess` design).
+- `apps/web-platform/Dockerfile` — `setcap cap_sys_admin,cap_setuid,
+  cap_setgid+ep /usr/bin/bwrap`; `getcap -r` audit asserting no other
+  file-cap'd binary in the image; entrypoint drops `SYS_ADMIN` from
+  effective/permitted/ambient (bounding retained — S0.7).
+- `apps/web-platform/infra/cloud-init.yml` — `docker run` gains
+  `--cap-add SYS_ADMIN` (bounding-set membership so the bwrap file cap can
+  elevate; app itself runs capless after the entrypoint drop).
 - `knowledge-base/legal/article-30-register.md` — new TOM row (adopting).
 
 ## Scope Check
@@ -435,7 +477,7 @@ runs at review time per the review-skill conditional block.
 | 2 | "Once shipped, the sandbox `denyRead` for `/workspaces` becomes unnecessary — simplify `buildAgentSandboxConfig`." | T2.4; AC7; flag-deletion issue filed in-PR | **partially mapped** — deny stays unconditional while the flag exists (regression guard); the simplification itself ships with flag deletion |
 | 3 | [operator] "Tenants are coming" → full end-state bar (content, existence, mount table, /proc) | P1/P2; T1.2 assertions; FR2/FR3 | mapped |
 | 4 | [operator] "Both tiers" — file tools covered | spawn-at-CLI-process design; AC1 covers both surfaces | mapped |
-| 5 | [operator] "Fold into #5863" — #9723 + #9725 | G2/G3; T2.2 proc handling; resolver-root derivation | mapped |
+| 5 | [operator] "Fold into #5863" — #9723 + #9725 | #9725: resolver-root derivation (mapped). #9723: measured unclosable in this posture — residual + cross-ref to #9773 | **partially mapped** — re-scoped in the open, operator-approved arm F |
 | 6 | [operator] "1 now, 3 tracked" | #9773 filed at brainstorm; ADR amendment records deferral | mapped |
 
 ### Plan-Item Provenance
@@ -462,21 +504,27 @@ runs at review time per the review-skill conditional block.
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** (CTO, brainstorm carry-forward) Outer-CLI bwrap wrap is the
-sweet spot — covers both tiers, dissolves #9725 and narrows #9723 to session
-scope, self-authored argv immune to SDK drift, failure scoped to session
-startup. Plan refines the mechanism to `spawnClaudeCodeProcess` (the SDK's
-documented interpose — strictly better than a wrapper script).
+**Assessment:** (CTO, brainstorm carry-forward; amended by Phase-0 spike)
+Outer-CLI bwrap wrap is the sweet spot — covers both tiers, dissolves #9725,
+self-authored argv immune to SDK drift, failure scoped to session startup.
+Spike corrected the #9723 expectation: a scoped `/proc` requires an outer
+pidns, which the vendored inner sandbox cannot survive — the wrap ships
+mountns-only (arm F, file-cap'd bwrap) and #9723 stays an open residual.
+Plan uses `spawnClaudeCodeProcess` (the SDK's documented interpose —
+strictly better than a wrapper script).
 
 ### Legal
 
 **Status:** reviewed
-**Assessment:** (CLO, brainstorm carry-forward) No commitment breached; #9723
-is a cross-tenant channel that must close or be recorded as an open residual —
-this design closes it. Plan must run `soleur:gdpr-gate` (Phase 2.7), write the
-register entry in honest tense (`adopting` until prod-measured), hold public
-claims, and ship an observability probe since `/proc` reads leave no audit
-trail.
+**Assessment:** (CLO, brainstorm carry-forward; amended by Phase-0 spike)
+No commitment breached; #9723 is a cross-tenant channel that must close or
+be recorded as an open residual — the spike measured it **unclosable in the
+current container posture**, so it is recorded as the open residual and the
+bounded claim names it. Plan runs `soleur:gdpr-gate` (done — see
+Compliance), writes the register entry in honest tense (`adopting` until
+prod-measured), holds public claims, and ships the realized-state probe —
+`/proc` reads leave no audit trail, so the residual's observability is the
+canary + naming, not detection.
 
 ### Product
 
@@ -552,12 +600,12 @@ per the register discipline.
 ### Guard 1 — outer-wrap realized-isolation probe
 
 **Property.** A sandboxed agent session observes no filesystem entry under the
-workspaces parent other than its own workspace, and `/proc` contains only
-session processes.
+workspaces parent other than its own workspace. (`/proc` pid scope is out of
+scope under arm F — #9723 residual.)
 
 **Assembly.** The probe runs inside the outer wrap at **both** vantages the
 property quantifies over: (a) a Bash-side check of `mountinfo` + `ls`/`stat`
-of the parent + `/proc` pid set, and (b) a CLI-process (file-tool) Read on a
+of the parent + mountinfo, and (b) a CLI-process (file-tool) Read on a
 sibling path — the file-tool tier shares the CLI process's view, so an
 inner-bwrap Bash-only probe structurally cannot decide it. The guard sits in
 the deploy canary replay plus an opt-in boot self-probe; the
@@ -569,7 +617,7 @@ the session-level AC test exercises (b).
 | # | Mutation | Expected |
 |---|----------|----------|
 | 1 | Add a sibling bind to the outer argv | probe reports sibling-visible → RED |
-| 2 | Remove `--unshare-pid` while keeping host-proc bind | probe reports host pid set → RED |
+| 2 | Add any `--unshare-*` flag to the outer argv (regresses into the dead userns arm) | T1.1 zero-unshare assertion + fixture pin → RED |
 | 3 | Reorder own-ws bind before a later parent tmpfs | session ws unwritable/absent → RED |
 | 4 | Probe body replaced by `exit 0` (vacuous harness row) | dispatch-count assertion: `mounts==0 && exit 0` is FAIL — the guard's own dispatch is floored |
 | 5 | Valid but different table: extra `/usr/local` bind (non-parent, no sibling) | must-PASS — pins that the guard discriminates by *sibling-bearing* mounts, not by argv diff |
@@ -598,10 +646,10 @@ as `sandbox-canary-argv.json`). No second producer exists.
 - AC1: In a spawned session, `ls`/stat/`findmnt` under the workspaces parent
   shows only the session's own workspace — via Bash AND via a file-tool read
   attempt on a sibling path (both denied by absence, not by hook).
-- AC2: `/proc` inside the session exposes no non-session pid (fresh procfs
-  per S0.0 — under the sanctioned outcomes this is either a scoped pid set
-  or the feature does not ship); a concurrent sibling session's environ is
-  unreachable.
+- AC2: ~~`/proc` scoped to session~~ — replaced: `/proc` inside the session
+  is the shared container procfs (#9723 residual); the AC suite must NOT
+  assert pid scoping. (An outer pidns is measured-fatal to the inner
+  sandbox; a host-proc bind never scopes.)
 - AC3: A sibling workspace created mid-session remains invisible.
 - AC4: No cross-tenant readable/writable scratch remains under `/tmp` or
   `HOME`; `resume`/`continue` keep working — narrow-bound
@@ -630,11 +678,11 @@ as `sandbox-canary-argv.json`). No second producer exists.
 ```
 founder_check:
   kind: command
-  text: "Two-tenant realized probe — done = a runtime probe shows tenant A's session namespace cannot see tenant B's workspace (ls/stat of the parent, mountinfo, /proc pid set)."
+  text: "Two-tenant realized probe — done = a runtime probe shows tenant A's session namespace cannot see tenant B's workspace on any filesystem surface (ls/stat of the parent, mountinfo)."
   command: bash knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh
   expected: isolation_ok
   pins:
-      knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh: 6c66253f6faa78a29c6b204780efd1294349e31c
+      knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh: 463fea74a6b122eaf77e01d15a179b43931b18d6
   approved_by: deruelle
   approved_at: 2026-10-08
 ```
@@ -675,11 +723,16 @@ founder_check:
 - **Nested bwrap on the deployed kernel/profile** — the #5873 split-unshare
   class lives here; Phase 0 spike is the gate, and the deploy canary replays
   the real argv before the flag flips.
-- **`--proc` vs masked-paths EPERM** (bubblewrap#284; likely present —
-  `enableWeakerNestedSandbox` exists for it, #1557). Fresh procfs or empty
-  tmpfs are the only honest arms; if both are unviable, #9723 stays open as a
-  named residual and the issue's fold-in is re-scoped in the open — never a
-  host-proc bind dressed as session scope.
+- **Measured, not projected:** fresh `--proc` EPERMs under Docker masked
+  paths and the masks are unremovable from inside a userns — arm F keeps
+  `/proc` shared and records #9723 as an open residual (#9773 topology is
+  the honest close). Never let a bound host procfs get described as scoped.
+- **File-cap'd bwrap is new privilege surface** — `cap_sys_admin+ep` on the
+  binary means any exec of it elevates transiently; mitigate by keeping the
+  file cap on bwrap only (`getcap -r /` audit at image build), the app
+  dropping SYS_ADMIN from effective/permitted/ambient (bounding retained so
+  the file cap can elevate), and `--cap-add SYS_ADMIN` scoped to the deploy
+  change in cloud-init.yml.
 - **Under-binding breaks the CLI** — mitigated by derived-state-roots +
   broad-system-image strategy (not a literal list) plus S0.1's real-session
   spawn; the canary replays the argv in-image.
