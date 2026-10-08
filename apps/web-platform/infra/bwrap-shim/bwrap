@@ -41,8 +41,9 @@
 # own pid namespace: no host pids, self-fd view intact), spliced at the LAST
 # position in the merged setup token stream so it mounts over the tail bind.
 # The SDK ships the setup argv via `--args <fd>` (the fd stream carries every
-# option); the shim consumes each pre-boundary `--args` payload, re-emits it
-# on a fresh fd, and splices there:
+# option); the shim consumes each pre-boundary `--args` payload and re-emits
+# it verbatim on a fresh fd — the mask itself always lands in the OUTER argv,
+# at the merged stream's last setup position:
 #   Arm A  first outer `--` (no --args, or no `--` inside any payload):
 #          inserted immediately before it — after every setup token incl. the
 #          vendor tail bind.

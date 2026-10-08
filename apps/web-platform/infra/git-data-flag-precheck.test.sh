@@ -362,6 +362,10 @@ case_mode() { # <label> <flag-value|ABSENT> <mode> — the flag=true mode branch
 case_deny() { # <label> <src-dir> <mode> — SANDBOX_DENY_ROOTS arm (#9725): emits SANDBOX_SRC_DIR + FLAG_MODE
   run_case "deny-$1" false SANDBOX_SRC_DIR="$2" FLAG_MODE="$3"
 }
+case_write_deny_absent_true_refused() { # asserts the WRITE gate refuses a `true` write over absent coverage (mutant row 18)
+  case_write m-write-gate ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
+    && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"
+}
 case_deny_absent_flip_refused() { # asserts the flip gate refuses absent coverage (mutant row)
   case_deny absent-flip "$T/deny-absent" flip
   [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"
@@ -697,10 +701,6 @@ else fail "D6: a covered flip was refused or lost the pin" "$(detail)"; fi
 if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"; then
   pass "D7: the flag-COLLAPSED helper shape (env read outside the deny fn) -> sandbox_deny_coverage_absent — the function-scope needle catches the #9725 form"
 else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
-case_write_deny_absent_true_refused() {
-  case_write m-write-gate ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
-    && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"
-}
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
 MUTANT_FLOOR=19  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17
