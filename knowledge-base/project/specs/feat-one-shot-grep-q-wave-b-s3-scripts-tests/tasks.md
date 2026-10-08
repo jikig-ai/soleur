@@ -10,7 +10,7 @@ Scope of this task list: S3 only (two deferral rows, `scripts/*.test.sh` 128 lin
 - [ ] 0.2 Drain probe on the dev host and inside `docker run --rm ubuntu:24.04` (plan Phase 0 command): expect `q: 141`, `c: 0`, `nomatch: 1`, `neg-q: 0`, `neg-c: 1`. If `c` prints 141, stop.
 - [ ] 0.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh`; keep the `DEFERRED:` lines (expect `scripts/*.test.sh (128 hits, ceiling 128, mode <=)`, `scripts/test-* (2 hits, ceiling 2, mode <=)`, 13 lines, test-shaped total 567).
 - [ ] 0.4 `python3 scripts/grep-q-drain-codemod.py apply --row 'scripts/*.test.sh' --row 'scripts/test-*'` dry run: expect POPULATION 588 lines in 132 files, WOULD-CHANGE 80 lines in 33 files, 53 QUEUE lines; diff against the plan's tables; any new entry stops the work until read. Then the same with the nine `--reviewed-suspect` files: expect 28 more lines in 9 files and a 22-line queue (4 H-m, 17 data, 1 X).
-- [ ] 0.5 Trigger derivation over the edited-file list against every `push` workflow filter (expect 0 of 48 for all 18 path-filtered workflows, the seven unfiltered ones match); open-PR intersection with the exact list (expect #9745, #9772, #9640, #7390, #6778 by file, no hunk within three lines) and the added-hit screen (expect none); `uptime`; `grep -l vitest` over the edited files.
+- [ ] 0.5 Trigger derivation over the edited-file list against every `push` workflow filter (expect 0 of 48 for all 18 path-filtered workflows, the seven unfiltered ones match); open-PR intersection with the exact list (expect #9745, #9772, #9640, #7390, #6778 by file, no hunk within three lines) and the added-hit screen (it found #9772's `scripts/ci-demand-census.test.sh:847` at deepen time; record whatever it finds now, and re-run it at the PR-ready step); `uptime`; `grep -l vitest` over the edited files.
 
 ## Phase 1: red first
 
@@ -31,14 +31,14 @@ Scope of this task list: S3 only (two deferral rows, `scripts/*.test.sh` 128 lin
 
 ## Phase 4: mutation battery
 
-- [ ] 4.1 Guard 1 matrix on scratch copies after a green control; first red line recorded from printed output; the two must-PASS rows rc 0; restore check clean.
+- [ ] 4.1 Guard 1 matrix (ten rows: nine RED, row 10 the measured surviving mutant) on scratch copies after a green control; first red line recorded from printed output; the two must-PASS rows rc 0 with a landing check (`git diff --numstat` +1) and a paired `-q` control; restore check clean.
 - [ ] 4.2 Observer table for the 18 hand-converted sites (`-vc` inversion and `grep -m 0` force-no-match, one at a time); a survivor is listed as unobserved, not claimed.
-- [ ] 4.3 Scratch evidence: old and new `grep -m` expressions on a three-line input whose first match is on line 2 (four displays); the bare-repository run of old and new `scripts/test-all.sh`; the `FATAL` pattern arms for the line-6476 expression.
+- [ ] 4.3 Scratch evidence (run the shipped bytes: `sed -n 669p` / `sed -n 6476p` from base and branch on the same inputs; a `-vc` copy of line 669 must print the bare-repository `ERROR` in a non-bare checkout; a SUT-side mutant for `web2-rebirth-recovery-check.test.sh:171`; empty-input and no-match runs for the four `-m` displays): old and new `grep -m` expressions on a three-line input whose first match is on line 2 (four displays); the bare-repository run of old and new `scripts/test-all.sh`; the `FATAL` pattern arms for the line-6476 expression.
 
 ## Phase 5: evidence and ship notes
 
 - [ ] 5.1 One learning file under `knowledge-base/project/learnings/test-failures/` if still non-obvious (candidate in AC-10). Pick the date at write time.
 - [ ] 5.2 `markdownlint-cli2` on the plan, this file, `decision-challenges.md` and the learning; re-measure the discoverability command under the 15 s cap, plain and in a Check 10-shaped `bwrap`.
 - [ ] 5.3 Ship notes for `soleur:ship`: first PR-body line says merging fires no path-filtered workflow and no plugin or web-platform release, apply or deploy (trigger derivation over the 48 files); `Ref #9217`; `## Changelog`; NOT-fixed list; the three acknowledged code-review issues; the `AFFECTED_FALLBACK` sentence; labels `semver:patch`, `type/chore`, `domain/engineering`; tracker comment text with the command behind each number.
-- [ ] 5.4 Cut S4 and S5 only after S3 has merged (the deleted lines sit next to the `apps/web-platform/*.test.sh` row); never re-sync a BEHIND branch mid-flight; on a queue ejection rebase once, re-run Phases 0 and 3, re-enter.
+- [ ] 5.4 S5 is cut only after S3 has merged (the deleted lines abut the `apps/web-platform/*.test.sh` row); S4 may run in parallel; never re-sync a BEHIND branch mid-flight; on a queue ejection rebase once, re-run Phases 0 and 3, re-enter. Paste the throwaway rewrite into the #9217 evidence comment.
 - [ ] 5.5 After merge: `soleur:postmerge` reads the push runs for the merge SHA (the seven unfiltered workflows ran, none of the 18 path-filtered ones), CI on main, and the files at the merge SHA.
