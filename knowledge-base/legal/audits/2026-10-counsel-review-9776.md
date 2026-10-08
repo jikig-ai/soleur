@@ -3,14 +3,14 @@ title: "Counsel review audit — #9776 (autonomous-mode disclosure copy: force-p
 type: counsel-review
 date: 2026-10-08
 issue: 9776
-pr: TBD
+pr: 9792
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-10-08
 signed_off_by: "CLO agent"
 disposition: "DISCHARGED on verbatim application of the CLO ruling of 2026-10-08, with conditions C1-C4"
 conditions:
   - "C1 — ack reset migration: moves autonomous_disclosure_ack_at into autonomous_disclosure_ack_superseded_at where bash_autonomous is true, with no write to the toggle column."
-  - "C2 — deploy order: the new-copy build is live before or with the migration."
+  - "C2 — deploy order: the release pipeline applies migrations before it swaps the build, so a window exists in which an old-build owner can re-acknowledge the OLD copy. Accepted with a mitigation, not eliminated: before the merge goes live the PR body states the window, and after the new build is serving the supersede UPDATE is re-run with a cutoff (COALESCE keeps the first superseded timestamp) under the owner explicit go-ahead for a production write. A versioned acknowledgement (copy version recorded with the ack) is the durable fix and is recommended on #9776."
   - "C3 — the banner, the enable-confirm dialog, AUP §5.7 and T&C §3a.7/§10.4 carry the same exposure statement; TC_VERSION 2.6.0; SHAs repinned; canonical and Eleventy mirror byte-equal."
   - "C4 — #9776 ships a same-PR copy revision and a legal-text follow-up for the '(and at the date of this version it does not)' parenthetical."
 supersedes_in_part: knowledge-base/legal/audits/2026-06-counsel-review-4952.md

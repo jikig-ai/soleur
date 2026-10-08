@@ -52,8 +52,18 @@ describe("migration 159: autonomous disclosure ack reset", () => {
   it("the UPDATE moves ack_at into ack_superseded_at and NULLs ack_at in one statement", () => {
     const u = updates[0];
     expect(u).toMatch(
-      /SET\s+autonomous_disclosure_ack_superseded_at\s*=\s*autonomous_disclosure_ack_at\s*,\s*autonomous_disclosure_ack_at\s*=\s*NULL/i,
+      /SET\s+autonomous_disclosure_ack_superseded_at\s*=\s*COALESCE\(\s*autonomous_disclosure_ack_superseded_at\s*,\s*autonomous_disclosure_ack_at\s*\)\s*,\s*autonomous_disclosure_ack_at\s*=\s*NULL/i,
     );
+  });
+
+  it("keeps the FIRST superseded timestamp on a re-run (COALESCE, Art. 7(1) evidence)", () => {
+    // Without COALESCE a second run would overwrite the original consent time
+    // with a later (possibly new-copy) ack.
+    expect(updates[0]).toMatch(/COALESCE\(\s*autonomous_disclosure_ack_superseded_at/i);
+  });
+
+  it("sets a lock_timeout so the ADD COLUMN cannot queue behind a long transaction", () => {
+    expect(sql).toMatch(/SET\s+LOCAL\s+lock_timeout\s*=\s*'5s'/i);
   });
 
   it("the UPDATE WHERE clause is exactly `bash_autonomous AND ack_at IS NOT NULL`", () => {
@@ -90,6 +100,8 @@ describe("migration 159: autonomous disclosure ack reset", () => {
   it("verify SQL emits check_name/bad rows and is read-only", () => {
     expect(verifySql).toContain("ack_superseded_column_exists");
     expect(verifySql).toContain("autonomous_disclosure_ack_superseded_at");
+    expect(verifySql).toContain("no_autonomous_ack_predates_relock");
+    expect(verifySql).toContain("ack_not_older_than_superseded");
     expect(verifySql).not.toMatch(/\b(UPDATE|DELETE|INSERT|ALTER)\b/i);
   });
 });

@@ -19,14 +19,20 @@
 -- bash_autonomous = false are untouched (their ack, if any, is not an
 -- approval-bypass consent record).
 --
--- DEPLOY ORDER: the new-copy build must be live BEFORE or WITH this migration,
--- otherwise a reset owner could re-ack against the OLD copy.
+-- DEPLOY ORDER: the release pipeline applies migrations BEFORE it swaps the
+-- build, so for the minutes between migrate and deploy an old-build owner who
+-- clicks "Got it" re-acks the OLD copy (PR #9792, "Deploy order"). The
+-- supersede below is therefore written to be SAFE TO RE-RUN with a cutoff:
+-- COALESCE keeps the first superseded timestamp (Art. 7(1) evidence) and never
+-- overwrites it with a later value.
 --
 -- LAWFUL_BASIS: GDPR Art. 6(1)(b) — contract performance (the owner's own
 --   consent-to-risk record for their own workspace); Art. 7(1) demonstrability
 --   is preserved by keeping the superseded timestamp. Non-PII timestamp; no
 --   new purpose, category, recipient or sub-processor.
 -- Retention: dies with the workspace row (existing cascades cover it).
+
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE public.workspaces
   ADD COLUMN IF NOT EXISTS autonomous_disclosure_ack_superseded_at timestamptz;
@@ -39,7 +45,7 @@ COMMENT ON COLUMN public.workspaces.autonomous_disclosure_ack_superseded_at IS
   'record remains autonomous_disclosure_ack_at.';
 
 UPDATE public.workspaces
-SET autonomous_disclosure_ack_superseded_at = autonomous_disclosure_ack_at,
+SET autonomous_disclosure_ack_superseded_at = COALESCE(autonomous_disclosure_ack_superseded_at, autonomous_disclosure_ack_at),
     autonomous_disclosure_ack_at = NULL
 WHERE bash_autonomous
   AND autonomous_disclosure_ack_at IS NOT NULL;
