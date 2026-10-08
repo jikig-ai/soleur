@@ -272,7 +272,7 @@ echo "== hook: more input shapes =="
 fresh_world e1 || exit 2
 DL="$(printf '%064d' 1)"
 hook_run "$(bash_json "bash $SB/fx/liar.sh --stage go --apply --plan-digest $DL")"
-[[ "$(decision)" == "ask" ]] && ! printf '%s' "$HOOK_OUT" | grep -q $'\033' && ! grep -q '\\u001b' <<<"$HOOK_OUT" && [[ "$(jq -r '.hookSpecificOutput.permissionDecisionReason | length' <<<"$HOOK_OUT")" -lt 1400 ]]
+[[ "$(decision)" == "ask" ]] && ! printf '%s' "$HOOK_OUT" | grep -c >/dev/null $'\033' && ! grep -q '\\u001b' <<<"$HOOK_OUT" && [[ "$(jq -r '.hookSpecificOutput.permissionDecisionReason | length' <<<"$HOOK_OUT")" -lt 1400 ]]
 expect "a script whose stage text carries an escape sequence and runs 2000+ characters: control characters dropped, each sentence capped" $?
 jq -e '.hookSpecificOutput.permissionDecisionReason | contains("not verified by Soleur")' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "script-authored reassurance is framed as the script's own words, not Soleur's" $?
 fresh_world e2 || exit 2
