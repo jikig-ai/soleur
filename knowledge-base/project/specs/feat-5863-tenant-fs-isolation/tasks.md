@@ -17,18 +17,27 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
   resume/fd-enumeration still pend a stubbed-API test in Phase 1.
 - [x] 0.4 S0.3 kill semantics: `detached:true` + `kill(-pgid)`; no orphan
   `claude`; server pgid untouched; ESRCH caught; no double-kill.
-- [ ] 0.6 S0.5 `tenant-isolation-probe.sh` under preflight Step 10.5 (arm F
-  needs file-cap'd bwrap — bounding-set question on the dev host; else the
-  check reshapes to `judgement`).
-- [ ] 0.7 S0.6 config strategy: narrow-bind `~/.claude/projects/<encoded-cwd>`
-  + enumerated CLI config files (default) vs new state root (contingency).
-- [ ] 0.8 S0.7 arm-F privilege mechanics in prod-posture container: setcap
-  needs bounding-set `SYS_ADMIN` (`--cap-add` at docker run); app drops
-  effective/permitted/ambient (NOT bounding); `getcap -r /` audit — no other
-  file-cap'd binary; session-child cap sets carry no sys_admin; inner canary
-  argv unchanged under file-cap'd bwrap.
-- [ ] 0.9 S0.8 `$HOME` dependents + socat/proxy socket ownership under the
-  arm-F table.
+- [x] 0.6 S0.5 `tenant-isolation-probe.sh` under preflight Step 10.5 —
+  **verified**: the probe is jq+bwrap-only (replays the committed fixture +
+  pipes the shared payload), so it runs inside the Step-10.5-shaped
+  `--unshare-all` sandbox (bun lives under the tmpfs'd /home and is never
+  needed). `isolation_ok` measured locally nested inside Step-10.5's own
+  bwrap invocation.
+- [x] 0.7 S0.6 config strategy: **narrow-bind landed** — `--dir $HOME` +
+  HOME_STATE_FILES (`.credentials.json`, `.claude.json`, `.claude.json.backup`,
+  `settings.json`) + HOME_SESSION_DIRS (`.claude/projects/<encoded-cwd>`
+  session-transcript bind) per plan; no new state root needed.
+- [x] 0.8 S0.7 privilege mechanics — Dockerfile `setcap cap_sys_admin,
+  cap_setuid,cap_setgid+ep` + `getcap -r /` audit (bwrap is the ONLY
+  file-cap'd binary) + cloud-init `--cap-add SYS_ADMIN` (bounding only — the
+  app runs as non-root `soleur`, eff/perm/amb already empty). Session-child
+  caps pinned by the real-wrap test (1.7). The inner canary argv is
+  path-pinned (`/usr/bin/bwrap` absolute — the shim only interposes PATH).
+- [x] 0.9 S0.8 `$HOME` dependents + proxy-socket ownership — the `--dir`
+  home + `--tmpfs /tmp` table gives every session a private home/scratch
+  (npm/gh/sock dirs write session-locally; the `claude-http-*.sock` dir is
+  bound only when explicitly provided). Shared-loopback/delegated-egress
+  cross-use is the named ADR-075 residual (#9723-adjacent, tracked).
 
 ## Phase 1 — Failing tests
 
@@ -37,18 +46,25 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
   pass-through; no `--clearenv`; no secrets in argv; realpath(command)+pkg
   dir bound; both resolver-root arms) + env-composition drift test + fixture
   pin (`infra/agent-outer-wrap-argv.json`).
-- [ ] 1.2 Integration (sandbox-isolation-fixtures.ts): sibling absent from
-  `ls`/`stat`/`mountinfo` inside the wrap; suite documents #9723 residual
-  (no /proc assertions).
-- [ ] 1.3 Mid-session sibling creation stays invisible (TOCTOU shape).
-- [ ] 1.4 Fail-closed spawn: missing bwrap/command/bind-source → synthetic
-  failed process, classified via `classifySandboxStartupError`.
+- [x] 1.2 Integration — real-wrap row in `agent-outer-wrap.test.ts` runs
+  the shared `tenant-isolation-inner-probe.sh` inside the built table:
+  sibling absent from parent `ls`/`stat`/`cat`/`/proc/self/mountinfo`
+  (`isolation_ok`). #9723 residual documented in-payload (shared procfs
+  expected).
+- [x] 1.3 Mid-session sibling — probe-time `ws-bbbb` creation asserts a
+  post-table-build sibling is never bound (the wrap binds paths, not the
+  parent enumeration).
+- [x] 1.4 Fail-closed spawn — all three preflight refusals (bwrap/command/
+  bind-source) synthesize a failed process whose error carries the SDK's
+  missing-binary signature → `missing_binary`/`sandbox_unavailable` + the
+  outcome marker preserved for triage.
 - [x] 1.5 Options-drift (verified green: flag-off snapshot byte-identical): flag-off `buildAgentQueryOptions` output byte-
   identical to existing snapshot; flag-on second pinned shape.
-- [ ] 1.6 File-tool vantage: Read on sibling path → ENOENT inside a wrapped
-  session.
-- [ ] 1.7 Session-child caps: post-exec `CapEff`/`CapBnd` carry no
-  `sys_admin` (privilege-hygiene pin).
+- [x] 1.6 File-tool vantage — the shared payload's fs-level read
+  (`cat`/`stat` → ENOENT) IS the mountns vantage the Read tool sees (same
+  kernel boundary, no hook-layer deny). No LLM needed.
+- [x] 1.7 Session-child caps — post-exec `/proc/self/status` CapEff/
+  CapBnd assertion runs INSIDE the real wrap in the integration row.
 
 ## Phase 2 — Implementation
 
@@ -66,24 +82,38 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
   `spawnClaudeCodeProcess` wired in `buildAgentQueryOptions` behind env flag
   (dispatch-time read, default off, workspace-allowlist arm); BOTH callers
   (`cc-dispatcher.ts`, `agent-runner.ts` `startAgentSession`).
-- [ ] 2.4 `agent-runner-sandbox-config.ts`: comments only — deny stays
-  unconditional while flag exists; file flag+deny deletion issue in-PR.
-- [ ] 2.5 Persona parity test: support arm binds nothing under ws root.
+- [x] 2.4 `agent-runner-sandbox-config.ts`: deny stays unconditional
+  (comment records load-bearing-off / vestigial-on); flag+deny deletion
+  issue filed in-PR.
+- [x] 2.5 Persona parity — support-arm argv test asserts zero binds under
+  the workspaces root AND absence of `knowledge-base` (both arms).
 - [x] 2.6 Dockerfile: `setcap` on `/usr/bin/bwrap` + `getcap -r /` audit
   line; entrypoint drops SYS_ADMIN (eff/perm/amb, keep bounding).
 - [x] 2.7 `infra/cloud-init.yml`: `docker run` gains `--cap-add SYS_ADMIN`.
 
 ## Phase 3 — Canary + observability
 
-- [ ] 3.1 `sandbox-canary.mjs` outer-wrap arm (capture fixture + deploy
-  replay; report-only at first deploy).
-- [ ] 3.2 Dual-vantage realized probe (fs surfaces + file-tool Read →
-  ENOENT); `tenant-isolation-probe.sh` delegates to the same assertions.
+- [x] 3.1 `--replay-outer` (committed `outer-bwrap-v1` fixture replay +
+  shared payload, three-way verdict) + `run_outer_wrap_canary` in
+  ci-deploy.sh (report-only, own soak ledger) + `outer_wrap_canary` on
+  /hooks/deploy-status + Dockerfile COPYs.
+- [x] 3.2 Shared `tenant-isolation-inner-probe.sh` (fs surfaces incl.
+  file-tool-equivalent reads); founder probe + canary + tests all delegate.
+  Opt-in boot self-probe `verifyOuterWrapRealizedIsolation`
+  (`AGENT_OUTER_WRAP_BOOT_PROBE=1`, feature:agent-sandbox + Sentry fork).
 - [x] 3.3 `op:"tenant-outer-wrap"` structured log per spawn incl. full argv.
-- [ ] 3.4 Interpose-installed assertion in `verifyAgentSandboxHardening`.
+- [x] 3.4 `probeOuterWrapInterpose` + `verifyOuterWrapInterpose` — flag-on
+  must yield a real `spawnClaudeCodeProcess` on buildAgentQueryOptions
+  output (cohort-aware); wired beside the hardening probe in index.ts with
+  the same emit fork.
 - [x] 3.5 `apps/web-platform/scripts/agent-outer-wrap-debug.sh` operator repro entry.
-- [ ] 3.6 Dep-bump smoke wired into `sandbox-canary-capture-gate`.
-- [ ] 3.7 `scripts/followthroughs/tenant-outer-wrap-soak-5863.sh` + tracker.
+- [x] 3.6 `--smoke-outer` in sandbox-canary-verify-in-image.sh (native
+  CLI inside the real table; smoke_fail short-circuits as last verdict),
+  `server/agent-outer-wrap.ts`+outer fixture added to both trigger sets
+  (ci.yml + sdk-bump-sandbox-gate.sh), `smoke_fail` blocking.
+- [x] 3.7 `scripts/followthroughs/tenant-outer-wrap-soak-5863.sh` (reads
+  `.outer_wrap_canary`; ≥5 greens/≥3d → PASS, sandbox_broken → FAIL,
+  else TRANSIENT) + tracker filed.
 
 ## Phase 4 — Records
 

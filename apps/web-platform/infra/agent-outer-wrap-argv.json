@@ -2,6 +2,14 @@
   "_comment": "Committed outer-wrap argv fixture for #5863 (arm F \u2014 mountns-only, zero --unshare-*). Produced by test/agent-outer-wrap.test.ts comparing buildOuterWrapArgv output under {{ROOT}} substitution; the canary replays it in-image. Drift in the mount set is a reviewable diff, never silent.",
   "status": "generated",
   "schema": "outer-bwrap-v1",
+  "_prep": "Replay-time filesystem manifest (#5863 T3.1): every bwrapSetupArgv token under {{ROOT}} that names a bind SOURCE must exist before `bwrap` runs (--dir/--tmpfs targets need nothing — bwrap creates them inside the namespace). prepDirs are mkdir -p'd; prepFiles get dirname mkdir -p + `: > file`. The pinned test asserts these sets cover every {{ROOT}}-carrying bind-source token exactly — argv/prep drift is a reviewable diff, not a silent replay failure. The sibling workspace the isolation probe asserts against is a replay-time addition, never part of the mount table.",
+  "prepDirs": [
+    "{{ROOT}}/app/shared/plugins/soleur",
+    "{{ROOT}}/workspaces/ws-aaaa"
+  ],
+  "prepFiles": [
+    "{{ROOT}}/home/soleur/.claude/.credentials.json"
+  ],
   "bwrapSetupArgv": [
     "--die-with-parent",
     "--new-session",

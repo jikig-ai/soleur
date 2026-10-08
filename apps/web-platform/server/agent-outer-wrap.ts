@@ -26,9 +26,21 @@
 // incl. delegated-egress cross-use through sibling socat proxies; abstract
 // unix sockets; server-side cross-tenant fs; shared in-process heap (#9773).
 
-import { spawn } from "node:child_process";
-import { accessSync, constants, existsSync, realpathSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 
 import type {
@@ -37,6 +49,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { createChildLogger } from "./logger";
+import { warnSilentFallback } from "./observability";
 
 const log = createChildLogger("agent-outer-wrap");
 
@@ -69,6 +82,12 @@ export interface OuterWrapInputs {
    * `projects/` slugs are never bound.
    */
   home?: string;
+  /**
+   * Override the bwrap binary path (default {@link BWRAP_PATH}). DI seam so
+   * tests can exercise the missing-binary fail-closed arm without touching
+   * the real `/usr/bin/bwrap`.
+   */
+  bwrapPath?: string;
   /** Existence-check override for tests (defaults to fs probes). */
   exists?: (p: string) => boolean;
 }
@@ -245,11 +264,11 @@ class StderrRing {
  * a natural ENOENT can hang `query()` (sdk-ts#255), so we return a
  * synthetic already-failed process instead of a dead child.
  */
-function preflight(command: string, argv: string[]): string | null {
+function preflight(bwrapPath: string, command: string, argv: string[]): string | null {
   try {
-    accessSync(BWRAP_PATH, constants.X_OK);
+    accessSync(bwrapPath, constants.X_OK);
   } catch {
-    return `bwrap_missing:${BWRAP_PATH}`;
+    return `bwrap_missing:${bwrapPath}`;
   }
   try {
     accessSync(command, constants.X_OK);
@@ -297,7 +316,12 @@ function syntheticFailedProcess(marker: string): SpawnedProcess {
     off() { return proc; },
   } as SpawnedProcess;
   queueMicrotask(() => {
-    for (const l of listeners.error) (l as (e: Error) => void)(new Error(marker));
+    // The error text deliberately carries the SDK's missing-binary preflight
+    // phrase so `classifySandboxStartupError` tags it `missing_binary` at the
+    // session catch (feature:agent-sandbox — loud, AC5). A bare marker would
+    // classify `other`/`bwrap_error` and miss the missing_binary routing.
+    for (const l of listeners.error)
+      (l as (e: Error) => void)(new Error(`sandbox required but unavailable (outer wrap: ${marker})`));
     for (const l of listeners.exit) (l as (c: number | null, s: null) => void)(127, null);
   });
   return proc;
@@ -313,6 +337,7 @@ export function makeSandboxedSpawn(
   inputs: OuterWrapInputs,
 ): (options: SpawnOptions) => SpawnedProcess {
   const wrapArgv = buildOuterWrapArgv(inputs);
+  const bwrapPath = inputs.bwrapPath ?? BWRAP_PATH;
   log.info(
     {
       op: "tenant-outer-wrap",
@@ -323,7 +348,7 @@ export function makeSandboxedSpawn(
     "outer wrap argv built",
   );
   return (options: SpawnOptions): SpawnedProcess => {
-    const fail = preflight(options.command, wrapArgv);
+    const fail = preflight(bwrapPath, options.command, wrapArgv);
     if (fail) {
       log.warn(
         { op: "tenant-outer-wrap", sessionId: inputs.sessionId, outcome: fail },
@@ -334,14 +359,16 @@ export function makeSandboxedSpawn(
     // Env composition: options.env verbatim (it is already the allowlisted
     // buildAgentEnv output — secrets ride env, never argv) + TMPDIR pinned
     // to the session tmpfs. undefined values dropped.
-    const env: NodeJS.ProcessEnv = {};
+    // Next augments ProcessEnv with a required NODE_ENV — seed it (the
+    // allowlisted options.env entry wins when present).
+    const env: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
     for (const [k, v] of Object.entries(options.env)) {
       if (v !== undefined) env[k] = v;
     }
     env.TMPDIR = "/tmp";
 
     const stderrRing = new StderrRing();
-    const child = spawn(BWRAP_PATH, [...wrapArgv, options.command, ...options.args], {
+    const child = spawn(bwrapPath, [...wrapArgv, options.command, ...options.args], {
       cwd: inputs.cwd ?? inputs.workspacePath,
       env,
       detached: true, // own pgid → kill(-pid) reaches the whole tree
@@ -420,4 +447,134 @@ export function outerWrapEnabled(workspaceId?: string): boolean {
   if (!allow) return true;
   if (!workspaceId) return false;
   return allow.split(",").map((s) => s.trim()).includes(workspaceId);
+}
+
+// ---------------------------------------------------------------------------
+// Realized-isolation boot probe (#5863 T3.2, plan Guard 1)
+//
+// The deploy canary measures the wrap INSIDE the canary container; this probe
+// measures it inside the PROD container at boot — the file-cap'd bwrap posture
+// is only known-good once a real namespace has been built on the running host.
+// Opt-in (AGENT_OUTER_WRAP_BOOT_PROBE=1): it is a spawn at boot, not per
+// session, so it stays behind its own flag even while the rollout flag is off.
+// ---------------------------------------------------------------------------
+
+/** The shared isolation payload — the same script the founder check and the
+ *  canary replay pipe into `bash -s`. Two layouts: dev
+ *  `apps/web-platform/server/../scripts`, prod bundle
+ *  `/app/dist/server/../../scripts` → `/app/scripts` (Dockerfile COPY). */
+const INNER_PROBE_PATH = [
+  "..",
+  path.join("..", ".."),
+]
+  .map((up) =>
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      up,
+      "scripts",
+      "tenant-isolation-inner-probe.sh",
+    ),
+  )
+  .find((p) => existsSync(p)) ??
+  path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "scripts",
+    "tenant-isolation-inner-probe.sh",
+  );
+
+export interface RealizedIsolationProbe {
+  /** The wrap built + the payload ran to a verdict (isolation_ok seen). */
+  ok: boolean;
+  /** bwrap/payload detail on failure (marker, never full output). */
+  reason?: string;
+}
+
+/**
+ * Build a synthetic two-tenant tree, wrap it with the real argv builder, and
+ * run the shared payload inside — the SAME assertion set the founder check
+ * and deploy canary use (no independently drifting copy). Runs the emitted
+ * argv VERBATIM: on the prod image /usr/bin/bwrap is file-cap'd, so zero
+ * --unshare-* is exactly what production spawns. Never throws.
+ */
+export function probeRealizedIsolation(
+  deps: { bwrapPath?: string; makeRoot?: () => string; probePath?: string } = {},
+): RealizedIsolationProbe {
+  const root = (deps.makeRoot ?? (() => mkdtempSync(path.join(tmpdir(), "aow-realized-"))))();
+  try {
+    const own = path.join(root, "workspaces", "ws-aaaa");
+    const sibling = path.join(root, "workspaces", "ws-bbbb");
+    const home = path.join(root, "home", "soleur");
+    const plugin = path.join(root, "plugin");
+    mkdirSync(own, { recursive: true });
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(path.join(sibling, "marker.txt"), "sibling\n");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(plugin, { recursive: true });
+    const argv = buildOuterWrapArgv({ workspacePath: own, home, pluginPath: plugin });
+    const res = spawnSync(
+      deps.bwrapPath ?? BWRAP_PATH,
+      [...argv, "/bin/bash", "-s", "--", path.dirname(own), own, sibling],
+      {
+        input: readFileSync(deps.probePath ?? INNER_PROBE_PATH, "utf8"),
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    if (res.error)
+      return {
+        ok: false,
+        reason: `spawn_${(res.error as NodeJS.ErrnoException).code ?? "error"}`,
+      };
+    const out = `${res.stdout ?? ""}`;
+    if (res.status === 0 && out.includes("isolation_ok")) return { ok: true };
+    if (/operation not permitted/i.test(`${res.stderr ?? ""}`)) {
+      return { ok: false, reason: "bwrap_operation_not_permitted" };
+    }
+    if (/^FAIL:/m.test(out)) return { ok: false, reason: "isolation_probe_failed" };
+    return { ok: false, reason: `exit_${res.status ?? "null"}` };
+  } catch (err) {
+    return { ok: false, reason: `probe_error:${String(err).slice(0, 120)}` };
+  } finally {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // best-effort — a leaked empty dir under tmpfs is not a finding.
+    }
+  }
+}
+
+/**
+ * Opt-in boot self-probe (AGENT_OUTER_WRAP_BOOT_PROBE=1): run the realized
+ * probe once and emit the verdict — `log.info` on pass,
+ * `warnSilentFallback` (Sentry warn + Better Stack) on fail, tagged
+ * `feature:agent-sandbox` / `op:outer-wrap-realized-probe`. Never throws;
+ * called un-awaited next to the other boot probes in index.ts.
+ */
+export function verifyOuterWrapRealizedIsolation(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  try {
+    if (env.AGENT_OUTER_WRAP_BOOT_PROBE !== "1") return;
+    const p = probeRealizedIsolation();
+    if (p.ok) {
+      log.info(
+        { feature: "agent-sandbox", op: "outer-wrap-realized-probe", ...p },
+        "agent-sandbox: outer-wrap realized-isolation probe ok",
+      );
+      return;
+    }
+    warnSilentFallback(null, {
+      feature: "agent-sandbox",
+      op: "outer-wrap-realized-probe",
+      message: "agent sandbox outer-wrap realized-isolation probe failed",
+      extra: { ...p },
+    });
+  } catch (err) {
+    warnSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "outer-wrap-realized-probe",
+      message: "agent sandbox outer-wrap realized-isolation probe threw",
+    });
+  }
 }

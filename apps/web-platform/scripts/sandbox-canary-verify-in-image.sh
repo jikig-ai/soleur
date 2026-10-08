@@ -78,12 +78,26 @@ docker run --rm \
     apt-get update -qq >/dev/null
     # openssh-client mirrors the runner stage of the deploy Dockerfile (#5914): it creates
     # /etc/ssh/ssh_config.d, which makes the SDK emit `--tmpfs /etc/ssh/ssh_config.d`.
-    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates openssh-client >/dev/null
+    # bubblewrap is for the #5863 outer-wrap smoke below; jq parses its verdict.
+    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates openssh-client bubblewrap jq >/dev/null
     bash /src/scripts/lib/in-image-copy-src.sh /src /build
     cd /build
     npm ci --no-audit --no-fund >/dev/null
     curl -fsSL https://bun.sh/install 2>/dev/null | bash -s "bun-v${BUN_VERSION}" >/dev/null
     export PATH="/root/.bun/bin:$PATH"
+    # #5863 T3.6 dep-bump smoke: exec the vendored CLI inside the REAL
+    # buildOuterWrapArgv mount table — every SDK bump can add a path the
+    # derived table misses. Runs BEFORE --verify so its verdict is the last
+    # stdout line when it blocks (the gate reads tail -1). smoke_fail
+    # short-circuits (no point re-verifying the inner arm when the CLI
+    # cannot launch inside the wrap); canary_infra_error continues —
+    # infra is non-signal here, same as in runReplay.
+    SMOKE_OUT="$(bun scripts/sandbox-canary.mjs --smoke-outer /build | tail -1)"
+    SMOKE_V="$(printf '%s' "$SMOKE_OUT" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    if [ "$SMOKE_V" = "smoke_fail" ]; then
+      printf '%s\n' "$SMOKE_OUT"
+      exit 0
+    fi
     if [ "$SANDBOX_CANARY_MODE" = capture ]; then
       bun scripts/sandbox-canary.mjs --capture infra/sandbox-canary-argv.json
       cp infra/sandbox-canary-argv.json /out/sandbox-canary-argv.json

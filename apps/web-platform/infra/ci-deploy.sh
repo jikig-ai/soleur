@@ -414,6 +414,12 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 # durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
 # cat-deploy-state.sh sandbox_canary_json().
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+# #5863 arm F: the outer-wrap canary gets its OWN durable soak state — same
+# cross-deploy accumulator shape as the inner canary but a separate ledger so
+# the two arms' soak windows never alias. Report-only at first deploy
+# (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
+# file via /hooks/deploy-status's outer_wrap_canary field.
+SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
@@ -639,12 +645,12 @@ write_cron_drain_state() {
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
 write_sandbox_canary_state() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}" tmp now prior_pass prior_first
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" tmp now prior_pass prior_first
   now="$(date +%s)"
   prior_pass=0; prior_first=0
-  if [[ -f "$SANDBOX_CANARY_STATE_FILE" ]]; then
-    prior_pass="$(jq -r '.consecutive_pass // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
-    prior_first="$(jq -r '.first_pass_at // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
+  if [[ -f "$state_file" ]]; then
+    prior_pass="$(jq -r '.consecutive_pass // 0' "$state_file" 2>/dev/null || echo 0)"
+    prior_first="$(jq -r '.first_pass_at // 0' "$state_file" 2>/dev/null || echo 0)"
     [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
     [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
   fi
@@ -659,13 +665,13 @@ write_sandbox_canary_state() {
     *)
       consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
   esac
-  tmp="$(mktemp "${SANDBOX_CANARY_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
+  tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
     --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$now" \
     --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
     '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-  mv "$tmp" "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$state_file" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
 }
 
@@ -673,14 +679,14 @@ write_sandbox_canary_state() {
 # signal #5873 lacked (hr-no-ssh-fallback-in-runbooks: never journald-only). Best-
 # effort + env-guarded, mirrors report_cron_drain_timeout. Fail-open under set -e.
 sandbox_canary_sentry_event() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}"
+  local verdict="$1" reason="$2" sdk_version="${3:-}" op="${4:-sandbox-canary}"
   logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (faithful canary; legacy probe gated the deploy)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" \
+    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg o "$op" \
       '{message: ("faithful sandbox canary " + $v + " (" + $r + ") — SDK " + $s),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: $v},
+        tags: {feature: "agent-sandbox", op: $o, verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
     curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
@@ -2611,6 +2617,44 @@ run_faithful_sandbox_canary() {
   return 0
 }
 
+# run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
+# Replays the SELF-AUTHORED outer mount-table fixture inside the canary
+# container (the file-cap'd /usr/bin/bwrap posture the prod wrap depends on)
+# and runs the shared isolation payload in the resulting namespace. Its
+# verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
+# #5863 soak follow-through; promotion to gating is a separate change after
+# a green soak. Same false-rollback guard: docker/exec failures classify
+# canary_infra_error, never sandbox_broken.
+run_outer_wrap_canary() {
+  local verdict reason sdk_version exec_rc out err_file docker_err
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+  set +o pipefail
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay-outer 2>"$err_file")"; then
+    exec_rc=0
+  else
+    exec_rc=$?
+  fi
+  set -o pipefail
+  if [[ "$exec_rc" -ne 0 ]]; then
+    docker_err="$(head -1 "$err_file" 2>/dev/null | tr -dc '[:print:]' | cut -c1-120)"
+    verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"; sdk_version=""
+  else
+    verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
+    sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
+  fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
+  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE"
+  echo "Outer-wrap canary (report-only): verdict=$verdict reason=$reason"
+  # A sandbox_broken here means the arm-F mechanism itself failed on deploy
+  # (file-cap mountns EPERM or a realized isolation violation) — page, never
+  # gate. Distinct op tag so the alert routes to the outer-wrap surface.
+  if [[ "$verdict" == "sandbox_broken" ]]; then
+    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "sandbox-canary-outer-wrap" || true
+  fi
+  return 0
+}
+
 # _atomic_write <dest> <content>: temp file in the SAME directory as <dest> (so the rename is atomic
 # on one filesystem), then `mv -f` — <dest> holds the old bytes or the new bytes, never a torn write.
 # Returns 1 (temp removed) on any failure; callers decide whether that is fatal (the quiesce marker)
@@ -4060,6 +4104,8 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+      # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
+      run_outer_wrap_canary || true
     fi
 
     # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.

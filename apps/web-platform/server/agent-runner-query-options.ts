@@ -26,12 +26,17 @@ import type {
   Options as SDKOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+
+import * as Sentry from "@sentry/nextjs";
 
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
 import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
-import type { WorkspaceMode } from "./workspace-mode";
-import { assertTrustedPluginPath } from "./plugin-path";
+import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
+import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
+import { warnSilentFallback } from "./observability";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
@@ -419,4 +424,146 @@ export function buildAgentQueryOptions(
   if (args.abortController !== undefined) opts.abortController = args.abortController;
 
   return opts;
+}
+
+// ---------------------------------------------------------------------------
+// Boot self-probe — is the outer-wrap interpose wired into
+// buildAgentQueryOptions output? (#5863 T3.4)
+//
+// Failure mode this covers (plan Observability): "SDK stops calling
+// spawnClaudeCodeProcess (silent unwrapped spawn)". What we control is the
+// install half — flag on must produce a real `spawnClaudeCodeProcess` on the
+// options object — so the probe builds REAL options against a throwaway
+// workspace and asserts the key. The per-session `op:"tenant-outer-wrap"`
+// log is the complementary proof the wrap actually ran; binary reachability
+// is folded into the in-image canary replay instead of a redundant probe row.
+// ---------------------------------------------------------------------------
+
+export interface OuterWrapInterposeProbe {
+  /** AGENT_OUTER_WRAP=1 (the rollout flag read at probe time). */
+  flagOn: boolean;
+  /** opts.spawnClaudeCodeProcess came back as a function. */
+  installed: boolean;
+  /** !flagOn || installed — flag-off is a legal posture, not a failure. */
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Measure — never throw — the interpose wiring. When the rollout flag is
+ * set, builds canonical options for a throwaway workspace (real
+ * `buildAgentQueryOptions` → real `outerWrapEnabled` → real
+ * `makeSandboxedSpawn` argv construction) and asserts
+ * `opts.spawnClaudeCodeProcess` came back as a function. An allowlisted
+ * cohort rollout probes with the allowlist's first entry so the measurement
+ * reflects a workspace that IS in the cohort. `env`/`deps` are injection
+ * seams for tests.
+ */
+export function probeOuterWrapInterpose(
+  env: Record<string, string | undefined> = process.env,
+  deps: {
+    buildOptions?: typeof buildAgentQueryOptions;
+    pluginPath?: string;
+    makeWorkspace?: () => string;
+  } = {},
+): OuterWrapInterposeProbe {
+  const flagOn = env.AGENT_OUTER_WRAP === "1";
+  if (!flagOn) return { flagOn, installed: false, ok: true };
+
+  const root = (deps.makeWorkspace ?? (() => mkdtempSync(path.join(tmpdir(), "aow-interpose-"))))();
+  // The flag is process-global at dispatch by design — the build reads
+  // process.env, so the probe applies the flag env it was handed, then
+  // restores. Boot-time single-threaded: no concurrent spawn can observe it.
+  const prevFlag = process.env.AGENT_OUTER_WRAP;
+  const prevAllow = process.env.AGENT_OUTER_WRAP_WORKSPACES;
+  process.env.AGENT_OUTER_WRAP = "1";
+  try {
+    // A cohort allowlist means "only THESE workspaces wrap" — probe with a
+    // member so the measured arm is the one the rollout will actually take.
+    const allowed = env.AGENT_OUTER_WRAP_WORKSPACES?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)[0];
+    if (env.AGENT_OUTER_WRAP_WORKSPACES !== undefined) {
+      process.env.AGENT_OUTER_WRAP_WORKSPACES = env.AGENT_OUTER_WRAP_WORKSPACES;
+    }
+    const build = deps.buildOptions ?? buildAgentQueryOptions;
+    const opts = build({
+      workspacePath: root,
+      workspaceId: allowed ?? "boot-interpose-probe",
+      pluginPath: deps.pluginPath ?? getPluginPath(),
+      mode: resolveWorkspaceMode("command_center"),
+      // The probe never spawns — the credential is a structural dummy and
+      // only flows into the composed env map.
+      credential: { value: "boot-interpose-probe", scheme: "api_key" },
+      serviceTokens: {},
+      systemPrompt: "boot interpose probe",
+      canUseTool: (async () => ({
+        behavior: "allow" as const,
+        updatedInput: {},
+      })) as CanUseTool,
+    });
+    const installed =
+      typeof (opts as { spawnClaudeCodeProcess?: unknown }).spawnClaudeCodeProcess ===
+      "function";
+    return { flagOn, installed, ok: installed };
+  } catch (err) {
+    return { flagOn, installed: false, ok: false, error: String(err) };
+  } finally {
+    if (prevFlag === undefined) delete process.env.AGENT_OUTER_WRAP;
+    else process.env.AGENT_OUTER_WRAP = prevFlag;
+    if (prevAllow === undefined) delete process.env.AGENT_OUTER_WRAP_WORKSPACES;
+    else process.env.AGENT_OUTER_WRAP_WORKSPACES = prevAllow;
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup — tmpfs leak of one empty dir is not a finding.
+    }
+  }
+}
+
+/**
+ * Emit the interpose verdict once at boot — same fork as
+ * `verifyAgentSandboxHardening`: `log.info` + Sentry info on success, a
+ * warnSilentFallback on a flagged-but-unwired build. Called un-awaited from
+ * the server `listen` callback in production; never throws.
+ */
+export function verifyOuterWrapInterpose(): void {
+  try {
+    const p = probeOuterWrapInterpose();
+    if (p.ok) {
+      log.info(
+        { feature: "agent-sandbox", op: "outer-wrap-selfprobe", ...p },
+        p.flagOn
+          ? "agent-sandbox: outer-wrap interpose installed (spawnClaudeCodeProcess wired)"
+          : "agent-sandbox: outer-wrap flag off — interpose not expected",
+      );
+      if (p.flagOn) {
+        // Only the flag-on arm mirrors to Sentry: flag-off is the shipped
+        // default posture during dark-launch and must not create events.
+        try {
+          Sentry.captureMessage("agent sandbox outer-wrap interpose installed", {
+            level: "info",
+            tags: { event_type: "agent-sandbox-outer-wrap-probe" },
+            extra: { ...p },
+          });
+        } catch {
+          // Sentry must never break the probe.
+        }
+      }
+      return;
+    }
+    warnSilentFallback(null, {
+      feature: "agent-sandbox",
+      op: "outer-wrap-selfprobe",
+      message:
+        "agent sandbox outer-wrap self-probe: flag on but spawnClaudeCodeProcess missing from buildAgentQueryOptions output",
+      extra: { ...p },
+    });
+  } catch (err) {
+    warnSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "outer-wrap-selfprobe",
+      message: "agent sandbox outer-wrap self-probe threw",
+    });
+  }
 }

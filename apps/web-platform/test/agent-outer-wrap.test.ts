@@ -16,16 +16,25 @@
 // emitted set so any mount-table drift is a reviewable diff.
 
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  realpathSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
   buildOuterWrapArgv,
+  makeSandboxedSpawn,
   outerWrapEnabled,
   BWRAP_PATH,
 } from "@/server/agent-outer-wrap";
+import { classifySandboxStartupError } from "@/server/sandbox-startup-classifier";
 
 function fixture(): { root: string; ws: string; home: string; plugin: string } {
   const root = mkdtempSync(path.join(tmpdir(), "aow-"));
@@ -172,6 +181,9 @@ describe("buildOuterWrapArgv", () => {
     });
     expect(argv.filter((a) => a.includes("workspaces"))).toEqual([]);
     expect(pairs(argv)).toContainEqual(["--chdir", realpathSync(f.plugin), undefined]);
+    // knowledge-base/ is absent-by-construction for EVERY persona — no
+    // persona-specific deny is needed because nothing binds /app/shared.
+    expect(argv.filter((a) => a.includes("knowledge-base"))).toEqual([]);
   });
 
   it("fails closed when workspacePath does not exist", () => {
@@ -203,6 +215,34 @@ describe("committed argv fixture (Guard 2)", () => {
     const projected2 = projected.map((a) => a.replaceAll(f.root, "{{ROOT}}"));
     expect(projected2).toEqual(fixture.bwrapSetupArgv);
   });
+
+  it("prep manifest covers every {{ROOT}} bind source exactly (argv/prep drift is red)", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        path.join(__dirname, "..", "infra", "agent-outer-wrap-argv.json"),
+        "utf8",
+      ),
+    );
+    const argv: string[] = fixture.bwrapSetupArgv;
+    // Anti-vacuity floor (Guard 2 mutation row 4): the fixture must carry
+    // the placeholder AND no absolute sibling path — a fixture without
+    // either would still diff-equal yet replay nothing meaningful.
+    expect(argv.some((a) => a.includes("{{ROOT}}"))).toBe(true);
+    expect(argv.filter((a) => /workspaces\/ws-(?!aaaa\b)/.test(a))).toEqual([]);
+
+    // Bind flags take <src> <dst> pair; only the SOURCE must pre-exist.
+    // --dir/--tmpfs targets are created inside the namespace — never prep.
+    const BIND_SRC_FLAGS = new Set(["--bind", "--ro-bind", "--dev-bind", "--ro-bind-try"]);
+    const sources = new Set<string>();
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === "--") break;
+      if (BIND_SRC_FLAGS.has(argv[i]) && argv[i + 1]?.includes("{{ROOT}}")) {
+        sources.add(argv[i + 1]);
+      }
+    }
+    const prep = new Set<string>([...fixture.prepDirs, ...fixture.prepFiles]);
+    expect(prep).toEqual(sources);
+  });
 });
 
 describe("outerWrapEnabled", () => {
@@ -221,6 +261,71 @@ describe("outerWrapEnabled", () => {
   });
 });
 
+describe("makeSandboxedSpawn — fail-closed preflight (T1.4)", () => {
+  function spawnWith(inputs: Parameters<typeof makeSandboxedSpawn>[0], command: string) {
+    const factory = makeSandboxedSpawn(inputs);
+    const proc = factory({
+      command,
+      args: [],
+      env: {},
+    } as never);
+    return new Promise<{ err: Error; code: number | null }>((resolve) => {
+      proc.once("error", ((e: Error) => {
+        proc.once("exit", ((code: number | null) => resolve({ err: e, code })) as never);
+      }) as never);
+    });
+  }
+
+  it("missing bwrap → synthetic exit 127 + missing_binary classification", async () => {
+    const f = fixture();
+    const { err, code } = await spawnWith(
+      { workspacePath: f.ws, home: f.home, bwrapPath: path.join(f.root, "no-bwrap") },
+      "/bin/true",
+    );
+    expect(code).toBe(127);
+    expect(err.message).toContain("bwrap_missing:");
+    const cls = classifySandboxStartupError(err);
+    expect(cls.sandboxKind).toBe("missing_binary");
+    expect(cls.errorCode).toBe("sandbox_unavailable");
+  });
+
+  it("missing command → synthetic exit 127 + missing_binary classification", async () => {
+    const f = fixture();
+    const { err, code } = await spawnWith(
+      { workspacePath: f.ws, home: f.home },
+      path.join(f.root, "no-such-cli"),
+    );
+    expect(code).toBe(127);
+    expect(err.message).toContain("command_missing:");
+    expect(classifySandboxStartupError(err).sandboxKind).toBe("missing_binary");
+  });
+
+  it("bind source vanishing between argv build and spawn → bind_source_missing", async () => {
+    const f = fixture();
+    const creds = path.join(f.home, ".claude", ".credentials.json");
+    const factory = makeSandboxedSpawn({ workspacePath: f.ws, home: f.home });
+    rmSync(creds); // the file was --bind'ed at build time; gone by spawn time
+    const proc = factory({ command: "/bin/true", args: [], env: {} } as never);
+    const { err, code } = await new Promise<{ err: Error; code: number | null }>(
+      (resolve) => {
+        proc.once("error", ((e: Error) => {
+          proc.once("exit", ((c: number | null) => resolve({ err: e, code: c })) as never);
+        }) as never);
+      },
+    );
+    expect(code).toBe(127);
+    expect(err.message).toContain("bind_source_missing:");
+    expect(classifySandboxStartupError(err).sandboxKind).toBe("missing_binary");
+  });
+});
+
+const INNER_PROBE = path.join(
+  __dirname,
+  "..",
+  "scripts",
+  "tenant-isolation-inner-probe.sh",
+);
+
 describe("spawn integration (real bwrap, if present)", () => {
   const bwrapOk = (() => {
     try {
@@ -233,28 +338,146 @@ describe("spawn integration (real bwrap, if present)", () => {
     }
   })();
 
+  // Runs the SHARED inner-probe payload inside the wrap — the same
+  // assertion set the founder check and the deploy canary replay use, so a
+  // green here cannot drift green while the deployed guard regresses.
+  // Returns the payload's stdout; throws (test fails) on non-zero exit.
+  function runInnerProbe(f: { root: string; ws: string }) {
+    const argv = buildOuterWrapArgv({
+      workspacePath: f.ws,
+      home: path.join(f.root, "home", "soleur"),
+      pluginPath: path.join(f.root, "app", "shared", "plugins", "soleur"),
+    });
+    const parent = path.dirname(f.ws);
+    const sibling = path.join(parent, "ws-bbbb");
+    // On an unprivileged host bwrap needs --unshare-user to build the
+    // mountns; the emitted argv stays mount-only — the flag is added by
+    // the caller when bwrap lacks file caps (same convention as the probe
+    // script's getcap fallback).
+    return execFileSync(
+      BWRAP_PATH,
+      [
+        "--unshare-user",
+        ...argv,
+        "/bin/bash",
+        "-s",
+        "--",
+        realpathSync(parent),
+        realpathSync(f.ws),
+        realpathSync(sibling),
+      ],
+      { input: readFileSync(INNER_PROBE, "utf8"), stdio: ["pipe", "pipe", "pipe"] },
+    ).toString();
+  }
+
   it.skipIf(!bwrapOk)(
-    "a real wrapped bash sees the own workspace and not the sibling",
+    "inside the wrap the shared probe sees own workspace and not the sibling (T1.2)",
+    () => {
+      const f = fixture();
+      const out = runInnerProbe(f);
+      expect(out).toContain("isolation_ok");
+      expect(out).not.toContain("FAIL:");
+    },
+  );
+
+  it.skipIf(!bwrapOk)(
+    "a sibling created after the argv was built stays invisible (T1.3 / AC3)",
+    () => {
+      const f = fixture();
+      // The probe's sibling exists at spawn time — recreate the TOCTOU
+      // shape by asserting against a SECOND sibling that did not exist when
+      // the fixture tree was created but does now.
+      const parent = path.dirname(f.ws);
+      const late = path.join(parent, "ws-late");
+      mkdirSync(late, { recursive: true });
+      const argv = buildOuterWrapArgv({
+        workspacePath: f.ws,
+        home: path.join(f.root, "home", "soleur"),
+      });
+      const out = execFileSync(
+        BWRAP_PATH,
+        [
+          "--unshare-user",
+          ...argv,
+          "/bin/bash",
+          "-s",
+          "--",
+          realpathSync(parent),
+          realpathSync(f.ws),
+          realpathSync(late),
+        ],
+        { input: readFileSync(INNER_PROBE, "utf8") },
+      ).toString();
+      expect(out).toContain("isolation_ok");
+    },
+  );
+
+  it.skipIf(!bwrapOk)(
+    "session child carries no sys_admin in CapEff/CapBnd (T1.7)",
     () => {
       const f = fixture();
       const argv = buildOuterWrapArgv({
         workspacePath: f.ws,
-        home: f.home,
-        pluginPath: f.plugin,
+        home: path.join(f.root, "home", "soleur"),
       });
-      // On an unprivileged host bwrap needs --unshare-user to build the
-      // mountns; the emitted argv stays mount-only — the flag is added by
-      // the caller when bwrap lacks file caps.
-      const out = execFileSync(BWRAP_PATH, [
-        "--unshare-user",
-        ...argv.slice(0, -1),
-        "/bin/bash",
-        "-c",
-        `ls ${path.dirname(f.ws)} && (stat ${path.dirname(f.ws)}/ws-bbbb && echo SIBLING-VISIBLE || echo SIBLING-ABSENT) && cat /proc/self/mounts | grep -c ws-bbbb || true`,
-      ]).toString();
-      expect(out).toContain("ws-aaaa");
-      expect(out).not.toContain("ws-bbbb\n");
-      expect(out).toContain("SIBLING-ABSENT");
+      const out = execFileSync(
+        BWRAP_PATH,
+        [
+          "--unshare-user",
+          ...argv,
+          "/bin/bash",
+          "-c",
+          "grep -E '^Cap(Eff|Bnd):' /proc/self/status",
+        ],
+      ).toString();
+      // cap_sys_admin = bit 21. --cap-drop ALL should clear it in the child.
+      const masks = Object.fromEntries(
+        [...out.matchAll(/^Cap(Eff|Bnd):\s+([0-9a-f]+)$/gm)].map((m) => [
+          m[1],
+          BigInt(`0x${m[2]}`),
+        ]),
+      );
+      for (const [k, mask] of Object.entries(masks)) {
+        expect(mask & (1n << 21n), `${k} must not carry cap_sys_admin`).toBe(0n);
+      }
     },
   );
+});
+
+// Boot self-probe (#5863 T3.2) — the realized mountns + shared payload run
+// once at boot inside the prod container. Real-bwrap rows use the implicit-
+// userns fallback locally; the prod image's file-cap'd bwrap takes the same
+// argv verbatim.
+describe("probeRealizedIsolation", () => {
+  const bwrapOk = (() => {
+    try {
+      return Boolean(realpathSync(BWRAP_PATH)) && Boolean(
+        execFileSync("sh", ["-c", `"${BWRAP_PATH}" --version`], { stdio: "pipe" }),
+      );
+    } catch {
+      return false;
+    }
+  })();
+
+  it.skipIf(!bwrapOk)("builds the real wrap and reports ok", async () => {
+    const { probeRealizedIsolation } = await import("@/server/agent-outer-wrap");
+    const p = probeRealizedIsolation();
+    expect(p.ok).toBe(true);
+  });
+
+  it("missing bwrap binary → not ok with spawn reason", async () => {
+    const { probeRealizedIsolation } = await import("@/server/agent-outer-wrap");
+    const p = probeRealizedIsolation({ bwrapPath: "/nonexistent-bwrap" });
+    expect(p.ok).toBe(false);
+    expect(p.reason).toContain("spawn_");
+  });
+});
+
+describe("verifyOuterWrapRealizedIsolation — opt-in emit", () => {
+  it("no-op when the opt-in env is unset", async () => {
+    const { verifyOuterWrapRealizedIsolation } = await import(
+      "@/server/agent-outer-wrap"
+    );
+    expect(() => verifyOuterWrapRealizedIsolation({})).not.toThrow();
+  });
 });

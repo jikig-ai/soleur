@@ -242,6 +242,12 @@ COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
 COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
 
+# #5863 outer-wrap canary arm: the self-authored outer mount-table fixture
+# (pinned to buildOuterWrapArgv output by the Guard-2 test) plus the shared
+# isolation payload --replay-outer pipes into `bash -s` inside the wrap.
+COPY --from=builder /app/infra/agent-outer-wrap-argv.json ./infra/agent-outer-wrap-argv.json
+COPY --from=builder /app/scripts/tenant-isolation-inner-probe.sh ./scripts/tenant-isolation-inner-probe.sh
+
 # Shared nested-userns seccomp filter + bwrap PATH shim (#8752). The Agent SDK
 # resolves `bwrap` via PATH and owns its argv (fd-passing contract is set in
 # stone in the vendored binary), so the shim at /usr/local/bin — which precedes

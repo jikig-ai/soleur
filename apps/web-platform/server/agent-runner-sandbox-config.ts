@@ -296,6 +296,13 @@ export function buildAgentSandboxConfig(
   // boot, so a missing root is a vanished-mount fault worth paging on
   // (the signal the deleted `degraded` arm carried; restored here as a
   // cheap existence bit, not enumeration).
+  //
+  // #5863 (T2.4): this deny stays UNCONDITIONAL while `AGENT_OUTER_WRAP`
+  // exists — it is load-bearing on the flag-off arm (the inner sandbox is
+  // the only boundary there) and vestigial under the wrap (the outer mount
+  // table never carries sibling paths at all; a deny against an absent
+  // landing is a builder skip). Removal is the flag-deletion follow-up,
+  // never part of this PR — the `denyRead` arm must not fork per-flag.
   const wsRoot = workspacesRoot();
   const wsRootExists = existsSync(wsRoot);
   if (process.env.NODE_ENV === "production" && !wsRootExists) {

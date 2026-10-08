@@ -18,6 +18,7 @@ import {
   CANARY_C4_STAGING_PLACEHOLDER,
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
+  classifyOuterWrapReplayVerdict,
   hasUnsubstitutedPlaceholder,
   isDeterministicConstPath,
   classifyFdCensusProbe,
@@ -27,10 +28,13 @@ import {
   computeCanaryPaths,
   countFdValuedOptions,
   normalizeCapturedArgv,
+  outerWrapChdirTarget,
   parseShimSetupArgv,
   selectSandboxSetupArgv,
   substituteCanonicalArgv,
+  substituteOuterRoot,
   validateFixture,
+  validateOuterWrapFixture,
 } from "../scripts/sandbox-canary.mjs";
 
 const MJS_PATH = fileURLToPath(
@@ -1109,5 +1113,96 @@ describe("countFdValuedOptions — census slack for argv-referenced fds", () => 
       ]),
     ).toBe(16);
     expect(countFdValuedOptions(["--unshare-user", "--ro-bind", "/", "/"])).toBe(0);
+  });
+});
+
+// --- Outer-wrap arm (#5863 T3.1) --------------------------------------------
+// The --replay-outer path: fixture validation, {{ROOT}} substitution, and the
+// three-way verdict (mountns EPERM vs realized-isolation violation vs infra).
+
+describe("validateOuterWrapFixture — outer-bwrap-v1 contract", () => {
+  const valid = {
+    schema: "outer-bwrap-v1",
+    status: "generated",
+    prepDirs: ["{{ROOT}}/workspaces/ws-aaaa"],
+    prepFiles: ["{{ROOT}}/home/soleur/.claude/.credentials.json"],
+    bwrapSetupArgv: ["--die-with-parent", "--ro-bind", "/usr", "/usr", "--chdir", "{{ROOT}}/workspaces/ws-aaaa", "--"],
+  };
+
+  it("accepts the committed fixture shape", () => {
+    expect(validateOuterWrapFixture(valid)).toBe(valid);
+  });
+
+  it("rejects a non-outer schema (the inner canonical fixture is a different arm)", () => {
+    expect(() => validateOuterWrapFixture({ ...valid, schema: "canonical-bwrap-v1" })).toThrow(/schema/);
+  });
+
+  it("rejects a missing '--' terminator (the payload follows it)", () => {
+    expect(() =>
+      validateOuterWrapFixture({ ...valid, bwrapSetupArgv: ["--die-with-parent"] }),
+    ).toThrow(/--/);
+  });
+
+  it("rejects non-array prep manifests", () => {
+    expect(() =>
+      validateOuterWrapFixture({ ...valid, prepFiles: "{{ROOT}}/x" }),
+    ).toThrow(/prepFiles/);
+  });
+});
+
+describe("substituteOuterRoot + outerWrapChdirTarget", () => {
+  it("substitutes every {{ROOT}} occurrence", () => {
+    expect(
+      substituteOuterRoot(["--bind", "{{ROOT}}/w/x", "{{ROOT}}/w/x", "--"], "/r"),
+    ).toEqual(["--bind", "/r/w/x", "/r/w/x", "--"]);
+  });
+
+  it("finds the --chdir target; undefined when absent", () => {
+    expect(outerWrapChdirTarget(["--chdir", "/r/w", "--"])).toBe("/r/w");
+    expect(outerWrapChdirTarget(["--bind", "/a", "/a", "--"])).toBeUndefined();
+  });
+});
+
+describe("classifyOuterWrapReplayVerdict — three-way discrimination", () => {
+  it("exit 0 + isolation_ok ⇒ pass", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ bwrapExitCode: 0, bwrapStdout: "isolation_ok\n" }),
+    ).toEqual({ verdict: "pass", reason: "ok" });
+  });
+
+  it("payload FAIL markers ⇒ sandbox_broken isolation_probe_failed (a realized violation, never infra)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 1,
+        bwrapStdout: "FAIL: sibling /r/workspaces/ws-bbbb exists inside the wrap\nisolation_fail\n",
+      }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "isolation_probe_failed" });
+  });
+
+  it('bwrap stderr "Operation not permitted" ⇒ sandbox_broken (file-cap posture regressed)', () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 1,
+        bwrapStderr: "bwrap: Can't mount /usr: Operation not permitted",
+      }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "bwrap_operation_not_permitted" });
+  });
+
+  it("spawn ENOENT ⇒ canary_infra_error (do NOT roll back)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ spawnErrorCode: "ENOENT" }),
+    ).toEqual({ verdict: "canary_infra_error", reason: "bwrap_spawn_enoent" });
+  });
+
+  it("exit 0 without the probe verdict ⇒ canary_infra_error probe_output_missing (a vacuous green is not a pass)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ bwrapExitCode: 0, bwrapStdout: "" }),
+    ).toEqual({ verdict: "canary_infra_error", reason: "probe_output_missing" });
+  });
+
+  it("unattributed non-zero ⇒ canary_infra_error, not sandbox_broken", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ bwrapExitCode: 2, bwrapStderr: "something odd" }),
+    ).toEqual({ verdict: "canary_infra_error", reason: "bwrap_exit_2" });
   });
 });

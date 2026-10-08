@@ -1,55 +1,78 @@
 #!/usr/bin/env bash
-# tenant-isolation-probe.sh — founder check for #5863 (ADR-275 founder_check).
+# tenant-isolation-probe.sh — founder check for #5863 (arm F outer wrap).
 #
-# Realized-state proof that a session's outer bwrap namespace carries no
-# sibling workspace on any observable filesystem surface: directory listing,
-# stat, and mountinfo. Builds two fixture workspaces, derives the outer argv
-# for tenant A via the production argv builder, runs the probe inside bwrap.
+# Builds a two-tenant fixture, replays the COMMITTED outer-wrap argv
+# (infra/agent-outer-wrap-argv.json — the same self-authored table the
+# deploy canary replays, pinned byte-for-byte to buildOuterWrapArgv output
+# by the Guard-2 test), and runs the SHARED isolation payload inside the
+# resulting mount namespace (apps/web-platform/scripts/
+# tenant-isolation-inner-probe.sh — the same assertion set the canary and
+# the test suite run; it must not be re-implemented here or the copies can
+# drift green).
 #
-# /proc is deliberately NOT asserted: arm F (mountns-only, file-cap bwrap —
-# spike-verified 2026-10-08) shares the container procfs, so sibling PIDs
-# remain visible. That residual is tracked as #9723.
+# Deliberately jq+bwrap only — no bun/node: this probe also executes under
+# soleur:preflight Check 10's Step-10.5 bwrap sandbox, where the repo's dev
+# toolchains live under a tmpfs'd /home and are unreachable.
 #
-# Lives under knowledge-base/ deliberately: the founder-check freeze commit
-# must precede the first non-knowledge-base commit on the branch, and the pin
-# must resolve in the freeze tree (ADR-275).
+# Prints `isolation_ok` on success, `isolation_fail` otherwise (the shared
+# payload's verdict; the plan's discoverability_test expected_output).
 #
-# Prints "isolation_ok" on success; exits non-zero otherwise. Until the outer
-# wrap lands, this script fails — that is the expected pre-work state.
+# Requires: bash, jq, coreutils, bwrap. On a host where bwrap carries the
+# file caps (prod image: cap_sys_admin+ep) the fixture argv runs verbatim;
+# otherwise --unshare-user is prepended (the fallback arm — the wrap itself
+# stays mount-only either way).
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+PAYLOAD="$REPO_ROOT/apps/web-platform/scripts/tenant-isolation-inner-probe.sh"
+FIXTURE="$REPO_ROOT/apps/web-platform/infra/agent-outer-wrap-argv.json"
+
+for dep in jq bwrap; do
+  command -v "$dep" >/dev/null 2>&1 || {
+    printf 'isolation_fail: %s not on PATH\n' "$dep" >&2
+    exit 1
+  }
+done
+
 FIXTURE_ROOT="$(mktemp -d /tmp/tip.XXXXXX)"
 trap 'rm -rf "$FIXTURE_ROOT"' EXIT
 
-mkdir -p "$FIXTURE_ROOT/tenant-a" "$FIXTURE_ROOT/tenant-b"
-echo secret-b > "$FIXTURE_ROOT/tenant-b/marker.txt"
+# Prep the fixture's declared tree (prepDirs + prepFiles — the manifest the
+# Guard-2 test keeps in lockstep with the argv bind sources).
+while IFS= read -r d; do mkdir -p "$d"; done < <(
+  jq -r '.prepDirs[] | gsub("\\{\\{ROOT\\}\\}"; $r)' --arg r "$FIXTURE_ROOT" "$FIXTURE"
+)
+while IFS= read -r f; do mkdir -p "$(dirname "$f")"; : > "$f"; done < <(
+  jq -r '.prepFiles[] | gsub("\\{\\{ROOT\\}\\}"; $r)' --arg r "$FIXTURE_ROOT" "$FIXTURE"
+)
 
-# Ask the production argv builder for tenant A's outer-wrap argv (one arg per
-# line). Exits non-zero if the module/flag does not exist yet.
-mapfile -t ARGV < <(cd "$REPO_ROOT" && bun -e '
-  import { buildOuterWrapArgv } from "./apps/web-platform/server/agent-outer-wrap.ts";
-  const argv = buildOuterWrapArgv({ workspacePath: process.argv[1] });
-  process.stdout.write(argv.join("\n") + "\n");
-' -- "$FIXTURE_ROOT/tenant-a")
+mapfile -t ARGV < <(
+  jq -r '.bwrapSetupArgv[] | gsub("\\{\\{ROOT\\}\\}"; $r)' --arg r "$FIXTURE_ROOT" "$FIXTURE"
+)
+[ "${#ARGV[@]}" -gt 0 ] || { printf 'isolation_fail: fixture argv empty\n' >&2; exit 1; }
 
-# Arm F's argv is mount-only; on a host where bwrap carries no file caps the
-# mountns still builds via the userns path. Capability check first.
+# Own workspace = the --chdir target (the builder emits it last); the
+# sibling is a probe-time addition that must never appear inside.
+OWN=""
+for ((i = 0; i < ${#ARGV[@]} - 1; i++)); do
+  [ "${ARGV[i]}" = "--chdir" ] && OWN="${ARGV[i+1]}"
+done
+[ -n "$OWN" ] || { printf 'isolation_fail: no --chdir target in fixture argv\n' >&2; exit 1; }
+PARENT="$(dirname "$OWN")"
+SIBLING="$PARENT/ws-bbbb"
+mkdir -p "$SIBLING"
+printf 'sibling-secret\n' > "$SIBLING/marker.txt"
+
+# File-cap'd bwrap (prod posture) runs the argv verbatim — zero --unshare-*.
+# A capless host adds --unshare-user up front (the fixture argv is unchanged;
+# bwrap's own userns fallback is what the in-image smoke uses too).
 EXTRA=()
 if ! getcap "$(command -v bwrap)" 2>/dev/null | grep -q 'cap_sys_admin'; then
   EXTRA=(--unshare-user)
 fi
 
-bwrap "${EXTRA[@]}" "${ARGV[@]}" /bin/bash -c '
-  set -e
-  ROOT="'"$FIXTURE_ROOT"'"
-  # own workspace present and readable
-  [ -d "$ROOT/tenant-a" ]
-  [ -f "$ROOT/tenant-a/marker.txt" ] || touch "$ROOT/tenant-a/marker.txt"
-  # sibling workspace absent — the parent may not even exist inside the ns
-  ! stat "$ROOT/tenant-b" >/dev/null 2>&1
-  # mount table must not name the sibling
-  ! grep -q tenant-b /proc/self/mounts
-' || { echo "isolation_fail" >&2; exit 1; }
-
-echo "isolation_ok"
+# The payload travels on stdin (`bash -s`): nothing under /app/scripts is
+# bound inside the wrap, and argv-embedding the script would make the
+# spawned argv carry assertion text.
+bwrap "${EXTRA[@]}" "${ARGV[@]}" /bin/bash -s -- "$PARENT" "$OWN" "$SIBLING" < "$PAYLOAD"

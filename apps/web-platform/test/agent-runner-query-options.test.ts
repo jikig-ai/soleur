@@ -31,6 +31,19 @@ vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
 }));
 
+// Emit-fork sinks for the outer-wrap boot probe (#5863 T3.4) — same shape as
+// the bwrap-shim probe tests: which surface each verdict branch writes to.
+// Spread the real module so other exports (hashUserId, TtlDedupMap, …)
+// transitive consumers rely on keep working.
+const obs = vi.hoisted(() => ({ warnSilentFallback: vi.fn(), reportSilentFallback: vi.fn() }));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  warnSilentFallback: obs.warnSilentFallback,
+  reportSilentFallback: obs.reportSilentFallback,
+}));
+const sentry = vi.hoisted(() => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => sentry);
+
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { buildAgentEnv } from "@/server/agent-env";
 import { AGENT_AUTH_ENV_VARS } from "@/server/agent-auth-env-vars";
@@ -481,5 +494,93 @@ describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
     expect(stableShape(legacy as unknown as Record<string, unknown>)).toBe(
       stableShape(cc as unknown as Record<string, unknown>),
     );
+  });
+});
+
+// --- outer-wrap interpose boot probe (#5863 T3.4) -----------------------------
+// The rollout flag dark-launches the wrap; the probe asserts that a flag-on
+// build actually installs `spawnClaudeCodeProcess` — a flag-on-but-unwired
+// build would silently run the CLI unwrapped (file-tool tier exposed).
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  probeOuterWrapInterpose,
+  verifyOuterWrapInterpose,
+} from "@/server/agent-runner-query-options";
+
+describe("probeOuterWrapInterpose — interpose wiring under the rollout flag", () => {
+  it("flag off → ok, not installed (legal dark-launch posture)", () => {
+    const p = probeOuterWrapInterpose({ AGENT_OUTER_WRAP: "0" });
+    expect(p).toMatchObject({ flagOn: false, installed: false, ok: true });
+  });
+
+  it("flag on → real build installs spawnClaudeCodeProcess", () => {
+    const ws = mkdtempSync(join(tmpdir(), "aow-probe-ws-"));
+    const plugin = mkdtempSync(join(tmpdir(), "aow-probe-plugin-"));
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1" },
+      { pluginPath: plugin, makeWorkspace: () => ws },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: true, ok: true });
+  });
+
+  it("flag on + cohort allowlist → probes with an allowlisted workspace id", () => {
+    const ws = mkdtempSync(join(tmpdir(), "aow-probe-ws-"));
+    const plugin = mkdtempSync(join(tmpdir(), "aow-probe-plugin-"));
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1", AGENT_OUTER_WRAP_WORKSPACES: "ws-cohort-1" },
+      { pluginPath: plugin, makeWorkspace: () => ws },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: true, ok: true });
+  });
+
+  it("flag on + interpose missing from build output → not ok", () => {
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1" },
+      { buildOptions: (() => ({})) as never },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: false, ok: false });
+  });
+
+  it("flag on + build throw → not ok with the error carried", () => {
+    const p = probeOuterWrapInterpose(
+      { AGENT_OUTER_WRAP: "1" },
+      {
+        buildOptions: (() => {
+          throw new Error("argv build boom");
+        }) as never,
+      },
+    );
+    expect(p).toMatchObject({ flagOn: true, installed: false, ok: false });
+    expect(p.error).toContain("argv build boom");
+  });
+});
+
+describe("verifyOuterWrapInterpose — emit fork", () => {
+  it("flag-on + installed → info emit (log + Sentry info), no warn", async () => {
+    vi.stubEnv("AGENT_OUTER_WRAP", "1");
+    vi.stubEnv("SOLEUR_PLUGIN_PATH", mkdtempSync(join(tmpdir(), "aow-probe-plugin-")));
+    const { verifyOuterWrapInterpose: run } = await import(
+      "@/server/agent-runner-query-options"
+    );
+    run();
+    expect(obs.warnSilentFallback).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("flag-on + unwired → warnSilentFallback with the feature/op tags", async () => {
+    vi.stubEnv("AGENT_OUTER_WRAP", "1");
+    vi.stubEnv("SOLEUR_PLUGIN_PATH", "/nonexistent-plugin-root");
+    const { verifyOuterWrapInterpose: run } = await import(
+      "@/server/agent-runner-query-options"
+    );
+    run();
+    expect(obs.warnSilentFallback).toHaveBeenCalledTimes(1);
+    expect(obs.warnSilentFallback.mock.calls[0][1]).toMatchObject({
+      feature: "agent-sandbox",
+      op: "outer-wrap-selfprobe",
+    });
+    vi.unstubAllEnvs();
   });
 });
