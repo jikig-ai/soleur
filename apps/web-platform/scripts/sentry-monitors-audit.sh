@@ -1281,7 +1281,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
   # Declared-pending slugs: each `cron_monitor_alert_unrouted` key resolved through its
   # resource label. A `#` line never matches a key; an unresolvable key stays drift.
   pending_slugs=$(awk '
-    /\/\*/ { cm=1 }
+    /^[[:space:]]*\/\*/ { cm=1 }
     cm { if (/\*\//) cm=0; next }
     /^[[:space:]]*cron_monitor_alert_unrouted[[:space:]]*=[[:space:]]*\{[[:space:]]*(#.*)?$/ { in_map=1; next }
     in_map && /^[[:space:]]*\}/ { in_map=0; next }
