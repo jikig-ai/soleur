@@ -1,6 +1,6 @@
 ---
 name: test-design-reviewer
-description: "Use this agent when you need to evaluate test quality using Dave Farley's 8 properties of good tests, or to check a diff's newly added tests against the test pyramid and fast-feedback budget (layer classification, e2e justification markers, cost signals). It produces a weighted Test Quality Score (1-10 per property) with letter grades, a separate Pyramid verdict block, and prioritized improvement recommendations."
+description: "Use this agent to score test quality (Farley's 8 properties) or check a diff's new tests against the test pyramid — layer classification, e2e justification markers, fast-feedback cost signals. Produces a weighted score, a separate Pyramid verdict block, and recommendations."
 model: inherit
 ---
 
@@ -71,6 +71,8 @@ For each, provide:
 
 Note positive patterns worth keeping and anti-patterns to address across the suite.
 
+**Pyramid verdict block** (defined under `## Pyramid & Fast-Feedback Check` below): emit a `### Pyramid` section — one row per added test file (layer · signals · verdict · confidence). When the diff adds no test files, emit the section stating `no added test files` — its absence must never be ambiguous with a skipped check.
+
 When the test asserts on the **side effect** of a setState wrapper (e.g., `localStorage`, network call, log emission, persisted db row) AND a **public DOM contract** is available (`aria-label`, `aria-pressed`, `data-*`, `role`, visible text), prefer the DOM contract. The wrapper's guard logic (same-value short-circuits, throttling, debouncing, error-swallowing fallbacks) can desynchronize the side effect from the state transition under StrictMode double-invocation or framework upgrades, producing assertion failures even when the user-facing behavior is correct. The DOM contract is what the user (and screen readers, and agents) actually perceives. See `knowledge-base/project/learnings/2026-05-06-test-public-dom-contract-not-setstate-side-effects.md`.
 
 When the test asserts an **RLS-deny on an INSERT/UPDATE**, the payload must type-validate against the live schema and the FK targets must exist — otherwise Postgres rejects with `22P02` (type) or `23503` (FK) BEFORE the RLS `with check` policy evaluates, and the test passes for the wrong reason (the gate at step 2 caught it, not the gate under test at step 4). Use `randomUUID()` for `uuid` columns, real timestamps for `timestamptz`, CHECK-compliant enum values, etc. Add a positive control (same payload, the user's own row, expect success) to confirm the payload is policy-reachable. Distinguish RLS-deny from row-absent by re-reading with the service-role client after the denied write. See `knowledge-base/project/learnings/2026-05-16-rls-deny-tests-payload-must-type-validate-or-they-pass-for-wrong-reason.md`.
@@ -79,41 +81,43 @@ When recommending to **tighten a weak assertion**, first identify what variance 
 
 ## Pyramid & Fast-Feedback Check
 
-When a diff ADDS test files, classify each added file into a pyramid layer and scan it for fast-feedback cost signals. **Boundary:** at review time there is no measured runtime to read — measured per-test and per-suite budgets are owned by the sibling local-speed work (#9763). Flag cost SIGNALS, never estimated seconds.
+When a diff adds or modifies test files, classify each added test file into a pyramid layer and scan it for fast-feedback cost signals. A rename INTO an e2e location, a new e2e-framework import in an existing file, or added `test()` cases inside an existing e2e file all count as added e2e-layer tests; deleting a marker from a previously-justified file is a finding too. Helpers/fixtures under `e2e/` that are not test files are out of scope. **Boundary:** at review time there is no measured runtime to read — measured per-test and per-suite budgets are owned by the sibling local-speed work (#9763). Flag cost SIGNALS, never estimated seconds.
 
 ### Layer classification
 
-Classify by path first, then imports, then cost signals — path and import evidence outranks cost-signal inference.
+Classify by path first, then framework/API signals, then cost signals — path and framework evidence outranks cost-signal inference. When path signals match more than one row, the most specific pattern wins (`*.integration.test.*` beats `test/`). Signal lists are NON-exhaustive — absence of a listed framework is not unit evidence; classify on the strongest available signal and lower confidence when the list is silent. `*.spec.*` alone is ambiguous (it is the default unit suffix in some frameworks — Angular/Karma, NestJS/Jest): treat it as e2e only alongside a browser-framework signal or an `e2e/` path.
 
-| Layer | Path signals | Import signals | Cost signals |
+| Layer | Path signals | Framework/API signals | Cost signals |
 |-------|--------------|----------------|--------------|
-| **unit** | `*.test.*` under a flat `test/` dir (this repo: `apps/web-platform/test/`), `__tests__/`, `test_*.py`, `*.test.sh` | vitest / jest / `bun:test` / pytest, with deps mocked or in-memory | none — pure assertions, sub-second |
-| **integration** | `*.integration.test.*`, db/service fixture dirs (this repo: `test/rls-fuzz/`) | real client imports (supabase / pg / redis), testcontainers, a booted local server | real DB or service boot; no browser |
-| **e2e** | a dedicated `e2e/` directory (this repo: `apps/web-platform/e2e/`) OR `*.e2e.ts` / `*.spec.ts` file extensions | `playwright` / `@playwright/test`, `cypress`, `puppeteer` imports; `page.goto`, `browser.newPage` | real browser or full server boot, external network, multi-second fixed waits |
+| **unit** | `*.test.*` under `test/` dirs (this repo: `apps/web-platform/test/` — NOT flat; subdirectory nesting like `rls-fuzz/` or `api/` does not change the layer), `__tests__/`, `test_*.py`, `*.test.sh` | vitest / jest / `bun:test` / pytest, with deps mocked or in-memory | none — pure assertions, sub-second |
+| **integration** | `*.integration.test.*`, db/service fixture dirs (this repo: `apps/web-platform/test/rls-fuzz/`) | real client imports (supabase / pg / redis), testcontainers, a booted local server | real DB or service boot; no browser |
+| **e2e** | a dedicated `e2e/` directory (this repo: `apps/web-platform/e2e/`) OR `*.e2e.*` file extensions | `playwright` / `@playwright/test`, `cypress`/`cy.`, `puppeteer`, `webdriverio`, `selenium`, `testcafe`; `page.goto`, `browser.newPage`, `cy.visit`, `browser.url` | real browser or full server boot, external network, multi-second fixed waits |
 
 ### Justification marker
 
-An e2e-layer test is justified when EITHER of the following is present — check both before ruling:
+An e2e-layer test is justified when EITHER of the following is present — check BOTH sinks before ruling absence:
 
 - a `pyramid-justified: <reason>` comment in the added test file, OR
 - a `## Test Pyramid` block in the PR body (the bulk form — one block covers every added file in the diff).
 
+Fetch the PR body before ruling absence — `gh pr view <N> --json body` (or the body handed to you in the spawn prompt); `gh pr diff` does not carry it. The `## Test Pyramid` block must appear in the PR body proper — inside a fenced code block it does not count, and an empty heading justifies nothing. In a branch-mode review with no PR body, only the file marker exists — say so when you could not check a body, and degrade "confirmed absence" accordingly. The marker is an affordance, not proof: weigh whether the stated reason plausibly covers EACH exempted file, and list exempted files in the `### Pyramid` table with verdict `PASS (justified)` rather than omitting them.
+
 ### Verdict rules
 
 - **FAIL** — the diff adds an e2e-layer test with no justification marker.
-- **WARN** — a new test carries fast-feedback cost signals (`waitForTimeout` / `sleep` / fixed delays, real browser or server boots, external network) with no stated necessity in code or PR body.
+- **WARN** — a new test carries fast-feedback cost signals (`waitForTimeout` / `sleep` / `cy.wait` / `browser.pause` / fixed delays, real browser or server boots, external network) with no stated necessity. A "stated necessity" is any explicit reason in code comments or the PR body — WARN fires only when a cost signal carries NO stated reason at all. A layer's defining signal is not a WARN signal at that layer: a real DB/service boot is the defining characteristic of an integration test — flag only signals inappropriate to the classified layer.
 - **WARN** — coverage achievable at a lower layer is exercised only at e2e (pyramid inversion — e.g., pure validation logic asserted through a browser flow).
 - Ambiguous classification degrades to **WARN**, never **FAIL** — a FAIL requires BOTH a confident e2e-layer classification AND the confirmed absence of a marker.
 
 ### Pyramid
 
-Report these findings in a separate `### Pyramid` verdict block — never fold them into the weighted 8-property score above; the score stays Farley-only. Emit one row per added test file:
+Report these findings in a separate `### Pyramid` verdict block — never fold them into the weighted 8-property score above; the score stays Farley-only. Emit one row per added test file (see `## Output Format` for the no-added-files case):
 
 | File | Layer | Signals | Verdict | Confidence |
 |------|-------|---------|---------|------------|
 | `apps/web-platform/e2e/checkout-flow.e2e.ts` | e2e | `@playwright/test` import, `page.waitForTimeout(15000)` | FAIL — no `pyramid-justified` marker or `## Test Pyramid` block | high |
 
-`confidence` (high / medium / low) records how much of the path + import + cost evidence agrees; anything below high caps the row's verdict at WARN.
+`confidence` (high / medium / low) records how much of the path + framework + cost evidence agrees; anything below high caps the row's verdict at WARN.
 
 ## Auditing a Mutation Battery
 

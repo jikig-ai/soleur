@@ -300,20 +300,20 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **If PR contains test files:**
 
-13. Task soleur:engineering:review:test-design-reviewer(PR content) - Score test quality against Farley's 8 properties; classify added tests by pyramid layer — FAIL when a new e2e-layer test carries no `pyramid-justified:` marker
+13. Task soleur:engineering:review:test-design-reviewer(PR content) - Score test quality against Farley's 8 properties; classify added tests by pyramid layer — FAIL when a new e2e-layer test carries no justification marker (`pyramid-justified:` file comment or `## Test Pyramid` PR-body block)
 
 **When to run test review agent:**
 
 - PR includes files matching `*_test.rb`, `*_spec.rb`
 - PR includes files matching `test_*.py`, `*_test.py`
-- PR includes files matching `*.test.ts`, `*.test.js`, `*.spec.ts`, `*.spec.js`
+- PR includes files matching `*.test.ts`, `*.test.js`, `*.spec.ts`, `*.spec.js`, `*.e2e.*`, `*.cy.*`
 - PR includes files matching `*_test.go`
 - PR includes files matching `*_test.swift`, `*Tests.swift`
-- PR includes files in `__tests__/` or `spec/` or `test/` directories
+- PR includes files in `__tests__/` or `spec/` or `test/` or `e2e/` directories
 
 **What this agent checks:**
 
-- `soleur:engineering:review:test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations; separately classifies added tests by pyramid layer (unit/integration/e2e) in a `### Pyramid` verdict block — FAIL on a new e2e-layer test with no `pyramid-justified:` marker, WARN on unjustified fast-feedback cost signals — never folded into the score
+- `soleur:engineering:review:test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations; separately classifies added tests by pyramid layer (unit/integration/e2e) in a `### Pyramid` verdict block — FAIL on a new e2e-layer test with no justification marker (`pyramid-justified:` file comment or `## Test Pyramid` PR-body block — the seat fetches the body via `gh pr view <N> --json body`, it is not in `gh pr diff`), WARN on unjustified fast-feedback cost signals — never folded into the score
 
 **If the PR's deliverable IS a guard (guard-shaped PR):**
 

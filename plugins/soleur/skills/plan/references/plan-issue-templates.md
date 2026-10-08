@@ -208,7 +208,7 @@ Derive from acceptance criteria. Use Given/When/Then format for logic tests, and
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
 
-Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior.
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 If the feature touches external services, include verification commands:
 
@@ -442,7 +442,7 @@ Translate each acceptance criterion into a testable scenario:
 - Given [precondition], when [action], then [expected result]
 - Given [error condition], when [action], then [graceful handling]
 
-Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior.
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 Include regression scenarios for any bugs this work addresses.
 
@@ -698,7 +698,7 @@ per ask, verbatim quote; every plan item cites the user words it answers or is
 
 ## Test Scenarios
 
-Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior.
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
 ### Acceptance Tests (RED phase targets)
 
