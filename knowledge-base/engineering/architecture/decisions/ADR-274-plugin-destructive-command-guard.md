@@ -293,8 +293,12 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
   splits is not analysed); `wrapper-depth` (more than 8 nested wrappers or `--` separators: the two share one counter, so nine `--`
   words ask even with no wrapper once the command reaches the lexer path); `bound` (a command too large to check: a tool call over
   256 KiB, checked before the prefilter or any parser reads it; more than 2000 simple commands; more than 20000 words; a single word
-  over 4096 bytes (`MAX_WORD_BYTES`: bash's expansions on one word are quadratic in its length, and real traffic has no word over
-  2007 bytes in 11,176 lexed commands); a target path of more than 128 components; a segment over 16 KiB, or more than 64 KiB of
+  over 4096 bytes where the rule table would expand it (`MAX_WORD_BYTES`; a command name, a path, a wrapper's option or a dash word of
+  `git`, `terraform` or `tofu`: bash's expansions on one word are quadratic in its length, and no clock check can interrupt one). A long
+  argument that is only text (a PR body, a commit message, an echo argument, an assignment value) is never expanded, so it is not
+  judged and is not asked about; a long word behind a wrapper (`timeout 5 gh pr create --body "<5 KB>"`) is read as an option and does
+  ask. A review-time measurement over the reviewer's own agent transcripts found no lexed word over 2007 bytes (not reproducible from
+  the repository); a target path of more than 128 components; a segment over 16 KiB, or more than 64 KiB of
   segments in all, in a degraded scan; or the 6 second `DEADLINE_S` wall clock reached; what was read before the
   limit is still judged, so a deny already found wins, and an ask-class match keeps its own rule id and reason with a sentence
   saying the rest was not checked); `lexer-empty` (the lexer returned no command for text that names something the guard decides on:

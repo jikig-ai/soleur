@@ -60,7 +60,8 @@
 #   ask   more than 8 nested wrappers or `--` separators (rule id `wrapper-depth`): what they run cannot be checked.
 #   ask   a command too large to check (rule id `bound`): a tool call over 256 KiB (checked before the prefilter or
 #         any parser reads it), more than MAX_RECORDS simple commands, more than MAX_WORDS words, a word over
-#         MAX_WORD_BYTES (4096 bytes: bash's expansions on one word are quadratic in its length), a target path
+#         MAX_WORD_BYTES where the rule table would expand it (a command name, a path, a wrapper's option, a dash word of git or
+#         terraform: bash's expansions on one word are quadratic in its length; long text such as a PR body is not asked), a target path
 #         with more than MAX_PATH_COMPONENTS components, a segment over 16 KiB (or 64 KiB of segments in all) in a degraded scan, or the DEADLINE_S wall
 #         clock reached.
 #         What was read before the limit is still judged: a deny wins; an ask-class match keeps its own reason
@@ -504,6 +505,31 @@ if [[ -n "$RAW_TOOL" ]]; then
 fi
 [[ "$CMD_TYPE" == string ]] || ask_envelope "tool_input.command is not a string"
 
+# long_word_judged <word>: 0 when a word over MAX_WORD_BYTES sits where the rule table would EXPAND it, so it is a bound ask. Those are
+# the command-name word itself, any word of a record whose command is rm, cd, pushd, popd, builtin or a wrapper (their words are paths and
+# options), and a dash word of git, terraform or tofu (the option loops). A long argument that is only text (a PR body, a commit message,
+# an echo argument, an assignment value) is never expanded by anything, so it is neither judged nor asked about. Reads the words of the
+# current record already read (W_TXT from REC_OFF); the word being tested is not yet in W_TXT.
+long_word_judged() {
+  local w="$1" k name had=0 hit=1
+  for ((k = REC_OFF[${#REC_OFF[@]} - 1]; k < NW; k++)); do
+    [[ "${W_TXT[$k]}" =~ ^[A-Za-z_][A-Za-z0-9_]*\+?= ]] || break
+  done
+  if (( k >= NW )); then   # nothing but assignments so far: this word is another assignment (not judged) or the command name (judged)
+    [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*\+?= ]] && return 1
+    return 0
+  fi
+  name="${W_TXT[$k]##*/}"
+  shopt -q nocasematch && had=1
+  shopt -s nocasematch
+  case "$name" in
+    rm|cd|pushd|popd|builtin|sudo|doas|env|command|nohup|time|timeout|nice|-p) hit=0 ;;
+    git|terraform|tofu) [[ "$w" == -* ]] && hit=0 ;;
+  esac
+  (( had )) || shopt -u nocasematch
+  return "$hit"
+}
+
 # ---- 4. lex ----------------------------------------------------------------------------------------
 # Frames: C \0 ctx \0 argc \0 (flags \0 arg \0){argc} ... then OK \0 (or E \0 cause \0 on failure).
 W_TXT=(); W_FLG=(); REC_OFF=(); REC_N=()
@@ -535,7 +561,10 @@ while IFS= read -r -d '' F; do
        else
          # a word over MAX_WORD_BYTES is replaced by a placeholder and the command asks `bound` unless something denies: the rule table's
          # expansions on it are quadratic, the lexer's 2 s alarm does not cover them, and the clock is read only between records
-         if (( ${#F} > MAX_WORD_BYTES )); then F="(overlong word)"; BOUND_SOFT="a word longer than ${MAX_WORD_BYTES} bytes"; fi
+         if (( ${#F} > MAX_WORD_BYTES )); then
+           long_word_judged "$F" && BOUND_SOFT="a word longer than ${MAX_WORD_BYTES} bytes"
+           F="(overlong word)"
+         fi
          W_TXT[${#W_TXT[@]}]="$F"; LEX_KIND=0; NW=$((NW + 1)); fi
        LEX_LEFT=$((LEX_LEFT - 1)); [[ "$LEX_LEFT" -le 0 ]] && LEX_ST=0 ;;
     9) SAW_E="$F"; LEX_ST=0 ;;

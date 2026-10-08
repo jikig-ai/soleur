@@ -97,7 +97,7 @@ ROWSEL="${DCG_ROWS:-}"
 # a one-edit change to the matching variable.
 README_SENT_NONCOVERAGE='The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools, `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.'
 README_SENT_HOSTED="Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt; this guard does not add one."
-README_SENT_UNREADABLE='The guard also asks, rather than allows, when it cannot read a command it was given: an oversized or unparsable command, a word longer than 4096 bytes, `env -S`, or wrappers nested more than eight deep (the last two only on a command the guard parses in full, which any command that spells `rm`, `destroy` or `push`, or uses a quote or `$`, is). You may meet such an ask on a command that is not destructive.'
+README_SENT_UNREADABLE='The guard also asks, rather than allows, when it cannot read a command it was given: an oversized or unparsable command, a path, command name or option longer than 4096 bytes, `env -S`, or wrappers nested more than eight deep (the last two only on a command the guard parses in full, which any command that spells `rm`, `destroy` or `push`, or uses a quote or `$`, is). You may meet such an ask on a command that is not destructive.'
 README_SENT_KILL='`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
 README_KILL_REST=' Set it in your own shell before you start the session; the'
 # Loud first line for any run that is not the full gate. NOTFULL is repeated before the summary.
@@ -2065,7 +2065,15 @@ bound_row "bound: a 96000-byte command word then rm -rf ~ denies, in under 5 s" 
 bound_row "bound: a relative rm target of 3000 bytes is judged normally (no decision)" none - "rm -rf ${_W3000}"
 bound_row "bound: a 4090-byte relative rm target is a word under the cap but a path over it once the working directory is joined: asks bound" ask - "rm -rf ${_W4090}" "^${ASK_LEAD_RX}bound: .*path longer than 4096"
 bound_row "bound: a relative rm target of 4097 bytes asks bound" ask - "rm -rf ${_W4097}" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
-bound_row "bound: an echo argument of 4097 bytes asks bound too (the cap is on every word of a lexed command, not only on paths)" ask - "echo \"${_W4097}\"; git status" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
+# A long word is only a problem where the rule table EXPANDS it: the command name, a path (rm, cd), a wrapper's options, a dash word of git or
+# terraform. Long prose (a PR body, a commit message, an echo argument) is never expanded, so it is not judged and does not ask.
+rep a 5700; _W5700="$REP_OUT"
+bound_row "bound: an echo argument of 4097 bytes is not judged and does not ask (it is never expanded)" none - "echo \"${_W4097}\"; git status"
+bound_row "bound: gh pr create with a 5700-byte --body is not judged and does not ask" none - "gh pr create --title t --body \"${_W5700}\""
+bound_row "bound: git commit -m with a 5700-byte message is not judged and does not ask" none - "git commit -m \"${_W5700}\""
+bound_row "bound: a 5700-byte assignment value before a command is not judged and does not ask" none - "X=${_W5700} ls \"x\""
+bound_row "bound: a 5700-byte message behind a wrapper (timeout 5 gh ...) asks: a wrapper's words are read as options (the documented over-ask)" ask - "timeout 5 gh pr create --body \"${_W5700}\"" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
+bound_row "bound: a 5700-byte prose word after a force push to main still denies nothing it should not: git push --force origin main \"x\" asks the force-push rule" ask @R1@ "git push --force origin main \"${_W5700}\"" "^${ASK_LEAD_RX}default-branch-force-push: "
 # Command-name case folding is fork-free: 1999 capitalised no-op commands then rm -rf / still deny (a `tr` per record turned this into a bound ask), and a PATH with no `tr` still decides RM.
 rep "Make 'x'; " 1999; _cmd1999Make="${REP_OUT}rm -rf /"
 bound_row "bound: 1999 capitalised commands (Make) then rm -rf / still denies, in under 5 s" deny - "$_cmd1999Make"
