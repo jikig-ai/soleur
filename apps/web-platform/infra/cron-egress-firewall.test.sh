@@ -1662,7 +1662,7 @@ if [[ "$RB_ELAPSED" -lt 60 ]]; then PASS=$((PASS + 1)); echo "  PASS: tick bound
 if grep -qF "DNS tick budget" <<<"$RB_OUT"; then PASS=$((PASS + 1)); echo "  PASS: budget-exhaustion WARN emitted"; else FAIL=$((FAIL + 1)); echo "  FAIL: no budget WARN in output"; fi
 if grep -qF "ADDITIVE-ONLY" <<<"$RB_OUT"; then PASS=$((PASS + 1)); echo "  PASS: starved hosts ride additive-only"; else FAIL=$((FAIL + 1)); echo "  FAIL: no additive-only line in output"; fi
 if [[ -e "$RB/fc/.budget-skip" ]]; then PASS=$((PASS + 1)); echo "  PASS: dedupe marker written after the event POSTed"; else FAIL=$((FAIL + 1)); echo "  FAIL: .budget-skip marker absent (event not sent or marker ordering broken)"; fi
-if grep -c "^curl" "$RB_CALLS" | grep -qE '^[1-9]'; then PASS=$((PASS + 1)); echo "  PASS: starved-tick Sentry event POSTed via curl"; else FAIL=$((FAIL + 1)); echo "  FAIL: no curl POST recorded"; fi
+if [[ "$(grep -c '^curl' "$RB_CALLS")" =~ ^[1-9][0-9]*$ ]]; then PASS=$((PASS + 1)); echo "  PASS: starved-tick Sentry event POSTed via curl"; else FAIL=$((FAIL + 1)); echo "  FAIL: no curl POST recorded"; fi
 if [[ ! -e "$RB/fc/slow14.example" ]]; then PASS=$((PASS + 1)); echo "  PASS: a starved host carries no try-and-fail counter"; else FAIL=$((FAIL + 1)); echo "  FAIL: slow14.example failcount file exists — skipped hosts must not escalate"; fi
 if [[ "$(cat "$RB/fc/slow01.example" 2>/dev/null)" == "1" ]]; then PASS=$((PASS + 1)); echo "  PASS: an attempted-and-failed host carries failcount=1"; else FAIL=$((FAIL + 1)); echo "  FAIL: slow01.example failcount missing/wrong (got: $(cat "$RB/fc/slow01.example" 2>/dev/null || echo absent))"; fi
 
