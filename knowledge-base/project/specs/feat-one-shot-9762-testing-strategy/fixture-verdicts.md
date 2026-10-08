@@ -17,9 +17,10 @@ Adds `apps/web-platform/e2e/checkout-flow.e2e.ts`.
 |------|-------|---------|---------|------------|
 | `apps/web-platform/e2e/checkout-flow.e2e.ts` | e2e | dedicated `e2e/` dir + `*.e2e.ts` extension, `@playwright/test` import, `page.goto`, `page.waitForTimeout(15000)` | FAIL — no `pyramid-justified:` marker in file, no `## Test Pyramid` block in PR body | high |
 
-**Verdict: FAIL** — cites the missing e2e justification marker. (The
-`waitForTimeout(15000)` would independently have drawn a WARN for an
-unjustified fast-feedback cost signal; the FAIL verdict dominates.)
+**Verdict: FAIL** — cites the missing e2e justification marker. The
+`waitForTimeout(15000)` carries a stated necessity in code (the payment-iframe
+comment), so under the written WARN rule ("no stated necessity") it does not
+draw the WARN arm — the FAIL is on marker absence alone.
 
 ## Fixture 2 — `plugins/soleur/test/fixtures/test-pyramid/fast-unit.diff`
 

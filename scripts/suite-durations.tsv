@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=996
-# generated-at=2026-10-07T09:45:56Z
+# generated-at=2026-10-08T16:54:14Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -246,6 +246,7 @@ plugins/soleur/test/ship-pir-action-items-gate.test.sh	2537	measured
 plugins/soleur/test/sync-pr-behind.test.sh	3815	measured
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	602	measured
 plugins/soleur/test/terraform-drift-step-order.test.sh	50	measured
+plugins/soleur/test/test-pyramid-fixtures.test.sh	996	floor
 plugins/soleur/test/ticket-triage-clauses.test.sh	28	measured
 plugins/soleur/test/token-drift-workflow-causes.test.sh	5465	measured
 plugins/soleur/test/unkept-promise-hook.test.sh	2421	measured
@@ -466,6 +467,7 @@ scripts/verify-marketplace-ruleset	1400	measured
 scripts/watch-live-verify-pass	204	measured
 scripts/watch-registration-narrowing-9564	996	floor
 scripts/watchdog-arm-soak-9237	2235	measured
+scripts/watchdog-debounce-soak-9686	996	floor
 scripts/web-fresh-boot-zot-8651	447	measured
 scripts/web-host-escrow-preflight	979	floor
 scripts/web-host-reboot	996	floor
@@ -497,6 +499,7 @@ tests/scripts/betterstack-ingest-probe	86	measured
 tests/scripts/betterstack-query-archive	163	measured
 tests/scripts/betterstack-read-classify	172	measured
 tests/scripts/betterstack-roundtrip-latency	165660	measured
+tests/scripts/cleanup-merged-space	996	floor
 tests/scripts/destroy-guard-counter-github	87	measured
 tests/scripts/destroy-guard-counter-sentry	307	measured
 tests/scripts/destroy-guard-counter-web-platform	1856	measured
