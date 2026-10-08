@@ -11,6 +11,27 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-08
+**Gates run (mechanically):** User-Brand Impact 4.6 (section present, threshold `single-user incident`), Observability 4.7 (five fields present, probe verb allowlisted, no shell-active characters, executed on the two already-clean files in 0.6 s), PAT sweep 4.8 (no hit), Guard Contract 4.11 (`lint-guard-contract.py` green, three entries), Scope Check 4.12 (one live section, `Recommendation:` present, no block marker), rule-id and PR/issue citation checks (every cited rule id active; #9597, #7797, #8767, #7898, #9294 open; #9674, #9736, #9594, #9632, #9654, #9733, #9747 merged). Not triggered: UI wireframe 4.9, Encryption Posture 4.10 (no store or connection), Downtime 4.55 (no serving surface goes offline; the one hosted-path risk is covered under MERGE EFFECTS), network-outage 4.5 (no trigger term).
+**Reviewers (report-only, parallel):** plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, plus CTO and CPO consults), then security-sentinel, observability-coverage, test-design, user-impact.
+
+### Key Improvements
+
+1. A review seat proved the "no infra-suite edit" premise false for two sites (the suite's tool-census counts `python3` in the probe arms); D1 now converts 17 of 19 and holds back 2, with the one-line suite edit tracked and an explicit operator choice recorded.
+2. Security seat verified the bash HMAC against bash 3.2 and a `6`x64 key, and found `set -a` exporting the function's locals; the function now turns allexport off, bans here-strings and heredocs on key-derived data, and the `.env` allow-list drops `~` (tilde expansion changes a stored value on source).
+3. The curl config deny-list was validated against real curl 8.22: only `"`, `\` and newline change parsing, so the planned superset is complete; Phase 0 gains a byte-sweep oracle and a corrected value-free measurement (a password may contain `:`).
+4. Test-design seat: the `hmac-cf` shim now recomputes the digest, delegated rows must record stdin, the population invariant becomes disjointness (so commits 3 to 8 stay green and bisectable), mutations run per copy and per script, held-back sites are pinned by arm anchor, and floors follow each suite's own shape (an exact `-ne` floor in `community-argv.test.sh`).
+5. Observability and user-impact seats: failure modes cite observability layers, the hosted "mirrored or paged" implication is removed (the extractor is wired to the agent PostToolUse hook only), the hosted X run becomes a mandatory post-merge gate, and Phase 0 measures the Cloudflare Access, deploy-webhook and Anthropic credential shapes value-free.
+
+### New Considerations Discovered
+
+- `bs_read_classify` and two callers (`scheduled-inngest-health.yml`, `git-data-cutover.yml`) discard the reader's stderr, so the marker is invisible there; surfacing it belongs to S3 (both are S3 files) and is added to the follow-up list.
+- `deploy-docs.yml` also fires on the plugin edits (docs site publish); `infra-validation.yml` runs the infra suites against the converted scripts in CI.
+- An empty `WEBHOOK_SECRET` signs silently under `hmac.new(b"")`; the canonical snippet now exits non-zero on an empty key.
+- `Closes #8767` is mandated by the brief but leaves the `op=backup` environment gap open; the PR body must say "partial" in words.
+
 ## Overview
 
 Slice S2 of the argv-credential sweep (tracker #9597, parent #7797). S1 (`cc4fa34d9d`, #9674) widened Rule E
@@ -47,8 +68,8 @@ Inngest crons. Both findings reshape the plan; neither is carried over from the 
 Each `SIG=$(printf ... | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')` becomes the canonical
 snippet with the key on the python3 child's environment only:
 `SIG=$(printf ... | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;sys.stdout.write(hmac.new(os.environb[b"HMAC_KEY"],sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')`
-(173 bytes, verified byte-equal to `openssl dgst -sha256 -hmac` on a synthetic key for the empty and a JSON body,
-and non-zero with no key). Reasons it is a per-command prefix and `-I`: an exported key reaches every later
+(173 bytes as first verified, byte-equal to `openssl dgst -sha256 -hmac` on a synthetic key for the empty and a JSON body,
+and non-zero with no key. Deepen adds an empty-key exit, because `hmac.new(b"")` signs silently: the final form reads the key into a name, then `k or sys.exit(1)`; Phase 0 re-measures the byte length and re-runs the oracle on the final text). Reasons it is a per-command prefix and `-I`: an exported key reaches every later
 child, `-I` ignores `PYTHON*` and user-site injection, `os.environb` cannot raise on a non-UTF-8 byte. The render
 drivers of the infra suite set `WEBHOOK_SECRET` as an **unexported** shell variable
 (`printf 'BASE=...; WEBHOOK_SECRET="stub"; ...'`), which is a second reason the key must be passed by prefix rather
@@ -173,19 +194,19 @@ its argv; it is a test seam, not a boundary.
 **D8. `write-env` hardening (three setup scripts) and the Discord positional webhook.** (Scope note: this is a `.env` source-injection class, not an argv leak; it is in because the brief names it explicitly for `bsky-setup.sh` and `discord-setup.sh`.) `.env` values are written
 unquoted and later `source`d (`verify`, the community scripts), so a value holding `$(...)`, a backtick, a quote,
 `;`, a space or a newline executes or splits on the next source. Validation is an **allow-list** per value, fail-closed:
-`[A-Za-z0-9._~:/@%+=,-]` and non-empty (covers a Bluesky handle and app password, a Discord bot token, a webhook URL, X
+`[A-Za-z0-9._:/@%+=,-]` and non-empty, implemented as an `LC_ALL=C case "$v" in ''|*[!set]*)` glob (not `grep`, which is line-oriented and lets a multi-line value through). `~` is deliberately absent: measured by the security seat, `A=~` sources as `$HOME` and `D=~+` as the working directory, which silently changes a stored credential (covers a Bluesky handle and app password, a Discord bot token, a webhook URL, X
 keys, a LinkedIn person URN). A refused value prints the marker plus one human line naming only the VARIABLE and
 the allowed class, writes nothing, exits 1, and leaves any existing `.env` untouched (validate every value before the
 first write). `bsky-setup.sh` and `discord-setup.sh` are asked for; `x-setup.sh` is edited anyway for the signing key and
 carries the identical `echo "KEY=${VAL}" >> .env` shape, so it is included and marked `inferred` in the provenance table (a
 reviewer can cut it without touching the rest). `linkedin-setup.sh` has the same shape and is **not** touched here (review: one
 inferred sibling is enough scope); it is named in the Phase 10 follow-up list so the class is tracked, not forgotten.
-Allow-list limits are intentional: a value with a space or `#` is refused (the message says to edit `.env` by hand).
+Allow-list limits are intentional: a value with a space, `#`, `?` or `&` is refused (the message says to edit `.env` by hand); `create-webhook` returns `https://discord.com/api/webhooks/<id>/<token>`, which has none of them, and thread-scoped URLs with `?thread_id=` are not supported by this script. The plugin release notes carry one changelog line for the changed CLI form.
 `discord-setup.sh write-env <guild_id> <webhook_url>`: the webhook URL (a write-capable secret) moves to
 `DISCORD_WEBHOOK_URL_INPUT`, the sibling of the two existing `*_WEBHOOK_URL_INPUT` variables. Argument handling happens
 BEFORE the existing `webhook_url="${2:?Usage...}"` expansion (which would otherwise fire a bare usage error first) and has four
 explicit branches, each with a row: (1) a second positional present: refuse, exit 64, one-line migration message that names the
-variable and shows a copy-pasteable form, never echoing the argument (CPO conditions), whether or not the env var is also set
+variable and shows a copy-pasteable form, never echoing the argument (CPO conditions), and the copy-pasteable form does not leave the secret in shell history (`read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT`), whether or not the env var is also set
 (the secret is already on the argv); (2) no second positional and `DISCORD_WEBHOOK_URL_INPUT` set and non-empty: validate and
 proceed; (3) neither: usage error naming the variable, exit 64; (4) env var set but empty: same as (3). Header, usage text and the
 header's exit-code list (a new `64 - usage`) change in the same commit; `SKILL.md` needs no change (it never documented the positional).
@@ -359,9 +380,14 @@ and print only the verdict).
    choice is re-opened (python3 becomes the single primitive); if `openssl` or `od` is absent D3 fails and the slice stops on the plugin
    rows only.
 3. Better Stack credential shape, value-free, so the deny-list guard cannot refuse a real value: with the Doppler token available,
-   `doppler secrets get BETTERSTACK_QUERY_USERNAME -p soleur -c prd_terraform --plain | LC_ALL=C grep -cvE '[:"\\[:cntrl:]]'` and the same
-   for `..._PASSWORD` must print `1` (a count, not the value). Without Doppler access, record "unmeasured" and rely on the deny-list being
-   the exact set of characters that can break a quoted config value.
+   `doppler secrets get BETTERSTACK_QUERY_USERNAME -p soleur -c prd_terraform --plain | LC_ALL=C grep -cvE '[:"\\[:cntrl:]]'` must print `1` (a count, not the value);
+   for `..._PASSWORD` drop the colon from the class, because a password may contain `:` and only the username may not (the Phase 3 guard encodes exactly that split). Without Doppler access, record "unmeasured" and rely on the deny-list being
+   the exact set of characters that can break a quoted config value (verified against real curl 8.22 during deepen: inside `user = "..."` only `"`, a backslash
+   and a newline change parsing; `#`, `=`, `;`, `%`, tab, CR, DEL and UTF-8 are delivered verbatim).
+   Measure the same way, count only, the credentials the new `_bearer_ok` guards judge: `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` against `^[A-Za-z0-9._~+/=-]+$`
+   (the cutover script already applies this to the same values, so a pass is expected), and `ANTHROPIC_API_KEY` against the same class. The deploy-webhook key
+   takes no shape guard (it is an HMAC key; only non-empty is required), so it needs no measurement. A refused real value would leave the four probes TRANSIENT with no alert,
+   so a failed measurement stops that conversion until the class is widened with evidence.
 4. Infra-suite partition (D1): copy `scripts/cutover-inngest.sh` to a scratch tree with ALL 19 HMAC sites converted and run
    `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` against it read-only (do not edit the suite; do not commit the scratch copy);
    record every red row. Expected: only the two census rows named in D1. Any other red row moves that site into the held-back set.
@@ -381,7 +407,7 @@ fail on exactly the three `-u` sites until Phases 4 and 9; the suite's repo-wide
 
 ### Phase 2: cutover-inngest.sh and #8767 (commit 2 = backup arm; commit 3 = HMAC sites)
 
-1. `backup)` arm per D2. Mask line: `[[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN" >&2` directly after the read, before the first
+1. `backup)` arm per D2. Order: shape check first (`_bearer_ok "$HCLOUD_TOKEN"`, so a value holding a newline can never inject a second `::` workflow command through the mask line), then the mask line `printf '::add-mask::%s\n' "$HCLOUD_TOKEN" >&2` (stderr; stdout inside `$(...)` would swallow it), directly after the read, before the first
    `_bearer_curl`. Replace the body echo with the code plus a class hint; drop `cat /tmp/backup-action`.
 2. The inline HMAC conversions for the partition Phase 0 recorded (17 expected) + the `_sig_curl` marker line (D1); the held-back sites get a one-line comment naming D1 and the follow-up issue. Locate by anchor, never by line number. Do not touch
    `apps/web-platform/infra/cutover-inngest-workflow.test.sh`; run it read-only (`bash apps/web-platform/infra/cutover-inngest-workflow.test.sh`)
@@ -393,9 +419,9 @@ fail on exactly the three `-u` sites until Phases 4 and 9; the suite's repo-wide
 
 ### Phase 3: Better Stack reader (commit 4)
 
-`run_sql` gets the guard and `--config -`: `user = "<u>:<p>"` on a process substitution. Guard (before any curl): username non-empty, no `:`, no `"`, no `\`, no control
+`run_sql` gets the guard (evaluated under `LC_ALL=C`, as `_bearer_ok` is; the script already exports it) and `--config -`: `user = "<u>:<p>"` on a process substitution. Guard (before any curl): username non-empty, no `:`, no `"`, no `\`, no control
 character; password non-empty, no `"`, no `\`, no control character; reason `control_char` when a control character is present, else `token_shape`; one marker line plus
-one stderr line naming only the variable; **exit 2**. `-d "$1"` (the SQL) stays an argument (not a secret). Rows (battery Stage S2-B, shim `curl` that models `--config -`):
+one stderr line naming only the variable; **exit 2**. `-d "$1"` (the SQL) stays an argument (not a secret). Rows (battery Stage S2-B, shim `curl` that models `--config -` and is calibrated for `user = "..."`: add a control that compares the shim's parse with `curl --libcurl` output (`CURLOPT_USERPWD` equals the fixture pair; a hostile value yields a second `CURLOPT_URL`), and sweep bytes 0x01 to 0x7f through the real curl so the deny-list is validated by an oracle, not by the characters the author chose; the empty-credential row is pinned to exit 3 (the script's existing `credentials absent` exit, before `run_sql`), and every refusal row keys on the marker, not the exit code alone):
 no `-u`/`--user`/`--user=` token in any recorded argv, neither value in argv, exactly one `user = "..."` line on stdin; refusal rows for quote, backslash, CR, LF, tab,
 colon-in-username, empty, and a hostile `x" \n url = "http://evil` value: zero curl calls, exit 2, marker once, value absent from output; the existing owning suites stay
 green (`tests/scripts/test-betterstack-query-archive.sh`, `tests/scripts/test-betterstack-read-classify.sh`, `tests/scripts/test-git-data-rung2-evidence-capture.sh`).
@@ -408,10 +434,16 @@ standard `case "$-"` block; their A/B/C and D baseline rows are removed in the s
 no baseline). Owning suites: `scripts/check-deploy-script-parity.test.sh`, `scripts/followthroughs/infra-config-activation-7220.test.sh`
 (its `openssl` stub becomes unused: remove it, and make the sandbox PATH resolve the real `python3`; the stubbed `curl` keeps ignoring stdin) and
 `scripts/followthroughs/inngest-soak-6178.test.sh`. Battery Stage S2-C: a new manifest for the four probes (the population derivation will now list them because they contain
-`--config -`): the two without owning suites (`canary-promotion-5875`, `infra-config-fatal-channel-7220`) run dynamically under an auth profile `hmac-cf` added to the shim
-(200 only when stdin carries `X-Signature-256: sha256=<64 hex>` and both Cloudflare Access values; INJECTED detection as today); the two with suites are delegated to them,
-extended with the same assertions. The row `population: the followthrough probes listed in baseline E equal the S2-owned list` is rewritten to assert the listed set is **empty**, with a
-positive control that the extractor returns a followthrough row from a synthetic baseline (so an empty set cannot be a broken extractor).
+`--config -`): the two without owning suites (`canary-promotion-5875`, `infra-config-fatal-channel-7220`) run dynamically under a new `probe_rows_hmac` (the existing `probe_rows` hard-codes
+`Authorization: Bearer`, its header-stripped-copy `sed` and `shape_check`/`xtrace_check` take one token variable) with a fourth manifest added to `CLASSIFIED`, under an auth profile `hmac-cf` added to the shim.
+The profile is NOT shape-only: the shim recomputes the digest over the recorded request body with the fixture key (through the real `openssl`, the independent oracle) and compares it, and compares both
+Cloudflare Access values exactly, so a hard-coded 64-zero digest or a wrong key returns 401 (`evaluate` takes a marker list that includes the digest). The two with owning suites are delegated, but
+the delegation row is not "the suite names the probe": the two suites' `curl` stubs are extended to RECORD stdin and the suites assert the exact three header lines and a 64-hex signature, so a delegated probe cannot pass while sending no credential.
+The row `population: the followthrough probes listed in baseline E equal the S2-owned list` is replaced by a **disjointness invariant** (no probe is both listed in baseline E and classified as converted),
+which holds in both states, so commits 3 to 8 stay green and bisectable while baseline E still lists the probes and commit 9 empties it; it keeps a positive control that the extractor returns a
+followthrough row from a synthetic baseline (an empty set cannot be a broken extractor). Mutation rows run one mutant PER COPY INDEX and PER SCRIPT (the suite's `mutated_copy` replaces the first match only, so "any one of the copies" would otherwise
+mutate copy 1 every time), each asserting the line range it touched, and the held-back sites are pinned by arm anchor (`registry-probe)`, `doublefire-probe)`), not by a count of 2. The recording `python3`/`openssl` shims are
+added per row through `RUN_EXTRA_PATH`, never by widening the battery's fail-closed `REALBIN` set; Stage S2-D (sweeper) lives in `scripts/sweep-followthroughs.test.sh` because the battery's `gh` stub exits 97.
 
 ### Phase 5: sweep-followthroughs.sh hop (commit 5)
 
@@ -427,7 +459,7 @@ explicit-path run is clean.
 
 ### Phase 7: plugin scripts (commit 7)
 
-1. `lib/hmac-sha1-b64.sh` (one function, no `exit`, returns non-zero on failure) sourced by `x-community.sh` and `x-setup.sh` in place of the `openssl dgst -hmac` line;
+1. `lib/hmac-sha1-b64.sh` (one function, no `exit`, returns non-zero on failure) sourced by `x-community.sh` and `x-setup.sh` in place of the `openssl dgst -hmac` line. Constraints from the security review: the function saves and turns off allexport on entry and restores it on return (under `set -a` its locals would otherwise be exported into the `openssl`, `od` and `tr` children's environment; `x-setup.sh` closes `set -a` before signing but variables sourced under `-a` stay exported), sets `LC_ALL=C` locally so `${#key}` counts bytes, carries its own xtrace refusal (it can be sourced without the caller's preamble), and never feeds key-derived data through a here-string or heredoc (bash older than 5.1, including macOS 3.2, writes those to a temp file); a grep row on the file bans both. The oracle also runs with `set -a` active and an env-recording `openssl` shim (no key-derived name in any child environment);
    `require_openssl` stays (still needed for `openssl rand` and the digest).
 2. `write-env` validation and the Discord positional change (D8), `SKILL.md` and header/usage text. `plugins/soleur/skills/community/SKILL.md` is 17,447 bytes and has no entry in `plugins/soleur/test/skill-body-budget.json` (lifecycle skills only), and its description is not touched, so
    `SKILL_DESCRIPTION_WORD_BUDGET` is not in play; edit body lines only and re-run `bun test plugins/soleur/test/components.test.ts`.
@@ -435,7 +467,8 @@ explicit-path run is clean.
    containing `=` and `%`), recording `openssl` shim (no `-hmac`/`-macopt`, no key bytes in any argument across a full `fetch-metrics`, `post-tweet` and `validate-credentials` run), a full signed request still
    reaches the curl shim with the same `Authorization: OAuth ...` structure, write-env hostile-value rows per script (`$(touch SENTINEL)`, backtick, newline-plus-assignment, `"`, `;`, space): refused, no sentinel
    file, `.env` byte-identical before and after, marker once; round trip (a valid write then `source` yields the same values byte-for-byte; mode 600); discord second positional refused with exit 64, argument not echoed,
-   env-var path works.
+   env-var path works. The oracle adds RFC 2202 (HMAC-SHA1) vectors, and the cutover-snippet oracle adds RFC 4231 (HMAC-SHA256) vectors, as a non-openssl anchor, plus the empty-key behaviour stated (the runner snippet exits non-zero), trailing-newline bodies, and a base64-shaped key with `+/=`; the "oldest bash" run asserts the binary differs from the default or reports `not exercised`, and, when docker is available, the oracle is also executed inside the pinned `node:22-slim` image (its bash is the hosted one). Must-PASS rows use realistic shapes, not only the canonical (a Better Stack password with `$ # ; !` checked by `USERPWD` equality; an `.env` value with `+/=:%`).
+   Floors: `community-argv.test.sh` ends in an EXACT `-ne 411` check (its comment records that `-lt` would grow the deferred ledger 47 to 48), so bump 411 in the same commit as the new rows and raise `EXPECTED_TESTS=187` in the same suite family; inner counters (32 oracle cases, 17 converted copies, the hostile-class count) guard the loops, because a row floor cannot see a loop that runs zero times.
 4. Hosted-path canary: an invocation of `x-community.sh fetch-metrics` under `env -i PATH=<dir with only bash, openssl, jq, curl-shim, coreutils>` (no python3, no node) succeeds against the shim, proving
    the plugin path does not need an interpreter the image lacks.
 
@@ -461,7 +494,7 @@ Ordering (D10), each step a command with an exit code:
 
 PR title `fix(security): argv-credential sweep S2 ...`; first body line names the plugin release trigger and states that no `apps/web-platform/infra/**` file is in the diff; `Ref #9597`, `Ref #7797`, `Closes #8767`;
 no plan or spec file paths in the body and no `*-soak-*` script names (an earlier PR was falsely blocked from `gh pr ready` by the follow-through gate matching a script named like that); the +2/-5 baseline arithmetic;
-the honest review-coverage statement. Issues to create (each with a milestone and `gh issue edit --add-blocked-by` where a blocker is known): (1) `op=backup` environment gate + O10 re-plumb (workflow expression and pinned infra suite; blocked by nothing, deadline before O10), (2) the two cla-evidence R2 `--user` sites (dated, owner: CLA-evidence), (3) heartbeat-URL path secrets in the three host files (S4/S5 class, ties to the infra apply notice), (4) the two held-back cutover probe-arm HMAC sites plus the one-line edit of the two tool-census regexes in the infra suite (carries operator notice; rides S4/S5), (5) `linkedin-setup.sh` `write-env` value validation (same class as D8). Comment on #9597: S2 done, corrected measurements (cutover 0 header sites / 19 HMAC of which 17 converted; baseline 29 files / 62 sites after S2), open items 1 and 2 resolved with evidence, item 3 re-armed, heartbeat decision; and on #7898 that the two `"$CURL_BIN"` sites are converted and the command-word blind spot remains.
+the honest review-coverage statement. Issues to create (each with a milestone and `gh issue edit --add-blocked-by` where a blocker is known): (1) `op=backup` environment gate + O10 re-plumb (workflow expression and pinned infra suite; blocked by nothing, deadline before O10), (2) the two cla-evidence R2 `--user` sites (dated, owner: CLA-evidence), (3) heartbeat-URL path secrets in the three host files (S4/S5 class, ties to the infra apply notice), (4) the two held-back cutover probe-arm HMAC sites plus the one-line edit of the two tool-census regexes in the infra suite (carries operator notice; rides S4/S5), (5) `linkedin-setup.sh` `write-env` value validation (same class as D8), (6) record on the S3 tracker that `scheduled-inngest-health.yml` and `git-data-cutover.yml` discard the Better Stack reader's stderr (`2>/dev/null`), so a credential refusal (exit 2) reads as `__UNREADABLE__` / a generic retry failure there; S3 surfaces the stderr as `::warning::` when it converts those files. Issue (4) carries a due date and an owner. Comment on #9597: S2 done, corrected measurements (cutover 0 header sites / 19 HMAC of which 17 converted; baseline 29 files / 62 sites after S2), open items 1 and 2 resolved with evidence, item 3 re-armed, heartbeat decision; and on #7898 that the two `"$CURL_BIN"` sites are converted and the command-word blind spot remains.
 
 ## Rule E arm: `-u` / `--user`
 
@@ -568,21 +601,21 @@ None. Checked 2026-10-08: `gh issue list --label code-review --state open` (200 
 - [ ] `git diff --name-only "$(git merge-base HEAD origin/main)"..HEAD` contains no path under `apps/web-platform/infra/`, neither `.github/workflows/apply-web-platform-infra.yml` nor `tests/scripts/lib/destroy-guard-filter-web-platform.jq`, and no `.mcp.json`.
 - [ ] Explicit-path `python3 scripts/lint-shell-trace-credential-refusal.py <every converted file>` exits 0 (all Rules A to E, no baseline), and the repo-wide run exits 0 with baseline E equal to the live set. Totals are DERIVED, not hard-coded: record `origin/main`'s baseline totals at the merge step (32 files / 65 sites at planning) and require post = pre - 5 files - 5 sites + 2 files + 2 sites (29 / 62 at planning). A mismatch means another PR moved rows or a new offender appeared: investigate before accepting the regenerated file. The five converted rows are absent and exactly the two cla-evidence rows are added; the ceiling table equals the regenerated baseline's own order (`diff` of the two path/count column sets is empty).
 - [ ] `bash scripts/lint-shell-trace-credential-refusal.test.sh` exits 0 with every `-u` row above, the mutation rows red as designed, and the ceiling table equal to baseline E.
-- [ ] `bash tests/scripts/test-argv-bearer-sweep.sh` exits 0 including: the converted-copy parity row (17 expected, the 2 held-back sites named), the HMAC oracle, the backup-arm rows (mask first and once, no body, no token in argv or output), the Better Stack rows, the four-probe manifest, the sweeper-hop rows, the two Anthropic rows; and a **canary sweep** row (CPO condition 1): a run of each converted script under a fake credential `CANARY-<random>` with every shim in failure modes (200, 401, 500, timeout, malformed JSON) never contains the canary in stdout or stderr.
+- [ ] `bash tests/scripts/test-argv-bearer-sweep.sh` exits 0 including: the converted-copy parity row (17 expected, the 2 held-back sites named), the HMAC oracle, the backup-arm rows (mask first and once, no body, no token in argv or output), the Better Stack rows, the four-probe manifest, the sweeper-hop rows, the two Anthropic rows; and a **canary sweep** row (CPO condition 1): a run of each converted script under a fake credential `CANARY-<random>` with every shim in failure modes (200, 401, 500, timeout, malformed JSON) never contains the canary in stdout or stderr; each such row first asserts a recorded shim call in the 200 mode (a script that exits at a precondition never touched the credential and proves nothing).
 - [ ] `bash plugins/soleur/skills/community/test/community-argv.test.sh` exits 0 (HMAC oracle, recording `openssl` shim, write-env rows, discord positional refusal, no-interpreter hosted canary).
 - [ ] The owning suites exit 0 unchanged where not listed as edited: `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` (floor 1069 untouched, **not edited**), `scripts/check-deploy-script-parity.test.sh`, `scripts/sweep-followthroughs.test.sh`, `scripts/compound-promote.test.sh`, the two probe suites, `tests/scripts/test-betterstack-query-archive.sh`, `tests/scripts/test-betterstack-read-classify.sh`, `tests/scripts/test-git-data-rung2-evidence-capture.sh`.
 - [ ] Drift and meta guards: the grep-q pipe guard test (`bash .claude/hooks/grep-q-pipe-guard.test.sh`), `scripts/lint-supabase-deprecated-endpoints.sh`, `scripts/lint-orphan-test-suites.sh`, `bash scripts/guard-vacuity-floor.test.sh`, `bash plugins/soleur/test/fixture-env-adoption.test.sh`, `bash plugins/soleur/test/c4-count-parity.test.sh`, `python3 lint-skill-body-budget.py` and `lint-rule-bodies.py --check` with `--base` the merge-base, `bunx vitest run apps/web-platform/test/git-lock-marker-telemetry.test.ts`, `tsc --noEmit` in `apps/web-platform`, gitleaks. Never `scripts/test-all.sh` locally.
 - [ ] Zero `-hmac` operand remains in the S2 conversion targets (the 14 non-test source files under Files to Edit, except the two held-back cutover sites named in D1); zero `x-api-key` header on argv in `compound-promote.sh` and `learning-retrieval-bench.sh`; `git grep -nE -- '-hmac' -- scripts plugins/soleur/skills/community/scripts .github/actions ':!*.test.sh' ':!tests' ':!scripts/fixtures' ':!scripts/lint-shell-trace-credential-refusal.py'` lists only `.github/actions/dispatch-web-redeploy/track.sh` (2, S4). The scope excludes `knowledge-base/`, so this plan's own text does not satisfy or defeat the count (measured at planning: 19 in cutover + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 2 in track.sh; after S2 expect 2 in cutover and 2 in track.sh).
 - [ ] `grep -c 'openssl dgst -sha256 -hmac' scripts/cutover-inngest.sh` prints 2 (exactly the two held-back probe-arm sites, each carrying the D1 comment) and the 17 snippet copies are byte-identical; the `::add-mask::` line precedes the first `_bearer_curl HCLOUD_TOKEN` in the `backup)` arm; no `$(cat /tmp/backup-` in any `::error::` line.
 - [ ] The runbook row is split and ADR-241 carries the dated amendment naming the follow-up issue number; the five follow-up issues of Phase 10 exist (`gh issue view <N> --json state,title,milestone`).
-- [ ] PR body: first line names the web-platform release trigger and the absence of infra-path edits; `Ref #9597`, `Ref #7797`, `Closes #8767`; the baseline arithmetic; no plan/spec paths; no `*-soak-*` script names; the read-only smoke run URLs; the commit-per-blast-radius table.
+- [ ] PR body: first line names the web-platform release trigger and the absence of infra-path edits; `Ref #9597`, `Ref #7797`, `Closes #8767`; the baseline arithmetic; no plan/spec paths; no `*-soak-*` script names; the word "partial" next to `Closes #8767` with the open `op=backup` environment gap stated (the brief mandates `Closes`; the gap is real and a closed issue must not hide it); the residual of the two held-back cutover sites (same secret on `openssl` argv for milliseconds on a manual read-only dispatch, tracked with a date and an owner); which sweeper form shipped (launcher or documented `env -i`); the read-only smoke run URLs; the commit-per-blast-radius table.
 - [ ] Read-only smoke (Phase 9 step 8) succeeded: the Better Stack reader through one read-only workflow on the branch ref and a sweeper `DRY_RUN=1` dispatch.
 
 ### Post-merge (verified by outcome)
 
 - [ ] The release run for the merge commit succeeds (`gh run list --workflow web-platform-release.yml --branch main --event push --limit 5 --json conclusion,headSha`), and `/health` reports the merge's build.
 - [ ] No infra apply was triggered by the merge commit: `gh run list --workflow apply-web-platform-infra.yml --branch main --event push --limit 5 --json headSha --jq '.[].headSha[0:10]'` does not list the merge commit's first 10 characters (the `--event push` filter is required).
-- [ ] The first post-merge scheduled run of each converted surface is healthy (CPO condition 5): the daily follow-through sweeper (the marker check is a count, not a visual read: `gh issue view <N> --json comments --jq '[.comments[-1].body] | map(select(contains("SOLEUR_CREDENTIAL_REFUSED"))) | length'` is 0 for each of the four probes' trackers, since a refusal is also TRANSIENT), the community-monitor X fetch (Sentry monitor; force one via the `soleur:trigger-cron` skill if its event is allowlisted, since a green monitor can mean the cron was not due), and the next apply or a read-only dispatch that reads Better Stack. Any `SOLEUR_CREDENTIAL_REFUSED` line from a hosted run is a defect.
+- [ ] The first post-merge scheduled run of each converted surface is healthy (CPO condition 5): the daily follow-through sweeper (the marker check is a count, not a visual read: `gh issue view <N> --json comments --jq '[.comments[-1].body] | map(select(contains("SOLEUR_CREDENTIAL_REFUSED"))) | length'` is 0 for each of the four probes' trackers, since a refusal is also TRANSIENT), the community-monitor X fetch (MANDATORY gate: force one via the `soleur:trigger-cron` skill if its event is allowlisted; if it is not, the postmerge step waits for the next scheduled run and the work is not reported done before it; a green Sentry monitor alone can mean the cron was not due), and the next apply or a read-only dispatch that reads Better Stack. Any `SOLEUR_CREDENTIAL_REFUSED` line from a hosted run is a defect.
 - [ ] Re-armed open item 3: the first scheduled content-publisher run after this merge posts to Bluesky and X (or reports its normal no-post state); its fallback issue body carries no refusal marker.
 
 ## Observability
@@ -591,14 +624,14 @@ None. Checked 2026-10-08: `gh issue list --label code-review --state open` (200 
 liveness_signal:
   what: the repo-wide Rule E run stays green on main with baseline E equal to the live set (29 files / 62 sites after S2) and no S2 file ever re-enters it; the refusal marker is absent from hosted run output
   cadence: every CI run on push to main and on every PR (the lint suite and the sweep battery are required shards)
-  alert_target: a red required test shard on the PR or on main; for a hosted refusal, the Inngest cron monitor and the content-publisher fallback issue
+  alert_target: a red required test shard on the PR or on main. Hosted refusals are NOT claimed to be mirrored or paged: the marker extractor is wired only to the agent PostToolUse hook (MARKER_RE comment), so a hosted cron's captured stderr is visible only in its own run output and the content-publisher fallback issue body
   configured_in: scripts/test-all.sh (suites scripts/lint-shell-trace-credential-refusal, tests/scripts/argv-bearer-sweep, scripts/sweep-followthroughs) and .github/workflows/ci.yml
 error_reporting:
   destination: stderr of the refusing script (one fixed value-free marker line plus one human line naming the variable), the CI log, and for followthrough probes the tracker comment
   fail_loud: every refusal exits non-zero with the code of D4 (never 0; 2 where 1 is a different failure class); the lint exits 1 on any unlisted offender or changed count and 2 when it cannot evaluate
 failure_modes:
   - mode: a converted script refuses a valid credential (shape guard too strict, python3 or openssl missing where it runs)
-    detection: battery must-PASS rows with real credential shapes, the no-interpreter hosted canary, the Phase 0 image toolset and credential-shape measurements, and the read-only smoke dispatches; in production the marker line on stderr of the failing step (surface: GitHub Actions run log / tracker comment / hosted cron output)
+    detection: battery must-PASS rows with real credential shapes, the no-interpreter hosted canary, the Phase 0 image toolset and credential-shape measurements, and the read-only smoke dispatches; in production the marker line on stderr of the failing step (observability layer 6, `workflow run log` with the `::error::` annotation for CI and cutover; the tracker comment for sweeper probes, which is the only reader of that surface; layer 7 `cli-stdout-artifact` for the setup scripts an installed user runs, where the refusal writes nothing and is re-runnable, so the durable artifact is the committed battery row, not a log)
     alert_route: red PR checks before merge; post-merge, the red job or step, the cron monitor, and the first-run checks in Acceptance
   - mode: a persistent refusal keeps a followthrough probe TRANSIENT forever (same as a persistent 403 today)
     detection: the tracker comment carries the marker on every sweep; unchanged class, stated in D4
@@ -614,7 +647,7 @@ logs:
   retention: GitHub Actions default
 discoverability_test:
   command: python3 scripts/lint-shell-trace-credential-refusal.py scripts/betterstack-query.sh scripts/cutover-inngest.sh scripts/check-deploy-script-parity.sh
-  expected_output: OK:
+  expected_output: "OK:"
 ```
 
 (An explicit-path run bypasses the baselines, so it prints `OK:` only when the files are clean on their own; it ran in 0.6 s on two files during planning, well inside the 15 s cap. The repo-wide run took 5.3 s on the unmodified tree; Phase 1 re-times it after the arm lands.)
@@ -654,6 +687,7 @@ discoverability_test:
 | 1 | Move the shape guard after the curl call (or delete it) in any one converted script | RED: the hostile-value row sees a curl call or an INJECTED config line |
 | 2 | Put the key back on an argument in one of the 17 converted cutover copies (a `-hmac` spelling outside the two held-back sites) | RED: parity row (copies differ, `-hmac` operand present at a non-held-back site) |
 | 3 | Add one more inline copy that differs by one byte after the compliant ones | RED: the parity row is per-copy, not first-copy |
+| 3c | Run the plugin HMAC function under `set -a` with an env-recording `openssl` shim; add a here-string or heredoc over key-derived data to the lib | RED: a key-derived name in a child environment; the grep row on `<<<`/`<<` |
 | 3b | Run a script with `python3` absent from PATH (parity script and a probe, neither has `set -e`) | RED if an unsigned request is sent; expected: refusal marker, exit 2, zero curl calls |
 | 4 | Move `::add-mask::` after the first curl call, or print the body on non-201 | RED: backup-arm rows (mask not first; body canary in output) |
 | 5 | Make the recording `curl` shim stop recording stdin, or stop being auth-gated | RED: harness rows (`bearer-not-on-stdin`, stripped-copy reaches PASS) |
