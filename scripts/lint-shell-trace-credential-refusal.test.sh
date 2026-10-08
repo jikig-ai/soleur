@@ -957,13 +957,28 @@ e_row 'Rule E -u: `-K -` and `--config <(...)` carrying a `user` key pass' "$LIN
 e_row 'Rule E -u: `sort -u`, `docker run --user`, `git push -u`, `sudo -u`, `id -u`, curl `--url` / `--user-agent` / `-A`, `-o/tmp/out`, `-oupload.log`, `-cuser.jar`, and `sort -u | curl ...` are NOT read' "$LINT" "$FIX/outofscope-nonyurl-user-flags.sh" 0
 # PINNED GAP (xfail): `-U` / `--proxy-user` is a PROXY credential, a different flag; the match is case-sensitive.
 e_row 'Rule E -u xfail: `-U` / `--proxy-user` (a proxy credential) is NOT read (pinned blind spot)' "$LINT" "$FIX/outofscope-proxy-user.sh" 0
-# REAL-CURL ORACLE (review of #9753): the bundle alphabet in E_SHORT_NOARG is curl's own, so the lint is scored
-# against curl itself. For each spelling, curl is run with `--libcurl` against a closed loopback port (no request
-# is answered, the C source is still written) and CURLOPT_USERPWD in that source says whether curl took the
-# spelling as basic auth. The same text is then linted in a generated one-curl script, and the lint must agree
-# with curl: one Rule E message when curl set a user, none when it did not (`-o`/`-c`/`-e`/`-X`/`-A`/`-U` swallow the
-# rest of the word as THEIR value; `-U` is the PROXY user). The expected verdict is never written in this table.
-# The anti-vacuity floor counts both directions, so a table that loses its negatives (or its positives) reads RED.
+# REAL-CURL ORACLE (review of #9753, round 2): the bundle alphabet in E_SHORT_NOARG is curl's own, so the lint is scored
+# against curl itself over EVERY character of [0-9A-Za-z#:], not over a hand-picked subset (the first cut exercised 7 of
+# the 41 members, and dropping `k`, `n` or `#` from the alphabet stayed green). For each character C two spellings are
+# built, `-Cu "svc:$TOK"` (value in the NEXT word) and `-Cusvc:"$TOK"` (value glued), plus the fixed legacy table below
+# (long spellings and multi-letter bundles). Each spelling is run through curl with `--libcurl` against a closed loopback
+# port (nothing answers, the C source is still written) with a URL on EACH side of it, so `--next` is meaningful; the
+# CURLOPT_USERPWD count in that source says whether curl took the spelling as basic auth. The same text is then linted in a
+# generated one-curl script and the lint must agree with curl. The expected verdict is never written in this table: it is
+# one of
+#   pos       curl set USERPWD                                  -> the lint must report it
+#   neg       curl wrote its source and set no user             -> the lint must not (`-o`/`-c`/`-e`/`-X`/`-A`/`-U`/...
+#             swallow the rest of the word as THEIR value; `-U` is the PROXY user; `-:` is `--next` and ends the bundle)
+#   rejected  curl stopped with a non-zero rc and wrote no source (rc 2 for a refused command line, rc 26 for `-K`
+#             reading a config file that is not there) -> the lint must not (no request is made, so no credential
+#             is sent; the unknown digits 5 7 8 9 and every letter that wants a number land here)
+#   cut       curl wrote its source, set no user, and warned "is deprecated and has no function anymore" (-2 / -3: this curl
+#             ends the bundle there)                            -> CONSERVATIVE, see below
+#   terminal  curl exited 0 with no source (-V / -M print and quit before any request) -> CONSERVATIVE, see below
+# CONSERVATIVE classes are the one place the lint is allowed to disagree with this curl, and the disagreement is not
+# hand-listed: the lint must report the spelling exactly when `curl --help all` lists the short flag WITHOUT an operand
+# (the lint's own alphabet is that listing), so a letter that stops being a no-argument flag turns the row RED.
+# Every character class has an anti-vacuity floor, so a table that loses a whole direction reads RED.
 ORC="$WORK/orc"
 mkdir -p "$ORC" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
 ORC_SPELLINGS=(
@@ -989,45 +1004,205 @@ ORC_SPELLINGS=(
   '-U "svc:${SENTRY_AUTH_TOKEN}"'
   '--proxy-user "svc:${SENTRY_AUTH_TOKEN}"'
 )
-ORC_POS=0
-ORC_NEG=0
+ORC_LEGACY_N="${#ORC_SPELLINGS[@]}"
+ORC_CHARS=()
+for _c in {0..9} {A..Z} {a..z} '#' ':'; do
+  ORC_CHARS+=("$_c")
+  ORC_SPELLINGS+=("-${_c}u \"svc:\${SENTRY_AUTH_TOKEN}\"" "-${_c}usvc:\"\${SENTRY_AUTH_TOKEN}\"")
+done
+unset _c
+ORC_N_CHARS="${#ORC_CHARS[@]}"
+if [ "$ORC_N_CHARS" -lt 64 ] || [ "$ORC_LEGACY_N" -lt 21 ]; then
+  fail "Rule E -u oracle: the table covers $ORC_N_CHARS characters and $ORC_LEGACY_N legacy spellings, anti-vacuity floor is 64 and 21"
+else
+  pass "Rule E -u oracle: the table covers $ORC_N_CHARS characters ([0-9A-Za-z#:]) and $ORC_LEGACY_N legacy spellings (anti-vacuity floor 64 and 21)"
+fi
+# curl's own listing of short flags: ` -k, --insecure   ...` has no operand, ` -o, --output <file> ...` has one.
+curl --help all > "$ORC/help-all.txt" 2>/dev/null || true
+orc_help_noarg() { # <char> -> prints noarg | arg | absent
+  awk -v f="-$1," '$1 == f { print ($3 ~ /^</ ? "arg" : "noarg"); found = 1; exit } END { if (!found) print "absent" }' "$ORC/help-all.txt"
+}
+ORC_RUN_N=0
+ORC_CLASS="" ORC_UP=0 ORC_RC=0 ORC_WANT=0
+orc_classify() { # <spelling> -> sets ORC_CLASS / ORC_UP / ORC_RC / ORC_WANT from what real curl does with it
+  local sp="$1" d="$ORC/run" help="" n_depr=0 first="${1:0:2}"
+  ORC_RUN_N=$((ORC_RUN_N + 1))
+  rm -rf "$d"
+  mkdir -p "$d" || return 1
+  ( cd "$d" && SENTRY_AUTH_TOKEN=synthetic-oracle-value SINK_URL=http://127.0.0.1:9/ \
+      bash -c "curl --disable --noproxy '*' -m 1 --libcurl \"\$0\" \"\$SINK_URL\" $sp \"\$SINK_URL\"" "$d/o.c" >/dev/null 2>"$d/err" </dev/null )
+  ORC_RC=$?
+  ORC_UP=0
+  if [ -s "$d/o.c" ]; then
+    ORC_UP="$(grep -c 'CURLOPT_USERPWD' "$d/o.c" || true)"
+    n_depr="$(grep -c 'is deprecated and has no function anymore' "$d/err" || true)"
+    if [ "$ORC_UP" -ge 1 ]; then
+      ORC_CLASS=pos
+      ORC_WANT=1
+    elif [ "$n_depr" -ge 1 ]; then
+      ORC_CLASS="cut"
+    else
+      ORC_CLASS=neg
+      ORC_WANT=0
+    fi
+  elif [ "$ORC_RC" = "0" ]; then
+    ORC_CLASS=terminal
+  else
+    ORC_CLASS=rejected
+    ORC_WANT=0
+  fi
+  if [ "$ORC_CLASS" = "cut" ] || [ "$ORC_CLASS" = "terminal" ]; then
+    help="$(orc_help_noarg "${first:1:1}")"
+    if [ "$help" = "noarg" ]; then ORC_WANT=1; else ORC_WANT=0; fi
+  fi
+}
+ORC_POS=0 ORC_NEG=0 ORC_REJ=0 ORC_CUT=0 ORC_TERM=0
+ORC_WANT1_CHARS="" ORC_WANT0_CHARS=""
+ORC_ALL_SP=() ORC_ALL_WANT=()
+orc_gen() { # <outfile> <spelling...>: the preamble of the glued-bundle fixture (everything up to its first `fi`), then one curl per spelling
+  local out="$1" sp
+  shift
+  { sed -n '1,/^fi$/p' "$FIX/violation-argv-user-glued-bundle.sh"
+    for sp in "$@"; do
+      printf "curl --disable %s --noproxy '*' \"\$SINK_URL\" || true\n" "$sp"
+    done; } > "$out"
+}
 if ! command -v curl >/dev/null 2>&1; then
   fail "Rule E -u oracle: curl is not installed, the bundle alphabet cannot be checked against the real tool"
 else
+  _i=0
+  _spaced_want=""
   for _sp in "${ORC_SPELLINGS[@]}"; do
-    rm -f "$ORC/o.c"
-    ( cd "$ORC" && SENTRY_AUTH_TOKEN=synthetic-oracle-value SINK_URL=http://127.0.0.1:9/ \
-        bash -c "curl --disable $_sp --noproxy '*' -m 1 --libcurl \"\$0\" \"\$SINK_URL\"" "$ORC/o.c" >/dev/null 2>&1 )
-    if [ ! -s "$ORC/o.c" ]; then
-      fail "Rule E -u oracle: INSTRUMENT ERROR -- curl wrote no --libcurl source for: $_sp"
+    if ! orc_classify "$_sp"; then
+      fail "Rule E -u oracle: INSTRUMENT ERROR -- could not run curl for: $_sp"
+      _i=$((_i + 1))
       continue
     fi
-    _orc_user="$(grep -c 'CURLOPT_USERPWD' "$ORC/o.c" || true)"
-    if [ "$_orc_user" -ge 1 ]; then
-      _orc_want=1
-      ORC_POS=$((ORC_POS + 1))
-    else
-      _orc_want=0
-      ORC_NEG=$((ORC_NEG + 1))
+    case "$ORC_CLASS" in
+      pos) ORC_POS=$((ORC_POS + 1)) ;;
+      neg) ORC_NEG=$((ORC_NEG + 1)) ;;
+      rejected) ORC_REJ=$((ORC_REJ + 1)) ;;
+      cut) ORC_CUT=$((ORC_CUT + 1)) ;;
+      terminal) ORC_TERM=$((ORC_TERM + 1)) ;;
+    esac
+    ORC_ALL_SP+=("$_sp")
+    ORC_ALL_WANT+=("$ORC_WANT")
+    # The generated characters come after the legacy table, spaced spelling first: record the verdict per
+    # character, and require the glued spelling of the same character to agree with it.
+    if [ "$_i" -ge "$ORC_LEGACY_N" ]; then
+      _k=$((_i - ORC_LEGACY_N))
+      _c="${ORC_CHARS[$((_k / 2))]}"
+      if [ $((_k % 2)) -eq 0 ]; then
+        _spaced_want="$ORC_WANT"
+        if [ "$ORC_WANT" = "1" ]; then ORC_WANT1_CHARS+="$_c"; else ORC_WANT0_CHARS+="$_c"; fi
+      elif [ "$_spaced_want" != "$ORC_WANT" ]; then
+        fail "Rule E -u oracle: curl disagrees with itself on \`-${_c}u\`: spaced spelling wants $_spaced_want, glued spelling wants $ORC_WANT"
+      fi
     fi
-    # The generated script reuses the preamble of the glued-bundle fixture (everything above its first comment
-    # about the compliant first member), then ONE curl: the spelling goes right after `--disable`.
-    { sed -n '1,/^fi$/p' "$FIX/violation-argv-user-glued-bundle.sh"
-      printf "curl --disable %s --noproxy '*' \"\$SINK_URL\" || true\n" "$_sp"; } > "$ORC/gen.sh"
-    e_row "Rule E -u oracle: \`$_sp\` -- real curl says USERPWD x$_orc_user, the lint reports $_orc_want" "$LINT" "$ORC/gen.sh" "$_orc_want"
+    _i=$((_i + 1))
+    orc_gen "$ORC/gen.sh" "$_sp"
+    e_row "Rule E -u oracle [$ORC_CLASS]: \`$_sp\` -- real curl says USERPWD x$ORC_UP (rc=$ORC_RC), the lint reports $ORC_WANT" "$LINT" "$ORC/gen.sh" "$ORC_WANT"
   done
-  if [ "$ORC_POS" -lt 9 ]; then
-    fail "Rule E -u oracle: curl classed only $ORC_POS spelling(s) as basic auth, anti-vacuity floor is 9"
+  unset _sp _i _k _c _spaced_want
+  # Measured on curl 8.22.0: 65 / 54 / 22 / cut 4 + terminal 4. The positive floor counts the conservative spellings
+  # with the positives, because which of `pos` / `cut` / `terminal` a deprecated or print-and-quit flag lands in
+  # is a property of the curl build (an older curl reads the `u` behind `-2`), not of the lint.
+  if [ $((ORC_POS + ORC_CUT + ORC_TERM)) -lt 73 ]; then
+    fail "Rule E -u oracle: curl took only $((ORC_POS + ORC_CUT + ORC_TERM)) spelling(s) as a no-argument flag followed by -u, anti-vacuity floor is 73"
   else
-    pass "Rule E -u oracle: curl classed $ORC_POS spelling(s) as basic auth (anti-vacuity floor 9)"
+    pass "Rule E -u oracle: curl took $ORC_POS spelling(s) as basic auth and $((ORC_CUT + ORC_TERM)) more as conservative no-argument flags (anti-vacuity floor 73 together)"
   fi
-  if [ "$ORC_NEG" -lt 12 ]; then
-    fail "Rule E -u oracle: curl classed only $ORC_NEG spelling(s) as NOT basic auth, anti-vacuity floor is 12"
+  if [ "$ORC_NEG" -lt 54 ]; then
+    fail "Rule E -u oracle: curl classed only $ORC_NEG spelling(s) as NOT basic auth, anti-vacuity floor is 54"
   else
-    pass "Rule E -u oracle: curl classed $ORC_NEG spelling(s) as NOT basic auth (anti-vacuity floor 12)"
+    pass "Rule E -u oracle: curl classed $ORC_NEG spelling(s) as NOT basic auth (anti-vacuity floor 54)"
+  fi
+  if [ "$ORC_REJ" -lt 20 ]; then
+    fail "Rule E -u oracle: curl stopped before a request for only $ORC_REJ spelling(s), anti-vacuity floor is 20"
+  else
+    pass "Rule E -u oracle: curl stopped before any request for $ORC_REJ spelling(s) (anti-vacuity floor 20)"
+  fi
+  if [ $((ORC_CUT + ORC_TERM)) -lt 1 ]; then
+    fail "Rule E -u oracle: no spelling landed in a conservative class (cut=$ORC_CUT terminal=$ORC_TERM), so the curl flag-listing tie is untested, anti-vacuity floor is 1"
+  else
+    pass "Rule E -u oracle: $((ORC_CUT + ORC_TERM)) spelling(s) in the conservative classes (cut=$ORC_CUT terminal=$ORC_TERM), each tied to curl's own flag listing (anti-vacuity floor 1)"
+  fi
+
+  # THE ALPHABET ITSELF, derived rather than compared by eye: the characters curl says may precede the `u` in a
+  # bundle (every verdict-1 character except `u`, which is the flag itself and is matched by the `u` in the pattern)
+  # must be exactly the set the lint declares, as a SET (the lint writes 0-4 as a range).
+  _derived="$(printf '%s' "$ORC_WANT1_CHARS" | tr -d 'u' | fold -w1 | LC_ALL=C sort | tr -d '\n')"
+  _declared="$(python3 -I -c '
+import re, sys
+m = re.search(r"^E_SHORT_NOARG = r\"\[([^\"]*)\]\"$", open(sys.argv[1]).read(), re.M)
+out = set()
+body = m.group(1)
+i = 0
+while i < len(body):
+    if i + 2 < len(body) and body[i + 1] == "-":
+        out.update(chr(c) for c in range(ord(body[i]), ord(body[i + 2]) + 1))
+        i += 3
+    else:
+        out.add(body[i])
+        i += 1
+sys.stdout.write("".join(sorted(out)))
+' "$LINT")"
+  if [ -n "$_derived" ] && [ "$_derived" = "$_declared" ]; then
+    pass "Rule E -u oracle: the lint's E_SHORT_NOARG is exactly the ${#_derived} characters real curl takes as no-argument flags ($_derived)"
+  else
+    fail "Rule E -u oracle: E_SHORT_NOARG is '$_declared' but real curl says '$_derived'"
+  fi
+
+  # MUTATION PROOF, one character at a time. Each row rebuilds E_SHORT_NOARG in a COPY of the lint as an explicit
+  # class, asserts the rebuilt copy differs from the lint's own line (the mutation LANDED), and scores the copy on
+  # the generated spellings of that ONE character: dropping a member must lose both of its spellings, adding a
+  # non-member must find both. The unmutated rebuild is the CONTROL and must be green on the whole table first.
+  orc_alpha_copy() { # <out.py> <explicit class chars>
+    sed -E "s/^E_SHORT_NOARG = r\"\[[^\"]*\]\"\$/E_SHORT_NOARG = r\"[$2]\"/" "$LINT" > "$1"
+  }
+  _classchars="$_derived"
+  orc_alpha_copy "$WORK/alpha-control.py" "$_classchars"
+  _want_all=0
+  for _w in "${ORC_ALL_WANT[@]}"; do _want_all=$((_want_all + _w)); done
+  orc_gen "$ORC/gen-all.sh" "${ORC_ALL_SP[@]}"
+  e_row "Rule E -u oracle control: the WHOLE table linted at once (${#ORC_ALL_SP[@]} spellings) reports exactly the $_want_all curl-positive ones" "$LINT" "$ORC/gen-all.sh" "$_want_all"
+  e_row "Rule E -u oracle control: the explicit rebuild of the alphabet is verdict-neutral on the whole table (mutation control)" "$WORK/alpha-control.py" "$ORC/gen-all.sh" "$_want_all"
+  ORC_MUT_DROP=0 ORC_MUT_ADD=0 ORC_MUT_EQUIV=0
+  for _c in $(printf '%s' "$ORC_WANT1_CHARS" | tr -d 'u' | fold -w1); do
+    orc_alpha_copy "$WORK/alpha-mut.py" "${_derived//"$_c"/}"
+    if cmp -s "$WORK/alpha-control.py" "$WORK/alpha-mut.py"; then
+      fail "Rule E -u oracle mutant: dropping \`$_c\` did not land"
+      continue
+    fi
+    orc_gen "$ORC/gen-one.sh" "-${_c}u \"svc:\${SENTRY_AUTH_TOKEN}\"" "-${_c}usvc:\"\${SENTRY_AUTH_TOKEN}\""
+    e_row "Rule E -u oracle mutant: \`$_c\` dropped from the alphabet -- \`-${_c}u\` and \`-${_c}uU:P\` go unseen" "$WORK/alpha-mut.py" "$ORC/gen-one.sh" 0
+    ORC_MUT_DROP=$((ORC_MUT_DROP + 1))
+  done
+  for _c in $(printf '%s' "$ORC_WANT0_CHARS" | fold -w1); do
+    orc_alpha_copy "$WORK/alpha-mut.py" "${_derived}${_c}"
+    if cmp -s "$WORK/alpha-control.py" "$WORK/alpha-mut.py"; then
+      fail "Rule E -u oracle mutant: adding \`$_c\` did not land"
+      continue
+    fi
+    orc_gen "$ORC/gen-one.sh" "-${_c}u \"svc:\${SENTRY_AUTH_TOKEN}\"" "-${_c}usvc:\"\${SENTRY_AUTH_TOKEN}\""
+    if [ "$_c" = "H" ]; then
+      # EQUIVALENT MUTANT, recorded and NOT counted as caught: `-H` is consumed by the header arm of `_e_scan`
+      # (E_HDR_FLAG / E_HDR_ATTACHED) before either `-u` arm is consulted, so `-Hu "svc:$T"` is a header
+      # value `u` whatever the alphabet says. The row pins that the widened copy reads the same as the lint.
+      e_row "Rule E -u oracle EQUIVALENT mutant (not a kill): \`H\` added to the alphabet reads the same -- the header arm takes \`-Hu\` first" "$WORK/alpha-mut.py" "$ORC/gen-one.sh" 0
+      ORC_MUT_EQUIV=$((ORC_MUT_EQUIV + 1))
+      continue
+    fi
+    e_row "Rule E -u oracle mutant: \`$_c\` added to the alphabet -- \`-${_c}u\` and \`-${_c}uU:P\` (not basic auth in curl) are reported" "$WORK/alpha-mut.py" "$ORC/gen-one.sh" 2
+    ORC_MUT_ADD=$((ORC_MUT_ADD + 1))
+  done
+  unset _c _w _want_all _classchars _derived _declared
+  if [ "$ORC_MUT_DROP" -lt 31 ] || [ "$ORC_MUT_ADD" -lt 31 ] || [ "$ORC_MUT_EQUIV" -lt 1 ]; then
+    fail "Rule E -u oracle: only $ORC_MUT_DROP drop mutants, $ORC_MUT_ADD add mutants and $ORC_MUT_EQUIV equivalent mutant(s) ran, anti-vacuity floor is 31, 31 and 1"
+  else
+    pass "Rule E -u oracle: $ORC_MUT_DROP drop mutants and $ORC_MUT_ADD add mutants killed, one per alphabet character, plus $ORC_MUT_EQUIV recorded equivalent mutant (anti-vacuity floor 31, 31 and 1)"
   fi
 fi
-unset _sp _orc_user _orc_want
 
 # --- Rule E widened (#9597 S1, D1): the YAML arm -----------------------------------
 # `.github/**` YAML is scanned by extracting every `run` string value with PyYAML (so a
@@ -1408,6 +1583,64 @@ if ! cmp -s "$BASE_E_FILE" "$WORK/base-nan.txt"; then
 else
   fail "Rule E census ceiling M-nan: the non-integer count did not land"
 fi
+# (7b) a CEILING that is not an integer, and (7c) a baseline row with an EMPTY count (a trailing tab, and no tab at all).
+# Each is a different conjunct of the guard clause in census_ceiling_check: `[ -n "${cl//[0-9]/}" ]` and `[ -z "$bn" ]`.
+# Both inputs fail OPEN without their conjunct, because `[ "$bn" -gt "$cl" ]` on a non-integer is an integer-expression
+# error that `if` reads as false = "not above the ceiling". The (7) row above covers only the `${bn//[0-9]/}` conjunct.
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$CEIL_FILE" > "$WORK/ceil-nan.tsv"
+if ! cmp -s "$CEIL_FILE" "$WORK/ceil-nan.tsv"; then
+  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-nan.tsv" 2>/dev/null
+  [ "$CC_BAD" = "1" ] \
+    && pass "Rule E census ceiling M-nan-ceiling: a non-integer CEILING reads as a defect (bad=$CC_BAD)" \
+    || fail "Rule E census ceiling M-nan-ceiling: a non-integer ceiling should give bad=1, got bad=$CC_BAD"
+else
+  fail "Rule E census ceiling M-nan-ceiling: the non-integer ceiling did not land"
+fi
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = ""; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-empty-tab.txt"
+awk -F'\t' '/^#/ || NF < 2 { print; next } !d { print $1; d = 1; next } { print }' "$BASE_E_FILE" > "$WORK/base-empty-bare.txt"
+for _v in tab bare; do
+  if ! cmp -s "$BASE_E_FILE" "$WORK/base-empty-$_v.txt"; then
+    census_ceiling_check "$WORK/base-empty-$_v.txt" "$CEIL_FILE" 2>/dev/null
+    [ "$CC_BAD" = "1" ] \
+      && pass "Rule E census ceiling M-empty-count ($_v): a baseline row with an EMPTY count reads as a defect (bad=$CC_BAD)" \
+      || fail "Rule E census ceiling M-empty-count ($_v): an empty baseline count should give bad=1, got bad=$CC_BAD"
+  else
+    fail "Rule E census ceiling M-empty-count ($_v): the empty count did not land"
+  fi
+done
+unset _v
+# (7d) MUTATION PROOF of the three guard conjuncts, against the function's own text: delete one conjunct, redefine the
+# function from the mutated text, and require the matching input to slip through (bad=0, so rows (7)/(7b)/(7c) would
+# be RED), then restore the original definition. The control is the unmutated function on the same input (bad=1),
+# asserted first so a mutant that "slips through" is measured against a function that did catch it.
+CC_SRC="$(sed -n '/^census_ceiling_check() {/,/^}/p' "${BASH_SOURCE[0]}")"
+cc_mutant_row() { # <label> <perl-expr> <baseline> <ceiling>
+  local label="$1" expr="$2" b="$3" c="$4" mutated ctl got
+  census_ceiling_check "$b" "$c" 2>/dev/null
+  ctl="$CC_BAD"
+  mutated="$(printf '%s\n' "$CC_SRC" | perl -0pe "$expr")"
+  if [ -z "$CC_SRC" ] || [ "$mutated" = "$CC_SRC" ]; then
+    fail "$label: the mutation did NOT land in the function text"
+    return
+  fi
+  eval "$mutated"
+  census_ceiling_check "$b" "$c" 2>/dev/null
+  got="$CC_BAD"
+  eval "$CC_SRC"
+  if [ "$ctl" = "1" ] && [ "$got" = "0" ]; then
+    pass "$label: the unmutated check reads bad=$ctl, the mutant reads bad=$got (the input slips through, so the row above would be RED)"
+  else
+    fail "$label: expected control bad=1 and mutant bad=0, got control bad=$ctl mutant bad=$got"
+  fi
+}
+cc_mutant_row 'Rule E census ceiling U-bn: the `${bn//[0-9]/}` conjunct deleted' \
+  's/\[ -n "\$\{bn\/\/\[0-9\]\/\}" \] \|\| //' "$WORK/base-nan.txt" "$CEIL_FILE"
+cc_mutant_row 'Rule E census ceiling U-cl: the `${cl//[0-9]/}` conjunct deleted' \
+  's/ \|\| \[ -n "\$\{cl\/\/\[0-9\]\/\}" \]//' "$BASE_E_FILE" "$WORK/ceil-nan.tsv"
+cc_mutant_row 'Rule E census ceiling U-empty: the `-z "$bn"` conjunct deleted (empty count after a tab)' \
+  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-tab.txt" "$CEIL_FILE"
+cc_mutant_row 'Rule E census ceiling U-empty: the `-z "$bn"` conjunct deleted (count column absent)' \
+  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-bare.txt" "$CEIL_FILE"
 # (8) CONTROL: the real pair reads clean on all three counters, or rows (5)-(7) prove nothing.
 census_ceiling_check "$BASE_E_FILE" "$CEIL_FILE" 2>/dev/null
 [ "$CC_DUP" = "0" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
@@ -2455,10 +2688,10 @@ unset SKIPSH_PY SIBLING _na _nb
 # reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
 # `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
 # can see and mutation-test them.
-if [ "$E_ROWS" -lt 136 ]; then
-  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 136"
+if [ "$E_ROWS" -lt 329 ]; then
+  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 329"
 else
-  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 136)"
+  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 329)"
 fi
 if [ "$Y_ROWS" -lt 48 ]; then
   fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 48"
@@ -2532,13 +2765,16 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 430 (review of #9753, WP3: the glued-bundle and wrapper-second-credential fixtures, the real-curl oracle
+# Re-measured at 635 (review of #9753 round 2, WPc: the real-curl oracle over EVERY character of [0-9A-Za-z#:] in the spaced and
+# glued spelling, its derived-alphabet equality row, the whole-table control and the per-character drop/add mutants, and the
+# census non-integer-ceiling / empty-count rows with their conjunct mutants, 205 assertions on top of the 430 below; the Rule E
+# fixture-row floor above moved from a stale 136 to the measured 329). Earlier: 430 (review of #9753, WP3: the glued-bundle and wrapper-second-credential fixtures, the real-curl oracle
 # table, the alphabet mutants U1e/U2c/U2d, U10, and the census duplicate/non-integer rows, 35 assertions on top of the 395 below).
 # Earlier: 395 (#9597 S2: the -u/--user arm rows, mutation rows and repo-wide sandbox rows, 32 assertions on top of the 363 below). Earlier: 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=430
+MIN_ASSERTIONS=635
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

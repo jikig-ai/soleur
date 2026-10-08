@@ -1206,9 +1206,10 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # production apply, so they are an S4/S5-class change with operator notice and are tracked there;
 # the other hits of the pattern are the `$HBODY` response-body variable of the Hetzner helpers,
 # not a heartbeat; a later conversion is `url = "..."` on the stdin config behind a shape guard); `doppler --token`; `jq --arg`
-# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (25 production sites in 14 files, measured
-# 2026-10-08 with `git grep -nE 'dgst .*-hmac'` minus Markdown, `*.test.sh`, fixtures, `tests/` and
-# knowledge-base/ and this file's own comment lines); the key is on openssl's argv. A stdin or env form
+# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (24 production sites in 13 files, measured
+# 2026-10-08 with `git grep -nE 'dgst .*-hmac'` minus Markdown, `*.test.sh`, fixtures, `tests/`,
+# knowledge-base/ and this file, and minus the lines whose first non-space character is `#`: the raw
+# command prints 25 hits, the 25th being a prose comment in kb-drift-walker.yml); the key is on openssl's argv. A stdin or env form
 # EXISTS now (the converted signers in scripts/cutover-inngest.sh, the community skill's
 # lib/hmac-sha1-b64.sh and the Python signers keep the key off argv) and is not detected here. TWO sites in
 # scripts/cutover-inngest.sh (the registry-probe and doublefire-probe signatures, lines 1372 and 1546 when
@@ -1336,7 +1337,13 @@ E_HDR_FLAG = re.compile(r"^(?:--header|-[A-Za-z]*H)$")
 # a f g i j k l n p q s v, plus `#` (--progress-bar). `u` is inside a bundle only when every letter before
 # it is one of these: a letter that takes an argument (`o`, `c`, `e`, `X`, `A`, `H`, `d`, ...) swallows the
 # REST of the word as its value, so `-oupload.log` and `-cuser.jar` are an output file and a cookie jar,
-# not a `-u`. The suite pins the alphabet against the real curl (`--libcurl` shows CURLOPT_USERPWD).
+# not a `-u`. The suite pins the alphabet against the real curl (`--libcurl` shows CURLOPT_USERPWD) over
+# EVERY character of [0-9A-Za-z#:] in both the spaced (`-Xu "U:P"`) and glued (`-XuU:P`) spelling. Measured
+# on 8.22.0, four members are CONSERVATIVE on purpose: `-V` and `-M` print and exit before any request, and
+# `-2` / `-3` (deprecated SSLv2/3) end the bundle in this curl so the `u` behind them is not seen -- an older
+# curl may still read it. In each case the credential is not sent by THIS curl, and a lint that reads
+# the spelling as a `-u` can only cost a baseline entry, never hide a leak. `-:` (`--next`) is the opposite
+# case and is absent: curl also ends the bundle there, so `-:u` sets no user.
 E_SHORT_NOARG = r"[0-46BGIJLMNORSVZafgijklnpqsv#]"
 E_USER_FLAG = re.compile(r"^(?:--user|-" + E_SHORT_NOARG + r"*u)$")
 E_USER_ATTACHED = re.compile(r"^(?:-" + E_SHORT_NOARG + r"*u(?=.)|--user=)")
