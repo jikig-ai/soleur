@@ -374,9 +374,10 @@ if lagging:
           % (", ".join(shown), more))
     print("  A LEAD, NOT A VERDICT: dropped_rows above can remove a completion while its start")
     print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
-    print("  the zot#4235 signature (gc completing for one repo and never another) was the standing")
-    print("  suspect; #4236, filed under that issue, ships in v2.1.21+, so a recurrence on v2.1.22 is")
-    print("  new evidence rather than the known bug;")
+    print("  the one-repo-never-completes signature (gc completing for one repo and never another,")
+    print("  attributed to zot#4235 whose text does not describe it) was the standing suspect; the")
+    print("  #4236 fix for that issue ships in v2.1.21+, and whether it covers this signature is")
+    print("  what this probe measures, so a recurrence on v2.1.22 is a result to report;")
     print("  .uploads/ staging is the other.")
 elif sum(starts.values()) == 0:
     # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape
