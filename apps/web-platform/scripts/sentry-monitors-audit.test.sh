@@ -1438,6 +1438,105 @@ else
   cat "$TMP19N/stderr.txt" >&2 || true
 fi
 rm -rf "$TMP19N"
+
+# T19p — a cron detector with no workflow whose monitor is a key of
+# `cron_monitor_alert_unrouted` in the SAME tf root is declared pending (two-PR
+# rule): listed in the report, not warned. Any other unrouted detector warns.
+# Labels differ from names (m_one -> m-one; x_job -> m-two-b) so a key resolves
+# via its resource block, and m-two is a prefix of m-two-b to pin whole-line matching.
+T19P_DET='[{"id":"1","name":"m-one","type":"monitor_check_in_failure","workflowIds":[]},{"id":"2","name":"m-two","type":"monitor_check_in_failure","workflowIds":[]},{"id":"3","name":"m-three","type":"monitor_check_in_failure","workflowIds":["9001"]}]'
+# $1 dir, $2 = body lines inside the map; T19P_ALERTS / T19P_DET_X override the file / detectors.
+t19p() {
+  mkdir -p "$1/tf"; local r m
+  for r in m_one:m-one m_two:m-two m_three:m-three x_job:m-two-b; do printf 'resource "sentry_cron_monitor" "%s" {\n  name = "%s"\n}\n' "${r%%:*}" "${r#*:}"; done > "$1/tf/monitors.tf"
+  if [[ -n "${T19P_ALERTS:-}" ]]; then printf '%s\n' "$T19P_ALERTS"; else printf 'locals {\n  cron_monitor_alert_unrouted = {\n%s\n  }\n}\n' "$2"; fi > "$1/tf/alerts.tf"
+  m=; for r in m-one m-two m-three m-two-b; do m+="{\"slug\":\"$r\",\"name\":\"M\",\"type\":\"cron_job\",\"config\":{\"schedule\":\"0 * * * *\"}},"; done
+  printf '[%s]' "${m%,}" > "$1/monitors.json"; printf '%s' "${T19P_DET_X:-$T19P_DET}" > "$1/detectors.json"
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform SENTRY_API_HOST=de.sentry.io \
+    SENTRY_FIXTURE_MONITORS="$1/monitors.json" SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+    SENTRY_FIXTURE_DETECTORS="$1/detectors.json" SENTRY_TF_DIR="$1/tf" AUDIT_OUT_DIR="$1" bash "$SCRIPT" >/dev/null 2>"$1/stderr.txt"
+  report=$(ls "$1"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+}
+
+echo "T19p: pending m-one (tab/space-mangled key, trailing comment) is reported not warned; m-two warns alone"
+TMP19P=$(mktemp -d); t19p "$TMP19P" $'\t\tm_one\t=   "pending (#1)"   # why'; w19p=$(t19_warning "$TMP19P")
+if grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-two' <<<"$w19p" && ! grep -qw 'm-one' <<<"$w19p" \
+   && grep -qE '\*\*1\*\* of \*\*3\*\* cron detectors' "$report" \
+   && grep -qE '\*\*1\*\* more declared pending in `cron_monitor_alert_unrouted`' "$report" \
+   && grep -qE '^- `m-one` — declared pending' "$report" && grep -qE '^- `m-two` — bound to no workflow' "$report" \
+   && grep -qF 'and are not declared pending' "$report" && grep -qF 'declare it pending in cron_monitor_alert_unrouted' <<<"$w19p"; then
+  pass "warning names m-two only; report lists m-one as declared pending"
+else fail "partition wrong: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p2: both declared pending -> no unrouted warning part and the clean verdict stands"
+TMP19P=$(mktemp -d); t19p "$TMP19P" $'    m_one = "p (#1)"\n    m_two = "p (#2)"'; w19p=$(t19_warning "$TMP19P")
+if ! grep -q 'bound to no workflow' <<<"$w19p" && grep -qE '\*\*0\*\* of \*\*3\*\*' "$report" \
+   && grep -qE '\*\*2\*\* more declared pending' "$report" && grep -q 'No orphans detected' "$report"; then
+  pass "all-pending: no unrouted warning, 2 pending reported, no orphans"
+else fail "all-pending run warned or lost its pending line: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p3: x_job resolves to m-two-b (pending); its prefix m-two and an unresolved detector still warn"
+TMP19P=$(mktemp -d)
+T19P_DET_X='[{"id":"2","name":"m-two","type":"monitor_check_in_failure","workflowIds":[]},{"id":"4","name":"m-two-b","type":"monitor_check_in_failure","workflowIds":[]},{"id":"9","name":null,"type":"monitor_check_in_failure","workflowIds":[]}]' t19p "$TMP19P" '    x_job = "p (#1)"'
+w19p=$(t19_warning "$TMP19P")
+if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qF '<unresolved detector id=9>' <<<"$w19p" \
+   && grep -qw 'm-two' <<<"$w19p" && ! grep -qF 'm-two-b' <<<"$w19p" && grep -qE '^- `m-two-b` — declared pending' "$report"; then
+  pass "label->name join and whole-line match hold; a placeholder warns beside a pending key"
+else fail "x_job/m-two-b partition wrong: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+# Fail toward noise: each leaves m-one UNDECLARED, so both detectors warn and nothing is reported pending.
+for v in '    # m_one = "p (#1)"' '    m_won = "p (#1)"' '' $'    /*\n    m_one = "p (#1)"\n    */'; do
+  echo "T19p4: [${v//$'\n'/ }] leaves m-one undeclared"
+  TMP19P=$(mktemp -d); t19p "$TMP19P" "$v"; w19p=$(t19_warning "$TMP19P")
+  if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-one' <<<"$w19p" && ! grep -q 'more declared pending' "$report"; then pass "m-one and m-two both warn"
+  else fail "suppressed a warning: [${w19p}]"; fi
+  rm -rf "$TMP19P"
+done
+
+# Parser shapes (alerts.tf | expected warning count | slug that must NOT be warned): an opener with a trailing
+# comment, a commented-out opener, a populated map before a sibling map, a multi-line header comment.
+for e in $'locals {\n  cron_monitor_alert_unrouted = { # note\n    m_one = "p (#1)"\n  }\n}|1|m-one' \
+         $'locals {\n  # cron_monitor_alert_unrouted = {\n  m_one = "p (#1)"\n}|2|m-three' \
+         $'locals {\n  cron_monitor_alert_unrouted = {\n    m_two = "p (#2)"\n  }\n  other = {\n    m_one = "x"\n  }\n}|1|m-two' \
+         $'/*\n header\n*/\nlocals {\n  cron_monitor_alert_unrouted = {\n    m_one = "p (#1)"\n  }\n}|1|m-one'; do
+  ab=${e##*|}; rest=${e%|*}; n=${rest##*|}; al=${rest%|*}
+  echo "T19p4b: parser shape expecting $n warning(s), $ab not warned"
+  TMP19P=$(mktemp -d); T19P_ALERTS="$al" t19p "$TMP19P" ''; w19p=$(t19_warning "$TMP19P")
+  if grep -qE "^::warning::.* $n cron detector\\(s\\) bound to no workflow" <<<"$w19p" && ! grep -qw -- "$ab" <<<"$w19p"; then pass "parser shape holds"
+  else fail "parser shape wrong (want $n, $ab not warned): [${w19p}]"; fi
+  rm -rf "$TMP19P"
+done
+
+echo "T19p5: an empty one-line map does not leak into a sibling map"
+TMP19P=$(mktemp -d); T19P_ALERTS=$'locals {\n  cron_monitor_alert_unrouted = {}\n  other = {\n    m_one = "x"\n  }\n}' t19p "$TMP19P" ''; w19p=$(t19_warning "$TMP19P")
+if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-one' <<<"$w19p"; then pass "sibling map key m_one is not read as pending"
+else fail "empty map leaked into a sibling: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p6: without SENTRY_TF_DIR the real map is NOT consulted (fixture run stays all-drift)"
+TMP19P=$(mktemp -d)
+printf '%s' '[{"slug":"scheduled-bot-pr-reaper","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
+printf '%s' '[{"id":"1","name":"scheduled-bot-pr-reaper","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
+t19_run "$TMP19P"; w19p=$(t19_warning "$TMP19P")
+# Precondition: the real map still holds this key; once it is routed, repoint this row at another declared key.
+if grep -q '^[[:space:]]*scheduled_bot_pr_reaper[[:space:]]*=' "$SCRIPT_DIR/../infra/sentry/cron-monitor-alerts.tf" \
+   && grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -q 'scheduled-bot-pr-reaper' <<<"$w19p"; then pass "no coherent tf half: partition skipped"
+else fail "partition ran without a coherent tf half, or the real map lost scheduled_bot_pr_reaper: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p7: the REAL infra/sentry tree resolves both declared-pending monitors (a /* inside a # comment must not open a block)"
+TMP19P=$(mktemp -d)
+printf '%s' '[{"slug":"scheduled-bot-pr-reaper","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}},{"slug":"workspaces-luks-verify-web2","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
+printf '%s' '[{"id":"1","name":"scheduled-bot-pr-reaper","type":"monitor_check_in_failure","workflowIds":[]},{"id":"2","name":"workspaces-luks-verify-web2","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform SENTRY_API_HOST=de.sentry.io SENTRY_FIXTURE_MONITORS="$TMP19P/monitors.json" \
+  SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" SENTRY_FIXTURE_DETECTORS="$TMP19P/detectors.json" SENTRY_TF_DIR="$SCRIPT_DIR/../infra/sentry" AUDIT_OUT_DIR="$TMP19P" bash "$SCRIPT" >/dev/null 2>"$TMP19P/stderr.txt"
+report=$(ls "$TMP19P"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if ! grep -q 'bound to no workflow' <(t19_warning "$TMP19P") && grep -qE '\*\*2\*\* more declared pending' "$report"; then pass "real tree: both monitors declared pending, no routing warning"
+else fail "real tree did not resolve the declared-pending monitors: [$(t19_warning "$TMP19P")]"; fi
+rm -rf "$TMP19P"
 rm -f "$T19_WORKFLOWS"
 
 # ------------------------------------------------------------------------
@@ -2441,8 +2540,8 @@ if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
   exit 1
 fi
 PASS=$_h_p; FAIL=$_h_f
-if [[ $((PASS + FAIL)) -lt 65 ]]; then
-  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 65.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 82 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 82.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 
