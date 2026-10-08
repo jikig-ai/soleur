@@ -76,3 +76,18 @@ data lines.
 - A failure message is code too. The refusal check's message named an unbounded producer in backticks inside double quotes, so the
   check ran `yes` the moment it FAILED (never while green). A mutation battery turned that into a 14 GB bash and took the host's memory.
   Run any battery under `ulimit -v`, one mutant at a time, and grep the failure strings you add for unescaped backticks and `$(`.
+
+## Session Errors
+
+Triage (recurring = fixed inline here or tracked; one-off = noted only):
+
+1. **`\b` after an alternation of `}`/`)`/words made the group-closer refusal dead for two of its four heads** (introduced by fix round 1, found by two seats) — Recovery: `(?!\w)` plus one refusal fixture row per head and a bounded-group twin. Prevention: one fixture row per alternative of any alternation; a pass on one alternative says nothing about the rest. Recurring, fixed inline.
+2. **A failure message quoted a command in backticks inside double quotes, so a FAILING check ran `yes` and bash buffered its endless output (14 GB in 16 s); the mutation battery took the host's memory twice** — Recovery: backticks removed, grep for unescaped backticks and `$(` in every `sweep_probe_fail+=(` string, battery rerun under `ulimit -v 6000000`, one mutant at a time. Prevention: batteries run under a memory cap and a watchdog; a failure string is code. Recurring, fixed inline.
+3. **An in-place mutation battery edited the tracked codemod with no restore guard, so an interrupted session left it mutated** — Recovery: backup copy plus `cmp` before and after, `try/finally` restore. Prevention: mutate a copy, or restore in a `finally` and `cmp` against a kept copy before trusting the tree. Recurring, fixed in the battery.
+4. **A process search by full command line, a foreground sleep, and a duplicate Monitor were each refused or redundant** — Recovery: search by process name plus `/proc/<pid>/cwd`, a Monitor until-loop, `TaskStop` on the duplicate. One-off.
+5. **A `cd /var/tmp` inside a command reset the shell's working directory to the main checkout for later calls** — Recovery: absolute worktree paths on every command. One-off.
+6. **A verification seat found the earlier fix-round reports missing from the scratchpad** — Recovery: judged round 1 from its commit message and diff. Prevention: copy seat reports a later seat must read into the spec directory. One-off.
+7. **The closing text promised an action and the stop hook rejected it** — Recovery: did the action in the same turn. One-off.
+8. **Forwarded from the plan phase:** two research-agent claims were wrong (`lint-orphan-test-suites` is advisory; `grep -c` exits 1 on a zero count like `grep -q`), the plan-time write guard blocked a draft once on a literal phrase, and a prototype pair run was stopped at 64 of 162 on a contended host. All recorded in the plan. One-off.
+
+No `AGENTS.md`, skill or hook edit comes out of this: `plugins/soleur/skills/work/SKILL.md` sits about 60 bytes under its ceiling, and the lessons above are domain-scoped to test authoring, so they live here.
