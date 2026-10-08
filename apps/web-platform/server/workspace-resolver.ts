@@ -828,3 +828,33 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
   }
   return join(getWorkspaceWorktreeRoot(), workspaceId);
 }
+
+/**
+ * Tenant-deny roots for the agent sandbox (#9725): every root under which
+ * workspace working trees may live, deduped, constant per dispatch (no
+ * readdir enumeration — the parent tmpfs masks present AND future siblings).
+ *
+ * `workspacePathForWorkspaceId` resolves under `WORKTREE_ROOT` once
+ * `GIT_DATA_STORE_ENABLED` flips (ADR-068): denying only `WORKSPACES_ROOT`
+ * would then mask a directory no workspace lives under — the deny covers
+ * nothing real. Both roots are returned unconditionally:
+ *   - flag OFF: `getWorkspaceWorktreeRoot()` IS `getWorkspacesRoot()`, so the
+ *     set is byte-identical to the pre-cutover single-root deny;
+ *   - flag ON:  both — the NVMe root carries live working trees, and the
+ *     volume root may still hold pre-cutover tenant dirs (stale leakage is
+ *     still tenant data).
+ *
+ * `"/"` (or empty) is never a tenant root — a deny there would tmpfs the
+ * whole rootfs; a misconfigured env must not silently become a catastrophic
+ * mask, so such a root is excluded here (the caller still fails closed on a
+ * workspacePath that equals/contains a deny root).
+ */
+export function workspaceTenantDenyRoots(): string[] {
+  const roots = new Set<string>();
+  for (const root of [getWorkspacesRoot(), getWorkspaceWorktreeRoot()]) {
+    const norm = root.replace(/\/+$/, "");
+    if (norm === "" || norm === "/") continue;
+    roots.add(norm);
+  }
+  return [...roots];
+}

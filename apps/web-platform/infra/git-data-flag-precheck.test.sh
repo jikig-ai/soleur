@@ -182,6 +182,16 @@ MIRROR="$T/tree/apps/web-platform"
 mkdir -p "$MIRROR/infra" "$MIRROR/server" || { printf 'FAIL SETUP: mirror\n' >&2; exit 1; }
 cp "$T/git-auth-tofu.ts" "$MIRROR/server/git-auth.ts" || { printf 'FAIL SETUP: mirror git-auth\n' >&2; exit 1; }
 
+# SANDBOX_DENY_ROOTS fixtures (#9725): a source dir carrying both markers
+# (resolver exports workspaceTenantDenyRoots + config calls it), one where the
+# config marker is missing (the pre-fix posture), and a nonexistent dir for
+# `unknown` (files unreadable → never "absent").
+mkdir -p "$T/deny-present" "$T/deny-absent" || { printf 'FAIL SETUP: deny fixtures\n' >&2; exit 1; }
+printf 'export function workspaceTenantDenyRoots() { return []; }\n' > "$T/deny-present/workspace-resolver.ts"
+printf 'import { workspaceTenantDenyRoots } from "./workspace-resolver";\n' > "$T/deny-present/agent-runner-sandbox-config.ts"
+printf 'export function workspacePathForWorkspaceId() { return ""; }\n' > "$T/deny-absent/workspace-resolver.ts"
+printf 'const denyRead = [];\n' > "$T/deny-absent/agent-runner-sandbox-config.ts" 
+
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
 # unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
 # (the case's own TMPDIR, so a leaked tempfile is visible) and RT (its RUNNER_TEMP). A store also
@@ -218,7 +228,8 @@ refusal() { # <verdict-detail> — the exact two-line output of a refusal
 TOFU_PRESENT='TOFU_ARM present
 ::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set'
 # ok_out <flag-line> — the exact output of a clear run with the default fixtures.
-ok_out() { printf '%s\ngit_data_pin=present fp=%s\n%s' "$TOFU_PRESENT" "$PIN_FP" "$1"; }
+DENY_LINE='SANDBOX_DENY_ROOTS present'
+ok_out() { printf '%s\n%s\ngit_data_pin=present fp=%s\n%s' "$TOFU_PRESENT" "$DENY_LINE" "$PIN_FP" "$1"; }
 detail() { printf 'rc=%s out=[%s]' "$RC" "$(tr '\n' '|' < "$OUT" | sed 's/::/: :/g')"; }
 
 # ── cases (functions, so a mutant re-runs exactly the case its row names) ──────────────
@@ -324,12 +335,19 @@ else fail "P6: the flag value was printed" "out=[$(tr '\n' '|' < "$OUT")]"; fi
 case_mode() { # <label> <flag-value|ABSENT> <mode> — the flag=true mode branch runs BEFORE TOFU/pin
   run_case "mode-$1" "$2" FLAG_MODE="$3"
 }
+case_deny() { # <label> <src-dir> <mode> — SANDBOX_DENY_ROOTS arm (#9725): emits SANDBOX_SRC_DIR + FLAG_MODE
+  run_case "deny-$1" false SANDBOX_SRC_DIR="$2" FLAG_MODE="$3"
+}
+case_deny_absent_flip_refused() { # asserts the flip gate refuses absent coverage (mutant row)
+  case_deny absent-flip "$T/deny-absent" flip
+  [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"
+}
 if case_mode flip-true true flip \
-  && [ "$(cat "$OUT")" = "$(printf 'flag=true resume=arm_b\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
+  && [ "$(cat "$OUT")" = "$(printf 'flag=true resume=arm_b\n%s\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$DENY_LINE" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
   pass "M-flip-true: flip with flag already true -> flag=true resume=arm_b, exit 0 (NOT a refusal — a prior flip died post-write)"
 else fail "M-flip-true: resume arm B was not reported" "$(detail)"; fi
 if case_mode rollback-true true rollback \
-  && [ "$(cat "$OUT")" = "$(printf 'flag=true mode=rollback\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
+  && [ "$(cat "$OUT")" = "$(printf 'flag=true mode=rollback\n%s\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$DENY_LINE" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
   pass "M-rb-true: rollback with flag=true -> the expected entry, exit 0"
 else fail "M-rb-true: flag=true under rollback was not accepted" "$(detail)"; fi
 if case_mode rollback-off false rollback \
@@ -354,7 +372,7 @@ case_pin_ok() { # the pin file holds exactly the key line, read-only (0444); onl
 case_pin_refused() { # <label> <reason> [VAR=value ...] — CASE_PIN set by the caller
   local label="$1" reason="$2"; shift 2
   run_case "pin-$label" false "$@"
-  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(printf '%s\n%s' "$TOFU_PRESENT" "$(refusal "git_data_host_key_unavailable reason=$reason")")" ] \
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(printf '%s\n%s\n%s' "$TOFU_PRESENT" "$DENY_LINE" "$(refusal "git_data_host_key_unavailable reason=$reason")")" ] \
     && [ ! -e "$RT/git-data.pin" ] && ! grep -q 'CANARY' "$OUT"
 }
 case_tofu() { # <label> <git-auth-path> <expected-line>
@@ -460,6 +478,12 @@ sites += [("top", k) for k, v in wf.items() if k != "jobs" and "DOPPLER_TOKEN_PR
 sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j != "cutover" and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
 check("G1-census: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned)" % len(steps),
       len(steps) >= 1 and sites == [("step", "flag_precheck")], sites)
+# #9725: the flip must also require the SERVED image to carry the dual-root
+# tenant deny — the GIT_DATA_DENY_FLOOR arm (env bound, refusal emitted).
+fp = [s for s in steps if s.get("id") == "flip_preconditions"]
+check("G1-denyfloor: flip_preconditions binds vars.GIT_DATA_DENY_FLOOR and refuses via sandbox_deny_floor",
+      len(fp) == 1 and "GIT_DATA_DENY_FLOOR" in json.dumps(fp[0].get("env", {}))
+      and "sandbox_deny_floor" in str(fp[0].get("run", "")), fp)
 iv = yaml.safe_load(open(iv_path))
 ivsteps = [s for j in (iv.get("jobs") or {}).values() for s in (j.get("steps") or [])]
 # Since #8736 this suite is registered by PRESENCE (the deploy-script-tests
@@ -481,7 +505,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -ge 7 ] || fail "G1: only $_wf_n workflow verdicts were produced (expected 7) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -ge 8 ] || fail "G1: only $_wf_n workflow verdicts were produced (expected 8) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
 
 # ── mutation matrix (Guard 1) ─────────────────────────────────────────────────────────
 echo; echo "--- mutation matrix (each row must turn its named case RED)"
@@ -615,14 +639,39 @@ fi
 if mutate pin-writable "$PRECHECK" 2 's#^chmod 0444 "\$PIN_OUT" \|\| refuse pin_write_failed$#:#'; then
   CASE_SCRIPT="$MUTANT" mutant_red pin-writable case_pin_ok
 fi
+# Row 17 — neuter the SANDBOX_DENY_ROOTS flip gate: an absent-coverage flip
+# must then proceed (the refusal is the arm's whole point).
+if mutate deny-flip-gate "$PRECHECK" 2 's#"\$FLAG_MODE" = flip#"\$FLAG_MODE" = flip_never#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red deny-flip-gate case_deny_absent_flip_refused
+fi
+
+# ── SANDBOX_DENY_ROOTS arm (#9725) ────────────────────────────────────────────────
+if case_deny absent "$T/deny-absent" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS absent' "$OUT"; then
+  pass "D1: source without the deny-root markers under proof -> SANDBOX_DENY_ROOTS absent, informational only (exit 0)"
+else fail "D1: absent markers were not reported" "$(detail)"; fi
+if case_deny present "$T/deny-present" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS present' "$OUT"; then
+  pass "D2: source carrying the markers -> SANDBOX_DENY_ROOTS present"
+else fail "D2: a present fixture was not reported" "$(detail)"; fi
+if case_deny unknown "$T/no-such-src" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS unknown' "$OUT"; then
+  pass "D3: unreadable source dir -> SANDBOX_DENY_ROOTS unknown (never absent)"
+else fail "D3: an unreadable dir was not unknown" "$(detail)"; fi
+if case_deny absent-flip "$T/deny-absent" flip   && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"; then
+  pass "D4: flip without the deny coverage -> verdict=sandbox_deny_coverage_absent, exit 5 (blocking)"
+else fail "D4: a flip over absent coverage was not refused" "$(detail)"; fi
+if case_deny unknown-flip "$T/no-such-src" flip   && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_unknown' "$OUT"; then
+  pass "D5: flip with unreadable source -> verdict=sandbox_deny_coverage_unknown, exit 5 (fail closed)"
+else fail "D5: a flip over unknown coverage was not refused" "$(detail)"; fi
+if case_deny present-flip "$T/deny-present" flip   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS present' "$OUT" && grep -qF 'flag=off' "$OUT"; then
+  pass "D6: flip WITH the coverage -> SANDBOX_DENY_ROOTS present, proceeds to pin + flag=off"
+else fail "D6: a covered flip was refused or lost the pin" "$(detail)"; fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=17  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b)
+MUTANT_FLOOR=18  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 30 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 7 + mutants 17 x 2 = 86 (exact).
-FLOOR=86
+# Assertion FLOOR: script cases 30 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 6 + mutants 18 x 2 = 93 (exact).
+FLOOR=93
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

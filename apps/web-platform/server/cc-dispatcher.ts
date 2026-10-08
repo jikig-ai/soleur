@@ -1818,7 +1818,14 @@ export const realSdkQueryFactory: QueryFactory = async (
       await Promise.all([
         fetchUserWorkspacePath(args.userId, activeWorkspaceId),
         getUserServiceTokens(args.userId),
-        resolveInstallationId(args.userId, activeWorkspaceId),
+        // #9558 — support (`runRepoLifecycle:false`) never resolves an
+        // installation: the id's only consumers are the repo-lifecycle
+        // self-heal/clone, the GH_TOKEN mint and the C4 write tool, and none
+        // of them run for a read-only docs session. null keeps every
+        // downstream gate closed by construction.
+        mode.runRepoLifecycle
+          ? resolveInstallationId(args.userId, activeWorkspaceId)
+          : Promise.resolve(null),
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
         // ADR-044 PR-1: the autonomous-toggle trio (bash-autonomous / ack /
@@ -1990,11 +1997,17 @@ export const realSdkQueryFactory: QueryFactory = async (
     // install and falsely report "workspace reclaimed — couldn't restore" for an
     // org repo a cold turn could recover (#5340 review finding). Best-effort:
     // returns the stored install on any probe failure, never widening access.
-    const effectiveInstallationId = await resolveEffectiveInstallationId({
-      userId: args.userId,
-      installationId,
-      repoUrl,
-    });
+    // #9558 — gated on runRepoLifecycle: the self-heal is repo-lifecycle
+    // machinery (its every consumer — clone, mint, C4 write — is already
+    // mode-gated). Support resolves to null, which also closes the mint +
+    // askpass arms below regardless of env state.
+    const effectiveInstallationId = mode.runRepoLifecycle
+      ? await resolveEffectiveInstallationId({
+          userId: args.userId,
+          installationId,
+          repoUrl,
+        })
+      : null;
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
     // reprovision-ensure-dir-presandbox). The bwrap sandbox binds `cwd` to THIS
@@ -2337,8 +2350,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // token, NEVER a PAT, and the value is NEVER logged. (Sentry
     // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
     // cron-side root cause this mirrors for the interactive path.)
+    // #9558 — the double gate is deliberate: runRepoLifecycle closes the whole
+    // repo-credential surface for support, and sandboxWrite!=="none" is the
+    // issue's literal invariant — a read-only dispatch must never mint a
+    // write-capable credential even if a future caller reaches here with one.
     let ghToken: string | undefined;
-    if (effectiveInstallationId !== null) {
+    if (effectiveInstallationId !== null && mode.sandboxWrite !== "none") {
       try {
         ghToken = await generateInstallationToken(effectiveInstallationId, {
           minRemainingMs: GH_TOKEN_MIN_LIFETIME_MS,
@@ -2358,7 +2375,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // buildAgentQueryOptions (both-or-nothing). Boolean only — NEVER the
     // token (AC6-class guard from #5041).
     log.info(
-      { userId: args.userId, githubEgress: Boolean(ghToken) },
+      {
+        userId: args.userId,
+        githubEgress: Boolean(ghToken),
+        // #9558 — attribute the posture to the persona so a support dispatch
+        // that ever opened egress is directly queryable in Sentry.
+        persona: args.persona,
+      },
       "Concierge sandbox GitHub egress posture",
     );
 
@@ -2653,8 +2676,11 @@ export const realSdkQueryFactory: QueryFactory = async (
   // degradation parity with GH_TOKEN. The token rides GIT_INSTALLATION_TOKEN
   // env, NEVER the script body or a remote URL, and is NEVER logged
   // (hr-github-app-auth-not-pat).
+  // #9558 — `ghToken` already can't exist under sandboxWrite==="none", but the
+  // file write is the side effect the issue names (a helper landing in the
+  // user's .git/) — keep the literal predicate as the second gate.
   let gitAskpassScriptPath: string | undefined;
-  if (ghToken) {
+  if (ghToken && mode.sandboxWrite !== "none") {
     // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
     const gitDir = path.join(workspacePath, ".git");
     const askpassDir = existsSync(gitDir) ? gitDir : workspacePath;
@@ -3871,7 +3897,12 @@ export async function dispatchSoleurGo(
   // feeds both the validity probe and the clone), so a valid-`.git` warm turn
   // pays only the resolve the LEADER already pays — never the 120s clone.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
-  if (runner.hasActiveQuery(conversationId)) {
+  // #9558 — the reprovision is repo-lifecycle machinery (installation resolve +
+  // ensureWorkspaceRepoCloned, which mints a GitHub installation token to
+  // clone). A support-persona turn has no workspace repo to recover, so the
+  // whole block is skipped — a read-only docs dispatch must never mint or
+  // clone into the user's workspace.
+  if (args.persona !== "support" && runner.hasActiveQuery(conversationId)) {
     // WARM: the factory did NOT run this turn — gate the agent start on the
     // awaited re-clone. The entire gate is self-contained (it sits BEFORE the
     // `runner.dispatch` try below) so it can NEVER reject out of dispatch.

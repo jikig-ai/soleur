@@ -25,6 +25,32 @@
 #
 # Fail-closed: any setup anomaly exits 65 with a `bwrap-shim:` stderr marker —
 # never fall back to an unfiltered/unscrubbed spawn.
+#
+# Tail /proc mask (#9723 — ADR-075 addendum). The vendored builder's
+# enableWeakerNestedSandbox handling appends `--bind /proc /proc` at the END
+# of the setup argv — landing AFTER the config's denyRead `--tmpfs /proc` and,
+# because later mounts win, re-exposing host procfs (cross-tenant
+# /proc/<pid>/environ reads). The vendor needs SOME procfs — the sandboxed
+# command's own `apply-seccomp /proc/self/fd/N` helper resolves fds through
+# it — so the mask is a FRESH `--proc /proc` (a procfs keyed to the sandbox's
+# own pid namespace: no host pids, self-fd view intact), spliced at the LAST
+# position in the merged setup token stream so it mounts over the tail bind.
+# The SDK ships the setup argv via `--args <fd>` (the fd stream carries every
+# option); the shim consumes each pre-boundary `--args` payload, re-emits it
+# on a fresh fd, and splices there:
+#   Arm A  first outer `--` (no --args, or no `--` inside any payload):
+#          inserted immediately before it — after every setup token incl. the
+#          vendor tail bind.
+#   Arm B  a `--` carried INSIDE an --args payload (a future SDK that puts the
+#          boundary in the fd stream): spliced before the first `--` there;
+#          payloads past that boundary are command text and pass through.
+#   Arm C  no boundary anywhere (command starts at the first bare operand, or
+#          the argv is pure options): mask lands before the operand / at tail.
+# Fail-closed applies to the rewrite too: a non-numeric or unreadable --args
+# fd or a re-emit failure refuses the spawn — never an unmasked namespace.
+# (A fresh `--proc` is never a regression on the tail bind even absent a
+# pidns unshare: under --unshare-user the kernel already masks foreign-task
+# fields, and at worst it is the same exposure — so no pidns precondition.)
 
 set -u
 
@@ -61,34 +87,104 @@ fi
 # desync after it (over-preserve — the leak direction, so conservative).
 # BWRAP_FD_VALUED_OPTS (scripts/sandbox-canary.mjs) mirrors the fd sets —
 # asserted byte-identical by sandbox-canary-regression.test.sh §D4.
+argv=("$@")
+argc=$#
 preserve=""
+args_pos=()   # argv index of every pre-boundary `--args` fd token
+boundary=-1   # argv index of the first `--` in option position
+operand=-1    # argv index of the first bare operand (the no-`--` command form)
 expect_fd=0
+fd_opt=""
 skip=0
 extra_skip=0
-for tok in "$@"; do
+i=0
+while [ "$i" -lt "$argc" ]; do
+  tok="${argv[$i]}"
   # Stop at the command boundary: tokens after `--` are the sandboxed
   # command, not options — a literal `--sync-fd 7` there must not pin an
   # fd open (over-preserve IS the leak direction; under-preserve is loud).
-  [ "$tok" = "--" ] && break
-  if [ "$skip" -gt 0 ]; then skip=$((skip - 1)); continue; fi
-  if [ "$expect_fd" = 1 ]; then
+  # The same stop applies at the first bare operand: with no `--`, tokens
+  # after the command's argv[0] are the command's args, not options.
+  if [ "$tok" = "--" ]; then boundary=$i; break; fi
+  if [ "$skip" -gt 0 ]; then skip=$((skip - 1))
+  elif [ "$expect_fd" = 1 ]; then
     case "$tok" in
       ''|*[!0-9]*) ;;  # non-numeric: let real bwrap report it; nothing to keep
-      *) preserve="$preserve $tok" ;;
+      *)
+        preserve="$preserve $tok"
+        [ "$fd_opt" = "--args" ] && args_pos+=("$i")
+        ;;
     esac
     expect_fd=0
     skip=$extra_skip
     extra_skip=0
-    continue
+  else
+    case "$tok" in
+      --args|--seccomp|--add-seccomp-fd|--sync-fd|--info-fd|--json-status-fd|--block-fd|--userns-block-fd|--userns|--pidns) expect_fd=1; fd_opt=$tok ;;
+      --file|--bind-data|--ro-bind-data|--bind-fd|--ro-bind-fd|--userns2) expect_fd=1; fd_opt=$tok; extra_skip=1 ;;
+      --argv0|--uid|--gid|--hostname|--chdir|--unsetenv|--lock-file|--remount-ro|--overlay-src|--tmp-overlay|--ro-overlay|--exec-label|--file-label|--proc|--dev|--tmpfs|--mqueue|--dir|--cap-add|--cap-drop|--perms|--size) skip=1 ;;
+      --setenv|--bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try|--chmod|--symlink|--level-prefix) skip=2 ;;
+      --overlay) skip=3 ;;
+      -*) ;;                   # unknown option — the zero-arg assumption above
+      *) operand=$i; break ;;  # bare operand = command start (no `--` form)
+    esac
   fi
-  case "$tok" in
-    --args|--seccomp|--add-seccomp-fd|--sync-fd|--info-fd|--json-status-fd|--block-fd|--userns-block-fd|--userns|--pidns) expect_fd=1 ;;
-    --file|--bind-data|--ro-bind-data|--bind-fd|--ro-bind-fd|--userns2) expect_fd=1; extra_skip=1 ;;
-    --argv0|--uid|--gid|--hostname|--chdir|--unsetenv|--lock-file|--remount-ro|--overlay-src|--tmp-overlay|--ro-overlay|--exec-label|--file-label|--proc|--dev|--tmpfs|--mqueue|--dir|--cap-add|--cap-drop|--perms|--size) skip=1 ;;
-    --setenv|--bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try|--chmod|--symlink|--level-prefix) skip=2 ;;
-    --overlay) skip=3 ;;
-  esac
+  i=$((i + 1))
 done
+
+# Command-side fd references: an fd can be named by PATH inside ANY token —
+# the vendored inner command execs its own binary as `/proc/self/fd/N` (the
+# apply-seccomp multicall dispatch) with N carried on the child's fd table
+# via stdio — never as an fd-valued option. Preserve every fd so named,
+# including tokens past the boundary. (#9723 hardening exposed this latent
+# gap: the sweep would otherwise close an fd the sandboxed command needs.)
+for tok in "$@"; do
+  while [[ $tok =~ /proc/self/fd/([0-9]+) ]]; do
+    preserve="$preserve ${BASH_REMATCH[1]}"
+    tok="${tok#*"${BASH_REMATCH[0]}"}"
+  done
+done
+
+# ---- tail /proc mask (#9723), stage 1: consume --args payloads --------------
+# The SDK ships the setup argv NUL-separated on each `--args <fd>`. Read every
+# PRE-boundary payload NOW — before the fd sweep — so an fd the payload names
+# by path (`/proc/self/fd/N` inside a setup token) is still open to preserve.
+# A `--` INSIDE a payload is the true option boundary: the mask is spliced
+# there in-place; payloads past it are command text and pass through unread
+# (their original fds stay argv-referenced → preserved). Unreadable fds refuse
+# the spawn — never an unmasked namespace.
+nread=0
+masked=0
+if [ "${#args_pos[@]}" -gt 0 ]; then
+  for pos in "${args_pos[@]}"; do
+    fd="${argv[$pos]}"
+    case "$fd" in
+      ''|*[!0-9]*) fail "non-numeric --args fd: $fd" ;;
+    esac
+    declare -n "pl=pl$nread"
+    pl=()
+    mapfile -d '' -t pl <&"$fd" || fail "cannot read --args fd $fd"
+    eval "exec $fd<&-" 2>/dev/null || true
+    for tok in "${pl[@]}"; do
+      while [[ $tok =~ /proc/self/fd/([0-9]+) ]]; do
+        preserve="$preserve ${BASH_REMATCH[1]}"
+        tok="${tok#*"${BASH_REMATCH[0]}"}"
+      done
+    done
+    if [ "$masked" = 0 ]; then
+      for j in "${!pl[@]}"; do
+        if [ "${pl[$j]}" = "--" ]; then
+          pl=("${pl[@]:0:$j}" --proc /proc "${pl[@]:$j}")
+          masked=1
+          break
+        fi
+      done
+    fi
+    unset -n pl
+    nread=$((nread + 1))
+    [ "$masked" = 1 ] && break  # payloads past the boundary are command text
+  done
+fi
 
 [ -x "$REAL" ] || fail "real bwrap not executable: $REAL"
 [ -r "$BPF" ] || fail "seccomp artifact not readable: $BPF"
@@ -118,4 +214,42 @@ for p in /proc/self/fd/*; do
   eval "exec $n>&-" 2>/dev/null || true
 done
 
-exec "$REAL" --add-seccomp-fd "$bpf_fd" "$@"
+# ---- tail /proc mask (#9723), stage 2: place the mask + re-emit payloads ----
+# `--proc /proc` lands at the LAST setup position so a pidns-scoped procfs
+# mounts AFTER the vendored tail `--bind /proc /proc` — the realized deny.
+# (Not --tmpfs: the vendored inner command resolves `/proc/self/fd/N` for its
+# apply-seccomp helper — an empty /proc would break the spawn.) Read payloads
+# are re-emitted on fresh POST-SWEEP fds and the argv renumbered.
+if [ "$nread" -gt 0 ]; then
+  if [ "$masked" = 0 ]; then
+    if [ "$boundary" -ge 0 ]; then
+      argv=("${argv[@]:0:$boundary}" --proc /proc "${argv[@]:$boundary}")
+    else
+      # No boundary in any read payload and none outer: append to the last
+      # payload read (nread >= 1).
+      declare -n "last=pl$((nread - 1))"
+      last+=(--proc /proc)
+      unset -n last
+    fi
+  fi
+  k=0
+  while [ "$k" -lt "$nread" ]; do
+    declare -n "pl=pl$k"
+    if [ "${#pl[@]}" -gt 0 ]; then
+      exec {newfd}< <(printf '%s\0' "${pl[@]}") || fail "cannot re-emit --args payload"
+    else
+      exec {newfd}< <(printf '') || fail "cannot re-emit --args payload"
+    fi
+    argv[${args_pos[$k]}]=$newfd
+    unset -n pl
+    k=$((k + 1))
+  done
+elif [ "$boundary" -ge 0 ]; then
+  argv=("${argv[@]:0:$boundary}" --proc /proc "${argv[@]:$boundary}")
+elif [ "$operand" -ge 0 ]; then
+  argv=("${argv[@]:0:$operand}" --proc /proc "${argv[@]:$operand}")
+else
+  argv+=(--proc /proc)
+fi
+
+exec "$REAL" --add-seccomp-fd "$bpf_fd" "${argv[@]}"

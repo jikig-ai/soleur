@@ -1292,7 +1292,12 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       );
       expect(postureCalls).toHaveLength(1);
       const payload = postureCalls[0][0];
-      expect(payload).toEqual({ userId: "user-1", githubEgress: true });
+      // #9558 — persona joined the posture payload (attribution axis).
+      expect(payload).toEqual({
+        userId: "user-1",
+        githubEgress: true,
+        persona: "command_center",
+      });
       expect(typeof payload.githubEgress).toBe("boolean");
       expect(JSON.stringify(payload)).not.toContain("ghs_default_test_token");
     });
@@ -1313,6 +1318,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(postureCalls[0][0]).toEqual({
         userId: "user-1",
         githubEgress: false,
+        persona: "command_center",
       });
     });
 
@@ -1453,6 +1459,49 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         denyReadExtra: ["/app/shared/knowledge-base"],
       }),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // #9558 — support persona must mint NOTHING GitHub-side: a read-only docs
+  // session has no repo lifecycle, so installation resolution, the GH_TOKEN
+  // mint, the .soleur-askpass.sh write into the user's .git/, and the
+  // ENTITLED_EGRESS_DOMAINS open are ALL out of contract. Drive the same
+  // connected-repo shape that mints on command_center — the persona must be
+  // the only delta.
+  // -------------------------------------------------------------------------
+  it("T2b: support persona skips installation resolve, GH_TOKEN mint, askpass write, and GitHub egress", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    // No GitHub machinery at all — not even the installation-id resolve.
+    expect(mockResolveInstallationId).not.toHaveBeenCalled();
+    expect(mockGetInstallationAccount).not.toHaveBeenCalled();
+    expect(mockFindRepoOwnerInstallationForUser).not.toHaveBeenCalled();
+    expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
+    // No askpass helper is ever written under the user's .git/.
+    expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
+    // The minted-token channel into the agent env stays empty.
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+    );
+    // Egress closed (also pinned in T2 via the sandbox-config call).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+      "/app/shared/plugins/soleur",
+      expect.objectContaining({ allowGithubEgress: false }),
+    );
+    // The egress posture log carries the persona so a support dispatch that
+    // ever DID open egress is attributable (observability gate).
+    const egressLog = mockLogInfo.mock.calls.find(
+      ([, msg]) => msg === "Concierge sandbox GitHub egress posture",
+    );
+    expect(egressLog?.[0]).toMatchObject({
+      githubEgress: false,
+      persona: "support",
+    });
   });
 
   // -------------------------------------------------------------------------

@@ -136,4 +136,75 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     const result = buildAgentSandboxConfig(own);
     expect(result.filesystem).not.toHaveProperty("allowRead");
   });
+
+  // ---- #9725: deny must cover the root workspaces ACTUALLY live under ----
+  // After the ADR-068 git-data cutover, workspacePathForWorkspaceId resolves
+  // under WORKTREE_ROOT — denying only WORKSPACES_ROOT would mask a directory
+  // no workspace lives under while every sibling sits readable elsewhere.
+
+  it("flag OFF: the deny set is byte-identical to the pre-cutover posture", () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "false");
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).toEqual([root, staging, "/proc"]);
+  });
+
+  it("flag ON: BOTH the volume root and the worktree root are denied", () => {
+    const worktree = mkdtempSync(join(tmpdir(), "sbx-worktree-"));
+    extraDirs.push(worktree);
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("WORKTREE_ROOT", worktree);
+    const result = buildAgentSandboxConfig(join(worktree, "00000000-0000-0000-0000-000000000002"));
+    expect(result.filesystem.denyRead).toEqual([root, worktree, staging, "/proc"]);
+  });
+
+  it("flag ON: worktree root that does not exist on disk is still emitted (constant list; builder skips the landing)", () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("WORKTREE_ROOT", join(root, "unborn-worktree-root"));
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).toEqual([
+      root,
+      join(root, "unborn-worktree-root"),
+      staging,
+      "/proc",
+    ]);
+  });
+
+  it("flag ON: identical volume + worktree roots collapse to one deny entry", () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("WORKTREE_ROOT", root); // same dir via env — dedupe must hold
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).toEqual([root, staging, "/proc"]);
+  });
+
+  it("flag ON: own workspace under the worktree root is still restored (deny covers siblings, not self)", () => {
+    const worktree = mkdtempSync(join(tmpdir(), "sbx-worktree-"));
+    extraDirs.push(worktree);
+    const ownWt = join(worktree, "00000000-0000-0000-0000-000000000002");
+    mkdirSync(ownWt);
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("WORKTREE_ROOT", worktree);
+    const result = buildAgentSandboxConfig(ownWt);
+    expect(result.filesystem.allowWrite).toEqual([ownWt]);
+    expect(result.filesystem.denyRead).toContain(worktree);
+  });
+
+  it("flag ON: catastrophic guard covers EVERY deny root — workspacePath containing the worktree root refuses", () => {
+    const worktree = mkdtempSync(join(tmpdir(), "sbx-worktree-"));
+    extraDirs.push(worktree);
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("WORKTREE_ROOT", worktree);
+    // workspacePath == the worktree root itself → vendor restore would re-bind
+    // the whole masked parent rw → unmasks every tenant. Fail loud.
+    expect(() => buildAgentSandboxConfig(worktree)).toThrow(/equals\/contains deny root/);
+    // …and a workspacePath that CONTAINS the worktree root is the same shape.
+    expect(() => buildAgentSandboxConfig(join(worktree, ".."))).toThrow(/equals\/contains deny root/);
+  });
+
+  it("a '/' or empty deny root can never enter the set (misconfigured env must not become a catastrophic mask)", () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("WORKTREE_ROOT", "/");
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).not.toContain("/");
+    expect(result.filesystem.denyRead).toContain(root);
+  });
 });

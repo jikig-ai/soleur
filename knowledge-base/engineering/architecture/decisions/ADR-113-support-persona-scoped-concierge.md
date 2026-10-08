@@ -207,3 +207,37 @@ premise correction under `## ADR-070 reconciliation`).
   write surface wired.
 - **`WSMessage` union member + shared reducer.** Rejected by the drift guard and
   by transport semantics — see above.
+
+## Decision addendum (2026-10-08, #9558): the repo-credential surface joins the gated set
+
+**Status: `accepted`.** The persona gate previously covered the clone self-heal, readiness gates,
+worktree lease, C4 write tool, and sandbox write-set — but the GitHub credential surface was still
+dispatched unconditionally: `resolveInstallationId`, `resolveEffectiveInstallationId`, the
+`generateInstallationToken` mint, the `.soleur-askpass.sh` write into the user's `.git/`, and the
+token-derived `ENTITLED_EGRESS_DOMAINS` open all ran on a support turn against a workspace the
+persona never touches.
+
+What changed in `cc-dispatcher.ts`:
+
+- `resolveInstallationId` in the Promise.all and `resolveEffectiveInstallationId` are gated on
+  `mode.runRepoLifecycle` — support resolves `effectiveInstallationId` to `null`, which closes the
+  mint, the C4 tool, and every clone arm downstream by construction.
+- The mint carries a second belt — `mode.sandboxWrite !== "none"` — so the issue's literal
+  invariant (a read-only dispatch must never mint a write-capable credential) survives a future
+  caller that reaches the mint with an installation id.
+- The askpass write (`writeAskpassScriptTo` under `.git/`) is gated on the same predicate; the
+  dispatch-level `reprovisionWorkspaceOnDispatch` (installation resolve + `ensureWorkspaceRepoCloned`
+  mint path) is skipped entirely for `persona === "support"`.
+- The egress posture `log.info` now carries `persona`, so a support dispatch that ever opened
+  egress is attributable in Sentry.
+
+**serviceTokens decision (plan FR3, was flagged inferred):** `getUserServiceTokens` is NOT gated.
+The service-token map holds the user's own third-party provider keys injected into the agent env —
+orthogonal to the repo/GitHub credential surface this issue names, and the support session's
+egress-closed, read-only sandbox cannot write them anywhere. Gating it would be a capability
+reduction with no isolation benefit; recorded here so the choice is deliberate, not an omission.
+
+**Token-channel sweep (4.3):** `ghToken`/`gitInstallationToken` (the askpass token) are the only
+agent-env credential channels fed by the dispatch (`buildAgentEnv` opts); `GIT_INSTALLATION_TOKEN`
+rides that env var alone — never the askpass body, never a remote URL. With `ghToken` forced
+`undefined` under support, every channel closes.

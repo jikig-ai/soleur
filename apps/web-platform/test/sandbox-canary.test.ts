@@ -21,6 +21,7 @@ import {
   hasUnsubstitutedPlaceholder,
   isDeterministicConstPath,
   classifyFdCensusProbe,
+  classifyProcMaskProbe,
   classifyForkProbe,
   classifyReplayVerdict,
   classifyUsernsDenyProbe,
@@ -1077,9 +1078,10 @@ describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit",
   });
 
   it("a count below 3 is vacuous, not clean — stdio 0-2 always exist", () => {
-    // A masked/absent /proc makes the census read ~nothing: an empty string
-    // parses to 0 and a bare glob echo to 1 — both must be infra errors, not
-    // passes (a green that measured nothing is indistinguishable from health).
+    // The procfs-free enumerator (#9723: a masked /proc has no /proc/self/fd
+    // to ls) still reports ≥3 for stdio — anything lower means the output was
+    // never produced by the enumerator, an infra error not a pass (a green
+    // that measured nothing is indistinguishable from health).
     for (const stdout of ["", "0", "1", "2"]) {
       expect(classifyFdCensusProbe({ status: 0, stdout }, 4)).toMatchObject({
         verdict: "canary_infra_error",
@@ -1089,8 +1091,37 @@ describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit",
   });
 });
 
+describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#9723)", () => {
+  it("status 0 (canary host pid absent AND /proc/self/environ present) ⇒ null", () => {
+    expect(classifyProcMaskProbe({ status: 0, stderr: "" })).toBeNull();
+  });
+
+  it("clean non-zero payload exit ⇒ sandbox_broken proc_mask_defeated (host procfs visible)", () => {
+    expect(classifyProcMaskProbe({ status: 1, stderr: "" })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("spawn/setup-side failure ⇒ canary_infra_error, never a mask verdict", () => {
+    expect(classifyProcMaskProbe({ status: null, errorCode: "ENOENT" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "proc_mask_spawn_enoent",
+    });
+    expect(classifyProcMaskProbe({ status: null })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "proc_mask_exit_null",
+    });
+    expect(classifyProcMaskProbe({ status: 1, stderr: "bwrap: Can't create file" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "proc_mask_exit_1",
+    });
+  });
+});
+
 describe("countFdValuedOptions — census slack for argv-referenced fds", () => {
-  it("the committed fixture argv carries no fd-valued options → limit stays 4", () => {
+  it("the committed fixture argv carries no fd-valued options → limit stays at baseline", () => {
     const fx = JSON.parse(
       readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
     ) as { bwrapSetupArgv: string[] };

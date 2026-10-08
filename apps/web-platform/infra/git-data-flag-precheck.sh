@@ -61,6 +61,20 @@
 #                 must return exactly the written value, else verdict=flag_write_readback_failed
 #   success     : flag_write=ok value=<written>
 #
+# SANDBOX DENY-ROOTS (#9725). The agent sandbox's tenant denyRead must cover the
+# worktree root BEFORE the flag flips — denying only WORKSPACES_ROOT when
+# workspacePathForWorkspaceId resolves under WORKTREE_ROOT masks an empty
+# directory while every sibling stays readable. This is a source-level probe on
+# the checkout (no runtime, no creds): `workspace-resolver.ts` must export
+# `workspaceTenantDenyRoots` AND `agent-runner-sandbox-config.ts` must call it.
+# One line, like TOFU_ARM:
+#   SANDBOX_DENY_ROOTS present   -> both markers found
+#   SANDBOX_DENY_ROOTS absent    -> files readable, marker missing (old posture)
+#   SANDBOX_DENY_ROOTS unknown   -> files unreadable/missing (never "absent")
+# Blocking on FLAG_MODE=flip: anything but `present` refuses
+# verdict=sandbox_deny_coverage_{absent,unknown}, because a flip without the
+# coverage ships a sandbox that denies nothing real.
+#
 # GIT-DATA HOST-KEY PIN (#7226, plan D3). The same step, with the same `prd` token, reads
 # GIT_DATA_SSH_HOST_KEY (published by Terraform when git-data is born or replaced) with the same
 # --no-exit-on-missing-secret semantics, validates its shape, and writes it to
@@ -212,6 +226,22 @@ elif grep -qiF "StrictHostKeyChecking=accept-""new" "$GIT_AUTH_TS"; then
   echo "::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set"
 else
   echo "TOFU_ARM absent"
+fi
+
+# --- SANDBOX_DENY_ROOTS (#9725) ---
+SANDBOX_SRC_DIR="${SANDBOX_SRC_DIR:-$(dirname "$0")/../server}"
+deny_state=unknown
+if [ -r "$SANDBOX_SRC_DIR/workspace-resolver.ts" ] && [ -r "$SANDBOX_SRC_DIR/agent-runner-sandbox-config.ts" ]; then
+  if grep -qF 'export function workspaceTenantDenyRoots' "$SANDBOX_SRC_DIR/workspace-resolver.ts" \
+     && grep -qF 'workspaceTenantDenyRoots' "$SANDBOX_SRC_DIR/agent-runner-sandbox-config.ts"; then
+    deny_state=present
+  else
+    deny_state=absent
+  fi
+fi
+echo "SANDBOX_DENY_ROOTS $deny_state"
+if [ "$FLAG_MODE" = flip ] && [ "$deny_state" != present ]; then
+  refuse "sandbox_deny_coverage_${deny_state} — the sandbox tenant denyRead does not verifiably cover WORKTREE_ROOT; land the #9725 deny-root fix before flipping GIT_DATA_STORE_ENABLED"
 fi
 
 # --- git-data host-key pin ---
