@@ -117,7 +117,7 @@ opt_kind() { # opt_kind <tok> — sets OPT_KIND (never echoes: a per-token $()
     --args|--seccomp|--add-seccomp-fd|--sync-fd|--info-fd|--json-status-fd|--block-fd|--userns-block-fd|--userns|--pidns) OPT_KIND=fd1 ;;
     --file|--bind-data|--ro-bind-data|--bind-fd|--ro-bind-fd|--userns2) OPT_KIND=fd2 ;;
     --argv0|--uid|--gid|--hostname|--chdir|--unsetenv|--lock-file|--remount-ro|--overlay-src|--tmp-overlay|--ro-overlay|--exec-label|--file-label|--proc|--dev|--tmpfs|--mqueue|--dir|--cap-add|--cap-drop|--perms|--size) OPT_KIND=a1 ;;
-    --setenv|--bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try|--chmod|--symlink|--level-prefix) OPT_KIND=a2 ;;
+    --setenv|--bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try|--chmod|--symlink) OPT_KIND=a2 ;;
     --overlay) OPT_KIND=a3 ;;
     -*) OPT_KIND=other ;;
     *) OPT_KIND=operand ;;

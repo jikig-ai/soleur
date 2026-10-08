@@ -615,6 +615,27 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
+  it("a zero-arg option never consumes the boundary as a value (--level-prefix then --)", () => {
+    const r = root();
+    try {
+      // --level-prefix is zero-arg (bwrap(1): "Prepend e.g. <3> to diagnostic
+      // messages"); an arity-table error that gives it an operand swallows the
+      // `--`, pushing the mask INTO the command argv — a silent unmask.
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-pid", "--level-prefix", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
+      expect(args[bi + 1]).toBe("/usr/bin/true");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("a setup argv with NO option-position --unshare-pid refuses (a fresh --proc without a pidns is a decorative mask)", () => {
     const r = root();
     try {
