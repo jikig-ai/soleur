@@ -62,6 +62,27 @@ WEEK_CAP_DEFAULT=2
 GH_BIN="${GH_BIN:-gh}"
 CURL_BIN="${CURL_BIN:-curl}"
 
+# The key reaches curl on a stdin config (`header = "x-api-key: <key>"`), a quoted
+# line-oriented grammar: a quote or newline inside the key would end the header value and
+# let the rest be read as further directives (a second `url =`, a `proxy =`). So the key
+# must match the token class `[A-Za-z0-9._~+/=-]` or the script refuses, value-free
+# (the marker names the script and a reason, never the key), with exit 1 -- this script's
+# one failure class, which turns its workflow step red -- instead of surfacing later as an
+# empty-content error after a 401. `LC_ALL=C` pins both the range and `[[:cntrl:]]`.
+# An unset or empty key keeps its own refusal at the call site below.
+_cp_refuse_malformed_api_key() {
+  local LC_ALL=C reason=""
+  case "${ANTHROPIC_API_KEY:-}" in
+    '') return 0 ;;
+    *[[:cntrl:]]*) reason=control_char ;;
+    *[!A-Za-z0-9._~+/=-]*) reason=token_shape ;;
+  esac
+  [[ -z "$reason" ]] && return 0
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=compound-promote reason=%s\n' "$reason" >&2
+  printf '::error::ANTHROPIC_API_KEY has characters outside [A-Za-z0-9._~+/=-]; refusing before any API call\n' >&2
+  exit 1
+}
+
 # 1. Opt-in gate ---------------------------------------------------------------
 if [[ ! -f "$CONFIG" ]]; then
   printf '::compound-promote-status::no-config\n'
@@ -151,6 +172,8 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "::error::ANTHROPIC_API_KEY not set" >&2
   exit 1
 fi
+# Shape guard, BEFORE any call and before the corpus work below (see the function).
+_cp_refuse_malformed_api_key
 
 # Build corpus JSON: { path, summary } per file. Summary is head -n 10 of the
 # file body — bounds prompt size on the ~947-file corpus and avoids piping
@@ -234,11 +257,20 @@ REQUEST=$(jq -n \
   --slurpfile corpus "$CORPUS_NDJSON" \
   '{model: $model, max_tokens: $max_tokens, messages: [{role: "user", content: ($prompt + "\n\nCorpus:\n" + ($corpus | tostring))}]}')
 
-RESPONSE=$("$CURL_BIN" -sS https://api.anthropic.com/v1/messages \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
+# The API key is delivered on a stdin config (`--config -`), never as an argument: an
+# argv header is readable by every local user in /proc/<pid>/cmdline and `ps` for the life
+# of the process (argv-bearer sweep S2, D7). It is fed by a PROCESS SUBSTITUTION, not
+# `printf | curl`: under pipefail a consumer that never reads stdin makes the producer
+# die on SIGPIPE and the pipeline report 141. `--disable` is FIRST (it aborts ~/.curlrc
+# parsing, so a rc file cannot add a proxy or a header) and `--noproxy '*'` keeps an
+# ALL_PROXY/HTTPS_PROXY from redirecting the credentialed request. The body stays
+# `-d "$REQUEST"`: it is non-secret corpus text and the suite captures it from `-d`.
+# The non-secret headers stay arguments.
+RESPONSE=$("$CURL_BIN" --disable --noproxy '*' -sS https://api.anthropic.com/v1/messages \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
-  -d "$REQUEST")
+  -d "$REQUEST" \
+  --config - < <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY"))
 
 # Extract the assistant's text reply.
 CLUSTERS_TEXT=$(echo "$RESPONSE" | jq -r 'first(.content[]? | select(.type == "text") | .text | strings) // empty' 2>/dev/null || echo "")

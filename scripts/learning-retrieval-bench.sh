@@ -155,6 +155,36 @@ require_api_key() {
   fi
 }
 
+# The API key reaches curl on a stdin config (`header = "x-api-key: <key>"`), a quoted
+# line-oriented grammar: a quote or newline inside the key would end the header value and
+# let the rest be read as further directives (a second `url =`, a `proxy =`). So the key
+# must match the token class `[A-Za-z0-9._~+/=-]` or the bench refuses, value-free. The
+# refusal MUST be raised in the main shell before the first anthropic_paraphrase call and
+# must NEVER be folded into "(API_ERROR)": that string means "the API failed twice" and
+# the bench would otherwise finish a ~50 minute run reporting every paraphrase as an API
+# error for what is a local credential typo.
+# anthropic_key_reason prints the reason (token_shape|control_char) for a key outside the
+# class and nothing for a conforming, unset or empty key (unset/empty keep their own
+# refusals: require_api_key, and the `-n` gate in kbsearch_rank). `LC_ALL=C` pins both the
+# range and `[[:cntrl:]]`.
+anthropic_key_reason() {
+  local LC_ALL=C
+  case "${ANTHROPIC_API_KEY:-}" in
+    '') ;;
+    *[[:cntrl:]]*) printf control_char ;;
+    *[!A-Za-z0-9._~+/=-]*) printf token_shape ;;
+  esac
+}
+
+refuse_malformed_api_key() {
+  local reason
+  reason=$(anthropic_key_reason)
+  [[ -z "$reason" ]] && return 0
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=learning-retrieval-bench reason=%s\n' "$reason" >&2
+  echo "error: ANTHROPIC_API_KEY has characters outside [A-Za-z0-9._~+/=-]; refusing before any API call." >&2
+  exit 1
+}
+
 count_corpus() {
   if [[ -n "$CORPUS_COUNT_OVERRIDE" ]]; then
     echo "$CORPUS_COUNT_OVERRIDE"
@@ -370,13 +400,29 @@ anthropic_paraphrase() {
     --arg prompt "$prompt" \
     --arg gt "$ground_truth" \
     '{model: $model, max_tokens: $max_tokens, messages: [{role:"user", content: ($prompt + "\n\nPassage:\n" + $gt)}]}')
+  # Last-resort defence only: the main shell already refused a malformed key before the first
+  # call (refuse_malformed_api_key). This function usually runs inside `$(...)`, where an `exit`
+  # only leaves the subshell, so it returns a distinct non-zero status with the marker rather
+  # than ever printing "(API_ERROR)" for a credential problem.
+  local _kreason
+  _kreason=$(anthropic_key_reason)
+  if [[ -n "$_kreason" ]]; then
+    printf 'SOLEUR_CREDENTIAL_REFUSED script=learning-retrieval-bench reason=%s\n' "$_kreason" >&2
+    return 3
+  fi
   local _try
   for _try in 1 2; do
-    resp=$("$CURL_BIN" -sS -w '\n__HTTP_STATUS__:%{http_code}' "$ANTHROPIC_ENDPOINT" \
-      -H "x-api-key: $ANTHROPIC_API_KEY" \
+    # The key rides a stdin config fed by a PROCESS SUBSTITUTION (never `printf | curl`: under
+    # pipefail a consumer that never reads stdin makes the producer die on SIGPIPE -> 141), not
+    # an argument: an argv header is readable by every local user in /proc/<pid>/cmdline and
+    # `ps` (argv-bearer sweep S2, D7). `--disable` is FIRST (it aborts ~/.curlrc parsing) and
+    # `--noproxy '*'` keeps an ALL_PROXY/HTTPS_PROXY from redirecting the credentialed request.
+    # The body stays `-d "$req"` (non-secret corpus text).
+    resp=$("$CURL_BIN" --disable --noproxy '*' -sS -w '\n__HTTP_STATUS__:%{http_code}' "$ANTHROPIC_ENDPOINT" \
       -H "anthropic-version: $ANTHROPIC_VERSION" \
       -H "content-type: application/json" \
-      -d "$req" 2>/dev/null || true)
+      -d "$req" \
+      --config - < <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY") 2>/dev/null || true)
     rc=$(printf '%s' "$resp" | awk -F: '/^__HTTP_STATUS__:/{print $2}' | tr -d ' ')
     body=$(printf '%s' "$resp" | sed '/^__HTTP_STATUS__:/d')
     if [[ "$rc" =~ ^2[0-9][0-9]$ ]]; then
@@ -761,6 +807,44 @@ st_write() {
   printf '%s\n' "$@" > "$path"
 }
 
+# st_make_recording_curl <path> <counter> <argv-log> <stdin-log>: the self-test's mock curl.
+# Cycles through three distinct paraphrases (lexically overlapping the orm-target.md corpus),
+# bumping the counter file on every call, and RECORDS what the real curl would have exposed:
+# every argument (NUL-separated, so a newline in -d cannot forge a boundary, with a
+# CALL-END record closing each call) and, when the call asks for a config on stdin
+# (`--config -` / `-K -`), the stdin bytes. Those two logs are how the key-off-argv rows prove
+# WHERE the credential went: a mock that only answered could not tell an argv header from a
+# stdin one. The body carries `"type":"text"` because the reader selects the text block by type
+# (#8392); without it every paraphrase read as empty and the call as an API error.
+st_make_recording_curl() {
+  local path="$1" counter="$2" argv_log="$3" stdin_log="$4"
+  cat > "$path" <<STUB
+#!/usr/bin/env bash
+COUNTER_FILE="${counter}"
+[[ -f "\$COUNTER_FILE" ]] || echo 0 > "\$COUNTER_FILE"
+idx=\$(cat "\$COUNTER_FILE")
+echo \$((idx + 1)) > "\$COUNTER_FILE"
+printf '%s\0' "\$@" >> "${argv_log}"
+printf 'CALL-END\0' >> "${argv_log}"
+_prev=""
+for _a in "\$@"; do
+  if [[ ( "\$_prev" == "--config" || "\$_prev" == "-K" ) && "\$_a" == "-" ]]; then
+    cat >> "${stdin_log}"
+  fi
+  _prev="\$_a"
+done
+case \$((idx % 3)) in
+  0) phrase='database connection pool exhaustion under burst load' ;;
+  1) phrase='transaction allocation timeout when concurrency exceeds maximum' ;;
+  2) phrase='TimeoutError on queries during pool saturation' ;;
+esac
+# The bench's anthropic_paraphrase strips newlines + writes the __HTTP_STATUS__ trailer; mimic it.
+printf '{"content":[{"type":"text","text":"%s"}],"stop_reason":"end_turn"}\n' "\$phrase"
+printf '__HTTP_STATUS__:200\n'
+STUB
+  chmod +x "$path"
+}
+
 # self_test_flooding_pathology: synthesized regression test for the cap-20
 # displacement bug that motivated #4119. 30 non-learning "session state"
 # entries flood INDEX.md tier-1 for the keyword "schema drift". Under the
@@ -867,24 +951,8 @@ self_test_paraphrase_prepass() {
   # cases). cq-test-fixtures-synthesized-only.
   local stub_curl="$KB_ROOT/stub-curl.sh"
   local stub_counter="$KB_ROOT/stub-curl-counter"
-  cat > "$stub_curl" <<STUB
-#!/usr/bin/env bash
-# Cycles through three distinct paraphrases (lexically overlap with corpus).
-# Each call increments the counter file. The bench's anthropic_paraphrase
-# strips newlines + writes the __HTTP_STATUS__ trailer; we mimic the shape.
-COUNTER_FILE="${stub_counter}"
-[[ -f "\$COUNTER_FILE" ]] || echo 0 > "\$COUNTER_FILE"
-idx=\$(cat "\$COUNTER_FILE")
-echo \$((idx + 1)) > "\$COUNTER_FILE"
-case \$((idx % 3)) in
-  0) phrase='database connection pool exhaustion under burst load' ;;
-  1) phrase='transaction allocation timeout when concurrency exceeds maximum' ;;
-  2) phrase='TimeoutError on queries during pool saturation' ;;
-esac
-printf '{"content":[{"text":"%s"}],"stop_reason":"end_turn"}\n' "\$phrase"
-printf '__HTTP_STATUS__:200\n'
-STUB
-  chmod +x "$stub_curl"
+  local stub_argv="$KB_ROOT/stub-curl-argv" stub_stdin="$KB_ROOT/stub-curl-stdin"
+  st_make_recording_curl "$stub_curl" "$stub_counter" "$stub_argv" "$stub_stdin"
 
   local rk_stage2 prev_curl_bin="$CURL_BIN"
   local prev_api_key_was_set=0 prev_api_key=""
@@ -911,7 +979,97 @@ STUB
     echo "  FAIL: paraphrase-prepass: Stage 2 union-of-paraphrases lost target (rank=${rk_stage2:-null})"
   fi
 
+  # ── api-key off argv (argv-bearer sweep S2, D7): the same recorded run says where the key went ──
+  # The key is a synthetic constant. Verdicts are compared, never echoed.
+  local st_argv="" st_stdin="" st_calls=0
+  [[ -s "$stub_argv" ]] && st_argv=$(tr '\0' '\n' < "$stub_argv")
+  [[ -s "$stub_stdin" ]] && st_stdin=$(cat "$stub_stdin")
+  [[ -f "$stub_counter" ]] && st_calls=$(cat "$stub_counter")
+  st_assert "api-key: precondition: the recording curl saw at least one call (else every row below is vacuous)" \
+    "true" "$([[ "$st_calls" =~ ^[0-9]+$ ]] && (( st_calls >= 1 )) && echo true || echo false)"
+  st_assert "api-key: --disable is the FIRST argument of the first call" \
+    "--disable" "$(head -n 1 <<<"$st_argv")"
+  st_assert "api-key: --noproxy '*' is present on every call (calls=$st_calls)" \
+    "$st_calls" "$(grep -cxF -- '--noproxy' <<<"$st_argv" || true)"
+  st_assert "api-key: no x-api-key header is an argument of any call" \
+    "0" "$(grep -cF -- 'x-api-key' <<<"$st_argv" || true)"
+  st_assert "api-key: the key bytes are in no argument of any call" \
+    "0" "$(grep -cF -- 'stub-key-self-test' <<<"$st_argv" || true)"
+  st_assert "api-key: every call delivered the key as a stdin config header (calls=$st_calls)" \
+    "$st_calls" "$(grep -cxF -- 'header = "x-api-key: stub-key-self-test"' <<<"$st_stdin" || true)"
+  st_assert "api-key: the request body is still a -d argument (payload capture intact)" \
+    "true" "$([[ "$st_argv" == *$'\n-d\n'* ]] && echo true || echo false)"
+
   REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
+}
+
+# self_test_api_key_guard (argv-bearer sweep S2, D7): a key outside the token class is refused,
+# value-free, BEFORE any call, and the refusal is never folded into "(API_ERROR)".
+#   * main path: `bash $0 --confirm` with a hostile key exits 1 with exactly one marker, before
+#     Phase 1 starts, with zero calls made (the primary guard);
+#   * function path: anthropic_paraphrase called directly with a hostile key returns 3 with the
+#     marker and prints nothing on stdout (the last-resort guard: a bare "(API_ERROR)" here
+#     would be the silent conversion this refusal exists to prevent);
+#   * must-pass: a realistic key shape is accepted and delivered intact.
+self_test_api_key_guard() {
+  local gdir="$TMP_ROOT/key-guard"
+  mkdir -p "$gdir"
+  local curl_g="$gdir/curl" cnt="$gdir/counter" alog="$gdir/argv" slog="$gdir/stdin"
+  st_make_recording_curl "$curl_g" "$cnt" "$alog" "$slog"
+  local marker_base="SOLEUR_CREDENTIAL_REFUSED script=learning-retrieval-bench reason="
+  local -a keys=('has space' 'quo"te' 'back\slash' 'semi;colon' 'dollar$x' "sq'uote"
+                 $'tab\tkey' $'new\nzzline77' $'inj\nurl = "http://evil.invalid"' $'ctl\001key' $'del\177key')
+  local -a want=(token_shape token_shape token_shape token_shape token_shape token_shape
+                 control_char control_char control_char control_char control_char)
+  local i rc out err n_main=0 n_fn=0 prev_curl="$CURL_BIN" prev_key_set=0 prev_key=""
+  if [[ -n "${ANTHROPIC_API_KEY+x}" ]]; then prev_key_set=1; prev_key="$ANTHROPIC_API_KEY"; fi
+  for i in "${!keys[@]}"; do
+    # -- main path
+    rm -f "$cnt" "$alog" "$slog"
+    rc=0
+    out=$(ANTHROPIC_API_KEY="${keys[$i]}" CURL_BIN="$curl_g" bash "$0" --confirm --corpus-count-override 150 2>&1) || rc=$?
+    st_assert "api-key guard [$i] main path: exit code is 1" "1" "$rc"
+    st_assert "api-key guard [$i] main path: exactly one marker (${want[$i]})" \
+      "1" "$(grep -cxF -- "${marker_base}${want[$i]}" <<<"$out" || true)"
+    st_assert "api-key guard [$i] main path: refused before Phase 1 started" \
+      "0" "$(grep -cF -- 'Phase 1:' <<<"$out" || true)"
+    st_assert "api-key guard [$i] main path: zero curl calls" \
+      "false" "$([[ -e "$cnt" ]] && echo true || echo false)"
+    st_assert "api-key guard [$i] main path: not folded into (API_ERROR)" \
+      "0" "$(grep -cF -- '(API_ERROR)' <<<"$out" || true)"
+    n_main=$((n_main+1))
+    # -- function path (the last-resort guard)
+    rm -f "$cnt" "$alog" "$slog"
+    rc=0; err="$gdir/err"
+    CURL_BIN="$curl_g" ANTHROPIC_API_KEY="${keys[$i]}" out=$(anthropic_paraphrase "$PROMPT_LIGHT" "passage" 2>"$err") || rc=$?
+    st_assert "api-key guard [$i] function path: returns 3" "3" "$rc"
+    st_assert "api-key guard [$i] function path: prints nothing on stdout (no (API_ERROR))" "" "$out"
+    st_assert "api-key guard [$i] function path: exactly one marker (${want[$i]})" \
+      "1" "$(grep -cxF -- "${marker_base}${want[$i]}" "$err" || true)"
+    st_assert "api-key guard [$i] function path: zero curl calls" \
+      "false" "$([[ -e "$cnt" ]] && echo true || echo false)"
+    n_fn=$((n_fn+1))
+  done
+  # A row floor cannot see a loop that runs zero times; these counters can.
+  st_assert "api-key guard: inner counter: every hostile key ran on the main path" "${#keys[@]}" "$n_main"
+  st_assert "api-key guard: inner counter: every hostile key ran on the function path" "${#keys[@]}" "$n_fn"
+  st_assert "api-key guard: inner counter: every key has an expected reason" "${#keys[@]}" "${#want[@]}"
+
+  # Must-pass, not the canonical: a realistic key shape goes through, intact, on stdin.
+  rm -f "$cnt" "$alog" "$slog"
+  local real_shape='sk-ant-api03-Ab_Cd.Ef~Gh+Ij/Kl=-0123456789' resp
+  rc=0
+  resp=$(CURL_BIN="$curl_g" ANTHROPIC_API_KEY="$real_shape" anthropic_paraphrase "$PROMPT_LIGHT" "passage" 2>/dev/null) || rc=$?
+  st_assert "api-key guard must-pass: a realistic key shape is accepted (rc 0)" "0" "$rc"
+  st_assert "api-key guard must-pass: the call returned a paraphrase, not (API_ERROR)" \
+    "database connection pool exhaustion under burst load" "$resp"
+  st_assert "api-key guard must-pass: the key is delivered intact on stdin" \
+    "header = \"x-api-key: $real_shape\"" "$(cat "$slog" 2>/dev/null)"
+  st_assert "api-key guard must-pass: the key is in no argument" \
+    "0" "$(tr '\0' '\n' < "$alog" | grep -cF -- "$real_shape" || true)"
+
+  CURL_BIN="$prev_curl"
+  if (( prev_key_set == 1 )); then ANTHROPIC_API_KEY="$prev_key"; else unset ANTHROPIC_API_KEY; fi
 }
 
 self_test() {
@@ -1251,10 +1409,22 @@ self_test() {
   # ── Paraphrase pre-pass (#4176 Stage 2): union-of-paraphrases recovers zero-overlap target ──
   self_test_paraphrase_prepass
 
+  # ── Anthropic key shape guard + key-off-argv (argv-bearer sweep S2, D7) ──
+  self_test_api_key_guard
+
   echo
   echo "== summary: PASS=$SELF_TEST_PASS  FAIL=$SELF_TEST_FAIL  TOTAL=$SELF_TEST_TOTAL =="
   if (( SELF_TEST_FAIL > 0 )); then
     exit 1
+  fi
+  # anti-vacuity floor: a self-test whose case calls were deleted or short-circuited reports
+  # PASS=0 FAIL=0 and exits 0 above. Declared on the line IMMEDIATELY above the `if`, and a
+  # lower bound (never -eq) so adding a row is not a spurious failure.
+  ST_MIN_ASSERTIONS=165
+  if (( SELF_TEST_TOTAL < ST_MIN_ASSERTIONS )); then
+    printf 'FATAL: anti-vacuity floor breached (TOTAL=%s < %s) -- cases did not dispatch\n' \
+      "$SELF_TEST_TOTAL" "$ST_MIN_ASSERTIONS" >&2
+    exit 2
   fi
   exit 0
 }
@@ -1301,6 +1471,10 @@ fi
 if (( WILL_NEED_API_KEY == 1 )); then
   require_api_key
 fi
+# Shape guard, in the MAIN shell and BEFORE the first anthropic_paraphrase call. Unconditional
+# on WILL_NEED_API_KEY: a cache-hit rerun skips Phase 2 but Phase 3's kbsearch_rank still calls
+# anthropic_paraphrase whenever a key is set, so a malformed key is just as live there.
+refuse_malformed_api_key
 
 # ─── Phase 1: corpus indexing ──────────────────────────────────────────────
 CORPUS_NDJSON=$(mktemp)
