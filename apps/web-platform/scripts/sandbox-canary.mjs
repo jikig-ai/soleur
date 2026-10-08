@@ -71,21 +71,20 @@ const INNER_PROBE_URL = new URL(
 // ---------------------------------------------------------------------------
 
 /**
- * Map a replayed bwrap outcome to a canary verdict.
+ * Shared classifier arms for BOTH replays — spawn errors, bwrap's own
+ * refusal/EPERM stderr signatures, and the generic-exit tail. Kept in ONE
+ * place so a new reason never lands on only one arm (the inner/outer
+ * classifiers re-spelled these verbatim until review flagged the drift).
  *
  * Exit-code classification is the false-rollback guard (#4941): ONLY a bwrap
  * "Operation not permitted" (EPERM — the #5873 seccomp/userns-denial shape) is
  * `sandbox_broken`; a missing binary, OOM, or any other non-zero exit is
  * `canary_infra_error` (non-blocking — never rolls back).
  *
- * @param {{ bwrapExitCode?: number | null, bwrapStderr?: string, spawnErrorCode?: string }} [args]
- * @returns {{ verdict: "pass" | "sandbox_broken" | "canary_infra_error", reason: string }}
+ * @returns {{verdict: string, reason: string} | null} a verdict when the
+ *   shared arms decide, else null (arm-specific logic continues).
  */
-export function classifyReplayVerdict({
-  bwrapExitCode,
-  bwrapStderr = "",
-  spawnErrorCode,
-} = {}) {
+function classifyShared({ bwrapExitCode, bwrapStderr = "", spawnErrorCode }) {
   if (spawnErrorCode === "ENOENT") {
     return { verdict: "canary_infra_error", reason: "bwrap_spawn_enoent" };
   }
@@ -95,28 +94,45 @@ export function classifyReplayVerdict({
       reason: `bwrap_spawn_${String(spawnErrorCode).toLowerCase()}`,
     };
   }
-  if (bwrapExitCode === 0) {
-    return { verdict: "pass", reason: "ok" };
-  }
-  // #8752: our own shim's refusal marker (exit 65, `bwrap-shim:` on stderr) is
-  // a deterministic deployed-hardening defect, not the flake class
-  // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
-  if (/bwrap-shim:/.test(bwrapStderr)) {
-    return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
-  }
-  // bwrap merges its userns/seccomp stderr into this stream; the EPERM phrase is
-  // the load-bearing signature (Phase-0 spike; matches the seccomp `unshare`
-  // denial that took down the Concierge sandbox for all tenants under SDK 0.3.x).
-  if (/operation not permitted/i.test(bwrapStderr)) {
+  if (bwrapExitCode !== 0) {
+    // #8752: our own shim's refusal marker (exit 65, `bwrap-shim:` on stderr)
+    // is a deterministic deployed-hardening defect, not the flake class
+    // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
+    if (/bwrap-shim:/.test(bwrapStderr)) {
+      return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
+    }
+    // bwrap merges its userns/seccomp stderr into this stream; the EPERM
+    // phrase is the load-bearing signature (Phase-0 spike; matches the
+    // seccomp `unshare` denial that took down the Concierge sandbox for all
+    // tenants under SDK 0.3.x).
+    if (/operation not permitted/i.test(bwrapStderr)) {
+      return {
+        verdict: "sandbox_broken",
+        reason: "bwrap_operation_not_permitted",
+      };
+    }
     return {
-      verdict: "sandbox_broken",
-      reason: "bwrap_operation_not_permitted",
+      verdict: "canary_infra_error",
+      reason: `bwrap_exit_${bwrapExitCode ?? "null"}`,
     };
   }
-  return {
-    verdict: "canary_infra_error",
-    reason: `bwrap_exit_${bwrapExitCode ?? "null"}`,
-  };
+  return null;
+}
+
+/**
+ * Map a replayed bwrap outcome to a canary verdict.
+ *
+ * @param {{ bwrapExitCode?: number | null, bwrapStderr?: string, spawnErrorCode?: string }} [args]
+ * @returns {{ verdict: "pass" | "sandbox_broken" | "canary_infra_error", reason: string }}
+ */
+export function classifyReplayVerdict({
+  bwrapExitCode,
+  bwrapStderr = "",
+  spawnErrorCode,
+} = {}) {
+  const shared = classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  if (shared) return shared;
+  return { verdict: "pass", reason: "ok" };
 }
 
 /**
@@ -1106,14 +1122,8 @@ export function classifyOuterWrapReplayVerdict({
   bwrapStderr = "",
   spawnErrorCode,
 } = {}) {
-  if (spawnErrorCode === "ENOENT") {
-    return { verdict: "canary_infra_error", reason: "bwrap_spawn_enoent" };
-  }
   if (spawnErrorCode) {
-    return {
-      verdict: "canary_infra_error",
-      reason: `bwrap_spawn_${String(spawnErrorCode).toLowerCase()}`,
-    };
+    return classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
   }
   if (bwrapExitCode === 0 && /^isolation_ok$/m.test(bwrapStdout)) {
     // An isolation green built on the implicit-userns fallback is the WRONG
@@ -1138,24 +1148,11 @@ export function classifyOuterWrapReplayVerdict({
   if (/^FAIL:/m.test(bwrapStdout) || bwrapStdout.includes("isolation_fail")) {
     return { verdict: "sandbox_broken", reason: "isolation_probe_failed" };
   }
-  if (/bwrap-shim:/.test(bwrapStderr)) {
-    return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
-  }
-  if (/operation not permitted/i.test(bwrapStderr)) {
-    return {
-      verdict: "sandbox_broken",
-      reason: "bwrap_operation_not_permitted",
-    };
-  }
-  if (bwrapExitCode === 0) {
-    // bwrap ran the payload but it produced no verdict line — the probe
-    // could not have run its assertions; not an isolation signal.
-    return { verdict: "canary_infra_error", reason: "probe_output_missing" };
-  }
-  return {
-    verdict: "canary_infra_error",
-    reason: `bwrap_exit_${bwrapExitCode ?? "null"}`,
-  };
+  const shared = classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  if (shared) return shared;
+  // bwrap ran the payload but it produced no verdict line — the probe
+  // could not have run its assertions; not an isolation signal.
+  return { verdict: "canary_infra_error", reason: "probe_output_missing" };
 }
 
 /**

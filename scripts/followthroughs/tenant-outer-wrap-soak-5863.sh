@@ -93,8 +93,20 @@ if [[ "$VERDICT" == "sandbox_broken" ]]; then
   exit 1
 fi
 
+# PASS is bound to the LATEST observation, not just the historical counters:
+# canary_infra_error holds (not resets) consecutive_pass, so a stale counter
+# could otherwise PASS while the current verdict is an infra flake or an
+# "unknown" sentinel. And a checked_at that has not advanced means the canary
+# has not actually run recently — the ledger is stale, not proven.
+NOW=$(date +%s)
+STALE_SECS=$((7 * 24 * 3600))
+if [[ $((NOW - CHECKED)) -gt "$STALE_SECS" ]]; then
+  echo "TRANSIENT: canary ledger stale — checked_at=$CHECKED is >${STALE_SECS}s old (last run has not reported recently). Retry next sweep." >&2
+  exit 2
+fi
+
 SPAN=$((CHECKED - FIRST))
-if [[ "$CONSEC" -ge "$REQUIRED_GREENS" && "$FIRST" -gt 0 && "$SPAN" -ge "$MIN_SPAN_SECS" ]]; then
+if [[ "$VERDICT" == "pass" && "$CONSEC" -ge "$REQUIRED_GREENS" && "$FIRST" -gt 0 && "$SPAN" -ge "$MIN_SPAN_SECS" ]]; then
   echo "PASS: $CONSEC consecutive green outer-wrap canary verdicts over $((SPAN / 86400))d (≥${REQUIRED_GREENS} / ≥3d) since first_pass_at=$FIRST — soak proven; promote the arm to gating."
   exit 0
 fi

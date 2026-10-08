@@ -420,6 +420,13 @@ SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sand
 # (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
 # file via /hooks/deploy-status's outer_wrap_canary field.
 SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
+# Aliasing guard: an env override pointing the outer ledger at the inner file
+# would let the #5863 soak read the #8752 arm's state (wrong mechanism's
+# greens counting toward promotion). Loud-warn + hold; the outer arm still
+# records to the shared file, but the misconfiguration is journaled.
+if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
+  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer soak would read the inner ledger; fix the env override"
+fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
