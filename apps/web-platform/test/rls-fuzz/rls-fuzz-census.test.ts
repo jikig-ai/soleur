@@ -45,11 +45,12 @@ const ALLOWED_BARE_SQL_CALLS = new Set([
   "securityDefinerAnonFns",
 ]);
 
-// sql.end / sql.begin / sql.savepoint on the OUTER handle are exempt from the
-// statement census: `end` is teardown (not a statement), and `begin`/`savepoint`
-// open transaction scopes — the retry wraps the CALL to `sql.begin`, which the
-// `withTransientRetry` line-filter covers on the preceding line.
-const UNWRAPPED_SQL_OK = /await sql\.(?:begin|end|savepoint)\b/;
+// `sql.end` is teardown, not a statement — exempt. A bare `await sql.begin` or
+// `await sql.savepoint` is NOT exempt: the retryable form puts `sql.begin` on a
+// line of its own inside `withTransientRetry(() => …)` (or shares a line that
+// then carries the `withTransientRetry` token), so a line matching `await
+// sql.begin` is by construction the unwrapped shape.
+const UNWRAPPED_SQL_OK = /await sql\.end\b/;
 
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
