@@ -1,5 +1,5 @@
-import { isAbsolute, join } from "path";
-import { existsSync, realpathSync } from "fs";
+import { basename, dirname, isAbsolute, join } from "path";
+import { realpathSync } from "fs";
 import { reportSilentFallback } from "@/server/observability";
 
 // Pure JWT-claim readers live in the client-safe `@/lib/session-claims` module
@@ -855,13 +855,16 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
  * (worktree root populated ahead of the flag) and any post-rollback window
  * (flag back to false while trees still live under the NVMe root). Denying
  * both unconditionally is safe flag-off: a nonexistent deny landing is a
- * tmpfs over an empty dir the vendor creates at namespace build.
+ * no-op mount entry until the root is provisioned (the vendored builder
+ * skips absent tmpfs sources), and the missing-root arm pages post-flip
+ * when it is expected.
  *
  * `"/"` (or empty) is never a tenant root — a deny there would tmpfs the
- * whole rootfs — so such a root is excluded. A non-absolute or `..`-carrying
- * root would mask the wrong tree silently; refuse LOUDLY (the caller's
- * catastrophic-path guard likewise fails closed rather than building a
- * mis-scoped namespace).
+ * whole rootfs — so such a root THROWS (dropping it silently would leave
+ * `/<uuid>` workspaces with no tenant deny at all). A non-absolute or
+ * `..`-carrying root would mask the wrong tree silently; refuse LOUDLY (the
+ * caller's catastrophic-path guard likewise fails closed rather than
+ * building a mis-scoped namespace).
  */
 export function workspaceTenantDenyRoots(): string[] {
   const roots = new Set<string>();
@@ -884,9 +887,34 @@ export function workspaceTenantDenyRoots(): string[] {
       );
     }
     roots.add(norm);
-    // A symlinked root masks the LINK path while the target stays visible
-    // under `--ro-bind / /` — deny the canonical path too.
-    if (existsSync(norm)) roots.add(realpathSync(norm));
+    // A symlinked (or partially-symlinked) root masks the LINK path while the
+    // target stays visible under `--ro-bind / /` — deny the canonical path
+    // too. Canonicalize via the longest existing PREFIX: realpathSync itself
+    // throws on absent leaves AND on dangling links, and skipping either
+    // silently leaves the target unmasked — same fail-open class as a
+    // stat error. ENOENT/ENOTDIR during the prefix walk just climbs; any
+    // other error throws (fail loud over silently unmasked).
+    let probe = norm;
+    const tail: string[] = [];
+    while (true) {
+      try {
+        const canon = realpathSync(probe);
+        if (tail.length === 0 && canon === "/") {
+          throw new Error(
+            `workspaceTenantDenyRoots: tenant root '${root}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
+          );
+        }
+        roots.add(tail.length === 0 ? canon : join(canon, ...tail.reverse()));
+        break;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+        const parent = dirname(probe);
+        if (parent === probe) break; // climbed to / — no canonical prefix exists
+        tail.push(basename(probe));
+        probe = parent;
+      }
+    }
   }
   return [...roots];
 }

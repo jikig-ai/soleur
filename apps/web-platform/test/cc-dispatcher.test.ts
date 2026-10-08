@@ -103,6 +103,15 @@ vi.mock("@/server/cc-reprovision", () => ({
   reprovisionWorkspaceOnDispatch: vi.fn().mockResolvedValue("ok"),
 }));
 
+// #9558 — resolveC4Eligible resolves installations + can MINT a token and
+// probe api.github.com: it must never fire on a support dispatch. Stubbed
+// false here (its factory-side consumers aren't exercised in this file) so
+// the not-called pin below can observe it.
+vi.mock("@/server/resolve-c4-eligible", () => ({
+  resolveC4FlagEnabled: vi.fn(async () => false),
+  resolveC4Eligible: vi.fn(async () => false),
+}));
+
 import {
   getPendingPromptRegistry,
   getCcStartSessionRateLimiter,
@@ -113,6 +122,7 @@ import {
   CC_OP_SLUGS,
 } from "@/server/cc-dispatcher";
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
+import { resolveC4Eligible } from "@/server/resolve-c4-eligible";
 import { ERR_ATTACHMENT_NOT_FOUND } from "@/server/error-messages";
 import {
   WORKSPACE_RECLAIMED_MESSAGE,
@@ -456,6 +466,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     it(`support persona never runs reprovisionWorkspaceOnDispatch (warm=${warm})`, async () => {
       const sendToClient = vi.fn().mockReturnValue(true);
       vi.mocked(reprovisionWorkspaceOnDispatch).mockClear();
+      vi.mocked(resolveC4Eligible).mockClear();
       const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
       __setCcRunnerForTests({
         dispatch: vi.fn(async () => {}),
@@ -482,6 +493,8 @@ describe("cc-dispatcher singletons + orchestration", () => {
       await Promise.resolve();
 
       expect(vi.mocked(reprovisionWorkspaceOnDispatch)).not.toHaveBeenCalled();
+      // resolveC4Eligible mints + probes api.github.com — must not run either.
+      expect(vi.mocked(resolveC4Eligible)).not.toHaveBeenCalled();
     });
   }
 

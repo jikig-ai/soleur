@@ -47,15 +47,20 @@
 #          inserted immediately before it — after every setup token incl. the
 #          vendor tail bind.
 #   Arm B  a `--` carried INSIDE an --args payload (a future SDK that puts the
-#          boundary in the fd stream): spliced before the first `--` there;
-#          payloads past that boundary are command text and pass through.
+#          boundary in the fd stream): upstream parse_args_recurse resumes
+#          outer-argv OPTION parsing after a payload ends, so an in-payload
+#          splice could still be mounted over by trailing outer options —
+#          the mask therefore always lands at the OUTER setup end (after every
+#          payload mount, verified on bwrap 0.12.0); payloads pass through
+#          verbatim and payloads past the command marker stay unread.
 #   Arm C  no boundary anywhere (command starts at the first bare operand, or
 #          the argv is pure options): mask lands before the operand / at tail.
-# Fail-closed applies to the rewrite too: a non-numeric or unreadable --args
-# fd or a re-emit failure refuses the spawn — never an unmasked namespace.
-# (A fresh `--proc` is never a regression on the tail bind even absent a
-# pidns unshare: under --unshare-user the kernel already masks foreign-task
-# fields, and at worst it is the same exposure — so no pidns precondition.)
+# Fail-closed applies to the rewrite too: an unreadable or EMPTY --args
+# payload or a re-emit failure refuses the spawn — never an unmasked
+# namespace (a non-numeric fd value passes through for real bwrap to report).
+# A merged setup argv lacking an option-position --unshare-pid/--unshare-all
+# is refused — a fresh `--proc` without a pidns is keyed to the HOST's and the
+# mask would be decorative.
 
 set -u
 
@@ -118,14 +123,16 @@ opt_kind() { # opt_kind <tok> — sets OPT_KIND (never echoes: a per-token $()
   esac
 }
 
-# The ONE arity walk over a token array. Emits "<boundary> <operand> <fdlist>"
-# — indices of the first option-position `--` and first bare operand (-1 when
-# absent), plus a space-separated list of fd-valued option values found before
-# either marker (fds the setup argv references by NUMBER; a `--` or operand
-# ends the scan). Command-side tokens are never walked.
-setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <fds>"
+# The ONE arity walk over a token array. Emits "<boundary> <operand> <pidns>
+# <fdlist>" — indices of the first option-position `--` and first bare operand
+# (-1 when absent), whether an option-position `--unshare-pid`/`--unshare-all`
+# was seen (a VALUE-position token — e.g. `--setenv K --unshare-pid` — must not
+# count: it mounts no namespace), plus a space-separated list of fd-valued
+# option values found before either marker (fds the setup argv references by
+# NUMBER; a `--` or operand ends the scan). Command-side tokens never walked.
+setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <pidns> <fds>"
   local toks=("$@") n=$# i=0 tok kind="" skip=0 expect_fd=0 extra_skip=0
-  local fds="" fd_opt=""
+  local fds="" pidns=0
   while [ "$i" -lt "$n" ]; do
     tok="${toks[$i]}"
     if [ "$skip" -gt 0 ]; then skip=$((skip - 1))
@@ -137,20 +144,21 @@ setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <fds>"
       expect_fd=0; skip=$extra_skip; extra_skip=0
     else
       opt_kind "$tok"; kind="$OPT_KIND"
+      [ "$kind" = other ] && case "$tok" in --unshare-pid|--unshare-all) pidns=1 ;; esac
       case "$kind" in
-        boundary) printf '%s -1%s\n' "$i" "$fds"; return ;;
+        boundary) printf '%s -1 %s%s\n' "$i" "$pidns" "$fds"; return ;;
         fd1) expect_fd=1 ;;
         fd2) expect_fd=1; extra_skip=1 ;;
         a1) skip=1 ;;
         a2) skip=2 ;;
         a3) skip=3 ;;
-        operand) printf -- '-1 %s%s\n' "$i" "$fds"; return ;;
+        operand) printf -- '-1 %s %s%s\n' "$i" "$pidns" "$fds"; return ;;
         *) ;;                       # other — zero-arg assumption
       esac
     fi
     i=$((i + 1))
   done
-  printf -- '-1 -1%s\n' "$fds"
+  printf -- '-1 -1 %s%s\n' "$pidns" "$fds"
 }
 
 # Preserve every fd named by PATH in COMMAND-side tokens — the vendored inner
@@ -176,10 +184,12 @@ preserve=""
 args_pos=()   # argv index of every pre-boundary `--args` fd token
 boundary=-1   # argv index of the first `--` in option position
 operand=-1    # argv index of the first bare operand (the no-`--` command form)
+pidns=0       # an OPTION-position --unshare-pid/--unshare-all was seen
 i=0
 while [ "$i" -lt "$argc" ]; do
   tok="${argv[$i]}"
   opt_kind "$tok"; kind="$OPT_KIND"
+  [ "$kind" = other ] && case "$tok" in --unshare-pid|--unshare-all) pidns=1 ;; esac
   case "$kind" in
     boundary) boundary=$i; break ;;
     fd1|fd2)
@@ -225,7 +235,6 @@ fi
 # mask. The last setup position of the MERGED stream is always in the outer
 # argv — that is where the mask goes (stage 2).
 nread=0
-pidns=0
 if [ "${#args_pos[@]}" -gt 0 ]; then
   for pos in "${args_pos[@]}"; do
     fd="${argv[$pos]}"
@@ -234,12 +243,10 @@ if [ "${#args_pos[@]}" -gt 0 ]; then
     mapfile -d '' -t pl <&"$fd" || fail "cannot read --args fd $fd"
     [ "${#pl[@]}" -gt 0 ] || fail "empty --args payload on fd $fd"
     eval "exec $fd<&-" 2>/dev/null || true
-    read -r pboundary poperand pfds <<< "$(setup_marks "${pl[@]}")"
+    read -r pboundary poperand ppidns pfds <<< "$(setup_marks "${pl[@]}")"
     [ -n "$pfds" ] && preserve="$preserve $pfds"
+    [ "$ppidns" = 1 ] && pidns=1
     pcmd=$(( pboundary >= 0 ? pboundary + 1 : poperand >= 0 ? poperand : ${#pl[@]} ))
-    for t in "${pl[@]:0:$pcmd}"; do
-      case "$t" in --unshare-pid|--unshare-all) pidns=1 ;; esac
-    done
     [ "$pcmd" -lt "${#pl[@]}" ] && add_cmd_fd_refs "${pl[@]:$pcmd}"
     # A payload carrying the command marker (inner `--`/operand) turns later
     # payloads into command text — stop reading (their fds stay argv-referenced
@@ -250,13 +257,10 @@ if [ "${#args_pos[@]}" -gt 0 ]; then
     [ "$pcarries_cmd" = 1 ] && break
   done
 fi
-# pidns across the OUTER setup tokens too.
-for t in "${argv[@]:0:$(( boundary >= 0 ? boundary : operand >= 0 ? operand : argc ))}"; do
-  case "$t" in --unshare-pid|--unshare-all) pidns=1 ;; esac
-done
 # A fresh --proc is keyed to the mount-time pid namespace: absent a pidns
 # unshare it still shows host pids — the mask is decorative and the tail bind
-# stands. Refuse rather than ship a silently-maskless spawn.
+# stands. Refuse rather than ship a silently-maskless spawn. (An
+# option-position flag only — a value-position literal does not satisfy.)
 [ "$pidns" = 1 ] || fail "merged setup argv lacks --unshare-pid/--unshare-all — refusing a proc mask with no namespace to scope it"
 
 [ -x "$REAL" ] || fail "real bwrap not executable: $REAL"
@@ -293,10 +297,9 @@ done
 # the realized deny. (Not --tmpfs: the vendored inner command resolves
 # `/proc/self/fd/N` for its apply-seccomp helper — an empty /proc would break
 # the spawn.) Read payloads are re-emitted on fresh POST-SWEEP fds and the
-# argv renumbered. Mask position, by precedence: (a) inside the payload that
-# carried the inner boundary/operand (done in stage 1); (b) before the outer
-# `--`; (c) before the outer operand — NOT inside a payload, where trailing
-# outer setup options would still mount over it; (d) at argv end.
+# argv renumbered. Mask position — always the OUTER setup end, never inside a
+# payload (trailing outer options parse after it and would mount over): (a)
+# before the outer `--`; (b) before the outer operand; (c) at argv end.
 if [ "$boundary" -ge 0 ]; then
   argv=("${argv[@]:0:$boundary}" "${mask[@]}" "${argv[@]:$boundary}")
 elif [ "$operand" -ge 0 ]; then

@@ -231,15 +231,21 @@ What changed in `cc-dispatcher.ts`:
 - The egress posture `log.info` now carries `persona`, so a support dispatch that ever opened
   egress is attributable in Sentry.
 
-**serviceTokens decision (plan FR3, was flagged inferred):** `getUserServiceTokens` is NOT gated.
-The service-token map holds the user's own third-party provider keys injected into the agent env —
-orthogonal to the repo/GitHub credential surface this issue names, and the support session's
-egress-closed sandbox cannot exfiltrate them to the network. Review note: a sandboxed command can
-still ECHO its env into the conversation transcript (the model API + transcript logs are a real,
-if narrower, exposure path for the user's own Connected-Services keys) — accepted deliberately:
-the transcript stays in the user's own session, and gating would cut a capability (service lookups
-in support answers) for a self-only exposure. Recorded here so the choice is deliberate, not an
-omission; revisit if support transcripts ever fan out beyond the session owner.
+**serviceTokens decision (plan FR3, was flagged inferred):** `getUserServiceTokens` is NOT gated
+as a fetch, but the **github provider entry is stripped post-fetch** when `sandboxWrite === "none"`
+(`cc-dispatcher.ts`: `const serviceTokens = { ...serviceTokensRaw }; if (mode.sandboxWrite ===
+"none") delete serviceTokens.GITHUB_TOKEN;`). The stored `GITHUB_TOKEN` is the user's own GitHub
+credential — squarely inside the surface #9558 names — and an env-visible, transcript-echoable
+credential in a session whose every GitHub egress domain is closed. Every OTHER provider key stays
+injected: they are the user's own third-party credentials, the egress-closed sandbox cannot
+exfiltrate them to the network, and stripping them would cut the support-persona capability of
+service lookups in answers. Review note: a sandboxed command can still ECHO its env into the
+conversation transcript (the model API + transcript logs are a real, if narrower, exposure path
+for the user's own Connected-Services keys) — accepted deliberately for the non-GitHub keys: the
+transcript stays in the user's own session. Recorded here so the choice is deliberate, not an
+omission; revisit if support transcripts ever fan out beyond the session owner. Residual: the
+fetch still decrypts the github key (and can fire the lazy v1→v2 key-version migration write) on
+a support dispatch — env-leak is closed; the wasted decrypt/migration is documented, not gated.
 
 **Token-channel sweep (4.3):** `ghToken`/`gitInstallationToken` (the askpass token) are the only
 agent-env credential channels fed by the dispatch (`buildAgentEnv` opts); `GIT_INSTALLATION_TOKEN`

@@ -297,10 +297,12 @@ export function buildAgentSandboxConfig(
   // cheap existence bit, not enumeration).
   // #9725 (ADR-068 aftermath): the deny set is every root where tenant
   // working trees can live — workspaceTenantDenyRoots() returns the volume
-  // root AND, once the git-data flag is on, the worktree root. Denying only
-  // WORKSPACES_ROOT post-cutover would mask an empty directory while sibling
-  // trees sit readable under /var/lib/soleur/worktrees. Constant per dispatch
-  // (roots, not dir entries), so the mid-session TOCTOU posture is unchanged.
+  // root AND the raw worktree root UNCONDITIONALLY (the flag-collapsed form
+  // would leave the pre-flip staging + post-rollback windows unmasked, and
+  // denying only WORKSPACES_ROOT post-cutover would mask an empty directory
+  // while sibling trees sit readable under /var/lib/soleur/worktrees).
+  // Constant per dispatch (roots, not dir entries), so the mid-session
+  // TOCTOU posture is unchanged.
   const denyRoots = workspaceTenantDenyRoots();
   const denyRootsExist = denyRoots.map((root) => existsSync(root));
   denyRoots.forEach((root, i) => {
@@ -343,8 +345,9 @@ export function buildAgentSandboxConfig(
   );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
-  // agent sandbox). `deniedCount` is now constant (3 + extras) per session —
-  // a drift in it is a config diff, not live directory state.
+  // agent sandbox). `deniedCount` is config-derived (raw roots + c4 staging +
+  // /proc + realpath aliases) per session — a drift in it is a config diff,
+  // not live directory state.
   log.info(
     {
       feature: "agent-sandbox",

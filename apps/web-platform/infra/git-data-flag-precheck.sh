@@ -147,9 +147,13 @@ detect_deny_roots() {
   local dir="${SANDBOX_SRC_DIR:-$(dirname "$0")/../server}"
   if [ -r "$dir/workspace-resolver.ts" ] && [ -f "$dir/workspace-resolver.ts" ] \
      && [ -r "$dir/agent-runner-sandbox-config.ts" ] && [ -f "$dir/agent-runner-sandbox-config.ts" ]; then
+    # Function-scoped: the RAW env read must be inside the helper body — a
+    # flag-collapsed body (calling getWorkspaceWorktreeRoot()) yields absent,
+    # while a file-scoped grep would still hit that helper's own env read.
     if grep -qE 'export function workspaceTenantDenyRoots' "$dir/workspace-resolver.ts" \
-       && grep -qF 'WORKTREE_ROOT' "$dir/workspace-resolver.ts" \
-       && grep -qE 'workspaceTenantDenyRoots[[:space:]]*\(' "$dir/agent-runner-sandbox-config.ts"; then
+       && sed -n '/export function workspaceTenantDenyRoots/,/^}/p' "$dir/workspace-resolver.ts" \
+          | grep -qF 'process.env.WORKTREE_ROOT' \
+       && grep -qE '=[[:space:]]*workspaceTenantDenyRoots\(' "$dir/agent-runner-sandbox-config.ts"; then
       echo present
     else
       echo absent

@@ -615,6 +615,35 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
+  it("a setup argv with NO option-position --unshare-pid refuses (a fresh --proc without a pidns is a decorative mask)", () => {
+    const r = root();
+    try {
+      const res = spawnSync(SHIM, ["--unshare-user", "--ro-bind", "/", "/", "--", "/usr/bin/true"], {
+        env: r.env(), encoding: "utf8",
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("bwrap-shim:");
+      expect(res.stderr).toContain("unshare-pid");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a `--unshare-pid` token in an option-VALUE position does NOT satisfy the pidns requirement (spoof-proof)", () => {
+    const r = root();
+    try {
+      // `--setenv K --unshare-pid` puts the flag name in an a2 value slot —
+      // real bwrap mounts no pidns, so the mask would be decorative; refuse.
+      const res = spawnSync(SHIM, ["--unshare-user", "--setenv", "K", "--unshare-pid", "--", "/usr/bin/true"], {
+        env: r.env(), encoding: "utf8",
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("unshare-pid");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("a `/proc/self/fd/N` path inside a PAYLOAD's command tokens IS preserved", () => {
     const r = root();
     const fdFile = join(r.root, "cmd-fd");

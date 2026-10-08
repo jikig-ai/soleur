@@ -309,6 +309,10 @@ export function classifyForkProbe({ status, stderr = "", errorCode } = {}) {
   return null;
 }
 
+/** stdio 0-2 baseline for the fd census — exported so tests pin the impl
+ *  constant rather than re-deriving the formula. */
+export const FD_CENSUS_BASELINE = 3;
+
 /**
  * Classify the in-sandbox fd census against `fdLimit`. Returns a verdict or
  * null.
@@ -430,7 +434,7 @@ const HARDENING_PROBES = [
 export function runHardeningProbes(setupArgv) {
   // Baseline 3 = stdio only (the dup-test enumerator opens nothing of its
   // own); fd-valued setup options are the argv-driven slack.
-  const fdLimit = 3 + countFdValuedOptions(setupArgv);
+  const fdLimit = FD_CENSUS_BASELINE + countFdValuedOptions(setupArgv);
   for (const probe of HARDENING_PROBES) {
     // fd_census carries a deliberately UNREFERENCED fd (child fd 3): swept by
     // the shim ⇒ count stays at the bound; a sweep regression ⇒ +1 over the

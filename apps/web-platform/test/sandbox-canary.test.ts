@@ -27,6 +27,7 @@ import {
   classifyUsernsDenyProbe,
   computeCanaryPaths,
   countFdValuedOptions,
+  FD_CENSUS_BASELINE,
   normalizeCapturedArgv,
   parseShimSetupArgv,
   selectSandboxSetupArgv,
@@ -1064,7 +1065,10 @@ describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit",
         "utf8",
       ),
     );
-    const fdLimit = 3 + countFdValuedOptions(fixture.bwrapSetupArgv);
+    // Pin the IMPL baseline constant — not a re-derived literal — so a 3→4
+    // drift in sandbox-canary.mjs surfaces here.
+    const fdLimit = FD_CENSUS_BASELINE + countFdValuedOptions(fixture.bwrapSetupArgv);
+    expect(FD_CENSUS_BASELINE).toBe(3);
     expect(
       classifyFdCensusProbe(
         { status: 0, stdout: String(fdLimit + 1) },

@@ -44,8 +44,12 @@ shim="$app/infra/bwrap-shim/bwrap"
 if need_file "$shim"; then
   check "shim tail re-mask emits --proc /proc" \
     "$(grep -c -E -- '--proc.*/proc' "$shim" || true)" 1
-  check "shim fail-closed marker + exit 65" \
-    "$(grep -c 'bwrap-shim:' "$shim" || true)" 1
+  # Code-shaped: the empty-payload refuse + the pidns refuse are the two
+  # fail-closed arms a gutted fail() can't fake.
+  check "shim refuses an empty --args payload (fail-closed)" \
+    "$(grep -c 'empty --args payload' "$shim" || true)" 1
+  check "shim refuses a pidns-less merged argv (decorative mask)" \
+    "$(grep -c 'unshare-pid' "$shim" || true)" 2
 fi
 # Canary probe discriminates on HOST PID visibility, never on an empty /proc
 # (the vendored apply-seccomp needs /proc/self/fd to exist).
@@ -61,12 +65,14 @@ cfg="$app/server/agent-runner-sandbox-config.ts"
 if need_file "$resolver"; then
   check "workspaceTenantDenyRoots exported from the resolver" \
     "$(grep -c 'export function workspaceTenantDenyRoots' "$resolver" || true)" 1
-  check "worktree root joins the deny root set" \
-    "$(grep -c 'getWorkspaceWorktreeRoot' "$resolver" || true)" 1
+  # The deny helper must read the RAW WORKTREE_ROOT itself — a flag-collapsed
+  # body (calling getWorkspaceWorktreeRoot) is the #9725 regression shape.
+  check "deny helper reads the RAW WORKTREE_ROOT in-body" \
+    "$(sed -n '/export function workspaceTenantDenyRoots/,/^}/p' "$resolver" | grep -cF 'process.env.WORKTREE_ROOT' || true)" 1
 fi
 if need_file "$cfg"; then
-  check "sandbox config consumes workspaceTenantDenyRoots" \
-    "$(grep -c 'workspaceTenantDenyRoots' "$cfg" || true)" 1
+  check "sandbox config consumes workspaceTenantDenyRoots (call site)" \
+    "$(grep -cE '=[[:space:]]*workspaceTenantDenyRoots\(' "$cfg" || true)" 1
 fi
 # Committed canary fixture pins the second deny landing.
 fixture="$app/infra/sandbox-canary-argv.json"
@@ -80,8 +86,12 @@ fi
 precheck="$app/infra/git-data-flag-precheck.sh"
 wf="$root/.github/workflows/git-data-cutover.yml"
 if need_file "$precheck"; then
-  check "precheck carries the SANDBOX_DENY_ROOTS arm" \
-    "$(grep -c 'SANDBOX_DENY_ROOTS' "$precheck" || true)" 2
+  # Code-shaped needles: the detector function, its verdict vocabulary, and
+  # the write-arm gate — a comment mentioning SANDBOX_DENY_ROOTS can't pass.
+  check "precheck carries the detect_deny_roots detector (def + call sites)" \
+    "$(grep -c 'detect_deny_roots' "$precheck" || true)" 3
+  check "precheck denies covered state via verdict=sandbox_deny_coverage_" \
+    "$(grep -c 'sandbox_deny_coverage_' "$precheck" || true)" 2
 fi
 if need_file "$wf"; then
   check "workflow carries the GIT_DATA_DENY_FLOOR precondition" \

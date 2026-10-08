@@ -191,6 +191,11 @@ printf 'export function workspaceTenantDenyRoots() { return [process.env.WORKTRE
 printf 'const denyRoots = workspaceTenantDenyRoots();\n' > "$T/deny-present/agent-runner-sandbox-config.ts"
 printf 'export function workspacePathForWorkspaceId() { return ""; }\n' > "$T/deny-absent/workspace-resolver.ts"
 printf 'const denyRead = [];\n' > "$T/deny-absent/agent-runner-sandbox-config.ts"
+mkdir -p "$T/deny-collapsed" || { printf 'FAIL SETUP: deny-collapsed fixture\n' >&2; exit 1; }
+# The #9725 regression shape: helper exists and env read exists FILE-wide
+# (inside getWorkspaceWorktreeRoot) — but NOT inside the deny helper's body.
+printf 'function getWorkspaceWorktreeRoot() { return process.env.WORKTREE_ROOT || "/x"; }\nexport function workspaceTenantDenyRoots() { return [getWorkspaceWorktreeRoot()]; }\n' > "$T/deny-collapsed/workspace-resolver.ts"
+printf 'const denyRoots = workspaceTenantDenyRoots();\n' > "$T/deny-collapsed/agent-runner-sandbox-config.ts"
 
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
 # unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
@@ -303,6 +308,13 @@ if case_write deny-ok ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write 
   && [ "$(cat "$OUT")" = "flag_write=ok value=true" ]; then
   pass "W7: a `true` write WITH deny coverage proceeds to the set+readback path"
 else fail "W7: a covered true write did not reach the write path" "$(detail)"; fi
+# W8 — a `false` write must NOT be gated (a rollback needs no deny coverage —
+# it moves toward less exposure, and the served-image side is floored by
+# GIT_DATA_DENY_FLOOR on flip). Pins the `= true` scope of the write gate.
+if case_write deny-absent-false ABSENT false DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
+  && [ "$(cat "$OUT")" = "flag_write=ok value=false" ]; then
+  pass "W8: a `false` write proceeds WITHOUT deny coverage (rollback must never be blocked by it)"
+else fail "W8: a false write was incorrectly gated on deny coverage" "$(detail)"; fi
 
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
 else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
@@ -656,6 +668,12 @@ fi
 if mutate deny-flip-gate "$PRECHECK" 2 's#"\$FLAG_MODE" = flip#"\$FLAG_MODE" = flip_never#'; then
   CASE_SCRIPT="$MUTANT" mutant_red deny-flip-gate case_deny_absent_flip_refused
 fi
+# Row 18 — neuter the WRITE-arm deny gate: a `true` write over absent coverage
+# then reaches doppler (the write arm is the gate the flip-gate can't cover —
+# it exits before the read probes run).
+if mutate deny-write-gate "$PRECHECK" 2 's#"\$FLAG_WRITE_VALUE" = true#"\$FLAG_WRITE_VALUE" = never#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red deny-write-gate case_write_deny_absent_true_refused
+fi
 
 # ── SANDBOX_DENY_ROOTS arm (#9725) ────────────────────────────────────────────────
 if case_deny absent "$T/deny-absent" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS absent' "$OUT"; then
@@ -676,14 +694,21 @@ else fail "D5: a flip over unknown coverage was not refused" "$(detail)"; fi
 if case_deny present-flip "$T/deny-present" flip   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS present' "$OUT" && grep -qF 'flag=off' "$OUT"; then
   pass "D6: flip WITH the coverage -> SANDBOX_DENY_ROOTS present, proceeds to pin + flag=off"
 else fail "D6: a covered flip was refused or lost the pin" "$(detail)"; fi
+if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"; then
+  pass "D7: the flag-COLLAPSED helper shape (env read outside the deny fn) -> sandbox_deny_coverage_absent — the function-scope needle catches the #9725 form"
+else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
+case_write_deny_absent_true_refused() {
+  case_write m-write-gate ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
+    && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT"
+}
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=18  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17
+MUTANT_FLOOR=19  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 32 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 6 + mutants 18 x 2 = 97 (exact).
-FLOOR=97
+# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 = 101 (exact).
+FLOOR=101
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1
