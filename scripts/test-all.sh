@@ -5918,9 +5918,10 @@ if want_scripts; then
   # covered by no glob here; appended LAST in the block so no earlier registration's positional-shard ordinal
   # moves. Its manifest rows come from the shard regeneration.
   run_suite "scripts/ci-demand-census" bash scripts/ci-demand-census.test.sh
-  # #9727: the secret-scan smoke path gate. Extracts the smoke-relevance step body and the smoke-tests `if:`
-  # from secret-scan.yml and EXECUTES them under the Actions shell, so it is what separates "the gate skipped
-  # smoke correctly" from "the gate never looked". Same explicit-registration and LAST-in-block reasons as above.
+  # #9727: the secret-scan smoke path gate. Extracts the smoke-relevance step body from secret-scan.yml and
+  # EXECUTES it under the Actions shell (the smoke-tests `if:` is pinned by exact string equality, not evaluated),
+  # so it is what separates "the gate skipped smoke correctly" from "the gate never looked". Same
+  # explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
 fi
 
