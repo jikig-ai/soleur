@@ -79,6 +79,16 @@ for f in "$SCRIPT" "$ACTION" "$WF" "$IV" "$APPLY_WF"; do
 done
 python3 -c 'import yaml' 2>/dev/null || { printf 'FAIL SETUP: python3 yaml module unavailable\n' >&2; exit 1; }
 [ -n "$UBUNTU_BASE" ] || { printf 'FAIL SETUP: no UBUNTU_BASE pin readable from %s\n' "$REHEARSAL" >&2; exit 1; }
+# Bounded apt (#8744 count, #9395 time): the runtime arm's in-container apt cycle shares lib/apt-bounded.sh
+# with the other git-data suites (one budget of apt seconds; expiry exits 100 with FIXTURE_APT_FAILED, so the
+# classification below is unchanged and the arm stays fail-closed under CI=true). 270 s = two 90 s-capped
+# stalls plus a healthy cycle (55 s measured in the pinned image on 2026-10-08) with margin; the container's
+# non-apt time (the whole suite is under 100 s) keeps the worst case inside the 480 s host bound.
+APT_LIB="${DIR}/lib/apt-bounded.sh"
+APT_BUDGET_S=270
+[ -r "$APT_LIB" ] || { printf 'FAIL SETUP: %s is missing — the runtime arm apt cycle could not be bounded\n' "$APT_LIB" >&2; exit 1; }
+# shellcheck source=lib/apt-bounded.sh
+. "$APT_LIB"
 REAL_TIMEOUT="$(command -v timeout)" || { printf 'FAIL SETUP: timeout(1) not found\n' >&2; exit 1; }
 command -v ssh-keygen >/dev/null 2>&1 || { printf 'FAIL SETUP: ssh-keygen not found\n' >&2; exit 1; }
 command -v ssh >/dev/null 2>&1 || { printf 'FAIL SETUP: ssh not found\n' >&2; exit 1; }
@@ -2907,25 +2917,12 @@ else
   cat > "$T/rt/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
-# Bounded apt (#8744): Acquire::Retries=5 inside each call and a 3-attempt loop with
-# 10s/30s backoff around the pair. The pair sits inside `if` — a tested context — so a
-# failed update can never fall through into an install attempt that was skipped. Output
-# goes to a fixture log instead of /dev/null: on exhaustion its credential-scrubbed tail
-# (apt error text can embed proxy user:pass@host) prints BEFORE the marker, so the fleet
-# log says WHY instead of a bare rc=100. The host greps the marker with -qx, so it stays
-# a bare line. Tail and marker both go to stderr: docker demuxes stdout/stderr, so a
-# stdout marker would race a stderr tail and could land BEFORE the diagnostics it
-# follows (measured — a cross-stream write order is not preserved).
-_apt_log=/tmp/apt-fixture.log; : > "$_apt_log"
-_apt_ok=0
-for _apt_try in 1 2 3; do
-  if apt-get update -qq -o Acquire::Retries=5 >> "$_apt_log" 2>&1 \
-     && apt-get install -y -qq -o Acquire::Retries=5 openssh-server openssh-client netcat-openbsd iproute2 git >> "$_apt_log" 2>&1; then
-    _apt_ok=1; break
-  fi
-  case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
-done
-[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+# Bounded apt (#8744 count, #9395 time): lib/apt-bounded.sh owns the retry loop, the shared apt budget, the
+# credential-scrubbed tail and the bare FIXTURE_APT_FAILED marker (rationale there). The host half arms the state
+# and mounts it at /work/apt; the lib load is its own statement ending in `exit 97`, so a forgotten mount can
+# never read as the environment decline, and the helper's rc is passed through (`|| exit $?`).
+. /work/apt/apt-bounded.sh || exit 97
+gd_apt_install_bounded openssh-server openssh-client netcat-openbsd iproute2 git || exit $?
 mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh
 ssh-keygen -A >/dev/null 2>&1
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k && cp /tmp/k.pub /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
@@ -3093,12 +3090,14 @@ DRV
   : > "$T/rt/out/rows"
   # Bounded: a hung driver must fail this arm loudly, never eat the CI job's clock.
   _cname="gdc-access-$$-${RANDOM}"
-  timeout -k 10 480 docker run --rm --cap-add NET_ADMIN --name "$_cname" -v /mnt/git-data -v "$T/rt/drive.sh:/work/drive.sh:ro" \
+  gd_apt_state_arm "$T/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
+  timeout -k 10 480 docker run --rm --cap-add NET_ADMIN --name "$_cname" -v /mnt/git-data -v "$GD_APT_STATE:/work/apt" -v "$T/rt/drive.sh:/work/drive.sh:ro" \
     -v "$T/rt/git-data-cutover.sh:/work/git-data-cutover.sh:ro" -v "$T/rt/sshcfg.sh:/work/sshcfg.sh:ro" -v "$T/rt/wrapper.sh:/work/wrapper.sh:ro" \
     -v "$T/rt/wkh.sh:/work/wkh.sh:ro" -v "$T/rt/web-inv.tmpl:/work/web-inv.tmpl:ro" \
     -v "$T/rt/out:/out" "$UBUNTU_BASE" bash /work/drive.sh > "$T/rt/stdout" 2>&1
   DRC=$?
   docker rm -f "$_cname" >/dev/null 2>&1 || true
+  gd_apt_state_summary
   if grep -qx DRIVER_DONE "$T/rt/stdout"; then
     _rv() { sed -n "s/^$1=//p" "$T/rt/out/rows" | tail -1; }
     _acc() { grep -qE "^\[git-data-cutover\] ACCESS role=$2 host=[^ ]+ verdict=$3( |$)" "$T/rt/out/$1.out"; }

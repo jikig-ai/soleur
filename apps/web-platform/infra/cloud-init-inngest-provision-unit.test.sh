@@ -1401,9 +1401,14 @@ tb_unbootable() {
   else tb_skip "unbootable systemd container: $1"; fi
 }
 tb_ok() { if [ "$1" -eq 0 ]; then echo "  PASS: $2"; else echo "  FAIL: $2"; TB_FAIL=$((TB_FAIL + 1)); fi; }
+# Bounded apt (#9395): the image build shares lib/apt-bounded.sh with the git-data suites (one budget of apt
+# seconds, expiry routed to FIXTURE_APT_FAILED + exit 100). Healthy cost measured in the pinned image on
+# 2026-10-08: update 8 s + install 12 s = 20 s; 150 s fits one 90 s-capped stall plus a healthy retry.
+APT_LIB="${SCRIPT_DIR}/lib/apt-bounded.sh"
+APT_BUDGET_S=150
 
 tierb() {
-  local img_tag ctr="pu-tierb-$$" x
+  local img_tag ctr="pu-tierb-$$" x rc
   if [ "${PU_TIERB:-1}" = 0 ]; then
     [ -n "${CI:-}" ] && { echo "  FAIL: PU_TIERB=0 is refused under CI"; TB_FAIL=1; return; }
     tb_skip "PU_TIERB=0 (operator opt-out, local only)"; return
@@ -1415,9 +1420,27 @@ tierb() {
   img_tag="soleur-pu-tierb:$(printf '%s systemd systemd-sysv dbus jq v1' "$UBUNTU_BASE" | sha256sum | cut -c1-12)"
   if ! docker image inspect "$img_tag" >/dev/null 2>&1; then
     docker rm -f "$ctr-build" >/dev/null 2>&1
-    if ! docker run --name "$ctr-build" "$UBUNTU_BASE" sh -c 'export DEBIAN_FRONTEND=noninteractive; for _ in 1 2 3; do apt-get update -qq -o Acquire::Retries=5 && apt-get install -y -qq --no-install-recommends -o Acquire::Retries=5 systemd systemd-sysv dbus jq && exit 0; sleep 5; done; exit 100' > "$W/tierb-apt.log" 2>&1; then
+    [ -r "$APT_LIB" ] || { echo "FAIL: ${APT_LIB} is missing — the Tier B apt cycle could not be bounded" >&2; exit 2; }
+    # shellcheck source=lib/apt-bounded.sh
+    . "$APT_LIB"
+    gd_apt_state_arm "$W/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
+    # shellcheck disable=SC2016  # single-quoted on purpose: the script expands inside the container
+    docker run --name "$ctr-build" -v "$GD_APT_STATE:/work/apt" "$UBUNTU_BASE" bash -c '
+      export DEBIAN_FRONTEND=noninteractive
+      . /work/apt/apt-bounded.sh || exit 97
+      gd_apt_install_bounded --no-install-recommends systemd systemd-sysv dbus jq || exit $?
+    ' > "$W/tierb-apt.log" 2>&1
+    rc=$?
+    gd_apt_state_summary
+    if [ "$rc" -ne 0 ]; then
       docker rm -f "$ctr-build" >/dev/null 2>&1
-      tb_skip "ADR-188 arm_skip: the ubuntu apt archive did not serve systemd/jq ($(tail -1 "$W/tierb-apt.log" | head -c 160))"; return
+      # Only the declared apt decline (the marker) or docker failing to create the container is the ADR-188
+      # skip; 97/98/126/127/137/124 are harness defects and must never read as the decline.
+      if grep -qx FIXTURE_APT_FAILED "$W/tierb-apt.log" || [ "$rc" -eq 125 ]; then
+        tb_skip "ADR-188 arm_skip: the ubuntu apt archive did not serve systemd/jq ($(grep -a FIXTURE_APT_CAUSE "$W/tierb-apt.log" | tail -1 | head -c 200))"; return
+      fi
+      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 300))"
+      TB_FAIL=$((TB_FAIL + 1)); TIERB_RESULT="FAIL: image build rc=$rc"; return
     fi
     docker commit "$ctr-build" "$img_tag" >/dev/null && docker rm "$ctr-build" >/dev/null
   fi

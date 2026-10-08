@@ -6,7 +6,7 @@
 #
 # Host-only: a stub `apt-get` on PATH and the real coreutils `timeout`; no docker, no network.
 # Behaviour rows drive the helper in a fresh `bash` (set -u, the shell the container drivers give it).
-# The assembly row is DERIVED from the two consumer suites and binds each docker site to its arm, its mount,
+# The assembly row is DERIVED from the four consumer suites and binds each docker site to its arm, its mount,
 # its source line and its rc handling; it reads the suites' text, so it pins what the text says, and the
 # containers' run-time behaviour is covered by the rows above it.
 #
@@ -237,18 +237,49 @@ else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')]
 
 # ── Derived assembly row ─────────────────────────────────────────────────────────────────
 # For each consumer suite (comment-stripped, continuation-joined): every `docker run` site is either mounted
-# with the EXACT state mount token and directly preceded by its arm line, or is one of the declared
-# unmounted sites (the rehearsal's R1 container runs no apt); every helper call carries a pass-through rc
-# form (`|| exit $?`, S1's re-raise, R4's fixture_fail) and none a hardcoded `|| exit 100` / `|| true`; every
-# call is preceded by the `. /work/apt/apt-bounded.sh || exit 97` (or fixture_fail) source line; every arm line
-# checks its own return; and no apt/dpkg/pip appears in command position outside the helper.
+# with the EXACT state mount token and directly preceded by its arm line (the suite's OWN state variable),
+# or is one of the declared unmounted sites (the rehearsal's R1 container and the provision-unit suite's
+# systemd boot container run no apt); every helper call carries a pass-through rc form (`|| exit $?`, S1's
+# re-raise, R4's fixture_fail) and none a hardcoded `|| exit 100` / `|| true`; every call is preceded by the
+# `. /work/apt/apt-bounded.sh || exit 97` (or fixture_fail) source line; every arm line checks its own return;
+# and no apt/dpkg/pip appears in command position outside the helper. The docker-site and raw-apt grammars are
+# defined ONCE below, asserted against a short sample list (a grammar edit that stops seeing a site turns
+# the row red with the sample that broke, not a quiet `total=0`), and a population census over the infra
+# directory's own suites keeps the consumer list from being a hand-listed snapshot (#9395).
 _strip() { sed 's/^[[:space:]]*#.*$//' "$1"; }
 _joined() { _strip "$1" | sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba' -e '}'; }
-_asm=""; _tot=0
-for spec in "$OWN:0" "$REH:1"; do
-  f="${spec%%:*}"; want_unmounted="${spec##*:}"
+# Command position: start of line, after a separator or an opening bracket/negation, or after a keyword.
+_CMDPOS='(^|[;&|({!]|[[:space:]](then|do|if|exec))[[:space:]]*'
+_VARPFX='([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
+# `timeout [-k N] N` / `timeout N`: the flag words, then one or two numbers (no `{n,m}` interval: mawk).
+_TMO='(timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*([0-9]+[[:space:]]+)([0-9]+[[:space:]]+)?)?'
+DOCK_RE="${_CMDPOS}${_VARPFX}${_TMO}docker[[:space:]]+run([[:space:]]|\$)"
+ADJ_RE="^[[:space:]]*${_VARPFX}${_TMO}docker[[:space:]]+run([[:space:]]|\$)"
+RAW_RE="${_CMDPOS}${_VARPFX}${_TMO}(apt-get|apt|dpkg|pip3?)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*(update|install|upgrade|-i)"
+APTTXT_RE='(apt-get|apt)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*(update|install)'
+CUT="${DIR}/git-data-cutover-access.test.sh"
+PUS="${DIR}/cloud-init-inngest-provision-unit.test.sh"
+# file:declared-unmounted-sites:state-variable-the-suite-arms
+SPECS=("$OWN:0:TMP" "$REH:1:TMP" "$CUT:0:T" "$PUS:1:W")
+_asm=""; _tot=0; _unm=0
+for _s in "docker run --rm img" "timeout -k 10 480 docker run --rm img" "timeout 480 docker run --rm img" \
+          "if ! docker run --name x img" "FOO=1 docker run img" "cmd && docker run img"; do
+  grep -Eq -- "$DOCK_RE" <<<"$_s" || _asm="${_asm} docker-grammar-misses-site:[${_s}]"
+done
+for _s in 'echo "docker run failed"' 'tb_unbootable "docker run failed (x)"' 'dockerrun img' 'echo docker run'; do
+  grep -Eq -- "$DOCK_RE" <<<"$_s" && _asm="${_asm} docker-grammar-matches-non-site:[${_s}]"
+done
+for _s in "apt-get install -y curl" "timeout -k 5 30 apt-get install -y curl" "FOO=1 apt-get update" "x; do apt-get update -qq"; do
+  grep -Eq -- "$RAW_RE" <<<"$_s" || _asm="${_asm} raw-apt-grammar-misses:[${_s}]"
+done
+for _s in 'echo "apt-get install failed"' 'gd_apt_install_bounded curl' 'apt-bounded'; do
+  grep -Eq -- "$RAW_RE" <<<"$_s" && _asm="${_asm} raw-apt-grammar-matches-non-site:[${_s}]"
+done
+for spec in "${SPECS[@]}"; do
+  IFS=: read -r f want_unmounted sv <<<"$spec"
+  [ -f "$f" ] || { _asm="${_asm} $(basename "$f"):[missing]"; continue; }
   j="$(_joined "$f")"; u="$(_strip "$f")"
-  dock="$(printf '%s\n' "$j" | grep -E '(^|&&|\|\||;)[[:space:]]*docker[[:space:]]+run([[:space:]]|$)' || true)"
+  dock="$(printf '%s\n' "$j" | grep -E -- "$DOCK_RE" || true)"
   total=$(printf '%s' "$dock" | grep -c . || true)
   # shellcheck disable=SC2016  # a literal `$GD_APT_STATE` in the suite text, not an expansion
   mounted=$(printf '%s\n' "$dock" | grep -cE -- '-v "\$GD_APT_STATE:/work/apt"( |$)' || true)
@@ -261,19 +292,35 @@ for spec in "$OWN:0" "$REH:1"; do
   arms=$(printf '%s\n' "$j" | grep -E '^[[:space:]]*gd_apt_state_arm[[:space:]]' || true)
   g=$(printf '%s' "$arms" | grep -c . || true)
   # shellcheck disable=SC2016  # literal source text
-  g_ok=$(printf '%s\n' "$arms" | grep -cE '^[[:space:]]*gd_apt_state_arm "\$TMP/aptstate" "\$APT_BUDGET_S" \|\| \{[^}]*exit 2; \}' || true)
-  adj=$(printf '%s\n' "$u" | awk '/^[[:space:]]*gd_apt_state_arm[[:space:]]/ {a=NR; next} NF && a {a=0; if ($0 !~ /^[[:space:]]*docker[[:space:]]+run/) bad++} END {print bad + 0}')
-  raw=$(printf '%s\n' "$u" | grep -cE '(^|[;&|({!]|[[:space:]](then|do|if|exec))[[:space:]]*([A-Z_]+=[^[:space:]]*[[:space:]]+)*(timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[[:space:]]+)?(apt-get|apt|dpkg|pip3?)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*(update|install|upgrade|-i)' || true)
-  _tot=$((_tot + c))
+  g_ok=$(printf '%s\n' "$arms" | grep -cE '^[[:space:]]*gd_apt_state_arm "\$'"${sv}"'/aptstate" "\$APT_BUDGET_S" \|\| \{[^}]*exit 2; \}' || true)
+  adj=$(printf '%s\n' "$u" | awk -v re="$ADJ_RE" '/^[[:space:]]*gd_apt_state_arm[[:space:]]/ {a=NR; next} NF && a {a=0; if ($0 !~ re) bad++} END {print bad + 0}')
+  raw=$(printf '%s\n' "$u" | grep -cE -- "$RAW_RE" || true)
+  _tot=$((_tot + c)); _unm=$((_unm + total - mounted))
   if [ "$mounted" -lt 1 ] || [ "$((total - mounted))" -ne "$want_unmounted" ] || [ "$mounted" -ne "$c" ] || [ "$c_ok" -ne "$c" ] \
      || [ "$c_bad" -ne 0 ] || [ "$src" -ne "$c" ] || [ "$g" -ne "$mounted" ] || [ "$g_ok" -ne "$g" ] || [ "$adj" -ne 0 ] || [ "$raw" -ne 0 ]; then
     _asm="${_asm} $(basename "$f"):[docker=$total mounted=$mounted calls=$c rc-ok=$c_ok rc-bad=$c_bad source=$src arms=$g arm-checked=$g_ok arm-not-before-docker=$adj raw-apt=$raw]"
   fi
 done
+# Population census, derived from the tree and independent of the stored list above: every infra suite that
+# holds a `docker run` site AND apt text must be a declared consumer, and every declared consumer must be seen.
+# This suite is the guard itself and carries the grammar as text, so it is the one file not scanned.
+_decl=" "; for spec in "${SPECS[@]}"; do _decl="${_decl}$(basename "${spec%%:*}") "; done
+_seen=0
+for cf in "$DIR"/*.test.sh; do
+  [ -f "$cf" ] || continue
+  cb="$(basename "$cf")"
+  case "$_decl" in *" $cb "*) _seen=$((_seen + 1)) ;; esac
+  [ "$cb" = "apt-bounded.test.sh" ] && continue
+  cj="$(_joined "$cf")"
+  if grep -Eq -- "$DOCK_RE" <<<"$cj" && grep -Eq -- "$APTTXT_RE" <<<"$cj"; then
+    case "$_decl" in *" $cb "*) : ;; *) _asm="${_asm} census:[${cb} holds a docker run site and apt text but is not a declared consumer — add it to SPECS and convert it to lib/apt-bounded.sh (arm, mount, source, call)]" ;; esac
+  fi
+done
+[ "$_seen" -eq "${#SPECS[@]}" ] || _asm="${_asm} census:[saw ${_seen} of ${#SPECS[@]} declared consumers in ${DIR}/*.test.sh]"
 row
-if [ -z "$_asm" ] && [ "$_tot" -eq 6 ]; then
-  pass "A10: assembly (derived) — each apt-bearing docker run is armed just before it, mounts the exact state token, sources the lib and calls the helper with a pass-through rc; no raw apt (6 sites, 1 declared unmounted)"
-else fail "A10: assembly drift" "${_asm:-ok} total-helper-calls=$_tot (want 6)"; fi
+if [ -z "$_asm" ] && [ "$_tot" -eq 8 ] && [ "$_unm" -eq 2 ]; then
+  pass "A10: assembly (derived) — each apt-bearing docker run is armed just before it, mounts the exact state token, sources the lib and calls the helper with a pass-through rc; no raw apt (8 mounted sites + 2 declared unmounted, 4 suites, census clean)"
+else fail "A10: assembly drift" "${_asm:-ok} total-helper-calls=$_tot (want 8) unmounted=$_unm (want 2)"; fi
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit inside the block, never through pass()/fail()) ──
 if [ "$checked" -lt 19 ]; then
