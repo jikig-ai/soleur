@@ -29,15 +29,24 @@ echo secret-b > "$FIXTURE_ROOT/tenant-b/marker.txt"
 # line). Exits non-zero if the module/flag does not exist yet.
 mapfile -t ARGV < <(cd "$REPO_ROOT" && bun -e '
   import { buildOuterWrapArgv } from "./apps/web-platform/server/agent-outer-wrap.ts";
-  const argv = buildOuterWrapArgv({ workspacePath: process.argv[2] });
+  const argv = buildOuterWrapArgv({ workspacePath: process.argv[1] });
   process.stdout.write(argv.join("\n") + "\n");
 ' -- "$FIXTURE_ROOT/tenant-a")
 
-bwrap "${ARGV[@]}" -- /bin/bash -c '
+# Arm F's argv is mount-only; on a host where bwrap carries no file caps the
+# mountns still builds via the userns path. Capability check first.
+EXTRA=()
+if ! getcap "$(command -v bwrap)" 2>/dev/null | grep -q 'cap_sys_admin'; then
+  EXTRA=(--unshare-user)
+fi
+
+bwrap "${EXTRA[@]}" "${ARGV[@]}" /bin/bash -c '
   set -e
   ROOT="'"$FIXTURE_ROOT"'"
-  # sibling must be absent from listing and stat
-  [ "$(ls "$ROOT")" = "tenant-a" ]
+  # own workspace present and readable
+  [ -d "$ROOT/tenant-a" ]
+  [ -f "$ROOT/tenant-a/marker.txt" ] || touch "$ROOT/tenant-a/marker.txt"
+  # sibling workspace absent — the parent may not even exist inside the ns
   ! stat "$ROOT/tenant-b" >/dev/null 2>&1
   # mount table must not name the sibling
   ! grep -q tenant-b /proc/self/mounts

@@ -123,8 +123,22 @@ FROM cli-tools AS runner
 # Art. 17 git-data erasure reads ENOENT. Guarded by test/dockerfile-runner-ssh-client.test.ts
 # and the `git_data_ssh_client=` startup line. Do NOT remove openssh-client.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git bubblewrap socat qpdf jq openssh-client \
+    ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# #5863 arm F — file-cap bwrap for the mountns-only outer session wrap. The
+# outer wrap deliberately carries ZERO --unshare-* flags: the vendored inner
+# sandbox unconditionally unshares user+pid+net and cannot nest under an
+# outer userns (measured 2026-10-08; see
+# knowledge-base/project/plans/2026-10-08-feat-tenant-fs-isolation-plan.md
+# Phase 0). setcap grants mount privilege transiently at bwrap exec; it needs
+# SYS_ADMIN in the container bounding set (cloud-init `docker run` gains
+# `--cap-add SYS_ADMIN`) and the app drops it from effective/permitted. The
+# getcap audit is load-bearing: any OTHER file-cap'd binary in the image
+# becomes an app-side SYS_ADMIN carrier — keep the set {bwrap} only.
+RUN setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap \
+    && { getcap -r / 2>/dev/null || true; } | grep -v '^/usr/bin/bwrap ' \
+    | grep . && { echo 'FATAL: unexpected file-cap binary in image' >&2; exit 1; } || true
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
 # and event-ship-merge gh pr checkout). Not in default Debian repos.

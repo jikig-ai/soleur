@@ -29,6 +29,7 @@ import type {
 import path from "node:path";
 
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
+import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import type { WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath } from "./plugin-path";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
@@ -114,6 +115,15 @@ export interface AgentQueryOptionsArgs {
   permissionMode?: SDKOptions["permissionMode"];
   /** When set, threads through to options.resume. */
   resumeSessionId?: string;
+  /**
+   * Tenant workspace id — the rollout-flag cohort key for the outer wrap
+   * (#5863). Optional; when absent the builder derives it from
+   * `basename(workspacePath)` (the legacy caller has no id in scope and the
+   * path is `<root>/<id>` under both resolver arms).
+   */
+  workspaceId?: string;
+  /** Session id — `op:tenant-outer-wrap` log correlation only. */
+  sessionId?: string;
   /** Per-call MCP server registration. Legacy: `{ soleur_platform: ... }` when platform tools register; cc: `{}`. */
   mcpServers?: Record<string, unknown>;
   /** Per-call allowedTools list (legacy: platform tool names + plugin MCP wildcards; cc: omitted at V1). */
@@ -237,6 +247,33 @@ export function buildAgentQueryOptions(
     : undefined;
 
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
+  // #5863 (arm F): flag-gated mountns-only outer wrap around the whole CLI
+  // process — the only boundary that covers the file-tool tier. The flag is
+  // read per spawn (dispatch-time), so in-flight sessions keep their birth
+  // mount table and a flip only affects new spawns.
+  const outerWrap = outerWrapEnabled(
+    args.workspaceId ?? path.basename(args.workspacePath),
+  );
+
+  // The session env is built once so the outer wrap reads the same HOME
+  // the child receives (narrow `~/.claude` binds key off it).
+  const agentEnv = buildAgentEnv(args.credential, args.serviceTokens, {
+    ghToken: args.ghToken,
+    // In-sandbox raw-git credential path (item 1). The askpass token IS the
+    // installation token (`ghToken`); `buildAgentEnv` injects the GIT_* set
+    // only when BOTH the path and token are present (both-or-nothing).
+    gitAskpassScriptPath: args.gitAskpassScriptPath,
+    gitInstallationToken: args.ghToken,
+    // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
+    // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
+    // absolute /app/ platform path) is threaded so the deployed skills'
+    // bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18) run the platform copy, never
+    // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
+    // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
+    pluginPath: trustedPluginPath,
+  });
+  const buildAgentEnvHome = agentEnv.HOME ?? "/home/soleur";
+
   const opts: any = {
     cwd: resolvedCwd,
     model: args.model ?? "claude-sonnet-5-5",
@@ -255,21 +292,7 @@ export function buildAgentQueryOptions(
       ...(args.extraDisallowedTools ?? []),
     ],
     systemPrompt: args.systemPrompt,
-    env: buildAgentEnv(args.credential, args.serviceTokens, {
-      ghToken: args.ghToken,
-      // In-sandbox raw-git credential path (item 1). The askpass token IS the
-      // installation token (`ghToken`); `buildAgentEnv` injects the GIT_* set
-      // only when BOTH the path and token are present (both-or-nothing).
-      gitAskpassScriptPath: args.gitAskpassScriptPath,
-      gitInstallationToken: args.ghToken,
-      // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
-      // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
-      // absolute /app/ platform path) is threaded so the deployed skills'
-      // bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18) run the platform copy, never
-      // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
-      // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
-      pluginPath: trustedPluginPath,
-    }),
+    env: agentEnv,
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape — identical except for the token-derived
     // `network.allowedDomains` below (drift-guarded by
@@ -298,6 +321,28 @@ export function buildAgentQueryOptions(
     // silently re-execute the untrusted repo's hooks.json in-process (the
     // connected-repo-shadow security hole this PR closes). Test-tolerant.
     plugins: [{ type: "local" as const, path: trustedPluginPath }],
+    ...(outerWrap
+      ? {
+          spawnClaudeCodeProcess: makeSandboxedSpawn(
+            sandboxReadOnly
+              ? // Support persona: nothing under the workspaces root is bound;
+                // cwd is the plugin root and the CLI runs read-only there.
+                {
+                  sessionId: args.sessionId,
+                  cwd: resolvedCwd,
+                  pluginPath: trustedPluginPath,
+                  home: buildAgentEnvHome,
+                }
+              : {
+                  sessionId: args.sessionId,
+                  workspacePath: args.workspacePath,
+                  cwd: resolvedCwd,
+                  pluginPath: trustedPluginPath,
+                  home: buildAgentEnvHome,
+                },
+          ),
+        }
+      : {}),
     hooks: {
       PreToolUse: [
         {
