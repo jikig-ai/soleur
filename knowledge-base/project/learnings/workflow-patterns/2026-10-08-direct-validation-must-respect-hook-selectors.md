@@ -85,3 +85,12 @@ The push reported 24 default-branch Dependabot alerts. A read-only API summary
 confirmed one critical, ten high, ten medium and three low existing alerts.
 The maintenance diagnostic patch changes no dependency manifests; the alert
 summary is neither a new dependency audit nor a promotion clearance.
+
+The session tmpfs warning suggested `find | sort | head`; `head` closed the
+pipe early and `sort` printed a broken-pipe warning. Replacing the final stage
+with `sed -n '1,40p'` consumed the stream and produced the same bounded rows
+without the warning. `/tmp` was 50% full; the oldest rows included desktop
+service paths and unrelated fixtures. Ownership was not established, so no
+deletion or attribution was made. During superseded-run cleanup, a cancel
+request raced workflow completion; the follow-up read established cancellation
+had already completed rather than treating the refused request as success.
