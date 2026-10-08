@@ -5913,6 +5913,15 @@ if want_scripts; then
   # scripts/followthroughs/ matches no SUITE_GLOBS entry; appended LAST in the block so no earlier
   # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
   run_suite "scripts/followthroughs/tty-ack-migration-9387" bash scripts/followthroughs/tty-ack-migration-9387.test.sh
+  # #9727 (ADR-276 S1): the hosted-runner demand census (golden totals, the C1/C2/non-vacuity self-checks and
+  # a gh-shim round trip over a committed fixture; offline). Explicit run_suite because scripts/*.test.sh is
+  # covered by no glob here; appended LAST in the block so no earlier registration's positional-shard ordinal
+  # moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/ci-demand-census" bash scripts/ci-demand-census.test.sh
+  # #9727: the secret-scan smoke path gate. Extracts the smoke-relevance step body and the smoke-tests `if:`
+  # from secret-scan.yml and EXECUTES them under the Actions shell, so it is what separates "the gate skipped
+  # smoke correctly" from "the gate never looked". Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
 fi
 
 # Named bun-test entries — bun shard.

@@ -1110,6 +1110,19 @@ AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
   "scripts/skill-security-scan-step-body.test.sh"
 )
 
+# scripts/secret-scan-smoke-gate (#9727, ADR-276 S1) — the suite extracts the smoke-relevance step body and the
+# smoke-tests `if:` from the workflow and reads the tracked operands the smoke job names; declared from the repo
+# paths its suite file names (a directory entry carries a trailing slash).
+AFFECTED_SCRIPTS_SECRET_SCAN_SMOKE_GATE_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".gitleaks.toml"
+  "apps/web-platform/scripts/"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/required-checks.txt"
+  "scripts/secret-scan-smoke-gate.test.sh"
+)
+
 # plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus
 # walk is sandbox-only (synthetic repos + fixture trees); the real subject is the resolver SUT
 # and the render arm it stubs, so the scan is scoped and the edges are honest.
