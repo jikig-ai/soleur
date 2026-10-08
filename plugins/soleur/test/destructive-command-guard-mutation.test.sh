@@ -225,6 +225,11 @@ scaled_timeout() {
 # The load average and the core count are read here and nowhere else. A sandbox COPY of this suite (DCG_MUT_META_COPY, set only by the
 # self-test rows below) may point them at fixtures; the real run always reads /proc/loadavg and nproc.
 LOADAVG_FILE=/proc/loadavg; CORES_FIXED=""
+# the sandbox-copy knobs are ambient env: in CI a stray DCG_MUT_META_COPY would swap real wiring rows for placeholders and still print a green count, so
+# it is refused there (exit 3) unless the caller says it means it (the self-test rows below set DCG_ALLOW_REDUCED=1 for their copies)
+if [[ -n "${DCG_MUT_META_COPY:-}" && -n "${CI:-}" && -z "${DCG_ALLOW_REDUCED:-}" ]]; then
+  printf '[FATAL] DCG_MUT_META_COPY is a sandbox-copy knob and is refused in CI (DCG_ALLOW_REDUCED=1 allows it, for this suite'"'"'s own self-test rows only)\n' >&2; exit 3
+fi
 if [[ -n "${DCG_MUT_META_COPY:-}" ]]; then LOADAVG_FILE="${DCG_LOADAVG_FILE:-/proc/loadavg}"; CORES_FIXED="${DCG_CORES:-}"; fi
 current_timeout() { # [loadavg file] [cores]: the timeout for a run started now
   local lf="${1:-$LOADAVG_FILE}" load cores
@@ -237,7 +242,7 @@ run_suite() {
   local raw
   RS_TIMEOUT="$(current_timeout)"
   raw="$(env -u GUARD_HOOK -u GUARD_FAST_COUNT -u GUARD_META_COPY -u SOLEUR_DISABLE_DESTRUCTIVE_GUARD \
-    "GUARD_REPO_ROOT=$1" "DCG_ROWS=$2" "TMPDIR=$SCRATCH" \
+    DCG_ALLOW_REDUCED=1 "GUARD_REPO_ROOT=$1" "DCG_ROWS=$2" "TMPDIR=$SCRATCH" \
     "$TIMEOUT_BIN" "$RS_TIMEOUT" "$BASH" "$HOOK_SUITE" 2>&1 </dev/null)"; RS_RC=$?
   RS_OUT="$(printf '%s' "$raw" | strip_ansi)"
   parse_summary
@@ -419,7 +424,7 @@ if [[ -z "${DCG_MUT_META_COPY:-}" ]]; then
     env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} git -C "$T9_DIR" init -q >/dev/null 2>&1
   }
   t9_run() { # <tree dir> -> T9_OUT, T9_RC
-    T9_OUT="$(env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} DCG_MUT_META_COPY=1 "DCG_LOADAVG_FILE=$GT/load30" DCG_CORES=8 "TMPDIR=$WORK/t9" "$BASH" "$1/plugins/soleur/test/destructive-command-guard-mutation.test.sh" 2>&1 </dev/null | strip_ansi)"; T9_RC=${PIPESTATUS[0]}
+    T9_OUT="$(env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} DCG_ALLOW_REDUCED=1 DCG_MUT_META_COPY=1 "DCG_LOADAVG_FILE=$GT/load30" DCG_CORES=8 "TMPDIR=$WORK/t9" "$BASH" "$1/plugins/soleur/test/destructive-command-guard-mutation.test.sh" 2>&1 </dev/null | strip_ansi)"; T9_RC=${PIPESTATUS[0]}
   }
   mkdir -p "$WORK/t9"
   mk_t9_tree cut "case \"\${DCG_ROWS:-}\" in \"(\"*) printf 'cases=100 passes=100 fails=0\\nselected=100\\n'; exit 0 ;; esac; exit 124"
@@ -436,8 +441,11 @@ if [[ -z "${DCG_MUT_META_COPY:-}" ]]; then
   t9_run "$T9_DIR"
   chk "unresolved: a control run that is itself cut off exits 3 before any mutant runs (rc=$T9_RC)" \
     "$([[ "$T9_RC" -eq 3 ]] && grep -q '^\[UNRESOLVED\] control: ' <<<"$T9_OUT" && ! grep -q '^== the mutants ==' <<<"$T9_OUT" && printf ok || printf bad)" "tail: $(tail -n 3 <<<"$T9_OUT" | tr '\n' ' ')"
+  _ci_mut="$(env -u DCG_ALLOW_REDUCED CI=1 DCG_MUT_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"; _ci_rc=$?
+  chk "sandbox-copy knobs: DCG_MUT_META_COPY in a CI environment is refused with exit 3 and runs nothing (rc=$_ci_rc)" \
+    "$([[ "$_ci_rc" -eq 3 && "$_ci_mut" == *"refused in CI"* && "$_ci_mut" != *"== "* ]] && printf ok || printf bad)" "out: $(head -n 2 <<<"$_ci_mut" | tr '\n' ' ')"
 else
-  for _n in 1 2 3 4 5; do chk "unresolved: sandbox-copy row $_n (not run inside the meta copy)" ok; done
+  for _n in 1 2 3 4 5 6; do chk "unresolved: sandbox-copy row $_n (not run inside the meta copy)" ok; done
 fi
 
 echo "== control: the unedited copy must be GREEN before any mutant runs =="
@@ -506,7 +514,7 @@ fi
 if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
 fi
-MIN_CASES=60
+MIN_CASES=61
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

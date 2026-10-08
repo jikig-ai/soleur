@@ -113,6 +113,12 @@ fi
 if [[ -n "$SEAM_HOOK" ]]; then
   printf '[REDIRECTED RUN: GUARD_HOOK=%s — the live hook is not what is judged]\n' "$SEAM_HOOK"; NOTFULL="${NOTFULL:+$NOTFULL; }GUARD_HOOK points at another hook"
 fi
+# A narrowed or redirected run is a developer's tool, never a gate. In CI (CI set) it is refused with exit 3 unless the caller says it means it
+# (DCG_ALLOW_REDUCED=1, set by the mutation suite for its own reduced runs and by this suite's meta copies): a stray DCG_ROWS, GUARD_HOOK,
+# GUARD_REPO_ROOT or GUARD_FAST_COUNT in a CI environment would otherwise exit 0 on a handful of rows and read as the gate.
+if [[ -n "$NOTFULL" && -n "${CI:-}" && -z "${DCG_ALLOW_REDUCED:-}" ]]; then
+  printf '[FATAL] a narrowed or redirected run is refused in CI: %s (DCG_ALLOW_REDUCED=1 allows it, for the mutation suite only)\n' "$NOTFULL" >&2; exit 3
+fi
 # want_row <label>: always true unless DCG_ROWS (reduced mode) is set; then the label must match it.
 want_row_quiet() { [[ -z "$ROWSEL" ]] || [[ "$1" =~ $ROWSEL ]]; }
 SELECTED=0
@@ -2691,7 +2697,7 @@ src, dst, anchor, new = sys.argv[1:5]
 s = open(src).read()
 if s.count(anchor) != 1: sys.exit(1)
 open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/unsafe.test.sh" "run_table 3 3${_HD}'ROWS'"$'\n' "run_table 3 3${_HD}'ROWS'"$'\n'"X @@ lint probe @@ none @@ - @@ ${_u_cmd}"$'\n' 2>/dev/null; _u_prep=$?
-    _unsafe_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/unsafe.test.sh" 2>&1 </dev/null)"; _unsafe_rc=$?
+    _unsafe_out="$(env -u DCG_ROWS DCG_ALLOW_REDUCED=1 GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/unsafe.test.sh" 2>&1 </dev/null)"; _unsafe_rc=$?
     if [[ "$_u_prep" -eq 0 && "$_unsafe_rc" -eq 2 ]] && grep -q "row 'lint probe' is not safe to execute" <<<"$_unsafe_out"; then :; else _u_miss+=" [${_u_cmd}: prep=$_u_prep rc=$_unsafe_rc]"; fi
   done
   if [[ -z "$_u_miss" ]]; then _x=ok; else _x=bad; fi
@@ -2701,7 +2707,7 @@ src, dst, anchor, new = sys.argv[1:5]
 s = open(src).read()
 if s.count(anchor) != 1: sys.exit(1)
 open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/disturb.test.sh" $'  # The oracle must never have touched the world it ran in.\n' $'  rm -f -- "$TREE/.canary"\n  # The oracle must never have touched the world it ran in.\n' 2>/dev/null; _d_prep=$?
-  _dist_out="$(env DCG_ROWS='^terraform plan$' GUARD_REPO_ROOT="$REPO_ROOT" GUARD_META_COPY=1 "$BASH" "$WORK/meta/disturb.test.sh" 2>&1 </dev/null)"; _dist_rc=$?
+  _dist_out="$(env DCG_ROWS='^terraform plan$' DCG_ALLOW_REDUCED=1 GUARD_REPO_ROOT="$REPO_ROOT" GUARD_META_COPY=1 "$BASH" "$WORK/meta/disturb.test.sh" 2>&1 </dev/null)"; _dist_rc=$?
   if [[ "$_d_prep" -eq 0 && "$_dist_rc" -eq 2 ]] && grep -q 'the oracle disturbed its fixture world' <<<"$_dist_out"; then _x=ok; else _x=bad; fi
   chk "harness (lint): a suite copy whose oracle deletes the canary stops with exit 2 (the post-row fixture check fires, rc=$_dist_rc)" "$_x" "prep=$_d_prep out: $(tail -n 2 <<<"$_dist_out" | tr '\n' ' ')"
 elif [[ -n "${GUARD_META_COPY:-}" ]]; then
@@ -2714,8 +2720,8 @@ if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (a): deleting one expect
   assert_fixture_dir "$WORK"
   grep -vF "$_m" "$SELF" > "$WORK/meta/mutant.test.sh"
   cp "$SELF" "$WORK/meta/control.test.sh"
-  _mut_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/mutant.test.sh" 2>&1 </dev/null)"; _mut_rc=$?
-  _ctl_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/control.test.sh" 2>&1 </dev/null)"; _ctl_rc=$?
+  _mut_out="$(env -u DCG_ROWS DCG_ALLOW_REDUCED=1 GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/mutant.test.sh" 2>&1 </dev/null)"; _mut_rc=$?
+  _ctl_out="$(env -u DCG_ROWS DCG_ALLOW_REDUCED=1 GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/control.test.sh" 2>&1 </dev/null)"; _ctl_rc=$?
   if [[ "$_mut_rc" -eq 1 ]] && grep -q 'assertions ran' <<<"$_mut_out"; then _x=ok; else _x=bad; fi
   chk "harness (a): deleting one expected-ask row makes the floor fail (rc=$_mut_rc)" "$_x" "$(tail -n 2 <<<"$_mut_out" | tr '\n' ' ')"
   if ! grep -q 'assertions ran' <<<"$_ctl_out" && grep -q '^cases=' <<<"$_ctl_out"; then _x=ok; else _x=bad; fi
@@ -2727,18 +2733,28 @@ fi
 # A reduced run says so: the first line of a DCG_ROWS run is the banner, the summary repeats it, and a run with no seam prints neither.
 if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (a2): a reduced run says so on its first line and in its summary"; then
   assert_fixture_dir "$WORK"
-  _rr_out="$(env DCG_ROWS='^terraform plan$' GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"
-  _rr_full="$(env -u DCG_ROWS -u GUARD_HOOK GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"
+  _rr_out="$(env DCG_ROWS='^terraform plan$' DCG_ALLOW_REDUCED=1 GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"
+  _rr_full="$(env -u DCG_ROWS -u GUARD_HOOK DCG_ALLOW_REDUCED=1 GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"
   if [[ "$(head -n 1 <<<"$_rr_out")" == '[REDUCED RUN: DCG_ROWS=^terraform plan$ — not the full gate]' ]]; then _x=ok; else _x=bad; fi
   chk "harness (a2): the first line of a DCG_ROWS run is the REDUCED RUN banner naming the selection" "$_x" "first line: $(head -n 1 <<<"$_rr_out")"
   if grep -q '^\[NOT THE FULL GATE: DCG_ROWS=\^terraform plan\$ selects a subset of the rows' <<<"$_rr_out"; then _x=ok; else _x=bad; fi
   chk "harness (a2): the summary of a DCG_ROWS run says it is not the full gate" "$_x" "$(tail -n 3 <<<"$_rr_out" | tr '\n' ' ')"
   if ! grep -q '^\[REDUCED RUN' <<<"$_rr_full" && ! grep -q '^\[NOT THE FULL GATE: DCG_ROWS' <<<"$_rr_full"; then _x=ok; else _x=bad; fi
   chk "harness (a2): a run without DCG_ROWS prints no REDUCED RUN banner" "$_x" "$(head -n 2 <<<"$_rr_full" | tr '\n' ' ')"
+  # a stray DCG_ROWS (or GUARD_HOOK, GUARD_REPO_ROOT, GUARD_FAST_COUNT) in a CI environment must not turn the gate into a green subset: a narrowed
+  # or redirected run is refused there (exit 3) unless the caller says it means it (the mutation suite does, for its own reduced runs)
+  _ci_out="$(env -u DCG_ALLOW_REDUCED CI=1 DCG_ROWS='^terraform plan$' GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"; _ci_rc=$?
+  if [[ "$_ci_rc" -eq 3 && "$_ci_out" == *"refused in CI"* && "$_ci_out" != *"cases="* ]]; then _x=ok; else _x=bad; fi
+  chk "harness (a3): a narrowed run in CI is refused with exit 3 and runs nothing" "$_x" "rc=$_ci_rc out: $(head -n 2 <<<"$_ci_out" | tr '\n' ' ')"
+  _ci_ok="$(env CI=1 DCG_ALLOW_REDUCED=1 DCG_ROWS='^terraform plan$' GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"
+  if [[ "$(head -n 1 <<<"$_ci_ok")" == '[REDUCED RUN: DCG_ROWS=^terraform plan$ — not the full gate]' && "$_ci_ok" != *"refused in CI"* ]]; then _x=ok; else _x=bad; fi
+  chk "harness (a3): the same run is allowed in CI when the caller sets DCG_ALLOW_REDUCED=1" "$_x" "first line: $(head -n 1 <<<"$_ci_ok")"
 elif [[ -n "${GUARD_META_COPY:-}" ]]; then
   chk "harness (a2): the first line of a DCG_ROWS run is the REDUCED RUN banner naming the selection (not run inside the meta copy)" ok
   chk "harness (a2): the summary of a DCG_ROWS run says it is not the full gate (not run inside the meta copy)" ok
   chk "harness (a2): a run without DCG_ROWS prints no REDUCED RUN banner (not run inside the meta copy)" ok
+  chk "harness (a3): a narrowed run in CI is refused with exit 3 and runs nothing (not run inside the meta copy)" ok
+  chk "harness (a3): the same run is allowed in CI when the caller sets DCG_ALLOW_REDUCED=1 (not run inside the meta copy)" ok
 fi
 
 # =====================================================================================================
