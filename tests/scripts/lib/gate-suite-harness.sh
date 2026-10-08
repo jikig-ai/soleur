@@ -298,7 +298,7 @@ gate_mutate_layered() {
 # ── gate_harness_selftest — drive the harness's OWN wrappers once each ────────────────
 # Every suite that sources this file has an instrument self-test for its local `pass`/`fail`, and
 # a wrapper self-test for whatever local `check()` it defines. NEITHER reaches the two wrappers
-# DEFINED HERE. Measured on test-inngest-volume-recut-gate.sh: replacing `gate_check`'s body with a
+# DEFINED HERE. Measured on test-inngest-backstop-retire-gate.sh (successor of the retired recut gate suite): replacing `gate_check`'s body with a
 # bare `pass "$name"` left the suite at 50 passed, 0 failed with the anti-vacuity floor healthy,
 # and `gate_mutate_layered` the same — and this harness is sourced by 13 suites, so one edit here
 # silences the degraded-shape and invoked-not-sourced batteries in all of them at once.
