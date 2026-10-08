@@ -196,6 +196,7 @@ one hang counts as a kill by timeout), and rows M1-M8 run in CI by the mutation 
 
 ## Server-side scheduled agents
 
+<!-- lint-infra-ignore start: this paragraph RECORDS the result of grepping the server-side agents' skill and prompt texts for destructive commands; it prescribes no human-run step -->
 Twelve functions in `apps/web-platform/server/inngest/functions/` pass `--plugin-dir plugins/soleur` to a headless `claude` spawn:
 `cron-agent-native-audit`, `cron-architecture-diagram-sync`, `cron-bug-fixer`, `cron-campaign-calendar`,
 `cron-competitive-analysis`, `cron-content-generator`, `cron-growth-audit`, `cron-growth-execution`, `cron-legal-audit`,
@@ -223,6 +224,7 @@ count), none of them nor the shared substrate names the kill switch, and none re
 This is a classification gap, not a demonstrated false positive; the cost today is a `jq` and `perl` spawn on lexed Bash calls.
 Follow-up: decide per function whether to set the kill switch in its `buildSpawnEnv`, or to leave the guard on and accept
 ask-as-block.
+<!-- lint-infra-ignore end -->
 
 ## Consequences
 
