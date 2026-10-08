@@ -929,7 +929,7 @@ while IFS= read -r erow; do
       ;;
     glob)
       member_file="$(printf '%s\n' "$eargv" | awk '{print $NF}')"
-      if printf '%s\n' "$SUITE_GLOBS" | grep -qF "${rest}*.test.sh" \
+      if printf '%s\n' "$SUITE_GLOBS" | grep -cF >/dev/null "${rest}*.test.sh" \
          && [[ -f "$REPO_ROOT/$member_file" ]]; then
         pass "anchor: $ename covered by a SUITE_GLOB and its file exists"
       else

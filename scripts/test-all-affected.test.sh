@@ -2703,7 +2703,7 @@ _rc=$ARM_RC
 _row=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $2=="test/x-community"' <<<"$ARM_OUT" | head -1)
 if [[ "$_rc" == "0" ]] \
   && [[ "$(awk -F'\t' '{print $3"|"$4}' <<<"$_row")" == "0|edge:declared" ]] \
-  && awk -F'\t' '{print $5}' <<<"$_row" | grep -qF '^plugins/soleur/skills/community/scripts/' \
+  && awk -F'\t' '{print $5}' <<<"$_row" | grep -cF >/dev/null '^plugins/soleur/skills/community/scripts/' \
   && grep -qF $'AFFECTED_SELECTED\tscripts/lint-dual-lockfile\t1\talways_on\t' <<<"$ARM_OUT"; then
   pass "q1: rows carry bit, class and edge set (declared edges shown anchored)"
 else

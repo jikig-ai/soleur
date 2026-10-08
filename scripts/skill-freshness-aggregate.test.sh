@@ -194,7 +194,7 @@ if [[ ! -f "$OUT_PATH" ]]; then
   fail "first run did not write output file"
 else
   OUT2=$(SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" 2>&1)
-  if echo "$OUT2" | grep -q "No material change"; then
+  if echo "$OUT2" | grep -c >/dev/null "No material change"; then
     pass "second identical run skipped write"
   else
     fail "second run rewrote unchanged output: $OUT2"
