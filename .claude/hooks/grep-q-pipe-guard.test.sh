@@ -1300,6 +1300,7 @@ _vrun "$vr/nul" --hand-edits "$vr/ins.list"; vr_nul_rc="$vr_rc"; vr_nul_out="$vr
 # the diff is taken against the merge-base, so a sibling commit that landed on the base branch after this slice forked is not this slice's edit; a non-ASCII swept path is judged
 _mbsetup() { # <dir>: base commit, a non-ASCII swept file on a branch, then a sibling commit on the base branch
   local d="$1"
+  assert_fixture_dir "$d"
   _vrepo "$d" || return 1
   mb_main="$(_cleangit -C "$d" branch --show-current)" || return 1
   printf '%s\n' 'echo "$z" | grep -q uni' > "$d/scripts/"$'caf\303\251'".test.sh" || return 1
