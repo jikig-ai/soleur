@@ -328,7 +328,7 @@ export function makeSandboxedSpawn(
     // Env composition: options.env verbatim (it is already the allowlisted
     // buildAgentEnv output — secrets ride env, never argv) + TMPDIR pinned
     // to the session tmpfs. undefined values dropped.
-    const env: Record<string, string> = {};
+    const env: NodeJS.ProcessEnv = {};
     for (const [k, v] of Object.entries(options.env)) {
       if (v !== undefined) env[k] = v;
     }
@@ -342,7 +342,7 @@ export function makeSandboxedSpawn(
       stdio: ["pipe", "pipe", "pipe"],
     });
     // stderr must drain continuously or the child blocks at ~64 kB.
-    child.stderr?.on("data", (b: Buffer) => stderrRing.push(b));
+    child.stderr!.on("data", (b: Buffer) => stderrRing.push(b));
     const ringTail = () => stderrRing.tail();
 
     const spawned: SpawnedProcess = {
