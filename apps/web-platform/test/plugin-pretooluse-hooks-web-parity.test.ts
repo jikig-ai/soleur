@@ -279,13 +279,56 @@ function stripComments(src: string): string {
 function walkTs(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const p = join(dir, e.name);
-    return e.isDirectory() ? walkTs(p) : e.name.endsWith(".ts") ? [p] : [];
+    return e.isDirectory() ? walkTs(p) : /\.[cm]?[tj]sx?$/.test(e.name) ? [p] : [];
   });
+}
+
+// Whether a (comment-stripped) source names the flag that loads the plugin: any quote or none, `--plugin-dir=...`, a template literal, and a
+// flag split across a string concatenation ("--plugin" + "-dir"). A flag imported from a module outside the directory is the one spelling
+// this cannot see (the census below would then miss a spawner); the day a function does that, widen the walk.
+function joined(code: string): string {
+  return code.replace(/["'`]\s*\+\s*["'`]/g, "");
+}
+function loadsPlugin(code: string): boolean {
+  return /--plugin-dir/.test(joined(code));
+}
+// Whether a (comment-stripped) source names the kill switch, spelled whole or split across a string concatenation (a computed key).
+function namesKillSwitch(code: string): boolean {
+  return joined(code).includes(KILL_SWITCH);
 }
 
 describe("server-side scheduled agents that load the plugin keep the destructive guard active (ADR-274)", () => {
   const sources = walkTs(FUNCTIONS_DIR).map((file) => ({ file, name: basename(file), code: stripComments(readFileSync(file, "utf8")) }));
-  const spawners = sources.filter((s) => s.code.includes('"--plugin-dir"'));
+  const spawners = sources.filter((s) => loadsPlugin(s.code));
+
+  it("the census predicate reads every spelling of the flag and nothing else (so a spawner that avoids the double-quoted token is still counted)", () => {
+    const yes = [
+      'const a = "--plugin-dir";',
+      "const a = '--plugin-dir';",
+      "const a = `--plugin-dir`;",
+      'const a = "--plugin-dir=plugins/soleur";',
+      'const a = "--plugin" + "-dir";',
+      "args.push('--plugin' + `-dir`, root);",
+      'spawn("claude", ["--plugin-dir", root])',
+    ];
+    const no = ['const a = "--plugin";', 'const a = "plugin-dir";', 'const a = "--plugn-dirs".length;', "const b = 1;"];
+    for (const code of yes) expect(loadsPlugin(stripComments(code)), code).toBe(true);
+    for (const code of no) expect(loadsPlugin(stripComments(code)), code).toBe(false);
+    expect(loadsPlugin(stripComments('// "--plugin-dir" only in a comment\nconst a = 1;')), "a comment that only mentions the flag does not count").toBe(false);
+  });
+
+  it("the kill-switch census reads a split spelling (a computed key) as well as the whole name", () => {
+    expect(namesKillSwitch(stripComments('env["SOLEUR_DISABLE_DESTRUCTIVE_GUARD"] = "1";'))).toBe(true);
+    expect(namesKillSwitch(stripComments('env["SOLEUR_DISABLE_" + "DESTRUCTIVE_GUARD"] = "1";'))).toBe(true);
+    expect(namesKillSwitch(stripComments("env[`SOLEUR_DISABLE_` + 'DESTRUCTIVE_GUARD'] = '1';"))).toBe(true);
+    expect(namesKillSwitch(stripComments('// SOLEUR_DISABLE_DESTRUCTIVE_GUARD only in a comment\nconst a = 1;'))).toBe(false);
+    expect(namesKillSwitch(stripComments('const a = "SOLEUR_DISABLE_OTHER";'))).toBe(false);
+  });
+
+  it("the directory walk reads every script extension (.ts, .mts, .cts, .tsx, .js, .mjs), not only .ts", () => {
+    const names = ["a.ts", "b.mts", "c.cts", "d.tsx", "e.js", "f.mjs", "g.json", "h.ts.bak", "i.d.ts.map"];
+    expect(names.filter((n) => /\.[cm]?[tj]sx?$/.test(n))).toEqual(["a.ts", "b.mts", "c.cts", "d.tsx", "e.js", "f.mjs"]);
+  });
 
   it("the comment stripper keeps code and strings and drops comments (so the census below cannot be satisfied or defeated by a comment)", () => {
     const src = [
@@ -310,7 +353,7 @@ describe("server-side scheduled agents that load the plugin keep the destructive
     const substrate = sources.find((s) => s.name === "_cron-claude-eval-substrate.ts");
     expect(substrate, "the shared substrate must exist").toBeTruthy();
     for (const s of [...spawners, substrate!]) {
-      expect(s.code.includes(KILL_SWITCH), `${s.name} sets or mentions ${KILL_SWITCH}: the ADR-274 disposition (guard active in server-side scheduled agents) no longer holds`).toBe(false);
+      expect(namesKillSwitch(s.code), `${s.name} sets or mentions ${KILL_SWITCH}: the ADR-274 disposition (guard active in server-side scheduled agents) no longer holds`).toBe(false);
     }
   });
 
