@@ -78,15 +78,23 @@ ruleset requires it**: a PR can edit the gate and its suite together.
 
 ### Reading the verdict (agents and operators)
 
-The step summary and the job outputs have no API. The verdict is in the job log:
+The step summary and the job outputs have no API. The verdict is a `::notice::` annotation, readable
+as soon as the gate job has finished, even while the rest of the run is still going:
 
 ```bash
 JOB_ID=$(gh run view <run-id> --json jobs --jq '.jobs[]|select(.name|startswith("smoke-relevance"))|.databaseId')
-gh run view --job "$JOB_ID" --log | grep 'smoke-relevance: smoke='
+gh api "repos/{owner}/{repo}/check-runs/$JOB_ID/annotations" --jq '.[].message'
 ```
 
-The line reads `smoke-relevance: smoke=<true|false> (<reason>)`; every `true` carries the reason it
-failed open or the subject path rule that fired.
+The message reads `smoke-relevance: smoke=<true|false> (<reason>)`; every `true` carries the reason it
+failed open or the subject path rule that fired. `gh run view --job "$JOB_ID" --log | grep
+'smoke-relevance: smoke='` prints the same line, but only once the whole run has completed (while it is
+in progress `gh` answers that logs are not available yet).
+
+Observed on the real runner before merge (scratch commits on this PR, reverted): with the subject
+alternatives this PR touches neutralised, run 37861019697 gave `smoke=false (no subject path changed)`
+and the matrix posted one skipped row, `smoke (${{ matrix.case }})`; with the step forced to fail, run
+37861115263 failed the gate and all ten legs ran.
 
 ### Accepted residuals
 
