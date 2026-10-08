@@ -110,10 +110,13 @@ assert "no-op on the registration push (workflow_dispatch guard)" "grep -qE \"gi
 
 # Rule D (#7873 / ADR-202, paid down at #8054 when this file left the lint's baseline): EVERY
 # credentialed curl is transport-confined — `--disable` as the LITERAL FIRST argument, then
-# `--noproxy '*'`. Counted against the curl count so a new call site cannot land unconfined.
+# `--noproxy '*'`. Two transport forms count: raw curls (each must carry the confinement
+# flags in its own argv) and `_sig_curl` call sites (the wrapper owns the confined argv,
+# and its credential headers ride `--config -` stdin, never argv — #9597 drawdown).
 BODY_CURLS=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE '\bcurl ' || true)
 BODY_CONFINED=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE "\bcurl --disable --noproxy '\*' " || true)
-assert "#8054 every curl in the body is transport-confined (curl=$BODY_CURLS confined=$BODY_CONFINED)" "[[ '$BODY_CURLS' -ge 20 && '$BODY_CURLS' -eq '$BODY_CONFINED' ]]"
+BODY_SIG_WRAPPED=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE '\b_sig_curl ' || true)
+assert "#8054 every transfer is transport-confined — raw curls confined in argv, webhook calls wrapped (curl=$BODY_CURLS confined=$BODY_CONFINED sig_wrapped=$BODY_SIG_WRAPPED)" "[[ '$BODY_CURLS' -eq '$BODY_CONFINED' && '$BODY_SIG_WRAPPED' -ge 20 ]]"
 assert "#8054 the body refuses to run under xtrace (it binds live credentials)" "grep -qE '^[[:space:]]*\*x\*\) printf .*refusing to run under xtrace.*exit 78' '$BODY_SH'"
 
 # every curl carries --max-time (no unbounded network call)
@@ -358,9 +361,10 @@ assert "doublefire SUM bound airtight: deadline + PAGE_MIN < 120 (#6919)" "[[ -n
 assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-starvation, #6919)" "grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\\\$PREFLIGHT_PAGE_MIN_S' '$DF_SH'"
 assert "inventory clamps per-page curl to the remaining budget (not a fixed const)" "grep -qE 'max-time \"\\\$max_time\"' '$INV_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$INV_SH'"
 assert "doublefire clamps per-page curl to the remaining budget" "grep -qE 'max-time \"\\\$max_time\"' '$DF_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$DF_SH'"
-# outer curl budgets present (the ceiling the sum must stay under).
-assert "inventory outer curl --max-time 30 present" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 30 -o /tmp/inv-body' '$WF'"
-assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 120 -o /tmp/verify-runs' '$WF'"
+# outer transfer budgets present (the ceiling the sum must stay under). The calls are
+# `_sig_curl` sites — the wrapper owns the confinement flags, the caller owns the bound.
+assert "inventory outer --max-time 30 present" "grep -qE '_sig_curl [A-Z_0-9]+ -s --max-time 30 -o /tmp/inv-body' '$WF'"
+assert "doublefire outer --max-time 120 present (#6919)" "grep -qE '_sig_curl [A-Z_0-9]+ -s --max-time 120 -o /tmp/verify-runs' '$WF'"
 
 # ============================================================================
 # #6919 — the op=verify HTTP 500 fix's plumbing: the doublefire hook reads a
@@ -374,7 +378,9 @@ assert "#6919 doublefire hook forwards ?function_ids → INNGEST_DOUBLEFIRE_FUNC
 # Workflow side: a shared doublefire_from() computes the ⊇-invariant lower bound, and BOTH the
 # op=verify (2.6) and standalone op=doublefire-probe arms forward it as ?from=.
 assert "#6919 workflow defines doublefire_from() helper" "grep -qE 'doublefire_from\(\) \{' '$WF'"
-assert "#6919 both doublefire calls forward the ?from= window cost lever (2 sites)" "[[ \"\$(grep -cF 'inngest-doublefire-probe?from=' '$WF')\" -eq 2 ]]"
+# #6940 — a THIRD site joins the two original arms: op=verify's zero-run discovery
+# re-probe (registry_cron_ids − observed, scoped function_ids=, open-topped).
+assert "#6919+#6940 all doublefire calls forward the ?from= window cost lever (3 sites)" "[[ \"\$(grep -cF 'inngest-doublefire-probe?from=' '$WF')\" -eq 3 ]]"
 assert "#6919 workflow wires the optional functionIDs cost lever (CUTOVER_DOUBLEFIRE_FUNCTION_IDS)" "grep -qF 'CUTOVER_DOUBLEFIRE_FUNCTION_IDS' '$WF'"
 # #6919 review — doublefire_from()'s cutover-instant anchor (and the missed-tick auto-enum) read
 # CUTOVER_WINDOW_UNTIL/FROM, which GitHub does not export to the shell unless the step env MAPS
@@ -2820,6 +2826,14 @@ assert "#8054 render driver: the REAL reader and remedy functions extract non-va
 # string, which would inline cleanly and leave the arm dying exactly as it would have
 # without this change — a silent regression wearing a green suite.
 assert "#8178 render driver: bs_read_classify extracts non-vacuously" "[[ \$(printf '%s\n' \"\$BS_CLASSIFY_FN\" | wc -l) -gt 5 ]]"
+# (#9597) The regions' webhook calls now go through _sig_curl (the #9597 drawdown wrapper —
+# credentials on --config stdin, never argv), defined at file top and so NOT inside any
+# extracted region. Splice the wrapper and its _bearer_ok shape guard into every render
+# driver below; without them each sourced region dies on an unbound command and every
+# render grades refusal arms it never measured. `_bearer_ok` is a one-line function — the
+# awk range pattern would run past its `}` — so it is extracted by single-line match.
+SIG_CURL_FNS="$( { awk '/^_bearer_ok\(\) \{/{print; exit}' "$BODY_SH"; awk '/^_sig_curl\(\) \{$/,/^\}$/' "$BODY_SH"; } )"
+assert "#9597 render driver: _bearer_ok + _sig_curl extract non-vacuously" "[[ \$(printf '%s\n' \"\$SIG_CURL_FNS\" | grep -cE '_bearer_ok\(\)|_sig_curl\(\)') -eq 2 ]]"
 RENDER_TMPDS="$(mktemp)"
 render_2_0() {
   local region="$1" code="$2" body="$3" pmode="$4" hmode="$5" tmpd driver rc=0
@@ -2840,6 +2854,7 @@ render_2_0() {
     printf '%s\n' "$BS_CLASSIFY_FN"
     printf '%s\n' "$BS_READER_FN"
     printf '%s\n' "$BS_REMEDY_FN"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 curl() { local o=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done; printf '%s' "$STUB_BODY" > "$o"; printf '%s' "$STUB_CODE"; }
 # doppler <run args…> -- bash scripts/betterstack-query.sh --since S --grep T --limit N : the process
@@ -3521,6 +3536,7 @@ render_2_2() { # $1 region  $2 SOURCE  $3 STUB_SEQ → stdout+stderr, __RC=, __C
       "$R22_QUIESCED" "$R22_QUIESCED_MULTI" "$R22_FATAL" "$R22_NOT_QUIESCED"
     printf 'UNATTR_BODY=%q; FORBIDDEN_BODY=%q; NOTFOUND_BODY=%q; GATEWAY_BODY=%q\n' \
       "$R22_UNATTRIBUTED" "$R22_FORBIDDEN" "$R22_NOTFOUND" "$R22_GATEWAY"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 curl() {
   local o="" n entry code name
@@ -3725,6 +3741,7 @@ render_qw_pf() { # $1 HTTP code  $2 body  $3 checkout file to REMOVE from the sa
     printf 'set -euo pipefail\n'
     printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
     printf 'STUB_CODE=%q; STUB_BODY=%q; TMPD=%q\n' "$code" "$body" "$tmpd"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 curl() {
   local o="" a
@@ -3800,6 +3817,7 @@ render_qw_poll() { # $1 QSEQ `reason:exit,…` → output, __RC=, __CALLS=
     printf 'set -euo pipefail\n'
     printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
     printf 'QSEQ=%q; TMPD=%q\n' "$seq" "$tmpd"
+    printf '%s\n' "$SIG_CURL_FNS"
     cat <<'DRIVER'
 sleep() { :; }
 curl() {
@@ -3942,7 +3960,10 @@ assert "#6939 exactly one mention of inputs.missed_tick_candidates in the workfl
 # between the verdict and the op's completion notice. A default (:-true) or a trailing `|| exit 1`
 # (which disables set -e inside the function) both fail the whole-line match.
 # shellcheck disable=SC2016  # a literal call-site line, matched with grep -xF
-MTR_CALL='    missed_tick_report "${CUTOVER_MISSED_TICK_CANDIDATES:-}" "$BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"'
+# #6940 — the call now passes the gate/body LOCALS: MTR_BODY is the primary
+# doublefire body plus (when armed) the merged zero-run discovery re-scan, and
+# MTR_GATE is the single read of CUTOVER_MISSED_TICK_CANDIDATES.
+MTR_CALL='    missed_tick_report "$MTR_GATE" "$MTR_BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"'
 MTR_CALL_N=$(grep -cxF -- "$MTR_CALL" "$BODY_SH" || true)
 assert "#6939 the call site is the one exact plain line (got '$MTR_CALL_N')" "[[ '$MTR_CALL_N' == '1' ]]"
 MTR_CALLERS=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE '^[[:space:]]+missed_tick_report[[:space:]]' || true)
@@ -3958,7 +3979,9 @@ assert "#6939 the call sits after the LAST exactly-once VERIFIED echo (call=$MTR
 # one of them.
 MTR_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'missed_tick_report' | head -1 | sed 's/^[[:space:]]*//' || true)
 MTR_NEXT=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -A1 -F 'missed_tick_report' | tail -1 | sed 's/^[[:space:]]*//' || true)
-assert "#6939 the call directly follows the 2.6 SCOPE CAVEAT echo" "[[ \"\$MTR_PREV\" == 'echo \"::notice::2.6 SCOPE CAVEAT'* ]]"
+# #6940 — the call now follows the zero-run discovery block's closing `fi`; the
+# block's own position (directly after the SCOPE CAVEAT) is pinned below.
+assert "#6940 the call directly follows the discovery block's closing fi" "[[ \"\$MTR_PREV\" == 'fi' ]]"
 assert "#6939 the call is directly followed by the op=verify complete notice (got: \$MTR_NEXT)" "[[ \"\$MTR_NEXT\" == 'echo \"::notice::op=verify complete\"' ]]"
 MTR_ARM_LOOP=$(grep -cE 'for fn in|candidate function_id=' "$VERIFY_ARM_FILE" || true)
 assert "#6939 verify) has no per-function loop of its own (got '$MTR_ARM_LOOP')" "[[ '$MTR_ARM_LOOP' == '0' ]]"
@@ -4141,6 +4164,141 @@ assert "#6939 P7 ON bad function ids: the shape-check warning counts 5 distinct 
 # Anti-vacuity: every declared case actually dispatched (the counter is derived from the tables).
 MTR_DECLARED=$(( ${#MTR_OFF_GATES[@]} + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + ${#MTR_BAD_WINDOWS[@]} + 2 + 2 * ${#MTR_FORGE[@]} + 1 ))
 assert "#6939 every declared missed_tick_report case ran (ran=$MTR_CASES declared=$MTR_DECLARED)" "[[ '$MTR_CASES' -eq '$MTR_DECLARED' && '$MTR_CASES' -ge 26 ]]"
+
+# =====================================================================================
+# #6940 item 1 — registry-sourced missed-tick discovery (ADR-146 §Deferred item 1).
+#
+# The verify arm captures the registry-probe body (REG_BODY) BEFORE the 2.6
+# doublefire fetch overwrites BODY, derives registry_cron_ids − observed via the
+# column-0 helper zero_run_cron_ids, and issues ONE scoped doublefire re-probe
+# (?from=<now - CUTOVER_DISCOVERY_LOOKBACK_S>&function_ids=<csv>, open-topped).
+# Its runs merge into the body missed_tick_report enumerates. The block sits
+# BETWEEN the SCOPE CAVEAT echo and the missed_tick_report call, is gated on the
+# missed-tick flag + both window vars, and must never fail op=verify.
+# =====================================================================================
+echo "--- #6940 zero-run discovery (registry-sourced, scoped re-probe) ---"
+
+# REG_BODY is captured AFTER the registry precondition reads BODY and BEFORE the
+# doublefire fetch overwrites it — a capture after that point would hold the runs
+# body and silently un-discover every cron.
+REG_BODY_LN=$(grep -nF 'REG_BODY="$BODY"' "$VERIFY_ARM_FILE" | head -1 | cut -d: -f1 || true)
+RUNS_FETCH_LN=$(grep -n 'cat /tmp/verify-runs' "$VERIFY_ARM_FILE" | head -1 | cut -d: -f1 || true)
+assert "#6940 verify arm captures REG_BODY exactly once (got line '$REG_BODY_LN')" "[[ -n '$REG_BODY_LN' && \"\$(grep -cF 'REG_BODY=\"\$BODY\"' '$VERIFY_ARM_FILE')\" -eq 1 ]]"
+assert "#6940 REG_BODY is captured BEFORE the doublefire fetch overwrites BODY (reg=$REG_BODY_LN runs=$RUNS_FETCH_LN)" "[[ -n '$REG_BODY_LN' && -n '$RUNS_FETCH_LN' && '$REG_BODY_LN' -lt '$RUNS_FETCH_LN' ]]"
+
+# The column-0 pure helper exists and awk-extracts cleanly (same contract as
+# missed_tick_report — the extraction below executes it).
+ZR_FN="$(mktemp)"; SCRATCH+=("$ZR_FN")
+awk '/^zero_run_cron_ids\(\) \{$/,/^\}$/' "$BODY_SH" > "$ZR_FN"
+assert "#6940 zero_run_cron_ids() extraction is non-empty and carries its definition" "[[ -s '$ZR_FN' ]] && grep -qx 'zero_run_cron_ids() {' '$ZR_FN'"
+
+# Discovery is gated on the missed-tick flag AND both window vars (armed-but-
+# windowless burns a webhook call the report cannot use), and the block directly
+# follows the SCOPE CAVEAT echo.
+assert "#6940 discovery is gated on flag == true AND both window vars set" "grep -qF 'if [[ \"\$MTR_GATE\" == \"true\" && -n \"\${CUTOVER_WINDOW_FROM:-}\" && -n \"\${CUTOVER_WINDOW_UNTIL:-}\" ]]; then' '$VERIFY_ARM_FILE'"
+DISC_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"' | head -1 | sed 's/^[[:space:]]*//' || true)
+assert "#6940 the discovery block directly follows the 2.6 SCOPE CAVEAT echo (got: \$DISC_PREV)" "[[ \"\$DISC_PREV\" == 'echo \"::notice::2.6 SCOPE CAVEAT'* ]]"
+assert "#6940 an empty zero-run set issues NO second call (guarded by -n)" "grep -qF 'if [[ -n \"\$ZERO_RUN_IDS\" ]]; then' '$VERIFY_ARM_FILE'"
+# The WIRE, not just the endpoints (#7969): the suite executes the extracted helper
+# and pins the URL below — but a call site reading `zero_run_cron_ids "$BODY"
+# "$REG_BODY"` (swapped) or assigning `""` would leave every row green. Pin the
+# exact call, in argument order, comment-stripped (VERIFY_ARM_FILE is already
+# comment-stripped, so a commented-out call cannot satisfy this).
+assert "#6940 the derivation call is wired (registry body first, runs body second)" "grep -qF 'ZERO_RUN_IDS=\$(zero_run_cron_ids \"\$REG_BODY\" \"\$BODY\")' '$VERIFY_ARM_FILE'"
+# The merge must ASSIGN back to MTR_BODY — a discarded jq output leaves the
+# enumeration on the primary body while the URL/call pins stay green.
+assert "#6940 the re-scan runs are merged INTO MTR_BODY (assignment pinned)" "grep -qF 'MTR_BODY=\$(jq -nc --argjson a \"\$MTR_BODY\" --argjson b \"\$DISC_BODY\"' '$VERIFY_ARM_FILE' && grep -qF 'runs:(\$a.runs + \$b.runs)' '$VERIFY_ARM_FILE'"
+
+# The scoped URL: function_ids=<the derived set>, from=<lookback>, and NEVER an
+# `until=` — the post-repoint region is the highest-risk interval (same invariant
+# as the primary scan; bounding the top is the symmetric-tidy-up defect).
+DISC_URL_LINES=$(grep -cF 'function_ids=${ZERO_RUN_IDS}' "$VERIFY_ARM_FILE" || true)
+assert "#6940 the re-probe URL carries function_ids=\${ZERO_RUN_IDS} exactly once (got '$DISC_URL_LINES')" "[[ '$DISC_URL_LINES' == '1' ]]"
+DISC_URL_BAD=$(grep -F 'function_ids=${ZERO_RUN_IDS}' "$VERIFY_ARM_FILE" | grep -c 'until=' || true)
+assert "#6940 the re-probe URL is open-topped (no until=, got '$DISC_URL_BAD')" "[[ '$DISC_URL_BAD' == '0' ]]"
+assert "#6940 the lookback is a now-relative window (from=<now - CUTOVER_DISCOVERY_LOOKBACK_S>)" "grep -qF 'CUTOVER_DISCOVERY_LOOKBACK_S' '$VERIFY_ARM_FILE' && grep -qF 'DISC_FROM=\$(date -u -d' '$VERIFY_ARM_FILE'"
+
+# ONE bounded call, transport-confined like every sibling, NEVER retried —
+# discovery is advisory, so a transient must not double the call surface.
+DISC_CURL_N=$(grep -c 'verify-zero-run' "$VERIFY_ARM_FILE" || true)
+assert "#6940 the re-probe curl writes /tmp/verify-zero-run (rm + curl, got '$DISC_CURL_N')" "[[ '$DISC_CURL_N' -ge 2 ]]"
+DISC_CURL_LINE=$(grep -F 'curl ' "$VERIFY_ARM_FILE" | grep -F 'verify-zero-run' || true)
+assert "#6940 the re-probe curl is transport-confined + --max-time bounded" "grep -qF \"curl --disable --noproxy '*' \" <<< \"\$DISC_CURL_LINE\" && grep -qF -- '--max-time' <<< \"\$DISC_CURL_LINE\""
+VERIFY_RETRIES=$(grep -cE 'for attempt in 1 2; do' "$VERIFY_ARM_FILE" || true)
+assert "#6940 verify arm still has exactly 2 retry loops — the re-probe is single-shot (got '$VERIFY_RETRIES')" "[[ '$VERIFY_RETRIES' == '2' ]]"
+
+# Failure policy: the block warns and degrades, and the region between the gate
+# and the call NEVER exits — discovery must not redden a printed verdict.
+DISC_BLOCK=$(awk '/MTR_GATE. == "true"/,/missed_tick_report .MTR_GATE./' "$VERIFY_ARM_FILE" || true)
+DISC_WARNS=$(echo "$DISC_BLOCK" | grep -c '::warning::' || true)
+DISC_EXITS=$(echo "$DISC_BLOCK" | grep -cE 'exit [0-9]' || true)
+assert "#6940 the discovery block warns on failure (got $DISC_WARNS warning(s))" "[[ '$DISC_WARNS' -ge 1 ]]"
+assert "#6940 the discovery block never exit Ns (got $DISC_EXITS)" "[[ '$DISC_EXITS' == '0' ]]"
+# A registry body without the additive `functions` field (pre-#6940 probe still
+# on the host) is a NAMED skip, not a silent "nothing to re-probe".
+assert "#6940 a missing .functions field degrades to a named ::warning:: skip" "grep -qF 'has(\"functions\")' '$VERIFY_ARM_FILE' && grep -qF 'predates #6940' '$VERIFY_ARM_FILE'"
+
+# Workflow side: the lookback tunable is mapped into the step env (an unmapped
+# var is the #6617 dead-remediation defect), and item 2 stays deferred — the two
+# env names must NOT appear as env entries, and the deferral comment names the
+# AC-V4 precondition.
+assert "#6940 workflow maps CUTOVER_DISCOVERY_LOOKBACK_S into the step env" "grep -qE 'CUTOVER_DISCOVERY_LOOKBACK_S:[[:space:]]*\\\$\{\{ vars.CUTOVER_DISCOVERY_LOOKBACK_S \}\}' '$WF_YAML'"
+assert "#6940 item 2 deferred: CUTOVER_REGISTRY_BASELINE is NOT an env entry" "! grep -qE '^[[:space:]]+CUTOVER_REGISTRY_BASELINE:' '$WF_YAML'"
+assert "#6940 item 2 deferred: CUTOVER_QUIESCE_PROBES is NOT an env entry" "! grep -qE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' '$WF_YAML'"
+assert "#6940 the deferral comment names the AC-V4 precondition" "grep -qF 'AC-V4' '$WF_YAML'"
+
+# Behavioural cases against the EXTRACTED helper (column 0 of $BODY_SH).
+# $1 = registry-probe body-json, $2 = doublefire runs body-json → $ZR_OUT (stdout),
+# $ZR_ERR (stderr), $ZR_RC.
+ZR_OUT="$(mktemp)"; SCRATCH+=("$ZR_OUT")
+ZR_ERR="$(mktemp)"; SCRATCH+=("$ZR_ERR")
+ZR_CASES=0
+zr_run() {
+  ZR_CASES=$((ZR_CASES + 1))
+  set +e
+  # shellcheck disable=SC1090
+  ( set -euo pipefail; . "$ZR_FN"; zero_run_cron_ids "$1" "$2" ) > "$ZR_OUT" 2> "$ZR_ERR"
+  ZR_RC=$?
+  set -e
+}
+
+# Canonical: c-slow is a registered CRON with zero runs (the item-1 target);
+# c-seen is a CRON WITH a run (must NOT be re-scoped); e-ev is EVENT-only; n-none
+# has no triggers; the last three are shape violations that must be skipped AND
+# counted — `*`, an embedded CR, and a TRAILING newline (jq's $ would accept it).
+ZR_REG=$(jq -nc '{functions:[
+  {id:"c-slow", slug:"cron/quarterly", triggers:[{type:"CRON",value:"0 11 1 1,4,7,10 *"}]},
+  {id:"c-seen", slug:"cron/hourly", triggers:[{type:"CRON",value:"17 * * * *"}]},
+  {id:"e-ev", slug:"events/x", triggers:[{type:"EVENT",value:"app/x"}]},
+  {id:"n-none", slug:"fn/no-trig", triggers:[]},
+  {id:"*", slug:"bad", triggers:[{type:"CRON",value:"0 0 * * *"}]},
+  {id:"a\rb", slug:"bad2", triggers:[{type:"CRON",value:"0 0 * * *"}]},
+  {id:"ok\n", slug:"bad3", triggers:[{type:"CRON",value:"0 0 * * *"}]}
+]}')
+ZR_RUNS='{"runs":[{"functionID":"c-seen","startedAt":"2026-10-06T00:00:05Z"}]}'
+
+zr_run "$ZR_REG" "$ZR_RUNS"
+assert "#6940 zero-run set = registry CRON ids minus observed minus event/null/bad (got '$ZR_OUT' rc=$ZR_RC)" "[[ '$ZR_RC' == '0' && \"\$(cat '$ZR_OUT')\" == 'c-slow' ]]"
+assert "#6940 the 3 shape-skipped ids are counted on stderr" "grep -qF '3 registry CRON id' '$ZR_ERR' && grep -qF 'skipped' '$ZR_ERR'"
+
+# Empty registry functions field → empty csv, rc 0 (a legitimate empty).
+zr_run '{"functions":[]}' "$ZR_RUNS"
+assert "#6940 empty registry → empty set, rc 0 (got '$ZR_OUT' rc=$ZR_RC)" "[[ '$ZR_RC' == '0' && -z \"\$(cat '$ZR_OUT')\" ]]"
+
+# Missing .functions field (pre-push probe body) → empty csv, rc 0 — the CALLER
+# warns; the helper must not crash or invent ids.
+zr_run '{"registry_empty":false,"function_count":2,"function_ids":["c-slow","e-ev"]}' "$ZR_RUNS"
+assert "#6940 missing .functions field → empty set, rc 0 (got '$ZR_OUT' rc=$ZR_RC)" "[[ '$ZR_RC' == '0' && -z \"\$(cat '$ZR_OUT')\" ]]"
+
+# Malformed inputs degrade to empty, never a crash that kills the verify arm.
+zr_run 'not-json' 'also-not-json'
+assert "#6940 unparseable inputs → empty set, rc 0 (got '$ZR_OUT' rc=$ZR_RC)" "[[ '$ZR_RC' == '0' && -z \"\$(cat '$ZR_OUT')\" ]]"
+
+# must-PASS: every registered cron observed → empty csv (nothing to re-probe).
+zr_run '{"functions":[{"id":"c-seen","slug":"x","triggers":[{"type":"CRON","value":"17 * * * *"}]}]}' "$ZR_RUNS"
+assert "#6940 all-crons-observed → empty set (must-PASS, got '$ZR_OUT' rc=$ZR_RC)" "[[ '$ZR_RC' == '0' && -z \"\$(cat '$ZR_OUT')\" ]]"
+
+assert "#6940 every declared zero_run_cron_ids case ran (ran=$ZR_CASES)" "[[ '$ZR_CASES' -eq 5 ]]"
 
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
@@ -4398,7 +4556,15 @@ _DISPATCHED=$((PASS + FAIL))
 #   + define + 12 rsb_case rows + counter + 7 assembly rows), the #7777 op=reflush block (+18: choice
 #   + case arm + non-vacuity + 10 wiring rows + 5 emitter-parity rows), and the reviewer-gate
 #   membership loop's fourth iteration (+1).
-_EXACT_FLOOR=1040
+# 1040 -> 1068 (+28) at #6940 item 1, measured: the zero-run discovery block —
+# REG_BODY capture pins (2), zero_run_cron_ids extraction (1), gate/placement/
+# URL/curl/retry/failure-policy structural rows (13), the WIRE pins for the
+# helper call site and the MTR_BODY merge assignment (2), the item-2 deferral
+# env rows (4), and the five executed zr_run cases + their case counter (6).
+# 1068 -> 1069 (+1) at the #9597 drawdown in #9736: the `_bearer_ok` + `_sig_curl` render-splice
+#   non-vacuity row. The confinement and outer-budget rows were rewritten for the wrapper shape
+#   (same assertion count).
+_EXACT_FLOOR=1069
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

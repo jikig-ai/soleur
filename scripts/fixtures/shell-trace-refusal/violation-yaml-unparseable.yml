@@ -1,0 +1,11 @@
+# NOT valid YAML (the unterminated flow sequence at the bottom) AND it holds a curl a
+# RAW-LINE scan would flag. The lint must exit 2 (cannot evaluate), never skip the file and
+# never fall back to raw lines: "skipped" and "fallback found nothing" would both read rc 0,
+# and a fallback that DOES find it would turn a broken workflow into an ordinary finding.
+name: fixture-unparseable
+jobs:
+  probe:
+    steps:
+      - run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+    broken: [unterminated, flow

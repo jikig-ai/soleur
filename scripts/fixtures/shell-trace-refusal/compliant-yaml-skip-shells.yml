@@ -1,0 +1,35 @@
+# MUST PASS (rc 0). One step per member of SKIP_SHELLS, each carrying an argv credential header
+# the lint must NOT scan (the step is not bash). Each step is the ONLY site its member skips, so
+# the suite deleting one member from SKIP_SHELLS in a sandbox copy of the lint must print exactly
+# ONE finding (that step goes back to being scanned). The curl text is deliberately not valid in
+# any of these interpreters: it is only text.
+name: fixture-skip-shells
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: python step
+        shell: python
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+      - name: pwsh step
+        shell: pwsh
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+      - name: powershell step
+        shell: powershell
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+      - name: cmd step
+        shell: cmd
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+      - name: node step
+        shell: node
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+      - name: ruby step
+        shell: ruby
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

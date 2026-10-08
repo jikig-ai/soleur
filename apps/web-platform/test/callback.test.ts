@@ -8,7 +8,9 @@ describe("auth callback origin validation", () => {
     expect(resolveOrigin("evil.com", "https", "app.soleur.ai")).toBe(
       "https://app.soleur.ai",
     );
-    // Rejection is logged via Pino (structured) — verified by return value
+    // Rejection is logged via console.warn (edge runtime — pino is not
+    // importable there), deduplicated per origin per process (#7665);
+    // verified by return value
   });
 
   test("rejects malicious proto + host combination", () => {

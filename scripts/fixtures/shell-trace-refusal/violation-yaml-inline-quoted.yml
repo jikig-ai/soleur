@@ -1,0 +1,13 @@
+# Rule E must fire ONCE. The offending step is an INLINE single-quoted `run:` (an unquoted
+# inline `run: curl -H "Authorization: ..."` is invalid YAML because of the colon-space).
+name: fixture-inline-quoted
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: compliant first
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+      - name: offending inline single-quoted
+        run: 'curl --disable --noproxy "*" -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"'

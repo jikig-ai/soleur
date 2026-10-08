@@ -510,6 +510,61 @@ resource "doppler_secret" "workspaces_luks_heartbeat_url" {
   }
 }
 
+# #8516 — the HOURLY dead-probe switch for the dedicated-host Inngest server probe, sibling of
+# logtail_exploration_alert.inngest_luks_wrong_volume (betterstack-logs-alerts.tf): that alert's
+# on_missing_data = "treat_as_zero" reads a silent probe pipeline as zero wrong-volume rows, so
+# a dead emitter / Vector allowlist regression / sink outage would let a rollback onto the
+# plaintext backstop hcloud_volume.inngest_redis go unpaged. This heartbeat watches the EMISSION
+# cadence (inngest-server-probe.timer: OnUnitActiveSec=1h + AccuracySec=1min), not the log rows.
+#
+# period 3600 = one emission interval; grace 1800 ⇒ the switch pages 5400 s after the last beat —
+# ONE skipped hourly emission is already the anomaly, and jitter/ingest latency is absorbed inside
+# the grace. (DP-10's shape, scaled from daily to hourly.)
+#
+# paused = true forever-until-armed, same DP-10/#6210 discipline: Better Stack starts expecting
+# pings at creation, so an unfed unpaused heartbeat pages falsely. The FEEDER is deliberately not
+# in this resource's PR — candidate shapes and the beat budget are tracked on the issue the
+# heartbeat-manifest.ts row (feeder.kind = "none" + tracking_issue + arming_pending) names. The
+# beat must certify a FRESH host_role=dedicated inngest-server-probe row landed in the
+# warehouse (covers sink + allowlist failures a host-side push cannot see; #6780).
+resource "betteruptime_heartbeat" "inngest_server_probe" {
+  name      = "soleur-inngest-server-probe-prd"
+  period    = 3600
+  grace     = 1800
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Arming happens out-of-band after an observed beat (the tracked follow-up); a later
+    # apply MUST NOT revert the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
+
+# #8516 — the heartbeat URL, provisioned beside the object so any feeder shape (a repo-side
+# verifier workflow, or a host-side push inside inngest-server-probe.sh once the OCI image
+# re-bakes) can read it from the soleur/prd config — the same sink
+# doppler_secret.inngest_heartbeat_url_prd uses. Delivered with the heartbeat via the
+# apply-web-platform-infra.yml -target allow-list (the #8754 git_data_prd precedent), NOT
+# OPERATOR_APPLIED_EXCLUSIONS: the push-apply IS the delivery path this issue prescribes.
+resource "doppler_secret" "inngest_server_probe_heartbeat_url" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "INNGEST_SERVER_PROBE_HEARTBEAT_URL"
+  value      = betteruptime_heartbeat.inngest_server_probe.url
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value] # URL is stable per heartbeat resource lifetime.
+  }
+}
+
 resource "betteruptime_team_member" "ops" {
   email     = "ops@jikigai.com"
   role      = "responder"

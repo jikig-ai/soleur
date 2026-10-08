@@ -37,12 +37,18 @@ vi.mock("@/server/sandbox-hook", () => ({
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
-// The filesystem `denyRead` is now computed per-dispatch from a live
-// `readdirSync(WORKSPACES_ROOT)` (per-sibling deny — #5733 follow-up, PR
-// #5848's `allowRead` re-bind made the workspace read-only). These tests
-// stub `WORKSPACES_ROOT` to a real temp fixture (own + two siblings) so the
-// enumeration is deterministic. Focused enumerator unit + fail-closed tests
-// live in `agent-sandbox-sibling-deny.test.ts`.
+// The filesystem `denyRead` is a CONSTANT list — the broad parent deny
+// `[WORKSPACES_ROOT, c4StagingRoot, "/proc"]` (#5862, ADR-075 exit criterion):
+// the vendored CLI 2.1.284 bwrap builder emits `--tmpfs <deny landing>` FIRST
+// and then re-binds every covered `allowWrite`/`allowRead` path after it
+// (deny-then-restore), so the parent tmpfs masks present AND future siblings
+// while the agent's own workspace keeps read+write via the post-tmpfs
+// `allowWrite` restore. No dispatch-time `readdirSync`, no per-sibling
+// enumeration — a sibling created after the namespace build is never listed
+// yet stays covered. Focused constant-deny tests live in
+// `agent-sandbox-tenant-deny.test.ts`. These tests stub `WORKSPACES_ROOT` to a
+// real temp fixture (own + two siblings) to prove the set is invariant under
+// sibling creation.
 describe("buildAgentSandboxConfig drift guard", () => {
   let root: string;
   let own: string;
@@ -65,7 +71,8 @@ describe("buildAgentSandboxConfig drift guard", () => {
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
     // The C4 staging root sits BESIDE the workspaces root, never inside it
-    // (inside, the sibling enumeration would list it as a tenant).
+    // (inside, it would sit under the covering workspace deny — still denied,
+    // but the dedicated staging tmpfs would be shadowed by the ws restore bind).
     rmSync(`${root}-c4-staging`, { recursive: true, force: true });
   });
 
@@ -81,17 +88,21 @@ describe("buildAgentSandboxConfig drift guard", () => {
       allowedDomains: [],
       allowManagedDomainsOnly: true,
     });
-    // filesystem: write own; deny every sibling + /proc; NO allowRead key.
+    // filesystem: write own; CONSTANT parent deny; NO allowRead key.
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
-    // EXACT set (order-independent): denyRead must be precisely the two
-    // siblings + /proc + the C4 re-render staging root (#8623). `arrayContaining`
-    // would let a stray/extra entry or a silently-widened deny set slip through
-    // the guard — and denyRead is now the sole bwrap-level cross-tenant guard,
-    // so an unexpected member is exactly what this must fail on.
-    expect([...result.filesystem.denyRead].sort()).toEqual(
-      [sibA, sibB, "/proc", `${root}-c4-staging`].sort(),
-    );
+    // EXACT list, order-pinned (#5862): the workspaces PARENT root + the C4
+    // re-render staging root (#8623) + /proc — the vendored builder's
+    // deny-then-restore ordering re-binds `allowWrite` paths after the covering
+    // `--tmpfs`, so own stays writable while the parent mask hides every
+    // sibling (present or future). Order matters because the emitted deny
+    // sequence maps to the builder's `--tmpfs` emission order; a per-sibling
+    // entry here means enumeration crept back in — fail on either drift.
+    expect(result.filesystem.denyRead).toEqual([
+      root,
+      `${root}-c4-staging`,
+      "/proc",
+    ]);
   });
 
   // #8623 Phase 0: the C4 re-render's staging root must be outside the agent's
@@ -113,37 +124,78 @@ describe("buildAgentSandboxConfig drift guard", () => {
     expect(result.filesystem.allowWrite).toEqual([own]);
   });
 
-  // #5733 core fix: the agent's OWN workspace must be READ+WRITE, so it must
-  // NOT appear in denyRead (a broad `/workspaces` deny `--tmpfs`-obscures it,
-  // and the SDK's only post-tmpfs re-allow — `allowRead` — is read-only and
-  // shadows the write bind; PR #5848 shipped exactly that read-only regression).
-  it("does NOT deny the agent's own workspace (own stays read+write)", () => {
+  // #5733/#5862: the agent's OWN workspace sits UNDER the denied parent root —
+  // that is correct, not a regression. The vendored CLI 2.1.284 builder emits
+  // `--tmpfs <root>` FIRST and then re-binds every covered `allowWrite` path
+  // read-write after it ("Re-bound write path wiped by denyRead tmpfs"), so the
+  // parent mask cannot strand own the way PR #5848's read-only `allowRead`
+  // re-bind did. What the config must NOT do is list `own` as its own denyRead
+  // entry (a deny landing equal to own would leave nothing to restore into).
+  it("covers the agent's own workspace via the parent deny (own restored rw by the vendor builder)", () => {
     const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).toContain(root);
+    // own is never an individual deny entry — the parent covers it.
     expect(result.filesystem.denyRead).not.toContain(own);
-    expect(result.filesystem.allowWrite).toContain(own);
-    // No allowRead re-bind — it is the read-only shadow that broke writes.
+    expect(result.filesystem.allowWrite).toEqual([own]);
+    // No allowRead re-bind on the default path — under deny-then-restore the
+    // read-only restore is reserved for the support persona (below).
     expect(result.filesystem).not.toHaveProperty("allowRead");
   });
 
-  // Security invariant: every OTHER tenant workspace is denied. A broad-only
-  // deny (or a missing sibling) would let the agent `cat` a sibling's repo via
-  // Bash (the runtime `createSandboxHook` containment covers file-tools, NOT
-  // Bash — so bwrap denyRead is the sole guard for that vector).
-  it("denies every sibling workspace + /proc (cross-tenant isolation)", () => {
+  // Security invariant: every OTHER tenant workspace is denied. Under the
+  // constant parent deny the sibling paths are NOT individual entries — the
+  // `--tmpfs <root>` covers the whole tree at namespace build (the runtime
+  // `createSandboxHook` containment covers file-tools, NOT Bash — so bwrap
+  // denyRead is the sole guard for that vector).
+  it("denies every sibling workspace via the parent root + /proc (cross-tenant isolation)", () => {
     const result = buildAgentSandboxConfig(own);
-    expect(result.filesystem.denyRead).toContain(sibA);
-    expect(result.filesystem.denyRead).toContain(sibB);
+    expect(result.filesystem.denyRead).toContain(root);
     expect(result.filesystem.denyRead).toContain("/proc");
+    // No per-sibling entries — enumeration is gone.
+    expect(result.filesystem.denyRead).not.toContain(sibA);
+    expect(result.filesystem.denyRead).not.toContain(sibB);
   });
 
-  it("denyRead tracks the live sibling set (per-dispatch, not constant)", () => {
+  // The ADR-075 residual TOCTOU: under per-sibling enumeration a sibling
+  // created between namespace builds stayed visible. With the constant parent
+  // deny the emitted set cannot drift — and the parent tmpfs masks the new
+  // sibling anyway, so coverage no longer depends on listing it.
+  it("denyRead is CONSTANT — a sibling created between dispatches changes nothing (TOCTOU close)", () => {
     const a = buildAgentSandboxConfig(own);
-    // A new tenant appears before the next dispatch → it must be denied too.
     const sibC = join(root, "00000000-0000-0000-0000-0000000000c3");
     mkdirSync(sibC);
     const b = buildAgentSandboxConfig(own);
-    expect(a.filesystem.denyRead).not.toContain(sibC);
-    expect(b.filesystem.denyRead).toContain(sibC);
+    expect(b.filesystem.denyRead).toEqual(a.filesystem.denyRead);
+    // sibC is covered by the parent deny, never enumerated.
+    expect(b.filesystem.denyRead).not.toContain(sibC);
+    expect(b.filesystem.denyRead).toContain(root);
+  });
+
+  it("readOnly (support persona): allowWrite empties and allowRead restores the workspace read-only", () => {
+    const result = buildAgentSandboxConfig(own, { readOnly: true });
+    expect(result.filesystem.allowWrite).toEqual([]);
+    // Under the covering parent deny the support session would lose its
+    // workspace entirely without this restore — the vendor builder re-binds
+    // `allowWithinDeny` paths `--ro-bind` after the tmpfs.
+    expect(result.filesystem.allowRead).toEqual([own]);
+    expect(result.filesystem.denyRead).toEqual([
+      root,
+      `${root}-c4-staging`,
+      "/proc",
+    ]);
+  });
+
+  it("denyReadExtra entries append after the constant base, deduped", () => {
+    const extra = join(root, "kb-internal");
+    const result = buildAgentSandboxConfig(own, {
+      denyReadExtra: [extra, "/proc"], // "/proc" duplicate must collapse
+    });
+    expect(result.filesystem.denyRead).toEqual([
+      root,
+      `${root}-c4-staging`,
+      "/proc",
+      extra,
+    ]);
   });
 
   it("network is locked down — no allowed domains, managed-only", () => {
@@ -180,7 +232,8 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
     // The C4 staging root sits BESIDE the workspaces root, never inside it
-    // (inside, the sibling enumeration would list it as a tenant).
+    // (inside, it would sit under the covering workspace deny — still denied,
+    // but the dedicated staging tmpfs would be shadowed by the ws restore bind).
     rmSync(`${root}-c4-staging`, { recursive: true, force: true });
   });
 
@@ -198,10 +251,12 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     // Filesystem is unchanged by the egress flag.
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
-    // EXACT set (order-independent) — see the T17 guard rationale above.
-    expect([...result.filesystem.denyRead].sort()).toEqual(
-      [sibA, "/proc", `${root}-c4-staging`].sort(),
-    );
+    // EXACT constant list — see the T17 guard rationale above.
+    expect(result.filesystem.denyRead).toEqual([
+      root,
+      `${root}-c4-staging`,
+      "/proc",
+    ]);
   });
 
   it("allowGithubEgress: false → locked down, identical to the default call", () => {
