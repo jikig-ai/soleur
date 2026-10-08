@@ -34,6 +34,9 @@ phase, re-runs Phase 0.3. The CPO's cap of two rounds was spent (round 2 of 2) b
 re-run did not happen and the hash gate stays green only because the signed section was left as it was. This is a recorded deviation, not a
 decision: the operator may take the list under "Post-review hardening" back to the CPO (`decision-challenges.md` T13).
 
+**Closed on 2026-10-08 by a third CPO pass, which the operator asked for after the merge.** Verdict: APPROVED WITH REQUIRED CHANGES, no
+change to the merged hook; see "CPO third pass" below. The deviation above stays on the record as it happened.
+
 ## Context
 
 A person who runs the Soleur plugin on their own machine gave their agent a shell. Before this change the plugin shipped one
@@ -393,9 +396,51 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
 - **C4 — a deny the person can read.** Every `deny` carries `systemMessage` with the full reason, the escape hatch and the issues URL;
   a suite row asserts it.
 
+## CPO third pass (2026-10-08, after merge of 425ea0fc1f)
+
+The operator asked for the re-sign-off the plan's rule called for, after the merge. The CPO read the code before answering and approved
+every user-visible item in "Post-review hardening", two of them conditionally (items 1 and 4b below), and recommended one product change.
+
+| Item in "Post-review hardening" | Verdict |
+|---|---|
+| 1. D8 premise corrected (hosted autonomous default) | Approved on the conditions R1 and R2; the decision stands, the risk accepted was larger than the signed text said |
+| 2. Longer README C1/C2 sentences | In spirit |
+| 3. `cd` rule narrowed to force and delete pushes | In spirit; fewer false positives, matches D3 |
+| 4a. Wrapper chdir, case folding, glob-only targets, bound blank runs, credential masking | In spirit |
+| 4b. New ask classes (`unparsed-wrapper`, `wrapper-depth`, `bound`, `lexer-empty`) and size bounds | Approved on condition R3: commands outside D1 now interrupt, headless runs block, and the false-positive rate is unmeasured |
+| 4c. Degraded scans ask on every force push | In spirit (D6 signed "force flag or +") |
+| 5. Reason wording by cause; "do not rephrase" only on matched destructive commands | Approved; a deliberate, bounded relaxation of D4's universal "no rephrase" |
+| 6. Quoted `hooks.json` registration | Approved |
+| D7 prefilter boundary growth (T8) | In spirit; keep the prefilter |
+
+**Hosted default (T12).** Keep-as-is was rejected: a hosted founder in autonomous mode can have a force-push over the default branch or
+an infrastructure teardown approved without a prompt, the consent copy promises "backed up in git" and never names it, and that is a
+single-user incident. Changing the `bash_autonomous` default was also rejected (autonomous-on is a deliberate activation, and the narrow
+risk is fixable narrowly). The recommendation is that hosted autonomous mode asks for the D1 destroy families only.
+
+**Required changes.**
+
+- **R1 (P1, before any broadening of the hosted rollout):** the hosted ask path for default-branch force-push/delete and
+  `terraform|tofu` destroy under `bash_autonomous`. Tracked as #9776 (the one follow-up the CPO did not accept as ADR-only).
+- **R2 (small):** the autonomous disclosure copy (`autonomous-disclosure-banner.tsx`, counsel-reviewed text) names a default-branch
+  force-push and infrastructure teardown as things Soleur may run without asking, until R1 ships. Needs CLO review; whether existing
+  acknowledgements stay valid is a CLO question.
+- **R3 (small):** measure the rate of the 4b ask classes outside D1 on real agent transcripts, per rule id, tune if it is more than rare,
+  and record the number here. Not started; it needs transcripts.
+- **R4 (small, done by this record):** two claims in the plan's Observability block outrun the shipped behaviour, and the plan's own
+  addendum already says so. Stated here so the durable record carries it: (1) `alert_route: the person at the harness prompt (layer 7,
+  in-session)` for a missing `jq` or `perl` is not guaranteed, because the notice is on stderr, which the person may never see; a hit
+  asks, and a command the narrow raw scan misses runs without a prompt. (2) `cadence: ... after merge on main` for the slice-1 probe is
+  not true: no workflow calls `scripts/verify-agent-security-slice1.sh`; only `scripts/test-all.sh` runs its suite
+  (`scripts/verify-agent-security-slice1.test.sh`), so no scheduled post-merge probe runs. The probe has no scheduled caller; a caller
+  is a follow-up, not a claim.
+
+Process note from the CPO: a post-review change to a signed decision should reopen the sign-off by default, whether or not the round cap
+is spent.
+
 ## Open follow-ups (recorded here; no tracking issue by operator decision, see C3)
 
-Enabling the guard in hosted sessions (needs a measured hosted `ask` path); Devin `exec` coverage and Devin `ask` measurement; a
+Enabling the guard in hosted sessions (needs a measured hosted `ask` path; the narrower autonomous-mode ask for the D1 destroy families is #9776); Devin `exec` coverage and Devin `ask` measurement; a
 per-rule allow for headless CI teardown; a settings-env tripwire; a session-start message stating full or degraded dependency
 posture (the stderr notice for a missing `jq` or `perl` is likely invisible to the person); the D2 candidates (the SQL rule, a plain
 `terraform apply`, secret writes, `kubectl delete`, `pulumi`/`terragrunt destroy`, `git push --mirror`, `find -delete`); a canonical
