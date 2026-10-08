@@ -34,6 +34,7 @@ const sql = raw
   .join("\n");
 
 const updates = sql.match(/UPDATE\s+public\.workspaces[\s\S]*?;/gi) ?? [];
+const upd = updates[0] ?? "";
 
 describe("migration 159: autonomous disclosure ack reset", () => {
   it("adds the nullable autonomous_disclosure_ack_superseded_at timestamptz column", () => {
@@ -50,7 +51,7 @@ describe("migration 159: autonomous disclosure ack reset", () => {
   });
 
   it("the UPDATE moves ack_at into ack_superseded_at and NULLs ack_at in one statement", () => {
-    const u = updates[0];
+    const u = upd;
     expect(u).toMatch(
       /SET\s+autonomous_disclosure_ack_superseded_at\s*=\s*COALESCE\(\s*autonomous_disclosure_ack_superseded_at\s*,\s*autonomous_disclosure_ack_at\s*\)\s*,\s*autonomous_disclosure_ack_at\s*=\s*NULL/i,
     );
@@ -59,7 +60,7 @@ describe("migration 159: autonomous disclosure ack reset", () => {
   it("keeps the FIRST superseded timestamp on a re-run (COALESCE, Art. 7(1) evidence)", () => {
     // Without COALESCE a second run would overwrite the original consent time
     // with a later (possibly new-copy) ack.
-    expect(updates[0]).toMatch(/COALESCE\(\s*autonomous_disclosure_ack_superseded_at/i);
+    expect(upd).toMatch(/COALESCE\(\s*autonomous_disclosure_ack_superseded_at/i);
   });
 
   it("sets a lock_timeout so the ADD COLUMN cannot queue behind a long transaction", () => {
@@ -67,7 +68,7 @@ describe("migration 159: autonomous disclosure ack reset", () => {
   });
 
   it("the UPDATE WHERE clause is exactly `bash_autonomous AND ack_at IS NOT NULL`", () => {
-    const where = updates[0].match(/WHERE([\s\S]*?);/i)?.[1] ?? "";
+    const where = upd.match(/WHERE([\s\S]*?);/i)?.[1] ?? "";
     expect(where.replace(/\s+/g, " ").trim()).toBe(
       "bash_autonomous AND autonomous_disclosure_ack_at IS NOT NULL",
     );
@@ -75,7 +76,7 @@ describe("migration 159: autonomous disclosure ack reset", () => {
 
   it("does NOT write the bash_autonomous toggle column (099 GDPR sentinel stays valid)", () => {
     const setClause =
-      updates[0].match(/SET([\s\S]*?)WHERE/i)?.[1] ?? "";
+      upd.match(/SET([\s\S]*?)WHERE/i)?.[1] ?? "";
     expect(setClause).not.toMatch(/\bbash_autonomous\b/i);
     expect(sql).not.toMatch(/set_workspace_bash_autonomous/i);
     expect(sql).not.toMatch(/SET\s+DEFAULT/i);
