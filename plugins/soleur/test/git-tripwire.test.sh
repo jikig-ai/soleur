@@ -121,7 +121,7 @@ if printf '%s' "$msg" | grep -cE >/dev/null '^[[:space:]]*unset[[:space:]]+GIT_T
   ok "remedy names the variable actually found (not a fixed spelling)"
 else
   bad "remedy does not name the found variable — an operator following it would loop"
-  printf '%s\n' "$msg" | grep -m1 'unset' | sed 's/^/        got: /'
+  grep -m1 'unset' <<<"$msg" | sed 's/^/        got: /'
 fi
 
 printf '\n=== K: the escape hatch works and ANNOUNCES itself ===\n'

@@ -271,7 +271,7 @@ case "$1 $2" in
       term)   # Signal the script itself: walk up past the command-substitution
               # subshell to the topmost ancestor running the module.
               p=$PPID; top=""
-              while [[ -r "/proc/$p/cmdline" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q 'roadmap-reconcile.sh'; do
+              while [[ -r "/proc/$p/cmdline" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -c 'roadmap-reconcile.sh' >/dev/null; do
                 top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
               done
               [[ -n "$top" ]] && kill -TERM "$top"; sleep 5; exit 1 ;;
