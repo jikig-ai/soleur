@@ -1,8 +1,8 @@
 ---
 title: "Art. 5(2) destruction record — web-1's retained plaintext /workspaces volume (hcloud_volume.workspaces[\"web-1\"])"
-status: template
+status: complete
 date: 2026-09-28
-related: [6604, 6588, 6897, 6931, 8734]
+related: [6604, 6588, 6897, 6931, 8734, 9163, 9286, 9348]
 related_adrs: [ADR-119, ADR-241]
 brand_survival_threshold: single-user incident
 ---
@@ -14,6 +14,15 @@ brand_survival_threshold: single-user incident
 A **template**, not a record. It is committed EMPTY and dated, before the dispatch exists (PR A of
 #6604 step 7), and it is completed in PR B, after the dispatch, from the dispatch's own rows. It must
 be `status: complete` **before** ADR-119 flips to `accepted`.
+
+**Superseded 2026-10-01 (#6604, PR #9348 draft), as to "committed EMPTY":** the fields that the
+rehearsal run `36769782488`, the same-day baseline run `36770448813` and the cutover run `29995956562`
+already print are filled below, each labelled "at rehearsal 36769782488 (2026-09-30)" (or with its own
+run), never "at wipe time". Every field only the destructive dispatch D or the state forget can supply
+is a PENDING-EVIDENCE marker. `status:` stays `template` until every marker is replaced
+from those runs' own output and the CLO has attested (`2026-10-counsel-review-6604.md`).
+
+**Superseded 2026-10-08 (#6604, PR #9348), as to the preceding paragraph:** every marker was replaced from the dispatch run 37801674740 and forget run 37803274724 output, and the CLO attested at `611051949cbe3539385a68ed8ac5609c699dce13` (`2026-10-counsel-review-6604.md`); `status:` is `complete`.
 
 Art. 5(2) makes the controller responsible for demonstrating compliance with Art. 5(1). Destroying a
 volume that holds every user's workspace source code as of 2026-07-23 is an Art. 5(1)(e) act, and the
@@ -28,6 +37,21 @@ the Hetzner API; `.github/workflows/workspaces-plaintext-forget.yml` then forget
 addresses. Design: ADR-119 *Addendum (2026-09-28): retiring the plaintext backstop*. Runbook:
 `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md` Sequence step 7.
 
+**Superseded 2026-10-01 (#6604, PR #9348), as to the paths above:** on the merge of PR #9348 the
+`wipe` job, the `CONFIRM_WIPE` mode body (`wipe_plaintext()` and its helpers in
+`workspaces-cutover.sh`) and the forget workflow are deleted from `main`. They are cited from then on
+by name at commit `59abf6a76c` (the SHA rehearsal 36769782488 ran at), never by path on `main`: the
+`wipe` job of `workspaces-luks-cutover.yml` at `59abf6a76c`, and `workspaces-plaintext-forget.yml` at
+`59abf6a76c`. That SHA is the procedure as run only if D's and the forget's head SHAs show no diff
+from it over `apps/web-platform/infra/workspaces-cutover.sh`, `.github/workflows/workspaces-luks-cutover.yml`
+and `.github/workflows/workspaces-plaintext-forget.yml` (the plan's Resume release check runs that
+`git diff --quiet`); otherwise the as-run head SHA is cited instead. Until PR #9348 merges, the wipe
+dispatch path (the `wipe_plaintext` and `expected_plaintext_volume_id` inputs and the `wipe` job) and
+the forget workflow exist on `main` only — that PR's branch has already deleted them — and D and the
+forget were dispatched from `main` (the `workspaces-luks-cutover` environment admits `main` only), so
+they ran `main`'s copies. Each run's head SHA is recorded with its run id:
+D (run 37801674740) at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, the forget (run 37803274724) at `425ea0fc1fda3624e53c46771d76580c43d36e90`; both show no diff from `59abf6a76c` over the wipe and forget code (checked 2026-10-08, `git diff --quiet`; re-run at attestation, exit 0 for both heads). The statements about D and the forget are in the past tense; the deletion of the wipe job, the CONFIRM_WIPE body and the forget workflow is a fact of the merge of PR #9348 and stays conditional on that merge.
+
 ## Where every field comes from
 
 From the dispatch run log and the `luks-monitor` tag (no SSH): the single
@@ -35,12 +59,22 @@ From the dispatch run log and the `luks-monitor` tag (no SSH): the single
 go-ahead quoted, the `SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE` rows, the preflight step summary, the `wipe`
 job's API step, and the forget run.
 
-```
+```text
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
   --since 1d --grep SOLEUR_WORKSPACES_LUKS_WIPE --limit 500
 ```
 
-**Personal data is recorded as COUNTS only — never names, ids, emails or paths.**
+**Superseded 2026-10-01 (#9348), as to `--since 1d`:** a one-day window returns nothing, without an
+error, when the record is filled more than a day after D. Anchor the window on D's start instead,
+where `<D-start-ISO-Z>` is `gh api repos/jikig-ai/soleur/actions/runs/<D>/attempts/1 --jq .run_started_at`:
+
+```text
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  --since <D-start-ISO-Z> --grep SOLEUR_WORKSPACES_LUKS_WIPE --limit 500
+```
+
+**Personal data is recorded as COUNTS only — never names, ids, emails or paths.** The rehearsal's
+`plaintext_only_name` rows (workspace ids), if any run prints them, are never copied here.
 
 ## Record
 
@@ -48,76 +82,86 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 
 | Field | Value | Source |
 |---|---|---|
-| **Zero started / completed (UTC)** | *(fill: the `result=begun` and `result=wiped` row times)* | run log / `luks-monitor` tag |
-| **Delete completed (UTC)** | *(fill)* | the `wipe` job's API step (`DELETE` → `204`) |
-| **Rehearsal run id** | *(fill)* | the `dry_run=true` dispatch quoted in the go-ahead |
-| **Dispatch run id** | *(fill)* | the `dry_run=false` dispatch |
-| **Forget run id** | *(fill)* | `workspaces-plaintext-forget.yml` |
-| **Approver** | *(fill: the GitHub user who approved `workspaces-luks-cutover`; or "agent under delegation" + the delegating message)* | the environment approval record |
-| **The operator go-ahead, quoted** | *(fill: verbatim, with its date)* | the session |
+| **Zero started / zero verified by read-back (UTC)** | 2026-10-08T15:36:46Z / 2026-10-08T15:41:41Z (the `wiped` row, emitted after the read-back that began at `readback_start` 2026-10-08T15:39:16Z; the `blkdiscard -z` itself ended before `readback_start`) | run log / `luks-monitor` tag |
+| **Delete completed (UTC)** | 2026-10-08T15:42:04Z | the `wipe` job's API step (`DELETE` → `204`) |
+| **Rehearsal run id** | `36769782488` — `workflow_dispatch` on `main` at `59abf6a76c`, created 2026-09-30T20:02:05Z, concluded `success`; its host row is `result=rehearsal_ok arm=first_wipe volume_id=105149570` at 2026-09-30T20:06:14Z. The go-ahead quoted this rehearsal: the prompt that named the dispatch command cited "run `36769782488` ended `rehearsal_ok`" and no later rehearsal exists; D's head SHA shows no diff from the rehearsed `59abf6a76c` over the wipe code | the `dry_run=true` dispatch quoted in the go-ahead |
+| **Dispatch run id** | `37801674740` — `workflow_dispatch` on `main`, created 2026-10-08T15:32:58Z, concluded `success`; one D run only, arm `first_wipe` (no `re_zero`, no `detached`) | the `dry_run=false` dispatch |
+| **Forget run id** | `37803274724` — `workflow_dispatch` on `main`, created 2026-10-08T15:44:48Z, concluded `success` at 2026-10-08T15:46:43Z (`updated_at`, from which the 48 h merge bound runs); its result row: `forgot 2 address(es): hcloud_volume.workspaces["web-1"] hcloud_volume_attachment.workspaces["web-1"] (serial 1762 -> 1763, lineage unchanged)` | `workspaces-plaintext-forget.yml`, dispatched from `main` before PR #9348 merges |
+| **Approver** | `deruelle` (the required reviewer of the `workspaces-luks-cutover` environment; `approved` on run 37801674740 before the `wipe` job started) | the environment approval record |
+| **The operator go-ahead, quoted** | On 2026-10-08, to the question "Do you want me to run this exact command? `gh workflow run workspaces-luks-cutover.yml -f confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 -f wipe_plaintext=true -f dry_run=false -f expected_plaintext_volume_id=105149570`", the operator answered `yes` (about 15:32Z, after the earlier `go ahead` that paused both push-apply workflows); the operator then answered `approved` for the environment approval of the `wipe` job. Each action had its own per-command go-ahead naming the exact command. | the session |
 
 ### Target identity
 
 | Field | Value | Source |
 |---|---|---|
-| **Volume id / name** | *(fill — MUST be `105149570` / `soleur-web-platform-data`)* | preflight banner; the `wiped` row's `volume_id` |
-| **Size** | *(fill: GiB and bytes)* | preflight banner; the `wiped` row's `bytes` |
-| **`linux_device` / server** | *(fill — `/dev/disk/by-id/scsi-0HC_Volume_105149570` on `123931471`)* | preflight banner |
-| **`format` / observed label / recorded mount source / fs UUID** | *(fill — `ext4` / the observed `label` (`none` on web-1: no artifact labelled it) / the `plaintext_dev` the rehearsal row printed, which resolves to `target=` / the `plaintext_fs_uuid` it printed)* | preflight banner; the rehearsal row's `label`, `plaintext_dev` and `plaintext_fs_uuid` |
-| **Resolved target vs the mapper's backing device** | *(fill: `target=` and `backing=` from the rehearsal row — they MUST differ)* | rehearsal row (W6) |
-| **Holders / dependents / device units** | *(fill: `holders=0 dependents=0 device_units=<n>`)* | rehearsal row (W6, W6b) |
+| **Volume id / name** | `105149570` / `soleur-web-platform-data`, at rehearsal 36769782488 (2026-09-30); the `wiped` row's `volume_id`: `105149570` (matches) | preflight env and API classification; the `wiped` row's `volume_id` |
+| **Size** | 20 GiB / `21474836480` bytes, at rehearsal 36769782488 (2026-09-30) (`size=21474836480` on the host row; `size_bytes=21474836480` in preflight's API classification); the `wiped` row's `bytes`: `21474836480` (matches) | preflight banner; the `wiped` row's `bytes` |
+| **`linux_device` / server** | server `123931471` (`WEB1_SERVER_ID`), and `serial=ok` (the device's hypervisor serial matched the pin), at rehearsal 36769782488 (2026-09-30); preflight classified the volume `api_state=attached`. The by-id path string itself is not printed by the rehearsal or by D; D's `begun` and `wiped` rows print `target=/dev/sdb` (same device as the rehearsal) | preflight banner |
+| **`format` / observed label / recorded mount source / fs UUID** | ext4 (superblock `magic=53ef`) / `label=none` / `plaintext_dev=/dev/sdb` (resolves to `target=/dev/sdb`) / `plaintext_fs_uuid=4cc6a724-f3b7-4c96-b607-af174f82169d`, at rehearsal 36769782488 (2026-09-30) | preflight banner; the rehearsal row's `label`, `plaintext_dev` and `plaintext_fs_uuid` |
+| **Resolved target vs the mapper's backing device** | `target=/dev/sdb`, `backing=/dev/sdc` — they differ, at rehearsal 36769782488 (2026-09-30) | rehearsal row (W6) |
+| **Holders / dependents / device units** | `holders=0 dependents=0 device_units=7`, at rehearsal 36769782488 (2026-09-30) | rehearsal row (W6, W6b) |
 
 ### Method and proof
 
 | Field | Value | Source |
 |---|---|---|
-| **Discard / write-zeroes capability, scheduler** | *(fill: `discard_gran`, `discard_max`, `write_zeroes_max`, `scheduler`)* | the `wiped` row (W8) |
-| **Positive control** | *(fill: `magic=53ef` on the rehearsal row)* | W9 |
-| **Provenance: last mount / last write** | *(fill: from the `field=last_mount` / `field=last_write` evidence rows — the CLO's check that nothing wrote after the 2026-07-23 cutover)* | W9 evidence rows |
-| **Zero command** | `blkdiscard -z -v <device>` under a 150M cgroup `io.max` cap — never `-f` (O_EXCL on) | the script; the `begun` row |
-| **Read-back** | *(fill: `readback=zero`, bytes read = size)* | the `wiped` row (W11) |
-| **Signature after the zero** | none (`blkid -p` rc 2) | W12 |
+| **Discard / write-zeroes capability, scheduler** | `discard_gran=4096`, `discard_max=1073741824`, `write_zeroes_max=2147483136`, `scheduler=none`, at rehearsal 36769782488 (2026-09-30); on D's `wiped` row: `discard_gran=4096`, `discard_max=1073741824`, `write_zeroes_max=2147483136`, `scheduler=none` (identical) | the `wiped` row (W8) |
+| **Positive control** | `magic=53ef`, at rehearsal 36769782488 (2026-09-30) | W9 |
+| **Provenance: last mount / last write** | `last_mount=Mon Jul 20 22:42:07 2026`, `last_write=Thu Jul 23 09:40:34 2026` (no timezone printed), from the `field=last_mount` / `field=last_write` evidence rows at rehearsal 36769782488 (2026-09-30). The last write falls inside cutover run `29995956562`'s window, one second after its `persisted workspace inventory baseline: WORKSPACES_COUNT=8` line (2026-07-23T09:40:33Z) and before the 2026-07-23T09:45:00Z freeze bound, so nothing wrote to the copy after the cutover froze it; the same W9 provenance gate ran on D's `first_wipe` arm before the act and did not refuse (inference from the gate) | W9 evidence rows; cutover run 29995956562 log (that run concluded `failure` after the persist) |
+| **Zero command** | `blkdiscard -z -v <device>` under a cgroup `io.max` cap of `150000000` bytes/s read and write — never `-f` (O_EXCL on). In force at rehearsal 36769782488 (2026-09-30): `io_max=8:16_rbps=150000000_wbps=150000000_riops=max_wiops=max`. (Corrected 2026-10-01: the template read "150M"; the cap is plain bytes, because systemd reads a `150M` suffix in base 1000.) | the script; the `begun` row |
+| **Read-back** | `readback=zero` over 21474836480 bytes (`bytes=21474836480` = the volume size); `readback_start` 2026-10-08T15:39:16Z, `wiped` row 2026-10-08T15:41:41Z | the `wiped` row (W11) |
+| **Signature after the zero** | none — inferred from the gate and corroborated by the read-back, not printed as a value. W12 (script at `59abf6a76c`) is a hard gate: it refuses with `wipe_signature_survived` unless `blkid -p` returns rc 2 (no signature) on the zeroed device, and the `wiped` row is emitted only after it; the `wiped` row exists. The `blkid` rc itself is n/a (first_wipe, run 37801674740). The full-device read-back (`readback=zero`, every byte) independently corroborates it: an all-zero device carries no signature | W12, W11 |
 
 ### Live data recoverable at wipe time
 
 | Field | Value | Source |
 |---|---|---|
-| **Live header UUID = persisted `CANARY_OK`** | *(fill: `uuid=` on the rehearsal row)* | W3 |
-| **Escrowed passphrase opens the live header** | *(fill: yes — the rehearsal passed W4)* | W4 |
-| **Off-host header restorable and current** | *(fill: `hdr_bytes`, `hdr_sha256` on the rehearsal row)* | W5 |
-| **Same-day verify baseline** | *(fill: run id, `workspace_count=<n>`)* | `workspaces-luks-verify.yml` |
-| **Post-dispatch verify** | *(fill: run id, `ready=true`, `workspace_count` vs the baseline; any drop explained)* | `workspaces-luks-verify.yml` |
+| **Live header UUID = persisted `CANARY_OK`** | `uuid=d42ede00-4ec4-48c6-9b83-f15ff3f69082`, at rehearsal 36769782488 (2026-09-30); at D: n/a (first_wipe, run 37801674740) — the UUID is not printed on D's `wiped` row. W3 (the live header equals the persisted `CANARY_OK`) is a Stage-3 precondition enforced before the act (script at `59abf6a76c`, W3: a mismatch refuses with `wipe_header_uuid_mismatch` and nothing is zeroed), and the zero ran and the `wiped` row exists, so W3 passed at D; that is an inference from the gate, not a printed value. The post-dispatch verify run 37804427597 (`crypto_LUKS`, `escrow=ok header=readable`) corroborates that the live header is intact after the act | W3 |
+| **Escrowed passphrase opens the live header** | yes, at rehearsal 36769782488 (2026-09-30): the `result=rehearsal_ok` row is emitted only after W3, W4 and W5 pass; at D: n/a (first_wipe, run 37801674740) — no separate row; W4 and W5 are Stage-3 preconditions that run before the act, so they passed before the zero (inference from the gate), and run 37804427597 read `escrow=ok header=readable` afterwards | W4 |
+| **Off-host header restorable and current** | `hdr_bytes=16777216`, `hdr_sha256=ac3447ec55082340d8de0e6a84a51439db1110464216dcb4e2f14df1c60dc98f`, at rehearsal 36769782488 (2026-09-30); at D: n/a (first_wipe, run 37801674740) — not printed (W5 passed before the act, by the same inference) | W5 |
+| **Same-day verify baseline** | run `36770448813` (2026-09-30T20:07:45Z, `success`): `ready=true workspace_count=9 expected=8` | `workspaces-luks-verify.yml` |
+| **Post-dispatch verify** | run `37804427597` (`workflow_dispatch`, 2026-10-08T15:53:24Z, `success`, about 11 minutes after the delete at 15:42:04Z): `SOLEUR_WORKSPACES_READYZ ready=true writable=true populated=true workspace_count=9 expected=8`, `device_type=crypto_LUKS mount_source=/dev/mapper/workspaces escrow=ok header=readable`, app `/health` 200, "workspaces-luks re-assert PASSED". `workspace_count` 9 equals the same-day baseline of 9: no drop to explain | `workspaces-luks-verify.yml` |
 
 ### Hetzner deletion and state
 
 | Field | Value | Source |
 |---|---|---|
-| **Detach action id / status** | *(fill)* | the `wipe` job's API step |
-| **`DELETE` status; final `GET`** | *(fill — `204`; `404`)* | the `wipe` job's API step |
-| **Server `123931471` volumes after** | *(fill — MUST be `[106443278]`)* | the `wipe` job's API step |
-| **Terraform state diff** | *(fill: the two removed addresses, serial `n → n+1`, lineage unchanged)* | the forget run |
+| **Detach action id / status** | `660248143891602` (arm `first_wipe`; the API step concluded `success`) | the `wipe` job's API step |
+| **`DELETE` status; final `GET`** | `DELETE` `204` (the step accepts only `204` and fails otherwise; it concluded `success`); final `GET` `404`, printed by the step at 2026-10-08T15:42:04Z ("GET -> 404"), presence-proven by the same token seeing web-1. Independently re-read after the run with the read-only token `HCLOUD_TOKEN_READONLY`: `GET /volumes/105149570` → `404 not_found` while `GET /servers/123931471` → `200` | the `wipe` job's API step |
+| **Server `123931471` volumes after** | `[106443278]` ("web-1 now holds only [106443278]"; re-read afterwards: server `123931471` `running`, volumes `[106443278]`) | the `wipe` job's API step |
+| **Terraform state diff** | removed `hcloud_volume.workspaces["web-1"]` and `hcloud_volume_attachment.workspaces["web-1"]` ("Successfully removed 2 resource instance(s)"); serial `1762 → 1763`, lineage unchanged | the forget run |
 
-### Personal data destroyed
+### Personal data on the zeroed and deleted volume
 
 | Field | Value | Source |
 |---|---|---|
 | **Categories** | Workspace source code and git history as of the 2026-07-23 cutover, including third-party commit authors' names/emails inside that history | the volume's role (ADR-119) |
-| **Workspace count on the copy** | *(fill: COUNT only — the G3 count persisted at the cutover)* | cutover run 29995956562 |
-| **Art. 17 account deletions on the live volume between 2026-07-23 and the wipe** | *(fill: COUNT, or the pre-onboarding bound — first arm's-length onboarding 2026-08-06 — if it cannot be measured)* | the account-deletion audit trail |
+| **Workspace count on the copy** | 8 (COUNT only) — `persisted workspace inventory baseline: WORKSPACES_COUNT=8` at 2026-07-23T09:40:33Z | cutover run 29995956562 |
+| **Workspaces on the copy only (`plaintext_only_count`)** | 0, at rehearsal 36769782488 (2026-09-30) (`plaintext_only=0` on the host row and on the `field=plaintext_only` evidence row); at D: 0 (`plaintext_only=0` on D's host row and on its `field=plaintext_only` evidence row). A non-zero value at D is dispositioned here by count before `complete`, and that run's logs are deleted after capture (they would carry workspace ids) | rehearsal row; the D host row |
+| **Art. 17 account deletions on the live volume between 2026-07-23 and the wipe** | Bounded, not counted: the copy was frozen 2026-07-23, before the first arm's-length onboarding on 2026-08-06 (tester #1, `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`), so any Art. 17 erasure the copy defeated is bounded to the owners of the 8 workspaces frozen on it (re-evaluation trigger (2) of the #6588 counsel review). Whole-workspace erasures: `plaintext_only=0` at D means no workspace directory existed on the copy that was absent from the live volume (the check is the one the script at `59abf6a76c` documents as surfacing a deletion since 2026-07-23), so the copy held no whole-workspace erasure when it was zeroed. File-level deletions inside a surviving workspace are not evidenced: the copy preserved the 2026-07-23 content for those. Window: 2026-07-23 to 2026-10-08 (77 days). Accepted, not remediable now that the copy is zeroed and deleted | the account-deletion audit trail; cutover run 29995956562 |
 
 ### Basis, recoverability, other copies
 
 | Field | Value |
 |---|---|
 | **Lawful basis** | Art. 5(1)(e) storage limitation, Art. 17(1)(a) (the retained copy defeats every erasure made since the cutover), Art. 32(1) (the plaintext copy is the exposure the LUKS migration exists to close). AP-009 deviation recorded in the ADR-119 addendum of 2026-09-28: a superseded copy frozen at the 2026-07-23 cutover. |
-| **Recoverability** | *(CLO-attested)* Logical full-device zero verified by a direct-IO read-back; physical media reclamation per the Hetzner DPA. A zero on a network block volume does not attest physical erasure. |
+| **Recoverability** | Logically zeroed, verified by a full-device direct-IO read-back (`readback=zero` over 21474836480 bytes); then detached and deleted through the Hetzner API (`DELETE` 204, final `GET` 404); physical media reclamation per the Hetzner DPA. A zero on a network block volume does not attest physical erasure of the underlying storage, and none is claimed. CLO-attested 2026-10-08 at `611051949cbe3539385a68ed8ac5609c699dce13` (`knowledge-base/legal/audits/2026-10-counsel-review-6604.md`). |
 | **Passphrase copies** | Doppler `prd_workspaces_luks` (proven by W4); Terraform state `random_password.workspaces_luks` (not proven by this act). |
-| **Other copies of workspace data** | The live LUKS volume `106443278` (the only copy after the wipe); web-2's plaintext volume (empty, serving-weight 0, #6931); the plaintext `git_data` volume (#6897); the web-1 root-disk snapshot deleted under #8734; the CLEAN_STRAY root-disk stray deleted 2026-07-19. |
+| **Other copies of workspace data** | The live LUKS volume `106443278` (the only copy after the wipe); web-2's plaintext volume (intended empty, serving-weight 0, contents unprobed, #6931); the plaintext `git_data` volume (#6897 — it holds no repository: the #8634 re-attestation records the store empty and `GIT_DATA_STORE_ENABLED` off); the web-1 root-disk snapshot deleted under #8734; the CLEAN_STRAY root-disk stray deleted 2026-07-19. |
+
+### What remains after the act (added 2026-10-01, #6604 PR #9348)
+
+| Field | Value |
+|---|---|
+| **The sentinel consequence** | On the merge of PR #9348, web-1's `workspaces_volume_id` template argument becomes the literal `"retired-6604"`. Should web-1 ever be rebuilt, its first boot's `/mnt/data` mount fails, `soleur-boot-emit workspaces_mount fatal` fires, and the host keeps booting on an empty, writable `/mnt/data` on the root disk: it fails loud, not closed, and new writes there would land unencrypted (fold into #6931). That path is unreachable while the replace path refuses web-1 and `user_data` is `ignore_changes`; a web-1 rebirth is the residual tracked in #6964. |
+| **Durability limits of the sole copy** | After the act, volume `106443278` holds the only copy of every workspace. There is no backup or snapshot of it. Escrow (Doppler passphrase, off-host header) covers key loss, not data loss. On the merge of PR #9348, Terraform declares `prevent_destroy = true` on `hcloud_volume.workspaces_luks` and on `hcloud_volume_attachment.workspaces_luks` (every Terraform plan that would destroy or replace either fails) and `delete_protection = true` on the volume, which is effective only after the post-merge SSH-stage apply (from then Hetzner refuses a console, API or CLI delete, until someone holding a write token lifts the protection). Hardware loss stays open: #5274, #8625. |
 
 ## Completion checklist
 
-- [ ] Every `*(fill)*` is replaced with a measured value, not an estimate.
-- [ ] Exactly one `result=wiped` row exists for `105149570`, and `target` ≠ `backing` on the rehearsal row.
-- [ ] Personal-data fields are counts only.
-- [ ] The recoverability row is CLO-attested.
-- [ ] `status:` is changed from `template` to `complete` — BEFORE ADR-119 flips to `accepted`.
+- [x] Every `*(fill)*` is replaced with a measured value, not an estimate.
+- [x] Every PENDING-EVIDENCE marker is replaced from the D and forget runs' own output; a field the
+  as-run arm cannot produce reads `n/a (<arm>, run <id>)` (added 2026-10-01).
+- [x] Exactly one `result=wiped` row exists for `105149570`, and `target` ≠ `backing` on the rehearsal row.
+- [x] Personal-data fields are counts only.
+- [x] The recoverability row is CLO-attested.
+- [x] `status:` is changed from `template` to `complete` — BEFORE ADR-119 flips to `accepted`.
