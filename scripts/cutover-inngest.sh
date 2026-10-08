@@ -1862,6 +1862,14 @@ case "$OP" in
     # pure hcloud API. HCLOUD_TOKEN read from the prd_terraform-scoped
     # DOPPLER_TOKEN (never echoed). server id 123931471 = soleur-web-platform.
     HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
+    # #8767: shape-check, THEN mask, BEFORE the first request. The check comes first so a value
+    # holding a newline can never inject a second `::` workflow command through the mask line (and an
+    # empty read never emits a bare directive). stderr: stdout inside `$(...)` would swallow it.
+    if ! _bearer_ok "$HCLOUD_TOKEN"; then
+      echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
+      echo "::error::backup: the HCLOUD_TOKEN read from Doppler is empty or has an unusable shape; refusing before any request"; exit 1
+    fi
+    printf '::add-mask::%s\n' "$HCLOUD_TOKEN" >&2
     TS=$(date -u +%Y%m%dT%H%M%SZ)
     rm -f /tmp/backup-body
     CODE=$(_bearer_curl HCLOUD_TOKEN -s --max-time 30 -o /tmp/backup-body -w '%{http_code}' \
@@ -1870,7 +1878,13 @@ case "$OP" in
       -d "{\"type\":\"snapshot\",\"description\":\"inngest-cutover-pre-$TS\",\"labels\":{\"purpose\":\"inngest-cutover-pre\",\"ts\":\"$TS\"}}" \
       "https://api.hetzner.cloud/v1/servers/123931471/actions/create_image" || echo "000")
     if [[ "$CODE" != "201" ]]; then
-      echo "::error::hcloud create_image returned HTTP $CODE: $(cat /tmp/backup-body 2>/dev/null)"; exit 1
+      # The HTTP code and a fixed hint by class, never the response body (public run log, #8767).
+      case "$CODE" in
+        401|403) HINT="token rejected or read-only, see ADR-241 D4" ;;
+        000) HINT="no HTTP response (transport failure)" ;;
+        *) HINT="unexpected status" ;;
+      esac
+      echo "::error::hcloud create_image returned HTTP $CODE ($HINT)"; exit 1
     fi
     IMAGE_ID=$(jq -r '.image.id' < /tmp/backup-body)
     ACTION_ID=$(jq -r '.action.id' < /tmp/backup-body)
@@ -1883,7 +1897,7 @@ case "$OP" in
       ST=$(jq -r '.action.status // "running"' < /tmp/backup-action 2>/dev/null || echo running)
       case "$ST" in
         success) echo "::notice::backup image id=$IMAGE_ID ready (label inngest-cutover-pre-$TS); DELETE after cutover confirmed: DELETE /v1/images/$IMAGE_ID"; exit 0 ;;
-        error) echo "::error::backup snapshot action $ACTION_ID failed"; cat /tmp/backup-action 2>/dev/null; exit 1 ;;
+        error) echo "::error::backup snapshot action $ACTION_ID failed (inspect the action in the Hetzner console; the response body is deliberately not printed)"; exit 1 ;;
         *) echo "Attempt $i/60: snapshot status=$ST — waiting"; sleep 10 ;;
       esac
     done

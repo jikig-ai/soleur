@@ -1428,6 +1428,208 @@ else row "static_absent: git rc 128 (unusable regex) is a refusal (false), not a
 echo "=== stage 4: shim extensions (scheme, stdin body, fail7, jq shim, static rows) done ==="
 
 # =====================================================================================
+# STAGE S2-A (argv-bearer sweep S2, plan 2026-10-08-fix-argv-bearer-sweep-s2-ops-runner-scripts):
+# scripts/cutover-inngest.sh. Part 1 = the `backup)` arm (#8767): the Doppler-read Hetzner token is
+# shape-checked, then masked BEFORE its first use, and no response body ever reaches the run log.
+# The arm is EXTRACTED from the real script (never re-typed here) and run under a recording `curl`
+# and a `doppler` that returns a synthetic canary. The driver runs with stdout and stderr in ONE file
+# so the ORDER of events (mask line, then the first curl call) is observable.
+# =====================================================================================
+CUT="scripts/cutover-inngest.sh"
+[[ -f "$CUT" ]] || fatal "stage S2-A: $CUT is missing"
+BKBIN="$TMPD/bkbin"; BKDIR="$TMPD/bk"
+for d in "$BKBIN" "$BKDIR"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+ln -s "$(type -P seq)" "$BKBIN/seq"
+printf '#!%s\nprintf "%%s\\n" "$BK_TOKEN"\n' "$BASH_BIN" > "$BKBIN/doppler"
+cat > "$BKBIN/curl" <<'BK_CURL_EOF'
+#!/usr/bin/env bash
+# Recording curl for the backup-arm rows. Records argv (NUL-delimited) and, for `--config -`, stdin.
+# Announces each call on STDERR (SHIMCALL n) so the combined stream orders it against the mask line.
+set -u
+D="${BK_SHIM:?}"; mkdir -p "$D/calls"
+n=0; [[ -r "$D/counter" ]] && read -r n < "$D/counter"
+n=$((n + 1)); printf '%s\n' "$n" > "$D/counter"
+printf '%s\0' "$@" > "$D/calls/$n.argv"
+printf 'SHIMCALL %s\n' "$n" >&2
+out=""; wfmt=""; url=""; cfg=0; a=("$@"); i=0
+while (( i < ${#a[@]} )); do
+  case "${a[i]}" in
+    -o) out="${a[i+1]}"; i=$((i + 1)) ;;
+    -w) wfmt="${a[i+1]}"; i=$((i + 1)) ;;
+    --config) [[ "${a[i+1]}" == "-" ]] && cfg=1; i=$((i + 1)) ;;
+    http*) url="${a[i]}" ;;
+  esac
+  i=$((i + 1))
+done
+(( cfg )) && cat > "$D/calls/$n.stdin"
+case "$url" in
+  *create_image) st="${BK_CREATE_STATUS:-201}"; bodyf="${BK_CREATE_BODY:-}" ;;
+  *) st=200; bodyf="${BK_ACTION_BODY:-}" ;;
+esac
+[[ "$st" == 000 ]] && { printf 'curl: (7) Failed to connect\n' >&2; exit 7; }
+[[ -n "$out" && -n "$bodyf" ]] && cp "$bodyf" "$out"
+[[ "$wfmt" == '%{http_code}' ]] && printf '%s' "$st"
+exit 0
+BK_CURL_EOF
+chmod +x "$BKBIN/doppler" "$BKBIN/curl"
+
+# bk_driver <outfile> <script>: _bearer_ok + _bearer_curl + the backup arm, /tmp/backup-* rewritten to
+# ${BK_TMP}/backup-* so a row never touches the real /tmp. A positive control below proves the arm ran.
+bk_driver() {
+  local out="$1" src="$2"
+  assert_fixture_dir "$out"
+  {
+    printf 'set -euo pipefail\n'
+    grep -m1 '^_bearer_ok() {' "$src"
+    awk '/^_bearer_curl\(\) \{$/,/^}$/' "$src"
+    printf 'case backup in\n'
+    awk '/^  backup\)$/{f=1} f{print} f&&/^    ;;$/{exit}' "$src" | sed 's|/tmp/backup-|${BK_TMP}/backup-|g'
+    printf 'esac\n'
+  } > "$out"
+}
+BKDRV="$BKDIR/driver.sh"
+bk_driver "$BKDRV" "$CUT"
+printf '%s' '{"image":{"id":111},"action":{"id":222}}' > "$BKDIR/create-ok.json"
+printf '%s' '{"action":{"id":222,"status":"success"}}' > "$BKDIR/action-success.json"
+BK_CANARY="hcloud-canary-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+BK_BODYCANARY="bodycanary-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+printf '{"error":{"code":"forbidden","message":"%s"}}' "$BK_BODYCANARY" > "$BKDIR/create-err.json"
+printf '{"action":{"id":222,"status":"error","error":{"code":"x","message":"%s"}}}' "$BK_BODYCANARY" > "$BKDIR/action-error.json"
+
+BK_RC=0
+bk_run() { # <rowname> <token> <create_status> <create_body_file> <action_body_file> [driver]
+  local name="$1" row="$ROWS/$1" drv="${6:-$BKDRV}"
+  assert_fixture_dir "$row"; mkdir -p "$row/tmp" "$row/home" "$row/shim"
+  ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" HOME="$row/home" TMPDIR="$row/tmp" BK_TMP="$row/tmp" BK_SHIM="$row/shim" \
+      BK_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
+      "$BASH_BIN" "$drv" < /dev/null > "$row/out" 2>&1 )
+  BK_RC=$?
+}
+bk_count() { local n; n="$(grep -cF -- "$2" "$1" 2>/dev/null || true)"; printf '%s' "${n:-0}"; }
+bk_calls() { local n=0 f; for f in "$1"/shim/calls/*.argv; do [[ -e "$f" ]] && n=$((n + 1)); done; printf '%s' "$n"; }
+# Invariants for a run that reached the Hetzner API: sets BK_FAIL (space-separated check names, empty = green).
+#   mask-not-first   the first output line is not exactly `::add-mask::<token>`
+#   mask-count       the token appears on a number of lines other than exactly one
+#   mask-after-curl  the first curl call is announced before the mask line
+#   token-in-argv    the token is in any recorded curl argv
+#   token-not-stdin  the first curl call's stdin lacks the bearer header
+#   body-in-output   the response-body canary reached the output
+bk_check() { # <rowname> <token>
+  local row="$ROWS/$1" tok="$2" first mline cline
+  BK_FAIL=""
+  first="$(head -n1 "$row/out")"
+  [[ "$first" == "::add-mask::$tok" ]] || BK_FAIL+=" mask-not-first"
+  [[ "$(bk_count "$row/out" "$tok")" == 1 ]] || BK_FAIL+=" mask-count"
+  mline="$(grep -nFx -m1 -- "::add-mask::$tok" "$row/out" | cut -d: -f1)"
+  cline="$(grep -n -m1 '^SHIMCALL ' "$row/out" | cut -d: -f1)"
+  [[ -n "$mline" && -n "$cline" && "$mline" -lt "$cline" ]] || BK_FAIL+=" mask-after-curl"
+  local f; for f in "$row"/shim/calls/*.argv; do [[ -e "$f" ]] && grep -aqF -- "$tok" "$f" && BK_FAIL+=" token-in-argv"; done
+  grep -qxF -- "header = \"Authorization: Bearer $tok\"" "$row/shim/calls/1.stdin" 2>/dev/null || BK_FAIL+=" token-not-stdin"
+  [[ "$(bk_count "$row/out" "$BK_BODYCANARY")" == 0 ]] || BK_FAIL+=" body-in-output"
+  BK_FAIL="$(printf '%s\n' $BK_FAIL | awk '!s[$0]++' | paste -sd' ' -)"
+}
+
+# Positive control: the extracted driver really runs the arm (two curl calls on the 201 path: create + one poll).
+bk_run bk-201 "$BK_CANARY" 201 "$BKDIR/create-ok.json" "$BKDIR/action-success.json"
+bk_check bk-201 "$BK_CANARY"
+if [[ "$(grep -c '_bearer_curl HCLOUD_TOKEN' "$BKDRV")" -ge 2 && "$BK_RC" -eq 0 && "$(bk_calls "$ROWS/bk-201")" == 2 ]] \
+   && grep -qF 'backup image id=111 ready' "$ROWS/bk-201/out"; then
+  row "backup arm extraction control: the extracted arm runs under the shims (rc 0, create + one poll, image id reported)" ok
+else row "backup arm extraction control: the extracted arm runs under the shims (rc 0, create + one poll, image id reported)" fail "rc=$BK_RC calls=$(bk_calls "$ROWS/bk-201")"; fi
+if [[ -z "$BK_FAIL" ]]; then
+  row "backup arm 201: the mask line is the first output event, appears once, before any curl call; the token is on curl's stdin and in no argv" ok
+else row "backup arm 201: the mask line is the first output event, appears once, before any curl call; the token is on curl's stdin and in no argv" fail "checks: $BK_FAIL"; fi
+
+# non-201: exit 1, the code and a fixed class hint, never the body; mask still first and once.
+bk_run bk-403 "$BK_CANARY" 403 "$BKDIR/create-err.json" "$BKDIR/action-success.json"
+bk_check bk-403 "$BK_CANARY"
+n_err="$(bk_count "$ROWS/bk-403/out" '::error::')"
+if [[ "$BK_RC" -eq 1 && -z "$BK_FAIL" && "$n_err" == 1 ]] && grep -qF 'HTTP 403' "$ROWS/bk-403/out" \
+   && grep -qF 'ADR-241 D4' "$ROWS/bk-403/out" && [[ "$(bk_calls "$ROWS/bk-403")" == 1 ]]; then
+  row "backup arm 403: exit 1 with the HTTP code and the ADR-241 D4 class hint, one ::error:: line, the response body canary absent, no poll" ok
+else row "backup arm 403: exit 1 with the HTTP code and the ADR-241 D4 class hint, one ::error:: line, the response body canary absent, no poll" fail "rc=$BK_RC errlines=$n_err checks: $BK_FAIL"; fi
+bk_run bk-500 "$BK_CANARY" 500 "$BKDIR/create-err.json" "$BKDIR/action-success.json"
+bk_check bk-500 "$BK_CANARY"
+if [[ "$BK_RC" -eq 1 && -z "$BK_FAIL" ]] && grep -qF 'HTTP 500' "$ROWS/bk-500/out"; then
+  row "backup arm 500: exit 1 with the HTTP code only, the response body canary absent" ok
+else row "backup arm 500: exit 1 with the HTTP code only, the response body canary absent" fail "rc=$BK_RC checks: $BK_FAIL"; fi
+bk_run bk-000 "$BK_CANARY" 000 "$BKDIR/create-err.json" "$BKDIR/action-success.json"
+if [[ "$BK_RC" -eq 1 ]] && grep -qF 'HTTP 000' "$ROWS/bk-000/out" && [[ "$(bk_count "$ROWS/bk-000/out" "$BK_BODYCANARY")" == 0 ]] \
+   && [[ "$(bk_count "$ROWS/bk-000/out" "$BK_CANARY")" == 1 ]]; then
+  row "backup arm transport failure (curl exit 7): exit 1 reporting HTTP 000, the token only on the mask line" ok
+else row "backup arm transport failure (curl exit 7): exit 1 reporting HTTP 000, the token only on the mask line" fail "rc=$BK_RC"; fi
+
+# action error: the id is printed, the action document (it carries error text) never is.
+bk_run bk-actionerr "$BK_CANARY" 201 "$BKDIR/create-ok.json" "$BKDIR/action-error.json"
+bk_check bk-actionerr "$BK_CANARY"
+if [[ "$BK_RC" -eq 1 && -z "$BK_FAIL" ]] && grep -qF 'action 222 failed' "$ROWS/bk-actionerr/out"; then
+  row "backup arm action error: exit 1 naming the action id, the action document (response body canary) absent from output" ok
+else row "backup arm action error: exit 1 naming the action id, the action document (response body canary) absent from output" fail "rc=$BK_RC checks: $BK_FAIL"; fi
+
+# hostile / empty Doppler value: refused before the mask and before any request; the value never appears.
+BK_HOSTILE=$'abc\n::error::injected-'"$BK_CANARY"
+for hv in "newline-and-workflow-command:$BK_HOSTILE" "space:abc def-$BK_CANARY" "quote:abc\"def-$BK_CANARY" "empty:"; do
+  hname="${hv%%:*}"; hval="${hv#*:}"
+  bk_run "bk-hostile-$hname" "$hval" 201 "$BKDIR/create-ok.json" "$BKDIR/action-success.json"
+  hbad=""
+  [[ "$BK_RC" -eq 1 ]] || hbad+=" rc=$BK_RC"
+  [[ "$(bk_calls "$ROWS/bk-hostile-$hname")" == 0 ]] || hbad+=" curl-called"
+  [[ "$(bk_count "$ROWS/bk-hostile-$hname/out" '::add-mask::')" == 0 ]] || hbad+=" mask-printed"
+  [[ "$(bk_count "$ROWS/bk-hostile-$hname/out" "$BK_CANARY")" == 0 ]] || hbad+=" value-in-output"
+  [[ "$(bk_count "$ROWS/bk-hostile-$hname/out" 'SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape')" == 1 ]] || hbad+=" no-marker"
+  if [[ -z "$hbad" ]]; then row "backup arm refuses a $hname Doppler value before the mask and before any request (rc 1, zero curl calls, one value-free marker)" ok
+  else row "backup arm refuses a $hname Doppler value before the mask and before any request (rc 1, zero curl calls, one value-free marker)" fail "$hbad"; fi
+done
+
+# static rows over the real script (pattern compile pre-check first: grep rc 2 must not read as "absent").
+BK_ARM="$BKDIR/arm.txt"
+awk '/^  backup\)$/{f=1} f{print} f&&/^    ;;$/{exit}' "$CUT" > "$BK_ARM"
+ERE_BK_ERRCAT='::error::[^"]*\$\(cat /tmp/backup-'; ERE_BK_CAT='cat /tmp/backup-(action|body)'
+bk_pre=0
+for ere in "$ERE_BK_ERRCAT" "$ERE_BK_CAT"; do grep -E -e "$ere" /dev/null >/dev/null 2>&1; [[ $? -eq 1 ]] || bk_pre=1; done
+n_bodycat="$(grep -cE -e "$ERE_BK_ERRCAT" "$BK_ARM" || true)"
+n_actioncat="$(grep -cE -e "$ERE_BK_CAT" "$BK_ARM" || true)"
+if [[ "$bk_pre" -eq 0 && "$n_bodycat" == 0 && "$n_actioncat" == 0 ]]; then
+  row "static: no cat of the backup body or action document remains in the backup arm (no \$(cat /tmp/backup- in any ::error:: line)" ok
+else row "static: no cat of the backup body or action document remains in the backup arm (no \$(cat /tmp/backup- in any ::error:: line)" fail "pre=$bk_pre error-cat=$n_bodycat cat=$n_actioncat"; fi
+mask_ln="$(grep -n -m1 "add-mask::" "$BK_ARM" | cut -d: -f1)"
+curl_ln="$(grep -n -m1 '_bearer_curl HCLOUD_TOKEN' "$BK_ARM" | cut -d: -f1)"
+shape_ln="$(grep -n -m1 '_bearer_ok "\$HCLOUD_TOKEN"' "$BK_ARM" | cut -d: -f1)"
+if [[ -n "$mask_ln" && -n "$curl_ln" && -n "$shape_ln" && "$shape_ln" -lt "$mask_ln" && "$mask_ln" -lt "$curl_ln" ]]; then
+  row "static: in the backup arm the shape check precedes the ::add-mask:: line, which precedes the first _bearer_curl HCLOUD_TOKEN" ok
+else row "static: in the backup arm the shape check precedes the ::add-mask:: line, which precedes the first _bearer_curl HCLOUD_TOKEN" fail "shape=$shape_ln mask=$mask_ln curl=$curl_ln"; fi
+# MUTATIONS of the extracted driver (one literal per mutant; mutated_copy is FATAL when the literal is absent). Each
+# must turn the named check RED, so the rows above are proven able to fail and not merely observed green.
+bk_mut() { # <mutant> <from> <to> [<from2> <to2>] -> $BKDIR/mut-<mutant>.sh
+  local out="$BKDIR/mut-$1.sh"
+  mutated_copy "$BKDRV" "$out" "$2" "$3"
+  [[ -n "${4:-}" ]] && mutated_copy "$out" "$out.2" "$4" "$5" && mv "$out.2" "$out"
+  printf '%s' "$out"
+}
+BK_MASK_LINE='printf '"'"'::add-mask::%s\n'"'"' "$HCLOUD_TOKEN" >&2'
+m="$(bk_mut nomask "$BK_MASK_LINE" ':')"
+bk_run bk-mut-nomask "$BK_CANARY" 201 "$BKDIR/create-ok.json" "$BKDIR/action-success.json" "$m"; bk_check bk-mut-nomask "$BK_CANARY"
+if [[ " $BK_FAIL " == *" mask-not-first "* && " $BK_FAIL " == *" mask-count "* ]]; then row "mutation: the mask line removed turns the 201 row RED (mask-not-first, mask-count)" ok
+else row "mutation: the mask line removed turns the 201 row RED (mask-not-first, mask-count)" fail "checks: $BK_FAIL"; fi
+m="$(bk_mut maskafter "$BK_MASK_LINE" ':' 'IMAGE_ID=$(jq' "$BK_MASK_LINE"$'\n    IMAGE_ID=$(jq')"
+bk_run bk-mut-maskafter "$BK_CANARY" 201 "$BKDIR/create-ok.json" "$BKDIR/action-success.json" "$m"; bk_check bk-mut-maskafter "$BK_CANARY"
+if [[ " $BK_FAIL " == *" mask-after-curl "* && " $BK_FAIL " == *" mask-not-first "* ]]; then row "mutation: the mask line moved after the first curl call turns the 201 row RED (mask-after-curl)" ok
+else row "mutation: the mask line moved after the first curl call turns the 201 row RED (mask-after-curl)" fail "checks: $BK_FAIL"; fi
+m="$(bk_mut bodyecho 'if [[ "$CODE" != "201" ]]; then' 'if [[ "$CODE" != "201" ]]; then echo "::error::body: $(cat ${BK_TMP}/backup-body 2>/dev/null)";')"
+bk_run bk-mut-bodyecho "$BK_CANARY" 403 "$BKDIR/create-err.json" "$BKDIR/action-success.json" "$m"; bk_check bk-mut-bodyecho "$BK_CANARY"
+if [[ " $BK_FAIL " == *" body-in-output "* ]]; then row "mutation: the response body echoed on non-201 turns the 403 row RED (body-in-output)" ok
+else row "mutation: the response body echoed on non-201 turns the 403 row RED (body-in-output)" fail "checks: $BK_FAIL"; fi
+m="$(bk_mut actioncat 'error) echo' 'error) cat ${BK_TMP}/backup-action; echo')"
+bk_run bk-mut-actioncat "$BK_CANARY" 201 "$BKDIR/create-ok.json" "$BKDIR/action-error.json" "$m"; bk_check bk-mut-actioncat "$BK_CANARY"
+if [[ " $BK_FAIL " == *" body-in-output "* ]]; then row "mutation: the action document printed on action error turns the action-error row RED (body-in-output)" ok
+else row "mutation: the action document printed on action error turns the action-error row RED (body-in-output)" fail "checks: $BK_FAIL"; fi
+m="$(bk_mut noshape 'if ! _bearer_ok "$HCLOUD_TOKEN"; then' 'if false; then')"
+bk_run bk-mut-noshape "abc"$'\n'"::error::injected-$BK_CANARY" 201 "$BKDIR/create-ok.json" "$BKDIR/action-success.json" "$m"
+if [[ "$(bk_count "$ROWS/bk-mut-noshape/out" "$BK_CANARY")" -ge 1 || "$(bk_calls "$ROWS/bk-mut-noshape")" -ge 1 ]]; then row "mutation: the shape check removed lets a hostile value reach the mask line or curl (the hostile rows go RED)" ok
+else row "mutation: the shape check removed lets a hostile value reach the mask line or curl (the hostile rows go RED)" fail "the mutant behaved like the original"; fi
+echo "=== stage S2-A part 1: backup arm (#8767) done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -1455,7 +1657,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=187
+EXPECTED_TESTS=204
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
