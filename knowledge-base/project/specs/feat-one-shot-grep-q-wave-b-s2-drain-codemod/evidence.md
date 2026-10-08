@@ -12,6 +12,8 @@ Source for the PR body and the tracker comment. Every number below was printed b
 
 ## Transform proof
 
+**Units.** The guard counts lines (140 before, 5 after); the codemod census counts hits (144 hits on those 140 lines). The change is 131 codemod lines in 45 files plus 5 hand-edit lines in 4 files, with one line shared (`web-host-escrow-diagnose-workflow.test.sh:710`) and one file added by hand edits (`worktree-manager-porcelain-sigpipe.test.sh`): 131 + 5 - 1 = 135 lines, 45 + 1 = 46 files. `verify` reports 130 verified because the shared line counts as hand-edited.
+
 `python3 scripts/grep-q-drain-codemod.py verify --base origin/main --hand-edits <hand-edits.txt>`: `verified: 130`, `hand-edited: 5`, `unexplained: 0`. Idempotency dry run: `WOULD-CHANGE: 0 lines in 0 files`. `bash -n` clean on all 46 files. `git diff --numstat origin/main...HEAD -- plugins/soleur/test/`: 135 insertions, 135 deletions. `verify` proves the transform, not the classification (a data line converted by mistake still passes it).
 
 ## Drain probe (Phase 0 gate)
@@ -20,7 +22,7 @@ Source for the PR body and the tracker comment. Every number below was printed b
 
 ## Trigger derivation (46 files against every push-to-main workflow filter)
 
-Among path-filtered workflows only `version-bump-and-release.yml` matches (46 of 46): one plugin patch release. `web-platform-release.yml`, `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` match nothing. The six unfiltered push workflows (`ci`, `codeql-main-alert-gate`, `secret-scan`, `skill-security-scan-corpus`, `skill-security-scan-postmerge`, `tenant-integration`, `vendor-pin-verify`) run on every merge and are not caused by this change. Open-PR intersection with the 47 edited files: empty.
+Among path-filtered workflows only `version-bump-and-release.yml` matches (46 of 46): one plugin patch release. `web-platform-release.yml`, `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` match nothing. The seven unfiltered push workflows (`ci`, `codeql-main-alert-gate`, `secret-scan`, `skill-security-scan-corpus`, `skill-security-scan-postmerge`, `tenant-integration`, `vendor-pin-verify`) run on every merge and are not caused by this change. Open-PR intersection with the 47 edited files (the 46 test files plus the guard): empty.
 
 ## Guard 1 mutation battery (scratch copy, one mutant at a time, `ulimit -v 6000000`, green control first, restore check clean)
 
@@ -50,58 +52,16 @@ Axes this battery did not edit: the guard's pattern (`PATTERN_V2`), `SWEEP_PROBE
 
 ## Pair run (pristine base vs branch, sequential, `timeout 150`, `ulimit -v 6000000`)
 
-A pair run on small fixtures shows "no verdict change", not "the race is gone". The base side is a `git archive` of `origin/main`; seven suites that cannot run there (no `.git`) were re-run against a real detached checkout of the same SHA (see the learning file of this PR).
+A pair run on small fixtures shows "no verdict change", not "the race is gone". All 46 suites were run on both sides; 38 read the same rc and the same result line on the first pass. The eight that differed (seven archive-failed suites and `git-tripwire`) are explained below, together with two same-rc suites whose numbers need a caveat. The 11 suites that carry a hand edit or a reviewed-suspect conversion (4 hand-edit files plus 7 suspect files) all read identical.
 
-| suite | base rc | branch rc | base s | branch s | verdict |
-|---|---|---|---|---|---|
-| auto-close-scanner | 0 | 0 | 0 | 1 | identical |
-| check-red-on-main | 0 | 0 | 2 | 2 | identical |
-| ci-e2e-skip-anchors | 0 | 0 | 0 | 1 | identical |
-| ci-path-gating | 0 | 0 | 0 | 0 | identical |
-| claude-code-action-auth | 0 | 0 | 1 | 1 | identical |
-| generate-kb-index | 0 | 0 | 1 | 1 | identical |
-| git-tripwire | 0 (archive: vitest arm skipped, no node_modules) | 1 | 1 | 3 | identical when compared like for like: the unmodified base content run in the worktree under the same ulimit is 24 passed, 1 failed (node V8 crash in the vitest arm), the branch is 24 passed, 1 failed under it and 25 of 25 without it [hand edit] |
-| go-session-gates | 0 | 0 | 77 | 141 | identical [hand edit or reviewed-suspect] |
-| hook-input-classification-mutation | 0 | 0 | 0 | 86 | identical (base re-run on a real checkout: rc 0) |
-| issue-flow-measure | 0 | 0 | 0 | 0 | identical [hand edit or reviewed-suspect] |
-| lane-frontmatter | 0 | 0 | 0 | 1 | identical |
-| lint-distribution-content | 0 | 0 | 0 | 0 | identical |
-| main-health-monitor-workflow | 0 | 0 | 4 | 4 | identical [hand edit or reviewed-suspect] |
-| operator-9321-stages | 0 | 0 | 76 | 67 | identical |
-| operator-ack-guard | 0 | 0 | 119 | 132 | identical |
-| operator-agent-runnable | 0 | 0 | 27 | 32 | identical (base re-run on a real checkout: rc 0) |
-| operator-digest-provision | 0 | 0 | 0 | 0 | identical |
-| operator-digest-skill | 0 | 0 | 0 | 0 | identical |
-| operator-digest-workflow | 0 | 0 | 1 | 0 | identical |
-| operator-stage-approval-hook | 0 | 0 | 11 | 12 | identical |
-| pr-fanout-ledger | 0 | 0 | 56 | 43 | identical |
-| preflight-check10-suite-integrity | 0 | 0 | 0 | 65 | identical (base re-run on a real checkout: rc 0) |
-| proc | 0 | 0 | 5 | 4 | identical (base re-run on a real checkout: rc 0) |
-| regenerate-shard-manifest | 0 | 0 | 4 | 3 | identical |
-| render-c4-model | 1 | 1 | 23 | 19 | identical |
-| required-checks-canonical-parity | 0 | 0 | 0 | 0 | identical [hand edit or reviewed-suspect] |
-| required-checks-merge-group-coverage | 0 | 0 | 11 | 11 | identical |
-| resolve-debt | 0 | 0 | 1 | 2 | identical |
-| reusable-release-caller-permissions | 0 | 0 | 0 | 0 | identical |
-| roadmap-reconcile | 0 | 0 | 7 | 6 | identical [hand edit or reviewed-suspect] |
-| scripts-shard-manifest | 0 | 0 | 1 | 1 | identical |
-| scripts-shard-runtime-coverage | 0 | 0 | 4 | 5 | identical [hand edit or reviewed-suspect] |
-| scripts-shard-totality | 0 | 0 | 5 | 9 | identical (base re-run on a real checkout: rc 0) |
-| ship-battery-owed | 0 | 0 | 2 | 18 | identical (base re-run on a real checkout: rc 0) |
-| ship-phase-7-poll-fixtures | 0 | 0 | 130 | 132 | identical [hand edit or reviewed-suspect] |
-| sync-pr-behind | 0 | 0 | 21 | 19 | identical [hand edit or reviewed-suspect] |
-| terraform-drift-sentry-leg | 0 | 0 | 1 | 1 | identical |
-| unkept-promise-hook | 0 | 0 | 3 | 2 | identical |
-| vendor-drift-workflow | 0 | 0 | 0 | 1 | identical |
-| web-host-escrow-diagnose-workflow | 0 | 0 | 7 | 7 | identical [hand edit or reviewed-suspect] |
-| workflow-run-deploy-invariants | 0 | 0 | 3 | 5 | identical (base re-run on a real checkout: rc 0) |
-| worktree-manager-atomic-config | 0 | 0 | 1 | 1 | identical |
-| worktree-manager-bare-in-dotgit-layout | 0 | 0 | 2 | 1 | identical |
-| worktree-manager-heal-stale-branch | 0 | 0 | 13 | 13 | identical |
-| worktree-manager-porcelain-sigpipe | 0 | 0 | 2 | 2 | identical [hand edit or reviewed-suspect] |
-| worktree-manager-stale-lock-diag | 0 | 0 | 6 | 5 | identical |
+| suite | base | branch | like-for-like verdict |
+|---|---|---|---|
+| `hook-input-classification-mutation`, `operator-agent-runnable`, `preflight-check10-suite-integrity`, `proc`, `scripts-shard-totality`, `ship-battery-owed`, `workflow-run-deploy-invariants` | rc 1, 2 or 128 on the `git archive` side (no `.git`, no `node_modules`) | rc 0 | identical once the base is re-run on a real detached checkout of `425ea0fc1f`: rc 0 and the same result line on both sides (13 pass/13 rows; 46 assertions; 38 checks; 61; "All tests passed"; "ALL TESTS PASSED"; 80/80) |
+| `git-tripwire` | rc 0 (archive side: vitest arm skipped, no `node_modules`) | rc 1 | identical like-for-like: the unmodified base content run in the worktree under the same cap is 24 passed, 1 failed (the vitest worker isolate aborts under `ulimit -v`); the branch is 24/1 under the cap and 25 of 25 without it |
+| `render-c4-model` | rc 1 | rc 1 | identical: AC5 fails the same way on both sides (`likec4 export` dies with `Illegal instruction (core dumped)` under the cap); not investigated further |
+| `go-session-gates` | 77 s | 141 s | wall time only; two alternating re-runs read 83 s / 81 s and 40 s / 100 s, so the spread (40 to 141 s) is larger than any effect and no change is claimed or ruled out |
 
-Wall time: `go-session-gates` read 77 s on base and 141 s on the branch in the pair run; two further alternating re-runs read 83 s / 81 s and 40 s / 100 s. The run-to-run spread (40 to 141 s) is larger than any effect, so no change in suite wall time is claimed or ruled out. No other suite moved by more than a few seconds.
+Wall times for the seven archive-failed suites are not comparable (the archive side aborted in seconds). A like-for-like re-run of two of them in one tree read `hook-input-classification-mutation` 99 s base / 112 s branch and `preflight-check10-suite-integrity` 72 s / 78 s, so the conversion did not slow them. Apart from those, no suite moved by more than a few seconds.
 
 ## Affected gate (`bash scripts/test-all.sh --affected`): stopped by decision, CI is the gate
 

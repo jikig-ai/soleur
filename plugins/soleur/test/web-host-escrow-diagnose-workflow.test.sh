@@ -707,7 +707,7 @@ body_expect_green() { # <name> <python> <cases...>: the mutated body must still 
   mutate_body "$name" "$code" || rc=$?
   if [[ "$rc" -ne 0 ]]; then no "body mutation $name did not land (rc=$rc)"; return; fi
   behave "$SCR/mut/$name.sh" "$@"
-  if printf '%s\n' "${BRES[@]}" | grep -c >/dev/null $'\tFAIL$'; then no "G2 body mutation $name: a check failed ($(grep -m1 $'\tFAIL$' <<<"$(printf '%s\n' "${BRES[@]}")" | cut -f1))"; else ok "G2 $name: the real timeout killed a stalled checker and the verdict still printed"; fi
+  if printf '%s\n' "${BRES[@]}" | grep -c >/dev/null $'\tFAIL$'; then no "G2 body mutation $name: a check failed ($(grep -m1 $'\tFAIL$' < <(printf '%s\n' "${BRES[@]}") | cut -f1))"; else ok "G2 $name: the real timeout killed a stalled checker and the verdict still printed"; fi
 }
 body_expect_green g2-real-timeout "s = s.replace('timeout -k 10 240', 'timeout -k 10 1', 1)" c_hang
 body_expect_red g2-no-redaction token-shape-absent-from-log-and-summary "s = '\n'.join(l for l in s.split('\n') if 'dp.REDACTED' not in l)" c_token

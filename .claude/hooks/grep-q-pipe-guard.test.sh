@@ -431,14 +431,16 @@ SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares agains
 # A row whose subtree reaches zero is STALE and fails: the wave that converts a subtree deletes its row in the same PR.
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
-# KNOWN HOLE (named, not covered): a `<=` row at slack 0 pins the COUNT per row, not the sites, so moving one hit between two files under
+# Slice order and the series plan: knowledge-base/project/plans/2026-10-07-fix-grep-q-wave-b-test-harness-and-producer-join-plan.md (Slice Register).
+# KNOWN HOLE (named, not covered): a glob row at slack 0 (either mode) pins the COUNT per row, not the sites, so moving one hit between two files under
 # the same glob (add one, delete one) stays green. File-exact `=` rows would close it, but `_ts_re` below classifies a file-exact test path as
 # a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
 SWEEP_DEFERRALS=(
   '.claude/*.test.sh | <= | 5 | #9217'
   'tests/* | <= | 181 | #9217'
-  # Slice S2 converted this subtree. Five data pins remain (mutation text, pins of text in .md fences), no pipes; tight (`=`) so a
-  # forgotten ceiling fails. The codemod refuses `--write` on a `=` row, so a later slice converts first, then flips.
+  # Slice S2 converted this subtree. Five counted data pins remain (mutation text and pins of text in .md fences: a pipe written inside a
+  # string, not a live one); marker-exempt demonstrations are not counted. Tight (`=`) so a forgotten ceiling fails. The codemod refuses
+  # `--write` on a `=` row: to convert one of these, flip the row to `<=` first, convert, then flip it back with the lowered number.
   'plugins/soleur/test/* | = | 5 | #9217'
   'plugins/soleur/*.test.sh | <= | 66 | #9217'
   'apps/web-platform/*.test.sh | <= | 180 | #9217'
