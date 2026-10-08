@@ -947,7 +947,7 @@ rm -rf "$QSD"
 # The query asks for the TOP-LEVEL `state` and `autoMergeRequest` (the stub keeps only fields the query names, so a query
 # that dropped them would read `-` and every MERGED/disarmed row above would go red; this row names the contract).
 qs_run notqueued
-if sed -E 's/\{[^{}]*\}//g' "$QSD/bin/gql-query" | grep -qE '(^|[^A-Za-z_])state([^A-Za-z_]|$)' && grep -q 'autoMergeRequest' "$QSD/bin/gql-query"; then
+if sed -E 's/\{[^{}]*\}//g' "$QSD/bin/gql-query" | grep -cE >/dev/null '(^|[^A-Za-z_])state([^A-Za-z_]|$)' && grep -q 'autoMergeRequest' "$QSD/bin/gql-query"; then
   pass "--queue-state query names the top-level state and autoMergeRequest"
 else fail "--queue-state query lost state/autoMergeRequest"; fi
 rm -rf "$QSD"

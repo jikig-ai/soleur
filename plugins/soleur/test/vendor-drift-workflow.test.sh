@@ -241,7 +241,7 @@ assert_contains "$VERIFY_BLOCK" 'contents/' "verify loop calls the contents endp
 assert_contains "$VERIFY_BLOCK" 'ref=' "verify loop pins the ref (pinned-commit)"
 assert_contains "$VERIFY_BLOCK" 'pinned-commit' "verify loop reads pinned-commit from NOTICE"
 assert_contains "$VERIFY_BLOCK" 'A-Za-z0-9._/-' "upstream_path charset-validated before URL interpolation"
-if printf '%s' "$VERIFY_BLOCK" | grep -q 'git/blobs'; then
+if printf '%s' "$VERIFY_BLOCK" | grep -c >/dev/null 'git/blobs'; then
   echo "  FAIL: verify loop still asserts via git/blobs object existence"
   FAIL=$((FAIL + 1))
 else

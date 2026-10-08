@@ -171,7 +171,7 @@ e2e_section="$(awk '/^  e2e:/{f=1} f && !/^  e2e:/ && /^  [a-zA-Z0-9_-]+:/{exit}
 
 anchor_in_e2e() { # <desc> <fixed-string> — must appear INSIDE the e2e job.
   local desc="$1" needle="$2"
-  if printf '%s\n' "$e2e_section" | grep -qF -e "$needle"; then
+  if printf '%s\n' "$e2e_section" | grep -cF >/dev/null -e "$needle"; then
     PASS=$((PASS + 1)); echo "ok   $desc"
   else
     FAIL=$((FAIL + 1)); echo "FAIL $desc (missing in e2e job section: $needle)"
@@ -181,7 +181,7 @@ anchor_in_e2e() { # <desc> <fixed-string> — must appear INSIDE the e2e job.
 # Boundary-anchored, not substring: `id: detector` must NOT satisfy this —
 # `steps.detect.outputs.applicable` would resolve empty and e2e green-skips
 # on every PR with every assertion green (demonstrated in review).
-if printf '%s\n' "$e2e_section" | grep -qE '^[[:space:]]+id: detect[[:space:]]*$'; then
+if printf '%s\n' "$e2e_section" | grep -cE >/dev/null '^[[:space:]]+id: detect[[:space:]]*$'; then
   PASS=$((PASS + 1)); echo "ok   e2e classify step id: detect (line-anchored)"
 else
   FAIL=$((FAIL + 1)); echo "FAIL e2e classify step id: detect missing/renamed"
@@ -221,7 +221,7 @@ detect_step="$(printf '%s\n' "$e2e_section" | awk '
   /^      - name: Classify e2e applicability/{f=1}
   f && /^      - / && !/Classify e2e applicability/{exit}
   f{print}')"
-if [ -n "$detect_step" ] && ! printf '%s\n' "$detect_step" | grep -qE '^\s+if:'; then
+if [ -n "$detect_step" ] && ! printf '%s\n' "$detect_step" | grep -cE >/dev/null '^\s+if:'; then
   PASS=$((PASS + 1)); echo "ok   classify step carries no if: (verdict always populated)"
 else
   FAIL=$((FAIL + 1)); echo "FAIL classify step is conditional or not found (empty verdict green-skips the job)"

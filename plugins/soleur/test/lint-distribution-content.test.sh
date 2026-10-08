@@ -175,7 +175,7 @@ set +e
 stderr=$(bash "$LINT_SCRIPT" "$ctrl" 2>&1 >/dev/null)
 set -e
 # The ESC byte (0x1b) must not appear in stderr after sanitization.
-if ! printf '%s' "$stderr" | grep -q $'\x1b'; then
+if ! printf '%s' "$stderr" | grep -c >/dev/null $'\x1b'; then
   echo "  PASS: control bytes stripped from stderr"
   PASS=$((PASS + 1))
 else
