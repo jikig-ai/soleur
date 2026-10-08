@@ -492,21 +492,21 @@ census while sitting on the wrong handle) is forbidden by rule 4 anyway.
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `withTransientRetry` re-invokes `fn` on a thrown error whose
+- [x] AC1 — `withTransientRetry` re-invokes `fn` on a thrown error whose
   SQLSTATE ∈ {`40P01`, `55P03`}, up to 3 total attempts; a stubbed `begin`
   rejecting `{code:"40P01"}` once then succeeding makes `rolledBackRaw` resolve
   with `fn`'s value.
-- [ ] AC2 — Non-transient errors propagate without retry: `{code:"42501"}` (and
+- [x] AC2 — Non-transient errors propagate without retry: `{code:"42501"}` (and
   any non-SQLSTATE error) throws on the first attempt and the call count stays
   1 — assertion failures are never replayed.
-- [ ] AC3 — Bounded exhaustion: a `begin` that always rejects `40P01` propagates
+- [x] AC3 — Bounded exhaustion: a `begin` that always rejects `40P01` propagates
   the error after exactly 3 attempts (spy-call count = 3).
-- [ ] AC4 — The `ROLLBACK` sentinel contract is unchanged: a `fn` that completes
+- [x] AC4 — The `ROLLBACK` sentinel contract is unchanged: a `fn` that completes
   normally still returns its value and the sentinel never escapes or triggers a
   retry.
-- [ ] AC5 — Retry cadence is jittered, not hot: an injected `sleep` spy observes
+- [x] AC5 — Retry cadence is jittered, not hot: an injected `sleep` spy observes
   delays in [80, 120) ms per attempt.
-- [ ] AC6 — Census, two greps (both verified at plan time):
+- [x] AC6 — Census, two greps (both verified at plan time):
 
   ```bash
   # A — bare `await sql` statements: 33 sites on the pre-fix tree, 0 post-fix
@@ -533,13 +533,13 @@ census while sitting on the wrong handle) is forbidden by rule 4 anyway.
   `sql\.(begin|…)` filter. The allowlist in census B is the contract: adding a
   new `Sql|Txn`-typed helper requires either wrapping its bare-`sql` call sites
   or a deliberate allowlist addition in review.
-- [ ] AC7 — `cd apps/web-platform && ./node_modules/.bin/vitest run test/rls-fuzz/harness-fixture.test.ts`
+- [x] AC7 — `cd apps/web-platform && ./node_modules/.bin/vitest run test/rls-fuzz/harness-fixture.test.ts`
   passes in the unit project (no DB needed — `RLS_FUZZ_LOCAL` unset).
 - [ ] AC8 — The PR's own `RLS authz fuzz` check runs green AND the run log
   shows the suite actually executed (the workflow's `paths:` filter includes
   `apps/web-platform/test/rls-fuzz/**`, so the PR exercises the fixed gate
   end-to-end on the real parallel suite — not a skipped/dark check).
-- [ ] AC9 — `git diff --name-only origin/main...HEAD` touches only paths under
+- [x] AC9 — `git diff --name-only origin/main...HEAD` touches only paths under
   `apps/web-platform/test/rls-fuzz/` plus the plan/specs artifacts — no diff
   under `apps/web-platform/server/`, `apps/web-platform/supabase/`,
   `.github/workflows/`, or `apps/web-platform/package.json`. (Merge-base form
