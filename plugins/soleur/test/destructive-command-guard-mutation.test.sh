@@ -6,7 +6,7 @@
 # knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md (section 1.6).
 #
 # WALL-TIME. Measured 2026-10-07 on a 16-core machine at a load average of 4-6: 105 s wall (67 s user + 43 s system), of which the
-# control run is 13 s. The full hook suite alone is about 2 minutes of wall time at that load (1018 cases, see its header), so every
+# control run is 13 s. The full hook suite alone is about 2.5 minutes of wall time at that load (see its header), so every
 # mutant runs it in REDUCED mode: DCG_ROWS=<ERE> selects only the rows that kill that mutant, plus the always-on static,
 # registration, lexer-contract and harness checks; the suite's own MIN_CASES floor does not apply to a selection and is replaced
 # there by a selected-row count. WALL_BUDGET_S below is that measurement with margin, not a target.

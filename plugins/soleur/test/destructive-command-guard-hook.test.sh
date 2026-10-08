@@ -64,8 +64,8 @@
 # reported by a direct printf + exit 1 and never through the helpers it backstops.
 #
 # Run: bash plugins/soleur/test/destructive-command-guard-hook.test.sh
-# Time: CPU-bound (every executed row spawns the hook, a shell and the oracle). Measured 2026-10-07 on a 16-core machine at a load
-#      average of 6-8: 1018 cases in 123 s wall (70 s user + 44 s system). Wall time scales with machine load; a review run at load 44-51
+# Time: CPU-bound (every executed row spawns the hook, a shell and the oracle). Measured 2026-10-08 on a 16-core machine at a load
+#      average of 7: the full suite in 151 s wall (the case count is MIN_CASES near the end of this file, not restated here). Wall time scales with machine load; a review run at load 44-51
 #      took about 5 minutes. The mutation suite runs it only in reduced DCG_ROWS mode (see its header for its own figure).
 # A run that is narrowed or redirected by a seam below says so on its FIRST line ([REDUCED RUN: ...], [COUNT-ONLY RUN: ...],
 # [REDIRECTED RUN: ...]) and again before its summary ([NOT THE FULL GATE: ...]); the exit status is unchanged.
@@ -1593,6 +1593,9 @@ L @@ lexer reserved word: while terraform destroy; do :; done asks @@ ask @@ - @
 L @@ lexer reserved word: until terraform destroy; do :; done asks @@ ask @@ - @@ until terraform destroy; do :; done
 L @@ lexer reserved word: an elif branch asks @@ ask @@ - @@ if false; then :; elif terraform destroy; then :; fi
 L @@ lexer reserved word: an else branch asks @@ ask @@ - @@ if false; then :; else terraform destroy; fi
+L @@ lexer nesting: ten nested subshells (spaced, so none is an arithmetic ((...))) around rm -rf ~ still deny (between the depth the suite had and the lexer's bound of 16) @@ deny @@ - @@ ( ( ( ( ( ( ( ( ( ( rm -rf ~ ) ) ) ) ) ) ) ) ) )
+L @@ lexer nesting: fifteen nested subshells (spaced) around rm -rf ~ still deny @@ deny @@ - @@ ( ( ( ( ( ( ( ( ( ( ( ( ( ( ( rm -rf ~ ) ) ) ) ) ) ) ) ) ) ) ) ) ) )
+L @@ lexer nesting: ten nested brace groups around rm -rf ~ still deny @@ deny @@ - @@ { { { { { { { { { { rm -rf ~; }; }; }; }; }; }; }; }; }; };
 L @@ lexer reserved word: a time-prefixed destroy asks @@ ask @@ - @@ time terraform destroy
 L @@ wrapper chdir: an absolute env -C after an unresolvable cd makes the directory known again: rm -rf ./* in /tmp is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C /tmp rm -rf ./*
 L @@ wrapper chdir: the last of two absolute env -C options wins and is known: rm -rf ./* after an unresolvable cd is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C / -C /tmp rm -rf ./*
@@ -2780,7 +2783,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1018
+MIN_CASES=1202
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
