@@ -1,6 +1,6 @@
 ---
 title: "Art. 5(2) destruction record — web-1's retained plaintext /workspaces volume (hcloud_volume.workspaces[\"web-1\"])"
-status: template
+status: complete
 date: 2026-09-28
 related: [6604, 6588, 6897, 6931, 8734, 9163, 9286, 9348]
 related_adrs: [ADR-119, ADR-241]
@@ -21,6 +21,8 @@ already print are filled below, each labelled "at rehearsal 36769782488 (2026-09
 run), never "at wipe time". Every field only the destructive dispatch D or the state forget can supply
 is a PENDING-EVIDENCE marker. `status:` stays `template` until every marker is replaced
 from those runs' own output and the CLO has attested (`2026-10-counsel-review-6604.md`).
+
+**Superseded 2026-10-08 (#6604, PR #9348), as to the preceding paragraph:** every marker was replaced from the dispatch run 37801674740 and forget run 37803274724 output, and the CLO attested at `611051949cbe3539385a68ed8ac5609c699dce13` (`2026-10-counsel-review-6604.md`); `status:` is `complete`.
 
 Art. 5(2) makes the controller responsible for demonstrating compliance with Art. 5(1). Destroying a
 volume that holds every user's workspace source code as of 2026-07-23 is an Art. 5(1)(e) act, and the
@@ -46,10 +48,9 @@ and `.github/workflows/workspaces-plaintext-forget.yml` (the plan's Resume relea
 `git diff --quiet`); otherwise the as-run head SHA is cited instead. Until PR #9348 merges, the wipe
 dispatch path (the `wipe_plaintext` and `expected_plaintext_volume_id` inputs and the `wipe` job) and
 the forget workflow exist on `main` only — that PR's branch has already deleted them — and D and the
-forget are dispatched from `main` (the `workspaces-luks-cutover` environment admits `main` only), so
-they run `main`'s copies. Each run's head SHA is recorded with its run id:
-D (run 37801674740) at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, the forget (run 37803274724) at `425ea0fc1fda3624e53c46771d76580c43d36e90`; both show no diff from `59abf6a76c` over the wipe and forget code (checked 2026-10-08, `git diff --quiet`). This paragraph moves to the past
-tense when `status:` becomes `complete`.
+forget were dispatched from `main` (the `workspaces-luks-cutover` environment admits `main` only), so
+they ran `main`'s copies. Each run's head SHA is recorded with its run id:
+D (run 37801674740) at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, the forget (run 37803274724) at `425ea0fc1fda3624e53c46771d76580c43d36e90`; both show no diff from `59abf6a76c` over the wipe and forget code (checked 2026-10-08, `git diff --quiet`; re-run at attestation, exit 0 for both heads). The statements about D and the forget are in the past tense; the deletion of the wipe job, the CONFIRM_WIPE body and the forget workflow is a fact of the merge of PR #9348 and stays conditional on that merge.
 
 ## Where every field comes from
 
@@ -157,10 +158,10 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 
 ## Completion checklist
 
-- [ ] Every `*(fill)*` is replaced with a measured value, not an estimate.
-- [ ] Every PENDING-EVIDENCE marker is replaced from the D and forget runs' own output; a field the
+- [x] Every `*(fill)*` is replaced with a measured value, not an estimate.
+- [x] Every PENDING-EVIDENCE marker is replaced from the D and forget runs' own output; a field the
   as-run arm cannot produce reads `n/a (<arm>, run <id>)` (added 2026-10-01).
-- [ ] Exactly one `result=wiped` row exists for `105149570`, and `target` ≠ `backing` on the rehearsal row.
-- [ ] Personal-data fields are counts only.
-- [ ] The recoverability row is CLO-attested.
-- [ ] `status:` is changed from `template` to `complete` — BEFORE ADR-119 flips to `accepted`.
+- [x] Exactly one `result=wiped` row exists for `105149570`, and `target` ≠ `backing` on the rehearsal row.
+- [x] Personal-data fields are counts only.
+- [x] The recoverability row is CLO-attested.
+- [x] `status:` is changed from `template` to `complete` — BEFORE ADR-119 flips to `accepted`.
