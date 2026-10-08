@@ -33,8 +33,9 @@
 # CF_ACCESS_CLIENT_SECRET (or CI_SSH_ACCESS_TOKEN_ID/SECRET fallback),
 # APP_DOMAIN_BASE (default soleur.ai); (BS): doppler CLI + prd_terraform creds.
 #
-# Exit: 0 parity; 1 drift/missing/transport failure (each named); 2 usage;
-# 78 trace refusal with a live credential set (#7797).
+# Exit: 0 parity; 1 drift/missing/transport failure (each named); 2 usage, or a credential/signature
+# refusal (an unusable Cloudflare Access value or request signature: SOLEUR_CREDENTIAL_REFUSED, no request
+# sent); 78 trace refusal with a live credential set (#7797).
 set -uo pipefail
 
 # (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
@@ -151,13 +152,10 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
     CF_ID="${CF_ACCESS_CLIENT_ID:-${CI_SSH_ACCESS_TOKEN_ID:-}}"
     CF_SEC="${CF_ACCESS_CLIENT_SECRET:-${CI_SSH_ACCESS_TOKEN_SECRET:-}}"
     : "${CF_ID:?CF Access client id required}" "${CF_SEC:?CF Access secret required}"
-    # (#9597, S2) The three credentials ride curl's STDIN as `header = "..."` config lines (a process substitution,
-    # never a pipe: `printf | curl --config -` dies with 141 under pipefail when curl does not read stdin), not its
-    # argument list, which every local user reads from /proc/<pid>/cmdline. A config line is a quoted string, so each
-    # VALUE is checked first: the Cloudflare Access pair against the cutover's `_bearer_ok` class, and the signature
-    # must be exactly 64 lowercase hex (python3 missing or an empty key leaves HMAC empty, and an unsigned request
-    # must never be sent). Every refusal is exit 2 (this script's usage-class refusal; exit 1 is DRIFT), sends no
-    # request, and prints one value-free marker.
+    # (#9597, S2) The three credentials ride curl's stdin as `header = "..."` config lines, values checked first (the why and the
+    # process-substitution rule: the comment above `_bs_refuse` in scripts/betterstack-query.sh). The signature must be exactly 64
+    # lowercase hex (python3 missing or an empty key leaves HMAC empty, and an unsigned request must never be sent). Every refusal
+    # is exit 2 (this script's usage-class refusal; exit 1 is DRIFT), sends no request, and prints one value-free marker.
     _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
     _refuse() { echo "check-deploy-script-parity: refusing to send credentials: $1 is unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=check-deploy-script-parity reason=token_shape" >&2; exit 2; }
     _bearer_ok "$CF_ID" || _refuse "the Cloudflare Access client id"

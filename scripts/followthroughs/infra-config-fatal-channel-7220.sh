@@ -91,13 +91,10 @@ fi
 # is reported TRANSIENT rather than passed.
 frame=""
 if [[ -n "${WEBHOOK_DEPLOY_SECRET:-}" && -n "${CF_ACCESS_CLIENT_ID:-}" && -n "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
-  # (#9597, S2) The three credentials ride curl's STDIN as `header = "..."` config lines (a process substitution,
-  # never a pipe: `printf | curl --config -` dies with 141 under pipefail when curl does not read stdin), not its
-  # argument list, which every local user reads from /proc/<pid>/cmdline. A config line is a quoted string, so each
-  # VALUE is checked first: the Cloudflare Access pair against the cutover's `_bearer_ok` class, and the signature
-  # must be exactly 64 lowercase hex (python3 missing or an empty key leaves _sig empty, and an unsigned request
-  # must never be sent). A refusal is TRANSIENT (exit 2, never 1: exit 1 is the FAIL verdict), sends no request and
-  # prints one value-free marker.
+  # (#9597, S2) The three credentials ride curl's stdin as `header = "..."` config lines, values checked first (the why and the
+  # process-substitution rule: the comment above `_bs_refuse` in scripts/betterstack-query.sh). The signature must be exactly 64
+  # lowercase hex (python3 missing or an empty key leaves _sig empty, and an unsigned request must never be sent). A refusal is
+  # TRANSIENT (exit 2, never 1: exit 1 is the FAIL verdict), sends no request and prints one value-free marker.
   _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
   _refuse() { echo "TRANSIENT: $1 is unusable; no request was sent" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=infra-config-fatal-channel-7220 reason=token_shape" >&2; exit 2; }
   _bearer_ok "$CF_ACCESS_CLIENT_ID" || _refuse "the Cloudflare Access client id"

@@ -184,7 +184,7 @@ chmod +x "$S/bin/curl"
 live_run() { # [NAME=value ...] -> RC; the stub's evidence is in $S/curl.{calls,argv,stdin}
   rm -f "$S/curl.calls" "$S/curl.argv" "$S/curl.stdin"
   mk_status "$REPO_SHA" "hetzner-1"
-  env PATH="$S/bin:$PATH" WEBHOOK_DEPLOY_SECRET="$LIVE_KEY" CF_ACCESS_CLIENT_ID="$LIVE_ID" CF_ACCESS_CLIENT_SECRET="$LIVE_SEC" "$@" \
+  env PATH="$S/bin:$PATH" APP_DOMAIN_BASE=soleur.ai WEBHOOK_DEPLOY_SECRET="$LIVE_KEY" CF_ACCESS_CLIENT_ID="$LIVE_ID" CF_ACCESS_CLIENT_SECRET="$LIVE_SEC" "$@" \
     bash "$SUT" --status-only >"$S/out" 2>"$S/err"; RC=$?
 }
 live_calls() { if [[ -e "$S/curl.calls" ]]; then wc -l < "$S/curl.calls" | tr -d ' '; else printf '0'; fi; }
@@ -205,6 +205,16 @@ if [[ "$argv14" != *"$LIVE_KEY"* && "$argv14" != *"$LIVE_ID"* && "$argv14" != *"
       && "$argv14" != *"-H "* && "$argv14" == "--disable --noproxy *"* && "$argv14" == *"--config -"* ]]; then
   ok "C15: no credential, digest or -H header is on curl's argv; --disable --noproxy '*' come first and the config comes from stdin"
 else no "C15: curl argv carries a credential or lost its prologue: ${argv14//$LIVE_KEY/<key>}"; fi
+
+# C15b: the transport flag set is pinned EXACTLY (recorded argv, not a prefix): dropping --proto '=https' (a redirect or a scheme downgrade
+# would carry the credentials in cleartext), -s, --max-time or the -w http_code probe, or adding a flag, must turn this row red. The -o value
+# is a mktemp path, so that one slot is masked; every other token is compared as is.
+cases=$((cases + 1))
+read -ra A15 <<< "$argv14"
+if [[ "${#A15[@]}" -ge 8 && "${A15[6]}" == "-o" ]]; then A15[7]="<tmp>"; fi
+want15="--disable --noproxy * --proto =https -s -o <tmp> -w %{http_code} --max-time 20 https://deploy.soleur.ai/hooks/deploy-status --config -"
+if [[ "${A15[*]}" == "$want15" ]]; then ok "C15b: curl's recorded argv is exactly the pinned transport flag set (--disable --noproxy '*' --proto '=https' -s -o <tmp> -w http_code --max-time 20 <url> --config -)"
+else no "C15b: curl's transport flag set drifted: ${A15[*]//$LIVE_ID/<id>}"; fi
 
 # C16: a malformed Cloudflare Access value is refused BEFORE curl: exit 2 (not 1: 1 is DRIFT), one value-free marker, nothing echoed.
 bad16=""
@@ -238,7 +248,7 @@ else no "C18: xtrace (rc=$RC calls=$(live_calls))"; fi
 if (( pass + fail != cases )); then
   printf '[FATAL] accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
 fi
-FLOOR=20
+FLOOR=21
 if (( cases < FLOOR )); then
   printf '[FATAL] anti-vacuity floor: %d cases ran, expected >= %d\n' "$cases" "$FLOOR" >&2; exit 1
 fi

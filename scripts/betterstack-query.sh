@@ -150,9 +150,9 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # the derived name exists and the query succeeds. That is this script's own headline bug
 # (asks for X, gets Y, exit 0) reintroduced one level down.
 # (#7873, #7898 §6) BETTERSTACK_QUERY_HOST is interpolated into `https://${HOST}?...` and
-# run_sql attaches Basic auth (a `user = "..."` line on curl's stdin config; curl sends it
-# PREEMPTIVELY on the first request with no challenge). The value IS the destination of a live secret, so it is
-# validated in two steps before run_sql is ever reachable.
+# run_sql attaches Basic auth (a `user = "..."` line on curl's stdin config; curl sends it PREEMPTIVELY on the
+# first request with no challenge). The value IS the destination of a live secret, so it is validated in two
+# steps before run_sql is ever reachable.
 #
 # STEP 1 — the SHAPE arm (cheap, first refusal). It rejects the userinfo/path/scheme family:
 # `real.host@evil.example` resolves to evil.example, and `evil.example/x?` puts the query on
@@ -349,7 +349,7 @@ EOF
 # (#9597, S2 of the argv-credential sweep) The Basic-auth pair used to ride curl's ARGUMENT LIST
 # (`-u USER:PASS`), which every local user can read from /proc/<pid>/cmdline and `ps`. It now travels on
 # curl's STDIN as one `user = "USER:PASS"` config line (`--config -`), fed by a PROCESS SUBSTITUTION: a
-# `printf | curl --config -` pipe dies with 141 under `pipefail` whenever curl does not read stdin.
+# `printf | curl --config -` pipe can die with 141 (SIGPIPE) under `pipefail` when curl does not read stdin.
 #
 # A config line is a quoted string, so the VALUE decides what curl parses. Measured against real curl 8.22
 # (a byte sweep of 0x01..0x7f through `--libcurl`): only a double quote, a backslash and a newline change the

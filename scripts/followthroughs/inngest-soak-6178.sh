@@ -257,13 +257,11 @@ printf '%s\n' "$pop_lines" > "$WORK/population.txt"
 LC_ALL=C sort -u "$WORK/population.txt" > "$WORK/population.sorted"
 
 # ── one request shape (canary-promotion-5875.sh: HMAC over the empty GET body) ───────────────
-# (#9597, S2) The three credentials ride curl's STDIN as `header = "..."` config lines (a process substitution,
-# never a pipe: `printf | curl --config -` dies with 141 under pipefail when curl does not read stdin), not its
-# argument list, which every local user reads from /proc/<pid>/cmdline. A config line is a quoted string, so each
-# VALUE is checked first: the Cloudflare Access pair against the cutover's `_bearer_ok` class, and the signature
-# must be exactly 64 lowercase hex (python3 missing or an empty key leaves SIG empty, and an unsigned request must
-# never be sent). A refusal is CANNOT ESTABLISH (exit 3, NEVER 2: this probe reserves 2 for a reading, and never 0
-# or 1), sends no request and prints one value-free marker.
+# (#9597, S2) The three credentials ride curl's stdin as `header = "..."` config lines, values checked first (the why and the
+# process-substitution rule: the comment above `_bs_refuse` in scripts/betterstack-query.sh). The signature must be exactly 64
+# lowercase hex (python3 missing or an empty key leaves SIG empty, and an unsigned request must never be sent). A refusal is
+# CANNOT ESTABLISH (exit 3, NEVER 2: this probe reserves 2 for a reading, and never 0 or 1), sends no request and prints one
+# value-free marker.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 _refuse() { printf 'SOLEUR_CREDENTIAL_REFUSED script=inngest-soak-6178 reason=token_shape\n' >&2; cannot_establish "credential_refused what=$1" "nothing about the host was measured and no request was sent; the credential value is not shown. Fix the secret named in what= (the repo secret the sweeper forwards) and re-run next sweep"; }
 _bearer_ok "$CF_ACCESS_CLIENT_ID" || _refuse "cf_access_client_id"
