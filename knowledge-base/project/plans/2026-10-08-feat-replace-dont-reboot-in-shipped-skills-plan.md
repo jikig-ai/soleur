@@ -148,14 +148,14 @@ None. Queried open `code-review` issues for each planned plugin file; the only h
 
 Run the checks after committing (or use two-dot `git diff origin/main -- plugins/soleur` before).
 
-- [ ] AC1: `terraform-architect.md` has the section and its preconditions. Check: `grep -c "Replace, Don't Reboot" plugins/soleur/agents/engineering/infra/terraform-architect.md` returns 1, and `grep -c "not a reservation" plugins/soleur/agents/engineering/infra/terraform-architect.md` returns 1.
-- [ ] AC2: `platform-strategist.md` Reproducibility First has the bullet. Check: `grep -c "Replace, don't reboot" plugins/soleur/agents/engineering/infra/platform-strategist.md` returns 1, and the text "(see §4)" is absent.
-- [ ] AC3: `plan/SKILL.md` §2.8 default flipped. Check: `grep -c "default for a running host with state on a persistent volume" plugins/soleur/skills/plan/SKILL.md` returns 1 and `grep -c "the default for existing infra" plugins/soleur/skills/plan/SKILL.md` returns 0.
-- [ ] AC4: `plan-sharp-edges.md` ends with the new bullet, at most 1100 B. Check: `grep -c "chosen the wrong unit of recovery" plugins/soleur/skills/plan/references/plan-sharp-edges.md` returns 1 and `tail -n 1 plugins/soleur/skills/plan/references/plan-sharp-edges.md | wc -c` is at most 1100.
-- [ ] AC5: `review/SKILL.md` carries the trigger extension and the in-quote clause. Check: `grep -c "plan or runbook whose recovery or proof step is a host reboot" plugins/soleur/skills/review/SKILL.md` returns 1.
-- [ ] AC6: Gates are green. `python3 scripts/lint-skill-body-budget.py --base origin/main` exits 0 (fetch `origin/main` first), `bun test plugins/soleur/test/components.test.ts` passes, and `npx markdownlint-cli2` on the plan, spec, tasks and the five edited plugin files reports 0 issues.
-- [ ] AC7: No `description:` line changed and no provider resource names added: `git diff origin/main -- plugins/soleur | grep -E '^[+-]description:'` and `git diff origin/main -- plugins/soleur | grep -E '^\+.*hcloud_'` both print nothing.
-- [ ] AC8: The spec reflects the plan. Check: `grep -c "Apply path" knowledge-base/project/specs/feat-immutable-infra-replace-dont-reboot/spec.md` is at least 1, and `grep -n "restart" knowledge-base/project/specs/feat-immutable-infra-replace-dont-reboot/spec.md` prints nothing.
+- [x] AC1: `terraform-architect.md` has the section and its preconditions. Check: `grep -c "Replace, Don't Reboot" plugins/soleur/agents/engineering/infra/terraform-architect.md` returns 1, and `grep -c "not a reservation" plugins/soleur/agents/engineering/infra/terraform-architect.md` returns 1.
+- [x] AC2: `platform-strategist.md` Reproducibility First has the bullet. Check: `grep -c "Replace, don't reboot" plugins/soleur/agents/engineering/infra/platform-strategist.md` returns 1, and the text "(see §4)" is absent.
+- [x] AC3: `plan/SKILL.md` §2.8 default flipped. Check: `grep -c "default for a running host with state on a persistent volume" plugins/soleur/skills/plan/SKILL.md` returns 1 and `grep -c "the default for existing infra" plugins/soleur/skills/plan/SKILL.md` returns 0.
+- [x] AC4: `plan-sharp-edges.md` ends with the new bullet, at most 1100 B. Check: `grep -c "chosen the wrong unit of recovery" plugins/soleur/skills/plan/references/plan-sharp-edges.md` returns 1 and `tail -n 1 plugins/soleur/skills/plan/references/plan-sharp-edges.md | wc -c` is at most 1100.
+- [x] AC5: `review/SKILL.md` carries the trigger extension and the in-quote clause. Check: `grep -c "plan or runbook whose recovery or proof step is a host reboot" plugins/soleur/skills/review/SKILL.md` returns 1.
+- [x] AC6: Gates are green. `python3 scripts/lint-skill-body-budget.py --base origin/main` exits 0 (fetch `origin/main` first), `bun test plugins/soleur/test/components.test.ts` passes, and `npx markdownlint-cli2` on the plan, spec, tasks and the five edited plugin files reports 0 issues.
+- [x] AC7: No `description:` line changed and no provider resource names added: `git diff origin/main -- plugins/soleur | grep -E '^[+-]description:'` and `git diff origin/main -- plugins/soleur | grep -E '^\+.*hcloud_'` both print nothing.
+- [x] AC8: The spec reflects the plan. Check: `grep -c "Apply path" knowledge-base/project/specs/feat-immutable-infra-replace-dont-reboot/spec.md` is at least 1, and `grep -n "restart" knowledge-base/project/specs/feat-immutable-infra-replace-dont-reboot/spec.md` prints nothing.
 
 ## Test Scenarios
 

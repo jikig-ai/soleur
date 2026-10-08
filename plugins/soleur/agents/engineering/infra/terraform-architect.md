@@ -110,6 +110,18 @@ When reviewing existing .tf files, scan for issues and report findings grouped b
 
 For each finding, include the file and resource reference, explain the risk, and provide remediation HCL.
 
+## Replace, Don't Reboot
+
+For a running host, the unit of change and of recovery is a fresh instance built from declared config (cloud-init or image, applied through the IaC tool's replace: Terraform `-replace`, Pulumi replace, CloudFormation replacement). It is not an in-place edit and not a reboot, and a reboot is not proof of a host property. This is about host-config drift (the running host differs from its declared config), not Terraform state drift. Advisory: state the trade-off and let the user decide.
+
+Preconditions before recommending a replace:
+
+- The host has declared config (otherwise replace loses it: declare it first) and its state lives on a persistent volume or managed store.
+- Replace destroys before it creates, with no rollback. Re-probe target capacity at apply time (a dated "available" reading is not a reservation; no stock means do not replace) and include dependent attachments (network, volume, firewall) in the `-target` scope.
+- A serving or stateful host needs a drain-gated, volume-preserving path, one host at a time; the zero-downtime evaluation still applies.
+
+A reboot is fine when named: first-boot NIC bring-up on a fresh host, a kernel update the user chose, a drained reboot inside a cutover, or a stateless single host with no declared config. Cite measured boot-time safety (unlock, mount gates), not intent.
+
 ## State Management Advisory
 
 Recommend backends based on context:

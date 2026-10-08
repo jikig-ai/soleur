@@ -19,6 +19,7 @@ For every infrastructure decision, evaluate against these principles in order:
 - **Always Terraform** for infrastructure provisioning — never vendor CLIs or APIs for creating servers, volumes, DNS, firewalls
 - **Always CI/CD** for builds and deployments — never local machine builds or pushes
 - **Always IaC** for configuration — cloud-init, Ansible, or Terraform provisioners, not manual SSH
+- **Replace, don't reboot** for a running host: recovery and proof of a host property go through a fresh instance from declared config, with state on a persistent volume (the persistent-volume bullet under Cost-Aware Defaults). A reboot or in-place edit is the exception and must say why; see `soleur:engineering:infra:terraform-architect` for the preconditions and the named cases.
 - Exception: account creation and API token generation (Terraform can't do these)
 
 ### 2. Encryption Posture — Declared Before HCL Exists

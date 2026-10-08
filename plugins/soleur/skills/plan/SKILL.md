@@ -632,7 +632,7 @@ If the plan introduces infrastructure that needs to live somewhere — a server,
 **Required output: `## Infrastructure (IaC)` section in the plan.** Mirror the `## Domain Review` heading contract. Required subsections:
 
 - `### Terraform changes` — listed files (existing TF root + new resources), required providers + version pins, sensitive variable list (`TF_VAR_<name>` plus where the value comes from — Doppler service token, etc.).
-- `### Apply path` — one of: (a) cloud-init-only (acceptable when the resource has not yet been provisioned), (b) cloud-init + idempotent bootstrap script (the default for existing infra), (c) taint + `terraform apply -replace` (only when the resource cannot be patched in place). State the chosen path and the expected downtime/blast-radius.
+- `### Apply path` — one of: (a) cloud-init-only (not yet provisioned), (b) taint + `terraform apply -replace` (default for a running host with state on a persistent volume; verify capacity first), (c) cloud-init + idempotent bootstrap script (only when a replace is not viable). State the chosen path and the expected downtime/blast-radius.
 - `### Distinctness / drift safeguards` — `dev != prd` preconditions, `lifecycle.ignore_changes` callouts, state-storage notes (encrypted backend, secret values land in `terraform.tfstate`).
 - `### Vendor-tier reality check` — when the chosen provider has free-tier limits that affect resource creation (e.g., Better Stack free tier rejects `betteruptime_policy`), document the tier gate (`count = var.<provider>_paid_tier ? 1 : 0`) before `apply` time.
 
