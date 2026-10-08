@@ -206,7 +206,7 @@ assert "sweep commit-body gh pr merge --delete-branch allows (FP fixed)" "<none>
 source "$SCRIPT_DIR/lib/incidents.sh" 2>/dev/null || true
 TOTAL=$((TOTAL + 1))
 if strip_command_bodies 'gh pr merge 7 --squash --delete-branch' \
-     | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
+     | grep -cE >/dev/null 'gh\s+pr\s+merge.*--delete-branch'; then
   PASS=$((PASS + 1)); echo "PASS: strip preserves real --delete-branch (detection non-vacuous)"
 else
   FAIL=$((FAIL + 1)); echo "FAIL: strip dropped real --delete-branch flags"

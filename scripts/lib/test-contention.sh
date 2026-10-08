@@ -1357,7 +1357,7 @@ tc_acquire() {
   # protect ADR-133 Phase 3.6.
   _tc_stop_heartbeat() {
     [[ -n "${_hb_pid:-}" ]] || return 0
-    if jobs -p 2>/dev/null | grep -qx "$_hb_pid"; then
+    if jobs -p 2>/dev/null | grep -cx >/dev/null "$_hb_pid"; then
       kill "$_hb_pid" 2>/dev/null || true
       wait "$_hb_pid" 2>/dev/null || true
     fi
