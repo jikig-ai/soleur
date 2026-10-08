@@ -248,12 +248,12 @@ done <<< "$_wr_consumers"
 if [ -z "$_desync" ]; then pass; else fail "G4 workflow_run/name desync: $_desync"; fi
 
 # The deploy arm must actually name it.
-if printf '%s' "$(jqa "d['wr_workflows']")" | grep -qF -- "$CI_NAME"; then pass; else
+if printf '%s' "$(jqa "d['wr_workflows']")" | grep -cF >/dev/null -- "$CI_NAME"; then pass; else
   fail "G4 web-platform-release.yml workflow_run.workflows does not name ci.yml's '$CI_NAME': $(jqa "d['wr_workflows']")"
 fi
 # `branches:` is not optional — without it a full run is created for every PR
 # and merge_group CI completion.
-if printf '%s' "$(jqa "d['wr_branches']")" | grep -qF 'main'; then pass; else
+if printf '%s' "$(jqa "d['wr_branches']")" | grep -cF >/dev/null 'main'; then pass; else
   fail "G4 workflow_run has no branches: [main] filter — a full run would be created for every PR and merge_group CI completion"
 fi
 
@@ -306,7 +306,7 @@ fi
 # workflow_run arm.
 if grep -qE 'DISPATCH_SHA' "$W/resolve.blk" 2>/dev/null || grep -qE 'DISPATCH_SHA' "$REL"; then
   # It must be consumed ONLY under the dispatch branch.
-  if awk '/if \[ "\$EVENT_NAME" = "workflow_dispatch" \]/{f=1} f&&/^          fi$/{exit} f' "$REL" | grep -qF 'DISPATCH_SHA'; then
+  if awk '/if \[ "\$EVENT_NAME" = "workflow_dispatch" \]/{f=1} f&&/^          fi$/{exit} f' "$REL" | grep -cF >/dev/null 'DISPATCH_SHA'; then
     pass
   else
     fail "G3 DISPATCH_SHA is read OUTSIDE the workflow_dispatch branch — the permit exists only because that value is unreachable on the workflow_run arm"
@@ -441,10 +441,10 @@ for st in no_release_run upstream_concluded_unpublished release_failed; do
   fi
 done
 # The two clean skips must exit 0 (green); the failure state must exit non-zero.
-if awk '/clean_skip\(\) \{/{f=1} f&&/^          \}/{exit} f' "$W/resolve.code" | grep -qE '^\s*exit 0\s*$'; then pass; else
+if awk '/clean_skip\(\) \{/{f=1} f&&/^          \}/{exit} f' "$W/resolve.code" | grep -cE >/dev/null '^\s*exit 0\s*$'; then pass; else
   fail "G7 resolve-target has no clean-skip path that leaves the run GREEN — a docs-only push would redden the release run"
 fi
-if awk '/fail_closed\(\) \{/{f=1} f&&/^          \}/{exit} f' "$W/resolve.code" | grep -qE '^\s*exit 1\s*$'; then pass; else
+if awk '/fail_closed\(\) \{/{f=1} f&&/^          \}/{exit} f' "$W/resolve.code" | grep -cE >/dev/null '^\s*exit 1\s*$'; then pass; else
   fail "G7 resolve-target has no fail-closed path — a genuinely failed release would be swallowed as a skip"
 fi
 # The own-run exclusion. Without it the query resolves state 2 for a SHA that

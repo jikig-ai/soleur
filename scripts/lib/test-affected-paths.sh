@@ -899,6 +899,12 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "scripts/followthroughs/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+  # S2 (#9597): the suite pins the sentences these records carry about the converted surfaces.
+  "knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md"
+  "knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md"
+  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "knowledge-base/engineering/operations/runbooks/inngest-server.md"
+  "knowledge-base/legal/article-30-register.md"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
