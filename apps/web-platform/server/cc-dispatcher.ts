@@ -1807,7 +1807,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // consumers now receive the ONE resolved id (no second divergent resolve).
     const [
       workspacePath,
-      serviceTokens,
+      serviceTokensRaw,
       installationId,
       bashAutonomous,
       autonomousAckAt,
@@ -1858,6 +1858,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
         getCurrentRepoStatus(args.userId, activeWorkspaceId),
       ]);
+
+    // #9558 — a write-closed sandbox must carry NO GitHub credential at all:
+    // the user's stored GITHUB_TOKEN (the `github` Connected-Services
+    // provider) would sit readable in the env — and echoable into the
+    // transcript — while every GitHub egress domain is closed. The rest of
+    // the service-token map stays (ADR-113 records that deliberate choice).
+    const serviceTokens = { ...serviceTokensRaw };
+    if (mode.sandboxWrite === "none") delete serviceTokens.GITHUB_TOKEN;
 
     // #9556 — every existing consumer below reads the bare url; the support
     // deny→handoff flag additionally reads `repoUrlResult.degraded` so a
@@ -2259,41 +2267,48 @@ export const realSdkQueryFactory: QueryFactory = async (
     // flips `repo_status→error` ONLY on the solo/owner path after a post-clone
     // `.git`-absence CAS, and returns `"block"` so the dispatch honest-blocks
     // instead of spawning a doomed agent. NO new clone site; NO service-role read.
-    const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
-      userId: args.userId,
-      workspacePath,
-      installationId: effectiveInstallationId,
-      repoUrl,
-    });
-    if (
-      (await consumeDispatchCloneOutcome(
-        {
-          outcome: dispatchCloneOutcome,
-          userId: args.userId,
-          activeWorkspaceId,
-          workspacePath,
-        },
-        {
-          // F4 status write via the SECURITY DEFINER RPC on the TENANT client
-          // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
-          // the rare failure path, never on the common success hot path.
-          setRepoStatus: async (status, reason) => {
-            const tenant = await getFreshTenantClient(args.userId);
-            const { error } = await tenant.rpc("set_repo_status", {
-              p_workspace_id: activeWorkspaceId,
-              p_status: status,
-              p_error: reason,
-            });
-            if (error) throw error;
+    // #9558 — the clone is repo-lifecycle machinery (it mints an installation
+    // token via gitWithInstallationAuth to authenticate the clone). Support
+    // never runs it: not "called then early-returns on a null install", but
+    // not called at all — the null-id early return inside
+    // ensureWorkspaceRepoCloned stays as the defense-in-depth floor.
+    if (mode.runRepoLifecycle) {
+      const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
+        userId: args.userId,
+        workspacePath,
+        installationId: effectiveInstallationId,
+        repoUrl,
+      });
+      if (
+        (await consumeDispatchCloneOutcome(
+          {
+            outcome: dispatchCloneOutcome,
+            userId: args.userId,
+            activeWorkspaceId,
+            workspacePath,
           },
-        },
-      )) === "block"
-    ) {
-      throw new RepoNotReadyError(
-        "error",
-        "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
-        "repo_setup_failed",
-      );
+          {
+            // F4 status write via the SECURITY DEFINER RPC on the TENANT client
+            // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
+            // the rare failure path, never on the common success hot path.
+            setRepoStatus: async (status, reason) => {
+              const tenant = await getFreshTenantClient(args.userId);
+              const { error } = await tenant.rpc("set_repo_status", {
+                p_workspace_id: activeWorkspaceId,
+                p_status: status,
+                p_error: reason,
+              });
+              if (error) throw error;
+            },
+          },
+        )) === "block"
+      ) {
+        throw new RepoNotReadyError(
+          "error",
+          "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
+          "repo_setup_failed",
+        );
+      }
     }
 
     // #5733 deliverable A — the host `git rev-parse` CONFIRM. Runs AFTER the
@@ -3899,10 +3914,10 @@ export async function dispatchSoleurGo(
   let reprovisionOutcome: ReprovisionOutcome | undefined;
   // #9558 — the reprovision is repo-lifecycle machinery (installation resolve +
   // ensureWorkspaceRepoCloned, which mints a GitHub installation token to
-  // clone). A support-persona turn has no workspace repo to recover, so the
-  // whole block is skipped — a read-only docs dispatch must never mint or
-  // clone into the user's workspace.
-  if (args.persona !== "support" && runner.hasActiveQuery(conversationId)) {
+  // clone). A support-persona turn has no workspace repo to recover, so BOTH
+  // arms are skipped — the await AND the fire-and-forget publish. A read-only
+  // docs dispatch must never mint or clone into the user's workspace.
+  if (resolveWorkspaceMode(args.persona).runRepoLifecycle && runner.hasActiveQuery(conversationId)) {
     // WARM: the factory did NOT run this turn — gate the agent start on the
     // awaited re-clone. The entire gate is self-contained (it sits BEFORE the
     // `runner.dispatch` try below) so it can NEVER reject out of dispatch.
@@ -3931,10 +3946,11 @@ export async function dispatchSoleurGo(
         extra: { userId, conversationId },
       });
     }
-  } else {
+  } else if (resolveWorkspaceMode(args.persona).runRepoLifecycle) {
     // COLD: the factory owns the await before `query()` construction. Keep the
     // fire-and-forget publish so the honest-message branch can still read the
-    // outcome without delaying the cold dispatch.
+    // outcome without delaying the cold dispatch. Support (runRepoLifecycle:
+    // false) reaches neither arm — #9558.
     void reprovisionWorkspaceOnDispatch(userId)
       .then((outcome) => {
         reprovisionOutcome = outcome;
@@ -3973,7 +3989,13 @@ export async function dispatchSoleurGo(
     ...CC_REGISTERED_PLATFORM_TOOL_NAMES,
     ...crmLeadPermissionToolNames(args.crmLead === true),
   ];
-  void resolveC4Eligible(userId)
+  // #9558 — resolveC4Eligible resolves installations and can MINT an
+  // installation token (cc-effective-installation) + probe api.github.com —
+  // repo-lifecycle machinery a support dispatch must never run.
+  void (resolveWorkspaceMode(args.persona).runRepoLifecycle
+    ? resolveC4Eligible(userId)
+    : Promise.resolve(false)
+  )
     .then((eligible) => {
       // #9539 — support dispatches never register the c4 write tool (gated in
       // the factory), so the advertise list must not claim it either.

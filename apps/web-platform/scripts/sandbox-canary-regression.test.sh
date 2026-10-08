@@ -273,9 +273,9 @@ fi
 # only entry widens the census bound past reality; a canary-only entry lets a
 # preserved fd look like a leak). Extract both lists mechanically and diff.
 SHIM_FILE="$SCRIPT_DIR/../infra/bwrap-shim/bwrap"
-# The fd-valued case arms are the lines that set expect_fd=1 (fd1 + fd2 rows);
+# The fd-valued case arms are the opt_kind rows assigning OPT_KIND=fd1/fd2;
 # cut at `)` so the trailing action never pollutes the token stream.
-shim_set=$(grep -E 'expect_fd=1' "$SHIM_FILE" | sed 's/).*//' | tr '| ' '\n' | grep '^--' | sort -u)
+shim_set=$(grep -E 'OPT_KIND=fd[12]' "$SHIM_FILE" | sed 's/).*//' | tr '| ' '\n' | grep '^--' | sort -u)
 mjs_set=$(sed -n '/BWRAP_FD_VALUED_OPTS = new Set/,/\]/p' "$MJS" | grep -oE '"--[a-z0-9-]+"' | tr -d '"' | sort -u)
 if [ -n "$shim_set" ] && [ "$shim_set" = "$mjs_set" ]; then
   pass "D4 shim preserve-set == canary BWRAP_FD_VALUED_OPTS ($(echo "$mjs_set" | wc -l) opts)"

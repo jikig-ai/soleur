@@ -187,10 +187,10 @@ cp "$T/git-auth-tofu.ts" "$MIRROR/server/git-auth.ts" || { printf 'FAIL SETUP: m
 # config marker is missing (the pre-fix posture), and a nonexistent dir for
 # `unknown` (files unreadable → never "absent").
 mkdir -p "$T/deny-present" "$T/deny-absent" || { printf 'FAIL SETUP: deny fixtures\n' >&2; exit 1; }
-printf 'export function workspaceTenantDenyRoots() { return []; }\n' > "$T/deny-present/workspace-resolver.ts"
-printf 'import { workspaceTenantDenyRoots } from "./workspace-resolver";\n' > "$T/deny-present/agent-runner-sandbox-config.ts"
+printf 'export function workspaceTenantDenyRoots() { return [process.env.WORKTREE_ROOT]; }\n' > "$T/deny-present/workspace-resolver.ts"
+printf 'const denyRoots = workspaceTenantDenyRoots();\n' > "$T/deny-present/agent-runner-sandbox-config.ts"
 printf 'export function workspacePathForWorkspaceId() { return ""; }\n' > "$T/deny-absent/workspace-resolver.ts"
-printf 'const denyRead = [];\n' > "$T/deny-absent/agent-runner-sandbox-config.ts" 
+printf 'const denyRead = [];\n' > "$T/deny-absent/agent-runner-sandbox-config.ts"
 
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
 # unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
@@ -215,6 +215,7 @@ run_case() {
   [ "${CASE_DEFAULT_GIT_AUTH:-0}" = 1 ] && gat=()
   timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$CTMP" DOPPLER_STORE="$store" DOPPLER_LOG="$DLOG" \
     RUNNER_TEMP="$RT" "${gat[@]}" \
+    SANDBOX_SRC_DIR="$(dirname "$PRECHECK")/../server" \
     DOPPLER_TOKEN=fixture-prd-read "$@" bash "${CASE_SCRIPT:-$PRECHECK}" > "$OUT" 2>&1
   RC=$?
 }
@@ -291,6 +292,17 @@ if case_write readback-differs ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-p
   && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_readback_failed reason=value_mismatch' "$OUT"; then
   pass "W5: a set whose read-back returns another value -> verdict=flag_write_readback_failed reason=value_mismatch, exit 5"
 else fail "W5: a mismatched read-back was not refused" "$(detail)"; fi
+# W6 — the write arm is gated on SANDBOX_DENY_ROOTS too: a `true` write under
+# ANY mode must refuse when the source lacks the #9725 deny coverage (the
+# read-side refuse fires only under flip; the write arm exits before it).
+if case_write deny-absent ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-absent" \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=sandbox_deny_coverage_absent' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "W6: a `true` write without deny coverage -> verdict=sandbox_deny_coverage_absent, exit 5, doppler never called"
+else fail "W6: a true write without deny coverage was not refused" "$(detail)"; fi
+if case_write deny-ok ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SANDBOX_SRC_DIR="$T/deny-present" \
+  && [ "$(cat "$OUT")" = "flag_write=ok value=true" ]; then
+  pass "W7: a `true` write WITH deny coverage proceeds to the set+readback path"
+else fail "W7: a covered true write did not reach the write path" "$(detail)"; fi
 
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
 else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
@@ -670,8 +682,8 @@ MUTANT_FLOOR=18  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refus
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 30 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 6 + mutants 18 x 2 = 93 (exact).
-FLOOR=93
+# Assertion FLOOR: script cases 32 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 6 + mutants 18 x 2 = 97 (exact).
+FLOOR=97
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

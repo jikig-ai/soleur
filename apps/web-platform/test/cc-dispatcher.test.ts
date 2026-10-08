@@ -444,6 +444,47 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(errs.some((e) => e.message === WORKSPACE_RECLAIMED_MESSAGE)).toBe(false);
   });
 
+  // -------------------------------------------------------------------------
+  // #9558 — support persona must never touch the repo-lifecycle reprovision:
+  // reprovisionWorkspaceOnDispatch resolves installations and (on a missing /
+  // corrupt .git) mints a GitHub installation token + clones into the user's
+  // workspace. BOTH the awaited warm arm and the fire-and-forget cold publish
+  // arm are skipped — a regression that only gated the warm arm left the cold
+  // else firing on every support dispatch.
+  // -------------------------------------------------------------------------
+  for (const warm of [true, false]) {
+    it(`support persona never runs reprovisionWorkspaceOnDispatch (warm=${warm})`, async () => {
+      const sendToClient = vi.fn().mockReturnValue(true);
+      vi.mocked(reprovisionWorkspaceOnDispatch).mockClear();
+      const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+      __setCcRunnerForTests({
+        dispatch: vi.fn(async () => {}),
+        hasActiveQuery: () => warm,
+        activeQueriesSize: () => (warm ? 1 : 0),
+        reapIdle: () => 0,
+        closeConversation: () => {},
+        respondToToolUse: () => false,
+        notifyAwaitingUser: () => {},
+        // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      } as any);
+
+      await dispatchSoleurGo({
+        persona: "support",
+        userId: "u1",
+        conversationId: "conv-support-reprov",
+        userMessage: "how do I invite a teammate?",
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient: sendToClient as unknown as (userId: string, message: WSMessage) => boolean,
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      });
+      // Let the fire-and-forget arm settle if a regression re-enabled it.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(vi.mocked(reprovisionWorkspaceOnDispatch)).not.toHaveBeenCalled();
+    });
+  }
+
   it("T19: dispatchSoleurGo surfaces errorCode=key_invalid when runner throws KeyInvalidError", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);

@@ -1,4 +1,5 @@
-import { join } from "path";
+import { isAbsolute, join } from "path";
+import { existsSync, realpathSync } from "fs";
 import { reportSilentFallback } from "@/server/observability";
 
 // Pure JWT-claim readers live in the client-safe `@/lib/session-claims` module
@@ -40,7 +41,7 @@ const WORKTREE_ROOT_DEFAULT = "/var/lib/soleur/worktrees";
 // UUID, so the solo-workspace case (workspaceId === userId, N2) passes.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function getWorkspacesRoot(): string {
+export function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
 }
 
@@ -70,6 +71,18 @@ function getWorkspaceWorktreeRoot(): string {
   return isGitDataStoreEnabled()
     ? process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT
     : getWorkspacesRoot();
+}
+
+/**
+ * The EFFECTIVE resolution root — the flag-collapsed root
+ * `workspacePathForWorkspaceId` actually resolves under. Distinct from
+ * {@link workspaceTenantDenyRoots} on purpose: the deny set is raw and
+ * flag-independent, while this is the flag-shaped truth used for the
+ * `workspaceUnderEffectiveRoot` drift tripwire (#9725 — a workspace still
+ * resolving under the stale volume root post-flip is the drift to page on).
+ */
+export function workspaceEffectiveRoot(): string {
+  return getWorkspaceWorktreeRoot();
 }
 
 /**
@@ -835,26 +848,45 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
  * readdir enumeration — the parent tmpfs masks present AND future siblings).
  *
  * `workspacePathForWorkspaceId` resolves under `WORKTREE_ROOT` once
- * `GIT_DATA_STORE_ENABLED` flips (ADR-068): denying only `WORKSPACES_ROOT`
- * would then mask a directory no workspace lives under — the deny covers
- * nothing real. Both roots are returned unconditionally:
- *   - flag OFF: `getWorkspaceWorktreeRoot()` IS `getWorkspacesRoot()`, so the
- *     set is byte-identical to the pre-cutover single-root deny;
- *   - flag ON:  both — the NVMe root carries live working trees, and the
- *     volume root may still hold pre-cutover tenant dirs (stale leakage is
- *     still tenant data).
+ * `GIT_DATA_STORE_ENABLED` flips (ADR-068), so the deny must cover the RAW
+ * worktree root — NOT `getWorkspaceWorktreeRoot()`'s flag-collapsed form.
+ * Collapsing to the flag reads `getWorkspacesRoot()` while off, which leaves
+ * the exact windows #9725 was filed for unmasked: the pre-flip staging phase
+ * (worktree root populated ahead of the flag) and any post-rollback window
+ * (flag back to false while trees still live under the NVMe root). Denying
+ * both unconditionally is safe flag-off: a nonexistent deny landing is a
+ * tmpfs over an empty dir the vendor creates at namespace build.
  *
  * `"/"` (or empty) is never a tenant root — a deny there would tmpfs the
- * whole rootfs; a misconfigured env must not silently become a catastrophic
- * mask, so such a root is excluded here (the caller still fails closed on a
- * workspacePath that equals/contains a deny root).
+ * whole rootfs — so such a root is excluded. A non-absolute or `..`-carrying
+ * root would mask the wrong tree silently; refuse LOUDLY (the caller's
+ * catastrophic-path guard likewise fails closed rather than building a
+ * mis-scoped namespace).
  */
 export function workspaceTenantDenyRoots(): string[] {
   const roots = new Set<string>();
-  for (const root of [getWorkspacesRoot(), getWorkspaceWorktreeRoot()]) {
+  for (const root of [
+    process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT,
+    process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT,
+  ]) {
     const norm = root.replace(/\/+$/, "");
-    if (norm === "" || norm === "/") continue;
+    if (norm === "" || norm === "/") {
+      // A "/" deny root masks the whole rootfs — but dropping it silently is
+      // WORSE: workspacePathForWorkspaceId would resolve `/<uuid>` with no
+      // tenant deny at all. Fail loud either way.
+      throw new Error(
+        `workspaceTenantDenyRoots: tenant root '${root}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
+      );
+    }
+    if (!isAbsolute(norm) || norm.split("/").includes("..")) {
+      throw new Error(
+        `workspaceTenantDenyRoots: tenant root '${root}' is not an absolute normalized path — refusing a deny set that masks the wrong tree`,
+      );
+    }
     roots.add(norm);
+    // A symlinked root masks the LINK path while the target stays visible
+    // under `--ro-bind / /` — deny the canonical path too.
+    if (existsSync(norm)) roots.add(realpathSync(norm));
   }
   return [...roots];
 }

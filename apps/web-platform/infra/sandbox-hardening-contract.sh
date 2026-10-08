@@ -95,10 +95,10 @@ if need_file "$cc"; then
     "$(grep -c 'mode.runRepoLifecycle' "$cc" || true)" 4
   check "mint + askpass belt on sandboxWrite" \
     "$(grep -c 'sandboxWrite !== "none"' "$cc" || true)" 2
-  check "egress posture log carries persona" \
-    "$(grep -c 'persona: args.persona' "$cc" || true)" 1
-  check "dispatch-level reprovision skipped for support" \
-    "$(grep -c 'args.persona !== "support" && runner.hasActiveQuery' "$cc" || true)" 1
+  check "egress posture log carries persona (all emit sites)" \
+    "$(grep -c 'persona: args.persona' "$cc" || true)" 3
+  check "dispatch-level reprovision gated on runRepoLifecycle (both arms)" \
+    "$(grep -c 'resolveWorkspaceMode(args.persona).runRepoLifecycle' "$cc" || true)" 2
 fi
 
 if [ "$fail" -ne 0 ]; then

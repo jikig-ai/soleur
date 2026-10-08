@@ -46,7 +46,7 @@ The sandbox's tenant-isolation story currently holds in *configuration* but not 
 
 `infra/bwrap-shim/bwrap` gains an argv-tail-mask arm in front of the existing exec:
 
-- **Arm A (today's shape):** first literal `--` in `"$@"` → splice `--tmpfs /proc` immediately before it. Verified live: `bwrap --args <fd> --tmpfs /proc -- <cmd>` → in-sandbox `/proc` is an empty tmpfs.
+- **Arm A (today's shape):** first literal `--` in `"$@"` → splice `--proc /proc` immediately before it. **Amended during work:** a bare `--tmpfs` leaves `/proc/self/fd` absent, which breaks the vendored inner `apply-seccomp /proc/self/fd/N` — the realized mask is a fresh pidns-scoped procfs (no host pids, self view intact). Verified live: `bwrap --args <fd> --proc /proc -- <cmd>` → in-sandbox `/proc` carries only sandbox pids.
 - **Arm B (defensive):** no outer `--` but ≥1 `--args <fd>` → read each args fd's NUL-separated payload in order (`mapfile -d ''`), locate the first `--` inside any payload and splice before it (else append to the LAST payload); re-emit each consumed payload through a fresh pipe via `exec {fd}< <(printf '%s\0' …)` and substitute the new fd number into the outer argv. Unreadable/malformed payload → `fail` (65).
 - **Arm C:** no `--`, no `--args` → insert before the first non-option/non-value token (the shim's existing arity walk already classifies values); a pure-options argv gets the token appended.
 - Unresolvable shapes still fail closed (exit 65, `bwrap-shim:` marker) — never exec an unmasked spawn.
@@ -56,7 +56,7 @@ Rationale for the layer: the vendored builder owns the payload and cannot be pat
 ### FR2 (#9725) — deny both tenant-workspace roots, flag-independently
 
 - `workspace-resolver.ts`: export a `workspaceTenantDenyRoots()` helper returning the deduped set `{ getWorkspacesRoot(), process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT }` — the raw worktree root unconditionally, NOT `getWorkspaceWorktreeRoot()`'s flag-collapsed form (the transition window where the cutover stage populates the worktree root while the flag is still off is exactly when staged tenant data needs masking).
-- `agent-runner-sandbox-config.ts`: `denyRead = new Set([...workspaceTenantDenyRoots(), c4StagingRoot, "/proc", ...denyReadExtra])`. The catastrophic-misconfig throw checks `workspacePath` against BOTH roots; the `tenant-deny` log gains `worktreeRoot`, `gitDataStoreEnabled`, `worktreeRootExists` and a `workspaceUnderEffectiveRoot` field (strict-descendant of the resolver's effective root — the drift tripwire #9725 names). The prod `WORKSPACES_ROOT missing` Sentry arm extends to the effective root.
+- `agent-runner-sandbox-config.ts`: `denyRead = new Set([...workspaceTenantDenyRoots(), c4StagingRoot, "/proc", ...denyReadExtra])`. The catastrophic-misconfig throw checks `workspacePath` against BOTH roots; the `tenant-deny` log gains `gitDataStoreEnabled`, `workspaceEffectiveRoot`, per-root `{root, exists}` rows and a `workspaceUnderEffectiveRoot` field (strict-descendant of the resolver's effective root — the drift tripwire #9725 names). The prod `WORKSPACES_ROOT missing` Sentry arm extends to the effective root.
 - The vendored builder skips non-existent deny landings, so flag-off argv is unchanged on hosts without the worktree dir — BUT the capture harness sets `WORKTREE_ROOT` to a fixed canary path (`/tmp/soleur-sandbox-canary-worktrees`) so the emitted argv deterministically carries both roots and the re-captured fixture pins their ordering.
 - Cutover gate: `git-data-flag-precheck.sh` gains a `SANDBOX_DENY_ROOTS` arm (blocking `refuse` under `FLAG_MODE=flip`, informational otherwise) grepping the checkout's `agent-runner-sandbox-config.ts` for worktree-root coverage; `git-data-cutover.yml` `flip_preconditions` gains a `GIT_DATA_DENY_FLOOR` arm (same `ver_le` + `/health` semver pattern as `live_image_stale`) so a flip cannot run against an image predating the deny fix. Both arms' refusal messages name the remedy, never "flip anyway".
 
@@ -76,7 +76,7 @@ In `cc-dispatcher.ts` `realSdkQueryFactory`, under the existing `mode` object:
 
 Ways an in-sandbox process can reach another tenant's data/credentials today:
 
-- `/proc/<pid>/environ`, `/proc/<pid>/cmdline` — **checked by FR1** (tmpfs mask lands last).
+- `/proc/<pid>/environ`, `/proc/<pid>/cmdline` — **checked by FR1** (pidns-scoped procfs mounts last; host pids never visible).
 - Direct sibling-tree reads via `--ro-bind / /` — **checked by FR2** for the post-cutover root; already covered for `/workspaces`.
 - `env`/`printenv` in sandboxed Bash — Anthropic creds already denied (W1, `credentials.envVars`); `GH_TOKEN`/`GIT_INSTALLATION_TOKEN`/service tokens remain reachable — **FR3 narrows the support-persona set**; command-center tokens intentionally stay (ADR-272 deferral to #9543 broker).
 - Network egress exfil — `allowManagedDomainsOnly` + empty `allowedDomains`; **FR3 keeps support at the closed default**.
@@ -87,7 +87,7 @@ Unchecked-but-safe: in-process MCP tools and hooks run outside bwrap with the pa
 
 ### Behavior-change disclosure
 
-Under a real empty `/proc`, in-sandbox `ps`/`pgrep`/`top`/`lsof` and `/proc/self/*` reads fail. That is the ADR-075 deny intent being *realized*, not a regression — but it is user-visible on agent Bash commands that introspect processes. The plan's Observability + changelog carry it.
+Under the pidns-scoped `/proc` (amended from empty tmpfs — `apply-seccomp` needs `/proc/self/fd`), in-sandbox `ps`/`pgrep`/`top` show only sandbox-pidns processes; host pids and host `/proc/<pid>/environ` are absent. That is the ADR-075 deny intent *realized* — user-visible on agent Bash commands that introspect host processes (a narrow operator-debug window). The plan's Observability + changelog carry it.
 
 ## User-Brand Impact
 
@@ -115,7 +115,7 @@ failure_modes:
     detection: "canary verdict fd_census_* / canary_infra_error blocks deploy"
     alert_route: "deploy gate (loud, safe direction)"
   - mode: "deny root missing in prod (vanished mount / flag-on without worktree dir)"
-    detection: "reportSilentFallback 'WORKSPACES_ROOT missing' extended to the effective root + worktreeRootExists=false in per-dispatch tenant-deny emit"
+    detection: "reportSilentFallback 'tenant deny root missing' per root + per-root exists=false in the per-dispatch tenant-deny emit"
     alert_route: "Sentry feature=agent-sandbox"
   - mode: "support-persona credential gate regresses (mint fires for support)"
     detection: "per-dispatch 'Concierge sandbox GitHub egress posture' log gains persona; query persona=support AND githubEgress=true; unit tests RED"
@@ -138,7 +138,7 @@ Skipped — no new persistent store and no new cross-component/network connectio
 
 ### Guard 1 — realized /proc mask
 
-**Property.** Every sandbox-building bwrap spawn through the PATH shim mounts an empty tmpfs at `/proc` AFTER any vendor-emitted `/proc` bind — i.e. the last procfs-touching setup token is ours.
+**Property.** Every sandbox-building bwrap spawn through the PATH shim mounts a fresh pidns-scoped procfs at `/proc` AFTER any vendor-emitted `/proc` bind — i.e. the last procfs-touching setup token is ours. (Amended: `--proc`, not `--tmpfs` — the vendored `apply-seccomp` inner command resolves `/proc/self/fd/N`.)
 
 **Assembly.** All bwrap invocations that reach `infra/bwrap-shim/bwrap` with a setup argv (argc>1, non-probe): the SDK's `--args`-transported spawn, the canary replay's argv-form spawn, any future caller. Chokepoint is the single `exec "$REAL" …` in the shim; there is no second bwrap caller in the image (capture uses a throwaway shim upstream of it).
 
@@ -146,7 +146,7 @@ Skipped — no new persistent store and no new cross-component/network connectio
 
 | # | Mutation | Expected |
 |---|----------|----------|
-| 1 | Shim execs `"$@"` verbatim (insertion removed) | RED — bwrap-shim.test.ts asserts `--tmpfs /proc` lands after `--args` payload tokens / before `--`; real-bwrap row asserts in-sandbox `/proc/self/environ` absent |
+| 1 | Shim execs `"$@"` verbatim (insertion removed) | RED — bwrap-shim.test.ts asserts `--proc /proc` lands after `--args` payload tokens / before `--`; real-bwrap row asserts the canary's HOST pid is absent in-sandbox while `/proc/self/environ` stays (self view intact) |
 | 2 | Insertion moved AFTER the `--` boundary (lands in command argv) | RED — same position assertion; in-sandbox `/proc` stays populated |
 | 3 | Payload-rewrite arm drops the mask when `--` lives inside `--args` payload | RED — fake-bwrap row asserting the rewritten payload contains the mask before its `--` |
 | 4 | Second `--` earlier in argv (command tail `--` first) — splice must target the FIRST `--` | RED — row asserting insertion index |
@@ -225,13 +225,13 @@ Each phase is RED-first (failing test rows land before the behavior change), the
 - 1.1 Extend `apps/web-platform/test/bwrap-shim.test.ts` with rows for Guard 1's matrix: insertion before first `--`; after-`--args`-payload ordering (fake-bwrap records `ARG`/`PAYLOAD` lines — assert the mask sits between the last setup token and `--`); Arm B payload-rewrite row (payload carrying its own `--`); Arm C positional-boundary row; fail-closed rows for malformed args fd.
 - 1.2 Implement the three arms + fail-closed in `infra/bwrap-shim/bwrap`, keeping probe passthrough and the fd sweep unchanged. Header comment updated: the shim now rewrites argv (documents the new trust role).
 - 1.3 `apps/web-platform/test/sandbox-isolation.test.ts` FR7 + `apps/web-platform/test/helpers/sandbox-isolation-fixtures.ts`: build the harness argv from the REAL captured shape — append the vendor tail `--bind /proc /proc` to the helper's emitted setup argv and run the spawn THROUGH the shim (`SOLEUR_BWRAP_REAL`/`SOLEUR_BWRAP_SECCOMP_BPF` env overrides, shim dir first on PATH for the spawned process only) so FR7 measures the deployed chain, not a paraphrase of it.
-- 1.4 `apps/web-platform/test/sandbox-credential-deny-runtime.test.ts` (or a sibling `sandbox-proc-mask-runtime.test.ts`): two-arm behavior probe — CONTROL (shim bypassed) asserts `/proc/self/environ` exists; TREATMENT (shim on PATH) asserts `/proc` is empty. Pins the OUTCOME, claims no mechanism (per the #9601/PR #9599 sharp-edge: outcome, not mechanism).
+- 1.4 `apps/web-platform/test/sandbox-proc-mask-runtime.test.ts`: SDK-chain interception probe — the vendored spawn PATH-resolves our shim and hands it the tail-bind shape; the realized-mask outcome discrimination lives in the unit rows + FR7b + the canary `proc_mask` probe (the vendored `apply-seccomp` re-scopes procfs in the inner namespace, so a host-level SDK outcome read cannot discriminate). Pins the CHAIN, claims no mechanism.
 
 ### Phase 2 — canary probe redesign (coupled to Phase 1)
 
-- 2.1 `apps/web-platform/scripts/sandbox-canary.mjs`: replace the `fd_census` probe's `ls /proc/self/fd | wc -l` with a procfs-free POSIX-sh fd enumeration (`eval` redirect-existence probe over fds 3..63, read- then write-mode) and re-derive `fdLimit` for the new enumerator (no `ls` transient dir fd). Add a fourth probe `proc_mask`: inside the replayed sandbox `test -e /proc/self/environ` MUST fail AND `ls /proc` MUST be empty — the deploy-time proof that the realized mask holds in the shipped image.
+- 2.1 `apps/web-platform/scripts/sandbox-canary.mjs`: replace the `fd_census` probe's `ls /proc/self/fd | wc -l` with a procfs-free POSIX-sh fd enumeration (`eval` redirect-existence probe over fds 3..63, read- then write-mode) and re-derive `fdLimit` for the new enumerator (no `ls` transient dir fd). Add a fourth probe `proc_mask`: inside the replayed sandbox `test -d /proc/<canary-host-pid>` MUST fail (host procfs masked) AND `test -e /proc/self/environ` MUST pass (self procfs intact for `apply-seccomp`) — the deploy-time proof that the realized pidns-scoped mask holds in the shipped image.
 - 2.2 `apps/web-platform/scripts/sandbox-canary-regression.test.sh`: update D3's probe-payload assertion to the new enumerator's marker (drop the `/proc/self/fd` literal); add an assertion that `runHardeningProbes` includes `proc_mask`.
-- 2.3 `apps/web-platform/test/sandbox-canary.test.ts`: unit rows for the new classifiers — empty-`/proc` treatment passes, populated-`/proc` control arm classifies `sandbox_broken` (`proc_mask_bypass`), unparseable/spawn errors keep `canary_infra_error`.
+- 2.3 `apps/web-platform/test/sandbox-canary.test.ts`: unit rows for the new classifiers — masked treatment passes, populated-`/proc` control arm classifies `sandbox_broken` (`proc_mask_defeated`), unparseable/spawn errors keep `canary_infra_error`.
 
 ### Phase 3 — dual-root deny + cutover gate (#9725)
 
@@ -250,7 +250,7 @@ Each phase is RED-first (failing test rows land before the behavior change), the
 
 ### Phase 5 — docs, ADR/C4, ship hygiene
 
-- 5.1 ADR-075 addendum: deny-set is now dual-root (transition-window rationale) and the `/proc` deny is realized by shim tail-mask rather than the mid-argv tmpfs; record that the committed fixture now pins BOTH roots' ordering.
+- 5.1 ADR-075 addendum: deny-set is now dual-root (transition-window rationale) and the `/proc` deny is realized by the shim's tail `--proc /proc` mask rather than the mid-argv tmpfs; record that the committed fixture now pins BOTH roots' ordering.
 - 5.2 ADR-113 addendum: the persona-gated set gains clone, install-resolution, mint, askpass, egress (the credential surface joins the repo-lifecycle surface); record the serviceTokens decision either way.
 - 5.3 ADR-272 one-line note: the `/proc` deny is now realized — the measured outcome's mechanism is no longer load-bearing on userns/ptrace luck.
 - 5.4 C4: no model change — enumerated: no new actor, no new external system/vendor, no new container/datastore, no new relationship; the `support_persona` description ("read-only sandbox") becomes accurate. State the enumeration in the PR description.
@@ -263,7 +263,7 @@ This plan amends two ADRs rather than writing a new one: the changes enforce bou
 
 ## Acceptance Criteria
 
-- [ ] AC-1: `apps/web-platform/test/bwrap-shim.test.ts` contains rows asserting `--tmpfs /proc` is inserted before the first `--` and after `--args` payload expansion, including the payload-carried-`--` rewrite arm, and they pass.
+- [x] AC-1: `apps/web-platform/test/bwrap-shim.test.ts` contains rows asserting `--proc /proc` is inserted before the first `--` and after `--args` payload expansion, including the payload-carried-`--` rewrite arm, and they pass.
 - [ ] AC-2: `apps/web-platform/test/sandbox-isolation.test.ts` FR7 runs the vendor argv shape (tail `--bind /proc /proc` present) THROUGH the shim and asserts cross-tenant environ is unreadable; without the shim the same shape shows real procfs (control discrimination recorded in the test or its fixture helper).
 - [ ] AC-3: `runHardeningProbes` includes a `proc_mask` probe; `sandbox-canary-regression.test.sh` no longer greps `/proc/self/fd` and asserts the new probe is wired; `apps/web-platform/test/sandbox-canary.test.ts` classifiers cover mask-present/mask-absent/unparseable.
 - [ ] AC-4: `buildAgentSandboxConfig` deny set includes both `WORKSPACES_ROOT` and `WORKTREE_ROOT`-resolved roots under every flag/env combination in `agent-sandbox-tenant-deny.test.ts`; catastrophic-guard rows cover both roots.
@@ -276,7 +276,7 @@ This plan amends two ADRs rather than writing a new one: the changes enforce bou
 
 ## Test Scenarios
 
-- Given a bwrap argv `--args N -- cmd` where the payload ends `--bind /proc /proc`, when the shim execs, then the real binary receives `--tmpfs /proc` after the payload and before `--`, and in-sandbox `/proc` is empty.
+- Given a bwrap argv `--args N -- cmd` where the payload ends `--bind /proc /proc`, when the shim execs, then the real binary receives `--proc /proc` after the payload and before `--`, and in-sandbox `/proc` is pidns-scoped (host pids absent, self view intact).
 - Given the payload carries its own `--`, when the shim execs, then the rewritten payload contains the mask before the boundary and the spawn succeeds.
 - Given `GIT_DATA_STORE_ENABLED=true` + `WORKTREE_ROOT=/var/lib/soleur/worktrees`, when a sandbox config is built for `/var/lib/soleur/workspaces/<uuid>`, then `/var/lib/soleur/worktrees` is in `denyRead` and `workspaceUnderEffectiveRoot` is true in the emit.
 - Given a support dispatch on a workspace with a connected repo, when the factory runs, then no token is minted, no askpass file is written, no clone runs, and `allowedDomains` is empty.
@@ -288,12 +288,12 @@ This plan amends two ADRs rather than writing a new one: the changes enforce bou
 
 - Deploy canary `proc_mask` verdict `pass` on the first release carrying the shim change (the deploy is the proof).
 - Zero `bwrap_shim_refused`/`fd_census_*`/`args_fd_*` canary verdicts across the deploys that follow.
-- Per-dispatch `tenant-deny` emits carry `worktreeRoot` + `gitDataStoreEnabled` fields; zero `persona="support" githubEgress=true` rows in Better Stack.
+- Per-dispatch `tenant-deny` emits carry `tenantDenyRoots[].exists` + `gitDataStoreEnabled` + `workspaceEffectiveRoot` fields; zero `persona="support" githubEgress=true` rows in Better Stack.
 - Cutover flip blocked (`SANDBOX_DENY_ROOTS` refuse) when staged against a pre-fix tree — demonstrated once in the precheck suite.
 
 ## Dependencies & Risks
 
-- **In-sandbox `/proc` becomes genuinely empty** — agent Bash commands that introspect processes (`ps`, `/proc/self/fd` tricks) stop working. This is the ADR-075 intent realized; it is a deliberate behavior change disclosed in the changelog and user-impact section.
+- **In-sandbox `/proc` becomes pidns-scoped** — agent Bash commands that introspect HOST processes (`ps`, `/proc/<host-pid>/*`) see only the sandbox's own pids; `/proc/self/fd` keeps working (the vendor's `apply-seccomp` needs it). This is the ADR-075 intent realized; it is a deliberate behavior change disclosed in the changelog and user-impact section.
 - **fd_census redesign** must keep discriminating fd leaks (the `leakFd` arm) without procfs; the bound re-derivation is the subtle part — Guard 1/2 mutation rows cover it.
 - **Arm B payload rewrite** adds ~30 lines of fd juggling to a security boundary script; the alternative (fail-closed on a payload-carried `--`) was rejected: a shape drift would take down every agent session instead of just being handled. Precedent-diff gate note: the `exec {fd}< <(printf '%s\0' …)` re-emit pattern has NO in-repo precedent (grepped — `exec {…}< <(` appears nowhere under `apps/web-platform/infra`, `scripts/`, or `plugins/soleur`); pattern is novel, scrutinize at review.
 - **bwrap version delta**: local verification ran on 0.12.0; the image pins Bookworm's 0.8.0. Ordering semantics are documented and version-stable, but the in-image `proc_mask` probe + `--verify` gate are what certify the real binary.
@@ -313,4 +313,4 @@ This plan amends two ADRs rather than writing a new one: the changes enforce bou
 
 ## Review & Consult Provenance
 
-Plan + deepen ran inline in this subagent (no Task/Spawn tool in this runtime — the multi-seat research fan-out is recorded as an environment limitation, not a skipped gate). Verified at write/deepen time: issue bodies fetched verbatim; every cited file/symbol re-grepped; the core mechanism (`--tmpfs` after `--args` payload beats the tail bind) measured live on host bwrap 0.12.0 and cross-checked against bwrap(1) docs; `lint-guard-contract.py` green on the Guard Contract; deepen halts 4.5 (network-outage — no trigger), 4.55 (downtime — code+workflow only, normal deploy path), 4.6 (User-Brand Impact — present, `single-user incident`), 4.7 (Observability — 5 fields, probe `bash` + committed script, no banned metacharacters), 4.8 (PAT scan — clean), 4.9 (UI wireframe — no UI surface), 4.10 (Encryption — no new store/connection), 4.11 (Guard Contract — lint green, assemblies structural), 4.12 (Scope Check — single unfenced section, all rows mapped/justified). One correction landed during deepen: `lb-weight-gate.sh` exists (the ADR-143 D3 pooling gate); the check lands at the flip precheck instead — see the reconciliation row.
+Plan + deepen ran inline in this subagent (no Task/Spawn tool in this runtime — the multi-seat research fan-out is recorded as an environment limitation, not a skipped gate). Verified at write/deepen time: issue bodies fetched verbatim; every cited file/symbol re-grepped; the core mechanism (`--proc` after `--args` payload beats the tail bind; the `--tmpfs` form was measured but REJECTED — it breaks `apply-seccomp`'s `/proc/self/fd` resolution) measured live on host bwrap 0.12.0 and cross-checked against bwrap(1) docs; `lint-guard-contract.py` green on the Guard Contract; deepen halts 4.5 (network-outage — no trigger), 4.55 (downtime — code+workflow only, normal deploy path), 4.6 (User-Brand Impact — present, `single-user incident`), 4.7 (Observability — 5 fields, probe `bash` + committed script, no banned metacharacters), 4.8 (PAT scan — clean), 4.9 (UI wireframe — no UI surface), 4.10 (Encryption — no new store/connection), 4.11 (Guard Contract — lint green, assemblies structural), 4.12 (Scope Check — single unfenced section, all rows mapped/justified). One correction landed during deepen: `lb-weight-gate.sh` exists (the ADR-143 D3 pooling gate); the check lands at the flip precheck instead — see the reconciliation row.

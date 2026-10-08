@@ -234,8 +234,12 @@ What changed in `cc-dispatcher.ts`:
 **serviceTokens decision (plan FR3, was flagged inferred):** `getUserServiceTokens` is NOT gated.
 The service-token map holds the user's own third-party provider keys injected into the agent env —
 orthogonal to the repo/GitHub credential surface this issue names, and the support session's
-egress-closed, read-only sandbox cannot write them anywhere. Gating it would be a capability
-reduction with no isolation benefit; recorded here so the choice is deliberate, not an omission.
+egress-closed sandbox cannot exfiltrate them to the network. Review note: a sandboxed command can
+still ECHO its env into the conversation transcript (the model API + transcript logs are a real,
+if narrower, exposure path for the user's own Connected-Services keys) — accepted deliberately:
+the transcript stays in the user's own session, and gating would cut a capability (service lookups
+in support answers) for a self-only exposure. Recorded here so the choice is deliberate, not an
+omission; revisit if support transcripts ever fan out beyond the session owner.
 
 **Token-channel sweep (4.3):** `ghToken`/`gitInstallationToken` (the askpass token) are the only
 agent-env credential channels fed by the dispatch (`buildAgentEnv` opts); `GIT_INSTALLATION_TOKEN`

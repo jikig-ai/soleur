@@ -1053,6 +1053,26 @@ describe("classifyForkProbe — the over-broad control (fork survives)", () => {
 });
 
 describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit", () => {
+  it("the fdLimit baseline is pinned against the committed fixture (3 stdio + fd-valued opts)", () => {
+    // A `4 +` drift would widen the leak tolerance by exactly 1 — silently
+    // absorbing the deliberate `leakFd` probe's +1. Derive the limit the same
+    // way runHardeningProbes does and assert the probe trips on the fixture's
+    // own shape.
+    const fixture = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)),
+        "utf8",
+      ),
+    );
+    const fdLimit = 3 + countFdValuedOptions(fixture.bwrapSetupArgv);
+    expect(
+      classifyFdCensusProbe(
+        { status: 0, stdout: String(fdLimit + 1) },
+        fdLimit,
+      ),
+    ).toMatchObject({ verdict: "sandbox_broken", reason: "fd_hygiene_bypass" });
+  });
+
   it("count ≤ limit ⇒ null", () => {
     expect(classifyFdCensusProbe({ status: 0, stdout: "4\n" }, 4)).toBeNull();
     expect(classifyFdCensusProbe({ status: 0, stdout: "3" }, 4)).toBeNull();

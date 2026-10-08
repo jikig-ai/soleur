@@ -1475,11 +1475,13 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
 
     await realSdkQueryFactory(makeArgs({ persona: "support" }));
 
-    // No GitHub machinery at all — not even the installation-id resolve.
+    // No GitHub machinery at all — not even the installation-id resolve or
+    // the clone (it mints a token via gitWithInstallationAuth internally).
     expect(mockResolveInstallationId).not.toHaveBeenCalled();
     expect(mockGetInstallationAccount).not.toHaveBeenCalled();
     expect(mockFindRepoOwnerInstallationForUser).not.toHaveBeenCalled();
     expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
     // No askpass helper is ever written under the user's .git/.
     expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
     // The minted-token channel into the agent env stays empty.
@@ -1502,6 +1504,37 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       githubEgress: false,
       persona: "support",
     });
+  });
+
+  it("T2c: support persona strips the user's stored GITHUB_TOKEN from serviceTokens (env must carry no GitHub credential)", async () => {
+    // #9558 review: a write-closed sandbox still received the user's own
+    // GITHUB_TOKEN via the Connected-Services map — readable in-env and
+    // echoable into the transcript while every GitHub egress domain is
+    // closed. The strip is provider-specific: other service tokens stay.
+    mockGetUserServiceTokens.mockResolvedValueOnce({
+      GITHUB_TOKEN: "ghp_stored_user_pat",
+      STRIPE_SECRET_KEY: "sk_live_other",
+    });
+
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      { STRIPE_SECRET_KEY: "sk_live_other" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+    );
+  });
+
+  it("T2d: command_center keeps the stored GITHUB_TOKEN (strip is support-scoped)", async () => {
+    mockGetUserServiceTokens.mockResolvedValueOnce({
+      GITHUB_TOKEN: "ghp_stored_user_pat",
+    });
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+
+    await realSdkQueryFactory(makeArgs({ persona: "command_center" }));
+
+    const envArgs = mockBuildAgentEnv.mock.calls[0];
+    expect(envArgs[1]).toMatchObject({ GITHUB_TOKEN: "ghp_stored_user_pat" });
   });
 
   // -------------------------------------------------------------------------

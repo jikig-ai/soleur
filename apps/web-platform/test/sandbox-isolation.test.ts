@@ -222,9 +222,21 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     const hostPid = handle.pid;
 
     // Precondition (same as FR7): the sentinel must actually be on the host's
-    // procfs, or a "masked" result below would be vacuous.
-    const hostEnviron = fs.readFileSync(`/proc/${hostPid}/environ`, "utf8");
-    expect(hostEnviron).toContain(sentinel);
+    // procfs, or a "masked" result below would be vacuous. The environ READ is
+    // host-policy-dependent though — ptrace_scope≥2, a setuid bwrap binary
+    // (dumpable cleared), or a hidepid procfs all deny it even host→child —
+    // so on EACCES the precondition degrades to PID-dir existence and the
+    // `__SANDBOXB_SEEN__` control arm below (already policy-independent) does
+    // the discrimination. An ENOENT means the spawn died before probing —
+    // that still fails loud.
+    let hostEnviron = "";
+    try {
+      hostEnviron = fs.readFileSync(`/proc/${hostPid}/environ`, "utf8");
+      expect(hostEnviron).toContain(sentinel);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EACCES") throw err;
+      expect(fs.existsSync(`/proc/${hostPid}`)).toBe(true);
+    }
 
     // Probe shape — positional, host-policy-independent. Whether a masked
     // procfs leaves `/proc/<hostPid>/environ` READABLE is kernel-dependent
@@ -252,9 +264,10 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(control.setupFailed, `control bwrap setup failed: ${control.stderr}`).toBe(false);
     expect(control.stdout, "control must expose host procfs (the tail-bind defect is real)").toContain("__SANDBOXB_SEEN__");
 
-    // TREATMENT — the identical argv through the deployed shim: it lands
-    // `--tmpfs /proc` after the tail bind, so in-sandbox /proc is an EMPTY
-    // mount — no host pids, no environ, nothing for the sentinel to ride.
+    // TREATMENT — the identical argv through the deployed shim: it lands a
+    // fresh `--proc /proc` (pidns-scoped procfs) after the tail bind, so
+    // in-sandbox /proc carries only the sandbox's own pids — nothing for the
+    // host-side sentinel to ride.
     const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "iso-shim-"));
     fs.symlinkSync(BWRAP_SHIM_PATH, path.join(shimDir, "bwrap"));
     try {

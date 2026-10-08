@@ -213,11 +213,12 @@ export function buildBwrapInvocation(fixture) {
 //     subshell — no /proc dependency — so the census keeps discriminating
 //     under the mask.
 //   args_fd_transport — the SDK's real spawn shape: setup argv rides
-//     `--args <fd>` NUL-separated on a pipe the shim's preserve-set must
-//     keep. Replay that shape with the fd carrying the same setup argv so a
-//     sweep regression that closes it lands HERE — not on every session's
-//     first Bash call (pre-merge tests cover `--args` against a stub;
-//     nothing else covers it at deploy time).
+//     `--args <fd>` NUL-separated on a pipe the shim consumes and re-emits
+//     on a fresh fd (the #9723 mask splice needs the content). Replay that
+//     shape with the fd carrying the same setup argv so a regression in the
+//     read/re-emit path lands HERE — not on every session's first Bash call
+//     (pre-merge tests cover `--args` against a stub; nothing else covers it
+//     at deploy time).
 // ---------------------------------------------------------------------------
 
 // bwrap options whose FIRST argument is an fd NUMBER — the complete
@@ -366,6 +367,10 @@ export function classifyProcMaskProbe({ status, stderr = "", errorCode } = {}) {
     };
   }
   if (status !== 0) {
+    // Either of the probe's halves failed: host-pid visible (mask defeated)
+    // OR /proc/self gone (procfs missing entirely — e.g. an empty tmpfs).
+    // The reason name keys on the defect class this probe exists to catch;
+    // stderr carries the probe's detail if the mechanism was different.
     return { verdict: "sandbox_broken", reason: "proc_mask_defeated", probe: "proc_mask" };
   }
   return null;
@@ -375,7 +380,12 @@ export function classifyProcMaskProbe({ status, stderr = "", errorCode } = {}) {
 // open fd accepts `<&` (read) or `>&` (write); a closed one fails both.
 // Stdio 0-2 are assumed present (the n<3 lower bound in the classifier stays
 // the "census read nothing" tripwire) so a weird stdin posture cannot flake.
-// No external binaries — /bin/sh builtins only, safe under the empty /proc.
+// No external binaries — /bin/sh builtins only, safe under the masked /proc.
+// Bounds: 255 covers every fd the SDK spawn shape can hand down (well under
+// RLIMIT_NOFILE); an O_PATH fd fails both arms and reads as closed — an
+// under-count (toward ok), never a false leak verdict, and argv-referenced
+// fds above the bound still widen the classifier's fdLimit via
+// countFdValuedOptions.
 const FD_ENUM_SCRIPT =
   "n=3; fd=3; " +
   "while [ $fd -le 255 ]; do " +
