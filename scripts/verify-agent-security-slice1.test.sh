@@ -20,7 +20,7 @@
 # gate's 15 s cap, and contains no negated grep. E: the probe's own setup is observable. A stub hook judges the
 # environment it is run in (no GIT_*, no kill switch, HOME equal to the working directory and to the envelope's cwd) and
 # answers only when it is clean, so a probe that drops its GIT_* strip, its HOME= or its cd turns red (mutated COPIES of
-# the probe, driven through the SLICE1_SCRIPT_UNDER_TEST seam). F: a bash that cannot do process substitution (a PATH
+# the probe, each run directly by run_probe_with; SLICE1_SCRIPT_UNDER_TEST only selects the script the controls and the RED proof drive). F: a bash that cannot do process substitution (a PATH
 # whose `bash` fails `-c`) is a named FAIL ("needs /dev/fd (process substitution)"), not an "answered 'ask', want deny".
 #
 # Anti-vacuity: the case counter moves at the call site (never in pass/fail), pass+fail must equal it, an
