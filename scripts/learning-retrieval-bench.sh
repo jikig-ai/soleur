@@ -372,7 +372,7 @@ anthropic_paraphrase() {
     '{model: $model, max_tokens: $max_tokens, messages: [{role:"user", content: ($prompt + "\n\nPassage:\n" + $gt)}]}')
   local _try
   for _try in 1 2; do
-    resp=$("$CURL_BIN" -sS -w '\n__HTTP_STATUS__:%{http_code}' "$ANTHROPIC_ENDPOINT" \
+    resp=$("$CURL_BIN" --disable --noproxy '*' -sS -w '\n__HTTP_STATUS__:%{http_code}' "$ANTHROPIC_ENDPOINT" \
       -H "x-api-key: $ANTHROPIC_API_KEY" \
       -H "anthropic-version: $ANTHROPIC_VERSION" \
       -H "content-type: application/json" \
