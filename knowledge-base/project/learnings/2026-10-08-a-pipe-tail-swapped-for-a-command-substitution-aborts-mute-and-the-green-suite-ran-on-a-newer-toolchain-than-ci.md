@@ -53,6 +53,8 @@ A tool swapped inside a command substitution carries its exit semantics with it:
 
 **Two Bash calls were blocked by hooks for their TEXT (`git stash list` inside a compound; `ps … | awk '/pattern/'` self-match)** — Recovery: re-issued without the text / used `ls` and git log instead — **Prevention:** never type `git stash` or `ps | awk '/<pat>/'` in a command even as a read; use `git log`, rc files and captured PIDs.
 
+**Four CI-only reds after every local gate was green: two other suites stubbed curl and parsed `-u` (one under `apps/web-platform/infra/`), the affected-tests edge list did not name five records the sweep suite now reads, and two probes printed a broken-pipe line when the runner inherits an ignored SIGPIPE** — Recovery: stubs read the stdin config line (and reject `-u`), five edges added, the config writer's stderr silenced inside the process substitution; the infra-path stub edit was approved by the operator because it fires the push-triggered apply — **Prevention:** when a PR changes HOW a credential reaches a shared script, grep every test stub of the transport (`-u)`, `--user`, `Authorization`) across the whole repo, not only suites that name the script; run the sweep suite once under `trap '' PIPE` (CI harnesses ignore SIGPIPE) and run `scripts/test-affected-kb-consumers.test.sh` whenever a suite gains a `knowledge-base/` read.
+
 **Session `cd` to the repo root left the Bash CWD outside the worktree for one call** — Recovery: chained `cd <worktree> &&` — **Prevention:** chain `cd <abs-worktree> &&` in every call after any `gh`/path probe that changed directory.
 
 ## Tags
