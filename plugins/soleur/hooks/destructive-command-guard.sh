@@ -131,7 +131,9 @@
 # NAME=value, --name=value and -var name=value with a key, tok, secret, pass, pw, cred, auth or bearer name; the
 # word after --token, --password, --passwd, --secret, --api-key, --auth or --bearer (not a command word, a path starting with / or ~ or
 # $HOME, or origin/main/master: the quote must still say what was about to run); the text after
-# `Authorization:` or `Bearer `; URL userinfo. That is a coverage choice, not a boundary. When jq cannot build the
+# `Authorization:` or `Bearer `; URL userinfo (not the `git@` of an ssh remote). That is a coverage choice, not a boundary: a
+# name that merely contains a cue (AUTHOR=, KEYBOARD=, -var key_name=, passenger_count=) is masked too, and the person reads the
+# original command at the Bash prompt. When jq cannot build the
 # output (emit_fallback) the decision and the rule id are kept: a plain body goes out as it is, a body that quotes
 # the command gets a fixed `guard-output-fallback` text, and a deny stays a deny.
 #
@@ -339,6 +341,7 @@ redact_word() { # <word> -> RW; RW_NEXT (1 = the word after a credential flag) c
   shopt -s nocasematch
   if [[ "$w" =~ $RE_SECRET_ASSIGN ]]; then w="${BASH_REMATCH[1]}<redacted>"
   elif [[ "$w" =~ $RE_URL_PW ]]; then w="${BASH_REMATCH[1]}<redacted>${BASH_REMATCH[2]}"
+  elif [[ "$w" == *://git@* ]]; then :   # the service account of an ssh remote (git@github.com) is not a credential
   elif [[ "$w" =~ $RE_URL_USER ]]; then w="${BASH_REMATCH[1]}<redacted>${BASH_REMATCH[2]}"
   elif [[ "$w" =~ $RE_AUTH_HDR ]]; then w="${BASH_REMATCH[1]}<redacted>"
   elif [[ "$w" =~ $RE_BEARER ]]; then w="${BASH_REMATCH[1]}<redacted>"

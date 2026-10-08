@@ -97,6 +97,7 @@ ROWSEL="${DCG_ROWS:-}"
 # a one-edit change to the matching variable.
 README_SENT_NONCOVERAGE='The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools, `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.'
 README_SENT_HOSTED="Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt; this guard does not add one."
+README_SENT_UNREADABLE='The guard also asks, rather than allows, when it cannot read a command it was given: an oversized or unparsable command, a word longer than 4096 bytes, `env -S`, or wrappers nested more than eight deep (the last two only on a command the guard parses in full, which any command that spells `rm`, `destroy` or `push`, or uses a quote or `$`, is). You may meet such an ask on a command that is not destructive.'
 README_SENT_KILL='`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
 README_KILL_REST=' Set it in your own shell before you start the session; the'
 # Loud first line for any run that is not the full gate. NOTFULL is repeated before the summary.
@@ -1155,6 +1156,7 @@ _st_rm_case bad killmid "$README_SENT_KILL" "a kill-switch sentence that does no
 _st_load
 _readme_row "README: the non-coverage sentence appears exactly once" "$README_SENT_NONCOVERAGE"
 _readme_row "README: the hosted-gap line appears exactly once" "$README_SENT_HOSTED"
+_readme_row "README: the sentence that the guard also asks when it cannot read a command appears exactly once (and says env -S and deep wrappers are conditional)" "$README_SENT_UNREADABLE"
 _readme_row "README: the kill switch is documented exactly once as an assignment" "$README_SENT_KILL" "$README_KILL_REST"
 
 echo "== the lexer contract the hook relies on (records, once each) =="
@@ -1908,6 +1910,10 @@ if want_row_quiet "quote: a matched command over 200 characters is cut and ends 
 fi
 # A credential flag masks the word after it, but never a command word or a destructive operand: rm and sudo reject these flags in reality, and the
 # person reads the quote to see WHAT was about to run.
+# the user in an ssh URL is the SERVICE account (git@github.com), not a credential: the quote keeps it; a real userinfo is still masked
+quote_row "quote: an ssh URL's git@ is not masked (git push --force ssh://git@github.com/o/r.git main)" 'git push --force ssh://git@github.com/o/r.git main' @R1@ 'git push --force ssh://git@github.com/o/r.git main'
+quote_row "quote: a git user WITH a password is still masked (https://git:s3cr3t@host)" 'git push --force https://git:s3cr3t-value@example.invalid/o/r.git main' @R1@ 'git push --force https://git:<redacted>@example.invalid/o/r.git main'
+quote_row "quote: another user name without a password is still masked (ssh://deploy-token@host)" 'git push --force ssh://deploy-token@example.invalid/o/r.git main' @R1@ 'git push --force ssh://<redacted>@example.invalid/o/r.git main'
 quote_row "quote: a credential flag does not mask the destructive operand (rm -rf --password /)" 'rm -rf --password /' - 'rm -rf --password /'
 quote_row "quote: a credential flag does not mask a home operand (rm -rf --token ~)" 'rm -rf --token ~' - 'rm -rf --token ~'
 quote_row "quote: a credential flag does not mask the command word that follows (sudo --auth rm -rf /)" 'sudo --auth rm -rf /' - 'sudo --auth rm -rf /'

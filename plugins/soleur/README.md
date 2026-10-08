@@ -531,14 +531,14 @@ Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the 
 
 It is a seatbelt, not a boundary: an agent that can edit your settings can switch it off.
 
-The guard also asks, rather than allows, when it cannot read a command it was given: an oversized or unparsable command, `env -S`, or wrappers nested more than eight deep. You may meet such an ask on a command that is not destructive.
+The guard also asks, rather than allows, when it cannot read a command it was given: an oversized or unparsable command, a word longer than 4096 bytes, `env -S`, or wrappers nested more than eight deep (the last two only on a command the guard parses in full, which any command that spells `rm`, `destroy` or `push`, or uses a quote or `$`, is). You may meet such an ask on a command that is not destructive.
 
 `SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off. Set it in your own shell before you start the session; the
 harness reads it at startup, so a running session needs a restart. Any other value, including `0` and empty, leaves
 the guard on.
 
 It needs `bash`, `jq`, `perl` and `git`. Without `jq` or `perl` it scans with a narrower set of patterns and prints a
-notice on stderr, which a person may never see, and a command that scan misses runs without a prompt. It also needs `/dev/fd`
+notice on stderr, which a person may never see, and a command that scan misses runs without a prompt. That scan cannot see the branch or the quoting, so it also asks on a force push to any branch (a routine `git push --force-with-lease` of a feature branch) and on text that only names a destroy, such as a commit message. It also needs `/dev/fd`
 (standard on Linux and macOS); in a minimal sandbox without it the guard asks with a "could not parse" reason instead of denying.
 
 Headless and CI: under `claude -p` an ask blocks the call and the agent is told why (measured on Claude Code 2.1.291). There is

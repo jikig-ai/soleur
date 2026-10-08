@@ -43,7 +43,7 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-g
 ## T8 — Prefilter deletion proposed by the simplicity seat, deferred (Taste)
 
 - Panel (post-review, simplicity seat): delete the zero-spawn prefilter. Measured by that seat: about 25 ms saved on the roughly 8% of calls that skip, about 2 ms mean per Bash call, against two defects the review found in it (an unterminated `<(` skipped yet asked by the lexer path, and a first-key read that a decoy `"command"` field could steer).
-- Decision: keep and fix. The prefilter is D7 in the CPO-signed set; deleting it reopens D7. Both defects are fixed (exactly one `"command"` text; `<(`, `>(`, `<<` and case variants are boundaries) and the invariant is restated in ADR-274 D7 as "no skipped command can be a D1 command".
+- Decision: keep and fix. The prefilter is D7 in the CPO-signed set. D7 is not left alone either way: fixing the two defects widened its boundary set (exactly one `"command"` text, any `\u`, `<(`, `>(`, `<<`, the `Rm`/`RM`/`rM` variants, a 256 KiB cap), so D7 was already reopened by the fix and ADR-274 lists it for the re-sign-off decision. The reason to keep rather than delete is the behaviour change deletion makes: every Bash call would pay the lexer path (about 35 ms against about 7 ms) and the lexer path's extra asks (`env -S`, wrapper depth, parse failures) would apply to the roughly 8% of calls the prefilter skips today. Both defects are fixed and the invariant is restated in ADR-274 D7 as "no skipped command can be a D1 command".
 - Re-open when: the CPO next reviews the decision set, or a measurement shows the saving is lower than the maintenance cost. Recorded under ADR-274 follow-ups.
 
 ## T9 — Wrappers beyond D1 not added, documented as NOT DECIDED (Taste)
@@ -73,5 +73,6 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-g
 ## T13 — CPO two-round cap spent; post-review hardening disclosed, not re-signed (operator decision needed)
 
 - The CPO signed D1-D10 in two rounds (the cap is in the plan's CPO sign-off step, tasks 0.3.2). The review then changed the shipped hook beyond that text (ADR-274 `## Post-review hardening (2026-10-07)`). The plan's Decision Set text was not edited.
+- The plan says any change to D1-D9 after sign-off re-runs Phase 0.3. That rule was not followed: the two-round cap was spent first. No one has waived it; it is a recorded deviation (ADR-274 Status). The post-review changes to D1 (the `cd` rule), D2 (the non-coverage sentence), D4, D7 (the prefilter boundary set) and D8 (the premise) stand unsigned until the operator decides to take them back.
 - User-visible changes, in case the operator wants a re-sign-off: listed once, in ADR-274 `## Post-review hardening (2026-10-07)` (the numbered list at its end); not copied here. Everything else is internal.
 - Not changed: D1's families, D3's deny set, D5, D6's posture, and the scope of D8/D9 (D8's premise was corrected, see T12).

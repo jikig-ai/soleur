@@ -24,10 +24,15 @@ The product owner (CPO) signed the **plan's** Decision Set (`## Final W2 Decisio
 `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`) before any implementation commit, on
 revision `3a60924ebd6ff3b3482b9e8972c0d9b890c4f92e` and section SHA-256
 `39593c04ced72bc4a7e6a768408cef4baaa6b22d52069b4836566bb00385d81a`, both recorded in the body of PR #9653; the four conditions the
-sign-off attached are listed with their satisfaction under "CPO conditions". **This record is not that signed text.** D6-D10 and the
-Considered Options here were rewritten after the sign-off, and the shipped hook goes beyond D1-D10 in the places listed under
-"Post-review hardening" (the list a re-sign-off would decide on, with what the CPO has not seen). The plan's Decision Set itself was
-not edited.
+sign-off attached are listed with their satisfaction under "CPO conditions". **This record is not that signed text.** D1 (the `cd` rule
+narrowed to force and delete pushes), D2 (the longer non-coverage sentence), D4 (measured detail dropped, a caveat added) and D6-D10 differ
+from it, the Considered Options were rewritten, and the shipped hook goes beyond D1-D10 in the places listed under "Post-review hardening"
+(the list a re-sign-off would decide on, with what the CPO has not seen). The plan's Decision Set itself was not edited.
+
+**The plan's own re-run rule was not followed, and nobody has waived it.** The plan says any change to D1-D9 after sign-off, from any later
+phase, re-runs Phase 0.3. The CPO's cap of two rounds was spent (round 2 of 2) before the review found what changed D1, D7 and D8, so the
+re-run did not happen and the hash gate stays green only because the signed section was left as it was. This is a recorded deviation, not a
+decision: the operator may take the list under "Post-review hardening" back to the CPO (`decision-challenges.md` T13).
 
 ## Context
 
@@ -126,7 +131,7 @@ reference for the rule table; this section records the decisions and why.
   with more than 32 commands would otherwise ask on every call). The depth, 8x-input budget and 2 s alarm bounds stay. External
   binaries are `bash` (3.2 or later), `jq`, `perl`, `git` (read-only and local) and POSIX utilities. A zero-spawn prefilter skips the
   lexer only when every one of these holds, and each is a rule that fails toward the lexer path, never toward an allow: the tool call
-  is at most 256 KiB (a larger one asks `bound` before anything reads it); the envelope holds exactly one `"command"` text (a decoy
+  is at most 256 KiB (a larger one asks `bound` before the prefilter or any parser reads it); the envelope holds exactly one `"command"` text (a decoy
   or duplicate key goes to `jq`, which reads `.tool_input.command`); the envelope holds no backslash followed by `u` anywhere (a key
   spelled `"\u0063ommand"` is the key `command` to `jq` but not the text `"command"` to the count, so any `\u` goes to `jq`); and the
   command's raw JSON text has none of `rm` (also `Rm`, `RM`, `rM`), `destroy`, `push`, `eval` and none of backslash, single quote,
@@ -135,8 +140,9 @@ reference for the rule table; this section records the decisions and why.
   unparseable command spelled with none of the other characters, and the lexer path asks on it; `<(` and `>(` because an
   unterminated process substitution is skipped by a keyword-only test yet asks on the lexer path. No skipped command can be a D1
   command (every D1 command spells `rm`, `destroy` or `push` as a plain substring and every other spelling carries a boundary
-  character); the lexer path can still add a parse or wrapper-depth ask to a skipped command, so "every skipped class is allowed by
-  the lexer path" is NOT claimed. Every boundary character has a must-ask row. The hook header (MECHANISM AND ORDER) is the
+  character). Had the lexer path run on a skipped command it could add a parse, `unparsed-wrapper` or `wrapper-depth` ask (never a
+  destructive-command decision), so "every skipped class is allowed by the lexer path" is NOT claimed, and those three asks are
+  conditional on the prefilter: `env -S ls` and nine nested `env` plus `ls` are skipped and not asked. Every boundary character has a must-ask row. The hook header (MECHANISM AND ORDER) is the
   reference for the prefilter.
 - **D8 — Hosted sessions.** The plugin's `hooks.json` loads into hosted sessions even with `settingSources: []` (ADR-093's
   2026-09-30 amendment establishes that; its 2026-10-07 amendment records this guard's override), so
@@ -236,9 +242,18 @@ ask-as-block.
 
 ## Residuals (as shipped; none is hidden)
 
-- **A raw-scan miss with `jq` missing is an allow.** The one implicit allow in the hook's own failure paths (a miss in the decoded scan with
+- **A raw-scan miss with `jq` missing is an allow.** An implicit allow in the hook's own failure paths (a miss in the decoded scan with
   `perl` missing is the same), stated and tested. It has the shape of the raw-scan-miss residual ADR-165 accepted for its retired
   `.openhands` row.
+- **A hook killed at the harness's 10 s timeout is an implicit allow too.** The caps (256 KiB envelope, 4096 bytes a word, 128 path
+  components, 2000 records, 20000 words, 16 KiB a degraded segment and 64 KiB of them in all) and the 6 s deadline exist to keep every
+  path inside it, and they hold on every shape the reviews measured. They do not hold by construction: a loaded machine can push a
+  path of several seconds past the deadline into a `bound` ask (never an allow), and a stall inside one bash expansion is not
+  interruptible. Round 2 found three shapes that ran past 10 s and closed them (a long word, a comment-only command of tens of
+  thousands of lines, two near-cap degraded segments).
+- **A chdir wrapper around a shell or `eval` makes the directory unresolved after it** (`env -C /tmp bash -c 'rm -rf ./x'` asks): the
+  lexer makes the inner string a record of its own, and the guard cannot place that record in the wrapper's directory. An over-ask,
+  never an under-ask.
 - **The shared lexer lexes identical `bash -c` / `eval` strings once**, so the working-directory simulation cannot tell two identical
   inner strings under different `cd`s apart.
 - **A `cd` inside a subshell or `$(…)` is sticky** for the later commands: it over-asks, never under-asks.
@@ -277,28 +292,37 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
 - **New ask classes, each with its own rule id.** `unparsed-wrapper` (`env -S`, `--split-string` and its abbreviations: the string it
   splits is not analysed); `wrapper-depth` (more than 8 nested wrappers or `--` separators: the two share one counter, so nine `--`
   words ask even with no wrapper once the command reaches the lexer path); `bound` (a command too large to check: a tool call over
-  256 KiB, checked before anything reads it; more than 2000 simple commands; more than 20000 words; a target path of more than 128
-  components; a segment over 64 KiB in a degraded scan; or the 6 second `DEADLINE_S` wall clock reached; what was read before the
+  256 KiB, checked before the prefilter or any parser reads it; more than 2000 simple commands; more than 20000 words; a single word
+  over 4096 bytes (`MAX_WORD_BYTES`: bash's expansions on one word are quadratic in its length, and real traffic has no word over
+  2007 bytes in 11,176 lexed commands); a target path of more than 128 components; a segment over 16 KiB, or more than 64 KiB of
+  segments in all, in a degraded scan; or the 6 second `DEADLINE_S` wall clock reached; what was read before the
   limit is still judged, so a deny already found wins, and an ask-class match keeps its own rule id and reason with a sentence
   saying the rest was not checked); `lexer-empty` (the lexer returned no command for text that names something the guard decides on:
   a whole-word `rm`, `destroy`, `push`, `terraform`, `tofu`, `git` or `eval` in any case, also after quote, backslash and backtick
-  removal so that `r""m` is read; full-line comments are skipped; a blank or comment-only command, and a bare redirect to a file that
-  merely contains one, such as `> terraform.log`, is allowed). `unparsed-wrapper` and `wrapper-depth` fire only on a command the
+  removal so that `r""m` is read; both passes read the last path component of a token, so `/bin/rm` counts and `git/err` does not;
+  full-line comments are skipped; a blank or comment-only command, and a bare redirect to a file that merely contains one, quoted or
+  not, such as `> terraform.log` or `> "docs/confirm.md"`, is allowed; a command that is only a heredoc or here-string asks). `unparsed-wrapper` and `wrapper-depth` fire only on a command the
   prefilter lets reach the lexer path (D7), so `env -S ls` is not asked.
 - **Degraded scans.** The raw (`jq` missing) and decoded (`perl` missing) scans read a run of blanks between the words of
-  `terraform`, `tofu` and `git` commands as one gap, and ask `bound` at a segment over 64 KiB or at the deadline.
+  `terraform`, `tofu` and `git` commands as one gap, and ask `bound` at a segment over 16 KiB, at 64 KiB of segments in all, or at the
+  deadline. The narrower scan cannot see the branch or the quoting, so it asks on every force push (a routine feature-branch
+  `git push --force-with-lease` too) and on text that only names a destroy (a commit message): the plugin README says so.
 - **Reasons.** An ask opens with a sentence for the person at the prompt ("The guard paused this command and is asking you. It has
   not run yet and runs only if you approve."), then the rule id, a one-sentence lead and the quoted command, then the agent's
   instructions under "If you are the agent: This command was NOT run."; a deny opens "This command was NOT run." and also goes in
   `systemMessage`. The agent's tail follows the cause: a matched destructive command (`infra-destroy`, `default-branch-force-push`,
   `recursive-delete-home`, `recursive-delete-workdir`, `unresolved-cd-before-destructive`) says stop, do not retry, do not
   rephrase; a lexer parse failure (`command-not-parsed`, exit 2) and `lexer-empty` say fix the quoting or heredoc and send it again;
-  a lexer that gave out (depth, budget, alarm, crash) and `bound` say split it; `envelope-unreadable` says the fault is in the tool
-  call, so stop and tell the person; `unparsed-wrapper` and `wrapper-depth` say write the command out so the guard can check it.
+  a lexer that gave out (depth, budget, alarm, crash) and `bound` say split it; a lexer that produced no result or malformed output
+  (an environment fault: every piece of a split command fails the same way) and `envelope-unreadable` say stop and tell the person;
+  `unparsed-wrapper` and `wrapper-depth` say write the command out so the guard can check it; `unresolved-cd-before-destructive` says
+  to put a literal directory in the `cd`, not "do not rephrase".
   Every ask and deny carries the kill-switch route and the issues URL. The quoted command has credentials masked BEFORE the
   200-character cut: `NAME=value`, `--name=value` and `-var name=value` where the name holds key, tok, secret, pass, pw, cred, auth
   or bearer; the word after `--token`, `--password`, `--passwd`, `--secret`, `--api-key`, `--auth` or `--bearer`; the text after
-  `Authorization:` or after the word `Bearer`; URL userinfo. That is a coverage choice, not a boundary. When `jq` cannot build the output the
+  `Authorization:` or after the word `Bearer`; URL userinfo (not the `git@` of an ssh remote); never a command word or a destructive
+  operand (`rm -rf --password /` keeps the `/`). That is a coverage choice, not a boundary: a name that merely contains a cue
+  (`AUTHOR=`, `-var key_name=`) is masked too, and the person reads the original command at the Bash prompt. When `jq` cannot build the output the
   decision and the rule id are kept (a deny stays a deny).
 - **Prefilter.** The rules are in D7: exactly one `"command"` text, any `\u` goes to `jq`, the 256 KiB cap, and `<(`, `>(`, `<<` and
   the case variants `Rm`, `RM`, `rM` as boundaries. The raw `tool_name` must still be exactly `Bash`.
@@ -306,6 +330,13 @@ differs from the signed text: the plan addendum and `decision-challenges.md` (T1
   containing a space does not break it; the census derives the file name through the `bash "..."` wrapper. Four of the ten command
   strings in `hooks.json` were already written that way (`codex-session-start`, `devin-session-start`, `compaction-state` twice);
   the unquoted ones that remain are a plugin-wide follow-up.
+- **Fix round 2, final batch (A-I).** A: a 4096-byte word cap at the frame reader. B: `lexer-empty` reads the text once, by word and by
+  basename. C: the degraded scans capped at 16 KiB a segment and 64 KiB in all, and the perl-less quote gather stopped at the 200
+  shown characters. D: the two wide `git push` rows shrunk to 5000 refs. E: the agent's tail for a lexer fault and an unresolved `cd`.
+  F: the judge extension counted from the trip, sudo long options read by unique prefix, an absolute wrapper chdir clearing an earlier
+  unresolved `cd`, a chdir wrapper around a shell, the masking and the marker byte. G: the bash-4 gate widened, the limits named
+  (`MAX_WRAP`, `QUOTE_MAX`, `MAX_PATH_COMPONENTS`). H: the test-design seat's survivors as rows, the verdict-owning wrappers driven with a
+  bad input, a narrowed run refused in CI. I: this section. The verification pass after it is recorded in the PR body.
 - **Fix rounds.** The commits whose subject ends `(fix round 1, R<n>)` and `(fix round 2, T<n>)` carry the rest. Hook: R1 path
   resolution bounded (one subshell per directory, a cache, a 128-component cap); R2 command-name case fold without a process; R3 a
   read-time bound trip still judges what was read; R4 the bound note appended to a matched rule's reason; R5 the degraded scans and the
