@@ -591,6 +591,12 @@ assert_grep "self-heal recursion guard (loader sets the env)" 'CRON_EGRESS_FROM_
 assert_grep "concurrent runs serialized via flock" 'flock -w 120' "$RESOLVER"
 assert_grep "BOTH drop prefixes counted toward the Sentry event" "egress-.blocked.dns-exfil.: " "$RESOLVER"
 assert_grep "single atomic nft -f batch apply" 'nft -f -' "$RESOLVER"
+assert_grep "tick budget: env-overridable constant (default 90 < TimeoutStartSec 120)" 'RESOLVE_TICK_BUDGET_SECS="\$\{RESOLVE_TICK_BUDGET_SECS:-90\}"' "$RESOLVER"
+assert_grep "tick budget: loop gate reads elapsed SECONDS before each getent" 'SECONDS >= RESOLVE_TICK_BUDGET_SECS' "$RESOLVER"
+assert_grep "tick budget: starved names count FAILED without touching the try-and-fail counter" 'DNS_SKIPPED=\$\(\(DNS_SKIPPED \+ 1\)\)' "$RESOLVER"
+assert_grep "tick budget: container-view exec shrinks to the remaining budget" 'CV_CAP=\$\(\( RESOLVE_TICK_BUDGET_SECS - SECONDS' "$RESOLVER"
+assert_grep "tick budget: dedupe marker cleared on a within-budget tick" 'rm -f "\$FAILCOUNT_DIR/\.budget-skip"' "$RESOLVER"
+assert_grep "tick budget: dedicated Sentry op for the starved-tick class" 'resolve_tick_budget' "$RESOLVER"
 assert_grep "Sentry Crons ok check-in (dead-timer detection)" 'sentry_checkin ok' "$RESOLVER"
 assert_grep "Sentry Crons error check-in on failure" 'sentry_checkin error' "$RESOLVER"
 
@@ -1613,6 +1619,53 @@ assert_grep "post-apply assert: probe output is capped (head -c N) and the produ
 # answers from a set file via python3 `ipaddress` (independent oracle), exactly like the real
 # interval set: found when the address is inside any listed prefix, rc 1 otherwise (including a
 # missing set). Real nft semantics were verified in a user namespace on nftables 1.1.7.
+echo "-- resolver DNS tick budget behavioral (mass-flap boundedness) --"
+# The 2026-10-08 incident this bounds: ~100 productionresultsa*
+# CNAMEs flapping at Traffic Manager each burn the 10s per-host cap in a
+# serial loop -> the tick exceeds TimeoutStartSec=120 and systemd SIGKILLs it
+# BEFORE the nft -f apply (40+ min of zero completions on both web hosts).
+# Here one fast host + fourteen 8s-slow hosts run under
+# RESOLVE_TICK_BUDGET_SECS=20: without the gate this takes ~115s; with it the
+# loop stops at ~25s and the starved names ride the additive-only path.
+RB="$SUITE_SCRATCH/resolve-budget"
+assert_fixture_dir "$RB"
+mkdir -p "$RB/stubs" "$RB/fc" "$RB/seen" "$RB/etc"
+printf '%s\n' fast.example slow01.example slow02.example slow03.example slow04.example \
+  slow05.example slow06.example slow07.example slow08.example slow09.example \
+  slow10.example slow11.example slow12.example slow13.example slow14.example > "$RB/etc/allowlist.txt"
+: > "$RB/etc/cidrs.txt"
+RB_CALLS="$RB/calls"; : > "$RB_CALLS"
+rbmk() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$RB/stubs/$1"; chmod +x "$RB/stubs/$1"; }
+rbmk getent 'case "$2" in *fast*) printf "93.184.216.34\n" ;; *) sleep 8 ;; esac'
+rbmk docker 'exit 0'   # ps prints nothing -> container absent; probes self-skip
+rbmk nft 'if [ "$1" = "-f" ]; then cat >/dev/null; exit 0; fi
+printf "%s\n" "  jump SOLEUR-EGRESS" "  ct state established,related accept" \
+  "  comment \"soleur-egress: default drop\"" "  comment \"soleur-egress: default drop log\""'
+rbmk systemctl 'exit 0'
+rbmk journalctl 'exit 0'
+rbmk logger 'exit 0'
+rbmk curl 'echo "curl $*" >> "$RB_CALLS"; exit 0'
+rbmk doppler 'exit 1'
+RB_T0="$(date +%s)"
+RB_OUT="$(env PATH="$RB/stubs:$PATH" \
+  ALLOWLIST_FILE="$RB/etc/allowlist.txt" CIDR_FILE="$RB/etc/cidrs.txt" \
+  FAILCOUNT_DIR="$RB/fc" SEEN_DIR="$RB/seen" \
+  CRON_EGRESS_LOCK_FILE="$RB/lock" LOADER=/bin/true \
+  RESOLVE_TICK_BUDGET_SECS=20 \
+  SENTRY_INGEST_DOMAIN=o0.ingest.us.sentry.io SENTRY_PROJECT_ID=42 \
+  SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \
+  RB_CALLS="$RB_CALLS" \
+  timeout 120 bash "$RESOLVER" 2>&1)"; RB_RC=$?
+RB_ELAPSED=$(( $(date +%s) - RB_T0 ))
+if [[ "$RB_RC" -eq 0 ]]; then PASS=$((PASS + 1)); echo "  PASS: flap tick completes (rc 0)"; else FAIL=$((FAIL + 1)); echo "  FAIL: flap tick rc=$RB_RC"; fi
+if [[ "$RB_ELAPSED" -lt 60 ]]; then PASS=$((PASS + 1)); echo "  PASS: tick bounded (${RB_ELAPSED}s < 60s; unbounded loop would be ~115s)"; else FAIL=$((FAIL + 1)); echo "  FAIL: tick ran ${RB_ELAPSED}s — budget gate ineffective"; fi
+if grep -qF "DNS tick budget" <<<"$RB_OUT"; then PASS=$((PASS + 1)); echo "  PASS: budget-exhaustion WARN emitted"; else FAIL=$((FAIL + 1)); echo "  FAIL: no budget WARN in output"; fi
+if grep -qF "ADDITIVE-ONLY" <<<"$RB_OUT"; then PASS=$((PASS + 1)); echo "  PASS: starved hosts ride additive-only"; else FAIL=$((FAIL + 1)); echo "  FAIL: no additive-only line in output"; fi
+if [[ -e "$RB/fc/.budget-skip" ]]; then PASS=$((PASS + 1)); echo "  PASS: dedupe marker written after the event POSTed"; else FAIL=$((FAIL + 1)); echo "  FAIL: .budget-skip marker absent (event not sent or marker ordering broken)"; fi
+if grep -c "^curl" "$RB_CALLS" | grep -qE '^[1-9]'; then PASS=$((PASS + 1)); echo "  PASS: starved-tick Sentry event POSTed via curl"; else FAIL=$((FAIL + 1)); echo "  FAIL: no curl POST recorded"; fi
+if [[ ! -e "$RB/fc/slow14.example" ]]; then PASS=$((PASS + 1)); echo "  PASS: a starved host carries no try-and-fail counter"; else FAIL=$((FAIL + 1)); echo "  FAIL: slow14.example failcount file exists — skipped hosts must not escalate"; fi
+if [[ "$(cat "$RB/fc/slow01.example" 2>/dev/null)" == "1" ]]; then PASS=$((PASS + 1)); echo "  PASS: an attempted-and-failed host carries failcount=1"; else FAIL=$((FAIL + 1)); echo "  FAIL: slow01.example failcount missing/wrong (got: $(cat "$RB/fc/slow01.example" 2>/dev/null || echo absent))"; fi
+
 GA_ROOT="$(mktemp -d)"
 assert_fixture_dir "$GA_ROOT"
 ga_setup() {   # ga_setup <name> -> prints the scenario dir; creates shims
@@ -2012,8 +2065,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 338 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 338. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 352 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 352. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
