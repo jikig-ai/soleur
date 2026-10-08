@@ -30,7 +30,8 @@ invariant:
       about exactly this shape.
   Rules C and D are documented at their definitions below. Rule E (#9597) is the
   argv-credential ratchet: no curl command carries a credential header (the six names in
-  `E_CREDENTIAL_HEADERS`; any `Authorization:` scheme) in its own argument list, in tracked
+  `E_CREDENTIAL_HEADERS`; any `Authorization:` scheme) or a basic-auth pair (`-u`/`--user`) in its
+  own argument list, in tracked
   shell, workflow/composite-action YAML or cloud-init YAML (see the Rule E block for the
   members, safe forms, scope and blind spots), with its own `path<TAB>site-count` baseline
   compared by equality in the repo-wide run.
@@ -1121,8 +1122,8 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 #     NAME, never a scheme list: ANY `Authorization:` value (Bearer, Bot, Basic, Digest, Token,
 #     `${SCHEME}`), plus the other five names listed in `E_CREDENTIAL_HEADERS` (six in all;
 #     that tuple is the source of truth, this prose is not), in any case. `apikey:` keeps its
-#     own semantics (below). `-u`/`--user` detection is NOT here: it is deferred to the slice
-#     that converts scripts/betterstack-query.sh, its only real site. NAMING: the locals
+#     own semantics (below). Basic auth (`-u`/`--user`) is the USER ARM (below), a second
+#     vocabulary read at the same sites. NAMING: the locals
 #     `bearer_*` / `f["bearer"]` / `_e_bearer_arrays` predate the six-name vocabulary and mean
 #     "any E_CREDENTIAL header", not "an Authorization: Bearer one"; the suite seds two of them
 #     (`bearer_in_call`, `bearer_ctx`), so they are not renamed;
@@ -1143,6 +1144,28 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # NOT flagged: `-H @-`, `--header @<(...)`, `--config -`, `-K -`, `--config <(...)`,
 # a credential inside a trailing comment, printed command text (`echo`/`printf` of a
 # curl command: curl is not in command position) and a YAML step whose `shell:` is not bash.
+#
+# USER ARM (#9597 S2, decision D5). `-u USER:PASSWORD` / `--user USER:PASSWORD` is a credential
+# pair on the same /proc/<pid>/cmdline, so it is judged exactly like a header: two constants,
+# `E_USER_FLAG` (the value is the NEXT word; covers a bundle ending in the `u`, `-sSu`) and
+# `E_USER_ATTACHED` (the value is glued: `-uU:P`, `--user=U:P`), set one flag, `f["user"]`, in
+# `_e_scan`, which the call-level check, the wrapper-site check (a `-u` handed to a file-local
+# wrapper) and the second-credential rule (`-u` plus an argv `apikey:` reports both reasons) read.
+# Array-held `-u` flows through `_inline_arrays` like any other word. The match is case-sensitive
+# and whole-word: `-U`/`--proxy-user` (a PROXY credential, pinned as a gap by an xfail fixture),
+# `--url` and `--user-agent` are not read, and only the curl invocation segment is scanned, so
+# `sort -u`, `docker run --user`, `git push -u` and `sudo -u` are not. The pinned finding grammar
+# (`credential header on curl argv`) is UNCHANGED; the basic-auth wording is in the reason clause.
+# The safe form is the stdin config: `--config - < <(printf 'user = "%s:%s"\n' "$U" "$P")` behind
+# a guard that refuses `"`, a backslash and a newline (measured on curl 8.22 over bytes 0x01-0x7f:
+# those are the only three that change how a quoted `user = "..."` value parses).
+# Census effect when the arm landed: exactly three curl sites, scripts/betterstack-query.sh
+# (converted in the same slice, never baselined) and two R2 SigV4 uploads in apps/cla-evidence
+# (`infra/bootstrap.sh`, `scripts/r2-conditional-put.sh`: `--aws-sigv4 ... --user "$ID:$SECRET"`).
+# The two cla-evidence sites are NOT converted here: that upload path is the legal-evidence
+# pipeline with its own suites and owner, outside the S2 file list, and a defect there would be a
+# legal-record regression rather than an ops one. They are baselined in the S2 diff (path and
+# count, ceiling row, dated tracking issue); the +2 is census widening, not a regression.
 #
 # SCOPE (decision D1 of the argv-bearer sweep, tier 3). `rule_e_files()` is tracked `*.sh`
 # PLUS `.github/**/*.yml|*.yaml` and the direct `.github/*.yml|*.yaml` spellings (workflows,
@@ -1165,7 +1188,14 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # KNOWN BLIND SPOTS (census-only; a reviewer, not this lint, judges them): message BODIES
 # that carry a secret (`-d` operands; the bsky password JSON moved to stdin in this sweep,
 # the generic point stands); a secret in a URL (heartbeat
-# path secrets, `x-access-token:` userinfo in git remotes); `doppler --token`; `jq --arg`
+# path secrets, `x-access-token:` userinfo in git remotes; HEARTBEAT-URL DECISION, S2/D9:
+# a URL path secret is not decidable from syntax, so it is documented, not detected; a pattern
+# census over `curl ... $*HEARTBEAT*|*PING*|*CHECKIN*` and the heartbeat variable names found
+# the real carriers only in host files under apps/web-platform/infra/ -- `inngest-bootstrap.sh`
+# (a heredoc unit), `web-git-data-probe.sh` and `luks-monitor.sh` -- where a conversion fires the
+# production apply, so they are an S4/S5-class change with operator notice and are tracked there;
+# the other hits of the pattern are the `$HBODY` response-body variable of the Hetzner helpers,
+# not a heartbeat; a later conversion is `url = "..."` on the stdin config behind a shape guard); `doppler --token`; `jq --arg`
 # (a value on jq's argv); `openssl dgst -hmac "$KEY"` (about 30 sites, no stdin form);
 # header VALUES held in `env:` and passed as `-H "$H"` (the assignment is not in the scanned
 # body); `env -i`; `wget`; `gh api -H`; `-K file` configs written with the default umask;
@@ -1180,8 +1210,9 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 #
 # VOCABULARY GAPS (measured E=0 on a synthesized one-line `curl ... -H "<name>: $TOK" "$URL"`;
 # NOT added to the vocabulary because the baseline impact of adding them is unmeasured; Rule D
-# still classifies some of them): `--oauth2-bearer` and `-u`/`--user` operands (Rule D's
-# CURL_CRED_FLAGS lists both, Rule E does not; deferred, see VOCABULARY), and the header names
+# still classifies some of them): the `--oauth2-bearer` operand (Rule D's CURL_CRED_FLAGS lists
+# it, Rule E does not; no measured site), `-U`/`--proxy-user` (a proxy credential; pinned by an
+# xfail fixture), and the header names
 # `x-hub-signature-256`, `X-Auth-Token`, `X-Auth-Key`, `PRIVATE-TOKEN` (Rule D's
 # CURL_AUTH_HEADER lists `Private-Token`, Rule E does not), `Doppler-Token`,
 # `CF-Access-Jwt-Assertion` and `x-amz-security-token`.
@@ -1196,9 +1227,11 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 #     while the same two commands on separate lines are each judged;
 #   * curl inside `<(...)` or `>(...)` (`diff <(curl ...)`, `tee >(curl ...)`); `$(...)` is read;
 #   * command-word spellings that are not the literal word `curl` (or an absolute path to
-#     it): `\curl`, `"curl"`, `$CURL_BIN`, `"$CURL_BIN"`. Two live `x-api-key` argv sites hide
-#     behind the last one (scripts/compound-promote.sh, scripts/learning-retrieval-bench.sh),
-#     tracked under #7898's CURL_BIN scope gap;
+#     it): `\curl`, `"curl"`, `$CURL_BIN`, `"$CURL_BIN"`. The two live `x-api-key` argv sites that hid
+#     behind the last one (scripts/compound-promote.sh, scripts/learning-retrieval-bench.sh) are
+#     converted to the stdin config in S2 (#9597), so no live member of this spelling remains and
+#     the detector (a command-word widening) is not built; the blind spot stays and is tracked
+#     under #7898's CURL_BIN scope gap;
 #   * launcher prefixes that take an option ARGUMENT or run curl indirectly: `sudo -n`,
 #     `sudo -u U`, `timeout -s SIG N`, `env -u NAME`, `command -p`, `stdbuf -oL`, `xargs`,
 #     `ssh host`, `bash -c '...'`, `eval "..."`, `docker run IMG` and a retry wrapper (a bare
@@ -1276,6 +1309,13 @@ E_APIKEY = re.compile(r"^\s*apikey\s*:", re.I)
 # `-H"..."`: the value is glued to the flag. A flag whose value is the NEXT word is E_HDR_FLAG.
 E_HDR_ATTACHED = re.compile(r"^-H(?=.)")
 E_HDR_FLAG = re.compile(r"^(?:--header|-[A-Za-z]*H)$")
+# Basic auth (#9597 S2): `-u USER:PASSWORD` / `--user USER:PASSWORD`. A flag whose value is the NEXT word is
+# E_USER_FLAG (covers a short-flag bundle that ends in the `u`: `-sSu`, `-fu`); a value glued to the flag is
+# E_USER_ATTACHED (`-uU:P`, `--user=U:P`). Both are CASE-SENSITIVE and whole-word on purpose: `-U` /
+# `--proxy-user` is a different (proxy) credential, `--url` and `--user-agent` are different flags. One
+# constant per line so the suite can delete each on its own.
+E_USER_FLAG = re.compile(r"^(?:--user|-[A-Za-z]*u)$")
+E_USER_ATTACHED = re.compile(r"^(?:-u(?=.)|--user=)")
 E_VERBOSE = re.compile(r"^(?:--verbose|--trace[A-Za-z-]*|-[A-Za-z]*v[A-Za-z]*)$")
 E_STDIN_BODY = re.compile(
     r"^(?:-d|--data|--data-binary|--data-raw|--data-ascii|--data-urlencode|--json|-F|--form|--form-string)$"
@@ -1949,7 +1989,7 @@ def _e_scan(args: list[str], held_re, bearer_arrays: set[str]) -> dict:
     """Classify the words after `curl` (or after a wrapper name): what travels on argv and
     which stdin-form hazards the words carry."""
     f = {"bearer": False, "apikey": False, "cfg": False, "hdr_stdin": False,
-         "verbose": False, "body": False, "heredoc": False}
+         "verbose": False, "body": False, "heredoc": False, "user": False}
     i = 0
     while i < len(args):
         w = args[i]
@@ -1968,6 +2008,10 @@ def _e_scan(args: list[str], held_re, bearer_arrays: set[str]) -> dict:
                 f["apikey"] = True
             i = after
             continue
+        if E_USER_ATTACHED.match(w):
+            f["user"] = True
+        elif E_USER_FLAG.match(w):
+            f["user"] = True
         if w in ("-K", "--config") and nxt == "-":
             f["cfg"] = True
         elif w == "-K-":
@@ -1990,6 +2034,12 @@ def _e_scan(args: list[str], held_re, bearer_arrays: set[str]) -> dict:
 # `<path>:<LINE>: credential header on curl argv<where> -- <reasons>`. Change the wording
 # only together with E_MSG_RE in scripts/lint-shell-trace-credential-refusal.test.sh.
 E_FINDING = "credential header on curl argv"
+# The -u/--user reasons keep the pinned finding phrase and carry the wording in the reason clause.
+E_USER_REASON = ("basic-auth credentials (`-u`/`--user USER:PASSWORD`) are an argument of {what}, "
+                 "readable by every local user in /proc/<pid>/cmdline and `ps`")
+E_USER_REMEDY = ("  Basic auth: put the pair on the stdin config as a `user` key, behind a guard that refuses `\"`, a "
+                 "backslash and a newline first (they break the config line): "
+                 "`curl … --config - {dest} < <(printf 'user = \"%s:%s\"\\n' \"$USER_NAME\" \"$PASSWORD\")`\n")
 # Derived from the vocabulary tuple (one source of truth); the names print as the tuple spells them.
 E_HEADER_NAMES = ", ".join(f"`{h}:`" for h in E_CREDENTIAL_HEADERS)
 
@@ -2034,6 +2084,7 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
         f = _e_scan(args, held_re, bearer_arrays)
         bearer_argv, apikey, cfg_stdin, hdr_stdin = f["bearer"], f["apikey"], f["cfg"], f["hdr_stdin"]
         verbose, body, heredoc = f["verbose"], f["body"], f["heredoc"]
+        user_argv = f["user"]
         # A heredoc/here-string on the PRECEDING pipeline stage feeds the same stdin.
         if segs[at][1].startswith("|") and at > 0:
             if any(E_HEREDOC.match(w) for w in _e_words(segs[at - 1][0])):
@@ -2044,7 +2095,9 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
         if bearer_argv:
             reasons.append(f"a credential header ({E_HEADER_NAMES}) is an argument of this curl, "
                            "readable by every local user in /proc/<pid>/cmdline and `ps`")
-        if apikey and bearer_in_call:
+        if user_argv:
+            reasons.append(E_USER_REASON.format(what="this curl"))
+        if apikey and (bearer_in_call or user_argv):
             reasons.append("a second credential header (`apikey:`) travels on argv beside the credential")
         if cfg_stdin and verbose:
             reasons.append("config-stdin hazard: -v/--verbose/--trace*/-D - prints the config's "
@@ -2058,8 +2111,10 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
         if reasons:
             out.append(
                 f"{rel}:{line_of(lineno)}: {E_FINDING}{where} -- " + "; ".join(reasons) + ".\n"
-                "  Feed the header on stdin instead (any header name above, any scheme): "
-                "`curl … --config - \"$URL\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n"
+                + ("" if user_argv and len(reasons) == 1 else
+                   "  Feed the header on stdin instead (any header name above, any scheme): "
+                   "`curl … --config - \"$URL\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n")
+                + (E_USER_REMEDY.format(dest='"$URL"') if user_argv else "")
             )
     # Wrapper CALL sites. The bearer/apikey judgement reads the arguments the author wrote
     # at THIS call; the stdin hazards read the spliced words, and count only when the call
@@ -2067,6 +2122,7 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
     for lineno, callee, call_words, results in _wrapper_sites_cached(tuple(lines)):
         cf = _e_scan(call_words, held_re, bearer_arrays) if any(r["fwd"] for r in results) else {}
         bearer_argv, apikey = cf.get("bearer", False), cf.get("apikey", False)
+        user_argv = cf.get("user", False)
         verbose = body = heredoc = bearer_ctx = False
         for r in results:
             sf = _e_scan(r["words"], held_re, bearer_arrays)
@@ -2083,7 +2139,9 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
             reasons.append(f"a credential header ({E_HEADER_NAMES}) is an argument of this call to `{callee}`, "
                            "which hands it to curl on argv, readable by every local user in "
                            "/proc/<pid>/cmdline and `ps`")
-        if apikey and (bearer_argv or bearer_ctx):
+        if user_argv:
+            reasons.append(E_USER_REASON.format(what=f"this call to `{callee}`, which hands it to curl on argv"))
+        if apikey and (bearer_argv or user_argv or bearer_ctx):
             reasons.append("a second credential header (`apikey:`) travels on argv beside the credential")
         if verbose:
             reasons.append("config-stdin hazard: -v/--verbose/--trace*/-D - prints the config's "
@@ -2097,8 +2155,10 @@ def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> l
         if reasons:
             out.append(
                 f"{rel}:{line_of(lineno)}: {E_FINDING}{where} -- " + "; ".join(reasons) + ".\n"
-                "  Feed the header on stdin instead, inside the wrapper (any header name above, any scheme): "
-                "`curl … --config - \"$@\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n"
+                + ("" if user_argv and len(reasons) == 1 else
+                   "  Feed the header on stdin instead, inside the wrapper (any header name above, any scheme): "
+                   "`curl … --config - \"$@\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n")
+                + (E_USER_REMEDY.format(dest='"$@"') if user_argv else "")
             )
     return out
 

@@ -906,6 +906,46 @@ e_row 'Rule D/E: flags-first flags in a plain `local curl_args=(` array pass (no
 # to cookies or vendor headers must be a visible edit to this row, not a silent drift.
 e_row 'Rule E xfail: -b "session=$T", -H "Cookie: s=$T" and x-gitlab-token are NOT in the vocabulary (pinned blind spot)' "$LINT" "$FIX/outofscope-blindspot-cookie-custom-header.sh" 0
 
+# --- Rule E -u/--user arm (#9597 S2, decision D5) ---------------------------------------------------
+# Basic-auth `-u USER:PASSWORD` / `--user USER:PASSWORD` is a credential on curl's argv exactly like a
+# header. Two constants (E_USER_FLAG: the value is the NEXT word; E_USER_ATTACHED: the value is glued)
+# feed one `f["user"]` flag in `_e_scan`, read at the call-level check, the wrapper-site check and the
+# second-credential rule. Every violation fixture opens with a COMPLIANT first member (the pair on the
+# stdin config), so a check satisfied by one compliant call, or one that stops at the first curl, reads
+# the file clean. The pinned finding grammar is unchanged: the -u wording is in the reason clause.
+_u_fx="$(find "$FIX" -maxdepth 1 -name 'violation-argv-user-*.sh' | wc -l)"
+if [ "$_u_fx" -lt 9 ]; then
+  fail "Rule E -u arm: only $_u_fx violation-argv-user-*.sh fixtures copied, anti-vacuity floor is 9"
+else
+  pass "Rule E -u arm: $_u_fx violation-argv-user-*.sh fixtures present (anti-vacuity floor 9)"
+fi
+e_row 'Rule E -u: a literal `-u "U:P"` after a compliant first member is reported' "$LINT" "$FIX/violation-argv-user-literal.sh" 1
+e_row 'Rule E -u: the value glued to the flag, quoted (`-u"U:P"`) and bare (`-uU:P`): one message each' "$LINT" "$FIX/violation-argv-user-attached.sh" 2
+e_row 'Rule E -u: the long spelling `--user "U:P"` is reported' "$LINT" "$FIX/violation-argv-user-long.sh" 1
+e_row 'Rule E -u: the long spelling with `=` (`--user="U:P"`) is reported' "$LINT" "$FIX/violation-argv-user-long-eq.sh" 1
+e_row 'Rule E -u: `-u` bundled behind other short flags (`-sSu "U:P"`, `-fu "U:P"`): one message each' "$LINT" "$FIX/violation-argv-user-bundle.sh" 2
+e_row 'Rule E -u: `-u` in a plain `local curl_args=(` array with a conditional += append is reported' "$LINT" "$FIX/violation-argv-user-array.sh" 1
+e_row 'Rule E -u: `-u` passed to a file-local wrapper (defined AFTER its use) is reported [wrapper-site read site]' "$LINT" "$FIX/violation-argv-user-wrapper.sh" 1
+e_row 'Rule E -u: a multi-line `--aws-sigv4 ... \` command with `--user "ID:SECRET"` on a continuation line (the cla-evidence shape) is reported' "$LINT" "$FIX/violation-argv-user-multiline-sigv4.sh" 1
+# Second-credential: ONE finding, BOTH reasons. The count alone cannot tell the `-u` reason from the
+# second-credential reason, so the row counts each reason's wording (here-strings/counts, never a pipe into grep -q).
+e_row 'Rule E -u: `-u` beside an argv `apikey:` is reported (one finding)' "$LINT" "$FIX/violation-argv-user-second-credential.sh" 1
+_u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+_u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+if [ "$_u_basic" = "1" ] && [ "$_u_second" = "1" ]; then
+  pass "Rule E -u: the -u + apikey: finding carries BOTH reasons (basic-auth wording x$_u_basic, second-credential wording x$_u_second)"
+else
+  fail "Rule E -u: the -u + apikey: finding should carry both reasons once each, got basic-auth=$_u_basic second-credential=$_u_second"
+fi
+unset _u_basic _u_second
+# MUST-PASS rows (none of them is the canonical): the safe spellings of the same pair, and the flags that
+# only LOOK like it.
+e_row 'Rule E -u: `--config -` with a `user = "..."` key on a process substitution (bare and inside $(...)) passes' "$LINT" "$FIX/compliant-stdin-user-config.sh" 0
+e_row 'Rule E -u: `-K -` and `--config <(...)` carrying a `user` key pass' "$LINT" "$FIX/compliant-stdin-user-dash-k.sh" 0
+e_row 'Rule E -u: `sort -u`, `docker run --user`, `git push -u`, `id -u`, curl `--url` / `--user-agent` / `-A`, and `sort -u | curl ...` are NOT read' "$LINT" "$FIX/outofscope-nonyurl-user-flags.sh" 0
+# PINNED GAP (xfail): `-U` / `--proxy-user` is a PROXY credential, a different flag; the match is case-sensitive.
+e_row 'Rule E -u xfail: `-U` / `--proxy-user` (a proxy credential) is NOT read (pinned blind spot)' "$LINT" "$FIX/outofscope-proxy-user.sh" 0
+
 # --- Rule E widened (#9597 S1, D1): the YAML arm -----------------------------------
 # `.github/**` YAML is scanned by extracting every `run` string value with PyYAML (so a
 # folded scalar and an inline `run: "curl ..."` step reach bash exactly as bash sees them);
@@ -1279,6 +1319,67 @@ mutate_row 'E6c Rule E: here-string/heredoc hazard dropped' \
   's/E_HEREDOC = re\.compile\(r"[^\n]*\n/E_HEREDOC = re.compile(r"(?!x)x")\n/' \
   "$FIX/violation-argv-bearer-config-hazards.sh" 1 1 2
 
+# -u/--user arm (#9597 S2), one mutation per member, each on the fixture only that member can report.
+mutate_row 'U1a Rule E -u: E_USER_FLAG deleted (the literal `-u` goes unseen)' \
+  's/E_USER_FLAG = re\.compile\(r"[^\n]*\n/E_USER_FLAG = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-literal.sh" 1 0 0
+mutate_row 'U1b Rule E -u: E_USER_FLAG deleted (the long `--user "U:P"` goes unseen)' \
+  's/E_USER_FLAG = re\.compile\(r"[^\n]*\n/E_USER_FLAG = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-long.sh" 1 0 0
+mutate_row 'U1c Rule E -u: E_USER_FLAG deleted (both bundled sites go unseen)' \
+  's/E_USER_FLAG = re\.compile\(r"[^\n]*\n/E_USER_FLAG = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-bundle.sh" 1 0 0
+mutate_row 'U2a Rule E -u: E_USER_ATTACHED deleted (both glued sites go unseen)' \
+  's/E_USER_ATTACHED = re\.compile\(r"[^\n]*\n/E_USER_ATTACHED = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-attached.sh" 1 0 0
+mutate_row 'U2b Rule E -u: E_USER_ATTACHED deleted (`--user="U:P"` goes unseen)' \
+  's/E_USER_ATTACHED = re\.compile\(r"[^\n]*\n/E_USER_ATTACHED = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-long-eq.sh" 1 0 0
+# Narrowing the FLAG alternation to the bare `-u` / `--user` words must lose the bundle (not the literal).
+mutate_row 'U1d Rule E -u: E_USER_FLAG narrowed to `-u`/`--user` (the bundled `-sSu`, `-fu` go unseen)' \
+  's/(E_USER_FLAG = re\.compile\(r")\^\(\?:--user\|-\[A-Za-z\]\*u\)\$/${1}^(?:--user|-u)\$/' \
+  "$FIX/violation-argv-user-bundle.sh" 1 0 0
+mutate_row 'U3 Rule E -u: the `_e_scan` assignment dropped (every classified `-u` goes unseen)' \
+  's/f\["user"\] = True/f["user"] = False/g' \
+  "$FIX/violation-argv-user-literal.sh" 1 0 0
+mutate_row 'U4 Rule E -u: the call-level reason removed' \
+  's/(\n\s*)if user_argv:\n(\s*)reasons\.append\(/${1}if False:\n${2}reasons.append(/' \
+  "$FIX/violation-argv-user-literal.sh" 1 0 0
+mutate_row 'U5 Rule E -u: the wrapper-site read removed (a `-u` handed to a wrapper goes unseen)' \
+  's/user_argv = cf\.get\("user", False\)/user_argv = False/' \
+  "$FIX/violation-argv-user-wrapper.sh" 1 0 0
+mutate_row 'U6 Rule E -u: the array declaration is not inlined and the expansion not resolved' \
+  's/ARRAY_EXPANSION = re\.compile\(r"[^\n]*\n/ARRAY_EXPANSION = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-array.sh" 1 0 0
+# Loosening the scope: the arm reads the WHOLE pipeline assembly instead of the curl's own invocation
+# segment, so `sort -u | curl ...` reads as a basic-auth curl. The out-of-scope fixture must redden.
+mutate_row 'U7 Rule E -u: scope loosened to the whole pipeline assembly (`sort -u | curl` flagged)' \
+  's/f = _e_scan\(args, held_re, bearer_arrays\)/f = _e_scan(_e_words(cmd), held_re, bearer_arrays)/' \
+  "$FIX/outofscope-nonyurl-user-flags.sh" 0 1 1
+# A SECOND `-u` curl appended after the compliant first member and the first `-u` one: two findings
+# (a check that stops at the first site reports one).
+fx_mut_row 'U8 Rule E -u: a second `--user` curl appended to the literal fixture: two messages' \
+  's/\z/curl --disable --noproxy \x27*\x27 -sS \x2d\x2duser "svc2:\${SENTRY_AUTH_TOKEN}" "\$SINK_URL" || true\n/' \
+  "$FIX/violation-argv-user-literal.sh" 2
+# Second-credential: dropping `-u` from the call-level second-credential context keeps the finding (the
+# -u reason still fires) but loses the second-credential reason; the count cannot see it, the wording can.
+_u_sandbox="$WORK/mut-user2.py"
+cp "$LINT" "$_u_sandbox"
+perl -0pi -e 's/if apikey and \(bearer_in_call or user_argv\):/if apikey and bearer_in_call:/' "$_u_sandbox"
+if diff -q "$LINT" "$_u_sandbox" >/dev/null 2>&1; then
+  fail "U9 Rule E -u second-credential: mutation did NOT land"
+else
+  rc="$(rc_of "$_u_sandbox" "$FIX/violation-argv-user-second-credential.sh")"
+  _u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+  _u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+  if [ "$rc" = "1" ] && [ "$_u_basic" = "1" ] && [ "$_u_second" = "0" ]; then
+    pass "U9 Rule E -u: -u dropped from the second-credential context loses exactly the second-credential reason (rc=1, basic-auth x1, second-credential x0)"
+  else
+    fail "U9 Rule E -u second-credential: mutant should keep the -u reason and lose the second-credential one, got rc=$rc basic-auth=$_u_basic second-credential=$_u_second"
+  fi
+fi
+unset _u_sandbox _u_second _u_basic
+
 # --- Rule E hazards: ONE site per MEMBER of the hazard vocabulary (#9674 review) ----------------------
 # E6a-c delete a WHOLE regex, so a single member dropped from E_STDIN_BODY or E_VERBOSE (or one inline
 # spelling in _e_scan) survived at full green. violation-argv-config-hazard-members.sh holds ONE
@@ -1430,6 +1531,54 @@ if sbx_repo 'scripts/offender.sh\t1\nscripts/gone.sh\t1\n'; then
   else
     fail "Rule E baseline M9d: stale listed path should report rc=1 naming it, got rc=$rc"
   fi
+fi
+
+# -u arm in the repo-wide run (#9597 S2): a `-u` file is baselined by PATH AND COUNT like any other.
+# offender.sh is replaced by the glued-`-u` fixture (live count 2).
+sbx_user_repo() { # <baseline-E body> [<perl-expr applied to the lint copy>]
+  sbx_repo "$1" "${2:-}" || return 1
+  cp "$FIX/violation-argv-user-attached.sh" "$SBX/scripts/offender.sh" || return 1
+  "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
+}
+if sbx_user_repo 'scripts/offender.sh\t2\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "0" ] && grep -q '2 site(s)' "$WORK/out" && sbx_clean_run; then
+    pass "Rule E -u baseline: a -u file listed with its exact count (2) is accepted and the OK line counts both sites"
+  else
+    fail "Rule E -u baseline: exact-count -u sandbox expected rc=0 and '2 site(s)', got rc=$rc: $(head -c 300 "$WORK/err") $(head -c 200 "$WORK/out")"
+  fi
+else
+  fail "Rule E -u baseline: could not build the -u sandbox repo"
+fi
+if sbx_user_repo 'scripts/offender.sh\t1\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/offender.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E -u baseline M1: a -u file seeded one lower than live (listed 1, live 2) is reported and names the file"
+  else
+    fail "Rule E -u baseline M1: listed 1 vs live 2 should report rc=1 naming the file, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+else
+  fail "Rule E -u baseline M1: could not build the -u sandbox repo"
+fi
+if sbx_user_repo ''; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/offender.sh' "$WORK/err" && grep -qE "$E_MSG_RE" "$WORK/err" && sbx_clean_run; then
+    pass "Rule E -u baseline M2: an unlisted -u file is reported repo-wide"
+  else
+    fail "Rule E -u baseline M2: an unlisted -u file should report rc=1, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+fi
+# Arm dead (the `_e_scan` assignment dropped): the live count of the -u file is 0 while the baseline
+# still lists 2, so equality names the file. Without the arm the baseline of a -u file reads stale.
+if sbx_user_repo 'scripts/offender.sh\t2\n' 's/f\["user"\] = True/f["user"] = False/g'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/offender.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E -u baseline M3: the -u arm dead (live 0, listed 2) reddens the repo-wide equality and names the file"
+  else
+    fail "Rule E -u baseline M3: arm dead should report rc=1 naming the -u file, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+else
+  fail "Rule E -u baseline M3: could not build the mutated -u sandbox (mutation did not land?)"
 fi
 
 # --- Rule E widened (#9597 S1): repo-wide rows for the YAML arm ----------------------
@@ -2135,10 +2284,10 @@ unset SKIPSH_PY SIBLING _na _nb
 # reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
 # `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
 # can see and mutation-test them.
-if [ "$E_ROWS" -lt 99 ]; then
-  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 99"
+if [ "$E_ROWS" -lt 113 ]; then
+  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 113"
 else
-  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 99)"
+  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 113)"
 fi
 if [ "$Y_ROWS" -lt 48 ]; then
   fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 48"
@@ -2212,11 +2361,11 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
+# Re-measured at 395 (#9597 S2: the -u/--user arm rows, mutation rows and repo-wide sandbox rows, 32 assertions on top of the 363 below). Earlier: 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=363
+MIN_ASSERTIONS=395
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
