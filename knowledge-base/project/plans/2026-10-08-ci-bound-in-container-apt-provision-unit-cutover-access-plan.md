@@ -319,15 +319,15 @@ discoverability_test:
 
 ## Acceptance Criteria
 
-- [ ] `bash apps/web-platform/infra/apt-bounded.test.sh` prints `=== apt-bounded: 19 passed, 0 failed ===`; A10 reports `8 mounted sites + 2 declared unmounted`.
-- [ ] Before the consumer edits, A10 with the new specs FAILS naming both suites (the RED step is recorded in the PR body).
-- [ ] The cutover suite with docker present: `N passed, 0 failed, S skipped` with `N + S = 549`, identical to the pre-change baseline; `FLOOR`, `MUTANT_FLOOR`, `RUNTIME_ROWS` unchanged in the diff.
-- [ ] Forced-decline temporary copy of the cutover suite: locally `SKIP runtime arm (27 rows)`, exit 0; with `CI=true` a `FAIL runtime arm ... CI=true` row and non-zero exit; both pass the exact-floor check. Temporary copies are deleted.
-- [ ] PU suite with the Tier B image removed first: Tier B builds through the helper and prints `ran: ... all PASS`; the forced-decline copy under `CI=true` prints `SKIP (Tier B): ADR-188 arm_skip` with `tierb=skipped`; a non-decline build failure (rc 97/98/126/127/137) is a counted FAIL that prints the rc and log tail.
-- [ ] No raw `apt-get`/`apt`/`dpkg` remains in command position in either edited suite; both container scripts source the lib on its own `|| exit 97` statement and pass the rc through (`|| exit $?`).
-- [ ] Mutation matrix of both guards: every RED row of Guard 1 lands and turns A10 red, the must-PASS row stays green; results in the PR body.
-- [ ] `shellcheck` is clean on the three edited scripts; `scripts/guard-vacuity-floor.test.sh` and `plugins/soleur/test/fixture-env-adoption.test.sh` pass with the edited suites staged.
-- [ ] `git diff --name-only origin/main...HEAD` lists no path under `.github/workflows`, no registration or shard file, no `lib/apt-bounded.sh`, and nothing outside the four planned files plus the pipeline's own plan, `tasks.md` and session-state artifacts; the main checkout's `.mcp.json` is untouched.
+- [x] `bash apps/web-platform/infra/apt-bounded.test.sh` prints `=== apt-bounded: 19 passed, 0 failed ===`; A10 reports `8 mounted sites + 2 declared unmounted`.
+- [x] Before the consumer edits, A10 with the new specs FAILS naming both suites (the RED step is recorded in the PR body).
+- [x] The cutover suite with docker present: `N passed, 0 failed, S skipped` with `N + S = 549`, identical to the pre-change baseline; `FLOOR`, `MUTANT_FLOOR`, `RUNTIME_ROWS` unchanged in the diff.
+- [x] Forced-decline temporary copy of the cutover suite: locally `SKIP runtime arm (27 rows)`, exit 0; with `CI=true` a `FAIL runtime arm ... CI=true` row and non-zero exit; both pass the exact-floor check. Temporary copies are deleted.
+- [x] PU suite with the Tier B image removed first: Tier B builds through the helper and prints `ran: ... all PASS`; the forced-decline copy under `CI=true` prints `SKIP (Tier B): ADR-188 arm_skip` with `tierb=skipped`; a non-decline build failure (rc 97/98/126/127/137) is a counted FAIL that prints the rc and log tail.
+- [x] No raw `apt-get`/`apt`/`dpkg` remains in command position in either edited suite; both container scripts source the lib on its own `|| exit 97` statement and pass the rc through (`|| exit $?`).
+- [x] Mutation matrix of both guards: every RED row of Guard 1 lands and turns A10 red, the must-PASS row stays green; results in the PR body.
+- [x] `shellcheck` is clean on the three edited scripts; `scripts/guard-vacuity-floor.test.sh` and `plugins/soleur/test/fixture-env-adoption.test.sh` pass with the edited suites staged.
+- [x] `git diff --name-only origin/main...HEAD` lists no path under `.github/workflows`, no registration or shard file, no `lib/apt-bounded.sh`, and nothing outside the four planned files plus the pipeline's own plan, `tasks.md` and session-state artifacts; the main checkout's `.mcp.json` is untouched.
 - [ ] PR body: `Closes #9395`, `Refs #8744`, `Refs #9379`; does not close #8211, #9377 or #8609.
 
 ## Test Scenarios
