@@ -17,3 +17,8 @@ None blocking. #8643 is an open issue, not a merged precedent; one garbled Phase
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan, claude-api, soleur:model-launch-review, 13 review/research agents.
+
+## Work Phase
+- Status: complete (implementation, tests, mutation checks, docs, ADR addenda, follow-ups #9790 and comments on #8643 / #6945 / #6000).
+- Affected gate (`test-all.sh --affected`) was queued behind a sibling worktree's multi-hour run and cancelled before it started; targeted suites (vitest model-tiers/pin/router/summarizer/leader-loop, bun model-launch-review/components/harness/pins, tsc, audit --detect, lints) all green. The affected gate runs once at ship Phase 4 on the final tree (ADR-183).
+- Pre-existing, not from this PR: `scripts/learning-retrieval-bench.sh --self-test` is 51/1 on origin/main.
