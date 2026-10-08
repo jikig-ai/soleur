@@ -1552,6 +1552,12 @@ L @@ wrapper abbreviation: an unresolvable sudo --chd directory before a recursi
 L @@ wrapper chdir: an unresolvable env -C directory before a recursive rm asks @@ ask @@ - @@ env -C "$UNKNOWN_DIR" rm -rf build
 L @@ wrapper chdir: an unresolvable sudo -D directory before a force push asks @@ ask @@ - @@ sudo -D "$UNKNOWN_DIR" git push --force origin feature
 L @@ wrapper chdir: an unresolvable env -C directory before something else is no decision @@ none @@ - @@ env -C "$UNKNOWN_DIR" ls
+L @@ wrapper chdir: an absolute env -C after an unresolvable cd makes the directory known again: rm -rf ./* in /tmp is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C /tmp rm -rf ./*
+L @@ wrapper chdir: the last of two absolute env -C options wins and is known: rm -rf ./* after an unresolvable cd is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C / -C /tmp rm -rf ./*
+L @@ wrapper chdir: an absolute sudo -D after an unresolvable cd makes the directory known: rm -rf ./* in /tmp is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && sudo -D /tmp rm -rf ./*
+L @@ wrapper chdir: a known directory after an unresolvable cd still denies a delete of home (env -C /tmp rm -rf ~) @@ deny @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C /tmp rm -rf ~
+L @@ wrapper chdir: a RELATIVE env -C after an unresolvable cd stays unresolved and asks @@ ask @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C sub rm -rf ./x
+L @@ wrapper chdir: the known directory is for the wrapped command only (the next rm is still after the unresolvable cd and asks) @@ ask @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C /tmp true; rm -rf ./x
 L @@ wrapper chdir: an unresolvable directory is for the wrapped command only (the next rm is judged normally) @@ none @@ - @@ env -C "$UNKNOWN_DIR" true; rm -rf build
 # ---- decide_argv keeps the caller's state: a `--` or a wrapper must not change what the cd effect or the quote sees
 X @@ state: cd -- ~ then rm -rf * (a `--` after cd must not hide the cd) @@ deny @@ - @@ cd -- ~ && rm -rf *

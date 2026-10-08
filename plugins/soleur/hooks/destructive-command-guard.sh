@@ -1141,13 +1141,15 @@ fold_name() {
 # wrapped command only (the directory and the unresolved-cd state are put back). A directory that cannot be resolved (a variable, an
 # empty word) is an unresolved cd, as for a literal `cd "$X"`.
 walk_in_dir() {
-  local d="$1" dflag="$2" saved_cwd saved_unres="$UNRES" ok=0
+  local d="$1" dflag="$2" saved_cwd saved_unres="$UNRES" ok=0 abs=0
   cwd_ready; saved_cwd="$SIMCWD"
   if [[ -n "$d" ]] && expand_word "$d" "$dflag"; then
-    d="$EW"; [[ "$d" == /* ]] || d="$SIMCWD/$d"
+    d="$EW"; if [[ "$d" == /* ]]; then abs=1; else d="$SIMCWD/$d"; fi
     if resolve_phys "$d" 1 && [[ -n "$RP" ]]; then SIMCWD="$RP"; ok=1; fi
   fi
-  (( ok )) || UNRES=1
+  # an ABSOLUTE directory that resolved makes the working directory known again, whatever an earlier unresolvable cd left (a relative one
+  # is joined to the unknown directory and stays unknown); the unresolved state is put back after the wrapped command
+  if (( ok )); then (( abs )) && UNRES=0; else UNRES=1; fi
   decide_walk "$3"
   SIMCWD="$saved_cwd"; UNRES="$saved_unres"
 }
