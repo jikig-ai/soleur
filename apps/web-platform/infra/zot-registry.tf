@@ -80,8 +80,8 @@ locals {
   # ONE file relative to the other; a swap applied coherently to BOTH the .tf and the sidecar
   # is caught by the digest<->repository probe in rule-audit.yml, not here.
   registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
-  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6"
-  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5"
+  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.22@sha256:920e3e327a73513643c67d14f54092c45ece6d29660bff7e898107e00b49fa03"
+  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.22@sha256:46f688dc26315a35a247e1784368829e66a67bf91de94c7d8d1645044fac1d5b"
 
   # zot's container memory cap, DERIVED from the host it will actually run on (ADR-062:
   # cap = host RAM − ~1024m for cron+doppler+sshd+OS). It was previously a hardcoded

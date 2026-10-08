@@ -10,23 +10,23 @@ here does not degrade the fleet — it darks it. Treat every row below as load-b
 
 | Field | Value |
 |---|---|
-| Pinned version | **v2.1.20** |
-| Upstream release date | 2026-08-04T17:51:30Z |
+| Pinned version | **v2.1.22** |
+| Upstream release date | 2026-10-06T16:50:05Z |
 | Capture date (UTC) | **2026-08-05** |
-| Superseded | v2.1.2 (2025-01-17) — 18 releases behind at time of bump (#7282) |
+| Superseded | v2.1.20 (2026-08-04) — 128 commits and one breaking change (#4363) behind at time of bump (#9252) |
 
 ## Current pin
 
 | Arch | Reference |
 |---|---|
-| amd64 | `ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5` |
-| arm64 | `ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6` |
+| amd64 | `ghcr.io/project-zot/zot-linux-amd64:v2.1.22@sha256:46f688dc26315a35a247e1784368829e66a67bf91de94c7d8d1645044fac1d5b` |
+| arm64 | `ghcr.io/project-zot/zot-linux-arm64:v2.1.22@sha256:920e3e327a73513643c67d14f54092c45ece6d29660bff7e898107e00b49fa03` |
 
 Resolved with, and re-verified at implementation time:
 
 ```bash
-crane digest ghcr.io/project-zot/zot-linux-amd64:v2.1.20
-crane digest ghcr.io/project-zot/zot-linux-arm64:v2.1.20
+crane digest ghcr.io/project-zot/zot-linux-amd64:v2.1.22
+crane digest ghcr.io/project-zot/zot-linux-arm64:v2.1.22
 ```
 
 **The tag is part of the reference on purpose.** It is what the upstream poll parses to
@@ -42,8 +42,10 @@ Asserted by staleness check 8; rotate it on every bump.
 
 | Arch | Reference | Superseded |
 |---|---|---|
-| amd64 | `ghcr.io/project-zot/zot-linux-amd64@sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71` (v2.1.2) | 2026-08-05 |
-| arm64 | `ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30` (v2.1.2) | 2026-08-05 |
+| amd64 | `ghcr.io/project-zot/zot-linux-amd64@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5` (v2.1.20) | 2026-10-08 |
+| arm64 | `ghcr.io/project-zot/zot-linux-arm64@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6` (v2.1.20) | 2026-10-08 |
+
+The v2.1.20 boot asset (immutable, published; preflight P6 reads CLEAR for it): release `zot-image-v2.1.20-95a837a0afac`, T `05b171f2bd500dc84f532ef7736d1550ffaf7464f0d655c86b8238b443568cb2`, C `2d7fee5603dfd88b2b90cffd07e6b97e6d7ba5e3d6bd5472e66b23bd5ad59114`. Rolling back means reverting the four values (`zot_image_amd64`, `zot_image_arm64`, T, C) to these.
 
 Recovery procedure: see the plan's `## Rollback`. In short — revert both locals to the
 above, merge (inert by `OPERATOR_APPLIED_EXCLUSIONS`), re-fire `registry-host-replace`.
