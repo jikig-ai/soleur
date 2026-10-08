@@ -1,0 +1,17 @@
+# Rule E must fire TWICE: two offending steps after a compliant first one. The repo-wide
+# rows list this file in baseline E with count 1 (live 2): equality must name it.
+name: fixture-second-site
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: compliant first
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+      - name: offending literal block
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+      - name: second offending step, a different header
+        run: |
+          curl --disable --noproxy '*' -sS -H "CF-Access-Client-Id: ${FIXTURE_TOKEN}" "$SINK_URL"

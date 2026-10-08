@@ -266,6 +266,14 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   # "no rows" between emissions, and with treat_as_zero that reads as healthy rather than as
   # "nothing measured". recovery_period covers two emissions, so one good row does not close an
   # incident the next row would re-open.
+  #
+  # #8516 — the same treat_as_zero also blinds this alert to the probe going SILENT: a dead
+  # emitter, a Vector journald-allowlist regression, or a sink outage all read as zero
+  # wrong-volume rows while a rollback onto plaintext hcloud_volume.inngest_redis goes unpaged.
+  # The dead-probe sibling that carries the absence-of-signal case is
+  # betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf), born paused pending its
+  # feeder (tracked there); scripts/followthroughs/inngest-luks-property-8296.sh reports the
+  # same silence as a daily CANNOT ESTABLISH on #8285 in the interim.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0

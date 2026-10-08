@@ -118,7 +118,7 @@ beforeEach(() => {
 describe("support escalation registry", () => {
   test("record → consume returns the source, consume-on-read empties it", () => {
     recordSupportEscalation("conv-1", "skill");
-    expect(consumeSupportEscalation("conv-1")).toBe("skill");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("skill");
     expect(consumeSupportEscalation("conv-1")).toBeNull();
   });
 
@@ -134,7 +134,7 @@ describe("support escalation registry", () => {
       recordSupportEscalation(`conv-cap-${i}`, "skill");
     }
     expect(consumeSupportEscalation("conv-cap-0")).toBeNull(); // evicted
-    expect(consumeSupportEscalation("conv-cap-1000")).toBe("skill"); // newest kept
+    expect(consumeSupportEscalation("conv-cap-1000")?.source).toBe("skill"); // newest kept
     for (let i = 1; i < 1001; i++) clearSupportEscalation(`conv-cap-${i}`);
   });
 
@@ -145,9 +145,29 @@ describe("support escalation registry", () => {
     recordSupportEscalation("conv-rr-overflow", "skill"); // evicts oldest
     // conv-cap-a was refreshed, so conv-rr-0 (the true oldest) is evicted.
     expect(consumeSupportEscalation("conv-rr-0")).toBeNull();
-    expect(consumeSupportEscalation("conv-cap-a")).toBe("bash");
+    expect(consumeSupportEscalation("conv-cap-a")?.source).toBe("bash");
     clearSupportEscalation("conv-rr-overflow");
     for (let i = 1; i < 999; i++) clearSupportEscalation(`conv-rr-${i}`);
+  });
+
+  // #9556 — the registry value is a record, not a bare source: repoConnected
+  // rides the deny → emit bridge to the `support_handoff` frame (FR-1).
+  test("record shape: source + repoConnected tri-state", () => {
+    recordSupportEscalation("conv-1", "skill", false);
+    expect(consumeSupportEscalation("conv-1")).toEqual({
+      source: "skill",
+      repoConnected: false,
+    });
+    recordSupportEscalation("conv-1", "bash", true);
+    expect(consumeSupportEscalation("conv-1")).toEqual({
+      source: "bash",
+      repoConnected: true,
+    });
+    // Dep-unwired record (legacy runner / pre-resolution deny): field absent.
+    recordSupportEscalation("conv-1", "tool");
+    const rec = consumeSupportEscalation("conv-1");
+    expect(rec?.source).toBe("tool");
+    expect(rec?.repoConnected).toBeUndefined();
   });
 });
 
@@ -155,7 +175,7 @@ describe("support persona — deny → escalation record", () => {
   test("(a) non-allowlisted Skill records escalation + names 'Ask an agent'", async () => {
     const canUse = createCanUseTool(buildContext({ persona: "support" }));
     const r = assertDeny(await canUse("Skill", { skill: "soleur:one-shot" }, opts()));
-    expect(consumeSupportEscalation("conv-1")).toBe("skill");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("skill");
     if (r.behavior === "deny") {
       expect(r.message).toMatch(/Ask an agent/);
     }
@@ -168,7 +188,7 @@ describe("support persona — deny → escalation record", () => {
     // "No emit, ever" — stronger than a frame-type allowlist.
     expect(deps.sendToClient).not.toHaveBeenCalled();
     expect(deps.abortableReviewGate).not.toHaveBeenCalled();
-    expect(consumeSupportEscalation("conv-1")).toBe("bash");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("bash");
     if (r.behavior === "deny") {
       expect(r.message).toMatch(/Ask an agent/);
     }
@@ -184,7 +204,7 @@ describe("support persona — deny → escalation record", () => {
     const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
     assertDeny(await canUse("Bash", { command: "git checkout -b x" }, opts()));
     expect(deps.sendToClient).not.toHaveBeenCalled();
-    expect(consumeSupportEscalation("conv-1")).toBe("bash");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("bash");
   });
 
   test("(b2b) owner + un-acked + autonomous OFF still denies (opt-out hold arm)", async () => {
@@ -200,14 +220,14 @@ describe("support persona — deny → escalation record", () => {
     assertDeny(await canUse("Bash", { command: "git checkout -b x" }, opts()));
     expect(deps.sendToClient).not.toHaveBeenCalled();
     expect(deps.abortableReviewGate).not.toHaveBeenCalled();
-    expect(consumeSupportEscalation("conv-1")).toBe("bash");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("bash");
   });
 
   test("(b3) blocklisted command on support records the escalation + handoff copy", async () => {
     const deps = buildDeps();
     const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
     const r = assertDeny(await canUse("Bash", { command: "sudo ls" }, opts()));
-    expect(consumeSupportEscalation("conv-1")).toBe("bash");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("bash");
     if (r.behavior === "deny") {
       expect(r.message).toMatch(/Ask an agent/);
     }
@@ -261,6 +281,35 @@ describe("support persona — deny → escalation record", () => {
     assertAllow(await canUse("Bash", { command: "git status" }, opts()));
     expect(consumeSupportEscalation("conv-1")).toBeNull();
   });
+
+  // #9556 / FR-2 — the closure-local `deny()` wrapper stamps deps.repoConnected
+  // onto every support deny path's escalation record (one injection point).
+  test("deps.repoConnected === false rides the deny → record", async () => {
+    const deps = buildDeps({ repoConnected: false });
+    const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
+    assertDeny(await canUse("Skill", { skill: "soleur:one-shot" }, opts()));
+    expect(consumeSupportEscalation("conv-1")).toEqual({
+      source: "skill",
+      repoConnected: false,
+    });
+  });
+
+  test("deps.repoConnected === true records true; unwired deps records the field absent", async () => {
+    const canUse = createCanUseTool(
+      buildContext({ persona: "support", deps: buildDeps({ repoConnected: true }) }),
+    );
+    assertDeny(await canUse("Skill", { skill: "soleur:one-shot" }, opts()));
+    expect(consumeSupportEscalation("conv-1")).toEqual({
+      source: "skill",
+      repoConnected: true,
+    });
+
+    const canUse2 = createCanUseTool(buildContext({ persona: "support" }));
+    assertDeny(await canUse2("Skill", { skill: "soleur:one-shot" }, opts()));
+    const rec = consumeSupportEscalation("conv-1");
+    expect(rec?.source).toBe("skill");
+    expect(rec?.repoConnected).toBeUndefined();
+  });
 });
 
 describe("support persona — uncovered-path belts (panel enumeration)", () => {
@@ -272,7 +321,7 @@ describe("support persona — uncovered-path belts (panel enumeration)", () => {
     mockIsFileTool.mockReturnValue(true);
     const canUse = createCanUseTool(buildContext({ persona: "support" }));
     assertDeny(await canUse("Edit", { file_path: "/tmp/ws/f.ts", old_string: "a", new_string: "b" }, opts()));
-    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("tool");
     mockIsFileTool.mockReturnValue(false);
   });
 
@@ -294,7 +343,7 @@ describe("support persona — uncovered-path belts (panel enumeration)", () => {
     (isPathInWorkspace as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const canUse = createCanUseTool(buildContext({ persona: "support" }));
     assertDeny(await canUse("Read", { file_path: "/outside/f.ts" }, opts()));
-    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("tool");
     mockIsFileTool.mockReturnValue(false);
     (extractToolPath as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isPathInWorkspace as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -303,7 +352,7 @@ describe("support persona — uncovered-path belts (panel enumeration)", () => {
   test("Agent on support denies + records 'tool' (engineering fan-out)", async () => {
     const canUse = createCanUseTool(buildContext({ persona: "support" }));
     assertDeny(await canUse("Agent", { prompt: "fix it" }, opts()));
-    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("tool");
   });
 
   test("platform tool on support denies + records 'tool' (belt for future entries)", async () => {
@@ -311,13 +360,13 @@ describe("support persona — uncovered-path belts (panel enumeration)", () => {
       buildContext({ persona: "support", platformToolNames: ["mcp__soleur_platform__x"] }),
     );
     assertDeny(await canUse("mcp__soleur_platform__x", {}, opts()));
-    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("tool");
   });
 
   test("deny-by-default unknown tool on support records 'tool'", async () => {
     const canUse = createCanUseTool(buildContext({ persona: "support" }));
     assertDeny(await canUse("MultiEdit", { file_path: "/tmp/ws/f" }, opts()));
-    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+    expect(consumeSupportEscalation("conv-1")?.source).toBe("tool");
   });
 
   test("TodoWrite denies on support WITHOUT recording (UX signal, not engineering)", async () => {
@@ -381,6 +430,39 @@ describe("reduceSupportFrame + composeSupportBubbleText (handoffMarkdown)", () =
     const md = buildSupportHandoffMarkdown("fix my board (CRM) page's footer");
     expect(md).toContain("?msg=fix%20my%20board%20%28CRM%29%20page%27s%20footer");
     expect(md).toMatch(/\]\(<.*>\)$/);
+  });
+
+  // #9556 / FR-5 (AC2) — exact copy pins for all three repoConnected arms.
+  test("buildSupportHandoffMarkdown tri-state: false → connect-repo copy", () => {
+    // A repo-less user's `?msg=` deep link dead-ends on the Command Center's
+    // repo gate — degrade honestly to the canonical connect flow instead.
+    expect(buildSupportHandoffMarkdown("fix it", false)).toBe(
+      "[Connect a repository to hand this task to an agent →](</connect-repo>)",
+    );
+  });
+
+  test("buildSupportHandoffMarkdown tri-state: true → clean link, caveat drops", () => {
+    expect(buildSupportHandoffMarkdown("fix it", true)).toBe(
+      "[Ask an agent to do this →](</dashboard/chat/new?msg=fix%20it>)",
+    );
+  });
+
+  test("buildSupportHandoffMarkdown tri-state: undefined → legacy copy byte-identical", () => {
+    // Dep-unwired contexts (legacy runner, dep-less denies) keep today's copy.
+    expect(buildSupportHandoffMarkdown("fix it")).toBe(
+      "[Ask an agent to do this (needs a connected repo) →](</dashboard/chat/new?msg=fix%20it>)",
+    );
+  });
+
+  test("tri-state still percent-encodes the task on the true/undefined arms", () => {
+    // `false` carries no task text (connect flow has no ?msg= consumer);
+    // the encoding contract is unchanged where the link carries it.
+    expect(buildSupportHandoffMarkdown("a (b)'s", true)).toBe(
+      "[Ask an agent to do this →](</dashboard/chat/new?msg=a%20%28b%29%27s>)",
+    );
+    expect(buildSupportHandoffMarkdown("a (b)'s")).toContain(
+      "?msg=a%20%28b%29%27s",
+    );
   });
 
   test("truncateSupportHandoffTask is code-point aware (no lone surrogate)", () => {
@@ -507,6 +589,70 @@ describe("POST /api/support — terminal-frame handoff emit", () => {
     // The frame carries the RAW task (server-derived from the POST body);
     // URL-encoding is the client's render-time concern (`buildSupportHandoffMarkdown`).
     expect(sse).toContain('"task":"turn the prospects board into a full page"');
+  });
+
+  // #9556 / AC1 — deps.repoConnected rides the REAL deny path (createCanUseTool
+  // → deny() wrapper → registry) into the emitted frame; only the dispatch is
+  // mocked, so this proves the whole deps → record → consume → emit join.
+  test("a deny recorded with deps.repoConnected === false emits repoConnected:false", async () => {
+    routeH.dispatchSoleurGo.mockImplementation(
+      async (args: { sendToClient: (u: string, m: WSMessage) => boolean }) => {
+        const canUse = createCanUseTool(
+          buildContext({
+            persona: "support",
+            conversationId: "conv-support-1",
+            deps: buildDeps({ repoConnected: false }),
+          }),
+        );
+        await canUse("Skill", { skill: "soleur:one-shot" }, opts());
+        args.sendToClient("user-1", { type: "stream_end", leaderId: "cc_router" } as WSMessage);
+      },
+    );
+    const res = await POST(routeReq({ message: "build the prospects board page" }));
+    const sse = await res.text();
+    const { messages } = parseSupportSseChunks(sse + "\n\n");
+    const handoff = messages.find((m) => m.type === "support_handoff") as
+      | { repoConnected?: boolean }
+      | undefined;
+    expect(handoff?.repoConnected).toBe(false);
+    // Still emitted BEFORE the terminal frame.
+    expect(sse.indexOf('"type":"support_handoff"')).toBeGreaterThan(-1);
+    expect(sse.indexOf('"type":"support_handoff"')).toBeLessThan(
+      sse.indexOf('"type":"stream_end"'),
+    );
+  });
+
+  test("a deny recorded with repoConnected:true emits repoConnected:true", async () => {
+    routeH.dispatchSoleurGo.mockImplementation(
+      async (args: { sendToClient: (u: string, m: WSMessage) => boolean }) => {
+        recordSupportEscalation("conv-support-1", "bash", true);
+        args.sendToClient("user-1", { type: "stream_end", leaderId: "cc_router" } as WSMessage);
+      },
+    );
+    const res = await POST(routeReq({ message: "wire up the webhook" }));
+    const sse = await res.text();
+    const { messages } = parseSupportSseChunks(sse + "\n\n");
+    const handoff = messages.find((m) => m.type === "support_handoff") as
+      | { repoConnected?: boolean }
+      | undefined;
+    expect(handoff?.repoConnected).toBe(true);
+  });
+
+  test("a dep-unwired record emits NO repoConnected key (additive-safe absence)", async () => {
+    routeH.dispatchSoleurGo.mockImplementation(
+      async (args: { sendToClient: (u: string, m: WSMessage) => boolean }) => {
+        recordSupportEscalation("conv-support-1", "bash");
+        args.sendToClient("user-1", { type: "stream_end", leaderId: "cc_router" } as WSMessage);
+      },
+    );
+    const res = await POST(routeReq({ message: "refactor the thing" }));
+    const sse = await res.text();
+    const { messages } = parseSupportSseChunks(sse + "\n\n");
+    const handoff = messages.find((m) => m.type === "support_handoff") as
+      | { repoConnected?: boolean }
+      | undefined;
+    expect(handoff).toBeDefined();
+    expect(handoff && "repoConnected" in handoff).toBe(false);
   });
 
   test("(AC6a) a turn with NO deny emits no handoff", async () => {
