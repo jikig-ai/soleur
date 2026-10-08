@@ -113,7 +113,7 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
   (ci.yml + sdk-bump-sandbox-gate.sh), `smoke_fail` blocking.
 - [x] 3.7 `scripts/followthroughs/tenant-outer-wrap-soak-5863.sh` (reads
   `.outer_wrap_canary`; ≥5 greens/≥3d → PASS, sandbox_broken → FAIL,
-  else TRANSIENT) + tracker filed.
+  else TRANSIENT) + tracker **#9797** filed; flag+deny deletion issue **#9798**.
 
 ## Phase 4 — Records
 
