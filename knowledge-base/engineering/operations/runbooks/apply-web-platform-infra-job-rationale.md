@@ -513,6 +513,21 @@ Zero downtime is NOT claimed and must not be: the volume being destroyed is the 
 scheduler's own store, and Guard 2 refuses unless the host is already dark. There is nothing to
 take down because nothing is serving.
 
+[2026-10-08, #8285 PR A, appended; the text above is unchanged and describes the ADR-199 empty-store
+recut as it was built.] This job is converted into `inngest_backstop_retire`
+(`-f apply_target=inngest-backstop-retire`, a `phase` input of `detach`, `wipe`, `teardown`,
+`destroy`). It keeps the `inngest-cutover` environment, the `confirm` typo-guard (now
+`RETIRE-INNGEST-BACKSTOP`), the `expected_inngest_volume_id` id-pin (now 106261946, the plaintext
+backstop, not the live store), the `deploy-inngest-restart` group, and also joins the
+`terraform-apply-web-platform-host` group because the state backend has `use_lockfile = false`. Its
+plan-shape gate (`tests/scripts/lib/inngest-backstop-retire-gate.sh`) is a rewrite, not a
+conversion: it replaces the delete-and-create-a-RAW-volume predicates and the empty-store predicates
+above, so the recut gate lib and its test are deleted and `inngest-host-dark-gate.sh` stays for its
+other user. The job destroys an orphan (a state entry with no declaration) by `-target`, with no
+`-destroy` flag. NO [ack-destroy] BYPASS still holds. The convergence PR of #8285 deletes the retire
+job and its gate once the volume is confirmed gone; the procedure as run stays in git history. The
+operator procedure is `inngest-luks-cutover-6894.md` §5b.
+
 ## apply/Measure the apex origin (ADR-194 Hypothesis Z)
 
 Tunnel ingress origin verification (#6594 / ADR-114 I2).
@@ -682,7 +697,7 @@ always distinct -- a token typed for a birth cannot authorize a destroy.
 **What actually gates each target.**
 
 - `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
-  and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
+  and `inngest-backstop-retire` (converted from `inngest-volume-recut` by #8285) carry an `environment:` with a REVIEWER. The reviewer click
   is the human authorization on those paths.
   *(Note, 2026-10-01, #6604 PR B #9348: on that PR's merge the `workspaces-luks-recut` job is
   hard-retired -- its first step exits 1 before any credential is loaded -- and Terraform

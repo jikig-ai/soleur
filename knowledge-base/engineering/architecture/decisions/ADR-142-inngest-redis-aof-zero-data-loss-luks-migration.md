@@ -371,3 +371,89 @@ The "Where it lives" row's "(ships paused; armed post-cutover)" is still true as
 did ship paused and was armed after the cutover (ADR-218, 2026-09-21 amendment). One known gap in
 that detector is open: a probe pipeline that goes silent reads as healthy (`treat_as_zero`), tracked
 in #8516.
+
+## Addendum — 2026-10-08 (#8285)
+
+Appended, not edited. Nothing above is changed.
+
+**Status of this addendum: adopting.** It describes the state this decision reaches when #8285 is
+done, and is written before that happens so the design is recorded before the destructive steps run.
+It flips to landed in the convergence PR (PR B), and only after the Hetzner API shows volume 106261946
+gone. Until then every sentence about the retirement below is a plan, not a fact. Ref #8285, Ref #6894.
+
+### What this addendum decides
+
+The plaintext backstop `hcloud_volume.inngest_redis` (Hetzner id 106261946) is retired before its
+ledger exception expires on 2026-10-22: detached, zeroed with a read-back, and deleted through
+Terraform. Four decisions shape how.
+
+**D1. The cloud-init template input is pinned to a literal, so the host is not replaced.**
+`inngest-host.tf` feeds `inngest_volume_id = hcloud_volume.inngest_redis.id` into the cloud-init
+template, so deleting the volume would change `user_data` and force-replace the sole scheduler (the
+root-disk decision tracked in #8620). Instead the input becomes the literal current id string
+`"106261946"` in a local, so the rendered `user_data` is byte-identical and `hcloud_server.inngest`
+plans no change. The pin also removes the only graph edge between the server and the volume, which
+makes a targeted destroy of the volume safe. The dead plaintext resolver arm stays in `user_data`
+until the next replace that is already scheduled for another reason (#9786).
+
+**D2. Erasure runs on a short-lived throwaway server, not on the Inngest host.**
+The detached volume is attached to a Terraform-managed, count-gated, deny-all-inbound Hetzner server
+that zeroes it with `blkdiscard -z`, reads it back with O_DIRECT and posts a
+`SOLEUR_INNGEST_BACKSTOP_WIPE` evidence row (counts and identity only) to Better Stack. The live LUKS
+volume is never attached to that server, so a mis-resolved device cannot reach the live store. The
+evidence is self-attested guest-side logical erasure, not physical erasure, and the destruction record
+says so.
+
+**D3. Detach, wipe, teardown and destroy are four gated phases of one dispatch, and Terraform performs
+the deletion.** `apply_target=inngest-backstop-retire` with a `phase` input, converted from the
+`inngest_volume_recut` chassis (reviewer-gated `inngest-cutover` environment, typed confirm,
+`expected_inngest_volume_id` id-pin, exact plan-shape gate). The orphaned addresses are destroyed by
+`-target` (no `-destroy` flag), and state converges in the same apply, so there is no separate forget
+step. The `[ack-destroy]` route is not used: it reaches only the per-merge `-target` apply, which never
+targets these addresses.
+
+**D4. Fallback if the wipe has not succeeded by 2026-10-17.** The decision point is the operator's and
+the CLO's, never made silently. A provider delete without zeroing is defensible only as a
+CLO-attested downgrade, recorded as "provider delete only, no overwrite, logical erasure not evidenced
+by read-back". It is preferred over letting a non-extendable Art. 32 exception expire. The `destroy`
+phase accepts either a `wipe_run_id` (evidence) or `erasure=provider-only` with a
+`clo_attestation_ref`.
+
+### Consequences this addendum records
+
+- **`op=luks-rollback` ends at the `detach` phase.** Once the volume is detached there is nothing for
+  the rollback to copy back from. The operator verb stays listed until PR B retires it; the runbook
+  carries a banner at §5a.
+- **The live LUKS volume becomes the only copy of the store, and `INNGEST_REDIS_LUKS_KEY` in Doppler
+  `soleur-inngest/prd` its sole opener.** Losing that key is then total loss (counsel review O4,
+  `knowledge-base/legal/audits/2026-09-counsel-review-8248.md`). This sharpens the "No key escrow"
+  stance above, which rests on the AOF being transient and self-healing while armed reminders can
+  carry unbounded future fire-times.
+- **AP-009 (never delete user data) tension.** The deleted object is a stale second copy, not the live
+  data. The live copy is evidenced before every phase (Doppler flag `done`, the pointer naming
+  106903269, that volume attached, a fresh probe row on it) and the destroy is gated on it, which is
+  why the principle holds.
+- **Orphan window.** From PR A's merge until the `destroy` phase the two removed Terraform addresses
+  are state-only; the scheduled drift plan will report two deletes, by design. Nothing auto-applies
+  them, and an untargeted apply of the root must not be run in that window.
+
+### Alternatives considered and rejected
+
+| Option | Why not |
+|---|---|
+| Host replace carrying a re-templated cloud-init | Replaces the sole scheduler for a value that can be pinned; forces the #8620 root-disk decision onto an unrelated change. |
+| On-host wipe FSM state in `inngest-luks-cutover.sh`, with an image release, a pin bump and a host replace | Same host as the live LUKS volume, so device mis-resolution can reach it; needs a replace and an image release on a 14-day clock; the script would ship in the permanent image. |
+| `lifecycle.ignore_changes = [user_data]` on the server | Breaks the deliberate replace-to-reprovision design (ADR-100) for every future cloud-init change. |
+| Terraform `-destroy -target` with the declarations kept | Destroy mode expands to dependents; only safe after D1, and leaves a declared-but-absent window. The orphan `-target` apply has the same effect without the flag. |
+| Bespoke Hetzner-API delete plus `terraform state rm` workflows (the web-1 shape) | Two new privileged workflows and suites for effects Terraform performs under an existing gate. |
+| Delete without zeroing as the default | Kept only as the D4 fallback, as a CLO-attested downgrade with weaker evidence. |
+| Mount the volume read-write on a web host to zero it | Touches production web hosts; rejected. |
+| A final snapshot before deleting | Creates a new plaintext copy; removed from the issue. |
+
+### What this addendum does NOT change
+
+The decision, its encryption mechanism, or the 2026-09-18 and 2026-09-21 amendments. The ledger row,
+the Article 30 cells, the C4 model and the probe stay as they are until PR B, after the Hetzner API
+read-back. The Art. 5(2) record for this destroy is
+`knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md`, committed as a template with
+every measured field `PENDING-EVIDENCE`.
