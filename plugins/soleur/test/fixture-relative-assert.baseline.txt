@@ -378,7 +378,7 @@
 6	scripts/guard-vacuity-floor.test.sh
 12	scripts/infra-config-red-alert.test.sh
 1	scripts/kb-staleness-metric.sh
-8	scripts/learning-retrieval-bench.sh
+9	scripts/learning-retrieval-bench.sh
 2	scripts/lib/git-data-boot-signal-poll.sh
 1	scripts/lib/legal-base-ref.test.sh
 3	scripts/lib/repo-write-boundary.test.sh
@@ -399,7 +399,7 @@
 9	scripts/lint-legal-registers.test.sh
 78	scripts/lint-legal-scope-block-placement.test.sh
 2	scripts/lint-orphan-test-suites.test.sh
-1	scripts/lint-shell-trace-credential-refusal.test.sh
+2	scripts/lint-shell-trace-credential-refusal.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
 7	scripts/lint-workflow-install-sites.test.sh
 1	scripts/machinery-backfill-propose.sh
@@ -427,7 +427,7 @@
 10	scripts/skill-security-scan-step-body.test.sh
 1	scripts/soleur-tmp-purge.sh
 2	scripts/sweep-followthroughs.sh
-93	scripts/sweep-followthroughs.test.sh
+104	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
 1	scripts/test-affected-kb-consumers.test.sh
 12	scripts/test-all-affected.test.sh
@@ -454,6 +454,7 @@
 3	tests/hooks/test_hook_emissions.sh
 3	tests/scripts/lib/gate-suite-harness.sh
 2	tests/scripts/lib/inngest-host-dark-gate.sh
+87	tests/scripts/test-argv-bearer-sweep.sh
 5	tests/scripts/test-audit-bot-codeql-coverage.sh
 23	tests/scripts/test-audit-ruleset-bypass.sh
 1	tests/scripts/test-betterstack-absence-classifier.sh
