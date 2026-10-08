@@ -1463,7 +1463,8 @@ TMP19P=$(mktemp -d); t19p "$TMP19P" $'\t\tm_one\t=   "pending (#1)"   # why'; w1
 if grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-two' <<<"$w19p" && ! grep -qw 'm-one' <<<"$w19p" \
    && grep -qE '\*\*1\*\* of \*\*3\*\* cron detectors' "$report" \
    && grep -qE '\*\*1\*\* more declared pending in `cron_monitor_alert_unrouted`' "$report" \
-   && grep -qE '^- `m-one` — declared pending' "$report" && grep -qE '^- `m-two` — bound to no workflow' "$report"; then
+   && grep -qE '^- `m-one` — declared pending' "$report" && grep -qE '^- `m-two` — bound to no workflow' "$report" \
+   && grep -qF 'and are not declared pending' "$report" && grep -qF 'declare it pending in cron_monitor_alert_unrouted' <<<"$w19p"; then
   pass "warning names m-two only; report lists m-one as declared pending"
 else fail "partition wrong: [${w19p}]"; fi
 rm -rf "$TMP19P"
@@ -1492,6 +1493,20 @@ for v in '    # m_one = "p (#1)"' '    m_won = "p (#1)"' '' $'    /*\n    m_one 
   TMP19P=$(mktemp -d); t19p "$TMP19P" "$v"; w19p=$(t19_warning "$TMP19P")
   if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-one' <<<"$w19p" && ! grep -q 'more declared pending' "$report"; then pass "m-one and m-two both warn"
   else fail "suppressed a warning: [${w19p}]"; fi
+  rm -rf "$TMP19P"
+done
+
+# Parser shapes (alerts.tf | expected warning count | slug that must NOT be warned): an opener with a trailing
+# comment, a commented-out opener, a populated map before a sibling map, a multi-line header comment.
+for e in $'locals {\n  cron_monitor_alert_unrouted = { # note\n    m_one = "p (#1)"\n  }\n}|1|m-one' \
+         $'locals {\n  # cron_monitor_alert_unrouted = {\n  m_one = "p (#1)"\n}|2|m-three' \
+         $'locals {\n  cron_monitor_alert_unrouted = {\n    m_two = "p (#2)"\n  }\n  other = {\n    m_one = "x"\n  }\n}|1|m-two' \
+         $'/*\n header\n*/\nlocals {\n  cron_monitor_alert_unrouted = {\n    m_one = "p (#1)"\n  }\n}|1|m-one'; do
+  ab=${e##*|}; rest=${e%|*}; n=${rest##*|}; al=${rest%|*}
+  echo "T19p4b: parser shape expecting $n warning(s), $ab not warned"
+  TMP19P=$(mktemp -d); T19P_ALERTS="$al" t19p "$TMP19P" ''; w19p=$(t19_warning "$TMP19P")
+  if grep -qE "^::warning::.* $n cron detector\\(s\\) bound to no workflow" <<<"$w19p" && ! grep -qw -- "$ab" <<<"$w19p"; then pass "parser shape holds"
+  else fail "parser shape wrong (want $n, $ab not warned): [${w19p}]"; fi
   rm -rf "$TMP19P"
 done
 
@@ -2525,8 +2540,8 @@ if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
   exit 1
 fi
 PASS=$_h_p; FAIL=$_h_f
-if [[ $((PASS + FAIL)) -lt 78 ]]; then
-  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 78.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 82 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 82.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 
