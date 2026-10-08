@@ -147,9 +147,10 @@ cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'PASS \(justified\)')" "ag
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'no added test files')" "agent: no-added-files emission string present"
 
 # ---------------------------------------------------------------------------
-# DRIFT PIN — restatement sites still carry the contract (the three places a
-# reader meets the rule without opening the agent body, plus the two
-# instruction surfaces that warn authors upstream).
+# DRIFT PIN — restatement + instruction surfaces still carry the contract:
+# the two reader surfaces (review/SKILL.md, review.workflow.js) and the two
+# authoring surfaces that warn upstream (plan-issue-templates.md,
+# work/SKILL.md) — four files, pinned below.
 # ---------------------------------------------------------------------------
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" 'pyramid-justified')" "review/SKILL.md: agent-13 text still names the marker"
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" 'or `## Test Pyramid` PR-body block')" "review/SKILL.md: PR-body disjunct shape preserved in restatement"
@@ -157,8 +158,9 @@ cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" '\*\.e2e\*')" "revi
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" 'pyramid-justified')" "review.workflow.js: lens still names the marker"
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" "'## Test Pyramid' PR-body block")" "review.workflow.js: PR-body disjunct shape preserved in lens"
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" '\\.e2e')" "review.workflow.js: hasTests regex covers e2e conventions"
-tpl_blocks="$(awk '/^## Test Scenarios/{inblock=1; blocks++} /^## / && !/^## Test Scenarios/{inblock=0} inblock && /pyramid-justified/{seen[blocks]=1} END{n=0; for(i=1;i<=blocks;i++) if(seen[i]) n++; print blocks":"n}' "$PLAN_TPL")"
+tpl_blocks="$(awk '/^## Test Scenarios/{inblock=1; blocks++} /^##? / && !/^## Test Scenarios/{inblock=0} inblock && /pyramid-justified/{seen[blocks]=1} END{n=0; for(i=1;i<=blocks;i++) if(seen[i]) n++; print blocks":"n}' "$PLAN_TPL" || echo "0:0")"
 cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" '^## Test Scenarios')" "plan-issue-templates.md: exactly 3 Test Scenarios blocks (a 4th unlabeled block reds)"
+cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'pyramid layer')" "plan-issue-templates.md: all 3 blocks still carry the pyramid-layer label line"
 cases=$((cases + 1)); assert_eq "3:3" "$tpl_blocks" "plan-issue-templates.md: EVERY Test Scenarios block carries the marker line (per-block, not just count)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'RED\(unit\|integration\|e2e\)')" "work/SKILL.md: RED-task layer naming present"
 cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'pyramid-justified')" "work/SKILL.md: e2e marker warning present"
@@ -176,7 +178,7 @@ fi
 
 # ANTI-VACUITY FLOOR. Set AT the running count, never below it; reads `cases`,
 # the counter no helper can move.
-MIN_ASSERTIONS=49
+MIN_ASSERTIONS=50
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2

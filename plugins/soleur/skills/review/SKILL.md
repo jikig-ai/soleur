@@ -310,6 +310,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 - PR includes files matching `*_test.go`
 - PR includes files matching `*_test.swift`, `*Tests.swift`
 - PR includes files in `__tests__/` or `spec/` or `test/` or `e2e/` directories
+- PR includes a file importing a browser-test framework (playwright / cypress / puppeteer / webdriverio / selenium)
 
 **What this agent checks:**
 
