@@ -33,7 +33,7 @@ default the plan took and the alternative the operator may choose. None blocks t
 
 ## 6. Exit code 1 versus 2 per surface (applied, deviates from the brief)
 
-- Refusals exit 2 in the Better Stack reader, the parity script and the follow-through probes because exit 1 means FAIL (probes) or "blame DOPPLER_TOKEN" (reader classifier).
+- Refusals exit 2 in the Better Stack reader, the parity script and three of the four converted follow-through probes (the soak probe exits 3 through its existing `cannot_establish`, since 2 is a reading for it) because exit 1 means FAIL (probes) or "blame DOPPLER_TOKEN" (reader classifier).
 
 ## 7. Follow-up issues consolidated from five to three (mechanical, applied at work time)
 
