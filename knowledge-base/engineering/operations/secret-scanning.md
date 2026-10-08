@@ -44,6 +44,22 @@ disable the CI job to "unblock" a PR; if a finding is a false positive, add
 a per-rule `[[rules.allowlists]]` block in `.gitleaks.toml` or a `# gitleaks:allow`
 waiver in the source file.
 
+## Smoke matrix is skipped by design on PRs that touch no smoke subject path
+
+The ten `smoke (<case>)` rows on a PR are gated by the `smoke-relevance` job (#9727, ADR-276 S1).
+It lists the PR's files through the API and writes `smoke=false` only when the list is complete and
+no file matches `SUBJECT_RE` (in that job's step body): `secret-scan.yml`, `.gitleaks.toml`,
+`.gitleaksignore`, anything under `apps/web-platform/scripts/`, `.gitignore` or `.gitattributes` at
+any depth, and any `smoke/` path component. For such a PR the ten rows render as skipped (grey) and
+that is intended, not a stall; the `::notice::` line and step summary of `smoke-relevance` state the
+verdict and why. The gate **fails open**: a failed or partial file-list fetch, an empty list, an
+entry count that differs from the event's `changed_files` (a list lagging the pushed head, or the
+API's 3000-entry cap), a matcher error, or a failure of the job itself all leave the matrix
+running. To force the smoke matrix on a PR, touch a subject file. The five required contexts
+(`gitleaks scan`, `lint fixture content`, `allowlist-diff`, `rename-guard`, `waiver discipline`)
+have no `needs:` edge to the gate and run on every PR as before. The gate is a cost optimisation,
+not a control; `scripts/secret-scan-smoke-gate.test.sh` pins it and CODEOWNERS covers that suite.
+
 ## Ref scope per event: which commits each trigger actually scans
 
 `gitleaks git` scans a **commit range**, not the working tree. Fixing a file in a
