@@ -33,10 +33,10 @@ assert_eq() { # expected actual msg
   if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 (expected [$1] got [$2])"; fi
 }
 assert_contains() { # haystack needle msg
-  if printf '%s' "$1" | grep -qF -- "$2"; then pass "$3"; else fail "$3 (missing [$2] in output)"; fi
+  if printf '%s' "$1" | grep -cF >/dev/null -- "$2"; then pass "$3"; else fail "$3 (missing [$2] in output)"; fi
 }
 assert_not_contains() { # haystack needle msg
-  if printf '%s' "$1" | grep -qF -- "$2"; then fail "$3 (unexpected [$2])"; else pass "$3"; fi
+  if printf '%s' "$1" | grep -cF >/dev/null -- "$2"; then fail "$3 (unexpected [$2])"; else pass "$3"; fi
 }
 # Positive control: drive each verdict helper once and require its counter to move,
 # then unwind, so a neutered pass()/fail() cannot silently turn every check green.

@@ -653,7 +653,7 @@ behave() { # <body file> [case functions...]: runs the cases, fills BRES and B_E
   [[ "${#cases[@]}" -gt 0 ]] || cases=("${ALL_CASES[@]}")
   for c in "${cases[@]}"; do "$c"; done
 }
-bres_failed() { printf '%s\n' "${BRES[@]}" | grep -qxF -- "$1"$'\t'FAIL; }
+bres_failed() { printf '%s\n' "${BRES[@]}" | grep -cxF >/dev/null -- "$1"$'\t'FAIL; }
 
 # INSTRUMENT SELF-TEST for the behavioural harness: leak_free must see a token in each of the three places, and a clean run.
 OUT="clean"; : > "$SUM"; : > "$MOCK_LOG"
@@ -707,7 +707,7 @@ body_expect_green() { # <name> <python> <cases...>: the mutated body must still 
   mutate_body "$name" "$code" || rc=$?
   if [[ "$rc" -ne 0 ]]; then no "body mutation $name did not land (rc=$rc)"; return; fi
   behave "$SCR/mut/$name.sh" "$@"
-  if printf '%s\n' "${BRES[@]}" | grep -q $'\tFAIL$'; then no "G2 body mutation $name: a check failed ($(printf '%s\n' "${BRES[@]}" | grep -m1 $'\tFAIL$' | cut -f1))"; else ok "G2 $name: the real timeout killed a stalled checker and the verdict still printed"; fi
+  if printf '%s\n' "${BRES[@]}" | grep -c >/dev/null $'\tFAIL$'; then no "G2 body mutation $name: a check failed ($(printf '%s\n' "${BRES[@]}" | grep -m1 $'\tFAIL$' | cut -f1))"; else ok "G2 $name: the real timeout killed a stalled checker and the verdict still printed"; fi
 }
 body_expect_green g2-real-timeout "s = s.replace('timeout -k 10 240', 'timeout -k 10 1', 1)" c_hang
 body_expect_red g2-no-redaction token-shape-absent-from-log-and-summary "s = '\n'.join(l for l in s.split('\n') if 'dp.REDACTED' not in l)" c_token
@@ -745,7 +745,7 @@ for rb in "$BIRTH" "$REPLACE"; do
   [[ "$s0" == *'re-run'* || "$s0" == *'re-runs'* ]] && ok "W4 $n step 0 says the birth/replace jobs re-run the check" || no "W4 $n step 0 lost the re-run sentence"
   [[ "$s0" != *'nothing to run beforehand'* ]] && ok "W5 $n step 0 no longer says there is nothing to run beforehand" || no "W5 $n step 0 still says there is nothing to run beforehand"
   # The stale source: O10 evicted DOPPLER_TOKEN_TF from prd_terraform, so a command that reads it from there cannot work.
-  if grep -E 'DOPPLER_TOKEN_TF[^|]*-c prd_terraform|-c prd_terraform[^|]*DOPPLER_TOKEN_TF' "$rb" | grep -q .; then no "W6 $n still reads DOPPLER_TOKEN_TF from prd_terraform"; else ok "W6 $n no longer reads DOPPLER_TOKEN_TF from prd_terraform"; fi
+  if grep -E 'DOPPLER_TOKEN_TF[^|]*-c prd_terraform|-c prd_terraform[^|]*DOPPLER_TOKEN_TF' "$rb" | grep -c >/dev/null .; then no "W6 $n still reads DOPPLER_TOKEN_TF from prd_terraform"; else ok "W6 $n no longer reads DOPPLER_TOKEN_TF from prd_terraform"; fi
 done
 b0="$(step0 "$BIRTH")"
 for key in 'PASS' 'NO TOKEN' 'FAIL' 'NOT READY' 'UNREADABLE' 'UNEXPECTED exit 124'; do
