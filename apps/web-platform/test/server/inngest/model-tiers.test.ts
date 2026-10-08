@@ -49,7 +49,10 @@ import {
   AUDIT_EFFORT,
   AUDIT_CLI_ARGS,
 } from "@/server/inngest/model-tiers";
-import { MODEL_PRICING } from "@/server/inngest/functions/agent-on-spawn-requested";
+import {
+  MODEL_PRICING,
+  resolveTurnCostUsd,
+} from "@/server/inngest/functions/agent-on-spawn-requested";
 import { stripComments } from "../../helpers/strip-comments";
 
 const FUNCTIONS_DIR = join(__dirname, "../../../server/inngest/functions");
@@ -102,6 +105,18 @@ describe("model-tiers registry — #5106", () => {
     expect(pricingKeys).toEqual(unionMembers);
   });
 
+  // The union comparison above is derived from the constants, so a constant that
+  // moves takes its own key with it and the assertion stays green. Compare the
+  // keys to LITERAL ids as well: a Haiku id that silently reverts to 4.5 reds here.
+  it("MODEL_PRICING keys are the two literal tier ids (no Haiku 4.5 row)", () => {
+    expect(HAIKU_MODEL).toBe("claude-haiku-5-5");
+    expect(SONNET_MODEL).toBe("claude-sonnet-5-5");
+    expect(Object.keys(MODEL_PRICING).sort()).toEqual([
+      "claude-haiku-5-5",
+      "claude-sonnet-5-5",
+    ]);
+  });
+
   // Pricing-drift tripwire. The keys-match test above guards the SHAPE of
   // MODEL_PRICING but says nothing about its VALUES — which is how the haiku
   // row carried retired Haiku 3.5 rates ($0.80/$4/$0.08/$1) under the Haiku
@@ -116,16 +131,24 @@ describe("model-tiers registry — #5106", () => {
   // price and the Sep-1 rise will not occur. Committed and published rates
   // therefore agree again — this pins today's billed price.
   //
-  // Source: https://platform.claude.com/docs/en/about-claude/pricing.md (2026-09-03)
-  //   Haiku 4.5   $1 / $5    cache-read $0.10  5m cache-write $1.25
-  //   Sonnet 5    $2 / $10   cache-read $0.20  5m cache-write $2.50
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing.md (2026-10-08)
+  //   Haiku 5.5, prompt up to 100,000 tokens   $0.10 / $0.50  cache-read $0.01  5m cache-write $0.125
+  //   Haiku 5.5, prompt over 100,000 tokens    $0.50 / $2.50  cache-read $0.05  5m cache-write $0.625
+  //   Sonnet 5.5                               $2 / $10       cache-read $0.20 (as committed)  5m cache-write $2.50
   it("MODEL_PRICING values match the committed per-MTok rates", () => {
     const M = 1_000_000;
     expect(MODEL_PRICING[HAIKU_MODEL]).toEqual({
-      inputPerToken: 1 / M,
-      outputPerToken: 5 / M,
-      cacheReadPerToken: 0.1 / M,
-      cacheCreatePerToken: 1.25 / M,
+      inputPerToken: 0.1 / M,
+      outputPerToken: 0.5 / M,
+      cacheReadPerToken: 0.01 / M,
+      cacheCreatePerToken: 0.125 / M,
+      longPrompt: {
+        aboveTokens: 100_000,
+        inputPerToken: 0.5 / M,
+        outputPerToken: 2.5 / M,
+        cacheReadPerToken: 0.05 / M,
+        cacheCreatePerToken: 0.625 / M,
+      },
     });
     expect(MODEL_PRICING[SONNET_MODEL]).toEqual({
       inputPerToken: 2 / M,
@@ -187,6 +210,92 @@ const END_OF_OPTIONS = /^\s*["'`]--["'`],\s*$/;
 // Other ways the pinned CLI accepts a model or an effort level.
 const OTHER_CHANNELS =
   /["'`]claude-(opus|sonnet|haiku|fable)-|--fallback-model|["'`]--settings["'`]|["'`]--agents["'`]|CLAUDE_CODE_EFFORT_LEVEL|\beffortLevel\b/;
+
+// Guard 2 — the Haiku 5.5 rate card is chosen by PROMPT LENGTH. The card is selected
+// on input_tokens + cache_read_input_tokens + cache_creation_input_tokens (a superset
+// of the page's undefined "prompt" length, so an ambiguity can only over-attribute),
+// and "over 100,000" is strictly greater. Every case below uses a different value
+// for each of the four token types, so swapping any single rate field on either card
+// changes the expected dollars. Expected values are hand-computed from the page's
+// per-MTok figures, never read back from MODEL_PRICING.
+describe("resolveTurnCostUsd — Haiku 5.5 two-card pricing (Guard 2)", () => {
+  const usage = (
+    input_tokens: number,
+    output_tokens: number,
+    cache_read_input_tokens: number,
+    cache_creation_input_tokens: number,
+  ) => ({
+    input_tokens,
+    output_tokens,
+    cache_read_input_tokens,
+    cache_creation_input_tokens,
+  });
+  const cost = (u: ReturnType<typeof usage>) => resolveTurnCostUsd(HAIKU_MODEL, u);
+
+  it("short card: four distinct token values", () => {
+    // 1000*0.10 + 2000*0.50 + 3000*0.01 + 4000*0.125 = 100+1000+30+500 = 1630 per-million
+    expect(cost(usage(1000, 2000, 3000, 4000))).toBeCloseTo(0.00163, 10);
+  });
+
+  it("long card: four distinct token values (prompt 114,000)", () => {
+    // 60000*0.50 + 2000*2.50 + 50000*0.05 + 4000*0.625 = 30000+5000+2500+2500 = 40000 per-million
+    expect(cost(usage(60_000, 2000, 50_000, 4000))).toBeCloseTo(0.04, 10);
+  });
+
+  it("boundary: exactly 100,000 prompt tokens (with a cache split) is the SHORT card", () => {
+    // 40000*0.10 + 1000*0.50 + 30000*0.01 + 30000*0.125 = 4000+500+300+3750 = 8550 per-million
+    expect(cost(usage(40_000, 1000, 30_000, 30_000))).toBeCloseTo(0.00855, 10);
+  });
+
+  it("boundary: 100,001 reached through input_tokens is the LONG card", () => {
+    // 100001*0.50 + 1000*2.50 = 50000.5+2500 = 52500.5 per-million
+    expect(cost(usage(100_001, 1000, 0, 0))).toBeCloseTo(0.0525005, 10);
+  });
+
+  it("boundary: 100,001 reached through cache_creation_input_tokens alone is the LONG card", () => {
+    // 1000*2.50 + 100001*0.625 = 2500+62500.625 = 65000.625 per-million
+    expect(cost(usage(0, 1000, 0, 100_001))).toBeCloseTo(0.065000625, 10);
+  });
+
+  it("boundary: 100,001 reached through cache_read_input_tokens alone is the LONG card", () => {
+    // 1000*2.50 + 100001*0.05 = 2500+5000.05 = 7500.05 per-million
+    expect(cost(usage(0, 1000, 100_001, 0))).toBeCloseTo(0.00750005, 10);
+  });
+
+  it("cache-heavy: input_tokens alone is under 100K but the prompt is over it, so LONG card", () => {
+    // input alone (60,000) would select the short card; 60000 + 50000 read = 110,000 > 100,000
+    // 60000*0.50 + 50000*0.05 = 30000+2500 = 32500 per-million
+    expect(cost(usage(60_000, 0, 50_000, 0))).toBeCloseTo(0.0325, 10);
+  });
+
+  it("zero usage costs zero on a priced model", () => {
+    expect(cost(usage(0, 0, 0, 0))).toBe(0);
+  });
+
+  it("Sonnet 5.5 has a single flat card: no prompt-length tier", () => {
+    // 200000*2 + 1000*10 + 50000*0.20 + 4000*2.5 = 400000+10000+10000+10000 = 430000 per-million
+    expect(resolveTurnCostUsd(SONNET_MODEL, usage(200_000, 1000, 50_000, 4000))).toBeCloseTo(
+      0.43,
+      10,
+    );
+  });
+
+  it("an unpriced model returns NaN, never 0 (fail closed into the WORM ledger)", () => {
+    expect(resolveTurnCostUsd("claude-haiku-4-5-20251001", usage(1, 1, 1, 1))).toBeNaN();
+    expect(resolveTurnCostUsd("claude-nonexistent", usage(0, 0, 0, 0))).toBeNaN();
+  });
+
+  // Pins the CURRENT integer-cent rounding the cost writers apply
+  // (`Math.round(costDelta * 100)`, server/cost-writer.ts) so that a later fix
+  // for #6945 is a deliberate test change. A turn priced at exactly half a cent
+  // rounds UP to 1 cent; one a hair under rounds to 0. That is why Haiku-class
+  // turns under half a cent are written to the WORM ledger as 0 cents.
+  it("rounding edge: the half-cent turn rounds to 1 cent, a hair under rounds to 0", () => {
+    // 50000 input tokens on the short card = 50000*0.10 = 5000 per-million = $0.005
+    expect(Math.round(cost(usage(50_000, 0, 0, 0)) * 100)).toBe(1);
+    expect(Math.round(cost(usage(49_990, 0, 0, 0)) * 100)).toBe(0);
+  });
+});
 
 describe("audit-cron effort pin — #8603 Guard 1", () => {
   const files = readdirSync(FUNCTIONS_DIR).filter((f) => f.endsWith(".ts"));

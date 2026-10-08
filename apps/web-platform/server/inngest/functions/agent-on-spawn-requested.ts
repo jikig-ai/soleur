@@ -140,11 +140,20 @@ function uuidv5(name: string, namespace: string): string {
 // totals as reconcilable against the founder's Anthropic invoice.
 //
 // Values are pinned by model-tiers.test.ts so a drift must be deliberate.
-interface ModelPricing {
+interface PricingCard {
   inputPerToken: number;
   outputPerToken: number;
   cacheReadPerToken: number;
   cacheCreatePerToken: number;
+}
+// A model with prompt-length-tiered pricing (Haiku 5.5) carries the SHORT card at the
+// top level and a second card in `longPrompt`. The long card applies when the turn's
+// prompt tokens (input + cache read + cache creation) are STRICTLY GREATER than
+// `aboveTokens`, following the pricing page's "over 100,000 tokens". The page does not
+// say whether cached tokens count toward the threshold; counting them is a superset,
+// which can only over-attribute (the safe direction for a cap input).
+interface ModelPricing extends PricingCard {
+  longPrompt?: PricingCard & { aboveTokens: number };
 }
 // Keys are computed properties referencing the SSOT model-ID constants
 // (leader-prompts/constants.ts) so a key can never drift out of byte-identity
@@ -169,12 +178,26 @@ export const MODEL_PRICING: Partial<Record<string, ModelPricing>> = {
     cacheReadPerToken: 0.2 / 1_000_000,
     cacheCreatePerToken: 2.5 / 1_000_000,
   },
-  // Claude Haiku 4.5: $1 input / $5 output / $0.10 cache-read / $1.25 5m cache-write.
+  // Claude Haiku 5.5, prompt up to 100,000 tokens: $0.10 input / $0.50 output /
+  // $0.01 cache-read / $0.125 5m cache-write. Prompt over 100,000 tokens (the
+  // `longPrompt` card): $0.50 / $2.50 / $0.05 / $0.625. Verified 2026-10-08 against
+  // https://platform.claude.com/docs/en/about-claude/pricing.md (rows "Claude Haiku
+  // 5.5 (for prompts up to 100,000 tokens)" and "(... over 100,000 tokens)").
+  // Haiku 4.5's row ($1 / $5 / $0.10 / $1.25) was removed with the swap: the key
+  // set must equal the AnthropicModelId union, and `leaderModule.model` is read
+  // per step, so no in-flight turn can look up 4.5 after the deploy.
   [HAIKU_MODEL]: {
-    inputPerToken: 1 / 1_000_000,
-    outputPerToken: 5 / 1_000_000,
-    cacheReadPerToken: 0.1 / 1_000_000,
-    cacheCreatePerToken: 1.25 / 1_000_000,
+    inputPerToken: 0.1 / 1_000_000,
+    outputPerToken: 0.5 / 1_000_000,
+    cacheReadPerToken: 0.01 / 1_000_000,
+    cacheCreatePerToken: 0.125 / 1_000_000,
+    longPrompt: {
+      aboveTokens: 100_000,
+      inputPerToken: 0.5 / 1_000_000,
+      outputPerToken: 2.5 / 1_000_000,
+      cacheReadPerToken: 0.05 / 1_000_000,
+      cacheCreatePerToken: 0.625 / 1_000_000,
+    },
   },
 };
 
@@ -192,8 +215,16 @@ export function resolveTurnCostUsd(
     cache_creation_input_tokens: number;
   },
 ): number {
-  const pricing = MODEL_PRICING[model];
-  if (!pricing) return Number.NaN;
+  const base = MODEL_PRICING[model];
+  if (!base) return Number.NaN;
+  const promptTokens =
+    usage.input_tokens +
+    usage.cache_read_input_tokens +
+    usage.cache_creation_input_tokens;
+  const pricing: PricingCard =
+    base.longPrompt && promptTokens > base.longPrompt.aboveTokens
+      ? base.longPrompt
+      : base;
   return (
     usage.input_tokens * pricing.inputPerToken +
     usage.output_tokens * pricing.outputPerToken +
