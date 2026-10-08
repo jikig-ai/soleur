@@ -1822,6 +1822,7 @@ case "$OP" in
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
     GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
+    # Availability note (same at the quiesce-web and rollback poll loops): an empty GSIG is refused by the signing wrapper on EVERY poll (fail-closed, one marker each), so the loop runs to its timeout (about 120 polls) instead of aborting.
     MAX_POLLS=120
     POLL_INTERVAL=10
     for i in $(seq 1 "$MAX_POLLS"); do
@@ -2772,7 +2773,7 @@ case "$OP" in
       -d "$PAYLOAD" \
       "$BASE/deploy" || echo "000")
     if [[ "$CODE" != "202" ]]; then
-      CAUSE="$(tr -d '\n\r' < /tmp/quiesce-body 2>/dev/null)"
+      CAUSE="$(cat /tmp/quiesce-body 2>/dev/null | tr -d '\n\r' || true)"   # absent when the signing wrapper refused or the transport failed: set -e must not end the script before the line below
       echo "::error::quiesce-web webhook rejected (HTTP $CODE): ${CAUSE:-<empty body>}. UNKNOWN (000) means the webhook was unreachable — check CF-Access/HMAC + the run log, then re-dispatch. Do NOT SSH the host."; exit 1
     fi
     echo "::notice::quiesce-web: fan-out accepted (202) for [$CUTOVER_HOSTS] — polling deploy-status for the host-side quiesced verdict (do NOT immediate-probe: TimeoutStopSec=180 means the async stop can lag the 202)"
@@ -3263,9 +3264,9 @@ case "$OP" in
     # (a missed pause pages the operator; blocking would withhold the safety-critical web
     # re-enable), but the unscoped read made that the LIKELY path rather than the exceptional one.
     BS_API=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)
-    # Mask only a value that exists: an unconditional add-mask on an empty read emits a bare
-    # `::add-mask::`, which is noise in the log and masks nothing.
-    [[ -n "$BS_API" ]] && printf '::add-mask::%s\n' "$BS_API"
+    # Shape-check FIRST, mask second (the HCLOUD arm's order): `::add-mask::` is itself a workflow command, so a value holding a newline must never
+    # reach it. A value that fails the check is printed nowhere and needs no mask; `-n` stays so an empty read still emits no bare `::add-mask::`.
+    _bearer_ok "$BS_API" && [[ -n "$BS_API" ]] && printf '::add-mask::%s\n' "$BS_API"
     if [[ -z "$BS_API" ]]; then
       echo "::warning::op=rollback: BETTERSTACK_API_TOKEN unreadable from prd_terraform — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. Pause 'soleur-inngest-consumer-prd' manually if it pages, or re-dispatch once the token reads."
     elif ! _bearer_ok "$BS_API"; then
@@ -3306,7 +3307,7 @@ case "$OP" in
       -d "$PAYLOAD" \
       "$BASE/deploy" || echo "000")
     if [[ "$CODE" != "202" ]]; then
-      CAUSE="$(tr -d '\n\r' < /tmp/rollback-body 2>/dev/null)"
+      CAUSE="$(cat /tmp/rollback-body 2>/dev/null | tr -d '\n\r' || true)"   # absent when the signing wrapper refused or the transport failed: set -e must not end the script before the line below
       echo "::error::rollback enable webhook rejected (HTTP $CODE): ${CAUSE:-<empty body>}. The webhook was unreachable — check CF-Access/HMAC + the run log, then re-dispatch. Do NOT SSH the host."; exit 1
     fi
     echo "::notice::rollback: enable fan-out accepted (202) for [$CUTOVER_HOSTS] (the deploy peers path forwards enable+start to EVERY host's private IP — this fan-out IS per-host) — polling deploy-status for the host-side enabled verdict"
