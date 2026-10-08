@@ -12,7 +12,7 @@ Source for the PR body and the tracker comment. Every number below was printed b
 
 ## Transform proof
 
-**Units.** The guard counts lines (140 before, 5 after); the codemod census counts hits (144 hits on those 140 lines). The change is 131 codemod lines in 45 files plus 5 hand-edit lines in 4 files, with one line shared (`web-host-escrow-diagnose-workflow.test.sh:710`) and one file added by hand edits (`worktree-manager-porcelain-sigpipe.test.sh`): 131 + 5 - 1 = 135 lines, 45 + 1 = 46 files. `verify` reports 130 verified because the shared line counts as hand-edited.
+**Units.** The guard counts lines (140 before, 5 after; its DEFERRED text prints the word "hits"); the codemod census counts hits (144 hits on those 140 lines). The change is 131 codemod lines in 45 files plus 5 hand-edit lines in 4 files, with one line shared (`web-host-escrow-diagnose-workflow.test.sh:710`) and one file added by hand edits (`worktree-manager-porcelain-sigpipe.test.sh`): 131 + 5 - 1 = 135 lines, 45 + 1 = 46 files. `verify` reports 130 verified because the shared line counts as hand-edited.
 
 `python3 scripts/grep-q-drain-codemod.py verify --base origin/main --hand-edits <hand-edits.txt>`: `verified: 130`, `hand-edited: 5`, `unexplained: 0`. Idempotency dry run: `WOULD-CHANGE: 0 lines in 0 files`. `bash -n` clean on all 46 files. `git diff --numstat origin/main...HEAD -- plugins/soleur/test/`: 135 insertions, 135 deletions. `verify` proves the transform, not the classification (a data line converted by mistake still passes it).
 
@@ -61,7 +61,7 @@ A pair run on small fixtures shows "no verdict change", not "the race is gone". 
 | `render-c4-model` | rc 1 | rc 1 | identical: AC5 fails the same way on both sides (`likec4 export` dies with `Illegal instruction (core dumped)` under the cap); not investigated further |
 | `go-session-gates` | 77 s | 141 s | wall time only; two alternating re-runs read 83 s / 81 s and 40 s / 100 s, so the spread (40 to 141 s) is larger than any effect and no change is claimed or ruled out |
 
-Wall times for the seven archive-failed suites are not comparable (the archive side aborted in seconds). A like-for-like re-run of two of them in one tree read `hook-input-classification-mutation` 99 s base / 112 s branch and `preflight-check10-suite-integrity` 72 s / 78 s, so the conversion did not slow them. Apart from those, no suite moved by more than a few seconds.
+Wall times for the seven archive-failed suites are not comparable (the archive side aborted in seconds). For the other suites the first-pass wall times moved by at most 13 s, mixed in sign (`operator-ack-guard` 119 to 132 s, `pr-fanout-ledger` 56 to 43 s, `operator-9321-stages` 76 to 67 s), except `go-session-gates` above.
 
 ## Affected gate (`bash scripts/test-all.sh --affected`): stopped by decision, CI is the gate
 

@@ -14,7 +14,7 @@ Scope of this task list: S2 only (one deferral row, `plugins/soleur/test/*`, 140
 
 ## Phase 1: red first
 
-- [x] 1.1 Edit only the guard row to `'plugins/soleur/test/* | <= | 5 | #9217'` with the two-line comment (five data pins, no pipes; `=` so a forgotten ceiling fails; the codemod refuses `--write` on `=` rows). The guard must go RED (`has 140 hits, ceiling 5`).
+- [x] 1.1 Edit only the guard row to `'plugins/soleur/test/* | <= | 5 | #9217'` with its comment (five counted data pins; `=` so a forgotten ceiling fails; the codemod refuses `--write` on `=` rows). The guard must go RED (`has 140 hits, ceiling 5`).
 
 ## Phase 2: convert
 
