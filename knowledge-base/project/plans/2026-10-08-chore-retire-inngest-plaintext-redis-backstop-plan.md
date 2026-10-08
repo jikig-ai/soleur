@@ -375,10 +375,11 @@ logs:
   where: Better Stack Logs (SOLEUR_INNGEST_BACKSTOP_WIPE, SOLEUR_INNGEST_SERVER_PROBE); GitHub Actions run logs
   retention: Better Stack retention is finite, so the evidence row values are copied into the destruction record in PR B
 discoverability_test:
-  command: curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" https://api.hetzner.cloud/v1/volumes/106261946
-  expected_output: 404
-  credentials_required: HCLOUD_TOKEN_READONLY from Doppler soleur/prd_terraform - the Hetzner API answers 401 to an unauthenticated request, so no unauthenticated probe verifies volume absence; the 404 is the post-condition after the destroy phase, 200 before it
+  command: bash apps/web-platform/infra/inngest-backstop-wipe.test.sh && bash tests/scripts/test-inngest-backstop-retire-gate.sh
+  expected_output: "0 failed"
 ```
+
+The discoverability test is the credential-free fixture pair for PR A, because merging PR A mutates nothing in production (no waiver of `credentials_required` is adopted; the corpus baseline in `preflight-discoverability-test.test.ts` is unchanged). The production read-backs are not a preflight probe: each dispatch phase reads Hetzner itself and comments the result on the tracker, and the volume-absence read-back (a `GET /v1/volumes/106261946` returning 404 with the read-only token) is the exit criterion of phase 2.4 and is recorded in the destruction record in PR B. Before the destroy phase that same request returns 200, so it cannot be this plan's merge-time probe.
 
 ## Encryption Posture
 
