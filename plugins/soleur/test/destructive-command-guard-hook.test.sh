@@ -2174,6 +2174,12 @@ tree_row "read bound: rm -rf / read before the deadline passed still denies (the
 slow_lexer slow-none 'print "C\0top\0" . "1\0" . "-\0ls\0"; nap(); print "C\0top\0" . "1\0" . "-\0echo\0" . "OK\0";'
 tree_row "read bound: nothing matched before the deadline passed asks with the bound reason" ask "$HT_HOOK" "$_LX_ENV"
 reason_has "read bound: the ask names the time limit and the bound rule id" "$ASK_LEAD bound: "
+# the 2 s judge extension after a read-time trip is counted from the TRIP (DEADLINE_S = SECONDS + 2), not added to the absolute deadline: a stall of 4.2 s
+# after rm -rf / is detected at 4-5 s, past DEADLINE_S + 2 = 4, and the old arithmetic broke the judging loop before it judged record 1 (a lost deny)
+stub_lexer slow-long "\$| = 1; sub nap { select(undef, undef, undef, 4.2); } $_SL_RM nap(); print \"C\\0top\\0\" . \"1\\0\" . \"-\\0echo\\0\" . \"OK\\0\";"
+HE_OK=ok; hook_edit "$HT_HOOK" $'\nDEADLINE_S=6\n' $'\nDEADLINE_S=2\n'
+chk "read bound: the 2 s deadline edit landed in the private copy (slow-long)" "$HE_OK"
+tree_row "read bound: rm -rf / read before a 4.2 s stall still denies (the 2 s judge extension is counted from the trip)" deny "$HT_HOOK" "$_LX_ENV"
 # one huge record: a frame-count check inside the read loop bounds it. 2046 complete words (the trip lands on a flag frame) are judged.
 slow_lexer slow-rec-flag 'print "C\0top\0" . "2500\0" . "-\0rm\0-\0-rf\0-\0/\0" . ("-\0x\0" x 1497); nap(); print "-\0x\0" x 997; print "OK\0";'
 tree_row "read bound: a single huge record cut mid-record (on a flag frame) still denies on the words read" deny "$HT_HOOK" "$_LX_ENV"

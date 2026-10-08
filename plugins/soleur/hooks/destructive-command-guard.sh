@@ -527,8 +527,8 @@ done < <({ printf '%s' "$INPUT" | jq -j '.tool_input.command' | perl "$LEXER"; }
 
 # A read-time trip (a record or word cap, or the clock: BOUND_SOFT) does not discard the records already read: the rule table
 # judges them, and the decision below is a deny if one matched, else a bound ask. After a clock trip the judging gets 2 more
-# seconds (the harness kills the hook at 10 s).
-[[ "$BOUND_READ" -eq 1 ]] && DEADLINE_S=$((DEADLINE_S + 2))
+# seconds counted from the trip (the harness kills the hook at 10 s; a trip detected late must not leave the judging no time at all).
+[[ "$BOUND_READ" -eq 1 ]] && DEADLINE_S=$((SECONDS + 2))
 if [[ "$SAW_OK" -ne 1 && -z "$BOUND_SOFT" ]]; then
   if [[ -n "$SAW_E" ]]; then ask_parse "lexer ${SAW_E}"; fi
   # No OK and no E: the lexer was killed, crashed, or perl is missing/unusable. Probe by RESULT.
