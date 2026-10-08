@@ -555,3 +555,47 @@
 - Maintenance head `a8fddddc65f07c59905213fcfec1541cd5380fcc` completed [CI 37824865510](https://github.com/jikig-ai/soleur/actions/runs/37824865510), [tenant integration 37824865562](https://github.com/jikig-ai/soleur/actions/runs/37824865562) and [RLS 37824865726](https://github.com/jikig-ai/soleur/actions/runs/37824865726) successfully, including both required aggregates, migration application and actual fuzzing. Production parity was skipped. Replacement guards 37825119010 and final description guards 37828332892 succeeded at that head; initial guards 37824865709 were canceled and superseded. The bounded primary watch settled with 84 effective passes, six skips and no failures, effective cancellations or pending checks. Fresh reinspection confirmed all 25 required checks successful, a clean worktree and zero unpushed commits. That verdict precedes this new sync.
 - The subsequent “continue” resumes draft maintenance without lifting execution or promotion holds. PR #9051 was verified OPEN, draft, outside the merge queue and with auto-merge disarmed. Inspected, pinned main `3ed3e4e6da7c4e55e40daa687d604034df544ffe` merged without conflicts as `0c1103ef43acd635ca91f751b198fd1ffce177b9`. Its two commits bring the Sentry declared-pending detector audit fix and workspace-plaintext-retirement infrastructure convergence, including sole-copy volume/attachment protection and retired destructive paths. Application runtime, components, libraries and migration bodies are unchanged from `a8fddddc`; infrastructure and recovery assumptions change. Source inspection and inherited legal records do not constitute new live infrastructure verification, full review, CLO disposition or production recovery qualification. No infrastructure workflow was dispatched. Fresh exact-head CI must cover the ensuing push.
 - Keep draft/default-off/customer content blocked. Local suites, recovery qualification, authenticated screenshots, eligible routine consumer, permitted Web matrices, attributable mode-specific CLO, full review and promotion remain held. The successful `27c04a95` synthetic rehearsal remains source-bound and its one-use authorization consumed. Account sharing/retention inheritance and configured storage/processing regions remain unknown; challenge retries remain stopped, Admin alternatives unexecuted and the support request unsent. No credential-value inspection, provider call, browser-auth copying, settings/key change, recovery rebuild/retry, shared-database/production write or flag/cohort change occurred.
+
+## Continuation update — 2026-10-08 resolver budget and test conversion sync
+
+- Documentation head `19583600ca64fcfa8036e0428f4386fc793d01d5` completed
+  [CI 37835550689](https://github.com/jikig-ai/soleur/actions/runs/37835550689),
+  [tenant integration 37835550859](https://github.com/jikig-ai/soleur/actions/runs/37835550859)
+  and [RLS 37835550793](https://github.com/jikig-ai/soleur/actions/runs/37835550793)
+  successfully, with both required aggregates, migration application and
+  actual fuzzing. Production parity was skipped. Final description
+  [guards 37838597606](https://github.com/jikig-ai/soleur/actions/runs/37838597606)
+  succeeded. All 25 required checks passed; the final bounded watch exited
+  with 84 passes, six skips and no failures, effective cancellations or
+  pending checks. Worktree cleanliness and zero unpushed commits were
+  reverified. This verdict precedes the ensuing main sync.
+- The operator's subsequent “continue” resumes draft maintenance without
+  releasing execution or promotion holds. PR #9051 was verified OPEN, draft,
+  outside the merge queue and with auto-merge disarmed. Inspected, pinned main
+  `fd1c4d5cac6f0129fa5682333fd12ccd2e7974a4` merged without conflicts as
+  `4b550847be205ba5170d014733cb8a9f81008955`. Its two commits bring the
+  cumulative DNS-resolution tick budget with additive-only retention of
+  unattempted hosts, companion boundedness tests and fixture-baseline updates,
+  plus the S2 shell-test grep conversion and a tightened sweep deferral.
+  Application runtime, components, libraries, migration bodies, dependency
+  manifests, plugin skills/agents and workflow files are unchanged from
+  `19583600ca`. Infrastructure and recovery assumptions change.
+- Limited read-only merge-scope inspection used pinned diffs and a repository
+  research agent; it was not full-branch review or a promotion sign-off.
+  Incoming S2 dated planning snapshots retain differing hand-edit counts
+  and operand descriptions; this sync uses final code and conversion evidence
+  rather than treating those historical snapshots as current instructions.
+  No correction of those dated records is part of this maintenance change.
+  Shell syntax and whitespace checks passed. Git hooks remain disabled at
+  the existing `/dev/null` path; no local-suite or hook-execution result is
+  claimed. Fresh exact-head CI must cover the ensuing push.
+- Keep draft/default-off/customer content blocked. Local suites, current-source
+  and production recovery, authenticated screenshots, routine eligibility,
+  permitted Web matrices, attributable mode-specific CLO, full review and
+  promotion remain held. The `27c04a95` rehearsal remains source-bound and
+  its one-use authorization consumed. No account read, challenge retry,
+  credential-value inspection, provider call, browser-auth copying, recovery
+  rebuild/retry, settings/key change, shared-database/production write,
+  infrastructure dispatch or flag/cohort change ran. Project controls and
+  regions remain unconfirmed; Admin alternatives are unexecuted and the
+  support request unsent.

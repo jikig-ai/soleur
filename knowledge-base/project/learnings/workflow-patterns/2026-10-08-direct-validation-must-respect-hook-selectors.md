@@ -46,3 +46,10 @@ restoring the branch's original bytes; no unknown edit was overwritten. For
 this repository, perform the required main-config refresh at the bare root,
 as the session-start rule specifies, and check the feature worktree afterward.
 Keep routing hygiene separate from an intentional feature-config change.
+
+During the next main-sync inspection, the queue-state helper's sandboxed
+network request failed. Its unknown result was preserved until the escalated
+read established an open PR outside the queue; no unknown state was treated
+as permission to push. A full read of the large pipe-guard test was truncated;
+the six-line incoming diff supplied the actual merge-scope evidence. Prefer
+bounded diffs for maintenance inspection and delegate broader file retrieval.
