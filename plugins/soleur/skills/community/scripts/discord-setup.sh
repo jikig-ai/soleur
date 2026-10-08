@@ -29,8 +29,13 @@
 # history, and (when the runtime wraps it in `bash -c`) on that wrapper's argument list. An inline
 # `VAR=value discord-setup.sh ...` is only free of an argument list in THIS process: the caller's
 # command still carries the value, so it is not offered. The form that works is to read each value
-# from a mode-600 file, in the one command that runs the script:
-#   read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id>
+# from a mode-600 file. Create each file in your own terminal (not through an agent), mode first,
+# and type the value at the prompt: `(umask 077; cat > /path/to/bot-token.txt)`; an existing file
+# keeps its wider mode through a redirect, so chmod 600 it before writing. Then, in one command whose
+# parentheses keep both values out of the shell you stay in:
+#   ( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id> )
+# (`create-webhook` also needs DISCORD_BOT_TOKEN_INPUT in its environment: read it from the bot-token
+# file first, as _print_env_remedy shows.)
 # Residual, stated plainly: the file names are in the command text, the values are not; the values
 # sit in those files until deleted; `create-webhook` prints the webhook URL on stdout (so it is in
 # the transcript once) unless its output is redirected into the file, which is the way to avoid it;
@@ -444,9 +449,12 @@ _print_env_remedy() {
   echo "  read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT"
   echo "  discord-setup.sh write-env <guild_id>"
   if [ ! -t 0 ]; then
-    echo "Your stdin is not a terminal, so read -rs has nothing to read. Do not type either value into the command: its text is kept in the transcript and the shell history. Run the terminal form above yourself, or put each value alone on one line of a mode-600 file and read it from there, in the one command that runs the script:"
-    echo "  read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id>"
-    echo "The webhook URL file can be written without printing the URL: (umask 077; discord-setup.sh create-webhook <channel_id> > /path/to/webhook-url.txt). Delete both files afterwards: the values stay in them until you do."
+    echo "Your stdin is not a terminal, so read -rs has nothing to read. Do not type either value into the command: its text is kept in the transcript and the shell history. Run the terminal form above yourself, or put each value alone on one line of a mode-600 file and read it from there. Create each file in your own terminal, not through an agent, and type the value at the prompt (end it with Ctrl-D), so the value is never in a command's text and the mode is set before it is written:"
+    echo "  (umask 077; cat > /path/to/webhook-url.txt)"
+    echo "  (umask 077; cat > /path/to/bot-token.txt)"
+    echo "If a file already exists, run chmod 600 on it before writing: a redirect keeps an existing file's wider mode. Then run the script in one command; the parentheses keep both values out of the shell you stay in:"
+    echo "  ( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id> )"
+    echo "Instead of typing the webhook URL, the webhook URL file can be written without printing the URL, once the bot token file exists (create-webhook needs the bot token in the environment too): ( read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_BOT_TOKEN_INPUT; umask 077; discord-setup.sh create-webhook <channel_id> > /path/to/webhook-url.txt ). Delete both files afterwards: the values stay in them until you do."
   fi
 }
 

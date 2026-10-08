@@ -270,7 +270,7 @@ require_credentials() {
     echo "To configure:" >&2
     echo "  1. Create an account at https://bsky.app" >&2
     echo "  2. Go to Settings > App Passwords > Add App Password" >&2
-    echo "  3. Export BSKY_HANDLE and BSKY_APP_PASSWORD as environment variables" >&2
+    echo "  3. Export BSKY_HANDLE and BSKY_APP_PASSWORD as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs BSKY_APP_PASSWORD; export BSKY_APP_PASSWORD" >&2
     exit 1
   fi
 }

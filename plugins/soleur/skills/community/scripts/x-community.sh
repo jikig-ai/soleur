@@ -215,7 +215,7 @@ require_credentials() {
     echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
     echo "  2. Create or select a project and app" >&2
     echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
-    echo "  4. Export them as environment variables" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
     exit 1
   fi
 }
@@ -311,8 +311,10 @@ oauth_sign() {
   # The load happens at EACH signature, not once: this function body is a command-substitution
   # subshell, so a function defined here dies with it and nothing is cached for the next call (the
   # library is one small file). Any function of this name inherited from the environment (an
-  # exported bash function) is dropped first, so only the vetted library's definition can ever run
-  # with the signing key in scope.
+  # exported bash function) is dropped first, so an inherited function named hmac_sha1_b64 cannot
+  # stand in for the library's. That is all this closes: the key stays readable by any other
+  # exported function (one named od, tr, openssl, base64 or cat still receives it on its stdin),
+  # which is the same exposure as the exported secret variables themselves.
   unset -f hmac_sha1_b64 2>/dev/null || true
   source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {
     echo "Error: could not load the OAuth signing helper; refusing to send an unsigned request." >&2

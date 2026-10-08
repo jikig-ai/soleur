@@ -40,8 +40,12 @@
 #     od, tr or base64. What the function does NOT control: a variable the caller exported
 #     earlier. The raw API secret and token secret the key is built from stay in those children's
 #     environment when the caller exported them (a sourced .env, the hosted environment); that is
-#     readable by the same user and root only, and on no argument list. The caller's shell
-#     options are untouched.
+#     readable by the same user and root only, and on no argument list. Nor does it control the
+#     functions the caller inherited: a caller that drops an inherited function NAMED
+#     hmac_sha1_b64 (`unset -f`) before sourcing this file stops it standing in for this one,
+#     but an exported function named od, tr, openssl, base64 or cat is still found first and
+#     receives the key on its stdin. That is the same exposure as the exported secret
+#     variables above, and no stronger claim is made. The caller's shell options are untouched.
 #   - LC_ALL=C inside, so every byte is one character.
 #   - portable to bash 3.2 and BSD od/base64: the shell features used are printf -v,
 #     substring expansion, indirect expansion and arithmetic; the external tools are

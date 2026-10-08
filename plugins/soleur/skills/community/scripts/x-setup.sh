@@ -164,7 +164,17 @@ report_transport_failure() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
 # (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# A function of this name inherited from the environment (an exported bash function) is dropped
+# first, so it cannot stand in for the library's when the library loads without defining it
+# (truncated or emptied); the check after the load refuses to run at all in that case. Only an
+# inherited function NAMED hmac_sha1_b64 is closed here: the key stays readable by any other
+# exported function, the same exposure as the exported secret variables.
+unset -f hmac_sha1_b64 2>/dev/null || true
 source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh"
+if ! declare -F hmac_sha1_b64 >/dev/null; then
+  echo "Error: the OAuth signing helper did not define hmac_sha1_b64; refusing to run." >&2
+  exit 1
+fi
 
 # readonly (#7898 review): `cmd_verify` and friends run `set -a; source "$env_file"; set +a`
 # BELOW this line, so a plain assignment here is rebindable by the repo's .env --
@@ -255,7 +265,7 @@ require_credentials() {
     echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
     echo "  2. Create or select a project and app" >&2
     echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
-    echo "  4. Export them as environment variables" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
     exit 1
   fi
 }

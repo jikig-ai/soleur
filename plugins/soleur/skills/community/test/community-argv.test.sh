@@ -1469,7 +1469,10 @@ SIGN_S="$X_SECRET" SIGN_T="$X_TOKSECRET"
 
 # --- an inherited exported function named hmac_sha1_b64 must not stand in for the vetted library ------
 echo "== x-community.sh: an inherited hmac_sha1_b64 function =="
-IMPFN='BASH_FUNC_hmac_sha1_b64%%=() { echo IMPORTED; }'
+# The stand-in drains its stdin (builtins only) before answering: a stand-in that exits at once races the
+# caller's `printf | hmac_sha1_b64` (SIGPIPE under `pipefail` when the writer is slower than the exit),
+# which flakes the "still sends one request" rows on a loaded host.
+IMPFN='BASH_FUNC_hmac_sha1_b64%%=() { local l; while IFS= read -r l || [ -n "$l" ]; do :; done; echo IMPORTED; }'
 check "inherited-function canary: bash imports that exported function from the environment here (the row is not vacuous)" \
   bash -c '[[ "$(env "$1" bash -c "type -t hmac_sha1_b64")" == function ]]' _ "$IMPFN"
 rec_clear
@@ -1486,6 +1489,55 @@ check "mutant: that guard mutant signs with the INHERITED function: the oracle r
 rec_clear
 run_sut "$REC" "" "${X_ENV[@]}" -- bash "$M" fetch-metrics
 check "mutant control: the same guard mutant with NO inherited function signs correctly (the row is RED because of the import)" x_sig_ok 1 GET
+
+# x-setup.sh loads the library at startup, so the same drop-then-check has to be there. With the library
+# intact the source redefines the function whatever was inherited; the path the drop closes is a library
+# that loads WITHOUT defining it (truncated, emptied). That is built in a sandbox tree with an empty library.
+echo "== x-setup.sh: an inherited hmac_sha1_b64 function =="
+XSL="$SANDBOX/xslib"
+mkdir -p "$XSL/skills/community/scripts/lib" "$XSL/scripts"
+cp "$HERE/../../../scripts/resolve-git-root.sh" "$XSL/scripts/"
+printf '# a library that loads and defines nothing\n:\n' > "$XSL/skills/community/scripts/lib/hmac-sha1-b64.sh"
+xsl_run() { # <x-setup.sh text file> [inherited-function env]: run validate-credentials against the empty library
+  cp "$1" "$XSL/skills/community/scripts/x-setup.sh"
+  rec_clear
+  RUN_CWD="$GITWORK" run_sut "$REC" "" "${X_ENV[@]}" "${@:2}" -- bash "$XSL/skills/community/scripts/x-setup.sh" validate-credentials
+}
+rec_clear
+RUN_CWD="$GITWORK" run_sut "$REC" "" "${X_ENV[@]}" "$IMPFN" -- bash "$X_SETUP" validate-credentials
+check "inherited hmac_sha1_b64 function: x-setup with the real library still exits 0 with one curl call" bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "inherited hmac_sha1_b64 function: x-setup's signature is the vetted library's (equals the independent recomputation)" x_sig_ok 1 GET
+xsl_run "$X_SETUP"
+check "x-setup with a library that defines nothing and NO inherited function: exit 1, curl never invoked (control: the empty library alone refuses)" \
+  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
+xsl_run "$X_SETUP" "$IMPFN"
+check "x-setup with a library that defines nothing and an inherited function: exit 1 and curl never invoked (the stand-in does not sign)" \
+  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
+check "x-setup with a library that defines nothing and an inherited function: the load failure is named on stderr, no credential on either stream" \
+  bash -c '[[ "$1" == *"did not define hmac_sha1_b64"* && "$1$2" != *"$3"* && "$1$2" != *"$4"* ]]' _ "$ERR" "$OUT" "$X_SECRET" "$X_TOKSECRET"
+# Mutant 1: the unset is gone (the declare -F check alone sees the inherited stand-in and passes it).
+M="$(mut_make x-setup.sh 'unset -f hmac_sha1_b64 2>/dev/null || true' ':')"
+xsl_run "$M" "$IMPFN"
+check "mutant: x-setup without the unset -f signs with the INHERITED function: one request is sent (RED on the refusal row)" test "$(curl_calls)" -eq 1
+check "mutant: that mutant's signature is the stand-in's, so the independent recomputation rejects it" not x_sig_ok 1 GET
+xsl_run "$M"
+check "mutant control: the same mutant with NO inherited function still refuses on the empty library (the row above is RED because of the import)" \
+  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
+# Mutant 2: the post-load check is gone (the unset alone still refuses, but the load failure is no longer named).
+M="$(mut_make x-setup.sh 'if ! declare -F hmac_sha1_b64 >/dev/null; then' 'if false; then')"
+xsl_run "$M" "$IMPFN"
+check "mutant: x-setup without the post-load check still sends nothing (the unset leaves no signer; exit 1)" \
+  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
+check "mutant: that mutant no longer names the load failure (RED on the named-failure row)" bash -c '[[ "$1" != *"did not define hmac_sha1_b64"* ]]' _ "$ERR"
+# The comment claim: an inherited function of the NAME is what is closed, not "every callee".
+check "x-community.sh: the signing comment no longer claims that only the vetted library's definition can run with the key in scope" \
+  test "$(file_count "only the vetted library's definition can ever run" "$X_COMMUNITY")" -eq 0
+check "x-community.sh: the signing comment states the true claim (an inherited function of this name cannot stand in for the library's)" \
+  test "$(file_count "stand in for the library's" "$X_COMMUNITY")" -eq 1
+check "x-community.sh: the signing comment states the residual (an exported od, tr, openssl, base64 or cat still receives the key on its stdin)" \
+  test "$(file_count "one named od, tr, openssl, base64 or cat still receives it on its stdin" "$X_COMMUNITY")" -eq 1
+check "the HMAC library header states the same residual and claims no stronger control" \
+  test "$(file_count "receives the key on its stdin" "$HMAC_LIB")" -eq 1
 
 # Lazy loading: the library is sourced inside oauth_sign, and the top-level source line is gone.
 check "x-community.sh: the only source of lib/hmac-sha1-b64.sh sits inside oauth_sign (lazy, not at load)" \
@@ -1768,10 +1820,22 @@ DW_INLINE_RE='(^|[[:space:]])DISCORD_[A-Z_]+_INPUT=[^[:space:]]'
 dw_no_inline() { [[ ! "$OUT" =~ $DW_INLINE_RE ]] && [[ "$OUT" != *printf* && "$OUT" != *'$URL'* ]]; }
 # dw_names_token: the remedy names the bot token too (a missing webhook plus a missing token must not give a second bare exit 64).
 dw_names_token() { [[ "$OUT" == *"read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT"* ]]; }
-dw_remedy_non_tty() {
-  [[ "$OUT" == *"$DW_FILEFORM"* && "$OUT" == *"stdin is not a terminal"* \
-    && "$OUT" == *"create-webhook <channel_id> > /path/to/webhook-url.txt"* ]] && dw_names_token && dw_no_inline
-}
+# The non-TTY remedy, one predicate per conjunct so a mutant can be driven to break exactly one of them
+# (dw_failed names the failing ones). The three recipes added for the value-in-command-text and
+# lingering-export findings: the mode-first file recipe for BOTH files, the chmod note for an existing
+# file, the bot token supplied to create-webhook, and both secrets confined to a subshell.
+dw_c_fileform()    { [[ "$OUT" == *"$DW_FILEFORM"* ]]; }
+dw_c_nontty()      { [[ "$OUT" == *"stdin is not a terminal"* ]]; }
+dw_c_createwh()    { [[ "$OUT" == *"create-webhook <channel_id> > /path/to/webhook-url.txt"* ]]; }
+dw_c_umask_hook()  { [[ "$OUT" == *"(umask 077; cat > /path/to/webhook-url.txt)"* ]]; }
+dw_c_umask_token() { [[ "$OUT" == *"(umask 077; cat > /path/to/bot-token.txt)"* ]]; }
+dw_c_chmod()       { [[ "$OUT" == *"run chmod 600 on it before writing"* ]]; }
+dw_c_cw_token()    { [[ "$OUT" == *"read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_BOT_TOKEN_INPUT; umask 077; discord-setup.sh create-webhook"* ]]; }
+dw_c_wrap_open()   { [[ "$OUT" == *"( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt;"* ]]; }
+dw_c_wrap_close()  { [[ "$OUT" == *"discord-setup.sh write-env <guild_id> )"* ]]; }
+DW_CONJ=(dw_c_fileform dw_c_nontty dw_c_createwh dw_c_umask_hook dw_c_umask_token dw_c_chmod dw_c_cw_token dw_c_wrap_open dw_c_wrap_close dw_names_token dw_no_inline)
+dw_remedy_non_tty() { local c; for c in "${DW_CONJ[@]}"; do "$c" || return 1; done; }
+dw_failed() { local c out=""; for c in "${DW_CONJ[@]}"; do "$c" || out+="$c "; done; printf '%s' "${out% }"; }
 dw_quiet_clean() { dw_no_secret && dw_untouched && dw_no_marker; }
 dw_untouched() { cmp -s "$SANDBOX/env.before" "$GITWORK/.env"; }
 dw_quiet_untouched() { dw_no_secret && dw_untouched; }
@@ -1980,6 +2044,38 @@ M="$(mut_make discord-setup.sh '  echo "  read -rs DISCORD_BOT_TOKEN_INPUT; expo
 dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$M" write-env "$GUILD"
 check "mutant: the remedy without the bot-token line: dw_names_token is RED (the rest of the remedy is intact)" not dw_names_token
 check "mutant: that token-less remedy still has no inline form (the other conjunct is not the one failing)" dw_no_inline
+# (e) every remaining conjunct, one mutant each that breaks ONLY it. The control runs first: the real
+# script has every conjunct green. Each from-string starts at the echo (the header comment of the
+# script carries near-copies of these texts, so a bare substring would land in the comment).
+dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$DISCORD_SETUP" write-env "$GUILD"
+check "conjunct control: the real script gives the non-TTY remedy with every conjunct green (the named set below is empty)" test -z "$(dw_failed)"
+check "conjunct control: the conjunct list is the eleven predicates (a dropped name cannot hide a mutant)" test "${#DW_CONJ[@]}" -eq 11
+dw_alone_mut() { # <label> <the one conjunct expected to fail> <from> <to>
+  local M; M="$(mut_make discord-setup.sh "$3" "$4")"
+  dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$M" write-env "$GUILD"
+  check "mutant: $1: exit 64 still (the usage class), so only the remedy text moved" test "$RC" -eq 64
+  check "mutant: $1: exactly $2 fails and no other conjunct" test "$(dw_failed)" = "$2"
+  check "mutant: $1: dw_remedy_non_tty is RED" not dw_remedy_non_tty
+}
+dw_alone_mut "the file-read line no longer exports the bot token" dw_c_fileform \
+  'echo "  ( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT;' \
+  'echo "  ( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT;'
+dw_alone_mut "the remedy does not say stdin is not a terminal" dw_c_nontty \
+  'echo "Your stdin is not a terminal, so' 'echo "Your stdin is a pipe, so'
+dw_alone_mut "create-webhook output is no longer redirected into the file (the URL would print)" dw_c_createwh \
+  'discord-setup.sh create-webhook <channel_id> > /path/to/webhook-url.txt )' 'discord-setup.sh create-webhook <channel_id> )'
+dw_alone_mut "the webhook-file recipe lost its umask (a 0644 file)" dw_c_umask_hook \
+  'echo "  (umask 077; cat > /path/to/webhook-url.txt)"' 'echo "  (cat > /path/to/webhook-url.txt)"'
+dw_alone_mut "the bot-token-file recipe lost its umask (a 0644 file)" dw_c_umask_token \
+  'echo "  (umask 077; cat > /path/to/bot-token.txt)"' 'echo "  (cat > /path/to/bot-token.txt)"'
+dw_alone_mut "the existing-file chmod note is gone (a redirect keeps a wider mode)" dw_c_chmod \
+  'run chmod 600 on it before writing' 'write to it'
+dw_alone_mut "create-webhook is no longer given the bot token" dw_c_cw_token \
+  'export DISCORD_BOT_TOKEN_INPUT; umask 077; discord-setup.sh create-webhook' 'umask 077; discord-setup.sh create-webhook'
+dw_alone_mut "the one-command form lost its opening parenthesis (the exports would stay in the invoking shell)" dw_c_wrap_open \
+  'echo "  ( read -r DISCORD_WEBHOOK_URL_INPUT <' 'echo "  read -r DISCORD_WEBHOOK_URL_INPUT <'
+dw_alone_mut "the one-command form lost its closing parenthesis (the exports would stay in the invoking shell)" dw_c_wrap_close \
+  'discord-setup.sh write-env <guild_id> )"' 'discord-setup.sh write-env <guild_id>"'
 # (d) no guild_id: the usage branch reverted to a bash parameter error.
 M="$(mut_make discord-setup.sh 'if [[ $# -eq 0 ]]; then' 'if false; then')"
 dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$M" write-env
@@ -2023,6 +2119,41 @@ RUN_CWD="$GITWORK" run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" -- bash "$M" writ
 check "mutant: bsky-setup write-env with the missing-credentials text back on stderr is RED on the stdout row (still exit 1)" \
   bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
 check "mutant: that stderr-diagnostic bsky-setup mutant fails we_missing_stdout" not we_missing_stdout BSKY_APP_PASSWORD
+# The missing-credentials advice (stdout of write-env) points at the no-history form, never an inline assignment.
+xs_advice_ok() { [[ "$OUT" == *"read -rs X_API_KEY; export X_API_KEY"* && "$OUT" == *"kept in the transcript and the shell history"* && "$OUT" != *"X_API_KEY="* ]]; }
+bs_advice_ok() { [[ "$OUT" == *"read -rs BSKY_APP_PASSWORD; export BSKY_APP_PASSWORD"* && "$OUT" == *"kept in the transcript and the shell history"* && "$OUT" != *"BSKY_APP_PASSWORD="* ]]; }
+RUN_CWD="$GITWORK" run_sut - "" "X_API_KEY=$XS_K" "X_API_SECRET=$XS_S" "X_ACCESS_TOKEN=$XS_T" -- bash "$X_SETUP" write-env
+check "x-setup write-env with a credential missing: exit 1 and the advice shows the read -rs form and no inline assignment" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "x-setup write-env with a credential missing: the advice text is read -rs, the transcript/history reason, no X_API_KEY=" xs_advice_ok
+M="$(mut_make x-setup.sh ', without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three' '')"
+RUN_CWD="$GITWORK" run_sut - "" "X_API_KEY=$XS_K" "X_API_SECRET=$XS_S" "X_ACCESS_TOKEN=$XS_T" -- bash "$M" write-env
+check "mutant: x-setup with the bare 'Export them as environment variables' advice back is RED on the advice row (still exit 1)" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "mutant: that bare-advice x-setup mutant fails xs_advice_ok" not xs_advice_ok
+RUN_CWD="$GITWORK" run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" -- bash "$BSKY_SETUP" write-env
+check "bsky-setup write-env with a credential missing: exit 1" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "bsky-setup write-env with a credential missing: the advice text is read -rs, the transcript/history reason, no BSKY_APP_PASSWORD=" bs_advice_ok
+M="$(mut_make bsky-setup.sh ', without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs BSKY_APP_PASSWORD; export BSKY_APP_PASSWORD' '')"
+RUN_CWD="$GITWORK" run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" -- bash "$M" write-env
+check "mutant: bsky-setup with the bare 'Export ... as environment variables' advice back is RED on the advice row (still exit 1)" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "mutant: that bare-advice bsky-setup mutant fails bs_advice_ok" not bs_advice_ok
+# The same advice in the two community scripts (stderr, exit 1).
+xs_advice_all_ok() { [[ "$OUT$ERR" == *"read -rs X_API_KEY; export X_API_KEY"* && "$OUT$ERR" == *"kept in the transcript and the shell history"* && "$OUT$ERR" != *"X_API_KEY="* ]]; }
+bs_advice_all_ok() { [[ "$OUT$ERR" == *"read -rs BSKY_APP_PASSWORD; export BSKY_APP_PASSWORD"* && "$OUT$ERR" == *"kept in the transcript and the shell history"* && "$OUT$ERR" != *"BSKY_APP_PASSWORD="* ]]; }
+run_sut - "" -- bash "$X_COMMUNITY" fetch-metrics
+check "x-community with no credentials: exit 1, curl never invoked, and the advice shows the read -rs form and no inline assignment" \
+  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
+check "x-community with no credentials: the advice text is read -rs, the transcript/history reason, no X_API_KEY=" xs_advice_all_ok
+M="$(mut_make x-community.sh ', without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three' '')"
+run_sut - "" -- bash "$M" fetch-metrics
+check "mutant: x-community with the bare advice back is RED on the advice row (still exit 1)" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "mutant: that bare-advice x-community mutant fails xs_advice_all_ok" not xs_advice_all_ok
+run_sut - "" -- bash "$BSKY_COMMUNITY" create-session
+check "bsky-community with no credentials: exit 1, curl never invoked" bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
+check "bsky-community with no credentials: the advice text is read -rs, the transcript/history reason, no BSKY_APP_PASSWORD=" bs_advice_all_ok
+M="$(mut_make bsky-community.sh ', without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs BSKY_APP_PASSWORD; export BSKY_APP_PASSWORD' '')"
+run_sut - "" -- bash "$M" create-session
+check "mutant: bsky-community with the bare advice back is RED on the advice row (still exit 1)" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "mutant: that bare-advice bsky-community mutant fails bs_advice_all_ok" not bs_advice_all_ok
 M="$(mut_make bsky-setup.sh 'echo "Wrote 2 variables to ${env_file} (permissions: 600)"' 'echo "Wrote 2 variables to ${env_file} (permissions: 600)" >&2')"
 RUN_CWD="$GITWORK" run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" -- bash "$M" write-env
 check "mutant: bsky-setup write-env with the confirmation back on stderr still exits 0" bash -c '[[ "$1" -eq 0 ]]' _ "$RC"
@@ -2099,7 +2230,24 @@ dockerfile_pins_image() { # <Dockerfile>: every `FROM node:22-slim@sha256:...` l
 check "pinned image: PINNED_IMAGE equals the node:22-slim digest of every FROM line in apps/web-platform/Dockerfile (not a literal that only this file checks)" \
   dockerfile_pins_image "$HERE/$DOCKERFILE_REL"
 mkdir -p "$SANDBOX/dockerfile"
-sed 's/^\(FROM node:22-slim@sha256:\)4/\15/' "$HERE/$DOCKERFILE_REL" > "$SANDBOX/dockerfile/Dockerfile.bumped"
+# The tamper rewrites the FIRST digest character of every FROM line to a different one, whatever it is
+# (a digest bump changes the leading character, and a tamper keyed on one hard-coded character would then
+# read RED as an instrument error). 0 becomes 1; any other character becomes 0.
+tamper_digest() { # <in> <out>
+  sed -E -e 's/^(FROM node:22-slim@sha256:)0/\11/' -e t -e 's/^(FROM node:22-slim@sha256:)[^0]/\10/' "$1" > "$2"
+}
+tamper_digest "$HERE/$DOCKERFILE_REL" "$SANDBOX/dockerfile/Dockerfile.bumped"
+tamper_all_hex() { # every leading hex digit is changed by tamper_digest, on a synthetic one-line Dockerfile
+  local c n=0
+  for c in 0 1 2 3 4 5 6 7 8 9 a b c d e f; do
+    printf 'FROM node:22-slim@sha256:%s%s AS base\n' "$c" "$(printf '%063d' 0)" > "$SANDBOX/dockerfile/lead.in"
+    tamper_digest "$SANDBOX/dockerfile/lead.in" "$SANDBOX/dockerfile/lead.out"
+    cmp -s "$SANDBOX/dockerfile/lead.in" "$SANDBOX/dockerfile/lead.out" && return 1
+    n=$((n + 1))
+  done
+  [[ "$n" -eq 16 ]]
+}
+check "pinned image: the tamper changes the leading digest character for each of the sixteen hex digits (it does not depend on the current digest)" tamper_all_hex
 check "pinned image: the doctored Dockerfile (one digest character changed on every FROM line) differs from the real one" not cmp -s "$HERE/$DOCKERFILE_REL" "$SANDBOX/dockerfile/Dockerfile.bumped"
 check "pinned image: a Dockerfile whose digest moved on is RED (PINNED_IMAGE no longer matches)" not dockerfile_pins_image "$SANDBOX/dockerfile/Dockerfile.bumped"
 check "pinned image: a Dockerfile with no node:22-slim FROM line is RED (an empty comparison cannot pass)" not dockerfile_pins_image /dev/null
@@ -2108,8 +2256,8 @@ echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 1167 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1167\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 1227 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1227\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]
