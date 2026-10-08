@@ -477,7 +477,7 @@ shape_run unterminated; row_on "F1e: an unterminated /* comment fails closed (qu
 G2_SUITE="$REPO_ROOT/tests/scripts/test-audit-ruleset-bypass.sh"
 G2_STRIP="$WORK/g2-strip.py"
 sed -n "/^_mq_strip_hcl() {/,/^}/p" "$G2_SUITE" | sed -n "/<<'PYSTRIP'/,/^PYSTRIP\$/p" | sed '1d;$d' > "$G2_STRIP"
-g2_on() { python3 "$G2_STRIP" "$1" 2>/dev/null | grep -q 'merge_queue'; }
+g2_on() { python3 "$G2_STRIP" "$1" 2>/dev/null | grep -c >/dev/null 'merge_queue'; }
 # parity_row <label> <engine-root> <shape...>: probe verdict == Guard 2 verdict for every shape.
 parity_row() {
   local label="$1" root="$2" shape bad="" probe_on g2
