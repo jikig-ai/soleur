@@ -1,6 +1,6 @@
 ---
 title: Encrypt the live /workspaces volume additively — never replace the host that cannot be rebuilt
-status: adopting
+status: accepted
 date: 2026-07-17
 amends: none
 supersedes: none
@@ -12,7 +12,7 @@ issue: 6588
 **Ruled by:** `soleur:engineering:cto`, 2026-07-17, per issue #6588's explicit routing mandate
 (*"Do not start with terraform… The design question belongs to `soleur:engineering:cto`"*).
 
-`status: adopting` → flips to `accepted` on soak-pass after the cutover.
+`status: adopting` → flips to `accepted` on soak-pass after the cutover. **Superseded 2026-10-08 (#6604 step 7, PR #9348):** flipped to `accepted` after the destruction record read `status: complete` and the CLO attested at `611051949cbe3539385a68ed8ac5609c699dce13`, each its own commit.
 
 ## Context
 
