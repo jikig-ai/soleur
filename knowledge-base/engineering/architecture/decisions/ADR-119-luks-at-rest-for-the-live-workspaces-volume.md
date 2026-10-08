@@ -1479,8 +1479,8 @@ run 37803274724. Evidence already in hand: rehearsal run `36769782488` (2026-09-
 
 - **AP-009 basis.** The volume D deletes is a superseded copy frozen at the 2026-07-23 cutover (run
   29995956562, 8 workspaces). At the rehearsal, `plaintext_only=0`: no workspace existed only on that
-  copy, so the wipe destroys nothing the live volume lacks, provided D re-reads the same count
-  (0 (`plaintext_only=0` on D's host row and on its `field=plaintext_only` evidence row)).
+  copy, so the wipe destroyed nothing the live volume lacked, and D re-read the same count: 0
+  (`plaintext_only=0` on D's host row and on its `field=plaintext_only` evidence row).
 - **The accepted drop to a single copy.** From D's `delete_issued=true`, volume `106443278`
   (`hcloud_volume.workspaces_luks`) holds the only copy of every workspace. There is no backup and no snapshot of it; escrow (the Doppler
   passphrase and the off-host header) covers key loss, not data loss. Hardware loss of that volume stays
@@ -1523,9 +1523,9 @@ run 37803274724. Evidence already in hand: rehearsal run `36769782488` (2026-09-
   #6931), unreachable while the replace path refuses web-1 and `user_data` is `ignore_changes`.
 - **The `CONFIRM_WIPE` mode is a tombstone.** The wipe body, `wipe_plaintext()` and its helpers, the
   `wipe` job and the forget workflow are deleted by PR #9348 (the procedure is in git history at
-  `59abf6a76c`, and it is the procedure as run once the release check's `git diff --quiet` of D's and
-  the forget's head SHAs against it passes: D, run 37801674740, at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, and the forget, run 37803274724, at `425ea0fc1fda3624e53c46771d76580c43d36e90`, both with no diff from `59abf6a76c`). Until that merge they exist on `main` only, and D and the forget are dispatched from
-  `main` (the `workspaces-luks-cutover` environment admits `main` only), so they run `main`'s copies and
+  `59abf6a76c`, and it is the procedure as run (the release check's `git diff --quiet` of D's and
+  the forget's head SHAs against it passed on 2026-10-08): D, run 37801674740, at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, and the forget, run 37803274724, at `425ea0fc1fda3624e53c46771d76580c43d36e90`, both with no diff from `59abf6a76c`). Until that merge they exist on `main` only, and D and the forget are dispatched from
+  `main` (the `workspaces-luks-cutover` environment admits `main` only), so D and the forget ran `main`'s copies, and
   every resume arm stays available until the merge deletes them. `CONFIRM_WIPE` stays declared and counted by `assert_mode_exclusive`; any value other
   than unset or `0` writes one `result=cutover_aborted outcome=wipe_retired` row, drops the EXIT trap and
   dies before any mutation, so a stray value can neither wipe nor fall through to the L3 cutover body.
