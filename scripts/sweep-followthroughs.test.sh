@@ -1149,6 +1149,203 @@ t_g3_h3_no_secrets_clause() {
   rm -rf "$root"
 }
 
+# =============================================================================
+# THE ENV HOP (S2 of the argv-bearer sweep, D6): a forwarded secret must reach the probe WITHOUT its
+# value ever being an argument of any process. The old form was `env -i PATH=... NAME=<value> "$script"`,
+# i.e. every forwarded secret sat in `env`'s /proc/<pid>/cmdline until `env` called exec. The new form is
+# a `python3 -I` launcher that takes the NAMES on argv, reads each value from its own environment and
+# `os.execve`s the probe with the exact `env -i` environment.
+#
+# Every row runs the real sweeper end to end under `g3_run` with two RECORDING shims in front of PATH:
+# `env` (a hop that still goes through it is the defect) and `python3` (which records its argv and then
+# execs the REAL interpreter, so the launcher is exercised, not faked). Secrets are synthetic canaries and
+# are only ever compared, never printed: the verdict helper below returns found|absent.
+# =============================================================================
+
+S2D_REAL_PY=$(command -v python3 || true)
+S2D_REAL_ENV=$(command -v env || true)
+if [[ -z "$S2D_REAL_PY" || -z "$S2D_REAL_ENV" ]]; then
+  # The sweeper's env hop needs python3 (the ubuntu-24.04 runner has it); a suite that cannot run
+  # the hop must not report green.
+  printf '[FATAL] python3 and env are prerequisites of the env-hop rows (python3=%s env=%s)\n' \
+    "${S2D_REAL_PY:-missing}" "${S2D_REAL_ENV:-missing}" >&2
+  exit 1
+fi
+S2D_PINNED_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# s2d_has <haystack> <needle> -> found|absent. Value-free on purpose: neither argument is echoed.
+s2d_has() { if [[ "$1" == *"$2"* ]]; then echo found; else echo absent; fi; }
+
+# s2d_root <secrets-clause> -> a g3 root whose tracker names scripts/followthroughs/q.sh, plus the shims.
+s2d_root() {
+  local clause="$1" root
+  root=$(g3_root "$(printf '[{"number":9001,"body":"<!-- soleur:followthrough script=scripts/followthroughs/q.sh earliest=2020-01-01T00:00:00Z secrets=%s -->"}]' "$clause")")
+  cat > "$root/scripts/followthroughs/q.sh" <<'EOF'
+#!/usr/bin/env bash
+# Writes what it received to CWD-relative sidecars (CWD = the g3 root, preserved across the hop).
+printf '%s' "${FOO_TOKEN-<unset>}" > val.foo
+printf '%s' "${OTHER_TOKEN-<unset>}" > val.other
+printf '%s' "$PATH" > val.path
+compgen -e | sort > val.names
+awk '/^SigIgn/{print $2}' "/proc/$$/status" > val.sigign 2>/dev/null || :
+exit 0
+EOF
+  chmod +x "$root/scripts/followthroughs/q.sh"
+  cat > "$root/bin/env" <<EOF
+#!/usr/bin/env bash
+printf 'ENV-EXEC %s\n' "\$#" >> "$root/env.log"
+exec "$S2D_REAL_ENV" "\$@"
+EOF
+  cat > "$root/bin/python3" <<EOF
+#!/usr/bin/env bash
+printf 'ARGV-BEGIN\n' >> "$root/py.log"
+printf 'ARG<%s>\n' "\$@" >> "$root/py.log"
+exec "$S2D_REAL_PY" "\$@"
+EOF
+  chmod +x "$root/bin/env" "$root/bin/python3"
+  : > "$root/env.log"
+  : > "$root/py.log"
+  printf '%s' "$root"
+}
+
+# s2d_count <file> <literal-line> -> number of exact-line matches (grep -c rc 1 on zero is normal).
+s2d_count() { local n; n=$(grep -cxF -- "$2" "$1" || true); echo "${n:-0}"; }
+
+# --- S2D-1: `env` is never exec'd, the launcher is, and no value is in its argv -----------------
+t_s2d_1_no_env_hop_and_no_value_on_argv() {
+  local root; root=$(s2d_root FOO_TOKEN)
+  local canary="CANARY-s2d1-$$-$RANDOM"
+  # Control: the env shim records an exec when one happens, so a count of 0 below is not a broken shim.
+  (PATH="$root/bin:$PATH" env true)
+  assert_eq "S2D-1 control: the recording env shim records an env exec" "1" "$(s2d_count "$root/env.log" 'ENV-EXEC 1')"
+  : > "$root/env.log"
+  g3_run "$root" "$SUT" FOO_TOKEN="$canary"
+  local pylog; pylog=$(cat "$root/py.log")
+  assert_eq       "S2D-1 the hop completes (rc 0)" "0" "$(cat "$root/rc")"
+  assert_eq       "S2D-1 env is never exec'd by the sweeper" "0" "$(wc -l < "$root/env.log" | tr -d ' ')"
+  assert_eq       "S2D-1 precondition: the python3 launcher was invoked exactly once" "1" "$(s2d_count "$root/py.log" 'ARGV-BEGIN')"
+  assert_contains "S2D-1 the forwarded NAME travels on the launcher's argv" "ARG<FOO_TOKEN>" "$pylog"
+  assert_eq       "S2D-1 the secret VALUE is in no python3 argument" "absent" "$(s2d_has "$pylog" "$canary")"
+  assert_eq       "S2D-1 the probe still receives the value" "found" "$([[ "$(cat "$root/val.foo")" == "$canary" ]] && echo found || echo absent)"
+  rm -rf "$root"
+}
+
+# --- S2D-2: values that an argv-shaped hop would mangle survive byte for byte -------------------
+t_s2d_2_hostile_values_round_trip() {
+  local -a shapes=(eq nl big)
+  local shape v root got n_ran=0
+  for shape in "${shapes[@]}"; do
+    case "$shape" in
+      eq)  v='a=b==c=' ;;
+      nl)  v=$'first line\nsecond=line\n\nthird\n' ;;
+      big) v=$(head -c 102400 /dev/zero | tr '\0' 'k') ;;
+    esac
+    root=$(s2d_root FOO_TOKEN)
+    g3_run "$root" "$SUT" FOO_TOKEN="$v"
+    # printf x sentinel: $(...) would strip a trailing newline and hide a lost one.
+    got=$(cat "$root/val.foo"; printf x)
+    assert_eq "S2D-2 [$shape] the sweep completes (rc 0)" "0" "$(cat "$root/rc")"
+    assert_eq "S2D-2 [$shape] the probe receives the value byte for byte" "found" "$([[ "$got" == "${v}x" ]] && echo found || echo absent)"
+    assert_eq "S2D-2 [$shape] the value is in no python3 argument" "absent" "$(s2d_has "$(cat "$root/py.log")" "$v")"
+    n_ran=$((n_ran + 1))
+    rm -rf "$root"
+  done
+  # A row floor cannot see a loop that runs zero times; this counter can.
+  assert_eq "S2D-2 inner counter: every value shape ran" "${#shapes[@]}" "$n_ran"
+}
+
+# --- S2D-3: a forwarded secret reaches the probe, an unforwarded one does not, and nothing else does ---
+t_s2d_3_forwarded_and_unforwarded() {
+  local root; root=$(s2d_root FOO_TOKEN)
+  local c1="CANARY-s2d3a-$$-$RANDOM" c2="CANARY-s2d3b-$$-$RANDOM"
+  g3_run "$root" "$SUT" FOO_TOKEN="$c1" OTHER_TOKEN="$c2"
+  local names; names=$'\n'"$(cat "$root/val.names")"$'\n'
+  assert_eq "S2D-3 the forwarded secret reaches the probe" "found" "$([[ "$(cat "$root/val.foo")" == "$c1" ]] && echo found || echo absent)"
+  assert_eq "S2D-3 an unforwarded secret does NOT reach the probe" "<unset>" "$(cat "$root/val.other")"
+  assert_eq "S2D-3 the unforwarded secret's name is not in the probe's environment" "absent" "$(s2d_has "$names" $'\nOTHER_TOKEN\n')"
+  assert_eq "S2D-3 the sweeper's own GH_REPO is not leaked into the probe" "absent" "$(s2d_has "$names" $'\nGH_REPO\n')"
+  assert_eq "S2D-3 the sweeper's own DRY_RUN is not leaked into the probe" "absent" "$(s2d_has "$names" $'\nDRY_RUN\n')"
+  assert_eq "S2D-3 PATH is pinned to the FHS default, not forwarded" "$S2D_PINNED_PATH" "$(cat "$root/val.path")"
+  assert_eq "S2D-3 HOME is present" "found" "$(s2d_has "$names" $'\nHOME\n')"
+  assert_eq "S2D-3 the clock channel is present" "found" "$(s2d_has "$names" $'\nSOLEUR_FT_EARLIEST\n')"
+  rm -rf "$root"
+  # Two names in one clause: both forwarded, still nothing else.
+  root=$(s2d_root FOO_TOKEN,OTHER_TOKEN)
+  g3_run "$root" "$SUT" FOO_TOKEN="$c1" OTHER_TOKEN="$c2"
+  assert_eq "S2D-3 two-name clause: first reaches the probe" "found" "$([[ "$(cat "$root/val.foo")" == "$c1" ]] && echo found || echo absent)"
+  assert_eq "S2D-3 two-name clause: second reaches the probe" "found" "$([[ "$(cat "$root/val.other")" == "$c2" ]] && echo found || echo absent)"
+  assert_eq "S2D-3 two-name clause: the first value is in no python3 argument" "absent" "$(s2d_has "$(cat "$root/py.log")" "$c1")"
+  assert_eq "S2D-3 two-name clause: the second value is in no python3 argument" "absent" "$(s2d_has "$(cat "$root/py.log")" "$c2")"
+  rm -rf "$root"
+}
+
+# --- S2D-4: a reserved name is refused BEFORE any value is read (and the reorder mutant is caught) ---
+t_s2d_4_reserved_refused_before_any_read() {
+  local -a reserved=(PATH BASH_ENV SOLEUR_FT_EARLIEST)
+  local name root posted n_ran=0
+  local -a extra
+  for name in "${reserved[@]}"; do
+    root=$(s2d_root "$name")
+    extra=()
+    # PATH is already set by g3_run; re-passing it would replace the sweeper's own search path.
+    [[ "$name" != "PATH" ]] && extra=("$name=/dev/null")
+    g3_run "$root" "$SUT" ${extra[@]+"${extra[@]}"}
+    posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+    assert_contains "S2D-4 [$name] the comment says the name is reserved" "reserved name" "$posted"
+    assert_eq       "S2D-4 [$name] the launcher was never invoked (no value was read)" "0" "$(s2d_count "$root/py.log" 'ARGV-BEGIN')"
+    assert_eq       "S2D-4 [$name] the probe did not run" "absent" "$([[ -e "$root/val.foo" ]] && echo present || echo absent)"
+    n_ran=$((n_ran + 1))
+    rm -rf "$root"
+  done
+  assert_eq "S2D-4 inner counter: every reserved name ran" "${#reserved[@]}" "$n_ran"
+
+  # Reorder mutation (Guard 2 #8): move the validation call to AFTER the append. The reserved name now
+  # reaches the launcher, so the same input must turn the "never invoked" row red.
+  root=$(s2d_root PATH)
+  local mut="$root/sut-reordered.sh"
+  awk '
+    /^[[:space:]]*valid_secret_name "\$name" \|\| vrc=\$\?[[:space:]]*$/ && !moved { held = $0; moved = 1; next }
+    { print }
+    /fwd_names\+=\("\$name"\)/ && held != "" { print held; held = "" }
+  ' "$SUT" > "$mut"
+  local l_valid l_append
+  l_valid=$(awk '/^[[:space:]]*valid_secret_name "\$name" \|\| vrc=\$\?[[:space:]]*$/{print NR; exit}' "$mut")
+  l_append=$(awk '/fwd_names\+=\("\$name"\)/{print NR; exit}' "$mut")
+  if [[ -z "$l_valid" || -z "$l_append" ]] || (( l_valid <= l_append )); then
+    TOTAL=$((TOTAL + 1)); fail "S2D-4 reorder mutation did not land (validation is not after the append: valid=${l_valid:-none} append=${l_append:-none}) -- the row would be vacuous"
+  else
+    g3_run "$root" "$mut"
+    assert_eq "S2D-4 reorder mutant: the reserved name reaches the launcher (the refusal-first order is the mechanism)" "1" "$(s2d_count "$root/py.log" 'ARGV-BEGIN')"
+  fi
+  rm -rf "$root"
+}
+
+# --- S2D-5: python ignores SIGPIPE; an ignored signal survives exec, so the launcher must restore it ---
+t_s2d_5_sigpipe_disposition_restored() {
+  if [[ ! -r /proc/self/status ]]; then
+    echo "SKIP: S2D-5 needs /proc/self/status"
+    return 0
+  fi
+  local root; root=$(s2d_root FOO_TOKEN)
+  g3_run "$root" "$SUT" FOO_TOKEN=x
+  local mask; mask=$(cat "$root/val.sigign")
+  assert_eq "S2D-5 precondition: the probe reported its signal mask" "1" "$([[ "$mask" =~ ^[0-9a-fA-F]+$ ]] && echo 1 || echo 0)"
+  # SIGPIPE is signal 13 -> bit 12 -> 0x1000.
+  assert_eq "S2D-5 the probe does NOT inherit an ignored SIGPIPE" "0" "$(( 0x${mask:-0} & 0x1000 ))"
+  rm -rf "$root"
+}
+
+# --- S2D-6: an un-execable probe maps to the same TRANSIENT verdict `env` gave it, with no traceback ---
+t_s2d_6_exec_failure_is_transient_not_a_traceback() {
+  local root; root=$(s2d_root FOO_TOKEN)
+  printf '#!/nonexistent/interpreter\n' > "$root/scripts/followthroughs/q.sh"
+  g3_run "$root" "$SUT" FOO_TOKEN=x
+  local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_contains     "S2D-6 an un-execable probe is reported as a verdict comment" "### Sweeper run: TRANSIENT" "$posted"
+  assert_not_contains "S2D-6 the launcher does not leak a Python traceback" "Traceback" "$posted"
+  rm -rf "$root"
+}
+
 
 # =============================================================================
 # GUARD 2 (#7490) -- the sweeper's FENCED-ONLY DIRECTIVE verdict is LOUD.
@@ -1582,6 +1779,12 @@ t_g3_h3_no_secrets_clause
 t_clk1_earliest_forwarded
 t_clk2_absent_earliest_is_empty_not_unset
 t_clk3_channel_name_is_reserved
+t_s2d_1_no_env_hop_and_no_value_on_argv
+t_s2d_2_hostile_values_round_trip
+t_s2d_3_forwarded_and_unforwarded
+t_s2d_4_reserved_refused_before_any_read
+t_s2d_5_sigpipe_disposition_restored
+t_s2d_6_exec_failure_is_transient_not_a_traceback
 
 echo
 
@@ -1690,7 +1893,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=195
+MIN_ASSERTIONS=239
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

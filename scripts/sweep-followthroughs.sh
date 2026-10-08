@@ -23,13 +23,17 @@ set -euo pipefail
 # Refuse unconditionally, not behind a `${VAR:+x}` hatch: the forwarded-secret
 # set is determined at RUNTIME by each issue's `secrets=` clause, so no literal
 # name exists for a hatch to test and it would be open by construction.
-# Measured -- the append at `env_args+=("$name=${!name}")` does NOT leak (bash
-# prints array appends unexpanded), but the invocation below traces as
+# Measured -- the pre-S2 invocation (`env -i PATH=... NAME=<value> ... "$script"`)
+# traced as
 #   ++ env -i PATH=... SENTRY_ACTIONS_RO_TOKEN=<value> scripts/followthroughs/<probe>
 # putting every secret this sweeper forwards onto one line, which then reaches a
-# public issue comment. To debug a probe, trace the probe itself: xtrace is not
-# inherited across this child invocation (and `env -i` clears it outright), so
-# tracing the sweeper never showed the probe's execution anyway.
+# public issue comment. The hop is now a name-only launcher (FT_LAUNCHER below), so
+# the traced line carries the NAMES, but the refusal stays: the launcher's environment
+# (the export that precedes it) is still the credential channel, and a traced `export`
+# or substitution around it is one edit from a leak. To debug a probe, trace the probe
+# itself: xtrace is not inherited across this child invocation (the launcher rebuilds
+# the environment from scratch), so tracing the sweeper never showed the probe's
+# execution anyway.
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script forwards live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
 esac
@@ -61,6 +65,38 @@ now_epoch=$(date -u +%s)
 
 log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
+
+# The probe launcher (argv-bearer sweep S2, D6), run as `python3 -I -c "$FT_LAUNCHER" SCRIPT EARLIEST NAME...`.
+# It rebuilds EXACTLY the environment the old `env -i PATH=<FHS default> HOME=.. NAME=value.. SOLEUR_FT_EARLIEST=..`
+# built -- nothing else survives -- reading each NAME's value from its OWN environment and execve()ing the
+# probe. The values are never an argument of any process. Written without single quotes (it lives in one).
+#  * `-I` ignores PYTHON* variables and the user site, so the interpreter cannot be steered by the
+#    forwarded environment; `os.environb` is bytes, so a non-UTF-8 value cannot raise.
+#  * Python ignores SIGPIPE and SIGXFSZ, and an ignored signal SURVIVES exec: restore both so the probe
+#    sees the disposition `env` would have handed it (a probe piping into a closed reader must die, not spin).
+#  * A name missing from the environment is a hard stop (126), not a silent skip: the sweeper validated
+#    and exported it a moment ago, so absence means the hop is broken and the probe must not run half-armed.
+#  * An exec failure maps to the codes `env` used (127 not found, 126 otherwise) so the sweeper reads the
+#    same TRANSIENT verdict it always did and no Python traceback reaches a public tracker comment.
+FT_LAUNCHER='import os, signal, sys
+try:
+    script, earliest, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+    src = os.environb
+    env = {b"PATH": b"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+    for n in names:
+        k = os.fsencode(n)
+        if k not in src:
+            sys.stderr.write("launcher: forwarded name %s is not in the sweeper environment\n" % n)
+            sys.exit(126)
+        env[k] = src[k]
+    env[b"SOLEUR_FT_EARLIEST"] = os.fsencode(earliest)
+    for s in (signal.SIGPIPE, signal.SIGXFSZ):
+        signal.signal(s, signal.SIG_DFL)
+    os.execve(script, [script], env)
+except OSError as e:
+    sys.stderr.write("launcher: cannot exec %s: %s\n" % (sys.argv[1], e.strerror))
+    sys.exit(127 if e.errno == 2 else 126)
+'
 
 # Parse a single directive from an issue body. Stdin = body text.
 # Writes lines: `KEY VALUE` for script/earliest/secrets, or nothing if no
@@ -552,7 +588,13 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
   # be augmented with tool-cache or actions-runner-prefix dirs) defeats
   # the purpose of `env -i`. The verification scripts under
   # scripts/followthroughs/ should not depend on caller-side PATH state.
-  local -a env_args=("env" "-i" "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "HOME=$HOME")
+  #
+  # THE HOP IS A NAME-ONLY LAUNCHER (argv-bearer sweep S2, D6). The old form was
+  # `env -i PATH=... NAME=<value> ... "$script"`, which put every forwarded secret in `env`'s
+  # /proc/<pid>/cmdline (world-readable) until `env` called exec. Now this loop collects NAMES only;
+  # FT_LAUNCHER (below) reads each value from its own environment and execve()s the probe with the
+  # exact environment `env -i` built. Names travel on argv, values never do.
+  local -a fwd_names=()
   # Guard 3 (#7946). Three properties of this loop, each measured absent before it:
   #   (a) VALIDATE BEFORE EXPANDING. `${!name+x}` on an author-controlled `name` evaluates
   #       an array subscript, so a directive `secrets=a[$(cmd)]` ran `cmd` inside this job
@@ -592,7 +634,7 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
         missing_lines+=("- \`${name}\` — bound but empty: the repo secret is absent or the \`secrets.\` reference in the workflow is misspelled")
         continue
       fi
-      env_args+=("$name=${!name}")
+      fwd_names+=("$name")
     done
   fi
   if (( ${#missing_lines[@]} > 0 )); then
@@ -625,14 +667,21 @@ Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followt
   # directive is re-baselined or a second tracker enrols the same script with its own `earliest=`.
   # Forwarded unconditionally (it is not a secret, and `${earliest:-}` may legitimately be empty:
   # a probe treats an empty/unparseable value as "no clock" and never escalates on it). Appended
-  # AFTER the secrets loop so ours is the last assignment `env` sees, independent of the reserved
-  # -name refusal above -- two mechanisms, because only one of them is a validator.
-  env_args+=("SOLEUR_FT_EARLIEST=${earliest:-}")
-
+  # Set by the launcher AFTER the forwarded names, so ours is the last assignment the probe sees,
+  # independent of the reserved-name refusal above -- two mechanisms, because only one of them is
+  # a validator. `earliest` is a directive date, not a secret, so it rides argv.
   log "issue #$issue_num: running $script"
   local rc=0
   local out
-  out=$("${env_args[@]}" "$script" 2>&1) || rc=$?
+  # The subshell exports the already-validated names (HOME first: the launcher forwards it like a
+  # secret) so a name that is set but not exported still reaches the launcher's environment, then
+  # execs the launcher. `export` with no operand would print every exported variable WITH its
+  # value, so the operand list is never empty (HOME is always in it). Subshell, so the sweeper's
+  # own environment is unchanged and the launcher's stdout/stderr feed `out` exactly as `env`'s did.
+  out=$(
+    export -- HOME ${fwd_names[@]+"${fwd_names[@]}"}
+    exec python3 -I -c "$FT_LAUNCHER" "$script" "${earliest:-}" HOME ${fwd_names[@]+"${fwd_names[@]}"} 2>&1
+  ) || rc=$?
   log "issue #$issue_num: $script exit=$rc"
 
   # STRIP SHELL-TRACE LINES BEFORE THIS OUTPUT REACHES A PUBLIC COMMENT (#7797).
