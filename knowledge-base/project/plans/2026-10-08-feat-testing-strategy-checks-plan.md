@@ -9,6 +9,25 @@ type: feat
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-08
+**Mode:** inline deepen (no Task/Workflow spawn in this harness — research agents, skill-application agents, and review seats were executed as inline passes by the orchestrator)
+**Sections enhanced:** Functional Requirements (fixture realism, verdict-block isolation), Guard Contract (lint-conformant field shape), Observability (single-token `expected_output`), Domain Review, Test Scenarios.
+
+### Key Improvements (deepen pass)
+
+1. Fixture paths corrected to repo conventions: e2e is `apps/web-platform/e2e/*.e2e.ts`, unit tests live flat in `apps/web-platform/test/` — the layer table must name both surface conventions (`e2e/` dir AND `*.e2e.ts`/`*.spec.ts`).
+2. Guard Contract reformatted to `lint-guard-contract.py` field shape (`**Property.**`/`**Assembly.**`/`**Mutation matrix.**` at line start); lint now green (1 entry, 7 matrix rows).
+3. Observability `discoverability_test.expected_output` reduced to single token `present` — a multi-word value tokenizes to one whitespace-containing token and is rejected as prose by Phase 4.7 / preflight Check 10.
+4. Pyramid verdicts live in a separate `### Pyramid` block — never folded into the weighted Farley score (score semantics preserved).
+
+### New Considerations Discovered
+
+- Sibling-boundary lock: measured per-test/suite budgets are #9763's scope; this mechanism flags *cost signals* only — the boundary line is mandatory in the agent text.
+- All cited issues/PRs verified live: #9762/#9763/#8659/#7942/#3531/#4133/#8593/#3216/#9771 OPEN; #9751 MERGED.
+- Halt gates checked: 4.6 User-Brand (threshold `aggregate pattern` — pass), 4.7 Observability (5 fields, allowlisted verb `grep`, <15 s command — pass), 4.8 PAT (clean), 4.9 UI wireframe (no UI surface — skip), 4.10 Encryption (no store/connection — skip), 4.11 Guard Contract (lint green — pass), 4.12 Scope Check (all asks mapped — pass).
+
 ## Overview
 
 Soleur's review pipeline scores test quality per-test (Farley's eight properties, via `test-design-reviewer`) but nothing checks a diff's test *mix*: whether new tests sit at the right pyramid layer, whether a new end-to-end test carried a justification, or whether a new test looks expensive enough to break the fast-feedback budget the owner set (a ~25-minute local `ship` battery on PR #9751 motivated this). This plan adds a pyramid/budget check to the existing test-review lane and a layer-naming instruction at plan/work time — the two cheapest candidates in issue #9762 — plus a committed fixture pair that proves the mechanism fails an unjustified slow-E2E diff and passes a fast unit-test diff.
@@ -91,7 +110,7 @@ Spec lacks valid `lane:` — no spec.md existed at plan time; defaulted to cross
 
 - **FR-1 — Pyramid & Fast-Feedback check in `test-design-reviewer`.** Add a `## Pyramid & Fast-Feedback Check` section to `plugins/soleur/agents/engineering/review/test-design-reviewer.md`: a layer-classification table (unit / integration / e2e — path, import, and cost signals), a justification-marker convention (`pyramid-justified: <reason>` in the added test file, or a `## Test Pyramid` block in the PR body), and three verdict rules that produce findings in a **separate** `### Pyramid` verdict block — never folded into the weighted 8-property score (the score's semantics stay Farley-only): **FAIL** when a diff adds an e2e-layer test with no justification marker; **WARN** when a new test carries fast-feedback cost signals (`waitForTimeout`/`sleep`/fixed delays, real browser or server boots, external network) with no stated necessity; **WARN** when coverage achievable at a lower layer is exercised only at e2e. The `### Pyramid` block lists one row per added test file — layer · signals · verdict. The section must state that review-time sees no measured runtimes (per-suite budgets are #9763's scope).
 - **FR-2 — Layer naming at plan/work time.** (a) `plugins/soleur/skills/plan/references/plan-issue-templates.md`: in each of the three `## Test Scenarios` template blocks add one line — label each scenario's pyramid layer (unit / integration / e2e); prefer the lowest layer that exercises the behavior. (b) `plugins/soleur/skills/work/SKILL.md` RED-task creation block: each RED task names the test's pyramid layer in its title (`RED(unit): …`).
-- **FR-3 — Fixture pair + pin suite.** Create `plugins/soleur/test/fixtures/test-pyramid/slow-e2e-no-justification.diff` (adds `apps/web-platform/e2e/checkout.spec.ts` — `@playwright/test` import, `page.goto`, `page.waitForTimeout(15000)`, no marker) and `fast-unit.diff` (adds `apps/web-platform/test/lib/order-total.test.ts` — pure unit test, no e2e signals). Create `plugins/soleur/test/test-pyramid-fixtures.test.sh` (sourcing `test-helpers.sh`, composed EXIT trap per #8659 convention): **censuses** `plugins/soleur/test/fixtures/test-pyramid/*.diff` (glob count `== 2` — a census, not a name list, so a third fixture arriving unasserted goes red) and asserts per fixture: it parses as a unified diff adding a test file; the e2e fixture carries e2e-layer + slow signals and NO `pyramid-justified` marker; the unit fixture carries neither signal; and `test-design-reviewer.md` still defines the marker token and layer vocabulary the fixtures key on (drift pin). Instrument self-check: assert helper counters moved both directions.
+- **FR-3 — Fixture pair + pin suite.** Create `plugins/soleur/test/fixtures/test-pyramid/slow-e2e-no-justification.diff` (adds `apps/web-platform/e2e/checkout-flow.e2e.ts` — this repo's e2e convention is `*.e2e.ts` under `apps/web-platform/e2e/`, verified; `@playwright/test` import, `page.goto`, `page.waitForTimeout(15000)`, no marker) and `fast-unit.diff` (adds `apps/web-platform/test/order-total.test.ts` — unit tests live flat under `apps/web-platform/test/`, verified; pure unit test, no e2e signals). The reviewer's layer table must name BOTH e2e surface conventions (`e2e/` dir AND `*.e2e.ts`/`*.spec.ts` extensions) plus the generic signals (playwright/cypress/puppeteer import, real browser or server boot). Create `plugins/soleur/test/test-pyramid-fixtures.test.sh` (sourcing `test-helpers.sh`, composed EXIT trap per #8659 convention): **censuses** `plugins/soleur/test/fixtures/test-pyramid/*.diff` (glob count `== 2` — a census, not a name list, so a third fixture arriving unasserted goes red) and asserts per fixture: it parses as a unified diff adding a test file; the e2e fixture carries e2e-layer + slow signals and NO `pyramid-justified` marker; the unit fixture carries neither signal; and `test-design-reviewer.md` still defines the marker token and layer vocabulary the fixtures key on (drift pin). Instrument self-check: assert helper counters moved both directions.
 - **FR-4 — Seat description accuracy.** `plugins/soleur/skills/review/SKILL.md` agent-13 bullet and `plugins/soleur/skills/review/workflows/review.workflow.js` `'test-design'` `lens:` string: append the pyramid/budget scope so routing text is truthful.
 - **FR-5 — Recorded verification run (AC 3).** During work: apply the extended reviewer to each fixture (the harness reads the agent body and evaluates the fixture diff), record both verdicts — FAIL on `slow-e2e-no-justification.diff`, PASS on `fast-unit.diff` — in `knowledge-base/project/specs/feat-one-shot-9762-testing-strategy/fixture-verdicts.md` and as an issue comment.
 
@@ -154,62 +173,11 @@ Each scenario names its pyramid layer per FR-2 (this plan dogfoods the instructi
 - **review-lane** — Given the extended reviewer and `slow-e2e-no-justification.diff`, when the checklist is applied, then the verdict is FAIL citing the missing e2e justification (recorded in `fixture-verdicts.md`).
 - **review-lane** — Given `fast-unit.diff`, when the checklist is applied, then the verdict is PASS with the file classified `unit` (recorded in `fixture-verdicts.md`).
 
-## Scope Check
-
-### Ask Mapping
-
-| # | User ask (verbatim) | Plan item | Status |
-|---|---------------------|-----------|--------|
-| 1 | "a `functional-discovery` / `agent-finder` run recorded on the issue (does a suitable external skill already exist?)" | Research Insights §Community Discovery + issue comment 6063533523 | mapped |
-| 2 | "a recorded decision — extend `test-design-reviewer`, new skill, or both" | `## Decision` + issue comment | mapped |
-| 3 | "the chosen mechanism fails a review on a synthetic diff that adds a slow end-to-end test with no justification, and passes a diff that adds a fast unit test (a fixture pair, not a description)" | FR-3 fixtures + FR-5 recorded verdicts + Test Scenarios rows 5–6 | mapped |
-| 4 | "plans and reviews tests against the test pyramid and a fast-feedback budget" | FR-1 (review) + FR-2 (plan/work) | mapped |
-
-### Plan-Item Provenance
-
-| Plan item | User words cited (verbatim quote) | Verdict |
-|-----------|-----------------------------------|---------|
-| `test-design-reviewer.md` edit | "Extend `test-design-reviewer` with a pyramid check" | asked |
-| `plan-issue-templates.md` + `work/SKILL.md` edits | "A `plan`/`work` instruction that states the test layer for each acceptance criterion before writing the test" | asked |
-| `review/SKILL.md` + `review.workflow.js` lens edits | — | inferred — justification: the seat's routing text must describe the new check or the spawn prompt lies about what the seat reviews |
-| fixture `.diff` pair | "a fixture pair, not a description" | asked |
-| `test-pyramid-fixtures.test.sh` | — | inferred — justification: committed fixtures with no consumer rot (repo convention: `vendor-drift` fixtures are consumed by `vendor-drift-classify.test.sh`); the pin also keeps the checklist vocabulary and the fixtures in lockstep |
-| `test-affected-paths.sh` edit | — | inferred — justification: registration model (ADR-238/#8322) requires every suite classified; an unclassified suite is flagged RED by `lint-orphan-test-suites.sh` |
-| `fixture-verdicts.md` | "recorded here" / "fails a review on a synthetic diff" | inferred — justification: AC 3 requires evidence of the verdicts, and the spec dir is the pipeline's artifact home |
-
-### Split Assessment
-
-- Subsystems touched: 2 — `plugins/soleur/` (agent + skills + tests), `scripts/lib/` (affected index)
-- Planned files: 6 edited + 4 created = 10 | Estimated changed lines: ~230
-- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR
-
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** a wrong test-review verdict on their PR — either a FAIL finding on a legitimate e2e test (friction; overridable via the `pyramid-justified` marker or PR-body block) or a silent pass (status quo ante). Concrete artifact: a false blocking-severity bullet in a `soleur:review` report.
 - **If this leaks, the user's [data / workflow / money] is exposed via:** no exposure vector — the change is prompt text and committed test fixtures; no runtime path reads user data.
 - **Brand-survival threshold:** aggregate pattern — a systematically-wrong check ships to every install via plugin update and degrades every test-touching review at once; per-incident severity is low and recoverable (advisory findings, explicit justification escape hatch), so no CPO sign-off gate. `user-impact-reviewer` will see the diff at review time regardless via the conditional-agent block.
-
-## Domain Review
-
-**Domains relevant:** Engineering, Product
-
-### Engineering
-
-**Status:** reviewed (inline — no subagent spawn available in this harness)
-**Assessment:** Modest blast radius — extends an existing review seat's checklist rather than adding a component. Risks: (a) agent prompt growth on a per-PR seat (~55 lines added; acceptable), (b) layer misclassification → mitigated by a `confidence` column and WARN-vs-FAIL split (only the missing-justification case is FAIL), (c) boundary confusion with #9763 → resolved by the explicit "no measured runtime at review time" line in the agent text. No architecture change; no ADR.
-
-### Product/UX Gate
-
-**Tier:** none — no user-facing pages/flows; the mechanical UI-surface override does not fire (no `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx` in the file lists).
-**Decision:** reviewed (inline)
-**Agents invoked:** none — CPO-lens assessed inline per the new-capability mandate (this IS a new user-facing capability of the plugin): user benefit is faster-feedback discipline enforced at review; worst user outcome is a false FAIL, mitigated by the justification convention. CMO omitted with rationale: developer-facing pipeline tooling, no content/brand surface.
-**Skipped specialists:** `soleur:marketing:copywriter` (no content surface) — `soleur:product:design:ux-design-lead` not required (no UI).
-**Pencil available:** N/A (no UI surface)
-
-#### Findings
-
-No domain leader recommended specialists; nothing escalates.
 
 ## Observability
 
@@ -236,30 +204,33 @@ logs:
   where: test-all stdout; fixture-verdicts.md for the AC-3 recorded run
   retention: repo / spec dir
 discoverability_test:
-  command: grep -q 'Pyramid & Fast-Feedback' plugins/soleur/agents/engineering/review/test-design-reviewer.md && printf 'pyramid-check present'
-  expected_output: pyramid-check present
+  command: grep -q 'Pyramid & Fast-Feedback' plugins/soleur/agents/engineering/review/test-design-reviewer.md && printf 'present'
+  expected_output: present
 ```
 
 ## Guard Contract
 
 ### Guard 1 — test-pyramid fixture pin suite
 
-1. **Property.** The committed fixture pair remains valid evidence for the reviewer's pyramid check: the e2e fixture still exercises the FAIL path (adds an e2e-layer test carrying slow signals and no `pyramid-justified` marker), the unit fixture still exercises the PASS path, and the checklist vocabulary the fixtures key on is still defined in `test-design-reviewer.md`.
-2. **Assembly.** Every `*.diff` under `plugins/soleur/test/fixtures/test-pyramid/` — discovered by **glob census** with a `== 2` count floor (not a name list; a third fixture landing unclassified reds the suite) — plus the `## Pyramid & Fast-Feedback Check` section's marker/layer vocabulary in the agent body. Chokepoint: every assertion flows through the suite's helpers sourced from `test-helpers.sh`.
-3. **Mutation matrix** (each MUST drive the suite red; written from the design, pre-implementation):
+**Property.** The committed fixture pair remains valid evidence for the reviewer's pyramid check: the e2e fixture still exercises the FAIL path (adds an e2e-layer test carrying slow signals and no `pyramid-justified` marker), the unit fixture still exercises the PASS path, and the checklist vocabulary the fixtures key on is still defined in `test-design-reviewer.md`.
 
-   | # | Mutation | Why it must red |
-   |---|----------|-----------------|
-   | M1 | Delete the `pyramid-justified` token from `test-design-reviewer.md` | vocabulary pin: fixtures key on a marker the checklist no longer defines |
-   | M2 | Insert `pyramid-justified:` into `slow-e2e-no-justification.diff` | the fixture stops exercising the FAIL path while its name still claims it |
-   | M3 | Repoint the e2e fixture's added path from `e2e/` to `test/` | mislabeled layer: the "e2e" fixture no longer classifies as e2e |
-   | M4 | Dispatch mutation: neuter the suite's own assert helper to always-pass | a guard that reports 0-checked-and-green is vacuous — instrument self-check must count both directions |
-   | M5 | Second-member row: truncate `fast-unit.diff` to a comment-only file (no `+++ b/` header) | the PASS fixture no longer parses as a diff — proves the suite checks each member, not just the first |
-   | M6 | Harness row (must-PASS variant): add a trailing comment line to `fast-unit.diff` | stays green — a harmless content addition is permitted; protects against an over-strict suite that rejects any edit |
-   | M7 | Harness row (must-RED): make the fail counter never increment in the suite itself | the instrument self-check exists precisely to catch a suite that can only ever pass |
+**Assembly.** Every `*.diff` under `plugins/soleur/test/fixtures/test-pyramid/` — discovered by **glob census** with a `== 2` count floor (not a name list; a third fixture landing unclassified reds the suite) — plus the `## Pyramid & Fast-Feedback Check` section's marker/layer vocabulary in the agent body. Chokepoint: every assertion flows through the suite's helpers sourced from `test-helpers.sh`.
 
-4. **Order/lifetime note:** the property is about content, not ordering — a REORDER row is not applicable; the window the property defends is "the fixtures as committed", and every row observes that state directly.
-5. **Anchor.** One diff CAN weaken both the fixtures and the checklist in the same commit — the pin proves consistency, not integrity. The out-of-commit anchor is the recorded AC-3 verdict pair (live checklist application posted to #9762 + `fixture-verdicts.md`), which a vocabulary drift cannot forge. Re-run the fixture review whenever the checklist section changes materially.
+**Mutation matrix.** Each row MUST drive the suite red (except the labelled must-PASS row); written from the design, pre-implementation:
+
+| # | Mutation | Why it must red |
+|---|----------|-----------------|
+| M1 | Delete the `pyramid-justified` token from `test-design-reviewer.md` | vocabulary pin: fixtures key on a marker the checklist no longer defines |
+| M2 | Insert `pyramid-justified:` into `slow-e2e-no-justification.diff` | the fixture stops exercising the FAIL path while its name still claims it |
+| M3 | Repoint the e2e fixture's added path from `e2e/` to `test/` | mislabeled layer: the "e2e" fixture no longer classifies as e2e |
+| M4 | Dispatch mutation: neuter the suite's own assert helper to always-pass | a guard that reports 0-checked-and-green is vacuous — instrument self-check must count both directions |
+| M5 | Second-member row: truncate `fast-unit.diff` to a comment-only file (no `+++ b/` header) | the PASS fixture no longer parses as a diff — proves the suite checks each member, not just the first |
+| M6 | Harness row (must-PASS variant): add a trailing comment line to `fast-unit.diff` | stays green — a harmless content addition is permitted; protects against an over-strict suite that rejects any edit |
+| M7 | Harness row (must-RED): make the fail counter never increment in the suite itself | the instrument self-check exists precisely to catch a suite that can only ever pass |
+
+**Order/lifetime note.** The property is about content, not ordering — a REORDER row is not applicable; the window the property defends is "the fixtures as committed", and every row observes that state directly.
+
+**Anchor.** One diff CAN weaken both the fixtures and the checklist in the same commit — the pin proves consistency, not integrity. The out-of-commit anchor is the recorded AC-3 verdict pair (live checklist application posted to #9762 + `fixture-verdicts.md`), which a vocabulary drift cannot forge. Re-run the fixture review whenever the checklist section changes materially.
 
 ## Architecture Decision (ADR/C4)
 
@@ -293,6 +264,36 @@ No infrastructure, no persistent store, no cross-component connection — Phase 
 | Deterministic `lint-test-pyramid.*` script | Rejected at Phase 0.6b — duplicates the review lane's judgment for no property the checklist doesn't already buy |
 | Do nothing / document-only | Rejected — the issue explicitly wants enforcement evidence, not prose |
 
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "a `functional-discovery` / `agent-finder` run recorded on the issue (does a suitable external skill already exist?)" | Research Insights §Community Discovery + issue comment 6063533523 | mapped |
+| 2 | "a recorded decision — extend `test-design-reviewer`, new skill, or both" | `## Decision` + issue comment | mapped |
+| 3 | "the chosen mechanism fails a review on a synthetic diff that adds a slow end-to-end test with no justification, and passes a diff that adds a fast unit test (a fixture pair, not a description)" | FR-3 fixtures + FR-5 recorded verdicts + Test Scenarios rows 5–6 | mapped |
+| 4 | "plans and reviews tests against the test pyramid and a fast-feedback budget" | FR-1 (review) + FR-2 (plan/work) | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `test-design-reviewer.md` edit | "Extend `test-design-reviewer` with a pyramid check" | asked |
+| `plan-issue-templates.md` + `work/SKILL.md` edits | "A `plan`/`work` instruction that states the test layer for each acceptance criterion before writing the test" | asked |
+| `review/SKILL.md` + `review.workflow.js` lens edits | — | inferred — justification: the seat's routing text must describe the new check or the spawn prompt lies about what the seat reviews |
+| fixture `.diff` pair | "a fixture pair, not a description" | asked |
+| `test-pyramid-fixtures.test.sh` | — | inferred — justification: committed fixtures with no consumer rot (repo convention: `vendor-drift` fixtures are consumed by `vendor-drift-classify.test.sh`); the pin also keeps the checklist vocabulary and the fixtures in lockstep |
+| `test-affected-paths.sh` edit | — | inferred — justification: registration model (ADR-238/#8322) requires every suite classified; an unclassified suite is flagged RED by `lint-orphan-test-suites.sh` |
+| `fixture-verdicts.md` | "recorded here" / "fails a review on a synthetic diff" | inferred — justification: AC 3 requires evidence of the verdicts, and the spec dir is the pipeline's artifact home |
+
+### Split Assessment
+
+- Subsystems touched: 2 — `plugins/soleur/` (agent + skills + tests), `scripts/lib/` (affected index)
+- Planned files: 6 edited + 4 created = 10 | Estimated changed lines: ~230
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
+
 ## Acceptance Criteria
 
 - [ ] **AC-1 (issue AC 1):** `functional-discovery`/`agent-finder` run recorded on #9762 — DONE at plan time (comment https://github.com/jikig-ai/soleur/issues/9762#issuecomment-6063533523); verify the comment exists and names the verdict.
@@ -302,3 +303,24 @@ No infrastructure, no persistent store, no cross-component connection — Phase 
 - [ ] **AC-5:** all three `## Test Scenarios` template blocks in `plan-issue-templates.md` name pyramid layers; `work/SKILL.md` RED-task instruction names the layer.
 - [ ] **AC-6:** `plugins/soleur/test/test-pyramid-fixtures.test.sh` exits 0 green standalone; Guard-Contract rows M1–M5 each drive it red (verified during work); `bash scripts/test-all.sh --print-selection` on this diff shows the suite AFFECTED-selected.
 - [ ] **AC-7:** seat descriptions updated — `review/SKILL.md` agent-13 bullet and `review.workflow.js` `lens:` mention pyramid/budget.
+
+## Domain Review
+
+**Domains relevant:** Engineering, Product
+
+### Engineering
+
+**Status:** reviewed (inline — no subagent spawn available in this harness)
+**Assessment:** Modest blast radius — extends an existing review seat's checklist rather than adding a component. Risks: (a) agent prompt growth on a per-PR seat (~55 lines added; acceptable), (b) layer misclassification → mitigated by a `confidence` column and WARN-vs-FAIL split (only the missing-justification case is FAIL), (c) boundary confusion with #9763 → resolved by the explicit "no measured runtime at review time" line in the agent text. No architecture change; no ADR.
+
+### Product/UX Gate
+
+**Tier:** none — no user-facing pages/flows; the mechanical UI-surface override does not fire (no `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx` in the file lists).
+**Decision:** reviewed (inline)
+**Agents invoked:** none — CPO-lens assessed inline per the new-capability mandate (this IS a new user-facing capability of the plugin): user benefit is faster-feedback discipline enforced at review; worst user outcome is a false FAIL, mitigated by the justification convention. CMO omitted with rationale: developer-facing pipeline tooling, no content/brand surface.
+**Skipped specialists:** `soleur:marketing:copywriter` (no content surface) — `soleur:product:design:ux-design-lead` not required (no UI).
+**Pencil available:** N/A (no UI surface)
+
+#### Findings
+
+No domain leader recommended specialists; nothing escalates.

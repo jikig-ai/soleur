@@ -12,8 +12,8 @@ Plan: `knowledge-base/project/plans/2026-10-08-feat-testing-strategy-checks-plan
 
 ## Phase 2 — Fixtures + pin suite + registration (FR-3)
 
-- [ ] 2.1 Create `plugins/soleur/test/fixtures/test-pyramid/slow-e2e-no-justification.diff` — unified diff adding `apps/web-platform/e2e/checkout.spec.ts` (`@playwright/test`, `page.goto`, `page.waitForTimeout(15000)`, no marker).
-- [ ] 2.2 Create `plugins/soleur/test/fixtures/test-pyramid/fast-unit.diff` — unified diff adding `apps/web-platform/test/lib/order-total.test.ts` (pure unit test).
+- [ ] 2.1 Create `plugins/soleur/test/fixtures/test-pyramid/slow-e2e-no-justification.diff` — unified diff adding `apps/web-platform/e2e/checkout-flow.e2e.ts` (`*.e2e.ts` convention, `@playwright/test`, `page.goto`, `page.waitForTimeout(15000)`, no marker).
+- [ ] 2.2 Create `plugins/soleur/test/fixtures/test-pyramid/fast-unit.diff` — unified diff adding `apps/web-platform/test/order-total.test.ts` (flat unit-test convention, pure unit test).
 - [ ] 2.3 Create `plugins/soleur/test/test-pyramid-fixtures.test.sh` — sources `test-helpers.sh`, composed EXIT trap (#8659), NOT `*.mutation.sh` naming (#7942); censuses `fixtures/test-pyramid/*.diff` (`== 2`), per-fixture parse + signal/marker assertions, vocabulary drift pin on `test-design-reviewer.md`, instrument self-check.
 - [ ] 2.4 Run `bash plugins/soleur/test/test-pyramid-fixtures.test.sh` standalone → exit 0.
 - [ ] 2.5 `scripts/lib/test-affected-paths.sh`: add `AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS` — entries: `plugins/soleur/agents/engineering/review/test-design-reviewer.md`, `plugins/soleur/test/fixtures/test-pyramid/`, `plugins/soleur/test/test-pyramid-fixtures.test.sh`, `scripts/lib/test-affected-paths.sh` (self-inclusion).
