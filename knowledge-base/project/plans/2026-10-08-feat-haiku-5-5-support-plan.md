@@ -448,6 +448,10 @@ Product/UX (no UI surface; `api-usage-section.tsx` is prose only, no price or id
 
 - **If this lands broken, the user experiences:** the domain-routing classifier silently falling back to the CPO leader for every message (wrong advisor on the first reply), or a triage/KB-drift leader run failing with a "max turns / max tokens" notification instead of an action.
 - **If this leaks, the user's money is exposed via:** mis-attributed BYOK cost in the WORM `audit_byok_use` ledger (a wrong Haiku 5.5 rate card or tier selection would be permanent and feeds both cap layers); no credentials, content or personal data are newly exposed because the vendor, data flow and prompts are unchanged.
+- **Added at review (2026-10-08, user-impact seat):**
+  - **Sonnet 5.5 cache-read correction ($0.20 to $0.10) is the larger blast radius**: it touches every Sonnet turn, not only Haiku classes. It rests on the pricing page stating $0.10 twice; the repo cannot query a Console invoice, so the invoice line is a post-merge spot-check by whoever reads the next bill, not a merge gate. The error direction if wrong is under-attribution (caps trip late), so the commit is separable on purpose.
+  - **A refused, truncated or empty summarizer turn** used to store an empty (or half-JSON) summary in a write-once column; it now stores an explicit placeholder and reports once. A refused `triage.p0p1_issue` turn dead-letters visibly with its category; a retry on Sonnet is a new mechanism, deferred to #9790.
+  - **Visibility, not paging:** the `no-text-block` mirrors create Sentry issues; no alert rule routes them to a person (stated, not implied).
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** the failure shapes are uniform and fail-closed (unpriced model returns NaN, pricing pinned by tests, bounded Layer 3 spend of a few cents per run), so no single founder can suffer a distinct, irreversible harm, which rules out `single-user incident`; a systematic mis-attribution across founders is an aggregate pattern, which rules out `none`.
 

@@ -69,6 +69,10 @@ MODEL_ID="claude-haiku-5-5"
 ANTHROPIC_VERSION="2023-06-01"
 ANTHROPIC_ENDPOINT="https://api.anthropic.com/v1/messages"
 COST_CEILING_USD=5.00
+# Per-file cost estimates were calibrated against Haiku 4.5. Haiku 5.5 is about 10x cheaper per
+# token (about 7.7x after its tokenizer's ~30% inflation), so these OVER-estimate; the ceiling
+# below can therefore refuse a run that would fit. Conservative on purpose: re-calibrate from a
+# real --confirm run before relying on a tighter estimate.
 LIGHT_COST_PER_FILE=0.0010
 HEAVY_COST_PER_FILE=0.0015
 HEADROOM_FACTOR="1.10"
@@ -372,6 +376,10 @@ anthropic_paraphrase() {
     '{model: $model, max_tokens: $max_tokens, messages: [{role:"user", content: ($prompt + "\n\nPassage:\n" + $gt)}]}')
   local _try
   for _try in 1 2; do
+    # --disable (first) ignores ~/.curlrc and --noproxy '*' ignores ALL_PROXY/HTTPS_PROXY, so the
+    # x-api-key header can only go to $ANTHROPIC_ENDPOINT (required by lint-shell-trace-credential-
+    # refusal). Consequence: this does not work behind an egress-only proxy; run it from a host
+    # with direct access.
     resp=$("$CURL_BIN" --disable --noproxy '*' -sS -w '\n__HTTP_STATUS__:%{http_code}' "$ANTHROPIC_ENDPOINT" \
       -H "x-api-key: $ANTHROPIC_API_KEY" \
       -H "anthropic-version: $ANTHROPIC_VERSION" \
