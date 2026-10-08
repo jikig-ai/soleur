@@ -100,7 +100,7 @@ Derived from `knowledge-base/project/plans/2026-10-05-feat-open-web-egress-plan.
       Sch.4 TOM entry; AUP hosted-egress abuse clause
 - [x] 2.7 ADR (deliverable of this PR) + C4 enumeration/update; legal
       status-flip sweep (future-tense egress claims)
-      — DONE: ADR-276; egressGw + egressForwarder + publicInternet in
+      — DONE: ADR-278; egressGw + egressForwarder + publicInternet in
       model.c4 (likec4-parse-verified); no stale future-tense egress claims
       found in docs/legal/
 - [x] 2.8 AC verification pass incl. deterministic (non-LLM) security

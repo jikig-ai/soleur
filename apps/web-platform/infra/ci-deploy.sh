@@ -364,11 +364,12 @@ fan_out_to_peers() {
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=${sig}" \
-      --data-binary "$payload" 2>/dev/null || echo "000")
+      --config - --data-binary "$payload" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") \
+      2>/dev/null || echo "000")
     if [[ "$code" == "202" ]]; then
       logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
     else
