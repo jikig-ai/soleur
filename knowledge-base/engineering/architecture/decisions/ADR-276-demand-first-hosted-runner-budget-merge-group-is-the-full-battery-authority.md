@@ -27,10 +27,10 @@ in this ADR provisions infrastructure.
 
 > **Superseded 2026-10-08 (S1, #9727):** two clauses above no longer describe S1. The smoke gate does not run
 > "unconditionally off `pull_request`": `smoke-relevance` runs on every pull request, and `smoke-tests` is now
-> path-conditional (it skips only when the run was not cancelled, the gate job succeeded and its output is exactly
-> `false`, and it is also skipped when the run is cancelled; on any non-`pull_request` event it still does not run). The exemption from 3(c), (d) and (g) rests instead
+> path-conditional (it is skipped in three cases: the event is not a `pull_request`, the run is cancelled, or the
+> gate job succeeded and its output is exactly `false`). The exemption from 3(c), (d) and (g) rests instead
 > on: a non-required context, a fail-open gate, rollback by revert, and a saving bounded at about 134 job-minutes per
-> 6 h (1.8% of the 7,456 job-minute baseline in the Context, 1.5% of the 9,045 the committed census reports for the
+> 6 h (1.8% of the 7,456 job-minute baseline in the Context, 1.5% of the 9,045 the baseline census attached to #9727 reports for the
 > same window). And "neither appends an amendment" was a floor, not a ban: S1 appends the amendment at the end of this
 > file. S1 is therefore merged, not done, until the census evidence named in the amendment is attached. The original
 > sentences are kept above unedited.

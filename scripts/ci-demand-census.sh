@@ -116,8 +116,10 @@
 #   allowed anywhere, CI included. SIGINT and SIGTERM stop the run at once when they are delivered to the
 #   PROCESS GROUP (a terminal's Ctrl-C, or `kill -- -PGID`; gh runs under `timeout --foreground`, so the signal
 #   reaches it too), and still remove the scratch directory; a bare `kill <pid>` (the script alone) waits for the
-#   current gh call to return, at most CENSUS_GH_TIMEOUT seconds, because bash defers a trap while it waits for a
-#   foreground child. SIGHUP ends the run with 129 after the same cleanup. A second signal during the cleanup is
+#   current gh call or retry sleep to return (at most the larger of CENSUS_GH_TIMEOUT and twice CENSUS_RETRY_SLEEP
+#   seconds), because bash defers a trap while it waits for a foreground child. A run started in the background
+#   with `&` or `nohup` inherits SIGINT and SIGHUP as ignored, and the traps cannot undo that: stop such a run
+#   with SIGTERM. SIGHUP ends the run with 129 after the same cleanup. A second signal during the cleanup is
 #   ignored, so the cleanup always finishes.
 #
 # SELF-CHECKS (a total is printed only if all pass; otherwise exit 3, reason on stderr, no
