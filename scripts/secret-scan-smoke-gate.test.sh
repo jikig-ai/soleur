@@ -18,10 +18,15 @@
 #   * a named subject list, each member as a modification and as a rename SOURCE, plus prefix
 #     rows, near-miss rows (must yield `false`) and a non-subject control;
 #   * a derived sweep: EVERY tracked file, partitioned by an independent Python statement of the
-#     intended subject set, must yield the matching verdict (catches a loosened SUBJECT_RE);
+#     intended subject set, must yield the matching verdict (catches a loosened SUBJECT_RE). The
+#     partition is pinned to the `git ls-files` count (non-subject + subject + skipped), the subject
+#     direction is checked PER FILE (grep -v over every subject file, so a narrowed alternative cannot
+#     hide behind the chunk's any-match) and a deterministic sample is fed through the body one file at a time;
 #   * a structural anchor: every tracked file or directory prefix that appears as a token in the
 #     PARSED smoke-tests job (run bodies, uses, with, env) must match the body's SUBJECT_RE, with
-#     a known-positive control and shape rows;
+#     a known-positive control and shape rows. There is NO exemption: the one operand that is only
+#     quoted text (the runbook path in a ::warning:: message) is listed in SUBJECT_RE by exact path;
+#   * the smoke-tests matrix case names must equal the case arms of the job's run script;
 #   * every fetch failure shape fails OPEN (`smoke=true` with a reason): non-zero exit, page one
 #     then failure, empty list, entry count differing from the event's `changed_files` in either
 #     direction, the 3000-entry cap (>= 3000), a failed head fetch, a head that moved, a matcher error;
@@ -32,7 +37,8 @@
 #
 # HARNESS ROWS. H1: stubs that always print one verdict must turn the shared row function red on
 # the opposite class. Positive controls drive the verdict-owning helpers (assert_sc, report_rows,
-# mutant_verdict) once with an input that MUST fail, including a deliberately uncatchable mutant.
+# mutant_verdict, the shape compare, the symlink scan, the sweep floor, check_scn's crash class) once
+# with an input that MUST fail, including a deliberately uncatchable mutant.
 # The assertion-count floor is guarded by scripts/guard-vacuity-floor.test.sh, not re-tested here.
 #
 # THE gh SHIM validates the two exact endpoints (`repos/<GH_REPO>/pulls/<PR_NUMBER>/files?per_page=100`
@@ -40,6 +46,13 @@
 # (`api`, `--paginate`, `--jq`), exits non-zero when GH_TOKEN is unset as real gh does, applies the
 # passed --jq with real jq, serves page one only without --paginate, flushes page one before
 # failing in page-then-fail mode, and logs every call.
+#
+# ACCEPTED LIMITS (recorded decisions, shape rows below expect 0 operands for each): the membership
+# derivation only sees whole tokens that are tracked files or nested tracked directories. It cannot see a
+# glob (`cat scripts/lint-*.sh`), a directory change followed by a bare name (`cd scripts && bash
+# lint-workflows.sh`), a path composed from a variable (`d=scripts; bash $d/x.sh`) or a bare top-level
+# directory word (`ls scripts`). The five required scanners still run on every PR; the cost of such a
+# miss is a skipped smoke matrix on a PR that edits an input of a future step, caught by review of that step.
 #
 # PRE-MERGE LIMIT. The suite cannot prove GitHub's `needs`/status-function skip semantics; the
 # `false` arm is exercised by the PR scratch canary and the first post-merge PR that touches no
@@ -108,13 +121,16 @@ HEAD_DEFAULT="headsha-synthetic-0001"
 OPERAND_FLOOR=6
 # The one derived operand that is only TEXT: the rename-laundering case names the runbook inside a
 # ::warning:: message ("update knowledge-base/.../secret-scanning.md"); it is never executed or read.
-READ_ONLY_MENTION="knowledge-base/engineering/operations/secret-scanning.md"
+# It is NOT exempted from the anchor: SUBJECT_RE lists it by exact path (over-inclusive, conservative).
+RUNBOOK_PATH="knowledge-base/engineering/operations/secret-scanning.md"
+RUNBOOK_ALT='|knowledge-base/engineering/operations/secret-scanning\.md'
 
 # The named subject list: what the ten smoke cases execute, read or create (and implicit git inputs).
 SUBJ=(
   ".github/workflows/secret-scan.yml"
   ".gitleaks.toml"
   ".gitleaksignore"
+  "knowledge-base/engineering/operations/secret-scanning.md"
   "apps/web-platform/scripts/rename-guard.sh"
   "apps/web-platform/scripts/allowlist-diff.sh"
   "apps/web-platform/scripts/lint-fixture-content.mjs"
@@ -124,6 +140,8 @@ SUBJ=(
   "apps/web-platform/.gitignore"
   "docs/sub/.gitattributes"
   "apps/web-platform/server/smoke/with-secret.ts"
+  "apps/web-platform/test/__goldens__/smoke/x"
+  "apps/web-platform/lib/safety/smoke/x"
   "smoke/x.txt"
   "apps/web-platform/test/__synthesized__/now-allowed.ts"
   "apps/web-platform/test/__synthesized__"
@@ -168,7 +186,7 @@ except Exception as e:  # a crash must be distinguishable from "found 0"
 PY
 
 cat > "$SANDBOX/wrapper.py" <<'PY'
-import os, sys, yaml
+import os, re, sys, yaml
 LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 wf, req = sys.argv[1], sys.argv[2]
 try:
@@ -200,6 +218,15 @@ try:
                 tags.append("W-ST-IF")
             if "continue-on-error" in s:
                 tags.append("W-ST-COE")
+        # matrix identity: the case names must equal the top-level arms of `case "${CASE}" in` in the
+        # one step that takes CASE from the matrix (a renamed entry or arm is an "Unknown case" at run time)
+        cs = [s for s in st.get("steps") or [] if isinstance(s.get("env"), dict) and "CASE" in s["env"]]
+        if len(cs) != 1 or cs[0]["env"]["CASE"] != "${{ matrix.case }}" or 'case "${CASE}" in' not in cs[0].get("run", ""):
+            tags.append("W-CASE-STEP")
+        elif isinstance(cases, list):
+            arms = re.findall(r"(?m)^  ([A-Za-z0-9_-]+)\)[ \t]*$", cs[0]["run"])
+            if sorted(arms) != sorted(cases):
+                tags.append("W-MATRIX-ARMS")
     for n, j in jobs.items():
         if n != "smoke-tests" and ("smoke-relevance" in needs(j) or "smoke-tests" in needs(j)):
             tags.append("W-NEEDS-OTHER:" + n)
@@ -318,7 +345,8 @@ PY
 cat > "$SANDBOX/sweep.py" <<'PY'
 import json, os, sys
 raw, out = sys.argv[1], sys.argv[2]
-EXACT = {".github/workflows/secret-scan.yml", ".gitleaks.toml", ".gitleaksignore", "gitleaks", "gitleaks.tgz"}
+EXACT = {".github/workflows/secret-scan.yml", ".gitleaks.toml", ".gitleaksignore", "gitleaks", "gitleaks.tgz",
+         "knowledge-base/engineering/operations/secret-scanning.md"}
 ANCESTORS = {"apps", "apps/web-platform", "apps/web-platform/test", "apps/web-platform/test/__goldens__",
              "apps/web-platform/server", "apps/web-platform/lib", "apps/web-platform/lib/safety"}
 SYNTH = "apps/web-platform/test/__synthesized__"
@@ -348,6 +376,8 @@ for b in open(raw, "rb").read().split(b"\0"):
         skipped += 1
         continue
     (subj if is_subject(p) else non).append(p)
+# one subject name per line (names containing a newline were skipped above): the per-file check input
+open(os.path.join(out, "subject-names.txt"), "w").write("".join(p + "\n" for p in subj))
 n = 0
 for kind, names in (("subj", subj), ("non", non)):
     for ci in range(0, len(names), 2000):
@@ -568,10 +598,20 @@ sc_empty() { scn_new; SC_CHANGED=0; pg 1; exec_scn "$1"; SC_EV=true; SC_ER="$R_E
 sc_short() { scn_new; SC_CHANGED=3; pg 1 docs/a.md docs/b.md; exec_scn "$1"; SC_EV=true; SC_ER="$R_MISMATCH"; }
 sc_long() { scn_new; SC_CHANGED=2; pg 1 docs/a.md docs/b.md docs/c.md; exec_scn "$1"; SC_EV=true; SC_ER="$R_MISMATCH"; }
 sc_blank() { scn_new; SC_CHANGED=""; pg 1 docs/a.md docs/b.md; exec_scn "$1"; SC_EV=true; SC_ER="$R_MISMATCH"; }
-gen_pages_3000() { local p; for p in $(seq 1 30); do
-  jq -n --argjson p "$p" '[range(100) | {filename: ("docs/gen/\($p)/f\(.).md"), status: "added"}]' \
-    > "$SCN/pages/page-$(printf '%03d' "$p").json"; done; }
+gen_pages_n() { # <entries>: that many non-subject entries in pages of 100
+  local p n="$1" full=$(( $1 / 100 )) rest=$(( $1 % 100 ))
+  for p in $(seq 1 "$full"); do
+    jq -n --argjson p "$p" '[range(100) | {filename: ("docs/gen/\($p)/f\(.).md"), status: "added"}]' \
+      > "$SCN/pages/page-$(printf '%03d' "$p").json"; done
+  if [ "$rest" -gt 0 ]; then
+    jq -n --argjson p $((full + 1)) --argjson r "$rest" '[range($r) | {filename: ("docs/gen/\($p)/f\(.).md"), status: "added"}]' \
+      > "$SCN/pages/page-$(printf '%03d' $((full + 1))).json"
+  fi
+}
+gen_pages_3000() { gen_pages_n 3000; }
 sc_cap() { scn_new; SC_CHANGED=3050; gen_pages_3000; exec_scn "$1"; SC_EV=true; SC_ER="$R_MISMATCH"; }
+# 2999 entries matching the event with no subject path: below the cap, so it is trusted (smoke=false)
+sc_cap_below() { scn_new; SC_CHANGED=2999; gen_pages_n 2999; exec_scn "$1"; SC_EV=false; SC_ER="$R_NOSUBJ"; }
 # GitHub caps the list at 3000: a list of exactly 3000 matching the event may be truncated, so it fails open
 sc_cap_exact() { scn_new; SC_CHANGED=3000; gen_pages_3000; exec_scn "$1"; SC_EV=true; SC_ER="$R_CAP"; }
 sc_rename_out() { scn_new; SC_CHANGED=1; pg 1 ".gitleaks.toml=>docs/x.md"; exec_scn "$1"; SC_EV=true; SC_ER="$R_SUBJ"; }
@@ -582,6 +622,10 @@ sc_summary_fail() { scn_new; mkdir "$SCN/sumdir"; SC_SUMMARY="$SCN/sumdir"; SC_C
 sc_hostile() { scn_new; SC_CHANGED=2; pg 1 $'docs/a\n::error::x' $'docs/b\nsmoke=false'; exec_scn "$1"; SC_EV=false; SC_ER="$R_NOSUBJ"; }
 # a stray line (no F/P framing) that LOOKS like a subject path is not an entry: the real name is docs/a<newline>smoke/x
 sc_hostile_stray() { scn_new; SC_CHANGED=1; pg 1 $'docs/a\nsmoke/x'; exec_scn "$1"; SC_EV=false; SC_ER="$R_NOSUBJ"; }
+# a stray line that merely STARTS with F (not an F<TAB> entry) must not be counted as an entry
+sc_hostile_fstray() { scn_new; SC_CHANGED=1; pg 1 $'docs/a\nFoo'; exec_scn "$1"; SC_EV=false; SC_ER="$R_NOSUBJ"; }
+# a TAB inside a filename is legal in git: the name is everything after the FIRST tab (cut -f2-, not -f2)
+sc_tab_name() { scn_new; SC_CHANGED=1; pg 1 $'docs/a\t/smoke/b'; exec_scn "$1"; SC_EV=true; SC_ER="$R_SUBJ"; }
 # a name that forges an extra F<TAB> entry must change the count and fail OPEN
 sc_hostile_forge() { scn_new; SC_CHANGED=1; pg 1 $'docs/a\nF\tdocs/forged'; exec_scn "$1"; SC_EV=true; SC_ER="$R_MISMATCH"; }
 # the PR head moved since the event: the list may describe another commit
@@ -676,6 +720,10 @@ run_rows() { # <body> [quick]: quick = modification rows + control only
     row "near-miss:gitleaks-extra" false "$R_NOSUBJ" "$body" gitleaks-extra
     row "near-miss:docs/gitleaks" false "$R_NOSUBJ" "$body" docs/gitleaks
     row "near-miss:gitleaks.tgz.bak" false "$R_NOSUBJ" "$body" gitleaks.tgz.bak
+    row "near-miss:runbook.md.bak" false "$R_NOSUBJ" "$body" knowledge-base/engineering/operations/secret-scanning.md.bak
+    row "near-miss:runbook-prefixed" false "$R_NOSUBJ" "$body" docs/knowledge-base/engineering/operations/secret-scanning.md
+    row "near-miss:runbook-dot-unescaped" false "$R_NOSUBJ" "$body" knowledge-base/engineering/operations/secret-scanningXmd
+    row "near-miss:runbook-sibling" false "$R_NOSUBJ" "$body" knowledge-base/engineering/operations/other-runbook.md
   fi
   row "control:non-subject" false "$R_NOSUBJ" "$body" knowledge-base/x.md plugins/y.ts
 }
@@ -741,6 +789,9 @@ assert_sc "G1 summary write failure leaves no smoke=false" sc_summary_fail "$BOD
 assert_sc "G1 hostile names: one smoke= line, no injected :: line" sc_hostile "$BODY"
 assert_sc "G1 hostile name with a stray subject-looking line is not an entry" sc_hostile_stray "$BODY"
 assert_sc "G1 hostile name forging an F entry changes the count and fails open" sc_hostile_forge "$BODY"
+assert_sc "G1 stray line starting with F (not an F<TAB> entry) is not counted" sc_hostile_fstray "$BODY"
+assert_sc "G1 a TAB inside a subject filename is kept whole (docs/a<TAB>/smoke/b)" sc_tab_name "$BODY"
+assert_sc "G1 2999 entries matching the event, no subject path: trusted, below the cap" sc_cap_below "$BODY"
 assert_sc "G1 PR head moved since the event fails open" sc_head_moved "$BODY"
 assert_sc "G1 head lookup failure fails open" sc_head_fetch "$BODY"
 assert_sc "G1 must-PASS: head matches the event, no subject path" sc_head_match "$BODY"
@@ -759,22 +810,55 @@ fi
 # Names containing a newline or invalid UTF-8 cannot be framed and are skipped (counted below).
 python3 "$SANDBOX/sweep.py" "$SANDBOX/tracked.z" "$SANDBOX/sweep" > "$SANDBOX/sweep.index" 2>"$SANDBOX/sweep.err" \
   || fail "SWEEP could not partition the tracked files: $(cat "$SANDBOX/sweep.err")"
-sweep_run() { # <body>: 0 = every chunk as expected, else the failing check's rc with WHY set
+SW_SEEN=0
+sweep_run() { # <body>: 0 = every chunk as expected, else the failing check's rc with WHY set; SW_SEEN = files fed
   local kind d n rc=0
+  SW_SEEN=0
   while read -r kind d n; do
     scn_new; cp "$d"/page-*.json "$SCN/pages/"; SC_CHANGED=$n
     exec_scn "$1"
     if [ "$kind" = non ]; then check_scn false "$R_NOSUBJ"; else check_scn true "$R_SUBJ"; fi; rc=$?
     if [ "$rc" -ne 0 ]; then WHY="sweep $kind chunk ${d##*/} ($n files): $WHY"; return "$rc"; fi
+    SW_SEEN=$((SW_SEEN + n))
   done < "$SANDBOX/sweep.index"
   WHY=""; return 0
 }
+# sweep_subject_each <body> <re>: the subject direction PER FILE. (1) every subject file must match the
+# regex (grep -v over the whole list: a narrowed alternative cannot hide behind a chunk's any-match);
+# (2) a deterministic sample of at least 25 subject files (every 4th, sorted) is fed through the BODY one
+# file at a time. Returns 0, or 1 with WHY naming the first offender.
+sweep_subject_each() {
+  local names="$SANDBOX/sweep/subject-names.txt" miss f i=0 fed=0
+  WHY=""
+  miss=$(grep -vE "$2" "$names" | head -3 | tr '\n' ' ')
+  if [ -n "$miss" ]; then WHY="SWEEP-SUBJECT: tracked subject file(s) the regex does not match: $miss"; return 1; fi
+  while IFS= read -r f; do
+    i=$((i + 1))
+    [ $((i % 4)) -eq 1 ] || continue
+    scn_new; SC_CHANGED=1; pg 1 "$f"; exec_scn "$1"; fed=$((fed + 1))
+    check_scn true "$R_SUBJ" || { WHY="SWEEP-SUBJECT: $f fed alone: $WHY"; return 1; }
+  done < <(LC_ALL=C sort "$names")
+  SW_FED=$fed
+  return 0
+}
+SW_FED=0
+sweep_floor_ok() { [ "$1" -ge 1000 ] && [ "$2" -ge 3 ]; } # <non-subject count> <subject count>
 _sw_non=$(awk '$1=="non" {s+=$3} END {print s+0}' "$SANDBOX/sweep.index")
 _sw_subj=$(awk '$1=="subj" {s+=$3} END {print s+0}' "$SANDBOX/sweep.index")
-if [ "$_sw_non" -ge 1000 ] && [ "$_sw_subj" -ge 3 ]; then pass
+_sw_skipped=$(sed -n 's/^skipped \([0-9][0-9]*\)$/\1/p' "$SANDBOX/sweep.err")
+# the entry count of git's own listing, derived without the partitioner (one NUL ends each entry)
+_ls_n=$(tr -cd '\0' < "$SANDBOX/tracked.z" | wc -c)
+if sweep_floor_ok "$_sw_non" "$_sw_subj"; then pass
 else fail "SWEEP is vacuous: $_sw_non non-subject and $_sw_subj subject tracked files partitioned (need >= 1000 and >= 3)"; fi
+if [ -n "$_sw_skipped" ] && [ $((_sw_non + _sw_subj + _sw_skipped)) -eq "$_ls_n" ]; then pass
+else fail "SWEEP partition ($_sw_non non-subject + $_sw_subj subject + ${_sw_skipped:-?} skipped) does not equal the $_ls_n tracked files: a chunk or file was lost"; fi
 sweep_run "$BODY"; _r=$?
 if [ "$_r" -eq 0 ]; then pass; else fail "SWEEP live body, rc=$_r: $WHY"; fi
+if [ "$SW_SEEN" -eq $((_sw_non + _sw_subj)) ]; then pass
+else fail "SWEEP fed $SW_SEEN files through the body, the partition holds $((_sw_non + _sw_subj)): the chunk loop stopped early"; fi
+sweep_subject_each "$BODY" "$RE_VAL"; _r=$?
+if [ "$_r" -eq 0 ] && [ "$SW_FED" -ge 25 ]; then pass
+else fail "SWEEP subject direction per file, rc=$_r fed=$SW_FED (need >= 25): $WHY"; fi
 
 # ── Wrapper assertions (equalities on the extracted workflow, not whole-file grep) ──────────
 export EXP_SMOKE_IF="$IF_LITERAL"
@@ -813,16 +897,27 @@ reqctx_check "$REQUIRED" "$SANDBOX/mut/ruleset-smoke.json"; _r=$?
 mutant_verdict "R2 canonical ruleset JSON gains a smoke context" "$_r" "SMOKE-REQUIRED: required context(s) naming smoke: smoke (allowlist-positive)"
 
 # ── No symlinked subject files (a symlink in the subject set would be read through) ─────────
-_links=""
-while IFS= read -r _f; do
-  [ -n "$_f" ] || continue
-  if grep -qE "$RE_VAL" <<<"$_f"; then _links="$_links $_f"; fi
-done < <(git -C "$REPO_ROOT" ls-files -s | awk -F'\t' '$1 ~ /^120000 / {print $2}')
-if [ -z "$_links" ]; then pass; else fail "G1 a tracked symlink matches SUBJECT_RE (mode 120000):$_links"; fi
+symlink_scan() { # <re>: reads `git ls-files -s` lines on stdin, prints each mode-120000 path that matches the regex
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if grep -qE "$1" <<<"$f"; then printf '%s\n' "$f"; fi
+  done < <(awk -F'\t' '$1 ~ /^120000 / {print $2}')
+}
+_links=$(git -C "$REPO_ROOT" ls-files -s | symlink_scan "$RE_VAL")
+if [ -z "$_links" ]; then pass; else fail "G1 a tracked symlink matches SUBJECT_RE (mode 120000): $(tr '\n' ' ' <<<"$_links")"; fi
+# positive controls (the repo has no tracked subject symlink, so the live scan alone can never fire)
+_TABC=$(printf '\t')
+if [ "$(printf '120000 0000000000000000000000000000000000000000 0%s.gitleaks.toml\n' "$_TABC" | symlink_scan "$RE_VAL")" = ".gitleaks.toml" ]; then pass
+else fail "CONTROL symlink_scan: a mode-120000 .gitleaks.toml was not reported"; fi
+if [ -z "$(printf '100644 0000000000000000000000000000000000000000 0%s.gitleaks.toml\n' "$_TABC" | symlink_scan "$RE_VAL")" ]; then pass
+else fail "CONTROL symlink_scan: a regular file (mode 100644) was reported as a symlink"; fi
+if [ -z "$(printf '120000 0000000000000000000000000000000000000000 0%sdocs/x.md\n' "$_TABC" | symlink_scan "$RE_VAL")" ]; then pass
+else fail "CONTROL symlink_scan: a symlink outside SUBJECT_RE was reported"; fi
 
 # ── Operand anchor ───────────────────────────────────────────────────────────
 # Membership, not a verb list: every token of the PARSED smoke-tests job (run bodies, uses, with,
-# env) that is a tracked file or a tracked directory prefix must match SUBJECT_RE.
+# env) that is a tracked file or a tracked directory prefix must match SUBJECT_RE. No exemptions.
 N_OPS=0
 anchor_check() { # <workflow file> <subject re>: 0 ok, 1 assertion failed, 2 extractor crash
   local ops op rc=0
@@ -837,7 +932,6 @@ anchor_check() { # <workflow file> <subject re>: 0 ok, 1 assertion failed, 2 ext
   fi
   while IFS= read -r op; do
     [ -n "$op" ] || continue
-    [ "$op" != "$READ_ONLY_MENTION" ] || continue
     if ! grep -qE "$2" <<<"$op"; then WHY="${WHY}OPERAND-OUTSIDE-PATTERN: $op; "; rc=1; fi
   done <<<"$ops"
   return $rc
@@ -849,7 +943,7 @@ LIVE_OPS=$N_OPS
 _ops_live=$(python3 "$SANDBOX/operands.py" "$WF" smoke-tests "$SANDBOX/tracked.z" | tr '\n' ' ')
 for _must in apps/web-platform/scripts/lint-fixture-content.mjs apps/web-platform/scripts/rename-guard.sh \
              apps/web-platform/scripts/allowlist-diff.sh .gitleaks.toml apps/web-platform/test/__synthesized__/ \
-             "$READ_ONLY_MENTION"; do
+             "$RUNBOOK_PATH"; do
   if [[ " $_ops_live" == *" $_must "* ]]; then pass; else fail "ANCHOR control: the extractor did not find the known operand $_must in the live job (found: $_ops_live)"; fi
 done
 # shape rows: each shape must yield exactly the expected number of operands
@@ -901,6 +995,11 @@ shape uses 1 "uses ./ action dir" "./$_A"
 shape run 0 "untracked operand" "bash scripts/definitely-not-a-tracked-file.sh"
 shape run 0 "variable operand" "bash \"\$SOME_SCRIPT\""
 shape run 0 "bare word equal to a top-level directory" "echo scripts are run"
+# ACCEPTED LIMITS, recorded as decisions (see the suite comment): forms the membership derivation cannot see
+shape run 0 "ACCEPTED LIMIT: glob" "cat scripts/lint-*.sh"
+shape run 0 "ACCEPTED LIMIT: cd then a bare name" "cd scripts && bash lint-workflows.sh"
+shape run 0 "ACCEPTED LIMIT: variable-composed path" "d=scripts; bash \$d/lint-workflows.sh"
+shape run 0 "ACCEPTED LIMIT: bare top-level directory word" "ls scripts"
 shape ycomment 0 "YAML comment-only mention" "bash $_T"
 shapes_run
 
@@ -916,6 +1015,20 @@ m2_variant() { # <name> <offending path> <expected sort position note>
 m2_variant first .github/CODEOWNERS "sorts first"
 m2_variant middle AGENTS.md "sorts in the middle"
 m2_variant last "$_T" "sorts last"
+# the runbook is a REAL operand when a step reads it: it is handled by SUBJECT_RE (exact path), not by an
+# exemption. Live regex: green. Regex without the runbook alternative: the same step is flagged.
+if land M2-runbook.yml "$WF" "$STEP_ANCHOR" $'      - name: probe\n        run: cat '"$RUNBOOK_PATH"$'\n\n'"$STEP_ANCHOR"; then
+  anchor_check "$LANDED" "$RE_VAL"; _r=$?
+  if [ "$_r" -eq 0 ]; then pass; else fail "ANCHOR 'cat $RUNBOOK_PATH' in smoke-tests must be covered by SUBJECT_RE: rc=$_r $WHY"; fi
+  _re_norb="${RE_VAL/"$RUNBOOK_ALT"/}"
+  if [ "$_re_norb" = "$RE_VAL" ]; then fail "ANCHOR runbook alternative '$RUNBOOK_ALT' is not in SUBJECT_RE"; else
+    anchor_check "$LANDED" "$_re_norb"; _r=$?
+    mutant_verdict "M2 smoke-tests gains 'cat $RUNBOOK_PATH' and SUBJECT_RE has no runbook alternative (no exemption hides it)" "$_r" "OPERAND-OUTSIDE-PATTERN: $RUNBOOK_PATH"
+    # the live job's own mention (the ::warning:: text) is covered by the alternative alone
+    anchor_check "$WF" "$_re_norb"; _r=$?
+    mutant_verdict "M2 live job's quoted runbook path is flagged when the alternative is dropped" "$_r" "OPERAND-OUTSIDE-PATTERN: $RUNBOOK_PATH"
+  fi
+fi
 # an untracked reference proves nothing and must not trip the anchor (the control for the above)
 if land M2-untracked.yml "$WF" "$STEP_ANCHOR" $'      - name: probe\n        run: bash scripts/definitely-not-a-tracked-file.sh\n\n'"$STEP_ANCHOR"; then
   anchor_check "$LANDED" "$RE_VAL"; _r=$?
@@ -955,9 +1068,16 @@ subj_mut never-match "$R_NOSUBJ" .gitleaks.toml "$RE_ASSIGN" "SUBJECT_RE='^\$'"
 subj_mut drop-workflow-alt "$R_NOSUBJ" .github/workflows/secret-scan.yml '\.github/workflows/secret-scan\.yml|' ''
 subj_mut drop-toml-alt "$R_NOSUBJ" .gitleaks.toml '\.gitleaks\.toml|' ''
 subj_mut drop-ignore-alt "$R_NOSUBJ" .gitleaksignore '|\.gitleaksignore' ''
+subj_mut drop-runbook-alt "$R_NOSUBJ" "$RUNBOOK_PATH" "$RUNBOOK_ALT" ''
 subj_mut drop-prefix-alt "$R_NOSUBJ" apps/web-platform/scripts/rename-guard.sh '|^apps/web-platform/scripts/' ''
 subj_mut drop-gitattributes-alt "$R_NOSUBJ" .gitattributes '|(^|/)\.git(attributes|ignore)$' ''
 subj_mut drop-smoke-alt "$R_NOSUBJ" apps/web-platform/server/smoke/with-secret.ts '|(^|/)smoke(/|$)' ''
+# the cases create fixtures under FOUR smoke directories; a narrowed alternative that keeps only the
+# server one must be caught by a named member under each of the other two
+subj_mut narrow-smoke-server-only-goldens "$R_NOSUBJ" apps/web-platform/test/__goldens__/smoke/x \
+  '|(^|/)smoke(/|$)' '|^(smoke|apps/web-platform/server/smoke)(/|$)'
+subj_mut narrow-smoke-server-only-safety "$R_NOSUBJ" apps/web-platform/lib/safety/smoke/x \
+  '|(^|/)smoke(/|$)' '|^(smoke|apps/web-platform/server/smoke)(/|$)'
 subj_mut smoke-file-collision "$R_NOSUBJ" apps/web-platform/server/smoke '(^|/)smoke(/|$)' '(^|/)smoke/'
 subj_mut drop-synthesized-alt "$R_NOSUBJ" apps/web-platform/test/__synthesized__/now-allowed.ts '|^apps/web-platform/test/__synthesized__(/|$)' ''
 subj_mut synthesized-file-collision "$R_NOSUBJ" apps/web-platform/test/__synthesized__ '__synthesized__(/|$)' '__synthesized__/'
@@ -974,6 +1094,17 @@ fi
 if land M1-extra-json-alt "$BODY" '(^|/)smoke(/|$)'"'" '(^|/)smoke(/|$)|\.json$'"'"; then
   sweep_run "$LANDED"; _r=$?
   mutant_verdict "M1 an extra '|\\.json\$' alternative: the derived sweep must see non-subject tracked files turn true" "$_r" "verdict=true"
+fi
+
+# the subject direction PER FILE: a prefix narrowed to four named scripts still matches the chunk's
+# any-match (so the chunk sweep above stays green); only the per-file check and the one-at-a-time body sample see it
+if land M1-sweep-narrow-prefix "$BODY" '|^apps/web-platform/scripts/' \
+  '|^apps/web-platform/scripts/(rename-guard\.sh|allowlist-diff\.sh|lint-fixture-content\.mjs|parse-gitleaks-allowlists\.mjs)$'; then
+  _re_n=$(sed -n "s/^[[:space:]]*SUBJECT_RE='\\(.*\\)'[[:space:]]*\$/\\1/p" "$LANDED")
+  sweep_subject_each "$LANDED" "$_re_n"; _r=$?
+  mutant_verdict "M1 prefix narrowed to four scripts: the per-file subject check must name an unmatched tracked file" "$_r" "SWEEP-SUBJECT: tracked subject file(s) the regex does not match"
+  sweep_subject_each "$LANDED" "$RE_VAL"; _r=$?
+  mutant_verdict "M1 prefix narrowed to four scripts: the one-at-a-time body sample must see a sampled file turn false" "$_r" "fed alone"
 fi
 
 # ── Row 4: the fetch ─────────────────────────────────────────────────────────
@@ -1028,6 +1159,15 @@ fi
 if land M5-names-from-P-only "$BODY" 'names=$(cut -s -f2- <<<"$lines")' 'names=$(grep -E "^P$T" <<<"$lines" | cut -f2-)'; then
   mutant_sc "M5 matcher fed only the previous_filename column (rename INTO a subject path)" sc_rename_in "$LANDED" "reason='$R_NOSUBJ'"
 fi
+if land M5-cut-f2 "$BODY" 'cut -s -f2-' 'cut -s -f2'; then
+  mutant_sc "M5 cut -f2 (not -f2-): a TAB inside a filename truncates the name (docs/a<TAB>/smoke/b)" sc_tab_name "$LANDED" "reason='$R_NOSUBJ'"
+fi
+if land M5-count-prefix-F-only "$BODY" 'grep -c "^F$T"' 'grep -c "^F"'; then
+  mutant_sc "M5 entry count matches a bare ^F: a stray line starting with F is counted" sc_hostile_fstray "$LANDED" "reason='$R_MISMATCH'"
+fi
+if land M5-cap-2999 "$BODY" '"$CHANGED_FILES" -ge 3000' '"$CHANGED_FILES" -ge 2999'; then
+  mutant_sc "M5 file-list cap lowered to 2999: a trusted 2999-entry list fails open" sc_cap_below "$LANDED" "reason='$R_CAP'"
+fi
 if land M5-cut-without-s "$BODY" 'cut -s -f2-' 'cut -f2-'; then
   mutant_sc "M5 cut without -s: a stray subject-looking line becomes a name" sc_hostile_stray "$LANDED" "verdict=true"
 fi
@@ -1073,6 +1213,9 @@ wf_mut env-head-sha-changed "W-ENV" $'          CHANGED_FILES: ${{ github.event.
   $'          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}\n          HEAD_SHA: ${{ github.event.pull_request.base.sha }}'
 wf_mut matrix-case-dropped "W-MATRIX" $'          - colocated-lib-test-allowlist\n' ''
 wf_mut matrix-include-added "W-MATRIX" $'      matrix:\n        case:\n' $'      matrix:\n        include:\n          - case: extra\n        case:\n'
+wf_mut matrix-entry-renamed "W-MATRIX-ARMS" $'          - allowlist-negative\n' $'          - allowlist-negativex\n'
+wf_mut case-arm-renamed "W-MATRIX-ARMS" $'            allowlist-negative)\n' $'            allowlist-negativex)\n'
+wf_mut case-step-env-changed "W-CASE-STEP" $'          CASE: ${{ matrix.case }}\n' $'          CASE: ${{ github.event_name }}\n'
 wf_mut smoke-step-if "W-ST-IF" "$STEP_ANCHOR" "$STEP_ANCHOR        if: false"$'\n'
 wf_mut smoke-step-continue-on-error "W-ST-COE" "$STEP_ANCHOR" "$STEP_ANCHOR        continue-on-error: true"$'\n'
 
@@ -1154,6 +1297,34 @@ ctl_restore
 if [ "$_mc_caught" -eq 1 ] && [ "$_mf_caught" -eq 0 ] && [ "$_mc_all" -eq 1 ] && [ "$_mf_all" -eq 3 ] && [ "$_mr_all" -eq 4 ]; then pass
 else ctl_die "mutant_verdict mis-scored the controls (first caught+$_mc_caught fails+$_mf_caught; all caught+$_mc_all fails+$_mf_all runs+$_mr_all; expected 1/0 and 1/3/4)"; fi
 
+# shapes_run decides every shape row: one row with a WRONG expected count must record exactly one failure
+# (and a right one exactly one pass), or the compare has been neutered
+ctl_snapshot
+SHAPE_KIND=(run run); SHAPE_EXP=(2 1); SHAPE_LABEL=(ctl-wrong ctl-right); SHAPE_VAL=("bash $_T" "bash $_T")
+shapes_run 2>/dev/null
+_mf=$((fails - _c_f)); _mn=$((${#FAILURES[@]} - _c_n)); _mp=$((passes - _c_p))
+ctl_restore
+if [ "$_mf" -eq 1 ] && [ "$_mn" -eq 1 ] && [ "$_mp" -eq 1 ]; then pass
+else ctl_die "shapes_run did not record one failure and one pass for a wrong and a right expectation (fails+$_mf ledger+$_mn passes+$_mp)"; fi
+
+# check_scn's crash class: a body that CRASHED (rc 2, or >= 126: not executable, not found, a signal) is never
+# an assertion verdict (return 2), while an ordinary failing exit (1, 125) is (return 1)
+ctl_scn_rc() { # <body exit code> -> prints "<check_scn rc>:<WHY starts with CRASH ? y : n>"
+  local r
+  scn_new; : > "$SCN/stdout"; : > "$SCN/stderr"; RC=$1; CALLS=0; GOUT_N=0
+  check_scn false "$R_NOSUBJ"; r=$?
+  case "$WHY" in CRASH*) printf '%s:y' "$r" ;; *) printf '%s:n' "$r" ;; esac
+}
+_crash_bad=""
+for _x in 2 126 127 139; do [ "$(ctl_scn_rc "$_x")" = "2:y" ] || _crash_bad="$_crash_bad rc$_x=$(ctl_scn_rc "$_x")"; done
+for _x in 1 125; do [ "$(ctl_scn_rc "$_x")" = "1:n" ] || _crash_bad="$_crash_bad rc$_x=$(ctl_scn_rc "$_x")"; done
+if [ -z "$_crash_bad" ]; then pass
+else fail "CONTROL check_scn crash class: a crashing body must return 2, an ordinary failing exit 1 (got:$_crash_bad)"; fi
+
+# the sweep floor: a vacuous or lopsided partition must be refused, a real one accepted
+if ! sweep_floor_ok 0 0 && ! sweep_floor_ok 999 5 && ! sweep_floor_ok 5000 2 && sweep_floor_ok 1000 3; then pass
+else fail "CONTROL sweep_floor_ok: (0,0), (999,5) and (5000,2) must be refused and (1000,3) accepted"; fi
+
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
@@ -1167,7 +1338,7 @@ if [ "$LIVE_OPS" -ge "$OPERAND_FLOOR" ]; then pass; else fail "ANCHOR the live j
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=219
+_FLOOR=259
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

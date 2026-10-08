@@ -53,8 +53,10 @@ subject set is a superset of what the ten cases execute, read or create: `secret
 `.gitleaks.toml`, `.gitleaksignore`, anything under `apps/web-platform/scripts/`, `.gitignore` or
 `.gitattributes` at any depth, any path component named `smoke` (a directory or a file), everything
 at and under `apps/web-platform/test/__synthesized__`, the directories the cases `mkdir -p` on the
-way to a fixture (a tracked file at one of those paths would collide), and `gitleaks` /
-`gitleaks.tgz` at the repo root.
+way to a fixture (a tracked file at one of those paths would collide), `gitleaks` /
+`gitleaks.tgz` at the repo root, and this runbook by exact path (the rename-laundering case only
+quotes it in a `::warning::` message; listing it is over-inclusive on purpose, so a docs-only edit of
+this page runs the matrix).
 
 For such a PR the matrix renders as ONE skipped row named `smoke (${{ matrix.case }})` (GitHub does
 not expand the matrix of a skipped job into ten rows), not ten grey rows. That is intended, not a
@@ -94,6 +96,14 @@ failed open or the subject path rule that fired.
   but cannot close it.
 - A cancelled run skips the matrix (`!cancelled()` stops a superseded run); the superseding run
   decides.
+- The suite's operand anchor derives the subject set from the smoke job by membership: a whole token
+  that is a tracked file, or a nested tracked directory. It cannot see a glob (`cat scripts/lint-*.sh`),
+  a directory change followed by a bare name (`cd scripts && bash lint-workflows.sh`), a path composed
+  from a variable, or a bare top-level directory word (`ls scripts`). A future smoke step that reads an
+  input only in one of those forms would not be flagged, so a PR editing that input could skip the
+  matrix. The five required scanners still run on every PR, and review of the new step is the check.
+  These forms are recorded as decisions (shape rows expecting zero operands) in
+  `scripts/secret-scan-smoke-gate.test.sh`.
 
 ## Ref scope per event: which commits each trigger actually scans
 
