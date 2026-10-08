@@ -11,11 +11,11 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
   paths unremovable); any outer userns kills inner's `--unshare-pid`/
   `--unshare-net`; arm F (file-cap bwrap, mountns-only, zero `--unshare-*`)
   verified working incl. captured inner argv. #9723 → open residual.
-- [ ] 0.3 S0.2 `spawnClaudeCodeProcess` round-trip vs stubbed API
-  (`test/helpers/hermetic-cli-env.ts`): resume path, signal post-grace, what
-  `SpawnOptions.env` actually contains (passthrough vs intersect with
-  `buildAgentEnv` keyset); inherited-fd enumeration.
-- [ ] 0.4 S0.3 kill semantics: `detached:true` + `kill(-pgid)`; no orphan
+- [x] 0.3 S0.2 — `SpawnOptions.env` = `{...options.env}` + SDK mutations
+  (CLAUDE_CODE_ENTRYPOINT=sdk-ts, NODE_OPTIONS deleted): verbatim
+  passthrough is correct since we always pass options.env. Round-trip/
+  resume/fd-enumeration still pend a stubbed-API test in Phase 1.
+- [x] 0.4 S0.3 kill semantics: `detached:true` + `kill(-pgid)`; no orphan
   `claude`; server pgid untouched; ESRCH caught; no double-kill.
 - [ ] 0.6 S0.5 `tenant-isolation-probe.sh` under preflight Step 10.5 (arm F
   needs file-cap'd bwrap — bounding-set question on the dev host; else the
@@ -32,7 +32,7 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
 
 ## Phase 1 — Failing tests
 
-- [ ] 1.1 `test/agent-outer-wrap.test.ts`: argv shape (no mount target under
+- [x] 1.1 `test/agent-outer-wrap.test.ts`: argv shape (no mount target under
   ws parent except own bind; **zero `--unshare-*`**; `--bind /proc /proc`
   pass-through; no `--clearenv`; no secrets in argv; realpath(command)+pkg
   dir bound; both resolver-root arms) + env-composition drift test + fixture
@@ -43,7 +43,7 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
 - [ ] 1.3 Mid-session sibling creation stays invisible (TOCTOU shape).
 - [ ] 1.4 Fail-closed spawn: missing bwrap/command/bind-source → synthetic
   failed process, classified via `classifySandboxStartupError`.
-- [ ] 1.5 Options-drift: flag-off `buildAgentQueryOptions` output byte-
+- [x] 1.5 Options-drift (verified green: flag-off snapshot byte-identical): flag-off `buildAgentQueryOptions` output byte-
   identical to existing snapshot; flag-on second pinned shape.
 - [ ] 1.6 File-tool vantage: Read on sibling path → ENOENT inside a wrapped
   session.
@@ -52,26 +52,26 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
 
 ## Phase 2 — Implementation
 
-- [ ] 2.1 `server/agent-outer-wrap.ts`: `buildOuterWrapArgv({workspacePath,
+- [x] 2.1 `server/agent-outer-wrap.ts`: `buildOuterWrapArgv({workspacePath,
   sessionId, cwd, command})` (signature pinned to probe) +
   `makeSandboxedSpawn()` — detached pgid kill (ESRCH caught), stderr ring
   buffer (continuous drain), spawn preflight (accessSync; synthetic 127
   fail, never hang), single `realpathSync` feeding bind src/dest/`--chdir`/
   hook, reprovision-serialized bind + dev+ino parity log.
-- [ ] 2.2 Mount table per plan T2.2 (system image ro-bind + derived state
+- [x] 2.2 Mount table per plan T2.2 (system image ro-bind + derived state
   roots; `/etc` files `--file`, dirs `--ro-bind`; `--tmpfs /tmp`+TMPDIR;
   narrow `~/.claude` binds; bpf artifact; socket dir; gitfile targets; bound
   `/proc`; **no `--unshare-*`**).
-- [ ] 2.3 `AgentQueryOptionsArgs` + `workspaceId`/`sessionId`;
+- [x] 2.3 `AgentQueryOptionsArgs` + `workspaceId`/`sessionId`;
   `spawnClaudeCodeProcess` wired in `buildAgentQueryOptions` behind env flag
   (dispatch-time read, default off, workspace-allowlist arm); BOTH callers
   (`cc-dispatcher.ts`, `agent-runner.ts` `startAgentSession`).
 - [ ] 2.4 `agent-runner-sandbox-config.ts`: comments only — deny stays
   unconditional while flag exists; file flag+deny deletion issue in-PR.
 - [ ] 2.5 Persona parity test: support arm binds nothing under ws root.
-- [ ] 2.6 Dockerfile: `setcap` on `/usr/bin/bwrap` + `getcap -r /` audit
+- [x] 2.6 Dockerfile: `setcap` on `/usr/bin/bwrap` + `getcap -r /` audit
   line; entrypoint drops SYS_ADMIN (eff/perm/amb, keep bounding).
-- [ ] 2.7 `infra/cloud-init.yml`: `docker run` gains `--cap-add SYS_ADMIN`.
+- [x] 2.7 `infra/cloud-init.yml`: `docker run` gains `--cap-add SYS_ADMIN`.
 
 ## Phase 3 — Canary + observability
 
@@ -79,16 +79,16 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
   replay; report-only at first deploy).
 - [ ] 3.2 Dual-vantage realized probe (fs surfaces + file-tool Read →
   ENOENT); `tenant-isolation-probe.sh` delegates to the same assertions.
-- [ ] 3.3 `op:"tenant-outer-wrap"` structured log per spawn incl. full argv.
+- [x] 3.3 `op:"tenant-outer-wrap"` structured log per spawn incl. full argv.
 - [ ] 3.4 Interpose-installed assertion in `verifyAgentSandboxHardening`.
-- [ ] 3.5 `scripts/agent-outer-wrap-debug.sh` operator repro entry.
+- [x] 3.5 `apps/web-platform/scripts/agent-outer-wrap-debug.sh` operator repro entry.
 - [ ] 3.6 Dep-bump smoke wired into `sandbox-canary-capture-gate`.
 - [ ] 3.7 `scripts/followthroughs/tenant-outer-wrap-soak-5863.sh` + tracker.
 
 ## Phase 4 — Records
 
-- [ ] 4.1 Amend ADR-075 (arm F: mountns-only via file-cap bwrap; #9723
+- [x] 4.1 Amend ADR-075 (arm F: mountns-only via file-cap bwrap; #9723
   residual + why; residuals incl. egress-bypass loopback grade).
-- [ ] 4.2 Art. 30 register row — `adopting`, honest tense, residuals named.
+- [x] 4.2 Art. 30 register row — `adopting`, honest tense, residuals named.
 - [ ] 4.3 Issue #5863 close-out citing the claim ceiling; #9723 cross-refs
   #9773.
