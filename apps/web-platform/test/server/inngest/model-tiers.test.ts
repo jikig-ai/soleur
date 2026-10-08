@@ -287,16 +287,10 @@ describe("resolveTurnCostUsd — Haiku 5.5 two-card pricing (Guard 2)", () => {
     expect(resolveTurnCostUsd("claude-nonexistent", usage(0, 0, 0, 0))).toBeNaN();
   });
 
-  // Pins the CURRENT integer-cent rounding the cost writers apply
-  // (`Math.round(costDelta * 100)`, server/cost-writer.ts) so that a later fix
-  // for #6945 is a deliberate test change. A turn priced at exactly half a cent
-  // rounds UP to 1 cent; one a hair under rounds to 0. That is why Haiku-class
-  // turns under half a cent are written to the WORM ledger as 0 cents.
-  it("rounding edge: the half-cent turn rounds to 1 cent, a hair under rounds to 0", () => {
-    // 50000 input tokens on the short card = 50000*0.10 = 5000 per-million = $0.005
-    expect(Math.round(cost(usage(50_000, 0, 0, 0)) * 100)).toBe(1);
-    expect(Math.round(cost(usage(49_990, 0, 0, 0)) * 100)).toBe(0);
-  });
+  // The integer-cent rounding the cost writers apply (Math.round(cost * 100); sub-half-cent
+  // Haiku 5.5 turns are stored as 0 cents, #6945) is pinned THROUGH the real writers in
+  // test/server/cost-writer-unpriced.test.ts, not here: a test that recomputes Math.round
+  // itself pins a JS builtin and cannot notice cost-writer.ts changing.
 });
 
 describe("audit-cron effort pin — #8603 Guard 1", () => {

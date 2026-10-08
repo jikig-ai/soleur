@@ -133,7 +133,8 @@ DELETION_GUARD=20   # abort --fix if any file would lose more than this many lin
 # break two paid scripts, and leaving them selectable would make `--detect` exit 10
 # forever. They stay on `claude-haiku-4-5` until the SDK pin reaches 0.3.293, the first
 # release whose bundle carries the id. EXACT paths, never a directory: widening this to
-# apps/web-platform/scripts/ would hide a genuinely stale sibling. It is SELF-EXPIRING:
+# apps/web-platform/scripts/ would hide a genuinely stale sibling. The exemption is per FILE
+# (every stale id, not only Haiku): these scripts run on the SDK-bundled CLI. It is SELF-EXPIRING:
 # model-launch-review.test.ts fails once the SDK pin reaches 0.3.293 and says to delete
 # this array and swap the two scripts.
 SDK_PATH_CARVEOUT=(
@@ -141,10 +142,15 @@ SDK_PATH_CARVEOUT=(
   "apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs"
 )
 sdk_carveout_re() {
-  local p out=""
+  # ANCHORED at both ends: `^<root>/<path>$`. The left anchor matters because candidate
+  # paths are absolute under $ROOT, so an unanchored `/apps/…/x.mjs$` also exempts the same
+  # relative path nested under another prefix (vendor/…, .worktrees/…). $ROOT is escaped so
+  # a root containing regex metacharacters cannot alter the pattern.
+  local p out="" root_re
+  root_re="$(printf '%s' "$ROOT" | sed 's/[][\\.*^$+?(){}|]/\\&/g')"
   for p in "${SDK_PATH_CARVEOUT[@]}"; do
     p="${p//./\\.}"
-    out="${out:+$out|}/${p}\$"
+    out="${out:+$out|}^${root_re}/${p}\$"
   done
   printf '%s' "$out"
 }

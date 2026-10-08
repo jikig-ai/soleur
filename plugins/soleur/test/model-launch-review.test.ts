@@ -797,6 +797,37 @@ describe("model-launch-review Haiku 5.5 launch", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("the carve-out is ANCHORED: a nested copy, a suffixed name and a near-miss spelling are still detected", () => {
+    const stale = 'const MODEL = "claude-haiku-4-5";\n';
+    const root = rootWith({
+      // left anchor: the same relative path under another prefix is NOT the carved file
+      "vendor/apps/web-platform/scripts/sandbox-canary.mjs": stale,
+      // right anchor: a longer filename is not the carved file
+      "apps/web-platform/scripts/sandbox-canary.mjs.bak": stale,
+      // dot escaping: 'x' is not '.'
+      "apps/web-platform/scripts/sandbox-canaryxmjs": stale,
+      "apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs": stale,
+    });
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(10);
+    expect(det.stdout).toContain("vendor/apps/web-platform/scripts/sandbox-canary.mjs");
+    expect(det.stdout).toContain("sandbox-canary.mjs.bak");
+    expect(det.stdout).toContain("sandbox-canaryxmjs");
+    // and the genuinely carved file is still not listed
+    expect(det.stdout).not.toMatch(/(^|\s)apps\/web-platform\/scripts\/plugin-root-sandbox-propagation-probe\.mjs/m);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the carve-out exempts the two files from EVERY stale id, not only Haiku (documented scope)", () => {
+    // The exemption is per FILE, by design: these scripts run on the SDK-bundled CLI. This
+    // pins that scope so widening or narrowing it is a deliberate change rather than drift.
+    const root = rootWith({
+      "apps/web-platform/scripts/sandbox-canary.mjs": 'const A = "claude-sonnet-4-5"; const B = "claude-fable-5";\n',
+    });
+    expect(run(["--detect"], root).status).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   test("the carve-out list in the script equals the two paths by VALUE (the test enumerates it, not the script)", () => {
     const src = readFileSync(AUDIT_SH, "utf8");
     const block = src.match(/SDK_PATH_CARVEOUT=\(([\s\S]*?)\)/);
@@ -805,27 +836,57 @@ describe("model-launch-review Haiku 5.5 launch", () => {
     expect(listed.sort()).toEqual([...SDK_CARVEOUT_PATHS].sort());
   });
 
-  test("the carve-out is self-expiring: it must be deleted once the Agent SDK pin knows claude-haiku-5-5", () => {
-    // claude-agent-sdk 0.3.284 (the pin) bundles a CLI that does not know the id;
-    // 0.3.293 is the first SDK release whose bundle carries it. From then on the two
-    // scripts can move to claude-haiku-5-5 and the exemption has no reason to exist.
-    const pkg = JSON.parse(
-      readFileSync(resolve(REPO_ROOT, "apps/web-platform/package.json"), "utf8"),
-    );
-    const pin: string = pkg.dependencies["@anthropic-ai/claude-agent-sdk"];
+  // claude-agent-sdk 0.3.284 (the pin) bundles a CLI that does not know claude-haiku-5-5;
+  // 0.3.293 is the first SDK release whose bundle carries it (verified 2026-10-08 by
+  // unpacking the platform packages 0.3.284..0.3.293: absent through 0.3.292).
+  function sdkKnowsHaiku55(pin: string): boolean {
     expect(pin, "SDK pin must be an exact version").toMatch(/^\d+\.\d+\.\d+$/);
     const [maj, min, pat] = pin.split(".").map(Number);
-    const knowsHaiku55 = maj > 0 || min > 3 || (min === 3 && pat >= 293);
+    return maj > 0 || min > 3 || (min === 3 && pat >= 293);
+  }
+
+  test("the pin predicate: false below 0.3.293, true from it (both branches are exercised, not just today's)", () => {
+    expect(sdkKnowsHaiku55("0.3.284")).toBe(false);
+    expect(sdkKnowsHaiku55("0.3.292")).toBe(false);
+    expect(sdkKnowsHaiku55("0.2.999")).toBe(false);
+    expect(sdkKnowsHaiku55("0.3.293")).toBe(true);
+    expect(sdkKnowsHaiku55("0.3.1000")).toBe(true);
+    expect(sdkKnowsHaiku55("0.4.0")).toBe(true);
+    expect(sdkKnowsHaiku55("1.0.0")).toBe(true);
+    expect(() => sdkKnowsHaiku55("^0.3.284")).toThrow();
+  });
+
+  const pkgSdkPin = (): string =>
+    JSON.parse(readFileSync(resolve(REPO_ROOT, "apps/web-platform/package.json"), "utf8")).dependencies[
+      "@anthropic-ai/claude-agent-sdk"
+    ];
+
+  test("the carve-out is self-expiring: it must be deleted once the Agent SDK pin knows claude-haiku-5-5", () => {
+    const pin = pkgSdkPin();
     expect(
-      knowsHaiku55,
+      sdkKnowsHaiku55(pin),
       `@anthropic-ai/claude-agent-sdk is pinned at ${pin}, which bundles a CLI that knows ` +
         "claude-haiku-5-5: delete SDK_PATH_CARVEOUT in audit-models.sh, swap " +
-        "sandbox-canary.mjs and plugin-root-sandbox-propagation-probe.mjs to " +
-        "claude-haiku-5-5, and delete this test and the carve-out test (#8643).",
+        "sandbox-canary.mjs, plugin-root-sandbox-propagation-probe.mjs AND " +
+        "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts to claude-haiku-5-5, " +
+        "and delete this test and the carve-out tests (#8643).",
     ).toBe(false);
   });
 
-  test("anti-vacuity: an unreadable --root fails the scan (rc 2), it never reports a clean 'none'", () => {
+  test("the THIRD SDK-path file (a test, so outside the audit) is on Haiku 4.5 exactly while the SDK pin cannot resolve 5.5", () => {
+    // sandbox-credential-deny-runtime.test.ts drives the real Agent SDK query(). It sits under
+    // /test/, which the audit excludes, so only this assertion can notice that it should move.
+    const src = readFileSync(
+      resolve(REPO_ROOT, "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"),
+      "utf8",
+    );
+    const onOld = /model:\s*"claude-haiku-4-5-20251001"/.test(src);
+    const onNew = /model:\s*"claude-haiku-5-5"/.test(src);
+    expect(onOld !== onNew, "exactly one Haiku id must be configured in that file").toBe(true);
+    expect(onOld, "on 4.5 iff the pinned SDK bundle does not know 5.5").toBe(!sdkKnowsHaiku55(pkgSdkPin()));
+  });
+
+  test("anti-vacuity: an unreadable --root fails the scan, it never reports a clean 'none'", () => {
     const r = spawnSync("bash", [AUDIT_SH, "--root", "/nonexistent-mlr-root-xyz", "--detect"], {
       encoding: "utf8",
     });

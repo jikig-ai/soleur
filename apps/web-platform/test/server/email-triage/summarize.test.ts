@@ -24,7 +24,7 @@ vi.mock("@/server/observability", () => ({
 
 import { APIError, BadRequestError } from "@anthropic-ai/sdk";
 import { ANTHROPIC_CREDIT_EXHAUSTED_OP } from "@/server/anthropic-credit";
-import { summarizeEmail } from "@/server/email-triage/summarize";
+import { DEGRADED_SUMMARY, summarizeEmail } from "@/server/email-triage/summarize";
 import { HAIKU_MODEL } from "@/server/inngest/leader-prompts/constants";
 
 const input = { subject: "Invoice", sender: "billing@example.test", bodyText: "Hello" };
@@ -227,5 +227,75 @@ describe("summarizeEmail — Haiku 5.5 request shape and no-text-block mirror", 
       ([, ctx]) => (ctx as { op?: string }).op === "mail-class-coerced",
     );
     expect(coerced).toHaveLength(1);
+  });
+});
+
+// A refused, truncated or empty answer used to be stored as an EMPTY summary (or a raw JSON
+// fragment) in a write-once column, with only a Sentry event to show for it. The operator
+// reading the inbox now sees an explicit placeholder, and one incident is one report.
+describe("summarizeEmail — degraded answers are stored as an explicit placeholder", () => {
+  const reportsByOp = (op: string) =>
+    reportSilentFallbackSpy.mock.calls.filter(([, ctx]) => (ctx as { op?: string }).op === op);
+
+  it.each([
+    ["empty text", { content: [], stop_reason: "end_turn" }],
+    ["a refusal", { content: [], stop_reason: "refusal", stop_details: { category: "cyber" } }],
+    ["a refusal message in text", { content: [{ type: "text", text: "I can't help with that." }], stop_reason: "refusal" }],
+    ["a truncated non-JSON fragment", { content: [{ type: "text", text: '{"summary":"An inv' }], stop_reason: "max_tokens" }],
+  ])("%s stores DEGRADED_SUMMARY, class other, and reports exactly once", async (_label, response) => {
+    createSpy.mockResolvedValue(response);
+    await expect(summarizeEmail(input)).resolves.toEqual({
+      summary: DEGRADED_SUMMARY,
+      mailClass: "other",
+    });
+    expect(DEGRADED_SUMMARY.length).toBeGreaterThan(0);
+    expect(reportsByOp("no-text-block")).toHaveLength(1);
+    // The same incident must not also raise a second event from the class coercion.
+    expect(reportsByOp("mail-class-coerced")).toHaveLength(0);
+  });
+
+  it("a max_tokens turn whose JSON is still complete keeps its parsed summary (and still reports)", async () => {
+    createSpy.mockResolvedValue({
+      content: [{ type: "text", text: '{"summary":"An invoice.","mail_class":"billing"}' }],
+      stop_reason: "max_tokens",
+    });
+    await expect(summarizeEmail(input)).resolves.toEqual({ summary: "An invoice.", mailClass: "billing" });
+    expect(reportsByOp("no-text-block")).toHaveLength(1);
+  });
+
+  it("a healthy non-JSON end_turn answer keeps its raw text (unchanged behaviour)", async () => {
+    createSpy.mockResolvedValue({
+      content: [{ type: "text", text: "A plain sentence summary." }],
+      stop_reason: "end_turn",
+    });
+    const out = await summarizeEmail(input);
+    expect(out.summary).toBe("A plain sentence summary.");
+    expect(reportsByOp("no-text-block")).toHaveLength(0);
+  });
+
+  it("a refusal's extra is the category ONLY, a hostile value is allowlisted, and no email content or explanation rides along", async () => {
+    createSpy.mockResolvedValue({
+      content: [],
+      stop_reason: "refusal",
+      stop_details: { category: "cyber", explanation: "SENTINEL-explanation-2b9d" },
+    });
+    await summarizeEmail({
+      subject: "SENTINEL-subject-5a",
+      sender: "sentinel-sender-6b@example.test",
+      bodyText: "SENTINEL-body-7c",
+    });
+    const ctx = reportsByOp("no-text-block")[0][1] as { message: string; extra: Record<string, unknown> };
+    expect(Object.keys(ctx.extra).sort()).toEqual(["category", "model", "stop_reason"]);
+    expect(JSON.stringify(reportSilentFallbackSpy.mock.calls)).not.toContain("SENTINEL");
+
+    reportSilentFallbackSpy.mockReset();
+    createSpy.mockResolvedValue({
+      content: [],
+      stop_reason: "refusal",
+      stop_details: { category: "SENTINEL-category-" + "z".repeat(300) },
+    });
+    await summarizeEmail(input);
+    const hostile = reportsByOp("no-text-block")[0][1] as { extra: Record<string, unknown> };
+    expect(hostile.extra.category).toBe("unrecognized");
   });
 });

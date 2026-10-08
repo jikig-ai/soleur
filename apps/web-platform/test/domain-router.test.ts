@@ -411,6 +411,84 @@ describe("routeMessage classify (auto) path", () => {
     expect(JSON.stringify(logErrorMock.mock.calls)).toContain("end_turn");
   });
 
+  // --- the mirror's clauses that the empty-text fixtures above never reach ---
+
+  test.each([
+    ["max_tokens", '{"leaders":["cm'],
+    ["refusal", "I can't help with that."],
+    ["model_context_window_exceeded", '{"leaders":'],
+  ])("NON-EMPTY text that ended at %s still mirrors (a fragment or a refusal message is not an answer)", async (stop, text) => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({ content: [{ type: "text", text }], stop_reason: stop }),
+    );
+    const result = await routeMessage("Help me with something", "fake-api-key");
+    expect(result).toEqual({ leaders: ["cpo"], source: "auto" });
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackMock.mock.calls[0][1].extra.stop_reason).toBe(stop);
+  });
+
+  test("whitespace-only text mirrors (the summarizer trims first; the two must agree on 'empty')", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({ content: [{ type: "text", text: "  \n " }], stop_reason: "end_turn" }),
+    );
+    await routeMessage("Help me with something", "fake-api-key");
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("a refusal's extra is the category ONLY: stop_details.explanation never rides along", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [],
+        stop_reason: "refusal",
+        stop_details: { type: "refusal", category: "cyber", explanation: "SENTINEL-explanation-7c1e" },
+      }),
+    );
+    await routeMessage("Help me with something", "fake-api-key");
+    const [, opts] = reportSilentFallbackMock.mock.calls[0];
+    expect(Object.keys(opts.extra).sort()).toEqual(["category", "model", "stop_reason"]);
+    expect(JSON.stringify(reportSilentFallbackMock.mock.calls)).not.toContain("SENTINEL-explanation");
+  });
+
+  test("a hostile stop_reason / category from the API is allowlisted before it reaches the sink", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [],
+        stop_reason: "refusal",
+        stop_details: { category: "SENTINEL-category-" + "z".repeat(300) },
+      }),
+    );
+    await routeMessage("Help me with something", "fake-api-key");
+    expect(reportSilentFallbackMock.mock.calls[0][1].extra.category).toBe("unrecognized");
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({ content: [], stop_reason: "SENTINEL-stop-" + "q".repeat(300) }),
+    );
+    reportSilentFallbackMock.mockClear();
+    await routeMessage("Help me with something", "fake-api-key");
+    expect(reportSilentFallbackMock.mock.calls[0][1].extra.stop_reason).toBe("unknown");
+    expect(JSON.stringify(reportSilentFallbackMock.mock.calls)).not.toContain("SENTINEL");
+  });
+
+  test("the sentinel sweep also covers the REFUSAL path, including the mirror's message", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({ content: [], stop_reason: "refusal", stop_details: { category: "cyber" } }),
+    );
+    await routeMessage("SENTINEL-9f3a-refusal-path-message", "sk-ant-SENTINEL-key", {
+      path: "SENTINEL-4c1d-context-path",
+      type: "file",
+    });
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+    const serialized = JSON.stringify(reportSilentFallbackMock.mock.calls);
+    expect(serialized).not.toContain("SENTINEL");
+  });
+
+  test("a non-ok HTTP response logs its status, so a 429/500 is not read as 'the model returned nothing'", async () => {
+    fetchSpy.mockResolvedValue(anthropicResponse({}, 429));
+    const result = await routeMessage("Help me with something", "fake-api-key");
+    expect(result).toEqual({ leaders: ["cpo"], source: "auto" });
+    expect(JSON.stringify(logErrorMock.mock.calls)).toContain("http_429");
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
   // --- prompt injection: the leader-ID allowlist is the ONLY path from model output to a leader ---
 
   test("adversarial message: an instruction to route elsewhere cannot add a leader outside the allowlist", async () => {
@@ -437,18 +515,39 @@ describe("routeMessage classify (auto) path", () => {
 
 // domain-router.ts sits on the interactive request path and must stay leaf-light: it
 // keeps an inline Anthropic request instead of calling the shared `_cron-shared.ts`
-// helper because that module statically imports octokit/github-app. Adding the
-// observability mirror must not change that. Pin the module's import set exactly, so a
-// future import of a heavy module fails here instead of loading it on every request.
+// helper because that module statically imports octokit/github-app. Pin the module's
+// import set exactly, in every static spelling, so a future import of a heavy module
+// fails here instead of loading it on every request. (Direct specifiers only: each
+// allowed module is itself small — constants.ts and anthropic-stop-report.ts import
+// nothing, observability.ts is already on this path via agent-runner.)
 describe("domain-router stays leaf-light", () => {
-  test("imports exactly domain-leaders, logger and observability, and nothing octokit-shaped", () => {
-    const src = readFileSync(join(__dirname, "../server/domain-router.ts"), "utf8");
-    const specifiers = [...src.matchAll(/^import\s[^;]*?from\s+"([^"]+)";/gm)].map((m) => m[1]);
+  const src = readFileSync(join(__dirname, "../server/domain-router.ts"), "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+
+  test("imports exactly the five known modules, in any quoting or form, and nothing octokit-shaped", () => {
+    // `import … from "x"`, `import "x"`, `export … from "x"` — single OR double quotes,
+    // with or without a trailing semicolon, and multi-line import lists.
+    const specifiers = [
+      ...src.matchAll(/^\s*(?:import|export)\b[^"';]*?(?:from\s*)?["']([^"']+)["']/gm),
+    ].map((m) => m[1]);
     // Non-vacuity: the extraction found the imports it is supposed to constrain.
-    expect(specifiers.length).toBeGreaterThanOrEqual(3);
-    expect([...specifiers].sort()).toEqual(["./domain-leaders", "./logger", "./observability"]);
+    expect(specifiers.length).toBeGreaterThanOrEqual(5);
+    expect([...specifiers].sort()).toEqual([
+      "./anthropic-stop-report",
+      "./domain-leaders",
+      "./inngest/leader-prompts/constants",
+      "./logger",
+      "./observability",
+    ]);
     for (const spec of specifiers) {
       expect(spec).not.toMatch(/octokit|github-app|_cron-shared/);
     }
+  });
+
+  test("no dynamic import() and no require() of anything", () => {
+    expect(src).not.toMatch(/\bimport\s*\(/);
+    expect(src).not.toMatch(/\brequire\s*\(/);
   });
 });
