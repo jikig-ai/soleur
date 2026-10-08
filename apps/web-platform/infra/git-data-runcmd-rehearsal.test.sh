@@ -55,10 +55,15 @@ fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:
 #
 #   docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'
 #
-# resolved 2026-09-02, reported by that command as
+# resolved 2026-10-08 (the previous pin was resolved 2026-09-02), reported by that command as
 # `MediaType: application/vnd.oci.image.index.v1+json` — the index media type is what makes it
 # the manifest list rather than a platform manifest. The tag is kept alongside the digest
 # because Docker still reports it and a bare digest reads as unattributed.
+#
+# RE-MEASURED 2026-10-08 on this bump: `mke2fs -V` inside the new image still reports 1.47.0
+# (5-Feb-2023), dpkg e2fsprogs 1.47.0-2.4~exp1ubuntu4.1, and the plain, `-O project` and
+# `-O casefold` feature sets are identical to the previous image. R1's allowlist needed no row
+# added, removed or changed; the fixture file was deliberately not touched (#9252).
 #
 # WHY THIS IS NOT COSMETIC. R1 fingerprints the birth filesystem's ext4 features and classifies
 # each against an allowlist, and that classification is version-sensitive: mke2fs measures
@@ -67,7 +72,7 @@ fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:
 # repair ("Do NOT 'refresh' the fixture wholesale — the point is the classification, not the
 # diff"). Pinned, an e2fsprogs change becomes a NAMED, dated drift that rule-audit.yml reports,
 # instead of an unattributable R1 failure blaming the template.
-UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
+UBUNTU_BASE='ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55'
 
 # ── R1-PIN — every spin in this file runs the PINNED image ──────────────────────────
 #

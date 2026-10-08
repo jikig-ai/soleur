@@ -1389,7 +1389,7 @@ fi
 # =================================================================================================
 echo ""
 echo "--- Tier B: systemd as PID 1 in the pinned ubuntu:24.04 image ---"
-UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
+UBUNTU_BASE='ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55'
 TIERB_RESULT=""
 TB_FAIL=0
 tb_skip() { echo "  SKIP (Tier B): $1"; TIERB_RESULT="skipped: $1"; }

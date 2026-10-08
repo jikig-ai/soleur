@@ -26,7 +26,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="${DIR}/cloud-init-git-data.yml"
 BOOTSTRAP="${DIR}/git-data-bootstrap.sh"
 # Pinned base image — the same digest git-data-runcmd-rehearsal.test.sh spins (#7544).
-UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
+UBUNTU_BASE='ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55'
 # Bounded apt (#9379): one budget of apt seconds on the runtime arm's in-container apt cycle, armed at
 # its docker site. 180 s is ~1.7x the slowest healthy apt cost measured on a slow box (32-104 s for the whole
 # suite, ~55 s of it apt) and well inside the 300 s suite bound. Expiry exits 100 with a FIXTURE_APT_CAUSE
