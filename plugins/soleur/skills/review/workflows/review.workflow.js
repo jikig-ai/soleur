@@ -68,7 +68,7 @@ const DIMENSIONS = {
   'rails-dhh':      { agentType: 'soleur:engineering:review:dhh-rails-reviewer',             lens: 'Rails philosophy, JS-framework contamination, unnecessary abstraction' },
   'data-migration': { agentType: 'soleur:engineering:review:data-migration-expert',          lens: 'ID-mapping correctness vs production, swapped values, rollback safety, dual-write' },
   'deploy-verify':  { agentType: 'soleur:engineering:review:deployment-verification-agent',  lens: 'Go/No-Go deploy checklist with SQL verification queries and rollback procedure' },
-  'test-design':    { agentType: 'soleur:engineering:review:test-design-reviewer',           lens: "Farley's 8 properties; weighted Test Quality Score + top improvements" },
+  'test-design':    { agentType: 'soleur:engineering:review:test-design-reviewer',           lens: "Farley's 8 properties; weighted Test Quality Score + top improvements; pyramid-layer + fast-feedback verdicts — FAIL on a new e2e-layer test with no 'pyramid-justified:' marker" },
   semgrep:          { agentType: 'soleur:engineering:review:semgrep-sast', deterministic: true, lens: 'deterministic SAST — bootstrap via plugins/soleur/skills/review/scripts/ensure-semgrep.sh first, then scan changed source for CWE/secret/taint signatures' },
   'user-impact':    { agentType: 'soleur:engineering:review:user-impact-reviewer',           lens: 'enumerate concrete user-facing failure modes (cross-tenant read, credential leak, data loss, double-charge) vs the plan threshold' },
   // --- deterministic tools (no agentType; run a scanner/skill, taken as ground truth) ---

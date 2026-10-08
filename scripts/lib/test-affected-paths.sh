@@ -608,6 +608,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
   "scripts/lib/test-contention.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# plugins/soleur/test/test-pyramid-fixtures.test.sh — pins the fixture pair AND the
+# `## Pyramid & Fast-Feedback Check` vocabulary in the agent body; name-stem derivation
+# reaches neither, so both are declared edges here.
+AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS=(
+  "plugins/soleur/agents/engineering/review/test-design-reviewer.md"
+  "plugins/soleur/test/fixtures/test-pyramid/"
+  "plugins/soleur/test/test-pyramid-fixtures.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
   "plugins/soleur/skills/ship/SKILL.md"
