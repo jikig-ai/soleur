@@ -500,6 +500,8 @@ row "25 a hand-copied deny loop naming ONLY the third host, writing through \"\$
 sub server.tf $'    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do\n      a=$(timeout 10 getent ahosts "$h"' \
   $'    for h in ghcr.io pkg-containers.githubusercontent.com; do\n      a=$(timeout 10 getent ahosts "$h"'
 row "26 the assertion's name list no longer equals the deny loop's (parity, not only the per-name agree rows)" parity server.tf
+sub server.tf 'echo "FATAL: $h does not resolve ONLY' 'echo "FATAL: ghcr.io does not resolve ONLY'
+row "27 the assertion's FATAL always names ghcr.io whichever host failed (an operator would chase the wrong host)" agree server.tf
 
 # Harness row (must PASS): copy A re-indented under its `- |` parses to the same entry.
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "re-indent anchor missing"
@@ -530,10 +532,10 @@ if [[ "$SURV_FAILS" == 1 ]]; then pass "harness: row() reports a mutation that n
 else fail "harness: row() did not count a surviving mutation (FAIL count '$SURV_FAILS', want 1) -- the whole battery is unfalsifiable"; fi
 sandbox
 
-# Floor at the MEASURED count (7 live checks + control + 26 rows + 3 harness rows = 37; was 29 before
-# #9390 added rows 20-26 and the row() honesty control). Reported with printf + exit DIRECTLY, never
+# Floor at the MEASURED count (7 live checks + control + 27 rows + 3 harness rows = 38; was 29 before
+# #9390 added rows 20-27 and the row() honesty control). Reported with printf + exit DIRECTLY, never
 # through pass()/fail() (the floor polices them).
-MIN_ASSERTIONS=37
+MIN_ASSERTIONS=38
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

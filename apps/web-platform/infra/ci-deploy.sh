@@ -364,8 +364,10 @@ fan_out_to_peers() {
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
-    # The HMAC signature header goes in on curl's stdin config channel, never its argv
+    # The HMAC SIGNATURE header goes in on curl's stdin config channel, never its argv
     # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
+    # Known remaining site: the shared secret itself is openssl's -hmac argument above
+    # (the deferred `openssl dgst -hmac` class in lint-shell-trace-credential-refusal.py).
     code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \

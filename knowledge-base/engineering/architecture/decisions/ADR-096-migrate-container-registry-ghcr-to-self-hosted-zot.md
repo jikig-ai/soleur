@@ -2163,7 +2163,8 @@ hosts template. This closes the open item that the 2026-10-01 and 2026-10-02 ame
 as #9390 (the `docker.pkg.github.com` hosts-file line); their statements that the deny covers two
 names describe the state before this date and are left as written.
 
-- **Delivery to the registry** is the registry-host replace that follows the merge; delivery to the running web hosts is not part of it. The merge carries the two kill-switch lines,
+- **Delivery to the registry** is the registry-host replace that follows the merge: the entry is part of
+  `user_data`, so the host receives it only at birth. Delivery to the running web hosts is not part of it. The merge carries the two kill-switch lines,
   so the push applies do not re-run `zot_consumer_probe_install` (web-1) and `deploy_pipeline_fix_web2` (web-2);
   the new `local.ghcr_deny_sh` reaches them with the next apply that includes those resources, and a fresh or
   reborn web host gets it from `cloud-init.yml` at birth.

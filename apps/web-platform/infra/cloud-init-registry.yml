@@ -87,8 +87,8 @@ write_files:
   #
   # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.22 supplies BOTH
   # deadlines as 60000000000 ns (60.000 s) when the "http" block omits them — read off the
-  # PINNED digest's own boot config, not from docs (re-read 2026-10-08, #9252). At 60 s a 703_724_542 B layer must sustain
-  # 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,
+  # PINNED digest's own boot config, not from docs (re-read 2026-10-08, #9252). At 60 s a
+  # 703_724_542 B layer must sustain 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,
   # zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
   # off-box against the then-pinned v2.1.20 digest over a docker bridge with NO tunnel and NO Cloudflare
   # edge, by dribbling a 4 MB blob over 100 s: same message, same routes.go:2078, same

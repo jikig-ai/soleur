@@ -7,12 +7,14 @@
 # fixed, because a freshly wiped disk is empty regardless of the defect.
 #
 # The untreated cause is upstream zot#4235: gc completes repeatedly for `soleur-inngest-bootstrap`
-# and never for `soleur-web-platform`, panicking in `pkg/scheduler/scheduler.go`. Upstream #4235
-# is closed and its fix PR #4236 merged 2026-08-11, which ships in v2.1.21 and later, so the v2.1.22
-# pin this host runs (from the #9252 replace on) carries it; before that replace the host ran v2.1.20, which did not.
-# Whether it ends the refill on THIS host is exactly what this probe measures, so a refill after
-# that replace is a result to report, not an expected outcome. A second candidate — orphaned `.uploads/` staging, seen as
-# `i/o timeout ... PatchBlobUpload` during the recut — is not discriminable from here; attribution
+# and never for `soleur-web-platform`, panicking in `pkg/scheduler/scheduler.go`. Upstream #4235 (as
+# filed: gc re-reads every manifest per deleted blob) is closed and its fix PR #4236 merged 2026-08-11,
+# in v2.1.21 and later, so the v2.1.22 pin this host runs (from the #9252 replace on) carries it; before
+# that replace the host ran v2.1.20, which did not. The issue text does not describe the one-repo-never-
+# completes signature above, so whether #4236 ends the refill on THIS host is exactly what this probe
+# measures: a refill after that replace is a result to report, not an expected outcome. A second
+# candidate — orphaned `.uploads/` staging, seen as `i/o timeout ... PatchBlobUpload` during the
+# recut — is not discriminable from here; attribution
 # was blocked by #7440 (the registry shipped no zot logs; this heartbeat was its only instrument).
 # UNBLOCKED 2026-08-12 (#7455): the zot container-log channel is LIVE, and it counts
 # message:PatchBlobUpload as one of its four evidence classes — which is the very discriminator
@@ -372,7 +374,9 @@ if lagging:
           % (", ".join(shown), more))
     print("  A LEAD, NOT A VERDICT: dropped_rows above can remove a completion while its start")
     print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
-    print("  zot#4235 was the standing suspect (gc completing for one repo and never another; fixed by #4236 in v2.1.21+, so suspect it only while this host runs v2.1.20 or older);")
+    print("  the zot#4235 signature (gc completing for one repo and never another) was the standing")
+    print("  suspect; #4236, filed under that issue, ships in v2.1.21+, so a recurrence on v2.1.22 is")
+    print("  new evidence rather than the known bug;")
     print("  .uploads/ staging is the other.")
 elif sum(starts.values()) == 0:
     # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape

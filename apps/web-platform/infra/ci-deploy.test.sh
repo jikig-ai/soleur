@@ -5838,13 +5838,15 @@ fi
 # DEPLOY_DOCKER_CONFIG_DIR; and NO `--config` passed a PATH-like arg anywhere. The ONLY
 # legitimate --config in this file is doppler's env-name form (`doppler … --config prd`), whose
 # argument starts with a LETTER; a docker `--config` always takes a path (/, ., ~, $, or a quote
-# wrapping one). The one exemption is curl's stdin-config form `--config -` (#9795: the fan-out HMAC
-# header; a docker --config never takes a bare `-`), stripped before the scan. Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
+# wrapping one). The one exemption is the `fan_out_to_peers` body: its curl takes the HMAC header on
+# the stdin config (`--config -`, #9795; pinned by T-9795-1), which is not a docker flag. The exemption
+# removes that FUNCTION from the scan, so a docker `--config -` elsewhere is still flagged.
+# Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
 # `docker run` CONTINUATION line is caught (a per-line docker-scoped negative missed it).
 TOTAL=$((TOTAL + 1))
 if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
-   && ! printf '%s\n' "$DOCKERCFG_CODE" | sed -E 's/--config[[:space:]]+-([[:space:]\\]|$)//g' | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
+   && ! printf '%s\n' "$DOCKERCFG_CODE" | awk '/^fan_out_to_peers\(\) \{$/{s=1} !s{print} s&&/^}$/{s=0}' | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
   PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; no --config path override (login-write == cosign-mount by construction)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced, or a --config path override can split login-write from cosign-mount"
@@ -9931,38 +9933,44 @@ unset GAK_PRD_KEY GAK_ISO_KEY GAK_RETIRED_KEY GAK_ISO_MARK GAK_PRD_MARK
 
 # #9795 (lint Rule E, #9597) -- fan_out_to_peers must feed the HMAC signature header on curl's
 # STDIN config, never its argv (/proc/<pid>/cmdline and `ps` are readable by every local user).
-# Executes the real function with a curl stub that records its argv and its stdin separately.
+# Executes the real function with a curl stub that APPENDS its argv and its stdin to separate
+# files, then pins the request shape (URL, body, content type, one call) and the CORRECT signature.
 FO_FIX="$(mktemp -d)"
 FO_ARGV="$FO_FIX/argv"; FO_STDIN="$FO_FIX/stdin"; : > "$FO_ARGV"; : > "$FO_STDIN"
 printf '%s\n' '[{"id":"deploy-peer","trigger-rule":{"match":{"secret":"fixture-fanout-secret"}}}]' > "$FO_FIX/hooks.json"
 awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT" > "$FO_FIX/fn.sh"
+FO_PAYLOAD='{"command":"deploy fixture"}'
+FO_WANT_SIG="$(printf '%s' "$FO_PAYLOAD" | openssl dgst -sha256 -hmac fixture-fanout-secret | sed 's/.*= //')"
 FO_RC=0
 (
   set -uo pipefail
-  LOG_TAG=fanout-test; export SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="$FO_FIX/hooks.json"
+  export LOG_TAG=fanout-test SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="$FO_FIX/hooks.json"
   SSH_ORIGINAL_COMMAND="deploy fixture"; ip() { return 0; }; logger() { :; }
   # A bounded read: a mutant that stops feeding stdin must fail the rows, not hang the suite on the runner's stdin.
-  curl() { printf '%s\n' "$*" > "$FO_ARGV"; timeout 2 cat > "$FO_STDIN" || true; printf 202; }
+  curl() { printf '%s\n' "$*" >> "$FO_ARGV"; timeout 2 cat >> "$FO_STDIN" || true; printf 202; }
   # shellcheck disable=SC1091
   source "$FO_FIX/fn.sh"
   fan_out_to_peers
 ) > /dev/null 2>&1 < /dev/null || FO_RC=$?
 TOTAL=$((TOTAL + 1))
-if [[ -s "$FO_FIX/fn.sh" && "$FO_RC" -eq 0 && -s "$FO_ARGV" ]] \
-   && ! /usr/bin/grep -qiE 'x-signature|sha256=' "$FO_ARGV" \
+if [[ -s "$FO_FIX/fn.sh" && "$FO_RC" -eq 0 && "$(wc -l < "$FO_ARGV")" -eq 1 && "${#FO_WANT_SIG}" -eq 64 ]] \
+   && ! /usr/bin/grep -qiE 'x-signature|sha256=|[0-9a-f]{64}' "$FO_ARGV" \
    && /usr/bin/grep -qE -- '(^| )--config -( |$)' "$FO_ARGV" \
-   && /usr/bin/grep -qE -- '^--disable --noproxy \* ' "$FO_ARGV"; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9795-1 fan-out: the signature header is absent from curl's argv, --config - is present, transport confined (--disable --noproxy)"
+   && /usr/bin/grep -qE -- '^--disable --noproxy \* ' "$FO_ARGV" \
+   && /usr/bin/grep -qF -- '-X POST http://10.9.9.9:9000/hooks/deploy-peer' "$FO_ARGV" \
+   && /usr/bin/grep -qF -- "-H Content-Type: application/json" "$FO_ARGV" \
+   && /usr/bin/grep -qF -- "--data-binary $FO_PAYLOAD" "$FO_ARGV"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9795-1 fan-out: one curl to the peer hook with the JSON body and content type, no signature or 64-hex run in argv, --config - present, transport confined (--disable --noproxy)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-1 fan-out argv carries the signature, lacks --config -, or is not transport-confined (rc=$FO_RC argv: $(cut -c1-200 "$FO_ARGV" 2>/dev/null))"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-1 fan-out argv carries the signature or a 64-hex run, lacks --config -, is not transport-confined, or the request shape is wrong (rc=$FO_RC argv: $(cut -c1-240 "$FO_ARGV" 2>/dev/null))"
 fi
 TOTAL=$((TOTAL + 1))
-if /usr/bin/grep -qxE 'header = "X-Signature-256: sha256=[0-9a-f]{64}"' "$FO_STDIN"; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9795-2 fan-out: the HMAC header arrives on curl's stdin config as a 64-hex signature"
+if [[ "$(cat "$FO_STDIN")" == "header = \"X-Signature-256: sha256=${FO_WANT_SIG}\"" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9795-2 fan-out: the stdin config is exactly the HMAC-SHA256 of the payload under the hook secret"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-2 fan-out stdin config lacks a well-formed X-Signature-256 header (stdin: $(cut -c1-120 "$FO_STDIN" 2>/dev/null))"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-2 fan-out stdin config is not the expected X-Signature-256 header for this payload and secret (stdin: $(cut -c1-140 "$FO_STDIN" 2>/dev/null))"
 fi
-rm -rf "$FO_FIX"; unset FO_FIX FO_ARGV FO_STDIN FO_RC
+rm -rf "$FO_FIX"; unset FO_FIX FO_ARGV FO_STDIN FO_RC FO_PAYLOAD FO_WANT_SIG
 
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
