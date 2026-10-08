@@ -281,7 +281,7 @@ hook_get() {
   : > "$2"
   HTTP_CODE="$(curl --disable --noproxy '*' --proto '=https' -sS --connect-timeout 10 --max-time 105 -o "$2" -w '%{http_code}' -X GET \
     "$1" \
-    --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") 2>/dev/null)"
+    --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET" 2>/dev/null) 2>/dev/null)"
   CURL_RC=$?
 }
 # classify_body <file> → body_class token. Never prints the body.

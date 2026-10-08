@@ -103,7 +103,7 @@ if [[ -n "${WEBHOOK_DEPLOY_SECRET:-}" && -n "${CF_ACCESS_CLIENT_ID:-}" && -n "${
   [[ "$_sig" =~ ^[0-9a-f]{64}$ ]] || _refuse "the request signature (python3 missing or the webhook key empty)"
   frame="$(curl --disable --noproxy '*' -sS --max-time 20 \
       "$STATUS_URL" \
-      --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$_sig" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") 2>/dev/null || printf '')"
+      --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$_sig" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET" 2>/dev/null) 2>/dev/null || printf '')"
 fi
 frame_ok=0
 if printf '%s' "$frame" | jq -e . >/dev/null 2>&1; then frame_ok=1; fi
