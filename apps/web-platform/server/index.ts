@@ -334,6 +334,10 @@ app.prepare().then(() => {
       // #5863 T3.2 (opt-in): AGENT_OUTER_WRAP_BOOT_PROBE=1 runs the realized
       // mountns + shared payload once at boot inside the PROD container —
       // the file-cap posture measured where sessions will actually run.
+      // NOTE: the probe is synchronous (spawnSync, 30s bound) — the resolved-
+      // promise hop does not off-thread it, so flag-on stalls the event loop
+      // up to ~30s once at boot. Opt-in-only by design; acceptable for a
+      // bounded diagnostic, never enabled in the default rollout.
       void Promise.resolve()
         .then(() => verifyOuterWrapRealizedIsolation())
         .catch((err) =>
