@@ -300,7 +300,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **If PR contains test files:**
 
-13. Task soleur:engineering:review:test-design-reviewer(PR content) - Score test quality against Farley's 8 properties
+13. Task soleur:engineering:review:test-design-reviewer(PR content) - Score test quality against Farley's 8 properties; classify added tests by pyramid layer — FAIL when a new e2e-layer test carries no `pyramid-justified:` marker
 
 **When to run test review agent:**
 
@@ -313,7 +313,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **What this agent checks:**
 
-- `soleur:engineering:review:test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations
+- `soleur:engineering:review:test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations; separately classifies added tests by pyramid layer (unit/integration/e2e) in a `### Pyramid` verdict block — FAIL on a new e2e-layer test with no `pyramid-justified:` marker, WARN on unjustified fast-feedback cost signals — never folded into the score
 
 **If the PR's deliverable IS a guard (guard-shaped PR):**
 

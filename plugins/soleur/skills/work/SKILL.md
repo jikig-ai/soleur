@@ -336,7 +336,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Structure tasks as RED/GREEN/REFACTOR units, not as "implement everything, then test":
 
    - For each feature requirement with Acceptance Criteria or testable behavior:
-     - Create a **RED task**: "Write failing test for [feature]" — the test file with at least one failing test
+     - Create a **RED task**: "RED(unit|integration|e2e): Write failing test for [feature]" — the title names the test's pyramid layer (prefer the lowest layer that exercises the behavior); the test file with at least one failing test
      - Create a **GREEN task**: "Implement [feature] to pass tests" — blocked by its RED task
      - Group these as a TDD unit with `blockedBy` dependency (GREEN blocked by RED)
    - Infrastructure-only tasks (config files, CI, scaffolding, legal docs) are exempt from RED/GREEN pairing — create them as standalone tasks

@@ -208,6 +208,8 @@ Derive from acceptance criteria. Use Given/When/Then format for logic tests, and
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
 
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior.
+
 If the feature touches external services, include verification commands:
 
 - **Browser:** [Navigate to URL, fill form, submit, verify UI state]
@@ -439,6 +441,8 @@ Translate each acceptance criterion into a testable scenario:
 
 - Given [precondition], when [action], then [expected result]
 - Given [error condition], when [action], then [graceful handling]
+
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior.
 
 Include regression scenarios for any bugs this work addresses.
 
@@ -693,6 +697,8 @@ per ask, verbatim quote; every plan item cites the user words it answers or is
 - [ ] Code review approval
 
 ## Test Scenarios
+
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior.
 
 ### Acceptance Tests (RED phase targets)
 
