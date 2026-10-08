@@ -914,16 +914,17 @@ e_row 'Rule E xfail: -b "session=$T", -H "Cookie: s=$T" and x-gitlab-token are N
 # stdin config), so a check satisfied by one compliant call, or one that stops at the first curl, reads
 # the file clean. The pinned finding grammar is unchanged: the -u wording is in the reason clause.
 _u_fx="$(find "$FIX" -maxdepth 1 -name 'violation-argv-user-*.sh' | wc -l)"
-if [ "$_u_fx" -lt 9 ]; then
-  fail "Rule E -u arm: only $_u_fx violation-argv-user-*.sh fixtures copied, anti-vacuity floor is 9"
+if [ "$_u_fx" -lt 11 ]; then
+  fail "Rule E -u arm: only $_u_fx violation-argv-user-*.sh fixtures copied, anti-vacuity floor is 11"
 else
-  pass "Rule E -u arm: $_u_fx violation-argv-user-*.sh fixtures present (anti-vacuity floor 9)"
+  pass "Rule E -u arm: $_u_fx violation-argv-user-*.sh fixtures present (anti-vacuity floor 11)"
 fi
 e_row 'Rule E -u: a literal `-u "U:P"` after a compliant first member is reported' "$LINT" "$FIX/violation-argv-user-literal.sh" 1
 e_row 'Rule E -u: the value glued to the flag, quoted (`-u"U:P"`) and bare (`-uU:P`): one message each' "$LINT" "$FIX/violation-argv-user-attached.sh" 2
 e_row 'Rule E -u: the long spelling `--user "U:P"` is reported' "$LINT" "$FIX/violation-argv-user-long.sh" 1
 e_row 'Rule E -u: the long spelling with `=` (`--user="U:P"`) is reported' "$LINT" "$FIX/violation-argv-user-long-eq.sh" 1
 e_row 'Rule E -u: `-u` bundled behind other short flags (`-sSu "U:P"`, `-fu "U:P"`): one message each' "$LINT" "$FIX/violation-argv-user-bundle.sh" 2
+e_row 'Rule E -u: `-u` behind a bundle with the value glued (`-sSu"U:P"`, `-fsSLusvc:"$T"`, `-suU:P`) or behind a digit flag (`-4u "U:P"`): one message each' "$LINT" "$FIX/violation-argv-user-glued-bundle.sh" 4
 e_row 'Rule E -u: `-u` in a plain `local curl_args=(` array with a conditional += append is reported' "$LINT" "$FIX/violation-argv-user-array.sh" 1
 e_row 'Rule E -u: `-u` passed to a file-local wrapper (defined AFTER its use) is reported [wrapper-site read site]' "$LINT" "$FIX/violation-argv-user-wrapper.sh" 1
 e_row 'Rule E -u: a multi-line `--aws-sigv4 ... \` command with `--user "ID:SECRET"` on a continuation line (the cla-evidence shape) is reported' "$LINT" "$FIX/violation-argv-user-multiline-sigv4.sh" 1
@@ -938,13 +939,95 @@ else
   fail "Rule E -u: the -u + apikey: finding should carry both reasons once each, got basic-auth=$_u_basic second-credential=$_u_second"
 fi
 unset _u_basic _u_second
+# The same pair of reasons through a WRAPPER call: the second-credential rule at the wrapper-site check carries
+# `user_argv` in its condition, and nothing in this fixture is a bearer-class header, so only that term can fire it.
+e_row 'Rule E -u: `-u` plus an `apikey:` header handed to a file-local wrapper is reported (one finding)' "$LINT" "$FIX/violation-argv-user-wrapper-second-credential.sh" 1
+_u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+_u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+if [ "$_u_basic" = "1" ] && [ "$_u_second" = "1" ]; then
+  pass "Rule E -u: the wrapper-site -u + apikey: finding carries BOTH reasons (basic-auth wording x$_u_basic, second-credential wording x$_u_second)"
+else
+  fail "Rule E -u: the wrapper-site -u + apikey: finding should carry both reasons once each, got basic-auth=$_u_basic second-credential=$_u_second"
+fi
+unset _u_basic _u_second
 # MUST-PASS rows (none of them is the canonical): the safe spellings of the same pair, and the flags that
 # only LOOK like it.
 e_row 'Rule E -u: `--config -` with a `user = "..."` key on a process substitution (bare and inside $(...)) passes' "$LINT" "$FIX/compliant-stdin-user-config.sh" 0
 e_row 'Rule E -u: `-K -` and `--config <(...)` carrying a `user` key pass' "$LINT" "$FIX/compliant-stdin-user-dash-k.sh" 0
-e_row 'Rule E -u: `sort -u`, `docker run --user`, `git push -u`, `id -u`, curl `--url` / `--user-agent` / `-A`, and `sort -u | curl ...` are NOT read' "$LINT" "$FIX/outofscope-nonyurl-user-flags.sh" 0
+e_row 'Rule E -u: `sort -u`, `docker run --user`, `git push -u`, `sudo -u`, `id -u`, curl `--url` / `--user-agent` / `-A`, `-o/tmp/out`, `-oupload.log`, `-cuser.jar`, and `sort -u | curl ...` are NOT read' "$LINT" "$FIX/outofscope-nonyurl-user-flags.sh" 0
 # PINNED GAP (xfail): `-U` / `--proxy-user` is a PROXY credential, a different flag; the match is case-sensitive.
 e_row 'Rule E -u xfail: `-U` / `--proxy-user` (a proxy credential) is NOT read (pinned blind spot)' "$LINT" "$FIX/outofscope-proxy-user.sh" 0
+# REAL-CURL ORACLE (review of #9753): the bundle alphabet in E_SHORT_NOARG is curl's own, so the lint is scored
+# against curl itself. For each spelling, curl is run with `--libcurl` against a closed loopback port (no request
+# is answered, the C source is still written) and CURLOPT_USERPWD in that source says whether curl took the
+# spelling as basic auth. The same text is then linted in a generated one-curl script, and the lint must agree
+# with curl: one Rule E message when curl set a user, none when it did not (`-o`/`-c`/`-e`/`-X`/`-A`/`-U` swallow the
+# rest of the word as THEIR value; `-U` is the PROXY user). The expected verdict is never written in this table.
+# The anti-vacuity floor counts both directions, so a table that loses its negatives (or its positives) reads RED.
+ORC="$WORK/orc"
+mkdir -p "$ORC" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
+ORC_SPELLINGS=(
+  '-u "svc:${SENTRY_AUTH_TOKEN}"'
+  '--user "svc:${SENTRY_AUTH_TOKEN}"'
+  '-sSu "svc:${SENTRY_AUTH_TOKEN}"'
+  '-sSu"svc:${SENTRY_AUTH_TOKEN}"'
+  '-fsSLusvc:"${SENTRY_AUTH_TOKEN}"'
+  '-suU:"${SENTRY_AUTH_TOKEN}"'
+  '-4u "svc:${SENTRY_AUTH_TOKEN}"'
+  '-6uU:P'
+  '-ZsSu "U:P"'
+  '-o/tmp/out'
+  '-sSo/dev/null'
+  '-fsSLo/dev/null'
+  '-oupload.log'
+  '-ou'
+  '-cuser.jar'
+  '-eusers.example'
+  '-Xuser'
+  '-sSA"ua"'
+  '--user-agent "ua/1"'
+  '-U "svc:${SENTRY_AUTH_TOKEN}"'
+  '--proxy-user "svc:${SENTRY_AUTH_TOKEN}"'
+)
+ORC_POS=0
+ORC_NEG=0
+if ! command -v curl >/dev/null 2>&1; then
+  fail "Rule E -u oracle: curl is not installed, the bundle alphabet cannot be checked against the real tool"
+else
+  for _sp in "${ORC_SPELLINGS[@]}"; do
+    rm -f "$ORC/o.c"
+    ( cd "$ORC" && SENTRY_AUTH_TOKEN=synthetic-oracle-value SINK_URL=http://127.0.0.1:9/ \
+        bash -c "curl --disable $_sp --noproxy '*' -m 1 --libcurl \"\$0\" \"\$SINK_URL\"" "$ORC/o.c" >/dev/null 2>&1 )
+    if [ ! -s "$ORC/o.c" ]; then
+      fail "Rule E -u oracle: INSTRUMENT ERROR -- curl wrote no --libcurl source for: $_sp"
+      continue
+    fi
+    _orc_user="$(grep -c 'CURLOPT_USERPWD' "$ORC/o.c" || true)"
+    if [ "$_orc_user" -ge 1 ]; then
+      _orc_want=1
+      ORC_POS=$((ORC_POS + 1))
+    else
+      _orc_want=0
+      ORC_NEG=$((ORC_NEG + 1))
+    fi
+    # The generated script reuses the preamble of the glued-bundle fixture (everything above its first comment
+    # about the compliant first member), then ONE curl: the spelling goes right after `--disable`.
+    { sed -n '1,/^fi$/p' "$FIX/violation-argv-user-glued-bundle.sh"
+      printf "curl --disable %s --noproxy '*' \"\$SINK_URL\" || true\n" "$_sp"; } > "$ORC/gen.sh"
+    e_row "Rule E -u oracle: \`$_sp\` -- real curl says USERPWD x$_orc_user, the lint reports $_orc_want" "$LINT" "$ORC/gen.sh" "$_orc_want"
+  done
+  if [ "$ORC_POS" -lt 9 ]; then
+    fail "Rule E -u oracle: curl classed only $ORC_POS spelling(s) as basic auth, anti-vacuity floor is 9"
+  else
+    pass "Rule E -u oracle: curl classed $ORC_POS spelling(s) as basic auth (anti-vacuity floor 9)"
+  fi
+  if [ "$ORC_NEG" -lt 12 ]; then
+    fail "Rule E -u oracle: curl classed only $ORC_NEG spelling(s) as NOT basic auth, anti-vacuity floor is 12"
+  else
+    pass "Rule E -u oracle: curl classed $ORC_NEG spelling(s) as NOT basic auth (anti-vacuity floor 12)"
+  fi
+fi
+unset _sp _orc_user _orc_want
 
 # --- Rule E widened (#9597 S1, D1): the YAML arm -----------------------------------
 # `.github/**` YAML is scanned by extracting every `run` string value with PyYAML (so a
@@ -1179,16 +1262,35 @@ fi
 #   - every baseline path is in the table with a count at or below its ceiling;
 #   - every table row either has a baseline row or its file STILL offends (a converted file must
 #     leave the table, so the table cannot keep a ceiling a later edit could silently re-raise to).
-# census_ceiling_check <baseline> <ceiling> sets CC_LISTED / CC_BAD / CC_STALE and reports on stderr.
+# The comparison is `<=` on purpose: a listed count BELOW its ceiling is a legitimate shrink (a site was
+# converted) and passes; only a count ABOVE the ceiling, or a path with no ceiling row, is a defect.
+# Two inputs would let that comparison fail OPEN, so both are rejected up front (review of #9753): a path listed
+# TWICE in either file (a duplicated ceiling row makes `cl` two lines, and `[ "$bn" -gt "$cl" ]` is then an
+# integer-expression error, which `if` reads as false = "not above the ceiling"), and a count or ceiling that is
+# not a plain integer (the same error). CC_DUP counts the extra rows.
+# census_ceiling_check <baseline> <ceiling> sets CC_LISTED / CC_BAD / CC_STALE / CC_DUP and reports on stderr.
 census_ceiling_check() {
-  local base="$1" ceil="$2" bp bn cl cp en rc
+  local base="$1" ceil="$2" bp bn cl cp en rc _f _d
   CC_LISTED=0
   CC_BAD=0
   CC_STALE=0
+  CC_DUP=0
+  for _f in "$base" "$ceil"; do
+    _d="$(awk -F'\t' '/^#/ || $1 == "" { next } seen[$1]++ >= 1 { n++ } END { print n + 0 }' "$_f")"
+    if [ "$_d" != "0" ]; then
+      CC_DUP=$((CC_DUP + _d))
+      printf 'duplicate path row(s) in %s: %s extra\n' "$(basename "$_f")" "$_d" >&2
+    fi
+  done
   while IFS=$'\t' read -r bp bn; do
     case "$bp" in '' | '#'*) continue ;; esac
     CC_LISTED=$((CC_LISTED + 1))
-    cl="$(awk -F'\t' -v p="$bp" '$1 == p { print $2 }' "$ceil")"
+    cl="$(awk -F'\t' -v p="$bp" '$1 == p { print $2; exit }' "$ceil")"
+    if [ -z "$bn" ] || [ -n "${bn//[0-9]/}" ] || [ -n "${cl//[0-9]/}" ]; then
+      CC_BAD=$((CC_BAD + 1))
+      printf 'baseline E entry with a non-integer count or ceiling: %s (listed %s, ceiling %s)\n' "$bp" "${bn:-none}" "${cl:-none}" >&2
+      continue
+    fi
     if [ -z "$cl" ] || [ "$bn" -gt "$cl" ]; then
       CC_BAD=$((CC_BAD + 1))
       printf 'baseline E entry above its census ceiling or absent from it: %s (listed %s, ceiling %s)\n' "$bp" "$bn" "${cl:-none}" >&2
@@ -1224,6 +1326,11 @@ if [ "$CC_STALE" != "0" ]; then
   fail "Rule E census ceiling: $CC_STALE table row(s) have no baseline row and their file no longer offends -- a converted file must leave the table"
 else
   pass "Rule E census ceiling: every table row has a baseline row or a file that still offends (no stale ceilings)"
+fi
+if [ "$CC_DUP" != "0" ]; then
+  fail "Rule E baseline vs census ceiling: $CC_DUP duplicate path row(s) in the baseline or the ceiling table (a duplicated ceiling row makes the comparison fail open)"
+else
+  pass "Rule E baseline vs census ceiling: no path is listed twice in the baseline or in the ceiling table"
 fi
 
 # Mutation rows for the check itself (each starts from the REAL pair, adds one defect, asserts it
@@ -1270,6 +1377,42 @@ if ! cmp -s "$BASE_E_FILE" "$WORK/base-raised.txt"; then
 else
   fail "Rule E census ceiling M-raise: the raised count did not land"
 fi
+# (5) a path listed TWICE in the ceiling table (the first row stays correct, so the integer comparison alone would
+# read the pair as a clean row) and (6) twice in the baseline. Each must read as a duplicate and nothing else.
+_first="$(grep -vE '^(#|[[:space:]]*$)' "$BASE_E_FILE" | head -1)"
+{ cat "$CEIL_FILE"; printf '%s\n' "$_first"; } > "$WORK/ceil-dup.tsv"
+if [ -n "$_first" ] && ! cmp -s "$CEIL_FILE" "$WORK/ceil-dup.tsv"; then
+  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-dup.tsv" 2>/dev/null
+  [ "$CC_DUP" = "1" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
+    && pass "Rule E census ceiling M-dup: a path listed twice in the ceiling table reads as a duplicate (dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
+    || fail "Rule E census ceiling M-dup: a doubled ceiling row should give dup=1 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
+else
+  fail "Rule E census ceiling M-dup: the doubled ceiling row did not land"
+fi
+{ cat "$BASE_E_FILE"; printf '%s\n' "$_first"; } > "$WORK/base-dup.txt"
+if [ -n "$_first" ] && ! cmp -s "$BASE_E_FILE" "$WORK/base-dup.txt"; then
+  census_ceiling_check "$WORK/base-dup.txt" "$CEIL_FILE" 2>/dev/null
+  [ "$CC_DUP" = "1" ] \
+    && pass "Rule E census ceiling M-dup: a path listed twice in the baseline reads as a duplicate (dup=$CC_DUP)" \
+    || fail "Rule E census ceiling M-dup: a doubled baseline row should give dup=1, got dup=$CC_DUP"
+else
+  fail "Rule E census ceiling M-dup: the doubled baseline row did not land"
+fi
+# (7) a count that is not an integer must read as a defect, never as "not above the ceiling".
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-nan.txt"
+if ! cmp -s "$BASE_E_FILE" "$WORK/base-nan.txt"; then
+  census_ceiling_check "$WORK/base-nan.txt" "$CEIL_FILE" 2>/dev/null
+  [ "$CC_BAD" = "1" ] \
+    && pass "Rule E census ceiling M-nan: a non-integer baseline count reads as a defect (bad=$CC_BAD)" \
+    || fail "Rule E census ceiling M-nan: a non-integer baseline count should give bad=1, got bad=$CC_BAD"
+else
+  fail "Rule E census ceiling M-nan: the non-integer count did not land"
+fi
+# (8) CONTROL: the real pair reads clean on all three counters, or rows (5)-(7) prove nothing.
+census_ceiling_check "$BASE_E_FILE" "$CEIL_FILE" 2>/dev/null
+[ "$CC_DUP" = "0" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
+  && pass "Rule E census ceiling control: the real baseline/ceiling pair reads clean (dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
+  || fail "Rule E census ceiling control: the real pair should read dup=0 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
 unset _first
 
 grep -qx -- '--- rule E ---' "$WORK/census" \
@@ -1337,8 +1480,18 @@ mutate_row 'U2b Rule E -u: E_USER_ATTACHED deleted (`--user="U:P"` goes unseen)'
   "$FIX/violation-argv-user-long-eq.sh" 1 0 0
 # Narrowing the FLAG alternation to the bare `-u` / `--user` words must lose the bundle (not the literal).
 mutate_row 'U1d Rule E -u: E_USER_FLAG narrowed to `-u`/`--user` (the bundled `-sSu`, `-fu` go unseen)' \
-  's/(E_USER_FLAG = re\.compile\(r")\^\(\?:--user\|-\[A-Za-z\]\*u\)\$/${1}^(?:--user|-u)\$/' \
+  's/(E_USER_FLAG = re\.compile\()r"\^\(\?:--user\|-" \+ E_SHORT_NOARG \+ r"\*u\)\$"\)/${1}r"^(?:--user|-u)\$")/' \
   "$FIX/violation-argv-user-bundle.sh" 1 0 0
+# The bundle alphabet (E_SHORT_NOARG) is the property the glued-bundle fixture pins, from three sides.
+mutate_row 'U1e Rule E -u: the digit flags dropped from the bundle alphabet (`-4u "U:P"` goes unseen, the three letter bundles stay)' \
+  's/E_SHORT_NOARG = r"\[0-46/E_SHORT_NOARG = r"[/' \
+  "$FIX/violation-argv-user-glued-bundle.sh" 1 1 3
+mutate_row 'U2c Rule E -u: E_USER_ATTACHED narrowed to the bare `-u<value>` / `--user=` (the three glued bundles go unseen, `-4u "U:P"` stays)' \
+  's/(E_USER_ATTACHED = re\.compile\(r"\^\(\?:)-" \+ E_SHORT_NOARG \+ r"\*u\(\?=\.\)/${1}-u(?=.)/' \
+  "$FIX/violation-argv-user-glued-bundle.sh" 1 1 1
+mutate_row 'U2d Rule E -u: the bundle alphabet widened to every letter and digit (`-oupload.log`, `-cuser.jar` read as a `-u`)' \
+  's/E_SHORT_NOARG = r"\[[^\n]*"/E_SHORT_NOARG = r"[A-Za-z0-9#]"/' \
+  "$FIX/outofscope-nonyurl-user-flags.sh" 0 1 2
 mutate_row 'U3 Rule E -u: the `_e_scan` assignment dropped (every classified `-u` goes unseen)' \
   's/f\["user"\] = True/f["user"] = False/g' \
   "$FIX/violation-argv-user-literal.sh" 1 0 0
@@ -1376,6 +1529,24 @@ else
     pass "U9 Rule E -u: -u dropped from the second-credential context loses exactly the second-credential reason (rc=1, basic-auth x1, second-credential x0)"
   else
     fail "U9 Rule E -u second-credential: mutant should keep the -u reason and lose the second-credential one, got rc=$rc basic-auth=$_u_basic second-credential=$_u_second"
+  fi
+fi
+unset _u_sandbox _u_second _u_basic
+# U10: the SAME defect at the wrapper-site check (`user_argv` removed from its second-credential condition). Only a
+# fixture whose call carries `-u` + `apikey:` and NO bearer-class header can see it, so it has its own fixture.
+_u_sandbox="$WORK/mut-user3.py"
+cp "$LINT" "$_u_sandbox"
+perl -0pi -e 's/if apikey and \(bearer_argv or user_argv or bearer_ctx\):/if apikey and (bearer_argv or bearer_ctx):/' "$_u_sandbox"
+if diff -q "$LINT" "$_u_sandbox" >/dev/null 2>&1; then
+  fail "U10 Rule E -u wrapper-site second-credential: mutation did NOT land"
+else
+  rc="$(rc_of "$_u_sandbox" "$FIX/violation-argv-user-wrapper-second-credential.sh")"
+  _u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+  _u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+  if [ "$rc" = "1" ] && [ "$_u_basic" = "1" ] && [ "$_u_second" = "0" ]; then
+    pass "U10 Rule E -u: -u dropped from the wrapper-site second-credential context loses exactly the second-credential reason (rc=1, basic-auth x1, second-credential x0)"
+  else
+    fail "U10 Rule E -u wrapper-site second-credential: mutant should keep the -u reason and lose the second-credential one, got rc=$rc basic-auth=$_u_basic second-credential=$_u_second"
   fi
 fi
 unset _u_sandbox _u_second _u_basic
@@ -2284,10 +2455,10 @@ unset SKIPSH_PY SIBLING _na _nb
 # reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
 # `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
 # can see and mutation-test them.
-if [ "$E_ROWS" -lt 113 ]; then
-  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 113"
+if [ "$E_ROWS" -lt 136 ]; then
+  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 136"
 else
-  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 113)"
+  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 136)"
 fi
 if [ "$Y_ROWS" -lt 48 ]; then
   fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 48"
@@ -2361,11 +2532,13 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 395 (#9597 S2: the -u/--user arm rows, mutation rows and repo-wide sandbox rows, 32 assertions on top of the 363 below). Earlier: 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
+# Re-measured at 430 (review of #9753, WP3: the glued-bundle and wrapper-second-credential fixtures, the real-curl oracle
+# table, the alphabet mutants U1e/U2c/U2d, U10, and the census duplicate/non-integer rows, 35 assertions on top of the 395 below).
+# Earlier: 395 (#9597 S2: the -u/--user arm rows, mutation rows and repo-wide sandbox rows, 32 assertions on top of the 363 below). Earlier: 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=395
+MIN_ASSERTIONS=430
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

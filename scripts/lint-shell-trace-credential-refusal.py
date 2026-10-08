@@ -1165,7 +1165,17 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # The two cla-evidence sites are NOT converted here: that upload path is the legal-evidence
 # pipeline with its own suites and owner, outside the S2 file list, and a defect there would be a
 # legal-record regression rather than an ops one. They are baselined in the S2 diff (path and
-# count, ceiling row, dated tracking issue); the +2 is census widening, not a regression.
+# count, ceiling row) and tracked in issue #9756; the +2 is census widening, not a regression.
+#
+# BLIND SPOTS OF THE -u ARM (documented, NOT implemented; each is E=0 on a synthesized file):
+#   * an array that is declared in ANOTHER function than the curl call that expands it: `_inline_arrays`
+#     resolves a declaration only at the call site's own scope and there is no file-wide fallback for a
+#     `-u` array (the bearer arrays have one, `E_ARRAY_WORD`);
+#   * option text held in a SCALAR: `OPTS="-s -u $U:$P"; curl $OPTS "$URL"` (the word `$OPTS` is not
+#     expanded, so the `-u` inside it is never a word of the curl invocation);
+#   * a quoted flag word: `curl "-u" "$U:$P"` / `curl '-u' ...` (the whole-word match reads the quotes);
+#   * the match is word-shaped, not operand-aware: `curl -d -u` reads the data value `-u` as the flag
+#     (a conservative false positive that curl itself would not treat as basic auth).
 #
 # SCOPE (decision D1 of the argv-bearer sweep, tier 3). `rule_e_files()` is tracked `*.sh`
 # PLUS `.github/**/*.yml|*.yaml` and the direct `.github/*.yml|*.yaml` spellings (workflows,
@@ -1196,7 +1206,13 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # production apply, so they are an S4/S5-class change with operator notice and are tracked there;
 # the other hits of the pattern are the `$HBODY` response-body variable of the Hetzner helpers,
 # not a heartbeat; a later conversion is `url = "..."` on the stdin config behind a shape guard); `doppler --token`; `jq --arg`
-# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (about 30 sites, no stdin form);
+# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (25 production sites in 14 files, measured
+# 2026-10-08 with `git grep -nE 'dgst .*-hmac'` minus Markdown, `*.test.sh`, fixtures, `tests/` and
+# knowledge-base/ and this file's own comment lines); the key is on openssl's argv. A stdin or env form
+# EXISTS now (the converted signers in scripts/cutover-inngest.sh, the community skill's
+# lib/hmac-sha1-b64.sh and the Python signers keep the key off argv) and is not detected here. TWO sites in
+# scripts/cutover-inngest.sh (the registry-probe and doublefire-probe signatures, lines 1372 and 1546 when
+# measured) are HELD BACK deliberately: tracked with the heartbeat items under #9757, not by this lint);
 # header VALUES held in `env:` and passed as `-H "$H"` (the assignment is not in the scanned
 # body); `env -i`; `wget`; `gh api -H`; `-K file` configs written with the default umask;
 # cookies (`-b`, `Cookie:`) and vendor-specific custom headers (`x-gitlab-token`), pinned by
@@ -1310,12 +1326,20 @@ E_APIKEY = re.compile(r"^\s*apikey\s*:", re.I)
 E_HDR_ATTACHED = re.compile(r"^-H(?=.)")
 E_HDR_FLAG = re.compile(r"^(?:--header|-[A-Za-z]*H)$")
 # Basic auth (#9597 S2): `-u USER:PASSWORD` / `--user USER:PASSWORD`. A flag whose value is the NEXT word is
-# E_USER_FLAG (covers a short-flag bundle that ends in the `u`: `-sSu`, `-fu`); a value glued to the flag is
-# E_USER_ATTACHED (`-uU:P`, `--user=U:P`). Both are CASE-SENSITIVE and whole-word on purpose: `-U` /
-# `--proxy-user` is a different (proxy) credential, `--url` and `--user-agent` are different flags. One
-# constant per line so the suite can delete each on its own.
-E_USER_FLAG = re.compile(r"^(?:--user|-[A-Za-z]*u)$")
-E_USER_ATTACHED = re.compile(r"^(?:-u(?=.)|--user=)")
+# E_USER_FLAG (covers a short-flag bundle that ends in the `u`: `-sSu`, `-fu`, `-4u`); a value glued to the
+# flag is E_USER_ATTACHED (`-uU:P`, `--user=U:P`, and a glued value behind a bundle: `-sSu"U:P"`,
+# `-fsSLusvc:$TOK`, `-suU:P`). Both are CASE-SENSITIVE and whole-word on purpose: `-U` / `--proxy-user` is a
+# different (proxy) credential, `--url` and `--user-agent` are different flags. One constant per line so the
+# suite can delete each on its own.
+# THE BUNDLE ALPHABET is curl's short options that take NO argument (measured on curl 8.22.0 from
+# `curl --help all`, the entries printed without a `<...>` operand): 0 1 2 3 4 6 B G I J L M N O R S V Z
+# a f g i j k l n p q s v, plus `#` (--progress-bar). `u` is inside a bundle only when every letter before
+# it is one of these: a letter that takes an argument (`o`, `c`, `e`, `X`, `A`, `H`, `d`, ...) swallows the
+# REST of the word as its value, so `-oupload.log` and `-cuser.jar` are an output file and a cookie jar,
+# not a `-u`. The suite pins the alphabet against the real curl (`--libcurl` shows CURLOPT_USERPWD).
+E_SHORT_NOARG = r"[0-46BGIJLMNORSVZafgijklnpqsv#]"
+E_USER_FLAG = re.compile(r"^(?:--user|-" + E_SHORT_NOARG + r"*u)$")
+E_USER_ATTACHED = re.compile(r"^(?:-" + E_SHORT_NOARG + r"*u(?=.)|--user=)")
 E_VERBOSE = re.compile(r"^(?:--verbose|--trace[A-Za-z-]*|-[A-Za-z]*v[A-Za-z]*)$")
 E_STDIN_BODY = re.compile(
     r"^(?:-d|--data|--data-binary|--data-raw|--data-ascii|--data-urlencode|--json|-F|--form|--form-string)$"

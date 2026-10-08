@@ -31,3 +31,13 @@ curl --disable --noproxy '*' -sS -A "fixture/1.0" -L "$SINK_URL" || true
 # `sort -u` is an earlier stage of a pipeline whose LAST stage is the curl: the arm judges the curl's own
 # invocation segment, never the whole pipeline assembly.
 printf 'b\na\nb\n' | sort -u | curl --disable --noproxy '*' -sS -X POST --data-binary @- "$SINK_URL" || true
+# `sudo -u` runs a command as another user; it is no curl flag at all.
+sudo -n -u nobody true || true
+# A short flag that takes an ARGUMENT swallows the rest of its word as the value, so a `u` after it is part of
+# that value, not a `-u`: an output file (`-o`), a cookie jar (`-c`). Only a bundle of curl's no-argument flags
+# (`-s`, `-S`, `-f`, `-L`, ...) followed by `u` is basic auth. Each of these is a curl invocation.
+curl --disable --noproxy '*' -sS -o/tmp/out "$SINK_URL" || true
+curl --disable --noproxy '*' -sSo/dev/null "$SINK_URL" || true
+curl --disable --noproxy '*' -fsSLo/dev/null "$SINK_URL" || true
+curl --disable --noproxy '*' -sS -oupload.log "$SINK_URL" || true
+curl --disable --noproxy '*' -sS -cuser.jar "$SINK_URL" || true
