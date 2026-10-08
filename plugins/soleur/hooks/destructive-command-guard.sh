@@ -1222,7 +1222,7 @@ cd_index() {
   while (( CI < n )) && is_assign "${DA_T[$CI]}"; do CI=$((CI + 1)); done
   while (( CI < n )); do
     case "${DA_T[$CI]}" in
-      command|builtin) CI=$((CI + 1)); [[ "${DA_T[$CI]:-}" == -p || "${DA_T[$CI]:-}" == -- ]] && CI=$((CI + 1)) ;;
+      command|builtin) CI=$((CI + 1)); while [[ "${DA_T[$CI]:-}" == -p || "${DA_T[$CI]:-}" == -- ]]; do CI=$((CI + 1)); done ;;
       *) break ;;
     esac
   done

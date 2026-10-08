@@ -1062,6 +1062,7 @@ chk "hooks.json carries a PreToolUse entry that runs the hook" "$(_reg '[.hooks.
 chk "that entry's matcher matches Bash" "$(_reg '[.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h))) | select(.matcher as $m | "Bash" | test($m))] | length == 1')"
 chk "that entry's matcher does not match Edit or exec (D9: ^Bash$ only)" "$(_reg '([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h)))] | length == 1) and ([.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h))) | select(.matcher as $m | ("Edit" | test($m)) or ("exec" | test($m)))] | length == 0)')"
 chk "the hook entry carries an explicit numeric timeout" "$(_reg '[.hooks.PreToolUse[] | .hooks[] | select(.command | contains($h)) | .timeout | select(type == "number" and . > 0)] | length == 1')"
+chk "that timeout is exactly 10 s (the hook's own deadline of 6 s plus the 2 s judge extension must stay inside it)" "$(_reg '[.hooks.PreToolUse[] | .hooks[] | select(.command | contains($h)) | .timeout | select(. == 10)] | length == 1')"
 chk "the hook is registered after the snapshot guard" "$(_reg '[.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains($h))) | .key][0] > ([.hooks.PreToolUse | to_entries[] | select(.value.hooks | map(.command) | any(contains("browser-snapshot-credential-guard.sh"))) | .key][0])')"
 chk "the hook's registered command is the shell-quoted form (bash \"\${CLAUDE_PLUGIN_ROOT}/hooks/destructive-command-guard.sh\"), as the plugin's session-start hooks are" "$(_reg --arg c 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/destructive-command-guard.sh"' '[.hooks.PreToolUse[].hooks[] | select(.command | contains($h)) | .command] == [$c]')"
 # The registered command string, run the way the harness runs it (a shell, CLAUDE_PLUGIN_ROOT in the environment), with a plugin root
@@ -1573,6 +1574,20 @@ L @@ wrapper chdir around a shell: a delete of home inside still denies (env -C 
 L @@ wrapper chdir around a shell: nothing destructive inside is no decision (env -C /tmp bash -c 'ls') @@ none @@ - @@ env -C /tmp bash -c 'ls'
 L @@ wrapper chdir around a shell: a relative delete inside asks even in /tmp (the documented over-ask) @@ ask @@ - @@ env -C /tmp bash -c 'rm -rf ./x'
 L @@ wrapper chdir around a program that is not a shell is unchanged: env -C /tmp rm -rf ./x is no decision @@ none @@ - @@ env -C /tmp rm -rf ./x
+L @@ wrapper chdir: the chdir state of an earlier wrapper does not leak into the next record's wrapper (env -C /tmp true; sudo rm -rf ./* in home still denies) @@ deny @@ @HOME@ @@ env -C /tmp true; sudo rm -rf ./*
+L @@ wrapper chdir: a RELATIVE env -C is joined to the working directory (env -C sub rm -rf ./* from a tree holding sub is no decision) @@ none @@ - @@ env -C sub rm -rf ./*
+L @@ wrapper chdir: a RELATIVE env -C .. from home reaches the parent of home (env -C .. rm -rf ./* denies) @@ deny @@ @HOME@ @@ env -C .. rm -rf ./*
+L @@ cd behind command --: command -- cd ~ && rm -rf ./* denies (the -- is skipped) @@ deny @@ - @@ command -- cd ~ && rm -rf ./*
+L @@ cd behind builtin --: builtin -- cd /tmp && rm -rf ./* in home is no decision @@ none @@ @HOME@ @@ builtin -- cd /tmp && rm -rf ./*
+L @@ cd behind command -p --: command -p -- cd ~ && rm -rf ./* denies (both -p and -- are skipped) @@ deny @@ - @@ command -p -- cd ~ && rm -rf ./*
+L @@ cd behind command -p --: command -p -- cd /tmp && rm -rf ./* in home is no decision @@ none @@ @HOME@ @@ command -p -- cd /tmp && rm -rf ./*
+L @@ lexer reserved word: ! terraform destroy asks @@ ask @@ - @@ ! terraform destroy
+L @@ lexer reserved word: if terraform destroy; then :; fi asks @@ ask @@ - @@ if terraform destroy; then :; fi
+L @@ lexer reserved word: while terraform destroy; do :; done asks @@ ask @@ - @@ while terraform destroy; do :; done
+L @@ lexer reserved word: until terraform destroy; do :; done asks @@ ask @@ - @@ until terraform destroy; do :; done
+L @@ lexer reserved word: an elif branch asks @@ ask @@ - @@ if false; then :; elif terraform destroy; then :; fi
+L @@ lexer reserved word: an else branch asks @@ ask @@ - @@ if false; then :; else terraform destroy; fi
+L @@ lexer reserved word: a time-prefixed destroy asks @@ ask @@ - @@ time terraform destroy
 L @@ wrapper chdir: an absolute env -C after an unresolvable cd makes the directory known again: rm -rf ./* in /tmp is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C /tmp rm -rf ./*
 L @@ wrapper chdir: the last of two absolute env -C options wins and is known: rm -rf ./* after an unresolvable cd is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C / -C /tmp rm -rf ./*
 L @@ wrapper chdir: an absolute sudo -D after an unresolvable cd makes the directory known: rm -rf ./* in /tmp is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && sudo -D /tmp rm -rf ./*
@@ -1851,6 +1866,9 @@ LH "a nonexistent home directory is still home" deny "$_FH" "rm -rf $_FH"
 LH "the contents of a nonexistent home" deny "$_FH" "rm -rf $_FH/*"
 LH "rm -rf ~ with a nonexistent home" deny "$_FH" 'rm -rf ~'
 LH "a project under a nonexistent home is not home" none "$_FH" "rm -rf $_FH/projects/x"
+# redaction runs under nocasematch and puts it back: after a quoted destroy, an upper-cased copy of the home path is NOT the home directory
+_FHU="$(printf '%s' "$_FH" | tr 'a-z' 'A-Z')"
+LH "nocasematch is restored after the reason is quoted: a destroy, then a delete under the upper-cased home path, is the destroy ask" ask "$_FH" "terraform destroy; rm -rf $_FHU/projects/x"
 LH "another user's home is not this home" none "$_FH" 'rm -rf /home/other-user-dir'
 LH "a .. through a nonexistent directory is normalized lexically and still reaches an ancestor of home" deny "$_FH" "rm -rf $_FH/nonexistent-dir/../.."
 
@@ -1875,6 +1893,10 @@ quote_row "quote: a wrapper stays in the quoted command (sudo rm -rf /)" 'sudo r
 quote_row "quote: the words before a -- stay in the quoted command (rm -rf -- /)" 'rm -rf -- /' - 'rm -rf -- /'
 quote_row "quote: doppler run -- terraform destroy quotes the whole command" 'doppler run -- terraform destroy' - 'doppler run -- terraform destroy'
 quote_row "quote: an env wrapper with an option and an assignment" 'env -i FOO=1 terraform destroy' - 'env -i FOO=1 terraform destroy'
+if want_row_quiet "quote: a matched command over 200 characters is cut and ends in an elision marker"; then
+  rep ' -target=module.m' 20; hook_run "$(mkjson "terraform destroy${REP_OUT}" "$TREE")"
+  jqchk "quote: a matched command over 200 characters is cut at 200 and ends in an elision marker" '.hookSpecificOutput.permissionDecisionReason | test("Matched command: \\[terraform destroy -target=module.m[^]]{100,}\\.\\.\\.\\]\\.")'
+fi
 # A credential flag masks the word after it, but never a command word or a destructive operand: rm and sudo reject these flags in reality, and the
 # person reads the quote to see WHAT was about to run.
 quote_row "quote: a credential flag does not mask the destructive operand (rm -rf --password /)" 'rm -rf --password /' - 'rm -rf --password /'
@@ -1912,6 +1934,7 @@ rule_row "rule id: rm -rf ~ denies with the recursive-delete-home rule id" 'rm -
 rule_row "rule id: rm -rf of the working directory asks with the recursive-delete-workdir rule id" "${_RMRF} \"\$PWD\"" @SUB@ recursive-delete-workdir
 rule_row "rule id: terraform destroy asks with the infra-destroy rule id" 'terraform destroy' - infra-destroy
 rule_row "rule id: a force push to main asks with the default-branch-force-push rule id" 'git push --force origin main' @R1@ default-branch-force-push
+reason_has "lead: the force-push lead says what was matched" "force-pushes over, or deletes, a default branch"
 rule_row "rule id: a recursive delete after an unresolvable cd asks with the unresolved-cd-before-destructive rule id" 'cd "$UNKNOWN_DIR" && rm -rf build' - unresolved-cd-before-destructive
 # the repair for an unresolvable cd is a literal directory, so the tail says that instead of "do not rephrase"; the lead does not claim the directory
 # "cannot be checked" (an absolute target is checkable, the rule asks anyway)
@@ -1947,6 +1970,28 @@ bound_row "bound: rm -rf / after a benign command, then a 30000-word command (ab
 bound_row "bound: 40 -- words then terraform destroy asks, in under 5 s" ask - "$_cmd40dash"
 bound_row "bound: a 1000-target rm line then rm -rf ~ denies, in under 5 s" deny - "$_cmd1000rm"
 bound_row "bound: 30000 words in one command (above the word cap) asks with the bound reason, in under 5 s" ask - "$_cmdwords" "^${ASK_LEAD_RX}bound: "
+# the exact edges of each cap: one under/at is read, one over asks (decisions only: the timing rows above cover speed)
+rep 'echo x; ' 1999; _rec2000="${REP_OUT}echo \"y\""
+rep 'echo x; ' 2000; _rec2001="${REP_OUT}echo \"y\""
+env_row "bound edge: exactly 2000 simple commands are read (no decision)" none "$(mkjson "$_rec2000" "$TREE")"
+env_row "bound edge: 2001 simple commands ask bound" ask "$(mkjson "$_rec2001" "$TREE")"
+reason_has "bound edge: that ask names the record cap" "more than 2000 simple commands"
+rep ' a' 19998; _w20000="ls \"x\"${REP_OUT}"
+rep ' a' 19999; _w20001="ls \"x\"${REP_OUT}"
+env_row "bound edge: exactly 20000 words are read (no decision)" none "$(mkjson "$_w20000" "$TREE")"
+env_row "bound edge: 20001 words ask bound" ask "$(mkjson "$_w20001" "$TREE")"
+reason_has "bound edge: that ask names the word cap" "more than 20000 words"
+bound_row "bound edge: a word-capped record followed by rm -rf / asks bound (the rm is past the cap and is not read)" ask - "${_cmdwords}; rm -rf /" "^${ASK_LEAD_RX}bound: "
+rep '/a' 127; env_row "bound edge: an absolute path with exactly 128 components is resolved (no decision)" none "$(mkjson "rm -rf /nonexist${REP_OUT}" "$TREE")"
+rep '/a' 128; env_row "bound edge: an absolute path with 129 components asks bound" ask "$(mkjson "rm -rf /nonexist${REP_OUT}" "$TREE")"
+reason_has "bound edge: that ask names the component cap" "more than 128 components"
+_ebase="$(mkjson 'echo ' "$TREE")"; _epad=$((262144 - ${#_ebase}))
+rep a "$_epad"; _env_exact="$(mkjson "echo ${REP_OUT}" "$TREE")"
+rep a $((_epad + 1)); _env_over="$(mkjson "echo ${REP_OUT}" "$TREE")"
+chk "bound edge: the two envelope inputs are exactly 262144 and 262145 bytes (the rows below are meaningless otherwise)" "$([[ ${#_env_exact} -eq 262144 && ${#_env_over} -eq 262145 ]] && echo ok)" "sizes: ${#_env_exact} ${#_env_over}"
+env_row "bound edge: an envelope of exactly 262144 bytes is read (no decision)" none "$_env_exact"
+env_row "bound edge: an envelope of 262145 bytes asks bound" ask "$_env_over"
+reason_has "bound edge: that ask names the envelope cap" "larger than 256 KiB"
 # A bound that trips AFTER an ask-class rule matched keeps that rule's reason (id, lead, the quoted command) and appends the bound
 # sentence; it never says the command was "not recognised as destructive" (it was).
 rep 'echo "N"; ' 2100; _cmdtf_then_many="terraform destroy; ${REP_OUT}"
@@ -1998,6 +2043,9 @@ env_row "case fold: a PATH with no tr still asks on TERRAFORM destroy" ask "$(mk
 env_row "case fold: a PATH with no tr still asks on Git push --force origin main" ask "$(mkjson 'Git push --force origin main' "$R3")" "PATH=$WORK/farm-notr"
 env_row "case fold: a PATH with no tr still unwraps Sudo and Env (Sudo Env Terraform destroy)" ask "$(mkjson 'Sudo Env Terraform destroy' "$TREE")" "PATH=$WORK/farm-notr"
 env_row "case fold: Doas / NOHUP / Timeout / Nice / Time / Command wrappers with an upper-case name are unwrapped" ask "$(mkjson 'DOAS NOHUP Timeout 5 NICE TIME Command Tofu destroy' "$TREE")" "PATH=$WORK/farm-notr"
+for _w in 'DOAS' 'NOHUP' 'Timeout 5' 'NICE' 'TIME' 'Command' 'Sudo' 'Env'; do
+  env_row "case fold: the wrapper $_w alone, with an upper-case name, is unwrapped (and Tofu is folded)" ask "$(mkjson "$_w Tofu destroy" "$TREE")" "PATH=$WORK/farm-notr"
+done
 env_row "case fold: only the command name is folded (Terraform DESTROY is not terraform destroy: nocasematch is restored)" none "$(mkjson 'Terraform DESTROY' "$TREE")"
 env_row "case fold: an unrelated capitalised command (Make with a quoted word, a lexed command) is still no decision" none "$(mkjson 'Make "clean"' "$TREE")" "PATH=$WORK/farm-notr"
 # The deadline branches: a private copy of the hook whose deadline is 0 s asks with the bound reason at the FIRST check it
@@ -2217,6 +2265,7 @@ jqchk "lexer seam: a lexer that produced no result does not tell the agent to sp
 stub_lexer okonly 'print "OK\0";'
 tree_row "lexer seam: OK with no record for a command that mentions rm asks (lexer-empty)" ask "$HT_HOOK" "$_LX_RM_ENV"
 reason_has "lexer seam: OK with no record carries the lexer-empty rule id and the fix-and-resend tail" "$ASK_LEAD lexer-empty: "
+reason_has "lexer seam: the lexer-empty tail tells the agent to fix the quoting or heredoc" "fix its quoting or heredoc and send it again"
 tree_row "lexer seam: OK with no record for a keyword-free command (ls) is not an ask" none "$HT_HOOK" "$_LX_ENV"
 tree_row "lexer seam: OK with no record for a comment-only command is not an ask" none "$HT_HOOK" "$(mkjson '# a "comment" only' "$TREE")"
 stub_lexer okone 'print "C\0top\0" . "1\0" . "-\0" . "ls\0" . "OK\0";'
@@ -2244,6 +2293,21 @@ tree_row "lexer-empty (stub): env /bin/rm -rf / asks" ask "$HT_HOOK" "$(mkjson '
 tree_row "lexer-empty (stub): /usr/local/bin/terraform destroy asks" ask "$HT_HOOK" "$(mkjson '/usr/local/bin/terraform destroy' "$TREE")"
 tree_row "lexer-empty (stub): a quoted file name that contains rm (\"format.log\") is not an ask" none "$HT_HOOK" "$(mkjson '> "format.log"' "$TREE")"
 tree_row "lexer-empty (stub): a path whose directory is a keyword but whose file is not (git/ignore) is not an ask" none "$HT_HOOK" "$(mkjson '> "x/git/ignore"' "$TREE")"
+# Every separator the first pass splits on, and every keyword it reads, has its own row: removing one from the set leaves the tokens joined
+# (`>rm;` is one token `rm;`), so a row per member is what keeps the net the size it claims.
+for _sep in ';' '&' '|' '(' ')' '<' '>' '$'; do
+  case "$_sep" in '(') _c='(>rm)' ;; ')') _c='>rm)' ;; '$') _c='>$rm' ;; '|') _c='>rm|>x' ;; '&') _c='>rm&' ;; '<') _c='>rm<x' ;; '>') _c='>rm>x' ;; *) _c=">rm${_sep}" ;; esac
+  tree_row "lexer-empty (stub): rm ends at the separator $_sep ($_c) and asks" ask "$HT_HOOK" "$(mkjson "$_c" "$TREE")"
+done
+for _kw in rm destroy push terraform tofu git eval; do
+  tree_row "lexer-empty (stub): the keyword $_kw as a whole word asks (>\"$_kw\";, a quote so the prefilter hands it on)" ask "$HT_HOOK" "$(mkjson ">\"$_kw\";" "$TREE")"
+done
+tree_row "lexer-empty (stub): two keyword-bearing names split by a redirect (>git>format) ask" ask "$HT_HOOK" "$(mkjson '>git>format' "$TREE")"
+tree_row "lexer-empty (stub): >tofu>format asks" ask "$HT_HOOK" "$(mkjson '>tofu>format' "$TREE")"
+tree_row "lexer-empty (stub): a digit-led variable (>\$1rm) is a plain variable name, not a keyword" none "$HT_HOOK" "$(mkjson '>$1rm' "$TREE")"
+tree_row "lexer-empty (stub): an empty quote pair splits a keyword (>r\$''m) and asks" ask "$HT_HOOK" "$(mkjson ">r\$''m" "$TREE")"
+tree_row "lexer-empty (stub): a quoted file name that contains log is not an ask (the net reads words, not substrings)" none "$HT_HOOK" "$(mkjson '>"out.log"' "$TREE")"
+tree_row "lexer-empty (stub): two redirect targets, neither a keyword, are not an ask (>cat>format)" none "$HT_HOOK" "$(mkjson '>cat>format' "$TREE")"
 tree_row "lexer seam: a stub lexer that reports one harmless record is not an ask (the seam is not an always-ask)" none "$HT_HOOK" "$_LX_ENV"
 # A read-time bound (the deadline reached while the lexer's output is still arriving) must not discard the records already read:
 # the rule table judges them, a deny wins, and only when nothing matched does the answer become a bound ask. The private copy has a
@@ -2279,11 +2343,17 @@ reason_has "read bound: a dropped half record still ends in the bound reason" "$
 # =====================================================================================================
 echo "== the envelope (ADR-156/157): an unreadable envelope asks, a non-Bash tool is not decided =="
 env_row "garbage stdin asks" ask 'not json at all {'
+reason_has "garbage stdin names its cause (not valid JSON)" 'the envelope is not valid JSON'
 env_row "a truncated envelope asks (M2)" ask '{"tool_input":'
 env_row "empty stdin asks (M2)" ask ''
+reason_has "empty stdin names its cause" 'stdin was empty'
+env_row "a JSON array envelope asks" ask '[1,2]'
+reason_has "a JSON array envelope names its cause (not an object)" 'the envelope is not a JSON object'
 env_row "an array command asks" ask '{"tool_name":"Bash","tool_input":{"command":["rm","-rf","~"]}}'
 env_row "an object command asks" ask '{"tool_name":"Bash","tool_input":{"command":{"a":1}}}'
 env_row "a numeric command asks" ask '{"tool_name":"Bash","tool_input":{"command":42}}'
+reason_has "a numeric command names its cause (not a string)" 'tool_input.command is not a string'
+env_row "a numeric cwd is ignored, not trusted: ls; rm -rf x is no decision" none '{"tool_name":"Bash","tool_input":{"command":"ls; rm -rf x"},"cwd":5}'
 env_row "a null command asks" ask '{"tool_name":"Bash","tool_input":{"command":null}}'
 env_row "a missing command asks" ask '{"tool_name":"Bash","tool_input":{}}'
 env_row "a string tool_input asks" ask '{"tool_name":"Bash","tool_input":"terraform destroy"}'
@@ -2332,6 +2402,13 @@ env_row "GIT_DIR leak: cwd on a feature branch, GIT_DIR naming a repo on main: g
 env_row "GIT_DIR leak (mirror): cwd on main, GIT_DIR naming a repo on a feature branch: git push --force still asks" ask "$(mkjson 'git push --force' "$R3")" "GIT_DIR=$R1/.git"
 env_row "GIT_DIR leak (control): the same two pushes with no GIT_DIR decide as before (feature: none)" none "$(mkjson 'git push --force' "$R1")"
 env_row "GIT_DIR leak (control): the same two pushes with no GIT_DIR decide as before (main: ask)" ask "$(mkjson 'git push --force' "$R3")"
+# the strip is by PREFIX: a GIT_COMMON_DIR or GIT_NAMESPACE the caller exported must not redirect the hook's own symbolic-ref read either
+env_row "GIT_COMMON_DIR leak: cwd on main, a nonexistent common dir: git push --force still asks (the strip is by prefix)" ask "$(mkjson 'git push --force' "$R3")" "GIT_COMMON_DIR=$WORK/no-such-common-dir"
+env_row "GIT_NAMESPACE leak: cwd on main, a namespace with no HEAD: git push --force still asks" ask "$(mkjson 'git push --force' "$R3")" "GIT_NAMESPACE=zq-no-such-namespace"
+# an end-of-options marker and a --repo value are not refs
+env_row "git push -- origin -f main: after -- the -f is a ref name, not a force flag (no decision)" none "$(mkjson 'git push -- origin -f main' "$R1")"
+env_row "git push origin -- -f: the -f after -- is a ref name (no decision)" none "$(mkjson 'git push origin -- -f' "$R1")"
+env_row "git push --force --repo main: main is the --repo value, not a destination, and the current branch is a feature branch (no decision)" none "$(mkjson 'git push --force --repo main' "$R1")"
 
 echo "== the kill switch (D5, Guard 1 M6/row 20) =="
 _destroy="$(mkjson 'terraform destroy' "$TREE")"
@@ -2392,6 +2469,14 @@ env_row "jq-less: rm\u0009-rf\u0009~ asks (a \u0009 escape is a blank)" ask '{"t
 # the escape is spelled through a variable so no tool layer between the author and this file can decode it into a blank
 _BS=$'\\'
 env_row "jq-less: rm\u0020-rf\u0020~ asks (a \u0020 escape is a blank)" ask "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm${_BS}u0020-rf${_BS}u0020~\"},\"cwd\":\"/var/tmp\"}" "$FJ"
+# a JSON-escaped newline (lower- and upper-case hex) and carriage return separate the segments of the raw scan; spelled through _BS (see above)
+env_row "jq-less: ls, \\u000a, terraform destroy asks (the escape ends the segment)" ask "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls${_BS}u000aterraform destroy\"},\"cwd\":\"/var/tmp\"}" "$FJ"
+env_row "jq-less: ls, \\u000A, terraform destroy asks (upper-case hex)" ask "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls${_BS}u000Aterraform destroy\"},\"cwd\":\"/var/tmp\"}" "$FJ"
+env_row "jq-less: ls, \\u000d, terraform destroy asks (a carriage return)" ask "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls${_BS}u000dterraform destroy\"},\"cwd\":\"/var/tmp\"}" "$FJ"
+env_row "jq-less: git push -f origin main asks (the short force flag)" ask "$(mkjson 'git push -f origin main' "$TREE")" "$FJ"
+env_row "jq-less: rm -rf \${HOME} asks (the braced home spelling)" ask "$(mkjson 'rm -rf ${HOME}' "$TREE")" "$FJ"
+env_row "jq-less: terraform plan with a file named destroy_old.tf is not decided (destroy must be a whole word)" none "$(mkjson 'terraform plan destroy_old.tf' "$TREE")" "$FJ"
+env_row "perl-less: a flag on one line and a target on the next are two segments (echo -r, newline, rm ~) and are not decided" none "$(mkjson $'echo -r\nrm ~' "$TREE")" "$FP"
 env_row "jq-less: a force push to main asks" ask "$_gp" "$FJ"
 env_row "jq-less: ls exits 0 with no decision" none "$_ls" "$FJ"
 env_row "jq-less: a push without force is not decided" none "$_gok" "$FJ"
