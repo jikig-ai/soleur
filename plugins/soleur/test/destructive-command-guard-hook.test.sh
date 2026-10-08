@@ -1552,6 +1552,14 @@ L @@ wrapper abbreviation: an unresolvable sudo --chd directory before a recursi
 L @@ wrapper chdir: an unresolvable env -C directory before a recursive rm asks @@ ask @@ - @@ env -C "$UNKNOWN_DIR" rm -rf build
 L @@ wrapper chdir: an unresolvable sudo -D directory before a force push asks @@ ask @@ - @@ sudo -D "$UNKNOWN_DIR" git push --force origin feature
 L @@ wrapper chdir: an unresolvable env -C directory before something else is no decision @@ none @@ - @@ env -C "$UNKNOWN_DIR" ls
+L @@ wrapper chdir around a shell: env -C ~ bash -c 'rm -rf ./*' asks (the inner string is its own record, judged with the unmoved directory, so the directory is unresolved) @@ ask @@ - @@ env -C ~ bash -c 'rm -rf ./*'
+L @@ wrapper chdir around a shell: sudo -D ~ sh -c 'rm -rf *' asks @@ ask @@ - @@ sudo -D ~ sh -c 'rm -rf *'
+L @@ wrapper chdir around a shell: env -C ~ eval 'rm -rf *' asks @@ ask @@ - @@ env -C ~ eval 'rm -rf *'
+L @@ wrapper chdir around a shell: env --chdir=~ zsh -c 'rm -rf *' asks @@ ask @@ - @@ env --chdir=~ zsh -c 'rm -rf *'
+L @@ wrapper chdir around a shell: a delete of home inside still denies (env -C /tmp bash -c 'rm -rf ~') @@ deny @@ - @@ env -C /tmp bash -c 'rm -rf ~'
+L @@ wrapper chdir around a shell: nothing destructive inside is no decision (env -C /tmp bash -c 'ls') @@ none @@ - @@ env -C /tmp bash -c 'ls'
+L @@ wrapper chdir around a shell: a relative delete inside asks even in /tmp (the documented over-ask) @@ ask @@ - @@ env -C /tmp bash -c 'rm -rf ./x'
+L @@ wrapper chdir around a program that is not a shell is unchanged: env -C /tmp rm -rf ./x is no decision @@ none @@ - @@ env -C /tmp rm -rf ./x
 L @@ wrapper chdir: an absolute env -C after an unresolvable cd makes the directory known again: rm -rf ./* in /tmp is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C /tmp rm -rf ./*
 L @@ wrapper chdir: the last of two absolute env -C options wins and is known: rm -rf ./* after an unresolvable cd is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && env -C / -C /tmp rm -rf ./*
 L @@ wrapper chdir: an absolute sudo -D after an unresolvable cd makes the directory known: rm -rf ./* in /tmp is no decision @@ none @@ @HOME@ @@ cd "$UNKNOWN_DIR" && sudo -D /tmp rm -rf ./*

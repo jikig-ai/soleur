@@ -52,7 +52,9 @@
 #   matches by basename (/bin/rm) and command names are compared in lower case (RM, Git, Terraform; the fold
 #   starts no process). A wrapper's chdir option (env -C DIR, env --chdir=DIR, sudo -D DIR, sudo --chdir=DIR, and the abbreviations getopt_long accepts: --chd)
 #   moves the simulated working directory for the command it runs, and for that command only; a directory the
-#   guard cannot resolve (a variable) is an unresolved cd.
+#   guard cannot resolve (a variable) is an unresolved cd. A chdir wrapper around a shell or eval (`env -C D bash
+#   -c '...'`) makes the directory unresolved for the commands after it, because the inner string is a record of
+#   its own that the guard cannot place in D (a later recursive delete asks; it never under-asks).
 #   ask   env -S, --split-string (any abbreviation) or a cluster with S (rule id `unparsed-wrapper`): the string
 #         it splits into a command is not analysed.
 #   ask   more than 8 nested wrappers or `--` separators (rule id `wrapper-depth`): what they run cannot be checked.
@@ -1005,6 +1007,7 @@ short_first_val() {
 # A wrapper's chdir option (env -C DIR, --chdir DIR; sudo -D DIR, --chdir DIR) is reported in WCD (the directory word), WCDF (its
 # lexer flags) and WCD_SET: the wrapped command runs there, and decide_walk judges it with the simulated working directory moved.
 WCD=""; WCDF="-"; WCD_SET=0
+WCD_RUNNER=0
 
 # wrap_skip <name> <index of name in t> -> WJ: the index of the wrapped command's first word, or -1 when
 # the wrapper is a look-up only (`command -v`) or its payload is a string the guard does not analyse (env -S).
@@ -1179,7 +1182,12 @@ decide_walk() {
         wcd="$WCD"; wcdf="$WCDF"; wset="$WCD_SET"
         if (( WJ >= 0 && WJ < n )); then
           DA_T=("${t[@]:$WJ}"); DA_F=("${f[@]:$WJ}")
-          if (( wset )); then walk_in_dir "$wcd" "$wcdf" $((depth + 1)); else decide_walk $((depth + 1)); fi
+          if (( wset )); then
+            # a chdir wrapper around a shell or eval: the lexer makes the inner string its OWN record, which the main loop judges with the
+            # unmoved directory, so the loop treats the directory as unresolved from here on (WCD_RUNNER; an over-ask, never an under-ask)
+            case "${t[$WJ]##*/}" in sh|bash|zsh|dash|ksh|eval) WCD_RUNNER=1 ;; esac
+            walk_in_dir "$wcd" "$wcdf" $((depth + 1))
+          else decide_walk $((depth + 1)); fi
         fi ;;
     esac
   fi
@@ -1252,6 +1260,7 @@ for ((r = 0; r < NREC; r++)); do
   for ((RQ = 0; RQ < RC; RQ++)); do DA_T[RQ]="${W_TXT[RO + RQ]}"; DA_F[RQ]="${W_FLG[RO + RQ]}"; done
   REC_RANK=0; REC_RULE=""
   decide_argv 0
+  if (( WCD_RUNNER )); then UNRES=1; WCD_RUNNER=0; fi
   if (( REC_RANK > BEST_RANK )); then
     BEST_RANK="$REC_RANK"; BEST_RULE="$REC_RULE"
     REC_TXT=""; RW_NEXT=0
