@@ -1579,6 +1579,13 @@ L @@ wrapper chdir around a shell: sudo -D ~ sh -c 'rm -rf *' asks @@ ask @@ - @
 L @@ wrapper chdir around a shell: env -C ~ eval 'rm -rf *' asks @@ ask @@ - @@ env -C ~ eval 'rm -rf *'
 L @@ wrapper chdir around a shell: env --chdir=~ zsh -c 'rm -rf *' asks @@ ask @@ - @@ env --chdir=~ zsh -c 'rm -rf *'
 L @@ wrapper chdir around a shell: a delete of home inside still denies (env -C /tmp bash -c 'rm -rf ~') @@ deny @@ - @@ env -C /tmp bash -c 'rm -rf ~'
+L @@ wrapper chdir around a shell behind sudo: env -C ~ sudo bash -c 'rm -rf ./*' asks (the shell is found behind any wrapper, not only directly) @@ ask @@ - @@ env -C ~ sudo bash -c 'rm -rf ./*'
+L @@ wrapper chdir around a shell behind nice: env -C ~ nice -n 5 bash -c 'rm -rf ./*' asks @@ ask @@ - @@ env -C ~ nice -n 5 bash -c 'rm -rf ./*'
+L @@ wrapper chdir around a shell behind timeout: env -C ~ timeout 5 sh -c 'rm -rf ./*' asks @@ ask @@ - @@ env -C ~ timeout 5 sh -c 'rm -rf ./*'
+L @@ wrapper chdir around a shell behind command: env -C ~ command bash -c 'rm -rf ./*' asks @@ ask @@ - @@ env -C ~ command bash -c 'rm -rf ./*'
+L @@ wrapper chdir around a shell behind env: env -C ~ env bash -c 'rm -rf ./*' asks @@ ask @@ - @@ env -C ~ env bash -c 'rm -rf ./*'
+L @@ wrapper chdir around a shell behind nohup: env -C ~ nohup bash -c 'rm -rf ./*' asks @@ ask @@ - @@ env -C ~ nohup bash -c 'rm -rf ./*'
+L @@ wrapper chdir around a shell behind busybox: env --chdir=~ busybox sh -c 'rm -rf ./*' asks @@ ask @@ - @@ env --chdir=~ busybox sh -c 'rm -rf ./*'
 L @@ wrapper chdir around a shell: nothing destructive inside is no decision (env -C /tmp bash -c 'ls') @@ none @@ - @@ env -C /tmp bash -c 'ls'
 L @@ wrapper chdir around a shell: a relative delete inside asks even in /tmp (the documented over-ask) @@ ask @@ - @@ env -C /tmp bash -c 'rm -rf ./x'
 L @@ wrapper chdir around a program that is not a shell is unchanged: env -C /tmp rm -rf ./x is no decision @@ none @@ - @@ env -C /tmp rm -rf ./x

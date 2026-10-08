@@ -1193,7 +1193,10 @@ decide_walk() {
           if (( wset )); then
             # a chdir wrapper around a shell or eval: the lexer makes the inner string its OWN record, which the main loop judges with the
             # unmoved directory, so the loop treats the directory as unresolved from here on (WCD_RUNNER; an over-ask, never an under-ask)
-            case "${t[$WJ]##*/}" in sh|bash|zsh|dash|ksh|eval) WCD_RUNNER=1 ;; esac
+            # (a shell can sit behind any wrapper: env -C D sudo bash -c, env -C D nice -n 5 sh -c, busybox sh -c, so every wrapped word is read)
+            for ((k = WJ; k < n; k++)); do
+              case "${t[$k]##*/}" in sh|bash|zsh|dash|ksh|eval|busybox) WCD_RUNNER=1; break ;; esac
+            done
             walk_in_dir "$wcd" "$wcdf" $((depth + 1))
           else decide_walk $((depth + 1)); fi
         fi ;;
