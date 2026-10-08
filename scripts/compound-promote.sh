@@ -260,8 +260,9 @@ REQUEST=$(jq -n \
 # The API key is delivered on a stdin config (`--config -`), never as an argument: an
 # argv header is readable by every local user in /proc/<pid>/cmdline and `ps` for the life
 # of the process (argv-bearer sweep S2, D7). It is fed by a PROCESS SUBSTITUTION, not
-# `printf | curl`: under pipefail a consumer that never reads stdin makes the producer
-# die on SIGPIPE and the pipeline report 141. `--disable` is FIRST (it aborts ~/.curlrc
+# `printf | curl`: under pipefail a consumer that never reads stdin can make the producer
+# die on SIGPIPE and the pipeline report 141 (when the config outgrows the pipe buffer or the
+# consumer closes first; the compound-promote suite pins it with an oversized key). `--disable` is FIRST (it aborts ~/.curlrc
 # parsing, so a rc file cannot add a proxy or a header) and `--noproxy '*'` keeps an
 # ALL_PROXY/HTTPS_PROXY from redirecting the credentialed request. The body stays
 # `-d "$REQUEST"`: it is non-secret corpus text and the suite captures it from `-d`.

@@ -413,7 +413,7 @@ anthropic_paraphrase() {
   local _try
   for _try in 1 2; do
     # The key rides a stdin config fed by a PROCESS SUBSTITUTION (never `printf | curl`: under
-    # pipefail a consumer that never reads stdin makes the producer die on SIGPIPE -> 141), not
+    # pipefail a consumer that never reads stdin can make the producer die on SIGPIPE -> 141), not
     # an argument: an argv header is readable by every local user in /proc/<pid>/cmdline and
     # `ps` (argv-bearer sweep S2, D7). `--disable` is FIRST (it aborts ~/.curlrc parsing) and
     # `--noproxy '*'` keeps an ALL_PROXY/HTTPS_PROXY from redirecting the credentialed request.
@@ -991,6 +991,19 @@ self_test_paraphrase_prepass() {
     "--disable" "$(head -n 1 <<<"$st_argv")"
   st_assert "api-key: --noproxy '*' is present on every call (calls=$st_calls)" \
     "$st_calls" "$(grep -cxF -- '--noproxy' <<<"$st_argv" || true)"
+  # The VALUE of --noproxy, not just its presence: `--noproxy example.invalid` keeps the word and lets
+  # ALL_PROXY/HTTPS_PROXY redirect the credentialed request. Counted as `--noproxy` immediately
+  # followed by the one-character argument `*`, once per call.
+  st_assert "api-key: --noproxy is followed by exactly '*' on every call (calls=$st_calls)" \
+    "$st_calls" "$(awk '$0 == "--noproxy" { if ((getline nxt) > 0 && nxt == "*") c++ } END { print c + 0 }' <<<"$st_argv")"
+  # The stdin config is fed by a process substitution, never `printf | curl`. Read from the function's
+  # own definition (`declare -f` drops comments, so a comment spelling either form cannot satisfy or
+  # trip it). The pipe form is not observable from a mock here (anthropic_paraphrase swallows the
+  # producer's 141 behind `|| true`), so this is a structural pin; compound-promote.test.sh T12 is the
+  # behavioural twin for the same property in its sibling call site.
+  local st_fdef; st_fdef=$(declare -f anthropic_paraphrase)
+  st_assert "api-key: the stdin config is a process substitution (1) and nothing is piped into the curl command (0)" \
+    "1:0" "$(grep -cF -- '--config - < <(printf' <<<"$st_fdef" || true):$(grep -cE -- '\| *"\$CURL_BIN"' <<<"$st_fdef" || true)"
   st_assert "api-key: no x-api-key header is an argument of any call" \
     "0" "$(grep -cF -- 'x-api-key' <<<"$st_argv" || true)"
   st_assert "api-key: the key bytes are in no argument of any call" \
@@ -1054,6 +1067,31 @@ self_test_api_key_guard() {
   st_assert "api-key guard: inner counter: every hostile key ran on the main path" "${#keys[@]}" "$n_main"
   st_assert "api-key guard: inner counter: every hostile key ran on the function path" "${#keys[@]}" "$n_fn"
   st_assert "api-key guard: inner counter: every key has an expected reason" "${#keys[@]}" "${#want[@]}"
+
+  # Cache-hit rerun (--cache-paraphrases <non-empty file>): require_api_key is skipped there, but Phase 3
+  # still calls anthropic_paraphrase whenever a key is set, so the shape guard must run on this path
+  # too. A guard moved under `if (( WILL_NEED_API_KEY == 1 ))` would pass every main-path row above (none
+  # of them passes a cache file) and let a hostile key reach the stdin config on exactly this rerun.
+  # `timeout` bounds the mutant: unguarded, the run proceeds into the real corpus instead of refusing.
+  local cache_f="$gdir/cache.ndjson" n_cache=0 ci
+  local -a tmo=(); if command -v timeout >/dev/null 2>&1; then tmo=(timeout 120); fi
+  printf '{"path":"x","light":"a","heavy":"b"}\n' > "$cache_f"
+  local -a ckeys=('has space' $'inj\nurl = "http://evil.invalid"')
+  local -a cwant=(token_shape control_char)
+  for ci in "${!ckeys[@]}"; do
+    rm -f "$cnt" "$alog" "$slog"
+    rc=0
+    out=$(ANTHROPIC_API_KEY="${ckeys[$ci]}" CURL_BIN="$curl_g" ${tmo[@]+"${tmo[@]}"} bash "$0" --confirm --corpus-count-override 150 --cache-paraphrases "$cache_f" 2>&1) || rc=$?
+    st_assert "api-key guard [cache-hit $ci]: exit code is 1" "1" "$rc"
+    st_assert "api-key guard [cache-hit $ci]: exactly one marker (${cwant[$ci]})" \
+      "1" "$(grep -cxF -- "${marker_base}${cwant[$ci]}" <<<"$out" || true)"
+    st_assert "api-key guard [cache-hit $ci]: refused before Phase 1 started" \
+      "0" "$(grep -cF -- 'Phase 1:' <<<"$out" || true)"
+    st_assert "api-key guard [cache-hit $ci]: zero curl calls" \
+      "false" "$([[ -e "$cnt" ]] && echo true || echo false)"
+    n_cache=$((n_cache+1))
+  done
+  st_assert "api-key guard: inner counter: every hostile key ran on the cache-hit path" "${#ckeys[@]}" "$n_cache"
 
   # Must-pass, not the canonical: a realistic key shape goes through, intact, on stdin.
   rm -f "$cnt" "$alog" "$slog"
@@ -1420,7 +1458,7 @@ self_test() {
   # anti-vacuity floor: a self-test whose case calls were deleted or short-circuited reports
   # PASS=0 FAIL=0 and exits 0 above. Declared on the line IMMEDIATELY above the `if`, and a
   # lower bound (never -eq) so adding a row is not a spurious failure.
-  ST_MIN_ASSERTIONS=165
+  ST_MIN_ASSERTIONS=176
   if (( SELF_TEST_TOTAL < ST_MIN_ASSERTIONS )); then
     printf 'FATAL: anti-vacuity floor breached (TOTAL=%s < %s) -- cases did not dispatch\n' \
       "$SELF_TEST_TOTAL" "$ST_MIN_ASSERTIONS" >&2
