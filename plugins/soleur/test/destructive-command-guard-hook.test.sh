@@ -952,16 +952,17 @@ chk "the hook starts with the bash shebang" "$_x"
 if [[ -f "$GUARD_HOOK" ]] && "$BASH" -n "$GUARD_HOOK" 2>/dev/null; then _x=ok; else _x=bad; fi
 chk "the hook parses (bash -n)" "$_x"
 # The bash-4 / GNU-only token list. `;&` counts only as a case terminator (not when a `|` follows it, as in the IFS string `$';&|\n'`).
-BASH4_RE='(declare -A|declare -n|local -n|mapfile|readarray|\$\{[A-Za-z_][A-Za-z0-9_]*(,,|\^\^|,|\^)\}|\[\[ -v |;;&|;&([^|]|$)|\|&|printf( -v +[A-Za-z_]+)? +[^ ]*%q|sort -z|xargs -r|find [^|;]*-printf|grep -P|sed +-[a-zA-Z]*r|readlink -f|realpath|sed -i|date -d|stat -c)'
+# Case conversion (`${v,,}`, `${v^^pat}`, `${v,,[A-Z]}`), `${v@Q}`, a negative subscript, `declare -g`, $BASHPID, `wait -n`, `&>>` and a fractional `read -t` are bash 4 or later too.
+BASH4_RE='(declare -A|declare -n|local -n|mapfile|readarray|\$\{[A-Za-z_][A-Za-z0-9_]*(,,|\^\^|,|\^)[^}]*\}|\$\{[A-Za-z_][A-Za-z0-9_]*@[QEPAaKkLUu]\}|\[-[0-9]+\]|declare -g|BASHPID|wait -n|&>>|read( -[a-zA-Z]+)* -t +[0-9]*\.[0-9]|\[\[ -v |;;&|;&([^|]|$)|\|&|printf( -v +[A-Za-z_]+)? +[^ ]*%q|sort -z|xargs -r|find [^|;]*-printf|grep -P|sed +-[a-zA-Z]*r|readlink -f|realpath|sed -i|date -d|stat -c)'
 _b4=1; [[ -f "$GUARD_HOOK" ]] && _b4="$(grep -cE -- "$BASH4_RE" "$GUARD_HOOK")"
 if [[ "$_b4" == 0 ]]; then _x=ok; else _x=bad; fi
 chk "the hook uses no bash-4 feature and no GNU-only flag (count is 0)" "$_x" "hits: $_b4"
 # the pattern itself can fail: every known-bad spelling is a hit and the known-good look-alikes are not
 _b4_miss=""
-for _s in 'x=${v,,}' 'x=${v^^}' 'x=${v,}' 'declare -n r=x' 'local -n r=x' '[[ -v X ]]' 'case x in a) ls ;;& b) ;; esac' 'case x in a) ls ;& b) ;; esac' 'a |& b' 'printf %q x' 'printf -v o %q x' 'readarray -t a' 'mapfile a' 'declare -A m' 'sort -z' 'xargs -r ls' 'find src -printf x' 'grep -P x' 'sed -r s/a/b/' 'sed -nr s/a/b/' 'readlink -f x' 'realpath x'; do
+for _s in 'x=${v,,}' 'x=${v^^}' 'x=${v,}' 'declare -n r=x' 'local -n r=x' '[[ -v X ]]' 'case x in a) ls ;;& b) ;; esac' 'case x in a) ls ;& b) ;; esac' 'a |& b' 'printf %q x' 'printf -v o %q x' 'readarray -t a' 'mapfile a' 'declare -A m' 'sort -z' 'xargs -r ls' 'find src -printf x' 'grep -P x' 'sed -r s/a/b/' 'sed -nr s/a/b/' 'readlink -f x' 'realpath x' 'x=${v,,[A-Z]}' 'x=${v^^pat}' 'x=${v,pat}' 'x=${a[-1]}' 'x=${v@Q}' 'x=${v@U}' 'declare -g X=1' 'echo $BASHPID' 'wait -n' 'a &>> f' 'read -t 0.5 x' 'read -r -t 0.25 x'; do
   printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE" || _b4_miss+=" [$_s]"
 done
-for _s in "IFS=\$';&|\\n'" 'sed -E s/a/b/' 'x=${v:-,,}' 'printf %s x' 'find src -name x' 'grep -E x' 'sort -u'; do
+for _s in "IFS=\$';&|\\n'" 'sed -E s/a/b/' 'x=${v:-,,}' 'x=${v:-^^}' 'x=${a[@]}' 'x=${#a[@]}' 'x=${PF_TAIL: -1}' 'x=${a[${#a[@]} - 1]}' 'printf %s x' 'find src -name x' 'grep -E x' 'sort -u' 'read -r -d x' 'read -t 5 x' 'wait $pid' 'a >> f 2>&1' 'declare -a x' 'declare -r x=1'; do
   if printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE"; then _b4_miss+=" false-hit[$_s]"; fi
 done
 if [[ -z "$_b4_miss" ]]; then _x=ok; else _x=bad; fi
