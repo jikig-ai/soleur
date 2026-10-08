@@ -24,6 +24,18 @@
 # Issue: #2720.
 
 set -euo pipefail
+# Canonical fixture-dir guard (BYTE-IDENTICAL to plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh compares every copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/compound-promote.sh"
@@ -667,6 +679,7 @@ t11_guard_removal_is_caught() {
 # pipe form exits 141. T9 cannot see this: its mock reads stdin to the end.
 make_mock_curl_noread() { # <path> <capture>: records argv, never reads stdin, answers an empty clusters array
   local path="$1" capture="$2"
+  assert_fixture_dir "$path"
   cat > "$path" <<EOF
 #!/usr/bin/env bash
 printf '%s\0' "\$@" > "$capture.argv"

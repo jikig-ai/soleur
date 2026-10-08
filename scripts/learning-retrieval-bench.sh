@@ -43,6 +43,18 @@ case "$-" in
     ;;
 esac
 
+# Canonical fixture-dir guard (BYTE-IDENTICAL to plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh compares every copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # ─── globals ────────────────────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEARNINGS_ROOT="${LEARNINGS_ROOT:-$REPO_ROOT/knowledge-base/project/learnings}"
@@ -1098,6 +1110,7 @@ self_test_api_key_guard() {
   # `timeout` bounds the mutant: unguarded, the run proceeds into the real corpus instead of refusing.
   local cache_f="$gdir/cache.ndjson" n_cache=0 ci
   local -a tmo=(); if command -v timeout >/dev/null 2>&1; then tmo=(timeout 120); fi
+  assert_fixture_dir "$gdir"
   printf '{"path":"x","light":"a","heavy":"b"}\n' > "$cache_f"
   local -a ckeys=('has space' $'inj\nurl = "http://evil.invalid"')
   local -a cwant=(token_shape control_char)

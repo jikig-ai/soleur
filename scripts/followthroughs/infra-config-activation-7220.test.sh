@@ -25,6 +25,18 @@
 # `header = "..."` config lines on stdin, so a stub that ignored stdin could not tell a probe that sends
 # the three headers from one that sends none.
 set -uo pipefail
+# Canonical fixture-dir guard (BYTE-IDENTICAL to plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh compares every copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOAK="$HERE/infra-config-activation-7220.sh"
@@ -290,7 +302,7 @@ for spec in "id|CF_ACCESS_CLIENT_ID|SYNTHMARK1\"x" "secret|CF_ACCESS_CLIENT_SECR
 done
 
 # A signature that cannot be computed (python3 failing) is refused before curl, never sent unsigned; this used to be a silent skip of the frame arm.
-D=$(mk_case "$R_OK" "$FRAME_RECONCILED"); rm -f "$D/bin/python3"; printf '#!/usr/bin/env bash\nexit 1\n' > "$D/bin/python3"; chmod +x "$D/bin/python3"
+D=$(mk_case "$R_OK" "$FRAME_RECONCILED"); assert_fixture_dir "$D"; rm -f "$D/bin/python3"; printf '#!/usr/bin/env bash\nexit 1\n' > "$D/bin/python3"; chmod +x "$D/bin/python3"
 run_case "$D"
 CASES=$((CASES + 1))
 if [[ "$RC" -eq 2 && ! -e "$D/curl.calls" && "$(grep -cxF 'SOLEUR_CREDENTIAL_REFUSED script=infra-config-activation-7220 reason=token_shape' "$D/err.txt")" -eq 1 ]]; then
