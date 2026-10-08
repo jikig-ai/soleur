@@ -134,7 +134,9 @@ describe("model-tiers registry — #5106", () => {
   // Source: https://platform.claude.com/docs/en/about-claude/pricing.md (2026-10-08)
   //   Haiku 5.5, prompt up to 100,000 tokens   $0.10 / $0.50  cache-read $0.01  5m cache-write $0.125
   //   Haiku 5.5, prompt over 100,000 tokens    $0.50 / $2.50  cache-read $0.05  5m cache-write $0.625
-  //   Sonnet 5.5                               $2 / $10       cache-read $0.20 (as committed)  5m cache-write $2.50
+  //   Sonnet 5.5                               $2 / $10       cache-read $0.10  5m cache-write $2.50
+  // (Sonnet 5.5 cache hits are 0.05x base input, stated twice on the page; the
+  // row carried Sonnet 5's $0.20 until the 2026-10-08 correction.)
   it("MODEL_PRICING values match the committed per-MTok rates", () => {
     const M = 1_000_000;
     expect(MODEL_PRICING[HAIKU_MODEL]).toEqual({
@@ -153,7 +155,7 @@ describe("model-tiers registry — #5106", () => {
     expect(MODEL_PRICING[SONNET_MODEL]).toEqual({
       inputPerToken: 2 / M,
       outputPerToken: 10 / M,
-      cacheReadPerToken: 0.2 / M,
+      cacheReadPerToken: 0.1 / M,
       cacheCreatePerToken: 2.5 / M,
     });
   });
@@ -272,10 +274,10 @@ describe("resolveTurnCostUsd — Haiku 5.5 two-card pricing (Guard 2)", () => {
     expect(cost(usage(0, 0, 0, 0))).toBe(0);
   });
 
-  it("Sonnet 5.5 has a single flat card: no prompt-length tier", () => {
-    // 200000*2 + 1000*10 + 50000*0.20 + 4000*2.5 = 400000+10000+10000+10000 = 430000 per-million
+  it("Sonnet 5.5 has a single flat card: no prompt-length tier, cache read $0.10", () => {
+    // 200000*2 + 1000*10 + 50000*0.10 + 4000*2.5 = 400000+10000+5000+10000 = 425000 per-million
     expect(resolveTurnCostUsd(SONNET_MODEL, usage(200_000, 1000, 50_000, 4000))).toBeCloseTo(
-      0.43,
+      0.425,
       10,
     );
   });
