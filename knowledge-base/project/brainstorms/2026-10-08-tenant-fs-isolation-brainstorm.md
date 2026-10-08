@@ -144,8 +144,8 @@ register entry in honest tense, status `adopting`.
 
 ## Deferred / Follow-up Items
 
-- **Per-tenant executor (Option 3)** — file as deferred issue (this brainstorm
-  is its authority record).
+- **Per-tenant executor (Option 3)** — filed as deferred issue **#9773** (this
+  brainstorm is its authority record).
 - **#9724** — canary gaps on the existing capture machinery; stays separate,
   plus a NEW outer-wrap replay probe is required by this design.
 - **Two-tenant runtime probe** — publishable isolation claim wants a realized-

@@ -49,7 +49,7 @@ hosted tenants are coming; the re-evaluation trigger has effectively fired.
 ## Non-Goals
 
 - Per-tenant subprocess/container executor (kernel/credential boundary,
-  subsumes #9543-class residuals) — deferred follow-up issue, staged behind
+  subsumes #9543-class residuals) — deferred follow-up **#9773**, staged behind
   capacity work.
 - In-process orchestrator isolation (BYOK leases, session state in the shared
   node heap) — out of scope; a separate residual class.
