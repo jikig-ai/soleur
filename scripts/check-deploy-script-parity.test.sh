@@ -206,8 +206,8 @@ if [[ "$argv14" != *"$LIVE_KEY"* && "$argv14" != *"$LIVE_ID"* && "$argv14" != *"
   ok "C15: no credential, digest or -H header is on curl's argv; --disable --noproxy '*' come first and the config comes from stdin"
 else no "C15: curl argv carries a credential or lost its prologue: ${argv14//$LIVE_KEY/<key>}"; fi
 
-# C15b: the transport flag set is pinned EXACTLY (recorded argv, not a prefix): dropping --proto '=https' (a redirect or a scheme downgrade
-# would carry the credentials in cleartext), -s, --max-time or the -w http_code probe, or adding a flag, must turn this row red. The -o value
+# C15b: the transport flag set is pinned EXACTLY (recorded argv, not a prefix): dropping --proto '=https' (defence in depth: the URL is a hard-coded https literal and the argv has no -L, so no redirect or
+# downgrade path exists today, but the pin keeps it that way), -s, --max-time or the -w http_code probe, or adding a flag, must turn this row red. The -o value
 # is a mktemp path, so that one slot is masked; every other token is compared as is.
 cases=$((cases + 1))
 read -ra A15 <<< "$argv14"

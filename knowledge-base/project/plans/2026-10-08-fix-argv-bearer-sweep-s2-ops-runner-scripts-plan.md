@@ -159,7 +159,7 @@ the new refusal's sink:
 | `check-deploy-script-parity.sh` | 403 -> `DRIFT(status)`, exit 1 | exit 2 (the script's existing usage-class refusal) | red step in `apply-deploy-pipeline-fix.yml` | same sink |
 | the four followthrough probes | 403 -> `TRANSIENT` (rc 2) comment on the tracker | exit 2 (the soak probe exits 3 via its existing `cannot_establish`, because 2 is a reading for it), marker line in the comment; a closed tracker's refusal is visible only in the sweeper run log (the closed-set arm posts nothing), so the sweeper logs one marker line there | tracker comment (the sweeper strips `^+` trace lines, not this line); a persistent refusal stays TRANSIENT exactly as a persistent 403 does today | same class; NOT exit 1, which is the FAIL verdict that closes or flags a tracker |
 | `compound-promote.sh`, `learning-retrieval-bench.sh` | HTTP 401 -> empty content -> `exit 1` / `(API_ERROR)` | exit 1 | workflow step / bench summary | same sink; the bench must not turn a refusal into `(API_ERROR)` silently |
-| setup scripts (`write-env`) | value written, later `source`d | exit 1 (exit 64 for the discord positional) | stderr to the invoking user | new refusal, user-visible |
+| setup scripts (`write-env`) | value written, later `source`d | exit 1 (exit 64 for the discord positional and for a missing required Discord input) | the one-line marker on stderr; the human remedy line on stdout for the Discord script and the allow-list refusals (round-1 review moved them) | new refusal, user-visible |
 
 **D5. Rule E `-u`/`--user` arm, seeded honestly.** Design in "Rule E arm" below. Measured effect on the census:
 `betterstack-query.sh` is converted in the same diff and never enters baseline E; the arm **newly flags two
