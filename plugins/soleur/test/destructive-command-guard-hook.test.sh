@@ -1562,6 +1562,15 @@ L @@ wrapper chdir: env -C /tmp rm -rf ./x is no decision @@ none @@ - @@ env -C
 L @@ wrapper chdir: env -C /tmp moves the cwd away from home: rm -rf ./* is no decision @@ none @@ @HOME@ @@ env -C /tmp rm -rf ./*
 L @@ wrapper chdir: sudo -D /tmp moves the cwd away from home: rm -rf ./* is no decision @@ none @@ @HOME@ @@ sudo -D /tmp rm -rf ./*
 L @@ wrapper chdir: the move is for the wrapped command only (env -C /tmp true; rm -rf ./* in home still denies) @@ deny @@ @HOME@ @@ env -C /tmp true; rm -rf ./*
+L @@ wrapper abbreviation: timeout --sig KILL 5 rm -rf ~ (--sig is --signal, so KILL is its value) @@ deny @@ - @@ timeout --sig KILL 5 rm -rf ~
+L @@ wrapper abbreviation: timeout --k 3 5 rm -rf ~ (--k is --kill-after) @@ deny @@ - @@ timeout --k 3 5 rm -rf ~
+L @@ wrapper abbreviation: timeout --signal=KILL 5 rm -rf ~ (attached value, nothing extra consumed) @@ deny @@ - @@ timeout --signal=KILL 5 rm -rf ~
+L @@ wrapper abbreviation: timeout --pre 5 rm -rf ~ (--pre is --preserve-status and takes no value) @@ deny @@ - @@ timeout --pre 5 rm -rf ~
+L @@ wrapper abbreviation: nice --ad 5 rm -rf ~ (--ad is --adjustment) @@ deny @@ - @@ nice --ad 5 rm -rf ~
+L @@ wrapper abbreviation: nice --adjustment=5 rm -rf ~ (attached value) @@ deny @@ - @@ nice --adjustment=5 rm -rf ~
+L @@ wrapper abbreviation: command time --fo %e rm -rf ~ (--fo is --format) @@ deny @@ - @@ command time --fo %e rm -rf ~
+L @@ wrapper abbreviation: command time --ou /dev/null rm -rf ~ (--ou is --output) @@ deny @@ - @@ command time --ou /dev/null rm -rf ~
+L @@ wrapper abbreviation: command time --app rm -rf ~ (--app is --append and takes no value) @@ deny @@ - @@ command time --app rm -rf ~
 L @@ wrapper abbreviation: sudo --us root rm -rf / (--us is --user, so root is its value and rm is the command) @@ deny @@ - @@ sudo --us root rm -rf /
 L @@ wrapper abbreviation: sudo --gr wheel rm -rf ~ (--gr is --group) @@ deny @@ - @@ sudo --gr wheel rm -rf ~
 L @@ wrapper abbreviation: sudo --ho box rm -rf ~ (--ho is --host) @@ deny @@ - @@ sudo --ho box rm -rf ~

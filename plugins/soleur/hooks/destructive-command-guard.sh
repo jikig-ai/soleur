@@ -1096,8 +1096,9 @@ wrap_skip() {
       while (( j < n )) && [[ "${t[$j]}" == -* ]]; do
         a="${t[$j]}"; j=$((j + 1))
         case "$a" in
-          --signal|--kill-after) j=$((j + 1)) ;;
-          --*) : ;;
+          --*)  # getopt_long takes a unique abbreviation: --sig KILL is --signal KILL
+            lname="${a%%=*}"; lname="${lname#--}"
+            if [[ "$a" != *=* && -n "$lname" ]] && { [[ signal == "$lname"* ]] || [[ kill-after == "$lname"* ]]; }; then j=$((j + 1)); fi ;;
           *) if short_val sk "$a"; then j=$((j + 1)); fi ;;
         esac
       done
@@ -1106,8 +1107,9 @@ wrap_skip() {
       while (( j < n )) && [[ "${t[$j]}" == -* ]]; do
         a="${t[$j]}"; j=$((j + 1))
         case "$a" in
-          --adjustment) j=$((j + 1)) ;;
-          --*) : ;;
+          --*)
+            lname="${a%%=*}"; lname="${lname#--}"
+            if [[ "$a" != *=* && -n "$lname" && adjustment == "$lname"* ]]; then j=$((j + 1)); fi ;;
           *) if short_val n "$a"; then j=$((j + 1)); fi ;;
         esac
       done ;;
@@ -1116,8 +1118,9 @@ wrap_skip() {
         a="${t[$j]}"; j=$((j + 1))
         [[ "$a" == -- ]] && break
         case "$a" in
-          --format|--output) j=$((j + 1)) ;;
-          --*) : ;;
+          --*)
+            lname="${a%%=*}"; lname="${lname#--}"
+            if [[ "$a" != *=* && -n "$lname" ]] && { [[ format == "$lname"* ]] || [[ output == "$lname"* ]]; }; then j=$((j + 1)); fi ;;
           *) if short_val fo "$a"; then j=$((j + 1)); fi ;;
         esac
       done ;;
