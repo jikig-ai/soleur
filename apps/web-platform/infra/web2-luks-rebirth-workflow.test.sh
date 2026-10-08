@@ -337,9 +337,9 @@ mutate "the APPLY guard is removed from the delete step" "        id: delete
         if: \${{ env.APPLY == 'yes' }}
 " "        id: delete
 "
-mutate "the APPLY guard is removed from the reboot step" "      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+mutate "the APPLY guard is removed from the reboot step" "      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
         if: \${{ env.APPLY == 'yes' }}
-" "      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+" "      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
 "
 mutate "the APPLY guard is removed from the post plan" "      - name: Terraform plan \`post\` (graded; the raw volume is created, or on resume only missing siblings are added) + stock preflight
         if: \${{ env.APPLY == 'yes' }}

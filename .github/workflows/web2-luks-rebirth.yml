@@ -19,9 +19,9 @@
 #   [apply only] delete volume by API -> state rm -> `post` plan graded -> apply -> readiness row -> recovery check -> reboot.
 # The classifier makes every re-dispatch heal the window a crash left, or refuse BEFORE writing.
 #
-# WHAT THIS WORKFLOW NEVER CLAIMS: that the volume reopens after a reboot (the reboot is ISSUED here; the graded proof is a later
-# luks-monitor probe row on a new boot_id, via the follow-through on #6931), that recovery was tested, or that web-2 may take
-# data or weight. The soak marker, and with it any weight, waits for that reboot proof (scripts/lib/web2-luks-rows.sh).
+# WHAT THIS WORKFLOW NEVER CLAIMS: that the volume reopens after a reboot (the reboot is ISSUED here, but the evidence rule no
+# longer needs it: ADR-263 addendum 2026-10-08), that recovery was tested, or that web-2 may take data or weight. The proof is the
+# #6931 grader's PASS (scripts/followthroughs/web2-luks-live-6931.sh); the soak marker is only a shape-only input to the weight gate.
 #
 # THE LIVE WEB-1 IS NEVER REACHABLE: its key is refused by name in the plan gate, every destroy is pinned to a physical id
 # captured from Hetzner, and the reboot re-resolves web-2 by name and refuses web-1's id.
@@ -439,7 +439,7 @@ jobs:
           if [[ -s "$facts" ]]; then printf 'facts=%s\n' "$(head -c 600 "$facts" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"; fi
           exit "$rc"
 
-      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
         if: ${{ env.APPLY == 'yes' }}
         env:
           # The script REFUSES to reboot without the never-pooled proof: with the soak marker present web-2 may already hold data.
