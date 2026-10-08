@@ -22,7 +22,7 @@
 #     loop, so a mass upstream flap (~100 CNAME chains at once) can starve a
 #     tick past TimeoutStartSec=120 and the nft -f transaction never runs
 #     (measured 2026-10-08: Traffic Manager NXDOMAIN flap killed every tick
-#     for 22+ min). Cumulative resolution is capped at
+#     for 40+ min on both web hosts). Cumulative resolution is capped at
 #     RESOLVE_TICK_BUDGET_SECS; unattempted names count as FAILED_HOSTS
 #     (additive-only — prior + grace-pool addresses kept) without bumping
 #     their per-host failcount, which stays honest for tried-and-failed

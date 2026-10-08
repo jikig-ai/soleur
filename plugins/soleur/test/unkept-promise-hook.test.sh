@@ -51,7 +51,7 @@ verdict() { # <message> [extra-json] [VAR=value] -> BLOCK | ALLOW
   local _err; _err=$(mktemp -t unkept-err.XXXXXXXX)
   out=$(jq -n --arg m "$msg" --argjson e "$extra" '$e + {last_assistant_message:$m}' \
         | env ${envkv:+"$envkv"} bash "$HOOK" 2>"$_err")
-  grep -c '^SOLEUR_HOOK_RAN$' "$_err" 2>/dev/null | grep -qv '^0$' \
+  grep -c '^SOLEUR_HOOK_RAN$' "$_err" 2>/dev/null | grep -cv >/dev/null '^0$' \
     && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
   rm -f "$_err"
   printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1 && echo BLOCK || echo ALLOW
@@ -338,7 +338,7 @@ PARKED_ERR=$(mktemp -t unkept-perr.XXXXXXXX)
 PARKED_BODY=$(jq -n --arg m "Done. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>" \
   '{last_assistant_message:$m}' | bash "$HOOK" 2>"$PARKED_ERR")
 PARKED_RC=$?
-grep -c '^SOLEUR_HOOK_RAN$' "$PARKED_ERR" 2>/dev/null | grep -qv '^0$' \
+grep -c '^SOLEUR_HOOK_RAN$' "$PARKED_ERR" 2>/dev/null | grep -cv >/dev/null '^0$' \
   && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
 rm -f "$PARKED_ERR"
 EXPECT_ROWS=$((EXPECT_ROWS + 1)); echo x >> "$INVOCATION_LOG"

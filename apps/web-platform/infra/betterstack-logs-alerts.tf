@@ -892,7 +892,7 @@ resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer stopped the app, unmounted the encrypted /workspaces volume and remounted the retained plaintext one. Writes since the freeze may be stranded on the LUKS volume. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result=ok or result=fail) to see how the revert ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
+  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer ran. While the retained plaintext volume still exists, a fire stops the app, unmounts the encrypted /workspaces volume and remounts the plaintext one (result=ok reason=plaintext_remounted), so writes since the freeze may be stranded on the LUKS volume. Once the plaintext wipe (#6604 step 7) has run, a fire refuses instead (result=fail reason=refused_plaintext_wiped or refused_plaintext_record_gone) and leaves the LUKS mount untouched. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result= and reason=) to see how it ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean any stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
   metadata = {
     runbook = local.workspaces_luks_deadman_runbook_url
   }

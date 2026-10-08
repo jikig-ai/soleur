@@ -247,7 +247,7 @@ counts_of_linked() { run_linked "$1" kill_mine test-all.sh 2>/dev/null | _signat
 counts_esc() {
   local o
   o=$(run_fake "$1" list_runs test-all.sh 2>/dev/null)
-  if printf '%s' "$o" | LC_ALL=C grep -q $'\033'; then
+  if printf '%s' "$o" | LC_ALL=C grep -c >/dev/null $'\033'; then
     printf 'RAW-CONTROL-BYTE-PRESENT'
   else
     printf '%s' "$BASELINE_COUNTS"
@@ -327,7 +327,7 @@ fi
 # The sanitizer must be a CLASS, not a hand-picked list: \n \t \r were covered
 # from the start and ESC was not, and an ESC in a printed path can erase the
 # line above it in the operator's terminal.
-if printf '%s' "$out" | LC_ALL=C grep -q $'\033'; then
+if printf '%s' "$out" | LC_ALL=C grep -c >/dev/null $'\033'; then
   fail "T-ESC-B: a raw ESC byte reached the output"
 else
   pass "T-ESC-B: no raw control bytes in the output (sanitizer is a class, not a list)"
@@ -381,7 +381,7 @@ else
   fail "T-baseline: expected '$BASELINE_COUNTS', got '$got'"
 fi
 if run_fake "$HELPER" kill_mine no-such-pattern-xyz 2>/dev/null \
-   | grep -qE '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
+   | grep -cE >/dev/null '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
   pass "T-D6: counter line printed even when nothing matched"
 else
   fail "T-D6: counter line missing/wrong on a zero-match run"

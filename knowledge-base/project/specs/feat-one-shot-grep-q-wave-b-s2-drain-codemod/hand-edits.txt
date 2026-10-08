@@ -1,0 +1,7 @@
+# S2 hand edits, keyed by BASE-side (origin/main 425ea0fc1f) line range: path:OLD[-OLD2]:reason
+# Re-derive the line numbers in Phase 0 if origin/main has moved; verify fails on a range that matches no hunk.
+plugins/soleur/test/git-tripwire.test.sh:124:H-m diagnostic print on the failure branch reads a here-string
+plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh:710:H-m display inside a failure message, same line as a converted -q site
+plugins/soleur/test/roadmap-reconcile.test.sh:274:H-exec stub written by a quoted heredoc and executed as the fake gh
+plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh:288:H-demo the stub-git SIGPIPE demonstration, marker appended
+plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh:369:H-label banner that names the shape, reworded so it is not a pipe

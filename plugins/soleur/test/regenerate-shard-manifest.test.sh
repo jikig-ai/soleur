@@ -677,7 +677,7 @@ DIFF_R="$(diff "$FR/before.rows" "$FR/after.rows" || true)"
 ADDED_R="$(printf '%s\n' "$DIFF_R" | grep -c '^> ' || true)"
 REMOVED_R="$(printf '%s\n' "$DIFF_R" | grep -c '^< ' || true)"
 if [[ "$ADDED_R" == "1" && "$REMOVED_R" == "0" ]] \
-   && printf '%s\n' "$DIFF_R" | grep -qE $'^> r-new\t[0-9]+$'; then
+   && printf '%s\n' "$DIFF_R" | grep -cE >/dev/null $'^> r-new\t[0-9]+$'; then
   check pass "fixture R: add-one regen diffs exactly +1 row (r-new); zero moved/removed"
 else
   check fail "fixture R: add-one diff is not the single new row: $DIFF_R"
@@ -689,7 +689,7 @@ grep -v '^#' "$FR/durations.tsv" > "$FR/dur-after.rows"
 DIFF_RD="$(diff "$FR/dur-before.rows" "$FR/dur-after.rows" || true)"
 if [[ "$(printf '%s\n' "$DIFF_RD" | grep -c '^> ' || true)" == "1" \
    && "$(printf '%s\n' "$DIFF_RD" | grep -c '^< ' || true)" == "0" ]] \
-   && printf '%s\n' "$DIFF_RD" | grep -qF $'> r-new\t100\tfloor'; then
+   && printf '%s\n' "$DIFF_RD" | grep -cF >/dev/null $'> r-new\t100\tfloor'; then
   check pass "fixture R: durations delta is exactly +1 floor row (r-new at 100ms)"
 else
   check fail "fixture R: durations delta is not the single floor row: $DIFF_RD"
