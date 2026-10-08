@@ -10,18 +10,26 @@
 #   discover-guilds                 - List guilds as JSON
 #   list-channels <guild_id>        - List text channels as JSON
 #   create-webhook <channel_id>     - Create webhook, output webhook URL
-#   write-env <guild_id> <webhook>  - Write to .env with chmod 600
+#   write-env <guild_id>            - Write to .env with chmod 600 (webhook URL from the environment)
 #   verify                          - Run guild-info check
 #
 # Environment variables:
 #   DISCORD_BOT_TOKEN_INPUT              - Bot token (required for API commands)
+#   DISCORD_WEBHOOK_URL_INPUT            - Webhook URL (required, write-env only; never an argument)
 #   DISCORD_RELEASES_WEBHOOK_URL_INPUT   - Releases channel webhook (optional, write-env only)
 #   DISCORD_BLOG_WEBHOOK_URL_INPUT       - Blog channel webhook (optional, write-env only)
 #
+# write-env no longer takes the webhook URL as an argument (it would sit in the process list
+# and the shell history). Set it in the environment without echoing it:
+#   read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT
+# Every value written to .env is checked against an allow-list first (see _wenv_validate).
+#
 # Exit codes:
 #   0 - Success
-#   1 - General error
+#   1 - General error (including a write-env value outside the allow-list)
 #   2 - Retryable error (e.g., webhook limit on channel)
+#   64 - Usage error (write-env: the webhook URL passed as an argument, or
+#        DISCORD_WEBHOOK_URL_INPUT missing or empty)
 #
 # Output: JSON or plain text to stdout
 # Errors: Messages to stderr, exit 1
@@ -43,8 +51,8 @@ set -euo pipefail
 # leaves the user with a bare `exit 78` and no text at all.
 case "$-" in
   *x*)
-    if [ -n "${DISCORD_BOT_TOKEN_INPUT:+x}${DISCORD_BOT_TOKEN:+x}" ]; then
-      printf 'Refusing to run under `bash -x`: a Discord bot token is set, and tracing would print it to your terminal. To trace safely, unset it and re-run.\n'
+    if [ -n "${DISCORD_BOT_TOKEN_INPUT:+x}${DISCORD_BOT_TOKEN:+x}${DISCORD_WEBHOOK_URL_INPUT:+x}${DISCORD_RELEASES_WEBHOOK_URL_INPUT:+x}${DISCORD_BLOG_WEBHOOK_URL_INPUT:+x}" ]; then
+      printf 'Refusing to run under `bash -x`: a Discord bot token or webhook URL is set, and tracing would print it to your terminal. To trace safely, unset them and re-run.\n'
       exit 78
     fi
     ;;
@@ -199,6 +207,45 @@ refuse_token_shape() {
   printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=token_shape\n' "$SOLEUR_TRANSPORT_SCRIPT" >&2
   echo "Error: DISCORD_BOT_TOKEN_INPUT is not shaped like a Discord bot token, so nothing was sent. Expected three dot-separated base64url segments (letters, digits, '-' and '_'), with no 'Bot ' prefix, quotes, spaces, or line breaks (including a trailing CR or newline). The value is not shown." >&2
   exit 1
+}
+
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand (a thread-scoped webhook URL with a query string is outside the list). The glob runs
+# under LC_ALL=C and is not grep, which is line-oriented and lets a multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand." >&2
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
 }
 
 # Make a Discord API request. Suppresses curl stderr to prevent token leakage
@@ -365,10 +412,30 @@ cmd_create_webhook() {
 }
 
 cmd_write_env() {
-  local guild_id="${1:?Usage: discord-setup.sh write-env <guild_id> <webhook_url>}"
-  local webhook_url="${2:?Usage: discord-setup.sh write-env <guild_id> <webhook_url>}"
+  # (#9597) The webhook URL is a write-capable secret, so it never rides this command line (the
+  # process list, the shell history). A second positional is refused BEFORE anything else reads
+  # it, whether or not the environment variable is also set (the secret is already on this
+  # command line). The argument is never echoed. Exit 64 (usage) is distinct from the exit 1
+  # of a value outside the .env allow-list.
+  if [[ $# -ge 2 ]]; then
+    echo "Error: write-env no longer takes the webhook URL as an argument, because an argument is visible in the process list and your shell history." >&2
+    echo "Pass it in the environment instead, without echoing it:" >&2
+    echo "  read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT" >&2
+    echo "  discord-setup.sh write-env <guild_id>" >&2
+    echo "The argument you passed is not shown. It was already on this command line, so rotate that webhook if anyone else can read your process list or shell history." >&2
+    exit 64
+  fi
+  local guild_id="${1:?Usage: discord-setup.sh write-env <guild_id>  (the webhook URL goes in DISCORD_WEBHOOK_URL_INPUT)}"
+  if [[ -z "${DISCORD_WEBHOOK_URL_INPUT:-}" ]]; then
+    echo "Usage: discord-setup.sh write-env <guild_id>" >&2
+    echo "Error: DISCORD_WEBHOOK_URL_INPUT is not set (or is empty). Pass the webhook URL in that environment variable, not as an argument:" >&2
+    echo "  read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT" >&2
+    exit 64
+  fi
   validate_snowflake_id "$guild_id" "guild_id"
   require_token
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate DISCORD_BOT_TOKEN_INPUT DISCORD_WEBHOOK_URL_INPUT DISCORD_RELEASES_WEBHOOK_URL_INPUT DISCORD_BLOG_WEBHOOK_URL_INPUT
 
   local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
@@ -394,7 +461,7 @@ cmd_write_env() {
   {
     echo "DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN_INPUT}"
     echo "DISCORD_GUILD_ID=${guild_id}"
-    echo "DISCORD_WEBHOOK_URL=${webhook_url}"
+    echo "DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL_INPUT}"
   } >> "$env_file"
 
   # Optional: write channel-specific webhooks if provided
@@ -478,7 +545,7 @@ main() {
     echo "  discover-guilds                 - List guilds as JSON" >&2
     echo "  list-channels <guild_id>        - List text channels as JSON" >&2
     echo "  create-webhook <channel_id>     - Create webhook, output webhook URL" >&2
-    echo "  write-env <guild_id> <webhook>  - Write to .env with chmod 600" >&2
+    echo "  write-env <guild_id>            - Write to .env with chmod 600 (webhook URL in DISCORD_WEBHOOK_URL_INPUT)" >&2
     echo "  verify                          - Run guild-info check" >&2
     exit 1
   fi

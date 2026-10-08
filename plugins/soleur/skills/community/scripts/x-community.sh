@@ -164,6 +164,10 @@ report_transport_failure() {
 # exists to close, one layer up. readonly makes the destination non-rebindable.
 readonly X_API="https://api.x.com"
 
+# (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh"
+
 # --- Dependency checks ---
 
 require_openssl() {
@@ -288,12 +292,19 @@ oauth_sign() {
   # Build signature base string
   local base_string="${method}&$(urlencode "$url")&$(urlencode "$param_string")"
 
-  # Build signing key
+  # Build signing key (read BY NAME inside the HMAC function below)
+  # shellcheck disable=SC2034
   local signing_key="$(urlencode "${X_API_SECRET}")&$(urlencode "${X_ACCESS_TOKEN_SECRET}")"
 
-  # Generate HMAC-SHA1 signature
+  # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
+  # lives only in bash builtins and pipes: it is on no process's argument list. A failed
+  # computation yields no signature and the request is never sent unsigned.
   local signature
-  signature=$(printf '%s' "$base_string" | openssl dgst -sha1 -hmac "$signing_key" -binary | base64)
+  signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
+  if [[ -z "$signature" ]]; then
+    echo "Error: could not compute the OAuth signature; refusing to send an unsigned request." >&2
+    return 1
+  fi
 
   # Build Authorization header
   local auth_header="OAuth "

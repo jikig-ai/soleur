@@ -197,6 +197,45 @@ bsky_refuse() {
   exit 1
 }
 
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand. The glob runs under LC_ALL=C and is not grep, which is line-oriented and lets a
+# multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand." >&2
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -234,6 +273,8 @@ require_credentials() {
 
 cmd_write_env() {
   require_credentials
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate BSKY_HANDLE BSKY_APP_PASSWORD
 
   local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
