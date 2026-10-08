@@ -27,3 +27,9 @@ Markdown-linter path was absent. Discover validation commands from
 `lefthook.yml` or tracked paths before reading them. Run dependent stages only
 after checking each command's own exit status: a later successful command must
 not conceal an earlier failed validation.
+
+The later queue-state probe rejected a copied `--repo` option with exit 2;
+that flag belongs to the monitor, not `sync-pr-behind.sh`. The script's usage
+names `PR_QUEUE_REPO` for repository selection and otherwise uses the current
+worktree. The corrected `9051 --queue-state` probe succeeded before any merge.
+Read each helper's own usage instead of transferring flags between helpers.
