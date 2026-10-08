@@ -634,3 +634,32 @@
   Project controls/regions remain unknown, challenge retries stopped, Admin
   alternatives unexecuted and support unsent. No provider call, credential
   inspection, browser-auth copying, shared-production write or flag change ran.
+
+## Continuation update — 2026-10-08 RLS shared-schema deadlock workaround
+
+- Diagnostic head `91e12825f9` and documentation-only follow-up `bd00501b25`
+  were superseded before their CI completed; their watches were deliberately
+  stopped and superseded workflows canceled. They carry no green verdict.
+  Head `d445c1159cd843de7588ed7ef92800b053cd055f` then failed
+  [RLS 37844980733](https://github.com/jikig-ai/soleur/actions/runs/37844980733)
+  after successful migration application. The actual harness reported 130
+  passes and one PostgreSQL 40P01 failure at the repair test's trigger drop;
+  parity did not run. Main CI 37844980534 and tenant integration 37844980572
+  remained in progress during diagnosis. No green verdict is asserted.
+- The same repair test exists on pinned main. Existing
+  [issue #9779](https://github.com/jikig-ai/soleur/issues/9779) was verified
+  OPEN and a separate active draft initially had no changed files. Limited
+  read-only inspection established parallel files sharing one disposable
+  schema, including transactional DDL; backend/OID identities were not
+  recovered. The workflow now appends `--no-file-parallelism` only to its
+  standalone RLS invocation, retaining test bodies, positive controls,
+  loopback restrictions, migrations, parity conditions and deadlines. This
+  CI-only workaround does not close the issue or alter the package script.
+- `actionlint` without its ShellCheck integration, whitespace checking and
+  the learning-content gate passed. Fresh exact-head CI must verify the
+  actual serialized harness and both required test aggregates. The C.9
+  diagnostics remain; issue #9791 remains open because tracing is not a
+  demonstrated root-cause correction. No local suite, provider call,
+  recovery rebuild/retry, credential inspection or shared-database write ran.
+  All existing qualification, account/browser, flag/cohort, full-review and
+  promotion holds persist; keep draft/default-off/customer content blocked.

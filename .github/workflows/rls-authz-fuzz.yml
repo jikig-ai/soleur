@@ -111,7 +111,10 @@ jobs:
 
       - name: Run RLS/authz-fuzz harness
         working-directory: apps/web-platform
-        run: bun run test:rls-fuzz
+        # Ref #9779: these files share one schema and include rollback-scoped
+        # DDL. Serialize files to prevent schema-lock inversions between suites;
+        # explicitly concurrent operations inside a test remain unchanged.
+        run: bun run test:rls-fuzz --no-file-parallelism
 
       # Prod-parity catalog diff — read-only introspection over the run-verify
       # doppler path. Skipped when the prod-readonly token secret is not set (so
