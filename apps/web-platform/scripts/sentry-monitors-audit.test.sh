@@ -1438,6 +1438,60 @@ else
   cat "$TMP19N/stderr.txt" >&2 || true
 fi
 rm -rf "$TMP19N"
+
+# T19p — a cron detector with no workflow whose monitor is a key of
+# `cron_monitor_alert_unrouted` in the SAME tf root is declared pending (two-PR
+# rule): listed in the report, not warned. Any other unrouted detector warns.
+# Labels differ from slugs (m_one -> m-one) so a key resolves via its resource.
+T19P_DET='[{"id":"1","name":"m-one","type":"monitor_check_in_failure","workflowIds":[]},{"id":"2","name":"m-two","type":"monitor_check_in_failure","workflowIds":[]},{"id":"3","name":"m-three","type":"monitor_check_in_failure","workflowIds":["9001"]}]'
+# $1 dir, $2 = body lines inside the map; runs the audit, leaves $1/{stderr.txt,report}.
+t19p() {
+  mkdir -p "$1/tf"; local r m
+  for r in m_one m_two m_three; do printf 'resource "sentry_cron_monitor" "%s" {\n  name = "%s"\n}\n' "$r" "${r//_/-}"; done > "$1/tf/monitors.tf"
+  printf 'locals {\n  cron_monitor_alert_unrouted = {\n%s\n  }\n}\n' "$2" > "$1/tf/alerts.tf"
+  m=; for r in m-one m-two m-three; do m+="{\"slug\":\"$r\",\"name\":\"M\",\"type\":\"cron_job\",\"config\":{\"schedule\":\"0 * * * *\"}},"; done
+  printf '[%s]' "${m%,}" > "$1/monitors.json"; printf '%s' "$T19P_DET" > "$1/detectors.json"
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform SENTRY_API_HOST=de.sentry.io \
+    SENTRY_FIXTURE_MONITORS="$1/monitors.json" SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+    SENTRY_FIXTURE_DETECTORS="$1/detectors.json" SENTRY_TF_DIR="$1/tf" AUDIT_OUT_DIR="$1" bash "$SCRIPT" >/dev/null 2>"$1/stderr.txt"
+  report=$(ls "$1"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+}
+
+echo "T19p: pending m-one (tab/space-mangled key, trailing comment) is reported not warned; m-two warns alone"
+TMP19P=$(mktemp -d); t19p "$TMP19P" $'\t\tm_one\t=   "pending (#1)"   # why'; w19p=$(t19_warning "$TMP19P")
+if grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-two' <<<"$w19p" && ! grep -qw 'm-one' <<<"$w19p" \
+   && grep -qE '\*\*1\*\* of \*\*3\*\* cron detectors' "$report" \
+   && grep -qE '\*\*1\*\* more declared pending in `cron_monitor_alert_unrouted`' "$report" \
+   && grep -qE '^- `m-one` — declared pending' "$report" && grep -qE '^- `m-two` — bound to no workflow' "$report"; then
+  pass "warning names m-two only; report lists m-one as declared pending"
+else fail "partition wrong: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+echo "T19p2: both declared pending -> no unrouted warning part and the clean verdict stands"
+TMP19P=$(mktemp -d); t19p "$TMP19P" $'    m_one = "p (#1)"\n    m_two = "p (#2)"'; w19p=$(t19_warning "$TMP19P")
+if ! grep -q 'bound to no workflow' <<<"$w19p" && grep -qE '\*\*0\*\* of \*\*3\*\*' "$report" \
+   && grep -qE '\*\*2\*\* more declared pending' "$report" && grep -q 'No orphans detected' "$report"; then
+  pass "all-pending: no unrouted warning, 2 pending reported, no orphans"
+else fail "all-pending run warned or lost its pending line: [${w19p}]"; fi
+rm -rf "$TMP19P"
+
+# Fail toward noise: each leaves m-one UNDECLARED, so both detectors warn.
+for v in '    # m_one = "p (#1)"' '    m_won = "p (#1)"' ''; do
+  echo "T19p3: [${v}] leaves m-one undeclared"
+  TMP19P=$(mktemp -d); t19p "$TMP19P" "$v"; w19p=$(t19_warning "$TMP19P")
+  if grep -qE '2 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -qw 'm-one' <<<"$w19p"; then pass "m-one and m-two both warn"
+  else fail "suppressed a warning: [${w19p}]"; fi
+  rm -rf "$TMP19P"
+done
+
+echo "T19p4: without SENTRY_TF_DIR the real map is NOT consulted (fixture run stays all-drift)"
+TMP19P=$(mktemp -d)
+printf '%s' '[{"slug":"scheduled-bot-pr-reaper","name":"M","type":"cron_job","config":{"schedule":"0 * * * *"}}]' > "$TMP19P/monitors.json"
+printf '%s' '[{"id":"1","name":"scheduled-bot-pr-reaper","type":"monitor_check_in_failure","workflowIds":[]}]' > "$TMP19P/detectors.json"
+t19_run "$TMP19P"; w19p=$(t19_warning "$TMP19P")
+if grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19p" && grep -q 'scheduled-bot-pr-reaper' <<<"$w19p"; then pass "no coherent tf half: partition skipped"
+else fail "partition ran without a coherent tf half: [${w19p}]"; fi
+rm -rf "$TMP19P"
 rm -f "$T19_WORKFLOWS"
 
 # ------------------------------------------------------------------------
