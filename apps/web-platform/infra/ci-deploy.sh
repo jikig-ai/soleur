@@ -367,7 +367,7 @@ fan_out_to_peers() {
     code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
-      --config - --data-binary "$payload" \
+      -K - --data-binary "$payload" \
       < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") \
       2>/dev/null || echo "000")
     if [[ "$code" == "202" ]]; then
