@@ -16,6 +16,42 @@ lane: cross-domain
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-08 (deepen-plan, sequential-fallback — no Task tool in
+subagent context; all passes ran inline)
+**Sections enhanced:** Observability (5-field schema), Dependencies & Risks
+(precedent-diff), Technical Considerations (verbatim doc/type evidence),
+Research Insights (second in-repo precedent + gate evaluations)
+
+### Key Improvements
+
+1. Second in-repo precedent found: `server/worktree-write-lease.ts:156-158`
+   carries an identical `TRANSIENT_SQLSTATES` + 3-attempt/80–120 ms retry —
+   the pattern is established twice, not once.
+2. postgres.js transactional semantics now pinned to the version-pinned
+   vendored README (`node_modules/postgres/README.md:619-623`), and the
+   `TransactionSql ⊄ Sql` structural claim is verified against the pinned
+   `types/index.d.ts` (`Sql` adds `begin`/`reserve`; `TransactionSql` does not
+   extend it).
+3. Observability upgraded from a skip-note to the 5-field schema (the
+   deepen-plan 4.7 gate fires for any non-pure-docs Files-to-Edit).
+4. All five issue/PR citations verified live via `gh` (#7376/#7432/#9529/#9740/
+   #9779 — titles match the roles the plan assigns them).
+5. Census-B self-review defect fixed pre-freeze: wrapped call sites still
+   match `\w+\(sql`, and a `=>` exclusion would have false-negatived
+   `.map(t => t.seed(sql, ctx))` shapes — the AC6 command was corrected.
+
+### New Considerations Discovered
+
+- `catalog.ts` + `Sql|Txn`-helper call sites widened the wrap census (33
+  `await sql` sites + 13 bare-`sql` handle-passing sites on the pre-fix tree).
+- The network-outage trigger (4.5) fired on the literal `timeout-minutes: 25`
+  — evaluated and dismissed: the symptom is a Postgres lock error, not an
+  L3/L7 connectivity failure.
+- Context7 MCP was denied in background mode; vendored `node_modules` docs
+  supplied equivalent (version-pinned, hence stronger) evidence.
+
 ## Overview
 
 The RLS/authz-fuzz merge gate (#9779) intermittently red-lights on a Postgres
@@ -283,6 +319,30 @@ No workflow, vitest-config, or package.json changes; parallelism is retained.
   no steady-state cost. `timeout-minutes: 25` unchanged.
 - **Constitution (worktrees):** verification commands for this change run
   vitest via `./node_modules/.bin/vitest run`, never `npx vitest run`.
+- **`sql.begin` semantics, verbatim from the version-pinned vendored README**
+  (`apps/web-platform/node_modules/postgres/README.md:619-623`):
+  > "Use `sql.begin` to start a new transaction. … `sql.begin` will resolve
+  > with the returned value from the callback function. `BEGIN` is
+  > automatically sent with the optional options, and if anything fails
+  > `ROLLBACK` will be called so the connection can be released and execution
+  > can continue."
+
+  Resolve→commit, throw→rollback — exactly the semantics the
+  committed-seed-txn restructure (rule 2) and the sentinel rollback in
+  `rolledBackRaw` rely on.
+- **`TransactionSql` is not assignable to `Sql`** (verified against the pinned
+  `node_modules/postgres/types/index.d.ts`): `interface Sql extends ISql` adds
+  `begin`, `reserve`, `end`, `listen`, `subscribe`, `options`, `parameters`,
+  `CLOSE`, `PostgresError`; `interface TransactionSql extends ISql` adds only
+  `savepoint`/`prepare`. A `t` handle therefore fails type-check at every
+  `Sql`-typed parameter — the catalog functions' signatures make the
+  "never wrap `t`" rule structural, not conventional.
+- **PostgreSQL's own guidance is the authority for whole-transaction retry**
+  (docs §13.5, current): "It is important to retry the complete transaction,
+  including all logic that decides which SQL to issue and/or which values to
+  use." — i.e. the `sql.begin` boundary, not a statement inside the aborted
+  txn, is the canonical retry unit. Jitter is likewise documented practice
+  (tight-loop retry can recreate the same cycle).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -309,13 +369,34 @@ No workflow, vitest-config, or package.json changes; parallelism is retained.
 
 ## Observability
 
-Skipped per plan Phase 2.9: every Files-to-Edit entry is under
-`apps/web-platform/test/` — none match the code-class prefixes
-(`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`) and no
-new infrastructure surface is introduced. The change's own "observability" IS
-the fix: a non-transient or thrice-transient failure surfaces as a normal red
-`RLS authz fuzz` check on the PR, and each `withTransientRetry` call site is
-visible in the suite's own output on exhaustion.
+Test-only change; the affected "surface" is the CI check itself, so the block
+below declares its observability in those terms (deepen-plan 4.7 requires the
+schema for any non-pure-docs Files-to-Edit):
+
+- **liveness_signal:**
+  what: the `RLS authz fuzz` PR check reporting green on a diff that touches
+        `apps/web-platform/test/rls-fuzz/**` — the workflow is paths-gated, so
+        this PR's own diff arms the probe
+  where: GitHub Actions `.github/workflows/rls-authz-fuzz.yml` (PR check)
+  probe: `discoverability_test`
+- **error_reporting:**
+  channel: red CI check with the failing vitest spec + SQLSTATE in the run
+           log — vitest's reporter is the existing mechanism; no Sentry
+           (test-only code)
+  aggregation: none (per-run)
+- **failure_modes:**
+  - `40P01`/`55P03` persists past 3 attempts → red check carrying the SQLSTATE
+    in vitest output (signal preserved, slower red)
+  - non-transient SQLSTATE (e.g. `42501` outside an expected-denial arm) →
+    propagates on attempt 1, no retry
+  - RLS assertion failure → propagates on attempt 1, unchanged signal — the
+    `sqlStateFromError` shape guard (`/^[0-9A-Z]{5}$/`) is what keeps Node
+    `ENOENT`-class codes and assertion errors out of the transient set
+- **logs:**
+  emit: none new — failures surface through vitest's existing test output
+- **discoverability_test:**
+  command: rg -l TRANSIENT_SQLSTATES apps/web-platform
+  expected_output: harness-fixture.ts
 
 ## Open Code-Review Overlap
 
@@ -489,10 +570,12 @@ sweep was applied inline.
 - Given a `begin` that raises `40P01` on every attempt, when the attempt cap is
   reached, then the third `40P01` propagates and the test reds — no silent
   absorption.
-- Given a multi-statement `beforeAll` seed where statement N dies to `55P03`,
-  when `withTransientRetry` replays statement N only, then statements 1..N-1
-  are not re-executed (each is a one-shot `withTransientRetry(() => sql\`…\`)`
-  call site — no PK-violation re-run hazard).
+- Given a multi-statement `beforeAll` seed cluster where statement N dies to
+  `55P03` inside its committed `sql.begin`, when `withTransientRetry` replays
+  the whole txn, then statements 1..N-1 ARE re-executed — safely, because the
+  abort rolled back their writes, so no half-provisioned fixture persists and
+  no PK-violation can result. Single bare statements outside a txn take the
+  single-expression wrap (statement-atomic by construction).
 - Given a txn aborted mid-flight, when a caller mistakenly wraps a `t`-handle
   call, then `25P02` is not in `TRANSIENT_SQLSTATES` and propagates — documented
   in the helper's docstring (never wrap a transaction-scoped handle).
@@ -531,6 +614,35 @@ sweep was applied inline.
   `rolledBackRaw` pin the rule (retry wraps `sql`-handle calls only).
 - **Dependency:** none — no new packages; reuses `lib/postgres-errors.ts`.
 
+### Precedent diff (deepen-plan 4.4)
+
+The plan's pattern — `TRANSIENT_SQLSTATES` + bounded jittered retry — has TWO
+in-repo precedents, both in `apps/web-platform/server/`:
+
+| Element | `concurrency.ts` `acquireSlot` (:83-143) | `worktree-write-lease.ts` `acquireWorktreeLease` (:156-184+) | `withTransientRetry` (this plan) |
+|---|---|---|---|
+| Transient set | `{40P01, 55P03}` | `{40P01, 55P03}` (comment: "Mirror concurrency.ts") | identical |
+| SQLSTATE extraction | `(err as {code?}).code` inline | same inline | `sqlStateFromError` — adds `/^[0-9A-Z]{5}$/` shape guard |
+| Attempts | 3 (`attempt < 3`, delay only `attempt < 2`) | 3 | 3, delay between attempts only |
+| Jitter | `80 + Math.random() * 40` ms | same | identical |
+| Terminal behavior | fail-closed `status:"error"` + `reportSilentFallback` (server semantics: never throw) | fail-closed `null` + Sentry | **rethrow** — test semantics: exhausted transient = red check |
+| Retried unit | one RPC call | one RPC call | the whole `sql.begin` / bare statement |
+
+Deviations from precedent, both deliberate: (a) the SQLSTATE extractor is the
+tighter shared helper (the precedents predate `sqlStateFromError`'s guard;
+adopting it here is consistent with `lib/` being the canonical parser);
+(b) exhaustion rethrows rather than fail-closes — in test code a swallowed
+error is a false green, the opposite of the server-side "lease lost" sentinel.
+Note the precedents' own drift wrinkle: `worktree-write-lease.ts:157`'s
+comment says "Mirror concurrency.ts:62" but the set lives at :85 today —
+comment-coupled cross-references drift; this plan pins by symbol name in
+prose, not line numbers in code comments.
+
+No precedent for the *shape* `withTransientRetry(fn, {sleep})` itself (the
+in-repo copies are per-call-site loops); the helper is a lift of the shared
+shape, and the `sleep` seam is what makes the jitter testable in the `unit`
+project without a fake timer.
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold
@@ -546,14 +658,28 @@ sweep was applied inline.
 
 ## References & Research
 
-- Issue: #9779 (open, `meta/machinery`)
-- Precedent: `apps/web-platform/server/concurrency.ts` (`TRANSIENT_SQLSTATES`,
-  jittered retry); `apps/web-platform/lib/postgres-errors.ts`
+- Issue: #9779 (open, `meta/machinery`) — verified live
+- Precedents: `apps/web-platform/server/concurrency.ts` `acquireSlot` and
+  `apps/web-platform/server/worktree-write-lease.ts` `acquireWorktreeLease`
+  (identical `TRANSIENT_SQLSTATES` + 3-attempt/80–120 ms jitter — diffed
+  side-by-side in Dependencies & Risks); `apps/web-platform/lib/postgres-errors.ts`
   (`sqlStateFromError`)
+- External authority: PostgreSQL docs §13.5 (Serialization Failure Handling) —
+  "retry the complete transaction"; postgres.js vendored
+  `node_modules/postgres/README.md` §Transactions (:619-623)
 - ADR-111 (rls-fuzz harness substrate); ADR-153 (loopback-bound local stack)
 - Prior plan: `2026-09-21-fix-tenant-integration-shared-fixture-contention-plan.md`
   (advisory-lock precedent + pooler caveat)
 - Learning: `2026-07-11-rls-migration-verify-savepoint-and-signature-scope.md`
   (txn-abort `25P02` semantics)
-- Related: #7376/#7432 (`JOBS:1` serialization-as-stopgap precedent),
-  #9740 (separate rls-fuzz flake — psql install timeout, untouched by this fix)
+- Related, all verified live via `gh`: #7376/#7432 (`JOBS:1`
+  serialization-as-stopgap precedent — #7432 is the open removal tracker),
+  #9529 (one of the observed-failure diff heads), #9740 (separate rls-fuzz
+  flake — psql install timeout, untouched by this fix)
+- Deepen-pass notes: Context7 MCP denied in background mode (vendored docs
+  used instead); the learning
+  `learnings/best-practices/2026-07-05-cross-pipeline-serialization-via-shared-job-level-concurrency-group.md`
+  was evaluated for the serialization alternative — it serializes across
+  workflow RUNS, not within one run's parallel vitest workers, so it does not
+  apply here; `learnings/best-practices/2026-07-12-config-gate-half-fix-and-unmasked-deterministic-deadlock.md`
+  is systemd-scoped (`ReadWritePaths`), not Postgres — not-applicable.
