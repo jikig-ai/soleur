@@ -16,6 +16,20 @@ requires_cpo_signoff: false
 
 Spec lacks valid `lane:` (no spec.md exists for this one-shot branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-08
+**Method:** proportionate to a 3-literal chore: halt gates 4.6-4.12 run mechanically, every cited issue/rule/line verified live, and the change itself dry-run on the real suites (edit, run, `git checkout --` revert; tree clean afterwards). No external-research fan-out: the subject is a public image digest and a repo-local allowlist, so there is no framework documentation to consult.
+
+### Key Improvements
+1. **The change is proven green before it is made.** With the literal swapped to `sha256:534baea6...eb55`, `git-data-runcmd-rehearsal.test.sh` ends `108 passed, 0 failed, Skipped: 0 (108 assertions)` rc=0 (R1-PIN, R1 a/b/c and all three controls included), and `git-data-ownership.test.sh` ends `39 passed, 0 failed, 0 skipped` rc=0. The pre-edit tree carried 3 occurrences of the old digest and 0 of any other, so AC-2's lockstep predicate is non-vacuous (it reds on today's tree).
+2. **Gate results.** 4.6 pass (concrete `none` threshold plus the `threshold: none, reason:` scope-out that the `apps/[^/]+/infra/` sensitive-path regex requires); 4.7 pass (all 5 fields present, command is `grep`, no `ssh`, `expected_output` is a matchable literal, command finishes instantly); 4.8 no PAT shapes; 4.9 not a UI plan; 4.10 skipped (no `.tf`/migration/cloud-init file edited, no store or connection introduced); 4.11 skipped (no guard is a deliverable; R1 and R1-PIN are untouched); 4.12 pass (1 unfenced `## Scope Check`, no `unmapped` cell).
+3. **Citations verified live.** Issues #9252, #9783, #9382, #9390 all OPEN as described. The only AGENTS rule id cited is `wg-use-closes-n-in-pr-body-not-title-to` (active; an earlier truncated spelling was corrected). Line cites re-read: `git-data-runcmd-rehearsal.test.sh:70`, `git-data-ownership.test.sh:29`, `cloud-init-inngest-provision-unit.test.sh:1392`, `git-data-cutover-access.test.sh:63`, `cloud-init-git-data.yml:1183`, `rule-audit.yml:238`.
+
+### New Considerations Discovered
+- **apt budget headroom is thin on a slow link.** The rehearsal run logged `GD_APT: spent=419s of budget=420s across 12 apt attempt(s)` on this host. That is the in-container apt cycle bounded by #9379, not the image digest, and it passed, but a slower mirror on CI could red the suite for a reason unrelated to the pin. If CI reds on a `FIXTURE_APT_CAUSE`/exit-100 line, that is the #9379 budget, not an R1 regression; do not "fix" it by touching the allowlist or the pin. No change is prescribed here (out of scope), only this attribution note for the work phase.
+- **Digest provenance.** The new index was created upstream 2026-09-17 (amd64 child `f610ab94...`); the tag has not moved between the issue filing and now other than the `008173c2` -> `534baea6` step, so a further move before merge is possible but unlikely; AC-1 handles it.
+
 ## Overview
 
 `rule-audit.yml` (#7544) reports that `ubuntu:24.04` has moved under the git-data rung-1
@@ -28,7 +42,7 @@ classification pass against the allowlist (`git-data-birth-fs-fingerprint.txt`).
 is a `cloud-init-registry.yml` render input and stays held, per
 `knowledge-base/project/plans/2026-10-08-chore-zot-adr096-tail-9382-9252-plan.md` Phase 2.
 
-Because the zot half remains, the PR MUST use `Ref #9252`, never `Closes #9252` (wg-use-closes-n).
+Because the zot half remains, the PR MUST use `Ref #9252`, never `Closes #9252` (wg-use-closes-n-in-pr-body-not-title-to).
 
 ## Research Reconciliation — Spec vs. Codebase
 
