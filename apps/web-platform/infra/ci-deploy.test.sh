@@ -6217,8 +6217,8 @@ assert_zot_login_class() {
   rm -f "$sf"
 }
 
-# The 401 fixture is byte-accurate — reproduced against the pinned zot v2.1.20 with this
-# repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
+# The 401 fixture is byte-accurate — reproduced against the pinned zot v2.1.22 (2026-10-08, #9252)
+# with this repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
 # answers 200 or 401 and NEVER 403, even for a user with zero accessControl policies.
 echo "--- #6497 T-5B-1..5: docker login stderr classifies into the login_class enum ---"
 assert_zot_login_class "401 stale htpasswd (H3 — the live defect)" \

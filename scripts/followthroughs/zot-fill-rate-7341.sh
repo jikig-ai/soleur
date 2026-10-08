@@ -7,9 +7,11 @@
 # fixed, because a freshly wiped disk is empty regardless of the defect.
 #
 # The untreated cause is upstream zot#4235: gc completes repeatedly for `soleur-inngest-bootstrap`
-# and never for `soleur-web-platform`, panicking in `pkg/scheduler/scheduler.go`. PR #4236 is
-# unmerged, so it is NOT fixed in the v2.1.20 pin this host runs. A refill is therefore the
-# EXPECTED outcome to measure. A second candidate — orphaned `.uploads/` staging, seen as
+# and never for `soleur-web-platform`, panicking in `pkg/scheduler/scheduler.go`. Upstream #4235
+# is closed and its fix PR #4236 merged 2026-08-11, which ships in v2.1.21 and later, so the v2.1.22
+# pin this host runs (from the #9252 replace on) carries it; before that replace the host ran v2.1.20, which did not.
+# Whether it ends the refill on THIS host is exactly what this probe measures, so a refill after
+# that replace is a result to report, not an expected outcome. A second candidate — orphaned `.uploads/` staging, seen as
 # `i/o timeout ... PatchBlobUpload` during the recut — is not discriminable from here; attribution
 # was blocked by #7440 (the registry shipped no zot logs; this heartbeat was its only instrument).
 # UNBLOCKED 2026-08-12 (#7455): the zot container-log channel is LIVE, and it counts
@@ -394,7 +396,7 @@ else:
 echo "zot-fill-rate[#7341]: ${verdict} ${detail} samples=${n} boot=${boot:0:8} window=${WINDOW}"
 case "$verdict" in
   PASS) exit 0 ;;
-  FAIL) echo "The store is refilling toward the threshold. zot#4235 is unfixed in v2.1.20; also weigh the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
+  FAIL) echo "The store is refilling toward the threshold. the zot#4235 fix (#4236) ships in v2.1.21+ and is in the v2.1.22 pin, so if this host is on that pin weigh other causes, including the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
         attribution_lead || true
         exit 1 ;;
   TRANSIENT) echo "TRANSIENT: the store's state could not be established. NOT a pass."; exit 2 ;;
