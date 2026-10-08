@@ -885,3 +885,41 @@ variable "inngest_luks_cutover_complete" {
   type        = bool
   default     = true
 }
+
+# #8285 — throwaway wipe host for the retired plaintext Inngest Redis AOF backstop volume
+# (inngest-backstop-wipe.tf). All three variables carry defaults, so neither the per-merge apply
+# nor a plan fails on an unprovisioned TF_VAR_*; the wipe resources are count = 0 unless the
+# reviewer-gated `inngest-backstop-retire` dispatch (phase=wipe) sets the flag.
+variable "inngest_backstop_wipe_enabled" {
+  description = "Instantiate the throwaway wipe host and its volume attachment (inngest-backstop-wipe.tf, #8285). Default false: nothing is created. Set true only by the reviewer-gated inngest-backstop-retire dispatch (phase=wipe, step A) and set back to false by step B (teardown) in the same dispatch."
+  type        = bool
+  default     = false
+}
+
+variable "inngest_backstop_volume_id" {
+  description = "Hetzner id of the retired plaintext Inngest Redis AOF backstop volume (hcloud_volume.inngest_redis, 106261946) that the wipe host zeroes. Non-secret. A Doppler tf-var override could repoint it, so the wipe plan gate asserts the attachment's volume_id against the dispatch's id-pin and the on-host script carries the same id as a literal; this validation additionally refuses the live encrypted store (hcloud_volume.inngest_redis_luks, 106903269) outright."
+  type        = number
+  default     = 106261946
+
+  validation {
+    condition     = var.inngest_backstop_volume_id > 0 && var.inngest_backstop_volume_id != 106903269
+    error_message = "inngest_backstop_volume_id must be a positive Hetzner volume id and must never be the live encrypted Inngest store (106903269)."
+  }
+}
+
+variable "inngest_backstop_wipe_server_type" {
+  description = "Hetzner server type for the throwaway wipe host. It lives minutes and does one blkdiscard plus one read of a 10 GB volume, so size is irrelevant; cpx22 (amd64) is the type already orderable in hel1 for the dedicated Inngest host. Verify stock before the wipe phase (the dispatch's stock preflight does)."
+  type        = string
+  default     = "cpx22"
+}
+
+variable "inngest_backstop_wipe_nonce" {
+  description = "The GitHub run id of the wipe dispatch, delivered through the wipe host's user_data and echoed in its SOLEUR_INNGEST_BACKSTOP_WIPE evidence row, so the destroy phase can bind to THIS run's evidence. Set by the workflow as TF_VAR_inngest_backstop_wipe_nonce; empty (the default) is only legal while inngest_backstop_wipe_enabled is false. Not a secret."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[0-9]{0,20}$", var.inngest_backstop_wipe_nonce))
+    error_message = "inngest_backstop_wipe_nonce must be a numeric GitHub run id (digits only) or empty."
+  }
+}
