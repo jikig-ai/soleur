@@ -10,7 +10,10 @@ import path from "node:path";
 // so nothing local reddens it). This file pins the two census greps so a new
 // bare `sql` call fails deterministically instead. Anchored on call forms a
 // comment cannot produce once comments are stripped, and each check carries a
-// seeded-offender self-test so the guard cannot pass vacuously.
+// seeded-offender self-test so the guard cannot pass vacuously. Scope: single-
+// line call shapes on a handle literally named `sql` — a multi-line `await`/
+// `sql` split or a renamed handle would evade the regex; the suite's style keeps
+// every call on one line and every handle named `sql`.
 
 const DIR = __dirname;
 
@@ -79,8 +82,12 @@ function censusAOffenders(ls: Line[]): Line[] {
 
 function censusBOffenders(ls: Line[]): Line[] {
   return ls.filter(({ line }) => {
-    const m = line.match(BARE_SQL_ARG);
-    return m != null && !ALLOWED_BARE_SQL_CALLS.has(m[1]) && !line.includes("withTransientRetry");
+    if (line.includes("withTransientRetry")) return false;
+    // EVERY callee on the line is checked — an allowlisted first call must not
+    // hide a non-allowlisted second (`foo(allowlisted(sql), bar(sql))`).
+    return [...line.matchAll(new RegExp(BARE_SQL_ARG, "g"))].some(
+      (m) => !ALLOWED_BARE_SQL_CALLS.has(m[1]),
+    );
   });
 }
 

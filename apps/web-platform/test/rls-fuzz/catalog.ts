@@ -187,7 +187,7 @@ export async function allSecurityDefinerFns(sql: Sql): Promise<SecDefFn[]> {
  * (unauthenticated) role may EXECUTE. A DISTINCT dimension from the authenticated
  * set: under anon `auth.uid()` is NULL, so every `founder_id = auth.uid()` /
  * `is_workspace_member(param, auth.uid())` premise a definer fn relies on
- * evaporates, and a caller-override param (`COALESCE(p_caller, auth.uid())`);
+ * evaporates, and a caller-override param (`COALESCE(p_caller, auth.uid())`)
  * becomes fully attacker-controlled. The #6306 exposure was exactly a residual
  * CREATE-time default EXECUTE grant to anon that migration 037 failed to revoke;
  * this enumerator is the FORWARD tripwire — any future anon-granted definer fn
