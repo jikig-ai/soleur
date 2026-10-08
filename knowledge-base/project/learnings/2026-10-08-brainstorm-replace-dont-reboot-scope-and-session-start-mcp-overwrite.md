@@ -16,3 +16,10 @@ A rule that exists in AGENTS.rules.md reaches only this repo. Before adding a ru
 ## Tags
 category: workflow-issues
 module: brainstorm, infra-agents
+
+## Planning-phase additions (same session)
+
+- **Byte ceilings, not the rule budget, bound edits to lifecycle skills.** `plugins/soleur/test/skill-body-budget.json` leaves `plan/SKILL.md` 4 B and `deepen-plan/SKILL.md` 103 B of headroom, so two spec items (a `deepen-plan` clause, a plan pointer) were cut at plan time and a needed `plan/SKILL.md` edit had to be byte-neutral. Measure `ceiling - wc -c` before specifying prose for any lifecycle SKILL.md.
+- **A skill's own default can contradict the repo's hard rule.** Plan section 2.8 "Apply path" made an idempotent bootstrap script the default for existing infra while `hr-prod-host-config-change-immutable-redeploy` mandates replace. Found by the spec-flow reviewer, not by research. When encoding a rule in shipped skills, grep the skills for the opposite default first.
+- **A review lens that fires on a diff shape never loads for a plan-only or runbook-only PR.** The downtime bullet's trigger covered infra paths, migrations and deploy restructures only, and its quoted reviewer instruction is the only text the spawned reviewers receive; a sentence placed after the quote is commentary.
+- **Generated harness mirrors can be stubs.** The cursor and grok agent files point at the canonical agent file, so body edits need no regeneration; check before assuming a mirror must be rebuilt.
