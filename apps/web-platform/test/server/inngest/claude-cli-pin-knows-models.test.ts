@@ -92,6 +92,11 @@ const REVIEWED_DEFAULT_EFFORT: Record<string, string> = {
   // 5→5.5 swap (bundle-verified 2026-09-29, claude-code 2.1.284). Execution
   // crons deliberately ride the CLI default (ADR-053 amendment #8603) — noted
   // as drift, not pinned back.
+  //
+  // Re-checked 2026-10-08 against claude-code 2.1.293 (the first release whose
+  // bundle knows claude-haiku-5-5): this guard passes with both rows still at
+  // `medium`. The Haiku id never reaches the cron CLI, so it has no row here;
+  // the id-set guard below is what covers it.
   [EXECUTION_MODEL]: "medium",
 };
 
