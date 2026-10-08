@@ -103,6 +103,15 @@ describe("detectHarness", () => {
     expect(detectHarness(env({ CURSOR_AGENT: "1" }))).toBe("unknown");
     expect(detectHarness(env({ CLAUDECODE: "1", CURSOR_AGENT: "1" }))).toBe("claude");
   });
+
+  test("2026-10-07 capture does not adopt CURSOR_INVOKED_AS", () => {
+    // The CLI process set CURSOR_INVOKED_AS=cursor-agent. No non-CLI Cursor
+    // process was measured, and CURSOR_AGENT was unset on that CLI process.
+    expect(detectHarness(env({ CURSOR_INVOKED_AS: "cursor-agent" }))).toBe("unknown");
+    expect(
+      detectHarness(env({ CLAUDECODE: "1", CURSOR_INVOKED_AS: "cursor-agent" })),
+    ).toBe("claude");
+  });
 });
 
 describe("normalizeSkillName", () => {
