@@ -48,7 +48,7 @@ dispatch path (the `wipe_plaintext` and `expected_plaintext_volume_id` inputs an
 the forget workflow exist on `main` only — that PR's branch has already deleted them — and D and the
 forget are dispatched from `main` (the `workspaces-luks-cutover` environment admits `main` only), so
 they run `main`'s copies. Each run's head SHA is recorded with its run id:
-PENDING-EVIDENCE(D-head-sha), PENDING-EVIDENCE(forget-head-sha). This paragraph moves to the past
+D (run 37801674740) at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, the forget (run 37803274724) at `425ea0fc1fda3624e53c46771d76580c43d36e90`; both show no diff from `59abf6a76c` over the wipe and forget code (checked 2026-10-08, `git diff --quiet`). This paragraph moves to the past
 tense when `status:` becomes `complete`.
 
 ## Where every field comes from
@@ -81,21 +81,21 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 
 | Field | Value | Source |
 |---|---|---|
-| **Zero started / completed (UTC)** | PENDING-EVIDENCE(zero-start-UTC) / PENDING-EVIDENCE(zero-complete-UTC) | run log / `luks-monitor` tag |
-| **Delete completed (UTC)** | PENDING-EVIDENCE(delete-UTC) | the `wipe` job's API step (`DELETE` → `204`) |
-| **Rehearsal run id** | `36769782488` — `workflow_dispatch` on `main` at `59abf6a76c`, created 2026-09-30T20:02:05Z, concluded `success`; its host row is `result=rehearsal_ok arm=first_wipe volume_id=105149570` at 2026-09-30T20:06:14Z. Whether the go-ahead quotes this rehearsal or a later one: PENDING-EVIDENCE(go-ahead-rehearsal-match) | the `dry_run=true` dispatch quoted in the go-ahead |
-| **Dispatch run id** | PENDING-EVIDENCE(D-run-id) (every D run, if a `re_zero` or `detached` arm ran) | the `dry_run=false` dispatch |
-| **Forget run id** | PENDING-EVIDENCE(forget-run-id); its result row (`forgot=2`, `forgot=1`, or a traced `already_forgotten`): PENDING-EVIDENCE(forget-result) | `workspaces-plaintext-forget.yml`, dispatched from `main` before PR #9348 merges |
-| **Approver** | PENDING-EVIDENCE(approver) (a GitHub handle, never an email) | the environment approval record |
-| **The operator go-ahead, quoted** | PENDING-EVIDENCE(go-ahead-quote) | the session |
+| **Zero started / completed (UTC)** | 2026-10-08T15:36:46Z / 2026-10-08T15:41:41Z | run log / `luks-monitor` tag |
+| **Delete completed (UTC)** | 2026-10-08T15:42:04Z | the `wipe` job's API step (`DELETE` → `204`) |
+| **Rehearsal run id** | `36769782488` — `workflow_dispatch` on `main` at `59abf6a76c`, created 2026-09-30T20:02:05Z, concluded `success`; its host row is `result=rehearsal_ok arm=first_wipe volume_id=105149570` at 2026-09-30T20:06:14Z. The go-ahead quoted this rehearsal: the prompt that named the dispatch command cited "run `36769782488` ended `rehearsal_ok`" and no later rehearsal exists; D's head SHA shows no diff from the rehearsed `59abf6a76c` over the wipe code | the `dry_run=true` dispatch quoted in the go-ahead |
+| **Dispatch run id** | `37801674740` — `workflow_dispatch` on `main`, created 2026-10-08T15:32:58Z, concluded `success`; one D run only, arm `first_wipe` (no `re_zero`, no `detached`) | the `dry_run=false` dispatch |
+| **Forget run id** | `37803274724` — `workflow_dispatch` on `main`, created 2026-10-08T15:44:48Z, concluded `success` at 2026-10-08T15:46:43Z (`updated_at`, from which the 48 h merge bound runs); its result row: `forgot 2 address(es): hcloud_volume.workspaces["web-1"] hcloud_volume_attachment.workspaces["web-1"] (serial 1762 -> 1763, lineage unchanged)` | `workspaces-plaintext-forget.yml`, dispatched from `main` before PR #9348 merges |
+| **Approver** | `deruelle` (the required reviewer of the `workspaces-luks-cutover` environment; `approved` on run 37801674740 before the `wipe` job started) | the environment approval record |
+| **The operator go-ahead, quoted** | On 2026-10-08, to the question "Do you want me to run this exact command? `gh workflow run workspaces-luks-cutover.yml -f confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 -f wipe_plaintext=true -f dry_run=false -f expected_plaintext_volume_id=105149570`", the operator answered `yes` (about 15:32Z, after the earlier `go ahead` that paused both push-apply workflows); the operator then answered `approved` for the environment approval of the `wipe` job. Each action had its own per-command go-ahead naming the exact command. | the session |
 
 ### Target identity
 
 | Field | Value | Source |
 |---|---|---|
-| **Volume id / name** | `105149570` / `soleur-web-platform-data`, at rehearsal 36769782488 (2026-09-30); the `wiped` row's `volume_id`: PENDING-EVIDENCE(wiped-row) | preflight env and API classification; the `wiped` row's `volume_id` |
-| **Size** | 20 GiB / `21474836480` bytes, at rehearsal 36769782488 (2026-09-30) (`size=21474836480` on the host row; `size_bytes=21474836480` in preflight's API classification); the `wiped` row's `bytes`: PENDING-EVIDENCE(wiped-row) | preflight banner; the `wiped` row's `bytes` |
-| **`linux_device` / server** | server `123931471` (`WEB1_SERVER_ID`), and `serial=ok` (the device's hypervisor serial matched the pin), at rehearsal 36769782488 (2026-09-30); preflight classified the volume `api_state=attached`. The by-id path string itself is not printed by the rehearsal: PENDING-EVIDENCE(linux-device) | preflight banner |
+| **Volume id / name** | `105149570` / `soleur-web-platform-data`, at rehearsal 36769782488 (2026-09-30); the `wiped` row's `volume_id`: `105149570` (matches) | preflight env and API classification; the `wiped` row's `volume_id` |
+| **Size** | 20 GiB / `21474836480` bytes, at rehearsal 36769782488 (2026-09-30) (`size=21474836480` on the host row; `size_bytes=21474836480` in preflight's API classification); the `wiped` row's `bytes`: `21474836480` (matches) | preflight banner; the `wiped` row's `bytes` |
+| **`linux_device` / server** | server `123931471` (`WEB1_SERVER_ID`), and `serial=ok` (the device's hypervisor serial matched the pin), at rehearsal 36769782488 (2026-09-30); preflight classified the volume `api_state=attached`. The by-id path string itself is not printed by the rehearsal or by D; D's `begun` and `wiped` rows print `target=/dev/sdb` (same device as the rehearsal) | preflight banner |
 | **`format` / observed label / recorded mount source / fs UUID** | ext4 (superblock `magic=53ef`) / `label=none` / `plaintext_dev=/dev/sdb` (resolves to `target=/dev/sdb`) / `plaintext_fs_uuid=4cc6a724-f3b7-4c96-b607-af174f82169d`, at rehearsal 36769782488 (2026-09-30) | preflight banner; the rehearsal row's `label`, `plaintext_dev` and `plaintext_fs_uuid` |
 | **Resolved target vs the mapper's backing device** | `target=/dev/sdb`, `backing=/dev/sdc` — they differ, at rehearsal 36769782488 (2026-09-30) | rehearsal row (W6) |
 | **Holders / dependents / device units** | `holders=0 dependents=0 device_units=7`, at rehearsal 36769782488 (2026-09-30) | rehearsal row (W6, W6b) |
@@ -104,18 +104,18 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 
 | Field | Value | Source |
 |---|---|---|
-| **Discard / write-zeroes capability, scheduler** | `discard_gran=4096`, `discard_max=1073741824`, `write_zeroes_max=2147483136`, `scheduler=none`, at rehearsal 36769782488 (2026-09-30); on the `wiped` row: PENDING-EVIDENCE(wiped-row) | the `wiped` row (W8) |
+| **Discard / write-zeroes capability, scheduler** | `discard_gran=4096`, `discard_max=1073741824`, `write_zeroes_max=2147483136`, `scheduler=none`, at rehearsal 36769782488 (2026-09-30); on D's `wiped` row: `discard_gran=4096`, `discard_max=1073741824`, `write_zeroes_max=2147483136`, `scheduler=none` (identical) | the `wiped` row (W8) |
 | **Positive control** | `magic=53ef`, at rehearsal 36769782488 (2026-09-30) | W9 |
 | **Provenance: last mount / last write** | `last_mount=Mon Jul 20 22:42:07 2026`, `last_write=Thu Jul 23 09:40:34 2026` (no timezone printed), from the `field=last_mount` / `field=last_write` evidence rows at rehearsal 36769782488 (2026-09-30). The last write falls inside cutover run `29995956562`'s window, one second after its `persisted workspace inventory baseline: WORKSPACES_COUNT=8` line (2026-07-23T09:40:33Z) and before the 2026-07-23T09:45:00Z freeze bound, so nothing wrote to the copy after the cutover froze it | W9 evidence rows; cutover run 29995956562 log (that run concluded `failure` after the persist) |
 | **Zero command** | `blkdiscard -z -v <device>` under a cgroup `io.max` cap of `150000000` bytes/s read and write — never `-f` (O_EXCL on). In force at rehearsal 36769782488 (2026-09-30): `io_max=8:16_rbps=150000000_wbps=150000000_riops=max_wiops=max`. (Corrected 2026-10-01: the template read "150M"; the cap is plain bytes, because systemd reads a `150M` suffix in base 1000.) | the script; the `begun` row |
-| **Read-back** | PENDING-EVIDENCE(readback) (`readback=zero`, bytes read = size) | the `wiped` row (W11) |
-| **Signature after the zero** | PENDING-EVIDENCE(signature-after-zero) (expected: none, `blkid -p` rc 2) | W12 |
+| **Read-back** | `readback=zero` over 21474836480 bytes (`bytes=21474836480` = the volume size); `readback_start` 2026-10-08T15:39:16Z, `wiped` row 2026-10-08T15:41:41Z | the `wiped` row (W11) |
+| **Signature after the zero** | none. The host step emits the `wiped` row only after W12 sees `blkid -p` rc 2 on the zeroed device (script at `59abf6a76c`, W12), and the row exists; the blkid value is not printed as a separate line | W12 |
 
 ### Live data recoverable at wipe time
 
 | Field | Value | Source |
 |---|---|---|
-| **Live header UUID = persisted `CANARY_OK`** | `uuid=d42ede00-4ec4-48c6-9b83-f15ff3f69082`, at rehearsal 36769782488 (2026-09-30); at D: PENDING-EVIDENCE(wiped-row) | W3 |
+| **Live header UUID = persisted `CANARY_OK`** | `uuid=d42ede00-4ec4-48c6-9b83-f15ff3f69082`, at rehearsal 36769782488 (2026-09-30); at D: not printed on D's `wiped` row; W3 (the live header equals the persisted `CANARY_OK`) is a precondition the host step enforces before it emits that row (script at `59abf6a76c`, W3), and the row was emitted | W3 |
 | **Escrowed passphrase opens the live header** | yes, at rehearsal 36769782488 (2026-09-30): the `result=rehearsal_ok` row is emitted only after W3, W4 and W5 pass | W4 |
 | **Off-host header restorable and current** | `hdr_bytes=16777216`, `hdr_sha256=ac3447ec55082340d8de0e6a84a51439db1110464216dcb4e2f14df1c60dc98f`, at rehearsal 36769782488 (2026-09-30) | W5 |
 | **Same-day verify baseline** | run `36770448813` (2026-09-30T20:07:45Z, `success`): `ready=true workspace_count=9 expected=8` | `workspaces-luks-verify.yml` |
@@ -125,10 +125,10 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 
 | Field | Value | Source |
 |---|---|---|
-| **Detach action id / status** | PENDING-EVIDENCE(detach-action-id) (`n/a (arm=detached, run <id>)` if D ran on the detached arm) | the `wipe` job's API step |
-| **`DELETE` status; final `GET`** | PENDING-EVIDENCE(delete-status) ; PENDING-EVIDENCE(final-get-404) (expected `204`; a presence-proven `404`) | the `wipe` job's API step |
-| **Server `123931471` volumes after** | PENDING-EVIDENCE(server-volumes-after) (MUST be `[106443278]`) | the `wipe` job's API step |
-| **Terraform state diff** | PENDING-EVIDENCE(state-diff) (the two removed addresses, serial `n → n+1`, lineage unchanged) | the forget run |
+| **Detach action id / status** | `660248143891602` (arm `first_wipe`; the API step concluded `success`) | the `wipe` job's API step |
+| **`DELETE` status; final `GET`** | `DELETE` `204` (the step accepts only `204` and fails otherwise; it concluded `success`); final `GET` `404`, printed by the step at 2026-10-08T15:42:04Z ("GET -> 404"), presence-proven by the same token seeing web-1. Independently re-read after the run with the read-only token `HCLOUD_TOKEN_READONLY`: `GET /volumes/105149570` → `404 not_found` while `GET /servers/123931471` → `200` | the `wipe` job's API step |
+| **Server `123931471` volumes after** | `[106443278]` ("web-1 now holds only [106443278]"; re-read afterwards: server `123931471` `running`, volumes `[106443278]`) | the `wipe` job's API step |
+| **Terraform state diff** | removed `hcloud_volume.workspaces["web-1"]` and `hcloud_volume_attachment.workspaces["web-1"]` ("Successfully removed 2 resource instance(s)"); serial `1762 → 1763`, lineage unchanged | the forget run |
 
 ### Personal data destroyed
 
@@ -136,7 +136,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 |---|---|---|
 | **Categories** | Workspace source code and git history as of the 2026-07-23 cutover, including third-party commit authors' names/emails inside that history | the volume's role (ADR-119) |
 | **Workspace count on the copy** | 8 (COUNT only) — `persisted workspace inventory baseline: WORKSPACES_COUNT=8` at 2026-07-23T09:40:33Z | cutover run 29995956562 |
-| **Workspaces on the copy only (`plaintext_only_count`)** | 0, at rehearsal 36769782488 (2026-09-30) (`plaintext_only=0` on the host row and on the `field=plaintext_only` evidence row); at D: PENDING-EVIDENCE(plaintext-only-count-at-D). A non-zero value at D is dispositioned here by count before `complete`, and that run's logs are deleted after capture (they would carry workspace ids) | rehearsal row; the D host row |
+| **Workspaces on the copy only (`plaintext_only_count`)** | 0, at rehearsal 36769782488 (2026-09-30) (`plaintext_only=0` on the host row and on the `field=plaintext_only` evidence row); at D: 0 (`plaintext_only=0` on D's host row and on its `field=plaintext_only` evidence row). A non-zero value at D is dispositioned here by count before `complete`, and that run's logs are deleted after capture (they would carry workspace ids) | rehearsal row; the D host row |
 | **Art. 17 account deletions on the live volume between 2026-07-23 and the wipe** | Bounded, not counted: the copy was frozen 2026-07-23, before the first arm's-length onboarding on 2026-08-06 (tester #1, `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`), so any Art. 17 erasure the copy defeated is bounded to the owners of the 8 workspaces frozen on it (re-evaluation trigger (2) of the #6588 counsel review) | the account-deletion audit trail; cutover run 29995956562 |
 
 ### Basis, recoverability, other copies

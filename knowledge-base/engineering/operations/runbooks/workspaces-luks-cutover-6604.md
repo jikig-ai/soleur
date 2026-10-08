@@ -316,11 +316,11 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 
 7. **RETIRED by PR #9348 — the retained plaintext volume is wiped and deleted, and Terraform
    converges (#6604 step 7; PR A #9163 / #9286, PR B #9348); complete only once D and the forget have
-   run, PENDING-EVIDENCE(D-date).** The retained plaintext volume (`105149570`,
+   run, 2026-10-08.** The retained plaintext volume (`105149570`,
    `soleur-web-platform-data`, `hcloud_volume.workspaces["web-1"]`) is a superseded copy frozen at the
    2026-07-23 cutover. The wipe dispatch D zeroes it with a full-device read-back, detaches and deletes
-   it (PENDING-EVIDENCE(D-run-id)), and the forget removes its two Terraform addresses
-   (PENDING-EVIDENCE(forget-run-id)). PR #9348 merges only after both (the plan's §Operator Holds).
+   it (run 37801674740), and the forget removes its two Terraform addresses
+   (run 37803274724). PR #9348 merges only after both (the plan's §Operator Holds).
    From D's `delete_issued=true`, the LUKS volume `106443278` holds the **only** copy of every
    workspace.
 

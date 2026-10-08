@@ -1033,10 +1033,10 @@ workflow-injection guidance. All action references are SHA-pinned.
   still sits attached and unopened, which is why the refusal stands. See
   tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
 
-  Superseded PENDING-EVIDENCE(D-date) (#6604 step 7), as to "DECISIVELY ... rolled back to
+  Superseded 2026-10-08 (#6604 step 7), as to "DECISIVELY ... rolled back to
   2026-07-23": this note holds only after the wipe dispatch D concludes with
   delete_issued=true, which zeroes web-1's plaintext volume (105149570) with a read-back
-  PENDING-EVIDENCE(readback) and deletes it PENDING-EVIDENCE(delete-UTC) (destruction record:
+  `readback=zero` over 21474836480 bytes and deletes it 2026-10-08T15:42:04Z (destruction record:
   knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). On the merge of
   PR #9348 hcloud_volume.workspaces ranges over every web host except web-1 and web-1's
   workspaces_volume_id is the literal "retired-6604", so a rebuilt web-1 would emit

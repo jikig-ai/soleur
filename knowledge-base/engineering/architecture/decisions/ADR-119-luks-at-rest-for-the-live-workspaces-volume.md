@@ -1459,7 +1459,7 @@ as written.
   at boot becomes true only after the volume rebirth (#9372); until then it is the empty Hetzner-formatted
   ext4 volume, kept un-pooled by `lb-weight-gate.sh`.
 
-## Addendum (PENDING-EVIDENCE(D-date)): the plaintext backstop is retired (#6604 step 7, PR B)
+## Addendum (2026-10-08): the plaintext backstop is retired (#6604 step 7, PR B)
 
 **Status condition.** This ADR's `status:` reads `accepted` only once the Art. 5(2) destruction record
 (`knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md`) reads `status: complete` and
@@ -1471,8 +1471,8 @@ have run (the plan's §Operator Holds).
 
 **What ran (by reference to the record).** The as-run facts — the dispatch run(s), the `wiped` row, the
 read-back, the detach and delete, the state forget, the approver — live in the destruction record and
-nowhere else; this addendum does not restate them. Dispatch: PENDING-EVIDENCE(D-run-id). Forget:
-PENDING-EVIDENCE(forget-run-id). Evidence already in hand: rehearsal run `36769782488` (2026-09-30,
+nowhere else; this addendum does not restate them. Dispatch: run 37801674740. Forget:
+run 37803274724. Evidence already in hand: rehearsal run `36769782488` (2026-09-30,
 `result=rehearsal_ok arm=first_wipe volume_id=105149570`, `target=/dev/sdb` ≠ `backing=/dev/sdc`,
 `holders=0 dependents=0`, `plaintext_only=0`) and the same-day baseline run `36770448813`
 (`ready=true workspace_count=9 expected=8`).
@@ -1480,7 +1480,7 @@ PENDING-EVIDENCE(forget-run-id). Evidence already in hand: rehearsal run `367697
 - **AP-009 basis.** The volume D deletes is a superseded copy frozen at the 2026-07-23 cutover (run
   29995956562, 8 workspaces). At the rehearsal, `plaintext_only=0`: no workspace existed only on that
   copy, so the wipe destroys nothing the live volume lacks, provided D re-reads the same count
-  (PENDING-EVIDENCE(plaintext-only-count-at-D)).
+  (0 (`plaintext_only=0` on D's host row and on its `field=plaintext_only` evidence row)).
 - **The accepted drop to a single copy.** From D's `delete_issued=true`, volume `106443278`
   (`hcloud_volume.workspaces_luks`) holds the only copy of every workspace. There is no backup and no snapshot of it; escrow (the Doppler
   passphrase and the off-host header) covers key loss, not data loss. Hardware loss of that volume stays
@@ -1524,7 +1524,7 @@ PENDING-EVIDENCE(forget-run-id). Evidence already in hand: rehearsal run `367697
 - **The `CONFIRM_WIPE` mode is a tombstone.** The wipe body, `wipe_plaintext()` and its helpers, the
   `wipe` job and the forget workflow are deleted by PR #9348 (the procedure is in git history at
   `59abf6a76c`, and it is the procedure as run once the release check's `git diff --quiet` of D's and
-  the forget's head SHAs against it passes: PENDING-EVIDENCE(D-head-sha)). Until that merge they exist on `main` only, and D and the forget are dispatched from
+  the forget's head SHAs against it passes: D, run 37801674740, at `57cc8494d58626f02c47f35f15e1b7219133c9b7`, and the forget, run 37803274724, at `425ea0fc1fda3624e53c46771d76580c43d36e90`, both with no diff from `59abf6a76c`). Until that merge they exist on `main` only, and D and the forget are dispatched from
   `main` (the `workspaces-luks-cutover` environment admits `main` only), so they run `main`'s copies and
   every resume arm stays available until the merge deletes them. `CONFIRM_WIPE` stays declared and counted by `assert_mode_exclusive`; any value other
   than unset or `0` writes one `result=cutover_aborted outcome=wipe_retired` row, drops the EXIT trap and
