@@ -19,12 +19,15 @@
 # Exit codes:
 #   0 - Success
 #   1 - General error, including missing credentials and a write-env value outside the .env
-#       allow-list. The two are told apart by the stderr marker: an allow-list refusal prints
-#       `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free); its one human
-#       line is on stdout.
+#       allow-list. The two are told apart by the stderr marker, which ONLY the allow-list refusal
+#       emits: `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free). Exit 1 with
+#       that marker is the allow-list; exit 1 without it is a missing credential.
 #
 # Output: JSON or plain text to stdout
-# Errors: Messages to stderr, exit 1 (the write-env allow-list line: stdout)
+# Errors: Messages to stderr, exit 1. The exception is `write-env`, which has no stdout payload and
+#         whose human text is therefore all on STDOUT (agent runtimes surface stdout and swallow
+#         stderr): the missing-credentials diagnostic, the allow-list line, and the "Wrote N
+#         variables" confirmation. Only the allow-list marker stays on stderr.
 
 set -euo pipefail
 
@@ -270,8 +273,11 @@ _cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; 
 
 # --- OAuth 1.0a signing ---
 
-# URL-encode a string per RFC 3986
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
 urlencode() {
+  local LC_ALL=C
   local string="$1"
   local encoded=""
   local i c o
@@ -435,7 +441,9 @@ cmd_validate_credentials() {
 }
 
 cmd_write_env() {
-  require_credentials
+  # write-env has no stdout payload, so its missing-credentials diagnostic goes to STDOUT too
+  # (require_credentials writes it to stderr, shared with the other commands; exit 1 either way).
+  require_credentials 2>&1
   # Every value is checked BEFORE the first write (see the allow-list above).
   _wenv_validate X_API_KEY X_API_SECRET X_ACCESS_TOKEN X_ACCESS_TOKEN_SECRET
 
@@ -465,7 +473,7 @@ cmd_write_env() {
     echo "X_ACCESS_TOKEN_SECRET=${X_ACCESS_TOKEN_SECRET}"
   } >> "$env_file"
 
-  echo "Wrote 4 variables to ${env_file} (permissions: 600)" >&2
+  echo "Wrote 4 variables to ${env_file} (permissions: 600)"
 }
 
 cmd_verify() {

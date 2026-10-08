@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # hmac-sha1-b64.sh -- RFC 2104 HMAC-SHA1 in bash, for OAuth 1.0a request signing.
-# Sourced by x-community.sh (lazily, at its first signature, so a trace-safe run with no credentials
-# set is never refused over this file) and by x-setup.sh (at load; its own prologue refuses
+# Sourced by x-community.sh (lazily, inside oauth_sign at EACH signature (oauth_sign runs in a
+# command-substitution subshell, so nothing is cached between calls), so a trace-safe run with no
+# credentials set is never refused over this file) and by x-setup.sh (at load; its own prologue refuses
 # `bash -x` unconditionally). Defines ONE function and runs nothing.
 #
 # WHY THIS EXISTS (#9597). The signing key (the API secret and the token secret, joined
@@ -52,8 +53,8 @@ case "$-" in
     # Load-time refusal, first in the file (the xtrace lint's prologue rule, #7797): sourcing
     # this under `bash -x` and then calling it would print the key. It is UNCONDITIONAL because
     # this file names its key indirectly (`${!1}`), so there is no literal credential name for a
-    # conditional `${VAR:+x}` hatch to test. That is why x-community.sh sources it lazily, at its
-    # first signature, after its own conditional prologue has already allowed the run. A sourced
+    # conditional `${VAR:+x}` hatch to test. That is why x-community.sh sources it lazily, at each
+    # signature, after its own conditional prologue has already allowed the run. A sourced
     # file returns; the `|| exit` arm runs only if the file is EXECUTED instead of sourced. The
     # refusal goes to STDOUT here, like the other prologues: agent runtimes surface stdout and
     # swallow stderr. A caller that sources this inside a command substitution redirects the

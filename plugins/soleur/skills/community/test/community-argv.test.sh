@@ -116,7 +116,9 @@ fi
 # shellcheck disable=SC1090
 [[ -r "$HMAC_LIB" ]] && source "$HMAC_LIB"
 
-for dep in jq openssl; do
+# python3: ONLY the test uses it (the independent RFC 5849 percent-encoder of the OAuth oracle); the
+# scripts under test never do, and the hosted runner image has none.
+for dep in jq openssl python3; do
   if ! command -v "$dep" >/dev/null 2>&1; then
     if [[ -n "${CI:-}" ]]; then
       echo "FAIL: $dep is required in CI but not found" >&2
@@ -1318,17 +1320,15 @@ echo "== OAuth 1.0a signing through the scripts (recording shims) =="
 # check; the default fixtures are unreserved characters, where the encoding is the identity, so the
 # reserved-character run further down is what pins it.
 SIGN_S="$X_SECRET" SIGN_T="$X_TOKSECRET"
-t_urlenc() {
-  local s="$1" out="" i c o
-  for (( i = 0; i < ${#s}; i++ )); do
-    c="${s:i:1}"
-    case "$c" in
-      [A-Za-z0-9._~-]) out+="$c" ;;
-      *) printf -v o '%%%02X' "'$c"; out+="$o" ;;
-    esac
-  done
-  printf '%s' "$out"
-}
+# The oracle's percent-encoder is NOT a copy of the script's `urlencode` (a line-for-line copy agreed
+# with it on a multi-byte character and both disagreed with the RFC): it is Python's, over the UTF-8
+# BYTES of the string, leaving exactly the RFC 5849 3.6 unreserved set (ALPHA DIGIT - . _ ~).
+t_urlenc() { python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+check "oracle encoder: the RFC 5849 reserved set and a space encode per the RFC (hard-coded expectation, not the SUT's output)" \
+  test "$(t_urlenc 'a b+c/d=e&f~g%h:i')" = 'a%20b%2Bc%2Fd%3De%26f~g%25h%3Ai'
+check "oracle encoder: a multi-byte character encodes as its UTF-8 BYTES (%C3%A9%E2%82%AC for e-acute and euro), not as code points" \
+  test "$(t_urlenc 'é€')" = '%C3%A9%E2%82%AC'
+check "oracle encoder: an empty string encodes to an empty string" test -z "$(t_urlenc '')"
 x_signkey() { printf '%s&%s' "$(t_urlenc "$SIGN_S")" "$(t_urlenc "$SIGN_T")"; }
 x_keyhex() { printf '%s' "$SIGN_S" | od -An -tx1 | tr -d ' \n'; }
 # x_sig_ok <n> <METHOD>: the oauth_signature on call n equals an INDEPENDENT recomputation from the
@@ -1430,6 +1430,63 @@ check "mutant: x-setup with the key left unencoded is RED on the reserved run (a
 check "mutant: x-setup with the key left unencoded: the oracle rejects its signature" not x_sig_ok 1 GET
 SIGN_S="$X_SECRET" SIGN_T="$X_TOKSECRET"
 
+# --- multi-byte characters in the secrets: the key is encoded as its UTF-8 BYTES (RFC 5849 3.6) -----
+# The script runs here under a UTF-8 locale (env -i would otherwise leave it in the C locale, where a
+# character-wise loop is byte-wise by accident). The oracle's encoder is Python's, over the bytes.
+echo "== OAuth 1.0a signing key with multi-byte characters in the secrets =="
+XU_LOC=C.UTF-8
+XU_S='Sécret€one' XU_T='tökén€two'
+XU_ENV=("LC_ALL=$XU_LOC" "X_API_KEY=$X_KEY" "X_API_SECRET=$XU_S" "X_ACCESS_TOKEN=$X_TOK" "X_ACCESS_TOKEN_SECRET=$XU_T" X_ALLOW_POST=true)
+check "multi-byte canary: the $XU_LOC locale is installed here and counts one character for e-acute (the row is not vacuous)" \
+  bash -c '[[ "$(LC_ALL="$1" bash -c "echo \${#1}" _ "é")" == 1 ]]' _ "$XU_LOC"
+SIGN_S="$XU_S" SIGN_T="$XU_T"
+check "multi-byte fixture: the encoded key holds the UTF-8 byte escapes, not code points (%C3%A9, not %E9)" \
+  bash -c '[[ "$1" == *"%C3%A9"* && "$1" != *"%E9"* ]]' _ "$(x_signkey)"
+rec_clear
+run_sut "$REC" "" "${XU_ENV[@]}" -- bash "$X_COMMUNITY" fetch-metrics
+check "multi-byte secrets, x-community fetch-metrics: exit 0, one curl call" bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "multi-byte secrets, x-community: the signature equals the oracle over the byte-encoded key" x_sig_ok 1 GET
+rec_clear
+RUN_CWD="$GITWORK" run_sut "$REC" "" "${XU_ENV[@]}" -- bash "$X_SETUP" validate-credentials
+check "multi-byte secrets, x-setup validate-credentials: exit 0, one curl call" bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "multi-byte secrets, x-setup: the signature equals the oracle over the byte-encoded key" x_sig_ok 1 GET
+# Mutants: the code-point encoding comes back (no LC_ALL=C in urlencode) -> the oracle disagrees.
+M="$(mut_make x-community.sh 'urlencode() {
+  local LC_ALL=C
+' 'urlencode() {
+')"
+run_sut "$REC" "" "${XU_ENV[@]}" -- bash "$M" fetch-metrics
+check "mutant: x-community urlencode without LC_ALL=C still signs and sends one request (exit 0)" bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "mutant: x-community urlencode without LC_ALL=C encodes a multi-byte secret by code point: the oracle rejects its signature" not x_sig_ok 1 GET
+M="$(mut_make x-setup.sh 'urlencode() {
+  local LC_ALL=C
+' 'urlencode() {
+')"
+RUN_CWD="$GITWORK" run_sut "$REC" "" "${XU_ENV[@]}" -- bash "$M" validate-credentials
+check "mutant: x-setup urlencode without LC_ALL=C still signs and sends one request (exit 0)" bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "mutant: x-setup urlencode without LC_ALL=C encodes a multi-byte secret by code point: the oracle rejects its signature" not x_sig_ok 1 GET
+SIGN_S="$X_SECRET" SIGN_T="$X_TOKSECRET"
+
+# --- an inherited exported function named hmac_sha1_b64 must not stand in for the vetted library ------
+echo "== x-community.sh: an inherited hmac_sha1_b64 function =="
+IMPFN='BASH_FUNC_hmac_sha1_b64%%=() { echo IMPORTED; }'
+check "inherited-function canary: bash imports that exported function from the environment here (the row is not vacuous)" \
+  bash -c '[[ "$(env "$1" bash -c "type -t hmac_sha1_b64")" == function ]]' _ "$IMPFN"
+rec_clear
+run_sut "$REC" "" "${X_ENV[@]}" "$IMPFN" -- bash "$X_COMMUNITY" fetch-metrics
+check "inherited hmac_sha1_b64 function: x-community still exits 0 with one curl call" bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "inherited hmac_sha1_b64 function: the signature is the vetted library's (equals the independent recomputation), not the inherited stand-in's" x_sig_ok 1 GET
+# Mutant: the pre-fix guard (load the library only when no such function exists) and no unset -> the stand-in runs.
+M="$(mut_make x-community.sh 'unset -f hmac_sha1_b64 2>/dev/null || true' ':' 'source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {' 'declare -F hmac_sha1_b64 >/dev/null || source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {')"
+rec_clear
+run_sut "$REC" "" "${X_ENV[@]}" "$IMPFN" -- bash "$M" fetch-metrics
+check "mutant: x-community with the declare -F guard and no unset still sends one request (exit 0)" bash -c '[[ "$1" -eq 0 && "$2" -eq 1 ]]' _ "$RC" "$(curl_calls)"
+check "mutant: that guard mutant signs with the INHERITED function: the oracle rejects the signature (RED on the row above)" not x_sig_ok 1 GET
+# The control for the mutant: the same mutant without an inherited function signs correctly (the guard alone is harmless).
+rec_clear
+run_sut "$REC" "" "${X_ENV[@]}" -- bash "$M" fetch-metrics
+check "mutant control: the same guard mutant with NO inherited function signs correctly (the row is RED because of the import)" x_sig_ok 1 GET
+
 # Lazy loading: the library is sourced inside oauth_sign, and the top-level source line is gone.
 check "x-community.sh: the only source of lib/hmac-sha1-b64.sh sits inside oauth_sign (lazy, not at load)" \
   awk 'BEGIN{f=0;n=0;ins=0} /^oauth_sign\(\) \{/{f=1} /^}/{f=0} /^[[:space:]]*#/{next} /source .*lib\/hmac-sha1-b64\.sh/{n++; if(f)ins++} END{exit !(n==1 && ins==1)}' "$X_COMMUNITY"
@@ -1452,6 +1509,17 @@ check "x-community with the signing library missing: exit 1, curl never invoked,
   bash -c '[[ "$1" -eq 1 && "$2" -eq 0 && "$3" == *"could not load the OAuth signing helper"* ]]' _ "$RC" "$(curl_calls)" "$ERR"
 check "x-community with the signing library missing: no credential reaches either stream" \
   bash -c '[[ "$1" != *"$2"* && "$1" != *"$3"* ]]' _ "$OUT$ERR" "$X_SECRET" "$X_TOKSECRET"
+nolib_one_error() { # the load failure is the ONE error: no second, misleading "unexpected shape" line
+  [[ "$ERR" != *"unexpected shape"* && "$OUT$ERR" != *"unexpected shape"* && "$(awk '/^Error:/ {n++} END {print n + 0}' <<<"$ERR")" -eq 1 ]]
+}
+check "x-community with the signing library missing: exactly one Error line, and no second 'unexpected shape' line" nolib_one_error
+# Mutant: the failed signature no longer stops the caller, so the empty header falls through to the shape check.
+M="$(mut_make x-community.sh 'auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}") || exit 1' 'auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}")')"
+mkdir -p "$NOLIB/mut2"; cp "$M" "$NOLIB/mut2/x-community.sh"
+run_sut - "" "${X_ENV[@]}" -- bash "$NOLIB/mut2/x-community.sh" fetch-metrics
+check "mutant: x-community without the exit after a failed signature still exits 1 and sends nothing (so only the one-error row can catch it)" \
+  bash -c '[[ "$1" -eq 1 && "$2" -eq 0 ]]' _ "$RC" "$(curl_calls)"
+check "mutant: that mutant prints the second, misleading 'unexpected shape' line (RED on the one-error row)" not nolib_one_error
 M="$(mut_make x-community.sh 'source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {' 'source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 2>/dev/null || true; : || {')"
 cp "$M" "$NOLIB/mut/x-community.sh"
 run_sut - "" "${X_ENV[@]}" -- bash "$NOLIB/mut/x-community.sh" fetch-metrics
@@ -1485,11 +1553,14 @@ SENT="$SANDBOX/SENTINEL.fired"
 WE_VAL="" WE_REASON="" WE_RUNS=0
 # The classes the allow-list must refuse. The first seven were the original matrix; the rest close the
 # shell metacharacters it omitted (& | < > ' # * ? [ { ! $ and a backslash, alone and glued to a
-# command substitution) plus the two control characters other than a newline (tab, CR). Each of the
+# command substitution) plus the two control characters other than a newline (tab, CR), and the two
+# parentheses (a subshell / array / function-definition opener and closer). Each of the
 # single-character classes holds ONLY that one hostile character beside letters, so widening the
 # allow-list by exactly that character is what the class's row must catch (a value that also held a
 # second hostile character would stay refused for the second one).
-WE_CLASSES=(cmdsub backtick nlassign dquote semi space tilde amp pipe lt gt squote hash star qmark lbracket lbrace bang dollar backslash bsglue tab cr)
+WE_CLASSES=(cmdsub backtick nlassign dquote semi space tilde amp pipe lt gt squote hash star qmark lbracket lbrace bang dollar backslash bsglue tab cr lparen rparen)
+# The classes that must always be present by NAME (a list cannot shrink to a few, or repeat one, and stay green).
+WE_REQUIRED_CLASSES=(cmdsub backtick nlassign dquote semi space tilde lparen rparen backslash tab cr squote dollar)
 we_class_val() { # <class> -> WE_VAL, WE_REASON
   WE_REASON=token_shape
   case "$1" in
@@ -1516,6 +1587,8 @@ we_class_val() { # <class> -> WE_VAL, WE_REASON
     bsglue)   WE_VAL="abc\\\$(touch $SENT)" ;;
     tab)      WE_VAL=$'abc\tdef'; WE_REASON=control_char ;;
     cr)       WE_VAL=$'abc\rdef'; WE_REASON=control_char ;;
+    lparen)   WE_VAL='abc(def' ;;
+    rparen)   WE_VAL='abc)def' ;;
     *) echo "FATAL: unknown class $1" >&2; exit 2 ;;
   esac
 }
@@ -1597,6 +1670,20 @@ check "bsky-setup write-env round trip: exit 0, no marker, mode 600 (an existing
 check "bsky-setup write-env round trip: .env is mode 600" we_mode_600
 check "bsky-setup write-env round trip: sourcing .env yields both values byte-for-byte, once each, and the unrelated line survives" \
   we_values_ok "BSKY_HANDLE=$LONG_HANDLE" "BSKY_APP_PASSWORD=$BS_PW2"
+# The confirmation is human text of a command with no stdout payload: STDOUT, like the refusal line.
+we_wrote_stdout() { # <N>: exactly one "Wrote N variables to <path> (permissions: 600)" line on stdout, nothing on stderr
+  [[ "$OUT" == "Wrote $1 variables to "*" (permissions: 600)" && "$(wc -l <<<"$OUT")" -eq 1 && -z "$ERR" ]]
+}
+check "bsky-setup write-env round trip: the 'Wrote 2 variables' confirmation is the one line on stdout and stderr is empty" we_wrote_stdout 2
+# Missing credentials: also stdout (write-env has no stdout payload), exit 1, and NO marker (the marker is the allow-list's alone).
+we_missing_stdout() { # <expected-missing-credential-name>
+  [[ "$RC" -eq 1 && "$OUT" == *"Error: Missing "*"credentials: "*"$1"* && "$OUT" == *"To configure:"* \
+    && -z "$ERR" && "$OUT$ERR" != *SOLEUR_CREDENTIAL_REFUSED* ]]
+}
+printf '%s\n' "$BS_SEED" > "$GITWORK/.env"; cp "$GITWORK/.env" "$SANDBOX/env.before"
+RUN_CWD="$GITWORK" run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" -- bash "$BSKY_SETUP" write-env
+check "bsky-setup write-env with BSKY_APP_PASSWORD missing: exit 1, the diagnostic names it on STDOUT, stderr empty, no marker" we_missing_stdout BSKY_APP_PASSWORD
+check "bsky-setup write-env with a credential missing: the existing .env is left byte-identical" cmp -s "$SANDBOX/env.before" "$GITWORK/.env"
 
 # --- x-setup.sh -------------------------------------------------------------------------------
 XS_SEED=$'KEEP_ME=1\nX_API_KEY=old\nX_API_SECRET=old\nX_ACCESS_TOKEN=old\nX_ACCESS_TOKEN_SECRET=old\nOTHER=2'
@@ -1612,6 +1699,11 @@ check "x-setup write-env round trip: exit 0, no marker" bash -c '[[ "$1" -eq 0 &
 check "x-setup write-env round trip: .env is mode 600" we_mode_600
 check "x-setup write-env round trip: sourcing .env yields all four values byte-for-byte (a secret holding + / = : %), once each, and the unrelated line survives" \
   we_values_ok "X_API_KEY=$XS_K" "X_API_SECRET=$XS_S" "X_ACCESS_TOKEN=$XS_T" "X_ACCESS_TOKEN_SECRET=$XS_TS"
+check "x-setup write-env round trip: the 'Wrote 4 variables' confirmation is the one line on stdout and stderr is empty" we_wrote_stdout 4
+printf '%s\n' "$XS_SEED" > "$GITWORK/.env"; cp "$GITWORK/.env" "$SANDBOX/env.before"
+RUN_CWD="$GITWORK" run_sut - "" "X_API_KEY=$XS_K" "X_API_SECRET=$XS_S" "X_ACCESS_TOKEN=$XS_T" -- bash "$X_SETUP" write-env
+check "x-setup write-env with X_ACCESS_TOKEN_SECRET missing: exit 1, the diagnostic names it on STDOUT, stderr empty, no marker" we_missing_stdout X_ACCESS_TOKEN_SECRET
+check "x-setup write-env with a credential missing: the existing .env is left byte-identical" cmp -s "$SANDBOX/env.before" "$GITWORK/.env"
 
 # --- discord-setup.sh -------------------------------------------------------------------------
 DW_URL="https://discord.com/api/webhooks/123456789012345678/SYNTHwebhook-token_0001"
@@ -1623,13 +1715,24 @@ DS_VARS=(DISCORD_BOT_TOKEN_INPUT DISCORD_WEBHOOK_URL_INPUT DISCORD_RELEASES_WEBH
 for var_ in "${DS_VARS[@]}"; do
   for cls_ in "${WE_CLASSES[@]}"; do we_run_bad "discord-setup" "$DS_SEED" "$DISCORD_SETUP" "$var_" "$cls_" write-env "$GUILD"; done
 done
-check "write-env hostile rows: the matrix has at least 23 classes (a shrunk class list must fail)" test "${#WE_CLASSES[@]}" -ge 23
+# The floor counts DISTINCT classes (sort -u), not array elements or words: eight copies of one class,
+# or a list cut to a few, must not satisfy it. The required names are asserted present on top of the count.
+we_distinct_classes() { printf '%s\n' "$@" | sort -u | wc -l; }
+we_has_all_required() { local want c; for want in "${WE_REQUIRED_CLASSES[@]}"; do for c in "$@"; do [[ "$c" == "$want" ]] && continue 2; done; return 1; done; }
+check "write-env hostile rows: the matrix has at least 25 DISTINCT classes (a shrunk or duplicated class list must fail)" test "$(we_distinct_classes "${WE_CLASSES[@]}")" -ge 25
+check "write-env hostile rows: every required class (parentheses, backslash, tab, CR, quote, dollar, ...) is present by name" we_has_all_required "${WE_CLASSES[@]}"
+we_distinct_is() { [[ "$(we_distinct_classes "${@:2}")" -eq "$1" ]]; }
+check "write-env hostile rows: the distinct counter counts three copies of one class as 1" we_distinct_is 1 quote quote quote
+check "write-env hostile rows: the distinct counter counts one duplicate among four classes as 3" we_distinct_is 3 quote quote semi pipe
+check "write-env hostile rows: the required-name check discriminates (a list missing lparen is refused)" \
+  not we_has_all_required cmdsub backtick nlassign dquote semi space tilde rparen backslash tab cr squote dollar
 check "write-env hostile rows: the inner counter saw every run (${#BS_VARS[@]} + ${#XS_VARS[@]} + ${#DS_VARS[@]} variables x ${#WE_CLASSES[@]} classes)" \
   test "$WE_RUNS" -eq "$(( (${#BS_VARS[@]} + ${#XS_VARS[@]} + ${#DS_VARS[@]}) * ${#WE_CLASSES[@]} ))"
 printf '%s\n' "$DS_SEED" > "$GITWORK/.env"; chmod 644 "$GITWORK/.env"
 RUN_CWD="$GITWORK" run_sut - "" "${WE_BASE[@]}" -- bash "$DISCORD_SETUP" write-env "$GUILD"
 check "discord-setup write-env round trip (webhook URL from the environment): exit 0, no marker" \
   bash -c '[[ "$1" -eq 0 && "$2" != *SOLEUR_CREDENTIAL_REFUSED* ]]' _ "$RC" "$ERR"
+check "discord-setup write-env round trip: the 'Wrote 5 variables' confirmation is the one line on stdout and stderr is empty" we_wrote_stdout 5
 check "discord-setup write-env round trip: .env is mode 600" we_mode_600
 check "discord-setup write-env round trip: all five values byte-for-byte, once each, and the unrelated line survives" \
   we_values_ok "DISCORD_BOT_TOKEN=$DISC_TOK" "DISCORD_GUILD_ID=$GUILD" "DISCORD_WEBHOOK_URL=$DW_URL" "DISCORD_RELEASES_WEBHOOK_URL=$DW_REL" "DISCORD_BLOG_WEBHOOK_URL=$DW_BLOG"
@@ -1656,9 +1759,19 @@ dw_devnull_run() {
   OUT="$(cat "$o")"
   ERR="$(cat "$e")"
 }
-DW_INLINE='DISCORD_WEBHOOK_URL_INPUT=<webhook-url> discord-setup.sh write-env <guild_id>'
-DW_PIPE='| { read -r DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT; discord-setup.sh write-env <guild_id>; }'
-dw_remedy_non_tty() { [[ "$OUT" == *"$DW_INLINE"* && "$OUT" == *"$DW_PIPE"* && "$OUT" == *"stdin is not a terminal"* ]]; }
+# The non-TTY remedy keeps every value out of the COMMAND TEXT (the transcript, the shell history, a
+# wrapper's argument list): the values are read from mode-600 files. An inline `VAR=value command`, and
+# any `printf '%s' "$URL" |` form (the URL has to come from somewhere typed into a command), is NOT offered.
+DW_FILEFORM='read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id>'
+DW_INLINE_RE='(^|[[:space:]])DISCORD_[A-Z_]+_INPUT=[^[:space:]]'
+# dw_no_inline: no `DISCORD_*_INPUT=<something>` word anywhere in the output, and no printf/$URL pipe form.
+dw_no_inline() { [[ ! "$OUT" =~ $DW_INLINE_RE ]] && [[ "$OUT" != *printf* && "$OUT" != *'$URL'* ]]; }
+# dw_names_token: the remedy names the bot token too (a missing webhook plus a missing token must not give a second bare exit 64).
+dw_names_token() { [[ "$OUT" == *"read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT"* ]]; }
+dw_remedy_non_tty() {
+  [[ "$OUT" == *"$DW_FILEFORM"* && "$OUT" == *"stdin is not a terminal"* \
+    && "$OUT" == *"create-webhook <channel_id> > /path/to/webhook-url.txt"* ]] && dw_names_token && dw_no_inline
+}
 dw_quiet_clean() { dw_no_secret && dw_untouched && dw_no_marker; }
 dw_untouched() { cmp -s "$SANDBOX/env.before" "$GITWORK/.env"; }
 dw_quiet_untouched() { dw_no_secret && dw_untouched; }
@@ -1668,21 +1781,26 @@ dw_untouched_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$DISCORD_SETUP" wr
 check "discord positional webhook (env unset): refused with exit 64" test "$RC" -eq 64
 check "discord positional webhook: the message (on stdout) names DISCORD_WEBHOOK_URL_INPUT and shows the interactive no-history form" \
   bash -c '[[ "$1" == *DISCORD_WEBHOOK_URL_INPUT* && "$1" == *"read -rs DISCORD_WEBHOOK_URL_INPUT"* ]]' _ "$OUT"
-check "discord positional webhook: stdin is not a terminal here, so the remedy ALSO names the inline-assignment form and the pipe-to-read form (read -rs needs a TTY)" dw_remedy_non_tty
+check "discord positional webhook: stdin is not a terminal here, so the remedy ALSO gives the read-from-a-mode-600-file form for both inputs and recommends no inline VAR=value form (read -rs needs a TTY)" dw_remedy_non_tty
 check "discord positional webhook: the whole usage error is on stdout (nothing on stderr)" test -z "$ERR"
 check "discord positional webhook: the argument is never echoed (stdout and stderr)" dw_no_secret
 check "discord positional webhook: not the credential-shape marker (this is a usage error)" dw_no_marker
 check "discord positional webhook: an existing .env is left byte-identical" dw_untouched
 # (1a) the same, with stdin from /dev/null (no terminal, as in an agent runtime)
 dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$DISCORD_SETUP" write-env "$GUILD" "$DW_URL"
-check "discord positional webhook, stdin </dev/null: exit 64 and the remedy names the inline-assignment and pipe-to-read forms" \
+check "discord positional webhook, stdin </dev/null: exit 64 and the remedy gives the file-read form" \
   bash -c '[[ "$1" -eq 64 ]]' _ "$RC"
 check "discord positional webhook, stdin </dev/null: the non-TTY remedy text is on stdout" dw_remedy_non_tty
 check "discord positional webhook, stdin </dev/null: the argument is never echoed, .env untouched" dw_quiet_untouched
 dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$DISCORD_SETUP" write-env "$GUILD"
-check "discord write-env with no webhook, stdin </dev/null: exit 64 and the non-TTY remedy (inline assignment, pipe-to-read) on stdout" \
+check "discord write-env with no webhook, stdin </dev/null: exit 64 and the non-TTY remedy (file-read form) on stdout" \
   bash -c '[[ "$1" -eq 64 ]]' _ "$RC"
-check "discord write-env with no webhook, stdin </dev/null: the remedy text names the non-TTY forms" dw_remedy_non_tty
+check "discord write-env with no webhook, stdin </dev/null: the remedy text gives the file-read form for both inputs" dw_remedy_non_tty
+check "discord write-env with no webhook, stdin </dev/null: the remedy recommends no inline VAR=value form and no printf/\$URL pipe form" dw_no_inline
+check "discord write-env with no webhook, stdin </dev/null: the remedy also names DISCORD_BOT_TOKEN_INPUT (following it once does not give a second bare exit 64)" dw_names_token
+check "discord write-env with no webhook, stdin </dev/null: the remedy states the residual (values stay in the files until deleted; create-webhook output is redirected into the file)" \
+  bash -c '[[ "$1" == *"Delete both files afterwards: the values stay in them until you do."* && "$1" == *"without printing the URL"* ]]' _ "$OUT"
+check "discord write-env with no webhook, stdin </dev/null: the usage error is on stdout and stderr is empty" test -z "$ERR"
 # (1b) the positional AND the variable: still refused (the secret is already on this command line)
 dw_untouched_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$DISCORD_SETUP" write-env "$GUILD" "$DW_URL"
 check "discord positional webhook (env also set): still refused with exit 64" test "$RC" -eq 64
@@ -1701,6 +1819,19 @@ dw_untouched_run "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$DISCORD_SETUP" wr
 check "discord write-env with DISCORD_BOT_TOKEN_INPUT unset: exit 64 (the same class as a missing webhook), the usage error on stdout names the variable" \
   bash -c '[[ "$1" -eq 64 && "$2" == *DISCORD_BOT_TOKEN_INPUT* ]]' _ "$RC" "$OUT"
 check "discord write-env with DISCORD_BOT_TOKEN_INPUT unset: .env untouched, no marker, the webhook not echoed" dw_quiet_clean
+check "discord write-env with DISCORD_BOT_TOKEN_INPUT unset: the remedy is printed too (SKILL.md says both missing inputs print it) and names the token" dw_names_token
+dw_devnull_run "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$DISCORD_SETUP" write-env "$GUILD"
+check "discord write-env with DISCORD_BOT_TOKEN_INPUT unset, stdin </dev/null: exit 64 and the non-TTY file-read remedy on stdout, no inline form" \
+  bash -c '[[ "$1" -eq 64 ]]' _ "$RC"
+check "discord write-env with DISCORD_BOT_TOKEN_INPUT unset, stdin </dev/null: the remedy gives the file-read form and recommends no inline VAR=value form" dw_remedy_non_tty
+# (5a) no guild_id at all: the same usage-error class (64) with the text on STDOUT, not a stderr-only `${1:?}` exit 1
+dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$DISCORD_SETUP" write-env
+check "discord write-env with no guild_id: exit 64 (usage class), not the exit 1 of a bash parameter error" \
+  bash -c '[[ "$1" -eq 64 ]]' _ "$RC"
+check "discord write-env with no guild_id: the usage line and the error are on stdout and stderr is empty" \
+  bash -c '[[ "$1" == *"Usage: discord-setup.sh write-env <guild_id>"* && "$1" == *"Error: guild_id is missing"* && -z "$2" ]]' _ "$OUT" "$ERR"
+check "discord write-env with no guild_id: .env untouched, no marker, neither secret echoed" bash -c '[[ "$1" != *"$2"* && "$1" != *"$3"* ]]' _ "$OUT$ERR" "$DW_URL" "$DISC_TOK"
+check "discord write-env with no guild_id: .env untouched" dw_clean_untouched
 dw_untouched_run "DISCORD_BOT_TOKEN_INPUT=" "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$DISCORD_SETUP" write-env "$GUILD"
 check "discord write-env with an EMPTY DISCORD_BOT_TOKEN_INPUT: exit 64 and the same usage error" \
   bash -c '[[ "$1" -eq 64 && "$2" == *DISCORD_BOT_TOKEN_INPUT* ]]' _ "$RC" "$OUT"
@@ -1708,6 +1839,8 @@ check "discord write-env with an EMPTY DISCORD_BOT_TOKEN_INPUT: exit 64 and the 
 dw_untouched_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$DISCORD_SETUP" write-env "$DW_URL"
 check "discord write-env with the webhook URL as the sole positional (the guild_id slot): exit 1, 'must be numeric'" \
   bash -c '[[ "$1" -eq 1 && "$2" == *"guild_id must be numeric"* ]]' _ "$RC" "$ERR"
+check "discord write-env with a non-numeric guild_id: the one line is on stderr and stdout is empty (the real stream the header and SKILL.md state)" \
+  bash -c '[[ -z "$1" && "$(wc -l <<<"$2")" -eq 1 ]]' _ "$OUT" "$ERR"
 check "discord write-env with the webhook URL as the guild_id: the URL is on neither stream, .env untouched" dw_quiet_untouched
 dw_untouched_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$DISCORD_SETUP" list-channels "$DW_URL"
 check "discord list-channels with the webhook URL as the guild_id: exit 1 and the URL is on neither stream, curl never invoked" \
@@ -1816,12 +1949,42 @@ check "mutant: discord-setup with the validator call removed writes a hostile op
 M="$(mut_make discord-setup.sh '[!A-Za-z0-9._:/@%+=,-]' '[!A-Za-z0-9._:/@%+=,\&-]')"
 we_mutant_run "discord" "$DS_SEED" "$M" DISCORD_WEBHOOK_URL_INPUT amp write-env "$GUILD"
 check "mutant: discord-setup with the allow-list widened to an ampersand lets 'VAR=x&y' through, so the written .env differs from its seed (RED on the amp row)" we_mut_fired "$M"
-# The Discord usage-error remedy: stdin not a terminal -> the inline and pipe forms; the check is inverted -> they vanish.
+# The Discord usage-error remedy: stdin not a terminal -> the file-read form; the check is inverted -> it vanishes.
 M="$(mut_make discord-setup.sh 'if [ ! -t 0 ]; then' 'if [ -t 0 ]; then')"
 dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$M" write-env "$GUILD"
 check "mutant: discord-setup with the terminal test inverted drops the non-TTY remedy under stdin </dev/null (exit 64 still; RED on the non-TTY rows)" \
   bash -c '[[ "$1" -eq 64 ]]' _ "$RC"
-check "mutant: that inverted-terminal-test mutant no longer names the inline-assignment form" not dw_remedy_non_tty
+check "mutant: that inverted-terminal-test mutant no longer gives the file-read form" not dw_remedy_non_tty
+# Each conjunct of dw_remedy_non_tty is driven to FAIL ALONE by a mutant that breaks only it.
+# (a) an inline `VAR=value command` form comes back: the no-inline conjunct (the rest of the remedy is intact).
+M="$(mut_make discord-setup.sh '    echo "Your stdin is not a terminal' '    echo "  DISCORD_WEBHOOK_URL_INPUT=<webhook-url> discord-setup.sh write-env <guild_id>"
+    echo "Your stdin is not a terminal')"
+dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$M" write-env "$GUILD"
+check "mutant: the inline-assignment form restored into the non-TTY remedy: only the no-inline conjunct is RED (the file form and the token are still there)" \
+  bash -c '[[ "$1" -eq 64 ]]' _ "$RC"
+check "mutant: that inline-form mutant still has the file-read form and names the token (only the no-inline conjunct fails)" \
+  bash -c '[[ "$1" == *"$2"* ]]' _ "$OUT" "$DW_FILEFORM"
+check "mutant: that inline-form mutant is caught by dw_no_inline alone" not dw_no_inline
+check "mutant: that inline-form mutant makes dw_remedy_non_tty RED" not dw_remedy_non_tty
+# (b) the printf/$URL pipe form comes back (it does not match the VAR=value regex: the printf conjunct).
+M="$(mut_make discord-setup.sh '    echo "Your stdin is not a terminal' '    echo "  printf %s \"\$URL\" | { read -r DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT; discord-setup.sh write-env <guild_id>; }"
+    echo "Your stdin is not a terminal')"
+dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$M" write-env "$GUILD"
+check "mutant: the printf-pipe form restored: it carries no VAR=value word, so the printf/\$URL arm alone catches it" \
+  bash -c '[[ ! "$1" =~ $2 && "$1" == *printf* ]]' _ "$OUT" "$DW_INLINE_RE"
+check "mutant: that printf-pipe mutant is caught by dw_no_inline (through its printf/\$URL arm)" not dw_no_inline
+check "mutant: that printf-pipe mutant makes dw_remedy_non_tty RED" not dw_remedy_non_tty
+# (c) the bot token dropped from the remedy: the names-the-token conjunct.
+M="$(mut_make discord-setup.sh '  echo "  read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT"
+' '')"
+dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" -- bash "$M" write-env "$GUILD"
+check "mutant: the remedy without the bot-token line: dw_names_token is RED (the rest of the remedy is intact)" not dw_names_token
+check "mutant: that token-less remedy still has no inline form (the other conjunct is not the one failing)" dw_no_inline
+# (d) no guild_id: the usage branch reverted to a bash parameter error.
+M="$(mut_make discord-setup.sh 'if [[ $# -eq 0 ]]; then' 'if false; then')"
+dw_devnull_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$M" write-env
+check "mutant: discord-setup without the no-guild_id branch exits non-64 (RED on the exit-64 row)" bash -c '[[ "$1" -ne 64 ]]' _ "$RC"
+check "mutant: that no-guild_id mutant has no usage text on stdout (RED on the stdout row)" bash -c '[[ "$1" != *"Error: guild_id is missing"* ]]' _ "$OUT"
 # The snowflake echo restored: the webhook URL in the guild_id slot is printed.
 M="$(mut_make discord-setup.sh 'must be numeric. The value is not shown." >&2' 'must be numeric. Got: ${id}" >&2')"
 dw_untouched_run "DISCORD_BOT_TOKEN_INPUT=$DISC_TOK" "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$M" write-env "$DW_URL"
@@ -1830,10 +1993,54 @@ check "mutant: discord-setup echoing 'Got: <value>' again prints the webhook URL
 check "mutant: that Got-echo mutant leaks the URL, so the redaction row would be RED" not dw_no_secret
 # The bot-token exit class: back to the generic exit 1.
 M="$(mut_make discord-setup.sh 'is not set (or is empty). Pass the bot token in that environment variable, not as an argument."
+    _print_env_remedy
     exit 64' 'is not set (or is empty). Pass the bot token in that environment variable, not as an argument."
+    _print_env_remedy
     exit 1')"
 dw_untouched_run "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$M" write-env "$GUILD"
 check "mutant: discord-setup with the missing-bot-token exit class back to 1 is RED on the exit-64 row" bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+# The missing-token branch without its remedy (the pre-fix shape: usage + error only, no form to follow).
+M="$(mut_make discord-setup.sh 'is not set (or is empty). Pass the bot token in that environment variable, not as an argument."
+    _print_env_remedy
+    exit 64' 'is not set (or is empty). Pass the bot token in that environment variable, not as an argument."
+    exit 64')"
+dw_untouched_run "DISCORD_WEBHOOK_URL_INPUT=$DW_URL" -- bash "$M" write-env "$GUILD"
+check "mutant: discord-setup whose missing-bot-token branch prints no remedy still exits 64 (so only the remedy rows can catch it)" bash -c '[[ "$1" -eq 64 ]]' _ "$RC"
+check "mutant: that remedy-less missing-bot-token mutant is RED on dw_names_token" not dw_names_token
+# The human text of write-env on STDOUT (missing credentials, the confirmation): each moved line put back on stderr is RED.
+xs_ok_env=("X_API_KEY=$XS_K" "X_API_SECRET=$XS_S" "X_ACCESS_TOKEN=$XS_T" "X_ACCESS_TOKEN_SECRET=$XS_TS")
+M="$(mut_make x-setup.sh 'require_credentials 2>&1' 'require_credentials')"
+RUN_CWD="$GITWORK" run_sut - "" "X_API_KEY=$XS_K" "X_API_SECRET=$XS_S" "X_ACCESS_TOKEN=$XS_T" -- bash "$M" write-env
+check "mutant: x-setup write-env with the missing-credentials text back on stderr is RED on the stdout row (still exit 1)" \
+  bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "mutant: that stderr-diagnostic x-setup mutant fails we_missing_stdout" not we_missing_stdout X_ACCESS_TOKEN_SECRET
+M="$(mut_make x-setup.sh 'echo "Wrote 4 variables to ${env_file} (permissions: 600)"' 'echo "Wrote 4 variables to ${env_file} (permissions: 600)" >&2')"
+RUN_CWD="$GITWORK" run_sut - "" "${xs_ok_env[@]}" -- bash "$M" write-env
+check "mutant: x-setup write-env with the confirmation back on stderr still exits 0" bash -c '[[ "$1" -eq 0 ]]' _ "$RC"
+check "mutant: that stderr-confirmation x-setup mutant fails we_wrote_stdout" not we_wrote_stdout 4
+M="$(mut_make bsky-setup.sh 'require_credentials 2>&1' 'require_credentials')"
+RUN_CWD="$GITWORK" run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" -- bash "$M" write-env
+check "mutant: bsky-setup write-env with the missing-credentials text back on stderr is RED on the stdout row (still exit 1)" \
+  bash -c '[[ "$1" -eq 1 ]]' _ "$RC"
+check "mutant: that stderr-diagnostic bsky-setup mutant fails we_missing_stdout" not we_missing_stdout BSKY_APP_PASSWORD
+M="$(mut_make bsky-setup.sh 'echo "Wrote 2 variables to ${env_file} (permissions: 600)"' 'echo "Wrote 2 variables to ${env_file} (permissions: 600)" >&2')"
+RUN_CWD="$GITWORK" run_sut - "" "BSKY_HANDLE=$BSKY_HANDLE_FIX" "BSKY_APP_PASSWORD=$BSKY_PW_FIX" -- bash "$M" write-env
+check "mutant: bsky-setup write-env with the confirmation back on stderr still exits 0" bash -c '[[ "$1" -eq 0 ]]' _ "$RC"
+check "mutant: that stderr-confirmation bsky-setup mutant fails we_wrote_stdout" not we_wrote_stdout 2
+M="$(mut_make discord-setup.sh 'echo "Wrote ${var_count} variables to ${env_file} (permissions: 600)"' 'echo "Wrote ${var_count} variables to ${env_file} (permissions: 600)" >&2')"
+RUN_CWD="$GITWORK" run_sut - "" "${WE_BASE[@]}" -- bash "$M" write-env "$GUILD"
+check "mutant: discord-setup write-env with the confirmation back on stderr still exits 0" bash -c '[[ "$1" -eq 0 ]]' _ "$RC"
+check "mutant: that stderr-confirmation discord-setup mutant fails we_wrote_stdout" not we_wrote_stdout 5
+# The usage table: every command row's " - " separator sits in one column (the verify row had lost a space).
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$DISCORD_SETUP"
+dw_usage_aligned() { # <usage-text>: six command rows, one separator column
+  awk '/^  [a-z]/ { c = index($0, " - "); if (c == 0) bad = 1; if (col == 0) col = c; else if (c != col) bad = 1; n++ } END { exit !(n == 6 && !bad) }' <<<"$1"
+}
+check "discord-setup usage: exit 1 with the table on stderr, nothing on stdout" bash -c '[[ "$1" -eq 1 && -z "$2" ]]' _ "$RC" "$OUT"
+check "discord-setup usage: the six command rows share one separator column" dw_usage_aligned "$ERR"
+M="$(mut_make discord-setup.sh "echo \"  verify$(printf '%26s' '')- Run" "echo \"  verify$(printf '%25s' '')- Run")"
+RUN_CWD="$GITWORK" run_sut - "" -- bash "$M"
+check "mutant: discord-setup usage with the verify row one column short is RED on the alignment row" not dw_usage_aligned "$ERR"
 # Positive control for the sentinel mechanism itself: a known-bad .env fires it, a clean one does not.
 printf 'PC=$(touch %s)\n' "$SENT" > "$GITWORK/.env"
 check "sentinel control: sourcing a known-bad .env fires the sentinel (the mechanism is real)" we_fired
@@ -1881,13 +2088,28 @@ else
   check "oracle inside the pinned image: not exercised on this host, and the image reference is still digest-pinned (a floating tag would silently change the bash the oracle runs under)" \
     bash -c '[[ "$1" =~ ^node:22-slim@sha256:[0-9a-f]{64}$ ]]' _ "$PINNED_IMAGE"
 fi
+# The image this oracle runs in is the image the repo BUILDS: compare PINNED_IMAGE with the FROM line(s)
+# of apps/web-platform/Dockerfile (read-only here), so a Dockerfile bump cannot leave the oracle on the
+# old image with a green row, and a different 64-hex digest cannot satisfy it.
+DOCKERFILE_REL="../../../../../apps/web-platform/Dockerfile"
+dockerfile_pins_image() { # <Dockerfile>: every `FROM node:22-slim@sha256:...` line carries exactly PINNED_IMAGE, and there is at least one
+  local imgs; imgs="$(awk '/^FROM node:22-slim@sha256:/ { print $2 }' "$1" 2>/dev/null | sort -u)"
+  [[ -n "$imgs" && "$imgs" == "$PINNED_IMAGE" ]]
+}
+check "pinned image: PINNED_IMAGE equals the node:22-slim digest of every FROM line in apps/web-platform/Dockerfile (not a literal that only this file checks)" \
+  dockerfile_pins_image "$HERE/$DOCKERFILE_REL"
+mkdir -p "$SANDBOX/dockerfile"
+sed 's/^\(FROM node:22-slim@sha256:\)4/\15/' "$HERE/$DOCKERFILE_REL" > "$SANDBOX/dockerfile/Dockerfile.bumped"
+check "pinned image: the doctored Dockerfile (one digest character changed on every FROM line) differs from the real one" not cmp -s "$HERE/$DOCKERFILE_REL" "$SANDBOX/dockerfile/Dockerfile.bumped"
+check "pinned image: a Dockerfile whose digest moved on is RED (PINNED_IMAGE no longer matches)" not dockerfile_pins_image "$SANDBOX/dockerfile/Dockerfile.bumped"
+check "pinned image: a Dockerfile with no node:22-slim FROM line is RED (an empty comparison cannot pass)" not dockerfile_pins_image /dev/null
 echo
 echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 1052 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1052\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 1167 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1167\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

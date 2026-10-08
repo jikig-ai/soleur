@@ -10,36 +10,46 @@
 #   discover-guilds                 - List guilds as JSON
 #   list-channels <guild_id>        - List text channels as JSON
 #   create-webhook <channel_id>     - Create webhook, output webhook URL
-#   write-env <guild_id>            - Write to .env with chmod 600 (webhook URL from the environment)
+#   write-env <guild_id>            - Write to .env with chmod 600 (secrets from the environment)
 #   verify                          - Run guild-info check
 #
 # Environment variables:
-#   DISCORD_BOT_TOKEN_INPUT              - Bot token (required for API commands)
+#   DISCORD_BOT_TOKEN_INPUT              - Bot token (required for API commands and write-env)
 #   DISCORD_WEBHOOK_URL_INPUT            - Webhook URL (required, write-env only; never an argument)
 #   DISCORD_RELEASES_WEBHOOK_URL_INPUT   - Releases channel webhook (optional, write-env only)
 #   DISCORD_BLOG_WEBHOOK_URL_INPUT       - Blog channel webhook (optional, write-env only)
 #
 # write-env no longer takes the webhook URL as an argument (it would sit in the process list
-# and the shell history). Set it in the environment without echoing it. In a terminal:
+# and the shell history). Set it, and the bot token, in the environment without echoing them. In a
+# terminal:
 #   read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT
-# `read -rs` needs a terminal. With no terminal (an agent runtime, a pipe, a script) use either
-# the inline assignment (the value is in this one process's environment, on no argument list):
-#   DISCORD_WEBHOOK_URL_INPUT=<webhook-url> discord-setup.sh write-env <guild_id>
-# or read it from a pipe (printf is a shell builtin, so the value is on no argument list):
-#   printf '%s' "$URL" | { read -r DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT; discord-setup.sh write-env <guild_id>; }
+#   read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT
+# `read -rs` needs a terminal. With no terminal (an agent runtime, a pipe, a script) keep each
+# value out of the COMMAND TEXT, because the text of a tool call lands in the transcript, in shell
+# history, and (when the runtime wraps it in `bash -c`) on that wrapper's argument list. An inline
+# `VAR=value discord-setup.sh ...` is only free of an argument list in THIS process: the caller's
+# command still carries the value, so it is not offered. The form that works is to read each value
+# from a mode-600 file, in the one command that runs the script:
+#   read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id>
+# Residual, stated plainly: the file names are in the command text, the values are not; the values
+# sit in those files until deleted; `create-webhook` prints the webhook URL on stdout (so it is in
+# the transcript once) unless its output is redirected into the file, which is the way to avoid it;
+# and the values end up in .env (mode 600), which is the point of the command.
 # Every value written to .env is checked against an allow-list first (see _wenv_validate).
 #
 # Exit codes:
 #   0 - Success
 #   1 - General error (including a write-env value outside the allow-list: the stderr marker
-#       SOLEUR_CREDENTIAL_REFUSED carries `var=<NAME> phase=write-env`, the one human line is on stdout)
+#       SOLEUR_CREDENTIAL_REFUSED carries `var=<NAME> phase=write-env`, the one human line is on
+#       stdout; and a non-numeric guild_id, whose one line is on stderr like every other command's)
 #   2 - Retryable error (e.g., webhook limit on channel)
-#   64 - Usage error (write-env: the webhook URL passed as an argument, or
-#        DISCORD_WEBHOOK_URL_INPUT or DISCORD_BOT_TOKEN_INPUT missing or empty). The usage text,
-#        including the remedy, is printed on STDOUT.
+#   64 - Usage error (write-env only: no guild_id, the webhook URL passed as an argument, or
+#        DISCORD_WEBHOOK_URL_INPUT or DISCORD_BOT_TOKEN_INPUT missing or empty). The usage text
+#        is printed on STDOUT, and so is the remedy for every one of these except the missing guild_id.
 #
 # Output: JSON or plain text to stdout
-# Errors: Messages to stderr, exit 1 (write-env usage and allow-list text: stdout, see above)
+# Errors: Messages to stderr, exit 1 (write-env: the usage errors (exit 64), the allow-list line
+#         and the confirmation line are on stdout, see above)
 
 set -euo pipefail
 
@@ -422,16 +432,21 @@ cmd_create_webhook() {
 
 # The remedy for a write-env usage error (exit 64). Printed on STDOUT: it is a signal the caller
 # must act on and the command has no stdout payload, and agent runtimes surface stdout and swallow
-# stderr. The interactive form needs a terminal, so when stdin is not one the two forms that work
-# without it are named too. Nothing here prints the value, and the placeholders are literal text.
-_print_webhook_env_remedy() {
-  echo "Pass it in the environment, without echoing it. In a terminal:"
+# stderr. Both required inputs are named (the webhook URL AND the bot token), so following it once
+# does not produce a second exit 64. The interactive form needs a terminal, so when stdin is not one
+# the form that works without it is named too: the values are read from mode-600 files, so they are
+# never in the text of the command (the transcript, shell history, a wrapper's argument list). An
+# inline `VAR=value command` is deliberately NOT offered. Nothing here prints a value, and the
+# placeholders are literal text.
+_print_env_remedy() {
+  echo "Pass the webhook URL and the bot token in the environment, without echoing them. In a terminal:"
   echo "  read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT"
+  echo "  read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT"
   echo "  discord-setup.sh write-env <guild_id>"
   if [ ! -t 0 ]; then
-    echo "Your stdin is not a terminal, so read -rs has nothing to read. Use one of these instead:"
-    echo "  DISCORD_WEBHOOK_URL_INPUT=<webhook-url> discord-setup.sh write-env <guild_id>"
-    echo "  printf '%s' \"\$URL\" | { read -r DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT; discord-setup.sh write-env <guild_id>; }"
+    echo "Your stdin is not a terminal, so read -rs has nothing to read. Do not type either value into the command: its text is kept in the transcript and the shell history. Run the terminal form above yourself, or put each value alone on one line of a mode-600 file and read it from there, in the one command that runs the script:"
+    echo "  read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id>"
+    echo "The webhook URL file can be written without printing the URL: (umask 077; discord-setup.sh create-webhook <channel_id> > /path/to/webhook-url.txt). Delete both files afterwards: the values stay in them until you do."
   fi
 }
 
@@ -439,26 +454,34 @@ cmd_write_env() {
   # (#9597) The webhook URL is a write-capable secret, so it never rides this command line (the
   # process list, the shell history). A second positional is refused BEFORE anything else reads
   # it, whether or not the environment variable is also set (the secret is already on this
-  # command line). The argument is never echoed. Exit 64 (usage) is distinct from the exit 1
-  # of a value outside the .env allow-list, and covers every missing REQUIRED input of this
-  # command (the webhook URL and the bot token), so the exit code names the class.
+  # command line). The argument is never echoed. Exit 64 (usage, text on STDOUT) is distinct from
+  # the exit 1 of a value outside the .env allow-list, and covers every missing REQUIRED input of
+  # this command: the guild_id, the webhook URL and the bot token, so the exit code names the class.
+  # Not covered, and exit 1 on purpose: a guild_id that is present but not numeric
+  # (validate_snowflake_id, shared with the other commands, one line on stderr, the value not shown).
   if [[ $# -ge 2 ]]; then
     echo "Error: write-env no longer takes the webhook URL as an argument, because an argument is visible in the process list and your shell history."
-    _print_webhook_env_remedy
+    _print_env_remedy
     echo "The argument you passed is not shown. It was already on this command line, so rotate that webhook if anyone else can read your process list or shell history."
     exit 64
   fi
-  local guild_id="${1:?Usage: discord-setup.sh write-env <guild_id>  (the webhook URL goes in DISCORD_WEBHOOK_URL_INPUT)}"
+  if [[ $# -eq 0 ]]; then
+    echo "Usage: discord-setup.sh write-env <guild_id>"
+    echo "Error: guild_id is missing. The webhook URL and the bot token go in DISCORD_WEBHOOK_URL_INPUT and DISCORD_BOT_TOKEN_INPUT, never as arguments."
+    exit 64
+  fi
+  local guild_id="$1"
   if [[ -z "${DISCORD_WEBHOOK_URL_INPUT:-}" ]]; then
     echo "Usage: discord-setup.sh write-env <guild_id>"
     echo "Error: DISCORD_WEBHOOK_URL_INPUT is not set (or is empty). Pass the webhook URL in that environment variable, not as an argument."
-    _print_webhook_env_remedy
+    _print_env_remedy
     exit 64
   fi
   validate_snowflake_id "$guild_id" "guild_id"
   if [[ -z "${DISCORD_BOT_TOKEN_INPUT:-}" ]]; then
     echo "Usage: discord-setup.sh write-env <guild_id>"
     echo "Error: DISCORD_BOT_TOKEN_INPUT is not set (or is empty). Pass the bot token in that environment variable, not as an argument."
+    _print_env_remedy
     exit 64
   fi
   # Every value is checked BEFORE the first write (see the allow-list above).
@@ -501,7 +524,9 @@ cmd_write_env() {
     var_count=$((var_count + 1))
   fi
 
-  echo "Wrote ${var_count} variables to ${env_file} (permissions: 600)" >&2
+  # The confirmation is on STDOUT like the rest of write-env's human text (agent runtimes surface
+  # stdout and swallow stderr, so a success printed on stderr reads as silence).
+  echo "Wrote ${var_count} variables to ${env_file} (permissions: 600)"
 }
 
 cmd_verify() {
@@ -572,9 +597,10 @@ main() {
     echo "  discover-guilds                 - List guilds as JSON" >&2
     echo "  list-channels <guild_id>        - List text channels as JSON" >&2
     echo "  create-webhook <channel_id>     - Create webhook, output webhook URL" >&2
-    echo "  write-env <guild_id>            - Write to .env with chmod 600 (webhook URL in DISCORD_WEBHOOK_URL_INPUT)" >&2
-    echo "                                    with no terminal: DISCORD_WEBHOOK_URL_INPUT=<webhook-url> discord-setup.sh write-env <guild_id>" >&2
-    echo "  verify                         - Run guild-info check" >&2
+    echo "  write-env <guild_id>            - Write to .env with chmod 600 (webhook URL in DISCORD_WEBHOOK_URL_INPUT," >&2
+    echo "                                    bot token in DISCORD_BOT_TOKEN_INPUT; with no terminal, read each from a" >&2
+    echo "                                    mode-600 file, never typed into the command; write-env prints the exact form)" >&2
+    echo "  verify                          - Run guild-info check" >&2
     exit 1
   fi
 

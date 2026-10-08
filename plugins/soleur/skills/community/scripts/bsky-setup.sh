@@ -16,12 +16,15 @@
 # Exit codes:
 #   0 - Success
 #   1 - General error, including missing credentials and a write-env value outside the .env
-#       allow-list. The two are told apart by the stderr marker: an allow-list refusal prints
-#       `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free); its one human
-#       line is on stdout.
+#       allow-list. The two are told apart by the stderr marker, which ONLY the allow-list refusal
+#       emits: `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free). Exit 1 with
+#       that marker is the allow-list; exit 1 without it is a missing credential.
 #
 # Output: JSON to stdout
-# Errors: Messages to stderr, exit 1 (the write-env allow-list line: stdout)
+# Errors: Messages to stderr, exit 1. The exception is `write-env`, which has no stdout payload and
+#         whose human text is therefore all on STDOUT (agent runtimes surface stdout and swallow
+#         stderr): the missing-credentials diagnostic, the allow-list line, and the "Wrote N
+#         variables" confirmation. Only the allow-list marker stays on stderr.
 
 set -euo pipefail
 
@@ -275,7 +278,9 @@ require_credentials() {
 # --- Commands ---
 
 cmd_write_env() {
-  require_credentials
+  # write-env has no stdout payload, so its missing-credentials diagnostic goes to STDOUT too
+  # (require_credentials writes it to stderr, shared with the other commands; exit 1 either way).
+  require_credentials 2>&1
   # Every value is checked BEFORE the first write (see the allow-list above).
   _wenv_validate BSKY_HANDLE BSKY_APP_PASSWORD
 
@@ -301,7 +306,7 @@ cmd_write_env() {
     echo "BSKY_APP_PASSWORD=${BSKY_APP_PASSWORD}"
   } >> "$env_file"
 
-  echo "Wrote 2 variables to ${env_file} (permissions: 600)" >&2
+  echo "Wrote 2 variables to ${env_file} (permissions: 600)"
 }
 
 cmd_verify() {

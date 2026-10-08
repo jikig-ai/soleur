@@ -165,7 +165,7 @@ report_transport_failure() {
 readonly X_API="https://api.x.com"
 
 # (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
-# The helper library is sourced LAZILY, inside oauth_sign at the first signature, not here: it
+# The helper library is sourced LAZILY, inside oauth_sign at each signature, not here: it
 # refuses `bash -x` unconditionally at load time (it names its key indirectly, so it has no
 # literal credential name to test), and loading it up here would make `bash -x x-community.sh`
 # with no credentials set exit 78 instead of printing usage -- the case this file's conditional
@@ -233,8 +233,11 @@ _cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; 
 
 # --- OAuth 1.0a signing ---
 
-# URL-encode a string per RFC 3986
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
 urlencode() {
+  local LC_ALL=C
   local string="$1"
   local encoded=""
   local i c o
@@ -305,12 +308,16 @@ oauth_sign() {
   # computation yields no signature and the request is never sent unsigned.
   # oauth_sign runs inside `$(...)`, so the load's stdout (the library's xtrace refusal text) goes
   # to the saved real stdout (fd 3), where the founder sees it, not into the captured header.
-  if ! declare -F hmac_sha1_b64 >/dev/null; then
-    source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {
-      echo "Error: could not load the OAuth signing helper; refusing to send an unsigned request." >&2
-      return 1
-    }
-  fi
+  # The load happens at EACH signature, not once: this function body is a command-substitution
+  # subshell, so a function defined here dies with it and nothing is cached for the next call (the
+  # library is one small file). Any function of this name inherited from the environment (an
+  # exported bash function) is dropped first, so only the vetted library's definition can ever run
+  # with the signing key in scope.
+  unset -f hmac_sha1_b64 2>/dev/null || true
+  source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {
+    echo "Error: could not load the OAuth signing helper; refusing to send an unsigned request." >&2
+    return 1
+  }
   local signature
   signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
   if [[ -z "$signature" ]]; then
@@ -423,7 +430,10 @@ post_request() {
 
   local url="${X_API}${endpoint}"
   local auth_header
-  auth_header=$(oauth_sign "POST" "$url")
+  # `|| exit 1`: a failed signature (it has already said why) stops here. These helpers run inside
+  # `$(...)`, where errexit does not apply, so without it the empty header would fall through to the
+  # shape check below and print a second, misleading "unexpected shape" line.
+  auth_header=$(oauth_sign "POST" "$url") || exit 1
 
   local -a curl_args=(
     -s -w "\n%{http_code}"
@@ -485,9 +495,9 @@ get_request() {
     while IFS= read -r param; do
       [[ -n "$param" ]] && param_args+=("$param")
     done <<< "${query_params//&/$'\n'}"
-    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}")
+    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}") || exit 1
   else
-    auth_header=$(oauth_sign "GET" "$url")
+    auth_header=$(oauth_sign "GET" "$url") || exit 1
   fi
 
   # Build request URL with query string
