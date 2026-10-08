@@ -13,6 +13,13 @@
 # The issue's acceptance criterion — "a drift guard so a future volume can't be born
 # plaintext (mutation-tested: a plaintext volume must go RED)" — is A4 + A5 below.
 #
+# Guard B4 (#6604 step 7, ADR-119): web-1's plaintext volume is wiped and deleted, so
+# server.tf must never plan it back (both workspaces for_each's exclude web-1; web-1
+# renders the "retired-6604" sentinel), and the LUKS volume — now the sole copy — must
+# carry delete_protection = true and prevent_destroy = true, its attachment prevent_destroy =
+# true (a replace detaches it), and the root must hold no *override.tf / *.tf.json that could
+# override any of these behind the HCL this suite reads.
+#
 # Each assertion is MUTATION-TESTED: the predicate is re-run against a deliberately
 # broken copy and MUST flip to failing. A green test that cannot go red is worthless
 # (the bash-gate-authoring foot-gun). Anchoring is on CONTENT, never line numbers
@@ -29,13 +36,51 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF="$DIR/workspaces-luks.tf"
+# Guard B4 (#6604 step 7) also reads server.tf: web-1's plaintext volume is retired there.
+SERVER_TF="$DIR/server.tf"
 
 [ -f "$TF" ] || { echo "FAIL: workspaces-luks.tf not found at $TF" >&2; exit 1; }
+[ -f "$SERVER_TF" ] || { echo "FAIL: server.tf not found at $SERVER_TF" >&2; exit 1; }
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
+
+# Reporter self-test (the harness_selftest pattern, workspaces-luks-harness.sh). pass()/fail() are
+# the instrument every verdict below runs through, so prove them first: one pass() must add exactly
+# one pass and no fail, one fail() exactly one fail and no pass. Runs in a SUBSHELL so the real
+# counters are untouched, and reports through printf + exit 2, never through fail(), the very
+# function under suspicion.
+suite_selftest() {
+  local got
+  got="$( passes=0; fails=0; pass selftest-pass; fail selftest-fail 2>/dev/null; printf '%s/%s' "$passes" "$fails" )"
+  if [ "$got" != "1/1" ]; then
+    printf 'INSTRUMENT FAIL - workspaces-luks.test.sh: pass()/fail() self-test got passes/fails=%s, want 1/1; every verdict below would be meaningless\n' "$got" >&2
+    exit 2
+  fi
+}
+suite_selftest
+
+# Canonical fixture-path guard (fixture-relative-assert P1b; byte-identical to every tracked copy).
+# SUITE_TMP below and Guard B4's helpers write to a mktemp path; this refuses an empty or relative one.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# ONE owning trap for every mutation copy below (lint-trap-tempfile-ownership rule (c)): each helper
+# allocates inside SUITE_TMP and still removes its own file, but a run that dies between allocation
+# and cleanup leaves nothing behind.
+SUITE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/wsluks-suite.XXXXXX")" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
+assert_fixture_dir "$SUITE_TMP"
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # --- Helpers ------------------------------------------------------------------
 
@@ -44,8 +89,52 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 # for a forbidden token must see code only. Knowing just `#` is what let A9
 # false-FAIL on its own .tf's comment once already; `//` and `/* */` are the same
 # trap wearing different hats.
+#
+# `/* */` MAY SPAN LINES, and terraform validate honours that. The old one-line sed
+# (`s~/\*.*\*/~~g`) only removed a comment that opened and closed on the same line, so
+# wrapping `delete_protection = true` or a whole `lifecycle { prevent_destroy = true }` in a
+# multi-line comment left the suite green (Guard B4 rows 8a-8c). This is a small lexer:
+#   - LINE COUNT IS PRESERVED. Every input line yields exactly one output line (a line wholly
+#     inside a block comment comes out blank), because _b4_block_range reports line numbers in
+#     the ORIGINAL file from this output.
+#   - `/*` opens a block only OUTSIDE a "string" and before any `#` / `//` on the line, so
+#     `"/mnt/*"` or `# see /etc/default/*` does not swallow the rest of the file.
+#   - Inside an HCL heredoc (opener: two less-than signs, an optional dash, then a marker word;
+#     closer: the marker alone on its line) the text is literal; only the whole-line `#` / `//`
+#     blanking applies there, as before.
+#   - Trailing `#` / `//` comments after code are KEPT (B4_TAIL tolerates them), as before.
 strip_comments() {
-  sed -E -e 's~/\*.*\*/~~g' -e 's~^[[:space:]]*(#|//).*$~~' "$1"
+  awk '
+    hd != "" {
+      line = $0
+      if (line ~ ("^[[:space:]]*" hd "[[:space:]]*$")) hd = ""
+      if (line ~ /^[[:space:]]*(#|\/\/)/) line = ""
+      print line
+      next
+    }
+    {
+      line = $0; out = ""; instr = 0; n = length(line); i = 1
+      while (i <= n) {
+        c = substr(line, i, 1); c2 = substr(line, i, 2)
+        if (inblk) { if (c2 == "*/") { inblk = 0; i += 2 } else { i++ }; continue }
+        if (instr) {
+          out = out c
+          if (c == "\\") { out = out substr(line, i + 1, 1); i += 2; continue }
+          if (c == "\"") instr = 0
+          i++; continue
+        }
+        if (c == "\"") { instr = 1; out = out c; i++; continue }
+        if (c2 == "/*") { inblk = 1; i += 2; continue }
+        if (c == "#" || c2 == "//") { out = out substr(line, i); break }
+        out = out c; i++
+      }
+      if (out ~ /^[[:space:]]*(#|\/\/)/) out = ""
+      if (!inblk && match(out, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
+        hd = substr(out, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd)
+      }
+      print out
+    }
+  ' "$1"
 }
 
 # Extract one resource block by BRACE DEPTH, not by an `awk /^}/` range.
@@ -107,7 +196,7 @@ p_masked() {
 
 # A4 — THE ISSUE'S ACCEPTANCE CRITERION. The new volume must carry NO `format`
 # attribute. C7: `format = "ext4"` makes a fresh volume byte-indistinguishable from
-# the live plaintext volume (both TYPE=ext4), which destroys the only sound
+# a plaintext source volume (both TYPE=ext4), which destroys the only sound
 # luksFormat guard — "format only a device with no filesystem signature". A raw
 # device makes the discriminator exist. A `format` line here IS the plaintext-birth
 # drift this guard names.
@@ -228,6 +317,111 @@ p_no_operator_variable() {
   if grep -Eq '^variable "workspaces_luks_key"' "$1"; then echo 0; else echo 1; fi
 }
 
+# --- Guard B4 (#6604 step 7): web-1 has no plaintext volume; the sole copy cannot be destroyed ---
+#
+# web-1's plaintext workspaces volume (105149570) was wiped and deleted, and its two state
+# addresses were forgotten. server.tf must never plan it back: both workspaces for_each's
+# range over local.plaintext_workspaces_hosts (var.web_hosts minus web-1) and web-1's
+# cloud-init workspaces_volume_id is the "retired-6604" sentinel. The LUKS volume is now the
+# SOLE copy of every workspace, so it carries delete_protection AND prevent_destroy, and its
+# attachment carries prevent_destroy (rows 9a/9b/8c).
+#
+# Every attribute is anchored INSIDE its block (leading whitespace, never column 0) on
+# comment-stripped text, and each value check tolerates extra spacing plus a trailing
+# comment (row H1), because strip_comments drops only whole-line comments.
+B4_TAIL='[[:space:]]*((#|//).*)?$'
+
+# B4-1/2: BOTH members (the volume AND its attachment) range over the narrowed local.
+# Exactly one for_each line per block, and it names local.plaintext_workspaces_hosts.
+p_b4_for_each_narrowed() {
+  local f="$1" t b
+  for t in hcloud_volume hcloud_volume_attachment; do
+    b="$(block_of "$f" "$t" workspaces)"
+    if [ -z "$b" ]; then echo 0; return; fi
+    [ "$(printf '%s\n' "$b" | grep -Ec '^[[:space:]]+for_each[[:space:]]*=')" = "1" ] || { echo 0; return; }
+    grep -Eq "^[[:space:]]+for_each[[:space:]]*=[[:space:]]*local\.plaintext_workspaces_hosts${B4_TAIL}" <<<"$b" \
+      || { echo 0; return; }
+  done
+  echo 1
+}
+
+# B4-3: the local exists exactly once and filters out web-1 (not some other host).
+p_b4_local_excludes_web1() {
+  local code
+  code="$(strip_comments "$1")"
+  [ "$(printf '%s\n' "$code" | grep -Ec '^[[:space:]]+plaintext_workspaces_hosts[[:space:]]*=')" = "1" ] || { echo 0; return; }
+  if grep -Eq "^[[:space:]]+plaintext_workspaces_hosts[[:space:]]*=[[:space:]]*\{[[:space:]]*for[[:space:]]+k[[:space:]]*,[[:space:]]*v[[:space:]]+in[[:space:]]+var\.web_hosts[[:space:]]*:[[:space:]]*k[[:space:]]*=>[[:space:]]*v[[:space:]]+if[[:space:]]+k[[:space:]]*!=[[:space:]]*\"web-1\"[[:space:]]*\}${B4_TAIL}" <<<"$code"; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
+# B4-4: hcloud_server.web's templatefile argument gives web-1 the "retired-6604" sentinel
+# (never an index into the narrowed map, which would be a plan error for web-1).
+p_b4_sentinel() {
+  local b
+  b="$(block_of "$1" hcloud_server web)"
+  if [ -z "$b" ]; then echo 0; return; fi
+  [ "$(printf '%s\n' "$b" | grep -Ec '^[[:space:]]+workspaces_volume_id[[:space:]]*=')" = "1" ] || { echo 0; return; }
+  if grep -Eq "^[[:space:]]+workspaces_volume_id[[:space:]]*=[[:space:]]*contains\(keys\(local\.plaintext_workspaces_hosts\),[[:space:]]*each\.key\)[[:space:]]*\?[[:space:]]*hcloud_volume\.workspaces\[each\.key\]\.id[[:space:]]*:[[:space:]]*\"retired-6604\"${B4_TAIL}" <<<"$b"; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
+# B4-5/6/9 shared body: resource <type> <name> carries exactly one `<attr> = ...` line and its
+# value is `true`. A token-present `= false` is the drift (mutations 5, 6 and 9a).
+_b4_attr_true() {
+  local f="$1" type="$2" name="$3" attr="$4" b
+  b="$(block_of "$f" "$type" "$name")"
+  if [ -z "$b" ]; then echo 0; return; fi
+  [ "$(printf '%s\n' "$b" | grep -Ec "^[[:space:]]+${attr}[[:space:]]*=")" = "1" ] || { echo 0; return; }
+  if grep -Eq "^[[:space:]]+${attr}[[:space:]]*=[[:space:]]*true${B4_TAIL}" <<<"$b"; then echo 1; else echo 0; fi
+}
+# prevent_destroy is only legal inside a lifecycle block — require one in the same resource.
+_b4_prevent_destroy_of() {
+  local f="$1" type="$2" name="$3" b
+  b="$(block_of "$f" "$type" "$name")"
+  if [ -z "$b" ]; then echo 0; return; fi
+  grep -Eq '^[[:space:]]+lifecycle[[:space:]]*\{' <<<"$b" || { echo 0; return; }
+  _b4_attr_true "$f" "$type" "$name" prevent_destroy
+}
+p_b4_prevent_destroy() { _b4_prevent_destroy_of "$1" hcloud_volume workspaces_luks; }
+p_b4_delete_protection() { _b4_attr_true "$1" hcloud_volume workspaces_luks delete_protection; }
+# B4-9: the ATTACHMENT carries prevent_destroy too. Its server_id and volume_id are both ForceNew,
+# so any replace of it (a web-1 server replace, a volume address that fell out of state, a re-pointed
+# server_id) DETACHES the sole copy from web-1. delete_protection does not stop a detach.
+p_b4_attach_prevent_destroy() { _b4_prevent_destroy_of "$1" hcloud_volume_attachment workspaces_luks; }
+
+# B4-10: no override file and no JSON config in the root. Terraform MERGES `*override.tf` /
+# `*override.tf.json` over the primary config at load time and loads `*.tf.json` exactly as `*.tf`,
+# so either one can drop prevent_destroy / delete_protection / the for_each narrowing while every
+# HCL-reading row above stays green on the file it reads. Same refusal as M14 of
+# git_data_authorization_map_gate (tests/scripts/lib/git-data-birth-readiness-gate.sh), which the
+# git-data-host-create / -replace arms of apply-web-platform-infra.yml run; this row extends it to
+# every B4 run. Takes the ROOT DIRECTORY, not a file. Terraform reads the root's top level only.
+p_b4_no_override_files() {
+  local hits
+  hits="$(find "$1" -maxdepth 1 -type f \( -name '*override.tf' -o -name '*override.tf.json' -o -name '*.tf.json' \) -print 2>/dev/null)"
+  if [ -z "$hits" ]; then echo 1; else echo 0; fi
+}
+
+# Line range [start end] of one resource block in the ORIGINAL file (strip_comments keeps the
+# line count, so its line numbers are the file's).
+_b4_block_range() {
+  local file="$1" type="$2" name="$3"
+  strip_comments "$file" | awk -v t="$type" -v n="$name" '
+    !inb && $0 ~ "^resource[[:space:]]+\"" t "\"[[:space:]]+\"" n "\"" { inb = 1; s = NR }
+    inb {
+      d += gsub(/\{/, "{")
+      d -= gsub(/\}/, "}")
+      if (d <= 0 && /\}/) { print s, NR; exit }
+    }
+  '
+}
+
 # --- Harness ------------------------------------------------------------------
 
 assert_holds() {
@@ -238,7 +432,7 @@ assert_holds() {
 
 assert_mutation() {
   local name="$1" fn="$2" file="$3" sed_expr="$4" tmp got
-  tmp="$(mktemp "${TMPDIR:-/tmp}/wsluks-mut.XXXXXX")"
+  tmp="$(mktemp "$SUITE_TMP/wsluks-mut.XXXXXX")"
   sed -E "$sed_expr" "$file" > "$tmp"
   got="$($fn "$tmp")"
   if [ "$got" = "0" ]; then
@@ -253,7 +447,7 @@ assert_mutation() {
 # a PRESENCE, not an absence). A deletion-based sed cannot test these.
 assert_mutation_append() {
   local name="$1" fn="$2" file="$3" line="$4" tmp got
-  tmp="$(mktemp "${TMPDIR:-/tmp}/wsluks-mut.XXXXXX")"
+  tmp="$(mktemp "$SUITE_TMP/wsluks-mut.XXXXXX")"
   cp "$file" "$tmp"
   printf '%s\n' "$line" >> "$tmp"
   got="$($fn "$tmp")"
@@ -262,6 +456,49 @@ assert_mutation_append() {
   else
     fail "$name: MUTATION (appended violating line) did not flip the check to failing"
   fi
+  rm -f "$tmp"
+}
+
+# Guard B4 mutation: like assert_mutation, but a sed that matched nothing is a FAIL (a vacuous
+# mutation proves nothing), and with a scope (type name) every changed line must sit inside that
+# resource block — so the "second member" row really mutates only the attachment.
+assert_b4_mutation() {
+  local name="$1" fn="$2" file="$3" sed_expr="$4" stype="${5:-}" sname="${6:-}" tmp got range changed
+  tmp="$(mktemp "$SUITE_TMP/wsluks-b4.XXXXXX")"
+  assert_fixture_dir "$tmp"
+  sed -E "$sed_expr" "$file" > "$tmp"
+  if cmp -s "$file" "$tmp"; then
+    fail "$name: mutation sed changed nothing (vacuous row)"; rm -f "$tmp"; return
+  fi
+  if [ -n "$stype" ]; then
+    range="$(_b4_block_range "$file" "$stype" "$sname")"
+    changed="$(awk 'NR==FNR { a[FNR] = $0; n = FNR; next } { if (a[FNR] != $0) print FNR } END { if (FNR != n) print "count" }' "$file" "$tmp")"
+    if [ -z "$range" ] || printf '%s\n' "$changed" | awk -v r="$range" '
+        BEGIN { split(r, x, " ") } $0 == "count" || $0 + 0 < x[1] || $0 + 0 > x[2] { bad = 1 } END { exit !bad }'; then
+      fail "$name: mutation was not confined to resource \"$stype\" \"$sname\""; rm -f "$tmp"; return
+    fi
+  fi
+  got="$($fn "$tmp")"
+  if [ "$got" = "0" ]; then
+    pass
+  else
+    fail "$name: MUTATION did not flip the check to failing (predicate still passed on a broken copy)"
+  fi
+  rm -f "$tmp"
+}
+
+# Guard B4 must-PASS row: a cosmetic rewrite (extra spacing, trailing comment) must stay green.
+# The rewrite itself must apply, or the row is vacuous.
+assert_b4_holds_variant() {
+  local name="$1" fn="$2" file="$3" sed_expr="$4" tmp got
+  tmp="$(mktemp "$SUITE_TMP/wsluks-b4.XXXXXX")"
+  assert_fixture_dir "$tmp"
+  sed -E "$sed_expr" "$file" > "$tmp"
+  if cmp -s "$file" "$tmp"; then
+    fail "$name: cosmetic sed changed nothing (vacuous row)"; rm -f "$tmp"; return
+  fi
+  got="$($fn "$tmp")"
+  if [ "$got" = "1" ]; then pass; else fail "$name: a cosmetic rewrite (spacing / trailing comment) false-REDDENED the check"; fi
   rm -f "$tmp"
 }
 
@@ -318,12 +555,119 @@ assert_mutation_append "A11 attack-2 (decoy random_password launders a weakened 
 assert_mutation_append "A11 attack-3 (second admin service token)" p_no_laundering_resource "$TF" \
   'resource "doppler_service_token" "admin_leak" { access = "admin" }'
 
+# --- Guard B4 rows (#6604 step 7) ---------------------------------------------
+# Numbering follows the plan's Guard B4 mutation matrix (1-7 RED, H1 must-PASS).
+assert_holds "B4 both workspaces for_each's range over local.plaintext_workspaces_hosts" p_b4_for_each_narrowed "$SERVER_TF"
+assert_b4_mutation "B4-1 (volume for_each reverted to var.web_hosts)" p_b4_for_each_narrowed "$SERVER_TF" \
+  '/^resource "hcloud_volume" "workspaces"/,/^}/ s/(for_each[[:space:]]*=[[:space:]]*)local\.plaintext_workspaces_hosts/\1var.web_hosts/' \
+  hcloud_volume workspaces
+# The SECOND member: the volume stays compliant and the diff is confined to the attachment
+# block, so a predicate that checked only the first block cannot pass this row.
+assert_b4_mutation "B4-2 (attachment-only for_each reverted; volume compliant)" p_b4_for_each_narrowed "$SERVER_TF" \
+  '/^resource "hcloud_volume_attachment" "workspaces"/,/^}/ s/(for_each[[:space:]]*=[[:space:]]*)local\.plaintext_workspaces_hosts/\1var.web_hosts/' \
+  hcloud_volume_attachment workspaces
+assert_b4_mutation "B4-7a (volume block absent)" p_b4_for_each_narrowed "$SERVER_TF" \
+  's/^resource "hcloud_volume" "workspaces"/resource "hcloud_volume" "gone"/'
+assert_b4_mutation "B4-7b (attachment block absent)" p_b4_for_each_narrowed "$SERVER_TF" \
+  's/^resource "hcloud_volume_attachment" "workspaces"/resource "hcloud_volume_attachment" "gone"/'
+
+assert_holds "B4 local.plaintext_workspaces_hosts excludes web-1" p_b4_local_excludes_web1 "$SERVER_TF"
+assert_b4_mutation "B4-3 (local filters web-2 instead of web-1)" p_b4_local_excludes_web1 "$SERVER_TF" \
+  '/^[[:space:]]+plaintext_workspaces_hosts[[:space:]]*=/ s/(k[[:space:]]*!=[[:space:]]*)"web-1"/\1"web-2"/'
+assert_b4_mutation "B4-7c (local absent)" p_b4_local_excludes_web1 "$SERVER_TF" \
+  's/^([[:space:]]+)plaintext_workspaces_hosts([[:space:]]*=)/\1other_hosts\2/'
+
+assert_holds "B4 web-1 workspaces_volume_id is the retired-6604 sentinel" p_b4_sentinel "$SERVER_TF"
+assert_b4_mutation "B4-4 (sentinel reverted to a bare index)" p_b4_sentinel "$SERVER_TF" \
+  's/^([[:space:]]+workspaces_volume_id[[:space:]]*=[[:space:]]*).*$/\1hcloud_volume.workspaces[each.key].id/' \
+  hcloud_server web
+assert_b4_mutation "B4-7d (hcloud_server.web block absent)" p_b4_sentinel "$SERVER_TF" \
+  's/^resource "hcloud_server" "web"/resource "hcloud_server" "gone"/'
+
+assert_holds "B4 workspaces_luks carries lifecycle prevent_destroy = true" p_b4_prevent_destroy "$TF"
+assert_b4_mutation "B4-5 (prevent_destroy = false: token present, property false)" p_b4_prevent_destroy "$TF" \
+  '/^resource "hcloud_volume" "workspaces_luks"/,/^}/ s/(prevent_destroy[[:space:]]*=[[:space:]]*)true/\1false/' \
+  hcloud_volume workspaces_luks
+assert_b4_mutation "B4-7e (workspaces_luks block absent — prevent_destroy)" p_b4_prevent_destroy "$TF" \
+  's/^resource "hcloud_volume" "workspaces_luks"/resource "hcloud_volume" "gone"/'
+
+assert_holds "B4 workspaces_luks carries delete_protection = true" p_b4_delete_protection "$TF"
+assert_b4_mutation "B4-6 (delete_protection = false)" p_b4_delete_protection "$TF" \
+  '/^resource "hcloud_volume" "workspaces_luks"/,/^}/ s/(delete_protection[[:space:]]*=[[:space:]]*)true/\1false/' \
+  hcloud_volume workspaces_luks
+assert_b4_mutation "B4-7f (workspaces_luks block absent — delete_protection)" p_b4_delete_protection "$TF" \
+  's/^resource "hcloud_volume" "workspaces_luks"/resource "hcloud_volume" "gone"/'
+
+# H1 must-PASS: the same lines with extra spacing and a trailing comment stay green.
+B4_H1_SERVER='s/^([[:space:]]+for_each)[[:space:]]*=[[:space:]]*(local\.plaintext_workspaces_hosts)[[:space:]]*$/\1   =   \2   # H1 note/'
+B4_H1_SERVER="$B4_H1_SERVER"';s/^([[:space:]]+plaintext_workspaces_hosts)[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1   =   \2  # H1 note/'
+B4_H1_SERVER="$B4_H1_SERVER"';s/^([[:space:]]+workspaces_volume_id)[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1  =   \2 # H1 note/'
+B4_H1_LUKS='s/^([[:space:]]+(prevent_destroy|delete_protection))[[:space:]]*=[[:space:]]*true.*$/\1   =   true   # H1 note/'
+assert_b4_holds_variant "B4-H1 for_each (spacing + trailing comment)" p_b4_for_each_narrowed "$SERVER_TF" "$B4_H1_SERVER"
+assert_b4_holds_variant "B4-H1 local (spacing + trailing comment)" p_b4_local_excludes_web1 "$SERVER_TF" "$B4_H1_SERVER"
+assert_b4_holds_variant "B4-H1 sentinel (spacing + trailing comment)" p_b4_sentinel "$SERVER_TF" "$B4_H1_SERVER"
+assert_b4_holds_variant "B4-H1 prevent_destroy (spacing + trailing comment)" p_b4_prevent_destroy "$TF" "$B4_H1_LUKS"
+assert_b4_holds_variant "B4-H1 delete_protection (spacing + trailing comment)" p_b4_delete_protection "$TF" "$B4_H1_LUKS"
+
+# B4-9: the attachment's own prevent_destroy (see p_b4_attach_prevent_destroy).
+assert_holds "B4 workspaces_luks ATTACHMENT carries lifecycle prevent_destroy = true" p_b4_attach_prevent_destroy "$TF"
+assert_b4_mutation "B4-9a (attachment prevent_destroy = false)" p_b4_attach_prevent_destroy "$TF" \
+  '/^resource "hcloud_volume_attachment" "workspaces_luks"/,/^}/ s/(prevent_destroy[[:space:]]*=[[:space:]]*)true/\1false/' \
+  hcloud_volume_attachment workspaces_luks
+assert_b4_mutation "B4-9b (attachment block absent)" p_b4_attach_prevent_destroy "$TF" \
+  's/^resource "hcloud_volume_attachment" "workspaces_luks"/resource "hcloud_volume_attachment" "gone"/'
+assert_b4_holds_variant "B4-H1 attachment prevent_destroy (spacing + trailing comment)" p_b4_attach_prevent_destroy "$TF" "$B4_H1_LUKS"
+
+# B4-8: the protections wrapped in a MULTI-LINE /* */ comment. terraform validate honours it, so
+# this is a real, fmt-clean way to drop them. Each sed keeps the line count (the opener and closer
+# take the blank line beside the guarded lines), so the confinement check still applies.
+# B4-8a: `/*` on the blank line above delete_protection, `*/` on the blank line below it.
+assert_b4_mutation "B4-8a (delete_protection wrapped in a multi-line /* */)" p_b4_delete_protection "$TF" \
+  '/^resource "hcloud_volume" "workspaces_luks"/,/^}/ { /^$/ { N; /\n[[:space:]]+delete_protection[[:space:]]*=[[:space:]]*true$/ { N; s/^\n/  \/*\n/; s/\n$/\n  *\// } } }' \
+  hcloud_volume workspaces_luks
+# B4-8b/8c: `/*` on the blank line above `lifecycle {`, `*/` after the lifecycle block's `}`.
+B4_ML_LIFECYCLE='{ /^$/ { N; /\n[[:space:]]+lifecycle[[:space:]]*\{$/ { N; N; s/^\n/  \/*\n/; s/\n([[:space:]]+\})$/\n\1 *\// } } }'
+assert_b4_mutation "B4-8b (volume lifecycle block wrapped in a multi-line /* */)" p_b4_prevent_destroy "$TF" \
+  '/^resource "hcloud_volume" "workspaces_luks"/,/^}/ '"$B4_ML_LIFECYCLE" \
+  hcloud_volume workspaces_luks
+assert_b4_mutation "B4-8c (attachment lifecycle block wrapped in a multi-line /* */)" p_b4_attach_prevent_destroy "$TF" \
+  '/^resource "hcloud_volume_attachment" "workspaces_luks"/,/^}/ '"$B4_ML_LIFECYCLE" \
+  hcloud_volume_attachment workspaces_luks
+# H2 must-PASS: a multi-line comment that CLOSES before the guarded lines, plus a string holding
+# `/*`, must not eat them (a comment stripper that over-strips false-REDs the real file).
+B4_H2='s~^(resource "hcloud_volume(_attachment)?" "workspaces_luks" \{)$~\1\n  /* H2 note: a multi-line comment\n     that closes before the guarded lines */\n  h2_note = "glob /mnt/*"~'
+assert_b4_holds_variant "B4-H2 prevent_destroy (multi-line comment + /* in a string)" p_b4_prevent_destroy "$TF" "$B4_H2"
+assert_b4_holds_variant "B4-H2 delete_protection (multi-line comment + /* in a string)" p_b4_delete_protection "$TF" "$B4_H2"
+assert_b4_holds_variant "B4-H2 attachment prevent_destroy (multi-line comment + /* in a string)" p_b4_attach_prevent_destroy "$TF" "$B4_H2"
+
+# B4-10: no override / JSON config in the root. The mutation copies the root's *.tf into a scratch
+# dir, requires the predicate to HOLD there first (else the row is vacuous), then plants one file.
+assert_b4_dir_mutation() {
+  local name="$1" fn="$2" plant="$3" d got
+  d="$(mktemp -d "$SUITE_TMP/wsluks-root.XXXXXX")"
+  assert_fixture_dir "$d"
+  cp "$DIR"/*.tf "$d"/
+  if [ "$($fn "$d")" != "1" ]; then fail "$name: the unplanted copy already fails (vacuous row)"; rm -rf "$d"; return; fi
+  printf '%s\n' '# planted by workspaces-luks.test.sh' > "$d/$plant"
+  got="$($fn "$d")"
+  if [ "$got" = "0" ]; then pass; else fail "$name: MUTATION (planted $plant) did not flip the check to failing"; fi
+  rm -rf "$d"
+}
+assert_holds "B4 no *override.tf / *.tf.json in apps/web-platform/infra" p_b4_no_override_files "$DIR"
+assert_b4_dir_mutation "B4-10a (zz_override.tf planted)" p_b4_no_override_files zz_override.tf
+assert_b4_dir_mutation "B4-10b (extra.tf.json planted)" p_b4_no_override_files extra.tf.json
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---------
+# Reported by printf + exit 1, NEVER through fail(): a neutered fail() must not silence the floor.
 # A1: 1 holds + 2 mutations. A5: 1 + 2. A11: 1 + 3. A2/A3/A4/A6/A7/A8/A9/A10: 1 + 1 each.
 # 3 + 3 + 4 + (8 x 2) = 26.
+# Guard B4: for_each 1 + 4, local 1 + 2, sentinel 1 + 2, prevent_destroy 1 + 2,
+# delete_protection 1 + 2, H1 5 → 5 + 3 + 3 + 3 + 3 + 5 = 22.
+# Guard B4 (review fix-forward): attachment 1 + 2 + H1 1 = 4, multi-line 8a/8b/8c 3, H2 3,
+# override 1 + 2 = 3 → 13. 26 + 22 + 13 = 61.
 total=$((passes + fails))
-if [ "$total" -lt 26 ]; then
-  echo "FAIL: ran only ${total} assertions (<26) — suite did not execute fully" >&2
+if [ "$total" -lt 61 ]; then
+  printf 'FAIL: ran only %s assertions (<61) — suite did not execute fully\n' "$total" >&2
   exit 1
 fi
 
