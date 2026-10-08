@@ -840,6 +840,8 @@ tree_row() {
 # known-good and a known-bad input each, before any row. Reported by printf + exit 1, never through the helpers it backstops. A
 # helper that always reads "ok" would otherwise turn every row green: nothing else in the suite drives them with a bad input.
 _st_fatal() { printf '[FATAL] instrument self-test: %s\n' "$1" >&2; exit 1; }
+# the failure reporter itself must fail: a `_st_fatal` that returns would let every probe below fail silently (checked in a subshell, reported by a direct printf + exit)
+if ( _st_fatal "reporter probe" ) >/dev/null 2>&1; then printf '[FATAL] instrument self-test: _st_fatal returned instead of exiting\n' >&2; exit 1; fi
 # A later self-test runs after rows have counted: it snapshots the counters, ignores DCG_ROWS, and puts everything back.
 _st_save() { _sv_p="$PASS_COUNT"; _sv_f="$FAIL_COUNT"; _sv_c="$CHECKED"; _sv_s="$SELECTED"; _sv_rs="$ROWSEL"; ROWSEL=""; }
 _st_load() { PASS_COUNT="$_sv_p"; FAIL_COUNT="$_sv_f"; CHECKED="$_sv_c"; SELECTED="$_sv_s"; ROWSEL="$_sv_rs"; }
@@ -2089,6 +2091,41 @@ redact_np() { # <label> <command> <secret that must be absent> <quoted text that
   jqchk "$1: the secret is absent from the reason" '.hookSpecificOutput.permissionDecisionReason | contains($s) | not' --arg s "$3"
   jqchk "$1: the rest of the segment is still quoted" '.hookSpecificOutput.permissionDecisionReason | contains($q)' --arg q "$4"
 }
+# Instrument self-test, part 3: the wrappers that carry their OWN jq filter (reason_has, rule_last, quote_row, rule_row, redact_row, redact_np) are
+# driven against a stub hook that prints one canned ask. A filter that always reads true would turn some sixty quote, rule-id and redaction rows green and
+# nothing else drives them with a bad input. Reported by printf + exit 1, never through the helpers it backstops.
+if [[ -z "$FAST" ]]; then
+  _st_save
+  cat > "$WORK/selftest/canned.sh" <<'CANEOF'
+#!/bin/sh
+echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"The guard. infra-destroy: a lead. Matched command: [x y z=<redacted>]. tail"}}'
+CANEOF
+  _st_canned_hook="$GUARD_HOOK"
+  _st_d() { # <function> <args...>: run it against the canned hook; the pass and fail deltas land in ST_DP / ST_DF
+    local p0="$PASS_COUNT" f0="$FAIL_COUNT"
+    GUARD_HOOK="$WORK/selftest/canned.sh"; { "$@"; } >/dev/null 2>&1; GUARD_HOOK="$_st_canned_hook"
+    ST_DP=$((PASS_COUNT - p0)); ST_DF=$((FAIL_COUNT - f0))
+  }
+  _st_expect() { [[ "$ST_DP" -eq "$1" && "$ST_DF" -eq "$2" ]] || _st_fatal "$3 (passes +$ST_DP, fails +$ST_DF; wanted +$1 and +$2)"; }
+  _st_canned_out="$(sh "$WORK/selftest/canned.sh")"
+  HOOK_OUT="$_st_canned_out"
+  _st_d reason_has "self-test: reason_has" "Matched command: [x y z=<redacted>]"; _st_expect 1 0 "reason_has failed a substring the reason holds"
+  _st_d reason_has "self-test: reason_has" "Matched command: [q]"; _st_expect 0 1 "reason_has passed a substring the reason does not hold"
+  _st_d rule_last "self-test: rule_last" infra-destroy; _st_expect 1 0 "rule_last failed the rule id the reason carries"
+  _st_d rule_last "self-test: rule_last" default-branch-force-push; _st_expect 0 1 "rule_last passed a rule id the reason does not carry"
+  _st_d quote_row "self-test: quote_row" 'ls' - 'x y z=<redacted>'; _st_expect 1 0 "quote_row failed the quote the reason holds"
+  _st_d quote_row "self-test: quote_row" 'ls' - 'x q'; _st_expect 0 1 "quote_row passed a quote the reason does not hold"
+  _st_d rule_row "self-test: rule_row" 'ls' - infra-destroy; _st_expect 1 0 "rule_row failed the rule id the reason carries"
+  _st_d rule_row "self-test: rule_row" 'ls' - lexer-empty; _st_expect 0 1 "rule_row passed a rule id the reason does not carry"
+  _st_d redact_row "self-test: redact_row" 'ls' - ZQ-NOT-THERE 'x y z=<redacted>'; _st_expect 2 0 "redact_row failed a reason with no secret and the right quote"
+  _st_d redact_row "self-test: redact_row" 'ls' - 'a lead' 'x y z=<redacted>'; _st_expect 1 1 "redact_row passed a reason that still holds the secret"
+  _st_d redact_row "self-test: redact_row" 'ls' - ZQ-NOT-THERE 'x q'; _st_expect 1 1 "redact_row passed a reason that does not hold the quote"
+  _st_d redact_np "self-test: redact_np" 'ls' ZQ-NOT-THERE 'x y z=<redacted>'; _st_expect 2 0 "redact_np failed a reason with no secret and the right quote"
+  _st_d redact_np "self-test: redact_np" 'ls' 'a lead' 'x y z=<redacted>'; _st_expect 1 1 "redact_np passed a reason that still holds the secret"
+  _st_d redact_np "self-test: redact_np" 'ls' ZQ-NOT-THERE 'x q'; _st_expect 1 1 "redact_np passed a reason that does not hold the quote"
+  HOOK_OUT=""
+  _st_load
+fi
 redact_np "redact (perl-less): a single-quoted -var name=value" "terraform destroy -var 'db_password=zq-fake-pw-22' -var region=us-east-1" zq-fake-pw-22 "db_password=<redacted> -var region=us-east-1"
 redact_np "redact (perl-less): a double-quoted name=value" 'terraform destroy -var "db_secret=zq-fake-sec-23" -var region=us-east-1' zq-fake-sec-23 "db_secret=<redacted> -var region=us-east-1"
 redact_np "redact (perl-less): a quoted value with spaces goes whole" "terraform destroy -var 'db_password=zq fake pw 24 two' -var region=us-east-1" "pw 24 two" "db_password=<redacted> -var region=us-east-1"
