@@ -73,3 +73,6 @@ data lines.
   cannot make the screen quadratic.
 - Each refusal fixture row needs a bounded twin that must still convert (`{ echo a; echo b; } | grep -q a`), or a screen that refuses every
   group passes the set.
+- A failure message is code too. The refusal check's message named an unbounded producer in backticks inside double quotes, so the
+  check ran `yes` the moment it FAILED (never while green). A mutation battery turned that into a 14 GB bash and took the host's memory.
+  Run any battery under `ulimit -v`, one mutant at a time, and grep the failure strings you add for unescaped backticks and `$(`.
