@@ -972,12 +972,14 @@ e_row 'Rule E -u xfail: `-U` / `--proxy-user` (a proxy credential) is NOT read (
 #   rejected  curl stopped with a non-zero rc and wrote no source (rc 2 for a refused command line, rc 26 for `-K`
 #             reading a config file that is not there) -> the lint must not (no request is made, so no credential
 #             is sent; the unknown digits 5 7 8 9 and every letter that wants a number land here)
-#   cut       curl wrote its source, set no user, and warned "is deprecated and has no function anymore" (-2 / -3: this curl
-#             ends the bundle there)                            -> CONSERVATIVE, see below
+#   cut       curl wrote its source, set no user, and warned "is deprecated and has no function anymore" (-2 / -3 on curl
+#             8.22.0: it ends the bundle there; curl 8.5.0 reads the `u` behind them, so they are `pos` there)
+#                                                                -> CONSERVATIVE, see below
 #   terminal  curl exited 0 with no source (-V / -M print and quit before any request) -> CONSERVATIVE, see below
 # CONSERVATIVE classes are the one place the lint is allowed to disagree with this curl, and the disagreement is not
 # hand-listed: the lint must report the spelling exactly when `curl --help all` lists the short flag WITHOUT an operand
-# (the lint's own alphabet is that listing), so a letter that stops being a no-argument flag turns the row RED.
+# (a letter that stops being a no-argument flag, or a listed no-argument flag the lint's alphabet lacks, turns a row RED).
+# Measured on curl 8.5.0 (ubuntu-24.04) and 8.22.0; the floors below are derived from NAMED characters, not from either total.
 # Every character class has an anti-vacuity floor, so a table that loses a whole direction reads RED.
 ORC="$WORK/orc"
 mkdir -p "$ORC" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
@@ -1012,6 +1014,23 @@ for _c in {0..9} {A..Z} {a..z} '#' ':'; do
 done
 unset _c
 ORC_N_CHARS="${#ORC_CHARS[@]}"
+# VERSION-TOLERANT FLOORS. Which class a character lands in is a property of the curl build (measured on curl 8.5.0, the
+# ubuntu-24.04 runner's, and 8.22.0: `-2`/`-3` are pos on one and cut on the other, `-h` is terminal on one and neg on the
+# other, `-O` is neg on 8.5.0 with an empty sink path), so no total is asserted. What is asserted is
+#   1. the population: every character of [0-9A-Za-z#:] ran, both spellings, and every one landed in a class;
+#   2. AGREEMENT: each row below scores the lint against THIS curl's verdict, whatever the build;
+#   3. NAMED stable classes: the characters below have the same family on every curl measured, they are asserted BY NAME
+#      (a drift names the character), and the class floors are DERIVED from these names (two spellings each), never
+#      copied from one build's total.
+# A: pos / cut / terminal (the lint must report them); N: neg (an operand-taking flag swallows the rest of the word, or
+# `:` ends the bundle); R: rejected (curl refuses the command line or the config file before any request).
+ORC_NAMED_A='#012346BGIJLMNORSVZafgijklnpqsuv'
+ORC_NAMED_N='ADEHPQTUXbcdeortwxz:'
+ORC_NAMED_R='5789CFKWYmy'
+# The letters the lint's alphabet must ALWAYS contain, whatever curl lists: the 31 no-argument flags measured on both
+# builds (ORC_NAMED_A without the `u` that is matched by the pattern itself).
+ORC_REQUIRED_ALPHA="${ORC_NAMED_A//u/}"
+declare -A ORC_CCLS=()
 if [ "$ORC_N_CHARS" -lt 64 ] || [ "$ORC_LEGACY_N" -lt 21 ]; then
   fail "Rule E -u oracle: the table covers $ORC_N_CHARS characters and $ORC_LEGACY_N legacy spellings, anti-vacuity floor is 64 and 21"
 else
@@ -1029,7 +1048,10 @@ orc_classify() { # <spelling> -> sets ORC_CLASS / ORC_UP / ORC_RC / ORC_WANT fro
   ORC_RUN_N=$((ORC_RUN_N + 1))
   rm -rf "$d"
   mkdir -p "$d" || return 1
-  ( cd "$d" && SENTRY_AUTH_TOKEN=synthetic-oracle-value SINK_URL=http://127.0.0.1:9/ \
+  # The sink URL carries a PATH on purpose: `-O` ("remote name") aborts with rc 23 on an empty path in curl 8.5.0
+  # (before the second URL's options are recorded, so `-Ou` read as "no user"), and keeps going on 8.22.0. With a
+  # path both builds record the user, so the verdict no longer depends on a file-name side effect of `-O`/`-J`.
+  ( cd "$d" && SENTRY_AUTH_TOKEN=synthetic-oracle-value SINK_URL=http://127.0.0.1:9/f \
       bash -c "curl --disable --noproxy '*' -m 1 --libcurl \"\$0\" \"\$SINK_URL\" $sp \"\$SINK_URL\"" "$d/o.c" >/dev/null 2>"$d/err" </dev/null )
   ORC_RC=$?
   ORC_UP=0
@@ -1094,6 +1116,7 @@ else
       _c="${ORC_CHARS[$((_k / 2))]}"
       if [ $((_k % 2)) -eq 0 ]; then
         _spaced_want="$ORC_WANT"
+        ORC_CCLS["$_c"]="$ORC_CLASS"
         if [ "$ORC_WANT" = "1" ]; then ORC_WANT1_CHARS+="$_c"; else ORC_WANT0_CHARS+="$_c"; fi
       elif [ "$_spaced_want" != "$ORC_WANT" ]; then
         fail "Rule E -u oracle: curl disagrees with itself on \`-${_c}u\`: spaced spelling wants $_spaced_want, glued spelling wants $ORC_WANT"
@@ -1104,24 +1127,46 @@ else
     e_row "Rule E -u oracle [$ORC_CLASS]: \`$_sp\` -- real curl says USERPWD x$ORC_UP (rc=$ORC_RC), the lint reports $ORC_WANT" "$LINT" "$ORC/gen.sh" "$ORC_WANT"
   done
   unset _sp _i _k _c _spaced_want
-  # Measured on curl 8.22.0: 65 / 54 / 22 / cut 4 + terminal 4. The positive floor counts the conservative spellings
-  # with the positives, because which of `pos` / `cut` / `terminal` a deprecated or print-and-quit flag lands in
-  # is a property of the curl build (an older curl reads the `u` behind `-2`), not of the lint.
-  if [ $((ORC_POS + ORC_CUT + ORC_TERM)) -lt 73 ]; then
-    fail "Rule E -u oracle: curl took only $((ORC_POS + ORC_CUT + ORC_TERM)) spelling(s) as a no-argument flag followed by -u, anti-vacuity floor is 73"
+  # Class floors, DERIVED from the named stable classes (two spellings per name), never from one build's totals: the
+  # positive floor counts the conservative spellings with the positives, because which of `pos` / `cut` / `terminal`
+  # a deprecated or print-and-quit flag lands in is a property of the curl build (an older curl reads the `u` behind
+  # `-2`), not of the lint.
+  ORC_FLOOR_A=$((2 * ${#ORC_NAMED_A}))
+  ORC_FLOOR_N=$((2 * ${#ORC_NAMED_N}))
+  ORC_FLOOR_R=$((2 * ${#ORC_NAMED_R}))
+  if [ $((ORC_POS + ORC_CUT + ORC_TERM)) -lt "$ORC_FLOOR_A" ]; then
+    fail "Rule E -u oracle: curl took only $((ORC_POS + ORC_CUT + ORC_TERM)) spelling(s) as a no-argument flag followed by -u, anti-vacuity floor is $ORC_FLOOR_A (two spellings of each of the ${#ORC_NAMED_A} named characters)"
   else
-    pass "Rule E -u oracle: curl took $ORC_POS spelling(s) as basic auth and $((ORC_CUT + ORC_TERM)) more as conservative no-argument flags (anti-vacuity floor 73 together)"
+    pass "Rule E -u oracle: curl took $ORC_POS spelling(s) as basic auth and $((ORC_CUT + ORC_TERM)) more as conservative no-argument flags (anti-vacuity floor $ORC_FLOOR_A together)"
   fi
-  if [ "$ORC_NEG" -lt 54 ]; then
-    fail "Rule E -u oracle: curl classed only $ORC_NEG spelling(s) as NOT basic auth, anti-vacuity floor is 54"
+  if [ "$ORC_NEG" -lt "$ORC_FLOOR_N" ]; then
+    fail "Rule E -u oracle: curl classed only $ORC_NEG spelling(s) as NOT basic auth, anti-vacuity floor is $ORC_FLOOR_N (two spellings of each of the ${#ORC_NAMED_N} named characters)"
   else
-    pass "Rule E -u oracle: curl classed $ORC_NEG spelling(s) as NOT basic auth (anti-vacuity floor 54)"
+    pass "Rule E -u oracle: curl classed $ORC_NEG spelling(s) as NOT basic auth (anti-vacuity floor $ORC_FLOOR_N)"
   fi
-  if [ "$ORC_REJ" -lt 20 ]; then
-    fail "Rule E -u oracle: curl stopped before a request for only $ORC_REJ spelling(s), anti-vacuity floor is 20"
+  if [ "$ORC_REJ" -lt "$ORC_FLOOR_R" ]; then
+    fail "Rule E -u oracle: curl stopped before a request for only $ORC_REJ spelling(s), anti-vacuity floor is $ORC_FLOOR_R (two spellings of each of the ${#ORC_NAMED_R} named characters)"
   else
-    pass "Rule E -u oracle: curl stopped before any request for $ORC_REJ spelling(s) (anti-vacuity floor 20)"
+    pass "Rule E -u oracle: curl stopped before any request for $ORC_REJ spelling(s) (anti-vacuity floor $ORC_FLOOR_R)"
   fi
+  # The named classes themselves: a character whose family moved on this curl is NAMED, not summed away.
+  _drift=""
+  for _fam in A N R; do
+    case "$_fam" in A) _names="$ORC_NAMED_A" ;; N) _names="$ORC_NAMED_N" ;; R) _names="$ORC_NAMED_R" ;; esac
+    for _c in $(printf '%s' "$_names" | fold -w1); do
+      _got="${ORC_CCLS[$_c]:-absent}"
+      case "$_fam:$_got" in
+        A:pos | A:cut | A:terminal | N:neg | R:rejected) ;;
+        *) _drift+=" -${_c}u(want family $_fam, curl says $_got)" ;;
+      esac
+    done
+  done
+  if [ -n "$_drift" ]; then
+    fail "Rule E -u oracle: named stable classes drifted on this curl:$_drift"
+  else
+    pass "Rule E -u oracle: all $((${#ORC_NAMED_A} + ${#ORC_NAMED_N} + ${#ORC_NAMED_R})) named characters sit in their stable class on this curl ($(curl --version | awk 'NR == 1 { print $1, $2 }'))"
+  fi
+  unset _drift _fam _names _c _got
   if [ $((ORC_CUT + ORC_TERM)) -lt 1 ]; then
     fail "Rule E -u oracle: no spelling landed in a conservative class (cut=$ORC_CUT terminal=$ORC_TERM), so the curl flag-listing tie is untested, anti-vacuity floor is 1"
   else
@@ -1147,11 +1192,23 @@ while i < len(body):
         i += 1
 sys.stdout.write("".join(sorted(out)))
 ' "$LINT")"
-  if [ -n "$_derived" ] && [ "$_derived" = "$_declared" ]; then
-    pass "Rule E -u oracle: the lint's E_SHORT_NOARG is exactly the ${#_derived} characters real curl takes as no-argument flags ($_derived)"
+  # A SUPERSET check, not an equality: every no-argument short flag THIS curl lists must be in the lint's alphabet (a
+  # flag the lint misses is a credential it cannot see), and so must the fixed letters in ORC_REQUIRED_ALPHA, which
+  # no curl build may take away (an older or newer curl listing fewer or more flags must not decide the lint's contents;
+  # a flag that is not listed there is scored by the per-character rows above, whichever way the build lands).
+  _missing="" _missing_req=""
+  for _c in $(printf '%s' "$_derived" | fold -w1); do
+    case "$_declared" in *"$_c"*) ;; *) _missing+="$_c" ;; esac
+  done
+  for _c in $(printf '%s' "$ORC_REQUIRED_ALPHA" | fold -w1); do
+    case "$_declared" in *"$_c"*) ;; *) _missing_req+="$_c" ;; esac
+  done
+  if [ -n "$_derived" ] && [ -z "$_missing" ] && [ -z "$_missing_req" ]; then
+    pass "Rule E -u oracle: the lint's E_SHORT_NOARG ($_declared) contains all ${#_derived} no-argument flags this curl lists ($_derived) and the ${#ORC_REQUIRED_ALPHA} fixed letters"
   else
-    fail "Rule E -u oracle: E_SHORT_NOARG is '$_declared' but real curl says '$_derived'"
+    fail "Rule E -u oracle: E_SHORT_NOARG is '$_declared'; this curl lists '$_derived' (missing from the lint: '$_missing'), fixed letters missing: '$_missing_req'"
   fi
+  unset _missing _missing_req _c
 
   # MUTATION PROOF, one character at a time. Each row rebuilds E_SHORT_NOARG in a COPY of the lint as an explicit
   # class, asserts the rebuilt copy differs from the lint's own line (the mutation LANDED), and scores the copy on
@@ -1160,7 +1217,7 @@ sys.stdout.write("".join(sorted(out)))
   orc_alpha_copy() { # <out.py> <explicit class chars>
     sed -E "s/^E_SHORT_NOARG = r\"\[[^\"]*\]\"\$/E_SHORT_NOARG = r\"[$2]\"/" "$LINT" > "$1"
   }
-  _classchars="$_derived"
+  _classchars="$_declared"
   orc_alpha_copy "$WORK/alpha-control.py" "$_classchars"
   _want_all=0
   for _w in "${ORC_ALL_WANT[@]}"; do _want_all=$((_want_all + _w)); done
@@ -1169,7 +1226,7 @@ sys.stdout.write("".join(sorted(out)))
   e_row "Rule E -u oracle control: the explicit rebuild of the alphabet is verdict-neutral on the whole table (mutation control)" "$WORK/alpha-control.py" "$ORC/gen-all.sh" "$_want_all"
   ORC_MUT_DROP=0 ORC_MUT_ADD=0 ORC_MUT_EQUIV=0
   for _c in $(printf '%s' "$ORC_WANT1_CHARS" | tr -d 'u' | fold -w1); do
-    orc_alpha_copy "$WORK/alpha-mut.py" "${_derived//"$_c"/}"
+    orc_alpha_copy "$WORK/alpha-mut.py" "${_declared//"$_c"/}"
     if cmp -s "$WORK/alpha-control.py" "$WORK/alpha-mut.py"; then
       fail "Rule E -u oracle mutant: dropping \`$_c\` did not land"
       continue
@@ -1179,7 +1236,7 @@ sys.stdout.write("".join(sorted(out)))
     ORC_MUT_DROP=$((ORC_MUT_DROP + 1))
   done
   for _c in $(printf '%s' "$ORC_WANT0_CHARS" | fold -w1); do
-    orc_alpha_copy "$WORK/alpha-mut.py" "${_derived}${_c}"
+    orc_alpha_copy "$WORK/alpha-mut.py" "${_declared}${_c}"
     if cmp -s "$WORK/alpha-control.py" "$WORK/alpha-mut.py"; then
       fail "Rule E -u oracle mutant: adding \`$_c\` did not land"
       continue
@@ -1197,10 +1254,14 @@ sys.stdout.write("".join(sorted(out)))
     ORC_MUT_ADD=$((ORC_MUT_ADD + 1))
   done
   unset _c _w _want_all _classchars _derived _declared
-  if [ "$ORC_MUT_DROP" -lt 31 ] || [ "$ORC_MUT_ADD" -lt 31 ] || [ "$ORC_MUT_EQUIV" -lt 1 ]; then
-    fail "Rule E -u oracle: only $ORC_MUT_DROP drop mutants, $ORC_MUT_ADD add mutants and $ORC_MUT_EQUIV equivalent mutant(s) ran, anti-vacuity floor is 31, 31 and 1"
+  # Floors derived from the fixed names: one drop mutant per required letter, one add mutant per named non-member
+  # (the equivalent mutant `H` is recorded, not counted as a kill).
+  ORC_FLOOR_DROP="${#ORC_REQUIRED_ALPHA}"
+  ORC_FLOOR_ADD=$((${#ORC_NAMED_N} + ${#ORC_NAMED_R} - 1))
+  if [ "$ORC_MUT_DROP" -lt "$ORC_FLOOR_DROP" ] || [ "$ORC_MUT_ADD" -lt "$ORC_FLOOR_ADD" ] || [ "$ORC_MUT_EQUIV" -lt 1 ]; then
+    fail "Rule E -u oracle: only $ORC_MUT_DROP drop mutants, $ORC_MUT_ADD add mutants and $ORC_MUT_EQUIV equivalent mutant(s) ran, anti-vacuity floor is $ORC_FLOOR_DROP, $ORC_FLOOR_ADD and 1"
   else
-    pass "Rule E -u oracle: $ORC_MUT_DROP drop mutants and $ORC_MUT_ADD add mutants killed, one per alphabet character, plus $ORC_MUT_EQUIV recorded equivalent mutant (anti-vacuity floor 31, 31 and 1)"
+    pass "Rule E -u oracle: $ORC_MUT_DROP drop mutants and $ORC_MUT_ADD add mutants killed, one per alphabet character, plus $ORC_MUT_EQUIV recorded equivalent mutant (anti-vacuity floor $ORC_FLOOR_DROP, $ORC_FLOOR_ADD and 1)"
   fi
 fi
 
