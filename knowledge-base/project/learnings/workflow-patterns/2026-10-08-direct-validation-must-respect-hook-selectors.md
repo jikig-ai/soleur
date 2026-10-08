@@ -53,3 +53,25 @@ read established an open PR outside the queue; no unknown state was treated
 as permission to push. A full read of the large pipe-guard test was truncated;
 the six-line incoming diff supplied the actual merge-scope evidence. Prefer
 bounded diffs for maintenance inspection and delegate broader file retrieval.
+
+## Addendum — failed CI evidence and issue filing
+
+For a completed failed job inside a still-running workflow, `gh run view
+--log-failed` refused access until workflow completion. The jobs/logs API
+worked, but the CLI refused ANSI-bearing content by default. Save it to an
+ignored file with the explicit `--allow-escape-sequences` option, then strip
+control sequences before displaying bounded excerpts. Match the runner's
+timestamped suite verdict, not fixture self-tests that intentionally print
+FAIL messages. Never replay raw terminal controls into Warp.
+
+A superseded description-guard run accepted normal cancellation but remained
+queued on repeated reads. After re-verifying the same head and inactive slot,
+GitHub's force-cancel endpoint completed cancellation; the replacement guards
+remained separately watched. An accepted cancel request is not completion.
+
+The watchdog tracking issue's first filing was refused because it omitted the
+milestone and filing exit; the corrected machinery-labeled, Post-MVP filing
+then needed network escalation before succeeding. Apply the hook's explicit
+filing metadata rather than treating a refusal or network error as a created
+issue. A full canonical go-command read was truncated; use bounded sections
+when retrieving a long workflow after compaction.

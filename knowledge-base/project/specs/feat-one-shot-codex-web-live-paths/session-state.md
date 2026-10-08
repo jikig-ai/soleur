@@ -599,3 +599,38 @@
   infrastructure dispatch or flag/cohort change ran. Project controls and
   regions remain unconfirmed; Admin alternatives are unexecuted and the
   support request unsent.
+
+## Continuation update — 2026-10-08 watchdog failure evidence
+
+- Head `a127f03be37c5ade6099a7a6d91865f12c19b76d` completed
+  [CI 37840920141](https://github.com/jikig-ai/soleur/actions/runs/37840920141)
+  with a failed script shard 5 and failed required `test` aggregate. Its C.9
+  fixture intentionally killed its runner, then observed no watchdog announce
+  within 20 seconds and a surviving fixture child after another 10 seconds.
+  All other CI jobs passed. This is a completed assertion failure, not an
+  unexplained runner crash or a green verdict. RLS 37840920994 succeeded with
+  migrations and actual fuzzing; production parity was skipped.
+- The runner and C.9 test are byte-identical at that head, included main
+  `fd1c4d5cac` and subsequently fetched main
+  `d0b5d2e35b16e49a5a968534e82e149332464509`. Main's shard 5 passed in runs
+  37835632720 and 37840201709. This establishes shared source, not root cause.
+  Limited research found that the fixture discarded its private output log.
+  [Issue #9791](https://github.com/jikig-ai/soleur/issues/9791) was filed and
+  verified OPEN before adding watchdog-only tracing to the copied synthetic
+  C.9 sandbox and printing bounded private-log/trace tails on failure. The
+  production runner is unchanged. A future green CI result alone does not
+  resolve the unexplained failure or close that issue.
+- Pinned main `d0b5d2e35b16e49a5a968534e82e149332464509` merged without
+  conflicts. Its changes are confined to ADR-277 and archived decision notes;
+  they do not repair this failure. The queue-state read confirmed OPEN,
+  not queued and auto-merge disarmed before the merge. Shell syntax and
+  applicable static documentation checks cover this maintenance patch;
+  local suites and hook execution remain held. Fresh exact-head CI must
+  verify the diagnostic fixture change and ensuing push.
+- All execution and promotion holds persist: default-off/customer content
+  blocked; no current-source or production recovery retry, authenticated QA,
+  routine qualification, permitted Web matrices, mode-specific CLO, full
+  review or promotion. The `27c04a95` rehearsal authorization remains consumed.
+  Project controls/regions remain unknown, challenge retries stopped, Admin
+  alternatives unexecuted and support unsent. No provider call, credential
+  inspection, browser-auth copying, shared-production write or flag change ran.
