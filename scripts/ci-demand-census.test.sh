@@ -29,7 +29,8 @@
 #   Row 7  --workflow.  Row 8  the windows.tsv manifest (exact tiling) and created_at checks.
 #   Row 2b a job still in flight, a re-run since the listing, one job id in two files.
 #   Self-test 2  every predicate helper (rc_is, has, hasi, hasx, same, stray_lines,
-#          tables_equal, landed) is driven once with an input that MUST fail.
+#          tables_equal, landed, no_dup_keys, no_exit1, keys_ok, in_live_tmp) is driven once
+#          with an input that MUST fail, and _pc (the driver of these controls) has a control of its own.
 #   H1     the same row function is run against a stub that prints the golden
 #          total; rows 1-8 must go RED against it, and the stub must pass EXACTLY
 #          the designated assertions (a neutered predicate would pass more).
@@ -40,19 +41,26 @@
 #          directory round-trips to the same golden, a failure on run k exits 2
 #          naming k after two retries, C1 fires before any jobs call, and every
 #          validation refusal exits 2 without a single gh call. A `jq` shim that
-#          fails only one filter proves every jq failure is fail-closed. L9: SIGINT
-#          and SIGTERM end a run with a hung gh call within 5 s (rc 130 / 143, no
-#          scratch left). L10: flag without value, missing dependency, shell-quoted
-#          cleanup hint, no scratch directory left by any run.
-#   Every census run goes through CENSUS_CMD: bounded by `timeout` (a looping
-#   mutant is a FAIL, not a hang) with the documented knobs unset (CENSUS_SUBWINDOW_S
-#   and friends exported in a developer shell do not change this suite).
+#          fails only one filter proves every jq failure is fail-closed. L9: SIGINT,
+#          SIGTERM and SIGHUP end a run with a hung gh call within 5 s (rc 130 / 143 /
+#          129, no scratch left), and a SECOND signal during the cleanup cannot cut it
+#          short. L10: flag without value, missing dependency (a timeout without
+#          --foreground included), shell-quoted cleanup hint, no scratch directory left
+#          by any run.
+#   Every census run (L9 excepted, see below) goes through CENSUS_CMD: bounded by `timeout` (a
+#   looping mutant is a FAIL, not a hang; after the FIRST timeout every later run is failed
+#   without being run, so a looping mutant is a fast red) with the documented knobs unset
+#   (CENSUS_SUBWINDOW_S and friends exported in a developer shell do not change this suite).
+#   The L9 signal rows do NOT go through the outer `timeout`: a plain `timeout` re-sends the signal it
+#   got to its own group, so the census would receive a second signal while its cleanup runs.
+#   The suite exports LC_ALL=C (bash prints EPOCHREALTIME with the locale's radix).
 #
 # This suite writes only under mktemp -d rooted at ${TMPDIR:-/var/tmp}; it never
 # writes into the repository (lesson: fixtures that clobber committed files).
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
+export LC_ALL=C
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -127,11 +135,21 @@ OUT="$T/out.txt"
 ERR="$T/err.txt"
 RC=0
 
-# Every census invocation of this suite goes through CENSUS_CMD: bounded by timeout (a looping mutant becomes a
-# FAIL with rc 124, never a hang) and with the documented knobs unset (a developer shell that lowered
-# CENSUS_SUBWINDOW_S must not turn this suite red).
+# Every census invocation of this suite (the L9 signal rows excepted) goes through CENSUS_CMD: bounded by timeout (a
+# looping mutant becomes a FAIL with rc 124, never a hang) and with the documented knobs unset (a developer shell that
+# lowered CENSUS_SUBWINDOW_S must not turn this suite red). The guard makes the FIRST timeout final: it leaves a marker,
+# and every later run exits 124 at once without running, so a looping mutant is a fast red, not 30 minutes of timeouts.
 CENSUS_TO="${CENSUS_TEST_TIMEOUT:-60}"   # seconds per census run; lowered only by mutation drivers that expect a hang
-CENSUS_CMD=(timeout "$CENSUS_TO" env -u CENSUS_SUBWINDOW_S -u CENSUS_GH_TIMEOUT -u CENSUS_RETRY_SLEEP)
+DEADLINE_FILE="$T/deadline-hit"
+CENSUS_ENV=(env -u CENSUS_SUBWINDOW_S -u CENSUS_GH_TIMEOUT -u CENSUS_RETRY_SLEEP)
+census_run() { # <env assignments / command words...>: timeout-bounded; after the first timeout, later runs fail at once (rc 124)
+  local rc
+  if [ -e "$DEADLINE_FILE" ]; then return 124; fi
+  timeout "$CENSUS_TO" "${CENSUS_ENV[@]}" "$@"; rc=$?
+  if [ "$rc" -eq 124 ]; then : >"$DEADLINE_FILE"; fi
+  return "$rc"
+}
+CENSUS_CMD=(census_run)
 # run_census <script> <args...>: fixture-mode style invocation; TMPDIR is a directory of this suite, so
 # the scratch-leak check at the end sees every run
 run_census() {
@@ -170,8 +188,18 @@ fmt() {
 }
 
 TAB=$(printf '\t')
+# EPOCHREALTIME as integer microseconds, whichever radix the locale prints (a comma in de_DE, fr_FR ...)
+epoch_us() { local v="${1//[.,]/}"; printf '%s' "$v"; }
 ESC=$(printf '\033')
-KEYS_RE='REPO|WINDOW|WINDOW_START|WINDOW_END|FETCHED_AT|WORKFLOW_FILTER|TOTAL_JOB_MINUTES|TOTAL_JOB_SECONDS|RUNS_COMPLETED|RUNS_NOT_COMPLETED|RUNS_RERUN|JOBS_COUNTED|JOBS_SKIPPED|JOBS_RUNNERLESS|JOBS_UNTIMED'
+KEYS_RE='REPO|WINDOW|WINDOW_START|WINDOW_END|FETCHED_AT|WORKFLOW_FILTER|TOTAL_JOB_MINUTES|TOTAL_JOB_SECONDS|RUNS_COMPLETED|RUNS_NOT_COMPLETED|RUNS_RERUN|RUNS_NOJOBS|JOBS_COUNTED|JOBS_SKIPPED|JOBS_RUNNERLESS|JOBS_UNTIMED'
+# a key line must appear exactly once: a second 'RUNS_COMPLETED=' line with another value would still satisfy hasx
+no_dup_keys() { [ -z "$(grep -E "^($KEYS_RE)=" "$1" | cut -d= -f1 | sort | uniq -d)" ]; }   # no_dup_keys <file>
+# the script has no 'exit 1' / 'die 1' outside comments (exit codes are 0, 2, 3, 129, 130, 143)
+no_exit1() { ! grep -vE '^[[:space:]]*#' "${1:-$CENSUS}" | grep -qE '(^|[^[:alnum:]_-])(exit|die)[[:space:]]+1([^0-9]|$)'; }   # no_exit1 [file]
+# the fetched jobs documents carry exactly the nine projected keys
+keys_ok() { jq -s -e 'all(.[]; (keys == ["jobs","total_count"]) and all(.jobs[]; (keys == ["completed_at","conclusion","id","name","run_attempt","run_id","runner_id","started_at","status"])))' "$@" >/dev/null; }
+# the fetched data directory exists and lives under this suite's own live TMPDIR
+in_live_tmp() { local d="${1-$DATA_DIR}"; [ -n "$d" ] && [ -d "$d" ] && case "$d" in "$T"/live/*) true ;; *) false ;; esac; }   # in_live_tmp [dir]
 stray_lines() { grep -cvE "^($KEYS_RE)=|^(BY_WORKFLOW|STEM)${TAB}" "$1" || true; }
 tables_equal() { # <wanted tables file> [output file, default $OUT]: its BY_WORKFLOW/STEM lines equal the wanted file
   grep -E "^(BY_WORKFLOW|STEM)${TAB}" "${2:-$OUT}" >"$T/got-tables.txt" || true
@@ -278,6 +306,16 @@ _pc() { # <description> <ok|no> <command...>: the command must succeed (ok) or f
   if [ "$want" = ok ] && [ "$got" -ne 0 ]; then _pc_bad+=("$desc: must be true")
   elif [ "$want" = no ] && [ "$got" -eq 0 ]; then _pc_bad+=("$desc: must be false"); fi
 }
+# the control of the control: _pc must stay silent on two right verdicts and record BOTH wrong ones
+_pc "ctl" ok true; _pc "ctl" no false
+_pc_ctl1=${#_pc_bad[@]}
+_pc "ctl" ok false; _pc "ctl" no true
+_pc_ctl2=${#_pc_bad[@]}
+_pc_bad=()
+if [ "$_pc_ctl1 $_pc_ctl2" != "0 2" ]; then
+  printf 'FAIL INSTRUMENT: _pc itself gave the wrong verdicts on its controls (silent on right: %s, recorded on wrong: %s; want 0 and 2)\n' "$_pc_ctl1" "$_pc_ctl2" >&2
+  exit 1
+fi
 _pc_stray() { [ "$(stray_lines "$1")" -eq "$2" ]; }
 mkdir -p "$T/pc"
 printf 'alpha\nabcd\nBeta line\n' >"$T/pc/a.txt"
@@ -288,7 +326,18 @@ printf 'TOTAL_JOB_SECONDS=1\nA stray line\nSTEM\tx\ty\n' >"$T/pc/stray.txt"
 printf 'STEM\tx\ty\nBY_WORKFLOW\ta\tb\n' >"$T/pc/tabs-a.txt"
 printf 'STEM\tx\ty\nBY_WORKFLOW\ta\tc\n' >"$T/pc/tabs-b.txt"
 cp -R "$FIXTURE" "$T/pc/fx-same"; cp -R "$FIXTURE" "$T/pc/fx-mod"; printf 'x\n' >>"$T/pc/fx-mod/windows.tsv"
+printf 'RUNS_COMPLETED=1\nRUNS_COMPLETED=2\nJOBS_COUNTED=3\n' >"$T/pc/dupkey.txt"
+printf 'RUNS_COMPLETED=1\nRUNS_RERUN=0\nSTEM\tx\ty\n' >"$T/pc/onekey.txt"
+printf 'exit 0\n# exit 1\ndie 2 "x"\n' >"$T/pc/exit-ok.sh"
+printf 'exit 0\nif x; then exit 1; fi\n' >"$T/pc/exit-1.sh"
+printf 'die 1 "x"\n' >"$T/pc/die-1.sh"
+_kdoc='{"total_count":1,"jobs":[{"completed_at":null,"conclusion":null,"id":1,"name":"n","run_attempt":null,"run_id":1,"runner_id":null,"started_at":null,"status":"x"}]}'
+printf '%s\n' "$_kdoc" >"$T/pc/keys-ok.json"
+printf '%s\n' "${_kdoc/\"status\":\"x\"/\"status\":\"x\",\"steps\":[]}" >"$T/pc/keys-extra.json"
+printf '%s\n' "${_kdoc/,\"status\":\"x\"/}" >"$T/pc/keys-missing.json"
+mkdir -p "$T/live/pc-inside" "$T/pc/outside"
 RC=7; _pc "rc_is: RC=7 against 3" no rc_is 3
+RC=3; _pc "rc_is: RC=3 against 7 (an upper-bound test passes the one-sided control)" no rc_is 7
 RC=3; _pc "rc_is: RC=3 against 3" ok rc_is 3
 RC=0
 _pc "has: absent text" no has zzz "$T/pc/a.txt"
@@ -306,6 +355,18 @@ _pc "tables_equal: a one-row mismatch" no tables_equal "$T/pc/tabs-a.txt" "$T/pc
 _pc "tables_equal: identical tables" ok tables_equal "$T/pc/tabs-a.txt" "$T/pc/tabs-a.txt"
 _pc "landed: a pristine copy of the fixture" no landed "$T/pc/fx-same"
 _pc "landed: a modified copy" ok landed "$T/pc/fx-mod"
+_pc "no_dup_keys: RUNS_COMPLETED twice with different values" no no_dup_keys "$T/pc/dupkey.txt"
+_pc "no_dup_keys: each key once" ok no_dup_keys "$T/pc/onekey.txt"
+_pc "no_exit1: an 'exit 1' in code" no no_exit1 "$T/pc/exit-1.sh"
+_pc "no_exit1: a 'die 1' in code" no no_exit1 "$T/pc/die-1.sh"
+_pc "no_exit1: only a comment mentions exit 1, and die 2" ok no_exit1 "$T/pc/exit-ok.sh"
+_pc "keys_ok: a job with an extra key" no keys_ok "$T/pc/keys-extra.json"
+_pc "keys_ok: a job missing a key" no keys_ok "$T/pc/keys-missing.json"
+_pc "keys_ok: exactly the projected keys" ok keys_ok "$T/pc/keys-ok.json"
+_pc "in_live_tmp: no directory given" no in_live_tmp ""
+_pc "in_live_tmp: a directory that does not exist under live" no in_live_tmp "$T/live/does-not-exist"
+_pc "in_live_tmp: an existing directory outside the live TMPDIR" no in_live_tmp "$T/pc/outside"
+_pc "in_live_tmp: an existing directory inside the live TMPDIR" ok in_live_tmp "$T/live/pc-inside"
 if [ "${#_pc_bad[@]}" -gt 0 ]; then
   printf 'FAIL INSTRUMENT: predicate helper(s) gave the wrong verdict on a control: %s\n' "${_pc_bad[*]}" >&2
   exit 1
@@ -373,9 +434,10 @@ rows() {
   chk 5 "TOTAL_JOB_SECONDS equals the integer golden ($WANT_SECS)" hasx "$WANT_SECS" "$OUT"
   nline=$(grep -c '^TOTAL_JOB_MINUTES=' "$OUT")
   chk 5 "exactly one TOTAL_JOB_MINUTES line (got $nline)" [ "$nline" -eq 1 ]
-  for k in RUNS_COMPLETED=10 RUNS_NOT_COMPLETED=1 RUNS_RERUN=0 JOBS_COUNTED=24 JOBS_SKIPPED=5 JOBS_RUNNERLESS=4 JOBS_UNTIMED=2; do
+  for k in RUNS_COMPLETED=10 RUNS_NOT_COMPLETED=1 RUNS_RERUN=0 RUNS_NOJOBS=1 JOBS_COUNTED=24 JOBS_SKIPPED=5 JOBS_RUNNERLESS=4 JOBS_UNTIMED=2; do
     chk 5 "key line $k" hasx "$k" "$OUT"
   done
+  chk 5 "every key line appears exactly once (a second line with another value would still satisfy the lines above)" no_dup_keys "$OUT"
   chk 5 "a COUNTED cancelled job (runner 7, 40 s) in a run that also holds a runner-less cancelled job is counted: 'ran', 40 s" \
     hasx "$(stem_line ci.yml merge_group cancelled-midway 1 0 0 1 0.7 0.67)" "$OUT"
   chk 5 "a counted job of 0 s (runner > 0, started == completed) is counted, not untimed" \
@@ -481,7 +543,20 @@ rows() {
   caught 2 "a queued job inside a completed run" "$d" "in flight"
   new_mutant; jq_edit "$d/jobs-104.json" 'del(.jobs[0].status)'
   landing 2 "jobs-104: the first job has no status field" "$d"
-  caught 2 "a job without a status is not known to be completed" "$d" "in flight"
+  caught 2 "a job without a status is not known to be completed" "$d" "no status"
+  chk_not 2 "a job without a status is reported as such, not as still in flight" hasi "in flight" "$ERR"
+  chk 2 "the no-status message names run 104" has 104 "$ERR"
+  new_mutant; jq_edit "$d/jobs-104.json" '.jobs[0].status = null'
+  landing 2 "jobs-104: the first job has status null" "$d"
+  caught 2 "a job with a null status is not known to be completed" "$d" "no status"
+  new_mutant; jq_edit "$d/jobs-104.json" '.jobs |= map(.run_attempt = $a)' --arg a "$(printf '2\033[31mX')"
+  landing 2 "jobs-104: run_attempt is a string with an ESC byte" "$d"
+  caught 2 "a non-numeric run_attempt in a jobs file is unreadable input (exit 2), never echoed" "$d" "run_attempt" 2
+  chk_not 2 "a non-numeric run_attempt: no ESC byte reaches stderr" has "$ESC" "$ERR"
+  new_mutant; jq_edit "$d/runs-1.json" '.workflow_runs |= map(if .id == 104 then .run_attempt = "abc" else . end)'
+  landing 2 "runs-1: run 104 has run_attempt \"abc\"" "$d"
+  caught 2 "a non-numeric run_attempt in the listing is unreadable input (exit 2)" "$d" "not a number" 2
+  chk 2 "a non-numeric run_attempt in the listing: the message names run 104" has 104 "$ERR"
   new_mutant; jq_edit "$d/jobs-104.json" '.jobs |= map(.run_attempt = 2)'
   landing 2 "jobs-104: every job is attempt 2 while the listing says attempt 1" "$d"
   caught 2 "jobs of attempt 2 against a listing of attempt 1 (a re-run since the listing)" "$d" "run_attempt"
@@ -595,6 +670,7 @@ rows() {
   run_census "$S" --fixture "$d" --summary
   chk 6 "mixed stems: exit 0 (got $RC)" rc_is 0
   chk 6 "mixed stems: JOBS_COUNTED=26 (24 + the two counted m shards)" hasx "JOBS_COUNTED=26" "$OUT"
+  chk 6 "mixed stems: run 108 now holds jobs, so RUNS_NOJOBS=0" hasx "RUNS_NOJOBS=0" "$OUT"
   chk 6 "mixed stems: JOBS_SKIPPED=8 (5 + g a, g b, h 1)" hasx "JOBS_SKIPPED=8" "$OUT"
   chk 6 "mixed stems: JOBS_RUNNERLESS=7 (4 + m 3, m 4, h 2: null runner beats null timestamps)" hasx "JOBS_RUNNERLESS=7" "$OUT"
   chk 6 "mixed stems: JOBS_UNTIMED=2 (a skipped job with a null started_at is skipped, not untimed)" hasx "JOBS_UNTIMED=2" "$OUT"
@@ -608,6 +684,24 @@ rows() {
     hasx "$(stem_line lint.yml push h 0 0 1 0 0.0 0.00)" "$OUT"
   chk 6 "mixed stems: BY_WORKFLOW lint.yml push now has 2 counted jobs and 3.0 minutes" \
     hasx "$(bw_line lint.yml push 1 2 3.0)" "$OUT"
+
+  # (a2) two completed runs with no job at all (108 as committed, and 110 emptied here): RUNS_NOJOBS says so
+  new_mutant; put_jobs "$d/jobs-110.json"
+  landing 6 "jobs-110 emptied (total_count 0, no jobs)" "$d"
+  run_census "$S" --fixture "$d" --summary
+  chk 6 "two runs without jobs: exit 0 (got $RC)" rc_is 0
+  chk 6 "two runs without jobs: RUNS_NOJOBS=2" hasx "RUNS_NOJOBS=2" "$OUT"
+  chk 6 "two runs without jobs: they are still completed runs (RUNS_COMPLETED=10)" hasx "RUNS_COMPLETED=10" "$OUT"
+  chk 6 "two runs without jobs: the 3 counted jobs of run 110 are gone (JOBS_COUNTED=21)" hasx "JOBS_COUNTED=21" "$OUT"
+  chk 6 "two runs without jobs: TOTAL_JOB_SECONDS=$((S_TOTAL - S_NIGHT))" hasx "TOTAL_JOB_SECONDS=$((S_TOTAL - S_NIGHT))" "$OUT"
+
+  # (a3) the runner_id boundary: runner_id 1 is a runner (> 0), 0 and null are not
+  new_mutant; jq_edit "$d/jobs-110.json" '.jobs |= map(if .name == "report" then .runner_id = 1 else . end)'
+  landing 6 "jobs-110: report has runner_id 1" "$d"
+  run_census "$S" --fixture "$d" --summary
+  chk 6 "runner_id 1: exit 0 (got $RC)" rc_is 0
+  chk 6 "runner_id 1 is a runner: the job is counted and the golden total is unchanged" hasx "$WANT_TOTAL" "$OUT"
+  chk 6 "runner_id 1: still 24 counted and 4 runner-less jobs" hasx "JOBS_RUNNERLESS=4" "$OUT"
 
   # (b) a superseded run: its parent was queue-cancelled, so the dependents concluded skipped.
   #     Run 108 holds a cancelled job -> its all-skipped stem is runner-less; run 110 has no cancelled job
@@ -642,6 +736,22 @@ rows() {
   chk 6 "names: an empty job name becomes the stem 'unknown'" hasx "$(stem_line lint.yml push unknown 1 0 0 1 1.0 1.00)" "$OUT"
   chk 6 "names: a 200-character stem is capped at 120 characters" \
     hasx "$(stem_line lint.yml push "$(printf 'a%.0s' $(seq 1 120))" 1 0 0 1 1.0 1.00)" "$OUT"
+
+  # (c2) a name of one letter, a very long run of spaces and an unbalanced "(((" is cut to 400 characters BEFORE the stem
+  #      regex runs (the regex is quadratic in a whitespace run): 50000 spaces cost about 19 s unsliced (0.3 s sliced)
+  local spaces t0 t1 ms
+  spaces=$(printf '%*s' 50000 '')
+  new_mutant
+  put_jobs "$d/jobs-108.json" "$(mkjob 1081 "x${spaces}(((" success 1001 "$TS0" "$TS60")"
+  landing 6 "jobs-108 rewritten with a 50000-space job name" "$d"
+  t0=$EPOCHREALTIME
+  run_census "$S" --fixture "$d" --summary
+  t1=$EPOCHREALTIME
+  ms=$(( ($(epoch_us "$t1") - $(epoch_us "$t0")) / 1000 ))
+  chk 6 "long whitespace name: exit 0 (got $RC)" rc_is 0
+  chk 6 "long whitespace name: the stem is the letter and 119 spaces (cut to 400 characters, then to 120)" \
+    hasx "$(stem_line lint.yml push "x$(printf '%*s' 119 '')" 1 0 0 1 1.0 1.00)" "$OUT"
+  chk 6 "long whitespace name: the run took ${ms} ms, under 10000 (the stem regex sees at most 400 characters)" [ "$ms" -lt 10000 ]
 
   # (d) every hostile character class is replaced by ?: U+0085, U+2028, U+2029, DEL, bidi controls,
   #     zero-width/format characters, backtick, < and >
@@ -723,9 +833,10 @@ rows() {
   chk 7 "--workflow: the output says which filter was applied" hasx "WORKFLOW_FILTER=secret-scan.yml" "$OUT"
   chk 7 "--workflow: TOTAL_JOB_SECONDS is that workflow's $S_SS_PR s" hasx "TOTAL_JOB_SECONDS=$S_SS_PR" "$OUT"
   chk 7 "--workflow: TOTAL_JOB_MINUTES is that workflow's total" hasx "TOTAL_JOB_MINUTES=$(fmt "$S_SS_PR" 1)" "$OUT"
-  for k in RUNS_COMPLETED=3 RUNS_NOT_COMPLETED=0 JOBS_COUNTED=8 JOBS_SKIPPED=2 JOBS_RUNNERLESS=2 JOBS_UNTIMED=0; do
+  for k in RUNS_COMPLETED=3 RUNS_NOT_COMPLETED=0 RUNS_NOJOBS=0 JOBS_COUNTED=8 JOBS_SKIPPED=2 JOBS_RUNNERLESS=2 JOBS_UNTIMED=0; do
     chk 7 "--workflow secret-scan.yml: key line $k" hasx "$k" "$OUT"
   done
+  chk 7 "--workflow secret-scan.yml: every key line (WORKFLOW_FILTER included) appears exactly once" no_dup_keys "$OUT"
   chk_not 7 "--workflow secret-scan.yml with no run in flight prints no lower-bound WARN" has WARN "$ERR"
   chk 7 "--workflow: the tables hold exactly the secret-scan.yml rows of the full tables" tables_equal "$T/want-tables-ss.txt"
   run_census "$S" --fixture "$FIXTURE" --workflow .github/workflows/secret-scan.yml
@@ -844,8 +955,7 @@ for kw in "lower bound" "closed window"; do
 done
 
 # exit codes: the header promises there is no exit 1 path (every failure is 2 or 3); the code must not contain one
-no_exit1() { ! grep -vE '^[[:space:]]*#' "$CENSUS" | grep -qE '(^|[^[:alnum:]_-])(exit|die)[[:space:]]+1([^0-9]|$)'; }
-chk 0 "the script has no 'exit 1' / 'die 1' outside comments (exit codes are 0, 2, 3, 130, 143)" no_exit1
+chk 0 "the script has no 'exit 1' / 'die 1' outside comments (exit codes are 0, 2, 3, 129, 130, 143)" no_exit1
 
 # the recipe in the header: its grep line must select the key lines and the 3 secret-scan STEM rows. Executed as
 # written (a `\t` in an ERE is the letter t and would match no STEM row at all).
@@ -919,43 +1029,60 @@ chk 0 "hostile names: STEM lines keep 10 tab fields and BY_WORKFLOW lines 6" \
 chk 0 "hostile names: exactly one extra line (the renamed stem splits out of 'gitleaks scan'), so no hostile text became extra lines" \
   [ "$(wc -l <"$OUT")" -eq $(( $(wc -l <"$T/first-main.txt") + 1 )) ]
 
-# ── the output sanitiser against EVERY invisible character class, probed from Python's unicodedata ──
-# The probe is generated here, not taken from the script's own list: every BMP code point (and the tag block
-# U+E0000-E007F) whose unicodedata category is Cc, Cf, Zl, Zp or Co, plus the explicit invisibles the header
-# lists (variation selectors, U+2800, U+3164, U+FFA0, U+115F-1160, U+17B4-17B5, U+00AD, U+180E, U+2060-2064, tag block).
+# ── the output sanitiser against EVERY invisible character class ──
+# Two probe sources, NEITHER taken from the script's own list:
+#  (1) derived: every BMP code point (and U+E0000-E007F) whose Python unicodedata category is Cc, Cf, Zl, Zp or Co;
+#  (2) hard-coded here from the Unicode Default_Ignorable_Code_Point property (the ranges below, typed by hand),
+#      two characters stripped by choice (U+2800 braille blank, U+FFFC object replacement) and one or more private-use
+#      code points of the planes 15 and 16, which no BMP list reaches. U+1F600 (a plane-1 emoji), U+1D49C and U+20000
+#      (letters of planes 1 and 2), NBSP and U+3000 (space separators) are the controls that must SURVIVE.
 # One job name per 100 code points, a hostile workflow path and a hostile EVENT (events of fork-PR runs are
-# attacker-chosen too). Nothing of the probe may reach stdout; each name must come out as the same number of
-# '?'; ordinary letters of other scripts must survive. A code point that Python's (newer) Unicode tables put in
-# a category the installed jq/Oniguruma does not know yet ('drift') is set aside and counted, never silently lost.
+# attacker-chosen too). Nothing of the probe may reach stdout; each name must come out as the same number of '?'.
+# The counts are pinned: Cc, Zl, Zp and Co are frozen by the Unicode stability policy (exact), Cf only ever grows
+# (floor, the exact value is printed), the hand-typed list has an exact size, and a code point that Python's tables put
+# in a category the installed jq/Oniguruma does not know ('drift') FAILS the suite and is named, never set aside.
 cat >"$T/probe.py" <<'PY'
 import json, subprocess, sys, unicodedata
 
-CATS = {"Cc", "Cf", "Zl", "Zp", "Co"}
-EXPLICIT_RANGES = [(0xFE00, 0xFE0F), (0xE0100, 0xE01EF), (0x2800, 0x2800), (0x3164, 0x3164), (0xFFA0, 0xFFA0),
-                   (0x115F, 0x1160), (0x17B4, 0x17B5), (0x00AD, 0x00AD), (0x180E, 0x180E), (0x2060, 0x2064),
-                   (0xE0000, 0xE007F)]
-HOSTILE = [0x2060, 0x00AD, 0xE0041, 0xFE0F, 0x180E, 0x200B, 0x202E, 0x2800, 0x3164, 0xFFA0, 0x17B4, 0x2028]
-ORDINARY = "日本語 é ü Ω ñ ß"
+CATS = ("Cc", "Cf", "Zl", "Zp", "Co")
+# Default_Ignorable_Code_Point, typed by hand (DerivedCoreProperties.txt), NOT read from the script under test
+DI_RANGES = [(0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+             (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+             (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF)]
+BY_CHOICE = [0x2800, 0xFFFC]
+PLANES = [0xF0000, 0xFFFFD, 0x100000, 0x10FFFD]
+HOSTILE = [0x2060, 0x00AD, 0xE0041, 0xFE0F, 0x180E, 0x200B, 0x202E, 0x2800, 0x3164, 0xFFA0, 0x17B4, 0x2028, 0x034F, 0x180C, 0x2065, 0xFFF3, 0xE0085, 0xE01F5, 0xF0000, 0x10FFFD]
+ORDINARY = "日本語 é ü Ω ñ ß 😀 𝒜 𠀀 z9 a-b_c.d,e;f a b　c"
 MOD, jq = sys.argv[1], sys.argv[2]
 
-def candidates():
+def derived():
     cps = list(range(0, 0x10000)) + list(range(0xE0000, 0xE0080))
-    return [c for c in cps if not 0xD800 <= c <= 0xDFFF and unicodedata.category(chr(c)) in CATS]
+    by = {k: [] for k in CATS}
+    for c in cps:
+        if 0xD800 <= c <= 0xDFFF:
+            continue
+        k = unicodedata.category(chr(c))
+        if k in by:
+            by[k].append(c)
+    return by
 
 def drift_of(cps):
     prog = r'.[] | select(test("\\A[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Co}]\\z") | not)'
     r = subprocess.run([jq, "-c", prog], input=json.dumps([chr(c) for c in cps]), capture_output=True, text=True, check=True)
     return {ord(json.loads(l)) for l in r.stdout.splitlines() if l}
 
-def probe_set():
-    cps = candidates()
-    drift = drift_of(cps)
-    explicit = {c for lo, hi in EXPLICIT_RANGES for c in range(lo, hi + 1)}
-    return sorted((set(cps) - drift) | explicit), drift, explicit
-
 if MOD == "gen":
     d, expect = sys.argv[3], sys.argv[4]
-    probe, drift, explicit = probe_set()
+    by = derived()
+    allcps = [c for k in CATS for c in by[k]]
+    drift = drift_of(allcps)
+    explicit = {c for lo, hi in DI_RANGES for c in range(lo, hi + 1)} | set(BY_CHOICE)
+    probe = sorted((set(allcps) - drift) | explicit | set(PLANES))
+    derived_ok = len(set(allcps) - drift)
+    print("cc=%d cf=%d zl=%d zp=%d co=%d drift=%d explicit=%d planes=%d derived=%d total=%d" % (
+        len(by["Cc"]), len(by["Cf"]), len(by["Zl"]), len(by["Zp"]), len(by["Co"]), len(drift), len(explicit), len(PLANES), derived_ok, len(probe)))
+    if drift:
+        print("DRIFT " + " ".join("U+%04X" % c for c in sorted(drift)[:20]), file=sys.stderr)
     jobs, stems = [], []
     for i in range(0, len(probe), 100):
         chunk = probe[i:i + 100]
@@ -981,7 +1108,6 @@ if MOD == "gen":
             f.write(json.dumps(doc, ensure_ascii=True) + "\n")
     json.dump({"probe": probe, "stems": stems, "wf": "dynamic/ev" + "?" * len(HOSTILE) + "il", "ev": "e" + "?" * len(HOSTILE) + "v"},
               open(expect, "w"))
-    print("strict=%d drift=%d explicit=%d jobs=%d" % (len(probe), len(drift), len(explicit), len(jobs)))
 else:
     out, expect = sys.argv[3], sys.argv[4]
     e = json.load(open(expect))
@@ -997,8 +1123,8 @@ else:
     miss = [x for x in e["stems"] if x not in stems]
     if miss:
         bad.append("%d hostile stem(s) did not come out as the same number of '?': %s" % (len(miss), miss[0]))
-    if "日本語 é ü Ω ñ ß" not in stems:
-        bad.append("ordinary non-ASCII letters (CJK, accented Latin, Greek) did not survive")
+    if ORDINARY not in stems:
+        bad.append("ordinary letters, digits, punctuation, emoji and space separators (CJK, accented Latin, Greek, planes 1 and 2) did not survive")
     bw = [l for l in text.split("\n") if l.startswith("BY_WORKFLOW\t" + e["wf"] + "\t" + e["ev"] + "\t")]
     if len(bw) != 1:
         bad.append("the hostile workflow path / event did not come out as '?' in exactly one BY_WORKFLOW row (%d)" % len(bw))
@@ -1012,15 +1138,22 @@ else:
 PY
 new_mutant
 python3 -I "$T/probe.py" gen "$(command -v jq)" "$d" "$T/probe-expect.json" >"$T/probe-gen.txt" 2>"$T/probe-gen.err"; _gen_rc=$?
-chk 0 "sanitiser probe: generated from unicodedata (exit $_gen_rc)" [ "$_gen_rc" -eq 0 ]
-_strict=$(sed -n 's/^strict=\([0-9]*\) .*/\1/p' "$T/probe-gen.txt"); _drift=$(sed -n 's/.* drift=\([0-9]*\) .*/\1/p' "$T/probe-gen.txt")
-chk 0 "sanitiser probe: thousands of code points (strict ${_strict:-0}; BMP Cc, Cf, Zl, Zp, Co and the explicit invisibles)" [ "${_strict:-0}" -ge 6000 ]
-chk 0 "sanitiser probe: at most 100 code points were set aside as Unicode-version drift (got ${_drift:-none})" [ "${_drift:-999}" -le 100 ]
+chk 0 "sanitiser probe: generated (exit $_gen_rc)" [ "$_gen_rc" -eq 0 ]
+pk() { awk -v k="$1" '{ for (i = 1; i <= NF; i++) { split($i, a, "="); if (a[1] == k) print a[2] } }' "$T/probe-gen.txt"; }   # pk <name>: a number printed by the generator
+_cc=$(pk cc); _cf=$(pk cf); _zl=$(pk zl); _zp=$(pk zp); _co=$(pk co); _drift=$(pk drift); _expl=$(pk explicit); _pl=$(pk planes); _der=$(pk derived); _tot=$(pk total)
+chk 0 "sanitiser probe: Cc is exactly 65 code points (C0, DEL, C1; frozen), got ${_cc:-none}" [ "${_cc:-0}" -eq 65 ]
+chk 0 "sanitiser probe: Zl and Zp are exactly 1 and 1 (frozen), got ${_zl:-none} and ${_zp:-none}" [ "${_zl:-0} ${_zp:-0}" = "1 1" ]
+chk 0 "sanitiser probe: Co is exactly 6400 BMP code points (U+E000-F8FF; frozen), got ${_co:-none}" [ "${_co:-0}" -eq 6400 ]
+chk 0 "sanitiser probe: Cf is at least 140 code points (Unicode 16; the category only grows), got ${_cf:-none}" [ "${_cf:-0}" -ge 140 ]
+chk 0 "sanitiser probe: the hand-typed Default_Ignorable list plus 2 by-choice code points is exactly 4176 (4174 + 2), got ${_expl:-none}" [ "${_expl:-0}" -eq 4176 ]
+chk 0 "sanitiser probe: 4 private-use code points of the planes 15 and 16, got ${_pl:-none}" [ "${_pl:-0}" -eq 4 ]
+chk 0 "sanitiser probe: NO code point is set aside as Unicode-version drift (jq knows every Cc, Cf, Zl, Zp, Co code point Python does), got ${_drift:-none}: $(head -c 200 "$T/probe-gen.err")" [ "${_drift:-1}" -eq 0 ]
+chk 0 "sanitiser probe: the explicit list reaches the probe (total ${_tot:-none} is at least 3900 more than the ${_der:-none} derived)" [ $(( ${_tot:-0} - ${_der:-0} )) -ge 3900 ]
 landing 0 "sanitiser probe fixture" "$d"
 run_census "$CENSUS" --fixture "$d" --summary
 chk 0 "sanitiser probe: exit 0 (got $RC)" rc_is 0
 python3 -I "$T/probe.py" check "$(command -v jq)" "$OUT" "$T/probe-expect.json" >"$T/probe-check.txt" 2>&1; _chk_rc=$?
-chk 0 "sanitiser probe: nothing of the probe reaches stdout, each name keeps one ? per character, ordinary letters survive, a hostile path and event are cleaned ($(head -c 300 "$T/probe-check.txt"))" [ "$_chk_rc" -eq 0 ]
+chk 0 "sanitiser probe: nothing of the probe reaches stdout, each name keeps one ? per character, ordinary text and planes 1-2 letters survive, a hostile path and event are cleaned ($(head -c 300 "$T/probe-check.txt"))" [ "$_chk_rc" -eq 0 ]
 chk 0 "sanitiser probe: every stdout line still starts with a fixed token" [ "$(stray_lines "$OUT")" -eq 0 ]
 
 # ── jq failures are fail-closed: a jq that fails ONLY one filter never yields a total ──
@@ -1058,7 +1191,7 @@ done
 # only the chk_not 'no ...' style assertions (it prints one line and exits 0); a neutered predicate (rc_is, has, hasx,
 # same, tables_equal ... returning true) makes it pass MORE, which a mere 'more than 0' check cannot see. Adding or
 # removing an assertion in rows() moves this signature: update it with the measured value, never with slack.
-H1_SIG_WANT="1:7:21 2:27:55 3:10:25 4:11:27 5:7:18 6:25:31 7:7:35 8:23:52"
+H1_SIG_WANT="1:7:21 2:32:66 3:10:25 4:11:27 5:8:19 6:33:38 7:8:36 8:23:52"
 H1_SIG_GOT=""
 for _r in 1 2 3 4 5 6 7 8; do H1_SIG_GOT="$H1_SIG_GOT${H1_SIG_GOT:+ }$_r:${STUB_PASSES[$_r]:-0}:${STUB_FAILS[$_r]:-0}"; done
 chk H1 "the stub passes and fails exactly the designated assertions per row (got: $H1_SIG_GOT)" [ "$H1_SIG_GOT" = "$H1_SIG_WANT" ]
@@ -1155,7 +1288,6 @@ chk L1 "every runs-listing call precedes the first jobs call (C1 before any jobs
   [ "$(grep -n '^RUNS ' "$SHIM_LOG" | tail -1 | cut -d: -f1)" -lt "$(grep -n '^JOBS ' "$SHIM_LOG" | head -1 | cut -d: -f1)" ]
 chk_not L1 "the shim saw no BAD call (only GETs, whitelisted flags, exact endpoints)" grep -q '^BAD' "$SHIM_LOG"
 DATA_DIR=$(sed -n 's/^census: data dir: //p' "$ERR" | head -1)
-in_live_tmp() { [ -n "$DATA_DIR" ] && [ -d "$DATA_DIR" ] && case "$DATA_DIR" in "$T"/live/*) true ;; *) false ;; esac; }
 chk L1 "stderr names the fetched data directory under TMPDIR" in_live_tmp
 chk L1 "last stderr line is the delete command for that directory" \
   [ "$(tail -1 "$ERR")" = "census: remove fetched data with: rm -rf $DATA_DIR" ]
@@ -1170,7 +1302,6 @@ chk L1 "the fetched jobs files are the committed fixture projected to id, run_id
 chk L1 "the committed fixture's jobs really carry the rich fields the projection must drop" grep -q 'runner_name' "$FIXTURE/jobs-101.json"
 chk_not L1 "no runner name, label, branch, URL, commit or step list survives in the fetched jobs files" \
   grep -qE 'runner_name|labels|head_branch|html_url|head_sha|"steps"|workflow_name|check_run_url' "$DATA_DIR"/jobs-*.json
-keys_ok() { jq -s -e 'all(.[]; (keys == ["jobs","total_count"]) and all(.jobs[]; (keys == ["completed_at","conclusion","id","name","run_attempt","run_id","runner_id","started_at","status"])))' "$@" >/dev/null; }
 chk L1 "every fetched jobs document has exactly the keys total_count and jobs, every job exactly the nine fields" keys_ok "$DATA_DIR"/jobs-*.json
 chk L1 "jobs-109 was not fetched (in-flight run)" [ ! -e "$DATA_DIR/jobs-109.json" ]
 chk L1 "the fetched manifest windows.tsv is byte-identical to the committed fixture's" same "$FIXTURE/windows.tsv" "$DATA_DIR/windows.tsv"
@@ -1239,6 +1370,21 @@ LIVE_PATH_PRE="$T/sbin" LIVE_RETRY_SLEEP="" LIVE_FAIL_RUN=105 run_live "$FIXTURE
 chk L2 "default retry sleeps are 10 s then 20 s" [ "$(grep '^SLEEP' "$SHIM_LOG" | paste -sd' ' -)" = "SLEEP 10 SLEEP 20" ]
 LIVE_PATH_PRE="$T/sbin" LIVE_RETRY_SLEEP=7 LIVE_FAIL_RUN=105 run_live "$FIXTURE" --start "$LIVE_START" --end "$LIVE_END" --summary
 chk L2 "CENSUS_RETRY_SLEEP=7 gives sleeps of 7 s then 14 s (linear by attempt)" [ "$(grep '^SLEEP' "$SHIM_LOG" | paste -sd' ' -)" = "SLEEP 7 SLEEP 14" ]
+
+# a non-object document in the MIDDLE of a paginated listing: jq's exit status is that of the LAST input only, so a
+# per-document trim would drop it silently; the trims are slurped and fail closed
+new_mutant; { head -n 1 "$d/runs-1.json"; echo 3; tail -n +2 "$d/runs-1.json"; } >"$d/r.new" && mv "$d/r.new" "$d/runs-1.json"
+landing L2 "runs-1: a bare 3 between the two documents" "$d"
+run_live "$d" --start "$LIVE_START" --end "$LIVE_END" --summary
+chk L2 "a non-object document in the middle of a runs listing: exit 2 exactly (got $RC)" rc_is 2
+chk L2 "a non-object document in the middle of a runs listing: the abort names the listing" has "could not read the runs listing" "$ERR"
+chk_not L2 "a non-object document in the middle of a runs listing: no total" has TOTAL_JOB_MINUTES "$OUT"
+new_mutant; { head -n 1 "$d/jobs-101.json"; echo 3; tail -n +2 "$d/jobs-101.json"; } >"$d/j.new" && mv "$d/j.new" "$d/jobs-101.json"
+landing L2 "jobs-101: a bare 3 between the two documents" "$d"
+run_live "$d" --start "$LIVE_START" --end "$LIVE_END" --summary
+chk L2 "a non-object document in the middle of a jobs listing: exit 2 exactly (got $RC)" rc_is 2
+chk L2 "a non-object document in the middle of a jobs listing: the abort names run 101" has "could not read the jobs listing for run 101" "$ERR"
+chk_not L2 "a non-object document in the middle of a jobs listing: no total" has TOTAL_JOB_MINUTES "$OUT"
 
 # L3: C1 fires before any jobs call
 new_mutant; jq_edit "$d/runs-2.json" '.total_count = 5'
@@ -1363,20 +1509,34 @@ run_live "$FIXTURE" --start "$LIVE_START" --end "$LIVE_END" --workflow does-not-
 chk L8 "live --workflow of an unknown file: exit 3 exactly (got $RC)" rc_is 3
 chk L8 "live --workflow of an unknown file: zero jobs calls" [ "$(shim_count JOBS)" -eq 0 ]
 
-# L9: Ctrl-C and kill while a gh call hangs. The run is a session of its own and the GROUP gets the signal,
+# L9: Ctrl-C, kill and hangup while a gh call hangs. The run is a session of its own and the GROUP gets the signal,
 # as a terminal's Ctrl-C delivers it. With plain `timeout` gh sits in a group of its own, never
 # sees the signal, and the run goes on until the call returns; with `timeout --foreground` it dies at once.
-signal_run() { # <INT|TERM>: sets SIG_RC, SIG_MS, SIG_WAITED
-  local sig="$1" pid wd t0 t1 waited=0
+# These runs do NOT go through the outer `timeout` of CENSUS_CMD: that `timeout` re-sends the signal it got to its own
+# group, so the census would get a second signal while its cleanup runs. The python launcher and the 5 s watchdog
+# below bound the run on their own. A deliberate second signal is the "double" variant further down.
+mkdir -p "$T/slowrm"
+cat >"$T/slowrm/rm" <<'SHIM'
+#!/usr/bin/env bash
+# rm that dawdles on the census scratch directory only, so a second signal lands INSIDE the cleanup
+case "$*" in *-rf*ci-demand-census-scratch.*) "$REAL_SLEEP" 1 ;; esac
+exec "$REAL_RM" "$@"
+SHIM
+chmod +x "$T/slowrm/rm"
+REAL_RM=$(command -v rm)
+signal_run() { # <INT|TERM|HUP> [double]: sets SIG_RC, SIG_MS, SIG_WAITED
+  local sig="$1" dbl="${2:-}" pid wd t0 t1 waited=0 pre=""
   rm -rf "$T/sig"; mkdir -p "$T/sig/tmp"; : >"$SHIM_LOG"
-  # The launcher puts the run in a session (and process group) of its own and RESTORES the default SIGINT: a job
-  # started with `&` from a non-interactive shell (a CI step, test-all.sh) inherits SIGINT ignored, which no
-  # trap in the script could undo.
+  if [ -n "$dbl" ]; then pre="$T/slowrm:"; fi
+  # The launcher puts the run in a session (and process group) of its own and RESTORES the default SIGINT, SIGTERM and
+  # SIGHUP: a job started with `&` from a non-interactive shell (a CI step, test-all.sh) inherits SIGINT ignored, and
+  # `nohup` ignores SIGHUP; a signal ignored on entry cannot be trapped by the script.
   python3 -I -c 'import os, signal, sys
-signal.signal(signal.SIGINT, signal.SIG_DFL)
+for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(s, signal.SIG_DFL)
 os.setsid()
-os.execvp(sys.argv[1], sys.argv[1:])' "${CENSUS_CMD[@]}" -u GITHUB_ACTIONS PATH="$T/bin:$PATH" SHIM_FIXTURE="$FIXTURE" SHIM_LOG="$SHIM_LOG" SHIM_REPO="$LIVE_REPO" \
-    REAL_SLEEP="$REAL_SLEEP" GH_REPO="$LIVE_REPO" CENSUS_RETRY_SLEEP=0 TMPDIR="$T/sig/tmp" SHIM_SLEEP_RUN=101 SHIM_SLEEP_S=20 \
+os.execvp(sys.argv[1], sys.argv[1:])' "${CENSUS_ENV[@]}" -u GITHUB_ACTIONS PATH="$pre$T/bin:$PATH" SHIM_FIXTURE="$FIXTURE" SHIM_LOG="$SHIM_LOG" SHIM_REPO="$LIVE_REPO" \
+    REAL_SLEEP="$REAL_SLEEP" REAL_RM="$REAL_RM" GH_REPO="$LIVE_REPO" CENSUS_RETRY_SLEEP=0 TMPDIR="$T/sig/tmp" SHIM_SLEEP_RUN=101 SHIM_SLEEP_S=20 \
     bash "$CENSUS" --start "$LIVE_START" --end "$LIVE_END" --summary >"$T/sig/out" 2>"$T/sig/err" &
   pid=$!
   while [ "$waited" -lt 100 ] && ! grep -q '^JOBS 101' "$SHIM_LOG" 2>/dev/null; do "$REAL_SLEEP" 0.1; waited=$((waited + 1)); done
@@ -1384,21 +1544,26 @@ os.execvp(sys.argv[1], sys.argv[1:])' "${CENSUS_CMD[@]}" -u GITHUB_ACTIONS PATH=
   wd=$!
   t0=$EPOCHREALTIME
   kill -"$sig" -- "-$pid" 2>/dev/null
+  if [ -n "$dbl" ]; then "$REAL_SLEEP" 0.3; kill -"$sig" "$pid" 2>/dev/null; fi   # the second signal, to the script alone, 0.3 s into a 1 s cleanup
   wait "$pid"; SIG_RC=$?
   t1=$EPOCHREALTIME
   kill "$wd" >/dev/null 2>&1; wait "$wd" 2>/dev/null
-  SIG_MS=$(( (${t1/./} - ${t0/./}) / 1000 )); SIG_WAITED=$waited
+  SIG_MS=$(( ($(epoch_us "$t1") - $(epoch_us "$t0")) / 1000 )); SIG_WAITED=$waited
 }
-for _sg in "INT 130" "TERM 143"; do
-  read -r _sig _want <<<"$_sg"
-  signal_run "$_sig"
-  chk L9 "SIG$_sig while a gh call hangs: the hung call was reached (polls: $SIG_WAITED)" [ "$SIG_WAITED" -lt 100 ]
-  chk L9 "SIG$_sig while a gh call hangs: exit $_want exactly (got $SIG_RC)" [ "$SIG_RC" -eq "$_want" ]
-  chk L9 "SIG$_sig while a gh call hangs: the run ends within 5 s, not after the 20 s call (took $SIG_MS ms)" [ "$SIG_MS" -lt 5000 ]
-  chk L9 "SIG$_sig: no ci-demand-census-scratch.* directory is left under TMPDIR" [ -z "$(find "$T/sig/tmp" -maxdepth 1 -name 'ci-demand-census-scratch.*')" ]
-  chk L9 "SIG$_sig: the cleanup still prints the fetched-data hint as the last stderr line" \
+chk L9 "EPOCHREALTIME with a dot radix reads as integer microseconds" [ "$(epoch_us 1791492514.757580)" = 1791492514757580 ]
+chk L9 "EPOCHREALTIME with a comma radix (de_DE, fr_FR) reads as the same integer microseconds" [ "$(epoch_us 1791492514,757580)" = 1791492514757580 ]
+for _sg in "INT 130" "TERM 143" "HUP 129" "TERM 143 double"; do
+  read -r _sig _want _dbl <<<"$_sg"
+  _lbl="SIG$_sig${_dbl:+ twice (the second one lands inside the cleanup)}"
+  signal_run "$_sig" "$_dbl" 2>"$T/sig-jobmsg"   # bash reports a job killed BY a signal ("Hangup", "Terminated") on its own stderr
+  chk L9 "$_lbl while a gh call hangs: the hung call was reached (polls: $SIG_WAITED)" [ "$SIG_WAITED" -lt 100 ]
+  chk L9 "$_lbl while a gh call hangs: exit $_want exactly (got $SIG_RC)" [ "$SIG_RC" -eq "$_want" ]
+  chk L9 "$_lbl while a gh call hangs: the run ends within 5 s, not after the 20 s call (took $SIG_MS ms)" [ "$SIG_MS" -lt 5000 ]
+  chk L9 "$_lbl: no ci-demand-census-scratch.* directory is left under TMPDIR" [ -z "$(find "$T/sig/tmp" -maxdepth 1 -name 'ci-demand-census-scratch.*')" ]
+  chk L9 "$_lbl: the cleanup still prints the fetched-data hint as the last stderr line" \
     grep -q '^census: remove fetched data with: rm -rf ' <(tail -1 "$T/sig/err")
-  chk L9 "SIG$_sig: no total is printed" [ ! -s "$T/sig/out" ]
+  chk L9 "$_lbl: no total is printed" [ ! -s "$T/sig/out" ]
+  chk L9 "$_lbl: the run left through its own exit $_want (trap), it was not killed by the signal (bash printed no job notice: $(head -c 80 "$T/sig-jobmsg"))" [ ! -s "$T/sig-jobmsg" ]
 done
 
 # L10: contract rows. A flag with no value is a usage error (exit 2, never a shell "unbound variable" exit 1); a
@@ -1427,6 +1592,18 @@ chk L10 "PATH without gh: nothing on stdout" [ ! -s "$OUT" ]
 chk L10 "PATH without timeout: exit 2 exactly (got $RC)" rc_is 2
 chk L10 "PATH without timeout: the message says timeout is required" has "timeout (coreutils) is required" "$ERR"
 chk L10 "PATH without timeout: no gh call was made" [ ! -s "$SHIM_LOG" ]
+# a timeout that exists but rejects --foreground (busybox, BSD): refused up front, not after three failed gh calls
+mkdir -p "$T/p-nofg"
+for _t in jq date mktemp rm; do ln -sf "$(command -v "$_t")" "$T/p-nofg/$_t"; done
+ln -sf "$T/bin/gh" "$T/p-nofg/gh"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in --foreground) echo "timeout: unrecognized option --foreground" >&2; exit 125 ;; esac; done\nexec "$@"\n' >"$T/p-nofg/timeout"
+chmod +x "$T/p-nofg/timeout"
+: >"$SHIM_LOG"
+"${CENSUS_CMD[@]}" -u GITHUB_ACTIONS PATH="$T/p-nofg" TMPDIR="$T/ftmp" GH_REPO="$LIVE_REPO" CENSUS_RETRY_SLEEP=0 SHIM_LOG="$SHIM_LOG" "$BASH" "$CENSUS" --start "$LIVE_START" --end "$LIVE_END" --summary >"$OUT" 2>"$ERR"; RC=$?
+chk L10 "a timeout without --foreground: exit 2 exactly (got $RC)" rc_is 2
+chk L10 "a timeout without --foreground: the message names --foreground" has "--foreground" "$ERR"
+chk L10 "a timeout without --foreground: no gh call was made (refused before the first fetch)" [ ! -s "$SHIM_LOG" ]
+chk L10 "a timeout without --foreground: nothing on stdout" [ ! -s "$OUT" ]
 # the cleanup hint is shell-quoted: a TMPDIR with a quote and a dollar sign must paste back as ONE safe word
 mkdir -p "$T/qdir/a'b\$c"
 LIVE_TMPDIR="$T/qdir/a'b\$c" run_live "$FIXTURE" --start "$LIVE_START" --end "$LIVE_END" --summary
@@ -1454,13 +1631,16 @@ chk L10 "after every live run, TMPDIR holds no ci-demand-census-scratch.* direct
 chk L10 "the live runs did leave their fetched data directories (the check above is not vacuous)" \
   [ -n "$(find "$T/live" -maxdepth 1 -name 'ci-demand-census.*')" ]
 
+# a census run that timed out makes every later run fail fast (rc 124 without running); it must not go unnoticed
+chk 0 "no census run hit the ${CENSUS_TO} s timeout (the first one would have made every later run fail fast)" [ ! -e "$DEADLINE_FILE" ]
+
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): the floor compares a literal and exits directly, so
 # deleting assertions above reddens the run instead of shrinking both sides of an equality.
 # Set to the FULL measured count, not a slack figure: headroom is deletable-assertion budget.
 # KEEP THE TWO ASSIGNMENTS AND THE `if` CONTIGUOUS (no comment between them).
 _total=$((passes + fails))
-_FLOOR=705
+_FLOOR=777
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d - the suite lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

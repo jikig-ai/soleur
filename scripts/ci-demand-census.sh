@@ -7,7 +7,7 @@
 #   ci-demand-census.sh --fixture <DIR> [--workflow <file>] [--summary]
 #   ci-demand-census.sh --help          (usage and the output schema, on stdout, exit 0)
 #
-# Live mode needs `gh` with a logged-in developer shell (`gh auth login`), `timeout` and `jq`; fixture
+# Live mode needs `gh` with a logged-in developer shell (`gh auth login`), GNU `timeout` (with --foreground) and `jq`; fixture
 # mode needs only `jq` and never touches the network. Both modes run ONE aggregator over the same
 # directory layout (runs-<n>.json, one per sub-window, and jobs-<run_id>.json), so the offline
 # suite exercises exactly the code a live run uses. Only GETs are issued (`gh api -f` would silently
@@ -38,10 +38,13 @@
 # OUTPUT (stdout, nothing else): KEY=value lines, then tab-separated tables.
 #   REPO WINDOW_START WINDOW_END FETCHED_AT   (fixture mode prints REPO=fixture and WINDOW=fixture)
 #   WORKFLOW_FILTER                           (only with --workflow)
-#   TOTAL_JOB_MINUTES TOTAL_JOB_SECONDS RUNS_COMPLETED RUNS_NOT_COMPLETED RUNS_RERUN
+#   TOTAL_JOB_MINUTES TOTAL_JOB_SECONDS RUNS_COMPLETED RUNS_NOT_COMPLETED RUNS_RERUN RUNS_NOJOBS
 #   JOBS_COUNTED JOBS_SKIPPED JOBS_RUNNERLESS JOBS_UNTIMED
 #   BY_WORKFLOW <workflow> <event> <runs> <jobs> <minutes>
 #   STEM <workflow> <event> <stem> <runs_ran> <runs_skipped> <runs_runnerless> <jobs> <minutes> <minutes_per_run>
+#   RUNS_NOJOBS is the number of completed runs whose jobs file holds zero jobs (a startup failure, or a re-run
+#   caught before its new jobs exist: the two look the same). Such a run is legitimate input, so it is not
+#   refused, but it is in RUNS_COMPLETED and in every minutes_per_run denominator, and this line says how many.
 #   In both tables <jobs> means COUNTED jobs only (the jobs whose seconds are in <minutes>), not every job of
 #   the runs; the skipped, runner-less and untimed jobs appear only in the JOBS_* key lines.
 # The CI per-family minutes per run are simply the `ci.yml` STEM rows (test-scripts, test-webplat,
@@ -84,12 +87,15 @@
 #
 # BIAS (a re-measure of a closed window will not reproduce an earlier figure to the digit)
 #   - runs still in flight are excluded (stderr WARN, RUNS_NOT_COMPLETED > 0): a lower bound;
-#   - `filter=latest` omits earlier attempts of re-run jobs, so a re-run run is counted by its last
-#     attempt only; RUNS_RERUN says how many completed runs have run_attempt > 1 AS OF THE LISTING TIME (a
-#     re-run started after the listing is not in it; if the re-run is still in progress when the jobs are
-#     fetched, or its attempt differs from the listing's, the census exits 3 instead, see C2). A re-run can
-#     bias the figure in EITHER direction (the last attempt may be shorter or longer than the first, and the
-#     earlier attempts' minutes are not in the figure at all);
+#   - `jobs?filter=latest` returns every job of the run labelled with the NEW run_attempt (read-only probe on
+#     run 36325677861, a partial re-run: filter=latest listed all its jobs with the new attempt, filter=all
+#     listed both attempts), so a re-run run is counted by its last attempt only. The jobs that were carried
+#     over from attempt 1 (not re-run) ARE in the figure, relabelled to the new attempt and still carrying
+#     their attempt-1 timestamps; only the minutes of the jobs that were RE-RUN lose their attempt-1 run.
+#     RUNS_RERUN says how many completed runs have run_attempt > 1 AS OF THE LISTING TIME (a re-run started
+#     after the listing is not in it; if the re-run is still in progress when the jobs are fetched, or its
+#     attempt differs from the listing's, the census exits 3 instead, see C2). A re-run can bias the figure in
+#     EITHER direction (the last attempt of a re-run job may be shorter or longer than the first);
 #   - a job's minutes are attributed to its run's creation time, so a re-run weeks later is credited
 #     to the original window.
 #   Measure only a CLOSED window: end must be in the past, and the window may span at most 12 hours.
@@ -107,8 +113,12 @@
 #   under ${TMPDIR:-/var/tmp}; its path and the delete command are on stderr. Live mode is for a
 #   developer shell: it refuses GITHUB_ACTIONS=true, because about 930 calls per six hours would spend
 #   the repo-wide GITHUB_TOKEN budget every other workflow shares; FIXTURE mode (offline, no network) is
-#   allowed anywhere, CI included. Ctrl-C (SIGINT) and SIGTERM stop the run at once (gh runs under
-#   `timeout --foreground`, so the terminal's interrupt reaches it) and still remove the scratch directory.
+#   allowed anywhere, CI included. SIGINT and SIGTERM stop the run at once when they are delivered to the
+#   PROCESS GROUP (a terminal's Ctrl-C, or `kill -- -PGID`; gh runs under `timeout --foreground`, so the signal
+#   reaches it too), and still remove the scratch directory; a bare `kill <pid>` (the script alone) waits for the
+#   current gh call to return, at most CENSUS_GH_TIMEOUT seconds, because bash defers a trap while it waits for a
+#   foreground child. SIGHUP ends the run with 129 after the same cleanup. A second signal during the cleanup is
+#   ignored, so the cleanup always finishes.
 #
 # SELF-CHECKS (a total is printed only if all pass; otherwise exit 3, reason on stderr, no
 #   TOTAL_JOB_MINUTES line)
@@ -128,29 +138,34 @@
 #       jobs all carry that run's own run_id, and whose runner_id values are numbers or null (a run with
 #       total_count 0 and an empty list is legitimate, the file must still exist); no job id may appear in
 #       two different jobs files; no job of a completed run may still be in flight (status other than
-#       `completed`: a re-run in progress, named by run id); and where both the listing and a job carry
-#       run_attempt they must be equal (a re-run that finished after the listing). Accumulated across ALL
-#       runs before the verdict, so the message names every shortfall.
+#       `completed`: a re-run in progress, named by run id; a job with no status at all is reported separately
+#       as "no status"); and where both the listing and a job carry run_attempt they must be equal (a re-run
+#       that finished after the listing), a run_attempt that is not a number being refused with exit 2.
+#       Accumulated across ALL runs before the verdict, so the message names every shortfall.
 #   non-vacuity  zero completed runs or zero counted jobs is refused, never reported as 0.
 #
 # EXIT CODES (every exit the script can produce; there is no exit 1 path, every failure maps to 2 or 3):
 #   0    ok, the summary was printed
-#   2    usage, validation, missing dependency (jq; gh and timeout in live mode), CI refusal of live mode,
+#   2    usage, validation, missing dependency (jq; gh and a timeout that supports --foreground in live mode), CI refusal of live mode,
 #        unreadable input (not JSON, wrong shape, a jq failure, a malformed windows.tsv), or an API/I-O error
 #        (a gh call that failed or timed out three times, a TMPDIR that is relative or holds whitespace or
 #        control characters, a failed write)
 #   3    self-check failure (C1, C2 or non-vacuity): exit 3 always means "do not trust a total, there is none"
-#   130  interrupted by SIGINT (Ctrl-C), 143 terminated by SIGTERM; both after the cleanup (scratch
-#        directory removed, the fetched-data hint printed) and without a total
+#   129  hangup (SIGHUP), 130 interrupted by SIGINT (Ctrl-C), 143 terminated by SIGTERM; all after the cleanup
+#        (scratch directory removed, the fetched-data hint printed) and without a total
 #
 # TRUST. Job names, workflow paths and events of fork-PR runs are attacker-chosen, so the STEM rows are
 #   a cost measurement, not an attestation. In every string that reaches the output each of these
 #   characters is replaced by one `?`, and nothing else is: the Unicode categories Cc (C0 and C1 controls,
 #   DEL; tab and newline included), Cf (format characters: zero-width, bidi controls, tag characters),
-#   Zl and Zp (U+2028, U+2029) and Co (private use); the variation selectors U+FE00-FE0F and
-#   U+E0100-E01EF; U+2800, U+3164, U+FFA0, U+115F-1160, U+17B4-17B5, U+00AD, U+180E, U+2060-2064 and the
-#   tag block U+E0000-E007F (listed explicitly because Unicode versions disagree on their category);
-#   backtick, < and >. Ordinary letters of any script survive. The result is length-capped at 120
+#   Zl and Zp (U+2028, U+2029) and Co (private use, all three planes); the Default_Ignorable_Code_Point
+#   members that no category covers on every Unicode version, listed explicitly: U+00AD, U+034F,
+#   U+115F-1160, U+17B4-17B5, U+180B-180F (Mongolian free variation selectors), U+2060-206F (U+2065 is
+#   unassigned), U+3164, U+FE00-FE0F, U+FFA0, U+FFF0-FFF8 (unassigned) and U+E0000-E0FFF (tag block, variation
+#   selectors supplement and the reserved code points between); U+2800 (braille blank), U+FFFC (object
+#   replacement); backtick, < and >. Space separators (Zs: U+00A0, U+2000-200A, U+3000 ...) are visible as
+#   spaces and survive, as do ordinary letters, digits and punctuation of any script. Other unassigned code
+#   points (Cn) are NOT swept: an old Unicode table in jq would blank a newly assigned letter. The result is length-capped at 120
 #   characters. Text echoed on stderr is cut to printable ASCII (every other byte becomes ?) and 200
 #   bytes. Every output line starts with a fixed token; nothing is built by eval, bash -c or
 #   string-splicing into a jq program (values reach jq through --arg); run ids are validated numeric
@@ -196,6 +211,8 @@ export TMPDIR
 FETCH_DIR=""
 SCRATCH=""
 cleanup() {
+  # a second signal (a wrapper such as `timeout` re-sends the one it got to its group) must not cut the cleanup short
+  trap '' INT TERM HUP
   if [ -n "$SCRATCH" ] && [ -d "$SCRATCH" ]; then
     # cannot fire: TMPDIR was validated before this trap existed (kept so the rm is guarded by construction)
     assert_fixture_dir "$SCRATCH"
@@ -206,9 +223,10 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
-# Ctrl-C and kill: leave through the EXIT trap (scratch removed, hint printed) with the shell's own codes
+# Ctrl-C, kill and hangup: leave through the EXIT trap (scratch removed, hint printed) with the shell's own codes
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 die() { # <rc> <message>
   printf 'census: %s\n' "$2" >&2
@@ -224,13 +242,13 @@ usage() { # <rc>: 0 prints usage + the output schema on stdout, anything else pr
 
 Window: [--start, --end), --end exclusive, at most 12 hours, --end in the past. Live mode needs gh.
 Exit codes: 0 ok; 2 usage/validation/dependency/I-O error; 3 self-check failure (no total is printed);
-130/143 interrupted by SIGINT/SIGTERM (cleaned up, no total). Exit status 1 is never used.
+129/130/143 interrupted by SIGHUP/SIGINT/SIGTERM (cleaned up, no total). Exit status 1 is never used.
 
 Output (stdout): KEY=value lines, then tab-separated tables.
   REPO=  WINDOW_START=  WINDOW_END=  FETCHED_AT=      (fixture mode: REPO=fixture, WINDOW=fixture)
   WORKFLOW_FILTER=<file>                              (only with --workflow)
   TOTAL_JOB_MINUTES=<one decimal>  TOTAL_JOB_SECONDS=<integer>  (the seconds figure is authoritative)
-  RUNS_COMPLETED=  RUNS_NOT_COMPLETED=  RUNS_RERUN=
+  RUNS_COMPLETED=  RUNS_NOT_COMPLETED=  RUNS_RERUN=  RUNS_NOJOBS=
   JOBS_COUNTED=  JOBS_SKIPPED=  JOBS_RUNNERLESS=  JOBS_UNTIMED=
   BY_WORKFLOW <TAB> workflow <TAB> event <TAB> runs <TAB> jobs <TAB> minutes
   STEM <TAB> workflow <TAB> event <TAB> stem <TAB> runs_ran <TAB> runs_skipped <TAB> runs_runnerless <TAB> jobs <TAB> minutes <TAB> minutes_per_run
@@ -314,6 +332,8 @@ if [ "$LIVE" -eq 1 ]; then
   [[ "$GH_TIMEOUT" =~ ^[1-9][0-9]{0,4}$ ]] || die 2 "CENSUS_GH_TIMEOUT must be a positive whole number of seconds: $(tame "$GH_TIMEOUT")"
   command -v gh >/dev/null 2>&1 || die 2 "gh is required in live mode"
   command -v timeout >/dev/null 2>&1 || die 2 "timeout (coreutils) is required in live mode"
+  # the gh calls run under `timeout --foreground` (GNU coreutils); a timeout that rejects the option would fail every call identically
+  timeout --foreground 1 "${BASH:-bash}" -c : >/dev/null 2>&1 || die 2 "a timeout that supports --foreground (GNU coreutils) is required in live mode; this timeout rejects it"
   REPO="${GH_REPO:-}"
   if [ -z "$REPO" ]; then
     REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner) || die 2 "could not resolve the repository (set GH_REPO=owner/name)"
@@ -325,16 +345,19 @@ fi
 
 # ── jq definitions shared by the run selection and the aggregator ────────────
 # san: untrusted text to printable output. Each of these characters becomes ONE "?": the categories Cc, Cf,
-# Zl, Zp and Co, the variation selectors U+FE00-FE0F and U+E0100-E01EF, U+2800, U+3164, U+FFA0,
-# U+115F-1160, U+17B4-17B5, U+00AD, U+180E, U+2060-2064, the tag block U+E0000-E007F, backtick, < and >.
-# Then the 120-character cap. (The header TRUST paragraph lists the same set.)
+# Zl, Zp and Co, and (listed explicitly, because Unicode versions disagree on their category and a
+# Default_Ignorable_Code_Point is invisible whatever its category) U+00AD, U+034F, U+115F-1160, U+17B4-17B5,
+# U+180B-180F, U+2060-206F, U+2800, U+3164, U+FE00-FE0F, U+FFA0, U+FFF0-FFF8, U+FFFC and U+E0000-E0FFF (the
+# tag block, the variation selectors supplement and the reserved code points between), plus backtick, < and >.
+# Then the 120-character cap. (The header TRUST paragraph lists the same set.) Space separators (Zs: U+00A0,
+# U+2000-200A, U+3000 ...) are visible as spaces and survive.
 JQ_DEFS='
 def san: tostring
-  | gsub("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Co}\\x{FE00}-\\x{FE0F}\\x{E0100}-\\x{E01EF}\\x{2800}\\x{3164}\\x{FFA0}\\x{115F}-\\x{1160}\\x{17B4}-\\x{17B5}\\x{00AD}\\x{180E}\\x{2060}-\\x{2064}\\x{E0000}-\\x{E007F}`<>]"; "?")
+  | gsub("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Co}\\x{FE00}-\\x{FE0F}\\x{2800}\\x{3164}\\x{FFA0}\\x{115F}-\\x{1160}\\x{17B4}-\\x{17B5}\\x{00AD}\\x{034F}\\x{180B}-\\x{180F}\\x{2060}-\\x{206F}\\x{FFF0}-\\x{FFF8}\\x{FFFC}\\x{E0000}-\\x{E0FFF}`<>]"; "?")
   | .[0:120];
 def wfkey: (.path // "unknown") | tostring | sub("@.*$"; "") | sub("^\\.github/workflows/"; "") | san;
 def evkey: (.event // "unknown") | san;
-def stemof: (.name // "unknown") | tostring | . as $n
+def stemof: (.name // "unknown") | tostring | .[0:400] | . as $n
   | (sub("\\s*(?<p>\\((?:[^()]|\\g<p>)*\\))$"; "")) as $s | (if $s == "" then $n else $s end) | san
   | if . == "" then "unknown" else . end;
 def ts: if type == "string" then sub("\\.[0-9]+Z$"; "Z") else . end;
@@ -432,7 +455,7 @@ fetch_runs_live() {
     n=$((n + 1)); ta=$(iso "$a"); tb=$(iso "$b")
     gh_get "repos/$REPO/actions/runs?created=$ta..$tb&per_page=100" "$SCRATCH/raw-runs.json" "runs $ta..$tb"
     # keep only the fields the aggregator reads: actor logins and commit author data never reach the disk
-    jq -c '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | objects | {id, status, event, path, created_at, run_attempt}]}' \
+    jq -c -s '.[] | {total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | objects | {id, status, event, path, created_at, run_attempt}]}' \
       "$SCRATCH/raw-runs.json" >"$FETCH_DIR/runs-$n.json" || die 2 "could not read the runs listing for $ta..$tb"
     rm -f "$SCRATCH/raw-runs.json"
     c1_check "$FETCH_DIR/runs-$n.json" || exit 3
@@ -447,7 +470,7 @@ fetch_jobs_live() { # needs IDS (set by select_runs)
     i=$((i + 1))
     gh_get "repos/$REPO/actions/runs/$id/jobs?per_page=100&filter=latest" "$SCRATCH/raw-jobs.json" "run $id"
     # keep only the fields the aggregator reads (runner name, labels, branch, steps and URLs never reach the disk)
-    jq -c '{total_count: .total_count, jobs: [(.jobs // [])[]? | objects | {id, run_id, name, status, conclusion, started_at, completed_at, runner_id, run_attempt}]}' \
+    jq -c -s '.[] | {total_count: .total_count, jobs: [(.jobs // [])[]? | objects | {id, run_id, name, status, conclusion, started_at, completed_at, runner_id, run_attempt}]}' \
       "$SCRATCH/raw-jobs.json" >"$FETCH_DIR/jobs-$id.json" || die 2 "could not read the jobs listing for run $id"
     rm -f "$SCRATCH/raw-jobs.json"
     if [ $((i % 50)) -eq 0 ]; then printf 'census: jobs fetched for %d of %s runs\n' "$i" "$total" >&2; fi
@@ -544,7 +567,7 @@ select_runs() { # <dir>
 # ── the aggregator both modes share ──────────────────────────────────────────
 aggregate() { # <dir> <header>
   local dir="$1" header="$2" f id row kind rid detail dups
-  local -a missing=() fewer=() more=() disagree=() foreign=() badrunner=() inflight=() attempt=() dupid=()
+  local -a badla=() missing=() fewer=() more=() disagree=() foreign=() badrunner=() inflight=() nostatus=() attempt=() dupid=()
 
   : >"$SCRATCH/jobs.ndjson"
   for id in "${IDS[@]}"; do
@@ -566,25 +589,30 @@ aggregate() { # <dir> <header>
          total: $ts[0], n: ($j | length),
          foreign: ($all | map(select((.run_id | tostring) != $rid)) | length),
          badrunner: ($all | map(select(.runner_id != null and ((.runner_id | type) != "number"))) | length),
-         inflight: ($j | map(select((.status // "") != "completed")) | length),
-         attempts: ($j | map(.run_attempt | select(. != null) | tostring) | unique),
+         nostatus: ($j | map(select(.status == null)) | length),
+         inflight: ($j | map(select(.status != null and .status != "completed")) | length),
+         attempts: ($j | map(.run_attempt | select(. != null) | if type == "number" then tostring else error("non-numeric run_attempt") end) | unique),
          ids: ($j | map(.id)),
          jobs: ($j | map({name, conclusion, runner_id, started_at, completed_at}))}' "$f") \
-      || die 2 "jobs file is not valid JSON: jobs-$id.json"
+      || die 2 "jobs file is not valid JSON, or a job has a non-numeric run_attempt: jobs-$id.json"
     printf '%s\n' "$row" >>"$SCRATCH/jobs.ndjson" || die 2 "could not write the jobs scratch file"
   done
   local probs
-  probs=$(jq -r --slurpfile R "$SCRATCH/sel.ndjson" '
+  # slurped (-s): jq's exit status is that of the LAST input only, so a runtime error on an earlier row of a
+  # multi-input stream would exit 0 and silently drop that row's findings
+  probs=$(jq -s -r --slurpfile R "$SCRATCH/sel.ndjson" '
       (reduce $R[] as $r ({}; .[($r.id | tostring)] = $r.run_attempt)) as $ra
-      | (select(.err != null) | "ERR\t\(.rid)\t\(.err)"),
+      | .[] | ((select(.err != null) | "ERR\t\(.rid)\t\(.err)"),
       (select(.err == null and .disagree) | "DISAGREE\t\(.rid)\t\(.totals)"),
       (select(.err == null and .foreign > 0) | "FOREIGN\t\(.rid)\t\(.foreign) job(s)"),
       (select(.err == null and .badrunner > 0) | "RUNNERID\t\(.rid)\t\(.badrunner) job(s)"),
+      (select(.err == null and .nostatus > 0) | "NOSTATUS\t\(.rid)\t\(.nostatus) job(s)"),
       (select(.err == null and .inflight > 0) | "INFLIGHT\t\(.rid)\t\(.inflight) job(s) not completed"),
-      (.rid as $id | ($ra[$id] | if . == null then null else tostring end) as $la
-       | select(.err == null and $la != null and (.attempts | any(. != $la))) | "ATTEMPT\t\($id)\tlisting attempt \($la), jobs attempt \(.attempts | join("/"))"),
+      (.rid as $id | ($ra[$id] | if . == null then null elif type == "number" then tostring else "NaN" end) as $la
+       | (select(.err == null and $la == "NaN") | "BADLISTATTEMPT\t\($id)\tnot a number"),
+         (select(.err == null and $la != null and $la != "NaN" and (.attempts | any(. != $la))) | "ATTEMPT\t\($id)\tlisting attempt \($la), jobs attempt \(.attempts | join("/"))")),
       (select(.err == null and (.disagree | not) and .n < .total) | "FEWER\t\(.rid)\ttotal_count=\(.total), jobs=\(.n)"),
-      (select(.err == null and (.disagree | not) and .n > .total) | "MORE\t\(.rid)\ttotal_count=\(.total), jobs=\(.n)")' "$SCRATCH/jobs.ndjson") \
+      (select(.err == null and (.disagree | not) and .n > .total) | "MORE\t\(.rid)\ttotal_count=\(.total), jobs=\(.n)"))' "$SCRATCH/jobs.ndjson") \
     || die 2 "could not summarise the jobs files"
   local bad=""
   while IFS=$'\t' read -r kind rid detail; do
@@ -593,13 +621,16 @@ aggregate() { # <dir> <header>
       DISAGREE) disagree+=("$rid ($detail)") ;;
       FOREIGN)  foreign+=("$rid ($detail)") ;;
       RUNNERID) badrunner+=("$rid ($detail)") ;;
+      NOSTATUS) nostatus+=("$rid ($detail)") ;;
       INFLIGHT) inflight+=("$rid ($detail)") ;;
-      ATTEMPT)  attempt+=("$rid ($detail)") ;;
+      BADLISTATTEMPT) badla+=("$rid") ;;
+      ATTEMPT)  attempt+=("$(tame "$rid ($detail)")") ;;
       FEWER)    fewer+=("$rid ($detail)") ;;
       MORE)     more+=("$rid ($detail)") ;;
     esac
   done <<<"$probs"
   [ -z "$bad" ] || die 2 "unreadable jobs file(s):$(printf '%s' "$bad" | cut -c1-300)"
+  [ "${#badla[@]}" -eq 0 ] || die 2 "the runs listing carries a run_attempt that is not a number, for run(s): ${badla[*]}"
   # a job id must belong to exactly one jobs file (jobs are de-duplicated within a file only)
   dups=$(jq -s -r '[.[] | select(.err == null) | .rid as $r | .ids[] | {id: ., rid: $r}]
       | group_by(.id) | map(select(length > 1)) | .[0:10][] | "\(.[0].id) (runs \(map(.rid) | unique | join("/")))"' "$SCRATCH/jobs.ndjson") \
@@ -608,7 +639,7 @@ aggregate() { # <dir> <header>
     [ -z "$detail" ] || dupid+=("$detail")
   done <<<"$dups"
   if [ "${#missing[@]}" -gt 0 ] || [ "${#fewer[@]}" -gt 0 ] || [ "${#more[@]}" -gt 0 ] || [ "${#disagree[@]}" -gt 0 ] \
-    || [ "${#foreign[@]}" -gt 0 ] || [ "${#badrunner[@]}" -gt 0 ] || [ "${#inflight[@]}" -gt 0 ] || [ "${#attempt[@]}" -gt 0 ] \
+    || [ "${#foreign[@]}" -gt 0 ] || [ "${#badrunner[@]}" -gt 0 ] || [ "${#nostatus[@]}" -gt 0 ] || [ "${#inflight[@]}" -gt 0 ] || [ "${#attempt[@]}" -gt 0 ] \
     || [ "${#dupid[@]}" -gt 0 ]; then
     [ "${#missing[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: jobs file missing for completed run(s): %s\n' "${missing[*]}" >&2
     [ "${#fewer[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: jobs truncated (fewer jobs than total_count) for run(s): %s\n' "${fewer[*]}" >&2
@@ -616,6 +647,7 @@ aggregate() { # <dir> <header>
     [ "${#disagree[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: the documents of a jobs file disagree on total_count for run(s): %s\n' "${disagree[*]}" >&2
     [ "${#foreign[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: jobs carrying another run_id than the file name (a replayed or wrong-run file) for run(s): %s\n' "${foreign[*]}" >&2
     [ "${#badrunner[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: runner_id is neither a number nor null for run(s): %s\n' "${badrunner[*]}" >&2
+    [ "${#nostatus[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: a job has no status (not an API response, or edited), so it cannot be known to be completed, for run(s): %s\n' "${nostatus[*]}" >&2
     [ "${#inflight[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: a job is still in flight in a completed run (a re-run in progress?), measure again once it ends, for run(s): %s\n' "${inflight[*]}" >&2
     [ "${#attempt[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: the run_attempt of the jobs differs from the listing (a re-run since the listing), measure again, for run(s): %s\n' "${attempt[*]}" >&2
     [ "${#dupid[@]}" -eq 0 ] || printf 'census: SELF-CHECK C2 FAILED: the same job id appears in more than one jobs file (a replayed or copied file), job id(s): %s\n' "${dupid[*]}" >&2
@@ -639,12 +671,14 @@ aggregate() { # <dir> <header>
     | ($jobs | map(select(.cls == "runnerless")) | length) as $nrl
     | ($jobs | map(select(.cls == "untimed")) | length) as $nun
     | ($done | map(select(((.run_attempt | numbers) // 1) > 1)) | length) as $nre
+    | ($J | map(select(.n == 0)) | length) as $nnj
     | $header,
       "TOTAL_JOB_MINUTES=\(min1($tot))",
       "TOTAL_JOB_SECONDS=\($tot)",
       "RUNS_COMPLETED=\($done | length)",
       "RUNS_NOT_COMPLETED=\(($all | length) - ($done | length))",
       "RUNS_RERUN=\($nre)",
+      "RUNS_NOJOBS=\($nnj)",
       "JOBS_COUNTED=\($counted | length)",
       "JOBS_SKIPPED=\($nsk)",
       "JOBS_RUNNERLESS=\($nrl)",
