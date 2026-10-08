@@ -2152,7 +2152,7 @@ hfa_check() { # <rowname> <mode> -> HFA_BAD (empty = held)
   fi
   # a bash diagnostic ("...: line N: ...") other than the CAUSE the mode itself creates (the unbound variable, the missing interpreter) is the script dying
   # inside the arm, which is what a `CAUSE="$(tr ... < file)"` on a never-written file did under set -e before the arm's own line could print
-  case "$mode" in unset) cause='unbound variable' ;; nopy) cause='python3: command not found' ;; *) cause='@@no-expected-diagnostic@@' ;; esac
+  case "$mode" in unset) cause='WEBHOOK_SECRET: unbound variable' ;; nopy) cause='python3: command not found' ;; *) cause='@@no-expected-diagnostic@@' ;; esac
   [[ "$(grep -F ': line ' "$row/stderr" | grep -cvF -- "$cause" || true)" == 0 ]] || HFA_BAD+=" bash-error"
   [[ "$(bk_count "$row/stdout" "$HM_WH")$(bk_count "$row/stderr" "$HM_WH")$(bk_count "$row/stdout" "$HM_CFSEC")$(bk_count "$row/stderr" "$HM_CFSEC")" == 0000 ]] || HFA_BAD+=" secret-in-output"
 }
@@ -2195,6 +2195,71 @@ HFA_MUTANTS
 [[ "$hfa_k" == 3 ]] || hfa_bad+=" [ran $hfa_k of 3 mutants]"
 if [[ -z "$hfa_bad" ]]; then row "single-request arm check, clause by clause: a request that is never made, a marker printed on success and a signature guard that accepts an empty signature (the request goes out and the arm carries on) are each caught, and only by the clauses that name them" ok
 else row "single-request arm check, clause by clause: a request that is never made, a marker printed on success and a signature guard that accepts an empty signature (the request goes out and the arm carries on) are each caught, and only by the clauses that name them" fail "$hfa_bad"; fi
+# hfa_check's clauses, EACH driven to FAIL alone by a FABRICATED row (green except for exactly one doctored fact; the three real-driver mutants above reach
+# only some of them: the bash-error, secret-in-output and HTTP-000 clauses were deletable with the battery green). A clause with several alternatives gets one
+# variant per alternative (the two conjuncts of the arm's error line, the four secret/stream pairs, both allowed causes and a different diagnostic carrying the
+# allowed cause's words). The un-doctored row of every mode must come out GREEN first, so a check that fails everything cannot satisfy a single variant.
+hfac_mk() { # <variant> <mode: ok|empty|unset|nopy> -> HFAC_ROW (name under $ROWS) and HF_RC
+  local v="$1" mode="$2" d="$ROWS/hfac-$1-$2"
+  HFAC_ROW="hfac-$1-$2"; HF_RC=0
+  assert_fixture_dir "$d"; mkdir -p "$d/shim/calls"
+  : > "$d/stdout"; : > "$d/stderr"
+  if [[ "$mode" == ok ]]; then
+    printf 'DRV-DONE\n' > "$d/stdout"; printf 'curl\0' > "$d/shim/calls/1.argv"
+  else
+    HF_RC=1
+    printf '::error::the deploy hook returned HTTP 000\n' > "$d/stdout"; printf '%s\n' "$SC_MARK" > "$d/stderr"
+    case "$mode" in
+      unset) printf 'x.sh: line 9: WEBHOOK_SECRET: unbound variable\n' >> "$d/stderr" ;;
+      nopy)  printf 'x.sh: line 9: python3: command not found\n' >> "$d/stderr" ;;
+    esac
+  fi
+  case "$v" in
+    good) ;;
+    rc)            if [[ "$mode" == ok ]]; then HF_RC=1; else HF_RC=0; fi ;;
+    no-done)       : > "$d/stdout" ;;
+    continued)     printf 'DRV-DONE\n' >> "$d/stdout" ;;
+    no-call)       rm -f "$d/shim/calls/1.argv" ;;
+    two-calls)     printf 'curl\0' > "$d/shim/calls/2.argv" ;;
+    call)          printf 'curl\0' > "$d/shim/calls/1.argv" ;;
+    marker)        printf 'SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape\n' >> "$d/stderr" ;;
+    no-marker)     : > "$d/stderr" ;;
+    two-markers)   printf '%s\n' "$SC_MARK" >> "$d/stderr" ;;
+    error-line)    printf '::error::the deploy hook returned HTTP 000\n' >> "$d/stdout" ;;
+    no-error)      printf 'the deploy hook returned HTTP 000\n' > "$d/stdout" ;;
+    two-errors)    printf '::error::a second error line\n' >> "$d/stdout" ;;
+    no-http000)    printf '::error::the deploy hook failed\n' > "$d/stdout" ;;
+    two-http000)   printf 'HTTP 000 again\n' >> "$d/stdout" ;;
+    bash-error)    printf 'x.sh: line 3: boom: command not found\n' >> "$d/stderr" ;;
+    other-cause)   if [[ "$mode" == unset ]]; then printf 'x.sh: line 4: OTHER_VARIABLE: unbound variable\n' >> "$d/stderr"; else printf 'x.sh: line 4: openssl: command not found\n' >> "$d/stderr"; fi ;;
+    out-wh)        printf 'leaked %s\n' "$HM_WH" >> "$d/stdout" ;;
+    err-wh)        printf 'leaked %s\n' "$HM_WH" >> "$d/stderr" ;;
+    out-cfsec)     printf 'leaked %s\n' "$HM_CFSEC" >> "$d/stdout" ;;
+    err-cfsec)     printf 'leaked %s\n' "$HM_CFSEC" >> "$d/stderr" ;;
+  esac
+}
+hfac_run() { # <spec...>: each "<variant>:<mode>:<expected HFA_BAD>" is built, judged by hfa_check and compared -> hfac_bad / hfac_k
+  local spec v mode exp
+  for spec in "$@"; do
+    v="${spec%%:*}"; mode="${spec#*:}"; exp="${mode#*:}"; mode="${mode%%:*}"
+    hfac_mk "$v" "$mode"; hfa_check "$HFAC_ROW" "$mode"; hfac_k=$((hfac_k + 1))
+    [[ "$HFA_BAD" == "$exp" ]] || hfac_bad+=" [$v/$mode: got '${HFA_BAD:-<none>}' want '${exp:-<none>}']"
+  done
+}
+hfac_bad=""; hfac_k=0
+hfac_run 'good:ok:' 'rc:ok: rc=1' 'no-done:ok: arm-did-not-complete' 'no-call:ok: calls=0' 'two-calls:ok: calls=2' 'marker:ok: marker-on-success' 'error-line:ok: error-line-on-success' \
+  'bash-error:ok: bash-error' 'other-cause:ok: bash-error'
+hfac_run 'good:empty:' 'rc:empty: rc=0' 'continued:empty: arm-continued' 'call:empty: curl-called' 'no-marker:empty: marker-count=0' 'two-markers:empty: marker-count=2' \
+  'no-error:empty: no-arm-error-line-naming-HTTP-000' 'two-errors:empty: no-arm-error-line-naming-HTTP-000' 'no-http000:empty: no-arm-error-line-naming-HTTP-000' \
+  'two-http000:empty: no-arm-error-line-naming-HTTP-000'
+hfac_run 'good:unset:' 'good:nopy:' 'bash-error:empty: bash-error' 'bash-error:unset: bash-error' 'bash-error:nopy: bash-error' 'other-cause:unset: bash-error' 'other-cause:nopy: bash-error' \
+  'other-cause:empty: bash-error'
+hfac_run 'out-wh:ok: secret-in-output' 'err-wh:ok: secret-in-output' 'out-cfsec:ok: secret-in-output' 'err-cfsec:ok: secret-in-output' \
+  'out-wh:empty: secret-in-output' 'err-wh:unset: secret-in-output' 'out-cfsec:nopy: secret-in-output' 'err-cfsec:empty: secret-in-output'
+hfac_label="arm check, every clause driven to FAIL alone by a fabricated row (control row green first): rc, arm completion, call count, marker on success, ::error:: on success; in the refusal modes rc, arm-continued, curl-called, the marker count (none and two), the arm's ::error:: line (absent, doubled) and its HTTP 000 (absent, doubled), a bash diagnostic in every mode, a different diagnostic that borrows the allowed cause's words, and the webhook secret and the Cloudflare Access secret on each stream"
+[[ "$hfac_k" == 35 ]] || hfac_bad+=" [ran $hfac_k of 35 variants]"
+if [[ -z "$hfac_bad" ]]; then row "$hfac_label" ok
+else row "$hfac_label" fail "$hfac_bad"; fi
 # ...and the real script, end to end, op=enumerate: the operator-facing result of the same two failures is the arm's own ::error:: line plus the marker
 # (never the silent exit), with zero requests and a non-zero rc.
 cs_arm_check() { # <rowname> -> cs_bad
@@ -2564,7 +2629,8 @@ bs_ok_call() {
   [[ ! -e "$c.injected" ]] || BS_BAD+=" injected"
   # no -u / --user / --user= token in the recorded argv, whatever the spelling: `--user`, `--user=...` and a short-flag bundle ending in u (which
   # includes a bare -u; the old separate `-u` alternative was subsumed by the bundle one and so could not be driven alone). Each alternative has a control.
-  [[ "$(tr '\0' '\n' < "$c.argv" | grep -cE -- '^(--user|--user=.*|-[A-Za-z]*u)$' || true)" == 0 ]] || BS_BAD+=" user-token-in-argv"
+  # The bundle alphabet is the one the lint proved against the real curl: digits (-4u, -6u, -0u) and `#` (-#u) bundle with the letters, so `[A-Za-z]*` missed them.
+  [[ "$(tr '\0' '\n' < "$c.argv" | grep -cE -- '^(--user|--user=.*|-[0-9A-Za-z#]*u)$' || true)" == 0 ]] || BS_BAD+=" user-token-in-argv"
   for tok in "$BS_USER" "$BS_PASS"; do
     [[ "$(grep -caF -- "$tok" "$c.argv" || true)" == 0 ]] || BS_BAD+=" value-in-argv"
   done
@@ -2803,7 +2869,10 @@ hm5_audit() { # <file>
   [[ "$(grep -cF -e '^[0-9a-f]{64}$' <<< "$code" || true)" == 1 ]] || HM5_BAD+=" hexcheck"
   [[ "$(grep -cE -e 'openssl|-hmac|-macopt' <<< "$code" || true)" == 0 ]] || HM5_BAD+=" openssl"
   [[ "$(sed 's/^[[:space:]]*//' "$f" | grep -cxF -- "$HM_BEARER_FN" || true)" == 1 && "$(grep -oE '_bearer_ok "' <<< "$code" | grep -c . || true)" == 2 ]] || HM5_BAD+=" bearer"
-  [[ "$(grep -cF -e "curl --disable --noproxy '*'" <<< "$code" || true)" -ge 1 && "$(grep -cF -e "$HM5_CFG_LIT" <<< "$code" || true)" == 1 \
+  # exactly ONE curl command in the file and it is the disable form: `-ge 1` on the disable form let a second, flag-less `curl` (a proxy-honouring, rc-honouring
+  # call outside the config-on-stdin shape) ride along; the count of `curl` words on non-comment lines is therefore held equal to the count of the disable form
+  [[ "$(grep -cF -e "curl --disable --noproxy '*'" <<< "$code" || true)" == 1 && "$(grep -cE -e '(^|[^A-Za-z0-9_./-])curl([^A-Za-z0-9_-]|$)' <<< "$code" || true)" == 1 \
+     && "$(grep -cF -e "$HM5_CFG_LIT" <<< "$code" || true)" == 1 \
      && "$(grep -cE -e '-H "(X-Signature-256|CF-Access-Client)' <<< "$code" || true)" == 0 ]] || HM5_BAD+=" config"
   [[ "$(grep -cF -e 'case "$-" in' <<< "$code" || true)" -ge 1 ]] || HM5_BAD+=" preamble"
   return 0
@@ -2859,8 +2928,13 @@ hm5_facet_mut() { # <file> <facet> -> HM5_MUT
               printf '%s' "${text//"curl --disable --noproxy '*'"/"curl --noproxy '*'"}" > "$HM5_MUT" ;;
     config-noprintf)  text="$(cat "$f"; printf x)"; text="${text%x}"
               [[ "$text" == *"$HM5_CFG_LIT"* ]] || fatal "facet mutation config-noprintf did not land in $1"
-              printf '%s' "${text//"$HM5_CFG_LIT"/"--config - < <(printf  'header = \"X-Signature-256: sha256=%s\"\\n'"}" > "$HM5_MUT" ;;
+              # the replacement goes through a variable: a process substitution written INSIDE the replacement of ${v//pat/repl} parses on bash 5.3 and
+              # is a parse error ("unexpected EOF while looking for matching ')'") on bash 5.2, the userland of the CI runner
+              hm5_repl="--config - < <(printf  'header = \"X-Signature-256: sha256=%s\"\\n'"
+              printf '%s' "${text//"$HM5_CFG_LIT"/"$hm5_repl"}" > "$HM5_MUT" ;;
     config-twoprintf) { cat "$f"; printf '%s\n' ": $HM5_CFG_LIT"; } > "$HM5_MUT" ;;
+    # a second, flag-less curl command next to the disable form (the disable-form count stays 1, so only the exact count of curl commands can see it)
+    config-barecurl)  { cat "$f"; printf '%s\n' 'curl -s http://127.0.0.1:9/x'; } > "$HM5_MUT" ;;
     guard)    mapfile -t tl < "$f"
               for i in "${!tl[@]}"; do ln="${tl[i]}"; [[ "$ln" == *'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3'* ]] && tl[i]="${ln% || *}"; done
               printf '%s\n' "${tl[@]}" > "$HM5_MUT" ;;
@@ -2873,12 +2947,12 @@ hm5_facet_mut() { # <file> <facet> -> HM5_MUT
 }
 while IFS= read -r hf; do
   base="$(basename "$hf" .sh)"; hm5_fbad=""
-  for hm5_facet in guard openssl config config-hdr-cf config-nodisable config-noprintf config-twoprintf preamble; do
+  for hm5_facet in guard openssl config config-hdr-cf config-nodisable config-barecurl config-noprintf config-twoprintf preamble; do
     hm5_facet_mut "$hf" "$hm5_facet"; hm5_audit "$HM5_MUT"
     [[ "$HM5_BAD" == " ${hm5_facet%%-*}" ]] || hm5_fbad+=" [$hm5_facet:${HM5_BAD:-none}]"
   done
-  if [[ -z "$hm5_fbad" ]]; then row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, dropping the header printf and repeating it each fail exactly their own facet" ok
-  else row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, dropping the header printf and repeating it each fail exactly their own facet" fail "facets that did not fire alone:$hm5_fbad"; fi
+  if [[ -z "$hm5_fbad" ]]; then row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" ok
+  else row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" fail "facets that did not fire alone:$hm5_fbad"; fi
 done <<< "$HM5_FILES"
 
 # ---- running the probes under the hmac-cf profile ------------------------------------------------------------
@@ -3197,7 +3271,7 @@ ctl_row() { # <label>: one row from ctl_bad
 
 # --- bk_check (the backup arm's mask/argv/stdin/body clauses) ---
 bkc_mk() { # <variant> -> row name
-  local v="$1" d tok="$BK_CANARY"; d="$(ctl_dir "bkc-$v")"
+  local v="$1" d tok="$BK_CANARY"; d="$(ctl_dir "bkc-$v")"; assert_fixture_dir "$d"
   printf '::add-mask::%s\nSHIMCALL 1\nbackup image id=111 ready\n' "$tok" > "$d/out"
   printf 'curl\0--config\0-\0' > "$d/shim/calls/1.argv"
   printf 'header = "Authorization: Bearer %s"\n' "$tok" > "$d/shim/calls/1.stdin"
@@ -3221,7 +3295,7 @@ ctl_row "bk_check: a green directory is green, and each of its six clauses (mask
 
 # --- bs_refusal (the Better Stack reader's refusal contract) ---
 bsr_mk() { # <variant> -> row name; sets BS_RC
-  local v="$1" d; d="$(ctl_dir "bsr-$v")"
+  local v="$1" d; d="$(ctl_dir "bsr-$v")"; assert_fixture_dir "$d"
   BS_RC=2
   printf 'betterstack-query.sh: refusing to send BETTERSTACK_QUERY_PASSWORD (token_shape)\n%stoken_shape\n' "$BS_MARKER_PFX" > "$d/stderr"
   : > "$d/stdout"
@@ -3249,7 +3323,7 @@ ctl_row "bs_refusal: a compliant refusal is green, and each of its clauses (exit
 
 # --- bs_ok_call (the well-formed Better Stack call) ---
 bso_mk() { # <variant> -> row name; sets BS_RC
-  local v="$1" d; d="$(ctl_dir "bso-$v")"
+  local v="$1" d; d="$(ctl_dir "bso-$v")"; assert_fixture_dir "$d"
   BS_RC=0
   printf 'curl\0--disable\0--noproxy\0*\0--config\0-\0-d\0%s\0https://%s?query=1\0' "$BS_SQL" "$BS_HOST" > "$d/shim/calls/1.argv"
   printf 'user = "%s"\n' "$BS_PAIR" > "$d/shim/calls/1.stdin"
@@ -3263,6 +3337,8 @@ bso_mk() { # <variant> -> row name; sets BS_RC
     injected)          printf 'INJECTED\n' > "$d/shim/calls/1.injected" ;;
     user-token)        printf 'curl\0-u\0%s\0-d\0%s\0https://%s?query=1\0' "x" "$BS_SQL" "$BS_HOST" > "$d/shim/calls/1.argv" ;;
     user-token-bundle) printf 'curl\0-sSu\0%s\0-d\0%s\0https://%s?query=1\0' "x" "$BS_SQL" "$BS_HOST" > "$d/shim/calls/1.argv" ;;
+    user-token-digit)  printf 'curl\0-4u\0%s\0-d\0%s\0https://%s?query=1\0' "x" "$BS_SQL" "$BS_HOST" > "$d/shim/calls/1.argv" ;;
+    user-token-hash)   printf 'curl\0-#u\0%s\0-d\0%s\0https://%s?query=1\0' "x" "$BS_SQL" "$BS_HOST" > "$d/shim/calls/1.argv" ;;
     user-token-long)   printf 'curl\0--user\0%s\0-d\0%s\0https://%s?query=1\0' "x" "$BS_SQL" "$BS_HOST" > "$d/shim/calls/1.argv" ;;
     user-token-eq)     printf 'curl\0--user=svc:x\0-d\0%s\0https://%s?query=1\0' "$BS_SQL" "$BS_HOST" > "$d/shim/calls/1.argv" ;;
     value-in-argv)     printf 'curl\0-d\0%s\0https://%s?query=1\0%s\0' "$BS_SQL" "$BS_HOST" "arg-$BS_PASS" > "$d/shim/calls/1.argv" ;;
@@ -3277,7 +3353,7 @@ bso_mk() { # <variant> -> row name; sets BS_RC
   esac
   CTL_NAME="ctl-bso-$v"
 }
-for v in good rc calls user-flag injected user-token user-token-bundle user-token-long user-token-eq value-in-argv value-in-argv-user stdin-shape userpwd sql url value-in-output marker-on-success unmodelled-flag; do
+for v in good rc calls user-flag injected user-token user-token-bundle user-token-digit user-token-hash user-token-long user-token-eq value-in-argv value-in-argv-user stdin-shape userpwd sql url value-in-output marker-on-success unmodelled-flag; do
   bso_mk "$v"; bs_ok_call "$CTL_NAME"
   case "$v" in
     good) want="" ;; rc) want=" rc=1" ;; calls) want=" calls=2" ;; user-flag) want=" user-flag-in-argv" ;; user-token*) want=" user-token-in-argv" ;; value-in-argv*) want=" value-in-argv" ;;
@@ -3286,11 +3362,11 @@ for v in good rc calls user-flag injected user-token user-token-bundle user-toke
   esac
   ctl_want "bs_ok_call/$v" "$BS_BAD" "$want"
 done
-ctl_row "bs_ok_call: a well-formed call is green, and each of its clauses fails ALONE when only its fact is doctored: exit 0, one call, no user flag, no INJECTED, each spelling of the user token (-u, a -sSu bundle, --user, --user=...) and each of the two values (username, password) in argv, exactly one stdin user line, USERPWD equal, SQL an argument, pinned URL, value absent from the output, no marker, no unmodelled flag (the user-line-count clause is unreachable: the exact-stdin clause fails first)"
+ctl_row "bs_ok_call: a well-formed call is green, and each of its clauses fails ALONE when only its fact is doctored: exit 0, one call, no user flag, no INJECTED, each spelling of the user token (-u, a -sSu bundle, a -4u bundle with a digit, a -#u bundle with the hash, --user, --user=...) and each of the two values (username, password) in argv, exactly one stdin user line, USERPWD equal, SQL an argument, pinned URL, value absent from the output, no marker, no unmodelled flag (the user-line-count clause is unreachable: the exact-stdin clause fails first)"
 
 # --- hmx_refused (every hostile-credential refusal of the canary-promotion, fatal-channel and parity rows) ---
 hmr_mk() { # <variant> -> row name; sets RUN_RC
-  local v="$1" d; d="$(ctl_dir "hmr-$v")"
+  local v="$1" d; d="$(ctl_dir "hmr-$v")"; assert_fixture_dir "$d"
   RUN_RC=2
   printf 'ctl-surface: refusing a credential\nSOLEUR_CREDENTIAL_REFUSED script=ctl-surface reason=token_shape\n' > "$d/stderr"
   : > "$d/stdout"
@@ -3322,7 +3398,7 @@ ctl_row "hmx_refused: a compliant refusal is green, and each of its clauses fail
 EHM_DIG="$(printf '%064d' 7)"
 ehm_stdin() { printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$1" "$2" "$3"; }
 ehm_mk() { # <variant> -> row dir
-  local v="$1" d; d="$(ctl_dir "ehm-$v")"
+  local v="$1" d; d="$(ctl_dir "ehm-$v")"; assert_fixture_dir "$d"
   printf 'curl\0--config\0-\0' > "$d/shim/calls/1.argv"
   printf 'deploy.soleur.ai' > "$d/shim/calls/1.host"
   ehm_stdin "$EHM_DIG" "$HMX_CFID" "$HMX_CFSEC" > "$d/shim/calls/1.stdin"
@@ -3372,7 +3448,7 @@ ctl_row "evaluate_hmac: a compliant row is green, and each of its clauses fails 
 # Its `no-calls` clause was the one verdict clause of the family with no control: with zero recorded calls the per-call clauses never run, so a
 # row that made no request at all read as GREEN the moment that clause went.
 evb_mk() { # <variant> -> row dir
-  local v="$1" d; d="$(ctl_dir "evb-$v")"; mkdir -p "$d/shim/jq"
+  local v="$1" d; d="$(ctl_dir "evb-$v")"; assert_fixture_dir "$d"; mkdir -p "$d/shim/jq"
   printf 'curl\0--data-binary\0@-\0https://x.example.test/\0' > "$d/shim/calls/1.argv"
   jq -n --arg i "$BODY_ID" --arg p "$BODY_PW" '{identifier:$i,password:$p}' > "$d/shim/calls/1.body"
   printf 'jq\0-n\0{identifier:$ENV.SYNTH_ID_E}\0' > "$d/shim/jq/1.argv"
@@ -3421,7 +3497,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=409
+EXPECTED_TESTS=410
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
