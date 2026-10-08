@@ -74,8 +74,8 @@ write_files:
   # manifest-referenced during an in-flight push — shortening it risks reclaiming an in-progress
   # layer). NO on-boot gc trigger is issued: zot v2.1.22 exposes no sanctioned on-demand gc HTTP
   # endpoint — MEASURED 2026-10-08 (#9252) by probing the pinned image locally: /v2/_zot/gc,
-  # /v2/_catalog/gc, /_zot/gc and /v2/_zot/ext/gc all answer 404 (v2.1.20 answered the same,
-  # 2026-08-05, #7282), and the release's BinaryType excludes mgmt/scrub/search entirely (hr-verify-repo-capability-claim — no fabricated admin
+  # /v2/_catalog/gc, /_zot/gc and /v2/_zot/ext/gc all answer 404, and the release's BinaryType
+  # excludes mgmt/scrub/search entirely (hr-verify-repo-capability-claim — no fabricated admin
   # call). Re-measure on every bump, never re-word. So the tightened
   # gcInterval is the reclamation lever; the first scheduled pass runs within ~1h of boot.
   #
@@ -87,8 +87,7 @@ write_files:
   #
   # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.22 supplies BOTH
   # deadlines as 60000000000 ns (60.000 s) when the "http" block omits them — read off the
-  # PINNED digest's own boot config, not from docs (re-read 2026-10-08, #9252; v2.1.20 gave the
-  # same, #7555). At 60 s a 703_724_542 B layer must sustain
+  # PINNED digest's own boot config, not from docs (re-read 2026-10-08, #9252). At 60 s a 703_724_542 B layer must sustain
   # 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,
   # zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
   # off-box against the then-pinned v2.1.20 digest over a docker bridge with NO tunnel and NO Cloudflare

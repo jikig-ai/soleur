@@ -29,6 +29,8 @@ crane digest ghcr.io/project-zot/zot-linux-amd64:v2.1.22
 crane digest ghcr.io/project-zot/zot-linux-arm64:v2.1.22
 ```
 
+Boot asset for this pin (immutable, published from the #9252 branch): release `zot-image-v2.1.22-46f688dc2631`, T `126c18a4ac0643a3c0c80ba46503593f02f92750303d2728c7cc0012b7d1c599`, C `5a8db63c9fae93403c39376052e205c41a469dbd84b3d1ea37ee497cb08318ef`. The next bump rotates this triple into `## Previous known-good pin`.
+
 **The tag is part of the reference on purpose.** It is what the upstream poll parses to
 learn the pinned version, and what makes the cross-arch version-coherence check
 expressible. Digest-pinning still provides the integrity guarantee; the tag is metadata.
@@ -47,14 +49,28 @@ Asserted by staleness check 8; rotate it on every bump.
 
 The v2.1.20 boot asset (immutable, published; preflight P6 reads CLEAR for it): release `zot-image-v2.1.20-95a837a0afac`, T `05b171f2bd500dc84f532ef7736d1550ffaf7464f0d655c86b8238b443568cb2`, C `2d7fee5603dfd88b2b90cffd07e6b97e6d7ba5e3d6bd5472e66b23bd5ad59114`. Rolling back means reverting the four values (`zot_image_amd64`, `zot_image_arm64`, T, C) to these.
 
-Recovery procedure: see the plan's `## Rollback`. In short — revert both locals to the
-above, merge (inert by `OPERATOR_APPLIED_EXCLUSIONS`), re-fire `registry-host-replace`.
-This works because cloud-init pulls zot from the **public upstream registry**, never from
-our own zot, so a dark zot does not block its own replacement.
+Recovery procedure (the whole procedure lives here, not in a plan that will be archived):
 
-**Constraint on that path:** the revert needs a second successful host create, subject to
-the same `stock_preflight_gate` that is ABORTing today. Firing the apply is effectively
-one-way with no capacity reservation.
+1. Revert the four values in `zot-registry.tf`. The two image locals must be restored in the
+   tag-qualified form `zot_version` is derived from, not the tag-less form above:
+   `zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5"`,
+   `zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6"`,
+   plus T and C from the boot-asset line above. The hosts-file deny reverts as one unit (all seven
+   sites), by `git revert` of the commit that added the third name; a partial revert breaks the
+   byte-parity guard.
+2. The revert touches `server.tf` and `ci-deploy.sh`, so its commit message BODY must carry
+   `[skip-web-platform-apply]` and `[skip-deploy-fix-apply]`, each on its own line, or the merge-fired
+   push applies SSH into web-1 and web-2. A bare `git revert` message carries neither.
+3. Merge it. The merge fires `registry-host-replace-dispatch.yml`; do not dispatch a second replace
+   (double destroy-first). The manual arm is for a refusal only, taken on an explicit operator go.
+4. The v2.1.20 boot asset is immutable and published, so preflight P6 passes for it. Store
+   compatibility in this direction is measured (see the config-compatibility table).
+
+This works because the registry host boots from the pinned release asset (see `## Boot asset`),
+which is independent of whatever the store holds.
+
+**Constraint on that path:** the revert needs a second successful host create, subject to the
+same `stock_preflight_gate`; there is no capacity reservation between the destroy and the create.
 
 ## Why v2.1.22, and why the floor is v2.1.19
 
@@ -69,8 +85,8 @@ disqualified by the safety motivation itself.
 The entire v2.1.19 → v2.1.20 delta is two commits: a zui version bump and an upstream-CI
 pin. The zui bump is **inert here** — the rendered `config.json` has exactly four top-level
 keys (`distSpecVersion`, `storage`, `http`, `log`) and **no `extensions` block**, so zot
-never serves the UI. So v2.1.20 carries zero additional runtime surface over v2.1.19 while
-being the current release.
+never serves the UI. So v2.1.20 carried zero additional runtime surface over v2.1.19 when it
+was pinned (#7282).
 
 v2.1.20 → v2.1.22 (#9252) is 128 commits, not two. Read against this config on 2026-10-08:
 the four source anchors are byte-identical (see the table below), one commit is marked
@@ -96,9 +112,9 @@ content, never line numbers.
 | `http.accessControl` | nested `accessControl.repositories["**"] = {policies[], defaultPolicy: []}` | `type AccessControlConfig { Repositories Repositories … }` | **SAFE — already on the new nested shape**, not the deprecated flat form. Added `Groups`, `Metrics`, CEL `compiledConditions` are all additive/optional. |
 | `http.compat` | `["docker2s2"]` | `pkg/compat/compat.go` › `DockerManifestV2SchemaV2 = "docker2s2"` — unchanged | **SAFE.** Load-bearing: zot rejects Docker schema2 pushes without it. |
 | `http.auth.htpasswd` | `{path: /etc/zot/htpasswd}`, baked with `htpasswd -Bbn` (bcrypt) | unchanged; v2.1.11 only *added* sha256/sha512 alongside bcrypt | **SAFE.** |
-| `storage.dedupe` + blob reads | `dedupe: true` | `fix(api)!` #4363 (v2.1.21): `HEAD`/`GET` of a blob that exists only under ANOTHER repo is now 404. Measured 2026-10-08 against both pinned digests with this repo's exact config: same-repo `HEAD`/`GET` 200 on both; cross-repo `HEAD`/`GET` **200 on v2.1.20, 404 on v2.1.22**; `POST …/uploads/?mount=<digest>&from=<repo>` 201 on both and `HEAD` then 200. | **SAFE, with a cost.** CI pushes with `crane copy` from GHCR (a different registry, so no mount path), so a layer shared by two zot repos is uploaded again instead of skipped. Bounded by the explicit 1800 s deadlines (ADR-190; the largest layer on record is 703,724,542 B, about 0.4 MB/s of headroom). `storage.hydrateBlobOnRead: true` would restore the old read, and is **NOT ADOPTED** (below). |
-| log format | scraper matches `'"level":"(error\|fatal)"\|level:(error\|fatal)\|level=(error\|fatal)'` | v2.1.9 migrated zerolog → `log/slog` | **ALREADY ABSORBED** — all three shapes matched in one alternation (`cloud-init-registry.yml`, the `_zlogs` grep). Asserted at implementation time, not assumed. Re-checked on v2.1.22: the `{"time":…,"level":"warn",…}` JSON shape is unchanged and a boot with this config emits zero error or fatal lines. |
-| `pkg/compat/compat.go` additions | n/a | `IsImageManifestMediaType` and `IsImageIndexMediaType` added (v2.1.21+); `DockerManifestV2SchemaV2` unchanged | **SAFE — purely additive helpers.** |
+| `storage.dedupe` + blob reads | `dedupe: true` | `fix(api)!` #4363 (v2.1.21): `HEAD`/`GET` of a blob that exists only under ANOTHER repo is now 404. Measured 2026-10-08 against both pinned digests with this repo's exact config: same-repo `HEAD`/`GET` 200 on both; cross-repo `HEAD`/`GET` **200 on v2.1.20, 404 on v2.1.22**; `POST …/uploads/?mount=<digest>&from=<repo>` 201 on both and `HEAD` then 200. | **SAFE, with a cost.** CI pushes with `crane copy` from GHCR (a different registry, so no mount path), so a layer shared by two zot repos is uploaded again instead of skipped. Extra upload today: 0 B (the three release tags go to one repo, and the three zot repos share no base layer). Were the largest layer on record (703,724,542 B) ever shared, one re-upload needs at least 0.4 MB/s sustained to meet the 1800 s deadlines (ADR-190). `storage.hydrateBlobOnRead: true` would restore the old read, and is **NOT ADOPTED** (below). |
+| store layout + metadata (upgrade AND rollback) | LUKS-backed ext4 store reattached across the replace; `storage.dedupe`, `gc`, `retention` as above | Measured 2026-10-08 (data-integrity review seat, prod config shape, shortened gc/retention delays, `lost+found` present): a store written by v2.1.20 was opened, gc'd and served by v2.1.22 with the same surviving tags and pullable images; then new tags and an overwritten `latest` were written by v2.1.22 and the same store was reopened by v2.1.20 and gc'd with every tag listed and every kept image pulled (including a hand-built Docker schema2 manifest through the `docker2s2` path). `CurrentVersion` in `pkg/meta/version/common.go` is unchanged (no metaDB migration); `cache.db` gains a method on the same bucket layout. | **SAFE both directions.** Not covered: real cosign referrers with a `subject`, multi-arch indexes, concurrent pushes. v2.1.22 logs `level:error` "failed to stat blob" lines (`checkCacheBlob`, `DedupeBlob`) when a client attempts a cross-repo `POST ?mount=` for a blob that is not there, where v2.1.20 logged nothing — `crane copy` GHCR to zot does not mount, so none are expected. |
+| log format | scraper matches `'"level":"(error\|fatal)"\|level:(error\|fatal)\|level=(error\|fatal)'` | v2.1.9 migrated zerolog → `log/slog` | **ALREADY ABSORBED** — all three shapes matched in one alternation (`cloud-init-registry.yml`, the `_zlogs` grep). Asserted at implementation time, not assumed. Re-checked on v2.1.22: the `{"time":…,"level":"warn",…}` JSON shape is unchanged and a boot with this config emits zero error or fatal lines (the warn-level `config dist-spec version differs` for `distSpecVersion` 1.1.0 vs the supported 1.1.1 appears on v2.1.20 too, and is not adopted). |
 
 ## Non-adoption decisions
 
@@ -106,8 +122,7 @@ Recorded so a future reader does not mistake absence for oversight:
 
 - **`storage.FastRestart`** — new opt-in in v2.1.19, defaults `false`, top-level storage only. **NOT ADOPTED.** A separate change with its own soak.
 - **`storage.retention.policies[].keepUntagged`** — new in v2.1.19. **NOT ADOPTED.** Adopting it would change what `deleteUntagged: true` means.
-- **`storage.hydrateBlobOnRead`** — the opt-in that restores cross-repo blob reads after #4363. **NOT ADOPTED** (decided 2026-10-08, #9252). Measured need: none. Same-repo reads, pushes and mounts are unchanged, and the only affected path is a re-upload of a layer shared between two zot repos, which fits the 1800 s deadlines by a wide margin. Adopting it is a config JSON change (`registry-boot-guard.test.sh` byte-literal fragments) and its own decision.
-- **`distSpecVersion` `1.1.1`** — v2.1.22 supports 1.1.1 and logs a warn-level `config dist-spec version differs` for the deployed `1.1.0`; v2.1.20 logged the same warn. **NOT ADOPTED.** The warn does not trip the `zot_last_err` error or fatal tiers.
+- **`storage.hydrateBlobOnRead`** — the opt-in that restores cross-repo blob reads after #4363. **NOT ADOPTED** (decided 2026-10-08, #9252). Measured need: none. Same-repo reads, pushes and mounts are unchanged, and the only affected path is a re-upload of a layer shared between two zot repos, which costs 0 B today (see the dedupe row). Adopting it is a config JSON change (`registry-boot-guard.test.sh` byte-literal fragments) and its own decision.
 
 ## Version-scoped claim register
 
@@ -119,7 +134,8 @@ re-verification — run the pinned image or downgrade the claim.
 | GET `/v2/` answers 200 or 401, **never 403**, with this repo's exact `accessControl` | `ci-deploy.sh`, above `_docker_login_failure_class`; `ci-deploy.test.sh`, the 401 fixture comment | Re-measured against v2.1.22 on 2026-10-08 — see `## Bump procedure` step 4: anonymous 401, pull user 200, push user 200, wrong password 401 (dockerd stderr `failed with status: 401 Unauthorized`), a user with zero policies 200 on `/v2/` and 403 on a manifest read, zero 403 on `/v2/`. This measurement is what makes the `authz_denied` arm a tripwire rather than a live arm. |
 | No sanctioned on-demand gc HTTP endpoint is exposed | `cloud-init-registry.yml`, config.json rationale block | Re-measured against v2.1.22 on 2026-10-08: `/v2/_zot/gc`, `/v2/_catalog/gc`, `/_zot/gc`, `/v2/_zot/ext/gc` all 404. Non-adoption of an on-boot gc trigger is unchanged. |
 | With `readTimeout`/`writeTimeout` omitted, zot supplies 60000000000 ns for both | `cloud-init-registry.yml`, the `http.readTimeout` rationale block | Re-read against v2.1.22 on 2026-10-08 from the pinned digest's own boot config (`"ReadTimeout":60000000000`, `"WriteTimeout":60000000000`). |
-| Unregistered, found by the #9252 bump — update at the next bump | `.github/workflows/reusable-release.yml` ("zot v2.1.20's built-in ReadTimeout/WriteTimeout"); `scripts/followthroughs/zot-fill-rate-7341.sh` (the zot#4235 sentence) | The workflow sentence is true of v2.1.22 too (the row above) and is left alone: editing a workflow removes the agent admin-merge path. The follow-through sentence was reworded on 2026-10-08 (upstream #4235 closed, fix #4236 in v2.1.21+). Staleness check 7 does not read either file. |
+| `reusable-release.yml` states zot's built-in ReadTimeout/WriteTimeout (60000000000 ns) | `.github/workflows/reusable-release.yml` | Unregistered (found by the #9252 bump; update at the next bump). True of v2.1.22 too (the row above); left alone because editing a workflow removes the agent admin-merge path. Staleness check 7 does not read it. |
+| zot#4235 is fixed upstream (#4236, v2.1.21+) | `scripts/followthroughs/zot-fill-rate-7341.sh` | Unregistered (found by the #9252 bump). Reworded 2026-10-08; staleness check 7 does not read it. |
 
 ## Known coupling
 

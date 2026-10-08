@@ -246,10 +246,16 @@ chk_parity() {  # <root>
   local arm
   for arm in false true; do
     render_a "$1" "$WORK/a-$arm" "$arm" || { echo "copy A (web_tunnel_connector=$arm): $(cat "$WORK/a-$arm/why" 2>/dev/null)"; return 1; }
+    [[ "$(cat "$WORK/a-$arm/count")" == 1 ]] || { echo "copy A (web_tunnel_connector=$arm): expected exactly one deny entry (the three-name header), found $(cat "$WORK/a-$arm/count") -- the header drifted, so the entry cannot be compared"; return 1; }
     same "$WORK/a-$arm/A" "$WORK/copyR" || { echo "copy A (cloud-init.yml runcmd deny entry, web_tunnel_connector=$arm) differs from copy R (the registry entry)"; return 1; }
   done
   copy_b "$1" "$WORK/b"
   same "$WORK/b/deny.sh" "$WORK/copyR" || { echo "copy B (local.ghcr_deny_sh) differs from copy R"; return 1; }
+  # The assertion is the only per-name proof on a running host, and nothing else derives its name list
+  # from the deny loop's: a name added to the deny but not to the assertion would be denied unproven.
+  local bn an
+  bn=$(grep -m1 -oE 'for h in [^;]+; do' "$WORK/b/deny.sh"); an=$(grep -m1 -oE 'for h in [^;]+; do' "$WORK/b/assert.sh")
+  [[ -n "$bn" && "$bn" == "$an" ]] || { echo "copy B: the assertion's name list ('$an') differs from the deny loop's ('$bn')"; return 1; }
 }
 chk_order() {  # <root>
   local arm
@@ -286,7 +292,7 @@ chk_exec() {  # <root> — copy B runs the way remote-exec runs it: POSIX sh, se
 }
 chk_agree() {  # <root>
   copy_b "$1" "$WORK/b" || { echo "copy B unreadable"; return 1; }
-  local s="$WORK/shim" row gh pk dk want_reg want_ci want_as reg ci as rc err bad=""
+  local s="$WORK/shim" row gh pk dk want_reg want_ci want_as reg ci as rc err exp_name bad=""
   assert_fixture_dir "$WORK"; mkdir -p "$s"
   cat > "$s/getent" <<'EOF'
 #!/usr/bin/env bash
@@ -317,6 +323,14 @@ EOF
     as=pass; [[ "$rc" == 0 ]] || as=fail
     err=""
     if [[ "$as" == fail ]] && ! grep -qE '^FATAL: .* \(#9169\)\. Route back: .*never gh run rerun --failed\.$' "$WORK/as.err"; then err=" (FATAL text/route-back missing)"; fi
+    # The FATAL must name the host that actually failed, not just look like a FATAL.
+    exp_name=""
+    case "$row" in
+      ghcr-sinked-pkg-routable) exp_name=pkg-containers.githubusercontent.com ;;
+      ghcr-routable-pkg-sinked) exp_name=ghcr.io ;;
+      dockerpkg-*) exp_name=docker.pkg.github.com ;;
+    esac
+    if [[ "$as" == fail && -n "$exp_name" ]] && ! grep -qF "FATAL: $exp_name does not resolve ONLY" "$WORK/as.err"; then err="$err (FATAL does not name $exp_name)"; fi
     if [[ "$reg" != "$want_reg" || "$ci" != "$want_ci" || "$as" != "$want_as" || -n "$err" ]]; then
       bad="$bad [$row: registry=$reg/$want_reg ci-deploy=$ci/$want_ci assert=$as/$want_as$err]"
     fi
@@ -458,8 +472,9 @@ sub variables.tf $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", 
   $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12", server_type = "cpx22" }\n'
 row "19 a third web host that neither running-host route reaches" wiring variables.tf
 # #9390: the deny names THREE hosts. Rows 20-24 each break exactly one copy or the assertion for the third
-# (docker.pkg.github.com) name. Copy R is the reference every check compares against, so a drift in R alone
-# is caught on the LIVE tree (A and B then differ from it); the rows below mutate A and B.
+# (docker.pkg.github.com) name. Copy R is the reference every check compares against, so a BODY drift in R
+# alone is caught on the LIVE tree (A and B then differ from it: parity red) and a HEADER drift in R exits 2
+# as a harness fault (no entry matches HDR); the rows below mutate A and B.
 OLD_HDR='for h in ghcr.io pkg-containers.githubusercontent.com; do'
 NEW_HDR='for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do'
 sub cloud-init.yml "$NEW_HDR" "$OLD_HDR"
@@ -469,10 +484,22 @@ row "21 the third name dropped from copy A, read as ZERO deny entries by the ord
 sub server.tf $'    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do\n      a=$(timeout 10 getent ahosts "$h"' \
   $'    for h in ghcr.io pkg-containers.githubusercontent.com; do\n      a=$(timeout 10 getent ahosts "$h"'
 row "22 the third name dropped from the apply-time assertion only, deny loop unchanged" agree server.tf
-sub cloud-init.yml "$NEW_HDR" 'for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com example.invalid; do'
-row "23 a fourth name appended to copy A after the compliant first three" parity cloud-init.yml
+sub cloud-init.yml "$NEW_HDR" $'for g in example.invalid; do :; done\n      '"$NEW_HDR"
+row "23 a fourth name loop added to copy A beside the compliant three-name header (found, but its bytes differ)" parity cloud-init.yml
 sub server.tf "$NEW_HDR" 'for h in docker.pkg.github.com ghcr.io pkg-containers.githubusercontent.com; do'
 row "24 the names reordered in copy B's deny loop only" parity server.tf
+assert_fixture_dir "$SB"
+cat > "$SB/extra-deny-dockerpkg.tf" <<'EOF'
+resource "terraform_data" "handcopied_dockerpkg_deny" {
+  provisioner "remote-exec" {
+    inline = ["for h in docker.pkg.github.com; do printf '0.0.0.0 %s\\n' \"$h\" >> \"$f\"; done"]
+  }
+}
+EOF
+row "25 a hand-copied deny loop naming ONLY the third host, writing through \"\$f\" (only DENY_LOOP can see it)" census extra-deny-dockerpkg.tf
+sub server.tf $'    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do\n      a=$(timeout 10 getent ahosts "$h"' \
+  $'    for h in ghcr.io pkg-containers.githubusercontent.com; do\n      a=$(timeout 10 getent ahosts "$h"'
+row "26 the assertion's name list no longer equals the deny loop's (parity, not only the per-name agree rows)" parity server.tf
 
 # Harness row (must PASS): copy A re-indented under its `- |` parses to the same entry.
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "re-indent anchor missing"
@@ -495,11 +522,18 @@ if ( same() { return 0; }; chk_parity "$SB" >/dev/null 2>&1 ); then
   pass "harness: with same() forced true, row 1's mutation goes undetected (the comparator is load-bearing)"
 else fail "harness: row 1 was detected even with same() forced true — parity is not decided by the comparator"; fi
 sandbox
+# Harness row (must RED the benign edit): row() itself must count a surviving mutation as a FAIL. Every
+# other row passes only if row() is honest, and a row() reduced to `if false` left the suite green.
+printf '\n# harmless trailing comment\n' >> "$SB/server.tf"
+SURV_FAILS=$( ( PASS=0; FAIL=0; row "benign edit" parity server.tf >/dev/null 2>&1; echo "$FAIL" ) )
+if [[ "$SURV_FAILS" == 1 ]]; then pass "harness: row() reports a mutation that no check detects as a FAIL (a benign edit survives, and is counted)"
+else fail "harness: row() did not count a surviving mutation (FAIL count '$SURV_FAILS', want 1) -- the whole battery is unfalsifiable"; fi
+sandbox
 
-# Floor at the MEASURED count (7 live checks + control + 24 rows + 2 harness rows = 34; was 29 before
-# #9390 added rows 20-24). Reported with printf + exit DIRECTLY, never through pass()/fail() (the
-# floor polices them).
-MIN_ASSERTIONS=34
+# Floor at the MEASURED count (7 live checks + control + 26 rows + 3 harness rows = 37; was 29 before
+# #9390 added rows 20-26 and the row() honesty control). Reported with printf + exit DIRECTLY, never
+# through pass()/fail() (the floor polices them).
+MIN_ASSERTIONS=37
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

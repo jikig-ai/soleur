@@ -353,9 +353,9 @@ PY
   sh "$TMP/deny.sh"; sh "$TMP/deny.sh"
   check "R10 the executed deny maps ghcr.io, pkg-containers.githubusercontent.com and docker.pkg.github.com to 0.0.0.0 and ::, once each (idempotent)" \
     "[[ \$(grep -cxE '0\.0\.0\.0 (ghcr\.io|pkg-containers\.githubusercontent\.com|docker\.pkg\.github\.com)' '$TMP/hosts') -eq 3 && \$(grep -cxE ':: (ghcr\.io|pkg-containers\.githubusercontent\.com|docker\.pkg\.github\.com)' '$TMP/hosts') -eq 3 && \$(grep -c . '$TMP/hosts') -eq 7 ]]"
-  # Per name, not only in total: a count of 3 is also met by one name written three times.
+  # Per name, not only in total: a count of 3 is also met by one name written three times, on either line kind.
   check "R10 each of the three names is written exactly once as 0.0.0.0 and once as :: (a total of 3 cannot hide a doubled name)" \
-    "[[ \$(grep -cxF '0.0.0.0 ghcr.io' '$TMP/hosts') -eq 1 && \$(grep -cxF '0.0.0.0 pkg-containers.githubusercontent.com' '$TMP/hosts') -eq 1 && \$(grep -cxF '0.0.0.0 docker.pkg.github.com' '$TMP/hosts') -eq 1 && \$(grep -cxF ':: docker.pkg.github.com' '$TMP/hosts') -eq 1 ]]"
+    "[[ \$(grep -cxF '0.0.0.0 ghcr.io' '$TMP/hosts') -eq 1 && \$(grep -cxF ':: ghcr.io' '$TMP/hosts') -eq 1 && \$(grep -cxF '0.0.0.0 pkg-containers.githubusercontent.com' '$TMP/hosts') -eq 1 && \$(grep -cxF ':: pkg-containers.githubusercontent.com' '$TMP/hosts') -eq 1 && \$(grep -cxF '0.0.0.0 docker.pkg.github.com' '$TMP/hosts') -eq 1 && \$(grep -cxF ':: docker.pkg.github.com' '$TMP/hosts') -eq 1 ]]"
   printf 'x\n' > "$TMP/hosts.tmpl"; sh "$TMP/deny.sh"
   check "R10 the deny also persists into the cloud hosts template when present" "[[ \$(grep -c 'ghcr.io' '$TMP/hosts.tmpl') -eq 2 ]]"
   # R11: EXECUTE the launch guard: no ID file, a malformed one, and a well-formed one.

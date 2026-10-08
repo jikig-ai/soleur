@@ -237,7 +237,7 @@ Target shape: the loop header becomes `for h in ghcr.io pkg-containers.githubuse
 | preflight P0 | Better Stack query credentials readable; fails closed | Stop and report; do not retry blind |
 | P1 | No sustained local-cache pulls in 24 h: the fleet is not already living off its last tier (#6400 hazard) | The fleet is already degraded. Stop and report. The manual arm's `--manual` skips only P1: never used without an explicit new go from the operator |
 | P2 | Advisory only (emitter unreachable since #7071) | Never gates; ignore |
-| P3 | No release run in flight (a release may be mid-pull from the host about to be destroyed); waits up to 2100 s | Times out: a release is stuck; stop and report |
+| P3 | No release run in flight (a release may be mid-pull from the host about to be destroyed); waits up to 2100 s | Times out. This merge touches `apps/web-platform/**`, so it also fires its own Web Platform Release and deploy chain on the same push; preflight measured about 18% of co-firing releases outlasting the wait, so a P3 refusal is the EXPECTED tail here, not a stuck release. A P3 refusal happens before any destroy. Stop and report; the single manual re-fire it needs is an explicit-go step (D4) |
 | P5 | The replace will be observable: control + container-log channel both return rows | `--manual` does not skip it: a dark channel means the outcome cannot be read back. Stop and report |
 | P6 | The boot asset named by the render exists and carries sha256 T | Phase 3 was skipped or T is wrong. Stop and report; fix by publishing, never by editing the preflight |
 | dispatch | Fires `apply-web-platform-infra.yml --ref main -f apply_target=registry-host-replace -f reason=...` | `dispatch-failed`: an apply may still have queued; read the apply workflow's run list before anything else |
@@ -256,19 +256,24 @@ Target shape: the loop header becomes `for h in ghcr.io pkg-containers.githubuse
 
 **Timebox.** The dispatcher's own ceilings are P3 2100 s and the apply poll 1500 s. If no `zot_image_fetch=ok` row newer than the apply's conclusion appears within 60 minutes of that conclusion (the host's fetch retries for up to about 35 minutes), treat it as red: stop and report on PR 9795 and #9390 with the latest row's `zot_image_fetch` value.
 
-**Soak (numeric, read from the same telemetry).** Over the 24 hours after the replace: `zot_restarts=0`, no `zot_last_err` row at error or fatal level, the next release's `crane copy` to zot completes inside its window, and the `zot-fill-rate-7341` follow-through (which waited on zot#4235, fixed by #4236 in v2.1.21+) is read for a changed outcome. A failure of any of these is reported, not auto-reverted (see Rollback).
+**Deploy-freeze bound.** From the destroy until the first `zot_image_fetch=ok` row, deploys (including security fixes) wait: the GHCR fallback is retracted, so there is no alternate route, and a fresh web-host boot fails at its pull stage, so no web host is born or replaced in that window. The accepted maximum is the 60-minute timebox after the apply's conclusion plus the apply itself; past it the run is red and is reported with the stock-gate class and the recovery-read block. A security fix that cannot wait for that window needs an explicit go before any re-dispatch.
 
-**Mid-replace failure (`apply-failed` after the destroy, volume preserved).** The host is down and deploys are frozen. The agent reports within the timebox with the `recovery-read` block's `class=` and the exact one-step recovery (re-dispatch of the same route); whether that single re-dispatch may be pre-authorised is an open operator decision (D4 in decision-challenges.md). Until it is, the re-dispatch waits for an explicit go.
+**Soak (numeric, read from the same telemetry).** Over the 24 hours after the replace: `zot_restarts=0`, no `zot_last_err` row at error or fatal level, the next release's `crane copy` to zot completes inside its window, and the `zot-fill-rate-7341` follow-through (which waited on zot#4235, fixed by #4236 in v2.1.21+) is read for a changed outcome. About 3 hours after boot (after the first hourly gc and retention pass over the preserved store), pull and cosign-verify the currently deployed web-platform digest and one older retained tag through the Cloudflare edge with the pull credential, so a silently reaped manifest or referrer is found by a read, not by a failed deploy. A `zot_last_err` row at error level whose caller is `checkCacheBlob` or `DedupeBlob` ("failed to stat blob") comes from a client attempting a cross-repo `POST ?mount=` for an absent blob; read its caller before treating it as store damage. A failure of any of these is reported, not auto-reverted (see Rollback).
+
+**Mid-replace failure (`apply-failed` after the destroy, volume preserved).** The host is down and deploys are frozen. The agent reports within the timebox with the `recovery-read` block's `class=` and the exact one-step recovery (re-dispatch of the same route); whether that single re-dispatch may be pre-authorised is the open decision D4 in decision-challenges.md. Until it is settled, the re-dispatch waits for an explicit go.
 
 **Verify the new host from telemetry (no SSH).**
 
 ```bash
-doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_ZOT_DISK --limit 5
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK --limit 15 \
+  | jq -r '.raw | fromjson | "\(.dt) \(.message)"'
 ```
+
+Each row's `raw` is double-encoded JSON, so grep the DECODED message, never the raw line. Choose `--since` to reach back before the apply's conclusion, so old-host rows (`zot_image_digest=95a837a0afac`) and new-host rows are both visible: the transition is the evidence, and the old digest alone means the new host has not booted yet.
 
 Healthy means a row newer than the apply's conclusion with `zot_image_fetch=ok`, `zot_image_digest=46f688dc2631` (D12 of the pinned manifest; re-derive from the final pin), `ghcr_blocked=1`, `state_status=running`, `zot_restarts=0`, `store_luks=yes`. `docker.pkg.github.com` has no per-name field, and `ghcr_blocked` probes `ghcr.io` only, so it reads identically on the old and new render. What it proves is that the deny entry ran and ghcr.io is sinkholed; `zot_image_digest=<final D12>` proves the NEW render booted. The proof that the third name is denied on the registry host is R10 (the rendered entry executed against a re-rooted hosts file) plus the Phase 4 step 11 render diff. #9390 is closed on those, with the limit stated in the closing comment. Also read the `soleur-registry-disk-prd` heartbeat status (best effort). Any other `zot_image_fetch` value: use the table in the runbook's "zot boot image" section, and stop and report.
 
-**Close-out.** Comment the evidence on #9390 and close it. #9252 stays open until PR 9783 lands (then the next rule-audit poll sees both pins current). File one tracking issue for the deferred running-host delivery of copy B (decision D1), owner the operator, target date 2026-10-22 to decide between a deliberate `workflow_dispatch` of the owning apply workflow and incidental delivery by a later infra merge (an incidental delivery that fails its post-deny assertion taints and fails an unrelated PR's apply), with re-evaluation criteria "the next push apply (or manual apply) that includes `zot_consumer_probe_install` or `deploy_pipeline_fix_web2`, which will deliver it unannounced; close when state carries the new hash", milestone from `knowledge-base/product/roadmap.md`, `Ref #9390`. The issue body also says that the 12-hourly `scheduled-terraform-drift` run will report `triggers_replace` drift for `zot_consumer_probe_install` and `deploy_pipeline_fix_web2` until then, so a drift report is expected, not a regression.
+**Close-out.** Comment the evidence on #9390 and close it. #9252 stays open until PR 9783 lands (then the next rule-audit poll sees both pins current). File one tracking issue for the deferred running-host delivery of copy B (decision D1) BEFORE `gh pr ready`, linked from the PR body, and consolidate the other follow-ups into it as a checklist (the staleness-check-7 follower that forces a `ci-deploy.sh` edit on every bump, and the baseline duration of the release mirror step), owner the operator, target date 2026-10-22 to decide between a deliberate `workflow_dispatch` of the owning apply workflow and incidental delivery by a later infra merge (an incidental delivery that fails its post-deny assertion taints and fails an unrelated PR's apply), with re-evaluation criteria "the next push apply (or manual apply) that includes `zot_consumer_probe_install` or `deploy_pipeline_fix_web2`, which will deliver it unannounced; close when state carries the new hash", milestone from `knowledge-base/product/roadmap.md`, `Ref #9390`. The issue body also says that the 12-hourly `scheduled-terraform-drift` run will report `triggers_replace` drift for `zot_consumer_probe_install` and `deploy_pipeline_fix_web2` until then, so a drift report is expected, not a regression.
 
 ## Failure Branches (non-gate)
 
@@ -286,7 +291,7 @@ Healthy means a row newer than the apply's conclusion with `zot_image_fetch=ok`,
 
 ## Rollback
 
-The superseded pin's asset is immutable and published, so P6 passes for it. Revert the four values (`zot_image_amd64`, `zot_image_arm64`, T, C) from the sidecar's previous-known-good block, plus the deny list if wanted, in one revert PR; the dispatcher sees the render change and replaces the host back. The revert commit carries the same two own-line kill-switch markers (it touches `server.tf` and `ci-deploy.sh` again, so it would otherwise fire both push applies). Decision rule: roll back only when `zot_image_fetch` is `id_mismatch` or `load_failed` after one re-fire, or the soak fails. Both the re-fire and the rollback are explicit-go-only steps (they are the red-gate protocol's exception, taken on the operator's go, never on the agent's own initiative). A revert is a second destroy-first replace and is subject to the same gates (including stock). If the push-arm run is refused on P1 because deploys fell to local-cache during an outage, the documented route is the manual arm, which needs an explicit go.
+The full procedure (the tag-qualified values the `zot_version` regex needs, the two marker lines, no second dispatch) lives in `apps/web-platform/infra/zot-image.provenance.md` under `## Previous known-good pin`. The superseded pin's asset is immutable and published, so P6 passes for it, and store compatibility in both directions was measured at review (sidecar config-compatibility table). Revert the four values (`zot_image_amd64`, `zot_image_arm64`, T, C) from the sidecar's previous-known-good block, plus the deny list if wanted, in one revert PR; the dispatcher sees the render change and replaces the host back. The revert commit carries the same two own-line kill-switch markers (it touches `server.tf` and `ci-deploy.sh` again, so it would otherwise fire both push applies). Decision rule: roll back only when `zot_image_fetch` is `id_mismatch` or `load_failed` after one re-fire, or the soak fails. Both the re-fire and the rollback are explicit-go-only steps (they are the red-gate protocol's exception, taken on the operator's go, never on the agent's own initiative). A revert is a second destroy-first replace and is subject to the same gates (including stock). If the push-arm run is refused on P1 because deploys fell to local-cache during an outage, the documented route is the manual arm, which needs an explicit go.
 
 ## Downtime & Cutover
 
@@ -318,9 +323,9 @@ The registry host is outside layers 1 to 5 (no Inngest, no Sentry-shipping Vecto
 
 ```yaml
 liveness_signal:
-  what: "SOLEUR_ZOT_DISK heartbeat rows (zot_image_fetch, zot_image_digest, ghcr_blocked, state_status, zot_restarts, store_luks) and the soleur-registry-disk-prd Better Stack heartbeat (Sentry monitor class: absence is the page)"
+  what: "SOLEUR_ZOT_DISK heartbeat rows (zot_image_fetch, zot_image_digest, ghcr_blocked, state_status, zot_restarts, store_luks) the soleur-registry-prd Better Stack heartbeat (zot-registry.tf; period 60 s, grace 30 s; Sentry monitor class: its absence is the page when zot is down), and the soleur-registry-disk-prd heartbeat (disk fill-rate only: it pings while the store is under 85% used, whether or not zot is healthy)"
   cadence: "every 5 minutes"
-  alert_target: "Better Stack heartbeat incident; registry-host-replace-dispatch verdict comment on the delivering PR"
+  alert_target: "Better Stack soleur-registry-prd heartbeat incident; registry-host-replace-dispatch verdict comment on the delivering PR"
   configured_in: "apps/web-platform/infra/cloud-init-registry.yml (emitter, one SOLEUR_ZOT_DISK line assembly) and apps/web-platform/infra/zot-registry.tf (heartbeat resource)"
 
 error_reporting:
@@ -338,13 +343,13 @@ failure_modes:
     detection: "workflow run log of the dispatcher job; the verdict comment carries a machine marker readable with the runbook's jq"
     alert_route: "verdict comment on PR 9795 (or the owner issue)"
   - mode: "new host boots but zot does not start (id_mismatch, load_failed, docker_unavailable)"
-    detection: "zot_image_fetch value in the SOLEUR_ZOT_DISK row, read by betterstack-query.sh; no Better Stack log alert exists on zot_image_fetch not being ok, so the detectors are the heartbeat absence (Sentry monitor class) and the 60-minute timebox in the runbook"
-    alert_route: "Better Stack heartbeat incident, then the agent's stop-and-report"
+    detection: "zot_image_fetch value in the SOLEUR_ZOT_DISK row, read by betterstack-query.sh; no Better Stack log alert exists on zot_image_fetch not being ok, so the detectors are the soleur-registry-prd heartbeat absence (Sentry monitor class; NOT the disk beat, which keeps pinging) and the 60-minute timebox in the runbook"
+    alert_route: "Better Stack soleur-registry-prd heartbeat incident, then the agent's stop-and-report"
   - mode: "new host healthy but its log shipper is silent (no rows), indistinguishable from a slow boot fetch of up to about 35 minutes"
-    detection: "no SOLEUR_ZOT_DISK row newer than the apply conclusion after 60 minutes (the timebox) while the heartbeat is up"
+    detection: "no SOLEUR_ZOT_DISK row newer than the apply conclusion after 60 minutes (the timebox) while the heartbeat is up; the [ci/zot-telemetry-silent] check in scheduled-zot-restart-loop.yml also covers absent registry rows"
     alert_route: "agent stop-and-report on PR 9795 and #9390"
   - mode: "hosts-file deny lost on the registry host (ghcr.io only is probed)"
-    detection: "ghcr_blocked=0 in the heartbeat row; the Better Stack log alert on ghcr_blocked=0 (betterstack-logs-alerts.tf) fires; unknown is not alerted and is read by the agent"
+    detection: "ghcr_blocked=0 in the heartbeat row; the Better Stack log alert soleur-ghcr-hostsfile-deny-lost-prd (betterstack-logs-alerts.tf) fires; unknown is not alerted and is read by the agent"
     alert_route: "Better Stack alert"
   - mode: "kill-switch lines dropped by the squash, so the push applies reach web-1 and web-2 over SSH"
     detection: "workflow run log: the preflight job of apply-web-platform-infra.yml and apply-deploy-pipeline-fix.yml shows skip=false for the merge SHA (AC14)"
@@ -360,7 +365,7 @@ discoverability_test:
   credentials_required: "Doppler soleur/prd_terraform Better Stack ClickHouse read credentials (run the command under doppler run -p soleur -c prd_terraform --): Better Stack log rows have no unauthenticated read path, so no unauthenticated probe verifies the same property"
 ```
 
-The `soleur-registry-disk-prd` heartbeat goes absent by design while the host is replaced, so an incident opens during the window and auto-resolves; the new host's rows, not the incident's resolution, are the proof. The `expected_output` literal is the D12 of the pre-reading digest and is re-derived from the final pin.
+The `soleur-registry-prd` and `soleur-registry-disk-prd` heartbeats go absent by design while the host is replaced, so an incident opens during the window and auto-resolves; the new host's rows, not the incident's resolution, are the proof. The `expected_output` literal is the D12 of the pre-reading digest and is re-derived from the final pin.
 
 
 ## Encryption Posture

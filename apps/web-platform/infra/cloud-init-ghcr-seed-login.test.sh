@@ -642,10 +642,10 @@ mrow "15b docker --config … pull ghcr.io/jikig-ai/… added to disk-monitor.sh
 py_sub cloud-init-registry.yml '      "$ZOT_IMAGE_ID" serve /etc/zot/config.json' "      '\${zot_image}' serve /etc/zot/config.json"
 mrow "16 the registry launch reverts to '\${zot_image}' (the pre-mirror ghcr.io pull)" cloud-init-registry.yml
 # 16b: "$ZOT_IMAGE_ID" is admitted only while it is read from the verified hand-off file
-py_sub cloud-init-registry.yml 'ZOT_IMAGE_ID="$(head -1 /run/soleur/zot-image-id 2>/dev/null || true)"' 'ZOT_IMAGE_ID="ghcr.io/project-zot/zot-linux-amd64:v2.1.20"'
+py_sub cloud-init-registry.yml 'ZOT_IMAGE_ID="$(head -1 /run/soleur/zot-image-id 2>/dev/null || true)"' 'ZOT_IMAGE_ID="ghcr.io/project-zot/zot-linux-amd64:v2.1.22"'
 mrow "16b ZOT_IMAGE_ID assigned a ghcr.io ref instead of the verified hand-off" cloud-init-registry.yml
 # 16c: a ghcr.io line in the registry template that is not the deny or its probe
-py_sub cloud-init-registry.yml '      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do' '      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do'
+py_sub cloud-init-registry.yml '      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do' '      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.22 || true; done; for h in x; do'
 mrow "16c a ghcr.io pull appended to the deny line in cloud-init-registry.yml" cloud-init-registry.yml
 
 # ── #9169 Guard 1: the deny header is admitted only as part of a whole entry equal to DENY_BLOCK.
@@ -659,7 +659,7 @@ krow() {  # <label> <file> <expected new-VIOL prefix>
 }
 DENY_HDR='      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do'
 DENY_BODY_PULL='        docker pull "$h/jikig-ai/soleur-web-platform:latest"'
-py_sub cloud-init.yml "$DENY_HDR" "$DENY_HDR docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do"
+py_sub cloud-init.yml "$DENY_HDR" "$DENY_HDR docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.22 || true; done; for h in x; do"
 krow "17 a ghcr.io pull appended to the web deny header in cloud-init.yml" cloud-init.yml "VIOL cloud-init.yml ghcr.io for h in ghcr.io"
 py_sub cloud-init.yml "$DENY_HDR"$'\n' "$DENY_HDR"$'\n'"$DENY_BODY_PULL"$'\n'
 krow "18 header byte-identical, a \$h pull added inside the web deny entry's loop body" cloud-init.yml "VIOL cloud-init.yml ghcr.io $(sed 's/^ *//' <<<"$DENY_HDR")"

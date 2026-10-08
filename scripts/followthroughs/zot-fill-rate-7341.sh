@@ -372,7 +372,7 @@ if lagging:
           % (", ".join(shown), more))
     print("  A LEAD, NOT A VERDICT: dropped_rows above can remove a completion while its start")
     print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
-    print("  zot#4235 is the standing suspect (gc completing for one repo and never another);")
+    print("  zot#4235 was the standing suspect (gc completing for one repo and never another; fixed by #4236 in v2.1.21+, so suspect it only while this host runs v2.1.20 or older);")
     print("  .uploads/ staging is the other.")
 elif sum(starts.values()) == 0:
     # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape
@@ -396,7 +396,7 @@ else:
 echo "zot-fill-rate[#7341]: ${verdict} ${detail} samples=${n} boot=${boot:0:8} window=${WINDOW}"
 case "$verdict" in
   PASS) exit 0 ;;
-  FAIL) echo "The store is refilling toward the threshold. the zot#4235 fix (#4236) ships in v2.1.21+ and is in the v2.1.22 pin, so if this host is on that pin weigh other causes, including the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
+  FAIL) echo "The store is refilling toward the threshold. The zot#4235 fix (#4236) ships in v2.1.21+ and is in the v2.1.22 pin, so if this host is on that pin weigh other causes, including the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
         attribution_lead || true
         exit 1 ;;
   TRANSIENT) echo "TRANSIENT: the store's state could not be established. NOT a pass."; exit 2 ;;
