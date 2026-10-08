@@ -82,6 +82,27 @@ elif ! printf '%s' "$_read_err" | grep -qi 'no such file'; then
   bad "sibling read failed with a NON-absence error: $_read_err"
 fi
 
+# --- posture assertions (F2/F3, security-seat) ----------------------------
+# Shared /proc is the wrap's documented residual (#9723) — it is ALSO a
+# mount-namespace oracle: /proc/<pid>/{root,cwd,ns} reach a same-uid
+# process's mount table when ptrace_scope=0. The residual only stays
+# acceptable while yama restricts ptrace; assert it here so a sysctl drift
+# pages instead of silently voiding the wrap.
+_ps="$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo 'unreadable')"
+if [ "$_ps" = "0" ]; then
+  bad "kernel.yama.ptrace_scope=0 — shared /proc exposes sibling mount namespaces (#9723 residual voided)"
+elif [ "$_ps" = "unreadable" ]; then
+  printf 'note: ptrace_scope unreadable inside the wrap\n'
+fi
+# --cap-drop ALL must clear the BOUNDING set under the privileged arm too:
+# if bit 21 (cap_sys_admin) survives in CapBnd, the file-cap'd bwrap inside
+# the ro-bound /usr can re-elevate to SYS_ADMIN+SETUID+SETGID.
+_capbnd="$(awk '/^CapBnd:/ {print $2}' /proc/self/status 2>/dev/null)"
+if [ -n "$_capbnd" ]; then
+  _bit21=$(( (0x$_capbnd >> 21) & 1 ))
+  [ "$_bit21" -eq 0 ] || bad "CapBnd still carries cap_sys_admin (0x$_capbnd) — file-cap'd bwrap inside the wrap can re-elevate"
+fi
+
 # --- elevation metadata (NOT part of ok/fail) -----------------------------
 # A file-cap'd /usr/bin/bwrap creates no userns: the child inherits the
 # container's own uid_map (full-map `0 0 4294967295`). The implicit-userns
@@ -90,7 +111,9 @@ fi
 # sandbox_broken; the founder check tolerates it (its explicit
 # --unshare-user arm is the documented local fallback).
 _elev="userns"
-_uid0="$(awk '$1 == "0" && $3 == "4294967295" { found=1; exit } END { if (!found) exit 1 }' /proc/self/uid_map 2>/dev/null)" && _elev="privileged"
+if awk '$1 == "0" && $3 == "4294967295" { found=1; exit } END { if (!found) exit 1 }' /proc/self/uid_map 2>/dev/null; then
+  _elev="privileged"
+fi
 printf 'elevation=%s\n' "$_elev"
 
 if [ "$fail" -eq 0 ]; then

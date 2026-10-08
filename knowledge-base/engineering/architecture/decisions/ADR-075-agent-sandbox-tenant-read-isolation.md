@@ -182,13 +182,22 @@ while the rollout flag exists — load-bearing on the flag-off arm).
 
 **Open residuals (named, tracked):**
 
-- `#9723` stays open: `/proc` remains the shared container procfs — sibling PIDs and
-  their `/proc/<pid>/environ` are still visible to a sandboxed session. The honest
-  close is the pidns, which requires the topology work in #9773.
+- `#9723` stays open: `/proc` remains the shared container procfs — sibling PIDs,
+  `/proc/<pid>/environ`, **and `/proc/<pid>/{root,cwd,ns}` (a mount-namespace
+  oracle into any same-uid process)** are still visible to a sandboxed session.
+  The `root`/`cwd`/`ns` reach is acceptable only while `kernel.yama.ptrace_scope`
+  stays `1` — the shared payload asserts the sysctl non-zero so a drift pages
+  instead of silently voiding the wrap. The honest close is the pidns, which
+  requires the topology work in #9773.
 - Shared container loopback — including delegated-egress cross-use (a non-entitled
   session reaching a sibling's socat proxy allowlist is an authorization bypass of
   `allowedDomains`, not merely a covert channel) and other-tenant `127.0.0.1`
   listeners.
+- **Shared mutable `$HOME` state**: `.credentials.json`/`settings.json`/
+  `.claude.json`/`.gitconfig` are the same host files bound rw into every session —
+  a same-uid cross-tenant corruption/config-poisoning channel (pre-existing
+  behavior the wrap preserves, not a new surface; per-session copy-in/out is the
+  candidate close — #9773 territory).
 - The server process's own cross-tenant filesystem access and the shared in-process
   heap (BYOK leases, session state) — `#9773` territory.
 - The bounded claim this supports publicly is *"per-session process-level filesystem

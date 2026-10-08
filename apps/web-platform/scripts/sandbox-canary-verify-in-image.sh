@@ -92,6 +92,8 @@ docker run --rm \
     # short-circuits (no point re-verifying the inner arm when the CLI
     # cannot launch inside the wrap); canary_infra_error continues —
     # infra is non-signal here, same as in runReplay.
+    # bun's stderr flows to the script's own stderr → the CI job log (a crash
+    # surfaces there; the verdict channel stays JSON-only on stdout).
     SMOKE_OUT="$(bun scripts/sandbox-canary.mjs --smoke-outer /build | tail -1)"
     SMOKE_V="$(printf '%s' "$SMOKE_OUT" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
     if [ "$SMOKE_V" = "smoke_fail" ]; then

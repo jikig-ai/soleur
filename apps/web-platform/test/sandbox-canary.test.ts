@@ -1164,10 +1164,37 @@ describe("substituteOuterRoot + outerWrapChdirTarget", () => {
 });
 
 describe("classifyOuterWrapReplayVerdict — three-way discrimination", () => {
-  it("exit 0 + isolation_ok ⇒ pass", () => {
+  it("exit 0 + isolation_ok + elevation=privileged ⇒ pass", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 0,
+        bwrapStdout: "elevation=privileged\nisolation_ok\n",
+      }),
+    ).toEqual({ verdict: "pass", reason: "ok" });
+  });
+
+  it("exit 0 + isolation_ok + elevation=userns ⇒ sandbox_broken wrong_elevation_userns (a green on the wrong mechanism is not a pass)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 0,
+        bwrapStdout: "elevation=userns\nisolation_ok\n",
+      }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "wrong_elevation_userns" });
+  });
+
+  it("exit 0 + isolation_ok WITHOUT an elevation marker ⇒ sandbox_broken wrong_elevation_unreported (a drifted payload cannot green)", () => {
     expect(
       classifyOuterWrapReplayVerdict({ bwrapExitCode: 0, bwrapStdout: "isolation_ok\n" }),
-    ).toEqual({ verdict: "pass", reason: "ok" });
+    ).toEqual({ verdict: "sandbox_broken", reason: "wrong_elevation_unreported" });
+  });
+
+  it("bwrap-shim refusal marker ⇒ sandbox_broken bwrap_shim_refused", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 65,
+        bwrapStderr: "bwrap-shim: refusing CLONE_NEWUSER argv",
+      }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "bwrap_shim_refused" });
   });
 
   it("payload FAIL markers ⇒ sandbox_broken isolation_probe_failed (a realized violation, never infra)", () => {

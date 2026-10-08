@@ -136,9 +136,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `--cap-add SYS_ADMIN`) and the app drops it from effective/permitted. The
 # getcap audit is load-bearing: any OTHER file-cap'd binary in the image
 # becomes an app-side SYS_ADMIN carrier — keep the set {bwrap} only.
-RUN setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap \
-    && { getcap -r / 2>/dev/null || true; } | grep -v '^/usr/bin/bwrap ' \
-    | grep . && { echo 'FATAL: unexpected file-cap binary in image' >&2; exit 1; } || true
+RUN setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap
+# The {bwrap}-only audit runs at the END of the runner stage (below), after
+# every later install layer — a cap binary introduced by gh/playwright/
+# Playwright-deps would otherwise escape a mid-build audit (review F4).
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
 # and event-ship-merge gh pr checkout). Not in default Debian repos.
@@ -342,6 +343,21 @@ COPY --from=builder \
   /app/infra/luks-monitor.timer \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
+
+# #5863 arm F — the {bwrap}-only file-cap audit, AFTER every install layer.
+# Fail-closed: a setcap/getcap failure or an unexpected cap'd binary aborts
+# the build; the prior `... || true` shape swallowed failures into a green
+# image whose bwrap silently fell to the implicit-userns path at runtime.
+RUN set -e; \
+    all="$(getcap -r /)"; \
+    bwrap_caps="$(printf '%s\n' "$all" | grep '^/usr/bin/bwrap ' || true)"; \
+    [ -n "$bwrap_caps" ] \
+      && printf '%s' "$bwrap_caps" | grep -q cap_sys_admin \
+      && printf '%s' "$bwrap_caps" | grep -q cap_setuid \
+      && printf '%s' "$bwrap_caps" | grep -q cap_setgid \
+      || { echo "FATAL: bwrap file caps not applied: $bwrap_caps" >&2; exit 1; }; \
+    others="$(printf '%s\n' "$all" | grep -v '^/usr/bin/bwrap ' || true)"; \
+    [ -z "$others" ] || { echo "FATAL: unexpected file-cap binary: $others" >&2; exit 1; }
 
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
 RUN useradd --no-log-init --uid 1001 -m soleur \

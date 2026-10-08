@@ -1048,6 +1048,14 @@ export function validateOuterWrapFixture(obj) {
       throw err(`${key} must be a string array`);
     }
   }
+  // Prep entries MUST carry {{ROOT}} — the replay mkdir/touches them inside
+  // the canary container (which mounts the shared /workspaces volume rw);
+  // a bare absolute path would write outside the scratch root.
+  for (const key of ["prepDirs", "prepFiles"]) {
+    if (!f[key].every((t) => t.startsWith("{{ROOT}}"))) {
+      throw err(`${key} entries must start with {{ROOT}}`);
+    }
+  }
   if (f.bwrapSetupArgv.length === 0) throw err("empty setup argv");
   if (f.bwrapSetupArgv[f.bwrapSetupArgv.length - 1] !== "--") {
     throw err("setup argv must end with '--' (it is followed by the payload)");
@@ -1063,13 +1071,22 @@ export function validateOuterWrapFixture(obj) {
  * @param {string} root
  */
 export function substituteOuterRoot(tokens, root) {
-  return tokens.map((t) => t.replaceAll("{{ROOT}}", root));
+  return tokens.map((t) => {
+    const sub = t.replaceAll("{{ROOT}}", root);
+    // Traversal guard (same as normalizeCapturedArgv's checkNoTraversal): a
+    // fixture token like `{{ROOT}}/../x` substitutes into an escape path for
+    // prep dirs or bind sources.
+    if (t.includes("{{ROOT}}") && /(^|\/)\.\.(\/|$)/.test(sub)) {
+      throw new Error(`outer fixture path escapes root after substitution: ${t}`);
+    }
+    return sub;
+  });
 }
 
-/** The own-workspace path inside a substituted outer argv — the `--chdir`
- *  target (the builder emits it last, realpath'd). */
+/** The own-workspace path inside a substituted outer argv — the LAST
+ *  `--chdir` target (same convention as the founder probe). */
 export function outerWrapChdirTarget(argv) {
-  const i = argv.indexOf("--chdir");
+  const i = argv.lastIndexOf("--chdir");
   return i !== -1 ? argv[i + 1] : undefined;
 }
 
@@ -1098,17 +1115,23 @@ export function classifyOuterWrapReplayVerdict({
       reason: `bwrap_spawn_${String(spawnErrorCode).toLowerCase()}`,
     };
   }
-  if (bwrapExitCode === 0 && bwrapStdout.includes("isolation_ok")) {
+  if (bwrapExitCode === 0 && /^isolation_ok$/m.test(bwrapStdout)) {
     // An isolation green built on the implicit-userns fallback is the WRONG
     // mechanism: the arm needs the file-cap'd mountns (an outer userns is
     // fatal to the inner sandbox — Phase 0 measurement). The deploy canary
     // must report the elevation it actually took, not just that the table
-    // held. The founder check tolerates userns explicitly; the canary does
-    // not.
-    if (/^elevation=userns$/m.test(bwrapStdout)) {
-      return { verdict: "sandbox_broken", reason: "wrong_elevation_userns" };
+    // held — pass requires an explicit `elevation=privileged`; `userns` OR a
+    // missing marker (drifted payload) is sandbox_broken. The founder check
+    // tolerates userns explicitly; the canary does not.
+    if (/^elevation=privileged$/m.test(bwrapStdout)) {
+      return { verdict: "pass", reason: "ok" };
     }
-    return { verdict: "pass", reason: "ok" };
+    return {
+      verdict: "sandbox_broken",
+      reason: /^elevation=userns$/m.test(bwrapStdout)
+        ? "wrong_elevation_userns"
+        : "wrong_elevation_unreported",
+    };
   }
   // The payload's own verdict markers — a realized isolation VIOLATION is a
   // sandbox verdict, never infra flake.
@@ -1167,7 +1190,8 @@ function runOuterReplay(fixtureUrl) {
     }
     const argv = substituteOuterRoot(fixture.bwrapSetupArgv, root);
     const own = outerWrapChdirTarget(argv);
-    if (!own || !own.startsWith(root)) {
+    // strict containment — a shared string prefix (`${root}XYZ`) is not under root.
+    if (!own || (own !== root && !own.startsWith(root + "/"))) {
       emitVerdict({
         verdict: "canary_infra_error",
         reason: "fixture_no_chdir_target",

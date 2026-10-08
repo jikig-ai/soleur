@@ -680,11 +680,11 @@ write_sandbox_canary_state() {
 # effort + env-guarded, mirrors report_cron_drain_timeout. Fail-open under set -e.
 sandbox_canary_sentry_event() {
   local verdict="$1" reason="$2" sdk_version="${3:-}" op="${4:-sandbox-canary}"
-  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (faithful canary; legacy probe gated the deploy)"
+  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (op=$op; report-only canary, never gated)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg o "$op" \
-      '{message: ("faithful sandbox canary " + $v + " (" + $r + ") — SDK " + $s),
+      '{message: (($o | sub("^sandbox-canary"; "sandbox canary"; "i")) + " " + $v + " (" + $r + ") — SDK " + $s),
         level: "error", platform: "other", logger: "ci-deploy",
         tags: {feature: "agent-sandbox", op: $o, verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
@@ -2571,12 +2571,12 @@ verify_image_signature() {
 # "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
-# run_canary_replay <arm-flag> <state-file> <sentry-op> <label>: the shared
+# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the shared
 # canary runner — one copy of the false-rollback guard (docker/exec failures
 # classify canary_infra_error, never sandbox_broken) for both replay arms.
 # Each arm's soak lives in its own state file.
 run_canary_replay() {
-  local arm="$1" state_file="$2" sentry_op="$3" label="$4"
+  local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
   local verdict reason sdk_version exec_rc out err_file docker_err
   # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
   # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
@@ -2588,7 +2588,7 @@ run_canary_replay() {
   set +o pipefail
   # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed docker exec
   # aborts before the read, leaving the infra classification below unreachable.
-  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" "$arm" 2>"$err_file")"; then
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" "$mode_flag" 2>"$err_file")"; then
     exec_rc=0
   else
     exec_rc=$?
@@ -2602,6 +2602,7 @@ run_canary_replay() {
     verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"; sdk_version=""
   else
     verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    verdict="${verdict:-canary_infra_error}" # empty docker-exec stdout → empty jq output, never a silent ""
     reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
     # sandbox-canary.mjs emits the SDK version as the camelCase key `sdkVersion`
     # (JS-idiomatic); this deploy-state chain is snake_case, so translate at the

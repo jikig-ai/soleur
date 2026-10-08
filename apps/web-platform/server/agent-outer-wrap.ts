@@ -17,7 +17,8 @@
 // those namespaces, which would require outer --unshare-pid (no mountable
 // scoped procfs under Docker masked paths — bubblewrap#284) and outer
 // --unshare-net (kills CLI egress). Instead bwrap runs in privileged mode
-// via file capabilities (`cap_sys_admin+ep` baked in the Dockerfile, cap kept
+// via file capabilities (`cap_sys_admin,cap_setuid,cap_setgid+ep` baked in
+// the Dockerfile, cap kept
 // in the container bounding set by `--cap-add SYS_ADMIN` at docker run); the
 // CLI child post-exec carries only the caller's cap set.
 //
@@ -31,11 +32,13 @@ import {
   accessSync,
   constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,6 +50,8 @@ import type {
   SpawnOptions,
   SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
+
+import * as Sentry from "@sentry/nextjs";
 
 import { createChildLogger } from "./logger";
 import { warnSilentFallback } from "./observability";
@@ -148,6 +153,10 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   argv.push("--symlink", "usr/lib", "/lib");
   argv.push("--symlink", "usr/lib64", "/lib64");
   argv.push("--ro-bind", req("/usr", "system image"), "/usr");
+  // Optional platform files: --ro-bind-try (bind-what-exists) keeps the argv
+  // host-STABLE — the committed fixture must be a pure function of the
+  // builder, and the /etc set varies per distro (Guard-2 host-dependence,
+  // review P1). Missing source is simply skipped by bwrap.
   for (const f of [
     "resolv.conf",
     "hosts",
@@ -155,13 +164,10 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
     "passwd",
     "group",
     "hostname",
+    "ssl",
+    "terminfo",
   ]) {
-    const src = `/etc/${f}`;
-    if (existsSync(src)) argv.push("--ro-bind", src, src);
-  }
-  for (const d of ["ssl", "terminfo"]) {
-    const src = `/etc/${d}`;
-    if (existsSync(src)) argv.push("--ro-bind", src, src);
+    argv.push("--ro-bind-try", `/etc/${f}`, `/etc/${f}`);
   }
   argv.push("--dev", "/dev");
   // Shared container procfs — intentional (arm F): a scoped procfs needs a
@@ -175,9 +181,10 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
     // node_modules + infra only — the vendored CLI tree, its deps, and the
     // inner shim's bpf artifact. `/app/shared/knowledge-base` is absent by
     // construction for every persona (better than today's deny-mask).
+    // --ro-bind-try: the sub set is optional per layout; argv stays stable.
     for (const sub of ["node_modules", "infra", "dist", "package.json"]) {
       const src = path.join(appRoot, sub);
-      if (existsSync(src)) argv.push("--ro-bind", src, src);
+      argv.push("--ro-bind-try", src, src);
     }
   }
   if (inputs.pluginPath) {
@@ -194,13 +201,24 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   for (const d of HOME_SESSION_DIRS) {
     argv.push("--dir", path.join(claudeHome, d));
   }
+  // Mutable tenant-adjacent sources: lstat-reject SYMLINKS — a planted
+  // symlink under $HOME would otherwise bind an arbitrary host file rw at
+  // the dest (writes land on the target). A skipped bind just means the
+  // file is absent in-wrap (the CLI recreates what it needs).
+  const notSymlink = (p: string) => {
+    try {
+      return !lstatSync(p).isSymbolicLink();
+    } catch {
+      return true; // ENOENT/race → the try-bind tolerates the absent source
+    }
+  };
   for (const f of HOME_STATE_FILES) {
     const src = path.join(claudeHome, f);
-    if (existsSync(src)) argv.push("--bind", src, src); // rw — credential refresh writes
+    if (notSymlink(src)) argv.push("--bind-try", src, src); // rw — credential refresh writes; first-boot sessions may lack them
   }
-  for (const f of [".claude.json"]) {
+  for (const f of [".claude.json", ".gitconfig"]) {
     const src = path.join(home, f);
-    if (existsSync(src)) argv.push("--bind", src, src);
+    if (notSymlink(src)) argv.push("--bind-try", src, src);
   }
 
   // The tenant workspace — bound rw at its real path (the parent is never
@@ -210,16 +228,24 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   if (ws) {
     const slug = claudeProjectSlug(ws);
     const transcriptDir = path.join(claudeHome, "projects", slug);
-    if (existsSync(transcriptDir)) argv.push("--bind", transcriptDir, transcriptDir);
+    // Existence-gated (unlike the fixed-name home files): the slug encodes
+    // the absolute ws path — an unconditional try-bind would make argv vary
+    // per tmpdir name and un-pin the fixture. Still lstat-rejects symlinks.
+    if (existsSync(transcriptDir) && notSymlink(transcriptDir)) {
+      argv.push("--bind-try", transcriptDir, transcriptDir);
+    }
     argv.push("--bind", ws, ws);
 
-    // A linked-worktree `.git` gitfile points outside the workspace; the
-    // target gitdir must be bound rw or every git op fails.
-    const gitFile = path.join(ws, ".git");
-    if (existsSync(gitFile)) {
-      const st = realpathSync(gitFile);
-      if (st !== gitFile && existsSync(st)) argv.push("--bind", st, st);
-    }
+    // `.git` external-target binds are deliberately ABSENT (review P0): the
+    // `.git` content is tenant-controlled — a `gitdir:` pointer or symlink
+    // resolving outside the workspace would bind an arbitrary host path rw
+    // into the wrap (shadowing the narrow credential binds). No legitimate
+    // escaping shape exists: platform readiness heals stranding pointers by
+    // re-clone (#5733, ensure-workspace-repo.ts), agent-made worktrees under
+    // the workspace resolve inside the ws bind, and submodule pointers land
+    // under `<ws>/.git/modules/` — all inside the workspace bind. A
+    // stranding shape that reaches the wrap fails git loudly at first op,
+    // same as it does un-wrapped.
   }
 
   if (cwd) argv.push("--chdir", cwd);
@@ -275,8 +301,14 @@ function preflight(bwrapPath: string, command: string, argv: string[]): string |
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--") break;
-    // --bind/--ro-bind only — the builder emits no --file/--dev-bind (and
+    // Strict binds only — the builder emits no --file/--dev-bind (and
     // --file's arg order is fd-first, so indexing it by src would mis-read).
+    // --ro-bind-try/--bind-try tolerate a missing source by design; consume
+    // the pair without the existence check.
+    if (flag === "--bind-try" || flag === "--ro-bind-try") {
+      i += 1;
+      continue;
+    }
     if (flag === "--bind" || flag === "--ro-bind") {
       const src = argv[i + 1];
       if (src && !src.startsWith("--") && !existsSync(src)) {
@@ -293,29 +325,43 @@ function preflight(bwrapPath: string, command: string, argv: string[]): string |
  *  classified failure, never a hang. */
 function syntheticFailedProcess(marker: string): SpawnedProcess {
   const listeners = { exit: [] as Array<(...a: unknown[]) => void>, error: [] as Array<(...a: unknown[]) => void> };
+  let fired = false;
   const proc: SpawnedProcess = {
     stdin: new Writable({ write(_c, _e, cb) { cb(); } }),
     stdout: new Readable({ read() { this.push(null); } }),
     get killed() { return true; },
     get exitCode() { return 127; },
+    get signalCode() { return null; },
     kill: () => true,
     on(event: "exit" | "error", listener: never) {
-      (listeners[event] as Array<never>).push(listener);
+      if (fired) {
+        // The process already reported — replay to late registrants on
+        // nextTick so a post-firing listener never hangs (sdk-ts#255 shape).
+        const l = listener as (...a: unknown[]) => void;
+        queueMicrotask(() =>
+          event === "error"
+            ? l(mkErr())
+            : l(127, null),
+        );
+      } else {
+        (listeners[event] as Array<never>).push(listener);
+      }
       return proc;
     },
     once(event: "exit" | "error", listener: never) {
-      (listeners[event] as Array<never>).push(listener);
-      return proc;
+      return (proc.on as (e: "exit" | "error", l: never) => SpawnedProcess)(event, listener);
     },
     off() { return proc; },
   } as SpawnedProcess;
-  queueMicrotask(() => {
+  const mkErr = () =>
     // The error text deliberately carries the SDK's missing-binary preflight
     // phrase so `classifySandboxStartupError` tags it `missing_binary` at the
     // session catch (feature:agent-sandbox — loud, AC5). A bare marker would
     // classify `other`/`bwrap_error` and miss the missing_binary routing.
-    for (const l of listeners.error)
-      (l as (e: Error) => void)(new Error(`sandbox required but unavailable (outer wrap: ${marker})`));
+    new Error(`sandbox required but unavailable (outer wrap: ${marker})`);
+  queueMicrotask(() => {
+    fired = true;
+    for (const l of listeners.error) (l as (e: Error) => void)(mkErr());
     for (const l of listeners.exit) (l as (c: number | null, s: null) => void)(127, null);
   });
   return proc;
@@ -334,21 +380,51 @@ export function makeSandboxedSpawn(
   const bwrapPath = inputs.bwrapPath ?? BWRAP_PATH;
   log.info(
     {
+      feature: "agent-sandbox",
       op: "tenant-outer-wrap",
       sessionId: inputs.sessionId,
       workspace: inputs.workspacePath,
-      mounts: wrapArgv.length,
+      argvTokens: wrapArgv.length,
+      argv: wrapArgv, // secrets-free by construction (test-pinned — no --setenv)
     },
     "outer wrap argv built",
   );
+  // Reprovision-parity (plan T2.1): the bind pins ws's realpath at BUILD
+  // time; a workspace reprovision between build and spawn swaps the inode
+  // under the same path — the session would bind the REPLACED tree while
+  // believing it is the provisioned one. Stat again at spawn and log the
+  // drift loudly (report-only — the reprovision itself is upstream's call).
+  let birth: { dev: number; ino: number } | undefined;
+  try {
+    const st = inputs.workspacePath ? statSync(inputs.workspacePath) : undefined;
+    if (st) birth = { dev: st.dev, ino: st.ino };
+  } catch {
+    // stat races a reprovision — undefined birth just skips the parity arm.
+  }
   return (options: SpawnOptions): SpawnedProcess => {
     const fail = preflight(bwrapPath, options.command, wrapArgv);
     if (fail) {
       log.warn(
-        { op: "tenant-outer-wrap", sessionId: inputs.sessionId, outcome: fail },
+        { feature: "agent-sandbox", op: "tenant-outer-wrap", sessionId: inputs.sessionId, outcome: fail },
         "outer wrap spawn refused",
       );
       return syntheticFailedProcess(fail);
+    }
+    if (birth && inputs.workspacePath) {
+      try {
+        const now = statSync(inputs.workspacePath);
+        if (now.dev !== birth.dev || now.ino !== birth.ino) {
+          warnSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "tenant-outer-wrap",
+            message:
+              "agent sandbox outer-wrap: workspace inode drifted between wrap build and spawn — session binds a reprovisioned tree",
+            extra: { sessionId: inputs.sessionId, workspace: inputs.workspacePath },
+          });
+        }
+      } catch {
+        // ENOENT mid-reprovision — preflight/first-op reports the absence.
+      }
     }
     // Env composition: options.env verbatim (it is already the allowlisted
     // buildAgentEnv output — secrets ride env, never argv) + TMPDIR pinned
@@ -362,6 +438,9 @@ export function makeSandboxedSpawn(
     env.TMPDIR = "/tmp";
 
     const stderrRing = new StderrRing();
+    // options.cwd is deliberately ignored — the mount table + --chdir are
+    // keyed off inputs.cwd/workspacePath; honoring per-spawn cwd could
+    // chdir into an unbound path (fail-closed) and is never meaningful here.
     const child = spawn(bwrapPath, [...wrapArgv, options.command, ...options.args], {
       cwd: inputs.cwd ?? inputs.workspacePath,
       env,
@@ -371,6 +450,46 @@ export function makeSandboxedSpawn(
     // stderr must drain continuously or the child blocks at ~64 kB.
     child.stderr!.on("data", (b: Buffer) => stderrRing.push(b));
     const ringTail = () => stderrRing.tail();
+
+    // Shared exit/error enrichment for BOTH on/once — whichever method the
+    // SDK uses must get identical behavior (obs review P2).
+    // A non-zero EXIT with a bwrap signature in the tail is a sandbox-posture
+    // failure the SDK classifies "other" (no bwrap token in its synthesized
+    // "process exited" error) → untagged at the session catch. Emit the
+    // feature:agent-sandbox warn here so the ADR-079 zero-signal amplifier
+    // stays closed for flag-on sessions. Signal exits (kill -pgid on Stop /
+    // deploy swap / idle reap) are routine — NOT failures: `code` is null
+    // there, and `null !== 0` would misreport every abort as a failure.
+    // The signature is deliberately narrow — bwrap's own refusal lines, not
+    // routine "permission denied" chatter the CLI may print.
+    const BWRAP_SIG = /bwrap:|operation not permitted/i;
+    const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (signal != null || code === 0 || code == null) return [code, signal] as const;
+      const tail = ringTail();
+      if (tail) {
+        log.warn(
+          { feature: "agent-sandbox", op: "tenant-outer-wrap", sessionId: inputs.sessionId, outcome: `exit:${code}`, stderrTail: tail.slice(-2000) },
+          "outer wrap child exited non-zero",
+        );
+        if (BWRAP_SIG.test(tail)) {
+          warnSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "tenant-outer-wrap",
+            message: `agent sandbox outer-wrap child exited ${code} with bwrap signature`,
+            extra: { sessionId: inputs.sessionId, outcome: `exit:${code}` },
+          });
+        }
+      }
+      return [code, signal] as const;
+    };
+    const emitError = (err: Error) => {
+      const tail = ringTail();
+      return tail ? new Error(`${err.message}\nstderr: ${tail.slice(-2000)}`) : err;
+    };
+
+    // wrapper↔caller listener pairs — `off` must remove OUR wrapper, not the
+    // caller's listener (which was never registered on the child).
+    const wrappers = new Map<never, unknown>();
 
     const spawned: SpawnedProcess = {
       stdin: child.stdin as Writable,
@@ -388,42 +507,42 @@ export function makeSandboxedSpawn(
       },
       on(event: "exit" | "error", listener: never): SpawnedProcess {
         if (event === "exit") {
-          child.on("exit", (code, signal) => {
-            const tail = ringTail();
-            if (code !== 0 && tail) {
-              log.warn(
-                { op: "tenant-outer-wrap", sessionId: inputs.sessionId, outcome: `exit:${code}`, stderrTail: tail.slice(-2000) },
-                "outer wrap child exited non-zero",
-              );
-            }
-            (listener as (c: number | null, s: NodeJS.Signals | null) => void)(code, signal);
-          });
+          const w = (code: number | null, signal: NodeJS.Signals | null) => {
+            const [c, s] = emitExit(code, signal);
+            (listener as (c: number | null, s: NodeJS.Signals | null) => void)(c, s);
+          };
+          wrappers.set(listener, w);
+          child.on("exit", w);
         } else {
-          child.on("error", (err: Error) => {
-            const tail = ringTail();
-            (listener as (e: Error) => void)(
-              tail ? new Error(`${err.message}\nstderr: ${tail.slice(-2000)}`) : err,
-            );
-          });
+          const w = (err: Error) =>
+            (listener as (e: Error) => void)(emitError(err));
+          wrappers.set(listener, w);
+          child.on("error", w);
         }
         return spawned;
       },
       once(event: "exit" | "error", listener: never): SpawnedProcess {
         if (event === "exit") {
-          child.once("exit", (code, signal) =>
-            (listener as (c: number | null, s: NodeJS.Signals | null) => void)(code, signal),
-          );
+          const w = (code: number | null, signal: NodeJS.Signals | null) => {
+            const [c, s] = emitExit(code, signal);
+            (listener as (c: number | null, s: NodeJS.Signals | null) => void)(c, s);
+          };
+          wrappers.set(listener, w);
+          child.once("exit", w);
         } else {
-          child.once("error", (err: Error) =>
-            (listener as (e: Error) => void)(
-              ringTail() ? new Error(`${err.message}\nstderr: ${ringTail().slice(-2000)}`) : err,
-            ),
-          );
+          const w = (err: Error) =>
+            (listener as (e: Error) => void)(emitError(err));
+          wrappers.set(listener, w);
+          child.once("error", w);
         }
         return spawned;
       },
       off(event: "exit" | "error", listener: never): SpawnedProcess {
-        child.off(event as "exit" | "error", listener as never);
+        const w = wrappers.get(listener);
+        if (w) {
+          wrappers.delete(listener);
+          child.off(event as never, w as never);
+        }
         return spawned;
       },
     } as SpawnedProcess;
@@ -457,10 +576,7 @@ export function outerWrapEnabled(workspaceId?: string): boolean {
  *  canary replay pipe into `bash -s`. Two layouts: dev
  *  `apps/web-platform/server/../scripts`, prod bundle
  *  `/app/dist/server/../../scripts` → `/app/scripts` (Dockerfile COPY). */
-const INNER_PROBE_PATH = [
-  "..",
-  path.join("..", ".."),
-]
+const INNER_PROBE_PATH = ["..", path.join("..", "..")]
   .map((up) =>
     path.join(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -469,13 +585,7 @@ const INNER_PROBE_PATH = [
       "tenant-isolation-inner-probe.sh",
     ),
   )
-  .find((p) => existsSync(p)) ??
-  path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "scripts",
-    "tenant-isolation-inner-probe.sh",
-  );
+  .find((p) => existsSync(p));
 
 export interface RealizedIsolationProbe {
   /** The wrap built + the payload ran to a verdict (isolation_ok seen). */
@@ -509,12 +619,14 @@ export function probeRealizedIsolation(
     writeFileSync(path.join(sibling, "marker.txt"), "sibling\n");
     mkdirSync(home, { recursive: true });
     mkdirSync(plugin, { recursive: true });
+    const probePath = deps.probePath ?? INNER_PROBE_PATH;
+    if (!probePath) return { ok: false, reason: "probe_path_missing" };
     const argv = buildOuterWrapArgv({ workspacePath: own, home, pluginPath: plugin });
     const res = spawnSync(
       deps.bwrapPath ?? BWRAP_PATH,
       [...argv, "/bin/bash", "-s", "--", path.dirname(own), own, sibling],
       {
-        input: readFileSync(deps.probePath ?? INNER_PROBE_PATH, "utf8"),
+        input: readFileSync(probePath, "utf8"),
         encoding: "utf8",
         timeout: 30_000,
       },
@@ -522,7 +634,7 @@ export function probeRealizedIsolation(
     if (res.error)
       return {
         ok: false,
-        reason: `spawn_${(res.error as NodeJS.ErrnoException).code ?? "error"}`,
+        reason: `bwrap_spawn_${((res.error as NodeJS.ErrnoException).code ?? "error").toLowerCase()}`,
       };
     const out = `${res.stdout ?? ""}`;
     const elevation = /^elevation=(privileged|userns)$/m.exec(out)?.[1] as
@@ -534,7 +646,8 @@ export function probeRealizedIsolation(
       return { ok: false, reason: "bwrap_operation_not_permitted" };
     }
     if (/^FAIL:/m.test(out)) return { ok: false, reason: "isolation_probe_failed" };
-    return { ok: false, reason: `exit_${res.status ?? "null"}` };
+    if (res.status === 0) return { ok: false, reason: "probe_output_missing" };
+    return { ok: false, reason: `bwrap_exit_${res.status ?? "null"}` };
   } catch (err) {
     return { ok: false, reason: `probe_error:${String(err).slice(0, 120)}` };
   } finally {
@@ -555,15 +668,28 @@ export function probeRealizedIsolation(
  */
 export function verifyOuterWrapRealizedIsolation(
   env: Record<string, string | undefined> = process.env,
+  deps: { probe?: () => RealizedIsolationProbe } = {},
 ): void {
   try {
     if (env.AGENT_OUTER_WRAP_BOOT_PROBE !== "1") return;
-    const p = probeRealizedIsolation();
+    const p = (deps.probe ?? probeRealizedIsolation)();
     if (p.ok && p.elevation === "privileged") {
       log.info(
         { feature: "agent-sandbox", op: "outer-wrap-realized-probe", ...p },
         "agent-sandbox: outer-wrap realized-isolation probe ok",
       );
+      // Same success-fork parity as verifyAgentSandboxHardening: info is
+      // journald-only on Vector, so the prod file-cap measurement must land
+      // on Sentry to be off-box queryable (the probe exists to measure).
+      try {
+        Sentry.captureMessage("agent sandbox outer-wrap realized probe ok", {
+          level: "info",
+          tags: { event_type: "agent-sandbox-outer-wrap-realized-probe" },
+          extra: { ...p },
+        });
+      } catch {
+        // Sentry must never break the probe.
+      }
       return;
     }
     if (p.ok) {

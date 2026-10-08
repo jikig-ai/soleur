@@ -183,11 +183,13 @@ capture_trigger=0
 # grep exits 0 on a match, 1 on none, above 1 when it could not run (a bad pattern): only a CLEAN miss may skip the gate. A
 # failed here-string redirect also returns 1, so this routing does not cover a redirect failure.
 ct_rc=0
-# The #5863 outer-wrap producer + fixture join the trigger set: the wrap's
-# mount table is a second sandbox surface whose inputs (the vendored CLI's
-# fs needs on SDK bumps, our own argv builder, the pinned fixture) deserve
-# the same capture-gate treatment — the in-image job runs --smoke-outer.
-grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' <<<"$CHANGED" || ct_rc=$?
+# The #5863 outer-wrap mechanism joins the trigger set — argv builder,
+# fixture, canary script, and (enumeration-seat) the files that define WHAT
+# the gate measures: the in-image verify script that executes it, the shared
+# isolation payload that defines `pass`, the interpose installer, and the
+# Dockerfile that establishes the file-cap posture. A change to any of those
+# silently retunes the mechanism without tripping the gate.
+grep -qE 'apps/web-platform/(Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' <<<"$CHANGED" || ct_rc=$?
 if (( ct_rc != 1 )); then
   capture_trigger=1
 fi

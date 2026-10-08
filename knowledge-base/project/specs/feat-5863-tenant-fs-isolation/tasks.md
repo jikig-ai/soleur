@@ -69,15 +69,23 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
 ## Phase 2 — Implementation
 
 - [x] 2.1 `server/agent-outer-wrap.ts`: `buildOuterWrapArgv({workspacePath,
-  sessionId, cwd, command})` (signature pinned to probe) +
-  `makeSandboxedSpawn()` — detached pgid kill (ESRCH caught), stderr ring
-  buffer (continuous drain), spawn preflight (accessSync; synthetic 127
-  fail, never hang), single `realpathSync` feeding bind src/dest/`--chdir`/
-  hook, reprovision-serialized bind + dev+ino parity log.
+  sessionId, cwd, home, pluginPath, appRoot})` (the `command` the plan
+  pinned arrives per-spawn in `SpawnOptions`, not at wrap build — the
+  vendored CLI rides the `appRoot/node_modules` ro-bind, covered by the
+  `--smoke-outer` dep-bump gate) + `makeSandboxedSpawn()` — detached pgid
+  kill (ESRCH caught), stderr ring buffer (continuous drain), spawn
+  preflight (accessSync; synthetic 127 fail, never hang), single
+  `realpathSync` feeding bind src/dest/`--chdir`/hook, dev+ino parity warn
+  on workspace reprovision between build and spawn.
 - [x] 2.2 Mount table per plan T2.2 (system image ro-bind + derived state
-  roots; `/etc` files `--file`, dirs `--ro-bind`; `--tmpfs /tmp`+TMPDIR;
-  narrow `~/.claude` binds; bpf artifact; socket dir; gitfile targets; bound
-  `/proc`; **no `--unshare-*`**).
+  roots; `/etc` files bound via `--ro-bind-try` — bind works for both file
+  and dir and try-variants keep argv host-stable for the Guard-2 pin;
+  `--tmpfs /tmp`+TMPDIR; narrow `~/.claude` binds; bpf artifact rides
+  `/app/infra`; bound `/proc`; **no `--unshare-*`**). The plan's gitfile
+  target mounts were DROPPED in review — `.git` indirection is
+  tenant-controlled and any outside-workspace bind is an arbitrary-host-path
+  primitive (see the module comment; platform readiness heals stranding
+  pointers, #5733).
 - [x] 2.3 `AgentQueryOptionsArgs` + `workspaceId`/`sessionId`;
   `spawnClaudeCodeProcess` wired in `buildAgentQueryOptions` behind env flag
   (dispatch-time read, default off, workspace-allowlist arm); BOTH callers
@@ -88,8 +96,12 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
 - [x] 2.5 Persona parity — support-arm argv test asserts zero binds under
   the workspaces root AND absence of `knowledge-base` (both arms).
 - [x] 2.6 Dockerfile: `setcap` on `/usr/bin/bwrap` + `getcap -r /` audit
-  line; entrypoint drops SYS_ADMIN (eff/perm/amb, keep bounding).
-- [x] 2.7 `infra/cloud-init.yml`: `docker run` gains `--cap-add SYS_ADMIN`.
+  as the runner-stage's LAST root layer (fail-closed, asserts bwrap's own
+  cap set + {bwrap}-only); the app runs as `USER soleur` so SYS_ADMIN is
+  bounding-only (no entrypoint needed — exec clears eff/perm/amb).
+- [x] 2.7 `infra/cloud-init.yml` + `infra/ci-deploy.sh` (canary + prod
+  docker run): `--cap-add SYS_ADMIN` on all three sites — cloud-init only
+  covers first boot; deploys re-create the container here.
 
 ## Phase 3 — Canary + observability
 

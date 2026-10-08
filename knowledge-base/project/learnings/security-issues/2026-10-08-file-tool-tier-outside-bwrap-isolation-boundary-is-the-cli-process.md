@@ -74,6 +74,13 @@ the wrong tier produces confident green tests against a leak that stays open.
 
 ## Plan-review addendum (2026-10-08)
 
+**Superseded bullets above (arm F, landed in the same spec):** the "Solution"
+section's `--unshare-pid`/`no CAP_SYS_ADMIN` bullets were reversed by the
+Phase-0 spike — the shipped arm is mountns-only via file-capability bwrap
+(`cap_sys_admin,cap_setuid,cap_setgid+ep` + `--cap-add SYS_ADMIN` bounding
+set), and `/proc` stays shared (#9723). Read the addendum + ADR-075, not the
+pre-spike bullets.
+
 Load-bearing corrections the review panel surfaced for the outer-wrap design:
 
 - **`spawnClaudeCodeProcess` (sdk.d.ts:2431) is the supported interpose** — strictly better than `pathToClaudeCodeExecutable`+wrapper script; but `SpawnedProcess` carries NO stderr channel (capture into a ring buffer yourself) and spawn-ENOENT can hang `query()` (sdk-ts#255 → `accessSync` preflight + synthetic failed process).

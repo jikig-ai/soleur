@@ -15,7 +15,7 @@
 // The committed fixture (infra/agent-outer-wrap-argv.json) pins the full
 // emitted set so any mount-table drift is a reviewable diff.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
@@ -23,6 +23,7 @@ import {
   realpathSync,
   readFileSync,
   rmSync,
+  symlinkSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -36,6 +37,18 @@ import {
 } from "@/server/agent-outer-wrap";
 import { classifySandboxStartupError } from "@/server/sandbox-startup-classifier";
 
+// Emit-fork sinks for the realized-isolation probe — same mock shape as
+// agent-runner-query-options.test.ts: spread the real module so unrelated
+// transitive exports keep working, capture the two forks the probes emit.
+const obs = vi.hoisted(() => ({ warnSilentFallback: vi.fn(), reportSilentFallback: vi.fn() }));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  warnSilentFallback: obs.warnSilentFallback,
+  reportSilentFallback: obs.reportSilentFallback,
+}));
+const sentry = vi.hoisted(() => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => sentry);
+
 function fixture(): { root: string; ws: string; home: string; plugin: string } {
   const root = mkdtempSync(path.join(tmpdir(), "aow-"));
   const ws = path.join(root, "workspaces", "ws-aaaa");
@@ -44,6 +57,10 @@ function fixture(): { root: string; ws: string; home: string; plugin: string } {
   const plugin = path.join(root, "app", "shared", "plugins", "soleur");
   mkdirSync(ws, { recursive: true });
   mkdirSync(sibling, { recursive: true });
+  // The shared payload's vantage-(b) read targets <sibling>/marker.txt —
+  // it must exist on the host so the ENOENT inside the wrap is isolation,
+  // not an absent fixture (anti-vacuity).
+  writeFileSync(path.join(sibling, "marker.txt"), "sibling-secret\n");
   mkdirSync(home, { recursive: true });
   mkdirSync(plugin, { recursive: true });
   mkdirSync(path.join(home, ".claude", "projects"), { recursive: true });
@@ -150,12 +167,11 @@ describe("buildOuterWrapArgv", () => {
       pluginPath: f.plugin,
     });
     const p = pairs(argv);
-    expect(p).toContainEqual(["--bind", projDir, projDir]);
-    expect(p).toContainEqual(["--bind", path.join(f.home, ".claude", ".credentials.json"), path.join(f.home, ".claude", ".credentials.json")]);
+    expect(p).toContainEqual(["--bind-try", projDir, projDir]);
+    expect(p).toContainEqual(["--bind-try", path.join(f.home, ".claude", ".credentials.json"), path.join(f.home, ".claude", ".credentials.json")]);
     // the projects PARENT is a --dir (fresh), never a bind — sibling slugs
     // under it stay absent.
     expect(p).toContainEqual(["--dir", path.join(f.home, ".claude", "projects"), undefined]);
-    expect(p.find(([, s]) => s === path.join(f.home, ".claude", "projects") && false)).toBeUndefined();
     expect(p.filter(([fl, s]) => fl !== "--dir" && s === path.join(f.home, ".claude", "projects"))).toEqual([]);
   });
 
@@ -231,7 +247,7 @@ describe("committed argv fixture (Guard 2)", () => {
 
     // Bind flags take <src> <dst> pair; only the SOURCE must pre-exist.
     // --dir/--tmpfs targets are created inside the namespace — never prep.
-    const BIND_SRC_FLAGS = new Set(["--bind", "--ro-bind", "--dev-bind", "--ro-bind-try"]);
+    const BIND_SRC_FLAGS = new Set(["--bind", "--ro-bind", "--dev-bind", "--ro-bind-try", "--bind-try"]);
     const sources = new Set<string>();
     for (let i = 0; i < argv.length; i++) {
       if (argv[i] === "--") break;
@@ -290,8 +306,10 @@ describe("makeSandboxedSpawn — fail-closed preflight (T1.4)", () => {
 
   it("missing command → synthetic exit 127 + missing_binary classification", async () => {
     const f = fixture();
+    // bwrapPath DI → host-agnostic (a bwrap-less dev host would trip the
+    // earlier preflight check instead of reaching the command check).
     const { err, code } = await spawnWith(
-      { workspacePath: f.ws, home: f.home },
+      { workspacePath: f.ws, home: f.home, bwrapPath: "/bin/true" },
       path.join(f.root, "no-such-cli"),
     );
     expect(code).toBe(127);
@@ -301,9 +319,10 @@ describe("makeSandboxedSpawn — fail-closed preflight (T1.4)", () => {
 
   it("bind source vanishing between argv build and spawn → bind_source_missing", async () => {
     const f = fixture();
-    const creds = path.join(f.home, ".claude", ".credentials.json");
-    const factory = makeSandboxedSpawn({ workspacePath: f.ws, home: f.home });
-    rmSync(creds); // the file was --bind'ed at build time; gone by spawn time
+    // Try-binds tolerate a missing source by design; the STRICT-bind arm the
+    // preflight guards is the workspace itself.
+    const factory = makeSandboxedSpawn({ workspacePath: f.ws, home: f.home, bwrapPath: "/bin/true" });
+    rmSync(f.ws, { recursive: true, force: true }); // --bind'ed at build time; gone by spawn time
     const proc = factory({ command: "/bin/true", args: [], env: {} } as never);
     const { err, code } = await new Promise<{ err: Error; code: number | null }>(
       (resolve) => {
@@ -315,6 +334,40 @@ describe("makeSandboxedSpawn — fail-closed preflight (T1.4)", () => {
     expect(code).toBe(127);
     expect(err.message).toContain("bind_source_missing:");
     expect(classifySandboxStartupError(err).sandboxKind).toBe("missing_binary");
+  });
+
+  it("spawn round-trip: wraps [bwrap, ...argv, command, ...args] + env verbatim/TMPDIR (T0.3)", async () => {
+    const f = fixture();
+    // An argv-dump script as the bwrapPath seam: the spawn composition is
+    // asserted against what the child ACTUALLY receives, incl. env.
+    const dump = path.join(f.root, "dump-argv.sh");
+    writeFileSync(
+      dump,
+      '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\nprintf "TMPDIR=%s\\n" "$TMPDIR"\nprintf "PROBE_SENTINEL=%s\\n" "${PROBE_SENTINEL:-<unset>}"\n',
+      { mode: 0o755 },
+    );
+    const factory = makeSandboxedSpawn({ workspacePath: f.ws, home: f.home, pluginPath: f.plugin, bwrapPath: dump });
+    const proc = factory({
+      command: "/bin/true",
+      args: ["--flag-a", "value-b"],
+      env: { PROBE_SENTINEL: "kept", TMPDIR: "/should/be/overridden" },
+    } as never);
+    const chunks: Buffer[] = [];
+    const code = await new Promise<number | null>((resolve) => {
+      proc.stdout.on("data", (b: Buffer) => chunks.push(b));
+      proc.once("exit", ((c: number | null) => resolve(c)) as never);
+    });
+    const lines = Buffer.concat(chunks).toString("utf8").trim().split("\n");
+    expect(code).toBe(0);
+    // The wrap argv precedes the command; command + args come last.
+    const cmdIdx = lines.indexOf("/bin/true");
+    expect(cmdIdx).toBeGreaterThan(10);
+    expect(lines.slice(cmdIdx, cmdIdx + 3)).toEqual(["/bin/true", "--flag-a", "value-b"]);
+    expect(lines[cmdIdx - 1]).toBe("--"); // bwrap's own terminator
+    expect(lines).toContain("TMPDIR=/tmp"); // pin to the session tmpfs, not the caller's
+    expect(lines).toContain("PROBE_SENTINEL=kept"); // options.env verbatim
+    // Secrets never ride argv — only the env channel.
+    expect(lines.slice(0, cmdIdx).join(" ")).not.toContain("PROBE_SENTINEL");
   });
 });
 
@@ -337,6 +390,20 @@ describe("spawn integration (real bwrap, if present)", () => {
     }
   })();
 
+  // Mirror tenant-isolation-probe.sh: --unshare-user is the documented
+  // LOCAL fallback — prepend it ONLY when the host bwrap lacks file caps,
+  // so a cap'd host exercises the same privileged arm production runs.
+  const BWRAP_HAS_CAPS = (() => {
+    try {
+      return /cap_sys_admin/.test(
+        execFileSync("getcap", [BWRAP_PATH], { encoding: "utf8" }),
+      );
+    } catch {
+      return false;
+    }
+  })();
+  const ELEVATION_PREFIX = BWRAP_HAS_CAPS ? [] : ["--unshare-user"];
+
   // Runs the SHARED inner-probe payload inside the wrap — the same
   // assertion set the founder check and the deploy canary replay use, so a
   // green here cannot drift green while the deployed guard regresses.
@@ -352,11 +419,11 @@ describe("spawn integration (real bwrap, if present)", () => {
     // On an unprivileged host bwrap needs --unshare-user to build the
     // mountns; the emitted argv stays mount-only — the flag is added by
     // the caller when bwrap lacks file caps (same convention as the probe
-    // script's getcap fallback).
+    // script's getcap fallback — gated by ELEVATION_PREFIX).
     return execFileSync(
       BWRAP_PATH,
       [
-        "--unshare-user",
+        ...ELEVATION_PREFIX,
         ...argv,
         "/bin/bash",
         "-s",
@@ -396,7 +463,7 @@ describe("spawn integration (real bwrap, if present)", () => {
       const out = execFileSync(
         BWRAP_PATH,
         [
-          "--unshare-user",
+          ...ELEVATION_PREFIX,
           ...argv,
           "/bin/bash",
           "-s",
@@ -422,7 +489,7 @@ describe("spawn integration (real bwrap, if present)", () => {
       const out = execFileSync(
         BWRAP_PATH,
         [
-          "--unshare-user",
+          ...ELEVATION_PREFIX,
           ...argv,
           "/bin/bash",
           "-c",
@@ -478,5 +545,74 @@ describe("verifyOuterWrapRealizedIsolation — opt-in emit", () => {
       "@/server/agent-outer-wrap"
     );
     expect(() => verifyOuterWrapRealizedIsolation({})).not.toThrow();
+  });
+});
+
+describe("verifyOuterWrapRealizedIsolation — emit fork", () => {
+  beforeEach(() => obs.warnSilentFallback.mockClear());
+  it("ok + privileged → info emit, no warn", async () => {
+    const { verifyOuterWrapRealizedIsolation } = await import("@/server/agent-outer-wrap");
+    verifyOuterWrapRealizedIsolation(
+      { AGENT_OUTER_WRAP_BOOT_PROBE: "1" },
+      { probe: () => ({ ok: true, elevation: "privileged" }) },
+    );
+    expect(obs.warnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("ok + userns → warn (file-cap posture not measured)", async () => {
+    const { verifyOuterWrapRealizedIsolation } = await import("@/server/agent-outer-wrap");
+    verifyOuterWrapRealizedIsolation(
+      { AGENT_OUTER_WRAP_BOOT_PROBE: "1" },
+      { probe: () => ({ ok: true, elevation: "userns" }) },
+    );
+    expect(obs.warnSilentFallback).toHaveBeenCalledTimes(1);
+    expect(obs.warnSilentFallback.mock.calls[0][1]).toMatchObject({
+      feature: "agent-sandbox",
+      op: "outer-wrap-realized-probe",
+    });
+  });
+
+  it("probe fail → warn with the reason carried", async () => {
+    const { verifyOuterWrapRealizedIsolation } = await import("@/server/agent-outer-wrap");
+    verifyOuterWrapRealizedIsolation(
+      { AGENT_OUTER_WRAP_BOOT_PROBE: "1" },
+      { probe: () => ({ ok: false, reason: "bwrap_operation_not_permitted" }) },
+    );
+    expect(obs.warnSilentFallback).toHaveBeenCalledTimes(1);
+    expect(obs.warnSilentFallback.mock.calls[0][1]).toMatchObject({
+      feature: "agent-sandbox",
+      op: "outer-wrap-realized-probe",
+    });
+  });
+});
+
+describe("buildOuterWrapArgv — .git external-target binds are absent (review P0)", () => {
+  it("gitdir: pointer file to an outside path → NO bind (tenant-controlled indirection must not become a bind primitive)", () => {
+    const f = fixture();
+    const repo = path.join(f.root, "repo");
+    const gitdir = path.join(repo, ".git", "worktrees", "ws-aaaa");
+    mkdirSync(gitdir, { recursive: true });
+    writeFileSync(path.join(gitdir, "commondir"), "../..\n");
+    writeFileSync(path.join(f.ws, ".git"), `gitdir: ${gitdir}\n`);
+    const argv = buildOuterWrapArgv({
+      workspacePath: f.ws,
+      home: f.home,
+      pluginPath: f.plugin,
+    });
+    expect(argv).not.toContain(gitdir);
+    expect(argv).not.toContain(path.join(repo, ".git"));
+  });
+
+  it(".git symlink to an outside path → NO bind (a symlink to / would mount the whole root)", () => {
+    const f = fixture();
+    const outside = path.join(f.root, "outside");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, path.join(f.ws, ".git"));
+    const argv = buildOuterWrapArgv({
+      workspacePath: f.ws,
+      home: f.home,
+      pluginPath: f.plugin,
+    });
+    expect(argv).not.toContain(realpathSync(outside));
   });
 });

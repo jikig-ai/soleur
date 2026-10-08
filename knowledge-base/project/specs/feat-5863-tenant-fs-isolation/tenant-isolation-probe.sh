@@ -68,11 +68,14 @@ printf 'sibling-secret\n' > "$SIBLING/marker.txt"
 # A capless host adds --unshare-user up front (the fixture argv is unchanged;
 # bwrap's own userns fallback is what the in-image smoke uses too).
 EXTRA=()
-if ! getcap "$(command -v bwrap)" 2>/dev/null | grep -q 'cap_sys_admin'; then
+# Pin /usr/bin/bwrap, never PATH — PATH may carry the #8752 bwrap-shim
+# (its NEWUSER-deny filter exists to reject the INNER sandbox's argv).
+BWRAP="${BWRAP_PATH:-/usr/bin/bwrap}"
+if ! getcap "$BWRAP" 2>/dev/null | grep -q 'cap_sys_admin'; then
   EXTRA=(--unshare-user)
 fi
 
 # The payload travels on stdin (`bash -s`): nothing under /app/scripts is
 # bound inside the wrap, and argv-embedding the script would make the
 # spawned argv carry assertion text.
-bwrap "${EXTRA[@]}" "${ARGV[@]}" /bin/bash -s -- "$PARENT" "$OWN" "$SIBLING" < "$PAYLOAD"
+"$BWRAP" "${EXTRA[@]}" "${ARGV[@]}" /bin/bash -s -- "$PARENT" "$OWN" "$SIBLING" < "$PAYLOAD"

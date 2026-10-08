@@ -506,7 +506,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   probeOuterWrapInterpose,
-  verifyOuterWrapInterpose,
 } from "@/server/agent-runner-query-options";
 
 describe("probeOuterWrapInterpose — interpose wiring under the rollout flag", () => {
@@ -554,6 +553,28 @@ describe("probeOuterWrapInterpose — interpose wiring under the rollout flag", 
     );
     expect(p).toMatchObject({ flagOn: true, installed: false, ok: false });
     expect(p.error).toContain("argv build boom");
+  });
+});
+
+describe("buildAgentQueryOptions — outer-wrap flag-off pin (#5863)", () => {
+  it("flag OFF → spawnClaudeCodeProcess is ABSENT (an always-install mutation must red)", () => {
+    const env = process.env;
+    const prev = env.AGENT_OUTER_WRAP;
+    const prevAllow = env.AGENT_OUTER_WRAP_WORKSPACES;
+    try {
+      delete env.AGENT_OUTER_WRAP;
+      delete env.AGENT_OUTER_WRAP_WORKSPACES;
+      const opts = buildAgentQueryOptions({
+        ...minArgs,
+        workspacePath: mkdtempSync(join(tmpdir(), "aow-flagoff-ws-")),
+      });
+      expect("spawnClaudeCodeProcess" in opts).toBe(false);
+    } finally {
+      if (prev === undefined) delete env.AGENT_OUTER_WRAP;
+      else env.AGENT_OUTER_WRAP = prev;
+      if (prevAllow === undefined) delete env.AGENT_OUTER_WRAP_WORKSPACES;
+      else env.AGENT_OUTER_WRAP_WORKSPACES = prevAllow;
+    }
   });
 });
 

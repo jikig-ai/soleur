@@ -483,7 +483,11 @@ export function probeOuterWrapInterpose(
     const allowed = env.AGENT_OUTER_WRAP_WORKSPACES?.split(",")
       .map((s) => s.trim())
       .filter(Boolean)[0];
-    if (env.AGENT_OUTER_WRAP_WORKSPACES !== undefined) {
+    // Mirror the INJECTED env exactly — an omitted allowlist must DELETE an
+    // ambient process.env value, not leak it into the measured build.
+    if (env.AGENT_OUTER_WRAP_WORKSPACES === undefined) {
+      delete process.env.AGENT_OUTER_WRAP_WORKSPACES;
+    } else {
       process.env.AGENT_OUTER_WRAP_WORKSPACES = env.AGENT_OUTER_WRAP_WORKSPACES;
     }
     const build = deps.buildOptions ?? buildAgentQueryOptions;

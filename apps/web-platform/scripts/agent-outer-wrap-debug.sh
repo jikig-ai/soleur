@@ -20,7 +20,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 # Arm F argv is mount-only; on a host where /usr/bin/bwrap carries no file
 # caps (dev machines), the mountns still builds via the userns path.
 EXTRA=()
-if ! getcap "$(command -v bwrap)" 2>/dev/null | grep -q cap_sys_admin; then
+# Pin /usr/bin/bwrap, never PATH — the #8752 shim's NEWUSER-deny filter
+# exists to reject the INNER sandbox's argv, not measure ours.
+BWRAP="${BWRAP_PATH:-/usr/bin/bwrap}"
+if ! getcap "$BWRAP" 2>/dev/null | grep -q cap_sys_admin; then
   EXTRA=(--unshare-user)
 fi
 
@@ -30,5 +33,5 @@ mapfile -t ARGV < <(cd "$REPO_ROOT" && bun -e '
   process.stdout.write(argv.join("\n") + "\n");
 ' -- "$WS")
 
-echo "+ bwrap ${EXTRA[*]} <${#ARGV[@]} setup args> ${*:-/bin/bash}" >&2
-exec bwrap "${EXTRA[@]}" "${ARGV[@]}" "${@:-/bin/bash}"
+echo "+ $BWRAP ${EXTRA[*]} <${#ARGV[@]} setup args> ${*:-/bin/bash}" >&2
+exec "$BWRAP" "${EXTRA[@]}" "${ARGV[@]}" "${@:-/bin/bash}"

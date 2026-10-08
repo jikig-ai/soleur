@@ -78,6 +78,17 @@ assert "writer default is NOT /var/run tmpfs" "[[ \"$WRITER_DEFAULT\" != /var/ru
 assert "reader default is NOT /var/run tmpfs" "[[ \"$READER_DEFAULT\" != /var/run/* ]]"
 assert "writer + reader defaults MATCH" "[[ \"$WRITER_DEFAULT\" == \"$READER_DEFAULT\" ]]"
 
+# 7. The #5863 OUTER-wrap ledger — same durability contract, distinct var
+# (SANDBOX_OUTER_WRAP_CANARY_STATE_FILE). Same #5889 failure shape: a drifted
+# default would silently TRANSIENT the #9797 soak followthrough forever.
+OWRITER_DEFAULT="$(grep -oE 'SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-[^}]+' "$TARGET" | head -1 | sed 's/.*:-//')"
+OREADER_DEFAULT="$(grep -oE 'SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-[^}]+' "$CAT_TARGET" | head -1 | sed 's/.*:-//')"
+assert "outer writer default is durable (/mnt/data), not tmpfs" "[[ \"$OWRITER_DEFAULT\" == /mnt/data/* ]]"
+assert "outer reader default is durable (/mnt/data), not tmpfs" "[[ \"$OREADER_DEFAULT\" == /mnt/data/* ]]"
+assert "outer writer default is NOT /var/run tmpfs" "[[ \"$OWRITER_DEFAULT\" != /var/run/* ]]"
+assert "outer reader default is NOT /var/run tmpfs" "[[ \"$OREADER_DEFAULT\" != /var/run/* ]]"
+assert "outer writer + reader defaults MATCH" "[[ \"$OWRITER_DEFAULT\" == \"$OREADER_DEFAULT\" ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
