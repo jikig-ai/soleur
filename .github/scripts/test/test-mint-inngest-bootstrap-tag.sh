@@ -387,7 +387,7 @@ a_annotated() {
   head=$(git -C "$F_REPO" rev-parse HEAD)
   a_eq "$id:annotated" "$(git -C "$F_ORIGIN" cat-file -t "refs/tags/$t" 2>/dev/null)" tag
   a_eq "$id:peels-to-head" "$(git -C "$F_ORIGIN" rev-parse -q --verify "refs/tags/$t^{commit}" 2>/dev/null)" "$head"
-  if git -C "$F_ORIGIN" cat-file -p "refs/tags/$t" 2>/dev/null | grep -qE '^tagger github-actions\[bot\] <41898282\+github-actions\[bot\]@users\.noreply\.github\.com> '; then
+  if git -C "$F_ORIGIN" cat-file -p "refs/tags/$t" 2>/dev/null | grep -cE >/dev/null '^tagger github-actions\[bot\] <41898282\+github-actions\[bot\]@users\.noreply\.github\.com> '; then
     pass "$id:tagger"
   else
     fail "$id:tagger" "tag $t is not tagged by github-actions[bot]"

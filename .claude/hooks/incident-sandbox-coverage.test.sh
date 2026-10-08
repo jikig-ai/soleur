@@ -424,7 +424,7 @@ while IFS= read -r cfg; do
     # the import line, by a `//` comment naming it, or by the very sentence above explaining it
     # (cq-assert-anchor-not-bare-token). A preload that imports the helper and never calls it is
     # exactly the shape this arm must not credit.
-    if _strip_line_comments "$tp" | grep -qE 'ensureIncidentSandbox[[:space:]]*\(' 2>/dev/null; then
+    if _strip_line_comments "$tp" | grep -cE >/dev/null 'ensureIncidentSandbox[[:space:]]*\(' 2>/dev/null; then
       COVERED_ROOTS+=("$d"); break
     fi
   done < <(grep -hoE '(preload|globalSetup)[[:space:]]*[:=][[:space:]]*\[[^]]*\]' "$REPO/$cfg" 2>/dev/null \
@@ -616,7 +616,7 @@ _tc_sb="$(printf '%s' "$_tc_out" | sed -n 's/^SB=//p')"
 
 verdict "$([ "$_tc_rc" -eq 0 ] && echo 0 || echo 1)" \
   "composing over a prior trap with a single quote exits 0 (got rc=$_tc_rc)"
-verdict "$(printf '%s' "$_tc_out" | grep -q 'prior-ran' && echo 0 || echo 1)" \
+verdict "$(printf '%s' "$_tc_out" | grep -c >/dev/null 'prior-ran' && echo 0 || echo 1)" \
   "the PRIOR trap still runs after composition (not clobbered)"
 verdict "$([ -n "$_tc_sb" ] && [ ! -d "$_tc_sb" ] && echo 0 || echo 1)" \
   "the sandbox is actually REMOVED — a trap that fails to parse never runs, and leaks it"
