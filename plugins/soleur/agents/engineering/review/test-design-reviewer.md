@@ -71,7 +71,7 @@ For each, provide:
 
 Note positive patterns worth keeping and anti-patterns to address across the suite.
 
-**Pyramid verdict block** (defined under `## Pyramid & Fast-Feedback Check` below): emit a `### Pyramid` section — one row per added test file (layer · signals · verdict · confidence). When the diff adds no test files, emit the section stating `no added test files` — its absence must never be ambiguous with a skipped check.
+**Pyramid verdict block** (defined under `## Pyramid & Fast-Feedback Check` below): emit a `### Pyramid` section — one row per added or layer-changed test file (a file whose added/modified cases move it to a new layer counts) — layer · signals · verdict · confidence. When the diff touches no test files, emit the section stating `no added test files` — its absence must never be ambiguous with a skipped check.
 
 When the test asserts on the **side effect** of a setState wrapper (e.g., `localStorage`, network call, log emission, persisted db row) AND a **public DOM contract** is available (`aria-label`, `aria-pressed`, `data-*`, `role`, visible text), prefer the DOM contract. The wrapper's guard logic (same-value short-circuits, throttling, debouncing, error-swallowing fallbacks) can desynchronize the side effect from the state transition under StrictMode double-invocation or framework upgrades, producing assertion failures even when the user-facing behavior is correct. The DOM contract is what the user (and screen readers, and agents) actually perceives. See `knowledge-base/project/learnings/2026-05-06-test-public-dom-contract-not-setstate-side-effects.md`.
 
@@ -85,13 +85,13 @@ When a diff adds or modifies test files, classify each added test file into a py
 
 ### Layer classification
 
-Classify by path first, then framework/API signals, then cost signals — path and framework evidence outranks cost-signal inference. When path signals match more than one row, the most specific pattern wins (`*.integration.test.*` beats `test/`). Signal lists are NON-exhaustive — absence of a listed framework is not unit evidence; classify on the strongest available signal and lower confidence when the list is silent. `*.spec.*` alone is ambiguous (it is the default unit suffix in some frameworks — Angular/Karma, NestJS/Jest): treat it as e2e only alongside a browser-framework signal or an `e2e/` path.
+Classify by path first, then framework/API signals, then cost signals — path and framework evidence outranks cost-signal inference. When path signals match more than one row, the most specific pattern wins (`*.integration.test.*` beats `test/`; a named fixture dir like `apps/web-platform/test/rls-fuzz/` beats its parent `test/`). Signal lists are NON-exhaustive — absence of a listed framework is not unit evidence; classify on the strongest available signal and lower confidence when the list is silent. `*.spec.*` alone is ambiguous (it is the default unit suffix in some frameworks — Angular/Karma, NestJS/Jest): treat it as e2e only alongside a browser-framework signal or an `e2e/` path.
 
 | Layer | Path signals | Framework/API signals | Cost signals |
 |-------|--------------|----------------|--------------|
-| **unit** | `*.test.*` under `test/` dirs (this repo: `apps/web-platform/test/` — NOT flat; subdirectory nesting like `rls-fuzz/` or `api/` does not change the layer), `__tests__/`, `test_*.py`, `*.test.sh` | vitest / jest / `bun:test` / pytest, with deps mocked or in-memory | none — pure assertions, sub-second |
+| **unit** | `*.test.*` under `test/` dirs (this repo: `apps/web-platform/test/` — NOT flat; subdirectory nesting like `api/` does not change the layer — but a named fixture dir such as `rls-fuzz/` is more specific and wins), `__tests__/`, `test_*.py`, `*.test.sh` | vitest / jest / `bun:test` / pytest, with deps mocked or in-memory | none — pure assertions, sub-second |
 | **integration** | `*.integration.test.*`, db/service fixture dirs (this repo: `apps/web-platform/test/rls-fuzz/`) | real client imports (supabase / pg / redis), testcontainers, a booted local server | real DB or service boot; no browser |
-| **e2e** | a dedicated `e2e/` directory (this repo: `apps/web-platform/e2e/`) OR `*.e2e.*` file extensions | `playwright` / `@playwright/test`, `cypress`/`cy.`, `puppeteer`, `webdriverio`, `selenium`, `testcafe`; `page.goto`, `browser.newPage`, `cy.visit`, `browser.url` | real browser or full server boot, external network, multi-second fixed waits |
+| **e2e** | a dedicated `e2e/` directory (this repo: `apps/web-platform/e2e/`) OR `*.e2e*` / `*.cy.*` file extensions | `playwright` / `@playwright/test`, `cypress`/`cy.visit`, `puppeteer`, `webdriverio`, `selenium`, `testcafe`; `page.goto`, `browser.newPage`, `browser.url` | real browser or full server boot, external network, multi-second fixed waits |
 
 ### Justification marker
 
@@ -100,18 +100,19 @@ An e2e-layer test is justified when EITHER of the following is present — check
 - a `pyramid-justified: <reason>` comment in the added test file, OR
 - a `## Test Pyramid` block in the PR body (the bulk form — one block covers every added file in the diff).
 
-Fetch the PR body before ruling absence — `gh pr view <N> --json body` (or the body handed to you in the spawn prompt); `gh pr diff` does not carry it. The `## Test Pyramid` block must appear in the PR body proper — inside a fenced code block it does not count, and an empty heading justifies nothing. In a branch-mode review with no PR body, only the file marker exists — say so when you could not check a body, and degrade "confirmed absence" accordingly. The marker is an affordance, not proof: weigh whether the stated reason plausibly covers EACH exempted file, and list exempted files in the `### Pyramid` table with verdict `PASS (justified)` rather than omitting them.
+Fetch the PR body before ruling absence — `gh pr view <N> --json body` (or the body handed to you in the spawn prompt); `gh pr diff` does not carry it. The `## Test Pyramid` block must appear in the PR body proper — inside a fenced code block it does not count, and an empty heading justifies nothing. In a branch-mode review with no PR body, only the file marker exists — say so when you could not check a body, and degrade "confirmed absence" accordingly: a marker-absence WARN raised branch-side is blocking-until-resolved, because the PR-time review re-checks the body sink. The marker is an affordance, not proof: weigh whether the stated reason plausibly covers EACH exempted file, and list exempted files in the `### Pyramid` table with verdict `PASS (justified)` rather than omitting them.
 
 ### Verdict rules
 
 - **FAIL** — the diff adds an e2e-layer test with no justification marker.
-- **WARN** — a new test carries fast-feedback cost signals (`waitForTimeout` / `sleep` / `cy.wait` / `browser.pause` / fixed delays, real browser or server boots, external network) with no stated necessity. A "stated necessity" is any explicit reason in code comments or the PR body — WARN fires only when a cost signal carries NO stated reason at all. A layer's defining signal is not a WARN signal at that layer: a real DB/service boot is the defining characteristic of an integration test — flag only signals inappropriate to the classified layer.
+- **WARN** — a new test carries fast-feedback cost signals (`waitForTimeout` / `sleep` / `cy.wait` / `browser.pause` / fixed delays, real browser or server boots, external network) with no stated necessity. A "stated necessity" is any explicit reason in code comments or the PR body — WARN fires only when a cost signal carries NO stated reason at all. A layer's defining signal is not a WARN signal at that layer — a real DB/service boot is the defining characteristic of an integration test, a real browser boot the defining characteristic of an e2e test — but external network access and multi-second fixed waits are never a layer's defining signal: they are flaggable at every layer.
+- **WARN** — a `pyramid-justified:` marker (or `## Test Pyramid` block reference) is deleted or weakened in a modified e2e test file — justification removed while the test remains.
 - **WARN** — coverage achievable at a lower layer is exercised only at e2e (pyramid inversion — e.g., pure validation logic asserted through a browser flow).
 - Ambiguous classification degrades to **WARN**, never **FAIL** — a FAIL requires BOTH a confident e2e-layer classification AND the confirmed absence of a marker.
 
 ### Pyramid
 
-Report these findings in a separate `### Pyramid` verdict block — never fold them into the weighted 8-property score above; the score stays Farley-only. Emit one row per added test file (see `## Output Format` for the no-added-files case):
+Report these findings in a separate `### Pyramid` verdict block — never fold them into the weighted 8-property score above; the score stays Farley-only. Emit one row per added or layer-changed test file (see `## Output Format` for the no-added-files case):
 
 | File | Layer | Signals | Verdict | Confidence |
 |------|-------|---------|---------|------------|

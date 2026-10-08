@@ -30,7 +30,7 @@ Adds `apps/web-platform/test/order-total.test.ts`.
 
 | File | Layer | Signals | Verdict | Confidence |
 |------|-------|---------|---------|------------|
-| `apps/web-platform/test/order-total.test.ts` | unit | flat `test/` dir, `vitest` import, pure function, no I/O | PASS | high |
+| `apps/web-platform/test/order-total.test.ts` | unit | `*.test.ts` under `test/` dir, `vitest` import, pure function, no I/O | PASS | high |
 
 **Verdict: PASS** — unit-layer, no e2e or slow-cost signals; no justification
 required at this layer.

@@ -13,7 +13,7 @@
 #     e2e or slow-cost signals).
 #   - DRIFT: `test-design-reviewer.md` still defines the marker token, the
 #     layer/verdict vocabulary, and the FAIL rule the fixtures key on — and
-#     the three restatement sites (review/SKILL.md, review.workflow.js,
+#     the four restatement sites (review/SKILL.md, review.workflow.js,
 #     plan-issue-templates.md, work/SKILL.md) still carry the contract.
 #
 # Chokepoint: every assertion flows through the helpers in test-helpers.sh.
@@ -81,7 +81,7 @@ found() { grep -qE "$2" "$1" && printf '1' || printf '0'; }
 shopt -s nullglob
 all_entries=( "$FIX_DIR"/* )
 diff_entries=( "$FIX_DIR"/*.diff )
-hidden_entries=( "$FIX_DIR"/.[!.]* )
+hidden_entries=( "$FIX_DIR"/.[!.]* "$FIX_DIR"/..?* )
 shopt -u nullglob
 cases=$((cases + 1)); assert_eq "2" "${#all_entries[@]}" "fixture census: exactly 2 entries under fixtures/test-pyramid/"
 cases=$((cases + 1)); assert_eq "2" "${#diff_entries[@]}" "fixture census: exactly 2 .diff files under fixtures/test-pyramid/"
@@ -143,6 +143,8 @@ cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" '`## Test Pyramid`')" "age
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'no measured runtime')" "agent: review-time boundary line present (measured budgets belong to local-speed work)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'gh pr view <N> --json body')" "agent: PR-body fetch instruction present (marker is checkable)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'waitForTimeout')" "agent: cost-signal vocabulary (waitForTimeout) present"
+cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'PASS \(justified\)')" "agent: 'PASS (justified)' verdict token present (exempted files stay visible)"
+cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'no added test files')" "agent: no-added-files emission string present"
 
 # ---------------------------------------------------------------------------
 # DRIFT PIN — restatement sites still carry the contract (the three places a
@@ -150,13 +152,14 @@ cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'waitForTimeout')" "agent:
 # instruction surfaces that warn authors upstream).
 # ---------------------------------------------------------------------------
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" 'pyramid-justified')" "review/SKILL.md: agent-13 text still names the marker"
-cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" '## Test Pyramid')" "review/SKILL.md: PR-body disjunct preserved in restatement"
-cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" '\*\.e2e\.\*')" "review/SKILL.md: e2e conventions in the spawn trigger list"
+cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" 'or `## Test Pyramid` PR-body block')" "review/SKILL.md: PR-body disjunct shape preserved in restatement"
+cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" '\*\.e2e\*')" "review/SKILL.md: e2e conventions in the spawn trigger list"
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" 'pyramid-justified')" "review.workflow.js: lens still names the marker"
-cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" '## Test Pyramid')" "review.workflow.js: PR-body disjunct preserved in lens"
-cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" '\\.e2e\\.')" "review.workflow.js: hasTests regex covers e2e conventions"
-cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'pyramid layer')" "plan-issue-templates.md: all 3 Test Scenarios blocks name the layer"
-cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'pyramid-justified')" "plan-issue-templates.md: all 3 blocks name the marker"
+cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" "'## Test Pyramid' PR-body block")" "review.workflow.js: PR-body disjunct shape preserved in lens"
+cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" '\\.e2e')" "review.workflow.js: hasTests regex covers e2e conventions"
+tpl_blocks="$(awk '/^## Test Scenarios/{inblock=1; blocks++} /^## / && !/^## Test Scenarios/{inblock=0} inblock && /pyramid-justified/{seen[blocks]=1} END{n=0; for(i=1;i<=blocks;i++) if(seen[i]) n++; print blocks":"n}' "$PLAN_TPL")"
+cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" '^## Test Scenarios')" "plan-issue-templates.md: exactly 3 Test Scenarios blocks (a 4th unlabeled block reds)"
+cases=$((cases + 1)); assert_eq "3:3" "$tpl_blocks" "plan-issue-templates.md: EVERY Test Scenarios block carries the marker line (per-block, not just count)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'RED\(unit\|integration\|e2e\)')" "work/SKILL.md: RED-task layer naming present"
 cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'pyramid-justified')" "work/SKILL.md: e2e marker warning present"
 
@@ -173,7 +176,7 @@ fi
 
 # ANTI-VACUITY FLOOR. Set AT the running count, never below it; reads `cases`,
 # the counter no helper can move.
-MIN_ASSERTIONS=47
+MIN_ASSERTIONS=49
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2

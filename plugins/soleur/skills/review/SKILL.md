@@ -306,7 +306,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - PR includes files matching `*_test.rb`, `*_spec.rb`
 - PR includes files matching `test_*.py`, `*_test.py`
-- PR includes files matching `*.test.ts`, `*.test.js`, `*.spec.ts`, `*.spec.js`, `*.e2e.*`, `*.cy.*`
+- PR includes files matching `*.test.ts`, `*.test.js`, `*.spec.ts`, `*.spec.js`, `*.e2e*`, `*.cy.*`
 - PR includes files matching `*_test.go`
 - PR includes files matching `*_test.swift`, `*Tests.swift`
 - PR includes files in `__tests__/` or `spec/` or `test/` or `e2e/` directories

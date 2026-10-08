@@ -149,7 +149,7 @@ const MECHANICAL_SURFACE_RE = {
   // for antiSlop, a required-fix brand gate). bashOnly has no path-presence
   // equivalent (it quantifies over ALL files) — it stays model-judged.
   hasMigration: /(\/migrations\/|\/migrate\/|\.sql$)/,
-  hasTests: /(\.test\.|\.spec\.|_test\.|_spec\.|(^|\/)test_[^/]*\.py$|__tests__\/|(^|\/)tests?\/|(^|\/)spec\/|Tests\.swift$|\.e2e\.|(^|\/)e2e\/|\.cy\.)/,
+  hasTests: /(\.test\.|\.spec\.|_test\.|_spec\.|(^|\/)test_[^/]*\.py$|__tests__\/|(^|\/)tests?\/|(^|\/)spec\/|Tests\.swift$|\.e2e|(^|\/)e2e\/|\.cy\.)/,
   antiSlop: /(apps\/web-platform\/(app|components)\/.*\.(tsx|jsx|css)$|apps\/web-platform\/server\/.*\.(ts|tsx)$|plugins\/soleur\/docs\/.*\.(njk|css)$)/,
 }
 function mechanicalSurfaces(files = []) {
@@ -201,7 +201,7 @@ const CLASSIFY_SCHEMA = {
         isRailsApp: { type: 'boolean', description: 'repo root has BOTH Gemfile and config/routes.rb' },
         hasRubyChange: { type: 'boolean', description: 'diff changes any *.rb file' },
         hasMigration: { type: 'boolean', description: 'diff touches db/migrate/*.rb or supabase/migrations/*' },
-        hasTests: { type: 'boolean', description: 'diff touches a test/spec file (*.test.*, *.e2e.*, *.cy.*, *_spec.rb, test_*.py, *_test.go, __tests__/…, test/ spec/ e2e/ dirs)' },
+        hasTests: { type: 'boolean', description: 'diff touches a test/spec file (*.test.*, *.spec.*, *.e2e*, *.cy.*, *_spec.rb, test_*.py, *_test.py, *_test.go, *Tests.swift, __tests__/…, test/ spec/ e2e/ dirs, or a file importing a browser-test framework)' },
         hasSource: { type: 'boolean' },
         bashOnly: { type: 'boolean', description: 'every changed source file is .sh/.bash/.zsh (semgrep cannot analyze; use shellcheck)' },
         gdprMatch: { type: 'boolean', description: 'a changed path matches the gdpr-gate canonical path globs (regulated-data surfaces)' },
@@ -288,7 +288,7 @@ Also compute the conditional triggers (booleans) — inspect the repo and the di
 - isRailsApp: repo root has BOTH Gemfile and config/routes.rb.
 - hasRubyChange: diff changes any *.rb file.
 - hasMigration: diff touches db/migrate/*.rb OR supabase/migrations/*.
-- hasTests: diff touches any test/spec file (*.test.ts/js, *.spec.ts/js, *.e2e.*, *.cy.*, *_spec.rb, test_*.py, *_test.py, *_test.go, *Tests.swift, or files under __tests__/ test/ spec/ e2e/).
+- hasTests: diff touches any test/spec file (*.test.ts/js, *.spec.ts/js, *.e2e*, *.cy.*, *_spec.rb, test_*.py, *_test.py, *_test.go, *Tests.swift, or files under __tests__/ test/ spec/ e2e/, or a file importing a browser-test framework — playwright/cypress/puppeteer/webdriverio/selenium).
 - bashOnly: hasSource is true AND every changed source file is .sh/.bash/.zsh.
 - gdprMatch: any changed path looks like a regulated-data surface (auth, billing, PII, consent, user/profile/account data models, supabase migrations on personal data). Be conservative — only true on a clear match.
 - antiSlop: any changed path matches apps/web-platform/(app|components)/*.{tsx,jsx,css}, apps/web-platform/server/*.{ts,tsx}, or plugins/soleur/docs/*.{njk,css}.
