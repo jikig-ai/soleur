@@ -63,3 +63,13 @@ data lines.
 - The unbounded-producer screen reads the text before the match on this line only. It now walks every continuation line above it,
   refuses a loop- or group-headed pipe (`done | grep -q`), and knows `tail -n 5 -f`, `--follow`, `logs -f`, `watch`, `ping`,
   `dmesg -w` and `/usr/bin/yes`. A converted pipe whose producer never ends hangs instead of taking SIGPIPE.
+
+## Fix-round additions
+
+- The closer rule above shipped dead for `}` and `)`: it was written `(done|fi|esac|\}|\))\b`, and `\b` needs a word character on one side, so a
+  head cut at the pipe (`} `, `) `) never matched. Only `done` and `fi` were refused. Use `(?!\w)` after an alternation that mixes words and
+  punctuation, and give every alternative its own refusal fixture row (a pass on `done` says nothing about `}`). The same fix round added `;` to
+  the unbounded-word tail (`{ yes; } | grep -q`), `until` and `for ((`, and bounded the `tail`/`logs` gaps to 200 characters so a long line
+  cannot make the screen quadratic.
+- Each refusal fixture row needs a bounded twin that must still convert (`{ echo a; echo b; } | grep -q a`), or a screen that refuses every
+  group passes the set.

@@ -19,6 +19,9 @@ Two modes, one transform function:
           that the author converted by hand, still equals transform(removed) and passes, so classification is held
           by the printed queue, the demonstration-suspect rule and a per-suite pair run.
 
+This tool EXECUTES the guard's assignment lines (bash `eval`, in `load_guard`), so run it only against a checkout whose guard
+you would run anyway.
+
 Run `apply` BEFORE editing the guard's SWEEP_DEFERRALS: it reads the checkout's guard, and a path whose row was
 already deleted is printed as `unowned` rather than converted.
 
@@ -48,10 +51,11 @@ import tempfile
 GUARD = ".claude/hooks/grep-q-pipe-guard.test.sh"
 SUSPECT_RE = re.compile(r"sigpipe|epipe|false-?fail|broken pipe", re.I)
 UNBOUNDED_RE = re.compile(
-    r"(^|[^\w.-])(yes|journalctl|ncat|nc|socat|sleep|timeout|inotifywait|watch|ping|dmesg\s+-[A-Za-z]*w)(\s|\)|$)"
-    r"|tail\b[^|]*(\s-[A-Za-z]*[fF]|--follow)|\blogs\s+[^|]*(-f|--follow)|while\s+(true|:)|/dev/(zero|urandom|random)"
+    r"(^|[^\w.-])(yes|journalctl|ncat|nc|socat|sleep|timeout|inotifywait|watch|ping|dmesg\s+-[A-Za-z]*w)(\s|\)|;|$)"
+    r"|tail\b[^|]{0,200}(\s-[A-Za-z]*[fF]|--follow)|\blogs\s+[^|]{0,200}(-f|--follow)|while\s+(true|:)|\buntil\b|for\s*\(\("
+    r"|/dev/(zero|urandom|random)"
 )
-CLOSER_HEAD_RE = re.compile(r"^\s*(done|fi|esac|\}|\))\b")
+CLOSER_HEAD_RE = re.compile(r"^\s*(done|fi|esac|\}|\))(?!\w)")   # (?!\w), not \b: after `}` or `)` there is no word boundary
 SAFE_LETTERS = set("iEFGwxvsazIyP")   # letters whose exit-status behaviour -c leaves unchanged
 OPERAND_LETTERS = set("efABCdD")      # letters that take an operand (the rest of the token, or the next token)
 
@@ -59,6 +63,11 @@ OPERAND_LETTERS = set("efABCdD")      # letters that take an operand (the rest o
 def fpath(root, path):
     """Filesystem path for a repo-relative path held as a latin-1 string (git's output is decoded byte for byte, so re-encode before opening)."""
     return os.path.join(os.fsencode(root), path.encode("latin-1"))
+
+
+def latin1_arg(a):
+    """A command-line path as the latin-1 string the population holds (argv is decoded as UTF-8; git's bytes are held byte for byte)."""
+    return os.fsencode(a).decode("latin-1")
 
 
 def die(code, msg):
@@ -431,7 +440,7 @@ def select_rows(args, globs, rows):
     modes = row_modes(rows)
     if args.write:
         if not args.row:
-            die(2, "usage: --write needs at least one --row (one slice is one deferral row; quote the glob so the shell leaves it alone). "
+            die(2, "usage: --write needs at least one --row (name every row the slice converts; slices that share a row split it with --exclude; quote the glob so the shell leaves it alone). "
                    "Valid rows: " + " ".join("'%s'" % g for g in globs))
         exact = [g for g in args.row if modes.get(g) == "="]
         if exact:
@@ -453,7 +462,9 @@ def do_apply(args):
     total_lines = sum(len(v) for v in pop.values())
     if total_lines == 0:
         die(3, "UNRESOLVED: the guard's pattern found no site under %s; nothing was measured" % root)
-    reviewed = set(args.reviewed_suspect)
+    reviewed = set(latin1_arg(a) for a in args.reviewed_suspect)
+    excludes = [latin1_arg(a) for a in args.exclude]
+    unused = {"--exclude": set(excludes), "--reviewed-suspect": set(reviewed)}
     per_row = {}
     queue = []
     changed_lines = 0
@@ -474,8 +485,13 @@ def do_apply(args):
                 queue.append((path, ln, "unowned", "no-deferral-row (run apply BEFORE editing SWEEP_DEFERRALS)"))
                 bump("(none)", "unowned")
             continue
-        if row not in wanted or path in args.exclude:
+        if row not in wanted:
             continue
+        hit = [x for x in excludes if x == path or fnmatch.fnmatchcase(path, x)]
+        if hit:
+            unused["--exclude"] -= set(hit)
+            continue
+        unused["--reviewed-suspect"].discard(path)
         with open(fpath(root, path), "rb") as f:
             text = f.read().decode("latin-1")
         lines = text.split("\n")
@@ -522,6 +538,10 @@ def do_apply(args):
         if file_changed:
             changed_files += 1
             pending_writes.append((path, "\n".join(lines).encode("latin-1")))
+    for flag, left in unused.items():
+        for x in sorted(left):
+            print("WARN: %s %s matched no path in the selected rows (not a typo-proof flag: check the spelling)" % (flag, x), file=sys.stderr)
+    written = []
     if args.write:
         for path, data in pending_writes:
             full = fpath(root, path)
@@ -531,16 +551,19 @@ def do_apply(args):
                     f.write(data)
                 shutil.copymode(full, tmp)
                 os.replace(tmp, full)
+                written.append(path)
             except BaseException:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+                print("WRITE FAILED on %s after %d of %d files; already written (revert with git restore): %s"
+                      % (path, len(written), len(pending_writes), " ".join(written) or "none"), file=sys.stderr)
                 raise
     print("POPULATION: %d lines in %d files (the guard's own pattern, comment and marker lines dropped)" % (total_lines, len(pop)))
     for g in globs + ["(none)"]:
         if (g in wanted or g == "(none)") and g in per_row:
             parts = " ".join("%s=%d" % (k, v) for k, v in sorted(per_row[g].items()))
-            print("ROW %s %s" % (g, parts))
-    print("SUMMARY %s" % (" ".join("%s=%d" % (k, v) for k, v in sorted(tiers.items())) or "none"))
+            print("ROW %s (hits) %s" % (g, parts))
+    print("SUMMARY (hits) %s" % (" ".join("%s=%d" % (k, v) for k, v in sorted(tiers.items())) or "none"))
     for path, ln, tier, reason in queue:
         print("QUEUE %s:%d:%s:%s" % (path, ln, tier, reason))
     verb = "CHANGED" if args.write else "WOULD-CHANGE"
@@ -743,7 +766,7 @@ def main():
         p.add_argument("--guard", default=GUARD, help="FALLBACK guard path, used only when --root has no %s of its own" % GUARD)
         if name == "apply":
             p.add_argument("--row", action="append", default=[], help="restrict to this SWEEP_DEFERRALS glob, quoted (repeatable); required with --write")
-            p.add_argument("--exclude", action="append", default=[], help="exact path to leave alone (repeatable)")
+            p.add_argument("--exclude", action="append", default=[], help="path or fnmatch glob to leave alone (repeatable); warns when it matches nothing")
             p.add_argument("--write", action="store_true", help="edit the files (default: dry run); never touches a file-exact `=` row")
             p.add_argument("--reviewed-suspect", action="append", default=[], help="a demonstration-suspect file a human has read (repeatable)")
         else:

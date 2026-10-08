@@ -1021,6 +1021,7 @@ echo "$x" | grep -qe 'p'
 echo "$x" | LC_ALL=C grep -qv 'p' 2>/dev/null
 if printf '%s\n' "$x" | grep -q p; then :; fi
 CM_C
+chmod 755 "$cmr/scripts/c.test.sh"
 cat > "$probe/c.want" <<'CM_CW'
 #!/usr/bin/env bash
 set -o pipefail
@@ -1047,6 +1048,25 @@ tail -n 5 -f /tmp/log | grep -q ready
 yes \
   | tr a b | grep -q a
 echo "$x" | grep -qq p
+echo "$x" | grep --quiet --silent p
+{
+  echo a
+  echo b
+} | grep -q a
+(
+  echo a
+) | grep -q a
+if true; then
+  echo a
+fi | grep -q a
+tail --follow /tmp/log | grep -q ready
+docker logs -f web | grep -q ready
+watch -n1 date | grep -q 1
+ping -c9 host | grep -q ttl
+dmesg -w | grep -q err
+until false; do echo a; done | grep -q a
+for ((;;)); do echo a; done | grep -q a
+{ yes; } | grep -q y
 echo "$x" | grep -q p 1> out
 echo "$x" | grep -q p &> out
 echo "$x" | grep -ql p
@@ -1083,6 +1103,8 @@ printf '%s\n' "$x" \
 true && echo "$x" | grep -q chain && echo yes
 r="$(echo "$x" | grep -q dq && echo y)"
 echo "$a" | grep -q one && echo "$b" | grep -q two
+{ echo a; echo b; } | grep -q a
+printf '%s' "Å" | grep -q nel
 CM_T
 cat > "$probe/t.want" <<'CM_TW'
 echo "$x" | grep -c >/dev/null p 2>/dev/null
@@ -1095,6 +1117,8 @@ printf '%s\n' "$x" \
 true && echo "$x" | grep -c >/dev/null chain && echo yes
 r="$(echo "$x" | grep -c >/dev/null dq && echo y)"
 echo "$a" | grep -c >/dev/null one && echo "$b" | grep -c >/dev/null two
+{ echo a; echo b; } | grep -c >/dev/null a
+printf '%s' "Å" | grep -c >/dev/null nel
 CM_TW
 printf '%s\n' '# a comment that names SIGPIPE' 'echo "$x" | grep -q p' > "$cmr/scripts/s.test.sh"
 printf '%s\n' '# a comment that names EPIPE' 'echo "$x" | grep -q p' > "$cmr/scripts/s2.test.sh"
@@ -1105,7 +1129,7 @@ cp "$cmr/scripts/s.test.sh" "$probe/s.want"
 cp -r "$cmr/scripts" "$probe/cm0"
 cm_dry="$(_cm apply --root "$cmr" 2>&1)" && cm_dry_rc=0 || cm_dry_rc=$?
 cm_untouched=0; diff -r "$probe/cm0" "$cmr/scripts" >/dev/null 2>&1 && cm_untouched=1
-cm_nowrite_rc=0; _cm apply --root "$cmr" --write >/dev/null 2>&1 || cm_nowrite_rc=$?
+cm_nowrite_rc=0; cm_nowrite_out="$(_cm apply --root "$cmr" --write 2>&1)" || cm_nowrite_rc=$?
 cm_nowrite_same=0; diff -r "$probe/cm0" "$cmr/scripts" >/dev/null 2>&1 && cm_nowrite_same=1
 cm_write="$(_cm apply --root "$cmr" --write --row '*' --reviewed-suspect scripts/s.test.sh 2>&1)" && cm_write_rc=0 || cm_write_rc=$?
 cm_again="$(_cm apply --root "$cmr" --write --row '*' --reviewed-suspect scripts/s.test.sh 2>&1)" && cm_again_rc=0 || cm_again_rc=$?
@@ -1114,13 +1138,15 @@ printf '%s\n' '# a comment that names SIGPIPE' 'echo "$x" | grep -c >/dev/null p
   || sweep_probe_fail+=("codemod-dry-run: the default dry run exited ${cm_dry_rc:-<err>} or modified a fixture (it must print WOULD-CHANGE and write nothing)")
 [[ "$cm_write_rc" == 0 ]] && cmp -s "$cmr/scripts/c.test.sh" "$probe/c.want" \
   || sweep_probe_fail+=("codemod-clusters: --write did not turn the control fixture (-qE, -iEq, --quiet, -F -x -q --, -qe, a -qv cluster behind an env prefix, an if-condition) into its expected -c >/dev/null form, or exited ${cm_write_rc:-<err>}: ${cm_write:0:300}")
-[[ "$cm_nowrite_rc" == 2 && "$cm_nowrite_same" == 1 ]] \
-  || sweep_probe_fail+=("codemod-write-needs-row: --write without --row exited ${cm_nowrite_rc:-<err>} and left the tree ${cm_nowrite_same:-<err>} (want rc 2 and an UNCHANGED tree, 1: a slice is one deferral row)")
+[[ "$cm_nowrite_rc" == 2 && "$cm_nowrite_same" == 1 && "$cm_nowrite_out" == *"--write needs at least one --row"* ]] \
+  || sweep_probe_fail+=("codemod-write-needs-row: --write without --row exited ${cm_nowrite_rc:-<err>} and left the tree ${cm_nowrite_same:-<err>} (want rc 2, an UNCHANGED tree, 1, and the message '--write needs at least one --row'): ${cm_nowrite_out:0:200}")
+[[ "$cm_write_rc" == 0 && -x "$cmr/scripts/c.test.sh" && ! -x "$cmr/scripts/t.test.sh" ]] \
+  || sweep_probe_fail+=("codemod-mode: a converted 755 file lost its executable bit, or a converted 644 file gained one (the temp-file replace must copy the mode)")
 cmp -s "$cmr/scripts/t.test.sh" "$probe/t.want" \
   || sweep_probe_fail+=("codemod-twins: the must-PASS twins (2>/dev/null is not stdout, a here-string is not a heredoc, << in arithmetic, > inside a quoted pattern, a leading-pipe continuation, a && chain, \$(...) inside double quotes, two hits on one line) did not all convert")
 cm_queue="$({ grep '^QUEUE scripts/r.test.sh:' <<<"$cm_dry" || true; } | cut -d: -f3,4 | LC_ALL=C sort | tr '\n' ' ')"
-[[ "$cm_queue" == "H-m:-m H-m:-m X:letter-l X:loop-or-group-producer X:operand-q X:repeated-q X:span-mismatch X:stdout-redirected X:stdout-redirected X:stdout-redirected X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer data:heredoc data:heredoc data:heredoc data:heredoc data:quoted " ]] && cmp -s "$cmr/scripts/r.test.sh" "$probe/r.want" \
-  || sweep_probe_fail+=("codemod-refusals: the refusal fixture queued [${cm_queue:-<none>}] (want -eq, -m, -qm1, -qq, -ql, a glued -q\$opt, four unbounded producers incl. a multi-line one, a loop-headed pipe, three redirected stdouts, a quoted hook input and four heredoc bodies incl. a near-miss delimiter; all unchanged)")
+[[ "$cm_queue" == "H-m:-m H-m:-m X:letter-l X:loop-or-group-producer X:loop-or-group-producer X:loop-or-group-producer X:loop-or-group-producer X:operand-q X:repeated-q X:repeated-quiet X:span-mismatch X:stdout-redirected X:stdout-redirected X:stdout-redirected X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer data:heredoc data:heredoc data:heredoc data:heredoc data:quoted " ]] && cmp -s "$cmr/scripts/r.test.sh" "$probe/r.want" \
+  || sweep_probe_fail+=("codemod-refusals: the refusal fixture queued [${cm_queue:-<none>}] (want -eq, -m, -qm1, -qq, --quiet --silent, -ql, a glued -q\$opt, twelve unbounded producers (yes, tail -f and --follow, logs -f, watch, ping, dmesg -w, until, for ((, a multi-line one, `{ yes; }`), four loop/group-headed pipes (done, }, ), fi), three redirected stdouts, a quoted hook input and four heredoc bodies incl. a near-miss delimiter; all unchanged)")
 cm_susp="$({ grep -E '^QUEUE scripts/s[0-9]*\.test\.sh:' <<<"$cm_dry" || true; } | cut -d: -f1,3,4 | LC_ALL=C sort | tr '\n' ' ')"
 cm_uns="$({ grep '^QUEUE scripts/u.test.sh:' <<<"$cm_dry" || true; } | cut -d: -f3,4)"
 [[ "$cm_susp" == "QUEUE scripts/s.test.sh:suspect:file-names-sigpipe QUEUE scripts/s2.test.sh:suspect:file-names-sigpipe QUEUE scripts/s3.test.sh:suspect:file-names-sigpipe QUEUE scripts/s4.test.sh:suspect:file-names-sigpipe " ]] \
@@ -1134,9 +1160,23 @@ sed -i "s/^  '\* | <= | 9999 | #1'/  'tests\/* | <= | 9 | #1'/" "$cmu/.claude/ho
 echo 'echo "$x" | grep -q p' > "$cmu/scripts/o.test.sh"
 cm_own="$(_cm apply --root "$cmu" 2>&1 || true)"
 cmz="$probe/cmz"; mkdir -p "$cmz/scripts"; _mkguard "$cmz"; echo true > "$cmz/scripts/e.test.sh"
-cm_empty_rc=0; _cm apply --root "$cmz" >/dev/null 2>&1 || cm_empty_rc=$?
-[[ "$cm_own" == *"QUEUE scripts/o.test.sh:1:unowned:no-deferral-row"* && "$cm_empty_rc" == 3 ]] \
-  || sweep_probe_fail+=("codemod-unowned-empty: a path under no row queued [$(grep -o 'QUEUE scripts/o.test.sh[^ ]*' <<<"$cm_own" || true)] (want unowned) and an empty population exited ${cm_empty_rc:-<err>} (want 3)")
+cm_empty_rc=0; cm_empty_out="$(_cm apply --root "$cmz" 2>&1)" || cm_empty_rc=$?
+[[ "$cm_own" == *"QUEUE scripts/o.test.sh:1:unowned:no-deferral-row"* && "$cm_empty_rc" == 3 && "$cm_empty_out" == *"found no site"* ]] \
+  || sweep_probe_fail+=("codemod-unowned-empty: a path under no row queued [$(grep -o 'QUEUE scripts/o.test.sh[^ ]*' <<<"$cm_own" || true)] (want unowned) and an empty population exited ${cm_empty_rc:-<err>} (want 3 with 'found no site'): ${cm_empty_out:0:200}")
+# a file-exact (=) row is a production carrier: --write refuses it (rc 2, tree unchanged); the same file under a <= row converts
+cme="$probe/cme"; mkdir -p "$cme/scripts"; _mkguard "$cme"
+sed -i "s/^  '\* | <= | 9999 | #1'/  'scripts\/e.test.sh | = | 1 | #1'/" "$cme/.claude/hooks/grep-q-pipe-guard.test.sh"
+echo 'echo "$x" | grep -q p' > "$cme/scripts/e.test.sh"
+cp -r "$cme/scripts" "$probe/cme0"
+cm_exact_rc=0; cm_exact_out="$(_cm apply --root "$cme" --write --row 'scripts/e.test.sh' 2>&1)" || cm_exact_rc=$?
+cm_exact_same=0; diff -r "$probe/cme0" "$cme/scripts" >/dev/null 2>&1 && cm_exact_same=1
+cml="$probe/cml"; mkdir -p "$cml/scripts"; _mkguard "$cml"
+sed -i "s/^  '\* | <= | 9999 | #1'/  'scripts\/e.test.sh | <= | 1 | #1'/" "$cml/.claude/hooks/grep-q-pipe-guard.test.sh"
+echo 'echo "$x" | grep -q p' > "$cml/scripts/e.test.sh"
+cm_loose_rc=0; _cm apply --root "$cml" --write --row 'scripts/e.test.sh' >/dev/null 2>&1 || cm_loose_rc=$?
+[[ "$cm_exact_rc" == 2 && "$cm_exact_same" == 1 && "$cm_exact_out" == *"file-exact"* && "$cm_loose_rc" == 0 ]] \
+  && cmp -s "$cml/scripts/e.test.sh" <(echo 'echo "$x" | grep -c >/dev/null p') \
+  || sweep_probe_fail+=("codemod-exact-row: --write on an '=' (file-exact) row exited ${cm_exact_rc:-<err>} with the tree unchanged ${cm_exact_same:-<err>} (want rc 2, 1, 'file-exact'), and the same file under a '<=' row exited ${cm_loose_rc:-<err>} (want 0 and a converted file): ${cm_exact_out:0:200}")
 # The tool's population equals this file's own scan on the same scratch root (the real-repo parity, 827 = 827, is read once in the PR body).
 cm_pop="$({ _cm apply --root "$sr" 2>&1 || true; } | sed -n 's/^POPULATION: \([0-9]*\) lines.*/\1/p')"
 [[ "$cm_pop" == "$sw_hits" ]] \
@@ -1186,6 +1226,7 @@ _vsetup() { # <dir>: build the fixture repo and convert it; a failure here is re
   _vrepo "$1" && _cm apply --root "$1" --write --row '*' >/dev/null 2>&1 \
     || sweep_probe_fail+=("verify-setup: could not build or convert the fixture repo $1 (the tool or git failed before any verify check ran)")
 }
+_vmut() { "$@" || sweep_probe_fail+=("verify-fixture-edit: \`$*\` failed, so the fixture it was meant to mutate is not what the checks after it assume"); }   # a failed edit is reported, never a silent suite exit
 _vrun() { # <dir> [verify args...] -> vr_rc, vr_out
   local d="$1"; shift
   vr_rc=0; vr_out="$(_cm verify --root "$d" --base HEAD "$@" 2>&1)" || vr_rc=$?
@@ -1216,7 +1257,7 @@ vr_bad_rc=0; _cm verify --root "$vr/empty" --base does-not-exist >/dev/null 2>&1
 [[ "$vr_ctl_rc" == 0 && "$vr_empty_rc" == 3 && "$vr_bad_rc" == 3 ]] \
   || sweep_probe_fail+=("verify-empty: an empty diff exited ${vr_empty_rc:-<err>} and an unknown base exited ${vr_bad_rc:-<err>} (want 3 and 3, never 0)")
 # every member is checked, not the first: v.test.sh converted cleanly, w.test.sh hand-edited and unlisted; the twin lists the hand edit exactly
-_vsetup "$vr/two"; sed -i "s/echo \"\$a\" | grep -c >\/dev\/null 'FALLBACK'/echo HAND/" "$vr/two/scripts/w.test.sh"
+_vsetup "$vr/two"; _vmut sed -i "s/echo \"\$a\" | grep -c >\/dev\/null 'FALLBACK'/echo HAND/" "$vr/two/scripts/w.test.sh"
 _vrun "$vr/two"; vr_two_rc="$vr_rc"; vr_two_out="$vr_out"
 printf '%s\n' 'scripts/w.test.sh:1:rewritten by hand' > "$vr/two.list"
 _vrun "$vr/two" --hand-edits "$vr/two.list"; vr_twin_rc="$vr_rc"; vr_twin_out="$vr_out"
@@ -1228,35 +1269,46 @@ _vrun "$vr/ok" --hand-edits "$vr/stale.list"; vr_stale_rc="$vr_rc"; vr_stale_out
 printf '%s\n' 'scripts/w.test.sh:1-2:wider than the hunk' > "$vr/wide.list"
 _vrun "$vr/two" --hand-edits "$vr/wide.list"; vr_wide_rc="$vr_rc"; vr_wide_out="$vr_out"
 # an entry that runs past the changed lines into UNCHANGED ones is caught only by the final range check (no per-line visit reaches it)
-_vsetup "$vr/edge"; sed -i "6s/.*/echo HAND/" "$vr/edge/scripts/w.test.sh"
+_vsetup "$vr/edge"; _vmut sed -i "6s/.*/echo HAND/" "$vr/edge/scripts/w.test.sh"
 printf '%s\n' 'scripts/w.test.sh:6-7:runs into the unchanged last line' > "$vr/edge.list"
 _vrun "$vr/edge" --hand-edits "$vr/edge.list"; vr_edge_rc="$vr_rc"; vr_edge_out="$vr_out"
 [[ "$vr_ctl_rc" == 0 && "$vr_stale_rc" == 1 && "$vr_stale_out" == *"stale hand-edit entry"* && "$vr_wide_rc" == 1 && "$vr_wide_out" == *"covers a line that is a plain transform"* \
    && "$vr_edge_rc" == 1 && "$vr_edge_out" == *"covers lines that are not hand edits"* ]] \
   || sweep_probe_fail+=("verify-stale: a listed edit absent from the diff exited ${vr_stale_rc:-<err>}, an over-wide entry ${vr_wide_rc:-<err>} and an entry running into unchanged lines ${vr_edge_rc:-<err>} (want 1, 1 and 1: 'stale hand-edit entry', 'covers a line that is a plain transform', 'covers lines that are not hand edits')")
 # what the base-tree swept set, the merge-base, the -z paths and the count-changing/insertion hunks each buy (every one was a silent pass before)
-_vsetup "$vr/del"; _cleangit -C "$vr/del" rm -q --cached scripts/w.test.sh; rm -f "$vr/del/scripts/w.test.sh"
+_vsetup "$vr/del"; _vmut _cleangit -C "$vr/del" rm -q --cached scripts/w.test.sh; rm -f "$vr/del/scripts/w.test.sh"
 _vrun "$vr/del"; vr_del_rc="$vr_rc"; vr_del_out="$vr_out"
-_vsetup "$vr/mode"; chmod +x "$vr/mode/scripts/w.test.sh"
+_vsetup "$vr/mode"; _vmut chmod +x "$vr/mode/scripts/w.test.sh"
 _vrun "$vr/mode"; vr_mode_rc="$vr_rc"; vr_mode_out="$vr_out"
 [[ "$vr_ctl_rc" == 0 && "$vr_del_rc" == 1 && "$vr_del_out" == *"scripts/w.test.sh: status D"* && "$vr_mode_rc" == 1 && "$vr_mode_out" == *"file mode changed"* ]] \
   || sweep_probe_fail+=("verify-silent-passes: a DELETED swept file exited ${vr_del_rc:-<err>} (want 1, 'status D') and a MODE change on a converted file exited ${vr_mode_rc:-<err>} (want 1, 'file mode changed'): ${vr_del_out//$'\n'/ } / ${vr_mode_out//$'\n'/ }")
-_vsetup "$vr/cnt"; sed -i '7c\
+_vsetup "$vr/cnt"; _vmut sed -i '7c\
 echo one\
 echo two' "$vr/cnt/scripts/w.test.sh"
 printf '%s\n' 'scripts/w.test.sh:7:one line became two' > "$vr/cnt.list"
 _vrun "$vr/cnt" --hand-edits "$vr/cnt.list"; vr_cnt_rc="$vr_rc"; vr_cnt_out="$vr_out"
-_vsetup "$vr/ins"; printf 'inserted\n' >> "$vr/ins/scripts/w.test.sh"
+_vsetup "$vr/ins"; _vmut bash -c 'printf "inserted\n" >> "$1"' _ "$vr/ins/scripts/w.test.sh"
 printf '%s\n' 'scripts/w.test.sh:7+:one line appended' > "$vr/ins.list"
 _vrun "$vr/ins" --hand-edits "$vr/ins.list"; vr_ins_rc="$vr_rc"; vr_ins_out="$vr_out"
 [[ "$vr_ctl_rc" == 0 && "$vr_cnt_rc" == 0 && "$vr_cnt_out" == *"hand-edited: 2"* && "$vr_ins_rc" == 0 && "$vr_ins_out" == *"hand-edited: 1"* ]] \
   || sweep_probe_fail+=("verify-listed-hunks: a listed count-changing hunk exited ${vr_cnt_rc:-<err>} (want 0, 'hand-edited: 2') and a listed pure insertion exited ${vr_ins_rc:-<err>} (want 0, 'hand-edited: 1'): ${vr_cnt_out//$'\n'/ } / ${vr_ins_out//$'\n'/ }")
+# a swept file that git treats as binary (a NUL in its first 8000 bytes) leaves no text hunk, so a listed insertion that would pass as text must fail
+_vsetup "$vr/nul"; _vmut bash -c 'printf "x\0y\n" >> "$1"' _ "$vr/nul/scripts/w.test.sh"
+_vrun "$vr/nul" --hand-edits "$vr/ins.list"; vr_nul_rc="$vr_rc"; vr_nul_out="$vr_out"
+[[ "$vr_ins_rc" == 0 && "$vr_nul_rc" == 1 && "$vr_nul_out" == *"no text hunk"* ]] \
+  || sweep_probe_fail+=("verify-binary: a NUL-bearing appended line, listed exactly like the passing text insertion, exited ${vr_nul_rc:-<err>} (want 1, 'no text hunk'): ${vr_nul_out//$'\n'/ }")
 # the diff is taken against the merge-base, so a sibling commit that landed on the base branch after this slice forked is not this slice's edit; a non-ASCII swept path is judged
-_vrepo "$vr/mb" || true; mb_main="$(_cleangit -C "$vr/mb" branch --show-current || true)"
-printf '%s\n' 'echo "$z" | grep -q uni' > "$vr/mb/scripts/"$'caf\303\251'".test.sh"
-_cleangit -C "$vr/mb" add -A && _cleangit -C "$vr/mb" commit -qm uni
-_cleangit -C "$vr/mb" checkout -q -b slice && _cleangit -C "$vr/mb" checkout -q "$mb_main"
-printf 'echo sibling\n' >> "$vr/mb/scripts/v.test.sh"; _cleangit -C "$vr/mb" commit -qam sibling && _cleangit -C "$vr/mb" checkout -q slice
+_mbsetup() { # <dir>: base commit, a non-ASCII swept file on a branch, then a sibling commit on the base branch
+  local d="$1"
+  _vrepo "$d" || return 1
+  mb_main="$(_cleangit -C "$d" branch --show-current)" || return 1
+  printf '%s\n' 'echo "$z" | grep -q uni' > "$d/scripts/"$'caf\303\251'".test.sh" || return 1
+  _cleangit -C "$d" add -A && _cleangit -C "$d" commit -qm uni || return 1
+  _cleangit -C "$d" checkout -q -b slice && _cleangit -C "$d" checkout -q "$mb_main" || return 1
+  printf 'echo sibling\n' >> "$d/scripts/v.test.sh" && _cleangit -C "$d" commit -qam sibling && _cleangit -C "$d" checkout -q slice
+}
+mb_main=""
+_mbsetup "$vr/mb" || sweep_probe_fail+=("verify-merge-base-setup: could not build the merge-base fixture repo (git or the tool failed before the check ran)")
 mb_apply="$(_cm apply --root "$vr/mb" --write --row '*' 2>&1)" || sweep_probe_fail+=("verify-merge-base-setup: apply failed on the merge-base fixture: ${mb_apply//$'\n'/ }")
 vr_mb_out="$(_cm verify --root "$vr/mb" --base "$mb_main" 2>&1)" && vr_mb_rc=0 || vr_mb_rc=$?
 [[ "$vr_mb_rc" == 0 && "$vr_mb_out" == *"unexplained: 0"* && "$vr_mb_out" == *"verified: 13"* ]] \
@@ -1266,7 +1318,7 @@ vr_mb_out="$(_cm verify --root "$vr/mb" --base "$mb_main" 2>&1)" && vr_mb_rc=0 |
 # `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
 # of checks (the pin's own line and its counting line included); comment lines are excluded, so rewording a comment can neither hide a
 # deletion nor trip the pin, and a `#` inside a check's own string does not hide it from the count.
-SWEEP_PROBE_CHECKS=57
+SWEEP_PROBE_CHECKS=62
 probe_checks=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" | grep -c 'sweep_probe_fail+=(' || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
