@@ -68,9 +68,9 @@
 #         (first non-blank character #) skipped and a later # not treated as a comment: (1) a whole-word token,
 #         with the line split at blanks and shell metacharacters, that is rm, destroy, push, terraform, tofu, git
 #         or eval in any case; (2) when the line has a quote, backslash, backtick or a $ that is not a plain
-#         variable name, the line with those characters removed (r""m, 'r'm, ev""al) contains one of them. A
-#         blank or comment-only command, and a bare redirect to a file that merely contains one (`> terraform.log`,
-#         `> out.log`), is allowed.
+#         variable name, the line with those characters removed (r""m, 'r'm, ev""al) has such a token. Both read the
+#         last path component of a token (/bin/rm is rm). A blank or comment-only command, and a bare redirect to a
+#         file that merely contains one (`> terraform.log`, `> "out/terraform.log"`, `> out.log`), is allowed.
 #
 # NOT DECIDED (stated, not implied). Obfuscation: a variable-built command name, glob or brace expansion of
 # a command name (r[m], r{m,}), brace expansion of a target (`/{bin,usr}`), `xargs rm`, `find -delete` and
@@ -535,42 +535,58 @@ fi
 # OK with no record is the right answer for a blank or comment-only command and for a command whose text names nothing the
 # guard decides on (a bare redirect, `> out.log`): there is nothing here for the guard to judge. A lexer that returned nothing
 # for text that DOES name something the guard decides on has silently dropped its input, and asks. The test is on the text, in
-# two parts: (1) a whole-word token (the line split on blanks and shell metacharacters) that is rm, destroy, push, terraform, tofu,
-# git or eval in any case, so a file NAME that merely contains one (terraform.log, format.log, rm.txt) is not a hit; and (2)
-# when the line has a quote, a backslash, a backtick or a $ that is not a plain variable name, the line read again with those
-# characters removed (r""m, 'r'm, r\m, $'r''m', ev""al) contains one of them as a substring. A line whose first non-blank character
-# is # is a comment and is skipped; a # later in a line is not a comment ("a #b" is a quoted string), so nothing after it is
-# dropped. No process and no here-string (bash before 5.1 writes a temporary file for <<<).
+# two parts, both a WORD test on the last path component of a token (so /bin/rm and ./rm count, `git/err` does not): (1) a token (the
+# line split on blanks and shell metacharacters) that is rm, destroy, push, terraform, tofu, git or eval in any case, so a file NAME
+# that merely contains one (terraform.log, format.log, rm.txt), quoted or not, is not a hit; and (2) when the line has a quote, a
+# backslash, a backtick or a $ that is not a plain variable name, the line read again with those characters removed (r""m, 'r'm,
+# r\m, $'r''m', ev""al) has such a token. A line whose first non-blank character is # is a comment and is skipped; a # later in a
+# line is not a comment ("a #b" is a quoted string), so nothing after it is dropped. (Pass 1 does not split at a backslash, pass 2
+# also splits at { and }: ${IFS}rm is IFS and rm.) The text is split into lines once (a loop that
+# re-sliced the rest per line was quadratic) and the clock is read every 1024 lines. No process and no here-string (bash before 5.1
+# writes a temporary file for <<<).
 RE_DOLLAR_X='\$([^A-Za-z0-9_]|$)'
-lexer_empty_hit() { # <command text>: 0 when the text mentions what the guard decides on
-  local rest="$1" ln j w had=0 hit=1 fin=0
+# le_words <text>: 0 when a blank-separated token of the text, taken by its last path component, is a keyword (the rule table
+# compares the basename too, so /bin/rm and ./rm are rm). Reads under set -f and the caller's nocasematch; a token over MAX_WORD_BYTES is
+# compared whole (a basename strip is quadratic in its length).
+le_words() {
+  local w
+  for w in $1; do
+    (( ${#w} > MAX_WORD_BYTES )) || w="${w##*/}"
+    case "$w" in rm|destroy|push|terraform|tofu|git|eval) return 0 ;; esac
+  done
+  return 1
+}
+LE_CLOCK=0
+lexer_empty_hit() { # <command text>: 0 when the text mentions what the guard decides on; LE_CLOCK=1 when the clock ran out first
+  local IFS=$'\n' ln j had=0 hit=1 nl=0
+  local -a lines
+  LE_CLOCK=0
   shopt -q nocasematch && had=1
   shopt -s nocasematch
-  while :; do
-    case "$rest" in
-      *$'\n'*) ln="${rest%%$'\n'*}"; rest="${rest#*$'\n'}" ;;
-      *) ln="$rest"; rest=""; fin=1 ;;
-    esac
+  # shellcheck disable=SC2206  # the split on newlines is the point (IFS is a newline, no pathname expansion: set -f)
+  lines=($1)   # the text is split ONCE (set -f is on; blank lines vanish, which is harmless: a blank line is skipped anyway)
+  IFS=$' \t\n'
+  for ln in ${lines[@]+"${lines[@]}"}; do
+    nl=$((nl + 1))
+    if (( (nl & 1023) == 0 && SECONDS >= DEADLINE_S )); then LE_CLOCK=1; hit=0; break; fi
     ln="${ln#"${ln%%[![:space:]]*}"}"
-    if [[ -n "$ln" && "$ln" != '#'* ]]; then
-      j="${ln//[;&|()<>\$\"\'\`\\]/ }"
-      for w in $j; do
-        case "$w" in rm|destroy|push|terraform|tofu|git|eval) hit=0; break 2 ;; esac
-      done
-      if [[ "$ln" == *[\'\"\\\`]* || "$ln" =~ $RE_DOLLAR_X ]]; then
-        j="${ln//[\'\"\\\`\$]/}"
-        # (`terraform` contains `rm`, so `*rm*` already covers it; this order differs from the prefilter's on purpose: the mutation suite anchors on the prefilter's pattern run, which must stay unique in this file)
-        case "$j" in *git*|*tofu*|*eval*|*destroy*|*push*|*rm*) hit=0; break ;; esac
-      fi
+    [[ -n "$ln" && "$ln" != '#'* ]] || continue
+    j="${ln//[;&|()<>\$\"\'\`]/ }"   # (not the backslash: terraform\.log is a file name; pass 2 removes the backslash)
+    if le_words "$j"; then hit=0; break; fi
+    if [[ "$ln" == *[\'\"\\\`]* || "$ln" =~ $RE_DOLLAR_X ]]; then
+      j="${ln//[\'\"\\\`\$]/}"; j="${j//[;&|()<>{\}]/ }"
+      if le_words "$j"; then hit=0; break; fi
     fi
-    (( fin )) && break
   done
   (( had )) || shopt -u nocasematch
   return "$hit"
 }
 if [[ "${#REC_N[@]}" -eq 0 && -z "$BOUND_SOFT" ]]; then
   LX_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || ask_lexer_empty
-  if lexer_empty_hit "$LX_CMD"; then ask_lexer_empty; fi
+  if lexer_empty_hit "$LX_CMD"; then
+    [[ "$LE_CLOCK" -eq 1 ]] && ask_bound "the ${DEADLINE_S} s time limit was reached while checking whether the lexer dropped a command"
+    ask_lexer_empty
+  fi
 fi
 
 # ---- 5. the rule table -----------------------------------------------------------------------------

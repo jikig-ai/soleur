@@ -1494,12 +1494,15 @@ L @@ lexer-empty: >> out.log is not an ask @@ none @@ - @@ >> out.log
 L @@ lexer-empty: a comment-only command is not an ask @@ none @@ - @@ # just a comment
 L @@ lexer-empty: a quoted comment-only command is not an ask @@ none @@ - @@ # only a comment, "quoted" so it reaches the lexer
 L @@ lexer-empty: indented comment lines and blank lines are not an ask @@ none @@ - @@ @NL@   # one "q"@NL@@NL@# two
-L @@ lexer-empty: a bare redirect whose text mentions git asks @@ ask @@ - @@ >"git.log"
-L @@ lexer-empty: a bare redirect whose text mentions destroy asks @@ ask @@ - @@ >"destroy.log"
-L @@ lexer-empty: a bare redirect whose text mentions push asks @@ ask @@ - @@ >"push.log"
-L @@ lexer-empty: a bare redirect whose text mentions tofu asks @@ ask @@ - @@ >"tofu.log"
-L @@ lexer-empty: a bare redirect whose text mentions eval asks @@ ask @@ - @@ >"eval.log"
-L @@ lexer-empty: a bare redirect whose text mentions RM in upper case asks (case-insensitive) @@ ask @@ - @@ >"RM.log"
+L @@ lexer-empty: a bare redirect to a file named git asks @@ ask @@ - @@ >"git"
+L @@ lexer-empty: a bare redirect to a file named destroy asks @@ ask @@ - @@ >"destroy"
+L @@ lexer-empty: a bare redirect to a file named push asks @@ ask @@ - @@ >"push"
+L @@ lexer-empty: a bare redirect to a file named tofu asks @@ ask @@ - @@ >"tofu"
+L @@ lexer-empty: a bare redirect to a file named eval asks @@ ask @@ - @@ >"eval"
+L @@ lexer-empty: a bare redirect to a file named RM in upper case asks (case-insensitive) @@ ask @@ - @@ >"RM"
+L @@ lexer-empty: a quoted file name that only starts with a keyword (git.log) is not an ask @@ none @@ - @@ >"git.log"
+L @@ lexer-empty: a quoted file name that only starts with a keyword (destroy.log) is not an ask @@ none @@ - @@ >"destroy.log"
+L @@ lexer-empty: a quoted file name that only starts with a keyword (push.log) is not an ask @@ none @@ - @@ >"push.log"
 L @@ lexer-empty: a keyword after a mid-line # is still read (only a full-line comment is skipped: "a #b" is not a comment) @@ ask @@ - @@ >"out.txt" # git push
 L @@ lexer-empty: a file name that merely contains a keyword (terraform.log) is not an ask @@ none @@ - @@ > terraform.log
 L @@ lexer-empty: a file name that merely contains rm (format.log) is not an ask @@ none @@ - @@ > format.log
@@ -1509,6 +1512,18 @@ L @@ lexer-empty: a file name that starts with push (push-notes.md) is not an as
 L @@ lexer-empty: a plain $HOME path with git in a directory name is not an ask @@ none @@ - @@ > $HOME/.config/git/ignore
 L @@ lexer-empty: a redirect to a file that IS a keyword (terraform) asks @@ ask @@ - @@ > terraform
 L @@ lexer-empty: a keyword only in a comment line before the redirect is not an ask @@ none @@ - @@ # rm -rf ~@NL@>"out.txt"
+L @@ lexer-empty: a QUOTED target whose name contains a keyword (terraform.log) is not an ask @@ none @@ - @@ > "terraform.log"
+L @@ lexer-empty: a single-quoted path whose file name contains a keyword is not an ask @@ none @@ - @@ > 'out/terraform.log'
+L @@ lexer-empty: a quoted target that contains rm (format.log) is not an ask @@ none @@ - @@ > "format.log"
+L @@ lexer-empty: a quoted target in a directory (docs/confirm.md) is not an ask @@ none @@ - @@ > "docs/confirm.md"
+L @@ lexer-empty: a quoted target with no space after the operator (perform.log) is not an ask @@ none @@ - @@ >"out/perform.log"
+L @@ lexer-empty: a quoted $HOME path with a git directory is not an ask (only the last component is a name) @@ none @@ - @@ >> "$HOME/.config/git/err"
+L @@ lexer-empty: an input redirect from a quoted variable path is not an ask @@ none @@ - @@ < "$TF_DIR/terraform.tfvars"
+L @@ lexer-empty: an escaped dot in a target name is not an ask @@ none @@ - @@ > terraform\.log
+L @@ lexer-empty: a parameter-expansion default holding a file name is not an ask @@ none @@ - @@ > ${TF_LOG:-terraform.log}
+L @@ lexer-empty: a braced variable then a platform.log file name is not an ask @@ none @@ - @@ >"${X}/platform.log"
+L @@ lexer-empty: a quoted redirect to a file that IS a keyword (terraform) asks @@ ask @@ - @@ > "terraform"
+L @@ lexer-empty: a quoted redirect to a path whose last component is a keyword asks @@ ask @@ - @@ > "out/rm"
 # ---- a wrapper's chdir option moves the working directory of the command it runs (env -C, --chdir; sudo -D, --chdir), for that command only
 L @@ wrapper chdir: env -C / rm -rf * @@ deny @@ - @@ env -C / rm -rf *
 L @@ wrapper chdir: env --chdir=/ rm -rf ./* @@ deny @@ - @@ env --chdir=/ rm -rf ./*
@@ -1900,6 +1915,12 @@ rep a 3000; _W3000="$REP_OUT"
 rep a 4090; _W4090="$REP_OUT"
 rep a 4097; _W4097="$REP_OUT"
 rep a 60000; _W60K="$REP_OUT"
+# lexer-empty reads the text once: a comment-only or redirect-only command of 20000 lines used to take 15 s and 8 s (the loop re-sliced the rest of the text per line)
+rep "# don't"$'\n' 20000; _LE_COMMENTS="$REP_OUT"
+rep ">'a'"$'\n' 20000; _LE_REDIRS="$REP_OUT"
+bound_row "bound: a comment-only command of 20000 lines is judged in under 5 s (no decision)" none - "$_LE_COMMENTS"
+bound_row "bound: a redirect-only command of 20000 lines is judged in under 5 s (no decision)" none - "$_LE_REDIRS"
+bound_row "bound: a redirect-only command of 20000 lines ending in a redirect to a keyword file name asks lexer-empty, in under 5 s" ask - "${_LE_REDIRS}>'rm'" "^${ASK_LEAD_RX}lexer-empty: "
 bound_row "bound: a 40000-component rm target then rm -rf ~ denies (the overlong word asks bound only when nothing denies), in under 5 s" deny - "rm -rf ${_PAD40K}; rm -rf ~"
 bound_row "bound: rm -rf ~ then a 40000-component rm target denies, in under 5 s" deny - "rm -rf ~; rm -rf ${_PAD40K}"
 bound_row "bound: terraform destroy then a 40000-component rm target asks with the destroy rule id and the bound sentence, in under 5 s" ask - "terraform destroy; rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}infra-destroy: .*Matched command: \[terraform destroy\].*too large to check in full"
@@ -1959,6 +1980,10 @@ deadline_row git-options 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" 
 deadline_row git-flags 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GR" "$_DL_GD"
 deadline_row git-refs 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GF" "$_DL_GD"
 deadline_row git-dests 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GF" "$_DL_GR"
+# lexer-empty reads the clock every 1024 lines: a redirect-only command of 1100 lines under a 0 s deadline asks bound, not lexer-empty
+rep ">'a'"$'\n' 1100; _LE_1100="$REP_OUT"
+deadline_row lexer-empty "$_LE_1100"
+jqchk "bound: deadline (lexer-empty): the ask says the clock ran out while checking whether the lexer dropped a command" '.hookSpecificOutput.permissionDecisionReason | contains("whether the lexer dropped a command")'
 # and a very wide push is decided in time (the real clock): 15000 refs, a force push to main last, and the same without force
 _t=""; for _i in $(seq 1 15000); do _t+=" r$_i"; done; _cmdgit15k="git push -f origin${_t} main"; _cmdgit15kp="git push origin${_t}"
 bound_row "bound: git push -f with 15000 refs ending in main is decided (ask) in under 5 s" ask @R1@ "$_cmdgit15k"
@@ -2112,6 +2137,14 @@ tree_row "lexer-empty (stub): a keyword only inside a full-line comment is not a
 tree_row "lexer-empty (stub): a plain \$VAR path with a keyword in a directory name is not an ask" none "$HT_HOOK" "$(mkjson '> $HOME/.config/git/ignore' "$TREE")"
 tree_row "lexer-empty (stub): a keyword inside a longer word (platform.log, no quote) is not an ask" none "$HT_HOOK" "$(mkjson '> platform.log' "$TREE")"
 tree_row "lexer-empty (stub): a quote with no keyword anywhere is not an ask" none "$HT_HOOK" "$(mkjson '>"out.txt"' "$TREE")"
+# A command spelled by path (/bin/rm, ./rm) is the same command to the rule table (it compares the basename), so the net counts it too.
+tree_row "lexer-empty (stub): /bin/rm -rf / asks (the basename of a path-qualified name is read)" ask "$HT_HOOK" "$(mkjson '/bin/rm -rf /' "$TREE")"
+tree_row "lexer-empty (stub): /usr/bin/rm -rf ~ asks" ask "$HT_HOOK" "$(mkjson '/usr/bin/rm -rf ~' "$TREE")"
+tree_row "lexer-empty (stub): ./rm -rf / asks" ask "$HT_HOOK" "$(mkjson './rm -rf /' "$TREE")"
+tree_row "lexer-empty (stub): env /bin/rm -rf / asks" ask "$HT_HOOK" "$(mkjson 'env /bin/rm -rf /' "$TREE")"
+tree_row "lexer-empty (stub): /usr/local/bin/terraform destroy asks" ask "$HT_HOOK" "$(mkjson '/usr/local/bin/terraform destroy' "$TREE")"
+tree_row "lexer-empty (stub): a quoted file name that contains rm (\"format.log\") is not an ask" none "$HT_HOOK" "$(mkjson '> "format.log"' "$TREE")"
+tree_row "lexer-empty (stub): a path whose directory is a keyword but whose file is not (git/ignore) is not an ask" none "$HT_HOOK" "$(mkjson '> "x/git/ignore"' "$TREE")"
 tree_row "lexer seam: a stub lexer that reports one harmless record is not an ask (the seam is not an always-ask)" none "$HT_HOOK" "$_LX_ENV"
 # A read-time bound (the deadline reached while the lexer's output is still arriving) must not discard the records already read:
 # the rule table judges them, a deny wins, and only when nothing matched does the answer become a bound ask. The private copy has a
