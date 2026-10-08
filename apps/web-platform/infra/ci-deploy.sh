@@ -364,11 +364,14 @@ fan_out_to_peers() {
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    # The HMAC signature header goes in on curl's stdin config channel, never its argv
+    # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
+    code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=${sig}" \
-      --data-binary "$payload" 2>/dev/null || echo "000")
+      --config - \
+      --data-binary "$payload" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || echo "000")
     if [[ "$code" == "202" ]]; then
       logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
     else
@@ -1301,8 +1304,7 @@ _docker_login_capture() {
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
 # zot v2.1.22 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
-# MEASURED 2026-10-08 by running the pinned image locally against this config (#9252; v2.1.20
-# answered identically, 2026-08-05, #7282):
+# MEASURED 2026-10-08 by running the pinned image locally against this config (#9252):
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:

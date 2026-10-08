@@ -5838,12 +5838,13 @@ fi
 # DEPLOY_DOCKER_CONFIG_DIR; and NO `--config` passed a PATH-like arg anywhere. The ONLY
 # legitimate --config in this file is doppler's env-name form (`doppler … --config prd`), whose
 # argument starts with a LETTER; a docker `--config` always takes a path (/, ., ~, $, or a quote
-# wrapping one). Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
+# wrapping one). The one exemption is curl's stdin-config form `--config -` (#9795: the fan-out HMAC
+# header; a docker --config never takes a bare `-`), stripped before the scan. Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
 # `docker run` CONTINUATION line is caught (a per-line docker-scoped negative missed it).
 TOTAL=$((TOTAL + 1))
 if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
-   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
+   && ! printf '%s\n' "$DOCKERCFG_CODE" | sed -E 's/--config[[:space:]]+-([[:space:]\\]|$)//g' | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
   PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; no --config path override (login-write == cosign-mount by construction)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced, or a --config path override can split login-write from cosign-mount"
@@ -9928,6 +9929,41 @@ fi
 rm -rf "$GAK_FIX"
 unset GAK_PRD_KEY GAK_ISO_KEY GAK_RETIRED_KEY GAK_ISO_MARK GAK_PRD_MARK
 
+# #9795 (lint Rule E, #9597) -- fan_out_to_peers must feed the HMAC signature header on curl's
+# STDIN config, never its argv (/proc/<pid>/cmdline and `ps` are readable by every local user).
+# Executes the real function with a curl stub that records its argv and its stdin separately.
+FO_FIX="$(mktemp -d)"
+FO_ARGV="$FO_FIX/argv"; FO_STDIN="$FO_FIX/stdin"; : > "$FO_ARGV"; : > "$FO_STDIN"
+printf '%s\n' '[{"id":"deploy-peer","trigger-rule":{"match":{"secret":"fixture-fanout-secret"}}}]' > "$FO_FIX/hooks.json"
+awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT" > "$FO_FIX/fn.sh"
+FO_RC=0
+(
+  set -uo pipefail
+  LOG_TAG=fanout-test; export SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="$FO_FIX/hooks.json"
+  SSH_ORIGINAL_COMMAND="deploy fixture"; ip() { return 0; }; logger() { :; }
+  # A bounded read: a mutant that stops feeding stdin must fail the rows, not hang the suite on the runner's stdin.
+  curl() { printf '%s\n' "$*" > "$FO_ARGV"; timeout 2 cat > "$FO_STDIN" || true; printf 202; }
+  # shellcheck disable=SC1091
+  source "$FO_FIX/fn.sh"
+  fan_out_to_peers
+) > /dev/null 2>&1 < /dev/null || FO_RC=$?
+TOTAL=$((TOTAL + 1))
+if [[ -s "$FO_FIX/fn.sh" && "$FO_RC" -eq 0 && -s "$FO_ARGV" ]] \
+   && ! /usr/bin/grep -qiE 'x-signature|sha256=' "$FO_ARGV" \
+   && /usr/bin/grep -qE -- '(^| )--config -( |$)' "$FO_ARGV" \
+   && /usr/bin/grep -qE -- '^--disable --noproxy \* ' "$FO_ARGV"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9795-1 fan-out: the signature header is absent from curl's argv, --config - is present, transport confined (--disable --noproxy)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-1 fan-out argv carries the signature, lacks --config -, or is not transport-confined (rc=$FO_RC argv: $(cut -c1-200 "$FO_ARGV" 2>/dev/null))"
+fi
+TOTAL=$((TOTAL + 1))
+if /usr/bin/grep -qxE 'header = "X-Signature-256: sha256=[0-9a-f]{64}"' "$FO_STDIN"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9795-2 fan-out: the HMAC header arrives on curl's stdin config as a 64-hex signature"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9795-2 fan-out stdin config lacks a well-formed X-Signature-256 header (stdin: $(cut -c1-120 "$FO_STDIN" 2>/dev/null))"
+fi
+rm -rf "$FO_FIX"; unset FO_FIX FO_ARGV FO_STDIN FO_RC
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # Assertion-count floor (#8077 review): a suite that silently narrows (a block skipped, a loop that
@@ -9950,7 +9986,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #6129: raised 485 -> 490 with the ENFORCE-default rows (4 #6129 verify rows + the T-1a-4 enforce arm).
 # #8016: raised 490 -> 500 with the 10 PDEATHSIG rows (Guard 2: 2 recorded-argv rows; Guard 1: the
 # real-tree scan, 4 must-flag fixtures, 3 must-pass inputs). Measured: 500 ran.
-CI_DEPLOY_ASSERT_FLOOR=500
+# #9795: raised 500 -> 502 with T-9795-1/-2 (the fan-out HMAC header on curl's stdin, not argv).
+CI_DEPLOY_ASSERT_FLOOR=502
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
