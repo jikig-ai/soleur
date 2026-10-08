@@ -14,6 +14,23 @@ lane: cross-domain
 
 # ci(infra): bound the in-container apt cycle in the provision-unit and cutover-access suites
 
+
+## Enhancement Summary
+
+**Deepened on:** 2026-10-08
+**Method:** halt gates 4.6-4.12 run mechanically, plus targeted verification instead of a blanket agent fan-out (the plan-review panel of four seats had already read the sources). Research agents used: learnings-researcher, functional-discovery (no overlap found), and the plan-review panel (DHH, Kieran, code-simplicity, CTO devex lens).
+
+### Key Improvements
+
+1. Panel findings folded in: multi-line `bash -c` body for the PU site (A10 anchors its call and source regexes to line start), exact arm tail, `local rc`, lib-presence guard, Tier B rc classification (125 skip; 97/98/126/127/137/124 FAIL), cutover budget raised to 270 s, ADR note shrunk to two lines, real-stall reproduction and most matrix rows cut.
+2. Verified by execution on 2026-10-08: the widened docker grammar counts 1 / 6 / 1 / 2 sites in ownership / rehearsal / cutover / PU and does not match the message strings `"docker run failed"`; the existing raw-apt regex misses `timeout -k 5 30 apt-get install` (so the widening is needed); the per-suite `g_ok` regex matches `$T` and not `$W`/`$TMP`; the `IFS=: read` spec parse yields file, count and variable.
+3. Healthy apt cost measured in the pinned image: Tier B packages 20 s, cutover packages 55 s.
+
+### New Considerations Discovered
+
+- The `discoverability_test` command prints nothing on the pre-change tree (it greps for the helper call the plan adds); it is satisfied by Phase 2, so it must be run after the conversion, not before.
+- Issue #8744 is still open; the PR uses `Refs #8744`, never a closing keyword.
+
 ## Overview
 
 Two infra test suites still run an in-container apt cycle bounded only by attempt count, while the git-data
@@ -340,6 +357,7 @@ No cross-domain implications detected: CI test-suite hardening in an infrastruct
 
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails deepen-plan Phase 4.6; this plan fills it (`none`, with the sensitive-path scope-out line because `apps/web-platform/infra/` matches the preflight regex).
 - The mutation matrices are throwaway batteries run in the scratchpad against copies; do not commit them (#9379 precedent).
+- The `discoverability_test` grep returns nothing before Phase 2 (it looks for the helper call the plan adds); run it after the conversion, where it must print the PU suite path.
 - Do not run the full battery; targeted suites only. Do not touch `.github/workflows`, PR #9466 or its worktree.
 
 ## References & Research
