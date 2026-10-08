@@ -39,7 +39,6 @@ OWN="${2:?}"
 SIBLING="${3:?}"
 
 fail=0
-note() { printf '%s\n' "$1"; }
 bad() { printf 'FAIL: %s\n' "$1"; fail=1; }
 
 # --- vantage (a): own workspace must be present AND usable ----------------
@@ -62,7 +61,7 @@ if [ -d "$PARENT" ]; then
     [ -e "$_e" ] || continue
     if [ "$_e" = "$OWN" ]; then _seen_own=1; else bad "unexpected entry under workspaces parent: $_e"; fi
   done
-  [ "$_seen_own" -eq 1 ] || note "note: parent $PARENT visible but own workspace not listed under it"
+  [ "$_seen_own" -eq 1 ] || printf 'note: parent %s visible but own workspace not listed under it\n' "$PARENT"
 fi
 
 # --- vantage (a): mount table carries no sibling-bearing entry ------------
@@ -82,6 +81,17 @@ if [ "$_read_rc" -eq 0 ]; then
 elif ! printf '%s' "$_read_err" | grep -qi 'no such file'; then
   bad "sibling read failed with a NON-absence error: $_read_err"
 fi
+
+# --- elevation metadata (NOT part of ok/fail) -----------------------------
+# A file-cap'd /usr/bin/bwrap creates no userns: the child inherits the
+# container's own uid_map (full-map `0 0 4294967295`). The implicit-userns
+# fallback produces a narrow map — the arm Phase 0 measured fatal to the
+# inner sandbox. The deploy canary treats `elevation=userns` as
+# sandbox_broken; the founder check tolerates it (its explicit
+# --unshare-user arm is the documented local fallback).
+_elev="userns"
+_uid0="$(awk '$1 == "0" && $3 == "4294967295" { found=1; exit } END { if (!found) exit 1 }' /proc/self/uid_map 2>/dev/null)" && _elev="privileged"
+printf 'elevation=%s\n' "$_elev"
 
 if [ "$fail" -eq 0 ]; then
   printf 'isolation_ok\n'

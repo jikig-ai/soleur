@@ -319,11 +319,13 @@ cron_drain_json() {
 # sentinel (verdict "unknown") when the file is absent because a deploy never ran
 # the canary. Best-effort + read-only. The canary-promotion follow-through
 # (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
-sandbox_canary_json() {
-  # DURABLE path (NOT /var/run tmpfs) — MUST match ci-deploy.sh
-  # SANDBOX_CANARY_STATE_FILE. The soak accumulator must survive host reboots or
-  # it silently resets to zero (#5889); see the writer's rationale.
-  local f="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+# Shared reader for a write_sandbox_canary_state ledger file — the soak
+# accumulator lives on the DURABLE volume (NOT /var/run tmpfs) and MUST
+# match ci-deploy.sh's state-file paths (must survive host reboots or the
+# soak silently resets to zero, #5889). Safe sentinel (verdict "unknown")
+# when the file is absent because a deploy never ran the arm.
+canary_state_json() {
+  local f="$1"
   if [[ -f "$f" ]]; then
     local v r s c cp fp
     v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
@@ -342,26 +344,16 @@ sandbox_canary_json() {
   fi
 }
 
+# The canary-promotion follow-through
+# (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
+sandbox_canary_json() {
+  canary_state_json "${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+}
+
 # Same shape, separate ledger (#5863): the outer-wrap canary's report-only
 # soak state. Read by the #5863 follow-through via /hooks/deploy-status.
 outer_wrap_canary_json() {
-  local f="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
-  if [[ -f "$f" ]]; then
-    local v r s c cp fp
-    v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
-    r="$(jq -r '.reason // ""' "$f" 2>/dev/null || echo '')"
-    s="$(jq -r '.sdk_version // ""' "$f" 2>/dev/null || echo '')"
-    c="$(jq -r '.checked_at // 0' "$f" 2>/dev/null || echo 0)"
-    cp="$(jq -r '.consecutive_pass // 0' "$f" 2>/dev/null || echo 0)"
-    fp="$(jq -r '.first_pass_at // 0' "$f" 2>/dev/null || echo 0)"
-    [[ "$c" =~ ^[0-9]+$ ]] || c=0
-    [[ "$cp" =~ ^[0-9]+$ ]] || cp=0
-    [[ "$fp" =~ ^[0-9]+$ ]] || fp=0
-    jq -nc --arg v "$v" --arg r "$r" --arg s "$s" --argjson c "$c" --argjson cp "$cp" --argjson fp "$fp" \
-      '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$c, consecutive_pass:$cp, first_pass_at:$fp}'
-  else
-    echo '{"verdict":"unknown","reason":"","sdk_version":"","checked_at":0,"consecutive_pass":0,"first_pass_at":0}'
-  fi
+  canary_state_json "${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
 }
 
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The no-SSH surface for

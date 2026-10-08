@@ -51,7 +51,6 @@ function fixture(): { root: string; ws: string; home: string; plugin: string } {
   return { root, ws, home, plugin };
 }
 
-const fixture2 = fixture;
 
 function pairs(argv: string[]): Array<[string, string, string | undefined]> {
   const out: Array<[string, string, string | undefined]> = [];
@@ -196,13 +195,13 @@ describe("buildOuterWrapArgv", () => {
 
 describe("committed argv fixture (Guard 2)", () => {
   it("matches infra/agent-outer-wrap-argv.json under {{ROOT}} substitution", async () => {
-    const fixture = JSON.parse(
+    const fx = JSON.parse(
       readFileSync(
         path.join(__dirname, "..", "infra", "agent-outer-wrap-argv.json"),
         "utf8",
       ),
     );
-    const f = fixture2();
+    const f = fixture();
     const argv = buildOuterWrapArgv({
       workspacePath: f.ws,
       home: f.home,
@@ -213,7 +212,7 @@ describe("committed argv fixture (Guard 2)", () => {
     // realpath may differ from the literal path (e.g. macOS /tmp symlink) —
     // project both forms.
     const projected2 = projected.map((a) => a.replaceAll(f.root, "{{ROOT}}"));
-    expect(projected2).toEqual(fixture.bwrapSetupArgv);
+    expect(projected2).toEqual(fx.bwrapSetupArgv);
   });
 
   it("prep manifest covers every {{ROOT}} bind source exactly (argv/prep drift is red)", () => {

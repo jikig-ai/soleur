@@ -24,8 +24,8 @@ userns wraps are measured-incompatible with the vendored inner sandbox).
   needed). `isolation_ok` measured locally nested inside Step-10.5's own
   bwrap invocation.
 - [x] 0.7 S0.6 config strategy: **narrow-bind landed** — `--dir $HOME` +
-  HOME_STATE_FILES (`.credentials.json`, `.claude.json`, `.claude.json.backup`,
-  `settings.json`) + HOME_SESSION_DIRS (`.claude/projects/<encoded-cwd>`
+  HOME_STATE_FILES (`.credentials.json`, `settings.json`) + `~/.claude.json`
+  + HOME_SESSION_DIRS (`.claude/projects/<encoded-cwd>`
   session-transcript bind) per plan; no new state root needed.
 - [x] 0.8 S0.7 privilege mechanics — Dockerfile `setcap cap_sys_admin,
   cap_setuid,cap_setgid+ep` + `getcap -r /` audit (bwrap is the ONLY

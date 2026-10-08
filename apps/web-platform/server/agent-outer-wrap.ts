@@ -88,8 +88,6 @@ export interface OuterWrapInputs {
    * the real `/usr/bin/bwrap`.
    */
   bwrapPath?: string;
-  /** Existence-check override for tests (defaults to fs probes). */
-  exists?: (p: string) => boolean;
 }
 
 const APP_ROOT = "/app";
@@ -134,8 +132,7 @@ function req(p: string, what: string): string {
  * `/proc/<pid>/cmdline`, same-uid readable).
  */
 export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
-  const exists = inputs.exists ?? existsSync;
-    // --cap-drop ALL: `--cap-add SYS_ADMIN` on the container put it in the
+  // --cap-drop ALL: `--cap-add SYS_ADMIN` on the container put it in the
   // bounding set (the file cap needs it there); on a non-root-USER image
   // Docker may also carry it ambient, which survives exec of any binary
   // without file caps — including the CLI we are about to wrap. Drop the
@@ -160,11 +157,11 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
     "hostname",
   ]) {
     const src = `/etc/${f}`;
-    if (exists(src)) argv.push("--ro-bind", src, src);
+    if (existsSync(src)) argv.push("--ro-bind", src, src);
   }
   for (const d of ["ssl", "terminfo"]) {
     const src = `/etc/${d}`;
-    if (exists(src)) argv.push("--ro-bind", src, src);
+    if (existsSync(src)) argv.push("--ro-bind", src, src);
   }
   argv.push("--dev", "/dev");
   // Shared container procfs — intentional (arm F): a scoped procfs needs a
@@ -174,13 +171,13 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   argv.push("--tmpfs", "/tmp");
 
   const appRoot = inputs.appRoot ?? APP_ROOT;
-  if (exists(appRoot)) {
+  if (existsSync(appRoot)) {
     // node_modules + infra only — the vendored CLI tree, its deps, and the
     // inner shim's bpf artifact. `/app/shared/knowledge-base` is absent by
     // construction for every persona (better than today's deny-mask).
     for (const sub of ["node_modules", "infra", "dist", "package.json"]) {
       const src = path.join(appRoot, sub);
-      if (exists(src)) argv.push("--ro-bind", src, src);
+      if (existsSync(src)) argv.push("--ro-bind", src, src);
     }
   }
   if (inputs.pluginPath) {
@@ -199,11 +196,11 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   }
   for (const f of HOME_STATE_FILES) {
     const src = path.join(claudeHome, f);
-    if (exists(src)) argv.push("--bind", src, src); // rw — credential refresh writes
+    if (existsSync(src)) argv.push("--bind", src, src); // rw — credential refresh writes
   }
   for (const f of [".claude.json"]) {
     const src = path.join(home, f);
-    if (exists(src)) argv.push("--bind", src, src);
+    if (existsSync(src)) argv.push("--bind", src, src);
   }
 
   // The tenant workspace — bound rw at its real path (the parent is never
@@ -213,15 +210,15 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   if (ws) {
     const slug = claudeProjectSlug(ws);
     const transcriptDir = path.join(claudeHome, "projects", slug);
-    if (exists(transcriptDir)) argv.push("--bind", transcriptDir, transcriptDir);
+    if (existsSync(transcriptDir)) argv.push("--bind", transcriptDir, transcriptDir);
     argv.push("--bind", ws, ws);
 
     // A linked-worktree `.git` gitfile points outside the workspace; the
     // target gitdir must be bound rw or every git op fails.
     const gitFile = path.join(ws, ".git");
-    if (exists(gitFile)) {
+    if (existsSync(gitFile)) {
       const st = realpathSync(gitFile);
-      if (st !== gitFile && exists(st)) argv.push("--bind", st, st);
+      if (st !== gitFile && existsSync(st)) argv.push("--bind", st, st);
     }
   }
 
@@ -278,17 +275,14 @@ function preflight(bwrapPath: string, command: string, argv: string[]): string |
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--") break;
-    if (
-      flag === "--bind" ||
-      flag === "--ro-bind" ||
-      flag === "--dev-bind" ||
-      flag === "--file"
-    ) {
+    // --bind/--ro-bind only — the builder emits no --file/--dev-bind (and
+    // --file's arg order is fd-first, so indexing it by src would mis-read).
+    if (flag === "--bind" || flag === "--ro-bind") {
       const src = argv[i + 1];
       if (src && !src.startsWith("--") && !existsSync(src)) {
         return `bind_source_missing:${src}`;
       }
-      i += flag === "--file" ? 2 : 1;
+      i += 1;
     }
   }
   return null;
@@ -486,6 +480,10 @@ const INNER_PROBE_PATH = [
 export interface RealizedIsolationProbe {
   /** The wrap built + the payload ran to a verdict (isolation_ok seen). */
   ok: boolean;
+  /** Which bwrap path built the namespace: file-cap'd mountns (`privileged`)
+   *  or the implicit-userns fallback (`userns`) — the arm measured fatal to
+   *  the inner sandbox in Phase 0, so prod expects `privileged`. */
+  elevation?: "privileged" | "userns";
   /** bwrap/payload detail on failure (marker, never full output). */
   reason?: string;
 }
@@ -527,7 +525,11 @@ export function probeRealizedIsolation(
         reason: `spawn_${(res.error as NodeJS.ErrnoException).code ?? "error"}`,
       };
     const out = `${res.stdout ?? ""}`;
-    if (res.status === 0 && out.includes("isolation_ok")) return { ok: true };
+    const elevation = /^elevation=(privileged|userns)$/m.exec(out)?.[1] as
+      | RealizedIsolationProbe["elevation"]
+      | undefined;
+    if (res.status === 0 && out.includes("isolation_ok"))
+      return { ok: true, elevation };
     if (/operation not permitted/i.test(`${res.stderr ?? ""}`)) {
       return { ok: false, reason: "bwrap_operation_not_permitted" };
     }
@@ -557,11 +559,24 @@ export function verifyOuterWrapRealizedIsolation(
   try {
     if (env.AGENT_OUTER_WRAP_BOOT_PROBE !== "1") return;
     const p = probeRealizedIsolation();
-    if (p.ok) {
+    if (p.ok && p.elevation === "privileged") {
       log.info(
         { feature: "agent-sandbox", op: "outer-wrap-realized-probe", ...p },
         "agent-sandbox: outer-wrap realized-isolation probe ok",
       );
+      return;
+    }
+    if (p.ok) {
+      // The table held but bwrap took the implicit-userns fallback — the
+      // file-cap path did not elevate on THIS host. An outer userns is
+      // fatal to the inner sandbox (Phase 0): warn, same severity as a fail.
+      warnSilentFallback(null, {
+        feature: "agent-sandbox",
+        op: "outer-wrap-realized-probe",
+        message:
+          "agent sandbox outer-wrap realized probe: isolation held but bwrap took the userns fallback — file-cap posture not measured",
+        extra: { ...p },
+      });
       return;
     }
     warnSilentFallback(null, {

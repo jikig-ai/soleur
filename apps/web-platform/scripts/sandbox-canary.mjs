@@ -1099,6 +1099,15 @@ export function classifyOuterWrapReplayVerdict({
     };
   }
   if (bwrapExitCode === 0 && bwrapStdout.includes("isolation_ok")) {
+    // An isolation green built on the implicit-userns fallback is the WRONG
+    // mechanism: the arm needs the file-cap'd mountns (an outer userns is
+    // fatal to the inner sandbox — Phase 0 measurement). The deploy canary
+    // must report the elevation it actually took, not just that the table
+    // held. The founder check tolerates userns explicitly; the canary does
+    // not.
+    if (/^elevation=userns$/m.test(bwrapStdout)) {
+      return { verdict: "sandbox_broken", reason: "wrong_elevation_userns" };
+    }
     return { verdict: "pass", reason: "ok" };
   }
   // The payload's own verdict markers — a realized isolation VIOLATION is a
@@ -1280,7 +1289,7 @@ async function runOuterSmoke(appRoot) {
       timeout: 60_000,
     });
     let verdict;
-    if (res.error?.code === "ENOENT" || res.error) {
+    if (res.error) {
       verdict = {
         verdict: "canary_infra_error",
         reason: `bwrap_spawn_${String(res.error?.code ?? "error").toLowerCase()}`,

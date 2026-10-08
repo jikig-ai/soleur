@@ -2571,7 +2571,12 @@ verify_image_signature() {
 # "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
-run_faithful_sandbox_canary() {
+# run_canary_replay <arm-flag> <state-file> <sentry-op> <label>: the shared
+# canary runner — one copy of the false-rollback guard (docker/exec failures
+# classify canary_infra_error, never sandbox_broken) for both replay arms.
+# Each arm's soak lives in its own state file.
+run_canary_replay() {
+  local arm="$1" state_file="$2" sentry_op="$3" label="$4"
   local verdict reason sdk_version exec_rc out err_file docker_err
   # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
   # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
@@ -2583,7 +2588,7 @@ run_faithful_sandbox_canary() {
   set +o pipefail
   # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed docker exec
   # aborts before the read, leaving the infra classification below unreachable.
-  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"; then
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" "$arm" 2>"$err_file")"; then
     exec_rc=0
   else
     exec_rc=$?
@@ -2606,15 +2611,22 @@ run_faithful_sandbox_canary() {
     sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
-  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version"
-  echo "Faithful sandbox canary (non-blocking): verdict=$verdict reason=$reason"
-  # Page only on a faithful FAIL (sandbox_broken) — the disagreement signal.
-  # canary_infra_error is expected during dark-launch (fixture not yet captured)
-  # and must not page.
+  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file"
+  echo "$label: verdict=$verdict reason=$reason"
+  # Page only on a sandbox_broken verdict — canary_infra_error is expected
+  # during dark-launch (fixture not yet captured) and must not page.
   if [[ "$verdict" == "sandbox_broken" ]]; then
-    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" || true
+    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
   fi
   return 0
+}
+
+run_faithful_sandbox_canary() {
+  # Faithful inner canary (#5875 / ADR-079): NON-BLOCKING dark-launch. Runs
+  # the SDK-captured split-unshare argv the legacy probe does not exercise
+  # (that gap is why #5849 shipped green).
+  run_canary_replay "--replay" "$SANDBOX_CANARY_STATE_FILE" "sandbox-canary" \
+    "Faithful sandbox canary (non-blocking)"
 }
 
 # run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
@@ -2623,36 +2635,10 @@ run_faithful_sandbox_canary() {
 # and runs the shared isolation payload in the resulting namespace. Its
 # verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
 # #5863 soak follow-through; promotion to gating is a separate change after
-# a green soak. Same false-rollback guard: docker/exec failures classify
-# canary_infra_error, never sandbox_broken.
+# a green soak.
 run_outer_wrap_canary() {
-  local verdict reason sdk_version exec_rc out err_file docker_err
-  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
-  set +o pipefail
-  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay-outer 2>"$err_file")"; then
-    exec_rc=0
-  else
-    exec_rc=$?
-  fi
-  set -o pipefail
-  if [[ "$exec_rc" -ne 0 ]]; then
-    docker_err="$(head -1 "$err_file" 2>/dev/null | tr -dc '[:print:]' | cut -c1-120)"
-    verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"; sdk_version=""
-  else
-    verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
-    reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
-    sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
-  fi
-  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
-  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE"
-  echo "Outer-wrap canary (report-only): verdict=$verdict reason=$reason"
-  # A sandbox_broken here means the arm-F mechanism itself failed on deploy
-  # (file-cap mountns EPERM or a realized isolation violation) — page, never
-  # gate. Distinct op tag so the alert routes to the outer-wrap surface.
-  if [[ "$verdict" == "sandbox_broken" ]]; then
-    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "sandbox-canary-outer-wrap" || true
-  fi
-  return 0
+  run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
+    "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
 }
 
 # _atomic_write <dest> <content>: temp file in the SAME directory as <dest> (so the rename is atomic
@@ -3848,6 +3834,11 @@ case "$COMPONENT" in
     # pdf-linearize tempfiles and keeps /tmp ephemeral. Post-GIT_ASKPASS
     # migration (git-auth.ts), git no longer writes credential helpers
     # under /tmp — the askpass script lives in $HOME instead.
+    # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
+    # (never effective — the app runs as non-root soleur) so the file-cap'd
+    # /usr/bin/bwrap can elevate at exec. Without it the wrap falls back to
+    # implicit userns — the arm Phase 0 measured fatal to the inner sandbox —
+    # and the outer-wrap canary would measure the wrong elevation path.
     docker run -d \
       --name soleur-web-platform-canary \
       --log-driver journald \
@@ -3857,6 +3848,7 @@ case "$COMPONENT" in
       --init \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+      --cap-add SYS_ADMIN \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
@@ -4182,6 +4174,11 @@ case "$COMPONENT" in
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
+      # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
+      # (never effective — the app runs as non-root soleur) so the file-cap'd
+      # /usr/bin/bwrap can elevate at exec — same posture cloud-init.yml's
+      # first-boot run grants; every subsequent deploy re-creates the
+      # container HERE.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \
@@ -4191,6 +4188,7 @@ case "$COMPONENT" in
         --init \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+        --cap-add SYS_ADMIN \
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
