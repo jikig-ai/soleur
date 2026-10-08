@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=996
-# generated-at=2026-10-08T16:54:14Z
+# generated-at=2026-10-08T17:32:10Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -154,6 +154,8 @@ plugins/soleur/test/concurrent-ship.test.sh	2489	measured
 plugins/soleur/test/debug-probe-residue.test.sh	2900	measured
 plugins/soleur/test/deploy-arm.test.sh	11825	measured
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	294	measured
+plugins/soleur/test/destructive-command-guard-hook.test.sh	996	floor
+plugins/soleur/test/destructive-command-guard-mutation.test.sh	996	floor
 plugins/soleur/test/digest-scrub.test.sh	390	measured
 plugins/soleur/test/domain-model-headless-append.test.sh	418	measured
 plugins/soleur/test/domain-model-init.test.sh	109	measured
@@ -239,6 +241,7 @@ plugins/soleur/test/scripts-shard-manifest.test.sh	728	measured
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	1369	measured
 plugins/soleur/test/scripts-shard-totality.test.sh	11460	measured
 plugins/soleur/test/session-state.test.sh	34903	measured
+plugins/soleur/test/shell-argv-parity.test.sh	996	floor
 plugins/soleur/test/ship-battery-owed.test.sh	17974	measured
 plugins/soleur/test/ship-followthrough-directive.test.sh	545	measured
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	8381	measured
@@ -462,6 +465,7 @@ scripts/test-all-webplat-gate	83	measured
 scripts/test-contention	137730	measured
 scripts/tmpfs-guard	5793	measured
 scripts/tunnel-connector-census	134	measured
+scripts/verify-agent-security-slice1	996	floor
 scripts/verify-lockfile-guards	104	measured
 scripts/verify-marketplace-ruleset	1400	measured
 scripts/watch-live-verify-pass	204	measured
