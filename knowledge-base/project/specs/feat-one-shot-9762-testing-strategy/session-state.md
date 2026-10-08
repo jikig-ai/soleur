@@ -21,3 +21,11 @@
 - Skills: `soleur:plan` (all phases), `soleur:deepen-plan` (all halt gates; lint-guard-contract green)
 - Inline agent passes: functional-discovery registries, domain-leader lenses, plan-review eng panel
 - Commands: cloud-detect.sh (local), gh issue view/comment/create, gh pr view, gh issue list, lint-guard-contract.py, git commit + push (2 commits: 87bd8646c8 plan+tasks, af2cb47bf2 deepened plan)
+
+### Position (post-review, shipping)
+- Review: 13-seat panel (design pass 2 + baseline 7 + conditionals 4), dedup 40→10 defects, all resolved inline (commits 98770d4c, 7766618e, dd373bfc, d2b0b5cf). Two targeted fix rounds + verification pass — all closed. Trailers: Reviewed-Coverage full 13/13, Reviewed-Risk-Tier aggregate pattern, 2× Reviewed-Fix-Round. Advisors: COMPLETE.
+- Compound: learning written (spawn-coverage + presence-vs-semantics pins).
+- Ship: synced origin/main (TSV conflict resolved via regen), net-issue-flow PASS (-1), PIR none, preflight PASS/SKIP, discoverability executed, PR marked ready. Battery: `test-all.sh --affected` degraded to FULL (runner-changed fallback — diff touches index), running detached to /var/tmp/ship-battery.pQzfuqQY.log, rc → /var/tmp/ship-battery-rc.PajPjFXL.
+- Next: battery green → CI settle → gh pr merge --squash --auto → Phase 7 poll → release → postmerge → then #9763 second sequential PR.
+### Errors (this phase)
+- ship-battery-launch wait-loop: `measured_runs=0` predicate too strict under continuous sibling affected-runs (affected mode is refusal-exempt); killed and launched --affected directly per the runner-changed/full-fallback path.
