@@ -33,3 +33,16 @@ that flag belongs to the monitor, not `sync-pr-behind.sh`. The script's usage
 names `PR_QUEUE_REPO` for repository selection and otherwise uses the current
 worktree. The corrected `9051 --queue-state` probe succeeded before any merge.
 Read each helper's own usage instead of transferring flags between helpers.
+
+## Addendum — session-start maintenance in a feature worktree
+
+The resumed routing preamble encountered read-only cleanup lock paths in the
+sandbox. Its zero exit accompanied an explicit skip, so cleanup was rerun with
+escalation and completed without removing worktrees. A skip is not completion.
+
+Running that preamble in the feature worktree also refreshed its clean, tracked
+`.mcp.json` from main. The resulting bytes were verified equal to main before
+restoring the branch's original bytes; no unknown edit was overwritten. For
+this repository, perform the required main-config refresh at the bare root,
+as the session-start rule specifies, and check the feature worktree afterward.
+Keep routing hygiene separate from an intentional feature-config change.
