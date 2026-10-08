@@ -50,7 +50,7 @@
 #   word (sudo -nu root, env -iu X, timeout -vk 5 10). The rule table is retried on the words after a `--`,
 #   which covers `doppler run --`, `aws-vault exec <profile> --` and `op run --`. An absolute-path binary
 #   matches by basename (/bin/rm) and command names are compared in lower case (RM, Git, Terraform; the fold
-#   starts no process). A wrapper's chdir option (env -C DIR, env --chdir=DIR, sudo -D DIR, sudo --chdir=DIR)
+#   starts no process). A wrapper's chdir option (env -C DIR, env --chdir=DIR, sudo -D DIR, sudo --chdir=DIR, and the abbreviations getopt_long accepts: --chd)
 #   moves the simulated working directory for the command it runs, and for that command only; a directory the
 #   guard cannot resolve (a variable) is an unresolved cd.
 #   ask   env -S, --split-string (any abbreviation) or a cluster with S (rule id `unparsed-wrapper`): the string
@@ -1010,7 +1010,7 @@ WCD=""; WCDF="-"; WCD_SET=0
 # the wrapper is a look-up only (`command -v`) or its payload is a string the guard does not analyse (env -S).
 # Reads t[] and n of the caller (dynamic scope, by design).
 wrap_skip() {
-  local name="$1" j=$(($2 + 1)) a lname k c eat split
+  local name="$1" j=$(($2 + 1)) a lname k c eat split opt
   WJ=-1
   case "$name" in
     sudo)
@@ -1018,10 +1018,16 @@ wrap_skip() {
         a="${t[$j]}"; k=$j; j=$((j + 1))
         [[ "$a" == -- ]] && break
         case "$a" in
-          --chdir) WCD="${t[$j]:-}"; WCDF="${f[$j]:--}"; WCD_SET=1; j=$((j + 1)) ;;
-          --chdir=*) WCD="${a#--chdir=}"; WCDF="${f[$k]:--}"; WCD_SET=1 ;;
-          --user|--group|--host|--prompt|--chroot|--role|--type|--close-from|--command-timeout|--other-user) j=$((j + 1)) ;;
-          --*) : ;;
+          --*)  # sudo (getopt_long) takes any unique abbreviation of a long option: --us root is --user root, --chd D is --chdir D
+            lname="${a%%=*}"; lname="${lname#--}"
+            if [[ -n "$lname" && "chdir" == "$lname"* ]]; then
+              if [[ "$a" == *=* ]]; then WCD="${a#*=}"; WCDF="${f[$k]:--}"; WCD_SET=1
+              else WCD="${t[$j]:-}"; WCDF="${f[$j]:--}"; WCD_SET=1; j=$((j + 1)); fi
+            elif [[ "$a" != *=* && -n "$lname" ]]; then
+              for opt in user group host prompt chroot role type close-from command-timeout other-user; do
+                if [[ "$opt" == "$lname"* ]]; then j=$((j + 1)); break; fi
+              done
+            fi ;;
           *) if short_first_val ughpCTUDRrt "$a"; then
                if [[ -z "$SFV_REST" ]]; then
                  [[ "$SFV" == D ]] && { WCD="${t[$j]:-}"; WCDF="${f[$j]:--}"; WCD_SET=1; }

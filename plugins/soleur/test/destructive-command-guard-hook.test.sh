@@ -1540,6 +1540,15 @@ L @@ wrapper chdir: env -C /tmp rm -rf ./x is no decision @@ none @@ - @@ env -C
 L @@ wrapper chdir: env -C /tmp moves the cwd away from home: rm -rf ./* is no decision @@ none @@ @HOME@ @@ env -C /tmp rm -rf ./*
 L @@ wrapper chdir: sudo -D /tmp moves the cwd away from home: rm -rf ./* is no decision @@ none @@ @HOME@ @@ sudo -D /tmp rm -rf ./*
 L @@ wrapper chdir: the move is for the wrapped command only (env -C /tmp true; rm -rf ./* in home still denies) @@ deny @@ @HOME@ @@ env -C /tmp true; rm -rf ./*
+L @@ wrapper abbreviation: sudo --us root rm -rf / (--us is --user, so root is its value and rm is the command) @@ deny @@ - @@ sudo --us root rm -rf /
+L @@ wrapper abbreviation: sudo --gr wheel rm -rf ~ (--gr is --group) @@ deny @@ - @@ sudo --gr wheel rm -rf ~
+L @@ wrapper abbreviation: sudo --ho box rm -rf ~ (--ho is --host) @@ deny @@ - @@ sudo --ho box rm -rf ~
+L @@ wrapper abbreviation: sudo --chd / rm -rf ./* (--chd is --chdir and moves the cwd) @@ deny @@ - @@ sudo --chd / rm -rf ./*
+L @@ wrapper abbreviation: sudo --chd=/ rm -rf ./* (attached value) @@ deny @@ - @@ sudo --chd=/ rm -rf ./*
+L @@ wrapper abbreviation: sudo --chd /tmp moves the cwd away from home: rm -rf ./* is no decision @@ none @@ @HOME@ @@ sudo --chd /tmp rm -rf ./*
+L @@ wrapper abbreviation: sudo --non rm -rf ~ (--non is --non-interactive and takes no value) @@ deny @@ - @@ sudo --non rm -rf ~
+L @@ wrapper abbreviation: sudo --user=root rm -rf ~ keeps working (attached value, nothing extra consumed) @@ deny @@ - @@ sudo --use=root rm -rf ~
+L @@ wrapper abbreviation: an unresolvable sudo --chd directory before a recursive rm asks @@ ask @@ - @@ sudo --chd "$UNKNOWN_DIR" rm -rf build
 L @@ wrapper chdir: an unresolvable env -C directory before a recursive rm asks @@ ask @@ - @@ env -C "$UNKNOWN_DIR" rm -rf build
 L @@ wrapper chdir: an unresolvable sudo -D directory before a force push asks @@ ask @@ - @@ sudo -D "$UNKNOWN_DIR" git push --force origin feature
 L @@ wrapper chdir: an unresolvable env -C directory before something else is no decision @@ none @@ - @@ env -C "$UNKNOWN_DIR" ls
