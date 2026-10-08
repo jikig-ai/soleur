@@ -9,8 +9,13 @@
 # Compares with `grep -c` counts, never a negated grep: a pattern that fails to
 # compile must not read as "nothing found, all good".
 #
-# Extended per PR: PR 1 (W1 credential deny) checks below; PR 2 adds the plugin
-# guard registration, PR 3 the release scan step.
+# Extended per PR: PR 1 (W1 credential deny) checks below; PR 2 (W2) adds the plugin
+# destructive-command guard (registration plus a three-envelope functional probe);
+# PR 3 the release scan step.
+#
+# SLICE1_PLUGIN_ROOT (default <repo>/plugins/soleur) is a test seam: the suite
+# points it at a COPY of the plugin tree so a broken guard can be driven without
+# editing the live hook. The observability gate runs this script under a 15 s cap.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -63,6 +68,63 @@ if need_file "$cfg" && need_file "$consts" && need_file "$qopts" && need_file "$
     "$(grep -c -E 'CREDENTIALS_PROMPT_DIRECTIVE' "$legacy" || true)" 2
   check "credentials directive defined and used by the Concierge prompt builder" \
     "$(grep -c -E 'CREDENTIALS_PROMPT_DIRECTIVE' "$cc" || true)" 2
+fi
+
+# --- W2: the plugin destructive-command guard is registered and decides -------
+# Registration: some PreToolUse entry that runs the guard has a matcher that reads
+# "Bash". Function: the hook, run from a temp HOME and cwd with GIT_* stripped by
+# prefix and the kill switch unset, answers ask / deny / nothing for three canned
+# envelopes. Needs jq and perl and says so by name rather than passing without them.
+plugin="${SLICE1_PLUGIN_ROOT:-$root/plugins/soleur}"
+hooks_json="$plugin/hooks/hooks.json"
+guard="$plugin/hooks/destructive-command-guard.sh"
+if need_file "$hooks_json" && need_file "$guard"; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "slice1-security: FAIL guard check needs jq on PATH"
+    fail=1
+  elif ! command -v perl >/dev/null 2>&1; then
+    echo "slice1-security: FAIL guard check needs perl on PATH"
+    fail=1
+  else
+    matchers="$(jq -r '.hooks.PreToolUse[]? | select(any(.hooks[]?; (.command // "") | contains("hooks/destructive-command-guard.sh"))) | .matcher // ""' "$hooks_json" 2>/dev/null || true)"
+    bash_hits=0
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      n="$(printf '%s' Bash | grep -c -E -- "$m" || true)"
+      case "$n" in '' | *[!0-9]*) n=0 ;; esac
+      bash_hits=$((bash_hits + n))
+    done <<EOF
+$matchers
+EOF
+    check "guard registered under a PreToolUse matcher that reads Bash" "$bash_hits" 1
+
+    # The hook reads the lexer's output through a process substitution (`< <(...)`), which needs /dev/fd. Probe the
+    # bash that will run the hook (the one on PATH) so a box without it fails by NAME, not as "answered 'ask', want deny".
+    if ! bash -c ': < <(:)' >/dev/null 2>&1; then
+      echo "slice1-security: FAIL guard check needs /dev/fd (process substitution)"
+      fail=1
+    else
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      guard_says() { # guard_says <command> -> the permissionDecision, or empty when the hook is silent
+        env_json="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"},\"cwd\":\"$tmp\"}"
+        out="$(
+          for v in $(compgen -e); do
+            case "$v" in GIT_*) unset "$v" ;; esac
+          done
+          unset SOLEUR_DISABLE_DESTRUCTIVE_GUARD
+          cd "$tmp" && printf '%s' "$env_json" | HOME="$tmp" bash "$guard" 2>/dev/null
+        )" || out=""
+        printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null || true
+      }
+      d1="$(guard_says 'terraform destroy')"
+      d2="$(guard_says 'rm -rf ~')"
+      d3="$(guard_says 'ls')"
+      [ "$d1" = ask ] || { echo "slice1-security: FAIL guard probe 'terraform destroy' answered '$d1', want ask"; fail=1; }
+      [ "$d2" = deny ] || { echo "slice1-security: FAIL guard probe 'rm -rf ~' answered '$d2', want deny"; fail=1; }
+      [ -z "$d3" ] || { echo "slice1-security: FAIL guard probe 'ls' answered '$d3', want silence"; fail=1; }
+    fi
+  fi
 fi
 
 if [ "$fail" -eq 0 ]; then
