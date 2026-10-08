@@ -7,7 +7,7 @@ Scope of this task list: S2 only (one deferral row, `plugins/soleur/test/*`, 140
 ## Phase 0: re-measure and gate (read-only)
 
 - [ ] 0.1 `git fetch origin main`; if it is ahead of the branch, merge it once now and re-run this phase (never mid-flight later).
-- [ ] 0.2 Drain probe on the dev host and inside `docker run --rm ubuntu:24.04`: with a writer that emits a second line after the first, `grep -q` must print 141 and `grep -c 1 >/dev/null` must print 0 under `set -o pipefail`. If the second prints 141, stop.
+- [ ] 0.2 Drain probe on the dev host and inside `docker run --rm ubuntu:24.04`: with a writer that emits a second line after the first, `grep -q` must print 141 and `grep -c 1 >/dev/null` must print 0 and a no-match input must keep rc 1, under `set -o pipefail`. If the second prints 141, stop.
 - [ ] 0.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh`; keep the `DEFERRED:` lines (expect `plugins/soleur/test/* (140 hits, ceiling 140, mode <=)` and a test-shaped total of 702).
 - [ ] 0.4 `python3 scripts/grep-q-drain-codemod.py apply --row 'plugins/soleur/test/*'` dry run; diff its QUEUE against the plan's disposition table (19 entries); any new entry stops the work until read.
 - [ ] 0.5 Trigger derivation over the `CHANGED` file list against every workflow path filter (expect only `version-bump-and-release.yml`, 46 of 46); open-PR intersection with the 46 files (expect empty); `uptime`.
@@ -31,7 +31,7 @@ Scope of this task list: S2 only (one deferral row, `plugins/soleur/test/*`, 140
 
 ## Phase 4: mutation battery
 
-- [ ] 4.1 Guard 1 matrix (seven rows) on scratch copies after a green control; first red line recorded from printed output; mutant 7 recorded as the surviving one; restore check clean.
+- [ ] 4.1 Guard 1 matrix (eight rows) on scratch copies after a green control; first red line recorded from printed output; mutant 8 recorded as the surviving one; restore check clean.
 - [ ] 4.2 Hand-edit rows: swap `-c` for `-vc` in the `roadmap-reconcile.test.sh` stub, TS15e must go RED; scratch run of the two `-m1` expressions on a three-line input whose first match is on line 2.
 
 ## Phase 5: evidence and ship notes
@@ -39,5 +39,5 @@ Scope of this task list: S2 only (one deferral row, `plugins/soleur/test/*`, 140
 - [ ] 5.1 One learning file under `knowledge-base/project/learnings/test-failures/` if still non-obvious (a `<=` row does not fail on slack; the codemod refuses a `=` row, so convert then flip). Do not prescribe a date in the plan; pick it at write time.
 - [ ] 5.2 `markdownlint-cli2` on the plan, this file, `decision-challenges.md` and the learning.
 - [ ] 5.3 Ship notes for `soleur:ship`: first PR-body line says merging fires one plugin release (`version-bump-and-release.yml`) and no web-platform release, apply or deploy; `Ref #9217`; `## Changelog`; NOT-fixed list; the eleven #8659 files; the later work that lowers this row next (Item F or S7); labels `semver:patch`, `type/chore`, `domain/engineering`; tracker comment text with the command behind each number.
-- [ ] 5.4 Cut S3 only after S2 has merged; never re-sync a BEHIND branch mid-flight.
+- [ ] 5.4 Cut S3, S4 and S5 only after S2 has merged (their rows sit next to the S2 row); never re-sync a BEHIND branch mid-flight.
 - [ ] 5.5 After merge: `soleur:postmerge` reads the `version-bump-and-release.yml` run and the new `v` release for the merge SHA; no other path-filtered workflow ran.
