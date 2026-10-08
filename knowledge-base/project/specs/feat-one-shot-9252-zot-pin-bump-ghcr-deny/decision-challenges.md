@@ -18,3 +18,9 @@ The brief asks for a `plan_only` rehearsal "where the path supports it". `regist
 ## 2026-10-08 D3 — "ubuntu half already shipped" is stale (mechanical, informational)
 
 PR 9783 (ubuntu:24.04 base pin) is OPEN. This PR uses `Ref #9252` only; #9252 closes when both halves land.
+
+## 2026-10-08 D4 - pre-authorising one recovery re-dispatch after a mid-replace failure (taste)
+
+- **Default (operator constraint "stop and report; never bypass"):** if the apply fails after the destroy (for example a Hetzner stock flip between the gate and the create), the agent reports with the `recovery-read` block's class and the one-step recovery, and waits for an explicit go before re-dispatching, even though the host is down and deploys are frozen meanwhile.
+- **Alternative:** pre-authorise exactly one re-dispatch of the same route for the class "apply failed after destroy, volume preserved", bounded in time, to shorten the freeze.
+- **Why the default:** a re-dispatch is a second destroy-first replace on the sole pull path and the failure may repeat for the same cause (stock); the decision belongs to the operator.
