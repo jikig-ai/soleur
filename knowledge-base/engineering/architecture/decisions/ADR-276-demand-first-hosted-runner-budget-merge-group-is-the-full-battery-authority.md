@@ -40,6 +40,8 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 | S4 | PR runs select the affected suites | #9729 | not started |
 | S5 | Re-measure, then CodeQL, Code Quality and supply decision | #9730 | not started |
 
+- 2026-10-08 S1 amended (#9727; see `## Amendment 2026-10-08 (S1, #9727)` below)
+
 ## Context
 
 Hosted-runner supply is saturated and per-push CI demand is the driver. GitHub documents the
@@ -283,3 +285,15 @@ acceptable because the unset state is the safe one (full CI), the accepted value
 each variable has a 30-day removal trigger. Only a future runner root and its runner group are
 Terraform; this ADR provisions nothing. ADR-032 holds: no required-context name changes. No other
 principle deviation.
+
+## Amendment 2026-10-08 (S1, #9727)
+
+Status stays `proposed`. This amendment is non-activating: it records what stage 1 delivered and corrects one sentence, and it activates no other stage.
+
+- **Delivered.** S1 added `scripts/ci-demand-census.sh` (the measurement authority Decision 7 names) and a path gate for the secret-scan `smoke-tests` matrix: a new fail-open `smoke-relevance` job lists the pull request's files through the API and the ten smoke cases run only when the PR touches a file they exercise, or when the changed-file list cannot be fully determined. Both are additive. No required context, merge authority or non-`pull_request` behaviour moved.
+- **Dropped.** The weekly smoke arm the issue allowed for was dropped, because no document claims weekly smoke coverage: every "weekly" in the secret-scanning runbook means the gitleaks scan, which the smoke job never fed. No schedule arm and no kill-switch variable were added; the rollback is a revert.
+- **Correction to the Status section.** The Status sentence that the smoke gate "runs unconditionally off `pull_request`" is inaccurate. The `smoke-relevance` job and `smoke-tests` are `pull_request`-only and nothing in S1 runs off a pull request.
+- **Decision 3(e).** Minutes are reported net: the secret-scan smoke-related minutes per pull-request run (the `smoke` stem plus the `smoke-relevance` stem) against the baseline window, with the skipped, ran and queue-cancelled split from the census `STEM` rows. An escape rate is not defined for a non-required, PR-only job whose smoke legs never run off a pull request, so none is reported.
+- **How to measure.** For a closed window, `bash scripts/ci-demand-census.sh --start <YYYY-MM-DDTHH:MM:SSZ> --end <YYYY-MM-DDTHH:MM:SSZ> --summary` from a developer shell with `gh auth` (the script refuses to run in CI). It fetches in one-hour sub-windows because the runs listing is capped at 1,000 results, and it exits 3 with no total when any self-check fails.
+- **How to roll back.** Delete the `needs:` edge and the `if:` gate on `smoke-tests` in `.github/workflows/secret-scan.yml`, or revert the pull request, which also reverts the ledger bump and the suite registrations.
+- **Not yet appended.** The `S1 live` line needs the post-merge census, so it is carried by the first later amendment (S2 or S3) or by a docs commit after the post-merge evidence is attached to #9727.
