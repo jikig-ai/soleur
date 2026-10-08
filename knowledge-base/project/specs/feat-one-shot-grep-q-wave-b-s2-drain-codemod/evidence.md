@@ -102,3 +102,7 @@ A pair run on small fixtures shows "no verdict change", not "the race is gone". 
 | worktree-manager-stale-lock-diag | 0 | 0 | 6 | 5 | identical |
 
 Wall time: `go-session-gates` read 77 s on base and 141 s on the branch in the pair run; two further alternating re-runs read 83 s / 81 s and 40 s / 100 s. The run-to-run spread (40 to 141 s) is larger than any effect, so no change in suite wall time is claimed or ruled out. No other suite moved by more than a few seconds.
+
+## Affected gate (`bash scripts/test-all.sh --affected`): stopped by decision, CI is the gate
+
+Selection: `AFFECTED_SUMMARY selected=251 of=582 always_on=148 edge=103 fallback=none`. The run was stopped by hand (SIGTERM, rc 143) after about 1 h 45 min at roughly 470 of 582 registrations processed, with 987 `[ok]` lines, no `[KILLED]` and no real `[FAIL]` (the three `[FAIL]` lines are suites' own deliberate self-test lines). It was stopped because CI's required `test` context runs the full battery on the PR head, so a longer local run adds no gate. This is not a green affected run and is not claimed as one; the local evidence is the pair run, the ratchet lane (`verdict=PASS members=23 red=0`), the guard and the mutation battery above.

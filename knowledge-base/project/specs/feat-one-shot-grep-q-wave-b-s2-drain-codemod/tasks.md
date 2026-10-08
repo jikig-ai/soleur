@@ -27,7 +27,7 @@ Scope of this task list: S2 only (one deferral row, `plugins/soleur/test/*`, 140
 - [x] 3.2 Flip the row to `= | 5` (last edit); the guard is rc 0 with `5 hits, ceiling 5, mode =, slack 0`; the other twelve `DEFERRED:` lines match the merge-base's.
 - [x] 3.3 `bash -n` on the 46 files; `git diff --numstat origin/main...HEAD -- plugins/soleur/test/` shows 135 and 135.
 - [x] 3.4 Pair run (pristine `git archive` of `origin/main` versus the branch, sequential, `timeout 150`); one table row per suite for the PR body.
-- [ ] 3.5 `bash scripts/pre-push-ratchet-lane.sh`, `bash scripts/guard-vacuity-floor.test.sh`, `bash scripts/lint-orphan-test-suites.sh`, `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`, `bash scripts/test-all.sh --print-selection` (guard selected), `bash scripts/test-all.sh --affected` if the host allows.
+- [x] 3.5 `bash scripts/pre-push-ratchet-lane.sh`, `bash scripts/guard-vacuity-floor.test.sh`, `bash scripts/lint-orphan-test-suites.sh`, `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`, `bash scripts/test-all.sh --print-selection` (guard selected), `bash scripts/test-all.sh --affected` if the host allows. (affected gate stopped after about 1 h 45 min, 0 real failures, by decision: CI is the gate; see evidence.md)
 
 ## Phase 4: mutation battery
 
@@ -37,7 +37,7 @@ Scope of this task list: S2 only (one deferral row, `plugins/soleur/test/*`, 140
 ## Phase 5: evidence and ship notes
 
 - [x] 5.1 One learning file under `knowledge-base/project/learnings/test-failures/` if still non-obvious (a `<=` row does not fail on slack; the codemod refuses a `=` row, so convert then flip). Do not prescribe a date in the plan; pick it at write time.
-- [ ] 5.2 `markdownlint-cli2` on the plan, this file, `decision-challenges.md` and the learning.
+- [x] 5.2 `markdownlint-cli2` on the plan, this file, `decision-challenges.md` and the learning.
 - [ ] 5.3 Ship notes for `soleur:ship`: first PR-body line says merging fires one plugin release (`version-bump-and-release.yml`) and no web-platform release, apply or deploy; `Ref #9217`; `## Changelog`; NOT-fixed list; the eleven #8659 files; the later work that lowers this row next (Item F or S7); labels `semver:patch`, `type/chore`, `domain/engineering`; tracker comment text with the command behind each number.
 - [ ] 5.4 Cut S3, S4 and S5 only after S2 has merged (their rows sit next to the S2 row); never re-sync a BEHIND branch mid-flight.
 - [ ] 5.5 After merge: `soleur:postmerge` reads the `version-bump-and-release.yml` run and the new `v` release for the merge SHA; no other path-filtered workflow ran.
