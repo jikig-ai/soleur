@@ -32,7 +32,7 @@
 # emitter may grow a field), while a duplicated key, a missing required key or an unequal one is RED.
 # `boot_id` is printed (uuid, else `unknown`) and is NOT part of the age join, because the readiness row is
 # per-instance and the probe row per-boot, so the two legitimately differ after any reboot. It is also not part of
-# the verdict: no reboot is required (owner decision 2026-10-08, ADR-263 addendum). What the marker-absent decision
+# the verdict: no reboot is required (owner decision 2026-10-07, ADR-263 addendum 2026-10-08). What the marker-absent decision
 # in w2l_judge and the follow-through need instead is w2l_ready_arm: the newest readiness row must say the boot
 # FORMATTED or OPENED the volume.
 #
@@ -44,12 +44,15 @@
 #   GREEN boot_id=<uuid|unknown> age_s=<n>   a POSITIVE count: >=1 probe row, shape-checked, every required
 #                                       field present and equal, probe age <= W2L_MAX_AGE_S; and, when EARNING
 #                                       the marker, a green readiness row that the probe row is not older than
+#                                       and whose luks_arm is formatted|opened (`RED reason=ready_luks_arm`;
+#                                       w2l_ready_verdict alone also tolerates noop, which only the marker refuses)
 #   RED reason=<token>                  negative evidence, OR an empty / unparseable body (zero counted rows)
 # GREEN is decided from the positive count and never from "no culprit named". A QUERY FAILURE (transport,
 # 5xx, 429, timeout, credentials absent) is NEITHER: w2l_query returns non-zero, no judge is ever called, and
 # the caller must leave the marker exactly as it is (a vendor blip must not reset a 3-day soak).
 #
-# EARNING vs KEEPING. With the marker ABSENT both rows are required. With it PRESENT the newest probe row alone
+# EARNING vs KEEPING. With the marker ABSENT both rows are required, the readiness row with a formatted|opened arm
+# (a noop or arm-less boot never heals by waiting: only replacing the host does). With it PRESENT the newest probe row alone
 # keeps it (the readiness row's W2L_READY_LOOKBACK_D lookback expires on a host that never reboots); a
 # readiness row NEWER than that probe row is a rebirth and still turns it RED.
 
@@ -255,16 +258,19 @@ w2l_ready_newest_age() {
     [ .[] | classify_ready | select(.kind == "row" and (.f.host // "") == $host) ] | sort_by(.age) | (.[0].age // empty)' "$1" 2>/dev/null || true
 }
 
-# w2l_ready_arm <ready.jsonl> — the luks_arm of the NEWEST well-formed readiness row for this host; returns 0 only for
-# `formatted` or `opened`. This is the one definition of the rule that replaced the reboot proof (owner decision
-# 2026-10-08): the boot that wrote the readiness row must have FORMATTED a raw volume or OPENED an existing LUKS
-# container. `noop` (which w2l_ready_verdict still tolerates) is NOT accepted here, nor is a row with no arm. It
-# prints the arm it found so a caller can name it, and fails closed (rc 1, no output) on an unparseable body or no row.
+# w2l_ready_arm <ready.jsonl> — the luks_arm of the NEWEST readiness row (the row w2l_ready_verdict judges: a newer
+# malformed or foreign row hides an older good one); rc 0 only for `formatted` or `opened`. This is the one definition
+# of the rule that replaced the reboot proof (owner decision 2026-10-07, ADR-263 addendum 2026-10-08): the boot that
+# wrote the readiness row must have FORMATTED a raw volume or OPENED an existing LUKS container. `noop` (which
+# w2l_ready_verdict still tolerates) is NOT accepted, nor is a row with no arm. Prints the arm when it is a known
+# value so a caller can name it; fails closed (rc 1) on an unparseable body, no row, or a row that is not this host's.
 w2l_ready_arm() {
   local arm
   _w2l_body_ok "$1" || return 1
   arm="$(jq -r -s --arg host "$W2L_HOST_NAME" "${_W2L_JQ_DEFS}"'
-    [ .[] | classify_ready | select(.kind == "row" and (.f.host // "") == $host) ] | sort_by(.age) | (.[0].f.luks_arm // empty)' "$1" 2>/dev/null)" || return 1
+    [ .[] | classify_ready ] | sort_by(.age) | .[0] // empty
+    | select(.kind == "row" and (.f.host // "") == $host)
+    | (.f.luks_arm // "") | select(. == "formatted" or . == "opened" or . == "noop")' "$1" 2>/dev/null)" || return 1
   [[ -n "$arm" ]] || return 1
   printf '%s\n' "$arm"
   [[ "$arm" == formatted || "$arm" == opened ]]

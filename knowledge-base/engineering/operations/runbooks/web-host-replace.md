@@ -336,8 +336,8 @@ prints one reason token in its `::error title=web-2 LUKS evidence is RED::` line
 instance (`no_probe_row`, `no_ready_row` or `probe_predates_ready`). Until #9372 has run, that notice is the expected state.
 
 The join is instance-level (ADR-263 D5; `boot_id` is printed for diagnosis and never compared). The marker is
-**earned** only when the newest probe row is green and fresh AND the newest readiness row is green and not newer
-than that probe row. It is **kept** by the newest probe row alone, unless a readiness row is newer than the probe
+**earned** only when the newest probe row is green and fresh AND the newest readiness row is green, not newer
+than that probe row, and reports `luks_arm` `formatted` or `opened` (`noop` is refused as `ready_luks_arm`). It is **kept** by the newest probe row alone, unless a readiness row is newer than the probe
 row (a rebirth), which is RED `probe_predates_ready`. A RED run on a held marker deletes it (the gate fails closed);
 a fault of the judge itself or of the query leaves the marker exactly as it is. A scheduled run that is RED or
 could not judge files a `[ci/luks-verify-web2]` GitHub issue, one per class, deduped by title and commented only
@@ -357,7 +357,7 @@ check-in (#9372), so the GitHub issue is the channel to watch.
 | `probe_not_luks`, `probe_mount_source` | The backing device is not `crypto_LUKS`, or `/mnt/data` is not mounted from `/dev/mapper/workspaces`. | The volume is not LUKS-backed. Do not flip; read the provisioner stages above. |
 | `probe_escrow` | The probe's passphrase re-test is not `ok`: the Doppler passphrase no longer opens the container header. | Check the fresh-host token and `WORKSPACES_LUKS_KEY`. |
 | `ready_escrow` | `escrow` is not `ok` in the readiness row: the header copy failed at birth. | Attempted once; replace the host to re-attempt. The marker stays withheld. |
-| `ready_not_ready`, `ready_stage`, `ready_unit`, `ready_not_luks`, `ready_luks_arm` | The readiness row reports the boot did not finish clean (read its `reason=`), a unit was down, or `luks` / `luks_arm` is wrong. Only judged while the marker is absent. | Read the row (query above) and the `fresh_boot_not_ready_<reason>` Sentry stage. |
+| `ready_not_ready`, `ready_stage`, `ready_unit`, `ready_not_luks`, `ready_luks_arm` | The readiness row reports the boot did not finish clean (read its `reason=`), a unit was down, or `luks` / `luks_arm` is wrong. Only judged while the marker is absent. For `ready_luks_arm`: the marker needs `formatted` or `opened`; a `noop` or arm-less boot is a clean boot that never emits the Sentry stage, and the readiness row is written once per instance, so only replacing web-2 (owner go-ahead for the dispatch) clears it. | Read the row (query above) and the `fresh_boot_not_ready_<reason>` Sentry stage. |
 | `ready_host`, `ready_malformed` | The newest readiness row names another host or does not parse. Only judged while the marker is absent. | Re-run the query above; a row for another host means the host-name splice is wrong. |
 | `probe_body_unparseable`, `ready_body_unparseable` | Better Stack answered with a body that is not JSON rows (an error page, a truncated line): zero counted rows, so RED. | Re-run the workflow; see [Better Stack log query](./betterstack-log-query.md) if it persists. A held marker is deleted. |
 
@@ -407,8 +407,7 @@ doppler run -p soleur -c prd_terraform -- bash -c '
 ```
 
 `luks_arm=formatted` on this rehearsal is a **stop-the-line** result, not a warning: it means the provisioner saw a raw volume, so the
-populated store was not the one attached. The verdict function accepts `formatted`, `opened` and `noop` for the daily marker, which is why
-this query adds the stricter `opened` requirement. The sentinel read-back, once a channel exists, is the second half of the acceptance;
+populated store was not the one attached. The readiness verdict accepts `formatted`, `opened` and `noop`; the marker and the #6931 grader accept only `formatted` and `opened` (ADR-263 addendum 2026-10-08), and this query adds the stricter `opened` requirement. The sentinel read-back, once a channel exists, is the second half of the acceptance;
 the row query alone cannot show that file content survived.
 
 ## If the apply fails partway

@@ -1325,7 +1325,7 @@ fi
 # PROPERTY. WORKSPACES_LUKS_CUTOVER_AT exists in its Doppler config only while web-2's newest probe row is
 # fresh and reports a LUKS-backed mount with an off-host header copy (and, to EARN it, a green readiness row
 # the probe row is not older than: an INSTANCE-level join on AGE, plus the readiness row's luks_arm being formatted
-# or opened (w2l_ready_arm; `noop` is refused). No reboot is required (owner decision 2026-10-08, ADR-263 addendum),
+# or opened (w2l_ready_arm; `noop` is refused). No reboot is required (owner decision 2026-10-07, ADR-263 addendum 2026-10-08),
 # so the boot_ids of the two rows are not compared); negative evidence removes it, and a FAILED QUERY (or a
 # Doppler fault) leaves it untouched.
 #
@@ -1622,6 +1622,8 @@ else
   g3_ready 259200 1 ok $G3_UUID_A 1 none > "$FX/r_armnone"
   g3_ready 259200 1 ok $G3_UUID_A 1 noop > "$FX/r_noop"      # w2l_ready_verdict tolerates noop; w2l_ready_arm (the marker rule) does not
   g3_ready 259200 1 ok $G3_UUID_A 1 opened > "$FX/r_opened"  # a fresh host that opened the existing LUKS container
+  { g3_ready 300000 1 ok $G3_UUID_A 1 formatted; g3_ready 259200 1 ok $G3_UUID_A 1 noop; } > "$FX/r_old_fmt_new_noop"   # the NEWEST row decides: refused
+  { g3_ready 300000 1 ok $G3_UUID_A 1 noop; g3_ready 259200 1 ok $G3_UUID_A 1 formatted; } > "$FX/r_old_noop_new_fmt"   # the NEWEST row decides: earned
   g3_ready 259200 1 ok $G3_UUID_A 0 formatted > "$FX/r_ready0"
   g3_ready 259200 1 ok $G3_UUID_A 1 formatted token=0 > "$FX/r_token0"
   g3_ready 259200 1 ok $G3_UUID_A 1 formatted vector=0 > "$FX/r_vector0"
@@ -1849,10 +1851,12 @@ EOS
     scn S54-readiness-boot-id-unknown-while-the-probe-is-known-is-GREEN p_ok r_unk none 0 1 0 iso green marker_written
     scn S59-readiness-luks-arm-noop-is-not-earned p_ok r_noop none 1 0 0 none red ready_luks_arm
     scn S60-readiness-luks-arm-opened-is-GREEN p_ok r_opened none 0 1 0 iso green marker_written
+    scn S61-an-older-formatted-row-does-not-rescue-a-newer-noop-row p_ok r_old_fmt_new_noop none 1 0 0 none red ready_luks_arm
+    scn S62-an-older-noop-row-does-not-block-a-newer-formatted-row p_ok r_old_noop_new_fmt none 0 1 0 iso green marker_written
     scn S42-doppler-set-fails    p_ok r_ok none nz 1 0 none query_failed marker_write FIXTURE_DOPPLER_SET_FAIL=1
     scn S43-read-back-mismatch   p_ok r_ok none nz 1 0 any  query_failed marker_readback FIXTURE_DOPPLER_SET_DIVERGE=1
   }
-  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54 S55 S56 S57 S58 S59 S60"
+  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54 S55 S56 S57 S58 S59 S60 S61 S62"
 
   # ---- PRISTINE: the battery must be clean on the code as shipped, and every scenario is its OWN assertion ----
   G3_SB="$(g3_sandbox pristine)"
@@ -1863,7 +1867,7 @@ EOS
   done
   g3_got_ids="$(printf '%s\n' "${G3_RAN[@]}" | cut -c1-3 | sort -u | tr '\n' ' ')"
   g3_want_ids="$(tr ' ' '\n' <<<"$G3_EXPECTED_IDS" | sort -u | tr '\n' ' ')"
-  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 60 ]]; then ok "G3 the registered scenario set ran exactly (60 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
+  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 62 ]]; then ok "G3 the registered scenario set ran exactly (62 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
 
   # the green scenario's two reads: host-scoped, unit-pinned, archive arm present, server-side age, no LIKE wildcard
   g3_scn "$G3_SB" "$FX/p_ok" "$FX/r_ok" none
@@ -2014,6 +2018,8 @@ PY
     $'  if [[ "$marker" != present ]] && ! w2l_ready_arm "$2" >/dev/null; then printf \'RED reason=ready_luks_arm\\n\'; return 0; fi\n  if [[ "$marker" != present ]]; then pb="${pv#GREEN boot_id=}"; pb="${pb%% *}"; rb="${rv#GREEN boot_id=}"; rb="${rb%% *}"; if [[ -z "$pb" || -z "$rb" || "$pb" == unknown || "$rb" == unknown || "$pb" == "$rb" ]]; then printf \'RED reason=reboot_not_seen\\n\'; return 0; fi; fi'
   g3_mut "22b noop is accepted by the shared arm helper (the marker is earned on a noop boot)" "S59" $LIB \
     '[[ "$arm" == formatted || "$arm" == opened ]]' '[[ "$arm" == formatted || "$arm" == opened || "$arm" == noop ]]'
+  g3_mut "22c the OLDEST readiness row decides the arm (an older formatted row rescues a newer noop one)" "S61 S62" $LIB \
+    $'| .[0] // empty\n' $'| .[-1] // empty\n'
   g3_mut "17e a failed doppler delete is ignored"     "S51" marker.sh \
     $'|| { echo "::error::RED (${reason}) and deleting the marker FAILED."; emit red_delete_failed "$reason"; exit 1; }' '|| true'
   # row 18 — emit() is a no-op (the issue and the check-in would read an empty class). Its own CONTROL cannot be the
@@ -2256,7 +2262,8 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # review round 1: S56 (empty-value marker reads absent) + mutation row 17h 323 -> 325.
 # 2026-10-08 (#9372, immutability not reboot): S59 (noop readiness arm refused) and S60 (opened) + mutation row 22b,
 # with row 22 re-pointed at the old reboot requirement, 325 -> 332 (measured green count).
-WF_MIN_ASSERTIONS=332
+# Review round 1: S61/S62 (the NEWEST readiness row decides, both directions) + mutation row 22c, 332 -> 335.
+WF_MIN_ASSERTIONS=335
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

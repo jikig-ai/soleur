@@ -140,7 +140,7 @@ run 0 PASS "T02 a FAIL row from BEFORE the readiness row does not count (the reb
 reset_fx; rdy $((SOAK + 60)) | ready; soak_probes $((SOAK + 60)) | probe
 run 0 PASS "T03 readiness one minute past 72 h with three daily buckets: the soak is met"
 
-# No reboot is required (owner decision 2026-10-08, ADR-263 addendum): the soak is met on the instance's readiness row
+# No reboot is required (owner decision 2026-10-07, ADR-263 addendum 2026-10-08): the soak is met on the instance's readiness row
 # (luks_arm formatted|opened) plus three GREEN days, whatever boot_id the probe rows carry. The four cases below used to
 # need a boot_id that differed from the readiness row's; they now pass, and T04f/T04g pin the arm that replaced it.
 reset_fx; rdy $((4 * D)) "boot_id=unknown" | ready; { row $H "$(okmsg crypto_LUKS ok unknown)"; row $((H + D)) "$(okmsg crypto_LUKS ok unknown)"; row $((H + 2 * D)) "$(okmsg crypto_LUKS ok $UB)"; } | probe
@@ -159,6 +159,8 @@ run 2 "NOT YET" "T04f an older formatted row and a NEWER noop row: noop is not f
 said "T04f the reason names the arm" 'luks_arm=noop'
 reset_fx; rdy $((4 * D)) "luks_arm=opened" | ready; soak_probes $((4 * D)) | probe
 run 0 PASS "T04g luks_arm=opened (a fresh host that opened the existing volume) meets the soak"
+reset_fx; { rdy $((5 * D)) "luks_arm=noop"; rdy $((4 * D)); } | ready; soak_probes $((4 * D)) | probe
+run 0 PASS "T04h an older noop row and a NEWER formatted row: the newest readiness row decides"
 
 reset_fx; rdy $((30 * D)) | ready; soak_probes $((30 * D)) | probe
 run 0 PASS "T05 a readiness row 30 days old: the probe lookback is capped at 504 h and the soak is still graded"
@@ -265,10 +267,10 @@ leak_out="$(env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" FX="$WORK/fx" CALLS="$
 expect "T41 w2l_query withholds every secret-shaped variable but the three Better Stack values (the stub refuses on any)" test "$leak_out" = "rc=0"
 
 # --- the scenario set is REGISTERED: deleting one reds the suite by name ------------------------------------------
-EXPECTED_IDS="T01 T02 T03 T04 T04b T04c T04d T04e T04f T04g T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 T17 T18 T19 T20 T21 T22 T23 T24 T25 T26 T27 T28 T29 T30 T31 T32 T33 T34 T35 T36 T37 T38 T39 T40 T41"
+EXPECTED_IDS="T01 T02 T03 T04 T04b T04c T04d T04e T04f T04g T04h T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 T17 T18 T19 T20 T21 T22 T23 T24 T25 T26 T27 T28 T29 T30 T31 T32 T33 T34 T35 T36 T37 T38 T39 T40 T41"
 got_ids="$(printf '%s\n' "${IDS[@]}" | sort -u | tr '\n' ' ')"
 want_ids="$(tr ' ' '\n' <<<"$EXPECTED_IDS" | sort -u | tr '\n' ' ')"
-if [ "$got_ids" = "$want_ids" ]; then ok "the registered scenario set ran exactly (46 ids)"; else no "the scenario set drifted: ran [$got_ids] expected [$want_ids]"; fi
+if [ "$got_ids" = "$want_ids" ]; then ok "the registered scenario set ran exactly (48 ids)"; else no "the scenario set drifted: ran [$got_ids] expected [$want_ids]"; fi
 
 # --- mutation proofs: each mutant must turn at least one replayed arm RED. A mutant that lands nothing is a failure. ----
 # The mutant runs from a sandbox tree (the probe finds its helper relative to its own path), so the repo is never
@@ -319,8 +321,6 @@ run_arms_quiet() {
   a_dead() { rdy $((4 * D)) | ready; }
   a_unready() { rdy $((4 * D)) "escrow=missing" | ready; soak_probes $((4 * D)) | probe; }
   a_cap() { rdy $((30 * D)) | ready; soak_probes $((30 * D)) | probe; }
-  a_ready_unknown() { rdy $((4 * D)) "boot_id=unknown" | ready; soak_probes $((4 * D)) | probe; }
-  a_no_reboot() { rdy $((4 * D)) | ready; { row $H "$(okmsg crypto_LUKS ok $UA)"; row $((H + D)) "$(okmsg crypto_LUKS ok $UA)"; row $((H + 2 * D)) "$(okmsg crypto_LUKS ok $UA)"; } | probe; }
   arm 0 a_pass; arm 2 a_young; arm 2 a_two_days; arm 2 a_one_bucket; arm 1 a_red; arm 1 a_ext4_in_window; arm 2 a_stale_newest
   # the NAMED reason matters here: the readiness-arm check also exits 2, so the exit code alone cannot tell the two checks apart
   [[ "$out" == *"not a fresh LUKS-backed OK row"* ]] || MUTANT_RED=$((MUTANT_RED + 1))
@@ -332,9 +332,6 @@ run_arms_quiet() {
   grep -qF "JSONExtractString(raw,'_SYSTEMD_UNIT') = 'luks-monitor.service'" "$WORK/sql" || MUTANT_RED=$((MUTANT_RED + 1))
   arm 0 a_cap
   grep -q "^probe:.*INTERVAL 504 HOUR" "$WORK/sql" || MUTANT_RED=$((MUTANT_RED + 1))
-  # no reboot is required any more: both of these used to be NOT YET
-  arm 0 a_no_reboot
-  arm 0 a_ready_unknown
   # the arm that replaced it: noop is neither formatted nor opened, and the REASON must be named
   a_noop() { rdy $((4 * D)) "luks_arm=noop" | ready; soak_probes $((4 * D)) | probe; }
   arm 2 a_noop
@@ -374,6 +371,6 @@ if [ "$MUTANT_RED" -eq 0 ]; then ok "mutation harmless variant (a trailing comme
 echo
 echo "web2-luks-live-6931.test.sh: $pass passed, $fail failed"
 # Non-degeneracy floor: EXACT (the green count of this suite; deleting an arm or a mutation row must red it).
-FLOOR=85
+FLOOR=86
 [ "$((pass + fail))" -ge "$FLOOR" ] || { echo "FAIL: only $((pass + fail)) assertions ran (<$FLOOR) — the harness did not execute fully" >&2; exit 1; }
 [ "$fail" -eq 0 ]
