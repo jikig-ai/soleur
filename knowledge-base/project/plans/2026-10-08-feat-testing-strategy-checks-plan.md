@@ -296,13 +296,13 @@ No infrastructure, no persistent store, no cross-component connection — Phase 
 
 ## Acceptance Criteria
 
-- [ ] **AC-1 (issue AC 1):** `functional-discovery`/`agent-finder` run recorded on #9762 — DONE at plan time (comment https://github.com/jikig-ai/soleur/issues/9762#issuecomment-6063533523); verify the comment exists and names the verdict.
-- [ ] **AC-2 (issue AC 2):** the decision (extend `test-design-reviewer` + plan/work instruction; standalone skill deferred to #9771) is recorded on #9762 and in `specs/feat-one-shot-9762-testing-strategy/`.
-- [ ] **AC-3 (issue AC 3):** the extended reviewer FAILs `slow-e2e-no-justification.diff` citing the missing justification, and PASSes `fast-unit.diff` with the file classified `unit`; both verdicts recorded in `fixture-verdicts.md` and posted to #9762.
-- [ ] **AC-4:** `test-design-reviewer.md` contains `## Pyramid & Fast-Feedback Check` with the layer table, marker convention, FAIL/WARN verdict rules, and the no-measured-runtime boundary line.
-- [ ] **AC-5:** all three `## Test Scenarios` template blocks in `plan-issue-templates.md` name pyramid layers; `work/SKILL.md` RED-task instruction names the layer.
-- [ ] **AC-6:** `plugins/soleur/test/test-pyramid-fixtures.test.sh` exits 0 green standalone; Guard-Contract rows M1–M5 each drive it red (verified during work); `bash scripts/test-all.sh --print-selection` on this diff shows the suite AFFECTED-selected.
-- [ ] **AC-7:** seat descriptions updated — `review/SKILL.md` agent-13 bullet and `review.workflow.js` `lens:` mention pyramid/budget.
+- [x] **AC-1 (issue AC 1):** `functional-discovery`/`agent-finder` run recorded on #9762 — DONE at plan time (comment https://github.com/jikig-ai/soleur/issues/9762#issuecomment-6063533523); verify the comment exists and names the verdict.
+- [x] **AC-2 (issue AC 2):** the decision (extend `test-design-reviewer` + plan/work instruction; standalone skill deferred to #9771) is recorded on #9762 and in `specs/feat-one-shot-9762-testing-strategy/`.
+- [x] **AC-3 (issue AC 3):** the extended reviewer FAILs `slow-e2e-no-justification.diff` citing the missing justification, and PASSes `fast-unit.diff` with the file classified `unit`; both verdicts recorded in `fixture-verdicts.md` and posted to #9762.
+- [x] **AC-4:** `test-design-reviewer.md` contains `## Pyramid & Fast-Feedback Check` with the layer table, marker convention, FAIL/WARN verdict rules, and the no-measured-runtime boundary line.
+- [x] **AC-5:** all three `## Test Scenarios` template blocks in `plan-issue-templates.md` name pyramid layers; `work/SKILL.md` RED-task instruction names the layer.
+- [x] **AC-6:** `plugins/soleur/test/test-pyramid-fixtures.test.sh` exits 0 green standalone; Guard-Contract rows M1–M5 each drive it red (verified during work); `bash scripts/test-all.sh --print-selection` on this diff shows the suite AFFECTED-selected.
+- [x] **AC-7:** seat descriptions updated — `review/SKILL.md` agent-13 bullet and `review.workflow.js` `lens:` mention pyramid/budget.
 
 ## Domain Review
 
