@@ -969,6 +969,13 @@ if [[ -z "$_b4_miss" ]]; then _x=ok; else _x=bad; fi
 chk "the bash-4 token pattern flags every known-bad spelling and none of the look-alikes" "$_x" "wrong:$_b4_miss"
 if [[ -f "$LEXER" && -r "$LEXER" ]]; then _x=ok; else _x=bad; fi
 chk "the vendored lexer is present" "$_x"
+# The hook's limits are named constants, and the texts that state them are built from those constants (a changed cap cannot leave a message
+# lying). Read from the comment-stripped code, so the header's prose about them cannot satisfy these.
+_hcode=""; [[ -f "$GUARD_HOOK" ]] && _hcode="$(grep -v '^[[:space:]]*#' "$GUARD_HOOK" | sed -E 's/[[:space:]]#([[:space:]].*)?$//')"
+chk "constants: the wrapper-depth limit, the quote length and the path-component cap are named (MAX_WRAP, QUOTE_MAX, MAX_PATH_COMPONENTS)" "$([[ "$_hcode" == *$'\nMAX_WRAP=8'* && "$_hcode" == *$'\nQUOTE_MAX=200'* && "$_hcode" == *$'\nMAX_PATH_COMPONENTS=128'* && "$_hcode" != *MAX_DEPTH* ]] && echo ok)"
+chk "constants: no bare 8 or 200 stands in for MAX_WRAP / QUOTE_MAX in a comparison or a cut" "$([[ "$_hcode" != *'depth > 8'* && "$_hcode" != *':0:200}'* && "$_hcode" != *'> 200 )'* && "$_hcode" != *'<= 200'* ]] && echo ok)"
+chk "constants: the size texts are built from MAX_ENVELOPE / SCAN_MAX_SEG / SCAN_MAX_TOTAL, not typed (no literal '64 KiB' or '256 KiB' in the code)" "$([[ "$_hcode" != *'64 KiB'* && "$_hcode" != *'256 KiB'* && "$_hcode" == *'MAX_ENVELOPE / 1024'* && "$_hcode" == *'SCAN_MAX_SEG / 1024'* && "$_hcode" == *'SCAN_MAX_TOTAL / 1024'* ]] && echo ok)"
+chk "constants: no message names DEADLINE_S as the limit (the read-time extension moves it); the messages name LIMIT_S" "$([[ "$_hcode" != *'${DEADLINE_S} s time limit'* && "$_hcode" == *'${LIMIT_S} s time limit'* ]] && echo ok)"
 _hdr=""; [[ -f "$GUARD_HOOK" ]] && _hdr="$(head -n 200 "$GUARD_HOOK")"
 if grep -qF 'SOLEUR_DISABLE_DESTRUCTIVE_GUARD' <<<"$_hdr" && grep -qi 'restart' <<<"$_hdr"; then _x=ok; else _x=bad; fi
 chk "the header documents the kill switch and that it needs a session restart" "$_x"
@@ -1513,6 +1520,8 @@ L @@ lexer-empty: an input redirect from a file name that starts with rm (rm.txt
 L @@ lexer-empty: a file name that starts with push (push-notes.md) is not an ask @@ none @@ - @@ > push-notes.md
 L @@ lexer-empty: a plain $HOME path with git in a directory name is not an ask @@ none @@ - @@ > $HOME/.config/git/ignore
 L @@ lexer-empty: a redirect to a file that IS a keyword (terraform) asks @@ ask @@ - @@ > terraform
+L @@ lexer-empty: a command that is only a heredoc has no command word and asks when its body names a keyword (the header says so) @@ ask @@ - @@ <<EOF@NL@terraform destroy@NL@EOF
+L @@ lexer-empty: a command that is only a here-string asks when it names a keyword @@ ask @@ - @@ <<<"rm -rf /"
 L @@ lexer-empty: a keyword only in a comment line before the redirect is not an ask @@ none @@ - @@ # rm -rf ~@NL@>"out.txt"
 L @@ lexer-empty: a QUOTED target whose name contains a keyword (terraform.log) is not an ask @@ none @@ - @@ > "terraform.log"
 L @@ lexer-empty: a single-quoted path whose file name contains a keyword is not an ask @@ none @@ - @@ > 'out/terraform.log'
@@ -2002,10 +2011,10 @@ if s.count(a) != 1:
     sys.exit(1)
 open(p, "w").write(s.replace(a, r))' "$1" "$2" "$3" 2>/dev/null || HE_OK=bad
 }
-_DL_READ='if (( SECONDS >= DEADLINE_S )); then BOUND_SOFT="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi'
-_DL_JUDGE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the commands"; break; fi'
-_DL_DECIDE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi'
-_DL_RM='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the targets of rm"; return 0; fi'
+_DL_READ='if (( SECONDS >= DEADLINE_S )); then BOUND_SOFT="the ${LIMIT_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi'
+_DL_JUDGE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the commands"; break; fi'
+_DL_DECIDE='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking a command"; return 0; fi'
+_DL_RM='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the targets of rm"; return 0; fi'
 deadline_row() { # deadline_row <phase> <command> <anchor to neuter>...
   local phase="$1" cmd="$2"; shift 2
   mk_hook_tree "deadline-$phase"; HE_OK=ok
@@ -2020,10 +2029,10 @@ deadline_row judging 'ls "x"; terraform plan' "$_DL_READ" "$_DL_DECIDE" "$_DL_RM
 deadline_row deciding 'ls "x"; terraform plan' "$_DL_READ" "$_DL_JUDGE" "$_DL_RM"
 deadline_row rm-targets 'rm -rf "build"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE"
 # git has four loops (its global options, the flags of push, its refs, its destinations), each with its own clock check: each row keeps ONE of them
-_DL_GO='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the options of git"; return 0; fi'
-_DL_GF='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the flags of git push"; return 0; fi'
-_DL_GR='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the refs of git push"; return 0; fi'
-_DL_GD='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the destinations of git push"; return 0; fi'
+_DL_GO='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the options of git"; return 0; fi'
+_DL_GF='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the flags of git push"; return 0; fi'
+_DL_GR='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the refs of git push"; return 0; fi'
+_DL_GD='if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the destinations of git push"; return 0; fi'
 deadline_row git-options 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GF" "$_DL_GR" "$_DL_GD"
 deadline_row git-flags 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GR" "$_DL_GD"
 deadline_row git-refs 'git push -f origin feat "x"' "$_DL_READ" "$_DL_JUDGE" "$_DL_DECIDE" "$_DL_RM" "$_DL_GO" "$_DL_GF" "$_DL_GD"
@@ -2449,7 +2458,9 @@ jqchk "output fallback: that ask keeps its rule id, the person-facing sentence a
 env_row "output fallback: a deny whose quoted command holds a double quote stays a deny" deny "$(mkjson "rm -rf ~ 'x\"y'" "$TREE")" "$JS"
 jqchk "output fallback: that deny names guard-output-fallback and the rule id, says it is blocked, and never says asking instead of allowing" '.hookSpecificOutput.permissionDecisionReason | (contains("guard-output-fallback") and contains("recursive-delete-home") and contains("blocked") and (contains("asking instead of allowing") | not) and startswith("This command was NOT run. "))'
 jqchk "output fallback: that deny repeats the reason in the systemMessage and keeps the escape hatch and the issues URL" '.systemMessage == .hookSpecificOutput.permissionDecisionReason and (.systemMessage | (contains("SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1") and test("https://[^ ]+/issues")))'
+jqchk "output fallback: that deny's text has no doubled space (the agent label follows the sentence with one)" '(.systemMessage | length > 0) and (.systemMessage | contains("  ") | not)'
 env_row "output fallback: an ask whose quoted command holds a double quote stays an ask" ask "$(mkjson "terraform destroy 'x\"y'" "$TREE")" "$JS"
+jqchk "output fallback: that ask has no doubled space (the agent label follows the sentence with one)" '.hookSpecificOutput.permissionDecisionReason | contains("  ") | not'
 jqchk "output fallback: that ask names guard-output-fallback and the rule id and says it is asking instead of allowing" '.hookSpecificOutput.permissionDecisionReason | (contains("guard-output-fallback") and contains("infra-destroy") and contains("asking instead of allowing") and startswith($lead + " "))' --arg lead "$ASK_LEAD"
 env_row "output fallback: a deny whose quoted command holds a backslash stays a deny" deny "$(mkjson "rm -rf ~ 'x\\y'" "$TREE")" "$JS"
 env_row "output fallback: a deny whose quoted command holds a tab stays a deny with valid JSON" deny "$(mkjson "rm -rf ~ 'x"$'\t'"y'" "$TREE")" "$JS"

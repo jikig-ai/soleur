@@ -61,7 +61,7 @@
 #   ask   a command too large to check (rule id `bound`): a tool call over 256 KiB (checked before the prefilter or
 #         any parser reads it), more than MAX_RECORDS simple commands, more than MAX_WORDS words, a word over
 #         MAX_WORD_BYTES (4096 bytes: bash's expansions on one word are quadratic in its length), a target path
-#         with more than MAX_DEPTH components, a segment over 16 KiB (or 64 KiB of segments in all) in a degraded scan, or the DEADLINE_S wall
+#         with more than MAX_PATH_COMPONENTS components, a segment over 16 KiB (or 64 KiB of segments in all) in a degraded scan, or the DEADLINE_S wall
 #         clock reached.
 #         What was read before the limit is still judged: a deny wins; an ask-class match keeps its own reason
 #         with the bound sentence appended; with nothing matched the ask is the bare `bound` one.
@@ -73,6 +73,8 @@
 #         variable name, the line with those characters removed (r""m, 'r'm, ev""al) has such a token. Both read the
 #         last path component of a token (/bin/rm is rm). A blank or comment-only command, and a bare redirect to a
 #         file that merely contains one (`> terraform.log`, `> "out/terraform.log"`, `> out.log`), is allowed.
+#         A command that is only a heredoc or a here-string (`<<EOF ... EOF`, `<<<"rm -rf /"`) has no command word, so
+#         the lexer returns no record; its body names a keyword, so it asks lexer-empty (a body is not a command).
 #
 # NOT DECIDED (stated, not implied). Obfuscation: a variable-built command name, glob or brace expansion of
 # a command name (r[m], r{m,}), brace expansion of a target (`/{bin,usr}`), `xargs rm`, `find -delete` and
@@ -205,17 +207,20 @@ unset CDPATH
 # (the frame-read loop costs about 120 us a word under load), not what the rule table can judge. MAX_WORD_BYTES caps one word
 # (the frame reader swaps a longer one for a placeholder): bash's own expansions on a word, ${p##*/} and a per-character loop,
 # are quadratic in its length and no clock check can interrupt one, while the 256 KiB and 128-component caps bound neither.
-# MAX_DEPTH caps the components of a path the guard resolves, MAX_ENVELOPE the tool call, SCAN_MAX_SEG a degraded-scan segment and
+# MAX_PATH_COMPONENTS caps the components of a path the guard resolves, MAX_ENVELOPE the tool call, SCAN_MAX_SEG a degraded-scan segment and
 # SCAN_MAX_TOTAL all the segments of one degraded scan. A command
 # beyond any of them, or one that runs out of time, asks with rule id `bound` unless a deny was found in what was read
 # (BOUND_SOFT: a trip while reading or resolving does not stop the judging of the rest). The lexer has its own 2 s alarm;
 # these bound everything after it.
 SECONDS=0
 DEADLINE_S=6
+LIMIT_S="$DEADLINE_S"   # the limit the messages name: DEADLINE_S itself moves (a read-time trip grants the judging 2 more seconds)
 MAX_RECORDS=2000
 MAX_WORDS=20000
 MAX_WORD_BYTES=4096   # PATH_MAX: a longer word is not judged. bash's own expansions on one word (${p##*/}, a per-character loop over a dash word) are quadratic in its length
-MAX_DEPTH=128
+MAX_PATH_COMPONENTS=128
+MAX_WRAP=8            # nested wrappers (and -- hops) the rule table unwraps; the ninth asks `wrapper-depth`
+QUOTE_MAX=200         # characters of the matched command a reason quotes
 MAX_ENVELOPE=262144   # 256 KiB: a larger tool call asks `bound` before the prefilter or any parser reads it (the prefilter and the raw scans are not linear)
 SCAN_MAX_SEG=16384    # 16 KiB: the longest segment the raw/decoded scans will try their patterns on (their cost is quadratic in it: about 0.3 s at the cap)
 SCAN_MAX_TOTAL=65536  # 64 KiB: the bytes of all the segments of one command the scans will try (the clock is read only between segments)
@@ -283,9 +288,9 @@ emit_fallback() {
   case "$COMPOSED" in
     *[![:print:]]*|*[\"\\]*)
       if [[ "$1" == deny ]]; then
-        emit_fixed deny "guard-output-fallback: the destructive-command guard matched rule ${fid} and blocked this command, but jq could not build the full message that quotes it. ${AMARK} Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
+        emit_fixed deny "guard-output-fallback: the destructive-command guard matched rule ${fid} and blocked this command, but jq could not build the full message that quotes it.${AMARK} Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
       else
-        emit_fixed ask "guard-output-fallback: the destructive-command guard matched rule ${fid}, but jq could not build the full message that quotes the command, so it is asking instead of allowing. ${AMARK} Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
+        emit_fixed ask "guard-output-fallback: the destructive-command guard matched rule ${fid}, but jq could not build the full message that quotes the command, so it is asking instead of allowing.${AMARK} Stop and tell the person. Do not retry this command. If no person is available, end the task and report it as blocked. The person can run it in their own terminal or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1. Report a wrong flag at ${ISSUES_URL}"
       fi ;;
     *) emit_fixed "$1" "$2" ;;
   esac
@@ -298,7 +303,7 @@ lead_for() {
     recursive-delete-workdir) LEAD="this command recursively deletes the working directory or one of its ancestors." ;;
     infra-destroy) LEAD="this command runs terraform or tofu destroy (or apply -destroy), which tears down infrastructure." ;;
     default-branch-force-push) LEAD="this command force-pushes over, or deletes, a default branch on a remote." ;;
-    wrapper-depth) LEAD="this command nests more than 8 wrappers (sudo, env, timeout, ...) or -- separators, more than the guard unwraps, so the command it finally runs cannot be checked." ;;
+    wrapper-depth) LEAD="this command nests more than ${MAX_WRAP} wrappers (sudo, env, timeout, ...) or -- separators, more than the guard unwraps, so the command it finally runs cannot be checked." ;;
     unparsed-wrapper) LEAD="this command runs env -S (--split-string), which splits a string into the command to run, and the guard does not analyse that string." ;;
     unresolved-cd-before-destructive) LEAD="a cd, pushd or wrapper directory option (env -C, sudo -D) that cannot be resolved (a variable, -, or a path too deep to resolve) comes before a recursive delete or a force push in the same command, so the guard cannot tell which directory the later command runs in." ;;
     *) LEAD="this command matched a destructive-command rule." ;;
@@ -353,11 +358,11 @@ redact_text() {
   # shellcheck disable=SC2206  # the split on blanks is the point (no pathname expansion: set -f)
   ws=($1); n=${#ws[@]}
   while (( i < n )); do
-    (( ${#out} > 200 )) && break
+    (( ${#out} > QUOTE_MAX )) && break
     w="${ws[$i]}"; i=$((i + 1)); q=""
     case "$w" in \'*|\"*) q="${w:0:1}"; w="${w#"$q"}" ;; esac
     if [[ -n "$q" ]]; then
-      while [[ "$w" != *"$q" ]] && (( i < n && ${#w} <= 200 )); do w="$w ${ws[$i]}"; i=$((i + 1)); done
+      while [[ "$w" != *"$q" ]] && (( i < n && ${#w} <= QUOTE_MAX )); do w="$w ${ws[$i]}"; i=$((i + 1)); done
       w="${w%"$q"}"
     fi
     redact_word "$w"; out="${out:+$out }$RW"
@@ -411,7 +416,7 @@ scan_narrow() {
     total=$((total + ${#seg}))
     if (( ${#seg} > SCAN_MAX_SEG )); then SCAN_WHY="a command segment longer than $((SCAN_MAX_SEG / 1024)) KiB"; return 2; fi
     if (( total > SCAN_MAX_TOTAL )); then SCAN_WHY="more than $((SCAN_MAX_TOTAL / 1024)) KiB of command text to scan"; return 2; fi
-    if (( SECONDS >= DEADLINE_S )); then SCAN_WHY="the ${DEADLINE_S} s time limit was reached while scanning"; return 2; fi
+    if (( SECONDS >= DEADLINE_S )); then SCAN_WHY="the ${LIMIT_S} s time limit was reached while scanning"; return 2; fi
     if [[ "$seg" =~ $RE_RM_WORD && "$seg" =~ $RE_RM_REC && "$seg" =~ $RE_RM_TGT ]]; then SCAN_SEG="$seg"; return 0; fi
     if [[ "$seg" =~ $RE_TF_DESTROY || "$seg" =~ $RE_TF_APPLY ]]; then SCAN_SEG="$seg"; return 0; fi
     if [[ "$seg" =~ $RE_GIT_PUSH ]]; then SCAN_SEG="$seg"; return 0; fi
@@ -505,7 +510,7 @@ while IFS= read -r -d '' F; do
   # a clock check every 1024 frames, so one huge record is bounded too (the per-record check below sees only record starts)
   FRN=$((FRN + 1))
   if (( (FRN & 1023) == 0 && SECONDS >= DEADLINE_S )); then
-    BOUND_SOFT="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1
+    BOUND_SOFT="the ${LIMIT_S} s time limit was reached while reading the lexer output"; BOUND_READ=1
     if (( LEX_ST == 3 )); then
       # a record cut mid-way keeps the words it has: they are judged; with none complete it is dropped (its words are not all there)
       LEX_DONE=$((NW - REC_OFF[${#REC_OFF[@]} - 1]))
@@ -520,7 +525,7 @@ while IFS= read -r -d '' F; do
     2) if [[ "$F" =~ ^[1-9][0-9]{0,6}$ ]]; then
          if (( ${#REC_N[@]} >= MAX_RECORDS )); then BOUND_SOFT="more than ${MAX_RECORDS} simple commands"; break; fi
          if (( NW + F > MAX_WORDS )); then BOUND_SOFT="more than ${MAX_WORDS} words"; break; fi
-         if (( SECONDS >= DEADLINE_S )); then BOUND_SOFT="the ${DEADLINE_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi
+         if (( SECONDS >= DEADLINE_S )); then BOUND_SOFT="the ${LIMIT_S} s time limit was reached while reading the lexer output"; BOUND_READ=1; break; fi
          REC_OFF[${#REC_OFF[@]}]="$NW"; REC_N[${#REC_N[@]}]="$F"; LEX_LEFT=$((F * 2)); LEX_KIND=0; LEX_ST=3
        else LEX_BAD=1; LEX_ST=0; fi ;;
     3) if [[ "$LEX_KIND" -eq 0 ]]; then W_FLG[${#W_FLG[@]}]="$F"; LEX_KIND=1
@@ -549,7 +554,7 @@ if [[ "$SAW_OK" -ne 1 && -z "$BOUND_SOFT" ]]; then
     [[ "$SCAN_RC" -eq 2 ]] && ask_bound "$SCAN_WHY"
     if [[ "$SCAN_RC" -eq 0 ]]; then
       redact_text "$SCAN_SEG"
-      emit ask "guard-degraded-perl-missing: perl is missing or unusable on this machine, so the destructive-command guard scanned the decoded command with its narrow patterns instead of lexing it, and this call looks destructive. Matched segment: ${RTXT:0:200}.${REASON_TAIL}"
+      emit ask "guard-degraded-perl-missing: perl is missing or unusable on this machine, so the destructive-command guard scanned the decoded command with its narrow patterns instead of lexing it, and this call looks destructive. Matched segment: ${RTXT:0:QUOTE_MAX}.${REASON_TAIL}"
     fi
     exit 0
   fi
@@ -608,7 +613,7 @@ lexer_empty_hit() { # <command text>: 0 when the text mentions what the guard de
 if [[ "${#REC_N[@]}" -eq 0 && -z "$BOUND_SOFT" ]]; then
   LX_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || ask_lexer_empty
   if lexer_empty_hit "$LX_CMD"; then
-    [[ "$LE_CLOCK" -eq 1 ]] && ask_bound "the ${DEADLINE_S} s time limit was reached while checking whether the lexer dropped a command"
+    [[ "$LE_CLOCK" -eq 1 ]] && ask_bound "the ${LIMIT_S} s time limit was reached while checking whether the lexer dropped a command"
     ask_lexer_empty
   fi
 fi
@@ -644,7 +649,7 @@ lex_norm() {
 
 # resolve_phys <abs path> <follow 0|1> -> RP (empty = no decision: rm refuses `.`)
 # follow=1: the path itself is resolved through symlinks (a trailing slash or a glob suffix); follow=0: a
-# bare final name stays literal (`rm -rf link` only unlinks the link). A path with more than MAX_DEPTH components
+# bare final name stays literal (`rm -rf link` only unlinks the link). A path with more than MAX_PATH_COMPONENTS components
 # sets BOUND_SOFT and returns 1 (nothing about that path was resolved); the rest of the command is still judged, so a
 # deny elsewhere in it wins, and the decision asks `bound` when nothing denied.
 #
@@ -659,7 +664,7 @@ phys_walk() {
   for ((k = 0; k < n; k++)); do
     if [[ "${PW_K[$k]}" == "$1" ]]; then out="${PW_V[$k]}"; WK="${out%%$'\n'*}"; WP="${out#*$'\n'}"; return 0; fi
   done
-  out="$( cd / && q="$1" && c=0 && while ! cd -P -- "$q" 2>/dev/null; do c=$((c + 1)); q="${q%/*}"; [[ -z "$q" ]] && q=/; (( c > MAX_DEPTH + 2 )) && break; done; printf '%s\n' "$c"; pwd -P )" || out=""
+  out="$( cd / && q="$1" && c=0 && while ! cd -P -- "$q" 2>/dev/null; do c=$((c + 1)); q="${q%/*}"; [[ -z "$q" ]] && q=/; (( c > MAX_PATH_COMPONENTS + 2 )) && break; done; printf '%s\n' "$c"; pwd -P )" || out=""
   WK="${out%%$'\n'*}"; WP="${out#*$'\n'}"
   [[ "$WK" =~ ^[0-9]+$ ]] || { WK=0; WP=""; }
   if (( n < PW_MAX )); then PW_K[n]="$1"; PW_V[n]="$WK"$'\n'"$WP"; fi
@@ -672,7 +677,7 @@ resolve_phys() {
   while [[ "$p" == */ && "$p" != / ]]; do p="${p%/}"; done
   if [[ "$p" == / ]]; then RP=/; return 0; fi
   slashes="${p//[!\/]/}"
-  if (( ${#slashes} > MAX_DEPTH )); then BOUND_SOFT="a path with more than ${MAX_DEPTH} components"; return 1; fi
+  if (( ${#slashes} > MAX_PATH_COMPONENTS )); then BOUND_SOFT="a path with more than ${MAX_PATH_COMPONENTS} components"; return 1; fi
   last="${p##*/}"
   if [[ "$follow" == 0 && "$last" == . ]]; then return 1; fi
   dir="${p%/*}"; [[ -z "$dir" ]] && dir=/
@@ -826,7 +831,7 @@ rule_rm() {
   cwd_ready; home_ready
   if (( UNRES )); then note 1 unresolved-cd-before-destructive; fi
   for k in ${tix[@]+"${tix[@]}"}; do
-    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the targets of rm"; return 0; fi
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the targets of rm"; return 0; fi
     expand_word "${a[$k]}" "${fl[$k]}" || continue
     T="$EW"; glob=0; follow=0
     if glob_contents "$T" "$EW_Q"; then glob=1; follow=1; D="$GD"
@@ -869,7 +874,7 @@ rule_git() {
   local force=0 del=0 allf=0 mirror=0 repoopt=0 risk=0 r f dele src dst mt=0 mtf=0
   cwd_ready; repo="$SIMCWD"
   while (( i < n )); do
-    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the options of git"; return 0; fi
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the options of git"; return 0; fi
     case "${a[$i]}" in
       -C) if (( i + 1 < n )); then
             case "${a[$((i + 1))]}" in /*) repo="${a[$((i + 1))]}" ;; *) repo="$repo/${a[$((i + 1))]}" ;; esac
@@ -884,7 +889,7 @@ rule_git() {
   [[ "${a[$i]:-}" == push ]] || return 0
   j=$((i + 1))
   while (( j < n )); do
-    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the flags of git push"; return 0; fi
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the flags of git push"; return 0; fi
     x="${a[$j]}"
     if (( end )); then pos[${#pos[@]}]="$x"
     elif [[ "$x" == -- ]]; then end=1
@@ -920,7 +925,7 @@ rule_git() {
   named="${remote:-origin}"
   # The destinations, flagged: +refspec / +dst (force) and :dst (delete) are risky on their own.
   for r in ${refs[@]+"${refs[@]}"}; do
-    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the refs of git push"; return 0; fi
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the refs of git push"; return 0; fi
     f=0; dele=0
     if [[ "$r" == +* ]]; then f=1; r="${r#+}"; fi
     if [[ "$r" == : ]]; then
@@ -945,7 +950,7 @@ rule_git() {
   head=""; cur=""; local have_head=0 have_cur=0
   local -a defaults=(main master)
   for ((k = 0; k < ${#D_DST[@]}; k++)); do
-    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the destinations of git push"; return 0; fi
+    if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the destinations of git push"; return 0; fi
     dst="${D_DST[$k]}"
     if [[ "$dst" == HEAD ]]; then
       if (( ! have_cur )); then cur="$(git_ro "$repo" symbolic-ref --short HEAD)"; have_cur=1; fi
@@ -1162,8 +1167,8 @@ walk_in_dir() {
 # through DA_T/DA_F, so it CLOBBERS them: callers use decide_argv, which puts them back.
 decide_walk() {
   local depth="$1" n i k name wcd wcdf wset
-  if (( depth > 8 )); then note 1 wrapper-depth; return 0; fi
-  if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking a command"; return 0; fi
+  if (( depth > MAX_WRAP )); then note 1 wrapper-depth; return 0; fi
+  if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking a command"; return 0; fi
   local -a t=("${DA_T[@]}") f=("${DA_F[@]}")
   n=${#t[@]}; i=0
   while (( i < n )) && is_assign "${t[$i]}"; do i=$((i + 1)); done
@@ -1254,7 +1259,7 @@ apply_cd() { # reads DA_T/DA_F of the current record; CI (from cd_index) is the 
 
 NREC=${#REC_N[@]}
 for ((r = 0; r < NREC; r++)); do
-  if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${DEADLINE_S} s time limit was reached while checking the commands"; break; fi
+  if (( SECONDS >= DEADLINE_S )); then BOUND_WHY="the ${LIMIT_S} s time limit was reached while checking the commands"; break; fi
   # one record's words by index: an array slice is O(offset) in bash and made the loop quadratic
   RO="${REC_OFF[$r]}"; RC="${REC_N[$r]}"; DA_T=(); DA_F=()
   for ((RQ = 0; RQ < RC; RQ++)); do DA_T[RQ]="${W_TXT[RO + RQ]}"; DA_F[RQ]="${W_FLG[RO + RQ]}"; done
@@ -1264,9 +1269,9 @@ for ((r = 0; r < NREC; r++)); do
   if (( REC_RANK > BEST_RANK )); then
     BEST_RANK="$REC_RANK"; BEST_RULE="$REC_RULE"
     REC_TXT=""; RW_NEXT=0
-    for ((RQ = 0; RQ < ${#DA_T[@]} && ${#REC_TXT} <= 200; RQ++)); do redact_word "${DA_T[RQ]}"; REC_TXT="${REC_TXT:+$REC_TXT }$RW"; done
-    BEST_QUOTE="${REC_TXT:0:200}"
-    (( ${#REC_TXT} > 200 )) && BEST_QUOTE="${BEST_QUOTE}..."
+    for ((RQ = 0; RQ < ${#DA_T[@]} && ${#REC_TXT} <= QUOTE_MAX; RQ++)); do redact_word "${DA_T[RQ]}"; REC_TXT="${REC_TXT:+$REC_TXT }$RW"; done
+    BEST_QUOTE="${REC_TXT:0:QUOTE_MAX}"
+    (( ${#REC_TXT} > QUOTE_MAX )) && BEST_QUOTE="${BEST_QUOTE}..."
     (( BEST_RANK == 2 )) && break
   fi
   [[ -n "$BOUND_WHY" ]] && break
