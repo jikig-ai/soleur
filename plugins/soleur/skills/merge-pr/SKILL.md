@@ -565,7 +565,7 @@ done
 If the loop exits with state `CLOSED` (not `MERGED`), auto-merge was cancelled — check for CI failures:
 
 ```bash
-gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS" and .state != "SKIPPED")'
+gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS" and (.state != "SKIPPED" or (.name | startswith("smoke (") | not)))'
 
 ```
 

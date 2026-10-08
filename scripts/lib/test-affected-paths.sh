@@ -1111,12 +1111,14 @@ AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
 )
 
 # scripts/secret-scan-smoke-gate (#9727, ADR-276 S1) — the suite extracts the smoke-relevance step body and the
-# smoke-tests `if:` from the workflow and reads the tracked operands the smoke job names; declared from the repo
-# paths its suite file names (a directory entry carries a trailing slash).
+# smoke-tests job from the workflow, reads scripts/required-checks.txt and the canonical required-checks ruleset JSON,
+# and sweeps every tracked file (git ls-files) through the body; declared from the repo paths its suite file names
+# (a directory entry carries a trailing slash).
 AFFECTED_SCRIPTS_SECRET_SCAN_SMOKE_GATE_PATHS=(
   ".github/workflows/secret-scan.yml"
   ".gitleaks.toml"
   "apps/web-platform/scripts/"
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/required-checks.txt"
