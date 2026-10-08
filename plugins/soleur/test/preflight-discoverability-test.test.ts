@@ -2844,7 +2844,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) alone and prints web-2's newest
   // readiness, probe and journald boot rows as ids and ages. NO SUBSTITUTE: those rows land only in the Logs
   // warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 48;
+  // #9372 (2026-10-08): +1 (48 -> 49) for `2026-10-08-fix-web2-luks-evidence-immutability-not-reboot-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform) alone and grades web-2's readiness and probe rows. NO SUBSTITUTE: those rows land
+  // only in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 49;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
