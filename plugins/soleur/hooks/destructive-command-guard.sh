@@ -125,7 +125,8 @@
 # unresolvable cd says put a literal directory in the cd.
 # Every ask and deny carries the escape hatch and the issues URL. The quoted command has credentials masked:
 # NAME=value, --name=value and -var name=value with a key, tok, secret, pass, pw, cred, auth or bearer name; the
-# word after --token, --password, --passwd, --secret, --api-key, --auth or --bearer; the text after
+# word after --token, --password, --passwd, --secret, --api-key, --auth or --bearer (not a command word, a path starting with / or ~ or
+# $HOME, or origin/main/master: the quote must still say what was about to run); the text after
 # `Authorization:` or `Bearer `; URL userinfo. That is a coverage choice, not a boundary. When jq cannot build the
 # output (emit_fallback) the decision and the rule id are kept: a plain body goes out as it is, a body that quotes
 # the command gets a fixed `guard-output-fallback` text, and a deny stays a deny.
@@ -319,8 +320,14 @@ RE_BEARER='^(.*bearer[[:space:]]+)(.+)$'
 RE_FLAG_NEXT='^--(token|password|passwd|secret|api-key|auth|bearer)$'
 RW=""; RW_NEXT=0
 redact_word() { # <word> -> RW; RW_NEXT (1 = the word after a credential flag) carries across words: the caller resets it per command
-  local w="$1" had=0 mask=0
-  if (( RW_NEXT )) && [[ "$w" != -* ]]; then RW="<redacted>"; RW_NEXT=0; return; fi
+  local w="${1//"$AMARK"/}" had=0 mask=0   # (the marker byte never reaches the quote: compose() splits the reason at it)
+  if (( RW_NEXT )) && [[ "$w" != -* ]]; then
+    case "$w" in
+      # a command word or a destructive operand is not a credential: the person reads the quote to see WHAT was about to run
+      /*|'~'*|'$HOME'*|'${HOME}'*|rm|git|terraform|tofu|sudo|doas|env|command|nohup|time|timeout|nice|origin|main|master) : ;;
+      *) RW="<redacted>"; RW_NEXT=0; return ;;
+    esac
+  fi
   shopt -q nocasematch && had=1
   shopt -s nocasematch
   if [[ "$w" =~ $RE_SECRET_ASSIGN ]]; then w="${BASH_REMATCH[1]}<redacted>"

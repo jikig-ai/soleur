@@ -1839,6 +1839,21 @@ quote_row "quote: a wrapper stays in the quoted command (sudo rm -rf /)" 'sudo r
 quote_row "quote: the words before a -- stay in the quoted command (rm -rf -- /)" 'rm -rf -- /' - 'rm -rf -- /'
 quote_row "quote: doppler run -- terraform destroy quotes the whole command" 'doppler run -- terraform destroy' - 'doppler run -- terraform destroy'
 quote_row "quote: an env wrapper with an option and an assignment" 'env -i FOO=1 terraform destroy' - 'env -i FOO=1 terraform destroy'
+# A credential flag masks the word after it, but never a command word or a destructive operand: rm and sudo reject these flags in reality, and the
+# person reads the quote to see WHAT was about to run.
+quote_row "quote: a credential flag does not mask the destructive operand (rm -rf --password /)" 'rm -rf --password /' - 'rm -rf --password /'
+quote_row "quote: a credential flag does not mask a home operand (rm -rf --token ~)" 'rm -rf --token ~' - 'rm -rf --token ~'
+quote_row "quote: a credential flag does not mask the command word that follows (sudo --auth rm -rf /)" 'sudo --auth rm -rf /' - 'sudo --auth rm -rf /'
+quote_row "quote: a credential flag does not mask the remote or the branch (git push --force --auth origin main)" 'git push --force --auth origin main' @R1@ 'git push --force --auth origin main'
+quote_row "quote: a credential flag still masks a real secret value after it (terraform destroy --password s3cr3t-value)" 'terraform destroy --password s3cr3t-value' - 'terraform destroy --password <redacted>'
+# the quote never carries the byte the reason uses to split the person's text from the agent's (U+0001): a raw one in the command would end the
+# quote early and present the model's own words as the guard's instructions
+_cmd_amark="terraform destroy a"$'\001'"b c"
+if want_row_quiet "quote: a raw U+0001 byte in the command is dropped from the quote and does not split the reason"; then
+  hook_run "$(mkjson "$_cmd_amark" "$TREE")"
+  jqchk "quote: a raw U+0001 byte in the command is dropped from the quote" '.hookSpecificOutput.permissionDecisionReason | contains("Matched command: [terraform destroy ab c]")'
+  jqchk "quote: a raw U+0001 byte in the command leaves exactly one agent instruction block and no raw control byte" '.hookSpecificOutput.permissionDecisionReason | ([match("If you are the agent"; "g")] | length) == 1 and (test("\u0001") | not)'
+fi
 rule_last() { # <label> <rule id>: the LAST hook output's reason carries the rule id right after the opening sentence(s)
   jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | test("(^|\\. )" + $id + ": ")' --arg id "$2"
 }
