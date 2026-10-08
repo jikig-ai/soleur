@@ -336,14 +336,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Structure tasks as RED/GREEN/REFACTOR units, not as "implement everything, then test":
 
    - For each feature requirement with Acceptance Criteria or testable behavior:
-     - Create a **RED task**: "RED(unit|integration|e2e): Write failing test for [feature]" — the title names the test's pyramid layer (prefer the lowest layer that exercises the behavior); the test file with at least one failing test. An `e2e`-layer RED task's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block) — the test-design review seat FAILs on an unjustified e2e-layer test
+     - Create a **RED task**: "RED(unit|integration|e2e): Write failing test for [feature]" — layer in title; `e2e` tests carry `pyramid-justified:` or a `## Test Pyramid` block
      - Create a **GREEN task**: "Implement [feature] to pass tests" — blocked by its RED task
      - Group these as a TDD unit with `blockedBy` dependency (GREEN blocked by RED)
    - Infrastructure-only tasks (config files, CI, scaffolding, legal docs) are exempt from RED/GREEN pairing — create them as standalone tasks
    - Place a final test-and-lint task at the end, blocked by all other tasks. **If the project has no CI-enforced full-suite gate on the merge branch, make it "Run the full test suite and lint" — see **Full-suite fallback** in Phase 2 §9, and when in doubt this is the branch you take.** Otherwise "Run the touched-file suites and lint".
    - Keep tasks specific and completable
 
-   **Anti-pattern to avoid:** Creating a task list like `[implement A, implement B, implement C, ..., write tests, lint]`. This structure guarantees TDD violation because the agent executes tasks in order. The correct structure is `[RED(unit): test A, GREEN: implement A, RED(integration): test B, GREEN: implement B, ..., lint]`.
+   **Anti-pattern to avoid:** Creating a task list like `[implement A, implement B, implement C, ..., write tests, lint]`. This structure guarantees TDD violation because the agent executes tasks in order. The correct structure is `[RED(unit): test A, GREEN: A, RED(integration): test B, GREEN: B, lint]`.
 
    **Post-creation validation (HARD GATE):** After creating all tasks, scan the task list for any non-exempt implementation task (GREEN) that does NOT have a corresponding RED test task in its `blockedBy` list. If found, restructure the task list before proceeding. Do not start Phase 2 with an invalid task structure. **Why:** In PR #2428, the agent created flat tasks ("Fix X", "Write tests") and started implementation before tests — the user had to intervene and force a restructure. The anti-pattern instruction was not enough without a validation gate.
 
