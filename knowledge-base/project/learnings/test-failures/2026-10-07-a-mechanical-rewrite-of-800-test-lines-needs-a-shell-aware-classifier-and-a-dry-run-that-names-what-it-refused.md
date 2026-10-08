@@ -67,7 +67,7 @@ data lines.
 ## Fix-round additions
 
 - The closer rule above shipped dead for `}` and `)`: it was written `(done|fi|esac|\}|\))\b`, and `\b` needs a word character on one side, so a
-  head cut at the pipe (`} `, `) `) never matched. Only `done` and `fi` were refused. Use `(?!\w)` after an alternation that mixes words and
+  head cut at the pipe (a closing brace or parenthesis plus a space) never matched. Only `done` and `fi` were refused. Use `(?!\w)` after an alternation that mixes words and
   punctuation, and give every alternative its own refusal fixture row (a pass on `done` says nothing about `}`). The same fix round added `;` to
   the unbounded-word tail (`{ yes; } | grep -q`), `until` and `for ((`, and bounded the `tail`/`logs` gaps to 200 characters so a long line
   cannot make the screen quadratic.
