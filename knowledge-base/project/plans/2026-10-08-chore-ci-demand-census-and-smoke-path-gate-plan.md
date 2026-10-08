@@ -14,6 +14,18 @@ brand_survival_threshold: aggregate pattern
 
 # ci: S1 census script and secret-scan smoke path gate (#9721 stage 1)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-08. **Agents used:** architecture-strategist, spec-flow-analyzer, test-design-reviewer, security-sentinel (deepen pass); DHH, Kieran, code-simplicity, CTO devex lens (plan review). Gates run: user-brand impact, observability (5 fields; probe verb `bash`, no shell-active characters, finishes offline), PAT-shape grep (no hits), UI-wireframe (no UI surface), encryption posture (no store or connection), guard contract (`lint-guard-contract.py`: 2 entries; adequacy read below), scope check (one unfenced section, no `unmapped` rows).
+
+1. Fail-open hardened: the output is written last and the `if:` also runs the matrix when the detect job did not succeed; the listed entry count must equal the event's own `changed_files` (catches a lagging list, a re-run on a newer head and the 3000-entry cap).
+2. Subject set widened to implicit git inputs (`.gitignore`, `.gitattributes`, any `smoke/` component); the measured skip share stays about 91%. Test design made executable: mutants run against a copy of the extracted body with a landing check, reasons are asserted per arm, and the operand anchor has a known-positive control and covers more command shapes.
+3. Census made measurable: one-hour sub-windows (the parent plan's own 6h baseline held 934 of the 1,000-run cap), C1 before any jobs call, `STEM` rows split into ran, skipped and queue-cancelled so the exit criterion is stated net and can fail, and input validation plus output sanitisation because fork-PR job names are attacker-chosen.
+4. The Part B step body was prototyped on 2026-10-08 against a local `gh` shim applying the real `--jq` with `jq` (the body parses with `bash -n` and runs under `bash --noprofile --norc -eo pipefail`): a docs-only list gave `smoke=false`; a new file under `apps/web-platform/scripts/`, a rename out of `.gitleaks.toml`, a nested `.gitattributes` and a `changed_files` mismatch each gave `smoke=true`; a hostile file name containing a newline and `::error::` left one output line. The work phase turns these into the suite's rows.
+5. Verify-the-negative result: "no document claims weekly smoke coverage" (grep of `knowledge-base/engineering`, the workflow, legal and docs found no weekly-smoke claim) and "the smoke job has no local `uses: ./` action" (only `actions/checkout`) both confirmed.
+
+**Guard Contract adequacy read.** Assembly names the chokepoint (one step body, one `if:`) and quantifies over derived sets (tracked operands of the live job text, required jobs derived from `scripts/required-checks.txt`), not a remembered list; the matrix rows come from the design (a dropped alternative, a second member, the guard's own dispatch, the failure shapes, the wrapper) and each row names the mutant that must land.
+
 ## Overview
 
 Stage 1 of the hosted-runner demand plan (#9721, parent plan
@@ -43,9 +55,9 @@ Spec note: no `spec.md` exists for this branch, so `lane:` is `cross-domain` (fa
 | "the gate must run unconditionally on non-PR events (no diff base there)" | On non-PR events `smoke-tests` does not run today, and after this change it still does not (its `pull_request` conjunct stays). Nothing runs "unconditionally off PR" | The ask is satisfied structurally: `smoke-relevance` carries `if: github.event_name == 'pull_request'` and `smoke-tests` keeps its own event conjunct, so the step body is unreachable off-PR. No in-body event guard is written (plan review: dead code, two mutation rows to keep it honest) |
 | "a new `smoke-relevance` job raises the declared count and needs a `scripts/pr-fanout-ledger.txt` bump" | Verified: `yaml.safe_load` gives 6 declared jobs in `secret-scan.yml`, the ledger row says 6 | Bump to 7 and name the consequence in the row (the ledger's ratchet rule) |
 | Parent-plan method: `gh api "repos/<r>/actions/runs/<id>/jobs?per_page=100&filter=latest"` per completed run | Unpaginated: a run with more than 100 jobs would silently truncate (`scripts/main-push-duplicate-skip.sh` documents the same hazard). The largest `CI` run today has 36 jobs | The census uses `--paginate` to a file and checks `length(jobs) == total_count` per run |
-| Parent plan: the runs listing is the self-check authority | Verified live 2026-10-08: a 24h window reports `total_count` 2500, and page 11 of 100 returns `total_count` 0 with no runs: the listing is capped at 1000 results while `total_count` keeps the true number | Self-check C1: unique runs fetched must equal the first page's `total_count`; a window past the cap fails with "narrow the window" instead of reporting a partial total |
+| Parent plan: the runs listing is the self-check authority | Verified live 2026-10-08: a 24h window reports `total_count` 2500, and page 11 of 100 returns `total_count` 0 with no runs: the listing is capped at 1000 results while `total_count` keeps the true number | Self-check C1: unique runs fetched must equal the first page's `total_count`; the census fetches in one-hour sub-windows, each checked on its own, and a sub-window at the cap fails with "narrow the window" before any jobs call instead of reporting a partial total |
 | Parent plan: runs in the listing carry a workflow `name` | Dynamic runs are named per PR (`Code Quality: PR #9653`, `PR #9653`), so grouping by name explodes into one row per PR | Group by `.path` (`.github/workflows/ci.yml`, `dynamic/github-code-quality/codeql`, `dynamic/github-code-scanning/codeql`), `@ref` suffix stripped |
-| Issue: "Fix-Size: 250 lines / 6 files" | The deliverable needs a script, two suites, a fixture directory, the workflow edit, the ledger row, two registrations and the ADR amendment: about 10 files and 650 to 800 lines, mostly test code | Accept and record in Split Assessment; the tests are the Guard Contract's deliverable, not padding |
+| Issue: "Fix-Size: 250 lines / 6 files" | The deliverable needs a script, two suites, a fixture directory, the workflow edit, the ledger row, two registrations, a CODEOWNERS line, a runbook paragraph and the ADR amendment: about 19 files and 600 lines, mostly test code | Accept and record in Split Assessment; the tests are the Guard Contract's deliverable, not padding |
 | ADR-276 Status: S1 "changes no CI behaviour ... neither appends an amendment" | The text states an exemption (Decision 3(g) does not bind S1), it does not forbid an amendment. The operator rule is that each stage PR appends a dated amendment before the stage takes effect | Append a short non-activating `## Amendment 2026-10-08 (S1, #9727)` and a dated Stage-status line; status stays `proposed` (see Architecture Decision) |
 
 ## Research Insights
@@ -102,17 +114,20 @@ The justification is a saving, so it is quantified and the command is named. Fro
 re-measure (window 2026-10-07 13:04Z to 19:04Z): secret-scan `pull_request` 203 runner job-minutes of
 which the smoke matrix is 134; 41 PR heads in the window gives about 3.3 smoke job-minutes per PR run (ten
 legs of about 20 s each) against a detect job of about 8 s (0.13 min). A PR that misses the subject paths
-therefore drops from about 3.3 to about 0.13 job-minutes, 96% (target: at least 80%). The 134 is a gross
-upper bound: it assumes no PR touches the subject paths. Reproduced and measured by the command this PR
+therefore drops from about 3.3 to about 0.13 job-minutes, 96%. The criterion is stated NET, because a skipped job counts 0 minutes by construction and
+"smoke minutes on PRs that miss the subject paths" could never fail: the secret-scan smoke-related minutes per PR run (the `smoke` stem plus the `smoke-relevance`
+stem) must be down at least 80% against the baseline window, and the skip share (`runs_skipped / (runs_ran + runs_skipped + runs_runnerless)` for the `smoke` stem) is
+reported next to the share of PRs that touched subject paths. The detect job runs once per workflow RUN, not per PR head (the workflow also fires on `labeled` and
+`unlabeled`), so its cost is stated per run. The 134 is a gross upper bound: it assumes no PR touches the subject paths. Reproduced and measured by the command this PR
 adds: `bash scripts/ci-demand-census.sh --start 2026-10-07T13:04:00Z --end 2026-10-07T19:04:00Z --summary`
 (before; read the `STEM secret-scan.yml pull_request smoke` row) and the same command over a post-merge window (after); both outputs are attached
 to #9727.
 
 Subject-set sizing, measured 2026-10-08 with `gh pr list --state merged --limit 200 --json number,files` and a
 `jq` `test()` over each file path (gh caps `files` at 100 per PR, so large PRs are undercounted): of the last
-200 merged PRs, 18 (9%) touch the chosen subject set (the three root files plus the whole
-`apps/web-platform/scripts/` prefix), against 5 (2.5%) for the three root files plus only the four named
-scripts. The prefix costs about 6.5 points of extra smoke runs and still leaves smoke skipped on about 91% of
+200 merged PRs, 18 (9%) touch the final subject set (the three root files, the whole
+`apps/web-platform/scripts/` prefix, `.gitignore`/`.gitattributes` at any depth and any `smoke/` path component; the last two add 0 in this sample), against 5 (2.5%) for the three root
+files plus only the four named scripts. The prefix costs about 6.5 points of extra smoke runs and still leaves smoke skipped on about 91% of
 PRs, above the 80% target, in exchange for covering a helper added later without an edit here.
 
 ### Institutional learnings applied
@@ -157,43 +172,54 @@ plan's suites write only under `mktemp -d`, never into the repo. No overlap on `
 Interface (one script, bash + jq; `gh` only in live mode):
 
 ```text
-ci-demand-census.sh --start <ISO8601Z> --end <ISO8601Z> [--summary]
+ci-demand-census.sh --start <YYYY-MM-DDTHH:MM:SSZ> --end <YYYY-MM-DDTHH:MM:SSZ> [--summary]
 ci-demand-census.sh --fixture <DIR> [--summary]
 ```
 
-- **Live mode** fetches into a fresh `mktemp -d` (path printed on stderr) and then calls the same aggregator fixture mode
-  uses, so there is one code path to test. `runs.json` is the verbatim
-  `gh api --paginate "repos/<repo>/actions/runs?created=<start>..<end>&per_page=100"` output (multi-document JSON) and
-  `jobs-<run_id>.json` is `gh api --paginate "repos/<repo>/actions/runs/<id>/jobs?per_page=100&filter=latest"` for each COMPLETED run.
-  The repo comes from `GH_REPO` or `gh repo view`. `--end` must be in the past: an open window is not reproducible (the parent
-  plan's first pass used an open `>=` bound). A `gh` failure aborts naming the run id; there is no `|| true`.
-- **Fixture mode** reads the same layout and never touches the network.
-- **Aggregation** (all `jq -s`, never `--paginate` with `--jq` aggregates): flatten `[.[].workflow_runs[]?]` and `[.[].jobs[]?]`.
-  A job is **counted** iff `conclusion != "skipped"`, `runner_id > 0` (null is runner-less), and `started_at` and `completed_at` are both
-  set; its minutes are the raw `(completed_at - started_at) / 60` (not billing-rounded). Workflow key is `.path` with `@...` and the
-  `.github/workflows/` prefix stripped.
-- **Output** is `KEY=value` lines, then tab-separated tables, and nothing else (`--summary` is accepted as the explicit selector the
-  issue's discoverability command uses):
-  `TOTAL_JOB_MINUTES=<n.n>`, `RUNS_COMPLETED`, `RUNS_NOT_COMPLETED` (in-flight runs are excluded, so the total is a stated lower bound),
-  `JOBS_COUNTED`, `JOBS_SKIPPED`, `JOBS_RUNNERLESS`;
+- **Live mode** fetches into a fresh `mktemp -d` under `${TMPDIR:-/var/tmp}` (path printed on stderr, with the delete command on the last line) and then
+  calls the same aggregator fixture mode uses, so there is one code path to test. The window is fetched as **one-hour sub-windows** (the
+  runs listing is capped at 1,000 results and the parent plan's own 6h baseline held 934 runs, so a 6h window is at the edge): for each sub-window,
+  `runs-<n>.json` is the verbatim `gh api --paginate "repos/<repo>/actions/runs?created=<a>..<b>&per_page=100"` output (multi-document JSON, sub-window ends
+  shifted by one second so the inclusive `created=a..b` bounds partition cleanly), checked by C1 **immediately, before any jobs call**; and
+  `jobs-<run_id>.json` is `gh api --paginate "repos/<repo>/actions/runs/<id>/jobs?per_page=100&filter=latest"` for each COMPLETED run. A sub-window that itself
+  holds 1,000 or more runs exits 3 before any jobs call, printing its `total_count` and window and naming the narrower window to use.
+  Progress goes to stderr every 50 runs; a failed call is retried twice, then aborts naming the run id (no `|| true`, no resume).
+  The repo comes from `GH_REPO` or `gh repo view` and is validated against `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`. `--start` and `--end` are validated against the
+  fixed `...T..:..:..Z` shape (a `+02:00` offset puts a raw `+` in the query string and silently shifts the window), `start < end`, and `end` must not be in
+  the future (a lexicographic compare against `date -u +%FT%TZ`; an open window is not reproducible). Every `run_id` is validated against `^[0-9]+$` before it
+  builds a path or a URL. Only GETs are issued (no `-f`, `-F`, `-X`: `-f` silently turns a `gh api` call into a POST). Live mode exits 2 when
+  `GITHUB_ACTIONS=true` (about 930 calls would spend the repo-wide `GITHUB_TOKEN` budget, about 1,000 requests per hour, that every other workflow shares).
+- **Fixture mode** reads the same layout (`runs-*.json`, `jobs-*.json`) and never touches the network or requires `gh`.
+- **Aggregation** (all `jq`, never `--paginate` with `--jq` aggregates; each jobs file is first projected to compact rows with `jq -c`, because the raw `steps`
+  arrays of about 900 files would otherwise be slurped whole): flatten `[.[].workflow_runs[]?]` and `[.[].jobs[]?]`, de-duplicating runs by id. A job is
+  **counted** iff `conclusion != "skipped"`, `runner_id > 0` (null is runner-less), and `started_at` and `completed_at` are both set; its minutes are the raw
+  integer-seconds difference divided by 60 once (not billing-rounded). Workflow key is `.path` with `@...` and the `.github/workflows/` prefix stripped.
+  Untrusted text hygiene: every string that reaches the output (workflow path, job name, event) is passed through a jq filter replacing
+  `[\u0000-\u001f\u007f-\u009f  ]` (tab included) with `?` and capped in length; every output line starts with a fixed token; nothing is built by
+  `eval`, `bash -c` or string-splicing into a jq program (values go in with `--arg`); the fixture directory is read-only.
+- **Output** is `KEY=value` lines, then tab-separated tables, and nothing else (`--summary` is accepted as the explicit selector the issue's discoverability
+  command uses): `REPO`, `WINDOW_START`, `WINDOW_END`, `FETCHED_AT` (`WINDOW=fixture` in fixture mode), `TOTAL_JOB_MINUTES=<n.n>`, `RUNS_COMPLETED`,
+  `RUNS_NOT_COMPLETED` (in-flight runs are excluded, so the total is a stated lower bound, with a stderr WARN when it is above zero), `JOBS_COUNTED`,
+  `JOBS_SKIPPED`, `JOBS_RUNNERLESS`, `JOBS_UNTIMED` (so the partition `counted + skipped + runnerless + untimed = total` is assertable);
   `BY_WORKFLOW <workflow> <event> <runs> <jobs> <minutes>`;
-  `STEM <workflow> <event> <stem> <runs_with_stem> <jobs> <minutes> <minutes_per_run>` for EVERY workflow, where the stem is the job name with its
-  trailing parenthesised matrix suffix removed (`test-scripts (3/8)` becomes `test-scripts`) and `minutes_per_run` divides by the completed runs of
-  that workflow and event. The `CI` per-family per-run minutes of the issue are the `ci.yml` rows of this table (the families are just the stems
-  `test-scripts`, `test-webplat`, `shard-totality-mutations`, `test-scripts-heavy`, `e2e`; the light set is the sum of the rest), with no family
-  list in the script to drift when a job is renamed. `runs_with_stem` makes the S1 exit criterion measurable: for the `smoke` stem of
-  `secret-scan.yml` on `pull_request`, runs where smoke ran is `runs_with_stem` and runs where it was skipped is `BY_WORKFLOW runs - runs_with_stem`.
-- **Self-checks (a total is printed only if all pass; exit 3 otherwise, with the reason on stderr and NO `TOTAL_JOB_MINUTES` line):**
-  C1 unique run ids fetched equal the first page's `total_count` (the 1000-result cap, duplicates from page drift and a truncated `--paginate`
-  all fail here); C2 for every completed run a jobs file exists and `length(jobs)` equals its `total_count`, accumulated across all runs before
-  the verdict; and a census with zero completed runs or zero counted jobs is refused rather than reported as 0.
-- **Exit codes:** 0 ok; 2 usage, missing dependency or API/I/O error; 3 self-check failure.
-- **Header comment** fixes the definitions the parent plan deferred to this PR: the denominator (completed runs in the listing), the lower bound
-  (in-flight runs are excluded and `filter=latest` omits earlier attempts of re-run jobs, so a re-measure of a closed window will not
-  reproduce an earlier figure to the digit), the closed-window rule and its `date -u` recipe, the 1000-result cap and how to narrow the window,
-  the exit codes, and that the live mode is for a developer shell with `gh auth` (the workflow `GITHUB_TOKEN` is rate-limited to about 1,000
-  requests per hour, too few for a 6h window of about 930 jobs calls). The runner-less fixture job shape is copied from a real jobs response
-  (field names only, synthetic values).
+  `STEM <workflow> <event> <stem> <runs_ran> <runs_skipped> <runs_runnerless> <jobs> <minutes> <minutes_per_run>` for EVERY workflow, where the stem is the job
+  name with its trailing parenthesised matrix suffix removed (`test-scripts (3/8)` becomes `test-scripts`), `runs_ran` is runs with at least one counted job of
+  the stem, `runs_skipped` is runs whose only jobs of the stem concluded `skipped`, `runs_runnerless` is runs whose jobs of the stem were all runner-less
+  (queue-cancelled), and `minutes_per_run` divides by the completed runs of that workflow and event. A queue-cancelled or superseded run is therefore never
+  counted as gate-skipped. The `CI` per-family per-run minutes of the issue are the `ci.yml` rows (the families are just the stems `test-scripts`, `test-webplat`,
+  `shard-totality-mutations`, `test-scripts-heavy`, `e2e`; the light set is the sum of the rest), with no family list in the script to drift.
+- **Self-checks (a total is printed only if all pass; exit 3 otherwise, with the reason on stderr and NO `TOTAL_JOB_MINUTES` line):** C1 per sub-window, unique run
+  ids fetched equal the first page's `total_count` (the 1000-result cap, a displaced run and a truncated `--paginate` all fail here; a harmless pure duplicate with
+  `total_count` equal to the unique count is de-duplicated, not failed); C2 for every completed run a jobs file exists and `length(jobs)` equals its `total_count`
+  (a run with `total_count` 0 and an empty `jobs` list is legitimate, the file must still exist), accumulated across all runs before the verdict; and a census
+  with zero completed runs or zero counted jobs is refused rather than reported as 0.
+- **Exit codes:** 0 ok; 2 usage, validation, missing dependency, CI refusal or API/I/O error; 3 self-check failure.
+- **Header comment** fixes the definitions the parent plan deferred to this PR: the denominator (completed runs in the listing); the lower bounds (in-flight runs
+  are excluded and `filter=latest` omits earlier attempts of re-run jobs, so a re-measure of a closed window will not reproduce an earlier figure to the digit,
+  and a job's minutes are attributed to its run's creation time, so a re-run weeks later is credited to the original window); the closed-window rule with its
+  `date -u` recipe; the 1000-result cap and the sub-window split; the exit codes; that live mode is for a developer shell with `gh auth`; and that job names and
+  workflow paths of fork-PR runs are attacker-chosen, so the `STEM` rows are a cost measurement, not an attestation. The runner-less fixture job shape is copied
+  from a real jobs response (field names only, synthetic values).
 
 ### Part B: secret-scan smoke path gate
 
@@ -217,126 +243,150 @@ New job in `.github/workflows/secret-scan.yml`, and one edit to `smoke-tests`:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
         run: |
           set -uo pipefail
-          # SUBJECT: what the ten smoke cases execute or read (Guard 1). A superset on purpose.
-          SUBJECT_RE='^(\.github/workflows/secret-scan\.yml|\.gitleaks\.toml|\.gitleaksignore|apps/web-platform/scripts/)'
-          emit() {
+          T=$(printf '\t')
+          # SUBJECT: what the ten smoke cases execute or read, including implicit git inputs (.gitignore and
+          # .gitattributes change what `git add` and the diff gitleaks sees). A superset on purpose.
+          SUBJECT_RE='^(\.github/workflows/secret-scan\.yml|\.gitleaks\.toml|\.gitleaksignore|apps/web-platform/scripts/)|(^|/)\.git(attributes|ignore)$|(^|/)smoke/'
+          emit() {  # the GITHUB_OUTPUT write is LAST: a failure before it leaves the output empty, which runs the matrix
             echo "::notice::smoke-relevance: smoke=$1 ($2)"
+            echo "smoke-relevance: smoke=$1 ($2). The smoke matrix runs when a PR changes a subject path (see SUBJECT_RE in this job) and whenever this job cannot decide." >> "$GITHUB_STEP_SUMMARY"
             echo "smoke=$1" >> "$GITHUB_OUTPUT"
-            echo "smoke-relevance: smoke=$1 ($2). The smoke matrix runs when a PR changes a file matching $SUBJECT_RE, and whenever this job cannot decide." >> "$GITHUB_STEP_SUMMARY"
           }
-          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files?per_page=100" --jq '.[] | .filename, (.previous_filename // empty)'); then
+          # one line per entry: F<TAB>filename, and P<TAB>previous_filename for a rename (no stray text reaches an annotation)
+          if ! lines=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files?per_page=100" --jq '.[] | "F\t" + .filename, (if .previous_filename then "P\t" + .previous_filename else empty end)'); then
             emit true "file list fetch failed"; exit 0; fi
-          if [ -z "$files" ]; then emit true "empty file list"; exit 0; fi
-          if [ "$(grep -c . <<<"$files")" -ge 3000 ]; then emit true "file list at the API cap"; exit 0; fi
-          if grep -qE "$SUBJECT_RE" <<<"$files"; then emit true "subject path changed"; else emit false "no subject path changed"; fi
+          if [ -z "$lines" ]; then emit true "empty file list"; exit 0; fi
+          # completeness: the listed entries must equal the event's own changed_files (catches a list that lags the pushed head,
+          # a re-run on a newer head, and the API's 3000-entry cap)
+          if [ "$(grep -c "^F$T" <<<"$lines")" != "$CHANGED_FILES" ]; then emit true "file list does not match the event's changed_files"; exit 0; fi
+          if ! names=$(grep -E "^[FP]$T" <<<"$lines" | cut -f2-); then emit true "name extraction failed"; exit 0; fi
+          rc=0; grep -qE "$SUBJECT_RE" <<<"$names" || rc=$?   # no pipeline here: grep -q would SIGPIPE its producer under pipefail
+          case "$rc" in 0) emit true "subject path changed";; 1) emit false "no subject path changed";; *) emit true "matcher error rc=$rc";; esac
 ```
 
 `smoke-tests` gains `needs: smoke-relevance` and its `if:` becomes exactly
-`github.event_name == 'pull_request' && !cancelled() && needs.smoke-relevance.outputs.smoke != 'false'`: it skips only on the explicit string
-`false`. Expression semantics relied on (GitHub Actions "Expressions" status-check functions and the `needs` context; confirm against the live
-run, not memory): an `if:` that contains a status-check function is evaluated even when a needed job failed, was skipped or was cancelled;
-a missing output is the empty string, and `'' != 'false'` is true, so a failed or skipped detect job runs the matrix (fail-open).
-`!cancelled()` rather than `always()` so a superseded PR run (the workflow's own cancel-in-progress) does not keep running the matrix. The
-expression does not start with `!` (a leading `!` is a YAML tag). The step summary line is what a developer sees when ten `smoke (...)` rows
-render grey, and the job name says what it gates.
-The job-level `pull-requests: read` is a job-level exception, not the only one: `allowlist-diff` already declares job-level
-`pull-requests: write`. The header comment's "permissions: contents: read ONLY (no pull-requests: read)" is therefore already stale and is reworded
-to "workflow-level `contents: read`; job-level exceptions: `allowlist-diff` (`pull-requests: write`) and `smoke-relevance` (`pull-requests: read`)".
-Required contexts (`gitleaks scan`, `lint fixture content`, `allowlist-diff`, `rename-guard`, `waiver discipline`) get no edge to the new job.
+`github.event_name == 'pull_request' && !cancelled() && (needs.smoke-relevance.result != 'success' || needs.smoke-relevance.outputs.smoke != 'false')`: it skips
+only when the detect job succeeded AND its output is the explicit string `false` (the precedent form, `pr-quality-guards.yml` `needs.detect.result != 'success' ||`).
+Expression semantics relied on (GitHub Actions "Expressions" status-check functions and the `needs` context; confirm against the live run, not memory): an
+`if:` that contains a status-check function is evaluated even when a needed job failed, was skipped or was cancelled; a missing output is the empty string, and
+`'' != 'false'` is true. `!cancelled()` rather than `always()` so a superseded PR run (the workflow's own cancel-in-progress) does not keep running the matrix.
+The expression does not start with `!` (a leading `!` is a YAML tag). The step summary line is what a developer sees when ten `smoke (...)` rows render grey, and
+the job name says what it gates; the summary never embeds the regex (its `|` and `\.` render badly) and no file name ever reaches an annotation, summary or output.
+The job-level `pull-requests: read` is a job-level exception, not the only one: `allowlist-diff` already declares job-level `pull-requests: write`. The header comment's
+"permissions: contents: read ONLY (no pull-requests: read)" is therefore already stale and is reworded to "workflow-level `contents: read`; job-level exceptions:
+`allowlist-diff` (`pull-requests: write`) and `smoke-relevance` (`pull-requests: read`)". Required contexts (`gitleaks scan`, `lint fixture content`,
+`allowlist-diff`, `rename-guard`, `waiver discipline`) get no edge to the new job.
 
-**Subject set (the pattern's rationale, to land as a comment above `SUBJECT_RE`):** `secret-scan.yml` itself (gitleaks pin, the case bodies);
-`.gitleaks.toml` and `.gitleaksignore` (read by every `gitleaks` call); `apps/web-platform/scripts/` as a directory prefix (`rename-guard.sh`,
-`allowlist-diff.sh`, `lint-fixture-content.mjs`, and the `parse-gitleaks-allowlists.mjs` both shell scripts invoke). The prefix is wider than the
-four files on purpose: a helper later sourced by one of them is covered without an edit here, at the cost of running smoke on unrelated edits in
-that directory.
+**This gate is a cost optimisation, not a control.** The workflow that runs on a PR is the PR's own version, so a PR can edit `SUBJECT_RE` or the `if:` and skip its own
+smoke; the five required scanners still run, and the review control is CODEOWNERS. `.github/CODEOWNERS` covers `secret-scan.yml` and the four named scripts; this PR adds
+`scripts/secret-scan-smoke-gate.test.sh` to it.
 
-**Consumers checked.** `smoke (...)` rows are not in `scripts/required-checks.txt`; `admin-merge-ready.sh` iterates the required set, never the
-present checks. A job-level skipped matrix job renders as one skipped `smoke (${{ matrix.case }})` row, exactly as it already does on `merge_group`
-and `push`, so no consumer sees a new shape. `cancel-superseded-pr-runs.yml` reaps by the ledger row (`cancel=yes`), unchanged. The serial
-`needs:` edge adds one runner start in front of the ten legs at peak queue; acceptable for a non-required job, and costed: about 41 PR heads times
-0.13 job-minute, roughly 5 job-minutes, against the 134 gross.
+**Subject set (the pattern's rationale, to land as a comment above `SUBJECT_RE`):** `secret-scan.yml` itself (gitleaks pin, the case bodies); `.gitleaks.toml` and
+`.gitleaksignore` (read by every `gitleaks` call); `apps/web-platform/scripts/` as a directory prefix (`rename-guard.sh`, `allowlist-diff.sh`,
+`lint-fixture-content.mjs`, and the `parse-gitleaks-allowlists.mjs` both shell scripts invoke); `.gitignore` and `.gitattributes` at any depth (implicit inputs of
+`git add` and of the diff gitleaks scans: a `-diff` attribute makes the patch "Binary files differ"); and any `smoke/` path component (the cases create fixtures under
+`.../smoke/` directories, so a tracked file there would collide). The prefix is wider than the four files on purpose: a helper later sourced by one of them is covered
+without an edit here.
+
+**Consumers checked.** `smoke (...)` rows are not in `scripts/required-checks.txt`; `admin-merge-ready.sh` iterates the required set, never the present checks. A job-level
+skipped matrix job renders as one skipped `smoke (${{ matrix.case }})` row, exactly as it already does on `merge_group` and `push`, so no consumer sees a new shape.
+`cancel-superseded-pr-runs.yml` reaps by the ledger row (`cancel=yes`), unchanged. Smoke is non-required, so a red subject-path smoke does not block auto-merge or an
+`--admin` merge: the gate's guarantee is "runs", not "gates". The serial `needs:` edge adds one runner start in front of the ten legs at peak queue; acceptable for a
+non-required job, and costed per workflow RUN (the workflow also fires on `labeled` and `unlabeled`, so runs outnumber PR heads): about 0.13 job-minute per run against
+about 3.3 saved per skipped run. Future work that adds `ready_for_review` to this workflow's `types` (S2/S3 territory) must revisit `smoke-relevance`.
 
 ## Guard Contract
 
-Two guards are deliverables: the smoke gate (Guard 1, required by the issue) and the census self-check (Guard 2, the parent plan's Observability
-failure mode "census silently undercounts"). The matrices are written from the design before either is implemented.
+Two guards are deliverables: the smoke gate (Guard 1, required by the issue) and the census self-check (Guard 2, the parent plan's Observability failure mode "census
+silently undercounts"). The matrices are written from the design before either is implemented.
 
 ### Guard 1 - Smoke path gate (`smoke-relevance` and the `smoke-tests` `if:`)
 
-**Property.** A pull request that changes a file any of the ten smoke cases executes or reads (or whose changed-file list cannot be fully
-determined) always runs all ten smoke cases, and the gate can reduce runner use only by skipping `smoke-tests`, never by changing any required
-context or any non-PR event.
+**Property.** A pull request that changes a file any of the ten smoke cases executes or reads (or whose changed-file list cannot be fully determined) always runs all ten
+smoke cases, and the gate can reduce runner use only by skipping `smoke-tests`, never by changing any required context or any non-PR event.
 
-**Assembly.** The chokepoint is the single `smoke-relevance` step body plus the single `smoke-tests` `if:` expression, both in
-`.github/workflows/secret-scan.yml`; no other path can skip a smoke leg. The property quantifies over three sets. (1) *The subject set*: an
-explicit named list in the suite (the workflow file, `.gitleaks.toml`, `.gitleaksignore`, `rename-guard.sh`, `allowlist-diff.sh`,
-`lint-fixture-content.mjs`, `parse-gitleaks-allowlists.mjs`), each of which must yield `smoke=true` as a modification and as a rename source,
-with a non-subject control (`knowledge-base/` and `plugins/` files only) that must yield `false`; PLUS a structural anchor over the live tree: every
-command-position operand in the `smoke-tests` job text (the token after `node` or `bash`, any `uses: ./` path, and any `.gitleaks*` operand) that
-is a tracked file must match `SUBJECT_RE`, so adding `bash scripts/other-helper.sh` to the job without widening the pattern reddens the suite.
-Runtime-created fixture paths, `mkdir -p` and `git mv` operands and paths inside `echo` text are not operands and are never considered, which is
-what keeps the anchor free of exclusion lists. (2) *The failure shapes of the fetch*: non-zero exit, partial pagination then failure, empty list,
-a list at the 3000-entry API cap. (3) *The verdict's consumers*: the `smoke-tests` `if:` (exact-string equality with the literal in Part B), the
-required jobs of the workflow (none may list `smoke-relevance` in `needs:`), and the step writing exactly one `smoke=` line.
+**Assembly.** The chokepoint is the single `smoke-relevance` step body plus the single `smoke-tests` `if:` expression, both in `.github/workflows/secret-scan.yml`; no
+other path can skip a smoke leg. The property quantifies over three sets. (1) *The subject set*: an explicit named list in the suite (the workflow file, `.gitleaks.toml`,
+`.gitleaksignore`, `rename-guard.sh`, `allowlist-diff.sh`, `lint-fixture-content.mjs`, `parse-gitleaks-allowlists.mjs`, `.gitignore`, `.gitattributes`, a nested
+`.gitignore`, and a path under a `smoke/` directory), each of which must yield `smoke=true` as a modification and as a rename source, plus prefix rows (a never-existing
+`apps/web-platform/scripts/new-helper.mjs` and a nested `apps/web-platform/scripts/lib/x.mjs` must be `true`; `apps/web-platform/scripts-extra/x` and `.gitleaks.toml.bak`
+must be `false`), with a non-subject control (`knowledge-base/` and `plugins/` files only) that must yield `false`; PLUS a structural anchor over the live tree: every
+tracked file that appears as a command-position operand in the `smoke-tests` job text (the token after `node`, `bash`, `sh`, `python3`, `python`, `source`, `.`, `jq -f`,
+`npx`, or a leading `./`, any `uses: ./` path, and any `.gitleaks*` operand) must match `SUBJECT_RE`, so adding a step that runs a real tracked file outside the pattern
+reddens the suite. Runtime-created fixture paths, `mkdir -p` and `git mv` operands and paths inside `echo` text are not operands and are never considered. (2) *The
+failure shapes of the fetch*: non-zero exit, page-then-failure (page one without a subject file, the subject file only on the failed page two), an empty list, an entry
+count that differs from `CHANGED_FILES` in either direction (including a count at the 3000-entry cap), a matcher error (`SUBJECT_RE` replaced by `(`). (3) *The verdict's
+consumers and wrapper*: the `smoke-tests` `if:` (exact-string equality with the literal in Part B), `smoke-tests.needs` exactly `smoke-relevance`, no other job in the workflow
+listing `smoke-relevance` or `smoke-tests` in `needs`, the job `outputs.smoke` expression, the step `id`, the step `env:` values taken from the extracted workflow (not
+hard-coded in the suite), the job `permissions` and `if:`, no `continue-on-error`, exactly one `run:` step, and the step writing exactly one `smoke=` line, last.
 
-**Mutation matrix:**
+**Mutation matrix** (each row is executed by the suite against a MUTATED COPY of the extracted body or parsed workflow, with an exact-string replace that asserts it
+matched exactly once and changed the text, and counts a mutant as caught only on the suite's own rc 1 with the expected `::notice::` reason string, never on rc 2 or 127):
 
-| # | Mutation (edit that must make `bash scripts/secret-scan-smoke-gate.test.sh` RED) | Targets |
+| # | Mutation (must make `bash scripts/secret-scan-smoke-gate.test.sh` RED) | Targets |
 |---|---|---|
-| 1 | Make `SUBJECT_RE` never match, or delete any one alternative (`.gitleaks.toml`, `.gitleaksignore`, the workflow file, the scripts prefix) in turn | the named-list rows: each member must yield `true`, so a single dropped alternative reddens a specific row |
-| 2 | Add a second path reference after a compliant first, e.g. a new `bash scripts/other-helper.sh` line in a copy of the `smoke-tests` job text, with the gate unchanged | the operand anchor must include the new member and fail on it (a check that stops at the first member) |
-| 3 | Make the operand extraction return fewer than 3 operands, or the YAML extraction find 0 steps (rename the job, break the extraction) | the suite's own dispatch: 0 operands or 0 extracted steps must FAIL, not pass |
-| 4 | Change the capture to `files=$(gh api ... \|\| true)`, or let the shim emit a first page and then exit non-zero | a failed or partial fetch must still yield `true` |
-| 5 | Remove the empty-list guard, or the 3000-entry guard (one mutant each) | an empty list and a list at the cap must yield `true` |
-| 6 | Drop `(.previous_filename // empty)` from the jq | a rename OUT of a subject path and a rename INTO one must yield `true` |
-| 7 | Edit the extracted `if:` (flip `!= 'false'` to `== 'true'`, drop `!cancelled()`, drop the event conjunct), or add `needs: smoke-relevance` to any required job, or make the step write `smoke=` twice | exact-string equality on the `if:`; required jobs keep reporting with no edge to the gate; one write per run |
+| 1 | Make `SUBJECT_RE` never match, or delete any one alternative (workflow file, `.gitleaks.toml`, `.gitleaksignore`, scripts prefix, git attributes/ignore, `smoke/`) in turn, or narrow the prefix to the four literal file names | the named-list and prefix rows: each member must yield `true`, so a single dropped alternative reddens a specific row |
+| 2 | Add a second path reference after a compliant first, naming a REAL tracked file outside the pattern (for example a `bash scripts/lint-workflows.sh` line in a copy of the `smoke-tests` job text), with the gate unchanged; the extractor is first run on the unmutated text as a known-positive control | the operand anchor must report the new operand by name (a check that stops at the first member); a mutant naming a non-existent file proves nothing and is not used |
+| 3 | Make the operand extraction return fewer than the measured 4 distinct tracked operands, or the YAML extraction find 0 steps (rename the job, break the extraction) | the suite's own dispatch: 0 operands or 0 extracted steps must FAIL, not pass |
+| 4 | Change the capture to `lines=$(gh api ... \|\| true)`, drop `--paginate`, or let the shim emit page one and then exit non-zero | a failed or partial fetch must still yield `true`; the shim serves page one only without `--paginate` |
+| 5 | Remove the empty-list guard, the `CHANGED_FILES` comparison, the `rc` case (treat grep rc 2 as no-match), or the `previous_filename` branch (one mutant each) | an empty list, a count mismatch in each direction (and exactly 3000), a matcher error, and a rename out of and into a subject path must yield `true`, each asserting its own reason string so one arm cannot pass for another |
+| 6 | Move the `GITHUB_OUTPUT` write before the `GITHUB_STEP_SUMMARY` write and make the summary write fail, or make the step write `smoke=` twice | the output is written last and once; the `if:` also treats a non-success detect job as run |
+| 7 | Edit the extracted `if:` (drop the `result != 'success'` arm, flip `!= 'false'` to `== 'true'`, drop `!cancelled()`, drop the event conjunct), change `needs`, or add `needs: smoke-relevance` to any other job | exact-string equality on the `if:`; the wrapper assertions; required jobs (derived from `scripts/required-checks.txt` names mapped to job `name:`) keep reporting with no edge to the gate |
 
-Harness rows (edits to the SUITE, not the guard): (H1) replace the extracted body with a stub that prints `smoke=false`: the suite must go RED on
-the named-list rows, and a stub printing `smoke=true` must go RED on the non-subject control, so the suite distinguishes the two verdicts; (H2) a suite that
-runs zero assertions must exit non-zero (`0 passed, 0 failed` is a failure; an append-only failure ledger, not a shared counter, decides the exit).
-Must-PASS non-canonical input: a two-page file list (two JSON arrays, the subject file on page two) must yield `true`, and a list of only
-`knowledge-base/` and `plugins/` files must yield `false` (a gate that rejects everything cannot pass this row). The `gh` shim whitelists the real
-flags (`api`, `--paginate`, `--jq`) and exits non-zero on anything else, so invented flags cannot make dead code look live.
+Harness rows (edits to the SUITE, not the guard): (H1) replace the extracted body with a stub that writes `smoke=false` to `GITHUB_OUTPUT`: the shared row function, run against
+the stub, must report failures above 0 on the named-list rows, and a stub writing `smoke=true` must fail the non-subject control, so the suite distinguishes the two
+verdicts; (H2) a suite that runs fewer assertions than its measured count must exit non-zero, written as the `guard-vacuity-floor` shape (`-lt <literal>` on a counter, with
+`_total=` and `_FLOOR=` contiguous, reporting through a direct `printf` and `exit 1`), not `-eq 0`. Must-PASS non-canonical input: a two-page list (two JSON arrays, the subject
+file on page two, `CHANGED_FILES` matching) must yield `true`, and a list of only `knowledge-base/` and `plugins/` files with a matching `CHANGED_FILES` must yield `false` (a gate
+that rejects everything cannot pass this row); a hostile-name fixture (`docs/a` followed by a newline and `::error::x`, and `docs/b` followed by a newline and `smoke=false`) must leave
+exactly one `smoke=` line in `GITHUB_OUTPUT` and no stdout line starting with `::` other than the single notice. The `gh` shim validates the exact endpoint
+(`repos/<GH_REPO>/pulls/<PR_NUMBER>/files?per_page=100`), whitelists the real flags (`api`, `--paginate`, `--jq`), exits non-zero when `GH_TOKEN` is unset as real `gh` does, applies the
+passed `--jq` with real `jq` per page, flushes page one before failing in page-then-fail mode, and logs every call so the suite proves it was used. One assertion: no tracked file in the subject
+set has mode 120000 (`git ls-files -s`).
 
-**Pre-merge limit, stated.** The suite proves the `if:` text and the step body; it cannot prove GitHub's `needs`/status-function skip semantics, and
-the `false` arm cannot be exercised on this PR (its diff touches the workflow file). Those are covered by `actionlint` expression checking in
-`scripts/lint-workflows.sh`, this PR's own run (the `true` arm and the matrix running), and the Phase 7 post-merge canary (the `false` arm).
+**Pre-merge limit, stated, and how it is narrowed.** The suite proves the `if:` text and the step body; it cannot prove GitHub's `needs`/status-function skip semantics, and
+the `false` arm cannot be exercised on this PR as written (its diff touches the workflow file). Phase 6 therefore adds a two-commit scratch canary (revert commits, no
+force-push): one narrows `SUBJECT_RE` so the PR emits `smoke=false` and the ten rows skip with `smoke-relevance` green; one adds an early `exit 1` before the output write so
+the empty-output arm must run the matrix. `actionlint` expression checking in `scripts/lint-workflows.sh` and the Phase 7 post-merge canary complete the evidence.
 
-**Anchor.** The matcher is compared with a set read from the live tree (the operands of the smoke job), not only with a stored value, so one diff cannot
-leave the pattern behind while adding a file the job executes. The stored part is the named list in the suite, which the same diff could edit; its
-independent anchor is the post-merge measurement (the census `STEM` table: smoke ran versus skipped per `secret-scan.yml` PR run, set against the share
-of PRs that touched the subject paths) attached to #9727.
+**Anchor.** The matcher is compared with a set read from the live tree (the operands of the smoke job), not only with a stored value, so one diff cannot leave the pattern behind
+while adding a file the job executes. The stored part is the named list in the suite, which the same diff could edit; its independent anchor is the post-merge measurement (the
+census `STEM` rows: smoke ran versus skipped per `secret-scan.yml` PR run, set against the share of PRs that touched the subject paths) attached to #9727.
 
 ### Guard 2 - Census self-check (`scripts/ci-demand-census.sh`)
 
-**Property.** `TOTAL_JOB_MINUTES` is printed only when every completed run in the listing was fetched, every run's jobs were fetched in full, and at
-least one job was examined; any shortfall exits 3 with no total.
+**Property.** `TOTAL_JOB_MINUTES` is printed only when every completed run in the listing was fetched, every run's jobs were fetched in full, and at least one job was examined;
+any shortfall exits 3 with no total.
 
-**Assembly.** The chokepoint is the aggregator both modes share (live mode fetches into the same directory layout fixture mode reads). The three
-checks run over the whole set, not a prefix: C1 over the run listing (unique ids against the first page's `total_count`), C2 over EVERY completed
-run's jobs file (existence and `length == total_count`, accumulated across all runs before the verdict), and non-vacuity over the totals. The
-classification predicate (`runner_id > 0`, not skipped, both timestamps set) is a second assembly: the golden fixture carries one job per clause that
-violates only that clause.
+**Assembly.** The chokepoint is the aggregator both modes share (live mode fetches into the same directory layout fixture mode reads). The three checks run over the whole set, not
+a prefix: C1 over every run-listing file (unique ids against the first page's `total_count`), C2 over EVERY completed run's jobs file (existence and `length == total_count`,
+accumulated across all runs before the verdict), and non-vacuity over the totals. The classification predicate (`runner_id > 0`, not skipped, both timestamps set) is a second
+assembly: the golden fixture carries one job per clause that violates only that clause.
 
-**Mutation matrix:**
+**Mutation matrix** (every row asserts `rc == 3` exactly plus a reason keyword on stderr, so an rc 2 crash never counts as caught):
 
 | # | Mutation | Targets |
 |---|---|---|
-| 1 | Delete the jobs file of one completed run, then of TWO runs after a compliant first | C2 existence: exit 3, no `TOTAL_JOB_MINUTES` line, and the message names both runs (a loop that stops at the first failure fails the two-run case) |
+| 1 | Delete the jobs file of one completed run, varying which (first, middle, last), then of TWO runs after a compliant first | C2 existence: exit 3, no `TOTAL_JOB_MINUTES` line, and the message names every missing run (a loop that stops at the first failure, or skips the last run, fails) |
 | 2 | Remove one job from a jobs file but keep its `total_count` | C2 truncation: exit 3 |
-| 3 | Raise the runs listing `total_count` above the runs present (the 1000-result cap), or duplicate one run object across two pages | C1: exit 3 with the narrow-the-window message |
-| 4 | Empty `runs.json`, or a window whose every job is skipped | non-vacuity (the guard's own dispatch): refuse with exit 3, never print `TOTAL_JOB_MINUTES=0` |
-| 5 | Golden totals over a fixture with a runner-less cancelled job, a skipped job, an untimed job and an in-progress run | the classification predicate, one clause per job: dropping any clause changes the golden total and reddens the suite |
+| 3 | Raise a runs-listing `total_count` above the runs present (the 1000-result cap), or duplicate one run so that the unique count is one short of `total_count` | C1: exit 3 with the narrow-the-window message; and, separately, a pure duplicate whose unique count equals `total_count` must exit 0 with the golden unchanged |
+| 4 | Empty `runs-*.json` (listing `total_count` 0), an empty file, or a window whose every job is skipped | non-vacuity (the guard's own dispatch): refuse with exit 3 (an unreadable file is exit 2, pinned), never print `TOTAL_JOB_MINUTES=0` |
+| 5 | Golden totals over a fixture with one job per clause: a runner-less cancelled job (`runner_id` 0) and a second with `runner_id` null, two untimed jobs (null `started_at`, null `completed_at`), a synthetic skipped job with `runner_id` > 0 and both timestamps set (labelled synthetic), and an in-progress run with a decoy jobs file | the classification predicate, one clause per job, each with a different power-of-two duration so a dropped clause shifts the golden by a unique amount; the partition `counted + skipped + runnerless + untimed = total` is asserted |
 
-Harness rows: (H1) replace the script with a stub printing the golden `TOTAL_JOB_MINUTES`: rows 1 to 4 must go RED against it (the golden number alone
-cannot satisfy the failure rows). Must-PASS non-canonical input: the committed fixture's jobs file for one run is two `--paginate` documents (a different
-layout from a single document) and still yields the hand-computed total.
+Harness rows: (H1) replace the script with a stub printing the golden `TOTAL_JOB_MINUTES`: rows 1 to 4 must go RED against it (the golden number alone cannot satisfy the
+failure rows); (H2) the vacuity floor, in the same `guard-vacuity-floor` shape as Guard 1. Must-PASS non-canonical input: the committed fixture's jobs file for one run is two
+`--paginate` documents (a different layout from a single document) and still yields the hand-computed total; the `STEM` rows are asserted over a stem present in only some runs, a job
+name with no suffix, a nested parenthesis, an `@refs/...` path suffix, two dynamic runs with different names on one path (one row), and the same stem in two workflows. A `gh` shim
+serving the committed fixture per endpoint (exact endpoints, whitelisted flags) covers the live layer: the fetched directory round-trips to the same golden; a failure on run k exits 2
+naming run k; an `--end` in the future, a malformed timestamp, a non-numeric run id and `GITHUB_ACTIONS=true` all exit 2. A hostile-name job (an ESC byte, a tab, a leading `::`) must yield
+one clean output line with no ESC byte and no line starting with `::`.
 
-**Anchor.** The checks compare the fetch against counts the API reports in the same payload (`total_count`), so a single diff to the script cannot
-weaken them without also editing the fixtures' own `total_count` fields; the live reproduction of the parent plan's re-measure window (8,414
-job-minutes on the re-run, to be explained rather than matched) is the independent anchor and is attached to #9727.
+**Anchor.** The checks compare the fetch against counts the API reports in the same payload (`total_count`), so a single diff to the script cannot weaken them without also editing
+the fixtures' own `total_count` fields. There is no stored value to anchor; the hand-computed golden is the only reference the suite asserts. The live reproduction of the parent plan's
+re-measure window (8,414 job-minutes on the re-run) is reported next to the baseline with its explanation and is not asserted.
 
 ## Architecture Decision (ADR/C4)
 
@@ -345,7 +395,9 @@ job-minutes on the re-run, to be explained rather than matched) is the independe
 No new architectural decision. ADR-276 stays `proposed` and gains, as an in-scope task of this PR, a short dated `## Amendment 2026-10-08 (S1, #9727)`
 plus the dated Stage-status line `2026-10-08 S1 amended` (append-only, below the table). Three sentences of substance: S1 delivered the census script and
 the smoke path gate; the weekly smoke arm was dropped because the claim never existed in the tree; no other stage is activated (S1 moves no required
-context, fails open and rolls back by revert, as the Status section already says). Two operator-facing lines: how to measure (the copy-pasteable census
+context, fails open and rolls back by revert, as the Status section already says). The amendment also corrects one Status sentence: the S1 smoke gate does not
+"run unconditionally off `pull_request`"; the job and `smoke-tests` are `pull_request`-only and nothing runs off-PR. On Decision 3(e) it reports minutes (net, per the
+Phase 7 criterion) and states that an escape rate is not defined for a non-required, PR-only job whose smoke legs never run off-PR. Two operator-facing lines: how to measure (the copy-pasteable census
 command for a closed 6h window, with the 1000-result cap noted) and how to roll back (delete the `needs:` and `if:` gate on `smoke-tests`, or revert the PR,
 which also reverts the ledger bump and the registrations). The `live` line is NOT appended in this PR: it needs the post-merge census, so the S2 or S3
 amendment (whichever lands first) carries `S1 live` citing the attached census, or a docs commit after the Phase 7 evidence does. The operator rule
@@ -382,8 +434,8 @@ failure_modes:
   - mode: gate skips smoke although a subject file changed
     detection: scripts/secret-scan-smoke-gate.test.sh executes the extracted step body for each named subject file and checks every command-position operand of the live smoke job against the pattern (runs in the test-scripts battery on every PR and merge_group)
     alert_route: red `test` context
-  - mode: file-list fetch fails or is truncated
-    detection: the step emits smoke=true with a ::notice:: naming the reason (fail-open); the smoke legs then run, so the cost is minutes, not coverage
+  - mode: file-list fetch fails, is truncated, or lags the pushed head
+    detection: the step emits smoke=true with a ::notice:: naming the reason (fail-open; the listed entry count must equal the event's changed_files); the smoke legs then run, so the cost is minutes, not coverage
     alert_route: the notice in the run log and, if the job itself errors, a red non-required `smoke-relevance` row
   - mode: census undercounts (truncated pagination, the 1000-result cap, runner-less jobs)
     detection: self-checks C1, C2 and the non-vacuity check exit 3 with no total; the classification predicate is proved clause by clause by golden fixture jobs in scripts/ci-demand-census.test.sh
@@ -471,13 +523,15 @@ provisioned).
 | Generic `STEM` table (job-name stems for every workflow, with `runs_with_stem`) | "smoke minutes down at least 80% on PRs that miss the subject paths" | inferred: the exit criterion is a per-job-stem, ran-versus-skipped measurement and the per-workflow table cannot isolate the ten `smoke` legs from the other secret-scan jobs; one generic table (not a flag and a second table) also yields the `CI` families, so the committed authority (ADR-276 Decision 7) can verify the criterion |
 | Guard 2 (census self-check C1, C2, non-vacuity) and its five-row matrix | "one job-count self-check against the runs listing" | asked in part (ask 2); the matrix is inferred from the parent plan's Observability failure mode and Guard Contract requirement, because a self-check with no row proving it can fail is the vacuous guard the contract exists to prevent |
 | Header comment amendments in `secret-scan.yml` (permissions line, new job rationale) | "Plan S1 only" | inferred: the file's header states "contents: read ONLY"; leaving it false after adding a job-level `pull-requests: read` is a documentation lie the next reader acts on |
+| `.github/CODEOWNERS` line for `scripts/secret-scan-smoke-gate.test.sh` | "Plan S1 only" | inferred: the gate is a cost optimisation that a PR can edit to skip its own smoke, so review ownership of the suite that pins it is the only control; the other secret-scan scripts already have CODEOWNERS entries |
+| Phase 6 scratch canary (two revert-able commits exercising the `false` and empty-output arms pre-merge) | "Needs its own Guard Contract for the smoke gate" | inferred: the suite cannot prove GitHub's `needs`/status-function semantics and this PR's own diff only exercises the `true` arm; without it the `false` arm is first exercised on `main` |
 | Runbook paragraph in `knowledge-base/engineering/operations/secret-scanning.md` | "Plan S1 only" | inferred: the runbook describes the smoke matrix as always running on PRs; after the gate it is skipped by design on PRs outside `SUBJECT_RE`, and leaving the runbook saying otherwise misleads the next on-call who finds ten grey rows |
 | Comment on #9730 about concurrency sampling | "later stages are out of scope" | inferred: the deferral needs a tracking location (workflow rule on deferrals); #9730 already exists, so no new issue |
 
 ### Split Assessment
 
 - Subsystems touched: 3 (`scripts/`, `.github/workflows/`, `knowledge-base/`), within the 4-root threshold
-- Planned files: about 18 (3 new scripts, a fixture directory of about 6 JSON files, `tasks.md`, 8 edits) | Estimated changed lines: about 500, over the issue's 250-line estimate but under the 800-line threshold; roughly 130 are the census script, 45 workflow YAML, and the rest tests, fixtures, runbook and ADR text (after plan review cut the closure walker, the expression evaluator and the harness-of-harness rows)
+- Planned files: about 19 (3 new scripts, a fixture directory of about 7 JSON files, `tasks.md`, 9 edits including CODEOWNERS) | Estimated changed lines: about 650, over the issue's 250-line estimate but under the 800-line threshold; roughly 170 are the census script, 55 workflow YAML, and the rest tests, fixtures, runbook and ADR text (after plan review cut the closure walker, the expression evaluator and most harness-of-harness rows, and deepen-plan added back the fetch-layer shim, the wrapper assertions and the per-clause fixture rows)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. The two parts are independent (the gate could ship alone) but share one issue and one ledger/registration pass; splitting adds a second CI cycle for no risk reduction.
 
@@ -499,21 +553,21 @@ Order follows `cq-write-failing-tests-before`: each suite lands before the code 
 
 ### Phase 1 - Fixture and RED suites
 
-1. `scripts/fixtures/ci-demand-census/basic/`: synthesized `runs.json` (about 6 runs: `ci.yml` on `pull_request`, `merge_group` and `push`; a
-   `secret-scan.yml` `pull_request` run with `smoke (...)` legs; a dynamic CodeQL run named per PR; one in-progress run) and `jobs-<run_id>.json` files:
-   matrix-suffixed names, a runner-less cancelled job (`runner_id` 0), a skipped job, a job with null `completed_at`, and one two-document
-   (`--paginate`-shaped) jobs file. Job field names come from a real response (`gh api .../jobs?per_page=1`), values are synthetic: IDs are small
-   integers, SHAs are obviously fake (`0000...`-style, no entropy), no logins or emails; run `gitleaks dir scripts/fixtures/ci-demand-census` if the
-   binary is installed, otherwise the PR's gitleaks job is the gate (the `lint-fixture-content` glob does not cover `scripts/fixtures/`). Goldens are
-   hand-computed in the suite.
-2. `scripts/ci-demand-census.test.sh`: golden totals and tables, Guard 2 rows 1 to 5 and H1, mutants made by `jq` edits into `mktemp -d` only,
-   append-only failure ledger, assertion floor, `TMPDIR=${TMPDIR:-/var/tmp}`, and a check that the script's header documents the closed-window and
-   lower-bound definitions.
-3. `scripts/secret-scan-smoke-gate.test.sh`: extracts the step body and the `smoke-tests` `if:` from the workflow with PyYAML (precedent
-   `skill-security-scan-step-body.test.sh`) and runs the body under `bash --noprofile --norc -eo pipefail` with `GITHUB_OUTPUT` and
-   `GITHUB_STEP_SUMMARY` pointing into a temp dir and a `gh` shim (whitelisted flags, applies the passed `--jq` with real `jq` per page, modes: JSON pages,
-   exit code, page-then-fail). Guard 1 rows 1 to 7 and H1, H2, the named-list rows (modification and rename source) and the operand anchor.
-   The suites are RED at this commit by design (no script, no job yet).
+1. `scripts/fixtures/ci-demand-census/basic/`: synthesized `runs-1.json` (about 7 runs: `ci.yml` on `pull_request`, `merge_group` and `push`; a `secret-scan.yml`
+   `pull_request` run with `smoke (...)` legs and one with a skipped `smoke` stem plus a `smoke-relevance` job; a dynamic CodeQL run named per PR; a run with
+   `total_count` 0 and no jobs; one in-progress run with a decoy jobs file of large minutes) and `jobs-<run_id>.json` files: matrix-suffixed names, one job per
+   classification clause (a runner-less cancelled job with `runner_id` 0 and a second with `runner_id` null, two untimed jobs with null `started_at` and null
+   `completed_at`, a labelled-synthetic skipped job with `runner_id` > 0 and both timestamps set), each with a different power-of-two duration, and one two-document
+   (`--paginate`-shaped) jobs file. Job field names come from a real response (`gh api .../jobs?per_page=1`), values are synthetic: IDs are small integers, SHAs are
+   obviously fake (`0000...`-style, no entropy), no logins or emails; run `gitleaks dir scripts/fixtures/ci-demand-census` if the binary is installed, otherwise the PR's
+   gitleaks job is the gate (the `lint-fixture-content` glob does not cover `scripts/fixtures/`). Goldens are hand-computed in the suite from integer seconds.
+2. `scripts/ci-demand-census.test.sh`: golden totals and tables, Guard 2 rows 1 to 5, H1, H2, the live-layer `gh` shim round trip, mutants made by `jq` edits into
+   `mktemp -d` only, append-only failure ledger, the `guard-vacuity-floor` shape for the assertion floor, `TMPDIR=${TMPDIR:-/var/tmp}`, and a check that the script's header
+   documents the closed-window and lower-bound definitions.
+3. `scripts/secret-scan-smoke-gate.test.sh`: extracts the step body, its `env:`, the job wrapper and the `smoke-tests` `if:` from the workflow with PyYAML (precedent
+   `skill-security-scan-step-body.test.sh`) and runs the body under `bash --noprofile --norc -eo pipefail` with `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY` pointing into a temp dir
+   and the `gh` shim described under Guard 1. Guard 1 rows 1 to 7, H1, H2, the named-list and prefix rows (modification and rename source), the operand anchor with its
+   known-positive control, the wrapper equalities and the hostile-filename fixture. The suites are RED at this commit by design (no script, no job yet).
 
 ### Phase 2 - Census script
 
@@ -525,9 +579,10 @@ difference gets an explanation in the attachment (the lower-bound definitions), 
 
 Edit `.github/workflows/secret-scan.yml` (new job, `smoke-tests` `needs:` and `if:`, the `SUBJECT_RE` rationale comment, the permissions header
 reword). Bump `scripts/pr-fanout-ledger.txt` `secret-scan.yml` 6 to 7 with the consequence appended ("+1 smoke-relevance (#9727, ADR-276 S1): fail-open
-detect gating the non-required smoke-tests matrix; no required context has a `needs:` edge to it"). Add the runbook paragraph to
+detect gating the non-required smoke-tests matrix; no required context has a `needs:` edge to it. Not folded into an existing job as a step (the ledger's A3 remedy) because
+the verdict must be a job-level output consumed through `needs:`, and folding it into a required job would couple a required context to the gate"). Add `scripts/secret-scan-smoke-gate.test.sh` to `.github/CODEOWNERS` next to the secret-scan entries. Add the runbook paragraph to
 `knowledge-base/engineering/operations/secret-scanning.md`. Verify with `bash plugins/soleur/test/pr-fanout-ledger.test.sh`, `bash scripts/lint-workflows.sh`
-(actionlint expression checking) and the lints in the Acceptance Criteria.
+(actionlint expression checking), `bash scripts/guard-vacuity-floor.test.sh` and the lints in the Acceptance Criteria.
 
 ### Phase 4 - Registration
 
@@ -551,17 +606,24 @@ Append the S1 amendment and the dated Stage-status line to ADR-276 (status stays
 Run every command in the Acceptance Criteria. Commit with the required trailer (`Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`), push (no
 force-push), update PR #9772 (body contains `Closes #9727`, ends with the `🤖 Generated with [Claude Code](https://claude.com/claude-code)` line). Poll CI
 with the Monitor tool, not a background Bash. This PR edits `secret-scan.yml`, so its own `smoke-relevance` must read `smoke=true` and all ten legs run
-(a live canary of the `true` arm and of the `needs`/`if:` semantics). `Closes #9727` will auto-close the issue at merge, before its post-merge exit
-evidence exists; Phase 7 therefore comments on the closed issue rather than leaving the evidence unattached.
+(a live canary of the `true` arm and of the `needs`/`if:` semantics). Then run the **scratch canary** with two revert-able commits (revert commits, never a force-push; the
+final tree equals the intended one): commit one narrows `SUBJECT_RE` so it no longer matches the workflow file, so the PR must emit `smoke=false`, the ten `smoke` rows must
+skip and `smoke-relevance` must be green; commit two adds an early `exit 1` before the output write, so the empty-output arm must run the matrix. Revert both before marking
+ready. This PR edits `.github/workflows/`, so `admin-merge-ready.sh` reports UNTRUSTED-CI for it: it merges through the normal queue or auto-merge, never the agent `--admin`
+path. `Closes #9727` will auto-close the issue at merge, before its post-merge exit evidence exists; Phase 7 therefore comments on the closed issue rather than leaving the
+evidence unattached.
 
 ### Phase 7 - Post-merge
 
-1. Run the census over a closed post-merge window of at least 6 hours, plus the Phase 2 baseline, and attach both to #9727 with
-   `gh issue comment 9727 --body-file`. The `STEM` rows for `secret-scan.yml` `pull_request` give smoke ran versus skipped per run.
-2. Live canary of the `false` arm: on the first post-merge PR that touched no subject path, `gh run view` shows `smoke-relevance` success and the ten
-   `smoke` rows skipped. If no such PR appears within 48 hours, the evidence is the census split alone (runs where the stem ran against skipped), with the share
-   of PRs that touched subject paths reported next to it; smoke minutes per PR run that missed the subject paths must be down at least 80%.
-3. Comment on #9730 (S5): concurrency sampling was left out of the census and belongs to S5's re-measure.
+1. Run the census over a closed post-merge window (it fetches in one-hour sub-windows, so 6 hours or more is fine), plus the Phase 2 baseline, and attach both to #9727
+   with `gh issue comment 9727 --body-file`, inside a code fence. The `STEM` rows for `secret-scan.yml` `pull_request` give `runs_ran`, `runs_skipped` and `runs_runnerless`
+   for the `smoke` stem and the cost of the `smoke-relevance` stem. Runs started before the merge used the old workflow, so report the coverage ratio
+   (`smoke-relevance` runs over PR runs) and take the after-figures from the post-merge runs only.
+2. Exit criterion, net: secret-scan smoke-related minutes per PR run (the `smoke` stem plus the `smoke-relevance` stem) down at least 80% against the baseline window, with the
+   skip share reported next to the share of PRs that touched subject paths (expected about 9%, from the sizing above).
+3. Live canary of the `false` arm on `main`: on the first post-merge PR that touched no subject path, `gh run view` shows `smoke-relevance` success and the ten `smoke` rows
+   skipped. If no such PR appears within 48 hours, the census split alone is the evidence.
+4. Comment on #9730 (S5): concurrency sampling was left out of the census and belongs to S5's re-measure.
 
 ## Files to Create
 
@@ -576,6 +638,7 @@ evidence exists; Phase 7 therefore comments on the closed issue rather than leav
 
 - `.github/workflows/secret-scan.yml` (new `smoke-relevance` job; `smoke-tests` `needs:` and `if:`; header comments)
 - `scripts/pr-fanout-ledger.txt` (secret-scan row: jobs 6 to 7, consequence text)
+- `.github/CODEOWNERS` (one line for `scripts/secret-scan-smoke-gate.test.sh`, next to the secret-scan entries)
 - `scripts/test-all.sh` (two registrations)
 - `scripts/lib/test-affected-paths.sh` (the gate suite's `AFFECTED_*_PATHS` block, or the classification the lint requires)
 - `scripts/suite-durations.tsv`, `scripts/suite-shard-legs.tsv` (regenerated by `regenerate-shard-manifest.py --incremental --write`)
@@ -603,19 +666,20 @@ and four files under `apps/web-platform/scripts/`).
 - [ ] `bash scripts/ci-demand-census.sh --fixture scripts/fixtures/ci-demand-census/basic --summary` prints a line matching `^TOTAL_JOB_MINUTES=` and the suite pins its value to the hand-computed golden.
 - [ ] A run against a truncated copy of the fixture exits 3 and prints no `TOTAL_JOB_MINUTES` line.
 - [ ] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-08-chore-ci-demand-census-and-smoke-path-gate-plan.md` reports 2 guard entries, each with a matrix of at least 3 rows.
-- [ ] `bash scripts/lint-orphan-test-suites.sh` exits 0 with both new suites registered and classified.
+- [ ] `bash scripts/lint-orphan-test-suites.sh` and `bash scripts/guard-vacuity-floor.test.sh` exit 0 with both new suites registered, classified and carrying a conforming assertion floor.
 - [ ] `bash plugins/soleur/test/pr-fanout-ledger.test.sh` passes with the secret-scan row at 7 jobs; `python3 -c "import yaml;print(len(yaml.safe_load(open('.github/workflows/secret-scan.yml'))['jobs']))"` prints 7.
 - [ ] `python3 scripts/lint-workflow-step-env-refs.py`, `python3 scripts/lint-workflow-errexit-capture.py`, `python3 scripts/lint-workflow-run-body-syntax.py` and `bash scripts/lint-workflows.sh` exit 0.
 - [ ] No required job in `secret-scan.yml` lists `smoke-relevance` in `needs:`, and `smoke-relevance` is absent from `scripts/required-checks.txt` (asserted by Guard 1 row 7, not by whole-file grep).
 - [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` and `bash scripts/check-adr-ordinals.sh` pass; ADR-276 `status:` is still `proposed` and the amendment plus the dated `S1 amended` line are present.
 - [ ] The workflow header no longer says "contents: read ONLY" without naming the job-level exceptions; the runbook paragraph is present.
 - [ ] PR #9772 body contains `Closes #9727` and its last line is `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; every commit message ends with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-- [ ] CI is green on the PR, including this PR's own `smoke-relevance` reading `smoke=true` (the workflow file is in its diff) and all ten smoke legs running.
+- [ ] CI is green on the PR, including this PR's own `smoke-relevance` reading `smoke=true` (the workflow file is in its diff) and all ten smoke legs running; the Phase 6 scratch canary showed `smoke=false` with the ten rows skipped and the empty-output arm running the matrix, and both scratch commits are reverted.
+- [ ] `.github/CODEOWNERS` names `scripts/secret-scan-smoke-gate.test.sh`; the live census run refuses `GITHUB_ACTIONS=true`, a future `--end`, a malformed timestamp and a non-numeric run id with exit 2.
 
 ### Post-merge (operator-free, run by the shipping agent)
 
 - [ ] The baseline and post-merge census outputs are attached to #9727 (`gh issue comment 9727 --body-file`), and the baseline total is explained against the parent plan's 8,414.
-- [ ] Smoke ran versus skipped per `secret-scan.yml` PR run is reported from the `STEM` rows, with smoke minutes per PR run that missed the subject paths down at least 80% (or the 48-hour fallback in Phase 7 is recorded).
+- [ ] Smoke ran versus skipped versus queue-cancelled per `secret-scan.yml` PR run is reported from the `STEM` rows, with the secret-scan smoke-related minutes per PR run (the `smoke` stem plus the `smoke-relevance` stem) down at least 80% against the baseline (or the 48-hour fallback in Phase 7 is recorded).
 - [ ] The #9730 comment about concurrency sampling is posted.
 
 ## Test Scenarios
@@ -623,7 +687,8 @@ and four files under `apps/web-platform/scripts/`).
 - Given a PR whose only changed files are `knowledge-base/x.md` and `plugins/y.ts`, when `smoke-relevance` runs, then it emits `smoke=false` and the ten legs are skipped.
 - Given a PR changing only `.gitleaks.toml`, when it runs, then `smoke=true`; the same for a rename whose OLD name was `apps/web-platform/scripts/rename-guard.sh`.
 - Given `gh api` exits non-zero, or exits non-zero after emitting a first page, then `smoke=true`.
-- Given a list of exactly 3000 entries with no subject path, then `smoke=true`.
+- Given a list whose entry count differs from the event's `changed_files` (a lagging list, a re-run on a newer head, or the 3000-entry cap), then `smoke=true`; given a matching count and no subject path, then `smoke=false`.
+- Given a PR touching only `.gitattributes` or a nested `.gitignore`, then `smoke=true`.
 - Given the smoke job gains a `bash scripts/other-helper.sh` step and `SUBJECT_RE` is unchanged, then the suite is RED.
 - Given a fixture where one completed run has no jobs file, when the census runs, then exit 3 and no total line.
 - Given a job with `runner_id` 0 and conclusion `cancelled`, then it contributes 0 minutes and is counted in `JOBS_RUNNERLESS`.
@@ -632,12 +697,13 @@ and four files under `apps/web-platform/scripts/`).
 ## Dependencies & Risks
 
 - **Over-skipping.** The named list and the operand anchor are the countermeasures; the residual is a path reference built at runtime (a variable-assembled path), which the operand anchor cannot see. The directory prefix `apps/web-platform/scripts/` absorbs the likely case (a new helper beside the existing ones).
-- **List lag.** `pulls/N/files` may briefly lag a `synchronize` push, and the step is fail-open on error, not on a stale non-empty list. A wrong skip costs one PR a missed non-required self-test (the five required scanners still run); the next push or the merge-queue candidate re-reads the list. A `.head.sha` freshness guard was considered and declined as taste (see `decision-challenges.md`).
+- **List lag.** `pulls/N/files` can lag a `synchronize` push and a re-run reads the current PR, not the run's SHA. The step therefore requires the listed entry count to equal the event's own `changed_files` and emits `true` on any mismatch, which also covers the 3000-entry cap; a stale list with an equal count is not detected and is bounded by the fact that smoke is non-required and the five required scanners still run. `smoke-tests` does not run on `merge_group`, so nothing re-reads the list at queue time (an earlier draft claimed it did).
 - **`pulls/N/files` needs a read scope.** The job declares `pull-requests: read` at job level (`allowlist-diff` already carries a job-level `pull-requests: write`; the workflow level stays `contents: read`). Whether a token without it could read a public PR's files is not verified, so the scope is declared rather than assumed.
 - **YAML and expression traps.** A leading `!` in `if:` is a YAML tag; `always()` would keep the matrix running on a cancelled run; both avoided and pinned by Guard 1 row 7.
 - **Registration side effects.** Editing `scripts/test-all.sh` and `scripts/lib/test-affected-paths.sh` degrades the local affected gate to a full run for that diff (the runner/index self-edge); expected, and the registration-only carve-out may apply.
 - **Live fetch cost.** About 930 `jobs` calls for a 6h window, sequential, a few minutes in a developer shell with `gh auth`; the 1000-result cap bounds the window size (the script says so when it bites).
-- **Fix-Size drift.** About 500 lines against the issue's 250 (see Split Assessment); the extra is test code and bookkeeping the lints require.
+- **Fix-Size drift.** About 650 lines against the issue's 250 (see Split Assessment); the extra is test code and bookkeeping the lints require.
+- **Census window and rate.** A 6-hour window is about 930 jobs calls, fetched in one-hour sub-windows with a retry and progress output; a transient failure restarts the run (no resume), and live mode is refused in CI so it cannot spend the shared `GITHUB_TOKEN` budget.
 
 ## References & Research
 

@@ -8,11 +8,12 @@ Taste items from plan review, none of which argues the operator's stated scope s
 - Default taken: not built. The script header documents the `date -u` recipe for a closed window. The issue asks for a small script, and the option
   can be added by the first stage that finds the recipe tiresome.
 
-## Accepted risk: no `.head.sha` freshness guard on the PR file list (Kieran)
+## Adopted in a different form: list freshness (Kieran, security-sentinel, architecture-strategist, spec-flow-analyzer)
 
-- Finding: `pulls/N/files` may lag right after a `synchronize` push, and the gate is fail-open on error, not on a stale non-empty list.
-- Default taken: no extra API call. A wrong skip costs one PR a non-required self-test while the five required scanners still run, and the next push or
-  the merge-queue candidate re-reads the list. Listed under Dependencies & Risks in the plan.
+- Finding: `pulls/N/files` may lag a `synchronize` push, and a re-run reads the current PR rather than the run's SHA.
+- First default (plan review): accept the risk. Reversed at deepen-plan because three reviewers independently rated it and `smoke-tests` never runs on `merge_group`, so nothing
+  re-reads the list later. Adopted: compare the listed entry count with the event's own `changed_files` (no extra API call) and emit `true` on any mismatch. A `.head.sha`
+  comparison was not adopted; a stale list with an equal count remains an accepted residual.
 
 ## Declined: a label or `workflow_dispatch` that forces the smoke matrix (CTO devex lens)
 
