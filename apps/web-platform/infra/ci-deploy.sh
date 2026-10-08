@@ -3286,7 +3286,7 @@ unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 # registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
 # sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
 # (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
-# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# in server.tf proves pkg-containers.githubusercontent.com and docker.pkg.github.com too. Fail-open: the probe is bounded by
 # `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
 # never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
 # (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.

@@ -2336,7 +2336,7 @@ runcmd:
   - |
     for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
       [ -f "$f" ] || continue
-      for h in ghcr.io pkg-containers.githubusercontent.com; do
+      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
         grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
       done
     done

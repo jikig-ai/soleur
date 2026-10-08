@@ -298,14 +298,14 @@ REGISTRY_DENY_LINES = {
 # command appended to the entry costs the header its admission. DENY_BLOCK is a literal copy of
 # the registry's entry: the G1 "DENY_BLOCK admits" row below reds if the two diverge, and
 # web-ghcr-deny.test.sh pins cloud-init.yml and server.tf to the registry entry.
-DENY_HEADER = "for h in ghcr.io pkg-containers.githubusercontent.com; do"
+DENY_HEADER = "for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do"
 DENY_FILES = {"cloud-init-registry.yml", "cloud-init.yml"}
 # runcmd is ONE shell script, so a function or alias defined in an earlier entry would run inside
 # the admitted deny loop with h=ghcr.io. Redefining the commands the deny calls is refused outright.
 SHADOW_RE = re.compile(r"^\s*(?:-\s+)?(?:function\s+|alias\s+)?(?:grep|printf|getent|awk|sort)\s*(?:\(\s*\)|=)")
 DENY_BLOCK = """for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
   [ -f "$f" ] || continue
-  for h in ghcr.io pkg-containers.githubusercontent.com; do
+  for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
     grep -qE "^0\\.0\\.0\\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\\n:: %s\\n' "$h" "$h" >> "$f"
   done
 done"""
@@ -645,7 +645,7 @@ mrow "16 the registry launch reverts to '\${zot_image}' (the pre-mirror ghcr.io 
 py_sub cloud-init-registry.yml 'ZOT_IMAGE_ID="$(head -1 /run/soleur/zot-image-id 2>/dev/null || true)"' 'ZOT_IMAGE_ID="ghcr.io/project-zot/zot-linux-amd64:v2.1.20"'
 mrow "16b ZOT_IMAGE_ID assigned a ghcr.io ref instead of the verified hand-off" cloud-init-registry.yml
 # 16c: a ghcr.io line in the registry template that is not the deny or its probe
-py_sub cloud-init-registry.yml '      for h in ghcr.io pkg-containers.githubusercontent.com; do' '      for h in ghcr.io pkg-containers.githubusercontent.com; do docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do'
+py_sub cloud-init-registry.yml '      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do' '      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do'
 mrow "16c a ghcr.io pull appended to the deny line in cloud-init-registry.yml" cloud-init-registry.yml
 
 # ── #9169 Guard 1: the deny header is admitted only as part of a whole entry equal to DENY_BLOCK.
@@ -657,7 +657,7 @@ krow() {  # <label> <file> <expected new-VIOL prefix>
   else no "G1 mutation SURVIVED (or wrong kind): $1 — want '$3', new: $(head -1 <<<"$n" | cut -c1-110)"; fi
   sandbox
 }
-DENY_HDR='      for h in ghcr.io pkg-containers.githubusercontent.com; do'
+DENY_HDR='      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do'
 DENY_BODY_PULL='        docker pull "$h/jikig-ai/soleur-web-platform:latest"'
 py_sub cloud-init.yml "$DENY_HDR" "$DENY_HDR docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do"
 krow "17 a ghcr.io pull appended to the web deny header in cloud-init.yml" cloud-init.yml "VIOL cloud-init.yml ghcr.io for h in ghcr.io"

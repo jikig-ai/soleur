@@ -2152,3 +2152,24 @@ running. Decided 2026-10-03, with no new Terraform delivery code:
 - #9393 stays open with two readable close conditions (an apply run after the change whose provisioner
   executed green, and the #9372 rebirth run) and a dated re-evaluation on 2026-10-17. #9390 and #9391 are
   tracked in their issues; read their state there rather than from this list.
+
+## Amendment 2026-10-08 (#9390) — the hosts-file deny names three hosts
+
+The host-process hosts-file deny (the registry's runcmd entry, its byte copies in `cloud-init.yml` and in
+`server.tf` `local.ghcr_deny_sh`, and the apply-time assertion `local.ghcr_deny_assert_sh`) now names
+`ghcr.io`, `pkg-containers.githubusercontent.com` and `docker.pkg.github.com`, in that order. The mechanism is
+unchanged: one `0.0.0.0` line and one `::` line per name, idempotent, written to `/etc/hosts` and to cloud-init's
+hosts template. This closes the open item in the 2026-09-30 and 2026-10-03 amendments that named the
+`docker.pkg.github.com` hosts-file line (#9390); their statements that the deny covers two names describe the
+state before this date and are left as written.
+
+- **Delivery to the registry** is the registry-host replace that carries the zot v2.1.22 pin (#9252): the entry
+  is part of `user_data`, so the host receives it only at birth.
+- **Delivery to the running web hosts** is not part of that merge. The merge carries the two kill-switch lines,
+  so the push applies do not re-run `zot_consumer_probe_install` (web-1) and `deploy_pipeline_fix_web2` (web-2);
+  the new `local.ghcr_deny_sh` reaches them with the next apply that includes those resources, and a fresh or
+  reborn web host gets it from `cloud-init.yml` at birth.
+- **What proves it.** `ghcr_blocked` in the registry heartbeat probes `ghcr.io` only, so no per-name telemetry
+  exists for the third name. The proof is `zot-image-fetch.test.sh` R10 (the rendered entry executed against a
+  re-rooted hosts file) and `web-ghcr-deny.test.sh` (byte parity of all copies on both `web_tunnel_connector`
+  arms, and the assertion's per-name behaviour).

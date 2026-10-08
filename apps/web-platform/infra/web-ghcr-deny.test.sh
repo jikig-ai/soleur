@@ -71,13 +71,13 @@ assert_fixture_dir "$WORK"
 cat > "$WORK/g2.py" <<'PY'
 import base64, os, re, sys, yaml
 
-HDR = "for h in ghcr.io pkg-containers.githubusercontent.com; do"
+HDR = "for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do"
 LOC_START = re.compile(r"^\s*ghcr_deny_sh\s*=\s*<<-EOT\s*$")
 ASSERT_START = re.compile(r"^\s*ghcr_deny_assert_sh\s*=\s*<<-EOT\s*$")
 EOT = re.compile(r"^\s*EOT\s*$")
 # A shell loop over the deny's names, in either order (`for h in ... ; do`). A string that merely
 # NAMES the header (zot-image-rehearse.sh finds the registry entry by it) is not a loop.
-DENY_LOOP = re.compile(r"\bfor\s+h\s+in\s+[^;\n\"']*\b(?:ghcr\.io|pkg-containers\.githubusercontent\.com)\b[^;\n\"']*;\s*do\b")
+DENY_LOOP = re.compile(r"\bfor\s+h\s+in\s+[^;\n\"']*\b(?:ghcr\.io|pkg-containers\.githubusercontent\.com|docker\.pkg\.github\.com)\b[^;\n\"']*;\s*do\b")
 # A write to the hosts file or cloud-init's hosts template, in any of the usual shell shapes, plus a
 # FILE_MAP destination (infra-config-apply.sh's `B64|/dest|mode|owner` rows).
 HOSTS_WRITE = re.compile(
@@ -271,7 +271,7 @@ chk_exec() {  # <root> — copy B runs the way remote-exec runs it: POSIX sh, se
   rc=0; sh "$w/run.sh" && sh "$w/run.sh" || rc=$?
   [[ "$rc" == 0 ]] || { echo "copy B exited $rc under sh + set -e"; return 1; }
   for f in hosts tmpl; do
-    for n in ghcr.io pkg-containers.githubusercontent.com; do
+    for n in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
       [[ "$(grep -cxF "0.0.0.0 $n" "$w/$f")" == 1 && "$(grep -cxF ":: $n" "$w/$f")" == 1 ]] \
         || { echo "$f: want exactly one '0.0.0.0 $n' and one ':: $n' after two runs"; return 1; }
     done
@@ -281,12 +281,12 @@ chk_exec() {  # <root> — copy B runs the way remote-exec runs it: POSIX sh, se
   rm -f "$w/tmpl"; printf '10.0.0.1 other\n0.0.0.0\tghcr.io\n' > "$w/hosts"
   rc=0; sh "$w/run.sh" || rc=$?
   [[ "$rc" == 0 && ! -e "$w/tmpl" && "$(grep -c 'ghcr\.io' "$w/hosts")" == 1 && "$(head -1 "$w/hosts")" == "10.0.0.1 other" \
-    && "$(grep -c 'pkg-containers' "$w/hosts")" == 2 ]] \
-    || { echo "pre-seeded hosts: ghcr.io duplicated, an unrelated line changed, or the absent template was created (rc=$rc)"; return 1; }
+    && "$(grep -c 'pkg-containers' "$w/hosts")" == 2 && "$(grep -c 'docker\.pkg\.github\.com' "$w/hosts")" == 2 ]] \
+    || { echo "pre-seeded hosts: ghcr.io duplicated, an unrelated line changed, the absent template was created, or a name not appended exactly once (rc=$rc)"; return 1; }
 }
 chk_agree() {  # <root>
   copy_b "$1" "$WORK/b" || { echo "copy B unreadable"; return 1; }
-  local s="$WORK/shim" row gh pk want_reg want_ci want_as reg ci as rc err bad=""
+  local s="$WORK/shim" row gh pk dk want_reg want_ci want_as reg ci as rc err bad=""
   assert_fixture_dir "$WORK"; mkdir -p "$s"
   cat > "$s/getent" <<'EOF'
 #!/usr/bin/env bash
@@ -294,6 +294,7 @@ chk_agree() {  # <root>
 case "$2" in
   ghcr.io) v="${GE_GHCR-}" ;;
   pkg-containers.githubusercontent.com) v="${GE_PKG-}" ;;
+  docker.pkg.github.com) v="${GE_DOCKERPKG-}" ;;
   *) echo "getent shim: unexpected name: $2" >&2; exit 64 ;;
 esac
 [[ -n "$v" ]] || exit 2
@@ -304,15 +305,15 @@ EOF
   [[ -s "$WORK/ci-fn.sh" ]] || { echo "_ghcr_blocked_state not found in ci-deploy.sh"; return 1; }
   local SINK='0.0.0.0 STREAM x\n0.0.0.0 DGRAM\n:: STREAM\n' ROUT='140.82.121.34 STREAM x\n' \
     MIX='0.0.0.0 STREAM x\n140.82.121.34 STREAM\n' V6='2606:50c0:8000::154 STREAM x\n' LOOP='127.0.0.1 STREAM x\n'
-  # ghcr | pkg | registry | ci-deploy | assertion. The two one-name-sinked rows are the NAMED
-  # expected difference: both classifiers probe ghcr.io only (registry parity) while the assertion
-  # checks both names — so it must fail whichever of the two is not sinked.
+  # ghcr | pkg | docker-pkg | registry | ci-deploy | assertion. The one-name-not-sinked rows are the
+  # NAMED expected difference: both classifiers probe ghcr.io only (registry parity) while the
+  # assertion checks all three names — so it must fail whichever of the three is not sinked.
   # Each implementation runs under its production shell: the registry heartbeat script is bash,
   # ci-deploy.sh is bash with set -euo pipefail, and a remote-exec inline script runs under sh.
-  while IFS='|' read -r row gh pk want_reg want_ci want_as; do
-    reg=$(env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" bash -c ". '$WORK/reg-classifier.sh'; printf %s \"\$GHCR_BLOCKED\"" 2>/dev/null)
-    ci=$(env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" bash -euo pipefail -c ". '$WORK/ci-fn.sh'; _ghcr_blocked_state" 2>/dev/null)
-    rc=0; env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" sh -c "set -e; $(cat "$WORK/b/assert.sh")" >/dev/null 2>"$WORK/as.err" || rc=$?
+  while IFS='|' read -r row gh pk dk want_reg want_ci want_as; do
+    reg=$(env GE_GHCR="$gh" GE_PKG="$pk" GE_DOCKERPKG="$dk" PATH="$s:$PATH" bash -c ". '$WORK/reg-classifier.sh'; printf %s \"\$GHCR_BLOCKED\"" 2>/dev/null)
+    ci=$(env GE_GHCR="$gh" GE_PKG="$pk" GE_DOCKERPKG="$dk" PATH="$s:$PATH" bash -euo pipefail -c ". '$WORK/ci-fn.sh'; _ghcr_blocked_state" 2>/dev/null)
+    rc=0; env GE_GHCR="$gh" GE_PKG="$pk" GE_DOCKERPKG="$dk" PATH="$s:$PATH" sh -c "set -e; $(cat "$WORK/b/assert.sh")" >/dev/null 2>"$WORK/as.err" || rc=$?
     as=pass; [[ "$rc" == 0 ]] || as=fail
     err=""
     if [[ "$as" == fail ]] && ! grep -qE '^FATAL: .* \(#9169\)\. Route back: .*never gh run rerun --failed\.$' "$WORK/as.err"; then err=" (FATAL text/route-back missing)"; fi
@@ -320,14 +321,16 @@ EOF
       bad="$bad [$row: registry=$reg/$want_reg ci-deploy=$ci/$want_ci assert=$as/$want_as$err]"
     fi
   done <<EOF
-sink-only|$SINK|$SINK|1|1|pass
-routable-v4|$ROUT|$ROUT|0|0|fail
-sink+routable|$MIX|$MIX|0|0|fail
-routable-v6-with-::|$V6|$V6|0|0|fail
-loopback-127|$LOOP|$LOOP|0|0|fail
-unresolvable|||unknown|unknown|fail
-ghcr-sinked-pkg-routable|$SINK|$ROUT|1|1|fail
-ghcr-routable-pkg-sinked|$ROUT|$SINK|0|0|fail
+sink-only|$SINK|$SINK|$SINK|1|1|pass
+routable-v4|$ROUT|$ROUT|$ROUT|0|0|fail
+sink+routable|$MIX|$MIX|$MIX|0|0|fail
+routable-v6-with-::|$V6|$V6|$V6|0|0|fail
+loopback-127|$LOOP|$LOOP|$LOOP|0|0|fail
+unresolvable||||unknown|unknown|fail
+ghcr-sinked-pkg-routable|$SINK|$ROUT|$SINK|1|1|fail
+ghcr-routable-pkg-sinked|$ROUT|$SINK|$SINK|0|0|fail
+dockerpkg-routable-others-sinked|$SINK|$SINK|$ROUT|1|1|fail
+dockerpkg-unresolvable-others-sinked|$SINK|$SINK||1|1|fail
 EOF
   [[ -z "$bad" ]] || { echo "classifier disagreement:$bad"; return 1; }
 }
@@ -454,6 +457,22 @@ row "18 hcloud_server.web user_data post-processed instead of the plain render" 
 sub variables.tf $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n' \
   $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12", server_type = "cpx22" }\n'
 row "19 a third web host that neither running-host route reaches" wiring variables.tf
+# #9390: the deny names THREE hosts. Rows 20-24 each break exactly one copy or the assertion for the third
+# (docker.pkg.github.com) name. Copy R is the reference every check compares against, so a drift in R alone
+# is caught on the LIVE tree (A and B then differ from it); the rows below mutate A and B.
+OLD_HDR='for h in ghcr.io pkg-containers.githubusercontent.com; do'
+NEW_HDR='for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do'
+sub cloud-init.yml "$NEW_HDR" "$OLD_HDR"
+row "20 the third name dropped from copy A only" parity cloud-init.yml
+sub cloud-init.yml "$NEW_HDR" "$OLD_HDR"
+row "21 the third name dropped from copy A, read as ZERO deny entries by the order check" order cloud-init.yml
+sub server.tf $'    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do\n      a=$(timeout 10 getent ahosts "$h"' \
+  $'    for h in ghcr.io pkg-containers.githubusercontent.com; do\n      a=$(timeout 10 getent ahosts "$h"'
+row "22 the third name dropped from the apply-time assertion only, deny loop unchanged" agree server.tf
+sub cloud-init.yml "$NEW_HDR" 'for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com example.invalid; do'
+row "23 a fourth name appended to copy A after the compliant first three" parity cloud-init.yml
+sub server.tf "$NEW_HDR" 'for h in docker.pkg.github.com ghcr.io pkg-containers.githubusercontent.com; do'
+row "24 the names reordered in copy B's deny loop only" parity server.tf
 
 # Harness row (must PASS): copy A re-indented under its `- |` parses to the same entry.
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "re-indent anchor missing"
@@ -477,10 +496,10 @@ if ( same() { return 0; }; chk_parity "$SB" >/dev/null 2>&1 ); then
 else fail "harness: row 1 was detected even with same() forced true — parity is not decided by the comparator"; fi
 sandbox
 
-# Floor at the MEASURED count (7 live checks + control + 19 rows + 2 harness rows = 29, #9169
-# review round). Reported with printf + exit DIRECTLY, never through pass()/fail() (the floor
-# polices them).
-MIN_ASSERTIONS=29
+# Floor at the MEASURED count (7 live checks + control + 24 rows + 2 harness rows = 34; was 29 before
+# #9390 added rows 20-24). Reported with printf + exit DIRECTLY, never through pass()/fail() (the
+# floor polices them).
+MIN_ASSERTIONS=34
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
