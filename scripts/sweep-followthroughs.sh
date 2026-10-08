@@ -81,10 +81,13 @@ fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 #  * ANY other exception (BaseException, minus the launcher own SystemExit) also exits 126 with the
 #    exception TYPE only, never its value or a traceback: an escaped exception exits 1, and on the
 #    closed set rc 1 means "verification FAILED -> reopen the tracker".
-#  * Edge cases that behave as `env` did, pinned by rows S2D-7: a probe with no shebang fails execve
-#    with ENOEXEC (126, never a shell fallback); an unset HOME is a missing forwarded name (126);
-#    execve does NO PATH search, which is safe only because every probe path is the canonical
-#    scripts/followthroughs/<name> (contains a slash) after the realpath check in run_one.
+#  * Edge cases where the launcher DELIBERATELY DIFFERS from `env` (measured, coreutils 9.11), pinned by
+#    rows S2D-7: a probe with no shebang fails execve with ENOEXEC (126, no shell fallback) whereas
+#    `env -i ./noshebang` falls back to /bin/sh and exits 0; execve does NO PATH search whereas `env`
+#    searches PATH for a slash-less name (the launcher exits 127); an unset HOME is a missing
+#    forwarded name (126). Neither difference is reachable: row S2D-10 pins a shebang and the exec bit
+#    on every committed probe, and every probe path is the canonical scripts/followthroughs/<name>
+#    (contains a slash) after the realpath check in run_one.
 FT_LAUNCHER='import os, signal, sys
 def run():
     script, earliest, names = sys.argv[1], sys.argv[2], sys.argv[3:]

@@ -542,6 +542,22 @@ t9_api_key_travels_on_stdin_not_argv() {
   assert_eq "T9 --noproxy is the SECOND curl argument" "--noproxy" "$(sed -n 2p <<<"$argv")"
   assert_eq "T9 --noproxy's value is exactly '*' (every host bypasses any proxy)" "*" "$(sed -n 3p <<<"$argv")"
   assert_eq "T9 the silent-but-show-errors flags follow as -sS" "-sS" "$(sed -n 4p <<<"$argv")"
+  # The WHOLE recorded argv, not a prefix (the same exactness check-deploy-script-parity.test.sh C15b
+  # applies): a prefix pin stays green when `-k` (TLS verification off), `-L` (follow redirects with the
+  # credential) or `http://` (the key in cleartext) is added after the first four tokens. Only the -d body
+  # (non-secret corpus text, captured separately above) is masked; the endpoint is a LITERAL so a scheme
+  # or host change is caught. Read NUL-delimited, so a newline inside a token cannot forge a boundary.
+  local tok exact_argv="" masked_next=0
+  while IFS= read -r -d '' tok; do
+    if (( masked_next )); then tok="<-d body>"; masked_next=0
+    elif [[ "$tok" == "-d" ]]; then masked_next=1; fi
+    exact_argv+="$tok"$'\x1f'
+  done < "$root/curl-capture.txt.argv"
+  local us=$'\x1f' want_argv
+  want_argv="--disable${us}--noproxy${us}*${us}-sS${us}https://api.anthropic.com/v1/messages${us}-H${us}anthropic-version: 2023-06-01${us}-H${us}content-type: application/json${us}-d${us}<-d body>${us}--config${us}-${us}"
+  # Verdict only (exact|drift): a drifted argv could be one that carries the key, which must not be printed.
+  assert_eq "T9 the recorded curl argv is EXACTLY the pinned transport set (no -k / -L / http:// can be added; only the -d body is masked)" \
+            "exact" "$([[ "$exact_argv" == "$want_argv" ]] && echo exact || echo drift)"
   assert_contains "T9 the credential config is read from stdin" "--config" "$argv"
   assert_eq "T9 no x-api-key header is an argument" "absent" "$(cp_has "$argv" "x-api-key")"
   assert_eq "T9 the key bytes are in no argument" "absent" "$(cp_has "$argv" "$canary")"
@@ -701,7 +717,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it, so a
 # threshold declared further up leaves the mutant unbound under `set -u` and the floor
 # scores as a construction failure instead of as a firing floor.
-MIN_ASSERTIONS=99
+MIN_ASSERTIONS=100
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s) — cases did not dispatch\n' \
     "$TOTAL" "$MIN_ASSERTIONS" >&2

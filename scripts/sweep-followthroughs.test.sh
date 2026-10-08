@@ -1228,6 +1228,11 @@ t_s2d_1_no_env_hop_and_no_value_on_argv() {
   assert_eq       "S2D-1 env is never exec'd by the sweeper" "0" "$(wc -l < "$root/env.log" | tr -d ' ')"
   assert_eq       "S2D-1 precondition: the python3 launcher was invoked exactly once" "1" "$(s2d_count "$root/py.log" 'ARGV-BEGIN')"
   assert_contains "S2D-1 the forwarded NAME travels on the launcher's argv" "ARG<FOO_TOKEN>" "$pylog"
+  # The interpreter flags, pinned as the RECORDED launcher argv (S2D-7 drives the extracted launcher with
+  # its own -I, so it cannot see the SUT dropping it): without -I an ambient PYTHONPATH / user site can
+  # substitute `os` or `signal`, which then run holding every forwarded secret.
+  assert_eq       "S2D-1 the launcher is started as python3 -I -c (isolated mode: PYTHON* and the user site are ignored)" \
+                  "ARGV-BEGIN:ARG<-I>:ARG<-c>" "$(sed -n 1p "$root/py.log"):$(sed -n 2p "$root/py.log"):$(sed -n 3p "$root/py.log")"
   assert_eq       "S2D-1 the secret VALUE is in no python3 argument" "absent" "$(s2d_has "$pylog" "$canary")"
   assert_eq       "S2D-1 the probe still receives the value" "found" "$([[ "$(cat "$root/val.foo")" == "$canary" ]] && echo found || echo absent)"
 }
@@ -1443,13 +1448,13 @@ EOF
   rm -f "$d/ran"
   s2d_launch with-home "$S2D_PINNED_PATH" "$d/noshebang.sh" FOO_TOKEN
   all_out+="$S2D_OUT"
-  assert_eq "S2D-7 a probe with no shebang (ENOEXEC) exits 126 and is NOT handed to a shell (documented env -i edge)" \
+  assert_eq "S2D-7 a probe with no shebang (ENOEXEC) exits 126 and is NOT handed to a shell (stricter than env -i, which falls back to /bin/sh and runs it; S2D-10 keeps it unreachable)" \
             "126:not-run" "$S2D_RC:$([[ -e "$d/ran" ]] && echo ran || echo not-run)"
 
   # execve does no PATH search: a bare name is "not found" even with its directory on PATH.
   s2d_launch with-home "$d:$S2D_PINNED_PATH" "ok.sh" FOO_TOKEN
   all_out+="$S2D_OUT"
-  assert_eq "S2D-7 execve does no PATH search: a bare script name exits 127 even with its directory on PATH" "127" "$S2D_RC"
+  assert_eq "S2D-7 execve does no PATH search (unlike env): a bare script name exits 127 even with its directory on PATH" "127" "$S2D_RC"
   local scripts_root
   scripts_root=$(awk -F'"' '/^SCRIPTS_ROOT=/{print $2; exit}' "$SUT")
   assert_eq "S2D-7 every probe path the sweeper hands over contains a slash (SCRIPTS_ROOT='$scripts_root')" \
@@ -1481,9 +1486,11 @@ EOF
 }
 
 # --- S2D-10: every committed probe is something execve can run -----------------------------------------
-# `env` fell back to nothing either, but the launcher makes the contract explicit: a probe without a
-# `#!` line fails ENOEXEC (126) and one without +x fails EACCES (126), both silent TRANSIENT verdicts
-# on the closed set. Checked here for the whole directory so a new probe cannot ship un-runnable.
+# The launcher is STRICTER than `env` here (measured, coreutils 9.11: `env -i ./noshebang` with the x bit
+# set ran the script through a /bin/sh fallback and exited 0; the launcher's execve gives ENOEXEC -> 126).
+# A probe without a `#!` line therefore fails ENOEXEC (126) and one without +x fails EACCES (126), both
+# silent TRANSIENT verdicts on the closed set. That difference is only safe because this row pins a
+# shebang and the exec bit on the whole directory, so a new probe cannot ship un-runnable.
 t_s2d_10_every_probe_has_a_shebang_and_the_exec_bit() {
   local f n=0 bad_shebang="" bad_mode=""
   for f in "$SCRIPT_DIR"/followthroughs/*.sh; do
@@ -1512,13 +1519,21 @@ t_s2d_9_closed_credential_refusal_is_logged() {
   cat > "$root/scripts/followthroughs/p.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "SOLEUR_CREDENTIAL_REFUSED script=probe reason=token_shape" >&2
+echo "PROBE-OUT-CANARY-s2d9" >&2
 exit 2
 EOF
   g3_run "$root" "$SUT"
   calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
   assert_eq           "S2D-9 the closed-set run completes (rc 0)" "0" "$(cat "$root/rc")"
-  assert_contains     "S2D-9 the run log names the credential refusal on the closed tracker" \
-                      "issue #9001: closed, probe REFUSED its credential (SOLEUR_CREDENTIAL_REFUSED, exit 2)" "$(cat "$root/out")"
+  # EXACT line (timestamp prefix stripped), not a substring: a log line extended with probe output
+  # (`$out`, which the probe controls) would still contain the prefix. The probe also prints a canary
+  # after the marker; the canary must be in NO line of the run log.
+  local refl
+  refl=$(awk 'index($0, "probe REFUSED its credential") { sub(/^\[[0-9:]+\] /, ""); print }' "$root/out")
+  assert_eq           "S2D-9 the run log names the credential refusal on the closed tracker: ONE line, exactly this text, no probe output" \
+                      "issue #9001: closed, probe REFUSED its credential (SOLEUR_CREDENTIAL_REFUSED, exit 2) — re-mint it; no comment on a closed tracker" "$refl"
+  assert_eq           "S2D-9 ... and the probe's own output (canary) is in no line of the run log" \
+                      "absent" "$(s2d_has "$(cat "$root/out")" "PROBE-OUT-CANARY-s2d9")"
   assert_not_contains "S2D-9 ... and still posts NO comment on the closed tracker" "issue comment" "$calls"
   assert_not_contains "S2D-9 ... and does not reopen it" "issue reopen" "$calls"
   # (b) control: the same exit code WITHOUT the marker is a plain flaky probe and logs no refusal line
@@ -2086,7 +2101,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=275
+MIN_ASSERTIONS=277
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

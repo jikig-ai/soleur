@@ -1012,6 +1012,29 @@ self_test_paraphrase_prepass() {
     "$st_calls" "$(grep -cxF -- 'header = "x-api-key: stub-key-self-test"' <<<"$st_stdin" || true)"
   st_assert "api-key: the request body is still a -d argument (payload capture intact)" \
     "true" "$([[ "$st_argv" == *$'\n-d\n'* ]] && echo true || echo false)"
+  # The WHOLE recorded argv of EVERY call, not the prefix pinned above (the exactness
+  # check-deploy-script-parity.test.sh C15b applies): a prefix pin stays green when `-k` (TLS
+  # verification off), `-L` (follow redirects with the credential) or `http://` (the key in cleartext)
+  # is added after it. Only the -d body (non-secret corpus text) is masked; the endpoint is a LITERAL,
+  # not $ANTHROPIC_ENDPOINT, so a scheme/host change in the script is caught. The log is NUL-delimited
+  # with a CALL-END sentinel per call. Verdict is a count, never the argv (a drift could carry the key).
+  local st_us=$'\x1f' st_tok st_cur="" st_mask=0 st_exact=0 st_seen=0 st_want
+  st_want="--disable${st_us}--noproxy${st_us}*${st_us}-sS${st_us}-w${st_us}"'\n__HTTP_STATUS__:%{http_code}'"${st_us}https://api.anthropic.com/v1/messages${st_us}-H${st_us}anthropic-version: 2023-06-01${st_us}-H${st_us}content-type: application/json${st_us}-d${st_us}<-d body>${st_us}--config${st_us}-${st_us}"
+  if [[ -s "$stub_argv" ]]; then
+    while IFS= read -r -d '' st_tok; do
+      if [[ "$st_tok" == "CALL-END" ]]; then
+        st_seen=$((st_seen + 1))
+        [[ "$st_cur" == "$st_want" ]] && st_exact=$((st_exact + 1))
+        st_cur=""; st_mask=0
+        continue
+      fi
+      if (( st_mask )); then st_tok="<-d body>"; st_mask=0
+      elif [[ "$st_tok" == "-d" ]]; then st_mask=1; fi
+      st_cur+="$st_tok$st_us"
+    done < "$stub_argv"
+  fi
+  st_assert "api-key: every call's recorded argv is EXACTLY the pinned transport set (no -k / -L / http:// can be added; calls=$st_calls)" \
+    "$st_calls:$st_calls" "$st_seen:$st_exact"
 
   REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
 }
@@ -1458,7 +1481,7 @@ self_test() {
   # anti-vacuity floor: a self-test whose case calls were deleted or short-circuited reports
   # PASS=0 FAIL=0 and exits 0 above. Declared on the line IMMEDIATELY above the `if`, and a
   # lower bound (never -eq) so adding a row is not a spurious failure.
-  ST_MIN_ASSERTIONS=176
+  ST_MIN_ASSERTIONS=177
   if (( SELF_TEST_TOTAL < ST_MIN_ASSERTIONS )); then
     printf 'FATAL: anti-vacuity floor breached (TOTAL=%s < %s) -- cases did not dispatch\n' \
       "$SELF_TEST_TOTAL" "$ST_MIN_ASSERTIONS" >&2
