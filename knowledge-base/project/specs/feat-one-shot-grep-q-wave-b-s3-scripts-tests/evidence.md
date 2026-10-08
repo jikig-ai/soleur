@@ -1,0 +1,19 @@
+# S3 evidence (measured at work time, base `d0b5d2e35b`, branch `498e7e0d4b`)
+
+Every number below was printed by the command named next to it, on this branch.
+
+- Phase 0 drain probe (GNU grep 3.12 on the dev host, 3.11 in `ubuntu:24.04`): `q: 141`, `c: 0`, `nomatch: 1`, `neg-q: 0`, `neg-c: 1` on both.
+- Guard before the edit: 13 `DEFERRED:` lines, `scripts/*.test.sh` 128 of 128, `scripts/test-*` 2 of 2. Red step (rows lowered to 22 and 0): rc 1 with `has 128 hits, ceiling 22` and `has 2 hits, ceiling 0`.
+- Guard after: rc 0, 11 `DEFERRED:` lines, none for `scripts/`; the diff of the guard against `origin/main` is exactly the two deleted rows (`0 2`). Test-shaped ceilings 567 to 437.
+- Codemod: default pass plus nine `--reviewed-suspect` files rewrote 108 lines in 42 files; the idempotency dry run printed `WOULD-CHANGE: 0 lines in 0 files`; `verify --base origin/main --hand-edits hand-edits.txt`: `verified: 126`, `hand-edited: 4`, `unexplained: 0`.
+- Hand edits: 18 one-token conversions (19 sites; one line carries two) by a throwaway regexp over the lines in `data-conversions.txt`, and the four `grep -m` displays rewritten to a here-string. Old and new display expressions printed the same text on a populated, an empty and a no-match input.
+- Whole diff: 130 insertions and 130 deletions in 47 files under `scripts/`; `scripts/test-all.sh` still 6689 lines; `bash -n` clean on all 47.
+- Pair run (real detached clone at the base SHA, both sides sequential under `ulimit -v 6000000`, `node_modules` linked on both sides): all 16 owning suites read the same rc (0) and the same result line.
+- Runner parity: the `--print-selection` digests for `README.md`, `scripts/web2-rebirth.test.sh`, `scripts/test-all.sh` and `plugins/soleur/skills/ship/SKILL.md` are equal on both trees; the 591 suite ids of `--enumerate-commands all` are equal. The split between `SUITE_COMMAND` and `SUITE_COMMAND_DECLINED` differs (581 against 588 selected) because the relevance gate reads each tree's diff; the id sets are identical.
+- Ratchets on the branch: `lint-orphan-test-suites` rc 0, `lint-shell-capture-exit --baseline` (1476 scanned, 0 new, 224 baselined) rc 0, `guard-vacuity-floor` rc 0, `pre-push-ratchet-lane` `verdict=PASS members=24 red=0`. `--print-selection` on the branch diff prints `AFFECTED_FALLBACK reason=runner-changed`.
+- Guard 1 matrix (scratch clone, green control first, one mutant at a time under the cap, restore check clean): rows 1, 2a, 2b, 3, 4, 5, 6 (458 sites), 7a, 7b, 8 each rc 1 with their named FAIL text; row 9 (base content, both rows deleted) rc 1 with `outside the deferral table (130 site(s))`; row 10 (a resurrected row plus a covering hit) rc 0, the known surviving mutant; the marker line and the drained spelling rc 0.
+- Runner lines: from a bare repository the base and the branch runner both print `ERROR: Cannot run tests from a bare repository root.` and exit 1; the `FATAL` pattern prints the same status on old and new (`FATAL head`, `FATAL worktree` match; `FATAL config` and empty do not).
+- `web2-rebirth-recovery-check.test.sh:171` observer: appending `doppler run -- true` to the script under test makes the suite fail with `FAIL no doppler run, no download, no insecure curl` on both the base and the branch tree.
+- Observer table for the other hand-converted sites: not re-measured here. The planning pass measured it on a rehearsal whose edits are the same transform bytes (`verify` proves the transform); see the plan's disposition table.
+- Trigger derivation over the 48 edited paths: 18 path-filtered push workflows match 0 of 48; the 7 unfiltered ones run.
+- Open-PR intersection with the 48 paths: #9784, #9772, #9745, #9640, #7390 and #6778, all drafts. #9784 is new since planning (`guard-vacuity-floor` hunk at 833, `test-all.sh` hunk at 5634; S3 edits lines 907, 908, 669, 6476). The added-line screen finds new early-exit pipes in #9784 and #9772.
