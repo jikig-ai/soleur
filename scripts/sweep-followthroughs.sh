@@ -78,8 +78,15 @@ fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 #    and exported it a moment ago, so absence means the hop is broken and the probe must not run half-armed.
 #  * An exec failure maps to the codes `env` used (127 not found, 126 otherwise) so the sweeper reads the
 #    same TRANSIENT verdict it always did and no Python traceback reaches a public tracker comment.
+#  * ANY other exception (BaseException, minus the launcher own SystemExit) also exits 126 with the
+#    exception TYPE only, never its value or a traceback: an escaped exception exits 1, and on the
+#    closed set rc 1 means "verification FAILED -> reopen the tracker".
+#  * Edge cases that behave as `env` did, pinned by rows S2D-7: a probe with no shebang fails execve
+#    with ENOEXEC (126, never a shell fallback); an unset HOME is a missing forwarded name (126);
+#    execve does NO PATH search, which is safe only because every probe path is the canonical
+#    scripts/followthroughs/<name> (contains a slash) after the realpath check in run_one.
 FT_LAUNCHER='import os, signal, sys
-try:
+def run():
     script, earliest, names = sys.argv[1], sys.argv[2], sys.argv[3:]
     src = os.environb
     env = {b"PATH": b"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
@@ -93,9 +100,16 @@ try:
     for s in (signal.SIGPIPE, signal.SIGXFSZ):
         signal.signal(s, signal.SIG_DFL)
     os.execve(script, [script], env)
+try:
+    run()
+except SystemExit:
+    raise
 except OSError as e:
     sys.stderr.write("launcher: cannot exec %s: %s\n" % (sys.argv[1], e.strerror))
     sys.exit(127 if e.errno == 2 else 126)
+except BaseException as e:
+    sys.stderr.write("launcher: internal failure before exec (%s)\n" % type(e).__name__)
+    sys.exit(126)
 '
 
 # Parse a single directive from an issue body. Stdin = body text.
@@ -785,6 +799,15 @@ $trimmed_out
       *)
         # TRANSIENT on a closed issue: no action AND no comment. A flaky probe
         # must not accrete daily noise on an issue that is already closed.
+        #
+        # ONE EXCEPTION IS LOG-ONLY: a probe that refused its credential (the value-free
+        # SOLEUR_CREDENTIAL_REFUSED marker on its output) would otherwise be indistinguishable from a
+        # flaky probe here, so a rotted secret on a closed tracker stayed invisible. One run-log line
+        # names it (no comment, no reopen: the policy above is unchanged); `$out` is the sanitized
+        # output, so the marker line is the probe's own and carries no credential.
+        if [[ "$out" == *SOLEUR_CREDENTIAL_REFUSED* ]]; then
+          log "issue #$issue_num: closed, probe REFUSED its credential (SOLEUR_CREDENTIAL_REFUSED, exit $rc) — re-mint it; no comment on a closed tracker"
+        fi
         log "issue #$issue_num: closed, verification TRANSIENT (exit $rc) — no action, no comment"
         return 0
         ;;

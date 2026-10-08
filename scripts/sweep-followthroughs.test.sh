@@ -1172,6 +1172,8 @@ if [[ -z "$S2D_REAL_PY" || -z "$S2D_REAL_ENV" ]]; then
   exit 1
 fi
 S2D_PINNED_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Cleanup: every root and scratch dir below lives under $SUITE_TMP (setup_tmpdir / mktemp -p), which the
+# suite's one EXIT trap removes -- rows carry NO inline `rm -rf`, so an abort mid-row leaks nothing.
 
 # s2d_has <haystack> <needle> -> found|absent. Value-free on purpose: neither argument is echoed.
 s2d_has() { if [[ "$1" == *"$2"* ]]; then echo found; else echo absent; fi; }
@@ -1186,6 +1188,7 @@ s2d_root() {
 printf '%s' "${FOO_TOKEN-<unset>}" > val.foo
 printf '%s' "${OTHER_TOKEN-<unset>}" > val.other
 printf '%s' "$PATH" > val.path
+printf '%s' "${HOME-<unset>}" > val.home
 compgen -e | sort > val.names
 awk '/^SigIgn/{print $2}' "/proc/$$/status" > val.sigign 2>/dev/null || :
 exit 0
@@ -1227,7 +1230,6 @@ t_s2d_1_no_env_hop_and_no_value_on_argv() {
   assert_contains "S2D-1 the forwarded NAME travels on the launcher's argv" "ARG<FOO_TOKEN>" "$pylog"
   assert_eq       "S2D-1 the secret VALUE is in no python3 argument" "absent" "$(s2d_has "$pylog" "$canary")"
   assert_eq       "S2D-1 the probe still receives the value" "found" "$([[ "$(cat "$root/val.foo")" == "$canary" ]] && echo found || echo absent)"
-  rm -rf "$root"
 }
 
 # --- S2D-2: values that an argv-shaped hop would mangle survive byte for byte -------------------
@@ -1248,7 +1250,6 @@ t_s2d_2_hostile_values_round_trip() {
     assert_eq "S2D-2 [$shape] the probe receives the value byte for byte" "found" "$([[ "$got" == "${v}x" ]] && echo found || echo absent)"
     assert_eq "S2D-2 [$shape] the value is in no python3 argument" "absent" "$(s2d_has "$(cat "$root/py.log")" "$v")"
     n_ran=$((n_ran + 1))
-    rm -rf "$root"
   done
   # A row floor cannot see a loop that runs zero times; this counter can.
   assert_eq "S2D-2 inner counter: every value shape ran" "${#shapes[@]}" "$n_ran"
@@ -1267,8 +1268,19 @@ t_s2d_3_forwarded_and_unforwarded() {
   assert_eq "S2D-3 the sweeper's own DRY_RUN is not leaked into the probe" "absent" "$(s2d_has "$names" $'\nDRY_RUN\n')"
   assert_eq "S2D-3 PATH is pinned to the FHS default, not forwarded" "$S2D_PINNED_PATH" "$(cat "$root/val.path")"
   assert_eq "S2D-3 HOME is present" "found" "$(s2d_has "$names" $'\nHOME\n')"
+  assert_eq "S2D-3 HOME carries the sweeper's own value (a launcher that sets another HOME is a different sandbox)" \
+            "found" "$([[ "$(cat "$root/val.home")" == "$HOME" ]] && echo found || echo absent)"
   assert_eq "S2D-3 the clock channel is present" "found" "$(s2d_has "$names" $'\nSOLEUR_FT_EARLIEST\n')"
-  rm -rf "$root"
+  # The EXACT exported-name set: the same probe run under the real `env -i` the launcher replaced
+  # (PATH, HOME, the forwarded name and the clock channel) is the oracle, so bash's own exports
+  # (PWD, SHLVL, _) cancel out and ANY extra variable the launcher forwards turns this red.
+  local ctl="$root/ctl"; mkdir -p "$ctl"
+  (cd "$ctl" && env -i PATH="$S2D_PINNED_PATH" HOME="$HOME" FOO_TOKEN="$c1" SOLEUR_FT_EARLIEST=2020-01-01T00:00:00Z \
+      "$root/scripts/followthroughs/q.sh")
+  assert_eq "S2D-3 control: the env -i oracle exports the forwarded name (else the set row below is vacuous)" \
+            "found" "$(s2d_has $'\n'"$(cat "$ctl/val.names")"$'\n' $'\nFOO_TOKEN\n')"
+  assert_eq "S2D-3 the probe's exported-name set is exactly what env -i would have built" \
+            "$(cat "$ctl/val.names")" "$(cat "$root/val.names")"
   # Two names in one clause: both forwarded, still nothing else.
   root=$(s2d_root FOO_TOKEN,OTHER_TOKEN)
   g3_run "$root" "$SUT" FOO_TOKEN="$c1" OTHER_TOKEN="$c2"
@@ -1276,7 +1288,6 @@ t_s2d_3_forwarded_and_unforwarded() {
   assert_eq "S2D-3 two-name clause: second reaches the probe" "found" "$([[ "$(cat "$root/val.other")" == "$c2" ]] && echo found || echo absent)"
   assert_eq "S2D-3 two-name clause: the first value is in no python3 argument" "absent" "$(s2d_has "$(cat "$root/py.log")" "$c1")"
   assert_eq "S2D-3 two-name clause: the second value is in no python3 argument" "absent" "$(s2d_has "$(cat "$root/py.log")" "$c2")"
-  rm -rf "$root"
 }
 
 # --- S2D-4: a reserved name is refused BEFORE any value is read (and the reorder mutant is caught) ---
@@ -1295,7 +1306,6 @@ t_s2d_4_reserved_refused_before_any_read() {
     assert_eq       "S2D-4 [$name] the launcher was never invoked (no value was read)" "0" "$(s2d_count "$root/py.log" 'ARGV-BEGIN')"
     assert_eq       "S2D-4 [$name] the probe did not run" "absent" "$([[ -e "$root/val.foo" ]] && echo present || echo absent)"
     n_ran=$((n_ran + 1))
-    rm -rf "$root"
   done
   assert_eq "S2D-4 inner counter: every reserved name ran" "${#reserved[@]}" "$n_ran"
 
@@ -1317,7 +1327,6 @@ t_s2d_4_reserved_refused_before_any_read() {
     g3_run "$root" "$mut"
     assert_eq "S2D-4 reorder mutant: the reserved name reaches the launcher (the refusal-first order is the mechanism)" "1" "$(s2d_count "$root/py.log" 'ARGV-BEGIN')"
   fi
-  rm -rf "$root"
 }
 
 # --- S2D-5: python ignores SIGPIPE; an ignored signal survives exec, so the launcher must restore it ---
@@ -1332,7 +1341,14 @@ t_s2d_5_sigpipe_disposition_restored() {
   assert_eq "S2D-5 precondition: the probe reported its signal mask" "1" "$([[ "$mask" =~ ^[0-9a-fA-F]+$ ]] && echo 1 || echo 0)"
   # SIGPIPE is signal 13 -> bit 12 -> 0x1000.
   assert_eq "S2D-5 the probe does NOT inherit an ignored SIGPIPE" "0" "$(( 0x${mask:-0} & 0x1000 ))"
-  rm -rf "$root"
+  # SIGXFSZ is signal 25 -> bit 24 -> 0x1000000. Python ignores BOTH at startup, so the control proves
+  # the bits are set in a bare `python3 -I` (without it a probe mask of 0 would also be what a
+  # platform that never ignored SIGXFSZ reports, and dropping the restore would go unseen).
+  local pymask
+  pymask=$("$S2D_REAL_PY" -I -c 'print([l.split()[1] for l in open("/proc/self/status") if l.startswith("SigIgn")][0])')
+  assert_eq "S2D-5 control: a bare python3 -I ignores SIGPIPE and SIGXFSZ itself (the restore is observable)" \
+            "$(( 0x1000 | 0x1000000 ))" "$(( 0x${pymask:-0} & (0x1000 | 0x1000000) ))"
+  assert_eq "S2D-5 the probe does NOT inherit an ignored SIGXFSZ" "0" "$(( 0x${mask:-0} & 0x1000000 ))"
 }
 
 # --- S2D-6: an un-execable probe maps to the same TRANSIENT verdict `env` gave it, with no traceback ---
@@ -1343,7 +1359,180 @@ t_s2d_6_exec_failure_is_transient_not_a_traceback() {
   local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
   assert_contains     "S2D-6 an un-execable probe is reported as a verdict comment" "### Sweeper run: TRANSIENT" "$posted"
   assert_not_contains "S2D-6 the launcher does not leak a Python traceback" "Traceback" "$posted"
-  rm -rf "$root"
+  # The launcher's own diagnostic travels in the SAME stream the old `env ... 2>&1` captured: it is
+  # on stderr, so dropping the `2>&1` on the launcher call sends it to the runner log instead and
+  # the tracker is left with a bare "exit 127" and an empty fold.
+  assert_contains     "S2D-6 the launcher's stderr diagnostic reaches the comment" "launcher: cannot exec" "$posted"
+}
+
+# --- S2D-7: the launcher's exit mapping and edge cases, driven DIRECTLY (extracted from the SUT) ------
+# Rows S2D-1..6 drive the whole sweeper, which cannot reach an EACCES probe, a missing forwarded name
+# or a non-OSError. They matter because the closed set reads rc 1 as "verification FAILED -> reopen":
+# any path that lets a launcher fault exit 1 (an EACCES mapped `else 1`, an escaped exception) reopens
+# trackers on a fault that has nothing to do with the thing they verify.
+s2d_launcher_src() { # the FT_LAUNCHER assignment body, from its opening quote to the lone closing quote
+  awk -v q="'" 'f { if ($0 == q) exit; print; next } index($0, "FT_LAUNCHER=" q) == 1 { f = 1; print substr($0, length("FT_LAUNCHER=" q) + 1) }' "$SUT"
+}
+
+# s2d_launch <with-home|no-home> <path-var> <script|-> <names...>: runs the launcher under env -i with
+# FOO_TOKEN set; sets S2D_RC and S2D_OUT (stdout+stderr). `-` passes no script/earliest arguments at all.
+s2d_launch() {
+  local home_mode="$1" path_var="$2" script="$3"; shift 3
+  local -a base=(env -i "PATH=$path_var" FOO_TOKEN=canary)
+  [[ "$home_mode" == with-home ]] && base+=("HOME=$HOME")
+  S2D_RC=0
+  if [[ "$script" == "-" ]]; then
+    S2D_OUT=$("${base[@]}" "$S2D_REAL_PY" -I -c "$S2D_LAUNCHER" 2>&1) || S2D_RC=$?
+  else
+    S2D_OUT=$("${base[@]}" "$S2D_REAL_PY" -I -c "$S2D_LAUNCHER" "$script" 2020-01-01T00:00:00Z "$@" 2>&1) || S2D_RC=$?
+  fi
+}
+
+t_s2d_7_launcher_exit_mapping() {
+  local d; d=$(mktemp -d -p "$SUITE_TMP")
+  S2D_LAUNCHER=$(s2d_launcher_src)
+  assert_contains "S2D-7 precondition: the launcher source was extracted from the SUT (exec call; else every row below is vacuous)" \
+                  "os.execve(script" "$S2D_LAUNCHER"
+  assert_contains "S2D-7 precondition: ... and it is the whole program (the signal restore at its end)" \
+                  "signal.SIGXFSZ" "$S2D_LAUNCHER"
+  local all_out=""
+
+  # A real probe: records that it ran, exits 3 (a distinctive code, so propagation is visible).
+  cat > "$d/ok.sh" <<EOF
+#!/usr/bin/env bash
+printf x > "$d/ran"
+exit 3
+EOF
+  chmod +x "$d/ok.sh"
+  rm -f "$d/ran"
+  s2d_launch with-home "$S2D_PINNED_PATH" "$d/ok.sh" FOO_TOKEN
+  all_out+="$S2D_OUT"
+  assert_eq "S2D-7 control: the probe's own exit code survives the exec (rc 3)" "3" "$S2D_RC"
+  assert_eq "S2D-7 control: the probe actually ran" "ran" "$([[ -e "$d/ran" ]] && echo ran || echo not-run)"
+
+  # A forwarded name that is absent from the environment is a hard stop, never a silent skip.
+  rm -f "$d/ran"
+  s2d_launch with-home "$S2D_PINNED_PATH" "$d/ok.sh" FOO_TOKEN NOT_IN_THE_ENVIRONMENT
+  all_out+="$S2D_OUT"
+  assert_eq       "S2D-7 a forwarded name missing from the environment exits 126" "126" "$S2D_RC"
+  assert_eq       "S2D-7 ... and the probe did NOT run half-armed" "not-run" "$([[ -e "$d/ran" ]] && echo ran || echo not-run)"
+  assert_contains "S2D-7 ... with a value-free diagnostic naming the cause" "is not in the sweeper environment" "$S2D_OUT"
+  assert_not_contains "S2D-7 ... and the launcher's own SystemExit is not re-reported as an internal failure" \
+                      "internal failure" "$S2D_OUT"
+
+  # An unset HOME is the same missing-name case (HOME is forwarded like a secret).
+  rm -f "$d/ran"
+  s2d_launch no-home "$S2D_PINNED_PATH" "$d/ok.sh" HOME
+  all_out+="$S2D_OUT"
+  assert_eq "S2D-7 an unset HOME is a missing forwarded name: 126 and no probe run (documented env -i edge)" \
+            "126:not-run" "$S2D_RC:$([[ -e "$d/ran" ]] && echo ran || echo not-run)"
+
+  # Exec failures map to the codes env used: 127 not found, 126 otherwise.
+  s2d_launch with-home "$S2D_PINNED_PATH" "$d/does-not-exist.sh" FOO_TOKEN
+  all_out+="$S2D_OUT"
+  assert_eq "S2D-7 a probe path that does not exist exits 127" "127" "$S2D_RC"
+
+  printf '#!/usr/bin/env bash\nprintf x > "%s/ran"\n' "$d" > "$d/noexec.sh"; chmod 644 "$d/noexec.sh"
+  rm -f "$d/ran"
+  s2d_launch with-home "$S2D_PINNED_PATH" "$d/noexec.sh" FOO_TOKEN
+  all_out+="$S2D_OUT"
+  assert_eq "S2D-7 a probe that lost its +x bit (EACCES) exits 126, NOT 1 (1 means reopen on the closed set)" "126" "$S2D_RC"
+  assert_eq "S2D-7 ... and did not run" "not-run" "$([[ -e "$d/ran" ]] && echo ran || echo not-run)"
+
+  printf 'printf x > "%s/ran"\n' "$d" > "$d/noshebang.sh"; chmod +x "$d/noshebang.sh"
+  rm -f "$d/ran"
+  s2d_launch with-home "$S2D_PINNED_PATH" "$d/noshebang.sh" FOO_TOKEN
+  all_out+="$S2D_OUT"
+  assert_eq "S2D-7 a probe with no shebang (ENOEXEC) exits 126 and is NOT handed to a shell (documented env -i edge)" \
+            "126:not-run" "$S2D_RC:$([[ -e "$d/ran" ]] && echo ran || echo not-run)"
+
+  # execve does no PATH search: a bare name is "not found" even with its directory on PATH.
+  s2d_launch with-home "$d:$S2D_PINNED_PATH" "ok.sh" FOO_TOKEN
+  all_out+="$S2D_OUT"
+  assert_eq "S2D-7 execve does no PATH search: a bare script name exits 127 even with its directory on PATH" "127" "$S2D_RC"
+  local scripts_root
+  scripts_root=$(awk -F'"' '/^SCRIPTS_ROOT=/{print $2; exit}' "$SUT")
+  assert_eq "S2D-7 every probe path the sweeper hands over contains a slash (SCRIPTS_ROOT='$scripts_root')" \
+            "slash" "$([[ "$scripts_root" == */* ]] && echo slash || echo bare)"
+
+  # Any non-OSError exception (here: no arguments at all -> IndexError) is 126 with the TYPE only.
+  s2d_launch with-home "$S2D_PINNED_PATH" -
+  all_out+="$S2D_OUT"
+  assert_eq       "S2D-7 a non-OSError launcher fault exits 126, not 1" "126" "$S2D_RC"
+  assert_contains "S2D-7 ... with a value-free diagnostic" "launcher: internal failure before exec (IndexError)" "$S2D_OUT"
+
+  assert_not_contains "S2D-7 no launcher failure mode leaks a Python traceback" "Traceback" "$all_out"
+}
+
+# --- S2D-8: the probe's stdout AND stderr both reach the posted comment (the old `env ... 2>&1`) ------
+t_s2d_8_probe_stderr_reaches_the_comment() {
+  local root; root=$(s2d_root FOO_TOKEN)
+  cat > "$root/scripts/followthroughs/q.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "OUT-CANARY-s2d8"
+echo "ERR-CANARY-s2d8" >&2
+exit 2
+EOF
+  g3_run "$root" "$SUT" FOO_TOKEN=x
+  local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_contains "S2D-8 precondition: the NOT YET verdict comment was posted" "### Sweeper run: NOT YET" "$posted"
+  assert_contains "S2D-8 the probe's stdout is in the comment" "OUT-CANARY-s2d8" "$posted"
+  assert_contains "S2D-8 the probe's STDERR is in the comment too (the TRANSIENT/reason markers live there)" "ERR-CANARY-s2d8" "$posted"
+}
+
+# --- S2D-10: every committed probe is something execve can run -----------------------------------------
+# `env` fell back to nothing either, but the launcher makes the contract explicit: a probe without a
+# `#!` line fails ENOEXEC (126) and one without +x fails EACCES (126), both silent TRANSIENT verdicts
+# on the closed set. Checked here for the whole directory so a new probe cannot ship un-runnable.
+t_s2d_10_every_probe_has_a_shebang_and_the_exec_bit() {
+  local f n=0 bad_shebang="" bad_mode=""
+  for f in "$SCRIPT_DIR"/followthroughs/*.sh; do
+    [[ -e "$f" ]] || continue
+    n=$((n + 1))
+    [[ "$(head -c 2 "$f")" == '#!' ]] || bad_shebang+=" ${f##*/}"
+    [[ -x "$f" ]] || bad_mode+=" ${f##*/}"
+  done
+  assert_eq "S2D-10 inner counter: the directory holds at least one probe (a zero-iteration loop would pass vacuously)" \
+            "1" "$(( n > 0 ))"
+  assert_eq "S2D-10 every scripts/followthroughs/*.sh starts with a shebang (offenders:${bad_shebang:- none})" "" "$bad_shebang"
+  assert_eq "S2D-10 every scripts/followthroughs/*.sh has the exec bit (offenders:${bad_mode:- none})" "" "$bad_mode"
+}
+
+# --- S2D-9: a credential refusal on a CLOSED tracker is logged, never commented (#userimpact) ----------
+# The closed-set catch-all is deliberately silent so a flaky probe does not accrete daily noise. A probe
+# that refused its credential looked identical, so a rotted secret on a closed tracker stayed invisible.
+# One run-log line now names it; the no-comment, no-reopen policy is unchanged.
+t_s2d_9_closed_credential_refusal_is_logged() {
+  local body='[x] closed\n\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->'
+  local closed_json
+  closed_json=$(printf '[{"number":9001,"body":"%s","stateReason":"COMPLETED"}]' "$body")
+  local root calls
+  # (a) the refusing probe
+  root=$(g3_root '[]' "$closed_json")
+  cat > "$root/scripts/followthroughs/p.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "SOLEUR_CREDENTIAL_REFUSED script=probe reason=token_shape" >&2
+exit 2
+EOF
+  g3_run "$root" "$SUT"
+  calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_eq           "S2D-9 the closed-set run completes (rc 0)" "0" "$(cat "$root/rc")"
+  assert_contains     "S2D-9 the run log names the credential refusal on the closed tracker" \
+                      "issue #9001: closed, probe REFUSED its credential (SOLEUR_CREDENTIAL_REFUSED, exit 2)" "$(cat "$root/out")"
+  assert_not_contains "S2D-9 ... and still posts NO comment on the closed tracker" "issue comment" "$calls"
+  assert_not_contains "S2D-9 ... and does not reopen it" "issue reopen" "$calls"
+  # (b) control: the same exit code WITHOUT the marker is a plain flaky probe and logs no refusal line
+  root=$(g3_root '[]' "$closed_json")
+  cat > "$root/scripts/followthroughs/p.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "plain transient failure" >&2
+exit 2
+EOF
+  g3_run "$root" "$SUT"
+  assert_contains     "S2D-9 control: the marker-less probe still logs the silent TRANSIENT line" \
+                      "issue #9001: closed, verification TRANSIENT (exit 2)" "$(cat "$root/out")"
+  assert_not_contains "S2D-9 control: ... and logs no credential-refusal line (the line is conditional on the marker)" \
+                      "REFUSED its credential" "$(cat "$root/out")"
 }
 
 
@@ -1785,6 +1974,10 @@ t_s2d_3_forwarded_and_unforwarded
 t_s2d_4_reserved_refused_before_any_read
 t_s2d_5_sigpipe_disposition_restored
 t_s2d_6_exec_failure_is_transient_not_a_traceback
+t_s2d_7_launcher_exit_mapping
+t_s2d_8_probe_stderr_reaches_the_comment
+t_s2d_9_closed_credential_refusal_is_logged
+t_s2d_10_every_probe_has_a_shebang_and_the_exec_bit
 
 echo
 
@@ -1893,7 +2086,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=239
+MIN_ASSERTIONS=275
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
