@@ -421,6 +421,20 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
+# Cross-workspace isolation probe verdict (#2640). Written per deploy by
+# write_workspace_isolation_state, surfaced on /hooks/deploy-status by
+# cat-deploy-state.sh (workspace_isolation_json). DURABLE on purpose, same
+# /mnt/data rationale as SANDBOX_CANARY_STATE_FILE directly above: this file
+# alone carries the probe's CROSS-DEPLOY soak accumulator (consecutive_pass +
+# first_pass_at) — a tmpfs wipe would silently reset the promotion soak. Reader
+# default MUST match cat-deploy-state.sh workspace_isolation_json().
+WORKSPACE_ISOLATION_STATE_FILE="${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
+# Host-side cap on the probe's `docker exec` (report-only NFR: the probe adds
+# <= ~5 min worst-case to a deploy; the observed direct-tier runtime is seconds
+# to low tens). rc 124 is its own verdict class (workspace_isolation_timeout) —
+# a wedged suite is a RED verdict, not an infra hiccup. Env-overridable pure
+# timing knob (the CRON_DRAIN_TIMEOUT convention), NOT a secret.
+WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
 # check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
@@ -693,6 +707,85 @@ sandbox_canary_sentry_event() {
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "SANDBOX_CANARY: Sentry POST failed"
+  fi
+}
+
+# write_workspace_isolation_state: persist the workspace-isolation probe verdict
+# for the no-SSH deploy-status surface (#2640; mirrors write_sandbox_canary_state,
+# #5875 / ADR-079). Always returns 0 — the probe is NON-BLOCKING (dark-launch per
+# wg-dark-launch-deploy-gates), so a state-write failure must never abort a
+# deploy. jq builds the JSON so the reason string is always escaped.
+#
+# Accumulates the soak signal on the host (deploy-state is the source of truth),
+# so the promotion follow-through
+# (scripts/followthroughs/workspace-isolation-verdict-2640.sh) is a single
+# stateless GET rather than an issue-comment ledger:
+#   - `pass`                          → increment `consecutive_pass`; pin
+#                                     `first_pass_at` on the first green
+#                                     (self-pins the soak window — no operator
+#                                     timestamp to hand-pin).
+#   - `workspace_isolation_failed` /  → reset both to 0 (a RED verdict restarts
+#     `workspace_isolation_timeout`     the soak).
+#   - `canary_infra_error` / *        → HOLD prior counters (a docker/exec hiccup
+#                                     or a pre-tooling canary image is a
+#                                     non-signal).
+write_workspace_isolation_state() {
+  local verdict="$1" reason="$2" now prior_pass prior_first
+  now="$(date +%s)"
+  prior_pass=0; prior_first=0
+  if [[ -f "$WORKSPACE_ISOLATION_STATE_FILE" ]]; then
+    prior_pass="$(jq -r '.consecutive_pass // 0' "$WORKSPACE_ISOLATION_STATE_FILE" 2>/dev/null || echo 0)"
+    prior_first="$(jq -r '.first_pass_at // 0' "$WORKSPACE_ISOLATION_STATE_FILE" 2>/dev/null || echo 0)"
+    [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
+    [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+  fi
+  local consecutive_pass first_pass_at
+  case "$verdict" in
+    pass)
+      consecutive_pass=$((prior_pass + 1))
+      if [[ "$prior_first" -gt 0 ]]; then first_pass_at="$prior_first"; else first_pass_at="$now"; fi
+      ;;
+    workspace_isolation_failed|workspace_isolation_timeout)
+      consecutive_pass=0; first_pass_at=0 ;;
+    *)
+      consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
+  esac
+  # Atomic tmp+rename via the shared helper (write_seccomp_profile_hash uses it
+  # for exactly this best-effort state-write shape) — NOT the inline
+  # mktemp/jq/mv the sibling re-spells, so the fixture-relative ratchet sees no
+  # new path operand. The `|| true` keeps a failed write from tripping set -e:
+  # this is a best-effort observability write, never a gate.
+  local content
+  content="$(jq -nc \
+    --arg v "$verdict" --arg r "$reason" --argjson ts "$now" \
+    --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
+    '{verdict:$v, reason:$r, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
+    2>/dev/null)" || return 0
+  _atomic_write "$WORKSPACE_ISOLATION_STATE_FILE" "$content" || true
+  return 0
+}
+
+# workspace_isolation_sentry_event: loud, no-SSH page on a RED isolation verdict
+# (#2640) — fires ONLY on workspace_isolation_failed / workspace_isolation_timeout,
+# NEVER on canary_infra_error (expected while pre-tooling canary images still
+# deploy) or pass. Best-effort + env-guarded, mirrors sandbox_canary_sentry_event.
+# Fail-open under set -e.
+workspace_isolation_sentry_event() {
+  local verdict="$1" reason="$2"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_FAIL: verdict=$verdict reason=$reason (report-only canary probe; deploy NOT rolled back)"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg v "$verdict" --arg r "$reason" \
+      '{message: ("workspace isolation canary probe " + $v + " (" + $r + ")"),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "agent-sandbox", op: "workspace-isolation", verdict: $v},
+        extra: {reason: $r}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "WORKSPACE_ISOLATION: Sentry POST failed"
   fi
 }
 
@@ -2616,6 +2709,77 @@ run_faithful_sandbox_canary() {
   return 0
 }
 
+# run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
+# run_faithful_sandbox_canary precedent, #5875 / ADR-079). Runs the direct tier
+# of the cross-workspace isolation suite (test/sandbox-isolation.test.ts under
+# the image-baked vitest config test/vitest.canary.config.ts) INSIDE the canary
+# container, records the classified verdict to deploy-state, and pages Sentry on
+# a RED verdict — but NEVER rolls back (report-only per
+# wg-dark-launch-deploy-gates; blocking promotion is a tracked follow-through
+# gated on observed real-deploy passes).
+# docker-exec exit-code classification (mirrors run_faithful_sandbox_canary):
+#   0             -> pass (the direct tier held inside the canary image)
+#   124           -> workspace_isolation_timeout (the host `timeout` cap fired —
+#                    a wedged suite is a RED verdict, not an infra hiccup)
+#   125/126/127   -> canary_infra_error (daemon trouble / vitest absent from the
+#                    canary image — expected while pre-tooling images deploy,
+#                    never a sandbox verdict: the #4941 false-rollback guard)
+#   other non-zero-> workspace_isolation_failed (the suite ran and FAILED —
+#                    cross-tenant isolation regressed in this exact image)
+run_workspace_isolation_probe() {
+  local verdict reason exec_rc out err_file docker_err
+  # Capture docker's OWN stderr so a persistent canary_infra_error (rc 126/127:
+  # vitest absent, exec-format error) or a failed run carries its CAUSE onto the
+  # no-SSH surfaces — the numeric rc alone would otherwise be the only signal
+  # (mirrors the faithful-canary obs review P2).
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+  # set +o pipefail so the classification below reads the exec's own rc, not a
+  # downstream pipe member's (load-bearing under set -euo — mirrors the
+  # faithful-canary capture arm).
+  set +o pipefail
+  # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed exec aborts
+  # before the read, leaving the classification below unreachable.
+  if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
+      -e CI=true -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct \
+      soleur-web-platform-canary /usr/local/bin/vitest run \
+      --config test/vitest.canary.config.ts 2>"$err_file")"; then
+    exec_rc=0
+  else
+    exec_rc=$?
+  fi
+  set -o pipefail
+  if [[ "$exec_rc" -eq 0 ]]; then
+    verdict="pass"; reason="ok"
+  else
+    # Fold the exec's first stderr line (print-safe, length-capped — docker's own
+    # error or vitest's first failure line) into the reason so the cause rides
+    # deploy-state + the journald line.
+    docker_err="$(head -1 "$err_file" 2>/dev/null | tr -dc '[:print:]' | cut -c1-120)"
+    case "$exec_rc" in
+      124)
+        verdict="workspace_isolation_timeout"
+        reason="host_timeout_${WORKSPACE_ISOLATION_TIMEOUT}s${docker_err:+: $docker_err}" ;;
+      125|126|127)
+        verdict="canary_infra_error"
+        reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+      *)
+        verdict="workspace_isolation_failed"
+        reason="vitest_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+    esac
+  fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
+  write_workspace_isolation_state "$verdict" "$reason"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION: verdict=$verdict reason=$reason" || true
+  echo "Workspace isolation probe (non-blocking): verdict=$verdict reason=$reason"
+  # Page only on a RED verdict — canary_infra_error is expected during the
+  # dark-launch window (pre-tooling canary images) and must not page, and a
+  # green probe never pages.
+  if [[ "$verdict" == "workspace_isolation_failed" || "$verdict" == "workspace_isolation_timeout" ]]; then
+    workspace_isolation_sentry_event "$verdict" "$reason" || true
+  fi
+  return 0
+}
+
 # _atomic_write <dest> <content>: temp file in the SAME directory as <dest> (so the rename is atomic
 # on one filesystem), then `mv -f` — <dest> holds the old bytes or the new bytes, never a torn write.
 # Returns 1 (temp removed) on any failure; callers decide whether that is fatal (the quiesce marker)
@@ -4065,6 +4229,14 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+
+      # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
+      # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
+      # isolation suite inside the canary via the image-baked vitest, records a
+      # classified verdict + pages Sentry on red, but never gates/rolls back this
+      # deploy. `|| true` is LOAD-BEARING — a probe hiccup must never abort a
+      # deploy under set -e.
+      run_workspace_isolation_probe || true
     fi
 
     # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.

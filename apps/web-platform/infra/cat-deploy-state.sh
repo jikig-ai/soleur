@@ -342,6 +342,38 @@ sandbox_canary_json() {
   fi
 }
 
+# Cross-workspace isolation probe verdict (#2640). The no-SSH surface for the
+# report-only canary probe: the last deploy's verdict (pass |
+# workspace_isolation_failed | workspace_isolation_timeout | canary_infra_error),
+# its reason, and the soak accumulators the promotion follow-through reads
+# (scripts/followthroughs/workspace-isolation-verdict-2640.sh). Read from the
+# small state file ci-deploy.sh writes (write_workspace_isolation_state). Safe
+# sentinel (verdict "unknown") when the file is absent — a deploy that never ran
+# the probe, or a host whose ci-deploy.sh predates it (an ABSENT verdict is
+# distinguishable from a failed one, never a false green). Best-effort +
+# read-only.
+workspace_isolation_json() {
+  # DURABLE path (NOT /var/run tmpfs) — MUST match ci-deploy.sh
+  # WORKSPACE_ISOLATION_STATE_FILE. The soak accumulator must survive host
+  # reboots; see the writer's rationale.
+  local f="${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
+  if [[ -f "$f" ]]; then
+    local v r c cp fp
+    v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
+    r="$(jq -r '.reason // ""' "$f" 2>/dev/null || echo '')"
+    c="$(jq -r '.checked_at // 0' "$f" 2>/dev/null || echo 0)"
+    cp="$(jq -r '.consecutive_pass // 0' "$f" 2>/dev/null || echo 0)"
+    fp="$(jq -r '.first_pass_at // 0' "$f" 2>/dev/null || echo 0)"
+    [[ "$c" =~ ^[0-9]+$ ]] || c=0
+    [[ "$cp" =~ ^[0-9]+$ ]] || cp=0
+    [[ "$fp" =~ ^[0-9]+$ ]] || fp=0
+    jq -nc --arg v "$v" --arg r "$r" --argjson c "$c" --argjson cp "$cp" --argjson fp "$fp" \
+      '{verdict:$v, reason:$r, checked_at:$c, consecutive_pass:$cp, first_pass_at:$fp}'
+  else
+    echo '{"verdict":"unknown","reason":"","checked_at":0,"consecutive_pass":0,"first_pass_at":0}'
+  fi
+}
+
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The no-SSH surface for
 # the "applied ≠ loaded" gap: the sha256 of the seccomp profile the RUNNING prod
 # container actually started with (--security-opt seccomp=<file>), recorded by
@@ -730,6 +762,7 @@ JOURNALD_STORAGE="$(journald_storage_json)"
 CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
 SANDBOX_CANARY="$(sandbox_canary_json)"
+WORKSPACE_ISOLATION="$(workspace_isolation_json)"
 SECCOMP_PROFILE_SHA256="$(seccomp_profile_sha256_value)"
 SECCOMP_LIVE="$(seccomp_live_json)"
 
@@ -760,6 +793,7 @@ jq -nc \
   --argjson cr "$CONTAINER_RESTART" \
   --argjson cd "$CRON_DRAIN" \
   --argjson sc "$SANDBOX_CANARY" \
+  --argjson wi "$WORKSPACE_ISOLATION" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
   --arg hid "$HOST_ID" \
@@ -773,7 +807,7 @@ jq -nc \
   --arg rb "$INNGEST_REDIS_BINARY" \
   --arg rts "$INNGEST_REDIS_TAIL_STATUS" \
   --arg vci "$VECTOR_CONFIG_IDENTITY" \
-  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, workspace_isolation: $wi, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
     inngest_heartbeat_dark_arm: $hbd,

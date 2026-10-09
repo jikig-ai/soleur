@@ -463,6 +463,35 @@ if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   exit "${MOCK_GAK_PROBE_RC:-0}"
 fi
 
+# #2640 Guard 1 (workspace-isolation canary probe), BEFORE the mode case so it
+# works in every mode and its output-captured exec emits no DOCKER_TRACE line —
+# same reason the github-app-key-probe arm sits here (the probe's stdout is
+# captured by ci-deploy.sh, so a trace marker would be swallowed anyway, but
+# answering here keeps the argv/rc/stdout contract under the test's control).
+# Matches the probe argv by the `vitest.canary.config.ts` token, records the raw
+# argv (space-joined, like the #8016 Guard 2 recorder) to MOCK_CWI_LOG, answers
+# MOCK_CWI_PROBE_OUT on stdout (default: a vitest pass summary) and MOCK_CWI_PROBE_ERR
+# on stderr (default for rc 127: the docker "no such file" exec error the reason
+# fold-in reads), and exits MOCK_CWI_PROBE_RC (default 0). The deploy-gate
+# contract's dedicated arm, MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1, forces rc 1
+# (a vitest FAIL); rc 124/127 arm the host-timeout and vitest-absent verdicts.
+if [[ "${1:-}" == "exec" && "$*" == *vitest.canary.config.ts* ]]; then
+  if [[ -n "${MOCK_CWI_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_CWI_LOG"; fi
+  _cwi_rc="${MOCK_CWI_PROBE_RC:-0}"
+  if [[ "${MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST:-}" == "1" ]]; then _cwi_rc=1; fi
+  if [[ -n "${MOCK_CWI_PROBE_ERR+x}" ]]; then
+    printf '%s\n' "$MOCK_CWI_PROBE_ERR" >&2
+  elif [[ "$_cwi_rc" == "127" ]]; then
+    printf 'docker: Error response from daemon: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: "/usr/local/bin/vitest": stat /usr/local/bin/vitest: no such file or directory: unknown\n' >&2
+  fi
+  if [[ -n "${MOCK_CWI_PROBE_OUT+x}" ]]; then
+    printf '%s' "$MOCK_CWI_PROBE_OUT"
+  else
+    printf ' Test Files  1 passed (1)\n      Tests  6 passed (6)\n'
+  fi
+  exit "$_cwi_rc"
+fi
+
 # #5933 Item 4 image-verify handlers, BEFORE the mode case so they work in every
 # mode and the app-run failure arming (canary/prod) cannot misfire on them.
 #
@@ -3001,6 +3030,205 @@ assert_bwrap_flag_guard() {
 }
 
 assert_bwrap_flag_guard
+
+echo ""
+echo "--- #2640 Guard 1: cross-workspace isolation canary probe (report-only dark-launch) ---"
+
+# run_cwi_deploy [extra_env]: one web-platform deploy with every probe-
+# observation channel pinned under a fresh dir the function creates itself —
+# mktemp-rooted INSIDE the function so every artifact path is provably absolute
+# for the fixture-relative ratchet (a param-passed dir is not). The dir is
+# reported on the LAST stdout line as `CWI_ARTIFACT_DIR=<path>` for the caller to
+# parse out; it survives the run's ephemeral MOCK_DIR. extra_env is eval'd
+# inside the subshell AFTER the default exports (so a row can re-pin
+# WORKSPACE_ISOLATION_STATE_FILE for multi-run soak rows, or arm
+# MOCK_CWI_PROBE_RC / MOCK_CWI_PROBE_OUT / MOCK_CWI_PROBE_ERR /
+# MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST). The SENTRY_* triple is armed so the page
+# arm is reachable; on a healthy deploy nothing else POSTs to /store/.
+run_cwi_deploy() {
+  local extra_env="${1:-}"
+  local d
+  d=$(mktemp -d)
+  (
+    export WORKSPACE_ISOLATION_STATE_FILE="$d/wi-state.json"
+    # Redirects run on the LITERAL path, never through the *_LOG/_CAPTURE_FILE
+    # vars: MOCK_LOGGER_CAPTURE_FILE is bound elsewhere in this file to roots the
+    # fixture-relative ratchet cannot prove absolute, so a redirect through the
+    # var would inherit that taint. $d is mktemp-rooted in this function.
+    export MOCK_CWI_LOG="$d/cwi-argv.log"; : > "$d/cwi-argv.log"
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"; : > "$d/logger.txt"
+    export MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"; : > "$d/sentry.txt"
+    export SENTRY_INGEST_DOMAIN="sentry.invalid" SENTRY_PROJECT_ID="1" SENTRY_PUBLIC_KEY="cwi-mock-key"
+    eval "$extra_env"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  )
+  printf 'CWI_ARTIFACT_DIR=%s\n' "$d"
+}
+
+# The probe is report-only (wg-dark-launch-deploy-gates): it execs the direct
+# tier of test/sandbox-isolation.test.ts inside the canary between
+# run_faithful_sandbox_canary and the prod swap, classifies the docker-exec rc
+# (0 → pass; 124 host-timeout → workspace_isolation_timeout; 125/126/127 infra →
+# canary_infra_error; other non-zero → workspace_isolation_failed), persists the
+# verdict + soak accumulators to WORKSPACE_ISOLATION_STATE_FILE, logs one
+# WORKSPACE_ISOLATION: journald line per run, and pages Sentry ONLY on the two
+# red verdicts — while `|| true` keeps it from ever rolling back a deploy.
+assert_cross_workspace_isolation() {
+  local d out rc
+  out=$(run_cwi_deploy "") && rc=0 || rc=$?
+  d=$(printf '%s\n' "$out" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+
+  # CWI-1: the vitest exec reaches the canary exactly once, with the pinned argv.
+  # EXACT match on exactly ONE recorded line, deliberately — the #8016 Guard 2
+  # convention: a token-presence check passes dropped flags AND injected ones, so
+  # any intended argv change is a conscious edit of EXPECTED here.
+  TOTAL=$((TOTAL + 1))
+  local expected log_contents n_lines
+  expected="exec -w /app -e CI=true -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts"
+  log_contents=$(cat "$d/cwi-argv.log" 2>/dev/null || true)
+  n_lines=$(printf '%s\n' "$log_contents" | grep -c . || true)
+  if [[ "$rc" -eq 0 && "$n_lines" -eq 1 && "$log_contents" == "$expected" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-1 the vitest exec reaches the canary once with the pinned argv"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-1 the vitest exec record (rc=$rc, lines=$n_lines)"
+    echo "        expected: $expected"
+    echo "        argv log: $log_contents"
+    echo "        deploy output (tail):"; printf '%s\n' "$out" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  # CWI-2: ordering — the probe's echo precedes the swap echo in deploy output
+  # (the call site sits inside CANARY_HEALTHY, before github_app_key_canary_check
+  # and the prod swap; a probe moved after `docker run ... soleur-web-platform`
+  # re-orders these lines).
+  TOTAL=$((TOTAL + 1))
+  local probe_line swap_line
+  probe_line=$(printf '%s\n' "$out" | { grep -n "Workspace isolation probe" || true; } | sed -n '1p' | cut -d: -f1)
+  swap_line=$(printf '%s\n' "$out" | { grep -n "Canary passed, swapping to production" || true; } | sed -n '1p' | cut -d: -f1)
+  if [[ -n "$probe_line" && -n "$swap_line" && "$probe_line" -lt "$swap_line" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-2 the probe runs between the faithful canary and the prod swap"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-2 probe/swap ordering (probe_line=$probe_line swap_line=$swap_line)"
+    echo "        deploy output (tail):"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/          /'
+  fi
+
+  # CWI-3: the green path — verdict=pass, the soak accumulators start
+  # (consecutive_pass=1, first_pass_at set), one WORKSPACE_ISOLATION journald
+  # line, and NO Sentry page (a green probe never pages). NOTE: sentry.txt is
+  # never literally empty — the zot pull posts an unrelated info event — so the
+  # no-page check is a zero COUNT of the probe's own event, not an empty file.
+  TOTAL=$((TOTAL + 1))
+  local v3 cp3 fp3 jrnl3 s3
+  v3=$(jq -r '.verdict // ""' "$d/wi-state.json" 2>/dev/null || echo "")
+  cp3=$(jq -r '.consecutive_pass // -1' "$d/wi-state.json" 2>/dev/null || echo -1)
+  fp3=$(jq -r '.first_pass_at // 0' "$d/wi-state.json" 2>/dev/null || echo 0)
+  jrnl3=$(grep -cF 'WORKSPACE_ISOLATION: verdict=pass' "$d/logger.txt" || true)
+  s3=$(grep -ci 'workspace.isolation' "$d/sentry.txt" || true)
+  if [[ "$rc" -eq 0 && "$v3" == "pass" && "$cp3" == "1" && "$fp3" =~ ^[0-9]+$ && "$fp3" -gt 0 && "$jrnl3" -ge 1 && "$s3" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-3 pass records verdict=pass, starts the soak (consecutive_pass=1, first_pass_at set), logs WORKSPACE_ISOLATION, pages nothing"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-3 green path (rc=$rc verdict=$v3 cp=$cp3 fp=$fp3 journald_lines=$jrnl3 wi_sentry_events=$s3)"
+    echo "        state file:"; { cat "$d/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        sentry:"; sed 's/^/          /' "$d/sentry.txt"
+  fi
+
+  # CWI-4/5: MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1 (the deploy-gate contract's
+  # vitest-FAIL arm) — the deploy STILL exits 0 (the `|| true` is load-bearing —
+  # this probe must never gate during dark-launch), the verdict reads
+  # workspace_isolation_failed, and a Sentry event fires (op=workspace-isolation).
+  local d2 out2 rc2 v2 s2 jrnl2
+  out2=$(run_cwi_deploy "export MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1") && rc2=0 || rc2=$?
+  d2=$(printf '%s\n' "$out2" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v2=$(jq -r '.verdict // ""' "$d2/wi-state.json" 2>/dev/null || echo "")
+  jrnl2=$(grep -cF 'WORKSPACE_ISOLATION_FAIL: verdict=workspace_isolation_failed' "$d2/logger.txt" || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc2" -eq 0 && "$v2" == "workspace_isolation_failed" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-4 a vitest FAIL still exits 0 (report-only) and records workspace_isolation_failed"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-4 vitest FAIL must not abort the deploy (rc=$rc2 verdict=$v2)"
+    echo "        deploy output (tail):"; printf '%s\n' "$out2" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  TOTAL=$((TOTAL + 1))
+  s2=$(grep -ci 'workspace.isolation' "$d2/sentry.txt" || true)
+  if [[ "$s2" -ge 1 && "$jrnl2" -ge 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-5 a failed verdict pages Sentry (op=workspace-isolation) and logs WORKSPACE_ISOLATION_FAIL"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-5 red verdict must page (sentry_hits=$s2 fail_lines=$jrnl2)"
+    echo "        sentry:"; sed 's/^/          /' "$d2/sentry.txt"
+    echo "        journald capture:"; sed 's/^/          /' "$d2/logger.txt"
+  fi
+
+  # CWI-6: rc 127 (a canary image predating the vitest tooling) — infra, never a
+  # verdict: canary_infra_error is recorded and NOTHING pages. This is the
+  # deploy-order coupling window the classification exists for.
+  local d3 out3 rc3 v6 s6
+  out3=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=127") && rc3=0 || rc3=$?
+  d3=$(printf '%s\n' "$out3" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v6=$(jq -r '.verdict // ""' "$d3/wi-state.json" 2>/dev/null || echo "")
+  s6=$(grep -ci 'workspace.isolation' "$d3/sentry.txt" || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc3" -eq 0 && "$v6" == "canary_infra_error" && "$s6" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-6 rc 127 (vitest absent) records canary_infra_error and pages nothing"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-6 rc-127 arm (rc=$rc3 verdict=$v6 wi_sentry_events=$s6)"
+    echo "        state file:"; { cat "$d3/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        sentry:"; sed 's/^/          /' "$d3/sentry.txt"
+    echo "        deploy output (tail):"; printf '%s\n' "$out3" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  # CWI-7: rc 124 — the host `timeout` cap fired on a wedged suite. A RED verdict
+  # (workspace_isolation_timeout) that DOES page, distinguished from infra.
+  local d4 out4 rc4 v7 s7
+  out4=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=124") && rc4=0 || rc4=$?
+  d4=$(printf '%s\n' "$out4" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v7=$(jq -r '.verdict // ""' "$d4/wi-state.json" 2>/dev/null || echo "")
+  s7=$(grep -ci 'workspace.isolation' "$d4/sentry.txt" || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc4" -eq 0 && "$v7" == "workspace_isolation_timeout" && "$s7" -gt 0 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-7 rc 124 (host timeout) records workspace_isolation_timeout and pages"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-7 rc-124 arm (rc=$rc4 verdict=$v7 wi_sentry_events=$s7)"
+    echo "        state file:"; { cat "$d4/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        sentry:"; sed 's/^/          /' "$d4/sentry.txt"
+    echo "        deploy output (tail):"; printf '%s\n' "$out4" | tail -n 20 | sed 's/^/          /'
+  fi
+
+  # CWI-8: the on-host soak accumulation (the promotion follow-through is a
+  # stateless GET keyed on these counters — mirroring write_sandbox_canary_state):
+  # pass,pass → consecutive_pass=2; canary_infra_error → HOLD (a hiccup is a
+  # non-signal); a red verdict → reset both accumulators to 0. The state file is
+  # re-pinned OUTSIDE the per-run artifact dir via extra_env so all four deploys
+  # accumulate onto one file.
+  local d5 cp8 fp8 cp8r fp8r fp8_first
+  d5=$(mktemp -d)
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"" >/dev/null 2>&1 || true
+  fp8_first=$(jq -r '.first_pass_at // 0' "$d5/wi-state.json" 2>/dev/null || echo 0)
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"" >/dev/null 2>&1 || true
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"; export MOCK_CWI_PROBE_RC=127" >/dev/null 2>&1 || true
+  cp8=$(jq -r '.consecutive_pass // -1' "$d5/wi-state.json" 2>/dev/null || echo -1)
+  fp8=$(jq -r '.first_pass_at // 0' "$d5/wi-state.json" 2>/dev/null || echo 0)
+  run_cwi_deploy "export WORKSPACE_ISOLATION_STATE_FILE=\"$d5/wi-state.json\"; export MOCK_DOCKER_EXEC_FAIL_CANARY_VITEST=1" >/dev/null 2>&1 || true
+  cp8r=$(jq -r '.consecutive_pass // -1' "$d5/wi-state.json" 2>/dev/null || echo -1)
+  fp8r=$(jq -r '.first_pass_at // -1' "$d5/wi-state.json" 2>/dev/null || echo -1)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$fp8_first" =~ ^[0-9]+$ && "$fp8_first" -gt 0 && "$cp8" == "2" && "$fp8" == "$fp8_first" && "$cp8r" == "0" && "$fp8r" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-8 the soak accumulator increments on pass, HOLDS on canary_infra_error, resets on a red verdict"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-8 soak accumulation (after 2x pass + infra: cp=$cp8 fp=$fp8 first_fp=$fp8_first; after red: cp=$cp8r fp=$fp8r)"
+    echo "        state file:"; { cat "$d5/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # No rm -rf on the parsed artifact dirs: they are sed-parsed paths (a
+  # call-unresolved root the fixture-relative ratchet cannot prove), and each is
+  # a mktemp dir under the runner's /tmp lifecycle anyway. $d5 is provable.
+  rm -rf "$d5"
+}
+
+assert_cross_workspace_isolation
 
 echo ""
 echo "--- Bwrap userns sysctl drift detector (non-blocking) ---"
@@ -9995,7 +10223,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #8016: raised 490 -> 500 with the 10 PDEATHSIG rows (Guard 2: 2 recorded-argv rows; Guard 1: the
 # real-tree scan, 4 must-flag fixtures, 3 must-pass inputs). Measured: 500 ran.
 # #9795: raised 500 -> 502 with T-9795-1/-2 (the fan-out HMAC header on curl's stdin, not argv).
-CI_DEPLOY_ASSERT_FLOOR=502
+# #2640: raised 502 -> 510 with the 8 CWI rows (Guard 1: recorded-argv + ordering +
+#   green/no-page + FAIL/infra/timeout classification + soak accumulate-hold-reset).
+CI_DEPLOY_ASSERT_FLOOR=510
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
