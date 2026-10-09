@@ -706,3 +706,7 @@ test rows; all findings were fixed inline. What changed against this plan, so th
   path segment with negation refused, and the composite set is derived by the basename of the library, including nested directories.
 - Pre-existing intermittent observed once in four runs of the sweep battery (an older stage's evaluator row reported an extra `bash-error`);
   it did not reproduce on the next three runs and is not touched by this slice.
+- The single verification pass after the fix round (no P1) found the argument guard still open to abbreviated long options on the runner's
+  curl 8.5, to several stdin-body spellings and to a literal `--`; the lint's review-trigger refs and `.github` cone were looser than their
+  docs. All were fixed inline in the next commit with mutation-checked rows; the targeted-round cap (two rounds plus one verification pass)
+  was not exceeded and no further seat round was run on those edits.

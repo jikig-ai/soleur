@@ -349,7 +349,13 @@ tail_cases=(
   "-d @-" "-d@-" "-sSd @-" "--data @-" "--data=@-" "--data-binary @-" "--data-raw @-" "--data-ascii @-" "--data-urlencode x@-"
   "--json @-" "-F f=@-" "-T -" "--upload-file=-" "--data @/dev/stdin"
   "--libcurl x" "-k" "--insecure" "--cacert x" "--capath x" "--proxy http://p" "-x http://p" "--preproxy http://p"
-  "--noproxy x" "--resolve a:1:2" "--connect-to a:1:b:2" "--proxy-header x:y"
+  "--noproxy x" "--resolve a:1:2" "--connect-to a:1:b:2" "--proxy-header x:y" "--proxy-insecure" "--proxy-anyauth" "--proxytunnel" "--proxy1.0 h" "--trace-envelope" "--netrc-x" "--location-x"
+  "-H X-Gitlab-Token:x" "-H X-Access-Token:x" "-H X-Amz-Security-Token:x" "-H X-Github-Token:x" "-H Authentication:x" "-H X-Signature:x"
+  "-H @f" "-H @-" "--form-string a=@-" "--url-query @-" "--data @/dev/fd/0" "--data @/proc/self/fd/0" "--data @/dev/./stdin"
+  "-F 'a=<-'" "-F 'a=@-;type=text/plain'" "--form='a=@-;filename=f'" "--expand-data @-" "--expand-json @-" "--expand-form a=@-" "--variable x@-"
+  "-E x:y" "-U a:b" "-n" "--netrc" "--unix-socket x" "--socks5 h" "--cert x" "--interface x" "--doh-url x" "--dns-servers x"
+  "--verb" "--locat" "--trace-a" "--heade Authorization:x" "--da @-" "--data-bin @-" "--varia x@-" "--prox http://p" "--sock h"
+  "--"
 )
 for bad in "${tail_cases[@]}"; do
   tail_n=$((tail_n + 1))
@@ -360,6 +366,17 @@ for bad in "${tail_cases[@]}"; do
   if [[ "$rc" != "64" || "$(ncalls)" != "0" ]] || ! grep -q 'refused' "$OUT/last"; then tail_bad=$((tail_bad + 1)); fail "forbidden argument '$bad' was not refused by the guard (rc=$rc calls=$(ncalls))"; fi
 done
 [[ "$tail_bad" == "0" ]] && pass "tail-argument guard: all $tail_n forbidden spellings (separate, attached, clustered, =-joined; every deny-list alternative) return 64 with a guard message and zero requests"
+reset_calls
+rc="$(GOODV=abc run "bc_curl tail 'X-A::GOODV' -- -sS http://127.0.0.1:9/ -H")"
+[[ "$rc" == "64" && "$(ncalls)" == "0" ]] && grep -q 'refused' "$OUT/last" && pass "tail-argument guard: a value-taking option left without its value at the end is refused" || fail "dangling -H: rc=$rc calls=$(ncalls)"
+# A value that LOOKS like an option is the value of the option before it (curl's own parsing), never judged as an option.
+cons_bad=0
+for c in A c C D e m o P Q r w X y Y z t H d T F; do
+  reset_calls
+  rc="$(GOODV=abc run "bc_curl tail 'X-A::GOODV' -- -sS -$c -v http://127.0.0.1:9/")"
+  if [[ "$rc" != "0" || "$(ncalls)" != "1" ]]; then cons_bad=$((cons_bad + 1)); fail "'-$c -v': the value of -$c was judged as an option (rc=$rc calls=$(ncalls))"; fi
+done
+[[ "$cons_bad" == "0" ]] && pass "tail-argument guard: the next token of every value-taking short option is consumed as its value (-w -L, -o -v, -X -K ...)"
 reset_calls
 rc="$(GOODV=abc run "bc_curl tail 'X-A::GOODV' -- -sS -H ' Authorization: x' http://127.0.0.1:9/")"
 [[ "$rc" == "64" && "$(ncalls)" == "0" ]] && pass "tail-argument guard: a header with leading whitespace is judged after the whitespace is dropped" || fail "leading-space credential header: rc=$rc calls=$(ncalls)"
@@ -494,7 +511,7 @@ printf '\nbearer-curl.test.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 # asserts PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=67
+MIN_ASSERTIONS=69
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

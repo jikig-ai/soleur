@@ -51,7 +51,8 @@ S3 needs one tested place for the pattern that the 26 alert-path composite call 
    files) or sources the library: a usable checkout (no `path:`, no foreign `repository:`) whose sparse cone, if any, names `scripts`,
    `scripts/**` or a path under `scripts/lib/` by path segment with a later negation refused; no `pull_request_target` trigger; and, under
    `workflow_run`, `issue_comment`, `pull_request_review*` and `issues`, a checkout of the default branch's own ref only (any other `ref:`
-   fails closed). Not covered, and named in the lint: a script that sources the library on a step's behalf, a composite that only calls
+   fails closed; on `pull_request_review*` even the implicit and `github.sha` refs are the PR's merge ref, so only an explicit default-branch
+   spelling counts). Not covered, and named in the lint: a script that sources the library on a step's behalf, a composite that only calls
    another library composite, and the callers' triggers of a reusable workflow.
 5. **Tracing is refused.** Each credential-binding function returns 78 when `set -x` is on: a sourced library cannot rely on its caller's
    prologue. `bc_ok_var NAME` takes the variable name so a site's own pre-guard never carries the value as an argument.
@@ -64,10 +65,13 @@ S3 needs one tested place for the pattern that the 26 alert-path composite call 
    intended. The value is therefore judged and sent after a trailing-whitespace trim; whitespace or any other byte outside the alphabet
    inside the value is still refused.
 8. **The arguments after `--` are checked against what would undo the property.** `_bc_tail_ok` refuses (rc 64, before any request), in the
-   separate, attached, clustered and `=`-joined spellings, verbose and trace flags, redirect following, a second config or `--next`, a
-   credential header or basic/bearer/cookie flag of the caller's own, a body read from stdin, `--libcurl`, and the trust, proxy and
-   resolution options. It is a guard against a caller's mistake: it does not enumerate every curl option, and it is not a boundary against
-   code that can edit the library.
+   separate, attached, clustered and `=`-joined spellings, and for long options by prefix (the runner's curl 8.5 accepts `--verb` for
+   `--verbose`): verbose and trace flags, redirect following, a second config or `--next`, a credential header (judged by name, and a
+   header read from a file or stdin) or basic/bearer/cookie flag of the caller's own, a request body that reads stdin (`@-`, `<-`, `name=-`
+   and the device spellings, with `;type=` modifiers dropped), a literal `--`, a value-taking option left without its value, `--libcurl`,
+   and the trust, proxy, socks, netrc, unix-socket, DNS-override and resolution families. It is a guard against a caller's mistake: it does
+   not enumerate every curl option (an option outside these families is not judged), and it is not a boundary against code that can edit
+   the library.
 
 ## Considered options
 
@@ -81,8 +85,8 @@ S3 needs one tested place for the pattern that the 26 alert-path composite call 
 
 - Rule E baseline E shrinks by deletion only (now 17 files / 42 sites); per-site fingerprint keying is not adopted because S4 and S5 delete
   the remaining population.
-- Blast radius: 12 files name the library (10 workflows and 2 composites), and 15 more workflow files call the composites, so a defect in it
-  reaches 22 workflow files and 26 composite call steps, including the alert paths of the production-apply and release workflows. That is the
+- Blast radius: 12 files name the library (10 workflows and 2 composites), and 15 workflow files call the composites (12 of them not among
+  the 10), so a defect in it reaches 22 workflow files and 26 composite call steps, including the alert paths of the production-apply and release workflows. That is the
   reason it has its own suite (with a mutation-sensitive census) and a CODEOWNERS entry, and why a missing or unloadable library is a visible
   hard failure at each site rather than a silent skip.
 - S1 and S2 kept an inline wrapper per script. This slice adds the shared library for workflows and composite actions only (they have no

@@ -31,7 +31,8 @@
 #   different token than the one intended): a value with whitespace or any other byte outside the
 #   alphabet INSIDE it is still refused.
 #   Arguments after `--` are checked against what would undo the property, in the separate and the
-#   attached spellings (`-H x`, `-Hx`, `-sSH x`, `--header=x`): verbose/trace flags (they print request
+#   attached spellings (`-H x`, `-Hx`, `-sSH x`, `--header=x`), and long options by prefix (an abbreviation such as `--verb`
+#   is accepted by the runner's curl 8.5): verbose/trace flags (they print request
 #   headers), redirect following (curl re-sends non-Authorization credential headers cross-origin), a
 #   second config or `--next`, a credential header or basic/bearer/cookie flag of the caller's own, a
 #   body read from stdin, `--libcurl`, and the trust, proxy and resolution options. A refusal is rc 64
@@ -65,22 +66,24 @@ bc_ok_var() {
 }
 
 # A header the caller may not carry on its own argument list (the credential belongs in a header spec). Judged
-# lowercase, after leading whitespace is dropped.
+# lowercase, after leading whitespace is dropped. A header read from a file or stdin (`@...`) cannot be judged by name.
 _bc_hdr_refused() {
   local LC_ALL=C _bc_h="${1#"${1%%[![:space:]]*}"}"
   _bc_h="${_bc_h,,}"
+  if [[ "$_bc_h" == @* ]]; then return 0; fi
   [[ "$_bc_h" =~ ^(authorization|proxy-authorization|authentication|x-api-key|api-key|apikey|private-token|x-auth-token|x-access-token|x-vault-token|x-github-token|x-gitlab-token|x-amz-security-token|cookie|x-signature|x-signature-256|x-hub-signature|x-hub-signature-256|cf-access-client-id|cf-access-client-secret|x-soleur-kb-drift-signature)[[:space:]]*: ]]
 }
 
-# A request body that reads the process's stdin would consume the config channel (the header lines would go out as the body).
+# A request body that reads the process's stdin would consume the config channel (the header lines would go out as the
+# body). `;type=...` / `;filename=...` modifiers are dropped first; `@-`, `<-`, `name=-` and a bare `-` read stdin, and so
+# do the device spellings (`/dev/stdin`, `/dev/fd/N`, `/dev/./stdin`, `/proc/self/fd/N`).
 _bc_body_from_stdin() {
-  case "$1" in
-    -|@-|*@-|@/dev/stdin|/dev/stdin|*@/dev/stdin|/dev/fd/*|@/dev/fd/*|*@/dev/fd/*|/proc/*|@/proc/*|*@/proc/*) return 0 ;;
-  esac
-  return 1
+  local LC_ALL=C _bc_v="${1%%;*}"
+  if [[ "$_bc_v" =~ (^|[@<=])-$ ]]; then return 0; fi
+  [[ "$1" =~ /dev/(stdin|fd/|\.)|/proc/ ]]
 }
 
-# Judge the value of an option that takes one. KIND is header | body. rc 64 refuses.
+# Judge the value of an option that takes one. KIND is header | body. rc 64 refuses; any other KIND is not judged.
 _bc_val_ok() {
   case "$1" in
     header) if _bc_hdr_refused "$2"; then
@@ -92,9 +95,37 @@ _bc_val_ok() {
   esac
 }
 
+# Long options the caller may not pass, by FULL name. A typed name is judged by PREFIX (`--verb` is `--verbose` on the
+# runner's curl 8.5), so every abbreviation of a listed name is refused too, and the families below by their stem.
+_BC_LONG_REFUSED=(--verbose --trace --trace-ascii --trace-config --trace-time --trace-ids --location --location-trusted
+  --config --next --disable --oauth2-bearer --user --proxy-user --cookie --libcurl --insecure --cacert --capath --proxy
+  --preproxy --proxy-header --noproxy --resolve --connect-to --unix-socket --abstract-unix-socket
+  --doh-url --dns-servers --interface --netrc --netrc-file --netrc-optional --cert --socks4 --socks4a --socks5
+  --socks5-hostname)
+_BC_LONG_REFUSED_STEM=(--proxy --socks --trace --netrc --location --cert --doh --dns --unix --abstract --oauth2)
+# Options that take a value which is judged (a header, or a request body): abbreviations are judged the same way.
+_BC_LONG_HEADER=(--header)
+_BC_LONG_BODY=(--data --data-binary --data-raw --data-ascii --data-urlencode --upload-file --json --form --form-string
+  --url-query --variable --expand-data --expand-json --expand-form --expand-upload-file)
+
+_bc_long_refused() { # <option name as typed, without =value>
+  local _bc_n="$1" _bc_r
+  for _bc_r in "${_BC_LONG_REFUSED[@]}"; do [[ "$_bc_r" == "$_bc_n"* ]] && return 0; done
+  for _bc_r in "${_BC_LONG_REFUSED_STEM[@]}"; do [[ "$_bc_n" == "$_bc_r"* ]] && return 0; done
+  return 1
+}
+
+_bc_long_kind() { # <option name as typed> -> sets _bc_kind (header | body | empty) in the caller
+  local _bc_n="$1" _bc_r
+  _bc_kind=""
+  for _bc_r in "${_BC_LONG_HEADER[@]}"; do [[ "$_bc_r" == "$_bc_n"* ]] && { _bc_kind=header; return 0; }; done
+  for _bc_r in "${_BC_LONG_BODY[@]}"; do [[ "$_bc_r" == "$_bc_n"* ]] && { _bc_kind=body; return 0; }; done
+  return 0
+}
+
 # Arguments the caller may not pass after `--` (see the header): both the separate (`-H x`, `--header x`) and the
-# attached (`-Hx`, `--header=x`, `-sSH x`) spellings. This is a guard against a caller's mistake, not a boundary against
-# code that can edit this file. Returns 64 naming the argument CLASS, never the value.
+# attached (`-Hx`, `--header=x`, `-sSH x`) spellings, and abbreviated long options. This is a guard against a caller's
+# mistake, not a boundary against code that can edit this file. Returns 64 naming the argument CLASS, never the value.
 _bc_tail_ok() {
   local LC_ALL=C _bc_a _bc_want="" _bc_name _bc_i _bc_c _bc_rest _bc_kind
   for _bc_a in "$@"; do
@@ -105,27 +136,14 @@ _bc_tail_ok() {
       continue
     fi
     case "$_bc_a" in
+      --)
+        printf 'bc_curl: a literal -- in the request arguments would turn the config channel into URLs; refused\n' >&2; return 64 ;;
       --*)
         _bc_name="${_bc_a%%=*}"
-        case "$_bc_name" in
-          --verbose|--trace|--trace-ascii|--trace-config|--trace-time|--trace-ids)
-            printf 'bc_curl: verbose/trace output prints request headers; refused\n' >&2; return 64 ;;
-          --location|--location-trusted)
-            printf 'bc_curl: following redirects re-sends credential headers cross-origin; refused\n' >&2; return 64 ;;
-          --config|--next|--disable)
-            printf 'bc_curl: a caller-supplied config or --next is refused (the library owns the config channel)\n' >&2; return 64 ;;
-          --oauth2-bearer|--user|--proxy-user|--cookie)
-            printf 'bc_curl: a credential flag in the request arguments is refused (pass it as a header spec)\n' >&2; return 64 ;;
-          --libcurl)
-            printf 'bc_curl: --libcurl would write the config-channel header values to a file; refused\n' >&2; return 64 ;;
-          --insecure|--cacert|--capath|--proxy|--preproxy|--proxy-header|--noproxy|--resolve|--connect-to|--proxy-insecure)
-            printf 'bc_curl: a trust, proxy or resolution option would re-open what the library closes; refused\n' >&2; return 64 ;;
-        esac
-        _bc_kind=""
-        case "$_bc_name" in
-          --header) _bc_kind=header ;;
-          --data|--data-binary|--data-raw|--data-ascii|--data-urlencode|--upload-file|--json|--form|--form-string|--url-query) _bc_kind=body ;;
-        esac
+        if _bc_long_refused "$_bc_name"; then
+          printf 'bc_curl: a refused option (verbose/trace, redirects, config, credential, trust, proxy or resolution option) is in the request arguments\n' >&2; return 64
+        fi
+        _bc_long_kind "$_bc_name"
         if [[ -n "$_bc_kind" ]]; then
           if [[ "$_bc_a" == *=* ]]; then _bc_val_ok "$_bc_kind" "${_bc_a#*=}" || return 64; else _bc_want="$_bc_kind"; fi
         fi
@@ -135,9 +153,9 @@ _bc_tail_ok() {
         for (( _bc_i = 1; _bc_i < ${#_bc_a}; _bc_i++ )); do
           _bc_c="${_bc_a:_bc_i:1}"
           case "$_bc_c" in
-            v|L|K|u|b|q|k|x|:)
-              printf 'bc_curl: a short flag that is refused (v, L, K, u, b, q, k, x, :) is in this argument\n' >&2; return 64 ;;
-            H|d|T|F|A|c|C|D|e|E|m|o|P|Q|r|U|w|X|y|Y|z|t)
+            v|L|K|u|b|q|k|x|E|U|n|:)
+              printf 'bc_curl: a short flag that is refused (v, L, K, u, b, q, k, x, E, U, n, :) is in this argument\n' >&2; return 64 ;;
+            H|d|T|F|A|c|C|D|e|m|o|P|Q|r|w|X|y|Y|z|t)
               case "$_bc_c" in H) _bc_kind=header ;; d|T|F) _bc_kind=body ;; *) _bc_kind="-" ;; esac
               _bc_rest="${_bc_a:_bc_i+1}"
               if [[ -n "$_bc_rest" ]]; then
@@ -151,6 +169,9 @@ _bc_tail_ok() {
         ;;
     esac
   done
+  if [[ -n "$_bc_want" ]]; then
+    printf 'bc_curl: an option that takes a value has none at the end of the request arguments; refused\n' >&2; return 64
+  fi
 }
 
 # Announce a refused credential: one value-free line naming only the variable, and the marker. Used by

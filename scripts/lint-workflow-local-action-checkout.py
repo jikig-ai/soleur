@@ -54,7 +54,8 @@ as `scripts-old`, a sibling such as `scripts/ci`, or a later negation of scripts
 sourced from the job's own workspace, so a job without it cannot send, and there is no argv fallback. The
 workflow must also not be triggered by `pull_request_target` (it runs with secrets against a ref the author
 controls), and a consumer job on a `workflow_run`/`issue_comment`/`pull_request_review*`/`issues` trigger may
-only check out the default branch's own ref: any other `ref:` (a head sha, `refs/pull/N/merge`, a step output)
+only check out the default branch's own ref (on `pull_request_review*` even the implicit and `github.sha` refs are the PR's merge
+ref, so only an explicit default-branch spelling counts): any other `ref:` (a head sha, `refs/pull/N/merge`, a step output)
 fails closed. Measured when this was written: the 26 composite call steps (23 `notify-ops-email`, 3
 `anthropic-preflight`) all follow a checkout whose ref is the default one, except `fix-constraints-stage-a`
 (checks out the PR head under plain `pull_request`, so it resolves the composite and the library from the same
@@ -112,6 +113,10 @@ LIB_PATH = "scripts/lib/bearer-curl.sh"
 LIB_NEEDLE = "bearer-curl.sh"
 LIB_COMPOSITE_DEFAULT = ("notify-ops-email", "anthropic-preflight")
 UNTRUSTED_REF_TRIGGERS = {"workflow_run", "issue_comment", "pull_request_review", "pull_request_review_comment", "issues"}
+# For these two the default `GITHUB_SHA`/`github.ref` is the PR's MERGE ref, i.e. the PR tree: only an explicit default-branch
+# spelling is acceptable.
+PR_TREE_TRIGGERS = {"pull_request_review", "pull_request_review_comment"}
+DEFAULT_BRANCH_ONLY = re.compile(r"^(\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}|main|master)$")
 # Under those triggers the only checkout ref the library may be sourced from is the default branch's own: any other
 # `ref:` (a head sha, `refs/pull/N/merge`, a step output, an input) can name a tree the author controls. Fail closed.
 DEFAULT_REF_OK = re.compile(
@@ -167,16 +172,19 @@ def cone_patterns(sparse) -> list:
 
 
 def cone_names_github(patterns: list) -> bool:
-    """`.github` as a path segment (not the string prefix `.github-old`)."""
-    return any(p == ".github" or p.startswith(".github/") for p in patterns)
+    """A cone materialises the composites iff a pattern IS `.github`, `.github/**`, `.github/actions` (or `/**`) or lies
+    under `.github/actions/`. A string prefix (`.github-old`) or `.github/workflows` alone does not."""
+    return any(p in (".github", ".github/**", ".github/actions", ".github/actions/**") or p.startswith(".github/actions/") for p in patterns)
 
 
 def cone_names_scripts(patterns: list) -> bool:
     """A cone materialises scripts/lib/ iff a pattern IS `scripts` / `scripts/**` / `scripts/lib` or lies under
     `scripts/lib/`. A string prefix (`scripts-old`) or a sibling directory (`scripts/ci`, `scripts/lib-old`) does
     not, and a negation that mentions scripts (`!scripts/lib`) can take it away again, so it refuses."""
-    if any(p.startswith("!") and "scripts" in p for p in patterns):
-        return False
+    for p in patterns:
+        neg = p[1:].lstrip("/") if p.startswith("!") else ""
+        if neg == "scripts" or neg.startswith("scripts/"):
+            return False
     return any(p in ("scripts", "scripts/**", "scripts/lib", "scripts/lib/**") or p.startswith("scripts/lib/") for p in patterns)
 
 
@@ -192,13 +200,15 @@ def checkout_has_lib(checkout: dict, step: dict) -> bool:
     return True
 
 
-def checkout_ref_untrusted(checkout: dict) -> bool:
-    """True when the checkout names a ref other than the default branch's own."""
+def checkout_ref_untrusted(checkout: dict, strict: bool = False) -> bool:
+    """True when the checkout names a ref other than the default branch's own. `strict` (the PR-review triggers, where
+    the implicit and `github.sha` refs are the PR's merge ref) accepts only an explicit default-branch spelling."""
     with_ = checkout.get("with")
-    if not isinstance(with_, dict) or "ref" not in with_:
-        return False
-    ref = with_["ref"]
-    return not (isinstance(ref, str) and DEFAULT_REF_OK.match(ref.strip()))
+    ref = with_.get("ref") if isinstance(with_, dict) and "ref" in with_ else None
+    if ref is None:
+        return strict
+    ok = DEFAULT_BRANCH_ONLY if strict else DEFAULT_REF_OK
+    return not (isinstance(ref, str) and ok.match(ref.strip()))
 
 
 def lib_composites(actions_root: Path) -> set:
@@ -291,7 +301,9 @@ def main(argv: list[str]) -> int:
                                 f"sparse-checkout cone must name scripts) — the library is sourced from the "
                                 f"job's own workspace and there is no argv fallback"
                             )
-                        if wf_triggers & UNTRUSTED_REF_TRIGGERS and any(checkout_ref_untrusted(c) for c in checkouts):
+                        if wf_triggers & UNTRUSTED_REF_TRIGGERS and any(
+                            checkout_ref_untrusted(c, bool(wf_triggers & PR_TREE_TRIGGERS)) for c in checkouts if checkout_usable(c, step)
+                        ):
                             findings.append(
                                 f"::error file={wf}::{wf.name}: job '{job_name}', step '{lib_label}' sends a "
                                 f"credential through {LIB_PATH} in a job triggered by {sorted(wf_triggers & UNTRUSTED_REF_TRIGGERS)} "

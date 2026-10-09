@@ -954,7 +954,7 @@ jobs:
 done
 
 # 34c: the near side — an untrusted trigger whose checkout is the default ref (no ref, github.sha, main) PASSES.
-for refline in '' 'ref: ${{ github.sha }}' 'ref: main'; do
+for refline in '' 'ref: ${{ github.sha }}' 'ref: ${{ github.ref }}' 'ref: ${{ github.event.repository.default_branch }}' 'ref: main' 'ref: master'; do
   reset
   if [[ -n "$refline" ]]; then withblock="        with:
           $refline"; else withblock=""; fi
@@ -976,6 +976,64 @@ $withblock
     fail "34c a default-ref checkout under workflow_run was refused ('${refline:-no ref:}'): rc=$RC: $(head -1 "$TMP/err")"
   fi
 done
+
+# 34d: on the PR-review triggers the implicit and github.sha refs are the PR's merge ref: only an explicit default branch counts.
+for refline in '' 'ref: ${{ github.sha }}' 'ref: ${{ github.ref }}'; do
+  reset
+  if [[ -n "$refline" ]]; then withblock="        with:
+          $refline"; else withblock=""; fi
+  mkwf lib-review-strict.yml "name: lib-review-strict
+on:
+  pull_request_review:
+    types: [submitted]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+$withblock
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq 1 ]] && grep -q "lib-review-strict.yml: job 'j'.*other than the default branch" "$TMP/err"; then
+    pass "34d a pull_request_review consumer whose checkout is '${refline:-the implicit ref}' (the PR merge ref) is REFUSED"
+  else
+    fail "34d pull_request_review with '${refline:-no ref}' was accepted: rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+reset
+mkwf lib-review-main.yml "name: lib-review-main
+on:
+  pull_request_review:
+    types: [submitted]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: main
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "34e (must-PASS) a pull_request_review consumer with an explicit default-branch ref passes"; else fail "34e: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 34f: a second checkout that does not serve the workspace root (foreign repository) may carry any ref.
+reset
+mkwf lib-foreign-ref.yml "name: lib-foreign-ref
+on:
+  workflow_run:
+    workflows: [ci]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: actions/checkout@$SHA
+        with:
+          repository: other/repo
+          ref: some-branch
+          path: other
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "34f (must-PASS) a foreign-repository checkout with its own ref does not make the workspace checkout untrusted"; else fail "34f: rc=$RC: $(head -1 "$TMP/err")"; fi
 
 reset
 mkwf lib-headref-pr.yml "name: lib-headref-pr
@@ -1024,6 +1082,9 @@ cone_row ".github scripts/ci"         1 .github scripts/ci
 cone_row ".github scripts/lib-old"    1 .github scripts/lib-old
 cone_row ".github scripts !scripts/lib" 1 .github scripts '!scripts/lib'
 cone_row ".github-old scripts"        1 .github-old scripts
+cone_row ".github/workflows scripts" 1 .github/workflows scripts
+cone_row ".github/actions scripts"   0 .github/actions scripts
+cone_row ".github scripts !apps/x/scripts" 0 .github scripts '!apps/x/scripts'
 cone_row ".github scripts"            0 .github scripts
 cone_row ".github /scripts"           0 .github /scripts
 cone_row ".github scripts/lib"        0 .github scripts/lib
@@ -1145,6 +1206,41 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/${LIBDIR}/bearer-curl.sh"'
 run_lint
 if [[ "$RC" -eq 1 ]] && grep -q "lib-varspell.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39d a run: step that names the library through a variable is still a consumer"; else fail "39d: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39f: derivation reads the BASENAME (a variable spelling in the composite) and an action.yaml file name.
+reset
+mkaction varcomp 'name: varcomp
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        LIBDIR=scripts/lib
+        source "${GITHUB_WORKSPACE:?}/${LIBDIR}/bearer-curl.sh"'
+mkwf lib-varcomp.yml "name: lib-varcomp
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/varcomp"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-varcomp.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39f a composite that names the library through a variable is derived by the basename"; else fail "39f variable-spelling derivation: rc=$RC: $(head -1 "$TMP/err")"; fi
+reset
+mkdir -p "$TMP/actions/yamlcomp"
+printf '%s\n' 'name: yamlcomp' 'runs:' '  using: composite' '  steps:' '    - shell: bash' '      run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/actions/yamlcomp/action.yaml"
+mkwf lib-yamlcomp.yml "name: lib-yamlcomp
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/yamlcomp"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-yamlcomp.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39g a composite named action.yaml is derived too"; else fail "39g action.yaml derivation: rc=$RC: $(head -1 "$TMP/err")"; fi
 # 39e: a malformed composite (runs is not a mapping) is reported by name, never a traceback.
 reset
 mkaction badruns 'name: badruns
@@ -1184,7 +1280,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=86
+FAIL_FLOOR_MIN=99
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2
