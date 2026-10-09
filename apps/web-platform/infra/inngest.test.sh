@@ -2397,7 +2397,7 @@ DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
     "$SCRIPT_DIR/inngest-luks-cutover.service"; do
     grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#'
   done)"
-DCFG_N="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -c .)"
+DCFG_N="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -c . || true)"
 DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inngest_doppler_config\}|@@DOPPLER_CONFIG@@|"?\$?\{?DOPPLER_CONFIG[^ ]*"?)' || true)"
 assert "inngest boot-path --config census is exactly 19 sites (unlisted site -> RED, #9175)" \
   "[[ '$DCFG_N' == '19' ]]"
