@@ -603,12 +603,15 @@ jobs:
           set -euo pipefail
           TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
+          # The token reaches curl on its stdin config (ADR-280); a refusal is a curl failure and takes
+          # the fail-closed arms below.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           # EXACT NAME, never a prefix match. `?name=` is an exact filter on the Hetzner side,
           # so this cannot reach `soleur-git-data` (the production host) or a leftover survivor
           # from an earlier rehearsal — both of which a `startswith(prefix)` resolution would
           # happily return. The teardown's own `per_page=50` list is a different question
           # (is ANY survivor left) and stays as it is.
-          body="$(curl --disable --noproxy '*' -sS -f -H "Authorization: Bearer ${TOKEN}" \
+          body="$(bc_curl rung2-rehearsal 'Authorization:Bearer :TOKEN' -- -sS -f \
                     "https://api.hetzner.cloud/v1/servers?name=${REHEARSAL_HOST}")" || {
             echo "::error::could not resolve ${REHEARSAL_HOST} through the Hetzner API. Failing closed: an unresolved host is not a host to reset."
             exit 1
@@ -626,13 +629,13 @@ jobs:
           # HARD reset (power cycle), not a graceful shutdown: an ACPI reboot leaves the
           # question of whether systemd unmounted cleanly, and the ext4 journal replay on the
           # mapper is part of what this arm is for.
-          action="$(curl --disable --noproxy '*' -sS -f -X POST \
-            -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+          action="$(bc_curl rung2-rehearsal 'Authorization:Bearer :TOKEN' -- -sS -f -X POST \
+            -H 'Content-Type: application/json' \
             "https://api.hetzner.cloud/v1/servers/${ids}/actions/reset")"
           aid="$(printf '%s' "$action" | jq -r '.action.id')"
           echo "reset action ${aid} issued for ${REHEARSAL_HOST} (server ${ids})"
           for i in $(seq 1 24); do
-            st="$(curl --disable --noproxy '*' -sS -f -H "Authorization: Bearer ${TOKEN}" \
+            st="$(bc_curl rung2-rehearsal 'Authorization:Bearer :TOKEN' -- -sS -f \
               "https://api.hetzner.cloud/v1/servers/${ids}/actions/${aid}" | jq -r '.action.status')"
             case "$st" in
               success) echo "reset completed after $((i * 5))s"; exit 0 ;;
@@ -1092,7 +1095,9 @@ jobs:
           set -euo pipefail
           TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           printf '::add-mask::%s\n' "$TOKEN"
-          body="$(curl --disable --noproxy '*' --connect-timeout 5 -m 30 -sS -f -H "Authorization: Bearer ${TOKEN}" \
+          # The token reaches curl on its stdin config (ADR-280); a refusal takes the fail-closed arm.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          body="$(bc_curl rung2-rehearsal 'Authorization:Bearer :TOKEN' -- --connect-timeout 5 -m 30 -sS -f \
                     'https://api.hetzner.cloud/v1/servers?per_page=50')" || {
             echo "::error::could not list Hetzner servers, so the teardown is UNVERIFIED. Fail-closed: this is not evidence that no host survived."
             exit 1; }
