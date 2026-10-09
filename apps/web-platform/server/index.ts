@@ -53,6 +53,8 @@ import {
 import { isLoopbackHost } from "./loopback";
 import { verifyC4RenderSandboxOnce } from "./c4-render";
 import { verifyAgentSandboxHardening } from "./agent-runner-sandbox-config";
+import { verifyOuterWrapInterpose } from "./agent-runner-query-options";
+import { verifyOuterWrapRealizedIsolation } from "./agent-outer-wrap";
 import { startWatchdogDispatchClock } from "./watchdog-dispatch-clock";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
@@ -329,6 +331,36 @@ app.prepare().then(() => {
             feature: "agent-sandbox",
             op: "sandbox-hardening-selfprobe",
             message: "agent sandbox hardening self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #5863: the outer-wrap interpose is installed ONLY when the rollout
+      // flag is on — a flag-on-but-unwired build would silently run the CLI
+      // unwrapped (the file-tool tier exposed). Same report-only fork.
+      void Promise.resolve()
+        .then(verifyOuterWrapInterpose)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "outer-wrap-selfprobe",
+            message: "agent sandbox outer-wrap self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #5863 T3.2 (opt-in): AGENT_OUTER_WRAP_BOOT_PROBE=1 runs the realized
+      // mountns + shared payload once at boot inside the PROD container —
+      // the file-cap posture measured where sessions will actually run.
+      // NOTE: the probe is synchronous (spawnSync, 30s bound) — the resolved-
+      // promise hop does not off-thread it, so flag-on stalls the event loop
+      // up to ~30s once at boot. Opt-in-only by design; acceptable for a
+      // bounded diagnostic, never enabled in the default rollout.
+      void Promise.resolve()
+        .then(() => verifyOuterWrapRealizedIsolation())
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "outer-wrap-realized-probe",
+            message: "agent sandbox outer-wrap realized probe threw",
             extra: { err: String(err) },
           }),
         );

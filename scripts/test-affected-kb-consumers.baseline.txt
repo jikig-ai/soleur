@@ -36,6 +36,7 @@ plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/archite
 plugins/soleur/scripts/taste-profile-update.test.sh	knowledge-base
 plugins/soleur/scripts/taste-profile-update.test.sh	knowledge-base/marketing
 plugins/soleur/scripts/taste-profile-update.test.sh	knowledge-base/marketing/brand-guide.md
+plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	knowledge-base/project/specs/archive
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	knowledge-base/product
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md
@@ -121,6 +122,7 @@ scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/mod
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/web-host-reboot.md
 scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
+scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/inngest-luks-property-8296	knowledge-base/legal/article-30-register.md

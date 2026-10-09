@@ -1,0 +1,22 @@
+# S4: the lines the codemod routes to its hand queue as data that are converted by the same one-token transform, read in context in the plan.
+# Base-side (origin/main 01d2b5a0d8; byte-identical to the branch base 71c0bac35f for this file) path:line:kind. Kinds: stub-heredoc-unquoted (heredoc written to an executed stub, `\$` escapes in the body), stub-heredoc-quoted (quoted heredoc, `$*` unescaped).
+# verify counts these as verified (plain transform); it cannot tell code from data, so this list plus the plan's table is the classification evidence. None of the stubs sets pipefail (the heredoc bodies start `#!/usr/bin/env bash` and set no option; the suite and the SUT never export SHELLOPTS), so the 19 lines are inert today and are converted for the ledger and the idiom.
+tests/scripts/test-git-data-rung2-evidence-capture.sh:162:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:174:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:176:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:182:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:183:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:184:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:194:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:197:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:198:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:199:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:206:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:301:stub-heredoc-quoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:310:stub-heredoc-quoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:1087:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:1718:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:1721:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:1723:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:1725:stub-heredoc-unquoted
+tests/scripts/test-git-data-rung2-evidence-capture.sh:1727:stub-heredoc-unquoted

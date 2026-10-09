@@ -123,8 +123,23 @@ FROM cli-tools AS runner
 # Art. 17 git-data erasure reads ENOENT. Guarded by test/dockerfile-runner-ssh-client.test.ts
 # and the `git_data_ssh_client=` startup line. Do NOT remove openssh-client.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git bubblewrap socat qpdf jq openssh-client \
+    ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# #5863 arm F — file-cap bwrap for the mountns-only outer session wrap. The
+# outer wrap deliberately carries ZERO --unshare-* flags: the vendored inner
+# sandbox unconditionally unshares user+pid+net and cannot nest under an
+# outer userns (measured 2026-10-08; see
+# knowledge-base/project/plans/2026-10-08-feat-tenant-fs-isolation-plan.md
+# Phase 0). setcap grants mount privilege transiently at bwrap exec; it needs
+# SYS_ADMIN in the container bounding set (cloud-init `docker run` gains
+# `--cap-add SYS_ADMIN`) and the app drops it from effective/permitted. The
+# getcap audit is load-bearing: any OTHER file-cap'd binary in the image
+# becomes an app-side SYS_ADMIN carrier — keep the set {bwrap} only.
+RUN setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap
+# The {bwrap}-only audit runs at the END of the runner stage (below), after
+# every later install layer — a cap binary introduced by gh/playwright/
+# Playwright-deps would otherwise escape a mid-build audit (review F4).
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
 # and event-ship-merge gh pr checkout). Not in default Debian repos.
@@ -228,6 +243,12 @@ COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
 COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
 
+# #5863 outer-wrap canary arm: the self-authored outer mount-table fixture
+# (pinned to buildOuterWrapArgv output by the Guard-2 test) plus the shared
+# isolation payload --replay-outer pipes into `bash -s` inside the wrap.
+COPY --from=builder /app/infra/agent-outer-wrap-argv.json ./infra/agent-outer-wrap-argv.json
+COPY --from=builder /app/scripts/tenant-isolation-inner-probe.sh ./scripts/tenant-isolation-inner-probe.sh
+
 # Shared nested-userns seccomp filter + bwrap PATH shim (#8752). The Agent SDK
 # resolves `bwrap` via PATH and owns its argv (fd-passing contract is set in
 # stone in the vendored binary), so the shim at /usr/local/bin — which precedes
@@ -327,6 +348,21 @@ COPY --from=builder \
   /app/infra/luks-monitor.timer \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
+
+# #5863 arm F — the {bwrap}-only file-cap audit, AFTER every install layer.
+# Fail-closed: a setcap/getcap failure or an unexpected cap'd binary aborts
+# the build; the prior `... || true` shape swallowed failures into a green
+# image whose bwrap silently fell to the implicit-userns path at runtime.
+RUN set -e; \
+    all="$(getcap -r /)"; \
+    bwrap_caps="$(printf '%s\n' "$all" | grep '^/usr/bin/bwrap ' || true)"; \
+    [ -n "$bwrap_caps" ] \
+      && printf '%s' "$bwrap_caps" | grep -q cap_sys_admin \
+      && printf '%s' "$bwrap_caps" | grep -q cap_setuid \
+      && printf '%s' "$bwrap_caps" | grep -q cap_setgid \
+      || { echo "FATAL: bwrap file caps not applied: $bwrap_caps" >&2; exit 1; }; \
+    others="$(printf '%s\n' "$all" | grep -v '^/usr/bin/bwrap ' || true)"; \
+    [ -z "$others" ] || { echo "FATAL: unexpected file-cap binary: $others" >&2; exit 1; }
 
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
 RUN useradd --no-log-init --uid 1001 -m soleur \

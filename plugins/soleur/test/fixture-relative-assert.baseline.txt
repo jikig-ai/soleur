@@ -269,6 +269,7 @@
 58	.github/scripts/test/fixtures-validate-infra-templates.sh
 2	.github/scripts/test/test-mint-inngest-bootstrap-tag.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
+3	knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh
 1	plugins/soleur/hooks/operator-stage-approval.sh

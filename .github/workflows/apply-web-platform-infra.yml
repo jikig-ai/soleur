@@ -48,11 +48,10 @@ on:
         description: "Why are you applying? (e.g. transient retry, or the dispatch reason)"
         required: true
         type: string
-      # NOTE on the input budget: `workflow_dispatch` caps at 10 inputs; 8 are used as of #7695
-      # (`expected_inngest_volume_id` took slot 8 — a SINGLE id-pin, not a pair). The next
-      # per-target input PAIR should split its target into a DEDICATED workflow rather than
-      # spend two more slots here (precedent: workspaces-luks-cutover.yml; the concurrency group
-      # is a shared literal and survives the split). Re-derive this count before trusting it:
+      # NOTE on the input budget: GitHub raised the `workflow_dispatch` cap from 10 to 25 inputs on
+      # 2025-12-04; 13 are used (#8285 added phase, wipe_run_id, erasure, clo_attestation_ref).
+      # Prefer a DEDICATED workflow for the next per-target group (precedent: workspaces-luks-cutover.yml;
+      # the concurrency group is a shared literal and survives the split). Re-derive the count:
       #   awk '/^  workflow_dispatch:/,/^concurrency:/' .github/workflows/apply-web-platform-infra.yml \
       #     | grep -cE '^      [a-z_]+:$'
       # A literal copied from a sibling PR's base is stale the moment either lands.
@@ -76,7 +75,7 @@ on:
         default: false
         type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, inngest-volume-recut, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, inngest-backstop-retire, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -128,26 +127,25 @@ on:
         description: "[registry-luks-recut] the numeric Hetzner id of the zot store volume to destroy (id-pin — the gate refuses to replace a different physical volume). Read it from the Hetzner API, not from a drift run."
         required: false
         type: string
-      # For apply_target=inngest-volume-recut ONLY (#7695). The Hetzner id of the inngest Redis AOF
-      # volume the operator intends to destroy. DISTINCTLY NAMED from the other two id-pins
-      # (expected_luks_volume_id = the WORKSPACES volume; expected_registry_store_volume_id = the
-      # zot store) — sharing one id input across three targets would make a wrong-volume
-      # mis-dispatch a typo rather than an impossibility.
-      #
-      # PINNED TWICE, AGAINST TWO INDEPENDENT SOURCES, and that is the point of a single input
-      # feeding both: Guard 2 compares it to the LIVE Hetzner attachment, Guard 1 to the PLAN's
-      # `.change.before.id`. A disagreement between the world and terraform state is exactly the
-      # state-corruption case an address-based guard cannot see, and it is the world that gets
-      # destroyed. Guard 1 additionally REFUSES a genuine destroy when this input is empty, so an
-      # omitted pin cannot silently disable the comparison.
-      #
-      # PROVENANCE — read it from the Hetzner API, NOT from a drift run's log (the drift workflow
-      # captures its plan into a command substitution, so `Refreshing state... [id=...]` never
-      # reaches the step log):
-      #   curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
-      #     'https://api.hetzner.cloud/v1/volumes?name=soleur-inngest-redis-store' | jq -r '.volumes[0].id'
+      # inngest-backstop-retire ONLY (#8285): the id-pin (106261946), graded against the plan's physical id in every phase.
       expected_inngest_volume_id:
-        description: "[inngest-volume-recut] the numeric Hetzner id of the inngest Redis AOF volume to destroy (id-pin — checked against BOTH the live Hetzner volume resolved BY NAME and the plan's before.id). Read it from the Hetzner API, not from a drift run."
+        description: "[inngest-backstop-retire] the numeric Hetzner id of the retired plaintext backstop volume: 106261946 (id-pin, required in every phase)."
+        required: false
+        type: string
+      phase:
+        description: "[inngest-backstop-retire] detach | wipe | teardown | destroy (run in that order; teardown only to clear a leaked wipe host)."
+        required: false
+        type: string
+      wipe_run_id:
+        description: "[inngest-backstop-retire, phase=destroy] the numeric GitHub run id of the wipe dispatch whose evidence row authorizes the destroy."
+        required: false
+        type: string
+      erasure:
+        description: "[inngest-backstop-retire, phase=destroy] leave empty, or provider-only (D4: delete without overwrite; needs clo_attestation_ref and NO wipe_run_id)."
+        required: false
+        type: string
+      clo_attestation_ref:
+        description: "[inngest-backstop-retire, erasure=provider-only] exactly https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<id>: first line `CLO-ATTESTATION erasure=provider-only volume=106261946`, unedited, by a human OWNER|MEMBER who is not the dispatching actor (two-person rule)."
         required: false
         type: string
       # `manual-rerun` (default) preserves the historical escape-hatch behavior EXACTLY
@@ -178,7 +176,7 @@ on:
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
           git-data-host-replace | git-data-host-rotate | git-data-host-create | workspaces-luks-cutover |
-          workspaces-luks-recut (RETIRED: exits 1) | inngest-volume-recut | web-host-create | web-host-replace |
+          workspaces-luks-recut (RETIRED: exits 1) | inngest-backstop-retire | web-host-create | web-host-replace |
           ci-ssh-token-replace | vector-redeliver | entrypoint-audit.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
           target you are firing.
@@ -194,27 +192,11 @@ on:
           needs `web_host_key` + `confirm=BIRTH-<key>`. web-host-replace DESTROYS AND
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
-          inngest-volume-recut DESTROYS the inngest Redis AOF volume and recreates it raw, so the
-          next boot cuts it to LUKS. It is the EMPTY-STORE route only (ADR-199): with a populated
-          store the route is the additive cutover, `op=luks-cutover` on cutover-inngest.yml, which
-          copies onto a second volume and swaps the mount (ADR-142). Needs `confirm=RECUT-INNGEST-VOLUME` +
-          `expected_inngest_volume_id`, and it REFUSES unless the host is measured dark and the
-          store measured empty — the expected verdict until the host is replaced is
-          `stale_schema`, which means "replace the host first WITH A PIN THAT CARRIES THE
-          EMITTER", not "retry". A replace alone does NOT clear it: the emitter is baked into the
-          OCI image and reaches the host through the digest literal in user_data, so a replace on
-          an unbumped pin re-delivers the same bytes (#7695; ADR-199 amendment 2026-09-07).
+          inngest-backstop-retire retires the plaintext Redis AOF backstop volume in four gated phases;
+          needs `confirm=RETIRE-INNGEST-BACKSTOP`, `phase`, `expected_inngest_volume_id=106261946`. Runbook: inngest-luks-cutover-6894.md 5b.
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`. THREE MECHANICAL INTERLOCKS, ALL CURRENTLY
-          RELEASING: the sentinel interlock (#6982, the host has an off-host emitter), the
-          rung-2 rehearsal interlock (released once the boot evidence for the current
-          template landed), and the authorization-map interlock (#8009). An earlier version
-          of this text said a dispatch exits 1 before planning; that stopped being true when
-          the evidence merged. What holds the route now is the environment approval alone
-          (the runbook banner was cleared by PR #8128, merged 2026-09-14) -- and that approval reports prevent_self_review:false with a
-          single reviewer, so the dispatcher can approve their own deployment. (That attribute
-          is declared nowhere in this repo's Terraform, so false is the provider default, not
-          a choice; every gated environment here reads the same way.) Read
+          needs `confirm=BIRTH-GIT-DATA`. Its three mechanical interlocks all release now; the
+          environment approval is the remaining hold (self-approval is possible; job-rationale.md §git_data_host_create). Read
           knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
         required: false
         default: manual-rerun
@@ -237,13 +219,8 @@ on:
           - workspaces-luks-cutover
           # RETIRED (#6604 step 7, PR B): kept so an old dispatch fails loud; its job's first step exits 1.
           - workspaces-luks-recut
-          # #7695 — the inngest Redis AOF volume recut, plaintext ext4 -> LUKS. The ONE
-          # apply_target in this file that must prove something about the WORLD before it plans:
-          # Guard 2 runs before terraform and refuses unless the host is measured dark and the
-          # store measured empty on one probe row from the current boot. Environment-gated on
-          # inngest-cutover, confirm=RECUT-INNGEST-VOLUME, expected_inngest_volume_id required.
-          # See the inngest_volume_recut job.
-          - inngest-volume-recut
+          # #8285 — retire the plaintext Redis AOF backstop volume (inngest_backstop_retire job).
+          - inngest-backstop-retire
           # #6730 (ADR-145) — the web-host BIRTH path. The ONE route granted the
           # capability every other route HALTs on; see the web_host_create job.
           - web-host-create
@@ -253,31 +230,13 @@ on:
           # requested host. Both volumes and the LUKS passphrase are preserved by
           # OMISSION from the -target set. REFUSES web-1. See the web_host_replace job.
           - web-host-replace
-          # #6977 — the git-data BIRTH path, and the counterpart to git-data-host-replace
-          # above rather than a widened version of it. That gate requires
-          # actions ⊇ {delete,create} and fires its luks_passphrase_touched arm on a
-          # CREATE, so a first birth aborts on it three separate ways; its 5-member
-          # allow-set also rests on "preserved by OMISSION", an argument that INVERTS on a
-          # birth (an omitted address is then a MISSING resource, not a protected one).
-          #
-          # The job sources a birth-readiness gate that refuses to plan while
-          # cloud-init-git-data.yml has no off-host emitter, because for this host a green
-          # apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
-          # gate now RELEASES — it remains armed as a regression check, not as a hold.
-          # The runbook's DO-NOT-DISPATCH banner held the route until the rung-2 evidence
-          # merged (PR #8126); it was cleared by PR #8128 (merged 2026-09-14) and the host was born
-          # 2026-09-14. See the git_data_host_create job and
-          # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+          # #6977 — git-data BIRTH path, counterpart of git-data-host-replace (full text: the job-rationale runbook, `inngest_volume_recut` section).
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write via the job's github.token; posts findings to #6767). See the
           # entrypoint_audit job below.
-          # #7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
-          # stopped accepting it. Narrow by construction: a two-resource -target set
-          # plus one -replace, reaching NO host, NO volume, and NO terraform_data.
-          # It is the ONE arm that can run while the SSH bridge is dead, because it
-          # repairs the credential the bridge authenticates with.
+          # #7095 — re-mints the CF Access ci_ssh service token (full text: the job-rationale runbook, `inngest_volume_recut` section).
           - ci-ssh-token-replace
           # #7542 — delivers a `vector.toml` change to web-1 on its own dispatch, scoped to
           # terraform_data.journald_persistent (the resource whose triggers_replace hashes that
@@ -826,8 +785,7 @@ jobs:
             echo "::error::[ack-destroy] deliberately does NOT reach this HALT: a replace also trips resource_deletes, so acking an unrelated destructive change in the same merge would ack this one through with it."
             echo "::error::Remediation depends on what you intended:"
             echo "::error::  • You did NOT intend to touch the passphrase → something upstream forced a replace (a changed keeper, length, or the Doppler project/config reference). Revert that change; a passphrase must never be a side effect."
-            echo "::error::  • You DID intend to rotate it → the store must be re-cut from empty in the same operation, which is the 'inngest-volume-recut' dispatch, not this path. Rotating the value without re-cutting the header strands the volume."
-            echo "::error::  • The volume is already absent/empty and you are re-establishing the pair → dispatch '-f apply_target=inngest-volume-recut -f confirm=RECUT-INNGEST-VOLUME', which grades the plan against both guards (a passphrase FIRST CREATE is legal there; a rotation is not)."
+            echo "::error::  • You DID intend to rotate it → the store must be re-cut from empty in the same operation, which has NO automated route since the recut dispatch was retired (#8285): stop and escalate (ADR-142). Rotating the value without re-cutting the header strands the volume."
             echo "::error::  • A workspaces pair (web-1 or the web host class) → NEVER a replace, and never this path. Rotating a populated volume's passphrase is a header re-key (cryptsetup luksChangeKey) followed by an intentional state change under review, and recovering a tainted first create is terraform untaint or a reviewed state-entry removal. NO automated route exists for either yet; the web-host rebirth work owns it (#9372). Until then merge with [skip-web-platform-apply] and escalate. A CREATE of the web-class passphrase (random_password.workspaces_luks_web, alone or with its Doppler copy) is refused too: the single-use escrow-create workflow is retired, so a planned create means state lost the entry, and applying it would mint a new passphrase over the header of any formatted web-class volume. Do not apply. There is no documented or verified automated recovery: importing the existing value is NOT a supported route (the import plans a replacement over the live passphrase). The live value is unharmed while its Doppler copy exists. Merge with [skip-web-platform-apply] and escalate to the owner, who decides the repair. A create of the Doppler copy alone, with the passphrase intact in state, restores the same value and is not refused."
             echo "::error::  • A bare update on a doppler_secret.*_key copy with no passphrase change in the diff → the Doppler value was edited out of band and drifted from the generator. Restore the previous value in Doppler; never apply over it, the header is cut from the old one."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
@@ -853,7 +811,7 @@ jobs:
             echo "::error::    PINNED=\"ghcr.io/jikig-ai/soleur-web-platform@\${DIGEST}\""
             echo "::error::    PINNED=\"\$PINNED\" bash apps/web-platform/infra/scripts/host-image-coherence-preflight.sh   # docker-cp the pinned image's baked host-scripts out, recompute their combined sha256 byte-identically to the cloud-init boot check, and compare against 'terraform console local.host_scripts_content_hash'. exit 0 = coherent, non-zero = do NOT apply."
             echo "::error::    test -n \"\$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain)\" || { echo 'EMPTY SENTRY_DSN — do NOT create the host'; exit 1; }   # MANDATORY (#6575, ADR-128 R1). The pre-extraction boot stages read ONLY the baked \${sentry_dsn}; doppler is not installed yet, so its fallback is dead. An empty DSN means the host boots DARK: no telemetry, no page, no signal that it died. The web-host-create job asserts this automatically — this line exists for the break-glass path, where nothing does."
-            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096)"
+            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096). NEVER untargeted while hcloud_volume.inngest_redis or its attachment is still in state (#8285 retire window): add -target=<each address planned above>"
             echo "::error::    Do not substitute 'just run the preflight' for this chain: the preflight REFUSES a mutable tag by design, so it is only actionable once DIGEST is resolved. And do not skip it — an incoherent pin destroys nothing at plan time, it strands you with a booted host that never passes verify."
             echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
@@ -1647,13 +1605,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # SHARED inngest mutex (#7695). `deploy-inngest-restart` is the group cutover-inngest.yml,
-    # deploy-inngest-image.yml and restart-inngest-server.yml already serialize on. This job
-    # re-provisions or replaces the host those three restart, so without it a cutover, a deploy and
-    # a host apply could interleave — and a mutex on one side of a race is not a mutex. The plan's
-    # AC B9 named a NEW `inngest-cutover` literal; joining the EXISTING one covers six surfaces
-    # instead of four and orphans none. See the inngest_volume_recut job header for the full
-    # reasoning behind the deviation.
+    # SHARED inngest mutex (#7695): the group cutover-inngest.yml, deploy-inngest-image.yml and
+    # restart-inngest-server.yml serialize on. Why: job-rationale.md (runbooks/) §inngest_volume_recut.
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
@@ -1741,8 +1694,6 @@ jobs:
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target='hcloud_server.inngest' \
-              -target='hcloud_volume.inngest_redis' \
-              -target='hcloud_volume_attachment.inngest_redis' \
               -target='hcloud_volume.inngest_redis_luks' \
               -target='hcloud_volume_attachment.inngest_redis_luks' \
               -target='hcloud_server_network.inngest' \
@@ -1789,7 +1740,6 @@ jobs:
           if ! inngest_host_shape_gate tfplan.json; then
             echo "::error::inngest-host plan-shape gate ABORTED (inngest_host_shape_gate, ADR-142 Guard 3). The reason= token above names the first failing property. NO [ack-destroy] bypass on this path."
             echo "::error::Remediation depends on the reason:"
-            echo "::error::  • old_volume_touched / old_attachment_touched → the plan acts on the LIVE plaintext AOF volume or its attachment (a create is legal only alongside a from-scratch server). Do NOT apply: that volume holds the only copy of the armed reminders. Find what forced the change (a size/location/label edit, or the volume leaving state) and revert it."
             echo "::error::  • server_touched → hcloud_server.inngest would be updated or replaced. A user_data edit force-replaces the host (no ignore_changes=[user_data]) — that is the separately-gated 'inngest-host-replace' dispatch; an in-place update (e.g. server_type) reboots the sole scheduler. Or firewall_ids (#8754 — clears at the next inngest-host-replace)."
             echo "::error::  • luks_passphrase_in_graph → random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key appear in this plan. They are per-merge -targeted and nothing in this job's target set depends on them; their presence means the target set or dependency graph changed. Stop — a mint here strands any LUKS header cut from the existing key."
             echo "::error::  • luks_volume_touched / luks_attachment_touched / network_touched / firewall_touched / generated_secret_touched → an update, delete or forget on an address this dispatch may only create. doppler_touched → a Doppler delete/forget."
@@ -1831,20 +1781,15 @@ jobs:
   # hcloud_server.inngest needs THIS scoped -replace path — the same gated, scoped -replace
   # shape the registry-host-replace and git-data-host-replace jobs use. The
   # sourced inngest_host_replace_gate permits EXACTLY the server + its 2 id-referencing
-  # dependents and PRESERVES the durable Redis AOF volume (hcloud_volume.inngest_redis).
+  # dependents and PRESERVES the durable Redis AOF volume (hcloud_volume.inngest_redis_luks).
   # ADR-100: this host is the SOLE scheduler post-cutover — gate this to the maintenance window.
   inngest_host_replace:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host-replace'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # SHARED inngest mutex (#7695). `deploy-inngest-restart` is the group cutover-inngest.yml,
-    # deploy-inngest-image.yml and restart-inngest-server.yml already serialize on. This job
-    # re-provisions or replaces the host those three restart, so without it a cutover, a deploy and
-    # a host apply could interleave — and a mutex on one side of a race is not a mutex. The plan's
-    # AC B9 named a NEW `inngest-cutover` literal; joining the EXISTING one covers six surfaces
-    # instead of four and orphans none. See the inngest_volume_recut job header for the full
-    # reasoning behind the deviation.
+    # SHARED inngest mutex (#7695): the group cutover-inngest.yml, deploy-inngest-image.yml and
+    # restart-inngest-server.yml serialize on. Why: job-rationale.md (runbooks/) §inngest_volume_recut.
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
@@ -1997,8 +1942,7 @@ jobs:
 
       - name: Warn if SENTRY_DSN is absent (#6500)
         # Advisory, and it degrades open, like the #7228 strand warning above. This job is also
-        # the RECOVERY route after a failed inngest-volume-recut (see that job's RECOVERY lines),
-        # and the boot does not need the DSN (the precondition in inngest-host.tf admits ""), so
+        # a RECOVERY route for the sole scheduler, and the boot does not need the DSN (the precondition in inngest-host.tf admits ""), so
         # a hard fail here would block restoring the sole scheduler over a missing observability
         # value, or over a transient Doppler read. Decision T2 in #6500's decision-challenges.md.
         continue-on-error: true
@@ -2028,13 +1972,11 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # Scoped -replace of the inngest server + its 3 id-referencing dependents
-        # (hcloud_server_network.inngest, hcloud_volume_attachment.inngest_redis and — since
-        # #6894 — hcloud_volume_attachment.inngest_redis_luks; all three interpolate the NEW
-        # server id → ForceNew replace). NEITHER hcloud_volume.inngest_redis NOR
-        # hcloud_volume.inngest_redis_luks is -targeted, so BOTH durable volumes are preserved
-        # by OMISSION — the plaintext AOF and the ADR-142 additive target alike. The two sets
-        # are not the same set: the additive VOLUME joins `inngest-host` (it must be creatable)
-        # and never this one (it must never be destroyed). Its ATTACHMENT must be here, though,
+        # (hcloud_server_network.inngest and hcloud_volume_attachment.inngest_redis_luks; both
+        # interpolate the NEW server id → ForceNew replace). hcloud_volume.inngest_redis_luks is
+        # NOT -targeted, so the durable volume is preserved by OMISSION (the retired plaintext pair
+        # is no longer declared or targeted here, #8285). The additive VOLUME joins `inngest-host`
+        # (it must be creatable) and never this one. Its ATTACHMENT must be here, though,
         # because inngest_host_replace_gate interpolates the server id and a replace therefore
         # forces the attachment into the plan; without admitting it the gate aborts
         # `out_of_scope` and a routine dispatch becomes a dead end. The sourced
@@ -2054,7 +1996,6 @@ jobs:
               -replace='hcloud_server.inngest' \
               -target='hcloud_server.inngest' \
               -target='hcloud_server_network.inngest' \
-              -target='hcloud_volume_attachment.inngest_redis' \
               -target='hcloud_volume_attachment.inngest_redis_luks' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
@@ -2122,10 +2063,10 @@ jobs:
             exit 1
           fi
           VOL_DELETES=$(jq '[.resource_changes[]?
-            | select(.address == "hcloud_volume.inngest_redis")
+            | select(.address == "hcloud_volume.inngest_redis_luks")
             | select(.change.actions? | index("delete"))] | length' tfplan.json)
           if [[ "$VOL_DELETES" != "0" ]]; then
-            echo "::error::hcloud_volume.inngest_redis shows ${VOL_DELETES} delete action(s) in the applied plan — the Redis AOF volume must be preserved. This should have been caught by the guard; failing hard."
+            echo "::error::hcloud_volume.inngest_redis_luks shows ${VOL_DELETES} delete action(s) in the applied plan — the Redis AOF volume must be preserved. This should have been caught by the guard; failing hard."
             exit 1
           fi
           echo "Redis AOF volume preserved (0 delete actions in the applied plan)."
@@ -2145,18 +2086,29 @@ jobs:
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ─── inngest Redis AOF volume recut: plaintext ext4 -> LUKS (#7695) ────────────
+  # ─── retire the plaintext inngest Redis AOF backstop volume (#8285; replaces inngest_volume_recut) ──
+  # phase = detach | wipe | teardown | destroy, one reviewer-approved dispatch each. Gates:
+  # tests/scripts/lib/inngest-backstop-retire-gate.sh. Header, trust model, concurrency: the rationale.
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §inngest_volume_recut
-  inngest_volume_recut:
-    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-volume-recut'
+  inngest_backstop_retire:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-backstop-retire'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    # SOLE human authorization (DP-11 F8). Held in "Waiting" for the reviewer before ANY step —
-    # including Guard 2's reads — executes.
+    timeout-minutes: 45
     environment: inngest-cutover
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    env:
+      RETIRE_PHASE: ${{ inputs.phase }}
+      EXPECTED_INNGEST_VOLUME_ID: ${{ inputs.expected_inngest_volume_id }}
+      WIPE_RUN_ID: ${{ inputs.wipe_run_id }}
+      RETIRE_ERASURE: ${{ inputs.erasure }}
+      CLO_REF: ${{ inputs.clo_attestation_ref }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -2171,301 +2123,372 @@ jobs:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
-      - name: Validate confirm token + expected volume id (typo-guards, NOT the authorization)
+      - name: Validate inputs (typo-guards, NOT the authorization)
         env:
-          # workflow_dispatch inputs — operator-controlled, NOT attacker-controlled; still passed via
-          # env: (never inline `${{ }}` in run:) per the workflow-injection convention.
           CONFIRM: ${{ inputs.confirm }}
-          EXPECTED_INNGEST_VOLUME_ID: ${{ inputs.expected_inngest_volume_id }}
         run: |
           set -euo pipefail
-          if [[ "$CONFIRM" != "RECUT-INNGEST-VOLUME" ]]; then
-            echo "::error::inngest-volume-recut requires confirm=RECUT-INNGEST-VOLUME (typo-guard). The environment reviewer approval is the authorization; this token only guards a mis-dispatch."
-            exit 1
-          fi
-          # Enforce a numeric id here so BOTH id-pins (the live Hetzner comparison in Guard 2 and the
-          # plan before.id comparison in Guard 1) are well-formed. Guard 1 additionally refuses a
-          # genuine destroy with an EMPTY pin, so an omitted input cannot silently disable the pin.
-          if [[ ! "$EXPECTED_INNGEST_VOLUME_ID" =~ ^[0-9]+$ ]]; then
-            echo "::error::inngest-volume-recut requires expected_inngest_volume_id=<numeric Hetzner id of the inngest Redis AOF volume to destroy>. Read it from the Hetzner API: curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-inngest-redis-store' | jq -r '.volumes[0].id'"
-            exit 1
-          fi
+          [[ "$CONFIRM" == "RETIRE-INNGEST-BACKSTOP" ]] || { echo "::error::inngest-backstop-retire requires confirm=RETIRE-INNGEST-BACKSTOP (typo-guard; the environment reviewer is the authorization)."; exit 1; }
+          case "$RETIRE_PHASE" in detach|wipe|teardown|destroy) ;; *) echo "::error::phase must be detach|wipe|teardown|destroy."; exit 1 ;; esac
+          [[ "$EXPECTED_INNGEST_VOLUME_ID" == "106261946" ]] || { echo "::error::expected_inngest_volume_id must be 106261946 (the retired plaintext backstop volume)."; exit 1; }
+          [[ -z "$WIPE_RUN_ID" || "$WIPE_RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::wipe_run_id must be numeric."; exit 1; }
+          if [[ "$RETIRE_PHASE" != destroy && -n "${WIPE_RUN_ID}${RETIRE_ERASURE}${CLO_REF}" ]]; then echo "::error::wipe_run_id/erasure/clo_attestation_ref belong to phase=destroy only."; exit 1; fi
+          printf 'JOB_START=%s\n' "$(date -u +%s)" >> "$GITHUB_ENV"
+          cat > "${RUNNER_TEMP}/hz.sh" <<'HZ'
+          hz() { local c; c="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" | curl -q -K - -sS --max-time 20 -o "$2" -w '%{http_code}' "https://api.hetzner.cloud/v1/$1" 2>/dev/null || true)"; echo "${c:-000}"; }
+          HZ
+          [[ -n "${HCLOUD_TOKEN:-}" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          echo "phase=${RETIRE_PHASE}; deadline 2026-10-22 (non-extendable); D4 decision point 2026-10-17"
 
       - name: Assert the inngest-cutover reviewer set is NON-EMPTY (layer 1 is the authorization)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        # A zero-reviewer environment AUTO-APPROVES (DP-11 F8), which would silently demote layer 1
-        # — the only authorization in the chain — to decoration while every other layer still reports
-        # green. Read it rather than assume it: this is the one property no test in the repo can
-        # observe, because it lives in the GitHub API rather than in the tree.
         run: |
           set -uo pipefail
           RESP="$(gh api "repos/${GITHUB_REPOSITORY}/environments/inngest-cutover" 2>/dev/null)" || RESP=""
-          if [[ -z "$RESP" ]]; then
-            echo "::error::could not read the inngest-cutover environment. Fail-closed: an unreadable reviewer set is not evidence of a populated one."
-            exit 1
-          fi
+          [[ -n "$RESP" ]] || { echo "::error::could not read the inngest-cutover environment; an unreadable reviewer set is not a populated one."; exit 1; }
           N="$(printf '%s' "$RESP" | jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' 2>/dev/null)"
-          if [[ ! "$N" =~ ^[0-9]+$ ]] || [[ "$N" -lt 1 ]]; then
-            echo "::error::the inngest-cutover environment has NO required reviewers (${N:-unparseable}). A zero-reviewer environment auto-approves, so the sole human authorization for this destroy does not exist. Refusing."
-            exit 1
-          fi
+          if [[ ! "$N" =~ ^[0-9]+$ ]] || [[ "$N" -lt 1 ]]; then echo "::error::inngest-cutover has NO required reviewers (${N:-unparseable}); a zero-reviewer environment auto-approves. Refusing."; exit 1; fi
           echo "inngest-cutover required reviewers: ${N}"
 
-      - name: 'Guard 2 — the host is dark and the store is measured empty (20 predicates)'
+      - name: Live-store gate (plan 2.0, in front of detach, wipe and destroy; NOT teardown)
+        if: env.RETIRE_PHASE != 'teardown'
         env:
-          # Better Stack ClickHouse read path — the no-SSH transport. Same three secrets every other
-          # read in this repo uses; hr-no-ssh-fallback-in-runbooks.
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          # READ-ONLY USE OF A READ/WRITE TOKEN, and it adds no exposure. `soleur-inngest/prd` is an
-          # isolated Doppler project and this is its only CI credential; the token is already a
-          # repo-level secret readable by every workflow (a residual documented at
-          # inngest-arm-write-token.tf). This step calls `doppler secrets get --plain` and never
-          # `set`, and the job is behind the same reviewer gate the arm path uses.
           DOPPLER_TOKEN_INNGEST_ARM: ${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}
-          EXPECTED_INNGEST_VOLUME_ID: ${{ inputs.expected_inngest_volume_id }}
-        # RUNS BEFORE THE PLAN. A serving host must cost nothing and reach no terraform at all.
         run: |
           set -uo pipefail
-          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
-            echo "::error::BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} are not all present — the host cannot be read, so it CANNOT be proven dark. Fail-closed: an unprovisioned credential is not evidence of a quiet host."
-            exit 1
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
+          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" || -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+            echo "::error::a read credential is missing (BETTERSTACK_QUERY_*, DOPPLER_TOKEN_INNGEST_ARM): the live store cannot be proven healthy. Fail-closed."; exit 1
           fi
-          if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-            echo "::error::DOPPLER_TOKEN_INNGEST_ARM is not present — INNGEST_CUTOVER_FLIP and INNGEST_DIAGNOSTIC_BOOT cannot be re-read synchronously, and the ≤90-minute-old probe row alone does not establish that no concurrent FLUSHALL can be authorized."
-            exit 1
+          unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_ROW_LIB INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
+          _ipr_lib="${INNGEST_PROBE_ROW_LIB:-${GITHUB_WORKSPACE}/scripts/lib/inngest-probe-row.sh}"
+          # shellcheck source=scripts/lib/inngest-probe-row.sh
+          if ! source "$_ipr_lib" || ! declare -F inngest_probe_row_selftest >/dev/null || ! inngest_probe_row_selftest; then
+            echo "::error::selector_unavailable lib=${_ipr_lib}: nothing about the host was measured."; exit 1
           fi
-
-          ROWS="${RUNNER_TEMP}/inngest-probe-rows.json"
-          FIN="${RUNNER_TEMP}/inngest-finished-rows.json"
-
-          # 90-MINUTE WINDOW: the probe timer is hourly, so a shorter window makes a healthy host
-          # look silent. Each rc is captured explicitly — a failed read must reach the gate as a
-          # non-zero rc rather than as an empty file, which is indistinguishable from a quiet host.
-          QRC=0
-          bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" \
-            --since 90m --grep SOLEUR_INNGEST_SERVER_PROBE --limit 500 > "$ROWS" 2>/dev/null || QRC=$?
-          FRC=0
-          bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" \
-            --since 90m --grep 'function.finished' --limit 500 > "$FIN" 2>/dev/null || FRC=$?
-
-          # G17's live half. Read the ATTACHMENT from the Hetzner API, not from terraform state — the
-          # plan's own before.id is Guard 1's job, and two pins against one source is one pin.
-          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
-          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          LIVE_ID=""
-          if [[ -n "$HCLOUD_TOKEN" ]]; then
-            LIVE_ID="$(curl -sS --max-time 20 -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-              'https://api.hetzner.cloud/v1/volumes?name=soleur-inngest-redis-store' \
-              | jq -r '.volumes[0].id // empty' 2>/dev/null)" || LIVE_ID=""
+          RAW="${RUNNER_TEMP}/probe-raw.json"
+          bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 6h --grep "${INNGEST_PROBE_MARKER:?}" --limit 2000 > "$RAW" 2> "${RUNNER_TEMP}/probe.err" \
+            || { echo "::error::probe-row query failed rc=$?: $(head -c 300 "${RUNNER_TEMP}/probe.err" | inngest_backstop_clean 300)"; exit 1; }
+          jq -R -r --arg h soleur-inngest --arg hn soleur-inngest-prd "${INNGEST_PROBE_ROW_JQ:?}"'
+              fromjson? | select(type == "object") | . as $o
+              | ((.raw // "") | fromjson?) | select(type == "object")
+              | select(.host == $h and .host_name == $hn)
+              | select(inngest_probe_row)
+              | .message
+              | select(((capture("(?:^| )host_role=(?<r>[^ ]*)")? // {r: ""}).r) == "dedicated")
+              | [(($o.dt // "") | tostring | sub("T"; " ")), .] | @tsv' "$RAW" > "${RUNNER_TEMP}/probe.tsv" || { echo "::error::selector_failed: the probe-row selection did not run."; exit 1; }
+          dget() { DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$1" --project soleur-inngest --config prd --plain 2>/dev/null || echo "__UNREADABLE__"; }
+          FLAG="$(dget INNGEST_LUKS_CUTOVER)"; ACT="$(dget INNGEST_LUKS_ACTIVE_VOLUME_ID)"
+          if ! inngest_backstop_live_store_gate --cutover-flag "$FLAG" --active-id "$ACT" --probe-file "${RUNNER_TEMP}/probe.tsv" --now "$(date -u +%s)"; then
+            echo "::error::live-store gate REFUSED: nothing was planned or changed. Read reason=: a rollback flag or a stale/off-volume probe means the live store is not provably serving."; exit 1
           fi
 
-          # G18. The followthrough returns 0=PASS, 2=TRANSIENT. It refuses to convert a broken read
-          # into a host verdict, which is correct and is itself the measured justification for this
-          # gate's unreadable-aborts posture.
-          FT_RC=0
-          BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" \
-          BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" \
-          BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" \
-            bash "${GITHUB_WORKSPACE}/scripts/followthroughs/inngest-host-not-serving-7674.sh" >/dev/null 2>&1 || FT_RC=$?
-
-          # G19/G20. SYNCHRONOUS, at dispatch time — not read off the probe row. The row is a
-          # ≤90-minute-old snapshot; these two are readable in real time and are what actually
-          # authorize a concurrent write. An unreadable flag must reach the gate as a value it will
-          # refuse, never as an empty string that could pass for "unset".
-          FLAG="$(doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain --token "$DOPPLER_TOKEN_INNGEST_ARM" 2>/dev/null)" || FLAG="__UNREADABLE__"
-          [[ -n "$FLAG" ]] || FLAG="__UNREADABLE__"
-          DBOOT_RC=0
-          DBOOT="$(doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config prd --plain --token "$DOPPLER_TOKEN_INNGEST_ARM" 2>/dev/null)" || DBOOT_RC=$?
-          # An ABSENT secret and an UNREADABLE one are different states with opposite meanings, and
-          # only one of them is safe. `doppler secrets get` exits non-zero for both, so distinguish
-          # them by asking whether the config listed at all: if the config reads, a missing key is
-          # genuinely unset (safe, G20 accepts it); if it does not, nothing was measured.
-          if [[ "$DBOOT_RC" -ne 0 ]]; then
-            if doppler secrets --project soleur-inngest --config prd --only-names --token "$DOPPLER_TOKEN_INNGEST_ARM" >/dev/null 2>&1; then
-              # `unset`, NOT "". The gate's accepting set is `0|unset`, and the empty string is
-              # deliberately NOT in it: "" is what the gate sees when the caller never passed
-              # --diagnostic-boot at all, and that must refuse. This branch is the opposite state —
-              # we DID measure, and the key is genuinely absent — so it must say so in the gate's
-              # own vocabulary. Passing "" here made every healthy dispatch verdict
-              # `diagnostic_boot`, refusing the recut on its own happy path.
-              DBOOT="unset"
-            else
-              DBOOT="__UNREADABLE__"
-            fi
-          fi
-
-          # shellcheck source=tests/scripts/lib/inngest-host-dark-gate.sh
-          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-host-dark-gate.sh"
-          VERDICT_FILE="${RUNNER_TEMP}/inngest-dark-verdict.txt"
-          if ! inngest_host_dark_gate \
-              --rows-file "$ROWS" --query-rc "$QRC" \
-              --finished-file "$FIN" --finished-rc "$FRC" \
-              --expected-volume-id "$EXPECTED_INNGEST_VOLUME_ID" \
-              --live-attachment-id "$LIVE_ID" \
-              --followthrough-rc "$FT_RC" \
-              --cutover-flag "$FLAG" \
-              --diagnostic-boot "$DBOOT" > "$VERDICT_FILE"; then
-            VERDICT="$(tail -1 "$VERDICT_FILE" 2>/dev/null)"
-            echo "::error::inngest-volume-recut REFUSED by Guard 2 — verdict=${VERDICT:-unreadable}. The recut is not authorized and NOTHING has been planned or changed. Read the verdict token against tests/scripts/lib/inngest-host-dark-gate.sh's predicate table: stale_schema = the host still runs a renderer older than the schema the gate expects. REPLACE THE HOST FIRST (apply_target=inngest-host-replace) — BUT ONLY IF THE PINNED DIGEST ALREADY CARRIES THE EMITTER: the emitter is baked into the OCI image and reaches the host through the digest literal in user_data, NOT through cloud-init, so a replace on an unbumped pin re-delivers the same bytes and this verdict does not clear (#7695; ADR-199 amendment 2026-09-07). Confirm with: EXPECTED=\$(grep -oE '^_IHDG_EXPECTED_SCHEMA="[0-9]+"' tests/scripts/lib/inngest-host-dark-gate.sh | head -1 | grep -oE '[0-9]+'); TAG=\$(grep -oE '^[[:space:]]*IREF=[^[:space:]]*soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' apps/web-platform/infra/cloud-init-inngest.yml | head -1 | sed 's/.*:/vinngest-/'); echo "schema=\$EXPECTED tag=\$TAG"; git show "\${TAG:?tag extraction failed}:apps/web-platform/infra/inngest-bootstrap.sh" > /tmp/ib-probe.sh && grep -c "^probe_schema=\${EXPECTED:?schema derivation failed}\$" /tmp/ib-probe.sh — a 0 means the PINNED image predates the schema the gate wants, so replacing will not help; a 1 means the pin carries it and a replace WILL clear this verdict. An ERROR instead of a count means the tag fetch or the schema derivation failed — that is NOT a 0 (an unfetched tag or empty EXPECTED would otherwise collapse to a printed 0 and repeat #8017's inverted advice). The schema is DERIVED from the gate, never hardcoded here: this line previously read 'grep -c probe_schema=3', which returns 0 against every correct post-#7695 image and so told the operator not to replace in precisely the case where replacing is the fix (#8017). store_populated = the store holds keys; the destructive path is refused outright and ADR-142's preserve-and-copy is the only lawful route. mount_mismatch = the volume backing /mnt/data is not the one the dispatch named (compared on data_mount_devid since #8017), so the emptiness measured is about the wrong object; data_mount_base and data_mount_src on the same row say whether that is a wrong device, a broken resolution, or no mount at all. silent / unreadable = nothing was measured; a gate that cannot see the host must never conclude the host is dark. followthrough_7674 = the host does not serve yet, and a recut before that is strictly counterproductive."
-            exit 1
-          fi
-          echo "Guard 2: dark — host measured not-serving and store measured empty on one row from the current boot, with all four dispatch-time re-reads agreeing."
-
-      - name: Generate ephemeral SSH public key for var.ssh_key_path
-        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
-        # satisfies var.ssh_key_path (never consumed by the scoped volume replace).
-        run: |
-          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
-          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
-
-      - name: Verify required secrets present
-        env:
-          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
-            echo "::error::DOPPLER_TOKEN secret is not configured."
-            exit 1
-          fi
-
-      - name: Extract backend credentials
+      - name: Prepare terraform (ephemeral ssh key, R2 backend credentials, init)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
-            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
-            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
-          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
-            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
-          printf '::add-mask::%s\n' "$KEY_ID"
-          printf '::add-mask::%s\n' "$SECRET"
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          [[ -n "$DOPPLER_TOKEN" ]] || { echo "::error::DOPPLER_TOKEN secret is not configured."; exit 1; }
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::AWS R2 backend credentials are empty."; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID" "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$KEY_ID" "$SECRET" >> "$GITHUB_ENV"
+          cd "$INFRA_DIR" && AWS_ACCESS_KEY_ID="$KEY_ID" AWS_SECRET_ACCESS_KEY="$SECRET" terraform init -input=false -lockfile=readonly
 
-      - name: Terraform init
-        working-directory: ${{ env.INFRA_DIR }}
-        run: terraform init -input=false -lockfile=readonly
-
-      - name: Terraform plan (inngest-redis volume recut -replace) + destroy-guard
-        id: plan
+      - name: Convergence read (idempotent per phase; Hetzner first)
+        id: conv
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          EXPECTED_INNGEST_VOLUME_ID: ${{ inputs.expected_inngest_volume_id }}
-        # Scoped `-replace` of the AOF volume + its attachment. hcloud_server.inngest is PRESERVED BY
-        # OMISSION from the -target set AND named-live with zero actions in the gate — the two
-        # mechanisms are independent on purpose, because "preserved by omission" is an argument about
-        # what was requested and the gate is a measurement of what was planned.
         run: |
-          # set +e so the `rc=$?` diagnostic runs — GitHub runs `run:` under an inherited `-e`.
+          set -uo pipefail
+          export LC_ALL=C
+          source "${RUNNER_TEMP}/hz.sh"
+          fail() { echo "::error::$*"; exit 1; }
+          ST="$(terraform state list 2>/dev/null)" || fail "cannot list terraform state"
+          has() { grep -qFx -- "$1" <<<"$ST"; }
+          WSA='hcloud_server.inngest_backstop_wipe[0]'; WAA='hcloud_volume_attachment.inngest_backstop_wipe[0]'
+          VC="$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" "${RUNNER_TEMP}/vol.json")"; WC="$(hz 'servers?label_selector=role%3Dinngest-backstop-wipe' "${RUNNER_TEMP}/ws.json")"
+          [[ "$VC" == 200 || "$VC" == 404 ]] || fail "Hetzner answered ${VC} for volume ${EXPECTED_INNGEST_VOLUME_ID}; nothing was decided"
+          if [[ "$WC" != 200 ]] || ! jq -e '.servers | type == "array"' "${RUNNER_TEMP}/ws.json" >/dev/null; then fail "wipe-server listing unreadable (${WC})"; fi
+          NWS="$(jq '.servers | length' "${RUNNER_TEMP}/ws.json")"; VS=gone
+          if [[ "$VC" == 200 ]]; then
+            jq -e --arg v "$EXPECTED_INNGEST_VOLUME_ID" '(.volume.id | tostring) == $v and (.volume | has("server"))' "${RUNNER_TEMP}/vol.json" >/dev/null || fail "degraded volume body"
+            VS="$(jq -r '.volume.server | tostring' "${RUNNER_TEMP}/vol.json")"
+          fi
+          if [[ "$NWS" != 0 ]] && ! has "$WSA"; then
+            fail "wipe host id(s) $(jq -r '[.servers[].id] | join(",")' "${RUNNER_TEMP}/ws.json") exist in Hetzner but not in state, so no phase can plan their deletion: delete them by id (DELETE /v1/servers/<id>, operator-held token), then re-dispatch"
+          fi
+          SKIP=false; RM=()
+          case "$RETIRE_PHASE" in
+            detach)
+              [[ "$NWS" == 0 ]] || fail "a wipe host exists: dispatch phase=teardown first"
+              if [[ "$VS" == gone || "$VS" == null ]]; then SKIP=true; has hcloud_volume_attachment.inngest_redis && RM+=(hcloud_volume_attachment.inngest_redis)
+                [[ "$VS" == gone ]] && has hcloud_volume.inngest_redis && RM+=(hcloud_volume.inngest_redis)
+              else SC="$(hz 'servers?name=soleur-inngest' "${RUNNER_TEMP}/srv.json")"
+                [[ "$SC" == 200 && "$VS" == "$(jq -r 'if (.servers | length) == 1 then (.servers[0].id | tostring) else "" end' "${RUNNER_TEMP}/srv.json")" ]] || fail "volume is attached to server ${VS}, not the live inngest host (server read ${SC})"; fi ;;
+            wipe)
+              [[ "$NWS" == 0 ]] || fail "a wipe host already exists: dispatch phase=teardown first"
+              [[ "$VS" == null ]] || fail "volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached (server null; state=${VS}) -- run phase=detach first"
+              if has "$WSA" || has "$WAA"; then fail "wipe addresses already in state: dispatch phase=teardown first"; fi ;;
+            teardown)
+              if [[ "$NWS" == 0 ]]; then SKIP=true
+                for a in "$WSA" "$WAA"; do has "$a" && RM+=("$a"); done; fi ;;
+            destroy)
+              if [[ "$VC" == 404 ]]; then SKIP=true; has hcloud_volume.inngest_redis && RM+=(hcloud_volume.inngest_redis)
+              elif [[ "$VS" != null ]]; then fail "volume ${EXPECTED_INNGEST_VOLUME_ID} is still attached (server ${VS}): dispatch phase=detach (or teardown) first"
+              elif has hcloud_volume_attachment.inngest_redis; then fail "the retired attachment is still in state although the volume is detached: re-dispatch phase=detach first"; fi ;;
+          esac
+          for a in "${RM[@]}"; do
+            has "$a" || continue
+            case "$a" in
+              hcloud_volume_attachment.inngest_redis) T=-target=hcloud_volume_attachment.inngest_redis ;;
+              hcloud_volume.inngest_redis) T=-target=hcloud_volume.inngest_redis ;;
+              hcloud_server.inngest_backstop_wipe*) T=-target=hcloud_server.inngest_backstop_wipe ;;
+              hcloud_volume_attachment.inngest_backstop_wipe*) T=-target=hcloud_volume_attachment.inngest_backstop_wipe ;;
+              *) fail "no reconcile target for ${a}" ;;
+            esac
+            doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+              terraform apply -refresh-only -auto-approve -no-color -input=false -var="ssh_key_path=${CI_SSH_PUB}" "$T" || fail "refresh-only reconcile of ${a} failed"
+            ST1="$(terraform state list 2>/dev/null)" || fail "cannot list terraform state after the refresh"
+            DEL="$(comm -23 <(sort <<<"$ST") <(sort <<<"$ST1"))"; ADD="$(comm -13 <(sort <<<"$ST") <(sort <<<"$ST1"))"
+            ALLOW="$a"; [[ "$VS" == gone && "$a" == hcloud_volume_attachment.inngest_redis ]] && has hcloud_volume.inngest_redis && ALLOW="hcloud_volume.inngest_redis"$'\n'"$a"
+            [[ ( "$DEL" == "$a" || "$DEL" == "$ALLOW" ) && -z "$ADD" ]] || fail "the refresh of ${a} changed state beyond it: dropped='${DEL}' added='${ADD}'"
+            ST="$ST1"; echo "state-only reconcile: ${DEL//$'\n'/ + } dropped from state (Hetzner confirms the object is gone)"
+          done
+          echo "skip=${SKIP}" >> "$GITHUB_OUTPUT"
+          [[ "$SKIP" == true ]] && echo "post-condition of phase=${RETIRE_PHASE} already holds; nothing to plan."
+          exit 0
+
+      - name: Destroy precondition (Guard 4, before any plan)
+        if: env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
+          source "${RUNNER_TEMP}/hz.sh"
+          P="${RUNNER_TEMP}"; ROWS="$P/wipe-rows.jsonl"; CF="$P/clo.json"; AFTER=""; : > "$ROWS"; : > "$CF"
+          rd() { local c; c="$(hz "$1" "$P/$2")"; [[ "$c" == 200 ]] || { echo "Hetzner GET $1 answered ${c}"; : > "$P/$2"; }; }  # a non-200 body is emptied: the gate reads it as unreadable
+          rd "volumes/${EXPECTED_INNGEST_VOLUME_ID}" vol-pre.json; rd "volumes/${EXPECTED_INNGEST_VOLUME_ID}/actions?per_page=50&sort=id%3Adesc" acts.json; rd 'servers?name=soleur-inngest' srv-pre.json
+          LIVE="$(jq -r 'if (.servers | type) == "array" and (.servers | length) == 1 then (.servers[0].id | tostring) else "" end' "$P/srv-pre.json" 2>/dev/null)"
+          if [[ "$RETIRE_ERASURE" == provider-only ]]; then
+            if [[ "$CLO_REF" =~ ^https://github\.com/jikig-ai/soleur/issues/8285#issuecomment-([0-9]+)$ ]]; then
+              gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${BASH_REMATCH[1]}" > "$CF" 2>/dev/null || { echo "GitHub API could not return comment ${BASH_REMATCH[1]}"; : > "$CF"; }
+            fi
+          elif [[ "$WIPE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WIPE_RUN_ID}" 2>/dev/null)" || RUN=""
+            if jq -e '.path == ".github/workflows/apply-web-platform-infra.yml" and .head_branch == "main" and .event == "workflow_dispatch" and .status == "completed"' <<<"$RUN" >/dev/null 2>&1; then
+              AFTER="$(jq -r '(.run_started_at // .created_at) | fromdateiso8601' <<<"$RUN" 2>/dev/null)"
+            else echo "run ${WIPE_RUN_ID} could not be read, or is not a completed workflow_dispatch run of this workflow on main: no time floor"; fi
+            bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 14d --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 2000 > "$ROWS" 2> "$P/bs.err" \
+              || { echo "Better Stack query failed rc=$?: $(head -c 300 "$P/bs.err" | inngest_backstop_clean 300)"; : > "$ROWS"; }
+          fi
+          if ! inngest_backstop_destroy_precondition --erasure "$RETIRE_ERASURE" --wipe-run-id "$WIPE_RUN_ID" --clo-attestation-ref "$CLO_REF" --clo-comment-file "$CF" --actor "$GITHUB_ACTOR" \
+              --rows-file "$ROWS" --volume-file "$P/vol-pre.json" --actions-file "$P/acts.json" --live-server-id "$LIVE" --after-epoch "$AFTER" --now "$(date -u +%s)"; then
+            echo "::error::destroy REFUSED (Guard 4): nothing was planned. Needs a wipe row for wipe_run_id corroborated by Hetzner's action history, or erasure=provider-only with a two-person CLO comment on #8285 (D4); read reason=."; exit 1
+          fi
+
+      - name: Read-only untargeted plan (host and LUKS pair must be present no-ops)
+        if: steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
           set +e
           set -uo pipefail
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform plan -no-color -input=false -out=tfplan \
-              -replace='hcloud_volume.inngest_redis' \
-              -target='hcloud_volume.inngest_redis' \
-              -target='hcloud_volume_attachment.inngest_redis' \
-              -var="ssh_key_path=${CI_SSH_PUB}"
+            terraform plan -no-color -input=false -out=tfplan-all -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
-          if [[ $rc -ne 0 ]]; then
-            echo "::error::terraform plan (inngest-volume-recut) failed (exit $rc)."
-            exit $rc
-          fi
+          [[ $rc -eq 0 ]] || { echo "::error::untargeted terraform plan failed (exit $rc)."; exit $rc; }
           set -e
-          terraform show -no-color tfplan > tfplan.txt
-          terraform show -json tfplan > tfplan.json
-          # Sourced gate — the SAME bytes tests/scripts/test-inngest-volume-recut-gate.sh exercises.
-          # shellcheck source=tests/scripts/lib/inngest-volume-recut-gate.sh
-          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-volume-recut-gate.sh"
-          if ! inngest_volume_recut_gate "tfplan.json" "${EXPECTED_INNGEST_VOLUME_ID}"; then
-            echo "::error::inngest-volume-recut destroy-guard ABORTED: the plan is not the exact scoped recut. Read the reason= token in the line above. luks_id_mismatch means the hcloud_volume.inngest_redis ADDRESS resolves to a DIFFERENT physical volume than expected_inngest_volume_id=${EXPECTED_INNGEST_VOLUME_ID} — STOP and reconcile terraform state. inngest_server_touched means the plan would replace the HOST, which is inngest-host-replace's job under a gate that PRESERVES this volume. old_volume_touched / old_attachment_touched / web1_server_touched mean the plan reaches the LIVE sole-copy /workspaces volume or the unrebuildable web-1. luks_passphrase_touched means the LUKS key would be rotated, stranding a store cut from the previous value. NO [ack-destroy] bypass on this path."
-            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+          terraform show -json tfplan-all > tfplan-all.json
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
+          if ! inngest_backstop_retire_gate tfplan-all.json "$RETIRE_PHASE" "$EXPECTED_INNGEST_VOLUME_ID" untargeted; then
+            echo "::error::untargeted plan REFUSED: the host and LUKS pair must be present no-ops, the retire addresses inside this phase's set, nothing may carry the live volume id. A pending change on the web-1 set or the LUKS key pair also refuses: resolve it first."
+            terraform show -no-color tfplan-all | grep -E 'will be (created|destroyed|updated)|must be replaced|Plan:' | head -30 >&2
             exit 1
           fi
-          echo "inngest-volume-recut plan is the exact scoped recut. Plan summary:"
-          grep -E '^Plan:' tfplan.txt || true
 
-      - name: Terraform apply (inngest-redis volume recut) — host-preserved + replace assert
+      - name: Terraform plan (phase) + plan-shape gate + stock preflight
+        if: steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Apply the saved, guarded plan, then re-assert from the SAVED plan. These jq backstops are
-        # belt-and-suspenders to Guard 1 and are deliberately redundant with it: the gate is one
-        # function and a regression in it would otherwise be unobserved at the moment it matters.
+        run: |
+          set +e
+          set -uo pipefail
+          D=(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --)
+          case "$RETIRE_PHASE" in
+            detach) "${D[@]}" terraform plan -no-color -input=false -out=tfplan -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=hcloud_volume_attachment.inngest_redis ;;
+            wipe) "${D[@]}" terraform plan -no-color -input=false -out=tfplan -var="ssh_key_path=${CI_SSH_PUB}" \
+              -var='inngest_backstop_wipe_enabled=true' -var="inngest_backstop_wipe_nonce=${GITHUB_RUN_ID}" \
+              -target=hcloud_server.inngest_backstop_wipe -target=hcloud_volume_attachment.inngest_backstop_wipe ;;
+            destroy) "${D[@]}" terraform plan -no-color -input=false -out=tfplan -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=hcloud_volume.inngest_redis ;;
+          esac
+          rc=$?
+          [[ $rc -eq 0 ]] || { echo "::error::terraform plan (${RETIRE_PHASE}) failed (exit $rc)."; exit $rc; }
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
+          if ! inngest_backstop_retire_gate tfplan.json "$RETIRE_PHASE" "$EXPECTED_INNGEST_VOLUME_ID" targeted; then
+            echo "::error::plan-shape gate ABORTED for phase=${RETIRE_PHASE}; read reason=. id_mismatch = the address maps to a DIFFERENT physical volume (STOP); live_volume_touched/inngest_server_touched = it reaches the live store or host. NO [ack-destroy] bypass."
+            grep -E 'will be (created|destroyed|updated)|must be replaced|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          # Stock preflight: the wipe phase creates a server.
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          [[ -n "$HCLOUD_TOKEN" ]] || { echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN; cannot PROVE stock. Fail-closed."; exit 1; }
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            stock_abort_closing inngest-backstop-retire "Refusing to apply -- no stock for the wipe host in the volume's location. Nothing changed; retry later or take the D4 path before 2026-10-17. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (phase)
+        id: apply
+        if: steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (inngest-volume-recut) failed — the plaintext AOF volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state)."
-            echo "::error::RECOVERY: dispatch '-f apply_target=inngest-host-replace'. Do NOT re-dispatch inngest-volume-recut, and do NOT dispatch inngest-host — both ABORT, and both aborts are correct."
-            echo "::error::  WHY the re-dispatch cannot work: Guard 2 runs BEFORE the plan and grades the LIVE host. After a partial apply there is no volume by that name, so the live-id lookup yields nothing and G17 returns id_pin_mismatch; /mnt/data is not mounted from the pinned volume, so G14 returns mount_mismatch; and Redis cannot have started against an absent store, so G11 returns redis_down. Guard 1's recovery bare-create arm is real, but the dispatch never reaches Guard 1. An earlier version of this line prescribed exactly that re-dispatch and it was unreachable — the operator would have followed it into three consecutive aborts while the store stayed absent."
-            echo "::error::  WHY NOT inngest-host: hcloud_server.inngest carries the volume id inside its user_data (inngest_volume_id = hcloud_volume.inngest_redis.id) with NO lifecycle ignore_changes on user_data. With the volume absent from state that id is unknown at plan time, so user_data changes, user_data is ForceNew, and the server is planned for REPLACE — which its additive-only guard refuses on the delete. Measured."
-            echo "::error::  WHY inngest-host-replace IS the route: it expects the server replace, terraform pulls the missing volume in as a dependency of that server, its gate admits hcloud_volume.inngest_redis for CREATE ONLY (redis_volume_destroyed still refuses any delete or forget at that address), and its fresh FIRST boot then runs the cloud-init LUKS stage against the new raw device — so one dispatch both re-creates the volume and cuts the header."
-            exit 1
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (${RETIRE_PHASE}) failed. Re-dispatch the SAME phase: it reads Hetzner first and converges."; exit 1
           fi
-          for ADDR in 'hcloud_server.inngest' 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_server.web["web-1"]'; do
-            TOUCHED=$(jq --arg a "$ADDR" '[.resource_changes[]?
-              | select(.address == $a)
-              | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))] | length' tfplan.json)
-            if [[ "$TOUCHED" != "0" ]]; then
-              echo "::error::${ADDR} shows ${TOUCHED} action(s) in the applied plan — the inngest host and the live /workspaces store must be preserved. This should have been caught by the guard; failing hard."
-              exit 1
-            fi
+          for ADDR in 'hcloud_server.inngest' 'hcloud_volume.inngest_redis_luks' 'hcloud_volume_attachment.inngest_redis_luks' 'random_password.inngest_redis_luks' 'doppler_secret.inngest_redis_luks_key' 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_server.web["web-1"]'; do
+            TOUCHED=$(jq --arg a "$ADDR" '[.resource_changes[]? | select(.address == $a) | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))] | length' tfplan.json)
+            [[ "$TOUCHED" == "0" ]] || { echo "::error::${ADDR} shows ${TOUCHED} action(s) in the applied plan; the host and live store must be untouched. Failing hard."; exit 1; }
           done
-          VOL_PROVISIONED=$(jq '[.resource_changes[]?
-            | select(.address == "hcloud_volume.inngest_redis")
-            | select(((.change.actions? | index("delete")) and (.change.actions? | index("create")))
-                     or ((.change.actions? == ["create"]) and (.change.before == null)))] | length' tfplan.json)
-          ATT_CREATES=$(jq '[.resource_changes[]?
-            | select(.address == "hcloud_volume_attachment.inngest_redis")
-            | select(.change.actions? | index("create"))] | length' tfplan.json)
-          if [[ "$VOL_PROVISIONED" == "0" || "$ATT_CREATES" == "0" ]]; then
-            echo "::error::the AOF volume did not show a replace (delete+create) or recovery create, or the attachment no create, in the applied plan — the recut did not produce a fresh raw target. Failing hard."
-            exit 1
+          echo "host and live encrypted store untouched (0 actions in the applied plan)."
+
+      - name: Wipe evidence (bounded poll for this run's nonce)
+        if: env.RETIRE_PHASE == 'wipe' && steps.conv.outputs.skip != 'true'
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          export LC_ALL=C
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
+          source "${RUNNER_TEMP}/hz.sh"
+          [[ "$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" "${RUNNER_TEMP}/vol-w.json")" == 200 ]] || { echo "::error::cannot read volume ${EXPECTED_INNGEST_VOLUME_ID} size."; exit 1; }
+          SZ="$(jq -r '.volume.size // empty' "${RUNNER_TEMP}/vol-w.json")"
+          [[ "$SZ" =~ ^[1-9][0-9]*$ ]] || { echo "::error::volume size unreadable."; exit 1; }
+          ROWS="${RUNNER_TEMP}/wipe-poll.jsonl"; NR="${RUNNER_TEMP}/wipe-nonce.jsonl"; ERR="${RUNNER_TEMP}/wipe-poll.err"; OK=0; MSGS=""; EV=""
+          DEADLINE=$(( $(date -u +%s) + 1200 )); (( DEADLINE <= JOB_START + 1800 )) || DEADLINE=$(( JOB_START + 1800 ))
+          while (( $(date -u +%s) < DEADLINE )); do
+            bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 1h --no-archive --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 500 > "$ROWS" 2> "$ERR" \
+              || { echo "poll query failed rc=$?: $(head -c 300 "$ERR" | inngest_backstop_clean 300)"; : > "$ROWS"; }
+            MSGS="$(inngest_backstop_wipe_nonce_rows --rows-file "$ROWS" --nonce "$GITHUB_RUN_ID")"
+            inngest_backstop_wipe_nonce_rows --rows-file "$ROWS" --nonce "$GITHUB_RUN_ID" --raw > "$NR"
+            if EV="$(inngest_backstop_wipe_evidence_gate --rows-file "$NR" --nonce "$GITHUB_RUN_ID" --volume-id "$EXPECTED_INNGEST_VOLUME_ID" --size-bytes "$((SZ * 1073741824))" --after-epoch "$JOB_START" --now "$(date -u +%s)")"; then OK=1; break; fi
+            grep -qF ' result=refused ' <<<"$MSGS" && break
+            [[ "$EV" == *reason=evidence_absent* || "$EV" == *reason=rows_unreadable* || "$EV" == *reason=not_wiped* ]] || break
+            sleep 30
+          done
+          HV="$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" "${RUNNER_TEMP}/vol-w2.json")"; HW="$(hz 'servers?label_selector=role%3Dinngest-backstop-wipe' "${RUNNER_TEMP}/ws-w2.json")"
+          echo "Hetzner at poll end: volume.server=$(jq -r '.volume.server' "${RUNNER_TEMP}/vol-w2.json" 2>/dev/null) (HTTP ${HV}) wipe hosts=$(jq -r '[.servers[]? | "\(.id):\(.status)"] | join(",")' "${RUNNER_TEMP}/ws-w2.json" 2>/dev/null) (HTTP ${HW})"
+          echo "rows for nonce ${GITHUB_RUN_ID}: $(inngest_backstop_clean <<<"${MSGS:-none}")"
+          REASON=""; [[ "$MSGS" == *reason=* ]] && { REASON="${MSGS#*reason=}"; REASON="$(inngest_backstop_clean 60 <<<"${REASON%%[[:space:]]*}")"; }
+          if grep -qF ' result=started ' <<<"$MSGS" || [[ "$REASON" =~ ^(zero_failed|readback_nonzero|sig_survived)$ ]]; then
+            W="the device may be PARTIALLY ZEROED (a started row and no wiped row; guards after the write: zero_failed, readback_nonzero, sig_survived); rollback is gone; re-dispatch phase=wipe (the wipe re-enters)"
+          else W="no started row, so nothing was written: the volume stays intact"; fi
+          [[ "$OK" == 1 ]] || { echo "::error::no wiped row for nonce ${GITHUB_RUN_ID} (absent = fail); funnel: $(inngest_backstop_clean 300 <<<"$EV"); host refusal: ${REASON:-none seen}. ${W}. Teardown still runs. Query Better Stack for a late wiped row BEFORE re-dispatching phase=wipe."; exit 1; }
+
+      - name: Teardown of the wipe host (if always; also phase=teardown)
+        if: always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true' && (env.RETIRE_PHASE == 'wipe' || env.RETIRE_PHASE == 'teardown')
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
+          D=(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --)
+          set +e
+          "${D[@]}" terraform plan -no-color -input=false -detailed-exitcode -out=tfplan-td -var="ssh_key_path=${CI_SSH_PUB}" -var='inngest_backstop_wipe_enabled=false' \
+            -target=hcloud_server.inngest_backstop_wipe -target=hcloud_volume_attachment.inngest_backstop_wipe
+          rc=$?
+          set -e
+          [[ $rc -ne 0 ]] || { echo "no wipe host or attachment exists; nothing to tear down."; exit 0; }
+          [[ $rc -eq 2 ]] || { echo "::error::teardown plan failed (exit $rc); the wipe host may be leaked: re-dispatch phase=teardown."; exit 1; }
+          terraform show -json tfplan-td > tfplan-td.json
+          if ! inngest_backstop_retire_gate tfplan-td.json teardown "$EXPECTED_INNGEST_VOLUME_ID" targeted; then
+            echo "::error::teardown plan REFUSED by the gate (only deletes of the two wipe addresses are legal)."; exit 1
           fi
-          echo "inngest host + live /workspaces store untouched (0 actions); AOF volume REPLACED (delete+create) + attachment re-created. The new volume is RAW."
-          echo "::warning::THE CUTOVER IS NOT COMPLETE. The next step is a HOST REPLACE, not a reboot, and without it this host has no /mnt/data at all."
-          echo "::warning::  The LUKS cut lives in cloud-init-inngest.yml's runcmd stage, and cloud-init runcmd is FIRST-BOOT-ONLY. What runs on boot 2+ is inngest-luks-open.service, whose script OPENS and never formats: against a raw device it takes the reopen_skip_plaintext arm (expect_luks=false) or fails reopen_not_luks (expect_luks=true). Either way nothing is formatted, /mnt/data does not mount, and inngest-redis.service's ExecStartPre mount guard refuses to start Redis onto the root disk — correctly, and until a first boot happens."
-          echo "::warning::  Guard 1 requires hcloud_server.inngest to show ZERO actions, so this dispatch deliberately cannot reboot or replace the host. That is the three-dispatch split working as designed, not an omission — the cutover completes as a SEQUENCE OF FOUR workflow_dispatch runs rather than one, and no step in it is performed by hand."
-          echo "::warning::  NEXT: dispatch '-f apply_target=inngest-host-replace'. Its fresh first boot runs the runcmd stage, which reads the raw device via blkid, takes ARM 3 (the only arm that may write a header), luksFormats, mkfs's and mounts /dev/mapper/inngest-redis. Confirm by querying for SOLEUR_INNGEST_LUKS_STAGE stage=luks_format and then stage=fstab; the encryption-posture ledger row keeps its exception until that boot is observed."
+          "${D[@]}" terraform apply -no-color -input=false tfplan-td || { echo "::error::teardown apply failed; re-dispatch phase=teardown."; exit 1; }
+
+      - name: Read-back (hard exit criterion for the phase)
+        if: always() && steps.conv.outcome == 'success' && (steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          APPLY: ${{ steps.apply.outcome }}
+        run: |
+          set -uo pipefail
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
+          source "${RUNNER_TEMP}/hz.sh"
+          OUT="${RUNNER_TEMP}/readback.txt"; : > "$OUT"
+          fail() { echo "::error::read-back: $*"; echo "READ-BACK FAILED: $*" >> "$OUT"; exit 1; }
+          note() { echo "$*" | tee -a "$OUT"; }
+          VC="$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" "${RUNNER_TEMP}/vol-rb.json")"; WC="$(hz 'servers?label_selector=role%3Dinngest-backstop-wipe' "${RUNNER_TEMP}/ws-rb.json")"
+          [[ "$WC" == 200 ]] || fail "wipe-server listing answered ${WC}"
+          case "$RETIRE_PHASE" in
+            detach) [[ "$VC" == 200 ]] && [[ "$(jq -r '.volume.server | tostring' "${RUNNER_TEMP}/vol-rb.json")" == null ]] || fail "volume ${EXPECTED_INNGEST_VOLUME_ID} is still attached"; note "volume ${EXPECTED_INNGEST_VOLUME_ID} server: null (detached; rollback ends here)" ;;
+            wipe|teardown) [[ "$(jq '.servers | length' "${RUNNER_TEMP}/ws-rb.json")" == 0 ]] || fail "a wipe host still exists"
+              [[ "$VC" == 200 ]] && [[ "$(jq -r '.volume.server | tostring' "${RUNNER_TEMP}/vol-rb.json")" == null ]] || fail "volume ${EXPECTED_INNGEST_VOLUME_ID} is not detached again"
+              note "wipe host and attachment gone; volume ${EXPECTED_INNGEST_VOLUME_ID} detached again (server: null)" ;;
+            destroy)
+              if [[ "$VC" != 404 && "$APPLY" == skipped ]]; then note "destroy not applied: a gate refused before the apply (GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} answered ${VC})"; exit 0; fi
+              [[ "$VC" == 404 ]] || fail "GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} answered ${VC}, expected 404"
+              note "GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} -> 404 at $(date -u +%Y-%m-%dT%H:%M:%SZ) ($([[ "$APPLY" == success ]] && echo 'apply completed just before' || echo 'no apply ran in this dispatch'))"
+              if [[ "$(hz 'servers?name=soleur-inngest' "${RUNNER_TEMP}/srv-rb.json")" != 200 ]] || ! jq -e --arg v "$_IBRG_LIVE_ID" '[.servers[0].volumes[] | tostring] == [$v]' "${RUNNER_TEMP}/srv-rb.json" >/dev/null; then fail "inngest server volumes != [${_IBRG_LIVE_ID}]"; fi
+              note "server volumes == [${_IBRG_LIVE_ID}]"
+              doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan-rb -var="ssh_key_path=${CI_SSH_PUB}" > /dev/null || fail "read-only untargeted plan failed"
+              terraform show -json tfplan-rb | jq -e '[.resource_changes[]? | select(.address == "hcloud_volume.inngest_redis" or .address == "hcloud_volume_attachment.inngest_redis")] | length == 0' > /dev/null || fail "a retired address is still in the plan"
+              note "untargeted plan lists neither retired address; still to self-pull: a fresh probe row on ${_IBRG_LIVE_ID} with the wrong-volume alert quiet" ;;
+          esac
+
+      - name: "Progress comment on #8285 (success or failure)"
+        if: always()
+        continue-on-error: true
+        env:
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          LEFT=$(( $(date -u -d 2026-10-22 +%s) - $(date -u +%s) )); EXP="$(( LEFT / 86400 )) day(s) to the non-extendable 2026-10-22 ledger expiry."
+          (( LEFT >= 0 )) || EXP="OVERDUE by $(( (86399 - LEFT) / 86400 )) day(s): the non-extendable 2026-10-22 ledger expiry has passed."
+          D4=""; [[ "$RETIRE_PHASE" == detach || ( "$RETIRE_PHASE" == wipe && "$JOB_STATUS" != success ) ]] && D4=" D4 decision point (wipe not yet succeeded): 2026-10-17."
+          printf '%s\n\nRead-back: %s\n\n%s%s\n' "inngest-backstop-retire phase=${RETIRE_PHASE}: ${JOB_STATUS}. Run: ${RUN_URL}" \
+            "$(cat "${RUNNER_TEMP}/readback.txt" 2>/dev/null || echo 'none recorded')" "$EXP" "$D4" | gh issue comment 8285 --repo "$GITHUB_REPOSITORY" --body-file - || echo "::warning::could not post the #8285 progress comment"
 
       - name: Dispatch summary
         if: always()
         env:
-          REASON: ${{ inputs.reason }}
           JOB_STATUS: ${{ job.status }}
-          EXPECTED_INNGEST_VOLUME_ID: ${{ inputs.expected_inngest_volume_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "## inngest-volume-recut (plaintext ext4 -> LUKS, #7695)"
-            echo ""
-            echo "**Dispatch reason:** ${REASON:-n/a}"
-            echo "**Status:** ${JOB_STATUS}"
-            echo "**Pinned volume id:** ${EXPECTED_INNGEST_VOLUME_ID:-n/a}"
-            echo "**Run:** ${RUN_URL}"
-            echo ""
-            echo "Guard 2 (host dark + store measured empty, 20 predicates) ran BEFORE the plan; Guard 1 graded the plan; both id-pins were checked against independent sources (the live Hetzner volume resolved by NAME (an id lookup only; what the host actually mounted is G14's data_mount_src), and the plan's before.id)."
-            echo ""
-            echo "The replacement volume is RAW. **This dispatch does not encrypt anything by itself, and it does not finish the cutover.**"
-            echo ""
-            echo "The LUKS cut lives in cloud-init-inngest.yml's runcmd stage, and cloud-init runcmd is FIRST-BOOT-ONLY. A plain reboot runs inngest-luks-open.service instead, which OPENS and never formats — so against this raw volume it would format nothing, /mnt/data would not mount, and the Redis mount guard would refuse the start."
-            echo ""
-            if [[ "${JOB_STATUS}" == "success" ]]; then
-              echo "**NEXT: dispatch \`-f apply_target=inngest-host-replace\`.** Its fresh first boot takes ARM 3 of the five-arm blkid discriminator (the only arm that may write a header), luksFormats, mkfs's and mounts /dev/mapper/inngest-redis. The encryption-posture ledger row keeps its exception until that boot is observed reaching stage=fstab on the mapper."
-            else
-              echo "**This dispatch did NOT succeed — do NOT run the step above.** If the apply failed part-way the AOF volume may be destroyed with no replacement, and \`inngest-host-replace\` would then rebuild the host with no volume to attach: cloud-init's bounded device wait FATALs and the host comes up with no /mnt/data at all."
-              echo ""
-              echo "**Recovery: dispatch \`-f apply_target=inngest-host-replace\`.** Terraform pulls the missing volume in as a dependency of the server it replaces, that gate admits the volume for CREATE only, and its fresh first boot cuts the header — one dispatch recovers and completes. \`inngest-host\` does NOT work (the volume id sits in the server-s ForceNew user_data, so a bare create forces a server replace its additive-only guard refuses), and re-dispatching \`inngest-volume-recut\` will NOT work: Guard 2 runs before the plan and grades the live host, so it returns id_pin_mismatch, mount_mismatch or redis_down. Read the failed step's ::error:: lines for the full route."
-            fi
+            echo "## inngest-backstop-retire (#8285) phase=${RETIRE_PHASE}"
+            echo "**Status:** ${JOB_STATUS}  **Pinned volume id:** ${EXPECTED_INNGEST_VOLUME_ID}  **Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── registry-host scoped -replace (dispatch-only; re-run cloud-init; ADR-096) ─
@@ -3544,7 +3567,7 @@ jobs:
             echo "::error::registry-luks-recut destroy-guard ABORTED. The counter line above names the failing check; each has a named exit in knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md:"
             echo "::error::  • volume_provisioned=0 → the plan PRESERVES the store volume. A plan that keeps the volume is a host replace: it cannot re-encrypt or empty the store. Re-dispatch with all three -replace flags (this job supplies them; a 0 here means the resource is absent from the -target set or already replaced)."
             echo "::error::  • volume_id_mismatch=1 → the address resolves to a DIFFERENT physical volume than you authorized, or the plan carries no before.id. STOP and reconcile terraform state — do not re-fire with a different id until you know why."
-            echo "::error::  • luks_key_touched=1 → the isolated Doppler config lacks the key, so terraform wants to create/update it. Run the operator's untargeted apply per the OPERATOR_APPLIED_EXCLUSIONS contract so the key lands, then re-dispatch."
+            echo "::error::  • luks_key_touched=1 → the isolated Doppler config lacks the key, so terraform wants to create/update it. Run the operator's untargeted apply per the OPERATOR_APPLIED_EXCLUSIONS contract so the key lands, then re-dispatch. NEVER untargeted while hcloud_volume.inngest_redis or its attachment is still in state (#8285 retire window): add -target for each planned address."
             echo "::error::  • logs_secret_destroyed=1 → the fresh host would brick (the 3-secret boot guard FATALs without BETTERSTACK_LOGS_TOKEN). Reconcile the plan."
             echo "::error::  • out_of_scope>0 → the plan touches a resource outside the registry's own 6. NEVER widen the allow-set (#6497) — reconcile the plan. This is the only barrier protecting web-1 and the sole /mnt/data volume in this lock-less shared state."
             echo "::error::NO [ack-destroy] bypass on this path."
