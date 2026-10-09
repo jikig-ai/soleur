@@ -145,7 +145,7 @@ fi
 # fallback, and an all-fallback leg is the n-mismatch degrade wearing a disguise.
 if [[ "$N_HDR" =~ ^[0123456789]+$ && -n "$DATA" ]]; then
   for leg in $(seq 1 "$(( 10#$N_HDR ))"); do
-    if printf '%s\n' "$DATA" | cut -f2 | grep -qx "$leg"; then
+    if printf '%s\n' "$DATA" | cut -f2 | grep -cx >/dev/null "$leg"; then
       check pass "leg $leg has at least one pinned label"
     else
       check fail "leg $leg has ZERO pinned labels — it would run on hash fallback alone"
@@ -250,7 +250,7 @@ else
   fi
   if [[ "$N_HDR_H" =~ ^[0123456789]+$ && -n "$DATA_H" ]]; then
     for leg in $(seq 1 "$(( 10#$N_HDR_H ))"); do
-      if printf '%s\n' "$DATA_H" | cut -f2 | grep -qx "$leg"; then
+      if printf '%s\n' "$DATA_H" | cut -f2 | grep -cx >/dev/null "$leg"; then
         check pass "heavy leg $leg has at least one pinned label"
       else
         check fail "heavy leg $leg has ZERO pinned labels — it would run on hash fallback alone"

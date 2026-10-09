@@ -322,7 +322,7 @@ row S2 "the secret is bound once, exactly as the gated expression, and every bra
 
 s3() {
   local bad=0 arm
-  if grep -v '^[[:space:]]*#' "$TMP/plan-step.sh" | grep -q -- '-target'; then
+  if grep -v '^[[:space:]]*#' "$TMP/plan-step.sh" | grep -c >/dev/null -- '-target'; then
     echo "    plan step carries -target"; bad=1
   fi
   arm=$(awk -v d="$SENTRY_DIR" 'index($0, "\"$MATRIX_DIR\" == \"" d "\"") {on=1} on && /^else$/ {exit} on' \

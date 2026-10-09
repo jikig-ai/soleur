@@ -906,6 +906,365 @@ e_row 'Rule D/E: flags-first flags in a plain `local curl_args=(` array pass (no
 # to cookies or vendor headers must be a visible edit to this row, not a silent drift.
 e_row 'Rule E xfail: -b "session=$T", -H "Cookie: s=$T" and x-gitlab-token are NOT in the vocabulary (pinned blind spot)' "$LINT" "$FIX/outofscope-blindspot-cookie-custom-header.sh" 0
 
+# --- Rule E -u/--user arm (#9597 S2, decision D5) ---------------------------------------------------
+# Basic-auth `-u USER:PASSWORD` / `--user USER:PASSWORD` is a credential on curl's argv exactly like a
+# header. Two constants (E_USER_FLAG: the value is the NEXT word; E_USER_ATTACHED: the value is glued)
+# feed one `f["user"]` flag in `_e_scan`, read at the call-level check, the wrapper-site check and the
+# second-credential rule. Every violation fixture opens with a COMPLIANT first member (the pair on the
+# stdin config), so a check satisfied by one compliant call, or one that stops at the first curl, reads
+# the file clean. The pinned finding grammar is unchanged: the -u wording is in the reason clause.
+_u_fx="$(find "$FIX" -maxdepth 1 -name 'violation-argv-user-*.sh' | wc -l)"
+if [ "$_u_fx" -lt 11 ]; then
+  fail "Rule E -u arm: only $_u_fx violation-argv-user-*.sh fixtures copied, anti-vacuity floor is 11"
+else
+  pass "Rule E -u arm: $_u_fx violation-argv-user-*.sh fixtures present (anti-vacuity floor 11)"
+fi
+e_row 'Rule E -u: a literal `-u "U:P"` after a compliant first member is reported' "$LINT" "$FIX/violation-argv-user-literal.sh" 1
+e_row 'Rule E -u: the value glued to the flag, quoted (`-u"U:P"`) and bare (`-uU:P`): one message each' "$LINT" "$FIX/violation-argv-user-attached.sh" 2
+e_row 'Rule E -u: the long spelling `--user "U:P"` is reported' "$LINT" "$FIX/violation-argv-user-long.sh" 1
+e_row 'Rule E -u: the long spelling with `=` (`--user="U:P"`) is reported' "$LINT" "$FIX/violation-argv-user-long-eq.sh" 1
+e_row 'Rule E -u: `-u` bundled behind other short flags (`-sSu "U:P"`, `-fu "U:P"`): one message each' "$LINT" "$FIX/violation-argv-user-bundle.sh" 2
+e_row 'Rule E -u: `-u` behind a bundle with the value glued (`-sSu"U:P"`, `-fsSLusvc:"$T"`, `-suU:P`) or behind a digit flag (`-4u "U:P"`): one message each' "$LINT" "$FIX/violation-argv-user-glued-bundle.sh" 4
+e_row 'Rule E -u: `-u` in a plain `local curl_args=(` array with a conditional += append is reported' "$LINT" "$FIX/violation-argv-user-array.sh" 1
+e_row 'Rule E -u: `-u` passed to a file-local wrapper (defined AFTER its use) is reported [wrapper-site read site]' "$LINT" "$FIX/violation-argv-user-wrapper.sh" 1
+e_row 'Rule E -u: a multi-line `--aws-sigv4 ... \` command with `--user "ID:SECRET"` on a continuation line (the cla-evidence shape) is reported' "$LINT" "$FIX/violation-argv-user-multiline-sigv4.sh" 1
+# Second-credential: ONE finding, BOTH reasons. The count alone cannot tell the `-u` reason from the
+# second-credential reason, so the row counts each reason's wording (here-strings/counts, never a pipe into grep -q).
+e_row 'Rule E -u: `-u` beside an argv `apikey:` is reported (one finding)' "$LINT" "$FIX/violation-argv-user-second-credential.sh" 1
+_u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+_u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+if [ "$_u_basic" = "1" ] && [ "$_u_second" = "1" ]; then
+  pass "Rule E -u: the -u + apikey: finding carries BOTH reasons (basic-auth wording x$_u_basic, second-credential wording x$_u_second)"
+else
+  fail "Rule E -u: the -u + apikey: finding should carry both reasons once each, got basic-auth=$_u_basic second-credential=$_u_second"
+fi
+unset _u_basic _u_second
+# The same pair of reasons through a WRAPPER call: the second-credential rule at the wrapper-site check carries
+# `user_argv` in its condition, and nothing in this fixture is a bearer-class header, so only that term can fire it.
+e_row 'Rule E -u: `-u` plus an `apikey:` header handed to a file-local wrapper is reported (one finding)' "$LINT" "$FIX/violation-argv-user-wrapper-second-credential.sh" 1
+_u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+_u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+if [ "$_u_basic" = "1" ] && [ "$_u_second" = "1" ]; then
+  pass "Rule E -u: the wrapper-site -u + apikey: finding carries BOTH reasons (basic-auth wording x$_u_basic, second-credential wording x$_u_second)"
+else
+  fail "Rule E -u: the wrapper-site -u + apikey: finding should carry both reasons once each, got basic-auth=$_u_basic second-credential=$_u_second"
+fi
+unset _u_basic _u_second
+# MUST-PASS rows (none of them is the canonical): the safe spellings of the same pair, and the flags that
+# only LOOK like it.
+e_row 'Rule E -u: `--config -` with a `user = "..."` key on a process substitution (bare and inside $(...)) passes' "$LINT" "$FIX/compliant-stdin-user-config.sh" 0
+e_row 'Rule E -u: `-K -` and `--config <(...)` carrying a `user` key pass' "$LINT" "$FIX/compliant-stdin-user-dash-k.sh" 0
+e_row 'Rule E -u: `sort -u`, `docker run --user`, `git push -u`, `sudo -u`, `id -u`, curl `--url` / `--user-agent` / `-A`, `-o/tmp/out`, `-oupload.log`, `-cuser.jar`, and `sort -u | curl ...` are NOT read' "$LINT" "$FIX/outofscope-nonyurl-user-flags.sh" 0
+# PINNED GAP (xfail): `-U` / `--proxy-user` is a PROXY credential, a different flag; the match is case-sensitive.
+e_row 'Rule E -u xfail: `-U` / `--proxy-user` (a proxy credential) is NOT read (pinned blind spot)' "$LINT" "$FIX/outofscope-proxy-user.sh" 0
+# REAL-CURL ORACLE (review of #9753, round 2): the bundle alphabet in E_SHORT_NOARG is curl's own, so the lint is scored
+# against curl itself over EVERY character of [0-9A-Za-z#:], not over a hand-picked subset (the first cut exercised 7 of
+# the 41 members, and dropping `k`, `n` or `#` from the alphabet stayed green). For each character C two spellings are
+# built, `-Cu "svc:$TOK"` (value in the NEXT word) and `-Cusvc:"$TOK"` (value glued), plus the fixed legacy table below
+# (long spellings and multi-letter bundles). Each spelling is run through curl with `--libcurl` against a closed loopback
+# port (nothing answers, the C source is still written) with a URL on EACH side of it, so `--next` is meaningful; the
+# CURLOPT_USERPWD count in that source says whether curl took the spelling as basic auth. The same text is then linted in a
+# generated one-curl script and the lint must agree with curl. The expected verdict is never written in this table: it is
+# one of
+#   pos       curl set USERPWD                                  -> the lint must report it
+#   neg       curl wrote its source and set no user             -> the lint must not (`-o`/`-c`/`-e`/`-X`/`-A`/`-U`/...
+#             swallow the rest of the word as THEIR value; `-U` is the PROXY user; `-:` is `--next` and ends the bundle)
+#   rejected  curl stopped with a non-zero rc and wrote no source (rc 2 for a refused command line, rc 26 for `-K`
+#             reading a config file that is not there) -> the lint must not (no request is made, so no credential
+#             is sent; the unknown digits 5 7 8 9 and every letter that wants a number land here)
+#   cut       curl wrote its source, set no user, and warned "is deprecated and has no function anymore" (-2 / -3 on curl
+#             8.22.0: it ends the bundle there; curl 8.5.0 reads the `u` behind them, so they are `pos` there)
+#                                                                -> CONSERVATIVE, see below
+#   terminal  curl exited 0 with no source (-V / -M print and quit before any request) -> CONSERVATIVE, see below
+# CONSERVATIVE classes are the one place the lint is allowed to disagree with this curl, and the disagreement is not
+# hand-listed: the lint must report the spelling exactly when `curl --help all` lists the short flag WITHOUT an operand
+# (a letter that stops being a no-argument flag, or a listed no-argument flag the lint's alphabet lacks, turns a row RED).
+# Measured on curl 8.5.0 (ubuntu-24.04) and 8.22.0; the floors below are derived from NAMED characters, not from either total.
+# Every character class has an anti-vacuity floor, so a table that loses a whole direction reads RED.
+ORC="$WORK/orc"
+mkdir -p "$ORC" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
+ORC_SPELLINGS=(
+  '-u "svc:${SENTRY_AUTH_TOKEN}"'
+  '--user "svc:${SENTRY_AUTH_TOKEN}"'
+  '-sSu "svc:${SENTRY_AUTH_TOKEN}"'
+  '-sSu"svc:${SENTRY_AUTH_TOKEN}"'
+  '-fsSLusvc:"${SENTRY_AUTH_TOKEN}"'
+  '-suU:"${SENTRY_AUTH_TOKEN}"'
+  '-4u "svc:${SENTRY_AUTH_TOKEN}"'
+  '-6uU:P'
+  '-ZsSu "U:P"'
+  '-o/tmp/out'
+  '-sSo/dev/null'
+  '-fsSLo/dev/null'
+  '-oupload.log'
+  '-ou'
+  '-cuser.jar'
+  '-eusers.example'
+  '-Xuser'
+  '-sSA"ua"'
+  '--user-agent "ua/1"'
+  '-U "svc:${SENTRY_AUTH_TOKEN}"'
+  '--proxy-user "svc:${SENTRY_AUTH_TOKEN}"'
+)
+ORC_LEGACY_N="${#ORC_SPELLINGS[@]}"
+ORC_CHARS=()
+for _c in {0..9} {A..Z} {a..z} '#' ':'; do
+  ORC_CHARS+=("$_c")
+  ORC_SPELLINGS+=("-${_c}u \"svc:\${SENTRY_AUTH_TOKEN}\"" "-${_c}usvc:\"\${SENTRY_AUTH_TOKEN}\"")
+done
+unset _c
+ORC_N_CHARS="${#ORC_CHARS[@]}"
+# VERSION-TOLERANT FLOORS. Which class a character lands in is a property of the curl build (measured on curl 8.5.0, the
+# ubuntu-24.04 runner's, and 8.22.0: `-2`/`-3` are pos on one and cut on the other, `-h` is terminal on one and neg on the
+# other, `-O` is neg on 8.5.0 with an empty sink path), so no total is asserted. What is asserted is
+#   1. the population: every character of [0-9A-Za-z#:] ran, both spellings, and every one landed in a class;
+#   2. AGREEMENT: each row below scores the lint against THIS curl's verdict, whatever the build;
+#   3. NAMED stable classes: the characters below have the same family on every curl measured, they are asserted BY NAME
+#      (a drift names the character), and the class floors are DERIVED from these names (two spellings each), never
+#      copied from one build's total.
+# A: pos / cut / terminal (the lint must report them); N: neg (an operand-taking flag swallows the rest of the word, or
+# `:` ends the bundle); R: rejected (curl refuses the command line or the config file before any request).
+ORC_NAMED_A='#012346BGIJLMNORSVZafgijklnpqsuv'
+ORC_NAMED_N='ADEHPQTUXbcdeortwxz:'
+ORC_NAMED_R='5789CFKWYmy'
+# The letters the lint's alphabet must ALWAYS contain, whatever curl lists: the 31 no-argument flags measured on both
+# builds (ORC_NAMED_A without the `u` that is matched by the pattern itself).
+ORC_REQUIRED_ALPHA="${ORC_NAMED_A//u/}"
+declare -A ORC_CCLS=()
+if [ "$ORC_N_CHARS" -lt 64 ] || [ "$ORC_LEGACY_N" -lt 21 ]; then
+  fail "Rule E -u oracle: the table covers $ORC_N_CHARS characters and $ORC_LEGACY_N legacy spellings, anti-vacuity floor is 64 and 21"
+else
+  pass "Rule E -u oracle: the table covers $ORC_N_CHARS characters ([0-9A-Za-z#:]) and $ORC_LEGACY_N legacy spellings (anti-vacuity floor 64 and 21)"
+fi
+# curl's own listing of short flags: ` -k, --insecure   ...` has no operand, ` -o, --output <file> ...` has one.
+curl --help all > "$ORC/help-all.txt" 2>/dev/null || true
+orc_help_noarg() { # <char> -> prints noarg | arg | absent
+  awk -v f="-$1," '$1 == f { print ($3 ~ /^</ ? "arg" : "noarg"); found = 1; exit } END { if (!found) print "absent" }' "$ORC/help-all.txt"
+}
+ORC_RUN_N=0
+ORC_CLASS="" ORC_UP=0 ORC_RC=0 ORC_WANT=0
+orc_classify() { # <spelling> -> sets ORC_CLASS / ORC_UP / ORC_RC / ORC_WANT from what real curl does with it
+  local sp="$1" d="$ORC/run" help="" n_depr=0 first="${1:0:2}"
+  ORC_RUN_N=$((ORC_RUN_N + 1))
+  rm -rf "$d"
+  mkdir -p "$d" || return 1
+  # The sink URL carries a PATH on purpose: `-O` ("remote name") aborts with rc 23 on an empty path in curl 8.5.0
+  # (before the second URL's options are recorded, so `-Ou` read as "no user"), and keeps going on 8.22.0. With a
+  # path both builds record the user, so the verdict no longer depends on a file-name side effect of `-O`/`-J`.
+  ( cd "$d" && SENTRY_AUTH_TOKEN=synthetic-oracle-value SINK_URL=http://127.0.0.1:9/f \
+      bash -c "curl --disable --noproxy '*' -m 1 --libcurl \"\$0\" \"\$SINK_URL\" $sp \"\$SINK_URL\"" "$d/o.c" >/dev/null 2>"$d/err" </dev/null )
+  ORC_RC=$?
+  ORC_UP=0
+  if [ -s "$d/o.c" ]; then
+    ORC_UP="$(grep -c 'CURLOPT_USERPWD' "$d/o.c" || true)"
+    n_depr="$(grep -c 'is deprecated and has no function anymore' "$d/err" || true)"
+    if [ "$ORC_UP" -ge 1 ]; then
+      ORC_CLASS=pos
+      ORC_WANT=1
+    elif [ "$n_depr" -ge 1 ]; then
+      ORC_CLASS="cut"
+    else
+      ORC_CLASS=neg
+      ORC_WANT=0
+    fi
+  elif [ "$ORC_RC" = "0" ]; then
+    ORC_CLASS=terminal
+  else
+    ORC_CLASS=rejected
+    ORC_WANT=0
+  fi
+  if [ "$ORC_CLASS" = "cut" ] || [ "$ORC_CLASS" = "terminal" ]; then
+    help="$(orc_help_noarg "${first:1:1}")"
+    if [ "$help" = "noarg" ]; then ORC_WANT=1; else ORC_WANT=0; fi
+  fi
+}
+ORC_POS=0 ORC_NEG=0 ORC_REJ=0 ORC_CUT=0 ORC_TERM=0
+ORC_WANT1_CHARS="" ORC_WANT0_CHARS=""
+ORC_ALL_SP=() ORC_ALL_WANT=()
+orc_gen() { # <outfile> <spelling...>: the preamble of the glued-bundle fixture (everything up to its first `fi`), then one curl per spelling
+  local out="$1" sp
+  shift
+  { sed -n '1,/^fi$/p' "$FIX/violation-argv-user-glued-bundle.sh"
+    for sp in "$@"; do
+      printf "curl --disable %s --noproxy '*' \"\$SINK_URL\" || true\n" "$sp"
+    done; } > "$out"
+}
+if ! command -v curl >/dev/null 2>&1; then
+  fail "Rule E -u oracle: curl is not installed, the bundle alphabet cannot be checked against the real tool"
+else
+  _i=0
+  _spaced_want=""
+  for _sp in "${ORC_SPELLINGS[@]}"; do
+    if ! orc_classify "$_sp"; then
+      fail "Rule E -u oracle: INSTRUMENT ERROR -- could not run curl for: $_sp"
+      _i=$((_i + 1))
+      continue
+    fi
+    case "$ORC_CLASS" in
+      pos) ORC_POS=$((ORC_POS + 1)) ;;
+      neg) ORC_NEG=$((ORC_NEG + 1)) ;;
+      rejected) ORC_REJ=$((ORC_REJ + 1)) ;;
+      cut) ORC_CUT=$((ORC_CUT + 1)) ;;
+      terminal) ORC_TERM=$((ORC_TERM + 1)) ;;
+    esac
+    ORC_ALL_SP+=("$_sp")
+    ORC_ALL_WANT+=("$ORC_WANT")
+    # The generated characters come after the legacy table, spaced spelling first: record the verdict per
+    # character, and require the glued spelling of the same character to agree with it.
+    if [ "$_i" -ge "$ORC_LEGACY_N" ]; then
+      _k=$((_i - ORC_LEGACY_N))
+      _c="${ORC_CHARS[$((_k / 2))]}"
+      if [ $((_k % 2)) -eq 0 ]; then
+        _spaced_want="$ORC_WANT"
+        ORC_CCLS["$_c"]="$ORC_CLASS"
+        if [ "$ORC_WANT" = "1" ]; then ORC_WANT1_CHARS+="$_c"; else ORC_WANT0_CHARS+="$_c"; fi
+      elif [ "$_spaced_want" != "$ORC_WANT" ]; then
+        fail "Rule E -u oracle: curl disagrees with itself on \`-${_c}u\`: spaced spelling wants $_spaced_want, glued spelling wants $ORC_WANT"
+      fi
+    fi
+    _i=$((_i + 1))
+    orc_gen "$ORC/gen.sh" "$_sp"
+    e_row "Rule E -u oracle [$ORC_CLASS]: \`$_sp\` -- real curl says USERPWD x$ORC_UP (rc=$ORC_RC), the lint reports $ORC_WANT" "$LINT" "$ORC/gen.sh" "$ORC_WANT"
+  done
+  unset _sp _i _k _c _spaced_want
+  # Class floors, DERIVED from the named stable classes (two spellings per name), never from one build's totals: the
+  # positive floor counts the conservative spellings with the positives, because which of `pos` / `cut` / `terminal`
+  # a deprecated or print-and-quit flag lands in is a property of the curl build (an older curl reads the `u` behind
+  # `-2`), not of the lint.
+  ORC_FLOOR_A=$((2 * ${#ORC_NAMED_A}))
+  ORC_FLOOR_N=$((2 * ${#ORC_NAMED_N}))
+  ORC_FLOOR_R=$((2 * ${#ORC_NAMED_R}))
+  if [ $((ORC_POS + ORC_CUT + ORC_TERM)) -lt "$ORC_FLOOR_A" ]; then
+    fail "Rule E -u oracle: curl took only $((ORC_POS + ORC_CUT + ORC_TERM)) spelling(s) as a no-argument flag followed by -u, anti-vacuity floor is $ORC_FLOOR_A (two spellings of each of the ${#ORC_NAMED_A} named characters)"
+  else
+    pass "Rule E -u oracle: curl took $ORC_POS spelling(s) as basic auth and $((ORC_CUT + ORC_TERM)) more as conservative no-argument flags (anti-vacuity floor $ORC_FLOOR_A together)"
+  fi
+  if [ "$ORC_NEG" -lt "$ORC_FLOOR_N" ]; then
+    fail "Rule E -u oracle: curl classed only $ORC_NEG spelling(s) as NOT basic auth, anti-vacuity floor is $ORC_FLOOR_N (two spellings of each of the ${#ORC_NAMED_N} named characters)"
+  else
+    pass "Rule E -u oracle: curl classed $ORC_NEG spelling(s) as NOT basic auth (anti-vacuity floor $ORC_FLOOR_N)"
+  fi
+  if [ "$ORC_REJ" -lt "$ORC_FLOOR_R" ]; then
+    fail "Rule E -u oracle: curl stopped before a request for only $ORC_REJ spelling(s), anti-vacuity floor is $ORC_FLOOR_R (two spellings of each of the ${#ORC_NAMED_R} named characters)"
+  else
+    pass "Rule E -u oracle: curl stopped before any request for $ORC_REJ spelling(s) (anti-vacuity floor $ORC_FLOOR_R)"
+  fi
+  # The named classes themselves: a character whose family moved on this curl is NAMED, not summed away.
+  _drift=""
+  for _fam in A N R; do
+    case "$_fam" in A) _names="$ORC_NAMED_A" ;; N) _names="$ORC_NAMED_N" ;; R) _names="$ORC_NAMED_R" ;; esac
+    for _c in $(printf '%s' "$_names" | fold -w1); do
+      _got="${ORC_CCLS[$_c]:-absent}"
+      case "$_fam:$_got" in
+        A:pos | A:cut | A:terminal | N:neg | R:rejected) ;;
+        *) _drift+=" -${_c}u(want family $_fam, curl says $_got)" ;;
+      esac
+    done
+  done
+  if [ -n "$_drift" ]; then
+    fail "Rule E -u oracle: named stable classes drifted on this curl:$_drift"
+  else
+    pass "Rule E -u oracle: all $((${#ORC_NAMED_A} + ${#ORC_NAMED_N} + ${#ORC_NAMED_R})) named characters sit in their stable class on this curl ($(curl --version | awk 'NR == 1 { print $1, $2 }'))"
+  fi
+  unset _drift _fam _names _c _got
+  if [ $((ORC_CUT + ORC_TERM)) -lt 1 ]; then
+    fail "Rule E -u oracle: no spelling landed in a conservative class (cut=$ORC_CUT terminal=$ORC_TERM), so the curl flag-listing tie is untested, anti-vacuity floor is 1"
+  else
+    pass "Rule E -u oracle: $((ORC_CUT + ORC_TERM)) spelling(s) in the conservative classes (cut=$ORC_CUT terminal=$ORC_TERM), each tied to curl's own flag listing (anti-vacuity floor 1)"
+  fi
+
+  # THE ALPHABET ITSELF, derived rather than compared by eye: the characters curl says may precede the `u` in a
+  # bundle (every verdict-1 character except `u`, which is the flag itself and is matched by the `u` in the pattern)
+  # must be exactly the set the lint declares, as a SET (the lint writes 0-4 as a range).
+  _derived="$(printf '%s' "$ORC_WANT1_CHARS" | tr -d 'u' | fold -w1 | LC_ALL=C sort | tr -d '\n')"
+  _declared="$(python3 -I -c '
+import re, sys
+m = re.search(r"^E_SHORT_NOARG = r\"\[([^\"]*)\]\"$", open(sys.argv[1]).read(), re.M)
+out = set()
+body = m.group(1)
+i = 0
+while i < len(body):
+    if i + 2 < len(body) and body[i + 1] == "-":
+        out.update(chr(c) for c in range(ord(body[i]), ord(body[i + 2]) + 1))
+        i += 3
+    else:
+        out.add(body[i])
+        i += 1
+sys.stdout.write("".join(sorted(out)))
+' "$LINT")"
+  # A SUPERSET check, not an equality: every no-argument short flag THIS curl lists must be in the lint's alphabet (a
+  # flag the lint misses is a credential it cannot see), and so must the fixed letters in ORC_REQUIRED_ALPHA, which
+  # no curl build may take away (an older or newer curl listing fewer or more flags must not decide the lint's contents;
+  # a flag that is not listed there is scored by the per-character rows above, whichever way the build lands).
+  _missing="" _missing_req=""
+  for _c in $(printf '%s' "$_derived" | fold -w1); do
+    case "$_declared" in *"$_c"*) ;; *) _missing+="$_c" ;; esac
+  done
+  for _c in $(printf '%s' "$ORC_REQUIRED_ALPHA" | fold -w1); do
+    case "$_declared" in *"$_c"*) ;; *) _missing_req+="$_c" ;; esac
+  done
+  if [ -n "$_derived" ] && [ -z "$_missing" ] && [ -z "$_missing_req" ]; then
+    pass "Rule E -u oracle: the lint's E_SHORT_NOARG ($_declared) contains all ${#_derived} no-argument flags this curl lists ($_derived) and the ${#ORC_REQUIRED_ALPHA} fixed letters"
+  else
+    fail "Rule E -u oracle: E_SHORT_NOARG is '$_declared'; this curl lists '$_derived' (missing from the lint: '$_missing'), fixed letters missing: '$_missing_req'"
+  fi
+  unset _missing _missing_req _c
+
+  # MUTATION PROOF, one character at a time. Each row rebuilds E_SHORT_NOARG in a COPY of the lint as an explicit
+  # class, asserts the rebuilt copy differs from the lint's own line (the mutation LANDED), and scores the copy on
+  # the generated spellings of that ONE character: dropping a member must lose both of its spellings, adding a
+  # non-member must find both. The unmutated rebuild is the CONTROL and must be green on the whole table first.
+  orc_alpha_copy() { # <out.py> <explicit class chars>
+    sed -E "s/^E_SHORT_NOARG = r\"\[[^\"]*\]\"\$/E_SHORT_NOARG = r\"[$2]\"/" "$LINT" > "$1"
+  }
+  _classchars="$_declared"
+  orc_alpha_copy "$WORK/alpha-control.py" "$_classchars"
+  _want_all=0
+  for _w in "${ORC_ALL_WANT[@]}"; do _want_all=$((_want_all + _w)); done
+  orc_gen "$ORC/gen-all.sh" "${ORC_ALL_SP[@]}"
+  e_row "Rule E -u oracle control: the WHOLE table linted at once (${#ORC_ALL_SP[@]} spellings) reports exactly the $_want_all curl-positive ones" "$LINT" "$ORC/gen-all.sh" "$_want_all"
+  e_row "Rule E -u oracle control: the explicit rebuild of the alphabet is verdict-neutral on the whole table (mutation control)" "$WORK/alpha-control.py" "$ORC/gen-all.sh" "$_want_all"
+  ORC_MUT_DROP=0 ORC_MUT_ADD=0 ORC_MUT_EQUIV=0
+  for _c in $(printf '%s' "$ORC_WANT1_CHARS" | tr -d 'u' | fold -w1); do
+    orc_alpha_copy "$WORK/alpha-mut.py" "${_declared//"$_c"/}"
+    if cmp -s "$WORK/alpha-control.py" "$WORK/alpha-mut.py"; then
+      fail "Rule E -u oracle mutant: dropping \`$_c\` did not land"
+      continue
+    fi
+    orc_gen "$ORC/gen-one.sh" "-${_c}u \"svc:\${SENTRY_AUTH_TOKEN}\"" "-${_c}usvc:\"\${SENTRY_AUTH_TOKEN}\""
+    e_row "Rule E -u oracle mutant: \`$_c\` dropped from the alphabet -- \`-${_c}u\` and \`-${_c}uU:P\` go unseen" "$WORK/alpha-mut.py" "$ORC/gen-one.sh" 0
+    ORC_MUT_DROP=$((ORC_MUT_DROP + 1))
+  done
+  for _c in $(printf '%s' "$ORC_WANT0_CHARS" | fold -w1); do
+    orc_alpha_copy "$WORK/alpha-mut.py" "${_declared}${_c}"
+    if cmp -s "$WORK/alpha-control.py" "$WORK/alpha-mut.py"; then
+      fail "Rule E -u oracle mutant: adding \`$_c\` did not land"
+      continue
+    fi
+    orc_gen "$ORC/gen-one.sh" "-${_c}u \"svc:\${SENTRY_AUTH_TOKEN}\"" "-${_c}usvc:\"\${SENTRY_AUTH_TOKEN}\""
+    if [ "$_c" = "H" ]; then
+      # EQUIVALENT MUTANT, recorded and NOT counted as caught: `-H` is consumed by the header arm of `_e_scan`
+      # (E_HDR_FLAG / E_HDR_ATTACHED) before either `-u` arm is consulted, so `-Hu "svc:$T"` is a header
+      # value `u` whatever the alphabet says. The row pins that the widened copy reads the same as the lint.
+      e_row "Rule E -u oracle EQUIVALENT mutant (not a kill): \`H\` added to the alphabet reads the same -- the header arm takes \`-Hu\` first" "$WORK/alpha-mut.py" "$ORC/gen-one.sh" 0
+      ORC_MUT_EQUIV=$((ORC_MUT_EQUIV + 1))
+      continue
+    fi
+    e_row "Rule E -u oracle mutant: \`$_c\` added to the alphabet -- \`-${_c}u\` and \`-${_c}uU:P\` (not basic auth in curl) are reported" "$WORK/alpha-mut.py" "$ORC/gen-one.sh" 2
+    ORC_MUT_ADD=$((ORC_MUT_ADD + 1))
+  done
+  unset _c _w _want_all _classchars _derived _declared
+  # Floors derived from the fixed names: one drop mutant per required letter, one add mutant per named non-member
+  # (the equivalent mutant `H` is recorded, not counted as a kill).
+  ORC_FLOOR_DROP="${#ORC_REQUIRED_ALPHA}"
+  ORC_FLOOR_ADD=$((${#ORC_NAMED_N} + ${#ORC_NAMED_R} - 1))
+  if [ "$ORC_MUT_DROP" -lt "$ORC_FLOOR_DROP" ] || [ "$ORC_MUT_ADD" -lt "$ORC_FLOOR_ADD" ] || [ "$ORC_MUT_EQUIV" -lt 1 ]; then
+    fail "Rule E -u oracle: only $ORC_MUT_DROP drop mutants, $ORC_MUT_ADD add mutants and $ORC_MUT_EQUIV equivalent mutant(s) ran, anti-vacuity floor is $ORC_FLOOR_DROP, $ORC_FLOOR_ADD and 1"
+  else
+    pass "Rule E -u oracle: $ORC_MUT_DROP drop mutants and $ORC_MUT_ADD add mutants killed, one per alphabet character, plus $ORC_MUT_EQUIV recorded equivalent mutant (anti-vacuity floor $ORC_FLOOR_DROP, $ORC_FLOOR_ADD and 1)"
+  fi
+fi
+
 # --- Rule E widened (#9597 S1, D1): the YAML arm -----------------------------------
 # `.github/**` YAML is scanned by extracting every `run` string value with PyYAML (so a
 # folded scalar and an inline `run: "curl ..."` step reach bash exactly as bash sees them);
@@ -1139,16 +1498,35 @@ fi
 #   - every baseline path is in the table with a count at or below its ceiling;
 #   - every table row either has a baseline row or its file STILL offends (a converted file must
 #     leave the table, so the table cannot keep a ceiling a later edit could silently re-raise to).
-# census_ceiling_check <baseline> <ceiling> sets CC_LISTED / CC_BAD / CC_STALE and reports on stderr.
+# The comparison is `<=` on purpose: a listed count BELOW its ceiling is a legitimate shrink (a site was
+# converted) and passes; only a count ABOVE the ceiling, or a path with no ceiling row, is a defect.
+# Two inputs would let that comparison fail OPEN, so both are rejected up front (review of #9753): a path listed
+# TWICE in either file (a duplicated ceiling row makes `cl` two lines, and `[ "$bn" -gt "$cl" ]` is then an
+# integer-expression error, which `if` reads as false = "not above the ceiling"), and a count or ceiling that is
+# not a plain integer (the same error). CC_DUP counts the extra rows.
+# census_ceiling_check <baseline> <ceiling> sets CC_LISTED / CC_BAD / CC_STALE / CC_DUP and reports on stderr.
 census_ceiling_check() {
-  local base="$1" ceil="$2" bp bn cl cp en rc
+  local base="$1" ceil="$2" bp bn cl cp en rc _f _d
   CC_LISTED=0
   CC_BAD=0
   CC_STALE=0
+  CC_DUP=0
+  for _f in "$base" "$ceil"; do
+    _d="$(awk -F'\t' '/^#/ || $1 == "" { next } seen[$1]++ >= 1 { n++ } END { print n + 0 }' "$_f")"
+    if [ "$_d" != "0" ]; then
+      CC_DUP=$((CC_DUP + _d))
+      printf 'duplicate path row(s) in %s: %s extra\n' "$(basename "$_f")" "$_d" >&2
+    fi
+  done
   while IFS=$'\t' read -r bp bn; do
     case "$bp" in '' | '#'*) continue ;; esac
     CC_LISTED=$((CC_LISTED + 1))
-    cl="$(awk -F'\t' -v p="$bp" '$1 == p { print $2 }' "$ceil")"
+    cl="$(awk -F'\t' -v p="$bp" '$1 == p { print $2; exit }' "$ceil")"
+    if [ -z "$bn" ] || [ -n "${bn//[0-9]/}" ] || [ -n "${cl//[0-9]/}" ]; then
+      CC_BAD=$((CC_BAD + 1))
+      printf 'baseline E entry with a non-integer count or ceiling: %s (listed %s, ceiling %s)\n' "$bp" "${bn:-none}" "${cl:-none}" >&2
+      continue
+    fi
     if [ -z "$cl" ] || [ "$bn" -gt "$cl" ]; then
       CC_BAD=$((CC_BAD + 1))
       printf 'baseline E entry above its census ceiling or absent from it: %s (listed %s, ceiling %s)\n' "$bp" "$bn" "${cl:-none}" >&2
@@ -1184,6 +1562,11 @@ if [ "$CC_STALE" != "0" ]; then
   fail "Rule E census ceiling: $CC_STALE table row(s) have no baseline row and their file no longer offends -- a converted file must leave the table"
 else
   pass "Rule E census ceiling: every table row has a baseline row or a file that still offends (no stale ceilings)"
+fi
+if [ "$CC_DUP" != "0" ]; then
+  fail "Rule E baseline vs census ceiling: $CC_DUP duplicate path row(s) in the baseline or the ceiling table (a duplicated ceiling row makes the comparison fail open)"
+else
+  pass "Rule E baseline vs census ceiling: no path is listed twice in the baseline or in the ceiling table"
 fi
 
 # Mutation rows for the check itself (each starts from the REAL pair, adds one defect, asserts it
@@ -1230,6 +1613,100 @@ if ! cmp -s "$BASE_E_FILE" "$WORK/base-raised.txt"; then
 else
   fail "Rule E census ceiling M-raise: the raised count did not land"
 fi
+# (5) a path listed TWICE in the ceiling table (the first row stays correct, so the integer comparison alone would
+# read the pair as a clean row) and (6) twice in the baseline. Each must read as a duplicate and nothing else.
+_first="$(grep -vE '^(#|[[:space:]]*$)' "$BASE_E_FILE" | head -1)"
+{ cat "$CEIL_FILE"; printf '%s\n' "$_first"; } > "$WORK/ceil-dup.tsv"
+if [ -n "$_first" ] && ! cmp -s "$CEIL_FILE" "$WORK/ceil-dup.tsv"; then
+  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-dup.tsv" 2>/dev/null
+  [ "$CC_DUP" = "1" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
+    && pass "Rule E census ceiling M-dup: a path listed twice in the ceiling table reads as a duplicate (dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
+    || fail "Rule E census ceiling M-dup: a doubled ceiling row should give dup=1 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
+else
+  fail "Rule E census ceiling M-dup: the doubled ceiling row did not land"
+fi
+{ cat "$BASE_E_FILE"; printf '%s\n' "$_first"; } > "$WORK/base-dup.txt"
+if [ -n "$_first" ] && ! cmp -s "$BASE_E_FILE" "$WORK/base-dup.txt"; then
+  census_ceiling_check "$WORK/base-dup.txt" "$CEIL_FILE" 2>/dev/null
+  [ "$CC_DUP" = "1" ] \
+    && pass "Rule E census ceiling M-dup: a path listed twice in the baseline reads as a duplicate (dup=$CC_DUP)" \
+    || fail "Rule E census ceiling M-dup: a doubled baseline row should give dup=1, got dup=$CC_DUP"
+else
+  fail "Rule E census ceiling M-dup: the doubled baseline row did not land"
+fi
+# (7) a count that is not an integer must read as a defect, never as "not above the ceiling".
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-nan.txt"
+if ! cmp -s "$BASE_E_FILE" "$WORK/base-nan.txt"; then
+  census_ceiling_check "$WORK/base-nan.txt" "$CEIL_FILE" 2>/dev/null
+  [ "$CC_BAD" = "1" ] \
+    && pass "Rule E census ceiling M-nan: a non-integer baseline count reads as a defect (bad=$CC_BAD)" \
+    || fail "Rule E census ceiling M-nan: a non-integer baseline count should give bad=1, got bad=$CC_BAD"
+else
+  fail "Rule E census ceiling M-nan: the non-integer count did not land"
+fi
+# (7b) a CEILING that is not an integer, and (7c) a baseline row with an EMPTY count (a trailing tab, and no tab at all).
+# Each is a different conjunct of the guard clause in census_ceiling_check: `[ -n "${cl//[0-9]/}" ]` and `[ -z "$bn" ]`.
+# Both inputs fail OPEN without their conjunct, because `[ "$bn" -gt "$cl" ]` on a non-integer is an integer-expression
+# error that `if` reads as false = "not above the ceiling". The (7) row above covers only the `${bn//[0-9]/}` conjunct.
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$CEIL_FILE" > "$WORK/ceil-nan.tsv"
+if ! cmp -s "$CEIL_FILE" "$WORK/ceil-nan.tsv"; then
+  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-nan.tsv" 2>/dev/null
+  [ "$CC_BAD" = "1" ] \
+    && pass "Rule E census ceiling M-nan-ceiling: a non-integer CEILING reads as a defect (bad=$CC_BAD)" \
+    || fail "Rule E census ceiling M-nan-ceiling: a non-integer ceiling should give bad=1, got bad=$CC_BAD"
+else
+  fail "Rule E census ceiling M-nan-ceiling: the non-integer ceiling did not land"
+fi
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = ""; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-empty-tab.txt"
+awk -F'\t' '/^#/ || NF < 2 { print; next } !d { print $1; d = 1; next } { print }' "$BASE_E_FILE" > "$WORK/base-empty-bare.txt"
+for _v in tab bare; do
+  if ! cmp -s "$BASE_E_FILE" "$WORK/base-empty-$_v.txt"; then
+    census_ceiling_check "$WORK/base-empty-$_v.txt" "$CEIL_FILE" 2>/dev/null
+    [ "$CC_BAD" = "1" ] \
+      && pass "Rule E census ceiling M-empty-count ($_v): a baseline row with an EMPTY count reads as a defect (bad=$CC_BAD)" \
+      || fail "Rule E census ceiling M-empty-count ($_v): an empty baseline count should give bad=1, got bad=$CC_BAD"
+  else
+    fail "Rule E census ceiling M-empty-count ($_v): the empty count did not land"
+  fi
+done
+unset _v
+# (7d) MUTATION PROOF of the three guard conjuncts, against the function's own text: delete one conjunct, redefine the
+# function from the mutated text, and require the matching input to slip through (bad=0, so rows (7)/(7b)/(7c) would
+# be RED), then restore the original definition. The control is the unmutated function on the same input (bad=1),
+# asserted first so a mutant that "slips through" is measured against a function that did catch it.
+CC_SRC="$(sed -n '/^census_ceiling_check() {/,/^}/p' "${BASH_SOURCE[0]}")"
+cc_mutant_row() { # <label> <perl-expr> <baseline> <ceiling>
+  local label="$1" expr="$2" b="$3" c="$4" mutated ctl got
+  census_ceiling_check "$b" "$c" 2>/dev/null
+  ctl="$CC_BAD"
+  mutated="$(printf '%s\n' "$CC_SRC" | perl -0pe "$expr")"
+  if [ -z "$CC_SRC" ] || [ "$mutated" = "$CC_SRC" ]; then
+    fail "$label: the mutation did NOT land in the function text"
+    return
+  fi
+  eval "$mutated"
+  census_ceiling_check "$b" "$c" 2>/dev/null
+  got="$CC_BAD"
+  eval "$CC_SRC"
+  if [ "$ctl" = "1" ] && [ "$got" = "0" ]; then
+    pass "$label: the unmutated check reads bad=$ctl, the mutant reads bad=$got (the input slips through, so the row above would be RED)"
+  else
+    fail "$label: expected control bad=1 and mutant bad=0, got control bad=$ctl mutant bad=$got"
+  fi
+}
+cc_mutant_row 'Rule E census ceiling U-bn: the `${bn//[0-9]/}` conjunct deleted' \
+  's/\[ -n "\$\{bn\/\/\[0-9\]\/\}" \] \|\| //' "$WORK/base-nan.txt" "$CEIL_FILE"
+cc_mutant_row 'Rule E census ceiling U-cl: the `${cl//[0-9]/}` conjunct deleted' \
+  's/ \|\| \[ -n "\$\{cl\/\/\[0-9\]\/\}" \]//' "$BASE_E_FILE" "$WORK/ceil-nan.tsv"
+cc_mutant_row 'Rule E census ceiling U-empty: the `-z "$bn"` conjunct deleted (empty count after a tab)' \
+  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-tab.txt" "$CEIL_FILE"
+cc_mutant_row 'Rule E census ceiling U-empty: the `-z "$bn"` conjunct deleted (count column absent)' \
+  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-bare.txt" "$CEIL_FILE"
+# (8) CONTROL: the real pair reads clean on all three counters, or rows (5)-(7) prove nothing.
+census_ceiling_check "$BASE_E_FILE" "$CEIL_FILE" 2>/dev/null
+[ "$CC_DUP" = "0" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
+  && pass "Rule E census ceiling control: the real baseline/ceiling pair reads clean (dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
+  || fail "Rule E census ceiling control: the real pair should read dup=0 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
 unset _first
 
 grep -qx -- '--- rule E ---' "$WORK/census" \
@@ -1278,6 +1755,95 @@ mutate_row 'E6b Rule E: stdin-body hazard dropped' \
 mutate_row 'E6c Rule E: here-string/heredoc hazard dropped' \
   's/E_HEREDOC = re\.compile\(r"[^\n]*\n/E_HEREDOC = re.compile(r"(?!x)x")\n/' \
   "$FIX/violation-argv-bearer-config-hazards.sh" 1 1 2
+
+# -u/--user arm (#9597 S2), one mutation per member, each on the fixture only that member can report.
+mutate_row 'U1a Rule E -u: E_USER_FLAG deleted (the literal `-u` goes unseen)' \
+  's/E_USER_FLAG = re\.compile\(r"[^\n]*\n/E_USER_FLAG = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-literal.sh" 1 0 0
+mutate_row 'U1b Rule E -u: E_USER_FLAG deleted (the long `--user "U:P"` goes unseen)' \
+  's/E_USER_FLAG = re\.compile\(r"[^\n]*\n/E_USER_FLAG = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-long.sh" 1 0 0
+mutate_row 'U1c Rule E -u: E_USER_FLAG deleted (both bundled sites go unseen)' \
+  's/E_USER_FLAG = re\.compile\(r"[^\n]*\n/E_USER_FLAG = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-bundle.sh" 1 0 0
+mutate_row 'U2a Rule E -u: E_USER_ATTACHED deleted (both glued sites go unseen)' \
+  's/E_USER_ATTACHED = re\.compile\(r"[^\n]*\n/E_USER_ATTACHED = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-attached.sh" 1 0 0
+mutate_row 'U2b Rule E -u: E_USER_ATTACHED deleted (`--user="U:P"` goes unseen)' \
+  's/E_USER_ATTACHED = re\.compile\(r"[^\n]*\n/E_USER_ATTACHED = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-long-eq.sh" 1 0 0
+# Narrowing the FLAG alternation to the bare `-u` / `--user` words must lose the bundle (not the literal).
+mutate_row 'U1d Rule E -u: E_USER_FLAG narrowed to `-u`/`--user` (the bundled `-sSu`, `-fu` go unseen)' \
+  's/(E_USER_FLAG = re\.compile\()r"\^\(\?:--user\|-" \+ E_SHORT_NOARG \+ r"\*u\)\$"\)/${1}r"^(?:--user|-u)\$")/' \
+  "$FIX/violation-argv-user-bundle.sh" 1 0 0
+# The bundle alphabet (E_SHORT_NOARG) is the property the glued-bundle fixture pins, from three sides.
+mutate_row 'U1e Rule E -u: the digit flags dropped from the bundle alphabet (`-4u "U:P"` goes unseen, the three letter bundles stay)' \
+  's/E_SHORT_NOARG = r"\[0-46/E_SHORT_NOARG = r"[/' \
+  "$FIX/violation-argv-user-glued-bundle.sh" 1 1 3
+mutate_row 'U2c Rule E -u: E_USER_ATTACHED narrowed to the bare `-u<value>` / `--user=` (the three glued bundles go unseen, `-4u "U:P"` stays)' \
+  's/(E_USER_ATTACHED = re\.compile\(r"\^\(\?:)-" \+ E_SHORT_NOARG \+ r"\*u\(\?=\.\)/${1}-u(?=.)/' \
+  "$FIX/violation-argv-user-glued-bundle.sh" 1 1 1
+mutate_row 'U2d Rule E -u: the bundle alphabet widened to every letter and digit (`-oupload.log`, `-cuser.jar` read as a `-u`)' \
+  's/E_SHORT_NOARG = r"\[[^\n]*"/E_SHORT_NOARG = r"[A-Za-z0-9#]"/' \
+  "$FIX/outofscope-nonyurl-user-flags.sh" 0 1 2
+mutate_row 'U3 Rule E -u: the `_e_scan` assignment dropped (every classified `-u` goes unseen)' \
+  's/f\["user"\] = True/f["user"] = False/g' \
+  "$FIX/violation-argv-user-literal.sh" 1 0 0
+mutate_row 'U4 Rule E -u: the call-level reason removed' \
+  's/(\n\s*)if user_argv:\n(\s*)reasons\.append\(/${1}if False:\n${2}reasons.append(/' \
+  "$FIX/violation-argv-user-literal.sh" 1 0 0
+mutate_row 'U5 Rule E -u: the wrapper-site read removed (a `-u` handed to a wrapper goes unseen)' \
+  's/user_argv = cf\.get\("user", False\)/user_argv = False/' \
+  "$FIX/violation-argv-user-wrapper.sh" 1 0 0
+mutate_row 'U6 Rule E -u: the array declaration is not inlined and the expansion not resolved' \
+  's/ARRAY_EXPANSION = re\.compile\(r"[^\n]*\n/ARRAY_EXPANSION = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-user-array.sh" 1 0 0
+# Loosening the scope: the arm reads the WHOLE pipeline assembly instead of the curl's own invocation
+# segment, so `sort -u | curl ...` reads as a basic-auth curl. The out-of-scope fixture must redden.
+mutate_row 'U7 Rule E -u: scope loosened to the whole pipeline assembly (`sort -u | curl` flagged)' \
+  's/f = _e_scan\(args, held_re, bearer_arrays\)/f = _e_scan(_e_words(cmd), held_re, bearer_arrays)/' \
+  "$FIX/outofscope-nonyurl-user-flags.sh" 0 1 1
+# A SECOND `-u` curl appended after the compliant first member and the first `-u` one: two findings
+# (a check that stops at the first site reports one).
+fx_mut_row 'U8 Rule E -u: a second `--user` curl appended to the literal fixture: two messages' \
+  's/\z/curl --disable --noproxy \x27*\x27 -sS \x2d\x2duser "svc2:\${SENTRY_AUTH_TOKEN}" "\$SINK_URL" || true\n/' \
+  "$FIX/violation-argv-user-literal.sh" 2
+# Second-credential: dropping `-u` from the call-level second-credential context keeps the finding (the
+# -u reason still fires) but loses the second-credential reason; the count cannot see it, the wording can.
+_u_sandbox="$WORK/mut-user2.py"
+cp "$LINT" "$_u_sandbox"
+perl -0pi -e 's/if apikey and \(bearer_in_call or user_argv\):/if apikey and bearer_in_call:/' "$_u_sandbox"
+if diff -q "$LINT" "$_u_sandbox" >/dev/null 2>&1; then
+  fail "U9 Rule E -u second-credential: mutation did NOT land"
+else
+  rc="$(rc_of "$_u_sandbox" "$FIX/violation-argv-user-second-credential.sh")"
+  _u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+  _u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+  if [ "$rc" = "1" ] && [ "$_u_basic" = "1" ] && [ "$_u_second" = "0" ]; then
+    pass "U9 Rule E -u: -u dropped from the second-credential context loses exactly the second-credential reason (rc=1, basic-auth x1, second-credential x0)"
+  else
+    fail "U9 Rule E -u second-credential: mutant should keep the -u reason and lose the second-credential one, got rc=$rc basic-auth=$_u_basic second-credential=$_u_second"
+  fi
+fi
+unset _u_sandbox _u_second _u_basic
+# U10: the SAME defect at the wrapper-site check (`user_argv` removed from its second-credential condition). Only a
+# fixture whose call carries `-u` + `apikey:` and NO bearer-class header can see it, so it has its own fixture.
+_u_sandbox="$WORK/mut-user3.py"
+cp "$LINT" "$_u_sandbox"
+perl -0pi -e 's/if apikey and \(bearer_argv or user_argv or bearer_ctx\):/if apikey and (bearer_argv or bearer_ctx):/' "$_u_sandbox"
+if diff -q "$LINT" "$_u_sandbox" >/dev/null 2>&1; then
+  fail "U10 Rule E -u wrapper-site second-credential: mutation did NOT land"
+else
+  rc="$(rc_of "$_u_sandbox" "$FIX/violation-argv-user-wrapper-second-credential.sh")"
+  _u_second="$(grep -c 'a second credential header' "$WORK/err" || true)"
+  _u_basic="$(grep -c 'basic-auth credentials' "$WORK/err" || true)"
+  if [ "$rc" = "1" ] && [ "$_u_basic" = "1" ] && [ "$_u_second" = "0" ]; then
+    pass "U10 Rule E -u: -u dropped from the wrapper-site second-credential context loses exactly the second-credential reason (rc=1, basic-auth x1, second-credential x0)"
+  else
+    fail "U10 Rule E -u wrapper-site second-credential: mutant should keep the -u reason and lose the second-credential one, got rc=$rc basic-auth=$_u_basic second-credential=$_u_second"
+  fi
+fi
+unset _u_sandbox _u_second _u_basic
 
 # --- Rule E hazards: ONE site per MEMBER of the hazard vocabulary (#9674 review) ----------------------
 # E6a-c delete a WHOLE regex, so a single member dropped from E_STDIN_BODY or E_VERBOSE (or one inline
@@ -1430,6 +1996,54 @@ if sbx_repo 'scripts/offender.sh\t1\nscripts/gone.sh\t1\n'; then
   else
     fail "Rule E baseline M9d: stale listed path should report rc=1 naming it, got rc=$rc"
   fi
+fi
+
+# -u arm in the repo-wide run (#9597 S2): a `-u` file is baselined by PATH AND COUNT like any other.
+# offender.sh is replaced by the glued-`-u` fixture (live count 2).
+sbx_user_repo() { # <baseline-E body> [<perl-expr applied to the lint copy>]
+  sbx_repo "$1" "${2:-}" || return 1
+  cp "$FIX/violation-argv-user-attached.sh" "$SBX/scripts/offender.sh" || return 1
+  "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
+}
+if sbx_user_repo 'scripts/offender.sh\t2\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "0" ] && grep -q '2 site(s)' "$WORK/out" && sbx_clean_run; then
+    pass "Rule E -u baseline: a -u file listed with its exact count (2) is accepted and the OK line counts both sites"
+  else
+    fail "Rule E -u baseline: exact-count -u sandbox expected rc=0 and '2 site(s)', got rc=$rc: $(head -c 300 "$WORK/err") $(head -c 200 "$WORK/out")"
+  fi
+else
+  fail "Rule E -u baseline: could not build the -u sandbox repo"
+fi
+if sbx_user_repo 'scripts/offender.sh\t1\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/offender.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E -u baseline M1: a -u file seeded one lower than live (listed 1, live 2) is reported and names the file"
+  else
+    fail "Rule E -u baseline M1: listed 1 vs live 2 should report rc=1 naming the file, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+else
+  fail "Rule E -u baseline M1: could not build the -u sandbox repo"
+fi
+if sbx_user_repo ''; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/offender.sh' "$WORK/err" && grep -qE "$E_MSG_RE" "$WORK/err" && sbx_clean_run; then
+    pass "Rule E -u baseline M2: an unlisted -u file is reported repo-wide"
+  else
+    fail "Rule E -u baseline M2: an unlisted -u file should report rc=1, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+fi
+# Arm dead (the `_e_scan` assignment dropped): the live count of the -u file is 0 while the baseline
+# still lists 2, so equality names the file. Without the arm the baseline of a -u file reads stale.
+if sbx_user_repo 'scripts/offender.sh\t2\n' 's/f\["user"\] = True/f["user"] = False/g'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/offender.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E -u baseline M3: the -u arm dead (live 0, listed 2) reddens the repo-wide equality and names the file"
+  else
+    fail "Rule E -u baseline M3: arm dead should report rc=1 naming the -u file, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+else
+  fail "Rule E -u baseline M3: could not build the mutated -u sandbox (mutation did not land?)"
 fi
 
 # --- Rule E widened (#9597 S1): repo-wide rows for the YAML arm ----------------------
@@ -2135,10 +2749,10 @@ unset SKIPSH_PY SIBLING _na _nb
 # reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
 # `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
 # can see and mutation-test them.
-if [ "$E_ROWS" -lt 99 ]; then
-  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 99"
+if [ "$E_ROWS" -lt 329 ]; then
+  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 329"
 else
-  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 99)"
+  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 329)"
 fi
 if [ "$Y_ROWS" -lt 48 ]; then
   fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 48"
@@ -2212,11 +2826,16 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
+# Re-measured at 635 (review of #9753 round 2, WPc: the real-curl oracle over EVERY character of [0-9A-Za-z#:] in the spaced and
+# glued spelling, its derived-alphabet equality row, the whole-table control and the per-character drop/add mutants, and the
+# census non-integer-ceiling / empty-count rows with their conjunct mutants, 205 assertions on top of the 430 below; the Rule E
+# fixture-row floor above moved from a stale 136 to the measured 329). Earlier: 430 (review of #9753, WP3: the glued-bundle and wrapper-second-credential fixtures, the real-curl oracle
+# table, the alphabet mutants U1e/U2c/U2d, U10, and the census duplicate/non-integer rows, 35 assertions on top of the 395 below).
+# Earlier: 395 (#9597 S2: the -u/--user arm rows, mutation rows and repo-wide sandbox rows, 32 assertions on top of the 363 below). Earlier: 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=363
+MIN_ASSERTIONS=635
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

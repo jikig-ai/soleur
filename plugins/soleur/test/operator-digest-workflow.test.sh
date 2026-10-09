@@ -69,14 +69,14 @@ assert "plugins id targets the soleur-marketplace entry" \
 CODE="$(grep -vE '^[[:space:]]*#' "$WF")"
 
 # Agent allowlist grants Write (the agent writes digest.md).
-if printf '%s\n' "$CODE" | grep -E 'allowedTools' | grep -qE '\bWrite\b'; then pass=$((pass+1)); else
+if printf '%s\n' "$CODE" | grep -E 'allowedTools' | grep -cE >/dev/null '\bWrite\b'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: --allowedTools must contain Write" >&2; fi
 
 # The agent must NOT be granted a post capability. claude_args is a YAML folded block (>-) that
 # can span multiple physical lines, so a single-line grep misses a `Bash(gh issue create:*)`
 # continuation. Refute `gh issue create` across the WHOLE claude_args region (claude_args: → prompt:).
 ARGS_REGION="$(awk '/claude_args:/{f=1} /^[[:space:]]*prompt:[[:space:]]*\|?[[:space:]]*$/{if(f) f=0} f' "$WF")"
-if printf '%s\n' "$ARGS_REGION" | grep -qE 'gh issue create'; then
+if printf '%s\n' "$ARGS_REGION" | grep -cE >/dev/null 'gh issue create'; then
   fail=$((fail+1)); echo "FAIL: agent allowlist/args must NOT grant 'gh issue create' (prompt-injection bypass)" >&2
 else pass=$((pass+1)); fi
 
@@ -86,15 +86,15 @@ else pass=$((pass+1)); fi
 create_lines="$(printf '%s\n' "$CODE" | grep -nE 'gh issue create' || true)"
 if [[ -z "$create_lines" ]]; then
   fail=$((fail+1)); echo "FAIL: no 'gh issue create' post-step found in executable YAML" >&2
-elif printf '%s\n' "$create_lines" | grep -qvE ':[[:space:]]+gh issue create -R '; then
+elif printf '%s\n' "$create_lines" | grep -cvE >/dev/null ':[[:space:]]+gh issue create -R '; then
   fail=$((fail+1)); echo "FAIL: a 'gh issue create' appears outside a run-step command line (post bypass):" >&2
   printf '%s\n' "$create_lines" | grep -vE ':[[:space:]]+gh issue create -R ' >&2
 else pass=$((pass+1)); fi
 
 # Scrub gate invoked as a post-step OUTSIDE the action — anchored to the functional invocation
 # (the SCRUB var + the `bash "$SCRUB"` call), NOT the doc-header mention.
-if printf '%s\n' "$CODE" | grep -qE 'bash[[:space:]]+"\$SCRUB"' && \
-   printf '%s\n' "$CODE" | grep -qE 'SCRUB=.*digest-scrub\.sh'; then pass=$((pass+1)); else
+if printf '%s\n' "$CODE" | grep -cE >/dev/null 'bash[[:space:]]+"\$SCRUB"' && \
+   printf '%s\n' "$CODE" | grep -cE >/dev/null 'SCRUB=.*digest-scrub\.sh'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: digest-scrub.sh must be invoked as a post-step (bash \"\$SCRUB\")" >&2; fi
 
 # --- No durable plaintext copy: rm digest.md after posting ---

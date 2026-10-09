@@ -439,9 +439,10 @@ jobs:
           # hcloud_server.web (server.tf: server_id / connection host — web-1 for
           # the original four, web-2 for deploy_pipeline_fix_web2 since #9151), and
           # `-target` is TRANSITIVE at the resource level, so hcloud_server.web
-          # ["web-1"] and hcloud_volume.workspaces["web-1"] sit in THIS plan's graph
-          # too. This workflow passes no -var image_name, so a transitive web-1 birth
-          # here boots the mutable ghcr.io/...:latest default while cloud-init
+          # ["web-1"] and hcloud_volume.workspaces sit in THIS plan's graph too (the
+          # edge is resource-level; since #6604 step 7 its only instance is
+          # ["web-2"] — web-1's plaintext volume is retired). This workflow passes
+          # no -var image_name, so a transitive web-1 birth here boots the mutable ghcr.io/...:latest default while cloud-init
           # re-verifies host_scripts_content_hash under `set -e` — a mismatch aborts
           # the entire runcmd at stage=verify, once per instance, unrepairable by
           # reboot. Identical composition to the sibling jobs in
