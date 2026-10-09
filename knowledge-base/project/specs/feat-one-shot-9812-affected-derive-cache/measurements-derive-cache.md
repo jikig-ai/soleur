@@ -24,8 +24,9 @@ Selection identity in the worktree: `diff` over the two runs' `AFFECTED_*` lines
 telemetry line itself; every `AFFECTED_SELECTED` row and the `AFFECTED_SUMMARY` are identical.
 
 Cold-path cost: the recording overhead (read-set hashing + probe recording + one atomic store
-per record) is visible — cold head pays ~113s wall where the uncached baseline pays ~87s
-(bench numbers below). The overhead is paid once per record per tree-state, then amortised.
+per record) is real and grows with contention — cold head paid ~27s extra CPU at load ~5 and
+~71s extra at load ~9 across the two bench runs (record+validate+store for 586 records).
+The overhead is paid once per record per tree-state, then amortised.
 
 ## 2. Acceptance bench — `affected-prepass-bench.sh` (the byte-identity gate)
 
@@ -44,6 +45,13 @@ probes what exists).
 | 1 README.md (head cache cold) | IDENTICAL — 585 rows + 1 added | 76.8 s | 104.3 s | 0.7x |
 | 2 worktree-manager+cookie-policy (head cache warm from probe 1) | IDENTICAL — 586 rows + 1 added | 87.6 s | 11.3 s | 7.8x |
 
+Re-run post-rebase (merge-base ceb1c6c1ba, load ~8–11, `--head HEAD` on the rebased tree):
+
+| probe | verdict | base CPU | head CPU | factor |
+|---|---|---|---|---|
+| 1 README.md | IDENTICAL — 587 rows + 1 added | 109.9 s | 181.1 s | 0.6x |
+| 2 worktree-manager+cookie-policy | IDENTICAL — 588 rows + 1 added | 115.8 s | 16.1 s | 7.2x |
+
 The "1 added row" is the new `scripts/test-affected-derive-cache` registration; the 30 rows
 carrying `^scripts/lib/test-affected-derive-cache.sh` are the declared added-file edge.
 
@@ -52,8 +60,9 @@ carrying `^scripts/lib/test-affected-derive-cache.sh` are the declared added-fil
 - Warm-run derive collapses from ~87–97 s CPU to ~5–11 s CPU — a 7.8–18x reduction on the
   pre-pass, worth ~1.9–2.5 min wall per run depending on contention. Matches the ~2.4 min/run
   lever the continuation measurements predicted.
-- Cold run is ~25 s CPU *slower* than uncached (recording + hashing + atomic stores). One cold
-  pass amortises across every subsequent run until an input drifts; a developer iterating on
-  the tree pays it once per derive-affecting change, not once per run.
+- Cold run is ~27–71 s CPU *slower* than uncached (recording + hashing + atomic stores for 586
+  records; the gap widens under contention). One cold pass amortises across every subsequent run
+  until an input drifts; a developer iterating on the tree pays it once per derive-affecting
+  change, not once per run.
 - Selection is byte-identical by the bench contract in both cold and warm states — the cache
   replays classification metadata only; `_diff_touches` and the verdict walk are unchanged.

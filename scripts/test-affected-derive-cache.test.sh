@@ -21,8 +21,7 @@
 # eval+source: a missed anchor or an absent lib must not pass vacuously.
 #
 # AUTHORING (work/SKILL.md): never `producer | grep -q` under pipefail; capture rc on its own
-# line; `cases` is incremented at the call site; a row whose host requirement is missing prints a
-# counted SKIPPED line locally and FAILS under CI (skip_or_fail). Fixture git needs only
+# line; `cases` is incremented at the call site. Fixture git needs only
 # `git init` + `hash-object` — no commits, no config.
 
 # shellcheck disable=SC2016,SC2086 # fixture text and eval'd snippets are single-quoted on purpose (their $ must not expand here); form strings split into argv words on purpose
@@ -60,14 +59,6 @@ if (( PASS != _sp + 1 )) || (( FAIL != _sf + 1 )); then
   echo "[FATAL] instrument self-test failed" >&2; exit 1
 fi
 PASS=$_sp; FAIL=$_sf
-
-skip_or_fail() { # skip_or_fail <row id> <what the row needs>
-  if [[ -n "${CI:-}" ]]; then
-    cases=$((cases + 1)); fail "$1: needs $2 and CI lacks it"
-  else
-    SKIPPED=$((SKIPPED + 1)); echo "  [skip] $1: needs $2"
-  fi
-}
 
 # ---- extraction floor -------------------------------------------------------------------------------
 # Same anchors as test-affected-derive.test.sh: the block opens on the column-0 `_AC_CLASS=""`

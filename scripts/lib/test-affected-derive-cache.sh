@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # test-affected-derive-cache.sh — per-record cross-run cache for the affected pre-pass derive (#9812).
 #
 # WHY. The `_aff_stream` walk pays one `_affected_classify` per registration (~585 records, ~150s
