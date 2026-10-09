@@ -94,3 +94,13 @@ service paths and unrelated fixtures. Ownership was not established, so no
 deletion or attribution was made. During superseded-run cleanup, a cancel
 request raced workflow completion; the follow-up read established cancellation
 had already completed rather than treating the refused request as success.
+
+## Addendum — 2026-10-09 post-push check registration
+
+The monitor armed immediately after the resolved main merge observed cached
+checks and the preceding DIRTY merge state, then exited on its first poll.
+Direct reads confirmed the new head, its running CI/tenant/RLS workflows and
+registered pending checks; the PR then reported BLOCKED. The monitor was
+rearmed after registration. Its initial all-passing count was not accepted as
+an exact-head result. Bind final validation to workflow `headSha` and required
+aggregates, and rearm an early-exited watch once current-head jobs register.
