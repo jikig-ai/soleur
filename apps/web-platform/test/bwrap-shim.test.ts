@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   symlinkSync,
+  closeSync,
   openSync,
   readFileSync,
   rmSync,
@@ -758,6 +759,88 @@ describe("bwrap PATH shim (#8752)", () => {
       } finally {
         cleanup();
       }
+    }
+  });
+
+  it("--bind-fd/--ro-bind-fd DEST=/proc is the same exposure class (fd2 dest check)", () => {
+    for (const opt of ["--bind-fd", "--ro-bind-fd"]) {
+      const r = root();
+      const procFd = openSync("/proc", "r", 0o40000); // O_DIRECTORY
+      try {
+        const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", opt, "3", "/proc", "--", "/usr/bin/true"], {
+          env: r.env(), encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe", procFd],
+        });
+        expect(res.status, `${opt}: ${res.stderr}`).toBe(0);
+        const { args } = r.read();
+        const bi = args.indexOf("--");
+        expect(args.slice(bi - 2, bi), `${opt} dest=/proc must re-mask`).toEqual(["--proc", "/proc"]);
+      } finally {
+        closeSync(procFd);
+        cleanup();
+      }
+    }
+  });
+
+  it("an exposure in a payload AFTER a command-carrying payload still triggers the mask (resume semantics)", () => {
+    const r = root();
+    // Upstream parse_args_recurse resumes outer-argv option parsing after
+    // EACH --args payload — a payload following one that carried `--` is
+    // still SETUP, so its procfs bind must still be seen. (Regression: an
+    // earlier consume loop stopped at the first command-carrying payload and
+    // would have passed this shape through unmasked.)
+    const p1 = join(r.root, "p1");
+    const p2 = join(r.root, "p2");
+    writeFileSync(p1, "--ro-bind\0/\0/\0--\0/usr/bin/true\0");
+    writeFileSync(p2, "--bind\0/proc\0/proc\0");
+    const fd1 = openSync(p1, "r"); // child fd 3
+    const fd2 = openSync(p2, "r"); // child fd 4
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--args", "3", "--args", "4"],
+        { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", fd1, fd2] },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      expect(args.slice(-2)).toEqual(["--proc", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dest canonicalization defeats slash/dot evasions — //proc, /proc//, /proc/./, /x/../proc all mount at /proc", () => {
+    for (const dest of ["//proc", "/proc//", "/proc/./", "/x/../proc"]) {
+      const r = root();
+      try {
+        const res = spawnSync(
+          SHIM,
+          ["--unshare-user", "--unshare-pid", "--bind", "/proc", dest, "--", "/usr/bin/true"],
+          { env: r.env(), encoding: "utf8" },
+        );
+        expect(res.status, `dest=${dest}: ${res.stderr}`).toBe(0);
+        const { args } = r.read();
+        const bi = args.indexOf("--");
+        expect(args.slice(bi - 2, bi), `dest=${dest} must re-mask`).toEqual(["--proc", "/proc"]);
+      } finally {
+        cleanup();
+      }
+    }
+  });
+
+  it("exposure inside a payload + no userns ANYWHERE in the merged stream refuses (union gate)", () => {
+    const r = root();
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(payloadFile, "--bind\0/proc\0/proc\0--\0/usr/bin/true\0");
+    const argsFd = openSync(payloadFile, "r");
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-pid"], {
+        env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", argsFd],
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("unshare-user");
+    } finally {
+      cleanup();
     }
   });
 

@@ -53,7 +53,9 @@
 #          splice could still be mounted over by trailing outer options —
 #          the mask therefore always lands at the OUTER setup end (after every
 #          payload mount, verified on bwrap 0.12.0); payloads pass through
-#          verbatim and payloads past the command marker stay unread.
+#          verbatim; EVERY pre-boundary payload is consumed for the merged
+#          scan (a payload after a command-carrying one is still setup —
+#          the outer parser resumes at it).
 #   Arm C  no boundary anywhere (command starts at the first bare operand, or
 #          the argv is pure options): mask lands before the operand / at tail.
 # Fail-closed applies to the rewrite too: an unreadable or EMPTY --args
@@ -96,9 +98,10 @@ fi
 #   a1/a2/a3: non-fd options consuming 1/2/3 tokens — their values are SKIPPED
 #     so a flag-named value can't desync the scan.
 #
-# Known limits: `--opt=value` equals-forms are invisible to this scan
-# (getopt accepts them; a future SDK emitting `--args=5` would strand that
-# fd — fail-closed, loudly); an option this table doesn't know can still
+# Known limits: `--opt=value` equals-forms are invisible to this scan —
+# getopt accepts them, and they now evade BOTH fd preservation AND the /proc
+# exposure gate (a `--bind=/x /proc` would pass through unmasked); the
+# vendored builder emits none. An option this table doesn't know can still
 # desync after it (over-preserve — the leak direction, so conservative).
 # BWRAP_FD_VALUED_OPTS (scripts/sandbox-canary.mjs) mirrors the fd sets —
 # asserted byte-identical by sandbox-canary-regression.test.sh §D4.
@@ -126,6 +129,26 @@ opt_kind() { # opt_kind <tok> — sets OPT_KIND (never echoes: a per-token $()
     -*) OPT_KIND=other ;;
     *) OPT_KIND=operand ;;
   esac
+}
+
+# Canonicalize a mount DEST for the exposure check: collapse duplicate
+# slashes, resolve `/./` and `/../` components. The dest is a NEWROOT path —
+# never host filesystem — so this is pure path algebra, no stat. Mount
+# semantics treat /proc//, //proc, /proc/./, /a/../proc as /proc; without
+# normalization each is a silent-evasion spelling of the /proc exposure.
+norm_dest() { # norm_dest <path> → stdout
+  local d="$1" out="" seg
+  # collapse duplicate slashes
+  while [[ "$d" == *///* ]]; do d="${d//\//\/}"; done
+  local IFS='/'
+  for seg in $d; do
+    case "$seg" in
+      ''|.) ;;
+      ..) out="${out%/*}" ;;
+      *) out="$out/$seg" ;;
+    esac
+  done
+  printf '%s' "${out:-/}"
 }
 
 # The ONE arity walk over a token array. Emits "<boundary> <operand> <pidns>
@@ -162,17 +185,25 @@ setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <pidns> 
       case "$kind" in
         boundary) printf '%s -1 %s %s %s%s\n' "$i" "$pidns" "$userns" "$expose" "$fds"; return ;;
         fd1) expect_fd=1 ;;
-        fd2) expect_fd=1; extra_skip=1 ;;
+        fd2)
+          # --bind-fd/--ro-bind-fd: arg1 is the fd, arg2 is the DEST — a
+          # procfs fd bound at /proc is the same exposure class.
+          case "$tok" in
+            --bind-fd|--ro-bind-fd)
+              dest="$(norm_dest "${toks[$((i + 2))]:-}")"
+              [ "$dest" = "/proc" ] && expose=1 ;;
+          esac
+          expect_fd=1; extra_skip=1 ;;
         a1)
           if [ "$tok" = "--proc" ]; then
-            dest="${toks[$((i + 1))]:-}"; dest="${dest%/}"
+            dest="$(norm_dest "${toks[$((i + 1))]:-}")"
             [ "$dest" = "/proc" ] && expose=1
           fi
           skip=1 ;;
         a2)
           case "$tok" in
             --bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try)
-              dest="${toks[$((i + 2))]:-}"; dest="${dest%/}"
+              dest="$(norm_dest "${toks[$((i + 2))]:-}")"
               [ "$dest" = "/proc" ] && expose=1 ;;
           esac
           skip=2 ;;
@@ -231,19 +262,27 @@ while [ "$i" -lt "$argc" ]; do
           [ "$tok" = "--args" ] && args_pos+=("$((i + 1))")
           ;;
       esac
+      # fd2's dest/pid arg on top — and for --bind-fd/--ro-bind-fd that arg
+      # is a mount DEST: a procfs fd bound at /proc exposes procfs the same
+      # way --bind does.
+      [ "$kind" = fd2 ] && case "$tok" in
+        --bind-fd|--ro-bind-fd)
+          dest="$(norm_dest "${argv[$((i + 2))]:-}")"
+          [ "$dest" = "/proc" ] && expose=1 ;;
+      esac
       i=$((i + 1))  # the fd VALUE token is consumed too
-      [ "$kind" = fd2 ] && i=$((i + 1))  # fd2's dest/pid arg on top
+      [ "$kind" = fd2 ] && i=$((i + 1))
       ;;
     a1)
       if [ "$tok" = "--proc" ]; then
-        dest="${argv[$((i + 1))]:-}"; dest="${dest%/}"
+        dest="$(norm_dest "${argv[$((i + 1))]:-}")"
         [ "$dest" = "/proc" ] && expose=1
       fi
       i=$((i + 1)) ;;
     a2)
       case "$tok" in
         --bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try)
-          dest="${argv[$((i + 2))]:-}"; dest="${dest%/}"
+          dest="$(norm_dest "${argv[$((i + 2))]:-}")"
           [ "$dest" = "/proc" ] && expose=1 ;;
       esac
       i=$((i + 2)) ;;
@@ -292,13 +331,14 @@ if [ "${#args_pos[@]}" -gt 0 ]; then
     [ "$pexpose" = 1 ] && expose=1
     pcmd=$(( pboundary >= 0 ? pboundary + 1 : poperand >= 0 ? poperand : ${#pl[@]} ))
     [ "$pcmd" -lt "${#pl[@]}" ] && add_cmd_fd_refs "${pl[@]:$pcmd}"
-    # A payload carrying the command marker (inner `--`/operand) turns later
-    # payloads into command text — stop reading (their fds stay argv-referenced
-    # → preserved); a payload without one is pure setup, so keep consuming.
-    pcarries_cmd=$(( pcmd < ${#pl[@]} ? 1 : 0 ))
+    # Keep consuming: under upstream parse_args_recurse the OUTER parser
+    # resumes option parsing after every payload, so a later --args payload
+    # is still SETUP — its procfs exposure, namespace flags, and command-side
+    # fd refs all count toward the merged stream. (An earlier version broke
+    # here, which would have silently passed through a tail payload carrying
+    # the very bind this mask exists to defeat.)
     unset -n pl
     nread=$((nread + 1))
-    [ "$pcarries_cmd" = 1 ] && break
   done
 fi
 # The mask engages ONLY when the merged setup actually mounts procfs at /proc
@@ -367,6 +407,9 @@ if [ "$expose" = 1 ]; then
     argv+=("${mask[@]}")
   fi
 fi
+# INVARIANT: every args_pos entry precedes every splice point (the outer walk
+# stops at boundary/operand), so mutating argv before renumbering is safe —
+# do not reorder the splice and re-emit blocks.
 if [ "$nread" -gt 0 ]; then
   k=0
   while [ "$k" -lt "$nread" ]; do
