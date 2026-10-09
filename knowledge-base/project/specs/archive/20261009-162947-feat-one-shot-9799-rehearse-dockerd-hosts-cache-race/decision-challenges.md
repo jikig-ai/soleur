@@ -14,3 +14,10 @@ Class: User-Challenge (adds scope the operator conditioned on something that is 
   before it). The plan-review simplicity seat recommended the static form; the plan keeps the behavioural suite
   because a static grep is satisfiable by a stub.
 - To change: drop Phase 1, the source guard, and the suite acceptance criteria; the fix itself is unaffected.
+
+## Resolution (work phase, 2026-10-09)
+
+Resolved by the operator brief's own condition ("add test rows to the existing suite if one exists"): no suite
+for the probe exists, so no new behavioural suite file was created. The probe is guarded inside the existing
+`web-ghcr-deny.test.sh` instead (a static `probe` check plus a driven run of the extracted function, mutation
+rows 28-44, floor 56). The source guard the plan proposed was not added.
