@@ -7,8 +7,29 @@
 // for this table), NEVER a pass. Scoring a constraint failure as "denied" is the
 // single most likely false-green in the write matrix.
 
+import { sqlStateFromError } from "../../lib/postgres-errors";
+
 /** SQLSTATE for a row-level-security policy violation. */
 export const RLS_VIOLATION_SQLSTATE = "42501";
+
+/** Transient Postgres SQLSTATES that warrant a bounded retry of the whole
+ *  unit of work: 40P01 deadlock_detected, 55P03 lock_not_available.
+ *  Mirrors apps/web-platform/server/concurrency.ts › acquireSlot()'s set. */
+export const TRANSIENT_SQLSTATES = new Set(["40P01", "55P03"]);
+
+/**
+ * Transient lock SQLSTATES are not verdict inputs: a 40P01/55P03 inside a
+ * probe's catch arm means this transaction was elected deadlock victim — it
+ * must propagate out of `fn` so the `sql`-level retry
+ * (harness-fixture.ts › withTransientRetry) can replay the unit, NEVER classify
+ * as `test-error`. Classifying it would convert a retriable flake into a red
+ * verdict — the exact failure signature this directory's retry exists to
+ * eliminate (#9779). Call before classifying any caught error.
+ */
+export function rethrowIfTransient(err: unknown): void {
+  const code = sqlStateFromError(err);
+  if (code !== undefined && TRANSIENT_SQLSTATES.has(code)) throw err;
+}
 
 export type Verdict =
   | { kind: "denied" } // RLS blocked it — the desired outcome
@@ -17,6 +38,7 @@ export type Verdict =
 
 /** Classify a write (INSERT/UPDATE/DELETE) attempt from its caught error (null = the write succeeded). */
 export function classifyWriteOutcome(err: { code?: string } | null | undefined): Verdict {
+  if (err != null) rethrowIfTransient(err);
   if (err == null) return { kind: "leaked" }; // no error → the cross-tenant write went through
   if (err.code === RLS_VIOLATION_SQLSTATE) return { kind: "denied" };
   return { kind: "test-error", sqlstate: err.code ?? "unknown" };
@@ -40,6 +62,7 @@ export function classifyMutationOutcome(
   affectedRows: number,
 ): Verdict {
   if (err != null) {
+    rethrowIfTransient(err);
     if (err.code === RLS_VIOLATION_SQLSTATE) return { kind: "denied" };
     return { kind: "test-error", sqlstate: err.code ?? "unknown" };
   }
@@ -69,6 +92,7 @@ export const RPC_DENIAL_SQLSTATES = new Set(["42501", "P0001", "P0002"]);
  */
 export function classifyRpcOutcome(err: { code?: string } | null | undefined, returnedRows: number): Verdict {
   if (err != null) {
+    rethrowIfTransient(err);
     if (RPC_DENIAL_SQLSTATES.has(err.code ?? "")) return { kind: "denied" };
     return { kind: "test-error", sqlstate: err.code ?? "unknown" };
   }

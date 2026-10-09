@@ -18,6 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   createNamedWorkspacePair,
@@ -39,6 +40,11 @@ import {
 
 const directProbe = probeSkip("direct");
 const queryProbe = probeSkip("query");
+// #9723 — the deployed PATH shim (same file the prod image installs at
+// /usr/local/bin/bwrap) and its seccomp artifact, for the through-shim FR7b arm.
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const BWRAP_SHIM_PATH = path.join(APP_ROOT, "infra", "bwrap-shim", "bwrap");
+const BWRAP_BPF_PATH = path.join(APP_ROOT, "infra", "bwrap-userns-clone3-deny.bpf");
 // FR9 reads ~/.claude/projects/*.jsonl excerpts and sends them to the Anthropic
 // API. On a dev workstation, historical transcripts could leak if isolation
 // regresses. Require explicit opt-in rather than inferring from CI=true —
@@ -193,6 +199,103 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     // somehow read a legitimate /proc/<pid>/environ and got lucky that the
     // sentinel wasn't there.
     expect(result.stdout + result.stderr).toMatch(FS_DENY_RE);
+  });
+
+  test("FR7b (#9723): the vendored tail --bind /proc /proc is re-masked by the PATH shim", async () => {
+    // The harness argv (buildBwrapArgs) never emits the vendor tail bind, so
+    // FR7 measures a cleaner-than-production shape. This row appends the real
+    // tail — `--bind /proc /proc` (the enableWeakerNestedSandbox defect) — and
+    // runs the SAME argv through the PATH-resolved shim, so the assertion
+    // measures the deployed chain, not the vendor text.
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const sentinel = `FR7B_SECRET_${randomBytes(8).toString("hex")}`;
+    // The vendored argv's namespace set — --unshare-user is load-bearing under
+    // the shim: a /proc-exposing argv without it cannot mount a fresh procfs
+    // (bwrap 0.8.0 in-image → EPERM) and the shim refuses rather than ship the
+    // leak. The deploy-probe shape (pidns without userns) is the counter-case,
+    // pinned by the passthrough row in bwrap-shim.test.ts.
+    const VENDOR_TAIL = ["--unshare-user", "--bind", "/proc", "/proc"];
+
+    const handle = spawnSandboxB(pair.rootB, {
+      pair,
+      readyTimeoutMs: 5_000,
+      env: { ...process.env, FR7B_SECRET: sentinel },
+    });
+    sandboxes.push(handle);
+    await handle.ready;
+    const hostPid = handle.pid;
+
+    // Precondition (same as FR7): the sentinel must actually be on the host's
+    // procfs, or a "masked" result below would be vacuous. The environ READ is
+    // host-policy-dependent though — ptrace_scope≥2, a setuid bwrap binary
+    // (dumpable cleared), or a hidepid procfs all deny it even host→child —
+    // so on EACCES the precondition degrades to PID-dir existence and the
+    // `__SANDBOXB_SEEN__` control arm below (already policy-independent) does
+    // the discrimination. An ENOENT means the spawn died before probing —
+    // that still fails loud.
+    let hostEnviron = "";
+    try {
+      hostEnviron = fs.readFileSync(`/proc/${hostPid}/environ`, "utf8");
+      expect(hostEnviron).toContain(sentinel);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EACCES") throw err;
+      expect(fs.existsSync(`/proc/${hostPid}`)).toBe(true);
+    }
+
+    // Probe shape — positional, host-policy-independent. Whether a masked
+    // procfs leaves `/proc/<hostPid>/environ` READABLE is kernel-dependent
+    // (yama ptrace_scope / userns credentials deny it on some hosts even when
+    // procfs is exposed), so the discriminator is host-pid VISIBILITY: the
+    // sandboxB host pid is a /proc dir only when real procfs is mounted.
+    // (`/proc/1` exists in BOTH arms — under the pidns-scoped `--proc` mask it
+    // is the sandbox's own init — so it is not the discriminator.)
+    const probe = [
+      `test -d /proc/${hostPid} && echo __SANDBOXB_SEEN__`,
+      `cat /proc/${hostPid}/environ 2>/dev/null || true`,
+      // Self-view intactness: the vendor's `apply-seccomp /proc/self/fd/N`
+      // inner command needs procfs for SELF — the mask must not break it.
+      `test -e /proc/self/environ && echo __SELFPROC_OK__`,
+    ].join("; ");
+
+    // CONTROL — the same argv straight through the real binary keeps the
+    // defect: the tail bind re-mounts HOST procfs over the pidns isolation,
+    // so the sandboxB host pid is visible in-sandbox.
+    const control = spawnBwrap(pair.rootA, probe, {
+      pair,
+      timeoutMs: 5_000,
+      extraArgs: VENDOR_TAIL,
+    });
+    expect(control.setupFailed, `control bwrap setup failed: ${control.stderr}`).toBe(false);
+    expect(control.stdout, "control must expose host procfs (the tail-bind defect is real)").toContain("__SANDBOXB_SEEN__");
+
+    // TREATMENT — the identical argv through the deployed shim: it lands a
+    // fresh `--proc /proc` (pidns-scoped procfs) after the tail bind, so
+    // in-sandbox /proc carries only the sandbox's own pids — nothing for the
+    // host-side sentinel to ride.
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "iso-shim-"));
+    fs.symlinkSync(BWRAP_SHIM_PATH, path.join(shimDir, "bwrap"));
+    try {
+      const env = {
+        ...process.env,
+        PATH: `${shimDir}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+        SOLEUR_BWRAP_REAL: "/usr/bin/bwrap",
+        SOLEUR_BWRAP_SECCOMP_BPF: BWRAP_BPF_PATH,
+      };
+      const masked = spawnBwrap(pair.rootA, probe, {
+        pair,
+        timeoutMs: 5_000,
+        extraArgs: VENDOR_TAIL,
+        env,
+      });
+      expect(masked.setupFailed, `masked bwrap setup failed: ${masked.stderr}`).toBe(false);
+      expect(masked.stdout).not.toContain(sentinel);
+      expect(masked.stdout).not.toContain("__SANDBOXB_SEEN__");
+      // The pidns-scoped procfs keeps the SELF view — not an empty mount.
+      expect(masked.stdout).toContain("__SELFPROC_OK__");
+    } finally {
+      fs.rmSync(shimDir, { recursive: true, force: true });
+    }
   });
 
   test("TOCTOU regression (#5862): a sibling created AFTER the namespace build stays masked", async () => {

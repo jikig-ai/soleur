@@ -54,6 +54,7 @@ import { resolveWorkspaceMode } from "@/server/workspace-mode";
 // sibling creation.
 describe("buildAgentSandboxConfig drift guard", () => {
   let root: string;
+  let wtRoot: string;
   let own: string;
   let sibA: string;
   let sibB: string;
@@ -67,6 +68,11 @@ describe("buildAgentSandboxConfig drift guard", () => {
     mkdirSync(sibA);
     mkdirSync(sibB);
     vi.stubEnv("WORKSPACES_ROOT", root);
+    // #9725: the raw worktree root joins the deny set unconditionally — stub
+    // it to a deterministic absent path so the verbatim denyRead assertions
+    // can't drift with host env or a realpath alias.
+    wtRoot = `${root}-worktrees`;
+    vi.stubEnv("WORKTREE_ROOT", wtRoot);
     vi.stubEnv("C4_RENDER_STAGING_ROOT", `${root}-c4-staging`);
   });
 
@@ -106,6 +112,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
     const tokenDir = process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens";
     expect(result.filesystem.denyRead).toEqual([
       root,
+      wtRoot,
       `${root}-c4-staging`,
       "/proc",
       tokenDir,
@@ -189,6 +196,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // after /proc because the builder dedupes denyReadExtra before it lands.
     expect(result.filesystem.denyRead).toEqual([
       root,
+      wtRoot,
       `${root}-c4-staging`,
       "/proc",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
@@ -202,6 +210,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
     });
     expect(result.filesystem.denyRead).toEqual([
       root,
+      wtRoot,
       `${root}-c4-staging`,
       "/proc",
       extra,
@@ -229,6 +238,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
   let root: string;
   let own: string;
   let sibA: string;
+  let wtRoot: string;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "sbx-egress-"));
@@ -237,6 +247,8 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     mkdirSync(own);
     mkdirSync(sibA);
     vi.stubEnv("WORKSPACES_ROOT", root);
+    wtRoot = `${root}-worktrees`;
+    vi.stubEnv("WORKTREE_ROOT", wtRoot);
     vi.stubEnv("C4_RENDER_STAGING_ROOT", `${root}-c4-staging`);
   });
 
@@ -267,6 +279,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     // The egress token dir is denied for every session (#9534).
     expect(result.filesystem.denyRead).toEqual([
       root,
+      wtRoot,
       `${root}-c4-staging`,
       "/proc",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",

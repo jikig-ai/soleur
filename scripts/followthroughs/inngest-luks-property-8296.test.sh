@@ -576,7 +576,7 @@ landed_within() {
       ok = 0
       for (i = 1; i <= n; i++) { split(R[i], lh, "-"); if (a >= lh[1] + 0 && b <= lh[2] + 0) ok = 1 }
       if (!ok) bad = 1 }
-    END { if (bad) print "out" }' <<<"$hunks" | grep -q out && return 1
+    END { if (bad) print "out" }' <<<"$hunks" | grep -c >/dev/null out && return 1
   return 0
 }
 fn_range() { # <file> <fn-name> -> "start-end" of `name() {` … first `}` at column 0
@@ -651,7 +651,7 @@ if [[ "$(grep -cxE '    exit 2' "$PROBE_SRC")" == 1 ]]; then pass "mutation row 
 else fail "mutation row 7a: expected exactly one '    exit 2' line"; fi
 assert_landed 7a "$M" "$DECIDE_R"
 cases=$((cases + 1))
-if allowlist_violations "$M" | grep -qE ':exit 0$'; then pass "mutation row 7a: static allowlist reds on exit 0"
+if allowlist_violations "$M" | grep -cE >/dev/null ':exit 0$'; then pass "mutation row 7a: static allowlist reds on exit 0"
 else fail "mutation row 7a: static allowlist missed exit 0"; fi
 reset_case; C_ROWS="$_fresh_luks"; C_PROBE="$M"
 expect_red 7a "exit 2 -> exit 0 in the agree arm" 2 agree
@@ -747,19 +747,19 @@ placement_check() {
   el="$(grep -nE 'if \[\[ "\$LK_STATE" == "\$LK_EXPECT" \]\]; then' <<<"$body" | cut -d: -f1)"
   gl="$(head -n "$((nl - 1))" <<<"$body" | grep -nE '^[[:space:]]*(el)?if[[:space:]]' | tail -1 | cut -d: -f1)"
   [[ -n "$gl" ]] || { echo "no enclosing if above the NEXT line"; return 1; }
-  sed -n "${gl}p" <<<"$body" | grep -qE '^[[:space:]]*if \[\[ "?\$OP"? == "?luks-rollback"? \]\]; then[[:space:]]*$' \
+  sed -n "${gl}p" <<<"$body" | grep -cE >/dev/null '^[[:space:]]*if \[\[ "?\$OP"? == "?luks-rollback"? \]\]; then[[:space:]]*$' \
     || { echo "the nearest guard above NEXT is not the luks-rollback guard: $(sed -n "${gl}p" <<<"$body")"; return 1; }
   (( el < cl && cl < gl && gl < nl )) || { echo "order violated (success-branch $el, confirm $cl, guard $gl, NEXT $nl)"; return 1; }
   if sed -n "$((el + 1)),$((nl - 1))p" <<<"$body" | grep -vE '^[[:space:]]*#' \
-      | grep -qE '^[[:space:]]*(else|elif|fi|esac)\b|;;|REFUSING|::error::|\bexit\b'; then
+      | grep -cE >/dev/null '^[[:space:]]*(else|elif|fi|esac)\b|;;|REFUSING|::error::|\bexit\b'; then
     echo "a branch boundary or refusal sits between the success branch and NEXT"; return 1
   fi
-  sed -n "${nl}p" <<<"$body" | grep -qE '^[[:space:]]*echo "::notice::NEXT \(not automatic\):[^"]*"$' \
+  sed -n "${nl}p" <<<"$body" | grep -cE >/dev/null '^[[:space:]]*echo "::notice::NEXT \(not automatic\):[^"]*"$' \
     || { echo "NEXT is not a bare echo \"::notice::NEXT (not automatic): ...\" line (redirected, conditional or reshaped)"; return 1; }
-  if (( gl + 1 <= nl - 1 )) && sed -n "$((gl + 1)),$((nl - 1))p" <<<"$body" | grep -qvE '^[[:space:]]*(#.*)?$'; then
+  if (( gl + 1 <= nl - 1 )) && sed -n "$((gl + 1)),$((nl - 1))p" <<<"$body" | grep -cvE >/dev/null '^[[:space:]]*(#.*)?$'; then
     echo "something other than comments sits between the luks-rollback guard and NEXT (a loop, heredoc or function would make it dead)"; return 1
   fi
-  if sed -n "${nl}p" <<<"$body" | grep -qE 'REFUSING|::error::'; then echo "NEXT sits on a refusal line"; return 1; fi
+  if sed -n "${nl}p" <<<"$body" | grep -cE >/dev/null 'REFUSING|::error::'; then echo "NEXT sits on a refusal line"; return 1; fi
   return 0
 }
 

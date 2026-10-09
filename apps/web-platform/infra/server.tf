@@ -976,13 +976,13 @@ locals {
   ghcr_deny_sh        = <<-EOT
     for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
       [ -f "$f" ] || continue
-      for h in ghcr.io pkg-containers.githubusercontent.com; do
+      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
         grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
       done
     done
   EOT
   ghcr_deny_assert_sh = <<-EOT
-    for h in ghcr.io pkg-containers.githubusercontent.com; do
+    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
       a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
       if [ -z "$a" ] || printf '%s\n' "$a" | grep -cvxE '0\.0\.0\.0|::' >/dev/null; then
         echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2

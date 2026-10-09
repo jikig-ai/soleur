@@ -72,8 +72,8 @@ write_files:
   # retention.delay 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay
   # stays 1h (the dangling-blob SAFETY window that protects a blob just uploaded but not yet
   # manifest-referenced during an in-flight push — shortening it risks reclaiming an in-progress
-  # layer). NO on-boot gc trigger is issued: zot v2.1.20 exposes no sanctioned on-demand gc HTTP
-  # endpoint — MEASURED 2026-08-05 (#7282) by probing the pinned image locally: /v2/_zot/gc,
+  # layer). NO on-boot gc trigger is issued: zot v2.1.22 exposes no sanctioned on-demand gc HTTP
+  # endpoint — MEASURED 2026-10-08 (#9252) by probing the pinned image locally: /v2/_zot/gc,
   # /v2/_catalog/gc, /_zot/gc and /v2/_zot/ext/gc all answer 404, and the release's BinaryType
   # excludes mgmt/scrub/search entirely (hr-verify-repo-capability-claim — no fabricated admin
   # call). Re-measure on every bump, never re-word. So the tightened
@@ -85,12 +85,12 @@ write_files:
   # plain `docker build` → docker-schema2, so it needs this; the web image is OCI (buildx) and
   # does not. (project-zot pkg/compat/compat.go DockerManifestV2SchemaV2 = "docker2s2".)
   #
-  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.20 supplies BOTH
+  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.22 supplies BOTH
   # deadlines as 60000000000 ns (60.000 s) when the "http" block omits them — read off the
-  # PINNED digest's own boot config, not from docs. At 60 s a 703_724_542 B layer must sustain
-  # 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,
-  # zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
-  # off-box against the pinned digest over a docker bridge with NO tunnel and NO Cloudflare
+  # PINNED digest's own boot config, not from docs (re-read 2026-10-08, #9252). At 60 s a
+  # 703_724_542 B layer must sustain 11.73 MB/s, and three concurrent layers ~280 Mbit/s through
+  # one tunnel; when it does not, zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
+  # off-box against the then-pinned v2.1.20 digest over a docker bridge with NO tunnel and NO Cloudflare
   # edge, by dribbling a 4 MB blob over 100 s: same message, same routes.go:2078, same
   # statusCode:500, same latency:1m0s. So the tunnel is exonerated and this is a TIME wall, not
   # a size wall — the 272_236_549 B layer died at the same deadline (< 4.54 MB/s effective).
@@ -326,7 +326,7 @@ write_files:
       # reaches web-1, not the registry — #7278), so without it "did the bump land?" is
       # unanswerable by any means available to this project. That matters most in the EXPECTED
       # steady state: the pin merges but stays staged (zot-registry.tf is an
-      # OPERATOR_APPLIED_EXCLUSION), so the repo pins a newer zot v2.1.20 while the live host still
+      # OPERATOR_APPLIED_EXCLUSION), so the repo pins a newer zot v2.1.22 while the live host still
       # runs its older one, and that divergence is the norm until
       # the host-replace path unblocks, and today that divergence is invisible.
       #
@@ -2335,7 +2335,7 @@ runcmd:
   - |
     for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
       [ -f "$f" ] || continue
-      for h in ghcr.io pkg-containers.githubusercontent.com; do
+      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
         grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
       done
     done
