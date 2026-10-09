@@ -50,8 +50,11 @@ capacity/placement.
   — SDK loop, MCP servers, hooks, `claude` CLI — so no tenant state shares a heap,
   procfs, network namespace or IPC with another tenant or with the control plane.
 - **G2.** A narrow executor protocol (`RemoteQuery` behind the runner's
-  `QueryFactory`) over an inherited stream, remote-ready (version-checked, no
-  filesystem/abstract sockets), so a remote executor host is additive.
+  `QueryFactory`) that is runtime-neutral and remote-ready (version-checked). The
+  transport is **reopened (2026-10-09)**: an inherited stream/socketpair on a
+  single host, or a network/mTLS transport under Kubernetes; S4 (#9846)
+  evaluates both. The earlier "no filesystem/abstract sockets" rule applies only
+  to the single-host stream form.
 - **G3.** A host-side **executor supervisor** launches sandboxes; the
   control plane never gains Docker/host privileges.
 - **G4.** A **provider-neutral executor-host contract + conformance suite**;
@@ -70,9 +73,11 @@ capacity/placement.
 
 - **NG1.** Per-tenant containers/dedicated servers as the *general* boundary
   (named enterprise escape hatch; tripwires in brainstorm Decision 11).
-- **NG2.** Firecracker/Kata — only where a provider offers nested virt/bare metal
-  and a customer/DPA requires a hardware boundary (Hetzner Cloud does not expose
-  nested virt — CONFIRMED vendor FAQ).
+- **NG2.** [Updated 2026-10-09] Kubernetes/k3s and a second EU provider are now
+  allowed, so Kata (Cloud Hypervisor) is a live option on KVM-capable nodes and
+  is compared head-to-head with gVisor in S1a/S1b. Still out: Firecracker as a
+  separate stack (Kata can wrap it), and any managed vendor (new Art. 28
+  sub-processor). Hetzner Cloud does not expose nested virt (vendor FAQ).
 - **NG3.** Nomad/k8s/managed runtime — only at a trigger recorded **in an ADR**
   (ADR-068 §8 Phase 4a, or the AX eval's sustained-concurrency trigger once
   recorded).
@@ -119,7 +124,7 @@ Cited, unverified, to re-check in S1: a gVisor CUSE device-node escape
 (CVE-2026-96812, fix at commit `573a9e7`, no release named) - pin `runsc` past the
 fix and reject image-supplied device nodes.
 
-### Pass 2 - constraints relaxed (2026-10-09, recommendation; operator decision pending)
+### Pass 2 - constraints relaxed (2026-10-09; operator APPROVED: widened S0 three-way comparison, S1 split into S1a/S1b, new spikes S9-S12 (#9864-#9867, KVM node S11 #9866), and reopening the FR2 transport rule)
 
 The operator relaxed two pass-1 constraints: Kubernetes/k3s is allowed and a second
 EU-resident provider is allowed (KVM and microVMs are back in scope). Full tables:
