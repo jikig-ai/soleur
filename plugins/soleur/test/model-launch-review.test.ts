@@ -797,6 +797,34 @@ describe("model-launch-review Haiku 5.5 launch", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("a root whose NAME contains regex metacharacters still exempts the carved file and still flags a stale sibling", () => {
+    // The carve-out regex embeds $ROOT; an unescaped `+ ( ) [ ]` would turn the exemption into
+    // a pattern that no longer matches the carved path (a false stale hit) or matches too much.
+    const base = mkdtempSync(join(tmpdir(), "mlr-meta-"));
+    const root = join(base, "a+b(1)[x]");
+    mkdirSync(join(root, "apps/web-platform/scripts"), { recursive: true });
+    mkdirSync(join(root, "apps/web-platform/server/x"), { recursive: true });
+    writeFileSync(join(root, "apps/web-platform/scripts/sandbox-canary.mjs"), 'const M = "claude-haiku-4-5";\n');
+    expect(run(["--detect"], root).status, "carved file exempt under a metachar root").toBe(0);
+    writeFileSync(join(root, "apps/web-platform/server/x/real.ts"), 'const M = "claude-haiku-4-5";\n');
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(10);
+    expect(det.stdout).toContain("real.ts");
+    expect(det.stdout).not.toContain("sandbox-canary.mjs");
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("a root containing a NEWLINE is refused (exit 64): it would split the exemption pattern and fail open", () => {
+    const base = mkdtempSync(join(tmpdir(), "mlr-nl-"));
+    const root = join(base, "a\nb");
+    mkdirSync(join(root, "apps/web-platform/server/x"), { recursive: true });
+    writeFileSync(join(root, "apps/web-platform/server/x/real.ts"), 'const M = "claude-haiku-4-5";\n');
+    const r = run(["--detect"], root);
+    expect(r.status).toBe(64);
+    expect(r.stdout).not.toContain("model-drift: none");
+    rmSync(base, { recursive: true, force: true });
+  });
+
   test("the carve-out is ANCHORED: a nested copy, a suffixed name and a near-miss spelling are still detected", () => {
     const stale = 'const MODEL = "claude-haiku-4-5";\n';
     const root = rootWith({

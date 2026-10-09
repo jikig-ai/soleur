@@ -266,7 +266,7 @@ dissented, correctly — the premise dissolves once the window lands.
 Residual, unchanged and out of scope: the ceiling read fails closed on a transient Postgres error,
 so a database blip fails the spawn rather than admitting it.
 
-## Addendum — 2026-10-08: Haiku 5.5 rate cards and the sub-cent Layer 2 gap
+## Addendum — 2026-10-08: Haiku 5.5 rate cards and the sub-cent cap blind spot
 
 Claude Haiku 5.5 (`claude-haiku-5-5`) replaced Haiku 4.5 as the Haiku-class model in
 `MODEL_PRICING`. Three consequences for the ledger and the layers. The amendment above is left as
@@ -290,8 +290,9 @@ The same change corrected `MODEL_PRICING[SONNET_MODEL]` cache read from $0.20 to
 (0.05× base input, per Anthropic's pricing page). This is a second undated boundary of the kind the
 2026-09-03 amendment describes ("The WORM boundary is undated in the data"), and the same reasoning
 applies. `audit_byok_use` has no model or rate column and its rows are permanent, so earlier rows
-are **not** restated, and the only partition key is `created_at` against 2026-10-08. The exact
-boundary is the UTC time of the merge commit that changed the row. Recover it with
+are **not** restated, and the only partition key is `created_at` against 2026-10-08. The boundary is
+the deploy of the release containing the merge commit that changed the row (the merge time is a
+day-level proxy; the release workflow run gives the minute). Recover the commit with
 `git log -S'cacheReadPerToken: 0.2 / 1_000_000' -- apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts`
 and take the NEWEST commit it lists (the older one introduced the $0.20 value; the correction
 removes it, so it is the one whose occurrence count changes last, and it survives a squash
@@ -302,12 +303,15 @@ Today cost route, the audit page) carry a permanent over-attributed segment boun
 pre-boundary Sonnet cache-read cents. Those totals still must not be presented as reconcilable
 against the founder's Anthropic invoice.
 
-The Haiku 4.5 to 5.5 swap is itself a boundary of the same kind and a larger one: every Haiku
-rate fell about 10× at the same instant (input $1 to $0.10 per MTok), and the ledger has no model
-column to tell the two regimes apart. Rolling windows and lifetime aggregates spanning it blend a
-~10× over-attributed Haiku segment with a correct one, again in the over-attribution direction.
+The Haiku 4.5 to 5.5 swap is a boundary too, of a different kind. The dollars are not wrong on
+either side: Haiku 4.5 rows priced real 4.5 calls at 4.5's actual rates. What changes is how much of
+the spend the caps can see. Every Haiku rate fell about 10× at one instant (input $1 to $0.10 per
+MTok), so a typical Haiku turn went from a few cents (accumulating) to under half a cent (stored
+as 0, see below). A window or lifetime aggregate spanning the swap therefore shows a step down in
+Haiku cap-input that reflects the model change, not a change in usage. There is no model column
+to separate the two regimes.
 
-### Layer 2 does not bound a Haiku class in practice
+### The caps cannot see a sub-cent Haiku turn
 
 The Consequences section above says the $2.60 ceiling bounds worst-case spend "even on a
 misbehaving Haiku-routed class", and the Layer 3 text says Layer 2 does not fire on Haiku classes
@@ -316,22 +320,28 @@ representative leader turn (20K uncached input plus 1K output) costs about $0.00
 mostly-cache-read turn about $0.0007. Both round to **0 cents** under the `Math.round(x * 100)`
 in the cost writers (pinned through the real writers in `cost-writer-unpriced.test.ts`).
 
-That blinds **both** accumulating layers, not only Layer 2: migration 121's Layer 1 sum is
-`SUM(token_count * unit_cost_cents)` over the same stored cents, and a 0-cent row is permanent in
-the WORM ledger, so delegated hourly and daily caps never see that spend either. The rounding is
-bimodal, though: a turn of half a cent or more (roughly 50K+ uncached input tokens on the short
-card) rounds to 1 cent or more and then contributes its **full token count** to the product, and
-a long-card turn (prompt over 100K tokens, at least about 5 cents) contributes at least ~500K
-points, which exceeds a default cap on a single turn. So a Haiku class is invisible to the caps
-while its turns are cheap and over-weighted once a turn is expensive.
+That blinds **both** accumulating layers to such turns, not only Layer 2: the cap function's Layer 1
+sum is `SUM(token_count * unit_cost_cents)` over the same stored cents (migration 137 holds the
+current body; it was introduced in 121), and a 0-cent row is permanent in the WORM ledger, so
+delegated hourly and daily caps (which sum cents) never see that spend either.
 
-What bounds a Haiku class is **Layer 3, a bound on turns, not on dollars**: 8 turns × 4096
-`max_tokens` caps output at about $0.016 on the short card and about $0.082 on the long card, but
-it does not bound input, and on a 1M-token window eight long-card turns of input could exceed the
-$2.60 promise. The residual is self-limiting only because any turn expensive enough to matter is
-also expensive enough to round to at least 1 cent and be ledgered; the unledgered remainder is
-under half a cent per turn, about $0.04 over eight turns. The single-click dollar promise for
-these classes is therefore best-effort until #6945 lands, not a guarantee.
+The rounding is bimodal, so the blind zone is bounded:
+
+- A turn under half a cent (the typical Haiku 5.5 turn) is stored as 0 and invisible to every cap.
+- A turn of half a cent or more rounds to at least 1 cent and is ledgered. Solo Layer 1 then
+  multiplies by token count, so a 1-cent turn of ~50K tokens contributes ~50K points against a
+  2000-point cap. An all-uncached long-card turn (prompt over 100K tokens, $0.05 or more) is at
+  least 5 cents and contributes at least ~500K points; the same 100K prompt served from cache is
+  about half a cent, 1 cent, and ~100K points. Either exceeds a default solo cap in one turn.
+- Layer 2 and the delegated caps sum cents, not cents × tokens, so they accumulate those turns
+  normally: a $0.50 turn ledgers as 50 cents and Layer 2 blocks the spawn after about the fifth.
+
+So Haiku classes are invisible to the caps while their turns are cheap and over-weighted by solo
+Layer 1 once a turn is expensive. The unledgered exposure is the cheap zone: under half a cent per
+turn, so under about $0.04 over the 8 turns Layer 3 allows, plus the usual one-turn overshoot of
+Layer 2. Layer 3 bounds the number of turns (and output tokens), not dollars; the claim above
+that Layer 2 bounds "even a misbehaving Haiku-routed class" is correct only for the expensive
+zone, and the single-click dollar promise is held by the combination, not by any one layer.
 
 The tracked fix is #6945 (the cost writers multiply tokens by cents and compare the sum to a cents
 budget, so the quantization and the dimension are wrong together). It is **deliberately not fixed

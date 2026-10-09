@@ -293,6 +293,22 @@ describe("resolveTurnCostUsd — Haiku 5.5 two-card pricing (Guard 2)", () => {
   // itself pins a JS builtin and cannot notice cost-writer.ts changing.
 });
 
+// The Haiku id also appears as a literal in files no import can reach (a composite action's
+// shell, a bash bench, a test stub). The model-drift detector excludes /test/ and does not
+// know which Haiku id is the tier's, so pin them to the SSOT here.
+describe("Haiku id literals outside TypeScript equal the tier SSOT", () => {
+  const ROOT = join(__dirname, "../../../../..");
+  it.each([
+    [".github/actions/anthropic-preflight/action.yml", /model:"(claude-haiku-[^"]+)"/],
+    ["scripts/learning-retrieval-bench.sh", /^MODEL_ID="(claude-haiku-[^"]+)"/m],
+    ["apps/web-platform/test/helpers/anthropic-stub.ts", /parsed\.model \?\? "(claude-haiku-[^"]+)"/],
+  ])("%s", (rel, re) => {
+    const m = readFileSync(join(ROOT, rel), "utf8").match(re);
+    expect(m, `${rel}: model literal not found`).not.toBeNull();
+    expect(m![1]).toBe(HAIKU_MODEL);
+  });
+});
+
 describe("audit-cron effort pin — #8603 Guard 1", () => {
   const files = readdirSync(FUNCTIONS_DIR).filter((f) => f.endsWith(".ts"));
   const code = new Map(

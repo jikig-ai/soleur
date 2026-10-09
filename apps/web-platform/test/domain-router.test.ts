@@ -23,6 +23,7 @@ vi.mock("@/server/logger", () => ({
 
 import { parseAtMentions, routeMessage } from "@/server/domain-router";
 import { HAIKU_MODEL } from "@/server/inngest/leader-prompts/constants";
+import { stripComments } from "./helpers/strip-comments";
 
 describe("parseAtMentions", () => {
   test("parses lowercase leader IDs", () => {
@@ -466,6 +467,26 @@ describe("routeMessage classify (auto) path", () => {
     await routeMessage("Help me with something", "fake-api-key");
     expect(reportSilentFallbackMock.mock.calls[0][1].extra.stop_reason).toBe("unknown");
     expect(JSON.stringify(reportSilentFallbackMock.mock.calls)).not.toContain("SENTINEL");
+    // The catch's pino log (mirrored to Sentry as a breadcrumb/event) is a SECOND sink for
+    // the same API string: it must be allowlisted too, not only the tagged mirror.
+    expect(JSON.stringify(logErrorMock.mock.calls)).not.toContain("SENTINEL");
+    expect(JSON.stringify(logErrorMock.mock.calls)).toContain('"stop_reason":"unknown"');
+  });
+
+  test("a max_tokens turn whose JSON is still COMPLETE routes normally; the mirror reports it without claiming a fallback", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [{ type: "text", text: '{"leaders":["clo"]}' }],
+        stop_reason: "max_tokens",
+      }),
+    );
+    const result = await routeMessage("Is our privacy policy compliant?", "fake-api-key");
+    expect(result).toEqual({ leaders: ["clo"], source: "auto" });
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+    const { message, extra } = reportSilentFallbackMock.mock.calls[0][1];
+    expect(extra.stop_reason).toBe("max_tokens");
+    // It did NOT fall back, so the message must not say it did.
+    expect(message).not.toMatch(/falling back|fell back|fallback/i);
   });
 
   test("the sentinel sweep also covers the REFUSAL path, including the mirror's message", async () => {
@@ -521,20 +542,16 @@ describe("routeMessage classify (auto) path", () => {
 // allowed module is itself small — constants.ts and anthropic-stop-report.ts import
 // nothing, observability.ts is already on this path via agent-runner.)
 describe("domain-router stays leaf-light", () => {
-  const src = readFileSync(join(__dirname, "../server/domain-router.ts"), "utf8")
-    .split("\n")
-    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-    .join("\n");
+  // Comments stripped properly (block and line), then EVERY `from "x"` / `import "x"` /
+  // `import("x")` occurrence is read wherever it sits on a line: two imports on one line,
+  // an import after a statement, and an import after a block comment are all seen.
+  const src = stripComments(readFileSync(join(__dirname, "../server/domain-router.ts"), "utf8"));
 
   test("imports exactly the five known modules, in any quoting or form, and nothing octokit-shaped", () => {
-    // `import … from "x"`, `import "x"`, `export … from "x"` — single OR double quotes,
-    // with or without a trailing semicolon, and multi-line import lists.
-    const specifiers = [
-      ...src.matchAll(/^\s*(?:import|export)\b[^"';]*?(?:from\s*)?["']([^"']+)["']/gm),
-    ].map((m) => m[1]);
+    const specifiers = [...src.matchAll(/\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]);
     // Non-vacuity: the extraction found the imports it is supposed to constrain.
     expect(specifiers.length).toBeGreaterThanOrEqual(5);
-    expect([...specifiers].sort()).toEqual([
+    expect([...new Set(specifiers)].sort()).toEqual([
       "./anthropic-stop-report",
       "./domain-leaders",
       "./inngest/leader-prompts/constants",
@@ -544,6 +561,14 @@ describe("domain-router stays leaf-light", () => {
     for (const spec of specifiers) {
       expect(spec).not.toMatch(/octokit|github-app|_cron-shared/);
     }
+  });
+
+  test("the extraction sees the shapes that evaded the previous line-anchored regex (known-positive controls)", () => {
+    const sample = stripComments(
+      'import a from "./ok"; import b from "heavy-one";\nconst x = 1; import c from "heavy-two";\n/* note */ import d from "heavy-three";\n',
+    );
+    const found = [...sample.matchAll(/\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]);
+    expect(found).toEqual(["./ok", "heavy-one", "heavy-two", "heavy-three"]);
   });
 
   test("no dynamic import() and no require() of anything", () => {

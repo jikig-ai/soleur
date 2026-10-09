@@ -1,7 +1,7 @@
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
-import { noTextBlockExtra } from "./anthropic-stop-report";
+import { noTextBlockExtra, safeStopReason } from "./anthropic-stop-report";
 import { HAIKU_MODEL } from "./inngest/leader-prompts/constants";
 
 const log = createChildLogger("domain");
@@ -223,7 +223,8 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
     // pino log mirrors that as a second, untagged event: expected, the tagged one is the
     // one that carries stop_reason/category. `extra` is built by the shared helper from a
     // closed vocabulary; the user's message, the context and the key never ride along.
-    stopReason = typeof data.stop_reason === "string" ? data.stop_reason : "unknown";
+    // Allowlisted: the catch below logs it, and pino mirrors that log to Sentry.
+    stopReason = safeStopReason(data.stop_reason);
     const noTextExtra = noTextBlockExtra({
       text,
       stopReason: data.stop_reason,
@@ -234,8 +235,9 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
       reportSilentFallback(null, {
         feature: "domain-router",
         op: "no-text-block",
-        message:
-          "domain router classifier returned no usable text or was cut off (see extra.stop_reason) — falling back to cpo",
+        // Neutral on purpose: a max_tokens/refusal turn whose JSON is still complete routes
+        // normally, so this must not claim a fallback. extra.stop_reason says which case.
+        message: "domain router classifier turn was empty, cut off or refused (see extra.stop_reason)",
         extra: noTextExtra,
       });
     }

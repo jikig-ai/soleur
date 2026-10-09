@@ -283,13 +283,15 @@ Haiku 4.5 at $1 / $5. It has a 1M-token context window, a 128K output ceiling, a
 yields about 30% more tokens, adaptive thinking on by default, `effort` levels `low` to `max`
 (default `medium`), no server-side fallback, and can return `stop_reason: "refusal"`. The 2026-09-03
 tables are left as recorded (see the dated notes above). Cost-ledger semantics (the long-prompt rate
-card, the Sonnet 5.5 cache-read regime boundary, and why Layer 2 no longer bounds a Haiku class) live
+card, the Sonnet 5.5 cache-read regime boundary, and why the caps cannot see a sub-cent Haiku turn) live
 in the [ADR-041 addendum](./ADR-041-byok-cap-enforcement-model.md), not here.
 
 ### Verdicts
 
 Every model-selecting site was inventoried and judged against this ADR's Decisions 2 and 3 (mechanical
-steps may go cheap; the never-downgrade list is excluded). Two of the "Move now" sites, the domain
+steps may go cheap; the never-downgrade list is excluded). Those decisions are written for workflow
+spawn pins; applying them to server, CI and cron sites is an extension by analogy, stated here
+rather than assumed. Two of the "Move now" sites, the domain
 router and the email summarizer, read user text and were already Haiku-tier before this launch, so
 their tier is unchanged by the verdict.
 

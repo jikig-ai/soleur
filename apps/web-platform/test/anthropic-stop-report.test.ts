@@ -80,7 +80,18 @@ describe("closed vocabularies — API strings are allowlisted before they reach 
 
   it("the vocabularies are the documented ones (a rename or removal is a deliberate test change)", () => {
     expect([...KNOWN_REFUSAL_CATEGORIES].sort()).toEqual(["bio", "cyber", "frontier_llm", "general_harms"]);
-    expect([...KNOWN_STOP_REASONS]).toContain("refusal");
-    expect([...KNOWN_STOP_REASONS]).toContain("max_tokens");
+    // The whole set, literally: dropping stop_sequence/tool_use/pause_turn would make a
+    // perfectly normal stop read as "unknown" in the sink.
+    expect([...KNOWN_STOP_REASONS].sort()).toEqual(
+      [
+        "end_turn",
+        "max_tokens",
+        "model_context_window_exceeded",
+        "pause_turn",
+        "refusal",
+        "stop_sequence",
+        "tool_use",
+      ].sort(),
+    );
   });
 });

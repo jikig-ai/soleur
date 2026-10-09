@@ -32,6 +32,15 @@ if [[ -z "$ROOT" ]]; then
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 fi
 ROOT="${ROOT%/}"   # normalize: trailing slash breaks rel() prefix-strip
+# A newline in ROOT would split the SDK-carve-out pattern built from it below: grep -E then
+# fails ("Unmatched (") and every `grep -vE "$EXCLUDE_RE" || true` swallows the error, so
+# --detect would print a clean verdict over a scan that excluded nothing. Refuse it up front.
+case "$ROOT" in
+  *$'\n'*)
+    echo "audit-models: refusing a --root containing a newline (it would corrupt the exclusion pattern)" >&2
+    exit 64
+    ;;
+esac
 
 # --- current landscape — update at each model launch ---
 # Each superseded id maps to the CURRENT same-tier id as "<stale>=<current>".

@@ -50,7 +50,7 @@ import { runWithByokLease, type ByokLeaseError } from "@/server/byok-lease";
 import { isAnthropicCreditExhausted } from "@/server/anthropic-credit";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
-import { refusalCategory } from "@/server/anthropic-stop-report";
+import { refusalCategory, safeStopReason } from "@/server/anthropic-stop-report";
 import { notifyOfflineUser, isCostBreakerReason } from "@/server/notifications";
 import { ACTION_CLASSES, type ActionClass } from "@/server/scope-grants/action-class-map";
 import {
@@ -858,7 +858,7 @@ export async function agentOnSpawnRequestedHandler({
           turnResult.stop_reason === "refusal"
             ? "leader_refused"
             : "leader_response_truncated",
-        err: new Error(`stop_reason=${turnResult.stop_reason} on turn ${n}`),
+        err: new Error(`stop_reason=${safeStopReason(turnResult.stop_reason)} on turn ${n}`),
         founderId,
         messageId,
         actionClass,

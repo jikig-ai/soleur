@@ -48,10 +48,16 @@ export type MailClass = (typeof MAIL_CLASS_ALLOWLIST)[number];
 /**
  * Stored (write-once column) when the model returned no usable answer: empty text, a
  * refusal, or a turn cut off before a parseable summary. An explicit placeholder beats an
- * empty string or a raw JSON fragment the operator would have to interpret.
+ * empty string or a raw JSON fragment the operator would have to interpret. The body is
+ * discarded at ingestion, so the pointer is the original in the ops@ mailbox (the same
+ * wording email-on-received.ts uses for its own degraded rows).
+ *
+ * It must NOT start with email-on-received's `fetch/summarize failed` prefix: that prefix
+ * is what the daily LLM-call ceiling EXCLUDES from its count, and a degraded Haiku turn
+ * spent money, so it has to keep counting.
  */
-export const DEGRADED_SUMMARY =
-  "Summary unavailable (the model returned no usable answer) — open the email to read it.";
+export const NO_USABLE_ANSWER_SUMMARY =
+  "Summary unavailable (the model returned no usable answer) — verify against the Proton original";
 
 /** Hard byte cap applied to the body BEFORE sanitize/summarize. */
 export const MAX_SUMMARIZE_BODY_BYTES = 64 * 1024;
@@ -177,8 +183,7 @@ export async function summarizeEmail(input: {
     reportSilentFallback(null, {
       feature: "email-triage",
       op: "no-text-block",
-      message:
-        "email summarizer got no usable answer (see extra.stop_reason) — stored the degraded placeholder",
+      message: "email summarizer turn was empty, cut off or refused (see extra.stop_reason)",
       extra: noTextExtra,
     });
   }
@@ -206,10 +211,10 @@ export async function summarizeEmail(input: {
   // healthy non-JSON answer keeps its raw text (unchanged). The class coercion is skipped
   // for a degraded turn with no class: the no-text-block report above already covers the
   // incident, and a second event for it is noise.
-  const summary = parsedSummary ?? (noTextExtra === null ? raw : DEGRADED_SUMMARY);
+  const summary = parsedSummary ?? (noTextExtra === null ? raw : NO_USABLE_ANSWER_SUMMARY);
   return {
     summary: summary.slice(0, 600),
     mailClass:
-      noTextExtra !== null && parsedClass === null ? "other" : coerceMailClass(parsedClass),
+      noTextExtra !== null && parsedClass == null ? "other" : coerceMailClass(parsedClass),
   };
 }

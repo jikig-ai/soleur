@@ -154,9 +154,12 @@ describe.each(["awaitable", "sync"] as const)(
       expect(await cents(0.015)).toBe(2);
     });
 
-    it("a long-card turn (prompt over 100K tokens) is at least 5 cents", async () => {
-      // 100,001 input tokens on the Haiku 5.5 long card = 100001 * $0.50/M = $0.0500005
+    it("an ALL-UNCACHED long-card turn is 5 cents; the same prompt as cache reads is only 1 cent", async () => {
+      // 100,001 uncached input tokens on the Haiku 5.5 long card = 100001 * $0.50/M = $0.0500005
       expect(await cents(0.0500005)).toBe(5);
+      // 100,001 CACHE-READ tokens = 100001 * $0.05/M = $0.00500005: half a cent, rounds to 1.
+      // So the long-card cliff is up to 5x lower for cache-heavy prompts than the all-uncached case.
+      expect(await cents(0.00500005)).toBe(1);
     });
   },
 );

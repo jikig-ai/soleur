@@ -24,7 +24,9 @@ vi.mock("@/server/observability", () => ({
 
 import { APIError, BadRequestError } from "@anthropic-ai/sdk";
 import { ANTHROPIC_CREDIT_EXHAUSTED_OP } from "@/server/anthropic-credit";
-import { DEGRADED_SUMMARY, summarizeEmail } from "@/server/email-triage/summarize";
+import { NO_USABLE_ANSWER_SUMMARY, summarizeEmail } from "@/server/email-triage/summarize";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { HAIKU_MODEL } from "@/server/inngest/leader-prompts/constants";
 
 const input = { subject: "Invoice", sender: "billing@example.test", bodyText: "Hello" };
@@ -242,13 +244,13 @@ describe("summarizeEmail — degraded answers are stored as an explicit placehol
     ["a refusal", { content: [], stop_reason: "refusal", stop_details: { category: "cyber" } }],
     ["a refusal message in text", { content: [{ type: "text", text: "I can't help with that." }], stop_reason: "refusal" }],
     ["a truncated non-JSON fragment", { content: [{ type: "text", text: '{"summary":"An inv' }], stop_reason: "max_tokens" }],
-  ])("%s stores DEGRADED_SUMMARY, class other, and reports exactly once", async (_label, response) => {
+  ])("%s stores NO_USABLE_ANSWER_SUMMARY, class other, and reports exactly once", async (_label, response) => {
     createSpy.mockResolvedValue(response);
     await expect(summarizeEmail(input)).resolves.toEqual({
-      summary: DEGRADED_SUMMARY,
+      summary: NO_USABLE_ANSWER_SUMMARY,
       mailClass: "other",
     });
-    expect(DEGRADED_SUMMARY.length).toBeGreaterThan(0);
+    expect(NO_USABLE_ANSWER_SUMMARY.length).toBeGreaterThan(0);
     expect(reportsByOp("no-text-block")).toHaveLength(1);
     // The same incident must not also raise a second event from the class coercion.
     expect(reportsByOp("mail-class-coerced")).toHaveLength(0);
@@ -297,5 +299,87 @@ describe("summarizeEmail — degraded answers are stored as an explicit placehol
     await summarizeEmail(input);
     const hostile = reportsByOp("no-text-block")[0][1] as { extra: Record<string, unknown> };
     expect(hostile.extra.category).toBe("unrecognized");
+  });
+
+  it.each([
+    ["whitespace-only text", { content: [{ type: "text", text: "  \n " }], stop_reason: "end_turn" }],
+    ["a context-window stop", { content: [{ type: "text", text: '{"summary":"An' }], stop_reason: "model_context_window_exceeded" }],
+  ])("%s is a degraded turn too", async (_label, response) => {
+    createSpy.mockResolvedValue(response);
+    await expect(summarizeEmail(input)).resolves.toEqual({
+      summary: NO_USABLE_ANSWER_SUMMARY,
+      mailClass: "other",
+    });
+    expect(reportsByOp("no-text-block")).toHaveLength(1);
+  });
+
+  it("a hostile stop_reason from the API is allowlisted to 'unknown' before it reaches the sink", async () => {
+    createSpy.mockResolvedValue({ content: [], stop_reason: "SENTINEL-stop-" + "q".repeat(300) });
+    await summarizeEmail(input);
+    const ctx = reportsByOp("no-text-block")[0][1] as { extra: Record<string, unknown> };
+    expect(ctx.extra.stop_reason).toBe("unknown");
+    expect(JSON.stringify(reportSilentFallbackSpy.mock.calls)).not.toContain("SENTINEL");
+  });
+
+  it("the TR3 sentinel sweep also covers the empty-text end_turn path", async () => {
+    createSpy.mockResolvedValue({ content: [], stop_reason: "end_turn" });
+    await summarizeEmail({
+      subject: "SENTINEL-subject-1e",
+      sender: "sentinel-sender-2f@example.test",
+      bodyText: "SENTINEL-body-3a",
+    });
+    expect(JSON.stringify(reportSilentFallbackSpy.mock.calls)).not.toContain("SENTINEL");
+    expect(JSON.stringify(reportSilentFallbackSpy.mock.calls)).not.toContain("sentinel-sender");
+  });
+
+  it("a degraded turn with COMPLETE JSON but no mail_class reports ONCE (undefined class, not only null)", async () => {
+    createSpy.mockResolvedValue({
+      content: [{ type: "text", text: '{"summary":"An invoice."}' }],
+      stop_reason: "max_tokens",
+    });
+    await expect(summarizeEmail(input)).resolves.toEqual({ summary: "An invoice.", mailClass: "other" });
+    expect(reportsByOp("no-text-block")).toHaveLength(1);
+    expect(reportsByOp("mail-class-coerced")).toHaveLength(0);
+  });
+
+  it("a HEALTHY turn with an out-of-allowlist class is still coerced AND reported (coercion volume stays observable)", async () => {
+    createSpy.mockResolvedValue({
+      content: [{ type: "text", text: '{"summary":"An invoice.","mail_class":"probe"}' }],
+      stop_reason: "end_turn",
+    });
+    await expect(summarizeEmail(input)).resolves.toEqual({ summary: "An invoice.", mailClass: "other" });
+    expect(reportsByOp("mail-class-coerced")).toHaveLength(1);
+    expect(reportsByOp("no-text-block")).toHaveLength(0);
+  });
+
+  it("the placeholder is a non-empty, bounded static string that the daily-ceiling sentinel does NOT match", () => {
+    // email-on-received counts LLM calls as rows NOT matching the 'fetch/summarize failed%'
+    // prefix. A degraded Haiku turn spent money, so it must keep counting: its text must
+    // not start with that prefix.
+    expect(NO_USABLE_ANSWER_SUMMARY.length).toBeGreaterThan(20);
+    expect(NO_USABLE_ANSWER_SUMMARY.length).toBeLessThan(600);
+    // The prefix lives, unexported, in email-on-received.ts (importing that module here would
+    // start the Inngest client). Pin the literal both ways: it is still what that file uses,
+    // and the placeholder does not start with it.
+    const PREFIX = "fetch/summarize failed";
+    expect(
+      readFileSync(join(__dirname, "../../../server/inngest/functions/email-on-received.ts"), "utf8"),
+      "email-on-received.ts must still define the degraded-row prefix this test pins",
+    ).toContain(`EMAIL_TRIAGE_DEGRADED_SUMMARY_PREFIX = "${PREFIX}"`);
+    expect(NO_USABLE_ANSWER_SUMMARY.startsWith(PREFIX)).toBe(false);
+    // The body is discarded at ingestion: the text must point at the original mailbox,
+    // not at a body that no longer exists in the app.
+    expect(NO_USABLE_ANSWER_SUMMARY).toMatch(/original/i);
+    expect(NO_USABLE_ANSWER_SUMMARY).not.toMatch(/open the email/i);
+  });
+
+  it("the mirror message does not claim a placeholder or a fallback it may not have used", async () => {
+    createSpy.mockResolvedValue({
+      content: [{ type: "text", text: '{"summary":"An invoice.","mail_class":"billing"}' }],
+      stop_reason: "max_tokens",
+    });
+    await summarizeEmail(input);
+    const ctx = reportsByOp("no-text-block")[0][1] as { message: string };
+    expect(ctx.message).not.toMatch(/placeholder|falling back|fallback/i);
   });
 });
