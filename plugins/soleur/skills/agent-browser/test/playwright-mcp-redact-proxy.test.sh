@@ -67,7 +67,7 @@ MUT="$WORK/mutants"; mkdir -p "$MUT"; cp "$REDACTOR" "$MUT/"   # every mutant lo
 # does no teardown (the passthrough, a teardown mutant) leaves it alive; reap_all SIGKILLs each
 # recorded group that still holds a stub process, at the hygiene row and again on EXIT.
 PGIDS="$WORK/pgids"
-stub_groups() { local pg; [[ -s "$PGIDS" ]] || return 0; while read -r pg; do if [[ -n "$pg" ]] && pgrep -g "$pg" -a 2>/dev/null | grep -qF -e "$STUB" -e 'sleep 300'; then printf '%s\n' "$pg"; fi; done < <(sort -u "$PGIDS"); }
+stub_groups() { local pg; [[ -s "$PGIDS" ]] || return 0; while read -r pg; do if [[ -n "$pg" ]] && pgrep -g "$pg" -a 2>/dev/null | grep -cF >/dev/null -e "$STUB" -e 'sleep 300'; then printf '%s\n' "$pg"; fi; done < <(sort -u "$PGIDS"); }
 reap_all() { local pg; while read -r pg; do pkill -KILL -g "$pg" 2>/dev/null || true; done < <(stub_groups); }
 trap 'reap_all; rm -rf "$WORK"' EXIT
 

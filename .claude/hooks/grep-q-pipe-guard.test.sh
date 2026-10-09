@@ -443,7 +443,7 @@ SWEEP_DEFERRALS=(
   # Slice S2 converted this subtree; five counted data pins remain (pipes inside strings or .md-fence text; marker-exempt demos are not counted).
   # Tight (`=`) so a forgotten ceiling fails; to convert one, flip the row to `<=`, convert, flip back lowered (the codemod refuses `--write` on `=` rows).
   'plugins/soleur/test/* | = | 5 | #9217'
-  'plugins/soleur/*.test.sh | <= | 66 | #9217'
+  'plugins/soleur/*.test.sh | <= | 14 | #9217'
   'apps/web-platform/*.test.sh | <= | 180 | #9217'
   # Wave A2 (this table's last production rows) converted .github/, lefthook.yml, the drain workflow prompt and every other
   # apps/web-platform/infra file. These four stay, file-exact and tight (`=`), because their bytes feed `user_data` of

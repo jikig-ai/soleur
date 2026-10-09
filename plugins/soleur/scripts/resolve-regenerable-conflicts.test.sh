@@ -488,8 +488,8 @@ fi
 r="$(mkrepo stageduring)"; assert_fixture_dir "$r"
 res="$(_slow_run "$r" _act_stage)"
 CASES_RUN=$((CASES_RUN + 1))
-if [[ "$(sut_rc "$res")" != "0" ]] && ! _git "$r" log -1 --name-only --format= | grep -q staged.txt \
-     && _git "$r" diff --cached --name-only | grep -qx staged.txt; then
+if [[ "$(sut_rc "$res")" != "0" ]] && ! _git "$r" log -1 --name-only --format= | grep -c >/dev/null staged.txt \
+     && _git "$r" diff --cached --name-only | grep -cx >/dev/null staged.txt; then
   pass "a file staged during the render is never committed and stays staged"
 else
   fail "a mid-render staged file was committed or lost: $(sut_out "$res")"
@@ -711,7 +711,7 @@ CASES_RUN=$((CASES_RUN + 1))
 # The resolver must NEVER push — in any git spelling (options before the subcommand count).
 _PUSH_RE='(^|[^-[:alnum:]])git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|--?[[:alnum:]-]+(=[^[:space:]]+)?))*[[:space:]]+push([[:space:]]|$)'
 CASES_RUN=$((CASES_RUN + 1))
-if grep -v '^[[:space:]]*#' "$SUT" | grep -qE "$_PUSH_RE"; then
+if grep -v '^[[:space:]]*#' "$SUT" | grep -cE >/dev/null "$_PUSH_RE"; then
   fail "the resolver contains a git push — callers own the push"
 else
   pass "the resolver never pushes"
