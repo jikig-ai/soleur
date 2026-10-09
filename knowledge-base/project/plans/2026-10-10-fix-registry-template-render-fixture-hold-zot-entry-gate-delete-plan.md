@@ -11,6 +11,20 @@ brand_survival_threshold: none
 
 # infra-validation tail: pin cloud-init-registry.yml render coverage (#6509); hold the zot-entry-gate deletion (#7258)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10 (proportionate pass: mechanical halt gates plus citation verification; no broad research fan-out for a small CI-fixture plan, per the invocation).
+**Gates run:** 4.6 user-brand (present, threshold `none`, diff reaches no sensitive path), 4.7 observability (5-field block added), 4.8 PAT sweep (no hits), 4.9 UI (not triggered), 4.10 encryption (not triggered: no store or connection), 4.11 guard contract (`lint-guard-contract.py` green), 4.12 scope check (one unfenced section, all rows mapped).
+**Citations verified live:** #6454 CLOSED, #6458 MERGED (3e934cf248), #6480 OPEN, #7242 CLOSED by #7244 MERGED (d31d8a2c7d), #7158 CLOSED unmerged, #6778 OPEN draft; no rule IDs cited.
+
+### Key improvements
+1. Observability block rewritten to the 5-field schema with a probe that fits Check 10's 15-second cap (pins the arm name `F23a-registry-baseline-renders`).
+2. Plan-review (simplicity + correctness) folded in: sampled first+last members in the suite, full sweeps as one-time evidence, cut speculative derivation and the duplicate rc 4 arm, message-attributed assertions, expected baseline regeneration, post-merge criterion corrected for `workflow_run` arms.
+
+### New considerations
+- `web-platform-release.yml` and `post-merge-monitor.yml` start on `workflow_run` for every main merge; the correct post-merge assertion is "no release published", not "no run".
+- Local terraform is 1.9.8 vs CI 1.10.5; render arms are version-insensitive for these errors, the pin is a CI concern only.
+
 Spec lane note: no `spec.md` exists for this branch, so `lane:` defaulted to `cross-domain` (fail-closed). The Domain Review below finds no cross-domain implications.
 
 ## Overview
@@ -159,7 +173,7 @@ Helpers (all roots via `newdir`; source rooted at `REPO_ROOT=$(cd "$DIR/../../..
 - Mutations use `cp` and `python3` writes (not `> "$D/..."` redirects) to avoid adding relative-operand sites to the P1b ratchet where possible.
 
 Arms:
-- **F23a baseline** — real pair, rc 0; output contains `ok  cloud-init-registry.yml` and `rendered+validated 1/1 file` (isolated root, exactly one member). This by-name line is the one assertion no other check provides: the `validate` job already runs the gate on the real tree, so rc 0 alone is redundant.
+- **F23a baseline** (arm name EXACTLY `F23a-registry-baseline-renders`, pinned by the Observability probe) — real pair, rc 0; output contains `ok  cloud-init-registry.yml` and `rendered+validated 1/1 file` (isolated root, exactly one member). This by-name line is the one assertion no other check provides: the `validate` job already runs the gate on the real tree, so rc 0 alone is redundant.
 - **F23b a dropped map key reds** — derive the template's distinct vars with `(?<!\$)\$\{\K[a-z_][a-z0-9_]*(?=\})`; for the FIRST and LAST: delete only the key's assignment line INSIDE the `templatefile(` map of the `.tf` copy (python: locate the registry `templatefile(` call, remove the first matching `^\s*key\s*=` line after it, leaving locals untouched); rc 2 and output contains BOTH `terraform failed to render` and `"<key>"` (quoted, as terraform prints it; the decode-failure path also exits 2, so the render message is what attributes the failure).
 - **F23c an un-doubled escape reds** — derive distinct `\$\$\{\K[A-Za-z_][A-Za-z0-9_]*` tokens; for the FIRST and LAST plus the single `%%{http_code}`: un-double the first occurrence, anchored on a non-identifier character after the name (`(?![A-Za-z0-9_])`, so a longer token sharing the prefix cannot be hit); `mutate_or_bad` anchor; rc 2 and output contains `terraform failed to render`. A token whose name equals a map key cannot red by design (F15) and is reported as `bad`, naming the token.
 - **F23d undeclared var** — insert `${undeclared_var}` into the template copy; rc 2; output contains `terraform failed to render` and `"undeclared_var"` (the quoted name is wrap-stable; the longer "vars map does not contain key" sentence is not asserted because terraform wraps at ~78 columns under ANSI colour).
@@ -256,7 +270,36 @@ None. (Queried 88 open `code-review` issues for `fixtures-validate-infra-templat
 
 ## Observability
 
-Skipped: the diff adds no server, runtime, infra, or `plugins/*/scripts` code (a CI fixture under `.github/scripts/test/` only); pure test change per plan §2.9 skip rules.
+Layer: CI/test surface (the fixture is the only new executable; it adds no runtime, server, or host code). Declared in full because deepen-plan Phase 4.7 applies to any non-docs Files-to-Edit.
+
+```yaml
+liveness_signal:
+  what: the `Results: N pass, 0 fail` line of the fixtures suite, including the F23 arms, in the deploy-script-tests-fixed job log
+  cadence: every pull request touching a path in infra-validation.yml pull_request.paths (the fixtures file itself is listed)
+  alert_target: the PR check status (the job is advisory today, tracked by #6480)
+  configured_in: .github/workflows/infra-validation.yml step "Fixture tests for validate-infra-templates.sh (#6454)"
+error_reporting:
+  destination: the CI job's red status plus the suite's per-arm `FAIL [<arm>]: ... rc=<n> out=<text>` lines
+  fail_loud: yes — any failed arm exits 1; a no-op mutation or a missing source file is an explicit `bad`, never a skip
+failure_modes:
+  - mode: registry template silently dropped from discovery
+    detection: F23a by-name line `ok  cloud-init-registry.yml` and `rendered+validated 1/1 file`
+    alert_route: red deploy-script-tests-fixed check on the PR
+  - mode: a dropped map key or un-doubled escape stops turning the gate red
+    detection: F23b / F23c rc 2 plus the `terraform failed to render` message
+    alert_route: red deploy-script-tests-fixed check on the PR
+  - mode: the harness mutation silently does not apply
+    detection: the `cmp` anchor reports `mutation was a no-op`
+    alert_route: red deploy-script-tests-fixed check on the PR
+logs:
+  where: GitHub Actions job log for deploy-script-tests-fixed
+  retention: the repository's Actions log retention (default 90 days)
+discoverability_test:
+  command: grep -o -m1 F23a-registry-baseline-renders .github/scripts/test/fixtures-validate-infra-templates.sh
+  expected_output: F23a-registry-baseline-renders
+```
+
+The command proves the arm is present in the committed suite without running it (the suite needs terraform and cloud-init and outruns preflight Check 10's 15-second cap); the arm's behaviour is proven by the CI job and the Phase 2 mutation table. The exact arm name `F23a-registry-baseline-renders` is therefore a contract of Phase 1.
 
 ## Domain Review
 

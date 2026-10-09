@@ -13,7 +13,7 @@ Plan: `knowledge-base/project/plans/2026-10-10-fix-registry-template-render-fixt
 
 - 1.1 Header carve-out note in `.github/scripts/test/fixtures-validate-infra-templates.sh` (real registry pair, derived populations).
 - 1.2 Helpers `reg_root` (cp the registry template + `zot-registry.tf` only; missing source = explicit `bad`) and `mutate_or_bad` (cmp anchor; reset RC/OUT before `bad`).
-- 1.3 F23a baseline: rc 0, `ok  cloud-init-registry.yml`, `rendered+validated 1/1 file`.
+- 1.3 F23a baseline (arm name exactly `F23a-registry-baseline-renders`): rc 0, `ok  cloud-init-registry.yml`, `rendered+validated 1/1 file`.
 - 1.4 F23b: FIRST and LAST distinct `${var}` of the template; delete the key's assignment line inside the `templatefile(` map only; rc 2, `terraform failed to render`, `"<key>"`.
 - 1.5 F23c: FIRST and LAST distinct `$${TOKEN` plus `%%{http_code}`; un-double first occurrence (non-identifier-anchored); rc 2 and `terraform failed to render`.
 - 1.6 F23d: undeclared `${undeclared_var}`; rc 2, `terraform failed to render`, `"undeclared_var"`.
