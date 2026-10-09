@@ -37,6 +37,7 @@ An AlphaSignal article argues prompts are not a security boundary and agents nee
 - FR3: Decide and record the sequencing of #9534 against #4671, #4672, #9545; update roadmap/issue dependencies (`--add-blocked-by`).
 - FR4: Credential broker design (placeholder-and-swap) tracked with #9543.
 - FR5: CVE scan of the runtime image as a CI gate.
+  > **Amended 2026-10-09 (W3, #9826).** FR5 ships as an *advisory* CI scan first and becomes a gate only on the numeric promotion criterion in ADR-281 (the dark-launch rule, `wg-dark-launch-deploy-gates`). The original wording above is kept as history. Public output carries counts only because this repository is public; no public claim may cite the scan until it gates and is measured (G5, FR6).
 - FR6: Security/control page copy drafted only after FR1-FR5 controls are measured; CLO review required.
 
 ## Technical Requirements
