@@ -437,7 +437,7 @@ hash-bound host payload moved.
 The 2026-10-02 sentence that `mode=proof` is the read-only re-verification refines the same way: the proof re-verifies the
 STORE only, and no mode re-runs the rollback's erasure probe, so a green proof is not evidence that erasure works.
 
-Still open, tracked rather than fixed here (follow-up tracker, number in the PR body): a probe or stamp failure after the
+Still open, tracked rather than fixed here (follow-up tracker #9897): a probe or stamp failure after the
 sentinel clear unwinds through a writable window (pre-existing); flip resume arm B never unwinds the flag; a rollback whose
 flag-off write landed but whose read-back failed leaves the fleet on the old env (`mode=redeploy` converges it). One live-only
 assumption: the probe `if:` reads the unfreeze step's `gc_timer_failed` output after the step exited non-zero; that is documented

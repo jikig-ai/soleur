@@ -160,7 +160,7 @@ A failed run whose confirm step rejected the input (a typo in the confirm token,
 does not notify. Not covered by the notify job, by platform design: a force-cancel (it skips `always()`), and a
 pending run replaced by a newer dispatch in the `git-data-state` group before any job exists (a queued recovery
 dispatch can vanish this way). A rollback that finds the flag already off (`nothing_to_rollback`) does not read a
-held sentinel (its step says so; `mode=proof` reads it, and the `cutover_frozen` row below gives the lever); the deferred-items issue tracks the rest. Also open: flip resume arm B never unwinds the flag, and a rollback whose flag-off write landed but whose read-back failed leaves the fleet on the old env (a second `mode=rollback` exits `nothing_to_rollback`; `mode=redeploy` converges the fleet). The notify job is the only failure channel and has no fallback: if
+held sentinel (its step says so; `mode=proof` reads it, and the `cutover_frozen` row below gives the lever); the deferred items are tracked in #9439 and #9897. Also open: flip resume arm B never unwinds the flag, and a rollback whose flag-off write landed but whose read-back failed leaves the fleet on the old env (a second `mode=rollback` exits `nothing_to_rollback`; `mode=redeploy` converges the fleet). The notify job is the only failure channel and has no fallback: if
 it fails itself (no `RESEND_API_KEY`, an issues API error), the email step records its outcome in the issue, and a
 failed `notify-failure` job shows red on the run's own summary, which is then the only signal.
 
