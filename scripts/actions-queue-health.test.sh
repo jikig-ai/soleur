@@ -432,7 +432,7 @@ fi
 mkplan team; queued_count 0; in_flight 0
 rc=0
 out="$(env -i PATH="/usr/bin:/bin" HOME="$WORK" GH_TOKEN=fake FIXTURE_DIR="$WORK/fix" REPO=jikig-ai/soleur bash "$PROBE" 2>&1)" || rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'UNKNOWN'; then
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -c >/dev/null 'UNKNOWN'; then
   pass "missing gh -> UNKNOWN rc2"
 else
   fail "missing gh (rc=$rc; out: $out)"

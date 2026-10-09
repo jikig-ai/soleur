@@ -32,7 +32,6 @@ import {
   accessSync,
   constants,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -201,24 +200,33 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
   for (const d of HOME_SESSION_DIRS) {
     argv.push("--dir", path.join(claudeHome, d));
   }
-  // Mutable tenant-adjacent sources: lstat-reject SYMLINKS — a planted
-  // symlink under $HOME would otherwise bind an arbitrary host file rw at
-  // the dest (writes land on the target). A skipped bind just means the
-  // file is absent in-wrap (the CLI recreates what it needs).
-  const notSymlink = (p: string) => {
+  // Mutable tenant-adjacent sources: leaf-lstat misses the intermediate-
+  // component redirect — a planted `~/.claude` symlink (flag-off sessions
+  // write $HOME) makes every leaf check pass while bwrap follows the full
+  // chain to an attacker path. Containment on the RESOLVED path instead:
+  // an existing source must realpath under `home` itself; an absent source
+  // emits the try-bind anyway (bwrap skips it; argv stays stable).
+  let homeReal: string | null = null;
+  try {
+    homeReal = realpathSync(home);
+  } catch {
+    /* home itself absent/unresolvable → no existing source can be contained */
+  }
+  const safeHomeBind = (src: string) => {
     try {
-      return !lstatSync(p).isSymbolicLink();
+      const rp = realpathSync(src);
+      return homeReal != null && (rp === homeReal || rp.startsWith(homeReal + path.sep));
     } catch {
-      return true; // ENOENT/race → the try-bind tolerates the absent source
+      return true; // ENOENT source → try-bind skips it anyway
     }
   };
   for (const f of HOME_STATE_FILES) {
     const src = path.join(claudeHome, f);
-    if (notSymlink(src)) argv.push("--bind-try", src, src); // rw — credential refresh writes; first-boot sessions may lack them
+    if (safeHomeBind(src)) argv.push("--bind-try", src, src); // rw — credential refresh writes; first-boot sessions may lack them
   }
   for (const f of [".claude.json", ".gitconfig"]) {
     const src = path.join(home, f);
-    if (notSymlink(src)) argv.push("--bind-try", src, src);
+    if (safeHomeBind(src)) argv.push("--bind-try", src, src);
   }
 
   // The tenant workspace — bound rw at its real path (the parent is never
@@ -230,8 +238,10 @@ export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
     const transcriptDir = path.join(claudeHome, "projects", slug);
     // Existence-gated (unlike the fixed-name home files): the slug encodes
     // the absolute ws path — an unconditional try-bind would make argv vary
-    // per tmpdir name and un-pin the fixture. Still lstat-rejects symlinks.
-    if (existsSync(transcriptDir) && notSymlink(transcriptDir)) {
+    // per tmpdir name and un-pin the fixture. The same resolved-path
+    // containment as the other home binds still applies (a symlinked
+    // .claude/projects redirect must not bind outside $HOME).
+    if (existsSync(transcriptDir) && safeHomeBind(transcriptDir)) {
       argv.push("--bind-try", transcriptDir, transcriptDir);
     }
     argv.push("--bind", ws, ws);
@@ -304,9 +314,9 @@ function preflight(bwrapPath: string, command: string, argv: string[]): string |
     // Strict binds only — the builder emits no --file/--dev-bind (and
     // --file's arg order is fd-first, so indexing it by src would mis-read).
     // --ro-bind-try/--bind-try tolerate a missing source by design; consume
-    // the pair without the existence check.
+    // BOTH pair members without the existence check.
     if (flag === "--bind-try" || flag === "--ro-bind-try") {
-      i += 1;
+      i += 2;
       continue;
     }
     if (flag === "--bind" || flag === "--ro-bind") {
@@ -351,7 +361,14 @@ function syntheticFailedProcess(marker: string): SpawnedProcess {
     once(event: "exit" | "error", listener: never) {
       return (proc.on as (e: "exit" | "error", l: never) => SpawnedProcess)(event, listener);
     },
-    off() { return proc; },
+    off(event: "exit" | "error", listener: never) {
+      // Remove a pending registration so a listener detached before the
+      // microtask fires never runs.
+      const q = listeners[event];
+      const i = q.indexOf(listener);
+      if (i !== -1) q.splice(i, 1);
+      return proc;
+    },
   } as SpawnedProcess;
   const mkErr = () =>
     // The error text deliberately carries the SDK's missing-binary preflight
@@ -466,19 +483,19 @@ export function makeSandboxedSpawn(
     const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
       if (signal != null || code === 0 || code == null) return [code, signal] as const;
       const tail = ringTail();
-      if (tail) {
-        log.warn(
-          { feature: "agent-sandbox", op: "tenant-outer-wrap", sessionId: inputs.sessionId, outcome: `exit:${code}`, stderrTail: tail.slice(-2000) },
-          "outer wrap child exited non-zero",
-        );
-        if (BWRAP_SIG.test(tail)) {
-          warnSilentFallback(null, {
-            feature: "agent-sandbox",
-            op: "tenant-outer-wrap",
-            message: `agent sandbox outer-wrap child exited ${code} with bwrap signature`,
-            extra: { sessionId: inputs.sessionId, outcome: `exit:${code}` },
-          });
-        }
+      // Log unconditionally on non-zero exit — a silent exit with empty
+      // stderr must still leave a trail (fix-round P3).
+      log.warn(
+        { feature: "agent-sandbox", op: "tenant-outer-wrap", sessionId: inputs.sessionId, outcome: `exit:${code}`, stderrTail: tail ? tail.slice(-2000) : "" },
+        "outer wrap child exited non-zero",
+      );
+      if (tail && BWRAP_SIG.test(tail)) {
+        warnSilentFallback(null, {
+          feature: "agent-sandbox",
+          op: "tenant-outer-wrap",
+          message: `agent sandbox outer-wrap child exited ${code} with bwrap signature`,
+          extra: { sessionId: inputs.sessionId, outcome: `exit:${code}` },
+        });
       }
       return [code, signal] as const;
     };
@@ -487,9 +504,10 @@ export function makeSandboxedSpawn(
       return tail ? new Error(`${err.message}\nstderr: ${tail.slice(-2000)}`) : err;
     };
 
-    // wrapper↔caller listener pairs — `off` must remove OUR wrapper, not the
-    // caller's listener (which was never registered on the child).
-    const wrappers = new Map<never, unknown>();
+    // (event, listener)→wrapper pairs — `off` must remove OUR wrapper, not
+    // the caller's listener (which was never registered on the child), and
+    // the same listener registered under two events must detach cleanly.
+    const wrappers: Array<{ event: "exit" | "error"; listener: never; wrap: (...a: never[]) => void }> = [];
 
     const spawned: SpawnedProcess = {
       stdin: child.stdin as Writable,
@@ -507,41 +525,41 @@ export function makeSandboxedSpawn(
       },
       on(event: "exit" | "error", listener: never): SpawnedProcess {
         if (event === "exit") {
-          const w = (code: number | null, signal: NodeJS.Signals | null) => {
+          const w = ((code: number | null, signal: NodeJS.Signals | null) => {
             const [c, s] = emitExit(code, signal);
             (listener as (c: number | null, s: NodeJS.Signals | null) => void)(c, s);
-          };
-          wrappers.set(listener, w);
-          child.on("exit", w);
+          }) as never;
+          wrappers.push({ event, listener, wrap: w });
+          child.on("exit", w as never);
         } else {
-          const w = (err: Error) =>
-            (listener as (e: Error) => void)(emitError(err));
-          wrappers.set(listener, w);
-          child.on("error", w);
+          const w = ((err: Error) =>
+            (listener as (e: Error) => void)(emitError(err))) as never;
+          wrappers.push({ event, listener, wrap: w });
+          child.on("error", w as never);
         }
         return spawned;
       },
       once(event: "exit" | "error", listener: never): SpawnedProcess {
         if (event === "exit") {
-          const w = (code: number | null, signal: NodeJS.Signals | null) => {
+          const w = ((code: number | null, signal: NodeJS.Signals | null) => {
             const [c, s] = emitExit(code, signal);
             (listener as (c: number | null, s: NodeJS.Signals | null) => void)(c, s);
-          };
-          wrappers.set(listener, w);
-          child.once("exit", w);
+          }) as never;
+          wrappers.push({ event, listener, wrap: w });
+          child.once("exit", w as never);
         } else {
-          const w = (err: Error) =>
-            (listener as (e: Error) => void)(emitError(err));
-          wrappers.set(listener, w);
-          child.once("error", w);
+          const w = ((err: Error) =>
+            (listener as (e: Error) => void)(emitError(err))) as never;
+          wrappers.push({ event, listener, wrap: w });
+          child.once("error", w as never);
         }
         return spawned;
       },
       off(event: "exit" | "error", listener: never): SpawnedProcess {
-        const w = wrappers.get(listener);
-        if (w) {
-          wrappers.delete(listener);
-          child.off(event as never, w as never);
+        const i = wrappers.findIndex((w) => w.event === event && w.listener === listener);
+        if (i !== -1) {
+          const [w] = wrappers.splice(i, 1);
+          child.off(event, w.wrap as never);
         }
         return spawned;
       },
@@ -640,7 +658,7 @@ export function probeRealizedIsolation(
     const elevation = /^elevation=(privileged|userns)$/m.exec(out)?.[1] as
       | RealizedIsolationProbe["elevation"]
       | undefined;
-    if (res.status === 0 && out.includes("isolation_ok"))
+    if (res.status === 0 && /^isolation_ok$/m.test(out))
       return { ok: true, elevation };
     if (/operation not permitted/i.test(`${res.stderr ?? ""}`)) {
       return { ok: false, reason: "bwrap_operation_not_permitted" };

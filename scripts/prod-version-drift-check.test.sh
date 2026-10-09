@@ -104,10 +104,10 @@ fi
 PASS=$_p0; FAIL=$_f0
 assert_contains() {
   # assert_contains <desc> <needle-ERE> <haystack>
-  if printf '%s' "$3" | grep -Eq -- "$2"; then pass "$1"; else fail "$1" "matches /$2/" "$3"; fi
+  if printf '%s' "$3" | grep -Ec >/dev/null -- "$2"; then pass "$1"; else fail "$1" "matches /$2/" "$3"; fi
 }
 assert_not_contains() {
-  if printf '%s' "$3" | grep -Eq -- "$2"; then fail "$1" "does NOT match /$2/" "$3"; else pass "$1"; fi
+  if printf '%s' "$3" | grep -Ec >/dev/null -- "$2"; then fail "$1" "does NOT match /$2/" "$3"; else pass "$1"; fi
 }
 
 TMP="$(mktemp -d "${TMPDIR%/}/prod-version-drift-test.XXXXXXXX")" || { echo "FATAL: mktemp -d failed" >&2; exit 2; }
@@ -414,7 +414,7 @@ STUB
   assert_contains "A21b main() emits DRIFT_VERDICT=CLEAN" "^DRIFT_VERDICT=CLEAN$" "$out"
   local k missing_keys=""
   for k in DRIFT_VERDICT DRIFT_REASON DRIFT_DETAIL DRIFT_MISSING_COUNT DRIFT_PATHSPEC DRIFT_HEALTH_URL DRIFT_MISSING_SHAS; do
-    printf '%s\n' "$out" | grep -q "^${k}=" || missing_keys="${missing_keys}${k} "
+    printf '%s\n' "$out" | grep -c >/dev/null "^${k}=" || missing_keys="${missing_keys}${k} "
   done
   assert_eq "A21c main() emits every documented output key" "" "$missing_keys"
 
@@ -1685,16 +1685,16 @@ mutate_and_assert_red() {
   # A syntax-error mutant trips A0 and nothing else. If the axis names a property, require the
   # assertion for THAT property to be among the failures.
   if [[ -n "$expect_label" ]]; then
-    if printf '%s' "$child_out" | grep -q "FAIL: ${expect_label}"; then
-      if [[ -n "$expect_re" ]] && ! printf '%s' "$child_out" | grep -Eq -- "$expect_re"; then
+    if printf '%s' "$child_out" | grep -c >/dev/null "FAIL: ${expect_label}"; then
+      if [[ -n "$expect_re" ]] && ! printf '%s' "$child_out" | grep -Ec >/dev/null -- "$expect_re"; then
         fail "C-$axis caught by ${expect_label} at the expected figure" "a line matching /${expect_re}/" \
-          "B9 red at a different figure: $(printf '%s' "$child_out" | grep -m2 -E '^    (expected|actual):' | tr '\n' ';')"
+          "B9 red at a different figure: $(grep -m2 -E '^    (expected|actual):' <<<"$child_out" | tr '\n' ';')"
         return 0
       fi
       pass "C-$axis caught by ${expect_label}, the assertion it targets"
     else
       fail "C-$axis caught by ${expect_label}" "a FAIL line naming ${expect_label}" \
-        "child failed on something else: $(printf '%s' "$child_out" | grep -m3 '^  FAIL' | tr '\n' ';')"
+        "child failed on something else: $(grep -m3 '^  FAIL' <<<"$child_out" | tr '\n' ';')"
     fi
   else
     pass "C-$axis $rel sabotage is caught (child exit $rc)"
@@ -1715,12 +1715,12 @@ mutate_and_assert_green() {
   child_out="$(run_child "$sbx")"
   local rc=$?
   local want="^  PASS: B9 threshold \\([0-9]+m\\) >= .* \\(${expect_crit}m\\)\$"
-  if [[ "$rc" == "0" ]] && printf '%s' "$child_out" | grep -Eq -- "$want"; then
+  if [[ "$rc" == "0" ]] && printf '%s' "$child_out" | grep -Ec >/dev/null -- "$want"; then
     pass "C-$row $rel must-PASS mutation stays green with B9 at the expected ${expect_crit}m"
   else
     fail "C-$row $rel must-PASS mutation stays green with B9 at the expected ${expect_crit}m" \
       "child exit 0 and a line matching /${want}/" \
-      "exit $rc: $(printf '%s' "$child_out" | grep -m3 -E '^  (FAIL|PASS: B9 threshold)' | tr '\n' ';')"
+      "exit $rc: $(grep -m3 -E '^  (FAIL|PASS: B9 threshold)' <<<"$child_out" | tr '\n' ';')"
   fi
 }
 
@@ -1785,7 +1785,7 @@ run_part_c() {
     pass "C0 unmutated control is GREEN (the battery's results are meaningful)"
   else
     fail "C0 unmutated control is GREEN" "exit 0" \
-      "exit $crc — battery VOID, fix the baseline first: $(printf '%s' "$cout" | grep -m3 '^  FAIL' | tr '\n' ';')"
+      "exit $crc — battery VOID, fix the baseline first: $(grep -m3 '^  FAIL' <<<"$cout" | tr '\n' ';')"
     return 0
   fi
 

@@ -440,6 +440,10 @@ function toBwrapResult(res: SpawnSyncReturns<string>): BwrapResult {
   const setupFailed =
     res.error !== undefined ||
     /^bwrap: /m.test(stderr) ||
+    // The PATH shim's own fail-closed refusals (exit 65, `bwrap-shim:`) are
+    // setup failures — without this a shim refusal surfaces as a confusing
+    // probe-output miss instead of a setup diagnostic.
+    /^bwrap-shim: /m.test(stderr) ||
     /execvp:/m.test(stderr);
   return {
     stdout: res.stdout ?? "",

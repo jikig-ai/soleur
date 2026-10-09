@@ -229,19 +229,27 @@ export function buildBwrapInvocation(fixture) {
 //     CLONE_NEWNS needs a CAP_SYS_ADMIN it does not hold: EPERM on every
 //     kernel, measured 2026-10-06 / bwrap 0.12. A real fork is the
 //     blanket-clone-deny tripwire.)
-//   fd_census — `ls /proc/self/fd | wc -l` inside MUST stay within
-//     `4 + #(fd-valued argv options)` — stdio 0-2, ls's own transient dir fd,
-//     plus any fd the SETUP argv itself references (none today; the
-//     vocabulary below stays in step with the shim's preserve-set). Larger =
-//     an inherited fd leaked into the sandbox → `fd_hygiene_bypass`. `ls`
-//     (not a glob echo) so a missing /proc bind fails LOUD (ls exit 2 →
-//     infra error) instead of a vacuous `$#`=1 green.
+//   proc_mask — /proc inside MUST be pidns-scoped, not the host's (the
+//     shim's tail `--proc /proc`, #9723). Asserts the CANARY'S OWN host pid
+//     is absent in-sandbox AND /proc/self/environ exists (the self-view the
+//     vendor's apply-seccomp helper needs). Host procfs re-exposed by the
+//     vendor tail `--bind /proc /proc` lands as `proc_mask_defeated`
+//     (sandbox_broken), not infra.
+//   fd_census — procfs-free fd enumeration (dup-test every fd 3..255; the
+//     realized mask takes /proc/self/fd away) MUST stay within
+//     `3 + #(fd-valued argv options)` — stdio 0-2, plus any fd the SETUP argv
+//     itself references (none today; the vocabulary below stays in step with
+//     the shim's preserve-set). Larger = an inherited fd leaked into the
+//     sandbox → `fd_hygiene_bypass`. Each fd is probed by a redirect in a
+//     subshell — no /proc dependency — so the census keeps discriminating
+//     under the mask.
 //   args_fd_transport — the SDK's real spawn shape: setup argv rides
-//     `--args <fd>` NUL-separated on a pipe the shim's preserve-set must
-//     keep. Replay that shape with the fd carrying the same setup argv so a
-//     sweep regression that closes it lands HERE — not on every session's
-//     first Bash call (pre-merge tests cover `--args` against a stub;
-//     nothing else covers it at deploy time).
+//     `--args <fd>` NUL-separated on a pipe the shim consumes and re-emits
+//     on a fresh fd (the #9723 mask splice needs the content). Replay that
+//     shape with the fd carrying the same setup argv so a regression in the
+//     read/re-emit path lands HERE — not on every session's first Bash call
+//     (pre-merge tests cover `--args` against a stub; nothing else covers it
+//     at deploy time).
 // ---------------------------------------------------------------------------
 
 // bwrap options whose FIRST argument is an fd NUMBER — the complete
@@ -332,6 +340,10 @@ export function classifyForkProbe({ status, stderr = "", errorCode } = {}) {
   return null;
 }
 
+/** stdio 0-2 baseline for the fd census — exported so tests pin the impl
+ *  constant rather than re-deriving the formula. */
+export const FD_CENSUS_BASELINE = 3;
+
 /**
  * Classify the in-sandbox fd census against `fdLimit`. Returns a verdict or
  * null.
@@ -355,8 +367,8 @@ export function classifyFdCensusProbe({ status, stdout = "", errorCode } = {}, f
     };
   }
   const n = Number(stdout.trim());
-  // Lower bound too: stdio 0-2 always exist, so n < 3 means the census read
-  // nothing real (an absent /proc glob echoes back empty — a vacuous pass).
+  // Lower bound too: the enumerator reports 3 even if every probe fails, so
+  // n < 3 means the output was never produced by it (a vacuous pass).
   if (!Number.isInteger(n) || n < 3) {
     return { verdict: "canary_infra_error", reason: "fd_census_unparseable", probe: "fd_census" };
   }
@@ -366,8 +378,68 @@ export function classifyFdCensusProbe({ status, stdout = "", errorCode } = {}, f
   return null;
 }
 
-/** The three probes, in order; `classify` returns a verdict or null (ok). */
+/**
+ * Classify the /proc mask probe. Returns a verdict or null (masked).
+ * Discrimination mirrors the fork probe: a signal kill or a bwrap/exec setup
+ * line is infra; a clean non-zero payload exit means real procfs was visible
+ * in-sandbox — the vendor tail bind defeated the mask (#9723).
+ *
+ * @param {{ status?: number | null, stderr?: string, errorCode?: string }} res
+ */
+export function classifyProcMaskProbe({ status, stderr = "", errorCode } = {}) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `proc_mask_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "proc_mask",
+    };
+  }
+  if (status === null || /(^|\n)bwrap:|execvp |No such file/.test(`${stderr}`)) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `proc_mask_exit_${status === null ? "null" : status}`,
+      probe: "proc_mask",
+    };
+  }
+  if (status !== 0) {
+    // Either of the probe's halves failed: host-pid visible (mask defeated)
+    // OR /proc/self gone (procfs missing entirely — e.g. an empty tmpfs).
+    // The reason name keys on the defect class this probe exists to catch;
+    // stderr carries the probe's detail if the mechanism was different.
+    return { verdict: "sandbox_broken", reason: "proc_mask_defeated", probe: "proc_mask" };
+  }
+  return null;
+}
+
+// The procfs-free fd enumerator: dup-test every fd 3..255 in a subshell — an
+// open fd accepts `<&` (read) or `>&` (write); a closed one fails both.
+// Stdio 0-2 are assumed present (the n<3 lower bound in the classifier stays
+// the "census read nothing" tripwire) so a weird stdin posture cannot flake.
+// No external binaries — /bin/sh builtins only, safe under the masked /proc.
+// Bounds: 255 covers every fd the SDK spawn shape can hand down (well under
+// RLIMIT_NOFILE); an O_PATH fd fails both arms and reads as closed — an
+// under-count (toward ok), never a false leak verdict, and argv-referenced
+// fds above the bound still widen the classifier's fdLimit via
+// countFdValuedOptions.
+const FD_ENUM_SCRIPT =
+  "n=3; fd=3; " +
+  "while [ $fd -le 255 ]; do " +
+  "if (: <&$fd) 2>/dev/null || (: >&$fd) 2>/dev/null; then n=$((n+1)); fi; " +
+  "fd=$((fd+1)); " +
+  "done; echo $n";
+
+/** The probes, in order; `classify` returns a verdict or null (ok). */
 const HARDENING_PROBES = [
+  {
+    // #9723 — mask check FIRST: the cheapest tripwire on the vendor tail bind.
+    // process.pid is the canary's own host-side pid: present under a bound
+    // host procfs, absent under the pidns-scoped `--proc` the shim installs.
+    // The `self/environ` half pins that the procfs is real (not missing) —
+    // the sandbox's own apply-seccomp path needs /proc/self/fd to exist.
+    argv: ["/bin/sh", "-c",
+      `test ! -d /proc/${process.pid} && test -e /proc/self/environ`],
+    classify: classifyProcMaskProbe,
+  },
   {
     argv: ["/usr/bin/unshare", "-U", "/usr/bin/true"],
     classify: classifyUsernsDenyProbe,
@@ -377,7 +449,7 @@ const HARDENING_PROBES = [
     classify: classifyForkProbe,
   },
   {
-    argv: ["/bin/sh", "-c", "/usr/bin/ls /proc/self/fd | /usr/bin/wc -l"],
+    argv: ["/bin/sh", "-c", FD_ENUM_SCRIPT],
     classify: classifyFdCensusProbe,
     leakFd: true,
   },
@@ -391,7 +463,9 @@ const HARDENING_PROBES = [
  * Exported for the live real-bwrap row in test/bwrap-shim.test.ts.
  */
 export function runHardeningProbes(setupArgv) {
-  const fdLimit = 4 + countFdValuedOptions(setupArgv);
+  // Baseline 3 = stdio only (the dup-test enumerator opens nothing of its
+  // own); fd-valued setup options are the argv-driven slack.
+  const fdLimit = FD_CENSUS_BASELINE + countFdValuedOptions(setupArgv);
   for (const probe of HARDENING_PROBES) {
     // fd_census carries a deliberately UNREFERENCED fd (child fd 3): swept by
     // the shim ⇒ count stays at the bound; a sweep regression ⇒ +1 over the
@@ -1452,7 +1526,13 @@ export async function doCapture({
   const captureFile = join(shimDir, "captured-argv.jsonl");
   const prevPath = process.env.PATH;
   const prevWorkspacesRoot = process.env.WORKSPACES_ROOT;
+  const prevWorktreeRoot = process.env.WORKTREE_ROOT;
   const prevC4Staging = process.env.C4_RENDER_STAGING_ROOT;
+  // #9725: the ADR-068 git-data root is a SECOND unconditional tenant deny
+  // landing. Pin it to a fixed /tmp canary path (created below) so the
+  // captured argv carries it byte-deterministically — an unset var would
+  // capture the host default (or be skipped by the vendor when absent).
+  const worktreeRootDir = join(CANARY_ROOT_BASE, "soleur-sandbox-canary-worktrees");
   // #8623: point the C4 staging root (a denyRead entry) at a throwaway dir so
   // the projection can placeholder it — never under the hermetic workspaces
   // root, where it would add a second covered path to the vendor's
@@ -1471,9 +1551,11 @@ export async function doCapture({
     // so the vendor's per-path restore set (deny-then-restore under the #5862
     // constant parent deny) is deterministic and the argv is byte-det.
     mkdirSync(ownWorkspacePath, { recursive: true });
+    mkdirSync(worktreeRootDir, { recursive: true });
     const resolvedRoot = realpathSync(root);
     const resolvedOwn = realpathSync(ownWorkspacePath);
     process.env.WORKSPACES_ROOT = resolvedRoot;
+    process.env.WORKTREE_ROOT = worktreeRootDir;
 
     // bwrap shim FIRST on PATH (mktemp -d 0700 — a predictable /tmp shim path
     // is a pre-seeding/symlink vector; security-sentinel).
@@ -1561,8 +1643,15 @@ export async function doCapture({
     else process.env.PATH = prevPath;
     if (prevWorkspacesRoot === undefined) delete process.env.WORKSPACES_ROOT;
     else process.env.WORKSPACES_ROOT = prevWorkspacesRoot;
+    if (prevWorktreeRoot === undefined) delete process.env.WORKTREE_ROOT;
+    else process.env.WORKTREE_ROOT = prevWorktreeRoot;
     if (prevC4Staging === undefined) delete process.env.C4_RENDER_STAGING_ROOT;
     else process.env.C4_RENDER_STAGING_ROOT = prevC4Staging;
+    try {
+      rmSync(worktreeRootDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
     try {
       rmSync(c4StagingDir, { recursive: true, force: true });
     } catch {

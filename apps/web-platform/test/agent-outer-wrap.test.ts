@@ -336,7 +336,9 @@ describe("makeSandboxedSpawn — fail-closed preflight (T1.4)", () => {
     expect(classifySandboxStartupError(err).sandboxKind).toBe("missing_binary");
   });
 
-  it("spawn round-trip: wraps [bwrap, ...argv, command, ...args] + env verbatim/TMPDIR (T0.3)", async () => {
+  // Linux-only: the emitted argv carries a strict `--bind /proc /proc` —
+  // absent on macOS, preflight fails closed there (exit 127) by design.
+  it.skipIf(process.platform !== "linux")("spawn round-trip: wraps [bwrap, ...argv, command, ...args] + env verbatim/TMPDIR (T0.3)", async () => {
     const f = fixture();
     // An argv-dump script as the bwrapPath seam: the spawn composition is
     // asserted against what the child ACTUALLY receives, incl. env.
@@ -549,7 +551,10 @@ describe("verifyOuterWrapRealizedIsolation — opt-in emit", () => {
 });
 
 describe("verifyOuterWrapRealizedIsolation — emit fork", () => {
-  beforeEach(() => obs.warnSilentFallback.mockClear());
+  beforeEach(() => {
+    obs.warnSilentFallback.mockClear();
+    sentry.captureMessage.mockClear();
+  });
   it("ok + privileged → info emit, no warn", async () => {
     const { verifyOuterWrapRealizedIsolation } = await import("@/server/agent-outer-wrap");
     verifyOuterWrapRealizedIsolation(
@@ -557,6 +562,10 @@ describe("verifyOuterWrapRealizedIsolation — emit fork", () => {
       { probe: () => ({ ok: true, elevation: "privileged" }) },
     );
     expect(obs.warnSilentFallback).not.toHaveBeenCalled();
+    // The info-level Sentry emit is load-bearing — Vector forwards warn+ only,
+    // so without this line the realized-isolation proof is unqueryable.
+    expect(sentry.captureMessage).toHaveBeenCalledTimes(1);
+    expect(sentry.captureMessage.mock.calls[0][0]).toContain("outer-wrap realized probe ok");
   });
 
   it("ok + userns → warn (file-cap posture not measured)", async () => {
@@ -614,5 +623,27 @@ describe("buildOuterWrapArgv — .git external-target binds are absent (review P
       pluginPath: f.plugin,
     });
     expect(argv).not.toContain(realpathSync(outside));
+  });
+
+  it("intermediate-component symlink (~/.claude → outside) drops every home bind (fix-round P1)", () => {
+    const f = fixture();
+    // A planted ~/.claude symlink survives a leaf lstat on each file INSIDE
+    // it — only resolved-path containment catches the redirect.
+    const attacker = path.join(f.root, "attacker-claude");
+    mkdirSync(attacker, { recursive: true });
+    writeFileSync(path.join(attacker, ".credentials.json"), "{}");
+    rmSync(path.join(f.home, ".claude"), { recursive: true });
+    symlinkSync(attacker, path.join(f.home, ".claude"));
+    const argv = buildOuterWrapArgv({
+      workspacePath: f.ws,
+      home: f.home,
+      pluginPath: f.plugin,
+    });
+    expect(argv).not.toContain(attacker);
+    for (const flag of ["--bind", "--bind-try"]) {
+      for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === flag) expect(argv[i + 1]).not.toContain("attacker-claude");
+      }
+    }
   });
 });

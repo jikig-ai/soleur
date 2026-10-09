@@ -364,11 +364,16 @@ fan_out_to_peers() {
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    # The HMAC SIGNATURE header goes in on curl's stdin config channel, never its argv
+    # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
+    # Known remaining site: the shared secret itself is openssl's -hmac argument above
+    # (the deferred `openssl dgst -hmac` class in lint-shell-trace-credential-refusal.py).
+    code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=${sig}" \
-      --data-binary "$payload" 2>/dev/null || echo "000")
+      --config - \
+      --data-binary "$payload" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || echo "000")
     if [[ "$code" == "202" ]]; then
       logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
     else
@@ -422,10 +427,12 @@ SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sand
 SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
 # Aliasing guard: an env override pointing the outer ledger at the inner file
 # would let the #5863 soak read the #8752 arm's state (wrong mechanism's
-# greens counting toward promotion). Loud-warn + hold; the outer arm still
-# records to the shared file, but the misconfiguration is journaled.
+# greens counting toward promotion). Warn AND skip the outer arm entirely —
+# interleaved writes under one file is worse than a missing arm.
+OUTER_LEDGER_ALIAS=0
 if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
-  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer soak would read the inner ledger; fix the env override"
+  OUTER_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer canary SKIPPED: aliasing would let the inner ledger's greens count toward the #5863 soak; fix the env override"
 fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
@@ -1313,8 +1320,8 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# zot v2.1.20 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
-# MEASURED 2026-08-05 by running the pinned image locally against this config (#7282):
+# zot v2.1.22 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
+# MEASURED 2026-10-08 by running the pinned image locally against this config (#9252):
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:
@@ -2645,6 +2652,9 @@ run_faithful_sandbox_canary() {
 # #5863 soak follow-through; promotion to gating is a separate change after
 # a green soak.
 run_outer_wrap_canary() {
+  if [[ "$OUTER_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into the inner ledger
+  fi
   run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
     "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
 }
@@ -3323,7 +3333,7 @@ unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 # registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
 # sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
 # (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
-# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# in server.tf proves pkg-containers.githubusercontent.com and docker.pkg.github.com too. Fail-open: the probe is bounded by
 # `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
 # never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
 # (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.

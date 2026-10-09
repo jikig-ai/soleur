@@ -44,7 +44,14 @@ cat > "$BIN/curl" <<'STUB'
 # The ONE egress site (betterstack-query.sh run_sql). Refuses everything it was not taught.
 url=""; data=""; user=""
 while [ $# -gt 0 ]; do
-  case "$1" in -d) data="$2"; shift 2 ;; -u) user="$2"; shift 2 ;; https://*) url="$1"; shift ;; *) shift ;; esac
+  case "$1" in
+    -d) data="$2"; shift 2 ;;
+    # The Basic-auth pair rides curl's stdin config (`--config -`, one `user = "USER:PASS"` line), never argv (#9597).
+    --config) if [ "$2" = - ]; then cfg="$(cat)"; user="${cfg#user = \"}"; user="${user%%\"*}"; fi; shift 2 ;;
+    -u) echo "curl stub: the credential pair is on ARGV (-u); it must ride stdin (--config -)" >&2; exit 64 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
 done
 # Credential hygiene: nothing secret-shaped but the Better Stack password may be in the query child's environment.
 leak="$(env | cut -d= -f1 | grep -E 'TOKEN|SECRET|PASSWORD|KEY|CREDENTIAL|AUTH|DOPPLER' | grep -vxE 'BETTERSTACK_QUERY_PASSWORD' || true)"
@@ -132,7 +139,7 @@ expect "T01 exactly one readiness read and one probe read, nothing else" test "$
 expect "T01 the probe read asks for the readiness age + 2 h (98 h) and 2000 rows" grep -q "^probe:.*INTERVAL 98 HOUR.*LIMIT 2000" "$WORK/sql"
 expect "T01 the readiness read asks for the 90-day lookback and 20 rows" grep -q "^ready:.*INTERVAL 90 DAY.*LIMIT 20" "$WORK/sql"
 expect "T01 the probe read pins the emitting unit as well as the identifier" grep -qF "JSONExtractString(raw,'_SYSTEMD_UNIT') = 'luks-monitor.service'" "$WORK/sql"
-expect "T01 the readiness read anchors the marker with startsWith and carries no LIKE wildcard" bash -c "grep '^ready:' '$WORK/sql' | grep -qF \"startsWith(JSONExtractString(raw,'message'), 'SOLEUR_FRESH_BOOT_READY ')\" && ! grep '^ready:' '$WORK/sql' | grep -q LIKE"
+expect "T01 the readiness read anchors the marker with startsWith and carries no LIKE wildcard" bash -c "grep '^ready:' '$WORK/sql' | grep -cF >/dev/null \"startsWith(JSONExtractString(raw,'message'), 'SOLEUR_FRESH_BOOT_READY ')\" && ! grep '^ready:' '$WORK/sql' | grep -c >/dev/null LIKE"
 
 reset_fx; rdy $((4 * D)) | ready; { soak_probes $((4 * D)); row $((6 * D)) "$(failmsg)"; } | probe
 run 0 PASS "T02 a FAIL row from BEFORE the readiness row does not count (the rebirth superseded it)"
@@ -252,10 +259,10 @@ expect "T37 the probe holds no Doppler credential and makes no marker access (no
 expect "T38 the probe carries no write verb" bash -c '! grep -qE "(-X[[:space:]]*(POST|PUT|PATCH|DELETE)|secrets (set|delete))" <<<"$1"' _ "$code"
 SWEEPER="$ROOT/.github/workflows/scheduled-followthrough-sweeper.yml"
 expect "T39 the sweeper no longer binds the marker write token (comment-stripped)" \
-  bash -c '! grep -vE "^[[:space:]]*#" "$1" | grep -q DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER' _ "$SWEEPER"
+  bash -c '! grep -vE "^[[:space:]]*#" "$1" | grep -c >/dev/null DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER' _ "$SWEEPER"
 IDS+=(T40)
 expect "T40 the enrollment directive in the probe header declares exactly the three Better Stack names" \
-  bash -c 'grep -E "^#   <!-- soleur:followthrough .*web2-luks-live-6931\.sh" "$1" | grep -qF "secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->"' _ "$PROBE"
+  bash -c 'grep -E "^#   <!-- soleur:followthrough .*web2-luks-live-6931\.sh" "$1" | grep -cF >/dev/null "secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->"' _ "$PROBE"
 
 # --- lib: the query child gets nothing it does not need (exercised on the real helper, not through the probe) ----------
 IDS+=(T41)

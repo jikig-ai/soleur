@@ -31,12 +31,12 @@ run_sut() {
 #!/usr/bin/env bash
 case "$1 $2" in
   "issue view")
-    if printf '%s ' "$@" | grep -q -- '--json state';    then cat "$MOCKD/state";    exit 0; fi
-    if printf '%s ' "$@" | grep -q -- '--json comments'; then cat "$MOCKD/comments"; exit 0; fi ;;
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--json state';    then cat "$MOCKD/state";    exit 0; fi
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--json comments'; then cat "$MOCKD/comments"; exit 0; fi ;;
   "run list") cat "$MOCKD/runs"; exit 0 ;;
   "run view")
-    if printf '%s ' "$@" | grep -q -- '--json jobs'; then cat "$MOCKD/jobs"; exit 0; fi
-    if printf '%s ' "$@" | grep -q -- '--log';        then cat "$MOCKD/log";  exit 0; fi ;;
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--json jobs'; then cat "$MOCKD/jobs"; exit 0; fi
+    if printf '%s ' "$@" | grep -c >/dev/null -- '--log';        then cat "$MOCKD/log";  exit 0; fi ;;
   "issue comment")
     bf=""; while [[ $# -gt 0 ]]; do [[ "$1" == "--body-file" ]] && { bf="$2"; break; }; shift; done
     [[ -n "$bf" && -f "$bf" ]] && cat "$bf" >> "$MOCKD/comment_calls"

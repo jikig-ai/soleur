@@ -142,6 +142,40 @@ What changed:
 Option B (#5863 — per-tenant isolation so an agent cannot observe siblings *exist*) remains the
 longer-term end-state; this amendment closes only the read-side residual.
 
+## Addendum — 2026-10-08 (#9723 / #9725): the deny is realized, not declared — shim tail mask + dual root
+
+**Status: `accepted`.** Two audit findings showed the read-isolation this ADR asserts was weaker in
+effect than in intent on the post-ADR-068 tree:
+
+- **#9723 — the `/proc` deny was dead code.** `denyRead` carries `/proc`, which the vendored builder
+  projects to `--tmpfs /proc` — but the same vendored argv *ends* with `--bind /proc /proc` (the
+  sandbox-runtime bootstrap bind), restoring the host procfs AFTER the deny landing. Host
+  `/proc/<pid>/environ` was readable in-sandbox again. The fix lands in `infra/bwrap-shim/bwrap`
+  (the PATH shim the SDK's spawn already resolves in the runner image): after arity-aware argv
+  parsing, the shim appends a final `--proc /proc` after the vendor tail — a fresh pidns-scoped
+  procfs, deliberately NOT `--tmpfs` (a bare tmpfs deletes `/proc/self/fd`, which the vendored
+  `apply-seccomp` inner command execs through; verified live). The mask is realized at spawn, so no
+  fixture or SDK source is edited; `infra/sandbox-canary-argv.json` keeps the vendor's authentic tail.
+  The canary `proc_mask` probe now discriminates on host-PID visibility (the canary's own host pid
+  must be absent), not on an empty procfs — `/proc/self/environ` legitimately exists under `--proc`.
+- **#9725 — the workspace deny covered only the pre-cutover root.** `workspacePathForWorkspaceId`
+  resolves under `WORKTREE_ROOT` (`/var/lib/soleur/worktrees`) once `GIT_DATA_STORE_ENABLED` flips,
+  but the deny list carried only `WORKSPACES_ROOT`. The deny set is now produced by
+  `workspaceTenantDenyRoots()` (exported from `workspace-resolver.ts`, the single owner of the
+  root pair): `[WORKSPACES_ROOT, WORKTREE_ROOT]`, deduplicated, flag-independent — both roots are
+  denied on every dispatch, so the cutover flag state cannot change the isolation guarantee.
+  `getWorkspaceWorktreeRoot` stays private. The builder's deny-then-restore ordering re-binds the
+  own workspace rw regardless of which root it resolves under; a catastrophic workspace path equal
+  to (or containing) a deny root still throws rather than silently restoring a whole tenant tree.
+
+Supporting gates (same PR): `infra/git-data-flag-precheck.sh` carries a `SANDBOX_DENY_ROOTS`
+source-coverage probe — informational under proof, blocking under `FLAG_MODE=flip` — and
+`.github/workflows/git-data-cutover.yml` gates the flip on a `GIT_DATA_DENY_FLOOR` live-image semver
+(same `/health` + `ver_le` pattern as `GIT_DATA_EMITTER_FLOOR`), so the flag cannot be flipped onto a
+running image that predates the dual-root deny. The canary fixture was re-captured on `node:22-slim`
+with `WORKTREE_ROOT=/tmp/soleur-sandbox-canary-worktrees` pinned — it now carries both deny landings
+and still ends `--bind /proc /proc`.
+
 ## Addendum — 2026-10-08 (#5863): Option B adopted in arm-F form — mount-namespace-only outer wrap
 
 **Status: `adopting`** (claim held until production measurement, per #9603 discipline).
@@ -182,10 +216,13 @@ while the rollout flag exists — load-bearing on the flag-off arm).
 
 **Open residuals (named, tracked):**
 
-- `#9723` stays open: `/proc` remains the shared container procfs — sibling PIDs,
-  `/proc/<pid>/environ`, **and `/proc/<pid>/{root,cwd,ns}` (a mount-namespace
-  oracle into any same-uid process)** are still visible to a sandboxed session.
-  The `root`/`cwd`/`ns` reach is acceptable only while `kernel.yama.ptrace_scope`
+- `#9723` stays open **for the wrapped-CLI tier specifically**: the #9768
+  addendum below scoped the *inner* sandbox's procfs (the shim tail mask), but
+  the file tools run in the CLI process itself — one level OUTSIDE the inner
+  shim — so for them `/proc` is still the shared container procfs: sibling
+  PIDs, `/proc/<pid>/environ`, **and `/proc/<pid>/{root,cwd,ns}` (a mount-
+  namespace oracle into any same-uid process)** remain visible there. The
+  `root`/`cwd`/`ns` reach is acceptable only while `kernel.yama.ptrace_scope`
   stays `1` — the shared payload asserts the sysctl non-zero so a drift pages
   instead of silently voiding the wrap. The honest close is the pidns, which
   requires the topology work in #9773.

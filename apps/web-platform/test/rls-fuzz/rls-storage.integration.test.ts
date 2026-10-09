@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { classifySelectOutcome, classifyMutationOutcome, isPass, type Verdict } from "./verdict";
-import { connect, asTenant } from "./harness-fixture";
+import { connect, asTenant, withTransientRetry } from "./harness-fixture";
 
 // storage.objects attachment isolation (#6256, ADR-111, AC9). message_attachments
 // object isolation lives in storage.objects RLS: chat-attachments objects are
@@ -29,13 +29,19 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — storage.objects attachment isolati
     sql = connect(DSN); // assertLocalDsn + max:1 pinned in the shared fixture
     userA = randomUUID();
     userB = randomUUID();
-    await sql`insert into auth.users (id, email) values (${userA}, ${`a-${userA}@example.test`}), (${userB}, ${`b-${userB}@example.test`})`;
-    await sql`insert into storage.buckets (id, name) values (${BUCKET}, ${BUCKET}) on conflict do nothing`;
-    // Seed a tenant-A object as superuser (bypasses storage RLS). Folder[1] = userA;
-    // folder[2] is a random non-workspace segment so the co-member SELECT branch cannot apply.
-    const [o] = await sql`insert into storage.objects (bucket_id, name, owner_id)
-      values (${BUCKET}, ${`${userA}/${randomUUID()}/attachment.txt`}, ${userA}) returning id`;
-    objectId = o.id as string;
+    // One committed txn under the retry wrapper — a mid-seed deadlock replay is
+    // only safe because the whole cluster rolls back together.
+    await withTransientRetry(() =>
+      sql.begin(async (t) => {
+        await t`insert into auth.users (id, email) values (${userA}, ${`a-${userA}@example.test`}), (${userB}, ${`b-${userB}@example.test`})`;
+        await t`insert into storage.buckets (id, name) values (${BUCKET}, ${BUCKET}) on conflict do nothing`;
+        // Seed a tenant-A object as superuser (bypasses storage RLS). Folder[1] = userA;
+        // folder[2] is a random non-workspace segment so the co-member SELECT branch cannot apply.
+        const [o] = await t`insert into storage.objects (bucket_id, name, owner_id)
+          values (${BUCKET}, ${`${userA}/${randomUUID()}/attachment.txt`}, ${userA}) returning id`;
+        objectId = o.id as string;
+      }),
+    );
   });
 
   afterAll(async () => {
@@ -43,7 +49,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — storage.objects attachment isolati
   });
 
   test("AC9 precondition: service_role sees tenant-A's object (count=1)", async () => {
-    expect(await countObject(sql)).toBe(1);
+    expect(await withTransientRetry(() => countObject(sql))).toBe(1);
   });
 
   test("AC9 positive control: tenant A CAN see its own attachment object", async () => {
@@ -80,6 +86,6 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — storage.objects attachment isolati
   });
 
   test("AC9 tail: tenant A's object is intact after the attacks", async () => {
-    expect(await countObject(sql)).toBe(1);
+    expect(await withTransientRetry(() => countObject(sql))).toBe(1);
   });
 });
