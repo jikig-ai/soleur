@@ -42,3 +42,14 @@ Plan: `knowledge-base/project/plans/2026-10-09-ci-skip-duplicate-push-main-run-s
 - [ ] 5.2 PM-1 S1 evidence census, attached to #9727 and #9512
 - [ ] 5.3 PM-2 shadow gate and activation on the operator's explicit go (ADR reads `adopting`)
 - [ ] 5.4 PM-3 first-run canary; PM-4 7-day soak and exit census; PM-5 docs-only status PR
+
+## Deepen-pass additions (2026-10-09)
+
+- [ ] D.1 Proof binds `event == merge_group`, repository, workflow path; `$GITHUB_OUTPUT` and annotations carry only literals (Guard 1 rows 13-15)
+- [ ] D.2 `push-dedupe` `timeout-minutes: 3` alone on its line (CI budget: path 70, budget 75); re-run the release workflow's awk and B9 on the edited tree
+- [ ] D.3 `would-elide` step (jobs API `steps[]`), `proof_error` warning, layer-6 citations in the Observability block
+- [ ] D.4 Probe: FAIL before NOT YET on every sweep, mean cost computed by the probe, `S2-EXIT-CENSUS:` marker required, 30-day never-activated exit 1 (Guard 2 rows 7-8)
+- [ ] D.5 CODEOWNERS lines for the proof suite and the probe; read the `main` ruleset's `require_code_owner_review` before PM-2
+- [ ] D.6 Keying TSV adds the share of `merge_group` runs completed before the push run was created
+- [ ] D.7 Read `scripts/regenerate-shard-manifest.py` `green_main_runs` and the two leg-balance probes; filter elided runs
+- [ ] D.8 PM-0 (first push run on `main`) and PM-6 (rollback) in the tracker checklist; PM-3 is the first run with `elide=true`

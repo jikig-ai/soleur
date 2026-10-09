@@ -33,3 +33,13 @@
 ### Mechanical applied (not challenged)
 
 - Gate the `test` aggregator instead of adding a tolerance arm; prove coverage from the `merge_group` run's `test` job; release-workflow CI budget and B9 added to the work; probe elision observed from job conclusions; `run_attempt == 1`.
+
+## 2026-10-09 deepen pass (headless)
+
+### Taste 4: add CODEOWNERS lines for the proof suite and the probe (security review) after plan review dropped them (simplicity)
+
+- Plan default: add them (two lines). Without them a commit touching only the suite or the probe can weaken the proof's voucher unreviewed. The residual stays detective, because an admin merge bypasses CODEOWNERS.
+
+### Mechanical applied
+
+- Vouching run bound to event, repository and workflow path; output and annotation injection discipline; job timeout 3 (CI budget slack); PM-0 and PM-6; probe FAIL precedence and exit-census marker; discoverability command counts the eight gated conditions.

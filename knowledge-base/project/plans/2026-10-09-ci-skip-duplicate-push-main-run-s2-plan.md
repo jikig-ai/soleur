@@ -14,6 +14,16 @@ brand_survival_threshold: aggregate pattern
 
 # ci: skip the duplicate push-to-main CI run when a merge_group run already passed on the same SHA (S2, ADR-276)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09. **Agents used:** architecture-strategist, spec-flow-analyzer, security-sentinel, observability-coverage-reviewer (deepen pass); repo-research-analyst, learnings-researcher, functional-discovery, DHH, Kieran, code-simplicity, CTO devex lens (plan and plan review). Mechanical gates run and green: user-brand impact, observability schema and verb gate, PAT-shape grep, encryption posture (no store or connection), guard contract lint (2 entries), scope check, cited PR and issue states, label and milestone existence, AGENTS.md rule ids, `knowledge-base/` path existence.
+
+1. **Security:** the vouching run is now bound to `event == merge_group`, the repository and the workflow path (a branch an author names `gh-readonly-queue/main/x` could otherwise vouch through a `pull_request` or `workflow_dispatch` run); `$GITHUB_OUTPUT` and annotations carry only literals and validated numbers.
+2. **Budget:** the release workflow's CI budget step leaves a slack of 5 minutes against the longest `needs:` path (70 of 75); the new job is set to 3, not 5.
+3. **Operations:** PM-0 (the push path first runs on `main`, not in the PR), a rollback path (PM-6), a probe that evaluates a wrong elision on every sweep, observes elision from job conclusions, computes its own mean cost (the census refuses live mode in CI) and requires an exit-census marker before the sweeper closes the tracker.
+4. **Eligibility:** the 92 of 94 match is on final conclusions; the proof reads the `merge_group` run at push time, so the share already completed then is measured in Phase 1.
+5. **Observability:** platform-reported `would-elide` step conclusion, layer citations, and a discoverability command that counts the eight gated conditions instead of a YAML key.
+
 ## Overview
 
 Stage S2 of ADR-276: remove the second full execution of the `CI` workflow that follows every queue
@@ -119,6 +129,8 @@ baseline report for that window (10% to 13%).
 | `plugins/soleur/scripts/deploy-arm.sh` (`evaluate`, the `actions/workflows/ci.yml/runs?head_sha=` read) | status, conclusion, created, started and updated timestamps of the push run | `CI=success` is reported; run duration shrinks, which only affects the creep warning |
 | `scripts/followthroughs/pr-battery-gate-saving-9323.sh` (the `push run for $sha` read) | push conclusion as the ADR-262 escape detector | An elided `success` can hide nothing the full `merge_group` battery did not already see; noted in the ADR amendment |
 | `scripts/followthroughs/ci-leg-balance-9232.sh`, `deploy-script-tests-legs-8736.sh` | success push runs, per-leg timing artifacts | Elided runs carry no leg artifacts and drop out of the sample; the work phase reads both to confirm they fail soft (NOT YET) rather than red |
+| `scripts/regenerate-shard-manifest.py` (`green_main_runs(workflow="ci.yml", n=5)`) | the five most recent successful `main` runs and their leg-timing artifacts | Elided runs are `success` with no timing artifacts; after activation most of the newest five could be elided. The work phase reads its `allow_empty` handling and filters to non-elided runs (display of the skipped gated jobs) |
+| Artifact readers (`download-artifact`, `run-id:` in any workflow other than `ci.yml`) | grepped 2026-10-09: only `fix-constraints-stage-b.yml` (its own stage-a run) and `apply-web-platform-infra.yml` (its own plan artifact) | None reads a `ci.yml` push run's artifacts |
 | `plugins/soleur/skills/ship/references/settle-then-admin-merge.md`, `postmerge` skill | `gh run list --branch main --workflow CI` | Read-only docs; the work phase greps them for a "test job ran" assumption |
 | `main-health-monitor.yml`, `codeql-main-alert-gate.yml` | not consumers (dispatch-only; its own push trigger) | None |
 
@@ -162,8 +174,9 @@ symlink or hard-link into the live repo. No open `code-review` issue names `ci.y
 ### Design chosen: a keyed attestation job inside `ci.yml` (design 1 of ADR-276 Decision 2)
 
 One new job, `push-dedupe`, with job-level `if: github.event_name == 'push'` (so on `pull_request`,
-`merge_group` and `workflow_dispatch` it is skipped without taking a runner), a small `timeout-minutes` (sized in
-Phase 2 against the release workflow's CI budget, see Risks), `permissions: actions: read`, an output `elide`, and
+`merge_group` and `workflow_dispatch` it is skipped without taking a runner), `timeout-minutes: 3` (written alone on its line: the
+release workflow's `run_declared_path` awk reads `timeout-minutes: N` with nothing after it, and a trailing comment would
+make the job count as undeclared at 360 minutes; see Phase 2 for the budget arithmetic), `permissions: actions: read`, an output `elide`, and
 one inline step (extracted and executed by the suite, the `secret-scan-smoke-gate` pattern, no checkout). The
 step runs with `continue-on-error: true`, its own step-level `timeout-minutes: 2` and `timeout 20` around each
 `gh` call (a hung read must end the step, not the job: a job timeout concludes the run `failure` and the deploy
@@ -175,9 +188,12 @@ sees `ci_not_green`), and `env:` of `GH_TOKEN: ${{ github.token }}`, `GH_REPO: $
 2. Refuses unless `EVENT_NAME == push`, `REF == refs/heads/main`, `RUN_ATTEMPT == 1` (a human re-run is never
    elided: it exists to re-test), and the SHA is 40 hex (reason codes `not_push`, `not_main`, `rerun`, `bad_sha`).
 3. Lists `ci.yml` runs with `event=merge_group&head_sha=<sha>` (one read, `per_page=100`), then selects client-side
-   a run with `status == completed`, `conclusion == success`, `head_sha == <sha>` and `head_branch` starting with
-   `gh-readonly-queue/main/` (the search parameters are advisory; the client-side re-check is the proof). None
-   selected is `no_mg_success`.
+   a run with `event == merge_group`, `status == completed`, `conclusion == success`, `head_sha == <sha>`,
+   `path == .github/workflows/ci.yml`, `head_repository.full_name == $GH_REPO` and `head_branch` starting with
+   `gh-readonly-queue/main/` (the search parameters are advisory; the client-side re-check is the proof, and the
+   `event` and repository checks are what stop a `pull_request` or `workflow_dispatch` run on a branch the author
+   named `gh-readonly-queue/main/x` from vouching; the branch prefix is only a secondary filter). None selected is
+   `no_mg_success`.
 4. Reads that run's jobs (`per_page=100`, `filter=latest`) and requires a job named exactly `test` with conclusion
    `success`. Why one job and not a stem list: the `test` aggregator already concludes red when any of its five
    legs is `skipped` (its loop sets `fail=1` on every non-`success` result), and the run conclusion `success`
@@ -188,7 +204,15 @@ sees `ci_not_green`), and `env:` of `GH_TOKEN: ${{ github.token }}`, `GH_REPO: $
 5. `would_elide=true` when all of that holds. `elide=true` only when additionally `SWITCH == "on"` (compared in the
    shell; the variable enters through `env:`, never inline in `run:`). It writes `elide=true` last.
 6. Emits one `::notice title=ci-push-dedupe::sha=... would_elide=... elide=... reason=... mg_run=...` annotation
-   (a human-readable audit line; nothing machine-reads it as evidence) and a step summary line.
+   (a human-readable audit line; nothing machine-reads it as evidence; a `::warning::` with reason `proof_error` on any
+   API failure) and a step summary line. Injection discipline: `$GITHUB_OUTPUT` receives only the literals
+   `elide=true`, `elide=false`, `would_elide=true` or `would_elide=false`, never an API value; `mg_run` is validated
+   against `^[0-9]+$`; reason codes come from a fixed enum; no `display_title`, `head_branch`, job name or `gh`
+   stderr is ever echoed into an annotation, summary or output (they are attacker-controlled PR titles and branch
+   names); `set -x` is forbidden in the body. A second step, `would-elide`, with `if: steps.proof.outputs.would_elide
+   == 'true'`, makes the dark-phase verdict readable from the jobs API `steps[]` (a platform-reported conclusion,
+   not an annotation to eyeball). Job `permissions` is exactly `actions: read`, `GH_TOKEN` appears only in the proof
+   step's `env:`, and the job has no `uses:`, checkout or `secrets.*`.
 
 The gated jobs are eight: `test-webplat`, `test-bun`, `test-scripts`, `test-scripts-heavy`, `web-platform-build`,
 `shard-totality-mutations`, `e2e` and the `test` aggregator. Each gets `needs: [push-dedupe]` (for `test`, appended
@@ -256,13 +280,20 @@ Phase 5), both append-only. No new ADR is created.
    ADR-276 Status reading (merge dark under `proposed`; the dark merge changes timing and cost of push runs, not
    a verdict; activation gated on `adopting`; challengeable); the S1 evidence ownership update; the Stage status
    line (`- 2026-10-09 S2 amended`). Status stays `proposed`.
+   The amendment also says in so many words that it NARROWS ADR-276 Decision 2's own sentence ("an attestation job
+   that reads a `merge_group` conclusion and lets the push run conclude `success` manufactures a push verdict from
+   another run's value, against ADR-217"): ADR-217's trust ladder covers the release verdict, the artifact values
+   and run discovery, and the CI conclusion is only the `workflow_run` trigger, so the reconciliation is a scope
+   clarification of Decision 2, not a Decision change, and it names the ejected-candidate case (a candidate that
+   passed the full battery and later reaches `main` outside the queue was still tested on the identical tree).
 2. **ADR-217 `## Amendment 2026-10-09 (S2, #9512)`** appended after `## References`, plus
    `amended_by: [ADR-276]` in its frontmatter (the convention used by the ADRs that already carry the key). It
    records that ADR-217's prohibition is about substituting an artifact value for the `release.result` jobs-API
    read and that this is unchanged; that the CI conclusion the deploy arm reads can now be attested by an
    identical-SHA `merge_group` run, read from the jobs API by the attestation job at run time and failing open to
    a full run; and that this is a named exception to "the verdict never crosses as a value" for the CI verdict
-   only.
+   only. It adds one row to the trust-ladder table for the CI gate: source is the `workflow_run` conclusion,
+   attested by a jobs-API read of an identical-`head_sha` `merge_group` run, identity from `github.sha`, failing open.
 
 Anti-truncation procedure for both (the S1 review learning): use the Edit tool at a unique anchor, not a
 scripted rewrite. If a script is used, match line-start anchors with `re.M`, assert exactly one match before
@@ -295,7 +326,8 @@ after the shadow gate in Phase 5 and only on the operator's explicit go.
 
 1. `scripts/ci-push-dedupe.test.sh`: extract-and-execute suite (below), RED against the unmodified `ci.yml`
    (no `push-dedupe` job: every parity and proof row fails; this is the failing-test commit). Register it in
-   `scripts/test-all.sh` in the same commit so no unregistered-suite lint fires between commits.
+   `scripts/test-all.sh` only (the `run_suite` line) in the same commit so no unregistered-suite lint fires; Phase 3
+   completes the remaining registrations.
 2. Extend `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh`: its W2 pins exactly 6 `needs` legs, which
    becomes 6 legs plus the non-leg `push-dedupe`; add a row that the aggregator body, `env:` and loop are
    unchanged by this stage (RED until the wiring exists).
@@ -304,13 +336,18 @@ after the shadow gate in Phase 5 and only on the operator's explicit go.
 
 1. Commit `knowledge-base/project/specs/feat-one-shot-9512-skip-duplicate-push-ci/measurements/keying-2026-10-09.tsv`
    (per push run: run id, SHA, created, conclusion, matching `merge_group` run id and conclusion, and for the
-   matched run the `test` job conclusion, which measures the coverage rate of the proof's one job check), produced by
+   matched run the `test` job conclusion, which measures the coverage rate of the proof's one job check, and the
+   `merge_group` run's `updated_at` against the push run's `created_at`, because the proof reads the run when
+   `push-dedupe` starts: the share of matched SHAs whose `merge_group` run had already COMPLETED is the real
+   eligibility rate, since the queue merges on required checks while an advisory job may still be running, and it
+   enters Property 1 and the PM-2 go), produced by
    the two API reads in Research Insights written to files plus one jobs read per matched run; and
    `push-cost-baseline.tsv` (the `ci.yml` `push` STEM rows of `bash scripts/ci-demand-census.sh --start
    2026-10-07T13:04:00Z --end 2026-10-07T19:04:00Z --workflow ci.yml --summary`, fetched once; the 145.41 and 29.08
    figures are recomputed from this file by the amendment's author, not copied from this plan). Classify the 8
-   push-only reds with one read each (does the next push run on `main` fail the same job): the result is a figure
-   the amendment's residual and the PM-2 go depend on.
+   push-only reds with two reads each (does the next push run on `main` fail the same job; did a re-run of the same
+   SHA go green): the result is a figure the amendment's residual and the PM-2 go depend on, and it is evidence, not
+   proof, of flake versus escape.
 2. Append the ADR-276 S2 amendment, then the ADR-217 amendment, each with the anti-truncation procedure; read
    `git diff origin/main -- <file>` and require 0 deletions (ADR-217: 1 changed frontmatter line).
 3. Run `bash scripts/check-adr-ordinals.sh` and the markdown lint for the two files; commit.
@@ -321,11 +358,15 @@ after the shadow gate in Phase 5 and only on the operator's explicit go.
    and check for creep" step runs `run_declared_path` over `ci.yml` and `exit 1`s when the longest `needs:` path
    exceeds `CI_BUDGET_MIN`, and `scripts/prod-version-drift-check.test.sh` (B9) asserts the same arithmetic against
    `DRIFT_SUSTAINED_THRESHOLD_MIN` (225 today). Every gated job now needs `push-dedupe`, so the longest path grows by
-   its `timeout-minutes`. Run that awk function and B9 on the unedited tree, record the slack, and set the job's
-   `timeout-minutes` to the largest value that keeps B9 and the step green (at most 5; if the slack is smaller,
-   move the threshold in the same commit per the header rule in `prod-version-drift-check.sh`).
-2. Add `push-dedupe` to `.github/workflows/ci.yml` (job, step body as specified), the eight `needs` and `if` edits,
-   and the comment above the job. Pin every action by the file's SHA convention (the job uses no `uses:`).
+   its `timeout-minutes`. Plan-time measurement (the release workflow's own awk run over the unedited tree): the longest
+   path is 70 (`test-scripts` 60 plus `test` 10) against `CI_BUDGET_MIN` 75 (225 minus the 150 of release ceilings
+   resolve-target 15, migrate 30, verify-migrations 15, deploy 90; re-verify the 90), so the slack is 5 and a
+   `push-dedupe` of 5 would leave zero. The job is set to 3 (path 73, slack 2). Re-run that awk function and B9 on
+   the edited tree and record both numbers in the amendment; if either goes red, move the threshold in the same
+   commit per the header rule in `prod-version-drift-check.sh`.
+2. Add `push-dedupe` to `.github/workflows/ci.yml` (job, step body as specified), the eight `needs` and `if` edits
+   (for each of the eight, record the existing `if:` first and AND the new condition onto it; today `test` carries
+   `always()` and the other seven carry none), and the comment above the job. Pin every action by the file's SHA convention (the job uses no `uses:`).
 3. Raise `scripts/pr-fanout-ledger.txt` row `ci.yml` from 24 to 25; append to its consequence text: `+1
    push-dedupe (S2, #9512/ADR-276): push-only job, skipped without a runner on pull_request and merge_group; a new
    heavy job must join the gated set (scripts/ci-push-dedupe.test.sh enforces it)`. Verify
@@ -339,7 +380,14 @@ after the shadow gate in Phase 5 and only on the operator's explicit go.
 1. `scripts/followthroughs/ci-push-dedupe-soak-9512.sh` and `.test.sh` (exit contract 0 PASS, 1 FAIL, 2 NOT YET, 3
    CANNOT ESTABLISH, 78 refused under xtrace with a token, as the sibling `pr-battery-gate-saving-9323.sh`). The
    activation time is the variable's own `updated_at` (`gh api repos/{owner}/{repo}/actions/variables/CI_PUSH_DEDUPE`);
-   an unreadable or unset variable is exit 3 or 2, never a pass. Over all push runs of `ci.yml` created after it:
+   an unreadable variable is exit 3; an unset one is exit 2 (NOT YET, "not activated") unless any run is OBSERVED
+   elided with no readable repo variable or before its `updated_at` (an org-level or environment variable), which
+   is FAIL. FAIL takes precedence over NOT YET on every sweep (criterion (a) is evaluated daily, so a wrong elision
+   is reported within a day, not after seven), and the probe computes the mean push cost itself from the jobs API
+   with the census's counted-job definition (the census refuses live mode in CI, so the sweeper cannot call it).
+   More than 30 days after the merge with the variable still unset, it exits 1 with "activate, or revert the job".
+   PASS also requires an `S2-EXIT-CENSUS: <url>` marker comment on the tracker (the agent attaches the exit census,
+   PM-4), because the sweeper closes the tracker itself on exit 0. Over all push runs of `ci.yml` created after it:
    (a) an "elided" run is one OBSERVED to be elided: `push-dedupe` concluded `success` and `test-scripts` concluded
    `skipped` in the run's jobs (not a self-reported annotation, which could fail to emit); each such run must have,
    recomputed independently from the `merge_group` runs listing (not by reusing the proof code), a completed
@@ -349,7 +397,10 @@ after the shadow gate in Phase 5 and only on the operator's explicit go.
 2. Follow-through tracker issue (filed in the work phase, before the PR is marked ready; milestone `Post-MVP / Later`,
    labels `follow-through`, `type/chore`, `domain/engineering`, `meta/machinery`, body `User-Impact:` and
    `Fix-Size:` lines) carrying the `<!-- soleur:followthrough script=scripts/followthroughs/ci-push-dedupe-soak-9512.sh
-   earliest=<activation + 7 days> secrets=GH_TOKEN -->` directive; `earliest` is rewritten when the variable is set.
+   earliest=<filing date> secrets=GH_TOKEN -->` directive (the convention says earliest is the filing date, never far
+   future; the probe itself returns NOT YET until activation plus 7 days), validated by the sweeper's directive parser
+   in dry-run before the PR is marked ready, and a PM-0 to PM-6 checklist in the body (owner: the ship agent for
+   PM-0 and PM-1, the activating agent for PM-2 to PM-6).
    This tracker, not #9512 (closed by the PR), is where Decision 7's "post-merge census attached to the stage's own
    tracking issue" is satisfied; the deviation is recorded in the amendment, as S1 recorded its own.
 3. Registrations, mirroring the S1 commit that added two suites: `scripts/test-all.sh` (`run_suite` lines appended
@@ -359,7 +410,11 @@ after the shadow gate in Phase 5 and only on the operator's explicit go.
    `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh`, `scripts/pr-fanout-ledger.txt`,
    `scripts/required-checks.txt` and the ADR paths; a test naming a `knowledge-base/` path needs a covering edge
    or a row in `scripts/test-affected-kb-consumers.baseline.txt`). `ci.yml` is already owned in CODEOWNERS
-   (`/.github/workflows/ci.yml @deruelle`), which is the review control; no extra CODEOWNERS line.
+   (`/.github/workflows/ci.yml @deruelle`); add `/scripts/ci-push-dedupe.test.sh` and
+   `/scripts/followthroughs/ci-push-dedupe-soak-9512.sh` there too (security review: the proof and its voucher
+   could otherwise be weakened by a commit that touches only the suite or the probe). Before PM-2, read the `main`
+   ruleset for `require_code_owner_review` and record the result in the amendment; an admin merge bypasses
+   CODEOWNERS, so the residual is detective (the probe), not preventive.
 
 ### Phase 4 - Direct pre-push verification (not `test-all.sh --affected`, which queues behind sibling worktrees)
 
@@ -383,8 +438,8 @@ per core) and must show 0 failures.
 
 **Property.** A push `CI` run on `main` skips the gated jobs only when the proof step's output is the string
 `true`, which it emits only for a first-attempt `push` event on `main`, with the variable exactly `on`, and a
-completed `success` `merge_group` run whose head SHA equals this run's SHA and whose `test` job concluded
-`success`; on every other event or state every gated job runs and the aggregator classifies results exactly as before.
+completed `success` run of EVENT `merge_group` on a `gh-readonly-queue/main/` branch of this repository's `ci.yml`,
+whose head SHA equals this run's SHA and whose `test` job concluded `success`; on every other event or state every gated job runs and the aggregator classifies results exactly as before.
 
 **Assembly.** The chokepoint for the decision is the single `elide` output of the `push-dedupe` step: nothing
 else may skip a gated job on the push event. Three structures must agree, and the suite derives each from the
@@ -395,7 +450,11 @@ directions, so a missing condition and an extra one each fail; (2) the `needs:` 
 tolerance arm exists to drift); (3) the proof's coverage claim: it demands only the `test` job, which is sound
 because the aggregator concludes red on any `skipped` leg, so the suite also executes the extracted aggregator
 body over a `merge_group` triple with one leg `skipped` and requires a non-zero exit (the coupling is pinned at
-its source). Consumers that read the resulting run conclusion are a census (Research Insights), not a
+its source). A fourth structure is the guard's reach into other jobs: none of the eight gated jobs may carry
+`continue-on-error: true` (other jobs in the file do, e.g. `harness-discovery`, and are out of scope), and none of the
+seven gated jobs outside the aggregator's `needs` (`e2e`, `shard-totality-mutations`, and the legs the run
+conclusion alone vouches for) may gain an `if:` other than the elision condition, because a later `if:` that skips
+them on `merge_group` would make a `success` run vouch for a leg that never ran. Consumers that read the resulting run conclusion are a census (Research Insights), not a
 recollection. Event shapes: `push` (main first attempt, main re-run, other ref), `pull_request` (including fork),
 `merge_group`, `workflow_dispatch`. Value shapes of the variable: unset, empty, `on`, `ON`, ` on `, `On`, `true`,
 `1`. Proof-input shapes: no `merge_group` run, several runs (a re-run), a run for another SHA returned by a lagging
@@ -408,7 +467,7 @@ read, malformed JSON.
 | # | Mutation (must go RED) | Targets |
 |---|---|---|
 | 1 | Accept the variable as `ON`, ` on `, `On`, `true`, `1`, empty or unset (one run per value) | only the exact string `on` enables elision |
-| 2 | Drop the `EVENT_NAME == push`, the `REF == refs/heads/main` or the `RUN_ATTEMPT == 1` refusal (one at a time), with everything else true | elision exists only on a first-attempt push to `main` |
+| 2 | Drop the `EVENT_NAME == push`, the `REF == refs/heads/main` or the `RUN_ATTEMPT == 1` refusal (one at a time), with everything else true; include `EVENT_NAME` values `pull_request`, `merge_group` and `workflow_dispatch` | elision exists only on a first-attempt push to `main`; a dispatched full run is never elided |
 | 3 | Accept `in_progress`, `cancelled`, `failure` or `skipped` as the `merge_group` conclusion | only a completed `success` run counts |
 | 4 | Drop the client-side `head_sha ==` re-check (feed a lagging search that returns a run for another SHA) | the search parameter is advisory; the re-check is the proof |
 | 5 | Drop the `gh-readonly-queue/main/` branch-prefix check (feed a green run on another branch with the right SHA) | only a queue run vouches |
@@ -418,7 +477,10 @@ read, malformed JSON.
 | 9 | Replace `!cancelled()` by `success()` (or drop it) in one gated condition; drop the `github.event_name != 'push'` disjunct (a defence-in-depth row: on reachable states `elide` is empty off push, so it goes red only on the synthetic (`pull_request`, `elide=true`) row) | off the push event a skipped `push-dedupe` must not skip a required context; the live canary is the authoritative oracle for this row |
 | 10 | Edit the aggregator: tolerate `skipped` for a gated leg, add an `ELIDE` env, or add an arm | the aggregator stays byte-identical, and the proof's one-job coverage claim stays true |
 | 11 | REORDER: write `elide=true` before the `test` job check or before the variable check, with a `gh` stub that fails the jobs read (the property is about ORDER: the true value is written last, observed inside the window) | `elide=true` is the last write |
-| 12 | Move the default `elide=false` write after the first `gh` call; remove `continue-on-error: true`, the step-level `timeout-minutes`, or the job output mapping (asserted statically on the parsed YAML, since a runner step cannot be killed from the harness) | a failed or hung proof is a full run, never a red run |
+| 12 | Move the default `elide=false` write after the first `gh` call; remove `continue-on-error: true`, the step-level `timeout-minutes`, or the job output mapping (asserted statically on the parsed YAML, since a runner step cannot be killed from the harness) | a failed or hung proof is a full run, never a red run (a job-level failure, such as a lost runner, is an accepted fail-closed path: the gated jobs still run and the deploy waits on a red run) |
+| 13 | Drop the `event == merge_group`, the `head_repository.full_name` or the `path` re-check: feed a green `pull_request` run, then a green `workflow_dispatch` run, each on a branch named `gh-readonly-queue/main/x` with the right SHA and `test` success; and a harness row that removes `event=merge_group` from the query so only the client-side check can carry the proof | a branch name an author controls cannot vouch; the server-side filter is not the proof |
+| 14 | Feed `display_title` and `head_branch` set to `x\nelide=true` and `::error::pwn`, and a `gh` stderr containing a newline | `$GITHUB_OUTPUT` holds exactly one `elide=` line whose value matches the verdict, `mg_run` matches `^[0-9]+$`, and no fixture string reaches an annotation, summary or output |
+| 15 | Static pins on the parsed YAML: job `permissions` other than exactly `{actions: read}`; `GH_TOKEN` in any env but the proof step's; a `uses:`, checkout or `secrets.` reference in the job; `set -x` in the body; a gated job with `continue-on-error`; a non-gated-set job gaining the condition | least privilege and the reach of the guard |
 
 Harness rows: replace the extracted proof body with a stub that prints `elide=true` (the suite must fail on the
 must-be-false rows); replace the `gh` shim with one that returns the canonical fixture for every call (rows 3 to 6
@@ -457,6 +519,8 @@ assembly; a read that fails is exit 3, never a quiet zero.
 | 4 | Compute the mean over elided runs only (about 8.5) so a window dominated by non-elided runs above 29.08 returns 0; flip the comparison so 29.08 returns non-zero | the criterion is over ALL push runs; 29.08 itself is a must-PASS row |
 | 5 | A `gh` failure on the jobs, variable or listing read returns 0 or 1 | exit 3, the sweeper retries |
 | 6 | Take "elided" from the `ci-push-dedupe` annotation instead of observed job conclusions (feed a run with gated jobs skipped and no annotation) | the probe cannot go blind when the annotation fails to emit |
+| 7 | Feed an elided run with the repo variable unset or `updated_at` later than the run (an org-level variable); feed NOT YET conditions together with a wrong elision | FAIL, and FAIL takes precedence over NOT YET |
+| 8 | Feed 10 clean elided runs, 7 days and a mean of 20, with no `S2-EXIT-CENSUS:` marker comment | exit 2, not PASS (the sweeper closes the tracker on exit 0) |
 
 Harness rows: replace the recomputation with a stub that always matches (the suite must fail row 2); must-PASS
 input differing from the canonical: elided runs listed newest-first and a `merge_group` listing split across two
@@ -479,23 +543,23 @@ error_reporting:
   fail_loud: false for the proof step by design (a failed proof must run the full battery, never redden the run); true for the soak probe (exit 3 on an unreadable source)
 failure_modes:
   - mode: a push run is elided for a SHA with no green merge_group run
-    detection: the soak probe recomputes the match from the runs listing for every run it OBSERVES as elided (gated jobs skipped); the proof suite pins the refusal rows
+    detection: layer 6 (workflow run log and jobs API): the soak probe recomputes the match from the runs listing for every run it OBSERVES as elided (gated jobs skipped), evaluated on every sweep; the proof suite pins the refusal rows
     alert_route: probe FAIL on the tracker issue; the agent unsets CI_PUSH_DEDUPE
   - mode: the proof never elides (API errors, search lag, queue method change) so the saving silently disappears
-    detection: the mean push CI cost over all push runs (criterion b of the probe) and the reason-code distribution in the annotations
+    detection: layer 6 (workflow run log and jobs API): the mean push CI cost over all push runs (criterion b of the probe), the `would-elide` step conclusions in the jobs API, and a `::warning::` with reason `proof_error` on any API failure
     alert_route: probe FAIL or NOT YET on the tracker; the share of elided runs is printed with the verdict
   - mode: an elided run concludes success but the deploy arm does not fire or clean-skips with ci_not_green
-    detection: the first-run canary (resolve-target outcome for the SHA) and the existing release-outcome non-delivery classification
+    detection: layer 6 (workflow run log): PM-0 and PM-3 check the resolve-target outcome for the SHA; ongoing, the existing release-outcome `ci_not_green` non-delivery classification (Slack and email), whose paging on this state the work phase confirms by reading the job before activation
     alert_route: notify-gated and release-outcome Slack and email
   - mode: a defect that the removed second sample would have caught reaches main
-    detection: not detectable by construction after activation; the pre-change rate (8 of 94, classified in the measurement file) is the recorded baseline
+    detection: layer 6 does not apply (undetectable by construction after activation); the pre-change rate (8 of 94, classified in the measurement file) is the recorded baseline
     alert_route: named residual in the ADR amendment and the operator's go at PM-2; S5 (#9730) decides whether a scheduled full run on main is worth its cost
 logs:
   where: GitHub Actions run logs and check-run annotations; measurement files committed under the feature spec directory
   retention: GitHub default run retention (90 days); the committed measurement files do not expire
 discoverability_test:
-  command: grep -cE '^  push-dedupe:' .github/workflows/ci.yml
-  expected_output: 1
+  command: grep -c -e 'if: .*needs.push-dedupe.outputs.elide' .github/workflows/ci.yml
+  expected_output: 8
 ```
 
 ## Domain Review
@@ -601,10 +665,10 @@ appears in Files to Create or Files to Edit, so the mechanical UI-surface overri
 
 - [ ] The PR body's first line answers "does merging THIS alone mutate production?": it adds one small job to every push run and gates eight jobs on its output, which changes push-run structure, timing and the release workflow's declared CI path, but moves no verdict and elides nothing while `CI_PUSH_DEDUPE` is unset (activation is the separate, authorized step). It then carries the ADR-276 Status question (merge dark under `proposed`, activation gated on `adopting`, the CTO flip pending), then `Closes #9512`, and ends with the line `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; every commit ends with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 - [ ] The ADR-276 S2 amendment and the ADR-217 amendment exist, were committed before the first `.github/` edit (`git log --reverse --format=%h -- <ADR files> .github/workflows/ci.yml` lists the ADRs first), ADR-276 `status:` is still `proposed`, and `git diff origin/main -- <each ADR>` shows 0 deleted lines (ADR-217: the one frontmatter line).
-- [ ] `grep -cE '^  push-dedupe:' .github/workflows/ci.yml` prints 1; `yaml.safe_load(ci.yml)['jobs']` has 25 entries equal to the `ci.yml` ledger row; `plugins/soleur/test/pr-fanout-ledger.test.sh` passes.
+- [ ] `grep -c -e 'if: .*needs.push-dedupe.outputs.elide' .github/workflows/ci.yml` prints 8 (one single-line `if:` per gated job; the discoverability command), `grep -cE '^  push-dedupe:' .github/workflows/ci.yml` prints 1; `yaml.safe_load(ci.yml)['jobs']` has 25 entries equal to the `ci.yml` ledger row; `plugins/soleur/test/pr-fanout-ledger.test.sh` passes.
 - [ ] Every one of the eight gated jobs carries the canonical condition and `needs` containing `push-dedupe`; the aggregator body, `env:` and loop are byte-identical; the proof step carries `continue-on-error: true`, a step-level timeout and `GH_TOKEN` (suite parity rows green, both directions).
 - [ ] The release workflow's CI budget is computed before and after: `bash scripts/prod-version-drift-check.test.sh` (B9) passes and the `push-dedupe` `timeout-minutes` leaves the longest `needs:` path within `CI_BUDGET_MIN`.
-- [ ] With the variable unset the push run is unchanged in verdict: this PR's own `pull_request` run and the queue's `merge_group` run are green with `push-dedupe` skipped (no runner) and the eight gated jobs run, with job `started_at - created_at` no later than a recent run's (read with `gh run view --json jobs`); this canary, not the suite's evaluator, is the authority for the condition.
+- [ ] With the variable unset the push run is unchanged in verdict: this PR's own `pull_request` run and the queue's `merge_group` run are green with `push-dedupe` skipped (no runner) and the eight gated jobs run, with job `started_at - created_at` no later than the median of the last 5 runs plus 60 seconds (read with `gh run view --json jobs`); this canary is the authority for the `event != push` half of the condition, not the suite's evaluator, and it says nothing about the push half, which PM-0 covers on `main`.
 - [ ] This PR's own `secret-scan.yml` `pull_request` run shows `smoke-relevance` succeeded and the `smoke (...)` row skipped (S1's false arm, handoff step 2), provided the PR touches no subject path; run id recorded on #9727 and #9512.
 - [ ] `python3 scripts/lint-guard-contract.py` passes on this plan (2 guard entries), `bash scripts/check-adr-ordinals.sh` passes, `bash plugins/soleur/test/c4-count-parity.test.sh` passes (no C4 edit).
 - [ ] The Phase 4 suites pass when run directly, output kept in a file; the loaded-machine loop (50 runs, 0 failures) is recorded for any suite using `timeout`, `sleep`, `date` arithmetic, signals or process groups.
@@ -614,7 +678,7 @@ appears in Files to Create or Files to Edit, so the mechanical UI-surface overri
 #### Post-merge (Phase 5; each item has a command and an expected result)
 
 - [ ] PM-1 S1 evidence census (below) attached to #9727 and #9512.
-- [ ] PM-2 shadow gate passed and the variable activated on an explicit go; PM-3 first-run canary green; PM-4 7-day soak and exit census attached to the tracker; PM-5 status lines appended by a docs-only PR.
+- [ ] PM-0 first push run on `main` verified; PM-2 shadow gate passed and the variable activated on an explicit go; PM-3 first-run canary green; PM-4 7-day soak and exit census attached to the tracker (the `S2-EXIT-CENSUS:` marker the probe requires); PM-5 status lines appended by a docs-only PR; PM-6 is the rollback path, exercised only on a stop.
 
 ### Non-Functional Requirements
 
@@ -632,6 +696,13 @@ appears in Files to Create or Files to Edit, so the mechanical UI-surface overri
 Nothing here blocks the merge; each item is an agent task with a command, and the one authorization-gated step is
 named. PM-1 does not depend on S2's own mechanism and does not gate PM-2 to PM-4.
 
+- **PM-0 - the push path, first run on `main` (owner: the ship agent, immediately after the merge).** The pre-merge
+  canary on this PR's `pull_request` and `merge_group` runs exercises only the `event != push` half of the condition;
+  the push half first runs on `main`, and a job-level failure there turns the run red and blocks that SHA's deploy
+  (`ci_not_green`). Command: `gh run list --workflow ci.yml --event push --branch main -L 1 --json databaseId,conclusion`,
+  then `gh run view <id> --json jobs`. Expected: `push-dedupe` succeeded, the `would-elide` step recorded, the reason
+  `switch_off`, all eight gated jobs ran, the run concluded `success`, and `resolve-target` did not report
+  `ci_not_green`. On any deviation: revert the PR at once.
 - **PM-1 - S1 evidence (owned by S2).** After the S2 PR merges, run over a closed window that started at or after
   2026-10-09T01:11:37Z (runs started earlier used the old `secret-scan.yml`): at least 6 hours, for example
   `bash scripts/ci-demand-census.sh --start 2026-10-09T02:00:00Z --end 2026-10-09T08:00:00Z --workflow secret-scan.yml
@@ -651,17 +722,25 @@ named. PM-1 does not depend on S2's own mechanism and does not gate PM-2 to PM-4
   `would_elide=true` without a green `merge_group` run and `would_elide=true` for every queue-merged SHA whose
   `merge_group` run was green, post the evidence together with the Phase 1 classification of the 8 push-only reds
   and ask for the operator's explicit go (`hr-menu-option-ack-not-prod-write-auth`: plan approval is not
-  authorization to change what the deploy gate trusts). A reproducible push-only red (the same job fails on the next
+  authorization to change what the deploy gate trusts). Before asking, read the `main` ruleset for
+  `require_code_owner_review` and report the result. A reproducible push-only red (the same job fails on the next
   push run) means do not activate until User-Challenge Taste 1 is answered. On the go, and only if ADR-276 reads
-  `adopting`, the agent runs `gh variable set CI_PUSH_DEDUPE --body on` and rewrites the tracker's `earliest=` to
-  activation plus 7 days.
-- **PM-3 - first-run canary.** The first push run after activation: `push-dedupe` annotation `elide=true` with a
+  `adopting`, the agent runs `gh variable set CI_PUSH_DEDUPE --body on --repo jikig-ai/soleur` (repository scope, never `-o`/`--org`),
+  reads it back with `gh variable get` and requires exactly `on`, and comments the `updated_at` on the tracker.
+- **PM-3 - first-run canary.** The first push run with `elide=true` after activation (a direct push or `--admin`
+  merge is a full run and does not exercise elision): `push-dedupe` annotation `elide=true` with a
   `merge_group` run id; the `CI` run `success`; the `web-platform-release.yml` `workflow_run` arm resolved to a
   deploy or to its normal path clean skip, never `ci_not_green`; `deploy-arm.sh` reports `CI=success`. On any
   deviation: `gh variable delete CI_PUSH_DEDUPE` and apply the stop rule.
 - **PM-4 - soak and exit census.** The follow-through sweeper runs the probe daily; at exit, run the census for
   `--workflow ci.yml` over the soak (consecutive windows), compute the mean push `CI` cost against 29.08, attach to
   the tracker; on PASS append `S2 live`.
+- **PM-6 - rollback.** `gh variable delete CI_PUSH_DEDUPE --repo jikig-ai/soleur`, read back, then comment the
+  deletion time on the tracker and close it as stopped. In-flight runs are safe (the variable is read once at
+  `push-dedupe` start; an already written `elide=true` still has its green `merge_group` run; a job not yet started
+  reads it as unset). The dark `push-dedupe` job then keeps costing one small serial job per push run, so the
+  stop rule also files a revert PR with an owner and a date; the 30-day removal clock does not start without
+  `S2 live`.
 - **PM-5 - status lines.** One docs-only PR appends to the ADR-276 Stage status list: `S1 live` (citing the PM-1
   comment) or `S1 criterion not met` with the figures, then `S2 live` after PM-4. The variable's 30-day removal
   trigger starts at `S2 live`, owned by the agent that appends that line (a dated comment on the tracker).
@@ -683,7 +762,7 @@ named. PM-1 does not depend on S2's own mechanism and does not gate PM-2 to PM-4
 
 ### Edge Cases
 
-- A re-run of a push run (never elided, reason `rerun`); a squash-method change (SHA no longer equal: reason `no_mg_success`, full run); a `merge_group` run older than log retention; two pushes in quick succession (separate per-SHA groups); a `workflow_dispatch` full run (never elided).
+- A re-run of a push run ("re-run all jobs" is never elided, reason `rerun`; "re-run failed jobs" of an already elided run keeps the skipped gated jobs skipped and does not re-run `push-dedupe`, documented in the amendment and the `settle-then-admin-merge` doc; each completed attempt re-fires `workflow_run`, existing behaviour that PM-3 confirms causes no double deploy); a squash-method change (SHA no longer equal: reason `no_mg_success`, full run); a `merge_group` run older than log retention; two pushes in quick succession (separate per-SHA groups); a `workflow_dispatch` full run (never elided).
 
 ### Integration Verification (for `soleur:qa`)
 
@@ -693,11 +772,12 @@ named. PM-1 does not depend on S2's own mechanism and does not gate PM-2 to PM-4
 ## Risks and Sharp Edges
 
 - **The second sample is lost.** 8 of 94 push runs were red on queue-merged SHAs (flake or escape, classified in Phase 1). After activation a SHA that would have shown red deploys instead. This is the cost of the stage, recorded as a named residual and as a protection traded away; S5 (#9730) owns whether a scheduled full run on `main` is worth buying back, and the operator decides at PM-2 with the classification in hand.
-- **The release workflow's CI budget reads `ci.yml`'s structure.** `push-dedupe` lengthens the longest declared `needs:` path by its `timeout-minutes`; the budget step hard-fails the deploy arm if it exceeds `CI_BUDGET_MIN`, and B9 in `prod-version-drift-check.test.sh` asserts the same arithmetic. Phase 2 computes the slack first.
+- **The release workflow's CI budget reads `ci.yml`'s structure.** `push-dedupe` lengthens the longest declared `needs:` path (70 today) by its `timeout-minutes`; the budget step hard-fails the deploy arm if the path exceeds `CI_BUDGET_MIN` (75 today), and B9 in `prod-version-drift-check.test.sh` asserts the same arithmetic. The current slack is 5, so a 5-minute job leaves zero and any later bump of `test-scripts` or `test` trips the deploy gate; the job is set to 3. The awk reads only `timeout-minutes: N` alone on a line.
 - **A hung proof must not redden the run.** A job timeout concludes the run `failure` and blocks the deploy (`ci_not_green`); the step carries its own timeout and `timeout 20` around each `gh` call, and `continue-on-error`.
 - **A required context left pending is the worst failure.** The condition's `!cancelled()` (and `always()` for `test`) and `github.event_name != 'push'` terms exist for that; mutation row 9 pins them and the live canary on this PR's own runs is the oracle. `ci.yml`'s header forbids event gates on required jobs: this is not one (it is true on every event except an elided push).
 - **`needs` on a skipped job.** Without a status function in the `if:`, a gated job whose need was skipped is itself skipped, which on `pull_request` would drop every required context. Row 9.
 - **One-job coverage couples the proof to the aggregator.** If a later stage lets the aggregator tolerate `skipped` on `merge_group`, the proof must regain a per-stem check; Guard 1 assembly item 3 and row 10 pin the coupling.
+- **The `merge_group` run may still be running when the push run starts.** The queue merges on required checks while an advisory job can still be in progress; the proof then reads `no_mg_success` and the push run is full (safe), but the eligible share can be lower than the 92 of 94 final-conclusion match. Phase 1 measures the share completed before the push run was created, and the 15.0% break-even and the PM-2 go use that share.
 - **GitHub search lag** can only hide a match (a full run). The shadow phase measures the miss rate; no fallback listing is built.
 - **Squash-method dependency.** SHA equality between the queue candidate and `main` holds because the queue fast-forwards with `merge_method = SQUASH`; a method change makes every push run a full run (safe) and is visible as a probe criterion (b) failure.
 - **`merge_group` runs use the candidate's `ci.yml`.** A PR that weakens the proof also weakens the run that vouches for it; CODEOWNERS on `ci.yml` is the control, stated in the Anchor.
