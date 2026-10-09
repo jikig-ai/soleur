@@ -80,3 +80,10 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
       `data_mount_src=/dev/mapper/inngest-redis` AND `data_mount_devid` still pinning the volume
       (ADR-199 §Consequences, as amended 2026-09-10 by #8017 — the mapper NAME alone proves
       nothing about which device backs it).
+
+## Addendum — 2026-10-09
+
+Appended; nothing above is changed. The record that applies to the #8285 destroy is
+`knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md` (a template until its fields
+are filled from run output). This file stays as the record of the ADR-199 recut route and is not
+completed.

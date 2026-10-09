@@ -18,7 +18,7 @@
 #
 # WHY IT RENDERS OFFLINE. templatefile()/base64gzip()/replace() are terraform BUILTINS, so an
 # EMPTY scratch dir needs no providers, no S3 backend and no credentials, and never touches
-# state. The real root's map consumes hcloud_volume.inngest_redis.id,
+# state. The real root's map consumes hcloud_volume.inngest_redis_luks.id,
 # doppler_service_token.inngest.key and random_password.zot_pull.result — measuring on it would
 # require Doppler prd_terraform and would be unrunnable on a fork PR. Stub LENGTHS are what a
 # size check needs, and each stub below is a length UPPER BOUND on its real value.

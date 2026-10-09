@@ -8,12 +8,13 @@
 # do not "tidy" these into the sibling files their names suggest.
 #
 # WHAT THIS FILE DOES NOT DO. It creates a passphrase and escrows it. It does
-# NOT change `hcloud_volume.inngest_redis`, does NOT recut anything, and is
-# inert with respect to the running host until a boot reads the key. The recut
-# itself is the reviewer-gated `apply_target=inngest-volume-recut`; ADR-142
-# forbids an unconditional `-replace` of this exact volume and that prohibition
-# stands — the destructive path is conditional on a measured-dark host, with
-# ADR-142's byte-copy the only lawful alternative.
+# NOT change the plaintext backstop volume, does NOT recut anything, and is
+# inert with respect to the running host until a boot reads the key. The
+# reviewer-gated `apply_target=inngest-volume-recut` that this paragraph used to
+# name is gone (#8285 PR A converted that job into `inngest-backstop-retire`,
+# which retires the plaintext backstop `hcloud_volume.inngest_redis`, id
+# 106261946, a state-only orphan until its `destroy` phase). ADR-142's additive
+# byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.
 #
 # "MERGE IS INERT" IS THE DEFECT HERE, NOT THE SAFETY PROPERTY. Both resources
 # below MUST be in the per-merge `-target=` allowlist in
@@ -57,7 +58,8 @@ resource "random_password" "inngest_redis_luks" {
 # the gated dispatch that PROVISIONS its volume, so mint-at-dispatch is right for
 # them — the key and the volume it opens are created by one apply.
 #
-# This volume already EXISTS. The recut is a `-replace` of it, and the LUKS cut
+# This volume already EXISTS. A recut would be a `-replace` of it (the dispatch
+# that did that, `inngest-volume-recut`, was retired by #8285 PR A), and the LUKS cut
 # happens on the host's NEXT BOOT via cloud-init's blkid discriminator — a
 # different apply from the one that mints the key, and possibly a different day.
 # A host replaced before the key is minted reaches the LUKS stage, finds
@@ -87,7 +89,7 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # WHY A SECOND VOLUME RATHER THAN A RECUT OF THE FIRST. `apply_target=inngest-
-# volume-recut` exists and is the CHEAP path, and it is unusable here — not as a
+# volume-recut` (retired by #8285 PR A) was the CHEAP path, and it was unusable here — not as a
 # matter of preference but because two records forbid it in conjunction:
 #
 #   ADR-199  permits the destroy ONLY on a measured-empty store (G13: redis_keys == 0,
@@ -99,8 +101,8 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 # MEASURED 2026-09-17 under all three pins (host=soleur-inngest, host_role=dedicated,
 # probe_schema=8): redis_keys=442, redis_expires=431, of which ?estate?:key:*=431 is
 # exactly the armed-reminder set ADR-142 names. So G13 refuses, and it refuses
-# permanently rather than transiently. The recut is not a path that is currently
-# blocked; it is a path this volume never had.
+# permanently rather than transiently. The recut was not a path that was merely
+# blocked; it was a path this volume never had.
 #
 # THIS VOLUME IS INERT AT MERGE, AND THAT IS THE DESIGN. It is created, attached
 # alongside the live plaintext volume, and mounted at a STAGING path — never at
@@ -109,19 +111,21 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 # snapshot: a live mountable device the cutover rehearses, not a blob nobody has
 # restored.
 #
-# NO `format` ATTRIBUTE, AND THAT IS LOAD-BEARING — the same reasoning the recut
-# apparatus records for the plaintext volume. The device must be born RAW so
+# NO `format` ATTRIBUTE, AND THAT IS LOAD-BEARING — the same reasoning the retired recut
+# apparatus recorded for the plaintext volume. The device must be born RAW so
 # `blkid -o value -s TYPE` is a sound discriminator: "" means empty and may be
 # luksFormatted, `crypto_LUKS` means already cut, anything else is a signature we
 # refuse to destroy. Declaring `format = "ext4"` would make the guard's empty arm
 # unreachable and the first boot would mount a plaintext ext4 filesystem at the
 # staging path — the precise outcome this volume exists to avoid. The precedents
-# omit it for this reason (hcloud_volume.workspaces_luks, and the recut's
-# `ignore_changes` note on hcloud_volume.inngest_redis).
+# omit it for this reason (hcloud_volume.workspaces_luks, and the `ignore_changes` note
+# that sat on the plaintext `hcloud_volume.inngest_redis` before #8285 PR A removed its
+# declaration).
 #
 # SIZE TRACKS THE SOURCE EXACTLY. `var.inngest_redis_volume_size` is the same input
-# hcloud_volume.inngest_redis uses, so the target can never be born smaller than the
-# volume whose bytes it must hold. `location` must match the server's for the
+# the plaintext volume `hcloud_volume.inngest_redis` used (that declaration was removed
+# by #8285 PR A), so the target was never born smaller than the volume whose bytes it
+# had to hold. `location` must match the server's for the
 # attachment to be legal.
 resource "hcloud_volume" "inngest_redis_luks" {
   name     = "soleur-inngest-redis-store-luks"
