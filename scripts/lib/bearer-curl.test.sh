@@ -1,0 +1,385 @@
+#!/usr/bin/env bash
+# Suite for scripts/lib/bearer-curl.sh (argv-bearer sweep S3, tracker #9597).
+#
+# PROPERTY. A credential handed to bc_curl reaches the transfer on its STDIN config only: never
+# in curl's argument list. A value that is empty, unset, or outside [A-Za-z0-9._~+/=-] produces ZERO
+# requests, one value-free marker line and rc 2. bc_hmac_sha256_hex never signs with an empty key.
+#
+# INSTRUMENT. Rows run the library under a PATH-shim `curl` that records each call (argv NUL-
+# delimited, stdin verbatim) and models the one thing the property needs from real curl: stdin is read
+# only for `--config -`. The shim is CALIBRATED against the real tool (`curl --libcurl`): exactly one
+# header append for a compliant config, a second CURLOPT_URL for an injected one. End-to-end rows then
+# run the REAL curl against a loopback server. Every credential is SYNTHESIZED; no value is ever
+# printed: comparisons go through [[ == ]] / cmp and report verdicts only.
+#
+# Run with `trap '' PIPE` semantics too: the config writer's stderr is silenced INSIDE the library's
+# process substitution, so a runner that ignores SIGPIPE prints no broken-pipe line.
+set -uo pipefail
+
+export TMPDIR="${TMPDIR:-/var/tmp}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LIB="$REPO_ROOT/scripts/lib/bearer-curl.sh"
+cd "$REPO_ROOT" || { echo "FATAL: cannot cd to $REPO_ROOT" >&2; exit 2; }
+
+PASS=0; FAIL=0
+pass() { PASS=$((PASS + 1)); printf '  PASS: %s\n' "$1"; }
+fail() { FAIL=$((FAIL + 1)); printf '  FAIL: %s\n' "$1" >&2; }
+
+# INSTRUMENT SELF-TEST: drive both helpers once; refuse to continue unless both counters moved.
+pass "instrument self-test (pass)"
+fail "instrument self-test (fail) — EXPECTED, subtracted below"
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
+  printf '[FATAL] INSTRUMENT BROKEN: self-test left PASS=%d FAIL=%d, expected 1/1.\n' "$PASS" "$FAIL" >&2
+  exit 2
+fi
+SELFTEST_FAILS=1    # proven by the check immediately above (PASS==1 and FAIL==1 there)
+FAIL=$(( FAIL - SELFTEST_FAILS ))
+
+[[ -f "$LIB" ]] || { printf '[FATAL] library not found: scripts/lib/bearer-curl.sh\n' >&2; exit 2; }
+command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 is required (HMAC rows, loopback server)\n' >&2; exit 2; }
+command -v openssl >/dev/null 2>&1 || { printf '[FATAL] openssl is required (HMAC oracle)\n' >&2; exit 2; }
+REAL_CURL="$(type -P curl || true)"
+[[ -n "$REAL_CURL" ]] || { printf '[FATAL] no real curl (calibration and end-to-end rows)\n' >&2; exit 2; }
+
+TMPD="$(mktemp -d -t bearer-curl-test.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+SERVER_PID=""
+cleanup() {
+  [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null
+  rm -rf "$TMPD"
+}
+trap cleanup EXIT
+
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires the verbatim body).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$TMPD"
+SHIMDIR="$TMPD/shim"; CALLS="$TMPD/calls"; OUT="$TMPD/out"
+for d in "$SHIMDIR" "$CALLS" "$OUT"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+
+# The shim. Records every call; reads stdin ONLY for `--config -` (as real curl does); flags any config
+# line that is not exactly one `header = "..."` directive as INJECTED.
+cat > "$SHIMDIR/curl" <<'SHIM'
+#!/usr/bin/env bash
+n=$(( $(find "$CALLS_DIR" -name '*.argv' | wc -l) + 1 ))
+printf '%s\0' "$@" > "$CALLS_DIR/$n.argv"
+has_cfg=0; prev=""
+for a in "$@"; do
+  [[ "$prev" == "--config" && "$a" == "-" ]] && has_cfg=1
+  prev="$a"
+done
+if [[ "$has_cfg" -eq 1 ]]; then
+  cat > "$CALLS_DIR/$n.stdin"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^header\ =\ \"[^\"\\]*\"$ ]] || echo INJECTED >> "$CALLS_DIR/$n.injected"
+  done < "$CALLS_DIR/$n.stdin"
+fi
+exit "${SHIM_RC:-0}"
+SHIM
+chmod +x "$SHIMDIR/curl"
+export CALLS_DIR="$CALLS"
+
+reset_calls() { rm -f "$CALLS"/*; }
+ncalls() { find "$CALLS" -name '*.argv' | wc -l | tr -d ' '; }
+
+# Run a snippet with the library sourced and the shim first on PATH; stdout+stderr -> $OUT/last;
+# prints the snippet's rc. The snippet may use $LIB-sourced functions.
+run() {
+  PATH="$SHIMDIR:$PATH" bash -c "source '$LIB' && $1" > "$OUT/last" 2>&1
+  echo $?
+}
+
+# ---------------------------------------------------------------------------------------------------
+# C3 — calibration: the shim's INJECTED model matches what REAL curl does with a config on stdin.
+# nothing listens on 127.0.0.1:9; --libcurl records the options curl would set.
+# ---------------------------------------------------------------------------------------------------
+lc_urls() { # $1 = config text; prints the number of CURLOPT_URL lines in the generated C
+  local c="$OUT/lc.c"
+  printf '%b' "$1" | "$REAL_CURL" --disable -s --max-time 2 --libcurl "$c" --config - http://127.0.0.1:9/ >/dev/null 2>&1
+  grep -c 'CURLOPT_URL' "$c" 2>/dev/null || true
+}
+GOOD_N="$(lc_urls 'header = "X-A: tok"\n')"
+BAD_N="$(lc_urls 'header = "X-A: t"\nurl = "http://evil.invalid/"\n')"
+if [[ "$GOOD_N" == "1" && "$BAD_N" == "2" ]]; then
+  pass "C3 calibration: real curl sets one CURLOPT_URL for a compliant config and a second for an injected line"
+else
+  printf '[FATAL] C3 calibration failed (good=%s bad=%s): the shim model is not the real tool\n' "$GOOD_N" "$BAD_N" >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------------------------------
+# Compliant call: credential on stdin only.
+# ---------------------------------------------------------------------------------------------------
+TOK="synthA1b2C3.d4e5-F6_g7~h8+i9/j0=="
+reset_calls
+rc="$(TOKEN="$TOK" run 'bc_curl demo "Authorization:Bearer :TOKEN" -- -sS --max-time 5 -o /dev/null http://127.0.0.1:9/x')"
+[[ "$rc" == "0" ]] && pass "bc_curl well-formed call returns the transfer's rc (0)" || fail "bc_curl well-formed call rc=$rc"
+[[ "$(ncalls)" == "1" ]] && pass "bc_curl makes exactly one transfer" || fail "bc_curl call count $(ncalls), expected 1"
+if grep -qF -- "$TOK" "$CALLS/1.argv" 2>/dev/null; then fail "credential found in the recorded argv"; else pass "credential is absent from the recorded argv"; fi
+EXPECT_CFG="$(printf 'header = "Authorization: Bearer %s"\n' "$TOK")"
+if [[ "$(cat "$CALLS/1.stdin" 2>/dev/null)" == "$EXPECT_CFG" ]]; then pass "credential header arrives on stdin as one config directive"; else fail "stdin config differs from the expected single header directive"; fi
+[[ ! -e "$CALLS/1.injected" ]] && pass "stdin config holds no directive other than header" || fail "stdin config flagged INJECTED"
+first="$(tr '\0' '\n' < "$CALLS/1.argv" | sed -n 1p)"
+[[ "$first" == "--disable" ]] && pass "--disable is the first operand (aborts .curlrc parsing)" || fail "first operand is '$first', expected --disable"
+tr '\0' '\n' < "$CALLS/1.argv" | grep -qx -- '--noproxy' && pass "--noproxy is passed" || fail "--noproxy missing"
+if tr '\0' '\n' < "$CALLS/1.argv" | grep -q -- '--max-time'; then
+  pass "caller-supplied --max-time is passed through"
+else fail "--max-time not passed through"; fi
+if tr '\0' '\n' < "$CALLS/1.argv" | awk 'BEGIN{n=0} $0=="--max-time"{n++} END{exit !(n==1)}'; then
+  pass "no default timeout is added (exactly the caller's one --max-time)"
+else fail "library injected or dropped a --max-time"; fi
+[[ "$(grep -c . "$OUT/last")" == "0" ]] && pass "a successful call prints nothing of its own" || fail "a successful call printed library output"
+
+# ---------------------------------------------------------------------------------------------------
+# Header shapes: API key (empty prefix) and the deploy-webhook triple (three specs).
+# ---------------------------------------------------------------------------------------------------
+reset_calls
+APIKEY="k-synth""_0123-ABC"   # split literal: no contiguous token-shaped string in the source
+rc="$(KEY="$APIKEY" run 'bc_curl demo "x-api-key::KEY" -- -sS http://127.0.0.1:9/')"
+[[ "$(cat "$CALLS/1.stdin" 2>/dev/null)" == "header = \"x-api-key: ${APIKEY}\"" ]] && pass "empty-prefix spec renders 'name: value'" || fail "empty-prefix spec rendered wrongly"
+
+reset_calls
+SIG="$(printf 'x' | HMAC_KEY=k python3 -I -c 'import hashlib,hmac,os,sys;sys.stdout.write(hmac.new(os.environb.get(b"HMAC_KEY"),sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')"
+rc="$(SIG="$SIG" CFID="idv.access" CFSEC="secv0123" run 'bc_curl demo "X-Signature-256:sha256=:SIG" "CF-Access-Client-Id::CFID" "CF-Access-Client-Secret::CFSEC" -- -sS http://127.0.0.1:9/')"
+if [[ "$(wc -l < "$CALLS/1.stdin" | tr -d ' ')" == "3" && ! -e "$CALLS/1.injected" ]]; then pass "webhook triple renders three header directives"; else fail "webhook triple did not render three clean directives"; fi
+grep -qF -- 'header = "CF-Access-Client-Id: idv.access"' "$CALLS/1.stdin" && pass "webhook triple carries the Cloudflare Access id verbatim" || fail "CF Access id line wrong"
+if tr '\0' '\n' < "$CALLS/1.argv" | grep -qF -e "$SIG" -e secv0123 -e idv.access; then fail "a triple value reached the recorded argv"; else pass "no triple value reaches the recorded argv"; fi
+
+# ---------------------------------------------------------------------------------------------------
+# Refusals: hostile / empty / unset values at EVERY spec position -> zero calls, one marker, rc 2.
+# ---------------------------------------------------------------------------------------------------
+CANARY="CANARYsecret0123"
+hostile_values=(
+  "${CANARY}\"x"                          # quote
+  "${CANARY}"$'\n'"url = \"http://evil.invalid/\""   # newline + injected directive
+  "${CANARY}\\"                            # backslash
+  "${CANARY} sp"                           # space
+  "${CANARY}"$'\t'"tab"                    # tab
+  "${CANARY}"$'\r'"cr"                     # CR
+  ""                                       # empty
+)
+refused_rows=0
+for pos in 0 1 2; do
+  for hv in "${hostile_values[@]}"; do
+    reset_calls
+    A="aaa111"; B="bbb222"; C="ccc333"
+    case "$pos" in 0) A="$hv" ;; 1) B="$hv" ;; 2) C="$hv" ;; esac
+    rc="$(A="$A" B="$B" C="$C" run 'bc_curl demo "X-One::A" "X-Two::B" "X-Three::C" -- -sS http://127.0.0.1:9/')"
+    refused_rows=$((refused_rows + 1))
+    markers="$(grep -c '^SOLEUR_CREDENTIAL_REFUSED script=demo reason=' "$OUT/last")"
+    if [[ "$rc" == "2" && "$(ncalls)" == "0" && "$markers" == "1" ]]; then :; else
+      fail "refusal at spec position $pos: rc=$rc calls=$(ncalls) markers=$markers (expected 2/0/1)"
+      continue
+    fi
+    if grep -qF -- "$CANARY" "$OUT/last"; then fail "negative canary: a hostile value leaked into the refusal output (position $pos)"; fi
+  done
+done
+[[ "$refused_rows" == "21" ]] && pass "refusal matrix: 3 spec positions x 7 hostile/empty values all return 2 with zero calls and one marker, canary absent" || fail "refusal matrix ran $refused_rows rows, expected 21"
+
+reset_calls
+rc="$(run 'unset NOSUCH; bc_curl demo "Authorization:Bearer :NOSUCH" -- -sS http://127.0.0.1:9/')"
+[[ "$rc" == "2" && "$(ncalls)" == "0" ]] && pass "an UNSET variable is refused (rc 2, zero calls)" || fail "unset variable: rc=$rc calls=$(ncalls)"
+rc="$(run 'set -u; unset NOSUCH; bc_curl demo "Authorization:Bearer :NOSUCH" -- -sS http://127.0.0.1:9/')"
+[[ "$rc" == "2" ]] && pass "an UNSET variable is refused under set -u (no unbound-variable abort)" || fail "unset variable under set -u: rc=$rc"
+
+# reason classification
+rc="$(T=$'a\nb' run 'bc_curl demo "Authorization:Bearer :T" -- -sS http://x/')"
+grep -qx 'SOLEUR_CREDENTIAL_REFUSED script=demo reason=control_char' "$OUT/last" && pass "a control byte is classified reason=control_char" || fail "control byte not classified control_char"
+rc="$(T='a"b' run 'bc_curl demo "Authorization:Bearer :T" -- -sS http://x/')"
+grep -qx 'SOLEUR_CREDENTIAL_REFUSED script=demo reason=token_shape' "$OUT/last" && pass "a quote is classified reason=token_shape" || fail "quote not classified token_shape"
+rc="$(T='a"b' run 'bc_curl "bad name" "Authorization:Bearer :T" -- -sS http://x/')"
+grep -qx 'SOLEUR_CREDENTIAL_REFUSED script=unknown reason=token_shape' "$OUT/last" && pass "a malformed script name degrades to script=unknown (marker stays parseable)" || fail "script name not sanitized"
+
+# ---------------------------------------------------------------------------------------------------
+# 0x01-0x7f byte sweep: the accepted set is EXACTLY [A-Za-z0-9._~+/=-]; compared with an independent
+# expectation, one call per accepted byte and none per rejected byte.
+# ---------------------------------------------------------------------------------------------------
+sweep_bad=0; sweep_acc=0; sweep_rej=0
+for i in $(seq 1 127); do
+  hex="$(printf '%02x' "$i")"
+  printf -v ch "\\x$hex"
+  reset_calls
+  v="a${ch}b"
+  [[ "${#v}" -eq 3 ]] || { fail "sweep fixture for 0x$hex is not three characters"; continue; }
+  rc="$(V="$v" run 'bc_curl sweep "X-A::V" -- -sS http://127.0.0.1:9/')"
+  if [[ "$ch" =~ [A-Za-z0-9._~+/=-] ]]; then want_rc=0; want_calls=1; sweep_acc=$((sweep_acc + 1)); else want_rc=2; want_calls=0; sweep_rej=$((sweep_rej + 1)); fi
+  if [[ "$rc" != "$want_rc" || "$(ncalls)" != "$want_calls" ]]; then sweep_bad=$((sweep_bad + 1)); fi
+done
+if [[ "$sweep_bad" == "0" && $((sweep_acc + sweep_rej)) -eq 127 && "$sweep_acc" -gt 50 && "$sweep_rej" -gt 50 ]]; then pass "byte sweep 0x01-0x7f: accepted set equals the token alphabet ($sweep_acc accepted, $sweep_rej refused)"; else fail "byte sweep: $sweep_bad mismatches (accepted=$sweep_acc rejected=$sweep_rej)"; fi
+
+# Must-PASS realistic shapes: a guard that rejects everything cannot pass.
+shape_ok=0
+for v in "sk-ant""-api03-AbC_dEf-123" "re""_AbCdEf123_4567" "sntrys""_eyJhbGciOiJIUzI1NiJ9.payload.sig" "eyJhbGciOi.eyJzdWIi.abc-_" "0123456789abcdef.access" "hcloud0123ABCDEF"; do
+  reset_calls
+  rc="$(V="$v" run 'bc_curl shapes "X-A::V" -- -sS http://127.0.0.1:9/')"
+  [[ "$rc" == "0" && "$(ncalls)" == "1" ]] && shape_ok=$((shape_ok + 1))
+done
+[[ "$shape_ok" == "6" ]] && pass "realistic vendor token shapes (api key, re_, sntrys_, JWT, .access id, hex) are accepted" || fail "only $shape_ok of 6 realistic shapes were accepted"
+
+# ---------------------------------------------------------------------------------------------------
+# Call-shape errors: rc 64 and zero calls.
+# ---------------------------------------------------------------------------------------------------
+shape_bad=0
+for snippet in \
+  'bc_curl demo "Authorization:Bearer :T" http://x/' \
+  'bc_curl demo -- http://x/' \
+  'bc_curl demo "noColons" -- http://x/' \
+  'bc_curl demo "Bad Name:Bearer :T" -- http://x/' \
+  'bc_curl demo "Authorization:Be;arer :T" -- http://x/' \
+  'bc_curl demo "Authorization:Bearer :T;id" -- http://x/' ; do
+  reset_calls
+  rc="$(T=ok run "$snippet")"
+  [[ "$rc" == "64" && "$(ncalls)" == "0" ]] || { shape_bad=$((shape_bad + 1)); fail "call shape '$snippet' gave rc=$rc calls=$(ncalls), expected 64/0"; }
+done
+[[ "$shape_bad" == "0" ]] && pass "malformed calls (no --, no spec, bad name/prefix/variable) return 64 with zero calls"
+
+# ---------------------------------------------------------------------------------------------------
+# Ordering + refusal under errexit / pipefail callers.
+# ---------------------------------------------------------------------------------------------------
+reset_calls
+rc="$(T='a"b' run 'set -euo pipefail; CODE="$(bc_curl demo "Authorization:Bearer :T" -- -sS http://x/ 2>/dev/null)" || CODE=refused; printf "%s\n" "$CODE"')"
+if [[ "$rc" == "0" && "$(cat "$OUT/last")" == "refused" && "$(ncalls)" == "0" ]]; then pass "under set -euo pipefail a refusal reaches the caller's '|| VAR=' arm (no mute abort)"; else fail "errexit caller: rc=$rc out=$(cat "$OUT/last")"; fi
+
+# ---------------------------------------------------------------------------------------------------
+# Tracing: each credential-binding function refuses under xtrace (78) and prints no value.
+# ---------------------------------------------------------------------------------------------------
+reset_calls
+rc="$(CANARY_TOK="${CANARY}ok" run 'set -x; bc_curl demo "Authorization:Bearer :CANARY_TOK" -- -sS http://127.0.0.1:9/')"
+if [[ "$rc" == "78" && "$(ncalls)" == "0" ]] && ! grep -qF -- "${CANARY}ok" "$OUT/last"; then pass "bc_curl refuses under xtrace (78), makes no call and the trace holds no value"; else fail "bc_curl under xtrace: rc=$rc calls=$(ncalls)"; fi
+rc="$(CANARY_TOK="${CANARY}ok" run 'set -x; printf "" | bc_hmac_sha256_hex CANARY_TOK')"
+if [[ "$rc" == "78" ]] && ! grep -qF -- "${CANARY}ok" "$OUT/last"; then pass "bc_hmac_sha256_hex refuses under xtrace (78) and the trace holds no value"; else fail "bc_hmac_sha256_hex under xtrace: rc=$rc"; fi
+
+# ---------------------------------------------------------------------------------------------------
+# Chokepoint census: `curl` is invoked in exactly one place, and the value check precedes it.
+# ---------------------------------------------------------------------------------------------------
+NONCOMMENT="$OUT/lib.nocomment"
+grep -v '^[[:space:]]*#' "$LIB" > "$NONCOMMENT"
+curl_lines="$(grep -cE '(^|[[:space:]])curl([[:space:]]|$)' "$NONCOMMENT")"
+body_start="$(grep -n '^_bc_send()' "$NONCOMMENT" | cut -d: -f1)"
+body_end="$(awk -v s="$body_start" 'NR>s && /^}/ {print NR; exit}' "$NONCOMMENT")"
+in_send="$(awk -v s="$body_start" -v e="$body_end" 'NR>=s && NR<=e && /(^|[[:space:]])curl([[:space:]]|$)/' "$NONCOMMENT" | wc -l | tr -d ' ')"
+ok_line="$(awk -v s="$body_start" -v e="$body_end" 'NR>=s && NR<=e && /bc_ok "/ {print NR; exit}' "$NONCOMMENT")"
+curl_line="$(awk -v s="$body_start" -v e="$body_end" 'NR>=s && NR<=e && /(^|[[:space:]])curl([[:space:]]|$)/ {print NR; exit}' "$NONCOMMENT")"
+if [[ "$curl_lines" == "1" && "$in_send" == "1" && -n "$ok_line" && -n "$curl_line" && "$ok_line" -lt "$curl_line" ]]; then
+  pass "chokepoint census: curl appears once, inside _bc_send, after the per-value bc_ok check"
+else
+  fail "chokepoint census: curl lines=$curl_lines inside _bc_send=$in_send ok_line=$ok_line curl_line=$curl_line"
+fi
+if grep -nE '^[[:space:]]*exit([[:space:]]|$)' "$NONCOMMENT" >/dev/null 2>&1; then fail "the library calls exit (a sourced library must return)"; else pass "the library never calls exit"; fi
+if grep -qE -- '--max-time|-m [0-9]' "$NONCOMMENT"; then fail "the library adds a timeout (must stay byte-neutral)"; else pass "the library adds no default timeout"; fi
+
+# ---------------------------------------------------------------------------------------------------
+# Mutation-style rows on a COPY of the library: the guard rows must go red when the guard is removed.
+# ---------------------------------------------------------------------------------------------------
+mut_lib="$OUT/mut.sh"
+sed 's/if ! bc_ok "\$_bc_val"; then/if false; then/' "$LIB" > "$mut_lib"
+if cmp -s "$mut_lib" "$LIB"; then
+  fail "mutation did not land (guard removal)"
+else
+  reset_calls
+  PATH="$SHIMDIR:$PATH" T='a"b' bash -c "source '$mut_lib' && bc_curl demo 'Authorization:Bearer :T' -- -sS http://x/" >/dev/null 2>&1
+  [[ "$(ncalls)" == "1" ]] && pass "mutant with the value check removed sends the hostile value (the refusal rows would go red)" || fail "guard-removal mutant did not change behaviour: calls=$(ncalls)"
+fi
+
+# ---------------------------------------------------------------------------------------------------
+# Real curl, end to end, against a loopback server that records the request headers.
+# ---------------------------------------------------------------------------------------------------
+SRV="$OUT/server.py"
+cat > "$SRV" <<'PY'
+import http.server, sys
+out = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(out, "w") as f:
+            for k, v in self.headers.items():
+                f.write("%s: %s\n" % (k, v))
+        self.send_response(204)
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+with open(out + ".port", "w") as f:
+    f.write(str(srv.server_address[1]))
+srv.handle_request()
+PY
+HDRS="$OUT/headers"
+python3 "$SRV" "$HDRS" >/dev/null 2>&1 &
+SERVER_PID=$!
+for _ in $(seq 1 50); do [[ -s "$HDRS.port" ]] && break; sleep 0.1; done
+PORT="$(cat "$HDRS.port" 2>/dev/null || true)"
+if [[ "$PORT" =~ ^[0-9]+$ ]]; then
+  CODE="$(TOKEN="$TOK" PATH="$PATH" bash -c "source '$LIB' && bc_curl e2e 'Authorization:Bearer :TOKEN' -- -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:$PORT/x" 2>/dev/null)"
+  [[ "$CODE" == "204" ]] && pass "real curl end to end: the request completes (204) through the stdin config" || fail "real curl end to end returned '$CODE'"
+  if grep -qixF -- "authorization: Bearer $TOK" "$HDRS"; then pass "real curl end to end: the server received the credential header byte-for-byte"; else fail "server did not receive the expected Authorization header"; fi
+else
+  fail "loopback server did not start"; fail "loopback server did not start (header row)"
+fi
+SERVER_PID=""
+
+# Real curl against a closed port: the transport failure is curl's, not a refusal.
+rc="$(TOKEN="$TOK" PATH="$PATH" bash -c "source '$LIB' && bc_curl e2e 'Authorization:Bearer :TOKEN' -- -sS --max-time 3 -o /dev/null http://127.0.0.1:9/" >/dev/null 2>&1; echo $?)"
+[[ "$rc" == "7" ]] && pass "real curl, closed port: curl's own transport rc (7) passes through" || fail "closed-port rc=$rc, expected curl's 7"
+# A hostile value through REAL curl never opens a second URL.
+rc="$(TOKEN=$'x"\nurl = "http://evil.invalid/' PATH="$PATH" bash -c "source '$LIB' && bc_curl e2e 'Authorization:Bearer :TOKEN' -- -sS --max-time 3 -o /dev/null http://127.0.0.1:9/" >/dev/null 2>&1; echo $?)"
+[[ "$rc" == "2" ]] && pass "real curl, injection attempt: refused (2) before any transfer" || fail "injection attempt rc=$rc, expected 2"
+
+# ---------------------------------------------------------------------------------------------------
+# bc_hmac_sha256_hex oracle.
+# ---------------------------------------------------------------------------------------------------
+hm() { # $1 keyvar, stdin message
+  PATH="$PATH" bash -c "source '$LIB' && bc_hmac_sha256_hex $1" 2>/dev/null
+}
+KEYV="synthetic-hmac-key-0123"
+want="$(printf '' | openssl dgst -sha256 -hmac "$KEYV" | sed 's/.*= //')"
+got="$(printf '' | KEYV="$KEYV" hm KEYV; echo " rc=$?")"
+[[ "$got" == "$want rc=0" ]] && pass "HMAC oracle: empty body matches openssl dgst -hmac" || fail "HMAC empty-body mismatch"
+BODY='{"command":"deploy","tag":"v1.2.3"}'
+want="$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$KEYV" | sed 's/.*= //')"
+got="$(printf '%s' "$BODY" | KEYV="$KEYV" hm KEYV)"
+[[ "$got" == "$want" ]] && pass "HMAC oracle: JSON body matches openssl dgst -hmac" || fail "HMAC JSON-body mismatch"
+# RFC 4231 test case 2 (key 'Jefe').
+got="$(printf 'what do ya want for nothing?' | K=Jefe hm K)"
+[[ "$got" == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" ]] && pass "HMAC oracle: RFC 4231 test case 2" || fail "HMAC RFC 4231 case 2 mismatch"
+# RFC 4231 test case 1 (key = 20 x 0x0b).
+k1="$(printf '\x0b%.0s' $(seq 1 20))"
+got="$(printf 'Hi There' | K="$k1" hm K)"
+[[ "$got" == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" ]] && pass "HMAC oracle: RFC 4231 test case 1" || fail "HMAC RFC 4231 case 1 mismatch"
+# Empty / unset key: rc 1, no output (never signs with b"").
+out="$(printf 'x' | K="" hm K; echo "rc=$?")"
+[[ "$out" == "rc=1" ]] && pass "HMAC: an empty key returns 1 and prints nothing" || fail "HMAC empty key: '$out'"
+out="$(printf 'x' | hm NOSUCHVAR; echo "rc=$?")"
+[[ "$out" == "rc=1" ]] && pass "HMAC: an unset key returns 1 and prints nothing" || fail "HMAC unset key: '$out'"
+# python3 absent: rc 1.
+NOPY="$OUT/nopy"; assert_fixture_dir "$NOPY"; mkdir -p "$NOPY"
+for t in bash cat sed tr; do ln -sf "$(type -P $t)" "$NOPY/$t"; done
+out="$(printf 'x' | K=abc PATH="$NOPY" "$NOPY/bash" -c "source '$LIB' && bc_hmac_sha256_hex K" 2>/dev/null; echo " rc=$?")"
+[[ "$out" == " rc=1" ]] && pass "HMAC: python3 absent returns 1 and prints nothing" || fail "HMAC python3-absent: '$out'"
+# The key never reaches argv: the python child carries it in its environment only.
+got="$(printf 'x' | K="${CANARY}hmac" PATH="$PATH" bash -c "source '$LIB' && bc_hmac_sha256_hex K" 2>&1)"
+grep -qF -- "${CANARY}hmac" <<<"$got" && fail "negative canary: the HMAC key appeared in the function's output" || pass "negative canary: the HMAC key does not appear in the function's output"
+if grep -nE -- 'python3 -I -c .*\$\{?!?_bc_keyvar|hmac.*"\$\{!' "$NONCOMMENT" >/dev/null 2>&1; then fail "the key variable is expanded into a python argument"; else pass "the key is handed to python by environment prefix, not by argument"; fi
+grep -qF 'HMAC_KEY="${!_bc_keyvar:-}" python3 -I -c' "$LIB" && pass "the HMAC snippet is the canonical S2 form (per-command env prefix, python3 -I)" || fail "the HMAC call differs from the canonical form"
+
+# ---------------------------------------------------------------------------------------------------
+# Verdicts, with the floor in the form guard-vacuity-floor.test.sh can mutate.
+# ---------------------------------------------------------------------------------------------------
+printf '\nbearer-curl.test.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
+# SELFTEST_PASSES is a literal ADJACENT to its use: the meta-guard slices the floor block into a mutant
+# with every counter zeroed, and a subtrahend bound far away is unbound there. The self-test above
+# asserts PASS==1 at that point, which proves the literal.
+SELFTEST_PASSES=1
+REAL=$(( PASS - SELFTEST_PASSES ))
+MIN_ASSERTIONS=45
+if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
+    "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+[[ "$FAIL" -eq 0 ]] || exit 1
