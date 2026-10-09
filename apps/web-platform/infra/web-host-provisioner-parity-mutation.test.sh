@@ -368,7 +368,7 @@ s = s.replace(old, "    host        = local.web1_ip\n    user        = \"root\"\
 # Repointing the sibling's dial to web-1 removes it from W2_DIALERS, so the presence check
 # (deploy_pipeline_fix_web2 present=) fires -- the class rule, not the pin check.
 expect_red "M4a (§1: web-2 sibling repointed to web-1)" server.tf \
-  "web-2 dialers=\['egress_gateway_web2'\]" '
+  "web-2 dialers=['egress_gateway_web2']" '
 old = "    host        = hcloud_server.web[\"web-2\"].ipv4_address"
 assert old in s
 s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address", 1)
