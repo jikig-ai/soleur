@@ -16,7 +16,8 @@ sibling PR #9884 diffs.
   `apps/web-platform/test/dockerfile-vitest-version-pin.test.ts` asserting the
   canary config carries zero `import` statements in its non-comment code
   (reuse the test's existing `code` comment-stripping; assert
-  `code` does not match `/^\s*import\s/m`). Run
+  `code` does not match `/^\s*import\b/m` — `\b` also catches a dynamic
+  `import(…)` arm, which a `\s`-terminated predicate would miss). Run
   `npx vitest run test/dockerfile-vitest-version-pin.test.ts` from
   `apps/web-platform/` — confirm RED on the current config.
 - [ ] 1.2 GREEN: `apps/web-platform/test/vitest.canary.config.ts` — delete

@@ -13,6 +13,67 @@ lane: cross-domain
 
 # fix: cross-workspace isolation canary probe fails on unresolved vitest/config import
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09 (soleur:deepen-plan, in-process;
+`Reviewed-Coverage: sequential-fallback` — this harness has no Task/Skill
+spawn, so the per-section agent fan-out ran as inline orchestrator passes; no
+independent review is claimed)
+
+**Halt gates run (all pass or N/A):**
+
+- 4.6 User-Brand Impact — present, threshold `none`, zero sensitive-path
+  matches in Files to Edit (regex re-run mechanically).
+- 4.7 Observability — 5-field block present; `discoverability_test.command` is
+  a single-verb `grep` (allowlisted), no ssh, no shell-active bytes
+  (`|`, `;`, `&`, `<`, `>`, `$`, backtick all absent — the Check-10 reject is
+  byte-level), finishes in ms; `expected_output` is the literal `1`.
+  **Detection-proxy argue-down:**
+  Check 10's suite-shape heuristic `(^|[[:space:]/])tests?/` matches the
+  `…/test/` path component — a false hit argued down per the gate's false-hit
+  clause (this is a one-file grep, not a suite).
+- 4.8 PAT sweep — zero hits (regex re-run against the plan file).
+- 4.9 UI-wireframe — N/A (no UI-surface files).
+- 4.10 Encryption Posture — N/A (no new persistent store or cross-component
+  connection; `cacheDir` is a tmpfs path, not a store).
+- 4.11 Guard Contract — `scripts/lint-guard-contract.py` green (1 entry,
+  5-row matrix incl. dispatch, second-member, harness, must-PASS rows);
+  assembly is structural (the file's import section is the single chokepoint —
+  CWI-1 pins `--config` to exactly this file).
+- 4.12 Scope Check — one unfenced section; all three subsections; every ask
+  mapped; `Recommendation: single PR`.
+- 4.5 Network-Outage — trigger token `timeout` is present incidentally
+  (verdict name `workspace_isolation_timeout`, config keys
+  `testTimeout`/`hookTimeout`); the plan proposes no SSH/connectivity
+  diagnosis, so the L3→L7 checklist has no surface — not fired, no telemetry.
+- 4.55 Downtime & Cutover — N/A (test/config/docs diff; no serving-surface
+  operation).
+
+**Sections enhanced:** Proposed Fix (measured claim strengthened), Files to
+Edit (pin regex covers dynamic `import(` too — `\b` not `\s`), Observability
+(probe semantics sharpened for Check 10), Alternative Approaches
+(import-type/satisfies arm added).
+
+### Key Improvements
+
+1. Root cause resolved empirically, not asserted — both failure and fix arms
+   reproduced on vitest 4.1.11 under `env -i` (the exact pinned version).
+2. The suite-side `import … from "vitest"` question the brief flagged as the
+   5-line-vs-image-change fork is settled by measurement: the specifier
+   resolves internally; option (a) alone suffices.
+3. The fix's regression coverage lands as a zero-imports assertion beside the
+   existing minimality pin — same file, same `code` comment-stripping — so the
+   defect class is caught at PR time.
+
+### New Considerations Discovered
+
+- `grep -c` exits 1 on zero matches, so the discoverability probe asserts the
+  POST-fix shape (`export default {` → `1`) rather than the absence of
+  `import` — a probe that FAILs on a healthy system is the misdiagnosis the
+  Check-10 schema exists to prevent.
+- `lint-infra-no-human-steps.py` and `lint-guard-contract.py` both green on
+  this file at write time.
+
 The report-only cross-workspace isolation deploy probe (#2640, shipped in PR
 #9809) logs `op=workspace-isolation workspace_isolation_failed
 reason=vitest_rc_1: test/vitest.canary.config.ts [UNRESOLVED_IMPORT] Could not
@@ -44,10 +105,11 @@ running installation internally (verified: `Tests 1 passed`). So dropping
   literal carrying identical keys); extend the header comment to record that
   the in-image run resolves no bare specifiers from the config file.
 - `apps/web-platform/test/dockerfile-vitest-version-pin.test.ts` — add an `it`
-  asserting the canary config carries **zero `import` statements** (the
-  in-image run has no `node_modules/vitest` to resolve them; vitest-only
-  specifiers inside *test* files resolve internally, config-file imports do
-  not).
+  asserting the canary config carries **zero `import` statements** — predicate
+  `/^\s*import\b/m` on the existing comment-stripped `code` (the `\b` boundary
+  also catches a dynamic `import(…)` arm, which `\s` would miss). The in-image
+  run has no `node_modules/vitest` to resolve them; vitest-only specifiers
+  inside *test* files resolve internally, config-file imports do not.
 - `knowledge-base/engineering/operations/runbooks/workspace-isolation-canary-probe.md`
   — one paragraph under "Image strategy" recording the zero-import constraint
   and the pin that enforces it (design-note accuracy; this file is NOT in the

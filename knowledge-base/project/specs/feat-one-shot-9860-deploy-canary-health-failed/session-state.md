@@ -3,7 +3,8 @@
 ## Plan Phase
 
 - Plan file: knowledge-base/project/plans/2026-10-09-fix-workspace-isolation-vitest-config-plan.md
-- Status: plan written; deepen-plan next in this pipeline step
+- Status: plan written + deepened (all halt gates pass/N-A); ready for
+  soleur:work
 
 ### Errors
 
@@ -30,6 +31,7 @@
 
 ### Components Invoked
 
-- soleur:plan (SKILL.md executed in-process)
+- soleur:plan, soleur:deepen-plan (SKILL.md executed in-process)
 - gh issue/pr view, git diff/show, vitest 4.1.11 local repro harness
-  (/tmp/canarysim, `env -i`)
+  (/tmp/canarysim, `env -i`), markdownlint-cli2, lint-infra-no-human-steps.py,
+  lint-guard-contract.py
