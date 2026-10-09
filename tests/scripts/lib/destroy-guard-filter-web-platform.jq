@@ -467,7 +467,7 @@ def destroyed_at($addr):
   # result is a Doppler passphrase the live LUKS header was never cut from: the store is
   # unopenable on the next boot, on a host with no SSH and no console, and the header key is the
   # only copy. The parity claim below is now true rather than aspirational. A first CREATE of THIS (inngest) pair
-  # stays legal and expected — the volume is being cut to LUKS for the first time, and inngest_volume_recut_gate
+  # stays legal and expected — the volume is being cut to LUKS for the first time, and the retired (#8285) inngest_volume_recut_gate
   # makes the same three-verb exclusion for the same reason. (A create of the web-class passphrase is the one exception;
   # see luks_passphrase_create_halt_addrs.) `forget` IS counted: a Terraform 1.7+ state-drop
   # of the passphrase leaves the header cut from a value nothing records any more, which is the

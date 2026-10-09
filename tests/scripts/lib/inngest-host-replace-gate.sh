@@ -14,7 +14,7 @@
 # inngest-host recreate: a -replace of hcloud_server.inngest + its two id-referencing
 # dependents that terraform replaces because they interpolate the NEW server id:
 #   - hcloud_server_network.inngest        (network.tf; server_id is ForceNew -> replace)
-#   - hcloud_volume_attachment.inngest_redis (inngest-host.tf; server_id is ForceNew -> replace)
+#   - hcloud_volume_attachment.inngest_redis_luks (inngest-redis-luks.tf; server_id is ForceNew -> replace)
 #   - doppler_service_token.inngest        (#6178: an UPSTREAM ForceNew that CAUSES the
 #     recreate. `access` is immutable on a Doppler service token, so an access change (e.g.
 #     the read->read/write flip #6889 needs for the on-host cutover FSM) destroys+recreates
@@ -32,10 +32,11 @@
 # it justified is unchanged and is now pinned by this gate's OWN tests, which are the live
 # guarantee. Do not re-add a pointer to a deleted fixture.
 #
-# hcloud_volume.inngest_redis (the durable Redis AOF store) is DELIBERATELY ABSENT — the
-# volume MUST be preserved across the replace (exactly how web2-retire-gate.sh preserves
-# hcloud_volume.workspaces), so ANY change to it trips inngest_out_of_scope_changes AND the
-# explicit redis_volume_destroyed backstop below.
+# RETIRED (#8285): hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis (the plaintext
+# backstop pair) are no longer declared or `-target`ed; they are state-only orphans until the
+# inngest-backstop-retire dispatch destroys them. Both are DELIBERATELY ABSENT from the allow-set, so ANY
+# action on either trips inngest_out_of_scope_changes; the named redis_volume_* counters below stay as
+# loud backstops. The live store is hcloud_volume.inngest_redis_luks (preserved by omission).
 #
 # NO [ack-destroy] BYPASS: a destructive prod host recreate is authorized by the menu-ack
 # workflow_dispatch (hr-menu-option-ack-not-prod-write-auth), never a commit trailer.
@@ -45,10 +46,9 @@
 # while UPDATING (resizing) the live AOF volume printed PASS — measured on a synthesized
 # `hcloud_server.inngest ["delete","create"]` + `hcloud_volume.inngest_redis ["update"]` fixture —
 # because an update is neither a delete nor out of the allow-set.
-#   hcloud_volume.inngest_redis                 no-op | create of an ABSENT volume (before == null)
-#                                                                     → redis_volume_touched
+#   hcloud_volume.inngest_redis (orphan)         no-op ONLY                → redis_volume_touched
 #   hcloud_volume.inngest_redis_luks            no-op | create        → luks_volume_touched
-#   hcloud_volume_attachment.inngest_redis{,_luks}
+#   hcloud_volume_attachment.inngest_redis_luks
 #                                               no-op | create | replace (delete+create, either order)
 #                                                                     → attachment_touched
 #   random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key
@@ -103,31 +103,7 @@ inngest_host_replace_gate() {
       def allow: [
         "hcloud_server.inngest",
         "hcloud_server_network.inngest",
-        "hcloud_volume_attachment.inngest_redis",
         "doppler_service_token.inngest",
-        # #7695 admitted this address for CREATE ONLY as the recovery route out of a partial
-        # `inngest-volume-recut` apply. `redis_volume_touched` below (#6894 CTO ruling) keeps that
-        # route and nothing else: a no-op, or a bare create whose `before` is null — a volume that
-        # does not exist, so there is no store to harm. An update, or a create that replaces a
-        # prior object, aborts. The ruling first read "no-op ONLY"; that withdrew the only route
-        # out of a partial recut, which the recovery text of the recut job still prescribes, so the
-        # create-of-absent arm was restored on the reasoning recorded here:
-        #
-        # Measured: after a partial recut the volume is destroyed and out of state, and every
-        # dispatch refused. `inngest-volume-recut` aborts because Guard 2 runs before the plan and
-        # grades the LIVE host (no volume by that name => id_pin_mismatch, and /mnt/data is not on
-        # the pinned volume alias => mount_mismatch, on `data_mount_devid` since #8017).
-        # `apply_target=inngest-host` aborts because
-        # the hcloud_server.inngest `user_data` embeds hcloud_volume.inngest_redis.id with no
-        # `ignore_changes` on it, so an absent volume makes that id unknown at plan time, forces a
-        # server replace, and the additive-only guard refuses any delete. And this gate aborted
-        # here, on `inngest_out_of_scope_changes=1`, because the volume was not in this list.
-        #
-        # ADMITTING IT COSTS NOTHING THIS GATE WAS PROTECTING. `redis_volume_destroyed` below is
-        # unchanged and still counts delete/forget at this exact address, so a plan that DESTROYS
-        # the volume aborts exactly as before. The only shape this widening newly permits is the
-        # one the recovery needs: creating a volume that is missing.
-        "hcloud_volume.inngest_redis",
         # #6894 / ADR-142. The ADDITIVE target volume ATTACHMENT. It interpolates the
         # server id exactly as its plaintext sibling does, so a replace FORCES it into the
         # plan; without admitting it this gate aborts `inngest_out_of_scope_changes=1` and
@@ -143,15 +119,15 @@ inngest_host_replace_gate() {
         "hcloud_volume.inngest_redis_luks"
       ];
       def pair: ["random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key"];
-      def attachments: ["hcloud_volume_attachment.inngest_redis", "hcloud_volume_attachment.inngest_redis_luks"];
+      def attachments: ["hcloud_volume_attachment.inngest_redis_luks"];
       $p[0] as $plan
       | {
           redis_volume_touched: (
-            # The live plaintext AOF: a replace must never resize, relabel or re-create it. The one
-            # admitted change is the #7695 recovery — creating it when it is ABSENT (before == null).
+            # The retired plaintext AOF orphan: a replace must not act on it at all (no create-of-absent
+            # recovery route exists any more -- the resource is no longer declared).
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.inngest_redis")
-              | select((.change.actions == ["no-op"]) or (.change.actions == ["create"] and .change.before == null) | not) ]
+              | select(.change.actions != ["no-op"]) ]
             | length
           ),
           luks_volume_touched: (

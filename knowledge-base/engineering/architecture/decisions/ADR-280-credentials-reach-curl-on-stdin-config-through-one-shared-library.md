@@ -79,7 +79,7 @@ S3 needs one tested place for the pattern that the 26 alert-path composite call 
 
 ## Consequences
 
-- Rule E baseline E shrinks by deletion only (now 17 files / 43 sites); per-site fingerprint keying is not adopted because S4 and S5 delete
+- Rule E baseline E shrinks by deletion only (now 17 files / 42 sites); per-site fingerprint keying is not adopted because S4 and S5 delete
   the remaining population.
 - Blast radius: 12 files name the library (10 workflows and 2 composites), and 15 more workflow files call the composites, so a defect in it
   reaches 22 workflow files and 26 composite call steps, including the alert paths of the production-apply and release workflows. That is the

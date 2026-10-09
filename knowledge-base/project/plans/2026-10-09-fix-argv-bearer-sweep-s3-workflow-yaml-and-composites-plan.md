@@ -509,7 +509,7 @@ Pre-push gates (owning suites directly; **do not run `scripts/test-all.sh` local
 
 PR title `fix(security): argv-credential sweep S3, workflow YAML and composite actions off the command line`; `Ref #9597`, `Ref #7797` (not `Closes`). The first body line states which pushes the merge fires (the plugin release run, via one test-file edit),
 that no `apps/web-platform/**` file is in the diff, and that the merge changes what the alert steps of the release and apply workflows run next time (the operator-visible line). No plan or spec file paths in the body and no script named like `*-soak-*` (say "the
-fourth converted probe" if that script must be named); avoid the words soak, outage, "Pro" and "subscription" in the body; the baseline arithmetic (28/61 -> 17/43, deletions only). Declare `Filed: #N ...` for every issue this PR files and, because it files issues,
+fourth converted probe" if that script must be named); avoid the words soak, outage, "Pro" and "subscription" in the body; the baseline arithmetic (28/60 -> 17/42, deletions only). Declare `Filed: #N ...` for every issue this PR files and, because it files issues,
 the net-issue-flow override with **one justification per issue**. Issues to file: (1) the held-back `workspaces-luks-cutover.yml` conversion (blocked by its infra suite's curl stub; rides S4 with operator notice; **owner and deadline named**; worded "reads
 `HCLOUD_TOKEN_READONLY` first and falls back to the read/write name until ADR-241 O10", never "read-only"), with `gh issue edit --add-blocked-by` where a blocker is known; (2) one post-merge first-run follow-through issue carrying the table below (owner, deadline merge + 3 days, and the
 staged positive-control path if no alert fires). Comments: on #9597 (S3 done, corrected counts and the partition, new baseline, the fingerprint-keying decision, the apply-exposure finding, the plugin-release finding), and on #9757 (the Better Stack stderr item
@@ -519,7 +519,7 @@ done; the owner ticks the checkbox, the issue stays open).
 
 Rows leaving baseline E (files fully converted): `.github/actions/anthropic-preflight/action.yml 1`, `.github/actions/notify-ops-email/action.yml 1`, `.github/workflows/board-status-sync.yml 1`, `canary-status.yml 1`, `git-data-cutover.yml 1`,
 `git-data-rung2-rehearsal.yml 4`, `kb-drift-walker.yml 1`, `rule-audit.yml 2`, `scheduled-prod-version-drift.yml 2`, `scheduled-terraform-drift.yml 1`, `sentry-audit-gate.yml 1` (11 rows leave, 16 sites); `scheduled-inngest-health.yml` goes 3 -> 1 (the held-back probe step keeps one; 2 sites removed). Rows staying:
-`workspaces-luks-cutover.yml 1` and `scheduled-inngest-health.yml 1`. Net: 18 sites removed. Result: **17 files / 43 sites** (derived at ship; the earlier 16/42 figure predated holding the inngest-health probe step back). The ceiling table loses the same 11 rows and lowers `scheduled-inngest-health.yml` to 1 in the same change. No row enters. Neither file is edited before the merge-from-main commit exists.
+`workspaces-luks-cutover.yml 1` and `scheduled-inngest-health.yml 1`. Net: 18 sites removed. Result: **17 files / 42 sites** (derived at ship; the earlier 16/42 figure predated holding the inngest-health probe step back). The ceiling table loses the same 11 rows and lowers `scheduled-inngest-health.yml` to 1 in the same change. No row enters. Neither file is edited before the merge-from-main commit exists.
 
 ## Test Scenarios
 
@@ -538,7 +538,7 @@ Rows leaving baseline E (files fully converted): `.github/actions/anthropic-pref
 
 ### Pre-merge (PR)
 
-- [ ] `python3 scripts/lint-shell-trace-credential-refusal.py` repo-wide exits 0 with baseline E equal to the pre-slice baseline minus the converted rows (derived: **17 files / 43 sites** with the final partition) and the ceiling table equal; the explicit-path run over the converted files and the library reports 0 findings (all rules A to E).
+- [ ] `python3 scripts/lint-shell-trace-credential-refusal.py` repo-wide exits 0 with baseline E equal to the pre-slice baseline minus the converted rows (derived: **17 files / 42 sites** with the final partition) and the ceiling table equal; the explicit-path run over the converted files and the library reports 0 findings (all rules A to E).
 - [ ] `scripts/lib/bearer-curl.sh` exists with `bc_ok`, `bc_curl`, `bc_hmac_sha256_hex`, one `_bc_send` chokepoint, an xtrace refusal in each credential-binding function, no `exit`, and no default timeout; its suite is green on the dev host and in `ubuntu:24.04` with identical row counts.
 - [ ] No S3 file keeps `-hmac` in a credential operand or `2>/dev/null` on a converted curl; the converted files contain no `Authorization: Bearer`, `x-api-key`, `X-Signature-256`, `CF-Access-Client-*` or `X-Soleur-Kb-Drift-Signature` inside any curl argument list.
 - [ ] Every converted site is covered structurally (derived population: calls the library, no credential on argv, argv-neutrality golden), and the Guard 2 representative set runs at the call site (real step body, or a recorded slice with a row that fails when the slice no longer matches the live text) with the credential empty, unset and hostile, asserting zero calls, the marker once and the site's verdict class; the HMAC representative also with `python3` absent.
@@ -685,7 +685,7 @@ Appended, not edited in place. Deviations found while implementing, each measure
 - **The `scheduled-inngest-health.yml` `probe` step is held back to S4 (second held-back site).** Converting it (HMAC key and header onto the library) reddens 12 rows of
   `inngest-dedicated-host-classify.test.sh`, which executes the real step in a fake workspace with no library and stubbed `openssl` and `curl`. Fixing that suite is an
   `apps/web-platform/infra/**` edit, so it fires the production push apply. The census calls and the dedicated-host reader's stderr surfacing (the #9757 item) DO convert.
-  Result: 11 files fully converted, 1 partially (that file keeps 1 site), 1 held back whole. Baseline E ends at **17 files / 43 sites** (not 16 / 42).
+  Result: 11 files fully converted, 1 partially (that file keeps 1 site), 1 held back whole. Baseline E ends at **17 files / 42 sites** (not 16 / 42).
 - **`bc_refuse SCRIPT VAR` added to the library** so a site's own pre-guard prints the identical value-free line and marker as the chokepoint.
 - **Battery stage S3 does not reuse the shim or the `CLASSIFIED` mechanism**: it carries its own small recording shim (calibrated against `curl --libcurl` in the library suite) and a derived
   manifest, because the existing shim's auth profiles do not model `x-api-key` or the Cloudflare Access pair and its `CLASSIFIED` keys off the followthrough population.

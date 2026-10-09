@@ -1,10 +1,14 @@
 # shellcheck shell=bash
-# Guard 2 — inngest_host_dark_gate. The fifth authorization layer for the inngest-volume-recut
-# apply_target (#7695), and the only one that checks the WORLD rather than an intent.
+# inngest_host_dark_gate — "Guard 2" of the RETIRED inngest-volume-recut apply_target (#7695), the
+# fifth authorization layer of that dispatch and the only one that checked the WORLD rather than an
+# intent. (#8285 PR A converted that job into `inngest-backstop-retire`, whose own, separate guards
+# live in tests/scripts/lib/inngest-backstop-retire-gate.sh; the "Guard N" numbers in this file and
+# in that one are unrelated.) Since then NO workflow calls `inngest_host_dark_gate`: it is kept, with
+# its suite, only while the retire-or-keep decision for the dormant recut target (#8316) is open.
 #
-# TWO ENTRY POINTS, TWO CONSUMERS — EDITING A SHARED HELPER EDITS BOTH:
-#   inngest_host_dark_gate         .github/workflows/apply-web-platform-infra.yml  (recut Guard 2)
-#   inngest_execute_registry_gate  scripts/cutover-inngest.sh op=execute step 2.0  (P0 cutover, #8054)
+# TWO ENTRY POINTS, ONE LIVE CONSUMER — EDITING A SHARED HELPER EDITS BOTH:
+#   inngest_host_dark_gate         no production caller since #8285 PR A (suite only; was the recut's Guard 2)
+#   inngest_execute_registry_gate  scripts/cutover-inngest.sh op=execute step 2.0 and its registry-probe arm (P0 cutover, #8054)
 # `_IHDG_IDENT` / `_IHDG_SELECT` and every `_ihdg_*` helper are SHARED; `_ihdg_graded_row` is the
 # shared prelude (G1-G6 plus the boot_id shape check == E1-E7; the execute gate's E8 is the same
 # predicate as G7). Helpers prefixed `_erg_` are consumed by the EXECUTE gate only. The execute
@@ -997,7 +1001,8 @@ inngest_host_dark_gate() {
   esac
 
   # ── G17 — the LIVE volume is the one the operator pinned ────────────────────────
-  # Guard 1's ID-PIN reads `.change.before.id` from a plan document. This one reads LIVE Hetzner
+  # The recut gate's Guard 1 ID-PIN (a plan-shape gate that no longer exists; its successor is the
+  # `before.id` pin in tests/scripts/lib/inngest-backstop-retire-gate.sh) read `.change.before.id` from a plan document. This one reads LIVE Hetzner
   # state at dispatch time. They can disagree — a plan is a projection of state, and state can be
   # wrong about the world — and it is the world that gets destroyed.
   #
@@ -1008,7 +1013,8 @@ inngest_host_dark_gate() {
   # THAT then added "and asserts the volume is attached to the inngest server", which is equally
   # false. G17 proves exactly one thing: the volume carrying this NAME has the id the operator
   # pinned. The attachment property is carried by G14's `data_mount_src` — a fact about what the
-  # host actually mounted — and the terraform ADDRESS question by Guard 1's `before.id`. Guard 1's before.id pin is the counter that answers the address
+  # host actually mounted — and the terraform ADDRESS question by the plan-shape gate's `before.id` pin (the recut gate's Guard 1,
+  # now the retire gate's). That pin is the counter that answers the address
   # question; the two are complementary and neither subsumes the other.
   #
   # An unreadable live id lands here rather than on `unreadable`: the pin could not be confirmed,
