@@ -38,6 +38,8 @@
 //     design-locked PR.
 
 import { test, expect } from "@playwright/test";
+
+// pyramid-justified: Soleur Go routing flow asserted against the rendered DOM with page.route network interception and WebSocket injection — needs a real browser. (#9855)
 import type { Page } from "@playwright/test";
 import { attachWsInjector, type WsInjector } from "./cc-soleur-go-ws-injector";
 import { MOCK_USER } from "./mock-supabase";

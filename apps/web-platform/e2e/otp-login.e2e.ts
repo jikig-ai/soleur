@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+
+// pyramid-justified: Full OTP login flow (form fill, code entry, redirect) asserted through the rendered UI — needs a real browser. (#9855)
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
 import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
 
@@ -110,26 +112,6 @@ test.describe("OTP callback error handling", () => {
     await expect(
       page.getByText("Sign-in failed. If you have an existing account, try signing in with email instead."),
     ).toBeVisible({ timeout: 10_000 });
-  });
-
-  test("/callback without code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
-  });
-
-  test("/callback with invalid code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback?code=invalid-code", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
   });
 });
 

@@ -27,6 +27,8 @@
 // no real SDK, no toHaveScreenshot baselines.
 
 import { test, expect } from "@playwright/test";
+
+// pyramid-justified: Security behavior asserted inside an isolated browser.newContext with WebSocket injection — needs real browser context isolation. (#9855)
 import type { BrowserContext, Page } from "@playwright/test";
 import { attachWsInjector, type WsInjector } from "./cc-soleur-go-ws-injector";
 import { MOCK_USER } from "./mock-supabase";

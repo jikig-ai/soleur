@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+
+// pyramid-justified: Authenticated onboarding flow asserted through the rendered UI (multi-step DOM + waitForURL) — needs a real browser under the authenticated project. (#9855)
 import type { Page } from "@playwright/test";
 import {
   injectFakeSupabaseSession,

@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+
+// pyramid-justified: Authenticated conversations-rail state asserted through the rendered UI with page.route interception — needs a real browser under the authenticated project. (#9855)
 import type { Page } from "@playwright/test";
 import {
   injectFakeSupabaseSession,
