@@ -1757,12 +1757,13 @@ case_vo_garbage() { local v; for v in empty notok x0 line2; do
   run_mode "${1:-vo8}-$v" probe SHIM_PROBE=ok SHIM_VERIFY=$v
   { [ "$RC" = 5 ] && has_store store-verified probe_failed && grep -q 'rc=96' "$OUT" && no_probe_session; } || return 1
   done; }
-case_vo_mustpass() { case_vo_valid && case_vo_nonempty && case_vo_missing && case_vo_dangling; }
-case_vo_refuse() { case_vo_mismatch && case_vo_sentinel && case_vo_nomarker; }
+VO_FAIL=""
+case_vo_mustpass() { local c; VO_FAIL=""; for c in case_vo_valid case_vo_nonempty case_vo_missing case_vo_dangling; do "$c" || { VO_FAIL="$c"; return 1; }; done; }
+case_vo_refuse() { local c; VO_FAIL=""; for c in case_vo_mismatch case_vo_sentinel case_vo_nomarker; do "$c" || { VO_FAIL="$c"; return 1; }; done; }
 if case_vo_mustpass; then pass "MZ-VO1 (must-pass): the verified-only session executed against a valid empty store, a POPULATED one, one with NO repositories directory and one with a dangling repositories symlink -> the probe proceeds (a rollback probes a filled store; provision then names a missing directory), and the pre-flight never claims the emptiness verdict"
-else fail "MZ-VO1: the verified-only pre-flight refused a store it must clear" "$(ctx)"; fi
+else fail "MZ-VO1: the verified-only pre-flight refused a store it must clear (failing member: ${VO_FAIL:-?})" "$(ctx)"; fi
 if case_vo_refuse; then pass "MZ-VO2: the executed verified-only session refuses a marker naming another filesystem (store_unverified marker_mismatch), a held sentinel even when it is this lineage's (cutover_frozen) and an absent marker (marker_absent), with nothing provisioned"
-else fail "MZ-VO2: an unverified or frozen store reached the provision session" "$(ctx)"; fi
+else fail "MZ-VO2: an unverified or frozen store reached the provision session (failing member: ${VO_FAIL:-?})" "$(ctx)"; fi
 if case_vo_garbage; then pass "MZ-VO3: an rc-0 answer that is empty, not a count, or carries extra lines is refused as probe_failed rc=96 (unreadable proves nothing held)"
 else fail "MZ-VO3: a garbage verified-only answer was accepted" "$(ctx)"; fi
 
@@ -2464,6 +2465,8 @@ fz_run() { # <body-file> <MODE> <UNFREEZE_OUTCOME> <markers: space list> [STUB_E
   cat > "$d/apps/web-platform/infra/git-data-cutover.sh" <<'STUB'
 #!/usr/bin/env bash
 printf 'git-data-cutover MODE=%s\n' "${MODE:-}" >> "$FZ_LOG"
+n=$(cat "$FZ_LOG.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$FZ_LOG.n"
+[ "$n" -ge 2 ] && [ -n "${STUB_UNFREEZE_RC2:-}" ] && exit "$STUB_UNFREEZE_RC2"
 exit "${STUB_UNFREEZE_RC:-0}"
 STUB
   cat > "$d/.github/actions/dispatch-web-redeploy/track.sh" <<'STUB'
@@ -2546,6 +2549,10 @@ case_fz() { # <finalizer-body-file>
   fz_expect "FZ20 flip failed early, the finalizer's own unfreeze finds the timer stuck: gc word, not a freeze" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
   fz_run "$body" rollback failure "flag_written" STUB_UNFREEZE_RC=6
   fz_expect "FZ21 rollback failed early, the finalizer's own unfreeze finds the timer stuck: gc word, not a freeze" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
+  # FZ22: two child unfreezes in one finalizer (rollback + a freeze_held marker): a held sentinel on the FIRST must not be re-labelled
+  # a timer-only failure by a rc-6 SECOND (the word invariant holds across calls, not only within one).
+  fz_run "$body" rollback failure "flag_written freeze_held" STUB_UNFREEZE_RC=5 STUB_UNFREEZE_RC2=6
+  fz_expect "FZ22 rollback, first unfreeze held then the second finds the timer stuck: freeze_held + recovery_failed, no gc word" 1 "freeze_held=1 ran=1 recovery_failed=1 " 2 || return 1
   return 0
 }
 if [ ! -s "$T/steps/finalizer.sh" ]; then
@@ -2840,6 +2847,7 @@ exec_row fz8-gc-trap-deleted 1 '/^          trap .\[\[ -z "\$gcw" \]\] \|\| echo
 exec_row fz9-child-6-is-held 2 's#elif \[\[ \$r == 6 \]\]; then gcw=1; echo#elif [[ $r == 99 ]]; then gcw=1; echo#' fz
 # A child unfreeze that exits 6 no longer sets gcw (the stopped timer is not exported when the step flag was absent).
 exec_row fz10-child-6-does-not-set-gcw 2 's#(elif \[\[ \$r == 6 \]\]; then )gcw=1; #\1#' fz
+exec_row fz11-held-latch-dropped 2 's#\[\[ -z "\$\{heldseen:-\}" \]\] \|\| gcw=""#:#' fz
 # The notify text loses a store verdict the owner is pointed at / the GC word loses its verdict.
 exec_row nb5-probe-text-drops-store-verdicts 2 's# or store_unverified mean# mean#' nb
 exec_row nb7-gc-word-dropped 1 '/if \[ "\$\{GC_TIMER_STOPPED:-\}" = 1 \]; then words=/d' nb
@@ -3491,8 +3499,8 @@ fi
 # plus m9439-10..13 (exit 6 collapsed; verified-only accepts the truncated-away rcs / sends the full session / drops the marker
 # test), fz8-gc-trap-deleted, fz9-child-6-is-held, nb6-gc-word-drops-verdict, nb7-gc-word-dropped (the previous nb6 was retargeted
 # onto the new word, m9439-5..8 became fz6/fz7/nb5 and kept), fw1-marker-conditional-false, g3p-3, g3p-4, wf-unfreeze-no-gc-output
-# and g2n-15-gc-output-dropped = 12, so exactly 136. Fix pass: -m9439-13 and -nb6 (both still killed: MZ-VO2/VX rows and NB1c), +fz10, fu1, g3p-5, g3p-6 = 138 (measured).
-MUTANT_FLOOR=138
+# and g2n-15-gc-output-dropped = 12, so exactly 136. Fix pass: -m9439-13 and -nb6 (both still killed: MZ-VO2/VX rows and NB1c), +fz10, fu1, g3p-5, g3p-6 = 138. Ship: plus fz11-held-latch-dropped (the cross-call word invariant) = 139 (measured).
+MUTANT_FLOOR=139
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3513,8 +3521,9 @@ fi
 # WF-gcgate / WF-markers / WF-notify-plain census verdicts, which also move the workflow verdict count 51 -> 54) = +12; the new FZ13..FZ18
 # and NB1c checks sit inside case_fz / case_nb and add none: 577 -> 613.
 # Fix pass: 138 mutants x 2 = 276 (+4 over 136 x 2); the MZ-VO rows now share case_vo_* members with their mutants, which
-# nets the standalone rows down by 5 (8 rows to 3), and the new FU row adds 1: -4, so 613, measured (the suite reported 613 passed, 0 failed, 0 skipped).
-FLOOR=613
+# nets the standalone rows down by 5 (8 rows to 3), and the new FU row adds 1: -4, so 613 (measured).
+# Ship: 139 mutants x 2 = 278 (+2); FZ22 and the MZ-VO failing-member loops sit inside case_fz / the existing rows and add none: 615.
+FLOOR=615
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

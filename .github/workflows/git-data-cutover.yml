@@ -653,7 +653,10 @@ jobs:
               echo "::error::finalizer: $1 FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
               echo "freeze_held=1" >> "$GITHUB_OUTPUT"
               unwind_failed=1
+              heldseen=1
             fi
+            # a held sentinel seen by ANY call outranks a later call's timer-only failure (the word invariant above)
+            [[ -z "${heldseen:-}" ]] || gcw=""
           }
           if [[ "$MODE" == "unfreeze" ]]; then
             # A failed unfreeze mode leaves the sentinel held; it is the only freeze_held source there. A
