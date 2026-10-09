@@ -53,8 +53,22 @@ Recovery procedure (the whole procedure lives here, not in a plan that will be a
 
 1. **Revert the squash-merge commit of the change that set the current pin, wholesale**
    (`git revert <sha>`). It returns, together: the four values in `zot-registry.tf`, this sidecar, the
-   `zot vX.Y.Z` claim comments the staleness gate requires in `ci-deploy.sh`, `ci-deploy.test.sh` and
-   `cloud-init-registry.yml`, and the three-name hosts-file deny at all seven sites. A narrower edit of
+   `zot vX.Y.Z` claim comments the staleness gate requires in `ci-deploy.test.sh` and
+   `cloud-init-registry.yml`, and the three-name hosts-file deny at all seven sites. `ci-deploy.sh` is
+   deliberately NOT a claim carrier (check 11): expect conflicts in `ci-deploy.sh`, `ci-deploy.test.sh`
+   and this sidecar (later edits sit beside the reverted hunks), and NOT only there: a revert of that
+   commit also reverts its non-conflicting hunks, which would put the fan-out signature back on curl's
+   argv. So do not resolve hunk by hunk. Keep the CURRENT `ci-deploy.sh` wholesale
+   (`git checkout HEAD -- apps/web-platform/infra/ci-deploy.sh`: its claim-free pointer comment, stdin-config
+   curl call and environment-only signer are independent of the pin and must survive); keep the CURRENT
+   `ci-deploy.test.sh` and change only its `zot v2.1.22` tokens to `zot v2.1.20`; take this sidecar's
+   REVERTED side. The revert also re-adds the `ci-deploy.sh` row to
+   `scripts/lint-shell-trace-credential-refusal-e.baseline.txt` and
+   `scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv`: restore both from the pre-revert tree
+   BEFORE committing the revert (`git checkout HEAD -- <both files>`; after the commit use
+   `git checkout HEAD~1 -- <both files>` and amend), or the credential lint reports the entry as stale.
+   Dry-run 2026-10-09 of this recipe: `zot-image-staleness.test.sh` exits 0 and
+   `lint-shell-trace-credential-refusal.py` reports OK. A narrower edit of
    only the four values fails `zot-image-staleness.test.sh` (the sidecar, the followers and the
    previous-known-good block then disagree with the pin), and a partial revert of the deny breaks its
    byte-parity guard. The values being restored, in the tag-qualified form `zot_version` is derived
@@ -62,9 +76,16 @@ Recovery procedure (the whole procedure lives here, not in a plan that will be a
    `zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5"`,
    `zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6"`,
    plus T and C from the boot-asset line above.
-2. The revert touches `server.tf` and `ci-deploy.sh`, so its commit message BODY must carry
-   `[skip-web-platform-apply]` and `[skip-deploy-fix-apply]`, each on its own line, or the merge-fired
-   push applies SSH into web-1 and web-2. A bare `git revert` message carries neither.
+2. The revert's commit message BODY must carry `[skip-web-platform-apply]` and
+   `[skip-deploy-fix-apply]`, each on its own line, or the merge-fired push applies SSH into web-1 and
+   web-2. A bare `git revert` message carries neither. Always include both, even for a revert that
+   seems to touch no trigger file: a `server.tf` edit reaches the web hosts' `triggers_replace` BY VALUE
+   (`local.ghcr_deny_sh` and `local.ghcr_deny_assert_sh` feed `zot_consumer_probe_install` and
+   `deploy_pipeline_fix_web2`), which a `git show --stat` file list will not show. The markers defer the
+   web-host delivery of the revert, they do not drop it: the next unmarked push to a trigger path applies
+   the reverted values to web-1 and web-2, so review that apply when it is sanctioned. The markers must
+   be on their own lines in the SQUASH-MERGE body too (the push head commit is what the workflows read);
+   verify it before merging.
 3. Merge it. The merge fires `registry-host-replace-dispatch.yml`; do not dispatch a second replace
    (double destroy-first). The manual arm is for a refusal only, taken on an explicit operator go.
 4. The v2.1.20 boot asset is immutable and published, so preflight P6 passes for it. Store
@@ -133,9 +154,14 @@ Recorded so a future reader does not mistake absence for oversight:
 These are **measurements**, not inferences. Re-deriving them from upstream source is not
 re-verification — run the pinned image or downgrade the claim.
 
+**Trigger files carry no version-scoped claim.** `ci-deploy.sh` feeds `triggers_replace` of the web
+hosts' SSH provisioners, so a `zot vX.Y.Z` token in it would make every bump redeliver the script to
+both hosts for a comment. Staleness check 11 enforces zero claims there; check 7 covers the real
+carriers (`ci-deploy.test.sh`, `cloud-init-registry.yml`).
+
 | Claim | Location | Status |
 |---|---|---|
-| GET `/v2/` answers 200 or 401, **never 403**, with this repo's exact `accessControl` | `ci-deploy.sh`, above `_docker_login_failure_class`; `ci-deploy.test.sh`, the 401 fixture comment | Re-measured against v2.1.22 on 2026-10-08 — see `## Bump procedure` step 4: anonymous 401, pull user 200, push user 200, wrong password 401 (dockerd stderr `failed with status: 401 Unauthorized`), a user with zero policies 200 on `/v2/` and 403 on a manifest read, zero 403 on `/v2/`. This measurement is what makes the `authz_denied` arm a tripwire rather than a live arm. |
+| GET `/v2/` answers 200 or 401, **never 403**, with this repo's exact `accessControl` | `ci-deploy.test.sh`, the 401 fixture comment (the version-bearing claim); `ci-deploy.sh`, above `_docker_login_failure_class`, carries a pointer to this row and NO version | Re-measured against v2.1.22 on 2026-10-08 — see `## Bump procedure` step 4: anonymous 401, pull user 200, push user 200, wrong password 401 (dockerd stderr `failed with status: 401 Unauthorized`), a user with zero policies 200 on `/v2/` and 403 on a manifest read, zero 403 on `/v2/`. This measurement is what makes the `authz_denied` arm a tripwire rather than a live arm. |
 | No sanctioned on-demand gc HTTP endpoint is exposed | `cloud-init-registry.yml`, config.json rationale block | Re-measured against v2.1.22 on 2026-10-08: `/v2/_zot/gc`, `/v2/_catalog/gc`, `/_zot/gc`, `/v2/_zot/ext/gc` all 404. Non-adoption of an on-boot gc trigger is unchanged. |
 | With `readTimeout`/`writeTimeout` omitted, zot supplies 60000000000 ns for both | `cloud-init-registry.yml`, the `http.readTimeout` rationale block | Re-read against v2.1.22 on 2026-10-08 from the pinned digest's own boot config (`"ReadTimeout":60000000000`, `"WriteTimeout":60000000000`). |
 | `reusable-release.yml` states zot's built-in ReadTimeout/WriteTimeout (60000000000 ns) | `.github/workflows/reusable-release.yml` | Unregistered (found by the #9252 bump; update at the next bump). True of v2.1.22 too (the row above); left alone because editing a workflow removes the agent admin-merge path. Staleness check 7 does not read it. |
@@ -195,7 +221,8 @@ staleness gate's failure message points at. Do all of it, in order:
    rather than shipping a false comment.
 5. **Re-check the `registry-boot-guard.test.sh` coupling** above if the config JSON moved.
 6. **Re-stamp `Capture date (UTC)`** and run `bash zot-image-staleness.test.sh` — it must
-   exit 0.
+   exit 0. A bump edits the claim comments in `ci-deploy.test.sh` and `cloud-init-registry.yml` and
+   never `ci-deploy.sh` (check 11); if a bump seems to need an edit there, the claim has crept back.
 7. **Publish the boot asset BEFORE the bump merges** (#8714 5.3b-iii). The registry host boots
    from a release asset, not from ghcr.io, so a merged pin with no asset refuses every replace
    (preflight P6). On the bump branch, run

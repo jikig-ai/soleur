@@ -1966,8 +1966,9 @@ ADR-100, amendment 2026-09-14.
 >   RESURRECTED: pull `reason=` from `/hooks/deploy-status` + Better Stack (tag `ci-deploy`) and find
 >   what restarts or re-enables it. Do **not** SSH.
 > - `quiesced_peer_fanout_unaccepted` — a peer did not return 202. Grep Better Stack for
->   `FANOUT: webhook secret unavailable` first: that line means the originating host cannot read its
->   own `deploy-peer` secret and a re-dispatch will not converge (R9). Otherwise check the peer host
+>   `FANOUT: webhook secret unavailable` and `FANOUT: could not compute the request signature` first:
+>   either line means the originating host cannot read its own `deploy-peer` secret or its signer fails
+>   (python3 missing), and a re-dispatch will not converge (R9). Otherwise check the peer host
 >   and the web→web:9000 firewall, then re-dispatch — stop and disable are idempotent.
 > - UNKNOWN/000 — the webhook was unreachable: check CF-Access/HMAC, then re-dispatch.
 >
