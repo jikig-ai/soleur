@@ -194,7 +194,7 @@ census_no_set_e() { local c; c="$(code_lines "$1")"; ! grep -qE '^[[:space:]]*se
 census_blkdiscard_exact() { local c; c="$(code_lines "$1")"; grep -qxE '[[:space:]]*blkdiscard -z "\$REAL" </dev/null' <<<"$c"; }
 # curl must FAIL on an HTTP error status (-f inside the short-flag cluster) and be time-bounded.
 census_curl_fail_flag() { local c; c="$(code_lines "$1")"; grep -qE 'curl[^|]* -[a-zA-Z]*f[a-zA-Z]*( |$)' <<<"$c"; }
-census_curl_max_time() { local c; c="$(code_lines "$1")"; grep -qE 'curl[^|]*--max-time [0-9]+' <<<"$c"; }
+census_curl_max_time() { local c; c="$(code_lines "$1")"; grep -qE 'curl[^|]*--max-time 15 ' <<<"$c"; }
 # guard_device is called exactly twice before the (single) wipe_device call: once for the identity
 # decision and once more after the started row, because the started row is a network round trip.
 census_reguard_before_wipe() {
@@ -925,6 +925,9 @@ mutate "M19 curl loses -f" 's/ -fsS / -sS /' && {
 mutate "M20 curl loses --max-time" 's/ --max-time [0-9]+//' && {
   check_not "M20 (no --max-time): the curl time-bound census is RED" census_curl_max_time "$MUT_PATH"
 }
+mutate "M20b curl --max-time becomes unbounded (0)" 's/--max-time 15 /--max-time 0 /' && {
+  check_not "M20b (--max-time 0): the exact time-bound census is RED" census_curl_max_time "$MUT_PATH"
+}
 # M21: the re-guard after the started row removed.
 mutate "M21 re-guard after the started row removed" '/\|\| no_evidence_channel$/{n;s/^guard_device$/true/}' && {
   LATE_HOLDER_T=1 scenario m21 "$MUT_PATH" || exit 2
@@ -1059,7 +1062,7 @@ if [ "$((passes + fails))" -ne "$executed" ]; then
   printf 'FAIL - accounting: passes %s + fails %s != executed %s (a verdict was discarded or double-counted)\n' "$passes" "$fails" "$executed" >&2
   exit 1
 fi
-FLOOR=243
+FLOOR=245
 if [ "$executed" -lt "$FLOOR" ]; then
   printf 'FAIL - assertion-count floor: executed %s < %s (a vacuous or truncated run)\n' "$executed" "$FLOOR" >&2
   exit 1

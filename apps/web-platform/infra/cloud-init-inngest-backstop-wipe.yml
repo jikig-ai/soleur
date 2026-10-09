@@ -38,8 +38,11 @@ write_files:
       # UNMEASURED UNTIL THE FIRST REAL RUN (nothing here has executed against a real Hetzner
       # volume): the 10 GiB size (the refusal row names the observed size, so a wrong constant fails
       # safe and diagnosably), the by-id naming (scsi-0HC_Volume_<id>; absent means a bounded
-      # device_absent refusal, never a write), and the 300 s wait for the link. The first wipe is
-      # the first measurement of all three; the evidence rows carry the observed values.
+      # device_absent refusal, never a write), the 300 s wait for the link, and that the guest
+      # hostname equals the server name (the evidence row's `host`, which the destroy gate pins; if
+      # it differs every row reads emitter_mismatch while the wipe itself completes, and the
+      # poll output shows the rows). The first wipe is the first measurement of all four; the
+      # evidence rows carry the observed values.
       LC_ALL=C; export LC_ALL
 
       VOLUME_ID='${volume_id}'
