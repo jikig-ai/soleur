@@ -3555,6 +3555,20 @@ if ! grep -qE '^[[:space:]]*export[[:space:]]+KB_DRIFT_INGEST_SIGNING_KEY' < <(g
   row "S3 kb-drift-walker: the signing key is not exported (no other child of the step inherits it)" ok
 else row "S3 kb-drift-walker: the signing key is exported" fail ""; fi
 
+# ---- composites: the branches after the send (non-2xx, billing 400, a real transport failure) ----
+s3_run "$S3/not.sh" "$S3/real" RESEND_API_KEY="synth-resend_key0123" EMAIL_SUBJECT=s EMAIL_BODY=b SHIM_CODE=500
+if [[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 ]] && s3_gho_has "sent=false" && grep -q '^::warning::Email notification failed (HTTP 500)' "$S3_OUT"; then
+  row "S3 notify-ops-email: a non-2xx is a warning with sent=false and exit 0 (the caller contract)" ok
+else row "S3 notify-ops-email: non-2xx" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
+s3_run "$S3/not.sh" "$S3/real" RESEND_API_KEY="synth-resend_key0123" EMAIL_SUBJECT=s EMAIL_BODY=b SHIM_CODE=000 SHIM_RC=7
+if [[ "$S3_RC" == 0 ]] && s3_gho_has "sent=false" && grep -q '^::warning::Email notification failed' "$S3_OUT"; then
+  row "S3 notify-ops-email: a transport failure is the same warning, sent=false, exit 0" ok
+else row "S3 notify-ops-email: transport failure" fail "rc=$S3_RC"; fi
+s3_run "$S3/pre.sh" "$S3/real" ANTHROPIC_API_KEY="$S3_K_ANTH"
+[[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 ]] && s3_gho_has "ok=true" && row "S3 anthropic-preflight: a 200 is ok=true" ok || row "S3 anthropic-preflight: 200" fail "rc=$S3_RC calls=$S3_NCALLS"
+s3_run "$S3/pre.sh" "$S3/real" ANTHROPIC_API_KEY="$S3_K_ANTH" SHIM_CODE=400 SHIM_BODY='{"error":{"message":"Your credit balance is too low"}}'
+[[ "$S3_RC" == 0 ]] && s3_gho_has "ok=false" && row "S3 anthropic-preflight: a billing 400 soft-skips (ok=false, exit 0)" ok || row "S3 anthropic-preflight: billing 400" fail "rc=$S3_RC"
+
 # ---- sentry-audit-gate: the red-class representative ----
 s3_body ".github/workflows/sentry-audit-gate.yml" "Verify token scope" > "$S3/sentry.sh" || fatal "S3 could not extract the sentry-audit-gate step"
 S3_SENTRY_ENV=(SENTRY_ORG=synthorg SENTRY_API_HOST=synthorg.sentry.io)
@@ -3606,6 +3620,52 @@ s3_run "$S3/cen.sh" "$S3/real" CF_API_TOKEN="${S3_CANARY}\"x"
 if [[ "$S3_RC" == 0 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 1 ]] && s3_gho_has "verdict=census_unavailable" && ! grep -qx 'REACHED_NEXT' "$S3_OUT"; then
   row "S3 inngest-health census: a malformed Cloudflare token is the SOFT census_unavailable verdict (exit 0), marker visible, zero requests" ok
 else row "S3 inngest-health census: malformed token" fail "rc=$S3_RC calls=$S3_NCALLS markers=$(s3_marker_count)"; fi
+
+# ---- Better Stack reader callers (#9757): the reader's refusal marker reaches the run log, with or without the classifier ----
+mkdir -p "$S3/ihws/scripts/lib" "$S3/ihstub" "$S3/ihws-nolib/scripts"
+cat > "$S3/ihws/scripts/betterstack-query.sh" <<'IHREADER'
+#!/usr/bin/env bash
+printf 'SOLEUR_CREDENTIAL_REFUSED script=betterstack-query reason=token_shape\nbetterstack-query: a credential was refused\n' >&2
+exit 2
+IHREADER
+cp "$S3/ihws/scripts/betterstack-query.sh" "$S3/ihws-nolib/scripts/betterstack-query.sh"
+cp "$REPO_ROOT/scripts/lib/betterstack-read-classify.sh" "$S3/ihws/scripts/lib/"
+cat > "$S3/ihstub/doppler" <<'IHDOPPLER'
+#!/usr/bin/env bash
+printf 'SOLEUR_CREDENTIAL_REFUSED script=betterstack-query reason=token_shape\nbetterstack-query: a credential was refused\n' >&2
+exit 2
+IHDOPPLER
+chmod +x "$S3/ihws/scripts/betterstack-query.sh" "$S3/ihws-nolib/scripts/betterstack-query.sh" "$S3/ihstub/doppler"
+S3_IH_SLICE="$(s3_slice .github/workflows/scheduled-inngest-health.yml "Dedicated inngest host probe consumer" '^BS_ERR=' 'rm -f "\$BS_ERR" "\$BS_ERR\.rows"')"
+S3_IH_LIVE="$(s3_body .github/workflows/scheduled-inngest-health.yml "Dedicated inngest host probe consumer")"
+if [[ -n "$S3_IH_SLICE" && "$S3_IH_LIVE" == *"$S3_IH_SLICE"* && "$(printf '%s\n' "$S3_IH_SLICE" | grep -c .)" -ge 8 && "$(printf '%s\n' "$S3_IH_SLICE" | grep -c .)" -le 24 ]]; then
+  row "S3 inngest-health dedicated-host reader slice: extracted from the live step text ($(printf '%s\n' "$S3_IH_SLICE" | grep -c .) lines)" ok
+else row "S3 inngest-health dedicated-host reader slice" fail "slice missing or drifted from the live step"; fi
+{ printf 'set -euo pipefail\nrc=0\nPROBE_WINDOW=1h\nPROBE_LIMIT=500\n'; printf '%s\n' "$S3_IH_SLICE"; printf 'echo REACHED_NEXT\necho "rc_seen=$rc"\n'; } > "$S3/ih.sh"
+s3_run "$S3/ih.sh" "$S3/real" GITHUB_WORKSPACE="$S3/ihws"
+if [[ "$S3_RC" == 0 && "$(s3_marker_count)" == 1 ]] && grep -qx 'REACHED_NEXT' "$S3_OUT" && grep -qx 'rc_seen=2' "$S3_OUT" && grep -q '^::warning::#9757 dedicated-host arm: the Better Stack read failed (rc=2, class=' "$S3_OUT"; then
+  row "S3 inngest-health dedicated-host arm: a reader refusal (rc 2) surfaces its marker once and ONE classified ::warning::, and the step goes on with rc=2" ok
+else row "S3 inngest-health dedicated-host arm: reader refusal" fail "rc=$S3_RC markers=$(s3_marker_count)"; fi
+s3_run "$S3/ih.sh" "$S3/real" GITHUB_WORKSPACE="$S3/ihws-nolib"
+if [[ "$S3_RC" == 0 && "$(s3_marker_count)" == 1 ]] && grep -qx 'rc_seen=2' "$S3_OUT" && ! grep -q '^::warning::#9757' "$S3_OUT"; then
+  row "S3 inngest-health dedicated-host arm: with the classifier library absent the marker still reaches the log, only the warning is dropped" ok
+else row "S3 inngest-health dedicated-host arm: classifier absent" fail "rc=$S3_RC markers=$(s3_marker_count)"; fi
+
+S3_GC_SLICE="$(s3_slice .github/workflows/git-data-cutover.yml "Per-host git_data_store= assertion" '^[[:space:]]*rows_rc=0' '^[[:space:]]*fi$')"
+S3_GC_LIVE="$(s3_body .github/workflows/git-data-cutover.yml "Per-host git_data_store= assertion")"
+if [[ -n "$S3_GC_SLICE" && "$S3_GC_LIVE" == *"$S3_GC_SLICE"* && "$(printf '%s\n' "$S3_GC_SLICE" | grep -c .)" -ge 5 && "$(printf '%s\n' "$S3_GC_SLICE" | grep -c .)" -le 14 ]]; then
+  row "S3 cutover per-host assertion reader slice: extracted from the live step text ($(printf '%s\n' "$S3_GC_SLICE" | grep -c .) lines)" ok
+else row "S3 cutover per-host assertion reader slice" fail "slice missing or drifted from the live step"; fi
+{ printf 'set -uo pipefail\nBS_ERR="$RUNNER_TEMP/bs-err"\nname_in="'"'"'h1'"'"'"\nleg=blue\ni=1\n'; printf 'source "%s/scripts/lib/betterstack-read-classify.sh"\n' "$REPO_ROOT"; printf '%s\n' "$S3_GC_SLICE"; printf 'echo REACHED_NEXT\necho "rows_rc_seen=$rows_rc"\n'; } > "$S3/gc.sh"
+{ printf 'set -uo pipefail\nBS_ERR="$RUNNER_TEMP/bs-err"\nname_in="'"'"'h1'"'"'"\nleg=blue\ni=1\n'; printf '%s\n' "$S3_GC_SLICE"; printf 'echo REACHED_NEXT\necho "rows_rc_seen=$rows_rc"\n'; } > "$S3/gc-nolib.sh"
+s3_run "$S3/gc.sh" "$S3/ihstub:$S3/real"
+if [[ "$(s3_marker_count)" == 1 ]] && grep -qx 'REACHED_NEXT' "$S3_OUT" && grep -qx 'rows_rc_seen=2' "$S3_OUT" && grep -q '^::warning::host blue: the Better Stack read failed (attempt 1, rc=2, class=' "$S3_OUT"; then
+  row "S3 cutover per-host assertion: a reader refusal (rc 2) surfaces its marker and the classified warning, and the loop's rc is kept" ok
+else row "S3 cutover per-host assertion: reader refusal" fail "markers=$(s3_marker_count) rc=$S3_RC"; fi
+s3_run "$S3/gc-nolib.sh" "$S3/ihstub:$S3/real"
+if [[ "$(s3_marker_count)" == 1 ]] && grep -qx 'rows_rc_seen=2' "$S3_OUT" && ! grep -q '^::warning::host blue' "$S3_OUT"; then
+  row "S3 cutover per-host assertion: with the classifier library absent the marker still reaches the log, only the warning is dropped" ok
+else row "S3 cutover per-host assertion: classifier absent" fail "markers=$(s3_marker_count) rc=$S3_RC"; fi
 
 # ---- the held-back site is declared, not forgotten ----
 if grep -qE 'openssl dgst -sha256 -hmac "\$WEBHOOK_SECRET"' "$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml"; then
@@ -3859,7 +3919,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=458
+EXPECTED_TESTS=468
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
