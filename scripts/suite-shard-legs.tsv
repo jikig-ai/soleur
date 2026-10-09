@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=996
-# generated-at=2026-10-09T04:16:17Z
+# generated-at=2026-10-09T11:42:48Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -355,6 +355,7 @@ scripts/inngest-restart-poll-classify	3
 scripts/inngest-soak-6178	7
 scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
+scripts/learning-retrieval-bench	7
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
@@ -529,10 +530,10 @@ tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/git-data-rung2-plan-shape	7
 tests/scripts/host-image-coherence-preflight	5
 tests/scripts/infra-privileged-tier-census	3
+tests/scripts/inngest-backstop-retire-gate	7
 tests/scripts/inngest-host-dark-gate	8
 tests/scripts/inngest-host-replace-gate	2
 tests/scripts/inngest-host-shape-gate	3
-tests/scripts/inngest-volume-recut-gate	4
 tests/scripts/kb-drift-walker	4
 tests/scripts/lint-rule-bodies	8
 tests/scripts/lint-rule-ids	1

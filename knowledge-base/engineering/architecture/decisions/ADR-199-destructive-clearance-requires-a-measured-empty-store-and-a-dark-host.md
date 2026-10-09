@@ -343,3 +343,15 @@ stale schema number in a sequencing walkthrough is precisely what produces a par
 `inngest-volume-recut`, does not clear the standing flush latch (#7777), and does not spend the one
 authorized FLUSHALL. G14 becoming satisfiable is a precondition for that dispatch, not a decision to
 make it.
+
+## Addendum — 2026-10-09 (#8285)
+
+Appended; nothing above is changed. The `apply_target=inngest-volume-recut` dispatch that this ADR's
+guards were written for no longer exists once PR A of #8285 has merged: its job is converted into
+`apply_target=inngest-backstop-retire`, which retires the plaintext backstop volume (id 106261946)
+under its own plan-shape gate (`tests/scripts/lib/inngest-backstop-retire-gate.sh`). The invariant this
+ADR states (a destructive clearance of the live store needs a measured-empty store and a dark host)
+is not weakened by that: the retire job never touches the live LUKS volume, and refuses unless the live
+store is provably healthy. The dark-host gate library
+(`tests/scripts/lib/inngest-host-dark-gate.sh`) is kept for `scripts/cutover-inngest.sh`. See the
+ADR-142 addendum of 2026-10-08 and 2026-10-09.

@@ -513,6 +513,152 @@ Zero downtime is NOT claimed and must not be: the volume being destroyed is the 
 scheduler's own store, and Guard 2 refuses unless the host is already dark. There is nothing to
 take down because nothing is serving.
 
+[2026-10-08, #8285 PR A, appended; the text above is unchanged and describes the ADR-199 empty-store
+recut as it was built.] This job is converted into `inngest_backstop_retire`
+(`-f apply_target=inngest-backstop-retire`, a `phase` input of `detach`, `wipe`, `teardown`,
+`destroy`). It keeps the `inngest-cutover` environment, the `confirm` typo-guard (now
+`RETIRE-INNGEST-BACKSTOP`), the `expected_inngest_volume_id` id-pin (now 106261946, the plaintext
+backstop, not the live store), the `deploy-inngest-restart` group, and also joins the
+`terraform-apply-web-platform-host` group because the state backend has `use_lockfile = false`. Its
+plan-shape gate (`tests/scripts/lib/inngest-backstop-retire-gate.sh`) is a rewrite, not a
+conversion: it replaces the delete-and-create-a-RAW-volume predicates and the empty-store predicates
+above, so the recut gate lib and its test are deleted and `inngest-host-dark-gate.sh` stays for its
+other user. The job destroys an orphan (a state entry with no declaration) by `-target`, with no
+`-destroy` flag. NO [ack-destroy] BYPASS still holds. The convergence PR of #8285 deletes the retire
+job and its gate once the volume is confirmed gone; the procedure as run stays in git history. The
+operator procedure is `inngest-luks-cutover-6894.md` §5b.
+
+[2026-10-09, #9784 review round 1, appended. Text moved here from the workflow's job header, inline
+comments and dispatch descriptions so the workflow stays under the byte gate (workflow-file-size.test.ts).]
+
+JOB HEADER (moved). `inngest_backstop_retire`: phase = detach | wipe | teardown | destroy, each its own
+reviewer-approved dispatch. Plan-shape gate, live-store gate, destroy precondition, evidence funnel and the poll's
+diagnostic read are the five functions of `tests/scripts/lib/inngest-backstop-retire-gate.sh`. The root's
+serializer is the WORKFLOW-level group `terraform-apply-web-platform-host` (the state backend has
+`use_lockfile = false`); a job carries one group, so this job adds `deploy-inngest-restart` on top of it.
+
+CONCURRENCY (moved from `inngest_host` and `inngest_host_replace`, whose comment was the same paragraph).
+`deploy-inngest-restart` is the group `cutover-inngest.yml`, `deploy-inngest-image.yml` and
+`restart-inngest-server.yml` already serialize on. These jobs re-provision or replace the host those three
+restart, so without it a cutover, a deploy and a host apply could interleave, and a mutex on one side of a race
+is not a mutex. The ADR-199 plan's AC B9 named a NEW `inngest-cutover` literal; joining the EXISTING one covers
+six surfaces instead of four and orphans none (see the paragraph above for the full argument).
+
+WHY `-target` ON THE ORPHANS. A `-target` on an orphaned address (a state entry with no declaration) destroys it
+without `-destroy`, so no dependent expansion happens. The three-resource chain was measured on Terraform 1.9.8
+(plan `-target=` the attachment plans only the attachment delete; `-target=` the volume plans only the volume
+delete); CI pins 1.10.5 in at least one job, so re-run that experiment before the first dispatch. If it is wrong
+the targeted gate aborts (`unauthorized_delete` / `out_of_scope`) with nothing mutated.
+
+TRUST MODEL OF THE WIPE EVIDENCE (D-A). The `SOLEUR_INNGEST_BACKSTOP_WIPE` row is posted with the shared Better
+Stack ingest token, so a holder of that token could post a perfect row from any host. What the funnel does and does
+not give: the nonce (the wipe dispatch's GitHub run id) and the time floor make STALE or REPLAYED rows fail; the
+emitter pin (payload `host` = the Terraform server name, `shipper` = `inngest-backstop-wipe`) makes a careless
+forgery fail; none of that stops a forgery by a token holder. The destroy precondition therefore ALSO requires
+Hetzner's own record, read from `GET /v1/volumes/<id>/actions` with the read-only token the job already holds: a
+successful `attach_volume` finished at or after the wipe run's `run_started_at` whose `resources` name a server
+that is neither null nor the live inngest server, and a successful `detach_volume` finished at or after that
+attach. The `resources` shape of those actions is documented but UNMEASURED for this volume until the first real
+run; if it differs the precondition fails closed (`no_wipe_attach`) and the D4 path is the way through.
+E-3 tightens it: the attach must finish at or after max(the run start, the latest attach of the volume to the LIVE
+server) (`live_reattached` when the volume went back to the live host after every non-live attach), and the matched
+wiped row's time (the top-level `dt` column; the `dt` inside `raw` is never read; whether the column is Better Stack's receive time or the sender's own `dt` is unmeasured for this emitter) must
+lie between that attach and the first later detach, 300 s slack each side (`row_outside_attach_window`). This
+corroborates that a host held the volume while the row was posted; it does not prove the overwrite happened, and a
+holder of the ingest token can still post a row inside a real attach..detach window. Erasure remains self-attested.
+
+CLO ATTESTATION (D-B, E-2: a two-person rule). `erasure=provider-only` accepts ONLY
+`https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>`. The job fetches the comment through
+`gh api repos/<repo>/issues/comments/<id>`; the gate requires the comment id to match, the comment to belong to
+issue 8285, the body to name volume 106261946 (not as part of a longer number), and then: the FIRST line is exactly
+`CLO-ATTESTATION erasure=provider-only volume=106261946` (a CR before the newline, the web editor's line ending, is
+tolerated), the comment is unedited (`created_at == updated_at`), `.user.type == "User"`, `author_association` is
+OWNER or MEMBER (COLLABORATOR is NOT enough), and `.user.login` differs (case-insensitively) from the dispatching
+`GITHUB_ACTOR`. Reasons: `clo_marker_missing`, `clo_comment_edited`, `clo_author_not_human`,
+`clo_author_not_privileged`, `clo_same_actor`. It evidences NO overwrite; the destruction record must say provider
+delete only.
+
+UNTARGETED PLAN (D-C). It is the D1 proof, not a drift gate. It requires `hcloud_server.inngest` and the LUKS
+volume/attachment as exactly one no-op each, nothing carrying the live volume id 106903269 as a whole scalar value,
+the four retire addresses inside the phase's set, and every verb inside {no-op, read, create, update, delete,
+forget}. Entries for any other resource are ignored. The TARGETED plan, which is the one applied, is graded exactly.
+
+LIVE-STORE GATE AND TEARDOWN (D-D). The gate runs in front of detach, wipe and destroy and NOT teardown: a leaked
+wipe host (EUR 0.03/h, holding the retired volume) must always be cleanable, whatever state the live store is in.
+
+STATE-ONLY RECONCILE (D-E). When Hetzner says an address's object is gone the job runs a `-refresh-only`
+apply on that one `-target` (never `state rm`: no workflow writes main-root state by hand), snapshots
+`terraform state list` before and after into variables (no `| grep -q`: SIGPIPE under pipefail fails open) and
+requires the difference to be exactly that single address. The wipe server is reconciled before its
+attachment, because refreshing the attachment also refreshes (and would drop) a vanished server. The `-target`
+values are literals: the escrow census reads a non-literal `-target` value as potentially host-creating.
+
+WIPE POLL (moved, W2). A 20-minute wall-clock deadline (the job timeout is 45 minutes), the hot window only
+(`--no-archive`, `--since 1h`; the destroy precondition keeps the archive and `--since 14d`), the query's exit
+code and stderr printed rather than swallowed, an immediate stop with the host's `reason=` when a row bearing this
+nonce says `result=refused`, and a read of Hetzner's server and volume state before the teardown step runs. On
+a timeout, query Better Stack for a late `wiped` row BEFORE re-dispatching phase=wipe (a re-run on a blank device
+emits a `prior=blank` row, which counts as evidence, but a second wipe of a wiped volume costs a cycle).
+
+LEAKED WIPE HOST ABSENT FROM STATE (W13). If a wipe host exists in Hetzner (label `role=inngest-backstop-wipe`)
+but not in state, no phase can plan its deletion, and the convergence read now says so and names the ids instead
+of dead-ending. The job does NOT delete it through the API: the workflow's `HCLOUD_TOKEN` is the read-only token
+whenever one exists. Recovery is the operator's: delete the server by id with the Hetzner API, then re-dispatch.
+
+ORPHAN WINDOW (D-H). Between the merge of PR A and the completion of phase=destroy the state holds two addresses
+with no declaration (`hcloud_volume.inngest_redis` and its attachment), so an UNTARGETED `terraform apply` of the
+root, by anyone, deletes the retired backstop outside every gate here. The per-merge apply is `-target`ed and never
+names them; the one place the workflows prescribed a bare apply was the host_creates HALT's break-glass chain,
+which now says to add `-target` for each planned address while the orphans are in state. The twice-daily drift cron
+reports the orphans as pending deletes during this window; that is expected, do not apply.
+
+DISPATCH DESCRIPTION (moved). git-data-host-create: the three mechanical interlocks (the #6982 sentinel, the
+rung-2 rehearsal, the #8009 authorization map) all release now; the environment approval is the remaining hold and
+it reports `prevent_self_review: false` with a single reviewer, so the dispatcher can approve their own
+deployment (declared nowhere in this repo's Terraform, so false is the provider default; every gated environment
+here reads the same way). The full account is at `## git_data_host_create` above.
+
+DISPATCH DESCRIPTION (moved). The option comment above `git-data-host-create` in the workflow_dispatch apply_target list:
+
+#6977 — the git-data BIRTH path, and the counterpart to git-data-host-replace
+above rather than a widened version of it. That gate requires
+actions ⊇ {delete,create} and fires its luks_passphrase_touched arm on a
+CREATE, so a first birth aborts on it three separate ways; its 5-member
+allow-set also rests on "preserved by OMISSION", an argument that INVERTS on a
+birth (an omitted address is then a MISSING resource, not a protected one).
+
+The job sources a birth-readiness gate that refuses to plan while
+cloud-init-git-data.yml has no off-host emitter, because for this host a green
+apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
+gate now RELEASES — it remains armed as a regression check, not as a hold.
+The runbook's DO-NOT-DISPATCH banner held the route until the rung-2 evidence
+merged (PR #8126); it was cleared by PR #8128 (merged 2026-09-14) and the host was born
+2026-09-14. See the git_data_host_create job and
+knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+
+DISPATCH DESCRIPTION (moved). The option comment above `ci-ssh-token-replace`:
+
+#7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
+stopped accepting it. Narrow by construction: a two-resource -target set
+plus one -replace, reaching NO host, NO volume, and NO terraform_data.
+It is the ONE arm that can run while the SSH bridge is dead, because it
+repairs the credential the bridge authenticates with.
+
+RETIRE JOB RUN-BODY NOTES (moved from the inngest_backstop_retire job; the job keeps the code only):
+
+- `hz <path> <outfile>` prints the HTTP code (000 on a transport failure, never "000000"); the token goes to curl on
+  stdin, not argv.
+- Convergence read: the refresh-only reconcile is a state-only repair of an address Hetzner says is gone. It is
+  DETECTIVE, not preventive (the state write has happened when the list diff is checked): the diff must be exactly
+  the one address. With the volume already gone (404) refreshing the attachment may drop the volume with it, so the
+  delta {attachment, volume} is accepted for that one case and the volume address is queued too.
+- Wipe evidence poll: 20 minutes of wall clock, capped at JOB_START+1800 s (fifteen minutes before the job's own
+  45-minute timeout; JOB_START is stamped after checkout and credentials), hot window only (--no-archive); a query error is printed with its rc and the first 300 bytes of stderr.
+  Every Better Stack-derived string the poll and the destroy precondition print passes inngest_backstop_clean
+  (the live-store gate prints two probe fields mid-line, escaped by @tsv).
+- Teardown: `enabled=false` deletes any SUBSET of exactly the two wipe addresses; the gate allows nothing else.
+  Teardown skips the live-store gate and the untargeted plan (a leaked wipe host must always be cleanable).
+
 ## apply/Measure the apex origin (ADR-194 Hypothesis Z)
 
 Tunnel ingress origin verification (#6594 / ADR-114 I2).
@@ -682,7 +828,7 @@ always distinct -- a token typed for a birth cannot authorize a destroy.
 **What actually gates each target.**
 
 - `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
-  and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
+  and `inngest-backstop-retire` (converted from `inngest-volume-recut` by #8285) carry an `environment:` with a REVIEWER. The reviewer click
   is the human authorization on those paths.
   *(Note, 2026-10-01, #6604 PR B #9348: on that PR's merge the `workspaces-luks-recut` job is
   hard-retired -- its first step exits 1 before any credential is loaded -- and Terraform
