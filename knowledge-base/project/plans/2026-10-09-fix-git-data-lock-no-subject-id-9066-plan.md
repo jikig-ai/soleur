@@ -10,6 +10,21 @@ requires_cpo_signoff: true
 
 # fix: git-data lock carries no subject id; pin the property; set the plaintext-volume retention end (#9066)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09 (after plan-review: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow; CLO and CPO consults)
+**Agents used:** learnings-researcher, CLO, CPO, five plan-review seats; deepen gates 4.6-4.12 run inline (no 40-agent fan-out: constraint "targeted, contended box").
+
+### Key Improvements
+1. Premise corrected with evidence: the constant-name lock is already on main (#9226) and its rung-2 evidence hash is current (#9254) — no bound-file edit.
+2. Guard redesigned around a pure predicate with a committed negative control, so the mutation evidence is CI-enforced rather than pasted; arms made per-suite.
+3. AC1 hardened (a failed bound-files call can no longer read as a pass); ADR wording aligned with D2 (the Hetzner delete is the end event, no zeroing write); post-merge chain and slip rule made explicit; C4 edit and issue comment cut.
+
+### New Considerations Discovered
+- The wipe PR (#6897) has no implementation on main, so 2026-10-22 is a target; the ledger lint hard-fails CI after that date.
+- Running host serves pre-#9226 wrappers until the next replace; the runbook step (d) text needs a qualifier.
+- Deepen gate results: 4.6 pass (filled, `single-user incident`); 4.7 pass (5 fields, probe `grep -c purge.count=` prints 1); 4.8 pass (no PAT shapes); 4.10 pass (section added); 4.11 pass (`lint-guard-contract.py` green, assembly structural); 4.12 pass (one unfenced Scope Check, all rows compliant); cited rule ids and PR/issue numbers verified live.
+
 Spec lacks valid `lane:` (no spec.md for this branch) — defaulted to cross-domain (fail-closed).
 
 ## Overview
@@ -189,7 +204,7 @@ PR body: `Refs #9066`, `Refs #5914`, `Refs #8211`, `Refs #9377`, `Refs #8609` �
 
 ### ADR
 
-Amend ADR-239 (`## Amendment 2026-10-09 — plaintext-volume retention end and lock-name status (#9066)`) via `soleur:architecture`: decision = the plaintext volume's residue is bounded by destruction of `hcloud_volume.git_data` (DL-2 wipe, #6897), target 2026-10-22, slip re-opens ADR + ledger + CLO. The amendment also says plainly that the wipe body was deleted from `git-data-cutover.sh` in #8189 (the wipe is a future hash-bound PR with its own rung-2 rehearsal), so the 2026-10-22 target is a target, and lists the three states the 2026-10-24 CLO re-ruling needs as input: wipe done (Hetzner delete evidence), wipe slipped, or flip slipped (so the wipe is still gated by the post-flip soak and the `plaintext_residue`/#8571 block). Alternatives considered (add to the ADR's existing table): purge in place by mounting (rejected — violates D2 "never mounted"); a standalone dated purge (rejected — requires the writable mount); extend the date silently (rejected — storage limitation; ledger `expires_on_not_extended` precedent).
+Amend ADR-239 (`## Amendment 2026-10-09 — plaintext-volume retention end and lock-name status (#9066)`) via `soleur:architecture`: decision = the plaintext volume's residue is bounded by destruction of `hcloud_volume.git_data` (DL-2 wipe, #6897), target 2026-10-22, slip re-opens ADR + ledger + CLO. The amendment also says plainly that the wipe body was deleted from `git-data-cutover.sh` in #8189's PR (the wipe is a future hash-bound PR with its own rung-2 rehearsal), so the 2026-10-22 target is a target, and lists the three states the 2026-10-24 CLO re-ruling needs as input: wipe done (Hetzner delete evidence), wipe slipped, or flip slipped (so the wipe is still gated by the post-flip soak and the `plaintext_residue`/#8571 block). Alternatives considered (add to the ADR's existing table): purge in place by mounting (rejected — violates D2 "never mounted"); a standalone dated purge (rejected — requires the writable mount); extend the date silently (rejected — storage limitation; ledger `expires_on_not_extended` precedent).
 
 ### C4 views
 
@@ -254,7 +269,24 @@ Triggers: (b) brand-survival `single-user incident` declared. Surface: infra tes
 
 ## Encryption Posture
 
-Skipped: no persistent store or cross-component connection is introduced; the one store in scope (`hcloud_volume.git_data`) already carries its plaintext-exception row (`tracking_issue #6897`, `expires_on 2026-10-22`) in `scripts/encryption-posture-ledger.json`, which this PR does not edit.
+No new store and no new connection. The one store in scope is existing and already ledgered; this PR restates its posture and edits no `.tf`, cloud-init or ledger file.
+
+```yaml
+at_rest:
+  - store: hcloud_volume.git_data   # the retained plaintext ext4 volume
+    mechanism: plaintext-exception
+    evidence: "scripts/encryption-posture-ledger.json, store hcloud_volume.git_data (format = ext4, no LUKS apparatus); never mounted after boot, read once per instance through a kernel-read-only dm snapshot (ADR-239 D2)"
+    defends_against: "nothing at the volume layer; the volume is detached from serving and holds only name-only legacy lock residue"
+    does_not_defend: "a seized or snapshotted disk exposes any data still resident on this volume, including the legacy .<id>.init.lock names (auth.users.id)"
+    disclosed_as: not-publicly-claimed
+    live_verification: "unavailable: Hetzner snapshots of the volume are unmeasured (Art. 30 PA-36 (f) already says so); the boot's plaintext_empty count covers entries, not freed blocks"
+in_transit: []   # no new connection
+exception:
+  justification: "retained plaintext rollback backstop pending the DL-2 wipe (#6897); residue bounded by destruction of the volume"
+  tracking_issue: "#6897"
+  reevaluate_when: "the DL-2 wipe's Hetzner volume delete is recorded, or 2026-10-22 passes (slip rule: re-open ADR-239, the ledger and the CLO)"
+  expires_on: "2026-10-22"
+```
 
 ## Open Code-Review Overlap
 
