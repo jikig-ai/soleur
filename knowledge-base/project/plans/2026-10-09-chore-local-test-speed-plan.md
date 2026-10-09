@@ -69,13 +69,20 @@ Issue #9763: local `ship` Phase 4 battery ran >25 min on PR #9751 because `--aff
 
 ## Guard Contract
 
-**Assembly.** `ALWAYS_ON_SUITES` (≤10 s committed weight) + `CI_HEAVY_SUITES` (the rest) + consumed edges + `--affected` vs CI/`: --full` mode gates = the local fast tier. Removing any conjunct breaks it: no split (status quo, 25 min), no edge fallback (a heavy suite never runs locally even when its subject changes — coverage gap), no CI arm (the gate silently shrinks), no budget lint (the tier regrows unnoticed).
+### Guard 1 — fast-tier budget lint (`scripts/test-all-fast-tier-budget`)
 
-**Chokepoint.** `scripts/lib/test-affected-paths.sh` list membership + `test-all.sh` mode predicate — every local run passes through `--affected` selection.
+**Property.** The local always-on tier cannot silently regrow: every `ALWAYS_ON_SUITES` label has committed weight ≤ `LOCAL_FAST_CAP_MS` (10 s) and the tier's Σ committed weight ≤ `LOCAL_FAST_TOTAL_CAP_MS` (300 s), and every suite name in either list stays registered (a heavy suite deleted from both lists reads as drift, not a pass).
 
-**Instrumentation.** `AFFECTED_SUMMARY` epilogue counts `always_on` vs `ci_tier` declines; the budget lint measures the committed-weight sum directly.
+**Assembly.** `ALWAYS_ON_SUITES` (≤10 s committed weight) + `CI_HEAVY_SUITES` (the 29 heavier labels) + own-file / consumed-edge fallback + `--affected` vs CI/`--full` mode predicate + this lint's census over both lists. Removing any conjunct breaks it: no split (status quo ~25 min), no edge fallback (heavy suite never runs locally when its subject changes — coverage gap), no CI arm (the merge gate silently shrinks), no budget lint (the tier regrows unnoticed). Chokepoint: `scripts/lib/test-affected-paths.sh` list membership and `test-all.sh`'s selection predicate — every local run passes through `--affected` selection.
 
-**Mutation matrix.** M1 move a heavy suite back into ALWAYS_ON → budget lint reds. M2 raise LOCAL_FAST_CAP_MS → budget lint reds. M3 delete CI_HEAVY_SUITES → selection drift pin reds. M4 remove the `[skip] (ci-tier)` epilogue → drift pin reds. M5 demote ship docs only (no list split) → budget lint still reds on the 29-suite sum. M6 benign — add a new ≤5 s suite to ALWAYS_ON → budget lint stays green (ratchet tolerates growth under the cap).
+**Mutation matrix.** Each row MUST drive the lint red (except the labelled must-PASS row); written from the design, pre-implementation:
+
+- M1 — a >10 s suite moved back into `ALWAYS_ON_SUITES` → per-suite assertion reds.
+- M2 — `LOCAL_FAST_CAP_MS` raised → the cap value pin reds.
+- M3 — a label deleted from both lists → census drift assertion reds.
+- M4 — the `[skip] (ci-tier)` epilogue class removed → epilogue drift pin reds.
+- M5 — ship docs demoted without the list split → the 29-suite sum still violates the total cap.
+- M6 — **must-PASS** — a new ≤5 s suite added to `ALWAYS_ON_SUITES` → lint stays green (the ratchet tolerates growth under the cap).
 
 ## Observability
 
