@@ -48,3 +48,12 @@ git-data decision record. `git diff --check` over the incoming range reported
 it; the one-line formatting correction preserves the record's content. Check
 the merged range, not only the uncommitted diff, before asserting whitespace
 passed after a clean merge.
+
+A later RLS warning investigation guessed `rls-fuzz.yml` and a root migration
+script glob; both reads failed visibly. Tracked-file discovery resolved the
+workflow to `.github/workflows/rls-authz-fuzz.yml` and the runner to
+`apps/web-platform/scripts/run-migrations.sh`. Discover workflow and script
+paths before constructing batched reads, just as for knowledge-base files.
+The workflow deliberately uses filename tracking for duplicate integer
+prefixes; the warning does not mean a migration was skipped. Its production
+catalog comparison remains separately gated and was skipped in this run.
