@@ -24,8 +24,9 @@
 #   census    across the infra .tf/.sh/.yml/.tmpl files: the deny loop header appears only in its
 #             three sanctioned copies, and nothing writes /etc/hosts or cloud-init's hosts template
 #   probe     the rehearsal's dockerd deny probe (#9799 item 5), static over zot-image-rehearse.sh: one pull,
-#             inside assert_dockerd_denied, after a >= 6 s sleep, output kept, the call after the deny and ending in
-#             `|| die`
+#             inside assert_dockerd_denied, output kept, the call after the deny and followed by `|| die`; and the
+#             extracted function is DRIVEN against shimmed sudo/docker/sleep/timeout (a refused pull returns 0 after a
+#             >= 6 s sleep, a successful or timed-out pull returns 1)
 #
 # The render/console half needs terraform: SKIP locally without it, FAIL CLOSED under CI.
 # Every fixture is synthesized (cq-test-fixtures-synthesized-only).
@@ -387,8 +388,48 @@ chk_probe() {  # <root>: the rehearsal's dockerd deny probe (#9799 item 5); stat
   call_ln=$(grep -E '^[0-9]+:assert_dockerd_denied ' <<<"$code" | head -n 1); call_ln=${call_ln%%:*}
   [[ "$deny_ln" =~ ^[0-9]+$ && "$call_ln" =~ ^[0-9]+$ ]] && (( deny_ln < call_ln )) \
     || { echo "the assert_dockerd_denied call (line '${call_ln}') does not come after the deny application (line '${deny_ln}')"; return 1; }
-  sed -n "${call_ln},$((call_ln + 1))p" "$f" | grep -qE '\|\| die "' \
-    || { echo "the assert_dockerd_denied call (line ${call_ln}) no longer ends in '|| die': a successful pull would not fail the rehearsal"; return 1; }
+  [[ "$(grep -c '^[0-9]*:assert_dockerd_denied() {' <<<"$code" || true)" == 1 ]] \
+    || { echo "assert_dockerd_denied must be defined exactly once (a later redefinition would shadow the probe)"; return 1; }
+  grep -qF "${call_ln}:"'assert_dockerd_denied /etc/hosts "ghcr.io/project-zot/zot-linux-amd64@sha256:$D" \' <<<"$code" \
+    || { echo "the assert_dockerd_denied call (line ${call_ln}) no longer probes the upstream ref ghcr.io/project-zot/zot-linux-amd64@sha256:\$D on /etc/hosts"; return 1; }
+  grep -qE "^$((call_ln + 1)):[[:space:]]+\|\| die \"dockerd could still pull from ghcr\.io after the deny" <<<"$code" \
+    || { echo "the line after the assert_dockerd_denied call is not '|| die \"dockerd could still pull ...\"': a successful pull would not fail the rehearsal"; return 1; }
+  chk_probe_run "$1"
+}
+chk_probe_run() {  # <root>: drive the extracted assert_dockerd_denied against shimmed sudo/docker/sleep/timeout
+  local f="$1/zot-image-rehearse.sh" t mode want rc log first_sleep first_pull slept
+  [[ -s "$f" ]] || { echo "zot-image-rehearse.sh is missing or empty"; return 1; }
+  t=$(mktemp -d "$WORK/probe-run.XXXXXX") || { echo "could not create the probe scratch dir"; return 1; }
+  assert_fixture_dir "$t"; mkdir "$t/bin"
+  { echo 'dk() { sudo docker "$@"; }'; sed -n '/^HOSTS_CACHE_WAIT_S=/p' "$f"; sed -n '/^assert_dockerd_denied() {/,/^}/p' "$f"; } > "$t/fn.sh"
+  printf '#!/bin/sh\nexec "$@"\n' > "$t/bin/sudo"
+  printf '#!/bin/sh\necho "sleep $1" >> "$SHIMLOG"\n' > "$t/bin/sleep"
+  printf '#!/bin/sh\nshift\n[ "$DOCKER_PULL" = timeout ] && exit 124\nexec "$@"\n' > "$t/bin/timeout"
+  cat > "$t/bin/docker" <<'SHIM'
+#!/bin/sh
+echo "docker $*" >> "$SHIMLOG"
+case "$1" in
+  pull) if [ "$DOCKER_PULL" = ok ]; then echo "Status: Downloaded newer image"; exit 0; fi
+        echo "Error: dial tcp 0.0.0.0:443: connect: connection refused"; exit 1 ;;
+  image) exit 1 ;;
+  version) echo 28.0.4 ;;
+  info) echo "http= https=" ;;
+esac
+SHIM
+  chmod +x "$t/bin/"*
+  for mode in refused:0 ok:1 timeout:1; do
+    want=${mode#*:}; mode=${mode%%:*}; log="$t/log-$mode"; : > "$log"
+    SHIMLOG="$log" DOCKER_PULL="$mode" PATH="$t/bin:$PATH" bash --noprofile --norc -c \
+      'source "$1"; assert_dockerd_denied /etc/hosts ghcr.io/x@sha256:abc' _ "$t/fn.sh" >/dev/null 2>&1
+    rc=$?
+    [[ "$rc" == "$want" ]] || { echo "assert_dockerd_denied returned $rc for a '$mode' pull, want $want (a successful or timed-out pull must fail the rehearsal)"; rm -rf "$t"; return 1; }
+    [[ "$mode" == timeout ]] && continue
+    first_sleep=$(grep -n '^sleep ' "$log" | head -n 1); first_pull=$(grep -n '^docker pull ' "$log" | head -n 1)
+    slept=${first_sleep#*:sleep }
+    [[ -n "$first_sleep" && -n "$first_pull" && "${first_sleep%%:*}" -lt "${first_pull%%:*}" && "$slept" =~ ^[0-9]+$ ]] && (( slept >= 6 )) \
+      || { echo "in a '$mode' run the probe did not sleep >= 6 s before the docker pull (sleep: '${first_sleep}', pull: '${first_pull}')"; rm -rf "$t"; return 1; }
+  done
+  rm -rf "$t"
 }
 CHECKS="nonempty parity order exec agree wiring census probe"
 
@@ -553,6 +594,18 @@ sub $ZR $'step "fetch + verify + load the published asset"' $'dk pull "ghcr.io/x
 row "33 a second pull, spelled dk pull, outside the probe (invisible to a literal 'docker pull' count)" probe $ZR
 sub $ZR '2>&1)" && rc=0 || rc=$?' '2>&1)" && rc=0 || rc=0'
 row "34 the pull status is forced to success, so a refused pull and a successful one read alike" probe $ZR
+sub $ZR $'  fi\n  echo "dockerd pulled' $'  fi\n  return 0\n  echo "dockerd pulled'
+row "35 the success path returns 0, so a successful post-deny pull passes the rehearsal" probe $ZR
+sub $ZR 'if (( rc != 0 )); then' 'if (( rc >= 0 )); then'
+row "36 the pull-status test is inverted, so every pull reads as refused" probe $ZR
+sub $ZR 'if (( rc == 124 )); then' 'if (( rc == 999 )); then'
+row "37 the timeout branch is dead, so a timed-out pull reads as a denial" probe $ZR
+sub $ZR '  sleep "$HOSTS_CACHE_WAIT_S"' '  if false; then sleep "$HOSTS_CACHE_WAIT_S"; fi'
+row "38 the wait sits in a dead branch (text intact, nothing waits)" probe $ZR
+sub $ZR 'sha256:$D" \' 'sha256:$D-none" \'
+row "39 the probe targets a ref that cannot exist, so the pull fails whether or not the deny holds" probe $ZR
+sub $ZR $'  || die "dockerd could still pull' $'  || true  # was: || die "dockerd could still pull'
+row "40 the die is spoofed by a trailing comment" probe $ZR
 
 # Harness row (must PASS): copy A re-indented under its `- |` parses to the same entry.
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "re-indent anchor missing"
@@ -583,10 +636,10 @@ if [[ "$SURV_FAILS" == 1 ]]; then pass "harness: row() reports a mutation that n
 else fail "harness: row() did not count a surviving mutation (FAIL count '$SURV_FAILS', want 1) -- the whole battery is unfalsifiable"; fi
 sandbox
 
-# Floor at the MEASURED count (8 live checks + control + 34 rows + 3 harness rows = 46; was 29 before
+# Floor at the MEASURED count (8 live checks + control + 40 rows + 3 harness rows = 52; was 29 before
 # #9390 added rows 20-27 and the row() honesty control). Reported with printf + exit DIRECTLY, never
 # through pass()/fail() (the floor polices them).
-MIN_ASSERTIONS=46
+MIN_ASSERTIONS=52
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
