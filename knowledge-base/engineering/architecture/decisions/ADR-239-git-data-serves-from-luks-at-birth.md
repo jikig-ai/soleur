@@ -348,34 +348,49 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
 
 ## Amendment 2026-10-09 — plaintext-volume retention end and lock-name status (#9066)
 
-- **The lock name carries no subject id (requirement 1): already true on main; no payload change.** Since
-  PR #9226 both wrappers open one shared `${REPO_ROOT}/.init.lock`, so a completed erasure and a "not present"
-  erasure leave no file named for the user. The rung-2 boot evidence for that exact payload is current
+- **The lock name carries no subject id: already true on main; no payload change.** Since PR #9226 both
+  wrappers open one shared `${REPO_ROOT}/.init.lock`, so a completed erasure and a "not present" erasure leave
+  no file named for the user. The rung-2 boot evidence for that exact payload is current
   (`RUNG2_TEMPLATE_SHA256` equals the hash of the tree), so this amendment edits no hash-bound file, and the
   two-PR payload sequence has already run for this change. A new check in the wrappers' unbound test files pins
-  the property: after an erasure or a provision, no entry under the repo root other than `<id>.git` carries the
-  workspace id in its name or its content.
-- **What is not yet true: the running host.** `user_data` is ForceNew, so the running host serves the pre-#9226
-  wrappers, which still write `.<id>.init.lock` onto the LUKS-served store, until the next
-  `git_data_host_replace`. The in-freeze purge (2026-09-30 amendment) closes the served-store limb. Neither the
-  replace nor the purge is taken by this amendment.
-- **Retention end for the plaintext volume (requirement 3).** The residue on `hcloud_volume.git_data`
-  (name-only `.<id>.init.lock` files left by the pre-#9226 wrappers) ends when that volume is destroyed by the
-  DL-2 destructive wipe (#6897). The Hetzner volume delete is the end event and is recorded in the wipe PR's
-  evidence. D2 ("never writable") holds until the volume is destroyed, so there is no zeroing write and no purge
-  in place: the volume is never mounted to remove the files. **Target: no later than 2026-10-22**, the ledger
-  `expires_on` for this store and two days before the 2026-10-24 re-ruling date. Hetzner-side snapshot
-  retention of the volume remains unmeasured (Art. 30 PA-36 (f)), so this records an end for the device and
-  claims nothing about copies of it.
-- **The date is a target, not a fact.** The wipe body was deleted from `git-data-cutover.sh` in #8189 and does
-  not exist on main (the script says the wipe remains a later PR). It will be a hash-bound PR with a rung-2
-  rehearsal of its own (see the Consequences bullet on the wipe branch), and it is gated by the flip chain
-  (#8573, #8609, #8209 and a fresh replace). **If the date passes with the volume present, the amendment is
-  re-opened together with the ledger exception and the CLO; the date is not extended quietly.** The ledger lint
-  warns inside 14 days of `expires_on` and fails CI after it.
-- **Inputs for the 2026-10-24 CLO re-ruling on DPD §10.3(b).** One of three states: the wipe is done (Hetzner
-  delete evidence); the wipe slipped (the volume still exists); or the flip slipped, so the wipe, which is
-  gated behind the flip, has not been reached.
+  the property for the repo root: after an erasure, a provision or a refusal, no entry under the repo root
+  other than `<id>.git` carries the workspace id in its name, its content or a symlink target.
+- **What was already written is a different question.** `git_data_host_replace` ran on 2026-10-08 (workflow
+  run 37846545572, head `d0b5d2e35b`, which contains #9226), so erasures since then are expected to write only
+  the shared lock; that was read from the run and its head, not from the host. Both volumes were preserved
+  across that replace. Per-id `.<id>.init.lock` files from earlier erasures therefore remain where they were
+  written: on the retained plaintext volume for erasures before PR #8564 (host birth, 2026-09-14), and on the
+  LUKS-served store for erasures after #8564 and before the replace. No count sees them (the counters skip
+  `.*.init.lock`), so whether any exist is not measured. The in-freeze purge (2026-09-30 amendment) will remove
+  the served-store ones when a freeze window runs; none has run, and neither the purge nor any other removal is
+  taken by this amendment. That amendment's binding of the residue to the freeze window is narrowed here to the
+  served store; the plaintext-volume limb is separate and ends as below.
+- **Retention end for the plaintext volume.** The residue on `hcloud_volume.git_data` ends when that volume is
+  destroyed by the DL-2 destructive wipe (#6897). The wipe PR must include the destroy of the volume itself:
+  emptying `git_data_volume_id` alone leaves the volume, and the Hetzner volume delete, recorded in that PR's
+  evidence, is the end event. D2 ("never writable") holds until the volume is destroyed, so there is no
+  zeroing write and no purge in place: the volume is never mounted to remove the files. **Target: 2026-10-22**,
+  the ledger `expires_on` for this store and two days before the 2026-10-24 date in the issue. Hetzner-side
+  snapshot retention of the volume remains unmeasured (Art. 30 PA-36 (f)), so this records an end for the
+  device and claims nothing about copies of it.
+- **A second id-bearing file the repo-root check cannot see: the gc cursor.** `git-data-gc.sh` writes the
+  basename of the last repo it completed (`<id>.git`) to `.gc-cursor` at the mount root, one level above the
+  repo root, and a later run that completes a repo overwrites it. The timer is weekly (Sunday 03:20), so after
+  an erasure the erased id can remain there for up to a week, and indefinitely if no repo remains on the store
+  to be completed. Neither the new check nor the in-freeze purge covers it. Closing it changes a hash-bound
+  payload (`git-data-gc.sh`, or the remove wrapper clearing a matching cursor), so it needs the rung-2
+  two-PR sequence and is not part of this change; it is recorded on #9066.
+- **The date is a target, not a fact.** The wipe body was deleted from `git-data-cutover.sh` in #8189 (landed
+  via PR #8206) and does not exist on main. It will be a hash-bound PR with a rung-2 rehearsal of its own (see
+  the Consequences bullet on the wipe branch), and it is gated by the flip chain (#8573, #8609, #8209 and a fresh
+  replace). **If the date will pass with the volume present, this amendment is re-opened together with the ledger
+  exception and the CLO before 2026-10-23, the first day the ledger lint fails; the date is not extended
+  quietly.** Until the volume is deleted, the files remain readable to anyone holding the volume or a snapshot of
+  it. The lint warns inside 14 days of `expires_on` and fails CI after it.
+- **Inputs for the CLO re-ruling.** The issue sets the trigger: if the fix and the served-store purge slip past
+  2026-10-24, the CLO re-rules on the DPD §10.3(b) disclosure. The re-ruling needs the state of three things: the
+  wipe (done, with Hetzner delete evidence, or slipped), the served-store purge (run, with its count, or not),
+  and the flip (slipped, so the wipe, which is gated behind it, has not been reached).
 
 Alternatives considered and rejected: purging the files in place by mounting the volume (violates D2); a
 standalone dated purge (needs the same writable mount); extending the date without re-opening this ADR

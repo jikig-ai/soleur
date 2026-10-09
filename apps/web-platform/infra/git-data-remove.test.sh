@@ -374,7 +374,10 @@ subject_id_leaks() { # subject_id_leaks <root> <id> -> offenders on stdout; empt
   assert_fixture_dir "$root"
   case "$id" in "" | *[!A-Za-z0-9._-]*) printf 'FATAL: bad id token\n' >&2; exit 2 ;; esac
   find "$root" -mindepth 1 -name "*${id}*" ! -path "${root}/${id}.git" ! -path "${root}/${id}.git/*"
-  grep -rlF --exclude-dir="${id}.git" -- "$id" "$root" 2>/dev/null
+  # A symlink whose TARGET text names the id (find -name sees only the link's own name; grep -r skips links).
+  find "$root" -mindepth 1 -type l -lname "*${id}*" ! -path "${root}/${id}.git/*"
+  # stderr is merged on purpose: an entry grep cannot read is reported as an offender, never counted clean.
+  grep -rlF --exclude-dir="${id}.git" -- "$id" "$root" 2>&1
   return 0
 }
 # Fixture roots shaped like the mutations the predicate must catch (M1-M3) and the clean shape it
@@ -386,6 +389,9 @@ ctl_root() { # ctl_root <kind> -> a populated fixture root on stdout
     m1) : > "${r}/.${UID_TOK}.init.lock" ;;                      # per-id lock NAME
     m2) : > "${r}/.init.lock"; : > "${r}/.${UID_TOK}.seen" ;;    # compliant first member, id in a second
     m3) printf '%s\n' "$UID_TOK" > "${r}/.init.lock" ;;          # constant name, id in the CONTENT
+    m4) mkdir "${r}/.meta"; : > "${r}/.meta/${UID_TOK}" ;;     # id in a NESTED name
+    m5) mkdir "${r}/.meta"; printf '%s\n' "$UID_TOK" > "${r}/.meta/x" ;;  # id in NESTED content
+    m6) ln -s "${UID_TOK}.git" "${r}/.latest" ;;                 # symlink whose TARGET names the id
     clean)
       : > "${r}/.init.lock"; : > "${r}/.boot-probe-0.init.lock"; mkdir "${r}/lost+found"
       mkdir "${r}/uid-other.git"; : > "${r}/uid-other.git/HEAD"; : > "${r}/.uid-other.init.lock"
@@ -396,21 +402,22 @@ ctl_root() { # ctl_root <kind> -> a populated fixture root on stdout
 # Committed negative control: the predicate flags each mutation shape and passes the clean one, so
 # a predicate that stopped looking at names (M1, M2) or at content (M3) reddens here without any
 # wrapper run.
-for kind in m1 m2 m3; do
-  r="$(ctl_root "$kind")"
-  leaks="$(subject_id_leaks "$r" "$UID_TOK")"
+for kind in m1 m2 m3 m4 m5 m6; do
+  r="$(ctl_root "$kind")" || exit 2
+  leaks="$(subject_id_leaks "$r" "$UID_TOK")" || exit 2
   if [ -n "$leaks" ]; then pass; else fail "9066 control $kind: the predicate did not flag the mutation shape"; fi
   drop_fixture "$r"
 done
-r="$(ctl_root clean)"
-leaks="$(subject_id_leaks "$r" "$UID_TOK")"
+r="$(ctl_root clean)" || exit 2
+leaks="$(subject_id_leaks "$r" "$UID_TOK")" || exit 2
 if [ -z "$leaks" ]; then pass; else fail "9066 control clean: the predicate flagged an unrelated entry ($leaks)"; fi
 drop_fixture "$r"
 # Arm: erase-present — the repo goes, the shared lock stays (anti-vacuity), nothing carries the id.
 root=$(fresh_root); make_repo "$root" "$UID_TOK"
 rc=$(run_remove "$root" "$UID_TOK")
-leaks="$(subject_id_leaks "$root" "$UID_TOK")"
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
 if [ "$rc" = "0" ]; then pass; else fail "9066 erase-present: expected 0, got $rc ($(head -c 200 "$ERR"))"; fi
+if [ ! -e "${root}/${UID_TOK}.git" ]; then pass; else fail "9066 erase-present: the repo is still present — the arm never reached the erase"; fi
 if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 erase-present: the shared .init.lock is missing — the arm proves nothing"; fi
 if [ -z "$leaks" ]; then pass; else fail "9066 erase-present: the subject id survives on the store: $leaks"; fi
 drop_fixture "$root"
@@ -418,10 +425,21 @@ drop_fixture "$root"
 # user, so it must leave no id-bearing file either.
 root=$(fresh_root)
 rc=$(run_remove "$root" "$UID_TOK")
-leaks="$(subject_id_leaks "$root" "$UID_TOK")"
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
 if [ "$rc" = "0" ]; then pass; else fail "9066 erase-absent: expected 0, got $rc ($(head -c 200 "$ERR"))"; fi
+if grep -qF "not present (no-op)" "$ERR"; then pass; else fail "9066 erase-absent: the wrapper did not report the not-present no-op ($(head -c 200 "$ERR"))"; fi
 if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 erase-absent: the shared .init.lock is missing — the arm proves nothing"; fi
 if [ -z "$leaks" ]; then pass; else fail "9066 erase-absent: the subject id survives on the store: $leaks"; fi
+drop_fixture "$root"
+# Arm: refused erase (cutover freeze) — a refusal path echoes the id to stderr only and must write nothing.
+root=$(fresh_root); make_repo "$root" "$UID_TOK"
+: > "${root}/.frozen"
+rc=$(env -i PATH="$SPATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+  GIT_DATA_STORE_DEVICE="$STORE_SRC" GIT_DATA_STORE_VERIFIED="$SEAMS/marker" \
+  GIT_DATA_CUTOVER_FREEZE="${root}/.frozen" SSH_ORIGINAL_COMMAND="$UID_TOK" bash "$WRAPPER" >/dev/null 2>"$ERR"; echo $?)
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
+if [ "$rc" != "0" ] && grep -q 'frozen for cutover' "$ERR"; then pass; else fail "9066 refused-erase: expected the freeze refusal, got rc=$rc ($(head -c 200 "$ERR"))"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 refused-erase: the subject id was written on a refusal path: $leaks"; fi
 drop_fixture "$root"
 
 rm -f "$ERR"
@@ -431,11 +449,11 @@ rm -f "$ERR"
 #     than incremented by memory (T1 2, T2 1, T3 8, T4 2, T5 2 = 15 before). 29 -> 37 at
 #     review: T10 +1 (message pin), T12 3, T13 2, T14 3. 38 -> 66 with the C1 store rows
 #     (#8211): C1a 3, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3, C1g 3, C1h 2, C1i 2 = 28 (measured:
-#     66 ran). 66 -> 76 with the #9066 subject-id guard: control 4 (m1, m2, m3, clean), erase-present
-#     3, erase-absent 3 = 10 (measured: 76 ran). ---
+#     66 ran). 66 -> 83 with the #9066 subject-id guard: control 7 (m1-m6, clean), erase-present 4,
+#     erase-absent 4, refused-erase 2 = 17 (measured: 83 ran). ---
 total=$((passes + fails))
-if [ "$total" -lt 76 ]; then
-  echo "FAIL: ran only ${total} assertions (<76) — suite did not execute fully" >&2
+if [ "$total" -lt 83 ]; then
+  echo "FAIL: ran only ${total} assertions (<83) — suite did not execute fully" >&2
   exit 1
 fi
 
