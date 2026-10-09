@@ -92,7 +92,7 @@ docker run --rm \
     # short-circuits (no point re-verifying the inner arm when the CLI
     # cannot launch inside the wrap); canary_infra_error continues —
     # infra is non-signal here, same as in runReplay.
-    # bun's stderr flows to the script's own stderr → the CI job log (a crash
+    # bun stderr flows to this script stderr → the CI job log (a crash
     # surfaces there; the verdict channel stays JSON-only on stdout). A bun
     # crash under `set -e` must NOT leave the gate reading the prior line —
     # every exit path ends with a JSON verdict.

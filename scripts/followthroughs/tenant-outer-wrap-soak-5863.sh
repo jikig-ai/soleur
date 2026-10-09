@@ -37,8 +37,8 @@ set -uo pipefail
 # real credential; tracing would echo it into whatever captures the log.
 case "$-" in
   *x*)
-    if [ -n "${WEBHOOK_DEPLOY_SECRET:+x}${CF_ACCESS_CLIENT_ID:+x}${CF_ACCESS_CLIENT_SECRET:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (WEBHOOK_DEPLOY_SECRET/CF_ACCESS_*). Unset them to trace safely (see #7797).\n' >&2
+    if [ -n "${WEBHOOK_DEPLOY_SECRET:+x}${CF_ACCESS_CLIENT_ID:+x}${CF_ACCESS_CLIENT_SECRET:+x}${HMAC_KEY:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (WEBHOOK_DEPLOY_SECRET/CF_ACCESS_*/HMAC_KEY). Unset them to trace safely (see #7797).\n' >&2
       exit 78
     fi
     ;;
