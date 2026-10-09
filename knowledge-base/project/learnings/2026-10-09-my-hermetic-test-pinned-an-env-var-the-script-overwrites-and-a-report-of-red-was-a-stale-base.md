@@ -57,6 +57,8 @@ style, constant, extension, key order) and add one mutant per shape.
 11. **Contract extractor was literal-only** (found by review). Recovery: object-literal scan plus the token-count and caller invariants. **Prevention:** one
     mutant per syntactic shape when a test claims a derived set.
 
+12. **A routed one-paragraph bullet pushed `plugins/soleur/skills/work/SKILL.md` 986 bytes over its lifecycle ceiling**, red on the required `rule-body-lint` check. Recovery: reverted the bullet; the insight lives here. **Prevention:** before routing a bullet into a lifecycle SKILL.md, run `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`; `work/SKILL.md` has almost no headroom.
+
 ## Tags
 category: workflow-issues
 module: scripts/learning-retrieval-bench, apps/web-platform/infra/sentry
