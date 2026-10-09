@@ -66,6 +66,26 @@ for l in "${always[@]}"; do
 done
 
 cases=$((cases + 1))
+# Bun-group registrations carry no suite-durations.tsv row (the manifest's population is the
+# scripts leg only) — the exact set is pinned so a NEW unmeasured label still reds and a stale
+# entry (a label that gained a row) is caught too.
+KNOWN_UNMEASURED_ALWAYS_ON=("blog-link-validation" "scripts/frontmatter-strip-parity")
+_unexp_missing=(); for l in "${missing[@]}"; do
+  _known=0; for k in "${KNOWN_UNMEASURED_ALWAYS_ON[@]}"; do [[ "$l" == "$k" ]] && { _known=1; break; }; done
+  (( _known == 0 )) && _unexp_missing+=("$l")
+done
+_stale_allow=(); for k in "${KNOWN_UNMEASURED_ALWAYS_ON[@]}"; do
+  [[ -n "${weight[$k]+x}" ]] && _stale_allow+=("$k")
+done
+if (( ${#_unexp_missing[@]} == 0 && ${#_stale_allow[@]} == 0 )); then
+  pass "weight census: every always-on label has a committed weight or a pinned exception (${#KNOWN_UNMEASURED_ALWAYS_ON[@]})"
+else
+  ((${#_unexp_missing[@]})) && printf '  [FAIL] unaccountable always-on label(s): %s\n' "${_unexp_missing[@]}" >&2
+  ((${#_stale_allow[@]})) && printf '  [FAIL] allowlist drift — now has a weight row: %s\n' "${_stale_allow[@]}" >&2
+  fails=$((fails + 1))
+fi
+
+cases=$((cases + 1))
 if (( ${#over[@]} == 0 )); then pass "per-suite cap: every always-on label <= ${LOCAL_FAST_CAP_MS}ms committed weight"
 else printf '  [FAIL] heavy always-on label(s): %s\n' "${over[@]}" >&2; fails=$((fails + 1)); fi
 
@@ -110,7 +130,7 @@ grep -q "withdrawn-to-edge-selection" "$INDEX" \
 if (( pass_n + fails != cases )); then
   echo "[FATAL] conservation breach: pass_n=$pass_n fails=$fails cases=$cases" >&2; exit 2
 fi
-MIN_ASSERTIONS=8
+MIN_ASSERTIONS=9
 if (( cases < MIN_ASSERTIONS )); then
   echo "[FATAL] anti-vacuity floor: only $cases assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2; exit 2
 fi

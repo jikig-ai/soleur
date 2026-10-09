@@ -26,3 +26,5 @@ Source: `scripts/suite-durations.tsv` committed weights (idle-machine measured, 
 | 18 | plugins/soleur/test/hook-input-classification-mutation.test.sh | 64455 |
 | 19 | tests/scripts/no-tofu-ssh-mutation | 61019 |
 | 20 | scripts/check-web-host-escrow-config | 61002 |
+
+measurement probe line

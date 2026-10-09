@@ -125,10 +125,8 @@ ALWAYS_ON_SUITES=(
   # Verdicts assert properties of the runner itself or of the whole
   # registration set — both invisible to any file-based selection.
   "scripts/test-all-capacity-signal"
-  "scripts/test-all-killed-classification"
   # #8993/#8940's run-path watchdog + durable-log battery — a runner-SUT
   # property suite like its killed-classification sibling.
-  "scripts/test-all-orphan-log-retention"
   "scripts/test-all-webplat-gate"
   # scripts/test-all-affected is NOT here: ADR-262 withdrew it (see AFFECTED_CONSUMED_EDGES). Its
   # verdict is computed on sandbox copies of named files, not on the live tree.
@@ -140,7 +138,6 @@ ALWAYS_ON_SUITES=(
   # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).
   # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
   # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
-  "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
 
   # --- corpus linters: verdict spans a file class scanned wholesale -------------
@@ -151,14 +148,12 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-diagnosis-claims"
   "scripts/lint-dual-lockfile"
   "scripts/lint-encryption-posture"
-  "scripts/lint-gh-argv-arg"
   "scripts/lint-infra-no-human-steps"
   "scripts/lint-legal-mirror-drift-baseline-unit"
   "scripts/lint-legal-registers-unit"
   "scripts/lint-legal-scope-block-placement-unit"
   "scripts/lint-migrated-rule-ids-unit"
   "scripts/lint-shell-capture-exit"
-  "scripts/lint-shell-trace-credential-refusal"
   "scripts/lint-shell-trace-credential-refusal-repo"
   "scripts/lint-supabase-deprecated-endpoints-unit"
   "scripts/lint-workflow-errexit-capture"
@@ -191,7 +186,6 @@ ALWAYS_ON_SUITES=(
   "scripts/ensure-kb-index"
   "plugins/soleur/test/kb-caches-untracked.test.sh"
   # (#8846) census of every tracked inngest probe-row reader over git ls-files.
-  "scripts/lib/inngest-probe-row.test.sh"
   "scripts/marketplace-drift-check"
   "scripts/digest-oracle-guard"
   "scripts/follow-through-closure-guard"
@@ -240,7 +234,6 @@ ALWAYS_ON_SUITES=(
   # --- the never-gated web-platform arm -----------------------------------------
   # repo-wide's subject is the repository by construction (#7498); component
   # runs alongside it by a measured, twice-affirmed decision (#7666 revert).
-  "apps/web-platform [repo-wide+component]"
   # --- re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh) ---------------
   # Each was demoted on one inotify run in PR 1; the committed recorder (verdict `disqualified`:
   # a file test/stat/ls/find operand it cannot resolve or a carried-disqualifier hit, or `uncovered`:
@@ -278,8 +271,6 @@ ALWAYS_ON_SUITES=(
   "scripts/check-tom4-rls-posture"
   "plugins/soleur/test/worktree-manager-atomic-config.test.sh"
   "plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh"
-  "plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh"
-  "tests/scripts/scratch-session"
   # --- Round 4 (section 2 of #9307; measurements and cost in always-on-audit.md, 2026-10-04 addendum). The recorder,
   # now running suites as the invoking user, recorded this suite completely and its read set is the registration corpus
   # itself: no short declaration bounds it, and the knowledge-base tree (read through `git ls-files`, invisible to
@@ -1870,5 +1861,44 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCRIPTS_SHARD_TOTALITY_TEST_SH_PATHS=(
   "scripts/regenerate-shard-manifest.py"
   "scripts/test-all.sh"
   "scripts/lib/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/preflight-check10-suite-integrity (#9763 demotion) — the Check-10
+# regression-suite anti-vacuity floor. Its subject is the four Check-10 suites it guards, the
+# manifest it reads, and the preflight skill whose contract it pins. Self-only derivation would
+# classify unclassified and leak it into every local run.
+AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
+  "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
+  "plugins/soleur/test/preflight-discoverability-test.test.ts"
+  "plugins/soleur/test/observability-schema-parity.test.ts"
+  "plugins/soleur/test/fullsuite-merge-gate.test.ts"
+  "plugins/soleur/test/preflight-founder-check.test.ts"
+  "plugins/soleur/test/fixtures/check10-test-manifest.txt"
+  "plugins/soleur/skills/preflight/SKILL.md"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-shell-trace-credential-refusal (#9763 demotion) — tree-wide *.sh scan for
+# credential-trace refusal shape; scope = the dirs where shell lives.
+AFFECTED_SCRIPTS_LINT_SHELL_TRACE_CREDENTIAL_REFUSAL_PATHS=(
+  "scripts/"
+  "plugins/"
+  "tests/"
+  ".claude/"
+  ".github/"
+  "apps/web-platform/scripts/"
+  "apps/web-platform/infra/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lib/inngest-probe-row.test.sh (#9763 demotion) — Guard 1 censuses every tracked file
+# naming SOLEUR_INNGEST_SERVER_PROBE; scope = the trees that host probe emitters and consumers.
+AFFECTED_SCRIPTS_LIB_INNGEST_PROBE_ROW_TEST_SH_PATHS=(
+  "apps/web-platform/infra/"
+  "apps/web-platform/test/infra/"
+  ".github/workflows/"
+  "plugins/soleur/test/"
+  "scripts/"
   "scripts/lib/test-affected-paths.sh"
 )
