@@ -11,6 +11,24 @@ lane: single-domain
 
 # test-all: cache the affected-derive across local runs
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09
+**Sections enhanced:** Proposed Solution, Technical Considerations, Research Insights, Dependencies & Risks, Implementation Phases/tasks
+**Research agents used:** `Reviewed-Coverage: sequential-fallback` — this harness has no Task/Workflow spawn, so the deepen pass ran sequentially in-session: skill gates 4.4–4.12 (all pass), learnings sweep (4 new learnings applied), verify-the-negative greps, and a self-review across the eng-panel lenses (simplicity / correctness / spec-flow). No parallel panel ran; findings are the author's, not independent reviews.
+
+### Key Improvements
+
+1. Probe census widened from the issue's one named site (`_affected_buf_add`) to all seven `-e`/`-f`/`[[ -d ]]` sites in the derive span, with a derived-set census test row so a later probe site cannot silently weaken invalidation.
+2. Learnings applied: new `.test.sh` arms `lint-trap-tempfile-ownership` + `fixture-relative-assert` ratchets (run by name, don't regenerate baselines); nested-runner rows must `env -u TEST_GROUP` (leak learning); `/usr/bin/time` absent — measure with shell `time`/`EPOCHREALTIME`; never edit the script under a running bench — measure from a copy.
+3. Precedent-diff (§4.4) resolved: cache-file hygiene follows `kb-search-cache.sh` (`mkdir -p` + unconditional `chmod 700` dir / `chmod 600` file, `.soleur/cache/` canonical prefix); the per-record content-keyed file shape diverges from that NDJSON append log deliberately — append logs cannot express per-record invalidation without compaction.
+4. AC1 gained a deterministic leg (`misses=0` on a second consecutive run) so the acceptance is not solely ambient-load wall-clock.
+
+### New Considerations Discovered
+
+- `test-affected-kb-consumers` reports spurious local violations from the generated `knowledge-base/INDEX.md` — the measurements doc must note the workaround (move INDEX.md aside when it reports INDEX rows).
+- The `.soleur/` write surface is invisible to `git status --porcelain` (ignored), so the cache cannot dirty-checkout-trip the runner's own boundary checks.
+
 ## Overview
 
 Every local `--affected` run of `scripts/test-all.sh` pays the affected pre-pass — a per-registration `_affected_classify` derive over ~585 records — before the first suite starts. On the #9763 idle docs arm (4.40 min) the pre-pass is ~2.5 min of it, ~55% of the local fast tier and larger than all 111 always-on suites combined (~1.9 min measured local). The derive is a pure function of enumerable inputs, so its per-record output (class + ordered edge set) can be cached across runs and re-validated cheaply, leaving the diff-vs-edges verdict (`_diff_touches`) to run fresh each time. This plan adds a per-worktree, gitignored, advisory derive cache; the `affected-prepass-bench` selection-identity contract (ADR-242 decision 16) is the acceptance gate.
@@ -50,7 +68,9 @@ A new sourced lib, `scripts/lib/test-affected-derive-cache.sh`, implements a per
 - **Concurrency and interruption.** Concurrent `test-all` runs in one worktree write the same deterministic content to the same keys; atomic per-record writes make last-writer-wins safe, and a killed run leaves a partial cache that still validates next run. Cache writes that fail (unwritable `.soleur/`, preflight Check 10's read-only-repo bwrap sandbox) degrade to plain derive with at most one stderr note — never a nonzero exit.
 - **CI.** `CI=1`/`--affected` CI runs get a cold cache each time; the mechanism is transparent there and changes nothing about merge gating (`--affected` already narrows only locally). No CI workflow or gate changes.
 - **The enumerate child stays uncached** (0.85s — measured negligible); it produces the live registration stream every run, so added/removed/changed registrations are seen naturally: a new argv hashes to a new key (miss → derive), a stale record is unreachable (key mismatch).
-- **GC.** The cache dir is bounded by registration count (~600 small files); a `find -mtime +30 -delete` sweep on write keeps churn from accumulating. Bash 3.2/BSD-compatible (no `sha256sum`, no `date -d`, no `readlink -f` anywhere in the lib — `git hash-object` is already a runner dependency).
+- **GC.** The cache dir is bounded by registration count (~600 small files); a `find -mtime +30 -delete` sweep on write keeps churn from accumulating. Bash 3.2/BSD-compatible (no `sha256sum`, no `date -d`, no `readlink -f` anywhere in the lib — `git hash-object` is already a runner dependency). Hash batching detail: `git hash-object --no-filters --stdin-paths` reads paths line-wise; the validator asserts output-line count equals input count (a path carrying a trailing CR/NL would under-match — treat as miss). Git env scrubbing follows the `_aff_rd_hash` idiom (`env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE ...`) verbatim — suites and hooks can export git env that would redirect a bare `git` call.
+- **Fixture/test hygiene (learning `2026-10-05`).** The new `.test.sh` arms two shrink-only repo ratchets no file-based selection names: `scripts/lint-trap-tempfile-ownership.py` (any `mktemp` without an owning trap) and `plugins/soleur/test/fixture-relative-assert.test.sh` (write/`rm` operands rooted at non-provably-absolute vars). Fixture idiom: standalone extraction harness like `test-affected-derive.test.sh` (own `mktemp` + owning `trap … EXIT` + `assert_fixture_dir` before each write AND each `rm -rf`); if it sources `test-helpers.sh` instead, use `$INCIDENTS_REPO_ROOT/<name>-$$` and NO second trap (a second EXIT trap replaces the helpers' composed one, #8659). Rows that drive a nested `test-all.sh` scrub `TEST_GROUP`/`CI` (`env -u TEST_GROUP -u CI bash …`) — the exported selector leaks into nested runs.
+- **Measurement hygiene (learning `2026-10-01`).** Re-measure after every review-requested revert; run the bench/long runs from a COPY of the script (bash reads incrementally — editing mid-run voids the run); use the shell `time` builtin/`EPOCHREALTIME` (`/usr/bin/time` is absent); quote CPU + load average; the memo charges a shared closure's cost to the first registration that reaches it, so per-record timings are attribution, not per-suite cost.
 - **Bench interplay.** The new `source scripts/lib/test-affected-derive-cache.sh` line in test-all.sh is a real load edge on a closure-leaf file (ADR-242 decision 18), so the acceptance bench invocation is `bash scripts/affected-prepass-bench.sh --base <merge-base> --added-edges scripts/lib/test-affected-derive-cache.sh`. The bench runs each side in a scratch worktree — cold cache on first probe, warm thereafter, which also exercises both paths.
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -283,6 +303,14 @@ No cross-domain implications detected — infrastructure/tooling change to the r
 - Zero selection drift: bench exit 0 on the acceptance invocation.
 
 ## Dependencies & Risks
+
+### Precedent diff (deepen-plan §4.4)
+
+- **Atomic write / cache hygiene** — precedent `plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh`: `mkdir -p` + unconditional `chmod 700` on every write, `chmod 600` on files, canonical `.soleur/cache/` prefix (it also refuses operator overrides outside that prefix — this plan prescribes no dir override at all, so the refusal arm is unnecessary). **Diff:** identical hygiene; the new lib adds tmp+`mv` atomic per-record writes (kb-search appends, so it needed no atomicity arm).
+- **Cache file shape** — precedent is a single NDJSON append log. **Diff:** per-record content-keyed files instead — an append log cannot express per-record invalidation without a compaction pass, and a corrupt tail line must not spoil sibling records. Pattern is otherwise novel in-repo (no other cross-run cache); scrutinize accordingly.
+- **Kill switch / env conventions** — `SOLEUR_TEST_FORCE_ALL` / `SOLEUR_DISABLE_*` precedent; `SOLEUR_AFFECTED_DERIVE_CACHE=0` follows.
+
+### Risks
 
 - **Risk: an unrecorded probe/read site silently weakens invalidation.** Mitigated by AC7's census row (derived probe set, named-exempt list) and the bench gate.
 - **Risk: per-record hashing cost creeps back toward the derive.** Validation is `[[ -e ]]` probes + one batched `git hash-object` per record — bounded by design; AC1 measures it.
