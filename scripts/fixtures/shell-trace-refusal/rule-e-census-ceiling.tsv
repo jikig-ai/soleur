@@ -31,7 +31,6 @@
 .github/workflows/workspaces-luks-cutover.yml	1
 apps/cla-evidence/infra/bootstrap.sh	1
 apps/cla-evidence/scripts/r2-conditional-put.sh	1
-apps/web-platform/infra/ci-deploy.sh	1
 apps/web-platform/infra/cloud-init-registry.yml	4
 apps/web-platform/infra/infra-config-verify.sh	1
 apps/web-platform/infra/push-infra-config.sh	1

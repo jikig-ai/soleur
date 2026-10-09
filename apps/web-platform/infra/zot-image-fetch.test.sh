@@ -303,7 +303,7 @@ PY
   # shellcheck disable=SC2034  # read inside check()'s eval'd condition strings
   GH_CODE="$(grep -vE '^[[:space:]]*#' "$RENDERED" | grep -F 'ghcr.io')"
   check "R5 ghcr.io appears on exactly 2 code lines: the deny's host list and the heartbeat probe" \
-    "[[ \$(grep -c . <<<\"\$GH_CODE\") -eq 2 ]] && grep -qF 'for h in ghcr.io pkg-containers.githubusercontent.com' <<<\"\$GH_CODE\" && grep -qF 'getent ahosts ghcr.io' <<<\"\$GH_CODE\""
+    "[[ \$(grep -c . <<<\"\$GH_CODE\") -eq 2 ]] && grep -qF 'for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do' <<<\"\$GH_CODE\" && grep -qF 'getent ahosts ghcr.io' <<<\"\$GH_CODE\""
   check "R5 no project-zot image ref survives anywhere in the render" "! grep -qF 'project-zot' '$RENDERED'"
   # Env file values and the P6/rule-audit parity (the bash derivation must name the SAME asset).
   envv() { sed -n "s/^[[:space:]]*$1=//p" "$RENDERED" | head -1; }
@@ -351,8 +351,11 @@ PY
   printf '127.0.0.1 localhost\n' > "$TMP/hosts"
   sed -i -e "s|/etc/hosts|$TMP/hosts|" -e "s|/etc/cloud/templates/hosts.debian.tmpl|$TMP/hosts.tmpl|" "$TMP/deny.sh"
   sh "$TMP/deny.sh"; sh "$TMP/deny.sh"
-  check "R10 the executed deny maps ghcr.io and pkg-containers.githubusercontent.com to 0.0.0.0 and ::, once each (idempotent)" \
-    "[[ \$(grep -cxE '0\.0\.0\.0 (ghcr\.io|pkg-containers\.githubusercontent\.com)' '$TMP/hosts') -eq 2 && \$(grep -cxE ':: (ghcr\.io|pkg-containers\.githubusercontent\.com)' '$TMP/hosts') -eq 2 && \$(grep -c . '$TMP/hosts') -eq 5 ]]"
+  check "R10 the executed deny maps ghcr.io, pkg-containers.githubusercontent.com and docker.pkg.github.com to 0.0.0.0 and ::, once each (idempotent)" \
+    "[[ \$(grep -cxE '0\.0\.0\.0 (ghcr\.io|pkg-containers\.githubusercontent\.com|docker\.pkg\.github\.com)' '$TMP/hosts') -eq 3 && \$(grep -cxE ':: (ghcr\.io|pkg-containers\.githubusercontent\.com|docker\.pkg\.github\.com)' '$TMP/hosts') -eq 3 && \$(grep -c . '$TMP/hosts') -eq 7 ]]"
+  # Per name, not only in total: a count of 3 is also met by one name written three times, on either line kind.
+  check "R10 each of the three names is written exactly once as 0.0.0.0 and once as :: (a total of 3 cannot hide a doubled name)" \
+    "[[ \$(grep -cxF '0.0.0.0 ghcr.io' '$TMP/hosts') -eq 1 && \$(grep -cxF ':: ghcr.io' '$TMP/hosts') -eq 1 && \$(grep -cxF '0.0.0.0 pkg-containers.githubusercontent.com' '$TMP/hosts') -eq 1 && \$(grep -cxF ':: pkg-containers.githubusercontent.com' '$TMP/hosts') -eq 1 && \$(grep -cxF '0.0.0.0 docker.pkg.github.com' '$TMP/hosts') -eq 1 && \$(grep -cxF ':: docker.pkg.github.com' '$TMP/hosts') -eq 1 ]]"
   printf 'x\n' > "$TMP/hosts.tmpl"; sh "$TMP/deny.sh"
   check "R10 the deny also persists into the cloud hosts template when present" "[[ \$(grep -c 'ghcr.io' '$TMP/hosts.tmpl') -eq 2 ]]"
   # R11: EXECUTE the launch guard: no ID file, a malformed one, and a well-formed one.
@@ -363,7 +366,7 @@ PY
   rm -rf "$TMP/grun"; mkdir -p "$TMP/grun"
   check "R11 the launch guard lines are extracted (one each)" "[[ \$(grep -c . <<<\"\$G_READ\") -eq 1 && \$(grep -c . <<<\"\$G_TEST\") -eq 1 ]]"
   check "R11 no ID file: the launch refuses (never reaches docker run)" "! guard | grep -q REACHED"
-  printf 'ghcr.io/project-zot/zot-linux-amd64:v2.1.20\n' > "$TMP/grun/zot-image-id"
+  printf 'ghcr.io/project-zot/zot-linux-amd64:v2.1.22\n' > "$TMP/grun/zot-image-id"
   check "R11 a registry ref in the ID file: the launch refuses" "! guard | grep -q REACHED"
   printf 'sha256:%s\n' "$C_OK" > "$TMP/grun/zot-image-id"
   check "R11 a well-formed verified ID: the launch proceeds" "guard | grep -q REACHED"
@@ -469,8 +472,9 @@ check "H7 the four fields sit before host= and zot_last_err stays LAST" \
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193). F+H rows always run; the R
 # rows only where terraform is present. Both are the MEASURED counts (F+H 68 without terraform;
-# R 32 = 100 - 68 with it), so deleting any one row fires the floor.
-FLOOR_FH=68; FLOOR_R=32
+# R 33 = 101 - 68 with it; 32 before #9390 added the per-name R10 row), so deleting any one row
+# fires the floor.
+FLOOR_FH=68; FLOOR_R=33
 N=$((PASS + FAIL))
 if (( N < FLOOR_FH + (R_RAN ? FLOOR_R : 0) )); then
   printf '[FATAL] only %d assertions ran (floor %d) -- the suite was gutted\n' "$N" "$((FLOOR_FH + (R_RAN ? FLOOR_R : 0)))" >&2

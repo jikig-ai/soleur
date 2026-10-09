@@ -80,8 +80,8 @@ locals {
   # ONE file relative to the other; a swap applied coherently to BOTH the .tf and the sidecar
   # is caught by the digest<->repository probe in rule-audit.yml, not here.
   registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
-  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6"
-  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5"
+  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.22@sha256:920e3e327a73513643c67d14f54092c45ece6d29660bff7e898107e00b49fa03"
+  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.22@sha256:46f688dc26315a35a247e1784368829e66a67bf91de94c7d8d1645044fac1d5b"
 
   # zot's container memory cap, DERIVED from the host it will actually run on (ADR-062:
   # cap = host RAM − ~1024m for cron+doppler+sshd+OS). It was previously a hardcoded
@@ -145,8 +145,8 @@ locals {
 # line a `name = <expr>` over literals and local.zot_image_amd64 only.
 locals {
   # zot-mirror:begin
-  zot_mirror_asset_sha256_amd64 = "05b171f2bd500dc84f532ef7736d1550ffaf7464f0d655c86b8238b443568cb2"
-  zot_config_digest_amd64       = "2d7fee5603dfd88b2b90cffd07e6b97e6d7ba5e3d6bd5472e66b23bd5ad59114"
+  zot_mirror_asset_sha256_amd64 = "126c18a4ac0643a3c0c80ba46503593f02f92750303d2728c7cc0012b7d1c599"
+  zot_config_digest_amd64       = "5a8db63c9fae93403c39376052e205c41a469dbd84b3d1ea37ee497cb08318ef"
   zot_mirror_repo               = "jikig-ai/soleur"
   zot_version                   = regex(":(v[0-9]+\\.[0-9]+\\.[0-9]+)@sha256:", local.zot_image_amd64)[0]
   zot_manifest_digest           = regex("@sha256:([0-9a-f]{64})$", local.zot_image_amd64)[0]

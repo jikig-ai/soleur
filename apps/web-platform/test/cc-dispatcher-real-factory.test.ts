@@ -1292,7 +1292,12 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       );
       expect(postureCalls).toHaveLength(1);
       const payload = postureCalls[0][0];
-      expect(payload).toEqual({ userId: "user-1", githubEgress: true });
+      // #9558 — persona joined the posture payload (attribution axis).
+      expect(payload).toEqual({
+        userId: "user-1",
+        githubEgress: true,
+        persona: "command_center",
+      });
       expect(typeof payload.githubEgress).toBe("boolean");
       expect(JSON.stringify(payload)).not.toContain("ghs_default_test_token");
     });
@@ -1313,6 +1318,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(postureCalls[0][0]).toEqual({
         userId: "user-1",
         githubEgress: false,
+        persona: "command_center",
       });
     });
 
@@ -1453,6 +1459,82 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         denyReadExtra: ["/app/shared/knowledge-base"],
       }),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // #9558 — support persona must mint NOTHING GitHub-side: a read-only docs
+  // session has no repo lifecycle, so installation resolution, the GH_TOKEN
+  // mint, the .soleur-askpass.sh write into the user's .git/, and the
+  // ENTITLED_EGRESS_DOMAINS open are ALL out of contract. Drive the same
+  // connected-repo shape that mints on command_center — the persona must be
+  // the only delta.
+  // -------------------------------------------------------------------------
+  it("T2b: support persona skips installation resolve, GH_TOKEN mint, askpass write, and GitHub egress", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    // No GitHub machinery at all — not even the installation-id resolve or
+    // the clone (it mints a token via gitWithInstallationAuth internally).
+    expect(mockResolveInstallationId).not.toHaveBeenCalled();
+    expect(mockGetInstallationAccount).not.toHaveBeenCalled();
+    expect(mockFindRepoOwnerInstallationForUser).not.toHaveBeenCalled();
+    expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
+    expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalled();
+    // No askpass helper is ever written under the user's .git/.
+    expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
+    // The minted-token channel into the agent env stays empty.
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+    );
+    // Egress closed (also pinned in T2 via the sandbox-config call).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+      "/app/shared/plugins/soleur",
+      expect.objectContaining({ allowGithubEgress: false }),
+    );
+    // The egress posture log carries the persona so a support dispatch that
+    // ever DID open egress is attributable (observability gate).
+    const egressLog = mockLogInfo.mock.calls.find(
+      ([, msg]) => msg === "Concierge sandbox GitHub egress posture",
+    );
+    expect(egressLog?.[0]).toMatchObject({
+      githubEgress: false,
+      persona: "support",
+    });
+  });
+
+  it("T2c: support persona strips the user's stored GITHUB_TOKEN from serviceTokens (env must carry no GitHub credential)", async () => {
+    // #9558 review: a write-closed sandbox still received the user's own
+    // GITHUB_TOKEN via the Connected-Services map — readable in-env and
+    // echoable into the transcript while every GitHub egress domain is
+    // closed. The strip is provider-specific: other service tokens stay.
+    mockGetUserServiceTokens.mockResolvedValueOnce({
+      GITHUB_TOKEN: "ghp_stored_user_pat",
+      STRIPE_SECRET_KEY: "sk_live_other",
+    });
+
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      { STRIPE_SECRET_KEY: "sk_live_other" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+    );
+  });
+
+  it("T2d: command_center keeps the stored GITHUB_TOKEN (strip is support-scoped)", async () => {
+    mockGetUserServiceTokens.mockResolvedValueOnce({
+      GITHUB_TOKEN: "ghp_stored_user_pat",
+    });
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+
+    await realSdkQueryFactory(makeArgs({ persona: "command_center" }));
+
+    const envArgs = mockBuildAgentEnv.mock.calls[0];
+    expect(envArgs[1]).toMatchObject({ GITHUB_TOKEN: "ghp_stored_user_pat" });
   });
 
   // -------------------------------------------------------------------------

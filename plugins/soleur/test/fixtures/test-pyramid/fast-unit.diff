@@ -1,0 +1,38 @@
+diff --git a/apps/web-platform/test/order-total.test.ts b/apps/web-platform/test/order-total.test.ts
+new file mode 100644
+index 0000000..ffdfc14
+--- /dev/null
++++ b/apps/web-platform/test/order-total.test.ts
+@@ -0,0 +1,32 @@
++import { describe, test, expect } from "vitest";
++
++interface LineItem {
++  unitPriceCents: number;
++  quantity: number;
++}
++
++function orderTotal(items: LineItem[]): number {
++  return items.reduce(
++    (sum, item) => sum + item.unitPriceCents * item.quantity,
++    0,
++  );
++}
++
++describe("orderTotal", () => {
++  test("returns 0 for an empty cart", () => {
++    expect(orderTotal([])).toBe(0);
++  });
++
++  test("sums unit price times quantity across line items", () => {
++    const items: LineItem[] = [
++      { unitPriceCents: 1200, quantity: 2 },
++      { unitPriceCents: 499, quantity: 1 },
++    ];
++
++    expect(orderTotal(items)).toBe(2899);
++  });
++
++  test("handles a quantity of zero without contributing to the total", () => {
++    expect(orderTotal([{ unitPriceCents: 999, quantity: 0 }])).toBe(0);
++  });
++});
