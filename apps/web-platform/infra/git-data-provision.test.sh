@@ -247,15 +247,106 @@ rc=$(run_provision_c1 "$root" "ws-c1" "$STORE_SRC" "$SEAMS/marker" "$curated")
 c1_refused "C1f findmnt absent" "$rc" "findmnt unavailable" "$root" "ws-c1"
 drop_fixture "$root"; drop_fixture "$curated"
 
+# ── (#9066, Art. 17) no subject identifier survives on the store ─────────────────────────────
+# Same predicate and negative control as the remove suite (see git-data-remove.test.sh for the
+# property and why it quantifies over every entry name and content rather than the lock glob).
+# Provisioning writes the repo `<id>.git` and the shared `.init.lock` — nothing else may carry the id.
+UID_TOK="uid-7f3a9c"
+subject_id_leaks() { # subject_id_leaks <root> <id> -> offenders on stdout; empty = clean
+  local root="$1" id="$2"
+  assert_fixture_dir "$root"
+  case "$id" in "" | *[!A-Za-z0-9._-]*) printf 'FATAL: bad id token\n' >&2; exit 2 ;; esac
+  find "$root" -mindepth 1 -name "*${id}*" ! -path "${root}/${id}.git" ! -path "${root}/${id}.git/*"
+  # A symlink whose TARGET text names the id (find -name sees only the link's own name; grep -r skips links).
+  find "$root" -mindepth 1 -type l -lname "*${id}*" ! -path "${root}/${id}.git/*"
+  # stderr is merged on purpose: an entry grep cannot read is reported as an offender, never counted clean.
+  grep -rlF --exclude-dir="${id}.git" -- "$id" "$root" 2>&1
+  return 0
+}
+# Closed world: the root holds EXACTLY the expected entries and the shared lock is empty. A substring
+# predicate cannot see a transformed id (case-folded, encoded, hashed); a new legitimate entry must be
+# added to the expected set on purpose.
+root_entries() { find "$1" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' '; }
+root_is_exactly() { # root_is_exactly <root> <expected entries, sorted, space-terminated>
+  [ "$(root_entries "$1")" = "$2" ] && { [ ! -e "${1}/.init.lock" ] || [ ! -s "${1}/.init.lock" ]; }
+}
+ctl_root() { # ctl_root <kind> -> a populated fixture root on stdout
+  local kind="$1" r
+  r="$(fresh_root)"; assert_fixture_dir "$r"
+  case "$kind" in
+    m1) : > "${r}/.${UID_TOK}.init.lock" ;;                      # per-id lock NAME
+    m2) : > "${r}/.init.lock"; : > "${r}/.${UID_TOK}.seen" ;;    # compliant first member, id in a second
+    m3) printf '%s\n' "$UID_TOK" > "${r}/.init.lock" ;;          # constant name, id in the CONTENT
+    m4) mkdir "${r}/.meta"; : > "${r}/.meta/${UID_TOK}" ;;     # id in a NESTED name
+    m5) mkdir "${r}/.meta"; printf '%s\n' "$UID_TOK" > "${r}/.meta/x" ;;  # id in NESTED content
+    m6) ln -s "${UID_TOK}.git" "${r}/.latest" ;;                 # symlink whose TARGET names the id
+    m7) mkdir "${r}/.m"; ln -s "${UID_TOK}.git" "${r}/.m/latest" ;; # the same, NESTED
+    clean)
+      : > "${r}/.init.lock"; : > "${r}/.boot-probe-0.init.lock"; mkdir "${r}/lost+found"
+      mkdir "${r}/uid-other.git"; : > "${r}/uid-other.git/HEAD"; : > "${r}/.uid-other.init.lock"
+      mkdir "${r}/${UID_TOK}.git"; printf '%s\n' "$UID_TOK" > "${r}/${UID_TOK}.git/HEAD" ;;
+  esac
+  echo "$r"
+}
+for kind in m1 m2 m3 m4 m5 m6 m7; do
+  r="$(ctl_root "$kind")" || exit 2
+  leaks="$(subject_id_leaks "$r" "$UID_TOK")" || exit 2
+  if [ -n "$leaks" ]; then pass; else fail "9066 control $kind: the predicate did not flag the mutation shape"; fi
+  drop_fixture "$r"
+done
+# A root the predicate cannot scan must surface as an offender (grep's stderr is merged into its output); a
+# missing root is deterministic, unlike a mode-000 entry, which a root-run CI job reads anyway.
+leaks="$(subject_id_leaks "/var/tmp/gd9066-no-such-root-$$" "$UID_TOK" 2>/dev/null)" || exit 2
+if [ -n "$leaks" ]; then pass; else fail "9066 control unscannable: an unscannable root was counted clean"; fi
+r="$(ctl_root clean)" || exit 2
+leaks="$(subject_id_leaks "$r" "$UID_TOK")" || exit 2
+if [ -z "$leaks" ]; then pass; else fail "9066 control clean: the predicate flagged an unrelated entry ($leaks)"; fi
+drop_fixture "$r"
+# Arm: provision-new — a first provision leaves the repo and the shared lock, no other id-bearing file.
+root=$(fresh_root)
+rc=$(run_provision "$root" "$UID_TOK")
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
+if [ "$rc" = "0" ]; then pass; else fail "9066 provision-new: expected 0, got $rc ($(head -c 200 "$ERR"))"; fi
+if [ -f "${root}/${UID_TOK}.git/HEAD" ]; then pass; else fail "9066 provision-new: no bare repo — the arm never reached the init"; fi
+if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 provision-new: the shared .init.lock is missing — the arm proves nothing"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 provision-new: the subject id is on the store outside the repo: $leaks"; fi
+if root_is_exactly "$root" ".init.lock uid-7f3a9c.git "; then pass; else fail "9066 provision-new: unexpected root entries or a non-empty lock: $(root_entries "$root")"; fi
+drop_fixture "$root"
+# Arm: provision-again — the already-present no-op arm opens the same lock and must add nothing.
+root=$(fresh_root)
+rc0=$(run_provision "$root" "$UID_TOK")
+rc=$(run_provision "$root" "$UID_TOK")
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
+if [ "$rc0" = "0" ] && [ "$rc" = "0" ]; then pass; else fail "9066 provision-again: expected 0 on both runs, got $rc0 then $rc ($(head -c 200 "$ERR"))"; fi
+if grep -qF "already provisioned (no-op)" "$ERR"; then pass; else fail "9066 provision-again: the second run did not take the no-op path ($(head -c 200 "$ERR"))"; fi
+if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 provision-again: the shared .init.lock is missing — the arm proves nothing"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 provision-again: the subject id is on the store outside the repo: $leaks"; fi
+if root_is_exactly "$root" ".init.lock uid-7f3a9c.git "; then pass; else fail "9066 provision-again: unexpected root entries or a non-empty lock: $(root_entries "$root")"; fi
+drop_fixture "$root"
+# Arm: refused provision (cutover freeze) — the freeze refusal fires before the lock is opened and must write nothing.
+root=$(fresh_root)
+assert_fixture_dir "$root"
+: > "${root}/.frozen"
+rc=$(env -i PATH="$SPATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+  GIT_DATA_STORE_DEVICE="$STORE_SRC" GIT_DATA_STORE_VERIFIED="$SEAMS/marker" \
+  GIT_DATA_CUTOVER_FREEZE="${root}/.frozen" SSH_ORIGINAL_COMMAND="$UID_TOK" bash "$WRAPPER" >/dev/null 2>"$ERR"; echo $?)
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
+if [ "$rc" != "0" ] && grep -q 'frozen for cutover' "$ERR"; then pass; else fail "9066 refused-provision: expected the freeze refusal, got rc=$rc ($(head -c 200 "$ERR"))"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 refused-provision: the subject id was written on a refusal path: $leaks"; fi
+if root_is_exactly "$root" ".frozen "; then pass; else fail "9066 refused-provision: unexpected root entries or a non-empty lock: $(root_entries "$root")"; fi
+drop_fixture "$root"
+
 rm -f "$ERR"
 
 # --- Minimum-cardinality guard (mirrors the fence test). 12 -> 24 with the four mount
 #     rows (T5 3, T6 3, T7 2, T8 2), re-derived: T1 2, T2 2, T3 8, T4 2 = 14 before.
 #     24 -> 30 at review: T7 +1 (message pin), T9 3, T10 2. 30 -> 50 with the C1 store rows
-#     (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20. ---
+#     (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20. 50 -> 72 with the #9066
+#     subject-id guard: control 9 (m1-m7, clean, unscannable root), provision-new 5, provision-again 5,
+#     refused-provision 3 = 22 (measured: 72 ran). ---
 total=$((passes + fails))
-if [ "$total" -lt 50 ]; then
-  echo "FAIL: ran only ${total} assertions (<50) — suite did not execute fully" >&2
+if [ "$total" -lt 72 ]; then
+  echo "FAIL: ran only ${total} assertions (<72) — suite did not execute fully" >&2
   exit 1
 fi
 

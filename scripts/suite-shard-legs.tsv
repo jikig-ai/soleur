@@ -305,6 +305,7 @@ scripts/check-web-host-escrow-config	4
 scripts/ci-demand-census	7
 scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-leg-balance-9232	8
+scripts/ci-push-dedupe	7
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6
 scripts/compound-promote-outcome-8281	3
@@ -331,6 +332,7 @@ scripts/followthrough-exec-bit	4
 scripts/followthrough-predicate-parity	6
 scripts/followthrough-varq-ban	6
 scripts/followthrough-varq-ban-live	2
+scripts/followthroughs/ci-push-dedupe-soak-9512	1
 scripts/followthroughs/pr-battery-gate-saving-9323	1
 scripts/followthroughs/t5-skip-persistence-bound-7510	8
 scripts/followthroughs/tty-ack-migration-9387	7

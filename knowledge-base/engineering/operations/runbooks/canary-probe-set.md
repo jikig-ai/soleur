@@ -218,6 +218,59 @@ tenant filesystem isolation arm — the mountns-only outer bwrap built from
 | `bwrap_spawn_enoent` / `bwrap_spawn_*` / `bwrap_exit_*` / `docker_exec_rc_*` | Infra flake, never sandbox signal — the soak holds | Transient; if persistent check `sandbox-canary.mjs` is baked in the image |
 | `fixture_missing` / `fixture_invalid` | `infra/agent-outer-wrap-argv.json` absent or schema-rejected (incl. `{{ROOT}}`-confinement violations on prep entries) | Regenerate via `test/agent-outer-wrap.test.ts` Guard 2; schema is `outer-bwrap-v1` |
 
+## Cross-workspace isolation canary — report-only soak (#2640)
+
+A third probe shares the word "sandbox" with the two above and is distinct from both:
+`run_workspace_isolation_probe` in `ci-deploy.sh` runs the **direct tier** of
+`test/sandbox-isolation.test.ts` (cross-workspace read/write isolation with sibling trees — the
+property the faithful canary's single captured argv cannot exercise) inside the canary container:
+
+```text
+timeout <cap> docker exec -w /app soleur-web-platform-canary \
+  /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+  CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
+  /usr/local/bin/vitest run --config test/vitest.canary.config.ts
+```
+
+(`SOLEUR_ISOLATION_IN_IMAGE=1` self-skips FR7b — in-image PATH `bwrap` is the
+deployed shim and its control arm needs the real binary; see the design note.)
+
+It is called `|| true` after `run_faithful_sandbox_canary` and `run_outer_wrap_canary` inside the `CANARY_HEALTHY`
+block — **report-only** (dark-launch per `wg-dark-launch-deploy-gates`): it logs, writes state and
+pages Sentry on a red verdict, but a failing verdict never rolls back the deploy. Promotion to
+blocking is a tracked follow-up (see the design note,
+`knowledge-base/engineering/operations/runbooks/workspace-isolation-canary-probe.md`).
+
+**Verdict classes** (docker-exec rc classification mirrors `run_faithful_sandbox_canary`):
+
+| Verdict | rc | Meaning | Sentry | First move |
+|---|---|---|---|---|
+| `pass` | 0 | direct-tier suite green in the canary | no | — |
+| `workspace_isolation_failed` | other non-zero | suite reported a real isolation failure (or a vacuous green — `reason=vacuous_green_no_tests_passed`) | **page** | `reason` carries vitest's first `FAIL <file> > <test>`/`AssertionError` line (or docker's first stderr line as fallback) — read it on `/hooks/deploy-status` `.workspace_isolation.reason` or the `WORKSPACE_ISOLATION_FAIL:` journald line; reproduce locally with `SOLEUR_ISOLATION_TIERS=direct npx vitest run test/sandbox-isolation.test.ts` (host-side: FR7b runs there — it is skipped in-image) |
+| `workspace_isolation_timeout` | 124 | host-side `timeout` fired (suite hung, e.g. bwrap deadlock) | **page** | the in-container vitest may outlive the killed `docker exec` until the canary is stopped; check `WORKSPACE_ISOLATION:` reason for the timeout's stderr tail |
+| `canary_infra_error` | 125/126/127 | could not exec (pre-tooling image, missing vitest) | no — state only | expected during the dark-launch window; a *persistent* stream means the image lacks the probe payload (Dockerfile `COPY`/`npm -g vitest` drift) — soak holds, nothing pages by design |
+
+The verdict + reason alone must suffice for triage — the probe's `docker exec`
+runs with `env -i` (no prod env inside the suite), so `reason` is safe to quote
+verbatim in incident notes.
+
+**State and surfaces.** `write_workspace_isolation_state` persists the verdict to
+`/mnt/data/ci-deploy-workspace-isolation.json` (atomic, always returns 0) and accumulates the soak
+fields `consecutive_pass` (increments on `pass`, resets on `workspace_isolation_failed` /
+`workspace_isolation_timeout`, **holds** on `canary_infra_error`) and `first_pass_at` — the same
+accumulation `write_sandbox_canary_state` performs, so the promotion probe is a stateless GET.
+`cat-deploy-state.sh` merges the file into the `/hooks/deploy-status` payload as
+`.workspace_isolation`, and every run logs a `WORKSPACE_ISOLATION:` line under `logger -t ci-deploy`
+(the Better Stack query shape in the bwrap-probe section applies verbatim — grep on the decoded
+`message` after `fromjson`, filter `SYSLOG_IDENTIFIER == "ci-deploy"`).
+
+**Promotion contract.** The committed soak checker
+`scripts/followthroughs/workspace-isolation-verdict-2640.sh` reads `.workspace_isolation` off
+`/hooks/deploy-status` and reports PASS only when `consecutive_pass >= 5` AND the span since
+`first_pass_at` is >= 3 days; a recorded `workspace_isolation_failed` or
+`workspace_isolation_timeout` verdict is a FAIL (investigate before promoting — do not flip the
+call site to blocking while either stands).
+
 ## References
 
 - AGENTS.md `wg-when-fixing-a-workflow-gates-detection`

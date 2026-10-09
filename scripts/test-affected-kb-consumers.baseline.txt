@@ -95,6 +95,8 @@ plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base
 plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base/product/design
 plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 scripts/battery-tag-authorship	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
+scripts/ci-push-dedupe	knowledge-base
+scripts/ci-push-dedupe	knowledge-base/project/specs
 scripts/compound-promote	knowledge-base
 scripts/compound-promote	knowledge-base/project
 scripts/compound-promote	knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md

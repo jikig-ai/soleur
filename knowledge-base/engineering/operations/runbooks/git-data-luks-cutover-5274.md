@@ -9,7 +9,9 @@ same-version webhook redeploy -> per-host `git_data_store=` readback -> unfreeze
 repoints a mount — the flag-off readback is the rollback); `unfreeze` clears the freeze sentinel
 (own lineage, or a stranded one via the `lineage` input); `redeploy` is the standalone pin-load lever.
 There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
-plaintext volume is retained read-only until its wipe decision (#6897/#8571).
+plaintext volume is retained read-only until its wipe decision (#6897/#8571). The residue on it ends
+when that volume is destroyed by the DL-2 wipe, never mounted to purge in place; the target date and the slip
+rule are in ADR-239, amendment 2026-10-09.
 
 **No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
 Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
@@ -518,7 +520,10 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       - **(d) No lock file for the collected ids.** Once its guards pass, `git-data-remove.sh`
         opens `REPO_ROOT/.<workspace_id>.init.lock` and never removes it. Neither the proof nor the
         bootstrap count sees it, because both skip `.*.init.lock`. The file is 0 bytes, but its name
-        is the user's id, so it is personal data on the store. Classify every
+        is the user's id, so it is personal data on the store. That describes the pre-#9226 wrapper; since
+        #9226 the wrapper opens one shared `.init.lock`, which carries no id, and the host was replaced onto
+        that payload on 2026-10-08 (per the workflow run and its head commit, not read from the host; ADR-239, amendment 2026-10-09). Files written before then still count
+        here. Classify every
         `op:git-data-bare-repo-erasure` event in the window, per id, by its `erasure_outcome` tag
         and `detail`:
         - **host not reached:** `unreachable`, `unauthorized`, `host_key_mismatch`, `unconfigured`
@@ -585,6 +590,11 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       not covered: .<id>.init.lock files left on the served store and on the retained plaintext volume by
         erasures that passed the wrapper's guards, including completed ones (#9066); the user's
         copy in web-1 /workspaces (a separate operation)
+        retained-volume limb: ends when the volume is destroyed (DL-2 wipe, #6897), never mounted to purge
+        in place; served-store limb: removed only by the freeze-window purge, which has not run; gc cursor
+        (.gc-cursor, may still hold the last repo's name, which can be the erased workspace's id, until a gc run
+        completes another repo): not covered by either; dates and slip rule: ADR-239,
+        amendment 2026-10-09
       earliest request: <date>  Art. 12(3) deadline: <date>
       ```
 
