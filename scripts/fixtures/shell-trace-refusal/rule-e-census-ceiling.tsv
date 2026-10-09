@@ -7,20 +7,7 @@
 # It is checked in BOTH directions: every baseline row needs a row here at or above its count,
 # and every row here needs a baseline row OR a file that still offends. A converted file must
 # therefore leave this table in the same change that removes it from the baseline.
-.github/actions/dispatch-web-redeploy/track.sh	2
-.github/actions/mint-infra-app-token/action.yml	2
-.github/workflows/apply-deploy-pipeline-fix.yml	6
-.github/workflows/apply-github-infra.yml	1
-.github/workflows/apply-inngest-rls.yml	4
 .github/workflows/apply-web-platform-infra.yml	6
-.github/workflows/deploy-inngest-image.yml	2
-.github/workflows/restart-inngest-server.yml	4
-.github/workflows/scheduled-inngest-health.yml	1
-.github/workflows/web-platform-release.yml	5
-.github/workflows/workspaces-luks-cutover.yml	1
 apps/cla-evidence/infra/bootstrap.sh	1
 apps/cla-evidence/scripts/r2-conditional-put.sh	1
 apps/web-platform/infra/cloud-init-registry.yml	4
-apps/web-platform/infra/infra-config-verify.sh	1
-apps/web-platform/infra/push-infra-config.sh	1
-apps/web-platform/scripts/github-app-key-status.sh	1
