@@ -2578,10 +2578,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "143" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 143 and ALWAYS_ON_SUITES ($_f1_count) meets it within the slack of 5"
+if [[ "$_f1_floor" == "115" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 115 (#9763: 120-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 143) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 115) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
@@ -2748,15 +2748,28 @@ else
   fail "q4: summary='${_q4_sum}'"
 fi
 
-# f2: scripts/test-affected-kb-consumers is hedged (always-on, ADR-242 decision 19): selected on a docs-only diff, with the
-#     class `always_on`, exactly once. Against the REAL runner and corpus: the sandbox arms trim the corpus to the keep-list,
-#     where this label is absent. f1 cannot catch the label being removed (the count would still meet the floor).
+# f2: scripts/test-affected-kb-consumers was demoted to edge-selection by #9763 (ADR-242 decision 19's
+#     revisit trigger): DECLINED on a docs-only diff with class edge:declared, exactly once. Against the
+#     REAL runner and corpus: the sandbox arms trim the corpus to the keep-list, where this label is
+#     absent. f1 cannot catch the label being removed (the count would still meet the floor).
 cases=$((cases + 1))
-_f2_rows=$(grep -cF "AFFECTED_SELECTED"$'\t'"scripts/test-affected-kb-consumers"$'\t'"1"$'\t'"always_on"$'\t' <<<"$_q4" || true)
+_f2_rows=$(grep -cF "AFFECTED_SELECTED"$'\t'"scripts/test-affected-kb-consumers"$'\t'"0"$'\t'"edge:declared"$'\t' <<<"$_q4" || true)
 if [[ "$_f2_rows" == "1" ]]; then
-  pass "f2: scripts/test-affected-kb-consumers is selected on a docs-only diff with class always_on (exactly one row)"
+  pass "f2: scripts/test-affected-kb-consumers is declined on a docs-only diff with class edge:declared (exactly one row)"
 else
-  fail "f2: expected exactly one AFFECTED_SELECTED row for scripts/test-affected-kb-consumers (selected=1, always_on); got $_f2_rows"
+  fail "f2: expected exactly one AFFECTED_SELECTED row for scripts/test-affected-kb-consumers (selected=0, edge:declared); got $_f2_rows"
+fi
+
+# f2b: the demoted label still selects when its edge fires — a knowledge-base path is inside its
+#      declared edge set (the fast-tier demotion must not make it unreachable).
+cases=$((cases + 1))
+_f2b=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection --paths=knowledge-base/project/roadmap.md 2>/dev/null) || true
+_f2b_rows=$(grep -cF "AFFECTED_SELECTED"$'\t'"scripts/test-affected-kb-consumers"$'\t'"1"$'\t'"edge:declared"$'\t' <<<"$_f2b" || true)
+if [[ "$_f2b_rows" == "1" ]]; then
+  pass "f2b: scripts/test-affected-kb-consumers selects on a knowledge-base path with class edge:declared"
+else
+  fail "f2b: expected kb-consumers selected=1 edge:declared on a kb path; got $_f2b_rows"
 fi
 
 # m6: the paths override is dead — q2's selection must now be empty.

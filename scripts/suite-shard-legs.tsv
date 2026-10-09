@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=996
-# generated-at=2026-10-09T01:28:51Z
+# generated-at=2026-10-09T03:04:58Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -460,6 +460,7 @@ scripts/test-affected-kb-consumers	7
 scripts/test-all-affected	3
 scripts/test-all-capacity-signal	4
 scripts/test-all-enumerate-toolchain	6
+scripts/test-all-fast-tier-budget	8
 scripts/test-all-group-affected	6
 scripts/test-all-infra-coverage-notice	8
 scripts/test-all-killed-classification	5

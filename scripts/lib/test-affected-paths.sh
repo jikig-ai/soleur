@@ -110,7 +110,6 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-legal-scope-block-placement-live"
   "scripts/lint-migrated-rule-ids-live"
   "scripts/lint-rule-bodies-live"
-  "scripts/lint-shell-capture-exit-live"
   "scripts/lint-window-closure-assertion-live"
   "scripts/lint-workflow-errexit-capture-live"
   "scripts/lint-workflow-install-sites-live"
@@ -118,7 +117,6 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-step-env-refs-live"
   "scripts/review-reminder-liveness"
   "scripts/watch-live-verify-pass"
-  "tests/scripts/sentry-alert-live-fidelity"
   # live-scanner batteries named for the gates they probe (#8384 landed these)
   "scripts/cosign-verify-live-8037"
   "scripts/generate-kb-index-live"
@@ -127,32 +125,23 @@ ALWAYS_ON_SUITES=(
   # Verdicts assert properties of the runner itself or of the whole
   # registration set — both invisible to any file-based selection.
   "scripts/test-all-capacity-signal"
-  "scripts/test-all-enumerate-toolchain"
-  "scripts/test-all-infra-coverage-notice"
   "scripts/test-all-killed-classification"
   # #8993/#8940's run-path watchdog + durable-log battery — a runner-SUT
   # property suite like its killed-classification sibling.
   "scripts/test-all-orphan-log-retention"
-  "scripts/test-all-runtime-ceiling"
   "scripts/test-all-webplat-gate"
   # scripts/test-all-affected is NOT here: ADR-262 withdrew it (see AFFECTED_CONSUMED_EDGES). Its
   # verdict is computed on sandbox copies of named files, not on the live tree.
   # #8591's TEST_GROUP=affected mutation suite — a runner-SUT property battery
   # like its sibling above; renamed out of the add/add collision with #8322's.
   "scripts/test-all-group-affected"
-  "scripts/test-contention"
   "scripts/suite-exit-class-parity"
-  "scripts/battery-tag-authorship"
-  "scripts/test-all-pr-battery-gate"
-  "scripts/lint-orphan-test-suites"
   # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected,
   # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).
   # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
   # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
-  "plugins/soleur/test/fanout-suite-scope.test.sh"
   "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
-  "plugins/soleur/test/scripts-shard-totality.test.sh"
 
   # --- corpus linters: verdict spans a file class scanned wholesale -------------
   # A ratchet counts a property across the whole tree and references nothing —
@@ -172,9 +161,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-shell-trace-credential-refusal"
   "scripts/lint-shell-trace-credential-refusal-repo"
   "scripts/lint-supabase-deprecated-endpoints-unit"
-  "scripts/lint-trap-tempfile-ownership"
   "scripts/lint-workflow-errexit-capture"
-  "scripts/lint-workflow-install-sites"
   "scripts/lint-workflow-issue-write-scope"
   "scripts/lint-workflow-step-env-refs"
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
@@ -188,45 +175,35 @@ ALWAYS_ON_SUITES=(
   # tree for `lib/operator-script.sh` sourcers and asserts the no-secret-leak
   # property over each. A diff adding a consumer anywhere must re-run it —
   # scoping to the lib's own path would decline exactly that diff.
-  "plugins/soleur/test/operator-script.test.sh"
   # operator-ack-guard (#8486): Guard 1 censuses every tracked *.sh for raw typed-yes
   # prompts and confirm-skip flags, and Guard 2's population is every
   # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
   # anywhere must re-run it — scoping to the scripts it names would decline that diff.
-  "plugins/soleur/test/operator-ack-guard.test.sh"
   # operator-agent-runnable (ADR-264): Guard 1 DISCOVERS every generated operator script in the tree
   # (git grep over file content) and drives each stage with no TTY, so a diff adding or editing a
   # generated script anywhere must re-run it. A file edge cannot express "every file carrying a
   # header", which is why this one is always-on. operator-stage-approval-hook (derived edge: every
   # diff under plugins/soleur) and operator-9321-stages (declared edge below) are scoped, not
   # always-on: measured ~85 CPU-s that an unrelated web-platform or docs diff does not need to pay.
-  "plugins/soleur/test/operator-agent-runnable.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
 
   # --- whole-corpus guards, drift checks, parity and census gates ---------------
-  "scripts/guard-vacuity-floor"
   "scripts/ensure-kb-index"
   "plugins/soleur/test/kb-caches-untracked.test.sh"
   # (#8846) census of every tracked inngest probe-row reader over git ls-files.
   "scripts/lib/inngest-probe-row.test.sh"
-  "scripts/check-cloudflare-token-drift"
-  "scripts/devin-docs-drift-check"
   "scripts/marketplace-drift-check"
-  "scripts/prod-version-drift-check"
   "scripts/digest-oracle-guard"
   "scripts/follow-through-closure-guard"
   "scripts/followthrough-exec-bit"
-  "scripts/followthrough-varq-ban"
   "scripts/alarm-issue-filing-guard"
   "scripts/battery-ref-guard"
   "scripts/betterstack-assert-absence"
   "scripts/betterstack-ingest-parity"
   "scripts/rule-metrics-aggregate"
   "scripts/skill-freshness-aggregate"
-  "scripts/sweep-followthroughs"
   # #8563's Tier-B credential census — a repo-global property census over every
   # workflow + Terraform tier declaration; no diff-scoped edge can reach it.
-  "tests/scripts/infra-privileged-tier-census"
   "scripts/cron-artifact-age"
   "scripts/rename-guard"
   "scripts/assert-dependabot-drain-unit"
@@ -241,10 +218,7 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/c4-count-parity.test.sh"
   "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
   "plugins/soleur/test/reusable-release-caller-permissions.test.sh"
-  "plugins/soleur/test/fixture-env-adoption.test.sh"
-  "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
   "plugins/soleur/test/gitleaks-merge-commit.test.sh"
-  "plugins/soleur/test/hook-input-classification-mutation.test.sh"
   "plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh"
   "apps/web-platform/scripts/assert-byok-rules-exist.test.sh"
   ".claude/hooks/hookeventname-coverage.test.sh"
@@ -287,7 +261,6 @@ ALWAYS_ON_SUITES=(
   "scripts/check-pa-22-unit"
   "scripts/check-pa-22-live"
   "scripts/frontmatter-strip-parity"
-  "plugins/soleur/test/gitleaks-rules.test.sh"
   "plugins/soleur/test/terraform-drift-step-order.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
   # --- A5 hedge (#9307 PR-C): the runner stopped being a closure leaf for text mentions and this suite lost 726 of
@@ -296,7 +269,6 @@ ALWAYS_ON_SUITES=(
   # to guess which of the 726 it read. The earlier explanation ("57 of 145 assertions fail under env -i with no network")
   # was disproved on 2026-10-04: the recorder ran suites as namespace-root and this suite refuses a privileged caller;
   # as the invoking user it passes 148/0. Evidence: always-on-audit.md "Round 3" and the 2026-10-04 addendum.
-  "scripts/orphan-process-reaper"
   # --- Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
   # runs reported the first window of every run as `contaminated` (tracked-but-gitignored files made the private checkout look dirty), so
   # the "unreliable" rows were an artifact. Re-run: these two are `uncovered` (reads outside their cover) and go back; the four after them
@@ -312,7 +284,13 @@ ALWAYS_ON_SUITES=(
   # now running suites as the invoking user, recorded this suite completely and its read set is the registration corpus
   # itself: no short declaration bounds it, and the knowledge-base tree (read through `git ls-files`, invisible to
   # inotify) is a second input. Hedged rather than declared; revisit trigger in ADR-242 decision 19.
-  "scripts/test-affected-kb-consumers"
+
+  "scripts/test-all-fast-tier-budget"
+  # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
+  # merge_group, push and --full like every registered suite, and locally only when their
+  # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
+  # fast-tier budget lint (scripts/test-all-fast-tier-budget) pins this set.
+
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -457,10 +435,12 @@ AFFECTED_TEST_CONTENT_PUBLISHER_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # scripts/test-affected-kb-consumers (#9307) — the dropped-consumer ratchet for the demotions
-# below. It is now ALSO always-on (Round 4, above): the recorder showed its read set is the registration corpus
-# itself. This array is RETAINED for pre-push-ratchet-lane arm 21, which pins the lane's
-# KB_CONSUMERS_INPUTS to it; do not delete it.
+# below. #9763 withdrew it from ALWAYS_ON: its read set is the registration corpus itself PLUS the
+# knowledge-base/ tree (the ADR-242 decision-19 hedge was "unbounded kb reads"), so knowledge-base/
+# is declared here — a kb diff selects it like the corpus inputs do. This array is RETAINED for
+# pre-push-ratchet-lane arm 21, which pins the lane's KB_CONSUMERS_INPUTS to it; do not delete it.
 AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
+  "knowledge-base/"
   "scripts/test-affected-kb-consumers.test.sh"
   "scripts/test-affected-kb-consumers.baseline.txt"
   "scripts/test-all.sh"
@@ -1681,5 +1661,214 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_AGENT_BROWSER_TEST_PLAYWRIGHT_MCP_LIFETIME_TEST_S
   "plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py"
   "plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py"
   "plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# --- #9763: declared edges for suites withdrawn from ALWAYS_ON whose derivation is self-only.
+# A self-only derivation degrades to `unclassified` which SELECTS fail-safe — for a heavy suite that
+# would leak it back into every local --affected run. Each array binds the suite to the subject its
+# verdict is actually a property of.
+
+# plugins/soleur/test/hook-input-classification-mutation — a mutation battery over the hook-input
+# classifier: it mutates the SUT and the contract suite under .claude/hooks/.
+AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_INPUT_CLASSIFICATION_MUTATION_TEST_SH_PATHS=(
+  ".claude/hooks/hook-input-contract.test.sh"
+  ".claude/hooks/lib/hook-input.sh"
+  "plugins/soleur/test/hook-input-classification-mutation.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/devin-docs-drift-check — behavioural gate for the scheduled docs-drift workflow: the check
+# step's anchors it extracts verbatim, plus the docs trees the watch scans.
+AFFECTED_SCRIPTS_DEVIN_DOCS_DRIFT_CHECK_PATHS=(
+  ".github/workflows/scheduled-devin-docs-drift.yml"
+  "docs/"
+  "plugins/soleur/docs/"
+  "scripts/devin-docs-drift-check.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# tests/scripts/infra-privileged-tier-census — the Tier-B privileged-credential census (#8209,
+# ADR-241): scans every workflow for environment: declarations and the terraform deployment-policy
+# objects that arm them.
+AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
+  ".github/workflows/"
+  "apps/web-platform/infra/"
+  "tests/scripts/test-infra-privileged-tier-census.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
+# the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
+AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
+  "scripts/battery-tag-authorship.test.sh"
+  "scripts/battery-tag-authorship-mutations.test.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+
+# scripts/test-all-fast-tier-budget (#9763) — the fast-tier budget ratchet. Its verdict reads the
+# always-on list and the committed duration manifest; a change to either must select it.
+AFFECTED_SCRIPTS_TEST_ALL_FAST_TIER_BUDGET_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/test-all-fast-tier-budget.test.sh"
+  "scripts/test-all.sh"
+)
+
+# --- #9763 fast-tier demotions: declared scopes for suites withdrawn from ALWAYS_ON whose
+# verdicts walk a corpus. The orphan lint refuses a demotion without a named scope; each array
+# names the trees the suite actually reads (edges are ^-prefixed path matches — a suffix walk
+# like `*.sh` becomes the dirs where those files live).
+
+# plugins/soleur/test/operator-ack-guard — finds every *.sh sourcing or calling the ack guard
+# (find . -name '*.sh' + grep -rl --include='*.sh' across the tree). Edge = the dirs that hold shell.
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
+  "scripts/"
+  "plugins/"
+  "tests/"
+  ".claude/"
+  ".github/"
+  "apps/web-platform/scripts/"
+  "apps/web-platform/infra/"
+  "plugins/soleur/test/operator-ack-guard.test.sh"
+  "plugins/soleur/test/fixtures/operator-ack-arms.tsv"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/operator-script — same whole-tree *.sh walk for the operator-script lib.
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
+  "scripts/"
+  "plugins/"
+  "tests/"
+  ".claude/"
+  ".github/"
+  "apps/web-platform/scripts/"
+  "apps/web-platform/infra/"
+  "plugins/soleur/test/operator-script.test.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-shell-capture-exit-live — live scanner over *.sh for capture-exit shape.
+AFFECTED_SCRIPTS_LINT_SHELL_CAPTURE_EXIT_LIVE_PATHS=(
+  "scripts/"
+  "plugins/"
+  "tests/"
+  ".claude/"
+  ".github/"
+  "apps/web-platform/scripts/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# tests/scripts/sentry-alert-live-fidelity — live probe of the sentry alert arms; the corpus it
+# cares about is the sentry infra + the workflows that invoke it.
+AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_LIVE_FIDELITY_PATHS=(
+  "apps/web-platform/infra/sentry/"
+  ".github/workflows/"
+  "tests/scripts/test-sentry-alert-live-fidelity.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/test-contention — measures the contention machinery itself (test-contention.sh, the
+# runner's lock/queue paths). A docs-only diff can never move its verdict.
+AFFECTED_SCRIPTS_TEST_CONTENTION_PATHS=(
+  "scripts/lib/test-contention.sh"
+  "scripts/test-all.sh"
+  "scripts/test-contention.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/test-all-infra-coverage-notice — census of infra-suite registration coverage; its
+# subject is the infra tree + the runner's registration corpus.
+AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
+  "apps/web-platform/infra/"
+  ".github/workflows/"
+  "tests/scripts/"
+  "scripts/test-all.sh"
+  "scripts/test-all-infra-coverage-notice.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/guard-vacuity-floor — derives its population from git ls-files '*.test.sh' — the
+# suite corpus under these roots.
+AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
+  "scripts/"
+  "plugins/soleur/test/"
+  "tests/"
+  ".claude/"
+  "apps/web-platform/scripts/"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-orphan-test-suites — scans the registration corpus for unregistered suites;
+# subject is every *.test.* tree plus the runner that registers them.
+AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
+  "scripts/"
+  "plugins/soleur/test/"
+  "tests/"
+  ".claude/"
+  "apps/web-platform/scripts/"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-trap-tempfile-ownership — *.sh-wide trap/tempfile ownership lint.
+AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
+  "scripts/"
+  "plugins/"
+  "tests/"
+  ".claude/"
+  ".github/"
+  "apps/web-platform/scripts/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/check-cloudflare-token-drift — scans .github/ workflows and actions for token drift.
+AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
+  ".github/"
+  "infra/"
+  "scripts/check-cloudflare-token-drift.sh"
+  "scripts/check-cloudflare-token-drift.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/fanout-suite-scope — drives a sandbox recorder over test-all.sh's
+# registration corpus; subject is the runner itself.
+AFFECTED_PLUGINS_SOLEUR_TEST_FANOUT_SUITE_SCOPE_TEST_SH_PATHS=(
+  "scripts/test-all.sh"
+  "scripts/lib/"
+  "plugins/soleur/test/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/fixture-env-adoption — census of fixture-env adoption across the test corpus.
+AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_ENV_ADOPTION_TEST_SH_PATHS=(
+  "plugins/soleur/test/"
+  "tests/scripts/"
+  "scripts/lib/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/fixture-dir-operand-assert — same corpus walk for fixture-dir operand shape.
+AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_DIR_OPERAND_ASSERT_TEST_SH_PATHS=(
+  "plugins/soleur/test/"
+  "tests/scripts/"
+  "scripts/lib/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/scripts-shard-totality — manifest-vs-registration census; subject is the
+# shard manifests + the runner's registration surface.
+AFFECTED_PLUGINS_SOLEUR_TEST_SCRIPTS_SHARD_TOTALITY_TEST_SH_PATHS=(
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
+  "scripts/suite-durations-heavy.tsv"
+  "scripts/regenerate-shard-manifest.py"
+  "scripts/test-all.sh"
+  "scripts/lib/"
   "scripts/lib/test-affected-paths.sh"
 )

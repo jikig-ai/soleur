@@ -3489,7 +3489,8 @@ _aff_runner_banner() {
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=143
+# #9763: 29 heaviest labels withdrawn to edge-selection; the floor pins count-5.
+_MIN_ALWAYS_ON_DECLARED=115
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4932,6 +4933,9 @@ if want_scripts; then
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
   # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
   run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
+  # #9763: the fast-tier budget ratchet — pins always-on committed weight to
+  # <=10s per suite and <=300s total so the local tier cannot silently regrow.
+  run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
   # Guard 1 for the #7869 runtime ceiling. Registered here rather than left to a
   # glob: nothing auto-discovers this directory, so an unregistered suite is
   # silently never gated — locally or in CI.
