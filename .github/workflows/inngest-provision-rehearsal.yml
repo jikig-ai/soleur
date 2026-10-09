@@ -84,7 +84,7 @@ jobs:
     # job sources repo scripts, and without the pin a branch dispatch could run a neutered
     # plan-shape guard that approves itself).
     environment: web-platform-infra-apply
-    # Budget = the SUM OF EVERY STEP'S OWN `timeout-minutes` plus a 10-minute runner margin —
+    # Budget = the SUM OF EVERY STEP'S OWN `timeout-minutes` plus a runner margin —
     # the sentinel suite (inngest-provision-rehearsal.test.sh) REDs a step without a bound
     # and a ceiling below the step sum. Teardown is its OWN job (`needs: rehearse`,
     # `if: always()`), so a ceiling reached here does not starve it.
@@ -272,19 +272,43 @@ jobs:
           # --since binds the window to THIS run's apply: a re-run reuses the same run id
           # (same host name), and the previous life's rows must not satisfy this gate.
           SINCE="$(cat "$GITHUB_WORKSPACE/phase-a-since.txt")"
+          # `doppler run` EXITS 1 ON ITS OWN FAILURES — the same code the capture script uses
+          # for a FAIL verdict. The script's terminal sentinel disambiguates: no
+          # INNGEST_PROVISION_CAPTURE_VERDICT line means the script never got to speak, and
+          # reporting that as a host failure blames the host for a credential problem. Two
+          # consecutive wrapper failures stop the poll; the second one self-probes the token
+          # (--only-names prints NAMES, never values) so the error names the fault instead of
+          # instructing a dashboard look.
+          wrapper_fails=0
           deadline=$(( SECONDS + 20 * 60 ))
           while (( SECONDS < deadline )); do
             set +e
             doppler run --preserve-env -p soleur -c prd_terraform -- \
               bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
                 --mode phase-a --since "$SINCE" \
-                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env"
-            rc=$?
+                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-a.log
+            rc=${PIPESTATUS[0]}
             set -e
+            if [[ "$rc" -eq 1 ]] && ! grep -q 'INNGEST_PROVISION_CAPTURE_VERDICT=' /tmp/capture-a.log; then
+              wrapper_fails=$(( wrapper_fails + 1 ))
+              if [[ "$wrapper_fails" -ge 2 ]]; then
+                probe_out="$(doppler secrets --only-names -p soleur -c prd_terraform 2>&1)" || true
+                if [[ -n "$probe_out" ]]; then
+                  echo "::error::doppler run failed twice with no capture verdict, but DOPPLER_TOKEN CAN read soleur/prd_terraform — NOT a token-scope fault; read the step log for what the wrapper did. This says nothing about the rehearsal host."
+                else
+                  echo "::error::doppler run failed twice with no capture verdict and DOPPLER_TOKEN CANNOT read soleur/prd_terraform — the token is the fault. This says nothing about the rehearsal host."
+                fi
+                exit 1
+              fi
+              echo "::warning::doppler run exited 1 with no capture verdict — wrapper fault (auth/config), not a host verdict. Retrying once."
+              sleep 15; continue
+            fi
+            wrapper_fails=0
             case "$rc" in
               0) echo "phase-a evidence: PASS"; exit 0 ;;
               1) echo "::error::phase-a evidence: FAIL — a forbidden marker exists (see capture output above). The rehearsal is stopped before phase B."; exit 1 ;;
-              *) sleep 30 ;;
+              2) sleep 30 ;;
+              *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
             esac
           done
           echo "::error::phase-a evidence gate timed out after 20 min — the expected NIC-absent failure was never observed. HALT: teardown still runs; read the Better Stack rows for host ${HOST}."
@@ -350,19 +374,31 @@ jobs:
           HOST="${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
           RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/${GITHUB_RUN_ID}"
           SINCE="$(cat "$GITHUB_WORKSPACE/phase-b-since.txt")"
+          wrapper_fails=0
           deadline=$(( SECONDS + 15 * 60 ))
           while (( SECONDS < deadline )); do
             set +e
             doppler run --preserve-env -p soleur -c prd_terraform -- \
               bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
                 --mode phase-b --since "$SINCE" \
-                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env"
-            rc=$?
+                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-b.log
+            rc=${PIPESTATUS[0]}
             set -e
+            if [[ "$rc" -eq 1 ]] && ! grep -q 'INNGEST_PROVISION_CAPTURE_VERDICT=' /tmp/capture-b.log; then
+              wrapper_fails=$(( wrapper_fails + 1 ))
+              if [[ "$wrapper_fails" -ge 2 ]]; then
+                echo "::error::doppler run failed twice with no capture verdict — wrapper fault (auth/config), not a host verdict. This says nothing about the rehearsal host."
+                exit 1
+              fi
+              echo "::warning::doppler run exited 1 with no capture verdict — wrapper fault. Retrying once."
+              sleep 15; continue
+            fi
+            wrapper_fails=0
             case "$rc" in
               0) echo "phase-b evidence: PASS"; exit 0 ;;
               1) echo "::error::phase-b evidence: FAIL (see capture output above)."; exit 1 ;;
-              *) sleep 30 ;;
+              2) sleep 30 ;;
+              *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
             esac
           done
           echo "::error::phase-b recovery gate timed out after 15 min — bootstrap-done never arrived for ${HOST}. HALT: teardown still runs."
@@ -407,19 +443,31 @@ jobs:
           RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/${GITHUB_RUN_ID}"
           SINCE="$(cat "$GITHUB_WORKSPACE/phase-a-since.txt")"
           RB="$(cat "$GITHUB_WORKSPACE/reboot-since.txt")"
+          wrapper_fails=0
           deadline=$(( SECONDS + 8 * 60 ))
           while (( SECONDS < deadline )); do
             set +e
             doppler run --preserve-env -p soleur -c prd_terraform -- \
               bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
                 --mode post-reboot --since "$SINCE" --reboot-since "$RB" \
-                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env"
-            rc=$?
+                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-c.log
+            rc=${PIPESTATUS[0]}
             set -e
+            if [[ "$rc" -eq 1 ]] && ! grep -q 'INNGEST_PROVISION_CAPTURE_VERDICT=' /tmp/capture-c.log; then
+              wrapper_fails=$(( wrapper_fails + 1 ))
+              if [[ "$wrapper_fails" -ge 2 ]]; then
+                echo "::error::doppler run failed twice with no capture verdict — wrapper fault (auth/config), not a host verdict. This says nothing about the rehearsal host."
+                exit 1
+              fi
+              echo "::warning::doppler run exited 1 with no capture verdict — wrapper fault. Retrying once."
+              sleep 15; continue
+            fi
+            wrapper_fails=0
             case "$rc" in
               0) echo "post-reboot evidence: PASS"; exit 0 ;;
               1) echo "::error::post-reboot evidence: FAIL — provision markers appeared after the reboot boundary; the latch did not hold."; exit 1 ;;
-              *) sleep 20 ;;
+              2) sleep 20 ;;
+              *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
             esac
           done
           echo "::error::post-reboot gate timed out after 8 min — the restage anchor never re-emitted for ${HOST}. HALT: teardown still runs."

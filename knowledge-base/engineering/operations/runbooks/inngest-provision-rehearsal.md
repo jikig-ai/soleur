@@ -21,8 +21,8 @@ and Phase A fails against a scratch config that exists but is never read.
 Check the pin before dispatching:
 
 ```bash
-grep -oE 'soleur-inngest-bootstrap:v[0-9.]+' \
-  apps/web-platform/infra/cloud-init-inngest.yml
+# The rendered pin (image ref in cloud-init) vs. the newest minted tag:
+grep -oE 'soleur-inngest-bootstrap:v[0-9.]+' apps/web-platform/infra/cloud-init-inngest.yml | sort -u
 git tag --merged origin/main --list 'vinngest-v*' | sort -V | tail -1
 ```
 
