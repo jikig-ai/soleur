@@ -205,13 +205,13 @@ on:
           # requested host. Both volumes and the LUKS passphrase are preserved by
           # OMISSION from the -target set. REFUSES web-1. See the web_host_replace job.
           - web-host-replace
-          # #6977 — git-data BIRTH path, counterpart of git-data-host-replace (full text: the job-rationale runbook, `inngest_volume_recut` section).
+          # #6977 — git-data BIRTH path, counterpart of git-data-host-replace (full text: the job-rationale runbook, `git_data_host_create` section).
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write via the job's github.token; posts findings to #6767). See the
           # entrypoint_audit job below.
-          # #7095 — re-mints the CF Access ci_ssh service token (full text: the job-rationale runbook, `inngest_volume_recut` section).
+          # #7095 — re-mints the CF Access ci_ssh service token (full text: the job-rationale runbook, `ci_ssh_token_replace` section).
           - ci-ssh-token-replace
           # #7542 — delivers a `vector.toml` change to web-1 on its own dispatch, scoped to
           # terraform_data.journald_persistent (the resource whose triggers_replace hashes that
@@ -1576,7 +1576,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # SHARED inngest mutex (#7695): the group cutover-inngest.yml, deploy-inngest-image.yml and
-    # restart-inngest-server.yml serialize on. Why: job-rationale.md (runbooks/) §inngest_volume_recut.
+    # restart-inngest-server.yml serialize on. Why: ADR-100 (one singleton control plane, one writer at a time); pinned by the B9 row of terraform-target-parity.test.ts.
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
@@ -1759,7 +1759,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # SHARED inngest mutex (#7695): the group cutover-inngest.yml, deploy-inngest-image.yml and
-    # restart-inngest-server.yml serialize on. Why: job-rationale.md (runbooks/) §inngest_volume_recut.
+    # restart-inngest-server.yml serialize on. Why: ADR-100 (one singleton control plane, one writer at a time); pinned by the B9 row of terraform-target-parity.test.ts.
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
@@ -2057,7 +2057,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── registry-host scoped -replace (dispatch-only; re-run cloud-init; ADR-096) ─
-  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §inngest_volume_recut/registry-host scoped -replace
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry-host scoped -replace
   registry_host_replace:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-host-replace'

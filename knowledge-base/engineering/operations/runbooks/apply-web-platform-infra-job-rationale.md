@@ -466,7 +466,7 @@ routine merge apply moves from 16 min to 47 min, and this group covers `ci_ssh_t
 ### Retired job: `inngest_backstop_retire` (formerly `inngest_volume_recut`)
 
 The dispatch-only job that retired the plaintext Inngest Redis AOF backstop volume (`apply_target=inngest-backstop-retire`,
-four reviewer-approved phases: detach, wipe, teardown, destroy) ran to completion on 2026-10-09 (detach run 37950928039,
+four reviewer-approved phases: detach, wipe, teardown, destroy; dispatched three times) ran to completion on 2026-10-09 (detach run 37950928039,
 wipe run 37955244979, destroy run 37958051426) and was deleted by #8285 PR B together with its gate library, its
 throwaway wipe host and its five dispatch inputs. Hetzner answered `GET /v1/volumes/106261946 -> 404` at 2026-10-09T16:21:26Z.
 Its predecessor `inngest_volume_recut` (#7695, `apply_target=inngest-volume-recut`) was replaced earlier by the 2026-09-20
@@ -914,7 +914,7 @@ workflow-injection guidance. All action references are SHA-pinned.
     mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
     dispatch issued while a merge apply is in flight is now a 47-minute wait.
 
-## inngest_volume_recut/registry-host scoped -replace
+## registry-host scoped -replace
 
   Selected by `-f apply_target=registry-host-replace`. zot-registry.tf resources are
   OPERATOR_APPLIED_EXCLUSIONS (CTO ruling 2026-07-06) — deliberately NOT in the per-PR

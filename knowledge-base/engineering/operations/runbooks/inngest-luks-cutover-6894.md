@@ -107,7 +107,7 @@ name the reason field to read.
 | Flag | What happened | Where the store is | What to do |
 | --- | --- | --- | --- |
 | `done` | Cutover complete, verified after the swap | **Encrypted volume** | §5 close-out |
-| `rolled-back` | The post-swap verification failed; the host reverse-copied and cleared the pointer | **Plaintext volume**, intact | Read `reason=t3-failed-rc*`; fix the cause; re-dispatch |
+| `rolled-back` | HISTORICAL (pre-2026-10-09 layout): the post-swap verification failed; the host reverse-copied and cleared the pointer. The plaintext volume no longer exists, so a fresh `rolled-back` row on this host is an incident (the on-host rollback refuses with `rollback-no-backstop`) | Not on a plaintext volume | Follow §5a; read `reason=` first |
 | `aborted` | A guard refused. Writers were resumed BEFORE the flag landed | Wherever it was before you dispatched | Read `reason=`; see below |
 | `copied` (persisting) | The swap LANDED but its bookkeeping (envfile, fstab, durable pointer) did not finish — a SIGTERM, a Doppler failure on the pointer write, or a refusal inside it. NOT terminal: every 30s tick re-drives the bookkeeping (`reason=repair-forward`) | **Encrypted volume**, serving | Nothing, if the next row is `done`. If `copied` persists across ticks, read the refusal `reason=` beside it — that is the bookkeeping step that keeps failing |
 | `aborted` with the pointer PRESENT | HISTORICAL: a ROLLBACK was interrupted (its `reason=` named the step: `rollback-no-backstop`, `t2-*`, `rollback-mapper-still-open`). The verb is retired (§5a), so a fresh row of this shape is an incident, not a rollback | **Encrypted volume**, serving | Do not look for a rollback dispatch: there is none. Read §5a, then §6 |
@@ -279,6 +279,21 @@ alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose
 the ledger does not claim. Nothing here can put it back on a plaintext volume. Treat each as a production incident
 (`soleur:incident`): read the newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row first (§5 step 1's query).
 
+**Signal -> route.** Read the newest `host_role=dedicated` probe row first, then pick the route; every route below is a
+production write and needs the operator's per-command go-ahead:
+
+| Signal | What it means now | Route |
+| --- | --- | --- |
+| Host dark / probe silent, volume intact | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
+| `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
+| `rollback_inversion` verdict from the property probe | The ledger/probe pair claims plaintext on a host that has no plaintext volume | Incident; the verdict text names this section |
+| `op=luks-cutover` dispatched again | Refused on this host: the durable pointer is set and the flag is `done` (G1/G2) | Nothing to do |
+
+The probe's other verdicts are about the ledger or the probe pipeline, not about where the store is: `under_claim` is a
+ledger-only edit, `backstop_expired` cannot fire once the backstop row is gone, and `no_rows` / `producer_silent` /
+`row_unusable` / `ledger_unreadable` (exit 3) mean the probe pipeline went silent or unreadable (see the #9703 note under
+"Rules that stay in force"): that reads as "cannot establish", never as healthy.
+
 **Recovery routes that exist:**
 
 - A host that is dark or stuck, with the volume intact: `apply_target=inngest-host-replace` (it keeps the LUKS volume
@@ -300,7 +315,7 @@ volume destroyed there is no plaintext exception to record, so none of those ste
 
 **Status: complete on 2026-10-09.** The plaintext backstop `hcloud_volume.inngest_redis` (Hetzner id **106261946**, ext4,
 hel1, 10 GiB) was detached, zeroed and read back, and deleted. Hetzner answered `GET /v1/volumes/106261946 -> 404` at
-2026-10-09T16:21:26Z. The dispatch that did it (`apply_target=inngest-backstop-retire`, four reviewer-gated phases) and
+2026-10-09T16:21:26Z. The dispatch that did it (`apply_target=inngest-backstop-retire`, a four-phase job, dispatched three times, each phase reviewer-gated) and
 its gate library were deleted by #8285 PR B; the code is in git history at d7dee46bb0 (PR #9784). Ref #8285, Ref #6894.
 The live store on `hcloud_volume.inngest_redis_luks` (id **106903269**) was never touched.
 
@@ -310,37 +325,10 @@ The live store on `hcloud_volume.inngest_redis_luks` (id **106903269**) was neve
 | `wipe` | https://github.com/jikig-ai/soleur/actions/runs/37955244979 | success; evidence row `result=wiped readback=zero sig_after=none`, then the throwaway server and attachment torn down in the same dispatch |
 | `destroy` | https://github.com/jikig-ai/soleur/actions/runs/37958051426 | success; `Apply complete! 0 added, 0 changed, 1 destroyed`; `server volumes == [106903269]` |
 
-The evidence, its limits and the attestation are in `knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md`.
+The evidence, how it was graded, its limits and the attestation are in `knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md`.
 **The erasure is logical, guest-side and self-attested**: Hetzner records that a non-live server held the volume between an
 attach and a detach, and the host reported the zero and read-back; nothing independent corroborates that the overwrite
 happened, and no claim of physical or secure erasure is made.
-
-### Reference: how the wipe evidence was graded (kept; the triage tables document what was checked)
-
-Every read below was self-pullable (Better Stack query or a read-only Hetzner `GET`); none needed a shell on any host.
-
-**Two classes of `refused` row.** The row's `reason=` named the guard, and the guard decided what could be assumed about
-the volume:
-
-- **Pre-write guards** refuse before the script has touched the device, so the volume is as it was:
-  `config_invalid`, `config_id_mismatch`, `device_absent`, `device_unresolved`,
-  `other_volume_attached`, `not_whole_disk`, `size_mismatch`, `mounted`, `has_children`,
-  `sysfs_absent`, `has_holders`, `luks_signature`, `type_not_ext4`.
-- **Post-write guards** fire after the zeroing has begun: `zero_failed`, `readback_nonzero` and `sig_survived`. After
-  one of these the device may be partially zeroed and the volume is not intact.
-
-The wipe host's identity pins were `host=soleur-inngest-backstop-wipe` and `shipper=inngest-backstop-wipe`; both held on
-the real run (the first-run hostname assumption was measured and was right).
-
-### What was measured on the first and only real run
-
-- On-host duration: 69 s for 10 GiB (16:03:16 to 16:04:25 on the host's clock).
-- The wipe row's top-level `dt` is the **sender's clock** (whole-second precision, `16:04:25.000000`), not Better Stack's
-  receive time; `ingest_time` is the receive time (`16:04:25.889296`). The window check holds on `ingest_time`: it lies
-  inside the attach-finish (16:03:10Z) and the detach-finish (16:05:05Z) of the volume's Hetzner actions.
-- Terraform: CI pinned 1.10.5. The orphan-address `-target` experiment (local backend, builtin `terraform_data`) was
-  re-run on 1.10.5 and matched 1.9.8: a targeted plan on the orphan attachment shows only the attachment delete, on the
-  volume only the volume delete, untargeted shows both.
 
 ### Read-backs after `destroy` (read-only; re-runnable)
 

@@ -646,7 +646,7 @@ the questions they left marked unmeasured. Ref #8285, Ref #6894.
 The plaintext backstop `hcloud_volume.inngest_redis` (Hetzner id 106261946) was detached (run 37950928039), zeroed and
 read back (run 37955244979) and destroyed (run 37958051426) on 2026-10-09; Hetzner answered `GET /v1/volumes/106261946 -> 404`
 at 16:21:26Z. The evidence-path variant was used; the provider-only variant (D4 of the 2026-10-08 addendum) was not. The
-three-phase dispatch, its wipe host, its gate library and the `op=luks-rollback` verb were deleted by PR B once the 404 was
+four-phase job (dispatched three times), its wipe host, its gate library and the `op=luks-rollback` verb were deleted by PR B once the 404 was
 read back. The destruction record `knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md` carries the
 evidence and the attestation. The destruction facts do not depend on PR #9877; the code-retirement statements in this
 addendum (the dispatch, its gate library and `op=luks-rollback` deleted) take effect on that PR's merge.

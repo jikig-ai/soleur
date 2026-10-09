@@ -300,7 +300,7 @@ gate_mutate_layered() {
 # a wrapper self-test for whatever local `check()` it defines. NEITHER reaches the two wrappers
 # DEFINED HERE. Measured on test-inngest-backstop-retire-gate.sh (since deleted, #8285 PR B; it succeeded the retired recut gate suite): replacing `gate_check`'s body with a
 # bare `pass "$name"` left the suite at 50 passed, 0 failed with the anti-vacuity floor healthy,
-# and `gate_mutate_layered` the same — and this harness is sourced by 13 suites, so one edit here
+# and `gate_mutate_layered` the same — and this harness is sourced by every gate suite, so one edit here
 # silences the degraded-shape and invoked-not-sourced batteries in all of them at once.
 #
 # Call it once, immediately after sourcing, BEFORE the first real arm. It drives each wrapper in
