@@ -1145,6 +1145,16 @@ AFFECTED_SCRIPTS_LEARNING_RETRIEVAL_BENCH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/ci-push-dedupe (#9512, ADR-276 S2) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
+# parses the eight gated conditions and pins the test aggregator; the only repo file it reads is the workflow. Declared
+# from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-push-dedupe.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus
 # walk is sandbox-only (synthetic repos + fixture trees); the real subject is the resolver SUT
 # and the render arm it stubs, so the scan is scoped and the edges are honest.
