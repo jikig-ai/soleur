@@ -57,3 +57,16 @@ paths before constructing batched reads, just as for knowledge-base files.
 The workflow deliberately uses filename tracking for duplicate integer
 prefixes; the warning does not mean a migration was skipped. Its production
 catalog comparison remains separately gated and was skipped in this run.
+
+After an interrupted turn, resuming the old shell watch returned `Unknown
+process id`. Query GitHub directly before rearming a bounded watch; shell
+session handles are transient, not durable CI evidence. Direct probes found
+the pushed head fully green. The next main sync again imported a blank EOF,
+this time in `2026-10-09-feat-runtime-image-cve-scan-plan.md`; the merged-range
+whitespace check caught it and its final blank line was removed.
+
+The delegated TypeScript import scan initially indexed a call expression's
+first argument without checking that an argument existed. A zero-argument
+call caused a visible parser-probe failure; adding the argument-count guard
+made the repeated read-only scan pass. Treat auxiliary parser failures as
+incomplete import evidence until the corrected scan succeeds.

@@ -70,6 +70,27 @@ successful build admission. The remaining acceptance chain remains current-sourc
 and full-production recovery, authenticated screenshots, eligible routine
 consumer, permitted mode-specific Web/CLO evidence, then full review/promotion.
 
+The subsequent main sync through `5485dffdaf41d67b2b833b331a7056a56303560b`
+adds global Vitest 4.1.11 and an exact three-file isolation-canary payload to
+the production image, removes the reverted bwrap file-cap elevation and
+container SYS_ADMIN addition, and rejects any file-cap binary. These production
+image controls, bwrap shim/outer-wrap execution, deploy-state/isolation ledgers
+and advisory image-CVE scanning are not supplied or qualified by this offline
+application-image proposal. Compiler-import inspection confirms the export
+set above is still sufficient; no build or infrastructure probe ran.
+
+Maintenance source `82e38794147e698a6916178e5e4d3d46f42ea0cb` passed all 25
+required checks (CI `37962538777`, tenant `37962538591`, RLS `37962538358`,
+final guards `37962582454`). Direct verification found 85 passes and seven
+skips, no failures/cancellations/pending; RLS applied 186 migrations and passed
+11 files / 153 tests, with production parity skipped. After the clean main
+sync, the previously authorized 30-file fixture set passed at merged source
+`c15572e48ce8cbf88b328647842ecc138253ee1a`: 255 unit and 66 component tests,
+exact file-set matches, no failures/skips/timeouts. Sanitized environment,
+disabled env-file loading, fake adapters/processes and one fork worker were
+retained. Syntax checks passed for 21 changed shell scripts. These checks do
+not qualify live sandbox, deployed-image isolation or recovery behavior.
+
 No build, image/container mutation, SQL or rehearsal has executed as part of
 this proposal. Codex remains default-off, customer content blocked and PR #9051
 draft with auto-merge disarmed. Subscription and OpenAI assistant usage are
