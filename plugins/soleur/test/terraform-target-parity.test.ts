@@ -3528,7 +3528,7 @@ describe("inngest-backstop-retire dispatch: registration, binding, ordering and 
     expect(body).not.toMatch(/terraform\s+state\s+(rm|mv|push|replace-provider)\b/);
   });
 
-  test("sources the gate lib and CALLS its three functions under a non-suppressing `if !`", () => {
+  test("sources the gate lib and CALLS its gate functions under a non-suppressing `if !`", () => {
     expect(body).toContain("tests/scripts/lib/inngest-backstop-retire-gate.sh");
     expect(body).toMatch(/^\s*if ! inngest_backstop_retire_gate \S+ "\$RETIRE_PHASE" "\$EXPECTED_INNGEST_VOLUME_ID" untargeted; then$/m);
     expect(body).toMatch(/^\s*if ! inngest_backstop_retire_gate \S+ "\$RETIRE_PHASE" "\$EXPECTED_INNGEST_VOLUME_ID" targeted; then$/m);
@@ -3598,6 +3598,36 @@ describe("inngest-backstop-retire dispatch: registration, binding, ordering and 
   test("asserts the reviewer set is non-empty at dispatch time (DP-11 F8)", () => {
     expect(jobBlock).toContain("environments/inngest-cutover");
     expect(jobBlock).toContain("required_reviewers");
+  });
+
+  test("D-D/W1: the live-store gate is skipped for teardown ONLY, and the read-back runs under always()", () => {
+    const LIVE = /- name: Live-store gate[^\n]*\n {8}if: env\.RETIRE_PHASE != 'teardown'\n/;
+    const READBACK = /- name: Read-back[^\n]*\n {8}if: always\(\) && steps\.conv\.outcome == 'success' && steps\.conv\.outputs\.skip != 'true'\n/;
+    expect(jobBlock).toMatch(LIVE);
+    expect(jobBlock).toMatch(READBACK);
+    // non-vacuity: the patterns can tell the guarded form from an unguarded one
+    expect(jobBlock.replace("if: env.RETIRE_PHASE != 'teardown'\n", "")).not.toMatch(LIVE);
+    expect(jobBlock.replaceAll("if: always() && steps.conv.outcome", "if: steps.conv.outcome")).not.toMatch(READBACK);
+  });
+
+  test("D-A/D-B: the destroy precondition is handed Hetzner's action history and the fetched CLO comment, never an HTTP status", () => {
+    expect(body).toMatch(/^\s*if ! inngest_backstop_destroy_precondition .*--clo-comment-file /m);
+    expect(body).toContain("--actions-file");
+    expect(body).toContain("--live-server-id");
+    expect(body).not.toContain("--clo-ref-http-code");
+    expect(body).toContain("issues/comments/${BASH_REMATCH[1]}");
+  });
+
+  test("the state-only reconcile -targets are literals (a non-literal -target value reads as host-creating to the escrow census)", () => {
+    for (const t of [
+      "hcloud_volume_attachment.inngest_redis",
+      "hcloud_volume.inngest_redis",
+      "hcloud_server.inngest_backstop_wipe",
+      "hcloud_volume_attachment.inngest_backstop_wipe",
+    ]) {
+      expect(body).toContain(`T=-target=${t} ;;`);
+    }
+    expect(body).not.toMatch(/-target="?\$/);
   });
 
   test("B9: the retire job, inngest_host, inngest_host_replace and cutover-inngest share ONE job-level mutex; the workflow-level root group governs all", () => {
