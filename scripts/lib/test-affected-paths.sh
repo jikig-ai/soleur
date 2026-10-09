@@ -168,16 +168,17 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/debug-probe-residue.test.sh"
   # operator-script's property is discovered, not enumerated: it greps the whole
   # tree for `lib/operator-script.sh` sourcers and asserts the no-secret-leak
-  # property over each. A diff adding a consumer anywhere must re-run it —
-  # scoping to the lib's own path would decline exactly that diff.
+  # property over each. #9763 demoted all three operator suites below to
+  # edge-selection with declared scopes covering every dir that holds *.sh
+  # (including knowledge-base/ — generated operator scripts ship under
+  # knowledge-base/project/specs/): a diff adding a consumer in one of those
+  # dirs still re-runs them, while an unrelated diff no longer pays ~220 s.
   # operator-ack-guard (#8486): Guard 1 censuses every tracked *.sh for raw typed-yes
   # prompts and confirm-skip flags, and Guard 2's population is every
-  # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
-  # anywhere must re-run it — scoping to the scripts it names would decline that diff.
+  # soleur_op_ack_or_die caller in the tree — covered by the same shell-dir edges.
   # operator-agent-runnable (ADR-264): Guard 1 DISCOVERS every generated operator script in the tree
-  # (git grep over file content) and drives each stage with no TTY, so a diff adding or editing a
-  # generated script anywhere must re-run it. A file edge cannot express "every file carrying a
-  # header", which is why this one is always-on. operator-stage-approval-hook (derived edge: every
+  # (git grep over file content) — its declared edge covers knowledge-base/ where
+  # generated scripts ship. operator-stage-approval-hook (derived edge: every
   # diff under plugins/soleur) and operator-9321-stages (declared edge below) are scoped, not
   # always-on: measured ~85 CPU-s that an unrelated web-platform or docs diff does not need to pay.
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
@@ -1939,5 +1940,22 @@ AFFECTED_SCRIPTS_LIB_INNGEST_PROBE_ROW_TEST_SH_PATHS=(
   ".github/workflows/"
   "plugins/soleur/test/"
   "scripts/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/operator-agent-runnable (#9763 demotion) — Guard 1 discovers every
+# generated operator script in the tree; generated scripts ship under knowledge-base/project/specs/.
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
+  "apps/"
+  "bin/"
+  ".claude/"
+  ".github/"
+  "knowledge-base/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "plugins/soleur/test/operator-agent-runnable.test.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
   "scripts/lib/test-affected-paths.sh"
 )

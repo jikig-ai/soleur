@@ -76,15 +76,6 @@ plugins/soleur/test/lane-frontmatter.test.sh	knowledge-base/project/specs/feat-c
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/2026-09-20-accountant-prepaid-hosting-contract.md
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md
 plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
-plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/legal/tenant-dpa-register.md
-plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/brainstorms
-plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/plans
-plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/specs
-plugins/soleur/test/operator-agent-runnable.test.sh	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
-plugins/soleur/test/operator-agent-runnable.test.sh	knowledge-base/project/specs
-plugins/soleur/test/operator-agent-runnable.test.sh	knowledge-base/project/specs/archive
-plugins/soleur/test/operator-agent-runnable.test.sh	knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
-plugins/soleur/test/operator-script.test.sh	knowledge-base/project/specs
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/plans
