@@ -763,13 +763,16 @@ srow "static: (positive control) the verb scan catches a planted write" "$([[ "$
 srow "static: the reader is on the census allow-list (READERS)" "$([[ "$(grep -c '"scripts/web-host-reboot-evidence.sh"' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" -ge 1 ]]; echo $?)"
 srow "static: the writer is NOT on the census allow-list" "$([[ "$(grep -c '"scripts/web-host-reboot.sh"' "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh")" == 0 ]]; echo $?)"
 # the one write site: the census over 'actions/reboot' finds exactly the recorded set (tests excepted)
+# `.github/workflows/inngest-provision-rehearsal.yml` joined the set in #9175: the dispatch-only
+# rehearsal workflow POSTs the same endpoint against its own throwaway host (unique-name id
+# resolution, fails closed on ambiguity) for the post-recovery latch check.
 if [[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]]; then
   census_files() { git ls-files --cached --others --exclude-standard -- scripts .github apps 2>/dev/null; }
 else
   census_files() { find scripts .github apps/web-platform/infra -type f 2>/dev/null; }   # a sandbox copy of this suite is not a git tree
 fi
 reboot_set="$(cd "$ROOT" && census_files | grep -E '\.(sh|yml|py)$' | grep -v '\.test\.' | xargs -r grep -l 'actions/reboot' 2>/dev/null | sort | tr '\n' ' ')"
-srow "static: the 'actions/reboot' census finds exactly the recorded set (${reboot_set})" "$([[ "$reboot_set" == "scripts/web-host-reboot.sh scripts/web2-rebirth.sh " ]]; echo $?)"
+srow "static: the 'actions/reboot' census finds exactly the recorded set (${reboot_set})" "$([[ "$reboot_set" == ".github/workflows/inngest-provision-rehearsal.yml scripts/web-host-reboot.sh scripts/web2-rebirth.sh " ]]; echo $?)"
 srow "static: the writer's POST site is unique in the script (one occurrence of the reboot path)" "$([[ -f "$RSCRIPT" && "$(grep -c 'actions/reboot' "$RSCRIPT")" == 1 ]]; echo $?)"
 # the copied helper bodies stay equal to the rebirth script's while both exist
 py_fn='

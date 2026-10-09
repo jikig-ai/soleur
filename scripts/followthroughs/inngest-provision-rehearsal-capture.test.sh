@@ -98,7 +98,7 @@ run() {
   if [[ "$rc" != "$wrc" ]]; then
     fail "$label — rc=${rc} (wanted ${wrc})" "$out"; return 1
   fi
-  if ! printf '%s' "$out" | grep -qF "INNGEST_PROVISION_CAPTURE_VERDICT=${rc}"; then
+  if ! grep -qF "INNGEST_PROVISION_CAPTURE_VERDICT=${rc}" < <(printf '%s' "$out"); then
     fail "$label — terminal sentinel missing or wrong (wanted VERDICT=${rc})" "$out"; return 1
   fi
   pass "$label"

@@ -1592,7 +1592,7 @@ STUB
   tb_ok "$( [ "$(grep -c ' phone provision-attempt-start attempt=1 ' <<<"$x")" = 1 ] && [ "$(grep -c ' phone provision-attempt-start ' <<<"$x")" = 1 ] && echo 0 || echo 1)" "T12: exactly one provision-attempt-start attempt=1 after arming (a single first-boot trigger)"
   tb_ok "$( [ "$(X systemctl is-active soleur-inngest-provision.timer)" = inactive ] && [ "$(X systemctl is-enabled soleur-inngest-provision.timer)" = enabled ] && echo 0 || echo 1)" "T12: the timer is enabled but NOT active (armed without --now)"
   tb_ok "$(grep -q ' phone provision-unit-armed ' <<<"$x" && echo 0 || echo 1)" "T12: provision-unit-armed is emitted by the rendered arming items"
-  tb_ok "$( [ "$(grep -c ' doppler ' <<<"$x")" -ge 2 ] && ! grep ' doppler ' <<<"$x" | grep -vq "TOKEN=$(sed -n 's/^DOPPLER_TOKEN=//p' "$W/c0/inngest-doppler.fixture") HOME=/root$" && echo 0 || echo 1)" "T6: every doppler call received DOPPLER_TOKEN and HOME=/root through real EnvironmentFile= parsing"
+  tb_ok "$( [ "$(grep -c ' doppler ' <<<"$x")" -ge 2 ] && ! grep -vq "TOKEN=$(sed -n 's/^DOPPLER_TOKEN=//p' "$W/c0/inngest-doppler.fixture") HOME=/root$" < <(grep ' doppler ' <<<"$x") && echo 0 || echo 1)" "T6: every doppler call received DOPPLER_TOKEN and HOME=/root through real EnvironmentFile= parsing"
   tb_ok "$(X test -e /var/lib/soleur-inngest-provision/done && echo 0 || echo 1)" "T12: the attempt latched"
 
   # ---- T9: TimeoutStartSec kill -> the TERM trap reports before SIGKILL, then attempt N+1 ------
@@ -1663,7 +1663,7 @@ STUB
   wait_boot || { echo "  FAIL: T11 container did not come back"; TB_FAIL=$((TB_FAIL + 1)); return; }
   local t11_up; t11_up="$(date +%s.%N)"
   XS 'printf tok > /run/inngest-bs-logs-token'
-  poll 20 "awk 'f; \$2 == \"PHASE\" && \$3 == \"T11a\" {f=1}' $LOGF | grep -q ' phone provision-attempt-exit-1 '"
+  poll 20 "grep -q ' phone provision-attempt-exit-1 ' < <(awk 'f; \$2 == \"PHASE\" && \$3 == \"T11a\" {f=1}' $LOGF)"
   x="$(lines_from T11a)"
   local t11_s; t11_s="$(awk '$2 == "phone" && $3 == "provision-attempt-start" {print $1; exit}' <<<"$x")"
   tb_ok "$( [ -n "$t11_s" ] && awk -v s="$t11_s" -v u="$t11_up" 'BEGIN { exit !((s - u) <= 15) }' && echo 0 || echo 1)" "T11: after a reboot with no latch the timer starts the unit within 15s of multi-user.target (up $t11_up, start ${t11_s:-none})"
@@ -1680,7 +1680,7 @@ STUB
   # attempts, then a success" is six failing pulls and then a served one.
   XS 'echo "1 1 1 1 1 1 0" > /var/lib/tierb/ctl/pull_rc'
   X systemctl start --no-block soleur-inngest-provision.service
-  poll 40 "awk 'f; \$2 == \"PHASE\" && \$3 == \"T10\" {f=1}' $LOGF | grep -q ' phone provision-attempt-exit-1 '"
+  poll 40 "grep -q ' phone provision-attempt-exit-1 ' < <(awk 'f; \$2 == \"PHASE\" && \$3 == \"T10\" {f=1}' $LOGF)"
   X systemctl start soleur-inngest-provision.timer >/dev/null 2>&1
   poll 90 '[ "$(systemctl show -p SubState --value soleur-inngest-provision.service)" = exited ]'
   x="$(lines_from T10)"

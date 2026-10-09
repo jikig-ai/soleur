@@ -173,7 +173,7 @@ bs_query() {
   # An HTTP-200 ClickHouse exception is NOT an empty result set — curl -f passes it and the
   # body parses to zero rows, which the callers would read as "the host said nothing". Treat
   # exception-shaped bodies as transport faults so they read TRANSIENT, never a verdict.
-  if printf '%s' "$out" | grep -qE 'DB::Exception|Code: [0-9]+\.|"exception"'; then
+  if grep -qE 'DB::Exception|Code: [0-9]+\.|"exception"' < <(printf '%s' "$out"); then
     printf '%s' "$out" >&2; return 1
   fi
   printf '%s' "$out"

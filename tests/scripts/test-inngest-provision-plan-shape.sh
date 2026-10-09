@@ -61,7 +61,7 @@ want() {
   local label="$1" w="$2" p="$3" m="$4" s="${5:-$SUT}" why="${6:-}"
   cases=$((cases + 1)); run "$s" "$p" "$m"
   if [[ "$RC" != "$w" ]]; then fail "$label — expected rc=$w, got $RC" "$OUT"; return; fi
-  if [[ -n "$why" ]] && ! grep -F -- '::error::' <<<"$OUT" | grep -qF -- "$why"; then
+  if [[ -n "$why" ]] && ! grep -qF -- "$why" < <(grep -F -- '::error::' <<<"$OUT"); then
     fail "$label — rc=$RC but no ::error:: line carries the reason '$why'" "$OUT"; return
   fi
   pass "$label (rc=$RC${why:+, reason matched})"

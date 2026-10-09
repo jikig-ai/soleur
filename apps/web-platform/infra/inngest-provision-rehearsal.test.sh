@@ -79,7 +79,7 @@ yes "the root contains EXACTLY {main,variables,rehearsal}.tf + the lockfile (no 
 yes "no production resource address is referenced (hcloud_*.inngest / doppler_*.inngest / remote state)" \
   "! grep -qE 'hcloud_(server|volume|firewall|network|ssh_key)\.inngest\b|doppler_(environment|project|config|service_token|secret)\.inngest|terraform_remote_state|data\.hcloud_server\.' '$REH_CODE'"
 no "hcloud_network.private is referenced ONLY as a data source" \
-  "grep -E '(^|[^.a-z_])hcloud_network\.private\b' '$REH_CODE' | grep -vqF 'data.hcloud_network.private'"
+  "grep -vqF 'data.hcloud_network.private' < <(grep -E '(^|[^.a-z_])hcloud_network\.private\b' '$REH_CODE')"
 yes "a distinct state key carries the rehearsal root (comment-stripped — a comment literal cannot satisfy this)" \
   "grep -qF 'web-platform/inngest-provision-rehearsal/terraform.tfstate' '$REH_CODE'"
 yes "the backend has no lockfile (R2 lacks conditional writes — the workflow's concurrency group is the serializer)" \
@@ -98,7 +98,7 @@ BAD_ADDR="$(grep -oE 'resource "(hcloud|doppler|random|tls)_[a-z_]+" "[a-z_]+"' 
             | grep -vE '"rehearsal(_[a-z0-9_]+)?"' || true)"
 yes "every managed resource address carries .rehearsal" "[[ -z '$BAD_ADDR' ]]"
 yes "the ONLY data source is the private-network read, bound to soleur-private by name" \
-  "[[ \$(grep -oE 'data \"[a-z_]+\" \"[a-z_]+\"' '$REH_CODE' | grep -vc 'hcloud_network.*private') -eq 0 ]] && awk '/data \"hcloud_network\" \"private\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' | grep -qE 'name[[:space:]]*=[[:space:]]*\"soleur-private\"'"
+  "[[ \$(grep -oE 'data \"[a-z_]+\" \"[a-z_]+\"' '$REH_CODE' | grep -vc 'hcloud_network.*private') -eq 0 ]] && grep -qE 'name[[:space:]]*=[[:space:]]*\"soleur-private\"' < <(awk '/data \"hcloud_network\" \"private\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' )"
 
 # ── 3. Non-inheriting scratch config ──────────────────────────────────────────
 yes "the scratch config is a doppler_environment (non-inheriting root config)" \
@@ -106,21 +106,21 @@ yes "the scratch config is a doppler_environment (non-inheriting root config)" \
 no "no doppler_config branch exists (a branch under prd inherits prod secrets)" \
   "grep -qF 'resource \"doppler_config\"' '$REH_CODE'"
 yes "the environment lives on the soleur-inngest project" \
-  "grep -A4 'resource \"doppler_environment\" \"rehearsal\"' '$REH_CODE' | grep -qF 'project = \"soleur-inngest\"'"
+  "grep -qF 'project = \"soleur-inngest\"' < <(grep -A4 'resource \"doppler_environment\" \"rehearsal\"' '$REH_CODE' )"
 yes "the service token is READ-scoped (the provision path only reads)" \
-  "awk '/resource \"doppler_service_token\" \"rehearsal\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' | grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"'"
+  "grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"' < <(awk '/resource \"doppler_service_token\" \"rehearsal\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
 yes "INNGEST_DIAGNOSTIC_BOOT is staged true (the rehearsal can never run a live scheduler)" \
-  "awk '/resource \"doppler_secret\" \"rehearsal_diagnostic_boot\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' | grep -qE 'value[[:space:]]*=[[:space:]]*\"true\"'"
+  "grep -qE 'value[[:space:]]*=[[:space:]]*\"true\"' < <(awk '/resource \"doppler_secret\" \"rehearsal_diagnostic_boot\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
 
 # ── 4. The forced-race toggle ─────────────────────────────────────────────────
 yes "nic_attached is a required variable (no default)" \
-  "! awk '/variable \"nic_attached\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' | grep -q 'default'"
+  "! grep -q 'default' < <(awk '/variable \"nic_attached\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
 yes "rehearsal_run_id is digit-validated (it lands in names/slugs)" \
-  "grep -A8 'variable \"rehearsal_run_id\"' '$REH_CODE' | grep -qF '[0-9]'"
+  "grep -qF '[0-9]' < <(grep -A8 'variable \"rehearsal_run_id\"' '$REH_CODE' )"
 yes "the NIC attachment is count-gated on nic_attached — inside the hcloud_server_network block itself" \
-  "awk '/resource \"hcloud_server_network\" \"rehearsal\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' | grep -qE 'count[[:space:]]*=[[:space:]]*var\.nic_attached \? 1 : 0'"
+  "grep -qE 'count[[:space:]]*=[[:space:]]*var\.nic_attached \? 1 : 0' < <(awk '/resource \"hcloud_server_network\" \"rehearsal\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' )"
 yes "the rehearsal host block carries NO inline network{} (Phase A is NIC-absent by definition)" \
-  "! awk '/resource \"hcloud_server\" \"rehearsal\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' | grep -qE '\\bnetwork[[:space:]]*\\{'"
+  "! grep -qE '\\bnetwork[[:space:]]*\\{' < <(awk '/resource \"hcloud_server\" \"rehearsal\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' )"
 
 yes "Sentry is suppressed on the rehearsal (empty DSN — stage-filtered prod alerts must not page)" \
   "grep -qE 'sentry_dsn[[:space:]]*=[[:space:]]*\"\"' '$REH_CODE'"
@@ -161,9 +161,9 @@ no "the rehearsal render never passes a literal prod config" \
 
 # ── 6. The workflow contract ──────────────────────────────────────────────────
 yes "the workflow is dispatch-only (no push/pull/schedule trigger)" \
-  "! awk '/^on:/{f=1;next} /^[a-z]/ {f=0} f' '$WF' | grep -qE '^\s*(push|pull_request|pull_request_target|schedule|merge_group):'"
+  "! grep -qE '^\s*(push|pull_request|pull_request_target|schedule|merge_group):' < <(awk '/^on:/{f=1;next} /^[a-z]/ {f=0} f' '$WF' )"
 yes "dry_run defaults true (a bare 'check the plan' must not spend a host)" \
-  "grep -A6 'dry_run:' '$WF' | grep -qF 'default: true'"
+  "grep -qF 'default: true' < <(grep -A6 'dry_run:' '$WF' )"
 yes "a teardown_only recovery arm exists" \
   "grep -qF 'teardown_only' '$WF'"
 yes "the reviewer-gated environment is bound" \
@@ -177,7 +177,7 @@ yes "the confirm token is REHEARSE-INNGEST-PROVISION" \
 yes "the rehearsal-directory env var names this root" \
   "grep -qF 'REHEARSAL_DIR: apps/web-platform/infra/inngest-provision-rehearsal' '$WF'"
 yes "terraform init runs -lockfile=readonly (the committed lockfile IS the pin)" \
-  "grep -cF 'lockfile=readonly' '$WF' | grep -qE '^[2-9]'"  # init runs in BOTH jobs
+  "grep -qE '^[2-9]' < <(grep -cF 'lockfile=readonly' '$WF')"  # init runs in BOTH jobs
 yes "terraform runs pinned at the repo's TERRAFORM_VERSION" \
   "grep -qF 'TERRAFORM_VERSION: \"1.10.5\"' '$WF'"
 yes "the plan-shape guard runs in BOTH modes (additive AND nic-attach)" \
@@ -189,9 +189,9 @@ yes "the reboot is the Hetzner API (never SSH)" \
 yes "the phase ordering is apply_A -> capture_A -> plan_B -> apply_B -> settle -> reboot -> capture_C" \
   "awk '/id: apply_a/{a=NR} /id: cap_a/{b=NR} /id: plan_b/{c=NR} /id: apply_b/{d=NR} /id: settle/{s=NR} /id: reboot/{e=NR} /id: cap_c/{f=NR} END{exit !(a<b && b<c && c<d && d<s && s<e && e<f)}' '$WF'"
 yes "teardown is its own job gated always() (a ceiling in rehearse cannot starve it)" \
-  "awk '/^  teardown:/{f=1} f&&/if:/{print;exit}' '$WF' | grep -qF 'always()'"
+  "grep -qF 'always()' < <(awk '/^  teardown:/{f=1} f&&/if:/{print;exit}' '$WF' )"
 yes "teardown runs under the infra-privileged environment (state writes need the credential tier)" \
-  "awk '/^  teardown:/{f=1} f&&/environment:/{print;exit}' '$WF' | grep -qF 'infra-privileged'"
+  "grep -qF 'infra-privileged' < <(awk '/^  teardown:/{f=1} f&&/environment:/{print;exit}' '$WF' )"
 yes "teardown destroys with nic_attached=false (the prod-network data read stays out of the destroy graph)" \
   "grep -qF 'var nic_attached=false' '$WF'"
 yes "the evidence artifact name carries run_attempt (immutable names collide on re-run)" \
