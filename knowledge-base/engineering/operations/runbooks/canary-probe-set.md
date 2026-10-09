@@ -188,38 +188,61 @@ command.
 `DEPLOY_ROLLBACK: bwrap sandbox non-functional ...` says THAT the blocking probe failed and keeps 200
 characters of stderr. When the probe fails, or the faithful canary (`op=sandbox-canary`) reports
 `sandbox_broken`, `ci-deploy.sh` also runs ONE bounded, read-only bundle inside the still-running canary
-(once per deploy) and emits it under the same `ci-deploy` journald tag, so it reaches Better Stack with
-no SSH:
+and emits it under the same `ci-deploy` journald tag, so it reaches Better Stack with no SSH. The two
+triggers are mutually exclusive in one run (a legacy failure exits before the faithful canary runs), so a
+deploy carries at most one bundle:
 
 ```text
 SOLEUR_CANARY_SANDBOX_DIAG: image=<image>:<tag> trigger=<legacy|faithful> section=<name> val="<text|<empty>>"
 ```
 
-`val` is last and quote-bounded; cut each line at `section=` and read the rest as free text. It is
-credential-scrubbed (`_cred_err_tail`, 200-char tail) and cannot change the deploy's exit code, state
-reason or teardown. Query:
-`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_CANARY_SANDBOX_DIAG`,
-then decode each row (`.raw | fromjson | select(.SYSLOG_IDENTIFIER=="ci-deploy") | .message`).
+`val` is last and quote-bounded; cut each line at the FIRST `section=` and read the rest as free text. It is
+credential-scrubbed (`_cred_err_tail`, which keeps the LAST 200 characters, so every row is short on
+purpose) and cannot change the deploy's exit code, state reason or teardown. Query:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_CANARY_SANDBOX_DIAG \
+  | jq -r '.raw | fromjson? | select(.SYSLOG_IDENTIFIER=="ci-deploy") | .message'
+```
+
+A complete bundle is fourteen rows: ten in-container sections, then `host`, `hostsec`, `kernel` and `done`.
 
 | section | what it shows | reads as |
 |---|---|---|
-| `id` | uid/gid of the exec user | expect 1001 |
-| `proc` | `CapInh/Prm/Eff/Bnd/Amb`, `NoNewPrivs`, `Seccomp` of a process in the container | non-zero `CapPrm`/`CapEff` for a non-root uid means caps reached the exec user, which bubblewrap 0.8.0 refuses |
+| `id` | uid/gid of the exec user | expect `uid=1001 gid=1001` |
+| `proc` | `CapInh/Prm/Eff/Bnd/Amb`, `NoNewPrivs`, `Seccomp` of the container shell | non-zero `CapPrm`/`CapEff` for a non-root uid means caps reached the exec user, which bubblewrap 0.8.0 refuses; `Seccomp=2` means a filter is installed (always true here: it does not separate AppArmor from seccomp) |
 | `lsm` | AppArmor profile and mode | `unconfined` or a missing profile points at the host profile, not the image |
 | `files` | mode/owner/size of `/usr/bin/bwrap` and the shim, `command -v bwrap`, `readlink -f` | a setuid bit or wrong owner is an image defect |
-| `caps` | `getcap` for both paths and a count of file-cap'd binaries under `/usr` | anything but `none` means the image carries file caps (the #9871 cause) |
+| `caps` | `getcap` for `/usr/bin/bwrap` and the shim | `bwrap=none` is clean. Only a `cap_` token means file caps; getcap error text (`No such file or directory`) is not a cap. Since #9874 the Dockerfile build aborts on any file cap, so a `cap_` token now means a stale image (check `prov`) or a bypassed build guard. `getcap=absent` means the tool is missing from the image |
 | `prov` | `BUILD_SHA` / `BUILD_VERSION` baked into the image | differs from the tag's commit = a stale image behind a newer tag (#9886) |
 | `direct_version` | `/usr/bin/bwrap --version` with the shim bypassed | `rc=126` = execve refused (file caps vs. bounding set, LSM, seccomp); a version line = exec is fine |
-| `direct_probe` | the blocking probe argv run against `/usr/bin/bwrap` directly | passes while the shimmed probe fails = the shim; fails the same = kernel/LSM posture |
+| `direct_probe` | the blocking (legacy) probe argv run against `/usr/bin/bwrap` directly | passes while the shimmed probe fails = the shim; fails the same = kernel/LSM posture. Under `trigger=faithful` it always passes (the legacy probe already did): read `sdk_probe` instead |
+| `sdk_probe` | the SDK's split-unshare argv (`--unshare-user --unshare-pid --proc /proc`) against `/usr/bin/bwrap` directly | the #9860 shape: `Can't mount proc on /newroot/proc: Operation not permitted` here with `direct_version rc=0` = namespace/mount creation denied (kernel/LSM posture). This argv is known to fail in the canary under `docker exec`, so the first stderr line decides, not the rc alone |
 | `kernel_ns` | userns sysctls as the container sees them | `restrict=1` or `max=0` = host userns policy |
-| `host` | the canary's `HostConfig`: cap-add, cap-drop, security-opt, privileged, AppArmor profile | a `SYS_ADMIN` cap-add or a missing `seccomp=` is a host-script defect (compare `ci_deploy_sha256` in deploy-status with the repo) |
-| `kernel` | host kernel, docker server version, host userns sysctl | version drift context |
+| `host` | the canary's `HostConfig`: `capadd`, `capdrop`, `priv`, `aa` (AppArmor profile) | a `SYS_ADMIN` cap-add or `priv=true` is a host-script defect |
+| `hostsec` | the `SecurityOpt` entries, each cut to 40 characters | expect `apparmor=soleur-bwrap` and a `seccomp={...` entry. docker inlines the whole seccomp profile here, so it is cut; a missing `seccomp=` entry means the profile was not applied |
+| `kernel` | host kernel and docker server version | version drift context |
+| `done` | `exec_rc=<n> lines=<n> capped=<0\|1>` | `exec_rc=0 lines=10 capped=0` = the bundle completed. `exec_rc=124` = the exec timed out and the LAST sections are missing (they are the probes); any other non-zero = `docker exec` itself failed |
 
-Decision order: `caps` non-empty, then image defect. `caps` = none and `direct_version rc=126`, then
-`proc` CapBnd/CapPrm against the `host` cap-add (stale host script). `direct_probe` passes but the shimmed
-probe failed, then the shim. `direct_probe` fails with a namespace error, then `lsm` + `kernel_ns` + `host`
-secopt (host posture). A flooded or timed-out bundle shows as a single `section=raw` line or fewer than
-eleven lines; that is itself a finding.
+### Which hypothesis holds (H1-H5, from the plan)
+
+| H | Hypothesis | Rows that decide it |
+|---|---|---|
+| H1 | The image still has `cap_sys_admin+ep` on `/usr/bin/bwrap` (stale or mis-built), and the bounding set lacks SYS_ADMIN, so execve is EPERM | `caps` has a `cap_` token; `prov` BUILD_SHA is the pre-fix commit (48d5144cf4), not the tag's; `direct_version rc=126` |
+| H2 | Exec is denied by LSM (AppArmor) or seccomp, independent of file caps | `caps=none` AND `direct_version rc=126`, with `proc` `Seccomp=2` and `lsm` naming the profile |
+| H3 | Exec works; namespace/mount creation is denied (the `Can't mount proc` shape, #9860) | `direct_version rc=0` AND `sdk_probe` (or `direct_probe` under `trigger=legacy`) failing with a namespace/mount error; `kernel_ns` / `kernel` show the userns policy |
+| H4 | The shim, not bwrap, is the culprit | `direct_probe rc=0` while the shimmed probe failed (`trigger=legacy` only) |
+| H5 | Container posture drift | `host` (`capadd`/`capdrop`/`priv`/`aa`) and `hostsec` differ from the `docker run` in `ci-deploy.sh` |
+
+H1 is excluded only when `caps` is `bwrap=none`; `done` must read `exec_rc=0` first, or the rows that decide H2-H4 may be missing.
+
+**Zero DIAG rows after a `DEPLOY_ROLLBACK` line** is NOT yet a finding: the host may still run the previous
+`ci-deploy.sh` (it is delivered by `apply-deploy-pipeline-fix`, whose run can be evicted by a pending
+`apply-web-platform-infra` run in the shared concurrency group, #8167). Check parity first:
+`bash scripts/check-deploy-script-parity.sh` (both arms: `/hooks/deploy-status` `ci_deploy_sha256` for web-1
+and the newest `DEPLOY_SCRIPT_SHA` row per host). Drift means a re-dispatch of `apply-deploy-pipeline-fix`, which needs explicit operator
+authorization; parity with no DIAG rows means the bundle itself failed (look for a lone `section=raw` row or a
+`done` row with a non-zero `exec_rc`).
 
 ## Faithful sandbox canary — #8752 hardening verdicts
 

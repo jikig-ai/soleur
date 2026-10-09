@@ -457,7 +457,7 @@ its own pre-existing rows; the guard proves routing through it, not the sanitise
 
 ### Post-merge (automatable)
 
-- [ ] `bash scripts/check-deploy-script-parity.sh --status-only` reports parity for the merge's `ci-deploy.sh`.
+- [ ] `bash scripts/check-deploy-script-parity.sh` (default: BOTH arms, `--status-only` reads web-1 only and `--bs-only` is its alternative, not an addition) reports parity for the merge's `ci-deploy.sh`; on drift the remedy is a `workflow_dispatch` re-run of `apply-deploy-pipeline-fix` (#8167 can evict the merge-triggered run), which needs explicit authorization.
 - [ ] After the next canary sandbox failure, `bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_CANARY_SANDBOX_DIAG` returns the section lines (credentials as declared above), and the sections decide H1-H5 per the table.
 
 ## Secondary Findings (investigated, NOT fixed here)
@@ -504,3 +504,38 @@ regulated-data surface: the markers carry kernel, capability and image-provenanc
 GDPR gate does not fire. No new persistent store or connection, so the Encryption Posture gate is skipped.
 No architectural decision is made or changed, so no ADR or C4 deliverable: the marker follows the existing
 ADR-115 trusted-region convention.)
+
+## Review Round 1 Amendments (2026-10-09, PR #9884)
+
+A 12-seat review (aggregate pattern tier) found the shipped design diverged from the plan in these ways. The text
+above is the plan as written; THIS section is what the code now does. All were fixed inline.
+
+- **`host` was unreadable on real docker.** docker inlines the whole ~12 KB seccomp profile into
+  `HostConfig.SecurityOpt`, so `head -c 600` plus the scrubber's 200-char tail kept only profile JSON and lost
+  `capadd`/`capdrop`/`priv`/`aa` (H5's whole evidence). The mock returned a short path, so no row saw it. Now `host`
+  carries the four short posture fields and a separate `hostsec` row carries each SecurityOpt entry cut to 40
+  chars; the mock models real docker (the TEMPLATE decides what it prints).
+- **Sections: ten in-container + `host`, `hostsec`, `kernel`, `done`.** Added `sdk_probe` (the SDK argv against the
+  real binary: `direct_probe` reuses the legacy argv and is predetermined green under `trigger=faithful`, so it
+  could not separate H3 there) and `done` (`exec_rc`, `lines`, `capped`: tells a timed-out exec from a failing
+  one from a clean one). Dropped `others_in_usr` (the Dockerfile's fail-closed audit already covers it) and the
+  `kernel` row's duplicate `restrict=`.
+- **`proc` read `/proc/self/status` through `sed`** (the sed child's caps); it now reads the shell's `/proc/$$/status`.
+- **Latch removed.** `CANARY_DIAG_EMITTED` was dead state: the legacy arm exits before the faithful canary runs, so
+  the two call sites are mutually exclusive.
+- **Bounds.** Host-side `docker inspect`/`docker version` now carry `timeout 3`; the exec carries `timeout -k 3`;
+  `CANARY_DIAG_TIMEOUT` is clamped to 60. Worst-case added time per bundle is 25 s + 3 s kill-after + 3 x 3 s
+  (about 37 s), and it applies to BOTH call sites: the rollback path (before `docker stop`) and the pre-promotion
+  faithful path, where every deploy since 2026-10-09 records `sandbox_broken`. The faithful bundle now runs AFTER
+  the Sentry page so it never delays it.
+- **Section names are an allowlist** (anything else, including a daemon error line or a forged first word, is
+  `section=raw`), so only the emitter can mint `host`/`hostsec`/`kernel`/`done`.
+- **Tests.** The real container script is now executed (under sh and bash) and pinned to the same section list as
+  the mock's default body; added rows for exec posture, health-failure negative direction, host-side hangs,
+  exec-status row, scrub RETENTION, the env-value redaction arm (with a control), forged section names, bounded
+  docker calls and the page-before-bundle order. Floor 522 -> 566.
+- **Runbook.** The decision table now carries the H1-H5 mapping, the corrected `caps` reading, the
+  zero-rows-means-check-parity branch and `| jq -r`.
+- **Post-merge ordering hazard.** The release deploy that merges this change can still run the OLD host script, so
+  the first failing deploy after merge may carry no DIAG rows: check parity (above) before reading absence as a
+  bundle failure.
