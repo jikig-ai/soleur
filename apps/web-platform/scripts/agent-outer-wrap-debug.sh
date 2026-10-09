@@ -23,7 +23,7 @@ EXTRA=()
 # Pin /usr/bin/bwrap, never PATH — the #8752 shim's NEWUSER-deny filter
 # exists to reject the INNER sandbox's argv, not measure ours.
 BWRAP="${BWRAP_PATH:-/usr/bin/bwrap}"
-if ! getcap "$BWRAP" 2>/dev/null | grep -q cap_sys_admin; then
+if ! grep -q cap_sys_admin < <(getcap "$BWRAP" 2>/dev/null); then
   EXTRA=(--unshare-user)
 fi
 

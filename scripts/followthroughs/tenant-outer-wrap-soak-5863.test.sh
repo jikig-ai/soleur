@@ -23,6 +23,12 @@ mkdir -p "$FX/bin"
 cat > "$FX/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 # Last positional arg is the URL; answer the fixture body + HTTP_STATUS line.
+# RECORDS argv (curl.argv) and stdin (curl.stdin) per call — the credential
+# headers now travel as `header = "..."` config lines on stdin, and a stub
+# that ignored stdin could not distinguish a probe that sends no credential.
+d="$SOAK_FX_DIR"
+printf '%s\n' "$*" >> "$d/curl.argv"
+cat >> "$d/curl.stdin"
 cat "$SOAK_FX_BODY"
 printf '\nHTTP_STATUS:%s\n' "${SOAK_FX_STATUS:-200}"
 STUB
@@ -32,7 +38,7 @@ NOW=$(date +%s)
 
 run_probe() { # run_probe <body-file> [http-status]
   local body="$1" status="${2:-200}" rc=0
-  SOAK_FX_BODY="$body" SOAK_FX_STATUS="$status" \
+  SOAK_FX_DIR="$FX" SOAK_FX_BODY="$body" SOAK_FX_STATUS="$status" \
     WEBHOOK_DEPLOY_SECRET=dummy CF_ACCESS_CLIENT_ID=dummy CF_ACCESS_CLIENT_SECRET=dummy \
     PATH="$FX/bin:$PATH" bash "$PROBE" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
@@ -76,6 +82,35 @@ check "HTTP 500 → TRANSIENT(2)" 2 "$(run_probe "$FX/http500.json" 500)"
 write_body short pass 2 "$((NOW - 86400))" "$((NOW - 3600))"
 check "green but <5 greens → TRANSIENT(2)" 2 "$(run_probe "$FX/short.json")"
 
+# 8. Credential transport: the request carries exactly the three header lines
+#    on curl's RECORDED stdin — a 64-hex digest, the CF client id, the secret —
+#    and none of it rides argv. A probe that sends no credential must not pass.
+write_body cred pass 6 "$((NOW - 4*86400))" "$((NOW - 3600))"
+: > "$FX/curl.stdin"; : > "$FX/curl.argv"
+run_probe "$FX/cred.json" >/dev/null
+if grep -qE 'header = "X-Signature-256: sha256=[0-9a-f]{64}"' "$FX/curl.stdin" \
+  && grep -qF 'header = "CF-Access-Client-Id: ' "$FX/curl.stdin" \
+  && grep -qF 'header = "CF-Access-Client-Secret: ' "$FX/curl.stdin" \
+  && ! grep -qE 'dummy|[0-9a-f]{64}' "$FX/curl.argv"; then
+  say "ok   credential transport: 3 header lines on curl.stdin (64-hex digest), none on argv"
+else
+  say "FAIL credential transport — stdin=$(cat "$FX/curl.stdin" 2>/dev/null | head -3) argv=$(cat "$FX/curl.argv" 2>/dev/null)"; fails=$((fails+1))
+fi
+
+# 9. Token-shape refusal: a malformed secret is TRANSIENT(2), sends ZERO curl
+#    calls and emits the value-free refusal marker — never the request.
+rm -f "$FX/curl.stdin" "$FX/curl.argv"
+err="$(SOAK_FX_DIR="$FX" SOAK_FX_BODY="$FX/cred.json" \
+  WEBHOOK_DEPLOY_SECRET=dummy CF_ACCESS_CLIENT_ID=dummy \
+  CF_ACCESS_CLIENT_SECRET='bad"secret' \
+  PATH="$FX/bin:$PATH" bash "$PROBE" 2>&1 >/dev/null)"; rc=$?
+if [ "$rc" = "2" ] && [ ! -e "$FX/curl.stdin" ] \
+  && [ "$(grep -cxF 'SOLEUR_CREDENTIAL_REFUSED script=tenant-outer-wrap-soak-5863 reason=token_shape' <<<"$err")" -eq 1 ]; then
+  say "ok   malformed secret → TRANSIENT(2), zero calls, refusal marker"
+else
+  say "FAIL malformed secret — rc=$rc calls=$([ -e "$FX/curl.stdin" ] && echo y || echo n) err=$err"; fails=$((fails+1))
+fi
+
 echo ""
-echo "=== Results: $((7 - fails))/7 passed, $fails failed ==="
+echo "=== Results: $((9 - fails))/9 passed, $fails failed ==="
 if [[ "$fails" -gt 0 ]]; then exit 1; fi

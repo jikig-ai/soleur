@@ -52,9 +52,24 @@ STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"
 REQUIRED_GREENS=5
 MIN_SPAN_SECS=$((3 * 24 * 3600)) # ≥3 days
 
+# Token-shape refusal: a credentialed request must never carry a malformed
+# secret (hostile characters would smuggle header lines through the --config
+# channel). Refusal is TRANSIENT (exit 2 — exit 1 is the FAIL verdict), sends
+# no request and prints one value-free marker (#7797 convention; mirrors
+# infra-config-activation-7220.sh).
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_refuse() { echo "TRANSIENT: $1 is unusable; no request was sent" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=tenant-outer-wrap-soak-5863 reason=token_shape" >&2; exit 2; }
+_bearer_ok "$CF_ACCESS_CLIENT_ID" || _refuse "the Cloudflare Access client id"
+_bearer_ok "$CF_ACCESS_CLIENT_SECRET" || _refuse "the Cloudflare Access client secret"
+
 # /hooks/deploy-status is a GET whose HMAC is computed over an EMPTY body
-# (mirrors canary-promotion-5875.sh), plus CF-Access headers.
-SIGNATURE="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
+# (mirrors canary-promotion-5875.sh). The webhook key travels on the
+# environment — NEVER argv (`openssl -hmac "$k"` is world-readable in
+# /proc/<pid>/cmdline). The signature must be exactly 64 lowercase hex;
+# python3 missing or an empty key leaves _sig empty and an unsigned request
+# must never be sent.
+SIGNATURE="$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' 2>/dev/null)" || SIGNATURE=""
+[[ "$SIGNATURE" =~ ^[0-9a-f]{64}$ ]] || _refuse "the request signature (python3 missing or the webhook key empty)"
 
 # Credential headers ride a process-substituted --config, not argv (a `-H`
 # arg is world-readable in /proc/<pid>/cmdline) — and the curl is

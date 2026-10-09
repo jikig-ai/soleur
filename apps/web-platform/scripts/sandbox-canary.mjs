@@ -1257,7 +1257,11 @@ function runOuterReplay(fixtureUrl) {
     }
     for (const f of substituteOuterRoot(fixture.prepFiles, root)) {
       mkdirSync(dirname(f), { recursive: true });
-      if (!existsSync(f)) writeFileSync(f, "");
+      try {
+        writeFileSync(f, "", { flag: "wx" });
+      } catch (err) {
+        if (err?.code !== "EEXIST") throw err;
+      }
     }
     const argv = substituteOuterRoot(fixture.bwrapSetupArgv, root);
     const own = outerWrapChdirTarget(argv);
@@ -1379,9 +1383,12 @@ async function runOuterSmoke(appRoot) {
       return 0;
     }
 
+    // HOME must point at the bound scratch home — inheriting /root (the
+    // in-image user) leaves the CLI's config dir unmounted → cli_exit_1.
     const res = spawnSync("/usr/bin/bwrap", ["--unshare-user", ...argv, cli, "--version"], {
       encoding: "utf8",
       timeout: 60_000,
+      env: { ...process.env, HOME: home, TMPDIR: "/tmp" },
     });
     let verdict;
     if (res.error) {
@@ -1391,9 +1398,11 @@ async function runOuterSmoke(appRoot) {
       };
     } else if (res.status === 0) {
       verdict = { verdict: "smoke_ok", reason: "ok" };
-    } else if (/operation not permitted/i.test(`${res.stderr ?? ""}`)) {
-      // In-image envs that forbid unprivileged userns land here — infra,
-      // not a mount-table defect (the deploy replay is the EPERM signal).
+    } else if (/operation not permitted|no permissions to create new namespace/i.test(`${res.stderr ?? ""}`)) {
+      // In-image envs that forbid unprivileged userns land here (bwrap's
+      // denial text is "No permissions to create new namespace" — NOT the
+      // EPERM phrase; both shapes must classify) — infra, not a mount-table
+      // defect (the deploy replay is the EPERM signal).
       verdict = { verdict: "canary_infra_error", reason: "bwrap_operation_not_permitted" };
     } else {
       // The CLI started and failed INSIDE the wrap — the case this smoke

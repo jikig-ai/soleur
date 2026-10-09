@@ -35,7 +35,7 @@ for dep in jq bwrap; do
   }
 done
 
-FIXTURE_ROOT="$(mktemp -d /tmp/tip.XXXXXX)"
+FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tip.XXXXXX")"
 trap 'rm -rf "$FIXTURE_ROOT"' EXIT
 
 # Prep the fixture's declared tree (prepDirs + prepFiles — the manifest the

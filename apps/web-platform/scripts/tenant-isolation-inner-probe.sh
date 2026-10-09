@@ -78,7 +78,7 @@ _read_err="$(cat "$_sib_marker" 2>&1 >/dev/null)"
 _read_rc=$?
 if [ "$_read_rc" -eq 0 ]; then
   bad "sibling file $_sib_marker is READABLE inside the wrap"
-elif ! printf '%s' "$_read_err" | grep -qi 'no such file'; then
+elif ! grep -qi 'no such file' <<<"$_read_err"; then
   bad "sibling read failed with a NON-absence error: $_read_err"
 fi
 

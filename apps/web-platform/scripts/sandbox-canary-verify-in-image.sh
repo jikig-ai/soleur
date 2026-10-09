@@ -93,17 +93,34 @@ docker run --rm \
     # cannot launch inside the wrap); canary_infra_error continues —
     # infra is non-signal here, same as in runReplay.
     # bun's stderr flows to the script's own stderr → the CI job log (a crash
-    # surfaces there; the verdict channel stays JSON-only on stdout).
-    SMOKE_OUT="$(bun scripts/sandbox-canary.mjs --smoke-outer /build | tail -1)"
-    SMOKE_V="$(printf '%s' "$SMOKE_OUT" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    # surfaces there; the verdict channel stays JSON-only on stdout). A bun
+    # crash under `set -e` must NOT leave the gate reading the prior line —
+    # every exit path ends with a JSON verdict.
+    if ! SMOKE_OUT="$(bun scripts/sandbox-canary.mjs --smoke-outer /build | tail -1)"; then
+      SMOKE_OUT="{\"verdict\":\"canary_infra_error\",\"reason\":\"smoke_spawn_failed\",\"arm\":\"outer-wrap\"}"
+    fi
+    if ! printf '%s' "$SMOKE_OUT" | jq -e '.verdict' >/dev/null 2>&1; then
+      SMOKE_OUT="{\"verdict\":\"canary_infra_error\",\"reason\":\"smoke_no_verdict\",\"arm\":\"outer-wrap\"}"
+    fi
+    SMOKE_V="$(printf '%s' "$SMOKE_OUT" | jq -r '.verdict')"
     if [ "$SMOKE_V" = "smoke_fail" ]; then
       printf '%s\n' "$SMOKE_OUT"
       exit 0
     fi
     if [ "$SANDBOX_CANARY_MODE" = capture ]; then
-      bun scripts/sandbox-canary.mjs --capture infra/sandbox-canary-argv.json
+      if ! bun scripts/sandbox-canary.mjs --capture infra/sandbox-canary-argv.json; then
+        printf "{\"verdict\":\"canary_infra_error\",\"reason\":\"capture_exit_nonzero\"}\n"
+        exit 0
+      fi
       cp infra/sandbox-canary-argv.json /out/sandbox-canary-argv.json
     else
-      bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json
+      # The gate reads tail -1 only. Capture stdout so a crash cannot leave the
+      # gate parsing an apt/npm progress line — but NEVER mask a verdict the
+      # command printed before exiting nonzero (argv_drift IS rc-nonzero).
+      VERIFY_OUT="$(bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json || true)"
+      printf '%s\n' "$VERIFY_OUT"
+      if ! printf '%s' "$VERIFY_OUT" | tail -1 | jq -e '.verdict' >/dev/null 2>&1; then
+        printf "{\"verdict\":\"canary_infra_error\",\"reason\":\"verify_exit_nonzero\"}\n"
+      fi
     fi
   '

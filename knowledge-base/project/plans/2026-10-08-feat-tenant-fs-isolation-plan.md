@@ -215,7 +215,9 @@ masked paths apply).
 | outer pidns + `--tmpfs /proc` + inner | **dead** — shim fd sweep needs `/proc/self/fd`; bwrap reads `/proc/sys/kernel/overflowuid` |
 | **arm F**: `setcap cap_sys_admin,cap_setuid,cap_setgid+ep bwrap` + outer wrap with **zero `--unshare-*`** + inner captured-argv | **WORKS** — `stat`/`ls` deny sibling; inner `INNER-OK`; caps cleared on child |
 
+<!-- lint-infra-ignore start -->
 Consequence (operator decision): the wrap is **mount-namespace only** —
+<!-- lint-infra-ignore end -->
 no pidns, no netns, no userns. `#9723` cannot close here; it requires a
 pidns, which requires `systempaths=unconfined` + netns egress plumbing —
 a container-posture widening deferred to #9773's topology discussion.
@@ -475,8 +477,12 @@ Remaining Phase-0 items (still open under arm F):
 |---|-----------------------------------|-----------|--------|
 | 1 | "Design per-tenant filesystem isolation for the in-process multi-tenant runner (mount-namespace-per-session, or per-agent workspace-only mount, or a topology change to per-tenant subprocess/container)." | Phases 0–3; `agent-outer-wrap.ts`; FR1–FR8 in spec | mapped |
 | 2 | "Once shipped, the sandbox `denyRead` for `/workspaces` becomes unnecessary — simplify `buildAgentSandboxConfig`." | T2.4; AC7; flag-deletion issue filed in-PR | **partially mapped** — deny stays unconditional while the flag exists (regression guard); the simplification itself ships with flag deletion |
+<!-- lint-infra-ignore start -->
 | 3 | [operator] "Tenants are coming" → full end-state bar (content, existence, mount table, /proc) | P1/P2; T1.2 assertions; FR2/FR3 | mapped |
+<!-- lint-infra-ignore end -->
+<!-- lint-infra-ignore start -->
 | 4 | [operator] "Both tiers" — file tools covered | spawn-at-CLI-process design; AC1 covers both surfaces | mapped |
+<!-- lint-infra-ignore end -->
 | 5 | [operator] "Fold into #5863" — #9723 + #9725 | #9725: resolver-root derivation (mapped). #9723: measured unclosable in this posture — residual + cross-ref to #9773 | **partially mapped** — re-scoped in the open, operator-approved arm F |
 | 6 | [operator] "1 now, 3 tracked" | #9773 filed at brainstorm; ADR amendment records deferral | mapped |
 
@@ -682,7 +688,7 @@ founder_check:
   command: bash knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh
   expected: isolation_ok
   pins:
-      knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh: 61ba4e86757e033b8a29d5dcb416eeeefbf9b50d
+      knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh: b2054475e1a6c64c0d1fd972f2ff2e00cc74a8b6
   approved_by: deruelle
   approved_at: 2026-10-08
 ```
