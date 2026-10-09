@@ -560,12 +560,23 @@ successful `attach_volume` finished at or after the wipe run's `run_started_at` 
 that is neither null nor the live inngest server, and a successful `detach_volume` finished at or after that
 attach. The `resources` shape of those actions is documented but UNMEASURED for this volume until the first real
 run; if it differs the precondition fails closed (`no_wipe_attach`) and the D4 path is the way through.
+E-3 tightens it: the attach must finish at or after max(the run start, the latest attach of the volume to the LIVE
+server) (`live_reattached` when the volume went back to the live host after every non-live attach), and the matched
+wiped row's INGEST time (Better Stack's top-level `dt`; the `dt` inside `raw` is sender-supplied and never read) must
+lie between that attach and the first later detach, 300 s slack each side (`row_outside_attach_window`). This
+corroborates that a host held the volume while the row was posted; it does not prove the overwrite happened, and a
+holder of the ingest token can still post a row inside a real attach..detach window. Erasure remains self-attested.
 
-CLO ATTESTATION (D-B). `erasure=provider-only` accepts ONLY
+CLO ATTESTATION (D-B, E-2: a two-person rule). `erasure=provider-only` accepts ONLY
 `https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>`. The job fetches the comment through
 `gh api repos/<repo>/issues/comments/<id>`; the gate requires the comment id to match, the comment to belong to
-issue 8285, `author_association` OWNER|MEMBER|COLLABORATOR, and the body to name volume 106261946 (not as part of
-a longer number). It evidences NO overwrite; the destruction record must say provider delete only.
+issue 8285, the body to name volume 106261946 (not as part of a longer number), and then: the FIRST line is exactly
+`CLO-ATTESTATION erasure=provider-only volume=106261946` (a CR before the newline, the web editor's line ending, is
+tolerated), the comment is unedited (`created_at == updated_at`), `.user.type == "User"`, `author_association` is
+OWNER or MEMBER (COLLABORATOR is NOT enough), and `.user.login` differs (case-insensitively) from the dispatching
+`GITHUB_ACTOR`. Reasons: `clo_marker_missing`, `clo_comment_edited`, `clo_author_not_human`,
+`clo_author_not_privileged`, `clo_same_actor`. It evidences NO overwrite; the destruction record must say provider
+delete only.
 
 UNTARGETED PLAN (D-C). It is the D1 proof, not a drift gate. It requires `hcloud_server.inngest` and the LUKS
 volume/attachment as exactly one no-op each, nothing carrying the live volume id 106903269 as a whole scalar value,
@@ -606,6 +617,46 @@ rung-2 rehearsal, the #8009 authorization map) all release now; the environment 
 it reports `prevent_self_review: false` with a single reviewer, so the dispatcher can approve their own
 deployment (declared nowhere in this repo's Terraform, so false is the provider default; every gated environment
 here reads the same way). The full account is at `## git_data_host_create` above.
+
+DISPATCH DESCRIPTION (moved). The option comment above `git-data-host-create` in the workflow_dispatch apply_target list:
+
+#6977 — the git-data BIRTH path, and the counterpart to git-data-host-replace
+above rather than a widened version of it. That gate requires
+actions ⊇ {delete,create} and fires its luks_passphrase_touched arm on a
+CREATE, so a first birth aborts on it three separate ways; its 5-member
+allow-set also rests on "preserved by OMISSION", an argument that INVERTS on a
+birth (an omitted address is then a MISSING resource, not a protected one).
+
+The job sources a birth-readiness gate that refuses to plan while
+cloud-init-git-data.yml has no off-host emitter, because for this host a green
+apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
+gate now RELEASES — it remains armed as a regression check, not as a hold.
+The runbook's DO-NOT-DISPATCH banner held the route until the rung-2 evidence
+merged (PR #8126); it was cleared by PR #8128 (merged 2026-09-14) and the host was born
+2026-09-14. See the git_data_host_create job and
+knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+
+DISPATCH DESCRIPTION (moved). The option comment above `ci-ssh-token-replace`:
+
+#7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
+stopped accepting it. Narrow by construction: a two-resource -target set
+plus one -replace, reaching NO host, NO volume, and NO terraform_data.
+It is the ONE arm that can run while the SSH bridge is dead, because it
+repairs the credential the bridge authenticates with.
+
+RETIRE JOB RUN-BODY NOTES (moved from the inngest_backstop_retire job; the job keeps the code only):
+
+- `hz <path> <outfile>` prints the HTTP code (000 on a transport failure, never "000000"); the token goes to curl on
+  stdin, not argv.
+- Convergence read: the refresh-only reconcile is a state-only repair of an address Hetzner says is gone. It is
+  DETECTIVE, not preventive (the state write has happened when the list diff is checked): the diff must be exactly
+  the one address. With the volume already gone (404) refreshing the attachment may drop the volume with it, so the
+  delta {attachment, volume} is accepted for that one case and the volume address is queued too.
+- Wipe evidence poll: 20 minutes of wall clock, capped at JOB_START+1800 s (ten minutes before the job's own
+  timeout), hot window only (--no-archive); a query error is printed with its rc and the first 300 bytes of stderr.
+  Every Better Stack-derived string printed to the run log passes inngest_backstop_clean.
+- Teardown: `enabled=false` deletes any SUBSET of exactly the two wipe addresses; the gate allows nothing else.
+  Teardown skips the live-store gate and the untargeted plan (a leaked wipe host must always be cleanable).
 
 ## apply/Measure the apex origin (ADR-194 Hypothesis Z)
 

@@ -65,7 +65,7 @@ governs. Rationale and the full decision list are in the ADR-142 addendum of 202
   wipe run's start, then a successful `detach_volume`) corroborates it.
 - **D4 attestation.** "A URL ... non-empty and resolvable" is corrected to exactly
   `https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>`, fetched through the GitHub API,
-  author an owner, member or collaborator, body containing 106261946.
+  author an owner or member (round 2 drops collaborator, see the addendum), body containing 106261946.
 - **2.0 live-store gate and untargeted plan.** The gate applies to `detach`, `wipe` and `destroy`, not
   `teardown`. In untargeted mode the plan requires only the server and the LUKS pair as one no-op each,
   nothing carrying the live id 106903269, and the retired and wipe addresses within the phase's authorized
@@ -80,6 +80,33 @@ governs. Rationale and the full decision list are in the ADR-142 addendum of 202
   apply's HALT text no longer prescribes one; no new Terraform resource.
 - **Not built, recorded as prerequisites:** a wipe rehearsal path and a LUKS key or header continuity
   proof (runbook `inngest-luks-cutover-6894.md` §5b; `decision-challenges.md` 2026-10-09).
+
+## Addendum — 2026-10-09 (round 2): supersessions from the second and last fix round of PR #9784
+
+Appended after the round-1 block above; where it conflicts with either block above, this one governs.
+Rationale: ADR-142 addendum of 2026-10-09 (round 2), E7 to E11; taste decisions: `decision-challenges.md`.
+Ref #8285, Ref #6894.
+
+- **2.0 live-store gate.** No in-flight-run check and no Hetzner attachment cross-check; the workflow
+  concurrency group serializes runs and the probe row proves the mount. The gate is the Doppler flag and
+  pointer plus the probe row.
+- **Untargeted plan.** It counts the web-1 set and the LUKS key pair as never-acted-on. `teardown` skips
+  both the live-store gate and the untargeted plan; its targeted plan is graded on the wipe server's
+  pinned name and a physical id other than 169426216 (reason `wipe_server_identity`).
+- **D4 attestation.** First line exactly `CLO-ATTESTATION erasure=provider-only volume=106261946`,
+  unedited, a `User` with `OWNER` or `MEMBER` association (round 1's `COLLABORATOR` is dropped), a login
+  different from the dispatching actor's, on issue 8285, body containing 106261946.
+- **Hetzner corroboration (Guard 4).** The time floor is the later of the wipe run's start and the latest
+  `attach_volume` to the live host; no live-host attach after the matched non-live attach; the row's
+  Better Stack ingest time lies between that attach's finish and the first later detach's finish, 300 s
+  slack each side. It proves an attach and detach by a non-live server, not that the overwrite happened.
+- **`refused` rows.** Pre-write guards leave the volume untouched; `zero_failed`, `readback_nonzero`
+  and `sig_survived` fire after the write began (the device may be partially zeroed; rollback gone).
+- **State-only reconcile.** Its state-list comparison is detective; recover by re-planning.
+- **Unmeasured until the first run.** Size, by-id naming, device wait, duration, and that the guest
+  hostname equals `soleur-inngest-backstop-wipe`; Terraform 1.9.8 measured, CI pins 1.10.5, re-run first.
+- **Observability.** The discoverability test is now a fast credential-free probe of the D1 pin; the
+  fixture suites are CI evidence (see ## Observability).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -399,8 +426,12 @@ failure_modes:
     alert_route: failed workflow run plus the #8285 comment (a pending environment approval is not a failure, so each progress comment restates days remaining to 2026-10-22)
   - mode: target device is not the expected ext4 volume (wrong id, already zeroed, LUKS)
     layer: 6
-    detection: script guards emit result=refused before any write; the poll stops at once and names the guard
+    detection: the pre-write guards emit result=refused before any write (volume untouched); the poll stops at once and names the guard
     alert_route: same poll; job fails loud
+  - mode: a post-write guard fires (zero_failed, readback_nonzero, sig_survived)
+    layer: 6
+    detection: the poll stops at once on the refused row and names the guard; the job error says the device may be partially zeroed and the rollback is gone
+    alert_route: failed workflow run; runbook triage says re-dispatch wipe (it re-enters), never destroy
   - mode: live store leaves the LUKS volume during the window
     layer: 3
     detection: wrong-volume alert (probe row off 106903269) and the live-store gate of detach, wipe and destroy
@@ -429,17 +460,15 @@ logs:
   where: Better Stack Logs (SOLEUR_INNGEST_BACKSTOP_WIPE, SOLEUR_INNGEST_SERVER_PROBE); GitHub Actions run logs
   retention: Better Stack retention is finite, so the evidence row values are copied into the destruction record in PR B
 discoverability_test:
-  command: bash apps/web-platform/infra/inngest-backstop-wipe.test.sh && bash tests/scripts/test-inngest-backstop-retire-gate.sh
-  expected_output: "passed, 0 failed"
+  command: grep -cPz '(?s)\A(?=.*\n[ \t]*inngest_volume_id[ \t]*=[ \t]*local\.inngest_retired_plaintext_volume_id[ \t]*\n)(?=.*\n[ \t]*inngest_retired_plaintext_volume_id[ \t]*=[ \t]*"106261946"[ \t]*\n)' apps/web-platform/infra/inngest-host.tf
+  expected_output: "1"
 ```
 
-The discoverability test is the credential-free fixture pair for PR A, because merging PR A mutates nothing in production (no waiver of `credentials_required` is adopted; the corpus baseline in `preflight-discoverability-test.test.ts` is unchanged). The production read-backs are not a preflight probe: each dispatch phase reads Hetzner itself and comments the result on the tracker, and the volume-absence read-back (a `GET /v1/volumes/106261946` returning 404 with the read-only token) is the exit criterion of phase 2.4 and is recorded in the destruction record in PR B. Before the destroy phase that same request returns 200, so it cannot be this plan's merge-time probe.
+The discoverability test is a FAST, credential-free probe of the one property PR A can show at merge time without touching production: the D1 pin (the cloud-init template input is the literal local for volume 106261946, so the host is not replaced). It runs one `grep -cPz` over `apps/web-platform/infra/inngest-host.tf` (a single `-z` record, so it needs no `&&`, which preflight Check 10 rejects as a shell-active token) and prints `1` when both lines are present and `0` otherwise; a missing file prints a `grep:` error that contains no `1`. `expected_output` is the bare `1`, never a value that is a substring of a failure line (the matcher splits on commas and accepts any token as a substring). It was mutation-checked on copies of the file: a changed pinned id prints `0`, the template input reverted to `hcloud_volume.inngest_redis.id` prints `0`, and a missing file prints the `grep:` error. The probe runs in well under a second. It proves the pin exists; it does not prove the host plan is a no-op (that is the `detach` phase's own live plan).
 
-**Why `expected_output` is "passed, 0 failed".** The bare substring "0 failed" also matches "10 failed" and "20 failed", so a red suite would satisfy it. Both suites print a summary containing `passed, N failed` (the wipe suite `N passed, N failed, N executed`, the gate suite `N passed, N failed`); "passed, 0 failed" cannot match "passed, 10 failed".
+**The fixture suites are CI evidence, not the preflight probe.** The wipe suite (`apps/web-platform/infra/inngest-backstop-wipe.test.sh`) and the gate suite (`tests/scripts/test-inngest-backstop-retire-gate.sh`) are the evidence for PR A and run in CI (`infra-validation.yml` runs every `apps/web-platform/infra/*.test.sh` by glob; the gate suite is a `scripts/test-all.sh` line). They are far over preflight Check 10's 15-second cap, so they are not the discoverability command; no waiver of `credentials_required` is adopted and the corpus baseline in `preflight-discoverability-test.test.ts` is unchanged. The production read-backs are likewise not a preflight probe: each dispatch phase reads Hetzner itself and comments the result on the tracker, and the volume-absence read-back (a `GET /v1/volumes/106261946` returning 404 with the read-only token) is the exit criterion of phase 2.4, recorded in the destruction record in PR B. Before the destroy phase that same request returns 200, so it cannot be this plan's merge-time probe.
 
-**How the pair is intended to run.** The wipe suite runs longer than preflight Check 10's 15-second wall-clock cap (`timeout 15s` in the preflight skill), so inside the Check 10 sandbox it reports a timeout, not a pass. Its authoritative run is CI (`infra-validation.yml` runs every `apps/web-platform/infra/*.test.sh` by glob; the gate suite is the `tests/scripts/inngest-backstop-retire-gate` line in `scripts/test-all.sh`) and the local run at ship time; the plan's evidence for PR A is those results, not the sandboxed probe. If Check 10 is to pass in the sandbox, the command needs a fast subset or a declared waiver; neither is adopted here (open question for the ship step).
-
-**Operator signal while a dispatch awaits approval.** The progress comment on #8285 is written by the run itself, so a dispatch waiting for the reviewer produces nothing. The only unprompted signal in that interval is the daily comment of `scripts/followthroughs/inngest-luks-property-8296.sh`, which should carry a "days to expiry" line (task 0.7 in `tasks.md`); that script is deleted in PR B step 3.4, which is gated on the dead-probe heartbeat feeder #9703 being armed.
+**Operator signal while a dispatch awaits approval.** The progress comment on #8285 is written by the run itself, so a dispatch waiting for the reviewer produces nothing. There is no unprompted signal in that interval: the daily comment of `scripts/followthroughs/inngest-luks-property-8296.sh` has no "days to expiry" line, and PR A does not edit the probe, so task 0.7 in `tasks.md` cannot be met in PR A. The reminder stays the operator's (runbook §5b) and becomes a pre-deletion note in PR B (task 3.4a); that script is deleted in PR B step 3.4, which is gated on the dead-probe heartbeat feeder #9703 being armed.
 
 ## Encryption Posture
 

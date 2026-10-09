@@ -59,6 +59,8 @@ and rationale: ADR-142 addendum 2026-10-09 and `decision-challenges.md` 2026-10-
   days-to-expiry reminder. If `scripts/followthroughs/inngest-luks-property-8296.sh` is still in the
   tree, its daily comment should carry a "days to expiry" line (it is the only unprompted signal);
   that script is deleted in PR B step 3.4, so any such line is needed before then, not in PR B.
+  > Superseded 2026-10-09 (round 2): the script has no such line and PR A does not edit the probe, so
+  > 0.7 cannot be satisfied in PR A. It stays open as an operator reminder; see 3.4a below.
 
 ### Narrowing of Phase 1 (1.3.1, 1.3.2)
 
@@ -69,8 +71,8 @@ and rationale: ADR-142 addendum 2026-10-09 and `decision-challenges.md` 2026-10-
 - 1.3.2 narrowed: the destroy precondition also reads Hetzner's action history for volume 106261946
   (a successful `attach_volume` to a server that is neither 169426216 nor null, finished not before the
   wipe run's start, then a successful `detach_volume`); the D4 attestation is a #8285 issue comment of
-  the exact shape `https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>` by an owner,
-  member or collaborator, whose body contains 106261946.
+  the exact shape `https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>` by an owner
+  or member (round 2, see 1.3.2: not a collaborator), whose body contains 106261946.
 - 1.3.3 The per-merge apply's HALT text no longer directs an operator to an untargeted `terraform apply`
   of the root while the orphans exist. No new Terraform resource.
 
@@ -99,8 +101,55 @@ and rationale: ADR-142 addendum 2026-10-09 and `decision-challenges.md` 2026-10-
   PR); `model.c4` `inngestRedis` is rewritten (it says the backstop "stays attached and intact") and
   regenerated; the wrong-volume alert's `incident_cause` and the comment block above it are re-read
   for the backstop's absence.
-- 3.6 extended: PR B is not merged before the Hetzner 404 read-back is recorded; its squash message has
+- 3.6 extended: PR B is not merged before the Hetzner 404 read-back is recorded; its squash message
   uses `Ref` for both trackers and no closing keyword at all (see commit 7f7d9c3d9b); update or retire #8316 at
   convergence with the PR link.
 - 3.7 The older template `knowledge-base/legal/audits/inngest-aof-destruction-record.md` keeps its
   2026-09-21 `Superseded` banner and is not completed for this destroy.
+
+## Review round 2 additions (2026-10-09, PR #9784, the last fix round)
+
+Appended; everything above is unchanged except the `Superseded` markers. Decisions: ADR-142 addendum
+2026-10-09 round 2 (E7 to E11) and `decision-challenges.md` round 2. Procedure: runbook
+`inngest-luks-cutover-6894.md` §5b. Ref #8285, Ref #6894.
+
+### Before the first production dispatch (adds to Phase 0)
+
+- 0.5 stands and is the recorded Terraform note: the orphan `-target` chain was measured on 1.9.8; CI
+  pins 1.10.5; re-run on 1.10.5 on a local backend and record the result.
+- 0.8 Treat these as unmeasured until the first real `wipe` run and record what the run shows: the
+  10 GiB size, the by-id device naming, the 300 s device wait, the on-host duration, and that the guest
+  hostname equals the server name `soleur-inngest-backstop-wipe` (the evidence funnel pins it; if wrong,
+  every row reads `emitter_mismatch`, the poll prints the observed values, and the remedy is a reviewed
+  change to the pin, with D4 as the fallback).
+
+### Narrowing of Phase 1 again (1.3.1, 1.3.2)
+
+- 1.3.1 narrowed again: the live-store gate no longer polls for in-flight runs (the workflow
+  concurrency group serializes); it is the Doppler flag and pointer plus the probe row. `teardown` skips
+  the live-store gate and the untargeted plan. The untargeted plan also counts the web-1 set and the
+  LUKS key pair as never-acted-on. The teardown plan is graded on the wipe server's pinned name and a
+  physical id other than 169426216 (`wipe_server_identity`).
+- 1.3.2 narrowed again: the D4 attestation comment needs the exact first line
+  `CLO-ATTESTATION erasure=provider-only volume=106261946`, must be unedited, from a `User` with
+  `OWNER` or `MEMBER` association (not `COLLABORATOR`), from a login different from the dispatcher's.
+  The Hetzner corroboration proves an attach and a later detach of the volume by a non-live server, not
+  the overwrite; erasure stays self-attested.
+
+### Narrowing of Phase 2 (2.2)
+
+- 2.2 A `refused` row does not always mean the volume is intact. Pre-write guards leave it untouched;
+  the post-write guards `zero_failed`, `readback_nonzero` and `sig_survived` mean the device may be
+  partially zeroed and the rollback is gone. Follow the guard-class table in runbook §5b before any
+  re-dispatch.
+- 2.2d The state-only reconcile's state-list comparison is detective, not preventive; if it fails,
+  re-plan rather than editing state.
+
+### Additions to Phase 3 (PR B)
+
+- 3.4a Pre-deletion note: record in PR B's checklist that the property probe's daily comment never
+  carried a days-to-expiry line (task 0.7 could not be met in PR A) before deleting the probe; do not
+  edit the script just to add the line.
+- 3.5 extended again: fill the destruction record's "Further measured fields" (attach and detach times
+  and servers, the row's ingest time against that window, the observed guest hostname, and for D4 the
+  two logins and the comment properties).

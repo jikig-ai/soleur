@@ -169,6 +169,9 @@ live Inngest host nor absent, finished not before the wipe run's start, followed
 `detach_volume`. That corroborates that the volume really was attached to a wipe host; it does not
 corroborate the zeroing. No claim of secure or physical deletion is made beyond this.
 
+> Superseded 2026-10-09 (round 2): use the second corrected paragraph in "Addendum — 2026-10-09
+> (review round 2)" below, which states what the Hetzner corroboration does and does not show.
+
 ### Variant: the CLO attestation reference
 
 For `erasure=provider-only` the reference is exactly one URL shape, a comment on #8285:
@@ -176,6 +179,9 @@ For `erasure=provider-only` the reference is exactly one URL shape, a comment on
 the GitHub API and requires the author to be an owner, member or collaborator of the repository and
 the body to contain the volume id 106261946. A reference on any other host, or of any other shape, is
 refused. The completed record cites the comment URL and the date.
+
+> Superseded 2026-10-09 (round 2): the author set and the comment properties are narrowed. See
+> "Variant: the CLO attestation, second revision" below.
 
 ### Additional measured fields (all `PENDING-EVIDENCE`)
 
@@ -230,3 +236,64 @@ lists hold.
 - [ ] The older template `inngest-aof-destruction-record.md` already carries its own `Superseded`
       banner (2026-09-21) and is kept as the record of the recut route; it is not completed for this
       destroy and needs no change in PR B beyond the pointer appended there on 2026-10-09.
+
+## Addendum — 2026-10-09 (review round 2)
+
+Appended after the second and last fix round of PR #9784; nothing above is edited except the
+`Superseded` markers that point here. This file is still a **template**: nothing in it states that the
+volume has been wiped, detached or destroyed, and every measured field remains `PENDING-EVIDENCE` until
+it is filled from run output. Ref #8285, Ref #6894.
+
+### Second corrected paragraph: what the evidence does and does not show
+
+State this paragraph, in place of the earlier two, in the completed record.
+
+The wipe evidence is **logical, guest-side and self-attested**, not physical erasure. The wipe host
+zeroes the volume with `blkdiscard -z`, reads the whole device back with O_DIRECT and posts the result
+to Better Stack itself. It proves the guest saw zeros through the Hetzner block interface at the time of
+the read. It does not evidence anything about the provider's physical media, replicas or sanitisation.
+The destroy gate binds the row to the wipe run's id (nonce), the pinned emitter (host and shipper), the
+Hetzner-side volume id and size, and a time window, so a **stale or replayed** row fails. It does not
+make a forged row fail: the row is posted with the ingest token that other hosts share, so a holder of
+that token could write a row, including one that falls inside a real attach-to-detach window. The
+destroy precondition adds Hetzner's own action history for the volume. **Hetzner records an attach and
+a later detach of the volume by a non-live server; this corroborates that a host held the volume, not
+that the overwrite happened; erasure remains self-attested.** The attach must have finished not before the
+later of the wipe run's start and any attach of the volume to the live Inngest host (169426216); no
+attach to the live host may have finished after it; and the row's Better Stack ingest time must lie
+between that attach's finish and the first later detach's finish, with 300 s of slack either side. No
+claim of secure or physical deletion is made beyond this.
+
+### Variant: the CLO attestation, second revision
+
+For `erasure=provider-only` the reference is exactly one URL shape, a comment on #8285:
+`https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>`. The gate fetches it through the
+GitHub API and requires all of: the first line exactly
+`CLO-ATTESTATION erasure=provider-only volume=106261946`; the comment unedited (`created_at` equal to
+`updated_at`); the author a `User` (not a bot) whose `author_association` is `OWNER` or `MEMBER`; the
+author's login **different from the login of the actor who dispatched the destroy**; the comment on
+issue 8285; and the body containing the volume id 106261946. The completed record cites the comment URL,
+the dates, and both logins (commenter and dispatcher).
+
+### Further measured fields (all `PENDING-EVIDENCE`)
+
+| Field | Value | Source |
+|---|---|---|
+| **Hetzner attach/detach times and servers** | `PENDING-EVIDENCE` | `GET /v1/volumes/106261946/actions`: the matched non-live `attach_volume` (server id, finish time), the first later `detach_volume` (finish time), and the finish time of the latest `attach_volume` to server 169426216 if any |
+| **Wipe row ingest time versus that window** | `PENDING-EVIDENCE` | the `wiped` row's Better Stack top-level time; it must lie between the attach finish and the detach finish, 300 s slack either side |
+| **Guest hostname as received** | `PENDING-EVIDENCE` | the row's `host`; the pin assumes `soleur-inngest-backstop-wipe`, which is unmeasured until the first run. If it differs, record that rows read `emitter_mismatch` and how it was resolved |
+| **Dispatching actor and CLO commenter logins** | `PENDING-EVIDENCE` | D4 variant only: the run's actor and the comment's author; they must differ |
+| **Attestation comment properties** | `PENDING-EVIDENCE` | D4 variant only: first line, `created_at` and `updated_at`, `author_association`, user type |
+| **Terraform version of the orphan `-target` re-run** | `PENDING-EVIDENCE` | the 1.10.5 local-backend result (the earlier experiment used 1.9.8); this repeats the row in the previous addendum and is the one to fill |
+
+### Completion checklist for PR B, second revision
+
+These add to both earlier lists.
+
+- [ ] The second corrected paragraph above is the one stated, or the D4 wording with the second-revision
+      attestation properties verified.
+- [ ] The "Further measured fields" are filled from the named reads, including the observed guest
+      hostname.
+- [ ] The days-to-expiry gap is recorded as it stood: the property probe's daily comment never carried
+      a days-to-expiry line, because PR A did not edit the probe. PR B's pre-deletion checklist notes
+      this rather than adding the line to a script it is about to delete.
