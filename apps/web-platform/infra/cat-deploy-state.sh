@@ -324,10 +324,21 @@ cron_drain_json() {
 # match ci-deploy.sh's state-file paths (must survive host reboots or the
 # soak silently resets to zero, #5889). Safe sentinel (verdict "unknown")
 # when the file is absent because a deploy never ran the arm.
+# $2 (optional): expected `ledger` stamp. A file whose stamp is PRESENT but
+# names a different mechanism (an env-alias misconfig interleaving two
+# ledgers' verdict vocabularies) reads as the sentinel — foreign `pass`
+# verdicts must never count toward this arm's soak. An ABSENT stamp is a
+# pre-stamp-era file and is read normally (rolling deploys must not blind
+# the existing soak histories).
 canary_state_json() {
-  local f="$1"
+  local f="$1" expected_ledger="${2:-}"
   if [[ -f "$f" ]]; then
-    local v r s c cp fp
+    local v r s c cp fp stamp
+    stamp="$(jq -r '.ledger // ""' "$f" 2>/dev/null || echo '')"
+    if [[ -n "$expected_ledger" && -n "$stamp" && "$stamp" != "$expected_ledger" ]]; then
+      echo '{"verdict":"unknown","reason":"foreign_ledger_stamp","sdk_version":"","checked_at":0,"consecutive_pass":0,"first_pass_at":0}'
+      return 0
+    fi
     v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
     r="$(jq -r '.reason // ""' "$f" 2>/dev/null || echo '')"
     s="$(jq -r '.sdk_version // ""' "$f" 2>/dev/null || echo '')"
@@ -357,20 +368,21 @@ canary_state_json() {
 workspace_isolation_json() {
   # DURABLE path (NOT /var/run tmpfs) — MUST match ci-deploy.sh
   # WORKSPACE_ISOLATION_STATE_FILE. The soak accumulator must survive host
-  # reboots; see the writer's rationale.
-  canary_state_json "${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
+  # reboots; see the writer's rationale. The expected-ledger stamp refuses a
+  # file a foreign writer (env-aliased canary arm) left behind.
+  canary_state_json "${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}" "workspace-isolation"
 }
 
 # The canary-promotion follow-through
 # (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
 sandbox_canary_json() {
-  canary_state_json "${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+  canary_state_json "${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}" "sandbox-canary"
 }
 
 # Same shape, separate ledger (#5863): the outer-wrap canary's report-only
 # soak state. Read by the #5863 follow-through via /hooks/deploy-status.
 outer_wrap_canary_json() {
-  canary_state_json "${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
+  canary_state_json "${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}" "sandbox-canary-outer-wrap"
 }
 
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The no-SSH surface for

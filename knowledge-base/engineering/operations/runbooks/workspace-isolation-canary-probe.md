@@ -21,10 +21,19 @@ trade-off from the paired #1285 change.
 inside the canary container and before the prod swap:
 
 ```text
-timeout <cap> docker exec -w /app -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct \
-  -e SOLEUR_ISOLATION_IN_IMAGE=1 \
-  soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts
+timeout <cap> docker exec -w /app soleur-web-platform-canary \
+  /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+  CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
+  /usr/local/bin/vitest run --config test/vitest.canary.config.ts
 ```
+
+`/usr/bin/env -i` is load-bearing, not style: `docker exec` inherits the
+canary's full `Config.Env` (the prd env-file — `GITHUB_APP_PRIVATE_KEY`,
+`ANTHROPIC_API_KEY`, …), and this suite deliberately spawns
+adversarially-probed inner sandboxes whose parent env is the exfil channel
+under test. Scrubbing (the `github_app_key_canary_check` precedent) means a
+real isolation break cannot leak credential material, and the vitest line
+folded into `reason` can never carry it.
 
 `SOLEUR_ISOLATION_IN_IMAGE=1` is load-bearing, not decoration: inside the image
 the PATH-resolved `bwrap` IS the deployed PATH shim (`/usr/local/bin/bwrap`)
@@ -78,12 +87,20 @@ same verified digest prod will run, so an additive global install keeps ONE
 verified artifact and the probe measures the exact image that will serve
 tenants. No new image means the cosign/zot/freshness machinery is untouched.
 
+**Acknowledged cost (review):** the payload files are tenant-*readable* — every
+agent sandbox `--ro-bind / /`s the image, so `/app/test/` documents the probe's
+assertions, sentinel names, and the `SOLEUR_ISOLATION_*` knob contract. This is
+deliberate info-disclosure (the server source is already in the image); the
+payload carries no secrets (tokens are `randomBytes` per run) and a tenant
+cannot reach the deploy exec that consumes it.
+
 **Image-size delta:** measured at build time; recorded in PR #9809 description.
 
 ## Gate vs report — report-only (chosen)
 
 The probe ships **report-only**: it is invoked `|| true` inside the
-`CANARY_HEALTHY` block immediately after `run_faithful_sandbox_canary`, so it
+`CANARY_HEALTHY` block after `run_faithful_sandbox_canary` and
+`run_outer_wrap_canary` (and before the GitHub App key check + swap), so it
 runs, classifies, records and pages — but no verdict rolls the deploy back.
 
 Rationale: `wg-dark-launch-deploy-gates` — never validate a gate change with the
@@ -144,3 +161,18 @@ limits. The kernel cgroup still enforces the limits — this is a heap-sizing
 behavior change, not an isolation break. Accepted and recorded here so a future
 "why does the sandboxed process see host memory totals" investigation has the
 answer without archaeology.
+
+Other `/sys`-masked reads that now return empty/error for sandboxed
+subprocesses: `lscpu`/`lsblk`/`udevadm`/`dmidecode` output and `/sys/class/net`
+interface enumeration (MAC addresses, CPU topology — the fingerprint surface
+#1285 is for). These are intended consequences, not breakage.
+
+What the mask does NOT cover (denyRead is a mount-layer control; the live
+procfs the sandbox still needs serves them): `/proc/sys/**` (kernel config:
+kernel.*, vm.*, fs.*), `/proc/self/mountinfo` (mount table), `/proc/kallsyms`,
+`/proc/cpuinfo`+`/proc/meminfo`+`/proc/version` (host CPU/RAM/kernel fingerprint),
+`/proc/sys/kernel/random/boot_id` (per-boot host UUID), and `uname(2)` (host
+kernel release — no `--unshare-uts` in the argv). A future vendored tail
+`--bind /sys /sys` would also pass through the shim's `/proc`-only exposure
+gate — recorded so "denyRead /sys" is not later over-read as "host kernel
+config invisible to tenants."

@@ -226,15 +226,16 @@ A third probe shares the word "sandbox" with the two above and is distinct from 
 property the faithful canary's single captured argv cannot exercise) inside the canary container:
 
 ```text
-timeout <cap> docker exec -w /app -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct \
-  -e SOLEUR_ISOLATION_IN_IMAGE=1 \
-  soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts
+timeout <cap> docker exec -w /app soleur-web-platform-canary \
+  /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+  CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
+  /usr/local/bin/vitest run --config test/vitest.canary.config.ts
 ```
 
 (`SOLEUR_ISOLATION_IN_IMAGE=1` self-skips FR7b — in-image PATH `bwrap` is the
 deployed shim and its control arm needs the real binary; see the design note.)
 
-It is called `|| true` immediately after `run_faithful_sandbox_canary` inside the `CANARY_HEALTHY`
+It is called `|| true` after `run_faithful_sandbox_canary` and `run_outer_wrap_canary` inside the `CANARY_HEALTHY`
 block — **report-only** (dark-launch per `wg-dark-launch-deploy-gates`): it logs, writes state and
 pages Sentry on a red verdict, but a failing verdict never rolls back the deploy. Promotion to
 blocking is a tracked follow-up (see the design note,
@@ -242,12 +243,16 @@ blocking is a tracked follow-up (see the design note,
 
 **Verdict classes** (docker-exec rc classification mirrors `run_faithful_sandbox_canary`):
 
-| Verdict | rc | Meaning | Sentry |
-|---|---|---|---|
-| `pass` | 0 | direct-tier suite green in the canary | no |
-| `workspace_isolation_failed` | other non-zero | suite reported a real isolation failure | **page** |
-| `workspace_isolation_timeout` | 124 | host-side `timeout` fired (suite hung, e.g. bwrap deadlock) | **page** |
-| `canary_infra_error` | 125/126/127 | could not exec (pre-tooling image, missing vitest) | no — state only |
+| Verdict | rc | Meaning | Sentry | First move |
+|---|---|---|---|---|
+| `pass` | 0 | direct-tier suite green in the canary | no | — |
+| `workspace_isolation_failed` | other non-zero | suite reported a real isolation failure (or a vacuous green — `reason=vacuous_green_no_tests_passed`) | **page** | `reason` carries vitest's first `FAIL <file> > <test>`/`AssertionError` line (or docker's first stderr line as fallback) — read it on `/hooks/deploy-status` `.workspace_isolation.reason` or the `WORKSPACE_ISOLATION_FAIL:` journald line; reproduce locally with `SOLEUR_ISOLATION_TIERS=direct npx vitest run test/sandbox-isolation.test.ts` (host-side: FR7b runs there — it is skipped in-image) |
+| `workspace_isolation_timeout` | 124 | host-side `timeout` fired (suite hung, e.g. bwrap deadlock) | **page** | the in-container vitest may outlive the killed `docker exec` until the canary is stopped; check `WORKSPACE_ISOLATION:` reason for the timeout's stderr tail |
+| `canary_infra_error` | 125/126/127 | could not exec (pre-tooling image, missing vitest) | no — state only | expected during the dark-launch window; a *persistent* stream means the image lacks the probe payload (Dockerfile `COPY`/`npm -g vitest` drift) — soak holds, nothing pages by design |
+
+The verdict + reason alone must suffice for triage — the probe's `docker exec`
+runs with `env -i` (no prod env inside the suite), so `reason` is safe to quote
+verbatim in incident notes.
 
 **State and surfaces.** `write_workspace_isolation_state` persists the verdict to
 `/mnt/data/ci-deploy-workspace-isolation.json` (atomic, always returns 0) and accumulates the soak

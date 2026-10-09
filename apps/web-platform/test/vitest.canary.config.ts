@@ -1,10 +1,13 @@
 import { defineConfig } from "vitest/config";
 
 // Deploy-time canary vitest config (#2640). ci-deploy.sh runs
-//   docker exec -w /app -e CI=true -e SOLEUR_ISOLATION_TEST_HOST=1 \
-//     -e SOLEUR_ISOLATION_TIERS=direct soleur-web-platform-canary \
+//   docker exec -w /app soleur-web-platform-canary /usr/bin/env -i \
+//     PATH=… HOME=/tmp CI=true SOLEUR_ISOLATION_TEST_HOST=1 \
+//     SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
 //     /usr/local/bin/vitest run --config test/vitest.canary.config.ts
-// inside the canary container (root = cwd = /app) before the prod swap.
+// inside the canary container (root = cwd = /app) before the prod swap —
+// env -i scrubs the canary's Config.Env (the prod env-file) out of the suite.
+// The exact argv is pinned by ci-deploy.test.sh CWI-1.
 //
 // Why a standalone config and not the repo vitest.config.ts: that config's
 // `globalSetup` (test/global-setup-git-tripwire.ts) and project `setupFiles`

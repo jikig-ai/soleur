@@ -28,6 +28,10 @@
 # Required env (declared in the #2640 followthrough directive; wired in
 # scheduled-followthrough-sweeper.yml): WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID,
 # CF_ACCESS_CLIENT_SECRET.
+#
+# RETIREMENT: when the tracker closes (soak green) or the probe is promoted to
+# gating, delete this file and its mention in the #2640 tracker body; no other
+# suite pins it.
 
 # #7797: refuse to run under xtrace while a live credential is bound. `$-` is tested FIRST and the
 # bindings ONLY with `${VAR:+x}` (expands to a literal `x`): a `-n "$VAR"` test would itself print
@@ -114,7 +118,10 @@ case "$VERDICT" in
 esac
 
 SPAN=$((NOW - FIRST))
-if [[ "$CONSEC" -ge "$REQUIRED_GREENS" && "$FIRST" -gt 0 && "$SPAN" -ge "$MIN_SPAN_SECS" ]]; then
+# The latest verdict must itself be `pass` (the 5863 soak checker's gate):
+# `canary_infra_error` HOLDS counters rather than resetting them, so a stale
+# counter could otherwise PASS while the current verdict is an infra flake.
+if [[ "$VERDICT" == "pass" && "$CONSEC" -ge "$REQUIRED_GREENS" && "$FIRST" -gt 0 && "$SPAN" -ge "$MIN_SPAN_SECS" ]]; then
   echo "PASS: $CONSEC consecutive green workspace-isolation verdicts over $((SPAN / 86400))d (≥${REQUIRED_GREENS} / ≥3d) since first_pass_at=$FIRST (reason=$REASON) — probe proven; promote it in a follow-up PR (add the red-verdict→rollback path in run_workspace_isolation_probe AND drop the call-site '|| true')."
   exit 0
 fi

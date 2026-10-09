@@ -272,6 +272,21 @@ echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":"not-a-numbe
 WI_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-bad.json" bash "$TARGET")
 assert "malformed workspace_isolation.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$WI_BAD' | jq -r .workspace_isolation.checked_at) == '0' ]]"
+# The ledger identity stamp (#2640 review): a file stamped by a FOREIGN
+# mechanism (an env-aliased canary writer interleaving vocabularies) must read
+# as the sentinel — foreign `pass` verdicts can never inflate this soak. The
+# matching stamp reads normally; an ABSENT stamp is a pre-stamp-era file and is
+# read normally (rolling deploys must not blind the existing soak).
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000900,"consecutive_pass":9,"first_pass_at":1750700000,"ledger":"sandbox-canary"}' > "$TMP/wi-foreign.json"
+WI_FOREIGN=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-foreign.json" bash "$TARGET")
+assert "workspace_isolation reads 'unknown' on a foreign ledger stamp" \
+  "[[ \$(printf '%s' '$WI_FOREIGN' | jq -r .workspace_isolation.verdict) == 'unknown' ]]"
+assert "workspace_isolation.reason names the foreign stamp" \
+  "[[ \$(printf '%s' '$WI_FOREIGN' | jq -r .workspace_isolation.reason) == 'foreign_ledger_stamp' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000900,"consecutive_pass":9,"first_pass_at":1750700000,"ledger":"workspace-isolation"}' > "$TMP/wi-own.json"
+WI_OWN=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-own.json" bash "$TARGET")
+assert "workspace_isolation reads normally on its own ledger stamp" \
+  "[[ \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.verdict) == 'pass' && \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.consecutive_pass) == '9' ]]"
 
 # --- #5960 live seccomp loaded/host discriminators (Phase 1) ------------------
 # seccomp_profile_loaded_matches_host (reload leg, host-jq skew-immune),

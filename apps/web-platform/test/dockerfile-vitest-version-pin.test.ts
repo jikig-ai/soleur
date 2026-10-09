@@ -64,4 +64,21 @@ describe("Dockerfile vitest global-install pin parity", () => {
       "the vitest install line must carry `--ignore-scripts` (same install mode the tests validate)",
     ).toMatch(/(^|\s)--ignore-scripts(\s|$)/);
   });
+
+  // Canary-config minimality pin (#2640 review): vitest.canary.config.ts is the
+  // config the deploy probe runs INSIDE the runner image, where only the
+  // three-file payload exists (test/, helpers/, vitest.canary.config.ts). A
+  // drift adding a `globalSetup`/`setupFiles`/`projects` key — or widening the
+  // include glob past the payload file — compiles locally but fails in-image
+  // (the referenced files are pruned), surfacing as a Sentry page on every
+  // deploy. Pin the shape so the discovery happens at PR time.
+  it("test/vitest.canary.config.ts stays minimal — payload-only include, no setup hooks or project fan-out", () => {
+    const config = read("test/vitest.canary.config.ts");
+    const code = config
+      .split("\n")
+      .filter((l) => !/^\s*\/\//.test(l)) // drop whole-line comments; they may name keys
+      .join("\n");
+    expect(code).not.toMatch(/\b(globalSetup|setupFiles|projects|workspace)\s*:/);
+    expect(code).toMatch(/include:\s*\[\s*"test\/sandbox-isolation\.test\.ts"\s*\]/);
+  });
 });

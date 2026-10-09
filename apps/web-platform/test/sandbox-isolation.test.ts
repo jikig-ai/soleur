@@ -65,7 +65,10 @@ const KNOWN_TIERS: readonly ProbeTier[] = ["direct", "query"];
  * by test/bwrap-shim.test.ts and the faithful-canary replay, so the exclusion
  * loses no deploy signal.
  */
-const ISOLATION_IN_IMAGE = process.env.SOLEUR_ISOLATION_IN_IMAGE === "1";
+function isolationInImage(raw: string | undefined): boolean {
+  return raw === "1";
+}
+const ISOLATION_IN_IMAGE = isolationInImage(process.env.SOLEUR_ISOLATION_IN_IMAGE);
 
 function parseIsolationTiers(raw: string | undefined): Set<ProbeTier> | null {
   if (raw === undefined || raw.trim() === "") return null;
@@ -810,6 +813,20 @@ describe("sandbox-isolation: coverage + test-hygiene guards", () => {
     expect(() => isolationTierEnabled("direct", "dirct")).toThrow(
       /unrecognized SOLEUR_ISOLATION_TIERS/,
     );
+  });
+
+  test("SOLEUR_ISOLATION_IN_IMAGE: only the literal '1' engages the FR7b skip (both polarities pinned)", () => {
+    // Polarity matters in BOTH directions: a `!== "1"` mutation would skip FR7b
+    // on every HOST run forever (a skip is green — silent); a truthy-check
+    // mutation ("0" → skip) would silently drop it in-image too.
+    expect(isolationInImage("1")).toBe(true);
+    expect(isolationInImage(undefined)).toBe(false);
+    expect(isolationInImage("0")).toBe(false);
+    expect(isolationInImage("true")).toBe(false);
+    expect(isolationInImage("")).toBe(false);
+    // The host-side contract: this run (no IN_IMAGE env) must not be the
+    // in-image arm — guards a polarity flip deadening FR7b in this process.
+    expect(ISOLATION_IN_IMAGE).toBe(process.env.SOLEUR_ISOLATION_IN_IMAGE === "1");
   });
 
   test("no test.fails uses a placeholder todo (#TBD, #todo, etc.)", () => {

@@ -3047,7 +3047,7 @@ echo "--- #2640 Guard 1: cross-workspace isolation canary probe (report-only dar
 # arm is reachable; on a healthy deploy nothing else POSTs to /store/.
 run_cwi_deploy() {
   local extra_env="${1:-}"
-  local d
+  local d src
   d=$(mktemp -d)
   (
     export WORKSPACE_ISOLATION_STATE_FILE="$d/wi-state.json"
@@ -3061,8 +3061,13 @@ run_cwi_deploy() {
     export SENTRY_INGEST_DOMAIN="sentry.invalid" SENTRY_PROJECT_ID="1" SENTRY_PUBLIC_KEY="cwi-mock-key"
     eval "$extra_env"
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
-  )
+  ) && src=0 || src=$?
   printf 'CWI_ARTIFACT_DIR=%s\n' "$d"
+  # Return the SUBSHELL's rc — the deploy's real exit code — not printf's. A
+  # caller's `&& rc=0 || rc=$?` must measure whether the DEPLOY succeeded; an
+  # unconditional-0 return would make every rc assertion in the CWI rows
+  # vacuous (the CWI-4 report-only claim especially).
+  return "$src"
 }
 
 # The probe is report-only (wg-dark-launch-deploy-gates): it execs the direct
@@ -3084,7 +3089,7 @@ assert_cross_workspace_isolation() {
   # any intended argv change is a conscious edit of EXPECTED here.
   TOTAL=$((TOTAL + 1))
   local expected log_contents n_lines
-  expected="exec -w /app -e CI=true -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct -e SOLEUR_ISOLATION_IN_IMAGE=1 soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts"
+  expected="exec -w /app soleur-web-platform-canary /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 /usr/local/bin/vitest run --config test/vitest.canary.config.ts"
   log_contents=$(cat "$d/cwi-argv.log" 2>/dev/null || true)
   n_lines=$(printf '%s\n' "$log_contents" | grep -c . || true)
   if [[ "$rc" -eq 0 && "$n_lines" -eq 1 && "$log_contents" == "$expected" ]]; then
@@ -3151,10 +3156,17 @@ assert_cross_workspace_isolation() {
 
   TOTAL=$((TOTAL + 1))
   s2=$(grep -ci 'workspace.isolation' "$d2/sentry.txt" || true)
-  if [[ "$s2" -ge 1 && "$jrnl2" -ge 1 ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: CWI-5 a failed verdict pages Sentry (op=workspace-isolation) and logs WORKSPACE_ISOLATION_FAIL"
+  # The page TEXT is the operator-facing contract, not just its firing: it must
+  # carry the report-only qualifier — a workspace_isolation_failed page means
+  # "the suspect image IS live; nothing auto-rolled back" and an operator woken
+  # at 3am must read that from the alert itself (review finding: the qualifier
+  # previously lived only on the journald line, which does not page).
+  local s2_ro
+  s2_ro=$(grep -c 'report-only canary; deploy NOT rolled back' "$d2/sentry.txt" || true)
+  if [[ "$s2" -ge 1 && "$jrnl2" -ge 1 && "$s2_ro" -ge 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-5 a failed verdict pages Sentry (op=workspace-isolation), logs WORKSPACE_ISOLATION_FAIL, and the page text says report-only/NOT-rolled-back"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-5 red verdict must page (sentry_hits=$s2 fail_lines=$jrnl2)"
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-5 red verdict must page with the report-only qualifier (sentry_hits=$s2 fail_lines=$jrnl2 qualifier_lines=$s2_ro)"
     echo "        sentry:"; sed 's/^/          /' "$d2/sentry.txt"
     echo "        journald capture:"; sed 's/^/          /' "$d2/logger.txt"
   fi
@@ -3238,6 +3250,77 @@ assert_cross_workspace_isolation() {
     FAIL=$((FAIL + 1)); echo "  FAIL: CWI-9 alias guard (rc=$rc6 exec_lines=$n9 warn_lines=$w9)"
     echo "        argv log:"; { cat "$d6/cwi-argv.log" 2>/dev/null || true; } | sed 's/^/          /'
     echo "        journald capture:"; { cat "$d6/logger.txt" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # The reverse direction of the same aliasing class (detected but the probe's
+  # skip alone used to be the whole mitigation): the canary writer still ran
+  # first and wrote ITS verdict into the aliased file — the `ledger` stamp is
+  # what makes the foreign content detectable (cat-deploy-state's reader
+  # refuses a present-but-foreign stamp, so this pollution can never inflate
+  # the workspace_isolation soak).
+  local l9
+  l9=$(jq -r '.ledger // ""' "$d6/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$l9" == "sandbox-canary" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-9b the foreign writer's verdict into the aliased file carries its own ledger stamp"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-9b aliased file must carry the FOREIGN ledger stamp (ledger=$l9)"
+    echo "        state file:"; { cat "$d6/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-10: vacuous-green guard — vitest rc 0 with NO nonzero-passed marker in
+  # stdout (a future skip-knob/tier regression running zero tests) is a RED
+  # verdict, not a pass. rc-only classification would promote a suite that
+  # measured nothing.
+  local d7 out7 rc7 v10 r10
+  out7=$(run_cwi_deploy "export MOCK_CWI_PROBE_OUT=' Test Files  1 skipped (1)\n      Tests  0 passed (0)'") && rc7=0 || rc7=$?
+  d7=$(printf '%s\n' "$out7" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v10=$(jq -r '.verdict // ""' "$d7/wi-state.json" 2>/dev/null || echo "")
+  r10=$(jq -r '.reason // ""' "$d7/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc7" -eq 0 && "$v10" == "workspace_isolation_failed" && "$r10" == "vacuous_green_no_tests_passed" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-10 an rc-0 run with no nonzero-passed marker records vacuous_green, not pass"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-10 vacuous green must be RED (rc=$rc7 verdict=$v10 reason=$r10)"
+    echo "        state file:"; { cat "$d7/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-11: the reason channel is load-bearing diagnostics, not a formatter —
+  # on a red verdict it carries vitest's first FAIL line from STDOUT (where the
+  # reporter writes detail); with no FAIL-shaped stdout line it falls back to
+  # the exec's first stderr line. Both arms sanitize through _cred_err_tail.
+  local d8 out8 rc8 r11a
+  out8=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=1; export MOCK_CWI_PROBE_OUT='Test Files  1 failed (1)\n FAIL  test/sandbox-isolation.test.ts > FR3 sibling read crossed workspaces\n      Tests  5 passed | 1 failed (6)'") && rc8=0 || rc8=$?
+  d8=$(printf '%s\n' "$out8" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  r11a=$(jq -r '.reason // ""' "$d8/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc8" -eq 0 && "$r11a" == *"FR3 sibling read crossed workspaces"* ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-11a a red verdict's reason carries the vitest FAIL line from stdout"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-11a reason must carry the stdout FAIL line (reason=$r11a)"
+  fi
+
+  local d9 out9 rc9 r11b
+  out9=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=1; export MOCK_CWI_PROBE_OUT=''; export MOCK_CWI_PROBE_ERR='OCI runtime exec failed: marker-stderr-cause'") && rc9=0 || rc9=$?
+  d9=$(printf '%s\n' "$out9" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  r11b=$(jq -r '.reason // ""' "$d9/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc9" -eq 0 && "$r11b" == *"marker-stderr-cause"* ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-11b with no FAIL-shaped stdout the reason falls back to docker's first stderr line"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-11b reason must carry the stderr fallback line (reason=$r11b)"
+  fi
+
+  # CWI-12: the host-side `timeout` cap wraps the exec in SOURCE — it cannot be
+  # exercised through the mock (timeout wraps `docker`, never enters the
+  # recorded argv), so it is pinned statically like the suite's other
+  # real-tree greps. Dropping the wrapper is the exact regression it exists to
+  # prevent (a wedged in-container vitest hanging the deploy).
+  TOTAL=$((TOTAL + 1))
+  if grep -qF 'timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app' "$DEPLOY_SCRIPT"; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-12 the host-side timeout wraps the probe's docker exec (static source pin)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-12 timeout wrapper absent from the probe's docker exec"
   fi
 
   # No rm -rf on the parsed artifact dirs: they are sed-parsed paths (a
@@ -10404,10 +10487,12 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #9799: raised 502 -> 508 with T-9799-1..6 (the fan-out HMAC key off argv: 33-comparison byte-identity
 # matrix, no secret on any argv, log or stdin config, key in the python3 environment only, seven
 # fail-closed arms, source census, and the errexit arm that pins the `|| sig=""` guard).
-# #2640: raised 508 -> 517 with the 9 CWI rows (Guard 1: recorded-argv + ordering +
+# #2640: raised 508 -> 522 with the 13 CWI rows (9 pre-panel + 9b/10/11a/11b/12
+# review-round additions: foreign-ledger stamp, vacuous-green, reason channel,
+# timeout source pin). (Guard 1: recorded-argv + ordering +
 #   green/no-page + FAIL/infra/timeout classification + soak accumulate-hold-reset
 #   + ledger-alias skip).
-CI_DEPLOY_ASSERT_FLOOR=517
+CI_DEPLOY_ASSERT_FLOOR=522
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
