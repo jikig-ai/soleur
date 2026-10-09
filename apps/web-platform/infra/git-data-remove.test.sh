@@ -362,6 +362,102 @@ if grep -qxF 'echo "remote: git-data remove: erased bare repo for '"'"'$workspac
 # shellcheck disable=SC2016
 if grep -qxF '  echo "remote: git-data remove: '"'"'$workspace_id'"'"' not present (no-op)" >&2' "$WRAPPER"; then pass; else fail "C1i the 'not present (no-op)' line changed"; fi
 
+# ── (#9066, Art. 17) no subject identifier survives on the store ─────────────────────────────
+# The property: after an erasure completes, no entry under the repo root other than `<id>.git`
+# (which the erasure deletes) carries the workspace id in its NAME, its CONTENT or a SYMLINK TARGET. The predicate
+# quantifies over every entry name and every file's content, not over the `.*.init.lock` glob, so
+# a future writer of ANY new name is caught. UID_TOK passes the wrapper charset and is unlike
+# every fixed filename.
+UID_TOK="uid-7f3a9c"
+subject_id_leaks() { # subject_id_leaks <root> <id> -> offenders on stdout; empty = clean
+  local root="$1" id="$2"
+  assert_fixture_dir "$root"
+  case "$id" in "" | *[!A-Za-z0-9._-]*) printf 'FATAL: bad id token\n' >&2; exit 2 ;; esac
+  find "$root" -mindepth 1 -name "*${id}*" ! -path "${root}/${id}.git" ! -path "${root}/${id}.git/*"
+  # A symlink whose TARGET text names the id (find -name sees only the link's own name; grep -r skips links).
+  find "$root" -mindepth 1 -type l -lname "*${id}*" ! -path "${root}/${id}.git/*"
+  # stderr is merged on purpose: an entry grep cannot read is reported as an offender, never counted clean.
+  grep -rlF --exclude-dir="${id}.git" -- "$id" "$root" 2>&1
+  return 0
+}
+# Fixture roots shaped like the mutations the predicate must catch (m1-m7) and the clean shape it
+# must pass. Built inside the function that binds the root, behind assert_fixture_dir.
+# Closed world: the root holds EXACTLY the expected entries and the shared lock is empty. A substring
+# predicate cannot see a transformed id (case-folded, encoded, hashed); a new legitimate entry must be
+# added to the expected set on purpose.
+root_entries() { find "$1" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' '; }
+root_is_exactly() { # root_is_exactly <root> <expected entries, sorted, space-terminated>
+  [ "$(root_entries "$1")" = "$2" ] && { [ ! -e "${1}/.init.lock" ] || [ ! -s "${1}/.init.lock" ]; }
+}
+ctl_root() { # ctl_root <kind> -> a populated fixture root on stdout
+  local kind="$1" r
+  r="$(fresh_root)"; assert_fixture_dir "$r"
+  case "$kind" in
+    m1) : > "${r}/.${UID_TOK}.init.lock" ;;                      # per-id lock NAME
+    m2) : > "${r}/.init.lock"; : > "${r}/.${UID_TOK}.seen" ;;    # compliant first member, id in a second
+    m3) printf '%s\n' "$UID_TOK" > "${r}/.init.lock" ;;          # constant name, id in the CONTENT
+    m4) mkdir "${r}/.meta"; : > "${r}/.meta/${UID_TOK}" ;;     # id in a NESTED name
+    m5) mkdir "${r}/.meta"; printf '%s\n' "$UID_TOK" > "${r}/.meta/x" ;;  # id in NESTED content
+    m6) ln -s "${UID_TOK}.git" "${r}/.latest" ;;                 # symlink whose TARGET names the id
+    m7) mkdir "${r}/.m"; ln -s "${UID_TOK}.git" "${r}/.m/latest" ;; # the same, NESTED
+    clean)
+      : > "${r}/.init.lock"; : > "${r}/.boot-probe-0.init.lock"; mkdir "${r}/lost+found"
+      mkdir "${r}/uid-other.git"; : > "${r}/uid-other.git/HEAD"; : > "${r}/.uid-other.init.lock"
+      mkdir "${r}/${UID_TOK}.git"; printf '%s\n' "$UID_TOK" > "${r}/${UID_TOK}.git/HEAD" ;;
+  esac
+  echo "$r"
+}
+# Committed negative control: the predicate flags each mutation shape and passes the clean one, so
+# a predicate that stopped looking at names (m1, m2, m4), content (m3, m5) or symlink targets (m6, m7) reddens here without any
+# wrapper run.
+for kind in m1 m2 m3 m4 m5 m6 m7; do
+  r="$(ctl_root "$kind")" || exit 2
+  leaks="$(subject_id_leaks "$r" "$UID_TOK")" || exit 2
+  if [ -n "$leaks" ]; then pass; else fail "9066 control $kind: the predicate did not flag the mutation shape"; fi
+  drop_fixture "$r"
+done
+# A root the predicate cannot scan must surface as an offender (grep's stderr is merged into its output); a
+# missing root is deterministic, unlike a mode-000 entry, which a root-run CI job reads anyway.
+leaks="$(subject_id_leaks "/var/tmp/gd9066-no-such-root-$$" "$UID_TOK" 2>/dev/null)" || exit 2
+if [ -n "$leaks" ]; then pass; else fail "9066 control unscannable: an unscannable root was counted clean"; fi
+r="$(ctl_root clean)" || exit 2
+leaks="$(subject_id_leaks "$r" "$UID_TOK")" || exit 2
+if [ -z "$leaks" ]; then pass; else fail "9066 control clean: the predicate flagged an unrelated entry ($leaks)"; fi
+drop_fixture "$r"
+# Arm: erase-present — the repo goes, the shared lock stays (anti-vacuity), nothing carries the id.
+root=$(fresh_root); make_repo "$root" "$UID_TOK"
+rc=$(run_remove "$root" "$UID_TOK")
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
+if [ "$rc" = "0" ]; then pass; else fail "9066 erase-present: expected 0, got $rc ($(head -c 200 "$ERR"))"; fi
+if [ ! -e "${root}/${UID_TOK}.git" ]; then pass; else fail "9066 erase-present: the repo is still present — the arm never reached the erase"; fi
+if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 erase-present: the shared .init.lock is missing — the arm proves nothing"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 erase-present: the subject id survives on the store: $leaks"; fi
+if root_is_exactly "$root" ".init.lock "; then pass; else fail "9066 erase-present: unexpected root entries or a non-empty lock: $(root_entries "$root")"; fi
+drop_fixture "$root"
+# Arm: erase-absent — the "not present" erasure the issue calls out is reported complete to the
+# user, so it must leave no id-bearing file either.
+root=$(fresh_root)
+rc=$(run_remove "$root" "$UID_TOK")
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
+if [ "$rc" = "0" ]; then pass; else fail "9066 erase-absent: expected 0, got $rc ($(head -c 200 "$ERR"))"; fi
+if grep -qF "not present (no-op)" "$ERR"; then pass; else fail "9066 erase-absent: the wrapper did not report the not-present no-op ($(head -c 200 "$ERR"))"; fi
+if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 erase-absent: the shared .init.lock is missing — the arm proves nothing"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 erase-absent: the subject id survives on the store: $leaks"; fi
+if root_is_exactly "$root" ".init.lock "; then pass; else fail "9066 erase-absent: unexpected root entries or a non-empty lock: $(root_entries "$root")"; fi
+drop_fixture "$root"
+# Arm: refused erase (cutover freeze) — the freeze refusal fires before the lock is opened and must write nothing.
+root=$(fresh_root); make_repo "$root" "$UID_TOK"
+assert_fixture_dir "$root"
+: > "${root}/.frozen"
+rc=$(env -i PATH="$SPATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+  GIT_DATA_STORE_DEVICE="$STORE_SRC" GIT_DATA_STORE_VERIFIED="$SEAMS/marker" \
+  GIT_DATA_CUTOVER_FREEZE="${root}/.frozen" SSH_ORIGINAL_COMMAND="$UID_TOK" bash "$WRAPPER" >/dev/null 2>"$ERR"; echo $?)
+leaks="$(subject_id_leaks "$root" "$UID_TOK")" || exit 2
+if [ "$rc" != "0" ] && grep -q 'frozen for cutover' "$ERR"; then pass; else fail "9066 refused-erase: expected the freeze refusal, got rc=$rc ($(head -c 200 "$ERR"))"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 refused-erase: the subject id was written on a refusal path: $leaks"; fi
+if root_is_exactly "$root" ".frozen uid-7f3a9c.git "; then pass; else fail "9066 refused-erase: unexpected root entries or a non-empty lock: $(root_entries "$root")"; fi
+drop_fixture "$root"
+
 rm -f "$ERR"
 
 # --- Minimum-cardinality guard (mirrors the provision/fence tests). 13 -> 29 with the
@@ -369,10 +465,11 @@ rm -f "$ERR"
 #     than incremented by memory (T1 2, T2 1, T3 8, T4 2, T5 2 = 15 before). 29 -> 37 at
 #     review: T10 +1 (message pin), T12 3, T13 2, T14 3. 38 -> 66 with the C1 store rows
 #     (#8211): C1a 3, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3, C1g 3, C1h 2, C1i 2 = 28 (measured:
-#     66 ran). ---
+#     66 ran). 66 -> 88 with the #9066 subject-id guard: control 9 (m1-m7, clean, unscannable root),
+#     erase-present 5, erase-absent 5, refused-erase 3 = 22 (measured: 88 ran). ---
 total=$((passes + fails))
-if [ "$total" -lt 66 ]; then
-  echo "FAIL: ran only ${total} assertions (<66) — suite did not execute fully" >&2
+if [ "$total" -lt 88 ]; then
+  echo "FAIL: ran only ${total} assertions (<88) — suite did not execute fully" >&2
   exit 1
 fi
 

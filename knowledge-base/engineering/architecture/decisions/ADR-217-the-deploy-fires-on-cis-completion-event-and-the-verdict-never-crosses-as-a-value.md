@@ -7,6 +7,7 @@ amends:
 
   - ADR-072
   - ADR-212
+amended_by: [ADR-276]
 tags: [ci, deploy, release, concurrency, observability]
 ---
 
@@ -497,3 +498,13 @@ none of those three defects.
   (including the empty-lookup rows L1–L9, 2026-09-24)
 - `plugins/soleur/test/ci-concurrency-key.test.sh` — Guard 1
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — Guard 6
+
+## Amendment 2026-10-09 (S2, #9512, ADR-276)
+
+Appended by the PR that adds the `push-dedupe` job to `ci.yml`. It narrows how Decision 2's rule is read for one value and changes no decision above.
+
+- **What stays.** The rule is about the RELEASE verdict: `web-platform-release.yml` still decides `release / release` from the jobs API read of its own push-arm run, never from a value another run hands it, and the artifact values and run discovery are untouched. The `workflow_run` trigger, its `success` conclusion, the identity binding and the five states are unchanged.
+- **The named exception (the CI verdict only).** The conclusion the `workflow_run` arm reads is the whole `CI` push run's conclusion. That run may now conclude `success` without having re-executed the eight heavy jobs, because the attestation job `push-dedupe` read, at run time and from the jobs API, a completed `success` run of EVENT `merge_group` of this repository's `ci.yml` with the identical head SHA, and that run's `test` job was `success`. This is the one place a verdict is attested by another run's value. It is bounded: the key is the commit id (it commits to tree, parents and message), the proof is read live and never stored or passed as an artifact, every uncertainty runs the full battery (fail open), and the whole mechanism is behind the repository variable `CI_PUSH_DEDUPE` (accepted value exactly `on`), dark until activated.
+- **Trust-ladder row (added).** CI gate: source is the `workflow_run` conclusion; attested by a jobs-API read of an identical-`head_sha` `merge_group` run of this repository's `ci.yml` on a `gh-readonly-queue/main/` branch whose `test` job concluded `success`; identity from `github.sha`; fails open to a full run. A `pull_request` or `workflow_dispatch` run on a branch named like a queue branch cannot vouch, because the proof binds the event, the repository and the workflow path, not the branch name.
+- **Limit.** The `merge_group` run executes the candidate's own `ci.yml`, so the voucher is only as strong as the reviewed candidate tree; CODEOWNERS review of `ci.yml`, the proof suite and the soak probe is the control, and an admin merge bypasses it. Detail, measurements, the rejected alternative and the exit criterion are in ADR-276's S2 amendment.
+- **Guard.** `scripts/ci-push-dedupe.test.sh` executes the extracted proof body, pins the eight gated conditions in both directions, evaluates the condition over an event and output truth table, and pins the `test` aggregator.
