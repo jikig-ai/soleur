@@ -114,7 +114,7 @@ A new environment, **`infra-privileged`**, carries the `main` policy and has **n
 serves the unattended Tier-B jobs — apply-on-merge and the scheduled drift check — which a reviewer
 gate would deadlock. *(Note, 2026-09-28, #6604 step 7: it also serves one dispatched state-forget,
 `workspaces-plaintext-forget.yml`, a `terraform state rm` that only forgets addresses whose object is
-measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* *(Note,
+measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* *(Note, 2026-10-01, #6604 PR B (#9348): `workspaces-plaintext-forget.yml` stays on `main` until #6604 PR B merges and is deleted by that PR, after its run from `main`, run 37803274724; from that merge it is cited by name at `59abf6a76c` and this environment no longer serves it.)* *(Note,
 2026-09-30, #9262: it also serves the two inngest-release App-token consumers, the auto-mint
 `mint-inngest-bootstrap-tag.yml::mint` and the pin bump
 `build-inngest-bootstrap-image.yml::bump-cloud-init-pin`. Both mint the `soleur-infra` App token
@@ -979,6 +979,14 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 
 **The approval gate on this consumer is a rule, not a platform separation (measured 2026-10-07).** `web-platform-infra-apply` has a custom deployment branch policy that lists exactly `main`, a single required reviewer whose login is `deruelle` (the owner), and `prevent_self_review` false. The dispatching agent's `gh` identity is that same login, so the platform enforces only the branch (a run from another ref never starts the gated job) and does not separate dispatching from approving. The separation is the owner's explicit per-dispatch go-ahead naming the production write (`hr-menu-option-ack-not-prod-write-auth`) and the owner doing the approving; an agent never approves its own dispatch. The issue records the same property for the other gated environments. Whether destructive dispatches should be two-party (`prevent_self_review` and a distinct agent identity, a `.tf` change) is tracked on #8044 and is not decided here. A re-run of the workflow is refused by design (a `github.run_attempt` guard), so an approval is never silently reused for a second request.
 
+### 2026-10-08 (#8767): `cutover-inngest.yml` `op=backup` is Tier B, and currently ungated
+
+`op=backup`'s Hetzner `create_image` is a **write**, so its `HCLOUD_TOKEN` read is **Tier B**; the generation-anchor read stays Tier A (`HCLOUD_TOKEN_READONLY`). The runbook row for `cutover-inngest.yml::cutover` is split in two accordingly (a tier classification change, recorded here rather than as a new ADR, as the 2026-09-30 and 2026-10-02 entries do).
+
+**Open gap, stated plainly.** The workflow's `environment:` expression lists arm, rollback, resume, reflush, luks-cutover and luks-rollback and not `backup`, so today the write runs on a repo-secret-reachable Doppler token with no reviewer-gated environment, and step O10 (which removes the token from `prd_terraform`) breaks `op=backup` outright. The classification is not enforced by anything yet: the tier census cannot see a script-level read. Closing it changes the workflow expression and the pinned infra suite that asserts the membership list, both under `apps/web-platform/infra/**` (merging them fires the production apply), so it is tracked as #9755, with the O10 re-plumb, and is not part of the argv-credential sweep slice that found it (#9597). An in-script ref check was considered and rejected: the dispatched ref supplies the script, so it is not a boundary.
+
+What the same slice did change for this consumer: the token is masked before first use and shape-checked, the HTTP code is the only response data printed, and the action-error branch no longer prints the action body.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -1002,3 +1010,4 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 - D5 apply-path note (2026-10-01): #9360, #9361, #9362
 - D11 (2026-10-01, switch 2026-10-03, `accepted` 2026-10-04): #9321, #9462
 - D2 note (2026-10-04): #9377, #9461
+- `op=backup` tier note (2026-10-08): #8767, #9755

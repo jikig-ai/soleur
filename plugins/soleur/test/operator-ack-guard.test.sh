@@ -363,7 +363,7 @@ g2_population() { # <root> -> rel paths of scripts that CALL the ack
          # A call is the name as a command word on a non-comment line; a mention
          # in prose or inside an error string is not one.
          grep -vE '^[[:space:]]*#' "$root/$rel" \
-           | grep -qE '(^|[;&|({][[:space:]]*|[[:space:]]\|\|[[:space:]]*|^[[:space:]]+)soleur_op_ack_or_die([[:space:]]|$)' \
+           | grep -cE >/dev/null '(^|[;&|({][[:space:]]*|[[:space:]]\|\|[[:space:]]*|^[[:space:]]+)soleur_op_ack_or_die([[:space:]]|$)' \
            && printf '%s\n' "$rel"
        done
 }
@@ -552,7 +552,7 @@ g2_check() {
   done < <(comm -13 <(printf '%s\n' "$pop") <(printf '%s\n' "$tabled"))
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
-    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s && $2=="write"' | grep -q . \
+    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s && $2=="write"' | grep -c >/dev/null . \
       || { echo "g2: ${rel} has no write row"; v=1; }
   done <<<"$tabled"
 
@@ -615,7 +615,7 @@ g2_check() {
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
     [[ -n "$only" && "$rel" != "$only" ]] && continue
-    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s' | cut -f4 | grep -q '^external:' && continue
+    g2_arm_rows "$arms" | awk -F'\t' -v s="$rel" '$1==s' | cut -f4 | grep -c >/dev/null '^external:' && continue
     while IFS= read -r p; do
       prefix="$(sed -E 's/^[^"]*soleur_op_ack_or_die[[:space:]]+"//; s/[$"].*$//' <<<"$p")"
       if [[ "${#prefix}" -lt 8 ]]; then echo "g2: ${rel}: ack prompt has no static prefix of 8+ chars: ${p}"; v=1; continue; fi
@@ -735,9 +735,9 @@ for skill in flag-create flag-delete flag-set-role user-set-role; do
 done
 
 fsr="$REPO_ROOT/plugins/soleur/skills/flag-set-role/SKILL.md"
-if awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -q 'own terminal' \
-   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -qE "not through Claude Code's .!. prefix|Not through Claude Code's .!." \
-   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -q 'Flagsmith dashboard'; then
+if awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -c >/dev/null 'own terminal' \
+   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -cE >/dev/null "not through Claude Code's .!. prefix|Not through Claude Code's .!." \
+   && awk '/^## Incident rollback/{f=1} f' "$fsr" | grep -c >/dev/null 'Flagsmith dashboard'; then
   pass "AC15 flag-set-role: incident-rollback block (own terminal, not the ! prefix, dashboard break-glass on exit 4)"
 else
   fail "AC15 flag-set-role: the incident-rollback block is missing or incomplete"

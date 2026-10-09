@@ -2117,7 +2117,7 @@ _TMP_OWNED+=("$SCEN10_ERR")
   pre_d="$([[ -d "$(git rev-parse --git-dir)/rebase-merge" ]] && echo "PRE-D: rebase=in-progress" || echo "PRE-D: rebase=NOT-STARTED")"
   arm D "$pre_d"
   [[ -d "$(git rev-parse --git-dir)/rebase-merge" ]] && echo "POST-D: rebase=in-progress" || echo "POST-D: rebase=GONE"
-  git status --porcelain | grep -q '^UU f$' && echo "POST-D: unmerged=f" || echo "POST-D: unmerged=NONE"
+  git status --porcelain | grep -c >/dev/null '^UU f$' && echo "POST-D: unmerged=f" || echo "POST-D: unmerged=NONE"
   git rebase --abort >/dev/null 2>&1 || true
 
   # E: detached HEAD.

@@ -171,7 +171,7 @@ echo "T7: the SUT never pipes \`doppler me\` (the construct that produced the fa
 # previous form flagged `… me 2>&1 >/dev/null)" || rc=$?` — a logical OR that is precisely the
 # CORRECT construct — and reported the fixed script as still broken. A single pipe is a `|`
 # whose next character is not another `|`; the `$` arm keeps a trailing-pipe line matchable.
-if grep -vE '^[[:space:]]*#' "$SUT" | grep -qE '(doppler|"?\$bin"?) me[^|]*\|([^|]|$)'; then
+if grep -vE '^[[:space:]]*#' "$SUT" | grep -cE >/dev/null '(doppler|"?\$bin"?) me[^|]*\|([^|]|$)'; then
   fail "SUT pipes 'doppler me' — exit status would be the pipe's, not doppler's"
 else
   pass "no piped 'doppler me' in the SUT"

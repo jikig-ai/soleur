@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=996
-# generated-at=2026-10-08T17:32:10Z
+# generated-at=2026-10-09T01:28:51Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -252,7 +252,7 @@ plugins/soleur/test/ship-pir-action-items-gate.test.sh	1
 plugins/soleur/test/sync-pr-behind.test.sh	3
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
-plugins/soleur/test/test-pyramid-fixtures.test.sh	7
+plugins/soleur/test/test-pyramid-fixtures.test.sh	3
 plugins/soleur/test/ticket-triage-clauses.test.sh	5
 plugins/soleur/test/token-drift-workflow-causes.test.sh	6
 plugins/soleur/test/unkept-promise-hook.test.sh	1
@@ -302,6 +302,7 @@ scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	7
 scripts/check-tom4-rls-posture-live	1
 scripts/check-web-host-escrow-config	4
+scripts/ci-demand-census	7
 scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-leg-balance-9232	8
 scripts/classify-workflow-transitions	5
@@ -441,6 +442,7 @@ scripts/rule-metrics-aggregate	4
 scripts/rules-loader-stamp-probe	1
 scripts/run-report-exit-first-contact-8076	5
 scripts/seccomp-unenforced-alert	2
+scripts/secret-scan-smoke-gate	1
 scripts/send-failed-alert-probe-8097	3
 scripts/sentry-issue	3
 scripts/sentry-issue-discover	7

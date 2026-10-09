@@ -133,6 +133,15 @@ The allocator copies the DIRTY tree at allocation time, so the lead either holds
 allocated, or has the seat compare against the SHA's content with `git show <sha>:<path>` read from the LIVE tree.
 It does not need a worktree.
 
+## Verifying a new shell suite in the runner's userland
+
+A suite green on the dev host (bash 5.3, curl 8.22) can be red on the CI runner (ubuntu-24.04: bash 5.2, curl 8.5). Before
+the first push of a NEW or heavily changed bash suite, run it once in `docker run --rm -v "$PWD":/w -w /w ubuntu:24.04`
+(install `git jq python3 curl openssl`), log to a file under `/var/tmp`, and require the same row count as the host. State
+tool-dependent floors as invariants over named sets, never as the total one tool build happens to produce. **Why:** #9753 -
+a real-curl oracle and a `<(` inside a `${v//p/r}` replacement were both green locally and red on the runner. See
+`knowledge-base/project/learnings/2026-10-08-a-pipe-tail-swapped-for-a-command-substitution-aborts-mute-and-the-green-suite-ran-on-a-newer-toolchain-than-ci.md`.
+
 ## Operator-side
 
 `SOLEUR_SANDBOX_BASES` (colon-separated, default `/var/tmp:$HOME/.cache`) and `SOLEUR_SANDBOX_SRC` (source tree,

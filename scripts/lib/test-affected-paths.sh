@@ -915,6 +915,12 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "scripts/followthroughs/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+  # S2 (#9597): the suite pins the sentences these records carry about the converted surfaces.
+  "knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md"
+  "knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md"
+  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  "knowledge-base/engineering/operations/runbooks/inngest-server.md"
+  "knowledge-base/legal/article-30-register.md"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
@@ -1124,6 +1130,23 @@ AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/skill-security-scan-step-body.test.sh"
+)
+
+# scripts/secret-scan-smoke-gate (#9727, ADR-276 S1) — the suite extracts the smoke-relevance step body and the
+# smoke-tests job from the workflow, reads scripts/required-checks.txt and the canonical required-checks ruleset JSON,
+# and sweeps every tracked file (git ls-files) through the body; declared from the repo paths its suite file names
+# (a directory entry carries a trailing slash). The runbook is named as text and as a subject operand, not read; the
+# edge is the conservative cover for the kb-consumer ratchet, since SUBJECT_RE lists that exact path.
+AFFECTED_SCRIPTS_SECRET_SCAN_SMOKE_GATE_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".gitleaks.toml"
+  "apps/web-platform/scripts/"
+  "knowledge-base/engineering/operations/secret-scanning.md"
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/required-checks.txt"
+  "scripts/secret-scan-smoke-gate.test.sh"
 )
 
 # plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus

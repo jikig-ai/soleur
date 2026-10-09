@@ -473,7 +473,7 @@ if [[ "$(grep -cxF "readonly LEG3_ALLOW_RE='ok'" <<<"$GRADER_SRC")" == 1 ]]; the
 else
   fail "leg 3's allowlist membership changed - widening it silently weakens signature verification"
 fi
-if grep -E '"\$dauth" == "none"' <<<"$GRADER_SRC" | grep -q '"\$dhelper" == "none"'; then
+if grep -E '"\$dauth" == "none"' <<<"$GRADER_SRC" | grep -c >/dev/null '"\$dhelper" == "none"'; then
   pass "the grader still conjoins both leg-1 carriers"
 else
   fail "the grader no longer conjoins deploy_ghcr_auth and deploy_ghcr_helper, which every prose copy claims"
@@ -493,7 +493,7 @@ fi
 _probe='ok|zzprobe'
 if sed "s/^readonly LEG3_ALLOW_RE=.*/readonly LEG3_ALLOW_RE='$_probe'/" "$SUT" > "$WORK/sut-probe.sh" \
    && grep -qF "readonly LEG3_ALLOW_RE='$_probe'" "$WORK/sut-probe.sh" \
-   && bash "$WORK/sut-probe.sh" --explain 2>/dev/null | grep -qF 'zzprobe'; then
+   && bash "$WORK/sut-probe.sh" --explain 2>/dev/null | grep -cF >/dev/null 'zzprobe'; then
   pass "--explain INTERPOLATES the leg-3 allowlist (single-sourced, not a matching literal)"
 else
   fail "--explain hardcodes the leg-3 allowlist, or the probe rewrite did not land"

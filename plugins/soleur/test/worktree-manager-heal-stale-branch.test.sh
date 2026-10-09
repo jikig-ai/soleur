@@ -89,7 +89,7 @@ EOF
 }
 
 remote_has_branch() {
-  git -C "$BARE" ls-remote --heads origin "$1" 2>/dev/null | grep -q . && echo true || echo false
+  git -C "$BARE" ls-remote --heads origin "$1" 2>/dev/null | grep -c >/dev/null . && echo true || echo false
 }
 
 local_has_branch() {

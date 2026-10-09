@@ -666,7 +666,7 @@ esac
 # Bare repos contain stale working-tree files that diverge from HEAD.
 # Running tests from a bare root produces phantom failures.
 # Use a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh
-if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
+if git rev-parse --is-bare-repository 2>/dev/null | grep -c >/dev/null true; then
   echo "ERROR: Cannot run tests from a bare repository root." >&2
   echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
   echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
@@ -5913,6 +5913,16 @@ if want_scripts; then
   # scripts/followthroughs/ matches no SUITE_GLOBS entry; appended LAST in the block so no earlier
   # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
   run_suite "scripts/followthroughs/tty-ack-migration-9387" bash scripts/followthroughs/tty-ack-migration-9387.test.sh
+  # #9727 (ADR-276 S1): the hosted-runner demand census (golden totals, the C1/C2/non-vacuity self-checks and
+  # a gh-shim round trip over a committed fixture; offline). Explicit run_suite because scripts/*.test.sh is
+  # covered by no glob here; appended LAST in the block so no earlier registration's positional-shard ordinal
+  # moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/ci-demand-census" bash scripts/ci-demand-census.test.sh
+  # #9727: the secret-scan smoke path gate. Extracts the smoke-relevance step body from secret-scan.yml and
+  # EXECUTES it under the Actions shell (the smoke-tests `if:` is pinned by exact string equality, not evaluated),
+  # so it is what separates "the gate skipped smoke correctly" from "the gate never looked". Same
+  # explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -6473,7 +6483,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         # good-sha/bad-sha and nothing to restore, so printing the steps there would send the
         # operator through irrelevant ref surgery. The per-dimension `next:` line above carries
         # each of those dimensions' own remedy.
-        if printf '%s\n' "$_repo_fatal" | grep -qE '^FATAL[[:space:]]+(head|worktree)'; then
+        if printf '%s\n' "$_repo_fatal" | grep -cE >/dev/null '^FATAL[[:space:]]+(head|worktree)'; then
           echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
           echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
           echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2

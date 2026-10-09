@@ -1244,6 +1244,7 @@ monitor_created() {
   ' <<<"$monitors_json"
 }
 
+pending_slugs=""; class_a_pending_labels=()  # Class A pending; slugs set only with a coherent tf half
 orphan_live_monitors=()   # Class D — live, undeclared, AND not in state (unreclaimable)
 class_d_unresolved=()     # live + undeclared, but state unknown -> cannot classify
 class_d_state_unknown=0
@@ -1275,6 +1276,24 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
       if (match($0, /"[^"]*"/)) { print substr($0, RSTART+1, RLENGTH-2); in_block=0 }
     }
     in_block && /^}/ { in_block=0 }
+  ' "$tf_dir"/*.tf | sort -u)
+
+  # Declared-pending slugs: each `cron_monitor_alert_unrouted` key resolved through its
+  # resource label. A `#` line never matches a key; an unresolvable key stays drift.
+  pending_slugs=$(awk '
+    /^[[:space:]]*\/\*/ { cm=1 }
+    cm { if (/\*\//) cm=0; next }
+    /^[[:space:]]*cron_monitor_alert_unrouted[[:space:]]*=[[:space:]]*\{[[:space:]]*(#.*)?$/ { in_map=1; next }
+    in_map && /^[[:space:]]*\}/ { in_map=0; next }
+    in_map && /^[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*"/ {
+      k=$0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k); keys[k]=1; next
+    }
+    /^resource[[:space:]]+"sentry_cron_monitor"[[:space:]]/ { lbl=$3; gsub(/"/, "", lbl); in_block=1; next }
+    in_block && /^[[:space:]]*name[[:space:]]*=[[:space:]]*"/ {
+      if (match($0, /"[^"]*"/)) { names[lbl]=substr($0, RSTART+1, RLENGTH-2); in_block=0 }
+    }
+    in_block && /^}/ { in_block=0 }
+    END { for (k in keys) if (k in names) print names[k] }
   ' "$tf_dir"/*.tf | sort -u)
 
   # Zero declarations parsed against a non-empty live org means the anchor broke
@@ -1349,6 +1368,21 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
     class_d_state_unknown=1
     class_d_unresolved=( ${class_d_candidates[@]+"${class_d_candidates[@]}"} )
   fi
+fi
+
+# Class A partition: declared-pending detectors are listed, not counted; everything
+# else (placeholders included, never slugs) stays drift and keeps warning.
+if [[ -n "$pending_slugs" ]] && (( ${#class_a_unrouted_labels[@]} > 0 )); then
+  class_a_drift_labels=()
+  for label in "${class_a_unrouted_labels[@]}"; do
+    if grep -qFx -- "$label" <<<"$pending_slugs"; then
+      class_a_pending_labels+=("$label")
+    else
+      class_a_drift_labels+=("$label")
+    fi
+  done
+  class_a_unrouted_labels=( ${class_a_drift_labels[@]+"${class_a_drift_labels[@]}"} )
+  class_a_count=${#class_a_unrouted_labels[@]}
 fi
 
 # --- Resolve report path --------------------------------------------------
@@ -1481,11 +1515,17 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
 
   if (( detectors_evaluated == 1 )); then
     printf '_Class A (cron detector with no routing workflow):_\n\n'
-    printf -- '- **%s** of **%s** cron detectors have an empty `workflowIds`.\n' \
+    printf -- '- **%s** of **%s** cron detectors have an empty `workflowIds` and are not declared pending.\n' \
       "$class_a_count" "$cron_detector_count"
-    printf -- '- Healthy state: **0** unrouted (every cron detector bound to a workflow).\n'
+    printf -- '- Healthy state: **0** unrouted (every cron detector bound to a workflow, or declared pending below).\n'
+    if (( ${#class_a_pending_labels[@]} > 0 )); then
+      printf -- '- **%s** more declared pending in `cron_monitor_alert_unrouted` (two-PR rule; not drift, not warned):\n' "${#class_a_pending_labels[@]}"
+      for label in "${class_a_pending_labels[@]}"; do
+        printf -- '- `%s` — declared pending; no cron-monitor-failure workflow routes this monitor yet.\n' "$label"
+      done
+    fi
     if (( class_a_count > 0 )); then
-      printf -- '- A non-zero count means a cron detector is bound to no workflow: either a pending route under the two-PR rule, listed in `cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`, or live drift.\n\n'
+      printf -- '- A non-zero count means a cron detector is bound to no workflow and is not declared in `cron_monitor_alert_unrouted` (`apps/web-platform/infra/sentry/cron-monitor-alerts.tf`): live drift, or a pending route not yet declared there.\n\n'
       printf '_Unrouted cron detectors (by monitor slug):_\n\n'
       for label in "${class_a_unrouted_labels[@]}"; do
         printf -- '- `%s` — bound to no workflow; a check-in failure for this monitor notifies no one.\n' "$label"
@@ -1580,7 +1620,7 @@ echo "[ok] Wrote audit report: $out_file"
 # is muted, disabled, or unknown.
 routing_warn_parts=()
 if (( class_a_count > 0 )); then
-  routing_warn_parts+=("${class_a_count} cron detector(s) bound to no workflow (healthy state is 0, so this is a pending route under the two-PR rule or live drift): ${class_a_unrouted_labels[*]}")
+  routing_warn_parts+=("${class_a_count} cron detector(s) bound to no workflow (healthy state is 0: bind it to a workflow or declare it pending in cron_monitor_alert_unrouted): ${class_a_unrouted_labels[*]}")
 fi
 if (( muted_unknown == 1 )); then
   routing_warn_parts+=("muted monitors unknown (no monitor in the payload carries isMuted)")

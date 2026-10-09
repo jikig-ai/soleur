@@ -137,7 +137,7 @@ if mknod "$D/config.lock" c 1 3 2>/dev/null; then
   run_sweep "$D" 60
   assert_contains "$SW_OUT" "type=chardevice" "char-device lock typed chardevice"
   # rdev must be present and well-formed (hex major:minor); /dev/null ⇒ 1:3.
-  if printf '%s' "$SW_OUT" | grep -qE 'rdev=[0-9a-f]+:[0-9a-f]+'; then
+  if printf '%s' "$SW_OUT" | grep -cE >/dev/null 'rdev=[0-9a-f]+:[0-9a-f]+'; then
     echo "  PASS: well-formed rdev=<hex>:<hex> emitted on DIAG"; PASS=$((PASS + 1))
   else
     echo "  FAIL: DIAG missing well-formed rdev field"; echo "    got: $SW_OUT"; FAIL=$((FAIL + 1))
@@ -149,7 +149,7 @@ if mknod "$D/config.lock" c 1 3 2>/dev/null; then
   if (( SW_RC != 0 )); then echo "  PASS: sweep returns non-zero on char-device lock"; PASS=$((PASS + 1));
   else echo "  FAIL: sweep must return non-zero on char-device lock"; FAIL=$((FAIL + 1)); fi
   # Regression guard: removing the `-c` branch would type this `other`, not `chardevice`.
-  if printf '%s' "$SW_OUT" | grep -q 'type=other'; then
+  if printf '%s' "$SW_OUT" | grep -c >/dev/null 'type=other'; then
     echo "  FAIL: char device fell through to type=other (the -c branch is missing)"; FAIL=$((FAIL + 1))
   else
     echo "  PASS: char device did not fall through to type=other"; PASS=$((PASS + 1))
@@ -210,14 +210,14 @@ D=$(new_lockdir)
 mkdir "$D/config.lock"
 touch -d "$OLD_MTIME" "$D/config.lock"
 run_sweep "$D" 60
-if printf '%s' "$SW_OUT" | grep -qF 'SOLEUR_GIT_LOCK_'; then
+if printf '%s' "$SW_OUT" | grep -cF >/dev/null 'SOLEUR_GIT_LOCK_'; then
   echo "  PASS: SOLEUR_GIT_LOCK_ tokens present on stdout"; PASS=$((PASS + 1))
 else
   echo "  FAIL: SOLEUR_GIT_LOCK_ tokens missing from stdout"; FAIL=$((FAIL + 1))
 fi
 # The DIAG/UNREMOVABLE lines must be free of ESC (\033) color codes.
 diag_lines="$(printf '%s\n' "$SW_OUT" | grep 'SOLEUR_GIT_LOCK_' || true)"
-if printf '%s' "$diag_lines" | grep -q $'\033'; then
+if printf '%s' "$diag_lines" | grep -c >/dev/null $'\033'; then
   echo "  FAIL: sentinel line carries ANSI color codes (breaks grep)"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: sentinel lines are plain (no ANSI)"; PASS=$((PASS + 1))
