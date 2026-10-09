@@ -467,17 +467,17 @@ No new decision: the boot-asset design, the deny mechanism and the replace autho
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `bash apps/web-platform/infra/zot-image-staleness.test.sh` exits 0 at the new version, and `zot-image-staleness-mutation.test.sh` is green.
-- [ ] AC2 Both digests in `zot-registry.tf` equal a fresh `crane digest` / anonymous-token resolution at the final tag, arch-keyed, and differ from each other.
-- [ ] AC3 `## Previous known-good pin` holds the v2.1.20 refs in tag-less form for both arches, plus the v2.1.20 release tag, T and C.
-- [ ] AC4 The four anchors are re-diffed and the table updated; the breaking-change scan is recorded with the #4363 measurement (cross-repo HEAD 200 to 404, mount unchanged) and the shared-layer answer; `hydrateBlobOnRead` recorded NOT ADOPTED in the sidecar, or the STOP rule fired and the PR was not marked ready.
-- [ ] AC5 The 200-or-401 and gc-404 claims are re-measured against the final digest with the exact config; zero 403; claim dates updated in the sidecar, `cloud-init-registry.yml`, `ci-deploy.sh` and `ci-deploy.test.sh`; `zot-fill-rate-7341.sh` reworded.
-- [ ] AC6 (hard gate before `gh pr ready`) Release `zot-image-<final version>-<D12>` exists, published before the PR is marked ready; `GH_TOKEN="$(gh auth token)" bash scripts/registry-replace-preflight.sh --check-asset` prints `verdict=CLEAR predicate=P6`; T and C are pinned; the PR's three `rehearse` jobs are green.
-- [ ] AC7 All seven deny sites carry the same three names; `web-ghcr-deny.test.sh`, `zot-image-fetch.test.sh`, `cloud-init-ghcr-seed-login.test.sh` are green; `git grep -n "for h in ghcr.io"` shows no unreviewed copy.
-- [ ] AC8 Registry render at HEAD vs `origin/main` differs only by the pin-derived values and the deny line; stored size headroom stays above 10,000 B; `registry-render-delta.test.sh`, `registry-userdata-budget.test.sh`, `registry-boot-guard.test.sh`, `cloud-init-user-data-size.test.ts`, `ci-deploy.test.sh` green.
-- [ ] AC9 `git diff origin/main --name-only` lists no `.github/workflows/` path and not `.mcp.json`; `git log origin/main..HEAD --format=%B | grep -c 'ack-destroy'` prints 0; one commit message has `[skip-web-platform-apply]` and `[skip-deploy-fix-apply]` each on its own line.
-- [ ] AC10 PR body: `Ref #9252`, `Ref #9390`, no closing keyword; ends with the Generated-with-Claude-Code line; the commit trailer is the Claude Sonnet 5.5 Co-Authored-By line.
-- [ ] AC11 `python3 scripts/lint-guard-contract.py` and `python3 scripts/lint-infra-no-human-steps.py <this plan>` pass.
+- [x] AC1 `bash apps/web-platform/infra/zot-image-staleness.test.sh` exits 0 at the new version, and `zot-image-staleness-mutation.test.sh` is green.
+- [x] AC2 Both digests in `zot-registry.tf` equal a fresh `crane digest` / anonymous-token resolution at the final tag, arch-keyed, and differ from each other.
+- [x] AC3 `## Previous known-good pin` holds the v2.1.20 refs in tag-less form for both arches, plus the v2.1.20 release tag, T and C.
+- [x] AC4 The four anchors are re-diffed and the table updated; the breaking-change scan is recorded with the #4363 measurement (cross-repo HEAD 200 to 404, mount unchanged) and the shared-layer answer; `hydrateBlobOnRead` recorded NOT ADOPTED in the sidecar, or the STOP rule fired and the PR was not marked ready.
+- [x] AC5 The 200-or-401 and gc-404 claims are re-measured against the final digest with the exact config; zero 403; claim dates updated in the sidecar, `cloud-init-registry.yml`, `ci-deploy.sh` and `ci-deploy.test.sh`; `zot-fill-rate-7341.sh` reworded.
+- [x] AC6 (hard gate before `gh pr ready`) Release `zot-image-<final version>-<D12>` exists, published before the PR is marked ready; `GH_TOKEN="$(gh auth token)" bash scripts/registry-replace-preflight.sh --check-asset` prints `verdict=CLEAR predicate=P6`; T and C are pinned; the PR's three `rehearse` jobs are green.
+- [x] AC7 All seven deny sites carry the same three names; `web-ghcr-deny.test.sh`, `zot-image-fetch.test.sh`, `cloud-init-ghcr-seed-login.test.sh` are green; `git grep -n "for h in ghcr.io"` shows no unreviewed copy.
+- [x] AC8 Registry render at HEAD vs `origin/main` differs only by the pin-derived values and the deny line; stored size headroom stays above 10,000 B; `registry-render-delta.test.sh`, `registry-userdata-budget.test.sh`, `registry-boot-guard.test.sh`, `cloud-init-user-data-size.test.ts`, `ci-deploy.test.sh` green.
+- [x] AC9 `git diff origin/main --name-only` lists no `.github/workflows/` path and not `.mcp.json`; `git log origin/main..HEAD --format=%B | grep -c 'ack-destroy'` prints 0; one commit message has `[skip-web-platform-apply]` and `[skip-deploy-fix-apply]` each on its own line.
+- [x] AC10 PR body: `Ref #9252`, `Ref #9390`, no closing keyword; ends with the Generated-with-Claude-Code line; the commit trailer is the Claude Sonnet 5.5 Co-Authored-By line.
+- [x] AC11 `python3 scripts/lint-guard-contract.py` and `python3 scripts/lint-infra-no-human-steps.py <this plan>` pass.
 
 ### Post-merge (automated; the agent reads, does not trigger)
 
