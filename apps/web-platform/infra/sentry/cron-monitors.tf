@@ -1065,6 +1065,28 @@ resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
   timezone                = "UTC"
 }
 
+# Liveness for the runtime-image vulnerability scan (W3, epic #9601):
+# .github/workflows/image-cve-scan.yml. The check-in is posted by the sentry-heartbeat step at the
+# end of that workflow, `error` on any non-zero scan exit (exit 3 = unmeasured), so this monitor
+# covers BOTH "the workflow never ran" (missed check-in) and "the scan ran blind" (error). A blind
+# scan must never read as clean.
+#
+# `name` MUST stay slug-shaped: Sentry derives the slug by slugifying `name`, and the workflow's
+# `monitor-slug` input must equal it (sentry-monitor-iac-parity.test.ts asserts the two agree).
+# 05:17 UTC mirrors the workflow's `schedule:`; checkin_margin_minutes = 360 follows the measured GHA
+# schedule-delivery jitter documented on scheduled_prod_version_drift below, NOT the nominal interval.
+resource "sentry_cron_monitor" "image_cve_scan" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "image-cve-scan"
+  schedule                = { crontab = "17 5 * * *" }
+  checkin_margin_minutes  = 360
+  max_runtime_minutes     = 30
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # #6549 item 2 — liveness for the source-vs-live Better Stack heartbeat reconcile job
 # (scheduled-terraform-drift.yml → heartbeat-live-reconcile). Since #7884 (ADR-222) the
 # same job also reconciles live monitors and reports unmanaged objects; the slug keeps

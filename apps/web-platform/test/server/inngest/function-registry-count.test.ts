@@ -87,6 +87,10 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // W3 (epic #9601, #9826): GHA-fired on its own daily `schedule:` (image-cve-scan.yml), advisory, with
+  // no Inngest cron function and therefore no SENTRY_MONITOR_SLUG. The monitor covers both a missed run
+  // and an unmeasured scan (exit 3 posts `error`).
+  "image-cve-scan",
   // #7471: GHA-fired on its own `schedule:` (scheduled-marketplace-drift.yml). It checks the
   // PUBLISHED marketplace manifest with two unauthenticated raw GETs and no product secrets, so
   // there is deliberately no Inngest cron function and therefore no SENTRY_MONITOR_SLUG — same
