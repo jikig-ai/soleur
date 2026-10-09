@@ -137,18 +137,18 @@ resource "hcloud_volume" "inngest_redis_luks" {
   }
 }
 
-# Attached ALONGSIDE the live plaintext volume — the additive design's two-copy
-# state. The plaintext volume keeps serving /mnt/data throughout; this one receives
-# the byte-copy under a clean-stop freeze and becomes /mnt/data only at the swap.
+# This attachment is the live one: the store is served from this volume, and it is the only copy
+# (the plaintext volume it was copied from was destroyed 2026-10-09, #8285). It was created ALONGSIDE
+# that volume by the additive cutover design (the byte-copy under a clean-stop freeze, then the swap).
 #
 # THE `-target=` SETS ARE NOT THE SAME SET. Both this volume and this attachment
 # join `inngest-host`. Only the ATTACHMENT joins `inngest-host-replace`, because
 # that dispatch preserves the durable AOF by OMISSION — its target set names the
-# server, its network attachment and the plaintext volume's attachment, and
-# deliberately not the plaintext VOLUME. Adding a volume there would break the
-# invariant the workflow states in those words. The attachment must be there,
-# though: inngest-host-replace-gate.sh interpolates the server id, so a replace
-# forces this attachment into the plan and the gate aborts `out_of_scope` without it.
+# server, its network attachment and this attachment, and deliberately not any
+# VOLUME. Adding a volume there would break the invariant the workflow states in
+# those words. The attachment must be there, though: inngest-host-replace-gate.sh
+# interpolates the server id, so a replace forces this attachment into the plan and
+# the gate aborts `out_of_scope` without it.
 resource "hcloud_volume_attachment" "inngest_redis_luks" {
   volume_id = hcloud_volume.inngest_redis_luks.id
   server_id = hcloud_server.inngest.id
