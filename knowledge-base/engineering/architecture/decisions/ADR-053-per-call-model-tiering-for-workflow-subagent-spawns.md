@@ -70,6 +70,10 @@ Separately, the comparison basis moved underneath this ADR. Sonnet 5 bills $2/$1
 | Sonnet 5 | 2 / 10 | **5×** (was 3.3× vs Sonnet 4.6) |
 | Haiku 4.5 | 1 / 5 | 10× |
 
+> **Superseded 2026-10-08 (Haiku 5.5 launch):** the Haiku 4.5 row is replaced by Haiku 5.5, which
+> bills $0.10 / $0.50 per MTok for prompts up to 100,000 tokens ($0.50 / $2.50 above), so Fable 5.1
+> is 100× Haiku 5.5 on the short card. The table is left as recorded.
+
 The Fable-vs-Sonnet gap **widened**. Every judgment in this ADR that leaned on 3.3× is therefore
 conservative in the safe direction: the case for pinning mechanical steps down to Sonnet is
 *stronger* now, not weaker.
@@ -95,6 +99,10 @@ funding and different protections, and found a sixth the first draft had no row 
 > **Superseded 2026-09-29 (#9236):** rows 5a and 6 name `claude-sonnet-5` — the execution tier,
 > routers, and CI pins moved to `claude-sonnet-5-5` at the Sonnet 5.5 launch (same tier, same
 > $2/$10 pricing, faster). The tiering judgments are unchanged.
+>
+> **Superseded 2026-10-08 (Haiku 5.5 launch):** row 5a's `claude-haiku-4-5` domain routing now runs
+> on `claude-haiku-5-5` (same tier, $0.10/$0.50 per MTok up to a 100K-token prompt). The tiering
+> judgment is unchanged; see the Haiku 5.5 addendum below.
 
 ### A Task spawn is cache-read-dominated — measured, after a first draft asserted the opposite
 
@@ -148,6 +156,24 @@ Because cache read is the dominant input component, the headline `$10/$50` multi
 So the **5× Sonnet** figure holds for output and uncached input, and collapses to **1.25×** on the
 component that actually dominates a spawn. A light consult (~250k cache read + ~1k output) costs
 ≈$0.11 on Fable 5.1 against ≈$0.06 on Sonnet 5 — about **1.8×**, not 5×.
+
+> **Superseded 2026-10-08 (Haiku 5.5 launch; Sonnet 5.5 cache-read correction):** two rows of the
+> table above are stale, and the table is left as recorded.
+>
+> - **Haiku 4.5 is replaced by Haiku 5.5.** At cache-read rates Haiku 5.5 reads at $0.01/MTok for
+>   prompts up to 100,000 tokens and $0.05/MTok above, against Sonnet 5.5 at $0.10. That is **10×**
+>   cheaper than Sonnet 5.5 on the short card and **2×** on the long card. This restates the
+>   comparison at the line item that dominates a multi-turn spawn, which is the basis this section
+>   established; the headline input gap (20× on the short card, 4× on the long card) is the wrong
+>   line item for this workload.
+> - **The Sonnet cache-read rate is $0.10, not $0.20.** Anthropic prices Sonnet 5.5 cache hits at
+>   0.05× base input, and the repo recorded $0.20 (0.1× base input, Sonnet 5's multiplier) until 2026-10-08. Against Sonnet 5.5 at $0.10,
+>   Fable 5.1's $0.25 is **2.5×** (the "1.25×" above, and the "5× collapses to 1.25×" sentence, no
+>   longer hold), and the light consult costs ≈$0.11 on Fable 5.1 against ≈$0.035 on Sonnet 5.5,
+>   about **3×**. The ruling is unchanged (no pin moves, Fable stays a scoped-consult tier), and the
+>   corrected gap is *wider*, which strengthens the case against widening Fable. The Re-evaluation
+>   trigger below and the Opus 5.5 addendum's "cache-read rate equals Sonnet 5's" are stale in the
+>   same way: Opus 5.5 ($0.20) is now 2× Sonnet 5.5 on cache reads.
 
 Two conclusions change shape:
 
@@ -248,6 +274,50 @@ change. A tier whose rationale is reasoning depth cannot inherit an unowned defa
   future audit-tier caller that uses the Messages API instead of the CLI needs its own carve-out
   and its own effort mapping. Effort is a cron-registry attribute, not part of ADR-110's semantic
   tier map.
+
+## Addendum — 2026-10-08: Haiku 5.5 launch re-evaluation
+
+Claude Haiku 5.5 (`claude-haiku-5-5`, no dated suffix, released 2026-10-07) bills $0.10 / $0.50 per
+MTok for prompts up to 100,000 tokens and $0.50 / $2.50 above (cache read $0.01 / $0.05), against
+Haiku 4.5 at $1 / $5. It has a 1M-token context window, a 128K output ceiling, a tokenizer that
+yields about 30% more tokens, adaptive thinking on by default, `effort` levels `low` to `max`
+(default `medium`), no server-side fallback, and can return `stop_reason: "refusal"`. The 2026-09-03
+tables are left as recorded (see the dated notes above). Cost-ledger semantics (the long-prompt rate
+card, the Sonnet 5.5 cache-read regime boundary, and why the caps cannot see a sub-cent Haiku turn) live
+in the [ADR-041 addendum](./ADR-041-byok-cap-enforcement-model.md), not here.
+
+### Verdicts
+
+Every model-selecting site was inventoried and judged against this ADR's Decisions 2 and 3 (mechanical
+steps may go cheap; the never-downgrade list is excluded). Those decisions are written for workflow
+spawn pins; applying them to server, CI and cron sites is an extension by analogy, stated here
+rather than assumed. Two of the "Move now" sites, the domain
+router and the email summarizer, read user text and were already Haiku-tier before this launch, so
+their tier is unchanged by the verdict.
+
+| Verdict | Sites | Reason |
+|---|---|---|
+| **Move to 5.5 now** | `domain-router`, email summarize, leader classes `triage.p0p1_issue` and `knowledge.kb_drift`, the CI preflight action, the manual retrieval bench `scripts/learning-retrieval-bench.sh` | Classification shape, same tier. `domain-router` and the summarizer send `effort: "low"`. The leader loop is unchanged: a live probe on 2026-10-08 (N=5 per cell) showed no truncation and 0/5 refusals on a security-flavored issue body, and a refusal ends in the existing `persistFailure` branch. The preflight probe at `max_tokens: 1` returned HTTP 200. |
+| **Follows via alias** | Five `engineering/research/*` agents (`model: haiku`); workflow `'cheap'` pins | The `haiku` alias resolves to 5.5 on Claude Code CLIs at or above 2.1.293, so this repo's pin does not control it (the silent-retargeting row of the lifecycle table). Inside the Agent SDK's bundled CLI (0.3.284) the alias still resolves to Haiku 4.5, so product-runtime runs of these agents stay on 4.5 until the SDK bump. Measure with the transcript-grep recipe in a real `/plan` run; no edit. |
+| **Candidate, not adopted (eval gate)** | `pdf-chapter-router` (Agent SDK, blocked on the SDK pin); the triage/summarize-shaped execution crons `cron-daily-triage`, `cron-follow-through-monitor`, `cron-campaign-calendar`, `cron-community-monitor`; workflow `'standard'` pins (`classify`, `parse`, `analyze`, `commit`, `report`, `cluster`, `detect-threshold`); CI `claude-code-review.yml` | Mechanical on paper, but the crons are multi-turn tool-using agents on the operator key whose failures are silent, and the pin allowlist and the CI `--model` swap each need their own attested change. Re-tiering a cron is "a separate clo-attestation-class model-bump PR" per the header comment of `apps/web-platform/server/inngest/model-tiers.ts`; this ADR's own clo-attestation clause (Decision item 3) applies to the workflow allowlist. A `claude-code-review.yml` swap also needs the coupled `claude-code-action` pin check. Tracked as the 2026-10-08 comment on #8643 (pdf-chapter-router to Haiku 5.5 after the SDK bump; the trigger is that issue's own bump, so it did not get a separate issue) and #9790 (one eval-gated re-tiering issue covering the execution crons and the `'standard'` to `'cheap'` pins, including `claude-code-review.yml`, so the `eval-harness` arm is built once). |
+| **Not a fit** | `cron-compound-promote`, `cron-weekly-release-digest`, the audit tier and Concierge/leader reasoning classes, `cron-bug-fixer`, `fix-constraints-stage-a.yml`, `test-pretooluse-hooks.yml`, leader class `security.cve_alert` | Reads operator-session learnings or writes PRs, deep reasoning, agentic coding (the launch guidance says Haiku 5.5 is not for complex agentic coding), or security-flavored input where Haiku 5.5's cyber safeguards decline pentest-style prompts with no server-side fallback and a refusal would drop a real alert. |
+| **Unchanged** | `cron-anthropic-credit-probe` (immaterial: about $0.00002 per call, the value is key liveness); advisor consults ([ADR-083](./ADR-083-scoped-strong-model-consult-at-decision-gates.md)) and the harness tier map ([ADR-110](./ADR-110-harness-semantic-model-tier-map.md)); the effort/model router (#6000, a future consumer of the five effort levels) | ADR-083 gates are judgment steps and stay on the advisor tier. ADR-110's `cheap` tier maps to the `haiku` alias on Claude, which follows the alias row above. |
+
+### SDK-path carve-out
+
+Two scripts stay on `claude-haiku-4-5` because they call the Agent SDK, whose bundled CLI
+(`claude-agent-sdk` 0.3.284) does not know the new id: `apps/web-platform/scripts/sandbox-canary.mjs`
+and `apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs`. The tier is Haiku 5.5;
+these two are the enumerated exception, so this ADR does not read as saying the tier is 5.5 while
+they run 4.5. The carve-out retires when the SDK pin reaches 0.3.293, the first release that knows
+the id, tracked on #8643 (whose own trigger, the next model launch, fired on this launch; the SDK gate it asks for was weighed and deferred because this launch puts no new id on the SDK path). Haiku 4.5 has no announced deprecation, so there is no urgency.
+
+### Re-evaluation trigger
+
+Re-run this review at the next Anthropic model launch, when the SDK pin reaches 0.3.293 (retire the
+carve-out and take the pdf-chapter-router candidate recorded on #8643), or when an eval shows a candidate site above is safe on
+Haiku 5.5 (take #9790). At each, quote cache-read rates, not headline rates, per the
+section above.
 
 ## Alternatives considered
 

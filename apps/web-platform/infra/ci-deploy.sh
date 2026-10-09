@@ -356,7 +356,12 @@ fan_out_to_peers() {
 
   local payload sig
   payload=$(jq -cn --arg cmd "${SSH_ORIGINAL_COMMAND:-}" '{command:$cmd}')
-  sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" | sed 's/.*= //')
+  # The key rides the python3 child's ENVIRONMENT only (owner-only /proc/<pid>/environ), never argv.
+  sig=$(printf '%s' "$payload" | HMAC_KEY="$secret" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || sig=""
+  if [[ ! "$sig" =~ ^[0-9a-f]{64}$ ]]; then
+    logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or the signer failed) — not forwarding an unsigned request"
+    return 1
+  fi
 
   local rc=0 peer code _peer_arr
   IFS=',' read -ra _peer_arr <<< "$peers_csv"
@@ -366,8 +371,7 @@ fan_out_to_peers() {
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
     # The HMAC SIGNATURE header goes in on curl's stdin config channel, never its argv
     # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
-    # Known remaining site: the shared secret itself is openssl's -hmac argument above
-    # (the deferred `openssl dgst -hmac` class in lint-shell-trace-credential-refusal.py).
+    # The shared secret is likewise environment-only (see the signer above).
     code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
@@ -1305,8 +1309,10 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# zot v2.1.22 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
-# MEASURED 2026-10-08 by running the pinned image locally against this config (#9252):
+# zot, with this repo's exact accessControl. The version, the date and the re-measurement status of
+# the claim below live in zot-image.provenance.md, '## Version-scoped claim register' (row 1), not
+# here: this file feeds triggers_replace, so a version or date in it would make every zot bump edit it.
+# The measurement (#9252) was made by running the pinned image locally against this config:
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:

@@ -99,6 +99,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/inngest/execution-placement.test.ts",
   "test/server/inngest/filing-shape-corpus-parity.test.ts",
   "test/server/inngest/leader-prompts/tool-surface.test.ts",
+  "test/server/inngest/model-tiers.test.ts",
   "test/server/inngest/rule-body-gate-recursion-invariant.test.ts",
   "test/server/inngest/sentry-cron-monitor-routing-parity.test.ts",
   "test/server/inngest/sentry-monitor-iac-parity.test.ts",

@@ -59,7 +59,7 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # pins agree and that the installed bundle knows every tier model id.
 # No `--before` on this line: the tree is the package plus its exact-pinned platform
 # packages and nothing floating, asserted offline in claude-cli-pin-knows-models.test.ts.
-RUN npm install -g @anthropic-ai/claude-code@2.1.284
+RUN npm install -g @anthropic-ai/claude-code@2.1.293
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
 # Global install (NOT a package.json dep) — same pattern as the line above —
