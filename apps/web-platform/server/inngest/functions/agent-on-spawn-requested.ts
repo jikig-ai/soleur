@@ -50,6 +50,7 @@ import { runWithByokLease, type ByokLeaseError } from "@/server/byok-lease";
 import { isAnthropicCreditExhausted } from "@/server/anthropic-credit";
 import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
 import { persistTurnCostAwaitable } from "@/server/cost-writer";
+import { refusalCategory, safeStopReason } from "@/server/anthropic-stop-report";
 import { notifyOfflineUser, isCostBreakerReason } from "@/server/notifications";
 import { ACTION_CLASSES, type ActionClass } from "@/server/scope-grants/action-class-map";
 import {
@@ -89,8 +90,8 @@ function uuidv5(name: string, namespace: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 }
 
-// Per-model unit pricing in USD per token. Cache-read tokens bill at ~10% of
-// input; cache-creation tokens at 125% of input FOR THE 5-MINUTE TTL used at
+// Per-model unit pricing in USD per token. Cache-read tokens bill at 10% of
+// input (5% on Sonnet 5.5 and Opus 5.5); cache-creation tokens at 125% of input FOR THE 5-MINUTE TTL used at
 // the call site below — the 1-hour TTL bills at 200% instead. The code prices
 // the combined `usage.cache_creation_input_tokens` at the 5m rate (the SDK also
 // returns a per-TTL split in `usage.cache_creation.ephemeral_{5m,1h}_input_tokens`,
@@ -101,7 +102,8 @@ function uuidv5(name: string, namespace: string): string {
 // `ttl`, so the 5m default applies; the Guard 1 exact-shape test in
 // agent-on-spawn-requested-leader-loop.test.ts pins that.)
 // Verified against https://platform.claude.com/docs/en/about-claude/pricing.md
-// on 2026-07-24; sonnet row re-verified 2026-09-29 at the Sonnet 5.5 launch.
+// on 2026-07-24; sonnet row re-verified 2026-09-29 at the Sonnet 5.5 launch;
+// both rows re-verified 2026-10-08 at the Haiku 5.5 launch.
 //
 // VERIFY EACH ROW AGAINST ITS KEY, not against the previous row. The haiku
 // entry carried Haiku *3.5*'s retired table ($0.80/$4/$0.08/$1) under the
@@ -140,11 +142,20 @@ function uuidv5(name: string, namespace: string): string {
 // totals as reconcilable against the founder's Anthropic invoice.
 //
 // Values are pinned by model-tiers.test.ts so a drift must be deliberate.
-interface ModelPricing {
+interface PricingCard {
   inputPerToken: number;
   outputPerToken: number;
   cacheReadPerToken: number;
   cacheCreatePerToken: number;
+}
+// A model with prompt-length-tiered pricing (Haiku 5.5) carries the SHORT card at the
+// top level and a second card in `longPrompt`. The long card applies when the turn's
+// prompt tokens (input + cache read + cache creation) are STRICTLY GREATER than
+// `aboveTokens`, following the pricing page's "over 100,000 tokens". The page does not
+// say whether cached tokens count toward the threshold; counting them is a superset,
+// which can only over-attribute (the safe direction for a cap input).
+interface ModelPricing extends PricingCard {
+  longPrompt?: PricingCard & { aboveTokens: number };
 }
 // Keys are computed properties referencing the SSOT model-ID constants
 // (leader-prompts/constants.ts) so a key can never drift out of byte-identity
@@ -155,26 +166,48 @@ interface ModelPricing {
 // through `MODEL_PRICING[…]`, so opus never reaches this lookup.
 // The `Partial<>` typing keeps the miss arm type-meaningful, not comment-guarded.
 export const MODEL_PRICING: Partial<Record<string, ModelPricing>> = {
-  // Claude Sonnet 5.5: $2 input / $10 output / $0.20 cache-read / $2.50 5m cache-write.
-  // Rates carried over unchanged from Sonnet 5 at the 5.5 launch (2026-09-28;
-  // verified 2026-09-29 against
+  // Claude Sonnet 5.5: $2 input / $10 output / $0.10 cache-read / $2.50 5m cache-write.
+  // Input, output and cache-write carried over unchanged from Sonnet 5 at the 5.5
+  // launch (2026-09-28; verified 2026-09-29 against
   // https://platform.claude.com/docs/en/about-claude/pricing.md and the launch
   // post, which state Sonnet 5.5 is "priced the same as Sonnet 5"). Sonnet 5's
   // own history: $2/$10 was "introductory" through 2026-08-31 with a scheduled
   // rise to $3/$15 on 2026-09-01 that Anthropic CANCELLED. Holding $3/$15
   // over-attributes cost 50%, tripping the BYOK cap early.
+  //
+  // CACHE READ CORRECTED 2026-10-08: $0.20 -> $0.10. The launch carry-over was wrong
+  // on this one field: Sonnet 5.5 (and Opus 5.5) cache hits are priced at 0.05x base
+  // input, not Sonnet 5's 0.1x. The pricing page says so twice (the model-table
+  // footnote, and the prompt-caching paragraph: "$0.10 USD on Claude Sonnet 5.5").
+  // Same WORM-ledger regime-boundary caveat as the 2026-09-03 note: rows written
+  // before this change used $0.20 and cannot be told apart from later ones, so rolling
+  // cap windows blend across it, and the error is toward over-attribution.
   [SONNET_MODEL]: {
     inputPerToken: 2 / 1_000_000,
     outputPerToken: 10 / 1_000_000,
-    cacheReadPerToken: 0.2 / 1_000_000,
+    cacheReadPerToken: 0.1 / 1_000_000,
     cacheCreatePerToken: 2.5 / 1_000_000,
   },
-  // Claude Haiku 4.5: $1 input / $5 output / $0.10 cache-read / $1.25 5m cache-write.
+  // Claude Haiku 5.5, prompt up to 100,000 tokens: $0.10 input / $0.50 output /
+  // $0.01 cache-read / $0.125 5m cache-write. Prompt over 100,000 tokens (the
+  // `longPrompt` card): $0.50 / $2.50 / $0.05 / $0.625. Verified 2026-10-08 against
+  // https://platform.claude.com/docs/en/about-claude/pricing.md (rows "Claude Haiku
+  // 5.5 (for prompts up to 100,000 tokens)" and "(... over 100,000 tokens)").
+  // Haiku 4.5's row ($1 / $5 / $0.10 / $1.25) was removed with the swap: the key
+  // set must equal the AnthropicModelId union, and `leaderModule.model` is read
+  // per step, so no in-flight turn can look up 4.5 after the deploy.
   [HAIKU_MODEL]: {
-    inputPerToken: 1 / 1_000_000,
-    outputPerToken: 5 / 1_000_000,
-    cacheReadPerToken: 0.1 / 1_000_000,
-    cacheCreatePerToken: 1.25 / 1_000_000,
+    inputPerToken: 0.1 / 1_000_000,
+    outputPerToken: 0.5 / 1_000_000,
+    cacheReadPerToken: 0.01 / 1_000_000,
+    cacheCreatePerToken: 0.125 / 1_000_000,
+    longPrompt: {
+      aboveTokens: 100_000,
+      inputPerToken: 0.5 / 1_000_000,
+      outputPerToken: 2.5 / 1_000_000,
+      cacheReadPerToken: 0.05 / 1_000_000,
+      cacheCreatePerToken: 0.625 / 1_000_000,
+    },
   },
 };
 
@@ -192,14 +225,29 @@ export function resolveTurnCostUsd(
     cache_creation_input_tokens: number;
   },
 ): number {
-  const pricing = MODEL_PRICING[model];
-  if (!pricing) return Number.NaN;
+  const base = MODEL_PRICING[model];
+  if (!base) return Number.NaN;
+  const promptTokens =
+    usage.input_tokens +
+    usage.cache_read_input_tokens +
+    usage.cache_creation_input_tokens;
+  const pricing: PricingCard =
+    base.longPrompt && promptTokens > base.longPrompt.aboveTokens
+      ? base.longPrompt
+      : base;
   return (
     usage.input_tokens * pricing.inputPerToken +
     usage.output_tokens * pricing.outputPerToken +
     usage.cache_read_input_tokens * pricing.cacheReadPerToken +
     usage.cache_creation_input_tokens * pricing.cacheCreatePerToken
   );
+}
+
+/** `{ category }` for a refusal turn that names one (allowlisted), else `{}`. */
+function refusalCategoryExtra(turn: unknown): { category?: string } {
+  const t = turn as { stop_reason?: unknown; stop_details?: unknown };
+  const category = refusalCategory(t.stop_reason, t.stop_details);
+  return category ? { category } : {};
 }
 
 interface AgentSpawnRequestedEvent {
@@ -810,13 +858,17 @@ export async function agentOnSpawnRequestedHandler({
           turnResult.stop_reason === "refusal"
             ? "leader_refused"
             : "leader_response_truncated",
-        err: new Error(`stop_reason=${turnResult.stop_reason} on turn ${n}`),
+        err: new Error(`stop_reason=${safeStopReason(turnResult.stop_reason)} on turn ${n}`),
         founderId,
         messageId,
         actionClass,
         sourceRef,
         logger,
-        extra: { turn: n, model: leaderModule.model },
+        // A refusal names its category (cyber | bio | frontier_llm | general_harms),
+        // allowlisted by the shared helper: never model- or user-authored text. The Haiku
+        // docs document no server-side fallback (not live-probed), so the dead letter is
+        // the place this refusal becomes visible.
+        extra: { turn: n, model: leaderModule.model, ...refusalCategoryExtra(turnResult) },
       });
     }
 
