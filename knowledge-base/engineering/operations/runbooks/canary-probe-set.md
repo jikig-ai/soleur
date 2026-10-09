@@ -183,6 +183,44 @@ jobs" on the release run, never `apply-deploy-pipeline-fix.yml` (it redeploys th
 tag and cannot ship past the gate; see the comment in `reusable-release.yml`) and never a host
 command.
 
+## Canary sandbox DIAG bundle — why a sandbox canary failed (#9871, #9860)
+
+`DEPLOY_ROLLBACK: bwrap sandbox non-functional ...` says THAT the blocking probe failed and keeps 200
+characters of stderr. When the probe fails, or the faithful canary (`op=sandbox-canary`) reports
+`sandbox_broken`, `ci-deploy.sh` also runs ONE bounded, read-only bundle inside the still-running canary
+(once per deploy) and emits it under the same `ci-deploy` journald tag, so it reaches Better Stack with
+no SSH:
+
+```text
+SOLEUR_CANARY_SANDBOX_DIAG: image=<image>:<tag> trigger=<legacy|faithful> section=<name> val="<text|<empty>>"
+```
+
+`val` is last and quote-bounded; cut each line at `section=` and read the rest as free text. It is
+credential-scrubbed (`_cred_err_tail`, 200-char tail) and cannot change the deploy's exit code, state
+reason or teardown. Query:
+`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_CANARY_SANDBOX_DIAG`,
+then decode each row (`.raw | fromjson | select(.SYSLOG_IDENTIFIER=="ci-deploy") | .message`).
+
+| section | what it shows | reads as |
+|---|---|---|
+| `id` | uid/gid of the exec user | expect 1001 |
+| `proc` | `CapInh/Prm/Eff/Bnd/Amb`, `NoNewPrivs`, `Seccomp` of a process in the container | non-zero `CapPrm`/`CapEff` for a non-root uid means caps reached the exec user, which bubblewrap 0.8.0 refuses |
+| `lsm` | AppArmor profile and mode | `unconfined` or a missing profile points at the host profile, not the image |
+| `files` | mode/owner/size of `/usr/bin/bwrap` and the shim, `command -v bwrap`, `readlink -f` | a setuid bit or wrong owner is an image defect |
+| `caps` | `getcap` for both paths and a count of file-cap'd binaries under `/usr` | anything but `none` means the image carries file caps (the #9871 cause) |
+| `prov` | `BUILD_SHA` / `BUILD_VERSION` baked into the image | differs from the tag's commit = a stale image behind a newer tag (#9886) |
+| `direct_version` | `/usr/bin/bwrap --version` with the shim bypassed | `rc=126` = execve refused (file caps vs. bounding set, LSM, seccomp); a version line = exec is fine |
+| `direct_probe` | the blocking probe argv run against `/usr/bin/bwrap` directly | passes while the shimmed probe fails = the shim; fails the same = kernel/LSM posture |
+| `kernel_ns` | userns sysctls as the container sees them | `restrict=1` or `max=0` = host userns policy |
+| `host` | the canary's `HostConfig`: cap-add, cap-drop, security-opt, privileged, AppArmor profile | a `SYS_ADMIN` cap-add or a missing `seccomp=` is a host-script defect (compare `ci_deploy_sha256` in deploy-status with the repo) |
+| `kernel` | host kernel, docker server version, host userns sysctl | version drift context |
+
+Decision order: `caps` non-empty, then image defect. `caps` = none and `direct_version rc=126`, then
+`proc` CapBnd/CapPrm against the `host` cap-add (stale host script). `direct_probe` passes but the shimmed
+probe failed, then the shim. `direct_probe` fails with a namespace error, then `lsm` + `kernel_ns` + `host`
+secopt (host posture). A flooded or timed-out bundle shows as a single `section=raw` line or fewer than
+eleven lines; that is itself a finding.
+
 ## Faithful sandbox canary — #8752 hardening verdicts
 
 `sandbox_canary.verdict` in deploy-state (and its Sentry `op=sandbox-canary` event) now covers the

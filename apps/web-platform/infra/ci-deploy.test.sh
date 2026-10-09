@@ -71,6 +71,11 @@ create_mock_logger() {
 if [[ -n "${MOCK_LOGGER_CAPTURE_FILE:-}" ]]; then
   printf '%s\n' "$*" >> "$MOCK_LOGGER_CAPTURE_FILE"
 fi
+# #9871: MOCK_LOGGER_FAIL_MATCH=<substring> makes journald fail for lines CONTAINING it, after capture,
+# so a row can prove the diag bundle's own logger call can never change the deploy's exit code or state.
+# (A blanket failure is not usable: other bare `logger` calls earlier in the script abort a deploy under
+# `set -e` long before the probe, which is existing behaviour and not what the row is about.)
+if [[ -n "${MOCK_LOGGER_FAIL_MATCH:-}" && "$*" == *"$MOCK_LOGGER_FAIL_MATCH"* ]]; then exit 1; fi
 exit 0
 MOCK
   chmod +x "$1/logger"
@@ -383,6 +388,58 @@ create_docker_mock() {
   cat > "$1/docker" << 'MOCK'
 #!/bin/bash
 mode="${MOCK_DOCKER_MODE:-default}"
+
+# #9871 canary DIAG bundle. The bundle is ONE `docker exec ... /bin/sh -c <script> soleur-canary-diag`;
+# the trailing literal is `$0` inside the script and is the token this arm keys on. It sits BEFORE the
+# Guard-2 argv recorder and the bwrap-substring arms on purpose: the script text itself names bwrap, so
+# any later arm would record it as a second probe exec and break Guard 2's "exactly one bwrap exec".
+#   MOCK_CANARY_SEQ_LOG   every diag exec / docker stop / docker rm appends its verb (ORDER rows)
+#   MOCK_CANARY_DIAG_LOG  the raw argv of each diag exec (COUNT rows)
+#   MOCK_CANARY_DIAG_OUT  stdout (default: a benign nine-section body); _RC exit code; _SLEEP seconds
+#                         (/bin/sleep directly -- the PATH sleep is a no-op); _BIG=1 prepends 4 MB.
+if [[ "${1:-}" == "exec" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == "soleur-canary-diag" ]]; then
+      printf 'diag\n' >> "${MOCK_CANARY_SEQ_LOG:-/dev/null}"
+      printf '%s\n' "$*" >> "${MOCK_CANARY_DIAG_LOG:-/dev/null}"
+      if [[ -n "${MOCK_CANARY_DIAG_SLEEP:-}" ]]; then /bin/sleep "$MOCK_CANARY_DIAG_SLEEP"; fi
+      if [[ "${MOCK_CANARY_DIAG_BIG:-}" == "1" ]]; then head -c 4194304 /dev/zero | tr '\0' 'x'; echo; fi
+      if [[ -n "${MOCK_CANARY_DIAG_OUT+x}" ]]; then
+        printf '%s' "$MOCK_CANARY_DIAG_OUT"
+      else
+        printf '%s\n' 'id uid=1001(soleur) gid=1001(soleur)' \
+          'proc CapInh=0000000000000000 CapPrm=0000000000000000 CapEff=0000000000000000 CapBnd=00000000a80425fb CapAmb=0000000000000000 NoNewPrivs=0 Seccomp=2' \
+          'lsm soleur-bwrap (enforce)' \
+          'files bwrap=755/root/51584 shim=755/root/9000 which=/usr/local/bin/bwrap' \
+          'caps none count=0' \
+          'prov sha=0123456789abcdef ver=0.334.1' \
+          'direct_version rc=0 bubblewrap 0.8.0' \
+          'direct_probe rc=1 bwrap: No permissions to create new namespace' \
+          'kernel_ns restrict=0 clone=n/a max=63000'
+      fi
+      exit "${MOCK_CANARY_DIAG_RC-0}"
+    fi
+  done
+fi
+# The faithful / outer-wrap replays (`node sandbox-canary.mjs --replay|--replay-outer`) answer from env so a
+# row can drive a sandbox_broken verdict through run_canary_replay. Unset => fall through (old behaviour).
+if [[ "${1:-}" == "exec" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == "--replay" && -n "${MOCK_CANARY_REPLAY_OUT:-}" ]]; then printf '%s' "$MOCK_CANARY_REPLAY_OUT"; exit 0; fi
+    if [[ "$_a" == "--replay-outer" && -n "${MOCK_CANARY_REPLAY_OUTER_OUT:-}" ]]; then printf '%s' "$MOCK_CANARY_REPLAY_OUTER_OUT"; exit 0; fi
+  done
+fi
+# Teardown order: stop/rm append to the same sequence log, then fall through to the mode arms.
+if [[ "${1:-}" == "stop" || "${1:-}" == "rm" ]]; then printf '%s\n' "$1" >> "${MOCK_CANARY_SEQ_LOG:-/dev/null}"; fi
+# The host-side bundle section reads the canary's HostConfig through `docker inspect -f`.
+if [[ "${1:-}" == "inspect" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == *HostConfig.CapAdd* ]]; then
+      printf '%s\n' 'capadd=[] capdrop=[] secopt=[apparmor=soleur-bwrap seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json] priv=false aa=soleur-bwrap'
+      exit 0
+    fi
+  done
+fi
 
 # #5669 cron-drain in-flight probe: `docker exec soleur-web-platform pgrep -f
 # claude`. Handled BEFORE the mode case so every swap-reaching test (trace AND
@@ -3812,6 +3869,184 @@ assert_probe_helper_positive_control() {
   fi
 }
 assert_probe_helper_positive_control
+
+# -- #9871 / #9860: a failed canary must self-diagnose --------------------------------------
+# Two production failures (v0.334.0: `bwrap: Unexpected capabilities`, then rc=126 `Operation not
+# permitted`) were read off a 200-char stderr tail and cost hours of inference, because nothing recorded
+# the container's capability sets, the binary's file caps, or the posture it ran under. On a sandbox
+# failure ci-deploy.sh now runs ONE bounded read-only bundle inside the still-running canary and emits it
+# as SOLEUR_CANARY_SANDBOX_DIAG lines (free text last, quote-bounded, credential-scrubbed) BEFORE the
+# teardown. The bundle must never change the deploy's verdict: every row below that perturbs it
+# (failing, hanging, flooding, journald down) re-asserts exit code, state reason and the unchanged
+# rollback line against a baseline run.
+DIAG_DEPLOY_CMD="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+DIAG_LINE_RE='^-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=[^ ]+ trigger=(legacy|faithful) section=[a-z_0-9]+ val="[^"]*"$'
+
+# run_diag_case <dir> [VAR=value ...]: one deploy in bwrap-fail mode. Sets DC_OUT DC_RC DC_REASON DC_EXIT and
+# leaves $dir/{logger,seq,diaglog,ci-deploy.state}. Exports live in the subshell only.
+run_diag_case() {
+  local dc_dir="$1"; shift
+  assert_fixture_dir "$dc_dir"
+  : > "$dc_dir/logger"; : > "$dc_dir/seq"; : > "$dc_dir/diaglog"; rm -f "$dc_dir/ci-deploy.state"
+  DC_OUT=$(
+    export CI_DEPLOY_STATE="$dc_dir/ci-deploy.state" MOCK_DOCKER_MODE=bwrap-fail MOCK_LOGGER_CAPTURE_FILE="$dc_dir/logger" \
+           MOCK_CANARY_SEQ_LOG="$dc_dir/seq" MOCK_CANARY_DIAG_LOG="$dc_dir/diaglog"
+    for _kv in "$@"; do export "$_kv"; done
+    run_deploy "$DIAG_DEPLOY_CMD" 2>&1
+  ) && DC_RC=0 || DC_RC=$?
+  DC_REASON=""; DC_EXIT=""
+  if [[ -f "$dc_dir/ci-deploy.state" ]]; then read_state_reason_and_exit "$dc_dir/ci-deploy.state" DC_REASON DC_EXIT; fi
+}
+
+# diag_check <description> <status-of-the-condition> [detail]: one counted assertion.
+diag_check() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+    if [[ -n "${3:-}" ]]; then printf '%s\n' "$3" | sed 's/^/        /'; fi
+  fi
+}
+
+# The ONE rollback line with its timing field removed (ms varies run to run; every other field is stable).
+diag_rollback_line() { { grep -F 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$1" || true; } | sed -E 's/ ms=[0-9]+//'; }
+diag_line_count() { { grep -cF 'SOLEUR_CANARY_SANDBOX_DIAG:' "$1" || true; }; }
+# One `diag` entry per bundle exec in the sequence log (the exec argv spans many lines, so wc -l of diaglog is not a count).
+diag_exec_count() { { grep -c '^diag$' "$1/seq" || true; }; }
+
+# D8 -- INSTRUMENT CONTROL, run first: the line-shape regex must accept a well-formed line and reject two
+# malformed ones, or every D1/D3/D4 shape assertion below is vacuous.
+_d8_good='-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=r/i:v1 trigger=legacy section=proc val="CapEff=0 Seccomp=2"'
+_d8_bad1='-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=r/i:v1 trigger=legacy section=proc val="a" tail=1'
+_d8_bad2='-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=r/i:v1 trigger=legacy section=proc val="a"b"'
+_d8_ok=0
+if printf '%s' "$_d8_good" | grep -qE -- "$DIAG_LINE_RE" \
+   && ! printf '%s' "$_d8_bad1" | grep -qE -- "$DIAG_LINE_RE" \
+   && ! printf '%s' "$_d8_bad2" | grep -qE -- "$DIAG_LINE_RE"; then _d8_ok=1; fi
+diag_check "#9871 D8 instrument control: the DIAG line-shape regex accepts a good line and rejects two malformed ones" "$((1 - _d8_ok))"
+unset _d8_good _d8_bad1 _d8_bad2 _d8_ok
+
+DIAGD=$(mktemp -d); assert_fixture_dir "$DIAGD"
+
+# D1 -- a sandbox failure emits the bundle once, in order, in shape.
+run_diag_case "$DIAGD"
+D1_N=$(diag_line_count "$DIAGD/logger")
+diag_check "#9871 D1a: a failed blocking probe still rolls back (exit 1, reason=canary_sandbox_failed)" \
+  "$([[ "$DC_RC" == 1 && "$DC_REASON" == canary_sandbox_failed && "$DC_EXIT" == 1 ]] && echo 0 || echo 1)" "rc=$DC_RC reason=$DC_REASON exit=$DC_EXIT"
+diag_check "#9871 D1b: exactly one diag exec is made (the log is non-empty first: no vacuous pass)" \
+  "$([[ -s "$DIAGD/diaglog" && "$(diag_exec_count "$DIAGD")" == 1 ]] && echo 0 || echo 1)" "diag execs: $(diag_exec_count "$DIAGD")"
+diag_check "#9871 D1c: at least 8 DIAG lines are emitted (nine in-container sections plus host and kernel)" \
+  "$([[ "$D1_N" -ge 8 ]] && echo 0 || echo 1)" "DIAG lines: $D1_N"
+D1_BAD=$({ grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" || true; } | { grep -vE -- "$DIAG_LINE_RE" || true; })
+diag_check "#9871 D1d: every DIAG line is shaped section=<name> val=\"...\" with the free text last and quote-bounded" \
+  "$([[ -z "$D1_BAD" && "$D1_N" -ge 1 ]] && echo 0 || echo 1)" "$D1_BAD"
+D1_RB=$({ grep -nF 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$DIAGD/logger" || true; } | head -n 1 | cut -d: -f1)
+D1_FD=$({ grep -nF 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" || true; } | head -n 1 | cut -d: -f1)
+diag_check "#9871 D1e: the bundle is emitted AFTER the DEPLOY_ROLLBACK line" \
+  "$([[ -n "$D1_RB" && -n "$D1_FD" && "$D1_RB" -lt "$D1_FD" ]] && echo 0 || echo 1)" "rollback line $D1_RB, first diag line $D1_FD"
+diag_check "#9871 D1f: the bundle runs BEFORE the canary is stopped and removed" \
+  "$(awk '/^diag$/{d=1} /^stop$/&&d{s=1} /^rm$/&&d&&s{r=1} END{exit !(d&&s&&r)}' "$DIAGD/seq" && echo 0 || echo 1)" "$(tr '\n' ' ' < "$DIAGD/seq")"
+diag_check "#9871 D1g: the host-side section carries the canary's HostConfig (cap-add/secopt), not the in-container text" \
+  "$(grep -qE 'section=host val="capadd=' "$DIAGD/logger" && echo 0 || echo 1)"
+D1_BASE_RB=$(diag_rollback_line "$DIAGD/logger")
+
+# D2 -- no failure, no bundle: neither a clean probe nor one that merely wrote to stderr.
+for d2_mode in "clean|" "chatter|bwrap: warning namespace fallback engaged"; do
+  d2_label="${d2_mode%%|*}"; d2_stderr="${d2_mode#*|}"
+  run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 "MOCK_BWRAP_FAIL_STDERR=$d2_stderr"
+  diag_check "#9871 D2 ($d2_label): a passing probe makes no diag exec and emits no DIAG line, and the deploy did not roll back" \
+    "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 && "$(diag_exec_count "$DIAGD")" == 0 && "$DC_REASON" != canary_sandbox_failed ]] && echo 0 || echo 1)" \
+    "diaglog bytes=$(wc -c < "$DIAGD/diaglog" | tr -d ' ') diag lines=$(diag_line_count "$DIAGD/logger") execs=$(diag_exec_count "$DIAGD") reason=$DC_REASON"
+done
+unset d2_mode d2_label d2_stderr
+
+# D3 -- the bundle can never change the deploy's verdict.
+diag_inert() {  # <description> [VAR=value ...]
+  local desc="$1"; shift
+  local t0=$SECONDS
+  run_diag_case "$DIAGD" "$@"
+  local took=$(( SECONDS - t0 ))
+  diag_check "$desc" \
+    "$([[ "$DC_RC" == 1 && "$DC_REASON" == canary_sandbox_failed && "$DC_EXIT" == 1 \
+        && "$(diag_rollback_line "$DIAGD/logger")" == "$D1_BASE_RB" \
+        && "$(awk '/^diag$/{d=1} /^stop$/&&d{s=1} /^rm$/&&d&&s{r=1} END{exit !(d&&s&&r)}' "$DIAGD/seq"; echo $?)" == 0 \
+        && "$took" -lt 12 ]] && echo 0 || echo 1)" \
+    "rc=$DC_RC reason=$DC_REASON exit=$DC_EXIT took=${took}s seq=$(tr '\n' ' ' < "$DIAGD/seq")"
+}
+diag_inert "#9871 D3a: a failing diag exec (rc=1) leaves exit code, state reason, rollback line and teardown unchanged" MOCK_CANARY_DIAG_RC=1
+diag_inert "#9871 D3b: a hanging diag exec is cut at CANARY_DIAG_TIMEOUT and changes nothing else" MOCK_CANARY_DIAG_SLEEP=20 CANARY_DIAG_TIMEOUT=1
+diag_inert "#9871 D3c: a 4 MB diag output is bounded and changes nothing else" MOCK_CANARY_DIAG_BIG=1
+run_diag_case "$DIAGD" MOCK_CANARY_DIAG_BIG=1
+diag_check "#9871 D3c2: a 4 MB diag output yields at most 16 in-container DIAG lines (plus the two host-side ones)" \
+  "$([[ "$(diag_line_count "$DIAGD/logger")" -le 18 ]] && echo 0 || echo 1)" "lines: $(diag_line_count "$DIAGD/logger")"
+diag_inert "#9871 D3d: journald failing for the DIAG lines leaves exit code, state reason, rollback line and teardown unchanged" MOCK_LOGGER_FAIL_MATCH=SOLEUR_CANARY_SANDBOX_DIAG
+diag_inert "#9871 D3e: a non-numeric CANARY_DIAG_TIMEOUT falls back to the default and changes nothing else" CANARY_DIAG_TIMEOUT=abc
+
+# D4 -- the bundle is a credential sink: shapes are scrubbed from both egress paths.
+D4_DP='dp.st.''prd.Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5Jp'
+D4_SK='sk_''live_Fx9aQ2mZ7vTbL4nKc8RdYw'
+D4_GH='gh''p_Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5JpQr1'
+D4_JWT='ey''Jhbgcioijiuzi1nirx9.eyJzdWIiOiJmaXh0dXJlIn0.Fx9aQ2mZ7vTbL4nKc8RdYw'
+D4_OUT=$(printf '%s\n' "proc tok=$D4_DP" "files k=$D4_SK" "caps g=$D4_GH" "prov j=$D4_JWT" 'lsm a" injected="1')
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=$D4_OUT"
+D4_LEAK=0
+for _f in "$D4_DP" "$D4_SK" "$D4_GH" "$D4_JWT"; do
+  if grep -qF -- "$_f" "$DIAGD/logger" || printf '%s' "$DC_OUT" | grep -qF -- "$_f"; then D4_LEAK=1; fi
+done
+diag_check "#9871 D4a: no credential-shaped fixture reaches the journald capture or the deploy stdout" "$D4_LEAK"
+diag_check "#9871 D4b: the scrub left a REDACTED marker (it ran, rather than the fixtures never arriving)" \
+  "$(grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" | grep -q 'REDACTED' && echo 0 || echo 1)"
+D4_BAD=$({ grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" || true; } | { grep -vE -- "$DIAG_LINE_RE" || true; })
+diag_check "#9871 D4c: a doubled-quote injection in a section value cannot break the line shape" \
+  "$([[ -z "$D4_BAD" && "$(diag_line_count "$DIAGD/logger")" -ge 4 ]] && echo 0 || echo 1)" "$D4_BAD"
+# A token that straddles the 8192-byte read cut: nothing usable of it may survive on either sink.
+D4_PAD=$(printf '%*s' 8169 '' | tr ' ' a)
+D4_STRAD='dp.st.''prd.Zk3pQ8mWv2TbL9nKc4RdYw7Hs1JpXe'
+run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=proc ${D4_PAD}${D4_STRAD}"
+diag_check "#9871 D4d: a token cut mid-way by the 8192-byte read leaves none of its secret part on either sink" \
+  "$({ grep -qF -- 'Zk3pQ8mW' "$DIAGD/logger" || printf '%s' "$DC_OUT" | grep -qF -- 'Zk3pQ8mW'; } && echo 1 || echo 0)"
+unset D4_DP D4_SK D4_GH D4_JWT D4_OUT D4_LEAK D4_BAD D4_PAD D4_STRAD _f
+
+# D5 -- source census over the bundle region.
+D5_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT")
+diag_check "#9871 D5a: the census region is found and holds both functions and the script (positive control)" \
+  "$(printf '%s' "$D5_SRC" | grep -q '^CANARY_DIAG_SCRIPT=' && printf '%s' "$D5_SRC" | grep -q '^_canary_diag_emit()' && printf '%s' "$D5_SRC" | grep -q '^emit_canary_sandbox_diag()' && echo 0 || echo 1)"
+D5_BAD=$(printf '%s\n' "$D5_SRC" | grep -vE '^[[:space:]]*#' | grep -nE '(^|[^A-Za-z0-9_.-])env([[:space:]]|$)|environ|export -p|Config\.Env|die-with-parent|^[[:space:]]*set[[:space:]]|printenv[[:space:]]+[^B[:space:]]' || true)
+diag_check "#9871 D5b: the bundle never dumps the environment (no bare env, printenv of a non-BUILD name, environ, export -p, .Config.Env) and never sets shell options" \
+  "$([[ -z "$D5_BAD" ]] && echo 0 || echo 1)" "$D5_BAD"
+D5_LOGGERS=$(grep -c 'logger -t .*SOLEUR_CANARY_SANDBOX_DIAG' "$DEPLOY_SCRIPT" || true)
+diag_check "#9871 D5c: the marker is emitted from exactly one logger call (inside _canary_diag_emit, which scrubs first)" \
+  "$([[ "$D5_LOGGERS" == 1 ]] && printf '%s' "$D5_SRC" | grep -A8 '^_canary_diag_emit()' | grep -q 'SOLEUR_CANARY_SANDBOX_DIAG' && echo 0 || echo 1)" "logger calls: $D5_LOGGERS"
+D5_CALLS=$(grep -nE '^[[:space:]]*(if .*; then )?emit_canary_sandbox_diag (legacy|faithful)' "$DEPLOY_SCRIPT" || true)
+D5_CALLS_BAD=$(printf '%s\n' "$D5_CALLS" | grep -v '|| true' | grep -v '^$' || true)
+diag_check "#9871 D5d: both call sites exist and each ends in '|| true' (a diag failure can never abort the deploy)" \
+  "$([[ "$(printf '%s\n' "$D5_CALLS" | grep -c .)" == 2 && -z "$D5_CALLS_BAD" ]] && echo 0 || echo 1)" "calls: $D5_CALLS"
+unset D5_SRC D5_BAD D5_LOGGERS D5_CALLS D5_CALLS_BAD
+
+# D6 -- the faithful canary's sandbox_broken verdict emits the same bundle, once per deploy, never gating.
+D6_BROKEN='{"verdict":"sandbox_broken","reason":"bwrap_operation_not_permitted","sdkVersion":"0.3.284"}'
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= "MOCK_CANARY_REPLAY_OUT=$D6_BROKEN"
+diag_check "#9871 D6a: a faithful sandbox_broken verdict (legacy probe green) emits the bundle once with trigger=faithful and does not roll back" \
+  "$([[ "$(diag_exec_count "$DIAGD")" == 1 && "$(diag_line_count "$DIAGD/logger")" -ge 8 \
+      && "$(grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$DIAGD/logger" | grep -vc 'trigger=faithful' || true)" == 0 \
+      && "$DC_REASON" != canary_sandbox_failed ]] && echo 0 || echo 1)" \
+  "diag execs=$(diag_exec_count "$DIAGD") lines=$(diag_line_count "$DIAGD/logger") reason=$DC_REASON"
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY_REPLAY_OUT={"verdict":"ok","reason":"ok","sdkVersion":"0.3.284"}'
+diag_check "#9871 D6b: a faithful ok verdict emits no bundle" \
+  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && echo 0 || echo 1)"
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY_REPLAY_OUT={"verdict":"canary_infra_error","reason":"x"}'
+diag_check "#9871 D6c: a faithful canary_infra_error verdict emits no bundle (no exec into a container that may not exist)" \
+  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && echo 0 || echo 1)"
+run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY_REPLAY_OUT={"verdict":"ok","reason":"ok"}' "MOCK_CANARY_REPLAY_OUTER_OUT=$D6_BROKEN"
+diag_check "#9871 D6d: an outer-wrap sandbox_broken verdict (the expected report-only state) emits no bundle, and the verdict WAS processed (positive control)" \
+  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && printf '%s' "$DC_OUT" | grep -qF 'Outer-wrap canary (report-only): verdict=sandbox_broken' && echo 0 || echo 1)" \
+  "$(printf '%s' "$DC_OUT" | grep -aE 'canary.*verdict=' | head -n 4)"
+run_diag_case "$DIAGD" "MOCK_CANARY_REPLAY_OUT=$D6_BROKEN"
+diag_check "#9871 D6e: a legacy failure emits the bundle exactly once even with a broken faithful replay armed" \
+  "$([[ "$(diag_exec_count "$DIAGD")" == 1 ]] && echo 0 || echo 1)" "diag execs: $(diag_exec_count "$DIAGD")"
+unset D6_BROKEN D1_N D1_BAD D1_RB D1_FD D1_BASE_RB
+rm -rf "$DIAGD"; unset DIAGD
 
 # Scenario 1 -- SPOKEN: the probe failed and said why. The message must ride the line.
 MOCK_BWRAP_CSTATE=running assert_blocking_probe_line \
@@ -10489,12 +10724,13 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #9799: raised 502 -> 508 with T-9799-1..6 (the fan-out HMAC key off argv: 33-comparison byte-identity
 # matrix, no secret on any argv, log or stdin config, key in the python3 environment only, seven
 # fail-closed arms, source census, and the errexit arm that pins the `|| sig=""` guard).
+# #9871: raised 522 -> 551 with the 29 canary DIAG-bundle rows (D1a-g, D2 x2, D3a-e, D4a-d, D5a-d, D6a-e, D8).
 # #2640: raised 508 -> 522 with the 13 CWI rows (9 pre-panel + 9b/10/11a/11b/12
 # review-round additions: foreign-ledger stamp, vacuous-green, reason channel,
 # timeout source pin). (Guard 1: recorded-argv + ordering +
 #   green/no-page + FAIL/infra/timeout classification + soak accumulate-hold-reset
 #   + ledger-alias skip).
-CI_DEPLOY_ASSERT_FLOOR=522
+CI_DEPLOY_ASSERT_FLOOR=551
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
