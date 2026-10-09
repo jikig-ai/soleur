@@ -319,9 +319,9 @@ The live store on `hcloud_volume.inngest_redis_luks` (id **106903269**) was neve
 
 | Phase | Run | Result |
 | --- | --- | --- |
-| `detach` | https://github.com/jikig-ai/soleur/actions/runs/37950928039 | success; volume 106261946 `server: null` |
-| `wipe` | https://github.com/jikig-ai/soleur/actions/runs/37955244979 | success; evidence row `result=wiped readback=zero sig_after=none`, then the throwaway server and attachment torn down in the same dispatch |
-| `destroy` | https://github.com/jikig-ai/soleur/actions/runs/37958051426 | success; `Apply complete! 0 added, 0 changed, 1 destroyed`; `server volumes == [106903269]` |
+| `detach` | <https://github.com/jikig-ai/soleur/actions/runs/37950928039> | success; volume 106261946 `server: null` |
+| `wipe` | <https://github.com/jikig-ai/soleur/actions/runs/37955244979> | success; evidence row `result=wiped readback=zero sig_after=none`, then the throwaway server and attachment torn down in the same dispatch |
+| `destroy` | <https://github.com/jikig-ai/soleur/actions/runs/37958051426> | success; `Apply complete! 0 added, 0 changed, 1 destroyed`; `server volumes == [106903269]` |
 
 The evidence, how it was graded, its limits and the attestation are in `knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md`.
 **The erasure is logical, guest-side and self-attested**: Hetzner records that a non-live server held the volume between an
