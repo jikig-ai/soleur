@@ -2645,6 +2645,37 @@ g2n_row g2n-11-cutover-job-continue-on-error 1 's#^    timeout-minutes: 120$#&\n
 g2n_row g2n-12-event-json-in-body-env 1 's#^          RUN_ID: \$\{\{ github\.run_id \}\}$#&\n          EV: ${{ toJSON(github.event) }}#' "N-body:"
 g2n_row g2n-13-email-step-not-best-effort 1 '/^        id: email$/{n;/continue-on-error: true/d}' "N-order:"
 g2n_row g2n-14-body-id-renamed 2 's#^        id: body$#        id: bodz#' "N-refs:"
+# #9439 — mutants over the three runner-side changes (item 8 gc timer, item 5 probe pre-flight, item 6 unwind marker).
+# Each case function re-drives one MZ row against $MUTANT (CASE_SCRIPT) and must go RED.
+case_m_gcstart() { run_mode mz-m-gcstart unfreeze SHIM_FREEZE=ours SHIM_GC_START_RC=1; [ "$RC" = 5 ] && has_store unfreeze-gc-timer gc_timer_restart_failed; }
+case_m_gcretry() { run_mode mz-m-gcretry unfreeze SHIM_FREEZE=ours SHIM_GC_START_FIRST_RC=1; [ "$RC" = 0 ] && has_store unfreeze ok; }
+case_m_preflight() { run_mode mz-m-preflight probe SHIM_PROBE=ok SHIM_VERIFY=r21; [ "$RC" = 5 ] && has_store store-verified store_unverified && no_probe_session; }
+case_m_frozen() { run_mode mz-m-frozen probe SHIM_PROBE=ok SHIM_VERIFY=r23 SHIM_FREEZE=ours; [ "$RC" = 5 ] && has_store store-verified cutover_frozen && no_probe_session; }
+# m9439-1: the old warn-and-continue branch is back (a failed restart no longer fails the verb).
+if mutate m9439-1-gc-warn-only "$SCRIPT" 2 's#_store_refuse unfreeze-gc-timer gc_timer_restart_failed "\$trc"#echo "::warning::gc.timer restart failed"#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-1-gc-warn-only case_m_gcstart
+fi
+# m9439-2: the immediate retry is gone (a single transient start failure fails the verb).
+if mutate m9439-2-gc-no-retry "$SCRIPT" 2 's#(gd_exec .systemctl start git-data-gc\.timer.) \|\| gd_exec .systemctl start git-data-gc\.timer. \|\| trc#\1 || trc#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-2-gc-no-retry case_m_gcretry
+fi
+# m9439-3: the probe's verified-only pre-flight is deleted (a booting host reaches the provision session again).
+if mutate m9439-3-no-preflight "$SCRIPT" 1 '/^  refuse_if_store_unverified_or_not_empty verified-only$/d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-3-no-preflight case_m_preflight
+fi
+# m9439-4: verified-only loses its refuse-any-sentinel line (the proof's same-lineage tolerance leaks into the probe).
+if mutate m9439-4-frozen-tolerated "$SCRIPT" 1 '/^      if \[ "\$\{1:-\}" = verified-only \]; then _store_refuse store-verified cutover_frozen; fi$/d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-4-frozen-tolerated case_m_frozen
+fi
+# m9439-5: the finalizer flip arm keys on flag_written alone again (an attempted write that never marked is not unwound).
+exec_row fz6-flip-ignores-attempted 2 's#\( -f "\$prog/flag_written" \|\| -f "\$prog/flag_write_attempted" \)#-f "$prog/flag_written"#' fz
+# m9439-6: the early exit also honours the attempted marker, so a rollback with only that marker dials the host.
+exec_row fz7-early-exit-honours-attempted 2 's#(if \[\[ ! -f "\$prog/flag_written" && ! -f "\$prog/freeze_held") \]\]; then#\1 \&\& ! -f "$prog/flag_write_attempted" ]]; then#' fz
+# m9439-7/8: the notify text loses the verdict words the owner is pointed at.
+exec_row nb5-probe-text-drops-store-verdicts 2 's#old_store_unmounted, store_not_on_mapper, store_unverified or cutover_frozen#old_store_unmounted, store_not_on_mapper or cutover_frozen#' nb
+exec_row nb6-freeze-text-drops-gc-verdict 2 's# the unfreeze step log names the verdict gc_timer_restart_failed, and# the unfreeze step log names the verdict, and#' nb
+# m9439-9: the attempted marker moves AFTER the precheck script (a write that lands then fails is again unmarked).
+g2n_row wf-flagmark-after-precheck 2 '/touch .*flag_write_attempted"$/d;s#^( +)touch "\$RUNNER_TEMP/cutover-progress/flag_written"$#&\n\1touch "$RUNNER_TEMP/cutover-progress/flag_write_attempted"#' "WF-flagmark:"
 # H4 (#7226) — host-identity classifier rows.
 # HK-M1 — drop the alg branch: an algorithm mismatch falls through to failed/unknown.
 if mutate hk-m1-no-alg "$SCRIPT" 1 '/^  elif \[ "\$1" = 255 \] && grep -qE .\^Unable to negotiate with /d'; then
@@ -3274,8 +3305,10 @@ fi
 # Total 91, measured 91 on the first run after the runtime arm was final. Guard 3's four rows live
 # with the census in tests/scripts/test-git-data-root-token-census.sh. #8211 (notify-failure plan):
 # plus g2n-1..6, 8 (the notify job, 7 rows), g3p-1..2 (the probe step) and fz1-5, nb1-4 (the EXECUTED finalizer
-# and notify body) and g2n-9..14 (the notify wiring) = 24, so exactly 115.
-MUTANT_FLOOR=115
+# and notify body) and g2n-9..14 (the notify wiring) = 24, so exactly 115. #9439: plus m9439-1..4 (script: gc timer
+# warn-only, no retry, probe pre-flight deleted, sentinel tolerated), fz6-7 and nb5-6 (finalizer and notify text) and
+# wf-flagmark-after-precheck = 9, so exactly 124 (measured).
+MUTANT_FLOOR=124
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3289,7 +3322,10 @@ fi
 # #8211 (notify-failure plan) after code review: 115 mutants x 2 = 230 (the base above counted 91 x 2), the
 # workflow YAML verdicts 38 -> 50 (N-if, N-jobkeys, N-secrets, N-secrets-form, N-order, N-body, N-exprs,
 # N-refs, N-outputs, N-finalizer, N-probe), plus the executed NB and FZ rows (2): 517 -> 549, measured.
-FLOOR=549
+# #9439: 124 mutants x 2 = 248 (+18 over 115 x 2); ten new standalone rows (MZ-U7, U8, U9, P10, P11, P11b, P12, P12b, P13
+# and the WF-flagmark verdict, which also moves the workflow verdict count 50 -> 51) = +10; the NB1b/NB6b and FZ11/FZ12
+# checks sit inside case_nb/case_fz and add none: 549 -> 577, measured.
+FLOOR=577
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
