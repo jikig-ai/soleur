@@ -26,3 +26,19 @@ then established that no Node 22 binary was present in the checked locations.
 Bind each batched read to an explicit absolute worktree or working directory.
 Use guarded glob discovery for optional runtime locations and inspect each
 probe's status independently; an absent candidate is not a test verdict.
+
+## Addendum — 2026-10-09 recovery proposal preflight
+
+A read-only compiler-export investigation referenced the generated
+`next-env.d.ts`; it is not tracked and is not an export prerequisite. Resolve
+tracked imports from Git and distinguish generated inputs before treating an
+absent file as missing source.
+
+The fresh offline build proposal's preview also refused every tracked `.npmrc`
+by filename. Key-only inspection established that both exported files contain
+the public `min-release-age` setting. The corrected admission allows only that
+key with a numeric value from pinned Git source. Environment files and other
+npm options remain refused; private npm credential configuration is not read.
+The preview refusal ran no export, build, image/container action or rehearsal,
+and consumed no authorization. Narrowly classify public configuration before
+either dropping a required build input or allowing a credential-bearing file.
