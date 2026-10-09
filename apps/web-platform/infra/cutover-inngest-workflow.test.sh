@@ -4421,6 +4421,58 @@ assert "#6894 a rolled-back or aborted FSM is reported as a FAILED dispatch, nev
 assert "#6894 no raw Better Stack row is echoed by the verb (the standing purity contract)" \
   "! grep -qE 'jq \\.(\$|[^a-zA-Z_])' '$LUKS_FILE'"
 
+# ── #8285 PR B review: BEHAVIOUR of the surviving luks-cutover guards. The rows above grep the arm's TEXT; none drives it,
+# so adding `|done` to the permitting G1 arm, dropping the `exit` from the in-flight or `present:` refusal, or flipping
+# LK_EXPECT all left the suite green (measured). The arm is extracted from the REAL script and run under bash with the
+# external readers stubbed (doppler, the pointer reader, the liveness/confirm helpers); each row asserts the exit status
+# AND whether the write happened, so a refusal that falls through to the write is caught.
+LKA_BODY="$(mktemp)"; LKA_DRV="$(mktemp)"; LKA_MARK="$(mktemp)"; SCRATCH+=("$LKA_BODY" "$LKA_DRV" "$LKA_MARK")
+awk '/^  luks-cutover\)$/{f=1;next} f&&/^    ;;$/{exit} f' "$BODY_SH" > "$LKA_BODY"
+LKA_N=$(wc -l < "$LKA_BODY" | tr -d '[:space:]')
+assert "#8285 luks-cutover arm extracted from the real script for behavioural driving (non-vacuity, got $LKA_N lines)" \
+  "[[ '$LKA_N' -gt 40 ]]"
+{
+  printf '%s\n' 'OP=luks-cutover; DOPPLER_TOKEN_INNGEST_ARM=synth-token'
+  printf '%s\n' 'doppler() { case "$*" in'
+  printf '%s\n' '  *"secrets get INNGEST_LUKS_CUTOVER"*) if [[ -n "${STUB_FLAG:-}" ]]; then printf "%s" "$STUB_FLAG"; else return 1; fi ;;'
+  printf '%s\n' '  *"--only-names"*) if [[ "${STUB_NAMES_HAS:-0}" == 1 ]]; then printf "{\"INNGEST_LUKS_CUTOVER\":{}}"; else printf "{\"OTHER\":{}}"; fi ;;'
+  printf '%s\n' '  *"secrets set INNGEST_LUKS_CUTOVER"*) cat > "$MARK" ;;'
+  printf '%s\n' 'esac; }'
+  printf '%s\n' '_luks_pointer_state() { printf "%s" "${STUB_PTR:-absent}"; }'
+  printf '%s\n' '_luks_liveness_count() { echo 3; }'
+  printf '%s\n' 'resume_liveness_decide() { echo audible; }'
+  printf '%s\n' 'confirm_luks_state() { printf "%s" "${STUB_CONFIRM:-done}"; }'
+  cat "$LKA_BODY"
+} > "$LKA_DRV"
+lka_run() { # <flag> <pointer> <confirm> <names-has-flag> -> LKA_RC, LKA_WROTE
+  : > "$LKA_MARK"
+  LKA_RC=0
+  MARK="$LKA_MARK" STUB_FLAG="$1" STUB_PTR="$2" STUB_CONFIRM="$3" STUB_NAMES_HAS="$4" bash "$LKA_DRV" >/dev/null 2>&1 || LKA_RC=$?
+  LKA_WROTE="$(cat "$LKA_MARK")"
+}
+lka_run "" absent done 0
+assert "#8285 luks-cutover on an UNSET flag with the pointer absent arms (writes 'armed', exit 0) — also proves the driver reaches the write" \
+  "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
+lka_run aborted absent done 0
+assert "#8285 luks-cutover re-arms from 'aborted' (permitted, writes 'armed')" "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
+lka_run rolled-back absent done 0
+assert "#8285 luks-cutover re-arms from 'rolled-back' (permitted, writes 'armed')" "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
+lka_run done absent done 0
+assert "#8285 luks-cutover REFUSES a 'done' flag before any write (G1: a completed cutover is never re-armed)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+lka_run copied absent done 0
+assert "#8285 luks-cutover REFUSES an in-flight flag before any write (G1: arming over a running FSM would race it)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+lka_run "" present done 0
+assert "#8285 luks-cutover REFUSES when the durable pointer is present, whatever the flag says, before any write (G2)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+lka_run "" absent done 1
+assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the flag exists but its value is unreadable (a swallowed read is not 'unset')" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+lka_run "" absent aborted 0
+assert "#8285 luks-cutover EXPECTS 'done' from the on-host FSM: a terminal 'aborted' confirm is a FAILED dispatch (exit 1) though the write landed" \
+  "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
+
 # #8079 D4/AC12 — `_bs_read_remedy` no longer hardcodes the step it is reporting for. The census IS
 # the assertion, not the number nine: a tenth message added later cannot slip through with a `2.0`
 # prefix, and one added with no prefix at all fails the equality arm. Scoped to `$BS_REMEDY_FN` —
@@ -4571,7 +4623,10 @@ _DISPATCHED=$((PASS + FAIL))
 # 1069 -> 1072 (+3) at #8285 PR B, measured: op=luks-rollback retired. -1 the G1 'aborted' arm row (LK_G1RB_ABORTED); the choice-list
 #   and reviewer-gate rows now grade luks-cutover alone (0 net); +4 Guard 1 rows (not in the choice list, in neither ternary,
 #   no orchestrator case arm / G2 arm / rollback write, and the non-vacuity row proving the three patterns recognise what they forbid).
-_EXACT_FLOOR=1072
+# 1072 -> 1081 (+9) at #8285 PR B review: behavioural driving of the surviving luks-cutover guards — the extraction non-vacuity
+#   row (1) plus 8 driven rows (arm from unset / aborted / rolled-back; refuse done / in-flight / pointer-present / unreadable;
+#   LK_EXPECT=done). Each of s1-s4 (permit `done`, drop the in-flight exit, drop the pointer-present exit, LK_EXPECT=aborted) now reds.
+_EXACT_FLOOR=1081
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

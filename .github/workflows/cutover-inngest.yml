@@ -47,9 +47,10 @@ on:
           # class as arm — inside BOTH ternaries below.
           - reflush
           # #6894 / ADR-142: the additive blue-green cutover of the Redis AOF store onto the LUKS
-          # volume, and its reverse. Both write INNGEST_LUKS_CUTOVER on soleur-inngest/prd, so both
-          # are in the reviewer-gated environment ternary AND the token ternary below — an op added
-          # to this list with either ternary unextended runs ungated, or with no token at all.
+          # volume (its reverse, luks-rollback, was retired by #8285 PR B). It writes INNGEST_LUKS_CUTOVER
+          # on soleur-inngest/prd, so it is in the reviewer-gated environment ternary AND the token
+          # ternary below — an op added to this list with either ternary unextended runs ungated, or
+          # with no token at all.
           - luks-cutover
       cron_period_seconds:
         description: "Bucket width for the exactly-once check (op=doublefire-probe / op=verify). MUST be <= the SHORTEST registered cron period, hour-aligned. Default 3600."

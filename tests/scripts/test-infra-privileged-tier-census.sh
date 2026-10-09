@@ -773,6 +773,15 @@ for j in jobs:
         root_targets.setdefault(wd, set()).update(TARGET.findall(body))
         root_targeted[wd] = root_targeted.get(wd, False) or ("-target=" in body)
 
+# EVERY `-target`/`-replace` operand in ANY step of ANY job (plan steps included). `root_targets` above reads only
+# `terraform apply` bodies, but the dispatch jobs name their addresses on a `terraform plan -out=` step and apply the
+# saved plan, so an apply-body scan is blind to them. RETIRED_STATE_ABSENT consults this broader set.
+ANY_TARGET = re.compile(r"-(?:target|replace)(?:=|\s+)[\"']?([A-Za-z0-9_]+\.[A-Za-z0-9_]+)")
+any_targeted = set()
+for j in jobs:
+    for s_ in j.steps:
+        any_targeted.update(ANY_TARGET.findall(CONT.sub(" ", str(s_.get("run") or ""))))
+
 unreached = []
 for r, f, a, _g in removed_blocks:
     if not a:
@@ -829,7 +838,8 @@ INTENDED_DESTROYS = {
 # whose own teardown destroyed it, so state holds no entry and there is nothing for a `-target` to destroy or a
 # `removed` block to forget. Honoured only when NO job still targets the address (a leftover target would be a
 # stale line, not a deletion), and never for the App identity (G4f). Each entry names the evidence; a new entry
-# is a claim about live state and belongs in the PR that deletes the block. Stale once the base no longer declares it.
+# is a claim about live state and belongs in the PR that deletes the block. The two entries below leave when #9786's
+# next-replace removal list lands, or at the first census edit after the #8285 PR B merge (G4g refuses a re-declared one).
 RETIRED_STATE_ABSENT = {
     "apps/web-platform/infra": {
         "hcloud_server.inngest_backstop_wipe": "#8285 PR B: throwaway wipe host destroyed by the wipe dispatch teardown 2026-10-09 (run 37955244979); Hetzner lists no such server",
@@ -845,7 +855,7 @@ for r in GUARD4_ROOTS:
                     and a in root_targets.get(r, set())):
                 continue
             if (a in RETIRED_STATE_ABSENT.get(r, {}) and a not in G4_PROTECTED
-                    and a not in root_targets.get(r, set())):
+                    and a not in any_targeted):
                 continue
             orphans.append("%s %s" % (r, a))
 check("G4c: every `resource` block the base ref declares and HEAD no longer declares is claimed by a "
@@ -854,8 +864,14 @@ check("G4c: every `resource` block the base ref declares and HEAD no longer decl
       bool(BASE_ROOT) and n_base >= 1 and not orphans,
       ("base unavailable" if not BASE_ROOT else "orphans=%s" % orphans[:8]))
 bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) for a in d if a in G4_PROTECTED})
-check("G4f: no INTENDED_DESTROYS entry names the App identity (%s) — that pair may only ever be "
-      "FORGOTTEN, never destroyed" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
+check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names the App identity (%s) — that pair may "
+      "only ever be FORGOTTEN, never destroyed" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
+# G4g: a RETIRED_STATE_ABSENT entry is a claim that the address is GONE. If HEAD declares it again the claim is
+# false and a later deletion of that new block would ride the allowance with no `removed` block (re-declare, apply,
+# delete). Entries are removed when #9786's next-replace work lands or at the first census edit after merge.
+redeclared = sorted("%s %s" % (r, a) for r, d in RETIRED_STATE_ABSENT.items() for a in d if a in declared_addrs.get(r, set()))
+check("G4g: no RETIRED_STATE_ABSENT address is declared at HEAD (the allowance is only for an address that is "
+      "gone; a re-declared one must go through `removed` or INTENDED_DESTROYS)", not redeclared, redeclared)
 
 if STATE_LIST:
     live = set(open(STATE_LIST, encoding="utf-8", errors="replace").read().split())
@@ -2888,6 +2904,30 @@ if mutate g4-8-retired-absent-base "$MUTDIR/base/apps/web-platform/infra/github-
   else fail "M-g4-8-retired-state-absent: G4c refused a listed, untargeted deletion" "$(grep G4c "$T/mut/g4-8.tsv" | cut -c1-240)"; fi
 fi
 
+# Row 9 — REFUSAL arm of the retired-state-absent allowance: the same listed deletion, but a PLAN step still
+# `-target`s the address (the dispatch jobs target on a plan step and apply the saved plan, which an apply-body scan
+# cannot see). The allowance must not be honoured, so G4c goes RED.
+MUTDIR="$(fixcopy g4-9)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-9-retired-absent-base "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}' \
+   && mutate g4-9-plan-step-target "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 3 '/^          bash scripts\/tierb-helper\.sh$/a\      - name: Terraform plan\n        run: |\n          terraform plan -input=false -out=tfplan -target=hcloud_server.inngest_backstop_wipe'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-9.tsv" ""
+  mutant_red g4-9-listed-but-targeted-on-a-plan-step wf_row "$T/mut/g4-9.tsv" "G4c:"
+fi
+# Row 10 — a PROTECTED address placed in RETIRED_STATE_ABSENT trips G4f. The allowance lives in the checker, so the
+# mutant is a copy of the checker with the App identity added to the dict.
+MUTDIR="$(fixcopy g4-10)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4-10.py" || { printf 'FAIL SETUP: g4-10 checker copy\n' >&2; exit 1; }
+if mutate g4-10-protected-in-allowance "$T/ipt-g4-10.py" 1 's/^(        )("hcloud_server\.inngest_backstop_wipe": ".*)$/\1"doppler_secret.github_app_id": "x",\n\1\2/'; then
+  python3 "$T/ipt-g4-10.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4-10.tsv" 2> "$T/mut/g4-10.tsv.err"
+  mutant_red g4-10-protected-in-allowance wf_row "$T/mut/g4-10.tsv" "G4f:"
+fi
+# Row 11 — an allowance entry that HEAD declares again (re-declare, then delete, would ride it): G4g RED.
+MUTDIR="$(fixcopy g4-11)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-11-redeclared "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-11.tsv" ""
+  mutant_red g4-11-allowance-entry-redeclared wf_row "$T/mut/g4-11.tsv" "G4g:"
+fi
+
 # ── Guard 6 (#8609): the soleur-github-app read token stays in Tier B ───────────────────
 # Row a — REORDER: after the compliant Tier-B job, a SECOND job with no `environment:` reads the
 # token. The scan must not stop at the first (compliant) referencing job.
@@ -3492,7 +3532,9 @@ fi
 # 111 -> 114 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3, H4 (3 landings).
 # 114 -> 115 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (spaced flag value before run; 1 landing). Measured: 115 ran.
 # 115 -> 116 (#8285 PR B): g4-8 (the retired-state-absent ACCEPT arm; 1 landing). Measured: 116 ran.
-MUTANT_FLOOR=116
+# 116 -> 120 (#8285 PR B review): g4-9 (listed address still targeted on a PLAN step; 2 landings), g4-10 (App identity in the
+#   allowance; 1 landing), g4-11 (allowance entry re-declared at HEAD; 1 landing). Measured: 120 ran.
+MUTANT_FLOOR=120
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3520,7 +3562,8 @@ _ran=$((passes + fails))
 # 287 -> 294 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3 (prose "run") and H4 (lowercase token) (3 landings + 3 verdicts) and the H7b exact-verdict drives (1). Measured: 294 ran.
 # 294 -> 296 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (1 landing + 1 verdict); the H7b absent-row and _h7b self-test drives add no assertion (inside the one H7b pass). Measured: 296 ran.
 # 296 -> 298 (#8285 PR B): g4-8 landing + verdict. Measured: 298 ran.
-FLOOR=298
+# 298 -> 306 (#8285 PR B review): live G4g (1), g4-9 (2 landings + 1 verdict), g4-10 (1 + 1), g4-11 (1 + 1). Measured: 306 ran.
+FLOOR=306
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

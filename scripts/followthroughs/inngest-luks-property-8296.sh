@@ -58,6 +58,10 @@
 # Tracker directive (goes in the #8285 issue body, never #8296's):
 #   <!-- soleur:followthrough script=scripts/followthroughs/inngest-luks-property-8296.sh secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
 #
+# STATUS (#8285 PR B, 2026-10-09): the backstop volume was destroyed, so the destroy-apply condition below is met.
+# What still gates deleting this file is the dead-probe heartbeat feeder (#9703): until it is armed this is the only
+# reporter of a silent probe pipeline. When #8285 is closed, move the followthrough directive to #9703 first.
+#
 # RETIREMENT: coverage ends when #8285 closes, because the sweeper does nothing with 2, 3 or 5 on a
 # closed issue. So retire it only AFTER the destroy apply has run and the Hetzner API shows
 # hcloud_volume.inngest_redis gone -- never in the PR that merely removes the volume from
@@ -337,12 +341,12 @@ decide() {
 
   if (( claims && ! on )); then
     marker "rollback_inversion" "claim=$MECH store=$(safe "$SRC") mapper=$MAPPER age_s=$ROW_AGE"
-    echo "ACTION REQUIRED: backstop is the LIVE store — do NOT destroy hcloud_volume.inngest_redis. The ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER, so the record is false. If this follows a sanctioned op=luks-rollback, revert the record per $RUNBOOK section 5a. If no rollback was run, investigate the mount first (the wrong-volume alert should also have paged)."
+    echo "ACTION REQUIRED: the LUKS volume is the ONLY copy of the Inngest store (the plaintext backstop was destroyed on 2026-10-09 and op=luks-rollback is retired, so there is no rollback). The ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER, so the record is false and the store is on a device nobody claimed. Treat this as a production incident: read the newest host_role=dedicated probe row first, then follow $RUNBOOK section 5a (the wrong-volume alert should also have paged)."
     exit 5
   fi
   if (( ! claims && on )); then
     marker "under_claim" "claim=$MECH store=$(safe "$SRC") mapper=$MAPPER age_s=$ROW_AGE"
-    echo "ACTION REQUIRED: the store is measured ON /dev/mapper/$MAPPER, but the ledger claims '$MECH' for $LUKS_ROW. The record under-states the encryption: re-apply the luks row (the #8296 PR-2 flip) in a PR, see $RUNBOOK section 5a."
+    echo "ACTION REQUIRED: the store is measured ON /dev/mapper/$MAPPER, but the ledger claims '$MECH' for $LUKS_ROW. The record under-states the encryption: re-apply the luks row (a ledger-only edit setting the mechanism back to luks) in a PR, see $RUNBOOK section 5a."
     exit 5
   fi
   # ARM-BEGIN backstop_expired

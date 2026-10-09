@@ -42,7 +42,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PROBE_NAME="inngest-luks-property-8296.sh"
 PROBE_SRC="$HERE/$PROBE_NAME"
-CUTOVER_SRC="$REPO/scripts/cutover-inngest.sh"
 # The shared probe-row predicate (#8846). The sandbox copies it next to the probe copy, exactly as
 # the probe resolves it from its own repo root; a case can skip the copy (C_LIB=__none__).
 LIB_SRC="$REPO/scripts/lib/inngest-probe-row.sh"
@@ -54,7 +53,6 @@ pass() { printf '  PASS: %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
 [[ -f "$PROBE_SRC" ]] || { echo "FATAL: probe not found at $PROBE_SRC" >&2; exit 1; }
-[[ -f "$CUTOVER_SRC" ]] || { echo "FATAL: cutover script not found at $CUTOVER_SRC" >&2; exit 1; }
 [[ -f "$LIB_SRC" ]] || { echo "FATAL: probe-row lib not found at $LIB_SRC" >&2; exit 1; }
 
 # Canonical guard, copied byte-for-byte from plugins/soleur/test/test-helpers.sh: every scratch
@@ -88,7 +86,7 @@ EXP_FUTURE="2026-10-02"                 # NOW is a day BEFORE expiry
 EXP_PAST="2026-09-30"                   # NOW is a day AFTER expiry
 LUKS_SRC="/dev/mapper/inngest-redis"
 PLAIN_SRC="/dev/sdb"
-LEAD="backstop is the LIVE store — do NOT destroy hcloud_volume.inngest_redis"
+LEAD="the LUKS volume is the ONLY copy of the Inngest store"
 
 # ── fixture builders ──────────────────────────────────────────────────────────────────────────
 msg() { # <host_role> <data_mount_src> <data_mount_devid> [tail]
@@ -383,7 +381,7 @@ expect "row6 device_binding.mapper missing" 3 ledger_unreadable
 # Row 7: claims luks, store not on the mapper.
 reset_case; C_ROWS="$(ded "$DT_FRESH" "$PLAIN_SRC" | fx plain)"; C_LEAD=1
 C_REQUIRE="inngest-luks-cutover-6894.md"
-expect "row7 claims luks, store on /dev/sdb (leads with the backstop warning, cites the runbook)" 5 rollback_inversion
+expect "row7 claims luks, store on /dev/sdb (leads with the sole-copy incident warning, cites the runbook)" 5 rollback_inversion
 reset_case; C_ROWS="$(ded "$DT_FRESH" "/dev/mapper/inngest-redis-plain" | fx prefix)"; C_LEAD=1
 expect "mut1 src /dev/mapper/inngest-redis-plain vs mapper inngest-redis (no prefix match)" 5 rollback_inversion
 reset_case; C_ROWS="$(ded "$DT_FRESH" "$PLAIN_SRC" "$VOL" "data_mount_src=$LUKS_SRC" | fx firstwins)"

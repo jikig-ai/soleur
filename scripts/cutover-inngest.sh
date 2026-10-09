@@ -3677,7 +3677,7 @@ case "$OP" in
     # discarded (`doppler secrets set` prints every remaining secret of the config).
     LK_TS=$(date -u +%s)
     printf '%s' "$LK_WANT" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=$OP: writing INNGEST_LUKS_CUTOVER=$LK_WANT FAILED. Nothing on the host has changed — re-dispatch. Do NOT SSH the host."; exit 1; }
-    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify, rolling back automatically if the verification fails."
+    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify. On this host the plaintext backstop no longer exists (destroyed 2026-10-09), so a failed verification aborts the swap rather than reverse-copying: the on-host rollback refuses with rollback-no-backstop."
     LK_ISO=$(date -u -d "@$LK_TS" +'%Y-%m-%d %H:%M:%S')
     LK_STATE=$(confirm_luks_state "$LK_ISO")
     if [[ "$LK_STATE" == "$LK_EXPECT" ]]; then
@@ -3685,7 +3685,7 @@ case "$OP" in
     else
       case "$LK_STATE" in
         rolled-back)
-          echo "::error::op=luks-cutover: the FSM rolled back. The post-swap verification failed, so the host reverse-copied to the plaintext volume and cleared the pointer — THE STORE IS INTACT and the scheduler is running on it. Read the reason field (t3-failed-rc*) on the inngest-luks-cutover rows before re-dispatching. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::op=luks-cutover: the FSM reported rolled-back. This was written for the pre-2026-10-09 layout, where a failed post-swap verification reverse-copied to the plaintext volume; that volume no longer exists, so on this host treat the row as a production incident (the on-host rollback refuses with rollback-no-backstop) and follow runbook inngest-luks-cutover-6894.md section 5a. Read the reason field on the inngest-luks-cutover rows. Do NOT SSH the host."; exit 1 ;;
         aborted)
           echo "::error::op=$OP: the FSM aborted. Every refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
         *)
