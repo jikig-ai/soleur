@@ -244,89 +244,109 @@ else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')]
 # followed, as the next statement, by a MOUNTED docker run; every helper call carries a pass-through rc form
 # (`|| exit $?`, S1's re-raise, R4's fixture_fail) and none a hardcoded `|| exit 100` / `|| true`; every call is
 # preceded by the `. /work/apt/apt-bounded.sh || exit 97` (or fixture_fail) source line; every arm line checks its
-# own return; and no apt/dpkg/pip appears in command position outside the helper. The grammars are defined ONCE
-# below and asserted against a sample list (a grammar edit that stops seeing a site turns the row red with the
-# sample that broke, not a quiet `total=0`), and a population census over every `*.test.sh` under the infra
-# directory (recursively, as run-registered-suites.sh registers them) keeps the consumer list from being a
-# hand-listed snapshot (#9395). BOUNDARY: the census reads infra suites; non-suite scripts and scripts outside
-# this directory (for example apps/web-platform/scripts/*-in-image.sh) are not covered by this row.
+# own return; and no apt/dpkg/pip appears in command position outside the helper.
+#
+# The grammar arms (separators, keywords, wrapper words, apt binaries and verbs, docker verbs) live in ARRAYS: the
+# regexes are BUILT from them and the sample loops below are generated from the same arrays, so an arm cannot exist
+# unsampled. A population census over every `*.test.sh` under the infra directory (recursive, as
+# run-registered-suites.sh registers them) keeps the consumer list from being a hand-listed snapshot (#9395): any
+# suite with a docker verb AND apt text anywhere in its code must be a declared consumer or carry an explicit
+# EXEMPT line with a reason (and a stale exemption is itself a finding). The census is deliberately looser than the
+# site grammars: a false candidate costs one SPECS or EXEMPT line, a miss is silent.
+# BOUNDARY: non-suite scripts and scripts outside this directory (for example apps/web-platform/scripts/*-in-image.sh)
+# are not covered by this row.
 _strip() { sed 's/^[[:space:]]*#.*$//' "$1"; }
 _joined() { _strip "$1" | sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba' -e '}'; }
-# Command position: start of line, after a separator or an opening bracket/negation, or after a keyword; then
-# optional wrapper words, VAR= words and `timeout [flags] N [N]` (units allowed, no `{n,m}` interval: ADJ_RE is
-# evaluated by awk and old mawk builds lack intervals).
-_CMDPOS='(^|[;&|({!`]|-c[[:space:]]+['"'"'"]|(^|[[:space:]])(then|do|if|elif|else|while|until|exec|RUN))[[:space:]]*'
-_END='([[:space:];&|)'"'"'"]|$)'
-_WRAP='((sudo|env|command|nohup|time|nice)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*|docker[[:space:]]+exec[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[^[:space:]]+[[:space:]]+)*'
+_join() { local IFS='|'; printf '%s' "$*"; }
+_SEPS=(';' '&' '|' '(' ')' '{' '!' '`')
+_KWS=('then' 'do' 'if' 'elif' 'else' 'while' 'until' 'exec' 'RUN')
+_WRAPS=(sudo env command nohup time nice stdbuf xargs flock X XS)
+_APT_BINS=(apt-get apt aptitude apt-fast dpkg)
+_PIP_BINS=(pip pip3)
+_APT_VERBS=(update install upgrade dist-upgrade full-upgrade build-dep reinstall -i --install)
+_DOCK_VERBS=(run exec create build start compose)
+_SEPCLASS="[$(printf '%s' "${_SEPS[@]}")]"
+_CMDPOS="(^|${_SEPCLASS}|-c[[:space:]]+['\"]|(^|[[:space:]])($(_join "${_KWS[@]}")))[[:space:]]*"
+_END="([[:space:];&|)'\"]|\$)"
+# Wrapper words and `docker run|exec ... ` may precede the tool; timeout may carry any flags/duration; both are
+# generous on purpose (no `{n,m}` interval: ADJ_RE is evaluated by awk and old mawk builds lack intervals).
+_WRAP="(($(_join "${_WRAPS[@]}")|docker[[:space:]]+(run|exec))[[:space:]]+['\"]?([^;&|]*[[:space:]])?)?"
 _VARPFX='([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
-_TMO='(timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+([A-Z]+[[:space:]]+)?)*([0-9]+[smhd]?[[:space:]]+)([0-9]+[smhd]?[[:space:]]+)?)?'
+_TMO='(timeout[[:space:]]+([^;&|]*[[:space:]])?)?'
 _BIN='(/[^[:space:]]*/)?'
 DOCK_RE="${_CMDPOS}${_WRAP}${_VARPFX}${_TMO}${_BIN}docker[[:space:]]+(container[[:space:]]+)?run${_END}"
 ADJ_RE="^[[:space:]]*((if|elif|while|until|exec)[[:space:]]+)?(![[:space:]]+)?${_WRAP}${_VARPFX}${_TMO}${_BIN}docker[[:space:]]+(container[[:space:]]+)?run${_END}"
-RAW_RE="${_CMDPOS}${_WRAP}${_VARPFX}${_TMO}${_BIN}(apt-get|apt|aptitude|apt-fast|dpkg|pip3?|python3?[[:space:]]+-m[[:space:]]+pip)[[:space:]]+([^;&|]*[[:space:]])?(update|install|upgrade|dist-upgrade|full-upgrade|build-dep|reinstall|-i|--install)${_END}"
-# Census predicates are deliberately looser than the site grammars in VERB (any docker verb that starts or enters
-# a container; the whole apt family) but share their command-position anchor: a string that merely NAMES a command
-# inside an assertion (`grep -qF 'apt-get install -y x'`) is data, not an apt cycle, and flagging it would turn
-# every suite that tests another script's text into a candidate.
-_DVAR='("?\$\{?[A-Za-z_]*(DOCKER|docker)[A-Za-z_]*\}?"?|(docker|podman))'
-CENS_DOCK_RE="${_CMDPOS}${_WRAP}${_VARPFX}${_TMO}${_BIN}${_DVAR}[[:space:]]+([^;&|]*[[:space:]])?(run|exec|create|build|start|compose)${_END}|${_CMDPOS}${_BIN}(docker|podman)-compose${_END}"
-# A suite that already uses the helper is a consumer too: leaving it out of SPECS must not silently drop its checks.
-CENS_APT_RE="${RAW_RE}|(^|[^A-Za-z0-9_-])(gd_apt_install_bounded|gd_apt_state_arm)([[:space:]]|\$)"
+RAW_RE="${_CMDPOS}${_WRAP}${_VARPFX}${_TMO}${_BIN}($(_join "${_APT_BINS[@]}" "${_PIP_BINS[@]}")|python3?[[:space:]]+-m[[:space:]]+pip)[[:space:]]+([^;&|]*[[:space:]])?($(_join "${_APT_VERBS[@]}"))${_END}"
+_DVAR='\$\{?[A-Za-z_]*(DOCKER|docker)[A-Za-z_]*\}?"?'
+CENS_DOCK_RE="(^|[^A-Za-z0-9_-])(docker|podman)[^;&|]*[[:space:]]($(_join "${_DOCK_VERBS[@]}"))${_END}|(docker|podman)-compose|${_DVAR}[[:space:]]+(run|exec|create|build)${_END}"
+CENS_APT_RE="(^|[^A-Za-z0-9_-])($(_join "${_APT_BINS[@]}"))[[:space:]]+([^;&|]*[[:space:]])?($(_join "${_APT_VERBS[@]}"))${_END}|gd_apt_install_bounded|gd_apt_state_arm"
 # shellcheck disable=SC2016  # the literal mount token as it appears in the suites' text
 MNT_LIT='-v "$GD_APT_STATE:/work/apt"'
 # One TAB-separated spec per consumer: file, declared-unmounted sites, state variable the suite arms, mounted sites.
 # A new consumer is one line here PLUS its conversion; the totals below are derived from this list.
 TAB=$'\t'
 SPECS=("${OWN}${TAB}0${TAB}TMP${TAB}1" "${REH}${TAB}1${TAB}TMP${TAB}5" "${CUT}${TAB}0${TAB}T${TAB}1" "${PUS}${TAB}1${TAB}W${TAB}1")
-_asm=""; _tot=0; _unm=0; _exp_tot=0; _exp_unm=0
-for _s in "docker run --rm img" "timeout -k 10 480 docker run --rm img" "timeout 480 docker run --rm img" \
-          "timeout -s KILL 480 docker run --rm img" "timeout 600s docker run --rm img" "timeout -k 10s 480s docker run img" \
-          "if ! docker run --name x img" "if docker run img" "elif docker run img" "while docker run img" "until docker run img" \
-          "else docker run img" "FOO=1 docker run img" "cmd && docker run img" "sudo docker run img" "env A=1 docker run img" \
-          "command docker run img" "/usr/bin/docker run img" "docker container run img"; do
-  grep -Eq -- "$DOCK_RE" <<<"$_s" || _asm="${_asm} docker-grammar-misses-site:[${_s}]"
-done
-for _s in 'echo "docker run failed"' 'tb_unbootable "docker run failed (x)"' 'dockerrun img' 'echo docker run' 'docker rm -f x' 'docker exec c true'; do
-  grep -Eq -- "$DOCK_RE" <<<"$_s" && _asm="${_asm} docker-grammar-matches-non-site:[${_s}]"
-done
-for _s in "timeout -k 10 480 docker run -v x img" "if ! timeout 480 docker run -v x img" "docker run -v x img" "FOO=1 docker run img"; do
-  grep -Eq -- "$ADJ_RE" <<<"$_s" || _asm="${_asm} adj-grammar-misses-site:[${_s}]"
-done
-for _s in 'echo docker run' ': docker run' 'gd_apt_state_arm x docker run'; do
-  grep -Eq -- "$ADJ_RE" <<<"$_s" && _asm="${_asm} adj-grammar-matches-non-site:[${_s}]"
-done
-for _s in "apt-get install -y curl" "timeout -k 5 30 apt-get install -y curl" "FOO=1 apt-get update" "x; do apt-get update -qq" \
-          "apt-get -o Acquire::Retries=5 install -y curl" "apt-get -y --no-install-recommends install curl" "sudo apt-get install curl" \
-          "env X=1 apt-get update" "/usr/bin/apt-get install curl" "if apt-get install -y curl; then :; fi" "until apt-get update; do :; done" \
-          "else apt-get update" "apt install -y curl" "aptitude install curl" "dpkg -i x.deb" "dpkg --install x.deb" "pip3 install x" \
-          "python3 -m pip install x" "apt-get dist-upgrade -y" "timeout 600s apt-get update"; do
-  grep -Eq -- "$RAW_RE" <<<"$_s" || _asm="${_asm} raw-apt-grammar-misses:[${_s}]"
-done
-for _s in 'echo "apt-get install failed"' 'gd_apt_install_bounded curl' 'apt-bounded' 'apt-get remove install-info' 'x=apt-get'; do
-  grep -Eq -- "$RAW_RE" <<<"$_s" && _asm="${_asm} raw-apt-grammar-matches-non-site:[${_s}]"
-done
-# shellcheck disable=SC2016  # sample lines: literal `$DOCKER` text, not an expansion
-for _s in "docker create --name x img" "docker exec c apt-get update" "docker build -t x ." "sudo docker run img" "docker -H tcp://x run img" "docker compose run x" \
-          "docker container run img" "podman run img" '$DOCKER run img' '"$docker_bin" exec c true' "bash -c 'docker run img'" "if docker exec c true; then" "docker-compose run x"; do
-  grep -Eq -- "$CENS_DOCK_RE" <<<"$_s" || _asm="${_asm} census-docker-grammar-misses:[${_s}]"
-done
-for _s in "assert x \"grep -qF 'docker create --name x'\"" "echo docker exec failed" "ga_row \"docker exec failing with rc 125\"" "docker is absent"; do
-  grep -Eq -- "$CENS_DOCK_RE" <<<"$_s" && _asm="${_asm} census-docker-grammar-matches-non-site:[${_s}]"
-done
-for _s in "RUN apt-get install -y x" "gd_apt_state_arm \"\$W/aptstate\" 1" "gd_apt_install_bounded curl" "bash -c 'apt-get install -y x'" "sh -c \"apt-get update\"" "docker exec c apt-get install curl"; do
-  grep -Eq -- "$CENS_APT_RE" <<<"$_s" || _asm="${_asm} census-apt-grammar-misses:[${_s}]"
-done
-for _s in "assert x \"grep -qF 'apt-get install -y cloudflared'\"" "echo apt-get install failed" "apt-get is missing"; do
-  grep -Eq -- "$CENS_APT_RE" <<<"$_s" && _asm="${_asm} census-apt-grammar-matches-non-site:[${_s}]"
-done
+# Suites that quote another script's docker/apt text as DATA (assertion strings), not as commands. Format: file TAB reason.
+EXEMPT=("cloud-init-inngest-bootstrap.test.sh${TAB}asserts on the rendered cloud-init text; its docker/apt strings are grep targets"
+        "cron-egress-firewall.test.sh${TAB}asserts on the egress firewall script text; its docker exec/apt lines are grep targets")
+_asm=""; _tot=0; _unm=0; _exp_tot=0; _exp_unm=0; _SAMP_CALLS=0
+# _samp <regex> <match|nomatch> <label> <items...>: a sample list shorter than 3 is itself a finding (an emptied list
+# would otherwise iterate zero times and stay green), and the number of calls is pinned below.
+_samp() {
+  local re="$1" want="$2" label="$3" it; shift 3
+  _SAMP_CALLS=$((_SAMP_CALLS + 1))
+  [ "$#" -ge 3 ] || { _asm="${_asm} ${label}:[fewer than 3 samples]"; return; }
+  for it in "$@"; do
+    if grep -Eq -- "$re" <<<"$it"; then
+      [ "$want" = match ] || _asm="${_asm} ${label}-matches-non-site:[${it}]"
+    else
+      [ "$want" = nomatch ] || _asm="${_asm} ${label}-misses:[${it}]"
+    fi
+  done
+}
+_dk=(); for c in "${_SEPS[@]}"; do _dk+=("true ${c} docker run img"); done
+for k in "${_KWS[@]}"; do _dk+=("${k} docker run img"); done
+for w in "${_WRAPS[@]}"; do _dk+=("${w} docker run img" "${w} -u root docker run img"); done
+# shellcheck disable=SC2016  # sample lines: literal `$VAR` text, not an expansion
+_dk+=("docker run --rm img" "timeout -k 10 480 docker run img" "timeout 480 docker run img" "timeout -s KILL 480 docker run img" "timeout 600s docker run img" \
+      'timeout "$T" docker run img' "timeout 1.5m docker run img" "FOO=1 docker run img" "/usr/bin/docker run img" "docker container run img" \
+      "bash -c 'docker run img'" "sh -c \"docker run img\"" "if ! docker run --name x img")
+_samp "$DOCK_RE" match docker-grammar "${_dk[@]}"
+_samp "$DOCK_RE" nomatch docker-grammar 'echo "docker run failed"' 'tb_unbootable "docker run failed (x)"' 'dockerrun img' 'echo docker run' 'docker rm -f x' 'docker exec c true'
+_samp "$ADJ_RE" match adj-grammar "timeout -k 10 480 docker run -v x img" "if ! timeout 480 docker run -v x img" "docker run -v x img" "FOO=1 docker run img" "sudo docker run img"
+_samp "$ADJ_RE" nomatch adj-grammar 'echo docker run' ': docker run' 'gd_apt_state_arm x docker run'
+_rw=()
+for b in "${_APT_BINS[@]}" "${_PIP_BINS[@]}"; do for v in "${_APT_VERBS[@]}"; do _rw+=("${b} ${v} x"); done; done
+for c in "${_SEPS[@]}"; do _rw+=("true ${c} apt-get update"); done
+for k in "${_KWS[@]}"; do _rw+=("${k} apt-get update"); done
+for w in "${_WRAPS[@]}"; do _rw+=("${w} apt-get install x" "${w} -u root apt-get install x"); done
+_rw+=("apt-get -o Acquire::Retries=5 install -y curl" "apt-get -y --no-install-recommends install curl" "timeout -k 5 30 apt-get install -y curl" "timeout 600s apt-get update" \
+      "FOO=1 apt-get update" "/usr/bin/apt-get install curl" "python3 -m pip install x" "python -m pip install x" "bash -c 'apt-get install -y x'" \
+      "docker run img apt-get install -y curl" "docker exec -u root c apt-get install curl" "XS 'apt-get install x'" "RUN apt-get install -y x")
+_samp "$RAW_RE" match raw-apt-grammar "${_rw[@]}"
+_samp "$RAW_RE" nomatch raw-apt-grammar 'echo "apt-get install failed"' 'gd_apt_install_bounded curl' 'apt-bounded' 'apt-get remove install-info' 'x=apt-get' 'ga_row "x apt-get update"'
+_cd=()
+for v in "${_DOCK_VERBS[@]}"; do _cd+=("docker ${v} x" "podman ${v} x" "docker -H tcp://x ${v} img"); done
+# shellcheck disable=SC2016  # sample lines: literal `$VAR` text, not an expansion
+_cd+=("docker-compose up" "podman-compose run x" 'docker container run img' '$DOCKER run img' '"$docker_bin" exec c true' "sudo docker run img")
+_samp "$CENS_DOCK_RE" match census-docker-grammar "${_cd[@]}"
+_samp "$CENS_DOCK_RE" nomatch census-docker-grammar 'docker is absent' 'nodocker run x' 'echo docker' 'docker.io/library/ubuntu'
+_ca=()
+for b in "${_APT_BINS[@]}"; do for v in "${_APT_VERBS[@]}"; do _ca+=("${b} ${v} x"); done; done
+# shellcheck disable=SC2016  # sample lines: literal `$VAR` text, not an expansion
+_ca+=("apt-get -o K=V install -y x" "RUN apt-get install -y x" "gd_apt_install_bounded curl" 'gd_apt_state_arm "$W/aptstate" 1' "bash -c 'apt-get update'")
+_samp "$CENS_APT_RE" match census-apt-grammar "${_ca[@]}"
+_samp "$CENS_APT_RE" nomatch census-apt-grammar 'echo apt is missing' 'apt-bounded' 'dpkg -l' 'pip3 install x'
+[ "$_SAMP_CALLS" -eq 10 ] || _asm="${_asm} sample-loops:[ran ${_SAMP_CALLS} of 10 sample calls]"
 for spec in "${SPECS[@]}"; do
   IFS="$TAB" read -r f want_unmounted sv want_mounted <<<"$spec"
-  _exp_tot=$((_exp_tot + want_mounted)); _exp_unm=$((_exp_unm + want_unmounted))
+  [[ "$want_unmounted" =~ ^[0-9]+$ && "$want_mounted" =~ ^[0-9]+$ ]] || { _asm="${_asm} $(basename "$f"):[non-numeric SPECS field]"; continue; }
+  _exp_tot=$((_exp_tot + 10#$want_mounted)); _exp_unm=$((_exp_unm + 10#$want_unmounted))
   [ -f "$f" ] || { _asm="${_asm} $(basename "$f"):[missing]"; continue; }
   j="$(_joined "$f")"; u="$(_strip "$f")"
   dock="$(printf '%s\n' "$j" | grep -E -- "$DOCK_RE" || true)"
-  # Count SITES (occurrences), not lines: two sites on one logical line must count twice.
-  total=$(printf '%s\n' "$dock" | grep -oE -- "$DOCK_RE" | wc -l)
+  # Count SITES, not lines: split the logical lines on ';', '&&' and '||' first so two sites on one line count twice.
+  total=$(printf '%s\n' "$dock" | sed -e 's/&&/\n/g' -e 's/||/\n/g' | tr ';' '\n' | grep -cE -- "$DOCK_RE" || true)
   mounted=$(printf '%s\n' "$dock" | grep -oF -- "$MNT_LIT" | wc -l)
   calls_=$(printf '%s\n' "$j" | grep -E '^[[:space:]]*(if[[:space:]]+)?gd_apt_install_bounded[[:space:]]' || true)
   c=$(printf '%s' "$calls_" | grep -c . || true)
@@ -338,8 +358,9 @@ for spec in "${SPECS[@]}"; do
   g=$(printf '%s' "$arms" | grep -c . || true)
   # shellcheck disable=SC2016  # literal source text
   g_ok=$(printf '%s\n' "$arms" | grep -cE '^[[:space:]]*gd_apt_state_arm "\$'"${sv}"'/aptstate" "\$APT_BUDGET_S" \|\| \{[^}]*exit 2; \}' || true)
-  # The first statement after an arm must be a docker run that carries the mount (joined text: the whole site).
-  adj=$(printf '%s\n' "$j" | awk -v re="$ADJ_RE" -v mnt="$MNT_LIT" '/^[[:space:]]*gd_apt_state_arm[[:space:]]/ {a=1; next} NF && a {a=0; if ($0 !~ re || index($0, mnt) == 0) bad++} END {print bad + 0}')
+  # The first statement after an arm must be a docker run that carries the mount (joined text: the whole site); an
+  # arm with no following statement at all is also a finding.
+  adj=$(printf '%s\n' "$j" | awk -v re="$ADJ_RE" -v mnt="$MNT_LIT" '/^[[:space:]]*gd_apt_state_arm[[:space:]]/ {a=1; next} NF && a {a=0; if ($0 !~ re || index($0, mnt) == 0) bad++} END {if (a) bad++; print bad + 0}')
   raw=$(printf '%s\n' "$u" | grep -cE -- "$RAW_RE" || true)
   _tot=$((_tot + c)); _unm=$((_unm + total - mounted))
   if [ "$mounted" -ne "$want_mounted" ] || [ "$((total - mounted))" -ne "$want_unmounted" ] || [ "$mounted" -ne "$c" ] || [ "$c_ok" -ne "$c" ] \
@@ -347,11 +368,15 @@ for spec in "${SPECS[@]}"; do
     _asm="${_asm} $(basename "$f"):[docker=$total mounted=$mounted (want $want_mounted) calls=$c rc-ok=$c_ok rc-bad=$c_bad source=$src arms=$g arm-checked=$g_ok arm-not-before-mounted-docker=$adj raw-apt=$raw]"
   fi
 done
-# Population census, derived from the tree and independent of the stored list above: every infra suite (recursive)
-# that holds a docker verb AND apt text must be a declared consumer, and every declared consumer must be seen.
+# Tier B's classification is only as good as its call site: pin the exact call so a flipped or constant condition is a finding.
+# shellcheck disable=SC2016  # literal source text
+_pin=$(printf '%s\n' "$(_joined "$PUS")" | grep -cE '^[[:space:]]*if \[ "\$\(tb_build_verdict "\$rc" "\$W/tierb-apt\.log"\)" = skip \]; then$' || true)
+[ "$_pin" -eq 1 ] || _asm="${_asm} provision-unit:[tb_build_verdict call-site pin=$_pin, want 1]"
+# Population census, derived from the tree and independent of the stored list above.
 # This suite is the guard itself and carries the grammars as text, so it is the one file not scanned.
 _decl="${TAB}"; for spec in "${SPECS[@]}"; do _spec_f="${spec%%"${TAB}"*}"; _decl="${_decl}${_spec_f#"${DIR}"/}${TAB}"; done
-_seen=0
+_exm="${TAB}"; for e in "${EXEMPT[@]}"; do _exm="${_exm}${e%%"${TAB}"*}${TAB}"; done
+_seen=0; _exm_hit=""
 while IFS= read -r cf; do
   rel="${cf#"${DIR}"/}"
   case "$_decl" in *"${TAB}${rel}${TAB}"*) _seen=$((_seen + 1)) ;; esac
@@ -359,10 +384,15 @@ while IFS= read -r cf; do
   grep -qE 'docker|podman' "$cf" || continue
   cj="$(_joined "$cf")"
   if grep -Eq -- "$CENS_DOCK_RE" <<<"$cj" && grep -Eq -- "$CENS_APT_RE" <<<"$cj"; then
-    case "$_decl" in *"${TAB}${rel}${TAB}"*) : ;; *) _asm="${_asm} census:[${rel} holds a docker verb and apt text but is not a declared consumer — add a SPECS line (file, declared-unmounted, state var, mounted sites) and convert it to lib/apt-bounded.sh: arm, mount, source, call]" ;; esac
+    case "$_exm" in *"${TAB}${rel}${TAB}"*) _exm_hit="${_exm_hit}${rel}${TAB}"; continue ;; esac
+    case "$_decl" in *"${TAB}${rel}${TAB}"*) : ;; *) _asm="${_asm} census:[${rel} holds a docker verb and apt text but is not a declared consumer — convert it to lib/apt-bounded.sh and add a SPECS line (file, declared-unmounted, state var, mounted sites), or, if the docker/apt text is only DATA (assertion strings), add an EXEMPT line with the reason]" ;; esac
   fi
 done < <(find "$DIR" -type f -name '*.test.sh' | sort)
-[ "$_seen" -eq "${#SPECS[@]}" ] || { _asm="${_asm} census:[saw ${_seen} of ${#SPECS[@]} declared consumers under ${DIR}]"; }
+[ "$_seen" -eq "${#SPECS[@]}" ] || _asm="${_asm} census:[saw ${_seen} of ${#SPECS[@]} declared consumers under ${DIR}]"
+for e in "${EXEMPT[@]}"; do
+  _ef="${e%%"${TAB}"*}"
+  case "${TAB}${_exm_hit}" in *"${TAB}${_ef}${TAB}"*) : ;; *) _asm="${_asm} census:[stale EXEMPT ${_ef}: no longer a docker+apt candidate (or missing) — remove its line]" ;; esac
+done
 row
 if [ -z "$_asm" ] && [ "$_tot" -eq "$_exp_tot" ] && [ "$_unm" -eq "$_exp_unm" ]; then
   pass "A10: assembly (derived) — each apt-bearing docker run is armed just before it, mounts the exact state token, sources the lib and calls the helper with a pass-through rc; no raw apt (${_exp_tot} mounted sites + ${_exp_unm} declared unmounted, ${#SPECS[@]} suites, census clean)"

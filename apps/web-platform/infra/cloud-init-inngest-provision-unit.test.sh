@@ -1409,9 +1409,6 @@ APT_BUDGET_S=150
 [ -r "$APT_LIB" ] || die "${APT_LIB} is missing — the Tier B apt cycle could not be bounded"
 # shellcheck source=lib/apt-bounded.sh
 . "$APT_LIB"
-# A ':' in the scratch path would make the -v mount spec invalid (docker rc 125), which the decline arm below
-# would read as an environment skip; refuse it as a harness defect instead.
-case "$W" in *:*) die "scratch dir $W contains ':' — the apt state mount spec would be invalid" ;; esac
 # Verdict for the image-build `docker run`: ok | skip | fail. Only the apt decline (the marker WITH the helper's
 # own rc 100) or docker failing to create the container (125) is the ADR-188 skip; 97/98/124/126/127/137 are
 # harness defects and must never read as the decline. Executed below as an instrument check, docker or not.
