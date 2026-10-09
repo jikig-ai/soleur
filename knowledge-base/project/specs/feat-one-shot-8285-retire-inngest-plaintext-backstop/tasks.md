@@ -73,8 +73,8 @@ and rationale: ADR-142 addendum 2026-10-09 and `decision-challenges.md` 2026-10-
   wipe run's start, then a successful `detach_volume`); the D4 attestation is a #8285 issue comment of
   the exact shape `https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>` by an owner
   or member (round 2, see 1.3.2: not a collaborator), whose body contains 106261946.
-- 1.3.3 The per-merge apply's HALT text no longer directs an operator to an untargeted `terraform apply`
-  of the root while the orphans exist. No new Terraform resource.
+- 1.3.3 The per-merge apply's HALT text no longer points at an untargeted whole-root apply
+  while the orphans exist. No new Terraform resource.
 
 ### Narrowing of Phase 2 (2.2, 2.5)
 
