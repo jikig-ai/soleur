@@ -224,15 +224,15 @@ PR body: `Closes #7256` on its own line; the mutation table; `Brand-survival thr
 
 ## Acceptance Criteria
 
-- [ ] `.github/workflows/reusable-release.yml` has exactly one step named `Post to Slack (release BLOCKED)`, whose parsed `if` equals `!cancelled() && failure() && steps.check_changed.outputs.changed == 'true' && (steps.create_release.outputs.released == 'true' || steps.idempotency.outputs.draft_exists == 'true')` — asserted by T6b on the parsed YAML, not by `grep`.
-- [ ] `git diff origin/main...HEAD -- .github/workflows/reusable-release.yml` shows no change to the `if:`, `env:` assignments or run-block code of `Post to Slack (release)` (comment lines only) and no change to `Email notification (release FAILED)`.
-- [ ] The blocked message carries `release BLOCKED`, the reason and verdict (when set), the run URL and `Re-run failed jobs`; never `released!`; omits the registry lines when both values are empty (T7b).
-- [ ] The two stale comment blocks are rewritten and the lead comment names `Post to Slack (release BLOCKED)`, `notify-gated` and #7256: `git grep -n "does not run at all" -- .github/workflows/reusable-release.yml` returns nothing.
-- [ ] ADR-096's "AMENDED 2026-07-30" bullet carries the `AMENDED 2026-10-09 (#7256)` sentence.
-- [ ] `bash plugins/soleur/test/reusable-release-idempotency.test.sh` exits 0 with `REUSABLE_RELEASE_WF` unset, and every pre-existing T1-T7 assertion still passes.
-- [ ] Guard 1 rows 1-10 and H1 were executed against a copy and observed RED, H2 GREEN; the outcome is noted in the PR body.
-- [ ] `actionlint` reports nothing new versus `origin/main`; `python3 scripts/lint-workflow-step-env-refs.py` reports nothing for the new step.
-- [ ] Diff scope: `git diff --name-only origin/main...HEAD` is a subset of {the workflow, the idempotency test, the ADR-096 file, this plan, its `tasks.md`} and matches none of `cloud-init-registry`, `zot-registry.tf`, `variables.tf`, `server.tf`, `ci-deploy.sh`, `build-inngest-bootstrap-image.yml`, `ci-workflow-authoring.md`, or `plugins/soleur/` outside `test/`.
+- [x] `.github/workflows/reusable-release.yml` has exactly one step named `Post to Slack (release BLOCKED)`, whose parsed `if` equals `!cancelled() && failure() && steps.check_changed.outputs.changed == 'true' && (steps.create_release.outputs.released == 'true' || steps.idempotency.outputs.draft_exists == 'true')` — asserted by T6b on the parsed YAML, not by `grep`.
+- [x] `git diff origin/main...HEAD -- .github/workflows/reusable-release.yml` shows no change to the `if:`, `env:` assignments or run-block code of `Post to Slack (release)` (comment lines only) and no change to `Email notification (release FAILED)`.
+- [x] The blocked message carries `release BLOCKED`, the reason and verdict (when set), the run URL and `Re-run failed jobs`; never `released!`; omits the registry lines when both values are empty (T7b).
+- [x] The two stale comment blocks are rewritten and the lead comment names `Post to Slack (release BLOCKED)`, `notify-gated` and #7256: `git grep -n "does not run at all" -- .github/workflows/reusable-release.yml` returns nothing.
+- [x] ADR-096's "AMENDED 2026-07-30" bullet carries the `AMENDED 2026-10-09 (#7256)` sentence.
+- [x] `bash plugins/soleur/test/reusable-release-idempotency.test.sh` exits 0 with `REUSABLE_RELEASE_WF` unset, and every pre-existing T1-T7 assertion still passes.
+- [x] Guard 1 rows 1-10 and H1 were executed against a copy and observed RED, H2 GREEN; the outcome is noted in the PR body.
+- [x] `actionlint` reports nothing new versus `origin/main`; `python3 scripts/lint-workflow-step-env-refs.py` reports nothing for the new step.
+- [x] Diff scope: `git diff --name-only origin/main...HEAD` is a subset of {the workflow, the idempotency test, the ADR-096 file, this plan, its `tasks.md`} and matches none of `cloud-init-registry`, `zot-registry.tf`, `variables.tf`, `server.tf`, `ci-deploy.sh`, `build-inngest-bootstrap-image.yml`, `ci-workflow-authoring.md`, or `plugins/soleur/` outside `test/`.
 - [ ] PR body carries `Closes #7256` on its own line, the brand-survival statement, the disclosed `notify-gated`/`release-outcome` duplicate, and that it ships through the normal merge queue.
 
 ## Test Scenarios
