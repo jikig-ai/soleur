@@ -35,7 +35,7 @@
 #   and only a run with NO finalizer output reads as STATE UNKNOWN. The separate notify-failure job
 #   turns a failed or cancelled run into a ci/git-data-cutover issue plus an ops email.
 #   Known gaps (runbook, "When a cutover run fails"): a rollback that finds the flag already off
-#   (nothing_to_rollback) does not read a held sentinel; a force-cancel and a pending run replaced
+#   (nothing_to_rollback) does not read a held sentinel (its step says so); a force-cancel and a pending run replaced
 #   by a newer dispatch in the git-data-state group notify nobody.
 # Downtime and blast radius of each mode: the runbook's "Downtime and blast radius" table
 # (knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md).
@@ -178,7 +178,7 @@ jobs:
       # rollback on an already-off flag: done, exit green.
       - name: Nothing to rollback
         if: steps.flag_precheck.outputs.nothing_to_rollback == '1'
-        run: echo "verdict=nothing_to_rollback — flag already off; nothing to take off."
+        run: echo "verdict=nothing_to_rollback — flag already off; nothing to take off. The freeze sentinel was NOT read on this path, so a stranded freeze is cleared with mode=unfreeze and the stranded lineage."
 
       - name: Verify required secrets present
         id: secrets_check
@@ -460,6 +460,10 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          # Mark BEFORE the write runs, as the freeze step does with freeze_held: a write that lands and then
+          # fails its read-back dies before flag_written, and the finalizer's flip arm must still switch the
+          # flag off. The marker means "a write MAY have landed", not "it succeeded"; the flag-off write is idempotent.
+          touch "$RUNNER_TEMP/cutover-progress/flag_write_attempted"
           bash apps/web-platform/infra/git-data-flag-precheck.sh
           touch "$RUNNER_TEMP/cutover-progress/flag_written"
 
@@ -570,7 +574,8 @@ jobs:
       # --- teardown (bridge + key hygiene), always ------------------------------------
 
       # --- finalizer: TOTAL unwind on any post-flag-write failure ----------------------
-      # Runs on every exit path. When the flag was written but the flip never concluded
+      # Runs on every exit path. When the flag was written (or a write was ATTEMPTED: the flag_write step
+      # marks before the write runs, so a write that landed and then failed its read-back still unwinds) but the flip never concluded
       # (cutover_at_written absent), the unwind is: flag off -> same-version redeploy ->
       # off-line readback (best-effort; it is the fail step's own assertion) ->
       # unfreeze -> gc restart. A runner kill never runs this — the resume arms
@@ -595,7 +600,7 @@ jobs:
           if [[ "$MODE" == "unfreeze" ]]; then
             # A failed unfreeze mode leaves the sentinel held; it is the only freeze_held source there.
             if [[ "${UNFREEZE_OUTCOME:-}" == "failure" ]]; then
-              echo "::error title=git-data-cutover finalizer::unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
+              echo "::error title=git-data-cutover finalizer::unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb, or the gc timer would not restart: gc_timer_restart_failed, sentinel already cleared)"
               echo "freeze_held=1" >> "$GITHUB_OUTPUT"
             fi
             exit 0
@@ -622,7 +627,7 @@ jobs:
             echo "::warning title=git-data-cutover finalizer::run ended mid-window — unwinding (flag off -> redeploy -> unfreeze -> gc restart)"
           fi
           unwind_failed=0
-          if [[ "$MODE" == "flip" && -f "$prog/flag_written" && -n "${DOPPLER_TOKEN_GIT_DATA_FLAG:-}" ]]; then
+          if [[ "$MODE" == "flip" && ( -f "$prog/flag_written" || -f "$prog/flag_write_attempted" ) && -n "${DOPPLER_TOKEN_GIT_DATA_FLAG:-}" ]]; then
             echo "finalizer: writing GIT_DATA_STORE_ENABLED=false"
             if printf 'false' | DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" \
               doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd >/dev/null 2>&1; then
@@ -654,7 +659,7 @@ jobs:
               bash apps/web-platform/infra/git-data-cutover.sh; then
               echo "finalizer: freeze cleared, gc.timer restarted"
             else
-              echo "::error::finalizer: unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
+              echo "::error::finalizer: unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb, or the gc timer would not restart: gc_timer_restart_failed, sentinel already cleared)"
               echo "freeze_held=1" >> "$GITHUB_OUTPUT"
               unwind_failed=1
             fi
@@ -663,7 +668,7 @@ jobs:
           if [[ "$MODE" == "rollback" && ! -f "$prog/cutover_at_written" ]]; then
             if ! MODE=unfreeze CUTOVER_LINEAGE="cutover-${{ github.run_id }}" \
               bash apps/web-platform/infra/git-data-cutover.sh; then
-              echo "::error::finalizer: rollback unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
+              echo "::error::finalizer: rollback unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb, or the gc timer would not restart: gc_timer_restart_failed, sentinel already cleared)"
               echo "freeze_held=1" >> "$GITHUB_OUTPUT"
               unwind_failed=1
             fi
@@ -767,9 +772,9 @@ jobs:
           case "$RESULT" in failure|cancelled|success|skipped) ;; *) RESULT=unknown ;; esac
           case "$RUN_ID" in ''|*[!0-9]*) echo "::error::run id is not numeric"; exit 1 ;; esac
           words=""; swords=""; remedy_needed=0
-          if [ "${FREEZE_HELD:-}" = 1 ]; then words="$words FREEZE_HELD"; swords="$swords FREEZE_HELD"; remedy_needed=1; fi
+          if [ "${FREEZE_HELD:-}" = 1 ]; then words="$words FREEZE_HELD (sentinel still held, or the gc timer would not restart: the unfreeze step log names the verdict gc_timer_restart_failed, and a mode=unfreeze re-dispatch converges)"; swords="$swords FREEZE_HELD"; remedy_needed=1; fi
           if [ "${RECOVERY_FAILED:-}" = 1 ]; then words="$words RECOVERY_FAILED"; swords="$swords RECOVERY_FAILED"; remedy_needed=1; fi
-          if [ "${PROBE_FAILED:-}" = 1 ]; then words="$words PROBE_FAILED (erasure probe; residue_left is named in the probe step log)"; swords="$swords PROBE_FAILED"; fi
+          if [ "${PROBE_FAILED:-}" = 1 ]; then words="$words PROBE_FAILED (erasure probe; the probe step log names the verdict: old_store_unmounted, store_not_on_mapper, store_unverified or cutover_frozen mean the host store was not verifiable and the push and remove were not attempted, re-verify with mode=proof; residue_left means a synthetic repository survived)"; swords="$swords PROBE_FAILED"; fi
           if [ -z "$words" ]; then
             if [ "$RESULT" = failure ] && [ "${FINALIZER_RAN:-}" = 1 ]; then
               words=" the run failed and its finalizer ran: it reported no stranded freeze and no partial unwind. Read the failing step in the run log."
