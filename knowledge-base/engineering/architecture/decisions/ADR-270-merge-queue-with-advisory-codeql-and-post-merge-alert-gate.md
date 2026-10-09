@@ -172,7 +172,7 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      a queued PR through its own queue gate and stops on an unreadable queue read; `MAX_POLL_MIN` still
      caps a PR whose required checks never settle or whose state keeps flapping (any tick that is not
      a wait tick restarts the idle count). Every unreadable answer falls toward today's sync in the fence (the standalone script's rules read is the one
-     exception, see the 2026-10-09 addendum): a failed
+     new exception, see the 2026-10-09 addendum): a failed
      rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
      ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
      rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook are not

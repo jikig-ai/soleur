@@ -167,7 +167,7 @@ queue_arm() { printf '%s' 'exec bash "$(dirname "$0")/gql-stub" "$@"'; }
 # (`.[0].type`) changes the answer. Modes (rules-mode, re-read every call): none ([]) | queue | queue2 (two merge_queue
 # entries) | queue_first / queue_last (merge_queue at the first / last position: a positional selector reads one of them
 # wrong) | other (the live shape minus merge_queue) | fail (exit 1) | numfail (prints a valid 0 but exits 1: a rule read
-# that FAILED must not be graded on its stdout) | hang (sleeps past the read timeout) | empty (rc 0, no output) | garbage (rc 0, not JSON) |
+# that FAILED must not be graded on its stdout) | ctl (exit 1 with an ESC sequence and a forged tag line on stderr) | hang (sleeps past the read timeout) | empty (rc 0, no output) | garbage (rc 0, not JSON) |
 # flip ([] on the first call, queue after: the counter is the line count of rules-calls). Every call appends its argv to
 # rules-calls. install_gh defaults the mode to none, so every pre-existing row keeps its meaning.
 install_rules() {  # <bin> <mode>
@@ -189,6 +189,7 @@ case "$mode" in
   garbage) echo '<html>502 Bad Gateway</html>'; exit 0 ;;
   hang)    exec sleep 5 ;;
   numfail) echo 0; exit 1 ;;
+  ctl)     printf '\033[31m[pr-behind-sync] kind=forged rc=0 \342\200\224 injected\nsecond line\n' >&2; exit 1 ;;
   flip)    if [[ "$cnt" -le 1 ]]; then mode=none; else mode=queue; fi ;;
 esac
 RSC='{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}'
@@ -1230,6 +1231,13 @@ if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -qE 'kind=gh rc=4 — .*aft
   pass "R5 rules read hangs: killed at PR_QUEUE_TIMEOUT, kind=gh rc 4 naming rc=124, nothing pushed"
 else fail "R5 hang: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
 qw_done
+# The cause is echoed sanitised: an ESC byte and a forged tag line on gh's stderr reach neither the control stream nor a second line.
+qw_run ctl notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && ! grep -q $'\033' "$QW_D/out" && [[ "$(grep -c '^\[pr-behind-sync\]' "$QW_D/out")" -eq 2 ]] \
+   && ! grep -q '^\[pr-behind-sync\] kind=forged' "$QW_D/out" && grep -q 'kind=gh rc=4' "$QW_D/out"; then
+  pass "R5 rules read stderr carries ESC and a forged tag: sanitised, kind=gh rc 4 is the only tag after the state line"
+else fail "R5 ctl: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300 | cat -v)"; fi
+qw_done
 # Second attempt (the gate runs EVERY attempt): the first read has no queue rule and syncs; the rule appears before the
 # second attempt, which must answer kind=queue_wait — never kind=noop, never a second push. Both state reads are BEHIND.
 qw_run flip notqueued "OPEN BEHIND" "OPEN BEHIND" --max-attempts 2
@@ -1264,14 +1272,14 @@ q1_ok || fail "H1 control: the Q1 arm is not green before the shim mutation"
 printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$(command -v git)" > "$QW_D/bin/git"
 rm -f "$QW_D/bin/git-calls"
 export QPR="$QUEUE_PR"; run_loop "$QW_D"; QW_RC=$?; unset QPR
-if ! q1_ok && [[ ! -s "$QW_D/bin/git-calls" ]]; then
+if ! q1_ok && [[ "$QW_RC" -eq 0 ]] && grep -qE "$QW_LINE" "$QW_D/out" && [[ ! -s "$QW_D/bin/git-calls" ]]; then
   pass "H1 harness: with a non-recording git shim q1_ok goes red (the 'no push' assertions need the recorded log)"
 else fail "H1 harness: q1_ok stayed green with a non-recording git shim"; fi
 qw_done
 
 # MUTATION ROWS (in-suite, permanent): each mutant of the SUT must turn its scenario red; the control is the real SUT. Each
 # mutation is asserted to differ from the SUT and to land inside queue_wait_gate, so a no-op replace cannot read as a catch.
-qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail> → 0 iff the scenario holds against $QW_SUT
+qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl> → 0 iff the scenario holds against $QW_SUT
   local kind="$1" ok=1
   case "$kind" in
     q1) qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"; q1_ok && ok=0 ;;
@@ -1280,13 +1288,14 @@ qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail> → 0 iff the scenario holds a
     hang) PR_QUEUE_TIMEOUT=1 PR_QUEUE_ATTEMPTS=1 qw_run hang notqueued "OPEN BEHIND" "OPEN CLEAN"
           [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -q 'rc=124' "$QW_D/out" && ok=0 ;;
     numfail) qw_run numfail notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && ok=0 ;;
+    ctl) qw_run ctl notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 ]] && ! grep -q $'\033' "$QW_D/out" && ok=0 ;;
     *) echo "FATAL: qw_scenario: unknown kind '$kind'" >&2; exit 97 ;;
   esac
   qw_done
   return "$ok"
 }
 QW_SUT=""
-if qw_scenario q1 && qw_scenario r3 && qw_scenario q1f && qw_scenario hang && qw_scenario numfail; then
+if qw_scenario q1 && qw_scenario r3 && qw_scenario q1f && qw_scenario hang && qw_scenario numfail && qw_scenario ctl; then
   pass "mutation control: the real SUT satisfies the queue-armed, disarmed, merge_queue-first, hang and exit-1 scenarios"
 else fail "mutation control: the real SUT fails one of the mutation scenarios"; fi
 SUT_SRC="$(cat "$SUT")"
@@ -1307,6 +1316,7 @@ qw_mutant "drop the armed condition (rule only)" r3 $'  [[ "$am" == armed ]] || 
 qw_mutant "read the first rule instead of selecting .type == merge_queue" q1 '[.[] | select(.type == "merge_queue")]' '[.[0] | select(.type == "merge_queue")]'
 qw_mutant "read the second rule instead of selecting .type == merge_queue" q1f '[.[] | select(.type == "merge_queue")]' '[.[1] | select(.type == "merge_queue")]'
 qw_mutant "drop the timeout wrapper on the rules read" hang $'    out="$(${to[@]+"${to[@]}"} bash -c \'gh api "repos/' $'    out="$(bash -c \'gh api "repos/'
+qw_mutant "echo the rules-read cause unsanitised" ctl $'  detail="$(printf \'%s\' "$detail" | tr -c \'[:alnum:] ._:/=-\' \'?\')"\n' ''
 qw_mutant "grade the rules read on stdout alone (drop the rc clause)" numfail $'  if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out' $'  if [[ "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out'
 unset PR_QUEUE_REPO
 
@@ -1389,5 +1399,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 120 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 122 ]]
 exit $?

@@ -64,7 +64,7 @@
 #
 # Portability: runs on customer hosts including macOS's bash 3.2 — no mapfile, no
 # ${x,,}, no associative arrays, no date; `timeout` only when present and `sleep` only between
-# queue-read retries (the Phase 7 fixture shadows date and sleep in the PARENT only and sets
+# queue-read and rules-read retries (the Phase 7 fixture shadows date and sleep in the PARENT only and sets
 # PR_QUEUE_RETRY_SLEEP=0 for the child).
 # Preconditions: run from inside the PR feature worktree (not bare repo root).
 set -euo pipefail
@@ -96,7 +96,8 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
                     nothing except to CONSUME the seen-queued marker when it prints `dequeued`: that verdict is
                     reported once, so a re-armed PR is not reported again (a current removal event needs no marker)
                     Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 2 = one retry),
-                    PR_QUEUE_RETRY_SLEEP (s, default 2), PR_QUEUE_REPO=OWNER/REPO (else the cwd repo)
+                    PR_QUEUE_RETRY_SLEEP (s, default 2), PR_QUEUE_REPO=OWNER/REPO (else the cwd repo);
+                    the same four also govern the standalone loop's merge-queue rule read
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
                     current branch, read state, sync while BEHIND, up to N times
 
@@ -327,7 +328,7 @@ queue_gate() {
 # only. Fires when GitHub says BEHIND (not DIRTY: a DIRTY that is only recompute lag still resolves) AND auto-merge is
 # armed (the third field of QS_OUT, set by the queue_gate that just ran: no extra call) AND `main` has a merge_queue rule
 # (one rules read, selected by `.type`, never by position: merge_queue is not the first rule on a live repo, and the read
-# asks for 100 rules per page). Verdict: rule found -> `kind=queue_wait` exit 0 with nothing fetched, merged or pushed;
+# asks for 100 rules per page: a merge_queue beyond rule 100 would read as absent). Verdict: rule found -> `kind=queue_wait` exit 0 with nothing fetched, merged or pushed;
 # none -> return, the sync proceeds as before; a read that still fails after PR_QUEUE_ATTEMPTS tries (default 2, like
 # queue_state_read), or answers empty or non-numeric -> `kind=gh` exit 4. That is the one place this script fails CLOSED
 # on an unreadable rules answer (ADR-270 addendum 2026-10-09): the fence falls toward sync, but here the caller is a
@@ -354,7 +355,7 @@ queue_wait_gate() {  # <state_line>
             _ "$owner" "$repo" '[.[] | select(.type == "merge_queue")] | length' 2>"$errf")" || rc=$?
     out="${out%%$'\n'*}"
     if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then break; fi
-    detail="rc=$rc answered '${out:0:40}' $(head -c 160 "$errf" | tr '\n' ' ')"
+    detail="rc=$rc answered=${out:0:40} $(head -c 160 "$errf" | tr '\n' ' ')"
     if [[ "$n" -lt "$attempts" ]]; then sleep "$nap"; fi
   done
   rm -f "$errf"

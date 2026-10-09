@@ -96,8 +96,8 @@ export function behindSyncInstructions(harness: Harness): string {
     default:
       return [
         "**BEHIND/DIRTY resync**",
-        `- Exception (first): when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) the PR is waiting for GitHub to enqueue it — keep polling; never merge origin/main into it, push, update-branch or --admin it until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit. This holds for a BEHIND reading only (a conflicting DIRTY PR still needs its sync). The script itself answers \`kind=queue_wait\` (exit 0, nothing synced) for that PR: a wait, not a failure.`,
-        `- Otherwise, mergeStateStatus \`BEHIND\` or \`DIRTY\` → merge origin/main into the branch and push before continuing (DIRTY only when the local merge is clean — run \`${script} <PR-number>\`). Use the Phase 7 loop; never write your own poll loop — on a harness without a Monitor tool, run that block itself inside the waiting subagent or shell.`,
+        `- Exception (first): when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) the PR is waiting for GitHub to enqueue it — keep polling; never merge origin/main into it, resync-push, update-branch or --admin it (a fix commit for a red check is fine) until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit. This holds for a BEHIND reading only (a conflicting DIRTY PR still needs its sync). The script itself answers \`kind=queue_wait\` (exit 0, nothing synced) for that PR: a wait, not a failure.`,
+        `- Otherwise, mergeStateStatus \`BEHIND\` or \`DIRTY\` → run \`${script} <PR-number>\` from the PR worktree (fetch → merge origin/main → push; DIRTY only when the local merge is clean; it refuses an armed BEHIND PR on a merge-queue repo with \`kind=queue_wait\`, so never hand-merge instead). Use the Phase 7 loop; never write your own poll loop — on a harness without a Monitor tool, run that block itself inside the waiting subagent or shell.`,
       ].join("\n");
   }
 }
