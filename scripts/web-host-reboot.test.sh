@@ -1114,6 +1114,9 @@ mk_sandbox() { # <dir>
   cp "$ROOT/apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh" "$d/apps/web-platform/infra/"
   cp "$ROOT/apps/web-platform/infra/web-host-reboot-workflow.test.sh" "$d/apps/web-platform/infra/"
   mkdir -p "$d/knowledge-base/engineering/operations/runbooks"; cp "$ROOT/knowledge-base/engineering/operations/runbooks/web-host-reboot.md" "$d/knowledge-base/engineering/operations/runbooks/"
+  # the actions/reboot census (#9175) counts this workflow as a third write site; the sandbox needs it
+  # for the unmutated control to be green
+  mkdir -p "$d/.github/workflows"; cp "$ROOT/.github/workflows/inngest-provision-rehearsal.yml" "$d/.github/workflows/"
 }
 static_red() { # <sandbox> -> the number of static conditions that are red in it
   local sb="$1" n=0 f
