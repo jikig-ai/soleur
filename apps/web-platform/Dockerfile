@@ -126,20 +126,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
-# #5863 arm F — file-cap bwrap for the mountns-only outer session wrap. The
-# outer wrap deliberately carries ZERO --unshare-* flags: the vendored inner
-# sandbox unconditionally unshares user+pid+net and cannot nest under an
-# outer userns (measured 2026-10-08; see
-# knowledge-base/project/plans/2026-10-08-feat-tenant-fs-isolation-plan.md
-# Phase 0). setcap grants mount privilege transiently at bwrap exec; it needs
-# SYS_ADMIN in the container bounding set (cloud-init `docker run` gains
-# `--cap-add SYS_ADMIN`) and the app drops it from effective/permitted. The
-# getcap audit is load-bearing: any OTHER file-cap'd binary in the image
-# becomes an app-side SYS_ADMIN carrier — keep the set {bwrap} only.
-RUN setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap
-# The {bwrap}-only audit runs at the END of the runner stage (below), after
-# every later install layer — a cap binary introduced by gh/playwright/
-# Playwright-deps would otherwise escape a mid-build audit (review F4).
+# #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
+# --unshare-* flags: the vendored inner sandbox unconditionally unshares
+# user+pid+net and cannot nest under an outer userns (measured 2026-10-08;
+# see knowledge-base/project/plans/2026-10-08-feat-tenant-fs-isolation-plan.md
+# Phase 0). NOTE: the file-cap elevation arm was reverted — released bwrap
+# (0.8–0.12) DIES on `real_uid != 0 && has_caps()`; upstream has no file-cap
+# support, so a cap'd /usr/bin/bwrap is poison to every bwrap call in the
+# container (v0.333.1 canary_sandbox_failed). Elevation arm is a follow-up
+# decision (setuid is the only non-userns path upstream supports).
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
 # and event-ship-merge gh pr checkout). Not in default Debian repos.
@@ -344,20 +339,17 @@ COPY --from=builder \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 
-# #5863 arm F — the {bwrap}-only file-cap audit, AFTER every install layer.
-# Fail-closed: a setcap/getcap failure or an unexpected cap'd binary aborts
-# the build; the prior `... || true` shape swallowed failures into a green
-# image whose bwrap silently fell to the implicit-userns path at runtime.
+# File-cap audit, AFTER every install layer. Fail-closed: ANY file-cap'd
+# binary aborts the build. Two reasons it stays with the setcap reverted:
+#   1. released bwrap refuses to run when it carries file caps (see the
+#      comment above), so a stray cap grant on bwrap — from a base-image or a
+#      transitive package — would silently break every sandbox invocation;
+#   2. with SYS_ADMIN out of the bounding set a cap'd binary is inert today,
+#      but it becomes an escalation carrier the moment any elevation arm
+#      lands — keep the invariant "zero file-cap'd binaries" instead.
 RUN set -e; \
     all="$(getcap -r /)"; \
-    bwrap_caps="$(printf '%s\n' "$all" | grep '^/usr/bin/bwrap ' || true)"; \
-    [ -n "$bwrap_caps" ] \
-      && printf '%s' "$bwrap_caps" | grep -q cap_sys_admin \
-      && printf '%s' "$bwrap_caps" | grep -q cap_setuid \
-      && printf '%s' "$bwrap_caps" | grep -q cap_setgid \
-      || { echo "FATAL: bwrap file caps not applied: $bwrap_caps" >&2; exit 1; }; \
-    others="$(printf '%s\n' "$all" | grep -v '^/usr/bin/bwrap ' || true)"; \
-    [ -z "$others" ] || { echo "FATAL: unexpected file-cap binary: $others" >&2; exit 1; }
+    [ -z "$all" ] || { echo "FATAL: unexpected file-cap binaries: $all" >&2; exit 1; }
 
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
 RUN useradd --no-log-init --uid 1001 -m soleur \
