@@ -2309,7 +2309,7 @@ jobs:
           terraform show -json tfplan-all > tfplan-all.json
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
           if ! inngest_backstop_retire_gate tfplan-all.json "$RETIRE_PHASE" "$EXPECTED_INNGEST_VOLUME_ID" untargeted; then
-            echo "::error::untargeted plan REFUSED: the host and LUKS pair must be present no-ops, the retire addresses inside this phase's set, nothing may carry the live volume id. Unrelated drift is ignored here."
+            echo "::error::untargeted plan REFUSED: the host and LUKS pair must be present no-ops, the retire addresses inside this phase's set, nothing may carry the live volume id. A pending change on the web-1 set or the LUKS key pair also refuses: resolve it first."
             terraform show -no-color tfplan-all | grep -E 'will be (created|destroyed|updated)|must be replaced|Plan:' | head -30 >&2
             exit 1
           fi
@@ -2453,7 +2453,7 @@ jobs:
             destroy)
               if [[ "$VC" != 404 && "$APPLY" == skipped ]]; then note "destroy not applied: a gate refused before the apply (GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} answered ${VC})"; exit 0; fi
               [[ "$VC" == 404 ]] || fail "GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} answered ${VC}, expected 404"
-              note "GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} -> 404 at $(date -u +%Y-%m-%dT%H:%M:%SZ) (apply completed just before)"
+              note "GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} -> 404 at $(date -u +%Y-%m-%dT%H:%M:%SZ) ($([[ "$APPLY" == success ]] && echo 'apply completed just before' || echo 'no apply ran in this dispatch'))"
               if [[ "$(hz 'servers?name=soleur-inngest' "${RUNNER_TEMP}/srv-rb.json")" != 200 ]] || ! jq -e --arg v "$_IBRG_LIVE_ID" '[.servers[0].volumes[] | tostring] == [$v]' "${RUNNER_TEMP}/srv-rb.json" >/dev/null; then fail "inngest server volumes != [${_IBRG_LIVE_ID}]"; fi
               note "server volumes == [${_IBRG_LIVE_ID}]"
               doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan-rb -var="ssh_key_path=${CI_SSH_PUB}" > /dev/null || fail "read-only untargeted plan failed"

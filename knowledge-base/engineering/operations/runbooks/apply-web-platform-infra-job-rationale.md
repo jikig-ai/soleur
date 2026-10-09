@@ -562,7 +562,7 @@ attach. The `resources` shape of those actions is documented but UNMEASURED for 
 run; if it differs the precondition fails closed (`no_wipe_attach`) and the D4 path is the way through.
 E-3 tightens it: the attach must finish at or after max(the run start, the latest attach of the volume to the LIVE
 server) (`live_reattached` when the volume went back to the live host after every non-live attach), and the matched
-wiped row's INGEST time (Better Stack's top-level `dt`; the `dt` inside `raw` is sender-supplied and never read) must
+wiped row's time (the top-level `dt` column; the `dt` inside `raw` is never read; whether the column is Better Stack's receive time or the sender's own `dt` is unmeasured for this emitter) must
 lie between that attach and the first later detach, 300 s slack each side (`row_outside_attach_window`). This
 corroborates that a host held the volume while the row was posted; it does not prove the overwrite happened, and a
 holder of the ingest token can still post a row inside a real attach..detach window. Erasure remains self-attested.
@@ -652,9 +652,10 @@ RETIRE JOB RUN-BODY NOTES (moved from the inngest_backstop_retire job; the job k
   DETECTIVE, not preventive (the state write has happened when the list diff is checked): the diff must be exactly
   the one address. With the volume already gone (404) refreshing the attachment may drop the volume with it, so the
   delta {attachment, volume} is accepted for that one case and the volume address is queued too.
-- Wipe evidence poll: 20 minutes of wall clock, capped at JOB_START+1800 s (ten minutes before the job's own
-  timeout), hot window only (--no-archive); a query error is printed with its rc and the first 300 bytes of stderr.
-  Every Better Stack-derived string printed to the run log passes inngest_backstop_clean.
+- Wipe evidence poll: 20 minutes of wall clock, capped at JOB_START+1800 s (fifteen minutes before the job's own
+  45-minute timeout; JOB_START is stamped after checkout and credentials), hot window only (--no-archive); a query error is printed with its rc and the first 300 bytes of stderr.
+  Every Better Stack-derived string the poll and the destroy precondition print passes inngest_backstop_clean
+  (the live-store gate prints two probe fields mid-line, escaped by @tsv).
 - Teardown: `enabled=false` deletes any SUBSET of exactly the two wipe addresses; the gate allows nothing else.
   Teardown skips the live-store gate and the untargeted plan (a leaked wipe host must always be cleanable).
 

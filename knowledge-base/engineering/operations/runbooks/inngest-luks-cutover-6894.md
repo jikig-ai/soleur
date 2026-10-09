@@ -357,7 +357,10 @@ deadline is PR B merged, not the destroy: the encryption-posture lint fails an e
 3. **First measurements (UNMEASURED until the first real `wipe` run).** The 10 GiB size, the by-id
    device naming (`scsi-0HC_Volume_<id>`), the 300 s wait for the device link and the on-host duration
    have never run against a real Hetzner volume. The expectation is a few minutes on the host (an
-   estimate of 4 to 10 minutes, not a measurement), inside a 20-minute wall-clock poll. A fifth
+   estimate of 4 to 10 minutes, not a measurement), inside a 20-minute wall-clock poll. One more
+   item, `dt`, is just as unmeasured: the wipe host's POST carries its own top-level `dt`, so the
+   window check may compare the sender's clock, not Better Stack's receive time (measure with
+   `SELECT dt, ingest_time, raw`). A fifth
    assumption is just as unmeasured: **the guest hostname equals the server name
    `soleur-inngest-backstop-wipe`**. The evidence funnel pins the row's `host` to that name and its
    `shipper` to `inngest-backstop-wipe`. If the hostname differs, the wipe itself completes but every
@@ -507,7 +510,7 @@ size, and Hetzner's own action history for the volume corroborates it. The corro
 specific. The time floor is the later of the wipe run's start and the finish of the latest successful
 `attach_volume` of 106261946 to the live Inngest host (169426216), if any. A successful `attach_volume`
 to a server that is neither the live host nor absent must have finished after that floor; no attach to
-the live host may have finished after it; the `wiped` row's Better Stack ingest time must fall between
+the live host may have finished after it; the `wiped` row's top-level `dt` (receive time or the wipe host's own clock: unmeasured for this emitter) must fall between
 that attach's finish and the first later successful `detach_volume`'s finish, with 300 s of slack either
 side; and no live attachment of 106261946 exists. **What this proves and does not:** Hetzner records an
 attach and a later detach of the volume by a non-live server. That corroborates that a host held the

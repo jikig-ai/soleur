@@ -624,3 +624,14 @@ mutation if the shape differs.
 
 D1 through D4 of the 2026-10-08 addendum, the decision, its encryption mechanism, or the earlier
 amendments. Nothing here states that the volume has been wiped, detached or destroyed.
+
+## Addendum — 2026-10-09 (#8285, verification seat)
+
+> **Clarifies E9 and the round-2 "ingest time" wording above.** The row time the window check reads is
+> the top-level `dt` column. The wipe host's POST carries its own top-level `dt`, so whether Better
+> Stack keeps it or stamps its receive time is **unmeasured** for this emitter (the Vector-shipped
+> source measured in #8759 does not predict it). Until the first real wipe measures it
+> (`SELECT dt, ingest_time, raw`), the row-time window is a plausibility bound on a self-attested time,
+> not independent evidence; the independent evidence is Hetzner's action history. Also: an untargeted
+> plan now refuses on pending drift of the web-1 set or the LUKS key pair (`named_live_touched`), and
+> the wipe attachment create is pinned off the live server like its delete.

@@ -297,3 +297,9 @@ These add to both earlier lists.
 - [ ] The days-to-expiry gap is recorded as it stood: the property probe's daily comment never carried
       a days-to-expiry line, because PR A did not edit the probe. PR B's pre-deletion checklist notes
       this rather than adding the line to a script it is about to delete.
+
+> **Clarification 2026-10-09 (#8285, verification seat):** wherever this record says the wipe row's
+> "ingest time" or "Better Stack top-level time" lies in the Hetzner attach..detach window, read "top-level
+> `dt` column": the wipe host sends its own `dt`, so it may be the sender's clock, not Better Stack's
+> receive time. This is unmeasured until the first real wipe. The window check is a plausibility bound;
+> Hetzner's action history is the independent evidence.

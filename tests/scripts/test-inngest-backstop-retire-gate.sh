@@ -338,6 +338,8 @@ write_plan "${WSRV_CREATE_N},${WATT_CREATE}"
 chk "Row 12g: wipe, the server to CREATE is named soleur-inngest (the live host) => wipe_server_identity" 1 "reason=wipe_server_identity" wipe "$PIN" targeted
 write_plan "${WSRV_CREATE_NONAME},${WATT_CREATE}"
 chk "Row 12h: wipe, the server create carries no name => wipe_server_identity" 1 "reason=wipe_server_identity" wipe "$PIN" targeted
+write_plan "${WSRV_CREATE},$(ent 'hcloud_volume_attachment.inngest_backstop_wipe[0]' '["create"]' null "{\"volume_id\":${PIN},\"server_id\":169426216}")"
+chk "Row 12j: wipe, the attachment to CREATE is bound to the LIVE server (after.server_id) => wipe_server_identity" 1 "reason=wipe_server_identity" wipe "$PIN" targeted
 write_plan "${WSRV_DEL_N},${WATT_DEL},${VOL_DEL},${LIVE_SET}"
 chk "Row 12i: the same name mismatch is refused in the UNTARGETED teardown plan too => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" untargeted
 write_plan "${WSRV_CREATE},${WATT_CREATE}"
@@ -431,6 +433,8 @@ write_plan "${WSRV_DEL},${WATT_DEL_LIVE}"
 mut "MUT wipe_server_identity: the attachment's server comparison dropped" 's/(bsrv == null or bsrv == \$lives)/(bsrv == null)/' teardown "$PIN" targeted
 write_plan "${WSRV_CREATE_N},${WATT_CREATE}"
 mut "MUT wipe_server_identity: the create's name comparison dropped" 's/(aname != \$wname)/false/' wipe "$PIN" targeted
+write_plan "${WSRV_CREATE},$(ent 'hcloud_volume_attachment.inngest_backstop_wipe[0]' '["create"]' null "{\"volume_id\":${PIN},\"server_id\":169426216}")"
+mut "MUT wipe_server_identity: the attachment create's live-server comparison dropped" 's/elif \$c == "watt_create" then (asrv == \$lives)/elif $c == "watt_create" then false/' wipe "$PIN" targeted
 write_plan "${VOL_DEL},${LIVE_SET},$(ent 'hcloud_server.web["web-1"]' '["update"]')"
 mut "MUT named_live_touched (untargeted, E-4)" "$(ZERO nlt)" destroy "$PIN" untargeted
 write_plan "${VOL_DEL},$(ent 'hcloud_volume.git_data' '["create"]' null)"
@@ -1934,7 +1938,7 @@ fi
 
 # ── Anti-vacuity: EXACT floors. The assertion total and the executed must-PASS arms are pinned to the numbers this suite
 #    produces; adding or deleting a row means raising or lowering them in the SAME edit. ──
-EXPECTED_TOTAL=660
+EXPECTED_TOTAL=662
 EXPECTED_MP=77
 _ran=$((passes + fails))
 if [[ "$mp" -ne "$EXPECTED_MP" ]]; then fails=$((fails + 1)); printf '  FAIL ANTI-VACUITY: %s must-PASS arms executed and passed, expected exactly %s (a guard stuck at "reject everything" would hide in the gap)\n' "$mp" "$EXPECTED_MP" >&2

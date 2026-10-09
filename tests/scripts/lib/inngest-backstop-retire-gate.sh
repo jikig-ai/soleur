@@ -110,6 +110,7 @@ inngest_backstop_retire_gate() {
       def bname: scal(try .change.before.name catch null);
       def aname: scal(try .change.after.name catch null);
       def bsrv: scal(try .change.before.server_id catch null);
+      def asrv: scal(try .change.after.server_id catch null);
       def is_wsrv: (.address == "hcloud_server.inngest_backstop_wipe" or .address == "hcloud_server.inngest_backstop_wipe[0]");
       def is_watt: (.address == "hcloud_volume_attachment.inngest_backstop_wipe" or .address == "hcloud_volume_attachment.inngest_backstop_wipe[0]");
       def cat:
@@ -153,6 +154,7 @@ inngest_backstop_retire_gate() {
         | if   $c == "wsrv_del"    then (bname != $wname or bid == null or bid == $lives)
           elif $c == "wsrv_create" then (aname != $wname)
           elif $c == "watt_del"    then (bsrv == null or bsrv == $lives)
+          elif $c == "watt_create" then (asrv == $lives)
           else false end;
       $p[0] as $plan
       | ($plan.resource_changes // []) as $rc
@@ -305,8 +307,9 @@ inngest_backstop_live_store_gate() {
 # impossible. The wipe path therefore ALSO requires Hetzner's own action history (a party the ingest token
 # does not reach): an attach_volume to a server that is not the live one, finished at or after
 # max(the wipe run's start, the latest attach of the volume to the live server), no attach to the live
-# server after it, and a later detach_volume; and the matched wiped row's INGEST time (Better Stack's
-# top-level dt, never the sender-supplied dt inside raw) must fall between that attach and that detach
+# server after it, and a later detach_volume; and the matched wiped row's time (the top-level dt column,
+# never the dt inside raw; the wipe host also POSTs a top-level dt, so whether Better Stack keeps it or
+# stamps its receive time is UNMEASURED: a plausibility bound on a self-attested time) must fall between that attach and that detach
 # (300 s slack each side). That corroborates that a host held the volume while a row was posted; it
 # does NOT prove the overwrite happened, and a holder of the ingest token can still post a row inside a
 # real attach..detach window. Erasure remains self-attested. The provider-only path (D4) is a TWO-PERSON
@@ -413,12 +416,12 @@ inngest_backstop_destroy_precondition() {
 # so every criterion has its OWN reason: marker (anchored at the message start, a row that merely
 # QUOTES the marker is not evidence) -> emitter (the host and shipper the wipe host's payload carries)
 # -> nonce == the wipe dispatch's run id -> result=wiped readback=zero sig_after=none -> volume_id and
-# size_bytes == Hetzner's -> ingest time not before the floor and not in the future -> (destroy only)
-# ingest time inside the Hetzner attach..detach window. ANY row surviving every filter counts: a later
+# size_bytes == Hetzner's -> row time not before the floor and not in the future -> (destroy only)
+# row time inside the Hetzner attach..detach window. ANY row surviving every filter counts: a later
 # `refused` row does not hide it, and neither does a `prior=blank` re-entry row (a re-run that found the
 # device already blank is itself a `wiped` row and qualifies as evidence).
-# THE ROW TIME is Better Stack's own top-level `dt` column (ingest time). The `dt` inside `raw` is
-# written by the sender and is never read. Key=value tokens are FIRST-wins. The emitter and nonce checks
+# THE ROW TIME is the top-level `dt` column; the `dt` inside `raw` is never read. UNMEASURED: the wipe
+# host's POST carries its own top-level `dt`, so the column may be the sender's clock, not receive time. Key=value tokens are FIRST-wins. The emitter and nonce checks
 # make STALE or REPLAYED rows fail; the row is still SELF-ATTESTED (a holder of the shared ingest token
 # could forge one), which is why the destroy precondition also requires Hetzner's action history.
 # Guest-side logical erasure, not physical.

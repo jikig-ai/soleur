@@ -41,7 +41,9 @@ write_files:
       # device_absent refusal, never a write), the 300 s wait for the link, and that the guest
       # hostname equals the server name (the evidence row's `host`, which the destroy gate pins; if
       # it differs every row reads emitter_mismatch while the wipe itself completes, and the
-      # poll output shows the rows). The first wipe is the first measurement of all four; the
+      # poll output shows the rows), and whether Better Stack keeps this POST's top-level `dt` or
+      # stamps receive time (the destroy gate's row-time window reads that column). The first wipe
+      # is the first measurement of all of them; the
       # evidence rows carry the observed values.
       LC_ALL=C; export LC_ALL
 
