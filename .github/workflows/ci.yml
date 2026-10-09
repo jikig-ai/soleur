@@ -12,10 +12,10 @@ on:
   # `rule-body-lint`, `grok-fidelity`, `credential-path-guard`) must run on
   # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of
   # them or that required context never reports → the queue entry stalls pending
-  # forever. Since ADR-276 S2 (#9512) the heavy jobs, incl. `test` and `e2e`, DO carry an event-aware `if:` whose condition
-  # names merge_group positively and is true on every event except an elided push (see `push-dedupe`); all others run
-  # unconditionally. This is a
-  # non-exhaustive example list, not the authority; required-checks.txt is.
+  # forever. Since ADR-276 S2 (#9512) the heavy jobs, incl. `test` and `e2e`, DO carry an event-aware `if:` whose
+  # condition names merge_group positively and is true on every event except an elided push (see `push-dedupe`);
+  # all others run unconditionally. The example list above is non-exhaustive and not the authority;
+  # required-checks.txt is.
   # `tc-document-sha-guard` additionally
   # receives `MERGE_GROUP_BASE_SHA` so its T&C TC_VERSION-bump bypass still works
   # on the candidate (github.base_ref is empty on merge_group). `detect-changes`
@@ -124,8 +124,10 @@ jobs:
   # push-dedupe (ADR-276 S2, #9512): skip the second full run of this workflow on a push to main when an
   # identical-SHA merge_group run of this same workflow already passed. A COST lever, allowed to fail in one
   # direction only: any unknown (variable not exactly `on`, any API error, no match, a non-success conclusion,
-  # a re-run) runs the full battery. The run still concludes `success` because this job and the ungated cheap
-  # guards run, so the deploy arm (web-platform-release.yml, workflow_run) sees what it sees today.
+  # a re-run) runs the full battery. The run still concludes `success` because this job is `continue-on-error`
+  # (below), so the deploy arm (web-platform-release.yml, workflow_run) sees what it sees today. The ungated cheap
+  # guards only keep an elided run from being all-skipped. A failing job shows as a red check on a green run and
+  # pages nobody: the soak probe (scripts/followthroughs/ci-push-dedupe-soak-9512.sh) counts those failures.
   #
   # DARK UNTIL ACTIVATED: with the repository variable CI_PUSH_DEDUPE unset, this job only annotates
   # `would_elide` and every gated job runs. Activation is a separate, authorized step (see the ADR-276 S2 amendment).
@@ -1746,8 +1748,9 @@ jobs:
     needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe]
     if: ${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads six leg `needs.*.result` strings (push-dedupe is a seventh, non-leg need the body never reads) (measured
-    # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
+    # Bounds a HUNG job (#7902). This job only reads six leg `needs.*.result` strings (push-dedupe is a seventh,
+    # non-leg need the body never reads) (measured p50 0.05 min) and runs no suite, so 10 minutes cannot fire
+    # before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
     # byte-unchanged from before the shard (#7902 AC5) ... which is what proves matrix legs roll

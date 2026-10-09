@@ -80,6 +80,8 @@ fi
 passes=$_p0; fails=$_f0; FAILURES=()
 
 # ── Pinned expectations (the design's reading of the wrapper) ────────────────
+# The condition tail every gated job carries, written ONCE here: chk.py, the parity rows and the mutants all derive from it.
+ELIDE_TAIL="(github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true')"
 GATED_PINNED="e2e shard-totality-mutations test test-bun test-scripts test-scripts-heavy test-webplat web-platform-build"
 # sha256 of the `test` aggregator job minus its `needs` and `if`, as json.dumps(sort_keys=True), measured
 # on the unmodified tree before this stage (the aggregator body, env, timeout and runner must not move).
@@ -117,8 +119,9 @@ mode, path = sys.argv[1], sys.argv[2]
 GATED = os.environ.get("GATED_PINNED", "").split()
 UNGATED = os.environ.get("UNGATED_PINNED", "").split()
 AGG = os.environ.get("AGG_DIGEST", "")
-CANON = {"test": "${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"}
-CANON_DEFAULT = "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
+TAIL = os.environ["ELIDE_TAIL"]
+CANON = {"test": "${{ always() && " + TAIL + " }}"}
+CANON_DEFAULT = "${{ !cancelled() && " + TAIL + " }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "SHA", "EVENT_NAME", "REF", "RUN_ATTEMPT", "SWITCH"}
 
 def load():
@@ -273,7 +276,7 @@ if mode == "aggbody":
 sys.stderr.write("unknown mode\n"); sys.exit(2)
 PY
 
-chk() { GATED_PINNED="$GATED_PINNED" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
+chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
 
 # ── Helper: the gh shim ──────────────────────────────────────────────────────
 cat > "$SANDBOX/shim/gh" <<'SH'
@@ -530,11 +533,11 @@ live_check WRAPPER wrapper
 live_check "GATED" gated
 live_check "TRUTH TABLE" truth
 live_check AGGREGATOR agg
-# the canonical condition is restated by two pre-existing suites' carve-outs; each copy must still equal ci.yml's
-for pair in "plugins/soleur/test/ci-e2e-skip-anchors.test.sh|!cancelled()" "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh|always()"; do
-  f="${pair%%|*}"; fn="${pair#*|}"
-  lit="$fn && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true')"
-  if [ "$(grep -cF -- "$lit" "$REPO_ROOT/$f")" -ge 1 ]; then pass; else fail "PARITY: $f no longer carries the canonical condition ($lit)"; fi
+# the canonical condition is restated by two pre-existing suites' carve-outs; each ASSIGNMENT must still equal ci.yml's
+# (the needle starts at the assignment head, so a comment or prose copy of the literal cannot satisfy it)
+for pair in "plugins/soleur/test/ci-e2e-skip-anchors.test.sh|E2E_ELIDE_IF=\"if: \\\${{ !cancelled() && " "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh|_ALLOWED_IF = (\"always()\", \"\${{ always() && "; do
+  f="${pair%%|*}"; lit="${pair#*|}$ELIDE_TAIL"
+  if [ "$(grep -cF -- "$lit" "$REPO_ROOT/$f")" -eq 1 ]; then pass; else fail "PARITY: $f no longer carries the canonical condition in its assignment ($lit)"; fi
 done
 
 # the proof demands only the `test` job: that is sound only while the aggregator concludes red on a
@@ -669,7 +672,7 @@ mutate_yml() {
     *) fail "MUTANT $name: checker $cmode did not report $want (got: ${got:0:160})" ;;
   esac
 }
-COND_DEFAULT="if: \${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
+COND_DEFAULT="if: \${{ !cancelled() && $ELIDE_TAIL }}"
 mutate_yml y-no-coe "        continue-on-error: true
         timeout-minutes: 2
 " "        timeout-minutes: 2
@@ -686,7 +689,7 @@ mutate_yml y-success-fn "  test-bun:
     needs: [push-dedupe]
     $COND_DEFAULT" "  test-bun:
     needs: [push-dedupe]
-    if: \${{ success() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}" truth TT:test-bun
+    if: \${{ success() && $ELIDE_TAIL }}" truth TT:test-bun
 mutate_yml y-no-event-disjunct "  test-bun:
     needs: [push-dedupe]
     $COND_DEFAULT" "  test-bun:
@@ -715,6 +718,56 @@ mutate_yml y-agg-tolerate "              skipped)
                 echo \"\$shard: SKIPPED — the leg did not run\" >&2" "              skipped)
                 fail=0
                 echo \"\$shard: SKIPPED — the leg did not run\" >&2" agg A-DIGEST
+# the checker tags that only a yml mutant can reach (each one is dead code if no row trips it)
+mutate_yml y-no-job-coe "    continue-on-error: true
+    runs-on: ubuntu-latest
+" "    runs-on: ubuntu-latest
+" wrapper W-JOBCOE
+mutate_yml y-runs-on "    runs-on: ubuntu-latest
+    timeout-minutes: 3
+" "    runs-on: macos-latest
+    timeout-minutes: 3
+" wrapper W-RUNSON
+mutate_yml y-xtrace-off-gone "          set +x
+" "" wrapper W-NOXTRACEOFF
+mutate_yml y-unclassified "
+  credential-path-guard:
+" "
+  new-heavy-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+
+  credential-path-guard:
+" gated G-UNCLASSIFIED:new-heavy-job
+mutate_yml y-dependent "
+  credential-path-guard:
+" "
+  dep-job:
+    needs: [test-bun]
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+
+  credential-path-guard:
+" gated G-DEPENDENT:dep-job
+mutate_yml y-reexport "
+  credential-path-guard:
+" "
+  reexport-job:
+    runs-on: ubuntu-latest
+    outputs:
+      elide: \${{ needs.push-dedupe.outputs.elide }}
+    steps:
+      - run: true
+
+  credential-path-guard:
+" gated G-REEXPORT:reexport-job
+mutate_yml y-ungated-gone "
+  credential-path-guard:
+" "
+  credential-path-guard-renamed:
+" gated G-GONE:credential-path-guard
 
 # the coupling row itself must go red when the aggregator tolerates a skipped leg
 cp "$SANDBOX/live/agg.sh" "$SANDBOX/mut/agg-tol.sh" 2>/dev/null
@@ -732,8 +785,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 40 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN killing mutants ran (floor 40), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+if [ "$MUT_RUN" -ge 47 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 47), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -742,7 +795,7 @@ else fail "MUTANT FLOOR: $MUT_RUN killing mutants ran (floor 40), $EQUIV_OK of $
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=132
+_FLOOR=139
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

@@ -6,13 +6,18 @@
 #       completed `success` merge_group run with the same head SHA. "Elided" is read from the run's job
 #       conclusions (`push-dedupe` success and every `test-scripts` job skipped), never from the
 #       `ci-push-dedupe` annotation, which could fail to emit and would blind the probe.
-#       Evaluated on EVERY sweep, before any NOT YET: a wrong elision is reported within a day.
+#       Evaluated on EVERY sweep once the PR is merged and the tracker is found, before any NOT YET: a wrong
+#       elision is reported within a day.
 #   (b) the mean runner-bound job-minutes over the trailing sample of push runs since activation (the newest
 #       MAX_RUNS, at most 100: about 4 days at 25 runs a day), elided or not, is at most 29.08 per run (20% of the
 #       145.41 baseline, ADR-276 S2 amendment). Computed here from the jobs API (the census refuses live mode in
 #       CI) with the census's counted-job definition: conclusion not skipped, runner_id a positive number, both
 #       timestamps set, completed not before started. Metered job-seconds, not billed minutes (ADR note).
 #   (c) at least MIN_ELIDED (10) elided runs and MIN_DAYS (7) days since activation.
+#   Also on every sweep, activated or not: a `push-dedupe` job that fails (conclusion failure or timed_out) in more
+#   than 20% of the sampled push runs (and at least 5 sampled) is a FAIL. The job is `continue-on-error`, so a
+#   failing job leaves a red check on a GREEN run and pages nobody: this is the detection path, up to one sweep
+#   (a day) late. A failed dedupe costs a full battery, never a skipped one, so safety is unaffected.
 #   (d) an `S2-EXIT-CENSUS: https://...` comment on the tracker from a repository owner, member or collaborator:
 #       the sweeper closes the tracker itself on exit 0, so a pass without the exit census attached would close
 #       the stage without its evidence.
@@ -21,16 +26,21 @@
 # that read would sit at CANNOT ESTABLISH forever. The activating agent comments `S2-ACTIVATED: <UTC ISO time>`
 # (the variable's updated_at) on the tracker; `S2-DEACTIVATED: <UTC ISO time>` ends it. Only comments by an
 # OWNER, MEMBER or COLLABORATOR count, so a drive-by commenter on a public repo can neither activate nor close.
+# Post each marker as a plain line under the operator's own identity: a marker posted by a bot (github-actions) has
+# no such association and is ignored (an activation nobody recorded then fails loud through the early-elision FAIL).
+# The marker's own timestamp orders markers, not the comment's created_at.
 # With no activation on record, an elided run is a FAIL (an org-level variable, or a flip nobody recorded).
 # More than DEADLINE_DAYS (30) days after the S2 PR merged with no activation is exit 1: activate, or revert.
-# More than DEADLINE_DAYS days after activation with too few elided runs is exit 1: the proof is not eliding
+# DEADLINE_DAYS or more whole days after activation with too few elided runs is exit 1: the proof is not eliding
 # (read the `would-elide` step conclusions and the `::warning reason=proof_error` annotations).
-# Two repo checks run on every sweep: an elided run while ADR-276 still reads `proposed` is a FAIL (activation
-# needs the `adopting` flip), and the proof suite must still be registered in scripts/test-all.sh (CODEOWNERS
-# cannot be assumed to bind; this probe is the detective control).
+# Two repo checks run on every sweep: an elided run while ADR-276 still reads `proposed` (compared case-
+# insensitively, quotes and a trailing `# note` stripped) is a FAIL (activation needs the `adopting` flip), and the
+# proof suite must still be registered in scripts/test-all.sh by a non-comment run_suite line (CODEOWNERS cannot be
+# assumed to bind, and a comment or echo naming the path is not a registration; this probe is the detective control).
 #
 # Exit semantics (sweep-followthroughs.sh contract):
-#   0 = PASS    1 = FAIL (a wrong elision, the mean over target, a deadline, or a deregistered proof suite)
+#   0 = PASS    1 = FAIL (a wrong elision, a failing push-dedupe job, the mean over target, a deadline, or a
+#               deregistered proof suite)
 #   2 = NOT YET (not activated, too few elided runs or days, or the exit census marker is missing)
 #   3 = CANNOT ESTABLISH (gh/jq/GH_TOKEN missing, or a GitHub API read failed: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
@@ -58,9 +68,12 @@ MAX_RUNS=100         # bounds API use: the sweeper token allows ~1000 requests/h
 IDLE_RUNS=10         # while nothing is activated only a wrong elision matters: a short sample is enough
 # 29.08 job-minutes per run, compared as integers: total_seconds * 100 <= 2908 * 60 * runs
 MEAN_LIMIT_HUNDREDTHS_MIN=2908
+MEAN_LIMIT_TEXT="29.08"
+PD_MIN_SAMPLE=5      # push-dedupe failures are judged only over at least this many sampled runs, and fail above 20%
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test seams (the sweeper runs this under env -i, so they are inert in production)
-ADR_GLOB="${SOAK_ADR_FILE:-$HERE/../../knowledge-base/engineering/architecture/decisions/ADR-276-*.md}"
+ADR_FILE_OVERRIDE="${SOAK_ADR_FILE:-}"
+ADR_DIR="$HERE/../../knowledge-base/engineering/architecture/decisions"
 TEST_ALL="${SOAK_TEST_ALL:-$HERE/../test-all.sh}"
 
 for need in gh jq; do
@@ -84,7 +97,7 @@ issues="$(api "repos/$REPO/issues?labels=follow-through&state=open&per_page=100"
           --jq "[.[] | select((.body // \"\") | contains(\"script=$DIRECTIVE_SCRIPT\")) | .number]")" || fail_api "follow-through issues"
 tracker="$(jq -r '.[0] // empty' <<<"$issues" 2>/dev/null)" || fail_api "tracker lookup"
 [ -n "$tracker" ] || { echo "NOT YET: the tracker issue carrying the $DIRECTIVE_SCRIPT directive was not found among open follow-through issues"; exit 2; }
-trusted="$(api "repos/$REPO/issues/$tracker/comments?per_page=100" \
+trusted="$(api --paginate "repos/$REPO/issues/$tracker/comments?per_page=100" \
            --jq '[.[] | select((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) | (.body // "")] | join("\n")')" \
   || fail_api "tracker $tracker comments"
 trusted="$(printf '%s' "$trusted" | tr -d '\r')"
@@ -102,12 +115,16 @@ fi
 
 # --- the repo checks that need no API: ADR status and the proof suite's registration ------------------------------------
 adr_file=""
-for f in $ADR_GLOB; do [ -f "$f" ] && { adr_file="$f"; break; }; done
-[ -n "$adr_file" ] || fail_api "ADR-276 file ($ADR_GLOB)"
-adr_status="$(sed -n 's/^status:[[:space:]]*//p' "$adr_file" | head -n 1 | tr -d '"')"
+if [ -n "$ADR_FILE_OVERRIDE" ]; then
+  [ -f "$ADR_FILE_OVERRIDE" ] && adr_file="$ADR_FILE_OVERRIDE"
+else
+  for f in "$ADR_DIR"/ADR-276-*.md; do [ -f "$f" ] && { adr_file="$f"; break; }; done
+fi
+[ -n "$adr_file" ] || fail_api "ADR-276 file"
+adr_status="$(sed -n 's/^status:[[:space:]]*//p' "$adr_file" | head -n 1 | sed 's/[[:space:]]*#.*$//' | tr -d "\"'[:space:]" | tr 'A-Z' 'a-z')"
 [ -n "$adr_status" ] || fail_api "ADR-276 status line"
 [ -r "$TEST_ALL" ] || fail_api "scripts/test-all.sh"
-suite_registered="$(grep -cF 'scripts/ci-push-dedupe.test.sh' "$TEST_ALL")"
+suite_registered="$(grep -cE '^[[:space:]]*run_suite[[:space:]].*scripts/ci-push-dedupe\.test\.sh' "$TEST_ALL")"
 
 # --- the sample: push runs since the PR merge (newest first) -----------------------------------------------------------------
 since_iso="$(date -u -d "@$merged_epoch" +%Y-%m-%dT%H:%M:%SZ)"
@@ -131,7 +148,7 @@ if [ -n "$oldest" ]; then
 fi
 
 # --- per run: elided? counted seconds ---------------------------------------------------------------------------------
-n=0; elided=0; total_s=0; wrong=0; wrong_list=""; early=0; early_list=""; seen=0; would=0; elided_any=0
+n=0; elided=0; total_s=0; wrong=0; wrong_list=""; early=0; early_list=""; seen=0; would=0; elided_any=0; pd_bad=0
 while IFS=$'\t' read -r id sha created; do
   [ -n "$id" ] || continue
   seen=$((seen + 1))
@@ -142,6 +159,9 @@ while IFS=$'\t' read -r id sha created; do
       | ([.jobs[]? | select(.name | test("^test-scripts( |$)"))] ) as $ts
       | if $pd > 0 and ($ts | length) > 0 and ($ts | all(.conclusion == "skipped")) then "yes" else "no" end' <<<"$jobs_json" 2>/dev/null)" \
     || fail_api "run $id jobs (parse)"
+  pd_failed="$(jq -r '[.jobs[]? | select(.name == "push-dedupe" and (.conclusion == "failure" or .conclusion == "timed_out"))] | length' <<<"$jobs_json" 2>/dev/null)" \
+    || fail_api "run $id push-dedupe (parse)"
+  [[ "$pd_failed" =~ ^[0-9]+$ ]] && [ "$pd_failed" -gt 0 ] && pd_bad=$((pd_bad + 1))
   proof_holds="$(jq -r '[.jobs[]? | select(.name == "push-dedupe") | .steps[]? | select(.name == "Proof holds for this SHA" and .conclusion == "success")] | length' <<<"$jobs_json" 2>/dev/null)" \
     || fail_api "run $id steps (parse)"
   secs="$(jq -r '[.jobs[]? | select(.conclusion != "skipped" and ((.runner_id | type) == "number") and .runner_id > 0 and .started_at and .completed_at)
@@ -180,19 +200,23 @@ if (( elided_any > 0 )) && [ "$adr_status" = "proposed" ]; then
   echo "FAIL: $elided_any push run(s) were elided while ADR-276 still reads 'proposed': activation requires the CTO flip to 'adopting' (unset CI_PUSH_DEDUPE until then)"
   exit 1
 fi
+if (( seen >= PD_MIN_SAMPLE && pd_bad * 5 > seen )); then
+  echo "FAIL: the push-dedupe job failed in $pd_bad of $seen sampled push runs (more than 20%): it is continue-on-error, so the runs stay green and nothing else reports it; read the job's logs and the ci-push-dedupe warning annotations, and unset CI_PUSH_DEDUPE if activated (a failed dedupe means a full battery, never a skipped one)"
+  exit 1
+fi
 if (( ! active )); then
   if (( NOW - merged_epoch > DEADLINE_DAYS * 86400 )); then
     echo "FAIL: more than $DEADLINE_DAYS days since PR $S2_PR merged and no activation is on record on #$tracker: activate, or revert the push-dedupe job (ADR-276 S2 stop rule)"
     exit 1
   fi
-  echo "NOT YET: not activated (no trusted S2-ACTIVATED comment on #$tracker); $seen recent push run(s) sampled, 0 elided"
+  echo "NOT YET: not activated (no trusted S2-ACTIVATED comment on #$tracker); $seen recent push run(s) sampled, 0 elided, push_dedupe_failed=$pd_bad"
   exit 2
 fi
 
 # --- active: counts and age ------------------------------------------------------------------------------------------
 age_days=$(( (NOW - act_epoch) / 86400 ))
 mean="n/a"; (( n > 0 )) && mean="$(awk -v s="$total_s" -v n="$n" 'BEGIN { printf "%.2f", s / n / 60 }')"
-echo "activated=$last_on trailing_push_runs=$n elided=$elided would_elide_runs=$would age_days=$age_days mean_job_min_per_run=$mean limit=29.08 adr_status=$adr_status"
+echo "activated=$last_on trailing_push_runs=$n elided=$elided would_elide_runs=$would age_days=$age_days mean_job_min_per_run=$mean adr_status=$adr_status push_dedupe_failed=$pd_bad/$seen limit=$MEAN_LIMIT_TEXT"
 if (( elided < MIN_ELIDED || age_days < MIN_DAYS )); then
   if (( age_days >= DEADLINE_DAYS )); then
     echo "FAIL: $age_days days since activation and only $elided elided run(s) (need >= $MIN_ELIDED): the proof is not eliding; read the push-dedupe job's 'Proof holds for this SHA' step conclusions and the ci-push-dedupe warning annotations (reason=proof_error / no_mg_success) in recent push runs"
@@ -203,8 +227,8 @@ if (( elided < MIN_ELIDED || age_days < MIN_DAYS )); then
 fi
 
 # --- (b) the cost criterion over ALL sampled push runs, in exact integers -----------------------------------------------
-if (( n == 0 )) || (( total_s * 100 > MEAN_LIMIT_HUNDREDTHS_MIN * 60 * n )); then
-  echo "FAIL: mean $mean job-minutes per push run is over 29.08 (20% of the 145.41 baseline) across the trailing $n run(s), elided or not; the stage did not pay: apply the ADR-276 S2 stop rule"
+if (( total_s * 100 > MEAN_LIMIT_HUNDREDTHS_MIN * 60 * n )); then
+  echo "FAIL: mean $mean job-minutes per push run is over $MEAN_LIMIT_TEXT (20% of the 145.41 baseline) across the trailing $n run(s), elided or not; the stage did not pay: apply the ADR-276 S2 stop rule"
   exit 1
 fi
 
@@ -213,5 +237,5 @@ if (( census_marked == 0 )); then
   echo "NOT YET: criteria (a)-(c) hold ($elided elided, $age_days days, mean $mean) but tracker #$tracker has no 'S2-EXIT-CENSUS: https://github.com/...' comment from an owner, member or collaborator; attach the exit census (plan PM-4)"
   exit 2
 fi
-echo "PASS: $elided elided push run(s) over $age_days days, every one vouched by a green merge_group run, mean $mean job-min per push run (limit 29.08), exit census attached on #$tracker"
+echo "PASS: $elided elided push run(s) among the trailing $n sampled over $age_days days, each vouched by a green merge_group run, mean $mean job-min per push run (limit $MEAN_LIMIT_TEXT), exit census attached on #$tracker"
 exit 0
