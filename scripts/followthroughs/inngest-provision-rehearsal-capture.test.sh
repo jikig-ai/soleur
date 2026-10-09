@@ -21,9 +21,10 @@ TMP="$(mktemp -d -t ipcap.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
 passes=0
+fails=0
 FAILURES=()
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
-fail() { FAILURES+=("$1"); printf '  FAIL %s\n' "$1"; [[ -n "${2:-}" ]] && printf '       %s\n' "$2" >&2; return 0; }
+fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf '  FAIL %s\n' "$1"; [[ -n "${2:-}" ]] && printf '       %s\n' "$2" >&2; return 0; }
 
 printf '\n=== inngest-provision-rehearsal-capture ===\n\n'
 
@@ -267,9 +268,13 @@ run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-since.json" -- "${BASE_ARGS[@]}" --mode phase-a --since "$SINCE_BOUND" --out "$TMP/ev-since.env"
 
 # ── floors (ADR-193): the ledger, never a bare counter ────────────────────────
+# `fails` is a scalar counter for exactly this floor: the vacuity guard's mutant slice
+# initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
+# `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
+# must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
 MIN=19
-if (( passes + ${#FAILURES[@]} < MIN )); then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + ${#FAILURES[@]}))" "$MIN" >&2
+if (( passes + fails < MIN )); then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1
 fi
 printf '\n=== %s passed, %s failed ===\n\n' "$passes" "${#FAILURES[@]}"
