@@ -471,6 +471,10 @@ def cmd_static(render):
     envblk = [s for _, s in L if re.match(r'^env\s+"INNGEST_CLI_VERSION=', s)]
     chk("G4: the bootstrap env list passes the literal \"DOPPLER_PROJECT=soleur-inngest\"",
         any(re.search(r'(^|\s)"DOPPLER_PROJECT=soleur-inngest"(\s|$)', s) for s in envblk), "env lines=%d" % len(envblk))
+    # #9175: on the RENDER (what this suite reads) the template arg has already resolved, so the
+    # prod-render invariant is "DOPPLER_CONFIG=prd" — the rehearsal render carries its scratch name.
+    chk("G4: the bootstrap env list passes the resolved \"DOPPLER_CONFIG=prd\" (#9175 — prod renders prd; rehearsal renders rehearsal_<runid>)",
+        any(re.search(r'(^|\s)"DOPPLER_CONFIG=prd"(\s|$)', s) for s in envblk), "env lines=%d" % len(envblk))
     guards = [x for x in its if "WRITE_GUARD_EOV" in x and "[!A-Za-z0-9._:/-]" in x and re.search(r"\bexit 1\b", x)]
     chk("G4: both credential files are charset-guarded before they are written (inngest-doppler, soleur-zot-read)",
         len(guards) == 2 and any("zot-read-write-REFUSED" in g for g in guards)
@@ -1017,7 +1021,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=160
+C0_EXPECTED=161
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1226,7 +1230,7 @@ ls = lines(); ls[d[0] + 1:d[0] + 1] = [ind(d[0]) + "DIAG2=\"$(env -i doppler sec
 row G4-r4 RED "G4: HOME=/root reaches the unit environment" '
 del_line("Environment=HOME=/root"); raw_rep("printf \x27HOME=/root\\nDOPPLER_TOKEN=", "printf \x27DOPPLER_TOKEN="); save()'
 row G4-r5 RED "G4: the bootstrap env list passes the literal" '
-rep_line("\"DOPPLER_PROJECT=soleur-inngest\" \\", "\"DOPPLER_PROJECT=soleur\" \\"); save()'
+rep_line("\"DOPPLER_PROJECT=soleur-inngest\" \"DOPPLER_CONFIG=prd\" \\", "\"DOPPLER_PROJECT=soleur\" \"DOPPLER_CONFIG=prd\" \\"); save()'
 row G4-r6 PASS - '
 ins_after("Environment=HOME=/root", ["Environment=DOPPLER_ENABLE_VERSION_CHECK=false"]); save()'
 
@@ -1276,7 +1280,7 @@ row G7-r3 RED "no 'parameter not set' in stderr" '
 f = one(ISO_PASSED); e = one("fi", after=f)
 ls = lines(); ls[e + 1:e + 1] = [ind(e) + "echo \"$DOPPLER_PROJECT_OVERRIDE\" >/dev/null"]; put(ls); save()'
 row G7-r4 RED "TA T2: exits 0" '
-raw_rep("DOPPLER_TOKEN=%s\\nDOPPLER_CONFIG_DIR=/tmp/.doppler\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n\x27 \x27", "DOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n\x27 \x27"); save()'
+raw_rep("DOPPLER_TOKEN=%s\\nDOPPLER_CONFIG_DIR=/tmp/.doppler\\nDOPPLER_ENABLE_VERSION_CHECK=false\\nDOPPLER_CONFIG=prd\\n\x27 \x27", "DOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n\x27 \x27"); save()'
 row G7-r5 PASS - '
 ins_after("attempt=0", [": \"${SOLEUR_PU_UNSET_OK:-default}\""]); save()'
 

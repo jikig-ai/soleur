@@ -367,7 +367,7 @@ write_files:
       vals+=("$(printf %s "$sdsn" | sed -E 's#https://([^@]+)@.*#\1#')")
       . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
       if [ -n "$DOPPLER_TOKEN" ]; then
-        while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config prd 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
+        while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config ${inngest_doppler_config} 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
       fi
       for s in "$${vals[@]}"; do
         [ -n "$s" ] && [ "$(printf %s "$s" | wc -c)" -ge 6 ] && data="$${data//"$s"/REDACTED}"
@@ -632,7 +632,7 @@ write_files:
       # reasoning does not cover it: Before= alone blocks, and a HANG is not a FAILURE, so the
       # script's own `exit 1` path is never reached. Every other host-path Doppler read in this
       # repo is `timeout`-wrapped; this was the outlier.
-      t="$(timeout 20 doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>/dev/null)"; drc=$?
+      t="$(timeout 20 doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config ${inngest_doppler_config} --plain 2>/dev/null)"; drc=$?
       if [ -z "$t" ]; then
         # LOUD, and non-zero so `systemctl is-active` disagrees too. Nothing Requires= this
         # unit, so a failure here cannot wedge the boot — it only makes the dead channel
@@ -932,7 +932,7 @@ write_files:
       # soleur-inngest/prd post-cutover FATALs the WHOLE bootstrap (not just Vector) — this is
       # desirable on a DARK host: a loud boot-brick beats a silent observability blind spot. The
       # check keys on the NAME, so value rotation is safe (the name persists across a rotate).
-      if doppler run --project soleur-inngest --config prd -- bash -s <<'CHKEOF'
+      if doppler run --project soleur-inngest --config ${inngest_doppler_config} -- bash -s <<'CHKEOF'
       set -euo pipefail
       names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
       n_total="$(printf '%s\n' "$names" | grep -c . || true)"
@@ -1189,7 +1189,7 @@ write_files:
       # (durable) boot, never hang the only path that installs the observability stack.
       # The token and HOME this doppler read needs come from the unit's EnvironmentFile= — before
       # #8562 they came, implicitly, from the isolation item's `set -a` in the shared runcmd shell.
-      DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+      DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config ${inngest_doppler_config} --plain 2>/dev/null || true)"
       # QUIESCE THE CUTOVER FSMs BEFORE EVERY BOOTSTRAP RUN (architecture P1). A retry after a late
       # failure or a timeout kill re-runs the bootstrap's `systemctl restart inngest-redis` /
       # `inngest-server` and re-enables the flip timer. If that lands while an operator's op=resume
@@ -1250,7 +1250,7 @@ write_files:
       /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run "attempt=$attempt iid=$IID"
       env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
           "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
-          "DOPPLER_PROJECT=soleur-inngest" \
+          "DOPPLER_PROJECT=soleur-inngest" "DOPPLER_CONFIG=${inngest_doppler_config}" \
           "INNGEST_DIAGNOSTIC_BOOT=$DIAG_BOOT" \
           "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256}" "VECTOR_CLI_ARCH=${inngest_cli_arch}" \
         bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1 &
@@ -1533,7 +1533,7 @@ runcmd:
       ''|*[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED "the Doppler token carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
     esac
     unset _wv
-  - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
+  - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_CONFIG=${inngest_doppler_config}\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
 
   # --- #7695: LUKS-at-rest for /mnt/data (the Redis AOF store) -------------------------
@@ -1567,7 +1567,7 @@ runcmd:
     set -a
     . /etc/default/inngest-doppler
     set +a
-    doppler run --project soleur-inngest --config prd -- bash -s <<'LUKSEOF'
+    doppler run --project soleur-inngest --config ${inngest_doppler_config} -- bash -s <<'LUKSEOF'
     set -euo pipefail
     # HEREDOC-LOCAL STAGE + TRAP. This is a CHILD of `doppler run`, so the parent's STAGE and
     # on_err do not cross the exec boundary — without a local trap a failed luksOpen and a
@@ -2004,7 +2004,7 @@ runcmd:
     # #6178 diag: capture WHY doppler reads fail on the host (works off-host w/ same token+env).
     # Probe api.doppler.com reachability (DNS/connect/http) + the doppler CLI's own stderr.
     api_probe="$(curl -sS -o /dev/null -w 'http=%%{http_code};ip=%%{remote_ip};dns=%%{time_namelookup}s;conn=%%{time_connect}s;curlrc=%%{exitcode}' --max-time 12 https://api.doppler.com/v3/me 2>&1 | head -c 160)"
-    derr="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>&1 1>/tmp/bstok)"; drc=$?
+    derr="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config ${inngest_doppler_config} --plain 2>&1 1>/tmp/bstok)"; drc=$?
     t="$(cat /tmp/bstok 2>/dev/null)"; rm -f /tmp/bstok
     if [ -n "$t" ]; then
       printf '%s' "$t" > /run/inngest-bs-logs-token; chmod 600 /run/inngest-bs-logs-token 2>/dev/null
@@ -2143,7 +2143,7 @@ runcmd:
   # dropped `--project`) resolve the dedicated project from EnvironmentFile at runtime. Literal
   # here (not $DOPPLER_PROJECT) — this cloud-init write runs BEFORE the bootstrap that would set
   # the shell var; the dedicated host is always soleur-inngest.
-  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\n' '${doppler_token}' > /etc/default/inngest-server )
+  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\nDOPPLER_CONFIG=${inngest_doppler_config}\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
 
   # --- #7695 probe_schema=3: the probe's Redis credential, and NOTHING else ----------------
@@ -2168,7 +2168,7 @@ runcmd:
     set -a
     . /etc/default/inngest-doppler
     set +a
-    _rp="$(doppler secrets get INNGEST_REDIS_PASSWORD --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+    _rp="$(doppler secrets get INNGEST_REDIS_PASSWORD --project soleur-inngest --config ${inngest_doppler_config} --plain 2>/dev/null || true)"
     if [ -n "$_rp" ]; then
       ( umask 0177 && printf 'INNGEST_REDIS_PASSWORD=%s\n' "$_rp" > /etc/default/inngest-probe )
       chown root:root /etc/default/inngest-probe

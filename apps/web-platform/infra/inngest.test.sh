@@ -144,9 +144,11 @@ HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTR
 # (e.g. "inngest-server.service's"), which break the single-quoted eval form.
 # #6555: the heartbeat unit dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a flag. The
-# ExecStart is `doppler run --config prd -- ${HEARTBEAT_SCRIPT}` with NO --project.
-assert "heartbeat unit uses doppler run --config prd with NO --project (#6555)" \
-  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE 'run --config prd' >/dev/null && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
+# ExecStart is `doppler run --config @@DOPPLER_CONFIG@@ -- ${HEARTBEAT_SCRIPT}` with NO
+# --project; #9175 made the config name a sentinel substituted from the bootstrap's
+# normalized `export DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd}"` (prd on prod).
+assert "heartbeat unit uses doppler run --config @@DOPPLER_CONFIG@@ with NO --project (#6555/#9175)" \
+  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE 'run --config @@DOPPLER_CONFIG@@' >/dev/null && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
 # #7695: the heredoc that renders this unit is now QUOTED, so the two values it needs arrive by
@@ -156,10 +158,12 @@ assert "heartbeat unit ExecStart is exactly one line" \
 # run --config prd") is still pinned rather than merely relocated.
 # Herestring, not a pipe: this file runs under pipefail, where `producer | grep -q` takes SIGPIPE
 # on an early match and fails the pipeline even though grep matched.
-assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config prd" \
-  "grep -qE '^ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@\$' <<<\"\$HEARTBEAT_BLOCK\""
+assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config @@DOPPLER_CONFIG@@ (#9175)" \
+  "grep -qE '^ExecStart=@@DOPPLER_BIN@@ run --config @@DOPPLER_CONFIG@@ -- @@HEARTBEAT_SCRIPT@@\$' <<<\"\$HEARTBEAT_BLOCK\""
 assert "the heartbeat sentinels are substituted after the heredoc (so the unit is not shipped with @@)" \
-  "(( \$(grep -cE 's\\|@@DOPPLER_BIN@@\\|.*s\\|@@HEARTBEAT_SCRIPT@@\\|' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
+  "(( \$(grep -cE 's\\|@@DOPPLER_BIN@@\\|.*s\\|@@HEARTBEAT_SCRIPT@@\\|.*s\\|@@DOPPLER_CONFIG@@\\|' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
+assert "DOPPLER_CONFIG default PRESERVES 'prd' (prod-render invariance, #9175)" \
+  "grep -qF 'export DOPPLER_CONFIG=\"\${DOPPLER_CONFIG:-prd}\"' \"\$BOOTSTRAP_SH\""
 assert "the render refuses to install a unit still carrying an unsubstituted sentinel" \
   "(( \$(grep -cF 'still carries an unsubstituted sentinel' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
 assert "heartbeat unit reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
@@ -2020,8 +2024,8 @@ assert "SDK_URL default PRESERVES the co-located loopback app route (web regress
   "grep -qF 'SDK_URL=\"\${SDK_URL:-http://127.0.0.1:3000/api/inngest}\"' \"\$BOOTSTRAP_SH\""
 # #6555: the server ExecStart dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a sentinel flag.
-assert "server ExecStart is doppler run --config prd with NO --project (#6555)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'run --config prd' >/dev/null && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
+assert "server ExecStart is doppler run --config @@DOPPLER_CONFIG@@ with NO --project (#6555/#9175)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'run --config @@DOPPLER_CONFIG@@' >/dev/null && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
 # No @@DOPPLER_PROJECT@@ SUBSTITUTION (`${var//@@DOPPLER_PROJECT@@/...}`) survives anywhere in the
 # bootstrap — a lingering render mechanism could silently re-introduce a hardcoded --project.
 # Anchored on the substitution syntax, NOT the bare sentinel (comments legitimately name it).
@@ -2244,8 +2248,8 @@ assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass 
 # #6555: the redis.service ExecStart dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime. The bootstrap installs
 # the unit verbatim (no @@DOPPLER_PROJECT@@ substitution round-trip).
-assert "redis.service runs under doppler run --config prd with NO --project (#6555)" \
-  "grep -qF 'doppler run --config prd' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$REDIS_SERVICE'"
+assert "redis.service runs under doppler run --config \${DOPPLER_CONFIG} with NO --project (#6555/#9175)" \
+  "grep -qF 'doppler run --config \${DOPPLER_CONFIG}' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$REDIS_SERVICE'"
 assert "redis.service reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
   "grep -qxF 'EnvironmentFile=/etc/default/inngest-server' '$REDIS_SERVICE'"
 assert "inngest-redis-bootstrap.sh no longer renders a @@DOPPLER_PROJECT@@ substitution (#6555)" \
@@ -2363,14 +2367,42 @@ assert "no ExecStart --project remains in inngest-bootstrap.sh units (#6555)" \
 # shellcheck disable=SC2034  # consumed inside the single-quoted predicate `assert` evals below,
 # which shellcheck cannot follow. Kept as a variable rather than inlined so the join runs once.
 CUTOVER_FLIP_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$CUTOVER_FLIP_SERVICE" | sed 's/\\$//' | tr -d '\n')"
-assert "inngest-cutover-flip.service ExecStart has NO --project, continuations joined (#6555/#7761)" \
-  "grep -qF 'doppler run --config prd' <<<\"\$CUTOVER_FLIP_EXEC\" && ! grep -qE 'ExecStart=.*--project' <<<\"\$CUTOVER_FLIP_EXEC\""
+assert "inngest-cutover-flip.service ExecStart has NO --project, continuations joined (#6555/#7761/#9175)" \
+  "grep -qF 'doppler run --config \${DOPPLER_CONFIG}' <<<\"\$CUTOVER_FLIP_EXEC\" && ! grep -qE 'ExecStart=.*--project' <<<\"\$CUTOVER_FLIP_EXEC\""
 assert "deploy-inngest-bootstrap.sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE '^Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$SUDOERS_SRC'"
 assert "cloud-init.yml inline sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE 'Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$CLOUD_INIT'"
 assert "ci-deploy.sh --preserve-env drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE 'preserve-env=.*DOPPLER_PROJECT' '$CI_DEPLOY'"
+
+echo ""
+echo "--- #9175: Doppler --config census on the inngest dedicated-host boot path ---"
+#
+# EVERY doppler `--config` flag site on the dedicated-host boot path resolves the config name
+# through a parameterization, never a literal name — the rehearsal host (inngest-provision-
+# rehearsal.tf) renders soleur-inngest/rehearsal_<runid> through the same files, and a literal
+# `--config prd` anywhere on this path would silently aim the throwaway host at PRODUCTION
+# secrets. Allowed forms, one per file class:
+#   cloud-init-inngest.yml          --config ${inngest_doppler_config}   (template arg; prod arg = "prd")
+#   inngest-bootstrap.sh emitted    --config @@DOPPLER_CONFIG@@  or  $DOPPLER_CONFIG  (provision-time)
+#   committed .service files        --config ${DOPPLER_CONFIG}           (systemd env substitution)
+#   scripts' own doppler calls      --config "${DOPPLER_CONFIG:-prd}" / "$DOPPLER_CONFIG"
+# A site carrying ANY other form — including a reverted literal `--config prd` — is an
+# unclassified site: RED, and the site must be enumerated here (the count is exact, so a NEW
+# site cannot slip in unlisted either).
+DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
+    "$SCRIPT_DIR/inngest-cutover-flip.sh" "$SCRIPT_DIR/inngest-luks-cutover.sh" \
+    "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE" \
+    "$SCRIPT_DIR/inngest-luks-cutover.service"; do
+    grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#'
+  done)"
+DCFG_N="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -c .)"
+DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inngest_doppler_config\}|@@DOPPLER_CONFIG@@|"?\$?\{?DOPPLER_CONFIG[^ ]*"?)' || true)"
+assert "inngest boot-path --config census is exactly 19 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '19' ]]"
+assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
+  "[[ -z \"\$DCFG_BAD\" ]]"
 
 echo ""
 echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep (class-closing) ---"

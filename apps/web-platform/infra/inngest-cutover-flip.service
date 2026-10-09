@@ -148,12 +148,15 @@ EnvironmentFile=/etc/default/inngest-server
 # timer retries in 30 seconds. Do NOT "fix" this by pointing DOPPLER_CONFIG_DIR at
 # StateDirectory= — that would persist an encrypted secret cache on disk to buy resilience the
 # retry already provides, inside the PR that exists to shrink this unit's secret exposure.
-# All flags sit AFTER `--config prd` so inngest.test.sh:1570-1571's contiguous-substring
-# assertion on `doppler run --config prd` still matches, and BEFORE the `--` so they are
-# doppler's flags rather than the script's arguments.
-ExecStart=/usr/bin/doppler run --config prd \
+# All flags sit AFTER `--config ${DOPPLER_CONFIG}` so the contiguous-substring assertion on
+# `doppler run --config ${DOPPLER_CONFIG}` in the pinning suite still matches, and BEFORE the
+# `--` so they are doppler's flags rather than the script's arguments. #9175: the config name
+# resolves from EnvironmentFile=/etc/default/inngest-server (DOPPLER_CONFIG) — systemd's plain
+# ${VAR} substitution; prod carries `prd`, the rehearsal host carries its scratch config.
+ExecStart=/usr/bin/doppler run --config ${DOPPLER_CONFIG} \
   --only-secrets INNGEST_CUTOVER_FLIP \
   --only-secrets INNGEST_REDIS_PASSWORD \
+  --only-secrets DOPPLER_CONFIG \
   --no-exit-on-missing-only-secrets \
   -- /usr/local/bin/inngest-cutover-flip.sh
 
