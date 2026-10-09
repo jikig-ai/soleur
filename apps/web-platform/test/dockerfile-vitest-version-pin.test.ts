@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import path from "node:path";
 import canaryConfig from "./vitest.canary.config";
+import { parseModule, specifiersOf } from "./helpers/ts-import-graph";
+import { stripComments } from "./helpers/strip-comments";
 
 // Drift guard (#2640): the vitest the deploy-time canary executes is a global
 // `npm install -g` in the Dockerfile `cli-tools` stage — NOT the devDependency
@@ -84,40 +87,56 @@ describe("Dockerfile vitest global-install pin parity", () => {
   });
 
   // Canary-config specifier pin (#9860): in the runner image vitest is a
-  // global `npm install -g` and /app has no `node_modules/vitest`, so a bare
+  // global `npm install -g` and /app has no `node_modules/vitest`, so a
   // specifier written into the config file resolves against nothing and the
   // whole probe fails at config-load with `[UNRESOLVED_IMPORT]` (suite-file
   // `vitest` imports resolve internally to the running install; config-file
-  // imports do not). The ban covers every specifier-resolution form, not just
-  // the `import` keyword: `export … from "x"` re-exports resolve identically,
-  // `import(…)` at any position, `require(…)`, and a `;`-separated `import`
-  // on a shared line. `import.meta` is excluded — it resolves no specifier.
-  // Type-space imports (`import type`, JSDoc `{import("x").T}`) are banned
-  // too: the pin reads text, not semantics, and the simpler invariant is the
-  // point.
-  it("test/vitest.canary.config.ts carries no specifier-resolution forms — the in-image run resolves nothing from the config file", () => {
-    const config = read("test/vitest.canary.config.ts");
-    const code = config
-      .split("\n")
-      .filter((l) => !/^\s*\/\//.test(l)) // drop whole-line comments; they legitimately name banned forms
-      .join("\n");
+  // specifiers do not). Extraction goes through the shared AST walker
+  // (helpers/ts-import-graph.ts › specifiersOf) — a regex would miss
+  // multiline `export {…} from`, comment-gapped and non-line-start forms;
+  // the walker covers import/export-from/import-equals/require()/import()
+  // and fails closed on non-literal arguments. Type-only clauses are erased
+  // by TypeScript and resolve nothing at runtime, so they are permitted —
+  // JSDoc `import("x")` types never reach here because comments are stripped
+  // by the parser (helpers/strip-comments.ts), not a regex.
+  it("test/vitest.canary.config.ts resolves zero specifiers — the in-image run can resolve none", () => {
+    const code = stripComments(
+      read("test/vitest.canary.config.ts"),
+      "vitest.canary.config.ts",
+    );
     // Vacuity floor: an empty or comment-only file satisfies every ban — the
     // file must still carry its export for the guard to mean anything.
     expect(code).toMatch(/export\s+default/);
+    const sf = parseModule("vitest.canary.config.ts", code);
+    expect(
+      specifiersOf(sf, { elideTypeOnlySpecifiers: true }),
+      "config file must contain zero specifier-resolution edges",
+    ).toEqual([]);
+    // Specifier-bearing channels the module graph does not model.
     const BANNED = [
-      /(^|;)\s*import(?![\w.])/m, // static/side-effect imports, incl. post-`;`
-      /\bimport\s*\(/, // dynamic import(), any position
-      /\bexport\b[^\n]*\bfrom\s*["']/, // re-export specifiers
-      /\brequire\s*\(/, // CJS specifier loads
+      /\bimport\.meta\.(?:resolve|glob)\s*\(/,
+      /\b(?:vi|vitest)\.(?:mock|doMock|importActual|importMock|hoisted)\s*\(/,
+      /\bnew\s+URL\s*\(\s*["'][^"']+["']\s*,\s*import\.meta\.url/,
     ] as const;
     for (const re of BANNED) expect(code).not.toMatch(re);
-    // Self-pin probes (guard-contract harness row): each predicate must fire
-    // on its own banned shape, or a weakened regex vacates the guard while
-    // staying green in both worlds.
-    expect('import { x } from "pkg"').toMatch(BANNED[0]);
-    expect('const m = await import("pkg")').toMatch(BANNED[1]);
-    expect('export { a } from "pkg"').toMatch(BANNED[2]);
-    expect('const r = require("pkg")').toMatch(BANNED[3]);
+    // Self-pin probes (guard-contract harness row): the extractor and each
+    // side-channel predicate must fire on their own banned shape, or a
+    // weakening stays green in both worlds.
+    for (const src of [
+      'import { x } from "pkg"',
+      'export {\n  a\n} from "pkg"',
+      'import "pkg"',
+      'const m = await import("pkg")',
+      'const r = require("pkg")',
+    ]) {
+      const sfs = parseModule("probe.ts", src);
+      expect(specifiersOf(sfs).length, `extractor must see ${src}`).toBe(1);
+    }
+    expect('import.meta.resolve("pkg")').toMatch(BANNED[0]);
+    expect('vi.mock("pkg")').toMatch(BANNED[1]);
+    expect('new URL("./x", import.meta.url)').toMatch(BANNED[2]);
+    // `import.meta` on its own resolves no specifier — must not trip.
+    expect("const u = import.meta.url;").not.toMatch(BANNED[0]);
   });
 
   // Exact-shape pin (#9860): dropping `defineConfig` also dropped
@@ -140,29 +159,41 @@ describe("Dockerfile vitest global-install pin parity", () => {
   });
 
   // Payload-specifier pin (#9860): the same unresolvable-module class applies
-  // one level down — a bare specifier in the suite or helper file resolves
-  // in-image only if it is a `node:` builtin, vitest-internal (`vitest`,
-  // `vitest/*`), a prod `dependencies` entry (`npm ci --omit=dev` prunes
-  // devDeps), or a relative path INSIDE the baked payload set. The payload
-  // list, the Dockerfile COPY set and the .dockerignore bang set are pinned
-  // to each other so a payload rename forces this test's list to move with it
-  // (a stale-file-persists rename would otherwise leave the guard green over
-  // a dead path).
+  // one level down — a specifier in the suite or helper file resolves
+  // in-image only if it is a builtin, vitest-internal (`vitest`, `vitest/*`),
+  // a prod `dependencies` entry (`npm ci --omit=dev` prunes devDeps), or a
+  // relative path INSIDE the baked payload set. The runner payload set is
+  // derived BOTH ways — test list == Dockerfile runner COPY set == banged
+  // .dockerignore set — so an added or renamed payload file forces this
+  // list to move with it.
   it("the canary payload's specifiers resolve in the runner image (builtins, vitest-internal, prod deps, in-payload relatives)", () => {
     const payload = [
       "test/vitest.canary.config.ts",
       "test/sandbox-isolation.test.ts",
       "test/helpers/sandbox-isolation-fixtures.ts",
-    ];
+    ].sort();
     const dockerfile = read("Dockerfile");
     const dockerignore = read(".dockerignore");
-    for (const p of payload) {
-      const esc = p.replace(/\./g, "\\.");
-      expect(dockerfile, `Dockerfile must COPY ${p} into the runner stage`).toMatch(
-        new RegExp(`COPY\\s+--from=builder\\s+/app/${esc}\\s+\\./${esc}`),
-      );
-      expect(dockerignore, `.dockerignore must re-include ${p}`).toContain(`!${p}`);
-    }
+    // The runner-stage COPY set and the .dockerignore bang set must equal the
+    // payload list in BOTH directions — a new COPY/bang without a payload
+    // entry, or a payload entry without either, is a RED.
+    const copySet = [
+      ...dockerfile.matchAll(
+        /^COPY\s+(?:--\S+\s+)*\/app\/(test\/\S+)\s+\.\/(test\/\S+)\s*$/gm,
+      ),
+    ].map((m) => ({ src: m[1], dst: m[2] }));
+    for (const { src, dst } of copySet)
+      expect(dst, `Dockerfile COPY must keep ${src} at its own path`).toBe(src);
+    expect(
+      copySet.map((c) => c.src).sort(),
+      "Dockerfile runner COPY set must equal the canary payload list",
+    ).toEqual(payload);
+    const bangSet = [
+      ...dockerignore.matchAll(/^!(test\/\S+)\s*$/gm),
+    ].map((m) => m[1]);
+    for (const p of payload)
+      expect(bangSet, `.dockerignore must re-include ${p}`).toContain(p);
+
     const deps = new Set(
       Object.keys(
         (JSON.parse(read("package.json")) as {
@@ -170,34 +201,68 @@ describe("Dockerfile vitest global-install pin parity", () => {
         }).dependencies ?? {},
       ),
     );
+    const depHit = (spec: string) =>
+      [...deps].some((d) => spec === d || spec.startsWith(`${d}/`));
+    const inPayload = (from: string, spec: string) => {
+      const resolved = path.posix.normalize(
+        path.posix.join(path.posix.dirname(from), spec),
+      );
+      // vitest/NodeNext tolerate `./x`, `./x.ts`, and `.js`→`.ts` spelling.
+      const candidates = [
+        resolved,
+        `${resolved}.ts`,
+        `${resolved}/index.ts`,
+        resolved.replace(/\.js$/, ".ts"),
+      ];
+      return candidates.some((c) => payload.includes(c));
+    };
+    const classify = (file: string, spec: string | null, argText = "") => {
+      if (spec === null)
+        return `${file} → non-literal specifier (${argText})`;
+      if (isBuiltin(spec) || spec === "vitest" || spec.startsWith("vitest/"))
+        return null;
+      if (spec.startsWith("."))
+        return inPayload(file, spec)
+          ? null
+          : `${file} → ${spec} (escapes payload)`;
+      return depHit(spec) ? null : `${file} → ${spec} (not a prod dependency)`;
+    };
+
     const unresolvable: string[] = [];
+    const literals: string[] = [];
     for (const rel of payload) {
-      const code = read(rel)
-        .split("\n")
-        .filter((l) => !/^\s*\/\//.test(l))
-        .join("\n");
-      const specRe =
-        /(?:import|export)\s[^'"]*?\bfrom\s*["']([^"']+)["']|(?:^|;)\s*import\s*["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']|\brequire\s*\(\s*["']([^"']+)["']/g;
-      for (const m of code.matchAll(specRe)) {
-        const spec = m[1] ?? m[2] ?? m[3] ?? m[4];
-        if (spec.startsWith("node:") || spec === "vitest" || spec.startsWith("vitest/"))
-          continue;
-        if (spec.startsWith(".")) {
-          const resolved = path.posix.normalize(
-            path.posix.join(path.posix.dirname(rel), spec),
-          );
-          const inPayload = payload.some(
-            (p) =>
-              resolved === p.replace(/\.ts$/, "") ||
-              `${resolved}.ts` === p ||
-              `${resolved}/index.ts` === p,
-          );
-          if (!inPayload) unresolvable.push(`${rel} → ${spec} (escapes payload)`);
-          continue;
-        }
-        const depHit = [...deps].some((d) => spec === d || spec.startsWith(`${d}/`));
-        if (!depHit) unresolvable.push(`${rel} → ${spec} (not a prod dependency)`);
+      const code = stripComments(read(rel), rel);
+      for (const s of specifiersOf(parseModule(rel, code))) {
+        const bad = classify(
+          rel,
+          s.kind === "literal" ? s.spec : null,
+          s.kind === "non-literal" ? s.argText : "",
+        );
+        if (bad) unresolvable.push(bad);
+        else if (s.kind === "literal") literals.push(s.spec);
       }
+      // Specifier-bearing call forms the module graph does not model:
+      // vi.mock/vi.importActual family, import.meta.glob/resolve, and
+      // `new URL("./x", import.meta.url)` (the release-#8136 class).
+      for (const m of code.matchAll(
+        /\b(?:vi|vitest)\.(?:mock|doMock|importActual|importMock|hoisted)\s*\(\s*["']([^"']+)["']|\bimport\.meta\.(?:resolve|glob)\s*\(\s*["']([^"']+)["']|\bnew\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url/g,
+      )) {
+        const spec = m[1] ?? m[2] ?? m[3];
+        const bad = classify(rel, spec);
+        if (bad) unresolvable.push(bad);
+        else literals.push(spec);
+      }
+    }
+    // Vacuity floor: the sweep must extract the payload's known imports —
+    // a broken extractor producing zero specifiers would pass `toEqual([])`
+    // vacuously.
+    for (const known of [
+      "vitest",
+      "node:crypto",
+      "@anthropic-ai/claude-agent-sdk",
+      "./helpers/sandbox-isolation-fixtures",
+    ]) {
+      expect(literals, `extractor must find ${known} (vacuity floor)`).toContain(known);
     }
     expect(unresolvable).toEqual([]);
   });
