@@ -76,11 +76,11 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
 // Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
 // same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
-// 278 -> 266 (#8285 PR B, -12): the "inngest-backstop-retire dispatch" describe (21 tests: registration, id-pin ordering,
+// 278 -> 266 (#8285 PR B, -12): the "inngest-backstop-retire dispatch" describe (17 tests: registration, id-pin ordering,
 // confirm literal, environment, phase gating, destroy preconditions, literal state-only -targets, mutex, timeout, strip,
 // ...) was replaced by a 5-test describe (G1 "stays retired" across every workflow, G1b deleted files/variables, B9 mutex
-// over the three surviving surfaces, B6, B5): the job those rows graded no longer exists. 21 -> 5 is -16; the floor
-// had 4 tests of slack, so it moves -12. Each deleted row's mutation, and what kills it now, is in the PR B plan
+// over the three surviving surfaces, B6, B5): the job those rows graded no longer exists. The floor is exact
+// (grep -cE '^\s*test\(' = 266). Each deleted row's mutation, and what kills it now, is in the PR B plan
 // (knowledge-base/project/plans/2026-10-09-chore-pr-b-retire-inngest-backstop-wipe-apparatus-plan.md).
 const TEST_FLOOR = 266;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
@@ -3499,20 +3499,23 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     // Quotes and a trailing comment are tolerated on every form: YAML accepts all of them, so a guard that
     // matches only the bare spelling is defeated by re-quoting the revert.
     const JOB = /^ {2}["']?inngest_backstop_retire["']?:[ \t]*(?:#.*)?$/m;
-    const OPTION = /^ {10}- ["']?inngest-backstop-retire["']?[ \t]*(?:#.*)?$/m;
-    const INPUT = /^ {6}["']?(expected_inngest_volume_id|phase|wipe_run_id|erasure|clo_attestation_ref)["']?:[ \t]*(?:#.*)?$/m;
+    const OPTION = /^ +- ["']?inngest-backstop-retire["']?[ \t]*(?:#.*)?$/m;
+    const INPUT = /^ +["']?(expected_inngest_volume_id|phase|wipe_run_id|erasure|clo_attestation_ref)["']?:[ \t]*(?:#.*)?$/m;
     // A retired address reaching terraform as -target / -replace, in either `=` or space form, in any job.
     const ADDR_FLAG = new RegExp(
-      `-(?:target|replace)[= ]["']?(?:${RETIRED_ADDRS.map((a) => a.replace(/\./g, "\\.")).join("|")})\\b`,
+      `-(?:target|replace)(?:=|\\s+)["']?(?:${RETIRED_ADDRS.map((a) => a.replace(/\./g, "\\.")).join("|")})\\b`,
     );
     // Non-vacuity: each pattern recognises the form it forbids, so an empty result is not a blind scan.
     expect(JOB.test("  inngest_backstop_retire:\n")).toBe(true);
     expect(JOB.test("  'inngest_backstop_retire': # x\n")).toBe(true);
     expect(OPTION.test("          - inngest-backstop-retire\n")).toBe(true);
+    expect(OPTION.test("      - inngest-backstop-retire\n")).toBe(true); // any indent
     expect(OPTION.test('          - "inngest-backstop-retire"\n')).toBe(true);
     expect(INPUT.test("      wipe_run_id:\n")).toBe(true);
     expect(INPUT.test("      phase:\n")).toBe(true);
     expect(ADDR_FLAG.test("-target=hcloud_server.inngest_backstop_wipe")).toBe(true);
+    // A line continuation between the flag and its operand is folded (as the census does) before the scan.
+    expect(ADDR_FLAG.test("-target \\\n  hcloud_server.inngest_backstop_wipe".replace(/\\\r?\n\s*/g, " "))).toBe(true);
     expect(ADDR_FLAG.test('-replace "hcloud_volume.inngest_redis"')).toBe(true);
     // The LIVE sibling must not match (the \b / name boundary is what keeps `inngest_redis_luks` legal).
     expect(ADDR_FLAG.test("-target=hcloud_volume.inngest_redis_luks")).toBe(false);
@@ -3528,11 +3531,11 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       expect(OPTION.test(text), `${f}: retired apply_target option`).toBe(false);
       // `phase` is a generic word: only the retired job's workflow could have carried it, so it is scoped to the
       // file the dispatch lived in; the other four inputs are unique to the retired job and scanned everywhere.
-      const inputRe = f === "apply-web-platform-infra.yml" ? INPUT : /^ {6}["']?(expected_inngest_volume_id|wipe_run_id|erasure|clo_attestation_ref)["']?:/m;
+      const inputRe = f === "apply-web-platform-infra.yml" ? INPUT : /^ +["']?(expected_inngest_volume_id|wipe_run_id|erasure|clo_attestation_ref)["']?:/m;
       expect(inputRe.test(text), `${f}: retired workflow_dispatch input`).toBe(false);
       expect(code, `${f}: confirm literal`).not.toContain("RETIRE-INNGEST-BACKSTOP");
       expect(text, `${f}: gate library`).not.toContain("inngest-backstop-retire-gate.sh");
-      expect(ADDR_FLAG.test(code), `${f}: retired address as -target/-replace`).toBe(false);
+      expect(ADDR_FLAG.test(code.replace(/\\\r?\n\s*/g, " ")), `${f}: retired address as -target/-replace`).toBe(false);
     }
     const all = extractAllTargets(wf);
     for (const addr of RETIRED_ADDRS) {
@@ -3553,7 +3556,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     for (const rel of GONE) expect(existsSync(resolve(REPO_ROOT, rel)), `${rel} was deleted by #8285 PR B`).toBe(false);
     const vars = stripComments(readFileSync(resolve(INFRA_DIR, "variables.tf"), "utf8"));
     expect(vars).toMatch(/variable "inngest_redis_volume_size"/); // non-vacuity: a live sibling variable is found
-    expect(vars).not.toMatch(/variable "inngest_backstop_/);
+    expect(vars).not.toMatch(/variable\s+"inngest_backstop_/);
   });
 
   test("B9: inngest_host, inngest_host_replace and cutover-inngest share ONE job-level mutex; the workflow-level root group governs all", () => {

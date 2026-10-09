@@ -9,8 +9,9 @@ related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879]
 **What this does.** Moves the dedicated Inngest host's Redis AOF store from the plaintext volume to
 the encrypted (LUKS) one, without losing a byte and without SSH. The host freezes its writers, copies
 the whole `/mnt/data` mount to the already-attached encrypted volume, proves the copy byte-identical,
-swaps the mount, restarts the writers, and verifies. If the verification fails it rolls itself back —
-reverse-copying first, so nothing written after the swap is lost.
+swaps the mount, restarts the writers, and verifies. (Before 2026-10-09 a failed verification rolled
+itself back by reverse-copying to the plaintext volume; that volume was destroyed, so on this host a failed
+post-swap verification is an incident with no automatic rollback — see §5a.)
 
 **One dispatch, nothing else.** There is no SSH step in this document and there is no manual
 Doppler write. If you find yourself wanting one, the answer is in §6.
@@ -108,7 +109,7 @@ name the reason field to read.
 | --- | --- | --- | --- |
 | `done` | Cutover complete, verified after the swap | **Encrypted volume** | §5 close-out |
 | `rolled-back` | HISTORICAL (pre-2026-10-09 layout): the post-swap verification failed; the host reverse-copied and cleared the pointer. The plaintext volume no longer exists, so a fresh `rolled-back` row on this host is an incident (the on-host rollback refuses with `rollback-no-backstop`) | Not on a plaintext volume | Follow §5a; read `reason=` first |
-| `aborted` | A guard refused. Writers were resumed BEFORE the flag landed | Wherever it was before you dispatched | Read `reason=`; see below |
+| `aborted` | A guard refused. Before the swap, writers were resumed BEFORE the flag landed. With the pointer PRESENT it is a post-swap failure whose rollback refused (`rollback-no-backstop`): the swap stayed landed | Before the swap: wherever it was before you dispatched. With the pointer present: the **encrypted volume** | Read `reason=`; with the pointer present follow §5a, otherwise see below |
 | `copied` (persisting) | The swap LANDED but its bookkeeping (envfile, fstab, durable pointer) did not finish — a SIGTERM, a Doppler failure on the pointer write, or a refusal inside it. NOT terminal: every 30s tick re-drives the bookkeeping (`reason=repair-forward`) | **Encrypted volume**, serving | Nothing, if the next row is `done`. If `copied` persists across ticks, read the refusal `reason=` beside it — that is the bookkeeping step that keeps failing |
 | `aborted` with the pointer PRESENT | HISTORICAL: a ROLLBACK was interrupted (its `reason=` named the step: `rollback-no-backstop`, `t2-*`, `rollback-mapper-still-open`). The verb is retired (§5a), so a fresh row of this shape is an incident, not a rollback | **Encrypted volume**, serving | Do not look for a rollback dispatch: there is none. Read §5a, then §6 |
 
@@ -204,7 +205,7 @@ drained tick double-fires the cron. That procedure's `routine_runs` check tells 
    the outer values win and a `prd_terraform` override no longer reaches a privileged run. Canonical
    form: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
    invocation.) Do not set one to arm. If one is
-   set to `false` — for a sanctioned re-pause during a rollback to the plaintext backstop — the
+   set to `false` — for a sanctioned re-pause during a rollback to the plaintext backstop (retired, §5a) — the
    drift reconciler will report `logs-alert-paused` twice daily BY DESIGN (it resolves the declared
    default and cannot see the override); that report is the only record the override leaves.
    Re-read it before concluding anything from a plan:
@@ -279,14 +280,14 @@ alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose
 the ledger does not claim. Nothing here can put it back on a plaintext volume. Treat each as a production incident
 (`soleur:incident`): read the newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row first (§5 step 1's query).
 
-**Signal -> route.** Read the newest `host_role=dedicated` probe row first, then pick the route; every route below is a
+**Signal -> route.** Read the newest `host_role=dedicated` probe row first, then pick the route; the host-replace route is a
 production write and needs the operator's per-command go-ahead:
 
 | Signal | What it means now | Route |
 | --- | --- | --- |
-| Host dark / probe silent, volume intact | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
+| Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
 | `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
-| `rollback_inversion` verdict from the property probe | The ledger/probe pair claims plaintext on a host that has no plaintext volume | Incident; the verdict text names this section |
+| `rollback_inversion` verdict from the property probe | The ledger claims LUKS but the measured store is not on `/dev/mapper/inngest-redis` | Incident; the verdict text names this section |
 | `op=luks-cutover` dispatched again | Refused on this host: the durable pointer is set and the flag is `done` (G1/G2) | Nothing to do |
 
 The probe's other verdicts are about the ledger or the probe pipeline, not about where the store is: `under_claim` is a
@@ -294,12 +295,9 @@ ledger-only edit, `backstop_expired` cannot fire once the backstop row is gone, 
 `row_unusable` / `ledger_unreadable` (exit 3) mean the probe pipeline went silent or unreadable (see the #9703 note under
 "Rules that stay in force"): that reads as "cannot establish", never as healthy.
 
-**Recovery routes that exist:**
+**Recovery routes that exist:** the host-replace route is the first row of the table above (note #7228: **every**
+replace strands the scheduler, whose one-dispatch recovery is `gh workflow run cutover-inngest.yml -f op=resume`).
 
-- A host that is dark or stuck, with the volume intact: `apply_target=inngest-host-replace` (it keeps the LUKS volume
-  by omission). Note #7228: **every** replace strands the scheduler, whose one-dispatch recovery is
-  `gh workflow run cutover-inngest.yml -f op=resume`. Replacing a host is a production write: it needs the operator's
-  per-command go-ahead.
 - A volume that will not open: the key is in Doppler `soleur-inngest/prd` (`INNGEST_REDIS_LUKS_KEY`). There is no SSH
   route and no second copy; stop and escalate rather than improvise.
 

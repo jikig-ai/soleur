@@ -104,12 +104,12 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 # permanently rather than transiently. The recut was not a path that was merely
 # blocked; it was a path this volume never had.
 #
-# THIS VOLUME IS INERT AT MERGE, AND THAT IS THE DESIGN. It is created, attached
-# alongside the live plaintext volume, and mounted at a STAGING path — never at
-# /mnt/data. Nothing copies data here until the reviewer-gated cutover runs. The
-# two-copy state IS the verified-restorable backup (ADR-142), and it beats a
-# snapshot: a live mountable device the cutover rehearses, not a blob nobody has
-# restored.
+# HISTORY (the design this volume was created under, ADR-142): it was INERT AT MERGE
+# — created, attached alongside the then-live plaintext volume, and mounted at a
+# STAGING path, never at /mnt/data — and nothing copied data here until the
+# reviewer-gated cutover ran. The two-copy state was the verified-restorable backup.
+# THAT STATE ENDED 2026-10-09 (#8285): the cutover completed, the plaintext volume
+# was destroyed, and this volume is now the SOLE copy of the Inngest store.
 #
 # NO `format` ATTRIBUTE, AND THAT IS LOAD-BEARING — the same reasoning the retired recut
 # apparatus recorded for the plaintext volume. The device must be born RAW so

@@ -40,12 +40,13 @@
 #                         its data_mount_devid is not a scsi-0HC_Volume_<n> alias
 #    3 ledger_unreadable  the ledger, the luks row (exactly one), its mechanism or its mapper cannot
 #                         be read, or there is more than one backstop row
-#    5 rollback_inversion claims luks, store NOT on the LUKS mapper -- the backstop is the live store
+#    5 rollback_inversion claims luks, store NOT on the LUKS mapper -- the store is on an unclaimed device (no plaintext
+#                         backstop exists since 2026-10-09; production incident, runbook 5a)
 #    5 under_claim        does not claim luks, store on the LUKS mapper
 #    3 ledger_unreadable  (agreeing state only) the backstop row's expires_on is not YYYY-MM-DD
 #    5 backstop_expired   ONLY when claims luks AND on the mapper AND today is AFTER the backstop
 #                         row's exception.expires_on AND that row still exists
-#    2 agree              claims_luks == on_luks_mapper (a correct post-rollback revert lands here
+#    2 agree              claims_luks == on_luks_mapper (the steady state; a pre-2026-10-09 post-rollback revert also landed here
 #                         too, even past the expiry)
 #    3 unreachable        the fall-through at the bottom of the file
 #    3 trap_remapped      the EXIT trap caught a status outside {2,3,5,64,78}
@@ -341,7 +342,7 @@ decide() {
 
   if (( claims && ! on )); then
     marker "rollback_inversion" "claim=$MECH store=$(safe "$SRC") mapper=$MAPPER age_s=$ROW_AGE"
-    echo "ACTION REQUIRED: the LUKS volume is the ONLY copy of the Inngest store (the plaintext backstop was destroyed on 2026-10-09 and op=luks-rollback is retired, so there is no rollback). The ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER, so the record is false and the store is on a device nobody claimed. Treat this as a production incident: read the newest host_role=dedicated probe row first, then follow $RUNBOOK section 5a (the wrong-volume alert should also have paged)."
+    echo "ACTION REQUIRED: the LUKS volume is the ONLY copy of the Inngest store (the plaintext backstop was destroyed on 2026-10-09 and op=luks-rollback is retired, so there is no rollback). The ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER, so the record is false and the store is on a device nobody claimed. Treat this as a production incident: read the newest host_role=dedicated probe row first, then follow $RUNBOOK section 5a (the wrong-volume alert should also have paged). Do not replace the host, detach or destroy the LUKS volume, or rotate INNGEST_REDIS_LUKS_KEY until the mounted device is identified."
     exit 5
   fi
   if (( ! claims && on )); then

@@ -229,7 +229,7 @@ expect() { # <name> <rc> <marker>
     ok=0; printf '        | missing required text: %s\n' "$C_REQUIRE" >&2
   fi
   if [[ "$C_LEAD" == "1" ]] && [[ "$(grep -v '^inngest-luks-property\[' "$OUT" | head -1)" != "ACTION REQUIRED: $LEAD"* ]]; then
-    ok=0; printf '        | the first human-readable line does not LEAD with the backstop warning\n' >&2
+    ok=0; printf '        | the first human-readable line does not LEAD with the sole-copy warning\n' >&2
   fi
   if (( ok )); then
     pass "$name (status $got, verdict $marker)"
@@ -394,6 +394,7 @@ expect "mut4b newest-by-dt is plaintext even when listed first" 5 rollback_inver
 
 # Row 8: does not claim luks, store on the mapper. (Mutation row 2.)
 reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="plaintext-exception inngest-redis $EXP_FUTURE"
+C_REQUIRE="inngest-luks-cutover-6894.md"
 expect "row8 / mut2 ledger plaintext-exception, store on LUKS" 5 under_claim
 
 # Row 9: encrypted and agreeing, backstop past its expiry.

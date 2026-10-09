@@ -4455,21 +4455,21 @@ lka_run() { # <flag> <pointer> <confirm> <names-has-flag> -> LKA_RC, LKA_WROTE
   MARK="$LKA_MARK" STUB_FLAG="$1" STUB_PTR="$2" STUB_CONFIRM="$3" STUB_NAMES_HAS="$4" bash "$LKA_DRV" >/dev/null 2>&1 || LKA_RC=$?
   LKA_WROTE="$(cat "$LKA_MARK")"
 }
-lka_run "" absent done 0
+lka_run "" absent "done" 0
 assert "#8285 luks-cutover on an UNSET flag with the pointer absent arms (writes 'armed', exit 0) — also proves the driver reaches the write" \
   "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
-lka_run aborted absent done 0
+lka_run aborted absent "done" 0
 assert "#8285 luks-cutover re-arms from 'aborted' (permitted, writes 'armed')" "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
-lka_run rolled-back absent done 0
+lka_run rolled-back absent "done" 0
 assert "#8285 luks-cutover REFUSES a 'rolled-back' flag before any write (the state is unreachable on this host: an incident, runbook 5a)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run done absent done 0
+lka_run done absent "done" 0
 assert "#8285 luks-cutover REFUSES a 'done' flag before any write (G1: a completed cutover is never re-armed)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run copied absent done 0
+lka_run copied absent "done" 0
 assert "#8285 luks-cutover REFUSES an in-flight flag before any write (G1: arming over a running FSM would race it)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run "" present done 0
+lka_run "" present "done" 0
 assert "#8285 luks-cutover REFUSES when the durable pointer is present, whatever the flag says, before any write (G2)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
 lka_run "" absent done 1
@@ -4480,25 +4480,25 @@ assert "#8285 luks-cutover EXPECTS 'done' from the on-host FSM: a terminal 'abor
   "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
 # The remaining refusals and failure arms (one row each; every one reds when its `exit 1` is dropped, because the
 # driver then falls through to the write or the green confirm).
-STUB_LIVE=silent lka_run "" absent done 0
+STUB_LIVE=silent lka_run "" absent "done" 0
 assert "#8285 luks-cutover REFUSES on a SILENT host before any write (G3: a write nothing can act on parks the flag)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_LIVE=unreadable lka_run "" absent done 0
+STUB_LIVE=unreadable lka_run "" absent "done" 0
 assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the liveness read path failed, before any write (G3)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_LIVE=bogus lka_run "" absent done 0
+STUB_LIVE=bogus lka_run "" absent "done" 0
 assert "#8285 luks-cutover REFUSES FAIL-CLOSED on an unrecognised liveness outcome, before any write (G3)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run "" unreadable done 0
+lka_run "" unreadable "done" 0
 assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the durable pointer is unreadable, before any write (G2)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_TOKEN= lka_run "" absent done 0
+STUB_TOKEN="" lka_run "" absent "done" 0
 assert "#8285 luks-cutover REFUSES an empty arm token before any read or write" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_NAMES_EMPTY=1 lka_run "" absent done 0
+STUB_NAMES_EMPTY=1 lka_run "" absent "done" 0
 assert "#8285 luks-cutover REFUSES FAIL-CLOSED when soleur-inngest/prd cannot be read at all, before any write (G1)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_SETFAIL=1 lka_run "" absent done 0
+STUB_SETFAIL=1 lka_run "" absent "done" 0
 assert "#8285 luks-cutover exits 1 when the Doppler write itself fails (never falls through to the confirm)" \
   "[[ '$LKA_RC' -eq 1 ]]"
 lka_run "" absent rolled-back 0
