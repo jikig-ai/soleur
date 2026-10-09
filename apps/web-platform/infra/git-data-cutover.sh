@@ -99,7 +99,9 @@
 #
 # Exit codes: 0 clear; 1 internal error (die: the access gate's mktemp failed); 3 access gate;
 # 5 refusal — all mode/probe verdicts (store probes, fence probe, freeze/unfreeze/probe
-# verbs, mode_invalid, lineage_absent, frozen_*, lock_held, FREEZE_HELD); 78 xtrace refusal.
+# verbs, mode_invalid, lineage_absent, frozen_*, lock_held, FREEZE_HELD); 6 gc.timer would not start
+# after the freeze sentinel was cleared (gc_timer_restart_failed: the verb fails loudly, but the store
+# and the flag are consistent, so the workflow must not read it as a stranded freeze); 78 xtrace refusal.
 set -euo pipefail
 # Every regex below is a byte-class check; a UTF-8 locale would widen [A-Za-z] to letters beyond ASCII.
 export LC_ALL=C
@@ -174,7 +176,7 @@ trap cleanup EXIT
 #             purge legacy .<id>.init.lock residue inside the freeze window.
 #   unfreeze  read the sentinel; clear it ONLY when its writer lineage equals
 #             CUTOVER_LINEAGE -> restart gc.timer (one immediate retry; a timer that will not
-#             start fails the verb as gc_timer_restart_failed, exit 5, with the sentinel
+#             start fails the verb as gc_timer_restart_failed, exit 6, with the sentinel
 #             already cleared). Refuses frozen_unattributed (a sentinel
 #             nobody wrote is a host incident, not a cleanup target) and frozen_foreign.
 #   probe     the positive replication probe: first the store pre-flight (mounted, on the
@@ -529,21 +531,26 @@ refuse_if_not_on_mapper() {
 # partial `x/` is user data too. `find -H` follows a symlinked $OLD_REPOS itself, never the
 # entries under it. The prefix is plain %q assignments; every other element is single-quoted, so
 # nothing expands on the runner.
-# The optional argument `verified-only` (the probe's pre-flight, #9439 item 5) cuts the session to the
-# store-verified facts and returns right after them: no repositories-directory check, no entry count (so
-# nothing in the repositories directory can fail or time out the pre-flight), and ANY held sentinel is
-# refused as cutover_frozen, not just a foreign one (the proof's same-lineage tolerance is resume arm A and
-# does not apply to a probe: the host's own wrappers refuse under any sentinel).
+# The optional argument `verified-only` (the probe's pre-flight, #9439 item 5) sends only the
+# store-verified facts and a constant count: no repositories-directory check and no entry count, so
+# nothing in the repositories directory can fail or time out the pre-flight. In that mode ANY held
+# sentinel is refused as cutover_frozen (the proof's same-lineage tolerance is resume arm A and does
+# not apply to a probe: the host's wrappers refuse under any sentinel), and the only accepted answer is
+# rc 0 — the truncated session cannot legitimately exit 3, 4, 7, 8 or 9, nor print a malformed count.
 refuse_if_store_unverified_or_not_empty() {
   local rc=0 reason="" cmd qr qs qm qd
-  local -a c
+  local -a c facts repos_checks
   [[ "$STORE_SOURCE" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-verified probe_failed
-  step "store probes: the bootstrap's store marker is bound to $OLD_ROOT, it is not frozen, and $OLD_REPOS holds nothing"
+  if [ "${1:-}" = verified-only ]; then
+    step "store probes: the bootstrap's store marker is bound to $OLD_ROOT and it is not frozen"
+  else
+    step "store probes: the bootstrap's store marker is bound to $OLD_ROOT, it is not frozen, and $OLD_REPOS holds nothing"
+  fi
   printf -v qr '%q' "$OLD_ROOT"
   printf -v qs '%q' "$STORE_SOURCE"
   printf -v qm '%q' "$STORE_VERIFIED"
   printf -v qd '%q' "$OLD_REPOS"
-  c=(
+  facts=(
     "r=$qr; src=$qs; mk=$qm; d=$qd"
     'fz="$r/.cutover-freeze"'
     's=$(findmnt -n -o SOURCE --mountpoint "$r") || exit 5'
@@ -554,6 +561,8 @@ refuse_if_store_unverified_or_not_empty() {
     '[ -f "$mk" ] && [ -s "$mk" ] || exit 21'
     'm=$(head -n 1 "$mk") || exit 16'
     '[ "$m" = "$fu" ] || exit 22'
+  )
+  repos_checks=(
     'if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi'
     'if [ ! -e "$d" ]; then exit 7; fi'
     '[ -d "$d" ] || exit 3'
@@ -562,14 +571,12 @@ refuse_if_store_unverified_or_not_empty() {
     "n=\$(find -H \"\$d\" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf .) || exit 4"
     'echo "${#n}"'
   )
-  # verified-only: keep elements 0-9 (through the marker-equals-UUID test) and answer a constant count.
-  if [ "${1:-}" = verified-only ]; then c=("${c[@]:0:10}" 'echo 0'); fi
+  if [ "${1:-}" = verified-only ]; then c=("${facts[@]}" 'echo 0'); else c=("${facts[@]}" "${repos_checks[@]}"); fi
   printf -v cmd '%s; ' "${c[@]}"
   gd_capture '^[0-9]+$' "${cmd%; }" || rc=$?
-  # In the truncated session the answer is a constant, so an unreadable one (96) proves nothing held.
-  if [ "${1:-}" = verified-only ] && [ "$rc" -eq 96 ]; then _store_refuse store-verified probe_failed "$rc"; fi
   case "$rc" in
-    0|3|4|7|8|9|96) ;;
+    3|4|7|8|9|96) [ "${1:-}" != verified-only ] || _store_refuse store-verified probe_failed "$rc" ;;
+    0) ;;
     21) reason=marker_absent ;;
     22) reason=marker_mismatch ;;
     24) reason=no_fs_uuid ;;
@@ -801,13 +808,15 @@ mode_unfreeze() {
   esac
   # A gc.timer that will not restart is a FAILED unfreeze (#9439 item 8), not a warning: the store is
   # writable but gc stays stopped, and a green run would hide it. One IMMEDIATE retry (the start is
-  # idempotent and the likeliest cause is a transient ssh blip); no sleep, so no test seam is needed.
-  # The sentinel is already cleared, so a re-dispatch converges: absent sentinel -> nothing_to_unfreeze ->
-  # the start is attempted again. `|| rc=$?` is the errexit-safe capture.
+  # idempotent), no sleep, so no test seam is needed; a timer that cannot start for a standing reason
+  # (masked, failed, unarmed at boot) fails both attempts, and a re-dispatch re-reads an absent sentinel
+  # and attempts the start again. `|| trc=$?` is the errexit-safe capture of the second attempt's rc.
+  # Exit 6, not 5: the sentinel is already cleared, so the workflow tells this from a stranded freeze.
   local trc=0
   gd_exec 'systemctl start git-data-gc.timer' || gd_exec 'systemctl start git-data-gc.timer' || trc=$?
   if [ "$trc" -ne 0 ]; then
-    _store_refuse unfreeze-gc-timer gc_timer_restart_failed "$trc"
+    _store_emit unfreeze-gc-timer gc_timer_restart_failed "$trc"
+    exit 6
   fi
   log "unfreeze done (state was: ${freeze_state}); gc.timer restarted"
 }

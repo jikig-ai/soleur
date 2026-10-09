@@ -47,6 +47,12 @@ introduced, so the IaC routing gate does not apply. Merging this alone does not 
 - A transient `flag_write_failed` that never landed now also runs the unwind (one unneeded web-1 restart); stated in the runbook.
 - Flip resume arm B never unwinds the flag; filed as its own issue, not fixed here.
 
+> **Superseded at review (2026-10-09).** The Phase 2 default below (a failed gc.timer restart exits 5 and a flip unwinds) was replaced
+> by a CTO ruling after the review panel: the verb exits **6**, the probe and stamp key on "sentinel cleared", the finalizer never
+> unwinds for a timer-only failure, and notify carries `GC_TIMER_STOPPED`. The `verified-only` pre-flight is also built from a named
+> facts array and accepts only rc 0. The record is the ADR-239 amendment "2026-10-09 — the gc timer is not a cutover precondition" and
+> `decision-challenges.md`. The sections below describe the pre-review plan and are kept as the dated record.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim | Reality | Plan response |
@@ -180,10 +186,10 @@ No cross-domain implications: runner-side CI/infra scripting behind a reviewer-g
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** nothing directly (dispatch-only workflow; no flip has been dispatched); the failure is owner-facing: a flip that fails to unwind the flag, or a notification that misnames the state, around the `/api/account/delete` erasure path.
-- **If this leaks, the user's data is exposed via:** no new exposure vector: no credential binding, no new output, no host bytes in any notification, no new network edge.
+- **If this lands broken, the user experiences** (artifact -> vector; a future dispatch, not the merge): workspace owners' repository bytes and worktree writes when a flip's unwind runs against a writable store while the fleet still serves flag=true (writes accepted in the window, orphaned after flag-off); web-1 sessions during the unwind's both-host redeploy (a transient flag-write failure now also unwinds); Art. 17 refusals logged during an extended freeze; and the rollback's post-rollback erasure-probe evidence (the CPO condition on #8211) when an unfreeze step fails before the probe. The CTO ruling removes the first and last for a gc-timer fault; the probe/stamp-failure window is pre-existing and tracked.
+- **If this leaks, the user's data is exposed via:** no new exposure vector: no credential binding, no host bytes in any notification, no new network edge; one new job output (`gc_timer_stopped`, a fixed word) carries no host data.
 - **Brand-survival threshold:** `aggregate pattern`
-- **Threshold decision (challengeable):** the change improves unwind and reporting accuracy of a workflow that needs a human-approved dispatch; host erasure behaviour is untouched, so a single-user tier (CPO sign-off) is not warranted.
+- **Threshold decision (challengeable):** the change improves unwind and reporting accuracy of a workflow that needs a human-approved dispatch. The host wrappers are untouched, but the erasure EVIDENCE path and the freeze duration are not (see above), which is why review ran the user-impact seat; the remaining exposure is a class (a failed late step after the sentinel clear), not an instance, so a single-user tier (CPO sign-off) is still not warranted.
 
 ## Observability
 
@@ -198,14 +204,14 @@ error_reporting:
   fail_loud: "::error title=git-data-cutover store::probe=unfreeze-gc-timer verdict=gc_timer_restart_failed" and "probe=store-verified verdict=store_unverified" in the probe step; notify subject [git-data-cutover <mode> <result>] with the verdict words
 failure_modes:
   - mode: flag write landed then read-back or the step failed (flag true, no marker)
-    detection: finalizer flip arm keyed on flag_write_attempted; a failed flag-off write exports recovery_failed
+    detection: layer 6 workflow run log: the finalizer prints "finalizer: writing GIT_DATA_STORE_ENABLED=false" (flip arm keyed on flag_write_attempted) and, on a failed write, "::error::finalizer: flag-off write FAILED"; exports recovery_failed
     alert_route: notify-failure RECOVERY_FAILED issue and email
   - mode: gc timer will not restart after the sentinel is cleared
-    detection: unfreeze step fails with verdict gc_timer_restart_failed
-    alert_route: run goes red; the flip/rollback unwind or the notify FREEZE_HELD path reports it
+    detection: layer 6 workflow run log: "::error title=git-data-cutover store::probe=unfreeze-gc-timer verdict=gc_timer_restart_failed rc=<n>" (unfreeze step exit 6); the finalizer exports gc_timer_stopped
+    alert_route: run goes red and notify-failure sends GC_TIMER_STOPPED (no unwind, no freeze)
   - mode: probe ran against an unverifiable (booting) store
-    detection: probe step fails with verdict store_unverified or cutover_frozen before any provision call
-    alert_route: notify PROBE_FAILED pointing at the verdict in the probe step log
+    detection: layer 6 workflow run log: "::error title=git-data-cutover store::probe=store-verified verdict=store_unverified" (or old_store_unmounted / store_not_on_mapper / cutover_frozen) in the probe step, before any provision call
+    alert_route: notify PROBE_FAILED naming the verdict words and pointing at the probe step log
 logs:
   where: GitHub Actions run log of git-data-cutover.yml (script output lines "[git-data-cutover] STORE probe=... verdict=...")
   retention: GitHub Actions log retention for the repository
@@ -214,7 +220,7 @@ discoverability_test:
   expected_output: gc_timer_restart_failed
 ```
 
-(The probe prints nothing until Phase 2 lands in this PR's tree; it is run once after the edit.)
+(Presence-only: the grep proves the verdict word exists in source; the executed MZ/FZ/NB rows prove it surfaces. The probe prints nothing until Phase 2 lands in this PR's tree; it is run once after the edit.)
 
 ## Scope Check
 

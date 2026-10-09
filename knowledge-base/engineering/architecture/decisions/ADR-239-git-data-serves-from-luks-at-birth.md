@@ -403,3 +403,38 @@ standalone dated purge (needs the same writable mount); extending the date witho
 (storage limitation; the ledger records `expires_on` as deliberately not extended).
 
 Plan: `knowledge-base/project/plans/2026-10-09-fix-git-data-lock-no-subject-id-9066-plan.md`.
+
+## Amendment 2026-10-09 — the gc timer is not a cutover precondition; the probe verifies first; the unwind marks the attempt (#9439)
+
+Three contracts this ADR states in prose changed, all runner-side (`git-data-cutover.sh`, `git-data-cutover.yml`); no
+hash-bound host payload moved.
+
+- **`mode_unfreeze` has a hard post-condition: the gc timer is started.** After the sentinel is cleared it starts
+  `git-data-gc.timer`, with one immediate retry (no sleep), and exits **6** (`gc_timer_restart_failed`) if both
+  attempts fail. The sentinel is already gone at that point, so the workflow treats this as degraded housekeeping, not
+  a switch-back trigger: the unfreeze step goes red, the replication probe and the cutover stamp still run (they key on
+  "the sentinel was cleared", not "unfreeze succeeded"), the finalizer does not unwind a flip it would otherwise call
+  concluded, and notify carries `GC_TIMER_STOPPED` (one new job output, `gc_timer_stopped`) rather than `FREEZE_HELD`.
+  The freeze still fences the store whenever the finalizer does unwind, because the timer is never started before the
+  sentinel clear (`git-data-gc.sh` does not read the sentinel). This refines the 2026-10-02 sentence that the probe runs
+  "after its unfreeze succeeds" to "after the sentinel is cleared". Accepted cost: the stamp can be written with gc
+  stopped; it anchors the ledger on data location, which gc does not affect. Ruled by the CTO agent after three review
+  seats showed the earlier fatal-and-unwind default orphaned writes through a writable-store window and repeated on a
+  standing cause (`gc_timer=unarmed` at boot is documented as tolerated).
+- **The probe verifies the store before it provisions.** `mode_probe` runs the proof's mount, mapper and store-verified
+  checks first (`STORE_SOURCE` is read from the mount, never assumed), in a `verified-only` form: the marker, the UUID
+  and ANY held sentinel (a probe has no resume arm A), and not the repositories directory or the entry count, so a
+  rollback probing a store a live flip has filled is not refused. A booting host reads as its store verdict
+  (`old_store_unmounted`, `store_not_on_mapper`, `store_unverified`, `cutover_frozen`) instead of
+  `probe_failed reason=provision`, and nothing is pushed or removed against it. A missing repositories directory still
+  surfaces later as `probe_failed reason=provision`.
+- **The flip unwind keys on "a flag write was attempted".** The `flag_write` step touches `flag_write_attempted` before
+  the write runs (mirroring `freeze_held`), and the finalizer's flip arm switches the flag off on `flag_written` or
+  `flag_write_attempted`. A write that lands and then fails its read-back is therefore unwound. The cost is stated in
+  the runbook: a transient `flag_write_failed` that never landed also runs the unwind (a flag-off write and a
+  both-host redeploy). Rollback conditions are unchanged.
+
+Still open, tracked rather than fixed here: a probe or stamp failure after the sentinel clear unwinds through a
+writable window (pre-existing); flip resume arm B never unwinds the flag; no mode re-runs the rollback's erasure probe.
+
+Plan: `knowledge-base/project/plans/2026-10-09-fix-git-data-cutover-residual-state-matrix-gaps-plan.md`.
