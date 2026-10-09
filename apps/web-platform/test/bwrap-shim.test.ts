@@ -683,6 +683,101 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
+  it("an exposure token AFTER the command boundary is not a trigger — setup-only scan", () => {
+    const r = root();
+    try {
+      // The user command legitimately names /proc paths; a setup-scan that
+      // ran past the boundary would splice a mask into this argv for no
+      // reason (and on a userns-less argv, refuse a spawn that never exposed
+      // procfs at all).
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-pid", "--bind", "/", "/", "--", "/bin/sh", "-c", "x", "--bind", "/proc", "/proc"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      const bi = args.indexOf("--");
+      expect(args.slice(2, bi)).toEqual(["--unshare-pid", "--bind", "/", "/"]);
+      expect(args.slice(bi + 1)).toEqual(["/bin/sh", "-c", "x", "--bind", "/proc", "/proc"]);
+      expect(args.slice(2, bi)).not.toContain("--proc");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dest matching is exact-with-trailing-slash normalization — /procfoo does NOT trigger, /proc/ DOES", () => {
+    const r = root();
+    try {
+      // Near-miss dest: not a procfs mount at /proc → passthrough.
+      const near = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--bind", "/proc", "/procfoo", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(near.status, near.stderr).toBe(0);
+      const { args: nearArgs } = r.read();
+      expect(nearArgs).not.toContain("--proc");
+
+      // Trailing slash normalizes — a bind AT /proc/ still triggers the mask.
+      const r2 = root();
+      try {
+        const slash = spawnSync(
+          SHIM,
+          ["--unshare-user", "--unshare-pid", "--bind", "/proc/", "/proc/", "--", "/usr/bin/true"],
+          { env: r2.env(), encoding: "utf8" },
+        );
+        expect(slash.status, slash.stderr).toBe(0);
+        const { args: slashArgs } = r2.read();
+        const bi = slashArgs.indexOf("--");
+        expect(slashArgs.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
+      } finally {
+        cleanup();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("every procfs-exposing option shape triggers the mask — --bind-try, --ro-bind, --dev-bind, --proc", () => {
+    for (const argv of [
+      ["--unshare-user", "--unshare-pid", "--bind-try", "/proc", "/proc"],
+      ["--unshare-user", "--unshare-pid", "--ro-bind", "/proc", "/proc"],
+      ["--unshare-user", "--unshare-pid", "--dev-bind", "/proc", "/proc"],
+      ["--unshare-user", "--unshare-pid", "--proc", "/proc"],
+    ]) {
+      const r = root();
+      try {
+        const res = spawnSync(SHIM, [...argv, "--", "/usr/bin/true"], {
+          env: r.env(), encoding: "utf8",
+        });
+        expect(res.status, `${argv[4]}: ${res.stderr}`).toBe(0);
+        const { args } = r.read();
+        const bi = args.indexOf("--");
+        expect(args.slice(bi - 2, bi), `${argv[4]} should re-mask`).toEqual(["--proc", "/proc"]);
+      } finally {
+        cleanup();
+      }
+    }
+  });
+
+  it("--unshare-all satisfies BOTH namespace gates", () => {
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-all", "--bind", "/proc", "/proc", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("a bare --tmpfs /proc is a mask, not an exposure — passthrough with no splice", () => {
     const r = root();
     try {
