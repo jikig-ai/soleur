@@ -1894,3 +1894,11 @@ Three related changes, all on the surfaces this ADR owns. It amends no Decision.
   `in-progress`, probe-fault, and every unexpected shape each refuse with their own remediation.
   The check sits after G3's audibility gate and before the mutating `flushed` write, so a
   refusal costs nothing to leave.
+
+## Addendum — 2026-10-09 (#8285)
+
+Appended; nothing above is changed. Where this ADR names `apply_target=inngest-volume-recut` as a
+remediation dispatch, that dispatch no longer exists once PR A of #8285 has merged (the job is
+converted into `inngest-backstop-retire`, which retires the plaintext Redis backstop and recuts
+nothing). A standing flush latch therefore has no in-repo remediation dispatch (#7777, closed, is the
+record of why the latch has no append-only clear). See the ADR-142 addendum of 2026-10-08.

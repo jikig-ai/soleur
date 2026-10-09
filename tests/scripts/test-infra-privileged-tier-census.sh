@@ -823,6 +823,11 @@ INTENDED_DESTROYS = {
         "doppler_secret.ghcr_read_token": "#8714 ADR-096 5.4",
         "doppler_service_token.ghcr_minter": "#8714 ADR-096 5.4",
         "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
+        # #8285: the plaintext Redis AOF backstop pair stops being declared in PR A and is destroyed by the
+        # reviewer-gated inngest-backstop-retire dispatch, which `-target`s both addresses bare (detach,
+        # then destroy), after the wipe evidence. Drop these two entries in PR B with the apparatus.
+        "hcloud_volume_attachment.inngest_redis": "#8285 retire dispatch (phase=detach)",
+        "hcloud_volume.inngest_redis": "#8285 retire dispatch (phase=destroy)",
     },
 }
 G4_PROTECTED = {"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"}
