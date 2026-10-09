@@ -12,9 +12,9 @@
 # inert with respect to the running host until a boot reads the key. The
 # reviewer-gated `apply_target=inngest-volume-recut` that this paragraph used to
 # name is gone (#8285 PR A converted that job into `inngest-backstop-retire`,
-# which retires the plaintext backstop `hcloud_volume.inngest_redis`, id
-# 106261946, a state-only orphan until its `destroy` phase). ADR-142's additive
-# byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.
+# which retired the plaintext backstop `hcloud_volume.inngest_redis`, id
+# 106261946; that volume was destroyed 2026-10-09 and the job deleted by PR B).
+# ADR-142's additive byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.
 #
 # "MERGE IS INERT" IS THE DEFECT HERE, NOT THE SAFETY PROPERTY. Both resources
 # below MUST be in the per-merge `-target=` allowlist in

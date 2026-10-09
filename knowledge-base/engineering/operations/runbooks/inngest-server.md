@@ -2189,6 +2189,12 @@ ADR-100, amendment 2026-09-14.
      > (the dark-gate library `tests/scripts/lib/inngest-host-dark-gate.sh` is kept, because
      > `scripts/cutover-inngest.sh` still uses it). The procedure is in
      > `inngest-luks-cutover-6894.md` §5b. The convergence PR of #8285 deletes the retire job itself.
+     >
+     > **Update (2026-10-09, #8285, PR B).** Appended; nothing above is changed. The retire job and its
+     > dispatch inputs are deleted: the backstop volume `106261946` was destroyed on 2026-10-09 (Hetzner
+     > `GET /v1/volumes/106261946 -> 404` at 16:21:26Z), so there is no dispatch left that touches it. The
+     > dark-gate library stays for `scripts/cutover-inngest.sh`. See `inngest-luks-cutover-6894.md` §5b for the
+     > record of the retirement.
 
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
      set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll

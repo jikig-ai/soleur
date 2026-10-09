@@ -2,8 +2,8 @@
 # inngest_host_dark_gate — "Guard 2" of the RETIRED inngest-volume-recut apply_target (#7695), the
 # fifth authorization layer of that dispatch and the only one that checked the WORLD rather than an
 # intent. (#8285 PR A converted that job into `inngest-backstop-retire`, whose own, separate guards
-# live in tests/scripts/lib/inngest-backstop-retire-gate.sh; the "Guard N" numbers in this file and
-# in that one are unrelated.) Since then NO workflow calls `inngest_host_dark_gate`: it is kept, with
+# lived in a gate library deleted by #8285 PR B with that job; the "Guard N" numbers in this file and
+# in that one were unrelated.) Since then NO workflow calls `inngest_host_dark_gate`: it is kept, with
 # its suite, only while the retire-or-keep decision for the dormant recut target (#8316) is open.
 #
 # TWO ENTRY POINTS, ONE LIVE CONSUMER — EDITING A SHARED HELPER EDITS BOTH:
@@ -1002,7 +1002,7 @@ inngest_host_dark_gate() {
 
   # ── G17 — the LIVE volume is the one the operator pinned ────────────────────────
   # The recut gate's Guard 1 ID-PIN (a plan-shape gate that no longer exists; its successor is the
-  # `before.id` pin in tests/scripts/lib/inngest-backstop-retire-gate.sh) read `.change.before.id` from a plan document. This one reads LIVE Hetzner
+  # `before.id` pin in the since-deleted inngest-backstop-retire gate library) read `.change.before.id` from a plan document. This one reads LIVE Hetzner
   # state at dispatch time. They can disagree — a plan is a projection of state, and state can be
   # wrong about the world — and it is the world that gets destroyed.
   #

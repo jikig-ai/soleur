@@ -550,10 +550,9 @@ resource "hcloud_server" "inngest" {
 
 # ---------------- Retired plaintext AOF backstop (#8285) ----------------
 # hcloud_volume.inngest_redis (the pre-cutover ext4 copy of the Redis AOF) and its attachment are
-# no longer declared: they are being retired by the reviewer-gated `inngest-backstop-retire`
-# dispatch (runbook inngest-luks-cutover-6894.md, "Retiring the backstop"). Until that dispatch
-# completes, state still holds both addresses as orphans; the per-merge `-target` apply never
-# names them, so nothing auto-destroys them.
+# no longer declared. They were retired on 2026-10-09 by the reviewer-gated `inngest-backstop-retire`
+# dispatch (since deleted; runbook inngest-luks-cutover-6894.md, "Retiring the backstop"): the volume is
+# gone from Hetzner (GET -> 404 at 2026-10-09T16:21:26Z) and from state. Only the id below remains.
 locals {
   inngest_retired_plaintext_volume_id = "106261946"
 }

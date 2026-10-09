@@ -645,9 +645,9 @@ always distinct -- a token typed for a birth cannot authorize a destroy.
 
 **What actually gates each target.**
 
-- `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
-  and `inngest-backstop-retire` (converted from `inngest-volume-recut` by #8285) carry an `environment:` with a REVIEWER. The reviewer click
-  is the human authorization on those paths.
+- `web-host-create`, `web-host-replace`, `git-data-host-create` and `workspaces-luks-recut`
+  carry an `environment:` with a REVIEWER (`inngest-backstop-retire`, converted from `inngest-volume-recut` by #8285,
+  did too until #8285 PR B deleted it). The reviewer click is the human authorization on those paths.
   *(Note, 2026-10-01, #6604 PR B #9348: on that PR's merge the `workspaces-luks-recut` job is
   hard-retired -- its first step exits 1 before any credential is loaded -- and Terraform
   declares `prevent_destroy = true` on `hcloud_volume.workspaces_luks` and on
