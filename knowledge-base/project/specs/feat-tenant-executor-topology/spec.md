@@ -119,6 +119,55 @@ Cited, unverified, to re-check in S1: a gVisor CUSE device-node escape
 (CVE-2026-96812, fix at commit `573a9e7`, no release named) - pin `runsc` past the
 fix and reject image-supplied device nodes.
 
+### Pass 2 - constraints relaxed (2026-10-09, recommendation; operator decision pending)
+
+The operator relaxed two pass-1 constraints: Kubernetes/k3s is allowed and a second
+EU-resident provider is allowed (KVM and microVMs are back in scope). Full tables:
+the Build vs Adopt artifact (private link in the PR conversation). Claims below are
+agent-sourced and README/vendor-doc level; none was run.
+
+What changes:
+
+- **The "Session lifecycle - still build" row above is stale.** `kubernetes-sigs/agent-sandbox`
+  (Apache-2.0, v1.0.6 released 2026-10-08, CRDs still v1beta1) provides `SandboxClaim`,
+  `WarmPool`, `Template`, `shutdownTime` TTL and a Suspended mode (pod deleted, PVC kept);
+  OpenSandbox's operator provides pools and TTL too. Gaps: claim-time network policy,
+  claim-time storage, auto-suspend and identity-at-claim are roadmap items; no credential
+  injection. Precedent: `angristan/netclode` (hobby project) runs Claude Code SDK loops inside
+  Kata/Cloud Hypervisor VMs on k3s with a warm pool and an out-of-VM secret proxy.
+- **A hardware boundary is reachable.** Hetzner Cloud still has no KVM. Cheapest path: one
+  Hetzner Robot AX42 (8 cores, 64 GB) at EUR 97.30/month plus EUR 49 setup, same signed
+  processor; cost is provisioning (no documented cloud-init on Robot, community Terraform
+  provider v0.1.0). Alternative: Scaleway Elastic Metal EM-B220E at EUR 119.99 (new
+  sub-processor, new Terraform root). Hyperscaler nested virt works (AWS M7i/M8i family and
+  similar, GCP, Azure) but costs roughly 4-5x and carries a documented performance penalty and
+  US-parent exposure. OVH and Exoscale nested virt are not production-grade. Managed K8s with a
+  Kata/gVisor RuntimeClass was only confirmed on AKS (Pod Sandboxing).
+- **Kata specifics:** use Cloud Hypervisor (supports virtiofs; Firecracker does not). Cold start
+  is about 10 s without a warm pool. A reported virtiofs guest-to-host escape (CVE-2026-47243,
+  unverified for 4.x) belongs in the S6 probes.
+- **OpenSandbox** is now a serious candidate for egress and credentials (Credential Vault lists
+  Claude Code as a use case) but its egress sidecar needs Kata and does not work under gVisor.
+- **E2B stays rejected** for production (README: embed package is "not a production deployment
+  pattern"; multi-node needs Nomad/K8s plus Postgres, Redis, ClickHouse and object storage).
+- **Highest-risk new unknown:** a warm pool cannot take a late-bound volume, which collides with
+  per-tenant LUKS workspaces; virtiofs also lowers small-file IOPS (git, bun).
+- **Transport:** under Kubernetes the "inherited stream, no sockets" rule (FR2) likely becomes a
+  network/mTLS transport; revisit.
+- **AX trigger:** K8s was gated on capacity (>100 sustained concurrent). With agent-sandbox it is
+  gated on whether the team would otherwise hand-build claim/pool/TTL/snapshot. The hardware
+  boundary is justified by risk (tripwire (i)), not scale.
+
+Recommendation (two reports differed on timing): do **not** commit to the bespoke supervisor or
+to either runtime yet. Widen S0 to a three-way comparison - bespoke vs agent-sandbox + gVisor vs
+agent-sandbox + Kata/Cloud Hypervisor on one KVM-capable node (Hetzner Robot AX42 is the cheapest
+same-processor option) - and split S1 into a gVisor canary and a Kata canary on the same
+workload. Keep the executor protocol runtime-neutral so the runtime can change without rework.
+Proposed new spikes: warm pool vs late-bound LUKS workspace; transcript resume across pod delete
+and node move; KVM verification and bare-metal IaC (rescue/installimage path vs
+`hr-all-infrastructure-provisioning-servers`); OpenSandbox egress + vault with the Claude CLI
+under Kata.
+
 ## Threat Model (Stage-0 deliverable; seed list)
 
 Adversaries: (A1) malicious tenant or prompt-injected agent with full tool use
