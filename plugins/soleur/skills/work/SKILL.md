@@ -1422,6 +1422,8 @@ See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/
 
 ## Common Pitfalls to Avoid
 
+- **On a contended box, push and let CI run the heavy verification once the local evidence is in hand.** `bash scripts/test-all.sh --capacity` (or a load average above the core count) says whether a multi-minute battery, a real-docker chain or a mutation matrix of dozens of rows will measure the box rather than the change; CI runs the same suites in a clean environment and a CI monitor reads the result back. Run locally only what is cheap and decisive (the guard suite, a trimmed matrix of the rows the change touches). **Why:** #9395 -- 64-row batteries and real-docker chains ran at load 55-80 and the operator twice interrupted to ask for CI. See `knowledge-base/project/learnings/2026-10-09-a-text-regex-guard-loses-to-spellings-derive-its-grammar-and-samples-from-arrays.md`.
+
 - **A sibling sweep is done when the SHAPE LISTS that drive the guards match, not when the guards match.** When a new guard joins an existing one (a `transitions` check beside a `sub_steps` check), diff the two enumerations beneath them — the fixture rows, the FATAL modes the message names, the shapes the suite drives — line for line. Parallel-looking guard bodies over unequal shape lists ship one side container-only. **Why:** #8382 — `transitions` asserted the container while `sub_steps` asserted members; the suite drove 5 shapes vs 2. See `knowledge-base/project/learnings/2026-09-21-a-conflict-starved-merge-ref-reads-as-ci-never-ran.md`.
 
 - **A claim about a platform's runtime semantics is a measurement you have not taken yet — take it
