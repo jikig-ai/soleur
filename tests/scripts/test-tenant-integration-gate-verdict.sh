@@ -50,7 +50,7 @@ _expect 1 bogus_future_state skipped "unknown detect state fails closed (allow-l
 # Capture stderr into a var (not a pipe) so the script's expected exit 1 does
 # not poison the check under `set -o pipefail`.
 err_out=$(bash "$SCRIPT" failure skipped 2>&1 >/dev/null) || true
-if printf '%s' "$err_out" | grep -q '::error::'; then
+if printf '%s' "$err_out" | grep -c >/dev/null '::error::'; then
   pass=$((pass + 1)); echo "[ok] fail-closed emits ::error:: diagnostic on stderr"
 else
   fail=$((fail + 1)); echo "[FAIL] fail-closed path did not emit ::error:: on stderr" >&2
@@ -65,12 +65,12 @@ _summary_file=$(mktemp)
 trap 'rm -f "$_summary_file"' EXIT
 
 skipped_out=$(GITHUB_STEP_SUMMARY="$_summary_file" bash "$SCRIPT" success skipped 2>/dev/null)
-if printf '%s' "$skipped_out" | grep -q '::notice::'; then
+if printf '%s' "$skipped_out" | grep -c >/dev/null '::notice::'; then
   pass=$((pass + 1)); echo "[ok] PASS/skipped arm emits a ::notice:: annotation on stdout"
 else
   fail=$((fail + 1)); echo "[FAIL] PASS/skipped arm emitted no ::notice:: annotation" >&2
 fi
-if printf '%s' "$skipped_out" | grep -q 'did NOT execute against this tree'; then
+if printf '%s' "$skipped_out" | grep -c >/dev/null 'did NOT execute against this tree'; then
   pass=$((pass + 1)); echo "[ok] PASS/skipped notice states the suite did not execute against this tree"
 else
   fail=$((fail + 1)); echo "[FAIL] PASS/skipped notice does not state that the suite did not execute" >&2
@@ -86,7 +86,7 @@ fi
 # while telling every green PR its suite never ran.
 : >"$_summary_file"
 ran_out=$(GITHUB_STEP_SUMMARY="$_summary_file" bash "$SCRIPT" success success 2>/dev/null)
-if printf '%s' "$ran_out" | grep -q '::notice::'; then
+if printf '%s' "$ran_out" | grep -c >/dev/null '::notice::'; then
   fail=$((fail + 1)); echo "[FAIL] PASS/success arm emitted the skipped-suite notice" >&2
 else
   pass=$((pass + 1)); echo "[ok] PASS/success arm emits no skipped-suite notice"
@@ -101,7 +101,7 @@ fi
 # not turn the disclosure into a crash: the annotation still goes out and the
 # verdict still exits 0.
 if unset_out=$(env -u GITHUB_STEP_SUMMARY bash "$SCRIPT" success skipped 2>/dev/null) &&
-  printf '%s' "$unset_out" | grep -q '::notice::'; then
+  printf '%s' "$unset_out" | grep -c >/dev/null '::notice::'; then
   pass=$((pass + 1)); echo "[ok] PASS/skipped arm still exits 0 and annotates with GITHUB_STEP_SUMMARY unset"
 else
   fail=$((fail + 1)); echo "[FAIL] PASS/skipped arm broke with GITHUB_STEP_SUMMARY unset" >&2
@@ -112,12 +112,12 @@ fi
 # failure that does not exist. Assert the message, and assert the arm did not
 # widen the allow-list on the detect axis. ---
 evict_err=$(bash "$SCRIPT" success cancelled 2>&1 >/dev/null) || true
-if printf '%s' "$evict_err" | grep -q 'EVICTION'; then
+if printf '%s' "$evict_err" | grep -c >/dev/null 'EVICTION'; then
   pass=$((pass + 1)); echo "[ok] suite=cancelled diagnostic names concurrency eviction"
 else
   fail=$((fail + 1)); echo "[FAIL] suite=cancelled diagnostic does not name eviction" >&2
 fi
-if printf '%s' "$evict_err" | grep -q 'Re-run failed jobs'; then
+if printf '%s' "$evict_err" | grep -c >/dev/null 'Re-run failed jobs'; then
   pass=$((pass + 1)); echo "[ok] suite=cancelled diagnostic names the re-run remedy"
 else
   fail=$((fail + 1)); echo "[FAIL] suite=cancelled diagnostic names no remedy" >&2
@@ -125,7 +125,7 @@ fi
 # The arm must not have widened the allow-list: a FAILED detect with a cancelled
 # suite is a different state and must not inherit the eviction explanation.
 noevict_err=$(bash "$SCRIPT" failure cancelled 2>&1 >/dev/null) || true
-if printf '%s' "$noevict_err" | grep -q 'EVICTION'; then
+if printf '%s' "$noevict_err" | grep -c >/dev/null 'EVICTION'; then
   fail=$((fail + 1)); echo "[FAIL] detect=failure wrongly inherits the eviction diagnostic" >&2
 else
   pass=$((pass + 1)); echo "[ok] detect=failure does not inherit the eviction diagnostic"

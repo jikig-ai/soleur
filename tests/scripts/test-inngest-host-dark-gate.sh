@@ -820,7 +820,7 @@ else
     EMITTED="$(printf '%s\n' "$EMIT_LINE" | grep -oE '[a-z_]+=\$[a-z_]+' | sed 's/=.*//' | sort -u)"
     _missing=""
     for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid cutover_flag registry_fns; do
-      printf '%s\n' "$EMITTED" | grep -qx "$_f" || _missing="${_missing} ${_f}"
+      printf '%s\n' "$EMITTED" | grep -cx >/dev/null "$_f" || _missing="${_missing} ${_f}"
     done
     if [[ -z "$_missing" ]]; then pass; else fail "B12: the gate consumes field(s) the emitter does not write:${_missing}"; fi
     # And every one of those names must resolve through the gate's OWN extractor on a message built

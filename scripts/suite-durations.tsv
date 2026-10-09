@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=996
-# generated-at=2026-10-09T09:31:20Z
+# generated-at=2026-10-09T11:42:48Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -354,6 +354,7 @@ scripts/inngest-restart-poll-classify	124	measured
 scripts/inngest-soak-6178	22524	measured
 scripts/inngest-zot-boot-7462	434	measured
 scripts/inngest-zot-client-authz-6500	511	measured
+scripts/learning-retrieval-bench	996	floor
 scripts/lib/frontmatter-strip.test.sh	202	measured
 scripts/lib/incidents-roots.test.sh	179	measured
 scripts/lib/inngest-probe-row.test.sh	8702	measured
