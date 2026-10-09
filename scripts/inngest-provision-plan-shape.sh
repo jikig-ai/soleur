@@ -95,7 +95,7 @@ if [[ "$MODE" == additive ]]; then
       bad=1
     fi
   done <<<"$creates"
-  if ! printf '%s\n' "$creates" | grep -q .; then
+  if ! grep -q . <<<"$creates"; then
     echo "::error::plan-shape (additive): the plan creates NOTHING — a vacuous Phase-A birth rehearses nothing."
     bad=1
   fi
@@ -113,7 +113,7 @@ else
       echo "::error::plan-shape (nic-attach): a create of ${addr} is not admitted — the Phase-B delta is exactly the NIC attachment"; bad=1
     fi
   done <<<"$creates"
-  if ! printf '%s\n' "$creates" | grep -qxF 'hcloud_server_network.rehearsal[0]'; then
+  if ! grep -qxF 'hcloud_server_network.rehearsal[0]' <<<"$creates"; then
     echo "::error::plan-shape (nic-attach): the plan does not create hcloud_server_network.rehearsal[0] — a Phase-B apply that attaches nothing rehearses nothing."
     bad=1
   fi

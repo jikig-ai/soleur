@@ -167,7 +167,7 @@ want "M2 (no [N] arm in the scope regex) refuses the counted NIC create — the 
 mutant noimport 'done <<<"$imports"' 'done <<<""'
 want "M3 (importing check removed) admits the importing Phase-A plan — the arm is live" 0 "$TMP/m-imp.json" additive "$MUT"
 # M4 — the NIC-presence floor removed: an empty Phase-B plan passes.
-mutant nopresence 'if ! printf '"'"'%s\n'"'"' "$creates" | grep -qxF '"'"'hcloud_server_network.rehearsal[0]'"'"'; then' 'if false; then'
+mutant nopresence 'if ! grep -qxF '"'"'hcloud_server_network.rehearsal[0]'"'"' <<<"$creates"; then' 'if false; then'
 want "M4 (presence floor removed) admits a Phase-B plan with no NIC create — the arm is live" 0 "$TMP/empty.json" nic-attach "$MUT"
 }
 
