@@ -119,7 +119,10 @@ m_r() { printf '\n## Bump log\n\n| Bump | Capture date (UTC) | **%s** |\n' "$CAP
 # --- #9799 item 2: ci-deploy.sh (a deploy_pipeline_fix trigger file) must carry NO claim ---
 m_s() { printf '# zot %s (a CORRECT, current claim appended to the trigger file)\n' "$VER" >> "$1/ci-deploy.sh"; }
 m_t() { rm -f "$1/ci-deploy.sh"; }
-m_u() { sed -i 's|^MIN_ASSERTIONS=.*|MIN_ASSERTIONS=16|; /^# --- 11\. Trigger files carry NO/,/^echo "RESULT: /{/^echo "RESULT: /!d}' "$1/$GATE"; }  # check 11 deleted
+m_u() { sed -i '/^# --- 11\. ci-deploy\.sh (a trigger file) carries NO/,/^echo "RESULT: /{/^echo "RESULT: /!d}' "$1/$GATE"; }  # check 11 deleted
+m_x() { printf '# pinned zot (%s) -- the parenthesised form, appended to the trigger file\n' "$VER" >> "$1/ci-deploy.sh"; }
+m_y() { sed -i "s|zot $VER|zot version ${VER#v}|g" "$1/cloud-init-registry.yml"; }   # claim REWORDED away at the OTHER required location
+m_z() { sed -i 's|^## Version-scoped claim register|## Claim register (renamed)|' "$1/$PROV"; }   # the heading ci-deploy.sh points at
 m_v() { printf '# zot %s (stale claim, only in cloud-init, after a compliant ci-deploy.test.sh)\n' "v2.1.2" >> "$1/cloud-init-registry.yml"; }
 # A COHERENT bump: every non-trigger file moves together, ci-deploy.sh is NOT touched. The pin
 # digests are replaced by fresh synthetic ones, and the version token moves everywhere it is a claim.
@@ -162,6 +165,9 @@ run_mutation v "stale claim in cloud-init only (2nd member)" 10 "name a version 
 # w is the PROOF that a zot bump no longer requires touching ci-deploy.sh: a coherent bump of
 # every other file stays GREEN, and ci-deploy.sh is byte-identical to pristine (asserted below).
 run_mutation w "coherent BUMP, ci-deploy.sh untouched"        0 ""                            m_w
+run_mutation x "PARENTHESISED claim appended to ci-deploy.sh" 10 "carries a version-scoped claim" m_x
+run_mutation y "claim reworded in cloud-init-registry.yml"  10 "0 version-scoped claims"     m_y
+run_mutation z "sidecar register heading renamed"           10 "has no '## Version-scoped claim register'" m_z
 
 # The bump proof's second half: m_w must not have edited the trigger file. run_mutation deletes
 # its box, so re-run the mutator once more on a scratch copy and compare bytes.

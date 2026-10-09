@@ -324,21 +324,28 @@ else
   pass "pinned version $tf_ver_amd64 is at or above the declared floor $floor"
 fi
 
-# --- 11. Trigger files carry NO version-scoped claim (#9799 item 2) --------------------
+# --- 11. ci-deploy.sh (a trigger file) carries NO version-scoped claim (#9799 item 2) ---
 # The decoupling invariant. Check 7 proves every FOLLOWER names the pinned version; this proves
 # the file that must not be a follower stays free of the claim. A claim here, current or stale,
 # is the defect: ci-deploy.sh feeds triggers_replace of the web hosts' SSH provisioners, so the
 # next bump would have to edit it and redeliver it to both hosts for a comment. A missing file
-# is a FAIL, not a pass: zero files examined must not read as clean.
+# is a FAIL, not a pass: zero files examined must not read as clean. The pointer the file now
+# carries is asserted too, together with the sidecar heading it names, so a rename of that
+# heading cannot leave the pointer dangling.
 TRIGGER_NOCLAIM="$DIR/ci-deploy.sh"
+REGISTER_HEADING='## Version-scoped claim register'
 if [[ ! -f "$TRIGGER_NOCLAIM" ]]; then
   fail "ci-deploy.sh missing at $TRIGGER_NOCLAIM -- cannot verify it carries no version-scoped claim"
 else
   trig_hits="$(grep -ohE "$CLAIM_RE" "$TRIGGER_NOCLAIM" 2>/dev/null | sort -u | tr '\n' ' ' || true)"
-  if [[ -z "$trig_hits" ]]; then
-    pass "ci-deploy.sh (a deploy_pipeline_fix trigger file) carries no 'zot vX.Y.Z' claim, so a zot bump never has to edit it"
+  if [[ -n "$trig_hits" ]]; then
+    fail "ci-deploy.sh carries a version-scoped claim ($trig_hits) -- point the comment at the sidecar's '$REGISTER_HEADING' instead; a version token in a deploy_pipeline_fix trigger file makes every zot bump redeliver the script to both web hosts"
+  elif ! grep -qF -- "$REGISTER_HEADING" "$PROV"; then
+    fail "the sidecar has no '$REGISTER_HEADING' heading -- the pointer in ci-deploy.sh (and check 11's pointer assertion) names it; restore the heading or move the pointer with it"
+  elif ! grep -qF -- "$REGISTER_HEADING" "$TRIGGER_NOCLAIM"; then
+    fail "ci-deploy.sh no longer points at the sidecar's '$REGISTER_HEADING' -- the measured /v2/ claim in it has lost the place that records its version and date"
   else
-    fail "ci-deploy.sh carries a version-scoped claim ($trig_hits) -- point the comment at the sidecar's '## Version-scoped claim register' instead; a version token in a deploy_pipeline_fix trigger file makes every zot bump redeliver the script to both web hosts"
+    pass "ci-deploy.sh (a deploy_pipeline_fix trigger file) carries no 'zot vX.Y.Z' claim and points at the sidecar register, so a zot bump never has to edit it"
   fi
 fi
 

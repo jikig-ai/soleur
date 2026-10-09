@@ -9998,13 +9998,18 @@ fo99_run() {
     logger() { printf '%s\n' "$*" >> "$d/log"; }
     curl() {
       printf '%s\n' "$*" >> "$d/curl.argv"; printf 'x\n' >> "$d/curl.n"
-      printf '%s\n' "${HMAC_KEY:+set}" >> "$d/curl.keyenv"
+      # ANY variable carrying the secret into curl's environment is a leak, whatever it is named.
+      env | /usr/bin/grep -qF -- "$secret" && echo leak >> "$d/curl.keyenv"
       timeout 2 cat >> "$d/curl.stdin" || true; printf 202
     }
     case "$pymode" in
       real) python3() { printf '%s\n' "$*" >> "$d/py.argv"; printf '%s\n' "${HMAC_KEY:+set}" >> "$d/py.keyenv"; command python3 "$@"; } ;;
       missing) python3() { printf '%s\n' "$*" >> "$d/py.argv"; return 127; } ;;
       garbage) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf 'not-a-signature'; } ;;
+      # 64 hex then a newline and junk: only an end-anchored 64-hex guard refuses it
+      garbagenl) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf '%064d\njunk' 0 | tr 0 a; } ;;
+      short63) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf '%063d' 0 | tr 0 a; } ;;
+      long65) python3() { printf '%s\n' "$*" >> "$d/py.argv"; cat > /dev/null; printf '%065d' 0 | tr 0 a; } ;;
     esac
     if [[ "$rec" == "rec" ]]; then
       openssl() { printf '%s\n' "$*" >> "$d/ossl.argv"; command openssl "$@"; }
@@ -10021,7 +10026,8 @@ fo99_oracle() {  # <secret> <payload-file>: the OLD signer, as an independent re
 FO99_SECRETS=("fixture-fanout-secret"
   "$(printf 'abcdefghij%.0s' {1..7} | cut -c1-63)" "$(printf 'abcdefghij%.0s' {1..7} | cut -c1-64)"
   "$(printf 'abcdefghij%.0s' {1..7} | cut -c1-65)" "$(printf 'abcdefghij%.0s' {1..21} | cut -c1-200)"
-  "a\"b\\c \$d 'e;f|g&h")
+  "a\"b\\c \$d 'e;f|g&h"
+  " lead-and-trail " "é-ünï-ключ" $'multi\nline' "-dash" 'trailing-backslash\')
 FO99_CMDS=("deploy fixture" "deploy \"q\" \\ 'x' é ü" "deploy $(printf 'z%.0s' {1..300})")
 FO99_LONG="${FO99_SECRETS[4]}"
 FO99_RAN=0; FO99_BAD=0; FO99_BADMSG=""
@@ -10037,40 +10043,45 @@ for _s in "${FO99_SECRETS[@]}"; do
   done
 done
 TOTAL=$((TOTAL + 1))
-if [[ "$FO99_RAN" -eq 18 && "$FO99_BAD" -eq 0 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9799-1 fan-out: 18 (6 secrets x 3 commands) signatures are 64-hex and byte-identical to openssl dgst -sha256 -hmac, incl. 63/64/65/200-byte and shell-hostile keys"
+if [[ "$FO99_RAN" -eq 33 && "$FO99_BAD" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-1 fan-out: 33 (11 secrets x 3 commands) signatures are 64-hex and byte-identical to openssl dgst -sha256 -hmac, incl. 63/64/65/200-byte, shell-hostile, space-padded, non-ASCII and multi-line keys"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-1 fan-out signature matrix: ran=$FO99_RAN (want 18) mismatches=$FO99_BAD:$FO99_BADMSG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-1 fan-out signature matrix: ran=$FO99_RAN (want 33) mismatches=$FO99_BAD:$FO99_BADMSG"
 fi
 
-FO99_ARGV_OK=1; FO99_ARGV_MSG=""
+FO99_ARGV_OK=1; FO99_ARGV_MSG=""; FO99_ARGV_N=0
 for _s in "fixture-fanout-secret" "$FO99_LONG"; do
   fo99_run "$_s" "deploy fixture" real rec
-  if /usr/bin/grep -qF -- "$_s" "$FO99/run/curl.argv" "$FO99/run/py.argv" "$FO99/run/ossl.argv" 2>/dev/null \
+  FO99_ARGV_N=$((FO99_ARGV_N + 1))
+  if /usr/bin/grep -qF -- "$_s" "$FO99/run/curl.argv" "$FO99/run/py.argv" "$FO99/run/ossl.argv" "$FO99/run/log" "$FO99/run/curl.stdin" 2>/dev/null \
      || [[ -s "$FO99/run/ossl.argv" || "$(wc -l < "$FO99/run/curl.n")" -ne 1 || "$(wc -l < "$FO99/run/py.argv")" -ne 1 ]] \
      || ! /usr/bin/grep -qE '^-I -c ' "$FO99/run/py.argv"; then
     FO99_ARGV_OK=0; FO99_ARGV_MSG+=" [${#_s}B: ossl=$(wc -c < "$FO99/run/ossl.argv")B py=$(cut -c1-60 "$FO99/run/py.argv")]"
   fi
 done
 TOTAL=$((TOTAL + 1))
-if [[ "$FO99_ARGV_OK" -eq 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9799-2 fan-out: the hook secret appears on no argv (curl, python3, openssl), openssl is never invoked, python3 runs once as -I -c"
+if [[ "$FO99_ARGV_OK" -eq 1 && "$FO99_ARGV_N" -eq 2 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-2 fan-out: the hook secret appears on no argv (curl, python3, openssl), in no log line and not in curl's stdin config; openssl is never invoked; python3 runs once as -I -c"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-2 fan-out leaks the secret on an argv or still shells out to openssl:$FO99_ARGV_MSG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-2 fan-out leaks the secret (argv, log or stdin config), still shells out to openssl, or the loop ran ${FO99_ARGV_N}x (want 2):$FO99_ARGV_MSG"
 fi
 
 fo99_run "fixture-fanout-secret" "deploy fixture" real
 TOTAL=$((TOTAL + 1))
 if [[ "$(cat "$FO99/run/py.keyenv")" == "set" && "$(cat "$FO99/run/curl.keyenv")" == "" ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9799-3 fan-out: the key is in the python3 call's environment only (not in curl's, not exported to the shell)"
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-3 fan-out: the key is in the python3 call's environment as HMAC_KEY, and the secret is in NO variable of curl's environment under any name"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-3 key environment channel wrong (python3 saw='$(cat "$FO99/run/py.keyenv")' curl saw='$(cat "$FO99/run/curl.keyenv")')"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-3 key environment channel wrong (python3 saw HMAC_KEY='$(cat "$FO99/run/py.keyenv")', curl env carries the secret='$(cat "$FO99/run/curl.keyenv")')"
 fi
 
-FO99_REFUSE_OK=1; FO99_REFUSE_MSG=""
+FO99_REFUSE_OK=1; FO99_REFUSE_MSG=""; FO99_REFUSE_N=0
 for _case in "empty||real|webhook secret unavailable" "null|null|real|webhook secret unavailable" \
              "py127|fixture-fanout-secret|missing|could not compute the request signature" \
-             "garbage|fixture-fanout-secret|garbage|could not compute the request signature"; do
+             "garbage|fixture-fanout-secret|garbage|could not compute the request signature" \
+             "hexplusjunk|fixture-fanout-secret|garbagenl|could not compute the request signature" \
+             "short63|fixture-fanout-secret|short63|could not compute the request signature" \
+             "long65|fixture-fanout-secret|long65|could not compute the request signature"; do
+  FO99_REFUSE_N=$((FO99_REFUSE_N + 1))
   IFS='|' read -r _label _sec _mode _logmsg <<< "$_case"
   fo99_run "$_sec" "deploy fixture" "$_mode"
   if [[ "$(cat "$FO99/run/rc")" != "1" || -s "$FO99/run/curl.n" || -s "$FO99/run/curl.stdin" ]] \
@@ -10079,10 +10090,10 @@ for _case in "empty||real|webhook secret unavailable" "null|null|real|webhook se
   fi
 done
 TOTAL=$((TOTAL + 1))
-if [[ "$FO99_REFUSE_OK" -eq 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9799-4 fan-out fails closed: empty secret, the string null, python3 unavailable (127) and a non-64-hex signature each return 1, log a FANOUT line and never call curl"
+if [[ "$FO99_REFUSE_OK" -eq 1 && "$FO99_REFUSE_N" -eq 7 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9799-4 fan-out fails closed: empty secret, the string null, python3 unavailable (127), a non-hex signature, 64 hex plus a trailing line, 63 hex and 65 hex each return 1, log a FANOUT line and never call curl"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-4 fan-out did not fail closed:$FO99_REFUSE_MSG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-4 fan-out did not fail closed (cases run: ${FO99_REFUSE_N}, want 7):$FO99_REFUSE_MSG"
 fi
 
 TOTAL=$((TOTAL + 1))
@@ -10093,11 +10104,12 @@ if ! /usr/bin/grep -qE 'openssl[[:space:]]+(dgst|mac)' "$DEPLOY_SCRIPT" && [[ "$
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-5 source census: openssl dgst/mac present, signer count=$FO99_SNIP_N (want 1), or HMAC_KEY exported"
 fi
-# The production script runs under `set -euo pipefail`, where an unguarded failing `sig=$(...)` would
-# ABORT the whole deploy script instead of returning 1. The rows above run without errexit (and a
-# `||` context disables it for the whole function), so this one drives the real function under
-# `bash -euo pipefail` with python3 absent and requires the FANOUT line to be logged: the line is
-# written only if the `|| sig=""` guard let execution reach the shape check.
+# The production script runs under `set -euo pipefail`. Today every caller of fan_out_to_peers sits
+# in an `if` condition (errexit is off for the whole function there), so the `|| sig=""` guard is
+# defence for a future BARE call, where an unguarded failing `sig=$(...)` would abort the deploy
+# script instead of returning 1. The rows above run without errexit, so this one drives the real
+# function as a bare call under `bash -euo pipefail` with python3 absent and requires the FANOUT
+# line to be logged: the line is written only if the guard let execution reach the shape check.
 FO99_E="$FO99/errexit"; assert_fixture_dir "$FO99_E"; mkdir -p "$FO99_E"; : > "$FO99_E/log"; : > "$FO99_E/curl"
 jq -n --arg s "fixture-fanout-secret" '[{id:"deploy-peer","trigger-rule":{match:{secret:$s}}}]' > "$FO99_E/hooks.json"
 FO99_E_RC=0
@@ -10117,7 +10129,7 @@ if [[ "$FO99_E_RC" -ne 0 && ! -s "$FO99_E/curl" ]] && /usr/bin/grep -qF 'FANOUT:
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-6 fan-out under errexit with python3 absent (rc=$FO99_E_RC curl_bytes=$(wc -c < "$FO99_E/curl") log=$(cut -c1-90 "$FO99_E/log" | head -1)) — the signing failure aborted before the FANOUT line or a request was forwarded"
 fi
-rm -rf "$FO99"; unset FO99 FO99_E FO99_E_RC FO99_SECRETS FO99_CMDS FO99_LONG FO99_RAN FO99_BAD FO99_BADMSG FO99_ARGV_OK FO99_ARGV_MSG \
+rm -rf "$FO99"; unset FO99 FO99_E FO99_E_RC FO99_ARGV_N FO99_REFUSE_N _s _c _got _want _case _label _sec _mode _logmsg FO99_SECRETS FO99_CMDS FO99_LONG FO99_RAN FO99_BAD FO99_BADMSG FO99_ARGV_OK FO99_ARGV_MSG \
   FO99_REFUSE_OK FO99_REFUSE_MSG FO99_SNIP_N; unset -f fo99_run fo99_oracle
 
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

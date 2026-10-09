@@ -1309,9 +1309,10 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# The pinned zot (its version lives in zot-registry.tf; the dated claim is in zot-image.provenance.md,
-# '## Version-scoped claim register'), with this repo's exact accessControl,
-# MEASURED 2026-10-08 by running the pinned image locally against this config (#9252):
+# zot, with this repo's exact accessControl. The version, the date and the re-measurement status of
+# the claim below live in zot-image.provenance.md, '## Version-scoped claim register' (row 1), not
+# here: this file feeds triggers_replace, so a version or date in it would make every zot bump edit it.
+# The measurement (#9252) was made by running the pinned image locally against this config:
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:

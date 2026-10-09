@@ -83,7 +83,7 @@ Delivery constraint (hold in force): this PR triggers no infrastructure apply, t
 - Deriving the full `deploy_pipeline_fix` trigger set from `server.tf` inside the staleness gate -> cut: P3 is bought for the one file the tracker names by a single grep; `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` already owns the trigger-file list.
 - A new HMAC helper script or `scripts/lib/` library -> cut: the canonical one-line snippet exists and is oracle-tested (`tests/scripts/test-argv-bearer-sweep.sh`, stage S2-A part 2: 8 keys x 4 bodies). `ci-deploy.sh` runs standalone on the host and cannot source a repo library.
 - A fd-based python3 key channel (`3< <(printf …)`) -> cut: `/proc/<pid>/environ` is owner-only (mode 0400), so it gives the same exposure class as an fd table; it adds a bash process-substitution and a second protocol for nothing, and it would diverge from the S2 snippet the census regexes know.
-- A pure-openssl manual HMAC construction (as in `hmac-sha1-b64.sh`) -> cut: python3 is a cloud-init dependency present on every host (`soleur-host-bootstrap.sh`: "python3 is a cloud-init dependency, always present"); the manual construction is ~30 lines of block-size handling to remove a dependency that already exists. Missing python3 fails closed anyway (P6).
+- A pure-openssl manual HMAC construction (as in `hmac-sha1-b64.sh`) -> cut: python3 is present on the web hosts because cloud-init itself is Python (`server.tf` and `soleur-host-bootstrap.sh` both state the guarantee; the same one-liner already runs from `scripts/cutover-inngest.sh`); the manual construction is ~30 lines of block-size handling to remove a dependency that already exists. Missing python3 fails closed anyway (P6).
 
 **Learnings applied.**
 
@@ -155,7 +155,7 @@ fi
 liveness_signal:
   what: the existing journald FANOUT lines from ci-deploy.sh ("FANOUT: peer <ip> accepted deploy (HTTP 202)") plus the DEPLOY_SCRIPT_SHA marker each ci-deploy.sh invocation emits, shipped by Vector to Better Stack
   cadence: per deploy that has peers configured
-  alert_target: the release workflow's deploy-status poll (web-platform-release.yml) fails the release step, which pages through the existing release-failure notification
+  alert_target: none today for this failure. The signal is pull-only (layer 3, Vector -> Better Stack `FANOUT:` lines, and the deploy-status `reason=ok_peer_fanout_degraded`). A fan-out failure on the deploy path exits 0 and does NOT red the release, so web-2 can stay on the previous build without a page; this is the pre-existing gap for a peer that is NOT accepted, and this PR adds one more way to reach it. Recorded at review (PR #9805), not fixed here.
   configured_in: apps/web-platform/infra/ci-deploy.sh (fan_out_to_peers and the DEPLOY_SCRIPT_SHA emit); Vector Source 4 in apps/web-platform/infra
 error_reporting:
   destination: journald tag LOG_TAG -> Vector -> Better Stack (same path as every other ci-deploy.sh log line); the fan-out return code is folded into the deploy-status reason
@@ -163,10 +163,10 @@ error_reporting:
 failure_modes:
   - mode: signature cannot be computed (python3 missing, empty or null secret)
     detection: the new FANOUT log line, plus the existing "FANOUT: webhook secret unavailable" line for the empty/null case; the function returns 1 so deploy-status carries the reason
-    alert_route: release workflow deploy-status poll -> release failure notification
+    alert_route: none (pull-only: Better Stack search for the FANOUT line; deploy-status reason on the originating host)
   - mode: signature computed but peer rejects it (key or payload mismatch)
     detection: existing "FANOUT: peer <ip> NOT accepted (HTTP <code>)" line and the peer's own deploy-status
-    alert_route: same as above
+    alert_route: same as above (none; the peer's own deploy-status carries the per-host state)
 logs:
   where: journalctl -t <LOG_TAG> on the host, aggregated in Better Stack
   retention: Better Stack plan retention (unchanged)
