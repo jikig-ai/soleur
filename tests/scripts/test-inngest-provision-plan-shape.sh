@@ -76,9 +76,9 @@ ADDITIVE_OK=(
   doppler_secret.rehearsal_signing_key:create doppler_secret.rehearsal_event_key:create
   doppler_secret.rehearsal_redis_password:create doppler_secret.rehearsal_diagnostic_boot:create
   doppler_secret.rehearsal_betterstack_logs_token:create doppler_service_token.rehearsal:create
-  hcloud_volume.rehearsal:create hcloud_volume.rehearsal_luks:create
+  hcloud_volume.rehearsal_inngest:create hcloud_volume.rehearsal_inngest_inngest_luks:create
   hcloud_firewall.rehearsal:create hcloud_server.rehearsal:create
-  hcloud_volume_attachment.rehearsal:create hcloud_volume_attachment.rehearsal_luks:create
+  hcloud_volume_attachment.rehearsal_inngest:create hcloud_volume_attachment.rehearsal_inngest_inngest_luks:create
 )
 
 # ── admitted ────────────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ want "additive: the Phase-A birth plan (creates only, rehearsal-scoped) is admit
 # Phase B: second apply of the same root with nic_attached=true — the ONLY change is the
 # counted NIC attachment; the rest of the stack no-ops (or is absent from the plan).
 plan "$TMP/phaseB.json" hcloud_server_network.rehearsal\[0\]:create hcloud_server.rehearsal:no-op \
-  hcloud_volume.rehearsal:no-op hcloud_volume.rehearsal_luks:no-op doppler_environment.rehearsal:no-op
+  hcloud_volume.rehearsal_inngest:no-op hcloud_volume.rehearsal_inngest_inngest_luks:no-op doppler_environment.rehearsal:no-op
 want "nic-attach: the Phase-B delta (exactly hcloud_server_network.rehearsal[0] created) is admitted" 0 "$TMP/phaseB.json" nic-attach
 # Must-PASS non-canonical: the same delta with refresh reads present.
 plan "$TMP/phaseB-reads.json" hcloud_server_network.rehearsal\[0\]:create data.hcloud_network.private:read \
@@ -105,10 +105,10 @@ plan "$TMP/m-module.json" module.foo.hcloud_server.rehearsal:create
 want "additive refuses a module-scoped create ending .rehearsal" 1 "$TMP/m-module.json" additive "" "NON-rehearsal address: module.foo.hcloud_server.rehearsal"
 plan "$TMP/m-suffix.json" hcloud_volume.inngest_rehearsal:create
 want "additive refuses hcloud_volume.inngest_rehearsal (suffix is not scope)" 1 "$TMP/m-suffix.json" additive "" "NON-rehearsal address: hcloud_volume.inngest_rehearsal"
-plan "$TMP/m-imp.json" "${ADDITIVE_OK[@]/hcloud_volume.rehearsal:create/hcloud_volume.rehearsal:no-op:import=100000001}"
-want "additive refuses an importing resource_change (import plans as no-op)" 1 "$TMP/m-imp.json" additive "" "the plan IMPORTS hcloud_volume.rehearsal"
-plan "$TMP/m-imp2.json" hcloud_server_network.rehearsal\[0\]:create hcloud_volume.rehearsal:no-op:import=100000001
-want "nic-attach refuses an importing resource_change" 1 "$TMP/m-imp2.json" nic-attach "" "the plan IMPORTS hcloud_volume.rehearsal"
+plan "$TMP/m-imp.json" "${ADDITIVE_OK[@]/hcloud_volume.rehearsal_inngest:create/hcloud_volume.rehearsal_inngest:no-op:import=100000001}"
+want "additive refuses an importing resource_change (import plans as no-op)" 1 "$TMP/m-imp.json" additive "" "the plan IMPORTS hcloud_volume.rehearsal_inngest"
+plan "$TMP/m-imp2.json" hcloud_server_network.rehearsal\[0\]:create hcloud_volume.rehearsal_inngest:no-op:import=100000001
+want "nic-attach refuses an importing resource_change" 1 "$TMP/m-imp2.json" nic-attach "" "the plan IMPORTS hcloud_volume.rehearsal_inngest"
 # Phase A must be NIC-ABSENT, not merely rehearsal-scoped — a NIC create in an additive plan
 # is otherwise admitted and only caught ~20 min later by the evidence gate, on a paid host.
 plan "$TMP/m-a-nic.json" "${ADDITIVE_OK[@]}" hcloud_server_network.rehearsal\[0\]:create

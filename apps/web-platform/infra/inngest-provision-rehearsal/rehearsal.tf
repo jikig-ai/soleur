@@ -59,8 +59,8 @@ locals {
 
   rehearsal_user_data_plain = replace(templatefile("${path.module}/../cloud-init-inngest.yml", {
     # --- identity/scratch args (the ONLY deliberate divergences from prod's map) ---
-    inngest_volume_id      = hcloud_volume.rehearsal.id
-    inngest_luks_volume_id = hcloud_volume.rehearsal_luks.id
+    inngest_volume_id      = hcloud_volume.rehearsal_inngest.id
+    inngest_luks_volume_id = hcloud_volume.rehearsal_inngest_luks.id
     doppler_token          = doppler_service_token.rehearsal.key
     inngest_doppler_config = local.rehearsal_doppler_config
     # SDK URL at loopback — no web backend exists for this host to register with, and a
@@ -203,7 +203,7 @@ resource "doppler_service_token" "rehearsal" {
 # `format` — the blkid signature IS the LUKS discriminator; declaring ext4 would make the
 # resolver's empty arm unreachable, see inngest-redis-luks.tf's header note). Size matches
 # prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
-resource "hcloud_volume" "rehearsal" {
+resource "hcloud_volume" "rehearsal_inngest" {
   name     = "${local.rehearsal_host_name}-store"
   size     = 10
   location = var.location
@@ -213,7 +213,7 @@ resource "hcloud_volume" "rehearsal" {
   }
 }
 
-resource "hcloud_volume" "rehearsal_luks" {
+resource "hcloud_volume" "rehearsal_inngest_luks" {
   name     = "${local.rehearsal_host_name}-luks"
   size     = 10
   location = var.location
@@ -291,14 +291,14 @@ resource "hcloud_server" "rehearsal" {
   }
 }
 
-resource "hcloud_volume_attachment" "rehearsal" {
-  volume_id = hcloud_volume.rehearsal.id
+resource "hcloud_volume_attachment" "rehearsal_inngest" {
+  volume_id = hcloud_volume.rehearsal_inngest.id
   server_id = hcloud_server.rehearsal.id
   automount = false
 }
 
-resource "hcloud_volume_attachment" "rehearsal_luks" {
-  volume_id = hcloud_volume.rehearsal_luks.id
+resource "hcloud_volume_attachment" "rehearsal_inngest_luks" {
+  volume_id = hcloud_volume.rehearsal_inngest_luks.id
   server_id = hcloud_server.rehearsal.id
   automount = false
 }
