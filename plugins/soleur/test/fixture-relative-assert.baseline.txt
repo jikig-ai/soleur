@@ -185,6 +185,7 @@
 11	apps/web-platform/infra/inngest-luks-cutover.sh
 1	apps/web-platform/infra/inngest-luks-cutover.test.sh
 7	apps/web-platform/infra/inngest-nic-wait.test.sh
+2	apps/web-platform/infra/inngest-provision-rehearsal.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
 1	apps/web-platform/infra/inngest.test.sh
@@ -368,6 +369,7 @@
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
 1	scripts/followthroughs/inngest-luks-cutover-6894.sh
+2	scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
 1	scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
