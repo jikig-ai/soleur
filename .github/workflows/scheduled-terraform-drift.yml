@@ -2023,7 +2023,9 @@ jobs:
           fi
 
       - name: File an issue for orphaned rehearsal hosts
-        if: steps.sweep.outputs.orphans != '0'
+        if: >-
+          always()
+          && steps.sweep.outputs.orphans != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NAMES: ${{ steps.sweep.outputs.names }}
@@ -2316,8 +2318,9 @@ jobs:
           # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
           survivors=""
           for _kind in servers volumes ssh_keys firewalls; do
-            body="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
-                      "https://api.hetzner.cloud/v1/${_kind}?per_page=50&label_selector=app%3Dsoleur-inngest-provision-rehearsal")" || {
+            body="$(curl -sS -f --config - \
+                      "https://api.hetzner.cloud/v1/${_kind}?per_page=50&label_selector=app%3Dsoleur-inngest-provision-rehearsal" \
+                      < <(printf 'header = "Authorization: Bearer %s"\n' "${TOKEN}")" || {
               echo "::error::could not list Hetzner ${_kind} — this sweep has no verdict. Fail-closed rather than reporting a clean sweep it did not perform."
               exit 1; }
             _next="$(printf '%s' "$body" | jq -r '.meta.pagination.next_page // "null"')"
@@ -2332,8 +2335,9 @@ jobs:
           # resource whose `labels` block was dropped is invisible to the query above —
           # name-prefix listing catches a labeled-out orphan. (Servers carry the name that
           # matters.)
-          _named="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
-                    "https://api.hetzner.cloud/v1/servers?per_page=50&name=${REHEARSAL_PREFIX}")" || {
+          _named="$(curl -sS -f --config - \
+                    "https://api.hetzner.cloud/v1/servers?per_page=50&name=${REHEARSAL_PREFIX}" \
+                    < <(printf 'header = "Authorization: Bearer %s"\n' "${TOKEN}")" || {
             echo "::error::could not name-sweep Hetzner servers — fail-closed."; exit 1; }
           _nhits="$(printf '%s' "$_named" | jq -r '[.servers[]? | .name] | .[]' 2>/dev/null || echo unreadable)"
           if [[ "$_nhits" == unreadable ]]; then
