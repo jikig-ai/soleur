@@ -52,6 +52,10 @@ locals {
     # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
     # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
     workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
+    # W3 (epic #9601) — the advisory runtime-image CVE scan's liveness monitor, added under the two-PR rule: route
+    # it after the first measured check-in. Meanwhile the unrouted monitor still opens a Sentry issue on a missed
+    # or errored check-in (exit 3 = unmeasured posts error), and the follow-through #9826 counts unmeasured runs.
+    image_cve_scan = "advisory scan; the unrouted monitor still opens a Sentry issue on a missed or unmeasured run; route after the first measured check-in (#9826)"
   }
 }
 

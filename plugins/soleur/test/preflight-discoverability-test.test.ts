@@ -2855,7 +2855,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (Doppler soleur/prd_terraform) and the post-replace registry host's own heartbeat rows are graded for
   // `zot_image_digest=<final D12>`. NO SUBSTITUTE: those rows land only in the Logs warehouse, which has no
   // unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 50;
+  // #9826 (2026-10-09): +1 (50 -> 51) for `2026-10-09-feat-runtime-image-cve-scan-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh SOLEUR_IMAGE_CVE_SCAN`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the per-finding marker is private BY DESIGN (the repository is public, so
+  // the job log carries counts only) and lands only in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 51;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
