@@ -666,7 +666,7 @@ esac
 # Bare repos contain stale working-tree files that diverge from HEAD.
 # Running tests from a bare root produces phantom failures.
 # Use a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh
-if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
+if git rev-parse --is-bare-repository 2>/dev/null | grep -c >/dev/null true; then
   echo "ERROR: Cannot run tests from a bare repository root." >&2
   echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
   echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
@@ -6473,7 +6473,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         # good-sha/bad-sha and nothing to restore, so printing the steps there would send the
         # operator through irrelevant ref surgery. The per-dimension `next:` line above carries
         # each of those dimensions' own remedy.
-        if printf '%s\n' "$_repo_fatal" | grep -qE '^FATAL[[:space:]]+(head|worktree)'; then
+        if printf '%s\n' "$_repo_fatal" | grep -cE >/dev/null '^FATAL[[:space:]]+(head|worktree)'; then
           echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
           echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
           echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2

@@ -575,7 +575,7 @@ ASSERTED=$((ASSERTED + 1))
 printf '== arm 12: env scrub\n'
 new_fixture a12
 stub "$FD/env-probe.sh" \
-  'if env | grep -qE "^(GIT_DIR|GIT_INDEX_FILE|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_NAMESPACE|GIT_TEMPLATE_DIR|GIT_EXEC_PATH|SSH_ASKPASS|CI|GITHUB_ACTIONS|LEFTHOOK|GIT_TRACE)="; then exit 1; fi' \
+  'if env | grep -cE >/dev/null "^(GIT_DIR|GIT_INDEX_FILE|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_NAMESPACE|GIT_TEMPLATE_DIR|GIT_EXEC_PATH|SSH_ASKPASS|CI|GITHUB_ACTIONS|LEFTHOOK|GIT_TRACE)="; then exit 1; fi' \
   'exit 0'
 write_members "$FD/members.txt" <<EOF
 env-probe|fast|bash $FD/env-probe.sh
@@ -929,7 +929,7 @@ while IFS= read -r erow; do
       ;;
     glob)
       member_file="$(printf '%s\n' "$eargv" | awk '{print $NF}')"
-      if printf '%s\n' "$SUITE_GLOBS" | grep -qF "${rest}*.test.sh" \
+      if printf '%s\n' "$SUITE_GLOBS" | grep -cF >/dev/null "${rest}*.test.sh" \
          && [[ -f "$REPO_ROOT/$member_file" ]]; then
         pass "anchor: $ename covered by a SUITE_GLOB and its file exists"
       else
