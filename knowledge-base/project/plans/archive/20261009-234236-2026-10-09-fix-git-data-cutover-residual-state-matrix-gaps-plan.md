@@ -271,12 +271,12 @@ discoverability_test:
 - [x] Executed notify body exits 0 with the new text (plain words, no backtick or `$`), keeps the subject words `PROBE_FAILED` and `FREEZE_HELD`, and its text names `store_unverified`; no job output, no `needs.cutover.outputs` reference and no secret binding changed.
 - [x] `MUTANT_FLOOR` and `FLOOR` restated from a measured run; `git-data-cutover-access.test.sh`, `tests/scripts/test-git-data-root-token-census.sh`, the shell-trace credential-refusal lint and `ci-deploy.test.sh` pass; actionlint is clean on the workflow.
 - [x] Runbook: gc verdict-map row added; the booting-host `PROBE_FAILED` caveat replaced; the `FREEZE_HELD` row and the plain statement of the flip-unwind cost added; the `nothing_to_rollback` and force-cancel sentences kept.
-- [ ] `git diff origin/main...HEAD -- .github/workflows/git-data-cutover.yml` touches none of the #9811 regions; the PR body's first line says merging alone does not mutate production; it uses `Refs #9439, #8211, #9066, #9377, #8609` only (no `Closes`); merged through the queue, no `--admin`.
+- [x] `git diff origin/main...HEAD -- .github/workflows/git-data-cutover.yml` touches none of the #9811 regions; the PR body's first line says merging alone does not mutate production; it uses `Refs #9439, #8211, #9066, #9377, #8609` only (no `Closes`); the merge route (queue, no `--admin`) is recorded by the merge commit.
 - [x] The rollback recipe (revert this PR) is simulated once in a scratch detached worktree: `git revert --no-commit` then the same targeted suite passes.
 
 ### Post-merge
 
-- [ ] One comment on #9439 with the deferral table; the arm-B issue filed; #9439 not closed.
+- [x] One comment on #9439 with the deferral table; the arm-B issue filed; #9439 not closed.
 
 ## Test Scenarios
 

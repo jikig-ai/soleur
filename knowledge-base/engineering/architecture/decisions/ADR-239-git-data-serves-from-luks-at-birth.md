@@ -443,4 +443,4 @@ flag-off write landed but whose read-back failed leaves the fleet on the old env
 assumption: the probe `if:` reads the unfreeze step's `gc_timer_failed` output after the step exited non-zero; that is documented
 runner behaviour and is checked by the first real dispatch, not by any offline suite.
 
-Plan: `knowledge-base/project/plans/2026-10-09-fix-git-data-cutover-residual-state-matrix-gaps-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261009-234236-2026-10-09-fix-git-data-cutover-residual-state-matrix-gaps-plan.md`.
