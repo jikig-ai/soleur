@@ -142,8 +142,9 @@ jobs:
           [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
           echo "::add-mask::$JWT"
 
-          INSTALL_TOKEN=$(curl -sS -X POST \
-            -H "Authorization: Bearer $JWT" \
+          # The App JWT reaches curl on its stdin config (ADR-280), not its argument list.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          INSTALL_TOKEN=$(bc_curl board-status-sync 'Authorization:Bearer :JWT' -- -sS -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \

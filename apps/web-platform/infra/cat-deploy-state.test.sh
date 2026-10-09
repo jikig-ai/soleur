@@ -250,6 +250,44 @@ OWC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="
 assert "malformed outer_wrap_canary.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$OWC_BAD' | jq -r .outer_wrap_canary.checked_at) == '0' ]]"
 
+# Workspace-isolation probe verdict (#2640) surfaced under workspace_isolation —
+# the same canary_state_json shape on the separate WORKSPACE_ISOLATION_STATE_FILE
+# ledger (sdk_version rides as "" — a vitest run carries none).
+WI_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/no-wi.json" bash "$TARGET")
+assert "workspace_isolation.verdict sentinel 'unknown' when no state file" \
+  "[[ \$(printf '%s' '$WI_ABSENT' | jq -r .workspace_isolation.verdict) == 'unknown' ]]"
+assert "workspace_isolation.consecutive_pass sentinel 0 when no state file" \
+  "[[ \$(printf '%s' '$WI_ABSENT' | jq -r .workspace_isolation.consecutive_pass) == '0' ]]"
+echo '{"verdict":"workspace_isolation_failed","reason":"vitest_rc_1","sdk_version":"","checked_at":1751000700,"consecutive_pass":0,"first_pass_at":0}' > "$TMP/wi.json"
+WI_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi.json" bash "$TARGET")
+assert "workspace_isolation.verdict read from state file (workspace_isolation_failed)" \
+  "[[ \$(printf '%s' '$WI_PRESENT' | jq -r .workspace_isolation.verdict) == 'workspace_isolation_failed' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000800,"consecutive_pass":4,"first_pass_at":1750800000}' > "$TMP/wi-soak.json"
+WI_SOAK=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-soak.json" bash "$TARGET")
+assert "workspace_isolation.consecutive_pass surfaced (4)" \
+  "[[ \$(printf '%s' '$WI_SOAK' | jq -r .workspace_isolation.consecutive_pass) == '4' ]]"
+assert "workspace_isolation.first_pass_at surfaced" \
+  "[[ \$(printf '%s' '$WI_SOAK' | jq -r .workspace_isolation.first_pass_at) == '1750800000' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":"not-a-number"}' > "$TMP/wi-bad.json"
+WI_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-bad.json" bash "$TARGET")
+assert "malformed workspace_isolation.checked_at falls back to sentinel 0" \
+  "[[ \$(printf '%s' '$WI_BAD' | jq -r .workspace_isolation.checked_at) == '0' ]]"
+# The ledger identity stamp (#2640 review): a file stamped by a FOREIGN
+# mechanism (an env-aliased canary writer interleaving vocabularies) must read
+# as the sentinel — foreign `pass` verdicts can never inflate this soak. The
+# matching stamp reads normally; an ABSENT stamp is a pre-stamp-era file and is
+# read normally (rolling deploys must not blind the existing soak).
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000900,"consecutive_pass":9,"first_pass_at":1750700000,"ledger":"sandbox-canary"}' > "$TMP/wi-foreign.json"
+WI_FOREIGN=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-foreign.json" bash "$TARGET")
+assert "workspace_isolation reads 'unknown' on a foreign ledger stamp" \
+  "[[ \$(printf '%s' '$WI_FOREIGN' | jq -r .workspace_isolation.verdict) == 'unknown' ]]"
+assert "workspace_isolation.reason names the foreign stamp" \
+  "[[ \$(printf '%s' '$WI_FOREIGN' | jq -r .workspace_isolation.reason) == 'foreign_ledger_stamp' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000900,"consecutive_pass":9,"first_pass_at":1750700000,"ledger":"workspace-isolation"}' > "$TMP/wi-own.json"
+WI_OWN=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-own.json" bash "$TARGET")
+assert "workspace_isolation reads normally on its own ledger stamp" \
+  "[[ \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.verdict) == 'pass' && \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.consecutive_pass) == '9' ]]"
+
 # --- #5960 live seccomp loaded/host discriminators (Phase 1) ------------------
 # seccomp_profile_loaded_matches_host (reload leg, host-jq skew-immune),
 # seccomp_profile_host_sha256 (raw sha256sum — delivery leg), and
