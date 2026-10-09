@@ -210,7 +210,12 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     const pair = createWorkspacePair();
     pairs.push(pair);
     const sentinel = `FR7B_SECRET_${randomBytes(8).toString("hex")}`;
-    const VENDOR_TAIL = ["--bind", "/proc", "/proc"];
+    // The vendored argv's namespace set — --unshare-user is load-bearing under
+    // the shim: a /proc-exposing argv without it cannot mount a fresh procfs
+    // (bwrap 0.8.0 in-image → EPERM) and the shim refuses rather than ship the
+    // leak. The deploy-probe shape (pidns without userns) is the counter-case,
+    // pinned by the passthrough row in bwrap-shim.test.ts.
+    const VENDOR_TAIL = ["--unshare-user", "--bind", "/proc", "/proc"];
 
     const handle = spawnSandboxB(pair.rootB, {
       pair,
