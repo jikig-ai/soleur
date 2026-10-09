@@ -429,3 +429,9 @@ The attested text is the record as of `5bb35c17ad`; this commit changes only the
 `attested_at_sha`, the two checklist boxes above and this section. Residual, non-blocking: the lint-baseline difference is
 a one-line-in, one-line-out change counted as "1 line"; Article 30 PA-13's cell already carried an odd bold-marker count
 before any amendment (cosmetic, not introduced here).
+
+**Rebase note (2026-10-09, appended).** After the attestation the PR branch was rebased onto `origin/main`, which rewrote the
+commit ids above; they no longer resolve in the branch. The attested content is unchanged: the record, the Article 30
+register and the compliance-posture file are byte-identical (same git blob ids) at the rebased commits that correspond to the
+audited ones, namely `0d3d6752fc` (pass 1, was `f75ba5c3bb`) and `0621c88003` (pass 2, was `5bb35c17ad`); the attestation
+commit is `e3b89c5d7f` (was `acd34680f7`). The PR is squash-merged, so the merged history carries the content, not these ids.
