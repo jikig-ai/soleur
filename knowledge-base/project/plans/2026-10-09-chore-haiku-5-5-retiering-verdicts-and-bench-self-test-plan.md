@@ -478,7 +478,7 @@ discoverability_test:
 - [x] **AC4 (design questions).** The addendum records the CLI internal-model table and the leader-effort, refusal-retry and attribution-limit dispositions with their triggers.
 - [x] **AC5 (alert).** `grep -c 'name *= "haiku-no-text-block-rate"' apps/web-platform/infra/sentry/issue-alerts.tf` prints `1` and `alert-reference.json` carries the entry; the contract test, `bash scripts/sentry-alert-reference-gate.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
 - [x] **AC6 (bench).** The self-test is green in a clean environment, with `NO_PARAPHRASE=1` exported, and with a synthetic key plus recording `CURL_BIN` (zero recorded calls); `bash scripts/learning-retrieval-bench.test.sh` passes and each Guard 1 mutation turns it RED; `bash scripts/test-all.sh --print-selection --paths=scripts/learning-retrieval-bench.sh` selects the suite.
-- [ ] **AC7 (disclosure and hygiene).** The PR body states the stale-base finding, that no tracking issue was filed, and the spend incurred; `git grep -n "sk-ant" -- knowledge-base/project/specs/feat-one-shot-haiku-5-5-retiering-bench-fix` is empty and no raw payload or marker file is committed.
+- [x] **AC7 (disclosure and hygiene).** The PR body states the stale-base finding, that no tracking issue was filed, and the spend incurred; `git grep -n "sk-ant" -- knowledge-base/project/specs/feat-one-shot-haiku-5-5-retiering-bench-fix` is empty and no raw payload or marker file is committed.
 
 ## Non-Goals
 
