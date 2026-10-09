@@ -141,27 +141,35 @@ describe("pr-merge-poll BEHIND contract", () => {
 
   test("no instruction surface conditions the queue exception on a marker only the Phase 7 fence prints (class ban, whole plugin)", () => {
     // The incident: "once the poll has printed `[ship.phase7.queue_wait]`" is never satisfied by a hand-written loop, so the
-    // exception was vacuous for exactly the reader who needed it. Ban the class (once/after/only after the poll|loop printed),
-    // not one spelling, over every markdown and TS source that agents read.
-    const BAN = /(once|after|only after|until) the (Phase 7 )?(poll|loop|fence) (has |had )?printed/i;
+    // exception was vacuous for exactly the reader who needed it. Ban the CLASS (once/after/until the poll|loop|fence
+    // [has] <up to three words> printed|prints|emitted|logged), whitespace-normalised, over every markdown, TS, JS and
+    // shell source in the plugin that an agent can read, plus the root AGENTS files.
+    const BAN = /(once|after|only after|until) the (ship |Phase 7 )?(poll|loop|fence)( has| had)?(\s+\S+){0,3}?\s+(printed|prints|emitted|emits|logged)/i;
+    // positive controls: the ban must fire on the incident sentence and its near spellings, or it pins nothing
+    for (const bad of [
+      "once the poll has printed `[ship.phase7.queue_wait]`",
+      "Once the ship poll has printed the marker",
+      "only after the loop prints it",
+      "once the   poll\n has emitted x",
+    ]) expect(bad.replace(/\s+/g, " ")).toMatch(BAN);
+    expect("when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`)").not.toMatch(BAN);
+    const SKIP = new Set(["node_modules", "test", ".git"]);
     const walk = (dir: string, out: string[] = []): string[] => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const full = resolve(dir, e.name);
         if (e.isDirectory()) {
-          if (["node_modules", "test", "docs", ".git"].includes(e.name)) continue;
-          walk(full, out);
-        } else if (/\.(md|ts)$/.test(e.name)) out.push(full);
+          if (!SKIP.has(e.name)) walk(full, out);
+        } else if (/\.(md|ts|js|mjs|sh)$/.test(e.name)) out.push(full);
       }
       return out;
     };
-    const files = [
-      ...walk(resolve(PLUGIN_ROOT, "skills")),
-      ...walk(resolve(PLUGIN_ROOT, "lib")),
-      resolve(PLUGIN_ROOT, "codex/INSTRUCTIONS.md"),
-      resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md"),
-    ];
-    expect(files.length).toBeGreaterThan(50); // non-vacuity: the walk found the skills tree
-    const hits = files.filter((f) => BAN.test(readFileSync(f, "utf-8")));
+    const REPO_ROOT = resolve(PLUGIN_ROOT, "../..");
+    const files = [...walk(PLUGIN_ROOT), resolve(REPO_ROOT, "AGENTS.md"), resolve(REPO_ROOT, "AGENTS.rules.md")];
+    expect(files.length).toBeGreaterThan(300); // non-vacuity: the walk found agents, commands, skills, scripts and hooks
+    for (const dir of ["agents", "commands", "skills", "scripts", "hooks", "lib"]) {
+      expect(files.some((f) => f.includes(`/plugins/soleur/${dir}/`))).toBe(true);
+    }
+    const hits = files.filter((f) => BAN.test(readFileSync(f, "utf-8").replace(/\s+/g, " ")));
     expect(hits).toEqual([]);
   });
 

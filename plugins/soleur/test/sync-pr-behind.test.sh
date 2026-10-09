@@ -1302,6 +1302,9 @@ SUT_SRC="$(cat "$SUT")"
 qw_mutant() {  # <label> <scenario> <old> <new>
   local label="$1" kind="$2" old="$3" new="$4" md mut
   [[ "$SUT_SRC" == *"$old"* ]] || { fail "mutation '$label': the anchor text is absent from the SUT (fix the row)"; return; }
+  # a first-match replace must land where intended: the WHOLE anchor occurs exactly once in the SUT, or the row is wrong
+  rest="${SUT_SRC//"$old"/}"
+  [[ $(( (${#SUT_SRC} - ${#rest}) / ${#old} )) -eq 1 ]] || { fail "mutation '$label': the anchor occurs more than once in the SUT, so a first-match replace may land outside queue_wait_gate (fix the row)"; return; }
   md="$(mktemp -d "$TMPDIR/sync-qwmut.XXXXXXXX")"; FIXTURES+=("$md"); assert_fixture_dir "$md"
   mut="$md/sync-pr-behind.sh"; printf '%s\n' "${SUT_SRC/"$old"/"$new"}" > "$mut"
   if cmp -s "$mut" "$SUT"; then fail "mutation '$label': the mutant equals the SUT"; rm -rf "$md"; return; fi
