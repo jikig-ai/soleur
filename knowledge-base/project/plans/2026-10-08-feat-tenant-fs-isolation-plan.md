@@ -682,7 +682,7 @@ founder_check:
   command: bash knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh
   expected: isolation_ok
   pins:
-      knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh: 409f1d0c9ab2dd4d4e4a00530fea7cb7d984021b
+      knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh: 61ba4e86757e033b8a29d5dcb416eeeefbf9b50d
   approved_by: deruelle
   approved_at: 2026-10-08
 ```
