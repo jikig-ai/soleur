@@ -70,7 +70,7 @@ cat > "$SHIMDIR/curl" <<'SHIM'
 #!/usr/bin/env bash
 n=$(( $(find "$CALLS_DIR" -name '*.argv' | wc -l) + 1 ))
 printf '%s\0' "$@" > "$CALLS_DIR/$n.argv"
-printf '%s|%s|%s|%s|%s' "${SSLKEYLOGFILE-U}" "${CURL_CA_BUNDLE-U}" "${SSL_CERT_FILE-U}" "${SSL_CERT_DIR-U}" "${CURL_HOME-U}" > "$CALLS_DIR/$n.env"
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' "${SSLKEYLOGFILE-U}" "${CURL_CA_BUNDLE-U}" "${SSL_CERT_FILE-U}" "${SSL_CERT_DIR-U}" "${CURL_HOME-U}" "${OPENSSL_CONF-U}" "${LD_PRELOAD-U}" "${LD_LIBRARY_PATH-U}" "${HOSTALIASES-U}" "${RES_OPTIONS-U}" > "$CALLS_DIR/$n.env"
 has_cfg=0; prev=""
 for a in "$@"; do
   [[ "$prev" == "--config" && "$a" == "-" ]] && has_cfg=1
@@ -306,7 +306,7 @@ fi
 # Trailing whitespace (a secret pasted with a newline) is trimmed; whitespace INSIDE a value still refuses.
 # ---------------------------------------------------------------------------------------------------
 reset_calls
-rc="$(V="$(printf 'tok-A1b2\n')" run 'bc_curl ws "X-A::V" -- -sS http://127.0.0.1:9/')"
+rc="$(V=$'tok-A1b2\n' run 'bc_curl ws "X-A::V" -- -sS http://127.0.0.1:9/')"
 if [[ "$rc" == "0" && "$(cat "$CALLS/1.stdin" 2>/dev/null)" == 'header = "X-A: tok-A1b2"' ]]; then pass "a trailing newline is trimmed: the wire carries the clean value, one directive"; else fail "trailing newline: rc=$rc"; fi
 reset_calls
 rc="$(V="tok-A1b2 "$'\t'" " run 'bc_curl ws "X-A::V" -- -sS http://127.0.0.1:9/')"
@@ -314,8 +314,10 @@ rc="$(V="tok-A1b2 "$'\t'" " run 'bc_curl ws "X-A::V" -- -sS http://127.0.0.1:9/'
 reset_calls
 rc="$(V=$' \n' run 'bc_curl ws "X-A::V" -- -sS http://127.0.0.1:9/')"
 [[ "$rc" == "2" && "$(ncalls)" == "0" ]] && pass "a value that is only whitespace is refused (empty after the trim)" || fail "whitespace-only value: rc=$rc"
-rc="$(run 'T=$(printf "abc\n"); bc_ok "$T"')"
-[[ "$rc" == "0" ]] && pass "bc_ok judges the value after trimming (trailing newline accepted)" || fail "bc_ok trim: rc=$rc"
+rc="$(run "bc_ok \$'abc\\n'")"
+[[ "$rc" == "0" ]] && pass "bc_ok judges the value after trimming (a real trailing newline byte is accepted)" || fail "bc_ok trim: rc=$rc"
+rc="$(run "bc_ok \$'ab\\nc'")"
+[[ "$rc" == "1" ]] && pass "bc_ok still refuses a newline INSIDE the value" || fail "bc_ok interior newline: rc=$rc"
 
 # ---------------------------------------------------------------------------------------------------
 # bc_ok_var: by NAME, never traced.
@@ -325,38 +327,72 @@ rc="$(BADV='a"b' run 'bc_ok_var BADV')"; [[ "$rc" == "1" ]] && pass "bc_ok_var r
 rc="$(run 'unset NOSUCH; bc_ok_var NOSUCH')"; [[ "$rc" == "1" ]] && pass "bc_ok_var rejects an unset variable" || fail "bc_ok_var unset: rc=$rc"
 rc="$(CANARY_TOK="${CANARY}ok" run 'set -x; bc_ok_var CANARY_TOK')"
 if [[ "$rc" == "78" ]] && ! grep -qF -- "${CANARY}ok" "$OUT/last"; then pass "bc_ok_var refuses under xtrace (78) and the trace holds no value"; else fail "bc_ok_var under xtrace: rc=$rc"; fi
+# The name is validated before the indirect expansion: a subscript would otherwise be EVALUATED by `${!name}`.
+rc="$(run "bc_ok_var 'a[\$(echo SUBSCRIPT_RAN)]'")"
+if [[ "$rc" == "64" ]] && ! grep -q SUBSCRIPT_RAN "$OUT/last"; then pass "bc_ok_var refuses a malformed name (64) without evaluating a subscript in it"; else fail "bc_ok_var malformed name: rc=$rc"; fi
+rc="$(run 'bc_ok_var _bc_val')"; [[ "$rc" == "64" ]] && pass "bc_ok_var refuses a name that would alias the library's own locals (_bc_*)" || fail "bc_ok_var _bc_ alias: rc=$rc"
 
 # ---------------------------------------------------------------------------------------------------
 # Arguments after `--` may not undo the property (verbose, redirects, second config, credential flags,
 # stdin body); benign arguments pass. Zero requests are made for a refused call.
 # ---------------------------------------------------------------------------------------------------
-tail_bad=0
-for bad in "-v" "--verbose" "--trace-ascii -" "-sSv" "-L" "--location" "-sSL" "--location-trusted" "-K x" "--config x" "--next"            "-H Private-Token:x" "-H x-api-key:x" "--header Authorization:x" "-H Cookie:x" "-u a:b" "--user a:b" "--oauth2-bearer x" "-b c=d"            "-d @-" "--data-binary @-" "-T -"; do
+tail_bad=0; tail_n=0
+tail_cases=(
+  "-v" "--verbose" "--trace-ascii -" "--trace x" "--trace-config" "--trace-time" "--trace-ids" "-sSv"
+  "-L" "--location" "-sSL" "--location-trusted"
+  "-K x" "-K/dev/stdin" "--config x" "--config=x" "--next" "-:" "--disable" "-q"
+  "-u a:b" "-uA:B" "--user a:b" "--oauth2-bearer x" "-b c=d" "-bc=d" "--cookie c=d" "--proxy-user a:b"
+  "-H Private-Token:x" "-H x-api-key:x" "-H api-key:x" "-H apikey:x" "-H X-Auth-Token:x" "-H X-Vault-Token:x"
+  "--header Authorization:x" "--header=authorization:x" "-HAuthorization:x" "-sSH Authorization:x" "-H Cookie:x"
+  "-H Proxy-Authorization:x" "-H X-Signature-256:x" "-H X-Hub-Signature:x" "-H X-Hub-Signature-256:x"
+  "-H CF-Access-Client-Id:x" "-H CF-Access-Client-Secret:x" "-H X-Soleur-Kb-Drift-Signature:x"
+  "-d @-" "-d@-" "-sSd @-" "--data @-" "--data=@-" "--data-binary @-" "--data-raw @-" "--data-ascii @-" "--data-urlencode x@-"
+  "--json @-" "-F f=@-" "-T -" "--upload-file=-" "--data @/dev/stdin"
+  "--libcurl x" "-k" "--insecure" "--cacert x" "--capath x" "--proxy http://p" "-x http://p" "--preproxy http://p"
+  "--noproxy x" "--resolve a:1:2" "--connect-to a:1:b:2" "--proxy-header x:y"
+)
+for bad in "${tail_cases[@]}"; do
+  tail_n=$((tail_n + 1))
   reset_calls
   # shellcheck disable=SC2086  # word splitting of the fixture is the point
   rc="$(GOODV=abc run "bc_curl tail 'X-A::GOODV' -- -sS $bad http://127.0.0.1:9/")"
-  if [[ "$rc" != "64" || "$(ncalls)" != "0" ]]; then tail_bad=$((tail_bad + 1)); fail "forbidden argument '$bad' was not refused (rc=$rc calls=$(ncalls))"; fi
+  # "refused" is in every guard message and in none of the other 64 causes (malformed spec, missing --, no spec).
+  if [[ "$rc" != "64" || "$(ncalls)" != "0" ]] || ! grep -q 'refused' "$OUT/last"; then tail_bad=$((tail_bad + 1)); fail "forbidden argument '$bad' was not refused by the guard (rc=$rc calls=$(ncalls))"; fi
 done
-[[ "$tail_bad" == "0" ]] && pass "tail-argument guard: 21 forbidden arguments (verbose/trace, redirects, second config, credential flags, stdin body) each return 64 with zero requests"
+[[ "$tail_bad" == "0" ]] && pass "tail-argument guard: all $tail_n forbidden spellings (separate, attached, clustered, =-joined; every deny-list alternative) return 64 with a guard message and zero requests"
 reset_calls
-rc="$(GOODV=abc run "bc_curl tail 'X-A::GOODV' -- -sSf -I -g --proto '=https' -m 30 --connect-timeout 5 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'Accept: x' -d '{}' -D - --data-raw '[]' http://127.0.0.1:9/")"
+rc="$(GOODV=abc run "bc_curl tail 'X-A::GOODV' -- -sS -H ' Authorization: x' http://127.0.0.1:9/")"
+[[ "$rc" == "64" && "$(ncalls)" == "0" ]] && pass "tail-argument guard: a header with leading whitespace is judged after the whitespace is dropped" || fail "leading-space credential header: rc=$rc calls=$(ncalls)"
+reset_calls
+rc="$(GOODV=abc run "bc_curl tail 'X-A::GOODV' -- -sSf -I -g --proto '=https' -m 30 --connect-timeout 5 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'Accept: x' -d '{}' -D - --data-raw '[]' -XPUT -m30 -o/dev/null -HAccept:y -sSfo /dev/null -d@file --data-urlencode a=b -F f=@file http://127.0.0.1:9/")"
 [[ "$rc" == "0" && "$(ncalls)" == "1" ]] && pass "tail-argument guard: the benign argument shapes the converted sites use all pass" || fail "benign tail shapes refused: rc=$rc calls=$(ncalls)"
 
 # ---------------------------------------------------------------------------------------------------
 # The library's own argument set is pinned exactly, and the TLS-subverting environment is unset.
 # ---------------------------------------------------------------------------------------------------
 reset_calls
-rc="$(GOODV=abc SSLKEYLOGFILE=/tmp/k CURL_CA_BUNDLE=/tmp/ca SSL_CERT_FILE=/tmp/c SSL_CERT_DIR=/tmp/d CURL_HOME=/tmp/h run 'bc_curl pin "X-A::GOODV" -- -sS --max-time 5 http://127.0.0.1:9/x')"
+rc="$(GOODV=abc SSLKEYLOGFILE=/tmp/k CURL_CA_BUNDLE=/tmp/ca SSL_CERT_FILE=/tmp/c SSL_CERT_DIR=/tmp/d CURL_HOME=/tmp/h OPENSSL_CONF=/tmp/o LD_PRELOAD='' LD_LIBRARY_PATH=/tmp/l HOSTALIASES=/tmp/ha RES_OPTIONS=x run 'bc_curl pin "X-A::GOODV" -- -sS --max-time 5 http://127.0.0.1:9/x')"
 want_argv=$'--disable\n--noproxy\n*\n-sS\n--max-time\n5\nhttp://127.0.0.1:9/x\n--config\n-'
 [[ "$(tr '\0' '\n' < "$CALLS/1.argv")" == "$want_argv" ]] && pass "argv pin: exactly --disable --noproxy '*' <caller args> --config - (nothing added, nothing reordered)" || fail "library argv differs from the pinned shape"
-[[ "$(cat "$CALLS/1.env")" == "U|U|U|U|U" ]] && pass "the TLS key-log, CA-bundle, cert and curl-home environment is unset for the transfer" || fail "TLS-subverting environment reached curl: $(cat "$CALLS/1.env")"
+[[ "$(cat "$CALLS/1.env")" == "U|U|U|U|U|U|U|U|U|U" ]] && pass "the TLS key-log, CA-bundle, cert, curl-home, OpenSSL-config, loader and resolver environment is unset for the transfer" || fail "TLS-subverting environment reached curl: $(cat "$CALLS/1.env")"
 
 # ---------------------------------------------------------------------------------------------------
 # A runner that ignores SIGPIPE prints no broken-pipe line, even when curl exits before reading its config.
 # ---------------------------------------------------------------------------------------------------
-big="$(head -c 200000 /dev/zero | tr '\0' 'a')"
-out_pipe="$( (trap '' PIPE; BIGV="$big" PATH="$PATH" bash -c "source '$LIB' && bc_curl pipe 'X-A::BIGV' -- -sS --max-time 3 -o /dev/null http://127.0.0.1:9/" ) 2>&1 )"
-if grep -qiE 'broken pipe|write error|printf:' <<<"$out_pipe"; then fail "SIGPIPE-ignoring runner printed a pipe error: $(head -c 120 <<<"$out_pipe")"; else pass "under trap '' PIPE with a 200 KB value and an early-exiting curl, no broken-pipe line is printed"; fi
+big="$(head -c 100000 /dev/zero | tr '\0' 'a')"   # one env string is capped at 128 KiB: larger fails to exec and tests nothing
+# --no-such-option-xyz passes the guard and real curl exits 2 BEFORE it reads the config, so the writer sees a closed pipe.
+out_pipe="$( (trap '' PIPE; BIGV="$big" PATH="$PATH" bash -c "source '$LIB' && bc_curl pipe 'X-A::BIGV' -- -sS --no-such-option-xyz http://127.0.0.1:9/; echo REACHED_RC=\$?" ) 2>&1 )"
+if ! grep -q 'REACHED_RC=2' <<<"$out_pipe" || ! grep -qi 'unknown' <<<"$out_pipe"; then
+  fail "SIGPIPE row did not reach the library and an early-exiting curl (positive control): $(head -c 160 <<<"$out_pipe")"
+elif grep -qiE 'broken pipe|write error|printf:' <<<"$out_pipe"; then fail "SIGPIPE-ignoring runner printed a pipe error: $(head -c 120 <<<"$out_pipe")"
+else pass "under trap '' PIPE with a 100 KB value and a curl that exits before reading its config, no broken-pipe line is printed (the run reached curl's own error)"; fi
+# The row can fail: with the writer's stderr redirect removed from the library the pipe error reappears.
+mut_pipe="$OUT/mut-pipe.sh"
+sed 's# 2>/dev/null)$#)#' "$LIB" > "$mut_pipe"
+if diff -q "$LIB" "$mut_pipe" >/dev/null; then fail "SIGPIPE mutant did not land (the writer's 2>/dev/null was not found)"; else
+  out_pipe_m="$( (trap '' PIPE; BIGV="$big" PATH="$PATH" bash -c "source '$mut_pipe' && bc_curl pipe 'X-A::BIGV' -- -sS --no-such-option-xyz http://127.0.0.1:9/" ) 2>&1 )"
+  grep -qiE 'broken pipe|write error|printf:' <<<"$out_pipe_m" && pass "mutant without the writer's stderr redirect prints the broken-pipe line (the SIGPIPE row above is not vacuous)" || fail "SIGPIPE mutant stayed silent: $(head -c 160 <<<"$out_pipe_m")"
+fi
 
 mut2="$OUT/mut2.sh"
 sed 's/_bc_tail_ok "\$@" || return 64/true/' "$LIB" > "$mut2"
@@ -458,7 +494,7 @@ printf '\nbearer-curl.test.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 # asserts PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=67
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

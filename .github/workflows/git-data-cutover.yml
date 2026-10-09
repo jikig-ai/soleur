@@ -519,9 +519,10 @@ jobs:
               rows_rc=0
               rows="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
                 "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') IN ($name_in) AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>"$BS_ERR")" || rows_rc=$?
+              # The reader's marker is surfaced whether or not the classifier library loaded, so the run-log grep finds it.
+              if [ "$rows_rc" -ne 0 ]; then grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true; fi
               if [ "$rows_rc" -ne 0 ] && declare -F bs_read_classify >/dev/null 2>&1 && declare -F bs_read_scrub_err1 >/dev/null 2>&1; then
                 printf '%s' "$rows" > "$BS_ERR.rows"
-                grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true  # the reader's marker, so the run-log grep finds it
                 echo "::warning::host $leg: the Better Stack read failed (attempt $i, rc=${rows_rc}, class=$(bs_read_classify "$rows_rc" "$BS_ERR.rows"), first stderr line: $(bs_read_scrub_err1 "$BS_ERR"))"
               fi
               if printf '%s' "$rows" | grep -cF "git_data_store=${EXPECTED}" >/dev/null; then

@@ -908,9 +908,10 @@ jobs:
           if [[ "$rc" -ne 0 ]]; then
             # shellcheck source=/dev/null
             source "$GITHUB_WORKSPACE/scripts/lib/betterstack-read-classify.sh" 2>/dev/null || true
+            # The reader's marker is surfaced whether or not the classifier library loaded, so the run-log grep finds it.
+            grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true
             if declare -F bs_read_classify >/dev/null 2>&1 && declare -F bs_read_scrub_err1 >/dev/null 2>&1; then
               printf '%s' "$ROWS" > "$BS_ERR.rows"
-              grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true  # the reader's marker, so the run-log grep finds it
               echo "::warning::#9757 dedicated-host arm: the Better Stack read failed (rc=${rc}, class=$(bs_read_classify "$rc" "$BS_ERR.rows"), first stderr line: $(bs_read_scrub_err1 "$BS_ERR"))"
             fi
           fi

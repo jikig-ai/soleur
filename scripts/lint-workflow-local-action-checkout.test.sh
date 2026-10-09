@@ -906,12 +906,14 @@ else
   fail "33 live tree: rc=$LIVE_RC library-consuming steps='${live_lib:-<unparsed>}': $(head -1 "$TMP/live.err")"
 fi
 
-# --- 34-39: review fix round — head-ref trigger rule, path-segment cone, derived composites, `$/`, string-form on: ----
-reset
-mkwf lib-headref.yml "name: lib-headref
+# --- 34-: review fix round — untrusted-ref rule (every trigger, every spelling), cone segments, derivation ----
+# 34: every untrusted trigger, with a checkout of a head sha, is refused.
+for trig in workflow_run issue_comment pull_request_review pull_request_review_comment issues; do
+  reset
+  mkwf "lib-headref-$trig.yml" "name: lib-headref
 on:
-  workflow_run:
-    workflows: [ci]
+  $trig:
+    types: [created]
 jobs:
   j:
     runs-on: ubuntu-24.04
@@ -920,12 +922,60 @@ jobs:
         with:
           ref: \${{ github.event.workflow_run.head_sha }}
       - uses: ./.github/actions/notify-ops-email"
-run_lint
-if [[ "$RC" -eq 1 ]] && grep -q "lib-headref.yml: job 'j'.*head ref" "$TMP/err"; then
-  pass "34 a library consumer on a workflow_run trigger that checks out the head ref is REFUSED"
-else
-  fail "34 a head-ref checkout under workflow_run was accepted for a library consumer: rc=$RC: $(head -1 "$TMP/err")"
-fi
+  run_lint
+  if [[ "$RC" -eq 1 ]] && grep -q "lib-headref-$trig.yml: job 'j'.*other than the default branch" "$TMP/err"; then
+    pass "34 a library consumer on a $trig trigger that checks out a head sha is REFUSED"
+  else
+    fail "34 $trig: a head-ref checkout was accepted for a library consumer: rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+
+# 34b: other spellings of a non-default ref fail closed too (refs/pull merge ref, a step output, an input).
+for refv in 'refs/pull/${{ github.event.issue.number }}/merge' '${{ steps.pr.outputs.sha }}' '${{ inputs.sha }}' 'feature-branch'; do
+  reset
+  mkwf lib-refspell.yml "name: lib-refspell
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: $refv
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq 1 ]] && grep -q "lib-refspell.yml: job 'j'.*other than the default branch" "$TMP/err"; then
+    pass "34b ref '$refv' under issue_comment is REFUSED (a ref other than the default branch's own fails closed)"
+  else
+    fail "34b ref '$refv' was accepted under issue_comment: rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
+
+# 34c: the near side — an untrusted trigger whose checkout is the default ref (no ref, github.sha, main) PASSES.
+for refline in '' 'ref: ${{ github.sha }}' 'ref: main'; do
+  reset
+  if [[ -n "$refline" ]]; then withblock="        with:
+          $refline"; else withblock=""; fi
+  mkwf lib-defref.yml "name: lib-defref
+on:
+  workflow_run:
+    workflows: [ci]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+$withblock
+      - uses: ./.github/actions/notify-ops-email"
+  run_lint
+  if [[ "$RC" -eq 0 ]]; then
+    pass "34c (must-PASS) a workflow_run consumer whose checkout is the default ref ('${refline:-no ref:}') passes"
+  else
+    fail "34c a default-ref checkout under workflow_run was refused ('${refline:-no ref:}'): rc=$RC: $(head -1 "$TMP/err")"
+  fi
+done
 
 reset
 mkwf lib-headref-pr.yml "name: lib-headref-pr
@@ -946,8 +996,13 @@ else
   fail "35 plain pull_request with a head ref was refused: rc=$RC: $(head -1 "$TMP/err")"
 fi
 
-reset
-mkwf lib-prefix.yml "name: lib-prefix
+# 36: cone segments. RED: a prefix, a sibling directory, a later negation, a prefix of .github. GREEN: the accepted spellings.
+cone_row() { # <label> <expect rc> <cone lines...>
+  local label="$1" want="$2"; shift 2
+  local cone_block="" l
+  for l in "$@"; do cone_block+="            $l"$'\n'; done
+  reset
+  mkwf lib-cone.yml "name: lib-cone
 jobs:
   j:
     runs-on: ubuntu-24.04
@@ -955,15 +1010,25 @@ jobs:
       - uses: actions/checkout@$SHA
         with:
           sparse-checkout: |
-            .github
-            scripts-old
+${cone_block%$'\n'}
       - uses: ./.github/actions/notify-ops-email"
-run_lint
-if [[ "$RC" -eq 1 ]] && grep -q "lib-prefix.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
-  pass "36 a cone naming scripts-old (a string prefix of scripts) does not materialise scripts/lib/"
-else
-  fail "36 a prefix-only cone was accepted: rc=$RC: $(head -1 "$TMP/err")"
-fi
+  run_lint
+  if [[ "$RC" -eq "$want" ]] && { [[ "$want" -eq 0 ]] || grep -q "lib-cone.yml: job 'j'" "$TMP/err"; }; then
+    pass "36 cone [$label] -> rc $want"
+  else
+    fail "36 cone [$label] expected rc $want, got rc=$RC: $(head -1 "$TMP/err")"
+  fi
+}
+cone_row ".github scripts-old"        1 .github scripts-old
+cone_row ".github scripts/ci"         1 .github scripts/ci
+cone_row ".github scripts/lib-old"    1 .github scripts/lib-old
+cone_row ".github scripts !scripts/lib" 1 .github scripts '!scripts/lib'
+cone_row ".github-old scripts"        1 .github-old scripts
+cone_row ".github scripts"            0 .github scripts
+cone_row ".github /scripts"           0 .github /scripts
+cone_row ".github scripts/lib"        0 .github scripts/lib
+cone_row ".github scripts/lib/"       0 .github scripts/lib/
+cone_row ".github scripts/**"         0 .github 'scripts/**'
 
 reset
 mkwf lib-dollar.yml 'name: lib-dollar
@@ -973,11 +1038,21 @@ jobs:
     steps:
       - uses: $/.github/actions/notify-ops-email'
 run_lint
-if [[ "$RC" -eq 1 ]]; then
-  pass "37 the \$/ spelling of a local composite with no checkout is REFUSED"
+if [[ "$RC" -eq 1 ]] && grep -q "lib-dollar.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "37 the \$/ spelling of a local composite with no checkout is REFUSED by the library rule (not only the generic one)"
 else
-  fail "37 a \$/ composite call without a checkout was accepted: rc=$RC"
+  fail "37 a \$/ composite call without a checkout was accepted or refused for the wrong reason: rc=$RC: $(head -1 "$TMP/err")"
 fi
+reset
+mkwf lib-dollar-ok.yml "name: lib-dollar-ok
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: \$/.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "37b (must-PASS) the \$/ spelling after a plain checkout passes"; else fail "37b: rc=$RC: $(head -1 "$TMP/err")"; fi
 
 reset
 mkwf lib-prt-str.yml "name: lib-prt-str
@@ -995,6 +1070,8 @@ else
   fail "38 the string-form trigger escaped the pull_request_target check: rc=$RC: $(head -1 "$TMP/err")"
 fi
 
+# 39: derivation. The composite is NEW (not in the default pair), the job HAS a usable checkout whose cone is .github
+# only, so the ONLY finding available is the library rule — which exists only if derivation found the composite.
 reset
 mkaction newlibcomp 'name: newlibcomp
 runs:
@@ -1002,18 +1079,78 @@ runs:
   steps:
     - shell: bash
       run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
-mkwf lib-derived.yml 'name: lib-derived
+mkwf lib-derived.yml "name: lib-derived
 jobs:
   j:
     runs-on: ubuntu-24.04
     steps:
-      - uses: ./.github/actions/newlibcomp'
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/newlibcomp"
 run_lint
-if [[ "$RC" -eq 1 ]] && grep -q "lib-derived.yml: job 'j'" "$TMP/err"; then
-  pass "39 a NEW composite that sources the library is picked up by derivation (no list to forget to extend)"
+if [[ "$RC" -eq 1 ]] && grep -q "lib-derived.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "39 a NEW composite that sources the library is picked up by derivation (a .github-only cone is refused for it)"
 else
-  fail "39 a derived library composite called without a checkout was accepted: rc=$RC: $(head -1 "$TMP/err")"
+  fail "39 a derived library composite under a .github-only cone was accepted or refused for the wrong reason: rc=$RC: $(head -1 "$TMP/err")"
 fi
+# 39b: retention — a composite that does NOT name the library is unaffected by the same cone.
+reset
+mkaction plaincomp 'name: plaincomp
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo hi'
+mkwf lib-plain.yml "name: lib-plain
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/plaincomp"
+run_lint
+if [[ "$RC" -eq 0 ]]; then pass "39b (must-PASS) a composite that does not source the library passes under a .github-only cone"; else fail "39b: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39c: a NESTED composite directory is derived by its path under actions/.
+reset
+mkaction grp/nestedlib 'name: nestedlib
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
+mkwf lib-nested.yml "name: lib-nested
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/grp/nestedlib"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-nested.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39c a nested composite directory that sources the library is derived by its path"; else fail "39c nested derivation: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39d: a variable spelling of the library path is still recognised (the basename is the needle).
+reset
+mkwf lib-varspell.yml 'name: lib-varspell
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: send
+        run: |
+          LIBDIR=scripts/lib
+          source "${GITHUB_WORKSPACE:?}/${LIBDIR}/bearer-curl.sh"'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-varspell.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then pass "39d a run: step that names the library through a variable is still a consumer"; else fail "39d: rc=$RC: $(head -1 "$TMP/err")"; fi
+# 39e: a malformed composite (runs is not a mapping) is reported by name, never a traceback.
+reset
+mkaction badruns 'name: badruns
+runs: composite'
+run_lint
+if [[ "$RC" -ne 0 ]] && grep -q "badruns/action.yml" "$TMP/err" && ! grep -q "Traceback" "$TMP/err"; then pass "39e a composite whose runs: is not a mapping is reported by name (no traceback)"; else fail "39e malformed composite: rc=$RC: $(head -2 "$TMP/err")"; fi
 
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
@@ -1047,7 +1184,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=61
+FAIL_FLOOR_MIN=86
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

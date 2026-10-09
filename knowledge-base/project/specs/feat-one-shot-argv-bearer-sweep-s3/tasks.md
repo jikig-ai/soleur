@@ -68,6 +68,6 @@ committed-tree gates; baseline E regenerated only after the merge-from-main comm
 ## Phase 10: PR and tracking
 
 - 10.1 PR body: first line names the plugin release run and the absence of `apps/web-platform/**`; `Ref` only; no plan/spec paths; no `*-soak-*` names; avoid soak/outage/"Pro"/"subscription"; `Filed: #N ...` plus the net-issue-flow override with one justification per issue.
-- 10.2 File the held-back-file issue (owner, deadline, S4 dependency, token wording) and the post-merge first-run follow-through issue (table, owner, merge + 3 days).
+- 10.2 File the held-back-file issue (covers workspaces-luks-cutover.yml AND the scheduled-inngest-health.yml probe step with its HMAC and its restart pre-guard that maps a credential fault to `secret_unset`, never `inngest_down`; owner, deadline, S4 dependency, token wording) and the post-merge first-run follow-through issue (table, owner, merge + 3 days).
 - 10.3 Comment on #9597 (counts, partition, baseline 17/43, keying decision, apply-exposure and plugin-release findings) and on #9757.
 - 10.4 Post-merge: fill the first-run table; confirm the plugin release run is green.

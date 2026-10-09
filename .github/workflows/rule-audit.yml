@@ -246,6 +246,7 @@ jobs:
           else
             set +e
             UB_TOK_RC=0
+            # shellcheck disable=SC2034  # read by NAME inside bc_curl
             UB_T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" 2>/dev/null | jq -r '.token // empty')" || UB_TOK_RC=$?
             UB_HDR="$(bc_curl rule-audit 'Authorization:Bearer :UB_T' -- -sS --max-time 20 -o /dev/null -D - -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04")"
             UB_RC=$?

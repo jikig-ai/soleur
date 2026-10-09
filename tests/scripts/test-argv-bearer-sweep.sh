@@ -3407,7 +3407,28 @@ for i, s in enumerate(steps):
     for ln in text.split("\n"):
         print("%d\t%s" % (i, ln))
 '
-S3_SRC_BAD=""; S3_ARGV_BAD=""; S3_STDERR_BAD=""; S3_HMAC_BAD=""; S3_PATH_BAD=""; S3_RC2_BAD=""; S3_CALLS=0
+# The D2/D3/D5 predicates, as functions over ONE line, so the live sweep below and the fixture table after it run the
+# SAME patterns (a pattern nothing ever fed a known positive and a known negative is not a control).
+S3_D2_RE='(-H|--header) *["'"'"']?(Authorization|Proxy-Authorization|x-api-key|api-key|apikey|private-token|x-auth-token|x-access-token|Cookie|X-Signature-256|X-Hub-Signature|CF-Access-Client|X-Soleur-Kb-Drift-Signature)'
+S3_D3_RE='(2|&)> *(/dev/null|&-)|>& *(/dev/null|-)|> */dev/null +2>&1'
+S3_D5_RE='(\[\[? [^]]*(-eq|-ne|==|!=|=) *"?2"? *\]\]?|\(\([^)]*(==|!=|-eq|-ne) *2([^0-9A-Za-z_]|$)[^)]*\)\)|case .*(\$\?|\$\{?[A-Za-z_]*[rR][cC]))'
+s3_d2_hit() { grep -qiE -- "$S3_D2_RE" <<<"$1"; }
+s3_d3_hit() { grep -qE -- "$S3_D3_RE" <<<"$1"; }
+s3_d5_hit() { grep -qE -- "$S3_D5_RE" <<<"$1" && grep -qE '(_RC|rc|\$\?)' <<<"$1" && ! grep -q 'exit 2' <<<"$1"; }
+S3_PRED_BAD=""
+s3_pred_check() { # <predicate> <HIT|MISS> <line>
+  local want="$2" got=MISS
+  "$1" "$3" && got=HIT
+  [[ "$got" == "$want" ]] || S3_PRED_BAD+=" [$1 wanted $want for: ${3:0:48}]"
+}
+for l in "bc_curl x 'A:B:C' -- -H 'Authorization: Bearer z' url" 'bc_curl x A -- -H "Authorization: z" url' "bc_curl x A -- --header 'x-api-key: z' url" 'bc_curl x A -- -H "Cookie: a" url' "bc_curl x A -- -H 'Private-Token: z' url"; do s3_pred_check s3_d2_hit HIT "$l"; done
+for l in 'bc_curl x A -- -H "Content-Type: application/json" url' "bc_curl x A -- -H 'Accept: x' url" 'bc_curl x A -- -o /dev/null -w %{http_code} url'; do s3_pred_check s3_d2_hit MISS "$l"; done
+for l in 'bc_curl x A -- -sS url 2>/dev/null' 'bc_curl x A -- -sS url 2> /dev/null' 'bc_curl x A -- -sS url &>/dev/null' 'bc_curl x A -- -sS url >/dev/null 2>&1' 'bc_curl x A -- -sS url 2>&-'; do s3_pred_check s3_d3_hit HIT "$l"; done
+for l in "bc_curl x A -- -sS -o /dev/null -w '%{http_code}' url" 'bc_curl x A -- -sS url 2>"$LOG"' 'bc_curl x A -- -sS url 2>&1'; do s3_pred_check s3_d3_hit MISS "$l"; done
+for l in '[[ "$rc" -eq 2 ]]' '[ "$rc" = 2 ]' '[ "$rc" = "2" ]' '(( rc == 2 ))' '(( $rc == 2 ))' '(( rc != 0 && rc == 2 ))' 'case "$rc" in' '[[ "$?" -ne 2 ]]'; do s3_pred_check s3_d5_hit HIT "$l"; done
+for l in '[[ "$rc" -eq 0 ]]' '[[ "$rc" -eq 20 ]]' '[[ "$rc" -eq 2 ]] && exit 2' 'echo "got 2 files"' '(( rc == 0 ))'; do s3_pred_check s3_d5_hit MISS "$l"; done
+[[ -z "$S3_PRED_BAD" ]] && row "S3 structure: the D2/D3/D5 sweep predicates flag every known-bad spelling (quotes, spacing, the &> and >&2 forms, bracket and arithmetic and case forms) and spare the benign neighbours" ok || row "S3 structure: a D2/D3/D5 predicate misjudges a fixture" fail "$S3_PRED_BAD"
+S3_SRC_BAD=""; S3_ARGV_BAD=""; S3_STDERR_BAD=""; S3_HMAC_BAD=""; S3_PATH_BAD=""; S3_RC2_BAD=""; S3_NAME_BAD=""; S3_CALLS=0
 for f in $S3_POP; do
   stm="$(cd "$REPO_ROOT" && python3 -I -c "$s3_statements_py" "$f")"
   # D1 the library is sourced (exact pinned form) before the first bc_curl/bc_ok/bc_hmac/bc_refuse of the same step
@@ -3423,21 +3444,25 @@ for f in $S3_POP; do
     grep -qE 'source "\$\{GITHUB_WORKSPACE:\?\}/scripts/lib/bearer-curl\.sh"|source "\$GITHUB_WORKSPACE/scripts/lib/bearer-curl\.sh"|source "\$\{GITHUB_WORKSPACE\}/scripts/lib/bearer-curl\.sh"' <<<"$l" || S3_PATH_BAD+=" $f"
   done < <(printf '%s\n' "$stm" | cut -f2 | grep -E '^[[:space:]]*(if .*)?source .*bearer-curl\.sh|\|\| ! source|! source .*bearer-curl' || true)
   # D2 no credential header literal inside a bc_curl statement (it would be a second, argv copy), and no -H credential on a curl line
-  grep -qiE -- '(-H|--header) *"?(Authorization|Proxy-Authorization|x-api-key|api-key|private-token|x-auth-token|Cookie|X-Signature-256|X-Hub-Signature|CF-Access-Client|X-Soleur-Kb-Drift-Signature)' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ') && S3_ARGV_BAD+=" $f"
+  while IFS= read -r l; do s3_d2_hit "$l" && S3_ARGV_BAD+=" $f"; done < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ' || true)
   # D3 no stderr suppression on a bc_curl statement
   # (the statement is the bc_curl call itself: a later pipe stage such as `| jq ... 2>/dev/null` is not its stderr)
-  grep -qE '(2|&)> *(/dev/null|&-)|>& *(/dev/null|-)' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ' | sed -E 's/.*(bc_curl .*)/\1/; s/ \|\| .*//; s/ \| .*//') && S3_STDERR_BAD+=" $f"
+  while IFS= read -r l; do s3_d3_hit "$l" && S3_STDERR_BAD+=" $f"; done < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ' | sed -E 's/.*(bc_curl .*)/\1/; s/ \|\| .*//; s/ \| .*//' || true)
   # D4 no openssl -hmac in a converted file (the held-back probe step keeps its own)
   if [[ "$(basename "$f")" != "$S3_HELD_BACK" ]]; then
     grep -qE 'openssl dgst .*-hmac' < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f") && S3_HMAC_BAD+=" $f"
   fi
   # D5 no converted statement branches on rc == 2 (curl's own init-failure code; the marker is the discriminator)
-  grep -qv 'exit 2' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(\[\[? .*(-eq|==) *"?2"? *\]|\(\( *[A-Za-z_]+ *== *2 *\)\)|case .*\$(\?|\{?[A-Za-z_]*rc)|^[[:space:]]*"?2"?\) )' | grep -E '(_RC|rc|\$\?)') && S3_RC2_BAD+=" $f"
+  while IFS= read -r l; do s3_d5_hit "$l" && S3_RC2_BAD+=" $f"; done < <(printf '%s\n' "$stm" | cut -f2 || true)
+  # D6 every bc_curl / bc_refuse names ITS OWN file in the marker (a copy-pasted donor name makes the marker unfindable)
+  want_name="$(basename "$f" .yml)"; [[ "$(basename "$f")" == action.yml ]] && want_name="$(basename "$(dirname "$f")")"
+  while IFS= read -r nm; do [[ "$nm" == "$want_name" ]] || S3_NAME_BAD+=" $f:$nm"; done < <(printf '%s\n' "$stm" | cut -f2 | grep -v '^[[:space:]]*#' | grep -oE '(^|[^_A-Za-z])bc_(curl|refuse)[ ]+[A-Za-z0-9._-]+' | awk '{print $NF}' | sort -u || true)
 done
 [[ -z "$S3_SRC_BAD" ]] && row "S3 structure: every step that calls the library sources it first (exact pinned source form)" ok || row "S3 structure: a step uses the library before it sources it" fail "$S3_SRC_BAD"
 [[ -z "$S3_PATH_BAD" ]] && row "S3 structure: the library is sourced only from the job's own workspace (\${GITHUB_WORKSPACE})" ok || row "S3 structure: a non-workspace source path" fail "$S3_PATH_BAD"
 [[ -z "$S3_ARGV_BAD" ]] && row "S3 structure: no bc_curl statement repeats a credential header on its own argument list" ok || row "S3 structure: a bc_curl statement carries -H credential" fail "$S3_ARGV_BAD"
 [[ -z "$S3_STDERR_BAD" ]] && row "S3 structure: no bc_curl statement discards stderr (the refusal marker must stay visible)" ok || row "S3 structure: 2>/dev/null on bc_curl" fail "$S3_STDERR_BAD"
+[[ -z "$S3_NAME_BAD" ]] && row "S3 structure: every bc_curl / bc_refuse call names its own file in the marker" ok || row "S3 structure: a marker names another file" fail "$S3_NAME_BAD"
 [[ -z "$S3_HMAC_BAD" ]] && row "S3 structure: no converted file computes an HMAC with the key on openssl's argv" ok || row "S3 structure: openssl -hmac remains" fail "$S3_HMAC_BAD"
 [[ -z "$S3_RC2_BAD" ]] && row "S3 structure: no converted statement branches on rc == 2 (the marker is the discriminator)" ok || row "S3 structure: a site branches on rc 2" fail "$S3_RC2_BAD"
 if [[ "$S3_CALLS" -ge 18 ]]; then row "S3 structure: the derived population holds >= 18 bc_curl call statements ($S3_CALLS)" ok; else row "S3 structure: population floor" fail "only $S3_CALLS bc_curl statements derived"; fi
@@ -3489,6 +3514,46 @@ if [[ "$S3_RC" != 0 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 1 ]] && s3_c
 else row "S3 canary-status: hostile CF id" fail "rc=$S3_RC calls=$S3_NCALLS markers=$(s3_marker_count)"; fi
 s3_run "$S3/canary.sh" "$S3/real" WEBHOOK_DEPLOY_SECRET="synth-webhook-key-0123" CF_ACCESS_CLIENT_ID="synthid.access" CF_ACCESS_CLIENT_SECRET="synthsecret0123" SHIM_CODE=403
 [[ "$S3_RC" == 1 ]] && grep -q '^::error::deploy-status returned HTTP 403' "$S3_OUT" && row "S3 canary-status: a non-200 keeps its verdict (::error:: HTTP 403, exit 1)" ok || row "S3 canary-status: 403" fail "rc=$S3_RC"
+
+# ---- kb-drift-walker: the HMAC moved from an inline python3 -c (key exported) to the library (key not exported) ----
+# The live step text is executed with two edits that only remove the repo walker and the host-wide /tmp path; each edit is
+# asserted to have landed. doppler is a stub that answers by secret NAME.
+mkdir -p "$S3/kbstub"
+cat > "$S3/kbstub/doppler" <<'KBDOPPLER'
+#!/usr/bin/env bash
+case "$*" in
+  *KB_DRIFT_INGEST_SIGNING_KEY*) [[ "${KB_DOPPLER_FAIL:-}" == 1 ]] && exit 1; printf '%s' "${KB_KEY-}" ;;
+  *KB_DRIFT_INGEST_URL*) printf '%s' "https://ingest.invalid/kb" ;;
+  *) exit 64 ;;
+esac
+KBDOPPLER
+chmod +x "$S3/kbstub/doppler"
+s3_body ".github/workflows/kb-drift-walker.yml" "Run walker" > "$S3/kb.live.sh" || fatal "S3 could not extract the kb-drift-walker step"
+KB_FINDINGS='{"findings":[{"id":"synthetic-1"}]}'
+sed -e "s#^FINDINGS_JSON=.*#FINDINGS_JSON='$KB_FINDINGS'#" -e 's#/tmp/ingest\.out#"$RUNNER_TEMP"/ingest.out#g' "$S3/kb.live.sh" > "$S3/kb.sh"
+if ! grep -q "^FINDINGS_JSON='" "$S3/kb.sh" || grep -q 'scripts/kb-drift-walker.sh' "$S3/kb.sh" || grep -q '/tmp/ingest.out' "$S3/kb.sh"; then fatal "S3 kb-drift-walker row edits did not land"; fi
+KB_REALDIR="$S3/kbstub:$S3/real"
+KB_WANT_SIG="$(printf '%s' "$KB_FINDINGS" | "$REAL_OSSL" dgst -sha256 -hmac "synth-kb-signing-key-0123" | sed 's/.*= //')"
+s3_run "$S3/kb.sh" "$KB_REALDIR" KB_KEY="synth-kb-signing-key-0123"
+if [[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 && "$(tr '\0' '\n' < "$S3_DIR_ROW/calls/1.stdin")" == "header = \"X-Soleur-Kb-Drift-Signature: sha256=$KB_WANT_SIG\"" ]]; then
+  row "S3 kb-drift-walker: the signature equals the independent openssl digest and is the only line on the stdin config" ok
+else row "S3 kb-drift-walker: well-formed run" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
+if s3_tok_not_in_argv "$KB_WANT_SIG" && s3_tok_not_in_argv "synth-kb-signing-key-0123"; then row "S3 kb-drift-walker: neither the signing key nor the signature is in any recorded argv" ok; else row "S3 kb-drift-walker: credential in argv" fail ""; fi
+s3_run "$S3/kb.sh" "$KB_REALDIR" KB_KEY=""
+if [[ "$S3_RC" == 1 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 0 ]] && grep -q '^::error::the ingest signature could not be computed' "$S3_OUT"; then
+  row "S3 kb-drift-walker: an EMPTY signing key is the arm's own red verdict (::error::, exit 1), zero requests (no mute abort)" ok
+else row "S3 kb-drift-walker: empty key" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
+s3_run "$S3/kb.sh" "$S3/kbstub:$S3/real-nopy" KB_KEY="synth-kb-signing-key-0123"
+if [[ "$S3_RC" == 1 && "$S3_NCALLS" == 0 ]] && grep -q '^::error::the ingest signature could not be computed' "$S3_OUT"; then
+  row "S3 kb-drift-walker: python3 absent is the same red verdict with zero requests" ok
+else row "S3 kb-drift-walker: python3 absent" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
+s3_run "$S3/kb.sh" "$KB_REALDIR" KB_KEY="synth-kb-signing-key-0123" KB_DOPPLER_FAIL=1
+if [[ "$S3_RC" != 0 && "$S3_NCALLS" == 0 ]]; then
+  row "S3 kb-drift-walker: a failing doppler read aborts the step before any request (the key is no longer swallowed into an empty export)" ok
+else row "S3 kb-drift-walker: doppler failure" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
+if ! grep -qE '^[[:space:]]*export[[:space:]]+KB_DRIFT_INGEST_SIGNING_KEY' < <(grep -v '^[[:space:]]*#' "$S3/kb.live.sh"); then
+  row "S3 kb-drift-walker: the signing key is not exported (no other child of the step inherits it)" ok
+else row "S3 kb-drift-walker: the signing key is exported" fail ""; fi
 
 # ---- sentry-audit-gate: the red-class representative ----
 s3_body ".github/workflows/sentry-audit-gate.yml" "Verify token scope" > "$S3/sentry.sh" || fatal "S3 could not extract the sentry-audit-gate step"
@@ -3794,7 +3859,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=448
+EXPECTED_TESTS=458
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

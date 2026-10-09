@@ -70,7 +70,7 @@ cutover HMAC sites, heartbeat-URL path secrets) and S5 (`apply-web-platform-infr
 | `plugins/soleur/**` (`version-bump-and-release.yml` includes the whole tree; `web-platform-release.yml` excludes `docs/` and `test/`) | **Yes: the plugin release run** | The one edit under it is `plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh`. `version-bump-and-release.yml` calls `reusable-release.yml` (inherited secrets, write permissions), and that workflow calls the converted `notify-ops-email` on failure paths. Not a web deploy. | First line of the PR body names it; merge when no other release is in flight; post-merge check on that run's conclusion. |
 | `.github/workflows/<converted>.yml`, `.github/actions/**`, `scripts/**`, `tests/**`, `knowledge-base/**` | Fires no deploy | None of the converted workflows lists itself, the composites or `scripts/lib/` in a **push** `paths:` filter. `infra-validation.yml` runs on `pull_request` for five converted workflows and `sentry-audit-gate.yml` on a PR touching itself; those are CI gates. | PR CI is part of the pre-merge proof. |
 | Unfiltered push workflows (`ci`, `secret-scan`, `codeql-main-alert-gate`, `skill-security-scan-*`, `tenant-integration`, `vendor-pin-verify`) | Yes, by design, on every merge | They carry no `paths:` filter; all are CI gates and none deploys. | None. |
-| Runtime reach of the composites | **Not triggered, but the next run uses them** | `notify-ops-email` has 21 call steps in 11 workflow files and `anthropic-preflight` 3 in 3 (24 steps, 14 files, measured by parsing every job), including `apply-web-platform-infra.yml` and `reusable-release.yml`, which are alert paths. Merging changes what those alert steps run the next time they fire. | Composite step executed end to end under the shim (Phase 2); library-absent row; a lint closure over all 24 callers (Phase 6); post-merge first-run table. |
+| Runtime reach of the composites | **Not triggered, but the next run uses them** | `notify-ops-email` has 23 call steps and `anthropic-preflight` 3 (26 steps in 16 workflow files; the fix round re-counted, the first count said 24 steps / 14 files; measured by parsing every job), including `apply-web-platform-infra.yml` and `reusable-release.yml`, which are alert paths. Merging changes what those alert steps run the next time they fire. | Composite step executed end to end under the shim (Phase 2); library-absent row; a lint closure over all 24 callers (Phase 6); post-merge first-run table. |
 | Live self-exercise on the PR | Yes, on its own branch | `board-status-sync.yml` runs on PR events with the real App-token mint; `sentry-audit-gate.yml` runs on PRs touching its own file. | These are the live pre-merge proofs for two sites (Phase 9). |
 
 ## Decisions
@@ -191,7 +191,7 @@ No precedent exists for a **sourced workflow-side credential library**; that par
 | Lead: "open PR 9785 edits `anthropic-preflight/action.yml`" | Confirmed: it rewrites the single `PAYLOAD=...model:"claude-haiku-4-5-20251001"` line directly above the curl, and adds a vitest regex over that action's `model:"(claude-haiku-...)"` literal. | Keep the PAYLOAD line byte-identical; read `gh pr diff 9785` and merge main before editing the file; expect an adjacent-hunk conflict if 9785 lands first. |
 | Lead: "draft PR 9794 edits `git-data-cutover-access.test.sh`" | Confirmed. S3 plans no edit to that file; the suite stayed green under the scratch conversion (548 passed / 1 failed in both the converted and the unmodified scratch copy; the 1 is a missing-file artifact of the trimmed scratch tree). | None. |
 | (Additional, found) other open PRs touching S3 files | 9787 (`scheduled-terraform-drift.yml`, appended at EOF), 9529 (`rule-audit.yml` @368), 7999 (`git-data-rung2-rehearsal.yml` @470), 9784 (`terraform-target-parity.test.ts`), 9801 (`tests/scripts/test-kb-drift-walker.sh`). None overlaps a site hunk. | `git fetch && git merge origin/main` before the baseline commit and again just before merge. |
-| "Sourced only from the job's own checkout" is satisfiable everywhere | One S3 job has no checkout: `canary-status.yml` (`permissions: {}`). All 24 composite call steps have a prior checkout. | D6, D7. |
+| "Sourced only from the job's own checkout" is satisfiable everywhere | One S3 job has no checkout: `canary-status.yml` (`permissions: {}`). All 26 composite call steps have a prior checkout. | D6, D7. |
 | Lessons: "grep the whole repo for transport stubs of the changed credential path" | Done for S3's vocabulary; holders in "Stub holders" below. One infra-path holder found (the workspaces-luks stub). | D3. |
 | Tracker acceptance: "a guard-before-curl battery row per converted site (the lint cannot decide ordering statically)" | With a single `_bc_send` chokepoint the ordering is structural for the library (proved once, in the library suite). The per-site battery rows prove the **verdict class** at the sites where a bare refusal could land in a different arm, plus one representative per class; every site is also covered structurally (calls the library, no credential on argv, argv-neutrality golden). | Phase 6, Guard 2. |
 | `scripts/lib/bearer-curl.sh` "exists" (implied by the tracker's wording) | Does not exist (`ls scripts/lib`); 68 inline `_bearer_ok` copies exist. | New file (Files to Create). |
@@ -234,7 +234,7 @@ helper, and the assumption that every S3 file converts without an infra-suite ed
 2. A malformed, empty or unset credential produces zero outbound requests and one value-free marker line, and the site's own verdict class (red step, soft verdict or warning) is the one the old
    failure produced: nothing newly silent, nothing newly red, and no credential fault ever maps to a production action (a restart).
 3. A Better Stack reader refusal (exit 2, marker on stderr) is visible in the two callers that discarded it, without changing their verdicts.
-4. The converted requests are byte-neutral: same method, URL, non-credential headers, body and timeouts.
+4. The converted requests keep the same method, URL, non-credential headers, body and timeouts. The transport itself is NOT byte-neutral: it runs `--disable --noproxy '*'` first and with the TLS/proxy/loader-redirecting environment unset (ADR-280 decision 6).
 5. The library, the composites and the converted workflows are exercised under the runner's toolchain (bash 5.2.21, curl 8.5.0), not only the dev host's.
 
 **Cut List (Phase 0.6b).** (i) Per-site fingerprint keying for baseline E (buys property 1 for files that S4/S5 delete; D8). (ii) Converting the existing `printf | curl -K -` / `-H @-` pipe-form sites
@@ -509,7 +509,7 @@ Pre-push gates (owning suites directly; **do not run `scripts/test-all.sh` local
 
 PR title `fix(security): argv-credential sweep S3, workflow YAML and composite actions off the command line`; `Ref #9597`, `Ref #7797` (not `Closes`). The first body line states which pushes the merge fires (the plugin release run, via one test-file edit),
 that no `apps/web-platform/**` file is in the diff, and that the merge changes what the alert steps of the release and apply workflows run next time (the operator-visible line). No plan or spec file paths in the body and no script named like `*-soak-*` (say "the
-fourth converted probe" if that script must be named); avoid the words soak, outage, "Pro" and "subscription" in the body; the baseline arithmetic (28/61 -> 16/42, deletions only). Declare `Filed: #N ...` for every issue this PR files and, because it files issues,
+fourth converted probe" if that script must be named); avoid the words soak, outage, "Pro" and "subscription" in the body; the baseline arithmetic (28/61 -> 17/43, deletions only). Declare `Filed: #N ...` for every issue this PR files and, because it files issues,
 the net-issue-flow override with **one justification per issue**. Issues to file: (1) the held-back `workspaces-luks-cutover.yml` conversion (blocked by its infra suite's curl stub; rides S4 with operator notice; **owner and deadline named**; worded "reads
 `HCLOUD_TOKEN_READONLY` first and falls back to the read/write name until ADR-241 O10", never "read-only"), with `gh issue edit --add-blocked-by` where a blocker is known; (2) one post-merge first-run follow-through issue carrying the table below (owner, deadline merge + 3 days, and the
 staged positive-control path if no alert fires). Comments: on #9597 (S3 done, corrected counts and the partition, new baseline, the fingerprint-keying decision, the apply-exposure finding, the plugin-release finding), and on #9757 (the Better Stack stderr item
@@ -518,8 +518,8 @@ done; the owner ticks the checkbox, the issue stays open).
 ## Baseline and ceiling rows
 
 Rows leaving baseline E (files fully converted): `.github/actions/anthropic-preflight/action.yml 1`, `.github/actions/notify-ops-email/action.yml 1`, `.github/workflows/board-status-sync.yml 1`, `canary-status.yml 1`, `git-data-cutover.yml 1`,
-`git-data-rung2-rehearsal.yml 4`, `kb-drift-walker.yml 1`, `rule-audit.yml 2`, `scheduled-inngest-health.yml 3`, `scheduled-prod-version-drift.yml 2`, `scheduled-terraform-drift.yml 1`, `sentry-audit-gate.yml 1` (12 rows, 19 sites). Row staying:
-`workspaces-luks-cutover.yml 1`. Result: **17 files / 43 sites** (derived at ship; the earlier 16/42 figure predated holding the inngest-health probe step back). The ceiling table loses the same 12 rows in the same change. No row enters. Neither file is edited before the merge-from-main commit exists.
+`git-data-rung2-rehearsal.yml 4`, `kb-drift-walker.yml 1`, `rule-audit.yml 2`, `scheduled-prod-version-drift.yml 2`, `scheduled-terraform-drift.yml 1`, `sentry-audit-gate.yml 1` (11 rows leave, 16 sites); `scheduled-inngest-health.yml` goes 3 -> 1 (the held-back probe step keeps one; 2 sites removed). Rows staying:
+`workspaces-luks-cutover.yml 1` and `scheduled-inngest-health.yml 1`. Net: 18 sites removed. Result: **17 files / 43 sites** (derived at ship; the earlier 16/42 figure predated holding the inngest-health probe step back). The ceiling table loses the same 11 rows and lowers `scheduled-inngest-health.yml` to 1 in the same change. No row enters. Neither file is edited before the merge-from-main commit exists.
 
 ## Test Scenarios
 
@@ -531,14 +531,14 @@ Rows leaving baseline E (files fully converted): `.github/actions/anthropic-pref
 6. `notify-ops-email` end to end: 2xx -> `sent=true`; non-2xx -> warning, `sent=false`, exit 0; transport failure (real curl, closed port) -> same; missing key -> exit 1; malformed key -> `::error::` annotation + marker, `sent=false`, exit 0; library absent -> `sent=false`, exit 1.
 7. `anthropic-preflight` end to end: 200 -> `ok=true`; billing 400 -> `ok=false`; 5xx -> `ok=false`; real transport failure -> the existing behaviour (documented `000000` quirk, red); malformed key -> exit 1 (not `ok=false`).
 8. Better Stack reader exit 2 with the marker on stderr: the dedicated-host arm still grades `__UNREADABLE__`/probe-unavailable and prints one `::warning::` carrying `reader-refusal`; the cutover assertion retries as before and prints the warning once per failed read; with the library absent from a fake workspace both steps behave exactly as before.
-9. Source-path closure: all 24 composite call steps resolve the library (lint); no caller or converted workflow is `pull_request_target`; the one `ref:` checkout (`fix-constraints-stage-a.yml`, PR head) resolves it from the same tree as the composite.
+9. Source-path closure: all 26 composite call steps resolve the library (lint); no caller or converted workflow is `pull_request_target`; the one `ref:` checkout (`fix-constraints-stage-a.yml`, PR head) resolves it from the same tree as the composite.
 10. Runner parity: every new or changed suite green in `ubuntu:24.04` with the same row counts.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] `python3 scripts/lint-shell-trace-credential-refusal.py` repo-wide exits 0 with baseline E equal to the pre-slice baseline minus the converted rows (derived: **16 files / 42 sites** with the default partition) and the ceiling table equal; the explicit-path run over the converted files and the library reports 0 findings (all rules A to E).
+- [ ] `python3 scripts/lint-shell-trace-credential-refusal.py` repo-wide exits 0 with baseline E equal to the pre-slice baseline minus the converted rows (derived: **17 files / 43 sites** with the final partition) and the ceiling table equal; the explicit-path run over the converted files and the library reports 0 findings (all rules A to E).
 - [ ] `scripts/lib/bearer-curl.sh` exists with `bc_ok`, `bc_curl`, `bc_hmac_sha256_hex`, one `_bc_send` chokepoint, an xtrace refusal in each credential-binding function, no `exit`, and no default timeout; its suite is green on the dev host and in `ubuntu:24.04` with identical row counts.
 - [ ] No S3 file keeps `-hmac` in a credential operand or `2>/dev/null` on a converted curl; the converted files contain no `Authorization: Bearer`, `x-api-key`, `X-Signature-256`, `CF-Access-Client-*` or `X-Soleur-Kb-Drift-Signature` inside any curl argument list.
 - [ ] Every converted site is covered structurally (derived population: calls the library, no credential on argv, argv-neutrality golden), and the Guard 2 representative set runs at the call site (real step body, or a recorded slice with a row that fails when the slice no longer matches the live text) with the credential empty, unset and hostile, asserting zero calls, the marker once and the site's verdict class; the HMAC representative also with `python3` absent.
@@ -590,7 +590,7 @@ failure_modes:
     detection: marker line in the run log; the executed rows pin the verdict class per representative site
     alert_route: the site's existing alert (red job, issue, delivered=0 error, sent=false annotation)
   - mode: the library cannot be sourced from the job checkout
-    detection: hard ::error:: and exit 1 in the composites and steps; the lint closure over all 24 composite callers
+    detection: hard ::error:: and exit 1 in the composites and steps; the lint closure over all 26 composite call steps
     alert_route: red job
   - mode: the Better Stack reader refuses a credential (exit 2) in inngest-health or git-data-cutover
     detection: ::warning:: with the reader-refusal class and the scrubbed first stderr line
@@ -691,3 +691,18 @@ Appended, not edited in place. Deviations found while implementing, each measure
   manifest, because the existing shim's auth profiles do not model `x-api-key` or the Cloudflare Access pair and its `CLASSIFIED` keys off the followthrough population.
 - **Population floor for the library surface lives in the lint suite's live row** (>= 20 library-consuming steps; 36 today), not in the lint (a fixture tree legitimately has few).
 - Known environmental reds on the unmodified base, unrelated to this slice: `git-data-runcmd-rehearsal.test.sh` (4 container-fixture rows).
+
+## Fix-Round Addendum (2026-10-09, review round 1)
+
+A fix-round review (security, test-design, architecture, pattern, code-quality, performance) reported no P1 in the code and two vacuous library
+test rows; all findings were fixed inline. What changed against this plan, so the earlier text is read as superseded where it disagrees:
+- The composite call-step count is 26 (23 + 3) in 16 workflow files, and the union of workflows that source the library directly or call a
+  library composite is 22 (the earlier 24 / 14 / 12 figures counted differently). The blast-radius statement in ADR-280 uses the union.
+- The transport is not "byte-neutral" (see Acceptance criterion 4 above); the library's `_bc_tail_ok` now parses short clusters and attached
+  values, and its env scrub is the union of two existing precedents. It remains a guard against a caller's mistake, not a boundary.
+- The probe pre-guard (restart mapping) and the probe HMAC belong to the held-back probe step and are S4 obligations; mutant row 3 and the
+  pre-guard rows above that describe them as built in S3 are superseded. The S4 issue must carry them.
+- The lint's untrusted-ref rule is a fail-closed allowlist of the default ref (not a head-ref pattern list), the sparse-cone check is by
+  path segment with negation refused, and the composite set is derived by the basename of the library, including nested directories.
+- Pre-existing intermittent observed once in four runs of the sweep battery (an older stage's evaluator row reported an extra `bash-error`);
+  it did not reproduce on the next three runs and is not touched by this slice.
