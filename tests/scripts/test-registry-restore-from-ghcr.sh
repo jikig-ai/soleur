@@ -18,9 +18,9 @@
 #     engine actually asks for — cannot pass.
 #   * Fixtures are keyed PER REF on disk, so an engine that processed only the first entry and
 #     broke out of the loop is detectable (the later entries' fixtures go unconsumed).
-#   * Every predicate greps a FILE directly. Never `producer | grep -q`: under `set -o pipefail`
-#     an early match closes the pipe, the producer takes SIGPIPE (141), and the pipeline reports
-#     non-zero even though grep matched — which fails OPEN on every negative assertion.
+#   * Predicates grep a FILE directly or drain a pipe (`producer | grep -c ... >/dev/null`, same exit
+#     status, reads to EOF). Never `producer | grep -q`: under `set -o pipefail` an early match
+#     takes SIGPIPE (141) and the pipeline reports non-zero though grep matched — failing OPEN.
 #   * Harness setup failures ABORT (exit 2) rather than degrading into a confident wrong verdict
 #     about the engine.
 #

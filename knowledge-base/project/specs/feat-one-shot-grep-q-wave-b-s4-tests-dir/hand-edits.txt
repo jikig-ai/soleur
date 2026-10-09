@@ -8,3 +8,4 @@ tests/scripts/test-git-data-birth-readiness-gate.sh:2973:seeded W2-control fixtu
 tests/scripts/test-git-data-birth-readiness-gate.sh:2974:seeded W2-control fixture line inside a quoted heredoc that must keep the banned shape (grep -m1 form); trailing sigpipe-demo marker, no conversion
 tests/scripts/test-git-data-rung2-evidence-capture.sh:934:grep -m1 display inside a probe echo: here-string instead of a printf producer, no pipe into an early-exit reader
 tests/scripts/test-tmp-purge.sh:300:grep -qc (quiet and count in one cluster): the codemod refuses the repeated-letter cluster as X; hand-converted to grep -c >/dev/null
+tests/scripts/test-registry-restore-from-ghcr.sh:21-23:header comment that said every predicate greps a FILE directly; reworded to name the drained pipe form (review finding, prose only, no executable change)

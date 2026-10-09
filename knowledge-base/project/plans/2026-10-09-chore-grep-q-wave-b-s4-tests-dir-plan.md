@@ -414,6 +414,8 @@ No cross-domain implications detected: an engineering-internal CI-hygiene change
 
 ## Acceptance Criteria
 
+> **Superseded at work and review (2026-10-09):** the final measured numbers are in `knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-s4-tests-dir/evidence.md` (section 'Review addendum'): guard diff 6 added / 7 removed against the merge base at the work commit and larger after review, `hand-edited: 10`, 17 planted real-table paths and 5 canary roots. Where an AC below quotes 7/7, 15 paths, `hand-edited: 7` or 181/181, the addendum wins.
+
 Pre-merge boxes are checkable on the final tree; post-merge boxes are executed by `soleur:postmerge` and the tracker comment, with no human step.
 
 ### Pre-merge (PR)

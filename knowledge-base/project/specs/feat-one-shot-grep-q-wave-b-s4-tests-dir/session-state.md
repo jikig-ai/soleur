@@ -24,3 +24,13 @@ soleur:plan, learnings-researcher, plan review (simplicity, correctness, overeng
 ### Plan file (deepened)
 
 knowledge-base/project/plans/2026-10-09-chore-grep-q-wave-b-s4-tests-dir-plan.md
+
+## Work Phase
+
+- Status: conversion committed and pushed (commits 1 and 2 of the slice, evidence commit); pair run 28/28 identical; Guard 1 matrix as predicted; full numbers in `evidence.md`.
+- Not run locally (host load 25 to 33, CI is the gate by the user's decision): `--affected`, the ratchet-lane re-run (one member timed out at its cap), `guard-vacuity-floor`, the orphan and capture-exit lints, markdownlint and the discoverability re-measure.
+
+## Review Phase
+
+- 12 report-only seats plus the coverage consult; no P1. Guard fixes committed as `0a7e0a71`; doc fixes and the review addendum in `evidence.md`.
+- Next: second guard mutation battery on the reviewed guard (running), then compound, ship (CI is the gate), postmerge, tracker comment on #9217.
