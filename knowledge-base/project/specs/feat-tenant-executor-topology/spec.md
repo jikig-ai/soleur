@@ -6,6 +6,7 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 brainstorm: knowledge-base/project/brainstorms/2026-10-08-tenant-executor-topology-brainstorm.md
 issues: [9773, 5863]
+epic: 9842
 branch: feat-tenant-executor-topology
 pr: 9832
 created: 2026-10-08
