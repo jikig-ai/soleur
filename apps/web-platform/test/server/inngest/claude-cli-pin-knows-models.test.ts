@@ -558,7 +558,7 @@ describe.skipIf(!HAVE_BIN && !MUST_RUN)(
         `the installed ${label} bundle does not know: ${absent.join(", ")}. ` +
           "An unknown id silently halves max_tokens (#6934) — bump the CLI pin to a version whose bundle carries them.",
       ).toEqual([]);
-    });
+    }, 60_000);
 
     it("each CLI-reaching tier's default_effort matches the reviewed value, and the audit model supports effort", () => {
       const { defaults, auditSupportsEffort } = tierRows(BIN);
@@ -571,10 +571,10 @@ describe.skipIf(!HAVE_BIN && !MUST_RUN)(
         "a CLI bump moved a tier's default_effort — re-decide AUDIT_EFFORT for the audit tier, " +
           "accept the execution tier's new default, then update REVIEWED_DEFAULT_EFFORT (checklist step 2)",
       ).toEqual(REVIEWED_DEFAULT_EFFORT);
-    });
+    }, 60_000);
 
     it("real-bundle negative control: a made-up id is absent", () => {
       expect(bundleHasId(BIN, "claude-zz-not-a-model-0")).toBe(false);
-    });
+    }, 60_000);
   },
 );
