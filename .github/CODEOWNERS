@@ -21,6 +21,7 @@
 /apps/web-platform/scripts/parse-gitleaks-allowlists.mjs @deruelle
 /apps/web-platform/scripts/rename-guard.sh              @deruelle
 /apps/web-platform/scripts/allowlist-diff.sh            @deruelle
+/scripts/secret-scan-smoke-gate.test.sh                 @deruelle
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
