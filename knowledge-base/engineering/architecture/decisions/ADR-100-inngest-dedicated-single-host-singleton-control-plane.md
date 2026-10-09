@@ -1902,3 +1902,5 @@ remediation dispatch, that dispatch no longer exists once PR A of #8285 has merg
 converted into `inngest-backstop-retire`, which retires the plaintext Redis backstop and recuts
 nothing). A standing flush latch therefore has no in-repo remediation dispatch (#7777, closed, is the
 record of why the latch has no append-only clear). See the ADR-142 addendum of 2026-10-08.
+
+**Appended 2026-10-09 (#8285 PR B).** The `inngest-backstop-retire` dispatch the paragraph above says PR A converted the recut job into has itself been deleted: it ran three times on 2026-10-09 (runs 37950928039, 37955244979, 37958051426), the plaintext volume answered 404, and PR B removed the job, its gate library and its wipe host. The set of Inngest dispatch surfaces is now `inngest-host`, `inngest-host-replace` and `cutover-inngest.yml` (`op=luks-cutover` and the rest; `op=luks-rollback` is retired). See the ADR-142 addendum of 2026-10-09.
