@@ -238,9 +238,12 @@ jobs:
           # Live Sentry rule check (ADR-220 2026-09-28): read rule 1310055 — do not infer.
           # A write-capable token is never used for this read.
           host="${SENTRY_API_HOST:-https://sentry.io}"
-          code="$(curl -s -o "$RUNNER_TEMP/rule.json" -w '%{http_code}' --max-time 20 \
-                    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
-                    "${host}/api/0/organizations/jikigai-eu/alert-rules/1310055/" 2>/dev/null || echo 000)"
+          # The read token reaches curl on its stdin config (ADR-280). The old `2>/dev/null` is gone on
+          # purpose: it would hide the refusal marker. A refusal (rc 2) lands in `|| echo 000`, the same
+          # fail-closed `pin_fault_paging_absent` verdict an unusable token produced before.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || fail pin_fault_paging_absent "scripts/lib/bearer-curl.sh could not be loaded from the job checkout — the pin-fault page could not be verified."
+          code="$(bc_curl git-data-cutover 'Authorization:Bearer :SENTRY_ACTIONS_RO_TOKEN' -- -s -o "$RUNNER_TEMP/rule.json" -w '%{http_code}' --max-time 20 \
+                    "${host}/api/0/organizations/jikigai-eu/alert-rules/1310055/" || echo 000)"
           [[ "$code" == "200" ]] || fail pin_fault_paging_absent "alert-rule GET returned HTTP $code — the pin-fault page is not verifiably live; check SENTRY_ACTIONS_RO_TOKEN and rule 1310055."
           enabled="$(jq -r '.status // 1' "$RUNNER_TEMP/rule.json" 2>/dev/null || echo "")"
           # Sentry: status 0 = enabled, 1 = disabled/snapshot
@@ -495,6 +498,13 @@ jobs:
           # a false miss triggers the TOTAL unwind on a healthy flip. Poll each host:
           # up to ~12 min (12 × 60 s), newest row wins.
           fail=0
+          # The reader's stderr is surfaced, not discarded (#9757): exit 2 is the reader refusing a
+          # credential, and `2>/dev/null || true` made that read as a host that never reported. The
+          # classifier is best effort (a missing library only drops the warning); the retry/unwind
+          # logic below is unchanged by it.
+          BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-assert-err.$$"
+          # shellcheck source=/dev/null
+          source "${GITHUB_WORKSPACE:-.}/scripts/lib/betterstack-read-classify.sh" 2>/dev/null || true
           # web-1's Better Stack host_name is 'soleur-web-platform' (server.tf each.key
           # exception) — but its RUNNING vector still stamps 'soleur-inngest-prd' until the
           # #6616 recreate lands. `git_data_store=` is web-app-only, so matching either name
@@ -506,8 +516,13 @@ jobs:
             name_in="$(printf "%s" "$names" | tr ' ' '\n' | sed "s/.*/'&'/" | paste -sd, -)"
             seen=0
             for i in $(seq 1 12); do
+              rows_rc=0
               rows="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-                "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') IN ($name_in) AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>/dev/null || true)"
+                "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') IN ($name_in) AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>"$BS_ERR")" || rows_rc=$?
+              if [ "$rows_rc" -ne 0 ] && declare -F bs_read_classify >/dev/null 2>&1 && declare -F bs_read_scrub_err1 >/dev/null 2>&1; then
+                printf '%s' "$rows" > "$BS_ERR.rows"
+                echo "::warning::host $leg: the Better Stack read failed (attempt $i, rc=${rows_rc}, class=$(bs_read_classify "$rows_rc" "$BS_ERR.rows"), first stderr line: $(bs_read_scrub_err1 "$BS_ERR"))"
+              fi
               if printf '%s' "$rows" | grep -cF "git_data_store=${EXPECTED}" >/dev/null; then
                 echo "host $leg: git_data_store=${EXPECTED} observed (attempt $i)"
                 seen=1
@@ -520,6 +535,7 @@ jobs:
               fail=1
             fi
           done
+          rm -f "$BS_ERR" "$BS_ERR.rows"
           [ "$fail" = 0 ] || { echo "::error::verdict=deploy_assert_failed — a web host never reported git_data_store=${EXPECTED}"; exit 1; }
 
       # --- flip tail: unfreeze + gc restart BEFORE the probe --------------------------

@@ -14,14 +14,21 @@ name: canary-status
 on:
   workflow_dispatch: {}
 
-# No repo checkout or contents access is needed — this job only makes one
-# outbound authenticated GET and writes a summary.
-permissions: {}
+# Read-only contents access for ONE reason: the job sources scripts/lib/bearer-curl.sh from its own
+# checkout so the deploy-webhook credentials ride curl's stdin config, not its argument list (ADR-280).
+# It still only makes one outbound authenticated GET and writes a summary.
+permissions:
+  contents: read
 
 jobs:
   read-canary-status:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout (for scripts/lib/bearer-curl.sh)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
       - name: Read /hooks/deploy-status .sandbox_canary
         env:
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
@@ -30,11 +37,18 @@ jobs:
         run: |
           set -uo pipefail
           : "${WEBHOOK_DEPLOY_SECRET:?}" "${CF_ACCESS_CLIENT_ID:?}" "${CF_ACCESS_CLIENT_SECRET:?}"
-          SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
-          RESP="$(curl -sS --max-time 20 -w '\nHTTP:%{http_code}' -X GET \
-            -H "X-Signature-256: sha256=$SIG" \
-            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          # The HMAC key reaches python in its environment and the signature, with the Cloudflare Access
+          # pair, reaches curl on its stdin config: none of the four is on any argument list. `|| SIG=""`
+          # sends a failure (python3 missing, empty key) to the explicit refusal, not a mute abort.
+          SIG="$(printf '' | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || SIG=""
+          if [[ ! "$SIG" =~ ^[0-9a-f]{64}$ ]]; then
+            bc_refuse canary-status WEBHOOK_DEPLOY_SECRET || true
+            echo "::error::the request signature could not be computed (python3 missing or the webhook key unusable)"
+            exit 1
+          fi
+          RESP="$(bc_curl canary-status 'X-Signature-256:sha256=:SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' 'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+            -sS --max-time 20 -w '\nHTTP:%{http_code}' -X GET \
             https://deploy.soleur.ai/hooks/deploy-status)"
           CODE="$(printf '%s' "$RESP" | sed -n 's/^HTTP://p' | tr -d '[:space:]')"
           BODY="$(printf '%s' "$RESP" | sed '$d')"

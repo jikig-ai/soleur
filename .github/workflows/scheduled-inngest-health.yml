@@ -898,8 +898,22 @@ jobs:
           # that saturates the limit is visible rather than silently truncated.
           PROBE_LIMIT=500
           rc=0
+          # The reader's stderr is no longer discarded (#9757): exit 2 is the reader REFUSING a credential
+          # (marker on stderr), and graded as __UNREADABLE__ with the cause thrown away it read as a silent
+          # host. It is captured and surfaced as ONE ::warning::, best effort: the verdict below is
+          # unchanged by it, and a missing classifier library only drops the warning.
+          BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-read-err.$$"
           ROWS="$(bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
-            --since "$PROBE_WINDOW" --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit "$PROBE_LIMIT" 2>/dev/null)" || rc=$?
+            --since "$PROBE_WINDOW" --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit "$PROBE_LIMIT" 2>"$BS_ERR")" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            # shellcheck source=/dev/null
+            source "$GITHUB_WORKSPACE/scripts/lib/betterstack-read-classify.sh" 2>/dev/null || true
+            if declare -F bs_read_classify >/dev/null 2>&1 && declare -F bs_read_scrub_err1 >/dev/null 2>&1; then
+              printf '%s' "$ROWS" > "$BS_ERR.rows"
+              echo "::warning::#9757 dedicated-host arm: the Better Stack read failed (rc=${rc}, class=$(bs_read_classify "$rc" "$BS_ERR.rows"), first stderr line: $(bs_read_scrub_err1 "$BS_ERR"))"
+            fi
+          fi
+          rm -f "$BS_ERR" "$BS_ERR.rows"
           LINES="$(printf '%s\n' "$ROWS" | grep -c . || true)"
 
           if [[ "$rc" -ne 0 ]]; then
@@ -1240,6 +1254,10 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/tunnel-connector-census.sh
+          # The Cloudflare API token reaches curl on its stdin config (ADR-280). A missing library is a hard
+          # failure, never an argv fallback; a refused token reads as census_unavailable below, with the
+          # marker visible on the run log.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
 
           CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN --project soleur --config prd_terraform --plain 2>/dev/null || true)
           CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --project soleur --config prd_terraform --plain 2>/dev/null || true)
@@ -1256,7 +1274,7 @@ jobs:
             exit 0
           fi
 
-          TUNNEL_ID=$(curl -s --max-time 20 -H "Authorization: Bearer $CF_API_TOKEN" \
+          TUNNEL_ID=$(bc_curl scheduled-inngest-health 'Authorization:Bearer :CF_API_TOKEN' -- -s --max-time 20 \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel?name=soleur-web-platform" \
             | jq -r '.result[0].id // empty' 2>/dev/null || true)
           if [[ -z "$TUNNEL_ID" ]]; then
@@ -1267,7 +1285,7 @@ jobs:
             exit 0
           fi
 
-          RESP=$(curl -s --max-time 20 -w '\n%{http_code}' -H "Authorization: Bearer $CF_API_TOKEN" \
+          RESP=$(bc_curl scheduled-inngest-health 'Authorization:Bearer :CF_API_TOKEN' -- -s --max-time 20 -w '\n%{http_code}' \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections" || printf '\n000')
           CODE=$(printf '%s' "$RESP" | tail -1)
           BODY=$(printf '%s' "$RESP" | sed '$d')
