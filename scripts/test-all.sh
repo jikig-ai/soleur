@@ -980,6 +980,20 @@ if declare -p ALWAYS_ON_SUITES >/dev/null 2>&1; then
   _AFF_LIB_OK=1
 fi
 
+# --- Derive-result cache (#9812) --------------------------------------------------
+# Same degrade-never-block class as _AFF_LIB above: a missing/broken cache lib leaves
+# _affected_classify_cached undefined, _ADC_LIB_OK stays 0, and the selection walk takes the
+# plain-classify arm. The lib itself is advisory-only — every failure falls back to a fresh derive.
+_ADC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-affected-derive-cache.sh"
+_ADC_LIB_OK=0
+if [[ -f "$_ADC_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-affected-derive-cache.sh
+  source "$_ADC_LIB" || true
+fi
+if declare -F _affected_classify_cached >/dev/null 2>&1; then
+  _ADC_LIB_OK=1
+fi
+
 # --- Test group selector ---
 # TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
 # over positional ($1) so GitHub Actions `env:` blocks and `gh workflow run`
@@ -2633,6 +2647,48 @@ _affected_resolve_edges() {
   done
 }
 
+# --- derive-input recording (the cross-run derive cache, #9812) ---------------------------------
+# The derive is a pure function of its inputs; to cache its output across runs the wrapper records
+# every input the derive consults — file reads (recorded at _affected_file_edges entry, covering
+# both fresh reads and _FE_FILES memo replays) and every existence probe. `_affected_probe` IS the
+# probe: same truth table as the bare `[[ -<k> ]]` it replaces, plus a recording side-channel active
+# only while the cache wrapper holds _ADC_REC=1. When the cache lib was never sourced the slots are
+# unset and the ${...:-} guards make recording a no-op — the probe still evaluates correctly
+# (degrade-never-block, the _AFF_LIB class of contract). The `[[ -d "$PWD" ]]` liveness probe
+# (_wt_missing_die) is named-exempt: it is not an edge input.
+_affected_probe() { # <e|f|d> <path> — evaluate the [[ -<k> path ]] test; record it when caching
+  local _k="$1" _pp="$2" _rc _nl=$'\n'
+  case "$_k" in
+    e) [[ -e "$_pp" ]] ;;
+    f) [[ -f "$_pp" ]] ;;
+    d) [[ -d "$_pp" ]] ;;
+    *) return 1 ;;
+  esac
+  _rc=$?
+  if (( ${_ADC_REC:-0} )); then
+    case "${_ADC_REC_PSET:-$_nl}" in
+      *"${_nl}${_k}|${_pp}${_nl}"*) : ;;   # same run, same answer — first record stands
+      *)
+        _ADC_REC_PSET+="${_k}|${_pp}${_nl}"
+        _ADC_REC_PROBES+=("${_k}"$'\t'"${_rc}"$'\t'"${_pp}")
+        ;;
+    esac
+  fi
+  return $_rc
+}
+
+# Record a file the derive's output depends on. Called at _affected_file_edges entry so both the
+# fresh-read and the _FE_FILES memo-replay arms count it. Deduped via the newline-bracketed shadow.
+_affected_rec_read() { # <path>
+  (( ${_ADC_REC:-0} )) || return 0
+  case "${_ADC_REC_RSET:-$'\n'}" in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+  esac
+  _ADC_REC_READS+=("$1")
+  _ADC_REC_RSET+="$1"$'\n'
+  return 0
+}
+
 # Append an edge if it resolves inside the repo and is not already present.
 # `[[ -e ]]` is the whole test: argv words, `-c` payload tokens and resolved
 # source/import paths are all filtered through it, so garbage never lands in
@@ -2645,11 +2701,11 @@ _affected_add_edge() {
   local _p="$1" _nl=$'\n'
   # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
   case "$_p" in *"$_nl"*) return 0 ;; esac
-  [[ -n "$_p" && -e "$_p" ]] || return 0
+  [[ -n "$_p" ]] && _affected_probe e "$_p" || return 0
   case "$_p" in
     .|..|./*|../*) ;;
     *)
-      if [[ -d "$_p" ]]; then _p="${_p%/}/"; fi
+      if _affected_probe d "$_p"; then _p="${_p%/}/"; fi
       _p="^$_p"
       ;;
   esac
@@ -2740,7 +2796,7 @@ _affected_edge_token() {
       case "$_p" in ../*|..|.) _p="" ;; esac
       ;;
   esac
-  if [[ -n "$_p" && ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+  if [[ -n "$_p" ]] && ! _affected_probe e "$_p" && [[ "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
     _p="$(printf '%s' "$_p" | tr '.' '/').py"
   fi
   _affected_buf_add "$_p"
@@ -2776,7 +2832,7 @@ _FE_EDGES=()
 _FE_BUF=()
 _affected_buf_add() {
   local _p="$1"
-  [[ -n "$_p" && -e "$_p" ]] || return 0
+  [[ -n "$_p" ]] && _affected_probe e "$_p" || return 0
   _EB_HIT=1
   _affected_in_list "$_p" ${_FE_BUF[@]+"${_FE_BUF[@]}"} && return 0
   _FE_BUF+=("$_p")
@@ -2821,7 +2877,10 @@ _affected_resolve_vars() {
 
 _affected_file_edges() {
   local _f="$1"
-  [[ -f "$_f" ]] || return 0
+  _affected_probe f "$_f" || return 0
+  # Record the read BEFORE the memo check: a _FE_FILES replay still consumed the file's content —
+  # the memo carries an earlier read of the same bytes the validator will re-hash.
+  _affected_rec_read "$_f"
   local _ci
   for (( _ci=0; _ci<${#_FE_FILES[@]}; _ci++ )); do
     if [[ "${_FE_FILES[$_ci]}" == "$_f" ]]; then
@@ -2984,19 +3043,19 @@ _affected_derive() {
         ;;
       *.sh|*.ts|*.tsx|*.mjs|*.js|*.py|*.rb)
         _affected_add_edge "$_tok"
-        [[ -z "$_suite_file" && -f "$_tok" ]] && _suite_file="$_tok"
+        if [[ -z "$_suite_file" ]] && _affected_probe f "$_tok"; then _suite_file="$_tok"; fi
         ;;
       *.*)
         # Literal first (`config.yml` resolves as itself); THEN the
         # dotted-module reading (`tests.scripts.test_x` -> tests/scripts/…),
         # which only lands when the literal did not.
         _affected_add_edge "$_tok"
-        if [[ ! -e "$_tok" && "$_tok" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+        if ! _affected_probe e "$_tok" && [[ "$_tok" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
           local _mod; _mod="$(printf '%s' "$_tok" | tr '.' '/')"
           _affected_add_edge "$_mod"
           _affected_add_edge "$_mod.py"
           _affected_add_edge "$_mod.sh"
-          [[ -z "$_suite_file" && -f "$_mod.py" ]] && _suite_file="$_mod.py"
+          if [[ -z "$_suite_file" ]] && _affected_probe f "$_mod.py"; then _suite_file="$_mod.py"; fi
         fi
         ;;
       *)
@@ -3068,7 +3127,7 @@ _affected_derive() {
         local _i _new
         for (( _i=_pre_n; _i<${#_AC_EDGES[@]}; _i++ )); do
           _new="${_AC_EDGES[$_i]#^}"
-          if [[ -f "$_new" ]]; then
+          if _affected_probe f "$_new"; then
             case "$_sset" in *"$_snl$_new$_snl"*) ;; *) _sset+="$_new$_snl"; _next+=("$_new") ;; esac
           fi
         done
@@ -3604,7 +3663,14 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             _aff_label[$_aff_ordinal]="${_aff_fields[1]}"
             [[ "$_aff_line" == SUITE_COMMAND$'\t'* ]] || continue
             _aff_cmd_records=$(( _aff_cmd_records + 1 ))
-            _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            # Cache wrapper (#9812): only on the selection walk — TEST_GROUP=all and NOT
+            # --print-affected-set receipt mode (whose edge set is deliberately partial, so it
+            # must never write records). Kill switch and init failure degrade to plain classify.
+            if (( _ADC_LIB_OK == 1 )) && [[ "${TEST_GROUP:-all}" == "all" ]] && (( _PRINT_AFFECTED == 0 )); then
+              _affected_classify_cached "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            else
+              _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            fi
             _aff_cls[$_aff_ordinal]="$_AC_CLASS"
             if (( _PRINT_SELECTION == 1 )); then
               _aff_ej=""
@@ -3621,6 +3687,11 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             ;;
         esac
       done <<< "$_aff_stream"
+      # Cache telemetry (#9812): hits+misses+derived ≈ classify calls served; a warm unchanged run
+      # should print misses=0 derived=0. Emitted unconditionally — zeros are the honest "cache off"
+      # reading, and a silently-absent line is how a dead cache regresses unnoticed.
+      printf 'AFFECTED_DERIVE_CACHE\thits=%d\tmisses=%d\tderived=%d\n' \
+        "${_ADC_HITS:-0}" "${_ADC_MISSES:-0}" "${_ADC_DERIVED:-0}"
       if (( _aff_selected == 0 )); then
         # The EFFECTIVE selected set, not the derived one: a run whose whole
         # reachable selection is empty would exit green having executed
@@ -5953,6 +6024,10 @@ if want_scripts; then
   # #9512: the push-dedupe soak probe's exit-code contract (a fake gh, an injected clock, and mutation rows over
   # copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/ci-push-dedupe-soak-9512" bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
+  # (#9812) the derive cache lib and the runner's recording/dispatch instrumentation. Explicit
+  # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
+  # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
+  run_suite "scripts/test-affected-derive-cache" bash scripts/test-affected-derive-cache.test.sh
 fi
 
 # Named bun-test entries — bun shard.
