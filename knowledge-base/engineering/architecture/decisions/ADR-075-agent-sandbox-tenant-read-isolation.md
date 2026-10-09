@@ -260,7 +260,7 @@ capped binary outside the container bounding set fails `execve` outright
 
 **Disposition (operator-ratified 2026-10-09, brainstorm
 `knowledge-base/project/brainstorms/2026-10-09-outer-wrap-elevation-disposition-brainstorm.md`
-+ spec `feat-outer-wrap-elevation-disposition/spec.md`): Option 3 — drop the
+and spec `feat-outer-wrap-elevation-disposition/spec.md`): Option 3 — drop the
 privileged arm.** The remaining non-userns elevation paths were all dead ends or
 net-negative:
 
@@ -282,8 +282,11 @@ net-negative:
 implicit-userns fallback still serves hosts that permit it); sibling workspace
 **content** stays masked by the #5862 `denyRead` + realpath hook, which is now
 indefinitely load-bearing (#9798's post-promotion cleanup premise is void).
-The open residual — sibling filesystem *existence*/mount-table presence — exits
-only with **#9773 Stage 1**. **Revisit trigger:** if Stage-1 GA slips materially
+The open residual — sibling filesystem *existence*/mount-table presence, plus
+the shared-`$HOME` **read** surface (`.claude/projects/<cwd-slug>/` transcripts
+are same-uid readable cross-session — the wrap's narrow `$HOME` binds were the
+mechanism that would have closed it; ADR-075's existing bullet records only
+the write side) — exits only with **#9773 Stage 1**. **Revisit trigger:** if Stage-1 GA slips materially
 (~8 weeks) or a realized sibling-filesystem incident lands, the interim arm is
 re-opened as a bespoke minimal setuid launcher (fixed-argv
 mount+bind+drop-uid+exec), never setuid bwrap.
