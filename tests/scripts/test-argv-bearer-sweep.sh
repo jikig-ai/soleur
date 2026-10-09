@@ -927,7 +927,8 @@ betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-late
 HMAC_MANIFEST='canary-promotion-5875|dynamic|deploy\.soleur\.ai|1|canary_pass|
 infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
 infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
-inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh'
+inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
+tenant-outer-wrap-soak-5863|delegated|||none|scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh'
 
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
 derive_population() {
