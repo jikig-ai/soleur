@@ -84,7 +84,7 @@ OpenAI for Anthropic in harness-specific billing disclosures. Soleur disclaims
 warranty for runtime cost.
 
 For asynchronous CI and merge work, own the wait, report changes, resolve
-`BEHIND` (not once the poll has printed `[ship.phase7.queue_wait]`: a merge-queue PR then waits for GitHub to enqueue it), and finish the prescribed postmerge checks before claiming success.
+`BEHIND` (not when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it), and finish the prescribed postmerge checks before claiming success.
 If a required capability cannot be mapped, report the exact unsupported gate
 and retain incomplete status instead of silently skipping it.
 When the Monitor tool is unavailable, do not stream `gh run watch` output to
