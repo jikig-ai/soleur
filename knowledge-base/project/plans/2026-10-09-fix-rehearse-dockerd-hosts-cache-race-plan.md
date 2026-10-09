@@ -12,6 +12,48 @@ type: fix
 
 Ref #9799 (tracker item 5). No close keyword: the tracker stays open for items 1 and 4.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09 (focused pass: the plan is a ~60-line CI-probe fix, so the halt gates and live
+verifications ran inline rather than as a 40-agent fan-out; the plan-review panel had already run four
+reviewers).
+**Sections enhanced:** Scope Check (added; was missing, 4.12), Observability discoverability command
+(re-shaped, 4.7), Research Insights (live verifications below).
+
+### Key Improvements
+1. Scope Check added: 11 asks mapped; the new test suite surfaced as the one unrequested item and queued as a
+   User-Challenge in `decision-challenges.md` (ask 4 is conditional on a suite that does not exist).
+2. Observability probe changed from the suite (suite-shaped, trips the Check 10 detection) to one anchored grep
+   with a literal expected output.
+3. Cited facts re-verified live (below).
+
+### Gate results
+- 4.6 User-Brand Impact: present, threshold `none`, scope-out bullet present for the `apps/*/infra/` path. Pass.
+- 4.7 Observability: five fields present; command verb `grep` is allowlisted, no SSH, under the 15 s cap,
+  `expected_output` is a literal. Pass.
+- 4.8 PAT-shaped variables: none. 4.9 UI wireframe: no UI surface, skipped. 4.10 Encryption posture: no new
+  persistent store or cross-component connection ("image store" here means the runner's docker image store
+  setting under test), skipped.
+- 4.11 Guard Contract: `lint-guard-contract.py` green (1 guard entry); assembly names the chokepoint
+  (`assert_dockerd_denied`), matrix has 5 rows including an own-dispatch row (M1) and a reorder row (M3).
+- 4.12 Scope Check: present, one unfenced occurrence, no `unmapped`, every `inferred` row justified.
+- 4.5 Network-outage: the plan's words `unreachable`/`timeout` appear only as probe results on a throwaway
+  runner; no SSH or firewall hypothesis is proposed, so no deep-dive. 4.55 Downtime: no serving surface.
+
+### Live verifications (this pass)
+- PR #9805: MERGED, "zot claim out of ci-deploy.sh and fan-out HMAC key off argv" (matches tracker items 2-3).
+- Issue #8881: OPEN, the K=6 -> K=7 rebalance review (the overlap acknowledged above).
+- ADR-252 exists: `ADR-252-infra-suite-registration-is-presence-and-deploy-script-tests-is-a-matrix.md`.
+- Go `net/hosts.go` at go1.24.0 (fetched from raw.githubusercontent.com): `cacheMaxAge = 5 * time.Second`;
+  `readHosts` returns early on `now.Before(hosts.expire)`, otherwise stats and compares `mtime` and `size`.
+- `docker info --format '{{.HTTPProxy}} {{.HTTPSProxy}} {{.NoProxy}} {{json .RegistryConfig.Mirrors}}'` runs on a
+  current local docker; the plan still requires one best-effort check on each CI leg (Phase 3 step 5).
+- Failing run timeline (run 37863203385 attempt 1): `docker 28.0.4 driver=overlay2` printed 00:08:40.87Z, the
+  deny step started in the same second, `::error::rehearse[classic]: dockerd could still pull ...` at
+  00:08:42.98Z. Attempt 2 conclusion: success.
+- `zot-image-rehearse.sh` is referenced by no `triggers_replace`; the only `.github/workflows` mention is the
+  `paths:` filter and the job step in `zot-image-mirror.yml`, which this plan does not edit.
+
 ## Overview
 
 `zot-image-rehearse.sh <store>` (CI job `rehearse` in `.github/workflows/zot-image-mirror.yml`)
@@ -243,6 +285,44 @@ hypothesis, not a measured cause (and what is unexplained: the dockerd read that
 deny); what the new output shows if it recurs; the real-host ordering finding (not shared;
 `cloud-init-registry.yml` unchanged); the one path not examined (web-host deny copies). No new issues filed.
 
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "make the dockerd probe capture its output and print it (plus the docker version and the hosts file mtime) on failure" [brief] | Phase 2 (`assert_dockerd_denied` capture and diagnostics); Files to Edit: `zot-image-rehearse.sh` | mapped |
+| 2 | "remove the race by waiting out the 5 s cache (or otherwise making the probe measure the steady state) and say plainly in a comment that this is the rehearsal's probe, not a claim about the registry host" [brief] | Phase 2 (`HOSTS_CACHE_WAIT_S=7`, `sleep` before the pull, the comment) | mapped |
+| 3 | "check cloud-init-registry.yml and the registry runbook for whether the real host has the same ordering (daemon restart then deny then a ghcr pull) and, if it does, note it in the PR rather than widening scope" [brief] | Research Insights (real-host ordering finding, no edit); Phase 4 (PR body) | mapped |
+| 4 | "add offline test row(s) in the existing zot-image-rehearse test suite if one exists (find it under apps/web-platform/infra/ and check how it is registered)" [brief] | Phase 1 and Files to Create: `zot-image-rehearse-probe.test.sh`; Phase 3 step 4 (registration) | mapped (condition not met: no such suite exists; see provenance row 3) |
+| 5 | "Do not edit trigger files of terraform_data.deploy_pipeline_fix, cloud-init-registry.yml, zot-registry.tf, variables.tf or server.tf" [brief] | Files to Edit (none of them); acceptance criterion on `git diff --stat` | mapped |
+| 6 | "This is a working hypothesis, not a measured cause: the plan must say so and must make a recurrence diagnosable." [brief] | `## Hypothesis` section and its alternatives table; Phase 2 diagnostics | mapped |
+| 7 | "Use `Ref #9799` in the PR body, no close keyword next to an issue number" [brief] | Phase 4; acceptance criteria | mapped |
+| 8 | "Net-issue-flow: file no new issues." [brief] | Phase 4 (no issues filed); Cut List records the one deferred idea inline instead | mapped |
+| 9 | "No web-1/web-2/git-data host contact; no apply workflow dispatch." [brief] | Infrastructure (IaC) section; Post-merge: none | mapped |
+| 10 | "Rely on CI for the broad battery (the machine is contended); keep targeted local checks only." [brief] | Phase 3 (targeted local only) | mapped |
+| 11 | "The user-brand-impact threshold for this CI-only rehearsal probe is expected to be `none` (state the reason)." [brief] | `## User-Brand Impact` | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Edit `zot-image-rehearse.sh`: capture and diagnostics | "capture its output and print it (plus the docker version and the hosts file mtime) on failure" (ask 1) | asked |
+| Edit `zot-image-rehearse.sh`: 7 s sleep and comment | "waiting out the 5 s cache" (ask 2) | asked |
+| Diagnostics beyond version and mtime: `image_present_before`, proxy/mirror fields, daemon unit environment | "must make a recurrence diagnosable" (ask 6) | asked |
+| Create `zot-image-rehearse-probe.test.sh` | — | inferred — justification: ask 4 is conditional on a suite existing and none does, so the literal ask is to add nothing; without a test the sleep and the output capture can be dropped silently, which the plan's property 3 forbids. Persisted as a User-Challenge in `decision-challenges.md` for the operator to confirm or cut. |
+| Source guard before `STORE=` parsing | — | inferred — justification: the only way to run `assert_dockerd_denied` offline without a new library file or a workflow path-filter edit; it exists solely to serve the suite above and goes if the suite goes. |
+| Registration rows in `suite-shard-legs.tsv` / `suite-durations.tsv` | "check how it is registered" (ask 4) | asked (conditional: only if the registration gate requires them) |
+| Real-host ordering check (read-only) | "check cloud-init-registry.yml and the registry runbook" (ask 3) | asked |
+| `## Guard Contract`, `## Observability`, `## Review Revisions` sections | — | inferred — justification: required plan-skill gates (Phase 2.9, 2.12) for a plan whose Files to Edit sit under `apps/*/infra/` and whose deliverable includes an assertion-based CI probe. |
+
+### Split Assessment
+
+- Subsystems touched: 1 — apps/web-platform (infra), plus knowledge-base plan/tasks
+- Planned files: 2 product files (+ at most 2 generated tsv rows) | Estimated changed lines: ~220 (about 60 in the script, about 150 in the suite)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
@@ -331,7 +411,9 @@ No new infrastructure. The edited script is not a Terraform trigger input.
 
 ## Observability
 
-The surface is a CI job, which the operator can inspect without SSH.
+The surface is a CI job, which the operator can inspect without SSH. The local probe is deliberately the
+smallest command that shows the fix is in place (one anchored grep, well inside Check 10's 15 s cap); the offline
+suite is the test of the behaviour, not the discovery command.
 
 ```yaml
 liveness_signal:
@@ -356,8 +438,8 @@ logs:
   where: GitHub Actions job log for the run
   retention: GitHub's workflow-log retention
 discoverability_test:
-  command: bash apps/web-platform/infra/zot-image-rehearse-probe.test.sh
-  expected_output: 0 failed
+  command: grep -c '^HOSTS_CACHE_WAIT_S=7$' apps/web-platform/infra/zot-image-rehearse.sh
+  expected_output: 1
 ```
 
 ## Guard Contract

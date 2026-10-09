@@ -25,3 +25,7 @@ Plan: knowledge-base/project/plans/2026-10-09-fix-rehearse-dockerd-hosts-cache-r
 ## Phase 4 - PR
 - 4.1 Body: Ref #9799, hypothesis wording, real-host ordering finding, web-host copies not examined; no close keyword; no new issues
 - 4.2 Rely on CI rehearse (classic|containerd|host) for live verification
+
+## Notes (deepen-plan, 2026-10-09)
+- Observability discovery command is `grep -c '^HOSTS_CACHE_WAIT_S=7$' apps/web-platform/infra/zot-image-rehearse.sh` (expects 1); keep the constant on its own line.
+- Phase 1 (new suite) and the source guard are queued as a User-Challenge in decision-challenges.md; implement them unless the operator cuts them.
