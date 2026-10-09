@@ -196,8 +196,8 @@ BODY="$(grep '  body ' "$T/p1-stale-then-ok.tl" | sed 's/^  body //')"
 # The hdr lines precede their CURL line; pair the most recent signature with the POST.
 SIG="$(awk '/X-Signature-256/{s=$0} /^CURL POST/{sub(/.*sha256=/,"",s); print s; exit}' "$T/p1-stale-then-ok.tl")"
 WANT_SIG="$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/.*= //')"
-if [ "$SIG" = "$WANT_SIG" ] && printf '%s' "$BODY" | grep -q '"peers":"10.0.1.10,10.0.1.11"' \
-   && printf '%s' "$BODY" | grep -q 'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.2.3'; then
+if [ "$SIG" = "$WANT_SIG" ] && printf '%s' "$BODY" | grep -c >/dev/null '"peers":"10.0.1.10,10.0.1.11"' \
+   && printf '%s' "$BODY" | grep -c >/dev/null 'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.2.3'; then
   pass "P2: POST body carries command+peers and the X-Signature-256 HMAC verifies"
 else fail "P2: the POST contract broke" "body=$BODY sig=$SIG want=$WANT_SIG"; fi
 

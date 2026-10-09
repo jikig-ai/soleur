@@ -484,19 +484,19 @@ t_pinned_path_end_to_end() {
   # argv[1] must be `--disable`, LITERALLY FIRST (curl reads it only there).
   local first; first=$(tr '\0' '\n' < "$_shim_dir/argv.bin" | head -1)
   [[ "$first" == "--disable" ]] || why+=("argv[1]='$first', want --disable")
-  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '--noproxy' || why+=("--noproxy absent")
-  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '\*' || why+=("noproxy '*' absent")
-  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '@-' || why+=("--header @- absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '--noproxy' || why+=("--noproxy absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '\*' || why+=("noproxy '*' absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '@-' || why+=("--header @- absent")
   grep -q 'fixture-token' "$_shim_dir/argv.bin" && why+=("the token appeared in curl argv")
   grep -q '^Authorization: Bearer fixture-token$' "$_shim_dir/stdin.log" || why+=("the bearer header was not fed on stdin")
   # The pinned URL must be the ONLY URL-shaped argument, with the page size the
   # `>= 100` ceiling assumes; and the call must be a plain GET.
   local urls; urls=$(tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -E '^[a-z]+://' || true)
   [[ "$urls" == "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/workflows/?per_page=100" ]] || why+=("URL set is not exactly the pinned URL: $(tr '\n' ' ' <<<"$urls")")
-  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qxE -- '-X|--request|-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-L|--location|-T|--upload-file' && why+=("a method/body/redirect flag is present")
-  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '-fsS' || why+=("-fsS absent")
-  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '--max-time' || why+=("--max-time absent")
-  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '--proto' || why+=("--proto absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cxE >/dev/null -- '-X|--request|-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-L|--location|-T|--upload-file' && why+=("a method/body/redirect flag is present")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '-fsS' || why+=("-fsS absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '--max-time' || why+=("--max-time absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cx >/dev/null -- '--proto' || why+=("--proto absent")
   if [[ ${#why[@]} -eq 0 ]]; then
     _report "F25 with host and org pinned, curl gets exactly the pinned URL (GET, --disable --noproxy '*' --proto, -fsS --max-time, --header @- with the token on stdin) and the probe prints the LIVE PASS over ${N}" ok
   else
