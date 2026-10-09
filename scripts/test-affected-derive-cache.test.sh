@@ -431,6 +431,17 @@ else
 fi
 
 echo
-echo "test-affected-derive-cache: $((PASS))/${cases} rows passed, $FAIL failed, $SKIPPED skipped"
-if (( FAIL > 0 || PASS < cases - SKIPPED )); then exit 1; fi
+if (( PASS + FAIL != cases )); then
+  echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
+  exit 2
+fi
+MIN_CASES=19
+if (( cases < MIN_CASES )); then
+  echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
+  exit 2
+fi
+echo "test-affected-derive-cache: $PASS/$cases rows passed, $FAIL failed, $SKIPPED skipped"
+if (( FAIL > 0 )); then
+  exit 1
+fi
 exit 0
