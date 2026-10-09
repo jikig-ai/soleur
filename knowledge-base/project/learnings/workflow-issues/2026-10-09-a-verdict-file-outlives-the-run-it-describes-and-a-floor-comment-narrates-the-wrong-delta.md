@@ -48,5 +48,6 @@ A notification is authoritative for liveness, never for verdict (already in the 
 13. **A hand-rolled monitor synced a queue-armed PR twice** (earlier in this session, a different PR). Recovery: stopped syncing; delivered a resume prompt to fix `sync-pr-behind.sh` and the ship skill text. **Prevention:** queue guard in `sync-pr-behind.sh` with a fixture test (not yet implemented; owner asked only for the prompt).
 
 ## Tags
+
 category: workflow-patterns
 module: apps/web-platform/infra
