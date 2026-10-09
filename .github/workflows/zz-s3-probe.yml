@@ -1,0 +1,72 @@
+name: zz-s3-probe
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      mode: ${{ steps.m.outputs.mode }}
+    steps:
+      - id: m
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          set +x
+          draft=$(timeout 20 gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq .draft) || draft=unknown
+          echo "live draft read: $draft; action: $ACTION"
+          if [ "$ACTION" != ready_for_review ] && [ "$draft" = true ]; then
+            echo "mode=light" >>"$GITHUB_OUTPUT"
+          else
+            echo "mode=full" >>"$GITHUB_OUTPUT"
+          fi
+  selfready:
+    if: github.event.action == 'opened' && github.event.pull_request.draft && contains(github.event.pull_request.title, 'SELFREADY')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          date -u +%FT%TZ
+          gh pr ready "$PR_NUMBER"
+          date -u +%FT%TZ
+  slow:
+    needs: gate
+    if: needs.gate.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: sleep 150
+  test:
+    needs: [gate, slow]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          MODE: ${{ needs.gate.outputs.mode }}
+          SLOW: ${{ needs.slow.result }}
+        run: |
+          if [ "$MODE" = light ]; then
+            echo "draft: full battery owed at ready"
+            exit 1
+          fi
+          if [ "$SLOW" != success ]; then
+            echo "slow leg did not succeed: $SLOW"
+            exit 1
+          fi
+          sleep 60
+          echo full-ok
