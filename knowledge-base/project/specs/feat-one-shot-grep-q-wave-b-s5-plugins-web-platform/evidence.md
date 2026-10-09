@@ -73,3 +73,31 @@ The helper at lines 548 to 566 walks `$PPID` upwards and sends SIGTERM to the ou
 ## Not run locally
 
 `scripts/test-all.sh --affected`, `--print-selection`, the long ratchet lane and markdownlint (not installed here) were left to CI's required `test` check, as agreed for a contended host. Cheap repo-global lints that were run: `lint-shell-capture-exit.py --baseline ...` (0 new findings, 224 baselined), `guard-vacuity-floor.test.sh` (23 passed), `lint-orphan-test-suites.sh` (647 covered, 0 orphaned). Shellcheck delta over the 14 files: 274 findings at base, 277 at head, all three new notes (two SC2016, one SC2031) in the guard's new probe lines and of the kinds the file already carries 33 of.
+
+
+## Review addendum (2026-10-09; appended, nothing above is edited)
+
+Panel: 12 report-only seats on PANEL_SHA `0a1c633584` (tier `aggregate pattern`, class `code`): two design-validity seats first (simplicity, architecture), then git-history, pattern-recognition, security-sentinel, performance-oracle, data-integrity, agent-native, code-quality, user-impact, test-design and a structural-enumeration seat. No P1. Two P2 (pre-existing, recorded as not fixed: decision-challenges item 23) and the rest P3. Semgrep was skipped (bash-only diff); shellcheck stood in.
+
+### Corrections to the record above
+- The ratchet lane (`scripts/pre-push-ratchet-lane.sh`) WAS run locally: 24 members, one red (`fixture-relative-assert`, a relative-fixture site in the planner's `pair-run.sh`), fixed in code with the canonical `assert_fixture_dir` (62/0, baseline untouched). "Not run locally" above does not apply to it.
+- Every matrix row was run in Phase 4, including 2b to 2d, 3, 8 and 10a to 10e (tasks.md and decision item 20 said some were carried; item 24 supersedes).
+- `data-conversions.txt` named an older base SHA in its header; the SHA `verify` uses is `32b2fe2abb` (line numbers are identical at both).
+
+### What review changed (commit `33357994b4`)
+- Guard: production rows pinned by identity (`GATED_PROD_GLOBS`) as well as count; the pin's failure text names the right remedy and says not to add a row for a subtree at zero; stale comments and the false "each root is V2-only" sentence corrected; hand-typed `7`s follow `SWEEP_CANARY_COUNT`; the inert hideroot additions dropped; `mktemp -d` in the probe checked; comments for the owner control and the canary-root recipe. `SWEEP_PROBE_CHECKS` still 62 (63 `sweep_probe_fail+=(` occurrences, unchanged).
+- `resolve-regenerable-conflicts.test.sh`: the signal helper's parent walk is bounded at the suite's own PID, and the hazard is stated at the helper. A no-kill rehearsal (catch-all match, `kill` replaced by a print) printed the resolver's PID, below the suite's, and nothing when the variable was unset. Unmutated suite: 140/140.
+- `playwright-mcp-redact-proxy.test.sh`: header prose reworded (line-count neutral).
+- `verify --base 32b2fe2abb`: `verified: 66`, `hand-edited: 7`, `unexplained: 0` (seven listed hand-edit lines in `hand-edits.txt`).
+
+### Matrix re-run on the review commit (scratch clone, green control first, `cmp` landing check, one mutant at a time under `ulimit -v 6000000`, clone restored and clean after every row)
+61 rows: 49 killed with the named text, 12 GREEN as predicted, 0 unexpected. Killed: 1a, 1b, 1c, 1d, 2a, 2b, 2c, 2d, 3, 4a, 4b, 5a, 5b, 6a, 6b, 6f, 6c, 6d, 6e, 6g, 6h, 6i, 7, 8, 9a, 9b, 10c, 10d, 11a, 11b, 11c, 11d, 11e, 11f, 13a, 13b, 13c, 14, 14b, 16a, 16b, 19a, 19b, 19c, 20a, 20b, 20c, 20e, 22. GREEN as predicted: 6j, 6k, 10a, 10b, 10e, 13e, 13f, 17, 12, 21a, 21c, 22b. New rows: 22 (a production row swapped for another with the count unchanged: killed by the identity pin) and 22b (the same swap with the pin term removed: GREEN, so the pin is load-bearing); row 20d (hideroot) no longer exists; row 2b now finds its line by content because the review edit moved it.
+
+### Observer mutants on the three shapes the test-design seat said nobody sampled
+Scratch clone of the review commit with both `node_modules` linked; controls first, all rc 0. Inversion (`grep -c` to `grep -vc`) of: `redact-sentinel.test.sh` t24 `... && continue` (rc 1, `95 pass, 1 fail`); `linear-fetch/test/parity.test.sh` negated `! ... | grep -cFx` (rc 1, `2 passed, 1 failed`); `bite-proof.test.sh` `head -1 ... | grep -cF >/dev/null '# Fixture project'` (rc 1, `95 passed, 1 failed (96 assertions)`). All three observed. None is the signal helper.
+
+### Cheap lints on the review commit
+`lint-shell-capture-exit.py --baseline ...` 0 new findings (224 baselined); `guard-vacuity-floor` 23/0; `lint-orphan-test-suites` none; `fixture-relative-assert` 62/0 and `fixture-dir-operand-assert` 71/0. Shellcheck notes: guard 41 to 44 (the S5 probe additions, same kinds the file already carries), the other two files unchanged.
+
+### Dispositions
+Fixed inline: security SEC-1 and SEC-3, agent-native A1 to A4, user-impact UI-1, code-quality 1 to 9 (prose, comments, the false sentence, literals), pattern F1, F2, F4 and F5 (F5 by dropping the hideroot additions), simplicity D4, architecture A2 and test-design T3 (production identity), data-integrity DI-1. Kept (operator direction): `real_plug_row` (item 21). Recorded, not fixed: test-design T1 and T2 (the guard's tail reporter and top-level call have no witness; needs another probe-check occurrence, which moves a pin slices may not edit), T4, structural-enumeration holes (symlinks, force-added ignored paths, pathspec narrowing of docs, `references`, `assets` and `fixtures` subtrees, no canary under `plugins/soleur/test/`), `.md` fences (29 lines), performance F1 and F2 (`suite-durations.tsv` weight and the unenforced 15 s cap), SEC-2 (`/dev/null`), D2, D3, D5, D6 (taste, S6/S7).
