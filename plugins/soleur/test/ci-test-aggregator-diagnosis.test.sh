@@ -440,11 +440,33 @@ import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 n = d["jobs"]["test"].get("needs") or []
 n = [n] if isinstance(n, str) else list(n)
-print(len(n))
+# push-dedupe (#9512, ADR-276 S2) is a NON-LEG need: it gates the job off an elided push and is never
+# read by the aggregator body. It is counted separately (W5), not as a seventh leg.
+print(len([x for x in n if x != "push-dedupe"]))
 PYN
 )
 if [ "$_nshards" -eq 6 ]; then pass; else
   fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 6 (four test-* shards + web-platform-build #8136 + encryption-posture #6907) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
+fi
+# W5 — the one non-leg need is push-dedupe, exactly once, and the aggregator's env: never reads it. If the
+# body ever read its output the stage-S2 claim "the aggregator is byte-identical" would be false.
+_nonleg=$(python3 - "$_ciy" <<'PYX'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+job = d["jobs"]["test"]
+n = job.get("needs") or []
+n = [n] if isinstance(n, str) else list(n)
+legs = {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy", "web-platform-build", "encryption-posture"}
+extra = [x for x in n if x not in legs]
+env = {}
+for st in job.get("steps") or []:
+    env.update(st.get("env") or {})
+leak = [k for k, v in env.items() if "push-dedupe" in str(v)]
+print(("extra=%s" % ",".join(extra)) + ((" env-reads-push-dedupe=%s" % ",".join(leak)) if leak else ""))
+PYX
+)
+if [ "$_nonleg" = "extra=push-dedupe" ]; then pass; else
+  fail "W5 the test job's only non-leg need must be push-dedupe and its env: must not read it (got: $_nonleg)"
 fi
 
 # W3 — the ARMED leg must be able to conclude failure (#6907 MB-10). Fail-OPEN
@@ -563,7 +585,8 @@ TOTAL=$((passes + fails))
 #   this floor
 # + 2 sixth leg (R1k red, R1l skipped) + 1 armed-leg shape (W3)
 # + 1 aggregator can go red (W4), #6907 = 38
-MIN_ROWS=38
+# + 1 non-leg need is push-dedupe only (W5), #9512 = 39
+MIN_ROWS=39
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
