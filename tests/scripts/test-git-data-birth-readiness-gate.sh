@@ -2968,10 +2968,10 @@ fi
 _w2c="$TMP/w2-control"; mkdir -p "$_w2c" || _a_setup_fail "could not create the W2-control dir"
 cat > "$_w2c/seeded.sh" <<'SH'
 #!/usr/bin/env bash
-probe1() { if ! printf '%s' "$1" | grep -q 'needle'; then return 1; fi; }
-probe2() { if ! printf '%s' "$1" | grep -E -q 'needle'; then return 1; fi; }
-probe3() { if ! printf '%s' "$1" |& grep -q 'needle'; then return 1; fi; }
-probe4() { if ! printf '%s' "$1" | grep -m1 'needle'; then return 1; fi; }
+probe1() { if ! printf '%s' "$1" | grep -q 'needle'; then return 1; fi; }  # sigpipe-demo: intentional
+probe2() { if ! printf '%s' "$1" | grep -E -q 'needle'; then return 1; fi; }  # sigpipe-demo: intentional
+probe3() { if ! printf '%s' "$1" |& grep -q 'needle'; then return 1; fi; }  # sigpipe-demo: intentional
+probe4() { if ! printf '%s' "$1" | grep -m1 'needle'; then return 1; fi; }  # sigpipe-demo: intentional
 SH
 cat > "$_w2c/sanctioned.sh" <<'SH'
 #!/usr/bin/env bash

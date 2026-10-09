@@ -297,7 +297,7 @@ cases=$((cases + 1)); [[ -d "$FAKE_A/lone-clone" ]] \
 
 # --- Arm 7: idempotence -----------------------------------------------------------
 out2="$(purge_env bash "$PURGE" --apply 2>&1)"
-cases=$((cases + 1)); printf '%s' "$out2" | grep -qc 'QUARANTINE' \
+cases=$((cases + 1)); printf '%s' "$out2" | grep -c >/dev/null 'QUARANTINE' \
   && { printf '%s' "$out2" | grep -c 'QUARANTINE' | grep -cx >/dev/null 0 && pass "second apply moves nothing" || fail "second apply moved entries"; } \
   || pass "second apply moves nothing"
 
