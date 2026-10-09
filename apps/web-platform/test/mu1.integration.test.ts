@@ -221,7 +221,7 @@ const INSTALLATION_ID_RE = /^[1-9][0-9]{0,9}$/;
 // so AC-2 already skips there; the partial-set canary above still guards the
 // one-var-set misconfig. See #4663. Run the live check with:
 //   MU1_INTEGRATION=1 doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 \
-//     npm run test:ci -- test/mu1-integration.test.ts --project unit
+//     npm run test:ci -- test/mu1.integration.test.ts --project unit
 const AC2_OPTED_IN = process.env.MU1_INTEGRATION === "1";
 
 describe.skipIf(!AC2_OPTED_IN || !AC2_HAS_REPO_URL || !AC2_HAS_INSTALL_ID)(

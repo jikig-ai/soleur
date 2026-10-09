@@ -109,7 +109,7 @@ fi
 # T1.7 No `|| true` / `|| :` / `set +e` on a mount. The whole apparatus is defeated by one of them:
 # a swallowed mount failure leaves /mnt/data as a plain directory on the root disk while every
 # downstream check that reads the STRING "/mnt/data" still passes.
-LUKS_BLOCK="$(awk '/doppler run --project soleur-inngest --config prd -- bash -s <<.LUKSEOF.$/,/^    LUKSEOF$/' "$CLOUD_INIT")"
+LUKS_BLOCK="$(awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s <<.LUKSEOF.$/,/^    LUKSEOF$/' "$CLOUD_INIT")"
 if [ -n "$LUKS_BLOCK" ]; then ok "T1.7a the LUKS stage block extracts"; else no "T1.7a could not extract the LUKS stage from $CLOUD_INIT — every assertion below it would be vacuous"; fi
 # A POSITIVE CONTROL ON WHAT THE RANGE ACTUALLY CAPTURED. `-n` is satisfied by a range that
 # stopped after two harmless lines AND by one that swallowed half the file because its terminator
@@ -324,7 +324,7 @@ if [ -z "$_t14" ]; then ok "T1.14 no doubled-dollar expansion in any delivered l
 # captured into a variable, and that variable checked against exactly 0-or-2 on the next statement.
 # An unclassified site is a RED, which is what makes "a second reader that skips the probe" visible
 # (mutation row 3). The site count here is a floor, never the definition.
-_G1_STAGE="$(awk '/doppler run --project soleur-inngest --config prd -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT")"
+_G1_STAGE="$(awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT")"
 _G1_REOPEN="$(awk '/^  - path: \/usr\/local\/bin\/inngest-luks-open\.sh$/{f=1;next} f&&/^    content: \|$/{c=1;next} c&&/^    owner:/{exit} c' "$CLOUD_INIT")"
 _g1_sites=0; _g1_bad=""
 _g1_classify() {  # _g1_classify <label> <text>

@@ -166,6 +166,19 @@ describe("review-tier parity (ADR-267)", () => {
     expect(wf("antiSlop")).toBe(shellVar("ANTISLOP_RE"));
   });
 
+  test("hasTests narrows e2e matching to terminal test extensions (#9855)", () => {
+    // The parity pin above proves the two copies AGREE; this row proves the
+    // pattern is NARROW — the unanchored `\.e2e` arm it replaced fired on
+    // helper/config names the pyramid classifier does not treat as tests.
+    const literal = WORKFLOW.match(/hasTests:\s*\/(.*?)\/,\s*\n/)![1];
+    const re = new RegExp(literal);
+    for (const p of ["apps/web-platform/e2e/smoke.e2e.ts", "x/y/foo.e2e.ts", "e2e/helpers/x.ts", "e2e/utils/e2e-utils.ts"])
+      expect(re.test(p), `should trigger: ${p}`).toBe(true);
+    // e2e-infix names OUTSIDE an e2e/ dir are not test files.
+    for (const p of ["src/e2e-utils.ts", "x/setup.e2e.config.ts", "x/foo.e2e.mjs", "playwright.e2e.config.ts"])
+      expect(re.test(p), `should not trigger: ${p}`).toBe(false);
+  });
+
   test("script SEAT_REGISTRY resolves against the workflow registry", () => {
     const registry = workflowSeats();
     const scriptSeats = new Set(shellVar("SEAT_REGISTRY").split(/\s+/));

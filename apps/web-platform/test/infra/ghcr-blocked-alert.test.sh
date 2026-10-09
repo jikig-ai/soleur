@@ -299,9 +299,9 @@ grep -qE '^[[:space:]]*-target=logtail_exploration\.ghcr_hostsfile_deny_lost \\$
 # Reachability: -target= lines only matter if a merge to main runs this plan at all.
 WF_PUSH="$(awk '/^on:$/{o=1;next} o&&/^[a-z]/{exit} o&&/^  push:$/{p=1;next} o&&p&&/^  [a-z_]+:/{exit} p{print}' "$WF")"
 if grep -qxF '    branches: [main]' <<< "$WF_PUSH" && grep -qxF '      - "apps/web-platform/infra/**"' <<< "$WF_PUSH" \
-   && [ -z "$(grep -E '^      - "!' <<< "$WF_PUSH" | grep -vxF -e '      - "!apps/web-platform/infra/rung2-rehearsal/**"' -e '      - "!apps/web-platform/infra/git-data-root-key/**"' || true)" ] \
+   && [ -z "$(grep -E '^      - "!' <<< "$WF_PUSH" | grep -vxF -e '      - "!apps/web-platform/infra/rung2-rehearsal/**"' -e '      - "!apps/web-platform/infra/git-data-root-key/**"' -e '      - "!apps/web-platform/infra/inngest-provision-rehearsal/**"' || true)" ] \
    && [ "$(grep -cxF "      (github.event_name == 'push' || inputs.apply_target == 'manual-rerun')" "$WF")" -eq 1 ]; then
-  ok "apply-web-platform-infra.yml's push block runs on main for apps/web-platform/infra/** with no path negation beyond the two known sub-roots, and the apply job runs on push (the alert is created by the merge, not by hand)"
+  ok "apply-web-platform-infra.yml's push block runs on main for apps/web-platform/infra/** with no path negation beyond the three known sub-roots, and the apply job runs on push (the alert is created by the merge, not by hand)"
 else
   no "apply-web-platform-infra.yml no longer triggers the apply on push to main for apps/web-platform/infra/** (branch, path, a negation of the alert's file, or the apply job's push clause changed) — the alert would not be created on merge"
 fi

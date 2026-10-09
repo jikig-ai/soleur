@@ -445,6 +445,16 @@ grep -qF 'local.inngest_arch == "arm64" ? local.vector_sha256_arm64 : local.vect
   && grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' "$CLOUD_INIT" \
   && pass || fail "inngest-host.tf passes arch-conditional Vector SHA + doppler_arch/sha; cloud-init uses \${doppler_arch}"
 
+# 7a. #9175: the templatefile passes the Doppler config name EXPLICITLY — prod resolves "prd"
+#     at the call site (never a template default, which would hide the prod resolution), and the
+#     rehearsal root supplies its scratch config through the same variable.
+grep -qF 'inngest_doppler_config = "prd"' "$HOST_TF" \
+  && pass || fail "inngest-host.tf must pass inngest_doppler_config = \"prd\" explicitly (#9175)"
+# The template consumes it at every boot-path --config site (rendered literally) — prove the
+# variable is actually threaded, not just declared.
+grep -qF '${inngest_doppler_config}' "$CLOUD_INIT" \
+  && pass || fail "cloud-init-inngest.yml must consume \${inngest_doppler_config} at the --config sites (#9175)"
+
 # 8. inngest-bootstrap.sh arch-parameterizes the Vector install (#6197): VECTOR_CLI_ARCH
 #    defaults amd64 (web host preserved) + an arm64->aarch64 triple map applied to BOTH the
 #    download URL AND the extract path. No residual UNCONDITIONAL x86_64 literal in either.
