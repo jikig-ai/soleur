@@ -1195,6 +1195,19 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # A `.github` YAML file PyYAML cannot parse is exit 2,
 # and so is a missing PyYAML (imported lazily, only when a workflow is about to be parsed).
 #
+# S3 (#9597, ADR-280): the workflow YAML that cannot fire production on merge, and the two composite
+# actions (`notify-ops-email`, `anthropic-preflight`), send their credential through the shared
+# `scripts/lib/bearer-curl.sh` (`bc_curl`, `bc_hmac_sha256_hex`), so Rule E sees no argv site in them. Every
+# file S3 converts LEAVES baseline E entirely, which is why per-site FINGERPRINT keying was decided "not
+# adopted": a re-added argv site in a converted file is an unlisted offender and fails the equality check,
+# and the still-listed population (S4, S5, the two cla-evidence files, the held-back sites) is deleted by the
+# later slices, so a keying mechanism would be built for rows that are about to go. Residual, stated: until S4/S5, a
+# PR that converts one site and adds another inside a STILL-LISTED file is count-neutral and is a reviewer's
+# catch, as before. HELD BACK from S3 and still listed: `workspaces-luks-cutover.yml` (its infra suite's curl stub
+# exits 64 on `--disable --noproxy`, so the conversion edits an `apps/web-platform/infra/**` file and fires the
+# production push apply) and the `probe` step of `scheduled-inngest-health.yml` (the infra suite that executes it
+# builds a fake workspace with stubbed `openssl` and `curl`; the same reason). Both ride S4 with operator notice.
+#
 # KNOWN BLIND SPOTS (census-only; a reviewer, not this lint, judges them): message BODIES
 # that carry a secret (`-d` operands; the bsky password JSON moved to stdin in this sweep,
 # the generic point stands); a secret in a URL (heartbeat

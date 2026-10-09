@@ -1,5 +1,5 @@
 // Contract tests for `buildOuterWrapArgv` + `makeSandboxedSpawn` (#5863,
-// ADR-075 Option B — arm F: mountns-only wrap via file-cap'd bwrap).
+// ADR-075 Option B — arm F: mountns-only wrap via privileged bwrap).
 //
 // The argv builder is the sole producer of the outer mount table; its shape
 // IS the isolation contract:
@@ -393,7 +393,7 @@ describe("spawn integration (real bwrap, if present)", () => {
   })();
 
   // Mirror tenant-isolation-probe.sh: --unshare-user is the documented
-  // LOCAL fallback — prepend it ONLY when the host bwrap lacks file caps,
+  // LOCAL fallback — prepend it ONLY when the host bwrap lacks elevation,
   // so a cap'd host exercises the same privileged arm production runs.
   const BWRAP_HAS_CAPS = (() => {
     try {
@@ -420,7 +420,7 @@ describe("spawn integration (real bwrap, if present)", () => {
     const sibling = path.join(parent, "ws-bbbb");
     // On an unprivileged host bwrap needs --unshare-user to build the
     // mountns; the emitted argv stays mount-only — the flag is added by
-    // the caller when bwrap lacks file caps (same convention as the probe
+    // the caller when bwrap lacks elevation (same convention as the probe
     // script's getcap fallback — gated by ELEVATION_PREFIX).
     return execFileSync(
       BWRAP_PATH,
@@ -514,7 +514,7 @@ describe("spawn integration (real bwrap, if present)", () => {
 
 // Boot self-probe (#5863 T3.2) — the realized mountns + shared payload run
 // once at boot inside the prod container. Real-bwrap rows use the implicit-
-// userns fallback locally; the prod image's file-cap'd bwrap takes the same
+// userns fallback locally; the prod image's elevated bwrap takes the same
 // argv verbatim.
 describe("probeRealizedIsolation", () => {
   const bwrapOk = (() => {
@@ -568,7 +568,7 @@ describe("verifyOuterWrapRealizedIsolation — emit fork", () => {
     expect(sentry.captureMessage.mock.calls[0][0]).toContain("outer-wrap realized probe ok");
   });
 
-  it("ok + userns → warn (file-cap posture not measured)", async () => {
+  it("ok + userns → warn (elevation posture not measured)", async () => {
     const { verifyOuterWrapRealizedIsolation } = await import("@/server/agent-outer-wrap");
     verifyOuterWrapRealizedIsolation(
       { AGENT_OUTER_WRAP_BOOT_PROBE: "1" },

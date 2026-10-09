@@ -4696,6 +4696,9 @@ if want_scripts; then
   run_suite "scripts/lint-migrated-rule-ids-live" bash scripts/lint-migrated-rule-ids.sh
   run_suite "scripts/lint-migrated-rule-ids-unit" bash scripts/lint-migrated-rule-ids.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
+  # not in SUITE_GLOBS, so it is registered explicitly.
+  run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
   # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
   # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
   # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
@@ -5171,6 +5174,10 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #9826 (W3, epic #9601): exit-code harness for the image-CVE-scan dark-launch window probe. Registered
+  # explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close the
+  # tracker on an unmeasured window.
+  run_suite "scripts/image-cve-scan-window-9826" bash scripts/followthroughs/image-cve-scan-window-9826.test.sh
   # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
   # arms for verdict binding, freshness window, and HTTP classes). Registered
   # explicitly (orphan-suite class above) — its PASS authorizes promoting the
@@ -5939,6 +5946,13 @@ if want_scripts; then
   # because scripts/*.test.sh is covered by no glob here; appended LAST in the block so no earlier
   # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
   run_suite "scripts/learning-retrieval-bench" bash scripts/learning-retrieval-bench.test.sh
+  # #9512 (ADR-276 S2): the push-dedupe proof. Extracts the proof step body from ci.yml and EXECUTES it under the
+  # Actions shell against a gh shim, and pins the eight gated conditions, the `test` aggregator and the wrapper.
+  # Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-push-dedupe" bash scripts/ci-push-dedupe.test.sh
+  # #9512: the push-dedupe soak probe's exit-code contract (a fake gh, an injected clock, and mutation rows over
+  # copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/ci-push-dedupe-soak-9512" bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
 fi
 
 # Named bun-test entries — bun shard.

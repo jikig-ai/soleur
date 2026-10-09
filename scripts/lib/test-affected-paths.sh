@@ -893,6 +893,21 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
   "knowledge-base/engineering/operations/runbooks/inngest-server.md"
   "knowledge-base/legal/article-30-register.md"
+  # S3 (ADR-280): the S3 stage derives its population from the workflow and composite step texts and
+  # executes the representative `run:` bodies, so an edit to any of them (or to the library) must select it.
+  "scripts/lib/bearer-curl.sh"
+  ".github/actions/anthropic-preflight/"
+  ".github/actions/notify-ops-email/"
+  ".github/workflows/board-status-sync.yml"
+  ".github/workflows/canary-status.yml"
+  ".github/workflows/git-data-cutover.yml"
+  ".github/workflows/git-data-rung2-rehearsal.yml"
+  ".github/workflows/kb-drift-walker.yml"
+  ".github/workflows/rule-audit.yml"
+  ".github/workflows/scheduled-inngest-health.yml"
+  ".github/workflows/scheduled-prod-version-drift.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  ".github/workflows/sentry-audit-gate.yml"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
@@ -1130,6 +1145,16 @@ AFFECTED_SCRIPTS_LEARNING_RETRIEVAL_BENCH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/ci-push-dedupe (#9512, ADR-276 S2) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
+# parses the eight gated conditions and pins the test aggregator; the only repo file it reads is the workflow. Declared
+# from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-push-dedupe.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus
 # walk is sandbox-only (synthetic repos + fixture trees); the real subject is the resolver SUT
 # and the render arm it stubs, so the scan is scoped and the edges are honest.
@@ -1234,9 +1259,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_GIT_FIXTURE_ENV_SHELL_TEST_SH_PATHS=(
 # plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_HEARTBEAT_RECONCILE_ISSUE_STEP_TEST_SH_PATHS=(
+  ".github/actions/notify-ops-email/action.yml"
   ".github/workflows/scheduled-terraform-drift.yml"
   "plugins/soleur/lib/heartbeat-live-reconcile.ts"
   "plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh"
+  "scripts/lib/bearer-curl.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

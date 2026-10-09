@@ -346,6 +346,9 @@ jobs:
           # step silently, where clearing errexit lets the empty payload reach the HTTP_CODE
           # branch that names the channel which did not deliver.
           set +e
+          # The key reaches curl on its stdin config (ADR-280). Sourced AFTER `set +e`: B15c pins that
+          # errexit is cleared by the first statement.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; echo "delivered=0" >> "$GITHUB_OUTPUT"; exit 1; }
 
           # INLINED curl, deliberately NOT ./.github/actions/notify-ops-email. That composite
           # declares no `outputs:` block at all, so steps.notify.outputs.delivered would be
@@ -370,9 +373,9 @@ jobs:
             --arg html "$BODY" \
             '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
 
-          HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-drift.txt" -w "%{http_code}" \
+          HTTP_CODE=$(bc_curl scheduled-prod-version-drift 'Authorization:Bearer :RESEND_API_KEY' -- \
+            -s -o "${RUNNER_TEMP}/resend-drift.txt" -w "%{http_code}" \
             -X POST "https://api.resend.com/emails" --max-time 15 \
-            -H "Authorization: Bearer ${RESEND_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" || echo "000")
 
@@ -484,6 +487,8 @@ jobs:
           # does NOT clear errexit. This body reads no `$?`, so the repo-wide lint gate can never
           # fire on it — B15 is what keeps it clear.
           set +e
+          # See the first email step: the library is sourced AFTER `set +e` (B15c).
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; echo "delivered=0" >> "$GITHUB_OUTPUT"; exit 1; }
 
           if [[ -z "${RESEND_API_KEY:-}" ]]; then
             echo "::error::RESEND_API_KEY is not set — nobody has been emailed that the drift check is broken."
@@ -503,9 +508,9 @@ jobs:
             --arg html "$BODY" \
             '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
 
-          HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-drift-error.txt" -w "%{http_code}" \
+          HTTP_CODE=$(bc_curl scheduled-prod-version-drift 'Authorization:Bearer :RESEND_API_KEY' -- \
+            -s -o "${RUNNER_TEMP}/resend-drift-error.txt" -w "%{http_code}" \
             -X POST "https://api.resend.com/emails" --max-time 15 \
-            -H "Authorization: Bearer ${RESEND_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" || echo "000")
 
