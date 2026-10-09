@@ -187,11 +187,15 @@ jobs:
           # binds a digest to an arch -- and that is the shape the bump procedure produces
           # (one paste session, two files). Measured: correct pairing 200, swapped 404.
           # Anonymous pull token, no secrets.
+          # The anonymous pull tokens reach curl on its stdin config (ADR-280). A refusal is a curl
+          # failure here: PROBE_RC / the empty-token arm below record it in PROBLEMS. Nothing branches on rc 2.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           for A in amd64 arm64; do
             set +e
             D="$(grep -oE "^[[:space:]]*zot_image_${A}[[:space:]]*=[[:space:]]*\"ghcr\.io/project-zot/zot-linux-$A:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"" "$TF" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)"
+            # shellcheck disable=SC2034  # T is read by NAME inside bc_curl
             T="$(curl -sS --max-time 20 "https://ghcr.io/token?scope=repository:project-zot/zot-linux-$A:pull&service=ghcr.io" | jq -r .token)"
-            CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I -H "Authorization: Bearer $T" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://ghcr.io/v2/project-zot/zot-linux-$A/manifests/$D")"
+            CODE="$(bc_curl rule-audit 'Authorization:Bearer :T' -- -sS -o /dev/null -w '%{http_code}' --max-time 20 -I -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://ghcr.io/v2/project-zot/zot-linux-$A/manifests/$D")"
             PROBE_RC=$?
             set -e
             if [ "$PROBE_RC" -ne 0 ] || [ -z "$CODE" ] || [ "$CODE" = "000" ]; then
@@ -242,8 +246,9 @@ jobs:
           else
             set +e
             UB_TOK_RC=0
+            # shellcheck disable=SC2034  # read by NAME inside bc_curl
             UB_T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" 2>/dev/null | jq -r '.token // empty')" || UB_TOK_RC=$?
-            UB_HDR="$(curl -sS --max-time 20 -o /dev/null -D - -H "Authorization: Bearer ${UB_T}" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04" 2>/dev/null)"
+            UB_HDR="$(bc_curl rule-audit 'Authorization:Bearer :UB_T' -- -sS --max-time 20 -o /dev/null -D - -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04")"
             UB_RC=$?
             set -e
             UB_LIVE="$(printf '%s' "$UB_HDR" | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"

@@ -33,13 +33,78 @@ import {
   spawnSandboxB,
   spawnSandboxed,
   waitForFile,
+  type ProbeTier,
   type SandboxBHandle,
   type SandboxProcessHandle,
   type WorkspacePair,
 } from "./helpers/sandbox-isolation-fixtures";
 
-const directProbe = probeSkip("direct");
-const queryProbe = probeSkip("query");
+/**
+ * Deploy-probe tier scoping (#2640). `SOLEUR_ISOLATION_TIERS` is a
+ * comma-separated allowlist of probe tiers (`direct`, `query`). When set, a
+ * suite whose tier is not listed is skipped BEFORE its `probeSkip` capability
+ * evaluation — so `SOLEUR_ISOLATION_TIERS=direct` in the canary exec keeps the
+ * query tier's live-ANTHROPIC_API_KEY runs (FR2-smoke/FR8/FR9) out of the
+ * deploy path entirely, and FR9's `ANTHROPIC_ISOLATION_TEST_OK` gate is
+ * unchanged (it lives inside the query describe, which never registers).
+ * Unset or empty runs the full matrix — the default CI/local behavior.
+ * An unrecognized tier name throws at load: a typo'd canary env would
+ * otherwise skip every suite and report a vacuous green — the same
+ * fail-loud opt-in class as `SOLEUR_ISOLATION_TEST_HOST` below.
+ */
+const KNOWN_TIERS: readonly ProbeTier[] = ["direct", "query"];
+
+/**
+ * In-image arm (#2640). `SOLEUR_ISOLATION_IN_IMAGE=1` marks a run inside the
+ * baked runner image (the ci-deploy.sh canary probe sets it on the docker
+ * exec). There PATH-resolved `bwrap` IS the deployed PATH shim
+ * (/usr/local/bin/bwrap precedes /usr/bin) and the shim's repo path
+ * (`infra/bwrap-shim/bwrap`) is never COPY'd in — so FR7b, which needs a
+ * real-binary CONTROL arm plus a symlink to the repo shim, is structurally
+ * un-runnable in-image and skips. FR7b's shim-splice property is still pinned
+ * by test/bwrap-shim.test.ts and the faithful-canary replay, so the exclusion
+ * loses no deploy signal.
+ */
+function isolationInImage(raw: string | undefined): boolean {
+  return raw === "1";
+}
+const ISOLATION_IN_IMAGE = isolationInImage(process.env.SOLEUR_ISOLATION_IN_IMAGE);
+
+function parseIsolationTiers(raw: string | undefined): Set<ProbeTier> | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  const tiers = new Set<ProbeTier>();
+  const unknown: string[] = [];
+  for (const t of raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if ((KNOWN_TIERS as readonly string[]).includes(t)) tiers.add(t as ProbeTier);
+    else unknown.push(t);
+  }
+  if (unknown.length) {
+    throw new Error(
+      `sandbox-isolation: unrecognized SOLEUR_ISOLATION_TIERS entries: ${unknown.join(", ")} ` +
+        `(known tiers: ${KNOWN_TIERS.join(", ")})`,
+    );
+  }
+  return tiers;
+}
+
+function isolationTierEnabled(tier: ProbeTier, raw: string | undefined): boolean {
+  const tiers = parseIsolationTiers(raw);
+  return tiers === null || tiers.has(tier);
+}
+
+// Bound once at module load — no default-parameter read inside
+// isolationTierEnabled, so an explicit `undefined` argument tests "unset"
+// rather than falling back to the live env.
+const ISOLATION_TIERS_RAW = process.env.SOLEUR_ISOLATION_TIERS;
+const directProbe = isolationTierEnabled("direct", ISOLATION_TIERS_RAW)
+  ? probeSkip("direct")
+  : { skip: true, reason: "SOLEUR_ISOLATION_TIERS excludes direct tier" };
+const queryProbe = isolationTierEnabled("query", ISOLATION_TIERS_RAW)
+  ? probeSkip("query")
+  : { skip: true, reason: "SOLEUR_ISOLATION_TIERS excludes query tier" };
 // #9723 — the deployed PATH shim (same file the prod image installs at
 // /usr/local/bin/bwrap) and its seccomp artifact, for the through-shim FR7b arm.
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -201,7 +266,7 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(result.stdout + result.stderr).toMatch(FS_DENY_RE);
   });
 
-  test("FR7b (#9723): the vendored tail --bind /proc /proc is re-masked by the PATH shim", async () => {
+  test.skipIf(ISOLATION_IN_IMAGE)("FR7b (#9723): the vendored tail --bind /proc /proc is re-masked by the PATH shim", async () => {
     // The harness argv (buildBwrapArgs) never emits the vendor tail bind, so
     // FR7 measures a cleaner-than-production shape. This row appends the real
     // tail — `--bind /proc /proc` (the enableWeakerNestedSandbox defect) — and
@@ -730,6 +795,38 @@ describe("sandbox-isolation: coverage + test-hygiene guards", () => {
         );
       }
     }
+  });
+
+  test("SOLEUR_ISOLATION_TIERS filter: 'direct' excludes the query tier (deploy-probe contract, #2640)", () => {
+    // Pure-function check of the env filter — no suite is spawned and no API
+    // call is made. The live verification is
+    // `SOLEUR_ISOLATION_TIERS=direct npx vitest run test/sandbox-isolation.test.ts`
+    // reporting the query-tier suite skipped rather than executed.
+    expect(isolationTierEnabled("direct", "direct")).toBe(true);
+    expect(isolationTierEnabled("query", "direct")).toBe(false);
+    expect(isolationTierEnabled("query", "direct,query")).toBe(true);
+    expect(isolationTierEnabled("direct", " query , direct ")).toBe(true);
+    // Unset/empty runs the full matrix — the deploy exec sets it explicitly.
+    expect(isolationTierEnabled("query", undefined)).toBe(true);
+    expect(isolationTierEnabled("direct", "")).toBe(true);
+    // A typo'd tier throws at load instead of vacuously greening the canary.
+    expect(() => isolationTierEnabled("direct", "dirct")).toThrow(
+      /unrecognized SOLEUR_ISOLATION_TIERS/,
+    );
+  });
+
+  test("SOLEUR_ISOLATION_IN_IMAGE: only the literal '1' engages the FR7b skip (both polarities pinned)", () => {
+    // Polarity matters in BOTH directions: a `!== "1"` mutation would skip FR7b
+    // on every HOST run forever (a skip is green — silent); a truthy-check
+    // mutation ("0" → skip) would silently drop it in-image too.
+    expect(isolationInImage("1")).toBe(true);
+    expect(isolationInImage(undefined)).toBe(false);
+    expect(isolationInImage("0")).toBe(false);
+    expect(isolationInImage("true")).toBe(false);
+    expect(isolationInImage("")).toBe(false);
+    // The host-side contract: this run (no IN_IMAGE env) must not be the
+    // in-image arm — guards a polarity flip deadening FR7b in this process.
+    expect(ISOLATION_IN_IMAGE).toBe(process.env.SOLEUR_ISOLATION_IN_IMAGE === "1");
   });
 
   test("no test.fails uses a placeholder todo (#TBD, #todo, etc.)", () => {

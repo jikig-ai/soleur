@@ -182,6 +182,20 @@ test/
 # would then type-check them inside the image.
 !test/helpers/mock-supabase.ts
 
+# Re-include the cross-workspace isolation canary payload (#2640). The
+# Dockerfile runner stage bakes these three files into /app/test/ via
+# `COPY --from=builder` so ci-deploy.sh can `docker exec … vitest run` the
+# deterministic direct-bwrap tier inside the canary container; without these
+# re-includes the builder-stage `COPY . .` drops them and the runner COPY fails
+# the image build — the same three-surface rule as !infra/* and !scripts/*
+# above. Exact-path bangs only: a bare `!test/` or `!test/helpers/` directory
+# bang is RECURSIVE and would re-include every sibling suite (measured on this
+# repo for the mock-supabase note above) — pulling files that import devDeps
+# absent from the runner image and widening the `next build` type-check set.
+!test/sandbox-isolation.test.ts
+!test/helpers/sandbox-isolation-fixtures.ts
+!test/vitest.canary.config.ts
+
 # Migrations/templates not needed at runtime
 supabase/
 

@@ -440,6 +440,33 @@ if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]
 fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
+# Cross-workspace isolation probe verdict (#2640). Written per deploy by
+# write_workspace_isolation_state, surfaced on /hooks/deploy-status by
+# cat-deploy-state.sh (workspace_isolation_json). DURABLE on purpose, same
+# /mnt/data rationale as SANDBOX_CANARY_STATE_FILE directly above: this file
+# alone carries the probe's CROSS-DEPLOY soak accumulator (consecutive_pass +
+# first_pass_at) — a tmpfs wipe would silently reset the promotion soak. Reader
+# default MUST match cat-deploy-state.sh workspace_isolation_json().
+WORKSPACE_ISOLATION_STATE_FILE="${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
+# Host-side cap on the probe's `docker exec` (report-only NFR: the probe adds
+# <= ~5 min worst-case to a deploy; the observed direct-tier runtime is seconds
+# to low tens). rc 124 is its own verdict class (workspace_isolation_timeout) —
+# a wedged suite is a RED verdict, not an infra hiccup. Env-overridable pure
+# timing knob (the CRON_DRAIN_TIMEOUT convention), NOT a secret.
+WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
+# 0/non-numeric would DISABLE the cap (timeout(1) treats 0 as unbounded) —
+# that is the opposite of the knob's contract; fail-safe back to the default.
+[[ "$WORKSPACE_ISOLATION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || WORKSPACE_ISOLATION_TIMEOUT=300
+# Same aliasing failure class as OUTER_LEDGER_ALIAS above: an env override
+# pointing the #2640 ledger at either canary ledger would interleave verdict
+# vocabularies (sandbox_broken vs workspace_isolation_*) and corrupt both
+# soaks. Warn AND skip the probe entirely — a missing arm beats a wrong file.
+WORKSPACE_ISOLATION_LEDGER_ALIAS=0
+if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" \
+   || "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" ]]; then
+  WORKSPACE_ISOLATION_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_STATE_FILE aliases a canary ledger ($WORKSPACE_ISOLATION_STATE_FILE) — workspace-isolation probe SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
+fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
 # check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
@@ -660,17 +687,35 @@ write_cron_drain_state() {
 #                       first green (self-pins the soak window strictly after this
 #                       deploy — no operator timestamp to hand-pin).
 #   - `sandbox_broken`→ reset both to 0 (a faithful FAIL restarts the soak).
+#     (reset set is actually $5 reset_re — `sandbox_broken` is just the
+#     default for the faithful/outer-wrap callers; the #2640 probe passes its
+#     own RED classes.)
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
+# $6 ledger: an identity stamp naming WHICH mechanism's ledger this write
+# belongs to (the Sentry-op vocabulary: sandbox-canary / sandbox-canary-
+# outer-wrap / workspace-isolation). The readers in cat-deploy-state.sh refuse
+# a file whose stamp is present-but-foreign — closing the env-alias blind spot
+# where an override points a canary ledger AT another ledger's path and foreign
+# `pass` verdicts would otherwise inflate the wrong soak.
 write_sandbox_canary_state() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" tmp now prior_pass prior_first
+  # $5 reset_re: an ERE alternation naming this ledger's RED verdict classes
+  # (soak-reset). Internal literal from the call sites, never operator input.
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" ledger="${6:-sandbox-canary}" tmp now prior_pass prior_first
   now="$(date +%s)"
   prior_pass=0; prior_first=0
   if [[ -f "$state_file" ]]; then
-    prior_pass="$(jq -r '.consecutive_pass // 0' "$state_file" 2>/dev/null || echo 0)"
-    prior_first="$(jq -r '.first_pass_at // 0' "$state_file" 2>/dev/null || echo 0)"
-    [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
-    [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+    # Foreign-ledger guard: a file carrying another mechanism's `ledger` stamp
+    # (an env-alias misconfig interleaving vocabularies) contributes NO prior
+    # counters — the soak restarts rather than inheriting foreign greens.
+    local prior_ledger
+    prior_ledger="$(jq -r '.ledger // ""' "$state_file" 2>/dev/null || echo "")"
+    if [[ -z "$prior_ledger" || "$prior_ledger" == "$ledger" ]]; then
+      prior_pass="$(jq -r '.consecutive_pass // 0' "$state_file" 2>/dev/null || echo 0)"
+      prior_first="$(jq -r '.first_pass_at // 0' "$state_file" 2>/dev/null || echo 0)"
+      [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
+      [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+    fi
   fi
   local consecutive_pass first_pass_at
   case "$verdict" in
@@ -678,16 +723,18 @@ write_sandbox_canary_state() {
       consecutive_pass=$((prior_pass + 1))
       if [[ "$prior_first" -gt 0 ]]; then first_pass_at="$prior_first"; else first_pass_at="$now"; fi
       ;;
-    sandbox_broken)
-      consecutive_pass=0; first_pass_at=0 ;;
     *)
-      consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
+      if [[ "$verdict" =~ ^($reset_re)$ ]]; then
+        consecutive_pass=0; first_pass_at=0
+      else
+        consecutive_pass="$prior_pass"; first_pass_at="$prior_first"
+      fi ;;
   esac
   tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
-    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$now" \
+    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg l "$ledger" --argjson ts "$now" \
     --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
-    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
+    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp, ledger:$l}' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   mv "$tmp" "$state_file" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
@@ -702,7 +749,7 @@ sandbox_canary_sentry_event() {
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg o "$op" \
-      '{message: (($o | sub("^sandbox-canary"; "sandbox canary"; "i")) + " " + $v + " (" + $r + ") — SDK " + $s),
+      '{message: (($o | sub("^sandbox-canary"; "sandbox canary"; "i")) + " " + $v + " (" + $r + ")" + (if ($s | length) > 0 then " — SDK " + $s else "" end) + " — report-only canary; deploy NOT rolled back"),
         level: "error", platform: "other", logger: "ci-deploy",
         tags: {feature: "agent-sandbox", op: $o, verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
@@ -713,6 +760,31 @@ sandbox_canary_sentry_event() {
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "SANDBOX_CANARY: Sentry POST failed"
   fi
+}
+
+# write_workspace_isolation_state: persist the workspace-isolation probe verdict
+# for the no-SSH deploy-status surface (#2640) — a thin wrapper over
+# write_sandbox_canary_state (#5875 / ADR-079), which is already parameterized
+# by state file. Deltas: no sdk_version (a vitest run carries none) and a
+# different reset set — `workspace_isolation_failed`/`workspace_isolation_timeout`
+# are this probe's RED classes (its `sandbox_broken` equivalent). Always
+# returns 0: NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates), so a
+# state-write failure must never abort a deploy.
+write_workspace_isolation_state() {
+  write_sandbox_canary_state "$1" "$2" "" "$WORKSPACE_ISOLATION_STATE_FILE" \
+    'workspace_isolation_failed|workspace_isolation_timeout' 'workspace-isolation'
+}
+
+# workspace_isolation_sentry_event: loud, no-SSH page on a RED isolation verdict
+# (#2640) — fires ONLY on workspace_isolation_failed / workspace_isolation_timeout,
+# NEVER on canary_infra_error (expected while pre-tooling canary images still
+# deploy) or pass. Emits its own WORKSPACE_ISOLATION_FAIL marker (the runbook
+# keys on it) and delegates the payload to sandbox_canary_sentry_event with
+# op=workspace-isolation. Best-effort + env-guarded. Fail-open under set -e.
+workspace_isolation_sentry_event() {
+  local verdict="$1" reason="$2"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_FAIL: verdict=$verdict reason=$reason (report-only canary probe; deploy NOT rolled back)" || true
+  sandbox_canary_sentry_event "$verdict" "$reason" "" "workspace-isolation" || true
 }
 
 # cosign_verify_event: loud, no-SSH page on an image-signature verify failure
@@ -2632,7 +2704,8 @@ run_canary_replay() {
     sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
-  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file"
+  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file" \
+    "sandbox_broken" "$sentry_op"
   echo "$label: verdict=$verdict reason=$reason"
   # Page only on a sandbox_broken verdict — canary_infra_error is expected
   # during dark-launch (fixture not yet captured) and must not page.
@@ -2652,7 +2725,7 @@ run_faithful_sandbox_canary() {
 
 # run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
 # Replays the SELF-AUTHORED outer mount-table fixture inside the canary
-# container (the file-cap'd /usr/bin/bwrap posture the prod wrap depends on)
+# container (the elevation posture the prod wrap depends on)
 # and runs the shared isolation payload in the resulting namespace. Its
 # verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
 # #5863 soak follow-through; promotion to gating is a separate change after
@@ -2663,6 +2736,125 @@ run_outer_wrap_canary() {
   fi
   run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
     "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
+}
+
+# run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
+# run_faithful_sandbox_canary precedent, #5875 / ADR-079). Runs the direct tier
+# of the cross-workspace isolation suite (test/sandbox-isolation.test.ts under
+# the image-baked vitest config test/vitest.canary.config.ts) INSIDE the canary
+# container, records the classified verdict to deploy-state, and pages Sentry on
+# a RED verdict — but NEVER rolls back (report-only per
+# wg-dark-launch-deploy-gates; blocking promotion is a tracked follow-through
+# gated on observed real-deploy passes).
+# Deliberately NOT a run_canary_replay caller (documented divergence, same
+# class cat-deploy-state.sh's SOLEUR-DEBT notes record): the
+# replay helper is bound to the .mjs contract (stdout verdict JSON, any
+# non-zero rc = canary_infra_error, sdk_version). This probe has a different
+# contract end-to-end — vitest argv, a host-side `timeout` cap, and rc-ONLY
+# classification into a 4-verdict taxonomy where 124 is a RED class — so
+# folding would need ~4 behavioral knobs for ~15 shared lines.
+# SOLEUR_ISOLATION_IN_IMAGE=1 is load-bearing: in-image PATH `bwrap` IS the
+# deployed shim and the repo-side shim path is not baked, which makes FR7b
+# structurally un-runnable — the suite self-skips it under this flag
+# (its shim-splice property is pinned by bwrap-shim.test.ts + the faithful
+# canary replay, so nothing is lost).
+# docker-exec exit-code classification (mirrors run_faithful_sandbox_canary):
+#   0             -> pass (the direct tier held inside the canary image)
+#   124           -> workspace_isolation_timeout (the host `timeout` cap fired —
+#                    a wedged suite is a RED verdict, not an infra hiccup)
+#   125/126/127   -> canary_infra_error (daemon trouble / vitest absent from the
+#                    canary image — expected while pre-tooling images deploy,
+#                    never a sandbox verdict: the #4941 false-rollback guard)
+#   other non-zero-> workspace_isolation_failed (the suite ran and FAILED —
+#                    cross-tenant isolation regressed in this exact image)
+run_workspace_isolation_probe() {
+  if [[ "$WORKSPACE_ISOLATION_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into a canary ledger
+  fi
+  local verdict reason exec_rc out err_file docker_err test_detail
+  # Capture docker's OWN stderr so a persistent canary_infra_error (rc 126/127:
+  # vitest absent, exec-format error) or a failed run carries its CAUSE onto the
+  # no-SSH surfaces — the numeric rc alone would otherwise be the only signal
+  # (mirrors the faithful-canary obs review P2).
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+  # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed exec aborts
+  # before the read, leaving the classification below unreachable.
+  # `/usr/bin/env -i` scrubs the exec'd process's environment (the
+  # github_app_key_canary_check precedent): `docker exec` inherits the canary's
+  # Config.Env — the FULL prd env-file — and this suite spawns
+  # adversarially-probed inner sandboxes whose parent env is the exfil channel
+  # under test. Scrubbing means even a REAL isolation break cannot leak
+  # credential material, and the vitest output folded into `reason` below can
+  # never carry it. The SOLEUR_ISOLATION_* knobs ride env -i's own assignments;
+  # docker `-e` flags would be redundant (env -i overrides inheritance anyway).
+  # Side effect: CANARY_NODE_OPTIONS (the heap cap) is scrubbed too — vitest
+  # runs at default heap inside the container's --memory cap; a runaway run
+  # OOMs loud (rc 137 → workspace_isolation_failed), never silently wrong.
+  if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
+      soleur-web-platform-canary /usr/bin/env -i \
+      PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+      CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
+      /usr/local/bin/vitest run \
+      --config test/vitest.canary.config.ts 2>"$err_file")"; then
+    exec_rc=0
+  else
+    exec_rc=$?
+  fi
+  if [[ "$exec_rc" -eq 0 ]]; then
+    # rc-0 alone is not proof the suite RAN: a future skip-knob regression (or a
+    # tier-filter bug) can green a zero-test run — vitest exits 0 when every
+    # collected test skips. Require the reporter's nonzero-passed marker;
+    # absent, this is a vacuous green and reads RED (loud, never promoting).
+    # Bash =~, not `grep -q`: under pipefail a `grep -q` early-exit SIGPIPEs the
+    # printf and the pipeline reports 141 even on a match.
+    if [[ "$out" =~ Tests\ +[1-9][0-9]*\ passed ]]; then
+      verdict="pass"; reason="ok"
+    else
+      verdict="workspace_isolation_failed"
+      reason="vacuous_green_no_tests_passed"
+    fi
+  else
+    # Diagnostics, sanitized through _cred_err_tail (the shared
+    # secret-shape/env-value scrubber the blocking bwrap probe uses — a bare
+    # `tr -dc` fold would let a runc-formatted error carry an env value onto
+    # journald/Sentry). Vitest writes failure detail to STDOUT (stderr's first
+    # line is its decorative banner), so prefer the first `FAIL <file>`/
+    # `AssertionError` line of `out`; fall back to docker's own stderr line.
+    # (while-read, not `grep -m1`: an early-exiting grep SIGPIPEs its producer
+    # under pipefail — the grep-q-pipe-guard lint's banned shape, #9217.)
+    test_detail=""
+    while IFS= read -r _line; do
+      if [[ "$_line" =~ FAIL\ +[^[:space:]]|AssertionError ]]; then
+        test_detail="$_line"; break
+      fi
+    done <<< "$out"
+    if [[ -z "$test_detail" ]]; then
+      test_detail="$(head -1 "$err_file" 2>/dev/null)"
+    fi
+    docker_err="$(_cred_err_tail "$test_detail" | cut -c1-120)"
+    case "$exec_rc" in
+      124)
+        verdict="workspace_isolation_timeout"
+        reason="host_timeout_${WORKSPACE_ISOLATION_TIMEOUT}s${docker_err:+: $docker_err}" ;;
+      125|126|127)
+        verdict="canary_infra_error"
+        reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+      *)
+        verdict="workspace_isolation_failed"
+        reason="vitest_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+    esac
+  fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
+  write_workspace_isolation_state "$verdict" "$reason"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION: verdict=$verdict reason=$reason" || true
+  echo "Workspace isolation probe (non-blocking): verdict=$verdict reason=$reason"
+  # Page only on a RED verdict — canary_infra_error is expected during the
+  # dark-launch window (pre-tooling canary images) and must not page, and a
+  # green probe never pages.
+  if [[ "$verdict" == "workspace_isolation_failed" || "$verdict" == "workspace_isolation_timeout" ]]; then
+    workspace_isolation_sentry_event "$verdict" "$reason" || true
+  fi
+  return 0
 }
 
 # _atomic_write <dest> <content>: temp file in the SAME directory as <dest> (so the rename is atomic
@@ -3858,11 +4050,6 @@ case "$COMPONENT" in
     # pdf-linearize tempfiles and keeps /tmp ephemeral. Post-GIT_ASKPASS
     # migration (git-auth.ts), git no longer writes credential helpers
     # under /tmp — the askpass script lives in $HOME instead.
-    # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
-    # (never effective — the app runs as non-root soleur) so the file-cap'd
-    # /usr/bin/bwrap can elevate at exec. Without it the wrap falls back to
-    # implicit userns — the arm Phase 0 measured fatal to the inner sandbox —
-    # and the outer-wrap canary would measure the wrong elevation path.
     docker run -d \
       --name soleur-web-platform-canary \
       --log-driver journald \
@@ -3872,7 +4059,6 @@ case "$COMPONENT" in
       --init \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
-      --cap-add SYS_ADMIN \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
@@ -4122,6 +4308,14 @@ case "$COMPONENT" in
       run_faithful_sandbox_canary || true
       # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
       run_outer_wrap_canary || true
+
+      # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
+      # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
+      # isolation suite inside the canary via the image-baked vitest, records a
+      # classified verdict + pages Sentry on red, but never gates/rolls back this
+      # deploy. `|| true` is LOAD-BEARING — a probe hiccup must never abort a
+      # deploy under set -e.
+      run_workspace_isolation_probe || true
     fi
 
     # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.
@@ -4198,11 +4392,6 @@ case "$COMPONENT" in
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
-      # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
-      # (never effective — the app runs as non-root soleur) so the file-cap'd
-      # /usr/bin/bwrap can elevate at exec — same posture cloud-init.yml's
-      # first-boot run grants; every subsequent deploy re-creates the
-      # container HERE.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \
@@ -4212,7 +4401,6 @@ case "$COMPONENT" in
         --init \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
-        --cap-add SYS_ADMIN \
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
