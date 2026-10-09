@@ -1,3 +1,6 @@
+// pyramid-justified: intercepts `**/auth/v1/otp*` via page.route and drives
+// the real rendered OTP form (banners, inputs, submit) — needs a real
+// browser.
 import { test, expect, type Page } from "@playwright/test";
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
 import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
