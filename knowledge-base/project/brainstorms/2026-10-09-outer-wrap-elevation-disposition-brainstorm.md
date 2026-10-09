@@ -1,7 +1,7 @@
 # Brainstorm: #9873 elevation arm vs #9773 executor — joint disposition
 
 **Date:** 2026-10-09
-**Issues:** #9873 (OPEN — arm-F elevation blocked: setuid or drop) · #9773 (OPEN — per-tenant executor topology, tracking issue for epic #9842)
+**Issues:** #9873 (OPEN at brainstorm time — arm-F elevation blocked: setuid or drop; CLOSED 2026-10-09 per this disposition) · #9773 (OPEN — per-tenant executor topology, tracking issue for epic #9842)
 **Branch:** feat-outer-wrap-elevation-disposition · **PR:** #9896 (draft)
 **Lane:** cross-domain · **Brand-survival threshold:** single-user incident (USER_BRAND_CRITICAL, auto per #5175)
 **Operator prompt:** "Two open issues sit on the same tension; decide them TOGETHER, not independently … The real question: is fixing the elevation arm worth it if #9773 is the end-state? … option 3 + 'accept the blocker' is a legitimate answer; setuid bwrap inside an agent-executed container is a real security cost, not just engineering effort."
@@ -18,7 +18,7 @@
 
 **Current state (verified 2026-10-09):**
 
-- The executor is no longer hypothetical. Operator-approved unified architecture (draft PR #9832, epic #9842, 13 Stage-0 spikes open, challenge-reviewed spec). Executor = gVisor (`runsc`, systrap) sandbox per session hosting the whole agent (SDK loop + MCP + hooks + CLI); Stage 1 = host supervisor + `RemoteQuery` + credential broker + flag-gated canary tenants. Challenge-review finding C2 **dropped the "arm-F uid envelope" premise** — the executor does not ride the in-container outer wrap.
+- The executor is no longer hypothetical. Operator-approved unified architecture (draft PR #9832, epic #9842, 13 Stage-0 spike IDs / 14 open spike issues, challenge-reviewed spec). Executor = gVisor (`runsc`, systrap) sandbox per session hosting the whole agent (SDK loop + MCP + hooks + CLI); Stage 1 = host supervisor + `RemoteQuery` + credential broker + flag-gated canary tenants. Challenge-review finding C2 **dropped the "arm-F uid envelope" premise** — the executor does not ride the in-container outer wrap.
 - The wrap never ran enabled in prod (v0.333.1 rolled back on the file-cap arm; #9874 reverted). Flag-off is the status quo, not a regression. Sibling workspace **content** remains masked today by #5862 deny-then-restore + the realpath hook; what stays open is sibling *existence* / mount-table presence / defense-in-depth — a bounded, documented residual.
 - Cohort exposure is currently zero: the only external user is on the self-hosted CLI plugin, not the shared web container; arms-length tenants are gated by the **superset** residuals (shared heap, procfs, net, IPC, credentials) the wrap does not close.
 
@@ -74,4 +74,4 @@ Closes the argv-flexibility hole of 1a and dodges upstream's setuid deprecation,
 
 - Leaders: CPO (residual ordering + zero cohort exposure + DPA review comparison), CLO (named-gap TOM form, self-defeating primitive, Art. 33(5) asymmetry, record list), CTO (mechanism dead-end, bounding-set widening, cost table, revisit trigger) — unanimous Option 3.
 - Mechanism facts: `agent-outer-wrap.ts` (argv contract, `elevation=privileged|userns` probe, DI seam); seccomp rule-15 permissive shape under CAP_SYS_ADMIN; `getcap` audit blind to setuid; inner sandbox starvation mechanics (userns ownership of pid/net).
-- Prior art: archived #9871 plan O3 (setuid dead ≤0.11.1 / removed 0.12); ADR-075 addendum; executor spec TR5 host-side launcher; counsel-review-9601 named-gap form; dark-launch rule (#4932→#4941); measurement-gap lesson (arm F never ran as uid 1001 in the prod image before merge).
+- Prior art: the archived #9871 plan's Option O3 (setuid works ≤0.11.1 only, removed at 0.12 — the plan sits on unmerged branch `feat-one-shot-9860-deploy-canary-health-failed`, `knowledge-base/project/plans/archive/20261009-195834-…`; its substance is upstream-verified); ADR-075 addendum; executor spec TR5 host-side launcher; counsel-review-9601 named-gap form; dark-launch rule (#4932→#4941); measurement-gap lesson (arm F never ran as uid 1001 in the prod image before merge).

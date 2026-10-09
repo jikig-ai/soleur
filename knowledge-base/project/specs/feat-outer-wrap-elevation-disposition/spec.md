@@ -42,7 +42,9 @@ Operator ratified 2026-10-09 after unanimous CTO/CLO/CPO + prior-art analysis
 ## Residual (accepted, documented)
 
 Sibling filesystem *existence*/mount-table presence on the shared container
-stays open until #9773 Stage 1. Sibling workspace *content* remains masked by
+stays open until #9773 Stage 1, plus the shared-`$HOME` **read** surface
+(`.claude/projects/<cwd-slug>/` transcripts are same-uid readable
+cross-session — the wrap's narrow `$HOME` binds would have closed it too). Sibling workspace *content* remains masked by
 the #5862 deny-then-restore + realpath hook (the `denyRead` on `workspacesRoot`
 stays load-bearing indefinitely under flag-off — see #9798 note). Exit
 criterion: #9773 Stage 1 GA.
