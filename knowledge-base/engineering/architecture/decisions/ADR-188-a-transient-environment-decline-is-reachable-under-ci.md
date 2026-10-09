@@ -511,7 +511,7 @@ for a total outage.
 
 **Later consumers (2026-10-08, #9395).** Two more in-container apt cycles moved onto the same helper with no new skip
 path: the `git-data-cutover-access` runtime arm (270 s, 55 s healthy; fail-closed under `CI=true`) and the
-`cloud-init-inngest-provision-unit` Tier B image build (150 s, 20 s healthy; the apt decline stays an ADR-188 skip, any other build rc is a counted FAIL).
+`cloud-init-inngest-provision-unit` Tier B image build (150 s, 20 s healthy; the apt decline, or docker failing to create the container (rc 125), stays an ADR-188 skip; any other build rc is a counted FAIL both locally and under CI, unlike `tb_unbootable`, because 97/98/137 are harness defects that must never read as the decline). The assembly guard (A10 in `apt-bounded.test.sh`) now covers the four consumers and a recursive census of the infra suites; non-suite scripts and scripts outside `apps/web-platform/infra/` are outside it.
 
 **Alternatives considered.** Raising `_SUITE_BOUNDS` (bounds nothing; the leg has a 15-minute
 `timeout-minutes` shared across suites). A pre-baked fixture image (rejected 2026-08-13: it would remove

@@ -82,8 +82,12 @@ python3 -c 'import yaml' 2>/dev/null || { printf 'FAIL SETUP: python3 yaml modul
 # Bounded apt (#8744 count, #9395 time): the runtime arm's in-container apt cycle shares lib/apt-bounded.sh
 # with the other git-data suites (one budget of apt seconds; expiry exits 100 with FIXTURE_APT_FAILED, so the
 # classification below is unchanged and the arm stays fail-closed under CI=true). 270 s = two 90 s-capped
-# stalls plus a healthy cycle (55 s measured in the pinned image on 2026-10-08) with margin; the container's
-# non-apt time (the whole suite is under 100 s) keeps the worst case inside the 480 s host bound.
+# stalls plus a healthy cycle (55 s measured in the pinned image on 2026-10-08) with margin. The 480 s host
+# `timeout` below covers the container run only: worst case is about 285 s of apt (three 90 s caps plus the
+# 5 s KILL grace each) plus the container's non-apt time, which is not measured separately but is bounded by
+# the whole suite's 137-184 s on CI (infra-validation timing artifacts, 2026-10) -- under 480 s with little
+# margin, so a total stall on a slow day can end as a docker rc 124 "driver did not complete" FAIL (still red
+# under CI) rather than the attributable FIXTURE_APT_CAUSE one.
 APT_LIB="${DIR}/lib/apt-bounded.sh"
 APT_BUDGET_S=270
 [ -r "$APT_LIB" ] || { printf 'FAIL SETUP: %s is missing — the runtime arm apt cycle could not be bounded\n' "$APT_LIB" >&2; exit 1; }
@@ -3090,6 +3094,7 @@ DRV
   : > "$T/rt/out/rows"
   # Bounded: a hung driver must fail this arm loudly, never eat the CI job's clock.
   _cname="gdc-access-$$-${RANDOM}"
+  case "$T" in *:*) echo "FIXTURE-FAIL: scratch dir $T contains ':' — the apt state mount spec would be invalid (docker rc 125 would read as the decline)" >&2; exit 2 ;; esac
   gd_apt_state_arm "$T/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
   timeout -k 10 480 docker run --rm --cap-add NET_ADMIN --name "$_cname" -v /mnt/git-data -v "$GD_APT_STATE:/work/apt" -v "$T/rt/drive.sh:/work/drive.sh:ro" \
     -v "$T/rt/git-data-cutover.sh:/work/git-data-cutover.sh:ro" -v "$T/rt/sshcfg.sh:/work/sshcfg.sh:ro" -v "$T/rt/wrapper.sh:/work/wrapper.sh:ro" \
