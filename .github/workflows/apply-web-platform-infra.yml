@@ -145,7 +145,7 @@ on:
         required: false
         type: string
       clo_attestation_ref:
-        description: "[inngest-backstop-retire, erasure=provider-only] https URL of the CLO attestation comment/file."
+        description: "[inngest-backstop-retire, erasure=provider-only] exactly https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<id>: first line `CLO-ATTESTATION erasure=provider-only volume=106261946`, unedited, by a human OWNER|MEMBER who is not the dispatching actor (two-person rule)."
         required: false
         type: string
       # `manual-rerun` (default) preserves the historical escape-hatch behavior EXACTLY
@@ -230,31 +230,13 @@ on:
           # requested host. Both volumes and the LUKS passphrase are preserved by
           # OMISSION from the -target set. REFUSES web-1. See the web_host_replace job.
           - web-host-replace
-          # #6977 — the git-data BIRTH path, and the counterpart to git-data-host-replace
-          # above rather than a widened version of it. That gate requires
-          # actions ⊇ {delete,create} and fires its luks_passphrase_touched arm on a
-          # CREATE, so a first birth aborts on it three separate ways; its 5-member
-          # allow-set also rests on "preserved by OMISSION", an argument that INVERTS on a
-          # birth (an omitted address is then a MISSING resource, not a protected one).
-          #
-          # The job sources a birth-readiness gate that refuses to plan while
-          # cloud-init-git-data.yml has no off-host emitter, because for this host a green
-          # apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
-          # gate now RELEASES — it remains armed as a regression check, not as a hold.
-          # The runbook's DO-NOT-DISPATCH banner held the route until the rung-2 evidence
-          # merged (PR #8126); it was cleared by PR #8128 (merged 2026-09-14) and the host was born
-          # 2026-09-14. See the git_data_host_create job and
-          # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+          # #6977 — git-data BIRTH path, counterpart of git-data-host-replace (full text: the job-rationale runbook, `inngest_volume_recut` section).
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write via the job's github.token; posts findings to #6767). See the
           # entrypoint_audit job below.
-          # #7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
-          # stopped accepting it. Narrow by construction: a two-resource -target set
-          # plus one -replace, reaching NO host, NO volume, and NO terraform_data.
-          # It is the ONE arm that can run while the SSH bridge is dead, because it
-          # repairs the credential the bridge authenticates with.
+          # #7095 — re-mints the CF Access ci_ssh service token (full text: the job-rationale runbook, `inngest_volume_recut` section).
           - ci-ssh-token-replace
           # #7542 — delivers a `vector.toml` change to web-1 on its own dispatch, scoped to
           # terraform_data.journald_persistent (the resource whose triggers_replace hashes that
@@ -2147,9 +2129,8 @@ jobs:
           [[ -z "$WIPE_RUN_ID" || "$WIPE_RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::wipe_run_id must be numeric."; exit 1; }
           if [[ "$RETIRE_PHASE" != destroy && -n "${WIPE_RUN_ID}${RETIRE_ERASURE}${CLO_REF}" ]]; then echo "::error::wipe_run_id/erasure/clo_attestation_ref belong to phase=destroy only."; exit 1; fi
           printf 'JOB_START=%s\n' "$(date -u +%s)" >> "$GITHUB_ENV"
-          # hz <path> <outfile> -> http code (000 on transport failure); token on stdin, not argv.
           cat > "${RUNNER_TEMP}/hz.sh" <<'HZ'
-          hz() { printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" | curl -q -K - -sS --max-time 20 -o "$2" -w '%{http_code}' "https://api.hetzner.cloud/v1/$1" 2>/dev/null || echo 000; }
+          hz() { local c; c="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" | curl -q -K - -sS --max-time 20 -o "$2" -w '%{http_code}' "https://api.hetzner.cloud/v1/$1" 2>/dev/null || true)"; echo "${c:-000}"; }
           HZ
           [[ -n "${HCLOUD_TOKEN:-}" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           echo "phase=${RETIRE_PHASE}; deadline 2026-10-22 (non-extendable); D4 decision point 2026-10-17"
@@ -2173,9 +2154,8 @@ jobs:
         run: |
           set -uo pipefail
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
-          source "${RUNNER_TEMP}/hz.sh"
-          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" || -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" || -z "${HCLOUD_TOKEN:-}" ]]; then
-            echo "::error::a read credential is missing (BETTERSTACK_QUERY_*, DOPPLER_TOKEN_INNGEST_ARM, HCLOUD_TOKEN): the live store cannot be proven healthy. Fail-closed."; exit 1
+          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" || -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+            echo "::error::a read credential is missing (BETTERSTACK_QUERY_*, DOPPLER_TOKEN_INNGEST_ARM): the live store cannot be proven healthy. Fail-closed."; exit 1
           fi
           unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_ROW_LIB INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
           _ipr_lib="${INNGEST_PROBE_ROW_LIB:-${GITHUB_WORKSPACE}/scripts/lib/inngest-probe-row.sh}"
@@ -2184,7 +2164,8 @@ jobs:
             echo "::error::selector_unavailable lib=${_ipr_lib}: nothing about the host was measured."; exit 1
           fi
           RAW="${RUNNER_TEMP}/probe-raw.json"
-          bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 6h --grep "${INNGEST_PROBE_MARKER:?}" --limit 2000 > "$RAW" 2>/dev/null || { echo "::error::probe-row query failed."; exit 1; }
+          bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 6h --grep "${INNGEST_PROBE_MARKER:?}" --limit 2000 > "$RAW" 2> "${RUNNER_TEMP}/probe.err" \
+            || { echo "::error::probe-row query failed rc=$?: $(head -c 300 "${RUNNER_TEMP}/probe.err" | inngest_backstop_clean 300)"; exit 1; }
           jq -R -r --arg h soleur-inngest --arg hn soleur-inngest-prd "${INNGEST_PROBE_ROW_JQ:?}"'
               fromjson? | select(type == "object") | . as $o
               | ((.raw // "") | fromjson?) | select(type == "object")
@@ -2195,15 +2176,7 @@ jobs:
               | [(($o.dt // "") | tostring | sub("T"; " ")), .] | @tsv' "$RAW" > "${RUNNER_TEMP}/probe.tsv" || { echo "::error::selector_failed: the probe-row selection did not run."; exit 1; }
           dget() { DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$1" --project soleur-inngest --config prd --plain 2>/dev/null || echo "__UNREADABLE__"; }
           FLAG="$(dget INNGEST_LUKS_CUTOVER)"; ACT="$(dget INNGEST_LUKS_ACTIVE_VOLUME_ID)"
-          [[ "$(hz "volumes/${_IBRG_LIVE_ID}" "${RUNNER_TEMP}/luks.json")" == 200 ]] || : > "${RUNNER_TEMP}/luks.json"
-          [[ "$(hz 'servers?name=soleur-inngest' "${RUNNER_TEMP}/srv.json")" == 200 ]] || : > "${RUNNER_TEMP}/srv.json"
-          SRV="$(jq -r 'if (.servers | type) == "array" and (.servers | length) == 1 then (.servers[0].id | tostring) else "" end' "${RUNNER_TEMP}/srv.json" 2>/dev/null)"
-          if RUNS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=100" \
-              --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | select(.path | test(\"apply-web-platform-infra|apply-deploy-pipeline-fix\")) | .id" 2>/dev/null)"; then
-            INF="$(grep -c . <<<"$RUNS" || true)"
-          else INF="__UNREADABLE__"; fi
-          if ! inngest_backstop_live_store_gate --cutover-flag "$FLAG" --active-id "$ACT" --luks-volume-file "${RUNNER_TEMP}/luks.json" \
-              --probe-file "${RUNNER_TEMP}/probe.tsv" --now "$(date -u +%s)" --inflight-runs "$INF" --server-id "$SRV"; then
+          if ! inngest_backstop_live_store_gate --cutover-flag "$FLAG" --active-id "$ACT" --probe-file "${RUNNER_TEMP}/probe.tsv" --now "$(date -u +%s)"; then
             echo "::error::live-store gate REFUSED: nothing was planned or changed. Read reason=: a rollback flag or a stale/off-volume probe means the live store is not provably serving."; exit 1
           fi
 
@@ -2253,10 +2226,12 @@ jobs:
             detach)
               [[ "$NWS" == 0 ]] || fail "a wipe host exists: dispatch phase=teardown first"
               if [[ "$VS" == gone || "$VS" == null ]]; then SKIP=true; has hcloud_volume_attachment.inngest_redis && RM+=(hcloud_volume_attachment.inngest_redis)
-              else [[ "$VS" == "$(jq -r '.servers[0].id | tostring' "${RUNNER_TEMP}/srv.json")" ]] || fail "volume is attached to server ${VS}, not the live inngest host"; fi ;;
+                [[ "$VS" == gone ]] && has hcloud_volume.inngest_redis && RM+=(hcloud_volume.inngest_redis)
+              else SC="$(hz 'servers?name=soleur-inngest' "${RUNNER_TEMP}/srv.json")"
+                [[ "$SC" == 200 && "$VS" == "$(jq -r 'if (.servers | length) == 1 then (.servers[0].id | tostring) else "" end' "${RUNNER_TEMP}/srv.json")" ]] || fail "volume is attached to server ${VS}, not the live inngest host (server read ${SC})"; fi ;;
             wipe)
-              [[ "$VS" == null ]] || fail "volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached (server null; state=${VS}) -- run phase=detach first"
               [[ "$NWS" == 0 ]] || fail "a wipe host already exists: dispatch phase=teardown first"
+              [[ "$VS" == null ]] || fail "volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached (server null; state=${VS}) -- run phase=detach first"
               if has "$WSA" || has "$WAA"; then fail "wipe addresses already in state: dispatch phase=teardown first"; fi ;;
             teardown)
               if [[ "$NWS" == 0 ]]; then SKIP=true
@@ -2266,8 +2241,8 @@ jobs:
               elif [[ "$VS" != null ]]; then fail "volume ${EXPECTED_INNGEST_VOLUME_ID} is still attached (server ${VS}): dispatch phase=detach (or teardown) first"
               elif has hcloud_volume_attachment.inngest_redis; then fail "the retired attachment is still in state although the volume is detached: re-dispatch phase=detach first"; fi ;;
           esac
-          # State-only reconcile (refresh-only, never `state rm`) of an address Hetzner says is gone; it must change state by EXACTLY that address.
           for a in "${RM[@]}"; do
+            has "$a" || continue
             case "$a" in
               hcloud_volume_attachment.inngest_redis) T=-target=hcloud_volume_attachment.inngest_redis ;;
               hcloud_volume.inngest_redis) T=-target=hcloud_volume.inngest_redis ;;
@@ -2279,8 +2254,9 @@ jobs:
               terraform apply -refresh-only -auto-approve -no-color -input=false -var="ssh_key_path=${CI_SSH_PUB}" "$T" || fail "refresh-only reconcile of ${a} failed"
             ST1="$(terraform state list 2>/dev/null)" || fail "cannot list terraform state after the refresh"
             DEL="$(comm -23 <(sort <<<"$ST") <(sort <<<"$ST1"))"; ADD="$(comm -13 <(sort <<<"$ST") <(sort <<<"$ST1"))"
-            [[ "$DEL" == "$a" && -z "$ADD" ]] || fail "the refresh of ${a} changed state beyond it: dropped='${DEL}' added='${ADD}'"
-            ST="$ST1"; echo "state-only reconcile: ${a} dropped from state (Hetzner confirms the object is gone)"
+            ALLOW="$a"; [[ "$VS" == gone && "$a" == hcloud_volume_attachment.inngest_redis ]] && has hcloud_volume.inngest_redis && ALLOW="hcloud_volume.inngest_redis"$'\n'"$a"
+            [[ ( "$DEL" == "$a" || "$DEL" == "$ALLOW" ) && -z "$ADD" ]] || fail "the refresh of ${a} changed state beyond it: dropped='${DEL}' added='${ADD}'"
+            ST="$ST1"; echo "state-only reconcile: ${DEL//$'\n'/ + } dropped from state (Hetzner confirms the object is gone)"
           done
           echo "skip=${SKIP}" >> "$GITHUB_OUTPUT"
           [[ "$SKIP" == true ]] && echo "post-condition of phase=${RETIRE_PHASE} already holds; nothing to plan."
@@ -2297,27 +2273,28 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
           source "${RUNNER_TEMP}/hz.sh"
           P="${RUNNER_TEMP}"; ROWS="$P/wipe-rows.jsonl"; CF="$P/clo.json"; AFTER=""; : > "$ROWS"; : > "$CF"
-          rd() { [[ "$(hz "$1" "$P/$2")" == 200 ]] || : > "$P/$2"; }  # a non-200 body is emptied: the gate reads it as unreadable
+          rd() { local c; c="$(hz "$1" "$P/$2")"; [[ "$c" == 200 ]] || { echo "Hetzner GET $1 answered ${c}"; : > "$P/$2"; }; }  # a non-200 body is emptied: the gate reads it as unreadable
           rd "volumes/${EXPECTED_INNGEST_VOLUME_ID}" vol-pre.json; rd "volumes/${EXPECTED_INNGEST_VOLUME_ID}/actions?per_page=50&sort=id%3Adesc" acts.json; rd 'servers?name=soleur-inngest' srv-pre.json
           LIVE="$(jq -r 'if (.servers | type) == "array" and (.servers | length) == 1 then (.servers[0].id | tostring) else "" end' "$P/srv-pre.json" 2>/dev/null)"
           if [[ "$RETIRE_ERASURE" == provider-only ]]; then
             if [[ "$CLO_REF" =~ ^https://github\.com/jikig-ai/soleur/issues/8285#issuecomment-([0-9]+)$ ]]; then
-              gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${BASH_REMATCH[1]}" > "$CF" 2>/dev/null || : > "$CF"
+              gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${BASH_REMATCH[1]}" > "$CF" 2>/dev/null || { echo "GitHub API could not return comment ${BASH_REMATCH[1]}"; : > "$CF"; }
             fi
           elif [[ "$WIPE_RUN_ID" =~ ^[0-9]+$ ]]; then
             RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WIPE_RUN_ID}" 2>/dev/null)" || RUN=""
             if jq -e '.path == ".github/workflows/apply-web-platform-infra.yml" and .head_branch == "main" and .event == "workflow_dispatch" and .status == "completed"' <<<"$RUN" >/dev/null 2>&1; then
               AFTER="$(jq -r '(.run_started_at // .created_at) | fromdateiso8601' <<<"$RUN" 2>/dev/null)"
-            fi
-            bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 14d --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 2000 > "$ROWS" 2>/dev/null || : > "$ROWS"
+            else echo "run ${WIPE_RUN_ID} could not be read, or is not a completed workflow_dispatch run of this workflow on main: no time floor"; fi
+            bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 14d --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 2000 > "$ROWS" 2> "$P/bs.err" \
+              || { echo "Better Stack query failed rc=$?: $(head -c 300 "$P/bs.err" | inngest_backstop_clean 300)"; : > "$ROWS"; }
           fi
-          if ! inngest_backstop_destroy_precondition --erasure "$RETIRE_ERASURE" --wipe-run-id "$WIPE_RUN_ID" --clo-attestation-ref "$CLO_REF" --clo-comment-file "$CF" \
+          if ! inngest_backstop_destroy_precondition --erasure "$RETIRE_ERASURE" --wipe-run-id "$WIPE_RUN_ID" --clo-attestation-ref "$CLO_REF" --clo-comment-file "$CF" --actor "$GITHUB_ACTOR" \
               --rows-file "$ROWS" --volume-file "$P/vol-pre.json" --actions-file "$P/acts.json" --live-server-id "$LIVE" --after-epoch "$AFTER" --now "$(date -u +%s)"; then
-            echo "::error::destroy REFUSED (Guard 4): nothing was planned. Needs a wipe row for wipe_run_id corroborated by Hetzner's action history, or erasure=provider-only with a CLO comment on #8285 (D4); read reason=."; exit 1
+            echo "::error::destroy REFUSED (Guard 4): nothing was planned. Needs a wipe row for wipe_run_id corroborated by Hetzner's action history, or erasure=provider-only with a two-person CLO comment on #8285 (D4); read reason=."; exit 1
           fi
 
       - name: Read-only untargeted plan (host and LUKS pair must be present no-ops)
-        if: steps.conv.outputs.skip != 'true'
+        if: steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -2380,6 +2357,7 @@ jobs:
           grep -E '^Plan:' tfplan.txt || true
 
       - name: Terraform apply (phase)
+        id: apply
         if: steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -2403,33 +2381,38 @@ jobs:
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
         run: |
           set -uo pipefail
+          export LC_ALL=C
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
           source "${RUNNER_TEMP}/hz.sh"
           [[ "$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" "${RUNNER_TEMP}/vol-w.json")" == 200 ]] || { echo "::error::cannot read volume ${EXPECTED_INNGEST_VOLUME_ID} size."; exit 1; }
           SZ="$(jq -r '.volume.size // empty' "${RUNNER_TEMP}/vol-w.json")"
           [[ "$SZ" =~ ^[1-9][0-9]*$ ]] || { echo "::error::volume size unreadable."; exit 1; }
-          ROWS="${RUNNER_TEMP}/wipe-poll.jsonl"; ERR="${RUNNER_TEMP}/wipe-poll.err"; OK=0; MSGS=""; DEADLINE=$(( $(date -u +%s) + 1200 ))
-          # 20 min wall clock, hot window only (--no-archive); a query error is printed, never swallowed.
+          ROWS="${RUNNER_TEMP}/wipe-poll.jsonl"; NR="${RUNNER_TEMP}/wipe-nonce.jsonl"; ERR="${RUNNER_TEMP}/wipe-poll.err"; OK=0; MSGS=""; EV=""
+          DEADLINE=$(( $(date -u +%s) + 1200 )); (( DEADLINE <= JOB_START + 1800 )) || DEADLINE=$(( JOB_START + 1800 ))
           while (( $(date -u +%s) < DEADLINE )); do
             bash "${GITHUB_WORKSPACE}/scripts/betterstack-query.sh" --since 1h --no-archive --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 500 > "$ROWS" 2> "$ERR" \
-              || { echo "poll query failed rc=$?: $(head -c 300 "$ERR")"; : > "$ROWS"; }
+              || { echo "poll query failed rc=$?: $(head -c 300 "$ERR" | inngest_backstop_clean 300)"; : > "$ROWS"; }
             MSGS="$(inngest_backstop_wipe_nonce_rows --rows-file "$ROWS" --nonce "$GITHUB_RUN_ID")"
-            if inngest_backstop_wipe_evidence_gate --rows-file "$ROWS" --nonce "$GITHUB_RUN_ID" --volume-id "$EXPECTED_INNGEST_VOLUME_ID" --size-bytes "$((SZ * 1073741824))" --after-epoch "$JOB_START" --now "$(date -u +%s)"; then OK=1; break; fi
+            inngest_backstop_wipe_nonce_rows --rows-file "$ROWS" --nonce "$GITHUB_RUN_ID" --raw > "$NR"
+            if EV="$(inngest_backstop_wipe_evidence_gate --rows-file "$NR" --nonce "$GITHUB_RUN_ID" --volume-id "$EXPECTED_INNGEST_VOLUME_ID" --size-bytes "$((SZ * 1073741824))" --after-epoch "$JOB_START" --now "$(date -u +%s)")"; then OK=1; break; fi
             grep -qF ' result=refused ' <<<"$MSGS" && break
+            [[ "$EV" == *reason=evidence_absent* || "$EV" == *reason=rows_unreadable* || "$EV" == *reason=not_wiped* ]] || break
             sleep 30
           done
-          hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" "${RUNNER_TEMP}/vol-w2.json" >/dev/null; hz 'servers?label_selector=role%3Dinngest-backstop-wipe' "${RUNNER_TEMP}/ws-w2.json" >/dev/null
-          echo "Hetzner at poll end: volume.server=$(jq -r '.volume.server' "${RUNNER_TEMP}/vol-w2.json" 2>/dev/null) wipe hosts=$(jq -r '[.servers[]? | "\(.id):\(.status)"] | join(",")' "${RUNNER_TEMP}/ws-w2.json" 2>/dev/null)"
-          echo "rows for nonce ${GITHUB_RUN_ID}: ${MSGS:-none}"
-          REASON=""; [[ "$MSGS" == *reason=* ]] && { REASON="${MSGS#*reason=}"; REASON="${REASON%%[[:space:]]*}"; }
-          [[ "$OK" == 1 ]] || { echo "::error::no wiped row for nonce ${GITHUB_RUN_ID} (absent = fail); host refusal: ${REASON:-none seen}. Teardown still runs; the volume stays intact. Query Better Stack for a late wiped row BEFORE re-dispatching phase=wipe."; exit 1; }
+          HV="$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" "${RUNNER_TEMP}/vol-w2.json")"; HW="$(hz 'servers?label_selector=role%3Dinngest-backstop-wipe' "${RUNNER_TEMP}/ws-w2.json")"
+          echo "Hetzner at poll end: volume.server=$(jq -r '.volume.server' "${RUNNER_TEMP}/vol-w2.json" 2>/dev/null) (HTTP ${HV}) wipe hosts=$(jq -r '[.servers[]? | "\(.id):\(.status)"] | join(",")' "${RUNNER_TEMP}/ws-w2.json" 2>/dev/null) (HTTP ${HW})"
+          echo "rows for nonce ${GITHUB_RUN_ID}: $(inngest_backstop_clean <<<"${MSGS:-none}")"
+          REASON=""; [[ "$MSGS" == *reason=* ]] && { REASON="${MSGS#*reason=}"; REASON="$(inngest_backstop_clean 60 <<<"${REASON%%[[:space:]]*}")"; }
+          if grep -qF ' result=started ' <<<"$MSGS" || [[ "$REASON" =~ ^(zero_failed|readback_nonzero|sig_survived)$ ]]; then
+            W="the device may be PARTIALLY ZEROED (a started row and no wiped row; guards after the write: zero_failed, readback_nonzero, sig_survived); rollback is gone; re-dispatch phase=wipe (the wipe re-enters)"
+          else W="no started row, so nothing was written: the volume stays intact"; fi
+          [[ "$OK" == 1 ]] || { echo "::error::no wiped row for nonce ${GITHUB_RUN_ID} (absent = fail); funnel: $(inngest_backstop_clean 300 <<<"$EV"); host refusal: ${REASON:-none seen}. ${W}. Teardown still runs. Query Better Stack for a late wiped row BEFORE re-dispatching phase=wipe."; exit 1; }
 
       - name: Teardown of the wipe host (if always; also phase=teardown)
         if: always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true' && (env.RETIRE_PHASE == 'wipe' || env.RETIRE_PHASE == 'teardown')
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # enabled=false deletes any SUBSET of exactly the two wipe addresses; the gate allows nothing else.
         run: |
           set -uo pipefail
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
@@ -2448,10 +2431,11 @@ jobs:
           "${D[@]}" terraform apply -no-color -input=false tfplan-td || { echo "::error::teardown apply failed; re-dispatch phase=teardown."; exit 1; }
 
       - name: Read-back (hard exit criterion for the phase)
-        if: always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true'
+        if: always() && steps.conv.outcome == 'success' && (steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          APPLY: ${{ steps.apply.outcome }}
         run: |
           set -uo pipefail
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh"
@@ -2467,6 +2451,7 @@ jobs:
               [[ "$VC" == 200 ]] && [[ "$(jq -r '.volume.server | tostring' "${RUNNER_TEMP}/vol-rb.json")" == null ]] || fail "volume ${EXPECTED_INNGEST_VOLUME_ID} is not detached again"
               note "wipe host and attachment gone; volume ${EXPECTED_INNGEST_VOLUME_ID} detached again (server: null)" ;;
             destroy)
+              if [[ "$VC" != 404 && "$APPLY" == skipped ]]; then note "destroy not applied: a gate refused before the apply (GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} answered ${VC})"; exit 0; fi
               [[ "$VC" == 404 ]] || fail "GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} answered ${VC}, expected 404"
               note "GET /v1/volumes/${EXPECTED_INNGEST_VOLUME_ID} -> 404 at $(date -u +%Y-%m-%dT%H:%M:%SZ) (apply completed just before)"
               if [[ "$(hz 'servers?name=soleur-inngest' "${RUNNER_TEMP}/srv-rb.json")" != 200 ]] || ! jq -e --arg v "$_IBRG_LIVE_ID" '[.servers[0].volumes[] | tostring] == [$v]' "${RUNNER_TEMP}/srv-rb.json" >/dev/null; then fail "inngest server volumes != [${_IBRG_LIVE_ID}]"; fi
@@ -2484,10 +2469,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          DAYS=$(( ( $(date -u -d 2026-10-22 +%s) - $(date -u +%s) ) / 86400 )); [[ "$DAYS" -ge 0 ]] || DAYS=0
-          D4=" D4 decision point (wipe not yet succeeded): 2026-10-17."; [[ "$RETIRE_PHASE" == destroy && "$JOB_STATUS" == success ]] && D4=""
-          printf '%s\n\nRead-back: %s\n\n%s day(s) to the non-extendable 2026-10-22 ledger expiry.%s\n' "inngest-backstop-retire phase=${RETIRE_PHASE}: ${JOB_STATUS}. Run: ${RUN_URL}" \
-            "$(cat "${RUNNER_TEMP}/readback.txt" 2>/dev/null || echo 'none recorded')" "$DAYS" "$D4" | gh issue comment 8285 --repo "$GITHUB_REPOSITORY" --body-file - || echo "::warning::could not post the #8285 progress comment"
+          LEFT=$(( $(date -u -d 2026-10-22 +%s) - $(date -u +%s) )); EXP="$(( LEFT / 86400 )) day(s) to the non-extendable 2026-10-22 ledger expiry."
+          (( LEFT >= 0 )) || EXP="OVERDUE by $(( (86399 - LEFT) / 86400 )) day(s): the non-extendable 2026-10-22 ledger expiry has passed."
+          D4=""; [[ "$RETIRE_PHASE" == detach || ( "$RETIRE_PHASE" == wipe && "$JOB_STATUS" != success ) ]] && D4=" D4 decision point (wipe not yet succeeded): 2026-10-17."
+          printf '%s\n\nRead-back: %s\n\n%s%s\n' "inngest-backstop-retire phase=${RETIRE_PHASE}: ${JOB_STATUS}. Run: ${RUN_URL}" \
+            "$(cat "${RUNNER_TEMP}/readback.txt" 2>/dev/null || echo 'none recorded')" "$EXP" "$D4" | gh issue comment 8285 --repo "$GITHUB_REPOSITORY" --body-file - || echo "::warning::could not post the #8285 progress comment"
 
       - name: Dispatch summary
         if: always()
@@ -3576,7 +3562,7 @@ jobs:
             echo "::error::registry-luks-recut destroy-guard ABORTED. The counter line above names the failing check; each has a named exit in knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md:"
             echo "::error::  • volume_provisioned=0 → the plan PRESERVES the store volume. A plan that keeps the volume is a host replace: it cannot re-encrypt or empty the store. Re-dispatch with all three -replace flags (this job supplies them; a 0 here means the resource is absent from the -target set or already replaced)."
             echo "::error::  • volume_id_mismatch=1 → the address resolves to a DIFFERENT physical volume than you authorized, or the plan carries no before.id. STOP and reconcile terraform state — do not re-fire with a different id until you know why."
-            echo "::error::  • luks_key_touched=1 → the isolated Doppler config lacks the key, so terraform wants to create/update it. Run the operator's untargeted apply per the OPERATOR_APPLIED_EXCLUSIONS contract so the key lands, then re-dispatch."
+            echo "::error::  • luks_key_touched=1 → the isolated Doppler config lacks the key, so terraform wants to create/update it. Run the operator's untargeted apply per the OPERATOR_APPLIED_EXCLUSIONS contract so the key lands, then re-dispatch. NEVER untargeted while hcloud_volume.inngest_redis or its attachment is still in state (#8285 retire window): add -target for each planned address."
             echo "::error::  • logs_secret_destroyed=1 → the fresh host would brick (the 3-secret boot guard FATALs without BETTERSTACK_LOGS_TOKEN). Reconcile the plan."
             echo "::error::  • out_of_scope>0 → the plan touches a resource outside the registry's own 6. NEVER widen the allow-set (#6497) — reconcile the plan. This is the only barrier protecting web-1 and the sole /mnt/data volume in this lock-less shared state."
             echo "::error::NO [ack-destroy] bypass on this path."

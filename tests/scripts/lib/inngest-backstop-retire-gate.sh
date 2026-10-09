@@ -6,18 +6,22 @@
 # and never permits a replace. Reused from it: the fail-closed preamble, the named-live pattern and
 # the id-pin counters.
 #
-# FIVE FUNCTIONS, each the SAME bytes tests/scripts/test-inngest-backstop-retire-gate.sh grades:
+# FIVE GATE FUNCTIONS plus one output helper (inngest_backstop_clean), each the SAME bytes
+# tests/scripts/test-inngest-backstop-retire-gate.sh grades:
 #
 #   inngest_backstop_retire_gate <plan.json> <phase> <expected_id> <mode>        (Guard 2)
 #       phase = detach | wipe | teardown | destroy   (anything else ABORTS: reason=phase_unknown)
 #       mode  = targeted | untargeted                (anything else ABORTS: reason=mode_unknown)
-#   inngest_backstop_live_store_gate --cutover-flag .. --active-id .. --luks-volume-file ..      (plan 2.0)
-#       --probe-file .. --now .. --inflight-runs .. --server-id ..
-#   inngest_backstop_destroy_precondition --erasure .. --wipe-run-id .. ...                      (Guard 4)
+#   inngest_backstop_live_store_gate --cutover-flag .. --active-id .. --probe-file .. --now ..  (plan 2.0)
+#   inngest_backstop_destroy_precondition --erasure .. --wipe-run-id .. --actor .. ...          (Guard 4)
 #   inngest_backstop_wipe_evidence_gate --rows-file .. --nonce .. ...        (the evidence funnel; the wipe
 #       phase's poll and Guard 4 both call it)
-#   inngest_backstop_wipe_nonce_rows --rows-file .. --nonce ..               (prints the message of every
-#       wipe-marker row bearing the nonce; the poll uses it to short-circuit on a refusal)
+#   inngest_backstop_wipe_nonce_rows --rows-file .. --nonce .. [--raw]       (prints the message of every
+#       wipe-marker row bearing the nonce from the pinned emitter, or with --raw the original lines of
+#       the rows bearing it from ANY emitter; the poll uses both)
+#   inngest_backstop_clean [max-bytes]   (stdin -> stdout: every Better Stack-derived string the workflow
+#       prints passes through it: non-printables to spaces, leading space/colon stripped per line so no
+#       line can open a workflow command, capped at 600 bytes by default)
 #
 # THE PLAN-SHAPE QUANTIFIER. Every element of .resource_changes[] is graded; an address nobody
 # enumerated still aborts (the gate never works from a list of "addresses known today"). Per phase
@@ -31,8 +35,9 @@
 # volume/attachment to be present as exactly one no-op each (absence from a plan proves nothing).
 # It grades ONLY the four retire addresses against the phase's set; an entry for any OTHER resource
 # is unrelated drift and is ignored (it is neither out_of_scope nor unauthorized_delete) unless it
-# carries the live volume id or the host (below) or uses a verb outside the closed vocabulary. The
-# targeted plan, which is what gets applied, is graded exactly. No [ack-destroy] bypass exists.
+# carries the live volume id, is the host, the LUKS pair or the web-1 set / LUKS key pair (all below),
+# or uses a verb outside the closed vocabulary. The targeted plan, which is what gets applied, is
+# graded exactly. No [ack-destroy] bypass exists.
 #
 # NEVER-ACTED-ON SET. Independently of the table above: any positive action (create/update/delete/
 # forget) on hcloud_server.inngest, on the LUKS volume or attachment, on the LUKS key pair, on the
@@ -44,6 +49,12 @@
 # CLOSED VERB VOCABULARY (this gate only). An entry whose actions contain a verb outside
 # {no-op, read, create, update, delete, forget} aborts as reason=unknown_verb: the positive-action
 # filter is a deny-list of four verbs, so a verb a future Terraform adds would otherwise read as inert.
+#
+# WIPE-SERVER IDENTITY (wipe_server_identity). The wipe addresses are graded on what they ARE, not on
+# their address: a wipe-server create must carry after.name == soleur-inngest-backstop-wipe; a delete
+# must carry before.name == that name and a before.id that is not the live inngest server
+# (169426216); an attachment delete must carry a before.server_id that is not the live server. A
+# missing name/id fails closed. (An attachment has no name, so its physical pin is its server id.)
 #
 # ID PIN. $expected_id is required in EVERY phase (id_pin_absent), must equal the retired volume id
 # 106261946 (pin_not_retired), and every authorized entry's physical id is read from the plan JSON
@@ -62,13 +73,14 @@ fi
 
 _IBRG_RETIRED_ID="106261946"
 _IBRG_LIVE_ID="106903269"
+_IBRG_LIVE_SERVER_ID="169426216"   # soleur-inngest: a wipe address must never resolve to it
 
 inngest_backstop_retire_gate() {
   local plan_json="${1:-}"
   local phase="${2:-}"
   local expected_id="${3:-}"
   local mode="${4:-}"
-  local counts lvt ist nlt uvb ipa pnr idm idu sab lpa ud oos sex smi reason
+  local counts lvt ist nlt uvb ipa pnr idm idu wsi sab lpa ud oos sex smi reason
 
   # An unrecognized phase or mode must abort, never default to a permissive set.
   case "$phase" in
@@ -84,7 +96,7 @@ inngest_backstop_retire_gate() {
   plan_gate_assert_classifiable "inngest_backstop_retire_gate" "$plan_json" || return 1
 
   if ! counts=$(jq -n --slurpfile p "$plan_json" --arg expected "$expected_id" --arg phase "$phase" --arg mode "$mode" \
-      --arg retired "$_IBRG_RETIRED_ID" --arg livev "$_IBRG_LIVE_ID" '
+      --arg retired "$_IBRG_RETIRED_ID" --arg livev "$_IBRG_LIVE_ID" --arg lives "$_IBRG_LIVE_SERVER_ID" --arg wname "$_IBRG_WIPE_HOST" '
       def nrm: .address | sub("\\[[0-9]+\\]$"; "");
       def acts: .change.actions;
       def pos: (acts | any(. == "create" or . == "update" or . == "delete" or . == "forget"));
@@ -95,6 +107,9 @@ inngest_backstop_retire_gate() {
       def bvol: scal(try .change.before.volume_id catch null);
       def avol: scal(try .change.after.volume_id catch null);
       def avol_unknown: ((try .change.after_unknown.volume_id catch null) == true);
+      def bname: scal(try .change.before.name catch null);
+      def aname: scal(try .change.after.name catch null);
+      def bsrv: scal(try .change.before.server_id catch null);
       def is_wsrv: (.address == "hcloud_server.inngest_backstop_wipe" or .address == "hcloud_server.inngest_backstop_wipe[0]");
       def is_watt: (.address == "hcloud_volume_attachment.inngest_backstop_wipe" or .address == "hcloud_volume_attachment.inngest_backstop_wipe[0]");
       def cat:
@@ -132,6 +147,13 @@ inngest_backstop_retire_gate() {
           elif $c == "att_del" or $c == "watt_del"       then bvol
           elif $c == "watt_create"                       then (if avol_unknown then null else avol end)
           else "n/a" end;
+      # a wipe address that is not (physically) the wipe host: wrong or missing name, or the id of the live host
+      def wid_bad:
+        (cat) as $c
+        | if   $c == "wsrv_del"    then (bname != $wname or bid == null or bid == $lives)
+          elif $c == "wsrv_create" then (aname != $wname)
+          elif $c == "watt_del"    then (bsrv == null or bsrv == $lives)
+          else false end;
       $p[0] as $plan
       | ($plan.resource_changes // []) as $rc
       | rng as $r
@@ -139,13 +161,14 @@ inngest_backstop_retire_gate() {
       | {
           live_volume_touched: ([ $posl[] | select((nrm | IN(live_addr[])) or refs_live) ] | length),
           inngest_server_touched: ([ $posl[] | select(nrm == "hcloud_server.inngest") ] | length),
-          named_live_touched: ([ $posl[] | select($mode == "targeted") | select(nrm | IN(named_live[])) ] | length),
+          named_live_touched: ([ $posl[] | select(nrm | IN(named_live[])) ] | length),
           unknown_verb: ([ $rc[] | select(acts | any(. as $v | (vocab | index($v)) == null)) ] | length),
           id_pin_absent: (if $expected == "" then 1 else 0 end),
           pin_not_retired: (if $expected != "" and $expected != $retired then 1 else 0 end),
           id_mismatch: (if $expected == "" then 0 else
               [ $posl[] | select(cat != null) | phys | select(. != null and . != "n/a" and . != $expected) ] | length end),
           id_unverifiable: ([ $posl[] | select(cat != null) | phys | select(. == null) ] | length),
+          wipe_server_identity: ([ $posl[] | select(wid_bad) ] | length),
           inngest_server_absent: (if $mode == "untargeted" then
               (if ([ $rc[] | select(.address == "hcloud_server.inngest") | select(only(["no-op"])) ] | length) == 1 then 0 else 1 end)
               else 0 end),
@@ -170,6 +193,7 @@ inngest_backstop_retire_gate() {
   pnr=$(echo "$counts" | jq -r '.pin_not_retired')
   idm=$(echo "$counts" | jq -r '.id_mismatch')
   idu=$(echo "$counts" | jq -r '.id_unverifiable')
+  wsi=$(echo "$counts" | jq -r '.wipe_server_identity')
   sab=$(echo "$counts" | jq -r '.inngest_server_absent')
   lpa=$(echo "$counts" | jq -r '.luks_pair_absent')
   ud=$(echo "$counts"  | jq -r '.unauthorized_delete')
@@ -180,13 +204,13 @@ inngest_backstop_retire_gate() {
   # Every counter is a non-negative integer BEFORE any arithmetic compares one.
   plan_gate_assert_numeric "inngest_backstop_retire_gate" \
     "live_volume_touched=${lvt}" "inngest_server_touched=${ist}" "named_live_touched=${nlt}" "unknown_verb=${uvb}" "id_pin_absent=${ipa}" \
-    "pin_not_retired=${pnr}" "id_mismatch=${idm}" "id_unverifiable=${idu}" "inngest_server_absent=${sab}" \
+    "pin_not_retired=${pnr}" "id_mismatch=${idm}" "id_unverifiable=${idu}" "wipe_server_identity=${wsi}" "inngest_server_absent=${sab}" \
     "luks_pair_absent=${lpa}" "unauthorized_delete=${ud}" "out_of_scope=${oos}" "shape_extra=${sex}" "shape_missing=${smi}" || return 1
 
-  echo "phase=${phase} mode=${mode} live_volume_touched=${lvt} inngest_server_touched=${ist} named_live_touched=${nlt} unknown_verb=${uvb} id_pin_absent=${ipa} pin_not_retired=${pnr} id_mismatch=${idm} id_unverifiable=${idu} inngest_server_absent=${sab} luks_pair_absent=${lpa} unauthorized_delete=${ud} out_of_scope=${oos} shape_extra=${sex} shape_missing=${smi}"
+  echo "phase=${phase} mode=${mode} live_volume_touched=${lvt} inngest_server_touched=${ist} named_live_touched=${nlt} unknown_verb=${uvb} id_pin_absent=${ipa} pin_not_retired=${pnr} id_mismatch=${idm} id_unverifiable=${idu} wipe_server_identity=${wsi} inngest_server_absent=${sab} luks_pair_absent=${lpa} unauthorized_delete=${ud} out_of_scope=${oos} shape_extra=${sex} shape_missing=${smi}"
 
   if [[ "$lvt" -eq 0 && "$ist" -eq 0 && "$nlt" -eq 0 && "$uvb" -eq 0 && "$ipa" -eq 0 && "$pnr" -eq 0 && "$idm" -eq 0 && "$idu" -eq 0 \
-     && "$sab" -eq 0 && "$lpa" -eq 0 && "$ud" -eq 0 && "$oos" -eq 0 && "$sex" -eq 0 && "$smi" -eq 0 ]]; then
+     && "$wsi" -eq 0 && "$sab" -eq 0 && "$lpa" -eq 0 && "$ud" -eq 0 && "$oos" -eq 0 && "$sex" -eq 0 && "$smi" -eq 0 ]]; then
     echo "inngest_backstop_retire_gate: PASS — ${phase}/${mode} plan is exactly the authorized set against volume ${expected_id} (hcloud_server.inngest, the LUKS pair and the web-1 set untouched; no reference to the live volume ${_IBRG_LIVE_ID}; no out-of-scope action)"
     return 0
   fi
@@ -199,6 +223,7 @@ inngest_backstop_retire_gate() {
   elif [[ "$pnr" -ne 0 ]]; then reason=pin_not_retired
   elif [[ "$idm" -ne 0 ]]; then reason=id_mismatch
   elif [[ "$idu" -ne 0 ]]; then reason=id_unverifiable
+  elif [[ "$wsi" -ne 0 ]]; then reason=wipe_server_identity
   elif [[ "$sab" -ne 0 ]]; then reason=inngest_server_absent
   elif [[ "$lpa" -ne 0 ]]; then reason=luks_pair_absent
   elif [[ "$ud"  -ne 0 ]]; then reason=unauthorized_delete
@@ -214,21 +239,20 @@ inngest_backstop_retire_gate() {
 # Plan 2.0: the SAME single chokepoint in front of phases detach | wipe | destroy (NOT teardown: a leaked
 # wipe host must always be cleanable, whatever state the live store is in). Pure decision over values the
 # workflow step READ (the I/O stays in the workflow): every input is adversarial, so an empty,
-# null, degraded or malformed value fails closed.
+# null, degraded or malformed value fails closed. The probe row is the proof that the live store is mounted
+# and serving; there is deliberately no in-flight-run count and no second Hetzner read (E-1: the
+# workflow-level concurrency group serializes runs, and the old count was unpinned and fail-open).
 #   --cutover-flag     INNGEST_LUKS_CUTOVER from Doppler soleur-inngest/prd  (must be exactly `done`)
 #   --active-id        INNGEST_LUKS_ACTIVE_VOLUME_ID                         (must be 106903269)
-#   --luks-volume-file body of GET /v1/volumes/106903269
-#   --server-id        id of the live inngest server (GET /v1/servers?name=soleur-inngest)
 #   --probe-file       TSV `dt<TAB>message` of the dedicated-host probe rows (selected by the
 #                      workflow with the shared predicate scripts/lib/inngest-probe-row.sh)
-#   --now              epoch seconds      --inflight-runs  count of OTHER apply runs in flight
+#   --now              epoch seconds
 inngest_backstop_live_store_gate() {
-  local flag="" active="" luks="" probe="" now="" inflight="" server="" a
+  local flag="" active="" probe="" now="" a
   while [[ $# -gt 0 ]]; do
     a="$1"
     case "$a" in
-      --cutover-flag) flag="${2-}" ;; --active-id) active="${2-}" ;; --luks-volume-file) luks="${2-}" ;;
-      --probe-file) probe="${2-}" ;; --now) now="${2-}" ;; --inflight-runs) inflight="${2-}" ;; --server-id) server="${2-}" ;;
+      --cutover-flag) flag="${2-}" ;; --active-id) active="${2-}" ;; --probe-file) probe="${2-}" ;; --now) now="${2-}" ;;
       *) echo "inngest_backstop_live_store_gate: ABORT reason=usage — unknown option ${a}"; return 1 ;;
     esac
     shift 2 2>/dev/null || shift $#
@@ -236,17 +260,6 @@ inngest_backstop_live_store_gate() {
   local _g="inngest_backstop_live_store_gate"
   [[ "$flag" == "done" ]] || { echo "${_g}: ABORT reason=flag_not_done — INNGEST_LUKS_CUTOVER must read exactly 'done' (rollback/armed/copying/unreadable all refuse)"; return 1; }
   [[ "$active" == "$_IBRG_LIVE_ID" ]] || { echo "${_g}: ABORT reason=active_id_mismatch — INNGEST_LUKS_ACTIVE_VOLUME_ID must be ${_IBRG_LIVE_ID}"; return 1; }
-  if [[ -z "$luks" || ! -f "$luks" ]] || ! jq -e '(.volume | type) == "object" and (.volume | has("id")) and (.volume | has("server"))' "$luks" >/dev/null 2>&1; then
-    echo "${_g}: ABORT reason=luks_volume_unreadable — the Hetzner body for the LUKS volume is missing, unparseable or lacks volume.id/volume.server (a degraded 200 is not evidence)"; return 1
-  fi
-  if [[ "$(jq -r '.volume.id | tostring' "$luks")" != "$_IBRG_LIVE_ID" ]]; then
-    echo "${_g}: ABORT reason=luks_identity_mismatch — the volume Hetzner answered is not ${_IBRG_LIVE_ID}"; return 1
-  fi
-  local srv
-  srv="$(jq -r '.volume.server | if (type == "number" or type == "string") then tostring else "" end' "$luks")"
-  if [[ ! "$server" =~ ^[0-9]+$ || "$srv" != "$server" ]]; then
-    echo "${_g}: ABORT reason=luks_not_attached — volume ${_IBRG_LIVE_ID} is not attached to the live server (server id '${server}', attached to '${srv:-none}')"; return 1
-  fi
   # Probe: every non-empty line must be `dt<TAB>message`; the NEWEST decides.
   if [[ -z "$now" || ! "$now" =~ ^[0-9]+$ ]]; then echo "${_g}: ABORT reason=probe_unusable — no clock"; return 1; fi
   if [[ -z "$probe" || ! -f "$probe" ]]; then echo "${_g}: ABORT reason=probe_unusable — probe file missing"; return 1; fi
@@ -274,14 +287,13 @@ inngest_backstop_live_store_gate() {
   done
   [[ "$devid" == "scsi-0HC_Volume_${_IBRG_LIVE_ID}" ]] || { echo "${_g}: ABORT reason=probe_devid_mismatch — the newest probe row's data_mount_devid is '${devid:-absent}', not scsi-0HC_Volume_${_IBRG_LIVE_ID}"; return 1; }
   [[ "$ra" == "active" ]] || { echo "${_g}: ABORT reason=probe_redis_down — redis_active='${ra:-absent}' on the newest probe row"; return 1; }
-  [[ "$inflight" =~ ^[0-9]+$ && "$inflight" -eq 0 ]] || { echo "${_g}: ABORT reason=inflight_apply — another apply run is in flight or unreadable ('${inflight}')"; return 1; }
-  echo "${_g}: PASS — flag done, pointer and probe on ${_IBRG_LIVE_ID}, volume attached to server ${server}, probe ${age}s old with redis active, no other apply in flight"
+  echo "${_g}: PASS — flag done, pointer and probe on ${_IBRG_LIVE_ID}, probe ${age}s old with redis active"
   return 0
 }
 
 # ── inngest_backstop_destroy_precondition ───────────────────────────────────────────
 # Guard 4: evidence-before-destroy. The single chokepoint; the workflow runs it BEFORE any plan.
-#   --erasure ''|wipe|provider-only   --wipe-run-id N
+#   --erasure ''|wipe|provider-only   --wipe-run-id N   --actor LOGIN (the dispatching GITHUB_ACTOR)
 #   --clo-attestation-ref URL   --clo-comment-file F      (provider-only: the comment fetched by id)
 #   --rows-file F (Better Stack JSONEachRow, `raw` double-encoded)   --volume-file F (GET /v1/volumes/106261946)
 #   --actions-file F (GET /v1/volumes/106261946/actions)  --live-server-id ID
@@ -290,18 +302,25 @@ inngest_backstop_live_store_gate() {
 #
 # TRUST. The wipe row is SELF-ATTESTED: the shared Better Stack ingest token lets a holder post any row,
 # so the funnel's nonce/emitter checks make STALE or REPLAYED rows fail, they do not make a forged row
-# impossible. The wipe path therefore ALSO requires Hetzner's own action history (a different party): an
-# attach_volume by a server that is not the live one, finished at or after the wipe run's start, and a
-# later detach_volume. The provider-only path (D4) needs a CLO attestation comment on #8285 from a
-# repository OWNER|MEMBER|COLLABORATOR that names the volume; it evidences NO overwrite.
+# impossible. The wipe path therefore ALSO requires Hetzner's own action history (a party the ingest token
+# does not reach): an attach_volume to a server that is not the live one, finished at or after
+# max(the wipe run's start, the latest attach of the volume to the live server), no attach to the live
+# server after it, and a later detach_volume; and the matched wiped row's INGEST time (Better Stack's
+# top-level dt, never the sender-supplied dt inside raw) must fall between that attach and that detach
+# (300 s slack each side). That corroborates that a host held the volume while a row was posted; it
+# does NOT prove the overwrite happened, and a holder of the ingest token can still post a row inside a
+# real attach..detach window. Erasure remains self-attested. The provider-only path (D4) is a TWO-PERSON
+# rule: a CLO attestation comment on #8285 whose first line is exactly
+# `CLO-ATTESTATION erasure=provider-only volume=106261946`, unedited, by a human OWNER|MEMBER whose
+# login differs from the dispatching actor; it evidences NO overwrite.
 inngest_backstop_destroy_precondition() {
-  local erasure="" run="" clo="" clofile="" rows="" vol="" acts="" livesrv="" after="" now="" a
+  local erasure="" run="" clo="" clofile="" rows="" vol="" acts="" livesrv="" after="" now="" actor="" a
   while [[ $# -gt 0 ]]; do
     a="$1"
     case "$a" in
       --erasure) erasure="${2-}" ;; --wipe-run-id) run="${2-}" ;; --clo-attestation-ref) clo="${2-}" ;; --clo-comment-file) clofile="${2-}" ;;
       --rows-file) rows="${2-}" ;; --volume-file) vol="${2-}" ;; --actions-file) acts="${2-}" ;; --live-server-id) livesrv="${2-}" ;;
-      --after-epoch) after="${2-}" ;; --now) now="${2-}" ;;
+      --after-epoch) after="${2-}" ;; --now) now="${2-}" ;; --actor) actor="${2-}" ;;
       *) echo "inngest_backstop_destroy_precondition: ABORT reason=usage — unknown option ${a}"; return 1 ;;
     esac
     shift 2 2>/dev/null || shift $#
@@ -321,10 +340,20 @@ inngest_backstop_destroy_precondition() {
     if [[ -z "$clofile" || ! -f "$clofile" ]] || ! jq -e --arg id "$cid" '(.id | tostring) == $id and (.issue_url | type == "string" and endswith("/issues/8285")) and (.author_association | type == "string") and (.body | type == "string")' "$clofile" >/dev/null 2>&1; then
       echo "${_g}: ABORT reason=clo_comment_unreadable — the GitHub API did not return comment ${cid} on #8285 (missing, not JSON, another comment or another issue)"; return 1
     fi
-    jq -e '.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")' "$clofile" >/dev/null 2>&1 \
-      || { echo "${_g}: ABORT reason=clo_author_not_privileged — the attestation comment's author_association is not OWNER|MEMBER|COLLABORATOR"; return 1; }
     jq -e --arg v "$_IBRG_RETIRED_ID" '.body | test("(^|[^0-9])" + $v + "([^0-9]|$)")' "$clofile" >/dev/null 2>&1 \
       || { echo "${_g}: ABORT reason=clo_body_missing_volume — the attestation comment does not name volume ${_IBRG_RETIRED_ID}"; return 1; }
+    # First line EXACTLY the marker (a CR before the newline is the web editor's line ending, not content).
+    jq -e --arg m "CLO-ATTESTATION erasure=provider-only volume=${_IBRG_RETIRED_ID}" '(.body | split("\n")[0] | sub("\r$"; "")) == $m' "$clofile" >/dev/null 2>&1 \
+      || { echo "${_g}: ABORT reason=clo_marker_missing — the attestation comment's first line is not exactly 'CLO-ATTESTATION erasure=provider-only volume=${_IBRG_RETIRED_ID}'"; return 1; }
+    jq -e '(.created_at | type == "string" and length > 0) and .created_at == .updated_at' "$clofile" >/dev/null 2>&1 \
+      || { echo "${_g}: ABORT reason=clo_comment_edited — the attestation comment was edited after it was posted (created_at != updated_at)"; return 1; }
+    jq -e '(.user | type == "object") and .user.type == "User"' "$clofile" >/dev/null 2>&1 \
+      || { echo "${_g}: ABORT reason=clo_author_not_human — the attestation comment's author is not a User account (a bot or app cannot attest)"; return 1; }
+    jq -e '.author_association | IN("OWNER", "MEMBER")' "$clofile" >/dev/null 2>&1 \
+      || { echo "${_g}: ABORT reason=clo_author_not_privileged — the attestation comment's author_association is not OWNER|MEMBER"; return 1; }
+    if [[ -z "$actor" ]] || ! jq -e --arg actor "$actor" '(.user.login | type == "string" and length > 0) and ((.user.login | ascii_downcase) != ($actor | ascii_downcase))' "$clofile" >/dev/null 2>&1; then
+      echo "${_g}: ABORT reason=clo_same_actor — the attestation must come from a login different from the dispatching actor '${actor:-unknown}' (two-person rule)"; return 1
+    fi
   else
     [[ -z "$clo" ]] || { echo "${_g}: ABORT reason=ambiguous_inputs — clo_attestation_ref requires erasure=provider-only"; return 1; }
     [[ "$run" =~ ^[0-9]+$ ]] || { echo "${_g}: ABORT reason=run_id_invalid — wipe_run_id must be the numeric id of the wipe dispatch"; return 1; }
@@ -338,35 +367,43 @@ inngest_backstop_destroy_precondition() {
     echo "${_g}: ABORT reason=still_attached — volume ${_IBRG_RETIRED_ID} still has an attachment (no live attachment may exist)"; return 1
   fi
   if [[ "$path" == provider ]]; then
-    echo "${_g}: PASS — D4 provider-only erasure: volume detached; CLO attestation comment ${cid} is from a privileged author and names the volume (NO overwrite is evidenced; the record must say provider delete only)"
+    echo "${_g}: PASS — D4 provider-only erasure: volume detached; CLO attestation comment ${cid} is a two-person attestation (marker, unedited, human OWNER|MEMBER, not the dispatcher) naming the volume (NO overwrite is evidenced; the record must say provider delete only)"
     return 0
-  fi
-  local size_bytes ev hres
-  size_bytes=$(( $(jq -r '.volume.size' "$vol") * 1073741824 ))
-  if ! ev="$(inngest_backstop_wipe_evidence_gate --rows-file "$rows" --nonce "$run" --volume-id "$_IBRG_RETIRED_ID" \
-        --size-bytes "$size_bytes" --after-epoch "$after" --now "$now")"; then
-    echo "$ev"; return 1
   fi
   # Corroboration by a party the ingest token does not reach: Hetzner's own action history for the volume.
   if [[ ! "$livesrv" =~ ^[0-9]+$ ]]; then echo "${_g}: ABORT reason=live_server_unreadable — the live inngest server id is unreadable ('${livesrv}')"; return 1; fi
+  if [[ ! "$after" =~ ^[0-9]+$ ]]; then echo "${_g}: ABORT reason=evidence_stale — the time floor (the wipe run's start) is unreadable"; return 1; fi
   if [[ -z "$acts" || ! -f "$acts" ]] || ! jq -e '(.actions | type) == "array"' "$acts" >/dev/null 2>&1; then
     echo "${_g}: ABORT reason=actions_unreadable — the Hetzner action history for volume ${_IBRG_RETIRED_ID} is missing or has no actions array"; return 1
   fi
+  local hres hk af df
   hres="$(jq -r --argjson after "$after" --arg live "$livesrv" '
       def ep: (try ((tostring | .[:19]) | strptime("%Y-%m-%dT%H:%M:%S") | mktime) catch null);
       def srv: [(.resources // [])[] | select(.type == "server") | .id | select(. != null) | tostring];
       [ .actions[] | select(.status == "success") | {c: .command, f: (.finished | ep), s: srv} | select(.f != null) ] as $ok
-      | [ $ok[] | select(.c == "attach_volume" and .f >= $after and (.s | any(. != $live))) ] as $att
-      | if ($att | length) == 0 then "no_wipe_attach"
-        elif ([ $ok[] | select(.c == "detach_volume" and .f >= ($att | map(.f) | min)) ] | length) == 0 then "no_wipe_detach"
-        else "ok" end' "$acts" 2>/dev/null)" || hres=""
-  case "$hres" in
-    ok) ;;
+      | ([ $ok[] | select(.c == "attach_volume" and (.s | any(. == $live))) | .f ] | max) as $ln
+      | [ $ok[] | select(.c == "attach_volume" and .f >= $after and (.s | any(. != $live))) ] as $a0
+      | [ $a0[] | select(.f >= ($ln // 0)) ] as $att
+      | if ($a0 | length) == 0 then "no_wipe_attach"
+        elif ($att | length) == 0 then "live_reattached"
+        else ($att | map(.f) | min) as $af
+          | [ $ok[] | select(.c == "detach_volume" and .f >= $af) | .f ] as $dts
+          | if ($dts | length) == 0 then "no_wipe_detach" else "ok \($af) \($dts | min)" end end' "$acts" 2>/dev/null)" || hres=""
+  read -r hk af df <<<"$hres"
+  case "$hk" in
+    ok) [[ "$af" =~ ^[0-9]+$ && "$df" =~ ^[0-9]+$ ]] || { echo "${_g}: ABORT reason=actions_unreadable — the Hetzner action history could not be evaluated"; return 1; } ;;
     no_wipe_attach) echo "${_g}: ABORT reason=no_wipe_attach — Hetzner records no successful attach_volume of ${_IBRG_RETIRED_ID} to a server other than ${livesrv} since the wipe run started (a wipe row without it is unsupported)"; return 1 ;;
+    live_reattached) echo "${_g}: ABORT reason=live_reattached — Hetzner records an attach of ${_IBRG_RETIRED_ID} to the LIVE server ${livesrv} after every non-live attach since the wipe run started"; return 1 ;;
     no_wipe_detach) echo "${_g}: ABORT reason=no_wipe_detach — Hetzner records an attach but no successful detach_volume after it"; return 1 ;;
     *) echo "${_g}: ABORT reason=actions_unreadable — the Hetzner action history could not be evaluated"; return 1 ;;
   esac
-  echo "${_g}: PASS — ${ev#*PASS — }; Hetzner records the wipe host's attach and a later detach; volume detached"
+  local size_bytes ev
+  size_bytes=$(( $(jq -r '.volume.size' "$vol") * 1073741824 ))
+  if ! ev="$(inngest_backstop_wipe_evidence_gate --rows-file "$rows" --nonce "$run" --volume-id "$_IBRG_RETIRED_ID" \
+        --size-bytes "$size_bytes" --after-epoch "$after" --now "$now" --attach-epoch "$af" --detach-epoch "$df")"; then
+    echo "$ev"; return 1
+  fi
+  echo "${_g}: PASS — ${ev#*PASS — }; Hetzner records an attach and a later detach of the volume by a non-live server; this corroborates that a host held the volume, not that the overwrite happened; erasure remains self-attested; volume detached"
   return 0
 }
 
@@ -376,13 +413,17 @@ inngest_backstop_destroy_precondition() {
 # so every criterion has its OWN reason: marker (anchored at the message start, a row that merely
 # QUOTES the marker is not evidence) -> emitter (the host and shipper the wipe host's payload carries)
 # -> nonce == the wipe dispatch's run id -> result=wiped readback=zero sig_after=none -> volume_id and
-# size_bytes == Hetzner's -> timestamp not before the floor and not in the future. ANY row surviving
-# every filter counts: a later `refused` row does not hide it, and neither does a `prior=blank` re-entry
-# row (a re-run that found the device already blank is itself a `wiped` row and qualifies as evidence).
-# Key=value tokens are FIRST-wins. The emitter and nonce checks make STALE or REPLAYED rows fail; the row
-# is still SELF-ATTESTED (a holder of the shared ingest token could forge one), which is why the destroy
-# precondition also requires Hetzner's action history. Guest-side logical erasure, not physical.
+# size_bytes == Hetzner's -> ingest time not before the floor and not in the future -> (destroy only)
+# ingest time inside the Hetzner attach..detach window. ANY row surviving every filter counts: a later
+# `refused` row does not hide it, and neither does a `prior=blank` re-entry row (a re-run that found the
+# device already blank is itself a `wiped` row and qualifies as evidence).
+# THE ROW TIME is Better Stack's own top-level `dt` column (ingest time). The `dt` inside `raw` is
+# written by the sender and is never read. Key=value tokens are FIRST-wins. The emitter and nonce checks
+# make STALE or REPLAYED rows fail; the row is still SELF-ATTESTED (a holder of the shared ingest token
+# could forge one), which is why the destroy precondition also requires Hetzner's action history.
+# Guest-side logical erasure, not physical.
 #   --rows-file F --nonce N --volume-id ID --size-bytes B --after-epoch E --now EPOCH
+#   [--attach-epoch A --detach-epoch D]   (both or neither; the row must lie in [A-300, D+300])
 _IBRG_WIPE_HOST="soleur-inngest-backstop-wipe"
 _IBRG_WIPE_SHIPPER="inngest-backstop-wipe"
 # shellcheck disable=SC2016  # jq program text, not shell
@@ -394,26 +435,31 @@ _IBRG_WIPE_JQ_DEFS='
     | (if (.raw | type) == "string" then (.raw | fromjson? // {}) else {} end) as $r
     | ((try ($r.message) catch null) // (try $o.message catch null)) as $m
     | select(($m | type) == "string" and ($m | startswith("SOLEUR_INNGEST_BACKSTOP_WIPE ")))
-    | {e: ($o | epoch), f: ($m | toks), m: $m, h: (try $r.host catch null), sh: (try $r.shipper catch null)};
+    | {e: ($o | epoch), f: ($m | toks), m: $m, h: (try $r.host catch null), sh: (try $r.shipper catch null), o: $o};
 '
 inngest_backstop_wipe_evidence_gate() {
-  local rows="" run="" vid="" size_bytes="" after="" now="" a
+  local rows="" run="" vid="" size_bytes="" after="" now="" att="" det="" a
   while [[ $# -gt 0 ]]; do
     a="$1"
     case "$a" in
       --rows-file) rows="${2-}" ;; --nonce) run="${2-}" ;; --volume-id) vid="${2-}" ;; --size-bytes) size_bytes="${2-}" ;;
-      --after-epoch) after="${2-}" ;; --now) now="${2-}" ;;
+      --after-epoch) after="${2-}" ;; --now) now="${2-}" ;; --attach-epoch) att="${2-}" ;; --detach-epoch) det="${2-}" ;;
       *) echo "inngest_backstop_wipe_evidence_gate: ABORT reason=usage — unknown option ${a}"; return 1 ;;
     esac
     shift 2 2>/dev/null || shift $#
   done
-  local _g="inngest_backstop_wipe_evidence_gate"
+  local _g="inngest_backstop_wipe_evidence_gate" win=0
   [[ "$run" =~ ^[0-9]+$ ]] || { echo "${_g}: ABORT reason=run_id_invalid — nonce must be the numeric id of the wipe dispatch"; return 1; }
   [[ "$vid" == "$_IBRG_RETIRED_ID" && "$size_bytes" =~ ^[1-9][0-9]*$ ]] || { echo "${_g}: ABORT reason=volume_mismatch — volume id/size to match are unreadable or not the retired volume"; return 1; }
   [[ "$after" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ ]] || { echo "${_g}: ABORT reason=evidence_stale — the time floor or the clock is unreadable"; return 1; }
+  if [[ -n "${att}${det}" ]]; then
+    [[ "$att" =~ ^[0-9]+$ && "$det" =~ ^[0-9]+$ ]] || { echo "${_g}: ABORT reason=window_invalid — the attach/detach window must carry both epochs"; return 1; }
+    win=1
+  fi
   if [[ -z "$rows" || ! -f "$rows" ]]; then echo "${_g}: ABORT reason=rows_unreadable — the evidence rows were not read"; return 1; fi
   local stages
   if ! stages="$(jq -R -s -r --arg run "$run" --arg vid "$_IBRG_RETIRED_ID" --arg sz "$size_bytes" --argjson after "$after" --argjson now "$now" \
+      --argjson win "$win" --argjson att "${att:-0}" --argjson det "${det:-0}" \
       --arg eh "$_IBRG_WIPE_HOST" --arg es "$_IBRG_WIPE_SHIPPER" "${_IBRG_WIPE_JQ_DEFS}"'
       objs as $objs
       | ($objs | length) as $decoded
@@ -423,43 +469,59 @@ inngest_backstop_wipe_evidence_gate() {
       | ($s1 | map(select(.f.result == "wiped" and .f.readback == "zero" and .f.sig_after == "none"))) as $s2
       | ($s2 | map(select(.f.volume_id == $vid and .f.size_bytes == $sz))) as $s3
       | ($s3 | map(select(.e != null and .e >= $after and .e <= ($now + 300)))) as $s4
-      | "\($decoded) \($s0 | length) \($se | length) \($s1 | length) \($s2 | length) \($s3 | length) \($s4 | length)"
+      | ($s4 | map(select($win == 0 or (.e >= ($att - 300) and .e <= ($det + 300))))) as $s5
+      | "\($decoded) \($s0 | length) \($se | length) \($s1 | length) \($s2 | length) \($s3 | length) \($s4 | length) \($s5 | length)"
     ' "$rows" 2>/dev/null)"; then
     echo "${_g}: ABORT reason=rows_unreadable — the evidence rows could not be decoded"; return 1
   fi
-  local d s0 se s1 s2 s3 s4
-  read -r d s0 se s1 s2 s3 s4 <<<"$stages"
-  if [[ ! "${d}${s0}${se}${s1}${s2}${s3}${s4}" =~ ^[0-9]+$ ]]; then echo "${_g}: ABORT reason=rows_unreadable — the evidence funnel did not evaluate"; return 1; fi
+  local d s0 se s1 s2 s3 s4 s5
+  read -r d s0 se s1 s2 s3 s4 s5 <<<"$stages"
+  if [[ ! "${d}${s0}${se}${s1}${s2}${s3}${s4}${s5}" =~ ^[0-9]+$ ]]; then echo "${_g}: ABORT reason=rows_unreadable — the evidence funnel did not evaluate"; return 1; fi
   if [[ "$d" -eq 0 && -s "$rows" ]]; then echo "${_g}: ABORT reason=rows_unreadable — the evidence file has content but nothing decodes as a row"; return 1; fi
   if   [[ "$s0" -eq 0 ]]; then echo "${_g}: ABORT reason=evidence_absent — no SOLEUR_INNGEST_BACKSTOP_WIPE row ($d decoded line(s))"; return 1
-  elif [[ "$se" -eq 0 ]]; then echo "${_g}: ABORT reason=emitter_mismatch — $s0 wipe row(s), none posted by host ${_IBRG_WIPE_HOST} / shipper ${_IBRG_WIPE_SHIPPER}"; return 1
+  elif [[ "$se" -eq 0 ]]; then
+    # the FIRST marker row's observed host/shipper, printable ASCII only and cut to 80 chars each
+    echo "${_g}: ABORT reason=emitter_mismatch — $s0 wipe row(s), none posted by host ${_IBRG_WIPE_HOST} / shipper ${_IBRG_WIPE_SHIPPER}; observed $(jq -R -s -r "${_IBRG_WIPE_JQ_DEFS}"'def sx: tostring | gsub("[^ -~]"; " ") | .[:80]; [objs[] | wrow][0] | "host=\(.h | sx) shipper=\(.sh | sx)"' "$rows" 2>/dev/null)"; return 1
   elif [[ "$s1" -eq 0 ]]; then echo "${_g}: ABORT reason=nonce_mismatch — $se wipe row(s) from the wipe host, none carrying nonce=${run}"; return 1
   elif [[ "$s2" -eq 0 ]]; then echo "${_g}: ABORT reason=not_wiped — no row for nonce ${run} says result=wiped readback=zero sig_after=none"; return 1
   elif [[ "$s3" -eq 0 ]]; then echo "${_g}: ABORT reason=volume_mismatch — no wiped row matches volume_id=${_IBRG_RETIRED_ID} and size_bytes=${size_bytes} (Hetzner)"; return 1
   elif [[ "$s4" -eq 0 ]]; then echo "${_g}: ABORT reason=evidence_stale — the wiped row is older than the wipe run's start or dated in the future"; return 1
+  elif [[ "$s5" -eq 0 ]]; then echo "${_g}: ABORT reason=row_outside_attach_window — no wiped row was ingested between Hetzner's attach and detach of the volume by a non-live server (300 s slack)"; return 1
   fi
-  echo "${_g}: PASS — wiped row bound to nonce ${run}: readback=zero sig_after=none volume_id=${vid} size_bytes=${size_bytes}, after the floor"
+  echo "${_g}: PASS — wiped row bound to nonce ${run}: readback=zero sig_after=none volume_id=${vid} size_bytes=${size_bytes}, after the floor$([[ "$win" -eq 1 ]] && echo ", inside the Hetzner attach..detach window")"
   return 0
 }
 
 # ── inngest_backstop_wipe_nonce_rows ────────────────────────────────────────────────
-# The poll's diagnostic read: prints the `message` of every wipe-marker row bearing --nonce, one per
-# line, and nothing else, so a `result=refused reason=<guard>` row can end the poll at once and a timeout
-# can name what the host DID say. It is not evidence (no emitter/result/size check): only the verdict
-# above is.
-#   --rows-file F --nonce N
+# The poll's diagnostic read. Default: prints the `message` of every wipe-marker row bearing --nonce from the
+# PINNED emitter (host + shipper), one per line, so a `result=refused reason=<guard>` row can end the poll at
+# once, a row from another emitter cannot, and a timeout can name what the host DID say. With --raw it prints
+# the ORIGINAL JSON line of every wipe-marker row bearing --nonce from ANY emitter, which the poll feeds to the
+# evidence funnel so an emitter mismatch is diagnosed rather than waited out. Neither is evidence by itself:
+# only the funnel's verdict is.
+#   --rows-file F --nonce N [--raw]
 inngest_backstop_wipe_nonce_rows() {
-  local rows="" run="" a
+  local rows="" run="" raw=0 a
   while [[ $# -gt 0 ]]; do
     a="$1"
     case "$a" in
       --rows-file) rows="${2-}" ;; --nonce) run="${2-}" ;;
+      --raw) raw=1; shift; continue ;;
       *) echo "inngest_backstop_wipe_nonce_rows: ABORT reason=usage — unknown option ${a}"; return 1 ;;
     esac
     shift 2 2>/dev/null || shift $#
   done
   [[ "$run" =~ ^[0-9]+$ ]] || { echo "inngest_backstop_wipe_nonce_rows: ABORT reason=run_id_invalid — nonce must be numeric"; return 1; }
   if [[ -z "$rows" || ! -f "$rows" ]]; then echo "inngest_backstop_wipe_nonce_rows: ABORT reason=rows_unreadable — the rows were not read"; return 1; fi
-  jq -R -s -r --arg run "$run" "${_IBRG_WIPE_JQ_DEFS}"'objs[] | wrow | select(.f.nonce == $run) | .m' "$rows" 2>/dev/null \
+  jq -R -s -r --arg run "$run" --argjson raw "$raw" --arg eh "$_IBRG_WIPE_HOST" --arg es "$_IBRG_WIPE_SHIPPER" "${_IBRG_WIPE_JQ_DEFS}"'
+      objs[] | wrow | select(.f.nonce == $run) | if $raw == 1 then (.o | tojson) else select(.h == $eh and .sh == $es) | .m end' "$rows" 2>/dev/null \
     || { echo "inngest_backstop_wipe_nonce_rows: ABORT reason=rows_unreadable — the rows could not be decoded"; return 1; }
+}
+
+# ── inngest_backstop_clean ──────────────────────────────────────────────────────────
+# stdin -> stdout, for every Better Stack-derived string the workflow prints to the run log: non-printable
+# bytes (ESC, CR, NUL, high bytes) become spaces, leading whitespace/colons are stripped from every line (so
+# no line can open a `::command::`, whatever precedes it), and the result is cut to [max-bytes] (default 600).
+inngest_backstop_clean() {
+  LC_ALL=C tr -c '[:print:]\n' ' ' | LC_ALL=C sed -E 's/^[[:space:]:]+//' | head -c "${1:-600}"
 }

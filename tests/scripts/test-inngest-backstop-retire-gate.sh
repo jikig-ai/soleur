@@ -2,12 +2,13 @@
 # Tests for tests/scripts/lib/inngest-backstop-retire-gate.sh (sourced by the inngest_backstop_retire
 # job in .github/workflows/apply-web-platform-infra.yml, #8285).
 #
-# FIVE FUNCTIONS ARE GRADED, each the SAME bytes the workflow sources:
+# FIVE GATE FUNCTIONS AND ONE OUTPUT HELPER ARE GRADED, each the SAME bytes the workflow sources:
 #   inngest_backstop_retire_gate        plan SHAPE per phase (Guard 2) -- detach | wipe | teardown | destroy
 #   inngest_backstop_live_store_gate    the live-store chokepoint in front of phases detach | wipe | destroy (plan 2.0)
-#   inngest_backstop_destroy_precondition   evidence-before-destroy (Guard 4), incl. the D4 alternative
+#   inngest_backstop_destroy_precondition   evidence-before-destroy (Guard 4), incl. the D4 two-person alternative
 #   inngest_backstop_wipe_evidence_gate     the evidence funnel (the wipe poll and Guard 4 share it)
 #   inngest_backstop_wipe_nonce_rows        the poll's refusal short-circuit (rows bearing the nonce)
+#   inngest_backstop_clean                  the sanitizer every Better Stack-derived log string passes
 # The workflow's run: bodies are graded too, from PyYAML-extracted text (the WIRING section at the end).
 #
 # WRITTEN FROM THE PLAN'S MUTATION MATRIX BEFORE THE LIB EXISTED (task 1.3: the Guard 2 rows first,
@@ -30,6 +31,7 @@ source "$GATE"
 
 passes=0
 fails=0
+mp=0   # must-PASS arms that actually EXECUTED and passed (a count of executed runs, never of source text)
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; [[ -n "${2:-}" ]] && echo "      rc=$2" >&2; [[ -n "${3:-}" ]] && echo "      out=$3" >&2; return 0; }
 
@@ -66,8 +68,9 @@ ATT_DEL="$(ent 'hcloud_volume_attachment.inngest_redis' '["delete"]' "{\"id\":\"
 VOL_DEL="$(ent 'hcloud_volume.inngest_redis' '["delete"]' "{\"id\":\"${PIN}\",\"name\":\"soleur-inngest-redis-store\"}" null)"
 WSRV_CREATE="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["create"]' null '{"name":"soleur-inngest-backstop-wipe"}')"
 WATT_CREATE="$(ent 'hcloud_volume_attachment.inngest_backstop_wipe[0]' '["create"]' null "{\"volume_id\":${PIN},\"automount\":false}")"
-WSRV_DEL="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["delete"]' '{"id":"777"}' null)"
-WATT_DEL="$(ent 'hcloud_volume_attachment.inngest_backstop_wipe[0]' '["delete"]' "{\"id\":\"778\",\"volume_id\":${PIN}}" null)"
+WIPE_NAME="soleur-inngest-backstop-wipe"
+WSRV_DEL="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["delete"]' "{\"id\":\"777\",\"name\":\"${WIPE_NAME}\"}" null)"
+WATT_DEL="$(ent 'hcloud_volume_attachment.inngest_backstop_wipe[0]' '["delete"]' "{\"id\":\"778\",\"volume_id\":${PIN},\"server_id\":777}" null)"
 
 SRV_NOOP="$(ent 'hcloud_server.inngest' '["no-op"]' "{\"id\":\"${SRVID}\"}" "{\"id\":\"${SRVID}\"}")"
 LVOL_NOOP="$(ent 'hcloud_volume.inngest_redis_luks' '["no-op"]' "{\"id\":\"${LIVEV}\"}" "{\"id\":\"${LIVEV}\"}")"
@@ -84,7 +87,7 @@ LIVE_SET="${SRV_NOOP},${LVOL_NOOP},${LATT_NOOP},${PW_NOOP},${KEY_NOOP},${W1V_NOO
 chk() {
   local name="$1" want="$2" needle="$3" phase="$4" pin="$5" mode="$6" out rc=0
   out="$(inngest_backstop_retire_gate "$TMP/plan.json" "$phase" "$pin" "$mode" 2>&1)" || rc=$?
-  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]]; then pass; else fail "$name (want rc=$want containing '$needle')" "$rc" "$out"; fi
+  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]]; then pass; [[ "$want" -eq 0 ]] && mp=$((mp + 1)); else fail "$name (want rc=$want containing '$needle')" "$rc" "$out"; fi
 }
 PASS_TOK="inngest_backstop_retire_gate: PASS"
 # A refusing live-store / precondition / evidence call prints EXACTLY ONE line. A guard neutered into an echo
@@ -124,7 +127,7 @@ write_plan "${DATA_READ},${LIVE_SET},$(ent 'doppler_secret.other' '["no-op"]'),$
 chk "H1: destroy, reordered with extra no-op and read entries" 0 "$PASS_TOK" destroy "$PIN" untargeted
 write_plan "$(ent 'hcloud_volume.inngest_redis' '["delete"]' "{\"id\":${PIN}}" null)"
 chk "H2: a NUMERIC before.id equal to the pin" 0 "$PASS_TOK" destroy "$PIN" targeted
-write_plan "$(ent 'hcloud_server.inngest_backstop_wipe' '["create"]' null),$(ent 'hcloud_volume_attachment.inngest_backstop_wipe' '["create"]' null "{\"volume_id\":\"${PIN}\"}")"
+write_plan "$(ent 'hcloud_server.inngest_backstop_wipe' '["create"]' null "{\"name\":\"${WIPE_NAME}\"}"),$(ent 'hcloud_volume_attachment.inngest_backstop_wipe' '["create"]' null "{\"volume_id\":\"${PIN}\"}")"
 chk "H3: unindexed wipe addresses and a STRING volume_id" 0 "$PASS_TOK" wipe "$PIN" targeted
 
 # ── Matrix row 1: a delete of the LIVE LUKS volume during destroy ──
@@ -275,7 +278,13 @@ chk "Row 10b: the SAME unrelated drift in the TARGETED plan is still refused => 
 write_plan "${VOL_DEL},${LIVE_SET},$(ent 'hcloud_volume_attachment.unrelated' '["update"]' "{\"volume_id\":${LIVEV}}" '{}')"
 chk "Row 10c: unrelated entry that carries the LIVE volume id is never ignored, even untargeted => live_volume_touched" 1 "reason=live_volume_touched" destroy "$PIN" untargeted
 write_plan "${VOL_DEL},${LIVE_SET},$(ent 'hcloud_server.web["web-1"]' '["update"]')"
-chk "Row 10d: untargeted ignores other resources' updates (the web-1 set is graded by the TARGETED gate and the post-apply loop)" 0 "$PASS_TOK" destroy "$PIN" untargeted
+chk "Row 10d (E-4): the untargeted plan counts the web-1 server like the targeted one => named_live_touched" 1 "reason=named_live_touched" destroy "$PIN" untargeted
+for nl in 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'random_password.inngest_redis_luks' 'doppler_secret.inngest_redis_luks_key'; do
+  write_plan "${VOL_DEL},${LIVE_SET},$(ent "$nl" '["update"]')"
+  chk "Row 10d (E-4): untargeted, ${nl} updated => named_live_touched" 1 "reason=named_live_touched" destroy "$PIN" untargeted
+done
+write_plan "${VOL_DEL},${LIVE_SET},$(ent 'hcloud_server.web["web-2"]' '["update"]'),$(ent 'doppler_secret.other_key' '["update"]')"
+chk "Row 10d (E-4 control): untargeted still ignores OTHER resources (web-2, an unrelated secret) => PASS" 0 "$PASS_TOK" destroy "$PIN" untargeted
 write_plan "${VOL_DEL},${LIVE_SET},$(ent 'hcloud_server.inngest' '["update"]' "{\"id\":\"${SRVID}\"}" '{}')"
 chk "Row 10e: untargeted plan that updates the host => inngest_server_touched (never ignored)" 1 "reason=inngest_server_touched" destroy "$PIN" untargeted
 write_plan "${VOL_DEL},${LIVE_SET},${WSRV_CREATE}"
@@ -298,6 +307,43 @@ write_plan "${VOL_DEL},${LIVE_SET},$(ent 'hcloud_firewall.other' '["import"]' '{
 chk "Row 11c: an unknown verb on an UNRELATED address is still refused when untargeted" 1 "reason=unknown_verb" destroy "$PIN" untargeted
 write_plan "${VOL_DEL},${LIVE_SET},${DATA_READ},$(ent 'hcloud_firewall.other' '["no-op"]' '{}' '{}')"
 chk "Row 11d: every verb of the vocabulary (no-op, read, delete) is accepted => PASS" 0 "$PASS_TOK" destroy "$PIN" untargeted
+
+
+# ── Matrix row 12 (E-4): the wipe addresses are graded on what they ARE (name, physical id), not on the address ──
+LIVE_SRV_ID="169426216"
+WSRV_DEL_N="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["delete"]' '{"id":"777","name":"soleur-inngest-backstop"}' null)"
+WSRV_DEL_LIVE="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["delete"]' "{\"id\":\"${LIVE_SRV_ID}\",\"name\":\"${WIPE_NAME}\"}" null)"
+WSRV_DEL_NUM="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["delete"]' "{\"id\":${LIVE_SRV_ID},\"name\":\"${WIPE_NAME}\"}" null)"
+WSRV_DEL_NOID="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["delete"]' "{\"name\":\"${WIPE_NAME}\"}" null)"
+WSRV_DEL_NONAME="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["delete"]' '{"id":"777"}' null)"
+WSRV_CREATE_N="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["create"]' null '{"name":"soleur-inngest"}')"
+WSRV_CREATE_NONAME="$(ent 'hcloud_server.inngest_backstop_wipe[0]' '["create"]' null)"
+WATT_DEL_LIVE="$(ent 'hcloud_volume_attachment.inngest_backstop_wipe[0]' '["delete"]' "{\"id\":\"778\",\"volume_id\":${PIN},\"server_id\":${LIVE_SRV_ID}}" null)"
+WATT_DEL_NOSRV="$(ent 'hcloud_volume_attachment.inngest_backstop_wipe[0]' '["delete"]' "{\"id\":\"778\",\"volume_id\":${PIN}}" null)"
+write_plan "${WSRV_DEL_N},${WATT_DEL}"
+chk "Row 12a: teardown, the server to delete is not named soleur-inngest-backstop-wipe => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" targeted
+write_plan "${WSRV_DEL_LIVE},${WATT_DEL}"
+chk "Row 12b: teardown, the 'wipe' server's physical id is the LIVE inngest server (string id) => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" targeted
+write_plan "${WSRV_DEL_NUM},${WATT_DEL}"
+chk "Row 12b2: ... the same with a NUMERIC id => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" targeted
+write_plan "${WSRV_DEL_NOID}"
+chk "Row 12c: teardown, the server delete carries no physical id => wipe_server_identity (fail closed)" 1 "reason=wipe_server_identity" teardown "$PIN" targeted
+write_plan "${WSRV_DEL_NONAME}"
+chk "Row 12d: teardown, the server delete carries no name => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" targeted
+write_plan "${WSRV_DEL},${WATT_DEL_LIVE}"
+chk "Row 12e: teardown, the attachment to delete is bound to the LIVE server => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" targeted
+write_plan "${WATT_DEL_NOSRV}"
+chk "Row 12f: teardown, the attachment delete carries no server_id => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" targeted
+write_plan "${WSRV_CREATE_N},${WATT_CREATE}"
+chk "Row 12g: wipe, the server to CREATE is named soleur-inngest (the live host) => wipe_server_identity" 1 "reason=wipe_server_identity" wipe "$PIN" targeted
+write_plan "${WSRV_CREATE_NONAME},${WATT_CREATE}"
+chk "Row 12h: wipe, the server create carries no name => wipe_server_identity" 1 "reason=wipe_server_identity" wipe "$PIN" targeted
+write_plan "${WSRV_DEL_N},${WATT_DEL},${VOL_DEL},${LIVE_SET}"
+chk "Row 12i: the same name mismatch is refused in the UNTARGETED teardown plan too => wipe_server_identity" 1 "reason=wipe_server_identity" teardown "$PIN" untargeted
+write_plan "${WSRV_CREATE},${WATT_CREATE}"
+chk "Row 12j (control): wipe/targeted with the real name => PASS" 0 "$PASS_TOK" wipe "$PIN" targeted
+write_plan "${WSRV_DEL},${WATT_DEL}"
+chk "Row 12k (control): teardown/targeted with the real name, a non-live id and a non-live attachment server => PASS" 0 "$PASS_TOK" teardown "$PIN" targeted
 
 # ── Shape rows: each phase needs its own set ──
 write_plan ""
@@ -375,6 +421,18 @@ write_plan "${VOL_DEL},$(ent 'hcloud_server.inngest' '["move"]' "{\"id\":\"${SRV
 mut "MUT unknown_verb" "$(ZERO uvb)" destroy "$PIN" targeted
 write_plan "${VOL_DEL},${ATT_DEL}"
 mut "MUT unauthorized_delete" "$(ZERO ud)" destroy "$PIN" targeted
+write_plan "${WSRV_DEL_N},${WATT_DEL}"
+mut "MUT wipe_server_identity (the counter itself)" "$(ZERO wsi)" teardown "$PIN" targeted
+write_plan "${WSRV_DEL_LIVE},${WATT_DEL}"
+mut "MUT wipe_server_identity: the server-id comparison dropped" 's/(bname != \$wname or bid == null or bid == \$lives)/(bname != $wname or bid == null)/' teardown "$PIN" targeted
+write_plan "${WSRV_DEL_N},${WATT_DEL}"
+mut "MUT wipe_server_identity: the server-name comparison dropped" 's/(bname != \$wname or bid == null or bid == \$lives)/(bid == null or bid == $lives)/' teardown "$PIN" targeted
+write_plan "${WSRV_DEL},${WATT_DEL_LIVE}"
+mut "MUT wipe_server_identity: the attachment's server comparison dropped" 's/(bsrv == null or bsrv == \$lives)/(bsrv == null)/' teardown "$PIN" targeted
+write_plan "${WSRV_CREATE_N},${WATT_CREATE}"
+mut "MUT wipe_server_identity: the create's name comparison dropped" 's/(aname != \$wname)/false/' wipe "$PIN" targeted
+write_plan "${VOL_DEL},${LIVE_SET},$(ent 'hcloud_server.web["web-1"]' '["update"]')"
+mut "MUT named_live_touched (untargeted, E-4)" "$(ZERO nlt)" destroy "$PIN" untargeted
 write_plan "${VOL_DEL},$(ent 'hcloud_volume.git_data' '["create"]' null)"
 mut "MUT out_of_scope" "$(ZERO oos)" destroy "$PIN" targeted
 write_plan "${VOL_DEL},${LVOL_NOOP},${LATT_NOOP}"
@@ -391,29 +449,25 @@ mut "MUT shape_extra" "$(ZERO sex)" destroy "$PIN" targeted
 # ══ LIVE-STORE GATE (plan 2.0) -- the chokepoint in front of EVERY phase ══════════
 NOW_EPOCH="$(date -u -d '2026-10-13T12:00:00Z' +%s)"
 FIX="$TMP/fx"; mkdir -p "$FIX"
-LUKS_OK="$FIX/luks.json"
-printf '{"volume":{"id":%s,"name":"soleur-inngest-redis-store-luks","server":%s,"size":10}}\n' "$LIVEV" "$SRVID" > "$LUKS_OK"
 probe_row() { # <iso dt> <devid> <redis_active> -> TSV row as the workflow's selection emits it
   printf '%s\tSOLEUR_INNGEST_SERVER_PROBE host_role=dedicated data_mount_src=/dev/mapper/inngest-redis data_mount_devid=%s redis_active=%s redis_keys=3\n' "$1" "$2" "$3"
 }
 PROBE_OK="$FIX/probe.tsv"
 probe_row '2026-10-13 11:10:00' "scsi-0HC_Volume_${LIVEV}" active > "$PROBE_OK"
 
-lsg() { # <name> <want_rc> <needle> [overrides: flag= active= luks= probe= inflight= server=]
+lsg() { # <name> <want_rc> <needle> [overrides: flag= active= probe=]   (LSG_FN: the function under test; a seam for the reject-controls)
   local name="$1" want="$2" needle="$3"; shift 3
-  local flag="done" active="$LIVEV" luks="$LUKS_OK" probe="$PROBE_OK" inflight=0 server="$SRVID" kv out rc=0
+  local flag="done" active="$LIVEV" probe="$PROBE_OK" kv out rc=0
   for kv in "$@"; do
     case "$kv" in
-      flag=*) flag="${kv#flag=}" ;; active=*) active="${kv#active=}" ;; luks=*) luks="${kv#luks=}" ;;
-      probe=*) probe="${kv#probe=}" ;; inflight=*) inflight="${kv#inflight=}" ;; server=*) server="${kv#server=}" ;;
+      flag=*) flag="${kv#flag=}" ;; active=*) active="${kv#active=}" ;; probe=*) probe="${kv#probe=}" ;;
     esac
   done
-  out="$(inngest_backstop_live_store_gate --cutover-flag "$flag" --active-id "$active" --luks-volume-file "$luks" \
-    --probe-file "$probe" --now "$NOW_EPOCH" --inflight-runs "$inflight" --server-id "$server" 2>&1)" || rc=$?
-  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]] && { [[ "$want" -eq 0 ]] || one_line "$out"; }; then pass; else fail "$name (want rc=$want containing '$needle', one line)" "$rc" "$out"; fi
+  out="$("${LSG_FN:-inngest_backstop_live_store_gate}" --cutover-flag "$flag" --active-id "$active" --probe-file "$probe" --now "$NOW_EPOCH" 2>&1)" || rc=$?
+  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]] && { [[ "$want" -eq 0 ]] || one_line "$out"; }; then pass; [[ "$want" -eq 0 ]] && mp=$((mp + 1)); else fail "$name (want rc=$want containing '$needle', one line)" "$rc" "$out"; fi
 }
 LS_PASS="inngest_backstop_live_store_gate: PASS"
-lsg "LS PASS: flag done, pointer on the LUKS volume, attached, fresh probe on it, no run in flight" 0 "$LS_PASS"
+lsg "LS PASS: flag done, pointer on the LUKS volume, fresh probe on it with redis active" 0 "$LS_PASS"
 # Guard 4 row 7 -- the chokepoint guards detach/wipe too, so any non-`done` flag value is refused.
 for v in rollback rolled-back armed copying "" "__UNREADABLE__" "DONE" "done " "done;x"; do
   lsg "LS flag '${v}' => flag_not_done (row 7)" 1 "reason=flag_not_done" "flag=${v}"
@@ -421,18 +475,12 @@ done
 lsg "LS pointer on the RETIRED volume => active_id_mismatch" 1 "reason=active_id_mismatch" "active=${PIN}"
 lsg "LS pointer empty => active_id_mismatch" 1 "reason=active_id_mismatch" "active="
 lsg "LS pointer is a prefix => active_id_mismatch" 1 "reason=active_id_mismatch" "active=10690326"
-# Hetzner reads are ADVERSARIAL: a 200 with a degraded body must fail closed.
-printf 'not json' > "$FIX/l1.json";                              lsg "LS luks body not JSON => luks_volume_unreadable" 1 "reason=luks_volume_unreadable" "luks=$FIX/l1.json"
-printf '{}' > "$FIX/l2.json";                                    lsg "LS luks body {} => luks_volume_unreadable" 1 "reason=luks_volume_unreadable" "luks=$FIX/l2.json"
-printf '{"volume":null}' > "$FIX/l3.json";                       lsg "LS luks volume null => luks_volume_unreadable" 1 "reason=luks_volume_unreadable" "luks=$FIX/l3.json"
-printf '{"volume":{"id":%s}}' "$LIVEV" > "$FIX/l4.json";         lsg "LS luks volume without a server key => luks_volume_unreadable" 1 "reason=luks_volume_unreadable" "luks=$FIX/l4.json"
-printf '{"volume":{"id":%s,"server":null}}' "$LIVEV" > "$FIX/l5.json"; lsg "LS luks volume DETACHED (server null) => luks_not_attached" 1 "reason=luks_not_attached" "luks=$FIX/l5.json"
-printf '{"volume":{"id":%s,"server":999}}' "$LIVEV" > "$FIX/l6.json";   lsg "LS luks volume attached to ANOTHER server => luks_not_attached" 1 "reason=luks_not_attached" "luks=$FIX/l6.json"
-printf '{"volume":{"id":%s,"server":%s}}' "$PIN" "$SRVID" > "$FIX/l7.json"; lsg "LS the volume answered is not the LUKS volume => luks_identity_mismatch" 1 "reason=luks_identity_mismatch" "luks=$FIX/l7.json"
-printf '{"volume":{"id":"%s","server":"%s"}}' "$LIVEV" "$SRVID" > "$FIX/l8.json"; lsg "LS string ids compare equal to the numeric pin => PASS" 0 "$LS_PASS" "luks=$FIX/l8.json"
-lsg "LS luks file missing => luks_volume_unreadable" 1 "reason=luks_volume_unreadable" "luks=$FIX/none.json"
-lsg "LS server id empty => luks_not_attached" 1 "reason=luks_not_attached" "server="
-lsg "LS server id not numeric => luks_not_attached" 1 "reason=luks_not_attached" "server=abc"
+# E-1: the in-flight-run count and the Hetzner LUKS-attached cross-check are GONE from the gate (the workflow
+# group serializes runs; the probe row proves the mount): their options are now unknown options.
+for opt in --inflight-runs --server-id --luks-volume-file; do
+  out="$(inngest_backstop_live_store_gate --cutover-flag done --active-id "$LIVEV" --probe-file "$PROBE_OK" --now "$NOW_EPOCH" "$opt" 0 2>&1)" && rc=0 || rc=$?
+  if [[ "$rc" -eq 1 && "$out" == *"reason=usage"* ]] && one_line "$out"; then pass; else fail "E-1: the removed option ${opt} must now be refused as usage" "$rc" "$out"; fi
+done
 # Probe: freshness and identity.
 probe_row '2026-10-13 08:30:00' "scsi-0HC_Volume_${LIVEV}" active > "$FIX/p1.tsv"; lsg "LS probe 3.5 h old => probe_stale (row 4)" 1 "reason=probe_stale" "probe=$FIX/p1.tsv"
 probe_row '2026-10-13 11:10:00' "scsi-0HC_Volume_${PIN}" active > "$FIX/p2.tsv";  lsg "LS probe on the RETIRED volume => probe_devid_mismatch (row 4)" 1 "reason=probe_devid_mismatch" "probe=$FIX/p2.tsv"
@@ -448,10 +496,6 @@ lsg "LS probe file missing => probe_unusable" 1 "reason=probe_unusable" "probe=$
 lsg "LS newest row off the live volume wins over an older good one => probe_devid_mismatch" 1 "reason=probe_devid_mismatch" "probe=$FIX/p9.tsv"
 { probe_row '2026-10-13 10:10:00' "scsi-0HC_Volume_${PIN}" active; probe_row '2026-10-13 11:10:00' "scsi-0HC_Volume_${LIVEV}" active; } > "$FIX/p10.tsv"
 lsg "LS newest row good, older one bad => PASS (non-canonical order, extra fields)" 0 "$LS_PASS" "probe=$FIX/p10.tsv"
-# In-flight apply.
-lsg "LS another apply in flight => inflight_apply" 1 "reason=inflight_apply" "inflight=1"
-lsg "LS in-flight count unreadable => inflight_apply" 1 "reason=inflight_apply" "inflight=__UNREADABLE__"
-lsg "LS in-flight count empty => inflight_apply" 1 "reason=inflight_apply" "inflight="
 # Injected-clock boundaries (W6): the stale limit is 10800 s (inclusive), the future allowance 300 s (inclusive).
 iso() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S'; }
 probe_row "$(iso $((NOW_EPOCH - 10800)))" "scsi-0HC_Volume_${LIVEV}" active > "$FIX/b1.tsv";  lsg "LS boundary: probe EXACTLY 10800 s old => PASS" 0 "$LS_PASS" "probe=$FIX/b1.tsv"
@@ -502,29 +546,33 @@ ACTS_OK="$FIX/acts-ok.json"; write_acts "$ACTS_OK" "${ACT_DET},${ACT_ATT},${ACT_
 # CLO attestation (D-B): the comment fetched through `gh api repos/<repo>/issues/comments/<id>`.
 CLO_ID=4300000001
 CLO_URL="https://github.com/jikig-ai/soleur/issues/8285#issuecomment-${CLO_ID}"
-clo_file() { # <path> <author_association> <body>  [id] [issue_url]
+CLO_MARK="CLO-ATTESTATION erasure=provider-only volume=${PIN}"
+ACTOR="dispatcher"
+clo_file() { # <path> <author_association> <body> [id] [issue_url] [login] [user.type] [created_at] [updated_at]
   jq -cn --argjson id "${4:-$CLO_ID}" --arg a "$2" --arg b "$3" --arg iu "${5:-https://api.github.com/repos/jikig-ai/soleur/issues/8285}" \
-    '{id: $id, issue_url: $iu, author_association: $a, body: $b}' > "$1"
+    --arg lg "${6-clo-reviewer}" --arg ty "${7-User}" --arg c "${8-2026-10-15T10:00:00Z}" --arg u "${9-2026-10-15T10:00:00Z}" \
+    '{id: $id, issue_url: $iu, author_association: $a, body: $b, user: {login: $lg, type: $ty}, created_at: $c, updated_at: $u}' > "$1"
 }
-CLO_OK="$FIX/clo-ok.json"; clo_file "$CLO_OK" OWNER "CLO attestation: provider-only deletion of volume ${PIN} accepted; no overwrite is evidenced."
+clo_body() { printf '%s\n%s' "$CLO_MARK" "${1:-I attest that provider-only deletion of volume ${PIN} is accepted; no overwrite is evidenced.}"; }
+CLO_OK="$FIX/clo-ok.json"; clo_file "$CLO_OK" OWNER "$(clo_body)"
 
 dp_args() { # [overrides: erasure= run= clo= clofile= rows= vol= acts= livesrv= after= now=] -> DPA (the precondition's argv)
-  local erasure="" run="$NONCE" clo="" clofile="" rows="$EV" vol="$VOL_FILE" acts="$ACTS_OK" livesrv="$LIVE_SRV" after="$AFTER_EPOCH" now="$NOW4" kv
+  local erasure="" run="$NONCE" clo="" clofile="" rows="$EV" vol="$VOL_FILE" acts="$ACTS_OK" livesrv="$LIVE_SRV" after="$AFTER_EPOCH" now="$NOW4" actor="$ACTOR" kv
   for kv in "$@"; do
     case "$kv" in
       erasure=*) erasure="${kv#erasure=}" ;; run=*) run="${kv#run=}" ;; clo=*) clo="${kv#clo=}" ;; clofile=*) clofile="${kv#clofile=}" ;;
       rows=*) rows="${kv#rows=}" ;; vol=*) vol="${kv#vol=}" ;; acts=*) acts="${kv#acts=}" ;; livesrv=*) livesrv="${kv#livesrv=}" ;;
-      after=*) after="${kv#after=}" ;; now=*) now="${kv#now=}" ;;
+      after=*) after="${kv#after=}" ;; now=*) now="${kv#now=}" ;; actor=*) actor="${kv#actor=}" ;;
     esac
   done
   DPA=(--erasure "$erasure" --wipe-run-id "$run" --clo-attestation-ref "$clo" --clo-comment-file "$clofile" --rows-file "$rows" --volume-file "$vol"
-       --actions-file "$acts" --live-server-id "$livesrv" --after-epoch "$after" --now "$now")
+       --actions-file "$acts" --live-server-id "$livesrv" --after-epoch "$after" --now "$now" --actor "$actor")
 }
-dpc() { # <name> <want_rc> <needle> [overrides, see dp_args]
+dpc() { # <name> <want_rc> <needle> [overrides, see dp_args]   (DPC_FN: the function under test; a seam for the reject-controls)
   local name="$1" want="$2" needle="$3" out rc=0; shift 3
   dp_args "$@"
-  out="$(inngest_backstop_destroy_precondition "${DPA[@]}" 2>&1)" || rc=$?
-  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]] && { [[ "$want" -eq 0 ]] || one_line "$out"; }; then pass; else fail "$name (want rc=$want containing '$needle', one line)" "$rc" "$out"; fi
+  out="$("${DPC_FN:-inngest_backstop_destroy_precondition}" "${DPA[@]}" 2>&1)" || rc=$?
+  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]] && { [[ "$want" -eq 0 ]] || one_line "$out"; }; then pass; [[ "$want" -eq 0 ]] && mp=$((mp + 1)); else fail "$name (want rc=$want containing '$needle', one line)" "$rc" "$out"; fi
 }
 DP_PASS="inngest_backstop_destroy_precondition: PASS"
 dpc "G4 PASS: a wiped row bound to this nonce, after the floor, matching id and size" 0 "$DP_PASS"
@@ -559,7 +607,8 @@ dpc "G4 row 3c: volume_id that merely starts with the pin => volume_mismatch" 1 
 # Row 6: nonce / timestamp.
 dpc "G4 row 6a: wipe_run_id differs from the row's nonce => nonce_mismatch" 1 "reason=nonce_mismatch" "run=37900000002"
 dpc "G4 row 6b: wipe_run_id that is a PREFIX of the nonce => nonce_mismatch" 1 "reason=nonce_mismatch" "run=3790000000"
-dpc "G4 row 6c: row older than the detach/run floor => evidence_stale" 1 "reason=evidence_stale" "after=$(date -u -d '2026-10-15T09:30:00Z' +%s)"
+write_acts "$FIX/a-late.json" "$(act detach_volume success 2026-10-15T09:50:00+00:00 "$WIPE_SRV"),$(act attach_volume success 2026-10-15T09:35:00+00:00 "$WIPE_SRV")"
+dpc "G4 row 6c: row older than the run floor => evidence_stale" 1 "reason=evidence_stale" "after=$(date -u -d '2026-10-15T09:30:00Z' +%s)" "acts=$FIX/a-late.json"
 dpc "G4 row 6d: row dated in the future => evidence_stale" 1 "reason=evidence_stale" "now=$(date -u -d '2026-10-15T08:00:00Z' +%s)"
 dpc "G4 row 6e: wipe_run_id empty without D4 inputs => run_id_invalid" 1 "reason=run_id_invalid" "run="
 dpc "G4 row 6f: wipe_run_id not numeric => run_id_invalid" 1 "reason=run_id_invalid" "run=12ab"
@@ -577,14 +626,17 @@ printf '{"volume":{"id":%s,"server":null,"size":20}}' "$PIN" > "$FIX/vol-20.json
 dpc "G4 volume file missing => volume_unreadable" 1 "reason=volume_unreadable" "vol=$FIX/none.json"
 # D4 alternative (D-B): provider-only needs a CLO attestation COMMENT on #8285, never a third way. The ref
 # must be exactly https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>; the comment is
-# fetched through the GitHub API (by id) and must come from OWNER|MEMBER|COLLABORATOR and name the volume.
+# fetched through the GitHub API (by id) and must be a TWO-PERSON attestation (E-2): first line exactly the
+# marker, unedited, by a human OWNER|MEMBER whose login differs from the dispatching actor.
 D4=("erasure=provider-only" "run=" "clo=$CLO_URL" "clofile=$CLO_OK")
 dpc "G4 D4: erasure=provider-only + an attested comment + no wipe run => PASS" 0 "$DP_PASS" "${D4[@]}"
 dpc "G4 D4: PASS needs no Hetzner action history (nothing was wiped)" 0 "$DP_PASS" "${D4[@]}" "acts=$FIX/none.json"
-for assoc in MEMBER COLLABORATOR; do
-  clo_file "$FIX/clo-$assoc.json" "$assoc" "attested: volume ${PIN}"
-  dpc "G4 D4: author_association ${assoc} => PASS" 0 "$DP_PASS" "erasure=provider-only" "run=" "clo=$CLO_URL" "clofile=$FIX/clo-$assoc.json"
-done
+clo_file "$FIX/clo-MEMBER.json" MEMBER "$(clo_body)"
+dpc "G4 D4: author_association MEMBER => PASS" 0 "$DP_PASS" "${D4[@]:0:3}" "clofile=$FIX/clo-MEMBER.json"
+dpc "G4 (E-3d wording): the wipe-path PASS says what it does not prove" 0 "this corroborates that a host held the volume, not that the overwrite happened; erasure remains self-attested"
+clo_file "$FIX/clo-crlf.json" OWNER "${CLO_MARK}"$'\r\n'"second line typed in the GitHub web editor"
+dpc "G4 D4 (E-2a): the web editor's CRLF line ending after the marker is tolerated => PASS" 0 "$DP_PASS" "${D4[@]:0:3}" "clofile=$FIX/clo-crlf.json"
+dpc "G4 D4 (E-2d): a different login (case-insensitively different from the actor) => PASS" 0 "$DP_PASS" "${D4[@]}" "actor=Somebody-Else"
 dpc "G4 D4: provider-only with NO ref => clo_ref_invalid" 1 "reason=clo_ref_invalid" "erasure=provider-only" "run=" "clo=" "clofile=$CLO_OK"
 dpc "G4 D4: provider-only with a non-URL ref => clo_ref_invalid" 1 "reason=clo_ref_invalid" "erasure=provider-only" "run=" "clo=trust-me" "clofile=$CLO_OK"
 dpc "G4 D4: an http (not https) ref => clo_ref_invalid" 1 "reason=clo_ref_invalid" "erasure=provider-only" "run=" "clo=http://github.com/jikig-ai/soleur/issues/8285#issuecomment-${CLO_ID}" "clofile=$CLO_OK"
@@ -604,14 +656,36 @@ clo_file "$FIX/clo-id.json" OWNER "volume ${PIN}" 4300000002
 dpc "G4 D4: the fetched comment is another comment than the ref names => clo_comment_unreadable" 1 "reason=clo_comment_unreadable" "erasure=provider-only" "run=" "clo=$CLO_URL" "clofile=$FIX/clo-id.json"
 clo_file "$FIX/clo-iss.json" OWNER "volume ${PIN}" "$CLO_ID" "https://api.github.com/repos/jikig-ai/soleur/issues/1"
 dpc "G4 D4: the comment belongs to another issue => clo_comment_unreadable" 1 "reason=clo_comment_unreadable" "erasure=provider-only" "run=" "clo=$CLO_URL" "clofile=$FIX/clo-iss.json"
-for assoc in NONE CONTRIBUTOR FIRST_TIME_CONTRIBUTOR FIRST_TIMER MANNEQUIN owner ""; do
-  clo_file "$FIX/clo-a.json" "$assoc" "attested: volume ${PIN}"
+for assoc in COLLABORATOR NONE CONTRIBUTOR FIRST_TIME_CONTRIBUTOR FIRST_TIMER MANNEQUIN owner ""; do
+  clo_file "$FIX/clo-a.json" "$assoc" "$(clo_body)"
   dpc "G4 D4: author_association '${assoc}' => clo_author_not_privileged" 1 "reason=clo_author_not_privileged" "erasure=provider-only" "run=" "clo=$CLO_URL" "clofile=$FIX/clo-a.json"
 done
 clo_file "$FIX/clo-b.json" OWNER "attested, no volume named"
 dpc "G4 D4: the body does not name the volume => clo_body_missing_volume" 1 "reason=clo_body_missing_volume" "erasure=provider-only" "run=" "clo=$CLO_URL" "clofile=$FIX/clo-b.json"
 clo_file "$FIX/clo-c.json" OWNER "volume ${PIN}0 and 1${PIN}"
 dpc "G4 D4: the id only as part of a longer number => clo_body_missing_volume" 1 "reason=clo_body_missing_volume" "erasure=provider-only" "run=" "clo=$CLO_URL" "clofile=$FIX/clo-c.json"
+# E-2: the two-person rule. Each refusal differs from the PASS fixture by ONE field.
+clo_file "$FIX/clo-m1.json" OWNER "attested volume ${PIN}"$'\n'"${CLO_MARK}"
+dpc "G4 D4 (E-2a): the marker only on the SECOND line => clo_marker_missing" 1 "reason=clo_marker_missing" "${D4[@]:0:3}" "clofile=$FIX/clo-m1.json"
+for bad in "${CLO_MARK} " " ${CLO_MARK}" "${CLO_MARK}x" "clo-attestation erasure=provider-only volume=${PIN}" "CLO-ATTESTATION erasure=wipe volume=${PIN}" "CLO-ATTESTATION erasure=provider-only volume=${PIN}0" "CLO-ATTESTATION  erasure=provider-only volume=${PIN}"; do
+  clo_file "$FIX/clo-m2.json" OWNER "${bad}"$'\n'"volume ${PIN}"
+  dpc "G4 D4 (E-2a): first line '${bad}' is not EXACTLY the marker => clo_marker_missing" 1 "reason=clo_marker_missing" "${D4[@]:0:3}" "clofile=$FIX/clo-m2.json"
+done
+clo_file "$FIX/clo-e1.json" OWNER "$(clo_body)" "$CLO_ID" "" clo-reviewer User 2026-10-15T10:00:00Z 2026-10-15T10:00:01Z
+dpc "G4 D4 (E-2b): the comment was edited one second after it was posted => clo_comment_edited" 1 "reason=clo_comment_edited" "${D4[@]:0:3}" "clofile=$FIX/clo-e1.json"
+clo_file "$FIX/clo-e2.json" OWNER "$(clo_body)" "$CLO_ID" "" clo-reviewer User "" ""
+dpc "G4 D4 (E-2b): no created_at/updated_at at all (empty equals empty) => clo_comment_edited" 1 "reason=clo_comment_edited" "${D4[@]:0:3}" "clofile=$FIX/clo-e2.json"
+for ty in Bot Organization Mannequin user ""; do
+  clo_file "$FIX/clo-u.json" OWNER "$(clo_body)" "$CLO_ID" "" clo-reviewer "$ty"
+  dpc "G4 D4 (E-2c): user.type '${ty}' => clo_author_not_human" 1 "reason=clo_author_not_human" "${D4[@]:0:3}" "clofile=$FIX/clo-u.json"
+done
+jq -c 'del(.user)' "$CLO_OK" > "$FIX/clo-nouser.json"
+dpc "G4 D4 (E-2c): no user object at all => clo_author_not_human" 1 "reason=clo_author_not_human" "${D4[@]:0:3}" "clofile=$FIX/clo-nouser.json"
+dpc "G4 D4 (E-2d): the comment's author IS the dispatching actor => clo_same_actor" 1 "reason=clo_same_actor" "${D4[@]}" "actor=clo-reviewer"
+dpc "G4 D4 (E-2d): ... compared case-insensitively => clo_same_actor" 1 "reason=clo_same_actor" "${D4[@]}" "actor=CLO-Reviewer"
+dpc "G4 D4 (E-2d): an empty dispatching actor is refused (fail closed) => clo_same_actor" 1 "reason=clo_same_actor" "${D4[@]}" "actor="
+clo_file "$FIX/clo-nolg.json" OWNER "$(clo_body)" "$CLO_ID" "" "" User
+dpc "G4 D4 (E-2d): the comment carries no login => clo_same_actor" 1 "reason=clo_same_actor" "${D4[@]:0:3}" "clofile=$FIX/clo-nolg.json"
 dpc "G4 D4: provider-only AND a wipe run id => ambiguous_inputs" 1 "reason=ambiguous_inputs" "erasure=provider-only" "run=${NONCE}" "clo=$CLO_URL" "clofile=$CLO_OK"
 dpc "G4 D4: a CLO ref supplied without erasure=provider-only => ambiguous_inputs" 1 "reason=ambiguous_inputs" "clo=$CLO_URL" "clofile=$CLO_OK"
 dpc "G4 D4: an unknown erasure value => erasure_unknown" 1 "reason=erasure_unknown" "erasure=skip"
@@ -642,7 +716,8 @@ dpc "G4 D-A: the only detach finished BEFORE the attach => no_wipe_detach" 1 "re
 write_acts "$FIX/a8.json" "${ACT_ATT},$(act detach_volume error 2026-10-15T09:40:00+00:00 "$WIPE_SRV")"
 dpc "G4 D-A: the later detach did not succeed => no_wipe_detach" 1 "reason=no_wipe_detach" "acts=$FIX/a8.json"
 write_acts "$FIX/a9.json" "${ACT_ATT},$(act detach_volume success 2026-10-15T09:05:00+00:00 "$WIPE_SRV")"
-dpc "G4 D-A: a detach finishing at the same second as the attach counts (>=) => PASS" 0 "$DP_PASS" "acts=$FIX/a9.json"
+ev_row '2026-10-15 09:07:00' "$GOODTAIL" > "$FIX/ev-a9.jsonl"
+dpc "G4 D-A: a detach finishing at the same second as the attach counts (>=) => PASS" 0 "$DP_PASS" "acts=$FIX/a9.json" "rows=$FIX/ev-a9.jsonl"
 dpc "G4 D-A: actions file missing => actions_unreadable" 1 "reason=actions_unreadable" "acts=$FIX/none.json"
 : > "$FIX/a10.json"; dpc "G4 D-A: actions file empty (the read failed) => actions_unreadable" 1 "reason=actions_unreadable" "acts=$FIX/a10.json"
 printf '{}' > "$FIX/a11.json"; dpc "G4 D-A: actions body without an actions array => actions_unreadable" 1 "reason=actions_unreadable" "acts=$FIX/a11.json"
@@ -664,18 +739,53 @@ dpc "G4 D-A: a row with no host/shipper fields at all => emitter_mismatch" 1 "re
 { ev_row_as "attacker-box" "$WIPE_SHIPPER" '2026-10-15 09:21:00' "$GOODTAIL"; ev_row '2026-10-15 09:20:00' "$GOODTAIL"; } > "$FIX/ev-hmix.jsonl"
 dpc "G4 D-A: a forged row does not hide a genuine one (any qualifying row counts) => PASS" 0 "$DP_PASS" "rows=$FIX/ev-hmix.jsonl"
 
+# ── E-3: the corroboration is tightened. (a)+(b) the volume must not go back to the LIVE server after the wipe
+#    host's attach; (c) the matched wiped row's INGEST time (the top-level dt column; the dt inside raw is
+#    sender-supplied and never read) must lie between the attach and the first later detach, 300 s slack each side. ──
+ACT_LIVE_RE="$(act attach_volume success 2026-10-15T09:50:00+00:00 "$LIVE_SRV")"
+write_acts "$FIX/e1.json" "${ACT_LIVE_RE},${ACT_DET},${ACT_ATT},${ACT_LIVE_ATT},${ACT_CREATE}"
+dpc "E-3a/b: the volume was attached to the LIVE server again after the wipe host's attach => live_reattached" 1 "reason=live_reattached" "acts=$FIX/e1.json"
+write_acts "$FIX/e2.json" "$(act attach_volume success 2026-10-15T09:05:00+00:00 "$LIVE_SRV"),${ACT_DET},${ACT_ATT},${ACT_CREATE}"
+dpc "E-3a/b: a live attach finishing in the SAME second as the wipe attach is not 'after' => PASS" 0 "$DP_PASS" "acts=$FIX/e2.json"
+write_acts "$FIX/e3.json" "$(act attach_volume success 2026-10-14T08:00:00+00:00 "$LIVE_SRV"),${ACT_DET},${ACT_ATT},${ACT_CREATE}"
+dpc "E-3a: a live attach from BEFORE the wipe run started does not matter => PASS" 0 "$DP_PASS" "acts=$FIX/e3.json"
+write_acts "$FIX/e4.json" "$(act attach_volume running 2026-10-15T09:50:00+00:00 "$LIVE_SRV"),${ACT_DET},${ACT_ATT},${ACT_CREATE}"
+dpc "E-3a: a live attach that did not succeed is ignored => PASS" 0 "$DP_PASS" "acts=$FIX/e4.json"
+ev_row_dts() { # <top-level (ingest) dt> <dt inside raw (sender-supplied)> <message tail>
+  jq -cn --arg dt "$1" --arg rdt "$2" --arg m "SOLEUR_INNGEST_BACKSTOP_WIPE $3" --arg h "$WIPE_HOST" --arg sh "$WIPE_SHIPPER" \
+    '{dt:$dt, raw: ({message:$m, marker:"SOLEUR_INNGEST_BACKSTOP_WIPE", host:$h, dt:$rdt, shipper:$sh} | tojson)}'
+}
+win_row() { ev_row_dts "$1" "$1" "$GOODTAIL" > "$FIX/ev-win.jsonl"; }
+win_row '2026-10-15 09:00:00'; dpc "E-3c: the row exactly 300 s before the attach (inclusive) => PASS" 0 "$DP_PASS" "rows=$FIX/ev-win.jsonl"
+win_row '2026-10-15 08:59:59'; dpc "E-3c: the row 301 s before the attach => row_outside_attach_window" 1 "reason=row_outside_attach_window" "rows=$FIX/ev-win.jsonl"
+win_row '2026-10-15 09:45:00'; dpc "E-3c: the row exactly 300 s after the detach (inclusive) => PASS" 0 "$DP_PASS" "rows=$FIX/ev-win.jsonl"
+win_row '2026-10-15 09:45:01'; dpc "E-3c: the row 301 s after the detach => row_outside_attach_window" 1 "reason=row_outside_attach_window" "rows=$FIX/ev-win.jsonl"
+win_row '2026-10-15T09:20:00Z'; dpc "E-3c: an ISO T...Z ingest dt inside the window => PASS" 0 "$DP_PASS" "rows=$FIX/ev-win.jsonl"
+ev_row_dts '2026-10-15 09:45:01' '2026-10-15 09:45:01' "$GOODTAIL" > "$FIX/ev-win-late.jsonl"
+ev_row_dts '2026-10-15 08:59:59' '2026-10-15 08:59:59' "$GOODTAIL" > "$FIX/ev-win-early.jsonl"
+ev_row_dts '2026-10-15 07:00:00' '2026-10-15 09:20:00' "$GOODTAIL" > "$FIX/ev-win-a.jsonl"
+dpc "E-3c: the ingest dt is OUTSIDE the window although the sender-supplied dt in raw is inside => row_outside_attach_window" 1 "reason=row_outside_attach_window" "rows=$FIX/ev-win-a.jsonl"
+ev_row_dts '2026-10-15 09:20:00' '2020-01-01 00:00:00' "$GOODTAIL" > "$FIX/ev-win-b.jsonl"
+dpc "E-3c: the ingest dt is inside the window although the dt in raw is years out => PASS (only the ingest column is read)" 0 "$DP_PASS" "rows=$FIX/ev-win-b.jsonl"
+{ ev_row '2026-10-15 07:00:00' "$GOODTAIL"; ev_row '2026-10-15 09:20:00' "$GOODTAIL"; } > "$FIX/ev-win-c.jsonl"
+dpc "E-3c: one qualifying row outside the window and one inside => PASS (any qualifying row counts)" 0 "$DP_PASS" "rows=$FIX/ev-win-c.jsonl"
+ev_row '2026-10-15 09:20:00' "result=wiped nonce=${NONCE} volume_id=${PIN} size_bytes=${SIZE_BYTES} readback=zero sig_after=ext4" > "$FIX/ev-win-d.jsonl"
+dpc "E-3c: the window does not mask an earlier funnel reason (not_wiped is reported first)" 1 "reason=not_wiped" "rows=$FIX/ev-win-d.jsonl"
+out="$(inngest_backstop_wipe_evidence_gate --rows-file "$EV" --nonce "$NONCE" --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$AFTER_EPOCH" --now "$NOW4" --attach-epoch "$(date -u -d '2026-10-15T09:05:00Z' +%s)" 2>&1)" && rc=0 || rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"reason=window_invalid"* ]] && one_line "$out"; then pass; else fail "E-3c: an attach epoch without a detach epoch => window_invalid" "$rc" "$out"; fi
+
 # ── Usage and operand hygiene: an unknown option, a missing clock, direct evidence-gate misuse ──
 for fn in inngest_backstop_live_store_gate inngest_backstop_destroy_precondition inngest_backstop_wipe_evidence_gate; do
   out="$("$fn" --bogus x 2>&1)" && rc=0 || rc=$?
   if [[ "$rc" -eq 1 && "$out" == *"reason=usage"* ]] && one_line "$out"; then pass; else fail "usage: ${fn} must refuse an unknown option" "$rc" "$out"; fi
 done
-out="$(inngest_backstop_live_store_gate --cutover-flag "done" --active-id "$LIVEV" --luks-volume-file "$LUKS_OK" --probe-file "$PROBE_OK" --inflight-runs 0 --server-id "$SRVID" 2>&1)" && rc=0 || rc=$?
+out="$(inngest_backstop_live_store_gate --cutover-flag "done" --active-id "$LIVEV" --probe-file "$PROBE_OK" 2>&1)" && rc=0 || rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"reason=probe_unusable"* ]]; then pass; else fail "LS: a missing --now (no clock) must fail closed" "$rc" "$out"; fi
-out="$(inngest_backstop_live_store_gate --cutover-flag "done" --active-id "$LIVEV" --luks-volume-file "$LUKS_OK" --probe-file "$PROBE_OK" --now abc --inflight-runs 0 --server-id "$SRVID" 2>&1)" && rc=0 || rc=$?
+out="$(inngest_backstop_live_store_gate --cutover-flag "done" --active-id "$LIVEV" --probe-file "$PROBE_OK" --now abc 2>&1)" && rc=0 || rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"reason=probe_unusable"* ]]; then pass; else fail "LS: a non-numeric --now must fail closed" "$rc" "$out"; fi
 evg() { # <name> <want-needle> then evidence-gate args
   local name="$1" needle="$2"; shift 2; local out rc=0
-  out="$(inngest_backstop_wipe_evidence_gate "$@" 2>&1)" || rc=$?
+  out="$("${EVG_FN:-inngest_backstop_wipe_evidence_gate}" "$@" 2>&1)" || rc=$?
   if [[ "$rc" -eq 1 && "$out" == *"$needle"* ]] && one_line "$out"; then pass; else fail "$name (want rc=1 containing '$needle', one line)" "$rc" "$out"; fi
 }
 evg "EV: non-numeric nonce" "reason=run_id_invalid" --rows-file "$EV" --nonce abc --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$AFTER_EPOCH" --now "$NOW4"
@@ -687,8 +797,8 @@ out="$(inngest_backstop_wipe_evidence_gate --rows-file "$EV" --nonce "$NONCE" --
 if [[ "$rc" -eq 0 && "$out" == *"inngest_backstop_wipe_evidence_gate: PASS"* ]]; then pass; else fail "EV (must-PASS): the evidence gate accepts the canonical wiped row directly (the wipe phase's poll form)" "$rc" "$out"; fi
 evok() { # <name> <rows-file> <now> <after>   must-PASS direction of the funnel (boundary rows)
   local name="$1" rf="$2" nw="$3" af="$4" o r=0
-  o="$(inngest_backstop_wipe_evidence_gate --rows-file "$rf" --nonce "$NONCE" --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$af" --now "$nw" 2>&1)" || r=$?
-  if [[ "$r" -eq 0 && "$o" == *"evidence_gate: PASS"* ]]; then pass; else fail "$name" "$r" "$o"; fi
+  o="$("${EVG_FN:-inngest_backstop_wipe_evidence_gate}" --rows-file "$rf" --nonce "$NONCE" --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$af" --now "$nw" 2>&1)" || r=$?
+  if [[ "$r" -eq 0 && "$o" == *"evidence_gate: PASS"* ]]; then pass; mp=$((mp + 1)); else fail "$name" "$r" "$o"; fi
 }
 ROW_EPOCH="$(date -u -d '2026-10-15T09:20:00Z' +%s)"
 evok "EV boundary: now = row - 300 s (the future allowance, inclusive) => PASS" "$EV" $((ROW_EPOCH - 300)) "$AFTER_EPOCH"
@@ -738,67 +848,415 @@ dlay() { # <label> <sed> <own> <fallback> [dp_args overrides]
 }
 dmut "MUT emitter pin: a forged row from another host passes" 's/map(select(\.h == \$eh and \.sh == \$es))/map(select(true))/' "rows=$FIX/ev-h.jsonl"
 dmut "MUT emitter pin (shipper half): a wrong shipper passes" 's/\.h == \$eh and \.sh == \$es/.h == $eh/' "rows=$FIX/ev-sh.jsonl"
-dmut "MUT Hetzner corroboration: a history with no wipe-host attach passes" 's/^  case "\$hres" in/  case "ok" in/' "acts=$FIX/a1.json"
+dmut "MUT Hetzner corroboration: a history with no wipe-host attach passes" 's/^    no_wipe_attach) echo .*; return 1 ;;/    no_wipe_attach) ;;/' "acts=$FIX/a1.json"
 dmut "MUT live-server exclusion: an attach to the LIVE server passes" 's/(\.s | any(\. != \$live))/(.s | any(true))/' "acts=$FIX/a3.json"
 dmut "MUT attach floor: an attach from before the wipe run started passes" 's/\.c == "attach_volume" and \.f >= \$after and/.c == "attach_volume" and/' "acts=$FIX/a2.json"
 dmut "MUT attach status: attaches that did not succeed pass" 's/select(\.status == "success")/select(true)/' "acts=$FIX/a5.json"
-dmut "MUT detach requirement: attached-never-detached passes" 's/ == 0 then "no_wipe_detach"/ == -1 then "no_wipe_detach"/' "acts=$FIX/a6.json"
-dmut "MUT detach ordering: a detach from BEFORE the attach passes" 's/\.c == "detach_volume" and \.f >= (\$att | map(\.f) | min)/.c == "detach_volume"/' "acts=$FIX/a7.json"
-clo_file "$FIX/clo-a.json" NONE "attested: volume ${PIN}"
-dmut "MUT CLO author (NONE fixture): author_association NONE passes" 's/IN("OWNER", "MEMBER", "COLLABORATOR")/IN("OWNER", "MEMBER", "COLLABORATOR", "NONE")/' "${D4[@]:0:3}" "clofile=$FIX/clo-a.json"
-dmut "MUT CLO body: a comment that does not name the volume passes" 's/test("(^|\[^0-9\])" + \$v + "(\[^0-9\]|\$)")/test("")/' "${D4[@]:0:3}" "clofile=$FIX/clo-b.json"
+dlay "MUT detach requirement: attached-never-detached is then caught only by the unparseable-window check" 's/ == 0 then "no_wipe_detach"/ == -1 then "no_wipe_detach"/' "reason=no_wipe_detach" "reason=actions_unreadable" "acts=$FIX/a6.json"
+dlay "MUT detach ordering: a detach from BEFORE the attach is then caught only by the attach..detach window" 's/\.c == "detach_volume" and \.f >= \$af/.c == "detach_volume"/' "reason=no_wipe_detach" "reason=row_outside_attach_window" "acts=$FIX/a7.json"
+dmut "MUT E-3a/b: a re-attach to the LIVE server after the wipe attach passes" 's|select(\.f >= (\$ln // 0))|select(true)|' "acts=$FIX/e1.json"
+dmut "MUT E-3c: the attach..detach window is not applied" 's/\$win == 0 or (\.e >= (\$att - 300) and \.e <= (\$det + 300))/true/' "rows=$FIX/ev-win-a.jsonl"
+dmut "MUT E-3c: the row time is read from the sender-supplied dt inside raw" 's/e: (\$o | epoch)/e: ($r | epoch)/' "rows=$FIX/ev-win-a.jsonl"
+dmut "MUT E-3c: the window's upper bound is dropped" 's/ and \.e <= (\$det + 300)//' "rows=$FIX/ev-win-late.jsonl"
+dmut "MUT E-3c: the window's lower bound is dropped" 's/(\.e >= (\$att - 300) and /(/' "rows=$FIX/ev-win-early.jsonl"
+clo_file "$FIX/clo-a.json" NONE "$(clo_body)"
+dmut "MUT CLO author (NONE fixture): author_association NONE passes" 's/IN("OWNER", "MEMBER")/IN("OWNER", "MEMBER", "NONE")/' "${D4[@]:0:3}" "clofile=$FIX/clo-a.json"
+dlay "MUT CLO body: a comment that does not name the volume is then refused only by the marker" 's/test("(^|\[^0-9\])" + \$v + "(\[^0-9\]|\$)")/test("")/' "reason=clo_body_missing_volume" "reason=clo_marker_missing" "${D4[@]:0:3}" "clofile=$FIX/clo-b.json"
+dmut "MUT E-2a: the marker line is not required" '/reason=clo_marker_missing/s/return 1; }/:; }/' "${D4[@]:0:3}" "clofile=$FIX/clo-m1.json"
+dmut "MUT E-2b: an edited comment is accepted" '/reason=clo_comment_edited/s/return 1; }/:; }/' "${D4[@]:0:3}" "clofile=$FIX/clo-e1.json"
+clo_file "$FIX/clo-bot.json" OWNER "$(clo_body)" "$CLO_ID" "" clo-reviewer Bot
+dmut "MUT E-2c: a Bot author is accepted" '/reason=clo_author_not_human/s/return 1; }/:; }/' "${D4[@]:0:3}" "clofile=$FIX/clo-bot.json"
+dmut "MUT E-2d: the comment's author may be the dispatching actor" '/reason=clo_same_actor/s/return 1$/:/' "${D4[@]}" "actor=clo-reviewer"
+dmut "MUT E-2d: the actor comparison is case-sensitive" 's/(\.user\.login | ascii_downcase) != (\$actor | ascii_downcase)/.user.login != $actor/' "${D4[@]}" "actor=CLO-Reviewer"
 dlay "MUT CLO ref pattern: an arbitrary host is then refused only by the comment-id binding" 's|^    if \[\[ ! "\$clo" =~ .*|    if false; then|' "reason=clo_ref_invalid" "reason=clo_comment_unreadable" "${D4[@]:0:3}" "clo=https://example.test/x" "clofile=$CLO_OK"
 
-# ── REJECT-CONTROLS for the verdict helpers lsg / dpc / evg (W5): drive each in a direction that MUST
-#    fail (a good call asserted to refuse, a refusing call asserted to pass, a wrong reason) and require
-#    exactly one recorded failure, then unwind. Reported with printf + exit, never through the helper
-#    it back-stops: a helper that cannot fail would otherwise make every row in this file decorative. ──
-reject_control() { # <label> <helper> <args...>
-  local label="$1" p0=$passes f0=$fails; shift
-  "$@" >/dev/null 2>&1
-  if [[ "$fails" -ne $((f0 + 1)) || "$passes" -ne "$p0" ]]; then
-    printf 'FATAL: reject-control "%s": the helper did not fail exactly once on a must-fail arm (passes %s->%s, fails %s->%s)\n' "$label" "$p0" "$passes" "$f0" "$fails" >&2
-    exit 2
-  fi
-  passes=$p0; fails=$f0; pass
-}
-reject_control "lsg: a good call asserted as a refusal" lsg "x" 1 "reason=flag_not_done"
-reject_control "lsg: a refusing call asserted as a PASS" lsg "x" 0 "$LS_PASS" "flag=rollback"
-reject_control "lsg: a refusing call asserted with the wrong reason" lsg "x" 1 "reason=probe_stale" "flag=rollback"
-reject_control "dpc: a good call asserted as a refusal" dpc "x" 1 "reason=not_wiped"
-reject_control "dpc: a refusing call asserted as a PASS" dpc "x" 0 "$DP_PASS" "run=12ab"
-reject_control "dpc: a refusing call asserted with the wrong reason" dpc "x" 1 "reason=still_attached" "run=12ab"
-reject_control "evg: a good call asserted as a refusal" evg "x" "reason=not_wiped" --rows-file "$EV" --nonce "$NONCE" --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$AFTER_EPOCH" --now "$NOW4"
-reject_control "evg: a refusing call asserted with the wrong reason" evg "x" "reason=not_wiped" --rows-file "$EV" --nonce abc --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$AFTER_EPOCH" --now "$NOW4"
-reject_control "evok: a refusing call asserted as a PASS" evok "x" "$EV" "$NOW4" $((ROW_EPOCH + 1))
+# the always-pass stub-lib meta-run (the meta-run) stops HERE when SOLEUR_IBRG_META is set: everything above is graded by the lib under test, everything below is helper-only (its reject-controls would FATAL against a stub that passes everything)
+if [[ -n "${SOLEUR_IBRG_META:-}" ]]; then
+  printf 'inngest-backstop-retire-gate: %s passed, %s failed\n' "$passes" "$fails"
+  [[ "$fails" -eq 0 ]]; exit $?
+fi
 
 # ── Row 5 / ordering and wiring, asserted against the workflow text ────────────────
 WF="${REPO_ROOT}/.github/workflows/apply-web-platform-infra.yml"
-wf_py() { python3 -I - "$WF" 2>&1; }
-WF_FACTS="$(wf_py <<'PY'
-import sys, yaml, json
-wf = yaml.safe_load(open(sys.argv[1]))
-job = wf["jobs"].get("inngest_backstop_retire")
-out = {"job": bool(job)}
-if job:
+# W2-14: the 489 KB workflow is parsed ONCE (CSafeLoader when libyaml exists, else the pure-Python SafeLoader), by the
+# extractor below; it writes the facts, one file per step `run:` (byte for byte, no escape processing) and the pin
+# results. Every later row reads those files; nothing re-parses the YAML.
+XD="$TMP/xd"; mkdir -p "$XD"
+assert_fixture_dir "$XD"
+EXTRACT_PY="$TMP/wf-extract.py"
+cat > "$EXTRACT_PY" <<'EXTRACTPY'
+import sys, re, json, os
+import yaml
+
+def load(text):
+    return yaml.load(text, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+
+# ---- the exact `if:` of EVERY step of the job, in order (label = name, or the pinned action for an unnamed step)
+IF_TABLE = [
+    ("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5", None),
+    ("hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85", None),
+    ("Load infra credentials (tiered)", None),
+    ("Validate inputs (typo-guards, NOT the authorization)", None),
+    ("Assert the inngest-cutover reviewer set is NON-EMPTY (layer 1 is the authorization)", None),
+    ("Live-store gate (plan 2.0, in front of detach, wipe and destroy; NOT teardown)", "env.RETIRE_PHASE != 'teardown'"),
+    ("Prepare terraform (ephemeral ssh key, R2 backend credentials, init)", None),
+    ("Convergence read (idempotent per phase; Hetzner first)", None),
+    ("Destroy precondition (Guard 4, before any plan)", "env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'"),
+    ("Read-only untargeted plan (host and LUKS pair must be present no-ops)", "steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'"),
+    ("Terraform plan (phase) + plan-shape gate + stock preflight", "steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'"),
+    ("Terraform apply (phase)", "steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'"),
+    ("Wipe evidence (bounded poll for this run's nonce)", "env.RETIRE_PHASE == 'wipe' && steps.conv.outputs.skip != 'true'"),
+    ("Teardown of the wipe host (if always; also phase=teardown)", "always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true' && (env.RETIRE_PHASE == 'wipe' || env.RETIRE_PHASE == 'teardown')"),
+    ("Read-back (hard exit criterion for the phase)", "always() && steps.conv.outcome == 'success' && (steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')"),
+    ("Progress comment on #8285 (success or failure)", "always()"),
+    ("Dispatch summary", "always()"),
+]
+JOB_KEYS = {"if", "runs-on", "timeout-minutes", "environment", "concurrency", "permissions", "env", "steps"}
+SHORT = {"Live-store gate": "LIVE", "Convergence read": "CONV", "Destroy precondition": "PRE", "Read-only untargeted plan": "UNT",
+         "Terraform plan (phase)": "PLAN", "Terraform apply (phase)": "APPLY", "Wipe evidence": "POLL", "Teardown of the wipe host": "TEAR",
+         "Read-back": "RB", "Progress comment": "PROG", "Dispatch summary": "SUM"}
+# which of the gated steps RUN, per phase and per skip flag, when every earlier step succeeded (conv succeeded)
+ALWAYS = {"PROG", "SUM"}
+EXPECT_OK = {
+    ("detach", "false"): {"LIVE", "CONV", "UNT", "PLAN", "APPLY", "RB"} | ALWAYS,
+    ("detach", "true"): {"LIVE", "CONV"} | ALWAYS,
+    ("wipe", "false"): {"LIVE", "CONV", "UNT", "PLAN", "APPLY", "POLL", "TEAR", "RB"} | ALWAYS,
+    ("wipe", "true"): {"LIVE", "CONV"} | ALWAYS,
+    ("teardown", "false"): {"CONV", "TEAR", "RB"} | ALWAYS,
+    ("teardown", "true"): {"CONV"} | ALWAYS,
+    ("destroy", "false"): {"LIVE", "CONV", "PRE", "UNT", "PLAN", "APPLY", "RB"} | ALWAYS,
+    ("destroy", "true"): {"LIVE", "CONV", "RB"} | ALWAYS,
+}
+# after ANY failed earlier step only the always() steps may run
+EXPECT_FAIL = {
+    ("detach", "false"): {"RB"} | ALWAYS, ("detach", "true"): ALWAYS,
+    ("wipe", "false"): {"TEAR", "RB"} | ALWAYS, ("wipe", "true"): ALWAYS,
+    ("teardown", "false"): {"TEAR", "RB"} | ALWAYS, ("teardown", "true"): ALWAYS,
+    ("destroy", "false"): {"RB"} | ALWAYS, ("destroy", "true"): {"RB"} | ALWAYS,
+}
+
+def eval_if(expr, phase, skip, conv, prev_ok):
+    """Evaluate a step `if:` the way Actions does for the tiny grammar this job uses."""
+    if expr is None:
+        return prev_ok
+    e = expr
+    if not re.fullmatch(r"[\w\s'=!()&|.]+", e):
+        raise ValueError("unsupported if grammar: " + expr)
+    always = "always()" in e
+    e = e.replace("&&", " and ").replace("||", " or ").replace("always()", "True")
+    e = e.replace("env.RETIRE_PHASE", repr(phase)).replace("steps.conv.outputs.skip", repr(skip)).replace("steps.conv.outcome", repr(conv))
+    val = bool(eval(e, {"__builtins__": {}}, {}))
+    return val if always else (prev_ok and val)
+
+def matrix(job):
+    bad = []
     steps = job["steps"]
-    names = [s.get("name", "") for s in steps]
-    out["names"] = names
-    out["env"] = job.get("environment")
-    out["conc"] = job.get("concurrency")
-    out["if"] = job.get("if")
-    out["wfconc"] = wf.get("concurrency")
-    out["perm"] = job.get("permissions")
-    out["bodies"] = {s.get("name", ""): s.get("run", "") for s in steps}
-    out["ifs"] = {s.get("name", ""): s.get("if", "") for s in steps}
-    out["uses"] = [s.get("uses", "") for s in steps]
-    out["opts"] = wf[True]["workflow_dispatch"]["inputs"]["apply_target"]["options"] if True in wf else wf["on"]["workflow_dispatch"]["inputs"]["apply_target"]["options"]
-    inp = wf[True]["workflow_dispatch"]["inputs"] if True in wf else wf["on"]["workflow_dispatch"]["inputs"]
-    out["inputs"] = sorted(inp.keys())
-out["old_job_present"] = "inngest_volume_recut" in wf["jobs"]
-print(json.dumps(out))
-PY
-)"
+    for (phase, skip), want in EXPECT_OK.items():
+        for ok, table in ((True, EXPECT_OK), (False, EXPECT_FAIL)):
+            want = table[(phase, skip)]
+            got = set()
+            for s in steps:
+                nm = s.get("name", "")
+                k = next((v for f, v in SHORT.items() if f in nm), None)
+                if k is None:
+                    continue
+                if k == "CONV" and not ok:
+                    continue
+                conv = "success"
+                if eval_if(s.get("if"), phase, skip, conv, ok):
+                    got.add(k)
+            if got != want:
+                bad.append("%s/skip=%s/%s: got %s want %s" % (phase, skip, "ok" if ok else "failed", sorted(got), sorted(want)))
+    return bad
+
+def pins(wf):
+    """Return the ids of every pin that FAILS for this parsed workflow."""
+    bad = []
+    def pin(pid, ok):
+        if not ok:
+            bad.append(pid)
+    job = wf["jobs"]["inngest_backstop_retire"]
+    steps = job["steps"]
+    def find(frag):
+        m = [s for s in steps if frag in s.get("name", "")]
+        return m[0] if len(m) == 1 else {"name": frag, "run": "", "_missing": True}
+    def lines(step):
+        out = []
+        for l in str(step.get("run", "")).split("\n"):
+            t = l.strip()
+            if t and not t.startswith("#"):
+                out.append(t)
+        return out
+    live, conv, pre = find("Live-store gate"), find("Convergence read"), find("Destroy precondition")
+    unt, plan, apply_, poll = find("Read-only untargeted plan"), find("Terraform plan (phase)"), find("Terraform apply (phase)"), find("Wipe evidence")
+    tear, back, valid = find("Teardown of the wipe host"), find("Read-back"), find("Validate inputs")
+    prog = find("Progress comment")
+    for s in (live, conv, pre, unt, plan, apply_, poll, tear, back, valid, prog):
+        pin("steps_present", not s.get("_missing"))
+    L = {k: lines(v) for k, v in dict(live=live, conv=conv, pre=pre, unt=unt, plan=plan, apply_=apply_, poll=poll, tear=tear, back=back, valid=valid, prog=prog).items()}
+    # --- the exact `if:` table for ALL steps, the job-level key allow-list, and the run matrix
+    got = [((s.get("name") or s.get("uses")), s.get("if")) for s in steps]
+    pin("if_table", got == IF_TABLE)
+    pin("job_keys", set(job.keys()) <= JOB_KEYS and job.get("runs-on") == "ubuntu-24.04" and job.get("timeout-minutes") == 45
+        and job.get("if") == "github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-backstop-retire'"
+        and set(job.get("env", {}).keys()) == {"RETIRE_PHASE", "EXPECTED_INNGEST_VOLUME_ID", "WIPE_RUN_ID", "RETIRE_ERASURE", "CLO_REF", "GH_TOKEN"})
+    try:
+        mx = matrix(job)
+    except Exception as e:  # an unevaluable `if:` is itself a finding
+        mx = [str(e)]
+    pin("if_matrix", not mx)
+    # --- exact `if:` strings (each one also named so a mutation reports its own pin)
+    pin("if_destroy_precondition", pre.get("if") == "env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'")
+    pin("if_live_store_not_teardown", live.get("if") == "env.RETIRE_PHASE != 'teardown'")
+    pin("if_readback_always", back.get("if") == "always() && steps.conv.outcome == 'success' && (steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')")
+    pin("if_teardown_always", str(tear.get("if", "")).startswith("always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true'"))
+    pin("if_poll_wipe_only", poll.get("if") == "env.RETIRE_PHASE == 'wipe' && steps.conv.outputs.skip != 'true'")
+    pin("if_unt_plan_skip", unt.get("if") == "steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'")
+    pin("if_apply_not_teardown", apply_.get("if") == "steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'")
+    pin("apply_has_id", apply_.get("id") == "apply" and back.get("env", {}).get("APPLY") == "${{ steps.apply.outcome }}")
+    # --- no continue-on-error anywhere except the advisory progress comment
+    for s in steps:
+        if "continue-on-error" in s and "Progress comment" not in s.get("name", ""):
+            pin("no_continue_on_error", False)
+    pin("progress_comment_advisory", prog.get("continue-on-error") is True)
+    # --- every gate call site is a non-suppressing `if !` whose block exits 1 before `fi`
+    sites = [("live", "inngest_backstop_live_store_gate"), ("pre", "inngest_backstop_destroy_precondition"),
+             ("unt", "inngest_backstop_retire_gate"), ("plan", "inngest_backstop_retire_gate"), ("tear", "inngest_backstop_retire_gate")]
+    for key, fn in sites:
+        ls = L[key]
+        idx = [i for i, l in enumerate(ls) if l.startswith("if ! " + fn + " ")]
+        ok = len(idx) == 1
+        if ok:
+            blk = []
+            for l in ls[idx[0]:]:
+                blk.append(l)
+                if l == "fi":
+                    break
+            ok = blk[-1] == "fi" and any(re.search(r"(^|[;\s])exit 1\b", b) for b in blk[1:-1]) and not any("|| true" in b or "exit 0" in b for b in blk)
+        pin("gate_site_exits_%s_%s" % (key, fn), ok)
+    # --- live-store gate (E-1: no in-flight count, no Hetzner read; the probe query error is printed)
+    lv = L["live"]
+    ljoin = " ".join(lv)
+    pin("live_gate_call_exact", 'if ! inngest_backstop_live_store_gate --cutover-flag "$FLAG" --active-id "$ACT" --probe-file "${RUNNER_TEMP}/probe.tsv" --now "$(date -u +%s)"; then' in lv)
+    pin("live_no_inflight_no_hetzner", not any(w in ljoin for w in ("inflight", "in_progress", "--server-id", "--luks-volume-file", "hz ", "hz.sh", "HCLOUD_TOKEN")))
+    pin("live_probe_error_printed", any("probe-row query failed rc=$?" in l and "inngest_backstop_clean" in l for l in lv))
+    # --- the poll
+    pl = L["poll"]
+    pjoin = " ".join(pl)
+    pin("poll_ok_required", any(l.startswith('[[ "$OK" == 1 ]] || {') and "exit 1" in l for l in pl))
+    pin("poll_deadline", 'DEADLINE=$(( $(date -u +%s) + 1200 )); (( DEADLINE <= JOB_START + 1800 )) || DEADLINE=$(( JOB_START + 1800 ))' in pl
+        and 'while (( $(date -u +%s) < DEADLINE )); do' in pl)
+    pin("poll_no_archive_hot_only", any("betterstack-query.sh" in l and "--no-archive" in l and "--since 1h" in l for l in pl))
+    pin("poll_breaks_on_refusal", "grep -qF ' result=refused ' <<<\"$MSGS\" && break" in pl)
+    pin("poll_query_error_printed", any("poll query failed rc=$?" in l for l in pl))
+    pin("poll_gate_inputs", any(l.startswith('if EV="$(inngest_backstop_wipe_evidence_gate ') and '--nonce "$GITHUB_RUN_ID"' in l and '--rows-file "$NR"' in l
+                                and '--after-epoch "$JOB_START"' in l and l.endswith("then OK=1; break; fi") for l in pl))
+    pin("poll_nonce_rows_raw", any(l.startswith("inngest_backstop_wipe_nonce_rows ") and "--raw" in l and '> "$NR"' in l for l in pl))
+    pin("poll_classifies", '[[ "$EV" == *reason=evidence_absent* || "$EV" == *reason=rows_unreadable* || "$EV" == *reason=not_wiped* ]] || break' in pl)
+    pin("poll_output_sanitized", 'inngest_backstop_clean <<<"${MSGS:-none}"' in pjoin and 'inngest_backstop_clean 300 <<<"$EV"' in pjoin
+        and '| inngest_backstop_clean 300)' in pjoin and 'inngest_backstop_clean 60 <<<' in pjoin)
+    pin("poll_partial_zero_text", "PARTIALLY ZEROED" in pjoin and "zero_failed, readback_nonzero, sig_survived" in pjoin and "no started row, so nothing was written" in pjoin)
+    pin("poll_hetzner_codes", "(HTTP ${HV})" in pjoin and "(HTTP ${HW})" in pjoin)
+    # --- convergence
+    cv = L["conv"]
+    pin("conv_wipe_requires_detached", any(l.startswith('[[ "$VS" == null ]] || fail') for l in cv))
+    wi = [i for i, l in enumerate(cv) if l == "wipe)"]; te = [i for i, l in enumerate(cv) if l == "teardown)"]
+    gi = [i for i, l in enumerate(cv) if l.startswith('[[ "$VS" == null ]] || fail')]
+    ni = [i for i, l in enumerate(cv) if l.startswith('[[ "$NWS" == 0 ]] || fail "a wipe host already exists')]
+    pin("conv_wipe_guard_in_wipe_arm", bool(wi and te and gi and wi[0] < gi[0] < te[0]))
+    pin("conv_wipe_host_before_detached", bool(wi and gi and ni and wi[0] < ni[0] < gi[0]))
+    pin("conv_reads_the_pinned_volume", any(l.startswith('VC="$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" ') for l in cv))
+    pin("conv_reconcile_exact_delta", '[[ ( "$DEL" == "$a" || "$DEL" == "$ALLOW" ) && -z "$ADD" ]] || fail "the refresh of ${a} changed state beyond it: dropped=\'${DEL}\' added=\'${ADD}\'"' in cv
+        and any(l.startswith('DEL="$(comm -23 ') and "ADD=\"$(comm -13 " in l for l in cv))
+    pin("conv_gone_queues_volume", '[[ "$VS" == gone ]] && has hcloud_volume.inngest_redis && RM+=(hcloud_volume.inngest_redis)' in cv
+        and any(l.startswith('ALLOW="$a"; [[ "$VS" == gone && "$a" == hcloud_volume_attachment.inngest_redis ]]') for l in cv))
+    pin("conv_detach_reads_live_server", any("hz 'servers?name=soleur-inngest'" in l for l in cv))
+    pin("conv_state_list_in_variable", not any("terraform state list" in l and "|" in l.replace("||", "") for l in cv))
+    pin("conv_orphan_host_message", any(l.startswith('if [[ "$NWS" != 0 ]] && ! has "$WSA"; then') for l in cv))
+    pin("conv_reconcile_targets_literal", all(any(t in l for l in cv) for t in ("T=-target=hcloud_volume_attachment.inngest_redis ", "T=-target=hcloud_volume.inngest_redis ", "T=-target=hcloud_server.inngest_backstop_wipe ", "T=-target=hcloud_volume_attachment.inngest_backstop_wipe ")))
+    pin("conv_destroy_attached_message", any("is still attached (server ${VS})" in l for l in cv))
+    # --- destroy precondition
+    pr = L["pre"]
+    pin("pre_provenance", any(l.startswith("if jq -e '") and '.path == ".github/workflows/apply-web-platform-infra.yml"' in l and '.head_branch == "main"' in l
+                              and '.event == "workflow_dispatch"' in l and '.status == "completed"' in l for l in pr))
+    pin("pre_archive_kept", any("betterstack-query.sh" in l and "--since 14d" in l and "--no-archive" not in l for l in pr))
+    pin("pre_hetzner_actions_read", any('/actions?per_page=50&sort=id%3Adesc"' in l for l in pr))
+    pin("pre_call_inputs", all(any(a in l for l in pr) for a in ("--clo-comment-file", "--actions-file", "--live-server-id", "--after-epoch")))
+    pin("pre_actor_arg", any(l.startswith("if ! inngest_backstop_destroy_precondition ") and '--actor "$GITHUB_ACTOR"' in l for l in pr))
+    pin("pre_clo_strict_pattern", any("https://github\\.com/jikig-ai/soleur/issues/8285#issuecomment-([0-9]+)$" in l for l in pr) and any("issues/comments/${BASH_REMATCH[1]}" in l for l in pr))
+    pin("pre_no_http_code_path", not any("clo-ref-http-code" in l or "%{http_code}" in l for l in pr))
+    pin("pre_query_errors_visible", any(l.startswith("rd() {") and 'answered ${c}' in l for l in pr)
+        and any("Better Stack query failed rc=$?" in l and "inngest_backstop_clean" in l for l in pr)
+        and any("could not be read, or is not a completed workflow_dispatch run" in l for l in pr))
+    # --- plan / apply
+    pp = L["plan"]
+    pin("plan_nonce_is_run_id", any('-var="inngest_backstop_wipe_nonce=${GITHUB_RUN_ID}"' in l and "-var='inngest_backstop_wipe_enabled=true'" in l for l in pp))
+    pin("plan_exact_targets_wipe", any("-target=hcloud_server.inngest_backstop_wipe -target=hcloud_volume_attachment.inngest_backstop_wipe" in l for l in pp))
+    ap = L["apply_"]
+    pin("apply_touched_zero", any(l.startswith('[[ "$TOUCHED" == "0" ]] || {') and "exit 1" in l for l in ap) and any(l.startswith("for ADDR in ") for l in ap)
+        and any('any(. == "create" or . == "update" or . == "delete" or . == "forget")' in l for l in ap))
+    pin("apply_exact_command", 'if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -no-color -input=false tfplan; then' in ap)
+    pin("apply_touched_exact", """TOUCHED=$(jq --arg a "$ADDR" '[.resource_changes[]? | select(.address == $a) | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))] | length' tfplan.json)""" in ap
+        and '[[ "$TOUCHED" == "0" ]] || { echo "::error::${ADDR} shows ${TOUCHED} action(s) in the applied plan; the host and live store must be untouched. Failing hard."; exit 1; }' in ap)
+    # --- teardown
+    td = L["tear"]
+    pin("teardown_detailed_exitcode", any("terraform plan" in l and "-detailed-exitcode" in l for l in td))
+    pin("teardown_rc_zero_is_noop", '[[ $rc -ne 0 ]] || { echo "no wipe host or attachment exists; nothing to tear down."; exit 0; }' in td)
+    pin("teardown_rc_two_only", any(l.startswith("[[ $rc -eq 2 ]] || {") and "exit 1" in l for l in td))
+    pin("teardown_gate_enabled_false", any("-var='inngest_backstop_wipe_enabled=false'" in l for l in td))
+    pin("teardown_apply_exact", '"${D[@]}" terraform apply -no-color -input=false tfplan-td || { echo "::error::teardown apply failed; re-dispatch phase=teardown."; exit 1; }' in td)
+    # --- read-back and progress comment
+    bk = L["back"]
+    pin("rb_destroy_not_applied", any(l.startswith('if [[ "$VC" != 404 && "$APPLY" == skipped ]]; then note "destroy not applied') and l.endswith("exit 0; fi") for l in bk))
+    pg = L["prog"]
+    pin("prog_d4_conditional", any(l.startswith('D4=""; [[ "$RETIRE_PHASE" == detach || ( "$RETIRE_PHASE" == wipe && "$JOB_STATUS" != success ) ]] && D4=') for l in pg)
+        and any('EXP="OVERDUE by ' in l for l in pg))
+    # --- secrets / hygiene
+    v = " ".join(L["valid"])
+    pin("hz_token_on_stdin", "curl -q -K - " in v and "-H " not in v)
+    pin("hz_default_000", '|| true)"; echo "${c:-000}"; }' in v)
+    pin("doppler_token_not_on_argv", any(l.startswith('dget() { DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get') and "--token" not in l for l in lv))
+    ui = [i for i, l in enumerate(lv) if l.startswith("unset INNGEST_PROBE_ROW_JQ ") and "INNGEST_PROBE_ROW_LIB" in l.split()]
+    ai = [i for i, l in enumerate(lv) if l.startswith("_ipr_lib=")]
+    pin("probe_lib_not_overridable", len(ui) == 1 and len(ai) == 1 and ui[0] < ai[0])
+    allbody = "\n".join("\n".join(v2) for v2 in L.values())
+    pin("retired_id_literal_once", sum(1 for l in allbody.split("\n") if "106261946" in l) == 1 and any(l.startswith('[[ "$EXPECTED_INNGEST_VOLUME_ID" == "106261946" ]]') for l in L["valid"]))
+    pin("live_id_literal_absent", "106903269" not in allbody)
+    return bad
+
+def mutations():
+    # (label, old, new, expected pin id)
+    return [
+        ("destroy-precondition if: inverted", "if: env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'", "if: env.RETIRE_PHASE != 'destroy' && steps.conv.outputs.skip != 'true'", "if_destroy_precondition"),
+        ("destroy-precondition if: dropped", "        if: env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'\n", "", "if_destroy_precondition"),
+        ("live-store gate also runs for teardown", "if: env.RETIRE_PHASE != 'teardown'\n        env:\n          BETTERSTACK_QUERY_HOST", "if: always()\n        env:\n          BETTERSTACK_QUERY_HOST", "if_live_store_not_teardown"),
+        ("read-back lost always()", "if: always() && steps.conv.outcome == 'success' && (steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')", "if: steps.conv.outcome == 'success' && (steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')", "if_readback_always"),
+        ("read-back no longer runs on the destroy 404 shortcut", "(steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')", "steps.conv.outputs.skip != 'true'", "if_matrix"),
+        ("untargeted plan runs for teardown again", "      - name: Read-only untargeted plan (host and LUKS pair must be present no-ops)\n        if: steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'", "      - name: Read-only untargeted plan (host and LUKS pair must be present no-ops)\n        if: steps.conv.outputs.skip != 'true'", "if_unt_plan_skip"),
+        ("apply runs for teardown", "      - name: Terraform apply (phase)\n        id: apply\n        if: steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'", "      - name: Terraform apply (phase)\n        id: apply\n        if: steps.conv.outputs.skip != 'true'", "if_apply_not_teardown"),
+        ("teardown lost always()", "if: always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true' && (env.RETIRE_PHASE == 'wipe'", "if: steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true' && (env.RETIRE_PHASE == 'wipe'", "if_teardown_always"),
+        ("poll runs for another phase", "if: env.RETIRE_PHASE == 'wipe' && steps.conv.outputs.skip != 'true'", "if: env.RETIRE_PHASE != 'destroy' && steps.conv.outputs.skip != 'true'", "if_poll_wipe_only"),
+        ("progress comment no longer always()", "      - name: \"Progress comment on #8285 (success or failure)\"\n        if: always()", "      - name: \"Progress comment on #8285 (success or failure)\"\n        if: success()", "if_table"),
+        ("job-level continue-on-error", "    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    environment: inngest-cutover\n", "    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    continue-on-error: true\n    environment: inngest-cutover\n", "job_keys"),
+        ("job-level env gains a key", "      GH_TOKEN: ${{ github.token }}\n    steps:\n      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1\n\n      - uses: hashicorp/setup-terraform", "      GH_TOKEN: ${{ github.token }}\n      EXTRA: x\n    steps:\n      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1\n\n      - uses: hashicorp/setup-terraform", "job_keys"),
+        ("apply step loses its id", "      - name: Terraform apply (phase)\n        id: apply\n", "      - name: Terraform apply (phase)\n", "apply_has_id"),
+        ("continue-on-error on the destroy precondition", "      - name: Destroy precondition (Guard 4, before any plan)\n", "      - name: Destroy precondition (Guard 4, before any plan)\n        continue-on-error: true\n", "no_continue_on_error"),
+        ("continue-on-error on the live-store gate", "      - name: Live-store gate (plan 2.0, in front of detach, wipe and destroy; NOT teardown)\n", "      - name: Live-store gate (plan 2.0, in front of detach, wipe and destroy; NOT teardown)\n        continue-on-error: true\n", "no_continue_on_error"),
+        ("destroy precondition: exit 1 dropped", "(D4); read reason=.\"; exit 1", "(D4); read reason=.\"", "gate_site_exits_pre_inngest_backstop_destroy_precondition"),
+        ("destroy precondition: call without the negation", "          if ! inngest_backstop_destroy_precondition ", "          if inngest_backstop_destroy_precondition ", "gate_site_exits_pre_inngest_backstop_destroy_precondition"),
+        ("destroy precondition: actor dropped", " --actor \"$GITHUB_ACTOR\"", "", "pre_actor_arg"),
+        ("live-store gate: exit 1 dropped", "not provably serving.\"; exit 1", "not provably serving.\"", "gate_site_exits_live_inngest_backstop_live_store_gate"),
+        ("live-store gate: the in-flight count is back", "--probe-file \"${RUNNER_TEMP}/probe.tsv\" --now \"$(date -u +%s)\"; then", "--probe-file \"${RUNNER_TEMP}/probe.tsv\" --now \"$(date -u +%s)\" --inflight-runs 0; then", "live_gate_call_exact"),
+        ("live-store gate: the probe query error swallowed", "2> \"${RUNNER_TEMP}/probe.err\" \\\n            || { echo \"::error::probe-row query failed rc=$?: $(head -c 300 \"${RUNNER_TEMP}/probe.err\" | inngest_backstop_clean 300)\"; exit 1; }", "2>/dev/null \\\n            || { echo \"::error::probe-row query failed.\"; exit 1; }", "live_probe_error_printed"),
+        ("targeted gate: exit 1 replaced by exit 0", "NO [ack-destroy] bypass.\"\n            grep -E 'will be (created|destroyed|updated)|must be replaced|Plan:' tfplan.txt | head -30 >&2\n            exit 1", "NO [ack-destroy] bypass.\"\n            grep -E 'will be (created|destroyed|updated)|must be replaced|Plan:' tfplan.txt | head -30 >&2\n            exit 0", "gate_site_exits_plan_inngest_backstop_retire_gate"),
+        ("untargeted gate: exit 1 dropped", "head -30 >&2\n            exit 1\n          fi\n\n      - name: Terraform plan (phase)", "head -30 >&2\n          fi\n\n      - name: Terraform plan (phase)", "gate_site_exits_unt_inngest_backstop_retire_gate"),
+        ("teardown gate: exit 1 dropped", "(only deletes of the two wipe addresses are legal).\"; exit 1", "(only deletes of the two wipe addresses are legal).\"", "gate_site_exits_tear_inngest_backstop_retire_gate"),
+        ("poll: the OK==1 requirement removed", "[[ \"$OK\" == 1 ]] || { echo \"::error::no wiped row", "[[ \"$OK\" == 1 ]] || true; { echo \"::error::no wiped row", "poll_ok_required"),
+        ("poll: back to a fixed 24-iteration loop", "while (( $(date -u +%s) < DEADLINE )); do", "for _ in $(seq 1 24); do", "poll_deadline"),
+        ("poll: the job-timeout cap dropped", "(( DEADLINE <= JOB_START + 1800 )) || DEADLINE=$(( JOB_START + 1800 ))", ":", "poll_deadline"),
+        ("poll: archive query again", "--since 1h --no-archive --grep SOLEUR_INNGEST_BACKSTOP_WIPE", "--since 2h --grep SOLEUR_INNGEST_BACKSTOP_WIPE", "poll_no_archive_hot_only"),
+        ("poll: refusal no longer ends it", "grep -qF ' result=refused ' <<<\"$MSGS\" && break", "grep -qF ' result=refused ' <<<\"$MSGS\" || true", "poll_breaks_on_refusal"),
+        ("poll: query errors swallowed again", "|| { echo \"poll query failed rc=$?: $(head -c 300 \"$ERR\" | inngest_backstop_clean 300)\"; : > \"$ROWS\"; }", "|| : > \"$ROWS\"", "poll_query_error_printed"),
+        ("poll: a genuine rejection no longer ends it", "[[ \"$EV\" == *reason=evidence_absent* || \"$EV\" == *reason=rows_unreadable* || \"$EV\" == *reason=not_wiped* ]] || break", ":", "poll_classifies"),
+        ("poll: the funnel reads the pinned rows only", " --raw > \"$NR\"", " > \"$NR\"", "poll_nonce_rows_raw"),
+        ("poll: rows printed unsanitized", "$(inngest_backstop_clean <<<\"${MSGS:-none}\")", "${MSGS:-none}", "poll_output_sanitized"),
+        ("poll: the partial-zero warning removed", "the device may be PARTIALLY ZEROED", "the device is fine", "poll_partial_zero_text"),
+        ("poll: the Hetzner HTTP codes dropped", " (HTTP ${HV}) wipe hosts", " wipe hosts", "poll_hetzner_codes"),
+        ("conv: wipe no longer requires a detached volume", "[[ \"$VS\" == null ]] || fail \"volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached", "[[ \"$VS\" == null ]] || true; : \"volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached", "conv_wipe_requires_detached"),
+        ("conv: the volume-attached check runs before the leaked-host check", "              [[ \"$NWS\" == 0 ]] || fail \"a wipe host already exists: dispatch phase=teardown first\"\n              [[ \"$VS\" == null ]] || fail \"volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached (server null; state=${VS}) -- run phase=detach first\"\n", "              [[ \"$VS\" == null ]] || fail \"volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached (server null; state=${VS}) -- run phase=detach first\"\n              [[ \"$NWS\" == 0 ]] || fail \"a wipe host already exists: dispatch phase=teardown first\"\n", "conv_wipe_host_before_detached"),
+        ("conv: reads another volume", "VC=\"$(hz \"volumes/${EXPECTED_INNGEST_VOLUME_ID}\" \"${RUNNER_TEMP}/vol.json\")\"", "VC=\"$(hz \"volumes/106903269\" \"${RUNNER_TEMP}/vol.json\")\"", "conv_reads_the_pinned_volume"),
+        ("conv: refresh delta no longer exact", "[[ ( \"$DEL\" == \"$a\" || \"$DEL\" == \"$ALLOW\" ) && -z \"$ADD\" ]] || fail", "[[ \"$DEL\" == \"$a\" ]] || fail", "conv_reconcile_exact_delta"),
+        ("conv: the gone volume is no longer queued", "[[ \"$VS\" == gone ]] && has hcloud_volume.inngest_redis && RM+=(hcloud_volume.inngest_redis)", ":", "conv_gone_queues_volume"),
+        ("conv: detach no longer reads the live server", "SC=\"$(hz 'servers?name=soleur-inngest' \"${RUNNER_TEMP}/srv.json\")\"", "SC=200", "conv_detach_reads_live_server"),
+        ("conv: state list piped into grep -q (SIGPIPE fail-open)", "            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "            terraform state list 2>/dev/null | grep -qFx -- \"$a\" && fail \"still in state\"\n            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "conv_state_list_in_variable"),
+        ("conv: leaked-host recovery message removed", "if [[ \"$NWS\" != 0 ]] && ! has \"$WSA\"; then", "if false; then", "conv_orphan_host_message"),
+        ("conv: a reconcile target made non-literal", "T=-target=hcloud_volume.inngest_redis ;;", "T=-target=$a ;;", "conv_reconcile_targets_literal"),
+        ("pre: .head_branch == \"main\" dropped", "and .head_branch == \"main\" and .event", "and .event", "pre_provenance"),
+        ("pre: archive dropped from the destroy query", "--since 14d --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 2000", "--since 14d --no-archive --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 2000", "pre_archive_kept"),
+        ("pre: Hetzner action history not read", "/actions?per_page=50&sort=id%3Adesc\"", "/actions\"", "pre_hetzner_actions_read"),
+        ("pre: actions file not handed to the gate", "--actions-file \"$P/acts.json\" ", "", "pre_call_inputs"),
+        ("pre: CLO ref accepts any https URL again", "https://github\\.com/jikig-ai/soleur/issues/8285#issuecomment-([0-9]+)$", "https://[^[:space:]]+$", "pre_clo_strict_pattern"),
+        ("pre: the Hetzner HTTP code no longer printed", "echo \"Hetzner GET $1 answered ${c}\"; ", "", "pre_query_errors_visible"),
+        ("plan: nonce no longer the run id", "-var=\"inngest_backstop_wipe_nonce=${GITHUB_RUN_ID}\"", "-var=\"inngest_backstop_wipe_nonce=1\"", "plan_nonce_is_run_id"),
+        ("apply: TOUCHED==0 check removed", "[[ \"$TOUCHED\" == \"0\" ]] || {", "[[ \"$TOUCHED\" == \"0\" ]] || true; {", "apply_touched_zero"),
+        ("apply: a verb dropped from the TOUCHED filter", "any(. == \"create\" or . == \"update\" or . == \"delete\" or . == \"forget\")", "any(. == \"create\" or . == \"delete\")", "apply_touched_zero"),
+        ("apply: the TOUCHED jq reads another file", "| length' tfplan.json)", "| length' tfplan-all.json)", "apply_touched_exact"),
+        ("apply: applies without the saved plan", "terraform apply -no-color -input=false tfplan; then", "terraform apply -no-color -input=false; then", "apply_exact_command"),
+        ("teardown: applies without the saved plan", "terraform apply -no-color -input=false tfplan-td ||", "terraform apply -no-color -input=false ||", "teardown_apply_exact"),
+        ("teardown: rc 0 no longer a no-op", "nothing to tear down.\"; exit 0; }", "nothing to tear down.\"; exit 1; }", "teardown_rc_zero_is_noop"),
+        ("teardown: rc other than 2 no longer fatal", "[[ $rc -eq 2 ]] || { echo \"::error::teardown plan failed", "[[ $rc -eq 2 ]] || true; { echo \"::error::teardown plan failed", "teardown_rc_two_only"),
+        ("teardown: -detailed-exitcode dropped", "-detailed-exitcode -out=tfplan-td", "-out=tfplan-td", "teardown_detailed_exitcode"),
+        ("read-back: a refused destroy is reported as a failed one again", "if [[ \"$VC\" != 404 && \"$APPLY\" == skipped ]]; then note", "if false; then note", "rb_destroy_not_applied"),
+        ("progress: the D4 sentence unconditional", "D4=\"\"; [[ \"$RETIRE_PHASE\" == detach ||", "D4=\"x\"; [[ \"$RETIRE_PHASE\" == detach ||", "prog_d4_conditional"),
+        ("hz: token on argv again", "hz() { local c; c=\"$(printf 'header = \"Authorization: Bearer %s\"\\n' \"$HCLOUD_TOKEN\" | curl -q -K - -sS --max-time 20", "hz() { local c; c=\"$(curl -sS --max-time 20 -H \"Authorization: Bearer ${HCLOUD_TOKEN}\"", "hz_token_on_stdin"),
+        ("hz: the empty answer is no longer 000", "echo \"${c:-000}\"; }", "echo \"$c\"; }", "hz_default_000"),
+        ("dget: Doppler token on argv again", "dget() { DOPPLER_TOKEN=\"$DOPPLER_TOKEN_INNGEST_ARM\" doppler secrets get \"$1\" --project soleur-inngest --config prd --plain 2>/dev/null", "dget() { doppler secrets get \"$1\" --project soleur-inngest --config prd --plain --token \"$DOPPLER_TOKEN_INNGEST_ARM\" 2>/dev/null", "doppler_token_not_on_argv"),
+        ("probe lib overridable again", "unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_ROW_LIB INNGEST_PROBE_EMITTER", "unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER", "probe_lib_not_overridable"),
+        ("a second retired-id literal reappears", "VC=\"$(hz \"volumes/${EXPECTED_INNGEST_VOLUME_ID}\" \"${RUNNER_TEMP}/vol-rb.json\")\"", "VC=\"$(hz \"volumes/106261946\" \"${RUNNER_TEMP}/vol-rb.json\")\"", "retired_id_literal_once"),
+        ("the live-id literal reappears", "note \"server volumes == [${_IBRG_LIVE_ID}]\"", "note \"server volumes == [106903269]\"", "live_id_literal_absent"),
+    ]
+
+def main():
+    path, libpath, xd = sys.argv[1:4]
+    text = open(path).read()
+    wf = load(text)
+    job = wf["jobs"].get("inngest_backstop_retire")
+    out = {"job": bool(job)}
+    os.makedirs(os.path.join(xd, "s"), exist_ok=True)
+    if job:
+        steps = job["steps"]
+        out["names"] = [s.get("name", "") for s in steps]
+        out["env"] = job.get("environment")
+        out["conc"] = job.get("concurrency")
+        out["if"] = job.get("if")
+        out["wfconc"] = wf.get("concurrency")
+        out["perm"] = job.get("permissions")
+        out["bodies"] = {s.get("name", ""): s.get("run", "") for s in steps}
+        out["ifs"] = {s.get("name", ""): s.get("if", "") for s in steps}
+        on = wf[True] if True in wf else wf["on"]
+        inp = on["workflow_dispatch"]["inputs"]
+        out["opts"] = inp["apply_target"]["options"]
+        out["inputs"] = sorted(inp.keys())
+        out["clo_desc"] = inp["clo_attestation_ref"]["description"]
+        with open(os.path.join(xd, "names.tsv"), "w") as f:
+            for i, s in enumerate(steps):
+                f.write("%d\t%s\n" % (i, s.get("name", "")))
+                if "run" in s:
+                    with open(os.path.join(xd, "s", "%d.sh" % i), "w") as g:
+                        g.write(s["run"])
+    out["old_job_present"] = "inngest_volume_recut" in wf["jobs"]
+    json.dump(out, open(os.path.join(xd, "facts.json"), "w"))
+    # the post-apply untouched loop == the gate's never-acted-on set
+    lib = open(libpath).read()
+    body = [s for s in wf["jobs"]["inngest_backstop_retire"]["steps"] if s.get("name") == "Terraform apply (phase)"][0]["run"]
+    addrs = set(re.findall(r"'([^']+)'", re.search(r"for ADDR in (.*?); do", body).group(1)))
+    def lst(name):
+        m = re.search(r"def " + name + r":\s*\[(.*?)\];", lib, re.S)
+        return set(x.replace('\\"', '"') for x in re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)))
+    want = lst("live_addr") | lst("named_live") | {"hcloud_server.inngest"}
+    print("LOOP SAME %d" % len(want) if addrs == want else "LOOP DIFF only-in-workflow=%s only-in-lib=%s" % (sorted(addrs - want), sorted(want - addrs)))
+    base = pins(wf)
+    print("CONTROL " + ("ok" if not base else "FAIL " + ",".join(base)))
+    if base and "if_matrix" in base:
+        for m in matrix(wf["jobs"]["inngest_backstop_retire"]):
+            print("MATRIX " + m)
+    muts = mutations()
+    print("MUTCOUNT %d" % len(muts))
+    a = text.index("\n  inngest_backstop_retire:\n"); b = text.index("\n  registry_host_replace:\n")
+    jobtext = text[a:b]
+    for label, old, new, want_pin in muts:
+        n = jobtext.count(old)
+        if n != 1:
+            print("MUT NOLAND [%s] occurrences=%d" % (label, n))
+            continue
+        got = pins(load("jobs:" + jobtext.replace(old, new)))
+        print("MUT %s [%s] -> %s" % ("ok" if want_pin in got else "NOTRED", label, ",".join(got) or "none"))
+
+if __name__ == "__main__":
+    main()
+EXTRACTPY
+EXOUT="$(python3 -I "$EXTRACT_PY" "$WF" "$GATE" "$XD" 2>&1)"
+WF_FACTS="$(cat "$XD/facts.json" 2>/dev/null)"
 if ! printf '%s' "$WF_FACTS" | jq -e . >/dev/null 2>&1; then
   fail "workflow YAML facts could not be extracted" "" "$WF_FACTS"
   WF_FACTS='{"job":false}'
@@ -848,210 +1306,20 @@ for j in inngest_host inngest_host_replace; do
   else pass; fi
 done
 
-# ══ THE WORKFLOW'S run: BODIES (W3, D-A..D-E) ═══════════════════════════════════════
-# Each step's `run:` is extracted with PyYAML (no escape processing, exactly what bash receives) and the
-# decisions that make the gates bite are pinned as ANCHORED, comment-stripped lines or exact `if:` strings:
-# the destroy precondition's condition, no continue-on-error on any gate step, `exit 1` before `fi` at each of the
-# five gate call sites, the poll's `[[ "$OK" == 1 ]] ||`, the wipe-phase detach guard, the convergence read of the
-# pinned volume, the provenance clause, the nonce, the post-apply untouched loop, the teardown rc handling.
-# The pin program ALSO carries a mutation table: every pin is mutated out of a copy of the real workflow and must
-# go RED (a pin that its mutation does not trip is decorative). The first line is the CONTROL on the real workflow.
-PINS_PY="$TMP/wf-pins.py"
-assert_fixture_dir "$TMP"
-cat > "$PINS_PY" <<'PINS'
-import sys, re, json
-import yaml
-
-def load(text):
-    return yaml.load(text, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
-
-def pins(wf):
-    """Return the ids of every pin that FAILS for this parsed workflow."""
-    bad = []
-    def pin(pid, ok):
-        if not ok:
-            bad.append(pid)
-    job = wf["jobs"]["inngest_backstop_retire"]
-    steps = job["steps"]
-    def find(frag):
-        m = [s for s in steps if frag in s.get("name", "")]
-        return m[0] if len(m) == 1 else {"name": frag, "run": "", "_missing": True}
-    def lines(step):
-        out = []
-        for l in str(step.get("run", "")).split("\n"):
-            t = l.strip()
-            if t and not t.startswith("#"):
-                out.append(t)
-        return out
-    live, conv, pre = find("Live-store gate"), find("Convergence read"), find("Destroy precondition")
-    unt, plan, apply_, poll = find("Read-only untargeted plan"), find("Terraform plan (phase)"), find("Terraform apply (phase)"), find("Wipe evidence")
-    tear, back, valid = find("Teardown of the wipe host"), find("Read-back"), find("Validate inputs")
-    prog = find("Progress comment")
-    for s in (live, conv, pre, unt, plan, apply_, poll, tear, back, valid, prog):
-        pin("steps_present", not s.get("_missing"))
-    L = {k: lines(v) for k, v in dict(live=live, conv=conv, pre=pre, unt=unt, plan=plan, apply_=apply_, poll=poll, tear=tear, back=back, valid=valid).items()}
-    # --- exact `if:` strings
-    pin("if_destroy_precondition", pre.get("if") == "env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'")
-    pin("if_live_store_not_teardown", live.get("if") == "env.RETIRE_PHASE != 'teardown'")
-    pin("if_readback_always", back.get("if") == "always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true'")
-    pin("if_teardown_always", str(tear.get("if", "")).startswith("always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true'"))
-    pin("if_poll_wipe_only", poll.get("if") == "env.RETIRE_PHASE == 'wipe' && steps.conv.outputs.skip != 'true'")
-    pin("if_unt_plan_skip", unt.get("if") == "steps.conv.outputs.skip != 'true'")
-    pin("if_apply_not_teardown", apply_.get("if") == "steps.conv.outputs.skip != 'true' && env.RETIRE_PHASE != 'teardown'")
-    # --- no continue-on-error anywhere except the advisory progress comment
-    for s in steps:
-        if "continue-on-error" in s and "Progress comment" not in s.get("name", ""):
-            pin("no_continue_on_error", False)
-    pin("progress_comment_advisory", prog.get("continue-on-error") is True)
-    # --- every gate call site is a non-suppressing `if !` whose block exits 1 before `fi`
-    sites = [("live", "inngest_backstop_live_store_gate"), ("pre", "inngest_backstop_destroy_precondition"),
-             ("unt", "inngest_backstop_retire_gate"), ("plan", "inngest_backstop_retire_gate"), ("tear", "inngest_backstop_retire_gate")]
-    for key, fn in sites:
-        ls = L[key]
-        idx = [i for i, l in enumerate(ls) if l.startswith("if ! " + fn + " ")]
-        ok = len(idx) == 1
-        if ok:
-            blk = []
-            for l in ls[idx[0]:]:
-                blk.append(l)
-                if l == "fi":
-                    break
-            ok = blk[-1] == "fi" and any(re.search(r"(^|[;\s])exit 1\b", b) for b in blk[1:-1]) and not any("|| true" in b or "exit 0" in b for b in blk)
-        pin("gate_site_exits_%s_%s" % (key, fn), ok)
-    # --- the poll
-    pl = L["poll"]
-    pin("poll_ok_required", any(l.startswith('[[ "$OK" == 1 ]] || {') and "exit 1" in l for l in pl))
-    pin("poll_deadline", 'DEADLINE=$(( $(date -u +%s) + 1200 ))' in " ".join(pl) and 'while (( $(date -u +%s) < DEADLINE )); do' in pl)
-    pin("poll_no_archive_hot_only", any("betterstack-query.sh" in l and "--no-archive" in l and "--since 1h" in l for l in pl))
-    pin("poll_breaks_on_refusal", "grep -qF ' result=refused ' <<<\"$MSGS\" && break" in pl)
-    pin("poll_query_error_printed", any("poll query failed rc=$?" in l for l in pl))
-    pin("poll_gate_inputs", any(l.startswith("if inngest_backstop_wipe_evidence_gate ") and '--nonce "$GITHUB_RUN_ID"' in l and '--after-epoch "$JOB_START"' in l and "OK=1; break" in l for l in pl))
-    # --- convergence
-    cv = L["conv"]
-    pin("conv_wipe_requires_detached", any(l.startswith('[[ "$VS" == null ]] || fail') for l in cv))
-    wi = [i for i, l in enumerate(cv) if l == "wipe)"]; te = [i for i, l in enumerate(cv) if l == "teardown)"]
-    gi = [i for i, l in enumerate(cv) if l.startswith('[[ "$VS" == null ]] || fail')]
-    pin("conv_wipe_guard_in_wipe_arm", bool(wi and te and gi and wi[0] < gi[0] < te[0]))
-    pin("conv_reads_the_pinned_volume", any(l.startswith('VC="$(hz "volumes/${EXPECTED_INNGEST_VOLUME_ID}" ') for l in cv))
-    pin("conv_reconcile_exact_delta", '[[ "$DEL" == "$a" && -z "$ADD" ]] || fail "the refresh of ${a} changed state beyond it: dropped=\'${DEL}\' added=\'${ADD}\'"' in cv
-        and any(l.startswith('DEL="$(comm -23 ') and "ADD=\"$(comm -13 " in l for l in cv))
-    pin("conv_state_list_in_variable", not any("terraform state list" in l and "|" in l.replace("||", "") for l in cv))
-    pin("conv_orphan_host_message", any(l.startswith('if [[ "$NWS" != 0 ]] && ! has "$WSA"; then') for l in cv))
-    pin("conv_reconcile_targets_literal", all(any(t in l for l in cv) for t in ("T=-target=hcloud_volume_attachment.inngest_redis ", "T=-target=hcloud_volume.inngest_redis ", "T=-target=hcloud_server.inngest_backstop_wipe ", "T=-target=hcloud_volume_attachment.inngest_backstop_wipe ")))
-    pin("conv_destroy_attached_message", any("is still attached (server ${VS})" in l for l in cv))
-    # --- destroy precondition
-    pr = L["pre"]
-    pin("pre_provenance", any(l.startswith("if jq -e '") and '.path == ".github/workflows/apply-web-platform-infra.yml"' in l and '.head_branch == "main"' in l
-                              and '.event == "workflow_dispatch"' in l and '.status == "completed"' in l for l in pr))
-    pin("pre_archive_kept", any("betterstack-query.sh" in l and "--since 14d" in l and "--no-archive" not in l for l in pr))
-    pin("pre_hetzner_actions_read", any('/actions?per_page=50&sort=id%3Adesc"' in l for l in pr))
-    pin("pre_call_inputs", all(any(a in l for l in pr) for a in ("--clo-comment-file", "--actions-file", "--live-server-id", "--after-epoch")))
-    pin("pre_clo_strict_pattern", any("https://github\\.com/jikig-ai/soleur/issues/8285#issuecomment-([0-9]+)$" in l for l in pr) and any("issues/comments/${BASH_REMATCH[1]}" in l for l in pr))
-    pin("pre_no_http_code_path", not any("clo-ref-http-code" in l or "%{http_code}" in l for l in pr))
-    # --- plan / apply
-    pp = L["plan"]
-    pin("plan_nonce_is_run_id", any('-var="inngest_backstop_wipe_nonce=${GITHUB_RUN_ID}"' in l and "-var='inngest_backstop_wipe_enabled=true'" in l for l in pp))
-    pin("plan_exact_targets_wipe", any("-target=hcloud_server.inngest_backstop_wipe -target=hcloud_volume_attachment.inngest_backstop_wipe" in l for l in pp))
-    ap = L["apply_"]
-    pin("apply_touched_zero", any(l.startswith('[[ "$TOUCHED" == "0" ]] || {') and "exit 1" in l for l in ap) and any(l.startswith("for ADDR in ") for l in ap)
-        and any('any(. == "create" or . == "update" or . == "delete" or . == "forget")' in l for l in ap))
-    # --- teardown
-    td = L["tear"]
-    pin("teardown_detailed_exitcode", any("terraform plan" in l and "-detailed-exitcode" in l for l in td))
-    pin("teardown_rc_zero_is_noop", '[[ $rc -ne 0 ]] || { echo "no wipe host or attachment exists; nothing to tear down."; exit 0; }' in td)
-    pin("teardown_rc_two_only", any(l.startswith("[[ $rc -eq 2 ]] || {") and "exit 1" in l for l in td))
-    pin("teardown_gate_enabled_false", any("-var='inngest_backstop_wipe_enabled=false'" in l for l in td))
-    # --- secrets / hygiene
-    v = " ".join(L["valid"])
-    pin("hz_token_on_stdin", "curl -q -K - " in v and "-H " not in v)
-    lv = L["live"]
-    pin("doppler_token_not_on_argv", any(l.startswith('dget() { DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get') and "--token" not in l for l in lv))
-    # The probe-row census (scripts/lib/inngest-probe-row.test.sh) requires the `unset INNGEST_PROBE_ROW_JQ`
-    # and `INNGEST_PROBE_ROW_LIB:-` literals, so the override stays spelled in the default; it is safe only
-    # because the SAME step unsets INNGEST_PROBE_ROW_LIB on a line before the `_ipr_lib=` assignment.
-    ui = [i for i, l in enumerate(lv) if l.startswith("unset INNGEST_PROBE_ROW_JQ ") and "INNGEST_PROBE_ROW_LIB" in l.split()]
-    ai = [i for i, l in enumerate(lv) if l.startswith("_ipr_lib=")]
-    pin("probe_lib_not_overridable", len(ui) == 1 and len(ai) == 1 and ui[0] < ai[0])
-    # --- literal hygiene: the pinned ids appear once (the validation) and the live id never
-    allbody = "\n".join("\n".join(v) for v in L.values())
-    pin("retired_id_literal_once", sum(1 for l in allbody.split("\n") if "106261946" in l) == 1 and any(l.startswith('[[ "$EXPECTED_INNGEST_VOLUME_ID" == "106261946" ]]') for l in L["valid"]))
-    pin("live_id_literal_absent", "106903269" not in allbody)
-    return bad
-
-def mutations():
-    # (label, old, new, expected pin id)
-    PRE_HEAD = "env:\n          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}\n          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}\n          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}\n        run: |\n          set -uo pipefail\n          source \"${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh\"\n          source \"${RUNNER_TEMP}/hz.sh\"\n          P="
-    DP_IF = "if: env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'\n        "
-    RB_IF = "if: always() && steps.conv.outcome == 'success' && steps.conv.outputs.skip != 'true'\n        working-directory: ${{ env.INFRA_DIR }}\n        env:\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}\n        run: |\n          set -uo pipefail\n          source \"${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-backstop-retire-gate.sh\"\n          source \"${RUNNER_TEMP}/hz.sh\"\n          OUT="
-    return [
-        ("destroy-precondition if: inverted", "if: env.RETIRE_PHASE == 'destroy' && steps.conv.outputs.skip != 'true'", "if: env.RETIRE_PHASE != 'destroy' && steps.conv.outputs.skip != 'true'", "if_destroy_precondition"),
-        ("destroy-precondition if: dropped", DP_IF + PRE_HEAD, PRE_HEAD, "if_destroy_precondition"),
-        ("live-store gate also runs for teardown", "if: env.RETIRE_PHASE != 'teardown'\n        env:\n          BETTERSTACK_QUERY_HOST", "if: always()\n        env:\n          BETTERSTACK_QUERY_HOST", "if_live_store_not_teardown"),
-        ("read-back lost always()", RB_IF, RB_IF.replace("if: always() && steps.conv.outcome == 'success' && ", "if: "), "if_readback_always"),
-        ("continue-on-error on the destroy precondition", "      - name: Destroy precondition (Guard 4, before any plan)\n", "      - name: Destroy precondition (Guard 4, before any plan)\n        continue-on-error: true\n", "no_continue_on_error"),
-        ("continue-on-error on the live-store gate", "      - name: Live-store gate (plan 2.0, in front of detach, wipe and destroy; NOT teardown)\n", "      - name: Live-store gate (plan 2.0, in front of detach, wipe and destroy; NOT teardown)\n        continue-on-error: true\n", "no_continue_on_error"),
-        ("destroy precondition: exit 1 dropped", "(D4); read reason=.\"; exit 1", "(D4); read reason=.\"", "gate_site_exits_pre_inngest_backstop_destroy_precondition"),
-        ("destroy precondition: call without the negation", "          if ! inngest_backstop_destroy_precondition ", "          if inngest_backstop_destroy_precondition ", "gate_site_exits_pre_inngest_backstop_destroy_precondition"),
-        ("live-store gate: exit 1 dropped", "not provably serving.\"; exit 1", "not provably serving.\"", "gate_site_exits_live_inngest_backstop_live_store_gate"),
-        ("targeted gate: exit 1 replaced by exit 0", "NO [ack-destroy] bypass.\"\n            grep -E 'will be (created|destroyed|updated)|must be replaced|Plan:' tfplan.txt | head -30 >&2\n            exit 1", "NO [ack-destroy] bypass.\"\n            grep -E 'will be (created|destroyed|updated)|must be replaced|Plan:' tfplan.txt | head -30 >&2\n            exit 0", "gate_site_exits_plan_inngest_backstop_retire_gate"),
-        ("untargeted gate: exit 1 dropped", "head -30 >&2\n            exit 1\n          fi\n\n      - name: Terraform plan (phase)", "head -30 >&2\n          fi\n\n      - name: Terraform plan (phase)", "gate_site_exits_unt_inngest_backstop_retire_gate"),
-        ("teardown gate: exit 1 dropped", "(only deletes of the two wipe addresses are legal).\"; exit 1", "(only deletes of the two wipe addresses are legal).\"", "gate_site_exits_tear_inngest_backstop_retire_gate"),
-        ("poll: the OK==1 requirement removed", "[[ \"$OK\" == 1 ]] || { echo \"::error::no wiped row", "[[ \"$OK\" == 1 ]] || true; { echo \"::error::no wiped row", "poll_ok_required"),
-        ("poll: back to a fixed 24-iteration loop", "while (( $(date -u +%s) < DEADLINE )); do", "for _ in $(seq 1 24); do", "poll_deadline"),
-        ("poll: archive query again", "--since 1h --no-archive --grep SOLEUR_INNGEST_BACKSTOP_WIPE", "--since 2h --grep SOLEUR_INNGEST_BACKSTOP_WIPE", "poll_no_archive_hot_only"),
-        ("poll: refusal no longer ends it", "grep -qF ' result=refused ' <<<\"$MSGS\" && break", "grep -qF ' result=refused ' <<<\"$MSGS\" || true", "poll_breaks_on_refusal"),
-        ("poll: query errors swallowed again", "|| { echo \"poll query failed rc=$?: $(head -c 300 \"$ERR\")\"; : > \"$ROWS\"; }", "|| : > \"$ROWS\"", "poll_query_error_printed"),
-        ("conv: wipe no longer requires a detached volume", "[[ \"$VS\" == null ]] || fail \"volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached", "[[ \"$VS\" == null ]] || true; : \"volume ${EXPECTED_INNGEST_VOLUME_ID} must be detached", "conv_wipe_requires_detached"),
-        ("conv: reads another volume", "VC=\"$(hz \"volumes/${EXPECTED_INNGEST_VOLUME_ID}\" \"${RUNNER_TEMP}/vol.json\")\"", "VC=\"$(hz \"volumes/106903269\" \"${RUNNER_TEMP}/vol.json\")\"", "conv_reads_the_pinned_volume"),
-        ("conv: refresh delta no longer exact", "[[ \"$DEL\" == \"$a\" && -z \"$ADD\" ]] || fail", "[[ \"$DEL\" == \"$a\" ]] || fail", "conv_reconcile_exact_delta"),
-        ("conv: state list piped into grep -q (SIGPIPE fail-open)", "            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "            terraform state list 2>/dev/null | grep -qFx -- \"$a\" && fail \"still in state\"\n            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "conv_state_list_in_variable"),
-        ("conv: leaked-host recovery message removed", "if [[ \"$NWS\" != 0 ]] && ! has \"$WSA\"; then", "if false; then", "conv_orphan_host_message"),
-        ("conv: a reconcile target made non-literal", "T=-target=hcloud_volume.inngest_redis ;;", "T=-target=$a ;;", "conv_reconcile_targets_literal"),
-        ("pre: .head_branch == \"main\" dropped", "and .head_branch == \"main\" and .event", "and .event", "pre_provenance"),
-        ("pre: archive dropped from the destroy query", "--since 14d --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 2000", "--since 14d --no-archive --grep SOLEUR_INNGEST_BACKSTOP_WIPE --limit 2000", "pre_archive_kept"),
-        ("pre: Hetzner action history not read", "/actions?per_page=50&sort=id%3Adesc\"", "/actions\"", "pre_hetzner_actions_read"),
-        ("pre: actions file not handed to the gate", "--actions-file \"$P/acts.json\" ", "", "pre_call_inputs"),
-        ("pre: CLO ref accepts any https URL again", "https://github\\.com/jikig-ai/soleur/issues/8285#issuecomment-([0-9]+)$", "https://[^[:space:]]+$", "pre_clo_strict_pattern"),
-        ("plan: nonce no longer the run id", "-var=\"inngest_backstop_wipe_nonce=${GITHUB_RUN_ID}\"", "-var=\"inngest_backstop_wipe_nonce=1\"", "plan_nonce_is_run_id"),
-        ("apply: TOUCHED==0 check removed", "[[ \"$TOUCHED\" == \"0\" ]] || {", "[[ \"$TOUCHED\" == \"0\" ]] || true; {", "apply_touched_zero"),
-        ("apply: a verb dropped from the TOUCHED filter", "any(. == \"create\" or . == \"update\" or . == \"delete\" or . == \"forget\")", "any(. == \"create\" or . == \"delete\")", "apply_touched_zero"),
-        ("teardown: rc 0 no longer a no-op", "nothing to tear down.\"; exit 0; }", "nothing to tear down.\"; exit 1; }", "teardown_rc_zero_is_noop"),
-        ("teardown: rc other than 2 no longer fatal", "[[ $rc -eq 2 ]] || { echo \"::error::teardown plan failed", "[[ $rc -eq 2 ]] || true; { echo \"::error::teardown plan failed", "teardown_rc_two_only"),
-        ("teardown: -detailed-exitcode dropped", "-detailed-exitcode -out=tfplan-td", "-out=tfplan-td", "teardown_detailed_exitcode"),
-        ("hz: token on argv again", "hz() { printf 'header = \"Authorization: Bearer %s\"\\n' \"$HCLOUD_TOKEN\" | curl -q -K - -sS --max-time 20", "hz() { curl -sS --max-time 20 -H \"Authorization: Bearer ${HCLOUD_TOKEN}\"", "hz_token_on_stdin"),
-        ("dget: Doppler token on argv again", "dget() { DOPPLER_TOKEN=\"$DOPPLER_TOKEN_INNGEST_ARM\" doppler secrets get \"$1\" --project soleur-inngest --config prd --plain 2>/dev/null", "dget() { doppler secrets get \"$1\" --project soleur-inngest --config prd --plain --token \"$DOPPLER_TOKEN_INNGEST_ARM\" 2>/dev/null", "doppler_token_not_on_argv"),
-        ("probe lib overridable again", "unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_ROW_LIB INNGEST_PROBE_EMITTER", "unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER", "probe_lib_not_overridable"),
-        ("a second retired-id literal reappears", "VC=\"$(hz \"volumes/${EXPECTED_INNGEST_VOLUME_ID}\" \"${RUNNER_TEMP}/vol-rb.json\")\"", "VC=\"$(hz \"volumes/106261946\" \"${RUNNER_TEMP}/vol-rb.json\")\"", "retired_id_literal_once"),
-        ("the live-id literal reappears", "[[ \"$(hz \"volumes/${_IBRG_LIVE_ID}\" \"${RUNNER_TEMP}/luks.json\")\" == 200 ]]", "[[ \"$(hz \"volumes/106903269\" \"${RUNNER_TEMP}/luks.json\")\" == 200 ]]", "live_id_literal_absent"),
-    ]
-
-def main():
-    path = sys.argv[1]
-    text = open(path).read()
-    base = pins(load(text))
-    print("CONTROL " + ("ok" if not base else "FAIL " + ",".join(base)))
-    a = text.index("\n  inngest_backstop_retire:\n"); b = text.index("\n  registry_host_replace:\n")
-    pre, job, post = text[:a], text[a:b], text[b:]
-    for label, old, new, want in mutations():
-        n = job.count(old)
-        if n != 1:
-            print("MUT NOLAND [%s] occurrences=%d" % (label, n))
-            continue
-        got = pins(load("jobs:" + job.replace(old, new)))  # only the job under test is parsed: a mutation run stays cheap
-        print("MUT %s [%s] -> %s" % ("ok" if want in got else "NOTRED", label, ",".join(got) or "none"))
-
-if __name__ == "__main__":
-    main()
-PINS
-PIN_OUT="$(python3 -I "$PINS_PY" "$WF" 2>&1)"
-if [[ "$(head -1 <<<"$PIN_OUT")" == "CONTROL ok" ]]; then pass; else fail "Pins: the real workflow trips a pin" "" "$(head -3 <<<"$PIN_OUT")"; fi
-n_mut=0
+# ══ THE WORKFLOW'S run: BODIES (W3, D-A..D-E, W2-13) ═══════════════════════════════
+# Each step's `run:` is pinned as ANCHORED, comment-stripped lines, and every step's `if:` as ONE exact table (plus an
+# allow-list of job-level keys and an evaluated run matrix: which steps run per phase, with and without skip, with and
+# without an earlier failure). The extractor ALSO carries a mutation table: every pin is mutated out of a copy of the
+# real job and must go RED (a pin that its mutation does not trip is decorative). CONTROL is the real workflow.
+if [[ "$(grep -m1 '^CONTROL' <<<"$EXOUT")" == "CONTROL ok" ]]; then pass; else fail "Pins: the real workflow trips a pin" "" "$(grep -E '^(CONTROL|MATRIX|Traceback)|Error' <<<"$EXOUT" | head -6)"; fi
+n_mut=0; n_ok=0
 while IFS= read -r l; do
   [[ "$l" == MUT\ * ]] || continue
   n_mut=$((n_mut + 1))
-  if [[ "$l" == "MUT ok "* ]]; then pass; else fail "Pins: a mutation was not caught (${l%% ->*})" "" "$l"; fi
-done <<<"$PIN_OUT"
-if [[ "$n_mut" -ge 38 ]]; then pass; else fail "Pins: only ${n_mut} workflow mutations ran (floor 38)"; fi
+  if [[ "$l" == "MUT ok "* ]]; then n_ok=$((n_ok + 1)); pass; else fail "Pins: a mutation was not caught (${l%% ->*})" "" "$l"; fi
+done <<<"$EXOUT"
+MUTCOUNT="$(sed -n 's/^MUTCOUNT \([0-9]*\)$/\1/p' <<<"$EXOUT")"
+if [[ "$MUTCOUNT" =~ ^[0-9]+$ && "$n_mut" -eq "$MUTCOUNT" && "$MUTCOUNT" -eq 67 ]]; then pass; else fail "Pins: ${n_mut} mutation rows ran, the table holds '${MUTCOUNT}', expected exactly 67 (a row was deleted, or one did not land)"; fi
 
 # Replicated literals and lists agree across the lib, the workflow and the Terraform (W8).
 TF="${REPO_ROOT}/apps/web-platform/infra/inngest-backstop-wipe.tf"
@@ -1065,18 +1333,7 @@ if [[ -n "$tf_role" && "$sel_all" == "label_selector=role%3D${tf_role}" ]]; then
 if [[ "$sel_n" -ge 3 ]]; then pass; else fail "Parity: expected >=3 label-selector reads in the workflow, found ${sel_n}"; fi
 if grep -qF "\\\"shipper\\\":\\\"${_IBRG_WIPE_SHIPPER}\\\"" "$YML"; then pass; else fail "Parity: the cloud-init payload's shipper literal != the funnel's pinned shipper ${_IBRG_WIPE_SHIPPER}"; fi
 if [[ "$(wf '.bodies["Validate inputs (typo-guards, NOT the authorization)"]')" == *"== \"${_IBRG_RETIRED_ID}\" ]]"* ]]; then pass; else fail "Parity: the workflow's id-pin literal != the lib's retired id ${_IBRG_RETIRED_ID}"; fi
-LOOP_CMP="$(python3 -I - "$WF" "$GATE" <<'LOOPPY' 2>&1
-import re, sys, yaml
-wf = yaml.safe_load(open(sys.argv[1])); lib = open(sys.argv[2]).read()
-body = [s for s in wf["jobs"]["inngest_backstop_retire"]["steps"] if s.get("name") == "Terraform apply (phase)"][0]["run"]
-addrs = set(re.findall(r"'([^']+)'", re.search(r"for ADDR in (.*?); do", body).group(1)))
-def lst(name):
-    m = re.search(r"def " + name + r":\s*\[(.*?)\];", lib, re.S)
-    return set(x.replace('\\"', '"') for x in re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)))
-want = lst("live_addr") | lst("named_live") | {"hcloud_server.inngest"}
-print("SAME %d" % len(want) if addrs == want else "DIFF only-in-workflow=%s only-in-lib=%s" % (sorted(addrs - want), sorted(want - addrs)))
-LOOPPY
-)"
+LOOP_CMP="$(sed -n 's/^LOOP //p' <<<"$EXOUT")"
 if [[ "$LOOP_CMP" == SAME\ * ]]; then pass; else fail "Parity: the post-apply untouched loop != the gate's never-acted-on set" "" "$LOOP_CMP"; fi
 
 # The REAL wipe script's evidence row (W8): the script's own san/log/post/emit are extracted from the cloud-init,
@@ -1120,9 +1377,10 @@ if [[ "$nr_out" == *" result=refused "* && "$nr_out" == *"reason=mounted"* ]]; t
 # the Better Stack query script replaced by stubs that answer ONLY what the scenario provides and exit 64 (or print
 # UNEXPECTED on stderr, which fails the row) on any other argv. Static pins above prove the text; these rows prove
 # what the text DOES.
-SB="$TMP/sb"; mkdir -p "$SB/bin" "$SB/ws/scripts" "$SB/ws/tests/scripts" "$SB/rt" "$SB/hz" "$SB/cwd"
+SB="$TMP/sb"; mkdir -p "$SB/bin" "$SB/ws/scripts/lib" "$SB/ws/tests/scripts" "$SB/rt" "$SB/hz" "$SB/cwd" "$SB/dop"
 assert_fixture_dir "$SB"
 ln -s "${REPO_ROOT}/tests/scripts/lib" "$SB/ws/tests/scripts/lib"
+ln -s "${REPO_ROOT}/scripts/lib/inngest-probe-row.sh" "$SB/ws/scripts/lib/inngest-probe-row.sh"
 cat > "$SB/bin/terraform" <<'STUB'
 #!/usr/bin/env bash
 echo "terraform $*" >> "$TF_LOG"
@@ -1143,6 +1401,12 @@ STUB
 cat > "$SB/bin/doppler" <<'STUB'
 #!/usr/bin/env bash
 if [[ "$1" == run ]]; then shift; while [[ $# -gt 0 && "$1" != -- ]]; do shift; done; shift; exec "$@"; fi
+if [[ "$1 $2" == "secrets get" ]]; then
+  [[ -n "${DOPPLER_TOKEN:-}" ]] || { echo "UNEXPECTED doppler secrets get without DOPPLER_TOKEN in the environment" >&2; exit 64; }
+  for a in "$@"; do [[ "$a" == --token || "$a" == "$DOPPLER_TOKEN" ]] && { echo "UNEXPECTED doppler token on argv" >&2; exit 64; }; done
+  [[ -f "$DOP_DIR/$3" ]] && { cat "$DOP_DIR/$3"; exit 0; }
+  exit 1
+fi
 echo "UNEXPECTED doppler $*" >&2; exit 64
 STUB
 cat > "$SB/bin/gh" <<'STUB'
@@ -1167,7 +1431,7 @@ STUB
 cat > "$SB/ws/scripts/betterstack-query.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$BS_LOG"
-if [[ "${BS_RC:-0}" != 0 ]]; then echo "boom: simulated query failure" >&2; exit "$BS_RC"; fi
+if [[ "${BS_RC:-0}" != 0 ]]; then printf '%s\n' "${BS_ERRTXT:-boom: simulated query failure}" >&2; exit "$BS_RC"; fi
 [[ -f "$BS_ROWS" ]] && cat "$BS_ROWS"
 exit 0
 STUB
@@ -1188,27 +1452,28 @@ hzreset() { rm -f "$SB"/hz/* "$SB"/rt/srv.json "$SB"/out "$SB"/gh-* "$SB"/bs-*; 
 HZ_VOL="volumes/${PIN}"; HZ_WS='servers?label_selector=role%3Dinngest-backstop-wipe'; HZ_SRV='servers?name=soleur-inngest'
 vol_json() { printf '{"volume":{"id":%s,"server":%s,"size":10}}' "$PIN" "$1"; }
 state_set() { printf '%s\n' "$@" > "$SB/tf.state"; [[ $# -gt 0 ]] || : > "$SB/tf.state"; }
-step_body() { # <step-name fragment> -> $SB/step.sh (the run: text, byte for byte)
-  python3 -I - "$WF" "$1" > "$SB/step.sh" <<'EXTRACT'
-import sys, yaml
-wf = yaml.safe_load(open(sys.argv[1]))
-m = [s for s in wf["jobs"]["inngest_backstop_retire"]["steps"] if sys.argv[2] in s.get("name", "")]
-if len(m) != 1: sys.exit(3)
-sys.stdout.write(m[0]["run"])
-EXTRACT
+step_body() { # <step-name fragment> -> $SB/step.sh (the run: text, byte for byte, from the one-time extraction)
+  local m
+  m="$(awk -F'\t' -v f="$1" 'index($2, f) {print $1}' "$XD/names.tsv")"
+  [[ "$(grep -c . <<<"$m")" -eq 1 && -f "$XD/s/$m.sh" ]] || return 3
+  if [[ -n "${STEP_MUT_OLD:-}" ]]; then   # a behavioural mutation: replace ONE literal in this copy of the body
+    local body; body="$(cat "$XD/s/$m.sh"; printf x)"; body="${body%x}"
+    [[ "$body" == *"$STEP_MUT_OLD"* ]] || return 4
+    printf '%s' "${body/"$STEP_MUT_OLD"/"$STEP_MUT_NEW"}" > "$SB/step.sh"
+  else cp "$XD/s/$m.sh" "$SB/step.sh"; fi
 }
 run_step() { # <step-name fragment> [VAR=val ...] -> SOUT (stdout+stderr), SRC (exit code)
   local frag="$1"; shift
-  step_body "$frag" || { SOUT="step '$frag' not found"; SRC=99; return; }
+  step_body "$frag" || { SOUT="step '$frag' not found, or the behavioural mutation did not land"; SRC=99; return; }
   SRC=0
   SOUT="$(cd "$SB/cwd" && env -i PATH="$SB/bin:/usr/bin:/bin" HOME="$SB" LC_ALL=C RUNNER_TEMP="$SB/rt" GITHUB_WORKSPACE="$SB/ws" GITHUB_OUTPUT="$SB/out" \
-    GITHUB_REPOSITORY=jikig-ai/soleur GITHUB_RUN_ID=555 CI_SSH_PUB=/x EXPECTED_INNGEST_VOLUME_ID="$PIN" HZ_FIX="$SB/hz" TF_STATE="$SB/tf.state" TF_REFRESH="$SB/tf.refresh" \
+    GITHUB_REPOSITORY=jikig-ai/soleur GITHUB_RUN_ID=555 GITHUB_ACTOR=dispatcher APPLY=success DOP_DIR="$SB/dop" CI_SSH_PUB=/x EXPECTED_INNGEST_VOLUME_ID="$PIN" HZ_FIX="$SB/hz" TF_STATE="$SB/tf.state" TF_REFRESH="$SB/tf.refresh" \
     TF_LOG="$SB/tf.log" TF_SHOW="$SB/tf.show" GH_RUN="$SB/gh-run.json" GH_COMMENT="$SB/gh-comment.json" GH_LOG="$SB/gh.log" GH_ISSUE_OUT="$SB/gh-issue.txt" \
     BS_LOG="$SB/bs.log" BS_ROWS="$SB/bs-rows.jsonl" "$@" bash --noprofile --norc -eo pipefail "$SB/step.sh" 2>&1)" || SRC=$?
 }
 beh() { # <name> <want-rc> <needle> [<absent-needle>]  (uses SOUT/SRC from the last run_step)
   local name="$1" want="$2" needle="$3" absent="${4:-}"
-  if [[ "$SRC" -eq "$want" && "$SOUT" == *"$needle"* && "$SOUT" != *"UNEXPECTED"* && ( -z "$absent" || "$SOUT" != *"$absent"* ) ]]; then pass; else fail "BEHAVIOUR: $name (want rc=$want containing '$needle')" "$SRC" "$SOUT"; fi
+  if [[ "$SRC" -eq "$want" && "$SOUT" == *"$needle"* && "$SOUT" != *"UNEXPECTED"* && ( -z "$absent" || "$SOUT" != *"$absent"* ) ]]; then pass; [[ "$want" -eq 0 ]] && mp=$((mp + 1)); else fail "BEHAVIOUR: $name (want rc=$want containing '$needle')" "$SRC" "$SOUT"; fi
 }
 out_has() { grep -qxF -- "$1" "$SB/out"; }
 SRV_LIVE='{"servers":[{"id":169426216}]}'
@@ -1216,7 +1481,7 @@ conv() { # <phase> -> runs the convergence step
   run_step "Convergence read" RETIRE_PHASE="$1"
 }
 conv_base() { # <vol-code> <vol-body> <ws-body>
-  hzreset; hzset "$HZ_VOL" "$1" "$2"; hzset "$HZ_WS" 200 "$3"; printf '%s' "$SRV_LIVE" > "$SB/rt/srv.json"
+  hzreset; hzset "$HZ_VOL" "$1" "$2"; hzset "$HZ_WS" 200 "$3"; hzset "$HZ_SRV" 200 "$SRV_LIVE"
 }
 WSA='hcloud_server.inngest_backstop_wipe[0]'; WAA='hcloud_volume_attachment.inngest_backstop_wipe[0]'
 printf 'hcloud_volume_attachment.inngest_redis\thcloud_volume_attachment.inngest_redis\nhcloud_volume.inngest_redis\thcloud_volume.inngest_redis\nhcloud_server.inngest_backstop_wipe\t%s\nhcloud_volume_attachment.inngest_backstop_wipe\t%s\n' "$WSA" "$WAA" > "$SB/tf.refresh"
@@ -1236,6 +1501,31 @@ printf 'hcloud_volume_attachment.inngest_redis\thcloud_volume_attachment.inngest
 conv_base 200 "$(vol_json null)" '{"servers":[]}'; state_set hcloud_volume_attachment.inngest_redis hcloud_server.inngest; conv detach
 beh "D-E: a refresh that ADDS an address to state => refused" 1 "added='hcloud_server.surprise'"
 cp "$SB/tf.refresh.keep" "$SB/tf.refresh"
+# W2-10: the volume is already GONE (404): the attachment and the volume address are both queued, and a refresh of the
+# attachment may drop the volume with it ({attachment, volume} is legal ONLY in this case)
+G_ATT=hcloud_volume_attachment.inngest_redis; G_VOL=hcloud_volume.inngest_redis
+conv_base 404 '{"error":{"code":"not_found"}}' '{"servers":[]}'; state_set "$G_ATT" "$G_VOL" hcloud_server.inngest
+printf '%s\t%s,%s\t\n%s\t%s\t\n' "$G_ATT" "$G_ATT" "$G_VOL" "$G_VOL" "$G_VOL" > "$SB/tf.refresh"; conv detach
+beh "W2-10: detach with the volume gone (404): the attachment refresh drops {attachment, volume} together => accepted" 0 "state-only reconcile: hcloud_volume.inngest_redis + hcloud_volume_attachment.inngest_redis dropped"
+out_has "skip=true" && pass || fail "BEHAVIOUR: detach/gone did not write skip=true"
+if [[ "$(cat "$SB/tf.state")" == "hcloud_server.inngest" && "$(grep -c 'apply -refresh-only' "$SB/tf.log")" -eq 1 ]]; then pass; else fail "BEHAVIOUR: the {attachment, volume} refresh must leave only the host in state after exactly one refresh" "" "$(cat "$SB/tf.state") / $(cat "$SB/tf.log")"; fi
+cp "$SB/tf.refresh.keep" "$SB/tf.refresh"
+conv_base 404 '{"error":{"code":"not_found"}}' '{"servers":[]}'; state_set "$G_ATT" "$G_VOL" hcloud_server.inngest; conv detach
+beh "W2-10: detach with the volume gone, the attachment refresh drops only itself => the volume address is refreshed next" 0 "state-only reconcile: hcloud_volume.inngest_redis dropped"
+if [[ "$(cat "$SB/tf.state")" == "hcloud_server.inngest" && "$(grep -c 'apply -refresh-only' "$SB/tf.log")" -eq 2 ]]; then pass; else fail "BEHAVIOUR: attachment then volume must be two refreshes" "" "$(cat "$SB/tf.state") / $(cat "$SB/tf.log")"; fi
+conv_base 404 '{"error":{"code":"not_found"}}' '{"servers":[]}'; state_set "$G_VOL" hcloud_server.inngest; conv detach
+beh "W2-10: detach with the volume gone and only the volume in state => the volume is reconciled" 0 "state-only reconcile: hcloud_volume.inngest_redis dropped"
+conv_base 404 '{"error":{"code":"not_found"}}' '{"servers":[]}'; state_set "$G_ATT" "$G_VOL" hcloud_server.inngest
+printf '%s\t%s,%s,hcloud_server.inngest\t\n' "$G_ATT" "$G_ATT" "$G_VOL" > "$SB/tf.refresh"; conv detach
+beh "W2-10: ... but a refresh that also drops the HOST is refused" 1 "changed state beyond it"
+conv_base 200 "$(vol_json null)" '{"servers":[]}'; state_set "$G_ATT" "$G_VOL" hcloud_server.inngest
+printf '%s\t%s,%s\t\n' "$G_ATT" "$G_ATT" "$G_VOL" > "$SB/tf.refresh"; conv detach
+beh "W2-10: {attachment, volume} is NOT legal when the volume still answers 200 (detached) => refused" 1 "changed state beyond it"
+cp "$SB/tf.refresh.keep" "$SB/tf.refresh"
+conv_base 200 "$(vol_json 169426216)" '{"servers":[]}'; hzset "$HZ_SRV" 500; state_set "$G_ATT" hcloud_server.inngest; conv detach
+beh "W2-10: detach, the live-server read answers 500 => refused, naming the code" 1 "server read 500"
+conv_base 200 "$(vol_json 777)" '{"servers":[{"id":777,"status":"running"}]}'; state_set "$WSA" "$WAA"; conv wipe
+beh "W2-10: wipe while a wipe host holds the volume => the LEAKED HOST is named first, not 'must be detached'" 1 "a wipe host already exists: dispatch phase=teardown first" "must be detached"
 conv_base 200 "$(vol_json 169426216)" '{"servers":[{"id":777,"status":"running"}]}'; state_set "$WSA" "$WAA"; conv detach
 beh "detach with a wipe host present => teardown first" 1 "a wipe host exists: dispatch phase=teardown first"
 conv_base 200 "$(vol_json 4242)" '{"servers":[]}'; state_set hcloud_volume_attachment.inngest_redis; conv detach
@@ -1274,32 +1564,72 @@ conv_base 200 "$(vol_json null)" '{"servers":[]}'; state_set hcloud_volume_attac
 if [[ "$SRC" -eq 1 && "$SOUT" == *"refresh-only reconcile of hcloud_volume_attachment.inngest_redis failed"* ]]; then pass; else fail "BEHAVIOUR: a failing refresh-only apply must fail the step, not skip" "$SRC" "$SOUT"; fi
 cp "$SB/tf.refresh.keep" "$SB/tf.refresh"
 
-# ---- the wipe evidence poll (W2) ----
+# ---- the wipe evidence poll (W2, W2-1..W2-5, W2-11) ----
 WCLOCK="$SB/clock"; echo 1760000000 > "$WCLOCK"
 poll() { echo 1760000000 > "$WCLOCK"; run_step "Wipe evidence" SB_CLOCK="$WCLOCK" JOB_START=1759999000 RETIRE_PHASE=wipe BETTERSTACK_QUERY_HOST=x BETTERSTACK_QUERY_USERNAME=x BETTERSTACK_QUERY_PASSWORD=x "$@"; }
 poll_base() { hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 200 '{"servers":[]}'; }
 POLL_GOOD="result=wiped nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES} readback=zero sig_after=none fs_uuid=abc last_write=x"
+POLL_STARTED="result=started nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}"
 poll_base; ev_row '2025-10-09 08:55:00' "$POLL_GOOD" > "$SB/bs-rows.jsonl"; poll
-beh "poll: a wiped row for this run's nonce => success" 0 "Hetzner at poll end: volume.server=null wipe hosts="
-poll_base; { ev_row '2025-10-09 08:54:00' "result=started nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}"; ev_row '2025-10-09 08:55:00' "result=refused reason=has_holders nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}"; ev_row '2025-10-09 08:55:30' "result=refused reason=mounted nonce=999 volume_id=${PIN} size_bytes=${SIZE_BYTES}"; } > "$SB/bs-rows.jsonl"; poll
+beh "poll: a wiped row for this run's nonce => success, with the Hetzner HTTP codes beside the end-of-poll values (W2-11)" 0 "Hetzner at poll end: volume.server=null (HTTP 200) wipe hosts= (HTTP 200)"
+poll_base; { ev_row '2025-10-09 08:54:00' "$POLL_STARTED"; ev_row '2025-10-09 08:55:00' "result=refused reason=has_holders nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}"; ev_row '2025-10-09 08:55:30' "result=refused reason=mounted nonce=999 volume_id=${PIN} size_bytes=${SIZE_BYTES}"; } > "$SB/bs-rows.jsonl"; poll
 beh "poll: a refusal for this nonce ends the poll at once and names the host's reason" 1 "host refusal: has_holders" "reason=mounted"
 if [[ "$(grep -c . "$SB/bs.log")" -le 2 ]]; then pass; else fail "BEHAVIOUR: the poll kept querying after a refusal" "" "$(cat "$SB/bs.log")"; fi
 if [[ "$SOUT" == *"result=started nonce=555"* && "$SOUT" != *"nonce=999"* ]]; then pass; else fail "BEHAVIOUR: the poll must print only THIS nonce's rows" "" "$SOUT"; fi
+beh "W2-4: a started row and no wiped row => 'may be PARTIALLY ZEROED; rollback is gone', naming the post-write guards, never 'stays intact'" 1 "the device may be PARTIALLY ZEROED" "volume stays intact"
+if [[ "$SOUT" == *"zero_failed, readback_nonzero, sig_survived"* && "$SOUT" == *"re-dispatch phase=wipe (the wipe re-enters)"* && "$SOUT" == *"rollback is gone"* ]]; then pass; else fail "BEHAVIOUR: the partial-zero message must cite the post-write guards and the re-entry" "" "$SOUT"; fi
+poll_base; ev_row '2025-10-09 08:55:00' "result=refused reason=has_holders nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}" > "$SB/bs-rows.jsonl"; poll
+beh "W2-4: a pre-write refusal with NO started row => 'nothing was written: the volume stays intact'" 1 "no started row, so nothing was written: the volume stays intact" "PARTIALLY"
+for g in zero_failed readback_nonzero sig_survived; do
+  poll_base; ev_row '2025-10-09 08:55:00' "result=refused reason=${g} nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}" > "$SB/bs-rows.jsonl"; poll
+  beh "W2-4: the post-write guard ${g} alone (no started row seen) still says PARTIALLY ZEROED" 1 "the device may be PARTIALLY ZEROED" "stays intact"
+done
 poll_base; : > "$SB/bs-rows.jsonl"; poll
-beh "poll: no rows => bounded by the wall-clock deadline, says none seen" 1 "host refusal: none seen"
+beh "poll: no rows => bounded by the wall-clock deadline, says none seen" 1 "host refusal: none seen" "PARTIALLY"
 n_q="$(grep -c . "$SB/bs.log")"
 if [[ "$n_q" -ge 3 && "$n_q" -le 25 ]]; then pass; else fail "BEHAVIOUR: expected the 20-minute wall-clock deadline to bound the poll to a handful of queries, saw ${n_q}" "" ""; fi
 if [[ "$(grep -vc -e '--no-archive' -e '^$' "$SB/bs.log")" -eq 0 && "$(grep -c -e '--since 1h' "$SB/bs.log")" -eq "$n_q" ]]; then pass; else fail "BEHAVIOUR: every poll query must be the hot-window form (--since 1h --no-archive)" "" "$(cat "$SB/bs.log")"; fi
+poll_base; : > "$SB/bs-rows.jsonl"; poll JOB_START=1759998000
+if [[ "$SRC" -eq 1 && ! -s "$SB/bs.log" ]]; then pass; else fail "W2-5: a deadline capped at JOB_START+1800 (already past) must run no query" "$SRC" "$(cat "$SB/bs.log")"; fi
+poll_base; : > "$SB/bs-rows.jsonl"; poll JOB_START=1759998600
+n_cap="$(grep -c . "$SB/bs.log")"
+if [[ "$n_cap" -ge 1 && "$n_cap" -lt "$n_q" ]]; then pass; else fail "W2-5: a later JOB_START must cap the poll tighter than 20 minutes (${n_cap} queries vs ${n_q})" "" ""; fi
 poll_base; poll BS_RC=7
 beh "poll: a failing query is printed (rc and stderr), not swallowed" 1 "poll query failed rc=7: boom: simulated query failure"
 poll_base; ev_row_as attacker-box "$WIPE_SHIPPER" '2025-10-09 08:55:00' "$POLL_GOOD" > "$SB/bs-rows.jsonl"; poll
-beh "poll: a perfect row from the wrong host is not evidence" 1 "no wiped row for nonce 555"
+beh "W2-3: a perfect row from the wrong host is not evidence; it ends the poll at once as emitter_mismatch, printing the observed host and shipper" 1 "reason=emitter_mismatch"
+if [[ "$SOUT" == *"observed host=attacker-box shipper=inngest-backstop-wipe"* && "$SOUT" == *"no wiped row for nonce 555"* && "$(grep -c . "$SB/bs.log")" -eq 1 ]]; then pass; else fail "W2-3: emitter_mismatch must print the observed values and not wait out the deadline" "" "$SOUT"; fi
+poll_base; ev_row_as "$(printf 'h%.0s' $(seq 1 200))" "$WIPE_SHIPPER" '2025-10-09 08:55:00' "$POLL_GOOD" > "$SB/bs-rows.jsonl"; poll
+if [[ "$SOUT" == *"observed host=hhhhhhhh"* && "$SOUT" != *"$(printf 'h%.0s' $(seq 1 81))"* ]]; then pass; else fail "W2-3: the observed host is cut to 80 characters" "" "$SOUT"; fi
+poll_base; ev_row '2025-10-09 08:55:00' "result=wiped nonce=555 volume_id=${PIN} size_bytes=$((SIZE_BYTES - 1)) readback=zero sig_after=none" > "$SB/bs-rows.jsonl"; poll
+beh "W2-3: a wiped row for the wrong size ends the poll at once with the funnel's own reason" 1 "reason=volume_mismatch"
+poll_base; ev_row '2025-10-09 08:55:00' "$POLL_STARTED" > "$SB/bs-rows.jsonl"; poll
+n_st="$(grep -c . "$SB/bs.log")"
+if [[ "$SRC" -eq 1 && "$n_st" -ge 3 ]]; then pass; else fail "W2-3: a started-only row is not a rejection: the poll keeps waiting for the wiped row (${n_st} queries)" "$SRC" "$SOUT"; fi
+poll_base; { ev_row_as attacker-box "$WIPE_SHIPPER" '2025-10-09 08:54:00' "result=refused reason=mounted nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}"; ev_row '2025-10-09 08:55:00' "$POLL_GOOD"; } > "$SB/bs-rows.jsonl"; poll
+beh "W2-2: a REFUSED row from another emitter bearing this nonce does not abort the poll when the genuine wiped row is there" 0 "Hetzner at poll end"
+# W2-1: nothing Better Stack-derived can open a workflow command. The row's message carries an embedded newline followed
+# by ::stop-commands:: and ::error:: lines, an ESC and a CR; the failing query's stderr does the same.
+inj_row() { jq -cn --arg dt '2025-10-09 08:55:00' --arg m "$1" --arg h "$WIPE_HOST" --arg sh "$WIPE_SHIPPER" \
+  '{dt:$dt, raw: ({message:$m, marker:"SOLEUR_INNGEST_BACKSTOP_WIPE", host:$h, dt:$dt, shipper:$sh} | tojson)}'; }
+no_cmd_lines() { # SOUT: no line opens a workflow command except the poll's OWN error annotation
+  ! grep -E '^[[:space:]]*::' <<<"$SOUT" | grep -vE '^::error::no wiped row for nonce 555' | grep -q . && [[ "$SOUT" != *$'\e'* && "$SOUT" != *$'\r'* ]]
+}
+poll_base; inj_row "SOLEUR_INNGEST_BACKSTOP_WIPE result=refused reason=x"$'\n::stop-commands::x\n::error::injected\e[31m\rtail'" nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}" > "$SB/bs-rows.jsonl"; poll
+if [[ "$SRC" -eq 1 && "$SOUT" == *"stop-commands::x"* && "$SOUT" == *"error::injected"* ]] && no_cmd_lines; then pass; else fail "W2-1: an embedded newline + ::stop-commands:: / ::error:: in a row must not open a command line in the poll output" "$SRC" "$SOUT"; fi
+poll_base; poll BS_RC=7 BS_ERRTXT=$'first\n::stop-commands::y\n   ::error::pwn'
+if [[ "$SOUT" == *"poll query failed rc=7: first"* ]] && no_cmd_lines; then pass; else fail "W2-1: the failing query's stderr is sanitized too" "$SRC" "$SOUT"; fi
+poll_base; inj_row "SOLEUR_INNGEST_BACKSTOP_WIPE result=refused reason=$(printf 'z%.0s' $(seq 1 3000)) nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}" > "$SB/bs-rows.jsonl"; poll
+if [[ "$(grep -m1 '^rows for nonce' <<<"$SOUT" | wc -c)" -le 640 ]]; then pass; else fail "W2-1: the printed rows are capped at 600 bytes" "" "$(grep -m1 '^rows for nonce' <<<"$SOUT" | wc -c)"; fi
 hzreset; hzset "$HZ_VOL" 404; poll
 beh "poll: an unreadable volume stops it before any query" 1 "cannot read volume"
 
 # ---- the destroy precondition (D-A, D-B), end to end through the real step ----
+# the behavioural history lives on the step's own (2025-10-09) timeline: run started 08:50, wipe host attached 08:52, row
+# ingested 08:55, detached 08:58 -- the row sits inside the attach..detach window, as the gate now demands
+ACTS_BEH="$SB/acts-beh.json"; write_acts "$ACTS_BEH" "$(act detach_volume success 2025-10-09T08:58:00+00:00 "$WIPE_SRV"),$(act attach_volume success 2025-10-09T08:52:00+00:00 "$WIPE_SRV"),${ACT_LIVE_ATT},${ACT_CREATE}"
 pre_base() {
-  hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "${HZ_VOL}/actions?per_page=50&sort=id%3Adesc" 200 "$(cat "$ACTS_OK")"; hzset "$HZ_SRV" 200 "$SRV_LIVE"
+  hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "${HZ_VOL}/actions?per_page=50&sort=id%3Adesc" 200 "$(cat "$ACTS_BEH")"; hzset "$HZ_SRV" 200 "$SRV_LIVE"
   printf '{"path":".github/workflows/apply-web-platform-infra.yml","head_branch":"main","event":"workflow_dispatch","status":"completed","run_started_at":"2025-10-09T08:50:00Z"}' > "$SB/gh-run.json"
   ev_row_as "$WIPE_HOST" "$WIPE_SHIPPER" '2025-10-09 08:55:00' "result=wiped nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES} readback=zero sig_after=none fs_uuid=abc last_write=x" > "$SB/bs-rows.jsonl"
 }
@@ -1307,7 +1637,8 @@ pre() { run_step "Destroy precondition" RETIRE_PHASE=destroy BETTERSTACK_QUERY_H
 pre_base; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
 beh "precondition: a wiped row + the wipe host's attach/detach in Hetzner's history => PASS" 0 "destroy_precondition: PASS"
 pre_base; printf '{"path":".github/workflows/apply-web-platform-infra.yml","head_branch":"feature","event":"workflow_dispatch","status":"completed","run_started_at":"2025-10-09T08:50:00Z"}' > "$SB/gh-run.json"; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
-beh "precondition: a wipe run from a non-main branch => refused (no floor)" 1 "reason=evidence_stale"
+beh "precondition: a wipe run from a non-main branch => refused (no floor), with its own explanatory line (W2-6)" 1 "reason=evidence_stale"
+if [[ "$SOUT" == *"run 555 could not be read, or is not a completed workflow_dispatch run of this workflow on main: no time floor"* ]]; then pass; else fail "W2-6: a non-main/unreadable wipe run must print its own line, not surface only as an unreadable floor" "" "$SOUT"; fi
 pre_base; rm -f "$SB/gh-run.json"; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
 beh "precondition: the wipe run cannot be read => refused" 1 "reason=evidence_stale"
 pre_base; printf '{"path":".github/workflows/other.yml","head_branch":"main","event":"workflow_dispatch","status":"completed","run_started_at":"2025-10-09T08:50:00Z"}' > "$SB/gh-run.json"; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
@@ -1315,7 +1646,8 @@ beh "precondition: a run of another workflow => refused" 1 "reason=evidence_stal
 pre_base; printf '{"path":".github/workflows/apply-web-platform-infra.yml","head_branch":"main","event":"workflow_dispatch","status":"in_progress","run_started_at":"2025-10-09T08:50:00Z"}' > "$SB/gh-run.json"; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
 beh "precondition: a wipe run that has not completed => refused" 1 "reason=evidence_stale"
 pre_base; hzset "${HZ_VOL}/actions?per_page=50&sort=id%3Adesc" 500; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
-beh "precondition: Hetzner's action history unreadable (500) => refused" 1 "reason=actions_unreadable"
+beh "precondition: Hetzner's action history unreadable (500) => refused, the HTTP code printed (W2-6)" 1 "reason=actions_unreadable"
+if [[ "$SOUT" == *"Hetzner GET volumes/106261946/actions?per_page=50&sort=id%3Adesc answered 500"* ]]; then pass; else fail "W2-6: rd must print the Hetzner HTTP code" "" "$SOUT"; fi
 pre_base; hzset "$HZ_SRV" 500; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
 beh "precondition: the live server id unreadable => refused" 1 "reason=live_server_unreadable"
 pre_base; hzset "$HZ_VOL" 200 "$(vol_json 777)"; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
@@ -1327,19 +1659,128 @@ CLO_GOOD_REF="https://github.com/jikig-ai/soleur/issues/8285#issuecomment-430000
 pre_base; cp "$CLO_OK" "$SB/gh-comment.json"; pre WIPE_RUN_ID= RETIRE_ERASURE=provider-only CLO_REF="$CLO_GOOD_REF"
 beh "precondition D4: an attestation comment from an OWNER naming the volume => PASS" 0 "destroy_precondition: PASS"
 if grep -q 'comment-fetch repos/jikig-ai/soleur/issues/comments/4300000001' "$SB/gh.log"; then pass; else fail "BEHAVIOUR: the comment must be fetched by id through the API" "" "$(cat "$SB/gh.log")"; fi
-pre_base; clo_file "$SB/gh-comment.json" NONE "volume ${PIN}"; pre WIPE_RUN_ID= RETIRE_ERASURE=provider-only CLO_REF="$CLO_GOOD_REF"
+pre_base; clo_file "$SB/gh-comment.json" NONE "$(clo_body)"; pre WIPE_RUN_ID= RETIRE_ERASURE=provider-only CLO_REF="$CLO_GOOD_REF"
 beh "precondition D4: the same comment from an author with NONE association => refused" 1 "reason=clo_author_not_privileged"
 pre_base; cp "$CLO_OK" "$SB/gh-comment.json"; pre WIPE_RUN_ID= RETIRE_ERASURE=provider-only CLO_REF="https://example.test/attestation"
 beh "precondition D4: an arbitrary https URL is refused before any fetch" 1 "reason=clo_ref_invalid"
 if [[ ! -s "$SB/gh.log" ]]; then pass; else fail "BEHAVIOUR: an invalid ref must not trigger an API fetch" "" "$(cat "$SB/gh.log")"; fi
 pre_base; pre WIPE_RUN_ID= RETIRE_ERASURE=provider-only CLO_REF="$CLO_GOOD_REF"
-beh "precondition D4: the comment cannot be fetched => refused" 1 "reason=clo_comment_unreadable"
+beh "precondition D4: the comment cannot be fetched => refused, with its own line (W2-6)" 1 "reason=clo_comment_unreadable"
+if [[ "$SOUT" == *"GitHub API could not return comment 4300000001"* ]]; then pass; else fail "W2-6: a failed comment fetch must print its own line" "" "$SOUT"; fi
+pre_base; cp "$CLO_OK" "$SB/gh-comment.json"; pre WIPE_RUN_ID= RETIRE_ERASURE=provider-only CLO_REF="$CLO_GOOD_REF" GITHUB_ACTOR=clo-reviewer
+beh "precondition D4 (E-2d): the dispatching GITHUB_ACTOR is the comment's author => refused (the step passes the actor)" 1 "reason=clo_same_actor"
+pre_base; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF= BS_RC=7
+beh "precondition: a failing Better Stack query is printed with rc and stderr (W2-6), then the empty rows are refused" 1 "Better Stack query failed rc=7: boom: simulated query failure"
+beh "precondition: ... and the gate then reports the rows as absent, not as a pass" 1 "reason=evidence_absent"
+pre_base; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF= BS_RC=7 BS_ERRTXT=$'x\n::stop-commands::z'
+if ! grep -qE '^[[:space:]]*::stop-commands' <<<"$SOUT"; then pass; else fail "W2-1: the destroy precondition's query stderr is sanitized" "" "$SOUT"; fi
+pre_base; hzset "$HZ_VOL" 500; pre WIPE_RUN_ID=555 RETIRE_ERASURE= CLO_REF=
+beh "precondition: the volume read answers 500 => 'Hetzner GET volumes/106261946 answered 500' and a refusal" 1 "Hetzner GET volumes/106261946 answered 500"
 
-# ---- the teardown step: rc 0 / 1 / 2 (W3) ----
+# ---- behavioural mutations: ONE literal of the extracted body is replaced, the bad scenario is re-run ----
+# mutrow_accept: the scenario was shown RED unmutated; under the mutation it must go GREEN (rc 0) -- the guard is load-bearing.
+# mutrow_red:    the scenario was shown GREEN unmutated; under the mutation it must go RED (rc != 0 or an UNEXPECTED stub call).
+mutrow_accept() { # <label> <step fragment> <old> <new> [VAR=val ...]
+  local label="$1" frag="$2"; STEP_MUT_OLD="$3"; STEP_MUT_NEW="$4"; shift 4
+  run_step "$frag" "$@"; STEP_MUT_OLD=""
+  if [[ "$SRC" -eq 0 && "$SOUT" != *UNEXPECTED* ]]; then pass; else fail "MUTATION: $label -- the mutated step still refused (rc=$SRC); the guard is not load-bearing" "$SRC" "$SOUT"; fi
+}
+mutrow_red() { # <label> <step fragment> <old> <new> [VAR=val ...]
+  local label="$1" frag="$2"; STEP_MUT_OLD="$3"; STEP_MUT_NEW="$4"; shift 4
+  run_step "$frag" "$@"; STEP_MUT_OLD=""
+  if [[ "$SRC" -ne 0 && "$SRC" -ne 99 ]] || [[ "$SOUT" == *UNEXPECTED* ]]; then pass; else fail "MUTATION: $label -- the mutated step still passed (rc=$SRC); the pin on it is decorative" "$SRC" "$SOUT"; fi
+}
+
+# ---- the live-store gate step (E-1, W2-6, W2-13 P2-2): stubbed doppler/Better Stack, the REAL probe-row lib ----
+LS_ENV=(RETIRE_PHASE=detach BETTERSTACK_QUERY_HOST=x BETTERSTACK_QUERY_USERNAME=x BETTERSTACK_QUERY_PASSWORD=x DOPPLER_TOKEN_INNGEST_ARM=armtok)
+probe_bs_row() { # <host> <host_name> <host_role> <emitter> <epoch-ago-seconds>
+  jq -cn --arg dt "$(date -u -d "@$(( $(date -u +%s) - $5 ))" '+%Y-%m-%d %H:%M:%S')" --arg h "$1" --arg hn "$2" --arg e "$4" \
+    --arg m "SOLEUR_INNGEST_SERVER_PROBE host_role=$3 data_mount_src=/dev/mapper/inngest-redis data_mount_devid=scsi-0HC_Volume_${LIVEV} redis_active=active redis_keys=3" \
+    '{dt:$dt, raw: ({SYSLOG_IDENTIFIER:$e, host:$h, host_name:$hn, message:$m} | tojson)}'
+}
+ls_base() { hzreset; rm -f "$SB"/dop/*; printf 'done' > "$SB/dop/INNGEST_LUKS_CUTOVER"; printf '%s' "$LIVEV" > "$SB/dop/INNGEST_LUKS_ACTIVE_VOLUME_ID"
+  probe_bs_row soleur-inngest soleur-inngest-prd dedicated inngest-server-probe 600 > "$SB/bs-rows.jsonl"; }
+lsrun() { run_step "Live-store gate" "${LS_ENV[@]}" "$@"; }
+ls_base; lsrun
+beh "live-store step: flag done, pointer on the LUKS volume, a fresh dedicated probe row from the REAL selector => PASS (producer and consumer meet)" 0 "live_store_gate: PASS"
+if [[ "$(cat "$SB/bs.log")" == *"--grep SOLEUR_INNGEST_SERVER_PROBE"* && "$(cat "$SB/bs.log")" == *"--since 6h"* ]]; then pass; else fail "live-store step: the probe query must be the 6 h window on the REAL marker" "" "$(cat "$SB/bs.log")"; fi
+ls_base; rm -f "$SB"/dop/*; lsrun
+beh "live-store step: Doppler returns nothing (failure) => __UNREADABLE__ => flag_not_done, fail-closed" 1 "reason=flag_not_done"
+ls_base; printf 'rollback' > "$SB/dop/INNGEST_LUKS_CUTOVER"; lsrun
+beh "live-store step: a rollback flag => refused" 1 "reason=flag_not_done"
+ls_base; printf '%s' "$PIN" > "$SB/dop/INNGEST_LUKS_ACTIVE_VOLUME_ID"; lsrun
+beh "live-store step: the pointer on the retired volume => refused" 1 "reason=active_id_mismatch"
+ls_base; probe_bs_row attacker-box soleur-inngest-prd dedicated inngest-server-probe 600 > "$SB/bs-rows.jsonl"; lsrun
+beh "live-store step: a probe row from ANOTHER host is not a probe row => probe_unusable" 1 "reason=probe_unusable"
+ls_base; probe_bs_row soleur-inngest other-name dedicated inngest-server-probe 600 > "$SB/bs-rows.jsonl"; lsrun
+beh "live-store step: ... nor from another host_name" 1 "reason=probe_unusable"
+ls_base; probe_bs_row soleur-inngest soleur-inngest-prd shared inngest-server-probe 600 > "$SB/bs-rows.jsonl"; lsrun
+beh "live-store step: the dedicated-role filter: a host_role=shared row is not the live store's => probe_unusable" 1 "reason=probe_unusable"
+ls_base; probe_bs_row soleur-inngest soleur-inngest-prd dedicated doppler 600 > "$SB/bs-rows.jsonl"; lsrun
+beh "live-store step: the shared predicate: a row from another emitter quoting the marker is not a probe row" 1 "reason=probe_unusable"
+ls_base; probe_bs_row soleur-inngest soleur-inngest-prd dedicated inngest-server-probe 12600 > "$SB/bs-rows.jsonl"; lsrun
+beh "live-store step: a 3.5 h old probe row => probe_stale" 1 "reason=probe_stale"
+ls_base; lsrun BETTERSTACK_QUERY_PASSWORD=
+beh "live-store step: a missing read credential fails closed before anything is read" 1 "a read credential is missing"
+ls_base; lsrun BS_RC=7
+beh "live-store step: a failing probe query prints its rc and stderr (W2-6)" 1 "probe-row query failed rc=7: boom: simulated query failure"
+ls_base; lsrun BS_RC=7 BS_ERRTXT=$'e\n::stop-commands::q'
+if ! grep -qE '^[[:space:]]*::stop-commands' <<<"$SOUT"; then pass; else fail "W2-1: the probe query's stderr is sanitized" "" "$SOUT"; fi
+ls_base; lsrun
+if [[ "$SOUT" != *"inflight"* && "$SOUT" != *"in_progress"* && ! -s "$SB/gh.log" ]] && ! grep -q 'hz' "$SB/step.sh"; then pass; else fail "E-1: the live-store step must neither count in-flight runs nor read Hetzner" "" "$SOUT"; fi
+# mutations (each re-runs the scenario that proves the line)
+ls_base; mutrow_red "G15: the @tsv join becomes join(\" \") (producer and consumer no longer meet)" "Live-store gate" "@tsv'" 'join(" ")'"'" "${LS_ENV[@]}"
+ls_base; probe_bs_row soleur-inngest soleur-inngest-prd shared inngest-server-probe 600 > "$SB/bs-rows.jsonl"
+mutrow_accept "G3: the dedicated-role filter dropped" "Live-store gate" '| select(((capture("(?:^| )host_role=(?<r>[^ ]*)")? // {r: ""}).r) == "dedicated")' '' "${LS_ENV[@]}"
+ls_base; probe_bs_row attacker-box soleur-inngest-prd dedicated inngest-server-probe 600 > "$SB/bs-rows.jsonl"
+mutrow_accept "G3b: the host/host_name isolation dropped" "Live-store gate" '| select(.host == $h and .host_name == $hn)' '' "${LS_ENV[@]}"
+ls_base; probe_bs_row soleur-inngest soleur-inngest-prd dedicated doppler 600 > "$SB/bs-rows.jsonl"
+mutrow_accept "G12c: the shared probe-row predicate dropped" "Live-store gate" '| select(inngest_probe_row)' '' "${LS_ENV[@]}"
+ls_base; mutrow_red "the Doppler token on argv again (the stub refuses it)" "Live-store gate" '--plain 2>/dev/null' '--plain --token "$DOPPLER_TOKEN_INNGEST_ARM" 2>/dev/null' "${LS_ENV[@]}"
+ls_base; printf 'rollback' > "$SB/dop/INNGEST_LUKS_CUTOVER"
+mutrow_accept "the gate call's refusal arm neutered (exit 1 dropped)" "Live-store gate" 'not provably serving."; exit 1' 'not provably serving."' "${LS_ENV[@]}"
+
+# ---- the apply step (W2-13 P2-1): argv, the untouched loop, the failure arm ----
+AP_ENV=(RETIRE_PHASE=detach)
+ap_plan() { printf '{"resource_changes":[%s]}' "$1" > "$SB/cwd/tfplan.json"; }
+ap_ent() { printf '{"address":%s,"change":{"actions":%s}}' "$(jq -Rn --arg a "$1" '$a')" "$2"; }
+apply_tail_ok() { [[ "$(grep '^terraform apply' "$SB/tf.log" | tail -1)" == "terraform apply -no-color -input=false tfplan" ]]; }
+APPLY_ADDRS=('hcloud_server.inngest' 'hcloud_volume.inngest_redis_luks' 'hcloud_volume_attachment.inngest_redis_luks' 'random_password.inngest_redis_luks' 'doppler_secret.inngest_redis_luks_key' 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_server.web["web-1"]')
+ap_clean() { local a e=""; for a in "${APPLY_ADDRS[@]}"; do e+="$(ap_ent "$a" '["no-op"]'),"; done; e+="$(ap_ent hcloud_volume_attachment.inngest_redis '["delete"]')"; printf '%s' "$e"; }
+hzreset; ap_plan "$(ap_clean)"; run_step "Terraform apply (phase)" "${AP_ENV[@]}" TF_APPLY_RC=0
+beh "apply: a clean plan => applies and reports the host and live store untouched" 0 "host and live encrypted store untouched"
+if apply_tail_ok; then pass; else fail "apply: the terraform apply argv must END in exactly 'tfplan' (the saved, gated plan)" "" "$(cat "$SB/tf.log")"; fi
+if ! grep -q 'tfplan-all\|-target\|-auto-approve' "$SB/tf.log"; then pass; else fail "apply: no other plan file, -target or -auto-approve" "" "$(cat "$SB/tf.log")"; fi
+: > "$SB/tf.log"; run_step "Terraform apply (phase)" "${AP_ENV[@]}" TF_APPLY_RC=1
+beh "apply: terraform apply fails => fails, says re-dispatch the SAME phase" 1 "terraform apply (detach) failed. Re-dispatch the SAME phase"
+for a in "${APPLY_ADDRS[@]}"; do
+  ap_plan "$(ap_ent "$a" '["update"]')"; run_step "Terraform apply (phase)" "${AP_ENV[@]}" TF_APPLY_RC=0
+  beh "apply: ${a} showing an update in the applied plan => fails hard, names it" 1 "${a} shows 1 action(s) in the applied plan"
+done
+for v in '"create"' '"delete"' '"forget"' '"delete","create"'; do
+  ap_plan "$(ap_ent hcloud_server.inngest "[$v]")"; run_step "Terraform apply (phase)" "${AP_ENV[@]}" TF_APPLY_RC=0
+  beh "apply: the host with the verb(s) ${v//\"/} => fails hard" 1 "hcloud_server.inngest shows 1 action(s)"
+done
+ap_plan "$(ap_ent hcloud_server.inngest '["read"]'),$(ap_ent hcloud_server.web '["update"]')"; run_step "Terraform apply (phase)" "${AP_ENV[@]}" TF_APPLY_RC=0
+beh "apply: a read of the host and an update of an UNLISTED address are not touches (control) => rc 0" 0 "untouched"
+ap_plan "$(ap_ent hcloud_server.inngest '["update"]')"
+mutrow_accept "G4: the untouched loop's verb filter loses 'update'" "Terraform apply (phase)" 'any(. == "create" or . == "update" or . == "delete" or . == "forget")' 'any(. == "create")' "${AP_ENV[@]}" TF_APPLY_RC=0
+mutrow_accept "G4b: the TOUCHED comparison neutered" "Terraform apply (phase)" '[[ "$TOUCHED" == "0" ]] || {' '[[ "$TOUCHED" == "0" ]] || [[ 1 ]] || {' "${AP_ENV[@]}" TF_APPLY_RC=0
+mutrow_accept "G4c: the loop reads another plan file's content (an empty list)" "Terraform apply (phase)" "| length' tfplan.json)" "| length' <<<'{\"resource_changes\":[]}')" "${AP_ENV[@]}" TF_APPLY_RC=0
+ap_plan "$(ap_clean)"; : > "$SB/tf.log"
+STEP_MUT_OLD='-input=false tfplan; then' STEP_MUT_NEW='-input=false; then' run_step "Terraform apply (phase)" "${AP_ENV[@]}" TF_APPLY_RC=0
+if ! apply_tail_ok; then pass; else fail "MUTATION G10: an apply without the saved plan must trip the argv pin" "" "$(cat "$SB/tf.log")"; fi
+: > "$SB/tf.log"; STEP_MUT_OLD='tfplan; then' STEP_MUT_NEW='tfplan-all; then' run_step "Terraform apply (phase)" "${AP_ENV[@]}" TF_APPLY_RC=0
+if ! apply_tail_ok; then pass; else fail "MUTATION G10b: an apply of another plan file must trip the argv pin" "" "$(cat "$SB/tf.log")"; fi
+STEP_MUT_OLD=""
+
+# ---- the teardown step: rc 0 / 1 / 2 (W3), the exact argv, the E-4 identity pin ----
 TD_ENV=(RETIRE_PHASE=wipe)
 td() { run_step "Teardown of the wipe host" "${TD_ENV[@]}" "$@"; }
 write_plan "${WSRV_DEL},${WATT_DEL}"; cp "$TMP/plan.json" "$SB/tf.show.ok"
 write_plan "${WSRV_DEL},${VOL_DEL}"; cp "$TMP/plan.json" "$SB/tf.show.bad"
+write_plan "${WSRV_DEL_N},${WATT_DEL}"; cp "$TMP/plan.json" "$SB/tf.show.name"
+write_plan "${WSRV_DEL_LIVE},${WATT_DEL}"; cp "$TMP/plan.json" "$SB/tf.show.live"
 hzreset; : > "$SB/tf.state"; cp "$SB/tf.show.ok" "$SB/tf.show"
 td TF_PLAN_RC=0 TF_APPLY_RC=64
 beh "teardown: plan rc 0 (nothing exists) => exits 0 without applying" 0 "nothing to tear down"
@@ -1348,39 +1789,135 @@ if ! grep -q 'apply -no-color' "$SB/tf.log"; then pass; else fail "BEHAVIOUR: te
 beh "teardown: plan rc 1 (error) => fails, names the leak" 1 "teardown plan failed (exit 1)"
 : > "$SB/tf.log"; td TF_PLAN_RC=2 TF_APPLY_RC=0
 beh "teardown: plan rc 2 + a legal deletes-only plan => applies" 0 ""
-if grep -q 'apply -no-color' "$SB/tf.log"; then pass; else fail "BEHAVIOUR: teardown must apply a legal plan" "" "$(cat "$SB/tf.log")"; fi
+if [[ "$(grep '^terraform apply' "$SB/tf.log")" == "terraform apply -no-color -input=false tfplan-td" ]]; then pass; else fail "BEHAVIOUR: the teardown apply must be exactly the saved teardown plan (tfplan-td)" "" "$(cat "$SB/tf.log")"; fi
+if [[ "$(grep '^terraform plan' "$SB/tf.log")" == "terraform plan -no-color -input=false -detailed-exitcode -out=tfplan-td -var=ssh_key_path=/x -var=inngest_backstop_wipe_enabled=false -target=hcloud_server.inngest_backstop_wipe -target=hcloud_volume_attachment.inngest_backstop_wipe" ]]; then pass; else fail "BEHAVIOUR: the teardown plan must be enabled=false, -detailed-exitcode and exactly the two wipe targets" "" "$(cat "$SB/tf.log")"; fi
 : > "$SB/tf.log"; td TF_PLAN_RC=2 TF_APPLY_RC=1
 beh "teardown: the apply fails => fails, says re-dispatch" 1 "teardown apply failed; re-dispatch phase=teardown"
 cp "$SB/tf.show.bad" "$SB/tf.show"; : > "$SB/tf.log"; td TF_PLAN_RC=2 TF_APPLY_RC=0
 beh "teardown: a plan that also deletes the retired volume is REFUSED by the gate, never applied" 1 "teardown plan REFUSED by the gate"
 if ! grep -q 'apply -no-color' "$SB/tf.log"; then pass; else fail "BEHAVIOUR: a refused teardown plan must not be applied" "" "$(cat "$SB/tf.log")"; fi
+for v in name live; do
+  cp "$SB/tf.show.$v" "$SB/tf.show"; : > "$SB/tf.log"; td TF_PLAN_RC=2 TF_APPLY_RC=0
+  beh "teardown (E-4): the 'wipe' server fails the identity pin (${v}) => refused by the gate with wipe_server_identity, never applied" 1 "reason=wipe_server_identity"
+  if ! grep -q 'apply -no-color' "$SB/tf.log"; then pass; else fail "BEHAVIOUR: an identity-refused teardown plan must not be applied" "" "$(cat "$SB/tf.log")"; fi
+done
+cp "$SB/tf.show.ok" "$SB/tf.show"
+TD_ENV=(RETIRE_PHASE=teardown); : > "$SB/tf.log"; td TF_PLAN_RC=2 TF_APPLY_RC=0
+beh "teardown phase: the same step applies the legal plan (phase=teardown)" 0 ""
+TD_ENV=(RETIRE_PHASE=wipe)
+cp "$SB/tf.show.bad" "$SB/tf.show"
+mutrow_accept "G10c: the teardown gate call's refusal neutered" "Teardown of the wipe host" '(only deletes of the two wipe addresses are legal)."; exit 1' '(only deletes of the two wipe addresses are legal)."' RETIRE_PHASE=wipe TF_PLAN_RC=2 TF_APPLY_RC=0
 
-# ---- the read-back and the progress comment (W1, W9) ----
+# ---- the read-back and the progress comment (W1, W9, W2-8, W2-11) ----
 rb() { run_step "Read-back" "$@"; }
 hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 200 '{"servers":[]}'; rb RETIRE_PHASE=detach
 beh "read-back detach: detached => records the rollback boundary" 0 "detached; rollback ends here"
 hzreset; hzset "$HZ_VOL" 200 "$(vol_json 169426216)"; hzset "$HZ_WS" 200 '{"servers":[]}'; rb RETIRE_PHASE=detach
 beh "read-back detach: still attached => fails and records it" 1 "is still attached"
 if grep -q 'READ-BACK FAILED' "$SB/rt/readback.txt"; then pass; else fail "BEHAVIOUR: a failed read-back must be recorded for the progress comment" "" "$(cat "$SB/rt/readback.txt" 2>/dev/null)"; fi
+hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 500; rb RETIRE_PHASE=detach
+beh "read-back: the wipe-server listing answers 500 => fails, naming the code" 1 "wipe-server listing answered 500"
 hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 200 '{"servers":[{"id":777}]}'; rb RETIRE_PHASE=wipe
 beh "read-back wipe: a wipe host still exists => fails" 1 "a wipe host still exists"
+hzreset; hzset "$HZ_VOL" 200 "$(vol_json 777)"; hzset "$HZ_WS" 200 '{"servers":[]}'; rb RETIRE_PHASE=wipe
+beh "read-back wipe: the volume is attached to a server again after the wipe => fails" 1 "is not detached again"
+hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 200 '{"servers":[]}'; rb RETIRE_PHASE=wipe
+beh "read-back wipe: host gone, volume detached again => PASS" 0 "wipe host and attachment gone"
+hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 200 '{"servers":[{"id":777}]}'; rb RETIRE_PHASE=teardown
+beh "read-back teardown: a wipe host still exists => fails" 1 "a wipe host still exists"
 printf '{"resource_changes":[]}' > "$SB/tf.show"
-hzreset; hzset "$HZ_VOL" 404; hzset "$HZ_WS" 200 '{"servers":[]}'; hzset "$HZ_SRV" 200 "{\"servers\":[{\"id\":169426216,\"volumes\":[${LIVEV}]}]}"; rb RETIRE_PHASE=destroy TF_PLAN_RC=0
-beh "read-back destroy: 404, the host holds only the live volume, no retired address in the plan => PASS" 0 "untargeted plan lists neither retired address"
+hzreset; hzset "$HZ_VOL" 404; hzset "$HZ_WS" 200 '{"servers":[]}'; hzset "$HZ_SRV" 200 "{\"servers\":[{\"id\":169426216,\"volumes\":[${LIVEV}]}]}"; rb RETIRE_PHASE=destroy TF_PLAN_RC=0 APPLY=skipped
+beh "read-back destroy on the 404 shortcut (apply skipped): 404, the host holds only the live volume, no retired address => PASS" 0 "untargeted plan lists neither retired address"
 hzreset; hzset "$HZ_VOL" 404; hzset "$HZ_WS" 200 '{"servers":[]}'; hzset "$HZ_SRV" 200 "{\"servers\":[{\"id\":169426216,\"volumes\":[${LIVEV},${PIN}]}]}"; rb RETIRE_PHASE=destroy TF_PLAN_RC=0
 beh "read-back destroy: the host also lists the retired volume => fails" 1 "inngest server volumes"
+hzreset; hzset "$HZ_VOL" 404; hzset "$HZ_WS" 200 '{"servers":[]}'; hzset "$HZ_SRV" 200 "{\"servers\":[{\"id\":169426216,\"volumes\":[${LIVEV}]}]}"; rb RETIRE_PHASE=destroy TF_PLAN_RC=1
+beh "read-back destroy: the read-only untargeted plan fails => fails" 1 "read-only untargeted plan failed"
+printf '{"resource_changes":[{"address":"hcloud_volume.inngest_redis","change":{"actions":["delete"]}}]}' > "$SB/tf.show"
+hzreset; hzset "$HZ_VOL" 404; hzset "$HZ_WS" 200 '{"servers":[]}'; hzset "$HZ_SRV" 200 "{\"servers\":[{\"id\":169426216,\"volumes\":[${LIVEV}]}]}"; rb RETIRE_PHASE=destroy TF_PLAN_RC=0
+beh "read-back destroy: a retired address is still in the plan => fails" 1 "a retired address is still in the plan"
 hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 200 '{"servers":[]}'; rb RETIRE_PHASE=destroy TF_PLAN_RC=0
-beh "read-back destroy: the volume still answers 200 => fails" 1 "expected 404"
+beh "read-back destroy: the volume still answers 200 after an apply => fails" 1 "expected 404"
+hzreset; hzset "$HZ_VOL" 200 "$(vol_json null)"; hzset "$HZ_WS" 200 '{"servers":[]}'; rb RETIRE_PHASE=destroy TF_PLAN_RC=0 APPLY=skipped
+beh "W2-8: the destroy apply never ran (a gate refused) => 'destroy not applied', not a failed destroy" 0 "destroy not applied" "READ-BACK FAILED"
+if ! grep -q 'READ-BACK FAILED' "$SB/rt/readback.txt"; then pass; else fail "W2-8: a refused destroy must not leave READ-BACK FAILED in the progress comment's record" "" "$(cat "$SB/rt/readback.txt")"; fi
 prog() { rm -f "$SB/gh-issue.txt"; echo "$1" > "$SB/clock"; run_step "Progress comment" SB_CLOCK="$SB/clock" RETIRE_PHASE="$2" JOB_STATUS="$3" RUN_URL=u "${@:4}"; }
 mkdir -p "$SB/rt"; printf 'volume x detached' > "$SB/rt/readback.txt"
+# the clock is a SEAM (SB_CLOCK): the date stub answers `date -u +%s` from it (+60 per call), so no row reads the real clock
+EXP_EP="$(date -u -d 2026-10-22 +%s)"
+gh_issue() { cat "$SB/gh-issue.txt" 2>/dev/null; }
 prog 1760000000 wipe failure
-if [[ "$SRC" -eq 0 && "$(cat "$SB/gh-issue.txt")" == *"D4 decision point (wipe not yet succeeded): 2026-10-17."* && "$(cat "$SB/gh-issue.txt")" == *"Read-back: volume x detached"* ]]; then pass; else fail "BEHAVIOUR: the progress comment before destroy carries the D4 point and the read-back" "$SRC" "$(cat "$SB/gh-issue.txt" 2>/dev/null) $SOUT"; fi
-prog 1760000000 destroy success
-if [[ "$SRC" -eq 0 && "$(cat "$SB/gh-issue.txt")" != *"D4 decision"* && "$(cat "$SB/gh-issue.txt")" == *"day(s) to the non-extendable 2026-10-22"* ]]; then pass; else fail "BEHAVIOUR: the D4 sentence must go once destroy has succeeded" "$SRC" "$(cat "$SB/gh-issue.txt" 2>/dev/null)"; fi
+if [[ "$SRC" -eq 0 && "$(gh_issue)" == *"D4 decision point (wipe not yet succeeded): 2026-10-17."* && "$(gh_issue)" == *"Read-back: volume x detached"* ]]; then pass; else fail "BEHAVIOUR: a FAILED wipe's progress comment carries the D4 point and the read-back" "$SRC" "$(gh_issue) $SOUT"; fi
+prog 1760000000 wipe success
+if [[ "$SRC" -eq 0 && "$(gh_issue)" != *"D4 decision"* ]]; then pass; else fail "W2-11: a SUCCESSFUL wipe drops the D4 sentence" "$SRC" "$(gh_issue)"; fi
+prog 1760000000 detach success
+if [[ "$SRC" -eq 0 && "$(gh_issue)" == *"D4 decision point"* ]]; then pass; else fail "W2-11: phase=detach (the wipe is still to come) carries the D4 sentence" "$SRC" "$(gh_issue)"; fi
+for ph in teardown destroy; do
+  prog 1760000000 "$ph" failure
+  if [[ "$SRC" -eq 0 && "$(gh_issue)" != *"D4 decision"* && "$(gh_issue)" == *"day(s) to the non-extendable 2026-10-22"* ]]; then pass; else fail "W2-11: phase=${ph} never carries the D4 sentence" "$SRC" "$(gh_issue)"; fi
+done
+prog $((EXP_EP - 3 * 86400 - 70)) wipe success
+if [[ "$SRC" -eq 0 && "$(gh_issue)" == *$'\n\n3 day(s) to the non-extendable 2026-10-22 ledger expiry.'* ]]; then pass; else fail "BEHAVIOUR: 3 days and 10 s left prints 3 day(s)" "$SRC" "$(gh_issue)"; fi
+prog $((EXP_EP - 60)) wipe success
+if [[ "$SRC" -eq 0 && "$(gh_issue)" == *$'\n\n0 day(s) to the non-extendable'* ]]; then pass; else fail "BEHAVIOUR: exactly at the expiry instant is 0 day(s), not OVERDUE" "$SRC" "$(gh_issue)"; fi
+prog $((EXP_EP - 59)) wipe success
+if [[ "$SRC" -eq 0 && "$(gh_issue)" == *"OVERDUE by 1 day(s)"* ]]; then pass; else fail "W2-11: one second past the expiry is OVERDUE by 1 day(s)" "$SRC" "$(gh_issue)"; fi
 prog 1800000000 wipe success
-if [[ "$SRC" -eq 0 && "$(cat "$SB/gh-issue.txt")" == *$'\n\n0 day(s) to the non-extendable'* ]]; then pass; else fail "BEHAVIOUR: a past expiry must clamp to 0 day(s), never print a negative number" "$SRC" "$(cat "$SB/gh-issue.txt" 2>/dev/null)"; fi
+if [[ "$SRC" -eq 0 && "$(gh_issue)" == *"OVERDUE by 86 day(s)"* && "$(gh_issue)" != *"-"[0-9]*"day(s)"* ]]; then pass; else fail "W2-11: a past expiry (pinned clock 1800000000 = 2027-01-15) prints OVERDUE by 86 day(s), never a negative number" "$SRC" "$(gh_issue)"; fi
+prog $((EXP_EP + 2 * 86400 - 60)) wipe success
+if [[ "$SRC" -eq 0 && "$(gh_issue)" == *"OVERDUE by 2 day(s)"* ]]; then pass; else fail "W2-11: exactly two days past is OVERDUE by 2 day(s)" "$SRC" "$(gh_issue)"; fi
 
-# ── H (suite edit): replace the sourced lib with an ALWAYS-PASS stub; THIS suite must fail ──
+# ── REJECT-CONTROLS for the verdict helpers lsg / dpc / evg (W5): drive each in a direction that MUST
+#    fail (a good call asserted to refuse, a refusing call asserted to pass, a wrong reason) and require
+#    exactly one recorded failure, then unwind. Reported with printf + exit, never through the helper
+#    it back-stops: a helper that cannot fail would otherwise make every row in this file decorative. ──
+reject_control() { # <label> <helper> <args...>
+  local label="$1" p0=$passes f0=$fails; shift
+  "$@" >/dev/null 2>&1
+  if [[ "$fails" -ne $((f0 + 1)) || "$passes" -ne "$p0" ]]; then
+    printf 'FATAL: reject-control "%s": the helper did not fail exactly once on a must-fail arm (passes %s->%s, fails %s->%s)\n' "$label" "$p0" "$passes" "$f0" "$fails" >&2
+    exit 2
+  fi
+  passes=$p0; fails=$f0; pass
+}
+reject_control "lsg: a good call asserted as a refusal" lsg "x" 1 "reason=flag_not_done"
+reject_control "lsg: a refusing call asserted as a PASS" lsg "x" 0 "$LS_PASS" "flag=rollback"
+reject_control "lsg: a refusing call asserted with the wrong reason" lsg "x" 1 "reason=probe_stale" "flag=rollback"
+reject_control "dpc: a good call asserted as a refusal" dpc "x" 1 "reason=not_wiped"
+reject_control "dpc: a refusing call asserted as a PASS" dpc "x" 0 "$DP_PASS" "run=12ab"
+reject_control "dpc: a refusing call asserted with the wrong reason" dpc "x" 1 "reason=still_attached" "run=12ab"
+reject_control "evg: a good call asserted as a refusal" evg "x" "reason=not_wiped" --rows-file "$EV" --nonce "$NONCE" --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$AFTER_EPOCH" --now "$NOW4"
+reject_control "evg: a refusing call asserted with the wrong reason" evg "x" "reason=not_wiped" --rows-file "$EV" --nonce abc --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$AFTER_EPOCH" --now "$NOW4"
+reject_control "evok: a refusing call asserted as a PASS" evok "x" "$EV" "$NOW4" $((ROW_EPOCH + 1))
+# the rc conjunct and the one_line conjunct of each helper, varied ONE AT A TIME against a function that satisfies the rest
+two_line_refuse() { echo "stub reason=flag_not_done"; echo "a second line"; return 1; }
+pass_rc1() { echo "stub PASS inngest_backstop_live_store_gate: PASS inngest_backstop_destroy_precondition: PASS evidence_gate: PASS"; return 1; }
+lsg_two() { LSG_FN=two_line_refuse lsg "$@"; }
+dpc_two() { DPC_FN=two_line_refuse dpc "$@"; }
+evg_two() { EVG_FN=two_line_refuse evg "$@"; }
+lsg_rc() { LSG_FN=pass_rc1 lsg "$@"; }
+dpc_rc() { DPC_FN=pass_rc1 dpc "$@"; }
+evok_rc() { EVG_FN=pass_rc1 evok "$@"; }
+reject_control "lsg rc conjunct: a PASS-text output with rc 1 asserted as a PASS" lsg_rc "x" 0 "$LS_PASS"
+reject_control "lsg one_line conjunct: two lines asserted as one refusal" lsg_two "x" 1 "reason=flag_not_done"
+reject_control "dpc rc conjunct: a PASS-text output with rc 1 asserted as a PASS" dpc_rc "x" 0 "$DP_PASS"
+reject_control "dpc one_line conjunct: two lines asserted as one refusal" dpc_two "x" 1 "reason=flag_not_done"
+reject_control "evg one_line conjunct: two lines asserted as one refusal" evg_two "x" "reason=flag_not_done" --rows-file "$EV"
+reject_control "evg rc conjunct: a refusing call asserted... the good call (rc 0) with a matching needle" evg "x" "evidence_gate: PASS" --rows-file "$EV" --nonce "$NONCE" --volume-id "$PIN" --size-bytes "$SIZE_BYTES" --after-epoch "$AFTER_EPOCH" --now "$NOW4"
+reject_control "evok rc conjunct: a PASS-text output with rc 1 asserted as a PASS" evok_rc "x" "$EV" "$NOW4" "$AFTER_EPOCH"
+# ── reject-controls for `beh` (it reads SOUT/SRC): drop the rc conjunct, the UNEXPECTED check, the absent-needle check ──
+SOUT="has needle"; SRC=1;  reject_control "beh rc conjunct: rc 1 asserted as rc 0" beh "x" 0 "has needle"
+SOUT="has needle UNEXPECTED hz foo"; SRC=0; reject_control "beh UNEXPECTED conjunct: a stub that saw an unexpected call" beh "x" 0 "has needle"
+SOUT="has needle and BADTHING"; SRC=0; reject_control "beh absent-needle conjunct: the forbidden text is present" beh "x" 0 "has needle" "BADTHING"
+SOUT="no match"; SRC=0; reject_control "beh needle conjunct: the needle is absent" beh "x" 0 "has needle"
+# the run_step mutation helpers must be able to fail too
+SRC=0; SOUT="fine"
+reject_control "mutrow_red: a mutation that leaves the step green" mutrow_red "x" "Dispatch summary" "GITHUB_STEP_SUMMARY" "GITHUB_STEP_SUMMARY" RETIRE_PHASE=detach GITHUB_STEP_SUMMARY="$SB/summary.md" JOB_STATUS=success RUN_URL=u
+reject_control "mutrow_accept: a mutation that still refuses (or does not land)" mutrow_accept "x" "Dispatch summary" "THIS-LITERAL-IS-NOT-IN-THE-BODY" "y"
+STEP_MUT_OLD=""
+
+# ── H (suite edit): replace the sourced lib with an ALWAYS-PASS stub; THIS suite must fail, loudly ──
+# rc must be exactly 1 (a FATAL 2 or a crash would also be "non-zero") and the stub must trip at least META_MIN rows.
+META_MIN=150
 if [[ -z "${SOLEUR_IBRG_META:-}" ]]; then
   STUBLIB="$TMP/stub-lib.sh"
   cat > "$STUBLIB" <<'STUB'
@@ -1390,22 +1927,24 @@ inngest_backstop_destroy_precondition() { echo "inngest_backstop_destroy_precond
 inngest_backstop_wipe_evidence_gate() { echo "inngest_backstop_wipe_evidence_gate: PASS (stub)"; return 0; }
 inngest_backstop_wipe_nonce_rows() { return 0; }
 STUB
-  if SOLEUR_IBRG_META=1 INNGEST_BACKSTOP_GATE_LIB="$STUBLIB" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
-    fail "H: with an always-pass stub lib this suite still exits 0 -- the must-RED rows are decorative"
-  else pass; fi
+  meta_rc=0; meta_out="$(SOLEUR_IBRG_META=1 INNGEST_BACKSTOP_GATE_LIB="$STUBLIB" bash "${BASH_SOURCE[0]}" 2>/dev/null)" || meta_rc=$?
+  meta_f="$(sed -n 's/^inngest-backstop-retire-gate: [0-9]* passed, \([0-9]*\) failed$/\1/p' <<<"$meta_out" | tail -1)"
+  if [[ "$meta_rc" -eq 1 && "$meta_f" =~ ^[0-9]+$ && "$meta_f" -ge "$META_MIN" ]]; then pass; else fail "H: with an always-pass stub lib this suite must exit EXACTLY 1 with >= ${META_MIN} failed rows -- the must-RED rows are decorative (rc=${meta_rc}, failed='${meta_f}')"; fi
 fi
 
-# ── Anti-vacuity: the must-PASS arms exist (counted from the file) and a floor on total assertions ──
-_pass_arms="$(grep -cE '^(chk|lsg|dpc|evok) "(PASS|LS PASS|G4 PASS|H[0-9]?:|G4 H:|Row 8[abc]|Row 10[adg]|Row 11d|G4 D4: erasure=provider-only \+|G4 D4: PASS|G4 explicit|G4 D-A: the attach finished AT|REAL ROW: the wipe script|EV boundary: (now|floor))' "${BASH_SOURCE[0]}" || true)"
-if [[ "$_pass_arms" =~ ^[0-9]+$ && "$_pass_arms" -ge 24 ]]; then pass; else fail "only ${_pass_arms} must-PASS arms found (floor 24) -- a guard stuck at 'reject everything' would go undetected"; fi
+# ── Anti-vacuity: EXACT floors. The assertion total and the executed must-PASS arms are pinned to the numbers this suite
+#    produces; adding or deleting a row means raising or lowering them in the SAME edit. ──
+EXPECTED_TOTAL=660
+EXPECTED_MP=77
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 460 ]]; then
+if [[ "$mp" -ne "$EXPECTED_MP" ]]; then fails=$((fails + 1)); printf '  FAIL ANTI-VACUITY: %s must-PASS arms executed and passed, expected exactly %s (a guard stuck at "reject everything" would hide in the gap)\n' "$mp" "$EXPECTED_MP" >&2
+else printf '  ok   must-PASS arms executed: %s\n' "$mp"; fi
+_ran=$((passes + fails))
+if [[ "$_ran" -ne "$EXPECTED_TOTAL" ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 460. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
-  printf 'inngest-backstop-retire-gate: %s passed, %s failed\n' "$passes" "$fails"
-  exit 1
+  printf '  FAIL ANTI-VACUITY: %s assertions ran, expected exactly %s. Arms were deleted, skipped, added without raising the floor, or the suite exited early.\n' "$_ran" "$EXPECTED_TOTAL" >&2
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 460)\n' "$_ran"
+  printf '  ok   anti-vacuity: exactly %s assertions ran\n' "$_ran"
 fi
 echo ""
 echo "inngest-backstop-retire-gate: ${passes} passed, ${fails} failed"

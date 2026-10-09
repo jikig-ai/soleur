@@ -3602,12 +3602,18 @@ describe("inngest-backstop-retire dispatch: registration, binding, ordering and 
 
   test("D-D/W1: the live-store gate is skipped for teardown ONLY, and the read-back runs under always()", () => {
     const LIVE = /- name: Live-store gate[^\n]*\n {8}if: env\.RETIRE_PHASE != 'teardown'\n/;
-    const READBACK = /- name: Read-back[^\n]*\n {8}if: always\(\) && steps\.conv\.outcome == 'success' && steps\.conv\.outputs\.skip != 'true'\n/;
+    // W2-8: the read-back also runs on the destroy 404 shortcut (skip=true) so a record exists
+    const READBACK = /- name: Read-back[^\n]*\n {8}if: always\(\) && steps\.conv\.outcome == 'success' && \(steps\.conv\.outputs\.skip != 'true' \|\| env\.RETIRE_PHASE == 'destroy'\)\n/;
+    // W2-7: the whole-root untargeted plan is skipped for teardown (a leaked wipe host must always be cleanable)
+    const UNTARGETED = /- name: Read-only untargeted plan[^\n]*\n {8}if: steps\.conv\.outputs\.skip != 'true' && env\.RETIRE_PHASE != 'teardown'\n/;
     expect(jobBlock).toMatch(LIVE);
     expect(jobBlock).toMatch(READBACK);
+    expect(jobBlock).toMatch(UNTARGETED);
     // non-vacuity: the patterns can tell the guarded form from an unguarded one
     expect(jobBlock.replace("if: env.RETIRE_PHASE != 'teardown'\n", "")).not.toMatch(LIVE);
     expect(jobBlock.replaceAll("if: always() && steps.conv.outcome", "if: steps.conv.outcome")).not.toMatch(READBACK);
+    expect(jobBlock.replace("(steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')", "steps.conv.outputs.skip != 'true'")).not.toMatch(READBACK);
+    expect(jobBlock.replace("skip != 'true' && env.RETIRE_PHASE != 'teardown'\n        working-directory: ${{ env.INFRA_DIR }}\n        env:\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}\n        run: |\n          set +e\n          set -uo pipefail\n          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \\\n            terraform plan -no-color -input=false -out=tfplan-all", "skip != 'true'\n        working-directory: ${{ env.INFRA_DIR }}\n        env:\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}\n        run: |\n          set +e\n          set -uo pipefail\n          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \\\n            terraform plan -no-color -input=false -out=tfplan-all")).not.toMatch(UNTARGETED);
   });
 
   test("D-A/D-B: the destroy precondition is handed Hetzner's action history and the fetched CLO comment, never an HTTP status", () => {
