@@ -447,12 +447,12 @@ its own pre-existing rows; the guard proves routing through it, not the sanitise
 
 ### Pre-merge (PR)
 
-- [ ] `bash apps/web-platform/infra/ci-deploy.test.sh` passes with the raised floor; Guard 2 (`assert_bwrap_probe_argv`) and Guard 1 pass unmodified.
-- [ ] `git diff origin/main -- apps/web-platform/infra/ci-deploy.test.sh` shows no deleted line inside the #8016 Scenarios 1-4 or Guard 1/2 blocks.
-- [ ] `git diff origin/main -- apps/web-platform/infra/ci-deploy.sh` leaves the probe statement, `BWRAP_RC` capture, `DEPLOY_ROLLBACK` line and teardown order byte-identical (the diff only adds functions and two guarded calls).
-- [ ] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-09-fix-canary-sandbox-failure-self-diagnosis-plan.md` passes.
-- [ ] `cd plugins/soleur/test && bun test preflight-discoverability-test.test.ts` passes with `BASELINE_DECLARED_PROBES` at 52.
-- [ ] orphan-suite census is unaffected (no new suite file is added; run `bash scripts/lint-orphan-test-suites.sh`).
+- [x] `bash apps/web-platform/infra/ci-deploy.test.sh` passes with the raised floor; Guard 2 (`assert_bwrap_probe_argv`) and Guard 1 pass unmodified.
+- [x] `git diff origin/main -- apps/web-platform/infra/ci-deploy.test.sh` shows no deleted line inside the #8016 Scenarios 1-4 or Guard 1/2 blocks.
+- [x] `git diff origin/main -- apps/web-platform/infra/ci-deploy.sh` leaves the probe statement, `BWRAP_RC` capture, `DEPLOY_ROLLBACK` line and teardown order byte-identical (the diff only adds functions and two guarded calls).
+- [x] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-09-fix-canary-sandbox-failure-self-diagnosis-plan.md` passes.
+- [x] `cd plugins/soleur/test && bun test preflight-discoverability-test.test.ts` passes with `BASELINE_DECLARED_PROBES` at 53 (main was already 52 from #9826 when this branch merged it in; this plan is the 53rd declaring plan).
+- [x] orphan-suite census is unaffected (no new suite file is added; run `bash scripts/lint-orphan-test-suites.sh`).
 - [ ] PR body says `Ref #9871` and `Ref #9860`, never `Closes`.
 
 ### Post-merge (automatable)
