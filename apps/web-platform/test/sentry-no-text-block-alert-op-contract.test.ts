@@ -130,8 +130,14 @@ describe("haiku_no_text_block_rate — emitter/rule contract", () => {
   it("every occurrence of the op token is a literal emit site (no constant or indirection hides one)", () => {
     const literal = emitSites().length;
     let tokens = 0;
-    for (const { src } of serverSources()) tokens += [...src.matchAll(/no-text-block/g)].length;
-    expect(tokens).toBe(literal);
+    const perFile: string[] = [];
+    for (const { file, src } of serverSources()) {
+      const n = [...src.matchAll(/no-text-block/g)].length;
+      tokens += n;
+      if (n > 0) perFile.push(`${file}=${n}`);
+    }
+    // The per-file list names the offender: a constant or a string holding the token fails here.
+    expect(tokens, `token counts per file: ${perFile.join(", ")}`).toBe(literal);
   });
 
   it("every file that builds a no-text-block `extra` also holds a literal emit site", () => {
