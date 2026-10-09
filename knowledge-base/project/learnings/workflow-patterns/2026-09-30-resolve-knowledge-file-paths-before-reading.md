@@ -70,3 +70,8 @@ first argument without checking that an argument existed. A zero-argument
 call caused a visible parser-probe failure; adding the argument-count guard
 made the repeated read-only scan pass. Treat auxiliary parser failures as
 incomplete import evidence until the corrected scan succeeds.
+
+A maintenance merge used `--stat=0`, which Git rejected because `--stat`
+takes no value. No merge occurred on that attempt. The corrected `--no-stat`
+command merged cleanly. Inspect each command's result rather than letting a
+later successful command conceal an earlier printed error in a shell batch.

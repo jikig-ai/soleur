@@ -2,26 +2,30 @@
 title: Fresh offline recovery-image build proposal
 date: 2026-10-09
 pr: 9051
-status: prepared-for-explicit-authorization-not-executed
+status: offline-image-built-recovery-unqualified
 ---
 
 ## Scope and authorization
 
-Maintenance was green at source `70b6d1a4d92a42dad406a8d87899668f105043a5`:
+Maintenance was green at approved source `f55142a4cfc07e20fb2f6027184ab84819af29f2`:
 all 25 required checks passed, including the CI and tenant aggregates.
-The next recovery build remains held. The historical `27c04a95` one-use
-rehearsal authorization is consumed and cannot authorize a new candidate.
+The user separately approved the exact one-use offline build command. It
+completed successfully; see [the executed build record](recovery-build-f55142a4-2026-10-09.md).
+That build authorization is consumed. The historical `27c04a95` one-use
+rehearsal authorization is also consumed and cannot authorize a new candidate.
 
-A fresh task-owned proposal is prepared in ignored scratch at
+A task-owned proposal was prepared in ignored scratch at
 `.soleur/current-source-recovery-proposal-20261009/prepare.py`. It is an
 execution artifact, not committed reusable tooling. Its immutable full source
 SHA and explicit one-build selector must match the reviewed command. It checks
-HEAD and tracked build inputs before proceeding. Documentation-only commits
-require repinning the proposal; they do not establish a new build result.
+HEAD and tracked build inputs before proceeding. Before authorization,
+documentation-only commits require repinning; they do not establish a build
+result. After execution, preserve the consumed runner and source-bound record
+unchanged. A future build needs a fresh proposal and explicit authorization.
 
-The proposed action is one offline application compile and local image build,
-followed by filesystem-only mount/hash probes. It starts no Web app or database
-and performs no recovery rehearsal, provider/authentication call, image push,
+The authorized action was one offline application compile and local image build,
+followed by filesystem-only mount/hash probes. It started no Web app or database
+and performed no recovery rehearsal, provider/authentication call, image push,
 deployment, account/settings change or shared write. All later holds remain.
 
 ## Read-only preparation evidence
@@ -61,7 +65,7 @@ historical raw-image-ID BuildKit registry lookup. Its source label, six runtime
 artifacts and full plugin manifest are verified independently in the local
 image. Probes run only filesystem/hash checks, never application entrypoints.
 
-This would prepare an application image, not establish production runner
+The result prepares an application image, without establishing production runner
 parity. Production npm install scripts, default Next build mode, global
 CLI/browser/system dependencies, bwrap capabilities/outer wrapping, infrastructure
 readiness, observability and full Supabase historical/auth/storage substrate
@@ -77,7 +81,8 @@ container SYS_ADMIN addition, and rejects any file-cap binary. These production
 image controls, bwrap shim/outer-wrap execution, deploy-state/isolation ledgers
 and advisory image-CVE scanning are not supplied or qualified by this offline
 application-image proposal. Compiler-import inspection confirms the export
-set above is still sufficient; no build or infrastructure probe ran.
+set above is still sufficient. That inspection preceded the separately
+approved build; no infrastructure probe ran.
 
 Maintenance source `82e38794147e698a6916178e5e4d3d46f42ea0cb` passed all 25
 required checks (CI `37962538777`, tenant `37962538591`, RLS `37962538358`,
@@ -91,7 +96,8 @@ disabled env-file loading, fake adapters/processes and one fork worker were
 retained. Syntax checks passed for 21 changed shell scripts. These checks do
 not qualify live sandbox, deployed-image isolation or recovery behavior.
 
-No build, image/container mutation, SQL or rehearsal has executed as part of
-this proposal. Codex remains default-off, customer content blocked and PR #9051
+One approved offline build completed at source `f55142a4`; all owned containers
+were removed. App startup, SQL and recovery rehearsal remain unexecuted.
+Codex remains default-off, customer content blocked and PR #9051
 draft with auto-merge disarmed. Subscription and OpenAI assistant usage are
 separate from local compute; Soleur disclaims warranty for runtime cost.
