@@ -75,3 +75,15 @@ A maintenance merge used `--stat=0`, which Git rejected because `--stat`
 takes no value. No merge occurred on that attempt. The corrected `--no-stat`
 command merged cleanly. Inspect each command's result rather than letting a
 later successful command conceal an earlier printed error in a shell batch.
+
+The evidence head's CI image check failed while resolving the pinned public
+Node base: Docker Hub's token endpoint returned HTTP 504 before any application
+or CLI compilation. Preserve that upstream failure and its source/job identity
+instead of treating it as a source-build verdict. It does not authorize retrying
+a separately consumed local recovery build.
+
+Fetching the completed job log with `gh api` was refused because its response
+contained terminal escapes. `--allow-escape-sequences` admitted the response
+to a task-owned log file; ANSI/control sequences were stripped before bounded
+display. Keep escape-bearing logs out of the host terminal and investigate the
+underlying job failure from normalized text.
