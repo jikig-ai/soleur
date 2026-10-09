@@ -5931,6 +5931,9 @@ if want_scripts; then
   # Actions shell against a gh shim, and pins the eight gated conditions, the `test` aggregator and the wrapper.
   # Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/ci-push-dedupe" bash scripts/ci-push-dedupe.test.sh
+  # #9512: the push-dedupe soak probe's exit-code contract (a fake gh, an injected clock, and mutation rows over
+  # copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/ci-push-dedupe-soak-9512" bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
 fi
 
 # Named bun-test entries — bun shard.

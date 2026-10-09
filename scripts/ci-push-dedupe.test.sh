@@ -95,6 +95,17 @@ elide=true
 
 mkdir -p "$SANDBOX/shim" "$SANDBOX/shim-timeout" "$SANDBOX/shim-catchall" "$SANDBOX/mut" "$SANDBOX/live"
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # ── Helper: the YAML checker (one program, several modes) ────────────────────
 cat > "$SANDBOX/chk.py" <<'PY'
 import hashlib, json, os, re, sys, yaml
@@ -296,14 +307,16 @@ chmod +x "$SANDBOX/shim-timeout/timeout"
 # ── Fixture builders ─────────────────────────────────────────────────────────
 # fx_run <id> <event> <status> <conclusion|null> <sha> <branch> <repo> <path> [title]
 FXD=""
-fx_new() { FXD="$1"; rm -rf "$FXD"; mkdir -p "$FXD"; : > "$FXD/runs.ndjson"; printf ok > "$FXD/mode"; : > "$FXD/calls.log"; }
+fx_new() { FXD="$1"; assert_fixture_dir "$FXD"; rm -rf "$FXD"; mkdir -p "$FXD"; : > "$FXD/runs.ndjson"; printf ok > "$FXD/mode"; : > "$FXD/calls.log"; }
 fx_run() {
+  assert_fixture_dir "$FXD"
   jq -nc --argjson id "$1" --arg ev "$2" --arg st "$3" --arg c "$4" --arg sha "$5" --arg br "$6" --arg repo "$7" --arg path "$8" --arg title "${9:-t}" \
     '{id:$id,event:$ev,status:$st,conclusion:(if $c=="null" then null else $c end),head_sha:$sha,head_branch:$br,path:$path,display_title:$title,head_repository:{full_name:$repo}}' >> "$FXD/runs.ndjson"
 }
-fx_flush() { jq -s '{workflow_runs: .}' "$FXD/runs.ndjson" > "$FXD/runs.json"; }
+fx_flush() { assert_fixture_dir "$FXD"; jq -s '{workflow_runs: .}' "$FXD/runs.ndjson" > "$FXD/runs.json"; }
 # fx_jobs <runid> name:conclusion ...
 fx_jobs() {
+  assert_fixture_dir "$FXD"
   local id="$1"; shift
   local args=() n c
   for pair in "$@"; do n="${pair%%:*}"; c="${pair#*:}"; args+=("$n" "$c"); done
@@ -331,6 +344,7 @@ ROWS_SEEN_REASONS=""
 row() {
   local id="$1" xe="$2" xw="$3" xr="$4" out so rc why="" k gh_out
   BAT_N=$((BAT_N + 1))
+  assert_fixture_dir "$FXD"
   out="$FXD/gh_output"; so="$FXD/stdout"; : > "$out"
   local pathv="$RB_SHIMPATH:$SANDBOX/shim:$(dirname "$(command -v jq)"):/usr/bin:/bin"
   ( cd "$FXD" && env -i PATH="$pathv" HOME="$FXD" FIX="$FXD" GITHUB_OUTPUT="$out" GITHUB_STEP_SUMMARY="$FXD/summary" \
