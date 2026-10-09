@@ -535,3 +535,31 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     is a reviewed act" is a property worth keeping). Index declarations (G3/G5) ship in their own commit and are separable: dropping them changes no
     runner-only line. They serve about 3.5% of the measured demand (5 of the commits that fit the grammar touched the index at all: 4 array blocks, 1 entry) and
     were kept because the operator named "a new AFFECTED_*_PATHS array" as registration-only.
+
+## Amendment — 2026-10-09 (#9812)
+
+21. **The derive's per-registration classification is a cacheable pure function; verdicts are not.** The
+    `_aff_stream` walk paid one fresh `_affected_classify` per registration on every local run (~150 s CPU
+    measured on a contended host — the dominant cost of the local fast tier, #9763 arc). A classify is a pure
+    function of (label, argv, the derive code, and the file contents + existence probes it consults), so
+    `scripts/lib/test-affected-derive-cache.sh` caches its OUTPUT — class, ordered edge set, suite file — as
+    one record per registration under `.soleur/cache/affected-derive/v<schema>/`, keyed on schema +
+    derive-code hash + label + length-prefixed argv, and validates a hit by re-hashing every recorded read
+    (`git hash-object --no-filters --stdin-paths`, one batched fork per record) and re-running every recorded
+    `-e`/`-f`/`-d` probe. Any drift, a malformed or truncated record (records end in an `end` trailer so a cut
+    file can never serve a partial edge set), a schema or worktree-path mismatch, an unwritable cache dir, or a
+    missing git re-derives that record only — the cache is advisory and can never narrow a selection.
+    `SOLEUR_AFFECTED_DERIVE_CACHE=0` is the kill switch. The runner instruments the derive span
+    (`_affected_probe`, `_affected_rec_read`, inside the extraction anchors so the derive suite carries them)
+    rather than duplicating the algorithm, so the recorded input set is the real one; the `[[ -d "$PWD" ]]`
+    `_wt_missing_die` liveness probe is named-exempt. What is cached is selection METADATA only — `_diff_touches`
+    still runs fresh per record and suite verdicts are never memoised (the twice-rejected suite-result shape,
+    #7454 / #9804 Proposal 2). The walk emits `AFFECTED_DERIVE_CACHE hits=/misses=/derived=` so a dead cache is
+    visible rather than silent. Identity gate: `affected-prepass-bench --added-edges` exits 0 with byte-identical
+    `AFFECTED_SELECTED` cold AND warm (the bench's own second probe serves the warm arm); measured warm derive
+    ~11 s CPU vs ~88 s base (7.8x) on probe 2, ~9 s wall vs ~2 min locally, cold arm ~27 s slower once per
+    record per tree-state. Per-record files (not one JSON) keep a single corrupt record's blast radius at one
+    registration; `.soleur/` (gitignored, per-worktree) over XDG because a record is meaningless outside its
+    worktree and the `worktree` field refuses a moved checkout. The probe-site census row in
+    `scripts/test-affected-derive-cache.test.sh` fails on any future existence probe added to the derive span
+    without recording — the standing guard against a silent invalidation weakening.
