@@ -167,3 +167,15 @@ properties or different credentials:
 - Mutation proof: two batteries against these guards (24 rows), each row confirmed to land, are recorded in
   `knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md` §1.4.
 - `scripts/verify-agent-security-slice1.sh` as the local discoverability probe.
+
+## Note — 2026-10-08 (#9723): the `/proc` deny is now realized by the shim, not incidental
+
+The `denyRead` `/proc` landing this ADR relies on for credential-adjacent procfs isolation was, in
+effect, dead code: the vendored bwrap argv ends with `--bind /proc /proc`, which re-mounted the host
+procfs after the `--tmpfs /proc` deny landing. Since this PR's `infra/bwrap-shim/bwrap` change, the
+spawn-time shim appends `--proc /proc` after that tail — a fresh pidns-scoped procfs — so the deny is
+REALIZED at namespace build, not merely declared. `/proc/self/environ` still exists for the sandboxed
+process itself (the vendored `apply-seccomp` helper requires `/proc/self/fd`), which is why the
+discriminator is host-PID absence, not an empty procfs; sibling/host task rows — including their
+`environ` files — are unreachable. Measured by the canary `proc_mask` probe and the FR7b isolation
+arm; pinned for regression by `test/bwrap-shim.test.ts` tail-ordering rows.
