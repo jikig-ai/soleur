@@ -89,9 +89,11 @@ Classify by path first, then framework/API signals, then cost signals — path a
 
 | Layer | Path signals | Framework/API signals | Cost signals |
 |-------|--------------|----------------|--------------|
-| **unit** | `*.test.*` under `test/` dirs (this repo: `apps/web-platform/test/` — NOT flat; subdirectory nesting like `api/` does not change the layer — but a named fixture dir such as `rls-fuzz/` is more specific and wins), `__tests__/`, `test_*.py`, `*.test.sh` | vitest / jest / `bun:test` / pytest, with deps mocked or in-memory | none — pure assertions, sub-second |
+| **unit** | `*.test.*` under `test/` dirs (this repo: `apps/web-platform/test/` — NOT flat; subdirectory nesting like `api/` does not change the layer — but a named fixture dir such as `rls-fuzz/` is more specific and wins), `__tests__/`, `test_*.py`, `*.test.sh` | vitest / jest / `bun:test` / pytest, with deps mocked or in-memory | none — pure assertions, sub-second. Declared exception: `*.test.sh` suites may spawn real subprocesses and run for minutes (e.g. mutation batteries); committed weights (`scripts/suite-durations.tsv`, #9763) own their runtime enforcement — do not WARN a `*.test.sh` on duration alone |
 | **integration** | `*.integration.test.*`, db/service fixture dirs (this repo: `apps/web-platform/test/rls-fuzz/`) | real client imports (supabase / pg / redis), testcontainers, a booted local server | real DB or service boot; no browser |
 | **e2e** | a dedicated `e2e/` directory (this repo: `apps/web-platform/e2e/`) OR `*.e2e*` / `*.cy.*` file extensions | `playwright` / `@playwright/test`, `cypress` / `cy.*()` call idioms (`cy.visit`, `cy.get`, …), `puppeteer`, `webdriverio`, `selenium`, `testcafe`; `page.goto`, `browser.newPage`, `browser.url` | real browser or full server boot, external network, multi-second fixed waits |
+
+A named fixture dir's path signal applies to specs that need the fixture's services — a `*.test.*` file living inside the dir whose SUT is the dir's own helper modules (e.g. `rls-fuzz/verdict.test.ts`, `rls-fuzz/harness-fixture.test.ts`) classifies by framework/API signals instead, so a vitest-only file there is unit.
 
 ### Justification marker
 

@@ -397,7 +397,7 @@ readonly WAIVED=(
   apps/web-platform/test/workspace-cleanup.test.ts
   apps/web-platform/test/workspace-error-handling.test.ts
   apps/web-platform/test/workspace-symlink-hardening.test.ts
-  apps/web-platform/test/mu1-integration.test.ts
+  apps/web-platform/test/mu1.integration.test.ts
   apps/web-platform/test/server/agent-ready-git-worktree.test.ts
 )
 
