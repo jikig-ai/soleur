@@ -1966,7 +1966,11 @@ Replace `BRANCH_NAME` with the actual branch name.
    git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 
-   A `WARNING: found a ... but NO ...` partial-discovery line means the slug axis found one class but the branch-diff axis found nothing of the other — surface the warning verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding.
+   — but check `git status` first: `git add -A knowledge-base` sweeps any dirty KB file into the archival commit; stage the moves deliberately if the tree carries unrelated edits.
+
+   Then sweep for stale references — archival without it strands every consumer in the same stroke: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
+
+   A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
 
 6. If the PR is a draft, mark it ready:
 

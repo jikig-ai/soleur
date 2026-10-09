@@ -130,17 +130,27 @@ done < <(discover_artifacts "$SLUG")
 # the slug results — the two axes (name match, commit provenance) cover what
 # either alone misses.
 discover_branch_diff() {
-  local base f
-  base=$(git merge-base HEAD origin/main 2>/dev/null) || return 0
-  while IFS= read -r f; do
+  local base st f sub
+  base=$(git merge-base HEAD origin/main 2>/dev/null | head -1) || return 0
+  [[ -z "$base" ]] && return 0
+  while IFS=$'\t' read -r st f; do
     case "$f" in
       */archive/*) ;;                                     # already archived
+      # Spec files collapse to their DIR — but only on A rows (the branch
+      # created the dir, so it is this feature's). An M row is a drive-by
+      # edit to a sibling feature's live spec — collapsing it would archive
+      # mid-flight work that is not ours.
       knowledge-base/project/specs/*/*)
-        printf 'knowledge-base/project/specs/%s\n' "${f#knowledge-base/project/specs/}" | cut -d/ -f1 ;;
+        [[ "$st" == A* ]] || continue
+        sub=${f#knowledge-base/project/specs/}
+        printf 'knowledge-base/project/specs/%s\n' "${sub%%/*}" ;;
       knowledge-base/project/plans/*|knowledge-base/project/brainstorms/*)
         [[ -f "$f" ]] && printf '%s\n' "$f" ;;
     esac
-  done < <(git diff --name-only --diff-filter=AM "$base"...HEAD --       knowledge-base/project/plans knowledge-base/project/brainstorms knowledge-base/project/specs 2>/dev/null)
+  done < <(git diff --name-status --diff-filter=AM "$base"...HEAD -- \
+      knowledge-base/project/plans \
+      knowledge-base/project/brainstorms \
+      knowledge-base/project/specs 2>/dev/null)
 }
 while IFS= read -r line; do
   [[ -n "$line" ]] && ARTIFACTS+=("$line")
