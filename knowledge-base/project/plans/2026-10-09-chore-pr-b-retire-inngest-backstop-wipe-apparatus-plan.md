@@ -152,12 +152,52 @@ of the spec directory.
 
 ## Scope Check
 
-Every deliverable maps to an ask: items 1 to 6 of the brief map to Phases 1, 2, 3, 4, 5 and 8. Inferred items,
-each justified: the probe-test edit and `MIN_PASSES` change (forced by retiring the arm it reads: Phase 2);
-`inngest-redis-luks.test.sh` G4.b2 removal and the four "never untargeted" qualifier reverts (forced by deleting
-what they name: Phase 1); the "stays retired" guard (Guard 1: prevents silent resurrection by conflict resolution);
-the directive re-home (D4: satisfies brief step 4 given step 6). No split is warranted: the pieces share one
-ratchet-ordering problem and one deadline.
+Asks are quoted from the brief that invoked this plan (`[brief]`); the brief's "STATE" and "SCOPE" paragraphs are context and constraints, not asks.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Delete the wipe apparatus: apps/web-platform/infra/inngest-backstop-wipe.tf, cloud-init-inngest-backstop-wipe.yml, inngest-backstop-wipe.test.sh, the inngest_backstop_retire job in .github/workflows/apply-web-platform-infra.yml, tests/scripts/lib/inngest-backstop-retire-gate.sh and its suite" [brief] | Phase 1.1, 1.2; Files to Delete | mapped |
+| 2 | "update terraform-target-parity.test.ts, test-all.sh, scripts/suite-durations.tsv, suite-shard-legs.tsv, guard-vacuity-floor.test.sh (PROMOTED_FILES), lint baselines" [brief] | Phase 1.4 | mapped |
+| 3 | "Retire op=luks-rollback (workflow + orchestrator, suites, floor); rewrite runbook 5a." [brief] | Phase 2.1-2.5; D3 | mapped |
+| 4 | "Ledger: remove the hcloud_volume.inngest_redis row only now that Hetzner shows the volume gone (404); correct the LUKS row text; run python3 scripts/lint-encryption-posture.py --repo-sweep." [brief] | Phase 3; D5 | mapped |
+| 5 | "do NOT delete scripts/followthroughs/inngest-luks-property-8296.sh (or its test/run_suite line) until the dead-probe heartbeat feeder (#9703) is armed" [brief] | Phase 4.1; D4 | mapped |
+| 6 | "Fix stale comments (betterstack-logs-alerts.tf, uptime-alerts.tf, inngest-redis-luks.tf, variables.tf)." [brief] | Phase 1.3, 1.5 | mapped |
+| 7 | "Complete the destruction record (counts only, no secrets): fill the evidence above, attach/detach times (self-pull from Hetzner), Terraform 1.10.5 note, destroy apply-completion time and first-404 time." [brief] | Phase 5.1; Research Insights | mapped |
+| 8 | "MEASURE (read-only) whether the wipe row's top-level dt is Better Stack receive time or the host's own clock" [brief] | Phase 0.2; Research Insights (measured) | mapped |
+| 9 | "Article 30 PA-13 (e), PA-21 (f), PA-22 (f) and the compliance-posture row" [brief] | Phase 5.2, 5.3 | mapped |
+| 10 | "model.c4 inngestRedis rewrite and regenerate; expenses ledger; ADR-142 landed" [brief] | Phase 5.4, 5.5; ADR/C4 section | mapped |
+| 11 | "CLO attestation (soleur:legal:clo) of the record at a named SHA before status: complete" [brief] | Phase 5.9; D8 | mapped |
+| 12 | "Keep the older template inngest-aof-destruction-record.md's Superseded banner." [brief] | Phase 5.7 | mapped |
+| 13 | "run post-merge verification from a detached origin/main worktree, then close #8285 and #6894 with `gh issue close` plus a comment with the PR link, the three run URLs (37950928039, 37955244979, 37958051426) and the 404 read-back" [brief] | Phase 8 | mapped |
+| 14 | "update or retire #8316 with the PR link" [brief] | D10; Phase 8.4 | mapped |
+| 15 | "Use `Ref #8285` / `Ref #6894` only" [brief] | Phase 7; AC 11 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Files to Delete; workflow job/option/inputs; variables | asks 1, 6 ("Delete the wipe apparatus"; "Fix stale comments") | asked |
+| Registry and ratchet edits (test-all, tsv, floor, baselines, parity tests) | ask 2 ("update terraform-target-parity.test.ts, test-all.sh ...") | asked |
+| `op=luks-rollback` retirement and runbook 5a | ask 3 | asked |
+| Ledger row removal and LUKS row correction | ask 4 | asked |
+| Destruction record, Article 30, compliance-posture, ADR, C4, expenses, attestation | asks 7-12 | asked |
+| Post-merge verification and tracker closure | ask 13 | asked |
+| Revert of the four "never untargeted ... retire window" qualifiers | — | inferred — justification: PR A added them to warn about the orphan window the destroy has now closed; leaving them tells a reader a state that no longer exists, and the retirement census (ask 1) covers every reference to the retired addresses |
+| `inngest-redis-luks.test.sh` G4.b2 removal; `INTENDED_DESTROYS` entries; ALLOW entry for the gate lib; infra-credential-tiers row; job-rationale section | — | inferred — justification: each is a consumer of the deleted job or gate that reds a suite or lies in a live doc once ask 1 lands; PR A's own comments say to drop the `INTENDED_DESTROYS` pair in PR B |
+| Probe-test AC-32 block removal and `MIN_PASSES` change | — | inferred — justification: the block extracts the `luks-cutover\|luks-rollback)` arm and its NEXT line, which ask 3 deletes; the suite goes red otherwise (ask 5 forbids deleting the suite itself) |
+| Re-home of the probe directive from #8285 to #9703 | — | inferred — justification: the sweeper stops the probe when #8285 closes (ask 13), which would defeat ask 5's intent of keeping the silent-pipeline report until #9703 arms |
+| Guard 1 (retired dispatch stays retired) | — | inferred — justification: deleting the presence assertions leaves nothing asserting absence, so a conflict resolution could silently return the retired surfaces |
+| #9879 deferral issue and #9786 comment | — | inferred — justification: wg-when-deferring-a-capability-create-a requires a tracking issue for the sole-copy protection and the dead on-host arm that this PR deliberately does not do |
+| `scripts/followthroughs/inngest-luks-cutover-6894.sh` echo, roadmap L31 row, `inngest-host-*-gate` comment edits | — | inferred — justification: stale prose naming a retired state (ask 6's class); no logic change |
+
+### Split Assessment
+
+- Subsystems touched: 6 — `.github`, `apps/web-platform`, `scripts`, `tests`, `plugins/soleur`, `knowledge-base`
+- Planned files: 62 | Estimated changed lines: 5200 (about 4,000 deleted, 1,200 edited or added)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR. Over every threshold, and a split was weighed: the deletions and the ratchet moves are one ordering problem (a half state reds suites that are green), the register and ADR edits state the post-retirement truth and so must follow the code deletions, and the non-extendable 2026-10-21 merge deadline leaves no room for a second review cycle. The only independently shippable seam (records first) would assert a retirement the code still contradicts.
 
 ## Decisions
 
@@ -225,7 +265,7 @@ The ADR is authored in this PR, after the 404 read-back, describing a state that
 
 Deletions only: `inngest-backstop-wipe.tf` and `cloud-init-inngest-backstop-wipe.yml`; four variables removed from
 `variables.tf` (`inngest_backstop_wipe_enabled`, `inngest_backstop_volume_id`, `inngest_backstop_wipe_server_type`,
-`inngest_backstop_wipe_nonce`). `var.betterstack_logs_token` (reused by the wipe host) stays. No provider, version or
+`inngest_backstop_wipe_nonce`). The existing Better Stack ingest-token variable (reused by the wipe host) stays. No provider, version or
 sensitive-variable change. `local.inngest_retired_plaintext_volume_id = "106261946"` **stays**: it keeps the cloud-init
 template's `user_data` byte-identical so `hcloud_server.inngest` is never force-replaced (#9786 removes it at the next
 planned replace). Its comment is rewritten in the past tense.
@@ -245,6 +285,30 @@ every later one must be clean. State storage unchanged (R2 backend).
 ### Vendor-tier reality check
 
 No vendor tier gate involved. Cost falls by about USD 0.62 per month (the backstop volume line).
+
+## Encryption Posture
+
+No store or connection is introduced by this PR; it retires one and re-states the surviving store's posture, so the section
+records that posture rather than a new one.
+
+```yaml
+at_rest:
+  - store: hcloud_volume.inngest_redis_luks
+    mechanism: luks
+    evidence: apps/web-platform/infra/inngest-redis-luks.tf, resource "hcloud_volume" "inngest_redis_luks" with the cloud-init-inngest.yml cryptsetup luksFormat/luksOpen mapper inngest-redis (ledger row device_binding.mapper)
+    defends_against: a seized, RMA'd or snapshot-imaged Hetzner block volume (the Inngest queue and run-state AOF is unreadable without the Doppler-held passphrase)
+    does_not_defend: a leaked Doppler credential; an app-layer read on the unlocked host; a compromised redis or inngest process; a dead probe pipeline (the wrong-volume alert reads silence as healthy until the #9703 feeder is armed); and, new after this PR, loss of the only copy (the volume and INNGEST_REDIS_LUKS_KEY are now the sole copy and sole opener; protection tracked in #9879). The retired plaintext copy's erasure is logical, guest-side and self-attested, not physical.
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable:the hourly probe row proves which device backs /mnt/data (data_mount_devid), not that it is crypto_LUKS; the cipher half is the statically-resolved apparatus check
+  - store: hcloud_volume.inngest_redis (RETIRED, removed from the ledger by this PR)
+    mechanism: plaintext-exception (ended)
+    evidence: ledger row removed after Hetzner returned 404 for volume 106261946 at 2026-10-09T16:21:26Z
+    defends_against: nothing at the volume layer (it was plaintext ext4)
+    does_not_defend: provider-side physical media, replicas and sanitisation: only guest-side zeroing with read-back is evidenced
+    disclosed_as: not-publicly-claimed
+    live_verification: available:Hetzner GET /v1/volumes/106261946 answers 404
+in_transit: []   # no connection is added or changed; the Doppler, Better Stack and Hetzner API edges are untouched
+```
 
 ## Implementation Phases
 
