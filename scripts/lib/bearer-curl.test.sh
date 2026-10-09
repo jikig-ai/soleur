@@ -128,8 +128,8 @@ if [[ "$(cat "$CALLS/1.stdin" 2>/dev/null)" == "$EXPECT_CFG" ]]; then pass "cred
 [[ ! -e "$CALLS/1.injected" ]] && pass "stdin config holds no directive other than header" || fail "stdin config flagged INJECTED"
 first="$(tr '\0' '\n' < "$CALLS/1.argv" | sed -n 1p)"
 [[ "$first" == "--disable" ]] && pass "--disable is the first operand (aborts .curlrc parsing)" || fail "first operand is '$first', expected --disable"
-tr '\0' '\n' < "$CALLS/1.argv" | grep -qx -- '--noproxy' && pass "--noproxy is passed" || fail "--noproxy missing"
-if tr '\0' '\n' < "$CALLS/1.argv" | grep -q -- '--max-time'; then
+grep -qx -- '--noproxy' < <(tr '\0' '\n' < "$CALLS/1.argv") && pass "--noproxy is passed" || fail "--noproxy missing"
+if grep -q -- '--max-time' < <(tr '\0' '\n' < "$CALLS/1.argv"); then
   pass "caller-supplied --max-time is passed through"
 else fail "--max-time not passed through"; fi
 if tr '\0' '\n' < "$CALLS/1.argv" | awk 'BEGIN{n=0} $0=="--max-time"{n++} END{exit !(n==1)}'; then
@@ -150,7 +150,7 @@ SIG="$(printf 'x' | HMAC_KEY=k python3 -I -c 'import hashlib,hmac,os,sys;sys.std
 rc="$(SIG="$SIG" CFID="idv.access" CFSEC="secv0123" run 'bc_curl demo "X-Signature-256:sha256=:SIG" "CF-Access-Client-Id::CFID" "CF-Access-Client-Secret::CFSEC" -- -sS http://127.0.0.1:9/')"
 if [[ "$(wc -l < "$CALLS/1.stdin" | tr -d ' ')" == "3" && ! -e "$CALLS/1.injected" ]]; then pass "webhook triple renders three header directives"; else fail "webhook triple did not render three clean directives"; fi
 grep -qF -- 'header = "CF-Access-Client-Id: idv.access"' "$CALLS/1.stdin" && pass "webhook triple carries the Cloudflare Access id verbatim" || fail "CF Access id line wrong"
-if tr '\0' '\n' < "$CALLS/1.argv" | grep -qF -e "$SIG" -e secv0123 -e idv.access; then fail "a triple value reached the recorded argv"; else pass "no triple value reaches the recorded argv"; fi
+if grep -qF -e "$SIG" -e secv0123 -e idv.access < <(tr '\0' '\n' < "$CALLS/1.argv"); then fail "a triple value reached the recorded argv"; else pass "no triple value reaches the recorded argv"; fi
 
 # ---------------------------------------------------------------------------------------------------
 # Refusals: hostile / empty / unset values at EVERY spec position -> zero calls, one marker, rc 2.

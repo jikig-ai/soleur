@@ -787,7 +787,7 @@ else fail "A4 a missing key must still fail the step and publish sent=false (rc=
 new_case; run_action RESEND_API_KEY=synthResendKey0123 CURL_CODE=200 CURL_REC="$CASE/rec"
 if [[ "$CASE_RC" == 0 && "$(out_val sent)" == "true" ]] \
    && [[ "$(cat "$CASE/rec.stdin" 2>/dev/null)" == 'header = "Authorization: Bearer synthResendKey0123"' ]] \
-   && ! tr '\0' '\n' < "$CASE/rec.argv" | grep -qF synthResendKey0123; then
+   && ! grep -qF synthResendKey0123 < <(tr '\0' '\n' < "$CASE/rec.argv"); then
   pass "A6 the key reaches curl on its stdin config as one header directive and is absent from argv"
 else fail "A6 the credential must ride curl's stdin config and not its argv (rc=$CASE_RC sent='$(out_val sent)')"; fi
 new_case; run_action 'RESEND_API_KEY=bad"key' CURL_CODE=200 CURL_REC="$CASE/rec"
