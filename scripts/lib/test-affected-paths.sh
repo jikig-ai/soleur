@@ -1683,8 +1683,10 @@ AFFECTED_SCRIPTS_DEVIN_DOCS_DRIFT_CHECK_PATHS=(
 # ADR-241): scans every workflow for environment: declarations and the terraform deployment-policy
 # objects that arm them.
 AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
-  ".github/workflows/"
-  "apps/web-platform/infra/"
+
+  ".github/"
+  "apps/"
+  "infra/"
   "tests/scripts/test-infra-privileged-tier-census.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -1717,13 +1719,16 @@ AFFECTED_SCRIPTS_TEST_ALL_FAST_TIER_BUDGET_PATHS=(
 # plugins/soleur/test/operator-ack-guard — finds every *.sh sourcing or calling the ack guard
 # (find . -name '*.sh' + grep -rl --include='*.sh' across the tree). Edge = the dirs that hold shell.
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
-  "scripts/"
-  "plugins/"
-  "tests/"
+
+  "apps/"
+  "bin/"
   ".claude/"
   ".github/"
-  "apps/web-platform/scripts/"
-  "apps/web-platform/infra/"
+  "knowledge-base/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
   "plugins/soleur/test/operator-ack-guard.test.sh"
   "plugins/soleur/test/fixtures/operator-ack-arms.tsv"
   "scripts/lib/test-affected-paths.sh"
@@ -1731,13 +1736,16 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
 
 # plugins/soleur/test/operator-script — same whole-tree *.sh walk for the operator-script lib.
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
-  "scripts/"
-  "plugins/"
-  "tests/"
+
+  "apps/"
+  "bin/"
   ".claude/"
   ".github/"
-  "apps/web-platform/scripts/"
-  "apps/web-platform/infra/"
+  "knowledge-base/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
   "plugins/soleur/test/operator-script.test.sh"
   "plugins/soleur/scripts/lib/operator-script.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1745,12 +1753,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
 
 # scripts/lint-shell-capture-exit-live — live scanner over *.sh for capture-exit shape.
 AFFECTED_SCRIPTS_LINT_SHELL_CAPTURE_EXIT_LIVE_PATHS=(
-  "scripts/"
-  "plugins/"
-  "tests/"
+
+  "apps/"
+  "bin/"
   ".claude/"
   ".github/"
-  "apps/web-platform/scripts/"
+  "knowledge-base/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "scripts/lint-shell-capture-exit.py"
+  "scripts/lint-shell-capture-exit.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -1786,11 +1800,14 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # scripts/guard-vacuity-floor — derives its population from git ls-files '*.test.sh' — the
 # suite corpus under these roots.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
-  "scripts/"
-  "plugins/soleur/test/"
-  "tests/"
+
+  "apps/"
   ".claude/"
-  "apps/web-platform/scripts/"
+  ".github/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -1798,23 +1815,31 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 # scripts/lint-orphan-test-suites — scans the registration corpus for unregistered suites;
 # subject is every *.test.* tree plus the runner that registers them.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
-  "scripts/"
-  "plugins/soleur/test/"
-  "tests/"
+
+  "apps/"
   ".claude/"
-  "apps/web-platform/scripts/"
+  ".github/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
 # scripts/lint-trap-tempfile-ownership — *.sh-wide trap/tempfile ownership lint.
 AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
-  "scripts/"
-  "plugins/"
-  "tests/"
+
+  "apps/"
+  "bin/"
   ".claude/"
   ".github/"
-  "apps/web-platform/scripts/"
+  "knowledge-base/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "scripts/lint-trap-tempfile-ownership.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -1838,16 +1863,26 @@ AFFECTED_PLUGINS_SOLEUR_TEST_FANOUT_SUITE_SCOPE_TEST_SH_PATHS=(
 
 # plugins/soleur/test/fixture-env-adoption — census of fixture-env adoption across the test corpus.
 AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_ENV_ADOPTION_TEST_SH_PATHS=(
+
+  "apps/web-platform/test/"
+  "apps/web-platform/infra/"
+  ".github/scripts/"
   "plugins/soleur/test/"
-  "tests/scripts/"
+  "test/"
+  "tests/"
   "scripts/lib/"
   "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/test/fixture-dir-operand-assert — same corpus walk for fixture-dir operand shape.
 AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_DIR_OPERAND_ASSERT_TEST_SH_PATHS=(
+
+  "apps/web-platform/test/"
+  "apps/web-platform/infra/"
+  ".github/scripts/"
   "plugins/soleur/test/"
-  "tests/scripts/"
+  "test/"
+  "tests/"
   "scripts/lib/"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -1882,13 +1917,17 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
 # scripts/lint-shell-trace-credential-refusal (#9763 demotion) — tree-wide *.sh scan for
 # credential-trace refusal shape; scope = the dirs where shell lives.
 AFFECTED_SCRIPTS_LINT_SHELL_TRACE_CREDENTIAL_REFUSAL_PATHS=(
-  "scripts/"
-  "plugins/"
-  "tests/"
+
+  "apps/"
+  "bin/"
   ".claude/"
   ".github/"
-  "apps/web-platform/scripts/"
-  "apps/web-platform/infra/"
+  "knowledge-base/"
+  "plugins/"
+  "scripts/"
+  "test/"
+  "tests/"
+  "scripts/lint-shell-trace-credential-refusal.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
