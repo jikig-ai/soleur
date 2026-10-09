@@ -52,6 +52,35 @@ destroys the orphaned attachment), `wipe` (the throwaway host), `destroy` (Terra
 orphaned volume; state converges in the same apply, so there is no separate forget step). Two PRs,
 mirroring the web-1 wipe (PR A tooling and decoupling, dispatches, PR B convergence).
 
+## Addendum — 2026-10-09: supersessions from review round 1 of PR #9784
+
+Appended; the text below is kept as written on 2026-10-08. Where it conflicts with this block, this block
+governs. Rationale and the full decision list are in the ADR-142 addendum of 2026-10-09 (E1 to E6) and
+`decision-challenges.md`. Ref #8285, Ref #6894.
+
+- **Evidence authenticity.** Statements below that the nonce, the Hetzner id/size re-check and the run
+  timestamp "make a stale or forged row fail" are corrected to: they make a stale or replayed row fail;
+  a holder of the shared ingest token could forge a row; Hetzner's action history for the volume
+  (a successful `attach_volume` to a server that is neither 169426216 nor null, finished not before the
+  wipe run's start, then a successful `detach_volume`) corroborates it.
+- **D4 attestation.** "A URL ... non-empty and resolvable" is corrected to exactly
+  `https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>`, fetched through the GitHub API,
+  author an owner, member or collaborator, body containing 106261946.
+- **2.0 live-store gate and untargeted plan.** The gate applies to `detach`, `wipe` and `destroy`, not
+  `teardown`. In untargeted mode the plan requires only the server and the LUKS pair as one no-op each,
+  nothing carrying the live id 106903269, and the retired and wipe addresses within the phase's authorized
+  set; other resources are ignored there. The targeted plan stays exact.
+- **2.1.** "Tolerate a 404 on the detach call" is replaced by the Hetzner-first convergence read: if the
+  volume already shows `server: null` or is gone, the phase skips the plan, and a stale attachment entry
+  is dropped by the gated single-address refresh-only reconcile.
+- **2.3.** "Whose timestamp is later than the detach run's" is corrected to: not earlier than the wipe
+  run's start.
+- **Rollback.** It ends at `detach` or at the first host replace after PR A merges, whichever is first.
+- **Orphan window.** No untargeted `terraform apply` of the root until `destroy` completes; the per-merge
+  apply's HALT text no longer prescribes one; no new Terraform resource.
+- **Not built, recorded as prerequisites:** a wipe rehearsal path and a LUKS key or header continuity
+  proof (runbook `inngest-luks-cutover-6894.md` §5b; `decision-challenges.md` 2026-10-09).
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim (issue #8285 / brief) | Reality (verified 2026-10-08) | Plan response |
@@ -349,37 +378,68 @@ notify-only), so the explicit close is the last step.
 
 ## Observability
 
+Layer numbers follow `plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md`:
+layer 3 is the asynchronous host-journald-to-Better-Stack path, layer 6 is the synchronous
+workflow-run log. Layer 7 (self-hosted CLI consumer) is not applicable: nothing here executes on a
+customer's machine.
+
 ```yaml
 liveness_signal:
-  what: SOLEUR_INNGEST_SERVER_PROBE hourly row from host_role=dedicated (data_mount_devid pins the live LUKS volume) plus logtail_exploration_alert.inngest_luks_wrong_volume (paused=false); per-run SOLEUR_INNGEST_BACKSTOP_WIPE evidence row from the wipe host
+  what: (a) per-run SOLEUR_INNGEST_BACKSTOP_WIPE evidence row from the wipe host, posted straight to the Better Stack ingest endpoint and read synchronously by the workflow's own poll (layer 6); (b) SOLEUR_INNGEST_SERVER_PROBE hourly row from host_role=dedicated, data_mount_devid pins the live LUKS volume (layer 3); (c) logtail_exploration_alert.inngest_luks_wrong_volume, paused=false (layer 3)
   cadence: hourly (probe); once per wipe dispatch (evidence row)
-  alert_target: Better Stack incident email (wrong-volume alert); dispatch job failure on the retire workflow run
+  alert_target: Better Stack incident email (wrong-volume alert); dispatch job failure and the #8285 progress comment on the retire workflow run (layer 6)
   configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf (alert); apps/web-platform/infra/cloud-init-inngest-backstop-wipe.yml (evidence row, created in PR A)
 error_reporting:
-  destination: the retire workflow run log and job summary (non-secret fields only); Better Stack Logs source 2457081 for the wipe row
-  fail_loud: wipe host emits result=refused with the failed guard; the dispatch fails when no row carrying this run's nonce appears after the bounded poll or when result is not wiped; every phase comments its run URL and read-back on #8285
+  destination: the retire workflow run log and job summary (non-secret fields only; layer 6); Better Stack Logs source 2457081 for the wipe row (the row is read by the poll in the same run, so it is not a separate async hop)
+  fail_loud: wipe host emits result=refused with the failed guard; the dispatch fails when no row carrying this run's nonce appears within the poll's wall-clock deadline or when result is not wiped; every phase comments its run URL and read-back on #8285
 failure_modes:
   - mode: wipe host never boots or never posts (stock, cloud-init error, egress)
+    layer: 6
     detection: bounded Better Stack poll in the wipe phase times out and fails the job; teardown step still runs
     alert_route: failed workflow run plus the #8285 comment (a pending environment approval is not a failure, so each progress comment restates days remaining to 2026-10-22)
   - mode: target device is not the expected ext4 volume (wrong id, already zeroed, LUKS)
-    detection: script guards emit result=refused before any write
+    layer: 6
+    detection: script guards emit result=refused before any write; the poll stops at once and names the guard
     alert_route: same poll; job fails loud
   - mode: live store leaves the LUKS volume during the window
-    detection: wrong-volume alert (probe row off 106903269) and the destroy-phase freshness precondition
+    layer: 3
+    detection: wrong-volume alert (probe row off 106903269) and the live-store gate of detach, wipe and destroy
     alert_route: Better Stack incident email
   - mode: plan shows any action on hcloud_server.inngest or the LUKS pair
+    layer: 6
     detection: gate lib named-live counters abort the phase before apply
     alert_route: failed workflow run
+  - mode: the wiped row cannot be delivered after the device was zeroed (ingest outage, token failure)
+    layer: 6
+    detection: the poll times out with no wiped row although the device is zero; the started row, if delivered, shows the host got that far
+    alert_route: failed workflow run; runbook triage table says to query Better Stack for a late wiped row, then re-dispatch wipe (an already-blank device takes the prior=blank path and re-emits evidence)
+  - mode: the started row cannot be delivered
+    layer: 6
+    detection: the script exits before any write ("NO EVIDENCE CHANNEL") and no row exists; the poll times out
+    alert_route: failed workflow run; nothing was written, so the volume is intact; teardown then re-dispatch wipe
+  - mode: teardown leaks the wipe host (job dies between steps, or the host is absent from Terraform state)
+    layer: 6
+    detection: the read-back step lists the labelled servers in Hetzner and fails when one remains; the convergence read of the next phase refuses until it is gone
+    alert_route: failed workflow run and the #8285 comment; recovery in runbook 5b (phase=teardown, or delete the labelled server by id when it is absent from state)
+  - mode: evidence forged or replayed (shared ingest token)
+    layer: 6
+    detection: stale or replayed rows fail the nonce, size and time bindings; a forged row is corroborated against Hetzner's action history for the volume before destroy
+    alert_route: destroy refuses in the run log; the destruction record states the residual limit
 logs:
   where: Better Stack Logs (SOLEUR_INNGEST_BACKSTOP_WIPE, SOLEUR_INNGEST_SERVER_PROBE); GitHub Actions run logs
   retention: Better Stack retention is finite, so the evidence row values are copied into the destruction record in PR B
 discoverability_test:
   command: bash apps/web-platform/infra/inngest-backstop-wipe.test.sh && bash tests/scripts/test-inngest-backstop-retire-gate.sh
-  expected_output: "0 failed"
+  expected_output: "passed, 0 failed"
 ```
 
 The discoverability test is the credential-free fixture pair for PR A, because merging PR A mutates nothing in production (no waiver of `credentials_required` is adopted; the corpus baseline in `preflight-discoverability-test.test.ts` is unchanged). The production read-backs are not a preflight probe: each dispatch phase reads Hetzner itself and comments the result on the tracker, and the volume-absence read-back (a `GET /v1/volumes/106261946` returning 404 with the read-only token) is the exit criterion of phase 2.4 and is recorded in the destruction record in PR B. Before the destroy phase that same request returns 200, so it cannot be this plan's merge-time probe.
+
+**Why `expected_output` is "passed, 0 failed".** The bare substring "0 failed" also matches "10 failed" and "20 failed", so a red suite would satisfy it. Both suites print a summary containing `passed, N failed` (the wipe suite `N passed, N failed, N executed`, the gate suite `N passed, N failed`); "passed, 0 failed" cannot match "passed, 10 failed".
+
+**How the pair is intended to run.** The wipe suite runs longer than preflight Check 10's 15-second wall-clock cap (`timeout 15s` in the preflight skill), so inside the Check 10 sandbox it reports a timeout, not a pass. Its authoritative run is CI (`infra-validation.yml` runs every `apps/web-platform/infra/*.test.sh` by glob; the gate suite is the `tests/scripts/inngest-backstop-retire-gate` line in `scripts/test-all.sh`) and the local run at ship time; the plan's evidence for PR A is those results, not the sandboxed probe. If Check 10 is to pass in the sandbox, the command needs a fast subset or a declared waiver; neither is adopted here (open question for the ship step).
+
+**Operator signal while a dispatch awaits approval.** The progress comment on #8285 is written by the run itself, so a dispatch waiting for the reviewer produces nothing. The only unprompted signal in that interval is the daily comment of `scripts/followthroughs/inngest-luks-property-8296.sh`, which should carry a "days to expiry" line (task 0.7 in `tasks.md`); that script is deleted in PR B step 3.4, which is gated on the dead-probe heartbeat feeder #9703 being armed.
 
 ## Encryption Posture
 

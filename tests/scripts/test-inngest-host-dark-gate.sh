@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for tests/scripts/lib/inngest-host-dark-gate.sh — BOTH of its entry points: Guard 2 of the
-# inngest-volume-recut apply_target (#7695), the layer that checks the WORLD rather than an intent,
+# (since #8285 PR A, RETIRED) inngest-volume-recut apply_target (#7695), the layer that checks the WORLD rather than an intent,
 # and — since #8054, section 6 below — `inngest_execute_registry_gate`, op=execute 2.0's positively-
 # dark pre-flight, which shares the row-grading prelude with Guard 2.
 #
@@ -473,7 +473,8 @@ predicate G16 "flush_latched=__UNREADABLE__ => unreadable" unreadable "$TMP/rows
 mk_rows "$TMP/rows-g16b.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg flush_latched=true)")"
 expect "[G16b] flush_latched=true still => dark (neither polarity blocks)" dark "$TMP/rows-g16b.json" "$FIN"
 
-# G17 — the LIVE Hetzner attachment disagrees with the operator's pin. Guard 1's ID-PIN reads a plan
+# G17 — the LIVE Hetzner attachment disagrees with the operator's pin. The plan-shape gate's ID-PIN
+# (the recut gate's Guard 1, now the retire gate's) reads a plan
 # document; this one reads the world, and it is the world that gets destroyed.
 predicate G17 "the live volume id != the pin => id_pin_mismatch" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id "$OTHERID"
 expect "[G17b] an UNREADABLE live volume id => id_pin_mismatch (fail-closed)" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id ""

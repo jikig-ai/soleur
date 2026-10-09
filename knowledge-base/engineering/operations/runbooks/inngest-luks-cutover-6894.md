@@ -246,20 +246,27 @@ drained tick double-fires the cron. That procedure's `routine_runs` check tells 
      no closing keyword next to #8285; #8285 is closed explicitly after the check. The probe
      header's RETIREMENT line lists what to delete.
    - A silent probe pipeline reads as healthy to the wrong-volume alert (`treat_as_zero`). The
-     property probe reports that as "CANNOT ESTABLISH", and the paging fix is tracked in #8516 (D1).
+     property probe reports that as "CANNOT ESTABLISH". The dead-probe heartbeat resource landed in
+     cde96fb5e2 (#8516, closed), but its feeder is not wired or armed (#9703, open), so a silent probe
+     still reads as healthy to the alert today. Do not retire the property probe before #9703 is armed
+     (§5b, "Records the convergence PR must carry").
    - **After a sanctioned `op=luks-rollback`**, see §5a.
 
 ---
 
 ## 5a. After a sanctioned `op=luks-rollback`: revert the record
 
-> **Rollback ends at the `detach` phase of the backstop retirement (#8285, see §5b).** Once
+> **Rollback ends at the `detach` phase of the backstop retirement (#8285, see §5b), or at the first
+> Inngest host replace after PR A merges, whichever comes first.** Once
 > `apply_target=inngest-backstop-retire phase=detach` has run, the plaintext volume
 > `hcloud_volume.inngest_redis` (id 106261946) is no longer attached to the Inngest host, and
 > `op=luks-rollback` has nothing to copy back from: its on-host path refuses with
-> `reason=rollback-no-backstop` (the plaintext device is absent). From that point there is no rollback and the live LUKS volume is the only copy of the store.
-> Everything below applies only while the backstop is still attached. The operator verb itself stays
-> listed until the convergence PR (PR B of #8285) retires it.
+> `reason=rollback-no-backstop` (the plaintext device is absent; the refusal is pinned by a fixture in
+> `apps/web-platform/infra/inngest-luks-cutover.test.sh`). The same holds after a host replace even
+> before `detach`: PR A removes the attachment declaration, so a replaced host boots without the
+> backstop attached. From that point there is no rollback and the live LUKS volume is the only copy of
+> the store. Everything below applies only while the backstop is still attached. The operator verb
+> itself stays listed until the convergence PR (PR B of #8285) retires it.
 
 The store is back on `hcloud_volume.inngest_redis`, which is now the **LIVE store: do NOT destroy
 it**, and do not act on #8285's expiry until the store is re-cut. A rollback makes no commit, so the
@@ -306,7 +313,7 @@ exists.** Ref #8285, Ref #6894.
 **106261946**, ext4) before its ledger exception expires on **2026-10-22** (pinned, not extendable).
 The live store on `hcloud_volume.inngest_redis_luks` (id **106903269**) is never touched. Four phases of
 one reviewer-gated dispatch, no SSH, no manual Doppler write, no `[ack-destroy]` (that route cannot
-reach these addresses). Design: ADR-142 addendum 2026-10-08.
+reach these addresses). Design: ADR-142 addendum 2026-10-08, refined by its 2026-10-09 addendum.
 
 | Phase | What it does | Terraform change |
 | --- | --- | --- |
@@ -320,19 +327,46 @@ that names it, then dispatch. The dispatch then holds in **Waiting** until a rev
 `inngest-cutover` environment (the sole human authorization; `confirm` is a typo guard only). Each phase
 is idempotent: it reads Hetzner first and exits green without planning if its post-condition already
 holds, so a retry after a partial apply is safe. After every phase (pass or fail) a step comments on
-#8285 with the run URL, the read-back and the days remaining to 2026-10-22.
+#8285 with the run URL, the read-back and the days remaining to 2026-10-22. A dispatch waiting for
+approval produces no comment, so the days-to-expiry reminder is the operator's to keep while it waits.
 
 ### Target dates
 
 PR A merged by 2026-10-12; `detach` by 2026-10-13; `wipe` by 2026-10-15; **decision point 2026-10-17**
 (below); `destroy` by 2026-10-17 (or the D4 path by 2026-10-19); PR B merged by **2026-10-21**. The real
 deadline is PR B merged, not the destroy: the encryption-posture lint fails an expired exception on
-2026-10-22 whether or not the volume is gone.
+2026-10-22 whether or not the volume is gone, and PR B may not merge before the 404 read-back.
+
+### Operator prerequisites before the first dispatch (known gaps, accepted)
+
+1. **No wipe rehearsal exists.** The first `wipe` dispatch is the first run of the wipe host script
+   against real hardware. Rehearsing it would need a dry-run input threaded through cloud-init,
+   Terraform, `variables.tf`, the workflow and their tests, which was weighed and not built (see
+   `decision-challenges.md`, 2026-10-09). The script's own guards refuse before any write, so a
+   refusal costs one approval cycle, not data. Record "none: no rehearsal path exists" in the
+   destruction record.
+2. **No key or header continuity proof exists.** Nothing here proves, before the backstop goes, that
+   the LUKS header and the Doppler key `INNGEST_REDIS_LUKS_KEY` still open the live volume at rest.
+   The only evidence is that the running host serves from it (the probe row on `scsi-0HC_Volume_106903269`
+   and `/dev/mapper/inngest-redis`). There is no SSH-free channel to open the header, and the gap is
+   older than this work (ADR-142). The operator accepts it knowingly before `detach`, because after
+   `detach` there is no rollback.
+3. **First measurements.** The 10 GiB size, the by-id device naming and the on-host duration are
+   unmeasured until the first real `wipe` run. The expectation is a few minutes on the host (an
+   estimate of 4 to 10 minutes, not a measurement), inside a 20-minute wall-clock poll. Copy what the
+   run shows into the destruction record.
+4. **Terraform version.** The orphan-address `-target` plans were checked on Terraform 1.9.8 (plan
+   `-target` on the attachment shows only the attachment delete; on the volume only the volume
+   delete). This workflow pins 1.10.5 (`TERRAFORM_VERSION`). Re-run that experiment on 1.10.5 on a
+   local backend before the first dispatch. If the chain behaves differently the gate aborts with no
+   mutation, so the cost of being wrong is a wasted approval, not a wrong delete.
 
 ### Precondition for every phase: the live store is healthy (read-only)
 
-The workflow proves all of this before it plans anything; read it yourself first, from the host's own
-telemetry (§5 step 1 for the probe query):
+The workflow proves all of this before it plans anything, for `detach`, `wipe` and `destroy`; read it
+yourself first, from the host's own telemetry (§5 step 1 for the probe query). **`teardown` is exempt
+from the live-store check:** a leaked wipe server must always be cleanable, even when the store looks
+unhealthy, and teardown can only delete the two wipe addresses.
 
 1. Doppler `soleur-inngest/prd`: `INNGEST_LUKS_CUTOVER` reads `done` (never `rollback`, `rolled-back`,
    `armed` or `copying`) and `INNGEST_LUKS_ACTIVE_VOLUME_ID` reads `106903269`.
@@ -340,9 +374,14 @@ telemetry (§5 step 1 for the probe query):
 3. The newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row (emitted by
    `inngest-server-probe`) is under 3 hours old with `data_mount_devid=scsi-0HC_Volume_106903269` and
    `redis_active=active`.
-4. No merge-triggered apply is in flight (the retire job joins the same concurrency group).
-5. An untargeted read-only plan of the whole root lists `hcloud_server.inngest` as a **no-op entry**
-   (its absence proves nothing), the LUKS pair as no-ops, and nothing outside the phase's authorized set.
+4. No merge-triggered apply runs alongside: the retire job joins the same concurrency group, so a run
+   queues behind it rather than interleaving.
+5. An untargeted read-only plan of the whole root is the proof that the host is untouched. It requires
+   only that `hcloud_server.inngest` and the two LUKS resources each appear as exactly one **no-op**
+   entry (absence proves nothing), that no positive entry carries the live volume id 106903269, and
+   that any entry for the retired or wipe addresses is within the phase's authorized set. Entries for
+   unrelated resources are ignored in this untargeted plan, so unrelated drift does not block a phase;
+   the targeted plan that follows stays exact.
 
 If any of these fails, stop and read the cause; do not dispatch around it.
 
@@ -355,8 +394,14 @@ gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=inngest-
 Gate: the targeted plan has exactly one non-no-op change, a delete of
 `hcloud_volume_attachment.inngest_redis` whose `before.volume_id` is 106261946, and the server shows no
 action (this is the first proof, on live state, that the cloud-init template pin leaves the host
-alone). A 404 on the detach call is tolerated (a routine host replace leaves a stale `server_id` on the
-orphan attachment). **Read back:** Hetzner `GET /v1/volumes/106261946` shows `server: null`.
+alone). The phase reads Hetzner before it plans: if the volume already shows `server: null` (or is
+gone), it skips the plan and apply, which covers an attachment left stale by a routine host replace;
+a stale attachment entry still in state is then dropped by a gated state-only reconcile (below).
+**Read back:** Hetzner `GET /v1/volumes/106261946` shows `server: null`.
+
+**State-only reconcile.** Where Hetzner says the object is gone but state still lists its address, the
+phase runs a single-address refresh-only apply, and only after comparing `terraform state list` before
+and after: the difference must be exactly that one address, or the phase fails with no further action.
 
 ### Phase 2: `wipe`
 
@@ -366,9 +411,10 @@ gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=inngest-
 
 Step A creates the throwaway server and attaches only volume 106261946 (the gate pins
 `after.volume_id` to 106261946, never 106903269). The job passes its own run id as the nonce and polls
-Better Stack for a bounded time for a row with that nonce, `result=wiped`, `volume_id=106261946` and the
-expected size; an absent row fails the job rather than passing it. Step B then removes the throwaway
-server. **Read back:**
+Better Stack, up to a 20-minute wall-clock deadline, for a row with that nonce, `result=wiped`,
+`volume_id=106261946` and the expected size; a `refused` row for the nonce ends the poll at once and
+names its guard, and an absent row fails the job rather than passing it. Step B then removes the
+throwaway server whether or not the poll passed. **Read back:**
 
 ```
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
@@ -377,13 +423,30 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 
 Expect `result=wiped readback=zero sig_after=none`, the run's nonce, `volume_id=106261946` and the
 volume's exact `size_bytes`. A `result=refused` row names the guard that stopped it and means nothing
-was written. The evidence is self-attested guest-side logical erasure, not physical erasure; word it
-that way anywhere it is repeated. Then confirm the wipe server is gone and the volume is detached again
-(commands under "Verification" below).
+was written. What the row does and does not prove is stated once, in the destruction record ("What the
+evidence does and does not show", as amended 2026-10-09); repeat it from there, not from memory. Then
+confirm the wipe server is gone and the volume is detached again (commands under "Verification" below).
 
 **If a wipe server is left behind** (the job died between steps), dispatch the same command with
 `-f phase=teardown`. **"Wiped but never destroyed" is a defined state:** the volume is zeroed, detached
 and rollback is gone; the next move is `destroy`, not a retry of `wipe`.
+
+#### When the wipe does not go green: triage
+
+Every read below is self-pullable (Better Stack query as above, or a read-only Hetzner `GET`); none needs
+a shell on any host. Before any re-dispatch of `wipe`, query Better Stack once more for the nonce: a
+slow host can post a `wiped` row after the poll has already given up.
+
+| What you see | What it means | Read | Next move |
+| --- | --- | --- | --- |
+| A `result=refused` row for the nonce | A guard stopped the script before any write; the volume is intact | the row's `reason=` (guard name) | Fix the named cause; the teardown step already ran; re-dispatch `wipe` |
+| Only a `result=started` row, no `wiped` or `refused` | The host proved it can post evidence, then ended or was still working at the deadline; a partial zero is possible | Better Stack for a late `wiped` row; Hetzner server listing for a surviving wipe host | Wait out a live host, then query again; if none arrives, `teardown` then re-dispatch `wipe` (zeroing twice is harmless; an already-blank device takes the `prior=blank` path). Never `destroy` on a `started` row |
+| No row at all | The host never booted, cloud-init failed before the script, egress or the ingest token failed, or the script could not deliver its `started` row (it then writes nothing and exits) | Hetzner server listing and status for the labelled server; Better Stack for any row from that host | `teardown`, then re-dispatch `wipe`. A kernel or cloud-init failure before the script runs leaves no row by construction; repeated empty runs are a reason to raise the D4 decision before 2026-10-17 |
+| Job red, evidence fine | A step after the poll failed (teardown or read-back) | the failed step's log; Hetzner for a surviving wipe host | `phase=teardown` converges; do not re-run the zero |
+| Job red and `teardown` also refuses or finds nothing, yet a labelled server exists in Hetzner | The wipe host is absent from Terraform state, so no gated phase can remove it | `GET /v1/servers?label_selector=role%3Dinngest-backstop-wipe` | Delete that server by id through the Hetzner API with the privileged token held by the operator tooling (a production write: show the exact call and wait for a named go-ahead). Hetzner detaches the volume with the server. Then dispatch `phase=teardown` to clear any stale state entry, and re-dispatch `wipe`. The workflow does not do this itself |
+
+A leaked wipe server costs roughly EUR 0.03 per hour (an estimate), so a leak is a nuisance, not an
+emergency, but it blocks every later phase until it is gone.
 
 ### Phase 3: `destroy`
 
@@ -392,24 +455,36 @@ gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=inngest-
 ```
 
 Preconditions beyond the live-store check, proved in the run log before any plan: a `wiped` evidence
-row exists whose nonce equals `wipe_run_id`, later than the `detach` run, with matching volume id and
-size; and no live attachment of 106261946 exists. Gate: exactly one delete, `hcloud_volume.inngest_redis`,
-`before.id` equal to 106261946; everything else no-op. Terraform deletes the Hetzner volume and drops the
-state entry. If Hetzner already answers 404 and state still lists the address, the phase runs a
-state-only reconcile for that one address.
+row exists whose nonce equals `wipe_run_id`, dated not before the wipe run's start, with matching
+volume id and size; Hetzner's own action history for the volume corroborates it (a successful
+`attach_volume` to a server that is neither the live Inngest host nor absent, finished not before the
+wipe run's start, followed by a successful `detach_volume`); and no live attachment of 106261946
+exists. The row alone is not proof: it is self-attested and a holder of the shared ingest token could
+write one, so the Hetzner action history is what ties it to a real attach. Gate: exactly one delete,
+`hcloud_volume.inngest_redis`, `before.id` equal to 106261946; everything else no-op. Terraform deletes
+the Hetzner volume and drops the state entry. If Hetzner already answers 404 and state still lists the
+address, the phase runs the gated state-only reconcile for that one address (see Phase 1).
+
+If `destroy` aborts because a stale orphan attachment for 106261946 is still in state, or a wipe host
+exists in Hetzner but not in state, re-dispatch `detach`, or delete the labelled server by id (triage
+table above), then retry; the abort message names which.
 
 ### Decision point: 2026-10-17 (D4)
 
 If the `wipe` phase has not succeeded by **2026-10-17**, stop and ask the operator for a decision; do not
 choose silently. A provider delete without zeroing is defensible only as a CLO-attested downgrade
 ("provider delete only, no overwrite, logical erasure not evidenced by read-back"), and it beats an
-expired non-extendable Art. 32 exception. The destroy dispatch then replaces `wipe_run_id` with:
+expired non-extendable Art. 32 exception. The attestation is a specific comment on #8285, posted by the
+CLO or an operator with repository access, that names volume 106261946 in its body. The destroy
+dispatch then replaces `wipe_run_id` with:
 
 ```
-gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=inngest-backstop-retire -f phase=destroy -f expected_inngest_volume_id=106261946 -f confirm=RETIRE-INNGEST-BACKSTOP -f erasure=provider-only -f clo_attestation_ref=<URL of the CLO attestation> -f reason='#8285 destroy plaintext backstop, provider delete only'
+gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=inngest-backstop-retire -f phase=destroy -f expected_inngest_volume_id=106261946 -f confirm=RETIRE-INNGEST-BACKSTOP -f erasure=provider-only -f clo_attestation_ref=https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<comment id> -f reason='#8285 destroy plaintext backstop, provider delete only'
 ```
 
-The gate checks the attestation reference is non-empty and resolvable; there is no third way past the
+The gate accepts only that exact URL shape, fetches the comment through the GitHub API, and requires
+the author to be an owner, member or collaborator of the repository and the body to contain the volume
+id 106261946; any other reference, on any host, is refused. There is no third way past the
 precondition. The destruction record uses its "provider delete only" wording.
 
 ### Verification after `destroy` (read-only, a hard exit criterion)
@@ -425,20 +500,40 @@ plan lists neither retired address; the next `host_role=dedicated` probe row sti
 `/dev/mapper/inngest-redis` on 106903269 with `redis_active`; the wrong-volume alert is quiet **and** a
 fresh probe row is present (an absent alert alone proves nothing, because a silent probe reads as
 healthy); Hetzner snapshots and backups for the volume are still 0. Record the `destroy` apply
-completion time and the time of the first 404 in the destruction record.
+completion time and the time of the first 404 in the destruction record. The workflow's read-back step
+runs even when an earlier step failed, so its output exists for a red run too.
 
 ### The window between PR A's merge and `destroy`
 
-- The two removed Terraform addresses are state-only orphans, so the scheduled drift plan reports two
-  deletes. That is expected and clears when the phases finish.
-- **Never run an untargeted apply of the root in this window**: it would delete both orphans unwiped.
-  No CI path does so; do not add one by hand.
-- Do not dispatch `inngest-host`, `inngest-host-replace` or any host rebirth in the window.
+- The two removed Terraform addresses are state-only orphans, so the scheduled drift plan (twice daily,
+  06:00 and 18:00 UTC) reports two deletes and comments on the infra-drift issue. That is expected and
+  clears when the phases finish. Do not apply it.
+- **Never run an untargeted `terraform apply` of the root until the `destroy` phase has completed**: it
+  would delete both orphans unwiped. No CI path does so, and any HALT or error text that suggests an
+  operator-run untargeted apply does not apply in this window; do not follow it. Do not add a path by
+  hand. (The orphans are plain state entries with no declaration, so a Terraform-level guard would
+  need a new resource; none is added, and this paragraph is the control.)
+- Do not dispatch `inngest-host`, `inngest-host-replace` or any host rebirth in the window. A host
+  replace after PR A also ends the rollback (§5a banner).
 - Do **not** close either tracker (#8285, #6894) before the 404 read-back, and do not retire the property probe before
   it either (§5 step 4). The convergence PR carries `Ref #8285` only; the trackers are closed
   explicitly afterwards with the PR link, the run URLs and the 404 read-back.
 - After retirement the live LUKS volume is the only copy of the store and `INNGEST_REDIS_LUKS_KEY` in
   Doppler `soleur-inngest/prd` is its sole opener (ADR-142 addendum 2026-10-08).
+
+### Records the convergence PR must carry
+
+The checklist is owned by the destruction record
+(`knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md`, "Addendum 2026-10-09",
+"Completion checklist for PR B, extended") and mirrored as tasks in the feature spec. Two operational
+points live here because they gate a deletion:
+
+- **Do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` until the dead-probe heartbeat
+  feeder (#9703) is armed.** That script is the only reporter that says "CANNOT ESTABLISH" for a silent
+  probe pipeline; the wrong-volume alert reads a silent probe as healthy until the feeder is wired.
+- **PR B merges only after the 404 read-back is recorded**, and its squash message carries no closing
+  keyword next to #8285 or #6894 (the property probe is notify-only for exactly this reason, see commit
+  7f7d9c3d9b; §5 step 4 explains why the tracker stays open until the destroy).
 
 ---
 

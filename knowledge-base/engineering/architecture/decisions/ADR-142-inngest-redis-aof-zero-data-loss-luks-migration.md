@@ -457,3 +457,79 @@ the Article 30 cells, the C4 model and the probe stay as they are until PR B, af
 read-back. The Art. 5(2) record for this destroy is
 `knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md`, committed as a template with
 every measured field `PENDING-EVIDENCE`.
+
+## Addendum — 2026-10-09 (#8285, review round 1 of PR #9784)
+
+Appended, not edited. The 2026-10-08 addendum above is unchanged; where this one narrows it, it says so.
+**Status: adopting**, on the same terms as that addendum: every sentence about the retirement is a
+plan until the Hetzner API shows volume 106261946 gone. Ref #8285, Ref #6894.
+
+### What the review round decided
+
+**E1. The wipe evidence is not forge-proof, and the records say so.** The 2026-10-08 addendum (D2)
+calls the evidence self-attested, which stands. What it did not say, and the destruction record's first
+draft got wrong, is what the destroy gate's binding buys. The evidence row reaches Better Stack with the
+ingest token that other hosts share, so a holder of that token can write a row with any `host`. The
+binding to the wipe run's nonce, the volume id, the size and the run's start time makes a **stale or
+replayed** row fail; it does not make a forged one fail. No new secret is introduced to change that.
+Instead the destroy precondition corroborates from the provider: it reads Hetzner's action history
+for volume 106261946 (read-only token) and requires a successful `attach_volume` to a server that is
+neither the live Inngest host (169426216) nor absent, finished not before the wipe run's start, and a
+later successful `detach_volume`. That ties the evidence to a real attach on a real wipe host; it does
+not prove the zeroing, which stays a guest-side claim. The evidence funnel also pins the emitter fields
+the wipe host sends (`host`, `shipper`) so a row from another source fails the match.
+
+**E2. The D4 attestation is a specific comment, not a reachable URL.** The 2026-10-08 D4 text accepts
+`erasure=provider-only` with a `clo_attestation_ref`. That reference is narrowed to exactly
+`https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>`, fetched through the GitHub API,
+whose author must be an owner, member or collaborator and whose body contains the volume id. Any other
+host or shape is refused. A downgrade that is the CLO's to make has to be a record on the tracker, not
+whatever returns HTTP 200.
+
+**E3. The untargeted whole-root plan proves the host is untouched; it does not police the rest of the
+root.** It stays as the D1 proof on live state, but in untargeted mode it requires only: the server and
+the LUKS pair are each exactly one no-op entry; no positive entry carries the live id 106903269; entries
+for the retired and wipe addresses are within the phase's authorized set. Unrelated resources are
+ignored there, so unrelated drift cannot block a phase, including the D4 path on its deadline. The
+targeted plan that follows stays exact.
+
+**E4. `teardown` is exempt from the live-store gate; `detach`, `wipe` and `destroy` keep it.** A leaked
+wipe host must always be cleanable, and teardown can only delete the two wipe addresses.
+
+**E5. The state-only reconcile is gated.** Where Hetzner says an object is gone but state lists its
+address, a single-address refresh-only apply drops it, and only if `terraform state list` before and
+after differs by exactly that one address.
+
+**E6. Rollback ends at the `detach` phase or at the first host replace after PR A merges.** PR A removes
+the attachment declaration, so a host replaced after it boots without the backstop attached; the
+rollback then has nothing to copy back from even if `detach` has not run.
+
+### The orphan window, restated
+
+From PR A's merge until `destroy`, the two removed addresses are state-only orphans. The scheduled drift
+plan (twice daily) reports two deletes by design and must not be applied. An untargeted `terraform apply`
+of the root in that window would delete both orphans unwiped. No CI path applies the root untargeted,
+and this PR amends the per-merge apply's HALT text so it no longer directs an operator to an untargeted
+apply. No Terraform resource is added to guard the window: the control is the runbook
+(`inngest-luks-cutover-6894.md` §5b, "The window between PR A's merge and `destroy`").
+
+### Chain behaviour of the orphan `-target`
+
+Measured on Terraform 1.9.8 on a local backend: with the attachment depending on the volume and the
+server, `plan -target` on the attachment plans only the attachment delete, and `plan -target` on the
+volume plans only the volume delete. The workflow pins 1.10.5, so the experiment is re-run on that
+version before the first dispatch. If the chain differs, the plan-shape gate aborts with no mutation.
+
+### C4 note
+
+`knowledge-base/engineering/architecture/diagrams/model.c4` (`inngestRedis`) still says the plaintext
+backstop "stays attached and intact". That is true until the `detach` phase and false after it, and the
+description is generated into `model.likec4.json`, so it is rewritten once, in PR B, with the
+regeneration, rather than in PR A before any phase has run.
+
+### What this addendum does NOT change
+
+D1 through D4 of the 2026-10-08 addendum, the decision, its encryption mechanism, or the earlier
+amendments. A wipe rehearsal and a LUKS key-or-header continuity proof are not built here; both are
+recorded as operator-facing prerequisites in the runbook and as untaken options in the feature's
+`decision-challenges.md`.

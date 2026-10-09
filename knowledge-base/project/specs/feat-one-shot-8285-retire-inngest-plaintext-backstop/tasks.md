@@ -42,3 +42,65 @@ PR bodies use `Ref #8285` / `Ref #6894` only (no closing keyword). PR A's body f
 - 3.4 Delete the probe script + test + `run_suite` line; fix stale comments (betterstack-logs-alerts.tf, uptime-alerts.tf, inngest-redis-luks.tf, variables.tf, followthroughs/inngest-luks-cutover-6894.sh).
 - 3.5 Complete the destruction record (counts only), Article 30 PA-13/PA-21/PA-22 in-cell amendments, compliance-posture row, `model.c4` edits + regenerate, expenses ledger, ADR-142 landed, CLO attestation.
 - 3.6 Ship PR B with `Ref #8285`; afterwards `gh issue close 8285` and `gh issue close 6894` with PR link, run URLs, 404 read-back.
+
+## Review round 1 additions (2026-10-09, PR #9784)
+
+Appended; the phases above are unchanged. Where a line below narrows one above, it says which. Decisions
+and rationale: ADR-142 addendum 2026-10-09 and `decision-challenges.md` 2026-10-09. Procedure: runbook
+`inngest-luks-cutover-6894.md` §5b.
+
+### Before the first production dispatch (adds to Phase 0)
+
+- 0.5 Re-run the orphan `-target` chain experiment (0.2b) on Terraform 1.10.5, the workflow's pin; the
+  earlier run used 1.9.8. The retire gate aborts with no mutation if the shape differs.
+- 0.6 Operator accepts, in writing in the go-ahead for `detach`, the two known gaps: no wipe rehearsal
+  exists, and no LUKS key or header continuity proof exists (runbook §5b, prerequisites 1 and 2).
+- 0.7 While a dispatch waits for reviewer approval nothing comments on #8285, so the operator keeps the
+  days-to-expiry reminder. If `scripts/followthroughs/inngest-luks-property-8296.sh` is still in the
+  tree, its daily comment should carry a "days to expiry" line (it is the only unprompted signal);
+  that script is deleted in PR B step 3.4, so any such line is needed before then, not in PR B.
+
+### Narrowing of Phase 1 (1.3.1, 1.3.2)
+
+- 1.3.1 narrowed: the live-store gate runs in front of `detach`, `wipe` and `destroy`, not `teardown`.
+  The untargeted plan requires only the host and the LUKS pair as one no-op each, nothing carrying the
+  live id, and the retired and wipe addresses within the phase's authorized set; unrelated resources
+  are ignored there.
+- 1.3.2 narrowed: the destroy precondition also reads Hetzner's action history for volume 106261946
+  (a successful `attach_volume` to a server that is neither 169426216 nor null, finished not before the
+  wipe run's start, then a successful `detach_volume`); the D4 attestation is a #8285 issue comment of
+  the exact shape `https://github.com/jikig-ai/soleur/issues/8285#issuecomment-<digits>` by an owner,
+  member or collaborator, whose body contains 106261946.
+- 1.3.3 The per-merge apply's HALT text no longer directs an operator to an untargeted `terraform apply`
+  of the root while the orphans exist. No new Terraform resource.
+
+### Narrowing of Phase 2 (2.2, 2.5)
+
+- 2.2 The wipe poll has a 20-minute wall-clock deadline and stops at once on a `refused` row for its
+  nonce. On any wipe that does not go green, follow runbook §5b "When the wipe does not go green":
+  query Better Stack for a late `wiped` row before re-dispatching, and for a wipe host absent from state
+  delete the labelled server by id through the Hetzner API (operator tooling, named go-ahead), then
+  dispatch `teardown`.
+- 2.2b Fill the destruction record's addendum rows per command: go-ahead quote, head SHA, the
+  `git diff --quiet` result against the reviewed SHA, rehearsal id ("none: no rehearsal path exists").
+- 2.2c The first real wipe is the first measurement of the 10 GiB size, the by-id naming and the on-host
+  duration (estimated 4 to 10 minutes, unmeasured); copy them into the record.
+- 2.5 stands. The 2026-10-17 point is the D4 decision: if `wipe` has not succeeded, ask the operator and
+  the CLO; do not choose silently.
+
+### Additions to Phase 3 (PR B)
+
+- 3.4 gated: do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` (or its test) until the
+  dead-probe heartbeat feeder #9703 is armed.
+- 3.5 extended: Article 30 PA-13 section (e), PA-21 section (f), PA-22 section (f) and the
+  compliance-posture row reuse the "logical, guest-side, self-attested" sentence (or the D4
+  provider-only text) and cite the first-404 and `destroy` apply-completion times; the CLO-attested audit
+  of the destruction record at a named SHA precedes `status: complete` (ship Phase 5.5 applies to that
+  PR); `model.c4` `inngestRedis` is rewritten (it says the backstop "stays attached and intact") and
+  regenerated; the wrong-volume alert's `incident_cause` and the comment block above it are re-read
+  for the backstop's absence.
+- 3.6 extended: PR B is not merged before the Hetzner 404 read-back is recorded; its squash message has
+  uses `Ref` for both trackers and no closing keyword at all (see commit 7f7d9c3d9b); update or retire #8316 at
+  convergence with the PR link.
+- 3.7 The older template `knowledge-base/legal/audits/inngest-aof-destruction-record.md` keeps its
+  2026-09-21 `Superseded` banner and is not completed for this destroy.
