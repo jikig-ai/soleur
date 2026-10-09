@@ -44,6 +44,17 @@ fail() { fails=$((fails + 1)); executed=$((executed + 1)); printf 'FAIL - %s\n' 
 check() { local d="$1"; shift; if "$@"; then pass "$d"; else fail "$d"; fi; }
 # check_not <description> <command...> : passes when the command exits non-zero (a property must NOT hold).
 check_not() { local d="$1"; shift; if "$@"; then fail "$d"; else pass "$d"; fi; }
+# opt_check <description> <command...> : a row that only runs when an OPTIONAL tool (shellcheck,
+# terraform + PyYAML) is installed. It must be able to FAIL the run, but it must never move
+# `executed`: the FLOOR is the exact count of rows that run on every machine, so a machine without
+# the optional tools cannot trip it and a machine with them cannot pad it.
+opt_ran=0; opt_fails=0
+opt_check() {
+  local d="$1"; shift
+  opt_ran=$((opt_ran + 1))
+  if "$@"; then printf 'ok   - (optional, not counted toward the floor) %s\n' "$d"
+  else opt_fails=$((opt_fails + 1)); printf 'FAIL - (optional) %s\n' "$d" >&2; fi
+}
 
 # ---- INSTRUMENT SELF-TEST (printf + exit; never through pass/fail) ----------------------------
 _p0=$passes; _f0=$fails; _e0=$executed
@@ -137,7 +148,7 @@ check "render: nonce landed"              grep -q "^NONCE='$NONCE'" "$GOOD"
 check_not "render: no unresolved interpolation placeholder remains" grep -qE '(^|[^$])\$\{(volume_id|expected_size_bytes|nonce|betterstack_logs_token)\}' "$GOOD"
 check "render: the rendered script is valid bash" bash -n "$GOOD"
 if command -v shellcheck >/dev/null 2>&1; then
-  check "render: shellcheck -S warning is clean on the rendered script" shellcheck -S warning -s bash "$GOOD"
+  opt_check "render: shellcheck -S warning is clean on the rendered script" shellcheck -S warning -s bash "$GOOD"
 else
   printf 'note - shellcheck not installed; lint row not counted\n'
 fi
@@ -148,7 +159,7 @@ if command -v terraform >/dev/null 2>&1 && python3 -I -c "import yaml" >/dev/nul
   ( cd "$TFR" && printf 'jsonencode(templatefile("%s", {volume_id=%s, expected_size_bytes=%s, nonce="%s", betterstack_logs_token="synthTok123"}))\n' \
       "$YML" "$PINNED_ID" "$SIZE_A" "$NONCE" | terraform console 2>/dev/null \
     | python3 -I -c 'import sys,json,yaml; d=yaml.safe_load(json.loads(json.loads(sys.stdin.read().strip()))); sys.stdout.write([f for f in d["write_files"] if f["path"].endswith(".sh")][0]["content"])' > "$TFR/script.sh" )
-  check "render: terraform's own templatefile() output is byte-identical to the harness render" cmp -s "$TFR/script.sh" "$GOOD"
+  opt_check "render: terraform's own templatefile() output is byte-identical to the harness render" cmp -s "$TFR/script.sh" "$GOOD"
 else
   printf 'note - terraform/python3 not installed; templatefile parity row not counted\n'
 fi
@@ -179,6 +190,26 @@ census_token_not_on_argv() {
   grep -q 'curl -q -K -' <<<"$c" && ! grep -qE 'curl[^|]*(Authorization|Bearer|\$TOKEN)' <<<"$c"
 }
 census_no_set_e() { local c; c="$(code_lines "$1")"; ! grep -qE '^[[:space:]]*set[[:space:]]+-[a-z]*e' <<<"$c"; }
+# The EXACT zero call: -z (a plain discard does not zero), the whole device, stdin detached.
+census_blkdiscard_exact() { local c; c="$(code_lines "$1")"; grep -qxE '[[:space:]]*blkdiscard -z "\$REAL" </dev/null' <<<"$c"; }
+# curl must FAIL on an HTTP error status (-f inside the short-flag cluster) and be time-bounded.
+census_curl_fail_flag() { local c; c="$(code_lines "$1")"; grep -qE 'curl[^|]* -[a-zA-Z]*f[a-zA-Z]*( |$)' <<<"$c"; }
+census_curl_max_time() { local c; c="$(code_lines "$1")"; grep -qE 'curl[^|]*--max-time [0-9]+' <<<"$c"; }
+# guard_device is called exactly twice before the (single) wipe_device call: once for the identity
+# decision and once more after the started row, because the started row is a network round trip.
+census_reguard_before_wipe() {
+  awk '/^[[:space:]]*wipe_device([[:space:]]|$)/{w=1; exit} /^[[:space:]]*guard_device([[:space:]]|$)/{c++} END{exit !(w==1 && c==2)}' "$1"
+}
+# Production literals: the token path in the script is the path write_files creates, and the ingest
+# endpoint is https. The seams may rebind either; these are what production runs.
+yml_token_path() { sed -nE 's/^  - path: (\/run\/[^ ]*\.token)$/\1/p' "$YML" | head -1; }
+script_literal() { sed -nE "s/^$2=(.*)\$/\\1/p" "$1" | head -1; }
+census_token_path_parity() {
+  local a b; a="$(script_literal "$1" TOKEN_FILE)"; b="$(yml_token_path)"
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" = "$b" ]
+}
+census_ingest_https() { local u; u="$(script_literal "$1" INGEST_URL)"; case "$u" in https://?*) return 0 ;; esac; return 1; }
+census_post_budget() { grep -qx 'POST_TRIES=3' "$1" && grep -qx 'POST_SLEEP=3' "$1"; }
 
 check "census: exactly ONE blkdiscard call site"                        census_single_blkdiscard "$GOOD"
 check "census: that call site is inside wipe_device()"                  census_blkdiscard_in_wipe_fn "$GOOD"
@@ -192,6 +223,13 @@ check "census: the script has no set -e (a failed probe must reach the refusal r
 check "census: the pinned volume id is a literal in the script, not only the template input" grep -q "^PINNED_ID=$PINNED_ID\$" "$GOOD"
 check "census: the live LUKS volume id never appears in the script" bash -c "! grep -q '$LIVE_LUKS_ID' '$GOOD'"
 check "census: the by-id wait is bounded (default WAIT_MAX literal present)" grep -qE '^WAIT_MAX=[0-9]+$' "$GOOD"
+check "census: the zero call is EXACTLY blkdiscard -z on the whole device with stdin detached" census_blkdiscard_exact "$GOOD"
+check "census: curl fails on an HTTP error status (-f in the short-flag cluster)" census_curl_fail_flag "$GOOD"
+check "census: curl is time-bounded (--max-time)" census_curl_max_time "$GOOD"
+check "census: guard_device runs TWICE before wipe_device (before and after the started-row round trip)" census_reguard_before_wipe "$GOOD"
+check "census: the script's TOKEN_FILE literal equals the write_files token path" census_token_path_parity "$GOOD"
+check "census: the production INGEST_URL literal is https" census_ingest_https "$GOOD"
+check "census: the production evidence POST budget is 3 tries, 3 s apart (a seam may change it, production may not)" census_post_budget "$GOOD"
 
 # ---- template / terraform static rows -------------------------------------------------------------
 check_not "yml: no template directive percent-brace anywhere (comments included)" grep -q '%{' "$YML"
@@ -211,37 +249,64 @@ tf_keys()  { awk '/templatefile\(.*cloud-init-inngest-backstop-wipe\.yml/{f=1;ne
 check "tf: the templatefile map keys equal the yml's interpolation keys exactly ($(yml_keys))" \
   bash -c "[ -n \"\$(printf '%s' '$(tf_keys)')\" ] && [ '$(yml_keys)' = '$(tf_keys)' ]"
 
-tf_code() { grep -vE '^[[:space:]]*#' "$TF"; }
-check "tf: server and attachment are both count-gated on inngest_backstop_wipe_enabled" \
-  bash -c "[ \"\$(grep -vE '^[[:space:]]*#' '$TF' | grep -c 'count *= *var.inngest_backstop_wipe_enabled ? 1 : 0')\" = 2 ]"
-check "tf: server pinned to var.location" bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -qE '^[[:space:]]*location *= *var\.location'"
-check "tf: server uses the existing deny-all firewall" bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -q 'firewall_ids *= *\[hcloud_firewall.inngest.id\]'"
-check "tf: ssh_keys is the existing default key with ignore_changes=[ssh_keys]" \
-  bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -q 'ssh_keys *= *\[hcloud_ssh_key.default.id\]' && grep -vE '^[[:space:]]*#' '$TF' | grep -q 'ignore_changes *= *\[ssh_keys\]'"
-check "tf: labels role=inngest-backstop-wipe and ephemeral=true" \
-  bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -q 'role *= *\"inngest-backstop-wipe\"' && grep -vE '^[[:space:]]*#' '$TF' | grep -q 'ephemeral *= *\"true\"'"
-check "tf: attachment has automount=false" bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -qE '^[[:space:]]*automount *= *false'"
-check "tf: attachment volume_id comes from the pinned numeric variable" bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -qE 'volume_id *= *var\.inngest_backstop_volume_id'"
-check "tf: the ingest token is the EXISTING variable (no new secret variable)" bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -q 'betterstack_logs_token *= *var.betterstack_logs_token'"
+# Comment- and description-stripped, whitespace-normalised views: a pin matches a whole code line, never
+# prose, so a description or comment that quotes a literal cannot satisfy (or break) a row.
+tf_norm() { grep -vE '^[[:space:]]*#' "$1" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'; }
+tf_pin() { local c; c="$(tf_norm "$1")"; grep -qxF -- "$2" <<<"$c"; }
+tf_pin_count() { local c; c="$(tf_norm "$1")"; [ "$(grep -cxF -- "$2" <<<"$c")" = "$3" ]; }
+vblock() { awk -v v="$2" '$0 ~ "^variable \"" v "\"" {f=1} f&&/^}/{f=0} f' "$1" | grep -vE '^[[:space:]]*(description|#)' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'; }
+vpin() { local b; b="$(vblock "$1" "$2")"; grep -qxF -- "$3" <<<"$b"; }
+vpin_vol() { vpin "$1" inngest_backstop_volume_id 'condition = var.inngest_backstop_volume_id == 106261946'; }
+tf_server_name() { awk '/^resource "hcloud_server" "inngest_backstop_wipe"/{f=1} f&&/^[[:space:]]*name[[:space:]]*=/{gsub(/^[^"]*"|".*$/,""); print; exit}' "$1"; }
+tf_nonce_precond() { tf_pin "$1" 'condition = can(regex("^[0-9]{1,20}$", var.inngest_backstop_wipe_nonce))'; }
+tf_server_pin() { tf_pin "$1" 'server_id = hcloud_server.inngest_backstop_wipe[0].id'; }
+tf_size_pin() { tf_pin "$1" 'inngest_backstop_wipe_expected_size_bytes = 10 * 1073741824'; }
+tf_nonce_entry() { tf_pin "$1" 'nonce = var.inngest_backstop_wipe_nonce'; }
+tf_size_entry() { tf_pin "$1" 'expected_size_bytes = local.inngest_backstop_wipe_expected_size_bytes'; }
+tf_volume_pins() { tf_pin_count "$1" 'volume_id = var.inngest_backstop_volume_id' 2; }
+tf_count_gate() { tf_pin_count "$1" 'count = var.inngest_backstop_wipe_enabled ? 1 : 0' 2; }
+TF_SERVER_NAME="$(tf_server_name "$TF")"
+[ -n "$TF_SERVER_NAME" ] || { printf 'FATAL: could not read the wipe server name from %s\n' "$TF" >&2; exit 2; }
+
+check "tf: server and attachment are both count-gated on inngest_backstop_wipe_enabled" tf_count_gate "$TF"
+check "tf: server pinned to var.location" tf_pin "$TF" 'location = var.location'
+check "tf: server uses the existing deny-all firewall" tf_pin "$TF" 'firewall_ids = [hcloud_firewall.inngest.id]'
+check "tf: ssh_keys is the existing default key" tf_pin "$TF" 'ssh_keys = [hcloud_ssh_key.default.id]'
+check "tf: ignore_changes=[ssh_keys]" tf_pin "$TF" 'ignore_changes = [ssh_keys]'
+check "tf: label role=inngest-backstop-wipe" tf_pin "$TF" 'role = "inngest-backstop-wipe"'
+check "tf: label ephemeral=true" tf_pin "$TF" 'ephemeral = "true"'
+check "tf: attachment has automount=false" tf_pin "$TF" 'automount = false'
+check "tf: the server name is the literal the evidence row's host field is pinned to ($TF_SERVER_NAME)" tf_pin "$TF" "name = \"$TF_SERVER_NAME\""
+check "tf: the attachment's server_id is the WIPE host (never the live inngest server)" tf_server_pin "$TF"
+check "tf: the nonce precondition requires 1-20 digits (empty or non-numeric refuses before any create)" tf_nonce_precond "$TF"
+check "tf: the expected size is 10 GiB, a historical literal (not the live volume's variable)" tf_size_pin "$TF"
+check "tf: the templatefile nonce entry is the nonce VARIABLE reference" tf_nonce_entry "$TF"
+check "tf: the templatefile size entry is the pinned local" tf_size_entry "$TF"
+check "tf: volume_id comes from the pinned numeric variable in BOTH the template map and the attachment" tf_volume_pins "$TF"
+check "tf: the ingest token is the EXISTING variable (no new secret variable)" tf_pin "$TF" 'betterstack_logs_token = var.betterstack_logs_token'
 check_not "tf: the live LUKS volume is never referenced by this file" bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -qE 'inngest_redis_luks|$LIVE_LUKS_ID'"
 check "tf: the user_data is not baked from any Doppler token or LUKS key" \
   bash -c "! grep -vE '^[[:space:]]*#' '$TF' | grep -qiE 'doppler|luks_key|redis_luks_key'"
-check "vars: inngest_backstop_wipe_enabled is a bool defaulting to false" \
-  bash -c "awk '/^variable \"inngest_backstop_wipe_enabled\"/{f=1} f&&/^}/{f=0} f' '$VARS' | grep -q 'type *= *bool' && awk '/^variable \"inngest_backstop_wipe_enabled\"/{f=1} f&&/^}/{f=0} f' '$VARS' | grep -q 'default *= *false'"
-check "vars: inngest_backstop_volume_id is a number defaulting to $PINNED_ID" \
-  bash -c "awk '/^variable \"inngest_backstop_volume_id\"/{f=1} f&&/^}/{f=0} f' '$VARS' | grep -q 'type *= *number' && awk '/^variable \"inngest_backstop_volume_id\"/{f=1} f&&/^}/{f=0} f' '$VARS' | grep -qE 'default *= *$PINNED_ID\$'"
-check "vars: the volume id variable refuses the live LUKS volume id" \
-  bash -c "awk '/^variable \"inngest_backstop_volume_id\"/{f=1} f&&/^}/{f=0} f' '$VARS' | grep -q '$LIVE_LUKS_ID'"
+check "vars: inngest_backstop_wipe_enabled is a bool" vpin "$VARS" inngest_backstop_wipe_enabled 'type = bool'
+check "vars: inngest_backstop_wipe_enabled defaults to false" vpin "$VARS" inngest_backstop_wipe_enabled 'default = false'
+check "vars: inngest_backstop_volume_id is a number" vpin "$VARS" inngest_backstop_volume_id 'type = number'
+check "vars: inngest_backstop_volume_id defaults to $PINNED_ID" vpin "$VARS" inngest_backstop_volume_id "default = $PINNED_ID"
+check "vars: the volume id validation is an allow-list of exactly $PINNED_ID (not a deny-list: no other id, the live LUKS id included, passes)" vpin_vol "$VARS"
+check "vars: the nonce validation accepts only digits or empty" vpin "$VARS" inngest_backstop_wipe_nonce 'condition = can(regex("^[0-9]{0,20}$", var.inngest_backstop_wipe_nonce))'
 check_not "vars: no new secret variable was added for the wipe (sensitive = true absent in the wipe variable blocks)" \
   bash -c "for v in inngest_backstop_wipe_enabled inngest_backstop_volume_id inngest_backstop_wipe_server_type inngest_backstop_wipe_nonce; do awk -v v=\"\$v\" '\$0 ~ \"^variable \\\"\"v\"\\\"\"{f=1} f&&/^}/{f=0} f' '$VARS'; done | grep -q 'sensitive'"
 
 # ---- fixture machinery ----------------------------------------------------------------------------
 # stubs ----------------------------------------------------------------------------------------------
 assert_fixture_dir "$W"
+# Every stub that takes the device as an operand FAILS unless that operand is the fixture device
+# (FIX_DEV): a script that queried the wrong path (the by-id directory, an unresolved alias) must be
+# unable to look healthy.
 cat > "$W/bin/lsblk" <<'EOF'
 #!/bin/sh
 echo "lsblk $*" >> "$STUB_DIR/lsblk.log"
 dev=""; for a in "$@"; do dev="$a"; done
+[ "$dev" = "$FIX_DEV" ] || { echo "lsblk: unexpected operand $dev" >> "$STUB_DIR/badop.log"; exit 1; }
 case "$*" in
   *TYPE,SIZE*) sz="$(stat -L -c %s "$dev")" || exit 1; echo "${LSBLK_TYPE:-disk} $sz" ;;
   *NAME*)      echo "dev0"; [ -n "${FX_CHILD:-}" ] && echo "dev0p1"; exit 0 ;;
@@ -251,12 +316,16 @@ EOF
 cat > "$W/bin/findmnt" <<'EOF'
 #!/bin/sh
 echo "findmnt $*" >> "$STUB_DIR/findmnt.log"
-[ "${FX_MOUNTED:-}" = 1 ] && echo /mnt/stub
+dev=""; for a in "$@"; do dev="$a"; done
+# A wrong operand reads as MOUNTED (and is logged): the script refuses instead of passing.
+[ "$dev" = "$FIX_DEV" ] || { echo "findmnt: unexpected operand $dev" >> "$STUB_DIR/badop.log"; echo /mnt/wrong-operand; exit 0; }
+{ [ "${FX_MOUNTED:-}" = 1 ] || [ -e "$STUB_DIR/mounted.flag" ]; } && echo /mnt/stub
 exit 0
 EOF
 cat > "$W/bin/blockdev" <<'EOF'
 #!/bin/sh
 echo "blockdev $*" >> "$STUB_DIR/blockdev.log"
+echo "blockdev $*" >> "$STUB_DIR/order.log"
 exit 0
 EOF
 cat > "$W/bin/sleep" <<'EOF'
@@ -264,37 +333,90 @@ cat > "$W/bin/sleep" <<'EOF'
 echo "sleep $*" >> "$STUB_DIR/sleep.log"
 exit 0
 EOF
+cat > "$W/bin/hostname" <<'EOF'
+#!/bin/sh
+echo "$HOSTNAME_STUB"
+EOF
+# blkdiscard honours its flags: -z/--zeroout is REQUIRED (a plain discard does not zero), and it
+# zeroes only [--offset, --offset+--length) of the device (default: the whole device). Anything else
+# is rejected, so a mutated call cannot look like a full zero.
 cat > "$W/bin/blkdiscard" <<'EOF'
 #!/bin/sh
 echo "blkdiscard $*" >> "$STUB_DIR/blkdiscard.log"
-dev=""; for a in "$@"; do dev="$a"; done
+echo "blkdiscard $*" >> "$STUB_DIR/order.log"
+zeroout=0; off=0; len=""; dev=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -z|--zeroout) zeroout=1 ;;
+    -o|--offset) shift; off="$1" ;;
+    --offset=*) off="${1#*=}" ;;
+    -l|--length) shift; len="$1" ;;
+    --length=*) len="${1#*=}" ;;
+    -*) echo "blkdiscard: stub rejects option $1" >&2; exit 64 ;;
+    *) dev="$1" ;;
+  esac
+  shift
+done
+[ "$zeroout" = 1 ] || { echo "blkdiscard: stub requires -z (a plain discard does not zero)" >&2; exit 64; }
+[ "$dev" = "$FIX_DEV" ] || { echo "blkdiscard: unexpected operand $dev" >> "$STUB_DIR/badop.log"; exit 1; }
 size="$(stat -L -c %s "$dev")" || exit 1
+[ -n "$len" ] || len=$((size - off))
+whole=0; { [ "$off" = 0 ] && [ "$len" = "$size" ]; } && whole=1
 case "${BD_MODE:-zero}" in
   fail) exit 1 ;;
   noop) exit 0 ;;
   partial)
     truncate -s 0 "$dev" && truncate -s "$size" "$dev" || exit 1
     printf '\001' | dd of="$dev" bs=1 seek=$((size - 1)) conv=notrunc status=none || exit 1 ;;
-  *) truncate -s 0 "$dev" && truncate -s "$size" "$dev" || exit 1 ;;
+  *)
+    if [ "$whole" = 1 ]; then truncate -s 0 "$dev" && truncate -s "$size" "$dev" || exit 1
+    else dd if=/dev/zero of="$dev" bs=1M oflag=seek_bytes seek="$off" count="$len" iflag=count_bytes conv=notrunc status=none || exit 1; fi ;;
 esac
 exit 0
 EOF
 cat > "$W/bin/blkid" <<'EOF'
 #!/bin/sh
-# Real blkid, except that after a (stub) zero it can be forced to claim a surviving signature.
-if [ -n "${BLKID_FORCE_TYPE:-}" ] && [ -s "$STUB_DIR/blkdiscard.log" ]; then echo "$BLKID_FORCE_TYPE"; exit 0; fi
+# Real blkid, except: after a (stub) zero it can be forced to claim a surviving signature
+# (BLKID_FORCE_TYPE) or to fail with an arbitrary rc (BLKID_FORCE_RC_AFTER); before any zero it can
+# be forced to fail with an arbitrary rc (BLKID_FORCE_RC), the "probe error that is neither found
+# nor not-found" case.
+if [ -s "$STUB_DIR/blkdiscard.log" ]; then
+  if [ -n "${BLKID_FORCE_TYPE:-}" ]; then echo "$BLKID_FORCE_TYPE"; exit 0; fi
+  if [ -n "${BLKID_FORCE_RC_AFTER:-}" ]; then exit "$BLKID_FORCE_RC_AFTER"; fi
+else
+  if [ -n "${BLKID_FORCE_RC:-}" ]; then exit "$BLKID_FORCE_RC"; fi
+fi
 exec "$REAL_BLKID" "$@"
 EOF
+# curl models the HTTP layer. CURL_RC is a transport failure. CURL_HTTP=503 is a server that ANSWERS
+# with an error status: real curl exits 22 for that ONLY when -f/--fail is in argv (a short cluster
+# such as -fsS counts); without it curl exits 0 and the error body would be "delivered".
+# LATE_HOLDER / LATE_MOUNT make the device change state right after the FIRST successful POST (the
+# started row), the window the second guard_device exists to close.
 cat > "$W/bin/curl" <<'EOF'
 #!/bin/sh
 n=$(( $(cat "$STUB_DIR/curl.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_DIR/curl.n"
 printf '%s\n' "$*" >> "$STUB_DIR/curl.argv"
+echo "curl $n" >> "$STUB_DIR/order.log"
 case " $* " in *" -K - "*) cat > "$STUB_DIR/curl.stdin.$n" ;; esac
 payload=""; prev=""
 for a in "$@"; do [ "$prev" = "-d" ] && payload="$a"; prev="$a"; done
 rc="${CURL_RC:-0}"
 if [ -n "${CURL_OK_FIRST:-}" ] && [ "$n" -gt "$CURL_OK_FIRST" ]; then rc=7; fi
+if [ "$rc" = 0 ] && [ -n "${CURL_HTTP:-}" ] && [ "$CURL_HTTP" -ge 400 ]; then
+  for a in "$@"; do
+    case "$a" in
+      --fail*) rc=22 ;;
+      --*) : ;;
+      -*f*) rc=22 ;;
+    esac
+  done
+fi
 if [ "$rc" = 0 ]; then printf '%s' "$payload" > "$STUB_DIR/payload.$n.ok"; else printf '%s' "$payload" > "$STUB_DIR/payload.$n.fail"; fi
+if [ "$rc" = 0 ] && [ "$n" = 1 ]; then
+  if [ -n "${LATE_HOLDER:-}" ]; then : > "$LATE_HOLDER"; fi
+  if [ -n "${LATE_MOUNT:-}" ]; then : > "$STUB_DIR/mounted.flag"; fi
+fi
 exit "$rc"
 EOF
 chmod +x "$W"/bin/* || { printf 'FATAL: stub chmod failed\n' >&2; exit 2; }
@@ -310,8 +432,11 @@ mkfixture() {
 
 # scenario <name> <script>: build the fixture and run the script. Behaviour knobs come from the
 # caller's prefix assignments: FX_KIND (ext4|luks|ext2|zero|dirty), FX_SIZE, FX_GROW, FX_MOUNTED,
-# FX_HOLDER, FX_OTHER, FX_CHILD, FX_NODEV, FX_NOSYSFS, BD_MODE, CURL_RC, CURL_OK_FIRST,
-# BLKID_FORCE_TYPE, WAIT_MAX_T, EXP_SIZE (no effect on the script: it is rendered by the caller).
+# FX_HOLDER, FX_SLAVE, FX_NOSLAVES, FX_OTHER, FX_CHILD, FX_NODEV, FX_NOSYSFS, BD_MODE, CURL_RC,
+# CURL_HTTP, CURL_OK_FIRST, BLKID_FORCE_TYPE, BLKID_FORCE_RC, BLKID_FORCE_RC_AFTER, LATE_HOLDER_T,
+# LATE_MOUNT_T (device changes state after the started row), POST_TRIES_T, NO_SEAMS (the script's
+# WIPE_T_* variables set WITHOUT WIPE_T_SEAMS=1), PROD_URL (every seam but the ingest URL),
+# WAIT_MAX_T, EXP_SIZE (no effect on the script: it is rendered by the caller).
 # Results: $W/s/<name>/{rc,out,dev.md5.before,dev.md5.after}.
 scenario() {
   local script="$2" d="$W/s/$1"
@@ -329,16 +454,26 @@ scenario() {
   [ -z "${FX_NODEV:-}" ] && ln -s "$dev" "$d/byid/scsi-0HC_Volume_${FX_BYID_ID:-$PINNED_ID}"
   [ -n "${FX_OTHER:-}" ] && { : > "$d/other"; ln -s "$d/other" "$d/byid/scsi-0HC_Volume_$LIVE_LUKS_ID"; }
   [ -n "${FX_HOLDER:-}" ] && : > "$d/sys/block/dev0/holders/dm-0"
+  [ -n "${FX_SLAVE:-}" ] && : > "$d/sys/block/dev0/slaves/sda"
+  [ -n "${FX_NOSLAVES:-}" ] && rm -rf "$d/sys/block/dev0/slaves"
   [ -n "${FX_NOSYSFS:-}" ] && rm -rf "$d/sys/block/dev0"
   printf '%s' "$TOKEN_VALUE" > "$d/token"
   md5sum < "$dev" > "$d/dev.md5.before"
+  local fixdev; fixdev="$(readlink -f "$dev")" || return 1
   (
     cd "$d" || exit 99
-    export STUB_DIR="$d" REAL_BLKID FX_CHILD="${FX_CHILD:-}" FX_MOUNTED="${FX_MOUNTED:-}" BD_MODE="${BD_MODE:-zero}" \
-           CURL_RC="${CURL_RC:-0}" CURL_OK_FIRST="${CURL_OK_FIRST:-}" BLKID_FORCE_TYPE="${BLKID_FORCE_TYPE:-}"
+    export STUB_DIR="$d" REAL_BLKID FIX_DEV="$fixdev" HOSTNAME_STUB="$TF_SERVER_NAME" \
+           FX_CHILD="${FX_CHILD:-}" FX_MOUNTED="${FX_MOUNTED:-}" BD_MODE="${BD_MODE:-zero}" \
+           CURL_RC="${CURL_RC:-0}" CURL_HTTP="${CURL_HTTP:-}" CURL_OK_FIRST="${CURL_OK_FIRST:-}" \
+           BLKID_FORCE_TYPE="${BLKID_FORCE_TYPE:-}" BLKID_FORCE_RC="${BLKID_FORCE_RC:-}" \
+           BLKID_FORCE_RC_AFTER="${BLKID_FORCE_RC_AFTER:-}"
+    [ -n "${LATE_HOLDER_T:-}" ] && export LATE_HOLDER="$d/sys/block/dev0/holders/dm-0"
+    [ -n "${LATE_MOUNT_T:-}" ] && export LATE_MOUNT=1
     export WIPE_T_SEAMS=1 WIPE_T_BYID_DIR="$d/byid" WIPE_T_SYSFS="$d/sys" WIPE_T_TOKEN_FILE="$d/token" \
            WIPE_T_INGEST_URL="https://ingest.invalid/" WIPE_T_LOG_FILE="$d/wipe.log" \
-           WIPE_T_WAIT_MAX="${WAIT_MAX_T:-4}" WIPE_T_WAIT_STEP=1
+           WIPE_T_WAIT_MAX="${WAIT_MAX_T:-4}" WIPE_T_WAIT_STEP=1 WIPE_T_POST_TRIES="${POST_TRIES_T:-}"
+    [ -n "${PROD_URL:-}" ] && unset WIPE_T_INGEST_URL
+    [ -n "${NO_SEAMS:-}" ] && unset WIPE_T_SEAMS
     PATH="$W/bin:$PATH" timeout 120 bash "$script" > "$d/out" 2>&1
     echo $? > "$d/rc"
   )
@@ -360,6 +495,37 @@ rows_of() {
 fld() { printf '%s\n' "$1" | tr ' ' '\n' | sed -n "s/^$2=//p" | head -1; }
 last_row() { rows_of "$1" | tail -1; }
 first_row() { rows_of "$1" | head -1; }
+# first_field_is / last_field_is <scenario> <field> <value>: a key=value field of the first/last DELIVERED row.
+first_field_is() { [ "$(fld "$(first_row "$1")" "$2")" = "$3" ]; }
+last_field_is() { [ "$(fld "$(last_row "$1")" "$2")" = "$3" ]; }
+# flush_order <scenario>: the first zero precedes the last buffer flush, which precedes the last POST
+# (the wiped claim). Line numbers in the shared order log, read with awk (no pipe into a predicate).
+flush_order() {
+  local o z f c; o="$(sdir "$1")/order.log"
+  [ -s "$o" ] || return 1
+  z="$(awk '/^blkdiscard/{print NR; exit}' "$o")"
+  f="$(awk '/^blockdev --flushbufs/{n=NR} END{print n}' "$o")"
+  c="$(awk '/^curl /{n=NR} END{print n}' "$o")"
+  [ -n "$z" ] && [ -n "$f" ] && [ -n "$c" ] && [ "$z" -lt "$f" ] && [ "$f" -lt "$c" ]
+}
+token_removed() { [ ! -e "$(sdir "$1")/token" ]; }
+no_badop() { [ ! -e "$(sdir "$1")/badop.log" ]; }
+# payload_pin <scenario>: the LAST delivered POST body has exactly the five fields the evidence funnel
+# can pin, with the emitter identity (host = the .tf server name, shipper) and a well-formed dt.
+payload_pin() {
+  local d n f; d="$(sdir "$1")"; n="$(cat "$d/curl.n" 2>/dev/null || echo 0)"; f=""
+  while [ "$n" -ge 1 ]; do [ -f "$d/payload.$n.ok" ] && { f="$d/payload.$n.ok"; break; }; n=$((n - 1)); done
+  [ -n "$f" ] || return 1
+  jq -e --arg h "$TF_SERVER_NAME" '(keys == ["dt","host","marker","message","shipper"]) and .host == $h and .shipper == "inngest-backstop-wipe" and .marker == "SOLEUR_INNGEST_BACKSTOP_WIPE" and (.dt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and (.message | startswith("SOLEUR_INNGEST_BACKSTOP_WIPE result="))' "$f" >/dev/null
+}
+# post_target_is_literal <scenario> <script>: the first POST went to the script's own INGEST_URL literal, https.
+post_target_is_literal() {
+  local d u l; d="$(sdir "$1")"
+  u="$(sed -nE 's/.* -X POST ([^ ]+) -H .*/\1/p' "$d/curl.argv" | head -1)"; l="$(script_literal "$2" INGEST_URL)"
+  [ -n "$u" ] && [ "$u" = "$l" ] || return 1
+  case "$u" in https://?*) return 0 ;; esac
+  return 1
+}
 dev_unchanged() { local d; d="$(sdir "$1")"; [ "$(cat "$d/dev.md5.before")" = "$(cat "$d/dev.md5.after")" ]; }
 dev_all_zero() {
   local d size; d="$(sdir "$1")"; size="$(stat -c %s "$d/dev0")"
@@ -416,7 +582,14 @@ check_not "happy: the token never appears in any posted row or the script log" \
   bash -c "grep -rq '$TOKEN_VALUE' '$(sdir happy)'/payload.* '$(sdir happy)/wipe.log' '$(sdir happy)/out'"
 check_not "happy: no device bytes in any output (payload marker absent from out, log, rows)" \
   bash -c "grep -rq 'SYNTHETIC-PAYLOAD' '$(sdir happy)/out' '$(sdir happy)/wipe.log' '$(sdir happy)'/payload.*"
-check "happy: the POST targets https" grep -q 'https://' "$(sdir happy)/curl.argv"
+check "happy: blkdiscard, then the buffer flush, then the wiped POST (the claim is shipped only after the flush)" flush_order happy
+check "happy: the token file is removed on exit (the EXIT trap)" token_removed happy
+check "happy: no stub was ever handed a wrong operand (the script queried exactly the resolved device)" no_badop happy
+check "happy: the evidence payload carries exactly dt, host, marker, message, shipper; host is the .tf server name, shipper the emitter pin" payload_pin happy
+# The production ingest URL (only the URL seam withheld): the POST goes to the script's own https literal.
+PROD_URL=1 scenario prod_url "$GOOD" || { printf 'FATAL: prod_url setup failed\n' >&2; exit 2; }
+check "prod-url: with every seam but the URL the run is still the canonical happy path" prop_happy prod_url "$SIZE_A"
+check "prod-url: the POST target is the script's INGEST_URL literal, and it is https" post_target_is_literal prod_url "$GOOD"
 
 # Non-canonical must-PASS: a different valid size supplied through the size variable.
 RENDER_B="$W/render-b.sh"; render_script "$RENDER_B" "$PINNED_ID" "$SIZE_B" "$NONCE" || exit 2
@@ -499,6 +672,105 @@ prop_dirty() {
 check "idempotent: no signature but NOT all-zero (damaged superblock) -> zeroed again, then wiped" prop_dirty
 FX_KIND=zero FX_GROW=1 scenario blank_wrong_size "$GOOD" || exit 2
 check "idempotent: the blank shortcut still enforces the size guard -> refused size_mismatch" prop_refused blank_wrong_size size_mismatch
+
+
+# ---- the re-guard: the device changes state DURING the started-row round trip ------------------------
+# The started row is a network round trip. If the device gains a holder or a mount in that window, the
+# identity decision made before it is stale; the second guard_device must refuse before the zero.
+LATE_HOLDER_T=1 scenario late_holder "$GOOD" || exit 2
+check "re-guard: a holder appearing AFTER the started row -> refused reason=has_holders, zero discards, device untouched" prop_refused late_holder has_holders
+check "re-guard: and the started row WAS delivered first (the change landed inside the round trip, not before it)" first_field_is late_holder result started
+LATE_MOUNT_T=1 scenario late_mount "$GOOD" || exit 2
+check "re-guard: a mount appearing AFTER the started row -> refused reason=mounted, zero discards, device untouched" prop_refused late_mount mounted
+
+# ---- HTTP status: an ANSWERING server that says 503 -------------------------------------------------------
+CURL_HTTP=503 scenario http503 "$GOOD" || exit 2
+check "http: a 503 from the ingest endpoint (curl -f exits 22) is NOT a delivered row -> NOTHING is written" prop_no_write http503
+check "http: a 503 is retried like any failed POST (exactly the 3-try production budget)" \
+  bash -c "[ \"\$(cat '$(sdir http503)/curl.n')\" = 3 ]"
+# The stub models -f faithfully (so the row above can only fail through the script): exit 22 with -f in
+# argv, exit 0 without it, whatever the flag cluster.
+STUB_SELF="$W/s/stub-self"; assert_fixture_dir "$STUB_SELF"; mkdir -p "$STUB_SELF" || exit 2
+curl_stub_rc() { # <CURL_HTTP> <flags...>
+  local h="$1"; shift
+  ( export STUB_DIR="$STUB_SELF" CURL_HTTP="$h"; sh "$W/bin/curl" "$@" >/dev/null 2>&1; echo $? )
+}
+check "stub self-test: CURL_HTTP=503 with -fsS exits 22" test "$(curl_stub_rc 503 -q -fsS -X POST x)" = 22
+check "stub self-test: CURL_HTTP=503 with --fail exits 22" test "$(curl_stub_rc 503 -q --fail -X POST x)" = 22
+check "stub self-test: CURL_HTTP=503 WITHOUT -f exits 0 (the error body would be 'delivered')" test "$(curl_stub_rc 503 -q -sS --max-time 15 -X POST x)" = 0
+check "stub self-test: CURL_HTTP=200 with -fsS exits 0" test "$(curl_stub_rc 200 -q -fsS -X POST x)" = 0
+lsblk_stub_rc() { ( export STUB_DIR="$STUB_SELF" FIX_DEV=/fixture/dev0; sh "$W/bin/lsblk" -dnbo TYPE,SIZE "$1" >/dev/null 2>&1; echo $? ); }
+check "stub self-test: lsblk fails on any operand but the fixture device" test "$(lsblk_stub_rc /somewhere/else)" != 0
+findmnt_stub_out() { ( export STUB_DIR="$STUB_SELF" FIX_DEV=/fixture/dev0; sh "$W/bin/findmnt" -rn -S "$1" 2>/dev/null ); }
+check "stub self-test: findmnt answers 'mounted' for any operand but the fixture device" test -n "$(findmnt_stub_out /somewhere/else)"
+check "stub self-test: findmnt answers nothing for the fixture device when it is not mounted" test -z "$(findmnt_stub_out /fixture/dev0)"
+BDS="$W/s/bd-self"; assert_fixture_dir "$BDS"; mkdir -p "$BDS" || exit 2
+bd_run() { # <args...>: a fresh random 1 MiB device, the stub run with <args...> <device>; rc in BD_RC
+  local f="$BDS/dev"; assert_fixture_dir "$f"
+  head -c 1048576 /dev/urandom > "$f" || return 1
+  ( export STUB_DIR="$BDS" FIX_DEV="$f"; sh "$W/bin/blkdiscard" "$@" "$f" >/dev/null 2>&1 ); BD_RC=$?
+}
+bd_prop_no_z() { bd_run || return 1; [ "$BD_RC" != 0 ] && ! cmp -s -n 4096 "$BDS/dev" /dev/zero; }
+bd_prop_full() { bd_run -z || return 1; [ "$BD_RC" = 0 ] && cmp -s -n 1048576 "$BDS/dev" /dev/zero; }
+bd_prop_range() { # -z -o 4096 -l 8192: exactly bytes [4096, 12288) are zero
+  bd_run -z -o 4096 -l 8192 || return 1
+  [ "$BD_RC" = 0 ] && cmp -s -i 4096 -n 8192 "$BDS/dev" /dev/zero \
+    && ! cmp -s -n 4096 "$BDS/dev" /dev/zero && ! cmp -s -i 12288 -n 4096 "$BDS/dev" /dev/zero
+}
+bd_prop_len_only() { # -z --length 4096: the first 4096 bytes only
+  bd_run -z --length 4096 || return 1
+  [ "$BD_RC" = 0 ] && cmp -s -n 4096 "$BDS/dev" /dev/zero && ! cmp -s -i 4096 -n 4096 "$BDS/dev" /dev/zero
+}
+check "stub self-test: blkdiscard WITHOUT -z is rejected and writes nothing" bd_prop_no_z
+check "stub self-test: blkdiscard -z zeroes the whole device" bd_prop_full
+check "stub self-test: blkdiscard -z --offset/--length zeroes exactly that range and nothing else" bd_prop_range
+check "stub self-test: blkdiscard -z --length alone zeroes only that many leading bytes" bd_prop_len_only
+
+# ---- sysfs: both holders/ and slaves/ are read, and either missing fails closed ----------------------------
+FX_SLAVE=1 scenario slave "$GOOD" || exit 2
+check "refuse: a sysfs SLAVE present (holders empty) -> refused reason=has_holders, no write" prop_refused slave has_holders
+FX_NOSLAVES=1 scenario noslaves "$GOOD" || exit 2
+check "refuse: slaves/ absent (holders/ present) fails CLOSED -> refused reason=sysfs_absent, no write" prop_refused noslaves sysfs_absent
+
+# ---- blkid probe errors that are neither found (0) nor not-found (2) -----------------------------------------
+BLKID_FORCE_RC=4 scenario blkid_err_pre "$GOOD" || exit 2
+check "refuse: blkid fails with rc 4 before the zero -> refused reason=type_not_ext4, no write" prop_refused blkid_err_pre type_not_ext4
+check "refuse: that refusal row names the blkid rc" last_field_is blkid_err_pre blkid_rc 4
+BLKID_FORCE_RC_AFTER=4 scenario blkid_err_post "$GOOD" || exit 2
+check "signature: blkid fails with rc 4 AFTER the zero (cannot prove no signature) -> refused reason=sig_survived, never wiped" prop_refused_after_write blkid_err_post sig_survived
+check "signature: that refusal row names the blkid rc" last_field_is blkid_err_post blkid_rc 4
+
+# ---- the blank shortcut must still exit non-zero when its wiped row cannot be delivered ----------------------
+FX_KIND=zero CURL_RC=7 scenario blank_no_channel "$GOOD" || exit 2
+prop_blank_no_channel() {
+  local n=blank_no_channel
+  [ "$(rc_of $n)" != 0 ] || return 1
+  [ "$(n_discards $n)" = 0 ] && [ -z "$(rows_of $n)" ]
+}
+check "blank shortcut: the wiped row cannot be delivered -> exits non-zero (a claim nobody received is not a success), no discard, no row delivered" prop_blank_no_channel
+
+# ---- the token file is removed on a REFUSAL exit too ------------------------------------------------------------
+check "refuse: the token file is removed on a refusal exit (the EXIT trap, not just the happy path)" token_removed luks
+
+# ---- POST budget: configurable by seam only ----------------------------------------------------------------------
+POST_TRIES_T=1 CURL_RC=7 scenario post_tries_1 "$GOOD" || exit 2
+check "post budget: the seam WIPE_T_POST_TRIES=1 makes a failing POST a single attempt" bash -c "[ \"\$(cat '$(sdir post_tries_1)/curl.n')\" = 1 ]"
+check "post budget: with no seam the production budget is exactly 3 attempts" bash -c "[ \"\$(cat '$(sdir no_channel)/curl.n')\" = 3 ]"
+
+# ---- production defaults: WIPE_T_* without WIPE_T_SEAMS=1 are IGNORED -----------------------------------------------
+[ ! -e "/dev/disk/by-id/scsi-0HC_Volume_$PINNED_ID" ] || { printf 'FIXTURE_UNAVAILABLE: this machine has volume %s attached; the no-seams row would not be a fixture\n' "$PINNED_ID" >&2; exit 2; }
+NO_SEAMS=1 scenario no_seams "$GOOD" || exit 2
+prop_no_seams_of() {
+  local n="$1" d; d="$(sdir "$1")"
+  [ "$(rc_of $n)" != 0 ] || return 1
+  # defaults: WAIT_MAX=300 / WAIT_STEP=2 -> 150 sleeps (the seam would have made it 4), the real by-id
+  # directory (so the fixture device is never found), the real token path (so no token, no POST), and
+  # the default log file (so the seam log file is never created).
+  [ "$(wc -l < "$d/sleep.log")" = 150 ] || return 1
+  [ ! -e "$d/curl.n" ] && [ ! -e "$d/wipe.log" ] || return 1
+  [ "$(n_discards $n)" = 0 ] && dev_unchanged $n
+}
+check "production defaults: WIPE_T_* set WITHOUT WIPE_T_SEAMS=1 are ignored (default wait 150 sleeps, no token, no POST, no seam log, nothing written)" prop_no_seams_of no_seams
 
 # ---- harness rows (the suite must not pass vacuously) --------------------------------------------------
 # Pointing the by-id seam at nothing: the canonical row must FAIL (not pass), proving the happy row
@@ -631,13 +903,153 @@ mutate "M16 an extra dd of= writer appended" 's/^(wipe_device\(\) \{)$/\1 dd if=
   check_not "M16 (dd of= writer): the other-writers census is RED" census_no_other_writers "$MUT_PATH"
 }
 
-# ---- Terraform-side mutation rows (static scans must be able to fail) -------------------------------------
-TFM="$W/mut/tf-mutated.tf"
-assert_fixture_dir "$TFM"
-cp "$TF" "$TFM" && b="$(md5sum < "$TFM")" && sed -E -i 's/count *= *var\.inngest_backstop_wipe_enabled \? 1 : 0/count = 1/' "$TFM" && a="$(md5sum < "$TFM")"
-check "T1 mutation LANDED: count gate removed from the .tf copy" test "$b" != "$a"
-check_not "T1 (count gate removed): the count-gate scan is RED on the mutated copy" \
-  bash -c "[ \"\$(grep -vE '^[[:space:]]*#' '$TFM' | grep -c 'count *= *var.inngest_backstop_wipe_enabled ? 1 : 0')\" = 2 ]"
+# M17: the zero call loses -z (a plain discard; the stub rejects it, the census pins the exact call).
+mutate "M17 blkdiscard loses -z" 's/^([[:space:]]*)blkdiscard -z "\$REAL"/\1blkdiscard "$REAL"/' && {
+  scenario m17 "$MUT_PATH" || exit 2
+  check_not "M17 (no -z): the happy row is RED" prop_happy m17 "$SIZE_A"
+  check_not "M17: the exact-call census is RED" census_blkdiscard_exact "$MUT_PATH"
+}
+# M18: the zero call is narrowed to the first 4 KiB (a partial zero that would leave the payload).
+mutate "M18 blkdiscard narrowed to --length 4096" 's/^([[:space:]]*)blkdiscard -z "\$REAL"/\1blkdiscard -z -o 0 -l 4096 "$REAL"/' && {
+  scenario m18 "$MUT_PATH" || exit 2
+  check_not "M18 (partial zero): the happy row is RED (the stub zeroed only the range it was given)" prop_happy m18 "$SIZE_A"
+  check_not "M18: the exact-call census is RED" census_blkdiscard_exact "$MUT_PATH"
+}
+# M19: curl loses -f (an HTTP error status would count as delivered).
+mutate "M19 curl loses -f" 's/ -fsS / -sS /' && {
+  CURL_HTTP=503 scenario m19 "$MUT_PATH" || exit 2
+  check_not "M19 (no -f): the 503 row is RED (a 503 is taken for a delivered started row and the zero runs)" prop_no_write m19
+  check_not "M19: the curl -f census is RED" census_curl_fail_flag "$MUT_PATH"
+}
+# M20: curl loses its time bound.
+mutate "M20 curl loses --max-time" 's/ --max-time [0-9]+//' && {
+  check_not "M20 (no --max-time): the curl time-bound census is RED" census_curl_max_time "$MUT_PATH"
+}
+# M21: the re-guard after the started row removed.
+mutate "M21 re-guard after the started row removed" '/\|\| no_evidence_channel$/{n;s/^guard_device$/true/}' && {
+  LATE_HOLDER_T=1 scenario m21 "$MUT_PATH" || exit 2
+  check_not "M21 (no re-guard): the late-holder row is RED (the zero ran against a device that gained a holder)" prop_refused m21 has_holders
+  LATE_MOUNT_T=1 scenario m21b "$MUT_PATH" || exit 2
+  check_not "M21: the late-mount row is RED too" prop_refused m21b mounted
+  check_not "M21: the two-guards census is RED" census_reguard_before_wipe "$MUT_PATH"
+}
+# M22/M23: a probe handed the wrong operand (the by-id DIRECTORY instead of the resolved device).
+mutate "M22 findmnt queried with the by-id directory" 's/findmnt -rn -S "\$REAL"/findmnt -rn -S "$BYID_DIR"/' && {
+  scenario m22 "$MUT_PATH" || exit 2
+  check_not "M22 (findmnt wrong operand): the happy row is RED (the strict stub refuses a wrong operand)" prop_happy m22 "$SIZE_A"
+}
+mutate "M23 lsblk queried with the by-id directory" 's/lsblk -dnbo TYPE,SIZE "\$REAL"/lsblk -dnbo TYPE,SIZE "$BYID_DIR"/' && {
+  scenario m23 "$MUT_PATH" || exit 2
+  check_not "M23 (lsblk wrong operand): the happy row is RED" prop_happy m23 "$SIZE_A"
+}
+# M24a-d: reject-controls for the census predicates (each must be able to go RED).
+mutate "M24a a second wipe_device call appended" 's/^(wipe_device \|\| refuse zero_failed.*)$/\1\nwipe_device/' && {
+  check_not "M24a (second wipe_device call): census_wipe_called_once is RED" census_wipe_called_once "$MUT_PATH"
+}
+mutate "M24b the O_DIRECT flag removed from the read-back" 's/ iflag=direct//' && {
+  check_not "M24b (buffered read-back): census_readback_o_direct is RED" census_readback_o_direct "$MUT_PATH"
+}
+mutate "M24c set -e added" 's/^LC_ALL=C; export LC_ALL$/set -e; LC_ALL=C; export LC_ALL/' && {
+  check_not "M24c (set -e): census_no_set_e is RED" census_no_set_e "$MUT_PATH"
+}
+mutate "M24d the blkdiscard moved out of wipe_device" 's/^wipe_device\(\) \{$/wipe_dev_x() {/' && {
+  check_not "M24d (call site outside wipe_device): census_blkdiscard_in_wipe_fn is RED" census_blkdiscard_in_wipe_fn "$MUT_PATH"
+}
+# M25a/b: an unexpected blkid rc is no longer refused.
+mutate "M25a g_type accepts an unexpected blkid rc as blank" 's/^( *)\*\) refuse type_not_ext4 "blkid_rc=\$brc" "type=\$t" ;;$/\1*) SIGSTATE=none ;;/' && {
+  BLKID_FORCE_RC=4 scenario m25a "$MUT_PATH" || exit 2
+  check_not "M25a (unexpected rc taken as blank): the blkid-rc-4 pre-zero row is RED" prop_refused m25a type_not_ext4
+}
+mutate "M25b g_sig_after accepts any rc" 's/if \[ "\$brc" != 2 \] \|\| \[ -n "\$t" \]; then/if [ -n "$t" ]; then/' && {
+  BLKID_FORCE_RC_AFTER=4 scenario m25b "$MUT_PATH" || exit 2
+  check_not "M25b (rc ignored after the zero): the blkid-rc-4 post-zero row is RED" prop_refused_after_write m25b sig_survived
+}
+# M26: the flush moved before the zero.
+mutate "M26 flush moved before the zero" 's/^([[:space:]]*)blkdiscard -z "\$REAL" <\/dev\/null$/\1blockdev --flushbufs "$REAL" >\/dev\/null 2>\&1; blkdiscard -z "$REAL" <\/dev\/null/;s/^([[:space:]]*)blockdev --flushbufs "\$REAL" >\/dev\/null 2>&1$/\1:/' && {
+  scenario m26 "$MUT_PATH" || exit 2
+  check_not "M26 (flush before the zero): the flush-ordering row is RED" flush_order m26
+}
+# M27: the token-file removal trap deleted.
+mutate "M27 token-file removal trap deleted" 's/^trap .rm -f "\$TOKEN_FILE". EXIT$/:/' && {
+  scenario m27 "$MUT_PATH" || exit 2
+  check_not "M27 (no trap): the token-removed row is RED" token_removed m27
+}
+# M28: the blank shortcut stops failing when its row cannot be delivered.
+mutate "M28 blank-shortcut || exit 1 dropped" 's/^( *emit wiped prior=blank .*) \|\| exit 1$/\1/' && {
+  FX_KIND=zero CURL_RC=7 scenario m28 "$MUT_PATH" || exit 2
+  check_not "M28 (|| exit 1 dropped): the blank-shortcut undeliverable row is RED (exit 0 over an undelivered claim)" bash -c "[ \"\$(cat '$(sdir m28)/rc')\" != 0 ]"
+}
+# M29/M30: the slaves/ arms.
+mutate "M29 slaves/ no longer scanned" 's/ "\$SYSFS\/block\/\$b\/slaves" -mindepth/ -mindepth/' && {
+  FX_SLAVE=1 scenario m29 "$MUT_PATH" || exit 2
+  check_not "M29 (slaves ignored): the slave row is RED" prop_refused m29 has_holders
+}
+mutate "M30 slaves/ absence no longer fails closed" 's/ \|\| \[ ! -d "\$SYSFS\/block\/\$b\/slaves" \]//' && {
+  FX_NOSLAVES=1 scenario m30 "$MUT_PATH" || exit 2
+  check_not "M30 (slaves/ absence tolerated): the no-slaves row is RED" prop_refused m30 sysfs_absent
+}
+# M31: the POST-budget seam is not honoured.
+mutate "M31 WIPE_T_POST_TRIES seam not honoured" 's/^( *)\[ -n "\$WIPE_T_POST_TRIES" \] && POST_TRIES="\$WIPE_T_POST_TRIES"$/\1:/' && {
+  POST_TRIES_T=1 CURL_RC=7 scenario m31 "$MUT_PATH" || exit 2
+  check_not "M31 (seam ignored): the single-attempt seam row is RED" bash -c "[ \"\$(cat '$(sdir m31)/curl.n')\" = 1 ]"
+}
+# M32: the seams honoured without WIPE_T_SEAMS=1 (the production script would obey an environment variable).
+mutate "M32 seams honoured unconditionally" 's/^if \[ "\$WIPE_T_SEAMS" = 1 \]; then$/if true; then/' && {
+  NO_SEAMS=1 scenario m32 "$MUT_PATH" || exit 2
+  check_not "M32 (seams always on): the production-defaults row is RED" prop_no_seams_of m32
+}
+# M33/M34: the production literals.
+mutate "M33 TOKEN_FILE literal diverges from the write_files path" 's|^TOKEN_FILE=/run/inngest-backstop-wipe\.token$|TOKEN_FILE=/run/other.token|' && {
+  check_not "M33 (token path drift): the token-path parity census is RED" census_token_path_parity "$MUT_PATH"
+}
+mutate "M34 INGEST_URL literal is plain http" 's|^INGEST_URL=https://|INGEST_URL=http://|' && {
+  check_not "M34 (http ingest): the https census is RED" census_ingest_https "$MUT_PATH"
+}
+mutate "M34b production POST budget raised" 's/^POST_TRIES=3$/POST_TRIES=30/' && {
+  check_not "M34b (budget raised): the production-budget census is RED" census_post_budget "$MUT_PATH"
+}
+# M35: the emitter pin (shipper) changed -> the payload pin must notice. A blank run is the cheapest scenario.
+mutate "M35 shipper field changed" 's/shipper(.{1,6})inngest-backstop-wipe/shipper\1other-emitter/' && {
+  FX_KIND=zero scenario m35 "$MUT_PATH" || exit 2
+  check_not "M35 (shipper changed): the payload-pin row is RED" payload_pin m35
+}
+
+# ---- Terraform-side mutation rows (every static pin must be able to fail) --------------------------------------
+# tf_mut <label> <sed -E expr> <predicate>: mutate a COPY of the .tf, assert the mutation landed, and
+# require the pin predicate to go RED on the copy.
+tf_mut() {
+  local label="$1" expr="$2" pred="$3" out b a
+  MUT_N=$((MUT_N + 1)); out="$W/mut/tf$MUT_N.tf"
+  assert_fixture_dir "$out"
+  cp "$TF" "$out" || return 1
+  b="$(md5sum < "$out")"; sed -E -i "$expr" "$out" || return 1; a="$(md5sum < "$out")"
+  if [ "$b" = "$a" ]; then fail "mutation LANDED: $label (md5 unchanged)"; return 1; fi
+  pass "mutation LANDED: $label"
+  check_not "$label: the pin is RED on the mutated copy" "$pred" "$out"
+}
+tf_name_pin() { tf_pin "$1" "name = \"$TF_SERVER_NAME\""; }
+tf_mut "T1 count gate removed" 's/count *= *var\.inngest_backstop_wipe_enabled \? 1 : 0/count = 1/' tf_count_gate
+tf_mut "T2 attachment server_id repointed at the live inngest server" 's/hcloud_server\.inngest_backstop_wipe\[0\]\.id/hcloud_server.inngest.id/' tf_server_pin
+tf_mut "T3 nonce precondition accepts an empty nonce" 's/\{1,20\}/{0,20}/' tf_nonce_precond
+tf_mut "T4 expected size changed" 's/10 \* 1073741824/11 * 1073741824/' tf_size_pin
+tf_mut "T5 templatefile nonce entry hard-coded" 's/^( *nonce *= *)var\.inngest_backstop_wipe_nonce/\1"1"/' tf_nonce_entry
+tf_mut "T6 volume_id no longer the pinned variable" 's/volume_id( *)= var\.inngest_backstop_volume_id/volume_id\1= 106903269/' tf_volume_pins
+tf_mut "T7 server name renamed (the evidence host pin would drift)" 's/name( *)= "soleur-inngest-backstop-wipe"/name\1= "soleur-inngest"/' tf_name_pin
+tf_mut "T8 templatefile size entry hard-coded" 's/expected_size_bytes( *)= local\.inngest_backstop_wipe_expected_size_bytes/expected_size_bytes\1= 10737418240/' tf_size_entry
+# vars_mut <label> <sed -E expr>: the same on a COPY of variables.tf.
+vars_mut() {
+  local label="$1" expr="$2" out b a
+  MUT_N=$((MUT_N + 1)); out="$W/mut/vars$MUT_N.tf"
+  assert_fixture_dir "$out"
+  cp "$VARS" "$out" || return 1
+  b="$(md5sum < "$out")"; sed -E -i "$expr" "$out" || return 1; a="$(md5sum < "$out")"
+  if [ "$b" = "$a" ]; then fail "mutation LANDED: $label (md5 unchanged)"; return 1; fi
+  pass "mutation LANDED: $label"
+  check_not "$label: the pin is RED on the mutated copy" vpin_vol "$out"
+}
+vars_mut "V1 volume id validation relaxed to any positive id" 's/var\.inngest_backstop_volume_id == 106261946/var.inngest_backstop_volume_id > 0/'
+vars_mut "V2 volume id validation back to a deny-list of the live id" 's/var\.inngest_backstop_volume_id == 106261946/var.inngest_backstop_volume_id != 106903269/'
+vars_mut "V3 volume id pinned to a different id" 's/== 106261946/== 106261947/'
 
 # ---- floor, reported with printf + exit (not through the helper it back-stops) --------------------------
 printf '\n%s passed, %s failed, %s executed\n' "$passes" "$fails" "$executed"
@@ -647,10 +1059,14 @@ if [ "$((passes + fails))" -ne "$executed" ]; then
   printf 'FAIL - accounting: passes %s + fails %s != executed %s (a verdict was discarded or double-counted)\n' "$passes" "$fails" "$executed" >&2
   exit 1
 fi
-FLOOR=122
+FLOOR=243
 if [ "$executed" -lt "$FLOOR" ]; then
   printf 'FAIL - assertion-count floor: executed %s < %s (a vacuous or truncated run)\n' "$executed" "$FLOOR" >&2
   exit 1
 fi
+# Optional rows (shellcheck, terraform templatefile parity) are outside the floor and outside the
+# counted verdicts, but a FAILING optional row still fails the run.
+if [ "$opt_ran" -gt 0 ]; then printf '%s optional row(s) ran (not counted toward the floor), %s failed\n' "$opt_ran" "$opt_fails"; fi
+if [ "$opt_fails" -ne 0 ]; then exit 1; fi
 if [ "$fails" -ne 0 ]; then exit 1; fi
 exit 0

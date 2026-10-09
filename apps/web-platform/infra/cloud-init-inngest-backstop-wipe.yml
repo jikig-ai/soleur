@@ -30,6 +30,16 @@ write_files:
       #   full O_DIRECT read-back decided by cmp -> signature check -> `wiped` row.
       # No `set -e`: a failed probe must reach its refusal row, not abort silently. Fail closed
       # everywhere a decision is read.
+      #
+      # LIMITS OF THE EVIDENCE CHANNEL. Every row is shipped BY THIS SCRIPT, so a failure before it
+      # runs (a kernel panic, a cloud-init failure, a dead runcmd) ships nothing: the workflow poll
+      # sees no row at all and times out, which is the signal. It is never read as a wipe.
+      #
+      # UNMEASURED UNTIL THE FIRST REAL RUN (nothing here has executed against a real Hetzner
+      # volume): the 10 GiB size (the refusal row names the observed size, so a wrong constant fails
+      # safe and diagnosably), the by-id naming (scsi-0HC_Volume_<id>; absent means a bounded
+      # device_absent refusal, never a write), and the 300 s wait for the link. The first wipe is
+      # the first measurement of all three; the evidence rows carry the observed values.
       LC_ALL=C; export LC_ALL
 
       VOLUME_ID='${volume_id}'
@@ -45,6 +55,10 @@ write_files:
       LOG_FILE=/var/log/inngest-backstop-wipe.log
       WAIT_MAX=300
       WAIT_STEP=2
+      # Evidence POST budget per row: POST_TRIES attempts, POST_SLEEP seconds apart. Production keeps
+      # 3 x 3 s (bounded, short-lived host); only the test seams below may change it.
+      POST_TRIES=3
+      POST_SLEEP=3
       # Test seams. Honoured ONLY with WIPE_T_SEAMS=1, which nothing in production sets.
       if [ "$WIPE_T_SEAMS" = 1 ]; then
         [ -n "$WIPE_T_BYID_DIR" ] && BYID_DIR="$WIPE_T_BYID_DIR"
@@ -54,6 +68,8 @@ write_files:
         [ -n "$WIPE_T_LOG_FILE" ] && LOG_FILE="$WIPE_T_LOG_FILE"
         [ -n "$WIPE_T_WAIT_MAX" ] && WAIT_MAX="$WIPE_T_WAIT_MAX"
         [ -n "$WIPE_T_WAIT_STEP" ] && WAIT_STEP="$WIPE_T_WAIT_STEP"
+        [ -n "$WIPE_T_POST_TRIES" ] && POST_TRIES="$WIPE_T_POST_TRIES"
+        [ -n "$WIPE_T_POST_SLEEP" ] && POST_SLEEP="$WIPE_T_POST_SLEEP"
       fi
 
       REAL=""
@@ -90,13 +106,13 @@ write_files:
         host="$(san "$(hostname 2>/dev/null)")"
         payload="{\"message\":\"$row\",\"marker\":\"SOLEUR_INNGEST_BACKSTOP_WIPE\",\"host\":\"$host\",\"dt\":\"$ts\",\"shipper\":\"inngest-backstop-wipe\"}"
         [ "$TOKEN_OK" = 1 ] || return 1
-        while [ "$n" -lt 3 ]; do
+        while [ "$n" -lt "$POST_TRIES" ]; do
           n=$((n + 1))
           printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl -q -K - -fsS --max-time 15 -X POST "$INGEST_URL" -H 'Content-Type: application/json' -d "$payload" >/dev/null 2>&1
           crc=$?
           [ "$crc" = 0 ] && return 0
           log "evidence POST attempt $n failed rc=$crc"
-          sleep 3
+          sleep "$POST_SLEEP"
         done
         return 1
       }

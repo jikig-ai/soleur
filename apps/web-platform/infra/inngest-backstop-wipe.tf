@@ -25,7 +25,9 @@ locals {
   # GiB-based, so the guest sees 10 * 2^30 bytes. Pinned as a historical fact here (not derived from
   # var.inngest_redis_volume_size, which sizes the LIVE volume and may change independently). The
   # on-host script refuses on any other size and names the observed size in its refusal row, so a wrong
-  # constant fails safe and diagnosably, never as a write.
+  # constant fails safe and diagnosably, never as a write. UNMEASURED until the first real wipe run:
+  # this size, the guest's by-id link naming (scsi-0HC_Volume_<id>) and the script's 300 s wait for it
+  # are all assumptions that run is the first to observe (a miss is a refusal row, never a write).
   inngest_backstop_wipe_expected_size_bytes = 10 * 1073741824
 
   inngest_backstop_wipe_user_data = templatefile("${path.module}/cloud-init-inngest-backstop-wipe.yml", {
@@ -39,6 +41,9 @@ locals {
 resource "hcloud_server" "inngest_backstop_wipe" {
   count = var.inngest_backstop_wipe_enabled ? 1 : 0
 
+  # The name is also the evidence row's `host` field: Hetzner sets the guest hostname to the server
+  # name and the wipe script ships it as `host` (shipper `inngest-backstop-wipe`), which is what the
+  # destroy gate pins as the emitter. Renaming this server is a change to that contract.
   name        = "soleur-inngest-backstop-wipe"
   server_type = var.inngest_backstop_wipe_server_type
   location    = var.location
