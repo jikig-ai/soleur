@@ -388,8 +388,8 @@ chk_probe() {  # <root>: the rehearsal's dockerd deny probe (#9799 item 5); stat
   call_ln=$(grep -E '^[0-9]+:assert_dockerd_denied ' <<<"$code" | head -n 1); call_ln=${call_ln%%:*}
   [[ "$deny_ln" =~ ^[0-9]+$ && "$call_ln" =~ ^[0-9]+$ ]] && (( deny_ln < call_ln )) \
     || { echo "the assert_dockerd_denied call (line '${call_ln}') does not come after the deny application (line '${deny_ln}')"; return 1; }
-  [[ "$(grep -c '^[0-9]*:assert_dockerd_denied() {' <<<"$code" || true)" == 1 ]] \
-    || { echo "assert_dockerd_denied must be defined exactly once (a later redefinition would shadow the probe)"; return 1; }
+  [[ "$(grep -c '^[0-9]*:assert_dockerd_denied() {' <<<"$code" || true)" == 1 && "$(grep -c 'assert_dockerd_denied' <<<"$code" || true)" == 2 ]] \
+    || { echo "assert_dockerd_denied must appear on exactly two code lines, its definition and the one call (a redefinition, function/alias/eval form or second call would shadow the probe)"; return 1; }
   grep -qF "${call_ln}:"'assert_dockerd_denied /etc/hosts "ghcr.io/project-zot/zot-linux-amd64@sha256:$D" \' <<<"$code" \
     || { echo "the assert_dockerd_denied call (line ${call_ln}) no longer probes the upstream ref ghcr.io/project-zot/zot-linux-amd64@sha256:\$D on /etc/hosts"; return 1; }
   grep -qE "^$((call_ln + 1)):[[:space:]]+\|\| die \"dockerd could still pull from ghcr\.io after the deny" <<<"$code" \
@@ -606,6 +606,14 @@ sub $ZR 'sha256:$D" \' 'sha256:$D-none" \'
 row "39 the probe targets a ref that cannot exist, so the pull fails whether or not the deny holds" probe $ZR
 sub $ZR $'  || die "dockerd could still pull' $'  || true  # was: || die "dockerd could still pull'
 row "40 the die is spoofed by a trailing comment" probe $ZR
+sub $ZR $'  sleep "$HOSTS_CACHE_WAIT_S"\n' $'  (( HOSTS_CACHE_WAIT_S = 1 ))\n  sleep "$HOSTS_CACHE_WAIT_S"\n'
+row "41 the wait is reassigned by arithmetic just before the sleep (the text and the assignment count are intact)" probe $ZR
+sub $ZR 'STORE="${1:-}"' $'assert_dockerd_denied() { return 0; }\nSTORE="${1:-}"'
+row "42 the probe is redefined as a no-op after its definition" probe $ZR
+sub $ZR '2>&1)" && rc=0 || rc=$?' $'2>&1)" && rc=0 || rc=$?\n  rc=0'
+row "43 the pull status is forced to success after the capture (the capture text is intact)" probe $ZR
+sub $ZR $'  if (( rc == 124 )); then\n    echo "dockerd pull TIMED OUT after 120 s: inconclusive, not a denial"\n    return 1\n  fi\n' ''
+row "44 the timeout branch is deleted outright, so a timed-out pull falls through to 'refused'" probe $ZR
 
 # Harness row (must PASS): copy A re-indented under its `- |` parses to the same entry.
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "re-indent anchor missing"
@@ -636,10 +644,10 @@ if [[ "$SURV_FAILS" == 1 ]]; then pass "harness: row() reports a mutation that n
 else fail "harness: row() did not count a surviving mutation (FAIL count '$SURV_FAILS', want 1) -- the whole battery is unfalsifiable"; fi
 sandbox
 
-# Floor at the MEASURED count (8 live checks + control + 40 rows + 3 harness rows = 52; was 29 before
+# Floor at the MEASURED count (8 live checks + control + 44 rows + 3 harness rows = 56; was 29 before
 # #9390 added rows 20-27 and the row() honesty control). Reported with printf + exit DIRECTLY, never
 # through pass()/fail() (the floor polices them).
-MIN_ASSERTIONS=52
+MIN_ASSERTIONS=56
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
