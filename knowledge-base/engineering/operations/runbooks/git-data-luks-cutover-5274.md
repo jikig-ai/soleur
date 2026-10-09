@@ -9,7 +9,9 @@ same-version webhook redeploy -> per-host `git_data_store=` readback -> unfreeze
 repoints a mount — the flag-off readback is the rollback); `unfreeze` clears the freeze sentinel
 (own lineage, or a stranded one via the `lineage` input); `redeploy` is the standalone pin-load lever.
 There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
-plaintext volume is retained read-only until its wipe decision (#6897/#8571).
+plaintext volume is retained read-only until its wipe decision (#6897/#8571). The residue on it ends
+when that volume is destroyed by the DL-2 wipe, targeted no later than 2026-10-22, and it is never mounted
+to purge in place (ADR-239, amendment 2026-10-09).
 
 **No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
 Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
@@ -518,7 +520,9 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       - **(d) No lock file for the collected ids.** Once its guards pass, `git-data-remove.sh`
         opens `REPO_ROOT/.<workspace_id>.init.lock` and never removes it. Neither the proof nor the
         bootstrap count sees it, because both skip `.*.init.lock`. The file is 0 bytes, but its name
-        is the user's id, so it is personal data on the store. Classify every
+        is the user's id, so it is personal data on the store. That is the payload the running host serves
+        until its next replace; the payload on main opens one shared `.init.lock` (#9226), which carries
+        no id. Classify every
         `op:git-data-bare-repo-erasure` event in the window, per id, by its `erasure_outcome` tag
         and `detail`:
         - **host not reached:** `unreachable`, `unauthorized`, `host_key_mismatch`, `unconfigured`
@@ -585,6 +589,9 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       not covered: .<id>.init.lock files left on the served store and on the retained plaintext volume by
         erasures that passed the wrapper's guards, including completed ones (#9066); the user's
         copy in web-1 /workspaces (a separate operation)
+        retained-volume limb: ends when the volume is destroyed (DL-2 wipe, #6897), targeted no later than
+        2026-10-22, never mounted to purge in place; served-store limb: closed only by the freeze-window
+        purge, counts only, no ids
       earliest request: <date>  Art. 12(3) deadline: <date>
       ```
 
