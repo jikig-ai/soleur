@@ -229,6 +229,27 @@ SC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/bad-can
 assert "malformed sandbox_canary.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$SC_BAD' | jq -r .sandbox_canary.checked_at) == '0' ]]"
 
+# Outer-wrap canary verdict (#5863) surfaced under outer_wrap_canary — the
+# same canary_state_json shape on the separate
+# SANDBOX_OUTER_WRAP_CANARY_STATE_FILE ledger.
+OWC_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/no-owc.json" bash "$TARGET")
+assert "outer_wrap_canary.verdict sentinel 'unknown' when no state file" \
+  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.verdict) == 'unknown' ]]"
+assert "outer_wrap_canary.consecutive_pass sentinel 0 when no state file" \
+  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.consecutive_pass) == '0' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000600,"consecutive_pass":3,"first_pass_at":1750900000}' > "$TMP/owc.json"
+OWC_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc.json" bash "$TARGET")
+assert "outer_wrap_canary.verdict read from state file (pass)" \
+  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.verdict) == 'pass' ]]"
+assert "outer_wrap_canary.consecutive_pass surfaced (3)" \
+  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.consecutive_pass) == '3' ]]"
+assert "outer_wrap_canary.first_pass_at surfaced" \
+  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.first_pass_at) == '1750900000' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":"not-a-number"}' > "$TMP/owc-bad.json"
+OWC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc-bad.json" bash "$TARGET")
+assert "malformed outer_wrap_canary.checked_at falls back to sentinel 0" \
+  "[[ \$(printf '%s' '$OWC_BAD' | jq -r .outer_wrap_canary.checked_at) == '0' ]]"
+
 # --- #5960 live seccomp loaded/host discriminators (Phase 1) ------------------
 # seccomp_profile_loaded_matches_host (reload leg, host-jq skew-immune),
 # seccomp_profile_host_sha256 (raw sha256sum — delivery leg), and

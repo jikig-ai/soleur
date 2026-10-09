@@ -26,11 +26,17 @@ import type {
   Options as SDKOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
+import * as Sentry from "@sentry/nextjs";
+
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
-import type { WorkspaceMode } from "./workspace-mode";
-import { assertTrustedPluginPath } from "./plugin-path";
+import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
+import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
+import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
+import { warnSilentFallback } from "./observability";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
@@ -114,6 +120,15 @@ export interface AgentQueryOptionsArgs {
   permissionMode?: SDKOptions["permissionMode"];
   /** When set, threads through to options.resume. */
   resumeSessionId?: string;
+  /**
+   * Tenant workspace id — the rollout-flag cohort key for the outer wrap
+   * (#5863). Optional; when absent the builder derives it from
+   * `basename(workspacePath)` (the legacy caller has no id in scope and the
+   * path is `<root>/<id>` under both resolver arms).
+   */
+  workspaceId?: string;
+  /** Session id — `op:tenant-outer-wrap` log correlation only. */
+  sessionId?: string;
   /** Per-call MCP server registration. Legacy: `{ soleur_platform: ... }` when platform tools register; cc: `{}`. */
   mcpServers?: Record<string, unknown>;
   /** Per-call allowedTools list (legacy: platform tool names + plugin MCP wildcards; cc: omitted at V1). */
@@ -237,6 +252,33 @@ export function buildAgentQueryOptions(
     : undefined;
 
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
+  // #5863 (arm F): flag-gated mountns-only outer wrap around the whole CLI
+  // process — the only boundary that covers the file-tool tier. The flag is
+  // read per spawn (dispatch-time), so in-flight sessions keep their birth
+  // mount table and a flip only affects new spawns.
+  const outerWrap = outerWrapEnabled(
+    args.workspaceId ?? path.basename(args.workspacePath),
+  );
+
+  // The session env is built once so the outer wrap reads the same HOME
+  // the child receives (narrow `~/.claude` binds key off it).
+  const agentEnv = buildAgentEnv(args.credential, args.serviceTokens, {
+    ghToken: args.ghToken,
+    // In-sandbox raw-git credential path (item 1). The askpass token IS the
+    // installation token (`ghToken`); `buildAgentEnv` injects the GIT_* set
+    // only when BOTH the path and token are present (both-or-nothing).
+    gitAskpassScriptPath: args.gitAskpassScriptPath,
+    gitInstallationToken: args.ghToken,
+    // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
+    // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
+    // absolute /app/ platform path) is threaded so the deployed skills'
+    // bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18) run the platform copy, never
+    // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
+    // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
+    pluginPath: trustedPluginPath,
+  });
+  const buildAgentEnvHome = agentEnv.HOME ?? "/home/soleur";
+
   const opts: any = {
     cwd: resolvedCwd,
     model: args.model ?? "claude-sonnet-5-5",
@@ -255,21 +297,7 @@ export function buildAgentQueryOptions(
       ...(args.extraDisallowedTools ?? []),
     ],
     systemPrompt: args.systemPrompt,
-    env: buildAgentEnv(args.credential, args.serviceTokens, {
-      ghToken: args.ghToken,
-      // In-sandbox raw-git credential path (item 1). The askpass token IS the
-      // installation token (`ghToken`); `buildAgentEnv` injects the GIT_* set
-      // only when BOTH the path and token are present (both-or-nothing).
-      gitAskpassScriptPath: args.gitAskpassScriptPath,
-      gitInstallationToken: args.ghToken,
-      // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
-      // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
-      // absolute /app/ platform path) is threaded so the deployed skills'
-      // bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18) run the platform copy, never
-      // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
-      // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
-      pluginPath: trustedPluginPath,
-    }),
+    env: agentEnv,
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape — identical except for the token-derived
     // `network.allowedDomains` below (drift-guarded by
@@ -298,6 +326,28 @@ export function buildAgentQueryOptions(
     // silently re-execute the untrusted repo's hooks.json in-process (the
     // connected-repo-shadow security hole this PR closes). Test-tolerant.
     plugins: [{ type: "local" as const, path: trustedPluginPath }],
+    ...(outerWrap
+      ? {
+          spawnClaudeCodeProcess: makeSandboxedSpawn(
+            sandboxReadOnly
+              ? // Support persona: nothing under the workspaces root is bound;
+                // cwd is the plugin root and the CLI runs read-only there.
+                {
+                  sessionId: args.sessionId,
+                  cwd: resolvedCwd,
+                  pluginPath: trustedPluginPath,
+                  home: buildAgentEnvHome,
+                }
+              : {
+                  sessionId: args.sessionId,
+                  workspacePath: args.workspacePath,
+                  cwd: resolvedCwd,
+                  pluginPath: trustedPluginPath,
+                  home: buildAgentEnvHome,
+                },
+          ),
+        }
+      : {}),
     hooks: {
       PreToolUse: [
         {
@@ -374,4 +424,150 @@ export function buildAgentQueryOptions(
   if (args.abortController !== undefined) opts.abortController = args.abortController;
 
   return opts;
+}
+
+// ---------------------------------------------------------------------------
+// Boot self-probe — is the outer-wrap interpose wired into
+// buildAgentQueryOptions output? (#5863 T3.4)
+//
+// Failure mode this covers (plan Observability): "SDK stops calling
+// spawnClaudeCodeProcess (silent unwrapped spawn)". What we control is the
+// install half — flag on must produce a real `spawnClaudeCodeProcess` on the
+// options object — so the probe builds REAL options against a throwaway
+// workspace and asserts the key. The per-session `op:"tenant-outer-wrap"`
+// log is the complementary proof the wrap actually ran; binary reachability
+// is folded into the in-image canary replay instead of a redundant probe row.
+// ---------------------------------------------------------------------------
+
+export interface OuterWrapInterposeProbe {
+  /** AGENT_OUTER_WRAP=1 (the rollout flag read at probe time). */
+  flagOn: boolean;
+  /** opts.spawnClaudeCodeProcess came back as a function. */
+  installed: boolean;
+  /** !flagOn || installed — flag-off is a legal posture, not a failure. */
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Measure — never throw — the interpose wiring. When the rollout flag is
+ * set, builds canonical options for a throwaway workspace (real
+ * `buildAgentQueryOptions` → real `outerWrapEnabled` → real
+ * `makeSandboxedSpawn` argv construction) and asserts
+ * `opts.spawnClaudeCodeProcess` came back as a function. An allowlisted
+ * cohort rollout probes with the allowlist's first entry so the measurement
+ * reflects a workspace that IS in the cohort. `env`/`deps` are injection
+ * seams for tests.
+ */
+export function probeOuterWrapInterpose(
+  env: Record<string, string | undefined> = process.env,
+  deps: {
+    buildOptions?: typeof buildAgentQueryOptions;
+    pluginPath?: string;
+    makeWorkspace?: () => string;
+  } = {},
+): OuterWrapInterposeProbe {
+  const flagOn = env.AGENT_OUTER_WRAP === "1";
+  if (!flagOn) return { flagOn, installed: false, ok: true };
+
+  const root = (deps.makeWorkspace ?? (() => mkdtempSync(path.join(tmpdir(), "aow-interpose-"))))();
+  // The flag is process-global at dispatch by design — the build reads
+  // process.env, so the probe applies the flag env it was handed, then
+  // restores. Boot-time single-threaded: no concurrent spawn can observe it.
+  const prevFlag = process.env.AGENT_OUTER_WRAP;
+  const prevAllow = process.env.AGENT_OUTER_WRAP_WORKSPACES;
+  process.env.AGENT_OUTER_WRAP = "1";
+  try {
+    // A cohort allowlist means "only THESE workspaces wrap" — probe with a
+    // member so the measured arm is the one the rollout will actually take.
+    const allowed = env.AGENT_OUTER_WRAP_WORKSPACES?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)[0];
+    // Mirror the INJECTED env exactly — an omitted allowlist must DELETE an
+    // ambient process.env value, not leak it into the measured build.
+    if (env.AGENT_OUTER_WRAP_WORKSPACES === undefined) {
+      delete process.env.AGENT_OUTER_WRAP_WORKSPACES;
+    } else {
+      process.env.AGENT_OUTER_WRAP_WORKSPACES = env.AGENT_OUTER_WRAP_WORKSPACES;
+    }
+    const build = deps.buildOptions ?? buildAgentQueryOptions;
+    const opts = build({
+      workspacePath: root,
+      workspaceId: allowed ?? "boot-interpose-probe",
+      pluginPath: deps.pluginPath ?? getPluginPath(),
+      mode: resolveWorkspaceMode("command_center"),
+      // The probe never spawns — the credential is a structural dummy and
+      // only flows into the composed env map.
+      credential: { value: "boot-interpose-probe", scheme: "api_key" },
+      serviceTokens: {},
+      systemPrompt: "boot interpose probe",
+      canUseTool: (async () => ({
+        behavior: "allow" as const,
+        updatedInput: {},
+      })) as CanUseTool,
+    });
+    const installed =
+      typeof (opts as { spawnClaudeCodeProcess?: unknown }).spawnClaudeCodeProcess ===
+      "function";
+    return { flagOn, installed, ok: installed };
+  } catch (err) {
+    return { flagOn, installed: false, ok: false, error: String(err) };
+  } finally {
+    if (prevFlag === undefined) delete process.env.AGENT_OUTER_WRAP;
+    else process.env.AGENT_OUTER_WRAP = prevFlag;
+    if (prevAllow === undefined) delete process.env.AGENT_OUTER_WRAP_WORKSPACES;
+    else process.env.AGENT_OUTER_WRAP_WORKSPACES = prevAllow;
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup — tmpfs leak of one empty dir is not a finding.
+    }
+  }
+}
+
+/**
+ * Emit the interpose verdict once at boot — same fork as
+ * `verifyAgentSandboxHardening`: `log.info` + Sentry info on success, a
+ * warnSilentFallback on a flagged-but-unwired build. Called un-awaited from
+ * the server `listen` callback in production; never throws.
+ */
+export function verifyOuterWrapInterpose(): void {
+  try {
+    const p = probeOuterWrapInterpose();
+    if (p.ok) {
+      log.info(
+        { feature: "agent-sandbox", op: "outer-wrap-selfprobe", ...p },
+        p.flagOn
+          ? "agent-sandbox: outer-wrap interpose installed (spawnClaudeCodeProcess wired)"
+          : "agent-sandbox: outer-wrap flag off — interpose not expected",
+      );
+      if (p.flagOn) {
+        // Only the flag-on arm mirrors to Sentry: flag-off is the shipped
+        // default posture during dark-launch and must not create events.
+        try {
+          Sentry.captureMessage("agent sandbox outer-wrap interpose installed", {
+            level: "info",
+            tags: { event_type: "agent-sandbox-outer-wrap-probe" },
+            extra: { ...p },
+          });
+        } catch {
+          // Sentry must never break the probe.
+        }
+      }
+      return;
+    }
+    warnSilentFallback(null, {
+      feature: "agent-sandbox",
+      op: "outer-wrap-selfprobe",
+      message:
+        "agent sandbox outer-wrap self-probe: flag on but spawnClaudeCodeProcess missing from buildAgentQueryOptions output",
+      extra: { ...p },
+    });
+  } catch (err) {
+    warnSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "outer-wrap-selfprobe",
+      message: "agent sandbox outer-wrap self-probe threw",
+    });
+  }
 }

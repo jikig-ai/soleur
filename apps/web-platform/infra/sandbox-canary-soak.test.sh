@@ -78,6 +78,41 @@ assert "writer default is NOT /var/run tmpfs" "[[ \"$WRITER_DEFAULT\" != /var/ru
 assert "reader default is NOT /var/run tmpfs" "[[ \"$READER_DEFAULT\" != /var/run/* ]]"
 assert "writer + reader defaults MATCH" "[[ \"$WRITER_DEFAULT\" == \"$READER_DEFAULT\" ]]"
 
+# 7. The #5863 OUTER-wrap ledger — same durability contract, distinct var
+# (SANDBOX_OUTER_WRAP_CANARY_STATE_FILE). Same #5889 failure shape: a drifted
+# default would silently TRANSIENT the #9797 soak followthrough forever.
+OWRITER_DEFAULT="$(grep -oE 'SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-[^}]+' "$TARGET" | head -1 | sed 's/.*:-//')"
+OREADER_DEFAULT="$(grep -oE 'SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-[^}]+' "$CAT_TARGET" | head -1 | sed 's/.*:-//')"
+assert "outer writer default is durable (/mnt/data), not tmpfs" "[[ \"$OWRITER_DEFAULT\" == /mnt/data/* ]]"
+assert "outer reader default is durable (/mnt/data), not tmpfs" "[[ \"$OREADER_DEFAULT\" == /mnt/data/* ]]"
+assert "outer writer default is NOT /var/run tmpfs" "[[ \"$OWRITER_DEFAULT\" != /var/run/* ]]"
+assert "outer reader default is NOT /var/run tmpfs" "[[ \"$OREADER_DEFAULT\" != /var/run/* ]]"
+assert "outer writer + reader defaults MATCH" "[[ \"$OWRITER_DEFAULT\" == \"$OREADER_DEFAULT\" ]]"
+assert "outer ledger aliases the inner ledger" "[[ \"$OWRITER_DEFAULT\" != \"$WRITER_DEFAULT\" ]]"
+
+# 8. Capability parity (review ask — static check, no docker needed): the
+# arm-F privilege model has THREE halves that must never drift apart —
+# (a) the image sets the file caps, (b) EVERY docker run retains SYS_ADMIN
+# in the bounding set, (c) the deployed argv carries zero --unshare-*.
+# A drift on any leg silently degrades the arm to the implicit-userns
+# fallback (wrong_elevation_userns at the canary — or worse, a green
+# userns run that starves the inner sandbox).
+DOCKERFILE="$SCRIPT_DIR/../Dockerfile"
+CLOUD_INIT="$SCRIPT_DIR/../infra/cloud-init.yml"
+FIXTURE="$SCRIPT_DIR/agent-outer-wrap-argv.json"
+assert "Dockerfile sets the file-cap triple on /usr/bin/bwrap" \
+  "grep -q 'setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap' \"$DOCKERFILE\""
+assert "Dockerfile audits {bwrap}-only file caps (getcap -r /)" \
+  "grep -q 'getcap -r /' \"$DOCKERFILE\""
+CAP_ADD_CI="$(grep -c -- '--cap-add SYS_ADMIN' "$TARGET")"
+assert "ci-deploy docker runs carry --cap-add SYS_ADMIN (canary + prod, >=2 sites)" \
+  "[[ \"$CAP_ADD_CI\" -ge 2 ]]"
+assert "cloud-init first-boot docker run carries --cap-add SYS_ADMIN" \
+  "grep -q -- '--cap-add SYS_ADMIN' \"$CLOUD_INIT\""
+UNSHARE_FIXTURE="$(grep -c -- '"--unshare' "$FIXTURE" || true)"
+assert "committed outer fixture carries zero --unshare-* tokens" \
+  "[[ \"$UNSHARE_FIXTURE\" == 0 ]]"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
