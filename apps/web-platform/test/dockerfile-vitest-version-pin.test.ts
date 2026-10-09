@@ -174,9 +174,10 @@ describe("Dockerfile vitest global-install pin parity", () => {
     ].sort();
     const dockerfile = read("Dockerfile");
     const dockerignore = read(".dockerignore");
-    // The runner-stage COPY set and the .dockerignore bang set must equal the
-    // payload list in BOTH directions — a new COPY/bang without a payload
-    // entry, or a payload entry without either, is a RED.
+    // The runner-stage COPY set must equal the payload list in BOTH
+    // directions (a new COPY, or a missing one, is a RED); the .dockerignore
+    // bang set must cover payload one-directionally — other `!test/…` bangs
+    // legitimately exist for builder-stage files outside the payload.
     const copySet = [
       ...dockerfile.matchAll(
         /^COPY\s+(?:--\S+\s+)*\/app\/(test\/\S+)\s+\.\/(test\/\S+)\s*$/gm,
@@ -194,13 +195,15 @@ describe("Dockerfile vitest global-install pin parity", () => {
     for (const p of payload)
       expect(bangSet, `.dockerignore must re-include ${p}`).toContain(p);
 
-    const deps = new Set(
-      Object.keys(
-        (JSON.parse(read("package.json")) as {
-          dependencies?: Record<string, string>;
-        }).dependencies ?? {},
-      ),
-    );
+    const pkg = JSON.parse(read("package.json")) as {
+      dependencies?: Record<string, string>;
+      optionalDependencies?: Record<string, string>;
+    };
+    // `npm ci --omit=dev` installs dependencies + optionalDependencies.
+    const deps = new Set([
+      ...Object.keys(pkg.dependencies ?? {}),
+      ...Object.keys(pkg.optionalDependencies ?? {}),
+    ]);
     const depHit = (spec: string) =>
       [...deps].some((d) => spec === d || spec.startsWith(`${d}/`));
     const inPayload = (from: string, spec: string) => {
@@ -232,7 +235,9 @@ describe("Dockerfile vitest global-install pin parity", () => {
     const literals: string[] = [];
     for (const rel of payload) {
       const code = stripComments(read(rel), rel);
-      for (const s of specifiersOf(parseModule(rel, code))) {
+      for (const s of specifiersOf(parseModule(rel, code), {
+        elideTypeOnlySpecifiers: true,
+      })) {
         const bad = classify(
           rel,
           s.kind === "literal" ? s.spec : null,
@@ -242,15 +247,18 @@ describe("Dockerfile vitest global-install pin parity", () => {
         else if (s.kind === "literal") literals.push(s.spec);
       }
       // Specifier-bearing call forms the module graph does not model:
-      // vi.mock/vi.importActual family, import.meta.glob/resolve, and
-      // `new URL("./x", import.meta.url)` (the release-#8136 class).
+      // vi.mock/vi.importActual family, import.meta.glob/resolve,
+      // require.resolve/createRequire, and `new URL("./x", import.meta.url)`
+      // (the release-#8136 class). A NON-literal first arg on any of these
+      // is itself a problem — the guard can't classify what it can't read.
       for (const m of code.matchAll(
-        /\b(?:vi|vitest)\.(?:mock|doMock|importActual|importMock|hoisted)\s*\(\s*["']([^"']+)["']|\bimport\.meta\.(?:resolve|glob)\s*\(\s*["']([^"']+)["']|\bnew\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url/g,
+        /\b(?:vi|vitest)\.(?:mock|doMock|importActual|importMock|hoisted)\s*\(\s*([^,)]*)|\b(?:import\.meta\.(?:resolve|glob)|require\.resolve|createRequire)\s*\(\s*([^,)]*)|\bnew\s+URL\s*\(\s*([^,)]+)\s*,\s*import\.meta\.url/g,
       )) {
-        const spec = m[1] ?? m[2] ?? m[3];
-        const bad = classify(rel, spec);
+        const arg = (m[1] ?? m[2] ?? m[3]).trim();
+        const lit = /^["']([^"']+)["']$/.exec(arg)?.[1];
+        const bad = classify(rel, lit ?? null, lit ? "" : arg || "(empty)");
         if (bad) unresolvable.push(bad);
-        else literals.push(spec);
+        else if (lit) literals.push(lit);
       }
     }
     // Vacuity floor: the sweep must extract the payload's known imports —

@@ -12,9 +12,12 @@
 // has no `node_modules/vitest`, so a bare specifier here (e.g.
 // `import { defineConfig } from "vitest/config"`, an `export … from`
 // re-export, `import(…)`, `require(…)`) resolves against nothing and the
-// whole probe fails at config-load with `[UNRESOLVED_IMPORT]`. `import type`
-// is banned too — the pin reads text, not semantics; `import.meta` is
-// allowed (it resolves no specifier). Suite files are different:
+// whole probe fails at config-load with `[UNRESOLVED_IMPORT]`. Type-only
+// clauses (`import type`, `import { type X }`) are permitted — TypeScript
+// erases them, so they resolve nothing at runtime; the pin uses the AST
+// extractor, which knows the difference. `import.meta` alone is likewise
+// allowed, but `import.meta.resolve`/`import.meta.glob` are banned. Suite
+// files are different:
 // `import { describe } from "vitest"` inside test/*.test.ts resolves
 // internally to the running install. Pinned by the specifier assertions in
 // test/dockerfile-vitest-version-pin.test.ts.
