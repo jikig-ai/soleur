@@ -34,7 +34,8 @@ S3 needs one tested place for the pattern that 24 alert-path composite steps and
    `header = "..."` directives from variable *names* (read by indirect expansion only inside the library) and runs
    `curl --disable --noproxy '*' ARGS --config -` fed by a process substitution (never a pipe: under `pipefail` a consumer that exits first
    turns the writer's SIGPIPE into 141). `bc_hmac_sha256_hex KEYVAR` signs with the key in a `python3 -I` child's environment only.
-2. **One chokepoint, judged before any byte is sent.** Every value passes `bc_ok` (non-empty, `[A-Za-z0-9._~+/=-]`) inside the single
+2. **One chokepoint, judged before any byte is sent.** (`bc_refuse SCRIPT VAR` prints the same line and marker for a site's own
+   pre-guard and returns 2, so a site that must keep a refusal out of the wrong verdict arm announces it identically.) Every value passes `bc_ok` (non-empty, `[A-Za-z0-9._~+/=-]`) inside the single
    internal `_bc_send`; the token `curl` occurs in the library only there, and a suite row asserts it. A refused call makes zero requests,
    prints one value-free line naming only the variable, and the marker `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>`.
 3. **A refusal lands in the same verdict class as the old failure.** The library returns 2 and a caller treats it as a curl failure. rc 2
@@ -60,8 +61,11 @@ S3 needs one tested place for the pattern that 24 alert-path composite steps and
 ## Consequences
 
 - Rule E baseline E shrinks by deletion only; per-site fingerprint keying is not adopted because S4 and S5 delete the remaining population.
-- The held-back file `workspaces-luks-cutover.yml` rides S4: converting its one Hetzner read needs an edit to an infra suite's curl stub,
-  which fires the production push apply. It reads `HCLOUD_TOKEN_READONLY` first and falls back to the read/write name until ADR-241 O10.
+- Two sites are held back to S4 because converting them needs an edit to an `apps/web-platform/infra/**` suite, which fires the production
+  push apply: `workspaces-luks-cutover.yml` (its suite's curl stub exits 64 on `--disable --noproxy`; it reads `HCLOUD_TOKEN_READONLY` first and
+  falls back to the read/write name until ADR-241 O10) and the `probe` step of `scheduled-inngest-health.yml` (its suite builds a fake
+  workspace with stubbed `openssl` and `curl` and no library). A step whose suite executes it in a library-less fake workspace cannot
+  adopt a sourced library without that edit; that is the cost of choosing a sourced library, accepted here.
 - The HMAC key and the credentials live in a child's environment (same-uid and root can read `/proc/<pid>/environ`): a reduction from
   world-readable `cmdline`, not elimination. Past exposure is not remediated here; rotation stays with ADR-241 O13.
 - A vendor changing its key alphabet turns an alert into a visible refusal annotation instead of a vendor 401, with a new cause. The marker

@@ -33,3 +33,14 @@ Taste and user-challenge items from the plan-review panel and the CPO. Each stat
 ## 6. Plugin release fires on merge (flag, not a challenge)
 
 - The one test-file edit under `plugins/soleur/test/` triggers `version-bump-and-release.yml` (calls `reusable-release.yml`). Not a web deploy. Alternative to avoid it: none found that keeps `heartbeat-reconcile-issue-step.test.sh` green without editing it.
+
+## 7. The scheduled-inngest-health `probe` step is also held back (user-challenge, found at work time)
+
+- Brief: S3 owns `scheduled-inngest-health.yml` (the Better Stack stderr item and the file's three argv sites).
+- Finding (measured): converting the `probe` step (HMAC key off `openssl`'s argv, signature and Cloudflare Access pair onto `bc_curl`) reddens 12 rows of
+  `apps/web-platform/infra/inngest-dedicated-host-classify.test.sh` (it executes the real step in a fake workspace with no library and a stubbed `openssl`
+  and `curl`; the pre-guard records `secret_unset`). That suite is under `apps/web-platform/infra/**`, so editing it fires the production push apply.
+- Default taken: revert only the probe step, convert the two census calls and surface the dedicated-host reader's stderr (neither is executed by that suite), and
+  hold the probe step (1 Rule E site and its `openssl -hmac`) for S4 with operator notice. The file therefore stays in baseline E with 1 site (not removed).
+- Alternative: convert it and edit the infra suite (an `apps/web-platform/infra/**` edit: push apply, web release, `infra-validation`; operator notice and a post-merge
+  outcome check). Not taken because the brief defines S3 as the class that cannot fire production on merge.

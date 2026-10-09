@@ -785,6 +785,127 @@ else
   fail "26 the composite .yaml glob is unpinned — dropping it is a silent bypass: rc=$RC"
 fi
 
+# --- RED 27-31 + must-PASS (ADR-280): the library surface -----------------------------------
+# A job that sends a credential through scripts/lib/bearer-curl.sh needs a checkout that
+# materialises scripts/lib/, and its workflow must not run under pull_request_target.
+reset
+mkwf lib-nocheckout.yml 'name: lib-nocheckout
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: send
+        run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-nocheckout.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "27 a step that sources the library with no checkout in its job is REFUSED"
+else
+  fail "27 a library consumer with no checkout was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-path.yml "name: lib-path
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          path: sub
+      - name: send
+        run: source \"\${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh\""
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-path.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "28 a checkout into a subdirectory does not materialise scripts/lib/ for a sourcing step"
+else
+  fail "28 a path: checkout was accepted for a library consumer: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-sparse.yml "name: lib-sparse
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: .github
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-sparse.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "29 a sparse cone that resolves the composite (.github) but excludes scripts/ is REFUSED for the library"
+else
+  fail "29 a .github-only cone was accepted for a composite that sources the library: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-prt.yml "name: lib-prt
+on:
+  pull_request_target:
+    types: [opened]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: ./.github/actions/anthropic-preflight"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-prt.yml: job 'j'.*pull_request_target" "$TMP/err"; then
+  pass "30 a library consumer in a pull_request_target workflow is REFUSED"
+else
+  fail "30 a pull_request_target caller of a credential composite was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-prt-list.yml "name: lib-prt-list
+on: [push, pull_request_target]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - name: send
+        run: source \"\${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh\""
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-prt-list.yml: job 'j'.*pull_request_target" "$TMP/err"; then
+  pass "31 the list form of on: is read too (pull_request_target among several triggers)"
+else
+  fail "31 the list-form trigger escaped the pull_request_target check: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-ok.yml "name: lib-ok
+on:
+  schedule:
+    - cron: '0 3 * * *'
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+            .github
+            scripts
+      - uses: ./.github/actions/notify-ops-email
+      - name: send
+        run: source \"\${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh\""
+run_lint
+if [[ "$RC" -eq 0 ]]; then
+  pass "32 (must-PASS) a plain-trigger job with a usable checkout whose cone names scripts passes"
+else
+  fail "32 a compliant library consumer was refused: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- 33: the LIVE tree's library population is non-trivial (the floor lives here, not in the lint) ----
+python3 "$SUT" "$ROOT/.github/workflows" >"$TMP/live.out" 2>"$TMP/live.err"; LIVE_RC=$?
+live_lib="$(sed -nE 's/.*; ([0-9]+) library-consuming step\(s\) each have a checkout.*/\1/p' "$TMP/live.out")"
+if [[ "$LIVE_RC" -eq 0 && "$live_lib" =~ ^[0-9]+$ && "$live_lib" -ge 20 ]]; then
+  pass "33 the live tree is clean and carries >= 20 library-consuming steps ($live_lib): the third surface is not scanning nothing"
+else
+  fail "33 live tree: rc=$LIVE_RC library-consuming steps='${live_lib:-<unparsed>}': $(head -1 "$TMP/live.err")"
+fi
+
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
 pass "canary: a true condition registers as PASS"
@@ -817,7 +938,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=48
+FAIL_FLOOR_MIN=55
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

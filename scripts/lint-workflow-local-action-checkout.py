@@ -44,6 +44,18 @@ copied under `mktemp -d` scans both; the count is printed so "scanned nothing" i
 a tree whose workflows reference `./.github/actions/…` while that directory is ABSENT exits 2
 rather than silently walking zero composites.
 
+THIRD SURFACE (ADR-280). A job that sends a credential through `scripts/lib/bearer-curl.sh` — by
+`uses:` of one of the two composites that source it (`notify-ops-email`, `anthropic-preflight`), or by a
+`run:` step that names the library path — needs a checkout that actually materialises
+`scripts/lib/`: usable per `checkout_usable()` (so no `path:`, no foreign `repository:`), AND, when it
+carries a `sparse-checkout:` cone, one that includes `scripts`. The library is sourced from the job's own
+workspace, so a job without it cannot send, and there is no argv fallback. The workflow must also not be
+triggered by `pull_request_target`: that trigger runs with secrets against a ref the author controls, and
+these steps hold the credentials. Both properties are true of every caller today by accident (measured:
+24 composite call steps, all after a plain checkout; the `pull_request_target` set — apply-sentry-infra,
+cla, cla-evidence, dev-ledger-reconcile, merge-queue-cla-synthetics, secret-scan — calls neither
+composite); this makes them checked.
+
 NAMED NON-PROPERTIES (so the claim is not overstated). `if:` is compared as a string, never
 evaluated — a `./` step whose `if:` legitimately narrows its checkout's is a loud false positive
 with an obvious fix. Whether the checkout ref is pinned (`@v4` vs `@<sha>`) is a separate property.
@@ -84,6 +96,10 @@ MIN_SAME_REPO_STEPS = 30
 # deliberately empty actions dir (and the absent-dir case, which `references_actions_dir` owns)
 # are unaffected.
 MIN_ACTION_FILES = 1
+# Third surface (ADR-280): the steps that send a credential through the shared library. The population floor
+# lives in the suite's live row, where the real tree is scanned, not here: a fixture tree legitimately has few.
+LIB_PATH = "scripts/lib/bearer-curl.sh"
+LIB_COMPOSITE = re.compile(r"^(\./|\$/)\.github/actions/(notify-ops-email|anthropic-preflight)/?$")
 
 
 def usage_error(msg: str) -> int:
@@ -128,6 +144,40 @@ def checkout_usable(checkout: dict, step: dict) -> bool:
     return str(checkout.get("if")) == str(step.get("if"))
 
 
+def checkout_has_lib(checkout: dict, step: dict) -> bool:
+    """A checkout that serves `step` AND materialises scripts/lib/ (a sparse cone must name `scripts`)."""
+    if not checkout_usable(checkout, step):
+        return False
+    with_ = checkout.get("with")
+    if isinstance(with_, dict):
+        sparse = with_.get("sparse-checkout")
+        if sparse is not None:
+            patterns = sparse.split() if isinstance(sparse, str) else list(sparse or [])
+            if not any(str(pat).lstrip("/").startswith("scripts") for pat in patterns):
+                return False
+    return True
+
+
+def consumes_lib(step: dict) -> bool:
+    uses = step.get("uses")
+    if isinstance(uses, str) and LIB_COMPOSITE.match(uses):
+        return True
+    run = step.get("run")
+    return isinstance(run, str) and LIB_PATH in run
+
+
+def triggers(doc: dict) -> set:
+    """The workflow's trigger names. PyYAML parses a bare `on:` key as boolean True."""
+    on = doc.get("on", doc.get(True))
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list):
+        return {str(t) for t in on}
+    if isinstance(on, dict):
+        return {str(t) for t in on}
+    return set()
+
+
 def main(argv: list[str]) -> int:
     if len(argv) > 2:
         return usage_error(f"expected at most one path, got {len(argv) - 1}")
@@ -141,6 +191,7 @@ def main(argv: list[str]) -> int:
     local_steps = 0
     self_steps = 0
     actions_scanned = 0
+    lib_steps = 0
     references_actions_dir = False
 
     try:
@@ -149,6 +200,7 @@ def main(argv: list[str]) -> int:
             if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
                 return usage_error(f"{wf} has no `jobs` mapping — not a workflow?")
             scanned += 1
+            wf_triggers = triggers(doc)
             for job_name, job in doc["jobs"].items():
                 if not isinstance(job, dict):
                     return usage_error(f"{wf}: job {job_name!r} is not a mapping")
@@ -162,6 +214,23 @@ def main(argv: list[str]) -> int:
                     if not isinstance(step, dict):
                         return usage_error(f"{wf}: job {job_name!r} step[{idx}] is not a mapping")
                     uses = step.get("uses")
+                    if consumes_lib(step):
+                        lib_steps += 1
+                        lib_label = step.get("name") or f"step[{idx}]"
+                        if not any(checkout_has_lib(c, step) for c in checkouts):
+                            findings.append(
+                                f"::error file={wf}::{wf.name}: job '{job_name}', step '{lib_label}' sends a "
+                                f"credential through {LIB_PATH} but no earlier usable actions/checkout in this "
+                                f"job materialises scripts/lib/ (no path:, no foreign repository:, and a "
+                                f"sparse-checkout cone must name scripts) — the library is sourced from the "
+                                f"job's own workspace and there is no argv fallback"
+                            )
+                        if "pull_request_target" in wf_triggers:
+                            findings.append(
+                                f"::error file={wf}::{wf.name}: job '{job_name}', step '{lib_label}' sends a "
+                                f"credential through {LIB_PATH} in a workflow triggered by pull_request_target "
+                                f"— that trigger runs with secrets against a ref the author controls"
+                            )
                     if uses is None:
                         continue
                     if not isinstance(uses, str):
@@ -258,7 +327,8 @@ def main(argv: list[str]) -> int:
     print(
         f"{NAME}: OK — {scanned} workflows scanned, {local_steps} local-action steps, "
         f"{self_steps} self-repository steps, {actions_scanned} composite action file(s); "
-        f"every local-action step is preceded by actions/checkout in its job"
+        f"every local-action step is preceded by actions/checkout in its job; "
+        f"{lib_steps} library-consuming step(s) each have a checkout that materialises scripts/lib/"
     )
     return 0
 

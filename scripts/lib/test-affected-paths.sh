@@ -893,6 +893,21 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
   "knowledge-base/engineering/operations/runbooks/inngest-server.md"
   "knowledge-base/legal/article-30-register.md"
+  # S3 (ADR-280): the S3 stage derives its population from the workflow and composite step texts and
+  # executes the representative `run:` bodies, so an edit to any of them (or to the library) must select it.
+  "scripts/lib/bearer-curl.sh"
+  ".github/actions/anthropic-preflight/"
+  ".github/actions/notify-ops-email/"
+  ".github/workflows/board-status-sync.yml"
+  ".github/workflows/canary-status.yml"
+  ".github/workflows/git-data-cutover.yml"
+  ".github/workflows/git-data-rung2-rehearsal.yml"
+  ".github/workflows/kb-drift-walker.yml"
+  ".github/workflows/rule-audit.yml"
+  ".github/workflows/scheduled-inngest-health.yml"
+  ".github/workflows/scheduled-prod-version-drift.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  ".github/workflows/sentry-audit-gate.yml"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
