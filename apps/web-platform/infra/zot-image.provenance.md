@@ -55,9 +55,12 @@ Recovery procedure (the whole procedure lives here, not in a plan that will be a
    (`git revert <sha>`). It returns, together: the four values in `zot-registry.tf`, this sidecar, the
    `zot vX.Y.Z` claim comments the staleness gate requires in `ci-deploy.test.sh` and
    `cloud-init-registry.yml`, and the three-name hosts-file deny at all seven sites. `ci-deploy.sh` is
-   deliberately NOT a claim carrier (check 11): if the revert conflicts there, keep the claim-free pointer
-   comment above `_docker_login_failure_class` (never restore a version token into it) and keep the
-   current fan-out signer. A narrower edit of
+   deliberately NOT a claim carrier (check 11): expect conflicts in `ci-deploy.sh`, `ci-deploy.test.sh`
+   and this sidecar (later edits sit beside the reverted hunks). Resolve the first two by keeping the
+   CURRENT side of every conflict (the claim-free pointer comment, the stdin-config curl call and the
+   environment-only signer are independent of the pin and must survive), and this sidecar by taking the
+   REVERTED side; the non-conflicting hunks still restore the `zot v2.1.20` claim in `ci-deploy.test.sh`.
+   Dry-run 2026-10-09: that resolution leaves `zot-image-staleness.test.sh` at 16 passed, 0 failed. A narrower edit of
    only the four values fails `zot-image-staleness.test.sh` (the sidecar, the followers and the
    previous-known-good block then disagree with the pin), and a partial revert of the deny breaks its
    byte-parity guard. The values being restored, in the tag-qualified form `zot_version` is derived
