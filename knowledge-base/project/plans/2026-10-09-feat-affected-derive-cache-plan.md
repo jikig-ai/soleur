@@ -19,7 +19,7 @@ lane: single-domain
 
 ### Key Improvements
 
-1. Probe census widened from the issue's one named site (`_affected_buf_add`) to all seven `-e`/`-f`/`[[ -d ]]` sites in the derive span, with a derived-set census test row so a later probe site cannot silently weaken invalidation.
+1. Probe census widened from the issue's one named site (`_affected_buf_add`) to all nine existence-probe sites in the derive span, with a derived-set census test row so a later probe site cannot silently weaken invalidation. (Post-review: the census also covers the full file-test predicate class, conjunct positions, file-content reads, and the out-of-span callee boundary.)
 2. Learnings applied: new `.test.sh` arms `lint-trap-tempfile-ownership` + `fixture-relative-assert` ratchets (run by name, don't regenerate baselines); nested-runner rows must `env -u TEST_GROUP` (leak learning); `/usr/bin/time` absent — measure with shell `time`/`EPOCHREALTIME`; never edit the script under a running bench — measure from a copy.
 3. Precedent-diff (§4.4) resolved: cache-file hygiene follows `kb-search-cache.sh` (`mkdir -p` + unconditional `chmod 700` dir / `chmod 600` file, `.soleur/cache/` canonical prefix); the per-record content-keyed file shape diverges from that NDJSON append log deliberately — append logs cannot express per-record invalidation without compaction.
 4. AC1 gained a deterministic leg (`misses=0` on a second consecutive run) so the acceptance is not solely ambient-load wall-clock.
@@ -114,7 +114,7 @@ A new sourced lib, `scripts/lib/test-affected-derive-cache.sh`, implements a per
 
 - Create `scripts/lib/test-affected-derive-cache.sh`: `_ADC_SCHEMA` constant (asserted by its own reader), record/validate/replay/write/prune functions, kill-switch check, atomic write, `git hash-object` batching with the env-scrub idiom.
 - In `scripts/test-all.sh`: source the lib beside the existing `_AFF_LIB`/`_REL_LIB` block; add recording hooks at every derive probe/read site (census above); route the walk's `_affected_classify` call site through the wrapper; emit `AFFECTED_DERIVE_CACHE hits=<n> misses=<n> derived=<n>` at walk end.
-- Add `AFFECTED_TEST_AFFECTED_DERIVE_CACHE_PATHS` declared edges in `scripts/lib/test-affected-paths.sh` covering `scripts/lib/test-affected-derive-cache.sh`, `scripts/test-all.sh`, and the test file (the stem convention already reaches `scripts/lib/`; the declaration is explicit cover, honest under the census linter).
+- Add `AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_CACHE_PATHS` declared edges in `scripts/lib/test-affected-paths.sh` covering `scripts/lib/test-affected-derive-cache.sh`, `scripts/test-all.sh`, and the test file (the stem convention already reaches `scripts/lib/`; the declaration is explicit cover, honest under the census linter).
 
 ### Phase 2: Test arm
 
@@ -263,7 +263,7 @@ No cross-domain implications detected — infrastructure/tooling change to the r
 | `scripts/test-all.sh` edits | asks 1, 2 | asked |
 | `scripts/test-affected-derive-cache.test.sh` | ask 3 | asked |
 | `measurements-derive-cache.md` | ask 1 | asked |
-| `AFFECTED_TEST_AFFECTED_DERIVE_CACHE_PATHS` declared array | — | inferred — justification: without declared edges the new suite's own selection is under-reached by the runner it exercises (the `runner-changed` fallback covers diffs TO the runner, not the lib-only case) |
+| `AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_CACHE_PATHS` declared array | — | inferred — justification: without declared edges the new suite's own selection is under-reached by the runner it exercises (the `runner-changed` fallback covers diffs TO the runner, not the lib-only case) |
 | ADR-242 amendment (decision 21) | — | inferred — justification: `wg-architecture-decision-is-a-plan-deliverable`; a cross-run cache of gate inputs is a decision future readers must find in the ADR |
 | `SOLEUR_AFFECTED_DERIVE_CACHE=0` kill switch | — | inferred — justification: repo convention for advisory mechanisms (`SOLEUR_TEST_FORCE_ALL`, `SOLEUR_DISABLE_*`); the only honest exit if the cache misbehaves on an unusual host |
 | Probe-site census row in the test suite | — | inferred — justification: a probe site added later without recording silently breaks invalidation; the property needs a census, not a named list (membership drifts) |

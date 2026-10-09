@@ -384,6 +384,7 @@
 1	scripts/lib/legal-base-ref.test.sh
 3	scripts/lib/repo-write-boundary.test.sh
 2	scripts/lib/scratch-root.sh
+3	scripts/lib/test-affected-derive-cache.sh
 4	scripts/lib/test-contention.sh
 18	scripts/lib/trusted-verdict.test.sh
 1	scripts/lib/web2-luks-rows.sh
@@ -430,6 +431,7 @@
 2	scripts/sweep-followthroughs.sh
 104	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
+2	scripts/test-affected-derive-cache.test.sh
 1	scripts/test-affected-kb-consumers.test.sh
 12	scripts/test-all-affected.test.sh
 7	scripts/test-all-capacity-signal.test.sh

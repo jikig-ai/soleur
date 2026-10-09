@@ -21,7 +21,10 @@ Deterministic leg (AC1): the second consecutive unchanged-tree run reports `miss
 586 served records — the saving does not depend on ambient load being kind.
 
 Selection identity in the worktree: `diff` over the two runs' `AFFECTED_*` lines shows only the
-telemetry line itself; every `AFFECTED_SELECTED` row and the `AFFECTED_SUMMARY` are identical.
+telemetry line itself (emitted on **stderr** post-review — `--print-selection`'s stdout is a
+machine-compared surface; the bench's repeat-run `cmp` determinism leg would flag cold-vs-warm
+counter drift as fake nondeterminism); every `AFFECTED_SELECTED` row and the `AFFECTED_SUMMARY`
+are identical.
 
 Cold-path cost: the recording overhead (read-set hashing + probe recording + one atomic store
 per record) is real and grows with contention — cold head paid ~27s extra CPU at load ~5 and
@@ -66,3 +69,43 @@ carrying `^scripts/lib/test-affected-derive-cache.sh` are the declared added-fil
   change, not once per run.
 - Selection is byte-identical by the bench contract in both cold and warm states — the cache
   replays classification metadata only; `_diff_touches` and the verdict walk are unchanged.
+- A harness that mints a fresh worktree per task pays the cold pass once per worktree — `.soleur/`
+  is per-worktree by construction (sibling isolation is the point). Agents typically run the gate
+  twice per worktree minimum, so it amortises; a slow FIRST gate on a fresh worktree is expected,
+  not a regression.
+
+## 4. Post-review deltas (design-validity + 8-seat panel)
+
+The review panel surfaced and fixed, all re-verified by the suite (19/19) and a re-run bench:
+
+- **P1 — memo probe slice (`_FE_PROBESETS`/`_FE_RECTRACKED`):** the `_FE_FILES` memo replayed a
+  shared file's edges into memo consumers without the probes that produced them — a file created
+  at a recorded-miss path inside a helper invalidated only the extractor's record. Now the probe
+  slice is memoised per file and replayed into each consumer's record (T13 pins it).
+- **P1 — telemetry off stdout:** the emit moved to stderr with a `state=on|off` field; the bench's
+  default `--runs 5` determinism arm `cmp`s whole stdout and would have flagged cold-vs-warm
+  counters as nondeterminism.
+- **P2 — `sum` integrity trailer:** a cksum over the record body verified before replay; an
+  in-body bit-flip or line drop is now a structural reject (T16 pins it).
+- **P2 — span-hash preimage:** the code hash covers the EXTRACTED derive span (same anchors the
+  derive suites pin, each leg asserted non-empty with whole-file fallback) instead of all ~6.8k
+  lines of the runner — unrelated runner edits no longer flush all ~586 records. The two edge libs
+  and the cache lib itself stay whole-file (their content IS the input set).
+- **P2 — environment fingerprint in the key:** BASH_VERSION (patsub_replacement flips on 5.2),
+  LC_ALL/COLLATE/CTYPE/MESSAGES/LANG, glob/case shell options, and IFS — channels that reach the
+  derive's output are keyed, so a record minted under one environment can't replay under another.
+- **P1-adjacent — `set -f` on the `-c` payload word-split:** the unquoted expansion also
+  pathname-expanded glob tokens against cwd — a directory-listing input no recorded probe could
+  invalidate. The sibling invocation arm already splits glob-free; selection was unchanged
+  (derive suite 116/116, bench IDENTICAL).
+- **Boundary + census hardening:** `cwd` record field, hex-bounded keys, probe-operand `\n`/`\t`
+  poisoning (`_ADC_REC_BAD`), `_ADC_DIRREADY` store hoisting, prune sweeps the schema root and
+  tmp orphans, T10 census widened to conjunct-position predicates + the full file-test class +
+  a read-side census + the out-of-span callee boundary ({`_affected_emit_receipt`,
+  `_wt_missing_die`}).
+- **Documented residual — torn-record TOCTOU:** record hashing runs after classify, so a file
+  edited mid-walk can mint edges-of-v1 keyed to hash-v2 — a record that validates while replaying
+  stale edges until the file changes again; the memo widens the same window to a shared file's
+  consumers. The uncached derive carries the same race but self-heals next run. Bounded to a
+  concurrent mid-walk edit (~per-record seconds); hashing at read time would cost the per-file
+  forks the design exists to avoid.
