@@ -610,17 +610,29 @@ export function outerWrapEnabled(workspaceId?: string): boolean {
 /** The shared isolation payload — the same script the founder check and the
  *  canary replay pipe into `bash -s`. Two layouts: dev
  *  `apps/web-platform/server/../scripts`, prod bundle
- *  `/app/dist/server/../../scripts` → `/app/scripts` (Dockerfile COPY). */
-const INNER_PROBE_PATH = ["..", path.join("..", "..")]
-  .map((up) =>
-    path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      up,
-      "scripts",
-      "tenant-isolation-inner-probe.sh",
-    ),
-  )
-  .find((p) => existsSync(p));
+ *  `/app/dist/server/../../scripts` → `/app/scripts` (Dockerfile COPY).
+ *
+ *  Resolved LAZILY, never at module load: esbuild's CJS bundle leaves
+ *  `import.meta.url` undefined, and a module-init `fileURLToPath(undefined)`
+ *  throw takes down the whole server — not just the opt-in probe (#8136
+ *  documented the identical trap in cron-bash-allowlist-hook.mjs; the
+ *  v0.332.3 canary crash was this line). */
+function innerProbePath(): string | undefined {
+  let here: string;
+  try {
+    here = path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    here = process.cwd(); // bundled CJS: import.meta.url is undefined
+  }
+  return [
+    // dev source tree: apps/web-platform/server/../scripts → apps/web-platform/scripts
+    path.join(here, "..", "scripts", "tenant-isolation-inner-probe.sh"),
+    // prod bundle: /app/dist/server/../../scripts → /app/scripts (Dockerfile COPY)
+    path.join(here, "..", "..", "scripts", "tenant-isolation-inner-probe.sh"),
+    // bundled fallback anchor when import.meta.url was undefined: WORKDIR /app
+    path.join("/app", "scripts", "tenant-isolation-inner-probe.sh"),
+  ].find((p) => existsSync(p));
+}
 
 export interface RealizedIsolationProbe {
   /** The wrap built + the payload ran to a verdict (isolation_ok seen). */
@@ -654,7 +666,7 @@ export function probeRealizedIsolation(
     writeFileSync(path.join(sibling, "marker.txt"), "sibling\n");
     mkdirSync(home, { recursive: true });
     mkdirSync(plugin, { recursive: true });
-    const probePath = deps.probePath ?? INNER_PROBE_PATH;
+    const probePath = deps.probePath ?? innerProbePath();
     if (!probePath) return { ok: false, reason: "probe_path_missing" };
     const argv = buildOuterWrapArgv({ workspacePath: own, home, pluginPath: plugin });
     const res = spawnSync(
