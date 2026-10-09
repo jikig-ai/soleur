@@ -444,3 +444,35 @@ describe("OAuth callback: keyless invitee redirect precedence (#4715)", () => {
     expect(new URL(res.headers.get("location")!).pathname).toBe("/invite/tok123");
   });
 });
+
+// Demoted from e2e/oauth.e2e.ts (#9855) — the e2e asserted these two error
+// branches over a booted dev server via `request.get`; both are pure route
+// logic and live at the invocation layer with the rest of this suite.
+describe("OAuth callback error branches (demoted from e2e/oauth.e2e.ts)", () => {
+  test("GET /callback without code → redirect to /login?error=auth_failed", async () => {
+    const res = await callbackGET(
+      new NextRequest(new URL("https://app.soleur.ai/callback"), { method: "GET" }),
+    );
+
+    expect([307, 308]).toContain(res.status);
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/login");
+    expect(loc.searchParams.get("error")).toBe("auth_failed");
+    // No-code is a reportable auth anomaly, not silence.
+    expect(mockReportSilentFallback).toHaveBeenCalled();
+  });
+
+  test("GET /callback with failing code exchange → redirect to /login?error=<classified>", async () => {
+    mockExchangeCodeForSession.mockResolvedValue({
+      data: null,
+      error: { code: "invalid_code", name: "AuthApiError", status: 400, message: "invalid" },
+    });
+
+    const res = await callbackGET(makeCallbackRequest("invalid-code"));
+
+    expect([307, 308]).toContain(res.status);
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/login");
+    expect(loc.searchParams.get("error")).toBeTruthy();
+  });
+});
