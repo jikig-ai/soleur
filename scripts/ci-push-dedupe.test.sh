@@ -84,6 +84,9 @@ GATED_PINNED="e2e shard-totality-mutations test test-bun test-scripts test-scrip
 # sha256 of the `test` aggregator job minus its `needs` and `if`, as json.dumps(sort_keys=True), measured
 # on the unmodified tree before this stage (the aggregator body, env, timeout and runner must not move).
 AGG_DIGEST="12a297030c34e7c1e8b5fa89833f0643857d61a61fef76e0dea016831976cc75"
+# The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
+# jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
+UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success no_test_job switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -112,6 +115,7 @@ import hashlib, json, os, re, sys, yaml
 LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 mode, path = sys.argv[1], sys.argv[2]
 GATED = os.environ.get("GATED_PINNED", "").split()
+UNGATED = os.environ.get("UNGATED_PINNED", "").split()
 AGG = os.environ.get("AGG_DIGEST", "")
 CANON = {"test": "${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"}
 CANON_DEFAULT = "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
@@ -166,7 +170,8 @@ if mode == "wrapper":
     if job.get("timeout-minutes") != 3: tags.append("W-JOBTIMEOUT")
     if job.get("permissions") != {"actions": "read"}: tags.append("W-PERM")
     if job.get("outputs") != {"elide": "${{ steps.proof.outputs.elide }}"}: tags.append("W-OUTPUTS")
-    if job.get("continue-on-error"): tags.append("W-JOBCOE")
+    if job.get("continue-on-error") is not True: tags.append("W-JOBCOE")
+    if job.get("runs-on") != "ubuntu-latest": tags.append("W-RUNSON")
     if needs(job): tags.append("W-JOBNEEDS")
     steps = job.get("steps") or []
     if [s.get("id") for s in steps] != ["proof", "would-elide"]: tags.append("W-STEPS")
@@ -189,6 +194,7 @@ if mode == "wrapper":
         if s is not proof and "GH_TOKEN" in (s.get("env") or {}): tags.append("W-TOKEN-LEAK")
     body = proof.get("run", "")
     if re.search(r"set\s+-[a-zA-Z]*x|xtrace", body): tags.append("W-XTRACE")
+    if "set +x" not in body: tags.append("W-NOXTRACEOFF")
     if "${{" in body: tags.append("W-INTERP")
     gh_calls = len(re.findall(r"\bgh api\b", body))
     t_calls = len(re.findall(r"\btimeout 20 gh api\b", body))
@@ -225,6 +231,11 @@ if mode == "gated":
         if j.get("continue-on-error"): tags.append("G-COE:" + n)
     for n, j in jobs.items():
         if n not in GATED and n != "push-dedupe" and "push-dedupe" in needs(j): tags.append("G-EXTRANEED:" + n)
+        if n not in GATED and n != "push-dedupe" and n not in UNGATED: tags.append("G-UNCLASSIFIED:" + n)
+        if n not in GATED and set(needs(j)) & set(GATED): tags.append("G-DEPENDENT:" + n)
+        if n != "push-dedupe" and "push-dedupe" in json.dumps((j or {}).get("outputs", {})): tags.append("G-REEXPORT:" + n)
+    for n in UNGATED:
+        if n not in jobs: tags.append("G-GONE:" + n)
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "truth":
@@ -262,7 +273,7 @@ if mode == "aggbody":
 sys.stderr.write("unknown mode\n"); sys.exit(2)
 PY
 
-chk() { GATED_PINNED="$GATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
+chk() { GATED_PINNED="$GATED_PINNED" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
 
 # ── Helper: the gh shim ──────────────────────────────────────────────────────
 cat > "$SANDBOX/shim/gh" <<'SH'
@@ -286,7 +297,7 @@ if [[ "$ep" =~ $runs_re ]]; then
 elif [[ "$ep" =~ $jobs_re ]]; then
   id="${BASH_REMATCH[1]}"
   case "$mode" in
-    fail_jobs) printf 'boom\nelide=true\n' >&2; exit 1 ;;
+    fail_jobs) printf 'boom\nelide=true\n::error::pwn\n' >&2; exit 1 ;;
     bad_jobs) printf '{not json'; exit 0 ;;
   esac
   if [ "${CATCHALL:-}" = 1 ]; then cat "$CATCHALL_JOBS"; exit 0; fi
@@ -318,6 +329,7 @@ fx_flush() { assert_fixture_dir "$FXD"; jq -s '{workflow_runs: .}' "$FXD/runs.nd
 fx_jobs() {
   assert_fixture_dir "$FXD"
   local id="$1"; shift
+  if [ "$#" -eq 0 ]; then printf '{"jobs":[]}\n' > "$FXD/jobs-$id.json"; return; fi
   local args=() n c
   for pair in "$@"; do n="${pair%%:*}"; c="${pair#*:}"; args+=("$n" "$c"); done
   printf '%s\n' "${args[@]}" | jq -Rn '[inputs] as $a | {jobs: [range(0; ($a|length); 2) | {name: $a[.], conclusion: (if $a[.+1]=="null" then null else $a[.+1] end)}]}' > "$FXD/jobs-$id.json"
@@ -342,11 +354,13 @@ BAT_LINES=""
 ROWS_SEEN_REASONS=""
 # row <id> <expect_elide> <expect_would> <expect_reason>   (fixture already built in $FXD, env in E)
 row() {
-  local id="$1" xe="$2" xw="$3" xr="$4" out so rc why="" k gh_out
+  local id="$1" xe="$2" xw="$3" xr="$4" out so rc why=""
   BAT_N=$((BAT_N + 1))
   assert_fixture_dir "$FXD"
   out="$FXD/gh_output"; so="$FXD/stdout"; : > "$out"
-  local pathv="$RB_SHIMPATH:$SANDBOX/shim:$(dirname "$(command -v jq)"):/usr/bin:/bin"
+  local pathv jqdir
+  jqdir=$(dirname "$(command -v jq)")
+  pathv="${RB_SHIMPATH:-/nonexistent}:$SANDBOX/shim:$jqdir:/usr/bin:/bin"
   ( cd "$FXD" && env -i PATH="$pathv" HOME="$FXD" FIX="$FXD" GITHUB_OUTPUT="$out" GITHUB_STEP_SUMMARY="$FXD/summary" \
       GH_TOKEN="${E[GH_TOKEN]}" GH_REPO="${E[GH_REPO]}" SHA="${E[SHA]}" EVENT_NAME="${E[EVENT_NAME]}" REF="${E[REF]}" \
       RUN_ATTEMPT="${E[RUN_ATTEMPT]}" SWITCH="${E[SWITCH]}" CATCHALL="${RB_CATCHALL:-}" CATCHALL_RUNS="${RB_CA_RUNS:-}" CATCHALL_JOBS="${RB_CA_JOBS:-}" \
@@ -371,7 +385,7 @@ row() {
   nlines=$(grep -c '' "$so" || true)
   notices=$(grep -cE '^::(notice|warning) title=ci-push-dedupe::sha=[0-9a-f]{40}|^::(notice|warning) title=ci-push-dedupe::sha=invalid' "$so" || true)
   [ "$nlines" = 1 ] && [ "$notices" = 1 ] || why="$why stdout-shape(lines=$nlines,annot=$notices)"
-  if grep -qF 'pwn' "$so" "$out" "$FXD/summary" 2>/dev/null; then why="$why fixture-string-leaked"; fi
+  if grep -qF 'pwn' "$so" "$out" "$FXD/summary" "$FXD/stderr" 2>/dev/null; then why="$why fixture-string-leaked"; fi
   reason=$(sed -n 's/.* reason=\([a-z_]*\) mg_run=.*/\1/p' "$so" | head -n 1)
   mg=$(sed -n 's/.* mg_run=\(.*\)$/\1/p' "$so" | head -n 1)
   [ "$reason" = "$xr" ] || why="$why reason=$reason(want $xr)"
@@ -444,16 +458,15 @@ battery() {
   done
   fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "attacker/soleur" .github/workflows/ci.yml
   fx_jobs "$MG_ID" "${GOOD_JOBS[@]}"; fx_flush; set_env_defaults; row R13-fork-repo false false no_mg_success
-  fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/other.yml
-  fx_jobs "$MG_ID" "${GOOD_JOBS[@]}"; fx_flush; set_env_defaults; row R13-other-workflow false false no_mg_success
+  for v in .github/workflows/other.yml .github/workflows/x-ci.yml ci.yml ".github/workflows/ci.yml@refs/heads/main"; do
+    fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" "$v"
+    fx_jobs "$MG_ID" "${GOOD_JOBS[@]}"; fx_flush; set_env_defaults; row "R13-path-[$v]" false false no_mg_success
+  done
   fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" ""
   fx_jobs "$MG_ID" "${GOOD_JOBS[@]}"; fx_flush; set_env_defaults; row R13-empty-path false false no_mg_success
-  # R14 injection: a poisoned title/branch on a MATCHING run, and poisoned stderr on a failing read
+  # R14 injection: a poisoned title/branch on a MATCHING run (poisoned stderr on a failing read is the R12 rows, via row()'s leak check)
   fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "gh-readonly-queue/main/$POISON" "$REPO_SLUG" .github/workflows/ci.yml "$POISON"
   fx_jobs "$MG_ID" "${GOOD_JOBS[@]}"; fx_flush; set_env_defaults; row R14-poisoned-match true true ok
-  # R17 a run id that is not digits never reaches a URL (it would add path segments to the jobs read)
-  fx_new "$d"; jq -nc --arg sha "$SHA_A" --arg br "$QB" --arg repo "$REPO_SLUG" '{id:"111/../../../../repos/x",event:"merge_group",status:"completed",conclusion:"success",head_sha:$sha,head_branch:$br,path:".github/workflows/ci.yml",head_repository:{full_name:$repo}}' >> "$d/runs.ndjson"
-  fx_flush; set_env_defaults; row R17-nonnumeric-run-id false false proof_error
   # R15 permitted shapes that are NOT the canonical fixture
   fx_new "$d"; fx_run 100 merge_group completed failure "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
   fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
@@ -467,6 +480,9 @@ battery() {
   fx_canonical "$d"; set_env_defaults; E[SWITCH]=on; row R15-switch-on-canonical-again true true ok
   # R16 the proof is evaluated for the dark phase: variable unset, canonical, would be elided
   fx_canonical "$d"; set_env_defaults; E[SWITCH]=""; row R16-dark-would-elide false true switch_off
+  # R17 a run id that is not digits never reaches a URL (it would add path segments to the jobs read)
+  fx_new "$d"; jq -nc --arg sha "$SHA_A" --arg br "$QB" --arg repo "$REPO_SLUG" '{id:"111/../../../../repos/x",event:"merge_group",status:"completed",conclusion:"success",head_sha:$sha,head_branch:$br,path:".github/workflows/ci.yml",head_repository:{full_name:$repo}}' >> "$d/runs.ndjson"
+  fx_flush; set_env_defaults; row R17-nonnumeric-run-id false false proof_error
 }
 
 # ── Extract the live body ────────────────────────────────────────────────────
@@ -492,8 +508,8 @@ while IFS= read -r ln; do
   esac
 done <<<"$CTRL_LINES"
 # independent producer count: the rows executed (counter in row()) must equal the verdict lines read back
-if [ "$CTRL_N" -eq $((_ok + _bad)) ] && [ "$CTRL_N" -ge 70 ]; then pass
-else fail "BATTERY COUNT: row() ran $CTRL_N rows but $((_ok + _bad)) verdict lines were read (floor 70)"; fi
+if [ "$CTRL_N" -eq $((_ok + _bad)) ] && [ "$CTRL_N" -ge 78 ]; then pass
+else fail "BATTERY COUNT: row() ran $CTRL_N rows but $((_ok + _bad)) verdict lines were read (floor 78)"; fi
 # every reason code in the enum is reached at least once, taken from what the body PRINTED
 _missing=""
 for r in $REASONS; do
@@ -502,10 +518,24 @@ done
 if [ -z "$_missing" ]; then pass; else fail "REASONS: never reached:$_missing"; fi
 
 # ── Wrapper, gated set, truth table, aggregator ──────────────────────────────
-W=$(chk wrapper "$WF"); [ -z "$W" ] && pass || fail "WRAPPER tags: $W"
-G=$(chk gated "$WF"); [ -z "$G" ] && pass || fail "GATED tags: $G"
-T=$(chk truth "$WF"); [ -z "$T" ] && pass || fail "TRUTH TABLE tags: $T"
-A=$(chk agg "$WF"); [ -z "$A" ] && pass || fail "AGGREGATOR tags: $A"
+# A checker that CRASHES prints nothing to stdout; its exit status is part of its verdict.
+live_check() { # <label> <mode>
+  local out rc
+  out=$(chk "$2" "$WF" 2>"$SANDBOX/chk.err"); rc=$?
+  if [ "$rc" -ne 0 ]; then fail "$1: the checker crashed (rc=$rc: $(head -c 160 "$SANDBOX/chk.err"))"
+  elif [ -n "$out" ]; then fail "$1 tags: $out"
+  else pass; fi
+}
+live_check WRAPPER wrapper
+live_check "GATED" gated
+live_check "TRUTH TABLE" truth
+live_check AGGREGATOR agg
+# the canonical condition is restated by two pre-existing suites' carve-outs; each copy must still equal ci.yml's
+for pair in "plugins/soleur/test/ci-e2e-skip-anchors.test.sh|!cancelled()" "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh|always()"; do
+  f="${pair%%|*}"; fn="${pair#*|}"
+  lit="$fn && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true')"
+  if [ "$(grep -cF -- "$lit" "$REPO_ROOT/$f")" -ge 1 ]; then pass; else fail "PARITY: $f no longer carries the canonical condition ($lit)"; fi
+done
 
 # the proof demands only the `test` job: that is sound only while the aggregator concludes red on a
 # skipped leg. Execute the extracted aggregator over a merge_group triple with one gated leg skipped.
@@ -550,10 +580,17 @@ mutate_body() {
   fi
   if cmp -s "$f" "$SANDBOX/pristine-body.sh"; then fail "MUTANT $name: mutant is byte-identical to the pristine body"; return; fi
   battery "$f"
-  got=$(grep -E "^ROW $want.* bad" <<<"$BAT_LINES" | head -n 1)
+  if [ "$want" = NONE ]; then # known-negative control: a harmless edit must leave EVERY row green
+    got=$(grep -E "^ROW .* bad:" <<<"$BAT_LINES" | head -n 1)
+    if [ -z "$got" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass; else fail "CONTROL $name: a harmless edit turned a row red ($got)"; fi
+    return
+  fi
+  got=$(grep -E "^ROW $want.* bad:" <<<"$BAT_LINES" | head -n 1)
   if [ -n "$got" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
   else fail "MUTANT $name: no row with prefix $want went red"; fi
 }
+mutate_body c-harmless-noop 'note=invalid' 'note=invalid; :' NONE
+# the verdict logic itself must be able to say "not caught": a mutant that changes nothing observable is refused above
 mutate_body m-switch-case '[ "$SWITCH" = on ]' '[ "${SWITCH,,}" = on ]' R03
 mutate_body m-switch-always '[ "$SWITCH" = on ]' 'true' R03
 mutate_body m-no-push-check '[ "$EVENT_NAME" = push ] || finish' 'true' R04
@@ -569,6 +606,9 @@ mutate_body m-test-conclusion 'select(.name == "test" and .conclusion == "succes
 mutate_body m-no-event-check '.event == "merge_group" and ' '' R13
 mutate_body m-no-repo-check ' and .head_repository.full_name == $repo' '' R13
 mutate_body m-no-path-check ' and .path == ".github/workflows/ci.yml"' '' R13
+mutate_body m-path-endswith '.path == ".github/workflows/ci.yml"' '(.path | endswith("ci.yml"))' R13
+mutate_body m-runs-stderr 'head_sha=${SHA}&per_page=100" 2>/dev/null) || finish' 'head_sha=${SHA}&per_page=100") || finish' R12
+mutate_body m-jobs-stderr 'filter=latest" 2>/dev/null) || finish' 'filter=latest") || finish' R12
 # fail-open on a failed read (the read is replaced by a vouching answer): must go red on the failure rows
 _open_runs=$(cat <<'EOS'
 head_sha=${SHA}&per_page=100" 2>/dev/null) || runs=$(printf '{"workflow_runs":[{"event":"merge_group","status":"completed","conclusion":"success","head_sha":"%s","path":".github/workflows/ci.yml","head_repository":{"full_name":"%s"},"head_branch":"gh-readonly-queue/main/x","id":111}]}' "$SHA" "$GH_REPO")
@@ -593,7 +633,7 @@ mutate_body_equiv() {
     fail "EQUIVALENT $name: mutation did NOT land"; return
   fi
   battery "$f"
-  if [ -z "$(grep ' bad' <<<"$BAT_LINES")" ]; then EQUIV_OK=$((EQUIV_OK + 1)); pass
+  if [ -z "$(grep -E '^ROW .* bad:' <<<"$BAT_LINES")" ]; then EQUIV_OK=$((EQUIV_OK + 1)); pass
   else fail "EQUIVALENT $name: expected no row to go red, but one did (not equivalent: add a killing row)"; fi
 }
 mutate_body_equiv e-runs-failure-ignored 'head_sha=${SHA}&per_page=100" 2>/dev/null) || finish' 'head_sha=${SHA}&per_page=100" 2>/dev/null) || true'
@@ -603,14 +643,14 @@ mutate_body_equiv e-nonarray-check-dropped "jq -e '.workflow_runs | type == \"ar
 printf '%s\n' 'printf "elide=true\nwould_elide=true\n" >> "$GITHUB_OUTPUT"; printf "::notice title=ci-push-dedupe::sha=invalid would_elide=true elide=true reason=ok mg_run=none\n"; exit 0' > "$SANDBOX/mut/stub-always.sh"
 MUT_RUN=$((MUT_RUN + 1))
 battery "$SANDBOX/mut/stub-always.sh"
-_n_bad=$(grep -c ' bad' <<<"$BAT_LINES" || true)
-if [ "$_n_bad" -ge 20 ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass; else fail "HARNESS H1: an always-elide stub went red on only $_n_bad rows (floor 20)"; fi
+_n_bad=$(grep -cE '^ROW .* bad:' <<<"$BAT_LINES" || true)
+if [ "$_n_bad" -ge 50 ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass; else fail "HARNESS H1: an always-elide stub went red on only $_n_bad rows (floor 50)"; fi
 # harness: a catch-all gh shim (canonical fixture for every call) must not let the must-be-false rows pass
 fx_canonical "$SANDBOX/ca"; RB_CA_RUNS="$SANDBOX/ca/runs.json"; RB_CA_JOBS="$SANDBOX/ca/jobs-$MG_ID.json"
 MUT_RUN=$((MUT_RUN + 1))
 battery "$LIVE/body.sh" 1
 RB_CA_RUNS=""; RB_CA_JOBS=""
-if grep -qE '^ROW R(08|09|10|11|13)' <<<"$(grep ' bad' <<<"$BAT_LINES")"; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
+if grep -qE '^ROW R(08|09|10|11|13)' <<<"$(grep -E '^ROW .* bad:' <<<"$BAT_LINES")"; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
 else fail "HARNESS H2: with a catch-all gh shim the no_mg_success / no_test_job rows must still go red"; fi
 
 # workflow mutants: yml copies run through the checkers
@@ -692,8 +732,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 36 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN killing mutants ran (floor 36), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+if [ "$MUT_RUN" -ge 40 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN killing mutants ran (floor 40), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -702,7 +742,7 @@ else fail "MUTANT FLOOR: $MUT_RUN killing mutants ran (floor 36), $EQUIV_OK of $
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=123
+_FLOOR=132
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

@@ -12,7 +12,9 @@ on:
   # `rule-body-lint`, `grok-fidelity`, `credential-path-guard`) must run on
   # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of
   # them or that required context never reports → the queue entry stalls pending
-  # forever. None gate on the event today, so they run unconditionally. This is a
+  # forever. Since ADR-276 S2 (#9512) the heavy jobs, incl. `test` and `e2e`, DO carry an event-aware `if:` whose condition
+  # names merge_group positively and is true on every event except an elided push (see `push-dedupe`); all others run
+  # unconditionally. This is a
   # non-exhaustive example list, not the authority; required-checks.txt is.
   # `tc-document-sha-guard` additionally
   # receives `MERGE_GROUP_BASE_SHA` so its T&C TC_VERSION-bump bypass still works
@@ -142,6 +144,11 @@ jobs:
   # through env:. Nothing an API returns is ever echoed into an output or an annotation.
   push-dedupe:
     if: github.event_name == 'push'
+    # Job-level continue-on-error, on purpose: a job failure here (a lost runner, a platform fault) would otherwise
+    # conclude the whole push run `failure` and block that SHA's deploy (`ci_not_green`) even while the switch is
+    # off. This is a COST lever; it must never be able to redden a run. A failed job leaves `elide` empty, so every
+    # gated job runs (`!= 'true'`).
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
@@ -1726,6 +1733,8 @@ jobs:
   # `if: always()`, the default `needs:` semantics produce `skipped` when
   # any dependency fails — and some branch-protection configs treat
   # `skipped` as success (fail-open). No `|| true`, no `continue-on-error`.
+  # (ADR-276 S2: the `if:` below is `always()` ANDed with the push-dedupe elision condition. It is true on every
+  # event except an elided push, so the status-function protection above holds wherever `test` is required.)
   # Per-shard `result` is read via env: + quoted "$VAR" per workflow-injection
   # guidance (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/).
   test:
@@ -1737,7 +1746,7 @@ jobs:
     needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe]
     if: ${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads six `needs.*.result` strings (measured
+    # Bounds a HUNG job (#7902). This job only reads six leg `needs.*.result` strings (push-dedupe is a seventh, non-leg need the body never reads) (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
@@ -1922,7 +1931,10 @@ jobs:
       # gated on it. Deliberately NOT a detect-changes output + `needs:` edge:
       # a failed upstream job would needs-skip `e2e`, and a skipped required
       # check posts GREEN — the fail-open shape this file warns about. A
-      # classify-step failure reds the job instead.
+      # classify-step failure reds the job instead. (The ONE job-level
+      # `needs: [push-dedupe]` this job now carries is the ADR-276 S2 exception,
+      # safe because its `if:` opens with `!cancelled()`: a failed or skipped
+      # push-dedupe never skips e2e. ci-e2e-skip-anchors.test.sh pins the exact pair.)
       - name: Classify e2e applicability
         id: detect
         env:

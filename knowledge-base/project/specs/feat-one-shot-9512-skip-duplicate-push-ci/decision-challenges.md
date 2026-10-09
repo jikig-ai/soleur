@@ -6,12 +6,12 @@
 
 - Operator direction (default, kept): "Append a dated ADR-276 S2 amendment BEFORE the stage takes effect (ADR stays "proposed")."
 - Conflict: ADR-276 Status says no stage PR that changes CI behaviour (S2, S3, S4) may merge while `status:` reads `proposed`; the flip to `adopting` needs the CTO's approval comment on a PR that edits the line.
-- Reading taken in the plan: the PR merges dark under `proposed` because, with `CI_PUSH_DEDUPE` unset, no verdict moves (one extra non-verdict job on push runs); the behaviour change is the activation, which is gated on the file reading `adopting` and on an explicit operator go. The amendment states this reading so it can be challenged.
+- Reading taken in the plan: the PR merges dark under `proposed` because, with `CI_PUSH_DEDUPE` unset, no verdict moves (one extra non-verdict job on push runs, which carries job-level `continue-on-error: true` so even a runner-level failure of it cannot redden a push run; review found that gap and it is closed). It is still a structure, timing and budget change: the release workflow's declared CI path goes 70 to 73 of 75 minutes (slack 2), so any other PR that raises a `ci.yml` or deploy-arm ceiling by 3 or more minutes would hard-block deploys from the release workflow's budget step, and the conflict would surface on `main`, not in either PR's CI; the behaviour change is the activation, which is gated on the file reading `adopting` and on an explicit operator go. The amendment states this reading so it can be challenged.
 - Decision needed from the operator/CTO: accept that reading, or approve ADR-276 (`adopting`) before this PR merges.
 
 ### Taste 1: accept losing the push run's second sample
 
-- Measured 2026-10-09: 8 of 94 completed push runs were red on SHAs that had a green `merge_group` run (e2e 3, test-scripts (5/8) 2, test 2, one unattributed). Each blocked that SHA's deploy. After activation those SHAs deploy instead.
+- Measured 2026-10-09 (committed in `measurements/keying-2026-10-09.tsv`): 8 of 99 completed push runs were red on SHAs that had a green `merge_group` run (e2e 3, test-scripts (5/8) 2, test 2, one unattributed). Each blocked that SHA's deploy. After activation those SHAs deploy instead.
 - Plan default: accept, record as a named residual after classifying the 8 as flake or escape in Phase 1, and leave "a scheduled full run on main" to S5 (#9730).
 - Alternative: keep one scheduled or dispatch full battery run per day on `main` as a detective control, at roughly the cost of one push run per day.
 

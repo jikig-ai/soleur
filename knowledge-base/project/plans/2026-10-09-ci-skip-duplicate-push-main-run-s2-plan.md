@@ -379,10 +379,11 @@ after the shadow gate in Phase 5 and only on the operator's explicit go.
 
 1. `scripts/followthroughs/ci-push-dedupe-soak-9512.sh` and `.test.sh` (exit contract 0 PASS, 1 FAIL, 2 NOT YET, 3
    CANNOT ESTABLISH, 78 refused under xtrace with a token, as the sibling `pr-battery-gate-saving-9323.sh`). The
-   activation time is the variable's own `updated_at` (`gh api repos/{owner}/{repo}/actions/variables/CI_PUSH_DEDUPE`);
-   an unreadable variable is exit 3; an unset one is exit 2 (NOT YET, "not activated") unless any run is OBSERVED
-   elided with no readable repo variable or before its `updated_at` (an org-level or environment variable), which
-   is FAIL. FAIL takes precedence over NOT YET on every sweep (criterion (a) is evaluated daily, so a wrong elision
+   activation time is recorded on the tracker (review correction, 2026-10-09: the sweeper's token cannot read Actions
+   variables, so a variable read would sit at exit 3 forever): the activating agent comments `S2-ACTIVATED: <the
+   variable's updated_at, UTC ISO>`, `S2-DEACTIVATED: <time>` ends it, and only owner, member or collaborator comments
+   count; no activation is exit 2 (NOT YET, "not activated") unless any run is OBSERVED elided with no activation on
+   record or before it (an org-level variable or an unrecorded flip), which is FAIL. FAIL takes precedence over NOT YET on every sweep (criterion (a) is evaluated daily, so a wrong elision
    is reported within a day, not after seven), and the probe computes the mean push cost itself from the jobs API
    with the census's counted-job definition (the census refuses live mode in CI, so the sweeper cannot call it).
    More than 30 days after the merge with the variable still unset, it exits 1 with "activate, or revert the job".
@@ -723,10 +724,10 @@ named. PM-1 does not depend on S2's own mechanism and does not gate PM-2 to PM-4
   `merge_group` run was green, post the evidence together with the Phase 1 classification of the 8 push-only reds
   and ask for the operator's explicit go (`hr-menu-option-ack-not-prod-write-auth`: plan approval is not
   authorization to change what the deploy gate trusts). Before asking, read the `main` ruleset for
-  `require_code_owner_review` and report the result. A reproducible push-only red (the same job fails on the next
-  push run) means do not activate until User-Challenge Taste 1 is answered. On the go, and only if ADR-276 reads
+  `require_code_owner_review` and report the result. A reproducible push-only red (the same job red on ANY other run in the
+  window, not only the next one; `test-scripts (5/8)` and `e2e` are the named candidates, owner: the activating agent) means do not activate until User-Challenge Taste 1 is answered. On the go, and only if ADR-276 reads
   `adopting`, the agent runs `gh variable set CI_PUSH_DEDUPE --body on --repo jikig-ai/soleur` (repository scope, never `-o`/`--org`),
-  reads it back with `gh variable get` and requires exactly `on`, and comments the `updated_at` on the tracker.
+  reads it back with `gh variable get` and requires exactly `on`, and comments `S2-ACTIVATED: <the variable's updated_at, UTC ISO>` on the tracker (the probe reads activation from it).
 - **PM-3 - first-run canary.** The first push run with `elide=true` after activation (a direct push or `--admin`
   merge is a full run and does not exercise elision): `push-dedupe` annotation `elide=true` with a
   `merge_group` run id; the `CI` run `success`; the `web-platform-release.yml` `workflow_run` arm resolved to a

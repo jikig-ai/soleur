@@ -1,5 +1,5 @@
 # push-only-reds-2026-10-09.tsv: the completed push runs that concluded non-success on a SHA that has a green merge_group run, classified.
-# next_run is the next completed push run on main by created_at; same_job_failed_on_next says whether it failed the same job. Reading: evidence of flake versus escape, not proof.
+# next_push_run is the next completed push run on main by created_at; same_job_failed_on_next says whether it failed the same job. Reading: evidence of flake versus escape, not proof.
 push_run_id	sha10	failed_jobs	next_push_run	next_conclusion	same_job_failed_on_next	classification
 37897224304	01d2b5a0d8	test-scripts (5/8);test	none completed at measurement time	-	unknown	intermittent test-scripts (5/8) (also red on 37854180409, green between)
 37854180409	4fea37ef3a	test-scripts (5/8);test	37855923903	success	no	intermittent test-scripts (5/8)
