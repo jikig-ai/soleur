@@ -17,6 +17,7 @@ basis the original decision was made on, not as current pricing.)** All 66 plugi
 1. **Frontmatter stays `inherit` for all agents** (operator session-model agency preserved; overrides still need written justification).
 2. **Workflow scripts MAY pin `opts.model` at mechanical steps only** — 12 allowlisted call sites at adoption (see `plugins/soleur/test/workflow-model-pins.test.ts`, the mechanical gate). Each pin carries a one-line justification comment. Pin style is single-quoted inline literals (`model: 'sonnet'`) — workflow scripts are self-contained by design, so no shared map or import.
 3. **Never-downgrade exemption list** (judgment paths): review dimensions, verify/concur adjudication, synthesis/merge, resolvers/implementers, per-cluster `one-shot`, `agent-native-audit` enumeration scoring, plan-review reviewers/consolidate, deepen-plan research/merge, `resolve-parallel` `plan`. Changing the allowlist is a clo-attestation-class change.
+4. **Re-tier spend gate (standing, added 2026-10-09, #9790).** A class moves to a cheaper tier only after a pre-registered spend gate (threshold, saving factor, window and re-open triggers in the 2026-10-09 addendum) says the saving justifies an evaluation. A class that fails it stays where it is; this gates the evaluation, not the safety case.
 
 ## Semantics
 
@@ -103,6 +104,11 @@ funding and different protections, and found a sixth the first draft had no row 
 > **Superseded 2026-10-08 (Haiku 5.5 launch):** row 5a's `claude-haiku-4-5` domain routing now runs
 > on `claude-haiku-5-5` (same tier, $0.10/$0.50 per MTok up to a 100K-token prompt). The tiering
 > judgment is unchanged; see the Haiku 5.5 addendum below.
+>
+> **Superseded 2026-10-09 (#9790):** row 6's "`claude-code-review.yml` ... fires **per PR**" is stale.
+> The workflow has been `disabled_manually` since 2026-02-12 (workflow id 229704973, last run
+> 2026-02-12), so it spends nothing today and is not eligible for a re-tiering evaluation until it is
+> re-enabled; see the 2026-10-09 addendum below.
 
 ### A Task spawn is cache-read-dominated — measured, after a first draft asserted the opposite
 
@@ -303,6 +309,11 @@ their tier is unchanged by the verdict.
 | **Not a fit** | `cron-compound-promote`, `cron-weekly-release-digest`, the audit tier and Concierge/leader reasoning classes, `cron-bug-fixer`, `fix-constraints-stage-a.yml`, `test-pretooluse-hooks.yml`, leader class `security.cve_alert` | Reads operator-session learnings or writes PRs, deep reasoning, agentic coding (the launch guidance says Haiku 5.5 is not for complex agentic coding), or security-flavored input where Haiku 5.5's cyber safeguards decline pentest-style prompts with no server-side fallback and a refusal would drop a real alert. |
 | **Unchanged** | `cron-anthropic-credit-probe` (immaterial: about $0.00002 per call, the value is key liveness); advisor consults ([ADR-083](./ADR-083-scoped-strong-model-consult-at-decision-gates.md)) and the harness tier map ([ADR-110](./ADR-110-harness-semantic-model-tier-map.md)); the effort/model router (#6000, a future consumer of the five effort levels) | ADR-083 gates are judgment steps and stay on the advisor tier. ADR-110's `cheap` tier maps to the `haiku` alias on Claude, which follows the alias row above. |
 
+> **Superseded 2026-10-09 (#9790):** the "Candidate, not adopted (eval gate)" row above is resolved for
+> the crons, `claude-code-review.yml` and the `'standard'` pins by the Gate 0 verdicts in the
+> 2026-10-09 addendum below: none qualifies for an eval, and nothing moves. `pdf-chapter-router` is
+> unchanged (blocked on the SDK pin, recorded on #8643).
+
 ### SDK-path carve-out
 
 Two scripts stay on `claude-haiku-4-5` because they call the Agent SDK, whose bundled CLI
@@ -319,6 +330,108 @@ carve-out and take the pdf-chapter-router candidate recorded on #8643), or when 
 Haiku 5.5 (take #9790). At each, quote cache-read rates, not headline rates, per the
 section above.
 
+> **Superseded 2026-10-09 (#9790):** "when an eval shows a candidate site above is safe on Haiku 5.5
+> (take #9790)" is replaced by the Gate 0 re-open triggers in the 2026-10-09 addendum below. #9790's
+> evaluation was gated on spend, not on an eval result, and no eval ran.
+
+## Addendum — 2026-10-09 (#9790): Gate 0 spend verdicts and the Haiku 5.5 design questions
+
+The 2026-10-08 addendum left five sites as "candidate, eval-gated" and tracked them on #9790. This
+addendum applies a spend gate fixed BEFORE any eval exists, so the result cannot choose its own
+threshold, and records what it found. The tiering policy above (Decisions 1-3) is unchanged. Gate 0
+and the two conditional dispositions below are **standing rules of this ADR (Decision 4)**, not a
+one-off verdict: later re-tiering reviews cite them as precedent. Gate 0 gates the *spend case for
+running an evaluation*; it says nothing about whether a class would be safe on Haiku 5.5, and a class
+that fails it is "not worth evaluating at current spend", never "unsafe". It sets no minimum sample
+size for a class to *stay* on Sonnet 5.5 beyond the re-open triggers below.
+
+### Gate 0 — method, assumptions, result
+
+- **Measure.** `S` is the projected Sonnet 5.5 spend per 30 days, from `SOLEUR_CLAUDE_COST` markers
+  in Better Stack, over the post-cutover window (2026-10-01 to 2026-10-09, nine days; per-run cost for
+  all four crons fell about four to five times between 2026-09-29 and 2026-10-01, coincident with the
+  Sonnet 5.5 migration, so windows straddling the change overstate the current regime and are not
+  used). Daily crons: window sum / window days x 30. Weekday and weekly crons: mean paid run x runs
+  per 30 days (21.4 and 4.3). Null or zero markers and missing days are reported because they bias
+  `S` downward, the unsafe direction for a "nothing qualifies" verdict. Command: `scripts/betterstack-query.sh
+  --since 20d --grep SOLEUR_CLAUDE_COST --limit 4000`, aggregated in `jq` on the structural
+  `component == "claude-cost"` filter; the pull was re-run on the work date and reproduced the plan-time
+  figures.
+- **Saving factor.** 0.65 of `S` (Haiku may need more turns and retries). The ceiling, 0.87, is the
+  cache-read price ratio after tokenizer inflation: 1 - (0.01 x 1.3) / 0.10, from Haiku 5.5's $0.01
+  and Sonnet 5.5's $0.10 per MTok cache read (the line that dominates a spawn). It is shown for
+  sensitivity only.
+- **Threshold.** A class qualifies for an evaluation iff its saving is at least **$12.50 per month**:
+  the 12-month saving must be at least three times an **assumed** $50 one-time cost to evaluate and
+  move one class (about $10 of eval spend plus one implementer pipeline run). The $50 is an assumption,
+  not a measurement.
+- **Not eligible, never "not worth it".** A class that is disabled or unmetered is recorded as such.
+
+| Class | `S` (Sonnet 5.5, per month) | Saving at 0.65 | At the 0.87 ceiling | Null or zero markers | Verdict |
+|---|---:|---:|---:|---:|---|
+| `cron-community-monitor` | $9.08 (13 runs, 9 days) | $5.90 | $7.90 | 0 | Stays on Sonnet 5.5: below the line |
+| `cron-daily-triage` | $5.36 (9 runs, 9 days) | $3.48 | $4.66 | 0 | Stays: below the line |
+| `cron-follow-through-monitor` | $3.10 (7 runs, 7 days) | $2.01 | $2.69 | 0 | Stays: below the line |
+| `cron-campaign-calendar` | $1.56 (1 run, weekly; the five-run all-regime mean gives $5.91) | $1.01 | $1.35 | 0 | Stays: below the line, and a single post-cutover run is weak evidence |
+| `claude-code-review.yml` | $0 | $0 | $0 | not applicable | Not eligible: disabled |
+| `'standard'` workflow pins (`classify`, `parse`, `analyze`, `commit`, `report`, `cluster`, `detect-threshold`) | unmetered | not applicable | not applicable | not applicable | Not eligible: unmetered |
+
+Nothing reaches $12.50. The only figure that does is the stale pre-cutover 14-day community-monitor
+window at the ceiling factor ($15.18), recorded as the reason the regime change matters. Nothing is
+moved: `PIN_ALLOWLIST` in `plugins/soleur/test/workflow-model-pins.test.ts` and
+`apps/web-platform/server/inngest/model-tiers.ts` are untouched, so this review needs no clo-attestation
+change. The `'standard'` pins sit in opt-in `Workflow`-tool ports of the review skill (the prose skill
+is the default) and nothing meters workflow spawns (finding 1 above), so there is no spend to project.
+
+**Re-open triggers.** At each `model-launch-review`; whenever any class's post-cutover `S` reaches
+$19.23 per month (= $12.50 / 0.65); when `claude-code-review.yml` is re-enabled; or when workflow
+spawns become metered. A class that then qualifies moves in its own separately attested PR, with an
+`eval-harness` arm of Sonnet 5.5 control against Haiku 5.5, the production prompt constant imported
+rather than copied, synthesized fixtures, and every failure mode of the class tied to a production
+detector. A capped, rate-limited or under-powered arm is "stays: insufficient evidence", never a pass.
+
+### Which model the claude-code CLI reports (pinned 2.1.293, measured)
+
+Four cells with the spend-limited eval key (about $0.058 in total, one synthesized prompt each):
+
+| Cell | `--model` | Tools | `modelUsage` keys |
+|---|---|---|---|
+| a | `claude-sonnet-5-5` | none | `claude-sonnet-5-5` |
+| b | `claude-sonnet-5-5` | Bash (one `echo`) | `claude-sonnet-5-5` |
+| c | `haiku` (alias) | none | `claude-haiku-5-5` |
+| d | `claude-sonnet-5-5` | WebFetch of a synthetic page | `claude-sonnet-5-5` and `claude-haiku-5-5` |
+
+The `haiku` alias resolves to Haiku 5.5 on 2.1.293, which confirms the "Follows via alias" row. The
+CLI's internal small and fast call (the WebFetch page summarizer) reports Haiku 5.5. Bash-only runs
+emit no internal call, and the cron prompts are Bash-only, so the cron cost shift cannot come from
+internal calls. Attribution limit: `_cron-claude-eval-substrate.ts` records the first `modelUsage` key
+as the marker's `model` while `cost_usd` is the all-model total, so a run that does trigger an internal
+call is attributed to whichever key the CLI lists first. No code change.
+
+### Dispositions of the open design questions
+
+- **Leader-loop effort: no change.** A leader turn that truncates dead-letters as
+  `leader_response_truncated`, which pages through `spawn-agent-dead-letter` (it is in
+  `PAGED_DEAD_LETTER_REASONS`). Rule: on the first such page for a Haiku class, add `effort: "low"` to
+  that `LeaderPromptModule` and bump its `promptVersion`, and plan that change at the
+  `single-user incident` threshold, because it alters the shared founder BYOK handler's input.
+- **Refusal and a Sonnet retry: no retry mechanism.** `leader_refused` already pages on its first
+  occurrence. Rule: decide a Sonnet 5.5 retry only if two or more `leader_refused` pages arrive for
+  non-adversarial input within 30 days, using that observed rate.
+- **`no-text-block` mirrors: alerted.** The router and the summarizer report `op: "no-text-block"`
+  when a Haiku turn has no text block, ends at `max_tokens` or is refused, and nothing alerted on it.
+  `sentry_alert.haiku_no_text_block_rate` now emails the issue owners (ActiveMembers fallthrough) when
+  one such issue accrues four events in an hour, a rate and not a first-seen page because one empty
+  turn is expected noise. `test/sentry-no-text-block-alert-op-contract.test.ts` derives the emit sites
+  by scanning `server/` and refuses a rule that omits or adds one. The threshold of 4 is
+  **provisional**: the emit sites shipped on 2026-10-08 and no baseline exists. Recalibrate it from the
+  first 14 days of data (on or after 2026-10-23), or sooner if the first alert email is judged noise
+  or an incident is found that it missed. The owner is whoever next edits
+  `apps/web-platform/infra/sentry/issue-alerts.tf` or reads an alert email from this rule; the
+  threshold's comment in that file carries the same date. The rule counts events across all users per
+  issue, so it cannot see one user's streak of degraded turns (for example one founder's inbound
+  mail filed as class `other`); that residual is accepted and is not detected by this rule.
+
 ## Alternatives considered
 
 | Alternative | Rejected because |
@@ -334,3 +447,4 @@ section above.
 - BYOK operators save ~65-80% per mechanical fan-out run (CFO estimate); flat-rate operators gain quota headroom.
 - The review layer (never pinned) remains the quality safety net for the execution layer — the brand-survival invariant at `single-user incident` threshold.
 - The allowlist test converts the prose never-downgrade policy into a CI-blocking gate.
+- Decision 4 makes future re-tiering a spend question first: the 2026-10-09 addendum applies it and moves nothing.

@@ -1101,6 +1101,55 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "haiku-no-text-block-rate": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "in",
+              "value": "domain-router,email-triage"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "no-text-block"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 37,
+    "name": "haiku-no-text-block-rate",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 4
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "image-freshness-mismatch": {
     "actionFilters": [
       {
