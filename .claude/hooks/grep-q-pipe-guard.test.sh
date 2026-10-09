@@ -901,7 +901,7 @@ real_none=$( SWEEP_DEFERRALS=(); _real_undeferred "$rr" | grep -c . || true )
 real_all=$( SWEEP_DEFERRALS=('* | <= | 99 | #1'); _real_undeferred "$rr" | grep -c . || true )
 # A row that owns every tests/ canary must leave exactly the others undeferred: this is the control that the owner comparison above can fail.
 real_tests_row="$( SWEEP_DEFERRALS=('tests/* | <= | 99 | #1'); _real_undeferred "$rr" | LC_ALL=C sort )"
-real_nontests="$(printf '%s\n' "${real_paths[@]}" | grep -v '^tests/' | LC_ALL=C sort)"
+real_nontests="$(printf '%s\n' "${real_paths[@]}" | { grep -v '^tests/' || true; } | LC_ALL=C sort)"
 [[ "$real_none" == "$REAL_PLANTED" && "$real_all" == 0 && "$real_tests_row" == "$real_nontests" ]] \
   || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want $REAL_PLANTED), with a catch-all row ${real_all:-<err>} (want 0), with a tests/ row [${real_tests_row//$'\n'/ }] (want exactly the non-tests/ canaries) — the helper above does not read the table it is given")
 # A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh, a test/ or tests/ directory,
