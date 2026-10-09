@@ -406,10 +406,11 @@ jobs:
 
           set +e
           T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ubuntu/squid:pull" | jq -r '.token // empty')"
-          LIVE="$(curl -sS --max-time 20 -o /dev/null -D - -H "Authorization: Bearer $T" \
+          LIVE="$(curl -sS --max-time 20 -o /dev/null -w '%{header_json}' --config - \
             -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
             "https://registry-1.docker.io/v2/ubuntu/squid/manifests/latest" \
-            | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
+            < <(printf 'header = "Authorization: Bearer %s"\n' "$T") \
+            | jq -r '.["docker-content-digest"][0] // empty')"
           POLL_RC=$?
           set -e
           if [ "$POLL_RC" -ne 0 ] || [ -z "$T" ] || [ -z "$LIVE" ]; then

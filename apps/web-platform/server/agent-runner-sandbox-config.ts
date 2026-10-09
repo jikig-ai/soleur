@@ -605,14 +605,24 @@ export function buildAgentSandboxConfig(
       // shape — the shared constant must lead the expression, so the egress
       // census joins via concat rather than a Set-wrapped spread.
       envVars: AGENT_AUTH_ENV_VARS.map(
-        (name): { name: string; mode: "deny" } => ({ name, mode: "deny" }),
+        // The widened return type ({name: string}) is required so .concat can
+        // take the census entries — AGENT_AUTH_ENV_VARS.map alone yields the
+        // literal-union name type. `mode: "deny" as const` on its own line is
+        // the slice1-security pinned denial marker.
+        (name): { name: string; mode: "deny" } => ({
+          name,
+          mode: "deny" as const,
+        }),
       ).concat(
         // filter, not concat-dupes: the census spreads ALLOWED_SERVICE_ENV_VARS,
         // which already contains ANTHROPIC_API_KEY (the provider envVar) — a
         // second deny row for it would break the dedup invariant the tests pin.
         (opts?.allowWebEgress ? WEB_EGRESS_ENV_DENY_CENSUS : [])
           .filter((n) => !(AGENT_AUTH_ENV_VARS as readonly string[]).includes(n))
-          .map((name) => ({ name, mode: "deny" as const })),
+          .map((name) => ({
+            name,
+            mode: "deny" as const,
+          })),
       ),
     },
   };
