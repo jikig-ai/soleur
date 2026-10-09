@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-08 · **[Updated 2026-10-09: adversarial challenge review + re-brainstorm of the isolation design]**
 **Issues:** #9773 (OPEN — per-tenant executor topology, deferred from #5863, tracking issue) · #5863 (OPEN — per-session mountns isolation; arm F shipped as PR #9767, merged 2026-10-09T12:11Z; soak follow-through open)
-**Branch:** feat-tenant-executor-topology · **PR:** #9832 (draft)
+**Epic:** #9842 (children #9843-#9854) · **Branch:** feat-tenant-executor-topology · **PR:** #9832 (draft)
 **Lane:** cross-domain · **Brand-survival threshold:** single-user incident (USER_BRAND_CRITICAL)
 **Operator prompt:** "how are we going to run Soleur users' agents and sessions at scale in our cluster — pros/cons of executor isolation vs cluster scheduling, separately vs one architecture" · **Scope: ALL hosted execution** (Concierge + cron/CI/dispatch runners)
 
