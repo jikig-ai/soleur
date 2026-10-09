@@ -17,6 +17,7 @@ basis the original decision was made on, not as current pricing.)** All 66 plugi
 1. **Frontmatter stays `inherit` for all agents** (operator session-model agency preserved; overrides still need written justification).
 2. **Workflow scripts MAY pin `opts.model` at mechanical steps only** — 12 allowlisted call sites at adoption (see `plugins/soleur/test/workflow-model-pins.test.ts`, the mechanical gate). Each pin carries a one-line justification comment. Pin style is single-quoted inline literals (`model: 'sonnet'`) — workflow scripts are self-contained by design, so no shared map or import.
 3. **Never-downgrade exemption list** (judgment paths): review dimensions, verify/concur adjudication, synthesis/merge, resolvers/implementers, per-cluster `one-shot`, `agent-native-audit` enumeration scoring, plan-review reviewers/consolidate, deepen-plan research/merge, `resolve-parallel` `plan`. Changing the allowlist is a clo-attestation-class change.
+4. **Re-tier spend gate (standing, added 2026-10-09, #9790).** A class moves to a cheaper tier only after a pre-registered spend gate (threshold, saving factor, window and re-open triggers in the 2026-10-09 addendum) says the saving justifies an evaluation. A class that fails it stays where it is; this gates the evaluation, not the safety case.
 
 ## Semantics
 
@@ -329,12 +330,20 @@ carve-out and take the pdf-chapter-router candidate recorded on #8643), or when 
 Haiku 5.5 (take #9790). At each, quote cache-read rates, not headline rates, per the
 section above.
 
+> **Superseded 2026-10-09 (#9790):** "when an eval shows a candidate site above is safe on Haiku 5.5
+> (take #9790)" is replaced by the Gate 0 re-open triggers in the 2026-10-09 addendum below. #9790's
+> evaluation was gated on spend, not on an eval result, and no eval ran.
+
 ## Addendum — 2026-10-09 (#9790): Gate 0 spend verdicts and the Haiku 5.5 design questions
 
 The 2026-10-08 addendum left five sites as "candidate, eval-gated" and tracked them on #9790. This
 addendum applies a spend gate fixed BEFORE any eval exists, so the result cannot choose its own
-threshold, and records what it found. The tiering policy above is unchanged: no new decision
-boundary, so no new ADR.
+threshold, and records what it found. The tiering policy above (Decisions 1-3) is unchanged. Gate 0
+and the two conditional dispositions below are **standing rules of this ADR (Decision 4)**, not a
+one-off verdict: later re-tiering reviews cite them as precedent. Gate 0 gates the *spend case for
+running an evaluation*; it says nothing about whether a class would be safe on Haiku 5.5, and a class
+that fails it is "not worth evaluating at current spend", never "unsafe". It sets no minimum sample
+size for a class to *stay* on Sonnet 5.5 beyond the re-open triggers below.
 
 ### Gate 0 — method, assumptions, result
 
@@ -416,7 +425,12 @@ call is attributed to whichever key the CLI lists first. No code change.
   turn is expected noise. `test/sentry-no-text-block-alert-op-contract.test.ts` derives the emit sites
   by scanning `server/` and refuses a rule that omits or adds one. The threshold of 4 is
   **provisional**: the emit sites shipped on 2026-10-08 and no baseline exists. Recalibrate it from the
-  first 14 days of data.
+  first 14 days of data (on or after 2026-10-23), or sooner if the first alert email is judged noise
+  or an incident is found that it missed. The owner is whoever next edits
+  `apps/web-platform/infra/sentry/issue-alerts.tf` or reads an alert email from this rule; the
+  threshold's comment in that file carries the same date. The rule counts events across all users per
+  issue, so it cannot see one user's streak of degraded turns (for example one founder's inbound
+  mail filed as class `other`); that residual is accepted and is not detected by this rule.
 
 ## Alternatives considered
 
@@ -433,3 +447,4 @@ call is attributed to whichever key the CLI lists first. No code change.
 - BYOK operators save ~65-80% per mechanical fan-out run (CFO estimate); flat-rate operators gain quota headroom.
 - The review layer (never pinned) remains the quality safety net for the execution layer — the brand-survival invariant at `single-user incident` threshold.
 - The allowlist test converts the prose never-downgrade policy into a CI-blocking gate.
+- Decision 4 makes future re-tiering a spend question first: the 2026-10-09 addendum applies it and moves nothing.

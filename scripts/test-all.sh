@@ -5927,8 +5927,8 @@ if want_scripts; then
   # so it is what separates "the gate skipped smoke correctly" from "the gate never looked". Same
   # explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
-  # The bench's own --self-test, run ONCE as a subprocess under a hostile environment (NO_PARAPHRASE=1, an
-  # exported key, a recording CURL_BIN). Nothing ran that self-test in CI, so it sat red for 18 days
+  # The bench's own --self-test (#9823), run ONCE as a subprocess under a hostile environment (NO_PARAPHRASE=1,
+  # an exported key, CURL_BIN, GIT_DIR, a quote-laden TMPDIR). Nothing ran that self-test in CI, so it sat red for 18 days
   # (2026-09-20 to 2026-10-08) and a caller's environment could change its verdict. Explicit run_suite
   # because scripts/*.test.sh is covered by no glob here; appended LAST in the block so no earlier
   # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.

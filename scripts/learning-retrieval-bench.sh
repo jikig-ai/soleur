@@ -54,6 +54,18 @@ assert_fixture_dir() {
   esac
 }
 
+# Hermeticity for --self-test: an inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE (a git hook exports
+# them) redirects the git calls below AND every fixture repository the self-test builds, so the run fails
+# or, worse, writes into the caller's repository. Scrub the whole GIT_ prefix, not a hand-listed set. Only
+# for --self-test: a real run legitimately honours the caller's git environment.
+for _a in "$@"; do
+  if [[ "$_a" == "--self-test" ]]; then
+    for _v in $(compgen -e | grep '^GIT_' || true); do unset "$_v"; done
+    break
+  fi
+done
+unset _a _v
+
 # ─── globals ────────────────────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEARNINGS_ROOT="${LEARNINGS_ROOT:-$REPO_ROOT/knowledge-base/project/learnings}"
@@ -831,19 +843,22 @@ st_write() {
 # stdin one. The body carries `"type":"text"` because the reader selects the text block by type
 # (#8392); without it every paraphrase read as empty and the call as an API error.
 st_make_recording_curl() {
-  local path="$1" counter="$2" argv_log="$3" stdin_log="$4"
+  local path="$1" counter argv_log stdin_log
+  # %q-quote every path interpolated into the generated body: a TMPDIR holding a quote, a dollar sign or a
+  # backtick otherwise breaks the stub (it exits without recording), which reads as a failing Stage 2 row.
+  counter="$(printf '%q' "$2")"; argv_log="$(printf '%q' "$3")"; stdin_log="$(printf '%q' "$4")"
   cat > "$path" <<STUB
 #!/usr/bin/env bash
-COUNTER_FILE="${counter}"
+COUNTER_FILE=${counter}
 [[ -f "\$COUNTER_FILE" ]] || echo 0 > "\$COUNTER_FILE"
 idx=\$(cat "\$COUNTER_FILE")
 echo \$((idx + 1)) > "\$COUNTER_FILE"
-printf '%s\0' "\$@" >> "${argv_log}"
-printf 'CALL-END\0' >> "${argv_log}"
+printf '%s\0' "\$@" >> ${argv_log}
+printf 'CALL-END\0' >> ${argv_log}
 _prev=""
 for _a in "\$@"; do
   if [[ ( "\$_prev" == "--config" || "\$_prev" == "-K" ) && "\$_a" == "-" ]]; then
-    cat >> "${stdin_log}"
+    cat >> ${stdin_log}
   fi
   _prev="\$_a"
 done
@@ -1166,7 +1181,9 @@ self_test() {
   ST_LEAK_LOG="$TMP_ROOT/curl-leaked-calls"
   : > "$ST_LEAK_LOG"
   CURL_BIN="$TMP_ROOT/curl-fail-closed"
-  printf '%s\n' '#!/usr/bin/env bash' "printf 'call\\n' >> \"$ST_LEAK_LOG\"" 'exit 99' > "$CURL_BIN"
+  # %q: the log path is shell-quoted into the generated body, so a TMPDIR holding a quote, a dollar sign
+  # or a backtick cannot break the stub (which would exit non-zero without logging and blind the row).
+  printf '%s\n' '#!/usr/bin/env bash' "printf 'call\\n' >> $(printf '%q' "$ST_LEAK_LOG")" 'exit 99' > "$CURL_BIN"
   chmod +x "$CURL_BIN"
 
   # ── AC2-a: full frontmatter + ## Problem → ground-truth = problem body ────

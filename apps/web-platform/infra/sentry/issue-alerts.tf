@@ -2742,7 +2742,8 @@ resource "sentry_alert" "inngest_provision_degraded" {
 # The emitter uses a constant message per site, so each site is ONE Sentry issue and
 # `event_frequency_count` (per issue) counts it correctly. The threshold of 4 events in one
 # hour is PROVISIONAL: the sites shipped on 2026-10-08 and no baseline exists. Recalibrate it
-# from the first 14 days of data (ADR-053 addendum 2026-10-09). The `feature` list is the
+# from the first 14 days of data, on or after 2026-10-23 (ADR-053 addendum 2026-10-09; the
+# owner is whoever next edits this file or reads an alert email from it). The `feature` list is the
 # set of emit sites under server/; test/sentry-no-text-block-alert-op-contract.test.ts
 # derives that set by scanning server/ and refuses a rule that omits or adds one.
 # `frequency_minutes = 37` is unused elsewhere in the root (Sentry dedups identical rules).

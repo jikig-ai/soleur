@@ -113,7 +113,7 @@ not the declaration); `2026-10-01-an-alert-guard-pinned-the-declaration-and-the-
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** nothing user-facing in the base plan (an ADR, a rate alert, a test and a measurement); worst case a founder's `domain-router` or email-summary degradation goes unpaged if the new alert is mis-tagged, which is today's state.
+- **If this lands broken, the user experiences:** nothing user-facing in the base plan (an ADR, a rate alert, a test and a measurement); worst case a founder's `domain-router` or email-summary degradation goes unpaged if the new alert is mis-tagged, which is today's state. Named artifact: a degraded Haiku turn in `email-triage/summarize.ts` stores a neutral summary and forces mail class `other`, so one founder's important inbound message can be mis-filed silently. The new alert counts events per issue across all users and does not detect one user's streak; that residual is accepted and out of scope here (no summarizer code changes).
 - **If this leaks, the user's workflow is exposed via:** the `soleur-ci-eval` key used by the plan-time and work-phase measurements (a $100/month-capped CI workspace, not production BYOK or operator keys); inputs are synthesized, so no founder content reaches any call.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** no founder-facing code path changes (the conditional leader `effort` edit was cut), so one user's breach cannot come from this diff; this PR edits no leader module, and any later change that touches `agent-on-spawn-requested` or a leader module must be planned as `single-user incident` (CPO sign-off before work starts), not flipped mid-implementation.
