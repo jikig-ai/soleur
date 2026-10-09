@@ -66,7 +66,7 @@ if grep -q "github/workflows/" "$DEP" && ! grep -q "github/workflows/dependency-
 # leave a truncated list → false-skip) plus the empty-list arm.
 fetch_line=$(grep -n "pulls/\$PR_NUMBER/files" "$DEP" | head -1 || true)
 if grep -q 'if ! files=$(gh api --paginate' "$DEP" && grep -q 'deps=true' "$DEP" \
-   && ! printf '%s' "$fetch_line" | grep -q '|| true'; then
+   && ! printf '%s' "$fetch_line" | grep -c >/dev/null '|| true'; then
   pass
 else
   fail "A6: dependency-review must gate on gh api EXIT STATUS, not emptiness"
@@ -89,15 +89,15 @@ declare -A GATE=( [settings-json-integrity]=settings_json [stray-worktree-marker
 for job in "${!GATE[@]}"; do
   out="${GATE[$job]}"
   block=$(awk -v j="  $job:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
-  if printf '%s' "$block" | grep -q 'needs: detect' \
-     && printf '%s' "$block" | grep -q "outputs.$out"; then pass; else
+  if printf '%s' "$block" | grep -c >/dev/null 'needs: detect' \
+     && printf '%s' "$block" | grep -c >/dev/null "outputs.$out"; then pass; else
     fail "B2: $job missing needs: detect / outputs.$out"; fi
 done
 
 # B3 — the two required jobs carry no `needs: detect` edge.
 for req in guard-script-fixture-tests markdown-lint; do
   block=$(awk -v j="  $req:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
-  if printf '%s' "$block" | grep -q 'needs: detect'; then
+  if printf '%s' "$block" | grep -c >/dev/null 'needs: detect'; then
     fail "B3: required job $req reads needs: detect"; else pass; fi
 done
 
@@ -106,8 +106,8 @@ done
 for job in "${!GATE[@]}"; do
   out="${GATE[$job]}"
   block=$(awk -v j="  $job:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
-  if printf '%s' "$block" | grep -q 'always()' \
-     && printf '%s' "$block" | grep -q "needs.detect.result != 'success'"; then pass; else
+  if printf '%s' "$block" | grep -c >/dev/null 'always()' \
+     && printf '%s' "$block" | grep -c >/dev/null "needs.detect.result != 'success'"; then pass; else
     fail "B4a: $job lacks the detect-failure escape"; fi
 done
 # B4b — same exit-status-capture rule for the detect job's file list.

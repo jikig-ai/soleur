@@ -137,8 +137,8 @@ rc9=$?
 # Positive control: EXACTLY ONE stale citation — proves the gone symbol was flagged
 # AND the live resolveActiveWorkspace citation was parsed-and-cleared (not vacuously
 # absent). A parser that never saw BR-1/BR-2 would not report "(1)".
-echo "$out9" | grep -qE 'Stale register citations \(1\)' && pass || fail "T9: expected exactly 1 stale citation (positive control)"
-echo "$out9" | grep -q "resolveGoneSymbol" && pass || fail "T9: the flagged stale citation is not resolveGoneSymbol"
+echo "$out9" | grep -cE >/dev/null 'Stale register citations \(1\)' && pass || fail "T9: expected exactly 1 stale citation (positive control)"
+echo "$out9" | grep -c >/dev/null "resolveGoneSymbol" && pass || fail "T9: the flagged stale citation is not resolveGoneSymbol"
 # drift found → exit 1
 [[ "$rc9" -eq 1 ]] && pass || fail "T9: drift-found exit=$rc9 (want 1)"
 
@@ -156,7 +156,7 @@ MD
 out10="$(bash "$DRIFT" drift --repo "$t10_repo" --register "$t10_reg" 2>/dev/null)"
 rc10=$?
 [[ "$rc10" -eq 0 ]] && pass || fail "T10: clean register drift-exit=$rc10 (want 0)"
-echo "$out10" | grep -qi "NOT a security audit" && pass || fail "T10: report missing completeness disclaimer"
+echo "$out10" | grep -ci >/dev/null "NOT a security audit" && pass || fail "T10: report missing completeness disclaimer"
 
 # --- Test 11: drift — undocumented table flagged ---
 t11_repo="$(mktemp -d)"; t11_mig="$t11_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t11_mig"
@@ -164,7 +164,7 @@ echo "CREATE POLICY secret_pol ON undocumented_table FOR SELECT USING (true);" >
 t11_reg="$t11_repo/register.md"
 printf '# Register\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|---|---|---|\n' > "$t11_reg"
 out11="$(bash "$DRIFT" drift --repo "$t11_repo" --register "$t11_reg" 2>/dev/null)"
-echo "$out11" | grep -q "undocumented_table" && pass || fail "T11: undocumented table not surfaced"
+echo "$out11" | grep -c >/dev/null "undocumented_table" && pass || fail "T11: undocumented table not surfaced"
 
 # --- Test 12: write-row appends to ## Auto-inferred, curated table untouched ---
 mk_register() {
@@ -194,7 +194,7 @@ grep -q "001.sql › t.pol" "$t12_reg" && pass || fail "T12: row not appended"
 # curated BR-1 row byte-identical (side-effect: curated table untouched)
 [[ "$(grep '| BR-1 | Curated' "$t12_reg")" == "$before12" ]] && pass || fail "T12: curated row mutated"
 # row landed under Auto-inferred, not Business Rules
-awk '/## Auto-inferred/{f=1} f && /001.sql/{print "OK"; exit}' "$t12_reg" | grep -q OK && pass || fail "T12: row not under Auto-inferred heading"
+awk '/## Auto-inferred/{f=1} f && /001.sql/{print "OK"; exit}' "$t12_reg" | grep -c >/dev/null OK && pass || fail "T12: row not under Auto-inferred heading"
 
 # --- Test 13: markdown-injection safe — exercise the REAL neutralization branch ---
 # (a) field-LEADING forged curated ID in the ANCHOR (column 1, where BR-NNN lives)
@@ -259,7 +259,7 @@ t17_repo="$(mktemp -d)"; mkdir -p "$t17_repo/src"; echo "x" > "$t17_repo/src/a.g
 t17_reg="$t17_repo/register.md"; printf '# R\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|---|---|---|\n' > "$t17_reg"
 out17="$(bash "$DRIFT" drift --repo "$t17_repo" --register "$t17_reg" 2>/dev/null)"; rc17=$?
 [[ "$rc17" -eq 2 ]] && pass || fail "T17: unsupported-stack drift exit=$rc17 (want 2, not a false-clean 0)"
-echo "$out17" | grep -qi "Source not analyzable" && pass || fail "T17: fail-open banner missing"
+echo "$out17" | grep -ci >/dev/null "Source not analyzable" && pass || fail "T17: fail-open banner missing"
 
 # --- Test 18: fail-safe-to-blind — quoted policy name + \$tag\$ SECURITY DEFINER ---
 t18_repo="$(mktemp -d)"; t18_mig="$t18_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t18_mig"

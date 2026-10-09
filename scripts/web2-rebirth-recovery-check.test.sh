@@ -116,11 +116,11 @@ battery() {
   as "the R2 pair rode stdin to curl (positive control)" 'grep -qF "curl-stdin: user = \"$KID:$RSECRET\"" "$TMP/log/stdin.log"'
   as "the passphrase arrived on cryptsetup stdin exactly, with no trailing newline" '[[ "$(cat "$TMP/log/cs-stdin")" == "$KEY" && "$(wc -c < "$TMP/log/cs-stdin" | tr -d " ")" == "${#KEY}" ]]'
   as "no file under the temp root held a passphrase while it was in use" '[[ ! -s "$TMP/log/files-with-passphrase" ]]'
-  as "the passphrase appears in stdout only on ::add-mask:: lines" '! grep -v "^::add-mask::" <<<"$out" | grep -qF -e "$KEY"'
+  as "the passphrase appears in stdout only on ::add-mask:: lines" '! grep -v "^::add-mask::" <<<"$out" | grep -cF >/dev/null -e "$KEY"'
   as "the state's other secret appears nowhere" '! grep -qF "OTHERSECRETVALUE" <<<"$out$(cat "$TMP/log/argv.log")"'
   as "terraform was only asked to pull state" '[[ "$(grep -c "^terraform " "$TMP/log/argv.log")" == 1 ]] && grep -qx "terraform state pull" "$TMP/log/argv.log"'
-  as "every doppler call was a single-secret read with a private config dir and no version check" '[[ "$(grep -c "^doppler " "$TMP/log/argv.log")" == 5 ]] && ! grep "^doppler " "$TMP/log/argv.log" | grep -vqE "^doppler secrets get [A-Z_0-9]+ --plain -p soleur -c prd_workspaces_luks_web \[cfgdir=set vercheck=false\]$"'
-  as "curl was always hardened (--disable, --noproxy, --max-time, no -k, no -f)" '! grep "^curl " "$TMP/log/argv.log" | grep -vqE "^curl --disable --noproxy \* --config - --aws-sigv4 aws:amz:auto:s3 -sS --max-time 60 "'
+  as "every doppler call was a single-secret read with a private config dir and no version check" '[[ "$(grep -c "^doppler " "$TMP/log/argv.log")" == 5 ]] && ! grep "^doppler " "$TMP/log/argv.log" | grep -vcE >/dev/null "^doppler secrets get [A-Z_0-9]+ --plain -p soleur -c prd_workspaces_luks_web \[cfgdir=set vercheck=false\]$"'
+  as "curl was always hardened (--disable, --noproxy, --max-time, no -k, no -f)" '! grep "^curl " "$TMP/log/argv.log" | grep -vcE >/dev/null "^curl --disable --noproxy \* --config - --aws-sigv4 aws:amz:auto:s3 -sS --max-time 60 "'
   as "the bucket was listed under the header prefix" 'grep -qF "list-type=2&prefix=workspaces-luks-header-" "$TMP/log/argv.log"'
 
   # ---- (a) exactly one escrowed header
@@ -168,10 +168,10 @@ battery() {
   [[ "$rc" -eq 78 ]] || printf 'FAILED xtrace with a live token must exit 78 (got %s)\n' "$rc"
 
   # ---- static properties of the script itself
-  as "no doppler run, no download, no insecure curl" '! grep -nE "doppler run|secrets download|--insecure|curl[^#]* -k( |$)" "$script" | grep -v ":[[:space:]]*#" | grep -q .'
+  as "no doppler run, no download, no insecure curl" '! grep -nE "doppler run|secrets download|--insecure|curl[^#]* -k( |$)" "$script" | grep -v ":[[:space:]]*#" | grep -c >/dev/null .'
   as "the script uses stdin for the key and the R2 pair" 'grep -qF -e "--key-file=-" "$script" && grep -qF -e "--config -" "$script"'
-  as "the state is piped into one jq program and never written" '[[ "$(grep -c "terraform state pull" <(grep -v "^[[:space:]]*#" "$script"))" == 1 ]] && grep -v "^[[:space:]]*#" "$script" | grep "terraform state pull" | grep -qF "| jq -er"'
-  as "the script claims no recovery property in its success line" '! grep -E "^echo \"web2-rebirth-recovery-check: PASS" "$script" | grep -qiE "$FORBIDDEN"'
+  as "the state is piped into one jq program and never written" '[[ "$(grep -c "terraform state pull" <(grep -v "^[[:space:]]*#" "$script"))" == 1 ]] && grep -v "^[[:space:]]*#" "$script" | grep "terraform state pull" | grep -cF >/dev/null "| jq -er"'
+  as "the script claims no recovery property in its success line" '! grep -E "^echo \"web2-rebirth-recovery-check: PASS" "$script" | grep -ciE >/dev/null "$FORBIDDEN"'
 
   printf 'RAN %s\n' "$n"
 }

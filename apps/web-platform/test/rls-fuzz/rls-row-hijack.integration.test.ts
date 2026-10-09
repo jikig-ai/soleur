@@ -4,7 +4,7 @@ import type postgres from "postgres";
 import { classifyMutationOutcome, type Verdict } from "./verdict";
 import { rowHijackTables } from "./catalog";
 import { type Ctx, type Locate } from "./targets";
-import { connect, seedTwoTenant, asTenant } from "./harness-fixture";
+import { connect, seedTwoTenant, asTenant, withTransientRetry } from "./harness-fixture";
 
 // Row-hijack WITH-CHECK variant (#6307 Item 3 / F4, ADR-111, AC6). The base matrix's
 // UPDATE attack does a no-op self-assign (SET col = col); this probes the WITH CHECK
@@ -99,7 +99,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — row-hijack WITH-CHECK (owner attac
   beforeAll(async () => {
     sql = connect(DSN); // assertLocalDsn + max:1 pinned in the shared fixture
     ctx = await seedTwoTenant(sql);
-    for (const h of HIJACK_TARGETS) seeded.set(h.table, await h.seed(sql, ctx));
+    for (const h of HIJACK_TARGETS) seeded.set(h.table, await withTransientRetry(() => h.seed(sql, ctx)));
   });
   afterAll(async () => {
     if (sql) await sql.end({ timeout: 5 });
@@ -118,7 +118,9 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — row-hijack WITH-CHECK (owner attac
   // Fixture invariant the oracle depends on: userA is NOT a member of wsB (else a
   // "denied" could be membership-legitimate rather than the WITH CHECK doing its job).
   test("fixture invariant: userA is not a member of wsB", async () => {
-    const [{ m }] = await sql<{ m: boolean }[]>`select is_workspace_member(${ctx.wsB}, ${ctx.userA}) as m`;
+    const [{ m }] = await withTransientRetry(
+      () => sql<{ m: boolean }[]>`select is_workspace_member(${ctx.wsB}, ${ctx.userA}) as m`,
+    );
     expect(m, "userA must be a non-member of wsB for the hijack oracle to be sound").toBe(false);
   });
 

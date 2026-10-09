@@ -56,7 +56,7 @@ if [[ "${1:-}" == "api" ]]; then
 fi
 [[ "${1:-}" == "issue" && "${2:-}" == "view" ]] || { printf 'STUB-UNEXPECTED: gh %s\n' "$*" >&2; exit 64; }
 [[ "${3:-}" == "5733" ]] || { printf 'STUB-UNEXPECTED: wrong issue %s\n' "${3:-}" >&2; exit 64; }
-printf '%s' "$*" | grep -q -- '--repo jikig-ai/soleur' || { printf 'STUB-UNEXPECTED: no --repo: %s\n' "$*" >&2; exit 64; }
+printf '%s' "$*" | grep -c >/dev/null -- '--repo jikig-ai/soleur' || { printf 'STUB-UNEXPECTED: no --repo: %s\n' "$*" >&2; exit 64; }
 jqexpr=""; want=""; prev=""
 for a in "$@"; do
   [[ "$prev" == "--jq"   ]] && jqexpr="$a"

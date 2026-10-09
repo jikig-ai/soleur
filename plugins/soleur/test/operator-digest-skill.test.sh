@@ -114,7 +114,7 @@ refute "agent is not instructed to 'gh issue create'" 'gh issue create'
 # returns EMPTY for a cross-repo query under the in-action App-installation token (#3403 class),
 # which would silently render "Nothing shipped" / "first digest" every week. Comment lines that
 # document "NOT --search" are allowed; an actual `gh pr/issue list ... --search` command is not. ---
-if grep -E 'gh (pr|issue) list' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -q -- '--search'; then
+if grep -E 'gh (pr|issue) list' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -c >/dev/null -- '--search'; then
   fail=$((fail+1)); echo "FAIL: a 'gh pr/issue list' command uses --search (breaks cross-repo under the in-action token)" >&2
 else
   pass=$((pass+1))
@@ -150,7 +150,7 @@ assert "run-rate allowlist also admits accruing-with-actual" 'accruing'
 # the guard-note prose ("never add an `author` field to the §1 `gh pr list --json` list", where
 # `author` precedes `--json`) cannot false-trip it — only `--json <fields>,author` (author AFTER
 # the field list) matches.
-if grep -E -- '--json' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -qiE -- '--json[[:space:]]*[a-zA-Z,]*author'; then
+if grep -E -- '--json' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -ciE >/dev/null -- '--json[[:space:]]*[a-zA-Z,]*author'; then
   fail=$((fail+1)); echo "FAIL: a --json field list includes 'author' — re-introduces per-contributor noise (#5986 AC)" >&2
 else
   pass=$((pass+1))

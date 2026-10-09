@@ -359,7 +359,7 @@ for f in "${PARSER_FILES[@]}"; do
   # must not return in CODE. Filter full-line comments first — every parser file
   # (and this test) documents the old form in prose, which a bare grep would
   # false-match (the grep-over-own-comments trap).
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\$\{(line|rcline)%%#'; then
+  if grep -vE '^[[:space:]]*#' "$f" | grep -cE >/dev/null '\$\{(line|rcline)%%#'; then
     echo "  FAIL: (6) $base contains a truncating inline #-strip in code — re-introduces #6049"
     FAIL=$((FAIL + 1))
   else

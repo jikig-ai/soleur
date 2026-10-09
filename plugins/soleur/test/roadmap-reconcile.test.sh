@@ -33,10 +33,10 @@ assert_eq() { # expected actual msg
   if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 (expected [$1] got [$2])"; fi
 }
 assert_contains() { # haystack needle msg
-  if printf '%s' "$1" | grep -qF -- "$2"; then pass "$3"; else fail "$3 (missing [$2] in output)"; fi
+  if printf '%s' "$1" | grep -cF >/dev/null -- "$2"; then pass "$3"; else fail "$3 (missing [$2] in output)"; fi
 }
 assert_not_contains() { # haystack needle msg
-  if printf '%s' "$1" | grep -qF -- "$2"; then fail "$3 (unexpected [$2])"; else pass "$3"; fi
+  if printf '%s' "$1" | grep -cF >/dev/null -- "$2"; then fail "$3 (unexpected [$2])"; else pass "$3"; fi
 }
 # Positive control: drive each verdict helper once and require its counter to move,
 # then unwind, so a neutered pass()/fail() cannot silently turn every check green.
@@ -271,7 +271,7 @@ case "$1 $2" in
       term)   # Signal the script itself: walk up past the command-substitution
               # subshell to the topmost ancestor running the module.
               p=$PPID; top=""
-              while [[ -r "/proc/$p/cmdline" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q 'roadmap-reconcile.sh'; do
+              while [[ -r "/proc/$p/cmdline" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -c 'roadmap-reconcile.sh' >/dev/null; do
                 top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
               done
               [[ -n "$top" ]] && kill -TERM "$top"; sleep 5; exit 1 ;;

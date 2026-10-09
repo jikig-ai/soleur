@@ -431,17 +431,17 @@ SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares agains
 # A row whose subtree reaches zero is STALE and fails: the wave that converts a subtree deletes its row in the same PR.
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
-# KNOWN HOLE (named, not covered): a `<=` row at slack 0 pins the COUNT per row, not the sites, so moving one hit between two files under
+# KNOWN HOLE (named, not covered): a glob row at slack 0 (either mode) pins the COUNT per row, not the sites, so moving one hit between two files under
 # the same glob (add one, delete one) stays green. File-exact `=` rows would close it, but `_ts_re` below classifies a file-exact test path as
 # a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
 SWEEP_DEFERRALS=(
   '.claude/*.test.sh | <= | 5 | #9217'
   'tests/* | <= | 181 | #9217'
-  'plugins/soleur/test/* | <= | 140 | #9217'
+  # Slice S2 converted this subtree; five counted data pins remain (pipes inside strings or .md-fence text; marker-exempt demos are not counted).
+  # Tight (`=`) so a forgotten ceiling fails; to convert one, flip the row to `<=`, convert, flip back lowered (the codemod refuses `--write` on `=` rows).
+  'plugins/soleur/test/* | = | 5 | #9217'
   'plugins/soleur/*.test.sh | <= | 66 | #9217'
   'apps/web-platform/*.test.sh | <= | 180 | #9217'
-  'scripts/*.test.sh | <= | 128 | #9217'
-  'scripts/test-* | <= | 2 | #9217'
   # Wave A2 (this table's last production rows) converted .github/, lefthook.yml, the drain workflow prompt and every other
   # apps/web-platform/infra file. These four stay, file-exact and tight (`=`), because their bytes feed `user_data` of
   # `hcloud_server.{registry,inngest,git_data}`, which carry NO `ignore_changes = [user_data]` (ADR-100, ADR-169): any edit is a
@@ -860,19 +860,20 @@ _real_undeferred() { # <scan root> -> each path the CURRENT SWEEP_DEFERRALS leav
   sed -n '/^FAIL: pipe-into-early-exit-grep outside/,$p' <<<"$v" | grep -E '^  [^ ]+:[0-9]+:' | sed 's/^  //' | cut -d: -f1 || true
 }
 rr="$probe/realroot"
-mkdir -p "$rr/.github/workflows" "$rr/plugins/soleur/skills/drain-labeled-backlog/workflows" "$rr/apps/web-platform/infra" "$rr/scripts" "$rr/apps/web-platform/scripts" "$rr/apps/cla-evidence"
-for _f in .github/workflows/zz.yml lefthook.yml plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js apps/web-platform/infra/zz-new.sh; do
+mkdir -p "$rr/.github/workflows" "$rr/plugins/soleur/skills/drain-labeled-backlog/workflows" "$rr/apps/web-platform/infra" "$rr/scripts/lib" "$rr/scripts/followthroughs" "$rr/apps/web-platform/scripts" "$rr/apps/cla-evidence"
+for _f in .github/workflows/zz.yml lefthook.yml plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js apps/web-platform/infra/zz-new.sh \
+  scripts/zz.test.sh scripts/lib/zz.test.sh scripts/followthroughs/zz.test.sh scripts/test-zz.sh; do
   echo 'echo "$x" | grep -q p' > "$rr/$_f"
 done
 for _f in scripts/c.sh plugins/soleur/c.sh apps/web-platform/scripts/c.sh apps/cla-evidence/c.sh; do echo 'grep -q p <<<"$x"' > "$rr/$_f"; done
-real_want=$'.github/workflows/zz.yml\napps/web-platform/infra/zz-new.sh\nlefthook.yml\nplugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js'
+real_want=$'.github/workflows/zz.yml\napps/web-platform/infra/zz-new.sh\nlefthook.yml\nplugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js\nscripts/followthroughs/zz.test.sh\nscripts/lib/zz.test.sh\nscripts/test-zz.sh\nscripts/zz.test.sh'
 real_got="$(_real_undeferred "$rr" | LC_ALL=C sort)"
 [[ "$real_got" == "$real_want" ]] \
-  || sweep_probe_fail+=("real-table-owner: the shipped table left [${real_got//$'\n'/ }] outside every row (want exactly the four planted paths: a path a row now owns, or a pathspec that dropped one, changes this)")
+  || sweep_probe_fail+=("real-table-owner: the shipped table left [${real_got//$'\n'/ }] outside every row (want exactly the eight planted paths: a path a row now owns, or a pathspec that dropped one, changes this)")
 real_none=$( SWEEP_DEFERRALS=(); _real_undeferred "$rr" | grep -c . || true )
 real_all=$( SWEEP_DEFERRALS=('* | <= | 99 | #1'); _real_undeferred "$rr" | grep -c . || true )
-[[ "$real_none" == 4 && "$real_all" == 0 ]] \
-  || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want 4), with a catch-all row ${real_all:-<err>} (want 0) — the helper above does not read the table it is given")
+[[ "$real_none" == 8 && "$real_all" == 0 ]] \
+  || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want 8), with a catch-all row ${real_all:-<err>} (want 0) — the helper above does not read the table it is given")
 # A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh, a test/ or tests/ directory,
 # or a test-* basename. A production-shaped loose glob would turn this header's own invariant into a convention.
 _ts_re='(^|/)(tests?/\*|\*\.test\.sh)$|^scripts/(lib/)?test-\*$'

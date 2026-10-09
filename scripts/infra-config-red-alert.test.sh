@@ -148,7 +148,7 @@ if grep -qF 'Do NOT run' <<<"$UNREACH_GH"; then
   bad "unreachable body forbids -replace, contradicting the gate's own recovery guidance"
 else ok "unreachable body does not contradict the gate on the -replace lever"; fi
 CASES=$((CASES + 1))
-if printf '%s' "$UNREACH_CURL" | grep -qF 'infra-config-listener-down'; then
+if printf '%s' "$UNREACH_CURL" | grep -cF >/dev/null 'infra-config-listener-down'; then
   ok "unreachable Sentry op is distinguishable from the gate-red op"
 else bad "unreachable state reused the gate-red Sentry op"; fi
 

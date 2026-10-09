@@ -7,12 +7,11 @@ import {
   classifyMutationOutcome,
   classifySelectOutcome,
   isPass,
-  RLS_VIOLATION_SQLSTATE,
   type Verdict,
 } from "./verdict";
 import { isolationSet, workspaceTenancyTables } from "./catalog";
 import { ISOLATION_TARGETS, EXCLUDED_ISOLATION, type Ctx, type Locate } from "./targets";
-import { connect, seedTwoTenant, attackAs, rolledBackRaw } from "./harness-fixture";
+import { connect, seedTwoTenant, attackAs, rolledBackRaw, withTransientRetry } from "./harness-fixture";
 
 // Runtime RLS/authz-fuzz harness (#6256, ADR-111). Drives a non-member tenant's
 // identity against another tenant's rows across every workspace-isolated RLS
@@ -42,7 +41,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
     sql = connect(DSN); // assertLocalDsn + max:1 pinned in the shared fixture
     ctx = await seedTwoTenant(sql);
     for (const t of ISOLATION_TARGETS) {
-      seeded.set(t.table, await t.seed(sql, ctx));
+      seeded.set(t.table, await withTransientRetry(() => t.seed(sql, ctx)));
     }
   });
 
@@ -85,7 +84,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
       const aClaims = buildAuthenticatedClaims({ sub: ctx.userA });
 
       // AC2 precondition: service_role sees exactly A's one seeded row (guards vacuous green).
-      expect(await countRows(sql, target.table, loc), `${target.table}: seed precondition`).toBe(1);
+      expect(await withTransientRetry(() => countRows(sql, target.table, loc)), `${target.table}: seed precondition`).toBe(1);
 
       if (target.selectAuthBlocked) {
         // The SELECT policy is grant-blocked for all authenticated (auth.users ref):
@@ -95,8 +94,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
           try {
             return classifySelectOutcome(await countRows(t, target.table, loc));
           } catch (err) {
-            const code = (err as { code?: string }).code;
-            return code === RLS_VIOLATION_SQLSTATE ? { kind: "denied" } : { kind: "test-error", sqlstate: code ?? "unknown" };
+            return classifyWriteOutcome(err as { code?: string });
           }
         });
         expect(bBlocked, `${target.table}: B SELECT must be denied (grant-blocked or filtered)`).toEqual({ kind: "denied" });
@@ -149,7 +147,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
       expect(delVerdict, `${target.table}: cross-tenant DELETE must not remove A's row`).toEqual({ kind: "denied" });
 
       // AC2 tail: A's row is still present + unchanged after every write attempt.
-      expect(await countRows(sql, target.table, loc), `${target.table}: A row intact after attacks`).toBe(1);
+      expect(await withTransientRetry(() => countRows(sql, target.table, loc)), `${target.table}: A row intact after attacks`).toBe(1);
     });
   }
 
@@ -181,7 +179,9 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
     expect(permitted, "allowed jti: A must see its own workspace").toBe(1);
 
     // Revoke deniedJti (SECURITY DEFINER is_jti_denied reads denied_jti regardless of RLS).
-    await sql`insert into denied_jti (jti, founder_id) values (${deniedJti}, ${ctx.userA})`;
+    await withTransientRetry(() =>
+      sql`insert into denied_jti (jti, founder_id) values (${deniedJti}, ${ctx.userA})`,
+    );
     const blocked = await attackTxn(buildAuthenticatedClaims({ sub: ctx.userA, jti: deniedJti }), (t) =>
       countRows(t, "workspaces", loc),
     );
@@ -225,9 +225,9 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
     };
     const TENANT_COLS = ["workspace_id", "user_id", "founder_id"];
     for (const [table, allow] of Object.entries(OPS_GLOBAL)) {
-      const rows = await sql<{ column_name: string }[]>`
+      const rows = await withTransientRetry(() => sql<{ column_name: string }[]>`
         select column_name from information_schema.columns
-        where table_schema = 'public' and table_name = ${table}`;
+        where table_schema = 'public' and table_name = ${table}`);
       const live = rows.map((r) => r.column_name);
       const tenant = live.filter((c) => TENANT_COLS.includes(c));
       expect(tenant, `${table}: grew a tenant-identifying column — global-read is now a per-tenant leak`).toEqual([]);

@@ -9,7 +9,7 @@ import {
 } from "./verdict";
 import { userIsolationTables, isolationSet, workspaceTenancyTables } from "./catalog";
 import { USER_ISOLATION_TARGETS, USER_EXCLUDED, type Ctx, type Locate } from "./targets";
-import { connect, seedTwoTenant, asTenant } from "./harness-fixture";
+import { connect, seedTwoTenant, asTenant, withTransientRetry } from "./harness-fixture";
 
 // USER-ISOLATION dimension (#6307 Item 5, ADR-111, AC3). The base matrix models
 // WORKSPACE isolation (attacker = a non-member of wsA). This models WITHIN-workspace
@@ -35,7 +35,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — user-isolation dimension (co-membe
   beforeAll(async () => {
     sql = connect(DSN); // assertLocalDsn + max:1 pinned in the shared fixture
     ctx = await seedTwoTenant(sql);
-    for (const t of USER_ISOLATION_TARGETS) seeded.set(t.table, await t.seed(sql, ctx));
+    for (const t of USER_ISOLATION_TARGETS) seeded.set(t.table, await withTransientRetry(() => t.seed(sql, ctx)));
   });
   afterAll(async () => {
     if (sql) await sql.end({ timeout: 5 });
@@ -68,7 +68,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — user-isolation dimension (co-membe
       const loc = seeded.get(target.table)!;
 
       // precondition: service_role sees A's one seeded row (guards vacuous green).
-      expect(await countRows(sql, target.table, loc), `${target.table}: seed precondition`).toBe(1);
+      expect(await withTransientRetry(() => countRows(sql, target.table, loc)), `${target.table}: seed precondition`).toBe(1);
 
       // AC3 positive control: the OWNER (userA) CAN see its own row.
       const aSees = await asTenant(sql, ctx.userA, (t) => countRows(t, target.table, loc));
@@ -117,7 +117,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — user-isolation dimension (co-membe
       expect(delV, `${target.table}: co-member DELETE must not remove A's row`).toEqual({ kind: "denied" });
 
       // tail: A's row is still present after every attack.
-      expect(await countRows(sql, target.table, loc), `${target.table}: A row intact after attacks`).toBe(1);
+      expect(await withTransientRetry(() => countRows(sql, target.table, loc)), `${target.table}: A row intact after attacks`).toBe(1);
     });
   }
 });
