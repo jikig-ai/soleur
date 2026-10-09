@@ -2820,7 +2820,14 @@ run_workspace_isolation_probe() {
     # journald/Sentry). Vitest writes failure detail to STDOUT (stderr's first
     # line is its decorative banner), so prefer the first `FAIL <file>`/
     # `AssertionError` line of `out`; fall back to docker's own stderr line.
-    test_detail="$(printf '%s' "$out" | grep -m1 -E 'FAIL +[^ ]|AssertionError' 2>/dev/null || true)"
+    # (while-read, not `grep -m1`: an early-exiting grep SIGPIPEs its producer
+    # under pipefail — the grep-q-pipe-guard lint's banned shape, #9217.)
+    test_detail=""
+    while IFS= read -r _line; do
+      if [[ "$_line" =~ FAIL\ +[^[:space:]]|AssertionError ]]; then
+        test_detail="$_line"; break
+      fi
+    done <<< "$out"
     if [[ -z "$test_detail" ]]; then
       test_detail="$(head -1 "$err_file" 2>/dev/null)"
     fi
