@@ -3491,7 +3491,7 @@ fi
 # plus m9439-10..13 (exit 6 collapsed; verified-only accepts the truncated-away rcs / sends the full session / drops the marker
 # test), fz8-gc-trap-deleted, fz9-child-6-is-held, nb6-gc-word-drops-verdict, nb7-gc-word-dropped (the previous nb6 was retargeted
 # onto the new word, m9439-5..8 became fz6/fz7/nb5 and kept), fw1-marker-conditional-false, g3p-3, g3p-4, wf-unfreeze-no-gc-output
-# and g2n-15-gc-output-dropped = 12, so exactly 136. Fix pass: plus two re-anchored/added workflow mutants = 138 (measured).
+# and g2n-15-gc-output-dropped = 12, so exactly 136. Fix pass: -m9439-13 and -nb6 (both still killed: MZ-VO2/VX rows and NB1c), +fz10, fu1, g3p-5, g3p-6 = 138 (measured).
 MUTANT_FLOOR=138
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
@@ -3513,7 +3513,7 @@ fi
 # WF-gcgate / WF-markers / WF-notify-plain census verdicts, which also move the workflow verdict count 51 -> 54) = +12; the new FZ13..FZ18
 # and NB1c checks sit inside case_fz / case_nb and add none: 577 -> 613.
 # Fix pass: 138 mutants x 2 = 276 (+4 over 136 x 2); the MZ-VO rows now share case_vo_* members with their mutants, which
-# nets the standalone rows down by 4: 613, measured (the suite reported 613 passed, 0 failed, 0 skipped).
+# nets the standalone rows down by 5 (8 rows to 3), and the new FU row adds 1: -4, so 613, measured (the suite reported 613 passed, 0 failed, 0 skipped).
 FLOOR=613
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
