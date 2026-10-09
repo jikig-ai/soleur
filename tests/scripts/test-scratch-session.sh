@@ -130,15 +130,15 @@ out="$(bash -c "
   mktemp -d -t child.XXXXXXXX >/dev/null && echo CHILD_OK
 " 2>&1)"
 
-cases=$((cases + 1)); printf '%s' "$out" | grep -q "ROOT=$FAKE_TMP/soleur-run\." \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null "ROOT=$FAKE_TMP/soleur-run\." \
   && pass "begin allocates soleur-run.<pid>.* under base" || fail "begin root: $out"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q "TMPDIR=$FAKE_TMP/soleur-run\." \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null "TMPDIR=$FAKE_TMP/soleur-run\." \
   && pass "begin exports TMPDIR at the root" || fail "TMPDIR export: $out"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'MARKER' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'MARKER' \
   && pass "begin writes .soleur-owned" || fail "marker missing"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'MARKER_PID' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'MARKER_PID' \
   && pass "marker carries top-level pid" || fail "marker pid wrong"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'MARKER_NS' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'MARKER_NS' \
   && pass "marker carries ns discriminator" || fail "marker ns missing"
 # child mktemp lands INSIDE the root (TMPDIR redirect) — verify via a follow-up probe
 cases=$((cases + 1)); child="$(bash -c "
@@ -158,7 +158,7 @@ cases=$((cases + 1)); out="$(bash -c "
   first=\"\$SOLEUR_SCRATCH_SESSION_ROOT\"
   soleur_scratch_session_begin '$TESTROOT/other'
   printf '%s' \"\$SOLEUR_SCRATCH_SESSION_ROOT\"; [[ \"\$SOLEUR_SCRATCH_SESSION_ROOT\" == \"\$first\" ]] && echo ' SAME'
-" 2>&1)"; printf '%s' "$out" | grep -q 'SAME' \
+" 2>&1)"; printf '%s' "$out" | grep -c >/dev/null 'SAME' \
   && pass "nested begin no-ops (parent root governs)" || fail "nested begin allocated: $out"
 
 # cleanup deletes the root (shape-pinned)
@@ -373,7 +373,7 @@ cases=$((cases + 1)); [[ ! -d "$FAKE_TMP/soleur-run.${DEAD}.sweepdead1" ]] \
   && pass "sweep reaps dead schema root" || fail "sweep retained dead root: $out"
 cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${LIVE}.sweeplive1" ]] \
   && pass "sweep retains live schema root" || fail "sweep reaped live root"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'SOLEUR_TMP_SWEEP.*reaped=[0-9]' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'SOLEUR_TMP_SWEEP.*reaped=[0-9]' \
   && pass "sweep emits SOLEUR_TMP_SWEEP telemetry" || fail "sweep telemetry missing: $out"
 rm -rf "${FAKE_PROC:?}/$LIVE"
 
@@ -383,7 +383,7 @@ mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.sweeplock1"; : > "$FAKE_TMP/soleur-run.${
 mkdir -p "$SWEEP_STATE/soleur"
 ( flock -n 9 && sleep 5 ) 9>"$SWEEP_STATE/soleur/tmp-guard.lock" & sleep 0.3
 out="$(sweep)"; wait || true
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'reason=lock-contended' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'reason=lock-contended' \
   && pass "sweep skips loudly on lock contention" || fail "contention not reported: $out"
 cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${DEAD}.sweeplock1" ]] \
   && pass "contended sweep mutates nothing" || fail "contended sweep still reaped"
@@ -394,14 +394,14 @@ out="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGE
   SCRIPT_DIR=/nonexistent
   sweep_orphan_scratch_dirs
 " 2>&1 || true)"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'reason=classifier-missing' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'reason=classifier-missing' \
   && pass "missing classifier skips loudly" || fail "classifier-missing not reported: $out"
 
 # bounded worktree batch defers past the cap
 reset_fixtures
 for i in 1 2 3; do mkdir -p "$FAKE_TMP/wt-$i"; printf 'gitdir: /nonexistent\n' > "$FAKE_TMP/wt-$i/.git"; done
 out="$(SOLEUR_SWEEP_WT_CAP=1 sweep)"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'SWEEP-DEFER' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'SWEEP-DEFER' \
   && pass "over-cap worktree batch emits SWEEP-DEFER" || fail "no defer marker: $out"
 cases=$((cases + 1)); [[ -d "$FAKE_TMP/wt-2" ]] \
   && pass "deferred worktrees are not moved" || fail "deferred worktree moved"
@@ -411,7 +411,7 @@ cases=$((cases + 1)); [[ -d "$FAKE_TMP/wt-2" ]] \
 reset_fixtures
 mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.timeboxxx1"; : > "$FAKE_TMP/soleur-run.${DEAD}.timeboxxx1/x"
 out="$(SOLEUR_SWEEP_TIMEBOX_S=0 TC_PROC_OVERRIDE="$FAKE_PROC" sweep)"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'SWEEP-DEFER' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'SWEEP-DEFER' \
   && pass "timebox=0 defers the declared-owner arm" || fail "declared-owner arm unbounded: $out"
 cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${DEAD}.timeboxxx1" ]] \
   && pass "deferred schema root survives" || fail "deferred root reaped"
