@@ -677,3 +677,17 @@ anything under `apps/web-platform/**`; `scripts/cutover-inngest.sh` and `ci-depl
 - PR 9785 and the adjacent worktree's HMAC work: do not touch `ci-deploy.sh` or the cutover script; merge main before the baseline commit and again before merge.
 - The `heartbeat-reconcile-issue-step.test.sh` edit fires the plugin release run on merge; merge when no other release is in flight.
 - Everything printed in this slice is counts, exit codes, marker names and class tokens; a comparison of a secret with an expected value goes through `[[ ... == ... ]]` or `cmp`, never through output.
+
+## Work-Phase Addendum (2026-10-09)
+
+Appended, not edited in place. Deviations found while implementing, each measured:
+
+- **The `scheduled-inngest-health.yml` `probe` step is held back to S4 (second held-back site).** Converting it (HMAC key and header onto the library) reddens 12 rows of
+  `inngest-dedicated-host-classify.test.sh`, which executes the real step in a fake workspace with no library and stubbed `openssl` and `curl`. Fixing that suite is an
+  `apps/web-platform/infra/**` edit, so it fires the production push apply. The census calls and the dedicated-host reader's stderr surfacing (the #9757 item) DO convert.
+  Result: 11 files fully converted, 1 partially (that file keeps 1 site), 1 held back whole. Baseline E ends at **17 files / 43 sites** (not 16 / 42).
+- **`bc_refuse SCRIPT VAR` added to the library** so a site's own pre-guard prints the identical value-free line and marker as the chokepoint.
+- **Battery stage S3 does not reuse the shim or the `CLASSIFIED` mechanism**: it carries its own small recording shim (calibrated against `curl --libcurl` in the library suite) and a derived
+  manifest, because the existing shim's auth profiles do not model `x-api-key` or the Cloudflare Access pair and its `CLASSIFIED` keys off the followthrough population.
+- **Population floor for the library surface lives in the lint suite's live row** (>= 20 library-consuming steps; 36 today), not in the lint (a fixture tree legitimately has few).
+- Known environmental reds on the unmodified base, unrelated to this slice: `git-data-runcmd-rehearsal.test.sh` (4 container-fixture rows).
