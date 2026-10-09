@@ -44,7 +44,14 @@ cat > "$BIN/curl" <<'STUB'
 # The ONE egress site (betterstack-query.sh run_sql). Refuses everything it was not taught.
 url=""; data=""; user=""
 while [ $# -gt 0 ]; do
-  case "$1" in -d) data="$2"; shift 2 ;; -u) user="$2"; shift 2 ;; https://*) url="$1"; shift ;; *) shift ;; esac
+  case "$1" in
+    -d) data="$2"; shift 2 ;;
+    # The Basic-auth pair rides curl's stdin config (`--config -`, one `user = "USER:PASS"` line), never argv (#9597).
+    --config) if [ "$2" = - ]; then cfg="$(cat)"; user="${cfg#user = \"}"; user="${user%%\"*}"; fi; shift 2 ;;
+    -u) echo "curl stub: the credential pair is on ARGV (-u); it must ride stdin (--config -)" >&2; exit 64 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
 done
 # Credential hygiene: nothing secret-shaped but the Better Stack password may be in the query child's environment.
 leak="$(env | cut -d= -f1 | grep -E 'TOKEN|SECRET|PASSWORD|KEY|CREDENTIAL|AUTH|DOPPLER' | grep -vxE 'BETTERSTACK_QUERY_PASSWORD' || true)"
