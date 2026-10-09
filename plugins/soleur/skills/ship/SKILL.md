@@ -357,7 +357,7 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 Then run the project's test gate. Since #8322 the local default is
 `test-all.sh --affected` — the suites this diff can move plus the always-on
 **fast tier**: since #9763, always-on is pinned to sub-10-second committed-weight
-ratchets (~3 minutes total, enforced by `scripts/test-all-fast-tier-budget`).
+ratchets (~3 minutes total, enforced by [scripts/test-all-fast-tier-budget](../../../../scripts/test-all-fast-tier-budget.test.sh)).
 The heavier mutation batteries and meta-suites are edge-selected like every other
 suite — they run locally only when their subject paths change, and always in CI
 legs, `merge_group`, `push` and `--full` (a `pull_request` run also declines
