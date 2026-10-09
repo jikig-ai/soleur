@@ -171,11 +171,13 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      the rest of that poll (`[ship.phase7.queue_wait_expired]`), and that sync's `--step` still skips
      a queued PR through its own queue gate and stops on an unreadable queue read; `MAX_POLL_MIN` still
      caps a PR whose required checks never settle or whose state keeps flapping (any tick that is not
-     a wait tick restarts the idle count). Every unreadable answer falls toward today's sync: a failed
+     a wait tick restarts the idle count). Every unreadable answer falls toward today's sync in the fence (the standalone script's rules read is the one
+     new exception, see the 2026-10-09 addendum): a failed
      rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
      ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
-     rule runs today's code unchanged. `sync-pr-behind.sh` and the `pre-merge-rebase.sh` hook are not
-     changed (the hook runs once per `gh pr merge`, not per poll tick). Accepted residuals: (1) some
+     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook are not
+     changed (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
+     the 2026-10-09 addendum). Accepted residuals: (1) some
      required contexts post a PASS on `merge_group` without re-running their suites
      (`tenant-integration-required` and `vendor-pin-required`; see each workflow's `merge_group`
      comment), so in queue mode their only real run is the PR-time one against the PR-time base,
@@ -642,6 +644,21 @@ checks are green, under `strict_required_status_checks_policy = true`? Answer: y
   the same PR: a required context that is absent counts as pending while any check is pending, and as idle when nothing
   is (fixtures Q12, Q12b). This run therefore says nothing about enqueue latency: it expired before the required set could
   complete.
+
+### Addendum 2026-10-09: the sync script refuses an armed BEHIND PR on a merge-queue repo
+
+Decision: the BEHIND-sync executable carries the queue-mode refusal for its standalone entry, so the rule no longer
+lives only in a bash fence an agent pastes. `sync-pr-behind.sh <PR>` answers `kind=queue_wait` (exit 0, nothing fetched,
+merged or pushed) when GitHub reports the PR BEHIND (not DIRTY), auto-merge is armed and `main` has a `merge_queue` rule
+(read by `.type`, never by position). An unreadable rules read while armed (after the same one retry the queue read
+has) fails closed (`kind=gh`, exit 4, cause in the line). That supersedes, for the standalone loop only, the Decision 5
+rule that every unreadable answer falls toward today's sync: the fence keeps that rule, but a standalone run has no
+poll behind it and an unknown answer is not a yes. The standalone answer has no expiry of its own; re-arming the Phase 7
+poll, whose fallback sync is the sanctioned one, is the bound. `--step` stays the Phase 7 fence's unguarded call: the fence owns the rule, armed, expiry and
+DIRTY decisions, and its expiry fallback must keep syncing. Trigger: PR 9839 (2026-10-09) took a resync push 12 minutes
+after it was armed and before it was enqueued, because a hand-written poll loop treated BEHIND as an error; the skill
+text scoped the ban to a Phase 7 poll that had already emitted `queue_wait`, a marker a hand-written loop never emits. Accepted residual: a loop that calls `--step` directly, and the `pre-merge-rebase.sh` hook, are still unguarded
+(tracked in #9869). Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
 
 ## Cost Impacts
 
