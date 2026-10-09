@@ -7,14 +7,17 @@
 // env -i scrubs the canary's Config.Env (the prod env-file) out of the suite.
 // The exact argv is pinned by ci-deploy.test.sh CWI-1.
 //
-// NO `import` statements in this file — that is load-bearing, not style
-// (#9860). In the image vitest is a global `npm install -g` and /app has no
-// `node_modules/vitest`, so a bare specifier here (e.g.
-// `import { defineConfig } from "vitest/config"`) resolves against nothing
-// and the whole probe fails at config-load with `[UNRESOLVED_IMPORT]`.
-// Suite files are different: `import { describe } from "vitest"` inside
-// test/*.test.ts resolves internally to the running install. Pinned by the
-// zero-imports assertion in test/dockerfile-vitest-version-pin.test.ts.
+// NO specifier-resolution forms in this file — that is load-bearing, not
+// style (#9860). In the image vitest is a global `npm install -g` and /app
+// has no `node_modules/vitest`, so a bare specifier here (e.g.
+// `import { defineConfig } from "vitest/config"`, an `export … from`
+// re-export, `import(…)`, `require(…)`) resolves against nothing and the
+// whole probe fails at config-load with `[UNRESOLVED_IMPORT]`. `import type`
+// is banned too — the pin reads text, not semantics; `import.meta` is
+// allowed (it resolves no specifier). Suite files are different:
+// `import { describe } from "vitest"` inside test/*.test.ts resolves
+// internally to the running install. Pinned by the specifier assertions in
+// test/dockerfile-vitest-version-pin.test.ts.
 //
 // Why a standalone config and not the repo vitest.config.ts: that config's
 // `globalSetup` (test/global-setup-git-tripwire.ts) and project `setupFiles`

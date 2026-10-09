@@ -4,7 +4,7 @@ type: runbook
 date: 2026-10-09
 owners: engineering/ops
 applies_to: apps/web-platform/infra/ci-deploy.sh
-related_issues: [1285, 2640]
+related_issues: [1285, 2640, 9860]
 ---
 
 # Cross-workspace isolation canary probe — design note
@@ -96,15 +96,21 @@ cannot reach the deploy exec that consumes it.
 
 **Image-size delta:** measured at build time; recorded in PR #9809 description.
 
-**Zero-import constraint on `test/vitest.canary.config.ts` (#9860):** the
-config file must carry no `import` statements at all — `export default` a
+**Zero-specifier constraint on `test/vitest.canary.config.ts` (#9860):** the
+config file must carry no specifier-resolution forms — `export default` a
 plain object literal, never `defineConfig(...)`. In the image vitest is a
 global install and `/app` has no `node_modules/vitest`, so a bare specifier in
 the config resolves against nothing and the probe fails at config-load with
 `reason=vitest_rc_1: … [UNRESOLVED_IMPORT]` — observed on the v0.334.1 deploy.
-Suite files are exempt: `import … from "vitest"` inside `test/*.test.ts`
-resolves internally to the running install (verified on vitest 4.1.11 under
-`env -i`). Pinned at PR time by the zero-imports assertion in
+The ban covers every specifier-resolution form (`export … from`, `import()`,
+`require()`, not only `import` declarations), and a sibling assertion
+deep-equals the exported object because config *values* (`environment`,
+`coverage.provider`, `reporters`, …) reach the same resolver. Suite files are
+exempt from the specifier ban: `import … from "vitest"` inside
+`test/*.test.ts` resolves internally to the running install (verified on
+vitest 4.1.11 under `env -i`) — but their bare specifiers are pinned to
+builtins / prod `dependencies` / in-payload relatives, since a devDep import
+there fails the same way in-image. All pinned at PR time in
 `apps/web-platform/test/dockerfile-vitest-version-pin.test.ts`.
 
 ## Gate vs report — report-only (chosen)
