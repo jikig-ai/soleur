@@ -877,7 +877,7 @@ CUT_SH="${REPO_ROOT}/scripts/cutover-inngest.sh"
 if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+tests/scripts/lib/inngest-host-dark-gate\.sh' "$CUT_SH"; then pass; else fail "Row 6a: scripts/cutover-inngest.sh has no live SOURCE statement for inngest-host-dark-gate.sh (its remaining consumer)"; fi
 _cut_calls="$(grep -vE '^[[:space:]]*#' "$CUT_SH" | grep -cE 'inngest_execute_registry_gate[[:space:]]+--rows-file' || true)"
 if [[ "$_cut_calls" -ge 2 ]]; then pass; else fail "Row 6b: scripts/cutover-inngest.sh does not CALL inngest_execute_registry_gate from both arms (found ${_cut_calls}, want >=2)"; fi
-if grep -vE '^[[:space:]]*#' "$WF" | grep -qE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*inngest-host-dark-gate\.sh|^[[:space:]]*if ! inngest_host_dark_gate '; then
+if [ "$(grep -vE '^[[:space:]]*#' "$WF" | grep -cE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*inngest-host-dark-gate\.sh|^[[:space:]]*if ! inngest_host_dark_gate ')" -gt 0 ]; then
   fail "Row 6c: the workflow sources or calls the dark gate again -- the recut dispatch it served was retired in #8285; re-add its wiring rows if that is intended"
 else pass; fi
 

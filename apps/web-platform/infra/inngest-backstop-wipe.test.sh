@@ -136,7 +136,7 @@ RAW="$W/raw.sh"
 assert_fixture_dir "$RAW"
 extract_script > "$RAW"
 check "extraction: the script body was recovered from write_files (non-empty, shebang)" \
-  bash -c "[ -s '$RAW' ] && head -1 '$RAW' | grep -q '^#!/usr/bin/env bash'"
+  bash -c "[ -s '$RAW' ] && [ \"\$(head -1 '$RAW' | grep -c '^#!/usr/bin/env bash')\" -gt 0 ]"
 check "extraction: the raw template is NOT valid-by-accident (it still carries interpolation placeholders)" \
   grep -q '\${volume_id}' "$RAW"
 
@@ -236,12 +236,12 @@ check_not "yml: no template directive percent-brace anywhere (comments included)
 check_not "yml: no bare dollar-dollar followed by an identifier/paren/special (bash would read the PID)" \
   grep -qE '\$\$[A-Za-z_(0-9?!#@*-]' "$YML"
 check_not "yml: no Doppler token, LUKS key or cryptsetup in any non-comment line (they must never reach this host)" \
-  bash -c "grep -vE '^[[:space:]]*#' '$YML' | grep -qiE 'doppler|luks_key|redis_luks|cryptsetup|INNGEST_REDIS'"
-check "yml: header is #cloud-config" bash -c "head -1 '$YML' | grep -qx '#cloud-config'"
+  bash -c "[ \"\$(grep -vE '^[[:space:]]*#' '$YML' | grep -ciE 'doppler|luks_key|redis_luks|cryptsetup|INNGEST_REDIS')\" -gt 0 ]"
+check "yml: header is #cloud-config" bash -c "[ \"\$(head -1 '$YML' | grep -cx '#cloud-config')\" -gt 0 ]"
 check "yml: the token file is written 0600 root" \
-  bash -c "awk '/^  - path: \/run\/inngest-backstop-wipe\.token\$/{f=1;next} f&&/^  - path: /{f=0} f' '$YML' | grep -qE \"permissions: '0600'\""
+  bash -c "[ \"\$(awk '/^  - path: \/run\/inngest-backstop-wipe\.token\$/{f=1;next} f&&/^  - path: /{f=0} f' '$YML' | grep -cE \"permissions: '0600'\")\" -gt 0 ]"
 check "yml: the script is mode 0700" \
-  bash -c "awk '/^  - path: \/usr\/local\/sbin\/inngest-backstop-wipe\.sh\$/{f=1;next} f&&/^  - path: /{f=0} f' '$YML' | grep -qE \"permissions: '0700'\""
+  bash -c "[ \"\$(awk '/^  - path: \/usr\/local\/sbin\/inngest-backstop-wipe\.sh\$/{f=1;next} f&&/^  - path: /{f=0} f' '$YML' | grep -cE \"permissions: '0700'\")\" -gt 0 ]"
 check "yml: runcmd runs the script" bash -c "grep -qE '^[[:space:]]*- \[ *bash, */usr/local/sbin/inngest-backstop-wipe\.sh *\]' '$YML'"
 
 yml_keys() { grep -oE '(^|[^$])\$\{[a-z_]+\}' "$YML" | grep -oE '[a-z_]+' | sort -u | tr '\n' ' '; }
@@ -284,9 +284,9 @@ check "tf: the templatefile nonce entry is the nonce VARIABLE reference" tf_nonc
 check "tf: the templatefile size entry is the pinned local" tf_size_entry "$TF"
 check "tf: volume_id comes from the pinned numeric variable in BOTH the template map and the attachment" tf_volume_pins "$TF"
 check "tf: the ingest token is the EXISTING variable (no new secret variable)" tf_pin "$TF" 'betterstack_logs_token = var.betterstack_logs_token'
-check_not "tf: the live LUKS volume is never referenced by this file" bash -c "grep -vE '^[[:space:]]*#' '$TF' | grep -qE 'inngest_redis_luks|$LIVE_LUKS_ID'"
+check_not "tf: the live LUKS volume is never referenced by this file" bash -c "[ \"\$(grep -vE '^[[:space:]]*#' '$TF' | grep -cE 'inngest_redis_luks|$LIVE_LUKS_ID')\" -gt 0 ]"
 check "tf: the user_data is not baked from any Doppler token or LUKS key" \
-  bash -c "! grep -vE '^[[:space:]]*#' '$TF' | grep -qiE 'doppler|luks_key|redis_luks_key'"
+  bash -c "[ \"\$(grep -vE '^[[:space:]]*#' '$TF' | grep -ciE 'doppler|luks_key|redis_luks_key')\" -eq 0 ]"
 check "vars: inngest_backstop_wipe_enabled is a bool" vpin "$VARS" inngest_backstop_wipe_enabled 'type = bool'
 check "vars: inngest_backstop_wipe_enabled defaults to false" vpin "$VARS" inngest_backstop_wipe_enabled 'default = false'
 check "vars: inngest_backstop_volume_id is a number" vpin "$VARS" inngest_backstop_volume_id 'type = number'
@@ -294,7 +294,7 @@ check "vars: inngest_backstop_volume_id defaults to $PINNED_ID" vpin "$VARS" inn
 check "vars: the volume id validation is an allow-list of exactly $PINNED_ID (not a deny-list: no other id, the live LUKS id included, passes)" vpin_vol "$VARS"
 check "vars: the nonce validation accepts only digits or empty" vpin "$VARS" inngest_backstop_wipe_nonce 'condition = can(regex("^[0-9]{0,20}$", var.inngest_backstop_wipe_nonce))'
 check_not "vars: no new secret variable was added for the wipe (sensitive = true absent in the wipe variable blocks)" \
-  bash -c "for v in inngest_backstop_wipe_enabled inngest_backstop_volume_id inngest_backstop_wipe_server_type inngest_backstop_wipe_nonce; do awk -v v=\"\$v\" '\$0 ~ \"^variable \\\"\"v\"\\\"\"{f=1} f&&/^}/{f=0} f' '$VARS'; done | grep -q 'sensitive'"
+  bash -c "[ \"\$(for v in inngest_backstop_wipe_enabled inngest_backstop_volume_id inngest_backstop_wipe_server_type inngest_backstop_wipe_nonce; do awk -v v=\"\$v\" '\$0 ~ \"^variable \\\"\"v\"\\\"\"{f=1} f&&/^}/{f=0} f' '$VARS'; done | grep -c 'sensitive')\" -gt 0 ]"
 
 # ---- fixture machinery ----------------------------------------------------------------------------
 # stubs ----------------------------------------------------------------------------------------------
@@ -636,7 +636,7 @@ check "no evidence channel -> the POST was retried a bounded number of times (<=
 CURL_OK_FIRST=1 scenario late_channel "$GOOD" || exit 2
 check "channel dies after the started row -> exits non-zero (the wipe happened, the claim could not be delivered)" \
   bash -c "[ \"\$(cat '$(sdir late_channel)/rc')\" != 0 ]"
-check_not "channel dies after the started row -> no wiped row is claimed as delivered" bash -c "cat '$(sdir late_channel)'/payload.*.ok | grep -q 'result=wiped'"
+check_not "channel dies after the started row -> no wiped row is claimed as delivered" bash -c "[ \"\$(cat '$(sdir late_channel)'/payload.*.ok | grep -c 'result=wiped')\" -gt 0 ]"
 
 # Zero / read-back / signature failures.
 BD_MODE=partial scenario nonzero_tail "$GOOD" || exit 2

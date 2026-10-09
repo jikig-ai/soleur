@@ -1172,7 +1172,7 @@ def mutations():
         ("conv: refresh delta no longer exact", "[[ ( \"$DEL\" == \"$a\" || \"$DEL\" == \"$ALLOW\" ) && -z \"$ADD\" ]] || fail", "[[ \"$DEL\" == \"$a\" ]] || fail", "conv_reconcile_exact_delta"),
         ("conv: the gone volume is no longer queued", "[[ \"$VS\" == gone ]] && has hcloud_volume.inngest_redis && RM+=(hcloud_volume.inngest_redis)", ":", "conv_gone_queues_volume"),
         ("conv: detach no longer reads the live server", "SC=\"$(hz 'servers?name=soleur-inngest' \"${RUNNER_TEMP}/srv.json\")\"", "SC=200", "conv_detach_reads_live_server"),
-        ("conv: state list piped into grep -q (SIGPIPE fail-open)", "            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "            terraform state list 2>/dev/null | grep -qFx -- \"$a\" && fail \"still in state\"\n            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "conv_state_list_in_variable"),
+        ("conv: state list piped into grep -q (SIGPIPE fail-open)", "            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "            terraform state list 2>/dev/null | grep " "-qFx -- \"$a\" && fail \"still in state\"\n            ST1=\"$(terraform state list 2>/dev/null)\" || fail \"cannot list terraform state after the refresh\"", "conv_state_list_in_variable"),
         ("conv: leaked-host recovery message removed", "if [[ \"$NWS\" != 0 ]] && ! has \"$WSA\"; then", "if false; then", "conv_orphan_host_message"),
         ("conv: a reconcile target made non-literal", "T=-target=hcloud_volume.inngest_redis ;;", "T=-target=$a ;;", "conv_reconcile_targets_literal"),
         ("pre: .head_branch == \"main\" dropped", "and .head_branch == \"main\" and .event", "and .event", "pre_provenance"),
@@ -1294,7 +1294,7 @@ if [[ "$(wf '.ifs["'"$(wf '.names['"$I_PRE"']')"'"] | contains("destroy")')" == 
 BODIES="$(wf '.bodies | to_entries[] | .value')"
 n_calls="$(grep -cE '^[[:space:]]*if ! inngest_backstop_retire_gate ' <<<"$BODIES" || true)"
 if [[ "$n_calls" -ge 3 ]]; then pass; else fail "Wiring: expected >=3 'if ! inngest_backstop_retire_gate' calls (untargeted, targeted, teardown); found ${n_calls}"; fi
-if grep -E '^[[:space:]]*if ! inngest_backstop_retire_gate ' <<<"$BODIES" | grep -vqE '"\$\{?EXPECTED_INNGEST_VOLUME_ID'; then fail "Wiring: a gate call does not pass EXPECTED_INNGEST_VOLUME_ID as the pin"; else pass; fi
+if [ "$(grep -E '^[[:space:]]*if ! inngest_backstop_retire_gate ' <<<"$BODIES" | grep -vcE '"\$\{?EXPECTED_INNGEST_VOLUME_ID')" -gt 0 ]; then fail "Wiring: a gate call does not pass EXPECTED_INNGEST_VOLUME_ID as the pin"; else pass; fi
 for fn in inngest_backstop_live_store_gate inngest_backstop_destroy_precondition; do
   if grep -qE "^[[:space:]]*if ! ${fn} " <<<"$BODIES"; then pass; else fail "Wiring: ${fn} is not called under a non-suppressing 'if !'"; fi
 done
@@ -1305,7 +1305,7 @@ if grep -qiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#(8285|6894)' <
 if grep -q '\${{' <<<"$BODIES"; then fail "Wiring: a \${{ }} expression sits inside a run: body (route inputs through env:)"; else pass; fi
 # The retired addresses leave the other two dispatch jobs' target sets.
 for j in inngest_host inngest_host_replace; do
-  if awk -v j="$j" '$0 ~ "^  "j":" {on=1; next} on && /^  [a-z_]+:$/ {on=0} on' "$WF" | grep -qE "(-target|-replace)='hcloud_volume(_attachment)?\.inngest_redis'"; then
+  if [ "$(awk -v j="$j" '$0 ~ "^  "j":" {on=1; next} on && /^  [a-z_]+:$/ {on=0} on' "$WF" | grep -cE "(-target|-replace)='hcloud_volume(_attachment)?\.inngest_redis'")" -gt 0 ]; then
     fail "Wiring: ${j} still targets a retired address"
   else pass; fi
 done
@@ -1617,7 +1617,7 @@ beh "W2-2: a REFUSED row from another emitter bearing this nonce does not abort 
 inj_row() { jq -cn --arg dt '2025-10-09 08:55:00' --arg m "$1" --arg h "$WIPE_HOST" --arg sh "$WIPE_SHIPPER" \
   '{dt:$dt, raw: ({message:$m, marker:"SOLEUR_INNGEST_BACKSTOP_WIPE", host:$h, dt:$dt, shipper:$sh} | tojson)}'; }
 no_cmd_lines() { # SOUT: no line opens a workflow command except the poll's OWN error annotation
-  ! grep -E '^[[:space:]]*::' <<<"$SOUT" | grep -vE '^::error::no wiped row for nonce 555' | grep -q . && [[ "$SOUT" != *$'\e'* && "$SOUT" != *$'\r'* ]]
+  [ "$(grep -E '^[[:space:]]*::' <<<"$SOUT" | grep -vcE '^::error::no wiped row for nonce 555')" -eq 0 ] && [[ "$SOUT" != *$'\e'* && "$SOUT" != *$'\r'* ]]
 }
 poll_base; inj_row "SOLEUR_INNGEST_BACKSTOP_WIPE result=refused reason=x"$'\n::stop-commands::x\n::error::injected\e[31m\rtail'" nonce=555 volume_id=${PIN} size_bytes=${SIZE_BYTES}" > "$SB/bs-rows.jsonl"; poll
 if [[ "$SRC" -eq 1 && "$SOUT" == *"stop-commands::x"* && "$SOUT" == *"error::injected"* ]] && no_cmd_lines; then pass; else fail "W2-1: an embedded newline + ::stop-commands:: / ::error:: in a row must not open a command line in the poll output" "$SRC" "$SOUT"; fi
