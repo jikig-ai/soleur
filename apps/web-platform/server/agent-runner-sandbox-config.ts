@@ -347,15 +347,19 @@ export function buildAgentSandboxConfig(
   // the real `--bind /proc /proc` AFTER every denyRead entry — the `/proc`
   // tmpfs here is intent only; the REALIZED mask is the bwrap shim's tail
   // `--proc /proc` splice (a pidns-scoped procfs mounted over the tail bind —
-  // see infra/bwrap-shim/bwrap + test/bwrap-shim.test.ts).
+  // see infra/bwrap-shim/bwrap + test/bwrap-shim.test.ts). `/sys` (#1285)
+  // has no such re-bind — nothing restores it after the tmpfs, so the
+  // `--tmpfs /sys` landing is a real mask. It also masks `/sys/fs/cgroup`,
+  // which changes heap sizing for sandboxed subprocesses (no visible cgroup
+  // limit → they size off host RAM); the kernel cgroup still enforces.
   const denyRead = Array.from(
-    new Set([...denyRoots, c4StagingRoot, "/proc", ...(opts?.denyReadExtra ?? [])]),
+    new Set([...denyRoots, c4StagingRoot, "/proc", "/sys", ...(opts?.denyReadExtra ?? [])]),
   );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
   // agent sandbox). `deniedCount` is config-derived (raw roots + c4 staging +
-  // /proc + realpath aliases) per session — a drift in it is a config diff,
-  // not live directory state.
+  // /proc + /sys + realpath aliases) per session — a drift in it is a config
+  // diff, not live directory state.
   log.info(
     {
       feature: "agent-sandbox",

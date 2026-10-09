@@ -16,11 +16,13 @@
 // unshares user+pid+net, and nested creation requires the outer userns to own
 // those namespaces, which would require outer --unshare-pid (no mountable
 // scoped procfs under Docker masked paths — bubblewrap#284) and outer
-// --unshare-net (kills CLI egress). Instead bwrap runs in privileged mode
-// via file capabilities (`cap_sys_admin,cap_setuid,cap_setgid+ep` baked in
-// the Dockerfile, cap kept
-// in the container bounding set by `--cap-add SYS_ADMIN` at docker run); the
-// CLI child post-exec carries only the caller's cap set.
+// --unshare-net (kills CLI egress). The intended elevation arm was file
+// capabilities — REVERTED: released bwrap (0.8–0.12) dies on any nonzero
+// permitted set when non-setuid ("Unexpected capabilities but not setuid"),
+// so a cap'd bwrap broke EVERY bwrap call in the container (v0.333.1
+// canary_sandbox_failed). The elevation arm (setuid is the only non-userns
+// path upstream supports) is a follow-up decision; until then the wrap
+// takes the implicit-userns fallback on hosts that permit it.
 //
 // Residuals this does NOT close (tracked): shared container /proc — sibling
 // PIDs and `/proc/<pid>/environ` stay visible (#9723); container loopback
@@ -136,12 +138,13 @@ function req(p: string, what: string): string {
  * `/proc/<pid>/cmdline`, same-uid readable).
  */
 export function buildOuterWrapArgv(inputs: OuterWrapInputs): string[] {
-  // --cap-drop ALL: `--cap-add SYS_ADMIN` on the container put it in the
-  // bounding set (the file cap needs it there); on a non-root-USER image
-  // Docker may also carry it ambient, which survives exec of any binary
-  // without file caps — including the CLI we are about to wrap. Drop the
-  // full set so the session can never setns/mount its way back out (the
-  // inner sandbox re-acquires whatever it needs inside ITS own userns).
+  // --cap-drop ALL: if a bounding-set SYS_ADMIN is ever granted at docker
+  // run (the retired file-cap arm needed it there; any future elevation arm
+  // will too), a non-root-USER image carries it ambient, which survives
+  // exec of any binary without file caps — including the CLI we are about
+  // to wrap. Drop the full set so the session can never setns/mount its way
+  // back out (the inner sandbox re-acquires whatever it needs inside ITS
+  // own userns).
   const argv: string[] = ["--die-with-parent", "--new-session", "--cap-drop", "ALL"];
 
   // Merged-usr layout + system image (ro). The minimal /etc set covers
@@ -601,7 +604,7 @@ export function outerWrapEnabled(workspaceId?: string): boolean {
 // Realized-isolation boot probe (#5863 T3.2, plan Guard 1)
 //
 // The deploy canary measures the wrap INSIDE the canary container; this probe
-// measures it inside the PROD container at boot — the file-cap'd bwrap posture
+// measures it inside the PROD container at boot — the elevated-bwrap posture
 // is only known-good once a real namespace has been built on the running host.
 // Opt-in (AGENT_OUTER_WRAP_BOOT_PROBE=1): it is a spawn at boot, not per
 // session, so it stays behind its own flag even while the rollout flag is off.
@@ -637,7 +640,7 @@ function innerProbePath(): string | undefined {
 export interface RealizedIsolationProbe {
   /** The wrap built + the payload ran to a verdict (isolation_ok seen). */
   ok: boolean;
-  /** Which bwrap path built the namespace: file-cap'd mountns (`privileged`)
+  /** Which bwrap path built the namespace: elevated mountns (`privileged`)
    *  or the implicit-userns fallback (`userns`) — the arm measured fatal to
    *  the inner sandbox in Phase 0, so prod expects `privileged`. */
   elevation?: "privileged" | "userns";
@@ -649,7 +652,7 @@ export interface RealizedIsolationProbe {
  * Build a synthetic two-tenant tree, wrap it with the real argv builder, and
  * run the shared payload inside — the SAME assertion set the founder check
  * and deploy canary use (no independently drifting copy). Runs the emitted
- * argv VERBATIM: on the prod image /usr/bin/bwrap is file-cap'd, so zero
+ * argv VERBATIM: on the prod image /usr/bin/bwrap elevates privileged, so zero
  * --unshare-* is exactly what production spawns. Never throws.
  */
 export function probeRealizedIsolation(
@@ -726,7 +729,7 @@ export function verifyOuterWrapRealizedIsolation(
         "agent-sandbox: outer-wrap realized-isolation probe ok",
       );
       // Same success-fork parity as verifyAgentSandboxHardening: info is
-      // journald-only on Vector, so the prod file-cap measurement must land
+      // journald-only on Vector, so the prod elevation measurement must land
       // on Sentry to be off-box queryable (the probe exists to measure).
       try {
         Sentry.captureMessage("agent sandbox outer-wrap realized probe ok", {
@@ -741,13 +744,13 @@ export function verifyOuterWrapRealizedIsolation(
     }
     if (p.ok) {
       // The table held but bwrap took the implicit-userns fallback — the
-      // file-cap path did not elevate on THIS host. An outer userns is
+      // elevated path did not elevate on THIS host. An outer userns is
       // fatal to the inner sandbox (Phase 0): warn, same severity as a fail.
       warnSilentFallback(null, {
         feature: "agent-sandbox",
         op: "outer-wrap-realized-probe",
         message:
-          "agent sandbox outer-wrap realized probe: isolation held but bwrap took the userns fallback — file-cap posture not measured",
+          "agent sandbox outer-wrap realized probe: isolation held but bwrap took the userns fallback — elevation posture not measured",
         extra: { ...p },
       });
       return;

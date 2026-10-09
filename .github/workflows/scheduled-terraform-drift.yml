@@ -1915,8 +1915,10 @@ jobs:
           # guards against.
           # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
           survivors=""
+          # The token reaches curl on its stdin config (ADR-280); a refusal takes the same fail-closed arm.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           for _kind in servers volumes ssh_keys firewalls; do
-            body="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
+            body="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS -f \
                       "https://api.hetzner.cloud/v1/${_kind}?per_page=50&label_selector=app%3Dsoleur-rung2-rehearsal")" || {
               echo "::error::could not list Hetzner ${_kind} — this sweep has no verdict. Fail-closed rather than reporting a clean sweep it did not perform."
               exit 1; }
