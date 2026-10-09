@@ -28,8 +28,9 @@
 # SECURITY: SUPABASE_ACCESS_TOKEN is injected via env (never argv). Untrusted response
 # bodies flow through strip_log_injection + scrub_pat before any echo. The Management
 # API endpoint is pinned to api.supabase.com (no env override — an overridable host is
-# a PAT-exfil-via-redirect seam). curl … 2>/dev/null keeps the Authorization header out
-# of captured output. All uses: are SHA-pinned. The anon path is verified in-DB via
+# a PAT-exfil-via-redirect seam). The token rides curl's stdin config through
+# scripts/lib/bearer-curl.sh (ADR-280, #9597), never an argument of the transfer process,
+# and no converted call discards stderr, so a refusal marker stays visible. All uses: are SHA-pinned. The anon path is verified in-DB via
 # `SET LOCAL ROLE anon` (the Management API runs as postgres and bypasses RLS, so the
 # role-switch is the correct client simulation); no anon key is retrieved here. The
 # in-DB grant gate is the authoritative proxy for BOTH HTTP front doors — PostgREST
@@ -94,6 +95,10 @@ jobs:
           set -uo pipefail
           # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
 
+          # The Management API token reaches curl on its stdin config through the shared library, sourced from
+          # the job's own checkout (ADR-280). A missing library is a hard failure: there is no argv fallback.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+
           # Anti-exfil helpers — copied VERBATIM from scheduled-inngest-health.yml
           # (bash functions do not cross GH-Actions steps; cq-regex-unicode-separators-escape-only).
           strip_log_injection() {
@@ -111,6 +116,11 @@ jobs:
 
           if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
             record_failure "secret_unset" "SUPABASE_ACCESS_TOKEN not set — cannot reach the Management API."
+          elif ! bc_ok_var SUPABASE_ACCESS_TOKEN; then
+            # A token outside the shape alphabet is refused by the library with zero requests. Recorded here, in the
+            # existing secret class, so the refusal is not read as an unreachable identity endpoint (HTTP empty).
+            bc_refuse apply-inngest-rls SUPABASE_ACCESS_TOKEN || true
+            record_failure "secret_unset" "SUPABASE_ACCESS_TOKEN failed the token-shape guard (see SOLEUR_CREDENTIAL_REFUSED above) — no request was made."
           fi
           if [[ ! -f "$SQL_FILE" ]]; then
             record_failure "sql_missing" "Migration file $SQL_FILE not found in checkout."
@@ -129,9 +139,9 @@ jobs:
           # already fail-closed — but we assert HTTP 200 SEPARATELY so an unreachable API is
           # reported as `identity_unreachable`, not silently mis-reported as a wrong project.
           if [[ -z "$fail_mode" ]]; then
-            id_resp="$(curl --silent --show-error --url "$API/v1/projects/${PROJECT_REF}" \
-              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
-              --max-time 30 -w $'\n%{http_code}' 2>/dev/null)"
+            id_resp="$(bc_curl apply-inngest-rls 'Authorization:Bearer :SUPABASE_ACCESS_TOKEN' -- \
+              --silent --show-error --url "$API/v1/projects/${PROJECT_REF}" \
+              --max-time 30 -w $'\n%{http_code}')"
             id_code="${id_resp##*$'\n'}"; id_body="${id_resp%$'\n'*}"
             if [[ "$id_code" != "200" ]]; then
               record_failure "identity_unreachable" "project-identity preflight HTTP ${id_code} for ref ${PROJECT_REF}: $(sanitize "$(printf '%s' "$id_body" | head -c 200)")"
@@ -152,11 +162,11 @@ jobs:
             payload="$(jq -nc --rawfile q "$SQL_FILE" '{query:$q}')"
             applied="no"
             for attempt in 1 2 3; do
-              resp="$(curl --silent --show-error --request POST \
+              resp="$(bc_curl apply-inngest-rls 'Authorization:Bearer :SUPABASE_ACCESS_TOKEN' -- \
+                --silent --show-error --request POST \
                 --url "$API/v1/projects/${PROJECT_REF}/database/query" \
-                --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
                 --header "Content-Type: application/json" \
-                --data "$payload" --max-time 60 -w $'\n%{http_code}' 2>/dev/null)"
+                --data "$payload" --max-time 60 -w $'\n%{http_code}')"
               code="${resp##*$'\n'}"; body="${resp%$'\n'*}"
               body_safe="$(sanitize "$(printf '%s' "$body" | tr '\n' ' ' | head -c 400)")"
               if [[ "$code" == 2?? ]]; then
@@ -175,11 +185,11 @@ jobs:
 
           # query <sql> -> echoes the JSON response body to stdout.
           query() {
-            curl --silent --show-error --request POST \
+            bc_curl apply-inngest-rls 'Authorization:Bearer :SUPABASE_ACCESS_TOKEN' -- \
+              --silent --show-error --request POST \
               --url "$API/v1/projects/${PROJECT_REF}/database/query" \
-              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
               --header "Content-Type: application/json" \
-              --data "$(jq -nc --arg q "$1" '{query:$q}')" --max-time 30 2>/dev/null
+              --data "$(jq -nc --arg q "$1" '{query:$q}')" --max-time 30
           }
 
           # AUTHORITATIVE gate — direct catalog/grant query over ALL public tables
@@ -236,8 +246,8 @@ jobs:
 
           # Corroborate with the advisor (NON-authoritative; can be stale).
           if [[ -z "$fail_mode" ]]; then
-            adv="$(curl --silent "$API/v1/projects/${PROJECT_REF}/advisors/security" \
-              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" --max-time 30 2>/dev/null)"
+            adv="$(bc_curl apply-inngest-rls 'Authorization:Bearer :SUPABASE_ACCESS_TOKEN' -- \
+              --silent "$API/v1/projects/${PROJECT_REF}/advisors/security" --max-time 30)"
             adv_n="$(printf '%s' "$adv" | jq '[.lints[]?|select(.name=="rls_disabled_in_public")]|length' 2>/dev/null || echo "err")"
             echo "Advisor corroboration: rls_disabled_in_public=${adv_n} (authoritative gate already passed; advisor may lag a DDL change)."
           fi
