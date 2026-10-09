@@ -31,12 +31,13 @@
 #   -> the `if: always()` finalizer unwinds TOTALLY:
 #   flag off -> same-version redeploy -> per-host off-lines -> unfreeze -> gc restart.
 #   FREEZE_HELD (the git-data hop dead at unfreeze) and RECOVERY_FAILED set the finalizer's
-#   freeze_held / recovery_failed step outputs (a failed MODE=unfreeze sets freeze_held too); the
+#   freeze_held / recovery_failed step outputs (a failed MODE=unfreeze sets freeze_held too, unless it failed only on the gc timer); the
 #   finalizer also exports ran=1 so a failed run with no verdict reads as "failed, nothing stranded",
 #   and only a run with NO finalizer output reads as STATE UNKNOWN. A gc.timer that will not start
 #   AFTER the sentinel was cleared (exit 6, gc_timer_restart_failed) is NOT a switch-back trigger: the
-#   unfreeze step goes red, the probe and the stamp still run, nothing unwinds, and the finalizer
-#   exports gc_timer_stopped (notify word GC_TIMER_STOPPED), never freeze_held. The separate
+#   unfreeze step goes red, the probe and the stamp still run, that failure ALONE unwinds nothing (a later
+#   probe or stamp failure still does), and the finalizer exports gc_timer_stopped (notify word
+#   GC_TIMER_STOPPED), never freeze_held for it. The separate
 #   notify-failure job turns a failed or cancelled run into a ci/git-data-cutover issue plus an ops email.
 #   Known gaps (runbook, "When a cutover run fails"): a rollback that finds the flag already off
 #   (nothing_to_rollback) does not read a held sentinel (its step says so); a force-cancel and a pending
@@ -112,9 +113,10 @@ jobs:
     concurrency:
       group: web-1-swap
       cancel-in-progress: false
-    # Read by notify-failure. freeze_held / recovery_failed / gc_timer_stopped are written by the finalizer ONLY in its
+    # Read by notify-failure. freeze_held / recovery_failed are written by the finalizer ONLY in its
     # failure branches (the freeze_held FILE marker means "a freeze may have run" and is never
-    # cleared, so it cannot be exported); probe_failed is the probe step's own outcome. On a runner
+    # cleared, so it cannot be exported); gc_timer_stopped is written by the finalizer's EXIT trap on
+    # EVERY exit path (including a green "flip concluded"); probe_failed is the probe step's own outcome. On a runner
     # loss or timeout these are absent — the notify job treats "no verdict outputs" as STATE UNKNOWN.
     outputs:
       mode: ${{ steps.confirm.outputs.mode }}
@@ -636,15 +638,21 @@ jobs:
           # exit 6, or a child unfreeze below); the EXIT trap exports it on every path, exit code preserved.
           gcw="${GC_TIMER_FAILED:-}"
           trap '[[ -z "$gcw" ]] || echo "gc_timer_stopped=1" >> "$GITHUB_OUTPUT"' EXIT
-          # One child unfreeze for both arms below: uc=ok (sentinel clear and timer up), uc=gc (exit 6: the sentinel
-          # is clear, only the timer is stopped, so neither a stranded freeze nor a failed unwind), uc=held (anything else).
-          run_unfreeze() {
+          # One child unfreeze for both arms below, classified by its exit code: 0 clears gcw (sentinel clear and
+          # timer up); 6 sets gcw (the sentinel is clear, only the timer is stopped: neither a stranded freeze nor a
+          # failed unwind); anything else is a held sentinel (freeze_held + unwind_failed) and clears gcw, so a
+          # stopped-timer word is never printed beside a freeze word.
+          run_unfreeze() { # <label>
             local r
             MODE=unfreeze CUTOVER_LINEAGE="cutover-${{ github.run_id }}" bash apps/web-platform/infra/git-data-cutover.sh
             r=$?
-            if [[ $r == 0 ]]; then gcw=""; uc=ok
-            elif [[ $r == 6 ]]; then gcw=1; uc=gc
-            else uc=held
+            if [[ $r == 0 ]]; then gcw=""; echo "finalizer: $1: sentinel clear, gc.timer started"
+            elif [[ $r == 6 ]]; then gcw=1; echo "finalizer: $1: gc.timer still stopped (gc_timer_restart_failed); the sentinel is clear"
+            else
+              gcw=""
+              echo "::error::finalizer: $1 FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
+              echo "freeze_held=1" >> "$GITHUB_OUTPUT"
+              unwind_failed=1
             fi
           }
           if [[ "$MODE" == "unfreeze" ]]; then
@@ -706,27 +714,11 @@ jobs:
             fi
           fi
           if [[ -f "$prog/freeze_held" ]]; then
-            run_unfreeze
-            case "$uc" in
-              ok) echo "finalizer: freeze cleared, gc.timer restarted" ;;
-              gc) echo "finalizer: freeze cleared, gc.timer still stopped (gc_timer_restart_failed); flag, hosts and sentinel are clean" ;;
-              *)
-                echo "::error::finalizer: unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
-                echo "freeze_held=1" >> "$GITHUB_OUTPUT"
-                unwind_failed=1 ;;
-            esac
+            run_unfreeze unfreeze
           fi
           # a rollback that died before its own unfreeze still needs the timer up
           if [[ "$MODE" == "rollback" && ! -f "$prog/cutover_at_written" ]]; then
-            run_unfreeze
-            case "$uc" in
-              ok) : ;;
-              gc) echo "finalizer: rollback unfreeze: gc.timer still stopped (gc_timer_restart_failed); the sentinel is clear" ;;
-              *)
-                echo "::error::finalizer: rollback unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
-                echo "freeze_held=1" >> "$GITHUB_OUTPUT"
-                unwind_failed=1 ;;
-            esac
+            run_unfreeze "rollback unfreeze"
           fi
           if [[ "$unwind_failed" != 0 ]]; then
             echo "::error title=git-data-cutover finalizer::verdict=RECOVERY_FAILED — partial unwind; recovery_warn: check flag state in prd, git_data_store= lines on both hosts, and the freeze sentinel before re-dispatching."
@@ -829,7 +821,7 @@ jobs:
           case "$RUN_ID" in ''|*[!0-9]*) echo "::error::run id is not numeric"; exit 1 ;; esac
           words=""; swords=""; remedy_needed=0
           if [ "${FREEZE_HELD:-}" = 1 ]; then words="$words FREEZE_HELD"; swords="$swords FREEZE_HELD"; remedy_needed=1; fi
-          if [ "${GC_TIMER_STOPPED:-}" = 1 ]; then words="$words GC_TIMER_STOPPED (flag, hosts and the freeze sentinel are clean and the cutover or rollback steps ran as usual; only git-data-gc.timer would not start, verdict gc_timer_restart_failed in the unfreeze step or finalizer log. Gc stays stopped until it is started: re-dispatch mode=unfreeze, no lineage input needed because the sentinel is already cleared. A second consecutive failure is a host incident: read the host events in Better Stack before re-dispatching again)"; swords="$swords GC_TIMER_STOPPED"; fi
+          if [ "${GC_TIMER_STOPPED:-}" = 1 ]; then words="$words GC_TIMER_STOPPED (the freeze sentinel is clear and only git-data-gc.timer would not start, verdict gc_timer_restart_failed in the unfreeze step or finalizer log; if the run also reports another failure, read that failing step first because the finalizer may have unwound the flip. Gc stays stopped until it is started, so the weekly pack and prune is skipped: re-dispatch gh workflow run git-data-cutover.yml --ref main -f mode=unfreeze -f confirm=UNFREEZE-GIT-DATA, no lineage input needed because the sentinel is already cleared. A second consecutive failure is a host incident: read the host events in Better Stack before re-dispatching again)"; swords="$swords GC_TIMER_STOPPED"; fi
           if [ "${RECOVERY_FAILED:-}" = 1 ]; then words="$words RECOVERY_FAILED"; swords="$swords RECOVERY_FAILED"; remedy_needed=1; fi
           if [ "${PROBE_FAILED:-}" = 1 ]; then words="$words PROBE_FAILED (erasure probe; the probe step log names the verdict. old_store_unmounted, store_not_on_mapper or store_unverified mean the host store was not verifiable and the push and remove were not attempted: see the runbook Verdict map row for that verdict and do not re-dispatch a replace. cutover_frozen means a freeze sentinel is held: clear it with mode=unfreeze and the lineage of the run that wrote it. residue_left means a synthetic repository survived. No mode re-runs the erasure probe, so a green mode=proof is not evidence that erasure works)"; swords="$swords PROBE_FAILED"; fi
           if [ -z "$words" ]; then

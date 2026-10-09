@@ -434,7 +434,13 @@ hash-bound host payload moved.
   the runbook: a transient `flag_write_failed` that never landed also runs the unwind (a flag-off write and a
   both-host redeploy). Rollback conditions are unchanged.
 
-Still open, tracked rather than fixed here: a probe or stamp failure after the sentinel clear unwinds through a
-writable window (pre-existing); flip resume arm B never unwinds the flag; no mode re-runs the rollback's erasure probe.
+The 2026-10-02 sentence that `mode=proof` is the read-only re-verification refines the same way: the proof re-verifies the
+STORE only, and no mode re-runs the rollback's erasure probe, so a green proof is not evidence that erasure works.
+
+Still open, tracked rather than fixed here (follow-up tracker, number in the PR body): a probe or stamp failure after the
+sentinel clear unwinds through a writable window (pre-existing); flip resume arm B never unwinds the flag; a rollback whose
+flag-off write landed but whose read-back failed leaves the fleet on the old env (`mode=redeploy` converges it). One live-only
+assumption: the probe `if:` reads the unfreeze step's `gc_timer_failed` output after the step exited non-zero; that is documented
+runner behaviour and is checked by the first real dispatch, not by any offline suite.
 
 Plan: `knowledge-base/project/plans/2026-10-09-fix-git-data-cutover-residual-state-matrix-gaps-plan.md`.
