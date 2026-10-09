@@ -10,6 +10,36 @@ lane: single-domain
 
 # docs(adr): accept ADR-270 and flip ADR-276 to adopting so stage S3 can start
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09 (proportionate pass; no agent fan-out, per the caller's instruction for a two-file docs change)
+**Sections enhanced:** 3 (AC5, ADR-270 amendment wording, anchors)
+**Checks run:** Phase 4.6 user-brand impact present with valid threshold; 4.7 skipped (pure docs, no code/infra path in
+Files to Edit); 4.8 PAT-shape sweep: no hits; 4.9, 4.10, 4.11 not triggered (no UI, store/connection or guard);
+4.12 exactly one unfenced `## Scope Check`; cited rule id `cq-write-failing-tests-before` exists in AGENTS.md; cited
+issues/PRs verified live (#9728 OPEN, #9808 MERGED, #9862 OPEN draft, #9876 OPEN draft on this branch, #9454 OPEN,
+#9512 CLOSED, #9727 CLOSED, #9729 OPEN); ADR-276 Decision numbering confirmed (1, 2, 3, 6, 7, 8 guardrails; 4 =
+draft PRs light set / stage 3; 5 = affected suites / stage 4); each ADR has exactly one line-start `status:` line and
+it is line 3, so the anchors are unique.
+
+### Key Improvements
+
+1. AC5 no longer asserts a count of the phrase `S2 live` (it appears in two prose sentences of the S2 amendment); it
+   asserts the absence of a dated Stage-status line for it.
+2. ADR-270 amendment wording for items 3, 4, 9 and 10 no longer implies item 10 or 9 had no reading at all: the
+   2026-10-05 addendum has a first reading for 9 and 10; the amendment says "first, partial or pending".
+3. Confirmed no ADR/status lint besides the S2 soak probe reads these statuses; `check-adr-ordinals.sh` checks
+   ordinals and ADR-041/042 headings only, so it will not catch an ADR-270/276 body error (the diff assertions and
+   verbatim check in AC1-AC4 are the real gate).
+
+### New Considerations Discovered
+
+- The ADR-276 H1 and prose use the current filename ordinal 276; ADR-270's H1 says ADR-269 (pre-existing, untouched).
+- Draft PR #9876 already exists for this branch; ship should push to it, not open a second PR.
+- The operator's confirmation on the PR (the review-comment form the ADR-276 Status requires) cannot be automated or
+  forged by the agent; the PR body asks for it and ship reports whether it arrived.
+
+
 ## Overview
 
 A documentation-only precondition for ADR-276 stage S3 (#9728). The ADR-276 Status section forbids any stage PR
@@ -141,8 +171,8 @@ pass; that condition is NOT met. This amendment records that acceptance came fir
 as a passed canary.
 
 The canary items not yet recorded as measured at this date are items 1, 3, 4, 5, 7, 8, 9 and 10 of "Canary
-measurements" (items 2 and 6 are recorded under "Canary results"; items 3, 4, 9 and 10 carry only the partial or
-pending readings in the 2026-10-05 and 2026-10-07 addenda). Item 4 waits for the next `weakness-miner.yml` PR;
+measurements" (items 2 and 6 are recorded under "Canary results"; items 3, 4, 9 and 10 carry only first, partial or
+pending readings in the 2026-10-05 addendum, not a completed measurement). Item 4 waits for the next `weakness-miner.yml` PR;
 the next scheduled fire is 2026-10-11T06:00Z. Their text, verbatim from "Canary measurements":
 
 <verbatim blockquote from step 2>
@@ -251,8 +281,9 @@ use `run_in_background` for polling.
 - [ ] AC4. The ADR-276 amendment cites the operator's direction as the CTO approval, names decisions 1, 2, 3, 6, 7,
       8 as `adopting` and 4, 5 as the proposed shape of stages 3 and 4, says `S2 live` waits for activation, and
       states plainly that the Status text asks for a review comment on a PR that edits the line.
-- [ ] AC5. The ADR-276 file contains exactly one `S2 amended` Stage-status line (no duplicate) and no `S2 live`
-      line.
+- [ ] AC5. The ADR-276 file contains exactly one `S2 amended` Stage-status line (no duplicate) and no Stage-status line
+      matching `^- 2026-.* S2 live` (the phrase `S2 live` already occurs in two body sentences of the S2 amendment, so a bare
+      count of the phrase is not the check).
 - [ ] AC6. Phase 3 commands all exit 0 (outputs read from the files they were redirected to).
 - [ ] AC7. The claim sweep `grep -rniE 'ADR-(270|276)[^0-9].{0,60}(adopting|proposed|accepted)'` over
       `knowledge-base/engineering`, `knowledge-base/legal`, `.github`, `infra` and `scripts` (excluding the two ADRs
