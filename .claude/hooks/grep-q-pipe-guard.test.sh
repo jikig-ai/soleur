@@ -436,7 +436,7 @@ SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares agains
 # a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
 SWEEP_DEFERRALS=(
   '.claude/*.test.sh | <= | 5 | #9217'
-  'tests/* | <= | 181 | #9217'
+  'tests/* | <= | 26 | #9217'
   # Slice S2 converted this subtree; five counted data pins remain (pipes inside strings or .md-fence text; marker-exempt demos are not counted).
   # Tight (`=`) so a forgotten ceiling fails; to convert one, flip the row to `<=`, convert, flip back lowered (the codemod refuses `--write` on `=` rows).
   'plugins/soleur/test/* | = | 5 | #9217'

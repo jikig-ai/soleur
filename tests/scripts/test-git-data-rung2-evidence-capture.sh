@@ -1277,7 +1277,7 @@ _tuple_n=0
 for _n in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD \
           SENTRY_ISSUE_RO_TOKEN SENTRY_ISSUE_RW_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
           DOPPLER_TOKEN HCLOUD_TOKEN BETTERSTACK_LOGS_TOKEN GIT_DATA_LUKS_KEY; do
-  if printf '%s\n' "$_tuple_block" | grep -qF "\"${_n}\""; then
+  if printf '%s\n' "$_tuple_block" | grep -cF >/dev/null "\"${_n}\""; then
     _tuple_n=$((_tuple_n + 1))
   else
     _tuple_missing="${_tuple_missing} ${_n}"
@@ -2113,7 +2113,7 @@ else
 fi
 # THE OTHER DIRECTION, on the same argv log: decoupling the anchor must not widen the FATAL
 # read, which is the one whose window is the verdict.
-if grep -- '--host-events' "$SENTRY_ARGV" | grep -q -- '--start 2026-09-02T10:00:00'; then
+if grep -- '--host-events' "$SENTRY_ARGV" | grep -c >/dev/null -- '--start 2026-09-02T10:00:00'; then
   pass "C3: the --host-events fatal read stays pinned to --since"
 else
   fail "C3: the --host-events fatal read stays pinned to --since" "$rc" "$(cat "$SENTRY_ARGV" 2>/dev/null)"

@@ -120,11 +120,11 @@ mkdir -p "$FAKE_A/rung2-archive.DeadBeef1"; : > "$FAKE_A/rung2-archive.DeadBeef1
 mkdir -p "$FAKE_A/tmp.PlainMktemp123"; : > "$FAKE_A/tmp.PlainMktemp123/x"
 out="$(purge_env bash "$PURGE" --dry-run 2>&1)"
 
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'SOLEUR_TMP_PURGE mode=dry-run' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'SOLEUR_TMP_PURGE mode=dry-run' \
   && pass "dry-run prints report header" || fail "dry-run header missing"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'prefix:rung2-archive' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'prefix:rung2-archive' \
   && pass "dry-run counts prefix class" || fail "prefix class not reported"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'protected' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'protected' \
   && pass "dry-run counts protected class" || fail "protected class not reported"
 cases=$((cases + 1)); [[ -d "$FAKE_A/rung2-archive.DeadBeef1" && -d "$FAKE_A/tmp.PlainMktemp123" ]] \
   && pass "dry-run moved nothing" || fail "dry-run mutated fixtures"
@@ -298,7 +298,7 @@ cases=$((cases + 1)); [[ -d "$FAKE_A/lone-clone" ]] \
 # --- Arm 7: idempotence -----------------------------------------------------------
 out2="$(purge_env bash "$PURGE" --apply 2>&1)"
 cases=$((cases + 1)); printf '%s' "$out2" | grep -qc 'QUARANTINE' \
-  && { printf '%s' "$out2" | grep -c 'QUARANTINE' | grep -qx 0 && pass "second apply moves nothing" || fail "second apply moved entries"; } \
+  && { printf '%s' "$out2" | grep -c 'QUARANTINE' | grep -cx >/dev/null 0 && pass "second apply moves nothing" || fail "second apply moved entries"; } \
   || pass "second apply moves nothing"
 
 # --- Arm 8: retain-since escalation ------------------------------------------------
@@ -309,7 +309,7 @@ purge_env bash "$PURGE" --apply >/dev/null 2>&1 || true
 stamp="$RETAIN_DIR/$(printf '%s' "$FAKE_A/stale2-wt-src" | sha256sum | cut -d' ' -f1)"
 [[ -f "$stamp" ]] && touch -d "-200 hours" "$stamp"
 out="$(purge_env bash "$PURGE" --apply 2>&1)"
-cases=$((cases + 1)); printf '%s' "$out" | grep -q 'OPERATOR-DECISION' \
+cases=$((cases + 1)); printf '%s' "$out" | grep -c >/dev/null 'OPERATOR-DECISION' \
   && pass "unverifiable past retain floor escalates to operator list" || fail "no escalation: $out"
 cases=$((cases + 1)); [[ -d "$FAKE_A/stale2-wt-src" ]] \
   && pass "escalated entry still not moved" || fail "escalated entry moved"
@@ -320,7 +320,7 @@ reset_fixtures
 sleep 0.3
 rc=0; out="$(purge_env bash "$PURGE" --apply 2>&1)" || rc=$?
 wait "$LOCKPID" 2>/dev/null || true
-cases=$((cases + 1)); [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'SKIP' \
+cases=$((cases + 1)); [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'SKIP' \
   && pass "concurrent run skips loudly (rc=2)" || fail "contention rc=$rc out=$out"
 
 # --- Arm 10: restore + drain ----------------------------------------------------------
@@ -367,17 +367,17 @@ cases=$((cases + 1)); [[ "$rc" == "0" && -d "$FAKE_A/rung2-archive.RestoreAll" ]
 
 # --- Arm 13: empty SOLEUR_PURGE_BASES refuses loudly, never defaults ------------
 rc=0; out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" SOLEUR_PURGE_LOCKFILE="$LOCKFILE" SOLEUR_PURGE_BASES="" bash "$PURGE" --dry-run 2>&1)" || rc=$?
-cases=$((cases + 1)); [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q 'FATAL' \
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null 'FATAL' \
   && pass "empty bases env refuses loudly" || fail "empty bases rc=$rc out=$out"
 
 # --base REPLACES the env list, so an empty SOLEUR_PURGE_BASES must not be fatal when --base is given
 # (the header documents the replacement); the empty list stays fatal for every base-less mode above.
 mkdir -p "$TESTROOT/base-only"
 rc=0; out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" SOLEUR_PURGE_BASES="" TMP_CLASSIFY_PROC="$FAKE_PROC" bash "$PURGE" --report --base "$TESTROOT/base-only" 2>&1)" || rc=$?
-cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'REPORT done' \
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'REPORT done' \
   && pass "empty SOLEUR_PURGE_BASES + --report --base DIR runs (--base replaces the env list)" || fail "empty bases + --base rc=$rc out=$out"
 rc=0; out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" SOLEUR_PURGE_BASES="" bash "$PURGE" --report 2>&1)" || rc=$?
-cases=$((cases + 1)); [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q 'FATAL' \
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null 'FATAL' \
   && pass "control: empty SOLEUR_PURGE_BASES + --report WITHOUT --base is still fatal" || fail "empty bases + bare --report rc=$rc"
 
 # --- Arm 14: symlinked quarantine root / class dir refuses the drain -------------
@@ -435,7 +435,7 @@ h_after="$(tree_hash "$FAKE_A" "$FAKE_B")"; l_after="$(sha256sum < "$LEDGER" | c
 fam_row() { grep -F "family=$1 " "$TESTROOT/report.out" | head -1 || true; }   # first row for a family
 kv() { printf '%s' "$1" | tr ' ' '\n' | grep "^$2=" | head -1 | cut -d= -f2 || true; }
 
-cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -c '^SOLEUR_TMP_PURGE_REPORT mode=report' "$TESTROOT/report.out" | grep -qx 1 \
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -c '^SOLEUR_TMP_PURGE_REPORT mode=report' "$TESTROOT/report.out" | grep -cx >/dev/null 1 \
   && pass "--report exits 0 and prints exactly one SOLEUR_TMP_PURGE_REPORT header" || fail "report rc=$rc: $(head -c 400 "$TESTROOT/report.out")"
 cases=$((cases + 1)); [[ "$h_before" == "$h_after" && "$l_before" == "$l_after" ]] \
   && pass "--report mutated nothing (tree hash of both bases + ledger unchanged)" || fail "--report mutated the fixture tree or ledger"
@@ -458,14 +458,14 @@ cases=$((cases + 1)); [[ -z "$(grep -F 'marked-dead' "$TESTROOT/report.out" || t
   && pass "quarantine root content is neither scanned nor touched by --report" || fail "report walked the quarantine root"
 cases=$((cases + 1)); [[ -d "$FAKE_B/td-123" && -n "$(git --git-dir="$GITROOT/main/.git" worktree list --porcelain | grep -F 'td-123' || true)" ]] \
   && pass "registered td-123 worktree still present and still registered" || fail "td-123 worktree disturbed"
-cases=$((cases + 1)); grep -c '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/report.out" | grep -qx 1 \
+cases=$((cases + 1)); grep -c '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/report.out" | grep -cx >/dev/null 1 \
   && pass "report names the quarantine bytes awaiting drain" || fail "no quarantine line in report"
 
 # More rows than SOLEUR_PURGE_REPORT_TOP must truncate cleanly: a `| head` in the
 # table pipeline gave sort a SIGPIPE and, under pipefail, killed the report
 # before the quarantine/done lines (measured on the operator host, 56 rows).
 rc=0; purge_env SOLEUR_PURGE_REPORT_TOP=2 bash "$PURGE" --report > "$TESTROOT/report-top2.out" 2>/dev/null || rc=$?
-cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -c 'REPORT done' "$TESTROOT/report-top2.out" | grep -qx 1 \
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -c 'REPORT done' "$TESTROOT/report-top2.out" | grep -cx >/dev/null 1 \
   && [[ "$(awk '/REPORT families/{f=1;next} /REPORT unattributable-families/{f=0} f' "$TESTROOT/report-top2.out" | grep -c 'family=')" == "2" ]] \
   && pass "TOP=2 truncates the family table to 2 rows and the report still completes" || fail "TOP=2 report rc=$rc: $(tail -c 300 "$TESTROOT/report-top2.out")"
 
@@ -503,7 +503,7 @@ out="$(purge_env bash "$PURGE" --drain 2>&1)"
 cases=$((cases + 1)); [[ -d "$Q/prefix/rung2-archive.Fresh001" ]] \
   && pass "control: default TTL retains a freshly quarantined entry" || fail "default drain removed a fresh entry: $out"
 out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash "$PURGE" --drain 2>&1)"
-cases=$((cases + 1)); [[ ! -e "$Q/prefix/rung2-archive.Fresh001" ]] && printf '%s' "$out" | grep -q 'drain: 1 entry removed' \
+cases=$((cases + 1)); [[ ! -e "$Q/prefix/rung2-archive.Fresh001" ]] && printf '%s' "$out" | grep -c >/dev/null 'drain: 1 entry removed' \
   && pass "SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 --drain drains the fresh scratch entry (space recovery path)" || fail "TTL=0 drain no-op: $out"
 cases=$((cases + 1)); [[ -d "$Q/worktrees/phantom-drain-src" ]] \
   && pass "TTL=0 seam does not shorten the worktrees class (separate TTL)" || fail "TTL=0 drained a worktrees entry"
@@ -551,10 +551,10 @@ cases=$((cases + 1)); [[ "$h_keep" == "$(tree_hash "$QR/.soleur-owned" "$QR/scra
 # --- Arm 19: an empty base is a clean no-op (rc 0), not a set -u crash -----------
 reset_fixtures
 rc=0; out="$(purge_env bash "$PURGE" --apply 2>&1)" || rc=$?
-cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'SOLEUR_TMP_PURGE mode=apply' \
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'SOLEUR_TMP_PURGE mode=apply' \
   && pass "--apply on empty bases exits 0 and prints the report" || fail "empty-base apply rc=$rc out=$out"
 rc=0; out="$(purge_env bash "$PURGE" --report 2>&1)" || rc=$?
-cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'REPORT done' \
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'REPORT done' \
   && pass "--report on empty bases exits 0" || fail "empty-base report rc=$rc out=$out"
 
 # --- Arm 20: report accuracy arms (entries=, leading-zero days, unreadable subtree, flag shapes) ---
@@ -571,9 +571,9 @@ cases=$((cases + 1)); [[ "$rc" == "0" && "$qline" == *" entries=3 "* ]] \
   && pass "quarantine line counts exactly the 3 <class>/<entry> rows (entries=3)" || fail "entries= wrong rc=$rc line=[$qline]"
 mkdir -p "$Q20/prefix/e4"
 purge_env bash "$PURGE" --report --base "$FAKE_B" > "$TESTROOT/r20b.out" 2>/dev/null || true
-cases=$((cases + 1)); grep '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/r20b.out" | grep -q ' entries=4 ' \
+cases=$((cases + 1)); grep '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/r20b.out" | grep -c >/dev/null ' entries=4 ' \
   && pass "control: entries= follows the fixture (adding a row moves 3 -> 4)" || fail "entries= did not follow the fixture"
-cases=$((cases + 1)); grep -q 'kb=' <<< "$qline" && printf '%s' "$qline" | grep -Eq 'kb=[0-9]+' \
+cases=$((cases + 1)); grep -q 'kb=' <<< "$qline" && printf '%s' "$qline" | grep -Ec >/dev/null 'kb=[0-9]+' \
   && pass "quarantine line carries a numeric kb=" || fail "quarantine kb= missing: [$qline]"
 cases=$((cases + 1)); grep -q '^SOLEUR_TMP_PURGE_REPORT note kb=' "$TESTROOT/r20.out" \
   && pass "report states what kb means (allocated blocks, own-uid, shared extents, unreadable dropped)" || fail "report has no honest kb note"
@@ -581,7 +581,7 @@ cases=$((cases + 1)); grep -q '^SOLEUR_TMP_PURGE_REPORT note kb=' "$TESTROOT/r20
 # A leading-zero day count is DECIMAL 8 (never octal-parsed): accepted, normalized, and it filters.
 for dd in 08 09; do
   rc=0; purge_env bash "$PURGE" --report --base "$FAKE_B" --older-than-days "$dd" > "$TESTROOT/r20d.out" 2> "$TESTROOT/r20d.err" || rc=$?
-  cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -q "older_than_days=${dd#0} " "$TESTROOT/r20d.out" && grep -c 'REPORT done' "$TESTROOT/r20d.out" | grep -qx 1 \
+  cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -q "older_than_days=${dd#0} " "$TESTROOT/r20d.out" && grep -c 'REPORT done' "$TESTROOT/r20d.out" | grep -cx >/dev/null 1 \
     && [[ -n "$(grep -F 'family=oldx-* ' "$TESTROOT/r20d.out" || true)" && -z "$(grep -F 'family=newx-* ' "$TESTROOT/r20d.out" || true)" ]] \
     && pass "--older-than-days $dd is accepted as ${dd#0}: header normalized, 40d family kept, fresh family dropped" || fail "--older-than-days $dd rc=$rc err=$(head -c 200 "$TESTROOT/r20d.err")"
 done
@@ -599,7 +599,7 @@ else
   rc=0; purge_env bash "$PURGE" --report --base "$FAKE_B" > "$TESTROOT/r20u.out" 2>/dev/null || rc=$?
   chmod 755 "$Q20/scratch/e1/locked" "$Q20/prefix"
   uline="$(grep '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/r20u.out" || true)"
-  if [[ "$rc" == "0" ]] && grep -c 'REPORT done' "$TESTROOT/r20u.out" | grep -qx 1 && [[ "$uline" == *"skipped_unreadable="[1-9]* ]]; then
+  if [[ "$rc" == "0" ]] && grep -c 'REPORT done' "$TESTROOT/r20u.out" | grep -cx >/dev/null 1 && [[ "$uline" == *"skipped_unreadable="[1-9]* ]]; then
     pass "unreadable quarantine subtree: report still completes (rc 0, footer present) and counts skipped_unreadable"
   else fail "unreadable quarantine subtree aborted or hid the loss: rc=$rc line=[$uline] tail=$(tail -c 200 "$TESTROOT/r20u.out")"; fi
 fi
@@ -638,7 +638,7 @@ for bad in -1 abc 7d 1.5 " 0"; do
     rc=0; out="$(purge_env "SOLEUR_PURGE_QUAR_${which}_TTL_MIN=$bad" bash "$PURGE" --drain 2>&1)" || rc=$?
     case "$which" in SCRATCH) want='scratch TTL' ;; *) want='worktrees TTL' ;; esac
     cases=$((cases + 1))
-    [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] && printf '%s' "$out" | grep -q "WARN.*$want" \
+    [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] && printf '%s' "$out" | grep -c >/dev/null "WARN.*$want" \
       && pass "TTL_${which} '$bad' is rejected with a WARN naming the $want, default applies, fresh entries kept" || fail "TTL_${which} '$bad' drained/aborted/no WARN rc=$rc: $out"
   done
 done
@@ -646,7 +646,7 @@ rc=0; out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN= SOLEUR_PURGE_QUAR_WT_T
 cases=$((cases + 1)); [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] \
   && pass "empty TTL env falls to the default (fresh entries kept, no abort)" || fail "empty TTL env drained or aborted rc=$rc: $out"
 rc=0; out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=08 SOLEUR_PURGE_QUAR_WT_TTL_MIN=09 bash "$PURGE" --drain 2>&1)" || rc=$?
-cases=$((cases + 1)); [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] && ! printf '%s' "$out" | grep -qi 'too great\|syntax\|error' \
+cases=$((cases + 1)); [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] && ! printf '%s' "$out" | grep -ci >/dev/null 'too great\|syntax\|error' \
   && pass "TTL '08'/'09' are decimal minutes (no octal arithmetic error); fresh entries kept" || fail "TTL 08 octal-parsed rc=$rc: $out"
 out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash "$PURGE" --drain 2>&1)"
 cases=$((cases + 1)); [[ ! -e "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] \
