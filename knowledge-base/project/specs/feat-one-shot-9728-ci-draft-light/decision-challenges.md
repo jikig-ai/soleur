@@ -14,11 +14,22 @@
 - Challenge (code-simplicity): if gate 1 shows the newest row per name decides, readers already see PENDING; ship only `wait-ready-run` and patch a reader only where gate 5 shows a misread.
 - Applied in part: every reader edit starts from a failing fixture row, so a reader that already behaves correctly is pinned rather than edited. Not applied in full: until the aggregator runs (up to 38 to 51 minutes after the ready event) the newest `test` row IS the draft run's red one, which gate 1 does not change.
 
+### User-Challenge 3: the S4/S5 parking rule can deadlock under Branch C
+
+- Operator direction (kept): S4 (#9729) and S5 (#9730) stay parked until S3 has a post-merge census or closes by gate or stop rule.
+- Challenge (spec-flow): Branch C (hold, policy never enforced) neither closes S3 nor produces a census, so S4 and S5 wait forever. The plan holds them parked and states why; whether a hold should count as "closed by gate" is the operator's call.
+
+### User-Challenge 4: gate 6 is a push count; the saving is minutes
+
+- Operator direction (kept): pass at a post-policy mean of 2.75 pushes per draft PR.
+- Challenge (spec-flow): a push-count PASS can be net-negative in minutes if the light run is expensive. The plan prints the minutes break-even as an informational line and raises a negative result to the operator before Branch B proceeds; it does not add a second verdict input on its own authority.
+
 ### Taste notes (not applied)
 
 - DHH: widen/narrow guard matrices. Declined; the Guard Contract lint requires the shape and duplicated rows are annotated with the suite that also covers them.
 - Code-simplicity: replace the `draft-light` live read with a `RUN_ATTEMPT == 1` guard (the S2 `push-dedupe` pattern). Declined: ADR-276 Decision 4 and the issue say the draft state is resolved live, because a re-run reuses the original payload and `RUN_ATTEMPT` does not say whether the PR has been readied since.
 - Code-simplicity: drop the 1-day dark-merge deadline and the dark-merge option. Kept (CTO asked to bound the dark window rather than remove the option).
+- Spec-flow: bot PRs opened as drafts gain a real full run on the human ready click; the plan accepts that and subtracts those runs from the net-minutes criterion. The alternative (excluding bot heads from the ready run) is an Option T-style skip and is the operator's call.
 - Code-simplicity: activation gated on a `S3-CONFIRMED` marker is inferred from the S2 precedent and the CTO's advice, not stated by the operator. Kept; the alternative is "the operator's explicit go only" (which the repo's production-write rule already demands). Surface for the operator.
 
 ### Not Yet Specified candidates

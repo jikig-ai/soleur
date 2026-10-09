@@ -28,7 +28,7 @@ Branch: feat-one-shot-9728-ci-draft-light (draft PR 9885). Sequence is load-bear
 
 ## Phase 4: Branch B ADR-276 amendment (before any ci.yml edit)
 - [ ] 4.1 Append the S3 amendment (kill-switch, 3(a) to (h), exit criterion, dark cost, rollback footprint, Option T rejection, gate results) and the `S1 live` and `S3 amended` lines
-- [ ] 4.2 Stateless check: ci.yml mentioning `draft-light` requires the ADR heading
+- [ ] 4.2 Stateless check: ci.yml mentioning `draft-light` requires the ADR heading; ADR-032 pointer line; supersession block for the two Decision 4 wordings
 
 ## Phase 5: Branch B tests first (RED)
 - [ ] 5.1 `scripts/ci-draft-light.test.sh` (executed step bodies, gated-set parity both directions, Guard 1 rows)
@@ -44,13 +44,13 @@ Branch: feat-one-shot-9728-ci-draft-light (draft PR 9885). Sequence is load-bear
 - [ ] 6.4 Ledger 25 to 26; header comment; actionlint; `c4-count-parity.test.sh`
 
 ## Phase 7: Branch B readers
-- [ ] 7.1 `plugins/soleur/scripts/ci-head-verdict.sh` (`verdict`, `wait-ready-run`)
+- [ ] 7.1 `plugins/soleur/scripts/ci-head-verdict.sh` (`verdict` with the closed state set `n/a|full-decided|pending-full|no-run|stalled|awaiting-approval`, `wait-ready-run --before-count`)
 - [ ] 7.2 Readers, each from a failing fixture: monitor-pr-checks, admin-merge-ready (`--wait`), triage-prs and drain-prs SKILL, ship Phase 7 and merge-pr poll copy
 - [ ] 7.3 Ship Phase 6, drain-prs and merge-pr: wait-ready-run between `gh pr ready` and arming; settle-then-admin-merge pointer; skill byte and word budgets
 - [ ] 7.4 `battery-owed.sh` rows; `pr-battery-gate-saving-9323.sh` fixture check
 
 ## Phase 8: Branch B probe
-- [ ] 8.1 `scripts/followthroughs/ci-draft-light-soak-9728.sh`: stall (N=75), dark deadline (1 day), activation order check, exit criterion; CODEOWNERS lines; tracker #9728 label and directive
+- [ ] 8.1 `scripts/followthroughs/ci-draft-light-soak-9728.sh`: stall (N=75), dark deadline (1 day), activation order check, live invariants, exit criterion (exit 2 until activation + 7 days); CODEOWNERS lines; tracker #9728 label and directive (`earliest=` merge + 1 day)
 
 ## Phase 9: Branch B canary and activation
 - [ ] 9.1 Canary on this PR only with the operator's go and gate 5b clear; variable deleted right after
