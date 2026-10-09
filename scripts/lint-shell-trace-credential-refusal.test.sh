@@ -1604,7 +1604,9 @@ else
   fail "Rule E census ceiling control: could not remove a baseline row"
 fi
 # (4) the baseline side: a baseline row above its ceiling reads RED.
-awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = $2 + 1; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-raised.txt"
+# One above the row's own CEILING, not one above its count: a ceiling may sit above a count (5 vs 6), and
+# `count + 1` then lands exactly ON the ceiling and reads green, which would make this row vacuous.
+awk -F'\t' -v OFS='\t' 'FNR == NR { if ($0 !~ /^#/ && NF >= 2) c[$1] = $2; next } /^#/ || NF < 2 { print; next } !d { $2 = c[$1] + 1; d = 1 } { print }' "$CEIL_FILE" "$BASE_E_FILE" > "$WORK/base-raised.txt"
 if ! cmp -s "$BASE_E_FILE" "$WORK/base-raised.txt"; then
   census_ceiling_check "$WORK/base-raised.txt" "$CEIL_FILE" 2>/dev/null
   [ "$CC_BAD" = "1" ] \
