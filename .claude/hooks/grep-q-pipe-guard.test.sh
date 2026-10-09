@@ -192,7 +192,8 @@ hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh'
 #      at all. A test that demonstrates a bug must be allowed to contain it. The marker is
 #      per-LINE and must be typed out, so it cannot be applied by accident or by a glob.
 # A TRAILING comment on the line (whitespace before the `#`, and nothing but whitespace or end of line after the words), so a
-# string that merely CONTAINS the words, or a `; echo "# sigpipe-demo: intentional"` tail, does not exempt the line.
+# `; echo "# sigpipe-demo: intentional"` tail does not exempt the line. KNOWN HOLE (Item F, measured in the S4 review): a string that
+# contains the words followed by a space (`"a # sigpipe-demo: intentional b"`) still matches, and the marker is not capped per file.
 ALLOW_MARKER='[[:space:]]#[[:space:]]*sigpipe-demo:[[:space:]]*intentional([[:space:]]|$)'
 # The comment filter every scan shares: drops `path:NN:<spaces>#...` lines. `--marker` also drops a line carrying the
 # per-line ALLOW_MARKER (the sweep only; the four named passes deliberately have no opt-out).
@@ -416,9 +417,9 @@ SWEEP_PATHSPEC=(
   ':(exclude).claude/hooks/grep-q-pipe-guard.test.sh'
 )
 # One swept file under each of these must exist, or the derivation is reading the wrong tree.
-SWEEP_CANARIES=('scripts/' 'plugins/soleur/' 'apps/web-platform/scripts/' 'apps/cla-evidence/')
+SWEEP_CANARIES=('scripts/' 'plugins/soleur/' 'apps/web-platform/scripts/' 'apps/cla-evidence/' 'tests/')
 SWEEP_FLOOR=1400   # measured 1,646 swept files on 2026-10-05 (1,405 without every non-.sh file); a truncated population reads UNRESOLVED, never "no hits"
-SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares against this literal, not against the array's own length
+SWEEP_CANARY_COUNT=5   # pinned beside SWEEP_CANARIES: the probe compares against this literal, not against the array's own length
 
 # What is deferred, one row per line: glob | mode | ceiling | tracker. A row is an OWNER for the hits under it, first
 # match wins (so ORDER is semantic: a more specific row goes above a broader one), a FILES_* member is never deferred.
@@ -434,6 +435,9 @@ SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares agains
 # KNOWN HOLE (named, not covered): a glob row at slack 0 (either mode) pins the COUNT per row, not the sites, so moving one hit between two files under
 # the same glob (add one, delete one) stays green. File-exact `=` rows would close it, but `_ts_re` below classifies a file-exact test path as
 # a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
+# S3 (scripts/) and S4 (tests/) took their subtrees to zero and deleted their rows. The drained form `grep -c ... >/dev/null` those
+# slices wrote is deliberate (same exit status for stdin operands, and the producer is read to EOF): do not rewrite it to a here-string.
+# The codemod only acts on rows still listed here, so a NEW hit in a zero subtree is converted by hand with the Rewrite table below.
 SWEEP_DEFERRALS=(
   '.claude/*.test.sh | <= | 5 | #9217'
   # Slice S2 converted this subtree; five counted data pins remain (pipes inside strings or .md-fence text; marker-exempt demos are not counted).
@@ -800,21 +804,22 @@ v2_git_good=$(git -C "$probe" grep --no-index -nE -e "$PATTERN_V2" -- good-v2.sh
 # line and the `a || grep` shape that must NOT be reported. Each root uses a different V2-only spelling, so the sweep
 # is proved to run PATTERN_V2 and not PATTERN. A gitignored directory must stay unscanned.
 sr="$probe/sweeproot"
-mkdir -p "$sr/scripts" "$sr/plugins/soleur" "$sr/apps/web-platform/scripts" "$sr/apps/cla-evidence" "$sr/ignored"
+mkdir -p "$sr/scripts" "$sr/plugins/soleur" "$sr/apps/web-platform/scripts" "$sr/apps/cla-evidence" "$sr/tests" "$sr/ignored"
 _noise() { printf '%s\n' '# echo "$y" | grep -q p' 'echo "$z" | grep -q p # sigpipe-demo: intentional' 'a || grep -q p <<<"$x"'; }
 { _noise; echo 'echo "$x" | grep -q p'; }              > "$sr/scripts/x.sh"
 { _noise; echo 'echo "$x" | LC_ALL=C grep -q p'; }     > "$sr/plugins/soleur/x.sh"
 { _noise; echo 'echo "$x" | { grep -m1 p || true; }'; } > "$sr/apps/web-platform/scripts/x.sh"
 { _noise; echo 'echo "$x" | grep --quiet p'; }         > "$sr/apps/cla-evidence/x.sh"
+{ _noise; echo 'echo "$x" | grep --silent p'; }        > "$sr/tests/x.sh"
 echo 'echo "$x" | grep -q p' > "$sr/ignored/x.sh"
 echo 'ignored/' > "$sr/.gitignore"
 sw_out="$(scan_sweep "$sr")"
 sw_hits=$(grep -c '^[^:]*:[0-9]*:' <<<"$sw_out" || true)
-sw_roots=$(grep -E '^(scripts|plugins/soleur|apps/web-platform/scripts|apps/cla-evidence)/x\.sh:' <<<"$sw_out" | cut -d: -f1 | sort -u | grep -c . || true)
+sw_roots=$(grep -E '^(scripts|plugins/soleur|apps/web-platform/scripts|apps/cla-evidence|tests)/x\.sh:' <<<"$sw_out" | cut -d: -f1 | sort -u | grep -c . || true)
 sw_swept=$(sed -n '1s/^SWEPT: \([0-9]*\) files$/\1/p' <<<"$sw_out")
 sw_unres=$(grep -c '^UNRESOLVED:' <<<"$sw_out" || true)
-[[ "$sw_hits" == 4 && "$sw_roots" == 4 ]] || sweep_probe_fail+=("sweep-wiring: ${sw_hits:-<err>} hits over ${sw_roots:-<err>} canary roots (want exactly one per root: 4 and 4; a comment, a marked line, the || shape and a gitignored dir must not count)")
-[[ "$sw_swept" == 4 && "$sw_unres" == 0 ]] || sweep_probe_fail+=("sweep-population: swept ${sw_swept:-<err>} files (want 4: the ignored one is excluded), ${sw_unres:-<err>} UNRESOLVED lines (want 0)")
+[[ "$sw_hits" == 5 && "$sw_roots" == 5 ]] || sweep_probe_fail+=("sweep-wiring: ${sw_hits:-<err>} hits over ${sw_roots:-<err>} canary roots (want exactly one per root: 5 and 5; a comment, a marked line, the || shape and a gitignored dir must not count)")
+[[ "$sw_swept" == 5 && "$sw_unres" == 0 ]] || sweep_probe_fail+=("sweep-population: swept ${sw_swept:-<err>} files (want 5: the ignored one is excluded), ${sw_unres:-<err>} UNRESOLVED lines (want 0)")
 # An unreadable root and a population missing the canaries are UNRESOLVED, never "no hits".
 mkdir -p "$probe/emptyroot" && echo 'true' > "$probe/emptyroot/x.sh"
 un_missing=$(scan_sweep "$probe/does-not-exist" 2>/dev/null | grep -c '^UNRESOLVED:' || true)
@@ -849,30 +854,56 @@ own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2');
 [[ "$own" == *"DEFERRED: a/b/* (1 hits"* && "$own" == *"DEFERRED: a/* (1 hits"* && "$own" == *"SWEEP_FAIL=0" ]] \
   || sweep_probe_fail+=("deferral-owner: first-match-wins did not give each overlapping row its own hit")
 
-# The REAL table (Wave A2). The synthetic rows above prove the arithmetic; these prove the table this file SHIPS still owns what it
+# The REAL table (Waves A2 and B). The synthetic rows above prove the arithmetic; these prove the table this file SHIPS still owns what it
 # must and nothing it must not. The scan runs scan_sweep on a scratch root (so SWEEP_PATHSPEC and PATTERN_V2 are exercised, not
-# only the verdict) and the verdict reads the live SWEEP_DEFERRALS. Planted: one violating line under each subtree this wave took
-# to zero, plus a compliant file under each canary root so the population is not UNRESOLVED.
+# only the verdict) and the verdict reads the live SWEEP_DEFERRALS. Planted: one violating line under each subtree a wave took
+# to zero (S3: scripts/, S4: tests/ at two depths and in a non-.sh extension), plus a compliant file under each canary root so the
+# population is not UNRESOLVED. To add a canary: append its path to real_paths and bump REAL_PLANTED; nothing else moves.
 _real_undeferred() { # <scan root> -> each path the CURRENT SWEEP_DEFERRALS leaves outside every row, one per line
   local v
   v="$( SWEEP_FAIL=0; sweep_verdict "$(scan_sweep "$1")"; echo "SWEEP_FAIL=$SWEEP_FAIL" )"
   sed -n '/^FAIL: pipe-into-early-exit-grep outside/,$p' <<<"$v" | grep -E '^  [^ ]+:[0-9]+:' | sed 's/^  //' | cut -d: -f1 || true
 }
 rr="$probe/realroot"
-mkdir -p "$rr/.github/workflows" "$rr/plugins/soleur/skills/drain-labeled-backlog/workflows" "$rr/apps/web-platform/infra" "$rr/scripts/lib" "$rr/scripts/followthroughs" "$rr/apps/web-platform/scripts" "$rr/apps/cla-evidence" "$rr/tests/scripts/lib" "$rr/tests/scripts/fixtures" "$rr/tests/commands" "$rr/tests/hooks" "$rr/tests/fixtures"
-for _f in .github/workflows/zz.yml lefthook.yml plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js apps/web-platform/infra/zz-new.sh \
-  scripts/zz.test.sh scripts/lib/zz.test.sh scripts/followthroughs/zz.test.sh scripts/test-zz.sh tests/zz.sh tests/scripts/test-zz.sh tests/scripts/lib/zz.sh tests/scripts/fixtures/zz.sh tests/commands/test-zz.sh tests/hooks/test_zz.sh tests/fixtures/zz.yml; do
+REAL_PLANTED=17   # pinned beside real_paths: a path deleted from the array alone must not pass (the plant and the expectation shrink together)
+real_paths=(
+  .github/workflows/zz.yml
+  lefthook.yml
+  plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js
+  apps/web-platform/infra/zz-new.sh
+  scripts/zz.test.sh
+  scripts/lib/zz.test.sh
+  scripts/followthroughs/zz.test.sh
+  scripts/test-zz.sh
+  tests/zz.sh
+  tests/scripts/test-zz.sh
+  tests/scripts/lib/zz.sh
+  tests/scripts/fixtures/zz.sh
+  tests/scripts/fixtures/zz/zz.sh
+  tests/commands/test-zz.sh
+  tests/hooks/test_zz.sh
+  tests/fixtures/zz.yml
+  tests/fixtures/zz/zz.yml
+)
+for _f in "${real_paths[@]}"; do
+  mkdir -p "$rr/$(dirname "$_f")"
   echo 'echo "$x" | grep -q p' > "$rr/$_f"
 done
-for _f in scripts/c.sh plugins/soleur/c.sh apps/web-platform/scripts/c.sh apps/cla-evidence/c.sh; do echo 'grep -q p <<<"$x"' > "$rr/$_f"; done
-real_want=$'.github/workflows/zz.yml\napps/web-platform/infra/zz-new.sh\nlefthook.yml\nplugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js\nscripts/followthroughs/zz.test.sh\nscripts/lib/zz.test.sh\nscripts/test-zz.sh\nscripts/zz.test.sh\ntests/commands/test-zz.sh\ntests/fixtures/zz.yml\ntests/hooks/test_zz.sh\ntests/scripts/fixtures/zz.sh\ntests/scripts/lib/zz.sh\ntests/scripts/test-zz.sh\ntests/zz.sh'
+for _f in scripts/c.sh plugins/soleur/c.sh apps/web-platform/scripts/c.sh apps/cla-evidence/c.sh; do
+  mkdir -p "$rr/$(dirname "$_f")"
+  echo 'grep -q p <<<"$x"' > "$rr/$_f"
+done
+real_want="$(printf '%s\n' "${real_paths[@]}" | LC_ALL=C sort)"
 real_got="$(_real_undeferred "$rr" | LC_ALL=C sort)"
 [[ "$real_got" == "$real_want" ]] \
-  || sweep_probe_fail+=("real-table-owner: the shipped table left [${real_got//$'\n'/ }] outside every row (want exactly the fifteen planted paths: a path a row now owns, or a pathspec that dropped one, changes this)")
+  || sweep_probe_fail+=("real-table-owner: the shipped table left [${real_got//$'\n'/ }] outside every row (want exactly the $REAL_PLANTED planted paths: a path a row now owns, or a pathspec that dropped one, changes this)")
 real_none=$( SWEEP_DEFERRALS=(); _real_undeferred "$rr" | grep -c . || true )
 real_all=$( SWEEP_DEFERRALS=('* | <= | 99 | #1'); _real_undeferred "$rr" | grep -c . || true )
-[[ "$real_none" == 15 && "$real_all" == 0 ]] \
-  || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want 15), with a catch-all row ${real_all:-<err>} (want 0) — the helper above does not read the table it is given")
+# A row that owns every tests/ canary must leave exactly the others undeferred: this is the control that the owner comparison above can fail.
+real_tests_row="$( SWEEP_DEFERRALS=('tests/* | <= | 99 | #1'); _real_undeferred "$rr" | LC_ALL=C sort )"
+real_nontests="$(printf '%s\n' "${real_paths[@]}" | grep -v '^tests/' | LC_ALL=C sort)"
+[[ "$real_none" == "$REAL_PLANTED" && "$real_all" == 0 && "$real_tests_row" == "$real_nontests" ]] \
+  || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want $REAL_PLANTED), with a catch-all row ${real_all:-<err>} (want 0), with a tests/ row [${real_tests_row//$'\n'/ }] (want exactly the non-tests/ canaries) — the helper above does not read the table it is given")
 # A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh, a test/ or tests/ directory,
 # or a test-* basename. A production-shaped loose glob would turn this header's own invariant into a convention.
 _ts_re='(^|/)(tests?/\*|\*\.test\.sh)$|^scripts/(lib/)?test-\*$'
@@ -886,8 +917,11 @@ _loose_not_test_shaped() { # <rows...> -> the glob of each `<=` row that is not 
   done
 }
 loose_bad="$(_loose_not_test_shaped "${SWEEP_DEFERRALS[@]}")"
-[[ -z "$loose_bad" ]] \
-  || sweep_probe_fail+=("real-table-test-shaped: loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } — production code could fall into their slack; make the row tight (=) or the glob test-shaped")
+# tests/ went to zero in S4 and every canary under it is owned by NO row; a resurrected row there (even a test-shaped one such as
+# `tests/commands/*.test.sh`) would own hits the canaries do not cover, so no row may start with `tests/`.
+tests_rows="$(printf '%s\n' "${SWEEP_DEFERRALS[@]}" | grep -c '^[[:space:]]*tests/' || true)"
+[[ -z "$loose_bad" && "$tests_rows" == 0 ]] \
+  || sweep_probe_fail+=("real-table-test-shaped: loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } (${tests_rows:-<err>} rows start with tests/, want 0: tests/ is at zero hits, a row there is a resurrected deferral) — production code could fall into their slack; make the row tight (=) or the glob test-shaped")
 loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217' '.github/workflows/test-* | <= | 9 | #9217' 'scripts/x.test.sh | = | 1 | #9217')"
 [[ "$loose_ctl" == $'apps/web-platform/infra/*\n.github/workflows/test-*' ]] \
   || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
@@ -924,7 +958,7 @@ un_anchor=$(scan_sweep "$probe/shiftroot" | grep -c '^UNRESOLVED: no swept file 
 [[ "$un_anchor" == 1 ]] || sweep_probe_fail+=("canary-anchor: a nested apps/web-platform/scripts/ file satisfied the top-level scripts/ canary (reported ${un_anchor:-<err>} times, want 1)")
 
 # The filters: a violating line must NOT hide behind a `:N:#` inside its own text, a marker-shaped string, or a marker that is not a trailing comment.
-mkdir -p "$probe/hideroot/scripts" "$probe/hideroot/plugins/soleur" "$probe/hideroot/apps/web-platform/scripts" "$probe/hideroot/apps/cla-evidence"
+mkdir -p "$probe/hideroot/scripts" "$probe/hideroot/plugins/soleur" "$probe/hideroot/apps/web-platform/scripts" "$probe/hideroot/apps/cla-evidence" "$probe/hideroot/tests"
 cat > "$probe/hideroot/scripts/x.sh" <<'EOF'
 echo "$x" | grep -q "a:3:# b"
 echo "$x" | grep -q p; echo "# sigpipe-demo: intentional"
@@ -932,7 +966,7 @@ echo "$x" | grep -q "foo # sigpipe-demo: intentional"
 echo "$x" | grep -q p # sigpipe-demo: intentional (a real trailing marker: not reported)
 echo "$x" | grep -q "p"#sigpipe-demo: intentional
 EOF
-for _r in plugins/soleur apps/web-platform/scripts apps/cla-evidence; do echo true > "$probe/hideroot/$_r/x.sh"; done
+for _r in plugins/soleur apps/web-platform/scripts apps/cla-evidence tests; do echo true > "$probe/hideroot/$_r/x.sh"; done
 # The NAMED passes use the same filter: a self-hiding line in a pinned-style file must be reported there too.
 named_hide=$(scan_pipes "$probe/hideroot/scripts/x.sh" | grep -c 'a:3:# b' || true)
 [[ "$named_hide" == 1 ]] || sweep_probe_fail+=("filter-anchor-named: scan_pipes reported ${named_hide:-<err>} of 1 self-hiding line")
@@ -940,8 +974,8 @@ hide_hits=$(scan_sweep "$probe/hideroot" | grep -c '^scripts/x.sh:[0-9]*:' || tr
 [[ "$hide_hits" == 4 ]] || sweep_probe_fail+=("filter-anchor: ${hide_hits:-<err>} of 4 self-hiding violating lines were reported (the real trailing marker line must be the only one dropped)")
 
 # The whole chain: a violating root reports rc 1, a compliant one rc 0, a short population rc 1 under a high floor, an empty one rc 3.
-okroot="$probe/okroot"; mkdir -p "$okroot/scripts" "$okroot/plugins/soleur" "$okroot/apps/web-platform/scripts" "$okroot/apps/cla-evidence"
-for _r in scripts plugins/soleur apps/web-platform/scripts apps/cla-evidence; do echo 'grep -q p <<<"$x"' > "$okroot/$_r/x.sh"; done
+okroot="$probe/okroot"; mkdir -p "$okroot/scripts" "$okroot/plugins/soleur" "$okroot/apps/web-platform/scripts" "$okroot/apps/cla-evidence" "$okroot/tests"
+for _r in scripts plugins/soleur apps/web-platform/scripts apps/cla-evidence tests; do echo 'grep -q p <<<"$x"' > "$okroot/$_r/x.sh"; done
 rc_bad=0;  ( SWEEP_DEFERRALS=(); sweep_main "$sr" 1 >/dev/null ) || rc_bad=$?
 rc_ok=0;   ( SWEEP_DEFERRALS=(); sweep_main "$okroot" 1 >/dev/null ) || rc_ok=$?
 rc_low=0;  ( SWEEP_DEFERRALS=(); sweep_main "$okroot" 100 >/dev/null ) || rc_low=$?
