@@ -15,9 +15,8 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Adopting** (slice S3 of the argv-credential sweep, tracker #9597). The status moves to `accepted` once the first scheduled runs of the
-converted workflows and the first delivered alert email are recorded on the follow-through issue the PR files. The ordinal was the next
-free one against `origin/main`, every `origin/*` ref and every open PR's files on 2026-10-09 (278 and 279 are held by open PRs); it is
-re-verified at ship.
+converted workflows and the first delivered alert email are recorded on the follow-through issue the PR files. The ordinal was verified free against
+`origin/main` and every open PR's files on 2026-10-09 and is re-verified at ship.
 
 ## Context
 

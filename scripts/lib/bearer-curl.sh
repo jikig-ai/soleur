@@ -80,13 +80,12 @@ _bc_body_from_stdin() {
   return 1
 }
 
-# Judge the value of an option that takes one. KIND is header | proxy-header | body. rc 64 refuses.
+# Judge the value of an option that takes one. KIND is header | body. rc 64 refuses.
 _bc_val_ok() {
   case "$1" in
     header) if _bc_hdr_refused "$2"; then
         printf 'bc_curl: a credential header in the request arguments is refused (pass it as a header spec)\n' >&2; return 64
       fi ;;
-    proxy-header) printf 'bc_curl: a proxy header is refused (the transfer is confined to no proxy)\n' >&2; return 64 ;;
     body) if _bc_body_from_stdin "$2"; then
         printf 'bc_curl: stdin is the credential config channel; a body from stdin is refused\n' >&2; return 64
       fi ;;
@@ -119,13 +118,12 @@ _bc_tail_ok() {
             printf 'bc_curl: a credential flag in the request arguments is refused (pass it as a header spec)\n' >&2; return 64 ;;
           --libcurl)
             printf 'bc_curl: --libcurl would write the config-channel header values to a file; refused\n' >&2; return 64 ;;
-          --insecure|--cacert|--capath|--proxy|--preproxy|--noproxy|--resolve|--connect-to|--proxy-insecure)
+          --insecure|--cacert|--capath|--proxy|--preproxy|--proxy-header|--noproxy|--resolve|--connect-to|--proxy-insecure)
             printf 'bc_curl: a trust, proxy or resolution option would re-open what the library closes; refused\n' >&2; return 64 ;;
         esac
         _bc_kind=""
         case "$_bc_name" in
           --header) _bc_kind=header ;;
-          --proxy-header) _bc_kind=proxy-header ;;
           --data|--data-binary|--data-raw|--data-ascii|--data-urlencode|--upload-file|--json|--form|--form-string|--url-query) _bc_kind=body ;;
         esac
         if [[ -n "$_bc_kind" ]]; then
@@ -174,7 +172,6 @@ bc_refuse() {
 _bc_send() {
   local LC_ALL=C _bc_script="${1:-}" _bc_spec _bc_name _bc_rest _bc_prefix _bc_var _bc_val
   shift
-  [[ "$_bc_script" =~ ^[A-Za-z0-9._-]+$ ]] || _bc_script="unknown"
   local -a _bc_fields=()
   while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
     _bc_spec="$1"
