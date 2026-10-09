@@ -120,6 +120,37 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && ARTIFACTS+=("$line")
 done < <(discover_artifacts "$SLUG")
 
+# Branch-diff discovery (#9803 follow-up): files ADDED or MODIFIED on this
+# branch under the KB artifact roots are this feature's artifacts by commit
+# provenance — no filename match needed. This is what catches a topic-named
+# plan (`2026-10-08-fix-sandbox-hardening-cluster-plan.md` never matches the
+# branch-derived slug) and a spec dir that is not `feat-<slug>` (the slug
+# probe cannot reach `fix-*`/`chore-*` dirs). Spec FILES collapse to their
+# spec DIR; archive/ paths are already archived and excluded. Unioned with
+# the slug results — the two axes (name match, commit provenance) cover what
+# either alone misses.
+discover_branch_diff() {
+  local base f
+  base=$(git merge-base HEAD origin/main 2>/dev/null) || return 0
+  while IFS= read -r f; do
+    case "$f" in
+      */archive/*) ;;                                     # already archived
+      knowledge-base/project/specs/*/*)
+        printf 'knowledge-base/project/specs/%s\n' "${f#knowledge-base/project/specs/}" | cut -d/ -f1 ;;
+      knowledge-base/project/plans/*|knowledge-base/project/brainstorms/*)
+        [[ -f "$f" ]] && printf '%s\n' "$f" ;;
+    esac
+  done < <(git diff --name-only --diff-filter=AM "$base"...HEAD --       knowledge-base/project/plans knowledge-base/project/brainstorms knowledge-base/project/specs 2>/dev/null)
+}
+while IFS= read -r line; do
+  [[ -n "$line" ]] && ARTIFACTS+=("$line")
+done < <(discover_branch_diff | sort -u)
+
+# Dedupe the union (a slug-glob hit that is also a branch-diff hit).
+if [[ ${#ARTIFACTS[@]} -gt 0 ]]; then
+  mapfile -t ARTIFACTS < <(printf '%s\n' "${ARTIFACTS[@]}" | sort -u)
+fi
+
 # A PARTIAL run must not read as a complete one (#8416).
 #
 # `discover_artifacts` derives ONE slug per run, and a feature's plan and spec
