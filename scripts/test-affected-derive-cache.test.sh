@@ -236,11 +236,26 @@ fi
 # or the named `_wt_missing_die` liveness exemption. A probe site added later WITHOUT recording must
 # fail here — the guard against silent invalidation weakening.
 cases=$((cases + 1))
-# A probe SITE is `[`-/`[[`-syntax: `[ -e x`, `[[ ! -f y ]]`. Requiring the bracket keeps `sed -e`
-# flags and grep `-e` patterns from false-matching. Exemptions: the recorder bodies probe `$_pp`,
-# and the `_wt_missing_die` cwd-liveness check is a liveness probe, not a derive input.
-_census_bad="$(grep -nE '\[\[?[[:space:]]*!?[[:space:]]*-[efd][[:space:]]' "$DERIVE_SRC" \
+# A probe SITE is `[`-/`[[`-syntax: `[ -e x`, `[[ ! -f y ]]`, plus bare `test -e`. Requiring the
+# bracket/test keeps `sed -e` flags and grep `-e` patterns from false-matching; the predicate set
+# is the existence-ish file tests, wider than just e/f/d so a future `-x`/`-s` site can't slip.
+# Exemptions: the recorder bodies probe `$_pp`, and the `_wt_missing_die` cwd-liveness check is a
+# liveness probe, not a derive input.
+_census_bad="$(grep -nE '(\[\[?[[:space:]]*!?[[:space:]]*|(^|[^_[:alnum:]])test[[:space:]]+!?[[:space:]]*)-[efdxsrwLh][[:space:]]' "$DERIVE_SRC" \
   | grep -vE '^[0-9]+:[[:space:]]*#|\$_pp|_wt_missing_die|_affected_(probe|rec_read)')"
+# Read side: every file-content read in the span must happen inside _affected_file_edges_uncached
+# (its operand "$_f" is recorded by _affected_rec_read at the _affected_file_edges entry). Flag any
+# read primitive outside it — a mapfile/$(<f)/source/cat/direct grep-on-$var added to the span would
+# consume a file's bytes with nothing recorded, silently weakening invalidation.
+_reads_bad="$(awk '
+  /^[[:space:]]*#/ {next}
+  /^_affected_file_edges_uncached\(\)/ {inf=1}
+  inf && /^\}$/ {inf=0}
+  !inf && (/mapfile|readarray|\$\([<]/ || /(^|[^_[:alnum:]])(source|\.)[[:space:]]+["'"'"'$\/A-Za-z_.]/ || /(^|[[:space:]])cat[[:space:]]+["'"'"'$\/A-Za-z_.]/ || /grep[[:space:]][^|]*\$_(f|new|tok|mod)\b/) {print NR": "$0}
+' "$DERIVE_SRC")"
+if [[ -n "$_reads_bad" ]]; then
+  _census_bad="${_census_bad:+${_census_bad} || }read-sites: ${_reads_bad}"
+fi
 if [[ -z "$_census_bad" ]]; then
   _probe_calls=$(grep -c '_affected_probe [efd] ' "$DERIVE_SRC")
   if (( _probe_calls >= 7 )); then
@@ -269,6 +284,33 @@ if grep -q 'test-affected-derive-cache.sh' "$RUNNER"; then
   pass "T12: runner sources scripts/lib/test-affected-derive-cache.sh"
 else
   fail "T12: runner never sources the cache lib"
+fi
+
+# T13 — memo-consumer invalidation (review P1): two registrations sharing one helper, classified in
+# ONE process so the second consumes the first's _FE_FILES memo. The helper names a path that does
+# not exist at extraction — the probe-miss must land in BOTH records, so creating the file later
+# re-derives the memo-consumer too, not just the extractor. Without the _FE_PROBESETS slice the
+# consumer's record would validate forever and serve an edge set missing the created file.
+cases=$((cases + 1))
+FX2="$TESTROOT/fx2"
+assert_fixture_dir "$FX2"
+mkdir -p "$FX2/scripts/lib" "$FX2/lib"
+git -C "$FX2" init -q
+for _cf in scripts/test-all.sh scripts/lib/test-affected-paths.sh scripts/lib/test-relevance-paths.sh scripts/lib/test-affected-derive-cache.sh; do
+  printf 'marker v1\n' > "$FX2/$_cf"
+done
+printf 'source "lib/helper.sh"\n' > "$FX2/suite.test.sh"
+printf 'source "lib/helper.sh"\n' > "$FX2/suite2.test.sh"
+printf 'source lib/dep.sh\nsource lib/maybe.sh\n' > "$FX2/lib/helper.sh"
+: > "$FX2/lib/dep.sh"   # dep.sh exists; maybe.sh deliberately does NOT
+# Cold-run both registrations in one process — s2 consumes s1's helper.sh memo.
+cache_run "$FX2" "_affected_classify_cached s1 bash suite.test.sh; _affected_classify_cached s2 bash suite2.test.sh" >/dev/null 2>&1
+: > "$FX2/lib/maybe.sh"   # the recorded-miss probe path now exists
+_k="$(cache_run "$FX2" "_affected_classify_cached s2 bash suite2.test.sh; $_SNAP" 2>/dev/null)"
+if printf '%s' "$_k" | grep -q 'maybe' && printf '%s' "$_k" | grep -q '^H=0 M=0 D=1$'; then
+  pass "T13: memo-consumer's record carries the extractor's probe slice (created file re-derives it)"
+else
+  fail "T13: memo-consumer warm=[${_k//$'\n'/|}]"
 fi
 
 echo

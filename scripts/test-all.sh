@@ -2823,6 +2823,11 @@ _affected_edge_token() {
 # between seconds and minutes. Parallel arrays, not assoc: bash 3.2.
 _FE_FILES=()
 _FE_EDGES=()
+# _FE_PROBESETS is the #9812 parallel memo: the probe slice a file's extraction consumed. A memo hit
+# must hand the consumer's cache record the SAME input set the extractor's record carries — without
+# it, a path that probed-miss inside a shared helper validates forever for every memo consumer, and
+# creating that file later would narrow their selection silently (review P1).
+_FE_PROBESETS=()
 
 # `_FE_BUF` is the per-file accumulator: _affected_file_edges_uncached and
 # _affected_edge_token append through _affected_buf_add so the CACHE records
@@ -2884,6 +2889,25 @@ _affected_file_edges() {
   local _ci
   for (( _ci=0; _ci<${#_FE_FILES[@]}; _ci++ )); do
     if [[ "${_FE_FILES[$_ci]}" == "$_f" ]]; then
+      # Replay the file's probe slice into the current record: pure string copies, no syscalls.
+      # The slice entries are the probe lines the extractor recorded (kind \t rc \t path); PSET
+      # dedup keeps the kind|path key shape _affected_probe writes.
+      if (( ${_ADC_REC:-0} )) && [[ -n "${_FE_PROBESETS[$_ci]:-}" ]]; then
+        local _pe _pk _ppath _prest _nl2=$'\n'
+        while IFS= read -r _pe; do
+          [[ -n "$_pe" ]] || continue
+          _pk="${_pe%%$'\t'*}"
+          _prest="${_pe#*$'\t'}"
+          _ppath="${_prest#*$'\t'}"
+          case "${_ADC_REC_PSET:-$_nl2}" in
+            *"${_nl2}${_pk}|${_ppath}${_nl2}"*) : ;;
+            *)
+              _ADC_REC_PSET+="${_pk}|${_ppath}${_nl2}"
+              _ADC_REC_PROBES+=("$_pe")
+              ;;
+          esac
+        done <<< "${_FE_PROBESETS[$_ci]}"
+      fi
       local _ce
       while IFS= read -r _ce; do
         _affected_add_edge "$_ce"
@@ -2892,6 +2916,8 @@ _affected_file_edges() {
     fi
   done
   _FE_BUF=()
+  local _fe_ps_start=0
+  (( ${_ADC_REC:-0} )) && _fe_ps_start=${#_ADC_REC_PROBES[@]}
   _affected_file_edges_uncached "$_f"
   local _j _joined=""
   for _j in ${_FE_BUF[@]+"${_FE_BUF[@]}"}; do
@@ -2900,6 +2926,15 @@ _affected_file_edges() {
   done
   _FE_FILES+=("$_f")
   _FE_EDGES+=("$_joined")
+  if (( ${_ADC_REC:-0} )); then
+    local _fe_ps="" _fe_pe
+    for _fe_pe in "${_ADC_REC_PROBES[@]:$_fe_ps_start}"; do
+      _fe_ps+="$_fe_pe"$'\n'
+    done
+    _FE_PROBESETS+=("$_fe_ps")
+  else
+    _FE_PROBESETS+=("")
+  fi
 }
 
 _affected_file_edges_uncached() {
