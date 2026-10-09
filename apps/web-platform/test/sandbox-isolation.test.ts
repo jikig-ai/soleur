@@ -33,13 +33,62 @@ import {
   spawnSandboxB,
   spawnSandboxed,
   waitForFile,
+  type ProbeTier,
   type SandboxBHandle,
   type SandboxProcessHandle,
   type WorkspacePair,
 } from "./helpers/sandbox-isolation-fixtures";
 
-const directProbe = probeSkip("direct");
-const queryProbe = probeSkip("query");
+/**
+ * Deploy-probe tier scoping (#2640). `SOLEUR_ISOLATION_TIERS` is a
+ * comma-separated allowlist of probe tiers (`direct`, `query`). When set, a
+ * suite whose tier is not listed is skipped BEFORE its `probeSkip` capability
+ * evaluation — so `SOLEUR_ISOLATION_TIERS=direct` in the canary exec keeps the
+ * query tier's live-ANTHROPIC_API_KEY runs (FR2-smoke/FR8/FR9) out of the
+ * deploy path entirely, and FR9's `ANTHROPIC_ISOLATION_TEST_OK` gate is
+ * unchanged (it lives inside the query describe, which never registers).
+ * Unset or empty runs the full matrix — the default CI/local behavior.
+ * An unrecognized tier name throws at load: a typo'd canary env would
+ * otherwise skip every suite and report a vacuous green — the same
+ * fail-loud opt-in class as `SOLEUR_ISOLATION_TEST_HOST` below.
+ */
+const KNOWN_TIERS: readonly ProbeTier[] = ["direct", "query"];
+
+function parseIsolationTiers(raw: string | undefined): Set<ProbeTier> | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  const tiers = new Set<ProbeTier>();
+  const unknown: string[] = [];
+  for (const t of raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if ((KNOWN_TIERS as readonly string[]).includes(t)) tiers.add(t as ProbeTier);
+    else unknown.push(t);
+  }
+  if (unknown.length) {
+    throw new Error(
+      `sandbox-isolation: unrecognized SOLEUR_ISOLATION_TIERS entries: ${unknown.join(", ")} ` +
+        `(known tiers: ${KNOWN_TIERS.join(", ")})`,
+    );
+  }
+  return tiers;
+}
+
+function isolationTierEnabled(tier: ProbeTier, raw: string | undefined): boolean {
+  const tiers = parseIsolationTiers(raw);
+  return tiers === null || tiers.has(tier);
+}
+
+// Bound once at module load — no default-parameter read inside
+// isolationTierEnabled, so an explicit `undefined` argument tests "unset"
+// rather than falling back to the live env.
+const ISOLATION_TIERS_RAW = process.env.SOLEUR_ISOLATION_TIERS;
+const directProbe = isolationTierEnabled("direct", ISOLATION_TIERS_RAW)
+  ? probeSkip("direct")
+  : { skip: true, reason: "SOLEUR_ISOLATION_TIERS excludes direct tier" };
+const queryProbe = isolationTierEnabled("query", ISOLATION_TIERS_RAW)
+  ? probeSkip("query")
+  : { skip: true, reason: "SOLEUR_ISOLATION_TIERS excludes query tier" };
 // #9723 — the deployed PATH shim (same file the prod image installs at
 // /usr/local/bin/bwrap) and its seccomp artifact, for the through-shim FR7b arm.
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -730,6 +779,24 @@ describe("sandbox-isolation: coverage + test-hygiene guards", () => {
         );
       }
     }
+  });
+
+  test("SOLEUR_ISOLATION_TIERS filter: 'direct' excludes the query tier (deploy-probe contract, #2640)", () => {
+    // Pure-function check of the env filter — no suite is spawned and no API
+    // call is made. The live verification is
+    // `SOLEUR_ISOLATION_TIERS=direct npx vitest run test/sandbox-isolation.test.ts`
+    // reporting the query-tier suite skipped rather than executed.
+    expect(isolationTierEnabled("direct", "direct")).toBe(true);
+    expect(isolationTierEnabled("query", "direct")).toBe(false);
+    expect(isolationTierEnabled("query", "direct,query")).toBe(true);
+    expect(isolationTierEnabled("direct", " query , direct ")).toBe(true);
+    // Unset/empty runs the full matrix — the deploy exec sets it explicitly.
+    expect(isolationTierEnabled("query", undefined)).toBe(true);
+    expect(isolationTierEnabled("direct", "")).toBe(true);
+    // A typo'd tier throws at load instead of vacuously greening the canary.
+    expect(() => isolationTierEnabled("direct", "dirct")).toThrow(
+      /unrecognized SOLEUR_ISOLATION_TIERS/,
+    );
   });
 
   test("no test.fails uses a placeholder todo (#TBD, #todo, etc.)", () => {
