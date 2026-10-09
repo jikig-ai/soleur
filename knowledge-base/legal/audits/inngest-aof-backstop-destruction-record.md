@@ -57,8 +57,8 @@ one named.
 | Field | Value | Source |
 |---|---|---|
 | **Exact volume size (bytes)** | 10737418240 (the wipe evidence row's `size_bytes`; 10 GiB). The destroy gate required the row's size to match the Hetzner-side size and the destroy run passed that gate. Hetzner reports volume sizes in whole GB, so the byte figure is the row's; the volume itself can no longer be read (404). | Hetzner `GET /v1/volumes/106261946` before the `detach` phase, and the `size_bytes` of the wipe evidence row (the two must agree) |
-| **Pre-state: snapshots of the volume** | 0, read 2026-10-09T19:05Z (record time). Hetzner Cloud has no volume-snapshot object, and the volume's 58 recorded actions contain only `attach_volume`, `detach_volume` and `delete_volume`. Not read separately at the `detach` phase. | Hetzner API read at the `detach` phase (expected 0; a non-zero count is a finding that the destroy does not erase) |
-| **Pre-state: backups covering the volume** | 0, read 2026-10-09T19:05Z: no snapshot or backup image is bound to, or was created from, server 169426216. Not read separately at the `detach` phase. | Hetzner API read at the `detach` phase (expected 0) |
+| **Pre-state: snapshots of the volume** | 0, inferred from a post-destroy read (2026-10-09T19:05Z). Hetzner Cloud has no volume-snapshot object, and the volume's 58 recorded actions contain only `attach_volume`, `detach_volume` and `delete_volume`. Not read separately at the `detach` phase. | Hetzner API read at the `detach` phase (expected 0; a non-zero count is a finding that the destroy does not erase) |
+| **Pre-state: backups covering the volume** | 0, inferred from a post-destroy read (2026-10-09T19:05Z): no snapshot or backup image is bound to, or was created from, server 169426216. Not read separately at the `detach` phase. | Hetzner API read at the `detach` phase (expected 0) |
 | **Live store before: `redis_keys` / `redis_active`** | `redis_keys=4124`, `redis_active=active`, `data_mount_src=/dev/mapper/inngest-redis`, `cutover_flag=done` (newest `host_role=dedicated` row before `detach` began, dt 2026-10-09 14:30:33Z). The next hourly row, dt 15:30:43Z (after `detach`), read `redis_keys=4426`, `redis_active=active`. | newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row before `detach`; informational only, counts legitimately move |
 | **`detach` dispatch run id and URL** | https://github.com/jikig-ai/soleur/actions/runs/37950928039 (workflow_dispatch, `apply_target=inngest-backstop-retire phase=detach`) | GitHub Actions run of `apply_target=inngest-backstop-retire phase=detach` |
 | **`detach` completion time (UTC)** | Hetzner `detach_volume` (server 169426216) finished 2026-10-09T15:27:18Z; run 15:19:57Z to 15:27:30Z; apply step 15:27:10Z to 15:27:22Z; conclusion success | that run's apply step |
@@ -131,6 +131,10 @@ The `destroy` phase accepts either a `wipe_run_id` (evidence path) or `erasure=p
 | **Recoverability after the destroy** | NONE for the backstop. After retirement the live LUKS volume is the only copy of the store, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener; losing that key is total loss (counsel review 2026-09, O4). The rollback to plaintext ends at the `detach` phase. |
 | **Records amended in PR B, after the Hetzner 404** | Article 30 PA-13 §(e), PA-21 §(f), PA-22 §(f) (in-cell, dated from the Hetzner delete time); `compliance-posture.md`; ADR-142 addendum status |
 
+> Superseded 2026-10-09 (#8285 PR B), for the "Recoverability after the destroy" row above: read it as "NONE by Jikigai (no snapshot or
+> backup exists; provider-side retention is not evidenced)". The record does not establish what Hetzner retains after deleting a
+> volume.
+
 ## Completion checklist (for PR B)
 
 - [ ] Every `PENDING-EVIDENCE` above is replaced with a value copied from run output or the named
@@ -153,6 +157,9 @@ Appended after review round 1 of PR #9784; the dated sections above are unchange
 `Superseded` markers that point here. This file is still a **template**: nothing in it states that the
 volume has been wiped, detached or destroyed, and every measured field remains `PENDING-EVIDENCE`
 until it is filled from run output. Ref #8285, Ref #6894.
+
+> Superseded 2026-10-09 (#8285 PR B): this file is no longer a template. Every measured field now holds a value and the
+> volume was wiped and destroyed; see "Completion — 2026-10-09 (#8285 PR B)" at the end of this file.
 
 ### Corrected paragraph: what the evidence does and does not show
 
@@ -191,7 +198,7 @@ refused. The completed record cites the comment URL and the date.
 |---|---|---|
 | **Hetzner action history for the volume** | `attach_volume` id 660462892361707, server 169544191 (the throwaway wipe host; not the live host 169426216, not null), success, finished 2026-10-09T16:03:10Z; later `detach_volume` id 660462892361820, server 169544191, success, finished 16:05:05Z; latest `attach_volume` to the live host 169426216: id 660282503645192, finished 2026-10-08T19:27:04Z (before the wipe run started, so the floor is the wipe run's own start, 15:54:55Z); the live host's `detach_volume` id 660454302424771 finished 15:27:18Z. Read 2026-10-09T19:05Z; the action list stays readable after the volume's deletion. | `GET /v1/volumes/106261946/actions` read before the `destroy` phase: the `attach_volume` action id, status and finish time with the server id it names (must not be 169426216 and not null), and the later `detach_volume` action id, status and finish time |
 | **Evidence row emitter** | `host=soleur-inngest-backstop-wipe`, `shipper=inngest-backstop-wipe`, on both the `started` row (dt 16:03:16Z) and the `wiped` row (dt 16:04:25Z) as received; the pin held and no row read `emitter_mismatch` | the row's `host` and `shipper` fields as received (the wipe host sets `shipper=inngest-backstop-wipe`); record what the row showed, not what the template says |
-| **Wipe poll outcome and duration** | green. Poll step 16:03:14Z to 16:04:51Z (97 s); the `wiped` row was ingested 71 s into it (16:04:25.9Z) | the `wipe` run's poll step: seconds from start to the `wiped` row |
+| **Wipe poll outcome and duration** | green. Poll step 16:03:14Z to 16:04:51Z (97 s); the `wiped` row was ingested about 72 s into it (16:04:25.9Z) | the `wipe` run's poll step: seconds from start to the `wiped` row |
 | **Device by-id name seen by the wipe host, and measured on-host duration** | by-id name: NOT RECOVERABLE (the row does not emit it; the wipe completing implies the path resolved inside the 300 s wait). On-host duration 69 s for 10737418240 bytes (`started` 16:03:16Z to `wiped` 16:04:25Z on the host's clock); the 10 GiB size, the device naming and the duration were assumed until this run and held. | the evidence row and the run; the first real wipe is the first measurement of the 10 GiB size, the by-id naming and the duration, which were assumed until then |
 | **Terraform version the orphan `-target` chain was re-checked on** | 1.10.5 (the workflow's `TERRAFORM_VERSION` pin; also what the three runs executed). The local-backend experiment (builtin `terraform_data` resources standing in for the orphan attachment and volume) was re-run on 1.10.5 in the session of 2026-10-09 and matched 1.9.8: a targeted plan on the orphan attachment shows only the attachment delete, on the volume only the volume delete, untargeted shows both. The experiment's output is not in this repository; the three green runs are the in-repo corroboration. | local-backend re-run on the workflow's pinned version (1.10.5) before the first dispatch; the earlier experiment used 1.9.8 |
 
@@ -201,7 +208,7 @@ Fill one row per production command (`detach`, `wipe`, each `teardown`, `destroy
 
 | Phase / command | Operator go-ahead (quote the message that named this exact command) | Head SHA the dispatch ran from | `git diff --quiet` against the reviewed SHA | Rehearsal / dry-run id |
 |---|---|---|---|---|
-| `detach` | recorded in the pipeline session; quote not in the repo | 32b2fe2abb (run 37950928039) | exit 1 against the reviewed commit 50fd47bb8a, confined to two TEST files (`inngest-backstop-wipe.test.sh`, `test-inngest-backstop-retire-gate.sh`: early-exit pipe-into-grep-q rewritten to count forms, 13 lines each way); exit 0 against PR #9784's head d0d74819c7 and against the squash commit d7dee46bb0 (the workflow, `variables.tf`, the wipe `.tf` and cloud-init and the gate library are byte-identical) | none: no rehearsal path exists |
+| `detach` | recorded in the pipeline session; quote not in the repo | 32b2fe2abb (run 37950928039) | exit 1 against the reviewed commit 50fd47bb8a over the apparatus paths, because two test files in the dispatch path differ (`inngest-backstop-wipe.test.sh` and `test-inngest-backstop-retire-gate.sh`: early-exit pipe-into-grep-q rewritten to count forms, 13 lines each way); exit 0 against PR #9784's head d0d74819c7 and against the squash commit d7dee46bb0. The workflow, `variables.tf`, the wipe `.tf`, cloud-init and the gate library are byte-identical to the reviewed commit | none: no rehearsal path exists |
 | `wipe` | recorded in the pipeline session; quote not in the repo | 32b2fe2abb (run 37955244979) | as for `detach` | none: no rehearsal path exists |
 | `teardown` (each, if any) | none dispatched on its own: teardown ran as a step of the `wipe` dispatch (16:04:51Z to 16:05:25Z) | 32b2fe2abb | as for `detach` | none: no rehearsal path exists |
 | `destroy` | recorded in the pipeline session; quote not in the repo | 32b2fe2abb (run 37958051426) | as for `detach` | none: no rehearsal path exists |
@@ -245,6 +252,8 @@ Appended after the second and last fix round of PR #9784; nothing above is edite
 `Superseded` markers that point here. This file is still a **template**: nothing in it states that the
 volume has been wiped, detached or destroyed, and every measured field remains `PENDING-EVIDENCE` until
 it is filled from run output. Ref #8285, Ref #6894.
+> Superseded 2026-10-09 (#8285 PR B): this file is no longer a template. Every measured field now holds a value and the
+> volume was wiped and destroyed; see "Completion — 2026-10-09 (#8285 PR B)" at the end of this file.
 
 ### Second corrected paragraph: what the evidence does and does not show
 
@@ -310,7 +319,8 @@ These add to both earlier lists.
 
 Appended by PR B of #8285 (draft PR #9877); the dated sections above are unchanged except that the measured fields now
 hold values and a pointer sits under "What this file is". Counts and identifiers only: no payload, key material or token
-value appears anywhere in this record. Ref #8285, Ref #6894.
+value appears anywhere in this record. Ref #8285, Ref #6894. The destruction facts below do not depend on PR #9877; the
+statements that code was deleted or `op=luks-rollback` retired take effect on that PR's merge.
 
 ### What happened
 
@@ -318,8 +328,8 @@ Volume 106261946 (`hcloud_volume.inngest_redis`, 10737418240 bytes) was detached
 Hetzner `detach_volume` finished 2026-10-09T15:27:18Z), attached to a throwaway server, zeroed and read back
 (run 37955244979; evidence row `result=wiped readback=zero sig_after=none`, host clock 16:04:25Z), detached again
 (16:05:05Z), and deleted (run 37958051426; Hetzner `delete_volume` 16:21:24Z, first 404 read 16:21:26Z). The throwaway
-server was removed by the same dispatch. The live LUKS volume 106903269 was never touched and its probe row is
-unchanged in shape afterwards. The variant used is the evidence path.
+server was removed by the same dispatch. No operation was directed at the live LUKS volume 106903269; probe rows from
+14:30:33Z through 17:31:19Z show it serving. The variant used is the evidence path.
 
 ### What the evidence does and does not show
 
@@ -349,27 +359,32 @@ inside the JSON the wipe host posted (`"dt":"2026-10-09T16:04:25Z"`), while the 
 values were read from Better Stack's hot window on 2026-10-09 before it aged out; the archive arm has no `ingest_time`
 column, so they cannot be re-read now, while the `dt` values and the in-payload `dt` were re-read from the archive). Receipt follows the
 sender's stamp by 0.9 s and 1.5 s. The clarification of 2026-10-09 above ("top-level `dt` column ... unmeasured") is
-therefore resolved: the host sets its own `dt` and Better Stack keeps it. The window check is still only a plausibility
-bound; Hetzner's action history is the independent evidence.
+therefore resolved: the host sets its own `dt` and Better Stack keeps it. This rests on two rows of one run: it bounds the sender's clock offset to about 2 s and says nothing about the overwrite or
+about the accuracy of the host's clock beyond that. The window check is still only a plausibility bound; Hetzner's action
+history is the independent evidence.
 
 ### Gaps and deviations, recorded as they stood
 
 - **Operator go-ahead quotes** for the three production commands are recorded in the pipeline session; the quotes are
   not in the repository. The approvals themselves are: `deruelle` approved the `inngest-cutover` environment on each of
   the three runs, and `deruelle` was also the dispatching actor. This is a self-approval; the evidence path does not
-  require two people.
-- **Reviewed commit versus dispatched head.** The reviewed commit 50fd47bb8a differs from the dispatched head
-  32b2fe2abb on two test files only (13 lines each way: `inngest-backstop-wipe.test.sh` and
-  `test-inngest-backstop-retire-gate.sh`, early-exit pipe-into-grep-q rewritten to count forms). The workflow, the
-  variables, the wipe `.tf` and cloud-init and the gate library are byte-identical between the PR head, the squash commit
-  d7dee46bb0 and the dispatched head. The reviewed-commit comparison therefore exits 1, and this is the reason.
+  require two people. **No independent second-person control operated on any of the three destructive steps.**
+- **Reviewed commit versus dispatched head.** Between the reviewed commit 50fd47bb8a and PR #9784's head d0d74819c7, nine
+  files of that PR differ: two test files in the dispatch path (13 lines each way: `inngest-backstop-wipe.test.sh` and
+  `test-inngest-backstop-retire-gate.sh`, early-exit pipe-into-grep-q rewritten to count forms), a third test file
+  (`test-inngest-host-dark-gate.sh`, 2 lines), a lint baseline (1 line), two runbooks, a learning file, the plan and the
+  tasks. None of the workflow, `variables.tf`, the wipe `.tf`, cloud-init or the gate library differs. Those paths are
+  byte-identical between the PR head, the squash commit d7dee46bb0 and the dispatched head 32b2fe2abb. The
+  reviewed-commit comparison therefore exits 1 over the apparatus paths, and the two dispatch-path test files are the reason.
 - **No rehearsal existed** for the wipe (weighed and not built; `decision-challenges.md`, 2026-10-09). The first real wipe
   was the first run of its host script and it passed.
 - **No key or header continuity proof existed** before the backstop went: nothing proved, ahead of `detach`, that the
   LUKS header and the Doppler key `INNGEST_REDIS_LUKS_KEY` still open the live volume at rest. The only evidence is that the
   running host serves from it (probe rows on `scsi-0HC_Volume_106903269` and `/dev/mapper/inngest-redis`). After retirement
-  that volume is the only copy and the key its sole opener; protection is tracked in #9879.
+  that volume is the only copy and the key its sole opener; protection is tracked in #9879 and is NOT built.
 - **The wipe host's by-id device name is not recoverable** (the row does not emit it).
+- **`ingest_time` values were read once** from Better Stack's hot window and cannot be re-read; no export of them is in the
+  repository. The `dt` values, the in-payload `dt` and the host identity were re-read from the archive.
 - **Days-to-expiry.** The property probe's daily comment never carried a days-to-expiry line, because PR A did not edit the
   probe and PR B does not delete it (it stays until the dead-probe feeder #9703 is armed).
 - **The pre-detach snapshot and backup read was not captured separately**; the counts are from 2026-10-09T19:05Z.
@@ -392,6 +407,8 @@ Article 30 register PA-13 section (e), PA-21 section (f) and PA-22 section (f) (
 - [x] No payload, key material or token value appears in this record.
 - [x] Article 30 PA-13 (e), PA-21 (f), PA-22 (f) and the compliance-posture row reuse "logical, guest-side, self-attested" and cite both times.
 - [x] The property probe is not deleted (#9703 not armed).
+- [ ] #8316 (the retire-or-keep decision for the dormant `inngest-volume-recut` target) updated or closed with the PR link:
+      pending at merge (a GitHub action on an open issue, done after PR #9877 merges).
 - [ ] CLO attestation at a named commit SHA: recorded in "CLO attestation" below.
 - [ ] `status:` flips from `template` to `complete` only in the commit that records that attestation, in the PR that also carries the 404 read-back.
 

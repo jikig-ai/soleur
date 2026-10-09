@@ -648,7 +648,8 @@ read back (run 37955244979) and destroyed (run 37958051426) on 2026-10-09; Hetzn
 at 16:21:26Z. The evidence-path variant was used; the provider-only variant (D4 of the 2026-10-08 addendum) was not. The
 three-phase dispatch, its wipe host, its gate library and the `op=luks-rollback` verb were deleted by PR B once the 404 was
 read back. The destruction record `knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md` carries the
-evidence and the attestation.
+evidence and the attestation. The destruction facts do not depend on PR #9877; the code-retirement statements in this
+addendum (the dispatch, its gate library and `op=luks-rollback` deleted) take effect on that PR's merge.
 
 ### Consequences now in force
 
@@ -656,7 +657,7 @@ evidence and the attestation.
   it" is satisfied: the verb is retired, and "Rollback ends at the `detach` phase" is now simply the state of the world.
 - **The LUKS volume is the only copy.** `hcloud_volume.inngest_redis_luks` (id 106903269) holds the only copy of the Inngest
   queue and run state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener. Delete protection,
-  edge pins and key-loss posture are not built here; they are tracked in #9879.
+  edge pins and key-loss posture are NOT built here; they are tracked in #9879 (open).
 - **The erasure is logical, guest-side and self-attested.** Hetzner's action history corroborates that a non-live server
   held the volume; it does not corroborate the overwrite. No physical or secure erasure is claimed.
 - **Two dead on-host surfaces remain until the next planned host replace**: the `rollback)` arm in
@@ -670,8 +671,8 @@ evidence and the attestation.
 - The wipe row's top-level `dt` is the **sender's clock**, not Better Stack's receive time; `ingest_time` is the receipt
   time. The round-2 wording "ingest time" in E9 should be read as `ingest_time`, and the window check holds on it (the
   verification-seat clarification above is resolved).
-- The 10 GiB size, the `scsi-0HC_Volume_<id>` naming and the 300 s device wait held on the first real run; the on-host
-  duration was 69 s. The guest hostname equalled the pinned `soleur-inngest-backstop-wipe`.
+- The 10 GiB size and the 300 s device wait held on the first real run, and the device naming is inferred to have held (the
+  wipe completed inside the 300 s wait); the by-id name itself was not recorded. The on-host duration was 69 s. The guest hostname equalled the pinned `soleur-inngest-backstop-wipe`.
 - The orphan-address `-target` chain on Terraform 1.10.5 matches 1.9.8.
 
 ### C4 note, closed
