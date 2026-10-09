@@ -269,6 +269,7 @@ describe("bwrap PATH shim (#8752)", () => {
       expect([...fds.values()]).not.toContain(argsFile);
       // The mask lands at the OUTER setup end (before `--`), not inside the
       // re-emitted payload — outer options parse after the payload regardless.
+      expect(payload).toEqual(["--ro-bind", "/", "/", "--", "/usr/bin/true"]);
       const bi = args.indexOf("--");
       expect(args.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
     } finally {
