@@ -17,20 +17,20 @@ body uses `Refs` (never `Closes`) for #9439, #8211, #9066, #9377, #8609; do not 
 
 - 2.1 RED: add FZ11 (flip, markers `freeze_held` + `flag_write_attempted`, expects flag-off write, redeploy, one unfreeze) and FZ12 (rollback, only `flag_write_attempted`, expects "nothing to unwind", zero unfreeze) inside `case_fz`.
 - 2.2 RED: add a WF pin that the `flag_write` step body touches `flag_write_attempted` after the xtrace guard and before the precheck call; add the mutant that moves it after.
-- 2.3 GREEN: add the `touch` to the workflow `flag_write` step; change the finalizer flip condition to `flag_written || flag_write_attempted`; leave rollback conditions on `flag_written`.
+- 2.3 GREEN (also update the finalizer header comment ~L572-577 and the "no flag write and no freeze" echo ~L612-614 to name the new marker): add the `touch` to the workflow `flag_write` step; change the finalizer flip condition to `flag_written || flag_write_attempted`; leave rollback conditions on `flag_written`.
 
 ## 3. Phase 2 — gc timer restart (item 8)
 
-- 3.1 RED: MZ-U5 (ours sentinel, `SHIM_GC_START_RC=1`) and MZ-U6 (absent sentinel, same): exit 5, `unfreeze-gc-timer gc_timer_restart_failed`, sentinel removal still happened in U5.
-- 3.2 GREEN: `mode_unfreeze` timer branch -> `_store_refuse` with the rc captured explicitly.
-- 3.3 Add the warn-only mutant (restores the old branch) and require MZ-U5 RED.
+- 3.1 RED: MZ-U7 (ours sentinel, `SHIM_GC_START_RC=1`) and MZ-U8 (absent sentinel, same): exit 5, `unfreeze-gc-timer gc_timer_restart_failed`, sentinel removal still happened in U7.
+- 3.2 GREEN: `mode_unfreeze` timer branch -> one immediate retry, then `_store_refuse` with `local rc=0` and `|| rc=$?`. Add MZ-U9 (ssh-shim fail-once counter file: first start fails, retry succeeds, exit 0).
+- 3.3 Add the warn-only mutant (restores the old branch) and require MZ-U7 RED.
 - 3.4 Update the finalizer's two "unfreeze FAILED" error lines (cleared sentinel / stopped timer wording).
 
 ## 4. Phase 3 — probe pre-flight (item 5)
 
-- 4.1 RED: MZ-P10 (probe, `SHIM_VERIFY=r21`, marker absent) -> exit 5 `store_unverified reason=marker_absent`, no `id=` session in the timeline; MZ-P11 (probe, `SHIM_VERIFY=r23`, `SHIM_FREEZE=foreign`) -> `cutover_frozen`. Check MZ-P1..P9 timelines gain exactly the one read.
-- 4.2 GREEN: `verified-only` argument on `refuse_if_store_unverified_or_not_empty`; `mode_probe` sets `STORE_SOURCE="$LUKS_MAPPER"` and calls it before the provision session.
-- 4.3 Notify-body PROBE_FAILED string: name the verdict words; add/adjust the NB text row; subject word unchanged.
+- 4.1 RED: MZ-P10 (probe, `SHIM_VERIFY=r21`, marker absent) -> exit 5 `store_unverified reason=marker_absent`, no `id=` session in the timeline; MZ-P11 (probe, `SHIM_VERIFY=r23`, `SHIM_FREEZE=ours` and a second row with `foreign`) -> `cutover_frozen` for BOTH (the pre-flight must not take the resume-arm-A tolerance); a row with `SHIM_FINDMNT=empty` -> `old_store_unmounted`. Use fresh case names. Check MZ-P1..P9 timelines gain exactly the two reads (mount source + store session).
+- 4.2 GREEN: optional `"${1:-}"` argument on `refuse_if_store_unverified_or_not_empty` (return after `store-verified ok`; refuse any sentinel before the `ours` tolerance); `mode_probe` calls `refuse_if_unmounted`, `refuse_if_not_on_mapper`, then the verified-only form, before the provision session.
+- 4.3 Notify body: PROBE_FAILED and FREEZE_HELD words strings in PLAIN words (no backtick, no `$`); NB row asserts the step exits 0 and the text names the verdict; subject words unchanged. Truncate the pre-flight session to elements 0-9 plus `echo 0` when `verified-only`.
 
 ## 5. Phase 4 — docs and records
 

@@ -28,6 +28,25 @@ transport wrapper, pre-receive) and no precheck script is edited. No infrastruct
 introduced, so the IaC routing gate does not apply. Merging this alone does not mutate production
 (dispatch-only workflow, no Terraform file in the diff); the PR body's first line says so.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09
+**Sections enhanced:** Research Insights, Implementation Phases 2-3, Acceptance Criteria, Risks
+**Passes used:** plan-review panel (DHH, Kieran, code-simplicity, CTO devex), a state-matrix walk (spec-flow), a suite-pin enumeration, the sharp-edges catalogue, the mechanical halt gates (user-brand, observability, PAT, scope check)
+
+### Key improvements
+
+1. Item 6's marker moved from a new env var in the precheck script to one `touch` in the workflow step, mirroring `freeze_held`; the precheck script and its suite are no longer edited.
+2. Item 5 lost its job-output plumbing: the verdict reaches the owner through reworded notify text (plain words only, since a backtick in that string is a command substitution) and the probe step log.
+3. The probe pre-flight now reuses `refuse_if_unmounted` and `refuse_if_not_on_mapper` (an unmounted booting host reads `old_store_unmounted`, not `probe_failed rc=5`), refuses ANY sentinel (including the same-lineage one the proof tolerates) and is truncated to the store-verified facts so the entry count cannot time out the pre-flight.
+4. Item 8 keeps one immediate no-sleep retry before failing, which removes the transient-ssh case from the flip-unwind trade-off.
+
+### New considerations
+
+- Test IDs MZ-U5/U6 already existed (now MZ-U7/U8/U9); RB requires each new `_store_*` word to be observed and have a row under the runbook's `## Verdict map`.
+- A transient `flag_write_failed` that never landed now also runs the unwind (one unneeded web-1 restart); stated in the runbook.
+- Flip resume arm B never unwinds the flag; filed as its own issue, not fixed here.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim | Reality | Plan response |
@@ -62,10 +81,22 @@ deferred-items issue (this one). No mechanism proposed here sits in a rejected-a
 - Extracting the Better Stack readback for a rollback finalizer readback (item 7) -> cut: it rewrites the region #9811 is editing.
 - A script-side marker in `git-data-flag-precheck.sh` (env var, path validation, new verdict, four test rows) -> cut by plan review: the workflow's own `touch` before the script buys the same property in one line, and the only extra refusals it over-marks are ones the earlier secrets/deny gates already make unreachable.
 - A `probe_verdict` job output, `PROBE_VERDICT` notify env, allowlist and re-pinned N-outputs/N-exprs -> cut by plan review: the verdict word is already in the probe step's annotation and log, and the notify body already points there; one reworded sentence carries it.
-- A bounded retry around the timer start -> cut: needs a sleep seam the script (no test seam, ADR-214) does not have.
+- A SLEPT retry around the timer start -> cut: needs a sleep seam the script (no test seam, ADR-214) lacks. An immediate, no-sleep single retry is kept (Phase 2) because it needs none.
 
 **Institutional learnings applied:**
 `2026-10-03-a-failure-notice-must-tell-failed-from-unknown-and-the-census-must-run-the-body` (bodies are EXECUTED, not grepped; a new job output needs a reader — which is why none is added), `2026-09-15-my-access-gate-proved-a-different-argv...` (exit 0 with a warning over a failed recovery is a false green), `2026-10-02-mutating-before-the-impl-commit-makes-checkout-a-shredder` (commit the implementation before running mutants), `2026-09-28-a-retrying-unit...` (the `ci-deploy.test.sh` pin guards variable-unit timer-start forms in host scripts; this plan adds no timer-start line, and its suite is run once to confirm).
+
+### Deepen findings (suite and state-matrix verification)
+
+Verified against the real files by a state-matrix walk, a pin enumeration and a correctness review:
+
+- **No existing pin touches the edits.** The suite extracts only `finalizer.sh`, `notify_body.sh`, `teardown.sh`, `key_fetch.sh`, `ssh_config.sh` and `secrets_check.sh` (T:1969-1973); nothing pins the `flag_write` step body, the finalizer's `flag_written` literal, or the PROBE_FAILED string beyond NB6 (subject ends `PROBE_FAILED`, body has no `mode=unfreeze`, no `${{`). Keep `swords="$swords PROBE_FAILED"`.
+- **Finalizer early exits.** L612 (`! flag_written && ! freeze_held`) is left unchanged: a flip always has `freeze_held` before the flag-write step can run (the step is gated on the freeze step's success), and rollback must keep ignoring the new marker. Only L625 changes; the header comment (~L572-577) and the L612-614 echo are reworded to name the marker.
+- **RB suite.** Every `_store_*` word must be OBSERVED by a unit row and have a row under `## Verdict map` (runbook L902); the new `probe=unfreeze-gc-timer verdict=gc_timer_restart_failed` row goes next to the unfreeze rows (L964-968). `store_unverified`, `cutover_frozen`, `old_store_unmounted` and `store_not_on_mapper` are already observed words, so the probe changes add no RB word.
+- **G5 census** requires exactly five `gd_capture` call sites; the plan adds none (it calls the existing `refuse_if_unmounted`/`refuse_if_not_on_mapper` helpers). **H5** requires the `mode_probe` calls to be plain statements (not in `$(…)`, `||`, `&&` or a pipe). **Verb census** scans `refuse_if_*` and `main`: no bare `touch`/`systemctl`/`rm` words there. The mutant `g2v-10` anchors on a literal line of the function; the plan keeps that line and does not rename the probe, so it still lands. `require_lineage` stays first in `mode_probe` (MZ-L).
+- **Floors.** `MUTANT_FLOOR` (T:3197, exact, currently 115) moves +1 per new landed mutant; `FLOOR` (T:3211, exact, currently 549) moves +2 per landed mutant and +1 per new standalone MZ row (rows inside `case_fz` add none). Restate the comment blocks at T:3187-3210 from a measured run, not from this arithmetic. The shim already has `SHIM_GC_START_RC` (T:227); no shim edit.
+- **Exit-status idiom.** Under `set -euo pipefail` capture with `local rc=0; gd_exec '…' || rc=$?`; a bare `gd_exec …; rc=$?` exits first.
+- **Standalone `mode=unfreeze` after a timer failure** still exports `freeze_held=1` (FZ7 pins that); the notify remedy and runbook row would tell the owner to sweep Art. 17 refusals from the freeze start although the sentinel is gone. Hence the wording fix in Phase 2, not a finalizer behaviour change.
 
 ## Item disposition
 
@@ -97,15 +128,16 @@ implementation before running the mutant batteries.
 
 ### Phase 2 — failed gc timer restart fails the unfreeze (item 8)
 
-- `mode_unfreeze`: replace the warn-and-continue branch with `_store_refuse unfreeze-gc-timer gc_timer_restart_failed "$rc"` (exit 5), capturing the rc explicitly (`gd_exec … || rc=$?`). The sentinel is already cleared, so a re-run converges (absent sentinel -> `nothing_to_unfreeze` -> start attempted again).
+- `mode_unfreeze`: replace the warn-and-continue branch with `_store_refuse unfreeze-gc-timer gc_timer_restart_failed "$rc"` (exit 5), with `local rc=0` and `gd_exec 'systemctl start git-data-gc.timer' || gd_exec 'systemctl start git-data-gc.timer' || rc=$?` — one IMMEDIATE retry with no sleep (the start is idempotent and the likeliest cause is a transient ssh blip, 255 or 124, which would otherwise unwind a proven flip). The S:712 idiom: a bare `gd_exec …; rc=$?` exits first under `set -e`. The retry is a second ssh call; the timeline rows account for it. The sentinel is already cleared, so a re-run converges (absent sentinel -> `nothing_to_unfreeze` -> start attempted again).
 - State the cost plainly in the runbook (not only in `decision-challenges.md`): in a flip the unfreeze step fails -> total unwind (flag off, redeploy, the finalizer's unfreeze retries the start and will usually fail the same way -> `RECOVERY_FAILED`); in a rollback the erasure probe is skipped and the finalizer retries; standalone `mode=unfreeze` goes red.
-- Wording: the finalizer's two "unfreeze FAILED" error lines and the runbook `FREEZE_HELD` row gain "or the gc timer would not restart (`gc_timer_restart_failed`; the sentinel is already cleared and the same re-dispatch converges)", because the existing text says the sentinel may still block every store verb. The notify body is not changed.
+- Wording: the finalizer's two "unfreeze FAILED" error lines and the runbook `FREEZE_HELD` row gain "or the gc timer would not restart (`gc_timer_restart_failed`; the sentinel is already cleared and the same re-dispatch converges)", because the existing text says the sentinel may still block every store verb. The wording change for the notify body is in Phase 3 (plain words, no new output).
 - Runbook verdict map: add the `gc_timer_restart_failed` row (the RB suite requires every `_store_*` word to have one).
 
 ### Phase 3 — booting-host provision misread (item 5)
 
-- `git-data-cutover.sh`: `refuse_if_store_unverified_or_not_empty` gains an optional `verified-only` argument that returns right after `_store_emit store-verified ok` (additive lines only; the count stage is skipped because a rollback after real use legitimately holds repositories). `mode_probe` sets `STORE_SOURCE="$LUKS_MAPPER"` (ADR-239 D1: the render serves only the mapper) and calls it after `access_gate`/`refuse_if_config_unsafe`, before the provision session. A booting or unbound host exits 5 as `store_unverified` (reason words as today) and a held sentinel as `cutover_frozen`, and no push or remove is attempted on an unverified store.
-- Notify body (workflow L772): extend the one existing string so `PROBE_FAILED` reads "the probe step log names the verdict: `store_unverified` or `cutover_frozen` mean the host store was not verifiable and the push and remove were not attempted (re-verify with `mode=proof`); `residue_left` means a synthetic repository survived". The subject word stays `PROBE_FAILED`.
+- `git-data-cutover.sh`: `refuse_if_store_unverified_or_not_empty` gains an optional first argument read as `"${1:-}"` (`main()` calls it with none, and the script runs under `set -u`) that returns right after `_store_emit store-verified ok`. Additive lines only, and two details from review: (a) in the `rc 23` branch, before the same-lineage `ours` tolerance, add `[ "${1:-}" != verified-only ] || _store_refuse store-verified cutover_frozen`, so the probe pre-flight refuses ANY sentinel (the proof's resume-arm-A tolerance would otherwise pass it and let the host's `provision` refuse, the very misread being fixed); (b) when the argument is `verified-only`, the remote session is TRUNCATED to the store-verified facts: right after the array `c` is built (elements 0-9, through the marker-equals-UUID test) add `if [ "${1:-}" = verified-only ]; then c=("${c[@]:0:10}" 'echo 0'); fi`, so the repositories-directory and entry-count checks (rc 3, 4, 7, 8, 9, 96, and a `find` timeout on a large store) cannot fail or time out the pre-flight; a missing repositories directory then surfaces later as `probe_failed reason=provision`, stated in the runbook.
+- `mode_probe` runs, after `access_gate`/`refuse_if_config_unsafe`: `refuse_if_unmounted`, `refuse_if_not_on_mapper`, then `refuse_if_store_unverified_or_not_empty verified-only` — the same order `proof` uses (S:848-852), instead of hard-assigning `STORE_SOURCE`. Reason: the pre-flight session opens with `findmnt … || exit 5`, so a host with no mount would read `probe_failed rc=5` and a wrong device `rc=6`; the two existing helpers name those states (`old_store_unmounted`, `store_not_on_mapper`), reuse existing capture sites (the G5 census still counts five) and set `STORE_SOURCE` from the real mount (ADR-239 D1). Result: a booting host reads `old_store_unmounted` or `store_unverified`, an unbound one `store_unverified`, a held sentinel `cutover_frozen`; no push or remove runs on an unverified store.
+- Notify body (workflow L772, and the `FREEZE_HELD` words string at ~L770): the strings are inside a double-quoted shell string under `set -euo pipefail`, so the new text uses plain words only — NO backticks and NO `$` (a backtick is a command substitution: rc 127 would kill the one job that must not fail). `PROBE_FAILED` reads: "the probe step log names the verdict: old_store_unmounted, store_unverified, store_not_on_mapper or cutover_frozen mean the host store was not verifiable and the push and remove were not attempted (re-verify with mode=proof); residue_left means a synthetic repository survived". The `FREEZE_HELD` word gains "(sentinel still held, or the gc timer would not restart: the unfreeze step log names the verdict, and a mode=unfreeze re-dispatch converges)". Subject words stay `FREEZE_HELD` and `PROBE_FAILED`. No job output, no env, no allowlist. The executed NB row asserts the body step exits 0 and the text contains the verdict word.
 - Runbook `PROBE_FAILED` row: replace the sentence "a `provision` failure while git-data is still booting reads as `PROBE_FAILED` too" with the verdict-word pointer.
 
 ### Phase 4 — item 1 mitigation, docs, deferral record
@@ -129,7 +161,7 @@ with the learning's recipe (save `git diff <merge-base> HEAD -- <file>`, check o
 
 - `.github/workflows/git-data-cutover.yml` — header comment, Nothing-to-rollback echo, `flag_write` step (`touch`), finalizer flip condition and two error lines, notify-body PROBE_FAILED string.
 - `apps/web-platform/infra/git-data-cutover.sh` — `verified-only` argument, probe pre-flight, `mode_unfreeze` timer branch, header comment.
-- `apps/web-platform/infra/git-data-cutover-access.test.sh` — MZ-U5/U6, MZ-P10/P11, FZ11/FZ12 (inside `case_fz`), a WF pin for the `touch` ordering, NB text row, mutants, restated `MUTANT_FLOOR` and `FLOOR`.
+- `apps/web-platform/infra/git-data-cutover-access.test.sh` — MZ-U7/U8/U9 (U9: first start fails, retry succeeds, via a fail-once counter file in the ssh shim), MZ-P10/P11, FZ11/FZ12 (inside `case_fz`; FZ12 is a regression pin that passes before the change, so it is paired with a mutant adding `flag_write_attempted` to the L612 gate and expecting RED), a WF pin for the `touch` ordering, NB text row, mutants, restated `MUTANT_FLOOR` and `FLOOR`.
 - `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md` — notify-channel table, known-gaps sentences, verdict-map row.
 
 ## Files to Create
@@ -228,9 +260,9 @@ discoverability_test:
 ### Pre-merge (PR)
 
 - [ ] The `flag_write` step body touches `flag_write_attempted` after the xtrace guard and before the precheck script (a static pin plus a mutant that moves it after); executed finalizer: flip with `freeze_held` + `flag_write_attempted` (no `flag_written`) writes the flag off, redeploys and unfreezes (FZ11); rollback with only `flag_write_attempted` exits "nothing to unwind" without calling the host script (FZ12).
-- [ ] `MODE=unfreeze` with the shim's timer-start rc set to 1 exits 5 with `unfreeze-gc-timer gc_timer_restart_failed` after the sentinel was cleared; the absent-sentinel arm does the same (MZ-U5/U6); a warn-only mutant goes RED.
+- [ ] `MODE=unfreeze` with the shim's timer-start rc set to 1 exits 5 with `unfreeze-gc-timer gc_timer_restart_failed` after the sentinel was cleared and after one immediate retry; the absent-sentinel arm does the same (MZ-U7/U8); a first-fail-then-succeed start exits 0 (MZ-U9); a warn-only mutant goes RED.
 - [ ] `MODE=probe` against an unverified store exits 5 `store_unverified` with NO provision session in the timeline; a foreign sentinel gives `cutover_frozen` (MZ-P10/P11); the happy path (MZ-P1) still passes with the extra read.
-- [ ] Executed notify body keeps the subject word `PROBE_FAILED` and its text names `store_unverified`; no job output, no `needs.cutover.outputs` reference and no secret binding changed.
+- [ ] Executed notify body exits 0 with the new text (plain words, no backtick or `$`), keeps the subject words `PROBE_FAILED` and `FREEZE_HELD`, and its text names `store_unverified`; no job output, no `needs.cutover.outputs` reference and no secret binding changed.
 - [ ] `MUTANT_FLOOR` and `FLOOR` restated from a measured run; `git-data-cutover-access.test.sh`, `tests/scripts/test-git-data-root-token-census.sh`, the shell-trace credential-refusal lint and `ci-deploy.test.sh` pass; actionlint is clean on the workflow.
 - [ ] Runbook: gc verdict-map row added; the booting-host `PROBE_FAILED` caveat replaced; the `FREEZE_HELD` row and the plain statement of the flip-unwind cost added; the `nothing_to_rollback` and force-cancel sentences kept.
 - [ ] `git diff origin/main...HEAD -- .github/workflows/git-data-cutover.yml` touches none of the #9811 regions; the PR body's first line says merging alone does not mutate production; it uses `Refs #9439, #8211, #9066, #9377, #8609` only (no `Closes`); merged through the queue, no `--admin`.
@@ -250,8 +282,8 @@ discoverability_test:
 
 ## Risks and Sharp Edges
 
-- **Taste decision for the owner (persisted to `specs/<branch>/decision-challenges.md`):** item 8 is fatal, so a gc timer hiccup after a proven flip triggers the total unwind (flag off plus a second web-1 restart) and the unwind's own retry will usually fail the same way. Alternatives: fatal for rollback and standalone unfreeze but red-without-unwind for flip; or an in-script retry (needs a sleep seam the script lacks). The plan takes fatal because it is the issue's literal ask and the smallest change; the cost is stated in the runbook.
-- Item 6's marker over-approximates "a write landed"; the flag-off write it can trigger is idempotent, and the only pre-write refusals it could over-mark are gated earlier by the secrets and deny checks.
-- Both exact floors (`MUTANT_FLOOR`, `FLOOR`) count by measured run, per measurement and not per loop iteration; rows added inside `case_fz` do not move `FLOOR`, new mutants do.
+- **Taste decision for the owner (persisted to `specs/<branch>/decision-challenges.md`):** item 8 is fatal after one immediate retry, so a persistent gc timer failure after a proven flip triggers the total unwind (flag off plus a second web-1 restart) and the unwind's own retry will usually fail the same way. The retry removes the transient-ssh case. Alternative: fatal for rollback and standalone unfreeze but red-without-unwind for flip. The plan takes fatal because it is the issue's literal ask and the smallest change; the cost is stated in the runbook, including that a rollback with this failure also skips its erasure probe.
+- Item 6's marker over-approximates "a write landed". The flag-off write it can trigger is idempotent, and the pre-write refusals are gated earlier by the secrets and deny checks, but a TRANSIENT `flag_write_failed` that never landed now also runs the unwind: flag off, a fleet redeploy (bounded at 900 s) and an unfreeze, i.e. one unneeded web-1 restart. Stated in the runbook; accepted because the run cannot tell a landed write from one that did not.
+- Both exact floors (`MUTANT_FLOOR`, `FLOOR`) count by measured run, per measurement and not per loop iteration; rows added inside `case_fz` do not move `FLOOR`, new mutants do. Only the cutover-access suite is edited; the flag-precheck suite is not touched. The FZ pass message (T:2371 "11 … cases") is updated to the new case count. New case names are unique (`mz-u7-gcstart`, `mz-u8-gcstart-absent`, `mz-p10-…`, `mz-p11-…`): `run_case` writes `$T/<name>.out` and RB snapshots `$T/*.out`, so a reused name would overwrite an observed verdict.
 - The probe pre-flight is one more ssh session in `mode_probe`; the MZ-P timeline expectations change by exactly that read. `STORE_SOURCE="$LUKS_MAPPER"` there is an ADR-239 D1 coupling that MZ-P10/P11 pin.
 - Commit the implementation before running mutants.
