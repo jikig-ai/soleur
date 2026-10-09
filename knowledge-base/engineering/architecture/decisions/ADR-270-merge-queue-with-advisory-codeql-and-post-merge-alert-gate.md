@@ -643,6 +643,18 @@ checks are green, under `strict_required_status_checks_policy = true`? Answer: y
   is (fixtures Q12, Q12b). This run therefore says nothing about enqueue latency: it expired before the required set could
   complete.
 
+### Addendum 2026-10-09: the sync script refuses an armed BEHIND PR on a merge-queue repo
+
+Decision: the BEHIND-sync executable carries the queue-mode refusal for its standalone entry, so the rule no longer
+lives only in a bash fence an agent pastes. `sync-pr-behind.sh <PR>` answers `kind=queue_wait` (exit 0, nothing fetched,
+merged or pushed) when GitHub reports the PR BEHIND (not DIRTY), auto-merge is armed and `main` has a `merge_queue` rule
+(read by `.type`, never by position). An unreadable rules read while armed fails closed (`kind=gh`, exit 4), as
+`queue_gate` does. `--step` stays the Phase 7 fence's unguarded call: the fence owns the rule, armed, expiry and
+DIRTY decisions, and its expiry fallback must keep syncing. Trigger: PR 9839 (2026-10-09) pushed twice in the window
+between arming and enqueue because a hand-written poll loop treated BEHIND as an error; the skill text already forbade
+it. Accepted residual: a loop that calls `--step` directly, and the `pre-merge-rebase.sh` hook, are still unguarded
+(tracked in #9869). Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
+
 ## Cost Impacts
 
 No new vendor or subscription. A queue adds one `merge_group` run per candidate on
