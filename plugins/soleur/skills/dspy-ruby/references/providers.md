@@ -7,7 +7,7 @@ DSPy.rb provides unified support across multiple LLM providers through adapter g
 ### Provider Overview
 
 - **OpenAI**: GPT-4, GPT-4o, GPT-4o-mini, GPT-3.5-turbo
-- **Anthropic**: Claude Opus 5.5, Sonnet 5.5, Haiku 4.5
+- **Anthropic**: Claude Opus 5.5, Sonnet 5.5, Haiku 5.5
 - **Google Gemini**: Gemini 1.5 Pro, Gemini 1.5 Flash, other versions
 - **Ollama**: Local model support via OpenAI compatibility layer
 - **OpenRouter**: Unified multi-provider API for 200+ models
@@ -57,8 +57,8 @@ DSPy.configure do |c|
   c.lm = DSPy::LM.new('anthropic/claude-sonnet-5-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 
-  # Claude Haiku 4.5 (fastest, cost-effective)
-  c.lm = DSPy::LM.new('anthropic/claude-haiku-4-5',
+  # Claude Haiku 5.5 (fastest, cost-effective)
+  c.lm = DSPy::LM.new('anthropic/claude-haiku-5-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 end
 ```
@@ -218,7 +218,7 @@ result2 = predictor.forward(
 
 ### Model Selection Strategy
 
-1. **Development**: Use cheaper, faster models (gpt-4o-mini, claude-haiku-4-5, gemini-1.5-flash)
+1. **Development**: Use cheaper, faster models (gpt-4o-mini, claude-haiku-5-5, gemini-1.5-flash)
 2. **Production Simple Tasks**: Continue with cheaper models if quality is sufficient
 3. **Production Complex Tasks**: Upgrade to more capable models (gpt-4o, claude-sonnet-5-5, gemini-1.5-pro)
 4. **Local Development**: Use Ollama for privacy and zero API costs

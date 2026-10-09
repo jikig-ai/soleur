@@ -119,11 +119,13 @@ export function BashAutonomousToggle({
           </span>
           <p className="text-xs text-soleur-text-secondary">
             The Concierge will run any non-blocked command without asking. The
-            blocklist (curl, wget, sudo, …) and secret redaction still apply, but
-            no blocklist is perfect — a command that looks safe could still
-            change or delete files in this workspace. Your work is backed up in
-            git, and you can watch each step in the chat. Only turn this
-            on for repos and accounts you trust.
+            blocklist (curl, wget, sudo, …) still applies, but no blocklist is
+            perfect. Until a stricter check ships, that includes a force-push
+            over your repository&apos;s default branch (which can erase its
+            history on GitHub) and infrastructure teardown such as terraform
+            destroy. Other commands that look safe could still change or delete
+            files in this workspace. You can watch each step in the chat. Only
+            turn this on for repos and accounts you trust.
           </p>
           <div className="flex justify-end gap-2">
             <Button
