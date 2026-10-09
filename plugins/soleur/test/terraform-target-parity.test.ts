@@ -76,7 +76,11 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
 // Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
 // same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
-const TEST_FLOOR = 278;
+// 278 -> 265 (#8285 PR B, -13): the "inngest-backstop-retire dispatch" describe (17 tests: registration, id-pin ordering,
+// confirm literal, environment, phase gating, destroy preconditions, literal state-only -targets, mutex, timeout, strip)
+// was replaced by a 4-test describe (G1 "stays retired", B9 mutex over the three surviving surfaces, B6, B5): the job those
+// rows graded no longer exists. Each deleted row's mutation, and what kills it now, is in the PR B checklist.
+const TEST_FLOOR = 265;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1190,18 +1194,12 @@ function stripDispatchJobs(workflowText: string): string {
   // rather than merely uniform: ALL EIGHTEEN of its -targets are
   // OPERATOR_APPLIED_EXCLUSIONS (ADR-103), so folding them into `allTargets` would assert
   // per-merge coverage for a fan-out the per-merge apply deliberately never touches.
-  // inngest_backstop_retire (#8285; the converted #7695 recut job): the dispatch-only retirement of the
-  // plaintext Redis AOF backstop. Its -targets (the two orphaned state addresses plus the throwaway wipe
-  // host's server and attachment) are none of them per-merge targets, and the wipe pair are
-  // OPERATOR_APPLIED_EXCLUSIONS, so stripping is coverage-neutral today — but strip it per the
-  // uniform rule: a dispatch writer surface must never broaden the per-merge coverage anchor, so a
-  // FUTURE -target that is NOT an exclusion cannot silently mask a per-merge miss.
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_backstop_retire");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1460,14 +1458,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // precedent); they are `doppler_secret`/`doppler_project`, not the CI-published token types the
   // #5566 test forces. Fresh signing/event keys (AC-KEYROTATE — not reused from the co-located inngest.tf).
   "hcloud_server.inngest",
-  // #8285 — the throwaway wipe host that zeroes the retired plaintext backstop volume (count-gated by
-  // var.inngest_backstop_wipe_enabled, default false). Touched only by the reviewer-gated
-  // `apply_target=inngest-backstop-retire` dispatch (stripDispatchJobs excludes that job). The
-  // plaintext pair `hcloud_volume.inngest_redis` / `hcloud_volume_attachment.inngest_redis` left this set
-  // when #8285 stopped declaring them: they are state-only orphans destroyed by that dispatch's
-  // `-target`, and a managed address that no longer exists needs no exclusion.
-  "hcloud_server.inngest_backstop_wipe",
-  "hcloud_volume_attachment.inngest_backstop_wipe",
+  // #8285 — the throwaway wipe host and the plaintext pair `hcloud_volume.inngest_redis` /
+  // `hcloud_volume_attachment.inngest_redis` are gone: the apparatus is deleted and the volume was destroyed
+  // 2026-10-09. A managed address that no longer exists needs no exclusion (Guard 1 below pins that the
+  // retired addresses are not targeted by any job).
   // #6894 / ADR-142. The ADDITIVE target volume and its attachment. Both are
   // operator-applied via `apply_target=inngest-host`; neither is in the per-merge
   // allowlist, because creating a volume is a billable resource change that wants
@@ -3477,173 +3471,55 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
 });
 
 /**
- * `apply_target=inngest-backstop-retire` (#8285, the converted #7695 recut job) is the ONE dispatch in
- * this workflow that proves something about the WORLD (the live encrypted store) before it plans, in
- * front of EVERY phase. Everything below pins the registration sites, the enum<->job binding, the
- * ordering of its chokepoints and the shared-mutex property.
+ * The inngest dispatch surfaces after the plaintext-backstop retirement (#8285 PR B).
+ *
+ * `apply_target=inngest-backstop-retire` and its `inngest_backstop_retire` job were deleted once the
+ * volume was destroyed. What stays pinned: the retired surface stays RETIRED (Guard 1: a conflict
+ * resolution or a revert-of-a-revert cannot silently bring the destroy dispatch back), and the properties
+ * of the surfaces that remain (the shared inngest mutex, the replace job's targets, the LUKS passphrase
+ * pair's place in the per-merge list).
  *
  * THE MUTEX IS TWO GROUPS, and a job can carry only one. The job-level group is the inngest one
  * (`deploy-inngest-restart`, shared with cutover-inngest.yml and the host jobs); the root's
  * serializer (`terraform-apply-web-platform-host`, the state backend has use_lockfile = false) is the
  * WORKFLOW-level group, which already governs every job in this file. Both are asserted as properties.
  */
-describe("inngest-backstop-retire dispatch: registration, binding, ordering and the shared mutex (#8285)", () => {
+describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-  const jobBlock = extractJobBlock(wf, "inngest_backstop_retire");
-  const body = stripComments(jobBlock);
+  const RETIRED_ADDRS = [
+    "hcloud_volume.inngest_redis",
+    "hcloud_volume_attachment.inngest_redis",
+    "hcloud_server.inngest_backstop_wipe",
+    "hcloud_volume_attachment.inngest_backstop_wipe",
+  ];
 
-  test("B6/B7: the enum option and its bound job BOTH exist, and the retired recut option is gone", () => {
-    expect(wf).toMatch(/^ {10}- inngest-backstop-retire$/m);
-    expect(wf).not.toMatch(/^ {10}- inngest-volume-recut$/m);
-    expect(jobBlock.length).toBeGreaterThan(0);
-    expect(jobBlock).toContain("inputs.apply_target == 'inngest-backstop-retire'");
-    expect(extractJobBlock(wf, "inngest_volume_recut")).toBe("");
-  });
-
-  test("B7 (non-vacuity): the binding check can distinguish present from absent", () => {
-    const noOption = wf.replace(/^ {10}- inngest-backstop-retire$/m, "");
-    expect(/^ {10}- inngest-backstop-retire$/m.test(noOption)).toBe(false);
-    const noJob = stripJob(wf, "inngest_backstop_retire");
-    expect(noJob).not.toContain("inputs.apply_target == 'inngest-backstop-retire'");
-  });
-
-  test("the phase, wipe_run_id, erasure and clo_attestation_ref inputs exist", () => {
-    for (const input of ["phase", "wipe_run_id", "erasure", "clo_attestation_ref", "expected_inngest_volume_id"]) {
-      expect(wf, `input ${input}`).toMatch(new RegExp(`^ {6}${input}:$`, "m"));
+  test("G1: the retired dispatch stays retired (no job, enum option, confirm literal, input or -target)", () => {
+    const JOB = /^ {2}inngest_backstop_retire:\s*$/m;
+    const OPTION = /^ {10}- inngest-backstop-retire$/m;
+    const INPUT = /^ {6}(expected_inngest_volume_id|wipe_run_id|erasure|clo_attestation_ref):$/m;
+    // Non-vacuity: each pattern recognises the form it forbids, so an empty result is not a blind scan.
+    expect(JOB.test("  inngest_backstop_retire:\n")).toBe(true);
+    expect(OPTION.test("          - inngest-backstop-retire\n")).toBe(true);
+    expect(INPUT.test("      wipe_run_id:\n")).toBe(true);
+    expect(extractAllTargets(wf).size).toBeGreaterThan(50);
+    expect(wf).not.toMatch(JOB);
+    expect(wf).not.toMatch(OPTION);
+    expect(wf).not.toMatch(INPUT);
+    expect(stripComments(wf)).not.toContain("RETIRE-INNGEST-BACKSTOP");
+    expect(wf).not.toContain("inngest-backstop-retire-gate.sh");
+    const all = extractAllTargets(wf);
+    for (const addr of RETIRED_ADDRS) {
+      expect(all.has(addr), `${addr} must not be a -target of any job`).toBe(false);
     }
   });
 
-  test("-targets are exactly the orphaned pair and the wipe pair; no -replace and no -destroy anywhere", () => {
-    const targets = extractAllTargets(jobBlock);
-    expect([...targets].sort()).toEqual([
-      "hcloud_server.inngest_backstop_wipe",
-      "hcloud_volume.inngest_redis",
-      "hcloud_volume_attachment.inngest_backstop_wipe",
-      "hcloud_volume_attachment.inngest_redis",
-    ]);
-    // Orphans are destroyed by `-target` alone: a destroy-mode plan would expand to dependents.
-    expect(body).not.toMatch(/(^|\s)-replace[=\s]/);
-    expect(body).not.toMatch(/(^|\s)-destroy([\s=]|$)/);
-    // Nothing in the job may write state by hand (the repo-wide invariant is asserted above too).
-    expect(body).not.toMatch(/terraform\s+state\s+(rm|mv|push|replace-provider)\b/);
-  });
-
-  test("sources the gate lib and CALLS its gate functions under a non-suppressing `if !`", () => {
-    expect(body).toContain("tests/scripts/lib/inngest-backstop-retire-gate.sh");
-    expect(body).toMatch(/^\s*if ! inngest_backstop_retire_gate \S+ "\$RETIRE_PHASE" "\$EXPECTED_INNGEST_VOLUME_ID" untargeted; then$/m);
-    expect(body).toMatch(/^\s*if ! inngest_backstop_retire_gate \S+ "\$RETIRE_PHASE" "\$EXPECTED_INNGEST_VOLUME_ID" targeted; then$/m);
-    expect(body).toMatch(/^\s*if ! inngest_backstop_retire_gate \S+ teardown "\$EXPECTED_INNGEST_VOLUME_ID" targeted; then$/m);
-    expect(body).toMatch(/^\s*if ! inngest_backstop_live_store_gate /m);
-    expect(body).toMatch(/^\s*if ! inngest_backstop_destroy_precondition /m);
-    expect(jobBlock).toContain("NO [ack-destroy] bypass");
-  });
-
-  test("the live-store gate runs BEFORE any terraform command, and the destroy precondition BEFORE the first plan", () => {
-    const liveAt = body.indexOf("inngest_backstop_live_store_gate");
-    const initAt = body.indexOf("terraform init");
-    const preAt = body.indexOf("inngest_backstop_destroy_precondition");
-    const planAt = body.indexOf("terraform plan -no-color");
-    const applyAt = body.indexOf("terraform apply -no-color");
-    for (const at of [liveAt, initAt, preAt, planAt, applyAt]) expect(at).toBeGreaterThan(-1);
-    expect(liveAt).toBeLessThan(initAt);
-    expect(preAt).toBeLessThan(planAt);
-    expect(planAt).toBeLessThan(applyAt);
-  });
-
-  test("does NOT re-derive an inline copy of the gate's counter logic in the plan steps", () => {
-    // The gate must be the SAME BYTES the test suite exercises. An inline jq over resource_changes
-    // inside a PLAN step would be a second, untested implementation. (The APPLY step's address-loop
-    // backstop re-reads the SAVED plan after the gate passed: redundancy, not a second decision.)
-    const planStep = jobBlock.slice(
-      jobBlock.indexOf("- name: Terraform plan (phase)"),
-      jobBlock.indexOf("- name: Terraform apply (phase)"),
-    );
-    expect(planStep.length).toBeGreaterThan(0);
-    expect(planStep).not.toContain("resource_changes");
-  });
-
-  test("calls the stock preflight (the wipe phase creates a server)", () => {
-    expect(body).toMatch(/\bstock_preflight_gate\s+tfplan\.json\b/);
-    expect(body).toMatch(/^\s*source\s+\S*stock-preflight-gate\.sh/m);
-  });
-
-  test("requires the typed confirm and the id-pin before planning", () => {
-    expect(body).toContain('"$CONFIRM" == "RETIRE-INNGEST-BACKSTOP"');
-    expect(body).toContain("EXPECTED_INNGEST_VOLUME_ID");
-    expect(body.indexOf("RETIRE-INNGEST-BACKSTOP")).toBeLessThan(body.indexOf("terraform init"));
-  });
-
-  test("B8: RETIRE-INNGEST-BACKSTOP is distinct from every other confirm literal", () => {
-    const literals = [...wf.matchAll(/"\$CONFIRM" != "([A-Z-]+)"/g)].map((m) => m[1]);
-    const others = literals;
-    expect(others.length).toBeGreaterThan(0); // non-vacuity: there ARE siblings to be distinct from
-    expect(others).not.toContain("RETIRE-INNGEST-BACKSTOP");
-    // Exactly ONE job gates on it, and the retired recut token is gone from the file's run text.
-    const gating = [...stripComments(wf).matchAll(/"\$CONFIRM" == "RETIRE-INNGEST-BACKSTOP"/g)];
-    expect(gating).toHaveLength(1);
-    expect(stripComments(wf)).not.toContain("RECUT-INNGEST-VOLUME");
-  });
-
-  test("B6: the `confirm` input DESCRIPTION names this target as environment-gated", () => {
-    const confirmDesc = /confirm:\n\s*description: "([^"]*)"/.exec(wf);
-    expect(confirmDesc).not.toBeNull();
-    expect(confirmDesc![1]).toContain("inngest-backstop-retire");
-    expect(confirmDesc![1]).not.toContain("inngest-volume-recut");
-  });
-
-  test("declares the required-reviewer environment (the SOLE authorization)", () => {
-    expect(jobBlock).toMatch(/^ {4}environment: inngest-cutover$/m);
-  });
-
-  test("asserts the reviewer set is non-empty at dispatch time (DP-11 F8)", () => {
-    expect(jobBlock).toContain("environments/inngest-cutover");
-    expect(jobBlock).toContain("required_reviewers");
-  });
-
-  test("D-D/W1: the live-store gate is skipped for teardown ONLY, and the read-back runs under always()", () => {
-    const LIVE = /- name: Live-store gate[^\n]*\n {8}if: env\.RETIRE_PHASE != 'teardown'\n/;
-    // W2-8: the read-back also runs on the destroy 404 shortcut (skip=true) so a record exists
-    const READBACK = /- name: Read-back[^\n]*\n {8}if: always\(\) && steps\.conv\.outcome == 'success' && \(steps\.conv\.outputs\.skip != 'true' \|\| env\.RETIRE_PHASE == 'destroy'\)\n/;
-    // W2-7: the whole-root untargeted plan is skipped for teardown (a leaked wipe host must always be cleanable)
-    const UNTARGETED = /- name: Read-only untargeted plan[^\n]*\n {8}if: steps\.conv\.outputs\.skip != 'true' && env\.RETIRE_PHASE != 'teardown'\n/;
-    expect(jobBlock).toMatch(LIVE);
-    expect(jobBlock).toMatch(READBACK);
-    expect(jobBlock).toMatch(UNTARGETED);
-    // non-vacuity: the patterns can tell the guarded form from an unguarded one
-    expect(jobBlock.replace("if: env.RETIRE_PHASE != 'teardown'\n", "")).not.toMatch(LIVE);
-    expect(jobBlock.replaceAll("if: always() && steps.conv.outcome", "if: steps.conv.outcome")).not.toMatch(READBACK);
-    expect(jobBlock.replace("(steps.conv.outputs.skip != 'true' || env.RETIRE_PHASE == 'destroy')", "steps.conv.outputs.skip != 'true'")).not.toMatch(READBACK);
-    expect(jobBlock.replace("skip != 'true' && env.RETIRE_PHASE != 'teardown'\n        working-directory: ${{ env.INFRA_DIR }}\n        env:\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}\n        run: |\n          set +e\n          set -uo pipefail\n          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \\\n            terraform plan -no-color -input=false -out=tfplan-all", "skip != 'true'\n        working-directory: ${{ env.INFRA_DIR }}\n        env:\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}\n        run: |\n          set +e\n          set -uo pipefail\n          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \\\n            terraform plan -no-color -input=false -out=tfplan-all")).not.toMatch(UNTARGETED);
-  });
-
-  test("D-A/D-B: the destroy precondition is handed Hetzner's action history and the fetched CLO comment, never an HTTP status", () => {
-    expect(body).toMatch(/^\s*if ! inngest_backstop_destroy_precondition .*--clo-comment-file /m);
-    expect(body).toContain("--actions-file");
-    expect(body).toContain("--live-server-id");
-    expect(body).not.toContain("--clo-ref-http-code");
-    expect(body).toContain("issues/comments/${BASH_REMATCH[1]}");
-  });
-
-  test("the state-only reconcile -targets are literals (a non-literal -target value reads as host-creating to the escrow census)", () => {
-    for (const t of [
-      "hcloud_volume_attachment.inngest_redis",
-      "hcloud_volume.inngest_redis",
-      "hcloud_server.inngest_backstop_wipe",
-      "hcloud_volume_attachment.inngest_backstop_wipe",
-    ]) {
-      expect(body).toContain(`T=-target=${t} ;;`);
-    }
-    expect(body).not.toMatch(/-target="?\$/);
-  });
-
-  test("B9: the retire job, inngest_host, inngest_host_replace and cutover-inngest share ONE job-level mutex; the workflow-level root group governs all", () => {
+  test("B9: inngest_host, inngest_host_replace and cutover-inngest share ONE job-level mutex; the workflow-level root group governs all", () => {
     const CUTOVER_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/cutover-inngest.yml");
     const groupOf = (block: string): string | null => {
       const m = /^ {4}concurrency:\n {6}group: (\S+)\n {6}cancel-in-progress: (\S+)$/m.exec(block);
       return m ? `${m[1]}|${m[2]}` : null;
     };
     const surfaces: Array<[string, string | null]> = [
-      ["inngest_backstop_retire", groupOf(jobBlock)],
       ["inngest_host", groupOf(extractJobBlock(wf, "inngest_host"))],
       ["inngest_host_replace", groupOf(extractJobBlock(wf, "inngest_host_replace"))],
       ["cutover-inngest.yml:cutover", groupOf(extractJobBlock(readFileSync(CUTOVER_WORKFLOW, "utf8"), "cutover"))],
@@ -3656,36 +3532,21 @@ describe("inngest-backstop-retire dispatch: registration, binding, ordering and 
     expect(wf).toMatch(/^concurrency:\n(?:  #[^\n]*\n)*  group: terraform-apply-web-platform-host\n  cancel-in-progress: false$/m);
   });
 
-  test("pins timeout-minutes below GitHub's 360-minute default", () => {
-    const m = /timeout-minutes:\s*(\d+)/.exec(jobBlock);
-    expect(m).not.toBeNull();
-    expect(Number(m![1])).toBeLessThanOrEqual(60);
-  });
-
-  test("stripDispatchJobs removes this job's -targets from the coverage set", () => {
-    const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
-    // Non-vacuity: unstripped, the whole-file scan DOES see them.
-    expect(extractAllTargets(wf).has("hcloud_volume.inngest_redis")).toBe(true);
-    expect(strippedTargets.has("hcloud_volume.inngest_redis")).toBe(false);
-    expect(strippedTargets.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
-    expect(strippedTargets.has("hcloud_server.inngest_backstop_wipe")).toBe(false);
-  });
-
-  test("B6: inngest_host_replace no longer targets the retired plaintext pair, still carries the LUKS attachment, and no volume (#6894, #8285)", () => {
+  test("B6: inngest_host_replace does not target the plaintext pair, still carries the LUKS attachment, and no volume (#6894, #8285)", () => {
     const replaceJob = extractJobBlock(wf, "inngest_host_replace");
     const targets = extractAllTargets(replaceJob);
     expect(targets.has("hcloud_server.inngest")).toBe(true); // non-vacuity: the extraction reached the job
     expect(targets.has("hcloud_volume_attachment.inngest_redis_luks")).toBe(true);
     expect(targets.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
-    // The durable volume is preserved by OMISSION — targeting it would put the sole copy one replace from a destroy.
+    // The durable volume is preserved by OMISSION - targeting it would put the sole copy one replace from a destroy.
     expect(targets.has("hcloud_volume.inngest_redis")).toBe(false);
     expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume.inngest_redis")).toBe(false);
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
-  test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not this job's", () => {
-    expect(extractAllTargets(jobBlock).has("random_password.inngest_redis_luks")).toBe(false);
+  test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not the inngest_host job's", () => {
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("random_password.inngest_redis_luks")).toBe(false);
     const perMerge = extractAllTargets(stripDispatchJobs(wf));
     expect(perMerge.has("random_password.inngest_redis_luks")).toBe(true);
     expect(perMerge.has("doppler_secret.inngest_redis_luks_key")).toBe(true);
@@ -3733,8 +3594,8 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
  *
  * The gate's allow-set is a literal in the same repo as the workflow it grades, so one diff could
  * widen both — this is the outside anchor the plan's Guard Contract names, and it mirrors the
- * registry parity block above. The call assertion follows the inngest-backstop-retire "sources and CALLS"
- * test: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
+ * registry parity block above. The call assertion follows the "sources and CALLS" shape the
+ * retired inngest-backstop-retire dispatch used: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
  * `# shellcheck source=` directive or prose cannot satisfy it.
  */
 describe("inngest_host dispatch: shape gate wired and allow-set === -target set (#6894)", () => {
@@ -6391,7 +6252,7 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
 
   test("the job census is non-vacuous (apply plus the dispatch jobs were all extracted)", () => {
     expect(jobIds).toContain("apply");
-    for (const dispatch of ["web_host_create", "web_host_replace", "workspaces_luks_cutover", "workspaces_luks_recut", "inngest_backstop_retire"]) {
+    for (const dispatch of ["web_host_create", "web_host_replace", "workspaces_luks_cutover", "workspaces_luks_recut", "inngest_host_replace"]) {
       expect(jobIds, `${dispatch} must be among the extracted jobs`).toContain(dispatch);
     }
     expect(jobIds.length).toBeGreaterThanOrEqual(15);

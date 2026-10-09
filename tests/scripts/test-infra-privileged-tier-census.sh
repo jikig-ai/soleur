@@ -823,11 +823,17 @@ INTENDED_DESTROYS = {
         "doppler_secret.ghcr_read_token": "#8714 ADR-096 5.4",
         "doppler_service_token.ghcr_minter": "#8714 ADR-096 5.4",
         "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
-        # #8285: the plaintext Redis AOF backstop pair stops being declared in PR A and is destroyed by the
-        # reviewer-gated inngest-backstop-retire dispatch, which `-target`s both addresses bare (detach,
-        # then destroy), after the wipe evidence. Drop these two entries in PR B with the apparatus.
-        "hcloud_volume_attachment.inngest_redis": "#8285 retire dispatch (phase=detach)",
-        "hcloud_volume.inngest_redis": "#8285 retire dispatch (phase=destroy)",
+    },
+}
+# RETIRED, STATE-ABSENT. A resource block deleted because its resource was already gone: a count-gated throwaway
+# whose own teardown destroyed it, so state holds no entry and there is nothing for a `-target` to destroy or a
+# `removed` block to forget. Honoured only when NO job still targets the address (a leftover target would be a
+# stale line, not a deletion), and never for the App identity (G4f). Each entry names the evidence; a new entry
+# is a claim about live state and belongs in the PR that deletes the block. Stale once the base no longer declares it.
+RETIRED_STATE_ABSENT = {
+    "apps/web-platform/infra": {
+        "hcloud_server.inngest_backstop_wipe": "#8285 PR B: throwaway wipe host destroyed by the wipe dispatch teardown 2026-10-09 (run 37955244979); Hetzner lists no such server",
+        "hcloud_volume_attachment.inngest_backstop_wipe": "#8285 PR B: destroyed by the same teardown; the volume itself was destroyed 2026-10-09 (run 37958051426)",
     },
 }
 G4_PROTECTED = {"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"}
@@ -838,13 +844,16 @@ for r in GUARD4_ROOTS:
             if (a in INTENDED_DESTROYS.get(r, {}) and a not in G4_PROTECTED
                     and a in root_targets.get(r, set())):
                 continue
+            if (a in RETIRED_STATE_ABSENT.get(r, {}) and a not in G4_PROTECTED
+                    and a not in root_targets.get(r, set())):
+                continue
             orphans.append("%s %s" % (r, a))
 check("G4c: every `resource` block the base ref declares and HEAD no longer declares is claimed by a "
       "`removed` block — a deleted resource block with none leaves the resource managed with no HCL, "
       "and the next apply plans a plain DESTROY [base .tf files: %d]" % n_base,
       bool(BASE_ROOT) and n_base >= 1 and not orphans,
       ("base unavailable" if not BASE_ROOT else "orphans=%s" % orphans[:8]))
-bad_intended = sorted({a for _r, d in INTENDED_DESTROYS.items() for a in d if a in G4_PROTECTED})
+bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) for a in d if a in G4_PROTECTED})
 check("G4f: no INTENDED_DESTROYS entry names the App identity (%s) — that pair may only ever be "
       "FORGOTTEN, never destroyed" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
 
@@ -2869,6 +2878,16 @@ if mutate g4-7-intended-destroy-untargeted "$MUTDIR/base/apps/web-platform/infra
   mutant_red g4-7-intended-destroy-untargeted wf_row "$T/mut/g4-7.tsv" "G4c:"
 fi
 
+# Row 8 — ACCEPT arm of the retired-state-absent allowance (#8285 PR B): the base declares a listed address, HEAD deletes
+# it, and no job targets it. G4c must stay GREEN, or deleting a count-gated throwaway whose teardown already destroyed it
+# has no sanctioned path. Its REFUSAL arm is row 3 (an unlisted deletion with no `removed` block stays RED).
+MUTDIR="$(fixcopy g4-8)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-8-retired-absent-base "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-8.tsv" ""
+  if wf_row "$T/mut/g4-8.tsv" "G4c:"; then pass "M-g4-8-retired-state-absent: a listed, untargeted deletion is ACCEPTED by G4c"
+  else fail "M-g4-8-retired-state-absent: G4c refused a listed, untargeted deletion" "$(grep G4c "$T/mut/g4-8.tsv" | cut -c1-240)"; fi
+fi
+
 # ── Guard 6 (#8609): the soleur-github-app read token stays in Tier B ───────────────────
 # Row a — REORDER: after the compliant Tier-B job, a SECOND job with no `environment:` reads the
 # token. The scan must not stop at the first (compliant) referencing job.
@@ -3472,7 +3491,8 @@ fi
 # 103 -> 111 (#9321 PR-2 review, 2026-10-04): G7f M2b', M2c, M-run, M-env, M-wrongtok, M-remote, M-dotdot, M-wrapper (8 landings).
 # 111 -> 114 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3, H4 (3 landings).
 # 114 -> 115 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (spaced flag value before run; 1 landing). Measured: 115 ran.
-MUTANT_FLOOR=115
+# 115 -> 116 (#8285 PR B): g4-8 (the retired-state-absent ACCEPT arm; 1 landing). Measured: 116 ran.
+MUTANT_FLOOR=116
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3499,7 +3519,8 @@ _ran=$((passes + fails))
 # 269 -> 287 (#9321 PR-2 review, 2026-10-04): 8 clause-isolated G7f mutants (8 landings + 8 verdicts) and the H7 and H8 unresolved-TSV controls (2). Measured: 287 ran.
 # 287 -> 294 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3 (prose "run") and H4 (lowercase token) (3 landings + 3 verdicts) and the H7b exact-verdict drives (1). Measured: 294 ran.
 # 294 -> 296 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (1 landing + 1 verdict); the H7b absent-row and _h7b self-test drives add no assertion (inside the one H7b pass). Measured: 296 ran.
-FLOOR=296
+# 296 -> 298 (#8285 PR B): g4-8 landing + verdict. Measured: 298 ran.
+FLOOR=298
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

@@ -834,8 +834,8 @@ variable "grok_dogfood_private_ip" {
 #
 # The delivery order is four dispatches (ADR-199 addendum, 2026-09-03). HISTORICAL: all four have
 # run or been superseded; the `inngest-volume-recut` dispatch named below no longer exists (the
-# 2026-09-20 additive cutover, ADR-142, replaced it, and #8285 retires the plaintext volume through
-# the `inngest-backstop-retire` dispatch).
+# 2026-09-20 additive cutover, ADR-142, replaced it, and the plaintext volume was retired on 2026-10-09
+# through the since-removed `inngest-backstop-retire` dispatch, #8285).
 #
 #   1. merge                    `format` gone; expect_luks STILL false
 #   2. inngest-host-replace     first boot; the volume is STILL the old ext4 one, so ARM 1 mounts
@@ -887,42 +887,4 @@ variable "inngest_luks_cutover_complete" {
   description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
   type        = bool
   default     = true
-}
-
-# #8285 — throwaway wipe host for the retired plaintext Inngest Redis AOF backstop volume
-# (inngest-backstop-wipe.tf). All three variables carry defaults, so neither the per-merge apply
-# nor a plan fails on an unprovisioned TF_VAR_*; the wipe resources are count = 0 unless the
-# reviewer-gated `inngest-backstop-retire` dispatch (phase=wipe) sets the flag.
-variable "inngest_backstop_wipe_enabled" {
-  description = "Instantiate the throwaway wipe host and its volume attachment (inngest-backstop-wipe.tf, #8285). Default false: nothing is created. Set true only by the reviewer-gated inngest-backstop-retire dispatch (phase=wipe, step A) and set back to false by step B (teardown) in the same dispatch."
-  type        = bool
-  default     = false
-}
-
-variable "inngest_backstop_volume_id" {
-  description = "Hetzner id of the retired plaintext Inngest Redis AOF backstop volume (hcloud_volume.inngest_redis) that the wipe host zeroes. Non-secret. A Doppler tf-var override could repoint it, so this validation pins it to exactly 106261946 (an allow-list of one: any other id, the live encrypted store hcloud_volume.inngest_redis_luks 106903269 included, fails the plan), the wipe plan gate asserts the attachment's volume_id against the dispatch's id-pin, and the on-host script carries the same id as a literal."
-  type        = number
-  default     = 106261946
-
-  validation {
-    condition     = var.inngest_backstop_volume_id == 106261946
-    error_message = "inngest_backstop_volume_id must be exactly 106261946, the retired plaintext Inngest Redis backstop volume. Any other id (the live encrypted store 106903269 included) is refused."
-  }
-}
-
-variable "inngest_backstop_wipe_server_type" {
-  description = "Hetzner server type for the throwaway wipe host. It lives minutes and does one blkdiscard plus one read of a 10 GB volume, so size is irrelevant; cpx22 (amd64) is the type already orderable in hel1 for the dedicated Inngest host. Verify stock before the wipe phase (the dispatch's stock preflight does)."
-  type        = string
-  default     = "cpx22"
-}
-
-variable "inngest_backstop_wipe_nonce" {
-  description = "The GitHub run id of the wipe dispatch, delivered through the wipe host's user_data and echoed in its SOLEUR_INNGEST_BACKSTOP_WIPE evidence row, so the destroy phase can bind to THIS run's evidence. Set by the workflow as TF_VAR_inngest_backstop_wipe_nonce; empty (the default) is only legal while inngest_backstop_wipe_enabled is false. Not a secret. The nonce makes STALE or REPLAYED rows fail the destroy gate; it is not a MAC, and a holder of the shared Better Stack ingest token could still forge a row, which the Hetzner action history corroborates."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = can(regex("^[0-9]{0,20}$", var.inngest_backstop_wipe_nonce))
-    error_message = "inngest_backstop_wipe_nonce must be a numeric GitHub run id (digits only) or empty."
-  }
 }

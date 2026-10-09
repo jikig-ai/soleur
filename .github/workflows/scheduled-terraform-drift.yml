@@ -1251,7 +1251,7 @@ jobs:
              - **A destroy (`-`) or a replace.** A dispatch can never carry `[ack-destroy]`, so the destroy gate refuses it. Re-run the failed push-triggered apply, which still has its merge commit and its ack, or land a PR whose merge commit carries `[ack-destroy]`.
           SENTRY_STEP
               else
-                echo "2. If the drift is intentional, run \`terraform apply\` locally to update state. NEVER untargeted while hcloud_volume.inngest_redis or its attachment is still in state (#8285 retire window): add -target for each planned address"
+                echo "2. If the drift is intentional, run \`terraform apply\` locally to update state"
                 echo "3. If the drift is unintentional, revert the manual change"
               fi
               echo "4. Close this issue when resolved"

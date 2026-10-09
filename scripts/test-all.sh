@@ -5650,11 +5650,6 @@ if want_scripts; then
   # #6197: inngest-host-replace scoped-recreate destroy-guard (same sourced-gate shape the
   # web2-recreate gate used before #6575 deleted it).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
-  # #8285 — the plan-shape, live-store and destroy-precondition gates on apply_target=inngest-backstop-retire
-  # (successor of the retired recut gate). NOTHING auto-discovers tests/scripts/: the `*.test.sh` glob
-  # elsewhere in this file cannot match a `test-*` prefix, so an unregistered suite here never gates and
-  # the failure is silent-and-green. It also executes nothing destructive: fixtures only.
-  run_suite "tests/scripts/inngest-backstop-retire-gate" bash tests/scripts/test-inngest-backstop-retire-gate.sh
   run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
   # #6894 — ADR-142 Guard 3: the per-address plan-shape gate on the inngest-host dispatch (which
   # also creates the additive LUKS volume). Same orphan trap as above: nothing globs tests/scripts/test-*.sh.

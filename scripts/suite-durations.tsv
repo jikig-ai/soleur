@@ -529,7 +529,6 @@ tests/scripts/git-data-rung2-evidence-capture	12863	measured
 tests/scripts/git-data-rung2-plan-shape	1019	measured
 tests/scripts/host-image-coherence-preflight	46	measured
 tests/scripts/infra-privileged-tier-census	13029	measured
-tests/scripts/inngest-backstop-retire-gate	28000	floor
 tests/scripts/inngest-host-dark-gate	15641	measured
 tests/scripts/inngest-host-replace-gate	1336	measured
 tests/scripts/inngest-host-shape-gate	4342	measured
