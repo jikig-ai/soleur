@@ -334,7 +334,7 @@ The rounding is bimodal, so the blind zone is bounded:
   least 5 cents and contributes at least ~500K points; the same 100K prompt served from cache is
   about half a cent, 1 cent, and ~100K points. Either exceeds a default solo cap in one turn.
 - Layer 2 and the delegated caps sum cents, not cents × tokens, so they accumulate those turns
-  normally: a $0.50 turn ledgers as 50 cents and Layer 2 blocks the spawn after about the fifth.
+  normally: a $0.50 turn ledgers as 50 cents and Layer 2 (precheck `SUM >= 260`) lets six of them run (250 then 300) and blocks the seventh.
 
 So Haiku classes are invisible to the caps while their turns are cheap and over-weighted by solo
 Layer 1 once a turn is expensive. The unledgered exposure is the cheap zone: under half a cent per

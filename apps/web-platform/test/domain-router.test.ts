@@ -545,10 +545,12 @@ describe("domain-router stays leaf-light", () => {
   // Comments stripped properly (block and line), then EVERY `from "x"` / `import "x"` /
   // `import("x")` occurrence is read wherever it sits on a line: two imports on one line,
   // an import after a statement, and an import after a block comment are all seen.
+  // ONE regex for the assertion and its known-positive control, so they cannot drift apart.
+  const IMPORT_SPEC_RE = /\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
   const src = stripComments(readFileSync(join(__dirname, "../server/domain-router.ts"), "utf8"));
 
   test("imports exactly the five known modules, in any quoting or form, and nothing octokit-shaped", () => {
-    const specifiers = [...src.matchAll(/\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]);
+    const specifiers = [...src.matchAll(IMPORT_SPEC_RE)].map((m) => m[1]);
     // Non-vacuity: the extraction found the imports it is supposed to constrain.
     expect(specifiers.length).toBeGreaterThanOrEqual(5);
     expect([...new Set(specifiers)].sort()).toEqual([
@@ -567,7 +569,7 @@ describe("domain-router stays leaf-light", () => {
     const sample = stripComments(
       'import a from "./ok"; import b from "heavy-one";\nconst x = 1; import c from "heavy-two";\n/* note */ import d from "heavy-three";\n',
     );
-    const found = [...sample.matchAll(/\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]);
+    const found = [...sample.matchAll(IMPORT_SPEC_RE)].map((m) => m[1]);
     expect(found).toEqual(["./ok", "heavy-one", "heavy-two", "heavy-three"]);
   });
 
