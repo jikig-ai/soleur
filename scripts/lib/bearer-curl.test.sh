@@ -257,6 +257,18 @@ rc="$(CANARY_TOK="${CANARY}ok" run 'set -x; printf "" | bc_hmac_sha256_hex CANAR
 if [[ "$rc" == "78" ]] && ! grep -qF -- "${CANARY}ok" "$OUT/last"; then pass "bc_hmac_sha256_hex refuses under xtrace (78) and the trace holds no value"; else fail "bc_hmac_sha256_hex under xtrace: rc=$rc"; fi
 
 # ---------------------------------------------------------------------------------------------------
+# bc_refuse: the pre-guard announcement (same line + marker as the chokepoint; classifies; never leaks).
+# ---------------------------------------------------------------------------------------------------
+rc="$(PGV="${CANARY}"$'\n'"x" run 'bc_refuse presite PGV')"
+if [[ "$rc" == "2" ]] && grep -qx 'SOLEUR_CREDENTIAL_REFUSED script=presite reason=control_char' "$OUT/last" && ! grep -qF -- "$CANARY" "$OUT/last"; then
+  pass "bc_refuse: returns 2, prints one marker (control_char) and leaks nothing"
+else fail "bc_refuse control-char row: rc=$rc"; fi
+rc="$(PGV='a"b' run 'bc_refuse presite PGV')"
+grep -qx 'SOLEUR_CREDENTIAL_REFUSED script=presite reason=token_shape' "$OUT/last" && pass "bc_refuse: a quote is classified token_shape" || fail "bc_refuse token_shape row"
+rc="$(PGV="${CANARY}ok" run 'set -x; bc_refuse presite PGV')"
+if [[ "$rc" == "78" ]] && ! grep -qF -- "${CANARY}ok" "$OUT/last"; then pass "bc_refuse refuses under xtrace (78) and the trace holds no value"; else fail "bc_refuse under xtrace: rc=$rc"; fi
+
+# ---------------------------------------------------------------------------------------------------
 # Chokepoint census: `curl` is invoked in exactly one place, and the value check precedes it.
 # ---------------------------------------------------------------------------------------------------
 NONCOMMENT="$OUT/lib.nocomment"
@@ -279,7 +291,7 @@ if grep -qE -- '--max-time|-m [0-9]' "$NONCOMMENT"; then fail "the library adds 
 # Mutation-style rows on a COPY of the library: the guard rows must go red when the guard is removed.
 # ---------------------------------------------------------------------------------------------------
 mut_lib="$OUT/mut.sh"
-sed 's/if ! bc_ok "\$_bc_val"; then/if false; then/' "$LIB" > "$mut_lib"
+sed 's/bc_ok "\$_bc_val" || {/true || {/' "$LIB" > "$mut_lib"
 if cmp -s "$mut_lib" "$LIB"; then
   fail "mutation did not land (guard removal)"
 else
@@ -376,7 +388,7 @@ printf '\nbearer-curl.test.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 # asserts PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=48
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

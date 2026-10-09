@@ -23,14 +23,26 @@ runs:
         # `curl || echo "000"` don't abort the step — we branch on HTTP_CODE.
         set -uo pipefail
         BODY_FILE="${RUNNER_TEMP}/anthropic-preflight-body.txt"
+        # The key reaches curl on its stdin config through the shared library, sourced from the job's own
+        # checkout (ADR-280); a missing library is a hard failure, never an argv fallback.
+        if [[ -z "${GITHUB_WORKSPACE:-}" ]] || ! source "${GITHUB_WORKSPACE}/scripts/lib/bearer-curl.sh"; then
+          echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout"
+          exit 1
+        fi
         if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
           echo "::error::ANTHROPIC_API_KEY not set"
           exit 1
+        elif ! bc_ok "$ANTHROPIC_API_KEY"; then
+          # A refusal must stay RED. Left to the curl below, rc 2 would fold into `|| echo "000"` and the
+          # soft-skip arm, and a malformed key would silently skip every Claude step.
+          bc_refuse anthropic-preflight ANTHROPIC_API_KEY || true
+          echo "::error::ANTHROPIC_API_KEY failed the token-shape guard"
+          exit 1
         fi
         PAYLOAD=$(jq -nc '{model:"claude-haiku-4-5-20251001",max_tokens:1,messages:[{role:"user",content:"."}]}')
-        HTTP_CODE=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" \
+        HTTP_CODE=$(bc_curl anthropic-preflight 'x-api-key::ANTHROPIC_API_KEY' -- \
+          -sS -o "$BODY_FILE" -w "%{http_code}" \
           https://api.anthropic.com/v1/messages \
-          -H "x-api-key: $ANTHROPIC_API_KEY" \
           -H "anthropic-version: 2023-06-01" \
           -H "content-type: application/json" \
           -d "$PAYLOAD" || echo "000")

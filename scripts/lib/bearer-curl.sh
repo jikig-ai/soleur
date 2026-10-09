@@ -25,6 +25,8 @@
 #   is the discriminator. No default timeout is added (byte-neutral per call site); a caller that
 #   had `--max-time` keeps it. Return codes: curl's own, 2 refused, 64 bad call shape, 78 xtrace on.
 #
+# bc_refuse SCRIPT VAR — print the same value-free line and marker for a site's own pre-guard, return 2.
+#
 # bc_hmac_sha256_hex KEYVAR — message on stdin; prints 64 lowercase hex or returns 1. The key reaches
 #   a `python3 -I` child by per-command environment prefix only (never argv); an empty key or a
 #   missing python3 returns 1, it never signs with an empty key. Use `|| SIG=""` at the call site so
@@ -36,9 +38,23 @@
 # A value is usable iff non-empty and drawn from the token alphabet the 68 inline copies used.
 bc_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
+# Announce a refused credential: one value-free line naming only the variable, and the marker. Used by
+# the chokepoint below and by a site's own pre-guard (where a bare rc 2 would fold into a different
+# verdict arm). Always returns 2. Reads the value only to classify control_char vs token_shape.
+bc_refuse() {
+  case "$-" in *x*) printf 'bc_refuse: refusing to bind a credential while xtrace is on\n' >&2; return 78 ;; esac
+  local _bc_script="${1:-}" _bc_var="${2:-}" _bc_val="" _bc_reason=token_shape
+  [[ "$_bc_script" =~ ^[A-Za-z0-9._-]+$ ]] || _bc_script="unknown"
+  if [[ "$_bc_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then _bc_val="${!_bc_var:-}"; else _bc_var="unknown"; fi
+  case "$_bc_val" in *[[:cntrl:]]*) _bc_reason=control_char ;; esac
+  printf 'bc_curl: %s unusable\n' "$_bc_var" >&2
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$_bc_script" "$_bc_reason" >&2
+  return 2
+}
+
 # The single place a request is made.
 _bc_send() {
-  local LC_ALL=C _bc_script="${1:-}" _bc_spec _bc_name _bc_rest _bc_prefix _bc_var _bc_val _bc_reason
+  local LC_ALL=C _bc_script="${1:-}" _bc_spec _bc_name _bc_rest _bc_prefix _bc_var _bc_val
   shift
   [[ "$_bc_script" =~ ^[A-Za-z0-9._-]+$ ]] || _bc_script="unknown"
   local -a _bc_fields=()
@@ -54,13 +70,7 @@ _bc_send() {
     [[ "$_bc_prefix" =~ ^[A-Za-z0-9=_\ .-]*$ ]] || { printf 'bc_curl: malformed header prefix\n' >&2; return 64; }
     [[ "$_bc_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { printf 'bc_curl: malformed variable name\n' >&2; return 64; }
     _bc_val="${!_bc_var:-}"
-    if ! bc_ok "$_bc_val"; then
-      _bc_reason=token_shape
-      case "$_bc_val" in *[[:cntrl:]]*) _bc_reason=control_char ;; esac
-      printf 'bc_curl: %s unusable\n' "$_bc_var" >&2
-      printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$_bc_script" "$_bc_reason" >&2
-      return 2
-    fi
+    bc_ok "$_bc_val" || { bc_refuse "$_bc_script" "$_bc_var"; return 2; }
     _bc_fields+=("$_bc_name" "$_bc_prefix" "$_bc_val")
   done
   [ "${1:-}" = "--" ] || { printf 'bc_curl: missing -- separator\n' >&2; return 64; }

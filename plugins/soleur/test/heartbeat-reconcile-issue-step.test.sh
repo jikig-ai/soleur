@@ -41,7 +41,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 # ANTI-VACUITY FLOOR at the REALIZED count: deleting assertions must show up as a diff here.
-FLOOR=139
+FLOOR=142
 
 # ---------------------------------------------------------------------------
 # OUTER RUN. Counts the inner run's own output lines; never trusts pass()/fail() for the verdict.
@@ -370,6 +370,16 @@ exit "${BUN_RC:-0}"
 STUB
 cat > "$TMP/bin/curl" <<'STUB' || fatal "write curl stub"
 #!/usr/bin/env bash
+# CURL_REC (a path prefix) records the argv (NUL-delimited) and, for `--config -`, the stdin config, so a
+# row can assert where the credential travelled. Stdin is read ONLY for `--config -`, as real curl does.
+if [[ -n "${CURL_REC:-}" ]]; then
+  printf '%s\0' "$@" >> "$CURL_REC.argv"
+  prev=""
+  for a in "$@"; do
+    [[ "$prev" == "--config" && "$a" == "-" ]] && cat >> "$CURL_REC.stdin"
+    prev="$a"
+  done
+fi
 if [[ "${CURL_CODE:-200}" == "transport" ]]; then exit 7; fi
 printf '%s' "${CURL_CODE:-200}"
 STUB
@@ -755,7 +765,7 @@ run_action() {
   CASE_RC=0
   env -u BASH_ENV -u SHELLOPTS -u BASHOPTS \
     PATH="$TMP/bin:$PATH" RUNNER_TEMP="$CASE/rt" GITHUB_OUTPUT="$CASE/out" \
-    EMAIL_SUBJECT=s EMAIL_BODY=b "$@" \
+    GITHUB_WORKSPACE="$REPO_ROOT" EMAIL_SUBJECT=s EMAIL_BODY=b "$@" \
     bash --noprofile --norc -eo pipefail "$TMP/steps/action.sh" > "$CASE/stdout" 2>&1 || CASE_RC=$?
 }
 new_case; run_action RESEND_API_KEY=stub CURL_CODE=200
@@ -773,6 +783,23 @@ else fail "A3 a transport failure must publish sent=false (rc=$CASE_RC sent='$(o
 new_case; run_action RESEND_API_KEY=
 if [[ "$CASE_RC" != 0 && "$(out_val sent)" == "false" ]]; then pass "A4 missing RESEND_API_KEY -> exit non-zero (unchanged) and sent=false"
 else fail "A4 a missing key must still fail the step and publish sent=false (rc=$CASE_RC sent='$(out_val sent)')"; fi
+# The credential travels on curl's STDIN config, never its argument list (argv-bearer sweep S3).
+new_case; run_action RESEND_API_KEY=synthResendKey0123 CURL_CODE=200 CURL_REC="$CASE/rec"
+if [[ "$CASE_RC" == 0 && "$(out_val sent)" == "true" ]] \
+   && [[ "$(cat "$CASE/rec.stdin" 2>/dev/null)" == 'header = "Authorization: Bearer synthResendKey0123"' ]] \
+   && ! tr '\0' '\n' < "$CASE/rec.argv" | grep -qF synthResendKey0123; then
+  pass "A6 the key reaches curl on its stdin config as one header directive and is absent from argv"
+else fail "A6 the credential must ride curl's stdin config and not its argv (rc=$CASE_RC sent='$(out_val sent)')"; fi
+new_case; run_action 'RESEND_API_KEY=bad"key' CURL_CODE=200 CURL_REC="$CASE/rec"
+if [[ "$CASE_RC" == 0 && "$(out_val sent)" == "false" && ! -e "$CASE/rec.argv" ]] \
+   && grep -q '^::error::RESEND_API_KEY failed the token-shape guard' "$CASE/stdout" \
+   && grep -qx 'SOLEUR_CREDENTIAL_REFUSED script=notify-ops-email reason=token_shape' "$CASE/stdout"; then
+  pass "A7 a malformed key -> ::error:: annotation, marker, sent=false, exit 0 and NO request made"
+else fail "A7 a malformed key must be a visible refusal with no request (rc=$CASE_RC sent='$(out_val sent)')"; fi
+new_case; mkdir -p "$CASE/nolib"; run_action RESEND_API_KEY=synthResendKey0123 GITHUB_WORKSPACE="$CASE/nolib" CURL_REC="$CASE/rec"
+if [[ "$CASE_RC" != 0 && "$(out_val sent)" == "false" && ! -e "$CASE/rec.argv" ]] && grep -q '^::error::scripts/lib/bearer-curl.sh could not be loaded' "$CASE/stdout"; then
+  pass "A8 library absent from the job checkout -> hard failure, sent=false, no request, no argv fallback"
+else fail "A8 a missing library must fail loudly with no request (rc=$CASE_RC)"; fi
 _aout=$(python3 -c 'import sys,yaml; print(((yaml.safe_load(open(sys.argv[1])).get("outputs") or {}).get("sent") or {}).get("value",""))' "$ACTION") || fatal "read action outputs"
 if [[ "$(tr -d ' ' <<<"$_aout")" == '${{steps.send.outputs.sent}}' ]]; then pass "A5 the composite maps outputs.sent to steps.send.outputs.sent"
 else fail "A5 the composite must expose outputs.sent from its send step (got '$_aout')"; fi
