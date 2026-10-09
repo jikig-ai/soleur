@@ -25,10 +25,21 @@ esac
 for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
   [[ -n "${!v:-}" ]] || { printf 'missing %s — run under doppler run -p soleur -c prd_terraform\n' "$v" >&2; exit 3; }
 done
-SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')
+# The credentials reach curl on its stdin config channel and the HMAC key reaches a python3 child in its
+# environment, never an argument list (tracker #9597, ADR-280). The library is found from THIS file's own
+# location: this diagnostic is run from anywhere. A refusal (an unusable value, or python3 missing) makes
+# no request, prints the value-free SOLEUR_CREDENTIAL_REFUSED marker, and reaches the exit-6 arm below.
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../scripts/lib/bearer-curl.sh" \
+  || { printf 'could not load scripts/lib/bearer-curl.sh from this checkout\n' >&2; exit 6; }
+# shellcheck disable=SC2034  # read by NAME inside bc_curl
+SIG=$(printf '' | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET) || SIG=""
 # The HTTP code rides the last line (`-w`), so a CF Access 403, an HMAC 403 and a 5xx stay distinct.
-RESP=$(curl --disable --noproxy '*' -s --max-time 15 -w '\n%{http_code}' -X GET -H "X-Signature-256: sha256=$SIG" \
-  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+RESP=$(bc_curl github-app-key-status \
+  'X-Signature-256:sha256=:SIG' \
+  'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+  'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+  -s --max-time 15 -w '\n%{http_code}' -X GET \
   "https://deploy.${SOLEUR_DEPLOY_DOMAIN:-soleur.ai}/hooks/deploy-status")
 CURL_RC=$?
 CODE=${RESP##*$'\n'}

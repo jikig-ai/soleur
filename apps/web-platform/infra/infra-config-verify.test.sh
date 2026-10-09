@@ -181,7 +181,7 @@ BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','uns
 # `ssh`, `systemctl` and `gh` are absent by omission rather than by enumeration, which is the
 # point of the inversion.
 ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
-           'openssl','sleep','source'}
+           'openssl','python3','sleep','source'}
 
 # The gate library's function names, DERIVED from the library rather than listed here, so a
 # newly added adjudicator is covered the moment it exists instead of reading as an escape.
@@ -240,7 +240,7 @@ _spec = importlib.util.spec_from_file_location('shellscan', sys.argv[2])
 _m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m)
 ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
-           'openssl','sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
+           'openssl','python3','sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
 SHAPES = {
     'bare-binary':   'f() {\n  terraform apply -auto-approve\n}\n',
     'abs-path':      'f() {\n  /usr/bin/terraform apply -auto-approve\n}\n',
@@ -410,17 +410,39 @@ EOS
   # body's own `|| echo "000"` turns into a transport-failure verdict — loud, and attributable.
   cat > "$I_TMP/bin/curl" <<'EOS'
 #!/usr/bin/env bash
+# The body hands curl its credentials on the STDIN config channel (`--config -`, #9597/ADR-280),
+# never on argv: this stub reads that channel (and always drains it, so the writer is never
+# SIGPIPEd), takes the signature from the `header = "X-Signature-256: ..."` directive, and
+# `exit 64`s if a credential header is on argv or the transport confinement (`--disable` first,
+# `--noproxy '*'`) is missing.
 out=""
 prev=""
-have_w=0; have_maxtime=0; have_sig=0; have_url=0; sigval=""; url=""
+have_w=0; have_maxtime=0; have_sig=0; have_url=0; have_cfg=0; have_noproxy=0; sigval=""; url=""
+first="${1:-}"
 for a in "$@"; do
   [[ "$prev" == "-o" ]] && out="$a"
+  [[ "$prev" == "--config" && "$a" == "-" ]] && have_cfg=1
+  [[ "$prev" == "--noproxy" && "$a" == "*" ]] && have_noproxy=1
   [[ "$a" == "-w" || "$a" == "--write-out" ]] && have_w=1
   [[ "$a" == "--max-time" ]] && have_maxtime=1
-  [[ "$a" == X-Signature-256:* ]] && { have_sig=1; sigval="${a#X-Signature-256:}"; }
   [[ "$a" == */hooks/infra-config-status ]] && { have_url=1; url="$a"; }
+  case "$a" in
+    X-Signature-256:*|CF-Access-Client-*|[Xx]-[Ss]ignature*|[Cc][Ff]-[Aa]ccess-*)
+      echo "curl-stub: a credential header is on argv — it must ride the stdin config channel (#9597)" >&2; cat > /dev/null; exit 64 ;;
+  esac
   prev="$a"
 done
+cfg=""
+[[ "$have_cfg" -eq 1 ]] && cfg="$(cat)"
+while IFS= read -r line; do
+  if [[ "$line" == 'header = "X-Signature-256: '* ]]; then
+    have_sig=1; sigval="${line#header = \"X-Signature-256: }"; sigval="${sigval%\"}"
+  fi
+done <<<"$cfg"
+if [[ "$first" != "--disable" || "$have_noproxy" -ne 1 || "$have_cfg" -ne 1 ]]; then
+  echo "curl-stub: transport confinement missing (first='${first}' noproxy=$have_noproxy config-stdin=$have_cfg)" >&2
+  exit 64
+fi
 if [[ -z "$out" || "$have_w" -ne 1 || "$have_maxtime" -ne 1 || "$have_sig" -ne 1 || "$have_url" -ne 1 ]]; then
   echo "curl-stub: required argv missing (o='${out:-}' w=$have_w max-time=$have_maxtime sig=$have_sig url=$have_url)" >&2
   exit 64
