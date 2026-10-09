@@ -22,4 +22,3 @@
 - **Why not fixed in this PR:** closing it edits a hash-bound payload (`git-data-gc.sh`, or the remove wrapper), which needs the rung-2 two-PR sequence. The scope given for this PR excludes any payload change and the PR2 step.
 - **What this PR does instead:** states the limb in ADR-239, the runbook `not covered:` line and the PR body, and records it on #9066 (the open tracker). The owner decides whether to take the payload change before the first flip.
 - **Reversibility:** high; nothing here forecloses the fix.
-

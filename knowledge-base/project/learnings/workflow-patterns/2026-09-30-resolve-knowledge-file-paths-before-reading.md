@@ -42,3 +42,9 @@ npm options remain refused; private npm credential configuration is not read.
 The preview refusal ran no export, build, image/container action or rehearsal,
 and consumed no authorization. Narrowly classify public configuration before
 either dropping a required build input or allowing a credential-bearing file.
+
+The subsequent main sync also imported an extra blank line at EOF in the
+git-data decision record. `git diff --check` over the incoming range reported
+it; the one-line formatting correction preserves the record's content. Check
+the merged range, not only the uncommitted diff, before asserting whitespace
+passed after a clean merge.
