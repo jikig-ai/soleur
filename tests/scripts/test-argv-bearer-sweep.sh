@@ -1198,6 +1198,9 @@ else row "fresh-host-boot-trail: removing the token-shape guard is RED on inject
 
 # --- verify-tunnel-ingress-origin.sh ----------------------------------------------------------
 VT_STUBS="$TMPD/vt-stubs"; assert_fixture_dir "$VT_STUBS"; mkdir -p "$VT_STUBS"
+# S4: the script signs with the canonical python3 snippet (the key rides python3's environment, not openssl's argv), so the
+# stub dir needs the real python3 beside the stubs. Without it the HMAC is empty and the shape guard refuses (a correct refusal).
+ln -s "$(type -P python3)" "$VT_STUBS/python3" || fatal "stage 3: no python3 to link into the verify-tunnel stub dir"
 cat > "$VT_STUBS/doppler" <<'VT_DOPPLER'
 #!/usr/bin/env bash
 set -u
@@ -1786,13 +1789,18 @@ else row "canonical snippet: the key is in python3's environment (HMAC_KEY prese
 hm_arm_count() { # <from-arm-regex> <to-arm-regex> <ere> <file> -> count of lines matching <ere> inside the arm range [from, to)
   awk -v from="$1" -v to="$2" -v re="$3" '$0 ~ from {f=1; next} $0 ~ to {f=0} f && $0 ~ re {n++} END {print n+0}' "$4"
 }
-# hm_audit <script>: ONE function reads the parity facts, so the real rows and the mutation rows below judge with the same code.
+# hm_audit <script> [default-want]: ONE function reads the parity facts, so the real rows and the mutation rows below judge with the same code.
+#   It reads ANY indentation (the cutover script's copies sit at 4 spaces, the workflow-step copies at 10, the two inline scripts at 0), and
+#   the body a site signs is derived from the arm's own `_sig_curl <VAR>` request; a file whose request is not an `_sig_curl` call (the two
+#   inline scripts, which print their header directives themselves) passes [default-want] (`empty`: a status GET).
 #   HM_BAD    space-separated copy indices that differ from the canonical snippet, lost the SIG=$(printf <body> | ...) shape, lost the
 #             `|| VAR=""` fallback, or sign a body other than the one their own request carries (derived per site, see below)
 #   HM_NCOPY  converted copies; HM_NOLD lines carrying the -hmac operand; HM_RP / HM_DP of those inside the registry-probe) /
 #   doublefire-probe) arms; HM_PYARMS python3 tokens inside the registry-probe) .. rearm) range
+HM_RE_EMPTY='^[[:space:]]*[A-Z][A-Za-z0-9_]*=\$\(printf '"''"' \| HMAC_KEY='
+HM_RE_PAYLOAD='^[[:space:]]*[A-Z][A-Za-z0-9_]*=\$\(printf '"'%s'"' "\$PAYLOAD" \| HMAC_KEY='
 hm_audit() {
-  local f="$1" ln rest seg i=0 shape n j k var tail blk want
+  local f="$1" dflt="${2:-}" ln rest seg i=0 shape n j k var tail blk want
   local -a L
   HM_BAD=""
   mapfile -t L < "$f"
@@ -1815,12 +1823,13 @@ hm_audit() {
         break
       fi
     done
-    want=""
+    want="$dflt"
     if [[ -n "$blk" ]]; then
       if [[ "$blk" == *'-d "$PAYLOAD"'* || "$blk" == *' --data'* ]]; then want=payload; else want=empty; fi
     fi
-    case "$want:$ln" in
-      empty:'    '[A-Z]*'=$(printf '"''"' | HMAC_KEY='*|payload:'    '[A-Z]*'=$(printf '"'%s'"' "$PAYLOAD" | HMAC_KEY='*) shape=1 ;;
+    case "$want" in
+      empty) [[ "$ln" =~ $HM_RE_EMPTY ]] && shape=1 ;;
+      payload) [[ "$ln" =~ $HM_RE_PAYLOAD ]] && shape=1 ;;
     esac
     [[ "$seg" == "$HM_CANON" && "$shape" == 1 ]] || HM_BAD+=" $i"
   done
@@ -3261,8 +3270,10 @@ echo "=== stage S2-C: deploy-webhook triple (parity script and four probes) done
 # representative call sites are EXECUTED (the real `run:` body, or a recorded slice whose drift from the live step
 # text is pinned by a row) under a recording curl shim with the credential empty, hostile and well-formed. A row asserts
 # the site's verdict class (red step, soft verdict or warning), the marker exactly once, zero requests for a refusal,
-# and the planted canary in no output. The scheduled-inngest-health probe step is HELD BACK (its infra suite builds a
-# fake workspace with stubbed openssl/curl): it is the one declared member that may still carry an argv site.
+# and the planted canary in no output. The scheduled-inngest-health probe step was HELD BACK by S3 (its infra suite builds a
+# fake workspace); S4 converted it, so no member of this population may carry an argv site any more. S4 added five more
+# members (the Supabase, GitHub App, restart-webhook and deploy-pipeline-fix workflows and the mint composite); the stage
+# below this one (STAGE S4) judges the script consumers of the library and the inline-wrapper files.
 # =====================================================================================
 S3="$TMPD/s3"; assert_fixture_dir "$S3"; mkdir -p "$S3/shim" "$S3/real" "$S3/rows"
 cat > "$S3/shim/curl" <<'S3SHIM'
@@ -3369,7 +3380,10 @@ S3_MANIFEST="$(printf '%s\n' \
   .github/workflows/board-status-sync.yml .github/workflows/canary-status.yml .github/workflows/git-data-cutover.yml \
   .github/workflows/git-data-rung2-rehearsal.yml .github/workflows/kb-drift-walker.yml .github/workflows/rule-audit.yml \
   .github/workflows/scheduled-inngest-health.yml .github/workflows/scheduled-prod-version-drift.yml \
-  .github/workflows/scheduled-terraform-drift.yml .github/workflows/sentry-audit-gate.yml | sort)"
+  .github/workflows/scheduled-terraform-drift.yml .github/workflows/sentry-audit-gate.yml \
+  .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml \
+  .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml \
+  .github/workflows/restart-inngest-server.yml | sort)"
 S3_UNCLASS="$(comm -23 <(printf '%s\n' "$S3_POP") <(printf '%s\n' "$S3_MANIFEST"))"
 S3_STALE="$(comm -13 <(printf '%s\n' "$S3_POP") <(printf '%s\n' "$S3_MANIFEST"))"
 if [[ -z "$S3_UNCLASS" && -z "$S3_STALE" && -n "$S3_POP" ]]; then
@@ -3377,17 +3391,17 @@ if [[ -z "$S3_UNCLASS" && -z "$S3_STALE" && -n "$S3_POP" ]]; then
 else
   row "S3 population: the derived set differs from the manifest" fail "unclassified='${S3_UNCLASS//$'\n'/,}' stale='${S3_STALE//$'\n'/,}'"
 fi
-# Rule E (the lint decides what an argv credential is): every member is clean except the declared HELD-BACK site.
-S3_HELD_BACK="scheduled-inngest-health.yml"
-S3_E_BAD=""; S3_E_HELD=0
+# Rule E (the lint decides what an argv credential is): every member is clean. S3 declared one held-back site (the
+# scheduled-inngest-health probe step); S4 converted it, so the exception is gone and a re-added argv site anywhere turns this red.
+S3_E_BAD=""
 for f in $S3_POP; do
   n="$(cd "$REPO_ROOT" && python3 scripts/lint-shell-trace-credential-refusal.py "$f" 2>&1 | grep -c 'credential header on curl argv\|HMAC\|-hmac' || true)"
-  if [[ "$(basename "$f")" == "$S3_HELD_BACK" ]]; then S3_E_HELD="$n"; elif [[ "$n" != 0 ]]; then S3_E_BAD+=" $f=$n"; fi
+  if [[ "$n" != 0 ]]; then S3_E_BAD+=" $f=$n"; fi
 done
-if [[ -z "$S3_E_BAD" && "$S3_E_HELD" == 1 ]]; then
-  row "S3 Rule E: every member is clean except exactly one declared held-back site in $S3_HELD_BACK (the probe step)" ok
+if [[ -z "$S3_E_BAD" ]]; then
+  row "S3 Rule E: every member is clean (the inngest-health probe left its held-back state in S4)" ok
 else
-  row "S3 Rule E: members carry argv credentials" fail "bad=$S3_E_BAD held=$S3_E_HELD"
+  row "S3 Rule E: members carry argv credentials" fail "bad=$S3_E_BAD"
 fi
 
 # ---- structural rows over the derived population (statement-level: continuation lines are joined) ----
@@ -3450,10 +3464,9 @@ for f in $S3_POP; do
   # D3 no stderr suppression on a bc_curl statement
   # (the statement is the bc_curl call itself: a later pipe stage such as `| jq ... 2>/dev/null` is not its stderr)
   while IFS= read -r l; do s3_d3_hit "$l" && S3_STDERR_BAD+=" $f"; done < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ' | sed -E 's/.*(bc_curl .*)/\1/; s/ \|\| .*//; s/ \| .*//' || true)
-  # D4 no openssl -hmac in a converted file (the held-back probe step keeps its own)
-  if [[ "$(basename "$f")" != "$S3_HELD_BACK" ]]; then
-    grep -qE 'openssl dgst .*-hmac' < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f") && S3_HMAC_BAD+=" $f"
-  fi
+  # D4 no openssl -hmac in a converted file (no exception remains: the probe step converted in S4)
+  grep -qE 'openssl dgst .*-hmac' < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f") && S3_HMAC_BAD+=" $f"
+
   # D5 no converted statement branches on rc == 2 (curl's own init-failure code; the marker is the discriminator)
   while IFS= read -r l; do s3_d5_hit "$l" && S3_RC2_BAD+=" $f"; done < <(printf '%s\n' "$stm" | cut -f2 || true)
   # D6 every bc_curl / bc_refuse names ITS OWN file in the marker (a copy-pasted donor name makes the marker unfindable)
@@ -3467,7 +3480,9 @@ done
 [[ -z "$S3_NAME_BAD" ]] && row "S3 structure: every bc_curl / bc_refuse call names its own file in the marker" ok || row "S3 structure: a marker names another file" fail "$S3_NAME_BAD"
 [[ -z "$S3_HMAC_BAD" ]] && row "S3 structure: no converted file computes an HMAC with the key on openssl's argv" ok || row "S3 structure: openssl -hmac remains" fail "$S3_HMAC_BAD"
 [[ -z "$S3_RC2_BAD" ]] && row "S3 structure: no converted statement branches on rc == 2 (the marker is the discriminator)" ok || row "S3 structure: a site branches on rc 2" fail "$S3_RC2_BAD"
-if [[ "$S3_CALLS" -ge 18 ]]; then row "S3 structure: the derived population holds >= 18 bc_curl call statements ($S3_CALLS)" ok; else row "S3 structure: population floor" fail "only $S3_CALLS bc_curl statements derived"; fi
+# The floor is the realized count (the YAML population after S4 converted the five more files and the inngest-health probe). BOTH operands are literals above the `if`.
+S3_CALLS_FLOOR=36
+if [[ "$S3_CALLS" -ge "$S3_CALLS_FLOOR" ]]; then row "S3 structure: the derived population holds >= $S3_CALLS_FLOOR bc_curl call statements ($S3_CALLS)" ok; else row "S3 structure: population floor" fail "only $S3_CALLS bc_curl statements derived (floor $S3_CALLS_FLOOR)"; fi
 
 # ---- anthropic-preflight (the soft-skip trap: a refusal must stay RED) ----
 s3_run "$S3/pre.sh" "$S3/real" ANTHROPIC_API_KEY="${S3_CANARY}\"x"
@@ -3669,10 +3684,953 @@ if [[ "$(s3_marker_count)" == 1 ]] && grep -qx 'rows_rc_seen=2' "$S3_OUT" && ! g
   row "S3 cutover per-host assertion: with the classifier library absent the marker still reaches the log, only the warning is dropped" ok
 else row "S3 cutover per-host assertion: classifier absent" fail "markers=$(s3_marker_count) rc=$S3_RC"; fi
 
-# ---- the held-back site is declared, not forgotten ----
-if grep -qE 'openssl dgst -sha256 -hmac "\$WEBHOOK_SECRET"' "$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml"; then
-  row "S3 held-back: the inngest-health probe step still keeps its argv HMAC, so the declared exception is real (flips RED the day it converts without leaving this list)" ok
-else row "S3 held-back: the declared inngest-health exception is stale" fail "no argv HMAC left; drop S3_HELD_BACK and update the Rule E expectation"; fi
+# ---- the held-back site left its held-back state (S4): the declaration is gone, not forgotten ----
+if ! grep -qE 'openssl dgst .*-hmac' < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml") \
+   && grep -qF 'bc_hmac_sha256_hex WEBHOOK_SECRET' "$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml"; then
+  row "S3 held-back: the inngest-health probe step left its held-back state (no argv HMAC; the signature comes from bc_hmac_sha256_hex) and S3 declares no exception any more" ok
+else row "S3 held-back: the inngest-health probe step carries an argv HMAC again, or no longer signs through the library" fail "restore bc_hmac_sha256_hex or re-declare the exception with its reason"; fi
+
+# =====================================================================================
+# STAGE S4 (argv-bearer sweep S4, ADR-280): the push-triggered production-class files. The deploy-webhook callers (the HMAC
+# signature plus the Cloudflare Access pair), the Supabase, GitHub App, Resend and Hetzner bearer sites, the `openssl dgst -hmac`
+# keys that sit on the same calls, one `x-access-token:` push URL and the two sites S3 held back leave the process command line.
+# Population and manifests are DERIVED from the tree; the representative real step bodies and scripts are EXECUTED.
+#
+#   GUARD 1  no production file puts an HMAC key or a credential header on an argument list: the HMAC census (set identity
+#            against an explicit allow-list), the library-user manifest judged structurally, and the inline-wrapper copies
+#            judged by the S2 parity audit (hm_audit, now over every copy: cutover 17 plus the S4 workflow and script copies).
+#   GUARD 2  a refused credential reaches the SAME verdict class as the old failure (red step, soft verdict, warning or degraded
+#            proceed) or the honest existing class of the sink table: never `down`, never `inngest_down`, never `unreachable`.
+#            The real step body is extracted from the YAML and run under a recording curl that READS `--config -`, with each
+#            credential empty, unset and hostile, and with python3 absent at one HMAC site per form (library, inline).
+# All credentials are synthesized. A fixture credential is built from pieces, never a contiguous token literal.
+# =====================================================================================
+S4="$TMPD/s4"; assert_fixture_dir "$S4"; mkdir -p "$S4/shim" "$S4/real" "$S4/real-nopy" "$S4/shimreal" "$S4/rows" "$S4/bodies"
+cat > "$S4/shim/curl" <<'S4SHIM'
+#!/usr/bin/env bash
+# Recording curl for the S4 stage. Synthesized. Models what the S4 sites need and nothing more:
+#  - `--config -` is READ (stdin -> <n>.stdin) unless SHIM_NOSTDIN=1 (the blind-shim control);
+#  - `-o <path>`: a /tmp path is remapped into the row (the real step bodies write /tmp/...), /dev/null is dropped;
+#  - a `-d/--data <literal>` body and a `--data-binary @<file>` body are recorded to <n>.body (the HMAC oracle's input);
+#  - the answer is by profile: generic (SHIM_CODE/SHIM_BODY), webhook (by /hooks/ path), rls (the Supabase Management API);
+#  - exit SHIM_RC (default 0).
+d="${CALLS_DIR:?}"
+n=$(( $(find "$d" -name '*.argv' | wc -l) + 1 ))
+printf '%s\0' "$@" > "$d/$n.argv"
+out=""; wfmt=""; cfg=0; data=""; url=""; hasdata=0
+args=("$@"); i=0
+while (( i < ${#args[@]} )); do
+  a="${args[i]}"; nx="${args[i+1]-}"
+  case "$a" in
+    -o|--output) out="$nx"; i=$((i + 1)) ;;
+    -w|--write-out) wfmt="$nx"; i=$((i + 1)) ;;
+    --config) [[ "$nx" == - ]] && cfg=1; i=$((i + 1)) ;;
+    -d|--data|--data-raw) data="$nx"; hasdata=1; i=$((i + 1)) ;;
+    --data-binary) if [[ "$nx" == @* ]]; then cp "${nx#@}" "$d/$n.body" 2>/dev/null; else data="$nx"; hasdata=1; fi; i=$((i + 1)) ;;
+    --url) url="$nx"; i=$((i + 1)) ;;
+    -X|--request|--max-time|--noproxy|-H|--header) i=$((i + 1)) ;;
+    http://*|https://*) url="$a" ;;
+  esac
+  i=$((i + 1))
+done
+(( hasdata )) && printf '%s' "$data" > "$d/$n.body"
+if (( cfg )) && [[ "${SHIM_NOSTDIN:-}" != 1 ]]; then cat > "$d/$n.stdin"; fi
+code="${SHIM_CODE:-200}"; body="${SHIM_BODY-}"
+case "${SHIM_PROFILE:-generic}" in
+  webhook)
+    body=""
+    case "$url" in
+      */hooks/deploy-status|*/hooks/infra-config-status) body="${SHIM_STATUS_BODY-}" ;;
+      */hooks/inngest-liveness) body="${SHIM_LIVE_BODY-}" ;;
+      */hooks/deploy|*/hooks/infra-config) code="${SHIM_POST_CODE:-202}" ;;
+    esac ;;
+  rls)
+    body='[]'; code=201
+    case "$url" in
+      */advisors/security) body='{"lints":[]}'; code=200 ;;
+      */database/query)
+        case "$data" in
+          *violations*) body='[{"violations":0}]'; code=200 ;;
+          *pg_default_acl*) body='[{"n":0}]'; code=200 ;;
+          *"set local role postgres"*) body='[{"n":1}]'; code=200 ;;
+          *"set local role anon"*) body='{"message":"ERROR: 42501: permission denied"}'; code=200 ;;
+        esac ;;
+      */v1/projects/*) body='{"name":"soleur-inngest-prd"}'; code=200 ;;
+    esac ;;
+esac
+if [[ -n "$out" ]]; then
+  case "$out" in
+    /dev/null) : ;;
+    "${RUNNER_TEMP:-/nonexistent}"/*) printf '%s' "$body" > "$out" ;;
+    /tmp/*) mkdir -p "$d/tmp"; printf '%s' "$body" > "$d/tmp/${out##*/}" ;;
+    *) printf '%s' "$body" > "$out" ;;
+  esac
+else
+  printf '%s' "$body"
+fi
+if [[ -n "$wfmt" ]]; then fmt="${wfmt//%\{http_code\}/$code}"; printf '%b' "$fmt"; fi
+exit "${SHIM_RC:-0}"
+S4SHIM
+sed -i "1s|.*|#!${BASH_BIN}|" "$S4/shim/curl"
+# `sleep` is a no-op (the poll loops would otherwise spend minutes), `doppler` answers by secret NAME from D_<NAME> (set = value, may be
+# empty; unset = the read fails), and every other tool a step may call is a real symlink.
+printf '#!%s\nexit 0\n' "$BASH_BIN" > "$S4/shim/sleep"
+cat > "$S4/shim/doppler" <<'S4DOP'
+#!/usr/bin/env bash
+var="D_${3:-}"
+if [[ "${1:-}" == secrets && "${2:-}" == get && -n "${!var+x}" ]]; then printf '%s' "${!var}"; exit 0; fi
+exit 1
+S4DOP
+sed -i "1s|.*|#!${BASH_BIN}|" "$S4/shim/doppler"
+chmod +x "$S4/shim/curl" "$S4/shim/sleep" "$S4/shim/doppler"
+# The real-curl wrapper for the transport-failure rows: every http(s) URL goes to a closed loopback port and the REAL curl runs.
+cat > "$S4/shimreal/curl" <<'S4REAL'
+#!/usr/bin/env bash
+args=(); for a in "$@"; do case "$a" in http://*|https://*) args+=("http://127.0.0.1:9/x") ;; *) args+=("$a") ;; esac; done
+exec "@REAL_CURL@" "${args[@]}"
+S4REAL
+sed -i "1s|.*|#!${BASH_BIN}|; s|@REAL_CURL@|${REAL_CURL}|" "$S4/shimreal/curl"
+cp "$S4/shim/sleep" "$S4/shim/doppler" "$S4/shimreal/"
+chmod +x "$S4/shimreal/curl" "$S4/shimreal/sleep" "$S4/shimreal/doppler"
+for t in bash cat date grep sed tr awk head tail jq mktemp rm mkdir env dirname basename cut wc sort tee python3 openssl find seq uniq ls cp mv cmp od base64 sha256sum diff xargs expr id uname paste readlink touch stat true false printf; do
+  p="$(type -P "$t" || true)"; [[ -n "$p" ]] && ln -s "$p" "$S4/real/$t"
+done
+[[ -e "$S4/real/python3" && -e "$S4/real/jq" && -e "$S4/real/openssl" ]] || fatal "stage S4: python3, jq and openssl are required"
+for t in "$S4"/real/*; do [[ "$(basename "$t")" == python3 ]] || ln -s "$(readlink "$t")" "$S4/real-nopy/$(basename "$t")"; done
+
+S4_CANARY="S4CANARYsecret0123"
+S4_HEX32="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+S4_HEX64="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+S4_KEY="synth-s4-webhook-key-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+S4_CFID="${S4_HEX32}.access"                      # the shape of a Cloudflare Access service-token id
+S4_CFSEC="$S4_HEX64"                              # and of its secret
+S4_N=0; S4_RC=0; S4_ROW=""; S4_CWD=""; S4_SHIM="$S4/shim"
+S4_FLAGS=(--noprofile --norc -e)                  # the runner's default step shell: `bash -e {0}`
+S4_ARGS=()                                        # arguments after the script (the bump script takes flags)
+S4_REFUSAL_RUNS=0                                 # refusal runs whose every captured stream was searched for the planted canary
+
+# s4_run <label> <script> <realdir> [NAME=value ...]: the script under `env -i` with the recording curl first on PATH.
+# An argument holding @ROW@ gets the row directory substituted (a status file path the script reads and writes).
+s4_run() {
+  local label="$1" body="$2" realdir="$3"; shift 3
+  S4_N=$((S4_N + 1)); local r="$S4/rows/$S4_N-${label//[^A-Za-z0-9._-]/_}"
+  assert_fixture_dir "$r"; mkdir -p "$r/calls" "$r/rt"
+  : > "$r/gho"; : > "$r/genv"; : > "$r/summary"
+  set -- "${@//@ROW@/$r}"
+  S4_RC=0
+  ( cd "${S4_CWD:-$REPO_ROOT}" && env -i PATH="$S4_SHIM:$realdir" HOME="$r" TMPDIR="$r" RUNNER_TEMP="$r/rt" GITHUB_OUTPUT="$r/gho" GITHUB_ENV="$r/genv" \
+      GITHUB_STEP_SUMMARY="$r/summary" GITHUB_WORKSPACE="$REPO_ROOT" CALLS_DIR="$r/calls" "$@" \
+      "$BASH_BIN" "${S4_FLAGS[@]}" "$body" ${S4_ARGS[@]+"${S4_ARGS[@]}"} < /dev/null ) > "$r/stdout" 2> "$r/stderr" || S4_RC=$?
+  S4_ROW="$r"
+}
+# s4_body <yml> <step id|name prefix> <out> [<from> <to>]...: the step's run text, /tmp/ moved under $RUNNER_TEMP (the runner's
+# fresh /tmp, never this host's), and any named edit applied; an edit that did not land is FATAL (a mutation that does not
+# land reports the baseline, which is indistinguishable from a pass).
+s4_body() {
+  local f="$1" sel="$2" out="$3"; shift 3
+  assert_fixture_dir "$out"
+  s3_body "$f" "$sel" > "$out.raw" || fatal "S4 could not extract the step '$sel' from $f"
+  python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+pairs = sys.argv[3:]
+for i in range(0, len(pairs), 2):
+    if pairs[i] not in t:
+        sys.exit(3)
+    t = t.replace(pairs[i], pairs[i + 1])
+t = t.replace("/tmp/", "${RUNNER_TEMP}/")
+open(sys.argv[2], "w").write(t)' "$out.raw" "$out" "$@" || fatal "S4 an edit on the step '$sel' of $f did not land"
+}
+s4_jobenv() { python3 -I -c 'import sys,yaml
+d = yaml.safe_load(open(sys.argv[1]))
+for k, v in ((d["jobs"][sys.argv[2]].get("env")) or {}).items():
+    print("%s=%s" % (k, v))' "$1" "$2"; }
+# Facts about the row just run.
+s4_ncalls() { find "$S4_ROW/calls" -name '*.argv' 2>/dev/null | wc -l | tr -d ' '; }
+s4_markers() { grep -c '^SOLEUR_CREDENTIAL_REFUSED script=' < <(cat "$S4_ROW/stdout" "$S4_ROW/stderr") || true; }
+s4_said() { grep -qF -- "$1" < <(cat "$S4_ROW/stdout" "$S4_ROW/stderr"); }                  # a literal line fragment on stdout or stderr
+s4_gho_has() { grep -qxF -- "$1" "$S4_ROW/gho"; }
+s4_genv_has() { grep -qxF -- "$1" "$S4_ROW/genv"; }
+# The planted canary appears in no captured stream (`::add-mask::` is the runner's own masking command and carries the value by design).
+s4_canary_clean() { ! grep -qaF -- "$S4_CANARY" < <(grep -rahv '^::add-mask::' "$S4_ROW" 2>/dev/null); }
+s4_argv_has() { local f; for f in "$S4_ROW"/calls/*.argv; do [[ -e "$f" ]] || continue; grep -qaF -- "$1" "$f" && return 0; done; return 1; }
+# s4_calls_ok <headers-per-call>: every recorded call read its stdin config (a blind shim records none), carries exactly that many bare
+# `header = "..."` directives and nothing else, and has the confinement prefix (`--disable`, `--noproxy '*'`) and `--config -`.
+s4_calls_ok() {
+  local want="$1" f c ok=1 cnt=0 w
+  local -a av
+  for f in "$S4_ROW"/calls/*.argv; do
+    [[ -e "$f" ]] || continue
+    cnt=$((cnt + 1)); c="${f%.argv}"
+    [[ -r "$c.stdin" ]] || { ok=0; continue; }
+    [[ "$(grep -c '^header = "[^"\\]*"$' "$c.stdin")" == "$want" && "$(grep -vc '^header = "[^"\\]*"$' "$c.stdin")" == 0 ]] || ok=0
+    mapfile -d '' av < "$f"
+    [[ "${av[0]:-}" == --disable && "${av[1]:-}" == --noproxy && "${av[2]:-}" == '*' ]] || ok=0
+    w=0; for ((i = 0; i + 1 < ${#av[@]}; i++)); do [[ "${av[i]}" == --config && "${av[i+1]}" == - ]] && w=1; done
+    (( w )) || ok=0
+  done
+  (( cnt > 0 && ok ))
+}
+s4_stdin_line() { sed -n "${2}p" "$S4_ROW/calls/$1.stdin" 2>/dev/null; }  # <call> <line>
+s4_oracle() { "$REAL_OSSL" dgst -sha256 -hmac "$1" < "$2" | sed 's/.*= //'; }  # <key> <file>
+
+# ---- instrument controls (the stage aborts with FATAL when the instrument is blind) ----
+# C1: the shim READS `--config -`: a directive piped to it is recorded, the body of a --data-binary @file is recorded, /tmp is remapped.
+printf '%s\n' 'set -e' \
+  'printf "{\"k\":1}" > "$RUNNER_TEMP/payload"' \
+  'curl --disable --noproxy "*" -s -o /tmp/s4-ctl-out -w "%{http_code}" --max-time 5 -X POST --data-binary @"$RUNNER_TEMP/payload" --config - https://deploy.invalid/hooks/deploy < <(printf "header = \"X-Test: ctl\"\n")' > "$S4/ctl1.sh"
+s4_run ctl1 "$S4/ctl1.sh" "$S4/real" SHIM_PROFILE=webhook
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_stdin_line 1 1)" == 'header = "X-Test: ctl"' && "$(cat "$S4_ROW/calls/1.body" 2>/dev/null)" == '{"k":1}' \
+      && -e "$S4_ROW/calls/tmp/s4-ctl-out" && "$(cat "$S4_ROW/stdout")" == 202 ]] && s4_calls_ok 1; then
+  row "S4 control: the recording curl reads --config -, records the --data-binary @file body, remaps /tmp and answers the webhook profile (202)" ok
+else row "S4 control: the recording curl is blind" fail "rc=$S4_RC calls=$(s4_ncalls)"; fatal "S4 control C1: the recording curl does not read --config -"; fi
+# C2: a BLIND curl (it never reads its stdin) must be judged RED by the very predicate the rows use.
+s4_run ctl2 "$S4/ctl1.sh" "$S4/real" SHIM_PROFILE=webhook SHIM_NOSTDIN=1
+if [[ "$(s4_ncalls)" == 1 ]] && ! s4_calls_ok 1; then row "S4 control: a curl that ignores --config - is judged RED by the credential-reaches-stdin predicate (the harness cannot be satisfied by a blind shim)" ok
+else row "S4 control: a blind curl is not judged red" fail "calls=$(s4_ncalls)"; fi
+# C3: a credential on curl's argv is seen by the argv predicate, and a hostile value planted in a stream is seen by the canary predicate.
+printf '%s\n' 'curl -s -o /dev/null -H "X-Signature-256: sha256=$K" --config - https://deploy.invalid/x < <(printf "header = \"X: y\"\n")' 'echo "$K" >&2' > "$S4/ctl3.sh"
+s4_run ctl3 "$S4/ctl3.sh" "$S4/real" "K=$S4_CANARY" SHIM_PROFILE=webhook
+if s4_argv_has "$S4_CANARY" && ! s4_canary_clean; then row "S4 control: a credential on a recorded argv and a credential echoed to stderr are both seen (argv predicate and negative canary are not blind)" ok
+else row "S4 control: the argv or canary predicate is blind" fail "argv=$(s4_argv_has "$S4_CANARY" && echo seen || echo missed)"; fi
+# C4: the real-curl oracle behind the transport-failure rows: a closed port is exit 7 and `000`, so `|| echo 000` makes `000000`.
+printf '%s\n' 'c=$(curl --disable --noproxy "*" -s -o /dev/null -w "%{http_code}" --max-time 5 https://deploy.invalid/x); echo "rc=$? first=$c"' \
+  'c2=$(curl --disable --noproxy "*" -s -o /dev/null -w "%{http_code}" --max-time 5 https://deploy.invalid/x || echo "000"); echo "second=$c2"' > "$S4/ctl4.sh"
+S4_SHIM="$S4/shimreal"; S4_FLAGS=(--noprofile --norc); s4_run ctl4 "$S4/ctl4.sh" "$S4/real"; S4_SHIM="$S4/shim"; S4_FLAGS=(--noprofile --norc -e)
+if s4_said 'rc=7 first=000' && s4_said 'second=000000'; then row "S4 control: real curl against a closed port exits 7 and prints 000, and the sites' \`|| echo \"000\"\` makes the documented 000000" ok
+else row "S4 control: the closed-port oracle drifted" fail "$(tr '\n' ' ' < "$S4_ROW/stdout")"; fi
+# C5: the HMAC oracle is the OTHER implementation (the real openssl), and the library signs the same bytes.
+printf '%s' '{"command":"synthetic"}' > "$S4/bodies/oracle-body"
+S4_ORA_WANT="$(s4_oracle "$S4_KEY" "$S4/bodies/oracle-body")"
+S4_ORA_GOT="$(env -i PATH="$S4/real" K="$S4_KEY" "$BASH_BIN" -c 'source "'"$REPO_ROOT"'/scripts/lib/bearer-curl.sh"; bc_hmac_sha256_hex K < "'"$S4"'/bodies/oracle-body"')"
+[[ -n "$S4_ORA_WANT" && "$S4_ORA_GOT" == "$S4_ORA_WANT" ]] && row "S4 control: the library's bc_hmac_sha256_hex equals the independent openssl dgst -hmac digest over the same bytes" ok || row "S4 control: the HMAC oracle disagrees with the library" fail "lens=${#S4_ORA_WANT}/${#S4_ORA_GOT}"
+echo "=== stage S4: instrument controls done ==="
+
+# =====================================================================================
+# GUARD 1 (a): the HMAC census. Every tracked non-test, non-documentation file that signs with `openssl dgst ... -hmac <key>` puts
+# the KEY on openssl's argv; after S4 only the two held-back arms of the cutover script do. The census is DERIVED by
+# `git grep -nE 'dgst .*-hmac'` over the tracked files minus Markdown, *.test.sh, tests/, fixtures, knowledge-base/, comment-only lines
+# and the lint's own docstring, and compared to the allow-list by SET IDENTITY (path AND hit count, so a second argv HMAC in an allowed
+# file is an unclassified member, and a deleted allow-list row while the file still signs is an unclassified member too).
+# =====================================================================================
+S4_HMAC_ALLOW="scripts/cutover-inngest.sh:2"
+S4_HMAC_MD_ALLOW="$(printf '%s\n' plugins/soleur/skills/postmerge/references/deploy-status-debugging.md plugins/soleur/skills/ship/SKILL.md)"
+s4_hmac_filter() { # stdin: grep -n lines (path:line:text) -> "path:count" per file after the exclusions
+  awk -F: '{
+    p = $1; t = substr($0, length($1) + length($2) + 3)
+    if (p ~ /\.md$/ || p ~ /\.test\.(sh|ts)$/ || p ~ /^tests\// || p ~ /\/tests\// || p ~ /(^|\/)fixtures\// || p ~ /^knowledge-base\// || p == "scripts/lint-shell-trace-credential-refusal.py") next
+    if (t ~ /^[[:space:]]*#/) next
+    c[p]++
+  } END { for (p in c) printf "%s:%d\n", p, c[p] }' | sort
+}
+s4_census_verdict() { # <census> <allow> -> prints "unclassified=... stale=..." and returns 0 when the two sets are identical
+  local un st
+  un="$(comm -23 <(printf '%s\n' "$1" | grep . | sort) <(printf '%s\n' "$2" | grep . | sort) | paste -sd, -)"
+  st="$(comm -13 <(printf '%s\n' "$1" | grep . | sort) <(printf '%s\n' "$2" | grep . | sort) | paste -sd, -)"
+  printf 'unclassified=%s stale=%s' "$un" "$st"
+  [[ -z "$un" && -z "$st" ]]
+}
+S4_HMAC_RAW="$(cd "$REPO_ROOT" && git grep -nE 'dgst .*-hmac' || true)"
+S4_HMAC_CENSUS="$(printf '%s\n' "$S4_HMAC_RAW" | s4_hmac_filter)"
+S4_HMAC_RAW_N="$(printf '%s\n' "$S4_HMAC_RAW" | grep -c . || true)"
+S4_CEN_OUT="$(s4_census_verdict "$S4_HMAC_CENSUS" "$S4_HMAC_ALLOW")"; S4_CEN_RC=$?
+if [[ "$S4_CEN_RC" == 0 && -n "$S4_HMAC_CENSUS" ]]; then
+  row "S4 HMAC census: the derived set of production files with an argv openssl -hmac equals the allow-list exactly (scripts/cutover-inngest.sh x2: the registry-probe and doublefire-probe arms)" ok
+else row "S4 HMAC census: the derived set differs from the allow-list" fail "$S4_CEN_OUT"; fi
+# The documentation exceptions, asserted separately: the two agent-executed Markdown files that still teach the argv form, no third.
+S4_MD_SET="$(cd "$REPO_ROOT" && git grep -lE 'dgst .*-hmac' -- '*.md' ':!knowledge-base' | sort)"
+if [[ "$S4_MD_SET" == "$S4_HMAC_MD_ALLOW" ]]; then row "S4 HMAC census: the Markdown exceptions are exactly ship/SKILL.md and postmerge/references/deploy-status-debugging.md (documentation, tracked on #9757, not S4)" ok
+else row "S4 HMAC census: the Markdown exception set drifted" fail "set='${S4_MD_SET//$'\n'/,}'"; fi
+# Anti-vacuity floor: the derivation itself must find the two held-back arms. A population that quietly emptied (a renamed pattern, a
+# missing git) would otherwise "equal" an allow-list nobody exercises. BOTH operands are literals on the lines IMMEDIATELY above the `if`.
+S4_CENSUS_HITS="$(printf '%s\n' "$S4_HMAC_CENSUS" | awk -F: 'NF > 1 {n += $NF} END {print n + 0}')"
+S4_CENSUS_HIT_FLOOR=2
+if [[ "$S4_CENSUS_HITS" -ge "$S4_CENSUS_HIT_FLOOR" && "$S4_HMAC_RAW_N" -gt "$S4_CENSUS_HITS" ]]; then row "S4 HMAC census: the derivation is not vacuous ($S4_CENSUS_HITS production lines found among $S4_HMAC_RAW_N tracked matches; anti-vacuity floor $S4_CENSUS_HIT_FLOOR)" ok
+else row "S4 HMAC census: the derived population is empty (anti-vacuity floor)" fail "hits=$S4_CENSUS_HITS raw=$S4_HMAC_RAW_N floor=$S4_CENSUS_HIT_FLOOR"; fi
+# The structural D4 predicate: none of the 15 S4 files carries `openssl dgst -hmac` in non-comment text (the census says so for the set;
+# this names each file so a restored site is reported at its file).
+S4_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/scripts/bump-inngest-bootstrap-pin.sh
+ .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml
+ .github/workflows/deploy-inngest-image.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml
+ .github/workflows/web-platform-release.yml .github/workflows/workspaces-luks-cutover.yml apps/web-platform/infra/infra-config-verify.sh
+ apps/web-platform/infra/push-infra-config.sh apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh apps/web-platform/scripts/github-app-key-status.sh"
+S4_D4_BAD=""; S4_NFILES=0
+for f in $S4_FILES; do
+  S4_NFILES=$((S4_NFILES + 1))
+  [[ -f "$REPO_ROOT/$f" ]] || { S4_D4_BAD+=" $f(missing)"; continue; }
+  grep -qE 'openssl dgst .*-hmac' < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f") && S4_D4_BAD+=" $f"
+done
+[[ -z "$S4_D4_BAD" && "$S4_NFILES" == 15 ]] && row "S4 structure: none of the 15 S4 files carries openssl dgst -hmac in non-comment text (the key is never on openssl's argv)" ok || row "S4 structure: an S4 file signs with the key on openssl's argv" fail "$S4_D4_BAD n=$S4_NFILES"
+
+# Harness rows for the census: a synthesized tree whose only HMAC is allowed MUST PASS; every other tree MUST FAIL. Both go through
+# the SAME s4_hmac_filter / s4_census_verdict the live census uses (a pattern nothing ever fed a known positive and a known negative
+# is not a control).
+S4_CEN="$S4/cen"; assert_fixture_dir "$S4_CEN"; mkdir -p "$S4_CEN"
+s4_cen_tree() { # <name> <variant>
+  local t="$S4_CEN/$1"; assert_fixture_dir "$t"; mkdir -p "$t/scripts" "$t/docs" "$t/tests" "$t/knowledge-base" "$t/x"
+  printf '%s\n' 'SIG=$(printf "" | openssl dgst -sha256 -hmac "$K" | sed s/x/y/)' '    SIG=$(printf "" | openssl dgst -sha256 -hmac "$K" | sed s/x/y/)' > "$t/scripts/cutover-inngest.sh"
+  printf '%s\n' '# SIG=$(printf "" | openssl dgst -sha256 -hmac "$K")' > "$t/x/commented.sh"
+  printf '%s\n' 'openssl dgst -sha256 -hmac "$K"' > "$t/docs/teaches.md"
+  printf '%s\n' 'openssl dgst -sha256 -hmac "$K"' > "$t/x/a.test.sh"
+  printf '%s\n' 'openssl dgst -sha256 -hmac "$K"' > "$t/tests/b.sh"
+  printf '%s\n' 'openssl dgst -sha256 -hmac "$K"' > "$t/knowledge-base/c.txt"
+  case "$2" in
+    allowed) ;;
+    extra) printf '%s\n' 'S=$(openssl dgst -sha256 -hmac "$K")' > "$t/x/new-production.sh" ;;
+    second) printf '%s\n' 'S=$(openssl dgst -sha256 -hmac "$K")' >> "$t/scripts/cutover-inngest.sh" ;;
+  esac
+  (cd "$t" && grep -rnE 'dgst .*-hmac' . | sed 's|^\./||' | s4_hmac_filter)
+}
+S4_CT_OK="$(s4_cen_tree ok allowed)"; s4_census_verdict "$S4_CT_OK" "$S4_HMAC_ALLOW" > /dev/null; S4_CT_OK_RC=$?
+S4_CT_EX="$(s4_cen_tree extra extra)"; s4_census_verdict "$S4_CT_EX" "$S4_HMAC_ALLOW" > /dev/null; S4_CT_EX_RC=$?
+S4_CT_2="$(s4_cen_tree second second)"; s4_census_verdict "$S4_CT_2" "$S4_HMAC_ALLOW" > /dev/null; S4_CT_2_RC=$?
+s4_census_verdict "$S4_CT_OK" "" > /dev/null; S4_CT_DEL_RC=$?
+[[ "$S4_CT_OK_RC" == 0 && "$S4_CT_OK" == "scripts/cutover-inngest.sh:2" ]] && row "S4 HMAC census control: a synthesized tree whose only HMAC is allowed (plus a comment-only line and Markdown, test, tests/ and knowledge-base/ copies) is GREEN" ok || row "S4 HMAC census control: the allowed tree is not green" fail "got='$S4_CT_OK' rc=$S4_CT_OK_RC"
+[[ "$S4_CT_EX_RC" != 0 ]] && row "S4 HMAC census control: an extra unlisted production file with an argv HMAC is RED (unclassified member)" ok || row "S4 HMAC census control: an extra member is accepted" fail "got='$S4_CT_EX'"
+[[ "$S4_CT_2_RC" != 0 ]] && row "S4 HMAC census control: a SECOND argv HMAC after a compliant first, in an allowed file, is RED (the census compares per-file counts, not 'at least one clean')" ok || row "S4 HMAC census control: a second member in an allowed file is accepted" fail "got='$S4_CT_2'"
+[[ "$S4_CT_DEL_RC" != 0 ]] && row "S4 HMAC census control: deleting the allow-list row while the file still signs is RED (the held-back set cannot shrink silently)" ok || row "S4 HMAC census control: a deleted allow-list row is accepted" fail ""
+# The inline copies of the canonical snippet are a DERIVED population too: every tracked non-test file holding it is in this explicit set.
+S4_INLINE_FILES="$(printf '%s\n' .github/workflows/deploy-inngest-image.yml .github/workflows/web-platform-release.yml apps/web-platform/infra/infra-config-verify.sh apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh scripts/cutover-inngest.sh | sort)"
+S4_INLINE_DERIVED="$(cd "$REPO_ROOT" && git grep -lF 'HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c' -- . ':!tests' ':!knowledge-base' ':!*.test.sh' | sort)"
+if [[ "$S4_INLINE_DERIVED" == "$S4_INLINE_FILES" ]]; then row "S4 parity population: the files holding the canonical inline HMAC snippet are exactly the cutover script and the four S4 inline files (derived by git grep, never counted)" ok
+else row "S4 parity population: a file holds the canonical inline HMAC snippet that no audit judges" fail "derived='${S4_INLINE_DERIVED//$'\n'/,}'"; fi
+
+# =====================================================================================
+# GUARD 1 (c): the library-user manifest. S3 derives the YAML population (S3_POP: steps and composites that source the library);
+# S4 adds the SCRIPTS that source it on a step's behalf (a script file invoked by a `run:` or a terraform provisioner). The set is
+# derived from the tree and compared to an explicit manifest; each script is judged structurally (the library sourced before its
+# first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
+# names the file).
+# =====================================================================================
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh | sort)"
+S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
+S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
+S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
+if [[ -z "$S4_SU" && -z "$S4_SS" && -n "$S4_SCRIPT_POP" ]]; then row "S4 population: every script that sources the library is in the manifest and every manifest member still does ($(printf '%s\n' "$S4_SCRIPT_POP" | grep -c .) scripts)" ok
+else row "S4 population: the derived script set differs from the manifest" fail "unclassified='${S4_SU//$'\n'/,}' stale='${S4_SS//$'\n'/,}'"; fi
+# The S4 additions to the YAML population (S3_MANIFEST now holds them; the S3 structure rows already judge every member).
+S4_YML_NEW=".github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml"
+S4_YML_MISS=""; for f in $S4_YML_NEW; do grep -qxF -- "$f" <<<"$S3_POP" || S4_YML_MISS+=" $f"; done
+[[ -z "$S4_YML_MISS" ]] && row "S4 population: the five newly converted YAML files and the converted inngest-health probe are all in the derived library-user set ($(printf '%s\n' "$S3_POP" | grep -c .) YAML members in all, judged by the S3 structure rows)" ok || row "S4 population: a converted YAML file is not a derived library user" fail "$S4_YML_MISS"
+# Anti-vacuity floor on the two derived populations (BOTH operands are literals on the lines IMMEDIATELY above the `if`).
+S4_POP_FLOOR=20
+S4_POP_N=$(( $(printf '%s\n' "$S3_POP" | grep -c .) + $(printf '%s\n' "$S4_SCRIPT_POP" | grep -c .) ))
+if [[ "$S4_POP_N" -ge "$S4_POP_FLOOR" ]]; then row "S4 population: the derived library-user population holds $S4_POP_N members (anti-vacuity floor $S4_POP_FLOOR)" ok
+else row "S4 population: the derived library-user population is below its anti-vacuity floor" fail "n=$S4_POP_N floor=$S4_POP_FLOOR"; fi
+# Structural rows over the scripts. Statement-level: continuation lines are joined (the same shape s3_statements_py uses for YAML).
+s4_script_stm() { sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' "$1"; }
+S4_SRC_BAD=""; S4_ARGV_BAD=""; S4_STDERR_BAD=""; S4_RC2_BAD=""; S4_NAME_BAD=""; S4_SCALLS=0; S4_HMAC_SCRIPT_BAD=""
+for f in $S4_SCRIPT_POP; do
+  stm="$(s4_script_stm "$REPO_ROOT/$f")"
+  first_use="$(printf '%s\n' "$stm" | awk '$0 !~ /^[[:space:]]*#/ && $0 ~ /(^|[^_A-Za-z])bc_(curl|ok_var|refuse|hmac_sha256_hex)[ "$]/ && $0 !~ /^[[:space:]]*(source|\.)[[:space:]]/ {print NR; exit}')"
+  first_src="$(printf '%s\n' "$stm" | awk '$0 ~ /^[[:space:]]*(source|\.)[[:space:]]/ && $0 ~ /scripts\/lib\/bearer-curl\.sh/ {print NR; exit}')"
+  [[ -n "$first_src" && -n "$first_use" && "$first_src" -le "$first_use" ]] || S4_SRC_BAD+=" $f"
+  S4_SCALLS=$((S4_SCALLS + $(printf '%s\n' "$stm" | grep -cE '(^|[^_A-Za-z])bc_curl [A-Za-z]' || true)))
+  while IFS= read -r l; do s3_d2_hit "$l" && S4_ARGV_BAD+=" $f"; done < <(printf '%s\n' "$stm" | grep -E '(^|[^_A-Za-z])bc_curl ' || true)
+  while IFS= read -r l; do s3_d3_hit "$l" && S4_STDERR_BAD+=" $f"; done < <(printf '%s\n' "$stm" | grep -E '(^|[^_A-Za-z])bc_curl ' | sed -E 's/.*(bc_curl .*)/\1/; s/ \|\| .*//; s/ \| .*//' || true)
+  while IFS= read -r l; do s3_d5_hit "$l" && S4_RC2_BAD+=" $f"; done < <(printf '%s\n' "$stm" | grep -v '^[[:space:]]*#' || true)
+  want_name="$(basename "$f" .sh)"
+  while IFS= read -r nm; do [[ "$nm" == "$want_name" || "$nm" == "$(basename "$f")" ]] || S4_NAME_BAD+=" $f:$nm"; done \
+    < <(printf '%s\n' "$stm" | grep -v '^[[:space:]]*#' | grep -oE '(^|[^_A-Za-z])bc_(curl|refuse)[ ]+[A-Za-z0-9._-]+' | awk '{print $NF}' | sort -u || true)
+  grep -qE 'openssl dgst .*-hmac' < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f") && S4_HMAC_SCRIPT_BAD+=" $f"
+done
+[[ -z "$S4_SRC_BAD" ]] && row "S4 structure: every script sources the library before its first bc_* call" ok || row "S4 structure: a script uses the library before it sources it" fail "$S4_SRC_BAD"
+[[ -z "$S4_ARGV_BAD" ]] && row "S4 structure: no bc_curl statement in a script repeats a credential header on its own argument list" ok || row "S4 structure: a script's bc_curl carries -H credential" fail "$S4_ARGV_BAD"
+[[ -z "$S4_STDERR_BAD" ]] && row "S4 structure: no bc_curl statement in a script discards stderr (the marker stays visible)" ok || row "S4 structure: 2>/dev/null on a script's bc_curl" fail "$S4_STDERR_BAD"
+[[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
+[[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
+[[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
+# The floor is the realized count (4 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=4
+if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
+else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
+# The predicates that judge the scripts are the S3 predicates; the script statement joiner is a control of its own: a continued call is one statement.
+S4_JOIN="$(printf '%s\n' 'x=$(bc_curl a "A:B:C" -- -sS \' '  -H "Authorization: z" \' '  url)' | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta')"
+[[ "$(printf '%s\n' "$S4_JOIN" | grep -c .)" == 1 ]] && s3_d2_hit "$S4_JOIN" && row "S4 structure control: the script statement joiner folds a continued bc_curl into ONE statement and the D2 predicate then sees the credential header on it" ok || row "S4 structure control: the statement joiner or the D2 predicate is blind" fail "joined='$S4_JOIN'"
+
+# track.sh VOCABULARY (mutation 8): an unusable credential reuses the EXISTING credential-absent verdict; no new verdict word.
+S4_TRACK=".github/actions/dispatch-web-redeploy/track.sh"
+S4_TRACK_WORDS="$(grep -ohE 'verdict=redeploy_[a-z_]+' "$REPO_ROOT/$S4_TRACK" | sort -u)"
+S4_TRACK_WANT="$(printf '%s\n' verdict=redeploy_baseline_unreadable verdict=redeploy_credential_absent verdict=redeploy_dispatch_rejected verdict=redeploy_peer_fanout_degraded verdict=redeploy_status_unreadable verdict=redeploy_tag_unresolved verdict=redeploy_terminal_failure verdict=redeploy_timeout verdict=redeploy_tool_absent | sort)"
+if [[ "$S4_TRACK_WORDS" == "$S4_TRACK_WANT" ]]; then row "S4 track.sh vocabulary: the verdict words are exactly the nine the consumers (apply-web-platform-infra, git-data-cutover, the runbook) grep for; the refusal reuses redeploy_credential_absent" ok
+else row "S4 track.sh vocabulary: a verdict word was added or removed" fail "got='${S4_TRACK_WORDS//$'\n'/,}'"; fi
+echo "=== stage S4: Guard 1 census, populations and structure done ==="
+
+# =====================================================================================
+# GUARD 1 (d): the inline-wrapper copies, judged by the S2 PARITY AUDIT (hm_audit above, which reads any indentation). S4 adds seven
+# copies of the canonical python3 HMAC snippet to the 17 of the cutover script: web-platform-release.yml 3 and deploy-inngest-image.yml
+# 2 (workflow steps, 10-space YAML indentation, signing through the inline `_sig_curl`), infra-config-verify.sh 1 and
+# verify-tunnel-ingress-origin.sh 1 (scripts at column 0 that print their own header directives; both sign a status GET).
+# The two held-back arms of the cutover script are unchanged at 2. The inline wrappers are the exception ADR-280 allows only where a
+# pinned property of the job or its suite rules out sourcing a repo file; this audit is the mechanical bound on that exception.
+# =====================================================================================
+S4_HM_SPEC=".github/workflows/web-platform-release.yml:3: .github/workflows/deploy-inngest-image.yml:2: apps/web-platform/infra/infra-config-verify.sh:1:empty apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh:1:empty"
+S4_HM_TOTAL=0; S4_HM_ALLBAD=""
+for spec in $S4_HM_SPEC; do
+  IFS=: read -r hf hn hd <<< "$spec"
+  hm_audit "$REPO_ROOT/$hf" "$hd"
+  S4_HM_TOTAL=$((S4_HM_TOTAL + HM_NCOPY))
+  [[ "$HM_NCOPY" == "$hn" ]] || S4_HM_ALLBAD+=" $hf(copies=$HM_NCOPY want=$hn)"
+  for ((hi = 1; hi <= HM_NCOPY; hi++)); do
+    if [[ " $HM_BAD " != *" $hi "* ]]; then row "S4 inline HMAC copy $(basename "$hf")#$hi equals the canonical snippet, keeps the SIG=\$(printf <body> | ...) || SIG=\"\" shape and signs the body its own request carries" ok
+    else row "S4 inline HMAC copy $(basename "$hf")#$hi equals the canonical snippet, keeps the SIG=\$(printf <body> | ...) || SIG=\"\" shape and signs the body its own request carries" fail "differs from the canonical string, lost its fallback, or signs the wrong body (bad:$HM_BAD)"; fi
+  done
+done
+hm_audit "$CUT"; S4_HM_CUT="$HM_NCOPY"; S4_HM_HELD="$HM_NOLD"
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 17 cutover copies + 7 S4 copies, and the 2 held-back arms.
+S4_HM_COPIES_WANT=24
+if [[ $((S4_HM_CUT + S4_HM_TOTAL)) -eq "$S4_HM_COPIES_WANT" && -z "$S4_HM_ALLBAD" && "$S4_HM_HELD" == 2 ]]; then
+  row "S4 parity audit: $S4_HM_COPIES_WANT converted copies in all (17 cutover + 7 inline: release 3, deploy-inngest-image 2, infra-config-verify 1, verify-tunnel 1), held-back unchanged at 2" ok
+else row "S4 parity audit: the converted-copy count or the held-back set moved" fail "cutover=$S4_HM_CUT inline=$S4_HM_TOTAL want=$S4_HM_COPIES_WANT held=$S4_HM_HELD bad:$S4_HM_ALLBAD"; fi
+# Mutants of the parity audit on the S4 copies: ONE byte (-I dropped) in ONE inline copy is caught as exactly that copy, touching exactly that line.
+for spec in $S4_HM_SPEC; do
+  IFS=: read -r hf hn hd <<< "$spec"
+  for ((hi = 1; hi <= hn; hi++)); do
+    mf="$BKDIR/hm-s4-$(basename "$hf")-$hi"; assert_fixture_dir "$mf"
+    nth_replace "$REPO_ROOT/$hf" "$mf" "$HM_PFX" 'HMAC_KEY="$WEBHOOK_SECRET" python3 -c' "$hi" || fatal "S4 parity mutation $hf#$hi did not land"
+    hm_audit "$mf" "$hd"; hm_ln="$(hm_nth_line "$hi" "$REPO_ROOT/$hf" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+    if [[ "$HM_BAD" == " $hi" && "$(hm_touched "$REPO_ROOT/$hf" "$mf")" == "${hm_ln}c${hm_ln}" ]]; then row "mutation: dropping -I from the inline copy $(basename "$hf")#$hi alone (line $hm_ln only) is caught as exactly that copy" ok
+    else row "mutation: dropping -I from the inline copy $(basename "$hf")#$hi alone (line $hm_ln only) is caught as exactly that copy" fail "bad:$HM_BAD touched:$(hm_touched "$REPO_ROOT/$hf" "$mf") want:${hm_ln}c${hm_ln}"; fi
+  done
+done
+# The fail-safe fallback and the signed body are per-site facets too: the empty-key abort (a mute `set -e` exit) and a POST signed over nothing.
+mf="$BKDIR/hm-s4-nofallback"; assert_fixture_dir "$mf"
+{ mapfile -t _ml < "$REPO_ROOT/.github/workflows/web-platform-release.yml"; _mi=0
+  for _mn in "${!_ml[@]}"; do [[ "${_ml[_mn]}" == *'HMAC_KEY="$WEBHOOK_SECRET" python3'* ]] || continue; _mi=$((_mi + 1)); [[ "$_mi" == 2 ]] && _ml[_mn]="${_ml[_mn]% || *}"; done
+  printf '%s\n' "${_ml[@]}"; } > "$mf"
+hm_audit "$mf" ""
+if [[ "$HM_BAD" == " 2" ]]; then row "mutation: dropping the || SIG=\"\" fallback from the web-platform-release Deploy-via-webhook copy is caught as exactly that copy (an empty key would abort the step mute)" ok
+else row "mutation: dropping the || SIG=\"\" fallback from the web-platform-release Deploy-via-webhook copy is caught as exactly that copy" fail "bad:$HM_BAD"; fi
+mf="$BKDIR/hm-s4-wrongbody"; assert_fixture_dir "$mf"
+python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+old = "SIG=$(printf '"'%s'"' \"$PAYLOAD\" | HMAC_KEY="
+new = "SIG=$(printf '"''"' | HMAC_KEY="
+if old not in t: sys.exit(3)
+open(sys.argv[2], "w").write(t.replace(old, new, 1))' "$REPO_ROOT/.github/workflows/web-platform-release.yml" "$mf" || fatal "S4 parity mutation wrongbody did not land"
+hm_audit "$mf" ""
+if [[ "$HM_BAD" == " 2" ]]; then row "mutation: signing the empty body in the web-platform-release Deploy-via-webhook copy, whose request carries -d \"\$PAYLOAD\", is caught as exactly that copy (a POST signed over nothing is a 401)" ok
+else row "mutation: signing the empty body in the Deploy-via-webhook copy is caught" fail "bad:$HM_BAD"; fi
+
+# --- the inline guard functions are pinned to the canonical text, byte for byte (plan D4) ---
+# `_bearer_ok` (every definition in the four S4 inline-wrapper files) must equal BEARER_FN; each wrapper (`_sig_curl`, `_bearer_curl`)
+# must equal the cutover script's after only the marker's script name and the cutover's own `--max-time 60` are normalized.
+S4_GUARD_FILES=".github/workflows/web-platform-release.yml .github/workflows/deploy-inngest-image.yml .github/workflows/workspaces-luks-cutover.yml apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
+s4_guard_py='
+import sys, re
+canon_ok, cut = sys.argv[1], sys.argv[2]
+files = sys.argv[3:]
+def fn(lines, name):
+    out = []
+    i = 0
+    while i < len(lines):
+        if re.match(r"^\s*" + name + r"\(\) \{$", lines[i]):
+            j = i
+            while not re.match(r"^\s*\}$", lines[j]):
+                j += 1
+            ind = len(lines[i]) - len(lines[i].lstrip())
+            out.append("\n".join(x[ind:] for x in lines[i:j + 1]))
+            i = j
+        i += 1
+    return out
+def norm(t):
+    return re.sub(r"script=[A-Za-z0-9._-]+", "script=X", t).replace("--max-time 60 ", "")
+cl = open(cut).read().split("\n")
+canon = {n: norm(fn(cl, n)[0]) for n in ("_sig_curl", "_bearer_curl")}
+n_ok = n_sig = n_brr = 0; bad = []
+for f in files:
+    L = open(f).read().split("\n")
+    for ln in L:
+        if re.match(r"^\s*_bearer_ok\(\) \{", ln):
+            n_ok += 1
+            if ln.strip() != canon_ok:
+                bad.append("%s:_bearer_ok" % f.rsplit("/", 1)[-1])
+    for n in ("_sig_curl", "_bearer_curl"):
+        for t in fn(L, n):
+            if n == "_sig_curl": n_sig += 1
+            else: n_brr += 1
+            if norm(t) != canon[n]:
+                bad.append("%s:%s" % (f.rsplit("/", 1)[-1], n))
+print(n_ok, n_sig, n_brr, ",".join(bad))
+'
+read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_GUARD_FILES)
+# BOTH operands are literals above the `if`: 9 `_bearer_ok` definitions (release 5, deploy-inngest-image 2, luks 1, verify-tunnel 1), 5 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=9
+if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_SIG" == 5 && "$S4_G_BRR" == 2 ]]; then
+  row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions equal the canonical text byte for byte, and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
+else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
+# The same pin must be SEEN to fail: a one-byte change in one definition is reported by that file (a pin nothing ever fed a known negative is not a control).
+mf="$BKDIR/guard-mut-release.yml"; assert_fixture_dir "$mf"
+python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+old = "_bearer_ok() { local LC_ALL=C; case"
+if old not in t: sys.exit(3)
+open(sys.argv[2], "w").write(t.replace(old, "_bearer_ok() { local LC_ALL=; case", 1))' "$REPO_ROOT/.github/workflows/web-platform-release.yml" "$mf" || fatal "S4 guard pin mutation did not land"
+read -r _g1 _g2 _g3 S4_G_MBAD < <(python3 -I -c "$s4_guard_py" "$BEARER_FN" "$REPO_ROOT/$CUT" "$mf")
+[[ "$S4_G_MBAD" == "guard-mut-release.yml:_bearer_ok" ]] && row "S4 inline guard pin control: a one-byte change to one _bearer_ok definition is reported at its file" ok || row "S4 inline guard pin control: the pin does not see a one-byte change" fail "got='$S4_G_MBAD'"
+# infra-config-verify.sh keeps its guard as a subshell case (a function would be an unlisted command to its read-only-allowlist suite): the
+# PATTERN is pinned to the library alphabet, and the marker names the file.
+S4_PAT="$(sed -E 's/.* in (.*)\) return 1.*/\1/' <<<"$BEARER_FN")"
+if grep -qF -- "case \"\${!_cred:-}\" in ${S4_PAT}) exit 1 ;; esac" "$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh"; then
+  row "S4 inline guard pin: infra-config-verify.sh judges the three credentials with exactly the library's token alphabet ($S4_PAT)" ok
+else row "S4 inline guard pin: infra-config-verify.sh's shape check differs from the library alphabet" fail "pattern=$S4_PAT"; fi
+S4_MARK_BAD=""
+for f in .github/workflows/web-platform-release.yml .github/workflows/deploy-inngest-image.yml .github/workflows/workspaces-luks-cutover.yml apps/web-platform/infra/infra-config-verify.sh; do
+  want_name="$(basename "$f")"; want_name="${want_name%.*}"
+  names="$(grep -oE 'SOLEUR_CREDENTIAL_REFUSED script=[A-Za-z0-9._-]+' "$REPO_ROOT/$f" | sed 's/.*script=//' | sort -u)"
+  [[ "$names" == "$want_name" ]] || S4_MARK_BAD+=" $f:${names//$'\n'/,}"
+done
+[[ -z "$S4_MARK_BAD" ]] && row "S4 structure: every inline wrapper file names ITSELF in the refusal marker (web-platform-release, deploy-inngest-image, workspaces-luks-cutover, infra-config-verify)" ok || row "S4 structure: an inline marker names another file" fail "$S4_MARK_BAD"
+echo "=== stage S4: parity audit and guard pins done ==="
+
+# =====================================================================================
+# GUARD 2: a refused credential reaches the SAME verdict class as the old failure. The REAL step bodies (extracted from the YAML) and
+# the real scripts run under the recording curl, each credential EMPTY, UNSET and HOSTILE (a quote carrying the canary, and a newline
+# that tries to open a second `url =` directive on the config channel), with python3 ABSENT at one HMAC site per form. Every row
+# reads the step's OWN lines and its GITHUB_OUTPUT / GITHUB_ENV (an exit code alone cannot tell a mute abort from a refusal), asserts
+# zero requests, the marker, the sink table's verdict, and the canary in no captured stream. A well-formed run per representative
+# proves the arm still SUCCEEDS; transport failures go through REAL curl against a closed port (the 000000 quirk).
+# =====================================================================================
+: > "$S4/bodies/empty"
+S4_BASE=()
+S4_SWEEP_BAD=""; S4_SWEEP_N=0; S4_SWEEP_WANT=0
+# s4_sweep <label> <script> <realdir> <verdict-fn> "<credential vars>" "<key vars>": reads the global S4_BASE (NAME=value ...).
+# A credential is run empty, unset, hostile-quote and hostile-newline; a KEY (an HMAC key, only non-emptiness matters) empty and unset.
+s4_sweep() {
+  local label="$1" body="$2" realdir="$3" vfn="$4" creds="$5" keys="$6" v st e
+  local -a env_
+  S4_SWEEP_BAD=""; S4_SWEEP_N=0; S4_SWEEP_WANT=0
+  for v in $creds $keys; do
+    for st in empty unset hostile-quote hostile-newline; do
+      [[ " $keys " == *" $v "* && "$st" == hostile-* ]] && continue
+      S4_SWEEP_WANT=$((S4_SWEEP_WANT + 1))
+      env_=(); for e in "${S4_BASE[@]}"; do [[ "$e" == "$v="* ]] || env_+=("$e"); done
+      case "$st" in
+        empty) env_+=("$v=") ;;
+        unset) : ;;
+        hostile-quote) env_+=("$v=${S4_CANARY}\"x") ;;
+        hostile-newline) env_+=("$v=${S4_CANARY}"$'\n'"url = \"http://127.0.0.1:9/\"") ;;
+      esac
+      s4_run "$label-$v-$st" "$body" "$realdir" "${env_[@]}"
+      S4_SWEEP_N=$((S4_SWEEP_N + 1)); S4_REFUSAL_RUNS=$((S4_REFUSAL_RUNS + 1))
+      if ! { [[ "$(s4_ncalls)" == 0 ]] && s4_canary_clean && "$vfn" "$v" "$st"; }; then S4_SWEEP_BAD+=" [$v/$st rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)]"; fi
+    done
+  done
+}
+s4_sweep_row() { # <description>
+  if [[ -z "$S4_SWEEP_BAD" && "$S4_SWEEP_N" == "$S4_SWEEP_WANT" && "$S4_SWEEP_N" -gt 0 ]]; then row "$1 ($S4_SWEEP_N runs)" ok
+  else row "$1" fail "${S4_SWEEP_BAD:- ran $S4_SWEEP_N of $S4_SWEEP_WANT}"; fi
+}
+# s4_nopy_row <description> <script> <verdict-fn>: the same site with python3 ABSENT (the signature cannot be computed): the arm's own verdict, never a mute abort.
+s4_nopy_row() {
+  s4_run "nopy-$1" "$2" "$S4/real-nopy" "${S4_BASE[@]}"; S4_REFUSAL_RUNS=$((S4_REFUSAL_RUNS + 1))
+  if [[ "$(s4_ncalls)" == 0 ]] && s4_canary_clean && "$3" python3 absent; then row "$1" ok
+  else row "$1" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+}
+# s4_wh_ok <body file> <call#>: the call carries X-Signature-256 == the independent openssl digest over the request's own body bytes, then
+# the Cloudflare Access id and secret, in that order, and none of the four values is on any recorded argv.
+s4_wh_ok() {
+  local want; want="$(s4_oracle "$S4_KEY" "$1")"
+  [[ -n "$want" && "$(s4_stdin_line "$2" 1)" == "header = \"X-Signature-256: sha256=$want\"" && "$(s4_stdin_line "$2" 2)" == "header = \"CF-Access-Client-Id: $S4_CFID\"" \
+     && "$(s4_stdin_line "$2" 3)" == "header = \"CF-Access-Client-Secret: $S4_CFSEC\"" ]] \
+    && ! s4_argv_has "$S4_KEY" && ! s4_argv_has "$want" && ! s4_argv_has "$S4_CFID" && ! s4_argv_has "$S4_CFSEC"
+}
+S4_NOW="$(date +%s)"
+S4_WH_BASE=(WEBHOOK_SECRET="$S4_KEY" CF_ACCESS_CLIENT_ID="$S4_CFID" CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook)
+S4_DOP_BASE=(D_WEBHOOK_DEPLOY_SECRET="$S4_KEY" D_CF_ACCESS_CLIENT_ID="$S4_CFID" D_CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook)
+
+# ---- row 1 and row 2: restart-inngest-server (library; the poll loop, the lock_contention final re-read and the liveness read) ----
+S4_RST=".github/workflows/restart-inngest-server.yml"
+s4_body "$REPO_ROOT/$S4_RST" "Trigger restart via webhook" "$S4/b-r1.sh"
+s4_body "$REPO_ROOT/$S4_RST" "Verify restart completion" "$S4/b-r2.sh" 'MAX_POLLS=120' 'MAX_POLLS=3'
+S4_BASE=("${S4_WH_BASE[@]}")
+s4_run r1-ok "$S4/b-r1.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(cat "$S4_ROW/calls/1.body")" == '{"command":"restart inngest _ latest"}' ]] && s4_calls_ok 3 && s4_wh_ok "$S4_ROW/calls/1.body" 1 \
+   && grep -q '^TRIGGER_TS=' "$S4_ROW/genv" && s4_said 'Restart initiated (HTTP 202)'; then
+  row "S4 row 1 restart trigger: a well-formed run sends ONE request whose three stdin headers are the independent digest over the body, the id and the secret; none is on argv" ok
+else row "S4 row 1 restart trigger: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r1() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 1 ]] && ! s4_said 'Restart initiated' && ! s4_said 'Restart webhook rejected'; }
+s4_sweep r1 "$S4/b-r1.sh" "$S4/real" s4_v_r1 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep_row "S4 row 1 restart trigger: an empty, unset or hostile credential is RED (rc 2 aborts under set -e) with ONE marker, zero requests, no 'rejected' line and the canary absent"
+s4_nopy_row "S4 row 1 restart trigger (library HMAC site): python3 absent is RED with the marker and zero requests, never a mute abort" "$S4/b-r1.sh" s4_v_r1
+s4_frame_ok="{\"component\":\"inngest\",\"exit_code\":0,\"reason\":\"success\",\"start_ts\":$((S4_NOW + 5))}"
+s4_run r2-ok "$S4/b-r2.sh" "$S4/real" "${S4_BASE[@]}" TRIGGER_TS="$S4_NOW" SHIM_STATUS_BODY="$s4_frame_ok"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_said 'Inngest restart completed successfully'; then
+  row "S4 row 2 restart verify: a well-formed poll sends the digest over the EMPTY body plus the Cloudflare pair on stdin and reads the success frame" ok
+else row "S4 row 2 restart verify: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+s4_lock_frame="{\"component\":\"inngest\",\"exit_code\":1,\"reason\":\"lock_contention\",\"start_ts\":$((S4_NOW + 5))}"
+s4_run r2-lock "$S4/b-r2.sh" "$S4/real" "${S4_BASE[@]}" TRIGGER_TS="$S4_NOW" SHIM_STATUS_BODY="$s4_lock_frame" SHIM_LIVE_BODY='{"functions":[{"name":"synthetic-fn"}]}'
+S4_LOCK_OK=1; for ((ci = 1; ci <= $(s4_ncalls); ci++)); do s4_wh_ok "$S4/bodies/empty" "$ci" || S4_LOCK_OK=0; done
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 5 && "$S4_LOCK_OK" == 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 3 && s4_said 'liveness healthy: functions registered'; then
+  row "S4 row 2 restart verify: the lock_contention path drives the other three library sites (3 polls, the final STATE re-read, the liveness read): 5 requests, each with its own digest and the pair on stdin, none on argv" ok
+else row "S4 row 2 restart verify: lock_contention path" fail "rc=$S4_RC calls=$(s4_ncalls) ok=$S4_LOCK_OK"; fi
+s4_v_r2() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 3 ]] && s4_said '::error::Restart did not complete within the' && ! s4_said 'Inngest restart completed'; }
+S4_BASE=("${S4_WH_BASE[@]}" TRIGGER_TS="$S4_NOW" SHIM_STATUS_BODY="$s4_frame_ok")
+s4_sweep r2 "$S4/b-r2.sh" "$S4/real" s4_v_r2 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep_row "S4 row 2 restart verify: an empty, unset or hostile credential is the poll loop's old terminal RED with ONE marker per attempt (3 here), zero requests and the canary absent"
+s4_nopy_row "S4 row 2 restart verify (library HMAC site): python3 absent reaches the same terminal red with the marker per attempt, never a mute abort" "$S4/b-r2.sh" s4_v_r2
+
+# ---- row 4: apply-inngest-rls (library + pre-guard; the four calls had 2>/dev/null, so the marker was invisible) ----
+S4_RLS=".github/workflows/apply-inngest-rls.yml"
+s4_body "$REPO_ROOT/$S4_RLS" "Apply lockdown" "$S4/b-r4.sh"
+S4_SBP="sbp""_$(od -An -N20 -tx1 /dev/urandom | tr -d ' \n')"
+S4_RLS_BASE=(SUPABASE_ACCESS_TOKEN="$S4_SBP" PROJECT_REF=pigsfuxruiopinouvjwy PROJECT_NAME=soleur-inngest-prd SQL_FILE=apps/web-platform/infra/inngest-rls/0001_enable_rls_lockdown.sql SHIM_PROFILE=rls)
+S4_BASE=("${S4_RLS_BASE[@]}")
+s4_run r4-ok "$S4/b-r4.sh" "$S4/real" "${S4_BASE[@]}"
+S4_RLS_OK=1; for ((ci = 1; ci <= $(s4_ncalls); ci++)); do [[ "$(s4_stdin_line "$ci" 1)" == "header = \"Authorization: Bearer $S4_SBP\"" ]] || S4_RLS_OK=0; done
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" -ge 6 && "$S4_RLS_OK" == 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 1 && ! s4_argv_has "$S4_SBP" && s4_said 'Inngest RLS lockdown verified'; then
+  row "S4 row 4 apply-inngest-rls: a well-formed run makes $(s4_ncalls) requests (identity, apply, the catalog queries, the advisor), each with the sbp_ token as its only stdin header and none on argv, and verifies the lockdown" ok
+else row "S4 row 4 apply-inngest-rls: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) ok=$S4_RLS_OK"; fi
+s4_v_r4() { # a refusal is the existing secret class, never `identity_unreachable` (an empty HTTP code read as an unreachable API)
+  [[ "$S4_RC" != 0 ]] && s4_gho_has 'failure_mode=secret_unset' && ! grep -q 'identity_unreachable' "$S4_ROW/gho" && ! s4_said 'identity_unreachable' || return 1
+  case "$2" in hostile-*) [[ "$(s4_markers)" == 1 ]] ;; *) [[ "$(s4_markers)" == 0 ]] ;; esac
+}
+s4_sweep r4 "$S4/b-r4.sh" "$S4/real" s4_v_r4 "SUPABASE_ACCESS_TOKEN" ""
+s4_sweep_row "S4 row 4 apply-inngest-rls: an empty, unset or hostile token is recorded as failure_mode=secret_unset (never identity_unreachable) with zero requests; a hostile one prints the marker ONCE"
+S4_EMPTYWS="$S4/emptyws"; assert_fixture_dir "$S4_EMPTYWS"; mkdir -p "$S4_EMPTYWS"
+s4_run r4-nolib "$S4/b-r4.sh" "$S4/real" "${S4_BASE[@]}" GITHUB_WORKSPACE="$S4_EMPTYWS"
+if [[ "$S4_RC" != 0 && "$(s4_ncalls)" == 0 ]] && s4_said 'scripts/lib/bearer-curl.sh could not be loaded'; then row "S4 row 4 apply-inngest-rls: a checkout without the library is a hard failure with zero requests and no argv fallback" ok
+else row "S4 row 4 apply-inngest-rls: library absent" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+# The marker must stay VISIBLE where a refusal reaches the call itself. The pre-guard normally stands in front of every call, so the row
+# neutralizes it in a COPY of the library (bc_ok_var always true) and runs the real step: the first call's own refusal is then the only
+# thing that can print the marker, and a `2>/dev/null` on that call would swallow it.
+S4_NOGUARD="$S4/ws-noguard"; assert_fixture_dir "$S4_NOGUARD"; mkdir -p "$S4_NOGUARD/scripts/lib"
+{ cat "$REPO_ROOT/scripts/lib/bearer-curl.sh"; printf '%s\n' 'bc_ok_var() { return 0; }'; } > "$S4_NOGUARD/scripts/lib/bearer-curl.sh"
+s4_run r4-visible "$S4/b-r4.sh" "$S4/real" "${S4_BASE[@]}" "SUPABASE_ACCESS_TOKEN=${S4_CANARY}\"x" GITHUB_WORKSPACE="$S4_NOGUARD"
+if [[ "$S4_RC" != 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 1 ]] && s4_canary_clean; then
+  row "S4 row 4 apply-inngest-rls: when a refusal reaches the identity call itself it aborts the step RED with the marker VISIBLE (no 2>/dev/null on the call), zero requests, the canary absent" ok
+else row "S4 row 4 apply-inngest-rls: marker-visible row" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+
+# ---- rows 8 to 12: web-platform-release (INLINE wrappers: the jobs are checkout-free by design) ----
+S4_WFR=".github/workflows/web-platform-release.yml"
+mapfile -t S4_REL_JOBENV < <(s4_jobenv "$REPO_ROOT/$S4_WFR" deploy)
+s4_body "$REPO_ROOT/$S4_WFR" "Pre-rerun lock probe" "$S4/b-r8.sh"
+s4_body "$REPO_ROOT/$S4_WFR" "Deploy via webhook" "$S4/b-r9.sh"
+s4_body "$REPO_ROOT/$S4_WFR" "Verify deploy script completion" "$S4/b-r10.sh"
+s4_body "$REPO_ROOT/$S4_WFR" "Email notification (deploy FAILED)" "$S4/b-r11.sh"
+s4_body "$REPO_ROOT/$S4_WFR" "email" "$S4/b-r12.sh"
+S4_REL_ENV=("${S4_REL_JOBENV[@]}" VERSION=1.2.3 WEB_HOST_PRIVATE_IPS=10.0.1.10,10.0.1.11)
+# row 9 (red class): Deploy via webhook
+S4_BASE=("${S4_WH_BASE[@]}" "${S4_REL_ENV[@]}")
+s4_run r9-ok "$S4/b-r9.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4_ROW/calls/1.body" 1 && s4_said 'Deploy initiated (HTTP 202)' \
+   && grep -qF '"peers":"10.0.1.10,10.0.1.11"' "$S4_ROW/calls/1.body" && grep -qF 'soleur-web-platform v1.2.3' "$S4_ROW/calls/1.body"; then
+  row "S4 row 9 release deploy (inline): a well-formed run signs the body it sends (independent openssl digest over the recorded bytes) and carries the pair on stdin, none on argv" ok
+else row "S4 row 9 release deploy (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r9() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 1 ]] && ! s4_said 'Deploy initiated' && ! s4_said 'Deploy webhook rejected'; }
+s4_sweep r9 "$S4/b-r9.sh" "$S4/real" s4_v_r9 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep_row "S4 row 9 release deploy (inline, red class): an empty, unset or hostile credential aborts the step RED before any request (production stays on the previous build) with ONE marker and the canary absent"
+s4_nopy_row "S4 row 9 release deploy (inline HMAC site): python3 absent is RED with the marker and zero requests, never a mute abort" "$S4/b-r9.sh" s4_v_r9
+S4_SHIM="$S4/shimreal"; s4_run r9-transport "$S4/b-r9.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+if [[ "$S4_RC" != 0 && "$(s4_markers)" == 0 ]] && ! s4_said 'Deploy initiated'; then row "S4 row 9 release deploy: a REAL transport failure (closed port) is still RED and is not a refusal (no marker)" ok
+else row "S4 row 9 release deploy: transport failure" fail "rc=$S4_RC markers=$(s4_markers)"; fi
+# row 10: Verify deploy script completion (poll loop)
+S4_BASE=("${S4_WH_BASE[@]}" "${S4_REL_ENV[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 SHIM_STATUS_BODY='{"exit_code":0,"reason":"ok","tag":"v1.2.3"}')
+s4_run r10-ok "$S4/b-r10.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_said 'ci-deploy.sh completed successfully for v1.2.3'; then
+  row "S4 row 10 release verify (inline): a well-formed poll carries the digest over the empty body and the pair on stdin and reads the completion" ok
+else row "S4 row 10 release verify (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r10() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 3 ]] && s4_said '::error::ci-deploy.sh did not report completion for v1.2.3'; }
+s4_sweep r10 "$S4/b-r10.sh" "$S4/real" s4_v_r10 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep_row "S4 row 10 release verify (inline): an empty, unset or hostile credential is the poll's old terminal RED with ONE marker per attempt, zero requests and the canary absent"
+s4_nopy_row "S4 row 10 release verify (inline HMAC site): python3 absent reaches the terminal red with the marker per attempt" "$S4/b-r10.sh" s4_v_r10
+# row 8 (soft class): the pre-rerun lock probe is DEGRADED-PERMISSIVE: a refusal proceeds, with the marker visible
+S4_BASE=("${S4_WH_BASE[@]}" "${S4_REL_ENV[@]}" SHIM_STATUS_BODY='{"exit_code":0}')
+s4_run r8-ok "$S4/b-r8.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_said 'Pre-rerun probe: no in-flight deploy (exit_code=0)'; then
+  row "S4 row 8 release lock probe (inline): a well-formed run reads the idle state through the digest and the pair on stdin" ok
+else row "S4 row 8 release lock probe (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r8() { [[ "$S4_RC" == 0 && "$(s4_markers)" == 1 ]] && s4_said 'Pre-rerun probe: non-JSON or empty body (HTTP 000) — proceeding (degraded-permissive)' && ! s4_said 'Prior deploy'; }
+s4_sweep r8 "$S4/b-r8.sh" "$S4/real" s4_v_r8 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep_row "S4 row 8 release lock probe (inline, soft class): an empty, unset or hostile credential PROCEEDS (exit 0, degraded-permissive) with the marker visible once, zero requests and the canary absent"
+S4_SHIM="$S4/shimreal"; s4_run r8-transport "$S4/b-r8.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+if [[ "$S4_RC" == 0 && "$(s4_markers)" == 0 ]] && s4_said 'Pre-rerun probe: non-JSON or empty body (HTTP 000000)'; then row "S4 row 8 release lock probe: a REAL transport failure keeps the documented 000000 quirk and proceeds, with no marker" ok
+else row "S4 row 8 release lock probe: transport failure" fail "rc=$S4_RC markers=$(s4_markers) out=$(tail -2 "$S4_ROW/stdout" | tr '\n' '|')"; fi
+# rows 11 and 12 (warning class): the Resend email steps. Hostile = the old delivery failure with the marker; empty/unset = the step's OWN message.
+S4_RESEND="re""_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+S4_BASE=(RESEND_API_KEY="$S4_RESEND" MIRROR_VERIFIED=true RUN_URL=https://example.invalid/run VERSION=1.2.3 SHIM_PROFILE=generic)
+s4_run r11-ok "$S4/b-r11.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $S4_RESEND\"" ]] && s4_calls_ok 1 && ! s4_argv_has "$S4_RESEND" && s4_said 'Deploy-failure email sent to ops@jikigai.com (HTTP 200)'; then
+  row "S4 row 11 deploy-failure email (inline): a well-formed run sends the re_ key as the only stdin header and none on argv" ok
+else row "S4 row 11 deploy-failure email (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r11() { [[ "$S4_RC" == 0 ]] || return 1
+  case "$2" in
+    hostile-*) [[ "$(s4_markers)" == 1 ]] && s4_said '::error::Deploy-failure email FAILED (HTTP 000)' ;;
+    *) [[ "$(s4_markers)" == 0 ]] && s4_said '::error::RESEND_API_KEY not set' ;;
+  esac; }
+s4_sweep r11 "$S4/b-r11.sh" "$S4/real" s4_v_r11 "RESEND_API_KEY" ""
+s4_sweep_row "S4 row 11 deploy-failure email (inline, warning class): a hostile key is the old '::error:: Deploy-failure email FAILED (HTTP 000)' line (exit 0, non-fatal) with the marker ONCE and zero requests; an empty or unset key keeps its own message"
+S4_SHIM="$S4/shimreal"; s4_run r11-transport "$S4/b-r11.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+if [[ "$S4_RC" == 0 && "$(s4_markers)" == 0 ]] && s4_said '::error::Deploy-failure email FAILED (HTTP 000000)'; then row "S4 row 11 deploy-failure email: a REAL transport failure keeps the 000000 quirk and the same non-fatal error line, no marker" ok
+else row "S4 row 11 deploy-failure email: transport failure" fail "rc=$S4_RC"; fi
+S4_BASE=(RESEND_API_KEY="$S4_RESEND" CLASSIFIER=failure FAILED=live-verify FAILED_HTML='<li>live-verify</li>' R_DEPLOY=failure TAG=v1.2.3 VERSION=1.2.3 RUN_URL=https://example.invalid/run SHIM_PROFILE=generic)
+s4_run r12-ok "$S4/b-r12.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $S4_RESEND\"" ]] && s4_calls_ok 1 && s4_gho_has 'delivered=1'; then row "S4 row 12 release-outcome email (inline): a well-formed run delivers (delivered=1) with the key on stdin only" ok
+else row "S4 row 12 release-outcome email (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r12() { [[ "$S4_RC" == 0 ]] || return 1
+  case "$2" in
+    hostile-*) [[ "$(s4_markers)" == 1 ]] && s4_gho_has 'delivered=0' && s4_gho_has 'reason=resend_http_000' ;;
+    *) [[ "$(s4_markers)" == 0 ]] && s4_gho_has 'delivered=0' && s4_gho_has 'reason=resend_api_key_unset' ;;
+  esac; }
+s4_sweep r12 "$S4/b-r12.sh" "$S4/real" s4_v_r12 "RESEND_API_KEY" ""
+s4_sweep_row "S4 row 12 release-outcome email (inline, warning class): a hostile key reads as the old delivery failure (delivered=0, reason=resend_http_000, exit 0) so the Sentry fallback still fires; an empty or unset key keeps its own reason"
+echo "=== stage S4: Guard 2 rows 1, 2, 4, 8 to 12 done ==="
+
+# ---- rows 13 to 15: apply-deploy-pipeline-fix (library; the step reads its credentials through doppler, stubbed by secret NAME) ----
+S4_DPF=".github/workflows/apply-deploy-pipeline-fix.yml"
+S4_CWD="$REPO_ROOT/apps/web-platform/infra"     # the steps carry `working-directory: ${{ env.INFRA_DIR }}`
+s4_body "$REPO_ROOT/$S4_DPF" "pre_frame" "$S4/b-r13.sh"
+s4_body "$REPO_ROOT/$S4_DPF" "Verify webhook is alive post-apply" "$S4/b-r14.sh"
+s4_body "$REPO_ROOT/$S4_DPF" "webhook_liveness" "$S4/b-r15.sh"
+# row 13: pre_frame "degrades loudly, never blocks": a refusal records PRE_FRAME_STATUS=secret_unavailable (the existing "credential unusable" class)
+S4_BASE=("${S4_DOP_BASE[@]}" SHIM_STATUS_BODY='{"start_ts":1700000123}')
+s4_run r13-ok "$S4/b-r13.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_genv_has 'PRE_FRAME_STATUS=ok' && s4_genv_has 'PRE_APPLY_FRAME_START_TS=1700000123'; then
+  row "S4 row 13 pre_frame: a well-formed run reads the frame through the digest over the empty body and the pair on stdin and records PRE_FRAME_STATUS=ok" ok
+else row "S4 row 13 pre_frame: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r13() { [[ "$S4_RC" == 0 ]] && s4_genv_has 'PRE_FRAME_STATUS=secret_unavailable' && ! grep -qE '^PRE_FRAME_STATUS=(unreachable|malformed|http404|ok|error)$' "$S4_ROW/genv" || return 1
+  case "$1:$2" in
+    D_CF_*) [[ "$(s4_markers)" == 1 ]] ;;
+    *) [[ "$(s4_markers)" == 0 ]] ;;
+  esac; }
+s4_sweep r13 "$S4/b-r13.sh" "$S4/real" s4_v_r13 "D_CF_ACCESS_CLIENT_ID D_CF_ACCESS_CLIENT_SECRET" "D_WEBHOOK_DEPLOY_SECRET"
+s4_sweep_row "S4 row 13 pre_frame: an empty, unset or hostile credential records PRE_FRAME_STATUS=secret_unavailable (never unreachable), exits 0, makes zero requests; the Cloudflare pair prints the marker once, the key arm keeps its own warning"
+s4_nopy_row "S4 row 13 pre_frame (library HMAC site): python3 absent records secret_unavailable, exits 0, makes zero requests (the apply is never blocked)" "$S4/b-r13.sh" s4_v_r13
+S4_SHIM="$S4/shimreal"; s4_run r13-transport "$S4/b-r13.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+if [[ "$S4_RC" == 0 && "$(s4_markers)" == 0 ]] && s4_genv_has 'PRE_FRAME_STATUS=unreachable'; then row "S4 row 13 pre_frame: a REAL transport failure still records PRE_FRAME_STATUS=unreachable (the old class for a request that was sent and failed)" ok
+else row "S4 row 13 pre_frame: transport failure" fail "rc=$S4_RC env=$(tr '\n' ' ' < "$S4_ROW/genv")"; fi
+# row 14: Verify webhook is alive post-apply: a refusal is the step's old red (three attempts, then the ::error::), marker visible per attempt
+S4_BASE=("${S4_DOP_BASE[@]}" SHIM_STATUS_BODY='{"start_ts":1700000123}')
+s4_run r14-ok "$S4/b-r14.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_said 'Webhook is alive (HTTP 200 on attempt 1)'; then row "S4 row 14 post-apply liveness: a well-formed run is alive on the first attempt through the digest and the pair on stdin" ok
+else row "S4 row 14 post-apply liveness: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_run r14-empty "$S4/b-r14.sh" "$S4/real" "${S4_BASE[@]}" D_WEBHOOK_DEPLOY_SECRET=
+if [[ "$S4_RC" != 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 3 ]] && s4_said '::error::Webhook did not respond with HTTP 200 after 3 attempts'; then row "S4 row 14 post-apply liveness: an empty key is the old red (the 3-attempt ::error::) with the marker per attempt and zero requests" ok
+else row "S4 row 14 post-apply liveness: empty key" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+# row 15: webhook_liveness, CF pair only: today 401/403 -> probe_error (OUR credential), anything else -> `down` ("the re-push bricked the only no-SSH channel")
+S4_BASE=(D_CF_ACCESS_CLIENT_ID="$S4_CFID" D_CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook)
+s4_run r15-ok "$S4/b-r15.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_stdin_line 1 1)" == "header = \"CF-Access-Client-Id: $S4_CFID\"" && "$(s4_stdin_line 1 2)" == "header = \"CF-Access-Client-Secret: $S4_CFSEC\"" ]] && s4_calls_ok 2 \
+   && ! s4_argv_has "$S4_CFID" && ! s4_argv_has "$S4_CFSEC" && s4_gho_has 'listener_state=up'; then
+  row "S4 row 15 webhook_liveness: a well-formed run sends the Cloudflare pair ONLY (two stdin headers, none on argv) and records listener_state=up" ok
+else row "S4 row 15 webhook_liveness: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_run r15-403 "$S4/b-r15.sh" "$S4/real" "${S4_BASE[@]}" SHIM_CODE=403
+[[ "$S4_RC" != 0 && "$(s4_ncalls)" == 1 ]] && s4_gho_has 'listener_state=probe_error' && row "S4 row 15 webhook_liveness: a 403 from Cloudflare Access stays listener_state=probe_error (the old class)" ok || row "S4 row 15 webhook_liveness: 403" fail "rc=$S4_RC"
+S4_SHIM="$S4/shimreal"; s4_run r15-transport "$S4/b-r15.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+[[ "$S4_RC" != 0 && "$(s4_markers)" == 0 ]] && s4_gho_has 'listener_state=down' && row "S4 row 15 webhook_liveness: a REAL transport failure is still listener_state=down (a request that was sent and got nothing), no marker" ok || row "S4 row 15 webhook_liveness: transport failure" fail "rc=$S4_RC"
+s4_v_r15() { [[ "$S4_RC" != 0 ]] && s4_gho_has 'listener_state=probe_error' && ! grep -qE '^listener_state=(down|up)$' "$S4_ROW/gho" && ! s4_said 'bricked the only no-SSH remediation channel' || return 1
+  case "$2" in hostile-*) [[ "$(s4_markers)" == 1 ]] ;; *) [[ "$(s4_markers)" == 0 ]] ;; esac; }
+s4_sweep r15 "$S4/b-r15.sh" "$S4/real" s4_v_r15 "D_CF_ACCESS_CLIENT_ID D_CF_ACCESS_CLIENT_SECRET" ""
+s4_sweep_row "S4 row 15 webhook_liveness: an empty, unset or hostile Cloudflare credential records listener_state=probe_error (NEVER down: no 'bricked the only no-SSH channel' claim), exits 1, makes zero requests; a hostile one prints the marker once"
+
+# ---- row 18: the scheduled-inngest-health probe (library + pre-guard): a refusal is `secret_unset`, which files the liveness-probe issue and restarts NOTHING ----
+S4_SIH=".github/workflows/scheduled-inngest-health.yml"
+s4_body "$REPO_ROOT/$S4_SIH" "probe" "$S4/b-r18.sh"
+S4_LIVE_OK='{"functions":[{"name":"synthetic-fn"}],"durability_state":"durable"}'
+S4_BASE=("${S4_WH_BASE[@]}" SHIM_LIVE_BODY="$S4_LIVE_OK")
+s4_run r18-ok "$S4/b-r18.sh" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_gho_has 'failure_mode=' && s4_gho_has 'durability_state=durable'; then
+  row "S4 row 18 inngest-health probe: a well-formed run reads the liveness hook through the digest and the pair on stdin and records NO failure_mode" ok
+else row "S4 row 18 inngest-health probe: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) gho=$(tr '\n' ' ' < "$S4_ROW/gho")"; fi
+s4_v_r18() { [[ "$S4_RC" == 0 ]] && s4_gho_has 'failure_mode=secret_unset' && ! grep -qE '^failure_mode=(inngest_down|inngest_unhealthy|probe_unavailable|functions_query_degraded)$' "$S4_ROW/gho" || return 1
+  case "$2" in hostile-*|absent) [[ "$(s4_markers)" -ge 1 ]] ;; *) [[ "$(s4_markers)" == 0 ]] ;; esac; }
+s4_sweep r18 "$S4/b-r18.sh" "$S4/real" s4_v_r18 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep_row "S4 row 18 inngest-health probe: an empty, unset or hostile credential records failure_mode=secret_unset (liveness-probe class, NO restart verdict, never inngest_down), exits 0, makes zero requests"
+s4_nopy_row "S4 row 18 inngest-health probe (library HMAC site): python3 absent records secret_unset with the marker and zero requests (the restart path is never reached)" "$S4/b-r18.sh" s4_v_r18
+S4_SHIM="$S4/shimreal"; s4_run r18-transport "$S4/b-r18.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+if [[ "$S4_RC" == 0 && "$(s4_markers)" == 0 ]] && s4_gho_has 'failure_mode=probe_unavailable'; then row "S4 row 18 inngest-health probe: a REAL transport failure keeps the old class (probe_unavailable after 3 attempts), no marker" ok
+else row "S4 row 18 inngest-health probe: transport failure" fail "rc=$S4_RC gho=$(tr '\n' ' ' < "$S4_ROW/gho")"; fi
+S4_CWD=""
+
+# ---- row 21: infra-config-verify.sh (INLINE + pre-guard): a refused credential must NOT print the "webhook listener being DOWN" sentence ----
+S4_ICV="$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh"
+S4_FLAGS=(--noprofile --norc); S4_CWD="$REPO_ROOT/apps/web-platform/infra"
+S4_BASE=("${S4_DOP_BASE[@]}" VERIFY_PASS=1 INFRA_CONFIG_STATUS_RESPONSE=@ROW@/rt/status.txt SHIM_STATUS_BODY='{"exit_code":0,"reason":"success","start_ts":1700000123}')
+s4_run r21-ok "$S4_ICV" "$S4/real" "${S4_BASE[@]}"
+if [[ "$(s4_ncalls)" -ge 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && ! s4_said 'webhook listener being DOWN'; then
+  row "S4 row 21 infra-config-verify (inline): a well-formed poll sends the digest over the empty body and the pair as three stdin directives, none on argv, and makes no refusal" ok
+else row "S4 row 21 infra-config-verify (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+s4_v_r21() { ! s4_said 'webhook listener being DOWN' && ! s4_said 'UNREACHABLE (HTTP' || return 1
+  if [[ "$2" == unset ]]; then [[ "$S4_RC" != 0 ]]   # the doppler read aborts the script before any guard: unchanged behaviour, no request
+  else [[ "$S4_RC" == 1 && "$(s4_markers)" == 1 ]] && s4_said 'this says nothing about the listener'; fi; }
+s4_sweep r21 "$S4_ICV" "$S4/real" s4_v_r21 "D_CF_ACCESS_CLIENT_ID D_CF_ACCESS_CLIENT_SECRET" "D_WEBHOOK_DEPLOY_SECRET"
+s4_sweep_row "S4 row 21 infra-config-verify: an empty or hostile credential exits 1 with its OWN message ('this says nothing about the listener') and the marker once, zero requests, never the 'listener being DOWN' sentence; an unset one aborts before any guard"
+s4_nopy_row "S4 row 21 infra-config-verify (inline HMAC site): python3 absent is the same own-message exit 1 with the marker and zero requests, never the DOWN sentence" "$S4_ICV" s4_v_r21
+S4_SHIM="$S4/shimreal"; s4_run r21-transport "$S4_ICV" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+if [[ "$S4_RC" == 1 && "$(s4_markers)" == 0 ]] && s4_said 'did not respond with HTTP 200 after 3 attempts'; then row "S4 row 21 infra-config-verify: a REAL transport failure keeps the old verdict (3 attempts, the 000000 quirk lands in the generic non-200 arm), no marker" ok
+else row "S4 row 21 infra-config-verify: transport failure" fail "rc=$S4_RC markers=$(s4_markers)"; fi
+S4_FLAGS=(--noprofile --norc -e); S4_CWD=""
+
+# ---- row 22: github-app-key-status.sh (library): a refusal reaches the EXISTING exit-6 arm (curl_rc=2) with the marker visible ----
+S4_GAK="$REPO_ROOT/apps/web-platform/scripts/github-app-key-status.sh"
+S4_FLAGS=(--noprofile --norc)
+S4_GAK_BODY='{"github_app_key_source":"doppler","github_app_key_fetch":"ok","github_app_key_probe":"accepted","component":"web-platform","tag":"v1.2.3","exit_code":0,"reason":"success","end_ts":1700000200,"host_id":"web-1"}'
+S4_BASE=(WEBHOOK_DEPLOY_SECRET="$S4_KEY" CF_ACCESS_CLIENT_ID="$S4_CFID" CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook SHIM_STATUS_BODY="$S4_GAK_BODY")
+s4_run r22-ok "$S4_GAK" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_said 'github_app_key_source=doppler' && s4_said 'host_id=web-1'; then
+  row "S4 row 22 github-app-key-status: a well-formed run prints the key-source lines (exit 0) through the digest and the pair on stdin, none on argv" ok
+else row "S4 row 22 github-app-key-status: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+s4_v_r22() { case "$1:$2" in
+    WEBHOOK_DEPLOY_SECRET:*|*:empty|*:unset) [[ "$S4_RC" == 3 && "$(s4_markers)" == 0 ]] && s4_said 'missing ' ;;   # credentials not injected: the existing exit 3
+    *) [[ "$S4_RC" == 6 && "$(s4_markers)" == 1 ]] && s4_said 'deploy-status read failed: http_code= curl_rc=2' ;;
+  esac; }
+s4_sweep r22 "$S4_GAK" "$S4/real" s4_v_r22 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
+s4_sweep_row "S4 row 22 github-app-key-status: an empty or unset credential keeps exit 3; a hostile one reaches the existing exit-6 arm with curl_rc=2, the marker once, zero requests and the canary absent"
+s4_v_r22_nopy() { [[ "$S4_RC" == 6 && "$(s4_markers)" == 1 ]] && s4_said 'curl_rc=2'; }
+s4_nopy_row "S4 row 22 github-app-key-status (library HMAC site): python3 absent reaches exit 6 (curl_rc=2) with the marker and zero requests" "$S4_GAK" s4_v_r22_nopy
+S4_FLAGS=(--noprofile --norc -e)
+
+# ---- row 20: push-infra-config.sh (library, found by BASH_SOURCE). A script, not a workflow step, and no existing suite executes it: the REAL
+# script runs here under the recording curl with INFRA_DIR at the real apps/web-platform/infra ----
+S4_PIC="$REPO_ROOT/apps/web-platform/infra/push-infra-config.sh"
+S4_FLAGS=(--noprofile --norc)
+S4_PIC_BASE=(WEBHOOK_SECRET="$S4_KEY" CF_ACCESS_ID="$S4_CFID" CF_ACCESS_SECRET="$S4_CFSEC" APP_DOMAIN_BASE=example.invalid INFRA_DIR="$REPO_ROOT/apps/web-platform/infra" HOOKS_JSON_B64=e30= SOLEUR_DOPPLER_TOKEN_B64=eA== SHIM_PROFILE=webhook)
+S4_BASE=("${S4_PIC_BASE[@]}")
+s4_run r20-ok "$S4_PIC" "$S4/real" "${S4_BASE[@]}"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 3 && s4_wh_ok "$S4_ROW/calls/1.body" 1 && s4_said 'infra-config push succeeded (HTTP 202)' \
+   && grep -qF '"ci_deploy_sh_b64"' "$S4_ROW/calls/1.body"; then
+  row "S4 row 20 push-infra-config: the REAL script signs the payload FILE bytes (independent openssl digest over the recorded body), sends the digest and the pair as three stdin headers in no argv, and a 202 prints 'infra-config push succeeded (HTTP 202)'" ok
+else row "S4 row 20 push-infra-config: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+s4_v_r20() { [[ "$S4_RC" != 0 ]] && ! s4_said 'infra-config push succeeded' || return 1
+  case "$2" in hostile-*) [[ "$(s4_markers)" == 1 ]] ;; *) [[ "$(s4_markers)" == 0 ]] && s4_said "required env var $1 is missing or empty" ;; esac; }
+s4_v_r20_nopy() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 1 ]] && ! s4_said 'infra-config push succeeded'; }
+s4_sweep r20 "$S4_PIC" "$S4/real" s4_v_r20 "CF_ACCESS_ID CF_ACCESS_SECRET" "WEBHOOK_SECRET"
+s4_sweep_row "S4 row 20 push-infra-config: an empty or unset credential or key keeps the script's own required-variable error, a hostile Cloudflare value is refused with ONE marker; every one exits non-zero with ZERO requests and the canary absent (no partial delivery to web-1)"
+s4_nopy_row "S4 row 20 push-infra-config (library HMAC site): python3 absent exits non-zero with the marker and ZERO requests, never a mute abort and never a push" "$S4_PIC" s4_v_r20_nopy
+S4_PUSH_BAD=""
+for pc in 401 403 404 500; do
+  s4_run "r20-$pc" "$S4_PIC" "$S4/real" "${S4_BASE[@]}" SHIM_POST_CODE="$pc"
+  [[ "$S4_RC" != 0 && "$(s4_ncalls)" == 1 ]] && ! s4_said 'infra-config push succeeded' && s4_said "webhook returned HTTP $pc (expected 202)" || S4_PUSH_BAD+=" $pc"
+done
+[[ -z "$S4_PUSH_BAD" ]] && row "S4 row 20 push-infra-config: a 401, 403, 404 or 500 from the webhook is never a pass (non-zero, no 'succeeded' line)" ok || row "S4 row 20 push-infra-config: a non-202 maps to a pass" fail "codes:$S4_PUSH_BAD"
+S4_SHIM="$S4/shimreal"; s4_run r20-transport "$S4_PIC" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
+[[ "$S4_RC" != 0 && "$(s4_markers)" == 0 ]] && ! s4_said 'infra-config push succeeded' && row "S4 row 20 push-infra-config: a REAL transport failure still exits non-zero and is not a refusal (no marker)" ok || row "S4 row 20 push-infra-config: transport failure" fail "rc=$S4_RC markers=$(s4_markers)"
+S4_FLAGS=(--noprofile --norc -e)
+
+# ---- row 24: bump-inngest-bootstrap-pin.sh: the token left the push URL for a per-command environment header. A refused token dies at `args` with the
+# marker BEFORE any git network call. The real script runs against an empty fixture repo with a recording git and fail-closed gh / crane ----
+S4_BUMP="$REPO_ROOT/.github/scripts/bump-inngest-bootstrap-pin.sh"
+S4_BB="$S4/bumpbin"; assert_fixture_dir "$S4_BB"; mkdir -p "$S4_BB"
+REAL_GIT="$(type -P git)"
+printf '#!%s\nprintf "%%s\\n" "$*" >> "${CALLS_DIR:?}/git.log"\nexec "%s" "$@"\n' "$BASH_BIN" "$REAL_GIT" > "$S4_BB/git"
+for t in gh crane; do printf '#!%s\nprintf "%%s\\n" "%s" >> "${CALLS_DIR:?}/unexpected"\nexit 97\n' "$BASH_BIN" "$t" > "$S4_BB/$t"; done
+chmod +x "$S4_BB/git" "$S4_BB/gh" "$S4_BB/crane"
+S4_BREPO="$S4/bump-repo"; assert_fixture_dir "$S4_BREPO"; mkdir -p "$S4_BREPO"
+env -i PATH="$S4/real:$(dirname "$REAL_GIT")" HOME="$S4" "$REAL_GIT" init -q "$S4_BREPO" || fatal "S4 row 24: could not initialise the fixture repo"
+S4_GHS="ghs""_$(od -An -N20 -tx1 /dev/urandom | tr -d ' \n')"
+S4_ARGS=(--signed-tag v1.2.3 --signed-digest "sha256:${S4_HEX64}" --signed-commit "$(od -An -N20 -tx1 /dev/urandom | tr -d ' \n')")
+S4_FLAGS=(--noprofile --norc)
+S4_BUMP_BASE=(BUMP_REPO_DIR="$S4_BREPO" GITHUB_REPOSITORY=jikig-ai/soleur)
+s4_bump_net() { ! grep -qE '(^| )(ls-remote|push)( |$)' "$S4_ROW/calls/git.log" 2>/dev/null; }
+S4_SHIM="$S4_BB"
+S4_BUMP_BAD=""
+for st in empty unset hostile-quote hostile-newline; do
+  e=(); case "$st" in empty) e=(GH_TOKEN=) ;; unset) e=() ;; hostile-quote) e=("GH_TOKEN=${S4_CANARY}\"x") ;; hostile-newline) e=("GH_TOKEN=${S4_CANARY}"$'\n'"x") ;; esac
+  s4_run "r24-$st" "$S4_BUMP" "$S4/real" "${S4_BUMP_BASE[@]}" ${e[@]+"${e[@]}"}
+  { [[ "$S4_RC" == 1 && "$(s4_markers)" == 1 ]] && grep -qx 'result=error' "$S4_ROW/stdout" && s4_said '::error::args: GH_TOKEN' && s4_bump_net && [[ ! -e "$S4_ROW/calls/unexpected" ]] && s4_canary_clean; } || S4_BUMP_BAD+=" $st(rc=$S4_RC markers=$(s4_markers))"
+done
+[[ -z "$S4_BUMP_BAD" ]] && row "S4 row 24 bump-inngest-bootstrap-pin: an empty, unset or hostile GH_TOKEN dies at 'args' (exit 1, result=error) with the marker ONCE, no git ls-remote or push, no gh or crane call and the canary absent" ok || row "S4 row 24 bump-inngest-bootstrap-pin: a refused token" fail "$S4_BUMP_BAD"
+s4_run r24-ok "$S4_BUMP" "$S4/real" "${S4_BUMP_BASE[@]}" GH_TOKEN="$S4_GHS"
+if [[ "$(s4_markers)" == 0 ]] && ! s4_said 'GH_TOKEN (soleur-infra installation token) is required' && ! grep -qF -- "$S4_GHS" "$S4_ROW/calls/git.log" 2>/dev/null && ! grep -qF -- "$S4_GHS" < <(cat "$S4_ROW/stdout" "$S4_ROW/stderr"); then
+  row "S4 row 24 bump-inngest-bootstrap-pin: a well-formed ghs_ token passes the shape guard (no marker, no token message) and appears in no recorded git argument and no output" ok
+else row "S4 row 24 bump-inngest-bootstrap-pin: well-formed token" fail "rc=$S4_RC markers=$(s4_markers)"; fi
+S4_SHIM="$S4/shim"; S4_ARGS=(); S4_FLAGS=(--noprofile --norc -e)
+
+# ---- the realistic credential shapes MUST PASS (the guard's alphabet is judged against what the vendors actually issue) ----
+S4_JWT="$(printf '{"alg":"RS256","typ":"JWT"}' | base64 -w0 | tr '+/' '-_' | tr -d '=').$(printf '{"iss":"123456","iat":1700000000,"exp":1700000600}' | base64 -w0 | tr '+/' '-_' | tr -d '=').$(head -c 48 /dev/urandom | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+S4_HZ="$(head -c 96 /dev/urandom | base64 -w0 | tr -d '+/=' | head -c 64)"
+printf '%s\n' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || exit 1' \
+  'bc_curl s4-shapes "Authorization:Bearer :TOK" -- -sS --max-time 5 https://example.invalid/x' > "$S4/shape-lib.sh"
+printf '%s\n' "$BEARER_FN" '_bearer_ok "${TOK:-}" || exit 1' "( LC_ALL=C; case \"\${TOK:-}\" in ${S4_PAT}) exit 1 ;; esac ) || exit 1" > "$S4/shape-inline.sh"
+S4_SHAPE_BAD=""
+for shape in "sig64:$S4_HEX64" "cfid:$S4_CFID" "sbp:$S4_SBP" "jwt:$S4_JWT" "ghs:$S4_GHS" "hetzner:$S4_HZ" "resend:$S4_RESEND"; do
+  sname="${shape%%:*}"; sval="${shape#*:}"
+  s4_run "shape-$sname" "$S4/shape-lib.sh" "$S4/real" TOK="$sval"
+  { [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $sval\"" ]] && s4_calls_ok 1 && ! s4_argv_has "$sval"; } || S4_SHAPE_BAD+=" $sname(library rc=$S4_RC)"
+  s4_run "shape-$sname-inline" "$S4/shape-inline.sh" "$S4/real" TOK="$sval"
+  [[ "$S4_RC" == 0 ]] || S4_SHAPE_BAD+=" $sname(inline rc=$S4_RC)"
+done
+[[ -z "$S4_SHAPE_BAD" ]] && row "S4 must-PASS shapes: a 64-hex signature, a <hex>.access Cloudflare id, a Supabase sbp_ token, a JWT with dots, a ghs_ installation token, a Hetzner token and a Resend re_ key are ALL accepted by the library (and arrive on stdin only), by the inline _bearer_ok and by infra-config-verify's case pattern" ok || row "S4 must-PASS shapes: a realistic credential is refused" fail "$S4_SHAPE_BAD"
+
+# ---- the replay (binding lesson 3): every converted call's non-credential argument list passes the library's own `_bc_tail_ok` ----
+# STATIC: each `bc_curl` statement of the nine library-user files is evaluated with `bc_curl` overridden to hand its argument list (after `--`) to the real
+# `_bc_tail_ok` (a statement that does not parse, or a refusal, is a failure). DYNAMIC: every call the well-formed runs above recorded (the real bodies:
+# the SQL payload, the Resend HTML, the push payload path) is replayed the same way.
+s4_replay_py='
+import sys, yaml, re, os
+out = sys.argv[1]; n = 0
+for f in sys.argv[2:]:
+    if f.endswith((".yml", ".yaml")):
+        d = yaml.safe_load(open(f)); steps = []
+        if isinstance(d.get("runs"), dict): steps = d["runs"].get("steps") or []
+        else:
+            for j in (d.get("jobs") or {}).values(): steps += (j.get("steps") or []) if isinstance(j, dict) else []
+        texts = [s["run"] for s in steps if isinstance(s, dict) and isinstance(s.get("run"), str)]
+    else:
+        texts = [open(f).read()]
+    for t in texts:
+        lines = t.split("\n"); i = 0
+        while i < len(lines):
+            l = lines[i]
+            if re.search(r"(^|[^_A-Za-z])bc_curl [A-Za-z]", l) and not l.lstrip().startswith("#"):
+                j = i; buf = l
+                while buf.endswith("\\") and j + 1 < len(lines):
+                    j += 1; buf = buf[:-1] + " " + lines[j].strip()
+                n += 1
+                open(os.path.join(out, "%03d.stm" % n), "w").write(buf.strip() + "\n"); i = j
+            i += 1
+print(n)
+'
+S4_RP="$S4/replay"; assert_fixture_dir "$S4_RP"; mkdir -p "$S4_RP"
+S4_REPLAY_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh"
+S4_RP_N="$(cd "$REPO_ROOT" && python3 -I -c "$s4_replay_py" "$S4_RP" $S4_REPLAY_FILES)"
+S4_RP_OK=0; S4_RP_BAD=""
+for stm in "$S4_RP"/*.stm; do
+  [[ -e "$stm" ]] || continue
+  { printf 'source "%s/scripts/lib/bearer-curl.sh"\n' "$REPO_ROOT"
+    printf '%s\n' 'bc_curl() { shift; while [[ $# -gt 0 && "$1" != -- ]]; do shift; done; shift; if _bc_tail_ok "$@" 2>/dev/null; then echo OK >&2; else echo REFUSED >&2; fi; }'
+    cat "$stm"; } > "$stm.sh"
+  ( cd "$S4_RP" && env -i PATH="$S4/real" "$BASH_BIN" --noprofile --norc "$stm.sh" > /dev/null 2> "$stm.out" < /dev/null )
+  res="$(grep -cx OK "$stm.out" || true)"; [[ "$(grep -c REFUSED "$stm.out" || true)" == 0 ]] || res=0
+  [[ "$res" -ge 1 ]] && S4_RP_OK=$((S4_RP_OK + 1)) || S4_RP_BAD+=" $(basename "$stm")"
+done
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 24 bc_curl statements in the nine files.
+S4_REPLAY_FLOOR=24
+if [[ -z "$S4_RP_BAD" && "$S4_RP_OK" == "$S4_RP_N" && "$S4_RP_OK" -ge "$S4_REPLAY_FLOOR" ]]; then row "S4 replay (static): all $S4_RP_OK converted bc_curl statements hand an argument list the library's own _bc_tail_ok accepts (zero refusals; anti-vacuity floor $S4_REPLAY_FLOOR)" ok
+else row "S4 replay (static): a converted call's argument list is refused or does not parse" fail "ok=$S4_RP_OK of $S4_RP_N bad:$S4_RP_BAD"; fi
+s4_tail_probe() { # <argv file>: the recorded call minus the library's own prefix and the config channel, judged by _bc_tail_ok
+  local -a av tail_=(); local i
+  mapfile -d '' av < "$1"
+  for ((i = 0; i < ${#av[@]}; i++)); do
+    if [[ "${av[i]}" == --config && "${av[i+1]:-}" == - ]]; then i=$((i + 1)); continue; fi
+    tail_+=("${av[i]}")
+  done
+  tail_=("${tail_[@]:3}")
+  env -i PATH="$S4/real" "$BASH_BIN" --noprofile --norc -c 'source "$1/scripts/lib/bearer-curl.sh"; shift; _bc_tail_ok "$@"' _ "$REPO_ROOT" "${tail_[@]}" > /dev/null 2>&1
+}
+S4_DYN_N=0; S4_DYN_BAD=""
+for rd in "$S4"/rows/*; do
+  case "$(basename "$rd")" in *empty*|*unset*|*hostile*|*nopy*|*transport*|*nolib*|*visible*|*shape*|*ctl*) continue ;; esac
+  for af in "$rd"/calls/*.argv; do
+    [[ -e "$af" ]] || continue
+    S4_DYN_N=$((S4_DYN_N + 1)); s4_tail_probe "$af" || S4_DYN_BAD+=" $(basename "$rd")/$(basename "$af")"
+  done
+done
+# the dynamic replay also needs a floor and a control: a body that reads stdin MUST be refused by the very probe
+printf '%s\0' --disable --noproxy '*' -sS --data-binary @- https://example.invalid/x --config - > "$S4/ctl-replay.argv"
+S4_DYN_FLOOR=33
+if [[ -z "$S4_DYN_BAD" && "$S4_DYN_N" -ge "$S4_DYN_FLOOR" ]] && ! s4_tail_probe "$S4/ctl-replay.argv"; then
+  row "S4 replay (dynamic): all $S4_DYN_N calls the well-formed runs recorded (real SQL, Resend, payload-path and header arguments) pass _bc_tail_ok, and the probe refuses a body read from stdin (control); anti-vacuity floor $S4_DYN_FLOOR" ok
+else row "S4 replay (dynamic): a recorded call is refused, the population is below its floor, or the probe is blind" fail "n=$S4_DYN_N bad:$S4_DYN_BAD"; fi
+# The negative canary, as one population: the planted canary was searched for in EVERY captured stream (stdout, stderr, GITHUB_OUTPUT, GITHUB_ENV, the step
+# summary, every recorded argv and stdin and every file a step wrote) of every hostile or refused run above; a run that leaks fails its own row, and this row
+# proves the sweep was not vacuous. BOTH operands are literals on the lines IMMEDIATELY above the `if`.
+S4_CANARY_FLOOR=129
+if [[ "$S4_REFUSAL_RUNS" -ge "$S4_CANARY_FLOOR" ]]; then row "S4 negative canary: $S4_REFUSAL_RUNS refusal runs searched for the planted canary in every captured stream (anti-vacuity floor $S4_CANARY_FLOOR)" ok
+else row "S4 negative canary: the refusal population is below its anti-vacuity floor" fail "runs=$S4_REFUSAL_RUNS floor=$S4_CANARY_FLOOR"; fi
+echo "=== stage S4: Guard 2 rows 13 to 24, shapes and replay done ==="
 
 # =====================================================================================
 # CONTROLS FOR THE VERDICT-OWNING HELPERS. Every helper that names failed checks (bk_check, bs_refusal, bs_ok_call, hmx_refused, evaluate_hmac,
@@ -3921,7 +4879,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=468
+EXPECTED_TESTS=588
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

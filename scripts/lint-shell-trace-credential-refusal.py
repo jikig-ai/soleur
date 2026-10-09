@@ -1200,13 +1200,17 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # `scripts/lib/bearer-curl.sh` (`bc_curl`, `bc_hmac_sha256_hex`), so Rule E sees no argv site in them. Every
 # file S3 converts LEAVES baseline E entirely, which is why per-site FINGERPRINT keying was decided "not
 # adopted": a re-added argv site in a converted file is an unlisted offender and fails the equality check,
-# and the still-listed population (S4, S5, the two cla-evidence files, the held-back sites) is deleted by the
-# later slices, so a keying mechanism would be built for rows that are about to go. Residual, stated: until S4/S5, a
-# PR that converts one site and adds another inside a STILL-LISTED file is count-neutral and is a reviewer's
-# catch, as before. HELD BACK from S3 and still listed: `workspaces-luks-cutover.yml` (its infra suite's curl stub
-# exits 64 on `--disable --noproxy`, so the conversion edits an `apps/web-platform/infra/**` file and fires the
-# production push apply) and the `probe` step of `scheduled-inngest-health.yml` (the infra suite that executes it
-# builds a fake workspace with stubbed `openssl` and `curl`; the same reason). Both ride S4 with operator notice.
+# and the still-listed population is deleted by the later slices, so a keying mechanism would be built for rows that are
+# about to go. Residual, stated: while a file is still listed, a PR that converts one site and adds another inside it
+# is count-neutral and is a reviewer's catch, as before.
+#
+# S4 (#9597, ADR-280 addendum): the push-triggered, production-class files (the deploy-webhook callers, the Supabase,
+# GitHub App, Resend and Hetzner bearer sites) also leave baseline E, through the shared library or, where a pinned
+# property of the job or its suite rules out sourcing a repo file, through the S2 inline wrapper. The two sites S3 held
+# back are CLOSED: `workspaces-luks-cutover.yml` (inline wrapper; its infra suite's curl stub gained `--disable` and
+# `--noproxy` arms) and the `probe` step of `scheduled-inngest-health.yml` (library; its infra suite now places the
+# library beside the classifier in its fake workspace). What stays listed in baseline E after S4 is the S5 population
+# (`apply-web-platform-infra.yml`, `cloud-init-registry.yml`) and the two cla-evidence files (#9756).
 #
 # KNOWN BLIND SPOTS (census-only; a reviewer, not this lint, judges them): message BODIES
 # that carry a secret (`-d` operands; the bsky password JSON moved to stdin in this sweep,
@@ -1219,14 +1223,20 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # production apply, so they are an S4/S5-class change with operator notice and are tracked there;
 # the other hits of the pattern are the `$HBODY` response-body variable of the Hetzner helpers,
 # not a heartbeat; a later conversion is `url = "..."` on the stdin config behind a shape guard); `doppler --token`; `jq --arg`
-# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (23 production sites in 12 files, measured
-# 2026-10-09 after ci-deploy.sh's fan-out signer was converted in #9799, with `git grep -nE 'dgst .*-hmac'` minus Markdown, `*.test.sh`, fixtures, `tests/`,
-# knowledge-base/ and this file, and minus the lines whose first non-space character is `#`: the raw
-# command prints 24 hits, the 24th being a prose comment in kb-drift-walker.yml); the key is on openssl's argv. A stdin or env form
-# EXISTS now (the converted signers in scripts/cutover-inngest.sh, the community skill's
-# lib/hmac-sha1-b64.sh and the Python signers keep the key off argv) and is not detected here. TWO sites in
-# scripts/cutover-inngest.sh (the registry-probe and doublefire-probe signatures, lines 1372 and 1546 when
-# measured) are HELD BACK deliberately: tracked with the heartbeat items under #9757, not by this lint);
+# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (the key is on openssl's argv, which Rule E does not see:
+# it reads curl's argument list). After S4 no production signer in a converted file does this: S4 moved the key to a
+# python3 child's environment (`bc_hmac_sha256_hex`, or the canonical inline snippet at the sites that cannot source
+# the library) at 20 sites, on top of ci-deploy.sh's fan-out signer and the converted copies in
+# scripts/cutover-inngest.sh. WHAT REMAINS, measured 2026-10-09 with `git grep -nE 'dgst .*-hmac'` minus `*.test.sh`,
+# fixtures, `tests/`, knowledge-base/ and this file (and no hit is a `#` comment line): TWO sites in
+# scripts/cutover-inngest.sh (the registry-probe and doublefire-probe signatures), HELD BACK deliberately because
+# converting them edits the census regexes of cutover-inngest-workflow.test.sh, a suite an open draft PR also edits;
+# owner #9757 item 1, taken after that draft merges. And two Markdown files that agents EXECUTE and that teach the argv
+# form (plugins/soleur/skills/ship/SKILL.md and the postmerge skill's deploy-status-debugging.md reference): plugin
+# files, outside S4, tracked under #9757. A stdin or env form EXISTS (the library, the converted signers in
+# scripts/cutover-inngest.sh, the community skill's lib/hmac-sha1-b64.sh and the Python signers) and is not detected
+# here: the population-derived guard that bounds the remainder to exactly those two arms is a stage of
+# tests/scripts/test-argv-bearer-sweep.sh, not this lint);
 # header VALUES held in `env:` and passed as `-H "$H"` (the assignment is not in the scanned
 # body); `env -i`; `wget`; `gh api -H`; `-K file` configs written with the default umask;
 # cookies (`-b`, `Cookie:`) and vendor-specific custom headers (`x-gitlab-token`), pinned by

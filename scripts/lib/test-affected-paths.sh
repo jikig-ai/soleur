@@ -908,6 +908,28 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   ".github/workflows/scheduled-prod-version-drift.yml"
   ".github/workflows/scheduled-terraform-drift.yml"
   ".github/workflows/sentry-audit-gate.yml"
+  # S4 (ADR-280): the S4 stage executes the REAL step bodies and scripts it names (extracted from the YAML, run under a
+  # recording curl) and derives the library-user manifest from the tree, so an edit to any consumer must select it.
+  # The repo-wide HMAC census rides the full run: no edge can name "any tracked file".
+  ".github/actions/dispatch-web-redeploy/"
+  ".github/actions/mint-infra-app-token/"
+  ".github/scripts/bump-inngest-bootstrap-pin.sh"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-github-infra.yml"
+  ".github/workflows/apply-inngest-rls.yml"
+  ".github/workflows/deploy-inngest-image.yml"
+  ".github/workflows/restart-inngest-server.yml"
+  ".github/workflows/web-platform-release.yml"
+  ".github/workflows/workspaces-luks-cutover.yml"
+  "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/infra-config-gate.sh"
+  "apps/web-platform/infra/infra-config-verify.sh"
+  "apps/web-platform/infra/push-infra-config.sh"
+  "apps/web-platform/scripts/github-app-key-status.sh"
+  "scripts/inngest-liveness-classify.sh"
+  "scripts/inngest-restart-poll-classify.sh"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
