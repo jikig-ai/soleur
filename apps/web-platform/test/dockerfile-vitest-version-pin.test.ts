@@ -114,9 +114,9 @@ describe("Dockerfile vitest global-install pin parity", () => {
     ).toEqual([]);
     // Specifier-bearing channels the module graph does not model.
     const BANNED = [
-      /\bimport\.meta\.(?:resolve|glob)\s*\(/,
-      /\b(?:vi|vitest)\.(?:mock|doMock|importActual|importMock|hoisted)\s*\(/,
-      /\bnew\s+URL\s*\(\s*["'][^"']+["']\s*,\s*import\.meta\.url/,
+      /\bimport\.meta\s*(?:\.(?:resolve|glob)|\[\s*["'](?:resolve|glob)["']\s*\])\s*\(/,
+      /\b(?:vi|vitest)\s*(?:\.(?:mock|doMock|importActual|importMock|hoisted)|\[\s*["'](?:mock|doMock|importActual|importMock|hoisted)["']\s*\])\s*\(/,
+      /\bnew\s+URL\s*\(\s*[^,]+,\s*import\.meta\.url/,
     ] as const;
     for (const re of BANNED) expect(code).not.toMatch(re);
     // Self-pin probes (guard-contract harness row): the extractor and each
@@ -133,7 +133,9 @@ describe("Dockerfile vitest global-install pin parity", () => {
       expect(specifiersOf(sfs).length, `extractor must see ${src}`).toBe(1);
     }
     expect('import.meta.resolve("pkg")').toMatch(BANNED[0]);
+    expect('import.meta["resolve"]("pkg")').toMatch(BANNED[0]);
     expect('vi.mock("pkg")').toMatch(BANNED[1]);
+    expect('vitest["importActual"]("pkg")').toMatch(BANNED[1]);
     expect('new URL("./x", import.meta.url)').toMatch(BANNED[2]);
     // `import.meta` on its own resolves no specifier — must not trip.
     expect("const u = import.meta.url;").not.toMatch(BANNED[0]);
@@ -252,7 +254,7 @@ describe("Dockerfile vitest global-install pin parity", () => {
       // (the release-#8136 class). A NON-literal first arg on any of these
       // is itself a problem — the guard can't classify what it can't read.
       for (const m of code.matchAll(
-        /\b(?:vi|vitest)\.(?:mock|doMock|importActual|importMock|hoisted)\s*\(\s*([^,)]*)|\b(?:import\.meta\.(?:resolve|glob)|require\.resolve|createRequire)\s*\(\s*([^,)]*)|\bnew\s+URL\s*\(\s*([^,)]+)\s*,\s*import\.meta\.url/g,
+        /\b(?:vi|vitest)\s*(?:\.(?:mock|doMock|importActual|importMock|hoisted)|\[\s*["'](?:mock|doMock|importActual|importMock|hoisted)["']\s*\])\s*\(\s*([^,)]*)|\b(?:import\.meta\s*(?:\.(?:resolve|glob)|\[\s*["'](?:resolve|glob)["']\s*\])|require\.resolve|createRequire)\s*\(\s*([^,)]*)|\bnew\s+URL\s*\(\s*([^,)]+)\s*,\s*import\.meta\.url/g,
       )) {
         const arg = (m[1] ?? m[2] ?? m[3]).trim();
         const lit = /^["']([^"']+)["']$/.exec(arg)?.[1];
