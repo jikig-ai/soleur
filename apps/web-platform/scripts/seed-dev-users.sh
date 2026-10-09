@@ -120,7 +120,7 @@ _bearer_ok "$SRK" || { echo "::error::SUPABASE_SERVICE_ROLE_KEY has an unusable 
 # TC_VERSION must match `lib/legal/tc-version.ts`. If that file's literal
 # changes, bump this string too — middleware redirects to /accept-terms
 # when the user's tc_accepted_version doesn't match the literal.
-TC_VERSION="2.5.1"
+TC_VERSION="2.6.0"
 
 # Look up an existing user by email via the admin endpoint's per-email
 # filter (avoids the >100-users pagination bug in the previous shape that
