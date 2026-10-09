@@ -551,7 +551,7 @@ if [[ -r /proc/self/stat ]]; then
 # outer shell whose command line merely mentions the path would be signalled too.
 p=$PPID; target=""
 while [ -n "$p" ] && [ "$p" -gt 1 ]; do
-  if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -qx '.*/scripts/resolve-regenerable-conflicts\.sh'; then
+  if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -cx >/dev/null '.*/scripts/resolve-regenerable-conflicts\.sh'; then
     target=$p
   elif [ -n "$target" ]; then
     break
