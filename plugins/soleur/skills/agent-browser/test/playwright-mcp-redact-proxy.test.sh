@@ -15,7 +15,7 @@
 # that stops landing reds the run instead of silently deleting its row.
 # An "absent" observable is only ever asserted together with a positive proof
 # that the thing which would have produced it ran. `grep -q` reads herestrings or
-# files only, never a producer pipe (SIGPIPE under pipefail is a false negative).
+# files only; a producer pipe is drained, `grep -c ... >/dev/null` (SIGPIPE under pipefail is a false negative).
 #
 # Three proxy paths: PROXY_SHIPPED (the file under test, and the source of every
 # mutant), PROXY (what the rows drive; PROXY_UNDER_TEST points it at

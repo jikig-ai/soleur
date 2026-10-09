@@ -542,7 +542,11 @@ fi
 
 # Signals that land after the merge started. The helper TERMs the OUTERMOST ancestor running the
 # resolver (a command substitution forks a copy with the same argv). Linux /proc only.
+# HAZARD: the helper TERMs the outermost ancestor whose argv matches its pattern. A MUTANT of the match line (-v, a dropped -x, a catch-all
+# pattern) matches every ancestor and walks up to the top of the user's session. The walk is bounded at this suite's own PID, but run any
+# mutant of this block ONLY as `unshare -Urpf --kill-child --mount-proc bash <this file>` (the test shell becomes PID 1; the walk stops there).
 if [[ -r /proc/self/stat ]]; then
+  export SOLEUR_TEST_SUITE_PID=$$   # read by the helper below; unset or empty means the helper signals nothing (the rows then fail loudly)
   _killer="$SANDBOX/kill-resolver.sh"; assert_fixture_dir "$SANDBOX"
   cat > "$_killer" <<'EOF'
 #!/bin/sh
@@ -550,7 +554,8 @@ if [[ -r /proc/self/stat ]]; then
 # whole argument, and stop at the first non-matching ancestor above it — never further, or any
 # outer shell whose command line merely mentions the path would be signalled too.
 p=$PPID; target=""
-while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+[ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || exit 0
+while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$p" != "$SOLEUR_TEST_SUITE_PID" ]; do
   if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -cx >/dev/null '.*/scripts/resolve-regenerable-conflicts\.sh'; then
     target=$p
   elif [ -n "$target" ]; then

@@ -3,3 +3,8 @@
 # including the 14 lines the codemod routes to its data queue (see data-conversions.txt).
 # Re-derive in Phase 0 if origin/main moved. A review-fix edit to any converted file lands HERE in the same commit, or verify goes red
 # (S4 session error 3): add the entry, then append an addendum to evidence.md instead of editing counts in place.
+# Review round 1 (PANEL_SHA 0a1c633584): the kill helper in resolve-regenerable-conflicts.test.sh gets a hazard comment and a walk bounded at the suite's own PID.
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh:544+:review fix: three comment lines naming the session-ending hazard of a mutated match line and the PID-namespace rule (no behaviour)
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh:545+:review fix: export SOLEUR_TEST_SUITE_PID=$$ so the helper can bound its ancestor walk at the suite (unset means the helper signals nothing)
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh:553:review fix: heredoc helper exits 0 when SOLEUR_TEST_SUITE_PID is unset and its walk stops at that PID (it never signals the suite or anything above it)
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:18:review fix: header prose said grep -q never reads a producer pipe; the file now has one drained producer pipe (line-count neutral comment reword, as S4 did)
