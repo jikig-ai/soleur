@@ -36,9 +36,9 @@ if [[ -z "$SCRIPT" ]]; then
 fi
 
 # AC9 (static): the feed includes AGENTS.rules.md via required_paths + append.
-if printf '%s' "$SCRIPT" | grep -q 'required_paths=("AGENTS.rules.md")' \
-   && printf '%s' "$SCRIPT" | grep -qF 'printf' \
-   && printf '%s' "$SCRIPT" | grep -qF '${required_paths[@]}'; then
+if printf '%s' "$SCRIPT" | grep -c >/dev/null 'required_paths=("AGENTS.rules.md")' \
+   && printf '%s' "$SCRIPT" | grep -cF >/dev/null 'printf' \
+   && printf '%s' "$SCRIPT" | grep -cF >/dev/null '${required_paths[@]}'; then
   pass "AC9 scan feed appends repo-root AGENTS.rules.md"
 else
   fail "AC9 feed inclusion" "required_paths / feed-append pattern not found"

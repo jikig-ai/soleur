@@ -604,7 +604,7 @@ fi
 
 cases=$((cases + 1))
 if awk '/^DEFAULT_EXCLUSIONS=\(/{f=1;next} f&&/^\)/{exit} f' "$CANARY" \
-     | grep -qE "^[[:space:]]*'(\*|\*\*|\*/\*|\*\*/\*)'"; then
+     | grep -cE >/dev/null "^[[:space:]]*'(\*|\*\*|\*/\*|\*\*/\*)'"; then
   fail "exclusions: a catch-all glob is declared — it would swallow an under-delivery"
 else
   pass "exclusions: no catch-all glob is declared"

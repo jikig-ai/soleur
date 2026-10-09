@@ -37,6 +37,18 @@ describe("BashAutonomousToggle", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  test("interstitial discloses force-push and teardown, not the removed claims (#9776)", () => {
+    global.fetch = vi.fn() as unknown as typeof fetch;
+    render(<BashAutonomousToggle initialAutonomous={false} isOwner={true} />);
+    fireEvent.click(screen.getByRole("switch", { name: /autonomous mode/i }));
+    const dialog = screen.getByRole("alertdialog");
+    const text = dialog.textContent ?? "";
+    expect(text).toMatch(/force-push over your repository's default branch/);
+    expect(text).toMatch(/terraform destroy/);
+    expect(text).not.toMatch(/backed up in git/i);
+    expect(text).not.toMatch(/secret redaction/i);
+  });
+
   test("confirming the interstitial POSTs value:true", async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,

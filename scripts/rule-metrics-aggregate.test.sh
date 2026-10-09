@@ -218,7 +218,7 @@ t4_rule_prune_excludes_rules_with_fire_events() {
   local candidates
   candidates=$(RULE_METRICS_ROOT="$root" bash "$PRUNE" --dry-run --weeks=0 2>/dev/null || true)
 
-  if ! echo "$candidates" | grep -q 'hr-rule-b-synthetic-test'; then
+  if ! echo "$candidates" | grep -c >/dev/null 'hr-rule-b-synthetic-test'; then
     echo "PASS: T4 rule-prune excludes rules with fire events (B with applied events excluded)"
     PASS=$((PASS + 1))
   else
@@ -274,7 +274,7 @@ EOF
   local candidates
   candidates=$(RULE_METRICS_ROOT="$root" bash "$PRUNE" --dry-run --weeks=0 2>/dev/null || true)
 
-  if echo "$candidates" | grep -q 'hr-rule-a-synthetic-test'; then
+  if echo "$candidates" | grep -c >/dev/null 'hr-rule-a-synthetic-test'; then
     echo "PASS: T4b rule-prune emits candidates for zero-fire rules with first_seen (A listed)"
     PASS=$((PASS + 1))
   else
@@ -499,7 +499,7 @@ t14_sentinel_only_noop_leaves_file_and_reports_drops() {
   stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
   assert_eq "T14 sentinel-only → exit 0" "0" "$exit_code"
   assert_eq "T14 sentinel-only → committed file byte-identical" "$before" "$(cat "$metrics")"
-  if echo "$stderr" | grep -q 'jq_fail'; then
+  if echo "$stderr" | grep -c >/dev/null 'jq_fail'; then
     echo "PASS: T14 sentinel-only → drop breakdown echoed to stderr"
     PASS=$((PASS + 1))
   else
@@ -1034,7 +1034,7 @@ t31_no_incidents_anywhere_is_loud() {
   root=$(make_fixture_repo)
   rm -f "$root/.claude/.rule-incidents.jsonl"
   err=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null || true)
-  if printf '%s' "$err" | grep -q 'SOLEUR_RULE_METRICS_NO_INCIDENTS'; then
+  if printf '%s' "$err" | grep -c >/dev/null 'SOLEUR_RULE_METRICS_NO_INCIDENTS'; then
     echo "PASS: T31 absent log emits SOLEUR_RULE_METRICS_NO_INCIDENTS"; PASS=$((PASS+1))
   else
     echo "FAIL: T31 absent log was SILENT — a null reading is indistinguishable from zero hits"; FAIL=$((FAIL+1))

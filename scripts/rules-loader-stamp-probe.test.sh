@@ -103,7 +103,7 @@ rm -rf "$d"
 # reports a defect that is actually the documentation of its absence. (Caught by
 # this suite on its first run -- cq-assert-anchor-not-bare-token, verbatim.)
 SUT_CODE=$(grep -vE '^[[:space:]]*#' "$SUT")
-if printf '%s' "$SUT_CODE" | grep -qE '(^|[^0-9])101([^0-9]|$)'; then
+if printf '%s' "$SUT_CODE" | grep -cE >/dev/null '(^|[^0-9])101([^0-9]|$)'; then
   bad "T5 probe hardcodes the rule count 101 in executable code"
 else
   ok "T5 probe derives the count (no hardcoded 101 outside comments)"

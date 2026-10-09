@@ -253,15 +253,17 @@ if grep -qE 'verdict\.verdict === "pass"' "$MJS" && grep -q 'runHardeningProbes(
 else
   fail "D1 runReplay does not call runHardeningProbes on pass — probes never run"
 fi
-for reason in userns_filter_bypass userns_filter_overbroad fd_hygiene_bypass args_fd_closed bwrap_shim_refused; do
+for reason in userns_filter_bypass userns_filter_overbroad fd_hygiene_bypass args_fd_closed bwrap_shim_refused proc_mask_defeated; do
   if grep -q "$reason" "$MJS"; then
     pass "D2 mjs emits verdict reason $reason"
   else
     fail "D2 mjs missing verdict reason $reason"
   fi
 done
-if grep -q '/proc/self/fd' "$MJS" && grep -q 'unshare", "-U"' "$MJS"; then
-  pass "D3 probe payloads present (fd census + unshare -U)"
+# The fd census is dup-test based (robust whether procfs is masked empty or
+# pidns-scoped); proc_mask pins host-pid absence + self-view presence.
+if grep -qF '(: <&$fd)' "$MJS" && grep -q 'unshare", "-U"' "$MJS" && grep -qF '/proc/self/environ' "$MJS"; then
+  pass "D3 probe payloads present (fd dup-test census + unshare -U + proc_mask)"
 else
   fail "D3 probe payloads missing from sandbox-canary.mjs"
 fi
@@ -271,9 +273,9 @@ fi
 # only entry widens the census bound past reality; a canary-only entry lets a
 # preserved fd look like a leak). Extract both lists mechanically and diff.
 SHIM_FILE="$SCRIPT_DIR/../infra/bwrap-shim/bwrap"
-# The fd-valued case arms are the lines that set expect_fd=1 (fd1 + fd2 rows);
+# The fd-valued case arms are the opt_kind rows assigning OPT_KIND=fd1/fd2;
 # cut at `)` so the trailing action never pollutes the token stream.
-shim_set=$(grep -E 'expect_fd=1' "$SHIM_FILE" | sed 's/).*//' | tr '| ' '\n' | grep '^--' | sort -u)
+shim_set=$(grep -E 'OPT_KIND=fd[12]' "$SHIM_FILE" | sed 's/).*//' | tr '| ' '\n' | grep '^--' | sort -u)
 mjs_set=$(sed -n '/BWRAP_FD_VALUED_OPTS = new Set/,/\]/p' "$MJS" | grep -oE '"--[a-z0-9-]+"' | tr -d '"' | sort -u)
 if [ -n "$shim_set" ] && [ "$shim_set" = "$mjs_set" ]; then
   pass "D4 shim preserve-set == canary BWRAP_FD_VALUED_OPTS ($(echo "$mjs_set" | wc -l) opts)"

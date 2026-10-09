@@ -387,7 +387,7 @@ call_sites() { # <root-dir>
     # direct `node .../markdownlint.js` are invocations the earlier pattern could not
     # see. A fixture in this repo already carries `run: markdownlint --fix docs/` and
     # went unmatched -- the blind spot demonstrated rather than argued.
-    sed 's/#.*//' "$f" 2>/dev/null | grep -qE '(npx[^|]*markdownlint|markdownlint-cli|\.bin/markdownlint|(^|[;&|[:space:]])markdownlint[[:space:]]|node[^|]*markdownlint[^|]*\.js)' \
+    sed 's/#.*//' "$f" 2>/dev/null | grep -cE >/dev/null '(npx[^|]*markdownlint|markdownlint-cli|\.bin/markdownlint|(^|[;&|[:space:]])markdownlint[[:space:]]|node[^|]*markdownlint[^|]*\.js)' \
       && printf '%s\n' "$f"
   done < <(
     { [[ -f "$base/lefthook.yml" ]] && printf '%s\n' "$base/lefthook.yml"
@@ -545,7 +545,7 @@ printf 'H4 sole scope interpreter\n'
 
 # (a) The SUT passes it. Anchored on the comment-STRIPPED source: the block explaining
 #     this flag names it in prose, so a bare grep would match its own rationale.
-if sed 's/#.*//' "$REPO_ROOT/$SUT_REL" | grep -qE '^[^#]*xargs -0 .*--ignore-path /dev/null'; then
+if sed 's/#.*//' "$REPO_ROOT/$SUT_REL" | grep -cE >/dev/null '^[^#]*xargs -0 .*--ignore-path /dev/null'; then
   pass "H4a -- the sweep invocation passes --ignore-path /dev/null"
 else
   fail "H4a -- the sweep invocation does not pass --ignore-path /dev/null"
@@ -746,7 +746,7 @@ fi
 # W1d: the job must carry no `if:`. A required context that does not report on
 # merge_group leaves the queue entry pending forever.
 if awk '/^  markdown-lint:/{f=1;next} /^  [a-z]/{f=0} f' \
-     "$REPO_ROOT/.github/workflows/pr-quality-guards.yml" | grep -qE '^[[:space:]]*if:'; then
+     "$REPO_ROOT/.github/workflows/pr-quality-guards.yml" | grep -cE >/dev/null '^[[:space:]]*if:'; then
   fail "W1d -- the markdown-lint job carries an 'if:'; a required context that skips on merge_group wedges the queue"
 else
   pass "W1d -- the markdown-lint job carries no 'if:' gate"

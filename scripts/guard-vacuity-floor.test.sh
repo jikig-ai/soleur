@@ -911,8 +911,8 @@ build_mutant() { # <suite> <floor-lineno> <out>
     # both, so a floor preceded by `total=$((passes + fails))` lost its threshold binding and
     # the mutant died unbound — reported as a construction failure for a fully compliant
     # floor. Same `$((` vs `$(` distinction the conservation arm makes.
-    if printf '%s' "$t" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^;]*$' \
-       && ! printf '%s' "$t" | grep -qE '\$\([^(]'; then
+    if printf '%s' "$t" | grep -cE >/dev/null '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^;]*$' \
+       && ! printf '%s' "$t" | grep -cE >/dev/null '\$\([^(]'; then
       start="$prev"
     else
       break

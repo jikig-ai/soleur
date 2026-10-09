@@ -666,7 +666,7 @@ esac
 # Bare repos contain stale working-tree files that diverge from HEAD.
 # Running tests from a bare root produces phantom failures.
 # Use a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh
-if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
+if git rev-parse --is-bare-repository 2>/dev/null | grep -c >/dev/null true; then
   echo "ERROR: Cannot run tests from a bare repository root." >&2
   echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
   echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
@@ -3489,7 +3489,8 @@ _aff_runner_banner() {
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=143
+# #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
+_MIN_ALWAYS_ON_DECLARED=106
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4932,6 +4933,9 @@ if want_scripts; then
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
   # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
   run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
+  # #9763: the fast-tier budget ratchet — pins always-on committed weight to
+  # <=10s per suite and <=300s total so the local tier cannot silently regrow.
+  run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
   # Guard 1 for the #7869 runtime ceiling. Registered here rather than left to a
   # glob: nothing auto-discovers this directory, so an unregistered suite is
   # silently never gated — locally or in CI.
@@ -5914,6 +5918,16 @@ if want_scripts; then
   # scripts/followthroughs/ matches no SUITE_GLOBS entry; appended LAST in the block so no earlier
   # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
   run_suite "scripts/followthroughs/tty-ack-migration-9387" bash scripts/followthroughs/tty-ack-migration-9387.test.sh
+  # #9727 (ADR-276 S1): the hosted-runner demand census (golden totals, the C1/C2/non-vacuity self-checks and
+  # a gh-shim round trip over a committed fixture; offline). Explicit run_suite because scripts/*.test.sh is
+  # covered by no glob here; appended LAST in the block so no earlier registration's positional-shard ordinal
+  # moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/ci-demand-census" bash scripts/ci-demand-census.test.sh
+  # #9727: the secret-scan smoke path gate. Extracts the smoke-relevance step body from secret-scan.yml and
+  # EXECUTES it under the Actions shell (the smoke-tests `if:` is pinned by exact string equality, not evaluated),
+  # so it is what separates "the gate skipped smoke correctly" from "the gate never looked". Same
+  # explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -6474,7 +6488,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         # good-sha/bad-sha and nothing to restore, so printing the steps there would send the
         # operator through irrelevant ref surgery. The per-dimension `next:` line above carries
         # each of those dimensions' own remedy.
-        if printf '%s\n' "$_repo_fatal" | grep -qE '^FATAL[[:space:]]+(head|worktree)'; then
+        if printf '%s\n' "$_repo_fatal" | grep -cE >/dev/null '^FATAL[[:space:]]+(head|worktree)'; then
           echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
           echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
           echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2

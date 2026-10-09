@@ -398,7 +398,7 @@ check "W6d the refusal holds on the fallback path, where the token is bound by t
 
 # --- W7: source-level pins (cheap structural claims the rows above exercise behaviourally) ---------------------------------------
 src_code() { grep -vE '^[[:space:]]*#' "$SUT"; }
-if { ! src_code | grep -qE 'doppler[[:space:]]+run|GITHUB_ENV|set[[:space:]]+-[A-Za-z]*x|\|\|[[:space:]]*true'; }; then rc=0; else rc=1; fi
+if { ! src_code | grep -cE >/dev/null 'doppler[[:space:]]+run|GITHUB_ENV|set[[:space:]]+-[A-Za-z]*x|\|\|[[:space:]]*true'; }; then rc=0; else rc=1; fi
 check "W7a the wrapper never runs 'doppler run', writes GITHUB_ENV, enables xtrace, or swallows an error with '|| true'" "$rc"
 if [[ "$(src_code | grep -c 'secrets get')" == 1 ]]; then rc=0; else rc=1; fi
 check "W7b exactly one Doppler read in the wrapper" "$rc"
@@ -412,7 +412,7 @@ reset_logs
 run "$REAL_WRAP" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK"
 if { [[ "$RC" -eq 0 ]] && [[ "$OUT" == *"escrow-split-contract:live-ok"* ]]; }; then rc=0; else rc=1; fi
 check "E1 real checker, complete web config, env token -> live-ok (rc 0)" "$rc"
-if { grep -c '^AUTH provider' "$MOCK_LOG" | grep -qx 2 && log_lacks_re '^AUTH step' "$MOCK_LOG"; }; then rc=0; else rc=1; fi
+if { grep -c '^AUTH provider' "$MOCK_LOG" | grep -cx >/dev/null 2 && log_lacks_re '^AUTH step' "$MOCK_LOG"; }; then rc=0; else rc=1; fi
 check "E1b both names-only reads authenticate with the PROVIDER token, never the step's prd_terraform token" "$rc"
 if no_leak "$ENVTOK" "$STEPTOK"; then rc=0; else rc=1; fi
 check "E1c the real checker child never echoes its environment (no token byte in output or logs)" "$rc"

@@ -1796,4 +1796,81 @@ describe("stop_reason other than end_turn/tool_use is terminal", () => {
     expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
     expect(deadletterTags()).toEqual({ reason });
   });
+
+  // Haiku 5.5 can end a turn with stop_reason "refusal" and a stop_details.category
+  // (cyber | bio | frontier_llm | general_harms); there is no server-side fallback on
+  // Haiku. triage.p0p1_issue reads issue bodies that can be security-flavored, so a
+  // refusal on a legitimate report is newly possible. It must dead-letter VISIBLY
+  // (a Sentry issue naming the category), never drop silently or retry blindly.
+  it("a Haiku-class (triage.p0p1_issue) refusal dead-letters as leader_refused with the category in extra", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: "refusal",
+      stop_details: {
+        type: "refusal",
+        category: "cyber",
+        explanation: "SENTINEL-explanation-8d2",
+      },
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({
+        sourceRef: "issue-acme:repo:31",
+        actionClass: "triage.p0p1_issue",
+      }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_refused" });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    expect(deadletterTags()).toEqual({ reason: "leader_refused" });
+    // The model on the request is the Haiku tier and no `fallbacks` field is sent.
+    const req = anthropicCreateSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(req.model).toBe("claude-haiku-5-5");
+    expect(req).not.toHaveProperty("fallbacks");
+    const extra = (deadletterCall()![1] as { extra?: Record<string, unknown> }).extra;
+    expect(extra).toMatchObject({ category: "cyber", model: "claude-haiku-5-5", turn: 1 });
+    // Only the allowlisted category rides along: never stop_details.explanation.
+    expect(JSON.stringify(deadletterCall())).not.toContain("SENTINEL-explanation");
+    expect(Object.keys(extra ?? {})).not.toContain("explanation");
+  });
+
+  it("a hostile category and a hostile stop_reason are allowlisted before the dead-letter event", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: "refusal",
+      stop_details: { category: "SENTINEL-category-" + "z".repeat(300) },
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "issue-acme:repo:32", actionClass: "triage.p0p1_issue" }),
+      step: makeStep(),
+      logger,
+    });
+    const extra = (deadletterCall()![1] as { extra?: Record<string, unknown> }).extra;
+    expect(extra?.category).toBe("unrecognized");
+    expect(JSON.stringify(deadletterCall())).not.toContain("SENTINEL");
+  });
+
+  it("an unknown stop_reason dead-letters as truncated with the value allowlisted in the error text", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: "SENTINEL-stop-" + "q".repeat(300),
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "issue-acme:repo:33", actionClass: "triage.p0p1_issue" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_response_truncated" });
+    expect(JSON.stringify(deadletterCall())).not.toContain("SENTINEL");
+    expect(JSON.stringify(deadletterCall())).toContain("stop_reason=unknown");
+  });
 });

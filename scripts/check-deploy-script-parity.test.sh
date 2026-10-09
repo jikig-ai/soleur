@@ -159,10 +159,96 @@ run --status-json-file "$S/status.json" --bs-rows-file "$S/rows.json"
 if [[ "$RC" -eq 0 ]]; then ok "C13: a non-object .raw is skipped, not a stream abort"
 else no "C13: non-object raw (rc=$RC) $(<"$S/err")"; fi
 
+# ── the LIVE status arm (#9597, S2): the web-1 request is the only one that carries credentials, and the fixture cases above never
+# reach it (--status-json-file bypasses curl). A recording curl stub on PATH (not an openssl stub: the signature is computed by the
+# real python3 and judged against the real openssl) proves the three header lines travel on STDIN, exactly, once, with a 64-hex
+# digest equal to the independent oracle, and that no credential value reaches curl's argument list. Values are synthetic.
+LIVE_KEY="whsecret-9151-synthetic"; LIVE_ID="cfid-9151-synthetic"; LIVE_SEC="cfsecret-9151-synthetic"
+mkdir -p "$S/bin"
+cat > "$S/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+# Records argv and stdin, writes a canned deploy-status body to the -o file and answers the -w http_code with 200.
+d="$(dirname "$0")/.."
+printf 'call\n' >> "$d/curl.calls"
+printf '%s\n' "$*" > "$d/curl.argv"
+cat > "$d/curl.stdin"
+out=""; want=0; a=("$@")
+for (( i = 0; i < ${#a[@]}; i++ )); do
+  case "${a[$i]}" in -o) out="${a[$((i+1))]}" ;; -w) want=1 ;; esac
+done
+[[ -n "$out" ]] && cp "$d/status.json" "$out"
+[[ "$want" == 1 ]] && printf '200'
+exit 0
+STUB
+chmod +x "$S/bin/curl"
+live_run() { # [NAME=value ...] -> RC; the stub's evidence is in $S/curl.{calls,argv,stdin}
+  rm -f "$S/curl.calls" "$S/curl.argv" "$S/curl.stdin"
+  mk_status "$REPO_SHA" "hetzner-1"
+  env PATH="$S/bin:$PATH" APP_DOMAIN_BASE=soleur.ai WEBHOOK_DEPLOY_SECRET="$LIVE_KEY" CF_ACCESS_CLIENT_ID="$LIVE_ID" CF_ACCESS_CLIENT_SECRET="$LIVE_SEC" "$@" \
+    bash "$SUT" --status-only >"$S/out" 2>"$S/err"; RC=$?
+}
+live_calls() { if [[ -e "$S/curl.calls" ]]; then wc -l < "$S/curl.calls" | tr -d ' '; else printf '0'; fi; }
+command -v openssl >/dev/null 2>&1 || { echo "FATAL: openssl is the independent oracle for the signature" >&2; exit 2; }
+LIVE_WANT="$(printf '' | openssl dgst -sha256 -hmac "$LIVE_KEY" | sed 's/.*= //')"
+
+# C14: the live arm sends the three header lines on stdin, exactly, and nothing credential-bearing on argv.
+cases=$((cases + 1)); live_run
+mapfile -t L14 < <(grep -v '^$' "$S/curl.stdin" 2>/dev/null)
+if [[ "$RC" -eq 0 && "$(live_calls)" == 1 && "${#L14[@]}" == 3 \
+      && "${L14[0]}" =~ ^header\ =\ \"X-Signature-256:\ sha256=([0-9a-f]{64})\"$ && "${BASH_REMATCH[1]}" == "$LIVE_WANT" \
+      && "${L14[1]}" == "header = \"CF-Access-Client-Id: $LIVE_ID\"" && "${L14[2]}" == "header = \"CF-Access-Client-Secret: $LIVE_SEC\"" ]]; then
+  ok "C14: the live status arm puts exactly the three header lines on curl's stdin (a 64-hex digest equal to the openssl oracle, then the id, then the secret)"
+else no "C14: live arm stdin (rc=$RC calls=$(live_calls) lines=${#L14[@]}) $(<"$S/err")"; fi
+cases=$((cases + 1))
+argv14="$(<"$S/curl.argv")"
+if [[ "$argv14" != *"$LIVE_KEY"* && "$argv14" != *"$LIVE_ID"* && "$argv14" != *"$LIVE_SEC"* && "$argv14" != *"$LIVE_WANT"* \
+      && "$argv14" != *"-H "* && "$argv14" == "--disable --noproxy *"* && "$argv14" == *"--config -"* ]]; then
+  ok "C15: no credential, digest or -H header is on curl's argv; --disable --noproxy '*' come first and the config comes from stdin"
+else no "C15: curl argv carries a credential or lost its prologue: ${argv14//$LIVE_KEY/<key>}"; fi
+
+# C15b: the transport flag set is pinned EXACTLY (recorded argv, not a prefix): dropping --proto '=https' (defence in depth: the URL is a hard-coded https literal and the argv has no -L, so no redirect or
+# downgrade path exists today, but the pin keeps it that way), -s, --max-time or the -w http_code probe, or adding a flag, must turn this row red. The -o value
+# is a mktemp path, so that one slot is masked; every other token is compared as is.
+cases=$((cases + 1))
+read -ra A15 <<< "$argv14"
+if [[ "${#A15[@]}" -ge 8 && "${A15[6]}" == "-o" ]]; then A15[7]="<tmp>"; fi
+want15="--disable --noproxy * --proto =https -s -o <tmp> -w %{http_code} --max-time 20 https://deploy.soleur.ai/hooks/deploy-status --config -"
+if [[ "${A15[*]}" == "$want15" ]]; then ok "C15b: curl's recorded argv is exactly the pinned transport flag set (--disable --noproxy '*' --proto '=https' -s -o <tmp> -w http_code --max-time 20 <url> --config -)"
+else no "C15b: curl's transport flag set drifted: ${A15[*]//$LIVE_ID/<id>}"; fi
+
+# C16: a malformed Cloudflare Access value is refused BEFORE curl: exit 2 (not 1: 1 is DRIFT), one value-free marker, nothing echoed.
+bad16=""
+for spec in "id:CF_ACCESS_CLIENT_ID:SYNTHMARK1\"x" "secret:CF_ACCESS_CLIENT_SECRET:SYNTHMARK2"$'\n'"url = \"http://evil.example.test/second" "space:CF_ACCESS_CLIENT_SECRET:SYNTHMARK3 x"; do
+  IFS=: read -r _lbl _var _rest <<< "$spec"; _val="${spec#*:*:}"
+  live_run "$_var=$_val"
+  [[ "$RC" -eq 2 && "$(live_calls)" == 0 && "$(grep -cxF 'SOLEUR_CREDENTIAL_REFUSED script=check-deploy-script-parity reason=token_shape' "$S/err")" == 1 ]] || bad16+=" [$_lbl rc=$RC calls=$(live_calls)]"
+  grep -qF 'SYNTHMARK' "$S/out" "$S/err" && bad16+=" [$_lbl value echoed]"
+done
+cases=$((cases + 1))
+if [[ -z "$bad16" ]]; then ok "C16: a quote, a newline-plus-url or a space in a Cloudflare Access value is refused before curl (exit 2, zero calls, the marker once, nothing echoed)"
+else no "C16: hostile Cloudflare Access value:$bad16"; fi
+
+# C17: a signature that cannot be computed (python3 fails ONLY the HMAC call) is refused before curl, never sent unsigned.
+cases=$((cases + 1))
+REAL_PY3="$(command -v python3)"
+printf '#!%s\n[[ "${1:-}" == "-I" ]] && exit 1\nexec "%s" "$@"\n' "$(command -v bash)" "$REAL_PY3" > "$S/bin/python3"; chmod +x "$S/bin/python3"
+live_run
+rm -f "$S/bin/python3"
+if [[ "$RC" -eq 2 && "$(live_calls)" == 0 && "$(grep -cxF 'SOLEUR_CREDENTIAL_REFUSED script=check-deploy-script-parity reason=token_shape' "$S/err")" == 1 ]]; then
+  ok "C17: an uncomputable signature is refused before curl (exit 2, zero calls, the marker once), never an unsigned request"
+else no "C17: failing python3 (rc=$RC calls=$(live_calls)) $(<"$S/err")"; fi
+
+# C18: xtrace refusal with a live credential: rc 78, no call, no value on output.
+cases=$((cases + 1))
+rm -f "$S/curl.calls"
+env PATH="$S/bin:$PATH" WEBHOOK_DEPLOY_SECRET="$LIVE_KEY" CF_ACCESS_CLIENT_ID="$LIVE_ID" CF_ACCESS_CLIENT_SECRET="$LIVE_SEC" bash -x "$SUT" --status-only >"$S/out" 2>"$S/err"; RC=$?
+if [[ "$RC" -eq 78 && "$(live_calls)" == 0 ]] && ! grep -qF "$LIVE_KEY" "$S/out" "$S/err"; then ok "C18: refuses xtrace with a live credential (rc 78, zero calls, the key not on output)"
+else no "C18: xtrace (rc=$RC calls=$(live_calls))"; fi
+
 if (( pass + fail != cases )); then
   printf '[FATAL] accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
 fi
-FLOOR=15
+FLOOR=21
 if (( cases < FLOOR )); then
   printf '[FATAL] anti-vacuity floor: %d cases ran, expected >= %d\n' "$cases" "$FLOOR" >&2; exit 1
 fi

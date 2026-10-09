@@ -148,7 +148,7 @@ perms_verdict() {
     # Block form: indented entries until the next same-level key.
     sub="$(printf '%s\n' "$block" \
       | awk -v s="$lineno" -v term="$term" 'NR > s { if ($0 ~ term) exit; print }')"
-    if printf '%s\n' "$sub" | grep -qE "$ID_TOKEN_ERE"; then
+    if printf '%s\n' "$sub" | grep -cE >/dev/null "$ID_TOKEN_ERE"; then
       echo "granted"
     else
       echo "denied"
@@ -160,7 +160,7 @@ perms_verdict() {
   # substring matching misclassifies).
   if [[ "$value" == "write-all" ]]; then
     echo "granted"
-  elif printf '%s\n' "$value" | grep -qE "$ID_TOKEN_FLOW_ERE"; then
+  elif printf '%s\n' "$value" | grep -cE >/dev/null "$ID_TOKEN_FLOW_ERE"; then
     echo "granted"
   else
     echo "denied"

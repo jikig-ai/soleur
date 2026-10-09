@@ -355,14 +355,22 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
 Then run the project's test gate. Since #8322 the local default is
-`test-all.sh --affected` — the suites this diff can move plus every always-on
-repo-global ratchet — while CI keeps the full battery (a `pull_request` run declines five self-test mutation batteries whose subject paths the diff does not touch, ADR-262; `push`, `merge_group` and dispatch run them all, so an escape surfaces on the merge-SHA push run). `TEST_GROUP=all` still
+`test-all.sh --affected` — the suites this diff can move plus the always-on
+**fast tier**: since #9763, always-on is pinned to sub-10-second committed-weight
+ratchets (~3 minutes total, enforced by [scripts/test-all-fast-tier-budget](../../../../scripts/test-all-fast-tier-budget.test.sh)).
+The heavier mutation batteries and meta-suites are edge-selected like every other
+suite — they run locally only when their subject paths change, and always in CI
+legs, `merge_group`, `push` and `--full` (a `pull_request` run also declines
+self-test mutation batteries whose subject paths the diff does not touch, ADR-262;
+`push`, `merge_group` and dispatch run them all, so an escape surfaces on the
+merge-SHA push run). `TEST_GROUP=all` still
 INVOKES `apps/web-platform/infra/run-registered-suites.sh` as a nested suite
 whenever the diff touches that directory (the affected selector carries the
 same edge), so the summary accounts for it. Calling `test-all.sh` alone
 "matches CI" is what produced #6969: a green summary read as evidence for
 infra it never executed, at the last gate before merge. An operator who passed
-`soleur:ship --full` gets `test-all.sh --full` instead — the whole battery.
+`soleur:ship --full` gets `test-all.sh --full` instead — the whole battery,
+including the tiered-out suites.
 
 **Probe capacity first (#7545).** An affected run can still DEGRADE to the
 full battery (undecidable diff, runner/index touched, FORCE_ALL), so spend ~3 s
@@ -2480,7 +2488,7 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
 
    ```bash
    gh pr checks <number> --json name,state,description,detailsUrl \
-     | jq '.[] | select(.state != "SUCCESS")'
+     | jq '.[] | select(.state != "SUCCESS" and (.state != "SKIPPED" or (.name | startswith("smoke (") | not)))'
    ```
 
 2. Identify the failing workflow run and read its logs:
