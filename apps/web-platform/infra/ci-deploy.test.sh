@@ -3273,7 +3273,9 @@ assert_cross_workspace_isolation() {
   # verdict, not a pass. rc-only classification would promote a suite that
   # measured nothing.
   local d7 out7 rc7 v10 r10
-  out7=$(run_cwi_deploy "export MOCK_CWI_PROBE_OUT=' Test Files  1 skipped (1)\n      Tests  0 passed (0)'") && rc7=0 || rc7=$?
+  # ($'...' quoting so \n lands as a real newline — the mock's `printf '%s'`
+  # does not interpret escapes, and a single-line blob would test nothing.)
+  out7=$(run_cwi_deploy "export MOCK_CWI_PROBE_OUT=\$' Test Files  1 skipped (1)\n      Tests  0 passed (0)'") && rc7=0 || rc7=$?
   d7=$(printf '%s\n' "$out7" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
   v10=$(jq -r '.verdict // ""' "$d7/wi-state.json" 2>/dev/null || echo "")
   r10=$(jq -r '.reason // ""' "$d7/wi-state.json" 2>/dev/null || echo "")
@@ -3290,7 +3292,7 @@ assert_cross_workspace_isolation() {
   # reporter writes detail); with no FAIL-shaped stdout line it falls back to
   # the exec's first stderr line. Both arms sanitize through _cred_err_tail.
   local d8 out8 rc8 r11a
-  out8=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=1; export MOCK_CWI_PROBE_OUT='Test Files  1 failed (1)\n FAIL  test/sandbox-isolation.test.ts > FR3 sibling read crossed workspaces\n      Tests  5 passed | 1 failed (6)'") && rc8=0 || rc8=$?
+  out8=$(run_cwi_deploy "export MOCK_CWI_PROBE_RC=1; export MOCK_CWI_PROBE_OUT=\$'Test Files  1 failed (1)\n FAIL  test/sandbox-isolation.test.ts > FR3 sibling read crossed workspaces\n      Tests  5 passed | 1 failed (6)'") && rc8=0 || rc8=$?
   d8=$(printf '%s\n' "$out8" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
   r11a=$(jq -r '.reason // ""' "$d8/wi-state.json" 2>/dev/null || echo "")
   TOTAL=$((TOTAL + 1))

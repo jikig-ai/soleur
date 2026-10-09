@@ -105,7 +105,7 @@ assert "WI ledger aliases neither canary ledger" "[[ \"$WIWRITER_DEFAULT\" != \"
 # two restatements makes every ledger read `foreign_ledger_stamp` (all three
 # deploy-status keys permanently 'unknown'). Pin the pairs on BOTH sides.
 assert "writer stamps sandbox-canary / outer-wrap / workspace-isolation" \
-  "grep -q '\"sandbox_broken\" \"\$sentry_op\"' \"$TARGET\" && grep -q \"'workspace-isolation'\" \"$TARGET\""
+  "grep -q '\"sandbox_broken\" \"\$sentry_op\"' \"$TARGET\" && grep -q \"'workspace-isolation'\" \"$TARGET\" && grep -q '\"sandbox-canary\"' \"$TARGET\" && grep -q '\"sandbox-canary-outer-wrap\"' \"$TARGET\""
 assert "readers expect the same three stamps" \
   "grep -q '\"sandbox-canary\"' \"$CAT_TARGET\" && grep -q '\"sandbox-canary-outer-wrap\"' \"$CAT_TARGET\" && grep -q '\"workspace-isolation\"' \"$CAT_TARGET\""
 

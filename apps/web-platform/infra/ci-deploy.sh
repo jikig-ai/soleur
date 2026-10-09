@@ -2787,6 +2787,9 @@ run_workspace_isolation_probe() {
   # credential material, and the vitest output folded into `reason` below can
   # never carry it. The SOLEUR_ISOLATION_* knobs ride env -i's own assignments;
   # docker `-e` flags would be redundant (env -i overrides inheritance anyway).
+  # Side effect: CANARY_NODE_OPTIONS (the heap cap) is scrubbed too — vitest
+  # runs at default heap inside the container's --memory cap; a runaway run
+  # OOMs loud (rc 137 → workspace_isolation_failed), never silently wrong.
   if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
       soleur-web-platform-canary /usr/bin/env -i \
       PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
