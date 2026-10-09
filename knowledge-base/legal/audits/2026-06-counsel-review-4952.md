@@ -8,6 +8,7 @@ status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-06-04
 signed_off_by: "Soleur CLO agent (Jikigai SARL — v1 internal counsel-review attestation authority; operator retains optional veto)"
 disposition: DISCHARGED
+superseded_in_part_by: knowledge-base/legal/audits/2026-10-counsel-review-9776.md
 re_evaluation_triggers: "First arms-length (non-Soleur) Workspace Owner enabling/inheriting autonomous command execution; first EEA-out operator running autonomous mode; first regulated-industry tenant (healthcare/finance/legal); OR any narrowing of the BLOCKED_BASH_PATTERNS blocklist OR widening of the read-only auto-approve allowlist that changes the illustrative blocklist verbs disclosed in AUP §5.7 (which would require re-pinning the disclosure prose AND the AUTONOMOUS_DISCLOSURE_COPY LOCKED COPY in lockstep); OR conversion of autonomous command execution into a third-party-effecting send (which would move it under §3a.1-3a.6 / Art. 22 and require an Art. 22(3) human-review affordance)"
 ---
 
@@ -36,7 +37,11 @@ The PR is held until this disposition is **DISCHARGED**.
 | "no blocklist is perfect. A command that looks safe could still change or delete files in this workspace" | `AUTONOMOUS_DISCLOSURE_COPY` verbatim: "but no blocklist is perfect. A command that looks safe could still change or delete files in this workspace." | MATCH — the contract prose (AUP §5.7 / T&C §3a.7 / §10.4) is the contractual counterpart of the banner; no divergence. |
 | "Only connect repos and accounts you trust" (responsibility) | `AUTONOMOUS_DISCLOSURE_COPY`: "Only connect repos and accounts you trust." | MATCH — AUP §5.7 "Your responsibilities" and T&C §3a.7/§10.4 mirror this. |
 
+> **Superseded 2026-10-08 (#9776): the "Mitigations" row above (git-backed / recovery-surface mitigation claim) is FALSE for a force-push over or deletion of the default branch and for infrastructure teardown, neither of which `BLOCKED_BASH_PATTERNS` blocks; the claim was removed from the banner, AUP §5.7 and T&C §3a.7/§10.4. See `knowledge-base/legal/audits/2026-10-counsel-review-9776.md`.**
+
 No drift found. The contract prose does not over-claim any safety guarantee the code does not provide; the banner's "hides your secrets" claim (secret redaction) is a SUPERSET disclosure the contract does not lean on for any warranty, so its omission from the contract is conservative, not a divergence.
+
+> **Superseded 2026-10-08 (#9776): "hides your secrets" is FALSE as a protection claim (redaction does not protect against a command the model chooses to run) and was removed, and the "No drift found" conclusion above no longer holds for the git-backed claim. See `knowledge-base/legal/audits/2026-10-counsel-review-9776.md`.**
 
 ## Resolution of the five attested questions
 
@@ -75,5 +80,7 @@ T&C §10.4's warranty disclaimer closes with: "This Section does not limit or ex
 | Article 30 disposition | `knowledge-base/legal/compliance-posture.md` (no register edit) | ☑ PASS — no PA amendment required; PA-2 anchor correct; PA-21/22 mis-cite corrected; no §(g) TOM narrowed. |
 
 ## Overall disposition
+
+> **Superseded 2026-10-08 (#9776): this DISCHARGED disposition rested on the git-backed mitigation and the blocklist disclosure being accurate; the exposure to force-push and infrastructure teardown is now disclosed and the ack is reset (disposition re-issued in the #9776 audit). See `knowledge-base/legal/audits/2026-10-counsel-review-9776.md`.**
 
 **DISCHARGED.** All five attested questions PASS; every per-artifact verdict is ☑; the disclosure prose is clean against the implementing `BLOCKED_BASH_PATTERNS`, the `bashAutonomous`/ack HOLD model, and the `AUTONOMOUS_DISCLOSURE_COPY` LOCKED COPY; SHAs and TC_VERSION are correctly pinned; no Article 30 amendment is owed. This is the v1 internal CLO-agent attestation under the Soleur-as-tenant-zero posture; the operator retains an optional veto, and external counsel re-review is reserved for the frontmatter re-evaluation triggers.

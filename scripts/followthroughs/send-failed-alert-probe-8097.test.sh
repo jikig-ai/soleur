@@ -165,10 +165,10 @@ run_case() {
   else fail "$desc -- expected exit=$expected got exit=$rc :: ${out:0:400}"; fi
 }
 expect_out() { # <desc> <grep-pattern>
-  if printf '%s' "$LAST_OUT" | grep -qE -- "$2"; then pass "$1"; else fail "$1 :: ${LAST_OUT:0:400}"; fi
+  if printf '%s' "$LAST_OUT" | grep -cE >/dev/null -- "$2"; then pass "$1"; else fail "$1 :: ${LAST_OUT:0:400}"; fi
 }
 expect_not_out() {
-  if printf '%s' "$LAST_OUT" | grep -qE -- "$2"; then fail "$1 :: ${LAST_OUT:0:400}"; else pass "$1"; fi
+  if printf '%s' "$LAST_OUT" | grep -cE >/dev/null -- "$2"; then fail "$1 :: ${LAST_OUT:0:400}"; else pass "$1"; fi
 }
 expect_calls() { # <desc> <fixed-string that must appear in calls.log>
   if grep -qF -- "$2" "$CALLS"; then pass "$1"; else fail "$1 :: calls.log lacks '$2'"; fi

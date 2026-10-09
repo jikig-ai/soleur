@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=996
-# generated-at=2026-10-08T14:23:56Z
+# generated-at=2026-10-09T04:16:17Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -249,6 +249,7 @@ plugins/soleur/test/ship-pir-action-items-gate.test.sh	2537	measured
 plugins/soleur/test/sync-pr-behind.test.sh	3815	measured
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	602	measured
 plugins/soleur/test/terraform-drift-step-order.test.sh	50	measured
+plugins/soleur/test/test-pyramid-fixtures.test.sh	996	floor
 plugins/soleur/test/ticket-triage-clauses.test.sh	28	measured
 plugins/soleur/test/token-drift-workflow-causes.test.sh	5465	measured
 plugins/soleur/test/unkept-promise-hook.test.sh	2421	measured
@@ -298,6 +299,7 @@ scripts/check-pa-22-unit	1083	measured
 scripts/check-tom4-rls-posture	3643	measured
 scripts/check-tom4-rls-posture-live	281	measured
 scripts/check-web-host-escrow-config	61002	measured
+scripts/ci-demand-census	996	floor
 scripts/ci-deploy-sentry-post-fail-6475	105	measured
 scripts/ci-leg-balance-9232	5478	measured
 scripts/classify-workflow-transitions	2403	measured
@@ -437,6 +439,7 @@ scripts/rule-metrics-aggregate	3090	measured
 scripts/rules-loader-stamp-probe	172	measured
 scripts/run-report-exit-first-contact-8076	1183	measured
 scripts/seccomp-unenforced-alert	91	measured
+scripts/secret-scan-smoke-gate	996	floor
 scripts/send-failed-alert-probe-8097	2146	measured
 scripts/sentry-issue	184	measured
 scripts/sentry-issue-discover	216	measured
@@ -454,6 +457,7 @@ scripts/test-affected-kb-consumers	68386	measured
 scripts/test-all-affected	311400	measured
 scripts/test-all-capacity-signal	4922	measured
 scripts/test-all-enumerate-toolchain	21095	measured
+scripts/test-all-fast-tier-budget	996	floor
 scripts/test-all-group-affected	2903	measured
 scripts/test-all-infra-coverage-notice	128451	measured
 scripts/test-all-killed-classification	4488	measured

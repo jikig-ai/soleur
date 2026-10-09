@@ -488,7 +488,7 @@ fi
 
 # --- 17. AC5 hygiene: no UUID-shaped identifier in the script or this suite ----
 if ! grep -qE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}' "$SUT" "$SCRIPT_DIR/measure-plan-sharp-edges-turns.test.sh" \
-   && ! printf '%s\n' "$OUT" | grep -q '/'; then
+   && ! printf '%s\n' "$OUT" | grep -c >/dev/null '/'; then
   pass "no UUID-shaped identifier in the SUT or the suite; --rows stdout carries no '/'"
 else
   fail "UUID-shaped literal or a path reached the sources/stdout"

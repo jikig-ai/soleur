@@ -1647,8 +1647,16 @@ else
 #!/usr/bin/env bash
 # Stub for the ONE egress site (betterstack-query.sh run_sql). Refuses anything it was not taught.
 url=""; user=""; data=""
+# The Basic-auth pair arrives as one `user = "USER:PASS"` line of curl's stdin config (`--config -`), NOT on argv
+# (#9597): read it only when asked to, and treat a `-u` on argv as the defect it is.
 while [[ $# -gt 0 ]]; do
-  case "$1" in -u) user="$2"; shift 2 ;; -d) data="$2"; shift 2 ;; https://*) url="$1"; shift ;; *) shift ;; esac
+  case "$1" in
+    -u) echo "curl stub: the credential pair is on ARGV (-u); it must ride stdin (--config -)" >> "${CURL_LOG:-/dev/null}"; exit 64 ;;
+    --config) if [[ "$2" == - ]]; then cfg="$(cat)"; user="${cfg#user = \"}"; user="${user%%\"*}"; fi; shift 2 ;;
+    -d) data="$2"; shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
 done
 # no secret-shaped variable (the marker write token above all) may reach the query child
 if [[ -n "$(env | cut -d= -f1 | grep -E 'TOKEN|SECRET|KEY|CREDENTIAL|AUTH|^DOPPLER' || true)" ]]; then echo "curl stub: a secret-shaped variable leaked into the query child" >&2; exit 64; fi

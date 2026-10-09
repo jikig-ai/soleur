@@ -2,7 +2,7 @@
 title: Anthropic Console workspace key (mint, store, rotate, revoke)
 category: credential-rotation
 issue: 8505
-last_verified: 2026-09-23
+last_verified: 2026-10-08
 ---
 
 # Anthropic Console workspace key
@@ -45,7 +45,7 @@ before the org mismatch was caught. It holds nothing and bills nothing.
    doppler run -p soleur -c prd -- bash -c 'curl -sS -D - -o /dev/null https://api.anthropic.com/v1/messages \
      -H @<(printf "x-api-key: %s\n" "$ANTHROPIC_API_KEY") -H "anthropic-version: 2023-06-01" \
      -H "content-type: application/json" \
-     -d "{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"' \
+     -d "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"' \
      | grep -i '^anthropic-organization-id'
    ```
 
@@ -74,7 +74,7 @@ before the org mismatch was caught. It holds nothing and bills nothing.
    curl -sS -D - -o /dev/null https://api.anthropic.com/v1/messages \
      -H @<(printf 'x-api-key: %s\n' "$(cat "$F.raw")") -H "anthropic-version: 2023-06-01" \
      -H "content-type: application/json" \
-     -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+     -d '{"model":"claude-haiku-5-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
      | grep -iE '^(HTTP|anthropic-workspace-id)'
    doppler secrets set <SLOT> -p soleur -c prd_terraform --silent < "$F.raw"
    printf 'file %s  stored %s\n' "$(sha256sum < "$F.raw" | cut -c1-12)" \

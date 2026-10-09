@@ -223,6 +223,11 @@ jobs:
           # #5914 TOFU removal AND the git_data_store= emitter (PR2's first commit). Set by
           # ops when the floor release ships; empty fails closed.
           GIT_DATA_EMITTER_FLOOR: ${{ vars.GIT_DATA_EMITTER_FLOOR }}
+          # the release floor for sandbox_deny_floor (#9725): the running image must
+          # carry the dual-root tenant deny (workspaceTenantDenyRoots covering
+          # WORKTREE_ROOT) — flipping onto an image that denies only
+          # WORKSPACES_ROOT would leave every sibling worktree unmasked.
+          GIT_DATA_DENY_FLOOR: ${{ vars.GIT_DATA_DENY_FLOOR }}
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
@@ -279,7 +284,11 @@ jobs:
           # semver compare: running >= floor
           ver_le() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]; }
           ver_le "$GIT_DATA_EMITTER_FLOOR" "$running" || fail live_image_stale "running $running is below emitter floor $GIT_DATA_EMITTER_FLOOR — wait for the deploy arm, then re-dispatch."
-          echo "preconditions clear: tier_b seam, pin-fault rule live, d6 replace stamped ($last_ok), no deploy in flight, image $running >= $GIT_DATA_EMITTER_FLOOR."
+          # sandbox_deny_floor (#9725): the same live-image floor pattern —
+          # the deny fix must be SERVED before the flag flips, not merely merged.
+          [[ -n "${GIT_DATA_DENY_FLOOR:-}" ]] || fail sandbox_deny_floor "vars.GIT_DATA_DENY_FLOOR unset — set it to the first release carrying the #9725 workspaceTenantDenyRoots deny."
+          ver_le "$GIT_DATA_DENY_FLOOR" "$running" || fail sandbox_deny_floor "running $running is below deny floor $GIT_DATA_DENY_FLOOR — a pre-fix image would deny only WORKSPACES_ROOT while workspaces live under WORKTREE_ROOT; wait for the deploy arm, then re-dispatch."
+          echo "preconditions clear: tier_b seam, pin-fault rule live, d6 replace stamped ($last_ok), no deploy in flight, image $running >= $GIT_DATA_EMITTER_FLOOR, image >= deny floor $GIT_DATA_DENY_FLOOR."
 
       # --- SSH access path (all host-touching modes) --------------------------------
       - name: CF Tunnel SSH bridge

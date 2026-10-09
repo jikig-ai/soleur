@@ -207,3 +207,47 @@ premise correction under `## ADR-070 reconciliation`).
   write surface wired.
 - **`WSMessage` union member + shared reducer.** Rejected by the drift guard and
   by transport semantics — see above.
+
+## Decision addendum (2026-10-08, #9558): the repo-credential surface joins the gated set
+
+**Status: `accepted`.** The persona gate previously covered the clone self-heal, readiness gates,
+worktree lease, C4 write tool, and sandbox write-set — but the GitHub credential surface was still
+dispatched unconditionally: `resolveInstallationId`, `resolveEffectiveInstallationId`, the
+`generateInstallationToken` mint, the `.soleur-askpass.sh` write into the user's `.git/`, and the
+token-derived `ENTITLED_EGRESS_DOMAINS` open all ran on a support turn against a workspace the
+persona never touches.
+
+What changed in `cc-dispatcher.ts`:
+
+- `resolveInstallationId` in the Promise.all and `resolveEffectiveInstallationId` are gated on
+  `mode.runRepoLifecycle` — support resolves `effectiveInstallationId` to `null`, which closes the
+  mint, the C4 tool, and every clone arm downstream by construction.
+- The mint carries a second belt — `mode.sandboxWrite !== "none"` — so the issue's literal
+  invariant (a read-only dispatch must never mint a write-capable credential) survives a future
+  caller that reaches the mint with an installation id.
+- The askpass write (`writeAskpassScriptTo` under `.git/`) is gated on the same predicate; the
+  dispatch-level `reprovisionWorkspaceOnDispatch` (installation resolve + `ensureWorkspaceRepoCloned`
+  mint path) is skipped entirely for `persona === "support"`.
+- The egress posture `log.info` now carries `persona`, so a support dispatch that ever opened
+  egress is attributable in Sentry.
+
+**serviceTokens decision (plan FR3, was flagged inferred):** `getUserServiceTokens` is NOT gated
+as a fetch, but the **github provider entry is stripped post-fetch** when `sandboxWrite === "none"`
+(`cc-dispatcher.ts`: `const serviceTokens = { ...serviceTokensRaw }; if (mode.sandboxWrite ===
+"none") delete serviceTokens.GITHUB_TOKEN;`). The stored `GITHUB_TOKEN` is the user's own GitHub
+credential — squarely inside the surface #9558 names — and an env-visible, transcript-echoable
+credential in a session whose every GitHub egress domain is closed. Every OTHER provider key stays
+injected: they are the user's own third-party credentials, the egress-closed sandbox cannot
+exfiltrate them to the network, and stripping them would cut the support-persona capability of
+service lookups in answers. Review note: a sandboxed command can still ECHO its env into the
+conversation transcript (the model API + transcript logs are a real, if narrower, exposure path
+for the user's own Connected-Services keys) — accepted deliberately for the non-GitHub keys: the
+transcript stays in the user's own session. Recorded here so the choice is deliberate, not an
+omission; revisit if support transcripts ever fan out beyond the session owner. Residual: the
+fetch still decrypts the github key (and can fire the lazy v1→v2 key-version migration write) on
+a support dispatch — env-leak is closed; the wasted decrypt/migration is documented, not gated.
+
+**Token-channel sweep (4.3):** `ghToken`/`gitInstallationToken` (the askpass token) are the only
+agent-env credential channels fed by the dispatch (`buildAgentEnv` opts); `GIT_INSTALLATION_TOKEN`
+rides that env var alone — never the askpass body, never a remote URL. With `ghToken` forced
+`undefined` under support, every channel closes.
