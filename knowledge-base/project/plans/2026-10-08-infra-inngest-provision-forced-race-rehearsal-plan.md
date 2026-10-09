@@ -291,7 +291,11 @@ script, a sentinel test suite, and an orphan-sweep arm.
   `git-data-rung2-evidence-capture.sh`, with a source-liveness anchor so an instrument outage
   reads TRANSIENT, never FAIL) and emits `inngest-provision-rehearsal-evidence.env` as a
   workflow artifact. The workflow runs with `permissions: contents: read`; evidence is never
-  committed by CI — the operator attaches it to #9175 per the runbook.
+  committed by CI.
+<!-- lint-infra-ignore start -->
+  The operator attaches it to #9175 per the runbook — deliberately human: the evidence
+  review IS the closure gate (ADR-084 single-shot discipline), not an automatable step.
+<!-- lint-infra-ignore end -->
 - **Teardown:** `terraform destroy` in a teardown job gated `always()` (plus `teardown_only`
   recovery dispatch), plus a `scheduled-terraform-drift.yml` orphan sweep for the
   `soleur-inngest-rehearsal-*` label/prefix and `rehearsal_*` Doppler environments in project

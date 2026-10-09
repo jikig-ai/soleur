@@ -141,9 +141,9 @@ resource "random_password" "rehearsal_redis_password" {
 # The five secrets the scratch config holds, and NOTHING else — keep the set exact: the
 # boot-time isolation self-check counts config members and FATALs on any unexpected name.
 resource "doppler_secret" "rehearsal_signing_key" {
-  project    = doppler_environment.rehearsal.project
-  config     = doppler_environment.rehearsal.slug
-  name       = "INNGEST_SIGNING_KEY"
+  project = doppler_environment.rehearsal.project
+  config  = doppler_environment.rehearsal.slug
+  name    = "INNGEST_SIGNING_KEY"
   # The signkey-prod- prefix is load-bearing: inngest-server's ExecStart strips exactly that
   # prefix (`${INNGEST_SIGNING_KEY#signkey-prod-}`) — a rehearsal key without it would boot
   # with the prefix still attached, which is a different value than prod computes.
@@ -168,9 +168,9 @@ resource "doppler_secret" "rehearsal_redis_password" {
 }
 
 resource "doppler_secret" "rehearsal_diagnostic_boot" {
-  project    = doppler_environment.rehearsal.project
-  config     = doppler_environment.rehearsal.slug
-  name       = "INNGEST_DIAGNOSTIC_BOOT"
+  project = doppler_environment.rehearsal.project
+  config  = doppler_environment.rehearsal.slug
+  name    = "INNGEST_DIAGNOSTIC_BOOT"
   # THE SAFETY VALUE. Diagnostic boot makes the bootstrap render the SQLite-only ExecStart
   # with --sdk-url pointed at a closed loopback port — the throwaway host adopts NO registry
   # and cannot double-fire prod crons even if every other guard failed. This is the arm the
