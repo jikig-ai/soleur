@@ -248,3 +248,42 @@ session's `CapEff`/`CapBnd` carry no `sys_admin` (test-pinned).
 Verification posture: realized-state probe (`tenant-isolation-probe.sh`, founder-check
 pinned) + committed argv fixture (`infra/agent-outer-wrap-argv.json`) + canary arm —
 all dark-launched before gating, per `wg-dark-launch-deploy-gates`.
+
+## Addendum — 2026-10-09 (#9873 disposition): arm-F elevation dropped; Option B exits via #9773 only
+
+The file-capability elevation arm recorded in the 2026-10-08 addendum was
+**reverted** (#9874, `d7dfd05aac`) after the v0.333.1 deploy rolled back on
+`canary_sandbox_failed`: released bwrap 0.8–0.12 aborts on
+`real_uid != 0 && has_caps()` ("Unexpected capabilities but not setuid"), and a
+capped binary outside the container bounding set fails `execve` outright
+(EPERM, rc 126 — incident #9871). #9873 tracked the replacement elevation arm.
+
+**Disposition (operator-ratified 2026-10-09, brainstorm
+`knowledge-base/project/brainstorms/2026-10-09-outer-wrap-elevation-disposition-brainstorm.md`
++ spec `feat-outer-wrap-elevation-disposition/spec.md`): Option 3 — drop the
+privileged arm.** The remaining non-userns elevation paths were all dead ends or
+net-negative:
+
+- **setuid bwrap** is a dead mechanism: upstream deprecated it at 0.11.2
+  (CVE-2026-41163) and removed it at 0.12.0 — it could only ever run on prod's
+  pinned 0.8.0 and cannot even be tested on the dev host's 0.12.
+- **Any** non-userns elevation needs `CAP_SYS_ADMIN` in the container bounding
+  set at `docker run`, which flips `seccomp-bwrap.json` onto its permissive
+  CAP_SYS_ADMIN shape for every process and makes every setuid binary already
+  in the image (`su`, `mount`, `newgrp`) a root-capable escalation carrier.
+  A setuid bwrap reachable by agent-executed code is also the primitive that
+  re-mounts over the deny mounts in force today — self-defeating.
+- The executor topology (#9773, epic #9842) was operator-approved the same week
+  and subsumes the wrap's entire purpose; the challenge review dropped the
+  "arm-F uid envelope" premise, so any in-container elevation would be strictly
+  interim spend against a funded replacement that closes the superset.
+
+`AGENT_OUTER_WRAP` stays flag-off on the shared prod container (the
+implicit-userns fallback still serves hosts that permit it); sibling workspace
+**content** stays masked by the #5862 `denyRead` + realpath hook, which is now
+indefinitely load-bearing (#9798's post-promotion cleanup premise is void).
+The open residual — sibling filesystem *existence*/mount-table presence — exits
+only with **#9773 Stage 1**. **Revisit trigger:** if Stage-1 GA slips materially
+(~8 weeks) or a realized sibling-filesystem incident lands, the interim arm is
+re-opened as a bespoke minimal setuid launcher (fixed-argv
+mount+bind+drop-uid+exec), never setuid bwrap.
