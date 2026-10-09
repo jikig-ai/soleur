@@ -161,6 +161,65 @@ STUB
 }
 queue_arm() { printf '%s' 'exec bash "$(dirname "$0")/gql-stub" "$@"'; }
 
+# `gh api repos/<o>/<r>/rules/branches/main` stub (the merge_queue rule read). Like gql-stub it serves the RAW
+# live-shape JSON array (captured read-only from this repo on 2026-10-09: merge_queue is the SECOND entry, with a
+# `parameters` object, beside unrelated rule types) and runs the `--jq` the SUT passed, so a selector mutation
+# (`.[0].type`) changes the answer. Modes (rules-mode, re-read every call): none ([]) | queue | queue2 (two merge_queue
+# entries) | other (the live shape minus merge_queue) | fail (exit 1) | empty (rc 0, no output) | garbage (rc 0, not JSON) |
+# flip ([] on the first call, queue after: the counter is the line count of rules-calls). Every call appends its argv to
+# rules-calls. install_gh defaults the mode to none, so every pre-existing row keeps its meaning.
+install_rules() {  # <bin> <mode>
+  local bin="$1" mode="$2"
+  assert_fixture_dir "$bin"
+  mkdir -p "$bin"
+  printf '%s\n' "$mode" > "$bin/rules-mode"
+  cat > "$bin/rules-stub" <<'STUB'
+#!/usr/bin/env bash
+d="$(cd "$(dirname "$0")" && pwd)"
+echo "$*" >> "$d/rules-calls"
+mode="$(cat "$d/rules-mode")"
+jqx=""; prev=""
+for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; prev="$a"; done
+cnt="$(wc -l < "$d/rules-calls" | tr -d ' ')"
+case "$mode" in
+  fail)    echo "gh: HTTP 502 from fixture (rules)" >&2; exit 1 ;;
+  empty)   exit 0 ;;
+  garbage) echo '<html>502 Bad Gateway</html>'; exit 0 ;;
+  flip)    if [[ "$cnt" -le 1 ]]; then mode=none; else mode=queue; fi ;;
+esac
+RSC='{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}'
+MQ='{"type":"merge_queue","parameters":{"check_response_timeout_minutes":60,"grouping_strategy":"ALLGREEN","max_entries_to_build":5,"max_entries_to_merge":5,"merge_method":"SQUASH","min_entries_to_merge":1,"min_entries_to_merge_wait_minutes":5}}'
+REST='{"type":"deletion"},{"type":"non_fast_forward"}'
+case "$mode" in
+  queue)  body="[$RSC,$MQ,$RSC,$REST]" ;;
+  queue2) body="[$RSC,$MQ,$MQ,$REST]" ;;
+  other)  body="[$RSC,$RSC,$REST]" ;;
+  none)   body='[]' ;;
+esac
+if [[ -z "$jqx" ]]; then printf '%s\n' "$body"; exit 0; fi
+printf '%s' "$body" | jq -r "$jqx"
+STUB
+  chmod +x "$bin/rules-stub"
+}
+
+# `git` PATH shim for the merge-queue rows: logs every argv to git-calls, then execs the REAL git (resolved to an
+# absolute path BEFORE the shim dir is put on PATH, so it cannot re-enter itself). The "no push" assertions read this
+# log; a shim that records nothing would make every one of them vacuous, so the rows also require `rev-parse` (which
+# the queue gate always runs) to be present.
+install_git_shim() {  # <bin>
+  local bin="$1" real
+  assert_fixture_dir "$bin"
+  real="$(command -v git)"
+  [[ "$real" == /* ]] || { echo "FATAL: git did not resolve to an absolute path" >&2; exit 97; }
+  mkdir -p "$bin"
+  cat > "$bin/git" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "\$(cd "\$(dirname "\$0")" && pwd)/git-calls"
+exec "$real" "\$@"
+EOF
+  chmod +x "$bin/git"
+}
+
 # First `gh pr view` state read returns $2; subsequent reads return $3 (default
 # OPEN CLEAN, so a successful sync is not scored as "still BEHIND", exit 8). The
 # standalone loop's headRefName read answers $4 (default `feat`, the fixture branch)
@@ -172,12 +231,14 @@ install_gh() {
   assert_fixture_dir "$bin"
   mkdir -p "$bin"
   install_gql "$bin" "$queue" "${QPR:-1}"
+  install_rules "$bin" none
   printf '%s\n' "0" > "$bin/gh-n"
   cat > "$bin/gh" <<EOF
 #!/usr/bin/env bash
 if [[ "$mode" == fail ]]; then echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
 case "\$*" in *headRefName*) echo "$head"; exit 0 ;; esac
 case "\$1 \$2" in "api graphql") $(queue_arm "$queue") ;; esac
+case "\$*" in *rules/branches/*) exec bash "\$(dirname "\$0")/rules-stub" "\$@" ;; esac
 nfile=\$(dirname "\$0")/gh-n
 n=\$(cat "\$nfile")
 n=\$((n+1))
@@ -407,6 +468,7 @@ install_gh_forbidden() {
   cat > "$bin/gh" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in "api graphql") $(queue_arm "$queue") ;; esac
+echo "\$*" >> "\$(dirname "\$0")/calls"
 echo "UNEXPECTED gh call: \$*"
 exit 99
 EOF
@@ -1041,6 +1103,166 @@ if [[ "$(cat "$QD/out2")" == "not_queued OPEN armed removal=none" ]]; then
 else fail "marker leaked across worktrees: out=$(tr '\n' ' ' < "$QD/out2")"; fi
 rm -rf "$QD"
 
+# =============================================================================
+# Armed BEHIND PR on a merge-queue repo (2026-10-09, PR 9839 incident). Between `gh pr merge --auto` and the enqueue the
+# PR is OPEN, BEHIND, armed and NOT in the queue; queue_gate cannot see it, and a sync there pushes a commit that restarts
+# every required check for nothing (the queue makes the PR current itself). The standalone loop must answer
+# kind=queue_wait (exit 0) with NO fetch, merge or push when `main` has a merge_queue rule AND auto-merge is armed.
+# The rules read is the stub above (raw live-shape JSON through the SUT's own --jq); `git` is a recording shim, so
+# "no push" is asserted from the log of every git call, never inferred.
+# =============================================================================
+export PR_QUEUE_REPO=o/r
+# qw_run <rules-mode> <gql-mode> <state1> <state2> [loop args…] — one loop run in a fresh fixture. Leaves the fixture in
+# QW_D, the exit code in QW_RC, the moved flag (HEAD, origin/feat or origin/main changed) in QW_MOVED. QW_SUT overrides the
+# script under test (the in-suite mutant rows).
+qw_run() {
+  local rmode="$1" gmode="$2" s1="$3" s2="$4" h r m; shift 4
+  QW_D="$(mktemp -d "$TMPDIR/sync-qw.XXXXXXXX")"; FIXTURES+=("$QW_D")
+  make_pair "$QW_D"
+  advance_main "$QW_D" h extra
+  if [[ -n "${QW_SUT:-}" ]]; then cp "$QW_SUT" "$QW_D/work/plugins/soleur/scripts/sync-pr-behind.sh"; fi
+  export QPR="$QUEUE_PR"
+  install_gh "$QW_D/bin" "$s1" "$s2" feat ok "$gmode"
+  printf '%s\n' "$rmode" > "$QW_D/bin/rules-mode"
+  install_git_shim "$QW_D/bin"
+  h="$(git -C "$QW_D/work" rev-parse HEAD)"
+  r="$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)"
+  m="$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)"
+  run_loop "$QW_D" "$@"; QW_RC=$?
+  unset QPR
+  QW_MOVED=no
+  [[ "$h" == "$(git -C "$QW_D/work" rev-parse HEAD)" && "$r" == "$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)" \
+     && "$m" == "$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)" ]] || QW_MOVED=yes
+  collect "$QW_D/out" "$QW_D/err"
+}
+# Predicates grep the log FILE directly (a pipe into `grep -q` takes SIGPIPE under pipefail and fails open on a negation).
+qw_gitcalls() { { cat "$QW_D/bin/git-calls" 2>/dev/null || true; }; }
+qw_wrote() { grep -qE '^(push|fetch|merge)( |$)' "$QW_D/bin/git-calls" 2>/dev/null; }   # a fetch, merge or push happened
+qw_pushes() { grep -cE '^push( |$)' "$QW_D/bin/git-calls" 2>/dev/null || true; }
+qw_rulescalls() { { cat "$QW_D/bin/rules-calls" 2>/dev/null || true; } | wc -l | tr -d ' '; }
+qw_done() { rm -rf "$QW_D"; }
+QW_LINE='^\[pr-behind-sync\] kind=queue_wait rc=0 — '
+
+# The queue-armed arm the incident hit: BEHIND + armed + merge_queue rule. Nothing is fetched, merged or pushed.
+q1_ok() {  # → 0 iff the refusal arm holds in QW_D (rows Q1 / Q1b and the in-suite mutant rows)
+  [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && grep -qE "$QW_LINE" "$QW_D/out" \
+    && ! grep -q 'auto-sync [0-9]* pushed' "$QW_D/out" && ! grep -q 'kind=behind\|BEHIND detected' "$QW_D/out" \
+    && grep -q '^rev-parse' "$QW_D/bin/git-calls" 2>/dev/null && ! qw_wrote
+}
+qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
+if q1_ok && [[ "$(qw_rulescalls)" == 1 ]] && grep -q 'repos/o/r/rules/branches/main' "$QW_D/bin/rules-calls" \
+   && grep -qE 'queue_wait.*not syncing' "$QW_D/out" && grep -q 'merge-queue-dequeue.md' "$QW_D/out"; then
+  pass "Q1 queue-armed: kind=queue_wait rc 0, no fetch/merge/push in the git-call log, HEAD/origin/feat/origin/main unmoved, one rules read of repos/o/r/rules/branches/main"
+else
+  fail "Q1 queue-armed: rc=$QW_RC moved=$QW_MOVED rules-calls=$(qw_rulescalls) git-calls=$(qw_gitcalls | tr '\n' ',' | cut -c1-200) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300) err=$(tr '\n' ' ' < "$QW_D/err" | cut -c1-200)"
+fi
+qw_done
+qw_run queue2 notqueued "OPEN BEHIND" "OPEN BEHIND"
+if q1_ok; then pass "Q1b two merge_queue entries: still kind=queue_wait (the count is >= 1, not == 1)"
+else fail "Q1b two entries: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+
+# Queue-absent: today's behaviour. The shim must RECORD the push (the positive control for every "no push" row above).
+qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == yes ]] && grep -q 'auto-sync 1 pushed' "$QW_D/out" && [[ "$(qw_pushes)" -ge 1 ]] \
+   && ! grep -q 'kind=queue_wait' "$QW_D/out"; then
+  pass "Q2 queue-absent (rules []): still syncs and pushes, and the git shim recorded the push"
+else fail "Q2 queue-absent: rc=$QW_RC moved=$QW_MOVED git-calls=$(qw_gitcalls | tr '\n' ',' | cut -c1-200) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# Armed but the base has no merge_queue rule (the live shape minus merge_queue): still syncs.
+qw_run other notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == yes ]] && grep -q 'auto-sync 1 pushed' "$QW_D/out" && ! grep -q 'kind=queue_wait' "$QW_D/out" \
+   && [[ "$(qw_rulescalls)" == 1 ]]; then
+  pass "R2 armed, no merge_queue rule: still syncs (rules read once)"
+else fail "R2 armed without a queue rule: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# A merge_queue rule but auto-merge is NOT armed: syncs, and the rules endpoint is never asked (armed is checked first).
+r3_ok() { [[ "$QW_RC" -eq 0 && "$QW_MOVED" == yes ]] && grep -q 'auto-sync 1 pushed' "$QW_D/out" && ! grep -q 'kind=queue_wait' "$QW_D/out" && [[ "$(qw_rulescalls)" == 0 ]]; }
+qw_run queue dequeued "OPEN BEHIND" "OPEN CLEAN"
+if r3_ok; then pass "R3 merge_queue rule but auto-merge disarmed: still syncs; no rules read (armed is checked first)"
+else fail "R3 rule, not armed: rc=$QW_RC moved=$QW_MOVED rules-calls=$(qw_rulescalls) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# DIRTY (merge-tree clean) + rule + armed: the guard is BEHIND-only, so the kb-index class still resolves (no livelock).
+qw_run queue notqueued "OPEN DIRTY" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == yes ]] && grep -q 'auto-sync 1 pushed' "$QW_D/out" && ! grep -q 'kind=queue_wait' "$QW_D/out" && [[ "$(qw_rulescalls)" == 0 ]]; then
+  pass "R4 DIRTY + rule + armed: still syncs (the guard fires for BEHIND only)"
+else fail "R4 DIRTY: rc=$QW_RC moved=$QW_MOVED rules-calls=$(qw_rulescalls) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# An unreadable rules read while armed FAILS CLOSED (kind=gh, rc 4), like queue_gate: a push to a queued PR would dequeue it.
+for rm_ in fail garbage empty; do
+  qw_run "$rm_" notqueued "OPEN BEHIND" "OPEN CLEAN"
+  if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -qE '^\[pr-behind-sync\] kind=gh rc=4 — .*merge-queue rule read failed' "$QW_D/out" && ! qw_wrote; then
+    pass "R5 rules read $rm_ while armed: kind=gh rc 4, nothing fetched, merged or pushed"
+  else fail "R5 rules read $rm_: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+  qw_done
+done
+# Second attempt (the gate runs EVERY attempt): the first read has no queue rule and syncs; the rule appears before the
+# second attempt, which must answer kind=queue_wait — never kind=noop, never a second push. Both state reads are BEHIND.
+qw_run flip notqueued "OPEN BEHIND" "OPEN BEHIND" --max-attempts 2
+if [[ "$QW_RC" -eq 0 ]] && [[ "$(grep -c 'auto-sync [0-9]* pushed' "$QW_D/out")" == 1 ]] && grep -qE "$QW_LINE" "$QW_D/out" \
+   && ! grep -q 'kind=noop' "$QW_D/out" && [[ "$(qw_rulescalls)" == 2 ]] && [[ "$(qw_pushes)" == 1 ]]; then
+  pass "R6 second attempt: attempt 1 pushes, attempt 2 reads the rule again and answers kind=queue_wait (2 rules reads, 1 push, no noop)"
+else fail "R6 second attempt: rc=$QW_RC rules-calls=$(qw_rulescalls) pushes=$(qw_pushes) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
+# In the queue: unchanged kind=queued from queue_gate, before the rules endpoint is ever asked.
+qw_run queue queued "OPEN BEHIND" "OPEN BEHIND"
+if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && grep -q '^\[pr-behind-sync\] kind=queued rc=0 — ' "$QW_D/out" && [[ "$(qw_rulescalls)" == 0 ]]; then
+  pass "R7 in the queue: unchanged kind=queued, no rules read"
+else fail "R7 in queue: rc=$QW_RC moved=$QW_MOVED rules-calls=$(qw_rulescalls) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# --step is the Phase 7 fence's call and is unguarded by design (the fence owns the queue decision and its expiry): it
+# still syncs on a queue repo, and makes NO gh call besides the queue read (the forbidden stub logs every other argv).
+R8="$(mktemp -d "$TMPDIR/sync-qw-step.XXXXXXXX")"; FIXTURES+=("$R8")
+make_pair "$R8"; advance_main "$R8" h extra
+export QPR="$QUEUE_PR"; install_gh_forbidden "$R8/bin" notqueued; install_rules "$R8/bin" queue; unset QPR
+before="$(git -C "$R8/work" rev-parse HEAD)"
+QPR="$QUEUE_PR" run_step "$R8"; rc=$?
+if [[ "$rc" -eq 0 && "$(git -C "$R8/work" rev-parse HEAD)" != "$before" ]] && no_gh "$R8" && [[ ! -s "$R8/bin/calls" ]]; then
+  pass "R8 --step on a queue repo: unguarded (still syncs), and its only gh call is the queue read"
+else fail "R8 --step: rc=$rc calls=$(tr '\n' ' ' < "$R8/bin/calls" 2>/dev/null) out=$(tr '\n' ' ' < "$R8/out" | cut -c1-300)"; fi
+collect "$R8/out" "$R8/err"; rm -rf "$R8"
+
+# H1: the git shim must RECORD. A shim that execs without logging would turn every "no push" assertion above vacuous, so
+# mutate the shim and require Q1's own check to go red.
+qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
+q1_ok || fail "H1 control: the Q1 arm is not green before the shim mutation"
+printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$(command -v git)" > "$QW_D/bin/git"
+rm -f "$QW_D/bin/git-calls"
+if ( cd "$QW_D/work" && PATH="$QW_D/bin:$PATH" bash "$QW_D/work/plugins/soleur/scripts/sync-pr-behind.sh" "$QUEUE_PR" >/dev/null 2>&1 ); [[ ! -s "$QW_D/bin/git-calls" ]]; then
+  pass "H1 harness: a non-recording git shim leaves git-calls empty, so q1_ok (which requires rev-parse) would go red"
+else fail "H1 harness: the unlogged shim still produced a git-calls log"; fi
+qw_done
+
+# MUTATION ROWS (in-suite, permanent): each mutant of the SUT must turn its scenario red; the control is the real SUT. Each
+# mutation is asserted to differ from the SUT and to land inside queue_wait_gate, so a no-op replace cannot read as a catch.
+qw_scenario() {  # <kind: q1|r3> → 0 iff the scenario holds against $QW_SUT
+  local kind="$1" ok=1
+  case "$kind" in
+    q1) qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"; q1_ok && ok=0 ;;
+    r3) qw_run queue dequeued "OPEN BEHIND" "OPEN CLEAN"; r3_ok && ok=0 ;;
+  esac
+  qw_done
+  return "$ok"
+}
+QW_SUT=""
+if qw_scenario q1 && qw_scenario r3; then pass "mutation control: the real SUT satisfies the queue-armed and disarmed scenarios"
+else fail "mutation control: the real SUT fails the queue-armed or disarmed scenario"; fi
+SUT_SRC="$(cat "$SUT")"
+qw_mutant() {  # <label> <scenario> <old> <new>
+  local label="$1" kind="$2" old="$3" new="$4" md mut
+  [[ "$SUT_SRC" == *"$old"* ]] || { fail "mutation '$label': the anchor text is absent from the SUT (fix the row)"; return; }
+  md="$(mktemp -d "$TMPDIR/sync-qwmut.XXXXXXXX")"; FIXTURES+=("$md"); assert_fixture_dir "$md"
+  mut="$md/sync-pr-behind.sh"; printf '%s\n' "${SUT_SRC/"$old"/"$new"}" > "$mut"
+  if cmp -s "$mut" "$SUT"; then fail "mutation '$label': the mutant equals the SUT"; rm -rf "$md"; return; fi
+  QW_SUT="$mut"
+  if qw_scenario "$kind"; then fail "mutation '$label' SURVIVED: the '$kind' scenario stayed green"; else pass "mutation '$label' caught by the '$kind' scenario"; fi
+  QW_SUT=""; rm -rf "$md"
+}
+qw_mutant "delete the queue_wait_gate call" q1 $'  queue_wait_gate "$state_line"\n' ''
+qw_mutant "drop the armed condition (rule only)" r3 $'  [[ "$am" == armed ]] || return 0\n' ''
+qw_mutant "read the first rule instead of selecting .type == merge_queue" q1 '[.[] | select(.type == "merge_queue")]' '[.[0] | select(.type == "merge_queue")]'
+unset PR_QUEUE_REPO
+
 # --- argv strictness and --help (no fixture needed: neither touches git) ---------
 NOWT="$(mktemp -d "$TMPDIR/sync-notworktree.XXXXXXXX")"
 FIXTURES+=("$NOWT")
@@ -1120,5 +1342,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 95 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 112 ]]
 exit $?
