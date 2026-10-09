@@ -4,37 +4,37 @@ Plan: `knowledge-base/project/plans/2026-10-09-ci-skip-duplicate-push-main-run-s
 
 ## Phase 0: Tests first
 
-- [ ] 0.1 `scripts/ci-push-dedupe.test.sh` (extract-and-execute proof body, parity, truth table, Guard 1 matrix rows 1-12), RED on the unmodified `ci.yml`; register it in `scripts/test-all.sh` in the same commit
-- [ ] 0.2 Extend `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` (W2 counts the non-leg `push-dedupe` need; aggregator body, `env:` and loop byte-identical)
+- [x] 0.1 `scripts/ci-push-dedupe.test.sh` (extract-and-execute proof body, parity, truth table, Guard 1 matrix rows 1-12), RED on the unmodified `ci.yml`; register it in `scripts/test-all.sh` in the same commit
+- [x] 0.2 Extend `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` (W2 counts the non-leg `push-dedupe` need; aggregator body, `env:` and loop byte-identical)
 
 ## Phase 1: Measurements and ADR amendments (before any `.github/` edit)
 
-- [ ] 1.1 Commit `measurements/keying-2026-10-09.tsv` (push runs, matching `merge_group` runs, `test` job conclusion) and `measurements/push-cost-baseline.tsv` (census `ci.yml` push rows for 2026-10-07T13:04Z-19:04Z)
-- [ ] 1.2 Classify the 8 push-only reds (does the next push run fail the same job)
-- [ ] 1.3 Append the ADR-276 S2 amendment (Edit tool, unique anchor; `git diff origin/main` shows 0 deletions; status stays `proposed`)
-- [ ] 1.4 Append the ADR-217 amendment and `amended_by: [ADR-276]` (1 changed frontmatter line only)
-- [ ] 1.5 `bash scripts/check-adr-ordinals.sh`; commit
+- [x] 1.1 Commit `measurements/keying-2026-10-09.tsv` (push runs, matching `merge_group` runs, `test` job conclusion) and `measurements/push-cost-baseline.tsv` (census `ci.yml` push rows for 2026-10-07T13:04Z-19:04Z)
+- [x] 1.2 Classify the 8 push-only reds (does the next push run fail the same job)
+- [x] 1.3 Append the ADR-276 S2 amendment (Edit tool, unique anchor; `git diff origin/main` shows 0 deletions; status stays `proposed`)
+- [x] 1.4 Append the ADR-217 amendment and `amended_by: [ADR-276]` (1 changed frontmatter line only)
+- [x] 1.5 `bash scripts/check-adr-ordinals.sh`; commit
 
 ## Phase 2: Workflow change
 
-- [ ] 2.1 Compute the release workflow's CI budget slack (`run_declared_path`, B9) on the unedited tree; set the `push-dedupe` `timeout-minutes` to fit
-- [ ] 2.2 Add the `push-dedupe` job and the eight `needs`/`if` edits in `.github/workflows/ci.yml`; comment above the job
-- [ ] 2.3 `scripts/pr-fanout-ledger.txt` `ci.yml` row 24 to 25 from `yaml.safe_load(...)['jobs']`, with consequence text
-- [ ] 2.4 Suites GREEN: proof suite, aggregator diagnosis, fan-out ledger, concurrency key, deploy invariants, `prod-version-drift-check.test.sh`
+- [x] 2.1 Compute the release workflow's CI budget slack (`run_declared_path`, B9) on the unedited tree; set the `push-dedupe` `timeout-minutes` to fit
+- [x] 2.2 Add the `push-dedupe` job and the eight `needs`/`if` edits in `.github/workflows/ci.yml`; comment above the job
+- [x] 2.3 `scripts/pr-fanout-ledger.txt` `ci.yml` row 24 to 25 from `yaml.safe_load(...)['jobs']`, with consequence text
+- [x] 2.4 Suites GREEN: proof suite, aggregator diagnosis, fan-out ledger, concurrency key, deploy invariants, `prod-version-drift-check.test.sh`
 
 ## Phase 3: Probe and registrations
 
-- [ ] 3.1 `scripts/followthroughs/ci-push-dedupe-soak-9512.sh` and `.test.sh` (Guard 2 rows 1-6)
-- [ ] 3.2 File the follow-through tracker issue (directive, labels, milestone, `User-Impact:` and `Fix-Size:` lines)
-- [ ] 3.3 Registrations: `scripts/test-all.sh`, `regenerate-shard-manifest.py --incremental --write`, `scripts/lib/test-affected-paths.sh` edges, kb-consumers baseline rows if needed
-- [ ] 3.4 Read the three followthrough probes and two skill references for a "test job ran" or "full push run" assumption
+- [x] 3.1 `scripts/followthroughs/ci-push-dedupe-soak-9512.sh` and `.test.sh` (Guard 2 rows 1-6)
+- [x] 3.2 File the follow-through tracker issue (directive, labels, milestone, `User-Impact:` and `Fix-Size:` lines)
+- [x] 3.3 Registrations: `scripts/test-all.sh`, `regenerate-shard-manifest.py --incremental --write`, `scripts/lib/test-affected-paths.sh` edges, kb-consumers baseline rows if needed
+- [x] 3.4 Read the three followthrough probes and two skill references for a "test job ran" or "full push run" assumption
 
 ## Phase 4: Direct pre-push verification (detached, output to a file, Monitor to wait)
 
-- [ ] 4.1 Proof suite, aggregator diagnosis, fan-out ledger, concurrency key, deploy invariants, drift check, probe suite
-- [ ] 4.2 `scripts/test-affected-kb-consumers.test.sh`, `.claude/hooks/grep-q-pipe-guard.test.sh`, `scripts/guard-vacuity-floor.test.sh`
-- [ ] 4.3 `lint-guard-contract.py`, `check-adr-ordinals.sh`, `c4-count-parity.test.sh`
-- [ ] 4.4 Loaded-machine loop (50 runs) for any suite using `timeout`, `sleep`, `date` arithmetic, signals or process groups
+- [x] 4.1 Proof suite, aggregator diagnosis, fan-out ledger, concurrency key, deploy invariants, drift check, probe suite
+- [x] 4.2 `scripts/test-affected-kb-consumers.test.sh`, `.claude/hooks/grep-q-pipe-guard.test.sh`, `scripts/guard-vacuity-floor.test.sh`
+- [x] 4.3 `lint-guard-contract.py`, `check-adr-ordinals.sh`, `c4-count-parity.test.sh`
+- [x] 4.4 Loaded-machine loop (50 runs) for any suite using `timeout`, `sleep`, `date` arithmetic, signals or process groups
 
 ## Phase 5: Ship and post-merge
 
@@ -45,11 +45,11 @@ Plan: `knowledge-base/project/plans/2026-10-09-ci-skip-duplicate-push-main-run-s
 
 ## Deepen-pass additions (2026-10-09)
 
-- [ ] D.1 Proof binds `event == merge_group`, repository, workflow path; `$GITHUB_OUTPUT` and annotations carry only literals (Guard 1 rows 13-15)
-- [ ] D.2 `push-dedupe` `timeout-minutes: 3` alone on its line (CI budget: path 70, budget 75); re-run the release workflow's awk and B9 on the edited tree
-- [ ] D.3 `would-elide` step (jobs API `steps[]`), `proof_error` warning, layer-6 citations in the Observability block
-- [ ] D.4 Probe: FAIL before NOT YET on every sweep, mean cost computed by the probe, `S2-EXIT-CENSUS:` marker required, 30-day never-activated exit 1 (Guard 2 rows 7-8)
-- [ ] D.5 CODEOWNERS lines for the proof suite and the probe; read the `main` ruleset's `require_code_owner_review` before PM-2
-- [ ] D.6 Keying TSV adds the share of `merge_group` runs completed before the push run was created
-- [ ] D.7 Read `scripts/regenerate-shard-manifest.py` `green_main_runs` and the two leg-balance probes; filter elided runs
-- [ ] D.8 PM-0 (first push run on `main`) and PM-6 (rollback) in the tracker checklist; PM-3 is the first run with `elide=true`
+- [x] D.1 Proof binds `event == merge_group`, repository, workflow path; `$GITHUB_OUTPUT` and annotations carry only literals (Guard 1 rows 13-15)
+- [x] D.2 `push-dedupe` `timeout-minutes: 3` alone on its line (CI budget: path 70, budget 75); re-run the release workflow's awk and B9 on the edited tree
+- [x] D.3 `would-elide` step (jobs API `steps[]`), `proof_error` warning, layer-6 citations in the Observability block
+- [x] D.4 Probe: FAIL before NOT YET on every sweep, mean cost computed by the probe, `S2-EXIT-CENSUS:` marker required, 30-day never-activated exit 1 (Guard 2 rows 7-8)
+- [x] D.5 CODEOWNERS lines for the proof suite and the probe; read the `main` ruleset's `require_code_owner_review` before PM-2
+- [x] D.6 Keying TSV adds the share of `merge_group` runs completed before the push run was created
+- [x] D.7 Read `scripts/regenerate-shard-manifest.py` `green_main_runs` and the two leg-balance probes; filter elided runs
+- [x] D.8 PM-0 (first push run on `main`) and PM-6 (rollback) in the tracker checklist; PM-3 is the first run with `elide=true`
