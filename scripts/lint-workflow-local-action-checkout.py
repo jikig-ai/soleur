@@ -45,16 +45,20 @@ a tree whose workflows reference `./.github/actions/…` while that directory is
 rather than silently walking zero composites.
 
 THIRD SURFACE (ADR-280). A job that sends a credential through `scripts/lib/bearer-curl.sh` — by
-`uses:` of one of the two composites that source it (`notify-ops-email`, `anthropic-preflight`), or by a
-`run:` step that names the library path — needs a checkout that actually materialises
-`scripts/lib/`: usable per `checkout_usable()` (so no `path:`, no foreign `repository:`), AND, when it
-carries a `sparse-checkout:` cone, one that includes `scripts`. The library is sourced from the job's own
-workspace, so a job without it cannot send, and there is no argv fallback. The workflow must also not be
-triggered by `pull_request_target`: that trigger runs with secrets against a ref the author controls, and
-these steps hold the credentials. Both properties are true of every caller today by accident (measured:
-24 composite call steps, all after a plain checkout; the `pull_request_target` set — apply-sentry-infra,
-cla, cla-evidence, dev-ledger-reconcile, merge-queue-cla-synthetics, secret-scan — calls neither
-composite); this makes them checked.
+`uses:` of a composite whose steps source it (the set is DERIVED from `.github/actions/**/action.yml`
+and always includes `notify-ops-email` and `anthropic-preflight`), or by a `run:` step that names the
+library path — needs a checkout that actually materialises `scripts/lib/`: usable per
+`checkout_usable()` (so no `path:`, no foreign `repository:`), AND, when it carries a
+`sparse-checkout:` cone, one with a path segment `scripts` (or a path under `scripts/lib`; a prefix such
+as `scripts-old` does not count). The library is sourced from the job's own workspace, so a job without
+it cannot send, and there is no argv fallback. The workflow must also not be triggered by
+`pull_request_target` (it runs with secrets against a ref the author controls), and a consumer job on a
+`workflow_run`/`issue_comment`/`pull_request_review*`/`issues` trigger must not check out a head ref
+(`head_sha`, `head_ref`, `pull_request.head`), for the same reason. Measured when this was written: the
+24 composite call steps all follow a checkout whose ref is the default one, except
+`fix-constraints-stage-a` (checks out the PR head under plain `pull_request`, so it resolves the
+composite and the library from the same tree); `cla`, `cla-evidence` and `dev-ledger-reconcile` are the
+`pull_request_target` workflows and call neither composite. This makes those properties checked.
 
 NAMED NON-PROPERTIES (so the claim is not overstated). `if:` is compared as a string, never
 evaluated — a `./` step whose `if:` legitimately narrows its checkout's is a loud false positive
@@ -99,7 +103,9 @@ MIN_ACTION_FILES = 1
 # Third surface (ADR-280): the steps that send a credential through the shared library. The population floor
 # lives in the suite's live row, where the real tree is scanned, not here: a fixture tree legitimately has few.
 LIB_PATH = "scripts/lib/bearer-curl.sh"
-LIB_COMPOSITE = re.compile(r"^(\./|\$/)\.github/actions/(notify-ops-email|anthropic-preflight)/?$")
+LIB_COMPOSITE_DEFAULT = ("notify-ops-email", "anthropic-preflight")
+UNTRUSTED_REF_TRIGGERS = {"workflow_run", "issue_comment", "pull_request_review", "pull_request_review_comment", "issues"}
+HEAD_REF = re.compile(r"head_sha|head_ref|pull_request\.head|workflow_run\.head")
 
 
 def usage_error(msg: str) -> int:
@@ -144,6 +150,16 @@ def checkout_usable(checkout: dict, step: dict) -> bool:
     return str(checkout.get("if")) == str(step.get("if"))
 
 
+def cone_names_scripts(patterns: list) -> bool:
+    """A sparse cone materialises scripts/lib/ iff a pattern IS `scripts`, is under `scripts/`, or is `/`-rooted
+    at one of those. A string prefix (`scripts-old`, `scripts_x`) does not."""
+    for pat in patterns:
+        seg = str(pat).strip().lstrip("/").rstrip("/")
+        if seg == "scripts" or seg.startswith("scripts/"):
+            return True
+    return False
+
+
 def checkout_has_lib(checkout: dict, step: dict) -> bool:
     """A checkout that serves `step` AND materialises scripts/lib/ (a sparse cone must name `scripts`)."""
     if not checkout_usable(checkout, step):
@@ -153,15 +169,37 @@ def checkout_has_lib(checkout: dict, step: dict) -> bool:
         sparse = with_.get("sparse-checkout")
         if sparse is not None:
             patterns = sparse.split() if isinstance(sparse, str) else list(sparse or [])
-            if not any(str(pat).lstrip("/").startswith("scripts") for pat in patterns):
+            if not cone_names_scripts(patterns):
                 return False
     return True
 
 
-def consumes_lib(step: dict) -> bool:
+def checkout_ref_is_head(checkout: dict) -> bool:
+    with_ = checkout.get("with")
+    return isinstance(with_, dict) and isinstance(with_.get("ref"), str) and bool(HEAD_REF.search(with_["ref"]))
+
+
+def lib_composites(actions_root: Path) -> set:
+    """Composites whose steps source the library: the always-included pair plus every action.yml that names it."""
+    names = set(LIB_COMPOSITE_DEFAULT)
+    if actions_root.is_dir():
+        for action in list(actions_root.rglob("action.yml")) + list(actions_root.rglob("action.yaml")):
+            try:
+                doc = yaml.safe_load(action.read_text(encoding="utf8"))
+            except (OSError, UnicodeDecodeError, yaml.YAMLError):
+                continue
+            steps = ((doc or {}).get("runs") or {}).get("steps") if isinstance(doc, dict) else None
+            if isinstance(steps, list) and any(isinstance(st, dict) and isinstance(st.get("run"), str) and LIB_PATH in st["run"] for st in steps):
+                names.add(action.parent.name)
+    return names
+
+
+def consumes_lib(step: dict, composites: set) -> bool:
     uses = step.get("uses")
-    if isinstance(uses, str) and LIB_COMPOSITE.match(uses):
-        return True
+    if isinstance(uses, str):
+        m = re.match(r"^(\./|\$/)\.github/actions/([A-Za-z0-9._-]+)/?$", uses)
+        if m and m.group(2) in composites:
+            return True
     run = step.get("run")
     return isinstance(run, str) and LIB_PATH in run
 
@@ -185,6 +223,7 @@ def main(argv: list[str]) -> int:
     if not root.is_dir():
         return usage_error(f"{root} is not a directory")
     actions_root = root.parent / "actions"
+    composites = lib_composites(actions_root)
 
     findings: list[str] = []
     scanned = 0
@@ -214,7 +253,7 @@ def main(argv: list[str]) -> int:
                     if not isinstance(step, dict):
                         return usage_error(f"{wf}: job {job_name!r} step[{idx}] is not a mapping")
                     uses = step.get("uses")
-                    if consumes_lib(step):
+                    if consumes_lib(step, composites):
                         lib_steps += 1
                         lib_label = step.get("name") or f"step[{idx}]"
                         if not any(checkout_has_lib(c, step) for c in checkouts):
@@ -224,6 +263,12 @@ def main(argv: list[str]) -> int:
                                 f"job materialises scripts/lib/ (no path:, no foreign repository:, and a "
                                 f"sparse-checkout cone must name scripts) — the library is sourced from the "
                                 f"job's own workspace and there is no argv fallback"
+                            )
+                        if wf_triggers & UNTRUSTED_REF_TRIGGERS and any(checkout_ref_is_head(c) for c in checkouts):
+                            findings.append(
+                                f"::error file={wf}::{wf.name}: job '{job_name}', step '{lib_label}' sends a "
+                                f"credential through {LIB_PATH} in a job triggered by {sorted(wf_triggers & UNTRUSTED_REF_TRIGGERS)} "
+                                f"that checks out a head ref — the library would be sourced from a tree the author controls"
                             )
                         if "pull_request_target" in wf_triggers:
                             findings.append(

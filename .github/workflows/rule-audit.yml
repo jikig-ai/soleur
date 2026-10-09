@@ -193,6 +193,7 @@ jobs:
           for A in amd64 arm64; do
             set +e
             D="$(grep -oE "^[[:space:]]*zot_image_${A}[[:space:]]*=[[:space:]]*\"ghcr\.io/project-zot/zot-linux-$A:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"" "$TF" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)"
+            # shellcheck disable=SC2034  # T is read by NAME inside bc_curl
             T="$(curl -sS --max-time 20 "https://ghcr.io/token?scope=repository:project-zot/zot-linux-$A:pull&service=ghcr.io" | jq -r .token)"
             CODE="$(bc_curl rule-audit 'Authorization:Bearer :T' -- -sS -o /dev/null -w '%{http_code}' --max-time 20 -I -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://ghcr.io/v2/project-zot/zot-linux-$A/manifests/$D")"
             PROBE_RC=$?

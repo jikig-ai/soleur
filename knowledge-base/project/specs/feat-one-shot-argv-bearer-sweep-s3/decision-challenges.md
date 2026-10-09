@@ -19,6 +19,7 @@ Taste and user-challenge items from the plan-review panel and the CPO. Each stat
 ## 3. HMAC moves kept as `inferred` (taste)
 
 - The two `openssl dgst -hmac` keys on the converted calls (canary-status, inngest-health probe) are outside the literal brief ("curl's argument list"). Default: convert them (a header-only conversion leaves the same call half-fixed). Alternative: leave both to S4 with the other five `-hmac` sites.
+- Outcome at work time: canary-status converted; the inngest-health `probe` HMAC is held back with its step (item 7), so it moves to S4 with the other `-hmac` sites.
 
 ## 4. Optional extra proofs that need the lead's go (taste)
 

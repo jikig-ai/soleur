@@ -1240,9 +1240,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_GIT_FIXTURE_ENV_SHELL_TEST_SH_PATHS=(
 # plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_HEARTBEAT_RECONCILE_ISSUE_STEP_TEST_SH_PATHS=(
+  ".github/actions/notify-ops-email/action.yml"
   ".github/workflows/scheduled-terraform-drift.yml"
   "plugins/soleur/lib/heartbeat-live-reconcile.ts"
   "plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh"
+  "scripts/lib/bearer-curl.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

@@ -43,8 +43,8 @@ jobs:
           # sends a failure (python3 missing, empty key) to the explicit refusal, not a mute abort.
           SIG="$(printf '' | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || SIG=""
           if [[ ! "$SIG" =~ ^[0-9a-f]{64}$ ]]; then
-            bc_refuse canary-status WEBHOOK_DEPLOY_SECRET || true
-            echo "::error::the request signature could not be computed (python3 missing or the webhook key unusable)"
+            # Not a credential-shape refusal (the key is an arbitrary byte string): no marker, just the cause.
+            echo "::error::the request signature could not be computed (python3 missing or the webhook key empty); no request was made"
             exit 1
           fi
           RESP="$(bc_curl canary-status 'X-Signature-256:sha256=:SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' 'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \

@@ -48,17 +48,20 @@ jobs:
         run: |
           set -euo pipefail
           FINDINGS_JSON="$(bash scripts/kb-drift-walker.sh)"
-          export KB_DRIFT_INGEST_SIGNING_KEY="$(doppler secrets get KB_DRIFT_INGEST_SIGNING_KEY -p soleur -c prd_kb_drift_walker --plain)"
+          # shellcheck disable=SC2034  # read by NAME inside bc_hmac_sha256_hex
+          KB_DRIFT_INGEST_SIGNING_KEY="$(doppler secrets get KB_DRIFT_INGEST_SIGNING_KEY -p soleur -c prd_kb_drift_walker --plain)"
           INGEST_URL="$(doppler secrets get KB_DRIFT_INGEST_URL -p soleur -c prd_kb_drift_walker --plain)"
-          # Stream the HMAC key via env, not argv. `openssl dgst -hmac "$KEY"`
-          # exposes the key through /proc/<pid>/cmdline for the lifetime of the
-          # openssl process — visible to any other process on the runner with
-          # /proc access. Python's hmac reads the key from the env-resident
-          # variable only; no key bytes ever land in argv.
-          SIG_HEX="$(printf '%s' "$FINDINGS_JSON" | python3 -c 'import os,sys,hmac,hashlib;print(hmac.new(os.environ["KB_DRIFT_INGEST_SIGNING_KEY"].encode("utf-8"), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')"
-          SIG="sha256=${SIG_HEX}"
-          # The signature reaches curl on its stdin config (ADR-280), not its argument list.
+          # The HMAC key and the signature stay off every argument list (ADR-280): the key reaches a
+          # `python3 -I` child by environment only (the variable is not exported, so no other child
+          # inherits it), and the signature reaches curl on its stdin config.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          SIG_HEX="$(printf '%s' "$FINDINGS_JSON" | bc_hmac_sha256_hex KB_DRIFT_INGEST_SIGNING_KEY)" || SIG_HEX=""
+          if [[ ! "$SIG_HEX" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::the ingest signature could not be computed (python3 missing or the signing key empty); no request was made"
+            exit 1
+          fi
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl
+          SIG="sha256=${SIG_HEX}"
           HTTP_CODE="$(bc_curl kb-drift-walker 'X-Soleur-Kb-Drift-Signature::SIG' -- \
             -sS -o /tmp/ingest.out -w '%{http_code}' \
             -X POST "$INGEST_URL" \

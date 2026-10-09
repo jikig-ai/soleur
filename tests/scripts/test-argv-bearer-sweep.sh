@@ -3419,19 +3419,19 @@ for f in $S3_POP; do
   S3_CALLS=$((S3_CALLS + $(printf '%s\n' "$stm" | grep -cE '(^|[^_A-Za-z])bc_curl [A-Za-z]' || true)))
   # the source token has exactly one accepted spelling
   while IFS= read -r l; do
-    grep -qE 'source "\$\{GITHUB_WORKSPACE:[?-]\}?/scripts/lib/bearer-curl\.sh"|source "\$GITHUB_WORKSPACE/scripts/lib/bearer-curl\.sh"|source "\$\{GITHUB_WORKSPACE\}/scripts/lib/bearer-curl\.sh"' <<<"$l" || S3_PATH_BAD+=" $f"
+    grep -qE 'source "\$\{GITHUB_WORKSPACE:\?\}/scripts/lib/bearer-curl\.sh"|source "\$GITHUB_WORKSPACE/scripts/lib/bearer-curl\.sh"|source "\$\{GITHUB_WORKSPACE\}/scripts/lib/bearer-curl\.sh"' <<<"$l" || S3_PATH_BAD+=" $f"
   done < <(printf '%s\n' "$stm" | cut -f2 | grep -E '^[[:space:]]*(if .*)?source .*bearer-curl\.sh|\|\| ! source|! source .*bearer-curl' || true)
   # D2 no credential header literal inside a bc_curl statement (it would be a second, argv copy), and no -H credential on a curl line
-  grep -qiE -- '-H "?(Authorization|x-api-key|X-Signature-256|CF-Access-Client|X-Soleur-Kb-Drift-Signature)' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ') && S3_ARGV_BAD+=" $f"
+  grep -qiE -- '(-H|--header) *"?(Authorization|Proxy-Authorization|x-api-key|api-key|private-token|x-auth-token|Cookie|X-Signature-256|X-Hub-Signature|CF-Access-Client|X-Soleur-Kb-Drift-Signature)' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ') && S3_ARGV_BAD+=" $f"
   # D3 no stderr suppression on a bc_curl statement
   # (the statement is the bc_curl call itself: a later pipe stage such as `| jq ... 2>/dev/null` is not its stderr)
-  grep -qE '2>/dev/null' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ' | sed -E 's/.*(bc_curl .*)/\1/; s/ \|\| .*//; s/ \| .*//') && S3_STDERR_BAD+=" $f"
+  grep -qE '(2|&)> *(/dev/null|&-)|>& *(/dev/null|-)' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(^|[^_A-Za-z])bc_curl ' | sed -E 's/.*(bc_curl .*)/\1/; s/ \|\| .*//; s/ \| .*//') && S3_STDERR_BAD+=" $f"
   # D4 no openssl -hmac in a converted file (the held-back probe step keeps its own)
   if [[ "$(basename "$f")" != "$S3_HELD_BACK" ]]; then
     grep -qE 'openssl dgst .*-hmac' < <(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f") && S3_HMAC_BAD+=" $f"
   fi
   # D5 no converted statement branches on rc == 2 (curl's own init-failure code; the marker is the discriminator)
-  grep -qv 'exit 2' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '\[\[? .*(-eq|==) *"?2"? *\]' | grep -E '(_RC|rc|\$\?)') && S3_RC2_BAD+=" $f"
+  grep -qv 'exit 2' < <(printf '%s\n' "$stm" | cut -f2 | grep -E '(\[\[? .*(-eq|==) *"?2"? *\]|\(\( *[A-Za-z_]+ *== *2 *\)\)|case .*\$(\?|\{?[A-Za-z_]*rc)|^[[:space:]]*"?2"?\) )' | grep -E '(_RC|rc|\$\?)') && S3_RC2_BAD+=" $f"
 done
 [[ -z "$S3_SRC_BAD" ]] && row "S3 structure: every step that calls the library sources it first (exact pinned source form)" ok || row "S3 structure: a step uses the library before it sources it" fail "$S3_SRC_BAD"
 [[ -z "$S3_PATH_BAD" ]] && row "S3 structure: the library is sourced only from the job's own workspace (\${GITHUB_WORKSPACE})" ok || row "S3 structure: a non-workspace source path" fail "$S3_PATH_BAD"
@@ -3479,8 +3479,8 @@ if [[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 && "$(grep -c . "$S3_DIR_ROW/calls/1.st
 else row "S3 canary-status: well-formed run" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
 if s3_tok_not_in_argv "$S3_WANT_SIG" && s3_tok_not_in_argv "synth-webhook-key-0123" && s3_tok_not_in_argv "synthsecret0123"; then row "S3 canary-status: neither the HMAC key, the signature nor the Cloudflare Access secret is in any recorded argv" ok; else row "S3 canary-status: credential in argv" fail ""; fi
 s3_run "$S3/canary.sh" "$S3/real-nopy" WEBHOOK_DEPLOY_SECRET="synth-webhook-key-0123" CF_ACCESS_CLIENT_ID="synthid.access" CF_ACCESS_CLIENT_SECRET="synthsecret0123"
-if [[ "$S3_RC" == 1 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 1 ]] && grep -q '^::error::the request signature could not be computed' "$S3_OUT"; then
-  row "S3 canary-status: python3 absent -> the arm's own red verdict with the marker, zero requests (no mute abort)" ok
+if [[ "$S3_RC" == 1 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 0 ]] && grep -q '^::error::the request signature could not be computed' "$S3_OUT"; then
+  row "S3 canary-status: python3 absent -> the arm's own red verdict (::error::, no credential-refusal marker: the key was never judged), zero requests, no mute abort" ok
 else row "S3 canary-status: python3 absent" fail "rc=$S3_RC calls=$S3_NCALLS markers=$(s3_marker_count)"; fi
 s3_run "$S3/canary.sh" "$S3/real" WEBHOOK_DEPLOY_SECRET="synth-webhook-key-0123" CF_ACCESS_CLIENT_ID="${S3_CANARY}\"x" CF_ACCESS_CLIENT_SECRET="synthsecret0123"
 if [[ "$S3_RC" != 0 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 1 ]] && s3_canary_clean; then
@@ -3493,7 +3493,8 @@ s3_run "$S3/canary.sh" "$S3/real" WEBHOOK_DEPLOY_SECRET="synth-webhook-key-0123"
 s3_body ".github/workflows/sentry-audit-gate.yml" "Verify token scope" > "$S3/sentry.sh" || fatal "S3 could not extract the sentry-audit-gate step"
 S3_SENTRY_ENV=(SENTRY_ORG=synthorg SENTRY_API_HOST=synthorg.sentry.io)
 s3_run "$S3/sentry.sh" "$S3/real" "${S3_SENTRY_ENV[@]}" SENTRY_AUTH_TOKEN="synth-sentry_token0123"
-if [[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 ]] && s3_argv_has "$S3_DIR_ROW/calls/1.argv" '--proto' && s3_argv_has "$S3_DIR_ROW/calls/1.argv" '=https' && s3_argv_has "$S3_DIR_ROW/calls/1.argv" '-g' && s3_tok_not_in_argv "synth-sentry_token0123"; then
+if [[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 ]] && s3_argv_has "$S3_DIR_ROW/calls/1.argv" '--proto' && s3_argv_has "$S3_DIR_ROW/calls/1.argv" '=https' && s3_argv_has "$S3_DIR_ROW/calls/1.argv" '-g' && s3_tok_not_in_argv "synth-sentry_token0123" \
+   && [[ "$(tr '\0' '\n' < "$S3_DIR_ROW/calls/1.stdin" 2>/dev/null)" == 'header = "Authorization: Bearer synth-sentry_token0123"' ]]; then
   row "S3 sentry-audit-gate: a good token passes; the protocol pin and -g survive and the token is on stdin only" ok
 else row "S3 sentry-audit-gate: well-formed" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
 s3_run "$S3/sentry.sh" "$S3/real" "${S3_SENTRY_ENV[@]}" SENTRY_AUTH_TOKEN="${S3_CANARY}\"x"
@@ -3507,7 +3508,7 @@ s3_run "$S3/sentry.sh" "$S3/real" "${S3_SENTRY_ENV[@]}" SENTRY_AUTH_TOKEN="synth
 s3_body ".github/workflows/scheduled-prod-version-drift.yml" "Email ops on first detection" > "$S3/drift.sh" || fatal "S3 could not extract the drift email step"
 S3_DRIFT_ENV=(DETAIL=d MISSING_COUNT=1 RUN_URL=https://example.invalid/run)
 s3_run "$S3/drift.sh" "$S3/real" "${S3_DRIFT_ENV[@]}" RESEND_API_KEY="synth-resend_key0123"
-[[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 ]] && s3_gho_has "delivered=1" && row "S3 prod-version-drift: a well-formed key delivers (delivered=1) with the key on stdin only" ok || row "S3 prod-version-drift: well-formed" fail "rc=$S3_RC calls=$S3_NCALLS"
+[[ "$S3_RC" == 0 && "$S3_NCALLS" == 1 ]] && s3_gho_has "delivered=1" && [[ "$(tr '\0' '\n' < "$S3_DIR_ROW/calls/1.stdin" 2>/dev/null)" == 'header = "Authorization: Bearer synth-resend_key0123"' ]] && row "S3 prod-version-drift: a well-formed key delivers (delivered=1) with the key on stdin only" ok || row "S3 prod-version-drift: well-formed" fail "rc=$S3_RC calls=$S3_NCALLS"
 s3_run "$S3/drift.sh" "$S3/real" "${S3_DRIFT_ENV[@]}" RESEND_API_KEY="${S3_CANARY}\"x"
 if [[ "$S3_RC" == 0 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 1 ]] && s3_gho_has "delivered=0" && grep -q '^::error::Drift email FAILED (HTTP 000)' "$S3_OUT" && s3_canary_clean; then
   row "S3 prod-version-drift: a malformed key reads as the old delivery failure (::error:: HTTP 000, delivered=0, exit 0) with the marker once and zero requests" ok
@@ -3529,7 +3530,7 @@ if [[ "$S3_RC" == 1 && "$S3_NCALLS" == 0 && "$(s3_marker_count)" == 1 ]] && grep
   row "S3 cutover flip precondition: a malformed read token fails CLOSED with the old verdict (pin_fault_paging_absent), the marker VISIBLE (stderr no longer discarded) and zero requests" ok
 else row "S3 cutover flip precondition: malformed token" fail "rc=$S3_RC calls=$S3_NCALLS markers=$(s3_marker_count)"; fi
 s3_run "$S3/cut.sh" "$S3/real" SENTRY_ACTIONS_RO_TOKEN="synth-sentry_ro0123"
-[[ "$S3_RC" == 0 ]] && grep -qx 'REACHED_200' "$S3_OUT" && s3_tok_not_in_argv "synth-sentry_ro0123" && row "S3 cutover flip precondition: a well-formed token reaches the 200 branch, token on stdin only" ok || row "S3 cutover flip precondition: well-formed" fail "rc=$S3_RC"
+[[ "$S3_RC" == 0 ]] && grep -qx 'REACHED_200' "$S3_OUT" && s3_tok_not_in_argv "synth-sentry_ro0123" && [[ "$(tr '\0' '\n' < "$S3_DIR_ROW/calls/1.stdin" 2>/dev/null)" == 'header = "Authorization: Bearer synth-sentry_ro0123"' ]] && row "S3 cutover flip precondition: a well-formed token reaches the 200 branch, token on stdin only" ok || row "S3 cutover flip precondition: well-formed" fail "rc=$S3_RC"
 
 S3_CEN_SLICE="$(s3_slice .github/workflows/scheduled-inngest-health.yml "Census tunnel connectors" 'TUNNEL_ID=\$\(bc_curl' '^fi$')"
 S3_CEN_LIVE="$(s3_body .github/workflows/scheduled-inngest-health.yml "Census tunnel connectors")"

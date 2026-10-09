@@ -519,7 +519,7 @@ done; the owner ticks the checkbox, the issue stays open).
 
 Rows leaving baseline E (files fully converted): `.github/actions/anthropic-preflight/action.yml 1`, `.github/actions/notify-ops-email/action.yml 1`, `.github/workflows/board-status-sync.yml 1`, `canary-status.yml 1`, `git-data-cutover.yml 1`,
 `git-data-rung2-rehearsal.yml 4`, `kb-drift-walker.yml 1`, `rule-audit.yml 2`, `scheduled-inngest-health.yml 3`, `scheduled-prod-version-drift.yml 2`, `scheduled-terraform-drift.yml 1`, `sentry-audit-gate.yml 1` (12 rows, 19 sites). Row staying:
-`workspaces-luks-cutover.yml 1`. Result: **16 files / 42 sites** (derived). The ceiling table loses the same 12 rows in the same change. No row enters. Neither file is edited before the merge-from-main commit exists.
+`workspaces-luks-cutover.yml 1`. Result: **17 files / 43 sites** (derived at ship; the earlier 16/42 figure predated holding the inngest-health probe step back). The ceiling table loses the same 12 rows in the same change. No row enters. Neither file is edited before the merge-from-main commit exists.
 
 ## Test Scenarios
 
@@ -568,7 +568,7 @@ First-run proof table (owner: the lead's session or the operator; deadline: merg
 | `scheduled-terraform-drift` sweep job | the next Inngest-cron dispatch | the next dispatch |
 | `canary-status`, `git-data-cutover` precondition, `git-data-rung2-rehearsal` | dispatch-only: **unproven until next use**; optional read-only `canary-status` dispatch with the lead's go | next use |
 | `anthropic-preflight` (3 callers) | first run of `claude-code-review`, `fix-constraints-stage-a` or `test-pretooluse-hooks` after merge: `ok=true`, no refusal | the first caller run |
-| `notify-ops-email` (24-step alert paths) | the plugin release run caused by this merge, then the first real alert email: `sent=true` in the step summary. If no real alert fires within the deadline: a one-off positive-control dispatch to the operator's own address with the operator's approval, or revert the composite commit (D11, commit 2) | the first delivered email |
+| `notify-ops-email` (24-step alert paths) | the plugin release run caused by this merge, then the log line `Email notification sent to ops@jikigai.com (HTTP 2xx)` from the first real alert. The default is a one-off positive-control dispatch to the operator's own address with the operator's approval (a real alert may not fire within the deadline); the fallback is to revert the composite commit (D11, commit 2) | the first delivered email |
 
 - [ ] The plugin release run caused by this merge concludes green.
 - [ ] The table above is filled in on the follow-through issue; the held-back-file issue is open with an owner, a deadline and the S4 dependency.
@@ -603,7 +603,7 @@ discoverability_test:
   expected_output: OK:
 ```
 
-Layer citation (`hr-observability-layer-citation`): layer 1 (CI run logs and the Actions annotations). The marker is mirrored only by the agent PostToolUse extractor, not paged and not shipped to Better Stack; the plan does not claim otherwise.
+Layer citation (`hr-observability-layer-citation`): layer 6 (the workflow run log and the Actions annotations). The marker is mirrored only by the agent PostToolUse extractor, not paged and not shipped to Better Stack; the plan does not claim otherwise.
 
 ## Domain Review
 

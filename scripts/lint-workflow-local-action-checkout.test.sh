@@ -906,6 +906,115 @@ else
   fail "33 live tree: rc=$LIVE_RC library-consuming steps='${live_lib:-<unparsed>}': $(head -1 "$TMP/live.err")"
 fi
 
+# --- 34-39: review fix round — head-ref trigger rule, path-segment cone, derived composites, `$/`, string-form on: ----
+reset
+mkwf lib-headref.yml "name: lib-headref
+on:
+  workflow_run:
+    workflows: [ci]
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: \${{ github.event.workflow_run.head_sha }}
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-headref.yml: job 'j'.*head ref" "$TMP/err"; then
+  pass "34 a library consumer on a workflow_run trigger that checks out the head ref is REFUSED"
+else
+  fail "34 a head-ref checkout under workflow_run was accepted for a library consumer: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-headref-pr.yml "name: lib-headref-pr
+on:
+  pull_request:
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          ref: \${{ github.event.pull_request.head.sha }}
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 0 ]]; then
+  pass "35 (must-PASS) a head-ref checkout under plain pull_request is not refused (composite and library resolve from one tree)"
+else
+  fail "35 plain pull_request with a head ref was refused: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-prefix.yml "name: lib-prefix
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+            .github
+            scripts-old
+      - uses: ./.github/actions/notify-ops-email"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-prefix.yml: job 'j'.*bearer-curl.sh" "$TMP/err"; then
+  pass "36 a cone naming scripts-old (a string prefix of scripts) does not materialise scripts/lib/"
+else
+  fail "36 a prefix-only cone was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf lib-dollar.yml 'name: lib-dollar
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: $/.github/actions/notify-ops-email'
+run_lint
+if [[ "$RC" -eq 1 ]]; then
+  pass "37 the \$/ spelling of a local composite with no checkout is REFUSED"
+else
+  fail "37 a \$/ composite call without a checkout was accepted: rc=$RC"
+fi
+
+reset
+mkwf lib-prt-str.yml "name: lib-prt-str
+on: pull_request_target
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+      - uses: ./.github/actions/anthropic-preflight"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-prt-str.yml: job 'j'.*pull_request_target" "$TMP/err"; then
+  pass "38 the string form of on: (on: pull_request_target) is read too"
+else
+  fail "38 the string-form trigger escaped the pull_request_target check: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkaction newlibcomp 'name: newlibcomp
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"'
+mkwf lib-derived.yml 'name: lib-derived
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/newlibcomp'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "lib-derived.yml: job 'j'" "$TMP/err"; then
+  pass "39 a NEW composite that sources the library is picked up by derivation (no list to forget to extend)"
+else
+  fail "39 a derived library composite called without a checkout was accepted: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
 pass "canary: a true condition registers as PASS"
@@ -938,7 +1047,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=55
+FAIL_FLOOR_MIN=61
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

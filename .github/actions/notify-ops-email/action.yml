@@ -50,7 +50,7 @@ runs:
 
         # A key outside the token alphabet is refused before any request is made. The caller contract
         # (exit 0, sent=false) is kept, but the refusal is an ::error:: annotation, not a vendor 401.
-        if ! bc_ok "${RESEND_API_KEY}"; then
+        if ! bc_ok_var RESEND_API_KEY; then
           bc_refuse notify-ops-email RESEND_API_KEY || true
           echo "::error::RESEND_API_KEY failed the token-shape guard — email notification not sent"
           echo "sent=false" >> "$GITHUB_OUTPUT"

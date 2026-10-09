@@ -32,7 +32,7 @@ runs:
         if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
           echo "::error::ANTHROPIC_API_KEY not set"
           exit 1
-        elif ! bc_ok "$ANTHROPIC_API_KEY"; then
+        elif ! bc_ok_var ANTHROPIC_API_KEY; then
           # A refusal must stay RED. Left to the curl below, rc 2 would fold into `|| echo "000"` and the
           # soft-skip arm, and a malformed key would silently skip every Claude step.
           bc_refuse anthropic-preflight ANTHROPIC_API_KEY || true

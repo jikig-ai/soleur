@@ -244,7 +244,7 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || fail pin_fault_paging_absent "scripts/lib/bearer-curl.sh could not be loaded from the job checkout — the pin-fault page could not be verified."
           code="$(bc_curl git-data-cutover 'Authorization:Bearer :SENTRY_ACTIONS_RO_TOKEN' -- -s -o "$RUNNER_TEMP/rule.json" -w '%{http_code}' --max-time 20 \
                     "${host}/api/0/organizations/jikigai-eu/alert-rules/1310055/" || echo 000)"
-          [[ "$code" == "200" ]] || fail pin_fault_paging_absent "alert-rule GET returned HTTP $code — the pin-fault page is not verifiably live; check SENTRY_ACTIONS_RO_TOKEN and rule 1310055."
+          [[ "$code" == "200" ]] || fail pin_fault_paging_absent "alert-rule GET returned HTTP $code — the pin-fault page is not verifiably live; check SENTRY_ACTIONS_RO_TOKEN (a SOLEUR_CREDENTIAL_REFUSED line above means the token was refused before any request) and rule 1310055."
           enabled="$(jq -r '.status // 1' "$RUNNER_TEMP/rule.json" 2>/dev/null || echo "")"
           # Sentry: status 0 = enabled, 1 = disabled/snapshot
           [[ "$enabled" == "0" || "$enabled" == "enabled" ]] || \
@@ -521,6 +521,7 @@ jobs:
                 "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') IN ($name_in) AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>"$BS_ERR")" || rows_rc=$?
               if [ "$rows_rc" -ne 0 ] && declare -F bs_read_classify >/dev/null 2>&1 && declare -F bs_read_scrub_err1 >/dev/null 2>&1; then
                 printf '%s' "$rows" > "$BS_ERR.rows"
+                grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true  # the reader's marker, so the run-log grep finds it
                 echo "::warning::host $leg: the Better Stack read failed (attempt $i, rc=${rows_rc}, class=$(bs_read_classify "$rows_rc" "$BS_ERR.rows"), first stderr line: $(bs_read_scrub_err1 "$BS_ERR"))"
               fi
               if printf '%s' "$rows" | grep -cF "git_data_store=${EXPECTED}" >/dev/null; then

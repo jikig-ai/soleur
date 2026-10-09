@@ -89,8 +89,8 @@
 /scripts/lib/canonicalize-bypass-actors.sh              @deruelle
 /scripts/lib/canonicalize-required-status-checks.sh     @deruelle
 /scripts/lib/strip-log-injection.sh                     @deruelle
-/scripts/lib/bearer-curl.sh                            @deruelle
-/scripts/lib/bearer-curl.test.sh                       @deruelle
+/scripts/lib/bearer-curl.sh                             @deruelle
+/scripts/lib/bearer-curl.test.sh                        @deruelle
 /scripts/audit-ruleset-bypass.sh                        @deruelle
 /scripts/update-ci-required-ruleset.sh                  @deruelle
 /scripts/create-ci-required-ruleset.sh                  @deruelle
