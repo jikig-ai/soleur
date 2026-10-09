@@ -140,7 +140,8 @@ Nothing was written in any of these cases. The anchor also prints which token it
 the read/write `HCLOUD_TOKEN`, because `HCLOUD_TOKEN_READONLY` is not yet minted
 (`infra-credential-tiers-8209.md` step O5). The same generation scope applies to op=arm G3.7's
 liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
-while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback.
+while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback (retired by #8285 PR B,
+so three ops today; the sentence is kept as written).
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
 it. If the intent is a deliberate SECOND flush on the same host — not a recovery — the verb is
