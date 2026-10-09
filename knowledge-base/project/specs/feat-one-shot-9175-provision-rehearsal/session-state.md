@@ -40,3 +40,17 @@ FAIL is reserved for VIOLATIONS (a forbidden row exists — bootstrap-done pre-N
 ### Post-merge gates (not this branch's work)
 - vinngest-v* mint + pin bump (parameterization must reach the image before any dispatch).
 - Re-probe ADR ordinal before merge; dry_run dispatch; real dispatch; attach evidence to #9175.
+
+
+## 2026-10-09 — review + ship
+
+- Review panel: 12/12 seats, 41 findings, 39 fixed inline, #9817 filed (rung2
+  doppler_config-inherits-prd + K=V GITHUB_ENV), Reviewed-Coverage: full.
+- Rebased onto origin/main (16 new commits incl. vinngest-v1.1.47 pin bump).
+- PR #9787: body/labels updated, marked ready, auto-merge armed (merge queue).
+- Watch armed: /tmp/pr9787-watch.log.
+- POST-MERGE (do not dispatch until): the vinngest-v* pin bump carries the
+  parameterization (post-merge mint per runbook prerequisite), then
+  `gh workflow run inngest-provision-rehearsal.yml --ref main -f
+  confirm=REHEARSE-INNGEST-PROVISION -f dry_run=true` first.
+- #9175 stays OPEN until the evidence artifact is attached.
