@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+
+// pyramid-justified: Navigation pending-state timing asserted via page.route interception, waitForURL and goBack — needs a real browser navigation lifecycle. (#9855)
 import type { Locator, Page } from "@playwright/test";
 import {
   injectFakeSupabaseSession,

@@ -12,6 +12,8 @@
 // FQN that is neither registered nor on the Tier 3 denylist (Spec TR9 / NG4).
 
 import { test, expect } from "@playwright/test";
+
+// pyramid-justified: WebSocket-injected Soleur Go bubble flow asserted against the rendered DOM (page.locator, browser.newContext) — needs a real browser and ws transport. (#9855)
 import type { Page } from "@playwright/test";
 import { attachWsInjector, type WsInjector } from "./cc-soleur-go-ws-injector";
 import { MOCK_USER } from "./mock-supabase";

@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+
+// pyramid-justified: Full OTP login flow (form fill, code entry, redirect) asserted through the rendered UI — needs a real browser. (#9855)
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
 import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
 

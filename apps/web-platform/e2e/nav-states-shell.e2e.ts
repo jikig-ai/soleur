@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+
+// pyramid-justified: Shell navigation state asserted via page.route interception, page.mouse and page.evaluate DOM probes — needs a real browser. (#9855)
 import type { Page, Response } from "@playwright/test";
 import {
   injectFakeSupabaseSession,
