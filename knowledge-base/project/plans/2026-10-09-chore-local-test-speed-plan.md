@@ -77,12 +77,16 @@ Issue #9763: local `ship` Phase 4 battery ran >25 min on PR #9751 because `--aff
 
 **Mutation matrix.** Each row MUST drive the lint red (except the labelled must-PASS row); written from the design, pre-implementation:
 
-- M1 — a >10 s suite moved back into `ALWAYS_ON_SUITES` → per-suite assertion reds.
-- M2 — `LOCAL_FAST_CAP_MS` raised → the cap value pin reds.
-- M3 — a label deleted from both lists → census drift assertion reds.
-- M4 — the `[skip] (ci-tier)` epilogue class removed → epilogue drift pin reds.
-- M5 — ship docs demoted without the list split → the 29-suite sum still violates the total cap.
-- M6 — **must-PASS** — a new ≤5 s suite added to `ALWAYS_ON_SUITES` → lint stays green (the ratchet tolerates growth under the cap).
+| # | Mutation | Why it must red |
+|---|----------|-----------------|
+| M1 | Move a >10 s suite back into `ALWAYS_ON_SUITES` | per-suite cap assertion must catch regrowth at the entry point |
+| M2 | Raise `LOCAL_FAST_CAP_MS` | the cap literal is pinned — softening the cap is the exact regression class |
+| M3 | Delete a label from both lists | census assertion: a suite dropped from both tiers reads as drift, not a pass |
+| M4 | Remove the `[skip] (ci-tier)` epilogue class | a skipped heavy suite must stay visible with its reason — silence is the failure |
+| M5 | Demote ship docs only (no list split) | the 29-suite committed-weight sum still violates the total cap |
+| M6 | **must-PASS** — add a new ≤5 s suite to `ALWAYS_ON_SUITES` | stays green — the ratchet tolerates growth under the cap |
+
+**Anchor.** The property is content, not ordering — every row observes the lists and the epilogue text directly. The out-of-commit anchor is the AC-4 measured `--affected` wall-clock on the idle machine, which no list edit can forge.
 
 ## Observability
 
