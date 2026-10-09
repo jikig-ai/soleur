@@ -11,7 +11,18 @@
 #        ln -s <worktree>/apps/web-platform/node_modules <root>/apps/web-platform/node_modules
 # Each suite runs sequentially under ulimit -v 6000000 (none of the 13 starts vitest), TMPDIR=/var/tmp, timeout 600 s.
 # Compare rc and the last non-empty line; a timeout on both sides is inconclusive, never identical.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 BASE=$1; BR=$2; OUT=$3; shift 3
+assert_fixture_dir "$OUT"
 mkdir -p "$OUT"
 for s in "$@"; do
   id=$(echo "$s" | tr '/' '_')
