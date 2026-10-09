@@ -27,6 +27,8 @@
     "--tmpfs",
     "/proc",
     "--tmpfs",
+    "/sys",
+    "--tmpfs",
     "/tmp/soleur-sandbox-canary",
     "--bind",
     "${CANARY_WS}",

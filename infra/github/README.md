@@ -210,6 +210,10 @@ the post-DR `terraform plan` is the authority on final values.
 
 ### Post-apply canary (flip ADR-270 `adopting` → `accepted`)
 
+> 2026-10-09: ADR-270 was set `accepted` by operator direction ahead of this canary (see `## Amendment 2026-10-09
+> (accepted by operator direction)` in ADR-270). The items below that are not yet recorded stay pending and are still
+> recorded on #9454.
+
 **First, before anything else (admin bypass):** run one `gh pr merge --admin` of a trivial PR and confirm it
 merges past the queue (`bypass_actors` `RepositoryRole 5`, mode `pull_request`). The rollback
 depends on this bypass; a failure is an **immediate rollback trigger**. Then:

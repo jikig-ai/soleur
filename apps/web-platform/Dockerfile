@@ -38,7 +38,7 @@ RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
 
-# Stage 3: Global CLI tools (the two `npm install -g` layers the runner needs).
+# Stage 3: Global CLI tools (the three `npm install -g` layers the runner needs).
 # A stage of their own, FROM the pinned base image (never from `builder`, whose build ARGs
 # declare SENTRY_AUTH_TOKEN), so that CI can build exactly this stage on every pull request
 # (`web-platform-build`, about a minute, npm registry only) instead of a full runner build
@@ -89,6 +89,18 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.293
 # it the CLI reports "claude native binary not installed".
 RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
 
+# vitest for the deploy-time cross-workspace isolation canary probe (#2640).
+# ci-deploy.sh `docker exec`s `vitest run --config test/vitest.canary.config.ts`
+# inside the canary container before the prod swap; the host has no node and the
+# canary image is the only place the real artifact's sandbox can be exercised.
+# Global install (NOT a package.json devDep copy) — same pattern as likec4 above.
+# KEEP IN SYNC with the lockfile's node_modules/vitest version: the pin is
+# asserted by test/dockerfile-vitest-version-pin.test.ts so the canary runs the
+# vitest the suite was authored against. `--before` bounds the floating
+# transitive tree to the day after vitest 4.1.11's publish date (2026-08-18);
+# `--ignore-scripts` matches the likec4 install mode.
+RUN npm install -g vitest@4.1.11 --before=2026-08-19 --ignore-scripts
+
 # Stage 4: Production image with only runtime artifacts
 FROM cli-tools AS runner
 
@@ -126,20 +138,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
-# #5863 arm F — file-cap bwrap for the mountns-only outer session wrap. The
-# outer wrap deliberately carries ZERO --unshare-* flags: the vendored inner
-# sandbox unconditionally unshares user+pid+net and cannot nest under an
-# outer userns (measured 2026-10-08; see
-# knowledge-base/project/plans/2026-10-08-feat-tenant-fs-isolation-plan.md
-# Phase 0). setcap grants mount privilege transiently at bwrap exec; it needs
-# SYS_ADMIN in the container bounding set (cloud-init `docker run` gains
-# `--cap-add SYS_ADMIN`) and the app drops it from effective/permitted. The
-# getcap audit is load-bearing: any OTHER file-cap'd binary in the image
-# becomes an app-side SYS_ADMIN carrier — keep the set {bwrap} only.
-RUN setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap
-# The {bwrap}-only audit runs at the END of the runner stage (below), after
-# every later install layer — a cap binary introduced by gh/playwright/
-# Playwright-deps would otherwise escape a mid-build audit (review F4).
+# #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
+# --unshare-* flags: the vendored inner sandbox unconditionally unshares
+# user+pid+net and cannot nest under an outer userns (measured 2026-10-08;
+# see knowledge-base/project/plans/2026-10-08-feat-tenant-fs-isolation-plan.md
+# Phase 0). NOTE: the file-cap elevation arm was reverted — released bwrap
+# (0.8–0.12) DIES on `real_uid != 0 && has_caps()`; upstream has no file-cap
+# support, so a cap'd /usr/bin/bwrap is poison to every bwrap call in the
+# container (v0.333.1 canary_sandbox_failed). Elevation arm is a follow-up
+# decision (setuid is the only non-userns path upstream supports).
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
 # and event-ship-merge gh pr checkout). Not in default Debian repos.
@@ -242,6 +249,17 @@ COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
 # swap and the boot path in the booted container. Standalone node:crypto + fetch, like the canary.
 COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
+
+# Cross-workspace isolation canary payload (#2640). Three exact files — the
+# deterministic direct-bwrap tier of test/sandbox-isolation.test.ts runs inside
+# the canary via `docker exec … vitest run` (SOLEUR_ISOLATION_TIERS=direct keeps
+# the live-API query tier out of the deploy path). `vitest.canary.config.ts` is
+# a minimal standalone config because the repo vitest.config.ts loads files
+# that stay pruned from the image. Each is re-included from the `test/` prune by
+# an exact-path .dockerignore bang — no `!test/` directory bang (it cascades).
+COPY --from=builder /app/test/sandbox-isolation.test.ts ./test/sandbox-isolation.test.ts
+COPY --from=builder /app/test/helpers/sandbox-isolation-fixtures.ts ./test/helpers/sandbox-isolation-fixtures.ts
+COPY --from=builder /app/test/vitest.canary.config.ts ./test/vitest.canary.config.ts
 
 # #5863 outer-wrap canary arm: the self-authored outer mount-table fixture
 # (pinned to buildOuterWrapArgv output by the Guard-2 test) plus the shared
@@ -349,20 +367,17 @@ COPY --from=builder \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 
-# #5863 arm F — the {bwrap}-only file-cap audit, AFTER every install layer.
-# Fail-closed: a setcap/getcap failure or an unexpected cap'd binary aborts
-# the build; the prior `... || true` shape swallowed failures into a green
-# image whose bwrap silently fell to the implicit-userns path at runtime.
+# File-cap audit, AFTER every install layer. Fail-closed: ANY file-cap'd
+# binary aborts the build. Two reasons it stays with the setcap reverted:
+#   1. released bwrap refuses to run when it carries file caps (see the
+#      comment above), so a stray cap grant on bwrap — from a base-image or a
+#      transitive package — would silently break every sandbox invocation;
+#   2. with SYS_ADMIN out of the bounding set a cap'd binary is inert today,
+#      but it becomes an escalation carrier the moment any elevation arm
+#      lands — keep the invariant "zero file-cap'd binaries" instead.
 RUN set -e; \
     all="$(getcap -r /)"; \
-    bwrap_caps="$(printf '%s\n' "$all" | grep '^/usr/bin/bwrap ' || true)"; \
-    [ -n "$bwrap_caps" ] \
-      && printf '%s' "$bwrap_caps" | grep -q cap_sys_admin \
-      && printf '%s' "$bwrap_caps" | grep -q cap_setuid \
-      && printf '%s' "$bwrap_caps" | grep -q cap_setgid \
-      || { echo "FATAL: bwrap file caps not applied: $bwrap_caps" >&2; exit 1; }; \
-    others="$(printf '%s\n' "$all" | grep -v '^/usr/bin/bwrap ' || true)"; \
-    [ -z "$others" ] || { echo "FATAL: unexpected file-cap binary: $others" >&2; exit 1; }
+    [ -z "$all" ] || { echo "FATAL: unexpected file-cap binaries: $all" >&2; exit 1; }
 
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
 RUN useradd --no-log-init --uid 1001 -m soleur \

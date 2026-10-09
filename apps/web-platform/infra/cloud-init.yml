@@ -784,18 +784,12 @@ runcmd:
     # from /tmp — if future hardening flips it on, grep for other
     # exec-from-/tmp call sites first.
     stage=docker_run
-    # #5863 arm F: SYS_ADMIN in the bounding set so the file-cap'd
-    # /usr/bin/bwrap can elevate transiently for the per-session
-    # mount-namespace wrap. Children of non-file-cap'd execs carry no caps
-    # (ambient is empty), so the wrapped CLI never holds it; only an exec of
-    # bwrap itself can acquire it.
     docker run -d \
       --name soleur-web-platform \
       --log-driver journald \
       --restart unless-stopped \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
       --security-opt apparmor=soleur-bwrap \
-      --cap-add SYS_ADMIN \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
       --add-host host.docker.internal:host-gateway \

@@ -41,7 +41,8 @@ import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 // The filesystem `denyRead` is a CONSTANT list — the broad parent deny
-// `[WORKSPACES_ROOT, c4StagingRoot, "/proc"]` (#5862, ADR-075 exit criterion):
+// `[WORKSPACES_ROOT, c4StagingRoot, "/proc", "/sys"]` (#5862, ADR-075 exit
+// criterion; `/sys` joined the constant set under #1285):
 // the vendored CLI 2.1.284 bwrap builder emits `--tmpfs <deny landing>` FIRST
 // and then re-binds every covered `allowWrite`/`allowRead` path after it
 // (deny-then-restore), so the parent tmpfs masks present AND future siblings
@@ -101,21 +102,23 @@ describe("buildAgentSandboxConfig drift guard", () => {
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
     // EXACT list, order-pinned (#5862): the workspaces PARENT root + the C4
-    // re-render staging root (#8623) + /proc — the vendored builder's
-    // deny-then-restore ordering re-binds `allowWrite` paths after the covering
-    // `--tmpfs`, so own stays writable while the parent mask hides every
-    // sibling (present or future). Order matters because the emitted deny
-    // sequence maps to the builder's `--tmpfs` emission order; a per-sibling
-    // entry here means enumeration crept back in — fail on either drift.
+    // re-render staging root (#8623) + /proc + /sys (#1285) — the vendored
+    // builder's deny-then-restore ordering re-binds `allowWrite` paths after
+    // the covering `--tmpfs`, so own stays writable while the parent mask
+    // hides every sibling (present or future). Order matters because the
+    // emitted deny sequence maps to the builder's `--tmpfs` emission order; a
+    // per-sibling entry here means enumeration crept back in — fail on either
+    // drift.
+
     // #9534: the egress token dir is denied for EVERY session — its files ARE
     // live gateway credentials for concurrent entitled sessions.
-    const tokenDir = process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens";
     expect(result.filesystem.denyRead).toEqual([
       root,
       wtRoot,
       `${root}-c4-staging`,
       "/proc",
-      tokenDir,
+      "/sys",
+      process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     ]);
   });
 
@@ -199,6 +202,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       wtRoot,
       `${root}-c4-staging`,
       "/proc",
+      "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     ]);
   });
@@ -213,6 +217,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       wtRoot,
       `${root}-c4-staging`,
       "/proc",
+      "/sys",
       extra,
       // #9534: token dir lands after extras (appended last in the union).
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
@@ -282,6 +287,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
       wtRoot,
       `${root}-c4-staging`,
       "/proc",
+      "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     ]);
   });
