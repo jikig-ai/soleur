@@ -1933,7 +1933,7 @@ AFFECTED_SCRIPTS_LINT_SHELL_TRACE_CREDENTIAL_REFUSAL_PATHS=(
 )
 
 # scripts/lib/inngest-probe-row.test.sh (#9763 demotion) — Guard 1 censuses every tracked file
-# naming SOLEUR_INNGEST_SERVER_PROBE; scope = the trees that host probe emitters and consumers.
+# naming the probe-row marker; scope = the trees that host probe emitters and consumers.
 AFFECTED_SCRIPTS_LIB_INNGEST_PROBE_ROW_TEST_SH_PATHS=(
   "apps/web-platform/infra/"
   "apps/web-platform/test/infra/"
