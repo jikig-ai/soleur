@@ -81,7 +81,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // ...) was replaced by a 5-test describe (G1 "stays retired" across every workflow, G1b deleted files/variables, B9 mutex
 // over the three surviving surfaces, B6, B5): the job those rows graded no longer exists. The floor is exact
 // (grep -cE '^\s*test\(' = 266). Each deleted row's mutation, and what kills it now, is in the PR B plan
-// (knowledge-base/project/plans/2026-10-09-chore-pr-b-retire-inngest-backstop-wipe-apparatus-plan.md).
+// (knowledge-base/project/plans/archive/20261009-235733-2026-10-09-chore-pr-b-retire-inngest-backstop-wipe-apparatus-plan.md).
 const TEST_FLOOR = 266;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
