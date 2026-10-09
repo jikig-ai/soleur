@@ -13,6 +13,36 @@ requires_cpo_signoff: false
 
 # chore(infra): decouple the zot version claim from ci-deploy.sh and take the fan-out HMAC key off argv
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09
+**Method:** halt gates 4.6-4.12 run mechanically against the plan (all pass), plus targeted verification of every load-bearing negative and attribution claim. The full 40-agent review fan-out was deliberately not run: the change is two hunks in one shell script plus a test gate, the plan already carries a Guard Contract validated by `scripts/lint-guard-contract.py`, and every research question was answerable by a grep or a one-off run (recorded below).
+
+### Key improvements
+
+1. **Marker scope widened in the Delivery Contract.** `apply-web-platform-infra.yml` wakes on `apps/web-platform/infra/**` (`.github/workflows/apply-web-platform-infra.yml:20`) and `apply-deploy-pipeline-fix.yml` on the named trigger files, so the tests and the sidecar in this PR wake the first workflow even though only `ci-deploy.sh` feeds `triggers_replace`. Both markers are therefore required on every commit and on the squash body, not only the commit that touches `ci-deploy.sh`.
+2. **Ship-skill text conflicts with the hold.** `plugins/soleur/skills/ship/SKILL.md` (Deploy Pipeline Fix Drift Gate) tells the author the apply "will auto-apply on merge — no action required". Under this PR's markers that sentence is false; `/ship` must not relay it as the delivery statement. The PR body carries the true statement (delivery waits for the next sanctioned apply).
+3. **python3 resolution on the host verified.** `webhook.service` uses `EnvironmentFile=/etc/default/webhook-deploy` and sets no `PATH`, so systemd's default `PATH` (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) applies; `jq`, `curl` and `logger`, which `fan_out_to_peers` already needs, resolve from `/usr/bin`, and python3 sits beside them.
+
+### Verification record (attribution and negative claims)
+
+| Claim in the plan | Probe | Result |
+|---|---|---|
+| #9795 is the merged change that set v2.1.22 and carries the markers | `gh pr view 9795 --json state,mergedAt` | MERGED 2026-10-09T01:44:05Z; `git show f911a789…` body ends with the two marker lines, each alone on a line |
+| `ci-deploy.sh` is in neither Rule A-E baseline | `git grep -n 'ci-deploy' scripts/lint-shell-trace-credential-refusal*.txt` | only `scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` in the A/B/C file; the lint run on `ci-deploy.sh` reports `0 baselined` |
+| Only one `openssl dgst` site exists in `ci-deploy.sh` | `git grep -n 'openssl dgst' apps/web-platform/infra/ci-deploy.sh` | line 359 (plus prose at 369-370) |
+| `ci-deploy.sh` currently has exactly one `zot vN.N.N` claim | `grep -nE 'zot \(?v[0-9]+\.[0-9]+\.[0-9]+' apps/web-platform/infra/ci-deploy.sh` | line 1308 only |
+| `/proc/<pid>/environ` is owner-only | `ls -ld /proc/self/environ` | `-r--------` (mode 0400) |
+| Staleness gate floor equals today's assertion count | `bash zot-image-staleness.test.sh` | `RESULT: 15 passed, 0 failed`, `MIN_ASSERTIONS=15` |
+| Battery has 18 cases | `grep -c '^run_mutation [a-z] ' apps/web-platform/infra/zot-image-staleness-mutation.test.sh` | 18 (cases a-r) |
+| Cited rule ids exist | `cq-write-failing-tests-before`, `cq-test-fixtures-synthesized-only`, `hr-when-a-plan-specifies-relative-paths-e-g` | present in the AGENTS.md index |
+| No fabricated or PAT-shaped variables (Phase 4.8) | regex sweep of the plan | no hits |
+
+### Halt-gate results
+
+4.6 User-Brand Impact: present, threshold `none` with the sensitive-path scope-out bullet (diff touches `apps/*/infra/`). 4.7 Observability: all five fields present; `command` starts with allowlisted `grep`, no `ssh`, finishes well inside the 15 s cap; `expected_output` is a single literal that the `grep -o` prints. The probe only matches once the new log line exists (post-implementation), which is when preflight Check 10 runs it. 4.9 UI wireframe: no UI surface, skipped. 4.10 Encryption posture: no store or new connection, skipped. 4.11 Guard Contract: `python3 scripts/lint-guard-contract.py` green, 2 entries; adequacy read: both Assembly paragraphs name the chokepoint (`CLAIM_RE`; the single `sig` assignment plus shape guard), not a member list. 4.12 Scope Check: all rows mapped or justified.
+
+
 Draft PR: #9805. PR body carries `Ref #9799` (tracker stays open for items 1, 4 and the addendum) and `Ref #9597` (argv sweep). No close-keyword sits next to either number.
 
 ## Overview
@@ -268,6 +298,8 @@ No cross-domain implications detected — infrastructure/tooling change confined
   Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   ```
 
+- The markers are required on EVERY commit of this PR and on the squash body, not only the one touching `ci-deploy.sh`: `apply-web-platform-infra.yml` wakes on `apps/web-platform/infra/**` (so the test and sidecar edits wake it), while `apply-deploy-pipeline-fix.yml` wakes on the named trigger files. Each workflow reads the marker from the head commit message of the push, anchored on its own line, so the squash body is the one that matters at merge.
+- `/ship`'s Deploy Pipeline Fix Drift Gate text ("will auto-apply on merge — no action required") does not apply under these markers; the PR body states the true delivery path instead.
 - Never an `[ack-destroy]` line. This change plans no destroy.
 - PR body: states that delivery of the new `ci-deploy.sh` to running hosts waits for the next sanctioned apply (tracker item 1, which stays open), carries `Ref #9799` and `Ref #9597`, no close-keyword adjacent to either number, avoids the word the brief bans, has a `## Changelog` section, and ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Expected consequence to disclose, not fix: until that apply, drift reports for `zot_consumer_probe_install` / `deploy_pipeline_fix_web2` (already expected by tracker item 1) now also reflect this file, and `check-deploy-script-parity.sh` reads repo-vs-running-host as drifted. Both are the known state, not a regression.

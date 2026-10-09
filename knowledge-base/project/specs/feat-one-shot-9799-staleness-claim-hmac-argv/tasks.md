@@ -42,6 +42,6 @@ Draft PR: #9805 (Ref #9799, Ref #9597; no close-keyword)
 
 ## Phase 5: Ship
 
-- 5.1 Commit bodies and the squash body carry `[skip-web-platform-apply]` and `[skip-deploy-fix-apply]` alone on their own lines (form of f911a789); never `[ack-destroy]`.
+- 5.1 EVERY commit body (apps/web-platform/infra/** wakes apply-web-platform-infra.yml even for test/sidecar edits) and the squash body carry `[skip-web-platform-apply]` and `[skip-deploy-fix-apply]` alone on their own lines (form of f911a789); never `[ack-destroy]`.
 - 5.2 PR body: `Ref #9799`, `Ref #9597`, delivery waits for the next sanctioned apply (tracker item 1), no close-keyword next to either number, ends with the Claude Code attribution line.
 - 5.3 Merge through the normal merge queue; do not sync a queued PR. After merge, one comment on #9597 (S4 `ci-deploy.sh` row done).
