@@ -917,11 +917,19 @@ const SERVER_DIR = join(APP_DIR, "server");
 describe("bwrap launch census — every spawn path engages the filter (#8752 G1)", () => {
   const serverFiles = () => readdirSync(SERVER_DIR).filter((f) => f.endsWith(".ts"));
 
-  it("every absolute-path bwrap spawn site is c4-render.ts (which carries --seccomp 9)", () => {
+  it("every absolute-path bwrap spawn site is an enumerated exception", () => {
     const sites = serverFiles().filter((f) =>
       /["'`]\/usr\/bin\/bwrap["'`]/.test(readFileSync(join(SERVER_DIR, f), "utf8")),
     );
-    expect(sites).toEqual(["c4-render.ts"]);
+    // c4-render.ts carries the inner-sandbox --seccomp 9 site.
+    // agent-outer-wrap.ts (#5863 arm F) is the second deliberate site: the
+    // outer wrap MUST exec the file-capability'd real binary at an absolute
+    // path — the PATH shim's job is filtering the VENDOR's inner-sandbox
+    // argv (seccomp splice + NEWUSER deny), which does not apply to the
+    // mountns-only outer table; routing the wrap through the shim would
+    // rewrite or refuse it. The wrap's own posture is --cap-drop ALL on the
+    // child + file-cap'd exec, pinned by test/agent-outer-wrap.test.ts.
+    expect(sites).toEqual(["agent-outer-wrap.ts", "c4-render.ts"]);
   });
 
   it("no bare-name bwrap spawn in server/ — PATH-resolved launches resolve to the baked shim", () => {
