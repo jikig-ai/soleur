@@ -4,7 +4,7 @@
 
 - [x] 1.1 `scripts/lib/test-affected-paths.sh`: add `CI_HEAVY_SUITES` — the 29 always-on labels with committed weight > `LOCAL_FAST_CAP_MS=10000` (derived from `suite-durations.tsv`, listed verbatim); move them out of `ALWAYS_ON_SUITES`; add own-file fallback (suite file touched → runs) and consumed-edge fallback where a subject array exists in `test-relevance-paths.sh`.
 - [x] 1.2 `scripts/test-all.sh`: `[skip] (ci-tier)` decline class in the affected epilogue — skipped heavy suite reads as tiered with its reason (runs in CI / `--full`).
-- [x] 1.3 Verify `--print-selection` on a docs-only diff: 29 ci-tier declines, `always_on` ≤130; on a diff touching `plugins/soleur/test/operator-ack-guard.test.sh`: that suite selected via own-file arm.
+- [x] 1.3 Verify `--print-selection` on a docs-only diff: 29+ heavy labels declined via edges (no ci_tier class was built — plain edge-selection was the simpler mechanism the index grammar admits), `always_on` ≤130; on a diff touching `plugins/soleur/test/operator-ack-guard.test.sh`: that suite selected via own-file arm.
 
 ## Phase 2 — Budget ratchet (FR-4)
 

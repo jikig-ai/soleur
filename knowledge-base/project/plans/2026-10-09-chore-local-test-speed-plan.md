@@ -12,6 +12,7 @@ lane: engineering
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-09
+**Built-shape note (post-implementation):** the `CI_HEAVY_SUITES` second list and `[skip] (ci-tier)` epilogue class were NOT built — the index file's INDEX-SHAPE grammar admits only `ALWAYS_ON_SUITES` entries and `AFFECTED_*_PATHS` blocks, so the 29+9 heavy labels were simply withdrawn to ordinary edge-selection (the exact ADR-262 shape), which reaches the same gate behavior with no new list machinery. Where the mutation matrix below says "delete a label from both lists" / "epilogue class removed", the realized pins are the budget lint's registration resolution and the index demotion-comment pin.
 **Mode:** inline deepen (no Task/Workflow spawn in this harness — passes executed inline by the orchestrator)
 **Owner decisions already taken (from the /go kickoff):** proposals 1 and 3 are authorized — split cheap local ratchets from CI-gated mutation batteries, and demote `ship` Phase 4's local battery to the fast tier while CI remains the complete merge gate.
 
