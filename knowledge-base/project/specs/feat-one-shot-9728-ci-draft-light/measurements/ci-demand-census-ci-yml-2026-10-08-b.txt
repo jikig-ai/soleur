@@ -1,0 +1,92 @@
+REPO=jikig-ai/soleur
+WINDOW_START=2026-10-08T12:00:00Z
+WINDOW_END=2026-10-09T00:00:00Z
+FETCHED_AT=2026-10-09T20:26:21Z
+WORKFLOW_FILTER=ci.yml
+TOTAL_JOB_MINUTES=20543.0
+TOTAL_JOB_SECONDS=1232581
+RUNS_COMPLETED=218
+RUNS_NOT_COMPLETED=0
+RUNS_RERUN=1
+RUNS_NOJOBS=30
+JOBS_COUNTED=5659
+JOBS_SKIPPED=128
+JOBS_RUNNERLESS=985
+JOBS_UNTIMED=0
+BY_WORKFLOW	ci.yml	merge_group	13	442	2122.2
+BY_WORKFLOW	ci.yml	pull_request	194	4843	16600.1
+BY_WORKFLOW	ci.yml	push	11	374	1820.7
+STEM	ci.yml	merge_group	adr-ordinals	13	0	0	13	3.7	0.28
+STEM	ci.yml	merge_group	cla-check	0	0	2	0	0.0	0.00
+STEM	ci.yml	merge_group	cla-evidence	0	0	2	0	0.0	0.00
+STEM	ci.yml	merge_group	credential-path-guard	13	0	0	13	5.8	0.44
+STEM	ci.yml	merge_group	critical-css-gate	13	0	0	13	14.2	1.09
+STEM	ci.yml	merge_group	detect-changes	13	0	0	13	5.2	0.40
+STEM	ci.yml	merge_group	e2e	13	0	0	13	53.4	4.10
+STEM	ci.yml	merge_group	encryption-posture	13	0	0	13	3.7	0.29
+STEM	ci.yml	merge_group	grok-fidelity	13	0	0	13	5.7	0.44
+STEM	ci.yml	merge_group	harness-discovery	13	0	0	13	5.8	0.44
+STEM	ci.yml	merge_group	lint-bot-statuses	13	0	0	13	16.5	1.27
+STEM	ci.yml	merge_group	lint-webplat	13	0	0	13	23.4	1.80
+STEM	ci.yml	merge_group	lockfile-sync	13	0	0	13	11.1	0.85
+STEM	ci.yml	merge_group	marketplace-manifest-guard	13	0	0	13	4.3	0.33
+STEM	ci.yml	merge_group	plugin-root-propagation-gate	0	13	0	0	0.0	0.00
+STEM	ci.yml	merge_group	rule-body-lint	13	0	0	13	5.0	0.38
+STEM	ci.yml	merge_group	sandbox-canary-capture-gate	0	13	0	0	0.0	0.00
+STEM	ci.yml	merge_group	service-role-allowlist-gate	13	0	0	13	4.0	0.31
+STEM	ci.yml	merge_group	shard-totality-mutations	13	0	0	39	116.2	8.94
+STEM	ci.yml	merge_group	tc-document-sha-guard	13	0	0	13	5.1	0.39
+STEM	ci.yml	merge_group	test	13	0	0	13	0.7	0.06
+STEM	ci.yml	merge_group	test-bun	13	0	0	13	29.5	2.27
+STEM	ci.yml	merge_group	test-scripts	13	0	0	104	1424.8	109.60
+STEM	ci.yml	merge_group	test-scripts-heavy	13	0	0	39	217.2	16.71
+STEM	ci.yml	merge_group	test-webplat	13	0	0	26	132.8	10.22
+STEM	ci.yml	merge_group	web-platform-build	13	0	0	13	34.3	2.64
+STEM	ci.yml	pull_request	adr-ordinals	138	0	26	138	36.6	0.19
+STEM	ci.yml	pull_request	credential-path-guard	135	0	29	135	57.3	0.30
+STEM	ci.yml	pull_request	critical-css-gate	47	47	70	47	50.2	0.26
+STEM	ci.yml	pull_request	detect-changes	139	0	25	139	49.0	0.25
+STEM	ci.yml	pull_request	e2e	134	0	30	134	498.3	2.57
+STEM	ci.yml	pull_request	encryption-posture	139	0	25	139	37.9	0.20
+STEM	ci.yml	pull_request	grok-fidelity	134	0	30	134	56.4	0.29
+STEM	ci.yml	pull_request	harness-discovery	131	0	33	131	63.3	0.33
+STEM	ci.yml	pull_request	lint-bot-statuses	142	0	22	142	151.0	0.78
+STEM	ci.yml	pull_request	lint-webplat	134	0	30	134	222.8	1.15
+STEM	ci.yml	pull_request	lockfile-sync	135	0	29	135	107.4	0.55
+STEM	ci.yml	pull_request	marketplace-manifest-guard	139	0	25	139	39.9	0.21
+STEM	ci.yml	pull_request	plugin-root-propagation-gate	137	0	27	137	69.0	0.36
+STEM	ci.yml	pull_request	rule-body-lint	135	0	29	135	49.6	0.26
+STEM	ci.yml	pull_request	sandbox-canary-capture-gate	139	0	25	139	67.0	0.35
+STEM	ci.yml	pull_request	service-role-allowlist-gate	142	0	22	142	40.6	0.21
+STEM	ci.yml	pull_request	shard-totality-mutations	145	0	19	411	1183.9	6.10
+STEM	ci.yml	pull_request	tc-document-sha-guard	138	0	26	138	47.5	0.24
+STEM	ci.yml	pull_request	test	144	0	20	144	8.2	0.04
+STEM	ci.yml	pull_request	test-bun	134	0	30	134	291.1	1.50
+STEM	ci.yml	pull_request	test-scripts	149	0	15	1104	11074.0	57.08
+STEM	ci.yml	pull_request	test-scripts-heavy	144	0	20	409	773.4	3.99
+STEM	ci.yml	pull_request	test-webplat	137	0	27	266	1274.0	6.57
+STEM	ci.yml	pull_request	web-platform-build	137	0	27	137	351.8	1.81
+STEM	ci.yml	push	adr-ordinals	11	0	0	11	3.1	0.28
+STEM	ci.yml	push	credential-path-guard	11	0	0	11	5.0	0.46
+STEM	ci.yml	push	critical-css-gate	11	0	0	11	11.6	1.05
+STEM	ci.yml	push	detect-changes	11	0	0	11	3.9	0.36
+STEM	ci.yml	push	e2e	11	0	0	11	44.2	4.02
+STEM	ci.yml	push	encryption-posture	11	0	0	11	3.6	0.33
+STEM	ci.yml	push	grok-fidelity	11	0	0	11	4.0	0.36
+STEM	ci.yml	push	harness-discovery	11	0	0	11	8.5	0.77
+STEM	ci.yml	push	lint-bot-statuses	11	0	0	11	13.6	1.23
+STEM	ci.yml	push	lint-webplat	11	0	0	11	18.7	1.70
+STEM	ci.yml	push	lockfile-sync	11	0	0	11	9.9	0.90
+STEM	ci.yml	push	marketplace-manifest-guard	11	0	0	11	3.5	0.31
+STEM	ci.yml	push	plugin-root-propagation-gate	0	11	0	0	0.0	0.00
+STEM	ci.yml	push	rule-body-lint	11	0	0	11	4.2	0.38
+STEM	ci.yml	push	sandbox-canary-capture-gate	0	11	0	0	0.0	0.00
+STEM	ci.yml	push	service-role-allowlist-gate	11	0	0	11	3.5	0.32
+STEM	ci.yml	push	shard-totality-mutations	11	0	0	33	106.4	9.67
+STEM	ci.yml	push	tc-document-sha-guard	11	0	0	11	4.5	0.41
+STEM	ci.yml	push	test	11	0	0	11	0.6	0.05
+STEM	ci.yml	push	test-bun	11	0	0	11	25.9	2.35
+STEM	ci.yml	push	test-scripts	11	0	0	88	1208.7	109.88
+STEM	ci.yml	push	test-scripts-heavy	11	0	0	33	189.4	17.22
+STEM	ci.yml	push	test-webplat	11	0	0	22	118.7	10.79
+STEM	ci.yml	push	web-platform-build	11	0	0	11	29.2	2.65

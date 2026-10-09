@@ -1,0 +1,90 @@
+REPO=jikig-ai/soleur
+WINDOW_START=2026-10-08T00:00:00Z
+WINDOW_END=2026-10-08T12:00:00Z
+FETCHED_AT=2026-10-09T20:10:03Z
+WORKFLOW_FILTER=ci.yml
+TOTAL_JOB_MINUTES=3209.0
+TOTAL_JOB_SECONDS=192540
+RUNS_COMPLETED=23
+RUNS_NOT_COMPLETED=0
+RUNS_RERUN=0
+RUNS_NOJOBS=1
+JOBS_COUNTED=766
+JOBS_SKIPPED=26
+JOBS_RUNNERLESS=0
+JOBS_UNTIMED=0
+BY_WORKFLOW	ci.yml	merge_group	4	136	653.6
+BY_WORKFLOW	ci.yml	pull_request	15	494	1925.6
+BY_WORKFLOW	ci.yml	push	4	136	629.8
+STEM	ci.yml	merge_group	adr-ordinals	4	0	0	4	0.9	0.23
+STEM	ci.yml	merge_group	credential-path-guard	4	0	0	4	1.7	0.42
+STEM	ci.yml	merge_group	critical-css-gate	4	0	0	4	4.2	1.05
+STEM	ci.yml	merge_group	detect-changes	4	0	0	4	1.4	0.35
+STEM	ci.yml	merge_group	e2e	4	0	0	4	21.7	5.41
+STEM	ci.yml	merge_group	encryption-posture	4	0	0	4	1.0	0.25
+STEM	ci.yml	merge_group	grok-fidelity	4	0	0	4	1.5	0.38
+STEM	ci.yml	merge_group	harness-discovery	4	0	0	4	1.9	0.48
+STEM	ci.yml	merge_group	lint-bot-statuses	4	0	0	4	4.7	1.18
+STEM	ci.yml	merge_group	lint-webplat	4	0	0	4	6.1	1.53
+STEM	ci.yml	merge_group	lockfile-sync	4	0	0	4	3.2	0.80
+STEM	ci.yml	merge_group	marketplace-manifest-guard	4	0	0	4	1.2	0.29
+STEM	ci.yml	merge_group	plugin-root-propagation-gate	0	4	0	0	0.0	0.00
+STEM	ci.yml	merge_group	rule-body-lint	4	0	0	4	1.5	0.37
+STEM	ci.yml	merge_group	sandbox-canary-capture-gate	0	4	0	0	0.0	0.00
+STEM	ci.yml	merge_group	service-role-allowlist-gate	4	0	0	4	1.1	0.26
+STEM	ci.yml	merge_group	shard-totality-mutations	4	0	0	12	37.7	9.42
+STEM	ci.yml	merge_group	tc-document-sha-guard	4	0	0	4	1.3	0.32
+STEM	ci.yml	merge_group	test	4	0	0	4	0.3	0.06
+STEM	ci.yml	merge_group	test-bun	4	0	0	4	9.4	2.35
+STEM	ci.yml	merge_group	test-scripts	4	0	0	32	428.8	107.21
+STEM	ci.yml	merge_group	test-scripts-heavy	4	0	0	12	71.4	17.85
+STEM	ci.yml	merge_group	test-webplat	4	0	0	8	41.8	10.45
+STEM	ci.yml	merge_group	web-platform-build	4	0	0	4	10.9	2.73
+STEM	ci.yml	pull_request	adr-ordinals	14	0	0	14	3.1	0.21
+STEM	ci.yml	pull_request	credential-path-guard	14	0	0	14	5.6	0.38
+STEM	ci.yml	pull_request	critical-css-gate	4	9	1	4	4.1	0.27
+STEM	ci.yml	pull_request	detect-changes	14	0	0	14	5.3	0.35
+STEM	ci.yml	pull_request	e2e	14	0	0	14	61.1	4.07
+STEM	ci.yml	pull_request	encryption-posture	14	0	0	14	3.8	0.25
+STEM	ci.yml	pull_request	grok-fidelity	14	0	0	14	5.2	0.35
+STEM	ci.yml	pull_request	harness-discovery	14	0	0	14	6.1	0.40
+STEM	ci.yml	pull_request	lint-bot-statuses	14	0	0	14	15.4	1.03
+STEM	ci.yml	pull_request	lint-webplat	14	0	0	14	25.2	1.68
+STEM	ci.yml	pull_request	lockfile-sync	14	0	0	14	11.6	0.78
+STEM	ci.yml	pull_request	marketplace-manifest-guard	14	0	0	14	4.0	0.26
+STEM	ci.yml	pull_request	plugin-root-propagation-gate	14	0	0	14	5.4	0.36
+STEM	ci.yml	pull_request	rule-body-lint	14	0	0	14	5.4	0.36
+STEM	ci.yml	pull_request	sandbox-canary-capture-gate	14	0	0	14	5.3	0.35
+STEM	ci.yml	pull_request	service-role-allowlist-gate	14	0	0	14	3.7	0.25
+STEM	ci.yml	pull_request	shard-totality-mutations	14	0	0	42	125.9	8.39
+STEM	ci.yml	pull_request	tc-document-sha-guard	14	0	0	14	5.1	0.34
+STEM	ci.yml	pull_request	test	14	0	0	14	0.8	0.05
+STEM	ci.yml	pull_request	test-bun	14	0	0	14	30.2	2.01
+STEM	ci.yml	pull_request	test-scripts	14	0	0	112	1340.8	89.39
+STEM	ci.yml	pull_request	test-scripts-heavy	14	0	0	42	61.6	4.11
+STEM	ci.yml	pull_request	test-webplat	14	0	0	28	154.2	10.28
+STEM	ci.yml	pull_request	web-platform-build	14	0	0	14	37.0	2.46
+STEM	ci.yml	push	adr-ordinals	4	0	0	4	1.0	0.25
+STEM	ci.yml	push	credential-path-guard	4	0	0	4	1.7	0.42
+STEM	ci.yml	push	critical-css-gate	4	0	0	4	4.1	1.01
+STEM	ci.yml	push	detect-changes	4	0	0	4	1.7	0.43
+STEM	ci.yml	push	e2e	4	0	0	4	16.3	4.08
+STEM	ci.yml	push	encryption-posture	4	0	0	4	1.2	0.29
+STEM	ci.yml	push	grok-fidelity	4	0	0	4	1.6	0.40
+STEM	ci.yml	push	harness-discovery	4	0	0	4	2.0	0.50
+STEM	ci.yml	push	lint-bot-statuses	4	0	0	4	4.6	1.14
+STEM	ci.yml	push	lint-webplat	4	0	0	4	6.4	1.60
+STEM	ci.yml	push	lockfile-sync	4	0	0	4	3.0	0.74
+STEM	ci.yml	push	marketplace-manifest-guard	4	0	0	4	1.2	0.29
+STEM	ci.yml	push	plugin-root-propagation-gate	0	4	0	0	0.0	0.00
+STEM	ci.yml	push	rule-body-lint	4	0	0	4	1.5	0.38
+STEM	ci.yml	push	sandbox-canary-capture-gate	0	4	0	0	0.0	0.00
+STEM	ci.yml	push	service-role-allowlist-gate	4	0	0	4	1.1	0.28
+STEM	ci.yml	push	shard-totality-mutations	4	0	0	12	36.5	9.13
+STEM	ci.yml	push	tc-document-sha-guard	4	0	0	4	1.4	0.35
+STEM	ci.yml	push	test	4	0	0	4	0.2	0.05
+STEM	ci.yml	push	test-bun	4	0	0	4	9.2	2.29
+STEM	ci.yml	push	test-scripts	4	0	0	32	413.8	103.45
+STEM	ci.yml	push	test-scripts-heavy	4	0	0	12	70.5	17.63
+STEM	ci.yml	push	test-webplat	4	0	0	8	41.0	10.25
+STEM	ci.yml	push	web-platform-build	4	0	0	4	10.0	2.50
