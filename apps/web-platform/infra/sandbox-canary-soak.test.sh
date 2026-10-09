@@ -110,24 +110,24 @@ assert "readers expect the same three stamps" \
   "grep -q '\"sandbox-canary\"' \"$CAT_TARGET\" && grep -q '\"sandbox-canary-outer-wrap\"' \"$CAT_TARGET\" && grep -q '\"workspace-isolation\"' \"$CAT_TARGET\""
 
 # 8. Capability parity (review ask — static check, no docker needed): the
-# arm-F privilege model has THREE halves that must never drift apart —
-# (a) the image sets the file caps, (b) EVERY docker run retains SYS_ADMIN
-# in the bounding set, (c) the deployed argv carries zero --unshare-*.
-# A drift on any leg silently degrades the arm to the implicit-userns
-# fallback (wrong_elevation_userns at the canary — or worse, a green
-# userns run that starves the inner sandbox).
+# reverted arm-F posture has THREE pins that must never drift —
+# (a) the image carries NO file-cap'd bwrap (released bwrap refuses to run
+#     with caps — v0.333.1 canary_sandbox_failed), (b) the getcap audit
+#     still asserts the zero-file-cap invariant, (c) the deployed argv
+#     carries zero --unshare-*. A re-add of setcap without the elevation
+#     redesign silently poisons every bwrap call in the container again.
 DOCKERFILE="$SCRIPT_DIR/../Dockerfile"
 CLOUD_INIT="$SCRIPT_DIR/../infra/cloud-init.yml"
 FIXTURE="$SCRIPT_DIR/agent-outer-wrap-argv.json"
-assert "Dockerfile sets the file-cap triple on /usr/bin/bwrap" \
-  "grep -q 'setcap cap_sys_admin,cap_setuid,cap_setgid+ep /usr/bin/bwrap' \"$DOCKERFILE\""
-assert "Dockerfile audits {bwrap}-only file caps (getcap -r /)" \
+assert "Dockerfile does NOT setcap /usr/bin/bwrap (upstream bwrap refuses caps)" \
+  "! grep -q 'setcap .*bwrap' \"$DOCKERFILE\""
+assert "Dockerfile audits zero file-cap'd binaries (getcap -r /)" \
   "grep -q 'getcap -r /' \"$DOCKERFILE\""
 CAP_ADD_CI="$(grep -c -- '--cap-add SYS_ADMIN' "$TARGET")"
-assert "ci-deploy docker runs carry --cap-add SYS_ADMIN (canary + prod, >=2 sites)" \
-  "[[ \"$CAP_ADD_CI\" -ge 2 ]]"
-assert "cloud-init first-boot docker run carries --cap-add SYS_ADMIN" \
-  "grep -q -- '--cap-add SYS_ADMIN' \"$CLOUD_INIT\""
+assert "ci-deploy docker runs carry no --cap-add SYS_ADMIN (reverted with file-cap arm)" \
+  "[[ \"$CAP_ADD_CI\" == 0 ]]"
+assert "cloud-init first-boot docker run carries no --cap-add SYS_ADMIN" \
+  "! grep -q -- '--cap-add SYS_ADMIN' \"$CLOUD_INIT\""
 UNSHARE_FIXTURE="$(grep -c -- '"--unshare' "$FIXTURE" || true)"
 assert "committed outer fixture carries zero --unshare-* tokens" \
   "[[ \"$UNSHARE_FIXTURE\" == 0 ]]"

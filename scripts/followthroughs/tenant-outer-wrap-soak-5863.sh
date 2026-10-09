@@ -19,7 +19,7 @@
 # Exit semantics (per scripts/sweep-followthroughs.sh contract):
 #   0 = PASS       (≥5 consecutive green verdicts over ≥3 days — promote the
 #                   outer-wrap arm to gating in a follow-up; sweeper closes the soak issue)
-#   1 = FAIL       (the outer-wrap replay returned sandbox_broken — the file-cap
+#   1 = FAIL       (the outer-wrap replay returned sandbox_broken — the elevated
 #                   mountns regressed or a sibling mount was realized;
 #                   investigate before promoting)
 #   * = TRANSIENT  (endpoint unreachable / non-JSON / soak not yet complete; retry)
@@ -104,7 +104,7 @@ for n in "$CONSEC" "$FIRST" "$CHECKED"; do
 done
 
 if [[ "$VERDICT" == "sandbox_broken" ]]; then
-  echo "FAIL: outer-wrap canary verdict=sandbox_broken reason=$REASON — the file-cap mountns regressed or the realized isolation probe failed. Investigate server/agent-outer-wrap.ts + Dockerfile setcap/cloud-init --cap-add posture before promoting (do NOT promote)." >&2
+  echo "FAIL: outer-wrap canary verdict=sandbox_broken reason=$REASON — the privileged mountns regressed or the realized isolation probe failed. Investigate server/agent-outer-wrap.ts + Dockerfile/cloud-init elevation posture before promoting (do NOT promote)." >&2
   exit 1
 fi
 

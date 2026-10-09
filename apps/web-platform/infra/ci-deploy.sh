@@ -2725,7 +2725,7 @@ run_faithful_sandbox_canary() {
 
 # run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
 # Replays the SELF-AUTHORED outer mount-table fixture inside the canary
-# container (the file-cap'd /usr/bin/bwrap posture the prod wrap depends on)
+# container (the elevation posture the prod wrap depends on)
 # and runs the shared isolation payload in the resulting namespace. Its
 # verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
 # #5863 soak follow-through; promotion to gating is a separate change after
@@ -4050,11 +4050,6 @@ case "$COMPONENT" in
     # pdf-linearize tempfiles and keeps /tmp ephemeral. Post-GIT_ASKPASS
     # migration (git-auth.ts), git no longer writes credential helpers
     # under /tmp — the askpass script lives in $HOME instead.
-    # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
-    # (never effective — the app runs as non-root soleur) so the file-cap'd
-    # /usr/bin/bwrap can elevate at exec. Without it the wrap falls back to
-    # implicit userns — the arm Phase 0 measured fatal to the inner sandbox —
-    # and the outer-wrap canary would measure the wrong elevation path.
     docker run -d \
       --name soleur-web-platform-canary \
       --log-driver journald \
@@ -4064,7 +4059,6 @@ case "$COMPONENT" in
       --init \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
-      --cap-add SYS_ADMIN \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
@@ -4398,11 +4392,6 @@ case "$COMPONENT" in
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
-      # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
-      # (never effective — the app runs as non-root soleur) so the file-cap'd
-      # /usr/bin/bwrap can elevate at exec — same posture cloud-init.yml's
-      # first-boot run grants; every subsequent deploy re-creates the
-      # container HERE.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \
@@ -4412,7 +4401,6 @@ case "$COMPONENT" in
         --init \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
-        --cap-add SYS_ADMIN \
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
