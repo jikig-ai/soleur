@@ -85,7 +85,10 @@ lint() {
               if (code ~ /admin-merge-ready\.sh/) seen = 1
             }
             END { print "HITS " hits + 0 }')
-  hits=$(grep -oE '^HITS [0-9]+$' <<<"$out" | tail -1 | cut -d' ' -f2)
+  # xargs may split the file list into several awk runs, each printing its own
+  # `HITS n` at END — take the SUM, not the last line (a trailing empty batch
+  # otherwise reports hits=0 in worktrees whose long paths split the list).
+  hits=$(grep -oE '^HITS [0-9]+$' <<<"$out" | awk '{s += $2} END {print s+0}')
   grep '^VIOLATION' <<<"$out" && v=1
   (( ${hits:-0} >= 3 )) || { echo "VIOLATION population: only ${hits:-0} admin-merge lines found (want >= 3) -- the scan is not seeing the tree"; v=1; }
 

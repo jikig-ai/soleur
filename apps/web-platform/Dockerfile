@@ -38,7 +38,7 @@ RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
 
-# Stage 3: Global CLI tools (the two `npm install -g` layers the runner needs).
+# Stage 3: Global CLI tools (the three `npm install -g` layers the runner needs).
 # A stage of their own, FROM the pinned base image (never from `builder`, whose build ARGs
 # declare SENTRY_AUTH_TOKEN), so that CI can build exactly this stage on every pull request
 # (`web-platform-build`, about a minute, npm registry only) instead of a full runner build
@@ -88,6 +88,18 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.293
 # Do NOT add it to the claude-code line above: its postinstall places the native binary, and without
 # it the CLI reports "claude native binary not installed".
 RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
+
+# vitest for the deploy-time cross-workspace isolation canary probe (#2640).
+# ci-deploy.sh `docker exec`s `vitest run --config test/vitest.canary.config.ts`
+# inside the canary container before the prod swap; the host has no node and the
+# canary image is the only place the real artifact's sandbox can be exercised.
+# Global install (NOT a package.json devDep copy) — same pattern as likec4 above.
+# KEEP IN SYNC with the lockfile's node_modules/vitest version: the pin is
+# asserted by test/dockerfile-vitest-version-pin.test.ts so the canary runs the
+# vitest the suite was authored against. `--before` bounds the floating
+# transitive tree to the day after vitest 4.1.11's publish date (2026-08-18);
+# `--ignore-scripts` matches the likec4 install mode.
+RUN npm install -g vitest@4.1.11 --before=2026-08-19 --ignore-scripts
 
 # Stage 4: Production image with only runtime artifacts
 FROM cli-tools AS runner
@@ -242,6 +254,17 @@ COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
 # swap and the boot path in the booted container. Standalone node:crypto + fetch, like the canary.
 COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
+
+# Cross-workspace isolation canary payload (#2640). Three exact files — the
+# deterministic direct-bwrap tier of test/sandbox-isolation.test.ts runs inside
+# the canary via `docker exec … vitest run` (SOLEUR_ISOLATION_TIERS=direct keeps
+# the live-API query tier out of the deploy path). `vitest.canary.config.ts` is
+# a minimal standalone config because the repo vitest.config.ts loads files
+# that stay pruned from the image. Each is re-included from the `test/` prune by
+# an exact-path .dockerignore bang — no `!test/` directory bang (it cascades).
+COPY --from=builder /app/test/sandbox-isolation.test.ts ./test/sandbox-isolation.test.ts
+COPY --from=builder /app/test/helpers/sandbox-isolation-fixtures.ts ./test/helpers/sandbox-isolation-fixtures.ts
+COPY --from=builder /app/test/vitest.canary.config.ts ./test/vitest.canary.config.ts
 
 # #5863 outer-wrap canary arm: the self-authored outer mount-table fixture
 # (pinned to buildOuterWrapArgv output by the Guard-2 test) plus the shared

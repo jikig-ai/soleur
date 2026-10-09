@@ -925,6 +925,7 @@ betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-late
 # the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot pass while sending
 # no credential).
 HMAC_MANIFEST='canary-promotion-5875|dynamic|deploy\.soleur\.ai|1|canary_pass|
+workspace-isolation-verdict-2640|dynamic|deploy\.soleur\.ai|1|workspace_isolation_pass|
 infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
 infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
 inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
@@ -2965,6 +2966,7 @@ printf '#!%s\nprintf "not-a-digest"\n' "$BASH_BIN" > "$PYGARB/python3"          
 printf '#!%s\n[[ "${1:-}" == "-I" ]] && exit 1\nexec "%s" "$@"\n' "$BASH_BIN" "$REAL_PY" > "$PYSEL/python3"   # fails ONLY the HMAC call (-I -c), runs the host-key parse
 chmod +x "$PYBAD/python3" "$PYGARB/python3" "$PYSEL/python3"
 printf '%s' '{"sandbox_canary":{"verdict":"pass","consecutive_pass":6,"first_pass_at":1700000000,"checked_at":1700345600,"sdk_version":"0.0.0-synthetic"}}' > "$BODIES/canary_pass.json"
+printf '%s' '{"workspace_isolation":{"verdict":"pass","consecutive_pass":6,"first_pass_at":1700000000,"checked_at":1700345600}}' > "$BODIES/workspace_isolation_pass.json"
 printf '%s' '{"schema_version":2,"start_ts":1700000000,"end_ts":1700000100,"fatal_rc":0}' > "$BODIES/fatal_frame.json"
 HMX_ENV=("WEBHOOK_DEPLOY_SECRET=$HMX_KEY" "CF_ACCESS_CLIENT_ID=$HMX_CFID" "CF_ACCESS_CLIENT_SECRET=$HMX_CFSEC"
   "BETTERSTACK_QUERY_HOST=bs.example.test" "BETTERSTACK_QUERY_USERNAME=bsu" "BETTERSTACK_QUERY_PASSWORD=bsp"

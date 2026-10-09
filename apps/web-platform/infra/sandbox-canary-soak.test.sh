@@ -90,6 +90,25 @@ assert "outer reader default is NOT /var/run tmpfs" "[[ \"$OREADER_DEFAULT\" != 
 assert "outer writer + reader defaults MATCH" "[[ \"$OWRITER_DEFAULT\" == \"$OREADER_DEFAULT\" ]]"
 assert "outer ledger aliases the inner ledger" "[[ \"$OWRITER_DEFAULT\" != \"$WRITER_DEFAULT\" ]]"
 
+# 7b. The #2640 WORKSPACE-ISOLATION ledger — third ledger, same #5889
+# durability/parity contract (WORKSPACE_ISOLATION_STATE_FILE). A drifted
+# default would silently TRANSIENT the verdict-2640 followthrough forever.
+WIWRITER_DEFAULT="$(grep -oE 'WORKSPACE_ISOLATION_STATE_FILE:-[^}]+' "$TARGET" | head -1 | sed 's/.*:-//')"
+WIREADER_DEFAULT="$(grep -oE 'WORKSPACE_ISOLATION_STATE_FILE:-[^}]+' "$CAT_TARGET" | head -1 | sed 's/.*:-//')"
+assert "WI writer default is durable (/mnt/data), not tmpfs" "[[ \"$WIWRITER_DEFAULT\" == /mnt/data/* ]]"
+assert "WI reader default is durable (/mnt/data), not tmpfs" "[[ \"$WIREADER_DEFAULT\" == /mnt/data/* ]]"
+assert "WI writer + reader defaults MATCH" "[[ \"$WIWRITER_DEFAULT\" == \"$WIREADER_DEFAULT\" ]]"
+assert "WI ledger aliases neither canary ledger" "[[ \"$WIWRITER_DEFAULT\" != \"$WRITER_DEFAULT\" && \"$WIWRITER_DEFAULT\" != \"$OWRITER_DEFAULT\" ]]"
+
+# 7c. Ledger-stamp vocabulary pairing: the writer's `ledger` field must name a
+# stamp the readers' expected-ledger arguments accept — a drift between the
+# two restatements makes every ledger read `foreign_ledger_stamp` (all three
+# deploy-status keys permanently 'unknown'). Pin the pairs on BOTH sides.
+assert "writer stamps sandbox-canary / outer-wrap / workspace-isolation" \
+  "grep -q '\"sandbox_broken\" \"\$sentry_op\"' \"$TARGET\" && grep -q \"'workspace-isolation'\" \"$TARGET\" && grep -q '\"sandbox-canary\"' \"$TARGET\" && grep -q '\"sandbox-canary-outer-wrap\"' \"$TARGET\""
+assert "readers expect the same three stamps" \
+  "grep -q '\"sandbox-canary\"' \"$CAT_TARGET\" && grep -q '\"sandbox-canary-outer-wrap\"' \"$CAT_TARGET\" && grep -q '\"workspace-isolation\"' \"$CAT_TARGET\""
+
 # 8. Capability parity (review ask — static check, no docker needed): the
 # arm-F privilege model has THREE halves that must never drift apart —
 # (a) the image sets the file caps, (b) EVERY docker run retains SYS_ADMIN
