@@ -245,6 +245,8 @@ const LIKEC4_RUN = new RegExp(`^RUN ${LIKEC4_CMD}$`);
 // naming a package manager (or NPM_CONFIG_*) that is not one of them is refused, because the spellings of a
 // global install are unbounded and an allowlist over logical lines is not.
 const PACKAGE_MANAGER = /\b(?:npm|npx|pnpm|yarn|bunx?|corepack)(?![a-z])/i;
+// The ADR-276 S2 (#9512) condition every gated ci.yml job carries; scripts/ci-push-dedupe.test.sh pins the same string against ci.yml.
+const PUSH_DEDUPE_IF = "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}";
 const RUNNER_PM_ALLOWED = [/^RUN npm ci --omit=dev$/, /^RUN npx playwright@\S+ install --with-deps chromium$/];
 
 function checkImageStructure(dockerfile: string, ci: string): string[] {
@@ -289,7 +291,7 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
 
   // ci.yml: exactly one step builds the stage, as one object (a commented-out or split step is not one).
   type Step = { uses?: string; if?: unknown; "continue-on-error"?: unknown; with?: Record<string, unknown> } & Record<string, unknown>;
-  type Job = { steps?: Step[]; if?: unknown; "continue-on-error"?: unknown; "runs-on"?: unknown };
+  type Job = { steps?: Step[]; if?: unknown; needs?: unknown; "continue-on-error"?: unknown; "runs-on"?: unknown };
   let doc: { jobs?: Record<string, Job> };
   try {
     doc = parseYaml(ci) as typeof doc;
@@ -299,10 +301,16 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
   }
   const job = doc?.jobs?.["web-platform-build"];
   // A job-level `continue-on-error` or `if` silences BOTH build steps while the step-level checks stay green.
+  // The one sanctioned exception (ADR-276 S2, #9512): `needs: [push-dedupe]` plus the exact condition below, which is true on
+  // every event except a push to main whose identical SHA already passed the full battery in the merge queue. Anything else
+  // (a different condition, a different `needs`) is still refused.
   for (const k of Object.keys(job ?? {})) {
     if (k === "continue-on-error") violations.push("ci.yml: web-platform-build must not set job-level continue-on-error (the cli-tools gate would go green on failure)");
-    else if (k === "if") violations.push("ci.yml: web-platform-build must not be conditional at job level");
-    else if (!["timeout-minutes", "runs-on", "steps"].includes(k)) violations.push(`ci.yml: web-platform-build sets unexpected job key ${k} (only timeout-minutes, runs-on, steps)`);
+    else if (k === "if") {
+      if (job?.if !== PUSH_DEDUPE_IF) violations.push("ci.yml: web-platform-build must not be conditional at job level");
+    } else if (k === "needs") {
+      if (!(Array.isArray(job?.needs) && job.needs.length === 1 && job.needs[0] === "push-dedupe")) violations.push(`ci.yml: web-platform-build sets unexpected job key needs (only timeout-minutes, runs-on, steps, and the ADR-276 S2 pair needs: [push-dedupe] with its exact if:)`);
+    } else if (!["timeout-minutes", "runs-on", "steps"].includes(k)) violations.push(`ci.yml: web-platform-build sets unexpected job key ${k} (only timeout-minutes, runs-on, steps)`);
   }
   if (job && "runs-on" in job && !(typeof job["runs-on"] === "string" && /^ubuntu-/.test(job["runs-on"]))) {
     violations.push(`ci.yml: web-platform-build must run on a GitHub-hosted ubuntu runner, found ${JSON.stringify(job["runs-on"])}`);
@@ -362,7 +370,8 @@ function checkLikec4InstallJobs(src: string, name: string, expected: string[]): 
       if (typeof s.run !== "string" || extractInstallLines(s.run).length === 0) continue;
       found.push(jobId);
       // A job-level `if` or `continue-on-error` skips or masks every step in it, install included.
-      if ("if" in job || "continue-on-error" in job) violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
+      // Exception: the ADR-276 S2 (#9512) condition, exact, which is true on every event except an elided push to main.
+      if (("if" in job && job.if !== PUSH_DEDUPE_IF) || "continue-on-error" in job) violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
       if ("if" in s || "continue-on-error" in s) violations.push(`${name}: the likec4 install step in ${jobId} must not be conditional or non-blocking`);
     }
   }
@@ -959,6 +968,10 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
   it("ci row 6: a job-level continue-on-error or if silences the gate and is refused", () => {
     expect(run(dockerfile(), stepYaml("", "", "", "continue-on-error: true"))).toMatch(/job-level continue-on-error/);
     expect(run(dockerfile(), stepYaml("", "", "", "if: false"))).toMatch(/not be conditional at job level/);
+    // The ADR-276 S2 exception is exactly one pair: the canonical condition and `needs: [push-dedupe]`; near-misses stay refused.
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe]\n    if: ${PUSH_DEDUPE_IF}`))).toBe("");
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe]\n    if: ${PUSH_DEDUPE_IF.replace("!cancelled()", "success()")}`))).toMatch(/not be conditional at job level/);
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe, other]\n    if: ${PUSH_DEDUPE_IF}`))).toMatch(/unexpected job key needs/);
   });
 
   it("ci row 7: an action ref that is not a full commit SHA, and any other job-level key, are refused", () => {
@@ -1006,6 +1019,9 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
   it("job-level if / continue-on-error on a job that carries the install is refused", () => {
     const withJobKey = (key: string): string => ci().replace("  test-scripts:\n", `  test-scripts:\n    ${key}\n`);
     expect(checkCiLikec4Jobs(withJobKey("if: false")).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
+    // The one sanctioned condition (ADR-276 S2) passes; a near-miss does not.
+    expect(checkCiLikec4Jobs(withJobKey(`if: ${PUSH_DEDUPE_IF}`)).join("\n")).toBe("");
+    expect(checkCiLikec4Jobs(withJobKey(`if: ${PUSH_DEDUPE_IF.replace("!cancelled()", "success()")}`)).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(withJobKey("continue-on-error: true")).join("\n")).toMatch(/job test-scripts carries/);
   });
 

@@ -5643,10 +5643,11 @@ if want_scripts; then
   # #6197: inngest-host-replace scoped-recreate destroy-guard (same sourced-gate shape the
   # web2-recreate gate used before #6575 deleted it).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
-  # #7695 — the two guards on apply_target=inngest-volume-recut. NOTHING auto-discovers
-  # tests/scripts/: the `*.test.sh` glob elsewhere in this file cannot match a `test-*` prefix, so
-  # an unregistered suite here never gates and the failure is silent-and-green.
-  run_suite "tests/scripts/inngest-volume-recut-gate" bash tests/scripts/test-inngest-volume-recut-gate.sh
+  # #8285 — the plan-shape, live-store and destroy-precondition gates on apply_target=inngest-backstop-retire
+  # (successor of the retired recut gate). NOTHING auto-discovers tests/scripts/: the `*.test.sh` glob
+  # elsewhere in this file cannot match a `test-*` prefix, so an unregistered suite here never gates and
+  # the failure is silent-and-green. It also executes nothing destructive: fixtures only.
+  run_suite "tests/scripts/inngest-backstop-retire-gate" bash tests/scripts/test-inngest-backstop-retire-gate.sh
   run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
   # #6894 — ADR-142 Guard 3: the per-address plan-shape gate on the inngest-host dispatch (which
   # also creates the additive LUKS volume). Same orphan trap as above: nothing globs tests/scripts/test-*.sh.
@@ -5938,6 +5939,13 @@ if want_scripts; then
   # because scripts/*.test.sh is covered by no glob here; appended LAST in the block so no earlier
   # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
   run_suite "scripts/learning-retrieval-bench" bash scripts/learning-retrieval-bench.test.sh
+  # #9512 (ADR-276 S2): the push-dedupe proof. Extracts the proof step body from ci.yml and EXECUTES it under the
+  # Actions shell against a gh shim, and pins the eight gated conditions, the `test` aggregator and the wrapper.
+  # Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-push-dedupe" bash scripts/ci-push-dedupe.test.sh
+  # #9512: the push-dedupe soak probe's exit-code contract (a fake gh, an injected clock, and mutation rows over
+  # copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/ci-push-dedupe-soak-9512" bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
 fi
 
 # Named bun-test entries — bun shard.

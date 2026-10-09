@@ -302,6 +302,7 @@ scripts/check-web-host-escrow-config	61002	measured
 scripts/ci-demand-census	996	floor
 scripts/ci-deploy-sentry-post-fail-6475	105	measured
 scripts/ci-leg-balance-9232	5478	measured
+scripts/ci-push-dedupe	996	floor
 scripts/classify-workflow-transitions	2403	measured
 scripts/compound-promote	337	measured
 scripts/compound-promote-outcome-8281	537	measured
@@ -328,6 +329,7 @@ scripts/followthrough-exec-bit	20	measured
 scripts/followthrough-predicate-parity	1887	measured
 scripts/followthrough-varq-ban	23235	measured
 scripts/followthrough-varq-ban-live	1231	measured
+scripts/followthroughs/ci-push-dedupe-soak-9512	996	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	9722	measured
 scripts/followthroughs/t5-skip-persistence-bound-7510	9063	measured
 scripts/followthroughs/tty-ack-migration-9387	979	floor
@@ -527,10 +529,10 @@ tests/scripts/git-data-rung2-evidence-capture	12863	measured
 tests/scripts/git-data-rung2-plan-shape	1019	measured
 tests/scripts/host-image-coherence-preflight	46	measured
 tests/scripts/infra-privileged-tier-census	13029	measured
+tests/scripts/inngest-backstop-retire-gate	28000	floor
 tests/scripts/inngest-host-dark-gate	15641	measured
 tests/scripts/inngest-host-replace-gate	1336	measured
 tests/scripts/inngest-host-shape-gate	4342	measured
-tests/scripts/inngest-volume-recut-gate	2266	measured
 tests/scripts/kb-drift-walker	82	measured
 tests/scripts/lint-rule-bodies	4670	measured
 tests/scripts/lint-rule-ids	1100	measured

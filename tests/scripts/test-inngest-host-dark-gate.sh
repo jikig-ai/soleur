@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for tests/scripts/lib/inngest-host-dark-gate.sh — BOTH of its entry points: Guard 2 of the
-# inngest-volume-recut apply_target (#7695), the layer that checks the WORLD rather than an intent,
+# (since #8285 PR A, RETIRED) inngest-volume-recut apply_target (#7695), the layer that checks the WORLD rather than an intent,
 # and — since #8054, section 6 below — `inngest_execute_registry_gate`, op=execute 2.0's positively-
 # dark pre-flight, which shares the row-grading prelude with Guard 2.
 #
@@ -473,7 +473,8 @@ predicate G16 "flush_latched=__UNREADABLE__ => unreadable" unreadable "$TMP/rows
 mk_rows "$TMP/rows-g16b.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg flush_latched=true)")"
 expect "[G16b] flush_latched=true still => dark (neither polarity blocks)" dark "$TMP/rows-g16b.json" "$FIN"
 
-# G17 — the LIVE Hetzner attachment disagrees with the operator's pin. Guard 1's ID-PIN reads a plan
+# G17 — the LIVE Hetzner attachment disagrees with the operator's pin. The plan-shape gate's ID-PIN
+# (the recut gate's Guard 1, now the retire gate's) reads a plan
 # document; this one reads the world, and it is the world that gets destroyed.
 predicate G17 "the live volume id != the pin => id_pin_mismatch" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id "$OTHERID"
 expect "[G17b] an UNREADABLE live volume id => id_pin_mismatch (fail-closed)" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id ""
@@ -862,136 +863,23 @@ else
   fi
 fi
 
-# ══ Row 6 — the guard's own dispatch: SOURCED and CALLED by the workflow ═════════
-# A guard that reports "0 checked" and exits 0 is vacuous, and nothing inside the gate function can
-# see its own call site.
+# ══ Row 6/7/7b — RETIRED WITH THE inngest_volume_recut JOB (#8285) ═════════════════
+# These rows graded the workflow's use of this gate: that apply-web-platform-infra.yml SOURCED it and
+# CALLED it under `if !`, that G17-G20 were bound from variables (not literals), that the two probe
+# windows stayed `--since 90m`, and the operator-facing recovery prose of the recut dispatch. That job was
+# converted into inngest_backstop_retire, which grades the live store through
+# tests/scripts/lib/inngest-backstop-retire-gate.sh (its own suite, test-inngest-backstop-retire-gate.sh)
+# and does not use this gate. The gate's remaining consumer is scripts/cutover-inngest.sh, whose wiring is
+# pinned below (the cq-assert-anchor-not-bare-token form: the `source` keyword at the start of a line,
+# comments stripped), and the workflow is pinned NOT to re-acquire an unreviewed copy of the call.
 WF="${REPO_ROOT}/.github/workflows/apply-web-platform-infra.yml"
-# ANCHORED ON THE STATEMENT, NOT THE PATH. A bare `grep -qF '<path>'` is satisfied by the
-# `# shellcheck source=…` directive and by any prose comment naming the file — measured: deleting
-# the real `source` line left this suite at 94/0. This is `cq-assert-anchor-not-bare-token`, and
-# the anchor that cannot be a comment is the `source`/`.` keyword at the start of the line.
-if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*tests/scripts/lib/inngest-host-dark-gate\.sh' "$WF"; then pass; else fail "Row 6a: the workflow has no live SOURCE statement for inngest-host-dark-gate.sh (a comment naming the path is not a source)"; fi
-if grep -qE '^[[:space:]]*if ! inngest_host_dark_gate ' "$WF"; then pass; else fail "Row 6b: the workflow does not CALL inngest_host_dark_gate under a non-suppressing 'if !'"; fi
-# THE WORKFLOW'S `stale_schema` REMEDY DERIVES THE EXPECTED SCHEMA FROM THIS LIB WITH A GREP — and
-# #8054's "define the schema once" refactor silently broke that grep (it read
-# `expected_schema="[0-9]+"`, a literal the lib no longer carries; a code-quality review agent
-# caught it). Extract the operator's command from the workflow text, run it against the live lib,
-# and require a digit equal to the constant — the cross-consumer grep (hr-type-widening-cross-
-# consumer-grep) made mechanical.
-_wf_pat='EXPECTED=\\?\$\(grep -oE '"'"'[^'"'"']*'"'"' tests/scripts/lib/inngest-host-dark-gate\.sh[^)]*\)'
-_wf_derive="$(grep -oE "$_wf_pat" "$WF" | head -1 | sed 's/\\\$/$/g')"
-if [[ -n "$_wf_derive" ]]; then
-  _wf_expected="$(cd "$REPO_ROOT" && eval "$_wf_derive"; printf '%s' "$EXPECTED")"
-  _lib_expected="$(grep -oE '^_IHDG_EXPECTED_SCHEMA="[0-9]+"' "$GATE" | grep -oE '[0-9]+')"
-  if [[ "$_wf_expected" =~ ^[0-9]+$ && "$_wf_expected" == "$_lib_expected" ]]; then pass; else fail "Row 6d: the workflow's stale_schema remedy derives EXPECTED='${_wf_expected}' from this lib (want '${_lib_expected}'): the operator's copy-paste would misjudge whether the pinned image carries the schema"; fi
-else
-  fail "Row 6d: could not locate the workflow's EXPECTED=\$(grep … inngest-host-dark-gate.sh …) derivation to test it"
-fi
-# Row 6b proves the call EXISTS. It does not prove it RUNS: wrapping it in `if [ 1 -eq 0 ]; then`
-# left the suite green. Assert no conditional opens between the source and the call — the cheap
-# structural form of reachability, and the one a reviewer can check by eye.
-_gate_call_line="$(grep -nE '^[[:space:]]*if ! inngest_host_dark_gate ' "$WF" | head -1 | cut -d: -f1)"
-_gate_src_line="$(grep -nE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*inngest-host-dark-gate\.sh' "$WF" | head -1 | cut -d: -f1)"
-if [[ -n "$_gate_call_line" && -n "$_gate_src_line" && "$_gate_call_line" -gt "$_gate_src_line" ]]; then
-  _between="$(sed -n "$((_gate_src_line + 1)),$((_gate_call_line - 1))p" "$WF" | grep -cE '^[[:space:]]*(if|case|while|until)[[:space:]]')"
-  if [[ "$_between" -eq 0 ]]; then pass; else fail "Row 6c: ${_between} conditional(s) open between the source and the gate call — the call may be unreachable"; fi
-else
-  fail "Row 6c: could not locate both the source and the call (src=${_gate_src_line:-none} call=${_gate_call_line:-none})"
-fi
-
-# ══ Row 7 — ARGUMENT BINDING ════════════════════════════════════════════════════
-# THE TWENTY-PREDICATE BATTERY GRADES THE GATE'S REACTION TO VALUES IT IS HANDED. It says nothing
-# about what the workflow hands it, and G17–G20 are precisely the four predicates whose entire
-# value is that plumbing. Measured: rebinding `--live-attachment-id` to the operator's own pin
-# (making G17 `x == x`), `--followthrough-rc` to a literal 0, `--cutover-flag` to a literal
-# `rolled-back` and `--diagnostic-boot` to a literal 0 — all four tautological at once — left the
-# suite at 94/0. So did widening `--since 90m` to `30d`, which is the premise the whole
-# monotonicity argument rests on.
-_bind() {  # _bind <label> <extended-regex>
-  if grep -qE "$2" "$WF"; then pass; else fail "Row 7: $1 — the workflow does not pass this from a variable (a literal here makes the predicate tautological)"; fi
-}
-# SELF-TEST FIRST — placed here rather than with the others because a wrapper cannot be driven
-# before it is defined (an earlier cut called it near the top and got "command not found", which
-# moves no counter and reads exactly like a pass).
-_w_p="$passes" _w_f="$fails"
-_bind "SELFTEST (expected to fail)" 'THIS-PATTERN-CANNOT-MATCH-ANYTHING-IN-THE-WORKFLOW-XYZZY' 2>/dev/null
-_w_ok=0; [[ "$fails" -eq $((_w_f + 1)) ]] && _w_ok=1
-passes="$_w_p"; fails="$_w_f"
-if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT: _bind() did not fail on an unmatchable pattern — Row 7 argument binding is decorative"; fi
-
-_bind "G17's live volume id"    '\-\-live-attachment-id[[:space:]]+"\$\{?LIVE_'
-_bind "G18's followthrough rc"      '\-\-followthrough-rc[[:space:]]+"\$\{?FT_'
-_bind "G19's cutover flag"          '\-\-cutover-flag[[:space:]]+"\$\{?FLAG'
-_bind "G20's diagnostic-boot value" '\-\-diagnostic-boot[[:space:]]+"\$\{?DBOOT'
-# The query window is the monotonicity argument's premise, so it is pinned as a literal — the one
-# argument that must NOT come from a variable, and must be the value the argument assumes.
-# COUNTED, NOT MERELY PRESENT. There are TWO queries behind this gate — the probe rows and the
-# `function.finished` rows — and a `grep -q` is satisfied while the other one has been widened.
-# COMMENT-STRIPPED. The previous cut grepped "$WF" raw, and its SECOND alternative
-# (`--since 90m --grep`) is matched by a shell comment inside a `run:` block — the exact
-# `cq-assert-anchor-not-bare-token` class this arm's own predecessor was rewritten to escape,
-# reintroduced by the rewrite. Executable lines only, so the count means what it says.
-WF_CODE="$(grep -vE '^[[:space:]]*#' "$WF" | sed 's/[[:space:]]#[[:space:]].*$//' || true)"
-_since90="$(grep -cE 'betterstack-query\.sh.*\-\-since[[:space:]]+90m|\-\-since[[:space:]]+90m[[:space:]]+\-\-grep' <<<"$WF_CODE")"
-# The bare `grep -c '--since 90m'` this replaced counted LINES ANYWHERE, including comments and
-# `::error::` prose — so widening the probe query to `30d` and adding a comment mentioning the old
-# value kept the count at 2 and the arm green, leaving the monotonicity premise unbacked. It now
-# matches only a `--since 90m` attached to an actual query invocation. `_sinceany` was assigned
-# here and never read; the check it was written for is the anchored form above.
-if [[ "$_since90" -eq 2 ]]; then pass; else fail "Row 7: expected exactly 2 '--since 90m' windows (the probe query and the function.finished query), found ${_since90} — the <=90-minute premise of the monotonicity argument is unbacked for at least one of them"; fi
-# G17 must not be handed the operator's own pin as BOTH operands.
-if grep -qE '\-\-live-attachment-id[[:space:]]+"?\$\{?EXPECTED_INNGEST_VOLUME_ID' "$WF"; then
-  fail "Row 7: --live-attachment-id is bound to the operator's own pin — G17 compares a value with itself"
-else
-  pass
-fi
-
-# ══ Row 7b — THE OPERATOR-FACING CLAIMS ═════════════════════════════════════════
-# Prose in a workflow is not decoration here: it is the only instruction the operator gets at
-# the moment a destructive dispatch finishes, and two of these claims were false in ways that
-# would have stranded the host.
-#
-# (a) The failure path prescribed "re-dispatch inngest-volume-recut". Guard 2 runs BEFORE the
-#     plan and grades the LIVE host, so after a partial apply it returns id_pin_mismatch (no
-#     volume by that name), mount_mismatch (/mnt/data not on the pinned device) and redis_down
-#     (Redis cannot have started against an absent store). Guard 1's recovery bare-create arm is
-#     real, but the dispatch never reaches Guard 1. The operator would have followed the
-#     instruction into three consecutive aborts.
-# (b) The success path said "the LUKS cut happens on the next boot". It does not: the cut lives
-#     in cloud-init runcmd, which is FIRST-BOOT-ONLY, and Guard 1 requires hcloud_server.inngest
-#     to show ZERO actions — so this dispatch cannot reboot or replace the host by construction.
-#     A plain reboot runs inngest-luks-open.sh, which OPENS and never formats.
-# ANCHORED ON THE EMITTER, NOT THE PROSE. All five of these were whole-file `grep -qF` over a
-# 6000-line workflow that is more than half comments and `description:` strings — so turning the
-# operator-facing line into a `#` comment left every arm green while the operator saw nothing.
-# Row 6a was fixed this way and Row 7b was not. `echo "::error::` is what a comment cannot be —
-# but only over COMMENT-STRIPPED text. Measured: commenting out each of these five lines left all
-# five arms green, because the commented line still carries its own `echo "::error::`. The emission
-# anchor and the strip are each necessary and neither is sufficient; all five use $WF_CODE.
-if grep -qF 'echo "::error::  WHY NOT inngest-host' <<<"$WF_CODE"; then pass; else fail "Row 7b(a): the recut failure path does not EMIT the warning against the dead route"; fi
-# THE ROUTE CHANGED BECAUSE THE FIRST REPLACEMENT WAS ALSO UNREACHABLE. `inngest-host` cannot
-# recover: hcloud_server.inngest carries the volume id in its user_data with no ignore_changes,
-# so an absent volume makes that id unknown at plan time, user_data is ForceNew, the server is
-# planned for replace, and the additive-only guard refuses the delete. Measured, and measured
-# again on inngest-host-replace, whose gate aborted on out_of_scope until the volume was admitted
-# for create-only. This arm pins the route that was actually driven green.
-if grep -qE 'echo "::error::.*RECOVERY: dispatch .-f apply_target=inngest-host-replace' <<<"$WF_CODE"; then pass; else fail "Row 7b(a2): the recut failure path does not name inngest-host-replace, the only route measured to work"; fi
-# ...and it must warn off BOTH dead routes, not just the one it used to name.
-# `do NOT dispatch inngest-host` is a PREFIX of `do NOT dispatch inngest-host-replace`, so the
-# previous anchor was satisfied by advice FORBIDDING the one route measured to work — which would
-# have left the workflow both prescribing and forbidding it, with both arms green. Anchor past
-# the token boundary.
-if grep -qF 'echo "::error::' <<<"$(grep -F "do NOT dispatch inngest-host —" <<<"$WF_CODE")"; then pass; else fail "Row 7b(a3): the failure path does not warn that inngest-host (not -replace) also aborts"; fi
-if grep -qF 'echo "::warning::' <<<"$(grep -F "THE CUTOVER IS NOT COMPLETE" <<<"$WF_CODE")"; then pass; else fail "Row 7b(b): the recut success path does not say that a host replace is still required"; fi
-# `FIRST-BOOT-ONLY` occurs TWICE in the workflow, on two different branches, and this arm took any
-# match: commenting out the success-path line it names left the suite at 115/0 while a DIFFERENT
-# code path satisfied it. Its emitter anchor was also the weakest of the five (`echo "` rather than
-# a severity). Require the success-path `::warning::` emission specifically — the same line Row
-# 7b(b) anchors on — so the two arms bind to one region rather than to a token.
-_b2="$(grep -F 'FIRST-BOOT-ONLY' <<<"$WF_CODE" | grep -F 'echo "::warning::' || true)"
-if [[ -n "$_b2" ]]; then pass; else fail "Row 7b(b2): the recut success path does not warn WHY a reboot is not enough (runcmd is first-boot-only) as a live ::warning:: emission"; fi
-# ...and it must not still claim the old thing anywhere. Grep the OLD wording, never the new.
-if grep -qF "the LUKS cut happens on the next boot" "$WF"; then fail "Row 7b(c): the superseded 'next boot' claim survives somewhere in the workflow"; else pass; fi
+CUT_SH="${REPO_ROOT}/scripts/cutover-inngest.sh"
+if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+tests/scripts/lib/inngest-host-dark-gate\.sh' "$CUT_SH"; then pass; else fail "Row 6a: scripts/cutover-inngest.sh has no live SOURCE statement for inngest-host-dark-gate.sh (its remaining consumer)"; fi
+_cut_calls="$(grep -vE '^[[:space:]]*#' "$CUT_SH" | grep -cE 'inngest_execute_registry_gate[[:space:]]+--rows-file' || true)"
+if [[ "$_cut_calls" -ge 2 ]]; then pass; else fail "Row 6b: scripts/cutover-inngest.sh does not CALL inngest_execute_registry_gate from both arms (found ${_cut_calls}, want >=2)"; fi
+if [ "$(grep -vE '^[[:space:]]*#' "$WF" | grep -cE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*inngest-host-dark-gate\.sh|^[[:space:]]*if ! inngest_host_dark_gate ')" -gt 0 ]; then
+  fail "Row 6c: the workflow sources or calls the dark gate again -- the recut dispatch it served was retired in #8285; re-add its wiring rows if that is intended"
+else pass; fi
 
 # ══ Row 8 — the DEFAULT clock ═══════════════════════════════════════════════════
 # Every arm above pins `--now-epoch`, so the branch that reads the real clock (`date -u +%s`, the
@@ -1961,7 +1849,10 @@ fi
 #   +5  [#8078] G8 wide predicate: activating + failed must-PASS rows, unknown => unreadable,
 #       and the widen-back (G8w) / unknown-clause (G8u) mutate rows
 # 297 + 21 + 5 = 323.
-_FLOOR=323
+# 323 -> 309 with #8285 (-14): the workflow-wiring rows (Row 6a-d, Row 7 argument bindings and window
+#   count, Row 7b operator prose) died with the inngest_volume_recut job (-17); three rows pin the gate's
+#   remaining consumer, scripts/cutover-inngest.sh, and the workflow's non-use of it (+3).
+_FLOOR=309
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
