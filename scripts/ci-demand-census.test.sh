@@ -195,7 +195,7 @@ KEYS_RE='REPO|WINDOW|WINDOW_START|WINDOW_END|FETCHED_AT|WORKFLOW_FILTER|TOTAL_JO
 # a key line must appear exactly once: a second 'RUNS_COMPLETED=' line with another value would still satisfy hasx
 no_dup_keys() { [ -z "$(grep -E "^($KEYS_RE)=" "$1" | cut -d= -f1 | sort | uniq -d)" ]; }   # no_dup_keys <file>
 # the script has no 'exit 1' / 'die 1' outside comments (exit codes are 0, 2, 3, 129, 130, 143)
-no_exit1() { ! grep -vE '^[[:space:]]*#' "${1:-$CENSUS}" | grep -qE '(^|[^[:alnum:]_-])(exit|die)[[:space:]]+1([^0-9]|$)'; }   # no_exit1 [file]
+no_exit1() { ! grep -vE '^[[:space:]]*#' "${1:-$CENSUS}" | grep -cE '(^|[^[:alnum:]_-])(exit|die)[[:space:]]+1([^0-9]|$)' >/dev/null; }   # no_exit1 [file]
 # the fetched jobs documents carry exactly the nine projected keys
 keys_ok() { jq -s -e 'all(.[]; (keys == ["jobs","total_count"]) and all(.jobs[]; (keys == ["completed_at","conclusion","id","name","run_attempt","run_id","runner_id","started_at","status"])))' "$@" >/dev/null; }
 # the fetched data directory exists and lives under this suite's own live TMPDIR

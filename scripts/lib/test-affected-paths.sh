@@ -1119,11 +1119,13 @@ AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
 # scripts/secret-scan-smoke-gate (#9727, ADR-276 S1) — the suite extracts the smoke-relevance step body and the
 # smoke-tests job from the workflow, reads scripts/required-checks.txt and the canonical required-checks ruleset JSON,
 # and sweeps every tracked file (git ls-files) through the body; declared from the repo paths its suite file names
-# (a directory entry carries a trailing slash).
+# (a directory entry carries a trailing slash). The runbook is named as text and as a subject operand, not read; the
+# edge is the conservative cover for the kb-consumer ratchet, since SUBJECT_RE lists that exact path.
 AFFECTED_SCRIPTS_SECRET_SCAN_SMOKE_GATE_PATHS=(
   ".github/workflows/secret-scan.yml"
   ".gitleaks.toml"
   "apps/web-platform/scripts/"
+  "knowledge-base/engineering/operations/secret-scanning.md"
   "scripts/ci-required-ruleset-canonical-required-status-checks.json"
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
