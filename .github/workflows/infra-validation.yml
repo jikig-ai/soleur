@@ -945,6 +945,17 @@ jobs:
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
 
+      # (#9175) Same gap again: the inngest rehearsal root nests under the infra dir, so the
+      # validate matrix never parses it — without this step a syntax error surfaces only at
+      # dispatch, after the environment approval. -backend=false, TF_DATA_DIR out of tree.
+      - name: Terraform validate the inngest provision rehearsal root
+        working-directory: apps/web-platform/infra/inngest-provision-rehearsal
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/inngest-provision-rehearsal-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
 
       # (#7025, R11) THE RUNG-2 GATE AS A PR CHECK, active only once evidence exists.
       #

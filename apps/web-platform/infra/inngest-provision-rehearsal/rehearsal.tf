@@ -81,7 +81,7 @@ locals {
     zot_pull_user          = local.zot_pull_user
     zot_pull_token         = var.zot_pull_token
     betterstack_logs_token = var.betterstack_logs_token
-    sentry_dsn             = var.sentry_dsn
+    sentry_dsn             = ""
   }), local.inngest_rationale_strip, "")
   rehearsal_user_data_b64gz = base64gzip(local.rehearsal_user_data_plain)
 }

@@ -51,7 +51,21 @@ changes="$(jq -r '.resource_changes[]? | select(.change.actions | map(select(. !
 creates="$(jq -r '.resource_changes[]? | select(.change.actions == ["create"]) | .address' "$PLAN")"
 imports="$(jq -r '.resource_changes[]? | select((.change.importing // null) != null) | .address' "$PLAN")"
 
+reads="$(jq -r '.resource_changes[]? | select(.change.actions == ["read"] or .change.actions == ["no-op"]) | .address' "$PLAN")"
+
 bad=0
+# Inert-verb lane is NOT unconditional: reads and no-ops are denied outside an allowlist.
+# The only sanctioned external read is data.hcloud_network.private; a data.doppler_* read
+# would land prod secret VALUES in this root's state/plan output, and data.external/http
+# would execute or fetch under the apply environment's credentials.
+while IFS= read -r addr; do
+  [[ -n "$addr" ]] || continue
+  case "$addr" in
+    data.hcloud_network.private) ;;
+    *.rehearsal|*.rehearsal_*|*.rehearsal[[]*[]]) ;;
+    *) echo "::error::plan-shape: inert change on a non-rehearsal, non-sanctioned address: ${addr} — only data.hcloud_network.private may read outside this root"; bad=1 ;;
+  esac
+done <<<"$reads"
 while IFS= read -r addr; do
   [[ -n "$addr" ]] || continue
   echo "::error::plan-shape: the plan IMPORTS ${addr} — an import plans as no-op/update and would adopt an existing object into the rehearsal root, whose teardown destroys it"
@@ -81,6 +95,10 @@ if [[ "$MODE" == additive ]]; then
       bad=1
     fi
   done <<<"$creates"
+  if ! printf '%s\n' "$creates" | grep -q .; then
+    echo "::error::plan-shape (additive): the plan creates NOTHING — a vacuous Phase-A birth rehearses nothing."
+    bad=1
+  fi
 else
   # nic-attach: `changes` holds only NON-create verbs (the jq filter above), so any entry is a
   # refusal outright; and `creates` must be exactly {hcloud_server_network.rehearsal[0]} —

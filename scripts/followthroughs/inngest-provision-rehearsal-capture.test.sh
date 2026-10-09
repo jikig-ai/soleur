@@ -37,6 +37,8 @@ URL="https://github.com/jikig-ai/soleur/actions/runs/17250000001"
 # arm PASS for a reason unrelated to the property under test. Three query shapes exist:
 #   * the anchor (`count() AS n`)            -> emits {"n": <ANCHOR_N>}
 #   * host rows  (`position(raw, 'HOST')`)   -> emits fixture rows, dt-bound applied
+#   * TSV unless the SQL asks FORMAT JSONEachRow — the real transport's default.
+#   * a host-confined anchor SQL is refused (the anchor must be source-liveness).
 #   * both use the same raw/JSONEachRow contract as the real transport.
 # The dt bound is read OUT of the SQL (parseDateTime64BestEffort or now()-INTERVAL), so the
 # stub applies the same window the real server would — a bound the SUT forgot shows up as an
@@ -46,6 +48,15 @@ import json, re, sys, datetime, os
 sql = sys.argv[1]
 rows_path = os.environ.get("STUB_ROWS", "")
 anchor_n = os.environ.get("STUB_ANCHOR", "0")
+# Transport-faithful: the real ClickHouse HTTP default is TabSeparated; the SUT must ask
+# for JSONEachRow explicitly. An anchor that carries a host needle is refused — the anchor
+# must be source-liveness, not host-keyed, or "the instrument is dead" reads as a dark host.
+if "FORMAT JSONEachRow" not in sql:
+    print("n\n0")  # TSV: a lone column name + row, unparseable as the SUT's JSON
+    sys.exit(0)
+if "count()" in sql and "AS n" in sql and "position(" in sql:
+    print('{"exception":"host-confined anchor refused by stub"}')
+    sys.exit(0)
 
 def cutoff(sql):
     m = re.search(r"parseDateTime64BestEffort\('([0-9:\-T]+)'\)", sql)
@@ -139,33 +150,34 @@ run "anchor query transport failure -> TRANSIENT" 2 STUB_ANCHOR=500 BETTERSTACK_
 # ── phase-a arms ──────────────────────────────────────────────────────────────
 : > "$TMP/ev.env"
 rows "$TMP/r-phasea.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed host=${HOST} detail=timer=enabled unit=inactive iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=1 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout host=${HOST} detail=boot=deadbee1.waited_s=150" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=2 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-nic-ABSENT host=${HOST} detail=ip=10.0.1.60 attempt=2 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 host=${HOST} detail=attempt=2 why=provision-nic-ABSENT iid=abc123"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=timer=enabled unit=inactive iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-nic-ABSENT detail=ip=10.0.1.60 attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 detail=attempt=2 why=provision-nic-ABSENT iid=abc123 \"host\":\"${HOST}\""
 run "phase-a PASS: armed + 2 attempts + NIC-absent observed + zero bootstrap-done" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-phasea.json" -- "${BASE_ARGS[@]}" --mode phase-a
 grep -qF 'REHEARSAL_PHASE_A_OBSERVED=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_PHASE_A_OBSERVED=PASS" \
   || fail "evidence file carries REHEARSAL_PHASE_A_OBSERVED=PASS" "$(cat "$TMP/ev.env")"
 
 rows "$TMP/r-oneattempt.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed host=${HOST} detail=iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=1 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout host=${HOST} detail=boot=deadbee1.waited_s=150"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\""
 run "phase-a TRANSIENT: only one attempt so far (absence polls, does not fail)" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-oneattempt.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
 rows "$TMP/r-baddone.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed host=${HOST} detail=iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=1 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=2 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout host=${HOST} detail=boot=deadbee1.waited_s=150" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done host=${HOST} detail=attempt=2 iid=abc123"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=2 iid=abc123 \"host\":\"${HOST}\""
 run "phase-a FAIL: bootstrap-done while the NIC was absent (the property under test, broken)" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-baddone.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
+: > "$TMP/empty-rows.json"
 run "phase-a TRANSIENT: live anchor but zero host rows (dark so far, not dark forever)" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/empty-rows.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
@@ -174,40 +186,40 @@ run "phase-a TRANSIENT: live anchor but zero host rows (dark so far, not dark fo
 # nic-wait helper, which runs only when nic_present FAILS — after the attach converges the
 # next attempt skips it entirely. bootstrap-done must pass with nic_ok ABSENT.
 rows "$TMP/r-phaseb.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=3 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 host=${HOST} detail=attempt=3 why=pull-timeout iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=4 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done host=${HOST} detail=attempt=4 iid=abc123"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=3 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 detail=attempt=3 why=pull-timeout iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=4 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=4 iid=abc123 \"host\":\"${HOST}\""
 run "phase-b PASS: bootstrap-done ALONE (private_nic_ok is unreachable in the happy path)" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-phaseb.json" -- "${BASE_ARGS[@]}" --mode phase-b
 grep -qF 'REHEARSAL_PHASE_B_RECOVERY=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_PHASE_B_RECOVERY=PASS" \
   || fail "evidence file carries REHEARSAL_PHASE_B_RECOVERY=PASS" "$(cat "$TMP/ev.env")"
 
 rows "$TMP/r-nodone.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_ok host=${HOST} detail=boot=cafe0002.waited_s=4" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=3 iid=abc123"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_ok detail=boot=cafe0002.waited_s=4 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=3 iid=abc123 \"host\":\"${HOST}\""
 run "phase-b TRANSIENT: nic converged but bootstrap-done not yet emitted" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-nodone.json" -- "${BASE_ARGS[@]}" --mode phase-b
 
 # bootstrap-done-DEGRADED writes NO latch — a substring match must not count it as done.
 rows "$TMP/r-degraded.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done-DEGRADED host=${HOST} detail=attempt=4 why=.redis-inactive iid=abc123"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done-DEGRADED detail=attempt=4 why=.redis-inactive iid=abc123 \"host\":\"${HOST}\""
 run "phase-b TRANSIENT: bootstrap-done-DEGRADED is NOT bootstrap-done (no latch was written)" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-degraded.json" -- "${BASE_ARGS[@]}" --mode phase-b
 
 # ── post-reboot arms ──────────────────────────────────────────────────────────
 PRE_REBOOT="2026-01-01T00:00:00"
 rows "$TMP/r-latch.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged host=${HOST} detail=ok=1.boot-trace.channel.re-armed" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=some-unrelated host=${HOST} detail=harmless"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1.boot-trace.channel.re-armed \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=some-unrelated detail=harmless \"host\":\"${HOST}\""
 run "post-reboot PASS: restage anchor re-emitted ON THE PHONE-HOME CHANNEL, zero provision rows after boundary" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-latch.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 grep -qF 'REHEARSAL_POST_REBOOT_LATCH=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_POST_REBOOT_LATCH=PASS" \
   || fail "evidence file carries REHEARSAL_POST_REBOOT_LATCH=PASS" "$(cat "$TMP/ev.env")"
 
 rows "$TMP/r-brokenlatch.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged host=${HOST} detail=ok=1" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=5 iid=abc123"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=5 iid=abc123 \"host\":\"${HOST}\""
 run "post-reboot FAIL: a provision-attempt-start after the boundary (latch broken)" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-brokenlatch.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 
@@ -215,21 +227,44 @@ run "post-reboot FAIL: a provision-attempt-start after the boundary (latch broke
 # rides journald -> Vector, a DIFFERENT channel than the provision markers. Vector alive while
 # phone-home is dead would vouch for a silence that was never measured — TRANSIENT, not PASS.
 rows "$TMP/r-vectoronly.json" "$NOW" \
-  "inngest-bs-token-restage[999]: SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=/run/inngest-bs-logs-token host=${HOST}"
+  "inngest-bs-token-restage[999]: SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=/run/inngest-bs-logs-token \"host\":\"${HOST}\""
 run "post-reboot TRANSIENT: Vector-only restage does not vouch for the phone-home silence" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-vectoronly.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 
 rows "$TMP/r-norestage.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=unrelated host=${HOST} detail=harmless"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=unrelated detail=harmless \"host\":\"${HOST}\""
 run "post-reboot TRANSIENT: restage anchor not yet emitted after the boundary" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-norestage.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 
 # pre-boundary rows must NOT count toward post-reboot assertions — the dt bound is real.
 rows "$TMP/r-preboundary.json" "$PRE_REBOOT" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=1 iid=abc123" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged host=${HOST} detail=ok=1"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1 \"host\":\"${HOST}\""
 run "post-reboot TRANSIENT: pre-boundary rows do not count (restage row older than --reboot-since)" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-preboundary.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "2026-06-01T00:00:00"
+
+# A bootstrap-done-DEGRADED after the boundary IS a provision marker (the unit re-entered,
+# even if it finished degraded) — the latch assertion is zero provision rows, no exception.
+rows "$TMP/r-postdegraded.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done-DEGRADED detail=attempt=1 iid=abc123 \"host\":\"${HOST}\""
+run "post-reboot FAIL: bootstrap-done-DEGRADED after the boundary is still provision re-entry" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-postdegraded.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "2026-06-01T00:00:00"
+
+# --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
+# prior life's bootstrap-done inside the window would trip the no-done check, but the bound
+# excludes it — this arm proves the bound is wired, not just parsed.
+SINCE_BOUND="2026-06-01T00:00:00"
+rows "$TMP/r-since.json" "2026-05-31T00:00:00" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=zzz999 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=9 iid=zzz999 \"host\":\"${HOST}\""
+rows "$TMP/r-since.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\""
+run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 0 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-since.json" -- "${BASE_ARGS[@]}" --mode phase-a --since "$SINCE_BOUND" --out "$TMP/ev-since.env"
 
 # ── floors (ADR-193): the ledger, never a bare counter ────────────────────────
 MIN=19

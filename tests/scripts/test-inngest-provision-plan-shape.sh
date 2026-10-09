@@ -117,6 +117,18 @@ plan "$TMP/m-forget.json" hcloud_server_network.rehearsal\[0\]:create hcloud_ssh
 want "nic-attach refuses a forget (deny-list the inert verbs)" 1 "$TMP/m-forget.json" nic-attach "" "hcloud_ssh_key.rehearsal (forget) is not admitted"
 plan "$TMP/m-extracreate.json" hcloud_server_network.rehearsal\[0\]:create doppler_secret.rehearsal_extra:create
 want "nic-attach refuses a second rehearsal-scoped create (the delta is exactly the NIC)" 1 "$TMP/m-extracreate.json" nic-attach "" "a create of doppler_secret.rehearsal_extra is not admitted"
+
+# The inert-verb lane is allowlisted, not unconditional: data.doppler_* would land prod
+# secret values in this root's plan/state, data.external would EXECUTE under the apply
+# environment's credentials. Only data.hcloud_network.private reads outside the root.
+plan "$TMP/m-read-secret.json" "${ADDITIVE_OK[@]}" data.doppler_secrets.prd:read
+want "additive refuses a data.doppler_secrets read (prod secret values into rehearsal state)" 1 "$TMP/m-read-secret.json" additive "" "inert change on a non-rehearsal, non-sanctioned address: data.doppler_secrets.prd"
+plan "$TMP/m-read-ext.json" "${ADDITIVE_OK[@]}" data.external.probe:read
+want "additive refuses a data.external read (plan-time exec under prod creds)" 1 "$TMP/m-read-ext.json" additive "" "data.external.probe"
+plan "$TMP/m-read-ok.json" "${ADDITIVE_OK[@]}" data.hcloud_network.private:read
+want "additive admits the sanctioned data.hcloud_network.private read" 0 "$TMP/m-read-ok.json" additive
+plan "$TMP/m-vacuous.json" ''
+want "additive refuses a vacuous plan (zero creates — the birth rehearses nothing)" 1 "$TMP/m-vacuous.json" additive "" "the plan creates NOTHING"
 plan "$TMP/m-noidx.json" hcloud_server_network.rehearsal:create
 want "nic-attach refuses the uncounted hcloud_server_network.rehearsal (the resource is counted [0])" 1 "$TMP/m-noidx.json" nic-attach "" "hcloud_server_network.rehearsal"
 plan "$TMP/m-update.json" hcloud_server_network.rehearsal\[0\]:create hcloud_server.rehearsal:update

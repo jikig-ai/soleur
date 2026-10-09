@@ -99,3 +99,17 @@ rehearsal dispatch is post-merge and operator-gated — it is NOT a work-skill t
       PR lands (ADR-232 machinery).
 - [ ] Dispatch `inngest-provision-rehearsal.yml -f dry_run=true`, then the real run;
       attach `inngest-provision-rehearsal-evidence.env` to #9175.
+
+## Review round (soleur:review panel, 12 seats)
+
+All panel findings dispositioned inline on the branch. Highlights: `FORMAT JSONEachRow`
+on every capture query (P0 — the anchor would never parse otherwise); sentinel-disambiguated
+wrapper failures in all three poll loops; 90s settle before the reboot boundary;
+post-reboot query reads newest-first + bound-hit refusal; `sentry_dsn=""` suppresses the
+rehearsal's Sentry channel (stage-only alert filters would page prod); plan-shape refuses
+vacuous additive plans, foreign inert-lane reads, and Phase-A NIC creates; sentinel pins
+file inventory, value-space binds, and the NIC toggle block-scoped; `terraform validate`
+step for the nested root in infra-validation; heredoc `$GITHUB_ENV` writes; bounded
+`--only-secrets` capture env; run-attempt artifact names; `REHEARSAL_COMPLETE` trailer;
+probe hardened (id/url/status fields, fail-closed parse). #9817 filed for the rung2
+sibling's inherited secrets + K=V env writes.

@@ -151,7 +151,7 @@ The asks restated as observable properties:
   SQLite-only server, prod Postgres unreachable, still emits `bootstrap-done` and still writes
   the latch (exempt from the durable-shape check). It removes any need for a rehearsal Postgres.
 - The throwaway-Doppler story mirrors git-data: a NEW `doppler_environment` in project
-  `soleur-inngest` (slug `rehearsal-<runid>`) creates a non-inheriting root config holding only
+  `soleur-inngest` (slug `rehearsal_<runid>` — Doppler slugs take underscores, not hyphens) creates a non-inheriting root config holding only
   the five allowlisted names (`INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`, `INNGEST_REDIS_PASSWORD`
   throwaway `random_*`, `INNGEST_DIAGNOSTIC_BOOT="true"`, `BETTERSTACK_LOGS_TOKEN` = prod's
   write-only ingest token) — n_total = n_inngest = 5, the isolation check passes; a
@@ -244,9 +244,15 @@ script, a sentinel test suite, and an orphan-sweep arm.
   `sdk_url` = `http://127.0.0.1:3000/api/inngest` (loopback; `INNGEST_DIAGNOSTIC_BOOT` also
   overrides it inside the image), `web_host_private_ips` = `127.0.0.1` (nobody may reach the
   rehearsal's :8288), `inngest_volume_id`/`inngest_luks_volume_id` = the scratch volumes.
-  Everything else — `sentry_dsn`, `betterstack_logs_token`, `zot_registry_endpoint`,
-  `zot_pull_user`, `zot_pull_token`, arch/sha256 derivations — is prod's own value, because the
-  fatal/telemetry/pull channels are part of what is being rehearsed.
+  Everything else — `betterstack_logs_token`, `zot_registry_endpoint`, `zot_pull_user`,
+  `zot_pull_token`, arch/sha256 derivations — is prod's own value, because the
+  telemetry/pull channels are part of what is being rehearsed. **EXCEPTION `sentry_dsn =
+  ""`** (changed at review time): the shared Sentry issue-alerts filter on stage only — the
+  rehearsal's intentional `private_nic_timeout` would page `web_private_nic_boot_gate` as
+  prod-attributed, and `soleur-boot-emit` hardcodes `host_name='soleur-inngest'`, which
+  would also pollute the zot-soak denominator. An empty DSN sends every Sentry emit down
+  the baddsn path (it still phones home `sentry-emit-FAILED` to Better Stack, so the emit
+  path itself is still exercised).
 - **The forced race is a two-phase apply**, not a timing hope: `hcloud_server_network.rehearsal`
   (`network_id = data.hcloud_network.private.id`, `ip = "10.0.1.60"` — the hcloud provider's
   data-source set has no `hcloud_network_subnet` lookup, so the attach binds by
@@ -254,7 +260,7 @@ script, a sentinel test suite, and an orphan-sweep arm.
   `count`-gated on `var.nic_attached`. Phase A (`nic_attached=false`) boots the host NIC-less;
   the workflow's evidence gate refuses to start phase B until Better Stack shows
   `private_nic_timeout` + `provision-unit-armed` + ≥2 `provision-attempt-start` rows all
-  carrying the host's `iid` — the miss is *observed*, then healed. Phase B (`nic_attached=true`)
+  provision-family markers iid-joined to this boot's cloud-init instance-id once it resolves — the miss is *observed*, then healed. Phase B (`nic_attached=true`)
   adds the one attachment; the `99-soleur-private-fallback.network` file converges it via DHCP
   (the ADR-115 #8539 amendment mechanism) and the unit's next retry runs the full
   zot-login → pull → Doppler-isolation → bootstrap chain.
@@ -297,7 +303,7 @@ script, a sentinel test suite, and an orphan-sweep arm.
 | Element | rung2 | this rehearsal | Why the diff |
 |---|---|---|---|
 | Private network | no `hcloud_server_network` (host stays off prod net) | phase-B `hcloud_server_network.rehearsal` into `data.hcloud_network.private` | The subnet IS the subject — the #8539 race is a prod-network attach event; a scratch net can't reach the IP-bound zot |
-| Scratch config shape | `doppler_config` branch `prd_git_data_rehearsal_*` under `soleur/prd` | `doppler_environment` root config `rehearsal_<runid>` under `soleur-inngest` | Branch configs inherit root secrets (verified: Doppler root-configs doc) — under prd that resolves prod values to the token. An environment root is non-inheriting. NOTE: this suggests rung2's "reads NOTHING of production's" claim merits a work-time recheck |
+| Scratch config shape | `doppler_config` branch `prd_git_data_rehearsal_*` under `soleur/prd` | `doppler_environment` root config `rehearsal_<runid>` under `soleur-inngest` | Branch configs inherit root secrets (verified: Doppler root-configs doc) — under prd that resolves prod values to the token. An environment root is non-inheriting. NOTE: rung2's "reads NOTHING of production's" claim is likely false under branch inheritance — tracked as #9817 |
 | Config reachability | `GIT_DATA_DOPPLER_CONFIG` was already env-parameterized | `--config prd` was literal everywhere → Deliverable A parameterizes | The inngest boot surface never needed a second config before |
 | Backend exercised | redis/LUKS provision, reset arm | diagnostic SQLite boot (`INNGEST_DIAGNOSTIC_BOOT=true`) | No scratch Postgres; the latch contract is identical on both arms |
 | Evidence consumer | releases `git_data_rung2_rehearsal_gate` (birth interlock) | no interlock — artifact + issue attachment closes #9175 | The provision unit already shipped; this is post-hoc assurance, not a gate dependency |
@@ -375,7 +381,7 @@ force-replace of the sole scheduler.)
   providers pinned to the parent's declared versions (hcloud `~> 1.49`, random `~> 3.0`,
   doppler `~> 1.21`, tls `~> 4.0`, cloudflare `~> 4.0` for the backend's S3 ops).
 - `apps/web-platform/infra/inngest-provision-rehearsal/variables.tf` — `hcloud_token`,
-  `doppler_token_tf`, `sentry_dsn`, `betterstack_logs_token`, `zot_pull_token`,
+  `doppler_token_tf`, `betterstack_logs_token`, `zot_pull_token`,
   `rehearsal_run_id` (validation `^[0-9]+$`), `nic_attached` (bool), `location`/`server_type`
   (defaults = prod's). No operator-minted secret defaults
   (`hr-tf-variable-no-operator-mint-default`).
@@ -496,7 +502,7 @@ real run's evidence is attached — the PR body must say `Ref #9175`, never `Clo
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** for the harness half — nothing user-visible
-  (a failed rehearsal burns a €4-class host-hour and reports FAIL). For the parameterization
+  (a failed rehearsal burns a ~€0.05 host-hour (cpx22 is ~€0.03/hr; ~90 min) and reports FAIL). For the parameterization
   half — if the `${DOPPLER_CONFIG:-prd}` contract resolved wrong on prod, the NEXT
   `inngest-host-replace` boots a scheduler that cannot read Doppler: provisioning retries to
   exhaustion, the scheduler stays dark, and every user's scheduled jobs/cron reminders stall
@@ -530,13 +536,13 @@ liveness_signal:
                    # scripts/followthroughs/inngest-provision-rehearsal-capture.sh
 
 error_reporting:
-  destination:     # Sentry web-platform via the SAME prod SENTRY_DSN prod bakes
-                   # (soleur-boot-emit) — the fatal channel's fidelity is part of the
-                   # rehearsal; the rehearsal host emits provision_attempt_failed warnings
-                   # and, on a real pull miss, inngest_pull_fatal fatals
-  fail_loud:       # provision-attempt-exit-* (Better Stack) + provision_attempt_failed
-                   # (Sentry) per failed attempt; bootstrap-exit-nonzero /
-                   # bootstrap-done-DEGRADED / inngest_pull_fatal on the fatal legs
+  destination:     # Sentry SUPPRESSED on the rehearsal (sentry_dsn="" — stage-only alert
+                   # filters would page the intentional nic-timeout as prod; the emit path
+                   # still runs and phones home sentry-emit-FAILED)
+  fail_loud:       # provision-attempt-exit-* (Better Stack) per failed attempt +
+                   # sentry-emit-FAILED (Better Stack) marking each suppressed Sentry emit;
+                   # bootstrap-exit-nonzero / bootstrap-done-DEGRADED / inngest_pull_fatal
+                   # on the fatal legs
 
 failure_modes:
   - mode:          # NIC attach never converges after phase-B apply

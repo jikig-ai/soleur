@@ -17,12 +17,6 @@ variable "doppler_token_tf" {
   sensitive   = true
 }
 
-variable "sentry_dsn" {
-  description = "The SAME Sentry DSN prod bakes — the rehearsal must exercise the real emit channel for its evidence to be meaningful. Passed through to the template's sentry_dsn arg."
-  type        = string
-  sensitive   = true
-}
-
 variable "betterstack_logs_token" {
   description = "The SAME write-only Better Stack ingest token prod's config holds — write-only against the shared source, so a throwaway host gains no readback. Passed to the template arg AND staged into the scratch config (the boot re-fetches it)."
   type        = string

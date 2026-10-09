@@ -167,14 +167,26 @@ fi
 BS_SRC="(SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)"
 
 # bs_query <sql> — runs the transport; rc on failure is propagated by callers.
-bs_query() { bash "$QUERY" "$1"; }
+bs_query() {
+  local out
+  out="$(bash "$QUERY" "$1")" || return 1
+  # An HTTP-200 ClickHouse exception is NOT an empty result set — curl -f passes it and the
+  # body parses to zero rows, which the callers would read as "the host said nothing". Treat
+  # exception-shaped bodies as transport faults so they read TRANSIENT, never a verdict.
+  if printf '%s' "$out" | grep -qE 'DB::Exception|Code: [0-9]+\.|"exception"'; then
+    printf '%s' "$out" >&2; return 1
+  fi
+  printf '%s' "$out"
+}
 
 # WHERE arm shared by every host-scoped query. SINCE pins to this run's window start when
 # given (a re-run ATTEMPT reuses the run id, so an unpinned read could surface the previous
 # attempt's rows); otherwise the --window bound applies.
 host_where() {
   if [[ -n "$SINCE" ]]; then
-    printf "dt > parseDateTime64BestEffort('%s') AND" "$SINCE"
+    # 'UTC' pins the session timezone — a naive datetime parses in the ClickHouse session
+    # TZ, and a shifted bound would re-admit a previous life's rows on a same-run-id re-run.
+    printf "dt > parseDateTime64BestEffort('%s', 'UTC') AND" "$SINCE"
   else
     printf "dt > now() - INTERVAL %s AND" "$WINDOW"
   fi
@@ -185,7 +197,7 @@ echo "capture: mode=${MODE} host=${HOST_NAME} window=${WINDOW}${SINCE:+ since=${
 # ── ANCHOR: is this source answering at all? ─────────────────────────────────
 # NOT keyed on this host (see header). A zero-row answer means the instrument is dead, not
 # the host — TRANSIENT, never FAIL.
-ANCHOR_SQL="SELECT count() AS n FROM ${BS_SRC} WHERE $(host_where) raw != '' LIMIT 1"
+ANCHOR_SQL="SELECT count() AS n FROM ${BS_SRC} WHERE $(host_where) raw != '' LIMIT 1 FORMAT JSONEachRow"
 ANCHOR_ROWS="$(bs_query "$ANCHOR_SQL" 2>/dev/null)" || {
   echo "TRANSIENT: the anchor query itself failed — the instrument cannot be trusted right now." >&2
   exit 2
@@ -198,30 +210,49 @@ fi
 echo "  anchor: source is answering (${ANCHOR_N} rows in window)"
 
 # ── Host rows ────────────────────────────────────────────────────────────────
-HOST_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE $(host_where) position(raw, '${HOST_NAME}') > 0 ORDER BY dt LIMIT 2000"
+HOST_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE $(host_where) position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow"
 HOST_ROWS="$(bs_query "$HOST_SQL" 2>/dev/null)" || {
   echo "TRANSIENT: the host-row query failed after a live anchor — transport fault." >&2
   exit 2
 }
 
-count_stage() { # <stage-substr> — count rows carrying this host's name AND the marker
-  printf '%s\n' "$HOST_ROWS" | grep -cF -- "$1" 2>/dev/null || true
+# Needles match the `stage=<name>` FIELD SHAPE, not the bare marker: an exit row's
+# `why=$last_stage` echoes the previous stage verbatim, and a substring grep would count an
+# early death's `why=provision-attempt-start` as a start. Every marker this script counts is
+# phone-home emitted, so `stage=` is present in both the message text and the JSON field.
+count_stage() { # <stage-name-or-prefix> — count rows carrying this host's name AND the stage
+  printf '%s\n' "$HOST_ROWS" | grep -cF -- "stage=$1" 2>/dev/null || true
 }
-count_done() { # bootstrap-done WITHOUT -DEGRADED (a degraded success writes NO latch)
-  printf '%s\n' "$HOST_ROWS" | grep -cE 'bootstrap-done([^-]|$)' 2>/dev/null || true
+count_done() { # stage=bootstrap-done WITHOUT -DEGRADED (a degraded success writes NO latch)
+  printf '%s\n' "$HOST_ROWS" | grep -cE 'stage=bootstrap-done([^-]|$)' 2>/dev/null || true
 }
 
-# IID DISCOVERY. Every provision marker carries iid=<cloud-init instance-id> in its detail;
-# `provision-unit-armed` is emitted once per host life and is the first row guaranteed to
-# carry it. An iid joined from this host's own armed row is how boot markers bind to THIS
-# boot — host_name is stable across replaces, so iid is the discriminator.
+# IID DISCOVERY + JOIN. Every provision-family marker carries iid=<cloud-init instance-id>
+# in its detail (`provision-unit-armed` is emitted once per host life and carries it first).
+# Once the iid is resolved, provision-family counts are joined on it — on a same-run-id
+# re-run the window bound alone cannot exclude a previous life's rows when a bound lands
+# inside it, and the iid is the per-boot discriminator. private_nic_* markers carry `boot=`,
+# not `iid=`, and stay host+window scoped. When IID is empty or the shared `unknown`
+# fallback, the join silently degrades to host+window — noted in the row below so a verdict
+# read knows which binding it got.
 IID="$(printf '%s\n' "$HOST_ROWS" | grep -oE 'iid=[A-Za-z0-9._-]+' | head -1 | sed 's/^iid=//')"
 IID="${IID:-}"
-if [[ -n "$IID" ]]; then
-  echo "  iid resolved: ${IID}"
+IID_JOINED=0
+if [[ -n "$IID" && "$IID" != "unknown" && "$IID" != "$HOST_NAME" ]]; then
+  IID_JOINED=1
+  echo "  iid resolved: ${IID} (provision-family counts are iid-joined)"
+elif [[ -n "$IID" ]]; then
+  echo "  iid resolved to the shared fallback (${IID}) — counts are host+window scoped, NOT iid-joined"
 else
   echo "  iid: no iid= field found yet (no armed/attempt rows)"
 fi
+count_iid() { # <stage-substr> — provision-family count, iid-joined when the join resolved
+  if [[ "$IID_JOINED" -eq 1 ]]; then
+    printf '%s\n' "$HOST_ROWS" | grep -F -- "stage=$1" | grep -cF "iid=${IID}" 2>/dev/null || true
+  else
+    count_stage "$1"
+  fi
+}
 
 # VERDICT SEMANTICS, matched to the poll loop that calls this: FAIL is for a VIOLATION — a
 # marker exists that the property forbids — which no further polling can heal. An ABSENT
@@ -248,13 +279,15 @@ case "$MODE" in
     #   >= MIN_ATTEMPTS provision-attempt-start — the retry loop actually retried
     #   >= 1 private_nic_timeout OR provision-nic-ABSENT — the NIC-absent failure was OBSERVED
     #   zero bootstrap-done             — nothing provisioned while the NIC was absent
-    n_armed="$(count_stage provision-unit-armed)"
-    n_start="$(count_stage provision-attempt-start)"
-    n_nic_fail=$(( $(count_stage private_nic_timeout) + $(count_stage provision-nic-ABSENT) ))
-    n_done="$(count_done)"
+    n_armed="$(count_iid provision-unit-armed)"
+    n_nic_fail=$(( $(count_stage private_nic_timeout) + $(count_iid provision-nic-ABSENT) ))
+    n_done="$(if [[ "$IID_JOINED" -eq 1 ]]; then printf '%s\n' "$HOST_ROWS" | grep -E 'stage=bootstrap-done([^-]|$)' | grep -cF "iid=${IID}" 2>/dev/null || true; else count_done; fi)"
     (( n_done > 0 )) && viol "bootstrap-done emitted while the NIC was absent (n=${n_done}) — the provision path RAN WITHOUT the private net; this is the property under test, broken" || ok "no bootstrap-done while the NIC was absent"
     (( n_armed >= 1 ))           && ok "provision-unit-armed emitted for this host" || want "provision-unit-armed (n=${n_armed})"
-    (( n_start >= MIN_ATTEMPTS )) && ok "provision-attempt-start count ${n_start} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "provision-attempt-start count ${n_start} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
+    # Distinct attempt numbers, not row count: the UNION ALL legs can both return the same
+    # row, so a single attempt landing in hot+archive would otherwise satisfy "retried".
+    n_start_distinct="$(printf '%s\n' "$HOST_ROWS" | grep -oE 'stage=provision-attempt-start.{0,40}attempt=[0-9]+' | sort -u | wc -l | tr -d ' ')"
+    (( n_start_distinct >= MIN_ATTEMPTS )) && ok "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
@@ -270,8 +303,8 @@ case "$MODE" in
     # plan rejects). Failed attempts inside the window are likewise EXPECTED (the unit
     # retries), so exit rows are reported, not required-zero.
     n_ok="$(count_stage private_nic_ok)"
-    n_done="$(count_done)"
-    n_exit="$(count_stage provision-attempt-exit-)"
+    n_done="$(if [[ "$IID_JOINED" -eq 1 ]]; then printf '%s\n' "$HOST_ROWS" | grep -E 'stage=bootstrap-done([^-]|$)' | grep -cF "iid=${IID}" 2>/dev/null || true; else count_done; fi)"
+    n_exit="$(count_iid provision-attempt-exit-)"
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
     KEY=REHEARSAL_PHASE_B_RECOVERY
@@ -286,7 +319,7 @@ case "$MODE" in
     # property this leg exists to prove. The boundary timestamp is recorded BEFORE the API
     # call and `dt` is ingest-time, so a delayed pre-boundary row can read post-boundary —
     # that direction errs conservative (false FAIL, never false PASS).
-    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}') AND position(raw, '${HOST_NAME}') > 0 ORDER BY dt LIMIT 2000" 2>/dev/null)" \
+    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}') AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow" 2>/dev/null)" \
       || { echo "TRANSIENT: the post-reboot query failed after a live anchor." >&2; exit 2; }
     n_restage="$(printf '%s\n' "$POST_ROWS" | grep -cE 'stage=bs-token-restaged' 2>/dev/null || true)"
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"
@@ -315,6 +348,10 @@ mkdir -p "$(dirname "$OUT")"
   printf 'REHEARSAL_RUN_URL=%s\n' "$EVIDENCE_URL"
   [[ -n "$IID" ]] && printf 'REHEARSAL_IID=%s\n' "$IID"
   printf 'CAPTURED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Self-describing completeness: an always() upload can ship a file carrying only
+  # REHEARSAL_PHASE_A_OBSERVED=PASS. Only the post-reboot PASS writes the trailer, so the
+  # presence of all three phase keys AND the trailer is the full-evidence contract.
+  [[ "$MODE" == post-reboot ]] && printf 'REHEARSAL_COMPLETE=true\n' 
 } >> "$OUT"
 echo "PASS (${MODE}): appended ${KEY}=PASS to ${OUT}"
 exit 0

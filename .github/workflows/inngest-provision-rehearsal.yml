@@ -88,7 +88,7 @@ jobs:
     # the sentinel suite (inngest-provision-rehearsal.test.sh) REDs a step without a bound
     # and a ceiling below the step sum. Teardown is its OWN job (`needs: rehearse`,
     # `if: always()`), so a ceiling reached here does not starve it.
-    timeout-minutes: 140
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         timeout-minutes: 2
@@ -106,10 +106,11 @@ jobs:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
-      # FIRST step that could matter: validate the dispatch before anything reads a secret or
-      # contacts a provider. Every untrusted input is routed through `env:` and never
-      # interpolated into the shell body — an input is attacker-controlled text as far as
-      # this runner is concerned.
+      # The typo-guard. Checkout, setup-terraform, and the credential LOAD have already run —
+      # this is not the authorization (the environment reviewer is); it exists so a mistyped
+      # confirm does not burn a paid host before failing. Every untrusted input is routed
+      # through `env:` and never interpolated into the shell body — an input is
+      # attacker-controlled text as far as this runner is concerned.
       - name: Validate dispatch inputs (confirm token)
         timeout-minutes: 1
         env:
@@ -133,20 +134,42 @@ jobs:
         timeout-minutes: 1
         run: |
           set -euo pipefail
-          hits="$(sed 's/^[[:space:]]*#.*$//' "${REHEARSAL_DIR}"/*.tf \
-                  | grep -cE 'hcloud_(server|volume|firewall|network|ssh_key)\.inngest\b|doppler_(environment|project|config|service_token|secret)\.inngest|terraform_remote_state|data\.hcloud_server\.' || true)"
+          # FILE INVENTORY FIRST — Terraform also loads *.tf.json, *.auto.tfvars (which
+          # override TF_VAR_* env!), and anything under a module dir. A file-shape escape
+          # carries real config outside every grep below.
+          extra="$(ls -A "${REHEARSAL_DIR}" | grep -vE '^(main|variables|rehearsal)\.tf$|^\.terraform\.lock\.hcl$|^\.terraform$' || true)"
+          if [[ -n "$extra" ]]; then
+            echo "::error::${REHEARSAL_DIR} contains unexpected files/dirs: ${extra} — only the three .tf files and the lockfile are sanctioned. Refusing to plan."
+            exit 1
+          fi
+          STRIPPED="$(mktemp)"
+          for f in "${REHEARSAL_DIR}"/*.tf; do sed 's/^[[:space:]]*#.*$//' "$f"; done > "$STRIPPED"
+          hits="$(grep -cE 'hcloud_(server|volume|firewall|network|ssh_key)\.inngest\b|doppler_(environment|project|config|service_token|secret)\.inngest|terraform_remote_state|data\.hcloud_server\.' "$STRIPPED" || true)"
           if [[ "$hits" -ne 0 ]]; then
             echo "::error::${REHEARSAL_DIR} references ${hits} production inngest address(es) or a remote state. -target is TRANSITIVE ON DEPENDENCIES, so a rehearsal apply could pull hcloud_server.inngest into its plan closure. Refusing to plan."
             exit 1
           fi
           # `hcloud_network.private` may appear ONLY behind `data.` — a resource-style
           # reference would bind the prod network's state object into this root's graph.
-          if sed 's/^[[:space:]]*#.*$//' "${REHEARSAL_DIR}"/*.tf \
-              | grep -nE '(^|[^.a-z_])hcloud_network\.private\b' | grep -v 'data\.hcloud_network\.private'; then
+          if grep -nE '(^|[^.a-z_])hcloud_network\.private\b' "$STRIPPED" | grep -v 'data\.hcloud_network\.private'; then
             echo "::error::${REHEARSAL_DIR} references the prod hcloud_network.private as a resource (not a data source). Refusing to plan."
             exit 1
           fi
-          echo "rehearsal root is clean: 0 production references in code"
+          # DECLARATION-syntax census: `data "TYPE" "NAME"` — the only permitted read is
+          # the private network. data.doppler_*, data.external, data.http would pull prod
+          # values (or execute) under this job's credentials at plan time.
+          extra_ds="$(grep -oE 'data "[a-z_]+" "[a-z_]+"' "$STRIPPED" | grep -vc 'hcloud_network.*private' || true)"
+          if [[ "$extra_ds" -ne 0 ]]; then
+            echo "::error::${REHEARSAL_DIR} declares data sources beyond data.hcloud_network.private: $(grep -oE 'data \"[a-z_]+\" \"[a-z_]+\"' "$STRIPPED" | grep -v 'hcloud_network.*private' | tr '\n' ' '). Refusing to plan."
+            exit 1
+          fi
+          # Provisioners execute under this environment's credentials at apply and leave no
+          # footprint in .change.actions — the plan-shape guard cannot see them.
+          if grep -qE '(provisioner|local-exec|remote-exec)[[:space:]]*\{|module[[:space:]]+"|output[[:space:]]+"' "$STRIPPED"; then
+            echo "::error::${REHEARSAL_DIR} carries a provisioner/exec/module/output surface the plan-shape guard cannot see. Refusing to plan."
+            exit 1
+          fi
+          echo "rehearsal root is clean: file inventory pinned, 0 production references, reads confined to data.hcloud_network.private"
 
       - name: Extract R2 backend credentials
         timeout-minutes: 2
@@ -162,8 +185,12 @@ jobs:
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # Heredoc-delimited writes, never K=V: a value carrying a newline would plant
+          # arbitrary NAME=value lines into every later step's environment.
+          {
+            printf 'AWS_ACCESS_KEY_ID<<GH_EOF\n%s\nGH_EOF\n' "$KEY_ID"
+            printf 'AWS_SECRET_ACCESS_KEY<<GH_EOF\n%s\nGH_EOF\n' "$SECRET"
+          } >> "$GITHUB_ENV"
 
       # `-lockfile=readonly`, matching every other init in apply-web-platform-infra.yml. The
       # rehearsal's entire claim is that it boots the bytes production would; without the
@@ -188,8 +215,11 @@ jobs:
           ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            # nic_attached=false: destroy is state-driven (the flag's value does not decide
+            # what is destroyed), and false keeps the conditional NIC resource out of the
+            # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
               -var "zot_pull_token=${ZOT_PULL}"
           echo "teardown-only complete"
 
@@ -250,7 +280,7 @@ jobs:
           # The observation window opens BEFORE the apply: the host starts booting the
           # instant ServerCreate lands, so a post-apply timestamp would exclude the
           # earliest (most diagnostic) rows.
-          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-a-since.txt"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$GITHUB_WORKSPACE/phase-a-since.txt"
           cat "$GITHUB_WORKSPACE/phase-a-since.txt"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan-a
@@ -283,7 +313,9 @@ jobs:
           deadline=$(( SECONDS + 20 * 60 ))
           while (( SECONDS < deadline )); do
             set +e
-            doppler run --preserve-env -p soleur -c prd_terraform -- \
+            doppler run --preserve-env -p soleur -c prd_terraform \
+              --only-secrets BETTERSTACK_QUERY_HOST --only-secrets BETTERSTACK_QUERY_USERNAME \
+              --only-secrets BETTERSTACK_QUERY_PASSWORD -- \
               bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
                 --mode phase-a --since "$SINCE" \
                 --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-a.log
@@ -329,7 +361,7 @@ jobs:
           # The phase-B window bound is taken BEFORE the plan/apply — phase-A's
           # (expected-failure) rows share the host name, and the capture must not count
           # them as recovery evidence.
-          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-b-since.txt"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$GITHUB_WORKSPACE/phase-b-since.txt"
           ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
@@ -378,7 +410,9 @@ jobs:
           deadline=$(( SECONDS + 15 * 60 ))
           while (( SECONDS < deadline )); do
             set +e
-            doppler run --preserve-env -p soleur -c prd_terraform -- \
+            doppler run --preserve-env -p soleur -c prd_terraform \
+              --only-secrets BETTERSTACK_QUERY_HOST --only-secrets BETTERSTACK_QUERY_USERNAME \
+              --only-secrets BETTERSTACK_QUERY_PASSWORD -- \
               bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
                 --mode phase-b --since "$SINCE" \
                 --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-b.log
@@ -401,8 +435,18 @@ jobs:
               *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
             esac
           done
-          echo "::error::phase-b recovery gate timed out after 15 min — bootstrap-done never arrived for ${HOST}. HALT: teardown still runs."
+          echo "::error::phase-b recovery gate timed out after 15 min — bootstrap-done never arrived for ${HOST}. HALT: teardown still runs. See ${RUNBOOK}."
           exit 1
+
+      # SETTLE before the boundary (mirrors git-data-rung2's settle step): bootstrap-done is
+      # emitted ~34 s before the provision unit exits, and a reboot POST landing inside that
+      # tail produces provision-attempt-exit-143 AFTER the boundary — indistinguishable from
+      # a broken latch and a false FAIL on the exact property this leg proves.
+      - name: Settle — let the provision unit's post-done tail drain
+        id: settle
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 3
+        run: sleep 90
 
       # THE LATCH LEG. The reboot is the Hetzner API (control plane, never SSH — same shape
       # as web-host-reboot.yml's #9372 job). The boundary timestamp is recorded FIRST so the
@@ -413,7 +457,7 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/reboot-since.txt"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$GITHUB_WORKSPACE/reboot-since.txt"
           TOKEN="${HCLOUD_TOKEN:-}"
           [[ -n "$TOKEN" ]] || { echo "::error::HCLOUD_TOKEN is empty — the infra-credentials loader exported no Hetzner token."; exit 1; }
           printf '::add-mask::%s\n' "$TOKEN"
@@ -421,12 +465,27 @@ jobs:
           sid="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
                 | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - \
                     "https://api.hetzner.cloud/v1/servers?name=${host}" \
-                | jq -r --arg n "$host" '[.servers[]? | select(.name == $n) | .id] | if length == 1 then .[0] else "ambiguous" end')"
+                | jq -r --arg n "$host" '[.servers[]? | select(.name == $n) | .id] | if length == 1 then .[0] else "ambiguous" end')" \
+            || { echo "::error::server-id lookup for ${host} failed at the Hetzner API. Failing closed."; exit 1; }
           [[ "$sid" =~ ^[0-9]+$ ]] || { echo "::error::could not resolve a unique server id for ${host} (got '${sid}')."; exit 1; }
-          printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
-            | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - -X POST \
-                "https://api.hetzner.cloud/v1/servers/${sid}/actions/reboot"
-          echo "reboot issued for ${host} (id ${sid}) at $(cat "$GITHUB_WORKSPACE/reboot-since.txt")Z"
+          aid="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+                | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - -X POST \
+                    "https://api.hetzner.cloud/v1/servers/${sid}/actions/reboot" \
+                | jq -r '.action.id // empty')" \
+            || { echo "::error::the reboot POST for ${host} failed at the Hetzner API."; exit 1; }
+          [[ -n "$aid" ]] || { echo "::error::the reboot POST returned no action id for ${host}."; exit 1; }
+          # Verify the action lands — a refused/error reboot otherwise surfaces as the
+          # cap_c deadline with the least actionable diagnosis.
+          for i in $(seq 1 12); do
+            st="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+                  | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - \
+                      "https://api.hetzner.cloud/v1/servers/${sid}/actions/${aid}" \
+                  | jq -r '.action.status // "unknown"')" || st=unknown
+            [[ "$st" == success ]] && break
+            [[ "$st" == error ]] && { echo "::error::Hetzner reports the reboot action for ${host} ERRORED."; exit 1; }
+            sleep 10
+          done
+          echo "reboot ${st:-unknown} for ${host} (id ${sid}, action ${aid}) at $(cat "$GITHUB_WORKSPACE/reboot-since.txt")"
 
       # POST-REBOOT EVIDENCE = the restage anchor (SOLEUR_INNGEST_BS_TOKEN_RESTAGED, emitted
       # every boot — itself a successful scratch-Doppler read) PLUS zero provision markers
@@ -447,7 +506,9 @@ jobs:
           deadline=$(( SECONDS + 8 * 60 ))
           while (( SECONDS < deadline )); do
             set +e
-            doppler run --preserve-env -p soleur -c prd_terraform -- \
+            doppler run --preserve-env -p soleur -c prd_terraform \
+              --only-secrets BETTERSTACK_QUERY_HOST --only-secrets BETTERSTACK_QUERY_USERNAME \
+              --only-secrets BETTERSTACK_QUERY_PASSWORD -- \
               bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
                 --mode post-reboot --since "$SINCE" --reboot-since "$RB" \
                 --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-c.log
@@ -470,20 +531,38 @@ jobs:
               *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
             esac
           done
-          echo "::error::post-reboot gate timed out after 8 min — the restage anchor never re-emitted for ${HOST}. HALT: teardown still runs."
+          echo "::error::post-reboot gate timed out after 8 min — the restage anchor never re-emitted for ${HOST}. HALT: teardown still runs. See ${RUNBOOK}."
           exit 1
+
+      # Persist the capture logs so a non-PASS run is diagnosable without Doppler access —
+      # the evidence file only exists on PASS (write-on-PASS is load-bearing), but every
+      # poll's stage table + the doppler-run stderr are what a triager needs on FAIL.
+      - name: Persist capture logs for the artifact
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && always() }}
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/capture-logs"
+          for f in /tmp/capture-a.log /tmp/capture-b.log /tmp/capture-c.log; do
+            [[ -f "$f" ]] && cp "$f" "$GITHUB_WORKSPACE/capture-logs/" || true
+          done
 
       # ARTIFACT, never a commit: the operator attaches it to #9175 per the runbook. A route
       # that wrote its own evidence to main would convert the reviewer gate into a rubber
-      # stamp — `contents: read` is what makes "never commits" structural.
+      # stamp — `contents: read` is what makes "never commits" structural. run_attempt is in
+      # the name because v4 artifacts are immutable per name — a re-run's upload 409s
+      # without it, losing exactly the retry evidence that mattered.
       - name: Upload the evidence artifact
         if: ${{ !inputs.teardown_only && !inputs.dry_run && always() }}
         timeout-minutes: 3
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: inngest-provision-rehearsal-evidence-${{ github.run_id }}
-          path: inngest-provision-rehearsal-evidence.env
+          name: inngest-provision-rehearsal-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
           if-no-files-found: warn
+          path: |
+            inngest-provision-rehearsal-evidence.env
+            capture-logs/
 
   # Teardown is its OWN job so a ceiling or failure above can never starve it. It destroys
   # whatever this root owns — including a half-created stack — then asserts nothing is left.
@@ -527,8 +606,12 @@ jobs:
           [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::AWS R2 backend credentials missing."; exit 1; }
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # Heredoc-delimited writes, never K=V: a value carrying a newline would plant
+          # arbitrary NAME=value lines into every later step's environment.
+          {
+            printf 'AWS_ACCESS_KEY_ID<<GH_EOF\n%s\nGH_EOF\n' "$KEY_ID"
+            printf 'AWS_SECRET_ACCESS_KEY<<GH_EOF\n%s\nGH_EOF\n' "$SECRET"
+          } >> "$GITHUB_ENV"
 
       - name: Terraform init (rehearsal root)
         timeout-minutes: 5
@@ -548,8 +631,11 @@ jobs:
           ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            # nic_attached=false: destroy is state-driven (the flag's value does not decide
+            # what is destroyed), and false keeps the conditional NIC resource out of the
+            # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
               -var "zot_pull_token=${ZOT_PULL}"
 
       # THE ORPHAN ASSERTION, IN-WORKFLOW. `terraform destroy` acts only on state, so a
@@ -567,8 +653,8 @@ jobs:
           for kind in servers volumes ssh_keys firewalls; do
             n="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
                  | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - \
-                     "https://api.hetzner.cloud/v1/${kind}?label_selector=app%3Dsoleur-inngest-provision-rehearsal" \
-                 | jq -r --arg k "$kind" '.[$k] | length' 2>/dev/null || echo unreadable)"
+                     "https://api.hetzner.cloud/v1/${kind}?label_selector=app%3Dsoleur-inngest-provision-rehearsal&per_page=50" \
+                 | jq -r --arg k "$kind" 'if (.meta.pagination.next_page != null) then "unreadable" else (.[$k] | length) end' 2>/dev/null || echo unreadable)"
             echo "${kind}: ${n} remaining"
             if [[ "$n" == unreadable || "$n" -gt 0 ]]; then orphans=1; fi
           done

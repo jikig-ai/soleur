@@ -69,6 +69,16 @@ cannot adopt a registry or double-fire prod crons even if every other guard fail
 it cannot emit a false positive pass, because the isolation self-check, zot pull, and
 bootstrap all still run for real.
 
+**Sentry emission is suppressed on the rehearsal host** (`sentry_dsn = ""`). The shared
+issue-alerts filter on stage only — the rehearsal's *intentional* `private_nic_timeout`
+would page `web_private_nic_boot_gate` as a prod-attributed event, a real `inngest_pull_fatal`
+in Phase B would page `zot_mirror_fallback_rate`, and `soleur-boot-emit`'s hardcoded
+`host_name='soleur-inngest'` would pollute the zot-soak denominator. The empty DSN sends
+every emit down the baddsn path — still visible as `sentry-emit-FAILED` phone-home rows on
+Better Stack, so the emit path is exercised without writing to the paging channel. (Review
+finding; the plan originally carried the real DSN "because the fatal channel's fidelity is
+part of the rehearsal" — wrong: the fidelity that matters is the Better Stack contract.)
+
 **Evidence is an artifact, never a commit** (`permissions: contents: read`); the operator
 attaches it to #9175 per the runbook.
 
@@ -89,7 +99,7 @@ attaches it to #9175 per the runbook.
 | Option | Rejected/accepted because |
 |---|---|
 | **`count=0` rehearsal inside the parent root** | Rejected — `-target` is transitive on dependencies; a rehearsal address referencing a prod resource could pull `hcloud_server.inngest` into a rehearsal apply's plan closure. A separate state file makes that structural rather than grep-enforced (same argument as ADR-149). |
-| **`doppler_config` branch under `prd` (rung2's shape)** | Rejected here — branch configs inherit their environment's root secrets; a rehearsal token would read all of prod `soleur-inngest`. `doppler_environment` root configs inherit nothing. **Named follow-up:** rung2's `prd_git_data_rehearsal_*` branch DOES inherit `soleur/prd` — its "reads NOTHING of production's" claim merits re-audit. |
+| **`doppler_config` branch under `prd` (rung2's shape)** | Rejected here — branch configs inherit their environment's root secrets; a rehearsal token would read all of prod `soleur-inngest`. `doppler_environment` root configs inherit nothing. **Named follow-up:** rung2's `prd_git_data_rehearsal_*` branch DOES inherit `soleur/prd` — its "reads NOTHING of production's" claim merits re-audit — filed as #9817. |
 | **systemd `${DOPPLER_CONFIG:-prd}` in committed units** | Rejected — systemd `EnvironmentFile=` interpolation supports `${FOO}`/`$FOO` only; a `:-` token resolves empty and breaks `doppler run`. Plain `${DOPPLER_CONFIG}` + the env file carries the value. |
 | **Scratch private network for Phase B** | Rejected — the subnet IS the subject; the attach event on the real `10.0.1.0/24` (and zot reachability over it) is what is being rehearsed. |
 | **Scratch docker Postgres arm (full non-diagnostic durable state)** | Deferred — the plan names it a follow-up; diagnostic boot is the #9175 scope. |

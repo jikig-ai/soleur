@@ -2328,6 +2328,18 @@ jobs:
             _hits="$(printf '%s' "$body" | jq -r --arg k "$_kind" '[.[$k][]? | "\($k): \(.name // .id)"] | .[]')"
             [[ -n "$_hits" ]] && survivors="${survivors}${_hits}"$'\n'
           done
+          # SECOND AXIS: the name prefix. Labels are set by this root's own code, so a
+          # resource whose `labels` block was dropped is invisible to the query above —
+          # name-prefix listing catches a labeled-out orphan. (Servers carry the name that
+          # matters.)
+          _named="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
+                    "https://api.hetzner.cloud/v1/servers?per_page=50&name=${REHEARSAL_PREFIX}")" || {
+            echo "::error::could not name-sweep Hetzner servers — fail-closed."; exit 1; }
+          _nhits="$(printf '%s' "$_named" | jq -r '[.servers[]? | .name] | .[]' 2>/dev/null || echo unreadable)"
+          if [[ "$_nhits" == unreadable ]]; then
+            echo "::error::could not parse the server name-sweep — fail-closed."; exit 1
+          fi
+          [[ -n "$_nhits" ]] && survivors="${survivors}$(printf '%s\n' "$_nhits" | sed 's/^/server(name): /')"$'\n'
           # ── THE SCRATCH DOPPLER ENVIRONMENT IS NOT A HETZNER OBJECT ──────────────
           # It needs its own probe, and that probe gets the same honest-verdict treatment as
           # the rung-2 sweep's config half: a Doppler service token is config-scoped by

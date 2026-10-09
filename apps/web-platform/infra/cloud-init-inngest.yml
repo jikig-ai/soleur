@@ -1533,6 +1533,14 @@ runcmd:
       ''|*[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED "the Doppler token carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
     esac
     unset _wv
+  - |
+    IFS= read -r _wv <<'SOLEUR_DCFG_GUARD_EOV'
+    ${inngest_doppler_config}
+    SOLEUR_DCFG_GUARD_EOV
+    case "$_wv" in
+      ''|*[!A-Za-z0-9_-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-config-REFUSED "the Doppler config name carries a character outside [A-Za-z0-9_-]" || true; exit 1 ;;
+    esac
+    unset _wv
   - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_CONFIG=${inngest_doppler_config}\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
 
@@ -2143,6 +2151,14 @@ runcmd:
   # dropped `--project`) resolve the dedicated project from EnvironmentFile at runtime. Literal
   # here (not $DOPPLER_PROJECT) — this cloud-init write runs BEFORE the bootstrap that would set
   # the shell var; the dedicated host is always soleur-inngest.
+  - |
+    IFS= read -r _wv <<'SOLEUR_DCFG_GUARD_EOV'
+    ${inngest_doppler_config}
+    SOLEUR_DCFG_GUARD_EOV
+    case "$_wv" in
+      ''|*[!A-Za-z0-9_-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-config-REFUSED "the Doppler config name carries a character outside [A-Za-z0-9_-]" || true; exit 1 ;;
+    esac
+    unset _wv
   - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\nDOPPLER_CONFIG=${inngest_doppler_config}\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
 

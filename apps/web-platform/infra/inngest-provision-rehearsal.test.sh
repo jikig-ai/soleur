@@ -67,15 +67,23 @@ REH_CODE="$(mktemp)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -f "$REH_CODE"' EXIT
 for f in "$REH"/*.tf; do sed 's/^[[:space:]]*#.*$//' "$f"; done > "$REH_CODE"
 
+# ── 0. The root's file inventory is closed ─────────────────────────────────────
+# Terraform also loads *.tf.json, *.tfvars{,.json} (auto tfvars BEAT TF_VAR_* env), and any
+# subdirectory reachable via module blocks. A file-shape escape carries real config outside
+# every grep window this suite (and the workflow census) applies. The inventory is pinned.
+_extra_files="$(ls -A "$REH" | grep -vE '^(main\.tf|variables\.tf|rehearsal\.tf|\.terraform\.lock\.hcl|\.terraform)$' || true)"
+yes "the root contains EXACTLY {main,variables,rehearsal}.tf + the lockfile (no .tf.json/.tfvars/subdirs)" \
+  "[[ -z '$_extra_files' ]]"
+
 # ── 1. No production references (the separation is the safety argument) ─────────
 yes "no production resource address is referenced (hcloud_*.inngest / doppler_*.inngest / remote state)" \
   "! grep -qE 'hcloud_(server|volume|firewall|network|ssh_key)\.inngest\b|doppler_(environment|project|config|service_token|secret)\.inngest|terraform_remote_state|data\.hcloud_server\.' '$REH_CODE'"
 no "hcloud_network.private is referenced ONLY as a data source" \
   "grep -E '(^|[^.a-z_])hcloud_network\.private\b' '$REH_CODE' | grep -vqF 'data.hcloud_network.private'"
-yes "a distinct state key carries the rehearsal root" \
-  "grep -qF 'web-platform/inngest-provision-rehearsal/terraform.tfstate' '$REH/main.tf'"
+yes "a distinct state key carries the rehearsal root (comment-stripped — a comment literal cannot satisfy this)" \
+  "grep -qF 'web-platform/inngest-provision-rehearsal/terraform.tfstate' '$REH_CODE'"
 yes "the backend has no lockfile (R2 lacks conditional writes — the workflow's concurrency group is the serializer)" \
-  "grep -qF 'use_lockfile = false' '$REH/main.tf'"
+  "grep -qF 'use_lockfile = false' '$REH_CODE'"
 no "the root carries no import or moved block (a rename-shaped adoption is how a prod address could ride in)" \
   "grep -qE '^(import|moved)[[:space:]]*\{|^[[:space:]]*(import|moved)[[:space:]]*\{' '$REH_CODE'"
 yes "the scratch host's sdk_url is loopback (it can never adopt a prod registry or reach prod web)" \
@@ -89,8 +97,8 @@ yes "the rehearsal private IP is 10.0.1.60 and feeds inngest_private_ip (collide
 BAD_ADDR="$(grep -oE 'resource "(hcloud|doppler|random|tls)_[a-z_]+" "[a-z_]+"' "$REH_CODE" \
             | grep -vE '"rehearsal(_[a-z0-9_]+)?"' || true)"
 yes "every managed resource address carries .rehearsal" "[[ -z '$BAD_ADDR' ]]"
-yes "the ONLY data source is the private-network read" \
-  "[[ \$(grep -oE 'data \"[a-z_]+\" \"[a-z_]+\"' '$REH_CODE' | grep -vc 'hcloud_network.*private') -eq 0 ]] && grep -qF 'data \"hcloud_network\" \"private\"' '$REH_CODE'"
+yes "the ONLY data source is the private-network read, bound to soleur-private by name" \
+  "[[ \$(grep -oE 'data \"[a-z_]+\" \"[a-z_]+\"' '$REH_CODE' | grep -vc 'hcloud_network.*private') -eq 0 ]] && awk '/data \"hcloud_network\" \"private\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' | grep -qE 'name[[:space:]]*=[[:space:]]*\"soleur-private\"'"
 
 # ── 3. Non-inheriting scratch config ──────────────────────────────────────────
 yes "the scratch config is a doppler_environment (non-inheriting root config)" \
@@ -109,10 +117,15 @@ yes "nic_attached is a required variable (no default)" \
   "! awk '/variable \"nic_attached\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' | grep -q 'default'"
 yes "rehearsal_run_id is digit-validated (it lands in names/slugs)" \
   "grep -A8 'variable \"rehearsal_run_id\"' '$REH_CODE' | grep -qF '[0-9]'"
-yes "the NIC attachment is count-gated on nic_attached" \
-  "grep -qE 'count[[:space:]]*=[[:space:]]*var\.nic_attached \? 1 : 0' '$REH_CODE'"
-yes "the NIC attachment addresses the counted instance ([0] — what the plan-shape guard names)" \
-  "grep -qF 'hcloud_server_network.rehearsal' '$REH_CODE'"
+yes "the NIC attachment is count-gated on nic_attached — inside the hcloud_server_network block itself" \
+  "awk '/resource \"hcloud_server_network\" \"rehearsal\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' | grep -qE 'count[[:space:]]*=[[:space:]]*var\.nic_attached \? 1 : 0'"
+yes "the rehearsal host block carries NO inline network{} (Phase A is NIC-absent by definition)" \
+  "! awk '/resource \"hcloud_server\" \"rehearsal\"/{f=1} f&&/^}/{exit} f' '$REH_CODE' | grep -qE '\\bnetwork[[:space:]]*\\{'"
+
+yes "Sentry is suppressed on the rehearsal (empty DSN — stage-filtered prod alerts must not page)" \
+  "grep -qE 'sentry_dsn[[:space:]]*=[[:space:]]*\"\"' '$REH_CODE'"
+yes "the zot endpoint literal equals the parent's registry_private_ip operand" \
+  "grep -qE 'zot_registry_endpoint[[:space:]]*=[[:space:]]*\"10\.0\.1\.30:5000\"' '$REH_CODE' && grep -qF 'registry_private_ip = \"10.0.1.30\"' '$DIR/zot-registry.tf'"
 
 # ── 5. Render parity: checksums copied from the parent must equal it ──────────
 for pair in \
@@ -173,10 +186,16 @@ yes "the evidence capture runs in all three modes (phase-a, phase-b, post-reboot
   "grep -qF -- '--mode phase-a' '$WF' && grep -qF -- '--mode phase-b' '$WF' && grep -qF -- '--mode post-reboot' '$WF'"
 yes "the reboot is the Hetzner API (never SSH)" \
   "grep -qF 'actions/reboot' '$WF' && ! grep -qE 'ssh |ssh-key' '$WF'"
-yes "the phase ordering is apply_A -> capture_A -> plan_B -> apply_B -> reboot -> capture_C" \
-  "awk '/id: apply_a/{a=NR} /id: cap_a/{b=NR} /id: plan_b/{c=NR} /id: apply_b/{d=NR} /id: reboot/{e=NR} /id: cap_c/{f=NR} END{exit !(a<b && b<c && c<d && d<e && e<f)}' '$WF'"
+yes "the phase ordering is apply_A -> capture_A -> plan_B -> apply_B -> settle -> reboot -> capture_C" \
+  "awk '/id: apply_a/{a=NR} /id: cap_a/{b=NR} /id: plan_b/{c=NR} /id: apply_b/{d=NR} /id: settle/{s=NR} /id: reboot/{e=NR} /id: cap_c/{f=NR} END{exit !(a<b && b<c && c<d && d<s && s<e && e<f)}' '$WF'"
 yes "teardown is its own job gated always() (a ceiling in rehearse cannot starve it)" \
   "awk '/^  teardown:/{f=1} f&&/if:/{print;exit}' '$WF' | grep -qF 'always()'"
+yes "teardown runs under the infra-privileged environment (state writes need the credential tier)" \
+  "awk '/^  teardown:/{f=1} f&&/environment:/{print;exit}' '$WF' | grep -qF 'infra-privileged'"
+yes "teardown destroys with nic_attached=false (the prod-network data read stays out of the destroy graph)" \
+  "grep -qF 'var nic_attached=false' '$WF'"
+yes "the evidence artifact name carries run_attempt (immutable names collide on re-run)" \
+  "grep -qF '\${{ github.run_id }}-\${{ github.run_attempt }}' '$WF'"
 yes "every step carries a timeout-minutes bound" \
   "python3 -c 'import yaml,sys; d=yaml.safe_load(open(\"$WF\")); sys.exit(0 if all(\"timeout-minutes\" in s for j in d[\"jobs\"].values() for s in j[\"steps\"]) else 1)'"
 yes "the job ceiling covers the step sum" \
