@@ -865,7 +865,7 @@ own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2');
 # The REAL table (Waves A2 and B). The synthetic rows above prove the arithmetic; these prove the table this file SHIPS still owns what it
 # must and nothing it must not. The scan runs scan_sweep on a scratch root (so SWEEP_PATHSPEC and PATTERN_V2 are exercised, not
 # only the verdict) and the verdict reads the live SWEEP_DEFERRALS. Planted: one violating line under each subtree a wave took
-# to zero (S3: scripts/, S4: tests/ at two depths and in a non-.sh extension, S5: plugins/soleur/ at seven depths and shapes), plus a compliant file under the four older canary roots (the plugins/soleur/ violators already satisfy the two newer ones) so the
+# to zero (S3: scripts/, S4: tests/ at two depths and in a non-.sh extension, S5: plugins/soleur/ at seven depths and shapes), plus a compliant file under the four roots no violator satisfies (scripts/, plugins/soleur/, apps/web-platform/scripts/, apps/cla-evidence/; the tests/ and plugins/soleur/{scripts,skills}/ violators cover the rest) so the
 # population is not UNRESOLVED. To add a canary: append its path to real_paths and bump REAL_PLANTED; nothing else moves.
 _real_undeferred() { # <scan root> -> each path the CURRENT SWEEP_DEFERRALS leaves outside every row, one per line
   local v
@@ -940,7 +940,7 @@ loose_bad="$(_loose_not_test_shaped "${SWEEP_DEFERRALS[@]}")"
 tests_rows="$(printf '%s\n' "${SWEEP_DEFERRALS[@]}" | grep -c '^[[:space:]]*tests/' || true)"
 # The test-shaped rows are PINNED by glob, not matched by prefix: a prefix test is a string test on the row text, and a narrow row such as
 # `*/skills/x/test/*.test.sh` or `plugins/*/skills/x/test/*.test.sh` owns real hits and no canary while starting with neither prefix.
-# Changing the set is a visible two-place edit (this literal and the row), exactly as GATED_PROD_ROWS is for the production rows.
+# Changing the set is a visible two-place edit (this literal and the row); the production rows are the three-place version below (row, count, glob list).
 test_globs=""
 for _row in "${SWEEP_DEFERRALS[@]}"; do
   IFS='|' read -r _g _ <<<"$_row"; _g="${_g#"${_g%%[![:space:]]*}"}"; _g="${_g%"${_g##*[![:space:]]}"}"
