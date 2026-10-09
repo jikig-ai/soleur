@@ -57,10 +57,12 @@ jobs:
           # variable only; no key bytes ever land in argv.
           SIG_HEX="$(printf '%s' "$FINDINGS_JSON" | python3 -c 'import os,sys,hmac,hashlib;print(hmac.new(os.environ["KB_DRIFT_INGEST_SIGNING_KEY"].encode("utf-8"), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')"
           SIG="sha256=${SIG_HEX}"
-          HTTP_CODE="$(curl -sS -o /tmp/ingest.out -w '%{http_code}' \
+          # The signature reaches curl on its stdin config (ADR-280), not its argument list.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+          HTTP_CODE="$(bc_curl kb-drift-walker 'X-Soleur-Kb-Drift-Signature::SIG' -- \
+            -sS -o /tmp/ingest.out -w '%{http_code}' \
             -X POST "$INGEST_URL" \
             -H "Content-Type: application/json" \
-            -H "X-Soleur-Kb-Drift-Signature: $SIG" \
             --data-raw "$FINDINGS_JSON")"
           echo "ingest response code: $HTTP_CODE"
           cat /tmp/ingest.out
