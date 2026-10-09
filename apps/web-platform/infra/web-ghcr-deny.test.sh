@@ -403,7 +403,10 @@ chk_probe_run() {  # <root>: drive the extracted assert_dockerd_denied against s
   assert_fixture_dir "$t"; mkdir "$t/bin"
   { echo 'dk() { sudo docker "$@"; }'; sed -n '/^HOSTS_CACHE_WAIT_S=/p' "$f"; sed -n '/^assert_dockerd_denied() {/,/^}/p' "$f"; } > "$t/fn.sh"
   printf '#!/bin/sh\nexec "$@"\n' > "$t/bin/sudo"
-  printf '#!/bin/sh\necho "sleep $1" >> "$SHIMLOG"\n' > "$t/bin/sleep"
+  cat > "$t/bin/sleep" <<'SHIM'
+#!/bin/sh
+echo "sleep $1" >> "$SHIMLOG"
+SHIM
   printf '#!/bin/sh\nshift\n[ "$DOCKER_PULL" = timeout ] && exit 124\nexec "$@"\n' > "$t/bin/timeout"
   cat > "$t/bin/docker" <<'SHIM'
 #!/bin/sh
@@ -418,7 +421,9 @@ esac
 SHIM
   chmod +x "$t/bin/"*
   for mode in refused:0 ok:1 timeout:1; do
-    want=${mode#*:}; mode=${mode%%:*}; log="$t/log-$mode"; : > "$log"
+    want=${mode#*:}; mode=${mode%%:*}; log="$t/log-$mode"
+    assert_fixture_dir "$log"
+    : > "$log"
     SHIMLOG="$log" DOCKER_PULL="$mode" PATH="$t/bin:$PATH" bash --noprofile --norc -c \
       'source "$1"; assert_dockerd_denied /etc/hosts ghcr.io/x@sha256:abc' _ "$t/fn.sh" >/dev/null 2>&1
     rc=$?
