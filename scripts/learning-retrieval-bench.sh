@@ -26,7 +26,6 @@
 # Self-test env-var hooks (per cq-test-fixtures-synthesized-only):
 #   LEARNINGS_ROOT, INDEX_PATH, OUTPUT_DIR  redirect script reads/writes
 #   CURL_BIN                                inject mock curl for API tests
-#   LIVE_API=1                              opt in to live calls in self-test
 
 set -euo pipefail
 
@@ -122,7 +121,6 @@ Closes #4043 once committed alongside output learning + sibling JSON.
 Env-var hooks (self-test fixture overrides only — cq-test-fixtures-synthesized-only):
   LEARNINGS_ROOT, INDEX_PATH, OUTPUT_DIR     redirect script reads/writes
   CURL_BIN                                   inject mock curl for API tests
-  LIVE_API=1                                 opt in to live calls in self-test
 HELP
 }
 
@@ -1156,6 +1154,21 @@ self_test() {
 
   echo "== self-test (synthesized fixtures only — cq-test-fixtures-synthesized-only) =="
 
+  # Hermeticity: the verdict must not depend on the caller's environment, and the self-test never
+  # reaches the network. An exported NO_PARAPHRASE=1 (the production kill switch) would switch off
+  # the Stage 2 rows (173 passed / 4 failed), and an exported ANTHROPIC_API_KEY would let
+  # kbsearch_rank pass its key gate and invoke the real curl with the caller's key. Rows that need a
+  # key or a curl set their own locally and restore to THIS baseline. CURL_BIN defaults to a stub that
+  # records the call and fails, so a row that forgets to stub curl is reported below instead of
+  # calling out. scripts/learning-retrieval-bench.test.sh pins all three.
+  NO_PARAPHRASE=0
+  unset ANTHROPIC_API_KEY
+  ST_LEAK_LOG="$TMP_ROOT/curl-leaked-calls"
+  : > "$ST_LEAK_LOG"
+  CURL_BIN="$TMP_ROOT/curl-fail-closed"
+  printf '%s\n' '#!/usr/bin/env bash' "printf 'call\\n' >> \"$ST_LEAK_LOG\"" 'exit 99' > "$CURL_BIN"
+  chmod +x "$CURL_BIN"
+
   # ── AC2-a: full frontmatter + ## Problem → ground-truth = problem body ────
   st_write "$TMP_ROOT/a.md" \
     '---' \
@@ -1490,6 +1503,9 @@ self_test() {
   # ── Anthropic key shape guard + key-off-argv (argv-bearer sweep S2, D7) ──
   self_test_api_key_guard
 
+  # ── Hermeticity: no row reached the fail-closed default curl ──
+  st_assert "hermeticity: no row invoked the fail-closed default CURL_BIN" "0" "$(wc -l < "$ST_LEAK_LOG" | tr -d ' ')"
+
   echo
   echo "== summary: PASS=$SELF_TEST_PASS  FAIL=$SELF_TEST_FAIL  TOTAL=$SELF_TEST_TOTAL =="
   if (( SELF_TEST_FAIL > 0 )); then
@@ -1498,7 +1514,7 @@ self_test() {
   # anti-vacuity floor: a self-test whose case calls were deleted or short-circuited reports
   # PASS=0 FAIL=0 and exits 0 above. Declared on the line IMMEDIATELY above the `if`, and a
   # lower bound (never -eq) so adding a row is not a spurious failure.
-  ST_MIN_ASSERTIONS=177
+  ST_MIN_ASSERTIONS=178
   if (( SELF_TEST_TOTAL < ST_MIN_ASSERTIONS )); then
     printf 'FATAL: anti-vacuity floor breached (TOTAL=%s < %s) -- cases did not dispatch\n' \
       "$SELF_TEST_TOTAL" "$ST_MIN_ASSERTIONS" >&2
