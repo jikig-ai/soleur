@@ -122,7 +122,7 @@ ghcall() { # <outfile> <gh args...>: bounded, retried twice, aborts naming the c
 }
 
 if [ "$LIVE" -eq 1 ]; then
-  PRQ='query($searchQuery: String!, $cursor: String) { search(query: $searchQuery, type: ISSUE, first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { number headRefName createdAt closedAt isDraft author { __typename } timelineItems(first: 100, itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT]) { totalCount nodes { __typename ... on ReadyForReviewEvent { createdAt } ... on ConvertToDraftEvent { createdAt } } } } } } }'
+  PRQ='query($searchQuery: String!, $cursor: String) { search(query: $searchQuery, type: ISSUE, first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { number headRefName createdAt closedAt isDraft author { __typename } timelineItems(first: 100, itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT]) { pageInfo { hasNextPage } nodes { __typename ... on ReadyForReviewEvent { createdAt } ... on ConvertToDraftEvent { createdAt } } } } } } }'
   : >"${DIR}/prs.ndjson"
   FIRST_PR_DAY=$(date -u -d "${DAYS[0]} 00:00:00 UTC -14 days" +%F)
   d="$FIRST_PR_DAY"
@@ -133,9 +133,10 @@ if [ "$LIVE" -eq 1 ]; then
       args=(api graphql -f "query=${PRQ}" -f "searchQuery=repo:${REPO} is:pr created:${d}..${d}")
       [ -z "$cursor" ] || args+=(-f "cursor=${cursor}")
       ghcall "${DIR}/pr-page.json" "${args[@]}" || die "could not fetch the PRs created on ${d}"
-      jq -c '.data.search.nodes[]? | select(.number != null) | {number, branch: .headRefName, createdAt, closedAt, isDraft,
-             isBot: ((.author.__typename // "") == "Bot"), timelineTotal: (.timelineItems.totalCount // 0),
-             events: [(.timelineItems.nodes // [])[] | {type: .__typename, at: .createdAt}]}' "${DIR}/pr-page.json" >>"${DIR}/prs.ndjson" \
+      jq -c '.data.search.nodes[]? | select(.number != null) | (.timelineItems.pageInfo.hasNextPage // false) as $more | {number, branch: .headRefName, createdAt, closedAt, isDraft,
+             isBot: ((.author.__typename // "") == "Bot"),
+             events: [(.timelineItems.nodes // [])[] | {type: .__typename, at: .createdAt}]}
+             | .timelineTotal = ((.events | length) + (if $more then 1 else 0 end))' "${DIR}/pr-page.json" >>"${DIR}/prs.ndjson" \
         || die "could not read the PR page for ${d}"
       more=$(jq -r '.data.search.pageInfo.hasNextPage // false' "${DIR}/pr-page.json") || die "could not read the PR page info for ${d}"
       [ "$more" = "true" ] || break

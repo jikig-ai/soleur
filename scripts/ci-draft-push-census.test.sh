@@ -432,7 +432,7 @@ case "${1:-}" in
         nodes: [.[] | select(.createdAt[0:10] == $day)
           | {number, headRefName: .branch, createdAt, closedAt, isDraft,
              author: {__typename: (if .isBot then "Bot" else "User" end)},
-             timelineItems: {totalCount: .timelineTotal, nodes: [.events[] | {__typename: .type, createdAt: .at}]}}]}}}' "$FIX/prs.json"
+             timelineItems: {pageInfo: {hasNextPage: (.timelineTotal > (.events | length))}, nodes: [.events[] | {__typename: .type, createdAt: .at}]}}]}}}' "$FIX/prs.json"
     ;;
   repos/*/actions/workflows/ci.yml/runs*)
     ep="$1"
@@ -462,6 +462,12 @@ chk L "live: runs are fetched with --paginate (every runs call carries it)" bash
 chk_not L "live: no pull_requests[] join, no POST/PATCH flag was ever sent" grep -qE -- ' (-X|--method) ' "$GH_LOG"
 chk L "live: PRs are listed for the 14 days before the period too (17 graphql day calls)" bash -c '[ "$(grep -c "graphql" "$1")" -eq 17 ]' _ "$GH_LOG"
 chk L "live: the fetched directory is kept and named on stderr" has "data dir:" "$ERR"
+
+GH_LOG="$T/gh1b.log"; : >"$GH_LOG"
+live "$T/mut/m7"
+chk L "live: a timeline the API says has more pages is refused (rc 3, got $RC)" rc_is 3
+chk L "live: the refusal names the truncated timeline" has timeline "$ERR"
+chk_not L "live: no mean after the truncated-timeline refusal" has MEAN_PUSHES_DISTINCT_SHA "$OUT"
 
 GH_LOG="$T/gh2.log"; : >"$GH_LOG"
 census_run PATH="$T/bin:$PATH" TMPDIR="$T/live" FIX="$BASE" GH_LOG="$GH_LOG" GH_FAIL_DAY=2026-01-02 CENSUS_RETRY_SLEEP=0 \
@@ -504,7 +510,7 @@ chk Z "no census run hit the ${CENSUS_TO} s timeout" [ ! -e "$DEADLINE_FILE" ]
 # DELIBERATELY NOT ROUTED THROUGH fail(): literal comparison and a direct exit.
 # KEEP THE TWO ASSIGNMENTS AND THE `if` CONTIGUOUS (no comment between them).
 _total=$((passes + fails))
-_FLOOR=125
+_FLOOR=128
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d - the suite lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
