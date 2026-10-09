@@ -5950,6 +5950,10 @@ if want_scripts; then
   # integer cross-multiplication, the REFUSED mutation matrix and a gh-shim round trip; offline). Same
   # explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/ci-draft-push-census" bash scripts/ci-draft-push-census.test.sh
+  # #9728 (ADR-276 S3): the draft-light proof. Extracts the draft-light step body, the four gated conditions and the
+  # test aggregator's draft arm from ci.yml and EXECUTES them under the Actions shell; mutation rows over copies.
+  # Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-draft-light" bash scripts/ci-draft-light.test.sh
 fi
 
 # Named bun-test entries — bun shard.

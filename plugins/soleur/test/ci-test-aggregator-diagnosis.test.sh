@@ -133,10 +133,11 @@ echo "  instrument self-test: pass() and fail() both move"
 # and $8 the 6th (encryption-posture, #6907). All three default to success so the
 # three-shard rows keep stating their FULL triple while the build, heavy and posture
 # rows below name their own values explicitly.
-run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] [$7=scripts-heavy] [$8=posture] ; sets OUT/RC
+run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] [$7=scripts-heavy] [$8=posture] [$9=draft-light output] ; sets OUT/RC
   OUT="$SANDBOX/out.$RANDOM.$RANDOM"
   ( WEBPLAT_RESULT="$2" BUN_RESULT="$3" SCRIPTS_RESULT="$4" EVENT_NAME="$5" \
       BUILD_RESULT="${6:-success}" SCRIPTS_HEAVY_RESULT="${7:-success}" POSTURE_RESULT="${8:-success}" \
+      DRAFT_LIGHT="${9:-}" \
       bash --noprofile --norc -eo pipefail "$1" ) >"$OUT" 2>&1
   RC=$?
 }
@@ -393,6 +394,115 @@ if [ -s "$OUT" ] && [ "$RC" -eq 1 ]; then pass; else
   fail "E3 an out-of-enum leg result ('neutral') produced rc=$RC and output '$(tr '\n' '|' <"$OUT" | head -c 120)'. A result the case does not enumerate must still fail the job and say so — otherwise a new GitHub conclusion value passes CI silently"
 fi
 
+# ── D1-D9: the draft arm (ADR-276 S3, #9728, Option R) ───────────────────────
+# On a `pull_request` run whose `draft-light` output is exactly `true`, the heavy legs are skipped and the aggregator must
+# conclude RED with `draft: full battery owed at ready`. The loop above already fails a skipped leg; the ARM is a second,
+# independent chokepoint so a later edit that makes the loop tolerate skipped legs cannot turn a light draft green.
+# It must not fire on merge_group, push or workflow_dispatch, and it must not fire for any value other than `true`.
+DRAFT_MSG="draft: full battery owed at ready"
+draft_must() {  # $1=label $2=body $3=event $4=draft-light $5=want_rc $6=want_msg(0|1) $7..$9=webplat bun scripts [$10=heavy]
+  local label="$1" body="$2" ev="$3" dl="$4" wrc="$5" wmsg="$6" w="${7:-success}" b="${8:-success}" s="${9:-success}" h="${10:-success}"
+  run_body "$body" "$w" "$b" "$s" "$ev" success "$h" success "$dl"
+  local ok=1
+  [ "$RC" -eq "$wrc" ] || ok=0
+  if grep -qF -- "$DRAFT_MSG" "$OUT"; then [ "$wmsg" -eq 1 ] || ok=0; else [ "$wmsg" -eq 0 ] || ok=0; fi
+  if [ "$ok" -eq 1 ]; then pass; return 0; fi
+  fail "$label — event=$ev draft-light='$dl' legs=($w,$b,$s,$h): want rc=$wrc msg=$wmsg; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 300)"
+  return 1
+}
+# D1 a light draft (heavy legs skipped): red, names the draft message AND still names the skipped legs
+draft_must "D1 light draft, heavy legs skipped" "$BODY" pull_request true 1 1 skipped success skipped skipped
+if grep -qF -- "test-webplat: SKIPPED" "$OUT" && grep -qF -- "test-scripts-heavy: SKIPPED" "$OUT"; then pass; else
+  fail "D1b the per-leg SKIPPED lines are gone from a light draft's output: $(tr '\n' '|' <"$OUT" | head -c 300)"
+fi
+# D2 the arm is unconditional on the legs: a light draft with every leg success is still red
+draft_must "D2 light draft, every leg success" "$BODY" pull_request true 1 1
+# D3/D4 other events are untouched: a skipped leg still fails (the loop), the draft message never prints; all-green passes
+for _ev in merge_group push workflow_dispatch; do
+  draft_must "D3 $_ev with light=true and a skipped leg" "$BODY" "$_ev" true 1 0 success success skipped
+  draft_must "D4 $_ev with light=true and every leg success" "$BODY" "$_ev" true 0 0
+done
+# D5 only the exact string `true` arms it
+for _v in "" false FALSE True TRUE 1 yes " true" "true "; do
+  draft_must "D5 pull_request with draft-light='$_v' and every leg success" "$BODY" pull_request "$_v" 0 0
+done
+draft_must "D5b pull_request not light, skipped leg" "$BODY" pull_request "" 1 0 success success skipped
+# D6 the arm is independent of the loop: with the loop made to TOLERATE skipped legs a light draft is still red
+_tol="$SANDBOX/mut.tolerant"
+sed 's/^\([[:space:]]*\)fail=1/\1: fail=1/' "$SANDBOX/body.pristine" > "$_tol"
+draft_must "D6 light draft, tolerant loop" "$_tol" pull_request true 1 1 skipped success skipped skipped
+# ...and the tolerant loop really tolerates (merge_group, skipped leg -> exit 0), so D6 is not vacuous
+draft_must "D6b tolerant loop control (merge_group, skipped leg)" "$_tol" merge_group true 0 0 success success skipped
+
+# D7 mutants of the ARM itself: each must be caught by the rows above. The mutator is a named-operation helper, so no
+# quoting of a code snippet is ever passed through the shell.
+cat > "$SANDBOX/armmut.py" <<'PYM'
+import re, sys
+src, dst, op = sys.argv[1:4]
+s = open(src).read()
+ARM = re.compile(r'(?ms)^[ \t]*if \[\[ "\$EVENT_NAME" == "pull_request" && "\$DRAFT_LIGHT" == "true" \]\]; then.*?^[ \t]*fi\n')
+m = ARM.search(s)
+if not m:
+    sys.stderr.write("arm not found\n"); sys.exit(3)
+arm = m.group(0)
+if op == "remove":
+    s = s.replace(arm, "", 1)
+elif op == "exit0":
+    s = s.replace(arm, arm.replace("exit 1", "exit 0"), 1)
+elif op == "anyevent":
+    s = s.replace(arm, arm.replace('"$EVENT_NAME" == "pull_request" && ', "", 1), 1)
+elif op == "nonempty":
+    s = s.replace(arm, arm.replace('"$DRAFT_LIGHT" == "true"', '-n "$DRAFT_LIGHT"', 1), 1)
+elif op == "stdout":
+    s = s.replace(arm, arm.replace(">&2", "", 1), 1)
+elif op == "after-final":
+    s = s.replace(arm, "", 1)
+    k = s.rfind('echo "All six legs green')
+    s = s[:k] + arm + s[k:]
+else:
+    sys.stderr.write("unknown op\n"); sys.exit(2)
+open(dst, "w").write(s)
+PYM
+mutate_arm() {  # $1=label $2=op ; probe: D1/D2/D3/D5/D6 over the mutant
+  local label="$1" op="$2" m="$SANDBOX/mut.arm.$RANDOM" _f
+  MUT_TOTAL=$((MUT_TOTAL + 1))
+  if ! python3 "$SANDBOX/armmut.py" "$SANDBOX/body.pristine" "$m" "$op" 2>"$SANDBOX/armmut.err"; then
+    fail "MUTATION DID NOT LAND: $label ($(head -c 120 "$SANDBOX/armmut.err"))"; return
+  fi
+  if cmp -s "$m" "$SANDBOX/body.pristine"; then
+    fail "MUTATION DID NOT LAND: $label — the mutant is byte-identical, so this row measured the BASELINE"; return
+  fi
+  _f=$fails
+  draft_must "(mutant probe) $label D1" "$m" pull_request true 1 1 skipped success skipped skipped >/dev/null 2>&1
+  draft_must "(mutant probe) $label D2" "$m" pull_request true 1 1 >/dev/null 2>&1
+  draft_must "(mutant probe) $label D3" "$m" merge_group true 1 0 success success skipped >/dev/null 2>&1
+  draft_must "(mutant probe) $label D5" "$m" pull_request false 0 0 >/dev/null 2>&1
+  if [ "$fails" -gt "$_f" ]; then
+    # retract every probe failure: the mutant being caught is a PASS for the battery
+    while [ "$fails" -gt "$_f" ]; do fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'; done
+    pass; MUT_KILLED=$((MUT_KILLED + 1))
+  else
+    fail "MUTANT SURVIVED: $label — the draft arm's rows did not detect this edit"
+    MUT_SURVIVED+=("$label")
+  fi
+}
+mutate_arm "D7 remove the draft arm" remove
+mutate_arm "D7b the arm exits 0" exit0
+mutate_arm "D7c the arm fires on every event" anyevent
+mutate_arm "D7d the arm fires on any non-empty value" nonempty
+mutate_arm "D7e the arm moves AFTER the final check (unreachable for a light draft)" after-final
+# D8 the arm sits AFTER the loop and BEFORE the final check, once (structure, not behaviour)
+_armpos=$(python3 - "$SANDBOX/body.pristine" <<'PYS'
+import sys
+s = open(sys.argv[1]).read()
+final = s.find("if [[ $fail -ne 0 ]]")
+arm = s.find('"$DRAFT_LIGHT" == "true"')
+done = s.rfind("\ndone", 0, final if final >= 0 else len(s))
+print("ok" if 0 <= done < arm < final and s.count('"$DRAFT_LIGHT" == "true"') == 1 else "bad done=%d arm=%d final=%d" % (done, arm, final))
+PYS
+)
+if [ "$_armpos" = ok ]; then pass; else fail "D8 the draft arm must sit after the loop and before the final fail check, exactly once ($_armpos)"; fi
+
 # ── W1-W4: the STEP's wiring, which no row asserted ─────────────────────────
 # Every row above executes the extracted `run:` body against env vars the HARNESS
 # supplies. That proves the classifier is right and says NOTHING about whether
@@ -441,8 +551,9 @@ d = yaml.safe_load(open(sys.argv[1]))
 n = d["jobs"]["test"].get("needs") or []
 n = [n] if isinstance(n, str) else list(n)
 # push-dedupe (#9512, ADR-276 S2) is a NON-LEG need: it gates the job off an elided push and is never
-# read by the aggregator body. It is counted separately (W5), not as a seventh leg.
-print(len([x for x in n if x != "push-dedupe"]))
+# read by the aggregator body. It is counted separately (W5), not as a seventh leg. Likewise draft-light
+# (#9728, ADR-276 S3): the aggregator reads its output once, through DRAFT_LIGHT (W6), never as a leg.
+print(len([x for x in n if x not in ("push-dedupe", "draft-light")]))
 PYN
 )
 if [ "$_nshards" -eq 6 ]; then pass; else
@@ -462,12 +573,28 @@ env = {}
 for st in job.get("steps") or []:
     env.update(st.get("env") or {})
 leak = [k for k, v in env.items() if "push-dedupe" in str(v)]
-print(("extra=%s" % ",".join(extra)) + ((" env-reads-push-dedupe=%s" % ",".join(leak)) if leak else ""))
+print(("extra=%s" % ",".join(sorted(extra))) + ((" env-reads-push-dedupe=%s" % ",".join(leak)) if leak else ""))
 PYX
 )
-if [ "$_nonleg" = "extra=push-dedupe" ]; then pass; else
-  fail "W5 the test job's only non-leg need must be push-dedupe and its env: must not read it (got: $_nonleg)"
+if [ "$_nonleg" = "extra=draft-light,push-dedupe" ]; then pass; else
+  fail "W5 the test job's only non-leg needs must be draft-light and push-dedupe, and its env: must not read push-dedupe (got: $_nonleg)"
 fi
+# W6 — the draft arm's input is exactly the draft-light output, and EVENT_NAME is exactly the event. A DRAFT_LIGHT that read
+# `.result`, a literal, or any other expression would make the arm fire on every PR (red-always) or never (Option R void).
+_dl_env=$(python3 - "$_ciy" <<'PYD'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+st = [s for s in d["jobs"]["test"].get("steps") or [] if s.get("name") == "Aggregate shard results"][0]
+env = st.get("env") or {}
+bad = []
+if "".join(str(env.get("DRAFT_LIGHT", "")).split()) != "${{needs.draft-light.outputs.light}}":
+    bad.append("DRAFT_LIGHT reads %r" % env.get("DRAFT_LIGHT"))
+if "".join(str(env.get("EVENT_NAME", "")).split()) != "${{github.event_name}}":
+    bad.append("EVENT_NAME reads %r" % env.get("EVENT_NAME"))
+print("; ".join(bad))
+PYD
+)
+if [ -z "$_dl_env" ]; then pass; else fail "W6 the aggregator's draft inputs are mis-wired: $_dl_env"; fi
 
 # W3 — the ARMED leg must be able to conclude failure (#6907 MB-10). Fail-OPEN
 # shapes: a job-level `continue-on-error`, a step-level `if:` or
@@ -589,13 +716,16 @@ TOTAL=$((passes + fails))
 # + 2 sixth leg (R1k red, R1l skipped) + 1 armed-leg shape (W3)
 # + 1 aggregator can go red (W4), #6907 = 38
 # + 1 non-leg need is push-dedupe only (W5), #9512 = 39
-MIN_ROWS=39
+# + the draft arm (ADR-276 S3, #9728): D1, D1b, D2, 3 x (D3, D4) per event, 9 D5 values + D5b, D6, D6b, D8 = 23, W6 (the arm's
+#   env wiring) = 24, and 5 arm mutants (D7, D7b-D7e) = 29. The tree ran 51 rows before S3 (80 minus these 29), so the
+#   tree now runs 80 and the floor below is the measured total (the earlier 39 left 12 rows of slack an undispatched row could hide in)
+MIN_ROWS=80
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-MIN_MUTANTS=4
+MIN_MUTANTS=9
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor — %d mutants executed, at least %d required.\n' \
     "$MUT_TOTAL" "$MIN_MUTANTS" >&2

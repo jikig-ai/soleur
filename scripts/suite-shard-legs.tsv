@@ -304,6 +304,7 @@ scripts/check-tom4-rls-posture-live	1
 scripts/check-web-host-escrow-config	4
 scripts/ci-demand-census	7
 scripts/ci-deploy-sentry-post-fail-6475	6
+scripts/ci-draft-light	7
 scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
 scripts/ci-push-dedupe	7

@@ -1155,6 +1155,21 @@ AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/ci-draft-light (#9728, ADR-276 S3) — the suite extracts the draft-light step, the four gated conditions and the test
+# aggregator's draft arm from ci.yml and executes them; it also reads the required-check name sources it pins the gated set against.
+# Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
+  ".github/workflows/ci.yml"
+  ".github/actions/bot-pr-with-synthetic-checks/action.yml"
+  "apps/web-platform/server/inngest/functions/_cron-safe-commit.ts"
+  "infra/github/ruleset-ci-required.tf"
+  "scripts/ci-draft-light.test.sh"
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/required-checks.txt"
+)
+
 # plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus
 # walk is sandbox-only (synthetic repos + fixture trees); the real subject is the resolver SUT
 # and the render arm it stubs, so the scan is scoped and the edges are honest.
