@@ -5927,6 +5927,10 @@ if want_scripts; then
   # so it is what separates "the gate skipped smoke correctly" from "the gate never looked". Same
   # explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
+  # #9512 (ADR-276 S2): the push-dedupe proof. Extracts the proof step body from ci.yml and EXECUTES it under the
+  # Actions shell against a gh shim, and pins the eight gated conditions, the `test` aggregator and the wrapper.
+  # Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-push-dedupe" bash scripts/ci-push-dedupe.test.sh
 fi
 
 # Named bun-test entries — bun shard.
