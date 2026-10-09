@@ -594,7 +594,7 @@ sweep_fold "$sweep_rc"
 # Non-vacuity: the pattern must actually match the shape it forbids. Without
 # this, a typo in PATTERN would make the guard pass forever on any input.
 probe="$(mktemp -d)" && [[ "$probe" == /* ]] \
-  || { echo "UNRESOLVED: mktemp -d failed or returned a relative path; the probe would write outside a scratch root"; exit 3; }
+  || { echo "UNRESOLVED: mktemp -d failed or returned a relative path; the probe would write outside a scratch root; free space under /var/tmp or set TMPDIR to a writable absolute directory"; exit 3; }
 trap 'rm -rf "$probe"' EXIT
 cat > "$probe/bad.sh" <<'EOF'
 echo "$x" | grep -q 'p'
@@ -865,7 +865,7 @@ own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2');
 # The REAL table (Waves A2 and B). The synthetic rows above prove the arithmetic; these prove the table this file SHIPS still owns what it
 # must and nothing it must not. The scan runs scan_sweep on a scratch root (so SWEEP_PATHSPEC and PATTERN_V2 are exercised, not
 # only the verdict) and the verdict reads the live SWEEP_DEFERRALS. Planted: one violating line under each subtree a wave took
-# to zero (S3: scripts/, S4: tests/ at two depths and in a non-.sh extension, S5: plugins/soleur/ at seven depths and shapes), plus a compliant file under each canary root so the
+# to zero (S3: scripts/, S4: tests/ at two depths and in a non-.sh extension, S5: plugins/soleur/ at seven depths and shapes), plus a compliant file under the four older canary roots (the plugins/soleur/ violators already satisfy the two newer ones) so the
 # population is not UNRESOLVED. To add a canary: append its path to real_paths and bump REAL_PLANTED; nothing else moves.
 _real_undeferred() { # <scan root> -> each path the CURRENT SWEEP_DEFERRALS leaves outside every row, one per line
   local v
@@ -949,12 +949,12 @@ done
 # The trailing newline of this literal is deliberate: the loop above appends each glob followed by a newline, so the two must stay in step.
 GATED_TEST_ROWS=$'.claude/*.test.sh\nplugins/soleur/test/*\napps/web-platform/*.test.sh\n'
 [[ -z "$loose_bad" && "$tests_rows" == 0 && "$test_globs" == "$GATED_TEST_ROWS" ]] \
-  || sweep_probe_fail+=("real-table-test-shaped: loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } (${tests_rows:-<err>} rows start with tests/, want 0: tests/ is at zero hits, a row there is a resurrected deferral; the test-shaped row globs are [${test_globs//$'\n'/ }], want exactly the pinned GATED_TEST_ROWS set: a new, widened, deleted or renamed test-shaped row is a deferral change). To CONVERT hits, delete the row and rewrite them by hand (header 'Rewrite table'); do not add a row for a subtree at zero. To KEEP a deferral, edit the row AND GATED_TEST_ROWS together. If the loose-rows list above is non-empty, make that row tight (=) or its glob test-shaped")
+  || sweep_probe_fail+=("real-table-test-shaped: loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } (${tests_rows:-<err>} rows start with tests/, want 0: tests/ is at zero hits, a row there is a resurrected deferral; the test-shaped row globs are [${test_globs//$'\n'/ }], want exactly the pinned GATED_TEST_ROWS set: a new, widened, deleted or renamed test-shaped row is a deferral change). To CONVERT hits, delete the row AND its GATED_TEST_ROWS line, then rewrite the hits by hand (the `Rewrite:` block the verdict prints); do not add a row for a subtree at zero. To KEEP a deferral, edit the row AND GATED_TEST_ROWS together. If the loose-rows list above is non-empty, make that row tight (=) or its glob test-shaped")
 loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217' '.github/workflows/test-* | <= | 9 | #9217' 'scripts/x.test.sh | = | 1 | #9217')"
 [[ "$loose_ctl" == $'apps/web-platform/infra/*\n.github/workflows/test-*' ]] \
   || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
 # The loose-row check sees only `<=` rows, so a TIGHT production row would pass it. Every non-test-shaped row, in any mode, must be one of the
-# file-exact deferrals above: no glob characters, and exactly GATED_PROD_ROWS of them. Adding a production row is then a visible two-place edit.
+# file-exact deferrals above: no glob characters, and exactly GATED_PROD_ROWS of them, in the order GATED_PROD_GLOBS pins. Changing the set is then a visible three-place edit (the row, the count, the glob list).
 GATED_PROD_ROWS=6
 GATED_PROD_GLOBS=$'apps/web-platform/infra/cloud-init-registry.yml\napps/web-platform/infra/cloud-init-inngest.yml\napps/web-platform/infra/cloud-init-git-data.yml\napps/web-platform/infra/git-data-bootstrap.sh\napps/web-platform/infra/workspaces-luks.tf\napps/web-platform/infra/inngest-luks-cutover.sh\n'
 prod_globs=""
@@ -965,7 +965,7 @@ done
 prod_n=$(grep -c . <<<"$prod_globs" || true)
 prod_wild=$(grep -c '[*?[(!@+)]' <<<"$prod_globs" || true)
 [[ "$prod_n" == "$GATED_PROD_ROWS" && "$prod_wild" == 0 && "$prod_globs" == "$GATED_PROD_GLOBS" ]] \
-  || sweep_probe_fail+=("real-table-production-rows: ${prod_n:-<err>} non-test-shaped rows (want exactly $GATED_PROD_ROWS), ${prod_wild:-<err>} with a glob character (want 0) — a production row is a host-replace claim; add it here AND to GATED_PROD_ROWS and GATED_PROD_GLOBS (the six globs are pinned by identity, so swapping one for another is a visible edit too); got [${prod_globs//$'\n'/ }]")
+  || sweep_probe_fail+=("real-table-production-rows: ${prod_n:-<err>} non-test-shaped rows (want exactly $GATED_PROD_ROWS), ${prod_wild:-<err>} with a glob character (want 0) — a production row is a host-replace claim; adding, deleting, swapping or reordering one is a three-place edit: the row, GATED_PROD_ROWS and GATED_PROD_GLOBS (identity, in table order); got [${prod_globs//$'\n'/ }]")
 
 # _vp itself needs a known-NEGATIVE control: a helper that always returned 0 would make every row above vacuous.
 _vp 'ZZZ-never-printed' 'a/* | <= | 1 | #1' -- 'a/x.sh:1:t' 'a/y.sh:2:t' && sweep_probe_fail+=("vp-negative: _vp accepted a failing case whose expected diagnostic cannot appear")
@@ -986,6 +986,7 @@ mkdir -p "$probe/shiftroot/apps/web-platform/scripts" && echo true > "$probe/shi
 un_anchor=$(scan_sweep "$probe/shiftroot" | grep -c '^UNRESOLVED: no swept file under scripts/' || true)
 [[ "$un_anchor" == 1 ]] || sweep_probe_fail+=("canary-anchor: a nested apps/web-platform/scripts/ file satisfied the top-level scripts/ canary (reported ${un_anchor:-<err>} times, want 1)")
 
+# hideroot holds only the five roots the hide check reads (decision 19: the two plugins/soleur sub-roots added nothing there, so they are absent).
 # The filters: a violating line must NOT hide behind a `:N:#` inside its own text, a marker-shaped string, or a marker that is not a trailing comment.
 mkdir -p "$probe/hideroot/scripts" "$probe/hideroot/plugins/soleur" "$probe/hideroot/apps/web-platform/scripts" "$probe/hideroot/apps/cla-evidence" "$probe/hideroot/tests"
 cat > "$probe/hideroot/scripts/x.sh" <<'EOF'

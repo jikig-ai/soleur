@@ -546,13 +546,15 @@ fi
 # pattern) matches every ancestor and walks up to the top of the user's session. The walk is bounded at this suite's own PID, but run any
 # mutant of this block ONLY as `unshare -Urpf --kill-child --mount-proc bash <this file>` (the test shell becomes PID 1; the walk stops there).
 if [[ -r /proc/self/stat ]]; then
-  export SOLEUR_TEST_SUITE_PID=$$   # read by the helper below; unset or empty means the helper signals nothing (the rows then fail loudly)
+  export SOLEUR_TEST_SUITE_PID=$$   # read by the helper below; unset or empty means the helper signals nothing (the mid-merge row then fails; the commit row cannot tell)
   _killer="$SANDBOX/kill-resolver.sh"; assert_fixture_dir "$SANDBOX"
   cat > "$_killer" <<'EOF'
 #!/bin/sh
 # Walk up to the TOP of the contiguous run of ancestors whose argv holds the resolver script as a
 # whole argument, and stop at the first non-matching ancestor above it — never further, or any
 # outer shell whose command line merely mentions the path would be signalled too.
+# The walk is also bounded at SOLEUR_TEST_SUITE_PID. A mutant of the grep line below (-v, no -x, a catch-all) matches every ancestor:
+# run such a mutant ONLY under `unshare -Urpf --kill-child --mount-proc` (see the HAZARD note above the block).
 p=$PPID; target=""
 [ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || exit 0
 while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$p" != "$SOLEUR_TEST_SUITE_PID" ]; do
