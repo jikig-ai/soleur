@@ -165,7 +165,9 @@ queue_arm() { printf '%s' 'exec bash "$(dirname "$0")/gql-stub" "$@"'; }
 # live-shape JSON array (captured read-only from this repo on 2026-10-09: merge_queue is the SECOND entry, with a
 # `parameters` object, beside unrelated rule types) and runs the `--jq` the SUT passed, so a selector mutation
 # (`.[0].type`) changes the answer. Modes (rules-mode, re-read every call): none ([]) | queue | queue2 (two merge_queue
-# entries) | other (the live shape minus merge_queue) | fail (exit 1) | empty (rc 0, no output) | garbage (rc 0, not JSON) |
+# entries) | queue_first / queue_last (merge_queue at the first / last position: a positional selector reads one of them
+# wrong) | other (the live shape minus merge_queue) | fail (exit 1) | numfail (prints a valid 0 but exits 1: a rule read
+# that FAILED must not be graded on its stdout) | hang (sleeps past the read timeout) | empty (rc 0, no output) | garbage (rc 0, not JSON) |
 # flip ([] on the first call, queue after: the counter is the line count of rules-calls). Every call appends its argv to
 # rules-calls. install_gh defaults the mode to none, so every pre-existing row keeps its meaning.
 install_rules() {  # <bin> <mode>
@@ -185,6 +187,8 @@ case "$mode" in
   fail)    echo "gh: HTTP 502 from fixture (rules)" >&2; exit 1 ;;
   empty)   exit 0 ;;
   garbage) echo '<html>502 Bad Gateway</html>'; exit 0 ;;
+  hang)    exec sleep 5 ;;
+  numfail) echo 0; exit 1 ;;
   flip)    if [[ "$cnt" -le 1 ]]; then mode=none; else mode=queue; fi ;;
 esac
 RSC='{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}'
@@ -193,6 +197,8 @@ REST='{"type":"deletion"},{"type":"non_fast_forward"}'
 case "$mode" in
   queue)  body="[$RSC,$MQ,$RSC,$REST]" ;;
   queue2) body="[$RSC,$MQ,$MQ,$REST]" ;;
+  queue_first) body="[$MQ,$RSC,$RSC,$REST]" ;;
+  queue_last)  body="[$RSC,$RSC,$REST,$MQ]" ;;
   other)  body="[$RSC,$RSC,$REST]" ;;
   none)   body='[]' ;;
 esac
@@ -1137,8 +1143,8 @@ qw_run() {
 }
 # Predicates grep the log FILE directly (a pipe into `grep -q` takes SIGPIPE under pipefail and fails open on a negation).
 qw_gitcalls() { { cat "$QW_D/bin/git-calls" 2>/dev/null || true; }; }
-qw_wrote() { grep -qE '^(push|fetch|merge)( |$)' "$QW_D/bin/git-calls" 2>/dev/null; }   # a fetch, merge or push happened
-qw_pushes() { grep -cE '^push( |$)' "$QW_D/bin/git-calls" 2>/dev/null || true; }
+qw_wrote() { grep -qE '(^| )(push|fetch|merge)( |$)' "$QW_D/bin/git-calls" 2>/dev/null; }   # a fetch, merge or push happened
+qw_pushes() { grep -cE '(^| )push( |$)' "$QW_D/bin/git-calls" 2>/dev/null || true; }
 qw_rulescalls() { { cat "$QW_D/bin/rules-calls" 2>/dev/null || true; } | wc -l | tr -d ' '; }
 qw_done() { rm -rf "$QW_D"; }
 QW_LINE='^\[pr-behind-sync\] kind=queue_wait rc=0 — '
@@ -1150,7 +1156,7 @@ q1_ok() {  # → 0 iff the refusal arm holds in QW_D (rows Q1 / Q1b and the in-s
     && grep -q '^rev-parse' "$QW_D/bin/git-calls" 2>/dev/null && ! qw_wrote
 }
 qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
-if q1_ok && [[ "$(qw_rulescalls)" == 1 ]] && grep -q 'repos/o/r/rules/branches/main' "$QW_D/bin/rules-calls" \
+if q1_ok && [[ "$(qw_rulescalls)" == 1 ]] && grep -q 'repos/o/r/rules/branches/main?per_page=100' "$QW_D/bin/rules-calls" \
    && grep -qE 'queue_wait.*not syncing' "$QW_D/out" && grep -q 'merge-queue-dequeue.md' "$QW_D/out"; then
   pass "Q1 queue-armed: kind=queue_wait rc 0, no fetch/merge/push in the git-call log, HEAD/origin/feat/origin/main unmoved, one rules read of repos/o/r/rules/branches/main"
 else
@@ -1160,6 +1166,21 @@ qw_done
 qw_run queue2 notqueued "OPEN BEHIND" "OPEN BEHIND"
 if q1_ok; then pass "Q1b two merge_queue entries: still kind=queue_wait (the count is >= 1, not == 1)"
 else fail "Q1b two entries: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# merge_queue first / last in the rules array: the selector is by .type, never by position.
+for qpos in queue_first queue_last; do
+  qw_run "$qpos" notqueued "OPEN BEHIND" "OPEN BEHIND"
+  if q1_ok; then pass "Q1 merge_queue rule at the $qpos position: still kind=queue_wait (selected by .type, not by index)"
+  else fail "Q1 $qpos: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+  qw_done
+done
+# The production default (no PR_QUEUE_REPO): gh itself fills {owner}/{repo} from the cwd repository.
+SAVE_PQR="$PR_QUEUE_REPO"; unset PR_QUEUE_REPO
+qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
+export PR_QUEUE_REPO="$SAVE_PQR"
+if q1_ok && grep -qF 'repos/{owner}/{repo}/rules/branches/main?per_page=100' "$QW_D/bin/rules-calls"; then
+  pass "Q1 default repo: the rules read asks gh for repos/{owner}/{repo}/rules/branches/main?per_page=100"
+else fail "Q1 default repo: rc=$QW_RC rules-calls=$(tr '\n' ',' < "$QW_D/bin/rules-calls" 2>/dev/null)"; fi
 qw_done
 
 # Queue-absent: today's behaviour. The shim must RECORD the push (the positive control for every "no push" row above).
@@ -1196,6 +1217,19 @@ for rm_ in fail garbage empty; do
   else fail "R5 rules read $rm_: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
   qw_done
 done
+# A read that FAILED (exit 1) is not graded on its stdout, even when stdout is a valid 0; and the read is retried once.
+qw_run numfail notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -qE '^\[pr-behind-sync\] kind=gh rc=4 — .*merge-queue rule read failed after 2 attempt' "$QW_D/out" \
+   && [[ "$(qw_rulescalls)" == 2 ]] && ! qw_wrote; then
+  pass "R5 rules read exits 1 with a valid-looking 0 on stdout: kind=gh rc 4 after 2 attempts, nothing pushed"
+else fail "R5 numfail: rc=$QW_RC moved=$QW_MOVED rules-calls=$(qw_rulescalls) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# A hung read is killed by the timeout wrapper and reported with its cause (rc 124), not graded as an empty answer.
+PR_QUEUE_TIMEOUT=1 PR_QUEUE_ATTEMPTS=1 qw_run hang notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -qE 'kind=gh rc=4 — .*after 1 attempt.*rc=124' "$QW_D/out" && ! qw_wrote; then
+  pass "R5 rules read hangs: killed at PR_QUEUE_TIMEOUT, kind=gh rc 4 naming rc=124, nothing pushed"
+else fail "R5 hang: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
 # Second attempt (the gate runs EVERY attempt): the first read has no queue rule and syncs; the rule appears before the
 # second attempt, which must answer kind=queue_wait — never kind=noop, never a second push. Both state reads are BEHIND.
 qw_run flip notqueued "OPEN BEHIND" "OPEN BEHIND" --max-attempts 2
@@ -1214,7 +1248,7 @@ qw_done
 # still syncs on a queue repo, and makes NO gh call besides the queue read (the forbidden stub logs every other argv).
 R8="$(mktemp -d "$TMPDIR/sync-qw-step.XXXXXXXX")"; FIXTURES+=("$R8")
 make_pair "$R8"; advance_main "$R8" h extra
-export QPR="$QUEUE_PR"; install_gh_forbidden "$R8/bin" notqueued; install_rules "$R8/bin" queue; unset QPR
+export QPR="$QUEUE_PR"; install_gh_forbidden "$R8/bin" notqueued; unset QPR
 before="$(git -C "$R8/work" rev-parse HEAD)"
 QPR="$QUEUE_PR" run_step "$R8"; rc=$?
 if [[ "$rc" -eq 0 && "$(git -C "$R8/work" rev-parse HEAD)" != "$before" ]] && no_gh "$R8" && [[ ! -s "$R8/bin/calls" ]]; then
@@ -1223,30 +1257,38 @@ else fail "R8 --step: rc=$rc calls=$(tr '\n' ' ' < "$R8/bin/calls" 2>/dev/null) 
 collect "$R8/out" "$R8/err"; rm -rf "$R8"
 
 # H1: the git shim must RECORD. A shim that execs without logging would turn every "no push" assertion above vacuous, so
-# mutate the shim and require Q1's own check to go red.
+# swap in a non-recording shim, re-run the Q1 fixture and require Q1's own check (q1_ok, which needs the logged rev-parse)
+# to go red.
 qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
 q1_ok || fail "H1 control: the Q1 arm is not green before the shim mutation"
 printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$(command -v git)" > "$QW_D/bin/git"
 rm -f "$QW_D/bin/git-calls"
-if ( cd "$QW_D/work" && PATH="$QW_D/bin:$PATH" bash "$QW_D/work/plugins/soleur/scripts/sync-pr-behind.sh" "$QUEUE_PR" >/dev/null 2>&1 ); [[ ! -s "$QW_D/bin/git-calls" ]]; then
-  pass "H1 harness: a non-recording git shim leaves git-calls empty, so q1_ok (which requires rev-parse) would go red"
-else fail "H1 harness: the unlogged shim still produced a git-calls log"; fi
+export QPR="$QUEUE_PR"; run_loop "$QW_D"; QW_RC=$?; unset QPR
+if ! q1_ok && [[ ! -s "$QW_D/bin/git-calls" ]]; then
+  pass "H1 harness: with a non-recording git shim q1_ok goes red (the 'no push' assertions need the recorded log)"
+else fail "H1 harness: q1_ok stayed green with a non-recording git shim"; fi
 qw_done
 
 # MUTATION ROWS (in-suite, permanent): each mutant of the SUT must turn its scenario red; the control is the real SUT. Each
 # mutation is asserted to differ from the SUT and to land inside queue_wait_gate, so a no-op replace cannot read as a catch.
-qw_scenario() {  # <kind: q1|r3> → 0 iff the scenario holds against $QW_SUT
+qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail> → 0 iff the scenario holds against $QW_SUT
   local kind="$1" ok=1
   case "$kind" in
     q1) qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"; q1_ok && ok=0 ;;
     r3) qw_run queue dequeued "OPEN BEHIND" "OPEN CLEAN"; r3_ok && ok=0 ;;
+    q1f) qw_run queue_first notqueued "OPEN BEHIND" "OPEN BEHIND"; q1_ok && ok=0 ;;
+    hang) PR_QUEUE_TIMEOUT=1 PR_QUEUE_ATTEMPTS=1 qw_run hang notqueued "OPEN BEHIND" "OPEN CLEAN"
+          [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -q 'rc=124' "$QW_D/out" && ok=0 ;;
+    numfail) qw_run numfail notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && ok=0 ;;
+    *) echo "FATAL: qw_scenario: unknown kind '$kind'" >&2; exit 97 ;;
   esac
   qw_done
   return "$ok"
 }
 QW_SUT=""
-if qw_scenario q1 && qw_scenario r3; then pass "mutation control: the real SUT satisfies the queue-armed and disarmed scenarios"
-else fail "mutation control: the real SUT fails the queue-armed or disarmed scenario"; fi
+if qw_scenario q1 && qw_scenario r3 && qw_scenario q1f && qw_scenario hang && qw_scenario numfail; then
+  pass "mutation control: the real SUT satisfies the queue-armed, disarmed, merge_queue-first, hang and exit-1 scenarios"
+else fail "mutation control: the real SUT fails one of the mutation scenarios"; fi
 SUT_SRC="$(cat "$SUT")"
 qw_mutant() {  # <label> <scenario> <old> <new>
   local label="$1" kind="$2" old="$3" new="$4" md mut
@@ -1255,12 +1297,17 @@ qw_mutant() {  # <label> <scenario> <old> <new>
   mut="$md/sync-pr-behind.sh"; printf '%s\n' "${SUT_SRC/"$old"/"$new"}" > "$mut"
   if cmp -s "$mut" "$SUT"; then fail "mutation '$label': the mutant equals the SUT"; rm -rf "$md"; return; fi
   QW_SUT="$mut"
-  if qw_scenario "$kind"; then fail "mutation '$label' SURVIVED: the '$kind' scenario stayed green"; else pass "mutation '$label' caught by the '$kind' scenario"; fi
+  if qw_scenario "$kind"; then fail "mutation '$label' SURVIVED: the '$kind' scenario stayed green"
+  elif [[ "$QW_RC" -eq 2 || "$QW_RC" -eq 127 ]]; then fail "mutation '$label': the mutant does not RUN (rc $QW_RC), so 'caught' would be an instrument error"
+  else pass "mutation '$label' caught by the '$kind' scenario"; fi
   QW_SUT=""; rm -rf "$md"
 }
 qw_mutant "delete the queue_wait_gate call" q1 $'  queue_wait_gate "$state_line"\n' ''
 qw_mutant "drop the armed condition (rule only)" r3 $'  [[ "$am" == armed ]] || return 0\n' ''
 qw_mutant "read the first rule instead of selecting .type == merge_queue" q1 '[.[] | select(.type == "merge_queue")]' '[.[0] | select(.type == "merge_queue")]'
+qw_mutant "read the second rule instead of selecting .type == merge_queue" q1f '[.[] | select(.type == "merge_queue")]' '[.[1] | select(.type == "merge_queue")]'
+qw_mutant "drop the timeout wrapper on the rules read" hang $'    out="$(${to[@]+"${to[@]}"} bash -c \'gh api "repos/' $'    out="$(bash -c \'gh api "repos/'
+qw_mutant "grade the rules read on stdout alone (drop the rc clause)" numfail $'  if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out' $'  if [[ "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out'
 unset PR_QUEUE_REPO
 
 # --- argv strictness and --help (no fixture needed: neither touches git) ---------
@@ -1342,5 +1389,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 112 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 120 ]]
 exit $?

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { resolve } from "path";
 import {
   isBehindPollState,
@@ -137,6 +137,32 @@ describe("pr-merge-poll BEHIND contract", () => {
       expect(text).toMatch(CANON);
       expect(text).not.toMatch(/once the poll has printed/);
     }
+  });
+
+  test("no instruction surface conditions the queue exception on a marker only the Phase 7 fence prints (class ban, whole plugin)", () => {
+    // The incident: "once the poll has printed `[ship.phase7.queue_wait]`" is never satisfied by a hand-written loop, so the
+    // exception was vacuous for exactly the reader who needed it. Ban the class (once/after/only after the poll|loop printed),
+    // not one spelling, over every markdown and TS source that agents read.
+    const BAN = /(once|after|only after|until) the (Phase 7 )?(poll|loop|fence) (has |had )?printed/i;
+    const walk = (dir: string, out: string[] = []): string[] => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, e.name);
+        if (e.isDirectory()) {
+          if (["node_modules", "test", "docs", ".git"].includes(e.name)) continue;
+          walk(full, out);
+        } else if (/\.(md|ts)$/.test(e.name)) out.push(full);
+      }
+      return out;
+    };
+    const files = [
+      ...walk(resolve(PLUGIN_ROOT, "skills")),
+      ...walk(resolve(PLUGIN_ROOT, "lib")),
+      resolve(PLUGIN_ROOT, "codex/INSTRUCTIONS.md"),
+      resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md"),
+    ];
+    expect(files.length).toBeGreaterThan(50); // non-vacuity: the walk found the skills tree
+    const hits = files.filter((f) => BAN.test(readFileSync(f, "utf-8")));
+    expect(hits).toEqual([]);
   });
 
   test("ship item 6 puts the queue exception BEFORE the stop-and-sync rule and no longer invites an ad hoc poll", () => {

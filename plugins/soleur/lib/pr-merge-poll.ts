@@ -68,7 +68,7 @@ export function behindSyncInstructions(harness: Harness): string {
       return [
         "**BEHIND/DIRTY resync (Grok Build)**",
         `- When \`gh pr view --jq '.mergeStateStatus'\` returns \`BEHIND\` or \`DIRTY\`, **STOP** CI-only polling.`,
-        `- Exception (first): when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) the PR is waiting for GitHub to enqueue it — keep polling; never run the sync script, update-branch or --admin it until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit. The script itself answers \`kind=queue_wait\` (exit 0) for that PR: a wait, not a failure.`,
+        `- Exception (first): when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) the PR is waiting for GitHub to enqueue it — keep polling; never run the sync script, update-branch or --admin it until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit. This holds for a BEHIND reading only (a conflicting DIRTY PR still needs its sync). The script itself answers \`kind=queue_wait\` (exit 0, nothing synced) for that PR: a wait, not a failure.`,
         `- Otherwise, from the PR worktree: \`${script} <PR-number>\` (fetch → merge origin/main → push). Use the Phase 7 loop; never write your own poll loop or wrap the script in one.`,
         `- \`DIRTY\` auto-syncs only when the local merge is clean; a real conflict exits for manual resolution.`,
         `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged|merge conflict|\\[pr-behind-sync\\] kind=|\\[ship\\.phase7\\.\`.`,
@@ -80,7 +80,7 @@ export function behindSyncInstructions(harness: Harness): string {
       return [
         "**BEHIND/DIRTY resync (Claude Code)**",
         `- When mergeStateStatus is \`BEHIND\` or \`DIRTY\`, the ship Phase 7 Monitor loop calls \`sync-pr-behind.sh <PR-number> --step\` once per attempt (the Phase 7 fence's call, never yours; unguarded by design). Never write your own poll loop — use that one. The standalone entry is \`${script} <PR-number>\`: it refuses an armed PR on a merge-queue repo with \`kind=queue_wait\` (exit 0, a wait, not a failure); DIRTY auto-syncs only when locally clean.`,
-        `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked — unless the script reported \`kind=queued\` (exit 11 with \`--step\`): a PR in the merge queue is not blocked, the queue merges it, so keep heartbeating and never sync it; likewise when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) — GitHub enqueues it, in force until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit; \`kind=dequeued\` (exit 13) stops the poll with the recovery.`,
+        `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked — unless the script reported \`kind=queued\` (exit 11 with \`--step\`): a PR in the merge queue is not blocked, the queue merges it, so keep heartbeating and never sync it; likewise when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) on a BEHIND reading (a conflicting DIRTY PR still syncs) — GitHub enqueues it, in force until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit; \`kind=dequeued\` (exit 13) stops the poll with the recovery.`,
       ].join("\n");
 
     case "cursor":
@@ -96,8 +96,8 @@ export function behindSyncInstructions(harness: Harness): string {
     default:
       return [
         "**BEHIND/DIRTY resync**",
-        `- mergeStateStatus \`BEHIND\` or \`DIRTY\` → merge origin/main into the branch and push before continuing (DIRTY only when the local merge is clean — run \`${script}\`).`,
-        `- Exception (first): when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) the PR is waiting for GitHub to enqueue it — keep polling; never merge origin/main into it, push, update-branch or --admin it until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit. Use the Phase 7 loop; never write your own.`,
+        `- Exception (first): when \`main\` has a merge queue and the PR is armed (the Phase 7 poll prints \`[ship.phase7.queue_wait]\`) the PR is waiting for GitHub to enqueue it — keep polling; never merge origin/main into it, push, update-branch or --admin it until \`[ship.phase7.queue_wait_expired]\`, a push line, MERGED, a dequeue or any poll exit. This holds for a BEHIND reading only (a conflicting DIRTY PR still needs its sync). The script itself answers \`kind=queue_wait\` (exit 0, nothing synced) for that PR: a wait, not a failure.`,
+        `- Otherwise, mergeStateStatus \`BEHIND\` or \`DIRTY\` → merge origin/main into the branch and push before continuing (DIRTY only when the local merge is clean — run \`${script} <PR-number>\`). Use the Phase 7 loop; never write your own poll loop — on a harness without a Monitor tool, run that block itself inside the waiting subagent or shell.`,
       ].join("\n");
   }
 }
