@@ -4361,15 +4361,16 @@ assert "#6894 luks-cutover is in the reviewer-gated environment set (an op in th
 # return through: the choice list, the environment ternary, the orchestrator's case arms and its LK_WANT=rollback write.
 assert "#8285 PR B Guard 1: luks-rollback is not offered in the choice list (bare, quoted, or with a trailing comment)" \
   "! grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' '$WF_YAML'"
-assert "#8285 PR B Guard 1: luks-rollback is in neither the environment set nor the token-injection ternary" \
-  "! printf '%s' \"\$ENV_OPS\" | grep -qF \"inputs.op == 'luks-rollback'\" && ! grep -qF \"inputs.op == 'luks-rollback'\" '$WF_YAML'"
-# A case arm is any line that is a pattern list ending in `)` and naming the verb as an ALTERNATE, in any position
-# (`luks-rollback)`, `luks-cutover|luks-rollback)`, `luks-rollback|luks-cutover)`, `a|luks-rollback|b)`, `absent:luks-rollback)`).
-assert "#8285 PR B Guard 1: the orchestrator has no luks-rollback case arm (any alternate position), G2 arm or rollback write" \
-  "! grep -qE '^[[:space:]]*[A-Za-z0-9_:|-]*luks-rollback[A-Za-z0-9_:|-]*\)' '$BODY_SH' && ! grep -qE 'LK_WANT=[\"'\"'\"']?rollback' '$BODY_SH'"
+assert "#8285 PR B Guard 1: luks-rollback is in neither the environment set nor the token-injection ternary (any quoting or spacing)" \
+  "! printf '%s' \"\$ENV_OPS\" | grep -qE \"inputs\\.op[[:space:]]*==[[:space:]]*[\\\"']luks-rollback\" && ! grep -qE \"inputs\\.op[[:space:]]*==[[:space:]]*[\\\"']luks-rollback\" '$WF_YAML'"
+# A case arm is any line that is a pattern list ending in `)` and naming the verb as an ALTERNATE, in any position, quoted or
+# not, spaced or not, parenthesised or not (`luks-rollback)`, `"luks-rollback")`, `luks-cutover | luks-rollback)`, `(luks-rollback)`,
+# `absent:luks-rollback)`). Message lines start with `echo`, whose `::error::op=` text cannot match the pattern-list class.
+assert "#8285 PR B Guard 1: the orchestrator has no luks-rollback case arm (any alternate position, quoting or spacing), G2 arm or rollback write" \
+  "! grep -qE '^[[:space:]]*\(?[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*luks-rollback[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*\)' '$BODY_SH' && ! grep -qE 'LK_WANT=[\"'\"'\"']?rollback' '$BODY_SH'"
 # Non-vacuity of the Guard 1 patterns: each recognises the form it forbids, so an absent result is not a blind scan.
-assert "#8285 PR B Guard 1 non-vacuity: the patterns recognise every form they forbid (quoted/commented list item, reversed/extra/G2 arms, quoted write)" \
-  "printf '          - luks-rollback\\n' | grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && printf '          - \"luks-rollback\" # x\\n' | grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && for arm in '  luks-cutover|luks-rollback)' '  luks-rollback|luks-cutover)' '  a|luks-rollback|b)' '      absent:luks-rollback)' '  luks-rollback)'; do printf '%s\\n' \"\$arm\" | grep -qE '^[[:space:]]*[A-Za-z0-9_:|-]*luks-rollback[A-Za-z0-9_:|-]*\)' || exit 1; done && printf 'LK_WANT=\"rollback\"\\n' | grep -qE 'LK_WANT=[\"'\"'\"']?rollback' && ! printf '  luks-cutover)\\n' | grep -qE '^[[:space:]]*[A-Za-z0-9_:|-]*luks-rollback[A-Za-z0-9_:|-]*\)'"
+assert "#8285 PR B Guard 1 non-vacuity: the patterns recognise every form they forbid (quoted/commented list item, reversed/extra/quoted/spaced/G2 arms, quoted write) and not the live arm" \
+  "printf '          - luks-rollback\\n' | grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && printf '          - \"luks-rollback\" # x\\n' | grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && printf 'if: inputs.op==\"luks-rollback\"\\n' | grep -qE \"inputs\\.op[[:space:]]*==[[:space:]]*[\\\"']luks-rollback\" && for arm in '  luks-cutover|luks-rollback)' '  luks-rollback|luks-cutover)' '  a|luks-rollback|b)' '      absent:luks-rollback)' '  luks-rollback)' '  \"luks-rollback\")' \"  'luks-rollback')\" '  luks-cutover | luks-rollback)' '  (luks-rollback)'; do printf '%s\\n' \"\$arm\" | grep -qE '^[[:space:]]*\(?[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*luks-rollback[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*\)' || exit 1; done && printf 'LK_WANT=\"rollback\"\\n' | grep -qE 'LK_WANT=[\"'\"'\"']?rollback' && ! printf '  luks-cutover)\\n' | grep -qE '^[[:space:]]*\(?[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*luks-rollback[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*\)'"
 LK_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "$LK_WANT" | DOPPLER_TOKEN=' "$LUKS_FILE" && LK_STDIN=1
 LK_ARGV=0;   grep -qE 'secrets set INNGEST_LUKS_CUTOVER=' "$LUKS_FILE" && LK_ARGV=1
 LK_SILENT=0; grep -E 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | grep -c '>/dev/null' >/dev/null && LK_SILENT=1
@@ -4434,15 +4435,17 @@ LKA_N=$(wc -l < "$LKA_BODY" | tr -d '[:space:]')
 assert "#8285 luks-cutover arm extracted from the real script for behavioural driving (non-vacuity, got $LKA_N lines)" \
   "[[ '$LKA_N' -gt 40 ]]"
 {
-  printf '%s\n' 'OP=luks-cutover; DOPPLER_TOKEN_INNGEST_ARM=synth-token'
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'OP=luks-cutover; INNGEST_HOST=synth-host; INNGEST_HOST_NAME=synth-name; LUKS_LIVENESS_SINCE=2h'
+  printf '%s\n' 'DOPPLER_TOKEN_INNGEST_ARM="${STUB_TOKEN-synth-token}"'
   printf '%s\n' 'doppler() { case "$*" in'
   printf '%s\n' '  *"secrets get INNGEST_LUKS_CUTOVER"*) if [[ -n "${STUB_FLAG:-}" ]]; then printf "%s" "$STUB_FLAG"; else return 1; fi ;;'
-  printf '%s\n' '  *"--only-names"*) if [[ "${STUB_NAMES_HAS:-0}" == 1 ]]; then printf "{\"INNGEST_LUKS_CUTOVER\":{}}"; else printf "{\"OTHER\":{}}"; fi ;;'
-  printf '%s\n' '  *"secrets set INNGEST_LUKS_CUTOVER"*) cat > "$MARK" ;;'
+  printf '%s\n' '  *"--only-names"*) if [[ "${STUB_NAMES_EMPTY:-0}" == 1 ]]; then :; elif [[ "${STUB_NAMES_HAS:-0}" == 1 ]]; then printf "{\"INNGEST_LUKS_CUTOVER\":{}}"; else printf "{\"OTHER\":{}}"; fi ;;'
+  printf '%s\n' '  *"secrets set INNGEST_LUKS_CUTOVER"*) cat > "$MARK"; if [[ "${STUB_SETFAIL:-0}" == 1 ]]; then return 1; fi ;;'
   printf '%s\n' 'esac; }'
   printf '%s\n' '_luks_pointer_state() { printf "%s" "${STUB_PTR:-absent}"; }'
   printf '%s\n' '_luks_liveness_count() { echo 3; }'
-  printf '%s\n' 'resume_liveness_decide() { echo audible; }'
+  printf '%s\n' 'resume_liveness_decide() { echo "${STUB_LIVE:-audible}"; }'
   printf '%s\n' 'confirm_luks_state() { printf "%s" "${STUB_CONFIRM:-done}"; }'
   cat "$LKA_BODY"
 } > "$LKA_DRV"
@@ -4458,7 +4461,8 @@ assert "#8285 luks-cutover on an UNSET flag with the pointer absent arms (writes
 lka_run aborted absent done 0
 assert "#8285 luks-cutover re-arms from 'aborted' (permitted, writes 'armed')" "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
 lka_run rolled-back absent done 0
-assert "#8285 luks-cutover re-arms from 'rolled-back' (permitted, writes 'armed')" "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
+assert "#8285 luks-cutover REFUSES a 'rolled-back' flag before any write (the state is unreachable on this host: an incident, runbook 5a)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
 lka_run done absent done 0
 assert "#8285 luks-cutover REFUSES a 'done' flag before any write (G1: a completed cutover is never re-armed)" \
   "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
@@ -4474,6 +4478,33 @@ assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the flag exists but its valu
 lka_run "" absent aborted 0
 assert "#8285 luks-cutover EXPECTS 'done' from the on-host FSM: a terminal 'aborted' confirm is a FAILED dispatch (exit 1) though the write landed" \
   "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
+# The remaining refusals and failure arms (one row each; every one reds when its `exit 1` is dropped, because the
+# driver then falls through to the write or the green confirm).
+STUB_LIVE=silent lka_run "" absent done 0
+assert "#8285 luks-cutover REFUSES on a SILENT host before any write (G3: a write nothing can act on parks the flag)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+STUB_LIVE=unreadable lka_run "" absent done 0
+assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the liveness read path failed, before any write (G3)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+STUB_LIVE=bogus lka_run "" absent done 0
+assert "#8285 luks-cutover REFUSES FAIL-CLOSED on an unrecognised liveness outcome, before any write (G3)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+lka_run "" unreadable done 0
+assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the durable pointer is unreadable, before any write (G2)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+STUB_TOKEN= lka_run "" absent done 0
+assert "#8285 luks-cutover REFUSES an empty arm token before any read or write" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+STUB_NAMES_EMPTY=1 lka_run "" absent done 0
+assert "#8285 luks-cutover REFUSES FAIL-CLOSED when soleur-inngest/prd cannot be read at all, before any write (G1)" \
+  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
+STUB_SETFAIL=1 lka_run "" absent done 0
+assert "#8285 luks-cutover exits 1 when the Doppler write itself fails (never falls through to the confirm)" \
+  "[[ '$LKA_RC' -eq 1 ]]"
+lka_run "" absent rolled-back 0
+assert "#8285 luks-cutover reports a rolled-back confirm as a FAILED dispatch (exit 1)" "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
+lka_run "" absent timeout 0
+assert "#8285 luks-cutover reports no terminal flag within the window as a FAILED dispatch (exit 1)" "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
 
 # #8079 D4/AC12 — `_bs_read_remedy` no longer hardcodes the step it is reporting for. The census IS
 # the assertion, not the number nine: a tenth message added later cannot slip through with a `2.0`
@@ -4628,7 +4659,11 @@ _DISPATCHED=$((PASS + FAIL))
 # 1072 -> 1081 (+9) at #8285 PR B review: behavioural driving of the surviving luks-cutover guards — the extraction non-vacuity
 #   row (1) plus 8 driven rows (arm from unset / aborted / rolled-back; refuse done / in-flight / pointer-present / unreadable;
 #   LK_EXPECT=done). Each of s1-s4 (permit `done`, drop the in-flight exit, drop the pointer-present exit, LK_EXPECT=aborted) now reds.
-_EXACT_FLOOR=1081
+# 1081 -> 1090 (+9) at the #8285 PR B fix round: rows for the G3 silent/unreadable/unrecognised refusals, the G2 unreadable
+#   refusal, the empty-token refusal, the unreadable-prd refusal, the Doppler write failure and the rolled-back / no-terminal confirm
+#   arms (9 rows); the 'rolled-back' re-arm row now asserts the refusal (same count). The driver also runs under the real
+#   script's `set -euo pipefail` with INNGEST_HOST / LUKS_LIVENESS_SINCE defined.
+_EXACT_FLOOR=1090
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

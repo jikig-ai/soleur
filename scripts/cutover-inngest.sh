@@ -3640,8 +3640,10 @@ case "$OP" in
     fi
     LK_WANT=armed;      LK_EXPECT=done
     case "$LK_CUR" in
-      ''|aborted|rolled-back)
+      ''|aborted)
         echo "::notice::op=luks-cutover: G1 — flag is '${LK_CUR:-unset}', a non-terminal-for-this-verb state; arming is permitted." ;;
+      rolled-back)
+        echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'rolled-back', a state the on-host FSM can no longer reach (the plaintext volume it reverse-copied to was destroyed 2026-10-09, #8285). Treat the flag as a production incident and follow runbook inngest-luks-cutover-6894.md section 5a. Nothing was written."; exit 1 ;;
       done)
         echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'done': this host has ALREADY been cut over to the encrypted volume. Re-arming would re-copy the live store over itself. There is no reverse verb: op=luks-rollback was retired by #8285 PR B along with the plaintext volume it copied back to."; exit 1 ;;
       *)
@@ -3677,7 +3679,7 @@ case "$OP" in
     # discarded (`doppler secrets set` prints every remaining secret of the config).
     LK_TS=$(date -u +%s)
     printf '%s' "$LK_WANT" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=$OP: writing INNGEST_LUKS_CUTOVER=$LK_WANT FAILED. Nothing on the host has changed — re-dispatch. Do NOT SSH the host."; exit 1; }
-    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify. On this host the plaintext backstop no longer exists (destroyed 2026-10-09), so a failed verification aborts the swap rather than reverse-copying: the on-host rollback refuses with rollback-no-backstop."
+    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify. On this host the plaintext backstop no longer exists (destroyed 2026-10-09), so a failed post-swap verification leaves the swap landed: the on-host rollback refuses with rollback-no-backstop and the flag ends aborted with the pointer set (runbook section 5a)."
     LK_ISO=$(date -u -d "@$LK_TS" +'%Y-%m-%d %H:%M:%S')
     LK_STATE=$(confirm_luks_state "$LK_ISO")
     if [[ "$LK_STATE" == "$LK_EXPECT" ]]; then
@@ -3687,7 +3689,7 @@ case "$OP" in
         rolled-back)
           echo "::error::op=luks-cutover: the FSM reported rolled-back. This was written for the pre-2026-10-09 layout, where a failed post-swap verification reverse-copied to the plaintext volume; that volume no longer exists, so on this host treat the row as a production incident (the on-host rollback refuses with rollback-no-backstop) and follow runbook inngest-luks-cutover-6894.md section 5a. Read the reason field on the inngest-luks-cutover rows. Do NOT SSH the host."; exit 1 ;;
         aborted)
-          echo "::error::op=$OP: the FSM aborted. Every refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::op=$OP: the FSM aborted. A pre-swap refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch; an abort with the pointer SET is a post-swap failure (the swap stayed landed, the on-host rollback refuses with rollback-no-backstop): treat it as an incident, runbook section 5a. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
         *)
           echo "::error::op=$OP: no terminal LUKS FSM flag within 900s since $LK_ISO (the write DID land). That is not itself a statement about the store: the confirm path may have failed (a betterstack-query.sh ::warning:: above names that case). The on-host FSM holds a flock and resumes from its own state on the next 30s tick, so do NOT re-dispatch blind — read the inngest-luks-cutover rows first. Do NOT SSH the host."; exit 1 ;;
       esac
