@@ -119,6 +119,109 @@ jobs:
             printf 'docs=false\n' >> "$GITHUB_OUTPUT"
           fi
 
+  # push-dedupe (ADR-276 S2, #9512): skip the second full run of this workflow on a push to main when an
+  # identical-SHA merge_group run of this same workflow already passed. A COST lever, allowed to fail in one
+  # direction only: any unknown (variable not exactly `on`, any API error, no match, a non-success conclusion,
+  # a re-run) runs the full battery. The run still concludes `success` because this job and the ungated cheap
+  # guards run, so the deploy arm (web-platform-release.yml, workflow_run) sees what it sees today.
+  #
+  # DARK UNTIL ACTIVATED: with the repository variable CI_PUSH_DEDUPE unset, this job only annotates
+  # `would_elide` and every gated job runs. Activation is a separate, authorized step (see the ADR-276 S2 amendment).
+  # The gated set is eight jobs: test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build,
+  # shard-totality-mutations, e2e and the `test` aggregator. A NEW HEAVY JOB MUST JOIN THE GATED SET
+  # (needs: [push-dedupe] plus the same condition); scripts/ci-push-dedupe.test.sh enforces the set in both
+  # directions. The `test` aggregator body is deliberately untouched: it is skipped, not taught to tolerate skips.
+  #
+  # The gated conditions name merge_group positively on purpose: scripts/probe-merge-group-coverage.sh proves a
+  # required context runs on the queue only from an event-independent status term or a positive merge_group term,
+  # and `event != push` alone is (by its design) never sufficient. The disjunct is redundant in logic, not in proof.
+  #
+  # Off the push event this job is skipped before it takes a runner. `timeout-minutes` is written alone on
+  # its line on purpose: the release workflow's CI budget awk reads that exact shape (slack was 5 minutes).
+  # The proof is least-privilege (actions: read), has no checkout and no `uses:`, and takes every input
+  # through env:. Nothing an API returns is ever echoed into an output or an annotation.
+  push-dedupe:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    outputs:
+      elide: ${{ steps.proof.outputs.elide }}
+    steps:
+      - name: Prove an identical-SHA merge_group run passed
+        id: proof
+        shell: bash
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SWITCH: ${{ vars.CI_PUSH_DEDUPE }}
+        run: |
+          # Every unknown is a full run: nothing in this step may fail the job. Verdicts are literals only.
+          set +x
+          emit() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
+          elide=false
+          would=false
+          reason=proof_error
+          mg=none
+          note=invalid
+          emit "elide=false"
+          emit "would_elide=false"
+          finish() {
+            if [ "$reason" = proof_error ]; then
+              printf '::warning title=ci-push-dedupe::sha=%s would_elide=%s elide=%s reason=%s mg_run=%s\n' "$note" "$would" "$elide" "$reason" "$mg"
+            else
+              printf '::notice title=ci-push-dedupe::sha=%s would_elide=%s elide=%s reason=%s mg_run=%s\n' "$note" "$would" "$elide" "$reason" "$mg"
+            fi
+            printf 'push-dedupe: reason=%s would_elide=%s elide=%s mg_run=%s\n' "$reason" "$would" "$elide" "$mg" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
+          }
+          reason=not_push
+          [ "$EVENT_NAME" = push ] || finish
+          reason=not_main
+          [ "$REF" = refs/heads/main ] || finish
+          reason=rerun
+          [ "$RUN_ATTEMPT" = 1 ] || finish
+          reason=bad_sha
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || finish
+          note="$SHA"
+          reason=proof_error
+          runs=$(timeout 20 gh api "repos/${GH_REPO}/actions/workflows/ci.yml/runs?event=merge_group&head_sha=${SHA}&per_page=100" 2>/dev/null) || finish
+          printf '%s' "$runs" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 || finish
+          id=$(printf '%s' "$runs" | jq -r --arg sha "$SHA" --arg repo "$GH_REPO" '[.workflow_runs[] | select(.event == "merge_group" and .status == "completed" and .conclusion == "success" and .head_sha == $sha and .path == ".github/workflows/ci.yml" and .head_repository.full_name == $repo and ((.head_branch // "") | startswith("gh-readonly-queue/main/"))) | .id] | first // empty' 2>/dev/null) || finish
+          reason=no_mg_success
+          [ -n "$id" ] || finish
+          reason=proof_error
+          [[ "$id" =~ ^[0-9]+$ ]] || finish
+          mg="$id"
+          jobs=$(timeout 20 gh api "repos/${GH_REPO}/actions/runs/${mg}/jobs?per_page=100&filter=latest" 2>/dev/null) || finish
+          n=$(printf '%s' "$jobs" | jq -r '[.jobs[] | select(.name == "test" and .conclusion == "success")] | length' 2>/dev/null) || finish
+          [[ "$n" =~ ^[0-9]+$ ]] || finish
+          reason=no_test_job
+          [ "$n" -ge 1 ] || finish
+          would=true
+          emit "would_elide=true"
+          reason=switch_off
+          if [ "$SWITCH" = on ]; then
+            reason=ok
+            elide=true
+            emit "elide=true"
+          fi
+          finish
+      - name: Proof holds for this SHA
+        id: would-elide
+        if: steps.proof.outputs.would_elide == 'true'
+        env:
+          ELIDE: ${{ steps.proof.outputs.elide }}
+        run: |
+          echo "push-dedupe: the proof holds for this SHA (elide=${ELIDE})"
+
   # BLOCKING required check (#6882). Registered in scripts/required-checks.txt,
   # scripts/ci-required-ruleset-canonical-required-status-checks.json, and
   # infra/github/ruleset-ci-required.tf — the job NAME is public ABI across all
@@ -815,6 +918,8 @@ jobs:
   # nothing (measured on this job's first run, 34774037658: zero CACHED steps).
   # Every run is cold by construction.
   web-platform-build:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     # 10m — measured 1m52s cold for the builder step alone on the first run of this shape
     # (run 34774037658: buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s
     # for the full-checkout form it replaced (#8020 measured max 2.2m). The `cli-tools` step
@@ -916,6 +1021,8 @@ jobs:
   # aggregator (below) reads `needs.test-webplat.result` which rolls up
   # the matrix outcome — failure on any shard fails the whole job.
   test-webplat:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). Sized ~5x the measured p90 (4.37 min) for this job's slowest
     # leg, and no suite on this path declares a per-suite budget, so it cannot fire before a
@@ -1013,6 +1120,8 @@ jobs:
         run: bash scripts/test-all.sh webplat
 
   test-bun:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). Measured p90 under 2 min; 20 is deliberate slack for a cold
     # runner. No suite on this path declares a per-suite budget.
@@ -1049,6 +1158,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test-scripts:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
     # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
@@ -1279,6 +1390,8 @@ jobs:
   # exact shape), so the install steps below mirror test-scripts, except for likec4 (this job
   # runs no likec4 suite and every consumer falls back to `npx`).
   test-scripts-heavy:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -1367,6 +1480,8 @@ jobs:
   # this context is a ruleset + canonical-JSON + synthetic-check-fabrication change and is
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     # THREE-LEG ROW SPLIT (#9035). The battery declares 42 numbered row
     # sites and takes `--rows A-B`; each leg runs its third plus the
@@ -1619,8 +1734,8 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture]
-    if: always()
+    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe]
+    if: ${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). This job only reads six `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
@@ -1773,6 +1888,8 @@ jobs:
   # for this job, root for critical-css-gate); the two jobs are deliberately
   # decoupled and a "tidying" unification will break browser-binary lookup.
   e2e:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     # 20m — measured max 4.2m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 20

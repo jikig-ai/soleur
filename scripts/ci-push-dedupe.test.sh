@@ -102,8 +102,8 @@ LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 mode, path = sys.argv[1], sys.argv[2]
 GATED = os.environ.get("GATED_PINNED", "").split()
 AGG = os.environ.get("AGG_DIGEST", "")
-CANON = {"test": "${{ always() && (github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"}
-CANON_DEFAULT = "${{ !cancelled() && (github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
+CANON = {"test": "${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"}
+CANON_DEFAULT = "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "SHA", "EVENT_NAME", "REF", "RUN_ATTEMPT", "SWITCH"}
 
 def load():
@@ -369,7 +369,7 @@ row() {
 
 # battery <body> [shim-path] : fills BAT_LINES, BAT_N, ROWS_SEEN_REASONS
 battery() {
-  BODY="$1"; RB_SHIMPATH=""; RB_CATCHALL=""
+  BODY="$1"; RB_SHIMPATH=""; RB_CATCHALL="${2:-}"
   BAT_N=0; BAT_LINES=""; ROWS_SEEN_REASONS=""
   local d="$SANDBOX/bat" v ev
   # R01 canonical, variable on
@@ -397,7 +397,7 @@ battery() {
     fx_canonical "$d"; set_env_defaults; E[SHA]="$v"; row "R07-sha-[${v:0:12}]" false false bad_sha
   done
   # R08 merge_group run state other than completed+success
-  for v in "in_progress:null" "queued:null" "completed:cancelled" "completed:failure" "completed:skipped" "completed:timed_out" "completed:neutral" "completed:null"; do
+  for v in "in_progress:null" "queued:null" "completed:cancelled" "completed:failure" "completed:skipped" "completed:timed_out" "completed:neutral" "completed:null" "in_progress:success" "queued:success"; do
     fx_new "$d"; fx_run "$MG_ID" merge_group "${v%%:*}" "${v#*:}" "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
     fx_jobs "$MG_ID" "${GOOD_JOBS[@]}"; fx_flush
     set_env_defaults; row "R08-state-$v" false false no_mg_success
@@ -437,6 +437,9 @@ battery() {
   # R14 injection: a poisoned title/branch on a MATCHING run, and poisoned stderr on a failing read
   fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "gh-readonly-queue/main/$POISON" "$REPO_SLUG" .github/workflows/ci.yml "$POISON"
   fx_jobs "$MG_ID" "${GOOD_JOBS[@]}"; fx_flush; set_env_defaults; row R14-poisoned-match true true ok
+  # R17 a run id that is not digits never reaches a URL (it would add path segments to the jobs read)
+  fx_new "$d"; jq -nc --arg sha "$SHA_A" --arg br "$QB" --arg repo "$REPO_SLUG" '{id:"111/../../../../repos/x",event:"merge_group",status:"completed",conclusion:"success",head_sha:$sha,head_branch:$br,path:".github/workflows/ci.yml",head_repository:{full_name:$repo}}' >> "$d/runs.ndjson"
+  fx_flush; set_env_defaults; row R17-nonnumeric-run-id false false proof_error
   # R15 permitted shapes that are NOT the canonical fixture
   fx_new "$d"; fx_run 100 merge_group completed failure "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
   fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
@@ -525,7 +528,8 @@ open(dst, "w").write(s.replace(old, new))
 PY
 # mutate_body <name> <old> <new> <expected-row-prefix>: the battery on the mutant must flag a row with the prefix
 mutate_body() {
-  local name="$1" old="$2" new="$3" want="$4" f="$SANDBOX/mut/$name.sh" got
+  local name="$1" old="$2" new="$3" want="$4" f got
+  f="$SANDBOX/mut/$name.sh"
   MUT_RUN=$((MUT_RUN + 1))
   if ! python3 "$SANDBOX/mut.py" "$SANDBOX/pristine-body.sh" "$f" "$old" "$new" 2>"$SANDBOX/mut.err"; then
     fail "MUTANT $name: mutation did NOT land ($(head -c 120 "$SANDBOX/mut.err"))"; return
@@ -551,14 +555,35 @@ mutate_body m-test-conclusion 'select(.name == "test" and .conclusion == "succes
 mutate_body m-no-event-check '.event == "merge_group" and ' '' R13
 mutate_body m-no-repo-check ' and .head_repository.full_name == $repo' '' R13
 mutate_body m-no-path-check ' and .path == ".github/workflows/ci.yml"' '' R13
-mutate_body m-runs-failure-ignored 'head_sha=${SHA}&per_page=100" 2>/dev/null) || finish' 'head_sha=${SHA}&per_page=100" 2>/dev/null) || true' R12
-mutate_body m-jobs-failure-ignored 'filter=latest" 2>/dev/null) || finish' 'filter=latest" 2>/dev/null) || true' R12
-mutate_body m-nonarray-ignored "jq -e '.workflow_runs | type == \"array\"' >/dev/null 2>&1 || finish" 'true' R12
+# fail-open on a failed read (the read is replaced by a vouching answer): must go red on the failure rows
+_open_runs=$(cat <<'EOS'
+head_sha=${SHA}&per_page=100" 2>/dev/null) || runs=$(printf '{"workflow_runs":[{"event":"merge_group","status":"completed","conclusion":"success","head_sha":"%s","path":".github/workflows/ci.yml","head_repository":{"full_name":"%s"},"head_branch":"gh-readonly-queue/main/x","id":111}]}' "$SHA" "$GH_REPO")
+EOS
+)
+mutate_body m-runs-failure-fails-open 'head_sha=${SHA}&per_page=100" 2>/dev/null) || finish' "$_open_runs" R12
+mutate_body m-jobs-failure-fails-open 'filter=latest" 2>/dev/null) || finish' 'filter=latest" 2>/dev/null) || jobs='"'"'{"jobs":[{"name":"test","conclusion":"success"}]}'"'"'' R12
 mutate_body m-echo-branch "printf '::notice title=ci-push-dedupe::sha=%s" "printf '%s' \"\$runs\"; printf '::notice title=ci-push-dedupe::sha=%s" R14
 # REORDER: write elide=true before the jobs read, with a jobs read that fails (R12-api-fail_jobs must go red)
 mutate_body m-reorder-true 'mg="$id"' 'mg="$id"; emit "elide=true"' R12
 mutate_body m-default-after-gh 'emit "elide=false"' ':' R12
-mutate_body m-mgid-unchecked '[[ "$id" =~ ^[0-9]+$ ]] || finish' 'true' R13
+mutate_body m-mgid-unchecked '[[ "$id" =~ ^[0-9]+$ ]] || finish' 'true' R17
+
+# EQUIVALENT mutants, recorded rather than hidden: each removes a guard that a LATER guard repeats, so no verdict
+# changes (a failed runs read leaves the listing empty, which the array check, then the id extraction, both refuse).
+# Reading 2 of "a surviving mutant" in the work skill: equivalent, proven by the battery staying green on it.
+EQUIV_RUN=0; EQUIV_OK=0
+mutate_body_equiv() {
+  local name="$1" old="$2" new="$3" f
+  f="$SANDBOX/mut/$name.sh"; EQUIV_RUN=$((EQUIV_RUN + 1))
+  if ! python3 "$SANDBOX/mut.py" "$SANDBOX/pristine-body.sh" "$f" "$old" "$new" 2>"$SANDBOX/mut.err"; then
+    fail "EQUIVALENT $name: mutation did NOT land"; return
+  fi
+  battery "$f"
+  if [ -z "$(grep ' bad' <<<"$BAT_LINES")" ]; then EQUIV_OK=$((EQUIV_OK + 1)); pass
+  else fail "EQUIVALENT $name: expected no row to go red, but one did (not equivalent: add a killing row)"; fi
+}
+mutate_body_equiv e-runs-failure-ignored 'head_sha=${SHA}&per_page=100" 2>/dev/null) || finish' 'head_sha=${SHA}&per_page=100" 2>/dev/null) || true'
+mutate_body_equiv e-nonarray-check-dropped "jq -e '.workflow_runs | type == \"array\"' >/dev/null 2>&1 || finish" 'cat >/dev/null'
 
 # harness: a stub proof that always elides must be refused by the battery
 printf '%s\n' 'printf "elide=true\nwould_elide=true\n" >> "$GITHUB_OUTPUT"; printf "::notice title=ci-push-dedupe::sha=invalid would_elide=true elide=true reason=ok mg_run=none\n"; exit 0' > "$SANDBOX/mut/stub-always.sh"
@@ -567,17 +592,18 @@ battery "$SANDBOX/mut/stub-always.sh"
 _n_bad=$(grep -c ' bad' <<<"$BAT_LINES" || true)
 if [ "$_n_bad" -ge 20 ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass; else fail "HARNESS H1: an always-elide stub went red on only $_n_bad rows (floor 20)"; fi
 # harness: a catch-all gh shim (canonical fixture for every call) must not let the must-be-false rows pass
-fx_canonical "$SANDBOX/ca"; RB_CATCHALL=1; RB_CA_RUNS="$SANDBOX/ca/runs.json"; RB_CA_JOBS="$SANDBOX/ca/jobs-$MG_ID.json"
+fx_canonical "$SANDBOX/ca"; RB_CA_RUNS="$SANDBOX/ca/runs.json"; RB_CA_JOBS="$SANDBOX/ca/jobs-$MG_ID.json"
 MUT_RUN=$((MUT_RUN + 1))
-battery "$LIVE/body.sh"
-RB_CATCHALL=""; RB_CA_RUNS=""; RB_CA_JOBS=""
+battery "$LIVE/body.sh" 1
+RB_CA_RUNS=""; RB_CA_JOBS=""
 if grep -qE '^ROW R(08|09|10|11|13)' <<<"$(grep ' bad' <<<"$BAT_LINES")"; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
 else fail "HARNESS H2: with a catch-all gh shim the no_mg_success / no_test_job rows must still go red"; fi
 
 # workflow mutants: yml copies run through the checkers
 # mutate_yml <name> <old> <new> <mode> <expected-tag-prefix>
 mutate_yml() {
-  local name="$1" old="$2" new="$3" cmode="$4" want="$5" f="$SANDBOX/mut/$name.yml" got
+  local name="$1" old="$2" new="$3" cmode="$4" want="$5" f got
+  f="$SANDBOX/mut/$name.yml"
   MUT_RUN=$((MUT_RUN + 1))
   if ! python3 "$SANDBOX/mut.py" "$WF" "$f" "$old" "$new" 2>"$SANDBOX/mut.err"; then
     fail "MUTANT $name: mutation did NOT land ($(head -c 120 "$SANDBOX/mut.err"))"; return
@@ -589,18 +615,24 @@ mutate_yml() {
     *) fail "MUTANT $name: checker $cmode did not report $want (got: ${got:0:160})" ;;
   esac
 }
-COND_DEFAULT="if: \${{ !cancelled() && (github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
-mutate_yml y-no-coe "    continue-on-error: true
-    timeout-minutes: 2" "    timeout-minutes: 2" wrapper W-COE
-mutate_yml y-no-step-timeout "    timeout-minutes: 2" "    timeout-minutes: 9" wrapper W-STEPTIMEOUT
-mutate_yml y-job-timeout "    timeout-minutes: 3" "    timeout-minutes: 5" wrapper W-JOBTIMEOUT
+COND_DEFAULT="if: \${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
+mutate_yml y-no-coe "        continue-on-error: true
+        timeout-minutes: 2
+" "        timeout-minutes: 2
+" wrapper W-COE
+mutate_yml y-no-step-timeout "        timeout-minutes: 2
+        env:" "        timeout-minutes: 9
+        env:" wrapper W-STEPTIMEOUT
+mutate_yml y-job-timeout "    timeout-minutes: 3
+    permissions:" "    timeout-minutes: 5
+    permissions:" wrapper W-JOBTIMEOUT
 mutate_yml y-no-output "      elide: \${{ steps.proof.outputs.elide }}" "      elide: \${{ steps.proof.outputs.would_elide }}" wrapper W-OUTPUTS
 mutate_yml y-perm "      actions: read" "      actions: write" wrapper W-PERM
 mutate_yml y-success-fn "  test-bun:
     needs: [push-dedupe]
     $COND_DEFAULT" "  test-bun:
     needs: [push-dedupe]
-    if: \${{ success() && (github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}" truth TT:test-bun
+    if: \${{ success() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}" truth TT:test-bun
 mutate_yml y-no-event-disjunct "  test-bun:
     needs: [push-dedupe]
     $COND_DEFAULT" "  test-bun:
@@ -614,11 +646,11 @@ mutate_yml y-lost-cancelled "  test-bun:
 mutate_yml y-lost-need "  test-bun:
     needs: [push-dedupe]" "  test-bun:
     needs: []" gated G-NEEDS:test-bun
-mutate_yml y-extra-gated "  critical-css-gate:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs == 'true'" "  critical-css-gate:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs == 'true' || needs.push-dedupe.outputs.elide == 'x'" gated G-SET
+mutate_yml y-extra-gated "    needs: detect-changes
+    if: needs.detect-changes.outputs.docs == 'true'
+" "    needs: detect-changes
+    if: needs.detect-changes.outputs.docs == 'true' || needs.push-dedupe.outputs.elide == 'x'
+" gated G-SET
 mutate_yml y-agg-env "          EVENT_NAME: \${{ github.event_name }}
         run: |
           # NAME THE MEASURED CAUSE" "          EVENT_NAME: \${{ github.event_name }}
@@ -633,7 +665,7 @@ mutate_yml y-agg-tolerate "              skipped)
 # the coupling row itself must go red when the aggregator tolerates a skipped leg
 cp "$SANDBOX/live/agg.sh" "$SANDBOX/mut/agg-tol.sh" 2>/dev/null
 MUT_RUN=$((MUT_RUN + 1))
-if python3 "$SANDBOX/mut.py" "$SANDBOX/live/agg.sh" "$SANDBOX/mut/agg-tol.sh" '                echo "$shard: SKIPPED — the leg did not run" >&2' '                fail=0; continue' 2>/dev/null; then
+if python3 "$SANDBOX/mut.py" "$SANDBOX/live/agg.sh" "$SANDBOX/mut/agg-tol.sh" '      echo "$shard: SKIPPED — the leg did not run" >&2' '      fail=0; continue' 2>/dev/null; then
   _save="$SANDBOX/live/agg.sh"; cp "$_save" "$SANDBOX/live/agg.orig"; cp "$SANDBOX/mut/agg-tol.sh" "$_save"
   agg_run SCRIPTS_RESULT; _rc=$?
   cp "$SANDBOX/live/agg.orig" "$_save"
@@ -646,7 +678,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 36 ]; then pass; else fail "MUTANT FLOOR: only $MUT_RUN mutants ran (floor 36)"; fi
+if [ "$MUT_RUN" -ge 36 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN killing mutants ran (floor 36), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -655,7 +688,7 @@ if [ "$MUT_RUN" -ge 36 ]; then pass; else fail "MUTANT FLOOR: only $MUT_RUN muta
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=1
+_FLOOR=123
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

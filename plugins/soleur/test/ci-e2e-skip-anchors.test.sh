@@ -212,8 +212,15 @@ anchor_absent "no trigger-level paths: on e2e/CI"       "paths-ignore"
 # rejected. And an `if:` on the classify STEP is worse: `applicable` resolves
 # empty, every gate and the verdict step evaluate false, job greens doing
 # nothing. Neither is pinned by presence anchors — assert absence.
-if printf '%s\n' "$e2e_section" | awk '/^    steps:/{exit} /^    (if|needs):/{bad=1} END{exit bad}'; then
-  PASS=$((PASS + 1)); echo "ok   e2e job carries no job-level if:/needs:"
+# ONE carve-out (ADR-276 S2, #9512): the push-dedupe elision. `e2e` may carry exactly `needs: [push-dedupe]` and
+# exactly the canonical condition below, nothing else. That is not the #5585 shape: push-dedupe cannot needs-skip
+# `e2e` by failing (the condition opens with the status function !cancelled(), so a failed or skipped need still runs
+# the job), it is skipped off the push event, and `e2e` is a required context for pull_request and merge_group only,
+# never for a push to main. scripts/ci-push-dedupe.test.sh evaluates the condition over the event x output truth table.
+E2E_ELIDE_NEEDS="needs: [push-dedupe]"
+E2E_ELIDE_IF="if: \${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
+if printf '%s\n' "$e2e_section" | awk -v en="    $E2E_ELIDE_NEEDS" -v ei="    $E2E_ELIDE_IF" '/^    steps:/{exit} /^    (if|needs):/{ if ($0 != en && $0 != ei) bad=1 } END{exit bad}'; then
+  PASS=$((PASS + 1)); echo "ok   e2e job carries no job-level if:/needs: other than the push-dedupe elision pair"
 else
   FAIL=$((FAIL + 1)); echo "FAIL e2e job has a job-level if:/needs: (skipped required check posts green)"
 fi

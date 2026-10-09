@@ -544,8 +544,11 @@ except yaml.YAMLError as exc:
     print("ci.yml does not parse strictly: %s" % str(exc).replace("\n", " "))
     raise SystemExit
 
-if str(job.get("if", "")).strip() != "always()":
-    bad.append("test job if is %r, must be exactly always()" % job.get("if"))
+# `always()` alone, or the one canonical form S2 (#9512, ADR-276) uses: always() ANDed with the push-dedupe elision
+# condition, which is true on every event except an elided push (scripts/ci-push-dedupe.test.sh evaluates it).
+_ALLOWED_IF = ("always()", "${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}")
+if str(job.get("if", "")).strip() not in _ALLOWED_IF:
+    bad.append("test job if is %r, must be always() or the canonical push-dedupe form" % job.get("if"))
 if job.get("continue-on-error") not in (None, False):
     bad.append("test job sets continue-on-error")
 for st in job.get("steps") or []:
