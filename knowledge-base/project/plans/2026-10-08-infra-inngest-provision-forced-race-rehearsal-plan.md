@@ -503,8 +503,9 @@ real run's evidence is attached — the PR body must say `Ref #9175`, never `Clo
   until rollback — the same blast shape as #8539's original incident.
 - **If this leaks, the user's [data / workflow / money] is exposed via:** the strongest
   residual is a throwaway host holding a token scoped to an *empty-of-prod-values* config —
-  the only prod values on it are write-only ingest material (`BETTERSTACK_LOGS_TOKEN`,
-  `sentry_dsn`, `zot_pull_token` — all append/read-limited by construction). A leak's worst
+  the only prod values on it are narrowly-scoped credentials (`BETTERSTACK_LOGS_TOKEN` and
+  `sentry_dsn` are write-only ingest; `zot_pull_token` is a registry **read** credential —
+  pull-only, no user data behind it). A leak's worst
   product-facing outcome is forged telemetry, not user data.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** a botched parameterization doesn't hurt one user on

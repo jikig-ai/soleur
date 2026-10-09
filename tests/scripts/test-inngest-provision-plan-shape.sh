@@ -109,6 +109,10 @@ plan "$TMP/m-imp.json" "${ADDITIVE_OK[@]/hcloud_volume.rehearsal:create/hcloud_v
 want "additive refuses an importing resource_change (import plans as no-op)" 1 "$TMP/m-imp.json" additive "" "the plan IMPORTS hcloud_volume.rehearsal"
 plan "$TMP/m-imp2.json" hcloud_server_network.rehearsal\[0\]:create hcloud_volume.rehearsal:no-op:import=100000001
 want "nic-attach refuses an importing resource_change" 1 "$TMP/m-imp2.json" nic-attach "" "the plan IMPORTS hcloud_volume.rehearsal"
+# Phase A must be NIC-ABSENT, not merely rehearsal-scoped — a NIC create in an additive plan
+# is otherwise admitted and only caught ~20 min later by the evidence gate, on a paid host.
+plan "$TMP/m-a-nic.json" "${ADDITIVE_OK[@]}" hcloud_server_network.rehearsal\[0\]:create
+want "additive refuses an hcloud_server_network create (Phase A is NIC-absent by definition)" 1 "$TMP/m-a-nic.json" additive "" "Phase A must birth the host WITHOUT a private NIC"
 plan "$TMP/m-forget.json" hcloud_server_network.rehearsal\[0\]:create hcloud_ssh_key.rehearsal:forget
 want "nic-attach refuses a forget (deny-list the inert verbs)" 1 "$TMP/m-forget.json" nic-attach "" "hcloud_ssh_key.rehearsal (forget) is not admitted"
 plan "$TMP/m-extracreate.json" hcloud_server_network.rehearsal\[0\]:create doppler_secret.rehearsal_extra:create

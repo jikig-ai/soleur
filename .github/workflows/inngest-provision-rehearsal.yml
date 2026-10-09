@@ -269,12 +269,15 @@ jobs:
           set -euo pipefail
           HOST="${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
           RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/${GITHUB_RUN_ID}"
+          # --since binds the window to THIS run's apply: a re-run reuses the same run id
+          # (same host name), and the previous life's rows must not satisfy this gate.
+          SINCE="$(cat "$GITHUB_WORKSPACE/phase-a-since.txt")"
           deadline=$(( SECONDS + 20 * 60 ))
           while (( SECONDS < deadline )); do
             set +e
             doppler run --preserve-env -p soleur -c prd_terraform -- \
               bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
-                --mode phase-a \
+                --mode phase-a --since "$SINCE" \
                 --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env"
             rc=$?
             set -e
@@ -491,9 +494,15 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # zot_pull_token is REQUIRED (no default) and is validated even on destroy —
+          # without it this step dies on `No value for required variable`, the orphan
+          # assertion below is skipped, and a real run leaks the paid stack.
+          ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true \
+              -var "zot_pull_token=${ZOT_PULL}"
 
       # THE ORPHAN ASSERTION, IN-WORKFLOW. `terraform destroy` acts only on state, so a
       # destroy that half-ran leaves paying objects behind — the drift sweep DETECTS those

@@ -29,7 +29,7 @@
 #     scripts/followthroughs/inngest-provision-rehearsal-capture.sh \
 #       --host-name soleur-inngest-rehearsal-<run-id> --mode phase-a \
 #       --evidence-url https://github.com/jikig-ai/soleur/actions/runs/<run-id> \
-#       [--out <path>] [--since <ISO>] [--window '2 HOUR'] [--min-attempts N]
+#       [--out <path>] [--since <ISO>] [--window '2 HOUR']
 set -uo pipefail
 
 # REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797 precedent). This script binds
@@ -61,6 +61,9 @@ OUT=""
 WINDOW="2 HOUR"
 SINCE=""
 REBOOT_SINCE=""
+# The ">= 2 attempts" property is a CONSTANT of the rehearsal requirement (the plan names it —
+# the retry loop must demonstrably retry NIC-less), not an operator knob; it stays a named
+# constant so the want lines below read it rather than a magic 2.
 MIN_ATTEMPTS=2
 
 while [[ $# -gt 0 ]]; do
@@ -74,7 +77,6 @@ while [[ $# -gt 0 ]]; do
     # post-reboot only: the ISO timestamp recorded immediately BEFORE the reboot action —
     # the latch claim is "no provision rows after this boundary".
     --reboot-since)  REBOOT_SINCE="${2:-}"; shift 2 || shift ;;
-    --min-attempts)  MIN_ATTEMPTS="${2:-}"; shift 2 || shift ;;
     --) shift ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
@@ -205,6 +207,9 @@ HOST_ROWS="$(bs_query "$HOST_SQL" 2>/dev/null)" || {
 count_stage() { # <stage-substr> — count rows carrying this host's name AND the marker
   printf '%s\n' "$HOST_ROWS" | grep -cF -- "$1" 2>/dev/null || true
 }
+count_done() { # bootstrap-done WITHOUT -DEGRADED (a degraded success writes NO latch)
+  printf '%s\n' "$HOST_ROWS" | grep -cE 'bootstrap-done([^-]|$)' 2>/dev/null || true
+}
 
 # IID DISCOVERY. Every provision marker carries iid=<cloud-init instance-id> in its detail;
 # `provision-unit-armed` is emitted once per host life and is the first row guaranteed to
@@ -246,7 +251,7 @@ case "$MODE" in
     n_armed="$(count_stage provision-unit-armed)"
     n_start="$(count_stage provision-attempt-start)"
     n_nic_fail=$(( $(count_stage private_nic_timeout) + $(count_stage provision-nic-ABSENT) ))
-    n_done="$(count_stage bootstrap-done)"
+    n_done="$(count_done)"
     (( n_done > 0 )) && viol "bootstrap-done emitted while the NIC was absent (n=${n_done}) — the provision path RAN WITHOUT the private net; this is the property under test, broken" || ok "no bootstrap-done while the NIC was absent"
     (( n_armed >= 1 ))           && ok "provision-unit-armed emitted for this host" || want "provision-unit-armed (n=${n_armed})"
     (( n_start >= MIN_ATTEMPTS )) && ok "provision-attempt-start count ${n_start} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "provision-attempt-start count ${n_start} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
@@ -254,28 +259,39 @@ case "$MODE" in
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
   phase-b)
-    # THE HEALED FACE: the phase-B attach converged and the FULL provision chain ran to
-    # bootstrap-done for this iid — zot login, pull, isolation check, bootstrap all implied.
-    # Failed attempts inside the window are EXPECTED (the unit retries), so exit rows are
-    # reported, not required-zero — the success criterion is bootstrap-done itself.
+    # THE HEALED FACE is bootstrap-done ALONE — it is strictly stronger than
+    # `private_nic_ok`: it can only be emitted after nic_present, zot login, the pull, the
+    # isolation self-check and the bootstrap itself. `private_nic_ok` is NOT required
+    # because it is unreachable in the happy path — soleur-inngest-nic-wait (its only
+    # emitter) runs only when nic_present FAILS at attempt start, and after the Phase-B
+    # attach converges the very next attempt sees the IP already configured and skips the
+    # wait entirely (architecture-review finding: the marker lands only on the coin-flip
+    # where the attach completes inside an in-flight 150 s wait window — a timing hope the
+    # plan rejects). Failed attempts inside the window are likewise EXPECTED (the unit
+    # retries), so exit rows are reported, not required-zero.
     n_ok="$(count_stage private_nic_ok)"
-    n_done="$(count_stage bootstrap-done)"
+    n_done="$(count_done)"
     n_exit="$(count_stage provision-attempt-exit-)"
-    (( n_ok >= 1 ))   && ok "private_nic_ok emitted after the attach" || want "private_nic_ok emitted after the attach (n=${n_ok})"
-    (( n_done >= 1 )) && ok "bootstrap-done emitted for this host" || want "bootstrap-done emitted for this host (n=${n_done})"
-    note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected)"
+    (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
+    note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
     KEY=REHEARSAL_PHASE_B_RECOVERY
     ;;
   post-reboot)
     # THE LATCH FACE: after the reboot boundary, the per-boot token-restage anchor MUST re-emit
-    # (proving the boot ran and the scratch-Doppler channel works), and ZERO provision markers
-    # may appear — the latch + OnBootSec re-entry refusal is the property under test.
+    # ON THE PHONE-HOME CHANNEL (stage=bs-token-restaged — the direct-curl emitter every
+    # provision marker also rides), and ZERO provision markers may appear. Anchoring on the
+    # logger'd `SOLEUR_INNGEST_BS_TOKEN_RESTAGED` line instead would vouch via VECTOR — a
+    # different channel than the silence being asserted — and a host whose latch failed while
+    # its phone-home path was dead would read restage=1 + provision=0: a false PASS on the
+    # property this leg exists to prove. The boundary timestamp is recorded BEFORE the API
+    # call and `dt` is ingest-time, so a delayed pre-boundary row can read post-boundary —
+    # that direction errs conservative (false FAIL, never false PASS).
     POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}') AND position(raw, '${HOST_NAME}') > 0 ORDER BY dt LIMIT 2000" 2>/dev/null)" \
       || { echo "TRANSIENT: the post-reboot query failed after a live anchor." >&2; exit 2; }
-    n_restage="$(printf '%s\n' "$POST_ROWS" | grep -cF 'SOLEUR_INNGEST_BS_TOKEN_RESTAGED' 2>/dev/null || true)"
+    n_restage="$(printf '%s\n' "$POST_ROWS" | grep -cE 'stage=bs-token-restaged' 2>/dev/null || true)"
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"
     (( n_provision > 0 )) && viol "${n_provision} provision marker(s) AFTER the reboot boundary — the latch did not hold (provision re-ran post-reboot)" || ok "zero provision markers after the reboot boundary — the latch held"
-    (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot (proves this boot ran)" || want "token-restage anchor re-emitted post-reboot (n=${n_restage})"
+    (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot ON THE PHONE-HOME CHANNEL (proves this boot ran AND the measured channel is live)" || want "token-restage anchor re-emitted post-reboot (stage=bs-token-restaged n=${n_restage})"
     KEY=REHEARSAL_POST_REBOOT_LATCH
     ;;
 esac

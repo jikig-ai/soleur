@@ -76,6 +76,14 @@ yes "a distinct state key carries the rehearsal root" \
   "grep -qF 'web-platform/inngest-provision-rehearsal/terraform.tfstate' '$REH/main.tf'"
 yes "the backend has no lockfile (R2 lacks conditional writes — the workflow's concurrency group is the serializer)" \
   "grep -qF 'use_lockfile = false' '$REH/main.tf'"
+no "the root carries no import or moved block (a rename-shaped adoption is how a prod address could ride in)" \
+  "grep -qE '^(import|moved)[[:space:]]*\{|^[[:space:]]*(import|moved)[[:space:]]*\{' '$REH_CODE'"
+yes "the scratch host's sdk_url is loopback (it can never adopt a prod registry or reach prod web)" \
+  "grep -qE 'sdk_url[[:space:]]*=[[:space:]]*\"http://127\.0\.0\.1:3000/api/inngest\"' '$REH_CODE'"
+yes "web_host_private_ips is loopback (the isolation self-check sees exactly one IP)" \
+  "grep -qE 'web_host_private_ips[[:space:]]*=[[:space:]]*\"127\.0\.0\.1\"' '$REH_CODE'"
+yes "the rehearsal private IP is 10.0.1.60 and feeds inngest_private_ip (collides with no prod allocation)" \
+  "grep -qE 'rehearsal_private_ip[[:space:]]*=[[:space:]]*\"10\.0\.1\.60\"' '$REH_CODE' && grep -qE 'inngest_private_ip[[:space:]]*=[[:space:]]*local\.rehearsal_private_ip' '$REH_CODE'"
 
 # ── 2. The .rehearsal addressing contract ─────────────────────────────────────
 BAD_ADDR="$(grep -oE 'resource "(hcloud|doppler|random|tls)_[a-z_]+" "[a-z_]+"' "$REH_CODE" \
@@ -170,7 +178,7 @@ yes "the phase ordering is apply_A -> capture_A -> plan_B -> apply_B -> reboot -
 yes "teardown is its own job gated always() (a ceiling in rehearse cannot starve it)" \
   "awk '/^  teardown:/{f=1} f&&/if:/{print;exit}' '$WF' | grep -qF 'always()'"
 yes "every step carries a timeout-minutes bound" \
-  "! awk '/steps:/,/^[a-z]/' '$WF' | grep -E '^\s+- (name|uses):' | grep -vF 'name: ' >/dev/null || python3 -c 'import yaml,sys; d=yaml.safe_load(open(\"$WF\")); sys.exit(0 if all(\"timeout-minutes\" in s for j in d[\"jobs\"].values() for s in j[\"steps\"]) else 1)'"
+  "python3 -c 'import yaml,sys; d=yaml.safe_load(open(\"$WF\")); sys.exit(0 if all(\"timeout-minutes\" in s for j in d[\"jobs\"].values() for s in j[\"steps\"]) else 1)'"
 yes "the job ceiling covers the step sum" \
   "python3 -c 'import yaml,sys; d=yaml.safe_load(open(\"$WF\")); cap=d[\"jobs\"][\"rehearse\"][\"timeout-minutes\"]; tot=sum(s[\"timeout-minutes\"] for s in d[\"jobs\"][\"rehearse\"][\"steps\"]); sys.exit(0 if cap>=tot else 1)'"
 yes "the evidence is uploaded as an ARTIFACT (never committed)" \
@@ -214,8 +222,10 @@ yes "the capture script carries the terminal verdict sentinel" \
   "grep -qF 'INNGEST_PROVISION_CAPTURE_VERDICT' '$CAPTURE'"
 yes "the capture script confines reads to rehearsal hosts" \
   "grep -qF 'soleur-inngest-rehearsal-' '$CAPTURE'"
-yes "the capture writes on PASS only" \
-  "! grep -qE '>>.*evidence|>.*evidence.*<<' '$CAPTURE' || grep -qF '=PASS' '$CAPTURE'"
+# The write-on-PASS property, pinned by POSITION: exactly one `$OUT` append exists and it
+# sits after the LAST `exit 1`/`exit 2`, so no FAIL/TRANSIENT path can reach it.
+yes "the capture writes on PASS only (the single evidence append sits past the last early exit)" \
+  "python3 -c 'import sys; s=open(\"$CAPTURE\").read(); w=[i for i in range(len(s)) if s.startswith(\">> \\\"\\$OUT\\\"\", i)]; last_fail=max(s.rfind(\"exit 1\"), s.rfind(\"exit 2\")); sys.exit(0 if len(w)==1 and w[0] > last_fail > 0 else 1)'"
 yes "the plan-shape guard is executable and bash-syntax-clean" \
   "[[ -x '$SHAPE' ]] && bash -n '$SHAPE'"
 yes "the probe script exists and is executable" \

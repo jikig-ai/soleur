@@ -170,13 +170,15 @@ run "phase-a TRANSIENT: live anchor but zero host rows (dark so far, not dark fo
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/empty-rows.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
 # ── phase-b arms ──────────────────────────────────────────────────────────────
+# THE P0 REGRESSION CASE (architecture review): private_nic_ok is emitted ONLY by the
+# nic-wait helper, which runs only when nic_present FAILS — after the attach converges the
+# next attempt skips it entirely. bootstrap-done must pass with nic_ok ABSENT.
 rows "$TMP/r-phaseb.json" "$NOW" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_ok host=${HOST} detail=boot=cafe0002.waited_s=4.by=99-soleur-private-fallback" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=3 iid=abc123" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 host=${HOST} detail=attempt=3 why=pull-timeout iid=abc123" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=4 iid=abc123" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done host=${HOST} detail=attempt=4 iid=abc123"
-run "phase-b PASS: nic_ok + bootstrap-done (mid-window retry exit rows are informational)" 0 \
+run "phase-b PASS: bootstrap-done ALONE (private_nic_ok is unreachable in the happy path)" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-phaseb.json" -- "${BASE_ARGS[@]}" --mode phase-b
 grep -qF 'REHEARSAL_PHASE_B_RECOVERY=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_PHASE_B_RECOVERY=PASS" \
   || fail "evidence file carries REHEARSAL_PHASE_B_RECOVERY=PASS" "$(cat "$TMP/ev.env")"
@@ -187,21 +189,35 @@ rows "$TMP/r-nodone.json" "$NOW" \
 run "phase-b TRANSIENT: nic converged but bootstrap-done not yet emitted" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-nodone.json" -- "${BASE_ARGS[@]}" --mode phase-b
 
+# bootstrap-done-DEGRADED writes NO latch — a substring match must not count it as done.
+rows "$TMP/r-degraded.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done-DEGRADED host=${HOST} detail=attempt=4 why=.redis-inactive iid=abc123"
+run "phase-b TRANSIENT: bootstrap-done-DEGRADED is NOT bootstrap-done (no latch was written)" 2 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-degraded.json" -- "${BASE_ARGS[@]}" --mode phase-b
+
 # ── post-reboot arms ──────────────────────────────────────────────────────────
 PRE_REBOOT="2026-01-01T00:00:00"
 rows "$TMP/r-latch.json" "$NOW" \
-  "inngest-bs-token-restage[999]: SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=/run/inngest-bs-logs-token host=${HOST}" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged host=${HOST} detail=ok=1.boot-trace.channel.re-armed" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=some-unrelated host=${HOST} detail=harmless"
-run "post-reboot PASS: restage anchor re-emitted, ZERO provision markers after boundary" 0 \
+run "post-reboot PASS: restage anchor re-emitted ON THE PHONE-HOME CHANNEL, zero provision rows after boundary" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-latch.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 grep -qF 'REHEARSAL_POST_REBOOT_LATCH=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_POST_REBOOT_LATCH=PASS" \
   || fail "evidence file carries REHEARSAL_POST_REBOOT_LATCH=PASS" "$(cat "$TMP/ev.env")"
 
 rows "$TMP/r-brokenlatch.json" "$NOW" \
-  "inngest-bs-token-restage[999]: SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 host=${HOST}" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged host=${HOST} detail=ok=1" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=5 iid=abc123"
 run "post-reboot FAIL: a provision-attempt-start after the boundary (latch broken)" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-brokenlatch.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
+
+# THE CHANNEL-MISMATCH CASE (architecture review): the logger'd SOLEUR_INNGEST_BS_TOKEN_RESTAGED
+# rides journald -> Vector, a DIFFERENT channel than the provision markers. Vector alive while
+# phone-home is dead would vouch for a silence that was never measured — TRANSIENT, not PASS.
+rows "$TMP/r-vectoronly.json" "$NOW" \
+  "inngest-bs-token-restage[999]: SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=/run/inngest-bs-logs-token host=${HOST}"
+run "post-reboot TRANSIENT: Vector-only restage does not vouch for the phone-home silence" 2 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-vectoronly.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 
 rows "$TMP/r-norestage.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=unrelated host=${HOST} detail=harmless"
@@ -211,7 +227,7 @@ run "post-reboot TRANSIENT: restage anchor not yet emitted after the boundary" 2
 # pre-boundary rows must NOT count toward post-reboot assertions — the dt bound is real.
 rows "$TMP/r-preboundary.json" "$PRE_REBOOT" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start host=${HOST} detail=attempt=1 iid=abc123" \
-  "inngest-bs-token-restage[999]: SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 host=${HOST}"
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged host=${HOST} detail=ok=1"
 run "post-reboot TRANSIENT: pre-boundary rows do not count (restage row older than --reboot-since)" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-preboundary.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "2026-06-01T00:00:00"
 

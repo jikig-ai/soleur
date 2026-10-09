@@ -4,8 +4,11 @@
 # workflow calls it at both plan steps: Phase A (additive) and Phase B (nic-attach).
 # Mirrors git-data-rung2-plan-shape.sh (#5274), the same guard for the rung-2 rehearsal.
 #
-#   additive    Every change is create/read/no-op, and every created address is
-#               rehearsal-scoped. Phase A births the throwaway stack.
+#   additive    Every change is create/read/no-op, every created address is
+#               rehearsal-scoped, AND no hcloud_server_network create is present —
+#               Phase A must birth the host WITHOUT the private NIC; an accidental
+#               attachment here is caught at plan cost, not at the evidence gate
+#               ~20 minutes later on a paid host.
 #   nic-attach  The Phase-B toggle. Beyond rehearsal-scoped creates, reads and no-ops, the
 #               ONLY admitted change is a create of hcloud_server_network.rehearsal[0] —
 #               that resource's `count = var.nic_attached ? 1 : 0` is the forced race's
@@ -67,6 +70,17 @@ if [[ "$MODE" == additive ]]; then
     printf '%s\n' "$changes"
     bad=1
   fi
+  # PHASE A MUST BE NIC-ABSENT — not merely rehearsal-scoped. `additive` otherwise admits
+  # any `.rehearsal` create, so a Phase-A plan that accidentally included the NIC would pass
+  # this gate and be caught only ~20 min later by the evidence gate, on a paid host. Refuse
+  # it here, where the cost is zero.
+  while IFS= read -r addr; do
+    [[ -n "$addr" ]] || continue
+    if [[ "$addr" =~ ^hcloud_server_network\. ]]; then
+      echo "::error::plan-shape (additive): the plan creates ${addr} — Phase A must birth the host WITHOUT a private NIC; the attachment belongs to Phase B only."
+      bad=1
+    fi
+  done <<<"$creates"
 else
   # nic-attach: `changes` holds only NON-create verbs (the jq filter above), so any entry is a
   # refusal outright; and `creates` must be exactly {hcloud_server_network.rehearsal[0]} —

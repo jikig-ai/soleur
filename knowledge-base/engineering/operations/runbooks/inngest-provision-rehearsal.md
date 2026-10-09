@@ -64,7 +64,8 @@ route; the rehearsal host is never logged into. The reboot leg is the Hetzner AP
    guard admits only when the delta is exactly `hcloud_server_network.rehearsal[0]`. The
    `99-soleur-private-fallback.network` file converges 10.0.1.60 via DHCP and the unit's
    next retry runs the full zot-login → pull → Doppler-isolation → bootstrap chain to
-   `bootstrap-done` (capture `--mode phase-b`).
+   `bootstrap-done` (capture `--mode phase-b`; `private_nic_ok` is reported but not
+   required — after convergence the nic-wait helper is skipped entirely).
 4. **Reboot leg** — `POST /v1/servers/<id>/actions/reboot`. Post-reboot evidence (capture
    `--mode post-reboot`) = the `SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1` row re-emitted
    (proving the boot ran) **plus zero** provision markers after the reboot boundary — the
@@ -78,8 +79,8 @@ route; the rehearsal host is never logged into. The reboot leg is the Hetzner AP
 | Artifact | What it establishes |
 |---|---|
 | **Source-liveness anchor** — any Better Stack row from *any* host in the window | The instrument works. Without it, zero rows from the rehearsal host is ambiguous between "booted dark" and "query/credentials/source broken". A dead anchor reads TRANSIENT, never FAIL. |
-| **The stage table for the host** (`provision-unit-armed` → `provision-attempt-start` → `private_nic_*` → `bootstrap-done`, all `iid=`-joined) | Each phase's required markers were observed, in order, for THIS boot — not asserted from `terraform apply` output. |
-| **Post-reboot silence** — zero `provision-*`/`bootstrap-*` rows after the reboot boundary | The latch and the timer's `OnBootSec` re-entry refusal held; provisioning did not re-run. |
+| **The stage table for the host** (`provision-unit-armed` → `provision-attempt-start` → `private_nic_*` → `bootstrap-done`) | Each phase's required markers were observed, in order, for this host name inside the phase's timestamp window (`iid` is recorded into the evidence, and the `--since` bounds — applied at each phase's apply — keep a re-run's rows from satisfying an earlier gate). Phase B's predicate is `bootstrap-done` ALONE: it is strictly stronger than `private_nic_ok` (it implies nic_present + zot + isolation + bootstrap all ran), and `private_nic_ok` is unreachable in the happy path because the nic-wait helper runs only when `nic_present` fails. |
+| **Post-reboot silence** — zero `provision-*`/`bootstrap-*` rows after the reboot boundary, anchored by a `stage=bs-token-restaged` row on the phone-home channel | The latch and the timer's `OnBootSec` re-entry refusal held — and the anchor rides the SAME channel the provision markers do, so a dead-channel silence cannot read as a PASS. |
 
 ## Reading the outcome
 
