@@ -197,6 +197,27 @@ the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and 
 | `args_fd_closed` | The `--args <fd>` transport probe failed — the SDK's real spawn shape broke (shim closed the argv fd) | Every agent spawn fails too; treat as deploy-blocking |
 | `bwrap_shim_refused` | The shim itself exited 65 (`bwrap-shim:` marker) — artifact or real bwrap missing in the image | `probeAgentSandboxHardening` fields (`shim`, `filter`, `bpfBytes`) say which |
 
+## Outer-wrap canary — #5863 arm-F verdicts
+
+`outer_wrap_canary.verdict` in deploy-state (Sentry `op=sandbox-canary-outer-wrap`) covers the
+tenant filesystem isolation arm — the mountns-only outer bwrap built from
+`infra/agent-outer-wrap-argv.json` inside the canary container (file-cap'd `/usr/bin/bwrap` +
+`--cap-add SYS_ADMIN` on the docker run). Report-only during dark launch; the soak lives in
+`/mnt/data/ci-deploy-outer-wrap-canary.json` and promotion is tracked by #9797.
+`canary_infra_error` rows hold the soak; `sandbox_broken` resets + pages.
+
+| `reason` | Meaning | First move |
+|---|---|---|
+| `isolation_probe_failed` | The shared payload saw the synthetic sibling or another `FAIL:` inside the realized wrap — the mount table LEAKS | The table is unsound — do not promote; diff `buildOuterWrapArgv` against the fixture; rerun `bash apps/web-platform/scripts/agent-outer-wrap-debug.sh <ws>` locally |
+| `wrong_elevation_userns` | `isolation_ok` but `elevation=userns` — bwrap took the implicit-userns fallback, NOT the file-cap'd mountns the arm requires (fatal to the inner sandbox, Phase 0) | Check `getcap /usr/bin/bwrap` in the image + `--cap-add SYS_ADMIN` on the docker run; the Dockerfile's end-stage audit should have caught a missing cap |
+| `wrong_elevation_unreported` | `isolation_ok` but no `elevation=` marker — a drifted payload cannot green | `scripts/tenant-isolation-inner-probe.sh` must print `elevation=<privileged\|userns>` before the verdict line |
+| `bwrap_operation_not_permitted` | bwrap could not build the mountns (EPERM on mount/userns) — file-cap posture regressed or the seccomp/AppArmor profile denies it | Check the loaded seccomp profile (`seccomp_profile_loaded_matches_host` on deploy-state) and AppArmor `soleur-bwrap` |
+| `bwrap_shim_refused` | The #8752 PATH shim rejected the replay (should never run — the replay pins `/usr/bin/bwrap`) | A PATH-resolved `bwrap` leaked into the replay path — check `sandbox-canary.mjs` for a non-absolute spawn |
+| `isolation_probe_failed` on `ptrace_scope` | `/proc/sys/kernel/yama/ptrace_scope` was 0 — shared `/proc` becomes a full mountns oracle for sibling sessions | Re-pin `kernel.yama.ptrace_scope=1` on the host (the #9723 residual only holds while yama restricts ptrace) |
+| `probe_output_missing` | The payload ran but printed no verdict — an empty/truncated payload file | Confirm `COPY --from=builder /app/scripts/tenant-isolation-inner-probe.sh` + the `.dockerignore` re-include |
+| `bwrap_spawn_enoent` / `bwrap_spawn_*` / `bwrap_exit_*` / `docker_exec_rc_*` | Infra flake, never sandbox signal — the soak holds | Transient; if persistent check `sandbox-canary.mjs` is baked in the image |
+| `fixture_missing` / `fixture_invalid` | `infra/agent-outer-wrap-argv.json` absent or schema-rejected (incl. `{{ROOT}}`-confinement violations on prep entries) | Regenerate via `test/agent-outer-wrap.test.ts` Guard 2; schema is `outer-bwrap-v1` |
+
 ## Cross-workspace isolation canary — report-only soak (#2640)
 
 A third probe shares the word "sandbox" with the two above and is distinct from both:

@@ -32,9 +32,11 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   closeSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -42,11 +44,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_FIXTURE_URL = new URL(
   "../infra/sandbox-canary-argv.json",
+  import.meta.url,
+);
+const DEFAULT_OUTER_FIXTURE_URL = new URL(
+  "../infra/agent-outer-wrap-argv.json",
+  import.meta.url,
+);
+// The SHARED realized-isolation payload run inside the outer wrap — the same
+// assertion set the founder check (tenant-isolation-probe.sh) and the test
+// suite use, so the canary cannot drift green while the deployed guard
+// regresses (#5863 T3.2). Passed to `bash -s` on stdin: nothing under
+// /app/scripts is bound inside the wrap.
+const INNER_PROBE_URL = new URL(
+  "./tenant-isolation-inner-probe.sh",
   import.meta.url,
 );
 
@@ -56,21 +71,20 @@ const DEFAULT_FIXTURE_URL = new URL(
 // ---------------------------------------------------------------------------
 
 /**
- * Map a replayed bwrap outcome to a canary verdict.
+ * Shared classifier arms for BOTH replays — spawn errors, bwrap's own
+ * refusal/EPERM stderr signatures, and the generic-exit tail. Kept in ONE
+ * place so a new reason never lands on only one arm (the inner/outer
+ * classifiers re-spelled these verbatim until review flagged the drift).
  *
  * Exit-code classification is the false-rollback guard (#4941): ONLY a bwrap
  * "Operation not permitted" (EPERM — the #5873 seccomp/userns-denial shape) is
  * `sandbox_broken`; a missing binary, OOM, or any other non-zero exit is
  * `canary_infra_error` (non-blocking — never rolls back).
  *
- * @param {{ bwrapExitCode?: number | null, bwrapStderr?: string, spawnErrorCode?: string }} [args]
- * @returns {{ verdict: "pass" | "sandbox_broken" | "canary_infra_error", reason: string }}
+ * @returns {{verdict: string, reason: string} | null} a verdict when the
+ *   shared arms decide, else null (arm-specific logic continues).
  */
-export function classifyReplayVerdict({
-  bwrapExitCode,
-  bwrapStderr = "",
-  spawnErrorCode,
-} = {}) {
+function classifyShared({ bwrapExitCode, bwrapStderr = "", spawnErrorCode }) {
   if (spawnErrorCode === "ENOENT") {
     return { verdict: "canary_infra_error", reason: "bwrap_spawn_enoent" };
   }
@@ -80,28 +94,45 @@ export function classifyReplayVerdict({
       reason: `bwrap_spawn_${String(spawnErrorCode).toLowerCase()}`,
     };
   }
-  if (bwrapExitCode === 0) {
-    return { verdict: "pass", reason: "ok" };
-  }
-  // #8752: our own shim's refusal marker (exit 65, `bwrap-shim:` on stderr) is
-  // a deterministic deployed-hardening defect, not the flake class
-  // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
-  if (/bwrap-shim:/.test(bwrapStderr)) {
-    return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
-  }
-  // bwrap merges its userns/seccomp stderr into this stream; the EPERM phrase is
-  // the load-bearing signature (Phase-0 spike; matches the seccomp `unshare`
-  // denial that took down the Concierge sandbox for all tenants under SDK 0.3.x).
-  if (/operation not permitted/i.test(bwrapStderr)) {
+  if (bwrapExitCode !== 0) {
+    // #8752: our own shim's refusal marker (exit 65, `bwrap-shim:` on stderr)
+    // is a deterministic deployed-hardening defect, not the flake class
+    // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
+    if (/bwrap-shim:/.test(bwrapStderr)) {
+      return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
+    }
+    // bwrap merges its userns/seccomp stderr into this stream; the EPERM
+    // phrase is the load-bearing signature (Phase-0 spike; matches the
+    // seccomp `unshare` denial that took down the Concierge sandbox for all
+    // tenants under SDK 0.3.x).
+    if (/operation not permitted/i.test(bwrapStderr)) {
+      return {
+        verdict: "sandbox_broken",
+        reason: "bwrap_operation_not_permitted",
+      };
+    }
     return {
-      verdict: "sandbox_broken",
-      reason: "bwrap_operation_not_permitted",
+      verdict: "canary_infra_error",
+      reason: `bwrap_exit_${bwrapExitCode ?? "null"}`,
     };
   }
-  return {
-    verdict: "canary_infra_error",
-    reason: `bwrap_exit_${bwrapExitCode ?? "null"}`,
-  };
+  return null;
+}
+
+/**
+ * Map a replayed bwrap outcome to a canary verdict.
+ *
+ * @param {{ bwrapExitCode?: number | null, bwrapStderr?: string, spawnErrorCode?: string }} [args]
+ * @returns {{ verdict: "pass" | "sandbox_broken" | "canary_infra_error", reason: string }}
+ */
+export function classifyReplayVerdict({
+  bwrapExitCode,
+  bwrapStderr = "",
+  spawnErrorCode,
+} = {}) {
+  const shared = classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  if (shared) return shared;
+  return { verdict: "pass", reason: "ok" };
 }
 
 /**
@@ -1073,6 +1104,321 @@ function runReplay(fixtureUrl) {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Outer-wrap arm (#5863, arm F). The inner replay above proves the SDK's
+// captured Bash-tier sandbox builds; this arm replays the SELF-AUTHORED
+// outer mount table (buildOuterWrapArgv → the committed
+// agent-outer-wrap-argv.json fixture) inside the canary container and runs
+// the shared isolation payload in it. It answers two questions the inner
+// arm cannot:
+//   1. does the file-cap'd /usr/bin/bwrap still build the mountns-only wrap
+//      on THIS deploy (setcap + --cap-add SYS_ADMIN posture), and
+//   2. does the realized namespace actually exclude sibling workspaces
+//      (Guard 1's realized-state property), measured by the same payload
+//      the founder check runs.
+// Report-only at first deploy (wg-dark-launch-deploy-gates): ci-deploy.sh
+// records the verdict + pages Sentry on sandbox_broken but never gates.
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate the outer-wrap fixture (`outer-bwrap-v1`). Unlike the captured
+ * canonical fixture this one is SELF-AUTHORED (buildOuterWrapArgv output
+ * pinned by Guard 2), so status is "generated", not "captured".
+ * @param {unknown} obj
+ * @returns {{ schema: string, status: string, prepDirs: string[], prepFiles: string[], bwrapSetupArgv: string[] }}
+ */
+export function validateOuterWrapFixture(obj) {
+  const err = (m) => new Error(`outer-wrap fixture invalid: ${m}`);
+  if (obj == null || typeof obj !== "object") throw err("not an object");
+  const f = obj;
+  if (f.schema !== "outer-bwrap-v1") throw err(`schema ${f.schema}`);
+  if (f.status !== "generated" && f.status !== "captured") throw err(`status ${f.status}`);
+  for (const key of ["prepDirs", "prepFiles", "bwrapSetupArgv"]) {
+    if (!Array.isArray(f[key]) || !f[key].every((t) => typeof t === "string")) {
+      throw err(`${key} must be a string array`);
+    }
+  }
+  // Prep entries MUST carry {{ROOT}} — the replay mkdir/touches them inside
+  // the canary container (which mounts the shared /workspaces volume rw);
+  // a bare absolute path would write outside the scratch root.
+  for (const key of ["prepDirs", "prepFiles"]) {
+    if (!f[key].every((t) => t.startsWith("{{ROOT}}"))) {
+      throw err(`${key} entries must start with {{ROOT}}`);
+    }
+  }
+  if (f.bwrapSetupArgv.length === 0) throw err("empty setup argv");
+  if (f.bwrapSetupArgv[f.bwrapSetupArgv.length - 1] !== "--") {
+    throw err("setup argv must end with '--' (it is followed by the payload)");
+  }
+  return f;
+}
+
+/**
+ * Substitute the outer fixture's `{{ROOT}}` placeholder. The whole derived
+ * state tree (workspace, home, plugin root) hangs off one scratch root so
+ * the replay creates it in one mkdtemp.
+ * @param {string[]} tokens
+ * @param {string} root
+ */
+export function substituteOuterRoot(tokens, root) {
+  return tokens.map((t) => {
+    const sub = t.replaceAll("{{ROOT}}", root);
+    // Traversal guard (same as normalizeCapturedArgv's checkNoTraversal): a
+    // fixture token like `{{ROOT}}/../x` substitutes into an escape path for
+    // prep dirs or bind sources.
+    if (t.includes("{{ROOT}}") && /(^|\/)\.\.(\/|$)/.test(sub)) {
+      throw new Error(`outer fixture path escapes root after substitution: ${t}`);
+    }
+    return sub;
+  });
+}
+
+/** The own-workspace path inside a substituted outer argv — the LAST
+ *  `--chdir` target (same convention as the founder probe). */
+export function outerWrapChdirTarget(argv) {
+  const i = argv.lastIndexOf("--chdir");
+  return i !== -1 ? argv[i + 1] : undefined;
+}
+
+/**
+ * Classify an outer-wrap replay. Distinguishes THREE failure shapes:
+ *   - EPERM building the mountns → sandbox_broken (the file-cap posture
+ *     regressed — the #5863 arm-F mechanism itself),
+ *   - the shared payload's FAIL markers → sandbox_broken (isolation
+ *     property violated — a sibling-bearing mount reached the namespace),
+ *   - anything else non-zero/missing → canary_infra_error (the #4941
+ *     false-rollback guard).
+ * @param {{ bwrapExitCode?: number | null, bwrapStdout?: string, bwrapStderr?: string, spawnErrorCode?: string }} [args]
+ */
+export function classifyOuterWrapReplayVerdict({
+  bwrapExitCode,
+  bwrapStdout = "",
+  bwrapStderr = "",
+  spawnErrorCode,
+} = {}) {
+  if (spawnErrorCode) {
+    return classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  }
+  if (bwrapExitCode === 0 && /^isolation_ok$/m.test(bwrapStdout)) {
+    // An isolation green built on the implicit-userns fallback is the WRONG
+    // mechanism: the arm needs the file-cap'd mountns (an outer userns is
+    // fatal to the inner sandbox — Phase 0 measurement). The deploy canary
+    // must report the elevation it actually took, not just that the table
+    // held — pass requires an explicit `elevation=privileged`; `userns` OR a
+    // missing marker (drifted payload) is sandbox_broken. The founder check
+    // tolerates userns explicitly; the canary does not.
+    if (/^elevation=privileged$/m.test(bwrapStdout)) {
+      return { verdict: "pass", reason: "ok" };
+    }
+    return {
+      verdict: "sandbox_broken",
+      reason: /^elevation=userns$/m.test(bwrapStdout)
+        ? "wrong_elevation_userns"
+        : "wrong_elevation_unreported",
+    };
+  }
+  // The payload's own verdict markers — a realized isolation VIOLATION is a
+  // sandbox verdict, never infra flake.
+  if (/^FAIL:/m.test(bwrapStdout) || bwrapStdout.includes("isolation_fail")) {
+    return { verdict: "sandbox_broken", reason: "isolation_probe_failed" };
+  }
+  const shared = classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  if (shared) return shared;
+  // bwrap ran the payload but it produced no verdict line — the probe
+  // could not have run its assertions; not an isolation signal.
+  return { verdict: "canary_infra_error", reason: "probe_output_missing" };
+}
+
+/**
+ * `--replay-outer` (deploy-time, report-only): replay the committed
+ * self-authored outer-wrap argv verbatim inside the canary container and
+ * run the shared isolation payload in the resulting namespace.
+ * `/usr/bin/bwrap` absolute — the same privileged binary the production
+ * spawn uses (never the PATH shim).
+ */
+function runOuterReplay(fixtureUrl) {
+  let fixture;
+  try {
+    fixture = validateOuterWrapFixture(
+      JSON.parse(readFileSync(fixtureUrl, "utf8")),
+    );
+  } catch (err) {
+    const code = err && err.code === "ENOENT" ? "fixture_missing" : "fixture_invalid";
+    emitVerdict({ verdict: "canary_infra_error", reason: code, arm: "outer-wrap" });
+    return 0;
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "canary-outer-wrap-"));
+  try {
+    // Prep the fixture's declared tree, then the sibling the probe asserts
+    // against (a REPLAY-time addition — never part of the mount table).
+    for (const d of substituteOuterRoot(fixture.prepDirs, root)) {
+      mkdirSync(d, { recursive: true });
+    }
+    for (const f of substituteOuterRoot(fixture.prepFiles, root)) {
+      mkdirSync(dirname(f), { recursive: true });
+      try {
+        writeFileSync(f, "", { flag: "wx" });
+      } catch (err) {
+        if (err?.code !== "EEXIST") throw err;
+      }
+    }
+    const argv = substituteOuterRoot(fixture.bwrapSetupArgv, root);
+    const own = outerWrapChdirTarget(argv);
+    // strict containment — a shared string prefix (`${root}XYZ`) is not under root.
+    if (!own || (own !== root && !own.startsWith(root + "/"))) {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: "fixture_no_chdir_target",
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+    const parent = dirname(own);
+    const sibling = join(parent, "ws-bbbb");
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, "marker.txt"), "sibling-canary\n");
+
+    const probe = readFileSync(INNER_PROBE_URL, "utf8");
+    const res = spawnSync(
+      "/usr/bin/bwrap",
+      [...argv, "/bin/bash", "-s", "--", parent, own, sibling],
+      { input: probe, encoding: "utf8", timeout: 60_000 },
+    );
+    const verdict = classifyOuterWrapReplayVerdict({
+      bwrapExitCode: res.status,
+      bwrapStdout: `${res.stdout ?? ""}`,
+      bwrapStderr: `${res.stderr ?? ""}`,
+      spawnErrorCode: res.error?.code,
+    });
+    emitVerdict({ ...verdict, arm: "outer-wrap" });
+    return 0;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `--smoke-outer <appRoot>` (CI, capture-gate job): the dep-bump smoke for
+ * #5863 T3.6. The vendored CLI's fs needs are empirical — every SDK bump
+ * can add a path the derived mount table misses — so on a bump we exec the
+ * REAL cli inside the REAL buildOuterWrapArgv table and assert it launches.
+ * The in-image env has no file-cap'd bwrap, so `--unshare-user` is added
+ * out front (the outer wrap itself stays mount-only; the smoke does not
+ * exercise the inner sandbox, which is the only thing an outer userns
+ * breaks — plan Phase-0 spike).
+ */
+async function runOuterSmoke(appRoot) {
+  const root = mkdtempSync(join(tmpdir(), "canary-outer-smoke-"));
+  try {
+    const ws = join(root, "workspaces", "ws-smoke");
+    const home = join(root, "home");
+    const plugin = join(root, "plugin");
+    mkdirSync(ws, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    mkdirSync(plugin, { recursive: true });
+
+    let buildOuterWrapArgv;
+    try {
+      ({ buildOuterWrapArgv } = await import(
+        new URL("../server/agent-outer-wrap.ts", import.meta.url).href
+      ));
+    } catch (err) {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: `outer_wrap_import_${err?.code ?? "failed"}`,
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+
+    let argv;
+    try {
+      argv = buildOuterWrapArgv({
+        workspacePath: ws,
+        home,
+        pluginPath: plugin,
+        appRoot,
+      });
+    } catch {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: "outer_wrap_argv_build_failed",
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+
+    // The vendored CLI the SDK spawns — the dep-bump surface under test.
+    // `bin/claude.exe` is only the "native binary not installed" stub; the
+    // SDK resolves the platform-native package directly, so the smoke must
+    // too: @anthropic-ai/claude-code-<platform>-<arch>/claude. Scan for a
+    // sibling package as fallback so a rename is loud, not a silent miss.
+    const nmAi = join(appRoot, "node_modules", "@anthropic-ai");
+    const named = join(
+      nmAi,
+      `claude-code-${process.platform}-${process.arch}`,
+      "claude",
+    );
+    let cli = existsSync(named) ? named : undefined;
+    if (!cli) {
+      try {
+        for (const d of readdirSync(nmAi)) {
+          const cand = join(nmAi, d, "claude");
+          if (d.startsWith("claude-code-") && existsSync(cand)) {
+            cli = cand;
+            break;
+          }
+        }
+      } catch {
+        // nmAi unreadable — cli stays undefined, infra verdict below.
+      }
+    }
+    if (!cli) {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: "cli_binary_missing",
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+
+    // HOME must point at the bound scratch home — inheriting /root (the
+    // in-image user) leaves the CLI's config dir unmounted → cli_exit_1.
+    const res = spawnSync("/usr/bin/bwrap", ["--unshare-user", ...argv, cli, "--version"], {
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, HOME: home, TMPDIR: "/tmp" },
+    });
+    let verdict;
+    if (res.error) {
+      verdict = {
+        verdict: "canary_infra_error",
+        reason: `bwrap_spawn_${String(res.error?.code ?? "error").toLowerCase()}`,
+      };
+    } else if (res.status === 0) {
+      verdict = { verdict: "smoke_ok", reason: "ok" };
+    } else if (/operation not permitted|no permissions to create new namespace/i.test(`${res.stderr ?? ""}`)) {
+      // In-image envs that forbid unprivileged userns land here (bwrap's
+      // denial text is "No permissions to create new namespace" — NOT the
+      // EPERM phrase; both shapes must classify) — infra, not a mount-table
+      // defect (the deploy replay is the EPERM signal).
+      verdict = { verdict: "canary_infra_error", reason: "bwrap_operation_not_permitted" };
+    } else {
+      // The CLI started and failed INSIDE the wrap — the case this smoke
+      // exists for: the bumped CLI needs a path the table does not bind.
+      verdict = {
+        verdict: "smoke_fail",
+        reason: `cli_exit_${res.status ?? "null"}`,
+      };
+    }
+    emitVerdict({ ...verdict, arm: "outer-wrap" });
+    return 0;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // Reserved exit code for a capture-MECHANISM failure (model never spawned
 // bwrap, query() threw, import failed, secret-scrub reject). Distinct from the
 // taken codes — 0 (replay verdict-is-payload), 2 (env/usage error), 3 (legacy
@@ -1492,16 +1838,24 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
 
 async function main(argv) {
   const mode = argv.find((a) => a.startsWith("--"))?.slice(2) ?? "replay";
-  const fixtureArg = argv.find((a) => !a.startsWith("--"));
-  const fixtureUrl = fixtureArg
-    ? pathToFileURL(fixtureArg)
+  const positional = argv.find((a) => !a.startsWith("--"));
+  const defaultFixture =
+    mode === "replay-outer" ? DEFAULT_OUTER_FIXTURE_URL : DEFAULT_FIXTURE_URL;
+  const fixtureUrl = positional
+    ? pathToFileURL(positional)
     : (process.env.SANDBOX_CANARY_FIXTURE
         ? pathToFileURL(process.env.SANDBOX_CANARY_FIXTURE)
-        : DEFAULT_FIXTURE_URL);
+        : defaultFixture);
 
   switch (mode) {
     case "replay":
       return runReplay(fixtureUrl);
+    case "replay-outer":
+      return runOuterReplay(fixtureUrl);
+    case "smoke-outer":
+      // Positional is the app root (default /app — the prod image layout;
+      // the in-image verify passes /build).
+      return runOuterSmoke(positional ?? "/app");
     case "capture":
       return runCapture(fixtureUrl, { verify: false });
     case "verify":

@@ -2911,6 +2911,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         workspacePath: agentWorkspacePath,
         pluginPath,
         mode,
+        // #5863 — outer-wrap rollout cohort key + log correlation.
+        workspaceId: activeWorkspaceId,
+        sessionId: args.sessionId ?? undefined,
         credential,
         serviceTokens,
         // Issue A — minted GH_TOKEN (or undefined when no repo connected).

@@ -295,6 +295,7 @@ export function buildAgentSandboxConfig(
   // boot, so a missing root is a vanished-mount fault worth paging on
   // (the signal the deleted `degraded` arm carried; restored here as a
   // cheap existence bit, not enumeration).
+  //
   // #9725 (ADR-068 aftermath): the deny set is every root where tenant
   // working trees can live — workspaceTenantDenyRoots() returns the volume
   // root AND the raw worktree root UNCONDITIONALLY (the flag-collapsed form
@@ -303,6 +304,13 @@ export function buildAgentSandboxConfig(
   // while sibling trees sit readable under /var/lib/soleur/worktrees).
   // Constant per dispatch (roots, not dir entries), so the mid-session
   // TOCTOU posture is unchanged.
+  // #5863 (T2.4): this deny also stays unconditional while `AGENT_OUTER_WRAP`
+  // exists — it is load-bearing on the flag-off arm (the inner sandbox is
+  // the only boundary there) and vestigial under the wrap (the outer mount
+  // table never carries sibling paths at all; a deny against an absent
+  // landing is a builder skip). Removal is the flag-deletion follow-up
+  // (#9798), never part of this PR — the `denyRead` arm must not fork
+  // per-flag.
   const denyRoots = workspaceTenantDenyRoots();
   const denyRootsExist = denyRoots.map((root) => existsSync(root));
   denyRoots.forEach((root, i) => {

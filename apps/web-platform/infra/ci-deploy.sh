@@ -356,7 +356,12 @@ fan_out_to_peers() {
 
   local payload sig
   payload=$(jq -cn --arg cmd "${SSH_ORIGINAL_COMMAND:-}" '{command:$cmd}')
-  sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" | sed 's/.*= //')
+  # The key rides the python3 child's ENVIRONMENT only (owner-only /proc/<pid>/environ), never argv.
+  sig=$(printf '%s' "$payload" | HMAC_KEY="$secret" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || sig=""
+  if [[ ! "$sig" =~ ^[0-9a-f]{64}$ ]]; then
+    logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or the signer failed) — not forwarding an unsigned request"
+    return 1
+  fi
 
   local rc=0 peer code _peer_arr
   IFS=',' read -ra _peer_arr <<< "$peers_csv"
@@ -366,8 +371,7 @@ fan_out_to_peers() {
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
     # The HMAC SIGNATURE header goes in on curl's stdin config channel, never its argv
     # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
-    # Known remaining site: the shared secret itself is openssl's -hmac argument above
-    # (the deferred `openssl dgst -hmac` class in lint-shell-trace-credential-refusal.py).
+    # The shared secret is likewise environment-only (see the signer above).
     code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
@@ -419,6 +423,21 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 # durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
 # cat-deploy-state.sh sandbox_canary_json().
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+# #5863 arm F: the outer-wrap canary gets its OWN durable soak state — same
+# cross-deploy accumulator shape as the inner canary but a separate ledger so
+# the two arms' soak windows never alias. Report-only at first deploy
+# (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
+# file via /hooks/deploy-status's outer_wrap_canary field.
+SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
+# Aliasing guard: an env override pointing the outer ledger at the inner file
+# would let the #5863 soak read the #8752 arm's state (wrong mechanism's
+# greens counting toward promotion). Warn AND skip the outer arm entirely —
+# interleaved writes under one file is worse than a missing arm.
+OUTER_LEDGER_ALIAS=0
+if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
+  OUTER_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer canary SKIPPED: aliasing would let the inner ledger's greens count toward the #5863 soak; fix the env override"
+fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # Cross-workspace isolation probe verdict (#2640). Written per deploy by
@@ -658,12 +677,12 @@ write_cron_drain_state() {
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
 write_sandbox_canary_state() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}" tmp now prior_pass prior_first
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" tmp now prior_pass prior_first
   now="$(date +%s)"
   prior_pass=0; prior_first=0
-  if [[ -f "$SANDBOX_CANARY_STATE_FILE" ]]; then
-    prior_pass="$(jq -r '.consecutive_pass // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
-    prior_first="$(jq -r '.first_pass_at // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
+  if [[ -f "$state_file" ]]; then
+    prior_pass="$(jq -r '.consecutive_pass // 0' "$state_file" 2>/dev/null || echo 0)"
+    prior_first="$(jq -r '.first_pass_at // 0' "$state_file" 2>/dev/null || echo 0)"
     [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
     [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
   fi
@@ -678,13 +697,13 @@ write_sandbox_canary_state() {
     *)
       consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
   esac
-  tmp="$(mktemp "${SANDBOX_CANARY_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
+  tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
     --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$now" \
     --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
     '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-  mv "$tmp" "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$state_file" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
 }
 
@@ -692,14 +711,14 @@ write_sandbox_canary_state() {
 # signal #5873 lacked (hr-no-ssh-fallback-in-runbooks: never journald-only). Best-
 # effort + env-guarded, mirrors report_cron_drain_timeout. Fail-open under set -e.
 sandbox_canary_sentry_event() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}"
-  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (faithful canary; legacy probe gated the deploy)"
+  local verdict="$1" reason="$2" sdk_version="${3:-}" op="${4:-sandbox-canary}"
+  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (op=$op; report-only canary, never gated)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" \
-      '{message: ("faithful sandbox canary " + $v + " (" + $r + ") — SDK " + $s),
+    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg o "$op" \
+      '{message: (($o | sub("^sandbox-canary"; "sandbox canary"; "i")) + " " + $v + " (" + $r + ") — SDK " + $s),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: $v},
+        tags: {feature: "agent-sandbox", op: $o, verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
     curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
@@ -1398,8 +1417,10 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# zot v2.1.22 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
-# MEASURED 2026-10-08 by running the pinned image locally against this config (#9252):
+# zot, with this repo's exact accessControl. The version, the date and the re-measurement status of
+# the claim below live in zot-image.provenance.md, '## Version-scoped claim register' (row 1), not
+# here: this file feeds triggers_replace, so a version or date in it would make every zot bump edit it.
+# The measurement (#9252) was made by running the pinned image locally against this config:
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:
@@ -2663,7 +2684,12 @@ verify_image_signature() {
 # "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
-run_faithful_sandbox_canary() {
+# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the shared
+# canary runner — one copy of the false-rollback guard (docker/exec failures
+# classify canary_infra_error, never sandbox_broken) for both replay arms.
+# Each arm's soak lives in its own state file.
+run_canary_replay() {
+  local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
   local verdict reason sdk_version exec_rc out err_file docker_err
   # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
   # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
@@ -2675,7 +2701,7 @@ run_faithful_sandbox_canary() {
   set +o pipefail
   # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed docker exec
   # aborts before the read, leaving the infra classification below unreachable.
-  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"; then
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" "$mode_flag" 2>"$err_file")"; then
     exec_rc=0
   else
     exec_rc=$?
@@ -2689,6 +2715,7 @@ run_faithful_sandbox_canary() {
     verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"; sdk_version=""
   else
     verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    verdict="${verdict:-canary_infra_error}" # empty docker-exec stdout → empty jq output, never a silent ""
     reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
     # sandbox-canary.mjs emits the SDK version as the camelCase key `sdkVersion`
     # (JS-idiomatic); this deploy-state chain is snake_case, so translate at the
@@ -2698,15 +2725,37 @@ run_faithful_sandbox_canary() {
     sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
-  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version"
-  echo "Faithful sandbox canary (non-blocking): verdict=$verdict reason=$reason"
-  # Page only on a faithful FAIL (sandbox_broken) — the disagreement signal.
-  # canary_infra_error is expected during dark-launch (fixture not yet captured)
-  # and must not page.
+  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file"
+  echo "$label: verdict=$verdict reason=$reason"
+  # Page only on a sandbox_broken verdict — canary_infra_error is expected
+  # during dark-launch (fixture not yet captured) and must not page.
   if [[ "$verdict" == "sandbox_broken" ]]; then
-    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" || true
+    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
   fi
   return 0
+}
+
+run_faithful_sandbox_canary() {
+  # Faithful inner canary (#5875 / ADR-079): NON-BLOCKING dark-launch. Runs
+  # the SDK-captured split-unshare argv the legacy probe does not exercise
+  # (that gap is why #5849 shipped green).
+  run_canary_replay "--replay" "$SANDBOX_CANARY_STATE_FILE" "sandbox-canary" \
+    "Faithful sandbox canary (non-blocking)"
+}
+
+# run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
+# Replays the SELF-AUTHORED outer mount-table fixture inside the canary
+# container (the file-cap'd /usr/bin/bwrap posture the prod wrap depends on)
+# and runs the shared isolation payload in the resulting namespace. Its
+# verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
+# #5863 soak follow-through; promotion to gating is a separate change after
+# a green soak.
+run_outer_wrap_canary() {
+  if [[ "$OUTER_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into the inner ledger
+  fi
+  run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
+    "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
 }
 
 # run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
@@ -3973,6 +4022,11 @@ case "$COMPONENT" in
     # pdf-linearize tempfiles and keeps /tmp ephemeral. Post-GIT_ASKPASS
     # migration (git-auth.ts), git no longer writes credential helpers
     # under /tmp — the askpass script lives in $HOME instead.
+    # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
+    # (never effective — the app runs as non-root soleur) so the file-cap'd
+    # /usr/bin/bwrap can elevate at exec. Without it the wrap falls back to
+    # implicit userns — the arm Phase 0 measured fatal to the inner sandbox —
+    # and the outer-wrap canary would measure the wrong elevation path.
     docker run -d \
       --name soleur-web-platform-canary \
       --log-driver journald \
@@ -3982,6 +4036,7 @@ case "$COMPONENT" in
       --init \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+      --cap-add SYS_ADMIN \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
@@ -4229,6 +4284,8 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+      # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
+      run_outer_wrap_canary || true
 
       # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
       # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
@@ -4313,6 +4370,11 @@ case "$COMPONENT" in
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
+      # #5863 arm F: --cap-add SYS_ADMIN grants SYS_ADMIN in the BOUNDING set
+      # (never effective — the app runs as non-root soleur) so the file-cap'd
+      # /usr/bin/bwrap can elevate at exec — same posture cloud-init.yml's
+      # first-boot run grants; every subsequent deploy re-creates the
+      # container HERE.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \
@@ -4322,6 +4384,7 @@ case "$COMPONENT" in
         --init \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+        --cap-add SYS_ADMIN \
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
