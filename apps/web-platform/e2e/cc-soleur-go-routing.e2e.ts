@@ -1,6 +1,7 @@
 // pyramid-justified: WS frames injected via attachWsInjector (page.route
 // `**/ws`) on the real client; routing/cost state is asserted on rendered
-// WorkflowLifecycleBar DOM — needs a real browser.
+// WorkflowLifecycleBar DOM and the composer glyph assertions measure real
+// bounding boxes (GLYPH_VIEWPORTS/expectBoxAtLeast) — needs a real browser.
 //
 // PR-B (#2939) Stage 6 — cc-soleur-go routing/cost/UX smoke regression net.
 //

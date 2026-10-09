@@ -115,26 +115,11 @@ test.describe("OTP callback error handling", () => {
     ).toBeVisible({ timeout: 10_000 });
   });
 
-  test("/callback without code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
-  });
-
-  test("/callback with invalid code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback?code=invalid-code", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
-  });
 });
+
+// Request-only /callback redirect cases live at the unit layer:
+// test/app/auth/callback-route-branches.test.ts covers bare-?code and
+// invalid-code exchange failures with branch-precision assertions.
 
 test.describe("Login no-account redirect", () => {
   test("submitting unknown email on /login redirects to /signup with prefill + banner", async ({

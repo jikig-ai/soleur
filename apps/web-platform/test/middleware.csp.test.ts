@@ -130,11 +130,34 @@ describe("middleware CSP wire (demoted from e2e/smoke.e2e.ts)", () => {
     expect(res.headers.get("x-middleware-request-x-nonce")).toBe(nonce);
   });
 
+  // #1075 regression: the dev-env arms below discriminate "forwarded host
+  // consulted" from "forwarded host ignored" — every rejection path in
+  // resolveOrigin falls back to app.soleur.ai, so asserting on the trusted
+  // prod host is vacuous (fallback produces the same appHost). Instead the
+  // forwarded value is an allowlisted DEV origin (http://localhost:3000,
+  // validate-origin.ts buildDevOrigins) distinct from the fallback: the
+  // ws://localhost:3000 connect-src token appears only when x-forwarded-*
+  // wins resolution. Host is deliberately a non-allowlisted value.
   test("trusted x-forwarded-host lands in connect-src (regression for #1075)", async () => {
+    vi.stubEnv("NODE_ENV", "development");
     const res = await middleware(
-      makeRequest("/login", { "x-forwarded-host": "app.soleur.ai" }),
+      makeRequest("/login", {
+        host: "internal.invalid:3000",
+        "x-forwarded-host": "localhost:3000",
+        "x-forwarded-proto": "http",
+      }),
     );
-    expect(cspOf(res)).toContain("app.soleur.ai");
+    expect(cspOf(res)).toContain("ws://localhost:3000");
+  });
+
+  test("control: same request without x-forwarded-host falls back to app.soleur.ai", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const res = await middleware(
+      makeRequest("/login", { host: "internal.invalid:3000" }),
+    );
+    const csp = cspOf(res);
+    expect(csp).not.toContain("ws://localhost:3000");
+    expect(csp).toContain("ws://app.soleur.ai");
   });
 
   test("spoofed x-forwarded-host is rejected", async () => {

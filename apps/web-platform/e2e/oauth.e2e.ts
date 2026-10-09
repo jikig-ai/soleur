@@ -13,7 +13,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("OAuth buttons on login page", () => {
   test("login page renders OAuth provider buttons", async ({ page }) => {
-    const response = await page.goto("/login");
+    await page.goto("/login");
     // Skip if the dev server returned an error page (CSS compilation failure in worktree)
     const html = await page.content();
     test.skip(html.includes("statusCode\":500"), "Dev server CSS compilation error — skipped in worktree, passes in CI");
@@ -25,7 +25,7 @@ test.describe("OAuth buttons on login page", () => {
   });
 
   test("login page renders 'or' divider", async ({ page }) => {
-    const response = await page.goto("/login");
+    await page.goto("/login");
     const html = await page.content();
     test.skip(html.includes("statusCode\":500"), "Dev server CSS compilation error");
 
