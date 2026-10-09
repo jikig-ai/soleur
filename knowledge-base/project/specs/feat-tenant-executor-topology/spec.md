@@ -94,6 +94,27 @@ capacity/placement.
 | **2** | Executor hosts; cron/eval fleet migration; `CRON_WORKSPACE_ROOT` off tenant mount | Evidence: #5417 residue and/or concurrency tripwire; ADR-243 reconciled; non-`prd` secret path | Fleet off tenant-serving host |
 | **3** | Legacy-runner tool triage; tenant placement via ADR-068 | Phase 3 GA (git-data cutover) | Tenant sessions placeable across executor hosts |
 
+## Build vs Adopt (web survey 2026-10-09)
+
+Sources are vendor docs and repos read by research agents; unverified items must
+be re-checked before the ADR cites them. Bottom line: **adopt the runtime, adapt
+Anthropic's documented patterns, build only the supervisor glue.**
+
+| Component | Decision | Basis |
+|---|---|---|
+| Sandbox runtime | **Adopt** gVisor `runsc` (systrap) | Only non-shared-kernel option that survives Hetzner Cloud's no-nested-virt. Anthropic's secure-deployment guide reports ~2x on simple syscalls and 10-200x on open/close-heavy I/O, and the CLI plus git is I/O-heavy, so **S1 must gate on a file-I/O benchmark**. |
+| Launch/reap | **Adopt** containerd with `io.containerd.runsc.v1`; **build** the thin reaper (reap-on-parent-death, restart reconcile, egress netns wiring) | Removes custom runc/shim code; Nomad containerd driver stale; Podman+runsc rootless has open issues (unverified). |
+| Protocol | **Adapt** the shape of Anthropic's Managed Agents self-hosted worker contract (claim, per-session secret, drain, reclaim, SIGTERM teardown; outbound-only; one environment key per trust boundary) | Do not adopt the product: its model loop runs at Anthropic, so it does not give loop-inside-sandbox and adds a vendor. ACP is editor interop only. |
+| Credential broker | **Adapt** Anthropic's documented pattern (sandbox with no network, unix-socket bridge to a host proxy that injects the credential via `ANTHROPIC_BASE_URL`); **build** a thin injector (one header, SSE pass-through, usage parse) | Node `fetch` ignores `HTTP(S)_PROXY` unless `NODE_USE_ENV_PROXY=1` on Node 24+; cover in every tool runtime. LiteLLM avoided (commercial-licensed enterprise features, DB for virtual keys). Anthropic's `sandbox-runtime` socket bridge is reusable **inside** the sandbox, not as the tenant boundary. |
+| Multi-tenant SDK hygiene | **Adopt** Anthropic's guidance: `settingSources: []`, per-tenant `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, per-tenant `cwd`, explicit tool allowlist | Repo-created `.claude/settings.json` hooks have been a host-escape class (cited CVE-2026-25725; unverified). |
+| Resume/transcripts | **Adopt** Agent SDK `SessionStore` adapters + its conformance-suite pattern | Mirror, not a full store. |
+| Orchestrator | **Spike** (S0): bespoke supervisor vs k3s + runsc + `agent-sandbox` (v1.0.x) | Decision rule in S0. Managed vendors: no (US vendors = new Art. 28 sub-processors, no Hetzner BYOC, exit cost). |
+| Rejected | E2B/microsandbox (need KVM; E2B self-host AWS/GCP only), Daytona (archived 2026-10-03, AGPL), Cloudflare Sandbox (hosted-only), Sysbox, Firecracker managers (need KVM) | |
+
+Cited, unverified, to re-check in S1: a gVisor CUSE device-node escape
+(CVE-2026-96812, fix at commit `573a9e7`, no release named) - pin `runsc` past the
+fix and reject image-supplied device nodes.
+
 ## Threat Model (Stage-0 deliverable; seed list)
 
 Adversaries: (A1) malicious tenant or prompt-injected agent with full tool use
