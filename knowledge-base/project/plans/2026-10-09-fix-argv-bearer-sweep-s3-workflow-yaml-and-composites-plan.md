@@ -12,6 +12,23 @@ requires_cpo_signoff: true
 
 Spec lacks valid lane: defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09
+**Gates run (mechanically):** User-Brand Impact 4.6 (section present, threshold `single-user incident`); Observability 4.7 (all five fields present, `python3` is an allowlisted probe verb, no `ssh`, the command runs in about 0.5 s against the lint, `expected_output` is the literal `OK:`); PAT sweep 4.8 (no hit); Guard Contract 4.11 (`lint-guard-contract.py` green, 2 entries); Scope Check 4.12 (one unfenced section, `Recommendation:` present, no block marker); rule-id check (`cq-write-failing-tests-before` and `hr-observability-layer-citation` active; `wg-architecture-decision-is-a-plan-deliverable` migrated and active); issue and PR citation check (#9597, #7797, #9755, #9756, #9757, #8593, #8800, #3321, #9294 open; #9674, #9753, #9736, #9632 merged; PRs 9785, 9794, 9787, 9529, 7999, 9784, 9801, 9811 open). Not triggered: UI wireframe 4.9, Encryption Posture 4.10 (no store or connection), Downtime 4.55 (no serving surface goes offline), network-outage 4.5 (no trigger term as a symptom; the strings only name existing code).
+**Reviewers (already run before this pass, report-only):** DHH, Kieran, code-simplicity, architecture-strategist, spec-flow and CPO; their findings are in "Plan Review Revisions". This pass added targeted verification instead of repeating those seats.
+
+### Key Improvements
+
+1. The ADR ordinal in D12 was wrong against live state: `origin/main` tops out at ADR-277, but open PRs 9529 and 9787 already carry ADR-278 and ADR-279 files. The ordinal is now 280 (provisional) and the check is "every open PR's files", not only the refs.
+2. A precedent diff against the two existing in-tree stdin-config wrappers (`_bearer_curl`/`_sig_curl` in `scripts/cutover-inngest.sh` and the `check-deploy-script-parity.sh` HMAC block) is recorded under "Precedent diff", so the library is a deliberate generalization with named differences, not a fresh pattern.
+3. Every citation was re-resolved live (state, merge, ADR ordinal, push-path filters) in this pass; none was carried from memory.
+
+### New Considerations Discovered
+
+- `version-bump-and-release.yml` calls `reusable-release.yml` (confirmed in the workflow text), so the plugin-test edit does fire a release run; the plan already says so, and this pass found no way to avoid it.
+- The ADR ordinal race is real on this branch: two open PRs hold the next two ordinals.
+
 ## Overview
 
 Slice S3 of the argv-credential sweep (tracker #9597, parent #7797). S1 (#9674) widened Rule E to workflow, composite-action and
@@ -147,7 +164,22 @@ drift emails, rule-audit, kb-drift, terraform-drift sweep); (4) rehearsal workfl
 
 **D12. An ADR records the contract (a plan deliverable, not a follow-up).** The library is a cross-cutting invariant five slices and 24 alert-path steps depend on: credentials reach curl on its
 stdin config through `scripts/lib/bearer-curl.sh`; a refusal must land in the same verdict class as the old failure; a missing library is a hard failure, never an argv fallback. Status `adopting`;
-ordinal provisional (next free on `main` is 278; re-verify against `origin/*` and at ship).
+ordinal provisional (the highest ordinal on `origin/main` is 277; open PRs 9529 and 9787 already claim 278 and 279, so 280 is the next free; re-verify against `origin/*` and every open PR's files, and again at ship).
+
+## Precedent diff (pattern-bound behaviors)
+
+The library generalizes two precedents already on `main`; the differences are deliberate and named.
+
+| Behavior | `scripts/cutover-inngest.sh` (`_bearer_curl`, `_sig_curl`) | `scripts/check-deploy-script-parity.sh` (S2 HMAC block) | `scripts/lib/bearer-curl.sh` (this plan) |
+|---|---|---|---|
+| Shape guard | `_bearer_ok` per value, inline copy | `_bearer_ok` inline copy, `_refuse` exits 2 | `bc_ok`, one copy, called from `_bc_send` for every spec |
+| Refusal | `return 2`, marker `script=cutover-inngest` | `exit 2`, marker `script=check-deploy-script-parity` | `return 2` (a sourced library never `exit`s), caller-supplied `script=` name |
+| Transport flags | `--disable --noproxy '*' --max-time 60` | `--disable --noproxy '*' --proto '=https'` | `--disable --noproxy '*'`, **no default timeout** (byte-neutral), caller adds `--max-time` and `--proto` |
+| Header feed | `--config - < <(printf ...)` | `--config - < <(printf ...)` | the same process substitution |
+| HMAC | not in the wrappers (inline python snippet per site) | inline python snippet, `|| HMAC=""`, 64-hex check | `bc_hmac_sha256_hex` (one copy of the same snippet, byte-pinned by the suite) |
+| xtrace | script-level refusal | script-level refusal | per-function refusal (a sourced library cannot rely on the caller's prologue) |
+
+No precedent exists for a **sourced workflow-side credential library**; that part is novel, which is why the plan adds the closure lint (usable checkout, no `pull_request_target`), the library-absent rows and ADR-280.
 
 ## Research Reconciliation: brief and tracker text vs. codebase
 
@@ -274,7 +306,7 @@ needing the lead's go; (5) separable commits (D11); (6) rotation not claimed (ab
 
 ### ADR
 
-Create **ADR-278** (provisional ordinal; re-verify the next free number against every `origin/*` ref and again at ship) via `soleur:architecture`, status `adopting`, in Phase 7 as a plan task (D12): credentials
+Create **ADR-280** (provisional ordinal; re-verify the next free number against every `origin/*` ref and again at ship) via `soleur:architecture`, status `adopting`, in Phase 7 as a plan task (D12): credentials
 reach curl on stdin config through `scripts/lib/bearer-curl.sh`; the refusal contract (same verdict class as the old failure, marker value-free, rc 2, no site branches on rc 2); library absence is a hard failure; the
 alternatives considered are the 68 inline copies, a `$PATH` curl wrapper, and the argv-with-masking status quo. ADR-241 is not amended: S3 names no new `secrets.*` in any job, adds no Tier-B read and changes no tier
 classification.
@@ -322,7 +354,7 @@ None. The ADR describes the state this PR ships.
 | `canary-status.yml` plain checkout (D6) | — | inferred — dependency: "sourced only from the job's own checkout" requires a checkout in the one checkout-free job |
 | `plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh` env edit | — | inferred — dependency: the suite executes the composite's send step standalone and goes red (A1 to A4) without `GITHUB_WORKSPACE` |
 | `lint-workflow-local-action-checkout.py` extension (Phase 6) | — | inferred — enforcement contract: the library-source closure and the no-`pull_request_target` property are otherwise true by accident (CPO condition 3, architecture review) |
-| ADR-278 (D12) | — | inferred — enforcement contract: `wg-architecture-decision-is-a-plan-deliverable`; a cross-cutting contract five slices and 24 alert-path steps depend on |
+| ADR-280 (D12) | — | inferred — enforcement contract: `wg-architecture-decision-is-a-plan-deliverable`; a cross-cutting contract five slices and 24 alert-path steps depend on |
 | `rule-audit.yml` anonymous-token conversion (D10) | "workflow YAML that cannot fire production on merge (workflow_dispatch / schedule ..." | asked (file is in the baseline and the trigger class) |
 | Battery stage S3 (`tests/scripts/test-argv-bearer-sweep.sh`) and baseline/ceiling edits | "a guard-before-curl battery row per converted site" [issue #9597] | asked |
 | `lint-shell-trace-credential-refusal.py` docstring edit | — | inferred — enforcement contract: the lint docstring records the converted file classes and the keying decision (D8) or it rots |
@@ -397,7 +429,7 @@ the per-phase gate is the explicit-path run, and the baseline must not be regene
 4. Toolchain: `docker run --rm ubuntu:24.04 bash -c 'bash --version | head -1; command -v python3 curl jq openssl'` and record versions (bash 5.2.21 / curl 8.5.0 expected); python3 must be present for D4.
 5. Verify the inngest-health `secret_unset` routing: the `liveness-probe` issue class, its dedupe (one open issue per class) and the re-open behaviour, so a sustained refusal cannot file an issue every 15 minutes. Revert trigger recorded in the PR body:
    the first scheduled tick that turns red because of a refusal marker reverts the PR.
-6. Next free ADR ordinal against every `origin/*` ref; draft the RED rows (library suite, battery, plugin-test env row, lint extension) and record RED counts.
+6. Next free ADR ordinal against `origin/main`, every `origin/*` ref and every open PR's files (`gh pr list --state open --json number,files`; PRs 9529 and 9787 hold 278 and 279 today); draft the RED rows (library suite, battery, plugin-test env row, lint extension) and record RED counts.
 
 ### Phase 1: the library, its suite, the ADR and CODEOWNERS (commit 1)
 
@@ -407,7 +439,7 @@ python snippet byte-equal to the S2 canonical string; no default timeout. Suite 
 a one-shot Python `http.server` (request line, headers, body; byte-neutrality of the credential header versus the old `-H` form); hostile, empty and unset values for every spec position; the 0x01-0x7f byte sweep through real curl;
 `--disable` is the first operand; xtrace refusal; chokepoint census; HMAC oracle against `openssl dgst -hmac` for an empty body and a JSON body plus RFC 4231 vectors and the empty-key / python3-absent behaviour; the negative canary;
 floors in the form `if [[ $((PASS + FAIL)) -lt N ]]; printf 'anti-vacuity floor: ...'`. Run the suite with `trap '' PIPE`, with the config writer's stderr silenced **inside** the process substitution (`< <(printf ... 2>/dev/null)`).
-Add `/scripts/lib/bearer-curl.sh` and `/scripts/lib/bearer-curl.test.sh` to `.github/CODEOWNERS` (`@deruelle`). Create ADR-278 via `soleur:architecture` (D12).
+Add `/scripts/lib/bearer-curl.sh` and `/scripts/lib/bearer-curl.test.sh` to `.github/CODEOWNERS` (`@deruelle`). Create ADR-280 via `soleur:architecture` (D12).
 
 ### Phase 2: composites and the plugin-test fix (commit 2)
 
@@ -444,7 +476,7 @@ the scratch dir at run time). If the battery now reads any `knowledge-base/` fil
 
 ### Phase 7: docs and tracking inputs (commit 7)
 
-Update the Rule E docstring's S3 paragraph (converted file classes, the helper, the held-back file, the keying decision D8). Write ADR-278 final text (if not completed in Phase 1). Draft the tracker comments and the filed issues (Phase 10).
+Update the Rule E docstring's S3 paragraph (converted file classes, the helper, the held-back file, the keying decision D8). Write ADR-280 final text (if not completed in Phase 1). Draft the tracker comments and the filed issues (Phase 10).
 Add a one-line runbook note for the new `::warning::` in `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` only if the suite already pins its sentences; otherwise leave the runbook alone.
 
 ### Phase 8: verification on the runner userland
@@ -517,7 +549,7 @@ Rows leaving baseline E (files fully converted): `.github/actions/anthropic-pref
 - [ ] `lint-workflow-local-action-checkout.py` (extended) is green and its suite covers the new check (usable checkout including `scripts/lib/`; no `pull_request_target`).
 - [ ] The `anthropic-preflight` `PAYLOAD=` line is byte-identical to `origin/main`'s at the time of the last merge; if PR 9785 merged first, the merge resolved by keeping its model literal.
 - [ ] The marker drift guard and `c4-count-parity` pass; `EXPECTED_TESTS` in the battery was raised with the new rows and the new floors are in the harness form (`-lt N` literal, lower-case "anti-vacuity floor").
-- [ ] CODEOWNERS has rows for the library and its suite; `scripts/lint-orphan-test-suites.sh` is green; ADR-278 exists with status `adopting` and an ordinal re-verified at ship.
+- [ ] CODEOWNERS has rows for the library and its suite; `scripts/lint-orphan-test-suites.sh` is green; ADR-280 exists with status `adopting` and an ordinal re-verified at ship.
 - [ ] The two Better Stack callers print a `::warning::` on a refused read and their verdict output is byte-identical to before on a successful read (executed rows).
 - [ ] `Ref #9597` and `Ref #7797` present, no `Closes`; every issue the PR files is declared with `Filed: #N ...` and the net-issue-flow override carries one justification per issue; no plan or spec path and no `*-soak-*` name in the body.
 - [ ] CPO sign-off recorded; `soleur:engineering:review:user-impact-reviewer` ran at review time.
@@ -596,7 +628,7 @@ Layer citation (`hr-observability-layer-citation`): layer 1 (CI run logs and the
 Panel: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CPO (the 5-agent baseline plus CPO for the single-user threshold; CMO, UX and CTO lenses not relevant: no market, design or developer-surface change).
 Classification per ADR-084: engineering-panel findings with one right answer were applied (Mechanical); scope-shaped or reversible-judgment findings are persisted to the decision file (Taste / User-Challenge).
 
-- **Applied (mechanical):** the post-merge Better Stack criterion could not fail (replaced by run-log greps); the plugin release run is fired by one test-file edit (MERGE EFFECTS row, PR body line); `source` after the missing-key block and a `sent=false` failure arm in the notify composite; Phase 0 derives the stub-holder list (five more suites run green); `|| echo "000"` in the inngest-health probe would map a refusal to `inngest_down` (pre-guard before the loop); the `000000` curl quirk (real-curl rows); refusal on `notify-ops-email` as an `::error::` annotation; ordering of the baseline commit and later merges of main; counts stated as derived; first-run proof table with owner and deadline; Phase 0 gate step for CPO sign-off and the D3 choice; the `pull_request_target` assertion and library-source closure as a lint extension; GitHub-only secret shape measurement path; rc-2 collision with curl's init failure documented; ADR-278 as a plan deliverable; dropped the default `--max-time` (byte-neutral); one N-spec `bc_curl` instead of three wrappers; pre-guards only where a bare rc lands in a different arm; Guard 2 of the first draft (a restatement of Rule E) dropped; per-site rows scoped by class; reuse of the existing `CLASSIFIED` mechanism; remedy-text rewrite cut; plain checkout for `canary-status.yml`.
+- **Applied (mechanical):** the post-merge Better Stack criterion could not fail (replaced by run-log greps); the plugin release run is fired by one test-file edit (MERGE EFFECTS row, PR body line); `source` after the missing-key block and a `sent=false` failure arm in the notify composite; Phase 0 derives the stub-holder list (five more suites run green); `|| echo "000"` in the inngest-health probe would map a refusal to `inngest_down` (pre-guard before the loop); the `000000` curl quirk (real-curl rows); refusal on `notify-ops-email` as an `::error::` annotation; ordering of the baseline commit and later merges of main; counts stated as derived; first-run proof table with owner and deadline; Phase 0 gate step for CPO sign-off and the D3 choice; the `pull_request_target` assertion and library-source closure as a lint extension; GitHub-only secret shape measurement path; rc-2 collision with curl's init failure documented; ADR-280 as a plan deliverable; dropped the default `--max-time` (byte-neutral); one N-spec `bc_curl` instead of three wrappers; pre-guards only where a bare rc lands in a different arm; Guard 2 of the first draft (a restatement of Rule E) dropped; per-site rows scoped by class; reuse of the existing `CLASSIFIED` mechanism; remedy-text rewrite cut; plain checkout for `canary-status.yml`.
 - **Persisted to the decision file (Taste / User-Challenge):** D3 hold-back versus alternatives B and C (User-Challenge: drops lead-listed scope by default); `canary-status.yml` held back to S4 as the review proposed (User-Challenge: drops lead-listed scope); HMAC moves kept as `inferred` (Taste); the optional temporary verdict job for GitHub-only secrets and the optional active alert-path positive control (Taste: each needs the lead's go); the `rule-audit` anonymous-token conversion kept (Taste, review split two ways).
 
 ## Open Code-Review Overlap
@@ -633,7 +665,7 @@ anything under `apps/web-platform/**`; `scripts/cutover-inngest.sh` and `ci-depl
 
 - `scripts/lib/bearer-curl.sh`
 - `scripts/lib/bearer-curl.test.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-278-credentials-reach-curl-on-stdin-config-through-one-shared-library.md` (ordinal provisional)
+- `knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md` (ordinal provisional)
 
 ## Risks and Sharp Edges
 

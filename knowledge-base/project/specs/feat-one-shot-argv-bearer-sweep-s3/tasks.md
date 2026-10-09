@@ -12,14 +12,14 @@ committed-tree gates; baseline E regenerated only after the merge-from-main comm
 - 0.3 Credential-shape counts (value-free): Doppler-held classes by `case` glob; GitHub-only secrets by vendor format plus the live `sentry-audit-gate` run; optional temporary verdict job only with the lead's go.
 - 0.4 `docker run ubuntu:24.04`: record bash/curl versions and python3 presence.
 - 0.5 Verify `secret_unset` routing and issue dedupe in `scheduled-inngest-health.yml`; record the revert trigger.
-- 0.6 Check the next free ADR ordinal against every `origin/*` ref; write the RED rows for each phase; record RED counts.
+- 0.6 Check the next free ADR ordinal against `origin/main`, every `origin/*` ref and every open PR's files (278 and 279 are held by PRs 9529 and 9787; 280 provisional); write the RED rows for each phase; record RED counts.
 
 ## Phase 1: library, suite, ADR, CODEOWNERS (commit 1)
 
 - 1.1 `scripts/lib/bearer-curl.sh`: `bc_ok`, `bc_curl SCRIPT SPEC... -- args`, `bc_hmac_sha256_hex`, one `_bc_send`, xtrace refusal per credential-binding function (return 78), no `exit`, no default timeout, marker `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>`, return 2.
 - 1.2 `scripts/lib/bearer-curl.test.sh`: shim contract calibrated against `curl --libcurl`; loopback real-curl end to end; hostile/empty/unset per spec position; 0x01-0x7f byte sweep; `--disable` first; xtrace; chokepoint census; HMAC oracle (openssl, RFC 4231, empty key, python3 absent); negative canary; floors in harness form. Config-writer stderr silenced inside the process substitution; run with `trap '' PIPE`.
 - 1.3 CODEOWNERS rows for the library and its suite; `scripts/lint-orphan-test-suites.sh` green.
-- 1.4 ADR-278 via `soleur:architecture` (status adopting, ordinal re-verified).
+- 1.4 ADR-280 via `soleur:architecture` (status adopting, ordinal re-verified).
 
 ## Phase 2: composites and the plugin-test fix (commit 2)
 
@@ -52,7 +52,7 @@ committed-tree gates; baseline E regenerated only after the merge-from-main comm
 
 ## Phase 7: docs and tracking inputs (commit 7)
 
-- 7.1 Rule E docstring S3 paragraph and the D8 keying decision; finish ADR-278 text; draft tracker comments and issue bodies.
+- 7.1 Rule E docstring S3 paragraph and the D8 keying decision; finish ADR-280 text; draft tracker comments and issue bodies.
 
 ## Phase 8: runner-userland verification
 
