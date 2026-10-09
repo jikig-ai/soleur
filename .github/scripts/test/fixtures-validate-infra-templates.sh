@@ -12,6 +12,12 @@
 #   4 template<->.tf drift · 5 counter mismatch · 6 tooling absent
 #
 # When the SUT's contract changes, update this fixture in the same PR.
+#
+# One deliberate carve-out from "synthetic only": F23 copies the REAL registry
+# pair (cloud-init-registry.yml + zot-registry.tf) into a mktemp root and mutates
+# the COPY (#6509). The property under test — "this template renders under its own
+# call site" — cannot be synthesized. The mutation targets are DERIVED from the real
+# template at run time, so growth of apps/*/infra/ cannot rot the arms.
 
 set -uo pipefail
 
@@ -761,6 +767,139 @@ EOF
 run_check "$D"
 assert_rc "F22-empty-root-passes" 0
 assert_out "F22-emits-summary-line" "rendered+validated 0/0"
+
+# ---------------------------------------------------------------------------
+# F23 — the REAL registry template stays inside what the gate renders (#6509).
+# Real corpus copy, mutated copy. Populations are derived from the template:
+# distinct `${var}` references and distinct `$${TOKEN` escapes. The suite samples
+# the FIRST and LAST member of each; the one-time full sweeps are Phase 2
+# evidence in the PR that added this arm, not CI cost.
+# ---------------------------------------------------------------------------
+REPO_ROOT=$(cd "$DIR/../../.." && pwd)
+REG_SRC="$REPO_ROOT/apps/web-platform/infra"
+
+read -r -d '' REG_MUT_PY <<'PY'
+import re, sys
+mode, path = sys.argv[1], sys.argv[2]
+arg = sys.argv[3] if len(sys.argv) > 3 else ""
+s = open(path).read()
+CALL = 'templatefile("${path.module}/cloud-init-registry.yml"'
+if mode == "vars":
+    seen = []
+    for m in re.finditer(r"(?<!\$)\$\{([a-z_][a-z0-9_]*)\}", s):
+        if m.group(1) not in seen:
+            seen.append(m.group(1))
+    print("\n".join(seen))
+elif mode == "tokens":
+    seen = []
+    for m in re.finditer(r"\$\$\{([A-Za-z_][A-Za-z0-9_]*)", s):
+        if m.group(1) not in seen:
+            seen.append(m.group(1))
+    print("\n".join(seen))
+elif mode == "dropkey":
+    i = s.index(CALL)
+    m = re.compile(r"^[ \t]*" + re.escape(arg) + r"[ \t]*=.*\n", re.M).search(s, i)
+    if m:
+        s = s[: m.start()] + s[m.end():]
+    open(path, "w").write(s)
+elif mode == "undouble":
+    s2 = re.sub(r"\$\$\{" + re.escape(arg) + r"(?![A-Za-z0-9_])", "${" + arg, s, count=1)
+    open(path, "w").write(s2)
+elif mode == "undouble-pct":
+    open(path, "w").write(s.replace("%%{http_code}", "%{http_code}", 1))
+elif mode == "addvar":
+    open(path, "w").write(s + "\n# ${undeclared_var}\n")
+elif mode == "extrakey":
+    i = s.index(CALL)
+    j = s.index("\n", i) + 1
+    open(path, "w").write(s[:j] + '    zz_unused_key = "x"\n' + s[j:])
+PY
+
+reg_mut() { python3 -I -c "$REG_MUT_PY" "$@"; }
+
+# reg_root <name>: isolated root holding exactly the real registry pair.
+reg_root() {
+  local d="$TMP/$1"
+  mkdir -p "$d"
+  python3 -I -c 'import shutil, sys; [shutil.copy(f, sys.argv[1]) for f in sys.argv[2:]]' \
+    "$d" "$REG_SRC/cloud-init-registry.yml" "$REG_SRC/zot-registry.tf"
+  echo "$d"
+}
+
+# reg_check <arm> <root> <srcfile> <mutated-file>: run the gate; a mutation that
+# left the copy byte-identical to its source is a named failure, never a pass.
+reg_noop_guard() { # arm file src -> 0 if the mutation landed
+  if cmp -s "$2" "$3"; then
+    RC=0
+    OUT=""
+    bad "$1" "mutation was a no-op (copy identical to source)"
+    return 1
+  fi
+  return 0
+}
+
+# F23a — baseline: the real pair renders, by NAME, as the only member of its root.
+D=$(reg_root f23a)
+run_check "$D"
+assert_rc "F23a-registry-baseline-renders" 0
+assert_out "F23a-registry-named-ok" "ok  cloud-init-registry.yml"
+assert_out "F23a-registry-counted" "rendered+validated 1/1 file"
+
+mapfile -t REG_VARS < <(reg_mut vars "$REG_SRC/cloud-init-registry.yml")
+mapfile -t REG_TOKS < <(reg_mut tokens "$REG_SRC/cloud-init-registry.yml")
+if [[ "${#REG_VARS[@]}" -lt 2 || "${#REG_TOKS[@]}" -lt 2 ]]; then
+  RC=0
+  OUT=""
+  bad "F23-populations-derived" "derived ${#REG_VARS[@]} vars / ${#REG_TOKS[@]} tokens from the real template (need >= 2 each)"
+else
+  ok "F23-populations-derived"
+fi
+
+# F23b — a dropped map key reds. FIRST and LAST derived var.
+for v in "${REG_VARS[0]:-}" "${REG_VARS[${#REG_VARS[@]}-1]:-}"; do
+  [[ -n "$v" ]] || continue
+  D=$(reg_root "f23b-$v")
+  reg_mut dropkey "$D/zot-registry.tf" "$v"
+  reg_noop_guard "F23b-drop-$v" "$D/zot-registry.tf" "$REG_SRC/zot-registry.tf" || continue
+  run_check "$D"
+  assert_rc "F23b-drop-$v-reds" 2
+  assert_out "F23b-drop-$v-render-message" "terraform failed to render"
+  assert_out "F23b-drop-$v-names-key" "\"$v\""
+done
+
+# F23c — an un-doubled escape reds. FIRST and LAST derived token, plus %%{.
+for t in "${REG_TOKS[0]:-}" "${REG_TOKS[${#REG_TOKS[@]}-1]:-}" "%%{http_code}"; do
+  [[ -n "$t" ]] || continue
+  D=$(reg_root "f23c-${t//[^A-Za-z0-9_]/_}")
+  if [[ "$t" == "%%{http_code}" ]]; then
+    reg_mut undouble-pct "$D/cloud-init-registry.yml"
+  else
+    reg_mut undouble "$D/cloud-init-registry.yml" "$t"
+  fi
+  reg_noop_guard "F23c-undouble-$t" "$D/cloud-init-registry.yml" "$REG_SRC/cloud-init-registry.yml" || continue
+  run_check "$D"
+  assert_rc "F23c-undouble-$t-reds" 2
+  assert_out "F23c-undouble-$t-render-message" "terraform failed to render"
+done
+
+# F23d — an undeclared var in the template reds and is named.
+D=$(reg_root f23d)
+reg_mut addvar "$D/cloud-init-registry.yml"
+reg_noop_guard "F23d-undeclared-var" "$D/cloud-init-registry.yml" "$REG_SRC/cloud-init-registry.yml" && {
+  run_check "$D"
+  assert_rc "F23d-undeclared-var-reds" 2
+  assert_out "F23d-render-message" "terraform failed to render"
+  assert_out "F23d-names-var" "\"undeclared_var\""
+}
+
+# F23e — must-PASS, non-canonical: an UNUSED extra map key is tolerated. A gate or
+# harness that rejects everything fails here, so the reds above carry information.
+D=$(reg_root f23e)
+reg_mut extrakey "$D/zot-registry.tf"
+reg_noop_guard "F23e-extra-key" "$D/zot-registry.tf" "$REG_SRC/zot-registry.tf" && {
+  run_check "$D"
+  assert_rc "F23e-unused-extra-key-passes" 0
+}
 
 echo ""
 echo "Results: $PASS pass, $FAIL fail"
