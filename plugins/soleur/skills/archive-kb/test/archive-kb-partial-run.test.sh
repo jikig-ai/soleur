@@ -161,8 +161,8 @@ git -C "$d" add -A && git -C "$d" commit -qm work
 out="$( cd "$d" && bash "$SUT" --dry-run mything 2>&1 )"; rc=$?
 cases=$((cases + 1))
 if [[ "$rc" -eq 0 ]] \
-  && printf '%s' "$out" | grep -q 'plans/archive/.*-2026-01-02-topic-named-plan.md' \
-  && printf '%s' "$out" | grep -q 'specs/archive/.*-fix-mything'; then
+  && grep -q 'plans/archive/.*-2026-01-02-topic-named-plan.md' <<<"$out" \
+  && grep -q 'specs/archive/.*-fix-mything' <<<"$out"; then
   pass "diff-axis: topic-named plan + non-feat spec dir discovered"
 else
   fail "diff-axis discovery missed: rc=$rc out='$out'"
@@ -172,8 +172,8 @@ fi
 # archived the literal path `knowledge-base` (whole-tree git mv). Pin both
 # directions: dir present in output, bare `knowledge-base` artifact absent.
 cases=$((cases + 1))
-if printf '%s' "$out" | grep -q 'knowledge-base/project/specs/archive/.*-fix-mything$' \
-  && ! printf '%s' "$out" | grep -qE '(^| )archive/.*-knowledge-base$'; then
+if grep -q 'knowledge-base/project/specs/archive/.*-fix-mything$' <<<"$out" \
+  && ! grep -qE '(^| )archive/.*-knowledge-base$' <<<"$out"; then
   pass "diff-axis: specs collapse emits the dir, not the tree root"
 else
   fail "diff-axis collapse emitted a wrong artifact: '$out'"
@@ -200,8 +200,8 @@ git -C "$d" add -A && git -C "$d" commit -qm work
 out="$( cd "$d" && bash "$SUT" --dry-run other 2>&1 )"; rc=$?
 cases=$((cases + 1))
 if [[ "$rc" -eq 0 ]] \
-  && printf '%s' "$out" | grep -q 'plans/archive/.*-feat-other-plan.md' \
-  && ! printf '%s' "$out" | grep -q 'feat-sibling'; then
+  && grep -q 'plans/archive/.*-feat-other-plan.md' <<<"$out" \
+  && ! grep -q 'feat-sibling' <<<"$out"; then
   pass "diff-axis: M row on a sibling spec dir does NOT collapse it"
 else
   fail "diff-axis M-row over-collection: rc=$rc out='$out'"
