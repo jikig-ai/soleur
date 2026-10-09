@@ -431,10 +431,10 @@ assert old in s
 s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
-# #9534: a NEW web-1-only SSH dialer must be forced through the web-2 classification —
-# without it a running web-2 silently never receives the artifact.
+# #9534: a NEW web-1-only SSH dialer must be forced through the fleet-sibling
+# classification — without it a running sibling silently never receives the artifact.
 expect_red "M4h (§1: unclassified web-1-only dialer reds)" server.tf \
-  "unclassified=['phantom_w1_probe']" '
+  "uncovered=['phantom_w1_probe@web-2']" '
 old = "resource \"terraform_data\" \"egress_gateway_web2\" {"
 assert old in s
 s = s.replace(old, """resource "terraform_data" "phantom_w1_probe" {
@@ -442,6 +442,28 @@ s = s.replace(old, """resource "terraform_data" "phantom_w1_probe" {
   connection {
     type        = "ssh"
     host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    host_key    = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" { inline = ["set -e", "true"] }
+}
+
+""" + old, 1)
+'
+
+# #9534 N-host: a web-3 SSH dialer reds on EVERY guard at once — the host-pinning
+# allow-set, the fleet roster (dialers on undeclared hosts), and G2's host_key
+# allow-set. The roster is declared, not discovered, so a fleet grow is a deliberate
+# edit with all three tripwires live.
+expect_red "M4i (§1: a web-3 dialer hits the undeclared-host clause)" server.tf \
+  "dialers on undeclared hosts" '
+old = "resource \"terraform_data\" \"egress_gateway_web2\" {"
+assert old in s
+s = s.replace(old, """resource "terraform_data" "phantom_w3_probe" {
+  triggers_replace = { h = timestamp() }
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-3"].ipv4_address
     user        = "root"
     host_key    = local.web_1_ssh_host_key
   }
