@@ -270,7 +270,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
     if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
         ssh_resources[name] = body
 
-FLOOR_RESOURCES = 20  # +1 #9151: terraform_data.deploy_pipeline_fix_web2; +1 #9534: terraform_data.egress_gateway
+FLOOR_RESOURCES = 21  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -305,14 +305,18 @@ else:
        "CI genuinely gained another route, the forward, the firewall and the -target lists "
        "must change FIRST, and this check with them.")
 
-# The web-2 sibling class (#9151 / #7103-B4). Exactly one resource may dial web-2 today:
-# deploy_pipeline_fix_web2. A web-2 dialer MUST pin local.web_2_ssh_host_key (Guard 2's
-# per-host rule asserts the twin from the connection side; this side pins it from the
-# resource census, so deleting EITHER local reference reds here). It must NEVER carry the
-# credential material web-1 receives: the full-prd Doppler token, its .tmpl, or the push
-# plumbing. A copy-pasted infra_config_handler_bootstrap carries all three — the failure
-# that puts the prd credential on a host the issue explicitly scopes out of this change.
+# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly two
+# resources today: deploy_pipeline_fix_web2 and (#9534) egress_gateway_web2 — the latter
+# delivers the squid gateway to the RUNNING web-2 (replace-only delivery would leave an
+# entitled session on web-2 fail-closed until its next -replace). A web-2 dialer MUST pin
+# local.web_2_ssh_host_key (Guard 2's per-host rule asserts the twin from the connection
+# side; this side pins it from the resource census, so deleting EITHER local reference reds
+# here). It must NEVER carry the credential material web-1 receives: the full-prd Doppler
+# token, its .tmpl, or the push plumbing. A copy-pasted infra_config_handler_bootstrap
+# carries all three — the failure that puts the prd credential on a host the issue
+# explicitly scopes out of this change.
 W2_DIALERS = [n for n, b in ssh_resources.items() if re.search(DIAL_W2, b)]
+W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2"}
 w2_bad_key = [n for n in W2_DIALERS
               if not re.search(r'host_key\s*=\s*local\.web_2_ssh_host_key', ssh_resources[n])]
 # Credential-boundary token set, widened at review: a bare `doppler_token` covers
@@ -325,14 +329,14 @@ w2_bad_key = [n for n in W2_DIALERS
 W2_CRED_RE = r'doppler_token|DOPPLER_TOKEN|soleur-doppler-token|push-infra-config'
 w2_creds = [n for n in W2_DIALERS if re.search(W2_CRED_RE, ssh_resources[n])]
 w2_named = "deploy_pipeline_fix_web2" in W2_DIALERS
-if w2_named and not w2_bad_key and not w2_creds and len(W2_DIALERS) == 1:
-    ok(f"1: web-2 sibling deploy_pipeline_fix_web2 pins local.web_2_ssh_host_key and carries no credential material "
-       f"(exactly one web-2 dialer)")
+if w2_named and not w2_bad_key and not w2_creds and set(W2_DIALERS) == W2_ALLOWED:
+    ok(f"1: web-2 siblings {sorted(W2_ALLOWED)} pin local.web_2_ssh_host_key and carry no credential material "
+       f"(exactly {len(W2_ALLOWED)} web-2 dialers)")
 else:
-    no(f"1: web-2 sibling class broken: deploy_pipeline_fix_web2 present={w2_named}, "
+    no(f"1: web-2 sibling class broken: vetted={sorted(W2_ALLOWED)}, "
        f"web-2 dialers={sorted(W2_DIALERS)}, wrong-or-missing web_2 host_key={sorted(w2_bad_key)}, "
        f"credential-material references={sorted(w2_creds)}. "
-       "The sibling must be the ONLY web-2 dialer, must pin local.web_2_ssh_host_key, and must "
+       "Web-2 dialers must be exactly the vetted set, must pin local.web_2_ssh_host_key, and must "
        "never reference the prd credential under any spelling "
        "(var.doppler_token / webhook_doppler_token_env / soleur_doppler_token_env_b64 / "
        "SOLEUR_DOPPLER_TOKEN / soleur-doppler-token / push-infra-config).")

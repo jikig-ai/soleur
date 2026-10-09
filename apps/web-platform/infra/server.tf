@@ -2743,6 +2743,75 @@ resource "terraform_data" "egress_gateway" {
   }
 }
 
+# Same delivery to the RUNNING web-2 (#9534). Without this a running web-2
+# waits for its next -replace for the baked set, and an entitled session
+# landing there fails closed — safe, but silently dark on half the fleet.
+# Identical artifact set + order; only the host identity differs (web-2's
+# host key local is the #9393 deploy_pipeline_fix_web2 one).
+resource "terraform_data" "egress_gateway_web2" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/egress-gateway-squid.conf"),
+      file("${path.module}/egress-auth-helper.sh"),
+      file("${path.module}/egress-deny-cidrs.txt"),
+      file("${path.module}/egress-gateway-bootstrap.sh"),
+    ]))
+    server_id = hcloud_server.web["web-2"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-egress-gateway-web2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-squid.conf"
+    destination = "/usr/local/bin/egress-gateway-squid.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-auth-helper.sh"
+    destination = "/usr/local/bin/egress-auth-helper.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-bootstrap.sh"
+    destination = "/usr/local/bin/egress-gateway-bootstrap.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/egress-gateway-bootstrap.sh /usr/local/bin/egress-auth-helper.sh",
+      "bash /usr/local/bin/egress-gateway-bootstrap.sh",
+      # Re-run the nftables loader so the three gateway legs (forward accept,
+      # reply accept, SOLEUR-EGRESS-GW deny chain) install on the live host.
+      "systemctl restart cron-egress-firewall.service",
+    ]
+  }
+}
+
 locals {
   # #6604 step 7 — web-1's plaintext workspaces volume (105149570) was zeroed, read back,
   # detached and deleted, and its two addresses were forgotten from state (ADR-119 addendum;
