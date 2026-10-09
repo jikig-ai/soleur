@@ -228,7 +228,7 @@ fi
 # A standing guard: if any case above forgot its seam, this catches it.
 if [[ -z "$(find "$TMP_ROOT" -maxdepth 0 -newer /etc/fstab 2>/dev/null; true)" ]] || [[ -r /etc/fstab ]]; then
   # We only assert we created no backups next to the real file.
-  if find /etc -maxdepth 1 -name 'fstab.bak.20260727T1*' 2>/dev/null | grep -q .; then
+  if find /etc -maxdepth 1 -name 'fstab.bak.20260727T1*' 2>/dev/null | grep -c >/dev/null .; then
     fail "a test wrote a backup next to the REAL /etc/fstab"
   else
     pass "no test artifact was written next to the real /etc/fstab"

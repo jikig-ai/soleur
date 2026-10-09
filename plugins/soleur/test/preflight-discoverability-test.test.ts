@@ -2849,7 +2849,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
   // (Doppler soleur/prd_terraform) alone and grades web-2's readiness and probe rows. NO SUBSTITUTE: those rows land
   // only in the Logs warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 49;
+  // #9252/#9390 (2026-10-08): +1 (49 -> 50) for `2026-10-08-chore-zot-pin-v2-1-22-and-docker-pkg-github-deny-registry-replace-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform) and the post-replace registry host's own heartbeat rows are graded for
+  // `zot_image_digest=<final D12>`. NO SUBSTITUTE: those rows land only in the Logs warehouse, which has no
+  // unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 50;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

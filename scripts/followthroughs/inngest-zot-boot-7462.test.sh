@@ -159,7 +159,7 @@ fi
 # the raw file for line numbers and then drops FULL-LINE comments. Diverging here would either
 # false-positive on the header paragraph that documents the ban (measured: it does) or, worse,
 # pass something the real CI lint rejects.
-if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$PROBE" | grep -qvE '^[0-9]+:[[:space:]]*#'; then
+if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$PROBE" | grep -cvE >/dev/null '^[0-9]+:[[:space:]]*#'; then
   fail "C14 probe uses the banned \${VAR:?} form in CODE (aborts rc=1 -> reads as FAIL)"
 else
   pass "C14 probe avoids the banned \${VAR:?} form in code"

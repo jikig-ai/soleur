@@ -2480,7 +2480,7 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
 
    ```bash
    gh pr checks <number> --json name,state,description,detailsUrl \
-     | jq '.[] | select(.state != "SUCCESS")'
+     | jq '.[] | select(.state != "SUCCESS" and (.state != "SKIPPED" or (.name | startswith("smoke (") | not)))'
    ```
 
 2. Identify the failing workflow run and read its logs:

@@ -364,11 +364,16 @@ fan_out_to_peers() {
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    # The HMAC SIGNATURE header goes in on curl's stdin config channel, never its argv
+    # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
+    # Known remaining site: the shared secret itself is openssl's -hmac argument above
+    # (the deferred `openssl dgst -hmac` class in lint-shell-trace-credential-refusal.py).
+    code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=${sig}" \
-      --data-binary "$payload" 2>/dev/null || echo "000")
+      --config - \
+      --data-binary "$payload" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || echo "000")
     if [[ "$code" == "202" ]]; then
       logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
     else
@@ -1300,8 +1305,8 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# zot v2.1.20 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
-# MEASURED 2026-08-05 by running the pinned image locally against this config (#7282):
+# zot v2.1.22 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
+# MEASURED 2026-10-08 by running the pinned image locally against this config (#9252):
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:
@@ -3285,7 +3290,7 @@ unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 # registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
 # sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
 # (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
-# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# in server.tf proves pkg-containers.githubusercontent.com and docker.pkg.github.com too. Fail-open: the probe is bounded by
 # `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
 # never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
 # (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.
