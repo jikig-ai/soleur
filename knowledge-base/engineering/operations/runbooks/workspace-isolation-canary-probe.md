@@ -96,6 +96,17 @@ cannot reach the deploy exec that consumes it.
 
 **Image-size delta:** measured at build time; recorded in PR #9809 description.
 
+**Zero-import constraint on `test/vitest.canary.config.ts` (#9860):** the
+config file must carry no `import` statements at all — `export default` a
+plain object literal, never `defineConfig(...)`. In the image vitest is a
+global install and `/app` has no `node_modules/vitest`, so a bare specifier in
+the config resolves against nothing and the probe fails at config-load with
+`reason=vitest_rc_1: … [UNRESOLVED_IMPORT]` — observed on the v0.334.1 deploy.
+Suite files are exempt: `import … from "vitest"` inside `test/*.test.ts`
+resolves internally to the running install (verified on vitest 4.1.11 under
+`env -i`). Pinned at PR time by the zero-imports assertion in
+`apps/web-platform/test/dockerfile-vitest-version-pin.test.ts`.
+
 ## Gate vs report — report-only (chosen)
 
 The probe ships **report-only**: it is invoked `|| true` inside the

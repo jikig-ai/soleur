@@ -81,4 +81,21 @@ describe("Dockerfile vitest global-install pin parity", () => {
     expect(code).not.toMatch(/\b(globalSetup|setupFiles|projects|workspace)\s*:/);
     expect(code).toMatch(/include:\s*\[\s*"test\/sandbox-isolation\.test\.ts"\s*\]/);
   });
+
+  // Canary-config zero-imports pin (#9860): in the runner image vitest is a
+  // global `npm install -g` and /app has no `node_modules/vitest`, so the
+  // config file's bare specifiers have nothing to resolve against — a single
+  // `import … from "vitest/config"` fails the whole probe with
+  // `[UNRESOLVED_IMPORT]` at config-load (suite-file `vitest` imports resolve
+  // internally to the running install; config-file imports do not). The `\b`
+  // terminator also catches a leading-position dynamic `import(…)`, which a
+  // `\s`-anchored predicate would miss.
+  it("test/vitest.canary.config.ts carries zero import statements — the in-image run resolves no bare specifiers from the config file", () => {
+    const config = read("test/vitest.canary.config.ts");
+    const code = config
+      .split("\n")
+      .filter((l) => !/^\s*\/\//.test(l)) // drop whole-line comments; they may name keys
+      .join("\n");
+    expect(code).not.toMatch(/^\s*import\b/m);
+  });
 });
