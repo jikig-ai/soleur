@@ -254,7 +254,9 @@ else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')]
 # EXEMPT line with a reason (and a stale exemption is itself a finding). The census is deliberately looser than the
 # site grammars: a false candidate costs one SPECS or EXEMPT line, a miss is silent.
 # BOUNDARY: non-suite scripts and scripts outside this directory (for example apps/web-platform/scripts/*-in-image.sh)
-# are not covered by this row.
+# are not covered by this row. Known spellings it does NOT see: apt-get download|source, add-apt-repository, apt-key,
+# ${APT:-apt-get}, nerdctl, python subprocess, apt/pip text in a sibling helper file, a container-side pip install in a
+# suite outside SPECS, and an unpinned APT_BUDGET_S value; the A10 legend states the budget rule.
 _strip() { sed 's/^[[:space:]]*#.*$//' "$1"; }
 _joined() { _strip "$1" | sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba' -e '}'; }
 _join() { local IFS='|'; printf '%s' "$*"; }
@@ -267,7 +269,7 @@ _APT_VERBS=(update install upgrade dist-upgrade full-upgrade build-dep reinstall
 _DOCK_VERBS=(run exec create build start compose)
 _SEPCLASS="[$(printf '%s' "${_SEPS[@]}")]"
 _CMDPOS="(^|${_SEPCLASS}|-c[[:space:]]+['\"]|(^|[[:space:]])($(_join "${_KWS[@]}")))[[:space:]]*"
-_END="([[:space:];&|)'\"]|\$)"
+_END="([[:space:];&|)<>}\`'\"]|\$)"
 # Wrapper words and `docker run|exec ... ` may precede the tool; timeout may carry any flags/duration; both are
 # generous on purpose (no `{n,m}` interval: ADJ_RE is evaluated by awk and old mawk builds lack intervals).
 _WRAP="(($(_join "${_WRAPS[@]}")|docker[[:space:]]+(run|exec))[[:space:]]+['\"]?([^;&|]*[[:space:]])?)?"
@@ -365,7 +367,8 @@ for spec in "${SPECS[@]}"; do
   _tot=$((_tot + c)); _unm=$((_unm + total - mounted))
   if [ "$mounted" -ne "$want_mounted" ] || [ "$((total - mounted))" -ne "$want_unmounted" ] || [ "$mounted" -ne "$c" ] || [ "$c_ok" -ne "$c" ] \
      || [ "$c_bad" -ne 0 ] || [ "$src" -ne "$c" ] || [ "$g" -ne "$mounted" ] || [ "$g_ok" -ne "$g" ] || [ "$adj" -ne 0 ] || [ "$raw" -ne 0 ]; then
-    _asm="${_asm} $(basename "$f"):[docker=$total mounted=$mounted (want $want_mounted) calls=$c rc-ok=$c_ok rc-bad=$c_bad source=$src arms=$g arm-checked=$g_ok arm-not-before-mounted-docker=$adj raw-apt=$raw]"
+    _sites="$(printf '%s\n' "$dock" | cut -c1-80 | head -4 | tr '\n' '|')"
+    _asm="${_asm} $(basename "$f"):[docker-sites=$total (lines: ${_sites}) mounted=$mounted (want $want_mounted) calls=$c rc-ok=$c_ok rc-bad=$c_bad source=$src arms=$g arm-checked=$g_ok arm-not-before-mounted-docker=$adj raw-apt=$raw]"
   fi
 done
 # Tier B's classification is only as good as its call site: pin the exact call so a flipped or constant condition is a finding.
@@ -381,11 +384,15 @@ while IFS= read -r cf; do
   rel="${cf#"${DIR}"/}"
   case "$_decl" in *"${TAB}${rel}${TAB}"*) _seen=$((_seen + 1)) ;; esac
   [ "$rel" = "apt-bounded.test.sh" ] && continue
-  grep -qE 'docker|podman' "$cf" || continue
+  grep -qiE 'docker|podman' "$cf" || continue
   cj="$(_joined "$cf")"
   if grep -Eq -- "$CENS_DOCK_RE" <<<"$cj" && grep -Eq -- "$CENS_APT_RE" <<<"$cj"; then
-    case "$_exm" in *"${TAB}${rel}${TAB}"*) _exm_hit="${_exm_hit}${rel}${TAB}"; continue ;; esac
-    case "$_decl" in *"${TAB}${rel}${TAB}"*) : ;; *) _asm="${_asm} census:[${rel} holds a docker verb and apt text but is not a declared consumer — convert it to lib/apt-bounded.sh and add a SPECS line (file, declared-unmounted, state var, mounted sites), or, if the docker/apt text is only DATA (assertion strings), add an EXEMPT line with the reason]" ;; esac
+    case "$_exm" in *"${TAB}${rel}${TAB}"*)
+      _exm_hit="${_exm_hit}${rel}${TAB}"
+      _ju="$(_joined "$cf")"
+      if grep -Eq -- "$DOCK_RE" <<<"$_ju" || grep -Eq -- "$RAW_RE" <<<"$_ju"; then _asm="${_asm} census:[EXEMPT ${rel} now holds a real command-position docker run or raw apt — declare it in SPECS instead]"; fi
+      continue ;; esac
+    case "$_decl" in *"${TAB}${rel}${TAB}"*) : ;; *) _asm="${_asm} census:[${rel} holds a docker verb and apt text but is not a declared consumer — if it runs apt in a container, convert it to lib/apt-bounded.sh (recipe: the header of that file; gd_apt_state_arm exports GD_APT_STATE for the -v mount) and add a SPECS line (file, declared-unmounted, state var, mounted sites; an already-converted suite only needs the line); if the docker/apt text is only DATA (assertion strings), add an EXEMPT line with the reason]" ;; esac
   fi
 done < <(find "$DIR" -type f -name '*.test.sh' | sort)
 [ "$_seen" -eq "${#SPECS[@]}" ] || _asm="${_asm} census:[saw ${_seen} of ${#SPECS[@]} declared consumers under ${DIR}]"
