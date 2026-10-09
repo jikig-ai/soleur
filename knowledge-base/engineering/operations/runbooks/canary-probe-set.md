@@ -197,6 +197,50 @@ the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and 
 | `args_fd_closed` | The `--args <fd>` transport probe failed — the SDK's real spawn shape broke (shim closed the argv fd) | Every agent spawn fails too; treat as deploy-blocking |
 | `bwrap_shim_refused` | The shim itself exited 65 (`bwrap-shim:` marker) — artifact or real bwrap missing in the image | `probeAgentSandboxHardening` fields (`shim`, `filter`, `bpfBytes`) say which |
 
+## Cross-workspace isolation canary — report-only soak (#2640)
+
+A third probe shares the word "sandbox" with the two above and is distinct from both:
+`run_workspace_isolation_probe` in `ci-deploy.sh` runs the **direct tier** of
+`test/sandbox-isolation.test.ts` (cross-workspace read/write isolation with sibling trees — the
+property the faithful canary's single captured argv cannot exercise) inside the canary container:
+
+```text
+timeout <cap> docker exec -w /app -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct \
+  soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts
+```
+
+It is called `|| true` immediately after `run_faithful_sandbox_canary` inside the `CANARY_HEALTHY`
+block — **report-only** (dark-launch per `wg-dark-launch-deploy-gates`): it logs, writes state and
+pages Sentry on a red verdict, but a failing verdict never rolls back the deploy. Promotion to
+blocking is a tracked follow-up (see the design note,
+`knowledge-base/engineering/operations/runbooks/workspace-isolation-canary-probe.md`).
+
+**Verdict classes** (docker-exec rc classification mirrors `run_faithful_sandbox_canary`):
+
+| Verdict | rc | Meaning | Sentry |
+|---|---|---|---|
+| `pass` | 0 | direct-tier suite green in the canary | no |
+| `workspace_isolation_failed` | other non-zero | suite reported a real isolation failure | **page** |
+| `workspace_isolation_timeout` | 124 | host-side `timeout` fired (suite hung, e.g. bwrap deadlock) | **page** |
+| `canary_infra_error` | 125/126/127 | could not exec (pre-tooling image, missing vitest) | no — state only |
+
+**State and surfaces.** `write_workspace_isolation_state` persists the verdict to
+`/mnt/data/ci-deploy-workspace-isolation.json` (atomic, always returns 0) and accumulates the soak
+fields `consecutive_pass` (increments on `pass`, resets on `workspace_isolation_failed` /
+`workspace_isolation_timeout`, **holds** on `canary_infra_error`) and `first_pass_at` — the same
+accumulation `write_sandbox_canary_state` performs, so the promotion probe is a stateless GET.
+`cat-deploy-state.sh` merges the file into the `/hooks/deploy-status` payload as
+`.workspace_isolation`, and every run logs a `WORKSPACE_ISOLATION:` line under `logger -t ci-deploy`
+(the Better Stack query shape in the bwrap-probe section applies verbatim — grep on the decoded
+`message` after `fromjson`, filter `SYSLOG_IDENTIFIER == "ci-deploy"`).
+
+**Promotion contract.** The committed soak checker
+`scripts/followthroughs/workspace-isolation-verdict-2640.sh` reads `.workspace_isolation` off
+`/hooks/deploy-status` and reports PASS only when `consecutive_pass >= 5` AND the span since
+`first_pass_at` is >= 3 days; a recorded `workspace_isolation_failed` or
+`workspace_isolation_timeout` verdict is a FAIL (investigate before promoting — do not flip the
+call site to blocking while either stands).
+
 ## References
 
 - AGENTS.md `wg-when-fixing-a-workflow-gates-detection`
