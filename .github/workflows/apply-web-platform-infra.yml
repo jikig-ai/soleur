@@ -33,6 +33,12 @@ on:
       # untouched, and modules/git-data-userdata/ is deliberately NOT excluded, because the
       # production host really does render from it.
       - "!apps/web-platform/infra/rung2-rehearsal/**"
+      # (#9175) Same reason, same shape: inngest-provision-rehearsal/ is its own Terraform
+      # root with its own state key, dispatched only by inngest-provision-rehearsal.yml. Its
+      # files must never fire a PRODUCTION apply of the parent root. The shared
+      # cloud-init-inngest.yml it renders is deliberately NOT excluded — the production host
+      # renders from it too.
+      - "!apps/web-platform/infra/inngest-provision-rehearsal/**"
       # (#8189, ADR-220) Same reason: git-data-root-key/ is its own root with its own state key,
       # applied only by apply-git-data-root-key.yml. The committed anchor
       # git-data-root-key.fingerprint sits OUTSIDE that directory and still fires this workflow.

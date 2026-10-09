@@ -5543,6 +5543,12 @@ if want_scripts; then
   # replace only the host, never the dirtied plaintext volume or the LUKS volume. Registered
   # here for the reason above: nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/git-data-rung2-plan-shape" bash tests/scripts/test-git-data-rung2-plan-shape.sh
+  # (#9175) The inngest-provision rehearsal's plan-shape chokepoint (Phase A additive-only /
+  # Phase B exactly-the-NIC-create) and its evidence-capture decision function (the verdict
+  # that decides whether evidence attaches to #9175). Registered here for the same reason as
+  # the rung2 entries above: nothing auto-discovers tests/scripts/ or scripts/followthroughs/.
+  run_suite "tests/scripts/inngest-provision-plan-shape" bash tests/scripts/test-inngest-provision-plan-shape.sh
+  run_suite "scripts/followthroughs/inngest-provision-rehearsal-capture" bash scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh
