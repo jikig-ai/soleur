@@ -157,7 +157,7 @@ cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" 'or `## Test Pyrami
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_SKILL" '\*\.e2e\*')" "review/SKILL.md: e2e conventions in the spawn trigger list"
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" 'pyramid-justified')" "review.workflow.js: lens still names the marker"
 cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" "'## Test Pyramid' PR-body block")" "review.workflow.js: PR-body disjunct shape preserved in lens"
-cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" '\\.e2e')" "review.workflow.js: hasTests regex covers e2e conventions"
+cases=$((cases + 1)); assert_eq "1" "$(found "$REVIEW_WF" '\\.e2e\\.\[jt\]sx')" "review.workflow.js: hasTests e2e arm stays narrowed to terminal test extensions (bare \\.e2e matches e2e-utils/e2e.config helpers)"
 tpl_blocks="$(awk '/^## Test Scenarios/{inblock=1; blocks++} /^##? / && !/^## Test Scenarios/{inblock=0} inblock && /pyramid-justified/{seen[blocks]=1} END{n=0; for(i=1;i<=blocks;i++) if(seen[i]) n++; print blocks":"n}' "$PLAN_TPL" || echo "0:0")"
 cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" '^## Test Scenarios')" "plan-issue-templates.md: exactly 3 Test Scenarios blocks (a 4th unlabeled block reds)"
 cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'pyramid layer')" "plan-issue-templates.md: all 3 blocks still carry the pyramid-layer label line"
