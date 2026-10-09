@@ -140,7 +140,7 @@ build_fx() {
       {name:"runnerless-timed",conclusion:"cancelled",runner_id:null,started_at:"2026-10-20T10:00:00Z",completed_at:"2026-10-21T10:00:00Z"},
       {name:"negative-duration",conclusion:"success",runner_id:6,started_at:"2026-10-20T10:10:00Z",completed_at:"2026-10-20T10:00:00Z"}'
     if (( elided )); then
-      # the first elided run keeps a RUNNING test-scripts-heavy: a different job, it must not decide the elision
+      # the first elided run keeps a SUCCESSFUL test-scripts-heavy: a different job, it must not decide the elision
       local heavy=skipped; (( k == 0 )) && heavy=success
       [ -z "$first_elided_sha" ] && first_elided_sha="$sha"
       jq -n --argjson s "$secs" "{jobs:[
@@ -169,8 +169,8 @@ build_fx() {
     fi
     (( elided )) && k=$((k + 1))
   done
-  # noise a correct voucher check must ignore, on the SHA that unmatched=K leaves unvouched: a failed and an in-progress
-# merge_group run and a pull_request run
+  # noise a correct voucher check must ignore, on the SHA that unmatched=K leaves unvouched: a failed merge_group run and
+# a pull_request run (the in-progress run is equivalent to absent: the success filter already refuses it)
   mg1="$mg1{\"event\":\"merge_group\",\"status\":\"completed\",\"conclusion\":\"failure\",\"head_sha\":\"$first_elided_sha\"},{\"event\":\"pull_request\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$first_elided_sha\"},{\"event\":\"merge_group\",\"status\":\"in_progress\",\"conclusion\":null,\"head_sha\":\"$first_elided_sha\"}"
   printf '{"workflow_runs":[%s]}\n' "${runs%,}" > "$fx/push.json"
   printf '{"workflow_runs":[%s]}\n' "${mg1%,}" > "$fx/mg-1.json"

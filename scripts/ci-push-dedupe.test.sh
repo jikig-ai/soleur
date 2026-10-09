@@ -718,7 +718,8 @@ mutate_yml y-agg-tolerate "              skipped)
                 echo \"\$shard: SKIPPED — the leg did not run\" >&2" "              skipped)
                 fail=0
                 echo \"\$shard: SKIPPED — the leg did not run\" >&2" agg A-DIGEST
-# the checker tags that only a yml mutant can reach (each one is dead code if no row trips it)
+# the checker tags that only a yml mutant can reach and review found unreached (the other W-*/G-*/TT-* tags are
+# reached only through the pristine-tree rows; a tag deleted from chk.py is NOT caught for those: add a row first)
 mutate_yml y-no-job-coe "    continue-on-error: true
     runs-on: ubuntu-latest
 " "    runs-on: ubuntu-latest
