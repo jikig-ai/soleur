@@ -362,7 +362,10 @@ RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-p
   path, and it cannot be combined with --affected. It is not an escape from the fallback.
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
-the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
+the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass),
+SOLEUR_AFFECTED_DERIVE_CACHE=0 (bypass the per-worktree derive cache at
+.soleur/cache/affected-derive/ — selection is unchanged either way; a run that
+consulted it prints AFFECTED_DERIVE_CACHE hits=/misses=/derived=).
 
 Run machinery (#8993/#8940): the parent-death watchdog self-terminates an
 orphaned run plus its suite children — SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 opts
@@ -2666,11 +2669,19 @@ _affected_probe() { # <e|f|d> <path> — evaluate the [[ -<k> path ]] test; reco
   esac
   _rc=$?
   if (( ${_ADC_REC:-0} )); then
-    case "${_ADC_REC_PSET:-$_nl}" in
-      *"${_nl}${_k}|${_pp}${_nl}"*) : ;;   # same run, same answer — first record stands
+    case "$_pp" in
+      # An operand carrying \n or \t could never be written into a record faithfully — and via the
+      # _FE_PROBESETS slice it would split into FORGED entries on memo replay. Record nothing and
+      # poison the record so the store refuses it whole rather than write an under-recorded set.
+      *$'\n'*|*$'\t'*) _ADC_REC_BAD=1 ;;
       *)
-        _ADC_REC_PSET+="${_k}|${_pp}${_nl}"
-        _ADC_REC_PROBES+=("${_k}"$'\t'"${_rc}"$'\t'"${_pp}")
+        case "${_ADC_REC_PSET:-$_nl}" in
+          *"${_nl}${_k}|${_pp}${_nl}"*) : ;;   # same run, same answer — first record stands
+          *)
+            _ADC_REC_PSET+="${_k}|${_pp}${_nl}"
+            _ADC_REC_PROBES+=("${_k}"$'\t'"${_rc}"$'\t'"${_pp}")
+            ;;
+        esac
         ;;
     esac
   fi
@@ -2828,9 +2839,12 @@ _FE_EDGES=()
 # it, a path that probed-miss inside a shared helper validates forever for every memo consumer, and
 # creating that file later would narrow their selection silently (review P1).
 _FE_PROBESETS=()
+# _FE_RECTRACKED: parallel flag — 1 when the entry's extraction ran under _ADC_REC=1 (slice exists),
+# 0 when it ran cold. A memo consumer recording under REC=1 refuses to store on a 0-flagged entry.
+_FE_RECTRACKED=()
 
 # `_FE_BUF` is the per-file accumulator: _affected_file_edges_uncached and
-# _affected_edge_token append through _affected_buf_add so the CACHE records
+# _affected_edge_token append through _affected_buf_add so the _FE_ memo records
 # the file's complete edge set — recording only what survived _AC_EDGES dedup
 # would silently drop edges another suite already contributed, and replaying
 # that for a later suite would under-edge it.
@@ -2892,6 +2906,13 @@ _affected_file_edges() {
       # Replay the file's probe slice into the current record: pure string copies, no syscalls.
       # The slice entries are the probe lines the extractor recorded (kind \t rc \t path); PSET
       # dedup keeps the kind|path key shape _affected_probe writes.
+      # A memo entry populated under _ADC_REC=0 has NO slice (_FE_RECTRACKED) — replaying it into
+      # a record would mint an under-recorded input set. Poison the record instead: the edges are
+      # still correct for this process, the record is just never stored. (Unreachable today —
+      # every caching context records from the first classify — belt for a future call site.)
+      if (( ${_ADC_REC:-0} )) && [[ "${_FE_RECTRACKED[$_ci]:-0}" != "1" ]]; then
+        _ADC_REC_BAD=1
+      fi
       if (( ${_ADC_REC:-0} )) && [[ -n "${_FE_PROBESETS[$_ci]:-}" ]]; then
         local _pe _pk _ppath _prest _nl2=$'\n'
         while IFS= read -r _pe; do
@@ -2917,7 +2938,7 @@ _affected_file_edges() {
   done
   _FE_BUF=()
   local _fe_ps_start=0
-  (( ${_ADC_REC:-0} )) && _fe_ps_start=${#_ADC_REC_PROBES[@]}
+  if (( ${_ADC_REC:-0} )); then _fe_ps_start=${#_ADC_REC_PROBES[@]}; fi
   _affected_file_edges_uncached "$_f"
   local _j _joined=""
   for _j in ${_FE_BUF[@]+"${_FE_BUF[@]}"}; do
@@ -2926,14 +2947,18 @@ _affected_file_edges() {
   done
   _FE_FILES+=("$_f")
   _FE_EDGES+=("$_joined")
+  # _FE_RECTRACKED marks whether the extraction ran under recording (its slice is trustworthy); a
+  # legitimately empty slice (a file with no candidate tokens) stays distinguishable this way.
   if (( ${_ADC_REC:-0} )); then
     local _fe_ps="" _fe_pe
-    for _fe_pe in "${_ADC_REC_PROBES[@]:$_fe_ps_start}"; do
+    for _fe_pe in ${_ADC_REC_PROBES[@]+"${_ADC_REC_PROBES[@]:$_fe_ps_start}"}; do
       _fe_ps+="$_fe_pe"$'\n'
     done
     _FE_PROBESETS+=("$_fe_ps")
+    _FE_RECTRACKED+=("1")
   else
     _FE_PROBESETS+=("")
+    _FE_RECTRACKED+=("0")
   fi
 }
 
@@ -3059,13 +3084,19 @@ _affected_derive() {
         # A `-c` payload is a script string, not a path: word-split it and keep
         # the tokens that resolve — `cd apps/web-platform && npm run x` yields
         # the directory edge, which is the whole point of looking inside.
-        local _w _pw=""
+        # set -f around the split: unquoted expansion would ALSO pathname-expand `*`/`?`/`[]`
+        # tokens against cwd — a directory-listing input no recorded probe can later invalidate
+        # (#9812 structural-enum review). The sibling invocation arm already splits glob-free
+        # via `IFS=' ' read -ra`; this arm matches it.
+        local _w _pw="" _gw=$-
+        set -f
         for _w in $_tok; do
           _w="${_w%\"}"; _w="${_w#\"}"; _w="${_w%\'}"; _w="${_w#\'}"
           if _affected_runner_subcmd "$_pw" "$_w"; then _pw="$_w"; continue; fi
           _pw="$_w"
           _affected_add_edge "$_w"
         done
+        case "$_gw" in *f*) : ;; *) set +f ;; esac
         ;;
     esac
     # A runner SUBCOMMAND is not an operand — see _affected_runner_subcmd.
@@ -3723,10 +3754,18 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
         esac
       done <<< "$_aff_stream"
       # Cache telemetry (#9812): hits+misses+derived ≈ classify calls served; a warm unchanged run
-      # should print misses=0 derived=0. Emitted unconditionally — zeros are the honest "cache off"
-      # reading, and a silently-absent line is how a dead cache regresses unnoticed.
-      printf 'AFFECTED_DERIVE_CACHE\thits=%d\tmisses=%d\tderived=%d\n' \
-        "${_ADC_HITS:-0}" "${_ADC_MISSES:-0}" "${_ADC_DERIVED:-0}"
+      # should print misses=0 derived=0. stderr, not stdout — --print-selection's stdout is a
+      # machine-compared surface (the bench's determinism gate cmp's repeat runs byte-for-byte, and
+      # cold-vs-warm counters would differ legitimately). Emitted unconditionally — zeros plus
+      # state=off are the honest "cache not consulted" reading; a silently-absent line is how a dead
+      # cache regresses unnoticed.
+      _adc_state=off
+      if (( _ADC_LIB_OK == 1 )) && [[ "${SOLEUR_AFFECTED_DERIVE_CACHE:-1}" != "0" ]] \
+        && (( ${_ADC_READY:-0} == 1 )); then
+        _adc_state=on
+      fi
+      printf 'AFFECTED_DERIVE_CACHE\tstate=%s\thits=%d\tmisses=%d\tderived=%d\n' \
+        "$_adc_state" "${_ADC_HITS:-0}" "${_ADC_MISSES:-0}" "${_ADC_DERIVED:-0}" >&2
       if (( _aff_selected == 0 )); then
         # The EFFECTIVE selected set, not the derived one: a run whose whole
         # reachable selection is empty would exit green having executed

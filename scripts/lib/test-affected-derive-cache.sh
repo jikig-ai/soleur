@@ -23,8 +23,11 @@
 #   edge <edge>           — one per _AC_EDGES element, order preserved (anchored ^ form included)
 #   read <path> <blobid>  — every file the derive consulted, with its hash-object --no-filters id
 #   probe <k> <rc> <path> — every existence probe (k ∈ e/f/d), rc 0 = existed at derive time
+#   sum <cksum-output>    — POSIX cksum of the body (everything before this line); an in-body
+#                         bit-flip or line drop leaves a well-formed record that would replay a
+#                         NARROWED edge set, so payload bytes are integrity-checked, not trusted
 #   end                   — trailer; a truncated record never carries it, so a cut file can never
-#                         serve a PARTIAL edge set as a hit
+#                         serve a PARTIAL edge set as a hit. Must be last; nothing follows it.
 #
 # The recording state (_ADC_REC, _ADC_REC_PROBES, _ADC_REC_READS and the two shadow sets) is written
 # by the runner's _affected_probe/_affected_rec_read, which live INSIDE the runner's derive span so
@@ -54,6 +57,7 @@ _ADC_DERIVED=0       # record parsed but INPUT validation failed (read-hash or p
 # Declared here AND guarded with :- at the use site so the runner's probe wrapper works when this
 # lib was never sourced (degrade-never-block, the _AFF_LIB class of contract).
 _ADC_REC=0
+_ADC_REC_BAD=0       # set by _affected_probe on an operand that can never be written faithfully
 _ADC_REC_PROBES=()
 _ADC_REC_READS=()
 _ADC_REC_PSET=$'\n'
@@ -68,8 +72,10 @@ _ADC_CODEFILES=(
 )
 
 # --- plumbing ----------------------------------------------------------------------------------------
-# git calls scrub the env exactly like _aff_rd_hash: suites and hooks can export GIT_DIR/
-# GIT_WORK_TREE, and a bare `git` would then operate on the WRONG repository.
+# git calls scrub the env like the runner's _aff_rd_* family (the 8-var scrub matches _aff_rd_diff):
+# suites and hooks can export GIT_DIR/GIT_WORK_TREE, and a bare `git` would operate on the WRONG
+# repository. `-C "$_ADC_ROOT"` resolves recorded paths against the repo root — correct because the
+# `cwd` record field pins cwd=root (a working derive requires it anyway).
 _adc_git() {
   env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_CONFIG -u GIT_CONFIG_COUNT \
       -u GIT_CONFIG_PARAMETERS -u GIT_EXTERNAL_DIFF -u GIT_DIFF_OPTS \
@@ -89,14 +95,22 @@ _adc_note() {
 # the wrapper degrades to plain classify for the rest of the process — advisory, never a gate.
 _adc_init() {
   if (( _ADC_READY != -1 )); then
-    (( _ADC_READY == 1 ))
-    return
+    if (( _ADC_READY == 1 )); then return 0; else return 1; fi
   fi
   _ADC_READY=0
   local _r
-  _r="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git rev-parse --show-toplevel 2>/dev/null)" || _r=""
+  _r="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_CONFIG -u GIT_CONFIG_COUNT \
+        -u GIT_CONFIG_PARAMETERS -u GIT_EXTERNAL_DIFF -u GIT_DIFF_OPTS \
+        git rev-parse --show-toplevel 2>/dev/null)" || _r=""
   if [[ -z "$_r" || ! -d "$_r" ]]; then
     _adc_note "no repo root — cache off"
+    return 1
+  fi
+  # Recorded probes/reads are cwd-relative while the read-hasher runs `-C root` — the record's cwd
+  # field pins write-cwd == read-cwd, and this init check pins cwd == ROOT. `-ef` compares device+
+  # inode so a symlinked prefix (/var/tmp -> /private/var/tmp) doesn't false-degrade.
+  if [[ ! "$PWD" -ef "$_r" ]]; then
+    _adc_note "cwd is not the repo root — cache off"
     return 1
   fi
   _ADC_ROOT="$_r"
@@ -107,19 +121,25 @@ _adc_init() {
   done
   if (( _missing == 0 )); then
     # The runner's preimage is its EXTRACTED derive span — the same content anchors the derive
-    # suites pin (_AC_CLASS="" to _affected_derive's close, plus the _affected_classify body). A
-    # whole-file hash would flush all ~586 records on every unrelated runner edit (the repo's
-    # most-touched file); the libs' edge declarations and the cache lib itself stay whole-file
-    # because their content IS the input set. Anchor drift extracts empty and falls back to the
-    # whole file — a flush, never a stale serve. Residual: helpers outside the span
-    # (_affected_in_list, _affected_emit_receipt) don't flush on edit — receipt mode never caches,
-    # and the in-list helper is a two-line membership test.
-    local _span
-    _span="$( {
-      awk '/^_AC_CLASS=""$/ && !s {s=1} s {print} s && /^_affected_derive\(\) \{/ {d=1} d && /^\}$/ {exit}' "$_ADC_ROOT/scripts/test-all.sh"
-      awk '/^_affected_classify\(\) \{/ {s=1} s {print} s && /^\}$/ {exit}' "$_ADC_ROOT/scripts/test-all.sh"
-    } 2>/dev/null )"
-    [[ -n "$_span" ]] || _span="$(cat "$_ADC_ROOT/scripts/test-all.sh" 2>/dev/null)"
+    # suites pin (scripts/test-affected-derive.test.sh + scripts/test-affected-derive-cache.test.sh:
+    # _AC_CLASS="" to _affected_derive's close, plus the _affected_classify body). A whole-file hash
+    # would flush all ~586 records on every unrelated runner edit (the repo's most-touched file);
+    # the libs' edge declarations and the cache lib itself stay whole-file because their content IS
+    # the input set (AFFECTED_CONSUMED_EDGES may name arrays owned by either lib, so
+    # test-relevance-paths.sh is a real derive input, not over-cover). EACH extraction must produce
+    # non-empty output — a partial extraction (one anchor drifts) without the whole-file fallback
+    # would silently drop part of the derive from the key. Anchor drift → whole file → a flush,
+    # never a stale serve. Residual: helpers outside the span (_affected_emit_receipt,
+    # _wt_missing_die) don't flush on edit — receipt mode never caches and the liveness check only
+    # ever exits.
+    local _s1 _s2 _span
+    _s1="$(awk '/^_AC_CLASS=""$/ && !s {s=1} s {print} s && /^_affected_derive\(\) \{/ {d=1} d && /^\}$/ {exit}' "$_ADC_ROOT/scripts/test-all.sh" 2>/dev/null)"
+    _s2="$(awk '/^_affected_classify\(\) \{/ {s=1} s {print} s && /^\}$/ {exit}' "$_ADC_ROOT/scripts/test-all.sh" 2>/dev/null)"
+    if [[ -n "$_s1" && -n "$_s2" ]]; then
+      _span="$_s1$_s2"
+    else
+      _span="$(cat "$_ADC_ROOT/scripts/test-all.sh" 2>/dev/null)"
+    fi
     local _libfiles=( "${_ADC_CODEFILES[@]:1}" )
     _h="$( { printf '%s\n' "$_span"; cat "${_libfiles[@]/#/$_ADC_ROOT/}" 2>/dev/null; } | _adc_git hash-object --stdin )" || _h=""
   fi
@@ -128,18 +148,27 @@ _adc_init() {
     return 1
   fi
   _ADC_CODEHASH="$_h"
+  # Environment fingerprint — computed once so the per-record key pays no extra fork. The derive's
+  # output is genuinely sensitive to all of it: BASH_VERSION (patsub_replacement flips on >=5.2),
+  # the full locale set (LC_ALL/COLLATE/CTYPE/MESSAGES/LANG reach `=~` classes and `sort -u`), and
+  # glob/case shell options (noglob/nullglob/nocasematch/... change what the expansion arms and
+  # [[ == ]] matches produce). An unkeyed env channel would let a record replay under different
+  # derive semantics with nothing to catch it.
+  _ADC_ENVFP="${BASH_VERSION}|${LC_ALL:-}|${LC_COLLATE:-}|${LC_CTYPE:-}|${LC_MESSAGES:-}|${LANG:-}|$-|$(shopt -p nocasematch nullglob failglob dotglob nocaseglob 2>/dev/null | tr '\n' ',')|${IFS}"
   _ADC_READY=1
   return 0
 }
 
-# Key material: schema + code hash + label + length-prefixed argv. Length-prefixing removes the
-# "a b"-vs-"a","b" ambiguity a delimiter-joined string would carry.
+# Key material: schema + code hash + environment fingerprint (bash version, locale set, glob/case
+# shell options, IFS) + label + length-prefixed argv. Length-prefixing removes the "a b"-vs-"a","b"
+# ambiguity a delimiter-joined string would carry. The env channels are real derive inputs — the
+# runner toggles patsub_replacement on >=5.2 and the extraction/`sort -u` arms are locale-sensitive.
 _adc_key() { # <label> <argv...> -> hex key on stdout
   local _label="$1"; shift
   local _a
   {
-    printf 'schema=%s\ncode=%s\nbash=%s\nloc=%s\nlabel=%s\nargc=%d\n' \
-      "$_ADC_SCHEMA" "$_ADC_CODEHASH" "$BASH_VERSION" "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" "$_label" "$#"
+    printf 'schema=%s\ncode=%s\nenvfp=%s\nlabel=%s\nargc=%d\n' \
+      "$_ADC_SCHEMA" "$_ADC_CODEHASH" "$_ADC_ENVFP" "$_label" "$#"
     for _a in "$@"; do
       printf 'argv %d:%s\n' "${#_a}" "$_a"
     done
@@ -154,11 +183,13 @@ _adc_lookup() { # <key> <label>
   local _rec="$_ADC_DIR/$1.rec" _label="$2"
   [[ -f "$_rec" ]] || return 1
   local _tag _a _b _c
-  local _r_schema="" _r_wt="" _r_cwd="" _r_label="" _r_class="" _r_sf="-" _r_end=""
+  local _r_schema="" _r_wt="" _r_cwd="" _r_label="" _r_class="" _r_sf="-" _r_end="" _r_sum=""
   local _edges=() _reads_p=() _reads_h=() _probes_k=() _probes_rc=() _probes_p=()
   while IFS=$'\t' read -r _tag _a _b _c; do
-    # Content after the trailer is malformed (trailing garbage or a second appended record).
+    # Content after the trailer is malformed (trailing garbage or a second appended record); only
+    # `end` may follow `sum`, else a payload line would ride outside the checksum's coverage.
     if [[ -n "$_r_end" && -n "$_tag" ]]; then return 1; fi
+    if [[ -n "$_r_sum" && -n "$_tag" && "$_tag" != "end" ]]; then return 1; fi
     case "$_tag" in
       schema)     _r_schema="$_a" ;;
       worktree)   _r_wt="$_a" ;;
@@ -169,12 +200,18 @@ _adc_lookup() { # <key> <label>
       edge)       _edges+=("$_a") ;;
       read)       _reads_p+=("$_a"); _reads_h+=("$_b") ;;
       probe)      _probes_k+=("$_a"); _probes_rc+=("$_b"); _probes_p+=("$_c") ;;
+      sum)        _r_sum="$_a" ;;
       end)        _r_end=1 ;;
       "")         : ;;                     # trailing blank line
       *)          return 1 ;;              # unknown tag: malformed — miss, never trust
     esac
   done < "$_rec"
-  [[ -n "$_r_end" ]] || return 1           # truncated record: never serve a partial parse as a hit
+  [[ -n "$_r_end" && -n "$_r_sum" ]] || return 1   # truncated/unsigned: never serve a partial parse
+  # Integrity before trust: the body checksum covers every byte the replay below will consume —
+  # a mid-record bit-flip or line drop validates probes/reads fine but replays a NARROWED edge set.
+  local _computed
+  _computed="$(awk 'index($0, "sum\t") == 1 {exit} {print}' "$_rec" 2>/dev/null | cksum 2>/dev/null)"
+  [[ "$_computed" == "$_r_sum" ]] || return 1
   [[ "$_r_schema" == "$_ADC_SCHEMA" ]] || return 1
   [[ "$_r_wt" == "$_ADC_ROOT" ]] || return 1
   [[ "$_r_cwd" == "$PWD" ]] || return 1    # recorded paths are cwd-relative
@@ -227,12 +264,11 @@ _adc_store() { # <label> <key>
   local _rec="$_ADC_DIR/$_key.rec" _tmp="$_ADC_DIR/.$_key.tmp.$$"
   local _p
   # A path carrying a tab or newline would misparse on read — refuse the whole record rather than
-  # write a subset (an under-recorded input set would serve a stale hit later). A symlinked read
-  # hashes the LINK TEXT via --stdin-paths, not the target's bytes — a target-content change would
-  # escape invalidation, so those records are refused too.
+  # write a subset (an under-recorded input set would serve a stale hit later). Symlinked reads
+  # need no special case: hash-object follows the link and hashes the target's bytes, so a
+  # retarget invalidates normally.
   for _p in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} ${_ADC_REC_READS[@]+"${_ADC_REC_READS[@]}"}; do
     case "$_p" in *$'\t'*|*$'\n'*) return 0 ;; esac
-    [[ -L "$_p" ]] && return 0
   done
   for _p in ${_ADC_REC_PROBES[@]+"${_ADC_REC_PROBES[@]}"}; do
     case "$_p" in *$'\n'*) return 0 ;; esac
@@ -240,6 +276,9 @@ _adc_store() { # <label> <key>
     local _pp_rest="${_p#*$'\t'}"
     case "${_pp_rest#*$'\t'}" in *$'\t'*) return 0 ;; esac
   done
+  # A poisoned input (a probe operand carrying \n/\t) can never be written faithfully — one bad
+  # operand refuses the whole record rather than store an under-recorded input set.
+  if (( ${_ADC_REC_BAD:-0} == 1 )); then return 0; fi
   # Writability first, once per process: hashing below is wasted work when the dir won't take
   # the file, and mkdir+chmod per record is ~1200 hoisted forks across a cold pass.
   if (( _ADC_DIRREADY == 0 )); then
@@ -247,13 +286,18 @@ _adc_store() { # <label> <key>
       _adc_note "cache dir unwritable ($_ADC_DIR)"
       return 0
     fi
-    chmod 700 "$_ADC_DIR" 2>/dev/null || true
+    # The whole cache chain is private state — chmod each level so a permissive umask or a
+    # pre-planted permissive parent can't seed records under someone else's access.
+    chmod 700 "$_ADC_ROOT/.soleur" "$_ADC_ROOT/.soleur/cache" "${_ADC_DIR%/*}" "$_ADC_DIR" 2>/dev/null || true
     _ADC_DIRREADY=1
   fi
   # Hash the read set in one fork — the same command the validator re-runs. TOCTOU: the derive
-  # read these bytes before this hash runs, so a mid-flight edit mints a self-consistent stale
-  # record until the file changes again — bounded to the per-record window; hashing at read time
-  # would cost the per-file forks the design exists to avoid.
+  # read these bytes before this hash runs, so a mid-flight edit mints a TORN record — edges from
+  # content v1 keyed to hash v2 — that validates while replaying stale edges until the file
+  # changes again, and the _FE_FILES memo widens the same window to every consumer of a shared
+  # file in one process. Bounded to a mid-walk edit (a race the uncached derive also carries,
+  # though it self-heals next run); hashing at read time would cost the per-file forks the design
+  # exists to avoid. Documented residual, ADR-242 decision 21.
   local _rhashes=""
   if (( ${#_ADC_REC_READS[@]} > 0 )); then
     _rhashes="$(printf '%s\n' "${_ADC_REC_READS[@]}" | _adc_git hash-object --no-filters --stdin-paths)" || return 0
@@ -280,8 +324,13 @@ _adc_store() { # <label> <key>
     for _p in ${_ADC_REC_PROBES[@]+"${_ADC_REC_PROBES[@]}"}; do
       printf 'probe\t%s\n' "$_p"
     done
-    printf 'end\n'
   } > "$_tmp" 2>/dev/null || { rm -f "$_tmp"; _adc_note "record write failed"; return 0; }
+  # Integrity trailer: cksum over the body (everything before the sum line), then end. The read
+  # side recomputes over the same bytes; a mismatch is a structural reject, never a partial serve.
+  local _sum
+  _sum="$(cksum < "$_tmp" 2>/dev/null)" || _sum=""
+  if [[ -z "$_sum" ]]; then rm -f "$_tmp"; return 0; fi
+  printf 'sum\t%s\nend\n' "$_sum" >> "$_tmp" 2>/dev/null || { rm -f "$_tmp"; _adc_note "record write failed"; return 0; }
   chmod 600 "$_tmp" 2>/dev/null || true
   mv "$_tmp" "$_rec" 2>/dev/null || { rm -f "$_tmp"; _adc_note "record commit failed"; return 0; }
   # Bounded churn, once per process: sweep the schema root (old vN/ dirs too, so a schema bump
@@ -311,6 +360,8 @@ _affected_classify_cached() { # <label> <argv...>
   fi
   local _key="" _lk=0
   _key="$(_adc_key "$_label" "$@")" || _key=""
+  # The key lands in a filename — bound it to hash-object's hex output shape before trusting it.
+  case "$_key" in ""|*[!0-9a-f]*) _key="" ;; esac
   if [[ -n "$_key" && -f "$_ADC_DIR/$_key.rec" ]]; then
     if _adc_lookup "$_key" "$_label"; then
       _ADC_HITS=$((_ADC_HITS + 1))
@@ -327,6 +378,7 @@ _affected_classify_cached() { # <label> <argv...>
     _ADC_MISSES=$((_ADC_MISSES + 1))
   fi
   _ADC_REC=1
+  _ADC_REC_BAD=0
   _ADC_REC_PROBES=()
   _ADC_REC_READS=()
   _ADC_REC_PSET=$'\n'

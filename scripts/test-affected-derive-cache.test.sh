@@ -160,21 +160,29 @@ fi
 # exists and helper.sh pulls dep+tool2). Every fallback below must reproduce it byte-identically.
 _gold_state="$(printf '%s\n' "$_d" | grep -v '^[HMD]=')"
 
-# T5 — corrupt record falls back to a fresh derive with identical output.
+# T5 — corrupt record falls back to a fresh derive with identical output, in two legs: (a) payload
+# appended AFTER the `end` trailer — the post-trailer guard must reject it, and (b) a truncated
+# record — the missing `end`/`sum` trailer must reject it. Each re-derives and re-stores a clean
+# record for the next leg.
 cases=$((cases + 1))
 _recdir="$FX/.soleur/cache/affected-derive"
 _corrupt_rc=0
-_rfile="$(find "$_recdir" -name '*.rec' -type f 2>/dev/null | head -1)" || _corrupt_rc=$?
+_rfile="$(find "$_recdir" -name '*.rec' -type f -print -quit 2>/dev/null)" || _corrupt_rc=$?
 if [[ -z "$_rfile" ]]; then _corrupt_rc=9; fi
 if (( _corrupt_rc == 0 )); then
-  printf 'edge\tCORTEX-MARKER-NEVER-A-REAL-EDGE\n' >> "$_rfile"
-  head -c 200 "$_rfile" > "$_rfile.trunc" && mv "$_rfile.trunc" "$_rfile"
-  _f="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
-  _f_state="$(printf '%s\n' "$_f" | grep -v '^[HMD]=')"
-  if [[ "$_f_state" == "$_gold_state" ]] && printf '%s' "$_f" | grep -q '^H=0 M=1 D=0$'; then
-    pass "T5: truncated/corrupt record misses and re-derives the identical state"
+  printf 'edge\tCORTEX-MARKER-NEVER-A-REAL-EDGE\n' >> "$_rfile"   # leg a: post-trailer garbage
+  _f1="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+  _f1_state="$(printf '%s\n' "$_f1" | grep -v '^[HMD]=')"
+  _rfile="$(find "$_recdir" -name '*.rec' -type f -print -quit 2>/dev/null)"
+  head -c 200 "$_rfile" > "$_rfile.trunc" && mv "$_rfile.trunc" "$_rfile"   # leg b: truncation
+  _f2="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+  _f2_state="$(printf '%s\n' "$_f2" | grep -v '^[HMD]=')"
+  if [[ "$_f1_state" == "$_gold_state" && "$_f2_state" == "$_gold_state" ]] \
+    && printf '%s' "$_f1" | grep -q '^H=0 M=1 D=0$' \
+    && printf '%s' "$_f2" | grep -q '^H=0 M=1 D=0$'; then
+    pass "T5: post-trailer garbage and truncated records both miss and re-derive the identical state"
   else
-    fail "T5: warm=[${_f//$'\n'/|}]"
+    fail "T5: post-trailer=[${_f1//$'\n'/|}] truncated=[${_f2//$'\n'/|}]"
   fi
 else
   fail "T5: no record file found under $_recdir to corrupt (find rc=$_corrupt_rc)"
@@ -182,9 +190,10 @@ fi
 
 # T6 — wrong schema field falls back: a record claiming another schema refuses at parse.
 cases=$((cases + 1))
-_rfile2="$(find "$_recdir" -name '*.rec' -type f 2>/dev/null | head -1)"
+_rfile2="$(find "$_recdir" -name '*.rec' -type f -print -quit 2>/dev/null)"
 if [[ -n "$_rfile2" ]]; then
-  sed -i '' 's/^schema	.*/schema	vWRONG/' "$_rfile2" 2>/dev/null || sed -i 's/^schema	.*/schema	vWRONG/' "$_rfile2"
+  # sed -i.bak + rm: the only prior in-place convention in scripts/ — works on BSD and GNU alike.
+  sed -i.bak 's/^schema	.*/schema	vWRONG/' "$_rfile2" && rm -f "$_rfile2.bak"
   _g="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
   if printf '%s' "$_g" | grep -q '^H=0 M=1 D=0$'; then
     pass "T6: a wrong-schema record misses and re-derives"
@@ -195,12 +204,16 @@ else
   fail "T6: no record file to corrupt"
 fi
 
-# T7 — kill switch: SOLEUR_AFFECTED_DERIVE_CACHE=0 derives fresh and writes nothing.
+# T7 — kill switch: SOLEUR_AFFECTED_DERIVE_CACHE=0 derives fresh, writes nothing (the record count
+# must not move — a switch that wrote would poison anyway).
 cases=$((cases + 1))
+_recs_before="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
 _h="$(cache_run "$FX" "SOLEUR_AFFECTED_DERIVE_CACHE=0; export SOLEUR_AFFECTED_DERIVE_CACHE; _affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+_recs_after="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
 _h_state="$(printf '%s\n' "$_h" | grep -v '^[HMD]=')"
-if [[ "$_h_state" == "$_gold_state" ]] && printf '%s' "$_h" | grep -q '^H=0 M=0 D=0$'; then
-  pass "T7: kill switch derives fresh, serves identical state, touches no counter"
+if [[ "$_h_state" == "$_gold_state" && "$_recs_before" == "$_recs_after" ]] \
+  && printf '%s' "$_h" | grep -q '^H=0 M=0 D=0$'; then
+  pass "T7: kill switch derives fresh, serves identical state, touches no counter, writes no record"
 else
   fail "T7: warm=[${_h//$'\n'/|}]"
 fi
@@ -231,56 +244,82 @@ else
   fail "T9: rc=$_j_rc notes=$_j_notes state=[${_j//$'\n'/|}]"
 fi
 
-# T10 — probe-site census: every `-e`/`-f`/`-d` existence probe in the extracted derive span is either
-# routed through `_affected_probe`/`_affected_rec_read`, inside the recorder's own body (operand `$_pp`),
-# or the named `_wt_missing_die` liveness exemption. A probe site added later WITHOUT recording must
-# fail here — the guard against silent invalidation weakening.
+# T10 — input-site census: every filesystem input the extracted derive span can consult is either
+# routed through `_affected_probe`/`_affected_rec_read`, inside the recorder's own body (`$_pp`), or
+# the named `_wt_missing_die` liveness exemption — and every `_[a-z_]+` callee the span reaches is
+# defined INSIDE the span (so the code hash covers it) or on the pinned boundary list. A site added
+# later WITHOUT recording must fail here — the guard against silent invalidation weakening.
 cases=$((cases + 1))
-# A probe SITE is `[`-/`[[`-syntax: `[ -e x`, `[[ ! -f y ]]`, plus bare `test -e`. Requiring the
-# bracket/test keeps `sed -e` flags and grep `-e` patterns from false-matching; the predicate set
-# is the existence-ish file tests, wider than just e/f/d so a future `-x`/`-s` site can't slip.
-# Exemptions: the recorder bodies probe `$_pp`, and the `_wt_missing_die` cwd-liveness check is a
-# liveness probe, not a derive input.
-_census_bad="$(grep -nE '(\[\[?[[:space:]]*!?[[:space:]]*|(^|[^_[:alnum:]])test[[:space:]]+!?[[:space:]]*)-[efdxsrwLh][[:space:]]' "$DERIVE_SRC" \
+# Probe census: a site is a file-test predicate in [ / [[ / test syntax — in ANY position including
+# after && / || / ! inside a compound test (`[[ -n "$p" && -e "$p" ]]` must be caught). The
+# predicate class is the full file-test set plus -nt/-ot/-ef, not just e/f/d — a future -x or -s
+# site is an unrecorded input the same way. `sed -e` flags and grep `-e` patterns never sit behind
+# a test-opener token, so they stay unflagged.
+_census_bad="$(grep -nE '(\[\[?|&&|\|\||!|(^|[^_[:alnum:]])test[[:space:]])[[:space:]]*(-[abcdefghkprstuwxGLNOS]|-nt|-ot|-ef)[[:space:]]' "$DERIVE_SRC" \
   | grep -vE '^[0-9]+:[[:space:]]*#|\$_pp|_wt_missing_die|_affected_(probe|rec_read)')"
-# Read side: every file-content read in the span must happen inside _affected_file_edges_uncached
-# (its operand "$_f" is recorded by _affected_rec_read at the _affected_file_edges entry). Flag any
-# read primitive outside it — a mapfile/$(<f)/source/cat/direct grep-on-$var added to the span would
-# consume a file's bytes with nothing recorded, silently weakening invalidation.
+# Read census: every file-content read must be the funnel read — "$_f" inside
+# _affected_file_edges_uncached, recorded via _affected_rec_read at the _affected_file_edges entry.
+# Outside the funnel flag mapfile/readarray/$(<f)/source/dot-source, cat and kin with a path
+# operand, grep/sed/awk taking a $-variable operand, and `< FILE` redirect reads; inside the funnel
+# a primitive on any variable OTHER than $_f reads unrecorded bytes. (Residual: exotic primitives
+# — git show, backtick-cat, eval-indirection — are outside this window; the probe census plus the
+# bench are the deeper net.)
 _reads_bad="$(awk '
   /^[[:space:]]*#/ {next}
   /^_affected_file_edges_uncached\(\)/ {inf=1}
   inf && /^\}$/ {inf=0}
-  !inf && (/mapfile|readarray|\$\([<]/ || /(^|[^_[:alnum:]])(source|\.)[[:space:]]+["'"'"'$\/A-Za-z_.]/ || /(^|[[:space:]])cat[[:space:]]+["'"'"'$\/A-Za-z_.]/ || /grep[[:space:]][^|]*\$_(f|new|tok|mod)\b/) {print NR": "$0}
+  !inf && (/mapfile|readarray|\$\([<]/ ||
+           /(^|[^_[:alnum:]])(source|\.)[[:space:]]+["'"'"'$\/A-Za-z_.]/ ||
+           /(^|[[:space:]])(cat|head|tail|wc|sort|uniq|cmp|diff|comm|perl|python|python3|jq|dd|iconv|xargs)[[:space:]]+["'"'"'$\/.A-Za-z_]/ ||
+           /(grep|sed|awk)[[:space:]][^|;><]*\$\{?[A-Za-z_]/ ||
+           /done[[:space:]]*<[^<(]|(^|[^_])read[[:space:]][^;|]*<[^<(]/) {print NR": "$0; next}
+  inf && /(grep|sed|awk|cat|head|tail|wc|mapfile|readarray)[[:space:]][^|;><]*\$\{?[A-Za-z_]/ && !/\$_f/ {print NR": funnel-read-not-on-$_f: "$0}
 ' "$DERIVE_SRC")"
 if [[ -n "$_reads_bad" ]]; then
   _census_bad="${_census_bad:+${_census_bad} || }read-sites: ${_reads_bad}"
 fi
+# Boundary census: the derive-family functions (_affected_*, _wt_*) defined OUTSIDE the extracted
+# span must be exactly the pinned boundary set — a NEW out-of-span helper would escape both the
+# code hash and every census above.
+_defs_all="$(grep -oE '^_[a-z_]+\(' "$RUNNER" | tr -d '(' | sort -u)"
+_defs_span="$(grep -oE '^_[a-z_]+\(' "$DERIVE_SRC" | tr -d '(' | sort -u)"
+_affected_out="$(comm -23 <(printf '%s\n' "$_defs_all") <(printf '%s\n' "$_defs_span") | grep -E '^(_affected|_wt_)')"
+if [[ "$_affected_out" != $'_affected_emit_receipt\n_wt_missing_die' ]]; then
+  _census_bad="${_census_bad:+${_census_bad} || }out-of-span derive-family defs drifted: ${_affected_out//$'\n'/,}"
+fi
+# The lib's own span-extraction must not go silently partial — both awk legs must produce output
+# on the real runner or the code hash quietly drops half the derive.
+_s1="$(awk '/^_AC_CLASS=""$/ && !s {s=1} s {print} s && /^_affected_derive\(\) \{/ {d=1} d && /^\}$/ {exit}' "$RUNNER")"
+_s2="$(awk '/^_affected_classify\(\) \{/ {s=1} s {print} s && /^\}$/ {exit}' "$RUNNER")"
+if [[ ${#_s1} -lt 4096 || -z "$_s2" ]]; then
+  _census_bad="${_census_bad:+${_census_bad} || }lib extraction anchors drifted (s1=${#_s1}B s2=${#_s2}B)"
+fi
 if [[ -z "$_census_bad" ]]; then
   _probe_calls=$(grep -c '_affected_probe [efd] ' "$DERIVE_SRC")
   if (( _probe_calls >= 7 )); then
-    pass "T10: census — every probe in the derive span is recorded or exempt (${_probe_calls} recorded sites)"
+    pass "T10: census — every probe/read/callee in the derive span is recorded, exempt, or boundary-pinned (${_probe_calls} recorded sites)"
   else
     fail "T10: census clean but only ${_probe_calls} recorded probe sites (<7 — instrumentation dropped?)"
   fi
 else
-  fail "T10: unrecorded probe site(s) in the derive span: ${_census_bad//$'\n'/ || }"
+  fail "T10: unrecorded input site(s) in the derive span: ${_census_bad//$'\n'/ || }"
 fi
 
-# T11 — the runner emits the AFFECTED_DERIVE_CACHE counters line at walk end (AC8's observability leg)
-# and the walk's SUITE_COMMAND arm routes through the wrapper. Static grep rows — cheap and pinned to
-# the emit/integrate sites.
+# T11 — the runner emits the AFFECTED_DERIVE_CACHE counters line at walk end (AC8's observability
+# leg) and the walk's SUITE_COMMAND arm routes through the wrapper. Anchored on the call shapes, not
+# bare names, so comments can't satisfy them.
 cases=$((cases + 1))
-if grep -qF 'AFFECTED_DERIVE_CACHE\thits=%d' "$RUNNER" && grep -q '_affected_classify_cached ' "$RUNNER"; then
-  pass "T11: runner emits AFFECTED_DERIVE_CACHE hits=/misses=/derived= and routes the walk through the wrapper"
+if grep -qF 'AFFECTED_DERIVE_CACHE\tstate=%s\thits=%d' "$RUNNER" \
+  && grep -qF '_affected_classify_cached "${_aff_fields[1]}"' "$RUNNER"; then
+  pass "T11: runner emits AFFECTED_DERIVE_CACHE state=/hits=/misses=/derived= and routes the walk through the wrapper"
 else
   fail "T11: runner lacks the emit line or the wrapper call site"
 fi
 
-# T12 — kill-switch var and lib presence are referenced in the runner's own lib-load block (the
-# degrade-never-block arm): a missing/absent lib must leave plain classify reachable. Static row.
+# T12 — the runner actually sources the lib through $_ADC_LIB (the degrade-never-block arm): a
+# missing/absent lib must leave plain classify reachable. Anchored on the source call.
 cases=$((cases + 1))
-if grep -q 'test-affected-derive-cache.sh' "$RUNNER"; then
+if grep -qF 'source "$_ADC_LIB"' "$RUNNER"; then
   pass "T12: runner sources scripts/lib/test-affected-derive-cache.sh"
 else
   fail "T12: runner never sources the cache lib"
@@ -311,6 +350,84 @@ if printf '%s' "$_k" | grep -q 'maybe' && printf '%s' "$_k" | grep -q '^H=0 M=0 
   pass "T13: memo-consumer's record carries the extractor's probe slice (created file re-derives it)"
 else
   fail "T13: memo-consumer warm=[${_k//$'\n'/|}]"
+fi
+
+# T14 — dispatch guards: the wrapper must bypass the cache (and write nothing) outside the
+# all-group selection-walk context — TEST_GROUP≠all, and receipt mode (_PRINT_AFFECTED=1), whose
+# edge set is deliberately partial and must never be minted into a record.
+cases=$((cases + 1))
+_recs_t14="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
+_t14a="$(cache_run "$FX" "TEST_GROUP=webplat; _affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+_t14b="$(cache_run "$FX" "_affected_emit_receipt() { :; }; _PRINT_AFFECTED=1; _affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+_recs_t14b="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
+if printf '%s' "$_t14a" | grep -q '^H=0 M=0 D=0$' \
+  && printf '%s' "$_t14b" | grep -q '^H=0 M=0 D=0$' \
+  && [[ "$_recs_t14" == "$_recs_t14b" ]]; then
+  pass "T14: dispatch guards — TEST_GROUP/receipt contexts skip the cache and write nothing"
+else
+  fail "T14: group=[${_t14a//$'\n'/|}] receipt=[${_t14b//$'\n'/|}] recs $_recs_t14->$_recs_t14b"
+fi
+
+# T15 — cross-worktree refusal: a record minted in FX must never validate under FX2 even with
+# identical code markers, label, and argv — the worktree field refuses it (AC6 leg).
+cases=$((cases + 1))
+# The record's FILENAME is its key — pick the canonical argv's record by computing the key in-fixture
+# (a same-label record under different argv shares the label but lands at a different key).
+_canon_key="$(cache_run "$FX" "_adc_init; _adc_key mysuite bash suite.test.sh" 2>/dev/null)"
+_rec_src="$_recdir/v1/$_canon_key.rec"
+_fx2dir="$FX2/.soleur/cache/affected-derive/v1"
+if [[ -f "$_rec_src" && -d "$_fx2dir" ]]; then
+  cp "$_rec_src" "$_fx2dir/"
+  _m="$(cache_run "$FX2" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+  if printf '%s' "$_m" | grep -q '^H=0 M=1 D=0$'; then
+    pass "T15: a record copied across worktrees misses (worktree field refuses foreign records)"
+  else
+    fail "T15: warm=[${_m//$'\n'/|}]"
+  fi
+else
+  fail "T15: no FX record to copy or FX2 cache dir missing"
+fi
+
+# T16 — in-body corruption: flip a byte inside the class field (record still parses, all field
+# checks pass) — the `sum` trailer must catch what structure checks cannot. Re-derives and heals.
+cases=$((cases + 1))
+_rfile3="$_recdir/v1/$_canon_key.rec"
+if [[ -f "$_rfile3" ]]; then
+  sed -i.bak 's/^class	.*/class	edge:forged-never-a-class/' "$_rfile3" && rm -f "$_rfile3.bak"
+  _n="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+  _n_state="$(printf '%s\n' "$_n" | grep -v '^[HMD]=')"
+  if [[ "$_n_state" == "$_gold_state" ]] && printf '%s' "$_n" | grep -q '^H=0 M=1 D=0$'; then
+    pass "T16: a checksum-mismatched record misses and re-derives the identical state"
+  else
+    fail "T16: warm=[${_n//$'\n'/|}]"
+  fi
+else
+  fail "T16: no record file to corrupt"
+fi
+
+# T17 — argv key collision shape: ('a|b','c') and ('a','b|c') join to the identical string under a
+# delimiter scheme — length-prefixing keeps them distinct, and the record count discriminates.
+cases=$((cases + 1))
+_recs_t17="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
+cache_run "$FX" "_affected_classify_cached argvshape bash suite.test.sh 'a|b' 'c'" >/dev/null 2>&1
+cache_run "$FX" "_affected_classify_cached argvshape bash suite.test.sh 'a' 'b|c'" >/dev/null 2>&1
+_recs_t17b="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
+if (( _recs_t17b == _recs_t17 + 2 )); then
+  pass "T17: ('a b') vs ('a','b') mint two distinct records (length-prefixed argv)"
+else
+  fail "T17: record count $_recs_t17 -> $_recs_t17b (expected +2)"
+fi
+
+# T18 — recorded-HIT probe flips to missing: remove a file the derive probed-and-read at record
+# time. Both the probe outcome and the read hash drift — the record must re-derive, and the edge
+# must leave the replayed set. (Last FX row: this mutates the fixture's gold state.)
+cases=$((cases + 1))
+rm -f "$FX/lib/tool.sh"
+_o="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
+if printf '%s' "$_o" | grep -q '^H=0 M=0 D=1$' && ! printf '%s' "$_o" | grep -q 'tool\.sh'; then
+  pass "T18: deleting a recorded-hit file re-derives (D=1, edge leaves the set)"
+else
+  fail "T18: warm=[${_o//$'\n'/|}]"
 fi
 
 echo
