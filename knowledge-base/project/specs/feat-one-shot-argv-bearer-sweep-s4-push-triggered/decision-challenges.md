@@ -15,11 +15,11 @@ Taste and user-challenge items from the planning pass. Each states the default t
 - Default taken: one PR, commit layering isolates the two infra-path commits (6 and 7).
 - Alternative: move commits 6 and 7 (every file the apply keys on) to a follow-on PR so the first PR fires only the web release and the RLS self-apply. Cost: S4 would span two PRs and the held-back S3 sites would wait.
 
-## 3. Checkout-free production jobs gain a one-file sparse checkout (user-challenge)
+## 3. Checkout-free production jobs keep their no-checkout design and take the inline wrapper (user-challenge)
 
 - Finding: `web-platform-release` `deploy` and `release-outcome`, and `deploy-inngest-image` `deploy`, deliberately have no checkout (comments, ADR-072 and ADR-217); the library must come from the job's own checkout (ADR-280).
-- Default taken: `actions/checkout` pinned, `persist-credentials: false`, `sparse-checkout: scripts/lib/bearer-curl.sh`, cone mode off, as the first step; a checkout outage now fails the deploy job at step 0 (loud, prod stays on the previous build), and a `release-outcome` checkout failure would suppress that job's operator email (its Sentry event is independent).
-- Alternative: convert those five sites inline (S2 pattern, five more copies of the guard each with a parity row), keeping the checkout-free design.
+- Default taken (plan D4): the S2 inline wrapper at those seven sites (step-local shape guard, `curl --disable --noproxy '*' ... --config -`, canonical python3 HMAC snippet); no checkout step is added. Cost: seven more guard copies, bounded by the S2 parity audit.
+- Alternative: a one-file sparse checkout (`actions/checkout` pinned, `persist-credentials: false`, `sparse-checkout: scripts/lib/bearer-curl.sh`, cone mode off) as the first step, then the library; a checkout outage would then fail the deploy job at step 0, and a `release-outcome` checkout failure would suppress that job's operator email (its Sentry event is independent).
 
 ## 4. Two sites take the inline wrapper instead of the library (taste)
 
