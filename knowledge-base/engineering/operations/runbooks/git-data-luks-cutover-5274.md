@@ -522,7 +522,7 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
         bootstrap count sees it, because both skip `.*.init.lock`. The file is 0 bytes, but its name
         is the user's id, so it is personal data on the store. That describes the pre-#9226 wrapper; since
         #9226 the wrapper opens one shared `.init.lock`, which carries no id, and the host was replaced onto
-        that payload on 2026-10-08 (ADR-239, amendment 2026-10-09). Files written before then still count
+        that payload on 2026-10-08 (per the workflow run and its head commit, not read from the host; ADR-239, amendment 2026-10-09). Files written before then still count
         here. Classify every
         `op:git-data-bare-repo-erasure` event in the window, per id, by its `erasure_outcome` tag
         and `detail`:
@@ -592,7 +592,8 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
         copy in web-1 /workspaces (a separate operation)
         retained-volume limb: ends when the volume is destroyed (DL-2 wipe, #6897), never mounted to purge
         in place; served-store limb: removed only by the freeze-window purge, which has not run; gc cursor
-        (.gc-cursor, holds the last repo's name): not covered by either; dates and slip rule: ADR-239,
+        (.gc-cursor, may still hold the last repo's name, which can be the erased workspace's id, until a gc run
+        completes another repo): not covered by either; dates and slip rule: ADR-239,
         amendment 2026-10-09
       earliest request: <date>  Art. 12(3) deadline: <date>
       ```

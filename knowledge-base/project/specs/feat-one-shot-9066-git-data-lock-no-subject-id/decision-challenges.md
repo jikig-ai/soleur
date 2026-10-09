@@ -18,8 +18,8 @@
 
 ## DC-4 (User-Challenge) — a second id-bearing file exists and is NOT fixed here (found at review)
 
-- **Finding:** `git-data-gc.sh` writes the last completed repo's basename (`<id>.git`) to `.gc-cursor` at the mount root, above the repo root the new check scans. After an erasure the id can persist there up to a week (weekly timer), indefinitely if no repo remains. Confirmed by two review seats and read in the code.
-- **Why not fixed in this PR:** closing it edits a hash-bound payload (`git-data-gc.sh`, or the remove wrapper), which needs the rung-2 two-PR sequence. The operator direction for this PR was no payload change and no PR2 step.
+- **Finding:** `git-data-gc.sh` writes the last completed repo's basename (`<id>.git`) to `.gc-cursor` at the mount root, above the repo root the new check scans. After an erasure the id can persist there until a later run completes a repo (nominally weekly; the freeze stops the timer), indefinitely if no repo remains. Confirmed by two review seats and read in the code.
+- **Why not fixed in this PR:** closing it edits a hash-bound payload (`git-data-gc.sh`, or the remove wrapper), which needs the rung-2 two-PR sequence. The scope given for this PR excludes any payload change and the PR2 step.
 - **What this PR does instead:** states the limb in ADR-239, the runbook `not covered:` line and the PR body, and records it on #9066 (the open tracker). The owner decides whether to take the payload change before the first flip.
 - **Reversibility:** high; nothing here forecloses the fix.
 

@@ -355,12 +355,14 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   two-PR payload sequence has already run for this change. A new check in the wrappers' unbound test files pins
   the property for the repo root: after an erasure, a provision or a refusal, no entry under the repo root
   other than `<id>.git` carries the workspace id in its name, its content or a symlink target.
-- **What was already written is a different question.** `git_data_host_replace` ran on 2026-10-08 (workflow
-  run 37846545572, head `d0b5d2e35b`, which contains #9226), so erasures since then are expected to write only
-  the shared lock; that was read from the run and its head, not from the host. Both volumes were preserved
-  across that replace. Per-id `.<id>.init.lock` files from earlier erasures therefore remain where they were
-  written: on the retained plaintext volume for erasures before PR #8564 (host birth, 2026-09-14), and on the
-  LUKS-served store for erasures after #8564 and before the replace. No count sees them (the counters skip
+- **What was already written is a different question.** A plain `git_data_host_replace` (its
+  both-volumes-preserved assert passed) ran on 2026-10-08 as workflow run 37846545572 from head `d0b5d2e35b`,
+  which contains #9226, so erasures since then are expected to write only the shared lock; that was read from
+  the run and its head, not from the host. Both volumes were preserved across that replace. Any per-id
+  `.<id>.init.lock` files from earlier erasures therefore remain where they were written: on the retained
+  plaintext volume for erasures from host birth (2026-09-14) until the 2026-09-25 replace onto the
+  LUKS-at-birth payload (run 36118115758, recorded in the 2026-09-27 amendment), and on the LUKS-served store
+  for erasures between that replace and the 2026-10-08 one. No count sees them (the counters skip
   `.*.init.lock`), so whether any exist is not measured. The in-freeze purge (2026-09-30 amendment) will remove
   the served-store ones when a freeze window runs; none has run, and neither the purge nor any other removal is
   taken by this amendment. That amendment's binding of the residue to the freeze window is narrowed here to the
@@ -375,9 +377,11 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   device and claims nothing about copies of it.
 - **A second id-bearing file the repo-root check cannot see: the gc cursor.** `git-data-gc.sh` writes the
   basename of the last repo it completed (`<id>.git`) to `.gc-cursor` at the mount root, one level above the
-  repo root, and a later run that completes a repo overwrites it. The timer is weekly (Sunday 03:20), so after
-  an erasure the erased id can remain there for up to a week, and indefinitely if no repo remains on the store
-  to be completed. Neither the new check nor the in-freeze purge covers it. Closing it changes a hash-bound
+  repo root, and a later run that completes a repo overwrites it. The timer is nominally weekly (Sunday 03:20), but a
+  run that skips, fails or finds the store unverified leaves the old value, and `MODE=freeze` stops the timer,
+  so after an erasure the erased id can remain there until a later run completes a repo, and indefinitely if
+  no repo remains on the store to be completed. Whether a stale cursor also sits on the plaintext volume is not
+  measured. Neither the new check nor the in-freeze purge covers it. Closing it changes a hash-bound
   payload (`git-data-gc.sh`, or the remove wrapper clearing a matching cursor), so it needs the rung-2
   two-PR sequence and is not part of this change; it is recorded on #9066.
 - **The date is a target, not a fact.** The wipe body was deleted from `git-data-cutover.sh` in #8189 (landed
@@ -388,9 +392,10 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   quietly.** Until the volume is deleted, the files remain readable to anyone holding the volume or a snapshot of
   it. The lint warns inside 14 days of `expires_on` and fails CI after it.
 - **Inputs for the CLO re-ruling.** The issue sets the trigger: if the fix and the served-store purge slip past
-  2026-10-24, the CLO re-rules on the DPD §10.3(b) disclosure. The re-ruling needs the state of three things: the
+  2026-10-24, the CLO re-rules on the DPD §10.3(b) disclosure. The re-ruling needs the state of four things: the
   wipe (done, with Hetzner delete evidence, or slipped), the served-store purge (run, with its count, or not),
-  and the flip (slipped, so the wipe, which is gated behind it, has not been reached).
+  the flip (slipped, so the wipe, which is gated behind it, has not been reached), and the gc cursor (fixed by a
+  hash-bound payload change, declined by the owner, or still open).
 
 Alternatives considered and rejected: purging the files in place by mounting the volume (violates D2); a
 standalone dated purge (needs the same writable mount); extending the date without re-opening this ADR
