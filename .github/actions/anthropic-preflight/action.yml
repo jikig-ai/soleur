@@ -39,7 +39,7 @@ runs:
           echo "::error::ANTHROPIC_API_KEY failed the token-shape guard"
           exit 1
         fi
-        PAYLOAD=$(jq -nc '{model:"claude-haiku-4-5-20251001",max_tokens:1,messages:[{role:"user",content:"."}]}')
+        PAYLOAD=$(jq -nc '{model:"claude-haiku-5-5",max_tokens:1,messages:[{role:"user",content:"."}]}')
         HTTP_CODE=$(bc_curl anthropic-preflight 'x-api-key::ANTHROPIC_API_KEY' -- \
           -sS -o "$BODY_FILE" -w "%{http_code}" \
           https://api.anthropic.com/v1/messages \

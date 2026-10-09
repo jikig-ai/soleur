@@ -1219,10 +1219,10 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # production apply, so they are an S4/S5-class change with operator notice and are tracked there;
 # the other hits of the pattern are the `$HBODY` response-body variable of the Hetzner helpers,
 # not a heartbeat; a later conversion is `url = "..."` on the stdin config behind a shape guard); `doppler --token`; `jq --arg`
-# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (24 production sites in 13 files, measured
-# 2026-10-08 with `git grep -nE 'dgst .*-hmac'` minus Markdown, `*.test.sh`, fixtures, `tests/`,
+# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (23 production sites in 12 files, measured
+# 2026-10-09 after ci-deploy.sh's fan-out signer was converted in #9799, with `git grep -nE 'dgst .*-hmac'` minus Markdown, `*.test.sh`, fixtures, `tests/`,
 # knowledge-base/ and this file, and minus the lines whose first non-space character is `#`: the raw
-# command prints 25 hits, the 25th being a prose comment in kb-drift-walker.yml); the key is on openssl's argv. A stdin or env form
+# command prints 24 hits, the 24th being a prose comment in kb-drift-walker.yml); the key is on openssl's argv. A stdin or env form
 # EXISTS now (the converted signers in scripts/cutover-inngest.sh, the community skill's
 # lib/hmac-sha1-b64.sh and the Python signers keep the key off argv) and is not detected here. TWO sites in
 # scripts/cutover-inngest.sh (the registry-probe and doublefire-probe signatures, lines 1372 and 1546 when

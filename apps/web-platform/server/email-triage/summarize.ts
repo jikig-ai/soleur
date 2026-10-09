@@ -22,6 +22,7 @@ import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { sanitizePromptString } from "@/server/inngest/leader-prompts/prompt-assembly";
 import { HAIKU_MODEL } from "@/server/inngest/leader-prompts/constants";
 import { reportSilentFallback } from "@/server/observability";
+import { noTextBlockExtra } from "@/server/anthropic-stop-report";
 import {
   isAnthropicCreditExhausted,
   reportAnthropicCreditExhausted,
@@ -43,6 +44,20 @@ export const MAIL_CLASS_ALLOWLIST = [
 ] as const;
 
 export type MailClass = (typeof MAIL_CLASS_ALLOWLIST)[number];
+
+/**
+ * Stored (write-once column) when the model returned no usable answer: empty text, a
+ * refusal, or a turn cut off before a parseable summary. An explicit placeholder beats an
+ * empty string or a raw JSON fragment the operator would have to interpret. The body is
+ * discarded at ingestion, so the pointer is the original in the ops@ mailbox (the same
+ * wording email-on-received.ts uses for its own degraded rows).
+ *
+ * It must NOT start with email-on-received's `fetch/summarize failed` prefix: that prefix
+ * is what the daily LLM-call ceiling EXCLUDES from its count, and a degraded Haiku turn
+ * spent money, so it has to keep counting.
+ */
+export const NO_USABLE_ANSWER_SUMMARY =
+  "Summary unavailable (the model returned no usable answer) — verify against the Proton original";
 
 /** Hard byte cap applied to the body BEFORE sanitize/summarize. */
 export const MAX_SUMMARIZE_BODY_BYTES = 64 * 1024;
@@ -108,11 +123,22 @@ export async function summarizeEmail(input: {
   const cleanSender = sanitizePromptString(input.sender);
 
   const client = new Anthropic({ apiKey });
-  let response: { content: { type: string; text?: string }[] };
+  let response: {
+    content: { type: string; text?: string }[];
+    stop_reason?: string | null;
+    stop_details?: { category?: string | null } | null;
+  };
   try {
     response = (await client.messages.create({
       model: HAIKU_MODEL,
       max_tokens: SUMMARIZE_MAX_TOKENS,
+      // Haiku 5.5 runs adaptive thinking by default and thinking tokens count against
+      // max_tokens. effort "low" keeps the 256 budget for the answer (2026-10-08 probe:
+      // 87-105 output tokens either way; this is headroom for longer bodies). Do NOT add
+      // `thinking: {type: "disabled"}` (capability flag unresolved), `fallbacks` (the
+      // Haiku docs document no server-side fallback; not live-probed) or assistant
+      // prefill (documented 400; not probed).
+      output_config: { effort: "low" },
       system: SYSTEM_PROMPT,
       messages: [
         {
@@ -123,7 +149,11 @@ export async function summarizeEmail(input: {
             `Body:\n${cleanBody}`,
         },
       ],
-    })) as unknown as { content: { type: string; text?: string }[] };
+    })) as unknown as {
+      content: { type: string; text?: string }[];
+      stop_reason?: string | null;
+      stop_details?: { category?: string | null } | null;
+    };
   } catch (err) {
     // #8505: this is the only SDK caller of the operator key, so it is the second
     // credit-marker chokepoint. Report, then rethrow unchanged so the caller's
@@ -138,6 +168,25 @@ export async function summarizeEmail(input: {
 
   const textBlock = response.content?.find((b) => b.type === "text");
   const raw = (textBlock?.text ?? "").trim();
+  // No usable answer (budget spent on thinking, cut at max_tokens, or refused) used to
+  // store an empty summary silently. Mirror it on the message path with err = null (an
+  // Error argument is captured by the pino mirror first and the tagged event is
+  // deduplicated away, #8629). The shared helper builds `extra` from a closed vocabulary
+  // — TR3: never the subject, sender, body, or the SDK error object.
+  const noTextExtra = noTextBlockExtra({
+    text: raw,
+    stopReason: response.stop_reason,
+    stopDetails: response.stop_details,
+    model: HAIKU_MODEL,
+  });
+  if (noTextExtra) {
+    reportSilentFallback(null, {
+      feature: "email-triage",
+      op: "no-text-block",
+      message: "email summarizer turn was empty, cut off or refused (see extra.stop_reason)",
+      extra: noTextExtra,
+    });
+  }
   // Tolerate a fenced JSON block; otherwise parse as-is.
   const jsonText = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
 
@@ -158,8 +207,14 @@ export async function summarizeEmail(input: {
     // summary. Never log the content (TR3).
   }
 
+  // A degraded turn stores the placeholder unless its JSON happened to be complete; a
+  // healthy non-JSON answer keeps its raw text (unchanged). The class coercion is skipped
+  // for a degraded turn with no class: the no-text-block report above already covers the
+  // incident, and a second event for it is noise.
+  const summary = parsedSummary ?? (noTextExtra === null ? raw : NO_USABLE_ANSWER_SUMMARY);
   return {
-    summary: (parsedSummary ?? raw).slice(0, 600),
-    mailClass: coerceMailClass(parsedClass),
+    summary: summary.slice(0, 600),
+    mailClass:
+      noTextExtra !== null && parsedClass == null ? "other" : coerceMailClass(parsedClass),
   };
 }
