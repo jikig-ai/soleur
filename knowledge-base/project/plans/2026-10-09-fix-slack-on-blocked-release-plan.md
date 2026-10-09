@@ -11,6 +11,22 @@ lane: single-domain
 
 # fix: a blocked release must also reach Slack (#7256)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09 (proportionate pass: the four-seat plan-review panel already ran; the 40-agent fan-out was deliberately not repeated for a ~250-line CI change on a contended machine)
+**Gates run mechanically:** 4.6 User-Brand Impact (pass, `none` with scope-out), 4.7 Observability (five fields present, probe is `grep`, expected output is the literal `1`), 4.8 PAT-shaped variables (none), 4.9 UI wireframe (not applicable), 4.10 encryption posture (not triggered), 4.11 Guard Contract (`scripts/lint-guard-contract.py` green; assembly is derived from the parsed workflow, not listed), 4.12 Scope Check (rewritten into the compliant Ask Mapping / Provenance / Split tables).
+**Citations verified live:** #7256 OPEN, #6278 CLOSED, PR 7390 OPEN draft; cited rule ids all exist in `AGENTS.md`; `Post to Slack (release BLOCKED)` is absent on `origin/main` (count 0), so the discoverability probe will read 1 only after the change; `timeout-minutes: 60` exists on the release job (the timeout scenario row is real).
+
+### Key improvements over the first draft
+1. The sibling-step decision survived four independent reviews; the success path stays untouched.
+2. The test moved from awk plus a hand-rolled expression evaluator to parsed YAML with whole-value equality, a derived census and env-wiring assertions.
+3. The message no longer over-claims ("nothing was published" became "the GitHub release was NOT published"), and the registry lines disappear for plugin releases.
+4. The web-platform `notify-gated` Slack duplicate is named, accepted and disclosed.
+
+### New considerations discovered
+- `mint-inngest-bootstrap-tag.yml` path-triggers on `build-inngest-bootstrap-image.yml`, and `web-platform-release.yml` path-triggers on `plugins/soleur/**` minus `docs/` and `test/`: two docs edits that looked free would have fired a zot push and a web deploy.
+- `.github/workflows/reusable-release.yml` matches the sensitive-path regex, so `threshold: none` needs the scope-out line (present).
+
 ## Overview
 
 The release notification step in the shared release workflow (`Post to Slack (release)` in `.github/workflows/reusable-release.yml`) carries a plain-expression `if:`, so GitHub ANDs an implicit `success()` into it. Since the zot mirror gate became release-blocking (`degraded()` exits non-zero and the mirror step no longer carries `continue-on-error`), a mirror failure fails the job before that step is evaluated and the step is skipped. The release job's own signal on a blocked release is then the failure email (`Email notification (release FAILED)`, `if: failure()`).
@@ -282,7 +298,48 @@ No cross-domain implications detected — CI notification-routing change in a re
 
 ## Scope Check
 
-Ask mapping: (1) Slack fires for a blocked release — new step; (2) not on a cancelled run — `!cancelled()` pinned by gate equality; (3) success-path condition unchanged — untouched and pinned; (4) keep the failure email — untouched and pinned; (5) rewrite the step's own comment — two blocks plus the lead comment; (6) premise verification — Research Insights; (7) test pinning the gate by anchored syntax with mutation proof — T6b/T7b + Guard 1; (8) PR hygiene (`Closes #7256`, no admin-merge path, brand-survival `none`) — Phase 4. Item provenance: every item maps to an ask above; the ADR-096 sentence is the brief's "any doc line that states the old behaviour"; the `WF` hook is the mechanism for the mutation-proof ask; registry-line suppression and the entity escape come from plan review (CTO devex, Kieran F7). No inferred scope beyond that. Split assessment: one PR, one concern.
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "make Slack fire for a blocked release too" [brief] | Proposed Solution 1; Files to Edit: reusable-release.yml | mapped |
+| 2 | "without firing on a cancelled run" [brief] | `!cancelled()` in the new gate; Guard 1 rows 1-3 | mapped |
+| 3 | "keep the existing success-path Slack condition byte-for-byte equivalent for non-failure runs" [brief] | success step left untouched; T6b success-gate equality | mapped |
+| 4 | "keep the failure email" [brief] | failure-email step left untouched; T6b failure-email equality | mapped |
+| 5 | "rewrite the step's own comment that currently documents the old behaviour" [brief] | Proposed Solution 2 (two comment blocks plus lead comment) | mapped |
+| 6 | "VERIFY THE PREMISE FIRST against the current file" [brief] | Research Insights, Premise Validation table | mapped |
+| 7 | "also read how build-inngest-bootstrap-image.yml fixed the same class and whether a single Slack message can carry the mirror failure reason the email already uses" [brief] | Premise Validation rows 5 and 6; message contract | mapped |
+| 8 | "Add or extend a test pinning the gate ... the gate must be pinned by anchored syntax, not a bare token, and mutation-proven by deleting the new condition and confirming red" [brief] | Phase 1 (T6b/T7b on parsed YAML), Phase 3, Guard Contract | mapped |
+| 9 | "edit only reusable-release.yml plus its test and any doc line that states the old behaviour" [brief] | Files to Edit (workflow, test, ADR-096 sentence); Files NOT to touch | mapped |
+| 10 | "do not touch cloud-init-registry.yml, zot-registry.tf, variables.tf, server.tf, ci-deploy.sh or any deploy_pipeline_fix trigger file" [brief] | Files NOT to touch; diff-scope acceptance criterion | mapped |
+| 11 | "The PR body will carry `Closes #7256` on its own line" and "ship through the normal merge queue" [brief] | Phase 4; last acceptance criterion | mapped |
+| 12 | "keep your hunk narrow so the two do not collide" [brief] | Collision note (PR 7390) | mapped |
+| 13 | "The brand-survival threshold is expected to be `none` ... state the reason" [brief] | User-Brand Impact | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Files to Edit: `.github/workflows/reusable-release.yml` (new step, comments) | "edit only reusable-release.yml plus its test" | asked |
+| Files to Edit: `plugins/soleur/test/reusable-release-idempotency.test.sh` | "Add or extend a test pinning the gate" | asked |
+| Files to Edit: ADR-096 one-sentence amendment | "any doc line that states the old behaviour" | asked |
+| Files to Create: `specs/.../tasks.md` | — | inferred — justification: the plan skill's own save-tasks step produces it; it is a plan artifact, not product scope |
+| Sibling step `Post to Slack (release BLOCKED)` | "make Slack fire for a blocked release too" | asked |
+| Release-in-flight predicate copied into the new gate | "keep the existing success-path Slack condition byte-for-byte equivalent" | asked |
+| Registry-line suppression when both values are empty; entity escape of reason and verdict | — | inferred — justification: the shared workflow also serves plugin releases that build no image (CTO devex review), and `degraded()` reasons are free-form shell arguments (Kieran F7); without them the message is noise or an injection surface |
+| `WF` override hook (`REUSABLE_RELEASE_WF`) | "mutation-proven by deleting the new condition and confirming red" | asked |
+| Parsed-YAML helper and census assertion | "the gate must be pinned by anchored syntax, not a bare token" | asked |
+| Env-wiring assertions | "the gate must be pinned by anchored syntax, not a bare token" | asked |
+| T7b run-block contract | "whether a single Slack message can carry the mirror failure reason the email already uses" | asked |
+| Guard Contract section | "mutation-proven by deleting the new condition and confirming red" | asked |
+| Observability block | — | inferred — justification: the file path matches the canonical sensitive-path regex, so preflight Check 10 and deepen-plan 4.7 require the block |
+
+### Split Assessment
+
+- Subsystems touched: 3 — `.github`, `plugins/soleur`, `knowledge-base`
+- Planned files: 3 edited + 1 created (plus the plan file) | Estimated changed lines: ~250
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Plan Review Revisions (2026-10-09; all Mechanical, applied)
 
