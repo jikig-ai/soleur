@@ -118,14 +118,19 @@ describe("CSP hardening directives", () => {
 
 describe("CSP connect-src via x-forwarded-host (regression for #1075)", () => {
   test("accepted forwarded host lands in connect-src", async () => {
+    // host and x-forwarded-host differ deliberately: resolveOrigin prefers
+    // forwardedHost over host, so asserting the forwarded value lands (and
+    // the bind host does not) exercises that arm rather than passing on the
+    // host fallback alone.
     const res = await middleware(
-      makeRequest("/login", { "x-forwarded-host": "app.soleur.ai" }),
+      makeRequest("/login", {
+        host: "localhost:3000",
+        "x-forwarded-host": "app.soleur.ai",
+      }),
     );
     const csp = res.headers.get("content-security-policy")!;
-    // resolveOrigin accepts https://app.soleur.ai (PRODUCTION_ORIGINS), so
-    // the host reaches connect-src in prod wss:// form — not the internal
-    // bind address.
     expect(csp).toContain("wss://app.soleur.ai");
+    expect(csp).not.toContain("localhost");
   });
 
   test("spoofed x-forwarded-host is rejected from connect-src", async () => {

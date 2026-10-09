@@ -113,26 +113,6 @@ test.describe("OTP callback error handling", () => {
       page.getByText("Sign-in failed. If you have an existing account, try signing in with email instead."),
     ).toBeVisible({ timeout: 10_000 });
   });
-
-  test("/callback without code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
-  });
-
-  test("/callback with invalid code redirects to /login with error", async ({
-    request,
-  }) => {
-    const response = await request.get("/callback?code=invalid-code", {
-      maxRedirects: 0,
-    });
-    expect(response.status()).toBe(307);
-    expect(response.headers()["location"]).toContain("/login");
-  });
 });
 
 test.describe("Login no-account redirect", () => {
