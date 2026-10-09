@@ -1691,12 +1691,12 @@ jobs:
       # PUBLISHED-release announcer. Giving it `!cancelled() &&` would run it on a blocked
       # release and post "released!" for a draft that was never published, and it would
       # touch the hot path of every release. This step is its mirror image: it fires only
-      # when the job FAILED, with the same release-in-flight predicate, so a failure BEFORE
-      # any draft exists stays email-only. `!cancelled()` keeps it off a cancelled run (and
-      # removes the ambiguity of `failure()` meaning "any previous step failed" on a run
-      # cancelled after an earlier failure); a job-level timeout ends as cancelled, so it
-      # stays silent too (unchanged). `Email notification (release FAILED)` above is the
-      # independent second channel.
+      # when the job FAILED, with the same release-in-flight predicate, so a failure
+      # BEFORE any draft exists stays email-only from this workflow. `!cancelled()` keeps
+      # it off a cancelled run (and removes the ambiguity of `failure()` meaning "any
+      # previous step failed" on a run cancelled after an earlier failure); a job-level
+      # timeout is expected to stay silent too (unchanged; not verified here).
+      # `Email notification (release FAILED)` above is the independent second channel.
       #
       # A web-platform PUSH release is also announced by web-platform-release.yml
       # `notify-gated` ("deploy GATED") to this same channel. That duplicate is
@@ -1747,7 +1747,7 @@ jobs:
 
           if [ -n "$REASON" ] || [ -n "$VERDICT" ]; then
             MESSAGE=$(printf "%s\n\nzot mirror stage: \`%s\`; registry-push token verdict: \`%s\`" \
-              "$MESSAGE" "${REASON:-not reached}" "${VERDICT:-unmeasured}")
+              "$MESSAGE" "${REASON:-n/a (failed before or outside the mirror step)}" "${VERDICT:-unmeasured}")
           fi
 
           MESSAGE=$(printf '%s\n\nRe-run failed jobs on this run to retry with the same version; a fresh "Run workflow" dispatch recomputes it.\n\nRun: %s' \
@@ -1757,15 +1757,16 @@ jobs:
             --arg text "$MESSAGE" \
             '{text: $text, unfurl_links: false}')
 
-          # `|| echo 000` keeps a curl transport failure (timeout, DNS) on the
-          # ::warning path -- without it `bash -e` kills the step before the
-          # warning is emitted.
+          # `|| HTTP_CODE=000` (not `|| echo 000`: curl's -w already printed 000, which
+          # would double it) keeps a transport failure on the ::warning path -- without
+          # it `bash -e` kills the step before the warning is emitted.
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
+            --proto '=https' \
             --max-time 15 \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "$WEBHOOK" || echo "000")
+            "$WEBHOOK") || HTTP_CODE=000
 
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
             echo "Slack notification sent (HTTP $HTTP_CODE)"

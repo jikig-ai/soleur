@@ -346,8 +346,9 @@ host. Read the amendment before relying on any bullet below:
     annotation is now `::error::`, not `::warning::`, and the Slack ⚠️ line is reachable
     ONLY on an operator override — the Slack step carries an implicit `success()`, so on a
     blocked release it does not run at all. **AMENDED 2026-10-09 (#7256):** a separate
-    failure-gated step, "Post to Slack (release BLOCKED)", now announces a blocked release.
-    For `build-inngest-bootstrap-image.yml` the
+    failure-gated step, "Post to Slack (release BLOCKED)", now announces a blocked release
+    once a draft exists (a failure before `Create GitHub Release`, a cancel or a timeout
+    stays email-only). For `build-inngest-bootstrap-image.yml` the
     original text still holds, since clause (h) scopes that workflow out.
     **The blanket "the rest of this bullet is unaffected and remains current" sentence that
     stood here has been REMOVED (2026-07-30, same-day correction).** It recertified ~110
