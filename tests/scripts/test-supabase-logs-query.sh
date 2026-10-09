@@ -769,7 +769,7 @@ fi
 # a guard built on it could never see the token it is asserting about -- it
 # passed a mutant that re-added the swallow. Strip comments ONLY. (Same class as
 # the finding above: ask what a normaliser removes before trusting it as coverage.)
-if sed 's/#.*//' "$SCRIPT" | grep -A6 'normalize_agg()' | grep -qF '2>/dev/null'; then
+if sed 's/#.*//' "$SCRIPT" | grep -A6 'normalize_agg()' | grep -cF >/dev/null '2>/dev/null'; then
   fail "normalize_agg silence" "normalize_agg redirects jq stderr to /dev/null again; a jq failure would once more read downstream as 'this source emitted nothing'"
 else
   pass "normalize_agg does not swallow jq's stderr (a jq failure stays loud)"

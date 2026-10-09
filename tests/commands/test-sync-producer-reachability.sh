@@ -220,9 +220,9 @@ else
   fail "T0f: expected the halt literal at >=2 call sites, found $halt_count"
 fi
 
-if grep -nE '^argument-hint:' "$SYNC_MD" | grep -Fq 'rule-prune'; then
+if grep -nE '^argument-hint:' "$SYNC_MD" | grep -Fc >/dev/null 'rule-prune'; then
   fail "T0g: rule-prune still advertised in argument-hint"
-elif grep -nE '^\*\*Valid areas:\*\*' "$SYNC_MD" | grep -Fq 'rule-prune'; then
+elif grep -nE '^\*\*Valid areas:\*\*' "$SYNC_MD" | grep -Fc >/dev/null 'rule-prune'; then
   fail "T0g: rule-prune still advertised in Valid areas"
 else
   pass "T0g: rule-prune de-advertised from argument-hint and Valid areas"
@@ -365,7 +365,7 @@ if [[ "${#GUARD_BLOCKS[@]}" -ne "$EXPECTED_SITES" || "$EXPECTED_SITES" -lt 3 ]];
   fail "T0j: extracted ${#GUARD_BLOCKS[@]} guard blocks for $EXPECTED_SITES anchored invocation sites in sync.md — every site must be guarded, and a mismatch means a site's guard was dropped or its shape drifted past the extractor (T0k/T0l below would then be vacuous for it)"
   fail "T0k: skipped — guard-block/site cardinality mismatch"
   fail "T0l: skipped — guard-block/site cardinality mismatch"
-elif ! printf '%s\n' "${PRODUCER_RELS[@]}" | grep -Fqx "$OMIT"; then
+elif ! printf '%s\n' "${PRODUCER_RELS[@]}" | grep -Fcx >/dev/null "$OMIT"; then
   fail "T0j: fixture target $OMIT is not in the derived producer inventory — the case would be vacuous"
   fail "T0k: skipped — fixture target not in inventory"
   fail "T0l: skipped — fixture target not in inventory"
