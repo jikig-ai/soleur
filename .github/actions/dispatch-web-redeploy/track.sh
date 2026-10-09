@@ -52,6 +52,18 @@ case "$-" in
 esac
 export LC_ALL=C
 
+# The Cloudflare Access pair and the HMAC signature reach curl on its stdin config through the shared library, never
+# on an argument list (ADR-280, tracker #9597). Found by this script's own path (no GITHUB_WORKSPACE is assumed), so the
+# library and the script cannot skew. A missing library is a hard failure: there is no argv fallback.
+# Pure parameter expansion (no dirname/cd): this must resolve under an empty PATH too.
+_here="${BASH_SOURCE[0]}"
+if [[ "$_here" == */* ]]; then _here="${_here%/*}"; else _here="."; fi
+# shellcheck source=/dev/null
+source "${_here}/../../../scripts/lib/bearer-curl.sh" || {
+  echo "::error::dispatch-web-redeploy: scripts/lib/bearer-curl.sh could not be loaded — the webhook credentials cannot be sent safely. verdict=redeploy_tool_absent"
+  exit 2
+}
+
 APP_DOMAIN_BASE="${APP_DOMAIN_BASE:-soleur.ai}"
 PEERS="${WEB_HOST_PRIVATE_IPS:-}"
 INTERVAL="${REDEPLOY_POLL_INTERVAL_S:-30}"
@@ -62,9 +74,16 @@ HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
 
 _summary() { [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && printf '%s\n' "$*" >> "$GITHUB_STEP_SUMMARY" || true; }
 
-for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-  if [[ -z "${!v:-}" ]]; then
-    echo "::error::dispatch-web-redeploy: ${v} is unset — the webhook path cannot authenticate. verdict=redeploy_credential_absent"
+# The HMAC key only has to be non-empty (it is never a header value); the Cloudflare Access pair is a header value and
+# must also be a plausible token. Either way an unusable credential is the existing credential-absent verdict, no new word.
+if [[ -z "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then
+  echo "::error::dispatch-web-redeploy: WEBHOOK_DEPLOY_SECRET is unset — the webhook path cannot authenticate. verdict=redeploy_credential_absent"
+  exit 2
+fi
+for v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+  if ! bc_ok_var "$v"; then
+    bc_refuse track.sh "$v" || true
+    echo "::error::dispatch-web-redeploy: ${v} is unset or not a usable token — the webhook path cannot authenticate. verdict=redeploy_credential_absent"
     exit 2
   fi
 done
@@ -74,7 +93,7 @@ for v in INTERVAL TIMEOUT; do
     exit 2
   fi
 done
-for b in curl jq openssl; do
+for b in curl jq python3; do
   command -v "$b" >/dev/null 2>&1 || { echo "::error::dispatch-web-redeploy: ${b} not on PATH (verdict=redeploy_tool_absent)"; exit 2; }
 done
 
@@ -92,13 +111,19 @@ echo "running version ${RUNNING_VERSION} → target tag ${TARGET_TAG} (same-imag
 
 # --- Webhook plumbing (HMAC over body; CF-Access) ------------------------------------
 # The GET signature is constant (empty body) — compute once, not per poll iteration.
-GET_SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
+# The key rides a python3 child's environment only (never an argument list); an empty key reaches the check below.
+# shellcheck disable=SC2034 # read by bc_curl / bc_ok_var through indirect expansion
+GET_SIG="$(bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET < /dev/null)" || GET_SIG=""
+if ! bc_ok_var GET_SIG; then
+  bc_refuse track.sh GET_SIG || true
+  echo "::error::dispatch-web-redeploy: the status-read signature could not be computed. verdict=redeploy_credential_absent"
+  exit 2
+fi
 get_status() { # -> http_code; body lands in $TMP/status.json
-  curl --disable --noproxy '*' -s --max-time 15 -o "$TMP/status.json" -w '%{http_code}' \
-    -X GET -H "X-Signature-256: sha256=${GET_SIG}" \
-    -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
-    -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
-    "$STATUS_URL" 2>/dev/null || echo "000"
+  bc_curl track.sh 'X-Signature-256:sha256=:GET_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+    'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+    -s --max-time 15 -o "$TMP/status.json" -w '%{http_code}' -X GET \
+    "$STATUS_URL" || echo "000"
 }
 
 # The status endpoint is remote-controlled bytes: bound every field before it reaches
@@ -123,13 +148,18 @@ echo "baseline start_ts=${PRIOR_START}"
 # --- 3. Dispatch --------------------------------------------------------------------
 PAYLOAD="$(jq -cn --arg cmd "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform ${TARGET_TAG}" --arg peers "$PEERS" \
            'if $peers == "" then {command:$cmd} else {command:$cmd, peers:$peers} end')"
-POST_SIG="$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
-POST_CODE="$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
+# shellcheck disable=SC2034 # read by bc_curl / bc_ok_var through indirect expansion
+POST_SIG="$(printf '%s' "$PAYLOAD" | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || POST_SIG=""
+if ! bc_ok_var POST_SIG; then
+  bc_refuse track.sh POST_SIG || true
+  echo "::error::dispatch-web-redeploy: the dispatch signature could not be computed — nothing was sent. verdict=redeploy_credential_absent"
+  exit 2
+fi
+POST_CODE="$(bc_curl track.sh 'X-Signature-256:sha256=:POST_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+  'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+  -s -o /dev/null -w '%{http_code}' --max-time 30 \
   -X POST -H "Content-Type: application/json" \
-  -H "X-Signature-256: sha256=${POST_SIG}" \
-  -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
-  -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
-  -d "$PAYLOAD" "$DEPLOY_URL" 2>/dev/null || echo "000")"
+  -d "$PAYLOAD" "$DEPLOY_URL" || echo "000")"
 if [[ "$POST_CODE" != "202" ]]; then
   echo "::error::dispatch-web-redeploy: POST /hooks/deploy rejected (HTTP ${POST_CODE}). verdict=redeploy_dispatch_rejected"
   exit 1

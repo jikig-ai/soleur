@@ -11,8 +11,12 @@
 #
 # Hermetic: curl is a PATH shim that answers /health, /hooks/deploy-status and
 # /hooks/deploy from env knobs and logs every request (method, URL, headers, POST body)
-# to $TL. openssl/jq are REAL — the HMAC header is verified by recomputation. sleep is
-# shimmed instant so the poll loop runs synchronously.
+# to $TL. openssl/jq are REAL — the HMAC header is verified by recomputation (openssl is the
+# independent oracle; the script itself signs through scripts/lib/bearer-curl.sh). The three
+# credential headers arrive on the shim's STDIN (`--config -`), as the real curl would read
+# them, and are logged as `hdr` lines; the shim's argv is recorded separately in $TLARGV so a
+# row can prove no credential rides an argument list. sleep is shimmed instant so the poll loop
+# runs synchronously.
 #
 #   row   scenario                                                        expected
 #   X     bash -x                                                         78 before any curl
@@ -32,6 +36,8 @@
 #   P7    only stale frames forever                                        1, verdict=redeploy_timeout
 #   P8    wrong component, then our tag                                    0 (foreign frame ignored)
 #   P9    no peers env -> POST body carries NO peers key                   0, body lacks peers
+#   P2b   the credentials (key, signature, CF pair) reach curl on stdin     no recorded argv holds any of them
+#   C4    a hostile CF Access value                                         2, redeploy_credential_absent, marker, no request
 set -uo pipefail   # NOT -e: run_case deliberately captures the SUT's non-zero exits.
 cd "$(dirname "$0")/../.."
 
@@ -57,17 +63,25 @@ BIN="$T/bin"; mkdir -p "$BIN" || exit 1
 cat > "$BIN/curl" <<'SHIM'
 #!/usr/bin/env bash
 method=GET; out=""; wfmt=""; data=""; url=""; failflag=0; prev=""
+[ -n "${TLARGV:-}" ] && printf '%s\n' "$@" >> "$TLARGV"
 for a in "$@"; do
   if [ -n "$prev" ]; then
     case "$prev" in
       -o) out="$a" ;; -X) method="$a" ;; -d) data="$a" ;; -w) wfmt="$a" ;;
       -H) printf '  hdr %s\n' "$a" >> "$TL" ;;
+      --config)
+        # The credential headers: one `header = "Name: value"` directive per line on stdin.
+        if [ "$a" = "-" ]; then
+          while IFS= read -r l; do
+            case "$l" in 'header = "'*) l="${l#header = \"}"; printf '  hdr %s\n' "${l%\"}" >> "$TL" ;; esac
+          done
+        fi ;;
       *) : ;;
     esac
     prev=""; continue
   fi
   case "$a" in
-    -o|-X|-d|-w|-H|--max-time) prev="$a" ;;
+    -o|-X|-d|-w|-H|--max-time|--config|--noproxy) prev="$a" ;;
     -f) failflag=1 ;;
     -*) : ;;
     *) url="$a" ;;
@@ -116,7 +130,7 @@ run_case() {
   TLF="$T/$name.tl"; OUT="$T/$name.out"; SEQ="$T/$name.seq"
   : > "$TLF"; : > "$OUT"
   SEQ_FILE="$SEQ"
-  env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$T" TL="$TLF" SEQ_FILE="$SEQ" \
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$T" TL="$TLF" TLARGV="$TLF.argv" SEQ_FILE="$SEQ" \
     SHIM_SEQ_IDX="$T/$name.idx" \
     APP_DOMAIN_BASE=example.test \
     WEBHOOK_DEPLOY_SECRET="$SECRET" CF_ACCESS_CLIENT_ID="$ID" CF_ACCESS_CLIENT_SECRET="$SC" \
@@ -141,6 +155,13 @@ for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
     pass "C: unset $v -> verdict=redeploy_credential_absent, no request"
   else fail "C: unset $v was not refused" "$(tail -2 "$OUT")"; fi
 done
+
+# C4 — a hostile Cloudflare Access value is refused before any request, with the marker and the credential-absent verdict.
+run_case c4-hostile 'CF_ACCESS_CLIENT_ID=bad value"x'
+if [ "$RC" = 2 ] && [ "$(verdict)" = "redeploy_credential_absent" ] && [ ! -s "$TLF" ] \
+   && grep -q '^SOLEUR_CREDENTIAL_REFUSED script=track.sh reason=token_shape$' "$OUT"; then
+  pass "C4: a hostile CF_ACCESS_CLIENT_ID -> verdict=redeploy_credential_absent, marker, no request"
+else fail "C4: a hostile Access value was not refused" "$(tail -3 "$OUT")"; fi
 
 # T1 — curl not on PATH (bash by absolute path; the rest of PATH is empty).
 rc=0
@@ -200,6 +221,20 @@ if [ "$SIG" = "$WANT_SIG" ] && printf '%s' "$BODY" | grep -c >/dev/null '"peers"
    && printf '%s' "$BODY" | grep -c >/dev/null 'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.2.3'; then
   pass "P2: POST body carries command+peers and the X-Signature-256 HMAC verifies"
 else fail "P2: the POST contract broke" "body=$BODY sig=$SIG want=$WANT_SIG"; fi
+
+# P2b — the credentials reach curl on stdin only: every recorded argv is free of the key, the signature and the CF pair,
+# and the stdin headers carry exactly the pair the script was given (value-free comparison, verdicts only).
+ARGV_LOG="$T/p1-stale-then-ok.tl.argv"
+p2b_bad=""
+for needle in "$SECRET" "$ID" "$SC" "$WANT_SIG" "sha256="; do
+  if grep -qF -e "$needle" "$ARGV_LOG"; then p2b_bad+=" argv-has-credential"; fi
+done
+[ -s "$ARGV_LOG" ] || p2b_bad+=" no-argv-recorded"
+if [ "$(grep -cF -e "hdr CF-Access-Client-Id: $ID" "$T/p1-stale-then-ok.tl")" -ge 2 ] \
+   && [ "$(grep -cF -e "hdr CF-Access-Client-Secret: $SC" "$T/p1-stale-then-ok.tl")" -ge 2 ] \
+   && [ -z "$p2b_bad" ]; then
+  pass "P2b: no recorded argv holds the key, signature or Access pair; the pair rides stdin on every request"
+else fail "P2b: a credential rides an argument list or never reached stdin" "$p2b_bad"; fi
 
 # P3 — a degraded fan-out is a FAILURE (the fleet is mixed; the cutover cannot accept it).
 printf '%s\n' \
