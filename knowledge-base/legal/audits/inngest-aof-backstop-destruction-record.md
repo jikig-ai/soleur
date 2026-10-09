@@ -1,6 +1,8 @@
 ---
 title: "Art. 5(2) destruction record — Inngest plaintext Redis AOF backstop volume (hcloud_volume.inngest_redis, id 106261946)"
-status: template
+status: complete
+completed: 2026-10-09
+attested_at_sha: 5bb35c17adc34cfc906ea06d506d5579cf8cde3f
 date: 2026-10-08
 related: [8285, 6894, 8296]
 related_adrs: [ADR-142, ADR-199, ADR-140]
@@ -409,9 +411,21 @@ Article 30 register PA-13 section (e), PA-21 section (f) and PA-22 section (f) (
 - [x] The property probe is not deleted (#9703 not armed).
 - [ ] #8316 (the retire-or-keep decision for the dormant `inngest-volume-recut` target) updated or closed with the PR link:
       pending at merge (a GitHub action on an open issue, done after PR #9877 merges).
-- [ ] CLO attestation at a named commit SHA: recorded in "CLO attestation" below.
-- [ ] `status:` flips from `template` to `complete` only in the commit that records that attestation, in the PR that also carries the 404 read-back.
+- [x] CLO attestation at a named commit SHA: recorded in "CLO attestation" below.
+- [x] `status:` flips from `template` to `complete` only in the commit that records that attestation, in the PR that also carries the 404 read-back. (Done in the commit that adds the attestation below.)
 
 ### CLO attestation
 
-PENDING: recorded by the attestation step of PR B once the record is final at a named commit SHA.
+Attested by the `soleur:legal:clo` agent (an AI legal-domain agent run by the pipeline; **not** a review by qualified
+external counsel, which remains a separate act routed through `knowledge-base/legal/recommended-tools.md`) on 2026-10-09,
+in two passes over the committed record:
+
+| Pass | Audited commit | Verdict |
+|---|---|---|
+| 1 | `f75ba5c3bb11b1182271f7990eb83e3eb3dec52d` | ATTEST-WITH-CONDITIONS: five conditions (C1 soften the existence and recoverability wording; C2 state the reviewed-versus-dispatched difference exactly and add two gaps; C3 Superseded markers under the "still a template" addenda; C4 merge-conditioning sentence and a stray bold marker; C5 ADR device-naming wording, "not built" for #9879, the #8316 item) |
+| 2 | `5bb35c17adc34cfc906ea06d506d5579cf8cde3f` | **ATTEST**, no remaining conditions: each of C1 to C5 verified present at that SHA, the commit touched only files under `knowledge-base/`, and no new claim exceeded the evidence |
+
+The attested text is the record as of `5bb35c17ad`; this commit changes only the frontmatter `status`, `completed` and
+`attested_at_sha`, the two checklist boxes above and this section. Residual, non-blocking: the lint-baseline difference is
+a one-line-in, one-line-out change counted as "1 line"; Article 30 PA-13's cell already carried an odd bold-marker count
+before any amendment (cosmetic, not introduced here).
