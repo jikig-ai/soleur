@@ -1,6 +1,6 @@
 ---
 title: Merge queue with advisory CodeQL and a post-merge alert gate
-status: adopting
+status: accepted
 date: 2026-10-03
 supersedes: ADR-032 (the 2026-07-01 "keep CodeQL required, no queue" decision and the 2026-09-14 capacity rejection, in part)
 issue: 9454
@@ -679,3 +679,71 @@ and `bash plugins/soleur/test/c4-count-parity.test.sh` passes 12/12.
   Cloudflare rulesets, unrelated to the CI Required ruleset.
 - Data stores: none (the workflows are stateless; the gate keeps no cache or artifact).
 - Access relationships: unchanged.
+
+## Amendment 2026-10-09 (accepted by operator direction)
+
+Status moves `adopting` to `accepted` on 2026-10-09 by the operator's (founder's) direction, given in their own
+words that day: "yes please accept and flip to adopting and start S3" (answering: accept ADR-270 and flip ADR-276
+to adopting so S3 can start). The Status section above says the flip waits for the post-apply canary to pass; that
+condition is NOT met. This amendment records that acceptance came first, so the record does not read as a passed
+canary.
+
+The canary items not yet recorded as measured at this date are items 1, 3, 4, 5, 7, 8, 9 and 10 of "Canary
+measurements" (items 2 and 6 are recorded under "Canary results"; items 3, 4, 9 and 10 carry only first, partial or
+pending readings in the 2026-10-05 addendum, not a completed measurement). Item 1 has a PASS recorded outside this
+file, in the #9454 comment of 2026-10-04T15:46Z (#9485 admin-merged past the queue at 15:20:13Z, not strictly first as
+the item requires), so it is listed here because this file's Canary results do not carry it. Item 6 is recorded as one
+GREEN verdict with 0 candidates (run 37210557735); this file records no run of the post-merge alert gate going RED on
+a real critical or high alert, so the compensating control for advisory CodeQL is evidenced on its green path only. Item 4 waits for the next
+`weakness-miner.yml` PR; the next scheduled fire is 2026-10-11T06:00Z. Their text, verbatim from "Canary
+measurements":
+
+> 1. **FIRST, before anything else: the admin bypass.** One `gh pr merge --admin` of a
+>    trivial PR merges past the queue (`bypass_actors` `RepositoryRole 5`, mode
+>    `pull_request`). The rollback depends on it. A failure is an IMMEDIATE rollback
+>    trigger: PUT the queue-less payload to the existing ruleset (see the rollback
+>    recipe above), and amend this ADR before the queue is left on.
+> 3. Canary human PR via `gh pr merge --squash --auto`: it enters the queue, all 25
+>    contexts (23 plus `cla-check` and `cla-evidence`) report on the temp ref, and it
+>    merges. Record enqueue-to-merge minutes, the observed `mergeStateStatus` of a
+>    queued PR (unmeasured; the dequeue rule no longer depends on it, the queued-skip is
+>    correct either way), the removal-event payload (`reason`, and its timestamp against the
+>    auto-merge enable and the head commit) on a real ejection if one occurs, the observed
+>    queue entry `state` and `position` values on a real entry (is `position` 1-based,
+>    which the stall filter assumes; which `state` a never-reporting head entry shows),
+>    the candidate squash shape recorded (number of parents, and whether the PR head is
+>    one; the first adoption measured one parent) and which check-run names and apps land
+>    on the candidate (the CLA verify relies on neither parent shape nor extra names,
+>    so a surprise here is a finding). Also record that the push SHA equals
+>    `merge_group.head_sha` (Follow-up (c)'s premise).
+> 4. Canary bot PR (next `weakness-miner.yml` PR): flows through without stalling. If a
+>    `GITHUB_TOKEN`-armed bot PR sits pending, the queue stays on for human PRs only if
+>    bot PRs fall back to the admin-merge path and a follow-up to arm bot PRs with an
+>    App token is filed in the same session.
+> 5. `merge_group` CI wall-clock and runner start spread, against the push-run proxy
+>    (p95 37.3, p99 44.2, max 50.8 min, n=99), whose headroom under the 60-minute
+>    timeout is 9 to 23 min. If the slowest required check on a real candidate exceeds
+>    30 minutes, raise `check_response_timeout_minutes` in the same Terraform root (one
+>    line); keep `max_entries_to_build` at 2 until contention is measured. Record the
+>    candidate failure rate against the 11% post-merge flake rate.
+> 7. PRs armed before the apply (`gh pr list --state open --json number,autoMergeRequest`)
+>    each show a `mergeQueueEntry` within minutes or merge.
+> 8. Inspect the queue-built squash commit: record whether the message came from the
+>    commits or from the PR title and body, and what happens when
+>    `check_response_timeout_minutes` is exceeded.
+> 9. Confirm `pre-merge-rebase.sh` is a no-op for an enqueue of an up-to-date branch
+>    and skips the sync for an already-queued PR, and record the head-change and CI
+>    cost of its sync for a not-yet-queued behind branch, as the count of hook and
+>    fence sync pushes per merged PR (before and after the queue).
+> 10. Measure the `schedule`-event gap of `merge-queue-stall-check.yml`
+>     (`gh run list --workflow merge-queue-stall-check.yml --event schedule`) against
+>     the 15-minute window between the 45-minute threshold and the 60-minute timeout;
+>     a wider median gap makes Follow-up (a) the next change (Follow-up (a) landed; the
+>     dispatched-run spacing and runner-start latency are measured on #9482 after merge).
+
+Nothing above this heading is edited by this amendment except the frontmatter `status:` line. The earlier Status
+sentence "Flips to `accepted` when the post-apply canary ... passes" (the lead beginning "**Adopting — 2026-10-03**"),
+the heading "Canary measurements (flip `adopting` to `accepted` when these hold)" and the Item 4 sentence "Status stays
+`adopting` until one clean pass" are superseded by this amendment, not rewritten.
+The pending measurements keep being recorded on #9454 as each completes; a measured failure of item 1 (the admin
+bypass) still triggers the rollback recipe above regardless of this status.
