@@ -175,3 +175,76 @@ source-coverage probe — informational under proof, blocking under `FLAG_MODE=f
 running image that predates the dual-root deny. The canary fixture was re-captured on `node:22-slim`
 with `WORKTREE_ROOT=/tmp/soleur-sandbox-canary-worktrees` pinned — it now carries both deny landings
 and still ends `--bind /proc /proc`.
+
+## Addendum — 2026-10-08 (#5863): Option B adopted in arm-F form — mount-namespace-only outer wrap
+
+**Status: `adopting`** (claim held until production measurement, per #9603 discipline).
+
+Option B landed — but not in the shape this ADR projected. The earlier framing assumed
+an outer `bwrap --unshare-*` namespace; the Phase-0 spike (docker + the production
+`soleur-bwrap` seccomp profile, 2026-10-08) measured that **impossible in the current
+container posture**:
+
+- A scoped `/proc` requires an outer PID namespace; fresh `--proc` mounts EPERM under
+  Docker's masked-paths (bubblewrap#284), and the masked mounts are init-userns-owned —
+  unremovable from inside (`must be superuser to unmount`).
+- The vendored inner sandbox unconditionally unshares user+pid+net; a child pidns/netns
+  requires the outer userns to *own* both, so ANY outer userns is fatal to the inner
+  sandbox unless it also owns a pidns — which has no mountable procfs. Bound procfs
+  indexes the wrong pid space (`/proc/<outer-pid>/ns` ENOENT); tmpfs starves the inner
+  shim's `/proc/self/fd` sweep.
+- The only unblocking posture (`systempaths=unconfined`) unmasks host `/proc` for the
+  whole container — a widening, not a fix.
+
+**Adopted:** the outer wrap is a **mount namespace only** (zero `--unshare-*`), built by
+a **file-capability `bwrap`** (`cap_sys_admin,cap_setuid,cap_setgid+ep` in the image;
+`SYS_ADMIN` lives in the container bounding set via `--cap-add SYS_ADMIN` at
+`docker run`; children of non-file-cap'd execs carry nothing, so the wrapped CLI and
+its inner sandbox never hold it). Wired via `Options.spawnClaudeCodeProcess`
+(`agent-outer-wrap.ts::makeSandboxedSpawn`) — the SDK's documented interpose for
+container execution. Because the outer wrap creates no namespaces, the inner sandbox
+runs at the same nesting level as today — verified with the captured inner argv shape
+(`infra/sandbox-canary-argv.json`).
+
+What this delivers: an agent session's filesystem contains **only its own tenant
+workspace** — sibling workspaces are never mounted, so they are absent from `ls`,
+`stat`, and `/proc/self/mounts` on **both** tool tiers (Bash's inner sandbox AND the
+in-CLI file tools, which the inner bwrap never bounded). Sibling *existence*, the
+mount-table leak, shared `/tmp`, and `#9725`'s deny-root divergence all close
+structurally; the `/workspaces` `denyRead` simplifies to vestigial (kept unconditional
+while the rollout flag exists — load-bearing on the flag-off arm).
+
+**Open residuals (named, tracked):**
+
+- `#9723` stays open **for the wrapped-CLI tier specifically**: the #9768
+  addendum below scoped the *inner* sandbox's procfs (the shim tail mask), but
+  the file tools run in the CLI process itself — one level OUTSIDE the inner
+  shim — so for them `/proc` is still the shared container procfs: sibling
+  PIDs, `/proc/<pid>/environ`, **and `/proc/<pid>/{root,cwd,ns}` (a mount-
+  namespace oracle into any same-uid process)** remain visible there. The
+  `root`/`cwd`/`ns` reach is acceptable only while `kernel.yama.ptrace_scope`
+  stays `1` — the shared payload asserts the sysctl non-zero so a drift pages
+  instead of silently voiding the wrap. The honest close is the pidns, which
+  requires the topology work in #9773.
+- Shared container loopback — including delegated-egress cross-use (a non-entitled
+  session reaching a sibling's socat proxy allowlist is an authorization bypass of
+  `allowedDomains`, not merely a covert channel) and other-tenant `127.0.0.1`
+  listeners.
+- **Shared mutable `$HOME` state**: `.credentials.json`/`settings.json`/
+  `.claude.json`/`.gitconfig` are the same host files bound rw into every session —
+  a same-uid cross-tenant corruption/config-poisoning channel (pre-existing
+  behavior the wrap preserves, not a new surface; per-session copy-in/out is the
+  candidate close — #9773 territory).
+- The server process's own cross-tenant filesystem access and the shared in-process
+  heap (BYOK leases, session state) — `#9773` territory.
+- The bounded claim this supports publicly is *"per-session process-level filesystem
+  isolation covering both agent tool tiers"* — never unqualified "tenant isolation".
+
+**Privilege-hygiene notes:** file caps elevate only on `exec` of the bwrap binary
+(ambient is empty for every other exec path); the image asserts `{bwrap}` is the only
+file-cap'd binary at build time (`getcap -r /` audit in the Dockerfile); the wrapped
+session's `CapEff`/`CapBnd` carry no `sys_admin` (test-pinned).
+
+Verification posture: realized-state probe (`tenant-isolation-probe.sh`, founder-check
+pinned) + committed argv fixture (`infra/agent-outer-wrap-argv.json`) + canary arm —
+all dark-launched before gating, per `wg-dark-launch-deploy-gates`.

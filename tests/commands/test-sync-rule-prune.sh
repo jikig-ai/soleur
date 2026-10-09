@@ -182,10 +182,10 @@ t_body_has_verify_block() {
   local first; first=$(ls "$root/issues"/*.json 2>/dev/null | head -1)
   [[ -n "$first" ]] || { _report "body: at least one issue filed" fail ""; rm -rf "$root"; return; }
   local body; body=$(jq -r .body "$first")
-  if echo "$body" | grep -qF '### Verify' \
-     && echo "$body" | grep -qF 'jq ' \
-     && echo "$body" | grep -qF 'generated at:' \
-     && echo "$body" | grep -qF '2026-04-14T00:00:00Z'; then
+  if echo "$body" | grep -cF >/dev/null '### Verify' \
+     && echo "$body" | grep -cF >/dev/null 'jq ' \
+     && echo "$body" | grep -cF >/dev/null 'generated at:' \
+     && echo "$body" | grep -cF >/dev/null '2026-04-14T00:00:00Z'; then
     _report "rule-prune: body has Verify block + generated_at" ok
   else
     _report "rule-prune: body has Verify block + generated_at" fail "body was: $body"
@@ -345,8 +345,8 @@ tp5b_title_format() {
   local title
   title=$(grep -E '^::rule-prune-pr-title::' "$root/out.txt" | head -n 1 | sed 's/^::rule-prune-pr-title:://')
   # Expected: "feat(rule-prune): propose retirement of 2 rules (1 hook/skill-enforced)"
-  if echo "$title" | grep -qE 'propose retirement of 2 rules' \
-     && echo "$title" | grep -qE '\(1 hook/skill-enforced\)'; then
+  if echo "$title" | grep -cE >/dev/null 'propose retirement of 2 rules' \
+     && echo "$title" | grep -cE >/dev/null '\(1 hook/skill-enforced\)'; then
     _report "tp5b: title sentinel format" ok
   else
     _report "tp5b: title sentinel format" fail "title='$title'"

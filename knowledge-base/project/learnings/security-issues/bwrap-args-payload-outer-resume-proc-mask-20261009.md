@@ -104,6 +104,44 @@ payload ends. Consequences that only surfaced in review:
    when probing a C tool's parser semantics, read the upstream source first —
    malformed-shape results are evidence about the error path, not the feature.
 
+## Post-Merge Addendum — the exposure gate (v0.330.10 rollback → #9803)
+
+The original shim spliced `--proc /proc` into EVERY pidns-carrying argv. On the
+merge's first deploy, `ci-deploy.sh`'s blocking probe —
+`bwrap --new-session --dev /dev --unshare-pid --bind / / -- true` — routes
+through the same PATH shim; it has `--unshare-pid` but NO `--unshare-user`, and
+on the in-image bubblewrap 0.8.0 a fresh procfs mount needs a user namespace:
+`Can't mount proc on /newroot/proc: Operation not permitted` →
+`canary_sandbox_failed` → deploy rollback. Production stayed on the prior
+build; the fix shipped as a hotfix release.
+
+**Design correction (#9803):** the mask engages only when the merged setup
+stream actually mounts procfs at /proc — bind-family or `--proc`/`--bind-fd`/
+`--ro-bind-fd` with dest ≡ /proc (canonicalized: `//proc`, `/proc//`,
+`/proc/.`, `/x/../proc` normalize away evasion spellings). A procfs-free argv
+passes through untouched; a proc-exposing argv missing option-position pidns
+OR userns refuses 65 rather than dying inside mount(2) or shipping the leak.
+
+Session errors / prevention:
+
+6. **Dev-host ≠ shipped-image toolchain masked the failure.** Local and CI
+   verification ran on bwrap 0.12.0 where the unconditional splice worked;
+   the deploy image carries Debian's 0.8.0, which fails differently (no
+   `--args` support at all on 0.8.0 — the multi-payload code path is
+   upstream-fidelity hardening only). **Prevention:** when a shim/gate wraps
+   a system binary, verify against the version the IMAGE ships, not the dev
+   host's — `docker run` the deploy base image and replay the real argv.
+7. **A "harmless" defensive splice is not harmless to non-target callers.**
+   The probe never mounts procfs — the mask was pure liability there and it
+   broke a pinned-by-contract probe argv (#8016 Guard 2) that could not be
+   changed. **Prevention:** gate a mutation on the defect shape it exists to
+   defeat — "only act when the thing being defended is present" — rather
+   than mutating every argv that shares a flag.
+8. **Review found the residual holes the same day.** Post-shim review seats
+   caught `--bind-fd`/`--ro-bind-fd` dest=/proc (same exposure class, fd2
+   arity) and the payload-consume loop's early `break` contradicting the
+   resume model. Both are fixed and pinned by discriminating rows.
+
 ## Tags
 
-bwrap, procfs, sandbox, cross-tenant, argv-rewrite, fd-hygiene, support-persona
+bwrap, procfs, sandbox, cross-tenant, argv-rewrite, fd-hygiene, support-persona, deploy-canary, bwrap-version-drift

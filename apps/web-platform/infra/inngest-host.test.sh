@@ -665,9 +665,74 @@ grep -qF 'for _f in $STAGED; do docker cp "$cid:/$_f" "/tmp/$_f" 2>/dev/null || 
 grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT" \
   && pass || fail "cloud-init-inngest.yml must phone-home the flip-assets staging outcome (flip-assets-staged / flip-assets-MISSING) so a future staging failure self-diagnoses off-box (#6178)"
 
+# 6. D1 PIN (#8285). The retired plaintext backstop volume is no longer declared, and the
+#    cloud-init `inngest_volume_id` input is a LITERAL: if it were derived from a volume resource,
+#    deleting that resource would change user_data and force-replace the sole scheduler. Property:
+#    "removing the backstop volume cannot change this host's rendered user_data". Four scans over
+#    comment-stripped *.tf (a comment naming a resource must not satisfy or trip them):
+#      v1 neither retired address is declared; v2 exactly one `inngest_volume_id =` assignment and
+#      it is the pinned local; v3 exactly one pin line, value the retired id; v4 no live reference
+#      to hcloud_volume.inngest_redis (the `_luks` sibling is a different resource and is allowed).
+d1_violations() { # d1_violations <dir>
+  local dir="$1" f stripped n
+  # Comment lines and `description = "..."` lines are prose, not references (a variable description may
+  # name the retired address to explain what it pins); a depends_on, attribute access or resource header
+  # is what v1/v4 are after.
+  stripped="$(for f in "$dir"/*.tf; do [ -f "$f" ] && grep -vE '^[[:space:]]*(#|//|description[[:space:]]*=)' "$f"; done)"
+  [[ -n "$stripped" ]] || { echo "no .tf content scanned (fail closed)"; return 0; }
+  grep -qE '^[[:space:]]*resource[[:space:]]+"hcloud_volume(_attachment)?"[[:space:]]+"inngest_redis"' <<<"$stripped" \
+    && echo "v1: hcloud_volume(_attachment).inngest_redis is declared again"
+  n="$(grep -cE '^[[:space:]]*inngest_volume_id[[:space:]]*=' <<<"$stripped")"
+  [[ "$n" == 1 ]] || echo "v2: expected exactly one inngest_volume_id assignment, found ${n}"
+  grep -qE '^[[:space:]]*inngest_volume_id[[:space:]]*=[[:space:]]*local\.inngest_retired_plaintext_volume_id[[:space:]]*$' <<<"$stripped" \
+    || echo "v2: inngest_volume_id is not the pinned local.inngest_retired_plaintext_volume_id"
+  n="$(grep -cE '^[[:space:]]*inngest_retired_plaintext_volume_id[[:space:]]*=' <<<"$stripped")"
+  [[ "$n" == 1 ]] || echo "v3: expected exactly one inngest_retired_plaintext_volume_id definition, found ${n}"
+  grep -qE '^[[:space:]]*inngest_retired_plaintext_volume_id[[:space:]]*=[[:space:]]*"106261946"[[:space:]]*$' <<<"$stripped" \
+    || echo "v3: the pin is not the string literal \"106261946\""
+  grep -qE 'hcloud_volume\.inngest_redis([^_[:alnum:]]|$)' <<<"$stripped" \
+    && echo "v4: a live reference to hcloud_volume.inngest_redis remains"
+  return 0
+}
+d1_fixture() { # d1_fixture <name> <assignment-rhs> <pin-line> [extra tf]
+  local d="${_G1_TMP}/d1-$1"
+  mkdir -p "$d" || return 1
+  printf 'locals {\n%s\n}\nresource "hcloud_server" "inngest" {\n  user_data = templatefile("x", {\n    inngest_volume_id = %s\n  })\n}\n%s\n' "$3" "$2" "${4:-}" > "$d/inngest-host.tf"
+  echo "$d"
+}
+_D1_PIN='  inngest_retired_plaintext_volume_id = "106261946"'
+_D1_OUT="$(d1_violations "$DIR")"
+if [[ -z "$_D1_OUT" ]]; then
+  pass
+else
+  while IFS= read -r _l; do fail "D1 pin (#8285): ${_l}"; done <<<"$_D1_OUT"
+fi
+d1_row() { # d1_row <PASS|RED> <label> <dir> [<needle>]
+  local out
+  out="$(d1_violations "$3")"
+  if [[ "$1" == PASS ]]; then
+    [[ -z "$out" ]] && pass || fail "D1 $2 must PASS, got: ${out}"
+  else
+    [[ -n "$out" && "$out" == *"${4:-}"* ]] && pass || fail "D1 $2 must RED naming '${4:-<any>}', got: '${out}'"
+  fi
+}
+d1_row PASS "canonical pinned local" "$(d1_fixture ok 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" '# hcloud_volume.inngest_redis is only named in this comment')"
+d1_row PASS "D1-H1 a variable description may name the retired address" "$(d1_fixture h1 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'variable "x" {\n  description = "pins hcloud_volume.inngest_redis (retired)"\n}')"
+d1_row RED "D1-M5b a depends_on reference is not a description" "$(d1_fixture m5b 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'resource "terraform_data" "y" {\n  depends_on = [hcloud_volume.inngest_redis]\n}')" "v4:"
+d1_row RED "D1-M1 the volume is re-declared" "$(d1_fixture m1 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'resource "hcloud_volume" "inngest_redis" {\n  size = 10\n}')" "v1:"
+d1_row RED "D1-M1b the attachment is re-declared" "$(d1_fixture m1b 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'resource "hcloud_volume_attachment" "inngest_redis" {\n  volume_id = 1\n}')" "v1:"
+d1_row RED "D1-M2 the input is re-pointed at the volume resource" "$(d1_fixture m2 'hcloud_volume.inngest_redis.id' "$_D1_PIN")" "not the pinned local"
+d1_row RED "D1-M2b the input is re-pointed at the LUKS volume" "$(d1_fixture m2b 'hcloud_volume.inngest_redis_luks.id' "$_D1_PIN")" "not the pinned local"
+d1_row RED "D1-M3 the pin drifts to another id" "$(d1_fixture m3 'local.inngest_retired_plaintext_volume_id' '  inngest_retired_plaintext_volume_id = "106903269"')" "v3:"
+d1_row RED "D1-M3b the pin becomes a reference, not a literal" "$(d1_fixture m3b 'local.inngest_retired_plaintext_volume_id' '  inngest_retired_plaintext_volume_id = hcloud_volume.inngest_redis_luks.id')" "v3:"
+d1_row RED "D1-M4 the pin local is missing" "$(d1_fixture m4 'local.inngest_retired_plaintext_volume_id' '  unrelated = 1')" "v3:"
+d1_row RED "D1-M5 a live reference hides in another expression" "$(d1_fixture m5 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'output "x" {\n  value = hcloud_volume.inngest_redis.id\n}')" "v4:"
+d1_row RED "D1-M6 a second input assignment" "$(d1_fixture m6 'local.inngest_retired_plaintext_volume_id' "$_D1_PIN" $'locals {\n  b = templatefile("y", {\n    inngest_volume_id = "1"\n  })\n}')" "found 2"
+d1_row RED "D1-M7 an empty root scans nothing" "$(mkdir -p "${_G1_TMP}/d1-empty" && echo "${_G1_TMP}/d1-empty")" "fail closed"
+
 # ANTI-VACUITY FLOOR. Reported by printf + exit, never through fail()/pass(), so neutering those
 # cannot disarm it. The bound is the exact passing count; raise it with every added assertion.
-INNGEST_HOST_MIN_ASSERTIONS=85
+INNGEST_HOST_MIN_ASSERTIONS=99
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1

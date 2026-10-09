@@ -22,6 +22,13 @@ infra/
 # can read it with no network; without this re-include the builder-stage
 # `COPY . .` drops it and the runner COPY fails the image build.
 !infra/sandbox-canary-argv.json
+# Same release-break class for the #5863 outer-wrap canary arm: the runner
+# stage bakes `infra/agent-outer-wrap-argv.json` and
+# `scripts/tenant-isolation-inner-probe.sh` (`COPY --from=builder`) so
+# ci-deploy.sh's `--replay-outer` can build + verify the outer mount table
+# inside the canary container. Both live under excluded dirs — each must be
+# re-included or the runner COPY fails the image build.
+!infra/agent-outer-wrap-argv.json
 # Same three-surface rule for the #8752 shared sandbox hardening pair: the
 # Dockerfile runner stage bakes the committed nested-userns filter
 # (`COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf`) and the bwrap
@@ -120,6 +127,9 @@ scripts/
 !scripts/sandbox-canary.mjs
 # Same shape for the #8609 GitHub App key probe (`COPY --from=builder /app/scripts/github-app-key-probe.mjs`).
 !scripts/github-app-key-probe.mjs
+# #5863 outer-wrap canary shared payload — baked for the `--replay-outer`
+# arm (the probe content is piped into the realized mountns via `bash -s`).
+!scripts/tenant-isolation-inner-probe.sh
 
 .git
 .gitignore

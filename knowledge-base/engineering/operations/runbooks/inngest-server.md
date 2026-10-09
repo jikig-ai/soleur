@@ -161,7 +161,7 @@ host. Records are only ever appended; nothing deletes or truncates the ledger, s
 evidence and the authorization evidence coexist permanently.
 
 A second flush is needed when a deliberate recut emptied the queue once and a later operation —
-typically the `inngest-volume-recut` refusal telling you the store holds N keys — requires it
+typically the `inngest-volume-recut` refusal telling you the store holds N keys (that dispatch is gone since #8285 PR A, see the Update callout under § Post-cutover status below) — requires it
 empty again. The verb:
 
 ```
@@ -1966,8 +1966,9 @@ ADR-100, amendment 2026-09-14.
 >   RESURRECTED: pull `reason=` from `/hooks/deploy-status` + Better Stack (tag `ci-deploy`) and find
 >   what restarts or re-enables it. Do **not** SSH.
 > - `quiesced_peer_fanout_unaccepted` — a peer did not return 202. Grep Better Stack for
->   `FANOUT: webhook secret unavailable` first: that line means the originating host cannot read its
->   own `deploy-peer` secret and a re-dispatch will not converge (R9). Otherwise check the peer host
+>   `FANOUT: webhook secret unavailable` and `FANOUT: could not compute the request signature` first:
+>   either line means the originating host cannot read its own `deploy-peer` secret or its signer fails
+>   (python3 missing), and a re-dispatch will not converge (R9). Otherwise check the peer host
 >   and the web→web:9000 firewall, then re-dispatch — stop and disable are idempotent.
 > - UNKNOWN/000 — the webhook was unreachable: check CF-Access/HMAC, then re-dispatch.
 >
@@ -2179,6 +2180,15 @@ ADR-100, amendment 2026-09-14.
      > latch's real precondition is a measured-empty store, which this volume cannot reach without
      > #7777; the plaintext posture is #6894's (ADR-142, additive), and the target's fate — dormant
      > on this volume, retire-or-keep undecided — is decided on #8316.
+     >
+     > **Update (2026-10-08, #8285, PR A).** Appended; nothing above is changed. The
+     > `apply_target=inngest-volume-recut` dispatch no longer exists once PR A of #8285 has merged: its job
+     > is converted into `inngest_backstop_retire` (`apply_target=inngest-backstop-retire`), which retires
+     > the plaintext backstop volume `106261946` and does not recut a store. So the "recut" remediation
+     > named above has no dispatch to run, and a standing flush latch has no in-repo remediation dispatch
+     > (the dark-gate library `tests/scripts/lib/inngest-host-dark-gate.sh` is kept, because
+     > `scripts/cutover-inngest.sh` still uses it). The procedure is in
+     > `inngest-luks-cutover-6894.md` §5b. The convergence PR of #8285 deletes the retire job itself.
 
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
      set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll

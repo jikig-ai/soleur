@@ -654,7 +654,7 @@ jobs:
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' >/dev/null; then
+          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' >/dev/null; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"

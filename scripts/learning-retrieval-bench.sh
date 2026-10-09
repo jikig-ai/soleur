@@ -26,7 +26,6 @@
 # Self-test env-var hooks (per cq-test-fixtures-synthesized-only):
 #   LEARNINGS_ROOT, INDEX_PATH, OUTPUT_DIR  redirect script reads/writes
 #   CURL_BIN                                inject mock curl for API tests
-#   LIVE_API=1                              opt in to live calls in self-test
 
 set -euo pipefail
 
@@ -55,6 +54,18 @@ assert_fixture_dir() {
   esac
 }
 
+# Hermeticity for --self-test: an inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE (a git hook exports
+# them) redirects the git calls below AND every fixture repository the self-test builds, so the run fails
+# or, worse, writes into the caller's repository. Scrub the whole GIT_ prefix, not a hand-listed set. Only
+# for --self-test: a real run legitimately honours the caller's git environment.
+for _a in "$@"; do
+  if [[ "$_a" == "--self-test" ]]; then
+    for _v in $(compgen -e | grep '^GIT_' || true); do unset "$_v"; done
+    break
+  fi
+done
+unset _a _v
+
 # ─── globals ────────────────────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEARNINGS_ROOT="${LEARNINGS_ROOT:-$REPO_ROOT/knowledge-base/project/learnings}"
@@ -77,10 +88,14 @@ SELF_TEST=0
 CORPUS_COUNT_OVERRIDE=""
 CACHE_PARAPHRASES=""
 NO_PARAPHRASE="${NO_PARAPHRASE:-0}"
-MODEL_ID="claude-haiku-4-5-20251001"
+MODEL_ID="claude-haiku-5-5"
 ANTHROPIC_VERSION="2023-06-01"
 ANTHROPIC_ENDPOINT="https://api.anthropic.com/v1/messages"
 COST_CEILING_USD=5.00
+# Per-file cost estimates were calibrated against Haiku 4.5. Haiku 5.5 is about 10x cheaper per
+# token (about 7.7x after its tokenizer's ~30% inflation), so these OVER-estimate; the ceiling
+# below can therefore refuse a run that would fit. Conservative on purpose: re-calibrate from a
+# real --confirm run before relying on a tighter estimate.
 LIGHT_COST_PER_FILE=0.0010
 HEAVY_COST_PER_FILE=0.0015
 HEADROOM_FACTOR="1.10"
@@ -118,7 +133,6 @@ Closes #4043 once committed alongside output learning + sibling JSON.
 Env-var hooks (self-test fixture overrides only — cq-test-fixtures-synthesized-only):
   LEARNINGS_ROOT, INDEX_PATH, OUTPUT_DIR     redirect script reads/writes
   CURL_BIN                                   inject mock curl for API tests
-  LIVE_API=1                                 opt in to live calls in self-test
 HELP
 }
 
@@ -829,19 +843,22 @@ st_write() {
 # stdin one. The body carries `"type":"text"` because the reader selects the text block by type
 # (#8392); without it every paraphrase read as empty and the call as an API error.
 st_make_recording_curl() {
-  local path="$1" counter="$2" argv_log="$3" stdin_log="$4"
+  local path="$1" counter argv_log stdin_log
+  # %q-quote every path interpolated into the generated body: a TMPDIR holding a quote, a dollar sign or a
+  # backtick otherwise breaks the stub (it exits without recording), which reads as a failing Stage 2 row.
+  counter="$(printf '%q' "$2")"; argv_log="$(printf '%q' "$3")"; stdin_log="$(printf '%q' "$4")"
   cat > "$path" <<STUB
 #!/usr/bin/env bash
-COUNTER_FILE="${counter}"
+COUNTER_FILE=${counter}
 [[ -f "\$COUNTER_FILE" ]] || echo 0 > "\$COUNTER_FILE"
 idx=\$(cat "\$COUNTER_FILE")
 echo \$((idx + 1)) > "\$COUNTER_FILE"
-printf '%s\0' "\$@" >> "${argv_log}"
-printf 'CALL-END\0' >> "${argv_log}"
+printf '%s\0' "\$@" >> ${argv_log}
+printf 'CALL-END\0' >> ${argv_log}
 _prev=""
 for _a in "\$@"; do
   if [[ ( "\$_prev" == "--config" || "\$_prev" == "-K" ) && "\$_a" == "-" ]]; then
-    cat >> "${stdin_log}"
+    cat >> ${stdin_log}
   fi
   _prev="\$_a"
 done
@@ -1151,6 +1168,23 @@ self_test() {
   trap 'rm -rf "$TMP_ROOT"' EXIT
 
   echo "== self-test (synthesized fixtures only — cq-test-fixtures-synthesized-only) =="
+
+  # Hermeticity: the verdict must not depend on the caller's environment, and the self-test never
+  # reaches the network. An exported NO_PARAPHRASE=1 (the production kill switch) would switch off
+  # the Stage 2 rows (173 passed / 4 failed), and an exported ANTHROPIC_API_KEY would let
+  # kbsearch_rank pass its key gate and invoke the real curl with the caller's key. Rows that need a
+  # key or a curl set their own locally and restore to THIS baseline. CURL_BIN defaults to a stub that
+  # records the call and fails, so a row that forgets to stub curl is reported below instead of
+  # calling out. scripts/learning-retrieval-bench.test.sh pins all three.
+  NO_PARAPHRASE=0
+  unset ANTHROPIC_API_KEY
+  ST_LEAK_LOG="$TMP_ROOT/curl-leaked-calls"
+  : > "$ST_LEAK_LOG"
+  CURL_BIN="$TMP_ROOT/curl-fail-closed"
+  # %q: the log path is shell-quoted into the generated body, so a TMPDIR holding a quote, a dollar sign
+  # or a backtick cannot break the stub (which would exit non-zero without logging and blind the row).
+  printf '%s\n' '#!/usr/bin/env bash' "printf 'call\\n' >> $(printf '%q' "$ST_LEAK_LOG")" 'exit 99' > "$CURL_BIN"
+  chmod +x "$CURL_BIN"
 
   # ── AC2-a: full frontmatter + ## Problem → ground-truth = problem body ────
   st_write "$TMP_ROOT/a.md" \
@@ -1486,6 +1520,9 @@ self_test() {
   # ── Anthropic key shape guard + key-off-argv (argv-bearer sweep S2, D7) ──
   self_test_api_key_guard
 
+  # ── Hermeticity: no row reached the fail-closed default curl ──
+  st_assert "hermeticity: no row invoked the fail-closed default CURL_BIN" "0" "$(wc -l < "$ST_LEAK_LOG" | tr -d ' ')"
+
   echo
   echo "== summary: PASS=$SELF_TEST_PASS  FAIL=$SELF_TEST_FAIL  TOTAL=$SELF_TEST_TOTAL =="
   if (( SELF_TEST_FAIL > 0 )); then
@@ -1494,7 +1531,7 @@ self_test() {
   # anti-vacuity floor: a self-test whose case calls were deleted or short-circuited reports
   # PASS=0 FAIL=0 and exits 0 above. Declared on the line IMMEDIATELY above the `if`, and a
   # lower bound (never -eq) so adding a row is not a spurious failure.
-  ST_MIN_ASSERTIONS=177
+  ST_MIN_ASSERTIONS=178
   if (( SELF_TEST_TOTAL < ST_MIN_ASSERTIONS )); then
     printf 'FATAL: anti-vacuity floor breached (TOTAL=%s < %s) -- cases did not dispatch\n' \
       "$SELF_TEST_TOTAL" "$ST_MIN_ASSERTIONS" >&2
