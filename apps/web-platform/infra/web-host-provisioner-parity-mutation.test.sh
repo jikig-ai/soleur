@@ -431,6 +431,26 @@ assert old in s
 s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
+# #9534: a NEW web-1-only SSH dialer must be forced through the web-2 classification —
+# without it a running web-2 silently never receives the artifact.
+expect_red "M4h (§1: unclassified web-1-only dialer reds)" server.tf \
+  "unclassified=['phantom_w1_probe']" '
+old = "resource \"terraform_data\" \"egress_gateway_web2\" {"
+assert old in s
+s = s.replace(old, """resource "terraform_data" "phantom_w1_probe" {
+  triggers_replace = { h = timestamp() }
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    host_key    = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" { inline = ["set -e", "true"] }
+}
+
+""" + old, 1)
+'
+
 # Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
 # a resource was skipped by every section at once -- and because all floors are `>=`, invisibly.
 # This is a GREEN control: after the rename the resource must still be swept (count unchanged).

@@ -340,6 +340,53 @@ else:
        "never reference the prd credential under any spelling "
        "(var.doppler_token / webhook_doppler_token_env / soleur_doppler_token_env_b64 / "
        "SOLEUR_DOPPLER_TOKEN / soleur-doppler-token / push-infra-config).")
+# ── #9534: web-1↔web-2 running-host delivery classification ─────────────────────────
+# Every SSH-connected terraform_data must answer "does the RUNNING web-2 get this?".
+# The failure class this prevents: an artifact added to cloud-init is baked for the
+# NEXT web-2 birth, but the live web-2's cloud-init is frozen (ignore_changes), so
+# anything introduced since its last replace never reaches it — and an entitled
+# codepath landing there fails dark on half the fleet. Forced classes:
+#   twin          — a `<name>_web2` resource exists (deploy_pipeline_fix_web2,
+#                   egress_gateway_web2)
+#   role-only     — meaningless on web-2 (its own host-key probe, the web-1 webhook
+#                   receiver plumbing)
+#   birth-covered — the artifact predates web-2's last replace (2026-10-07) and rode
+#                   its birth cloud-init; the web-1 SSH provisioner exists only
+#                   because web-1 predates the bake. An artifact INTRODUCED after a
+#                   web-2 birth may NOT claim this — its entry here must name the
+#                   introduction PR so a reviewer can check the date.
+W1_ONLY_JUSTIFIED = {
+    "apparmor_bwrap_profile": "birth-covered: predates web-2 birth",
+    "container_restart_monitor_install": "birth-covered: predates web-2 birth (#5417)",
+    "cosign_trusted_root": "birth-covered: predates web-2 birth",
+    "cron_egress_firewall": "birth-covered (loader/units/allowlist) + partial twin: the three cron-egress files hot-deliver via deploy_pipeline_fix_web2 (#9393)",
+    "disk_monitor_install": "birth-covered: predates web-2 birth",
+    "docker_seccomp_config": "birth-covered: predates web-2 birth",
+    "fail2ban_tuning": "birth-covered: predates web-2 birth",
+    "git_data_probe_install": "birth-covered: predates web-2 birth",
+    "infra_config_handler_bootstrap": "role-only: webhook receiver plumbing lives on web-1",
+    "inngest_consumer_probe_install": "birth-covered: predates web-2 birth",
+    "journald_persistent": "birth-covered: predates web-2 birth",
+    "orphan_reaper_install": "birth-covered: predates web-2 birth",
+    "private_nic_guard_install": "birth-covered: predates web-2 birth",
+    "registry_insecure_config": "birth-covered: predates web-2 birth",
+    "resource_monitor_install": "birth-covered: predates web-2 birth",
+    "send_failed_alert_probe": "birth-covered: predates web-2 birth",
+    "web_1_host_key_probe": "role-only: probes web-1's own committed host key; web-2's is local.web_2_ssh_host_key",
+    "zot_consumer_probe_install": "birth-covered: predates web-2 birth",
+}
+_w1_only = [n for n in ssh_resources
+            if not n.endswith("_web2") and f"{n}_web2" not in ssh_resources]
+_unclassified = [n for n in _w1_only if n not in W1_ONLY_JUSTIFIED]
+_stale_class = [n for n in W1_ONLY_JUSTIFIED if n not in _w1_only]
+if not _unclassified and not _stale_class:
+    ok(f"1: every web-1 SSH provisioner declares its web-2 story ({len(_w1_only)} classified, "
+       f"{len(ssh_resources) - len(_w1_only)} twin/scoped)")
+else:
+    no(f"1: web-2 delivery classification broken: unclassified={sorted(_unclassified)} "
+       f"(add a *_web2 twin or a W1_ONLY_JUSTIFIED entry naming the class + introduction PR), "
+       f"stale entries={sorted(_stale_class)} (a classified name no longer exists or gained a twin)")
+
 # #8609 (plan 1.4): the GitHub App key read token rides the SAME credential file web-2 does not
 # receive in place, so the denylist above needs no change — but only while every spelling of the
 # new credential falls inside it. Pinned: the pattern is byte-unchanged and matches each spelling

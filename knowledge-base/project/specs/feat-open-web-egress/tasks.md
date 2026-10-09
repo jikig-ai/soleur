@@ -36,11 +36,14 @@ Derived from `knowledge-base/project/plans/2026-10-05-feat-open-web-egress-plan.
 - [ ] 1.10 Bake chain (all four): `host_script_files` (server.tf), Dockerfile
       COPY, `.dockerignore` re-includes, `soleur-host-bootstrap.sh` install
       loops+assertions
-- [ ] 1.11 `terraform_data` SSH block for web-1 (config_hash+server_id
-      triggers, `host_key`, literal dests; creates token dir + re-runs app
-      container so the rw mount lands)
-- [ ] 1.12 `apply-web-platform-infra.yml` `-target` allowlist entries (post-
-      bridge SSH stage); `terraform-target-parity.test.ts` update
+- [ ] 1.11 `terraform_data` SSH blocks for BOTH running hosts — web-1
+      (`egress_gateway`) and web-2 (`egress_gateway_web2`, the
+      `local.web_2_ssh_host_key` + `%RAND%` script_path shape). Web-2 is not
+      optional: its cloud-init is frozen, so replace-only delivery would leave
+      entitled sessions there fail-closed until the next `-replace`.
+- [ ] 1.12 `apply-web-platform-infra.yml` `-target` allowlist entries for BOTH
+      gateway resources (post-bridge SSH stage); `terraform-target-parity.test.ts`
+      update + the `web-host-provisioner-parity` web-2 dialer-class widening
 - [ ] 1.13 `vector.toml`: `egress_gw_journald` source +
       `pii_scrub_drop_userdata` inputs wiring
 - [ ] 1.14 `cron-egress-enforce-probe.sh`: synthetic CONNECT pair

@@ -2748,6 +2748,19 @@ resource "terraform_data" "egress_gateway" {
 # landing there fails closed — safe, but silently dark on half the fleet.
 # Identical artifact set + order; only the host identity differs (web-2's
 # host key local is the #9393 deploy_pipeline_fix_web2 one).
+#
+# RUNNING-WEB-2 DELIVERY CENSUS (frozen cloud-init → these are the only
+# hot-delivery channels today; update when adding one):
+#   terraform_data.deploy_pipeline_fix_web2 — the full deploy-pipeline set
+#     (ci-deploy, webhook.service, infra-config, inngest-*, service drop-ins)
+#     + the three cron-egress artifacts (resolver, allowlist-cidr,
+#     post-apply assert) (#9151, #9393)
+#   terraform_data.egress_gateway_web2    — four gateway artifacts
+#     (squid.conf, auth helper, deny CIDRs, bootstrap) (#9534)
+# Everything else reaches a running web-2 only via -replace (birth set) or
+# not at all by role. web-host-provisioner-parity.test.sh forces every new
+# web-1 SSH provisioner through this classification — add the twin here or
+# record the W1_ONLY_JUSTIFIED reason.
 resource "terraform_data" "egress_gateway_web2" {
   triggers_replace = {
     config_hash = sha256(join(",", [
