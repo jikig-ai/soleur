@@ -28,3 +28,7 @@ Result is better than the issue's target: invocation tests classify **unit**, no
 category: workflow-patterns
 module: test-infrastructure
 related: "#9855, #9762, #9771"
+
+## Addendum (plan phase, same session)
+
+- **`founder_check` `expected` is single-line-only** — `verify --candidate` rejects a YAML block scalar (`unparseable`) and a `\n`-escaped multi-line value (`control-character`: the validator rejects `\x00-\x1f` after YAML decode). "Every file marked" isn't expressible as a multi-line expected; the frozen form is `git grep -l` + a single-file substring. Fixed in place: `plan-founder-check.md` now states the constraint. Also: `rg -l` output order is readdir-dependent — `git grep -l` iterates the sorted index, so prefer it when `expected` asserts file ORDER or a full set.
