@@ -1,5 +1,5 @@
-# S3: the lines the codemod routes to its hand queue as data/X that are converted by the same one-token transform, read in context in the plan.
-# Base-side (origin/main fd1c4d5cac) path:line:kind. Kinds: stub-heredoc (quoted heredoc written to a stub that is executed), eval-string (assertion string run by eval or bash -c), stub-body (argument of a stub() helper written to an executed script), x-false-positive (producer screen refused the line because the word sleep sits inside the quoted pattern; the producer is printf).
+# S3: the lines the codemod routes to its hand queue as data or X that are converted by the same one-token transform, read in context in the plan.
+# Base-side (origin/main d0b5d2e35b (identical to fd1c4d5cac for these files)) path:line:kind. Kinds: stub-heredoc (quoted heredoc written to a stub that is executed), eval-string (assertion string run by eval or bash -c), stub-body (argument of a stub() helper written to an executed script), x-false-positive (producer screen refused the line because the word sleep sits inside the quoted pattern; the producer is printf).
 # verify counts these as verified (plain transform); it cannot tell code from data, so this list plus the plan's table is the classification evidence.
 scripts/followthroughs/concierge-strand-754ee124-5733.test.sh:59:stub-heredoc
 scripts/lib/trusted-verdict.test.sh:57:stub-heredoc
