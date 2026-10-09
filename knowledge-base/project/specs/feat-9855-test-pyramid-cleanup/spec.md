@@ -30,7 +30,7 @@ The test-design-reviewer's pyramid check FAILs any PR that adds an e2e-layer tes
 
 - **FR1** — `team-membership.e2e.ts` deleted. Preconditions verified at plan/work time: the flag-off 404 assertion is covered by `test/team-membership-resolver.test.ts` (AC-A); the conversation-names reachability assertion is either covered by `test/conversation-names-settings.test.tsx` or demoted as a route-invocation test; the 6 `describe.skip` stubs are dead spec text.
 - **FR2** — `smoke.e2e.ts` split: the ~8–9 `request.get`-only CSP-header/wiring assertions move to a new vitest file (e.g. `test/csp-middleware.test.ts`) invoking `middleware.ts` directly — header presence per route, nonce rotation across invocations, `x-forwarded-host` connect-src handling, `/health` header absence. The browser-needing residue (nonce-matches-script-tag DOM check, console-CSP-violations listener, and anything else using `page`) stays in `smoke.e2e.ts` under a `pyramid-justified:` marker.
-- **FR3** — `oauth.e2e.ts` deleted after a per-test coverage check: `/callback` 307-redirect cases against `test/e2e-oauth-tc-consent.test.ts` (route-invocation suite already covers callback redirects incl. `next`-param handling); DOM-contract cases against `test/oauth-buttons.test.tsx` + the consent suite. Any assertion without a lower-layer equivalent is demoted to a route-invocation or component test, not dropped.
+- **FR3** — `oauth.e2e.ts` kept trimmed + marked after a per-test coverage check [Updated 2026-10-09: operator merge call — served-page wiring is browser-level]: `/callback` 307-redirect cases against `test/e2e-oauth-tc-consent.test.ts` (route-invocation suite already covers callback redirects incl. `next`-param handling); DOM-contract cases against `test/oauth-buttons.test.tsx` + the consent suite. Any assertion without a lower-layer equivalent is demoted to a route-invocation or component test, not dropped.
 - **FR4** — `pyramid-justified:` marker backfilled on every surviving e2e file (the 8 untouched files + the `smoke.e2e.ts` remnant), each naming its file-specific browser need (e.g. `nav-states-*` intercept `page.route` timing; `cc-soleur-go-*` use ws-injector + `browser.newContext`; `start-fresh-*` need the authenticated project).
 - **FR5** — A comment on #9771 enumerates the 5 machinery critiques from #9855 (named-dir precedence, `*.test.sh` ratchet, `hasTests` regex vs `*.e2e-utils`/`setup.e2e.config`, `mu1-integration` spelling, unweighed e2e layer); a comment on #9855 records that PR 1 landed and PR 2 remains open.
 
@@ -44,7 +44,7 @@ The test-design-reviewer's pyramid check FAILs any PR that adds an e2e-layer tes
 ## Acceptance Criteria
 
 - [ ] `git grep pyramid-justified apps/web-platform/e2e` returns a marker in every surviving `.e2e.ts` file.
-- [ ] `team-membership.e2e.ts` and `oauth.e2e.ts` no longer exist; each removed assertion is accounted for (unit-covered or demoted).
+- [ ] `team-membership.e2e.ts` no longer exists and `oauth.e2e.ts` is reduced to browser-required tests under a marker; each removed assertion is accounted for (unit-covered or demoted).
 - [ ] `smoke.e2e.ts` retains only browser-needing tests; the moved assertions live in a vitest file that passes locally.
 - [ ] `test/e2e-oauth-tc-consent.test.ts`, `test/oauth-buttons.test.tsx`, `test/csp.test.ts`, `test/team-membership-resolver.test.ts`, `test/conversation-names-settings.test.tsx` still pass (coverage claims re-verified, not assumed).
 - [ ] Comments posted on #9855 (PR 1 landed / PR 2 open) and #9771 (machinery critiques enumerated).

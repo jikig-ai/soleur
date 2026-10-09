@@ -118,19 +118,22 @@ describe("CSP hardening directives", () => {
 
 describe("CSP connect-src via x-forwarded-host (regression for #1075)", () => {
   test("accepted forwarded host lands in connect-src", async () => {
-    // host and x-forwarded-host differ deliberately: resolveOrigin prefers
-    // forwardedHost over host, so asserting the forwarded value lands (and
-    // the bind host does not) exercises that arm rather than passing on the
-    // host fallback alone.
+    // Under NODE_ENV=production PRODUCTION_ORIGINS and resolveOrigin's
+    // rejection fallback are BOTH app.soleur.ai, so accept-vs-reject is
+    // unobservable there. In dev, buildDevOrigins admits
+    // http://localhost:3000 — forwarding it from a different bind host
+    // makes the forwardedHost arm the only way ws://localhost:3000 can
+    // land in connect-src.
+    vi.stubEnv("NODE_ENV", "development");
     const res = await middleware(
       makeRequest("/login", {
-        host: "localhost:3000",
-        "x-forwarded-host": "app.soleur.ai",
+        host: "10.0.0.5:3000",
+        "x-forwarded-host": "localhost:3000",
+        "x-forwarded-proto": "http",
       }),
     );
     const csp = res.headers.get("content-security-policy")!;
-    expect(csp).toContain("wss://app.soleur.ai");
-    expect(csp).not.toContain("localhost");
+    expect(csp).toContain("ws://localhost:3000");
   });
 
   test("spoofed x-forwarded-host is rejected from connect-src", async () => {

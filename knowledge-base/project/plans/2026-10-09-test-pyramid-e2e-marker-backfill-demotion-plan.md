@@ -60,7 +60,7 @@ Verify coverage assertion-by-assertion, then: delete `team-membership.e2e.ts` an
 - `apps/web-platform/e2e/start-fresh-onboarding.e2e.ts` — add marker (authenticated onboarding flow through rendered UI)
 - `apps/web-platform/e2e/smoke.e2e.ts` — remove demoted request-only tests; keep browser-needing residue under marker
 - `apps/web-platform/e2e/team-membership.e2e.ts` — **delete** (after Phase 1 coverage ledger is fully green)
-- `apps/web-platform/e2e/oauth.e2e.ts` — **delete** (after Phase 1 coverage ledger is fully green)
+- `apps/web-platform/e2e/oauth.e2e.ts` — **trim + marker** [Updated 2026-10-09: operator merge call — the served-page render is browser-level, so the file stays with only its 3 login DOM tests; `/callback` + signup-gate assertions landed lower]
 
 ## Files to Create
 
@@ -77,7 +77,7 @@ For every active test in `team-membership.e2e.ts`, `oauth.e2e.ts`, and every `re
 
 - Write `test/csp-middleware.test.ts` covering: CSP header present on `/login` + `/signup` responses; `strict-dynamic` + nonce in header; nonce rotates across invocations; `x-forwarded-host` connect-src behavior (accepted + spoofed, the #1075 regression); no CSP header on `/health`; `/dashboard` unauthenticated → `/login` redirect.
 - Write any conditional demotions the ledger requires (FR3).
-- Delete `team-membership.e2e.ts` and `oauth.e2e.ts` only when their ledger rows are all `covered-by` or `demote-to`-landed.
+- Delete `team-membership.e2e.ts` only when its ledger rows are all `covered-by` or `demote-to`-landed. [Updated 2026-10-09: `oauth.e2e.ts` kept trimmed per the operator merge call]
 
 ### Phase 3 — Split + markers
 
@@ -130,7 +130,7 @@ CPO sign-off: brainstorm `## Domain Assessments` carried forward — the CPO ass
 | 1 | "Backfill `pyramid-justified:` comments on 10 of 11 `apps/web-platform/e2e/*.e2e.ts` files (all except `team-membership.e2e.ts`)" [issue #9855] | Phase 3; Files to Edit (8 untouched + smoke remnant) | mapped |
 | 2 | "Demote or delete `apps/web-platform/e2e/team-membership.e2e.ts`" [issue #9855] | FR1-equivalent Phase 1–2; delete `team-membership.e2e.ts` | mapped |
 | 3 | "Split `apps/web-platform/e2e/smoke.e2e.ts` … Move header-only assertions to the integration layer; keep the nonce-on-script-tag DOM check in e2e." [issue #9855] | Phase 2 (`test/csp-middleware.test.ts`) + Phase 3 (smoke split) | mapped |
-| 4 | "Evaluate `apps/web-platform/e2e/oauth.e2e.ts` — … Demote what's duplicated, marker what genuinely needs a browser." [issue #9855] | Phase 1 ledger + Phase 2 delete `oauth.e2e.ts` | mapped |
+| 4 | "Evaluate `apps/web-platform/e2e/oauth.e2e.ts` — … Demote what's duplicated, marker what genuinely needs a browser." [issue #9855] | Phase 1 ledger + Phase 2 demotion; file kept marked (3 browser tests) [Updated 2026-10-09] | mapped |
 | 5 | "Wire the orphaned env gates into CI." [issue #9855 — PR 2] | — | descoped — justification: operator chose PR-1-only scope; PR 2 needs Doppler dev-Supabase secrets + per-suite cost/flake decisions, remains open on #9855 |
 | 6 | "Input to #9771 — machinery critiques … fix there or inline if trivial" [issue #9855] | #9771 comment (posted 2026-10-09) | mapped — deferred to #9771 per the ask's own routing |
 
@@ -140,7 +140,7 @@ CPO sign-off: brainstorm `## Domain Assessments` carried forward — the CPO ass
 |-----------|-----------------------------------|---------|
 | `pyramid-justified:` markers on 9 surviving e2e files | "Backfill `pyramid-justified:` comments on 10 of 11 `apps/web-platform/e2e/*.e2e.ts` files" | asked |
 | Delete `team-membership.e2e.ts` | "Demote or delete `apps/web-platform/e2e/team-membership.e2e.ts`" | asked |
-| Delete `oauth.e2e.ts` | "Demote what's duplicated, marker what genuinely needs a browser" | asked — evaluation concluded all 6 tests duplicated at lower layer |
+| Keep `oauth.e2e.ts` trimmed + marked | "Demote what's duplicated, marker what genuinely needs a browser" | asked — evaluation kept the 3 served-page DOM tests as genuinely browser-required [Updated 2026-10-09] |
 | `test/csp-middleware.test.ts` | "Move header-only assertions to the integration layer" | asked — mechanism (middleware-invocation vitest) inferred — justification: no booted-server harness exists; invocation tests are the repo's established browser-free HTTP-contract pattern (`e2e-oauth-tc-consent.test.ts`) |
 | Phase-1 coverage ledger | — | inferred — justification: the brand-survival control; G3 (zero net coverage loss) is unverifiable without a per-assertion accounting |
 | #9771 machinery comment | "Input to #9771 — machinery critiques" | asked |
@@ -157,8 +157,8 @@ CPO sign-off: brainstorm `## Domain Assessments` carried forward — the CPO ass
 
 <!-- founder-stated check: see plan-founder-check.md -->
 
-- [ ] `git grep pyramid-justified apps/web-platform/e2e` returns a `pyramid-justified:` comment in every surviving `.e2e.ts` file (9 files: 8 untouched + smoke remnant)
-- [ ] `apps/web-platform/e2e/team-membership.e2e.ts` and `apps/web-platform/e2e/oauth.e2e.ts` are deleted; every removed assertion is accounted `covered-by` or `demote-to` in the PR-body coverage ledger
+- [ ] `git grep pyramid-justified apps/web-platform/e2e` returns a `pyramid-justified:` comment in every surviving `.e2e.ts` file (10 files: 9 + oauth remnant) [Updated 2026-10-09]
+- [ ] `apps/web-platform/e2e/team-membership.e2e.ts` is deleted and `apps/web-platform/e2e/oauth.e2e.ts` is reduced to browser-required tests under a marker; every removed assertion is accounted `covered-by` or `demote-to` in the PR-body coverage ledger
 - [ ] `apps/web-platform/e2e/smoke.e2e.ts` retains only browser-needing tests (no `request`-only test remains) and carries a marker
 - [ ] New `apps/web-platform/test/csp-middleware.test.ts` passes locally and covers each demoted CSP-wiring assertion named in Phase 2
 - [ ] `test/team-membership-resolver.test.ts`, `test/oauth-buttons.test.tsx`, `test/e2e-oauth-tc-consent.test.ts`, `test/csp.test.ts`, `test/conversation-names-settings.test.tsx` pass unchanged (coverage claims verified, not assumed)
@@ -192,7 +192,7 @@ founder_check:
 ## Success Metrics
 
 - Zero `pyramid-justified` absence FAILs attributable to pre-existing e2e files on subsequent PRs
-- e2e file count drops 11 → 9; every deleted assertion has a named lower-layer home
+- e2e file count drops 11 → 10; every removed assertion has a named lower-layer home [Updated 2026-10-09]
 - New middleware-invocation suite runs in the unit/integration CI leg, not the 20-min e2e job
 
 ## Dependencies & Risks
