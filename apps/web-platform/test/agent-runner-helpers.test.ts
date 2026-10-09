@@ -29,6 +29,9 @@ import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: vi.fn(() => ({ ANTHROPIC_API_KEY: "sk-test" })),
+  // feat-open-web-egress (#9534): the sandbox-config deny census derives
+  // from this set at module load — keep it non-empty.
+  ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
 }));
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
@@ -106,12 +109,16 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // emitted deny sequence maps to the builder's `--tmpfs` emission order; a
     // per-sibling entry here means enumeration crept back in — fail on either
     // drift.
+
+    // #9534: the egress token dir is denied for EVERY session — its files ARE
+    // live gateway credentials for concurrent entitled sessions.
     expect(result.filesystem.denyRead).toEqual([
       root,
       wtRoot,
       `${root}-c4-staging`,
       "/proc",
       "/sys",
+      process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     ]);
   });
 
@@ -188,12 +195,15 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // workspace entirely without this restore — the vendor builder re-binds
     // `allowWithinDeny` paths `--ro-bind` after the tmpfs.
     expect(result.filesystem.allowRead).toEqual([own]);
+    // The egress token dir is denied for every session (#9534) — it sits
+    // after /proc because the builder dedupes denyReadExtra before it lands.
     expect(result.filesystem.denyRead).toEqual([
       root,
       wtRoot,
       `${root}-c4-staging`,
       "/proc",
       "/sys",
+      process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     ]);
   });
 
@@ -209,6 +219,8 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/proc",
       "/sys",
       extra,
+      // #9534: token dir lands after extras (appended last in the union).
+      process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     ]);
   });
 
@@ -269,12 +281,14 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
     // EXACT constant list — see the T17 guard rationale above.
+    // The egress token dir is denied for every session (#9534).
     expect(result.filesystem.denyRead).toEqual([
       root,
       wtRoot,
       `${root}-c4-staging`,
       "/proc",
       "/sys",
+      process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
     ]);
   });
 

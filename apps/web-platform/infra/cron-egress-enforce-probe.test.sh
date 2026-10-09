@@ -215,12 +215,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ENV_BIN="$(command -v env || true)"; BASH_BIN="$(command -v bash || true)"; TIMEOUT_BIN="$(command -v timeout || true)"
 STUBS="$(mktemp -d)"; trap 'rm -rf "$STUBS"' EXIT
 STUB_CALLS="$STUBS/calls"
+GWTOK_DIR="$STUBS/gwtok"; mkdir -p "$GWTOK_DIR"
 mk_stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$STUBS/$1"; chmod +x "$STUBS/$1"; }
 LOGLINE='printf "%s\t%s\n" "$(basename "$0")" "$*" >> "$STUB_CALLS"'
 mk_stub docker "$LOGLINE
 case \"\$1\" in
-  ps) if [ -n \"\${STUB_PS_NAMES+x}\" ]; then printf '%s\n' \"\$STUB_PS_NAMES\"; else echo soleur-web-platform; fi ;;
-  exec) case \"\$*\" in *api.github.com*) exit 0 ;; *example.com*) exit 28 ;; esac; echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
+  ps) if [ -n \"\${STUB_PS_NAMES+x}\" ]; then printf '%s\n' \"\$STUB_PS_NAMES\"; else printf '%s\n' soleur-web-platform soleur-egress-gw; fi ;;
+  inspect) echo '172.18.0.9' ;;
+  exec) case \"\$*\" in *169.254.169.254*) exit \"\${STUB_GW_DENY_RC:-7}\" ;; *api.github.com*) case \"\$*\" in *--proxy*) printf '%s' \"\${STUB_GW_ALLOW_CODE:-200}\" ;; esac; exit 0 ;; *example.com*) exit 28 ;; esac; echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
   *) echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
 esac"
 mk_stub nft "$LOGLINE
@@ -243,6 +245,8 @@ run_probe() {
   done
   : > "$STUB_CALLS"
   RC=0
+  local has_tok=false; for w in "${envw[@]+"${envw[@]}"}"; do [[ "$w" == EGRESS_GW_TOKEN_DIR=* ]] && has_tok=true; done
+  $has_tok || envw+=("EGRESS_GW_TOKEN_DIR=$GWTOK_DIR")
   # shellcheck disable=SC2034  # consumed by check() conditions via eval
   OUT="$("$ENV_BIN" -u BASH_ENV -u SHELLOPTS PATH="$STUBS:$PATH" STUB_CALLS="$STUB_CALLS" ${envw[@]+"${envw[@]}"} \
     "$TIMEOUT_BIN" 20 "$BASH_BIN" ${flags[@]+"${flags[@]}"} "$PROBE" 2>"$STUBS/err")" || RC=$?
@@ -285,7 +289,7 @@ check "P2-2 near-miss container names are not the container: rc 1 and container-
   '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: container-absent"* ]]'
 check "P2-2 the readiness loop polled exactly 30 times before giving up (its retry bound is pinned)" \
   '[[ "$(grep -c "^docker.ps" "$STUB_CALLS" || true)" -eq 30 ]]'
-run_probe $'STUB_PS_NAMES=other\nsoleur-web-platform\nnext' --
+run_probe $'STUB_PS_NAMES=other\nsoleur-web-platform\nsoleur-egress-gw\nnext' --
 check "P2-3 the container found mid-list still passes (non-canonical must-pass control): rc 0 and egress-enforce-ok" \
   '[[ "$RC" -eq 0 && "$OUT" == *egress-enforce-ok* ]]'
 run_probe STUB_NFT_OUT= --
@@ -302,6 +306,34 @@ check "P2-6 stdout carries no bare count line (every converted predicate discard
 check "P2-6 non-vacuity: that healthy run did print egress-enforce-ok" '[[ "$RC" -eq 0 && "$OUT" == *egress-enforce-ok* ]]'
 check "P2-4 control: the healthy run does run docker exec (so the zero count above is the ordering, not a dead logger)" \
   '[[ "$(grep -c "^docker.exec" "$STUB_CALLS" || true)" -ge 1 ]]'
+
+echo "-- pass 3 (#9534): the stage-4 gateway leg keeps its discrimination --"
+# gw absent: app container up, no gateway — a named gw_absent, not a silent pass.
+run_probe $'STUB_PS_NAMES=soleur-web-platform' --
+check "P4-1 gw container absent fails named: rc 1 and egress-gw-absent" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: egress-gw-absent"* ]]'
+# near-miss gw names are not the gateway (the grep -x on the second container is not shrunk).
+run_probe $'STUB_PS_NAMES=soleur-web-platform\nsoleur-egress-gw-old\nxsoleur-egress-gw' --
+check "P4-2 near-miss gw names are not the gateway: rc 1 and egress-gw-absent" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: egress-gw-absent"* ]]'
+# token dir missing/unwritable fails before either CONNECT leg.
+run_probe EGRESS_GW_TOKEN_DIR="$STUBS/gwtok-missing" --
+check "P4-3 unwritable token dir fails named: rc 1 and egress-gw-token-dir" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: egress-gw-token-dir"* ]]'
+# allow leg: a 407 from the proxy (auth refused) fails named rather than passing as 000-adjacent.
+run_probe STUB_GW_ALLOW_CODE=407 --
+check "P4-4 a 407 CONNECT fails the allow leg named: rc 1 and egress-gw-allow" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: egress-gw-allow"* ]]'
+# deny leg: the metadata CONNECT succeeding (rc 0) means the deny ACL set is broken.
+run_probe STUB_GW_DENY_RC=0 --
+check "P4-5 a successful metadata CONNECT fails the deny leg named: rc 1 and egress-gw-deny" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: egress-gw-deny"* ]]'
+# instrument control: the healthy run exercised the new arms (inspect + exactly one metadata CONNECT).
+run_probe --
+check "P4-6 healthy run inspects the gw and runs the metadata deny leg once" \
+  '[[ "$(grep -c "^docker.inspect" "$STUB_CALLS" || true)" -ge 1 && "$(grep -c "169.254.169.254" "$STUB_CALLS" || true)" -eq 1 ]]'
+check "P4-6 non-vacuity: that healthy run printed both gw legs before egress-enforce-ok" \
+  '[[ "$OUT" == *egress-gw-allow-ok* && "$OUT" == *egress-gw-deny-ok* && "$OUT" == *egress-enforce-ok* ]]'
 
 echo "-- drawdown (#7797): not grandfathered in the credential-refusal baseline --"
 check "P-L the probe's repo path is absent from the A/B/C baseline" \

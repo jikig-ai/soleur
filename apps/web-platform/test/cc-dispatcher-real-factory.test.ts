@@ -32,6 +32,10 @@ const {
   mockResolveInstallationId,
   mockGenerateInstallationToken,
   mockResolveBashAutonomous,
+  mockResolveWebEgress,
+  mockResolveWebEgressStrict,
+  mockSpawnEgressForwarder,
+  mockTeardownEgressForwarder,
   mockResolveAutonomousAck,
   mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
@@ -64,6 +68,10 @@ const {
   mockResolveInstallationId: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
   mockResolveBashAutonomous: vi.fn(),
+  mockResolveWebEgress: vi.fn(),
+  mockResolveWebEgressStrict: vi.fn(),
+  mockSpawnEgressForwarder: vi.fn(),
+  mockTeardownEgressForwarder: vi.fn(),
   mockResolveAutonomousAck: vi.fn(),
   mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
@@ -118,6 +126,9 @@ vi.mock("@/server/agent-runner-sandbox-config", () => ({
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: mockBuildAgentEnv,
+  // feat-open-web-egress (#9534): the sandbox-config deny census derives
+  // from this set at module load — keep it non-empty.
+  ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
 }));
 
 vi.mock("@/server/sandbox-hook", () => ({
@@ -164,6 +175,24 @@ vi.mock("@/server/git-auth", async () => {
 // tests dispatch with the review-gate intact.
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: mockResolveBashAutonomous,
+}));
+
+// feat-open-web-egress (#9534) — default off (false): entitlement
+// wiring is tested in web-egress.test.ts / dedicated factory cases;
+// factory-shape tests dispatch with no forwarder spawn.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: mockResolveWebEgress,
+  resolveWebEgressStrict: mockResolveWebEgressStrict,
+}));
+
+// feat-open-web-egress (#9534) — never spawn a real forwarder in
+// unit tests; the module lifecycle is covered by web-egress.test.ts.
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: mockSpawnEgressForwarder,
+  teardownEgressForwarder: mockTeardownEgressForwarder,
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
 }));
 
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs. Default
@@ -436,6 +465,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    mockResolveWebEgress.mockResolvedValue(false);
     mockResolveAutonomousAck.mockResolvedValue(null);
     mockResolveIsWorkspaceOwner.mockResolvedValue(false);
     // ADR-044 PR-1: default to the solo workspace (= userId). Dispatch-path
@@ -627,6 +657,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
       readOnly: false,
+      // #9534 — entitlement-derived quarantine flag (unentitled → false).
+      allowWebEgress: false,
     });
   });
 
@@ -1232,6 +1264,8 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: true,
         readOnly: false,
+        // #9534 — unentitled dispatch (webEgress grant off).
+        allowWebEgress: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       // Literal on purpose (canonical-literal style, do not import the
@@ -1253,6 +1287,8 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
         readOnly: false,
+        // #9534 — entitlement-derived quarantine flag (unentitled → false).
+        allowWebEgress: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1270,6 +1306,8 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
         readOnly: false,
+        // #9534 — entitlement-derived quarantine flag (unentitled → false).
+        allowWebEgress: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1577,6 +1615,8 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
       readOnly: false,
+      // #9534 — entitlement-derived quarantine flag (unentitled → false).
+      allowWebEgress: false,
     });
   });
 
@@ -1781,4 +1821,88 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       });
     });
   });
+  // -------------------------------------------------------------------------
+  // feat-open-web-egress (#9534) — workspace "Agent web access" grant.
+  // -------------------------------------------------------------------------
+  describe("web egress entitlement (#9534)", () => {
+    it("unentitled (default) → no forwarder spawn, no webEgress handle", async () => {
+      await realSdkQueryFactory(makeArgs());
+      expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+      const opts = mockQuery.mock.calls[0][0].options;
+      // WebFetch stays disallowed; WebSearch too.
+      expect(opts.disallowedTools).toContain("WebFetch");
+      expect(opts.disallowedTools).toContain("WebSearch");
+      expect(opts.allowedTools).not.toContain("WebFetch");
+      expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ egressProxy: undefined }),
+      );
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ allowWebEgress: false }),
+      );
+    });
+
+    it("entitled + spawn OK → forwarder spawned for the workspace, handle threaded", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({
+        port: 28711,
+        token: "tok-abc",
+        pid: 4242,
+      });
+      await realSdkQueryFactory(makeArgs());
+      expect(mockSpawnEgressForwarder).toHaveBeenCalledWith(
+        "conv-1",
+        expect.any(String),
+      );
+      const opts = mockQuery.mock.calls[0][0].options;
+      // WebFetch re-enabled; WebSearch stays disallowed (Phase A).
+      expect(opts.disallowedTools).not.toContain("WebFetch");
+      expect(opts.disallowedTools).toContain("WebSearch");
+      // WebFetch is ask-class: without the auto-approve it would still die at
+      // canUseTool's deny-default (agent-native review critical finding).
+      expect(opts.allowedTools).toContain("WebFetch");
+      // The two security wires the tool-surface change depends on: the
+      // credentialed proxy URL reaches the spawned CLI env, and the sandbox
+      // credential census engages. Deleting either line in the factory is a
+      // silent-bypass regression — pin both.
+      expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({
+          egressProxy: { workspaceId: expect.any(String), token: "tok-abc", port: 28711 },
+        }),
+      );
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ allowWebEgress: true }),
+      );
+    });
+
+    it("entitled + spawn failure → degrade to zero-egress, mirrored, Query still built", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+      await realSdkQueryFactory(makeArgs());
+      expect(mockQuery).toHaveBeenCalledOnce();
+      const opts = mockQuery.mock.calls[0][0].options;
+      expect(opts.disallowedTools).toContain("WebFetch");
+      const calls = mockReportSilentFallback.mock.calls.filter(
+        ([, o]) => o?.op === "web-egress-forwarder-spawn",
+      );
+      expect(calls).toHaveLength(1);
+    });
+
+    it("entitled but support persona → no forwarder (repo lifecycle is off)", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({
+        port: 28711,
+        token: "tok-abc",
+        pid: 4242,
+      });
+      await realSdkQueryFactory(makeArgs({ persona: "support" }));
+      expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+    });
+  });
 });
+

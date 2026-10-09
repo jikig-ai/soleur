@@ -120,6 +120,19 @@ if parse_err != null {
 }
 '''
 
+# ---------------- Source 3b: egress gateway journald (#9534) ----------------
+# soleur-egress-gw runs --log-driver journald; its stdout is the JSON decision
+# log (soleur_json logformat: workspace attribution + requested host + resolved
+# IP + decision). Volume is bounded by session entitlement — near-silent during
+# the PR-A dark launch (only the synthetic CONNECT probe pair every 5 min).
+# ALL lines ship (allow AND deny): the deny class is the named security signal
+# and the allow class is the per-workspace forensic record.
+[sources.egress_gw_journald]
+type = "journald"
+include_matches.CONTAINER_NAME = ["soleur-egress-gw"]
+journal_directory = "/var/log/journal"
+batch_size = 16
+
 # ---------------- Source 4: host-script journald (logger -t tags) (#5499, #6178) ----------------
 # Thirteen bash scripts under apps/web-platform/infra/ log operational events to
 # the journal via `logger -t <LOG_TAG>`. They run under webhook.service / cron on
@@ -173,6 +186,12 @@ if parse_err != null {
 [sources.host_scripts_journald]
 type = "journald"
 include_matches.SYSLOG_IDENTIFIER = [
+  # #9534: the egress-gw synthetic CONNECT probe's heartbeat line (result=ok|fail|
+  # skipped) — the sole resolver line this source ships, ~288 rows/day. The
+  # Better Stack "egress gw probe silent" absence alert keys on it: a dead timer
+  # or a dead gateway can never read as green. Dedicated tag because shipping
+  # all of cron-egress-resolve would pay ~2k rows/day for the same signal.
+  "egress-gw-probe",
   "infra-config-apply",
   "infra-config-install",
   "ci-deploy",
@@ -374,7 +393,7 @@ type = "remap"
 # app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
 # the app container's pino lines traverse the full 3-stage redaction (Art-9 key
 # drop → userId HMAC → string backstop) like every other source.
-inputs = ["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald"]
+inputs = ["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)

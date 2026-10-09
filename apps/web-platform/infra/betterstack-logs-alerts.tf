@@ -1128,3 +1128,161 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #9534: egress gateway — deny-class spike + probe silence ────────────────────
+#
+# WHAT THEY DETECT. The gateway's sole security surface is its deny decisions
+# (Squid TCP_DENIED on the shared CIDR ACL + kernel `egress-gw-deny:` drops are
+# the same class). A spike means something is actively probing internal space —
+# a prompt-injected session reaching for metadata/RFC1918, or a confused-deputy
+# forwarder. During the PR-A dark launch the only legitimate deny traffic is the
+# synthetic probe's one row per 5 min, so a sustained rate above that pages.
+#
+# The heartbeat alert is the absence detector: cron-egress-resolve emits one
+# `egress_gw_probe` line every 5 min under SYSLOG_IDENTIFIER=egress-gw-probe.
+# Silence means the resolver timer died, the gateway container is gone (the
+# probe skips with gw_absent — a row, not silence), or Vector stopped — none of
+# which may read as green. The deny SPIKE is deliberately NOT on the probe row
+# itself: a probe that only emits failures still pages via Sentry
+# (egress_gw_probe_fail op), and the deny spike counts SQUID decisions, which a
+# dead gateway cannot produce either — the two rules cover distinct failure
+# arms (no gateway at all vs a live gateway mis-ACL'd).
+#
+# WHAT THEY DELIBERATELY DO NOT DETECT: allowed-traffic abuse/volume anomalies
+# (documented gap — CMO review; tracked in the spec's open questions), and
+# domain-fronting/SNI-vs-CONNECT drift (Squid cannot see past the tunnel; the
+# residual is recorded in the ADR).
+locals {
+  # Squid's soleur_json logformat puts the decision in `decision` (%Ss);
+  # TCP_DENIED is Squid's refusal class (ACL deny + auth deny both land here —
+  # a brute-forcing unauthenticated client is the same signal worth paging).
+  egress_gw_deny_spike_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-egress-gw'
+      AND position(JSONExtractString(raw, 'message'), 'TCP_DENIED') > 0
+    GROUP BY time
+  SQL
+
+  egress_gw_probe_silent_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'
+    GROUP BY time
+  SQL
+
+  egress_gw_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#egress-gateway-better-stack-alerts"
+}
+
+resource "logtail_exploration" "egress_gw_deny_spike" {
+  name      = "soleur-egress-gw-deny-spike-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.egress_gw_deny_spike_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "egress_gw_deny_spike" {
+  exploration_id = logtail_exploration.egress_gw_deny_spike.id
+  name           = "soleur-egress-gw-deny-spike-prd"
+
+  # > 20 deny rows in 5 min. Dark-launch baseline is ~1 row per probe pair; the
+  # 20x headroom keeps a few noisy-but-legit client retries sub-paging while any
+  # sustained internal-space scan clears it in one window.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 20
+  check_period        = 300
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 1800
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "Sustained Squid TCP_DENIED volume on soleur-egress-gw — sessions are attempting CONNECT to denied destination classes (metadata/RFC1918/ULA). Check which workspace tokens are generating denies; revocation is deleting the token file. Runbook: ${local.egress_gw_runbook_url}"
+  metadata = {
+    runbook = local.egress_gw_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "egress_gw_probe_silent" {
+  name      = "soleur-egress-gw-probe-silent-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.egress_gw_probe_silent_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "egress_gw_probe_silent" {
+  exploration_id = logtail_exploration.egress_gw_probe_silent.id
+  name           = "soleur-egress-gw-probe-silent-prd"
+
+  # < 1 heartbeat row in 15 min (probe emits every 5 min when due). No rows ->
+  # the absence is the alert; treat_as_zero makes "no bucket" read as 0 beats.
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No egress_gw_probe heartbeat from cron-egress-resolve for 15+ min — the resolver timer, the Vector pipeline, or the host journal is dead. The gateway's allow/deny verification is dark. Runbook: ${local.egress_gw_runbook_url}"
+  metadata = {
+    runbook = local.egress_gw_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

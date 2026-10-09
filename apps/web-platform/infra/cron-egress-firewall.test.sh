@@ -589,7 +589,7 @@ assert_grep "container-view resolution unioned (resolver-divergence guard)" 'CON
 assert_grep "self-heal: re-runs loader when enforcement rules missing" 'enforcement rules missing' "$RESOLVER"
 assert_grep "self-heal recursion guard (loader sets the env)" 'CRON_EGRESS_FROM_LOADER=1' "$LOADER"
 assert_grep "concurrent runs serialized via flock" 'flock -w 120' "$RESOLVER"
-assert_grep "BOTH drop prefixes counted toward the Sentry event" "egress-.blocked.dns-exfil.: " "$RESOLVER"
+assert_grep "ALL drop prefixes counted toward the Sentry event (blocked + dns-exfil + gw-deny)" "egress-.blocked.dns-exfil.gw-deny.: " "$RESOLVER"
 assert_grep "single atomic nft -f batch apply" 'nft -f -' "$RESOLVER"
 assert_grep "tick budget: env-overridable constant (default 90 < TimeoutStartSec 120)" 'RESOLVE_TICK_BUDGET_SECS="\$\{RESOLVE_TICK_BUDGET_SECS:-90\}"' "$RESOLVER"
 assert_grep "tick budget: loop gate reads elapsed SECONDS before each getent" 'SECONDS >= RESOLVE_TICK_BUDGET_SECS' "$RESOLVER"
@@ -889,8 +889,8 @@ SLUG_VAL="$(echo "$SLUG_RESOLVE" | sed -E 's/SENTRY_SLUG="([^"]+)"/\1/')"
 assert_grep "Sentry monitor name matches the scripts' slug" "name += +\"$SLUG_VAL\"" "$SCRIPT_DIR/sentry/cron-monitors.tf"
 # Drop-prefix parity: the resolver's journal grep must match the loader's
 # nft log prefixes, else drops keep happening while the alert goes dark.
-for prefix in 'egress-blocked: ' 'egress-dns-exfil: '; do
-  if grep -qF "$prefix" "$LOADER" && grep -qE "egress-.blocked.dns-exfil.: " "$RESOLVER"; then
+for prefix in 'egress-blocked: ' 'egress-dns-exfil: ' 'egress-gw-deny: '; do
+  if grep -qF "$prefix" "$LOADER" && grep -qE "egress-.blocked.dns-exfil.gw-deny.: " "$RESOLVER"; then
     PASS=$((PASS + 1)); echo "  PASS: drop prefix '$prefix' present in loader and covered by resolver grep"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: drop prefix '$prefix' parity broken between loader and resolver"
@@ -1611,6 +1611,68 @@ fi
 # URL-through-substitution-end tail, not a bare `head -c`.
 assert_grep "post-apply assert: probe output is capped (head -c N) and the producer's exit is re-raised via PIPESTATUS[0] (rc not masked by the pipe)" \
   'https://ghcr[.]io/ 2>/dev/null [|] head -c [0-9]+; exit "[$][{]PIPESTATUS\[0\][}]"[)]"' "$ASSERT_CODE"
+# --- egress gateway wiring (open-web egress, #9534 / feat-open-web-egress) ------
+# Three rules, three placements (design: plan §Proposed Solution):
+#   1. FORWARD leg — docker0→gw accept inside SOLEUR-EGRESS before the
+#      default-drop (gw IP derived from the soleur-egress0 network, never
+#      hardcoded: the bootstrap may re-number on subnet collision).
+#   2. REPLY leg — DOCKER-USER `iifname $EGRESS_BRIDGE_IF oifname docker0 ct
+#      state established,related accept` BEFORE DOCKER-ISOLATION-STAGE-2
+#      (Docker's FORWARD order: DOCKER-USER → ISOLATION — a rule only inside
+#      SOLEUR-EGRESS would never see iifname egress0 packets, and
+#      conntrack does not rescue replies the isolation chain drops).
+#   3. DENY leg — SOLEUR-EGRESS-GW chain jumped from DOCKER-USER on
+#      iifname egress0; every deny is `ct state new`-scoped (the same packet
+#      stream carries replies destined for docker0, whose 172.17.0.0/16 IS
+#      RFC1918 — an unscoped drop would sever the tunnel).
+# One-way invariant: a NEW gw→docker0 connection (gw dialing INTO the app
+# container) must still be denied — the deny set's RFC1918 ranges cover
+# docker0's subnet, and ct-state-new means established replies pass while
+# cold dials die.
+assert_grep "egress-deny-cidrs.txt artifact exists" '^[0-9]' "$SCRIPT_DIR/egress-deny-cidrs.txt"
+assert_grep "loader declares SOLEUR-EGRESS-GW chain" 'chain SOLEUR-EGRESS-GW' "$LOADER"
+assert_grep "loader declares gw-deny interval set" 'set soleur_egress_gw_deny' "$LOADER"
+assert_grep "loader reads the shared deny-cidr file" 'egress-deny-cidrs\.txt' "$LOADER"
+assert_grep "gw-deny rules are ct-state-new scoped (reply traffic must pass)" \
+  'add rule ip filter SOLEUR-EGRESS-GW ct state new' "$LOADER"
+assert_grep "gw-deny drop is logged (not silent)" 'egress-gw-deny' "$LOADER"
+assert_grep "gateway ip derived, not hardcoded" 'docker inspect soleur-egress-gw' "$LOADER"
+assert_grep "docker0→gw accept inside SOLEUR-EGRESS (IP baked, never a literal" \
+  'ip daddr \${EGRESS_GW_IP} tcp dport 8443 accept' "$LOADER"
+assert_not_grep "no literal \$EGRESS_GW_IP inside the nft -f script (unknown-identifier abort)" \
+  'daddr \$EGRESS_GW_IP' "$LOADER"
+assert_grep "reply leg: established/related accept at DOCKER-USER" \
+  'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER"
+assert_grep "deny leg: egress0 jump at DOCKER-USER" \
+  'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER"
+REPLY_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+GWJUMP_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+# `nft insert` is LIFO: the jump must be installed FIRST so the reply-accept
+# (inserted after it) lands ABOVE it — the chain-order invariant "reply
+# precedes jump" is preserved while the source order inverts.
+if [[ -n "$REPLY_LINE" && -n "$GWJUMP_LINE" && "$REPLY_LINE" -gt "$GWJUMP_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: egress0 jump is installed before the reply accept so insert-order lands reply first (jump=$GWJUMP_LINE reply=$REPLY_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: with insert-LIFO the egress0 jump must be installed BEFORE the reply accept (jump=$GWJUMP_LINE reply=$REPLY_LINE)"
+fi
+GWACCEPT_LINE="$(grep -n 'ip daddr \${EGRESS_GW_IP} tcp dport 8443 accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+if [[ -n "$GWACCEPT_LINE" && -n "$DROP_RULE_LINE" && "$GWACCEPT_LINE" -lt "$DROP_RULE_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: docker0→gw accept precedes the default drop (line $GWACCEPT_LINE < $DROP_RULE_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: docker0→gw accept must precede the default drop (accept=$GWACCEPT_LINE drop=$DROP_RULE_LINE)"
+fi
+# Self-heal needle extension: a flushed SOLEUR-EGRESS-GW chain or a missing
+# egress0 jump must re-run the loader, never coast silent.
+assert_grep "resolver self-heal probes the egress0 GW jump" 'SOLEUR-EGRESS-GW' "$RESOLVER"
+assert_grep "resolver self-heal probes the reply accept" 'established,related' "$RESOLVER"
+# Boot probe: fresh-host gw bring-up is asserted (gw container + a real
+# CONNECT pair through it), not assumed.
+assert_grep "boot probe asserts the gateway container" 'soleur-egress-gw' "$SCRIPT_DIR/cron-egress-enforce-probe.sh"
+# Resolver carries the recurring synthetic CONNECT probe (heartbeat + live
+# allow/deny verification on the real path — the deny line is the proof the
+# policy still holds mid-life).
+assert_grep "resolver carries the synthetic CONNECT pair probe" 'egress_gw_probe' "$RESOLVER"
+
 # --- GHCR carve post-apply assertions: BEHAVIOUR (#9275 Phase 4) -----------------------------
 # The static greps above only prove the sentinels EXIST. These rows EXECUTE the delivered script
 # under `bash` with `nft`/`docker`/`systemctl`/`curl` shims first on PATH and a fixture CIDR file
@@ -1637,10 +1699,11 @@ printf '%s\n' fast.example slow01.example slow02.example slow03.example slow04.e
 RB_CALLS="$RB/calls"; : > "$RB_CALLS"
 rbmk() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$RB/stubs/$1"; chmod +x "$RB/stubs/$1"; }
 rbmk getent 'case "$2" in *fast*) printf "93.184.216.34\n" ;; *) sleep 8 ;; esac'
-rbmk docker 'exit 0'   # ps prints nothing -> container absent; probes self-skip
+rbmk docker 'exit 0'   # ps prints nothing -> container + gw both absent; probes self-skip
 rbmk nft 'if [ "$1" = "-f" ]; then cat >/dev/null; exit 0; fi
-printf "%s\n" "  jump SOLEUR-EGRESS" "  ct state established,related accept" \
-  "  comment \"soleur-egress: default drop\"" "  comment \"soleur-egress: default drop log\""'
+printf "%s\n" "  jump SOLEUR-EGRESS" "  jump SOLEUR-EGRESS-GW" "  ct state established,related accept" \
+  "  comment \"soleur-egress: default drop\"" "  comment \"soleur-egress: default drop log\"" \
+  "  comment \"soleur-egress-gw: deny drop\""'
 rbmk systemctl 'exit 0'
 rbmk journalctl 'exit 0'
 rbmk logger 'exit 0'
@@ -1651,6 +1714,7 @@ RB_OUT="$(env PATH="$RB/stubs:$PATH" \
   ALLOWLIST_FILE="$RB/etc/allowlist.txt" CIDR_FILE="$RB/etc/cidrs.txt" \
   FAILCOUNT_DIR="$RB/fc" SEEN_DIR="$RB/seen" \
   CRON_EGRESS_LOCK_FILE="$RB/lock" LOADER=/bin/true \
+  EGRESS_GW_TOKEN_DIR="$RB/seen" \
   RESOLVE_TICK_BUDGET_SECS=20 \
   SENTRY_INGEST_DOMAIN=o0.ingest.us.sentry.io SENTRY_PROJECT_ID=42 \
   SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \

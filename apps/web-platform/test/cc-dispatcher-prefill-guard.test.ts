@@ -61,9 +61,17 @@ vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,
 }));
 
-vi.mock("@/server/agent-env", () => ({
-  buildAgentEnv: mockBuildAgentEnv,
-}));
+vi.mock("@/server/agent-env", async () => {
+  // feat-open-web-egress (#9534): keep the REAL exports —
+  // agent-runner-sandbox-config derives the web-egress deny census from
+  // ALLOWED_SERVICE_ENV_VARS at module init; a bare stub drops it and
+  // crashes every transitive importer.
+  const actual =
+    await vi.importActual<typeof import("@/server/agent-env")>(
+      "@/server/agent-env",
+    );
+  return { ...actual, buildAgentEnv: mockBuildAgentEnv };
+});
 
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
@@ -88,6 +96,20 @@ vi.mock("@/server/git-auth", () => ({
 }));
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: vi.fn(async () => false),
+}));
+
+// feat-open-web-egress (#9534): entitlement read + forwarder spawn default
+// off — these factory tests never exercise the egress path.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: vi.fn(async () => false),
+  resolveWebEgressStrict: vi.fn(async () => false),
+}));
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: vi.fn(),
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
 }));
 // feat-bash-autonomous-default-on — soft-gate inputs default to un-acked /
 // non-owner so the prefill-guard factory-shape tests dispatch unaffected.

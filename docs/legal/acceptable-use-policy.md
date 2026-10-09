@@ -308,6 +308,16 @@ The Web Platform's hosted agent can run shell commands in your connected workspa
 
 **Your responsibilities.** You are responsible for connecting only repositories and accounts you trust to autonomous command execution, for reviewing command activity in the chat, and for the consequences of a non-blocked command that auto-runs in a workspace you have placed (or left) in autonomous mode. The in-product disclosure banner shown at first run states the same residual-risk admission in summary form; this Section and Terms & Conditions Section 3a.7 / Section 10.4 are its contractual counterpart.
 
+### 5.8 Hosted agent web access (opt-in)
+
+Hosted agent sessions on the Web Platform run with no outbound network access by default. A Workspace Owner may enable **Agent web access** for a workspace (Scope Grants settings), which lets that workspace's hosted agent sessions make outbound HTTPS connections to the public internet through Soleur's egress gateway. This Section governs what may transit that path.
+
+**Permitted use.** Ordinary development-oriented outbound requests: fetching documentation and source artifacts, installing packages and dependencies, and calling third-party APIs the workspace legitimately uses. Destinations are chosen by the agent at run time; Soleur does not pre-approve each destination, and enabling the feature is the Workspace Owner's direction that such access may occur.
+
+**Prohibited use of the egress path** (in addition to everything Section 4 already prohibits): you must not use, instruct, or knowingly permit the hosted agent web access to (a) attack, probe, or scan third-party systems, including port scanning, vulnerability scanning without authorization, denial-of-service traffic, or credential testing; (b) send spam, bulk unsolicited requests, or high-volume scraping contrary to a destination's terms or robots directives; (c) exfiltrate data you are not entitled to transmit, including personal data of third parties contrary to data-protection law; (d) circumvent the egress controls themselves — the gateway's destination deny-set, protocol restrictions, or session authentication — or tunnel prohibited traffic around them; or (e) abuse a destination's rate limits or paywall/access controls.
+
+**Your responsibility.** Enabling Agent web access is your choice and applies workspace-wide; you are responsible for the outbound traffic your workspace's agents generate while it is on, including traffic a prompt-injected or compromised agent generates. Every outbound connection is recorded in an egress audit log (destination host and workspace attribution); turning the feature off ends the access for live sessions. Section 6 enforcement applies to this path as to any other.
+
 ---
 
 ## 6. Enforcement

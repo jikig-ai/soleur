@@ -323,6 +323,11 @@ COPY --from=builder \
   /app/infra/cron-egress-resolve.timer \
   /app/infra/cron-egress-alarm@.service \
   /app/infra/cron-egress-postapply-assert.sh \
+  /app/infra/egress-gateway-squid.conf \
+  /app/infra/egress-auth-helper.sh \
+  /app/infra/egress-deny-cidrs.txt \
+  /app/infra/egress-gateway-bootstrap.sh \
+  /app/infra/egress-forwarder.mjs \
   /app/infra/cron-egress-enforce-probe.sh \
   /app/infra/hooks.json.tmpl \
   /app/infra/journald-soleur.conf \

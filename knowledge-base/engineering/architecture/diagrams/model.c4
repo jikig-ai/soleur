@@ -113,6 +113,10 @@ model {
         technology "Supabase Auth"
         description "JWT authentication, OAuth providers, session tokens"
       }
+      egressForwarder = component "Per-Dispatch Egress Forwarder" {
+        technology "egress-forwarder.mjs — spawned per entitled dispatch inside the webapp dispatcher process, binds 127.0.0.1:0, ppid watchdog"
+        description "Session-scoped bridge between the spawned-CLI env proxy (HTTP(S)_PROXY=http://<workspaceId>:<sessionToken>@127.0.0.1:<port>) and the egress gateway (ADR-278). Requires the session token inbound, injects workspaceId:token upstream. Lifetime-bound: dies with the dispatch; token file deleted at teardown or toggle-off (warm-path re-resolution). Spawn failure degrades the dispatch to zero-egress — never a dead config — mirrored to Sentry. The token never reaches the sandboxed child's env (SRT substitutes its own creds on the in-netns hop — measured, spec TR7 arm 3)"
+      }
     }
 
     engine = system "Cloud CLI Engine" {
@@ -121,7 +125,6 @@ model {
       claude = container "Agent Runtime" {
         technology "Claude Code"
         description "Executes agent workflows with full orchestration tools"
-
         registry = component "Engine Registry" {
           technology "Reviewed definitions"
           description "Checks engine availability, authentication modes, capabilities, and qualification evidence"
@@ -308,6 +311,10 @@ model {
         technology "PostgreSQL — dedicated EU project, Supavisor session pooler :5432"
         description "Inngest config + run history. Dedicated project isolates connection budget + fate from the main app DB (#5450). Public tables RLS-locked; reachable only as the postgres owner (ADR-030 I8)"
       }
+      egressGw = container "Agent Egress Gateway" {
+        technology "Squid CONNECT-only on dedicated docker bridge soleur-egress0 (172.31.100.2:8443)"
+        description "Standing outbound HTTPS chokepoint for ENTITLED hosted agent sessions only (feat-open-web-egress, #9534, ADR-278). The SDK sandbox's own domain filter is NOT a boundary under a proxy chain (spec TR7 — measured: it forwards upstream unfiltered), so this gateway is the load-bearing control: CONNECT-only, SSL_ports 443, proxy_auth REQUIRED (per-session tokens ro-mounted from /var/lib/soleur/egress-tokens — a file's existence IS the credential), DNS-pinned per request, file-backed dst deny-set (RFC1918/CGNAT/link-local/cluster-private/IPv6-local/v4-mapped/6to4 + cloud-metadata endpoints), JSON decision+close log. Belted by nftables chain SOLEUR-EGRESS-GW (iifname soleur-egress0, ct-state-new-scoped) and the standing default-drop for every other egress path. Fail-closed: gateway unreachable = no egress, same as before the feature"
+      }
       inngestRedis = container "Inngest Redis" {
         technology "Self-hosted Redis — AOF on /mnt/data"
         description "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. RETAINED PLAINTEXT BACKSTOP: the pre-cutover volume hcloud_volume.inngest_redis stays attached and intact, holding a full plaintext copy of the AOF as of the cutover freeze, so that op=luks-rollback on cutover-inngest.yml (ADR-225) is a mount move plus a reverse copy; it is retired under #8285 (expires 2026-10-22) and until then a seized or snapshot-imaged backstop exposes in-flight job payloads. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh, once enrolled on #8285, cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
@@ -349,6 +356,10 @@ model {
   anthropic = system "Anthropic API" {
     #external
     description "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+  }
+  publicInternet = system "Public Internet Destinations" {
+    #external
+    description "The unenumerated set of public HTTPS hosts an entitled workspace's agent session may CONNECT to through the egress gateway (#9534, ADR-278) — documentation, package registries, third-party APIs, chosen by the agent at run time. NOT a recipient/sub-processor in the Art. 28 sense: destinations are owner-directed, and the gateway's audit log attributes each CONNECT to the workspace token. The risk is disclosed at the toggle and accepted by name in the DPIA screening."
   }
   github = system "GitHub" {
     #external
@@ -552,6 +563,9 @@ model {
   emailSender -> resend "Sends email to the operator address" { technology "SMTP" }
   resend -> webapp "Inbound email webhook (operator inbox ingress)" { technology "HTTPS webhook (svix)" }
   webapp -> resend "Statutory triage notifications (outbound email), incl. the push-failure fallback (ADR-136)" { technology "HTTPS (Resend API)" }
+  platform.engine.claude -> platform.webapp.egressForwarder "Spawned-CLI HTTPS CONNECTs arrive via SRT's upstream chain carrying the env proxy-URL credentials (workspaceId:sessionToken) — in-process WebFetch uses the same env proxy" { technology "HTTP CONNECT on container loopback" }
+  platform.webapp.egressForwarder -> platform.infra.egressGw "CONNECT tunnel per entitled session — Proxy-Authorization Basic <workspaceId>:<sessionToken>; TLS handshake metadata only, payloads end-to-end" { technology "CONNECT over soleur-egress0 (private bridge)" }
+  platform.infra.egressGw -> publicInternet "Allow-listed-by-absence-of-deny CONNECT to :443 public hosts only; deny-set refuses private/link-local/metadata ranges; every decision logged" { technology "HTTPS CONNECT" }
   webapp -> pushService "Web Push delivery (VAPID); non-410 failures fall back to Resend email — the WNS egress DROP (#5046 PR-2) is the known trigger" { technology "HTTPS (Web Push / VAPID)" }
 
   // ---- Operational inbox (severity-ranked attention queue, ADR-085 / #6007) --

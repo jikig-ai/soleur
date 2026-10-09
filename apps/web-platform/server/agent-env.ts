@@ -42,12 +42,10 @@ const AGENT_ENV_ALLOWLIST = Object.freeze([
   "USER",
   "SHELL",
   "TMPDIR",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
+  // HTTP(S)_PROXY/NO_PROXY (both cases) are DELIBERATELY absent: ambient proxy
+  // env on the dispatcher would steer EVERY session outside the egress guard
+  // (#9534 review, structural A8). The only sanctioned carrier is the
+  // entitled-session `egressProxy` injection below.
   // #8752 — the bwrap shim's artifact override. Forwarded so an incident-time
   // override reaches the Agent SDK spawn path symmetrically with the C4
   // prelude (which reads the same var); without it the shim would always
@@ -82,7 +80,11 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed
 // as service token keys. Prevents injection of LD_PRELOAD, NODE_OPTIONS, etc.
-const ALLOWED_SERVICE_ENV_VARS = new Set(
+// Exported (feat-open-web-egress #9534): the entitled-session sandbox
+// `credentials.envVars` deny census reuses this exact set so the BYOK
+// secret census can never drift out of sync with the injection allowlist
+// (the census derives FROM this export, never a hand-copied list).
+export const ALLOWED_SERVICE_ENV_VARS = new Set(
   Object.values(PROVIDER_CONFIG).map((c) => c.envVar),
 );
 
@@ -132,6 +134,23 @@ export interface BuildAgentEnvOptions {
    * both-present guard is explicit.
    */
   gitInstallationToken?: string;
+  /**
+   * feat-open-web-egress (#9534) — per-session egress forwarder. When the
+   * workspace's `web_egress` grant is ON, the dispatcher mints a session
+   * token and spawns a loopback forwarder; this field carries its
+   * `{port, token, workspaceId}` so the spawned-CLI env gets
+   * `HTTP(S)_PROXY=http://<workspaceId>:<token>@127.0.0.1:<port>` (+lowercase
+   * twins) — the credentialed URL is BOTH the transport and the forwarder's
+   * inbound auth (its token check reads the Proxy-Authorization password).
+   * Phase-0 spike (spec TR7): this one env covers BOTH egress paths —
+   * in-process WebFetch honors process-env proxy, and SRT chains the
+   * sandboxed child's traffic upstream presenting THESE URL creds.
+   * Overrides the AGENT_ENV_ALLOWLIST ambient copies for THIS dispatch.
+   * The token never enters the sandbox child's env (SRT mints its own
+   * child-side proxy creds) — it lives only in the CLI-subprocess env and
+   * on the host loopback.
+   */
+  egressProxy?: { workspaceId: string; token: string; port: number };
   /**
    * The platform-deployed plugin root (`getPluginPath()` →
    * `/app/shared/plugins/soleur` in prod), injected as `CLAUDE_PLUGIN_ROOT`.
@@ -234,6 +253,30 @@ export function buildAgentEnv(
     env.GIT_TERMINAL_PROMPT = "0";
     env.GIT_CONFIG_NOSYSTEM = "1";
     env.GIT_CONFIG_GLOBAL = "/dev/null";
+  }
+
+  // feat-open-web-egress (#9534) — credentialed per-session proxy URL. Set
+  // AFTER the allowlist + service-token loops: this is a per-dispatch value
+  // and MUST beat any ambient HTTP_PROXY the server process carries (the
+  // allowlist copies ambient vars — an ambient proxy URL without the session
+  // token would 407 at the forwarder). NO_PROXY enumerates the platform
+  // control plane so API/telemetry traffic ideally bypasses the tenant
+  // gateway. Measured caveat (spec TR7): the SDK's API path still transits
+  // the proxy even with these hosts listed — the gateway must therefore
+  // allow them (they are ordinary public CONNECTs) and the ADR records the
+  // control-plane audit noise as accepted Phase-A posture.
+  if (opts?.egressProxy) {
+    const proxyUrl = `http://${opts.egressProxy.workspaceId}:${opts.egressProxy.token}@127.0.0.1:${opts.egressProxy.port}`;
+    // Curl-class stacks DO honor this — keep it complete for those even
+    // though the SDK API path ignores it (spec TR7 arm on NO_PROXY).
+    const noProxy =
+      "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com,*.supabase.co,*.supabase.in,api.stripe.com,github.com,*.github.com";
+    env.HTTP_PROXY = proxyUrl;
+    env.HTTPS_PROXY = proxyUrl;
+    env.http_proxy = proxyUrl;
+    env.https_proxy = proxyUrl;
+    env.NO_PROXY = noProxy;
+    env.no_proxy = noProxy;
   }
 
   // Deployed plugin root for the agent's `bash` shell-outs (Slice B / #6223).

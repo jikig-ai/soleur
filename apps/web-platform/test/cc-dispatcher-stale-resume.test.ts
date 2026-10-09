@@ -12,6 +12,7 @@
  * Mirrors the mock-pattern at `cc-dispatcher-session-id-writer.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+const mockTeardownEgressForwarder = vi.hoisted(() => vi.fn());
 
 const {
   mockReportSilentFallback,
@@ -49,6 +50,13 @@ vi.mock("@/server/observability", () => ({
   MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: mockTeardownEgressForwarder,
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
+}));
 vi.mock("@/server/kb-document-resolver", async () => {
   const actual = await vi.importActual<
     typeof import("@/server/kb-document-resolver")
@@ -534,6 +542,9 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     // heartbeat (a zombie beat resurrects the tombstone forever).
     expect(release).not.toHaveBeenCalled();
     expect(detach).toHaveBeenCalledTimes(1);
+    // #9534: every close path tears the session's forwarder down — the token
+    // file's lifetime must equal the session's (no credential outlives it).
+    expect(mockTeardownEgressForwarder).toHaveBeenCalledWith("conv-stale");
   });
 
   it("control: a non-stale close still releases the worktree lease", async () => {
@@ -548,5 +559,6 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     await flushMicrotasks(20);
 
     expect(release).toHaveBeenCalledTimes(1);
+    expect(mockTeardownEgressForwarder).toHaveBeenCalledWith("conv-ctl");
   });
 });
