@@ -359,7 +359,7 @@ fan_out_to_peers() {
   # The key rides the python3 child's ENVIRONMENT only (owner-only /proc/<pid>/environ), never argv.
   sig=$(printf '%s' "$payload" | HMAC_KEY="$secret" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || sig=""
   if [[ ! "$sig" =~ ^[0-9a-f]{64}$ ]]; then
-    logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or empty key) — not forwarding an unsigned request"
+    logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or the signer failed) — not forwarding an unsigned request"
     return 1
   fi
 

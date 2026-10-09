@@ -126,7 +126,7 @@ with the canonical snippet (byte-for-byte the line the S2 slice oracle-tested; 1
 ```bash
 sig=$(printf '%s' "$payload" | HMAC_KEY="$secret" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || sig=""
 if [[ ! "$sig" =~ ^[0-9a-f]{64}$ ]]; then
-  logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or empty key) — not forwarding an unsigned request"
+  logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or the signer failed) — not forwarding an unsigned request"
   return 1
 fi
 ```
@@ -155,11 +155,11 @@ fi
 liveness_signal:
   what: the existing journald FANOUT lines from ci-deploy.sh ("FANOUT: peer <ip> accepted deploy (HTTP 202)") plus the DEPLOY_SCRIPT_SHA marker each ci-deploy.sh invocation emits, shipped by Vector to Better Stack
   cadence: per deploy that has peers configured
-  alert_target: none today for this failure. The signal is pull-only (layer 3, Vector -> Better Stack `FANOUT:` lines, and the deploy-status `reason=ok_peer_fanout_degraded`). A fan-out failure on the deploy path exits 0 and does NOT red the release, so web-2 can stay on the previous build without a page; this is the pre-existing gap for a peer that is NOT accepted, and this PR adds one more way to reach it. Recorded at review (PR #9805), not fixed here.
+  alert_target: none today for this failure. The signal is pull-only (layer 3, Vector -> Better Stack `FANOUT:` lines, and the deploy-status `reason=ok_peer_fanout_degraded`). A fan-out failure on the deploy path exits 0 and does NOT red `web-platform-release.yml` (the redeploy tracker `dispatch-web-redeploy/track.sh` does red it, for the infra-apply and cutover paths), so web-2 can stay on the previous build without a page; this is the pre-existing gap for a peer that is NOT accepted, and this PR adds one more way to reach it. Recorded at review (PR #9805), not fixed here.
   configured_in: apps/web-platform/infra/ci-deploy.sh (fan_out_to_peers and the DEPLOY_SCRIPT_SHA emit); Vector Source 4 in apps/web-platform/infra
 error_reporting:
   destination: journald tag LOG_TAG -> Vector -> Better Stack (same path as every other ci-deploy.sh log line); the fan-out return code is folded into the deploy-status reason
-  fail_loud: the new log line "FANOUT: could not compute the request signature (python3 unavailable or empty key)" and a non-zero return from fan_out_to_peers
+  fail_loud: the new log line "FANOUT: could not compute the request signature (python3 unavailable or the signer failed)" and a non-zero return from fan_out_to_peers
 failure_modes:
   - mode: signature cannot be computed (python3 missing, empty or null secret)
     detection: the new FANOUT log line, plus the existing "FANOUT: webhook secret unavailable" line for the empty/null case; the function returns 1 so deploy-status carries the reason

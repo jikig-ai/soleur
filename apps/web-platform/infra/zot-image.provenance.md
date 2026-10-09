@@ -56,15 +56,19 @@ Recovery procedure (the whole procedure lives here, not in a plan that will be a
    `zot vX.Y.Z` claim comments the staleness gate requires in `ci-deploy.test.sh` and
    `cloud-init-registry.yml`, and the three-name hosts-file deny at all seven sites. `ci-deploy.sh` is
    deliberately NOT a claim carrier (check 11): expect conflicts in `ci-deploy.sh`, `ci-deploy.test.sh`
-   and this sidecar (later edits sit beside the reverted hunks). Resolve the first two by keeping the
-   CURRENT side of every conflict (the claim-free pointer comment, the stdin-config curl call and the
-   environment-only signer are independent of the pin and must survive), and this sidecar by taking the
-   REVERTED side; the non-conflicting hunks still restore the `zot v2.1.20` claim in `ci-deploy.test.sh`.
-   Dry-run 2026-10-09: that resolution leaves `zot-image-staleness.test.sh` exiting 0. The revert's
-   non-conflicting hunks also re-add the `ci-deploy.sh` row to
+   and this sidecar (later edits sit beside the reverted hunks), and NOT only there: a revert of that
+   commit also reverts its non-conflicting hunks, which would put the fan-out signature back on curl's
+   argv. So do not resolve hunk by hunk. Keep the CURRENT `ci-deploy.sh` wholesale
+   (`git checkout HEAD -- apps/web-platform/infra/ci-deploy.sh`: its claim-free pointer comment, stdin-config
+   curl call and environment-only signer are independent of the pin and must survive); keep the CURRENT
+   `ci-deploy.test.sh` and change only its `zot v2.1.22` tokens to `zot v2.1.20`; take this sidecar's
+   REVERTED side. The revert also re-adds the `ci-deploy.sh` row to
    `scripts/lint-shell-trace-credential-refusal-e.baseline.txt` and
-   `scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv`; restore both from the pre-revert
-   tree (`git checkout HEAD -- <both files>`), or the credential lint reports the entry as stale. A narrower edit of
+   `scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv`: restore both from the pre-revert tree
+   BEFORE committing the revert (`git checkout HEAD -- <both files>`; after the commit use
+   `git checkout HEAD~1 -- <both files>` and amend), or the credential lint reports the entry as stale.
+   Dry-run 2026-10-09 of this recipe: `zot-image-staleness.test.sh` exits 0 and
+   `lint-shell-trace-credential-refusal.py` reports OK. A narrower edit of
    only the four values fails `zot-image-staleness.test.sh` (the sidecar, the followers and the
    previous-known-good block then disagree with the pin), and a partial revert of the deny breaks its
    byte-parity guard. The values being restored, in the tag-qualified form `zot_version` is derived
@@ -77,8 +81,11 @@ Recovery procedure (the whole procedure lives here, not in a plan that will be a
    web-2. A bare `git revert` message carries neither. Always include both, even for a revert that
    seems to touch no trigger file: a `server.tf` edit reaches the web hosts' `triggers_replace` BY VALUE
    (`local.ghcr_deny_sh` and `local.ghcr_deny_assert_sh` feed `zot_consumer_probe_install` and
-   `deploy_pipeline_fix_web2`), which a `git show --stat` file list will not show, and the markers
-   are harmless when they are not needed.
+   `deploy_pipeline_fix_web2`), which a `git show --stat` file list will not show. The markers defer the
+   web-host delivery of the revert, they do not drop it: the next unmarked push to a trigger path applies
+   the reverted values to web-1 and web-2, so review that apply when it is sanctioned. The markers must
+   be on their own lines in the SQUASH-MERGE body too (the push head commit is what the workflows read);
+   verify it before merging.
 3. Merge it. The merge fires `registry-host-replace-dispatch.yml`; do not dispatch a second replace
    (double destroy-first). The manual arm is for a refusal only, taken on an explicit operator go.
 4. The v2.1.20 boot asset is immutable and published, so preflight P6 passes for it. Store

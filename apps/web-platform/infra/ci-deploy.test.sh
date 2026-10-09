@@ -9999,7 +9999,7 @@ fo99_run() {
     curl() {
       printf '%s\n' "$*" >> "$d/curl.argv"; printf 'x\n' >> "$d/curl.n"
       # ANY variable carrying the secret into curl's environment is a leak, whatever it is named.
-      env | /usr/bin/grep -qF -- "$secret" && echo leak >> "$d/curl.keyenv"
+      _fo99_env="$(env)"; [[ "$_fo99_env" == *"$secret"* ]] && echo leak >> "$d/curl.keyenv"
       timeout 2 cat >> "$d/curl.stdin" || true; printf 202
     }
     case "$pymode" in
@@ -10063,7 +10063,7 @@ TOTAL=$((TOTAL + 1))
 if [[ "$FO99_ARGV_OK" -eq 1 && "$FO99_ARGV_N" -eq 2 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: T-9799-2 fan-out: the hook secret appears on no argv (curl, python3, openssl), in no log line and not in curl's stdin config; openssl is never invoked; python3 runs once as -I -c"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-2 fan-out leaks the secret (argv, log or stdin config), still shells out to openssl, or the loop ran ${FO99_ARGV_N}x (want 2):$FO99_ARGV_MSG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-2 fan-out leaks the secret (argv, log or stdin config) or still shells out to openssl$([[ "$FO99_ARGV_N" -eq 2 ]] || echo "; the loop ran ${FO99_ARGV_N}x (want 2)"):$FO99_ARGV_MSG"
 fi
 
 fo99_run "fixture-fanout-secret" "deploy fixture" real
@@ -10155,9 +10155,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #8016: raised 490 -> 500 with the 10 PDEATHSIG rows (Guard 2: 2 recorded-argv rows; Guard 1: the
 # real-tree scan, 4 must-flag fixtures, 3 must-pass inputs). Measured: 500 ran.
 # #9795: raised 500 -> 502 with T-9795-1/-2 (the fan-out HMAC header on curl's stdin, not argv).
-# #9799: raised 502 -> 508 with T-9799-1..6 (the fan-out HMAC key off argv: 18-comparison byte-identity
-# matrix, no secret on any argv, key in the python3 environment only, four fail-closed arms, source
-# census, and the errexit arm that pins the `|| sig=""` guard).
+# #9799: raised 502 -> 508 with T-9799-1..6 (the fan-out HMAC key off argv: 33-comparison byte-identity
+# matrix, no secret on any argv, log or stdin config, key in the python3 environment only, seven
+# fail-closed arms, source census, and the errexit arm that pins the `|| sig=""` guard).
 CI_DEPLOY_ASSERT_FLOOR=508
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
