@@ -615,10 +615,8 @@ runcmd:
   # Enable container restart/OOM churn monitor timer (#5417)
   - systemctl enable --now container-restart-monitor.timer
 
-  # Egress gateway bridge + container (#9534) — BEFORE the firewall loader so
-  # the derived docker0→gw accept lands on its first run.
+  # Egress gateway (#9534): before the firewall loader so the derived docker0→gw accept lands first-run.
   - /usr/local/bin/egress-gateway-bootstrap.sh
-
   # Container egress firewall + allowlist re-resolve (#5046 PR-2). The
   # firewall unit is After=docker.service and tolerates a not-yet-running
   # container (probes live in the SSH provisioner, not here).

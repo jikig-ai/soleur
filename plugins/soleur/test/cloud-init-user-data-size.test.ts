@@ -177,7 +177,11 @@ const HETZNER_CAP = 32_768;
 // took the local render to 23,584 B, 4 B over. Same derivation as the lower above: CI ~= local + 32
 // = ~23,616; 23,800 restores ~184 B of headroom and stays ~9.0 KB below HETZNER_CAP. If CI reds,
 // re-derive from its failure line.
-const WEB_GZIP_BUDGET = 23_800;
+// #9534: +300 B modest re-baseline (23,800 → 24,100). Measured 23,908 B local for the
+// egress-gateway runcmd call-site, the SOLEUR_EGRESS_REAPER env flag and the token-dir mount
+// on the web container — boot-time call-sites (the bootstrap script body is baked, #5921
+// pattern), so irreducibly inline. Comments trimmed first. ~8.7 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 24_100;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
