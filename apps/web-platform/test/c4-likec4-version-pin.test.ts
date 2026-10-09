@@ -191,7 +191,7 @@ function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
 
 // ---------------------------------------------------------------------------
 // Image structure. The release builds the default (last) Dockerfile target, `runner`.
-// The two global CLI installs live in the `cli-tools` ancestor stage so that `web-platform-build`
+// The three global CLI installs live in the `cli-tools` ancestor stage so that `web-platform-build`
 // can build exactly them per pull request (about a minute, npm registry only) instead of a full
 // runner build (apt, cli.github.com and the Playwright CDN inside a required aggregate). That
 // only stands in for "builds the runner stage" while these facts hold, so they are pinned here as
@@ -238,10 +238,13 @@ const NODE_DIGEST_FROM = /^node:[^@\s]+@sha256:[0-9a-f]{64}$/;
 // Each `cli-tools` line must be EXACTLY one of these: an extra package, `|| true`, an `ENV NPM_CONFIG_*`,
 // a `COPY` or a backslash continuation would resolve (or change resolution) in a stage the PR-time
 // build runs but nothing else inspects. claude-code keeps lifecycle scripts (its postinstall places the
-// native binary) and takes no `--before` (its tree is exact-pinned); likec4 takes both flags.
+// native binary) and takes no `--before` (its tree is exact-pinned); likec4 and vitest take both flags.
 const CLAUDE_RUN = /^RUN npm install -g @anthropic-ai\/claude-code@\d+\.\d+\.\d+$/;
 const LIKEC4_RUN = new RegExp(`^RUN ${LIKEC4_CMD}$`);
-// `runner` inherits both installs. The only other registry resolutions it may run are these exact lines; a line
+// vitest rides the same install convention for the report-only canary isolation probe (#2640);
+// the pin-vs-lockfile parity is pinned separately by `dockerfile-vitest-version-pin.test.ts`.
+const VITEST_RUN = /^RUN npm install -g vitest@\d+\.\d+\.\d+ --before=\d{4}-\d{2}-\d{2} --ignore-scripts$/;
+// `runner` inherits all three installs. The only other registry resolutions it may run are these exact lines; a line
 // naming a package manager (or NPM_CONFIG_*) that is not one of them is refused, because the spellings of a
 // global install are unbounded and an allowlist over logical lines is not.
 const PACKAGE_MANAGER = /\b(?:npm|npx|pnpm|yarn|bunx?|corepack)(?![a-z])/i;
@@ -273,11 +276,13 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
   const bodyLines = cliTools.body.split("\n").map((l) => l.trim()).filter(Boolean);
   const claude = bodyLines.filter((l) => CLAUDE_RUN.test(l));
   const likec4 = bodyLines.filter((l) => LIKEC4_RUN.test(l));
+  const vitest = bodyLines.filter((l) => VITEST_RUN.test(l));
   for (const l of bodyLines) {
-    if (!CLAUDE_RUN.test(l) && !LIKEC4_RUN.test(l)) violations.push(`Dockerfile: \`cli-tools\` may hold only the two pinned global installs, found: ${l}`);
+    if (!CLAUDE_RUN.test(l) && !LIKEC4_RUN.test(l) && !VITEST_RUN.test(l)) violations.push(`Dockerfile: \`cli-tools\` may hold only the three pinned global installs, found: ${l}`);
   }
   if (likec4.length !== 1) violations.push(`Dockerfile: \`cli-tools\` must hold exactly one likec4 install, found ${likec4.length}`);
   if (claude.length !== 1) violations.push(`Dockerfile: \`cli-tools\` must hold exactly one claude-code install, found ${claude.length}`);
+  if (vitest.length !== 1) violations.push(`Dockerfile: \`cli-tools\` must hold exactly one vitest install, found ${vitest.length}`);
   for (const l of runner.body.split("\n").map((x) => x.trim()).filter(Boolean)) {
     if (PACKAGE_MANAGER.test(l) && !RUNNER_PM_ALLOWED.some((re) => re.test(l))) {
       violations.push(`Dockerfile: \`runner\` may use a package manager only in its two known lines (npm ci --omit=dev, the pinned playwright install), found: ${l}`);
@@ -555,7 +560,8 @@ describe("checkLikec4Pins self-test (string-fed mutations)", () => {
   const D = "2026-09-28";
   const installBlock = (flags: string[]) =>
     flags.map((f, i) => `  - name: step ${i}\n    run: |\n      npm install -g likec4@1.50.0${f}\n      likec4 --version`).join("\n");
-  // The Dockerfile fixture: the four stages, the two installs in `cli-tools`, `runner` FROM it.
+  // The Dockerfile fixture: the four stages, the two likec4-suite installs in `cli-tools` (this
+  // fixture feeds only checkLikec4Pins, which does not assert the vitest install), `runner` FROM it.
   const dockerfileWith = (likec4Run: string, extra = ""): string =>
     [
       `# prose quoting npm install -g likec4@1.50.0 is a comment, not a site`,
@@ -797,6 +803,7 @@ describe("checkLikec4Pins self-test (string-fed mutations)", () => {
 describe("checkImageStructure self-test (string-fed mutations)", () => {
   const ACTION = `docker/build-push-action@${"a".repeat(40)}`;
   const LIKEC4_LINE = "RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts";
+  const VITEST_LINE = "RUN npm install -g vitest@4.1.11 --before=2026-08-19 --ignore-scripts";
   const LIKEC4_AND_CLAUDE = `RUN npm install -g @anthropic-ai/claude-code@2.1.284\n${LIKEC4_LINE}`;
   const dockerfile = (o: { cliFrom?: string; runnerFrom?: string; cliBody?: string; runnerBody?: string; tail?: string } = {}): string =>
     [
@@ -806,7 +813,7 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
       "ARG SENTRY_AUTH_TOKEN",
       "RUN npm run build",
       `FROM ${o.cliFrom ?? DIGEST} AS cli-tools`,
-      o.cliBody ?? LIKEC4_AND_CLAUDE,
+      o.cliBody ?? `${LIKEC4_AND_CLAUDE}\n${VITEST_LINE}`,
       `FROM ${o.runnerFrom ?? "cli-tools"} AS runner`,
       "RUN apt-get update",
       o.runnerBody ?? "",
@@ -875,7 +882,7 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
     expect(run(dockerfile({ cliBody: LIKEC4_LINE }))).toMatch(/exactly one claude-code install, found 0/);
   });
 
-  it("image row 5: anything in cli-tools beyond the two exact installs is refused, whatever its spelling", () => {
+  it("image row 5: anything in cli-tools beyond the three exact installs is refused, whatever its spelling", () => {
     const extras = [
       `${LIKEC4_LINE} typescript`, // a third package on the guarded line
       `${LIKEC4_LINE} || true`, // a failing install that does not fail the build
@@ -887,7 +894,7 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
       "RUN npm i -g @anthropic-ai/claude-code@2.1.284 --foo",
     ];
     for (const e of extras) {
-      expect(run(dockerfile({ cliBody: `${LIKEC4_AND_CLAUDE}\n${e}` })), e).toMatch(/may hold only the two pinned global installs/);
+      expect(run(dockerfile({ cliBody: `${LIKEC4_AND_CLAUDE}\n${e}` })), e).toMatch(/may hold only the three pinned global installs/);
     }
     // The likec4 line without its flags is not "the pinned install".
     expect(run(dockerfile({ cliBody: "RUN npm install -g @anthropic-ai/claude-code@2.1.284\nRUN npm install -g likec4@1.50.0 --before=2026-09-28" }))).toMatch(/exactly one likec4 install, found 0/);
@@ -935,7 +942,7 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
 
   it("a backslash-continued install is read as the one logical line the builder runs", () => {
     const split = "RUN npm install -g @anthropic-ai/claude-code@2.1.284\nRUN npm install -g likec4@1.50.0 \\\n  --before=2026-09-28 --ignore-scripts";
-    expect(run(dockerfile({ cliBody: split }))).toBe("");
+    expect(run(dockerfile({ cliBody: `${split}\n${VITEST_LINE}` }))).toBe("");
   });
 
   it("ci row 1: no-cache dropped, push/load not false, or the step absent is refused", () => {

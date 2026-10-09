@@ -2855,7 +2855,16 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (Doppler soleur/prd_terraform) and the post-replace registry host's own heartbeat rows are graded for
   // `zot_image_digest=<final D12>`. NO SUBSTITUTE: those rows land only in the Logs warehouse, which has no
   // unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 50;
+  // #1285/#2640 (2026-10-09): +1 (50 -> 51) for `2026-10-09-feat-sys-denyread-isolation-deploy-gate-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`curl -fsS https://deploy.soleur.ai/hooks/deploy-status`)
+  // signs the GET with a WEBHOOK_DEPLOY_SECRET HMAC over the empty body plus the
+  // CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET service-token pair (Doppler soleur/prd_terraform) —
+  // the same credential shape `scripts/followthroughs/workspace-isolation-verdict-2640.sh` uses.
+  // NO SUBSTITUTE: the endpoint answers 403 without them and the `.workspace_isolation` verdict lives
+  // only in the deploy host's state file surfaced through that gate, so no unauthenticated read can
+  // verify the live verdict. Genuine.
+  const BASELINE_DECLARED_PROBES = 51;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
