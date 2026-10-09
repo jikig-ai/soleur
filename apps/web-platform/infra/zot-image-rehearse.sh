@@ -9,7 +9,7 @@
 #      and C must be the manifest's config digest. A PR cannot move T or C without reproducing the
 #      upstream bytes. The builder's TAG/ASSET must equal what P6 and the render derive.
 #   2. DENY — with the rendered runcmd deny applied to /etc/hosts, ghcr.io is unreachable from the
-#      host AND from dockerd (a `docker pull` of the upstream ref fails).
+#      host AND from dockerd (a `docker pull` of the upstream ref, after HOSTS_CACHE_WAIT_S, fails).
 #   3. BOOT — the rendered /etc/default/zot-image and zot-image-fetch.sh, installed at their real
 #      paths and invoked by the rendered runcmd entry itself (under its `env -i`), fetch the REAL
 #      published asset, verify it and load it into THIS docker image store; the verified ID is the
@@ -28,31 +28,36 @@ set -euo pipefail
 # A deny written within 5 s of a dockerd read of /etc/hosts is invisible to dockerd until the cache expires.
 # That is the WORKING HYPOTHESIS for the one intermittent "dockerd could still pull from ghcr.io after the
 # deny" failure (run 37863203385, attempt 1), not a measured cause: the failure output below is what tells
-# a recurrence apart. This is the REHEARSAL's probe, not a claim about the registry host: that host starts
-# dockerd before the deny, never restarts it after, and never pulls from ghcr.io.
+# a recurrence apart. This is the REHEARSAL's probe, not a claim about the registry host: that host's dockerd
+# comes from the docker.io package (packages: stage, before runcmd applies the deny), is never restarted
+# after it, and the host never pulls from ghcr.io. The web hosts' copies of the deny were not examined.
 HOSTS_CACHE_WAIT_S=7
 
-# assert_dockerd_denied <hosts-file> <ref>: 0 = dockerd cannot pull <ref>; 1 = it could (diagnostics printed).
-# Called under `||`, so errexit is OFF inside it: every stop is an explicit return, and the pull's status
-# is captured with `&& rc=0 || rc=$?`. Every diagnostic is best-effort (`|| true`) and cannot change the verdict.
+# assert_dockerd_denied <hosts-file> <ref>: 0 = dockerd cannot pull <ref>; 1 = it could, or the probe was
+# inconclusive (diagnostics printed). Called under `||`, so errexit is OFF inside it: every stop is an
+# explicit return, and the pull's status is captured with `&& rc=0 || rc=$?`.
 assert_dockerd_denied() {
   local hosts="$1" ref="$2" out rc present
   sleep "$HOSTS_CACHE_WAIT_S"
   present=no
-  sudo docker image inspect "$ref" >/dev/null 2>&1 && present=yes
+  dk image inspect "$ref" >/dev/null 2>&1 && present=yes
+  # `timeout` cannot exec the dk shell function, so the pull spells out sudo docker.
   out="$(timeout 120 sudo docker pull "$ref" 2>&1)" && rc=0 || rc=$?
+  if (( rc == 124 )); then
+    echo "dockerd pull TIMED OUT after 120 s: inconclusive, not a denial"
+    return 1
+  fi
   if (( rc != 0 )); then
     echo "dockerd pull refused (rc=$rc): $(printf '%s\n' "$out" | tail -n 1)"
     return 0
   fi
   echo "dockerd pulled $ref after the deny; evidence follows"
   echo "-- pull output (last 20 lines)"
-  printf '%s\n' "$out" | tail -n 20 || true
-  echo "-- docker version: $(sudo docker version -f '{{.Server.Version}}' 2>&1 || true)"
-  echo "-- hosts file $hosts: $(stat -c 'mtime=%y size=%s age_s=' "$hosts" 2>&1 || true)$(( $(date +%s) - $(stat -c %Y "$hosts" 2>/dev/null || echo 0) ))"
+  printf '%s\n' "$out" | tail -n 20
+  echo "-- docker version: $(dk version -f '{{.Server.Version}}' 2>&1)"
+  echo "-- hosts file $hosts: $(stat -c 'mtime=%y size=%s' "$hosts" 2>&1)"
   echo "-- image_present_before_pull=$present"
-  echo "-- docker info (proxy, registry mirrors): $(sudo docker info -f 'http={{.HTTPProxy}} https={{.HTTPSProxy}} mirrors={{json .RegistryConfig.Mirrors}}' 2>&1 || true)"
-  echo "-- docker unit: $(systemctl show docker -p Environment -p DropInPaths 2>&1 | tr '\n' ' ' || true)"
+  echo "-- docker info (proxy): $(dk info -f 'http={{.HTTPProxy}} https={{.HTTPSProxy}}' 2>&1)"
   return 1
 }
 
