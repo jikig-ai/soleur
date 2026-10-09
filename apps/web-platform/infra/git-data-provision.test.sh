@@ -247,15 +247,71 @@ rc=$(run_provision_c1 "$root" "ws-c1" "$STORE_SRC" "$SEAMS/marker" "$curated")
 c1_refused "C1f findmnt absent" "$rc" "findmnt unavailable" "$root" "ws-c1"
 drop_fixture "$root"; drop_fixture "$curated"
 
+# ── (#9066, Art. 17) no subject identifier survives on the store ─────────────────────────────
+# Same predicate and negative control as the remove suite (see git-data-remove.test.sh for the
+# property and why it quantifies over every entry name and content rather than the lock glob).
+# Provisioning writes the repo `<id>.git` and the shared `.init.lock` — nothing else may carry the id.
+UID_TOK="uid-7f3a9c"
+subject_id_leaks() { # subject_id_leaks <root> <id> -> offenders on stdout; empty = clean
+  local root="$1" id="$2"
+  assert_fixture_dir "$root"
+  case "$id" in "" | *[!A-Za-z0-9._-]*) printf 'FATAL: bad id token\n' >&2; exit 2 ;; esac
+  find "$root" -mindepth 1 -name "*${id}*" ! -path "${root}/${id}.git" ! -path "${root}/${id}.git/*"
+  grep -rlF --exclude-dir="${id}.git" -- "$id" "$root" 2>/dev/null
+  return 0
+}
+ctl_root() { # ctl_root <kind> -> a populated fixture root on stdout
+  local kind="$1" r
+  r="$(fresh_root)"; assert_fixture_dir "$r"
+  case "$kind" in
+    m1) : > "${r}/.${UID_TOK}.init.lock" ;;                      # per-id lock NAME
+    m2) : > "${r}/.init.lock"; : > "${r}/.${UID_TOK}.seen" ;;    # compliant first member, id in a second
+    m3) printf '%s\n' "$UID_TOK" > "${r}/.init.lock" ;;          # constant name, id in the CONTENT
+    clean)
+      : > "${r}/.init.lock"; : > "${r}/.boot-probe-0.init.lock"; mkdir "${r}/lost+found"
+      mkdir "${r}/uid-other.git"; : > "${r}/uid-other.git/HEAD"; : > "${r}/.uid-other.init.lock"
+      mkdir "${r}/${UID_TOK}.git"; printf '%s\n' "$UID_TOK" > "${r}/${UID_TOK}.git/HEAD" ;;
+  esac
+  echo "$r"
+}
+for kind in m1 m2 m3; do
+  r="$(ctl_root "$kind")"
+  leaks="$(subject_id_leaks "$r" "$UID_TOK")"
+  if [ -n "$leaks" ]; then pass; else fail "9066 control $kind: the predicate did not flag the mutation shape"; fi
+  drop_fixture "$r"
+done
+r="$(ctl_root clean)"
+leaks="$(subject_id_leaks "$r" "$UID_TOK")"
+if [ -z "$leaks" ]; then pass; else fail "9066 control clean: the predicate flagged an unrelated entry ($leaks)"; fi
+drop_fixture "$r"
+# Arm: provision-new — a first provision leaves the repo and the shared lock, no other id-bearing file.
+root=$(fresh_root)
+rc=$(run_provision "$root" "$UID_TOK")
+leaks="$(subject_id_leaks "$root" "$UID_TOK")"
+if [ "$rc" = "0" ]; then pass; else fail "9066 provision-new: expected 0, got $rc ($(head -c 200 "$ERR"))"; fi
+if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 provision-new: the shared .init.lock is missing — the arm proves nothing"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 provision-new: the subject id is on the store outside the repo: $leaks"; fi
+drop_fixture "$root"
+# Arm: provision-again — the already-present no-op arm opens the same lock and must add nothing.
+root=$(fresh_root)
+run_provision "$root" "$UID_TOK" >/dev/null
+rc=$(run_provision "$root" "$UID_TOK")
+leaks="$(subject_id_leaks "$root" "$UID_TOK")"
+if [ "$rc" = "0" ]; then pass; else fail "9066 provision-again: expected 0, got $rc ($(head -c 200 "$ERR"))"; fi
+if [ -e "${root}/.init.lock" ]; then pass; else fail "9066 provision-again: the shared .init.lock is missing — the arm proves nothing"; fi
+if [ -z "$leaks" ]; then pass; else fail "9066 provision-again: the subject id is on the store outside the repo: $leaks"; fi
+drop_fixture "$root"
+
 rm -f "$ERR"
 
 # --- Minimum-cardinality guard (mirrors the fence test). 12 -> 24 with the four mount
 #     rows (T5 3, T6 3, T7 2, T8 2), re-derived: T1 2, T2 2, T3 8, T4 2 = 14 before.
 #     24 -> 30 at review: T7 +1 (message pin), T9 3, T10 2. 30 -> 50 with the C1 store rows
-#     (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20. ---
+#     (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20. 50 -> 60 with the #9066
+#     subject-id guard: control 4 (m1, m2, m3, clean), provision-new 3, provision-again 3 = 10. ---
 total=$((passes + fails))
-if [ "$total" -lt 50 ]; then
-  echo "FAIL: ran only ${total} assertions (<50) — suite did not execute fully" >&2
+if [ "$total" -lt 60 ]; then
+  echo "FAIL: ran only ${total} assertions (<60) — suite did not execute fully" >&2
   exit 1
 fi
 
