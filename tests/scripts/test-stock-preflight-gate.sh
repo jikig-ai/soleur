@@ -44,7 +44,7 @@ fi
 passes=$_p0; fails=$_f0
 # ... and fail() must actually PRINT: a verdict nobody can read is a red run with zero FAIL lines and a misleading
 # "truncation" message. Run in a subshell so no counter moves.
-if ! ( fail "probe" 2>&1 ) | grep -q '^FAIL: probe'; then
+if ! ( fail "probe" 2>&1 ) | grep -c >/dev/null '^FAIL: probe'; then
   echo "stock-preflight-gate: FAIL — fail() does not print its FAIL: line; a red run would be unreadable." >&2
   exit 1
 fi

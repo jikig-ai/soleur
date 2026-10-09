@@ -87,7 +87,7 @@ fields_missing=$(printf '%s' "$OUT" | grep -oE '"kind":"[^"]+","source_path":"[^
 assert_eq "5 findings each carry kind/source_path/target/source_ref shape" "5" "$fields_missing"
 
 # Negative: healthy controls do NOT appear in findings.
-if printf '%s' "$OUT" | grep -q "exists-1.md\|exists-2.md\|exists-4.ts:1"; then
+if printf '%s' "$OUT" | grep -c >/dev/null "exists-1.md\|exists-2.md\|exists-4.ts:1"; then
   fail=$((fail + 1))
   echo "[FAIL] healthy fixtures appeared in findings (should not)" >&2
 else

@@ -5171,6 +5171,11 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
+  # arms for verdict binding, freshness window, and HTTP classes). Registered
+  # explicitly (orphan-suite class above) — its PASS authorizes promoting the
+  # report-only canary to gating, so the promotion decision must be driven.
+  run_suite "scripts/tenant-outer-wrap-soak-5863" bash scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh
   # #9237: exit-code harness for the watchdog-arm soak probe. Registered
   # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
   # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
@@ -5927,6 +5932,12 @@ if want_scripts; then
   # so it is what separates "the gate skipped smoke correctly" from "the gate never looked". Same
   # explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
+  # The bench's own --self-test (#9823), run ONCE as a subprocess under a hostile environment (NO_PARAPHRASE=1,
+  # an exported key, CURL_BIN, GIT_DIR, a quote-laden TMPDIR). Nothing ran that self-test in CI, so it sat red for 18 days
+  # (2026-09-20 to 2026-10-08) and a caller's environment could change its verdict. Explicit run_suite
+  # because scripts/*.test.sh is covered by no glob here; appended LAST in the block so no earlier
+  # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/learning-retrieval-bench" bash scripts/learning-retrieval-bench.test.sh
 fi
 
 # Named bun-test entries — bun shard.
