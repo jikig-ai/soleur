@@ -38,7 +38,7 @@ for another reason (follow-up #9786, folded into #8620 if that lands first).
 
 **Erasure without a host replace (decision D2).** The inngest host has no SSH and its only inbound
 channel is a Doppler-flag-polled FSM shipped in the bootstrap image; adding a wipe there would need an
-image release, a pin bump and an approved host replace (a cron outage on the sole scheduler, with
+image release, a pin bump and an approved host replace (a cron stoppage on the sole scheduler, with
 the live LUKS volume attached beside the wipe target). Instead the volume is detached from the host,
 attached to a **short-lived throwaway Hetzner server** (Terraform-managed, count-gated, deny-all
 inbound, torn down in the same dispatch) that zeroes it with `blkdiscard -z`, reads it back with
@@ -169,7 +169,7 @@ like `inngest-boot-phone-home.sh`, which needs no `vector.toml` allowlist entry)
 
 ## Hypotheses
 
-The network-outage gate fired on the constraint wording "no SSH"; there is no connectivity symptom to
+The network-connectivity gate fired on the constraint wording "no SSH"; there is no connectivity symptom to
 diagnose. L3 facts the design relies on: the wipe host is created with the existing deny-all-inbound
 firewall `hcloud_firewall.inngest` (Hetzner firewalls filter only inbound public traffic, so egress to
 the Better Stack ingest host is unaffected); no inbound path to the wipe host is needed or provided; DNS
@@ -440,7 +440,7 @@ failure_modes:
     layer: 6
     detection: gate lib named-live counters abort the phase before apply
     alert_route: failed workflow run
-  - mode: the wiped row cannot be delivered after the device was zeroed (ingest outage, token failure)
+  - mode: the wiped row cannot be delivered after the device was zeroed (ingest unavailable, token failure)
     layer: 6
     detection: the poll times out with no wiped row although the device is zero; the started row, if delivered, shows the host got that far
     alert_route: failed workflow run; runbook triage table says to query Better Stack for a late wiped row, then re-dispatch wipe (an already-blank device takes the prior=blank path and re-emits evidence)
