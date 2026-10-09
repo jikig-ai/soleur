@@ -78,8 +78,8 @@ fi
 
 # The poll loop actually polls: a `sleep` inside a `while` in the watchdog
 # subshell is what makes liveness re-checked rather than evaluated once.
-if printf '%s\n' "$wd_block" | grep -q 'while :; do' \
-   && printf '%s\n' "$wd_block" | grep -q 'sleep "$_RUN_WD_POLL_S"'; then
+if printf '%s\n' "$wd_block" | grep -c >/dev/null 'while :; do' \
+   && printf '%s\n' "$wd_block" | grep -c >/dev/null 'sleep "$_RUN_WD_POLL_S"'; then
   pass "watchdog liveness loop polls on _RUN_WD_POLL_S"
 else
   fail "watchdog block must contain a polling loop (while + sleep _RUN_WD_POLL_S)"
@@ -88,8 +88,8 @@ fi
 # The reparented/zombie-parent arm: the poll checks `ps -o stat=` for Z and
 # re-reads the parent's lstart (pid-reuse). Removing either leaves a live
 # corpse or a recycled pid reading as a live parent.
-if printf '%s\n' "$wd_block" | grep -q 'stat= -p "\$_RUN_WD_PARENT_PID"' \
-   && printf '%s\n' "$wd_block" | grep -q '_RUN_WD_PARENT_LSTART'; then
+if printf '%s\n' "$wd_block" | grep -c >/dev/null 'stat= -p "\$_RUN_WD_PARENT_PID"' \
+   && printf '%s\n' "$wd_block" | grep -c >/dev/null '_RUN_WD_PARENT_LSTART'; then
   pass "watchdog guards zombie-parent AND pid-reuse (stat check + lstart compare)"
 else
   fail "watchdog must check zombie stat and parent lstart identity"
@@ -202,7 +202,7 @@ fi
 # The [FAIL] summary line carries the durable path; the file exists OUTSIDE
 # the scratch root and contains the suite's own marker.
 fail_line="$(grep -E '^\[FAIL\] failfx' "$out" | head -1)"
-if printf '%s' "$fail_line" | grep -q 'log='; then
+if printf '%s' "$fail_line" | grep -c >/dev/null 'log='; then
   pass "[FAIL] line prints a durable log= path"
 else
   fail "[FAIL] line missing log= path — got: ${fail_line:-<no FAIL line>}"
@@ -427,7 +427,7 @@ fi
 gc_call_line="$(grep -n '_gc_durable_logs "' "$TARGET" | head -1 | cut -d: -f1)"
 acq_line2="$(grep -n 'tc_acquire "test-all"' "$TARGET" | head -1 | cut -d: -f1)"
 if [[ -n "$gc_call_line" && -n "$acq_line2" && "$gc_call_line" -gt "$acq_line2" ]] \
-   && grep -F '_gc_durable_logs "' "$TARGET" | grep -qF '${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs'; then
+   && grep -F '_gc_durable_logs "' "$TARGET" | grep -cF >/dev/null '${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs'; then
   pass "GC runs after the lock acquisition, on the default namespace only (never SOLEUR_TEST_ALL_LOG_DIR)"
 else
   fail "GC call must follow tc_acquire and target the default soleur-test-all-logs namespace (call=${gc_call_line:-none} acq=${acq_line2:-none})"

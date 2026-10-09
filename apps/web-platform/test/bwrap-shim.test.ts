@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   symlinkSync,
+  closeSync,
   openSync,
   readFileSync,
   rmSync,
@@ -132,7 +133,8 @@ describe("bwrap PATH shim (#8752)", () => {
   it("a setup invocation gets --add-seccomp-fd N on a live fd carrying the artifact bytes", () => {
     const r = root();
     try {
-      const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "/usr/bin/true"], {
+      // The vendored tail bind is what engages the mask — include it.
+      const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--bind", "/proc", "/proc", "--", "/usr/bin/true"], {
         env: r.env(),
         encoding: "utf8",
       });
@@ -145,7 +147,7 @@ describe("bwrap PATH shim (#8752)", () => {
       expect(Number(fd)).toBeGreaterThan(2);
       // The fd was open inside the stub and resolves to the artifact.
       expect(fds.get(fd)).toBe(BPF);
-      expect(args.slice(2)).toEqual(["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "/usr/bin/true"]);
+      expect(args.slice(2)).toEqual(["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--bind", "/proc", "/proc", "--proc", "/proc", "--", "/usr/bin/true"]);
     } finally {
       cleanup();
     }
@@ -157,16 +159,26 @@ describe("bwrap PATH shim (#8752)", () => {
     writeFileSync(payloadFile, "--unshare-user\0--unshare-pid\0--\0/usr/bin/true\0");
     const argsFd = openSync(payloadFile, "r"); // host fd; child sees it as fd 3
     try {
-      const res = spawnSync(SHIM, ["--args", "3"], {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-user", "--unshare-pid", "--bind", "/proc", "/proc"], {
         env: r.env(),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe", argsFd],
       });
       expect(res.status, res.stderr).toBe(0);
       const { args, fds, payload } = r.read();
-      expect(args).toEqual(["--add-seccomp-fd", expect.stringMatching(/^\d+$/), "--args", "3"]);
-      expect(fds.has("3")).toBe(true);
+      // #9723: the payload is consumed and re-emitted verbatim on a FRESH fd
+      // (the original fd 3 is read to EOF and closed); the `--proc /proc`
+      // mask lands at the OUTER argv tail — outer options after an --args
+      // token parse after the payload, so the outer end is always the last
+      // setup position of the merged stream.
+      expect(args[0]).toBe("--add-seccomp-fd");
+      expect(args[1]).toMatch(/^\d+$/);
+      expect(args[2]).toBe("--args");
+      const renumFd = args[3];
+      expect(renumFd).toMatch(/^\d+$/);
+      expect(fds.has(renumFd)).toBe(true); // the re-emitted payload fd survives
       expect(payload).toEqual(["--unshare-user", "--unshare-pid", "--", "/usr/bin/true"]);
+      expect(args.slice(4)).toEqual(["--unshare-user", "--unshare-pid", "--bind", "/proc", "/proc", "--proc", "/proc"]);
     } finally {
       cleanup();
     }
@@ -181,7 +193,7 @@ describe("bwrap PATH shim (#8752)", () => {
     writeFileSync(argsFile, "--ro-bind\0/\0/\0--\0/usr/bin/true\0");
     const argsFd = openSync(argsFile, "r"); // child fd 3
     try {
-      const res = spawnSync(SHIM, ["--args", "3"], {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-pid"], {
         env: r.env(),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe", argsFd, secretFd],
@@ -193,7 +205,11 @@ describe("bwrap PATH shim (#8752)", () => {
       // false-positive trap — the stub's own /proc/self/fd glob dir fd appears
       // transiently as the lowest free fd and readlinks to '?'.)
       expect([...fds.values()]).not.toContain(secret);
-      expect(fds.get("3")).toBe(argsFile); // the argv-referenced fd survives
+      // #9723: the original --args fd is consumed and closed; the re-emitted
+      // payload rides a FRESH fd (a pipe — readlink shows 'pipe:...', never
+      // the source file path).
+      expect(fds.get("3")).not.toBe(argsFile);
+      expect([...fds.values()]).not.toContain(argsFile);
 
       // Positive control: WITHOUT the shim the same stub inherits the secret
       // fd — the sweep is what removed it, not node/libuv fd hygiene.
@@ -236,17 +252,28 @@ describe("bwrap PATH shim (#8752)", () => {
           ? [o, String(3 + i), "x"]
           : [o, String(3 + i)],
       );
-      const res = spawnSync(SHIM, [...argv, "--args", String(3 + OPTS.length), "--", "/usr/bin/true"], {
+      const res = spawnSync(SHIM, [...argv, "--args", String(3 + OPTS.length), "--unshare-user", "--unshare-pid", "--bind", "/proc", "/proc", "--", "/usr/bin/true"], {
         env: r.env(),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe", ...fdsOpen, argsFd],
       });
       expect(res.status, res.stderr).toBe(0);
-      const { fds } = r.read();
+      const { args, fds, payload } = r.read();
       for (let i = 0; i < OPTS.length; i++) {
         expect(fds.get(String(3 + i)), `${OPTS[i]} fd must survive the sweep`).toBe(keep);
       }
-      expect(fds.get(String(3 + OPTS.length))).toBe(argsFile);
+      // #9723: the original --args fd is consumed; the payload rides the
+      // re-emitted fd named in the forwarded argv (a pipe, never argsFile).
+      const renumIdx = args.indexOf("--args") + 1;
+      const renumFd = args[renumIdx];
+      expect(renumFd).toMatch(/^\d+$/);
+      expect(fds.has(renumFd)).toBe(true);
+      expect([...fds.values()]).not.toContain(argsFile);
+      // The mask lands at the OUTER setup end (before `--`), not inside the
+      // re-emitted payload — outer options parse after the payload regardless.
+      expect(payload).toEqual(["--ro-bind", "/", "/", "--", "/usr/bin/true"]);
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
     } finally {
       cleanup();
     }
@@ -263,7 +290,7 @@ describe("bwrap PATH shim (#8752)", () => {
       // 3 open into the sandbox (silent leak). The arity-aware scan must not.
       const res = spawnSync(
         SHIM,
-        ["--setenv", "--args", "3", "--ro-bind", "--sync-fd", "3", "--", "/usr/bin/true"],
+        ["--unshare-pid", "--setenv", "--args", "3", "--ro-bind", "--sync-fd", "3", "--", "/usr/bin/true"],
         { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", secretFd] },
       );
       expect(res.status, res.stderr).toBe(0);
@@ -284,7 +311,7 @@ describe("bwrap PATH shim (#8752)", () => {
       // `--sync-fd 3` there must NOT pin fd 3 open through the sweep.
       const res = spawnSync(
         SHIM,
-        ["--ro-bind", "/usr", "/usr", "--", "/bin/sh", "-c", "x", "--sync-fd", "3"],
+        ["--unshare-pid", "--ro-bind", "/usr", "/usr", "--", "/bin/sh", "-c", "x", "--sync-fd", "3"],
         { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", secretFd] },
       );
       expect(res.status, res.stderr).toBe(0);
@@ -295,10 +322,642 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
+  it("a `/proc/self/fd/N` path inside a command token IS preserved (apply-seccomp contract)", () => {
+    const r = root();
+    const helper = join(r.root, "helper-binary");
+    writeFileSync(helper, "x");
+    const helperFd = openSync(helper, "r"); // child fd 3
+    try {
+      // The vendored inner command execs its own binary through
+      // `/proc/self/fd/3` (apply-seccomp multicall dispatch — see the command
+      // tail the SDK emits). The fd is named by PATH inside a command token,
+      // never by an option — the sweep must still preserve it, else the
+      // sandboxed spawn dies on exec (ENOENT).
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-pid", "--ro-bind", "/usr", "/usr", "--", "/bin/sh", "-c", "exec /proc/self/fd/3 arg"],
+        { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", helperFd] },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { fds } = r.read();
+      expect([...fds.values()]).toContain(helper);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("inserts --proc /proc immediately before the first -- (plain setup argv)", () => {
+    // #9723 — the vendored builder's enableWeakerNestedSandbox handling ends the
+    // setup argv with `--bind /proc /proc`, re-mounting real procfs over the
+    // denyRead `--tmpfs /proc` (later mounts win). The shim re-masks at the tail
+    // with a FRESH pidns-scoped procfs: `--proc /proc` must land BEFORE the
+    // command boundary and AFTER every setup token (so after the vendor's tail
+    // bind) — empty tmpfs would break the vendor's `apply-seccomp
+    // /proc/self/fd/N` inner command.
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--bind", "/proc", "/proc", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      expect(args).toEqual([
+        "--add-seccomp-fd",
+        expect.stringMatching(/^\d+$/),
+        "--unshare-user",
+        "--unshare-pid",
+        "--ro-bind", "/", "/",
+        "--bind", "/proc", "/proc",
+        "--proc", "/proc",
+        "--",
+        "/usr/bin/true",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("targets the FIRST -- when the command tail carries another", () => {
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--bind", "/proc", "/proc", "--", "/bin/sh", "-c", "x", "--"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      const boundary = args.indexOf("--");
+      expect(boundary).toBeGreaterThan(0);
+      expect(args.slice(boundary - 2, boundary)).toEqual(["--proc", "/proc"]);
+      // The command tail is passed through verbatim — including its own `--`.
+      expect(args.slice(boundary + 1)).toEqual(["/bin/sh", "-c", "x", "--"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("the --args transport (SDK shape) gets the mask after the payload, before --", () => {
+    const r = root();
+    // Mirror of the committed fixture's shape: early --tmpfs /proc (denyRead
+    // entry) + the vendor's tail --bind /proc /proc (token 118-119).
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(
+      payloadFile,
+      "--unshare-user\0--tmpfs\0/proc\0--ro-bind\0/\0/\0--bind\0/proc\0/proc\0",
+    );
+    const argsFd = openSync(payloadFile, "r"); // child fd 3
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-pid", "--", "/usr/bin/true"], {
+        env: r.env(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", argsFd],
+      });
+      expect(res.status, res.stderr).toBe(0);
+      const { args, payload } = r.read();
+      // The payload is consumed and re-emitted verbatim on a fresh fd (the
+      // fd NUMBER may differ — assert the re-emitted content, not the fd).
+      expect(payload).toEqual([
+        "--unshare-user", "--tmpfs", "/proc", "--ro-bind", "/", "/",
+        "--bind", "/proc", "/proc",
+      ]);
+      const argsIdx = args.indexOf("--args");
+      const boundary = args.indexOf("--");
+      expect(argsIdx).toBe(2); // [--add-seccomp-fd, N, --args, M, ...]
+      expect(args.slice(argsIdx + 2, boundary)).toEqual(["--unshare-pid", "--proc", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a -- carried INSIDE the --args payload: the mask still lands at the OUTER setup end", () => {
+    const r = root();
+    // Arm B semantics corrected: upstream parse_args_recurse resumes OUTER-argv
+    // option parsing after a payload ends — a mask spliced inside the payload
+    // could be mounted over by trailing outer options (verified on bwrap
+    // 0.12.0). The mask therefore always lands at the OUTER setup end: after
+    // the --args fd token's expansion, i.e. after every payload mount.
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(
+      payloadFile,
+      "--ro-bind\0/\0/\0--bind\0/proc\0/proc\0--\0/usr/bin/true\0",
+    );
+    const argsFd = openSync(payloadFile, "r");
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-user", "--unshare-pid"], {
+        env: r.env(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", argsFd],
+      });
+      expect(res.status, res.stderr).toBe(0);
+      const { args, payload } = r.read();
+      // Payload passes through verbatim; the mask is the outer-argv tail.
+      expect(payload).toEqual([
+        "--ro-bind", "/", "/", "--bind", "/proc", "/proc", "--", "/usr/bin/true",
+      ]);
+      expect(args).toEqual([
+        "--add-seccomp-fd",
+        expect.stringMatching(/^\d+$/),
+        "--args",
+        expect.stringMatching(/^\d+$/),
+        "--unshare-user",
+        "--unshare-pid",
+        "--proc", "/proc",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("no -- and no --args: the mask lands before the first non-option token", () => {
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--bind", "/proc", "/proc", "--chdir", "/", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      expect(args).toEqual([
+        "--add-seccomp-fd",
+        expect.stringMatching(/^\d+$/),
+        "--unshare-user",
+        "--unshare-pid",
+        "--bind", "/proc", "/proc",
+        "--chdir", "/",
+        "--proc", "/proc",
+        "/usr/bin/true",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("an unreadable --args fd fails closed (exit 65 + marker)", () => {
+    const r = root();
+    try {
+      // fd 9 is never opened — the payload read must refuse, never exec
+      // an unmasked spawn.
+      const res = spawnSync(SHIM, ["--args", "9", "--unshare-pid", "--", "/usr/bin/true"], {
+        env: r.env(),
+        encoding: "utf8",
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("bwrap-shim:");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("an EMPTY --args payload fails closed — a silent re-emit would drop the whole setup argv", () => {
+    const r = root();
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(payloadFile, ""); // empty — never a real setup argv
+    const argsFd = openSync(payloadFile, "r");
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-pid", "--", "/usr/bin/true"], {
+        env: r.env(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", argsFd],
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("bwrap-shim:");
+      expect(res.stderr).toContain("empty --args payload");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a write-only --args fd fails closed — mapfile reports no error on O_WRONLY, so the empty check must trip", () => {
+    const r = root();
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(payloadFile, "--unshare-user\0");
+    const argsFd = openSync(payloadFile, "w"); // write-only: read yields EOF/empty
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-pid", "--", "/usr/bin/true"], {
+        env: r.env(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", argsFd],
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("bwrap-shim:");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("Arm C ordering: setup options AFTER an --args token still precede the mask (merged-stream position)", () => {
+    const r = root();
+    // `bwrap --args FD --bind /proc /proc cmd`: the payload is setup, the
+    // trailing outer --bind is the vendor tail — the mask must land AFTER it
+    // (before the operand), never inside the earlier payload.
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(payloadFile, "--unshare-user\0");
+    const argsFd = openSync(payloadFile, "r");
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--args", "3", "--unshare-pid", "--bind", "/proc", "/proc", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", argsFd] },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args, payload } = r.read();
+      expect(payload).toEqual(["--unshare-user"]);
+      expect(args.slice(4)).toEqual([
+        "--unshare-pid",
+        "--bind", "/proc", "/proc",
+        "--proc", "/proc",
+        "/usr/bin/true",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a payload's own operand (no inner --): the mask lands at the outer argv tail, payload verbatim", () => {
+    const r = root();
+    // `bwrap --args FD` alone, payload carrying setup + bare command operand.
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(payloadFile, "--ro-bind\0/\0/\0--bind\0/proc\0/proc\0/usr/bin/true\0");
+    const argsFd = openSync(payloadFile, "r");
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-user", "--unshare-pid"], {
+        env: r.env(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", argsFd],
+      });
+      expect(res.status, res.stderr).toBe(0);
+      const { args, payload } = r.read();
+      expect(payload).toEqual(["--ro-bind", "/", "/", "--bind", "/proc", "/proc", "/usr/bin/true"]);
+      expect(args.slice(4)).toEqual(["--unshare-user", "--unshare-pid", "--proc", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a `--` in an option-VALUE position is not the boundary (`--setenv K --`)", () => {
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--setenv", "MARK", "--", "--bind", "/proc", "/proc", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      // The real boundary is the SECOND `--` — the mask splices there, not
+      // into the middle of --setenv's operands.
+      expect(args.slice(2)).toEqual([
+        "--unshare-user", "--unshare-pid", "--setenv", "MARK", "--",
+        "--bind", "/proc", "/proc",
+        "--proc", "/proc",
+        "--", "/usr/bin/true",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a zero-arg option never consumes the boundary as a value (--level-prefix then --)", () => {
+    const r = root();
+    try {
+      // --level-prefix is zero-arg (bwrap(1): "Prepend e.g. <3> to diagnostic
+      // messages"); an arity-table error that gives it an operand swallows the
+      // `--`, pushing the mask INTO the command argv — a silent unmask.
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--level-prefix", "--bind", "/proc", "/proc", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
+      expect(args[bi + 1]).toBe("/usr/bin/true");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("an argv that never mounts procfs at /proc passes through UNMASKED — the ci-deploy canary probe shape (v0.330.10 rollback)", () => {
+    const r = root();
+    try {
+      // The deploy gate's exact probe argv has --unshare-pid but NO
+      // --unshare-user and mounts no procfs — on in-image bwrap 0.8.0 a
+      // spliced `--proc /proc` EPERMs ("Can't mount proc on /newroot/proc"),
+      // which is what rolled back the v0.330.10 deploy. No /proc exposure →
+      // nothing to mask → verbatim passthrough (plus the shim's own
+      // --add-seccomp-fd prepended at args[0..1]).
+      const res = spawnSync(
+        SHIM,
+        ["--new-session", "--dev", "/dev", "--unshare-pid", "--bind", "/", "/", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      expect(args).not.toContain("--proc");
+      const bi = args.indexOf("--");
+      expect(args.slice(2, bi)).toEqual([
+        "--new-session", "--dev", "/dev", "--unshare-pid", "--bind", "/", "/",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a /proc exposure with pidns but NO userns refuses — unprivileged bwrap cannot mount a fresh procfs", () => {
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-pid", "--bind", "/proc", "/proc", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("bwrap-shim:");
+      expect(res.stderr).toContain("unshare-user");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("an exposure token AFTER the command boundary is not a trigger — setup-only scan", () => {
+    const r = root();
+    try {
+      // The user command legitimately names /proc paths; a setup-scan that
+      // ran past the boundary would splice a mask into this argv for no
+      // reason (and on a userns-less argv, refuse a spawn that never exposed
+      // procfs at all).
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-pid", "--bind", "/", "/", "--", "/bin/sh", "-c", "x", "--bind", "/proc", "/proc"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      const bi = args.indexOf("--");
+      expect(args.slice(2, bi)).toEqual(["--unshare-pid", "--bind", "/", "/"]);
+      expect(args.slice(bi + 1)).toEqual(["/bin/sh", "-c", "x", "--bind", "/proc", "/proc"]);
+      expect(args.slice(2, bi)).not.toContain("--proc");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dest matching is exact-with-trailing-slash normalization — /procfoo does NOT trigger, /proc/ DOES", () => {
+    const r = root();
+    try {
+      // Near-miss dest: not a procfs mount at /proc → passthrough.
+      const near = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--bind", "/proc", "/procfoo", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(near.status, near.stderr).toBe(0);
+      const { args: nearArgs } = r.read();
+      expect(nearArgs).not.toContain("--proc");
+
+      // Trailing slash normalizes — a bind AT /proc/ still triggers the mask.
+      const r2 = root();
+      try {
+        const slash = spawnSync(
+          SHIM,
+          ["--unshare-user", "--unshare-pid", "--bind", "/proc/", "/proc/", "--", "/usr/bin/true"],
+          { env: r2.env(), encoding: "utf8" },
+        );
+        expect(slash.status, slash.stderr).toBe(0);
+        const { args: slashArgs } = r2.read();
+        const bi = slashArgs.indexOf("--");
+        expect(slashArgs.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
+      } finally {
+        cleanup();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("every procfs-exposing option shape triggers the mask — --bind-try, --ro-bind, --dev-bind, --proc", () => {
+    for (const argv of [
+      ["--unshare-user", "--unshare-pid", "--bind-try", "/proc", "/proc"],
+      ["--unshare-user", "--unshare-pid", "--ro-bind", "/proc", "/proc"],
+      ["--unshare-user", "--unshare-pid", "--dev-bind", "/proc", "/proc"],
+      ["--unshare-user", "--unshare-pid", "--proc", "/proc"],
+    ]) {
+      const r = root();
+      try {
+        const res = spawnSync(SHIM, [...argv, "--", "/usr/bin/true"], {
+          env: r.env(), encoding: "utf8",
+        });
+        expect(res.status, `${argv[4]}: ${res.stderr}`).toBe(0);
+        const { args } = r.read();
+        const bi = args.indexOf("--");
+        expect(args.slice(bi - 2, bi), `${argv[4]} should re-mask`).toEqual(["--proc", "/proc"]);
+      } finally {
+        cleanup();
+      }
+    }
+  });
+
+  it("--bind-fd/--ro-bind-fd DEST=/proc is the same exposure class (fd2 dest check)", () => {
+    for (const opt of ["--bind-fd", "--ro-bind-fd"]) {
+      const r = root();
+      const procFd = openSync("/proc", "r", 0o40000); // O_DIRECTORY
+      try {
+        const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", opt, "3", "/proc", "--", "/usr/bin/true"], {
+          env: r.env(), encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe", procFd],
+        });
+        expect(res.status, `${opt}: ${res.stderr}`).toBe(0);
+        const { args } = r.read();
+        const bi = args.indexOf("--");
+        expect(args.slice(bi - 2, bi), `${opt} dest=/proc must re-mask`).toEqual(["--proc", "/proc"]);
+      } finally {
+        closeSync(procFd);
+        cleanup();
+      }
+    }
+  });
+
+  it("an exposure in a payload AFTER a command-carrying payload still triggers the mask (resume semantics)", () => {
+    const r = root();
+    // Upstream parse_args_recurse resumes outer-argv option parsing after
+    // EACH --args payload — a payload following one that carried `--` is
+    // still SETUP, so its procfs bind must still be seen. (Regression: an
+    // earlier consume loop stopped at the first command-carrying payload and
+    // would have passed this shape through unmasked.)
+    const p1 = join(r.root, "p1");
+    const p2 = join(r.root, "p2");
+    writeFileSync(p1, "--ro-bind\0/\0/\0--\0/usr/bin/true\0");
+    writeFileSync(p2, "--bind\0/proc\0/proc\0");
+    const fd1 = openSync(p1, "r"); // child fd 3
+    const fd2 = openSync(p2, "r"); // child fd 4
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--args", "3", "--args", "4"],
+        { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", fd1, fd2] },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      expect(args.slice(-2)).toEqual(["--proc", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dest canonicalization defeats slash/dot evasions — //proc, /proc//, /proc/./, /x/../proc all mount at /proc", () => {
+    for (const dest of ["//proc", "/proc//", "/proc/./", "/x/../proc"]) {
+      const r = root();
+      try {
+        const res = spawnSync(
+          SHIM,
+          ["--unshare-user", "--unshare-pid", "--bind", "/proc", dest, "--", "/usr/bin/true"],
+          { env: r.env(), encoding: "utf8" },
+        );
+        expect(res.status, `dest=${dest}: ${res.stderr}`).toBe(0);
+        const { args } = r.read();
+        const bi = args.indexOf("--");
+        expect(args.slice(bi - 2, bi), `dest=${dest} must re-mask`).toEqual(["--proc", "/proc"]);
+      } finally {
+        cleanup();
+      }
+    }
+  });
+
+  it("exposure inside a payload + no userns ANYWHERE in the merged stream refuses (union gate)", () => {
+    const r = root();
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(payloadFile, "--bind\0/proc\0/proc\0--\0/usr/bin/true\0");
+    const argsFd = openSync(payloadFile, "r");
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-pid"], {
+        env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", argsFd],
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("unshare-user");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("--unshare-all satisfies BOTH namespace gates", () => {
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-all", "--bind", "/proc", "/proc", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--proc", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a bare --tmpfs /proc is a mask, not an exposure — passthrough with no splice", () => {
+    const r = root();
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-user", "--unshare-pid", "--tmpfs", "/proc", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8" },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { args } = r.read();
+      // One --proc pair at most — none here: the tmpfs deny stands alone.
+      expect(args).not.toContain("--proc");
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--tmpfs", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a setup argv with NO option-position --unshare-pid refuses (a fresh --proc without a pidns is a decorative mask)", () => {
+    const r = root();
+    try {
+      const res = spawnSync(SHIM, ["--unshare-user", "--ro-bind", "/", "/", "--bind", "/proc", "/proc", "--", "/usr/bin/true"], {
+        env: r.env(), encoding: "utf8",
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("bwrap-shim:");
+      expect(res.stderr).toContain("unshare-pid");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a `--unshare-pid` token in an option-VALUE position does NOT satisfy the pidns requirement (spoof-proof)", () => {
+    const r = root();
+    try {
+      // `--setenv K --unshare-pid` puts the flag name in an a2 value slot —
+      // real bwrap mounts no pidns, so the mask would be decorative; refuse.
+      const res = spawnSync(SHIM, ["--unshare-user", "--setenv", "K", "--unshare-pid", "--bind", "/proc", "/proc", "--", "/usr/bin/true"], {
+        env: r.env(), encoding: "utf8",
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("unshare-pid");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a `/proc/self/fd/N` path inside a PAYLOAD's command tokens IS preserved", () => {
+    const r = root();
+    const fdFile = join(r.root, "cmd-fd");
+    writeFileSync(fdFile, "cmd side fd");
+    const cmdFd = openSync(fdFile, "r"); // child fd 4
+    const payloadFile = join(r.root, "args-payload");
+    writeFileSync(payloadFile, "--ro-bind\0/\0/\0--\0/proc/self/fd/4\0--version\0");
+    const argsFd = openSync(payloadFile, "r"); // child fd 3
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-pid"], {
+        env: r.env(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", argsFd, cmdFd],
+      });
+      expect(res.status, res.stderr).toBe(0);
+      const { fds, payload } = r.read();
+      expect(fds.get("4")).toBe(fdFile);
+      expect(payload.slice(payload.indexOf("--"))).toEqual([
+        "--", "/proc/self/fd/4", "--version",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a `/proc/self/fd/N` path in SETUP position is NOT preserved (command-side scan only)", () => {
+    const r = root();
+    const fdFile = join(r.root, "setup-fd");
+    writeFileSync(fdFile, "setup side fd");
+    const setupFd = openSync(fdFile, "r"); // child fd 4 — an option-position
+    // path ref must not pin it (over-preserve is the leak direction).
+    try {
+      const res = spawnSync(
+        SHIM,
+        ["--unshare-pid", "--ro-bind", "/proc/self/fd/4", "/mnt/x", "--", "/usr/bin/true"],
+        { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "ignore", setupFd] },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      const { fds } = r.read();
+      expect(fds.get("4")).not.toBe(fdFile);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("fails closed with a marker when the seccomp artifact is missing", () => {
     const r = root();
     try {
-      const res = spawnSync(SHIM, ["--unshare-user", "--", "/usr/bin/true"], {
+      const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", "--", "/usr/bin/true"], {
         env: r.env({ SOLEUR_BWRAP_SECCOMP_BPF: join(r.root, "nonexistent.bpf") }),
         encoding: "utf8",
       });
@@ -312,7 +971,7 @@ describe("bwrap PATH shim (#8752)", () => {
   it("fails closed with a marker when the real bwrap is missing", () => {
     const r = root();
     try {
-      const res = spawnSync(SHIM, ["--unshare-user", "--", "/usr/bin/true"], {
+      const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", "--", "/usr/bin/true"], {
         env: r.env({ SOLEUR_BWRAP_REAL: join(r.root, "no-bwrap") }),
         encoding: "utf8",
       });
@@ -493,12 +1152,53 @@ describe.skipIf(!BWRAP_OK)("bwrap shim end-to-end with the real binary", () => {
     // vacuous row).
     const unfiltered = spawnSync("/usr/bin/bwrap", [...argv, "/usr/bin/unshare", "-U", "/usr/bin/true"], { encoding: "utf8", timeout: 30_000 });
     expect(unfiltered.status, `unfiltered control stderr=${unfiltered.stderr}`).toBe(0);
-    const denied = spawnSync(SHIM, [...argv, "/usr/bin/unshare", "-U", "/usr/bin/true"], { env, encoding: "utf8", timeout: 30_000 });
+    const denied = spawnSync(SHIM, ["--unshare-pid", ...argv, "/usr/bin/unshare", "-U", "/usr/bin/true"], { env, encoding: "utf8", timeout: 30_000 });
     expect(denied.status).not.toBe(0);
     expect(String(denied.stderr)).not.toContain("bwrap:");
     expect(String(denied.stderr)).toMatch(/Operation not permitted/);
-    const ok = spawnSync(SHIM, [...argv, "/usr/bin/sh", "-c", "/usr/bin/true"], { env, encoding: "utf8", timeout: 30_000 });
+    const ok = spawnSync(SHIM, ["--unshare-pid", ...argv, "/usr/bin/sh", "-c", "/usr/bin/true"], { env, encoding: "utf8", timeout: 30_000 });
     expect(ok.status, String(ok.stderr)).toBe(0);
+  }, 60_000);
+
+  it("#9723: the vendor's tail --bind /proc /proc is re-masked — in-sandbox /proc is pidns-scoped, not host", () => {
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: "test",
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      SOLEUR_BWRAP_REAL: "/usr/bin/bwrap",
+      SOLEUR_BWRAP_SECCOMP_BPF: BPF,
+    };
+    // The vendor shape: setup argv on --args <fd>, ending with the
+    // enableWeakerNestedSandbox tail bind that shadows the denyRead tmpfs.
+    const payload =
+      "--unshare-user\0--unshare-pid\0--unshare-net\0" +
+      "--ro-bind\0/\0/\0--tmpfs\0/proc\0--bind\0/proc\0/proc\0";
+    const argsFile = join(mkdtempSync(join(tmpdir(), "shim-proc-")), "payload");
+    writeFileSync(argsFile, payload);
+    try {
+      // Probe: the shim's tail `--proc /proc` mounts a procfs keyed to the
+      // sandbox's OWN pidns — this worker's host pid must be ABSENT, while
+      // the self-view (environ, fd) stays intact for `apply-seccomp
+      // /proc/self/fd/N` et al.
+      const probe = `test ! -d /proc/${process.pid} && test -e /proc/self/environ && test -d /proc/self/fd`;
+      const throughShim = spawnSync(SHIM, ["--args", "3", "--unshare-pid", "--", "/usr/bin/sh", "-c", probe], {
+        env,
+        encoding: "utf8",
+        timeout: 30_000,
+        stdio: ["ignore", "pipe", "pipe", openSync(argsFile, "r")],
+      });
+      expect(throughShim.status, String(throughShim.stderr)).toBe(0);
+
+      // CONTROL: the same argv through the REAL binary keeps the defect —
+      // the tail bind exposes real procfs (this worker's host pid is a dir).
+      const control = spawnSync(
+        "/usr/bin/bwrap",
+        ["--args", "3", "--", "/usr/bin/sh", "-c", `test -d /proc/${process.pid}`],
+        { env, encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe", openSync(argsFile, "r")] },
+      );
+      expect(control.status, `control must see host procfs (the defect): ${control.stderr}`).toBe(0);
+    } finally {
+      rmSync(dirname(argsFile), { recursive: true, force: true });
+    }
   }, 60_000);
 });
 

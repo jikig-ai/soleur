@@ -54,6 +54,10 @@ set -uo pipefail
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The pin is owned by git-data-runcmd-rehearsal.test.sh (rule-audit.yml watches that copy); read it
+# from there so a bump cannot leave Tier B on a stale image. Read at setup so a bad pin fails early.
+UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${SCRIPT_DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
+[ -n "$UBUNTU_BASE" ] || { echo "FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh" >&2; exit 1; }
 BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
 EXPECTED_ROWS=83
 EXPECTED_RED=74
@@ -1389,7 +1393,6 @@ fi
 # =================================================================================================
 echo ""
 echo "--- Tier B: systemd as PID 1 in the pinned ubuntu:24.04 image ---"
-UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
 TIERB_RESULT=""
 TB_FAIL=0
 tb_skip() { echo "  SKIP (Tier B): $1"; TIERB_RESULT="skipped: $1"; }

@@ -663,3 +663,45 @@
   recovery rebuild/retry, credential inspection or shared-database write ran.
   All existing qualification, account/browser, flag/cohort, full-review and
   promotion holds persist; keep draft/default-off/customer content blocked.
+
+## Continuation update — 2026-10-09 sandbox and RLS retry main sync
+
+- Head `2fc7bc84ad0fa8cec3638423b0199e9573b31c21` completed
+  [CI 37846192187](https://github.com/jikig-ai/soleur/actions/runs/37846192187),
+  [tenant integration 37846192195](https://github.com/jikig-ai/soleur/actions/runs/37846192195)
+  and [RLS 37846192219](https://github.com/jikig-ai/soleur/actions/runs/37846192219)
+  successfully, including both required aggregates and script shard 5. The
+  RLS log confirms the serial-file command, nine passing files and 131 passing
+  tests; production parity was skipped. Replacement guards 37846243544 passed.
+  All 25 required checks passed. The primary watch exited at poll 66 with 84
+  passes, six skips and no failures, effective cancellations or pending checks.
+  The worktree was clean with zero unpushed commits. This verdict precedes the
+  following merge; a green C.9 retry does not close issue #9791.
+- Newer main made PR #9051 conflict. The queue-state read confirmed OPEN,
+  outside the queue and auto-merge disarmed. Inspected, pinned main
+  `01d2b5a0d840d2ec5fc5b43851d1540726ea97cb` brings ten commits, including
+  sandbox proc/dual-root isolation and support credential gates, RLS retry
+  boundaries, registry/rehearsal pins, credential-argument transport, test
+  tier/grep conversions and secret-scan relevance gating. Application
+  runtime and infrastructure inputs change; migration bodies and dependency
+  manifests are unchanged. Limited source inspection is not full review,
+  current-source recovery, new CLO evidence or authenticated QA.
+- The only merge conflict was the shared RLS fixture. Resolution preserves
+  the Codex engine, generation, history acknowledgment and returned context
+  inside main's new retried committed transaction, using its `t` handle.
+  The feature's three expected-error savepoint catches now rethrow transient
+  SQLSTATEs to the whole-transaction retry before treating expected 55000
+  errors as assertions. Main's census and retry boundaries remain; the
+  workflow's serial-file option and bounded C.9 diagnostics remain. Issue
+  #9779 was independently closed by merged PR #9793 before this sync; no
+  duplicate closure is claimed. Fresh exact-head CI must cover the merge.
+- Shell syntax, workflow actionlint without ShellCheck and whitespace checks
+  passed. Type checking covers the merged application; no local suite or
+  hook execution ran. Keep draft/default-off/customer content blocked. All
+  recovery, authenticated QA, routine/Web qualification, mode-specific CLO,
+  full-review and promotion holds persist. Rehearsal remains bound to
+  `27c04a95` with authorization consumed. No recovery retry, provider call,
+  credential inspection, browser-auth copying, shared-production write,
+  infrastructure dispatch or flag/cohort change occurred. Project controls
+  and regions remain unknown; challenge retries are stopped, Admin
+  alternatives unexecuted and support unsent.

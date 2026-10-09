@@ -1,5 +1,11 @@
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
+import {
+  getWorkspacesRoot,
+  isGitDataStoreEnabled,
+  workspaceEffectiveRoot,
+  workspaceTenantDenyRoots,
+} from "./workspace-resolver";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
 import { basename, delimiter, join } from "path";
 import * as Sentry from "@sentry/nextjs";
@@ -51,7 +57,7 @@ const log = createChildLogger("agent-sandbox");
 //     `--tmpfs <landing>` BEFORE re-binding each covered `allowWrite` path rw
 //     (`Re-bound write path wiped by denyRead tmpfs`) and each covered
 //     `allowRead` path ro (`Re-allowed read access within denied region`).
-//     Broad `denyRead: [workspacesRoot()]` is
+//     Broad `denyRead: [<tenant roots>]` is
 //     therefore expressible AND safe — the parent tmpfs masks the whole tree
 //     at namespace build, so a sibling created mid-session is never visible.
 //     The committed argv fixture pins this ordering; a future SDK drift that
@@ -67,13 +73,6 @@ const log = createChildLogger("agent-sandbox");
 // /usr/bin/bwrap. `probeAgentSandboxHardening` below is the boot-time
 // measurement of that pair; the deploy-time measurement is the canary's
 // `runHardeningProbes`.
-
-const WORKSPACES_ROOT_DEFAULT = "/workspaces";
-
-/** Resolve WORKSPACES_ROOT at call time so tests can stub the env per-case. */
-function workspacesRoot(): string {
-  return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
-}
 
 // SDK's `SandboxSettings` is a Zod-inferred type with `[x: string]: unknown`
 // index signature. Our helper returns a structurally-compatible object
@@ -296,56 +295,88 @@ export function buildAgentSandboxConfig(
   // boot, so a missing root is a vanished-mount fault worth paging on
   // (the signal the deleted `degraded` arm carried; restored here as a
   // cheap existence bit, not enumeration).
-  const wsRoot = workspacesRoot();
-  const wsRootExists = existsSync(wsRoot);
-  if (process.env.NODE_ENV === "production" && !wsRootExists) {
-    reportSilentFallback(new Error(`WORKSPACES_ROOT missing: ${wsRoot}`), {
-      feature: "agent-sandbox",
-      op: "tenant-deny",
-      extra: { workspacesRoot: wsRoot, workspace: basename(workspacePath) },
-    });
-  }
+  // #9725 (ADR-068 aftermath): the deny set is every root where tenant
+  // working trees can live — workspaceTenantDenyRoots() returns the volume
+  // root AND the raw worktree root UNCONDITIONALLY (the flag-collapsed form
+  // would leave the pre-flip staging + post-rollback windows unmasked, and
+  // denying only WORKSPACES_ROOT post-cutover would mask an empty directory
+  // while sibling trees sit readable under /var/lib/soleur/worktrees).
+  // Constant per dispatch (roots, not dir entries), so the mid-session
+  // TOCTOU posture is unchanged.
+  const denyRoots = workspaceTenantDenyRoots();
+  const denyRootsExist = denyRoots.map((root) => existsSync(root));
+  denyRoots.forEach((root, i) => {
+    // Page only on roots expected to exist NOW: the volume root always, the
+    // worktree root once the flag is on (pre-flip, a not-yet-staged NVMe root
+    // is expected-absent — reporting it would desensitize the real
+    // vanished-mount tripwire this arm restores).
+    const expected = i === 0 || isGitDataStoreEnabled();
+    if (expected && process.env.NODE_ENV === "production" && !denyRootsExist[i]) {
+      reportSilentFallback(new Error(`tenant deny root missing: ${root}`), {
+        feature: "agent-sandbox",
+        op: "tenant-deny",
+        extra: { denyRoot: root, workspace: basename(workspacePath) },
+      });
+    }
+  });
   // Guard the catastrophic misconfiguration: a workspacePath that IS or
-  // CONTAINS the deny root would make the vendor's restore re-bind the whole
+  // CONTAINS a deny root would make the vendor's restore re-bind the whole
   // root after the tmpfs — unmasking every sibling rw. Impossible under the
   // uuid layout (join(root, uuid)); fail loud if it ever drifts.
   const wsNorm = workspacePath.replace(/\/+$/, "");
-  const rootNorm = wsRoot.replace(/\/+$/, "");
-  if (wsNorm === rootNorm || rootNorm.startsWith(`${wsNorm}/`)) {
-    throw new Error(
-      `buildAgentSandboxConfig: workspacePath ${workspacePath} equals/contains deny root ${wsRoot} — refusing to build a sandbox that would unmask every tenant`,
-    );
+  for (const rootNorm of denyRoots) {
+    if (wsNorm === rootNorm || rootNorm.startsWith(`${wsNorm}/`)) {
+      throw new Error(
+        `buildAgentSandboxConfig: workspacePath ${workspacePath} equals/contains deny root ${rootNorm} — refusing to build a sandbox that would unmask every tenant`,
+      );
+    }
   }
   // denyReadExtra contract: absolute paths to existing DIRECTORIES (a file →
   // `--tmpfs` → spawn failure). An extra under the own workspace only masks
   // if the vendor emits it after the ws restore — do not rely on that order.
   //
-  // KNOWN TAIL CAVEAT (pre-existing, not this change): the vendored builder's
-  // `enableWeakerNestedSandbox` handling re-binds the real `--bind /proc /proc`
-  // at the END of the argv — shadowing this `/proc` tmpfs deny. The `/proc`
-  // entry stays as intent + future-proofing, but do not treat it as realized
-  // isolation today; see the follow-up issue on the fixture's trailing bind.
+  // #9723: the vendored builder's `enableWeakerNestedSandbox` tail re-binds
+  // the real `--bind /proc /proc` AFTER every denyRead entry — the `/proc`
+  // tmpfs here is intent only; the REALIZED mask is the bwrap shim's tail
+  // `--proc /proc` splice (a pidns-scoped procfs mounted over the tail bind —
+  // see infra/bwrap-shim/bwrap + test/bwrap-shim.test.ts).
   const denyRead = Array.from(
-    new Set([wsRoot, c4StagingRoot, "/proc", ...(opts?.denyReadExtra ?? [])]),
+    new Set([...denyRoots, c4StagingRoot, "/proc", ...(opts?.denyReadExtra ?? [])]),
   );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
-  // agent sandbox). `deniedCount` is now constant (3 + extras) per session —
-  // a drift in it is a config diff, not live directory state.
+  // agent sandbox). `deniedCount` is config-derived (raw roots + c4 staging +
+  // /proc + realpath aliases) per session — a drift in it is a config diff,
+  // not live directory state.
   log.info(
     {
       feature: "agent-sandbox",
       op: "tenant-deny",
-      workspacesRoot: workspacesRoot(),
+      // Self-describing per-root rows (not parallel arrays) — a Sentry query
+      // reads root+existence as one record, no positional correlation.
+      tenantDenyRoots: denyRoots.map((root, i) => ({
+        root,
+        exists: denyRootsExist[i],
+      })),
+      // The git-data flag state + the effective resolution root — the pair a
+      // cutover-window reader needs to tell a legit flag-off deny from drift.
+      gitDataStoreEnabled: isGitDataStoreEnabled(),
+      workspaceEffectiveRoot: workspaceEffectiveRoot(),
       // Own workspace UUID — the join key so this isolation decision is
-      // attributable to a session (every sibling shares `workspacesRoot`).
+      // attributable to a session (every sibling shares the deny roots).
       workspace: basename(workspacePath),
       deniedCount: denyRead.length,
       c4StagingRootReady,
       // Detection surface for the vanished-volume fault (replaces the deleted
-      // enumeration arm's `degraded`): emitted per dispatch, always.
-      workspacesRootExists: wsRootExists,
-      workspaceUnderDenyRoot: wsNorm.startsWith(`${rootNorm}/`),
+      // enumeration arm's `degraded`): emitted per dispatch, always. Resolved
+      // from the resolver's own getter, not the deny-set position (a "/" env
+      // value is excluded from the set and would mislabel index 0).
+      workspacesRootExists: existsSync(getWorkspacesRoot()),
+      workspaceUnderDenyRoot: denyRoots.some((root) => wsNorm.startsWith(`${root}/`)),
+      // The drift tripwire #9725 names: the workspace resolves under the
+      // resolver's EFFECTIVE root (flag-shaped), not just any deny root — a
+      // post-flip workspace still under the volume root must read false.
+      workspaceUnderEffectiveRoot: wsNorm.startsWith(`${workspaceEffectiveRoot()}/`),
     },
     "agent-sandbox: computed tenant denyRead",
   );

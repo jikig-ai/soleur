@@ -214,7 +214,7 @@ battery() {
   # ---- delete-volume ----
   world; VERDICT=proceed EXTRA_ENV="VERDICT=proceed" run "delete: detach then delete, then 404 proven" 0 "is gone" delete-volume
   check "delete: write order is DETACH then DELETE-VOLUME" "$([[ "$(writes)" == "DETACH DELETE-VOLUME " ]]; echo $?)"
-  check "delete: no request ever names another volume id" "$(! grep -E '/volumes/[0-9]+' "$WORLD/calls.log" | grep -vq "/volumes/$PIN"; echo $?)"
+  check "delete: no request ever names another volume id" "$(! grep -E '/volumes/[0-9]+' "$WORLD/calls.log" | grep -vc >/dev/null "/volumes/$PIN"; echo $?)"
   world detached; EXTRA_ENV="VERDICT=heal:detach_done" run "delete: detach-done window skips the detach" 0 "is gone" delete-volume
   check "delete: no second detach" "$([[ "$(writes)" == "DELETE-VOLUME " ]]; echo $?)"
   world pin_gone; EXTRA_ENV="VERDICT=heal:delete_done" run "delete: later windows skip" 0 "skipped" delete-volume

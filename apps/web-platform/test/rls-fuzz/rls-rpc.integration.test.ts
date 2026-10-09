@@ -2,11 +2,11 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import path from "node:path";
 import type postgres from "postgres";
 import { buildAuthenticatedClaims } from "./claim";
-import { classifyRpcOutcome, type Verdict } from "./verdict";
+import { classifyRpcOutcome, rethrowIfTransient, type Verdict } from "./verdict";
 import { securityDefinerAuthenticatedFns, securityDefinerAnonFns, allSecurityDefinerFns, type SecDefFn } from "./catalog";
 import { staticallyUndetectedDefinerFns, loadForwardCorpus } from "../migration-lint/definer-grants";
 import { ATTACK_SQL, EXCLUDED, KNOWN_EXPOSURES, type RpcCtx } from "./rpc-cases";
-import { connect, seedRpcCtx, rolledBackRaw } from "./harness-fixture";
+import { connect, seedRpcCtx, rolledBackRaw, withTransientRetry } from "./harness-fixture";
 
 // SECURITY DEFINER RPC-bypass dimension (#6256, ADR-111, AC8). Drives every
 // authenticated-EXECUTE definer fn with tenant-B claims + tenant-A params and
@@ -155,6 +155,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
       try {
         await t.unsafe("select public.save_agent_engine_recovery_checkpoint($1, $2, $3::jsonb)", [ctx.engineRunA, attempt.id, t.json({ synthetic: true })]);
       } catch (error) {
+        rethrowIfTransient(error);
         code = (error as { code?: string }).code;
         await t.unsafe("ROLLBACK TO SAVEPOINT erased_checkpoint");
       }
@@ -185,6 +186,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
       try {
         await t.unsafe("select public.start_agent_engine_attempt($1, $2, $3, $4)", [ctx.engineRunA, "stale-binding-read", "managed", 0]);
       } catch (error) {
+        rethrowIfTransient(error);
         admissionCode = (error as { code?: string }).code;
         await t.unsafe("ROLLBACK TO SAVEPOINT stale_mode_admission");
       }
@@ -204,6 +206,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
         try {
           await t.unsafe(query, values);
         } catch (error) {
+          rethrowIfTransient(error);
           code = (error as { code?: string }).code;
           await t.unsafe("ROLLBACK TO SAVEPOINT stale_mode_write");
         }
@@ -297,6 +300,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
           sp.unsafe(`select authorize_template('h-${ctx.messageA}', 'general.attack', '${ctx.scopeGrantA}')`),
         );
       } catch (e) {
+        rethrowIfTransient(e); // a deadlock victim must reach the sql-level retry, not be stored as a verdict input
         caught = e as { code?: string };
       }
       const r = await t.unsafe(
@@ -363,9 +367,9 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
   // persist. After the guard-strip self-test's rollback, the scratch definer fn must
   // be ABSENT (so a guard-stripped fn cannot silently survive into a later run).
   test("AC14: the scratch self-test definer fn does not persist after rollback", async () => {
-    const [{ n }] = await sql<{ n: number }[]>`
+    const [{ n }] = await withTransientRetry(() => sql<{ n: number }[]>`
       select count(*)::int as n from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
-      where ns.nspname = 'public' and p.proname = '_rls_fuzz_selftest'`;
+      where ns.nspname = 'public' and p.proname = '_rls_fuzz_selftest'`);
     expect(n, "scratch self-test fn must not persist past its rolled-back txn").toBe(0);
   });
 

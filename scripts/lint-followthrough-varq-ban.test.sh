@@ -514,7 +514,7 @@ run_guard "$d"
 # summary names all three rules on every failure, so a negative assertion over the whole
 # output can never hold. Strip the summary before asserting which rule fired.
 r3_diag() { grep -v '^FAILED:' <<<"$GUARD_OUT"; }
-(( GUARD_RC == 1 )) && r3_diag | grep -q 'banned' && ! r3_diag | grep -q 'rule 3: MISSING'
+(( GUARD_RC == 1 )) && r3_diag | grep -c >/dev/null 'banned' && ! r3_diag | grep -c >/dev/null 'rule 3: MISSING'
 check $? "R3-M16a a rule-1 violation with rule 3 clean reddens on rule 1 alone" "R3-M16a expected a rule-1-only failure, got rc=$GUARD_RC: $GUARD_OUT"
 d=$(mkcase r3_m16b)
 cat >"$d/probe.sh" <<'EOF'
@@ -523,7 +523,7 @@ if [[ -z "${FOO:-}" ]]; then echo "TRANSIENT" >&2; exit 2; fi
 S="scripts/absent-7490.sh"
 EOF
 run_guard "$d"
-(( GUARD_RC == 1 )) && r3_diag | grep -q 'rule 3: MISSING' && ! r3_diag | grep -qE 'banned \$\{VAR'
+(( GUARD_RC == 1 )) && r3_diag | grep -c >/dev/null 'rule 3: MISSING' && ! r3_diag | grep -cE >/dev/null 'banned \$\{VAR'
 check $? "R3-M16b a rule-3 violation with rule 1 clean reddens on rule 3 alone" "R3-M16b expected a rule-3-only failure, got rc=$GUARD_RC: $GUARD_OUT"
 
 # --- R3-M19: the `# repo-path: runtime` opt-out is per LINE, not per file. Two absent paths,

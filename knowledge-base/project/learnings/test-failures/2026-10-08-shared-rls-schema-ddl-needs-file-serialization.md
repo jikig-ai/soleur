@@ -40,3 +40,24 @@ performed because qualification holds persist.
 During inspection, an un-escalated PR-diff request failed to reach GitHub.
 The escalated retry returned an empty diff, consistent with the live draft's
 empty file list. A draft's title is not evidence that it contains a fix.
+
+## Addendum — 2026-10-09 retry-boundary integration
+
+The serial invocation passed all 131 tests at `2fc7bc84ad`, while PR #9793
+independently merged a whole-unit retry boundary and closed #9779. The next
+main sync conflicted at the feature's Codex fixture additions. Preserve both
+contracts: create the engine and history acknowledgment with the transaction
+handle inside `seedTwoTenantTx`, and keep its generation in the returned
+context. A bare outer `sql` call inside that helper would escape atomic seeding
+and can wedge its single-connection transaction.
+
+Expected-error savepoint catches also need `rethrowIfTransient(error)` before
+recovering the savepoint or asserting 55000. Otherwise they absorb the 40P01
+that main's outer transaction retry needs to see. Retry the whole transaction,
+not a statement on an aborted transaction. The preceding green head does not
+verify this conflict resolution; fresh exact-head CI is required.
+
+The successful RLS log's filtered retrieval initially failed inside the
+sandboxed pipeline; its escalated retry confirmed the serial command and
+test counts. Keep pipefail enabled so a successful filter cannot hide a failed
+network producer, and strip terminal controls before displaying log lines.
