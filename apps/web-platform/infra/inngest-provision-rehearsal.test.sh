@@ -224,8 +224,15 @@ yes "the capture script confines reads to rehearsal hosts" \
   "grep -qF 'soleur-inngest-rehearsal-' '$CAPTURE'"
 # The write-on-PASS property, pinned by POSITION: exactly one `$OUT` append exists and it
 # sits after the LAST `exit 1`/`exit 2`, so no FAIL/TRANSIENT path can reach it.
-yes "the capture writes on PASS only (the single evidence append sits past the last early exit)" \
-  "python3 -c 'import sys; s=open(\"$CAPTURE\").read(); w=[i for i in range(len(s)) if s.startswith(\">> \\\"\\$OUT\\\"\", i)]; last_fail=max(s.rfind(\"exit 1\"), s.rfind(\"exit 2\")); sys.exit(0 if len(w)==1 and w[0] > last_fail > 0 else 1)'"
+_w_count="$(grep -cF '>> "$OUT"' "$CAPTURE")"
+_w_pos="$(grep -nF '>> "$OUT"' "$CAPTURE" | head -1 | cut -d: -f1)"
+_e_pos="$(grep -nE 'exit [12]' "$CAPTURE" | tail -1 | cut -d: -f1)"
+cases=$((cases + 1))
+if [[ "$_w_count" == 1 && "$_w_pos" -gt "${_e_pos:-0}" ]]; then
+  pass "the capture writes on PASS only (the single evidence append sits past the last early exit)"
+else
+  fail "the capture writes on PASS only" "appends=${_w_count} at :${_w_pos}; last exit at :${_e_pos}"
+fi
 yes "the plan-shape guard is executable and bash-syntax-clean" \
   "[[ -x '$SHAPE' ]] && bash -n '$SHAPE'"
 yes "the probe script exists and is executable" \
