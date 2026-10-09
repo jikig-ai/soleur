@@ -324,7 +324,7 @@ Query: `gh issue list --label code-review --state open --json number,title,body 
 - [x] AC10 Follow-up issues (a) and (b) exist with milestone and re-evaluation criteria and are linked from the ADR amendment; comments are posted on #8643, #6945 and #6000.
 - [x] AC15 `knowledge-base/engineering/operations/runbooks/anthropic-console-workspace-key.md` and `.github/actions/anthropic-preflight/action.yml` name the same Haiku id (both swapped or both left on 4.5 with the carve-out), checked by `grep -c` on each.
 - [x] AC11 `python3 scripts/lint-anthropic-content-position.py`, `python3 scripts/lint-guard-contract.py` (over this plan), the vitest and bun suites listed in Phase F, `bash plugins/soleur/skills/eval-harness/test/gen-models.test.sh`, and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` all pass; `npx markdownlint-cli2` passes on this plan and `tasks.md`.
-- [ ] AC12 The PR body's first line states that merging deploys the web-platform image (CLI pin and Haiku routing change); it also carries the "Supply-chain floor override" section (if the override was used) and states the Sonnet cache-read correction and its regime-boundary caveat.
+- [x] AC12 The PR body's first line states that merging deploys the web-platform image (CLI pin and Haiku routing change); it also carries the "Supply-chain floor override" section (if the override was used) and states the Sonnet cache-read correction and its regime-boundary caveat.
 
 ### Post-merge
 

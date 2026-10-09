@@ -49,4 +49,4 @@ Plan: `knowledge-base/project/plans/2026-10-08-feat-haiku-5-5-support-plan.md`. 
 
 - [x] 5.1 Run the vitest, bun, tsc, lint and audit commands listed in plan Phase F; `--detect` must print `model-drift: none` with rc 0
 - [x] 5.2 Create the two follow-up issues (pdf-chapter-router after the SDK bump; eval-gated re-tiering of crons and workflow pins) after verifying labels and milestone; comment on #6945, #8643, #6000
-- [ ] 5.3 PR body first line states that merging deploys the web-platform image; include the pricing lines, probe results, floor override section and Sonnet correction note
+- [x] 5.3 PR body first line states that merging deploys the web-platform image; include the pricing lines, probe results, floor override section and Sonnet correction note
