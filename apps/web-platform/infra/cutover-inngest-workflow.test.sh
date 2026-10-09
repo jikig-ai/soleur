@@ -4441,7 +4441,7 @@ assert "#8285 luks-cutover arm extracted from the real script for behavioural dr
   printf '%s\n' 'doppler() { case "$*" in'
   printf '%s\n' '  *"secrets get INNGEST_LUKS_CUTOVER"*) if [[ -n "${STUB_FLAG:-}" ]]; then printf "%s" "$STUB_FLAG"; else return 1; fi ;;'
   printf '%s\n' '  *"--only-names"*) if [[ "${STUB_NAMES_EMPTY:-0}" == 1 ]]; then :; elif [[ "${STUB_NAMES_HAS:-0}" == 1 ]]; then printf "{\"INNGEST_LUKS_CUTOVER\":{}}"; else printf "{\"OTHER\":{}}"; fi ;;'
-  printf '%s\n' '  *"secrets set INNGEST_LUKS_CUTOVER"*) cat > "$MARK"; if [[ "${STUB_SETFAIL:-0}" == 1 ]]; then return 1; fi ;;'
+  printf '%s\n' '  *"secrets set INNGEST_LUKS_CUTOVER"*) tee "$MARK" >/dev/null; if [[ "${STUB_SETFAIL:-0}" == 1 ]]; then return 1; fi ;;'
   printf '%s\n' 'esac; }'
   printf '%s\n' '_luks_pointer_state() { printf "%s" "${STUB_PTR:-absent}"; }'
   printf '%s\n' '_luks_liveness_count() { echo 3; }'
