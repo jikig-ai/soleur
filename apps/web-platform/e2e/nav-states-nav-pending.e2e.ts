@@ -1,3 +1,6 @@
+// pyramid-justified: soft-navigation pending states are driven by holding the
+// target route's RSC fetch via page.route and asserted on the rendered bar —
+// hydration + fetch timing need a real browser.
 import { test, expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import {

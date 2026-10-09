@@ -141,7 +141,7 @@ render_stage() {
   # names, and this function cannot see its root. Callers pass "$TMPROOT/...", but that is a fact
   # about the callers; a bare filename would truncate a file in the CWD instead.
   assert_fixture_dir "$out"
-  awk '/doppler run --project soleur-inngest --config prd -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT" \
+  awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT" \
     | sed -e 's/\$\${/${/g' -e 's/%%{/%{/g' \
           -e "s|\${inngest_expect_luks}|${expect}|g" \
           -e "s|\${inngest_volume_id}|${PLAIN_ID}|g" \

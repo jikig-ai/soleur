@@ -1,3 +1,6 @@
+// pyramid-justified: authenticated onboarding flow — injected session +
+// mocked foundation-status/kb routes + glyph-box viewport assertions on a
+// real page — needs a real browser.
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import {
