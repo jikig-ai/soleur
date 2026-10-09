@@ -225,7 +225,7 @@ At ship time, add ONE comment to #7258 (no new issue is filed): the evidence (si
 ## Files to Edit
 
 - `.github/scripts/test/fixtures-validate-infra-templates.sh` — header carve-out note + F23a-F23e.
-- `plugins/soleur/test/fixture-relative-assert.baseline.txt` — regenerated in the same commit (expected, not conditional: row 268 is this file; allowed path, `plugins/soleur/test/`).
+- `plugins/soleur/test/fixture-relative-assert.baseline.txt` — NOT edited: the expected regeneration was avoided by routing the copy through python (row stays 58); see `evidence.md`.
 
 ## Files to Create
 
@@ -312,9 +312,9 @@ No cross-domain implications detected — infrastructure/tooling change confined
 ### Pre-merge (PR)
 
 - [ ] `fixtures-validate-infra-templates.sh` contains F23a-F23e; all arms PASS in CI's `deploy-script-tests-fixed` job (`Results: N pass, 0 fail`).
-- [ ] Each Phase 2 mutation row was executed and the named arm went RED; the table (edit -> arm reddened) is in the PR body.
-- [ ] `git diff --name-only origin/main...HEAD` contains NO path from "Files NOT to Touch" and nothing under `apps/web-platform/`: `git diff --name-only origin/main...HEAD | grep -E '^(apps/web-platform/|\.github/workflows/|plugins/soleur/)' | grep -vE '^plugins/soleur/(test|docs)/'` prints nothing.
-- [ ] `bash plugins/soleur/test/fixture-relative-assert.test.sh` is green (baseline regenerated in-commit only if required, with the reason in the commit message).
+- [x] Each Phase 2 mutation row was executed and the named arm went RED; the table (edit -> arm reddened) is in the PR body.
+- [x] `git diff --name-only origin/main...HEAD` contains NO path from "Files NOT to Touch" and nothing under `apps/web-platform/`: `git diff --name-only origin/main...HEAD | grep -E '^(apps/web-platform/|\.github/workflows/|plugins/soleur/)' | grep -vE '^plugins/soleur/(test|docs)/'` prints nothing.
+- [x] `bash plugins/soleur/test/fixture-relative-assert.test.sh` is green (baseline regenerated in-commit only if required, with the reason in the commit message).
 - [ ] `shellcheck .github/scripts/test/fixtures-validate-infra-templates.sh` clean; `python3 scripts/lint-guard-contract.py` passes on this plan.
 - [ ] PR body: `Closes #6509` on its own line; `Refs #7258` (NOT a close keyword); threshold `none` with the reason above; the mutation table; the Trigger-Filter Proof (Diff A fires none of the apply/replace/mint/release workflows; Diff B would fire two and is held); the reduced-panel disclosure (proportionate review panel, as on #9892); the net-issue-flow line (closes 1, files 0); ends with the Claude Code attribution line.
 - [ ] PR checks: `Infra Validation` ran (path filter match on the fixtures file); post-merge verification per the section below.
