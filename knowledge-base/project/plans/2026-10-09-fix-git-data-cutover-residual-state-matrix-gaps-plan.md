@@ -259,14 +259,14 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] The `flag_write` step body touches `flag_write_attempted` after the xtrace guard and before the precheck script (a static pin plus a mutant that moves it after); executed finalizer: flip with `freeze_held` + `flag_write_attempted` (no `flag_written`) writes the flag off, redeploys and unfreezes (FZ11); rollback with only `flag_write_attempted` exits "nothing to unwind" without calling the host script (FZ12).
-- [ ] `MODE=unfreeze` with the shim's timer-start rc set to 1 exits 5 with `unfreeze-gc-timer gc_timer_restart_failed` after the sentinel was cleared and after one immediate retry; the absent-sentinel arm does the same (MZ-U7/U8); a first-fail-then-succeed start exits 0 (MZ-U9); a warn-only mutant goes RED.
-- [ ] `MODE=probe` against an unverified store exits 5 `store_unverified` with NO provision session in the timeline; a foreign sentinel gives `cutover_frozen` (MZ-P10/P11); the happy path (MZ-P1) still passes with the extra read.
-- [ ] Executed notify body exits 0 with the new text (plain words, no backtick or `$`), keeps the subject words `PROBE_FAILED` and `FREEZE_HELD`, and its text names `store_unverified`; no job output, no `needs.cutover.outputs` reference and no secret binding changed.
-- [ ] `MUTANT_FLOOR` and `FLOOR` restated from a measured run; `git-data-cutover-access.test.sh`, `tests/scripts/test-git-data-root-token-census.sh`, the shell-trace credential-refusal lint and `ci-deploy.test.sh` pass; actionlint is clean on the workflow.
-- [ ] Runbook: gc verdict-map row added; the booting-host `PROBE_FAILED` caveat replaced; the `FREEZE_HELD` row and the plain statement of the flip-unwind cost added; the `nothing_to_rollback` and force-cancel sentences kept.
+- [x] The `flag_write` step body touches `flag_write_attempted` after the xtrace guard and before the precheck script (a static pin plus a mutant that moves it after); executed finalizer: flip with `freeze_held` + `flag_write_attempted` (no `flag_written`) writes the flag off, redeploys and unfreezes (FZ11); rollback with only `flag_write_attempted` exits "nothing to unwind" without calling the host script (FZ12).
+- [x] `MODE=unfreeze` with the shim's timer-start rc set to 1 exits 5 with `unfreeze-gc-timer gc_timer_restart_failed` after the sentinel was cleared and after one immediate retry; the absent-sentinel arm does the same (MZ-U7/U8); a first-fail-then-succeed start exits 0 (MZ-U9); a warn-only mutant goes RED.
+- [x] `MODE=probe` against an unverified store exits 5 `store_unverified` with NO provision session in the timeline; a foreign sentinel gives `cutover_frozen` (MZ-P10/P11); the happy path (MZ-P1) still passes with the extra read.
+- [x] Executed notify body exits 0 with the new text (plain words, no backtick or `$`), keeps the subject words `PROBE_FAILED` and `FREEZE_HELD`, and its text names `store_unverified`; no job output, no `needs.cutover.outputs` reference and no secret binding changed.
+- [x] `MUTANT_FLOOR` and `FLOOR` restated from a measured run; `git-data-cutover-access.test.sh`, `tests/scripts/test-git-data-root-token-census.sh`, the shell-trace credential-refusal lint and `ci-deploy.test.sh` pass; actionlint is clean on the workflow.
+- [x] Runbook: gc verdict-map row added; the booting-host `PROBE_FAILED` caveat replaced; the `FREEZE_HELD` row and the plain statement of the flip-unwind cost added; the `nothing_to_rollback` and force-cancel sentences kept.
 - [ ] `git diff origin/main...HEAD -- .github/workflows/git-data-cutover.yml` touches none of the #9811 regions; the PR body's first line says merging alone does not mutate production; it uses `Refs #9439, #8211, #9066, #9377, #8609` only (no `Closes`); merged through the queue, no `--admin`.
-- [ ] The rollback recipe (revert this PR) is simulated once in a scratch detached worktree: `git revert --no-commit` then the same targeted suite passes.
+- [x] The rollback recipe (revert this PR) is simulated once in a scratch detached worktree: `git revert --no-commit` then the same targeted suite passes.
 
 ### Post-merge
 
