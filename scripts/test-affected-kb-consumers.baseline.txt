@@ -172,6 +172,7 @@ scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-09-counsel-revi
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-09-counsel-review-8754.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-09-counsel-review-8918.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-09-counsel-review-9034.md
+scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-10-09-clo-ruling-arm-f-elevation-disposition.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-10-counsel-review-9601.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/breach-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/ccla-register.md

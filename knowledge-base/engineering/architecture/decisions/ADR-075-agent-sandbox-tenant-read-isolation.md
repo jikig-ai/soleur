@@ -272,7 +272,7 @@ net-negative:
   CAP_SYS_ADMIN shape for every process and makes every setuid binary already
   in the image (`su`, `mount`, `newgrp`) a root-capable escalation carrier.
   A setuid bwrap reachable by agent-executed code is also the primitive that
-  re-mounts over the deny mounts in force today — self-defeating.
+  unmounts the deny tmpfs in force today — self-defeating.
 - The executor topology (#9773, epic #9842) was operator-approved the same week
   and subsumes the wrap's entire purpose; the challenge review dropped the
   "arm-F uid envelope" premise, so any in-container elevation would be strictly
