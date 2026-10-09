@@ -301,6 +301,7 @@ scripts/check-tom4-rls-posture-live	281	measured
 scripts/check-web-host-escrow-config	61002	measured
 scripts/ci-demand-census	996	floor
 scripts/ci-deploy-sentry-post-fail-6475	105	measured
+scripts/ci-draft-push-census	996	floor
 scripts/ci-leg-balance-9232	5478	measured
 scripts/ci-push-dedupe	996	floor
 scripts/classify-workflow-transitions	2403	measured

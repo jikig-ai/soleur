@@ -5946,6 +5946,10 @@ if want_scripts; then
   # #9512: the push-dedupe soak probe's exit-code contract (a fake gh, an injected clock, and mutation rows over
   # copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/ci-push-dedupe-soak-9512" bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
+  # #9728 (ADR-276 S3, entry gate 6): the draft-push census instrument (synthesized fixtures, the verdict table by
+  # integer cross-multiplication, the REFUSED mutation matrix and a gh-shim round trip; offline). Same
+  # explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-draft-push-census" bash scripts/ci-draft-push-census.test.sh
 fi
 
 # Named bun-test entries — bun shard.
