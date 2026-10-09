@@ -690,7 +690,11 @@ canary.
 
 The canary items not yet recorded as measured at this date are items 1, 3, 4, 5, 7, 8, 9 and 10 of "Canary
 measurements" (items 2 and 6 are recorded under "Canary results"; items 3, 4, 9 and 10 carry only first, partial or
-pending readings in the 2026-10-05 addendum, not a completed measurement). Item 4 waits for the next
+pending readings in the 2026-10-05 addendum, not a completed measurement). Item 1 has a PASS recorded outside this
+file, in the #9454 comment of 2026-10-04T15:46Z (#9485 admin-merged past the queue at 15:20:13Z, not strictly first as
+the item requires), so it is listed here because this file's Canary results do not carry it. Item 6 is recorded as one
+GREEN verdict with 0 candidates (run 37210557735); this file records no run of the post-merge alert gate going RED on
+a real critical or high alert, so the compensating control for advisory CodeQL is evidenced on its green path only. Item 4 waits for the next
 `weakness-miner.yml` PR; the next scheduled fire is 2026-10-11T06:00Z. Their text, verbatim from "Canary
 measurements":
 
@@ -738,6 +742,8 @@ measurements":
 >     dispatched-run spacing and runner-start latency are measured on #9482 after merge).
 
 Nothing above this heading is edited by this amendment except the frontmatter `status:` line. The earlier Status
-sentence "Flips to `accepted` when the post-apply canary ... passes" is superseded by this amendment, not rewritten.
+sentence "Flips to `accepted` when the post-apply canary ... passes" (the lead beginning "**Adopting — 2026-10-03**"),
+the heading "Canary measurements (flip `adopting` to `accepted` when these hold)" and the Item 4 sentence "Status stays
+`adopting` until one clean pass" are superseded by this amendment, not rewritten.
 The pending measurements keep being recorded on #9454 as each completes; a measured failure of item 1 (the admin
 bypass) still triggers the rollback recipe above regardless of this status.

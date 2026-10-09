@@ -52,7 +52,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 
 - 2026-10-08 S1 amended (#9727; see `## Amendment 2026-10-08 (S1, #9727)` below)
 - 2026-10-09 S2 amended (#9512; see `## Amendment 2026-10-09 (S2, #9512)` below)
-- 2026-10-09 status flipped `proposed` to `adopting` by operator direction (see `## Amendment 2026-10-09 (status flip to adopting)` below); S3 (#9728) may now be merged; S2 stays `amended` and `S2 live` waits for activation
+- 2026-10-09 status flipped `proposed` to `adopting` by operator direction, CTO review-comment confirmation still owed on #9876 (see `## Amendment 2026-10-09 (status flip to adopting)` below); S2 stays `amended`, `S2 live` waits for activation
 
 ## Context
 
@@ -337,19 +337,23 @@ Status stays `proposed`. This amendment records stage 2 BEFORE it can take effec
 
 The file `status:` moves `proposed` to `adopting` on 2026-10-09. The authority is the operator's (founder's)
 direction, given in their own words that day: "yes please accept and flip to adopting and start S3" (answering:
-accept ADR-270 and flip ADR-276 to adopting so S3 can start). It is cited here as the CTO approval the Status
-section requires.
+accept ADR-270 and flip ADR-276 to adopting so S3 can start). It stands in for the CTO approval the Status
+section requires, pending the confirmation described next.
 
 The Status text asks for that approval as a review comment on a PR that edits the `status:` line. A chat direction
-is not that comment, so it is recorded here as the approval and the PR that carries this amendment asks the operator
-to confirm it by approving, or commenting on, that PR. Until that confirmation exists, the flip rests on the
-direction quoted above and no later stage PR should treat it as stronger.
+is not that comment: the review-comment approval is OWED and has not yet been given. The PR that carries this
+amendment asks the operator to give it by approving, or commenting on, that PR. Until it exists, the flip rests on
+the direction quoted above and no later stage PR should treat it as stronger.
 
 Effect, per the Status section: the guardrail decisions (1, 2, 3, 6, 7 and 8) become `adopting`; Decisions 4 and 5
-stay the proposed shape of stages 3 and 4. The earlier Status paragraph and the "Status stays `proposed`" sentence in
-the S2 amendment are historic and unedited; the current state is the frontmatter plus this amendment. The flip
-unblocks S3 (#9728) and S4 (#9729) from merging under the Status rule; each still takes effect only when its own PR
-appends its dated `## Amendment` (Decision 3(g)).
+stay the proposed shape of stages 3 and 4. The earlier Status paragraph (the lead beginning "**Proposed, 2026-10-07**"), the "Status stays `proposed`"
+sentences in the S1 and S2 amendments and the S2 amendment's "Status reading" paragraph are historic and unedited;
+the current state is the frontmatter plus this amendment. Once the confirmation above exists, the flip no longer
+holds S3 (#9728) and S4 (#9729) back under the Status rule; each still takes effect only when its own PR appends its
+dated `## Amendment` (Decision 3(g)). Decision 3(h) (ADR-270 `accepted` before any stage moves a check from the PR
+run to the queue) is met in form by ADR-270's acceptance of the same date, which was by operator direction ahead of
+its canary (`## Amendment 2026-10-09 (accepted by operator direction)` in ADR-270); whether a stage moves a check is
+still decided by that stage's own entry gates.
 
 S2 (#9512) is merged (PR #9808, squash 32b2fe2abb) and dark. The `S2 amended` line above is already present and is not
 repeated. `S2 live` waits for activation: the repository variable `CI_PUSH_DEDUPE` set to `on` after the operator's
