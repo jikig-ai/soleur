@@ -29,3 +29,8 @@ Plan: knowledge-base/project/plans/2026-10-09-fix-rehearse-dockerd-hosts-cache-r
 ## Notes (deepen-plan, 2026-10-09)
 - Observability discovery command is `grep -c '^HOSTS_CACHE_WAIT_S=7$' apps/web-platform/infra/zot-image-rehearse.sh` (expects 1); keep the constant on its own line.
 - Phase 1 (new suite) and the source guard are queued as a User-Challenge in decision-challenges.md; implement them unless the operator cuts them.
+
+## Work log (2026-10-09)
+- Operator ruling applied: no new behavioural suite and no source guard. The probe is covered by a static `probe` check in web-ghcr-deny.test.sh (39 assertions, floor 39); five hand mutations (delete sleep, restore /dev/null, wait 1 s, second pull site, drop the deny) each red it.
+- Fix: assert_dockerd_denied in zot-image-rehearse.sh (unconditional 7 s wait, captured pull output, diagnostics on a successful pull). Function dry-run with shimmed sudo/docker/sleep: refused pull returns 0 after one sleep 7; successful pull prints the evidence block and returns 1.
+- Lints: lint-shell-capture-exit (0 new), lint-shell-trace-credential-refusal --changed (OK). Broad battery left to CI.

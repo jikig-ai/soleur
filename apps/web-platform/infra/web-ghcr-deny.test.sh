@@ -356,7 +356,25 @@ chk_census() {  # <root>
   local o; o=$(python3 "$WORK/g2.py" census "$1")
   [[ "$o" == OK ]] || { printf '%s — %s\n' "$(tr '\n' ';' <<<"$o")" "$RETIRE"; return 1; }
 }
-CHECKS="nonempty parity order exec agree wiring census"
+chk_probe() {  # <root>: the rehearsal's dockerd probe (#9799 item 5); static, over zot-image-rehearse.sh
+  local f="$1/zot-image-rehearse.sh" code pulls n wait_s sleep_ln pull_ln deny_ln call_ln
+  [[ -s "$f" ]] || { echo "zot-image-rehearse.sh is missing or empty"; return 1; }
+  code=$(grep -nvE '^[[:space:]]*#' "$f")   # "<lineno>:<line>" for every non-comment line
+  pulls=$(grep -E 'docker pull' <<<"$code" || true)
+  n=$(grep -c . <<<"$pulls" || true)
+  [[ "$n" == 1 ]] || { echo "expected exactly one non-comment docker pull in zot-image-rehearse.sh, found $n"; return 1; }
+  grep -qF '/dev/null' <<<"$pulls" && { echo "the docker pull discards its output (/dev/null): a recurrence of the bypass would be undiagnosable"; return 1; }
+  wait_s=$(sed -n 's/^HOSTS_CACHE_WAIT_S=\([0-9][0-9]*\)$/\1/p' "$f")
+  [[ "$wait_s" =~ ^[0-9]+$ ]] && (( wait_s >= 6 )) || { echo "HOSTS_CACHE_WAIT_S is '$wait_s'; it must be a number >= 6 (Go caches the hosts file for 5 s)"; return 1; }
+  pull_ln=${pulls%%:*}
+  sleep_ln=$(grep -E 'sleep "\$HOSTS_CACHE_WAIT_S"' <<<"$code" | tail -n 1); sleep_ln=${sleep_ln%%:*}
+  [[ "$sleep_ln" =~ ^[0-9]+$ ]] && (( sleep_ln < pull_ln )) || { echo "no 'sleep \"\$HOSTS_CACHE_WAIT_S\"' before the docker pull (line ${pull_ln})"; return 1; }
+  deny_ln=$(grep -F 'sudo sh "$W/deny.sh"' <<<"$code" | head -n 1); deny_ln=${deny_ln%%:*}
+  call_ln=$(grep -E '^[0-9]+:assert_dockerd_denied ' <<<"$code" | head -n 1); call_ln=${call_ln%%:*}
+  [[ "$deny_ln" =~ ^[0-9]+$ && "$call_ln" =~ ^[0-9]+$ ]] && (( deny_ln < call_ln )) \
+    || { echo "the assert_dockerd_denied call (line '${call_ln}') does not come after the deny application (line '${deny_ln}')"; return 1; }
+}
+CHECKS="nonempty parity order exec agree wiring census probe"
 
 # ── the live tree ─────────────────────────────────────────────────────────────────────────────────
 echo "--- Guard 2 on the live tree ---"
@@ -532,10 +550,10 @@ if [[ "$SURV_FAILS" == 1 ]]; then pass "harness: row() reports a mutation that n
 else fail "harness: row() did not count a surviving mutation (FAIL count '$SURV_FAILS', want 1) -- the whole battery is unfalsifiable"; fi
 sandbox
 
-# Floor at the MEASURED count (7 live checks + control + 27 rows + 3 harness rows = 38; was 29 before
+# Floor at the MEASURED count (8 live checks + control + 27 rows + 3 harness rows = 39; was 29 before
 # #9390 added rows 20-27 and the row() honesty control). Reported with printf + exit DIRECTLY, never
 # through pass()/fail() (the floor polices them).
-MIN_ASSERTIONS=38
+MIN_ASSERTIONS=39
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
