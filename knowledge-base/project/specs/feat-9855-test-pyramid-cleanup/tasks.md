@@ -17,7 +17,7 @@ Spec: `knowledge-base/project/specs/feat-9855-test-pyramid-cleanup/spec.md`
 - [ ] 2.2 Create any conditional demotion test files the Phase-1 ledger requires (name at that point; none created pre-emptively).
 - [ ] 2.3 Run the new vitest file(s) — all green.
 - [ ] 2.4 Delete `apps/web-platform/e2e/team-membership.e2e.ts` — only when every 1.2 ledger row is `covered-by`/`demote-to`-landed.
-- [ ] 2.5 Delete `apps/web-platform/e2e/oauth.e2e.ts` — only when every 1.3 ledger row is landed.
+- [x] 2.5 `apps/web-platform/e2e/oauth.e2e.ts` — KEPT with marker (operator merge call): trimmed to the 3 login DOM tests (served-page wiring is browser-only); /callback + signup-gate rows landed at lower layer instead.
 
 ## Phase 3: Split + markers
 
@@ -33,7 +33,7 @@ Spec: `knowledge-base/project/specs/feat-9855-test-pyramid-cleanup/spec.md`
 
 ## Phase 4: Verification + bookkeeping
 
-- [ ] 4.1 `git grep pyramid-justified apps/web-platform/e2e` → a marker in every surviving `.e2e.ts` (9 files).
+- [x] 4.1 `git grep pyramid-justified apps/web-platform/e2e` → a marker in every surviving `.e2e.ts` (10 files after oauth.e2e.ts restore).
 - [ ] 4.2 `git grep -l "@playwright/test" -- apps/web-platform/test` → empty.
 - [ ] 4.3 Re-run the Phase-1.5 coverage tests + new `csp-middleware.test.ts` — all green.
 - [ ] 4.4 Coverage ledger pasted into PR body (per-assertion `covered-by`/`demote-to`/`keep-in-e2e`).
