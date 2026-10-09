@@ -680,7 +680,7 @@ _issue_alerts() { jq -nc --argjson n "$1" '[range($n) | {addr: "sentry_alert.iss
 _g3_red() {
   local label="$1" f="$2" addr="$3" want="$4" rc msg
   rc=$(_rc bash "$BINDING" "$f"); msg=$(_err bash "$BINDING" "$f")
-  if [[ "$rc" -eq 1 ]] && grep -F -- "$addr " <<<"$msg" | grep -qF -- "$want"; then
+  if [[ "$rc" -eq 1 ]] && grep -F -- "$addr " <<<"$msg" | grep -cF >/dev/null -- "$want"; then
     _report "$label" ok
   else
     _report "$label" fail "rc=$rc (want 1), address '$addr' with reason '$want' not on one stderr line. stderr: $(head -c 600 <<<"$msg")"
@@ -780,7 +780,7 @@ t_g3_6a_newline_id_on_issue_rule_red() {
     "$f" "sentry_alert.a" "expected '1213799'"
   # The id is rendered ESCAPED on the offending line, never as a raw line break.
   msg=$(_err bash "$BINDING" "$f")
-  if grep -F -- "sentry_alert.a " <<<"$msg" | grep -qF -- "'999\\n'"; then
+  if grep -F -- "sentry_alert.a " <<<"$msg" | grep -cF >/dev/null -- "'999\\n'"; then
     _report "G3-6b the newline-bearing id is rendered escaped ('999\\n') on the address's own line" ok
   else
     _report "G3-6b newline-bearing id rendered escaped" fail "stderr: $(head -c 400 <<<"$msg")"

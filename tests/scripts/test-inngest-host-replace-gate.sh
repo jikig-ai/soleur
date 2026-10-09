@@ -39,7 +39,7 @@ FW_NOOP="{\"address\":\"hcloud_firewall.inngest\",\"change\":{\"actions\":[\"no-
 srv_replace() { printf '{"address":"hcloud_server.inngest","change":{"actions":["delete","create"],"after":%s}}' "$1"; }
 SERVER_REPLACE="$(srv_replace "{\"firewall_ids\":[${FW_ID}]}"),${FW_NOOP}"
 NET_REPLACE="$(rc_obj 'hcloud_server_network.inngest' '"delete","create"')"
-VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"delete","create"')"
+VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"delete","create"')"
 TOKEN_REPLACE="$(rc_obj 'doppler_service_token.inngest' '"delete","create"')"
 
 write_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
@@ -101,8 +101,7 @@ fi
 #     if the allow-set entry were dropped this plan would abort `out_of_scope`, and if the twin
 #     backstop over-matched (counting create as well as delete) it would abort here too. ---
 LUKS_VOL_CREATE="$(rc_obj 'hcloud_volume.inngest_redis_luks' '"create"')"
-LUKS_VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"delete","create"')"
-write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${LUKS_VA_REPLACE},${LUKS_VOL_CREATE}"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${LUKS_VOL_CREATE}"
 if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
   pass
 else
@@ -206,7 +205,7 @@ BASE_REPLACE="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE}"
 rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"update"')"
 RCHK "C1 (the reproduction): server replace + live AOF volume UPDATE => ABORT redis_volume_touched" 1 "reason=redis_volume_touched "
 rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"create"')"
-RCHK "C2 (must-PASS): live AOF volume bare CREATE of an ABSENT volume (before null) => PASS (the #7695 recovery route)" 0 "inngest_host_replace_gate: PASS"
+RCHK "C2: the retired AOF volume bare CREATE (no recovery route exists since #8285) => ABORT redis_volume_touched" 1 "reason=redis_volume_touched "
 rp "$BASE_REPLACE" '{"address":"hcloud_volume.inngest_redis","change":{"actions":["create"],"before":{"id":"1"}}}'
 RCHK "C2b: a CREATE whose before is a live object => ABORT redis_volume_touched (only an absent volume may be created)" 1 "reason=redis_volume_touched "
 rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"delete","create"')"
@@ -220,19 +219,21 @@ rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks' '"update"')"
 RCHK "C5: additive LUKS volume UPDATE => ABORT luks_volume_touched" 1 "reason=luks_volume_touched "
 rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks' '"forget"')"
 RCHK "C6: additive LUKS volume FORGET => ABORT luks_volume_destroyed" 1 "reason=luks_volume_destroyed "
-rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks' '"no-op"')" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"delete","create"')"
-RCHK "C7 (must-PASS): LUKS volume no-op + its attachment replaced => PASS" 0 "inngest_host_replace_gate: PASS"
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks' '"no-op"')"
+RCHK "C7 (must-PASS): LUKS volume no-op + its attachment replaced (in BASE) => PASS" 0 "inngest_host_replace_gate: PASS"
 
 rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"update"')"
-RCHK "C8: live attachment bare UPDATE => ABORT attachment_touched" 1 "reason=attachment_touched "
-rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"update"')"
+RCHK "C8: the RETIRED plaintext attachment UPDATE => ABORT inngest_out_of_scope_changes (outside the allow-set)" 1 "reason=inngest_out_of_scope_changes "
+rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"update"')"
 RCHK "C9: LUKS attachment bare UPDATE => ABORT attachment_touched" 1 "reason=attachment_touched "
 rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"delete"')"
-RCHK "C10: live attachment bare DELETE (detach, no re-attach) => ABORT attachment_touched" 1 "reason=attachment_touched "
-rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"forget"')"
+RCHK "C10: the RETIRED plaintext attachment DELETE (the dispatch's job, not this one) => ABORT inngest_out_of_scope_changes" 1 "reason=inngest_out_of_scope_changes "
+rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"forget"')"
 RCHK "C11: LUKS attachment FORGET => ABORT attachment_touched" 1 "reason=attachment_touched "
-rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"create","delete"')" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"create"')"
-RCHK "C12 (must-PASS): create-before-destroy attachment replace + a bare LUKS attachment create => PASS" 0 "inngest_host_replace_gate: PASS"
+rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"create","delete"')"
+RCHK "C12 (must-PASS): create-before-destroy LUKS attachment replace => PASS" 0 "inngest_host_replace_gate: PASS"
+rp "${BASE_REPLACE}" "$(rc_obj 'hcloud_volume.inngest_redis' '"delete"')"
+RCHK "C12b: the RETIRED volume DELETE riding a host replace => ABORT redis_volume_destroyed" 1 "reason=redis_volume_destroyed "
 
 rp "$BASE_REPLACE" "$(rc_obj 'random_password.inngest_redis_luks' '"no-op"')"
 RCHK "C13: random_password.inngest_redis_luks present as no-op => ABORT luks_passphrase_in_graph" 1 "reason=luks_passphrase_in_graph "

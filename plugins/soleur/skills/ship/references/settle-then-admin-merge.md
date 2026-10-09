@@ -22,6 +22,8 @@ for id in $(gh run list --branch main --workflow CI --limit 5 --status completed
 done
 ```
 
+*Once ADR-276 S2 (`CI_PUSH_DEDUPE`) is live, a `main` push run can be elided: its `test-scripts` and the other heavy jobs read `skipped` and the run is a few minutes long. Such a run is not a timing sample for this loop; use `--event merge_group` runs (or skip runs whose `push-dedupe` job succeeded and `test-scripts` is `skipped`) when sizing the settle window.*
+
 **Trigger it at 2 BEHIND syncs pushed on a branch WHOSE OWN DIFF touches nothing but docs, skills and regenerable indexes — not at the 6-sync cap.** Keyed on your diff, not on the conflicts you happened to hit, because those are different sets and only one of them is checkable. A branch carrying real code plus a regenerated index can conflict *so far* only on the index and still have genuine semantic surface; the loop also never prints a conflict surface at sync 2, since the only sync that reaches 2 is a clean one (a conflicting `git merge origin/main` aborts and breaks on the first occurrence). So classify the branch, which you can do in one command:
 
 ```bash
