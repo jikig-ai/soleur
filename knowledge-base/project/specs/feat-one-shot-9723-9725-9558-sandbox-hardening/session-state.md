@@ -39,3 +39,11 @@
 - P2: precheck write arm (`FLAG_WRITE_VALUE=true`, any mode) bypassed the deny check → `detect_deny_roots` gates it.
 - P2: merged setup lacking `--unshare-pid`/`--unshare-all` → refuse (the mask is decorative without a pidns).
 - P2/P3: opt_kind arity table single-sourced; fd-ref scan scoped to command-side tokens; existsSync single-pass emit; `tenantDenyRoots[{root,exists}]` + `gitDataStoreEnabled` + `workspaceEffectiveRoot` + `workspaceUnderEffectiveRoot`; FR7b EACCES degrade; fd_census baseline pinned; contract needles code-shaped; FLOOR=97; docs reconciled.
+
+## Ship Phase
+
+- QA: skipped per rule — plan's Test Scenarios are Given/When/Then prose (no Browser:/API verify: steps); coverage via unit/integration suites.
+- Compound: `knowledge-base/project/learnings/security-issues/bwrap-args-payload-outer-resume-proc-mask-20261009.md`.
+- Fix-round residuals landed: `--level-prefix` arity correction (advisor), verbatim denyRead drift rows (CI), `bwrap-shim:` setup signature, FD_CENSUS_BASELINE pin, W8/D7/mutant-18 rows.
+- PR marked ready, `semver:patch`, auto-merge armed (merge queue); synced past BEHIND via sync-pr-behind.
+- Note: PR body was wiped transiently by a `gh pr body` misuse (not a command) → `--body-file` with empty file; restored immediately.

@@ -151,8 +151,8 @@ detect_deny_roots() {
     # flag-collapsed body (calling getWorkspaceWorktreeRoot()) yields absent,
     # while a file-scoped grep would still hit that helper's own env read.
     if grep -qE 'export function workspaceTenantDenyRoots' "$dir/workspace-resolver.ts" \
-       && sed -n '/export function workspaceTenantDenyRoots/,/^}/p' "$dir/workspace-resolver.ts" \
-          | grep -qF 'process.env.WORKTREE_ROOT' \
+       && grep -qF 'process.env.WORKTREE_ROOT' \
+          < <(sed -n '/export function workspaceTenantDenyRoots/,/^}/p' "$dir/workspace-resolver.ts") \
        && grep -qE '=[[:space:]]*workspaceTenantDenyRoots\(' "$dir/agent-runner-sandbox-config.ts"; then
       echo present
     else
