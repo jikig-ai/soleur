@@ -3084,7 +3084,7 @@ assert_cross_workspace_isolation() {
   # any intended argv change is a conscious edit of EXPECTED here.
   TOTAL=$((TOTAL + 1))
   local expected log_contents n_lines
-  expected="exec -w /app -e CI=true -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts"
+  expected="exec -w /app -e CI=true -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct -e SOLEUR_ISOLATION_IN_IMAGE=1 soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts"
   log_contents=$(cat "$d/cwi-argv.log" 2>/dev/null || true)
   n_lines=$(printf '%s\n' "$log_contents" | grep -c . || true)
   if [[ "$rc" -eq 0 && "$n_lines" -eq 1 && "$log_contents" == "$expected" ]]; then
@@ -3220,6 +3220,24 @@ assert_cross_workspace_isolation() {
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: CWI-8 soak accumulation (after 2x pass + infra: cp=$cp8 fp=$fp8 first_fp=$fp8_first; after red: cp=$cp8r fp=$fp8r)"
     echo "        state file:"; { cat "$d5/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-9: ledger-aliasing guard (mirrors OUTER_LEDGER_ALIAS) — pointing
+  # WORKSPACE_ISOLATION_STATE_FILE at the sandbox-canary ledger skips the probe
+  # entirely: zero vitest execs, the alias warn logged, deploy still succeeds.
+  local d6 out6 rc6 n9 w9
+  out6=$(run_cwi_deploy "export SANDBOX_CANARY_STATE_FILE=\"\$d/wi-state.json\"") && rc6=0 || rc6=$?
+  d6=$(printf '%s\n' "$out6" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  n9=$(grep -c . "$d6/cwi-argv.log" 2>/dev/null || true)
+  w9=$(grep -c 'WORKSPACE_ISOLATION_STATE_FILE aliases' "$d6/logger.txt" 2>/dev/null || true)
+
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc6" -eq 0 && "$n9" == "0" && "$w9" -ge 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-9 an aliased WORKSPACE_ISOLATION_STATE_FILE skips the probe (no exec, warn logged)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-9 alias guard (rc=$rc6 exec_lines=$n9 warn_lines=$w9)"
+    echo "        argv log:"; { cat "$d6/cwi-argv.log" 2>/dev/null || true; } | sed 's/^/          /'
+    echo "        journald capture:"; { cat "$d6/logger.txt" 2>/dev/null || true; } | sed 's/^/          /'
   fi
 
   # No rm -rf on the parsed artifact dirs: they are sed-parsed paths (a
@@ -10386,9 +10404,10 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #9799: raised 502 -> 508 with T-9799-1..6 (the fan-out HMAC key off argv: 33-comparison byte-identity
 # matrix, no secret on any argv, log or stdin config, key in the python3 environment only, seven
 # fail-closed arms, source census, and the errexit arm that pins the `|| sig=""` guard).
-# #2640: raised 508 -> 516 with the 8 CWI rows (Guard 1: recorded-argv + ordering +
-#   green/no-page + FAIL/infra/timeout classification + soak accumulate-hold-reset).
-CI_DEPLOY_ASSERT_FLOOR=516
+# #2640: raised 508 -> 517 with the 9 CWI rows (Guard 1: recorded-argv + ordering +
+#   green/no-page + FAIL/infra/timeout classification + soak accumulate-hold-reset
+#   + ledger-alias skip).
+CI_DEPLOY_ASSERT_FLOOR=517
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

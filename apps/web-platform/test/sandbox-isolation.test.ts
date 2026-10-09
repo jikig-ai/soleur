@@ -54,6 +54,19 @@ import {
  */
 const KNOWN_TIERS: readonly ProbeTier[] = ["direct", "query"];
 
+/**
+ * In-image arm (#2640). `SOLEUR_ISOLATION_IN_IMAGE=1` marks a run inside the
+ * baked runner image (the ci-deploy.sh canary probe sets it on the docker
+ * exec). There PATH-resolved `bwrap` IS the deployed PATH shim
+ * (/usr/local/bin/bwrap precedes /usr/bin) and the shim's repo path
+ * (`infra/bwrap-shim/bwrap`) is never COPY'd in — so FR7b, which needs a
+ * real-binary CONTROL arm plus a symlink to the repo shim, is structurally
+ * un-runnable in-image and skips. FR7b's shim-splice property is still pinned
+ * by test/bwrap-shim.test.ts and the faithful-canary replay, so the exclusion
+ * loses no deploy signal.
+ */
+const ISOLATION_IN_IMAGE = process.env.SOLEUR_ISOLATION_IN_IMAGE === "1";
+
 function parseIsolationTiers(raw: string | undefined): Set<ProbeTier> | null {
   if (raw === undefined || raw.trim() === "") return null;
   const tiers = new Set<ProbeTier>();
@@ -250,7 +263,7 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(result.stdout + result.stderr).toMatch(FS_DENY_RE);
   });
 
-  test("FR7b (#9723): the vendored tail --bind /proc /proc is re-masked by the PATH shim", async () => {
+  test.skipIf(ISOLATION_IN_IMAGE)("FR7b (#9723): the vendored tail --bind /proc /proc is re-masked by the PATH shim", async () => {
     // The harness argv (buildBwrapArgs) never emits the vendor tail bind, so
     // FR7 measures a cleaner-than-production shape. This row appends the real
     // tail — `--bind /proc /proc` (the enableWeakerNestedSandbox defect) — and

@@ -22,8 +22,18 @@ inside the canary container and before the prod swap:
 
 ```text
 timeout <cap> docker exec -w /app -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct \
+  -e SOLEUR_ISOLATION_IN_IMAGE=1 \
   soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts
 ```
+
+`SOLEUR_ISOLATION_IN_IMAGE=1` is load-bearing, not decoration: inside the image
+the PATH-resolved `bwrap` IS the deployed PATH shim (`/usr/local/bin/bwrap`)
+and the repo-side shim path (`/app/infra/bwrap-shim/bwrap`) is never baked —
+so **FR7b self-skips in-image**. That row needs a real-binary control arm plus
+a symlink to the repo shim; without the flag it fails both arms and every
+deploy would page `workspace_isolation_failed` (a permanently-zero soak).
+Nothing is lost: FR7b's shim-splice property is pinned by
+`test/bwrap-shim.test.ts` and the faithful-canary replay.
 
 Verdicts, classified from the `docker exec` rc exactly as
 `run_faithful_sandbox_canary` does: `pass` (0), `workspace_isolation_failed`
@@ -94,10 +104,22 @@ window is benign by design and never reads as a false green.
    counter; `canary_infra_error` holds it), AND
 2. `>= 3 days` elapsed since `first_pass_at`.
 
-When both hold, a follow-up PR flips the probe to blocking (drop `|| true`, map
-red verdicts to a rollback reason). A recorded `workspace_isolation_failed` or
+When both hold, a follow-up PR promotes the probe to blocking — a code change,
+not a flag flip: `run_workspace_isolation_probe` always `return 0`s today, so
+promotion adds a red-verdict→rollback path inside it AND drops the call-site
+`|| true`. A recorded `workspace_isolation_failed` or
 `workspace_isolation_timeout` verdict means investigate first — do NOT promote
 while either stands.
+
+Two ordering/ledger facts worth knowing before triaging a soak anomaly:
+
+- The probe runs (and records `pass`) **before** `github_app_key_canary_check` —
+  a verdict is about the image's isolation property, and still stands even if a
+  later gate rolls that canary back for unrelated reasons.
+- `WORKSPACE_ISOLATION_STATE_FILE` is alias-guarded against both canary ledgers
+  (`WORKSPACE_ISOLATION_LEDGER_ALIAS`, same failure class as
+  `OUTER_LEDGER_ALIAS`): an env override that aliases it logs a warn and skips
+  the probe entirely — verdict vocabularies must never interleave in one file.
 
 ## Tier scoping — `SOLEUR_ISOLATION_TIERS=direct`
 

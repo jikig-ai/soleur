@@ -454,6 +454,16 @@ WORKSPACE_ISOLATION_STATE_FILE="${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-d
 # a wedged suite is a RED verdict, not an infra hiccup. Env-overridable pure
 # timing knob (the CRON_DRAIN_TIMEOUT convention), NOT a secret.
 WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
+# Same aliasing failure class as OUTER_LEDGER_ALIAS above: an env override
+# pointing the #2640 ledger at either canary ledger would interleave verdict
+# vocabularies (sandbox_broken vs workspace_isolation_*) and corrupt both
+# soaks. Warn AND skip the probe entirely — a missing arm beats a wrong file.
+WORKSPACE_ISOLATION_LEDGER_ALIAS=0
+if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" \
+   || "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" ]]; then
+  WORKSPACE_ISOLATION_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_STATE_FILE aliases a canary ledger ($WORKSPACE_ISOLATION_STATE_FILE) — workspace-isolation probe SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
+fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
 # check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
@@ -677,7 +687,9 @@ write_cron_drain_state() {
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
 write_sandbox_canary_state() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" tmp now prior_pass prior_first
+  # $5 reset_re: an ERE alternation naming this ledger's RED verdict classes
+  # (soak-reset). Internal literal from the call sites, never operator input.
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" tmp now prior_pass prior_first
   now="$(date +%s)"
   prior_pass=0; prior_first=0
   if [[ -f "$state_file" ]]; then
@@ -692,10 +704,12 @@ write_sandbox_canary_state() {
       consecutive_pass=$((prior_pass + 1))
       if [[ "$prior_first" -gt 0 ]]; then first_pass_at="$prior_first"; else first_pass_at="$now"; fi
       ;;
-    sandbox_broken)
-      consecutive_pass=0; first_pass_at=0 ;;
     *)
-      consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
+      if [[ "$verdict" =~ ^($reset_re)$ ]]; then
+        consecutive_pass=0; first_pass_at=0
+      else
+        consecutive_pass="$prior_pass"; first_pass_at="$prior_first"
+      fi ;;
   esac
   tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
@@ -730,82 +744,28 @@ sandbox_canary_sentry_event() {
 }
 
 # write_workspace_isolation_state: persist the workspace-isolation probe verdict
-# for the no-SSH deploy-status surface (#2640; mirrors write_sandbox_canary_state,
-# #5875 / ADR-079). Always returns 0 — the probe is NON-BLOCKING (dark-launch per
-# wg-dark-launch-deploy-gates), so a state-write failure must never abort a
-# deploy. jq builds the JSON so the reason string is always escaped.
-#
-# Accumulates the soak signal on the host (deploy-state is the source of truth),
-# so the promotion follow-through
-# (scripts/followthroughs/workspace-isolation-verdict-2640.sh) is a single
-# stateless GET rather than an issue-comment ledger:
-#   - `pass`                          → increment `consecutive_pass`; pin
-#                                     `first_pass_at` on the first green
-#                                     (self-pins the soak window — no operator
-#                                     timestamp to hand-pin).
-#   - `workspace_isolation_failed` /  → reset both to 0 (a RED verdict restarts
-#     `workspace_isolation_timeout`     the soak).
-#   - `canary_infra_error` / *        → HOLD prior counters (a docker/exec hiccup
-#                                     or a pre-tooling canary image is a
-#                                     non-signal).
+# for the no-SSH deploy-status surface (#2640) — a thin wrapper over
+# write_sandbox_canary_state (#5875 / ADR-079), which is already parameterized
+# by state file. Deltas: no sdk_version (a vitest run carries none) and a
+# different reset set — `workspace_isolation_failed`/`workspace_isolation_timeout`
+# are this probe's RED classes (its `sandbox_broken` equivalent). Always
+# returns 0: NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates), so a
+# state-write failure must never abort a deploy.
 write_workspace_isolation_state() {
-  local verdict="$1" reason="$2" now prior_pass prior_first
-  now="$(date +%s)"
-  prior_pass=0; prior_first=0
-  if [[ -f "$WORKSPACE_ISOLATION_STATE_FILE" ]]; then
-    prior_pass="$(jq -r '.consecutive_pass // 0' "$WORKSPACE_ISOLATION_STATE_FILE" 2>/dev/null || echo 0)"
-    prior_first="$(jq -r '.first_pass_at // 0' "$WORKSPACE_ISOLATION_STATE_FILE" 2>/dev/null || echo 0)"
-    [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
-    [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
-  fi
-  local consecutive_pass first_pass_at
-  case "$verdict" in
-    pass)
-      consecutive_pass=$((prior_pass + 1))
-      if [[ "$prior_first" -gt 0 ]]; then first_pass_at="$prior_first"; else first_pass_at="$now"; fi
-      ;;
-    workspace_isolation_failed|workspace_isolation_timeout)
-      consecutive_pass=0; first_pass_at=0 ;;
-    *)
-      consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
-  esac
-  # Atomic tmp+rename via the shared helper (write_seccomp_profile_hash uses it
-  # for exactly this best-effort state-write shape) — NOT the inline
-  # mktemp/jq/mv the sibling re-spells, so the fixture-relative ratchet sees no
-  # new path operand. The `|| true` keeps a failed write from tripping set -e:
-  # this is a best-effort observability write, never a gate.
-  local content
-  content="$(jq -nc \
-    --arg v "$verdict" --arg r "$reason" --argjson ts "$now" \
-    --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
-    '{verdict:$v, reason:$r, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
-    2>/dev/null)" || return 0
-  _atomic_write "$WORKSPACE_ISOLATION_STATE_FILE" "$content" || true
-  return 0
+  write_sandbox_canary_state "$1" "$2" "" "$WORKSPACE_ISOLATION_STATE_FILE" \
+    'workspace_isolation_failed|workspace_isolation_timeout'
 }
 
 # workspace_isolation_sentry_event: loud, no-SSH page on a RED isolation verdict
 # (#2640) — fires ONLY on workspace_isolation_failed / workspace_isolation_timeout,
 # NEVER on canary_infra_error (expected while pre-tooling canary images still
-# deploy) or pass. Best-effort + env-guarded, mirrors sandbox_canary_sentry_event.
-# Fail-open under set -e.
+# deploy) or pass. Emits its own WORKSPACE_ISOLATION_FAIL marker (the runbook
+# keys on it) and delegates the payload to sandbox_canary_sentry_event with
+# op=workspace-isolation. Best-effort + env-guarded. Fail-open under set -e.
 workspace_isolation_sentry_event() {
   local verdict="$1" reason="$2"
-  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_FAIL: verdict=$verdict reason=$reason (report-only canary probe; deploy NOT rolled back)"
-  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
-    local payload
-    payload="$(jq -n --arg v "$verdict" --arg r "$reason" \
-      '{message: ("workspace isolation canary probe " + $v + " (" + $r + ")"),
-        level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "agent-sandbox", op: "workspace-isolation", verdict: $v},
-        extra: {reason: $r}}' 2>/dev/null)" || return 0
-    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
-      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
-      -H "Content-Type: application/json" \
-      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
-      -d "$payload" 2>/dev/null \
-      || logger -t "$LOG_TAG" "WORKSPACE_ISOLATION: Sentry POST failed"
-  fi
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_FAIL: verdict=$verdict reason=$reason (report-only canary probe; deploy NOT rolled back)" || true
+  sandbox_canary_sentry_event "$verdict" "$reason" "" "workspace-isolation" || true
 }
 
 # cosign_verify_event: loud, no-SSH page on an image-signature verify failure
@@ -2766,6 +2726,17 @@ run_outer_wrap_canary() {
 # a RED verdict — but NEVER rolls back (report-only per
 # wg-dark-launch-deploy-gates; blocking promotion is a tracked follow-through
 # gated on observed real-deploy passes).
+# Deliberately NOT a run_canary_replay caller (#9503-class drift pin): the
+# replay helper is bound to the .mjs contract (stdout verdict JSON, any
+# non-zero rc = canary_infra_error, sdk_version). This probe has a different
+# contract end-to-end — vitest argv, a host-side `timeout` cap, and rc-ONLY
+# classification into a 4-verdict taxonomy where 124 is a RED class — so
+# folding would need ~4 behavioral knobs for ~15 shared lines.
+# SOLEUR_ISOLATION_IN_IMAGE=1 is load-bearing: in-image PATH `bwrap` IS the
+# deployed shim and the repo-side shim path is not baked, which makes FR7b
+# structurally un-runnable — the suite self-skips it under this flag
+# (its shim-splice property is pinned by bwrap-shim.test.ts + the faithful
+# canary replay, so nothing is lost).
 # docker-exec exit-code classification (mirrors run_faithful_sandbox_canary):
 #   0             -> pass (the direct tier held inside the canary image)
 #   124           -> workspace_isolation_timeout (the host `timeout` cap fired —
@@ -2776,6 +2747,9 @@ run_outer_wrap_canary() {
 #   other non-zero-> workspace_isolation_failed (the suite ran and FAILED —
 #                    cross-tenant isolation regressed in this exact image)
 run_workspace_isolation_probe() {
+  if [[ "$WORKSPACE_ISOLATION_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into a canary ledger
+  fi
   local verdict reason exec_rc out err_file docker_err
   # Capture docker's OWN stderr so a persistent canary_infra_error (rc 126/127:
   # vitest absent, exec-format error) or a failed run carries its CAUSE onto the
@@ -2790,6 +2764,7 @@ run_workspace_isolation_probe() {
   # before the read, leaving the classification below unreachable.
   if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
       -e CI=true -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct \
+      -e SOLEUR_ISOLATION_IN_IMAGE=1 \
       soleur-web-platform-canary /usr/local/bin/vitest run \
       --config test/vitest.canary.config.ts 2>"$err_file")"; then
     exec_rc=0

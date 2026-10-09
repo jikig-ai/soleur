@@ -250,6 +250,29 @@ OWC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="
 assert "malformed outer_wrap_canary.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$OWC_BAD' | jq -r .outer_wrap_canary.checked_at) == '0' ]]"
 
+# Workspace-isolation probe verdict (#2640) surfaced under workspace_isolation —
+# the same canary_state_json shape on the separate WORKSPACE_ISOLATION_STATE_FILE
+# ledger (sdk_version rides as "" — a vitest run carries none).
+WI_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/no-wi.json" bash "$TARGET")
+assert "workspace_isolation.verdict sentinel 'unknown' when no state file" \
+  "[[ \$(printf '%s' '$WI_ABSENT' | jq -r .workspace_isolation.verdict) == 'unknown' ]]"
+assert "workspace_isolation.consecutive_pass sentinel 0 when no state file" \
+  "[[ \$(printf '%s' '$WI_ABSENT' | jq -r .workspace_isolation.consecutive_pass) == '0' ]]"
+echo '{"verdict":"workspace_isolation_failed","reason":"vitest_rc_1","sdk_version":"","checked_at":1751000700,"consecutive_pass":0,"first_pass_at":0}' > "$TMP/wi.json"
+WI_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi.json" bash "$TARGET")
+assert "workspace_isolation.verdict read from state file (workspace_isolation_failed)" \
+  "[[ \$(printf '%s' '$WI_PRESENT' | jq -r .workspace_isolation.verdict) == 'workspace_isolation_failed' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000800,"consecutive_pass":4,"first_pass_at":1750800000}' > "$TMP/wi-soak.json"
+WI_SOAK=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-soak.json" bash "$TARGET")
+assert "workspace_isolation.consecutive_pass surfaced (4)" \
+  "[[ \$(printf '%s' '$WI_SOAK' | jq -r .workspace_isolation.consecutive_pass) == '4' ]]"
+assert "workspace_isolation.first_pass_at surfaced" \
+  "[[ \$(printf '%s' '$WI_SOAK' | jq -r .workspace_isolation.first_pass_at) == '1750800000' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":"not-a-number"}' > "$TMP/wi-bad.json"
+WI_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-bad.json" bash "$TARGET")
+assert "malformed workspace_isolation.checked_at falls back to sentinel 0" \
+  "[[ \$(printf '%s' '$WI_BAD' | jq -r .workspace_isolation.checked_at) == '0' ]]"
+
 # --- #5960 live seccomp loaded/host discriminators (Phase 1) ------------------
 # seccomp_profile_loaded_matches_host (reload leg, host-jq skew-immune),
 # seccomp_profile_host_sha256 (raw sha256sum — delivery leg), and

@@ -227,8 +227,12 @@ property the faithful canary's single captured argv cannot exercise) inside the 
 
 ```text
 timeout <cap> docker exec -w /app -e SOLEUR_ISOLATION_TEST_HOST=1 -e SOLEUR_ISOLATION_TIERS=direct \
+  -e SOLEUR_ISOLATION_IN_IMAGE=1 \
   soleur-web-platform-canary /usr/local/bin/vitest run --config test/vitest.canary.config.ts
 ```
+
+(`SOLEUR_ISOLATION_IN_IMAGE=1` self-skips FR7b — in-image PATH `bwrap` is the
+deployed shim and its control arm needs the real binary; see the design note.)
 
 It is called `|| true` immediately after `run_faithful_sandbox_canary` inside the `CANARY_HEALTHY`
 block — **report-only** (dark-launch per `wg-dark-launch-deploy-gates`): it logs, writes state and

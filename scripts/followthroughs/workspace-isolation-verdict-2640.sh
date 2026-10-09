@@ -16,7 +16,10 @@
 #
 # Exit semantics (per scripts/sweep-followthroughs.sh contract):
 #   0 = PASS       (≥5 consecutive green verdicts over ≥3 days — the probe is proven;
-#                   a follow-up PR flips the call site from report-only to blocking)
+#                   a follow-up PR promotes it to blocking — that is a code change,
+#                   not a flag flip: run_workspace_isolation_probe always `return 0`s,
+#                   so promotion adds a red-verdict→rollback path AND drops the
+#                   call-site `|| true`)
 #   1 = FAIL       (a `workspace_isolation_failed` or `workspace_isolation_timeout`
 #                   verdict is recorded — investigate before promoting; do NOT flip)
 #   * = TRANSIENT  (endpoint unreachable / non-JSON / field absent / soak not yet
@@ -93,6 +96,10 @@ done
 # soak was measured against); if the field is absent, fall back to this client's
 # now. Either way a dark probe cannot keep accruing window: checked_at freezes
 # when the writer stops running.
+# Residual: a ledger frozen AFTER the criteria were already met still reports
+# PASS (a dead writer's last state stands). Deliberately left unbounded — the
+# promotion PR is human-reviewed and re-reads the ledger's freshness; keying a
+# staleness bound on wall-now would also break this script's canned-body pins.
 if [[ "$CHECKED" =~ ^[0-9]+$ ]] && [[ "$CHECKED" -gt 0 ]]; then
   NOW="$CHECKED"
 else
@@ -108,7 +115,7 @@ esac
 
 SPAN=$((NOW - FIRST))
 if [[ "$CONSEC" -ge "$REQUIRED_GREENS" && "$FIRST" -gt 0 && "$SPAN" -ge "$MIN_SPAN_SECS" ]]; then
-  echo "PASS: $CONSEC consecutive green workspace-isolation verdicts over $((SPAN / 86400))d (≥${REQUIRED_GREENS} / ≥3d) since first_pass_at=$FIRST (reason=$REASON) — probe proven; flip the report-only call site to blocking in a follow-up PR."
+  echo "PASS: $CONSEC consecutive green workspace-isolation verdicts over $((SPAN / 86400))d (≥${REQUIRED_GREENS} / ≥3d) since first_pass_at=$FIRST (reason=$REASON) — probe proven; promote it in a follow-up PR (add the red-verdict→rollback path in run_workspace_isolation_probe AND drop the call-site '|| true')."
   exit 0
 fi
 

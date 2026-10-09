@@ -348,32 +348,17 @@ canary_state_json() {
 # report-only canary probe: the last deploy's verdict (pass |
 # workspace_isolation_failed | workspace_isolation_timeout | canary_infra_error),
 # its reason, and the soak accumulators the promotion follow-through reads
-# (scripts/followthroughs/workspace-isolation-verdict-2640.sh). Read from the
-# small state file ci-deploy.sh writes (write_workspace_isolation_state). Safe
-# sentinel (verdict "unknown") when the file is absent — a deploy that never ran
-# the probe, or a host whose ci-deploy.sh predates it (an ABSENT verdict is
-# distinguishable from a failed one, never a false green). Best-effort +
-# read-only.
+# (scripts/followthroughs/workspace-isolation-verdict-2640.sh). Same reader as
+# the canary ledgers — the only delta is this ledger has no sdk_version (the
+# shared shape emits it as ""). Safe sentinel (verdict "unknown") when the file
+# is absent — a deploy that never ran the probe, or a host whose ci-deploy.sh
+# predates it (an ABSENT verdict is distinguishable from a failed one, never a
+# false green). Best-effort + read-only.
 workspace_isolation_json() {
   # DURABLE path (NOT /var/run tmpfs) — MUST match ci-deploy.sh
   # WORKSPACE_ISOLATION_STATE_FILE. The soak accumulator must survive host
   # reboots; see the writer's rationale.
-  local f="${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
-  if [[ -f "$f" ]]; then
-    local v r c cp fp
-    v="$(jq -r '.verdict // "unknown"' "$f" 2>/dev/null || echo unknown)"
-    r="$(jq -r '.reason // ""' "$f" 2>/dev/null || echo '')"
-    c="$(jq -r '.checked_at // 0' "$f" 2>/dev/null || echo 0)"
-    cp="$(jq -r '.consecutive_pass // 0' "$f" 2>/dev/null || echo 0)"
-    fp="$(jq -r '.first_pass_at // 0' "$f" 2>/dev/null || echo 0)"
-    [[ "$c" =~ ^[0-9]+$ ]] || c=0
-    [[ "$cp" =~ ^[0-9]+$ ]] || cp=0
-    [[ "$fp" =~ ^[0-9]+$ ]] || fp=0
-    jq -nc --arg v "$v" --arg r "$r" --argjson c "$c" --argjson cp "$cp" --argjson fp "$fp" \
-      '{verdict:$v, reason:$r, checked_at:$c, consecutive_pass:$cp, first_pass_at:$fp}'
-  else
-    echo '{"verdict":"unknown","reason":"","checked_at":0,"consecutive_pass":0,"first_pass_at":0}'
-  fi
+  canary_state_json "${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
 }
 
 # The canary-promotion follow-through
