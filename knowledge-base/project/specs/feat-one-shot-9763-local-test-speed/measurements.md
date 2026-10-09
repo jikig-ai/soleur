@@ -27,4 +27,18 @@ Source: `scripts/suite-durations.tsv` committed weights (idle-machine measured, 
 | 19 | tests/scripts/no-tofu-ssh-mutation | 61019 |
 | 20 | scripts/check-web-host-escrow-config | 61002 |
 
-measurement probe line
+
+AC-4 probe: staged docs-only measurement
+
+## AC-4 idle-machine `--affected` wall-clock (2026-10-09)
+
+Two docs-only arms measured via `--affected --affected-scope=staged` on the idle host:
+
+| diff | wall-clock | result |
+|---|---|---|
+| `README.md` only (pure docs) | **4.40 min** | 111/595 passed, 0 failed |
+| `knowledge-base/` spec file | 5.7 min | 111/595 passed, 1 failed (pre-baseline-fix kb-consumers argv-code rows — expected demotion-round triage, fixed by `--write-baseline`) |
+
+The kb arm legitimately selects `scripts/test-affected-kb-consumers` (~65 s) — its declared
+`knowledge-base/` edge is the honest subject for a suite whose verdict reads the kb tree.
+Baseline before this change: ~25 min observed on PR #9751 (the issue's motivating number).

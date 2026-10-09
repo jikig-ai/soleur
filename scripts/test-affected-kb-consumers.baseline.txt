@@ -85,6 +85,11 @@ plugins/soleur/test/operator-agent-runnable.test.sh	knowledge-base/project/specs
 plugins/soleur/test/operator-agent-runnable.test.sh	knowledge-base/project/specs/archive
 plugins/soleur/test/operator-agent-runnable.test.sh	knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 plugins/soleur/test/operator-script.test.sh	knowledge-base/project/specs
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/learnings
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/plans
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/specs
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/specs/archive
 plugins/soleur/test/render-c4-model.test.sh	knowledge-base/engineering/architecture/diagrams
 plugins/soleur/test/resolve-target-decision.test.sh	knowledge-base
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -129,6 +134,11 @@ scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbook
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/inngest-luks-property-8296	knowledge-base/legal/article-30-register.md
 scripts/lib/incidents-roots.test.sh	knowledge-base/project
+scripts/lib/inngest-probe-row.test.sh	knowledge-base
+scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
+scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
+scripts/lib/inngest-probe-row.test.sh	knowledge-base/legal/article-30-register.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings
