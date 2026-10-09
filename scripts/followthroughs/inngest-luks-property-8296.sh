@@ -342,7 +342,7 @@ decide() {
 
   if (( claims && ! on )); then
     marker "rollback_inversion" "claim=$MECH store=$(safe "$SRC") mapper=$MAPPER age_s=$ROW_AGE"
-    echo "ACTION REQUIRED: the LUKS volume is the ONLY copy of the Inngest store (the plaintext backstop was destroyed on 2026-10-09 and op=luks-rollback is retired, so there is no rollback). The ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER, so the record is false and the store is on a device nobody claimed. Treat this as a production incident: read the newest host_role=dedicated probe row first, then follow $RUNBOOK section 5a (the wrong-volume alert should also have paged). Do not replace the host, detach or destroy the LUKS volume, or rotate INNGEST_REDIS_LUKS_KEY until the mounted device is identified."
+    echo "ACTION REQUIRED: the LUKS volume is the ONLY copy of the Inngest store (the plaintext backstop was destroyed on 2026-10-09 and op=luks-rollback is retired, so there is no rollback). The ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER, so the record is false and the store is on a device nobody claimed. Treat this as a production incident: read the newest host_role=dedicated probe row first, then follow $RUNBOOK section 5a (the wrong-volume alert should also have paged). Do not replace the host, detach or destroy the LUKS volume, or rotate the LUKS passphrase secret until the mounted device is identified."
     exit 5
   fi
   if (( ! claims && on )); then
