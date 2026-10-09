@@ -466,6 +466,23 @@ export function makeSandboxedSpawn(
     });
     // stderr must drain continuously or the child blocks at ~64 kB.
     child.stderr!.on("data", (b: Buffer) => stderrRing.push(b));
+
+    // The SDK's forwarded `options.signal` is the POST-GRACE force-kill
+    // channel for custom spawners (stdin EOF → ~2 s grace → abort; it
+    // deliberately does NOT call spawn's own kill so it can't race the
+    // graceful path). Honor it with the group kill — a CLI that survives
+    // stdin-EOF would otherwise leak until host exit.
+    options.signal?.addEventListener(
+      "abort",
+      () => {
+        try {
+          process.kill(-child.pid!, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      },
+      { once: true },
+    );
     const ringTail = () => stderrRing.tail();
 
     // Shared exit/error enrichment for BOTH on/once — whichever method the
