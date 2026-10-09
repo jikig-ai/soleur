@@ -4359,15 +4359,17 @@ assert "#6894 luks-cutover is in the reviewer-gated environment set (an op in th
 # Guard 1 (#8285 PR B): op=luks-rollback STAYS retired. The plaintext volume it reverse-copied to is destroyed, so a
 # resurrected verb would arm an on-host FSM that has nowhere to land. Each form is asserted absent from a surface it could
 # return through: the choice list, the environment ternary, the orchestrator's case arms and its LK_WANT=rollback write.
-assert "#8285 PR B Guard 1: luks-rollback is not offered in the choice list" \
-  "! grep -qE '^[[:space:]]+-[[:space:]]*luks-rollback\$' '$WF_YAML'"
+assert "#8285 PR B Guard 1: luks-rollback is not offered in the choice list (bare, quoted, or with a trailing comment)" \
+  "! grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' '$WF_YAML'"
 assert "#8285 PR B Guard 1: luks-rollback is in neither the environment set nor the token-injection ternary" \
   "! printf '%s' \"\$ENV_OPS\" | grep -qF \"inputs.op == 'luks-rollback'\" && ! grep -qF \"inputs.op == 'luks-rollback'\" '$WF_YAML'"
-assert "#8285 PR B Guard 1: the orchestrator has no luks-rollback case arm, G2 arm or rollback write" \
-  "! grep -qE '^[[:space:]]*(luks-cutover\|)?luks-rollback\)' '$BODY_SH' && ! grep -qE '^[[:space:]]*absent:luks-rollback\)' '$BODY_SH' && ! grep -qF 'LK_WANT=rollback' '$BODY_SH'"
+# A case arm is any line that is a pattern list ending in `)` and naming the verb as an ALTERNATE, in any position
+# (`luks-rollback)`, `luks-cutover|luks-rollback)`, `luks-rollback|luks-cutover)`, `a|luks-rollback|b)`, `absent:luks-rollback)`).
+assert "#8285 PR B Guard 1: the orchestrator has no luks-rollback case arm (any alternate position), G2 arm or rollback write" \
+  "! grep -qE '^[[:space:]]*[A-Za-z0-9_:|-]*luks-rollback[A-Za-z0-9_:|-]*\)' '$BODY_SH' && ! grep -qE 'LK_WANT=[\"'\"'\"']?rollback' '$BODY_SH'"
 # Non-vacuity of the Guard 1 patterns: each recognises the form it forbids, so an absent result is not a blind scan.
-assert "#8285 PR B Guard 1 non-vacuity: the three patterns recognise the forms they forbid" \
-  "printf '          - luks-rollback\\n' | grep -qE '^[[:space:]]+-[[:space:]]*luks-rollback\$' && printf '  luks-cutover|luks-rollback)\\n' | grep -qE '^[[:space:]]*(luks-cutover\|)?luks-rollback\)' && printf '      absent:luks-rollback)\\n' | grep -qE '^[[:space:]]*absent:luks-rollback\)'"
+assert "#8285 PR B Guard 1 non-vacuity: the patterns recognise every form they forbid (quoted/commented list item, reversed/extra/G2 arms, quoted write)" \
+  "printf '          - luks-rollback\\n' | grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && printf '          - \"luks-rollback\" # x\\n' | grep -qE '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && for arm in '  luks-cutover|luks-rollback)' '  luks-rollback|luks-cutover)' '  a|luks-rollback|b)' '      absent:luks-rollback)' '  luks-rollback)'; do printf '%s\\n' \"\$arm\" | grep -qE '^[[:space:]]*[A-Za-z0-9_:|-]*luks-rollback[A-Za-z0-9_:|-]*\)' || exit 1; done && printf 'LK_WANT=\"rollback\"\\n' | grep -qE 'LK_WANT=[\"'\"'\"']?rollback' && ! printf '  luks-cutover)\\n' | grep -qE '^[[:space:]]*[A-Za-z0-9_:|-]*luks-rollback[A-Za-z0-9_:|-]*\)'"
 LK_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "$LK_WANT" | DOPPLER_TOKEN=' "$LUKS_FILE" && LK_STDIN=1
 LK_ARGV=0;   grep -qE 'secrets set INNGEST_LUKS_CUTOVER=' "$LUKS_FILE" && LK_ARGV=1
 LK_SILENT=0; grep -E 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | grep -c '>/dev/null' >/dev/null && LK_SILENT=1
@@ -4402,7 +4404,7 @@ assert "#6894 writes INNGEST_LUKS_CUTOVER on STDIN, never on argv (/proc is worl
   "[[ '$LK_STDIN' -eq 1 && '$LK_ARGV' -eq 0 ]]"
 assert "#6894 the write discards stdout (doppler secrets set prints every remaining secret of the config)" \
   "[[ '$LK_SILENT' -eq 1 ]]"
-assert "#6894 neither verb writes the FLIP's flag — the destructive verb and the preserving one stay separate" \
+assert "#6894 the verb never writes the FLIP's flag — the destructive flip and the preserving copy stay separate" \
   "[[ '$LK_FLIPW' -eq 0 ]]"
 assert "#6894 the write is LAST: every guard refusal is above it (write line $LK_WRITE_LN > last G3 refusal $LK_LASTG3_LN)" \
   "[[ -n '$LK_WRITE_LN' && -n '$LK_LASTG3_LN' && '$LK_WRITE_LN' -gt '$LK_LASTG3_LN' ]]"
