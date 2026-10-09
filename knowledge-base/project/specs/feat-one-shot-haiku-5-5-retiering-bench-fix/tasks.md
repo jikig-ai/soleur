@@ -25,7 +25,7 @@ or credentials in committed files; a cap or limit error is a non-result, never a
 - 3.1 Write `scripts/learning-retrieval-bench.test.sh` (RED): one run under a constructed hostile environment (`env -i` plus allowlist; `NO_PARAPHRASE=1`, synthetic `ANTHROPIC_API_KEY`, `CURL_BIN` = wrapper-owned recorder); recorder positive control first; assert `FAIL=0`, TOTAL at or above the bench floor, named rows present, recorder empty afterwards.
 - 3.2 In `scripts/learning-retrieval-bench.sh` `self_test()`: `NO_PARAPHRASE=0`, `unset ANTHROPIC_API_KEY`, fail-closed `CURL_BIN`, before the first fixture. Delete the `LIVE_API=1` lines (29 and 125).
 - 3.3 Run the five Guard 1 mutations and the harness rows; each must turn the wrapper RED.
-- 3.4 Measure the wrapper's weight. At or under 10 s: always-on fast tier; over: heavy edge-selected. Add the `scripts/suite-durations.tsv` row and the `scripts/lib/test-affected-paths.sh` edge; confirm with `bash scripts/test-all.sh --print-selection --paths=scripts/learning-retrieval-bench.sh`.
+- 3.4 Measure the wrapper's weight. At or under 10 s: an `ALWAYS_ON_SUITES` entry; over: an `AFFECTED_*_PATHS` block only (edge-selected). Add the `scripts/suite-durations.tsv` row and the `scripts/lib/test-affected-paths.sh` edge; confirm with `bash scripts/test-all.sh --print-selection --paths=scripts/learning-retrieval-bench.sh`.
 
 ## 4. ADR-053 addendum and disposition
 

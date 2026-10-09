@@ -9,6 +9,25 @@ lane: cross-domain
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-09. **Mechanical gates run:** User-Brand Impact (present, `aggregate pattern`), Observability (5 fields, `grep` probe, literal `expected_output`), PAT-shaped variables (none), UI wireframe (no UI surface), Encryption Posture (skip stated), Guard Contract (`lint-guard-contract.py`: 2 entries, green), Scope Check (one live section, 14 asks mapped, 0 unmapped), citation checks (below).
+
+### Key improvements
+
+1. The reported `51/1` baseline was reproduced on a pre-#9753 copy and attributed to #8394's reader/mock mismatch; the current tree is 177/0, so the work is a regression guard and two environment-leak fixes, not a repair.
+2. The re-tiering decision is made by a pre-registered spend gate on measured post-cutover numbers (all candidates fall below the line), with `claude-code-review.yml` found disabled since 2026-02-12.
+3. The CLI 2.1.293 internal-model question is answered by measurement ($0.058): the `haiku` alias and the internal WebFetch summarizer both report `claude-haiku-5-5`.
+4. Plan review cut four inferred mechanisms (N=60 probes, the global-env census, a Phase 3 protocol, a measurement script) and corrected a stale-window error that had made the best candidate look closer to the line than it is.
+5. Deepen corrected the suite-registration wording to the real symbols (`ALWAYS_ON_SUITES` / `AFFECTED_*_PATHS`; there is no `CI_HEAVY_SUITES`).
+
+### Verified in this pass
+
+- `PAGES_OPERATOR` in `apps/web-platform/lib/failure-reason.ts` marks `leader_refused` and `leader_response_truncated` true, so the existing `spawn-agent-dead-letter` rule is the production trigger for both leader-loop questions.
+- Neighbouring rules use `tagged_event ... match = "in"` with a comma list (`issue-alerts.tf` lines 324 and 768), so the `feature in domain-router,email-triage` filter has precedent.
+- `reportSilentFallback(null, ...)` takes the `captureMessage` path with a constant message per site, so the two `no-text-block` mirrors are two Sentry issues and `event_frequency_count` (per issue) counts them correctly.
+- Cited numbers resolved live: #9790 OPEN, #9785 / #9753 / #8394 / #9236 / #9804 MERGED, #8643 / #8800 / #6297 OPEN; commits `d0707d3fa3`, `73d5b13a9a`, `8729cc0dfa`, `d0f39fed6f` are ancestors of origin/main; the only rule id cited (`wg-when-tests-fail-and-are-confirmed-pre`) is active.
+
 ## Overview
 
 The Haiku 5.5 support PR (#9785) merged on 2026-10-09 and left two follow-ups open. This plan finishes
@@ -270,10 +289,11 @@ Recorded in the ADR addendum:
    `unset ANTHROPIC_API_KEY`, and point `CURL_BIN` at a fail-closed stub (records the call, exits
    non-zero) before the first fixture. Delete the `LIVE_API=1` lines (29 and 125).
 3. Register the suite: measure its weight first. At or under the 10 s cap it is an always-on fast-tier
-   suite (`ALWAYS_ON_SUITES`); over it, it is a heavy edge-selected suite (`CI_HEAVY_SUITES`, selected
-   by the bench and wrapper paths). Add the `scripts/suite-durations.tsv` row, the
+   suite (an `ALWAYS_ON_SUITES` entry in `scripts/lib/test-affected-paths.sh`); over it, it is
+   edge-selected only (an `AFFECTED_*_PATHS` block and no `ALWAYS_ON_SUITES` entry; the budget lint
+   `scripts/test-all-fast-tier-budget` pins the always-on set). Add the `scripts/suite-durations.tsv` row, the
    `scripts/lib/test-affected-paths.sh` `AFFECTED_*_PATHS` block (subject
-   `scripts/learning-retrieval-bench.sh`) and the matching list entry the #9804 rules require; read the `scripts/test-all.sh` header and `scripts/test-all-fast-tier-budget.test.sh` first
+   `scripts/learning-retrieval-bench.sh`); read the `scripts/test-all.sh` header and `scripts/test-all-fast-tier-budget.test.sh` first
    and confirm with `bash scripts/test-all.sh --print-selection --paths=scripts/learning-retrieval-bench.sh`.
 4. No tracking issue: the failure is not on main (`wg-when-tests-fail-and-are-confirmed-pre` covers
    failures confirmed on main) and the hardening is inline.
