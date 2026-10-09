@@ -360,9 +360,10 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   which contains #9226, so erasures since then are expected to write only the shared lock; that was read from
   the run and its head, not from the host. Both volumes were preserved across that replace. Any per-id
   `.<id>.init.lock` files from earlier erasures therefore remain where they were written: on the retained
-  plaintext volume for erasures from host birth (2026-09-14) until the 2026-09-25 replace onto the
-  LUKS-at-birth payload (run 36118115758, recorded in the 2026-09-27 amendment), and on the LUKS-served store
-  for erasures between that replace and the 2026-10-08 one. No count sees them (the counters skip
+  plaintext volume for erasures from host birth (2026-09-14) until that host was destroyed on 2026-09-24 by
+  replace run 35979304442 (its replacement refused to serve, so nothing served between), and on the LUKS-served
+  store for erasures from the first LUKS-serving host (replace run 36118115758, 2026-09-25, recorded in the
+  2026-09-27 amendment) until the 2026-10-08 replace. No count sees them (the counters skip
   `.*.init.lock`), so whether any exist is not measured. The in-freeze purge (2026-09-30 amendment) will remove
   the served-store ones when a freeze window runs; none has run, and neither the purge nor any other removal is
   taken by this amendment. That amendment's binding of the residue to the freeze window is narrowed here to the

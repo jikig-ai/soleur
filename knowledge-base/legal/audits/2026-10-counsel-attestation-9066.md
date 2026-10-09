@@ -19,7 +19,7 @@ Draft material; v1 internal sign-off, not external counsel review. This PR chang
 
 ## What changed since the first attestation
 
-Withdrawn: "the running host still serves the pre-#9226 wrappers". `git_data_host_replace` ran 2026-10-08 (run 37846545572, head d0b5d2e35b, contains #9226); read from the run, not from the host. Added: the plaintext-volume residue comes from erasures before PR #8564; files written on the LUKS-served store between #8564 and the replace are a separate limb removed only by the unrun freeze-window purge; existence of both is unmeasured (hedged "may"). "no later than 2026-10-22" is now a target (wipe not implemented on main). A second id-bearing file, `.gc-cursor`, is disclosed and unfixed.
+Withdrawn: "the running host still serves the pre-#9226 wrappers". `git_data_host_replace` ran 2026-10-08 (run 37846545572, head d0b5d2e35b, contains #9226); read from the run, not from the host. Added: the plaintext-volume residue comes from erasures between host birth (2026-09-14) and the plaintext-serving host's destruction on 2026-09-24; files written on the LUKS-served store between the first LUKS-serving host (2026-09-25) and the 2026-10-08 replace are a separate limb removed only by the unrun freeze-window purge; existence of both is unmeasured (hedged "may"). "no later than 2026-10-22" is now a target (wipe not implemented on main). A second id-bearing file, `.gc-cursor`, is disclosed and unfixed.
 
 ## Per-artifact verdicts
 
