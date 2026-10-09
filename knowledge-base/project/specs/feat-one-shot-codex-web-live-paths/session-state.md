@@ -705,3 +705,66 @@
   infrastructure dispatch or flag/cohort change occurred. Project controls
   and regions remain unknown; challenge retries are stopped, Admin
   alternatives unexecuted and support unsent.
+
+## Continuation update — 2026-10-09 resumed local fixture suites
+
+- The user's subsequent `continue` followed the direct question asking whether
+  to resume local test suites. This releases the local-suite hold only. Recovery
+  rebuild/retry, provider calls, authenticated screenshot QA, routine/live Web
+  qualification, mode-specific CLO, full review and promotion remain held.
+  Keep PR #9051 draft, Codex default-off and customer content blocked.
+- At source `f9a4d27205b25cb39c1fc7cde0b87f79adea4543`, the selected local
+  Vitest set passed: 25 unit files / 255 tests and five component files /
+  66 tests, with no skips, failures, timeouts or unhandled-runtime warnings.
+  JSON reports matched the exact selected file sets. These are fixture results;
+  the routine bridge test does not qualify an eligible Inngest consumer.
+- Main advanced to inspected, pinned
+  `ceb1c6c1ba745b2dfcb90121d994a3650c843ec8`. Its twelve commits include
+  tenant filesystem outer wrapping and the bundled-server path fix, Haiku
+  model/CLI changes, autonomous-consent disclosure, Inngest backstop retirement,
+  infrastructure transport/apt changes and test/knowledge-base maintenance.
+  The merge completed without conflicts as
+  `a84311e936fb970afce0d9dec3d4d10b42f8d1b5`. This changes runtime,
+  dependency, infrastructure and schema inputs; source inspection is not
+  production verification, full review or a new CLO disposition.
+- The same 30-file set was rerun at that merged source and passed again:
+  **255 unit tests and 66 component tests**, zero skips/failures/timeouts.
+  Unit and component process exits were both zero; their JSON reports confirmed
+  success and exact file membership. Earlier source results remain distinct.
+  Node 22 TypeScript checking of the merged application also exited zero.
+- Both runs used Node v22.22.1 and the worktree's own Vitest installation,
+  separate `unit`/`component` projects, `forks`, one worker and no file
+  parallelism. A temporary config imported the real repository config and set
+  `envFile: false` and `envDir: false`; the child environment contained only
+  runtime/path/test/git controls, with isolated HOME, scratch and workspace
+  directories. No inherited provider credential or environment file was loaded.
+  The selected adapters, repositories, transports and child processes use
+  injected fixtures/mocks. No browser or live provider was invoked.
+- Existing local dependencies were retained. The installed Claude CLI reports
+  `2.1.280`, while merged source pins `2.1.293`; the selected tests do not launch
+  that CLI. These results make no dependency/tool/production-runner parity claim.
+  Full local battery, database integrations, RLS/parity, E2E, recovery and
+  authenticated screenshot runs were not performed. No hook verdict is claimed;
+  the existing `core.hooksPath` remains `/dev/null`. Fresh pushed-head CI is
+  required after this sync and evidence update.
+- The selected unit files are `codex-app-server-event-bridge`,
+  `codex-app-server-event-buffer`, `codex-app-server-handshake`,
+  `codex-app-server-launcher`, `codex-app-server-lifecycle-source`,
+  `codex-app-server-protocol`, `codex-app-server-rpc-client`,
+  `codex-app-server-session`, `codex-app-server-stdio`, `codex-code-adapter`,
+  `codex-code-message-translator`, `codex-conversation-dispatch`,
+  `codex-credential-provider`, `codex-held-turn-cache`,
+  `codex-history-transfer-ack`, `codex-routine-dispatch`, `codex-web-runtime`,
+  `codex-web-transport`, `codex-ws-events`, `agent-engine-dispatch`,
+  `agent-engine-persistence`, `agent-engine-registry`, `agent-engine-route-guard`,
+  `server/ws-handler-codex-production-boundary` and
+  `ws-handler-session-started-capabilities`, each under
+  `apps/web-platform/test/` with suffix `.test.ts`.
+  The component files use the same directory and suffix `.test.tsx`:
+  `agent-engine-settings`, `chat-surface-codex-history-transfer`,
+  `error-card-confirm`, `message-bubble-retry` and `ws-client-resume-history`.
+- Current-source/full-production recovery remains unqualified; the successful
+  `27c04a95` rehearsal remains source-bound and its one-use authorization
+  consumed. Account controls/regions remain unconfirmed, challenge retries
+  stopped, Admin alternatives unexecuted and support unsent. All credential,
+  browser-auth, shared-write, deployment and flag/cohort restrictions persist.
