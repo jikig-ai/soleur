@@ -768,3 +768,29 @@
   consumed. Account controls/regions remain unconfirmed, challenge retries
   stopped, Admin alternatives unexecuted and support unsent. All credential,
   browser-auth, shared-write, deployment and flag/cohort restrictions persist.
+
+## Continuation update — 2026-10-09 second main sync
+
+- Exact-head CI `37945413686`, tenant `37945413574` and RLS
+  `37945413483` passed at `ad8e182e4962d5ca7ec7c9f7ceb9814a504f085c`,
+  including both required aggregates. All 25 required checks passed; the
+  completed watch reported 85 passes, six skips and no failures, effective
+  cancellations or pending checks. RLS applied 186 migrations and passed
+  11 files / 153 tests; production parity was skipped.
+- Main then advanced by PR #9808 to pinned
+  `32b2fe2abb6cb57b2badf0faf8efca0ac51990c0`. The conflict-free merge is
+  `0e052b24dad93e34e695183bf420110e764ef3fd`. This changes CI push deduplication,
+  structural tests and documentation. Codex application/UI files, Vitest
+  configuration and setup files are unchanged, so the prior scoped fixture
+  results remain applicable to those unchanged inputs; they were not rerun.
+- Workflow actionlint without ShellCheck and whitespace checks passed.
+  The focused `scripts/ci-push-dedupe.test.sh` passed with 139 assertions,
+  47 of 47 mutants caught and 78 battery rows. It ran with a sanitized,
+  credential-free environment, a fake GitHub CLI and temporary fixture writes.
+  No live CI-elision variable was changed or inspected. Fresh pushed-head
+  CI must cover this second merge; the previous head's success is not its verdict.
+- Keep draft/default-off/customer content blocked. Recovery, authenticated
+  screenshots, routine/live Web qualification, mode-specific CLO, full review
+  and promotion remain held. The source-bound rehearsal authorization remains
+  consumed; no recovery retry, credential inspection, provider invocation,
+  shared-production write, deployment or flag/cohort change occurred.
