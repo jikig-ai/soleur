@@ -2660,14 +2660,13 @@ _affected_resolve_edges() {
 # (degrade-never-block, the _AFF_LIB class of contract). The `[[ -d "$PWD" ]]` liveness probe
 # (_wt_missing_die) is named-exempt: it is not an edge input.
 _affected_probe() { # <e|f|d> <path> — evaluate the [[ -<k> path ]] test; record it when caching
-  local _k="$1" _pp="$2" _rc _nl=$'\n'
+  local _k="$1" _pp="$2" _rc=0 _nl=$'\n'
   case "$_k" in
-    e) [[ -e "$_pp" ]] ;;
-    f) [[ -f "$_pp" ]] ;;
-    d) [[ -d "$_pp" ]] ;;
+    e) [[ -e "$_pp" ]] || _rc=$? ;;
+    f) [[ -f "$_pp" ]] || _rc=$? ;;
+    d) [[ -d "$_pp" ]] || _rc=$? ;;
     *) return 1 ;;
   esac
-  _rc=$?
   if (( ${_ADC_REC:-0} )); then
     case "$_pp" in
       # An operand carrying \n or \t could never be written into a record faithfully — and via the

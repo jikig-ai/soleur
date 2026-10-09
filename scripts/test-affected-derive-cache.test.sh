@@ -130,7 +130,7 @@ cases=$((cases + 1))
 printf 'source lib/dep.sh\nsource lib/tool2.sh\n' > "$FX/lib/helper.sh"
 : > "$FX/lib/tool2.sh"
 _c="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
-if printf '%s' "$_c" | grep -q 'tool2' && printf '%s' "$_c" | grep -q '^H=0 M=0 D=1$'; then
+if grep -q 'tool2' <<<"$_c" && grep -q '^H=0 M=0 D=1$' <<<"$_c"; then
   pass "T2: editing a recorded read re-derives the record (new edge visible, D=1)"
 else
   fail "T2: warm=[${_c//$'\n'/|}]"
@@ -140,7 +140,7 @@ fi
 cases=$((cases + 1))
 : > "$FX/lib/suite.sh"   # a stem-candidate probe path (lib/ + suite stem) that missed at record time
 _d="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
-if printf '%s' "$_d" | grep -q 'suite\.sh' && printf '%s' "$_d" | grep -q '^H=0 M=0 D=1$'; then
+if grep -q 'suite\.sh' <<<"$_d" && grep -q '^H=0 M=0 D=1$' <<<"$_d"; then
   pass "T3: creating a file at a recorded-miss probe path re-derives (D=1)"
 else
   fail "T3: warm=[${_d//$'\n'/|}]"
@@ -150,7 +150,7 @@ fi
 cases=$((cases + 1))
 printf 'changed\n' >> "$FX/unrelated.txt"
 _e="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
-if printf '%s' "$_e" | grep -q '^H=1 M=0 D=0$'; then
+if grep -q '^H=1 M=0 D=0$' <<<"$_e"; then
   pass "T4: an edit to an unread/unprobed file serves the cache (H=1)"
 else
   fail "T4: warm=[${_e//$'\n'/|}]"
@@ -178,8 +178,8 @@ if (( _corrupt_rc == 0 )); then
   _f2="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
   _f2_state="$(printf '%s\n' "$_f2" | grep -v '^[HMD]=')"
   if [[ "$_f1_state" == "$_gold_state" && "$_f2_state" == "$_gold_state" ]] \
-    && printf '%s' "$_f1" | grep -q '^H=0 M=1 D=0$' \
-    && printf '%s' "$_f2" | grep -q '^H=0 M=1 D=0$'; then
+    && grep -q '^H=0 M=1 D=0$' <<<"$_f1" \
+    && grep -q '^H=0 M=1 D=0$' <<<"$_f2"; then
     pass "T5: post-trailer garbage and truncated records both miss and re-derive the identical state"
   else
     fail "T5: post-trailer=[${_f1//$'\n'/|}] truncated=[${_f2//$'\n'/|}]"
@@ -195,7 +195,7 @@ if [[ -n "$_rfile2" ]]; then
   # sed -i.bak + rm: the only prior in-place convention in scripts/ — works on BSD and GNU alike.
   sed -i.bak 's/^schema	.*/schema	vWRONG/' "$_rfile2" && rm -f "$_rfile2.bak"
   _g="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
-  if printf '%s' "$_g" | grep -q '^H=0 M=1 D=0$'; then
+  if grep -q '^H=0 M=1 D=0$' <<<"$_g"; then
     pass "T6: a wrong-schema record misses and re-derives"
   else
     fail "T6: warm=[${_g//$'\n'/|}]"
@@ -212,7 +212,7 @@ _h="$(cache_run "$FX" "SOLEUR_AFFECTED_DERIVE_CACHE=0; export SOLEUR_AFFECTED_DE
 _recs_after="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
 _h_state="$(printf '%s\n' "$_h" | grep -v '^[HMD]=')"
 if [[ "$_h_state" == "$_gold_state" && "$_recs_before" == "$_recs_after" ]] \
-  && printf '%s' "$_h" | grep -q '^H=0 M=0 D=0$'; then
+  && grep -q '^H=0 M=0 D=0$' <<<"$_h"; then
   pass "T7: kill switch derives fresh, serves identical state, touches no counter, writes no record"
 else
   fail "T7: warm=[${_h//$'\n'/|}]"
@@ -221,7 +221,7 @@ fi
 # T8 — argv change is a key change: same label, different argv misses and re-derives.
 cases=$((cases + 1))
 _i="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh --verbose; $_SNAP" 2>/dev/null)"
-if printf '%s' "$_i" | grep -q '^H=0 M=1 D=0$'; then
+if grep -q '^H=0 M=1 D=0$' <<<"$_i"; then
   pass "T8: changed argv misses (key includes the verbatim argv)"
 else
   fail "T8: warm=[${_i//$'\n'/|}]"
@@ -346,7 +346,7 @@ printf 'source lib/dep.sh\nsource lib/maybe.sh\n' > "$FX2/lib/helper.sh"
 cache_run "$FX2" "_affected_classify_cached s1 bash suite.test.sh; _affected_classify_cached s2 bash suite2.test.sh" >/dev/null 2>&1
 : > "$FX2/lib/maybe.sh"   # the recorded-miss probe path now exists
 _k="$(cache_run "$FX2" "_affected_classify_cached s2 bash suite2.test.sh; $_SNAP" 2>/dev/null)"
-if printf '%s' "$_k" | grep -q 'maybe' && printf '%s' "$_k" | grep -q '^H=0 M=0 D=1$'; then
+if grep -q 'maybe' <<<"$_k" && grep -q '^H=0 M=0 D=1$' <<<"$_k"; then
   pass "T13: memo-consumer's record carries the extractor's probe slice (created file re-derives it)"
 else
   fail "T13: memo-consumer warm=[${_k//$'\n'/|}]"
@@ -360,8 +360,8 @@ _recs_t14="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
 _t14a="$(cache_run "$FX" "TEST_GROUP=webplat; _affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
 _t14b="$(cache_run "$FX" "_affected_emit_receipt() { :; }; _PRINT_AFFECTED=1; _affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
 _recs_t14b="$(find "$_recdir" -name '*.rec' -type f | wc -l | tr -d ' ')"
-if printf '%s' "$_t14a" | grep -q '^H=0 M=0 D=0$' \
-  && printf '%s' "$_t14b" | grep -q '^H=0 M=0 D=0$' \
+if grep -q '^H=0 M=0 D=0$' <<<"$_t14a" \
+  && grep -q '^H=0 M=0 D=0$' <<<"$_t14b" \
   && [[ "$_recs_t14" == "$_recs_t14b" ]]; then
   pass "T14: dispatch guards — TEST_GROUP/receipt contexts skip the cache and write nothing"
 else
@@ -379,7 +379,7 @@ _fx2dir="$FX2/.soleur/cache/affected-derive/v1"
 if [[ -f "$_rec_src" && -d "$_fx2dir" ]]; then
   cp "$_rec_src" "$_fx2dir/"
   _m="$(cache_run "$FX2" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
-  if printf '%s' "$_m" | grep -q '^H=0 M=1 D=0$'; then
+  if grep -q '^H=0 M=1 D=0$' <<<"$_m"; then
     pass "T15: a record copied across worktrees misses (worktree field refuses foreign records)"
   else
     fail "T15: warm=[${_m//$'\n'/|}]"
@@ -396,7 +396,7 @@ if [[ -f "$_rfile3" ]]; then
   sed -i.bak 's/^class	.*/class	edge:forged-never-a-class/' "$_rfile3" && rm -f "$_rfile3.bak"
   _n="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
   _n_state="$(printf '%s\n' "$_n" | grep -v '^[HMD]=')"
-  if [[ "$_n_state" == "$_gold_state" ]] && printf '%s' "$_n" | grep -q '^H=0 M=1 D=0$'; then
+  if [[ "$_n_state" == "$_gold_state" ]] && grep -q '^H=0 M=1 D=0$' <<<"$_n"; then
     pass "T16: a checksum-mismatched record misses and re-derives the identical state"
   else
     fail "T16: warm=[${_n//$'\n'/|}]"
@@ -424,7 +424,7 @@ fi
 cases=$((cases + 1))
 rm -f "$FX/lib/tool.sh"
 _o="$(cache_run "$FX" "_affected_classify_cached mysuite bash suite.test.sh; $_SNAP" 2>/dev/null)"
-if printf '%s' "$_o" | grep -q '^H=0 M=0 D=1$' && ! printf '%s' "$_o" | grep -q 'tool\.sh'; then
+if grep -q '^H=0 M=0 D=1$' <<<"$_o" && ! grep -q 'tool\.sh' <<<"$_o"; then
   pass "T18: deleting a recorded-hit file re-derives (D=1, edge leaves the set)"
 else
   fail "T18: warm=[${_o//$'\n'/|}]"
