@@ -839,14 +839,23 @@ INTENDED_DESTROYS = {
 # `removed` block to forget. Honoured only when NO job still targets the address (a leftover target would be a
 # stale line, not a deletion), and never for the App identity (G4f). Each entry names the evidence; a new entry
 # is a claim about live state and belongs in the PR that deletes the block. The two entries below leave when #9786's
-# next-replace removal list lands, or at the first census edit after the #8285 PR B merge (G4g refuses a re-declared one).
+# next-replace removal list lands (G4g refuses a re-declared one).
+# SOLEUR-DEBT: remove both entries once #9786's next-replace removal list lands; nothing here expires them mechanically.
 RETIRED_STATE_ABSENT = {
     "apps/web-platform/infra": {
         "hcloud_server.inngest_backstop_wipe": "#8285 PR B: throwaway wipe host destroyed by the wipe dispatch teardown 2026-10-09 (run 37955244979); Hetzner lists no such server",
         "hcloud_volume_attachment.inngest_backstop_wipe": "#8285 PR B: destroyed by the same teardown; the volume itself was destroyed 2026-10-09 (run 37958051426)",
     },
 }
-G4_PROTECTED = {"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"}
+# Never destroyable and never "retired": the App identity (forget-only) and the SOLE-COPY live stores (the Inngest LUKS
+# volume, its attachment, passphrase and key secret, web-1's workspaces LUKS volume). A later PR that lists one of these
+# in INTENDED_DESTROYS or RETIRED_STATE_ABSENT trips G4f instead of silently masking its destroy (#8285 PR B review).
+G4_PROTECTED = {
+    "doppler_secret.github_app_id", "doppler_secret.github_app_private_key",
+    "hcloud_volume.inngest_redis_luks", "hcloud_volume_attachment.inngest_redis_luks",
+    "random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key",
+    "hcloud_volume.workspaces_luks", "hcloud_volume_attachment.workspaces_luks",
+}
 orphans = []
 for r in GUARD4_ROOTS:
     for a in sorted(base_declared.get(r, set())):
@@ -864,8 +873,8 @@ check("G4c: every `resource` block the base ref declares and HEAD no longer decl
       bool(BASE_ROOT) and n_base >= 1 and not orphans,
       ("base unavailable" if not BASE_ROOT else "orphans=%s" % orphans[:8]))
 bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) for a in d if a in G4_PROTECTED})
-check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names the App identity (%s) — that pair may "
-      "only ever be FORGOTTEN, never destroyed" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
+check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names a protected address (the App identity, which "
+      "may only ever be FORGOTTEN, or a sole-copy live store: %s)" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
 # G4g: a RETIRED_STATE_ABSENT entry is a claim that the address is GONE. If HEAD declares it again the claim is
 # false and a later deletion of that new block would ride the allowance with no `removed` block (re-declare, apply,
 # delete). Entries are removed when #9786's next-replace work lands or at the first census edit after merge.
@@ -2921,6 +2930,24 @@ if mutate g4-10-protected-in-allowance "$T/ipt-g4-10.py" 1 's/^(        )("hclou
   python3 "$T/ipt-g4-10.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4-10.tsv" 2> "$T/mut/g4-10.tsv.err"
   mutant_red g4-10-protected-in-allowance wf_row "$T/mut/g4-10.tsv" "G4f:"
 fi
+# Row 12 — a SOLE-COPY live store (the Inngest LUKS volume) placed in the allowance trips G4f, like the App identity.
+MUTDIR="$(fixcopy g4-12)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4-12.py" || { printf 'FAIL SETUP: g4-12 checker copy\n' >&2; exit 1; }
+if mutate g4-12-live-store-in-allowance "$T/ipt-g4-12.py" 1 's/^(        )("hcloud_server\.inngest_backstop_wipe": ".*)$/\1"hcloud_volume.inngest_redis_luks": "x",\n\1\2/'; then
+  python3 "$T/ipt-g4-12.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4-12.tsv" 2> "$T/mut/g4-12.tsv.err"
+  mutant_red g4-12-live-store-in-allowance wf_row "$T/mut/g4-12.tsv" "G4f:"
+fi
+# Rows 13 and 14 — the two other spellings ANY_TARGET reads on a plan step: the space form `-target ADDR` and `-replace=ADDR`.
+# Row 9 drives only `-target=`; dropping either alternative from the regex left the suite green.
+for _spelling in "13:-target hcloud_server.inngest_backstop_wipe" "14:-replace=hcloud_server.inngest_backstop_wipe"; do
+  _n="${_spelling%%:*}"; _arg="${_spelling#*:}"
+  MUTDIR="$(fixcopy g4-$_n)"; assert_fixture_dir "$MUTDIR"
+  if mutate g4-$_n-retired-absent-base "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}' \
+     && mutate g4-$_n-plan-step-spelling "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 3 '/^          bash scripts\/tierb-helper\.sh$/a\      - name: Terraform plan\n        run: |\n          terraform plan -input=false -out=tfplan '"$_arg"; then
+    fixcensus "$MUTDIR" "$T/mut/g4-$_n.tsv" ""
+    mutant_red g4-$_n-listed-but-targeted-by-spelling wf_row "$T/mut/g4-$_n.tsv" "G4c:"
+  fi
+done
 # Row 11 — an allowance entry that HEAD declares again (re-declare, then delete, would ride it): G4g RED.
 MUTDIR="$(fixcopy g4-11)"; assert_fixture_dir "$MUTDIR"
 if mutate g4-11-redeclared "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 3 '$a\resource "hcloud_server" "inngest_backstop_wipe" {\n  name = "x"\n}'; then
@@ -3534,7 +3561,9 @@ fi
 # 115 -> 116 (#8285 PR B): g4-8 (the retired-state-absent ACCEPT arm; 1 landing). Measured: 116 ran.
 # 116 -> 120 (#8285 PR B review): g4-9 (listed address still targeted on a PLAN step; 2 landings), g4-10 (App identity in the
 #   allowance; 1 landing), g4-11 (allowance entry re-declared at HEAD; 1 landing). Measured: 120 ran.
-MUTANT_FLOOR=120
+# 120 -> 125 (#8285 PR B fix round): g4-12 (live store in the allowance; 1 landing), g4-13/g4-14 (space-form `-target ADDR` and
+#   `-replace=ADDR` on a plan step; 2 landings each). Measured: 125 ran.
+MUTANT_FLOOR=125
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3563,7 +3592,8 @@ _ran=$((passes + fails))
 # 294 -> 296 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (1 landing + 1 verdict); the H7b absent-row and _h7b self-test drives add no assertion (inside the one H7b pass). Measured: 296 ran.
 # 296 -> 298 (#8285 PR B): g4-8 landing + verdict. Measured: 298 ran.
 # 298 -> 306 (#8285 PR B review): live G4g (1), g4-9 (2 landings + 1 verdict), g4-10 (1 + 1), g4-11 (1 + 1). Measured: 306 ran.
-FLOOR=306
+# 306 -> 314 (#8285 PR B fix round): g4-12 (1 landing + 1 verdict), g4-13 and g4-14 (2 landings + 1 verdict each). Measured: 314 ran.
+FLOOR=314
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
