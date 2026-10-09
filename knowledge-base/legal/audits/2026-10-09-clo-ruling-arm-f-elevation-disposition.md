@@ -1,3 +1,24 @@
+---
+title: "CLO ruling — arm-F elevation disposition: privileged arm dropped, flag stays off, residual exits via #9773 Stage 1"
+type: clo-ruling
+date: 2026-10-09
+issue: 9873
+pr: 9896
+attestation-authority: clo
+status: RULED (CLO-agent-ruled, Soleur-as-tenant-zero v1)
+disposition: DECIDED — mechanism-choice disposition, not a breach determination. No Art. 33 duty, no Art. 34 duty, NO breach-register row: no Art. 4(12) event occurred (#9871 was a deploy-availability incident touching no personal-data limb, expressly stated in the ruling). Recorded per the breach-register convention for controller decision-closure; cited from the #9873 close-out comment; input to the Stage-0 Art. 33(5) assessment (#9723 window) and the DPIA re-screen memo in epic #9842. NOT_TRANSCRIBED waiver committed (scripts/lint-legal-registers.sh + breach-register.md §Excluded records).
+signed_off_at: 2026-10-09
+signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
+art_33_triggered: false
+art_34_triggered: false
+art_33_deadline: "not due — no Art. 4(12) event occurred, so no clock started."
+brand_survival_threshold: single-user incident
+re_evaluation_triggers:
+  - "Executor Stage-1 GA slips materially (~8 weeks) — interim isolation re-opens as a bespoke minimal setuid launcher (fixed-argv mount+bind+drop-uid+exec), never setuid bwrap."
+  - "A realized sibling-filesystem incident lands — same arm re-opens; if evidence of a realized cross-tenant read ever surfaces, breach-notice-triage engages with the 72h clock anchored at awareness."
+related: [ADR-075 addendum 2026-10-09, knowledge-base/legal/compliance-posture.md, knowledge-base/project/brainstorms/2026-10-09-outer-wrap-elevation-disposition-brainstorm.md, #9773, epic #9842]
+---
+
 # CLO Ruling — arm-F elevation disposition (#9873 → Option 3, #9773 unchanged)
 
 **Date:** 2026-10-09 · **Authority:** internal v1 CLO sign-off scope (draft
