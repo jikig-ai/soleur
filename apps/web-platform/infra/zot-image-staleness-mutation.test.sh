@@ -107,14 +107,31 @@ m_h() { sed -i "s@\*\*$CAPDATE\*\*@**not-a-date**@" "$1/$PROV"; }
 m_i() { sed -i 's|^## Previous known-good pin|## Removed section|' "$1/$PROV"; }
 m_j() { sed -i "s|pinned zot $VER|pinned zot (v2.1.2)|" "$1/ci-deploy.test.sh"; }
 m_k() { sed -i 's|^pass() {.*|pass() { :; }|; s|^fail() {.*|fail() { :; }|' "$1/$GATE"; }
-m_l() { rm -f "$1/ci-deploy.sh"; }
+m_l() { rm -f "$1/ci-deploy.test.sh"; }   # a FOLLOWER removed (ci-deploy.sh is no longer one: see s/t below)
 # --- mutations added after the review panel; each closes a case the first battery missed ---
 m_m() { sed -i 's|^fail() {.*|fail() { :; }|' "$1/$GATE"; }                    # fail() ALONE: gate can never redden
 m_n() { sed -i "s|$AMD|__T__|; s|$ARM|$AMD|; s|__T__|$ARM|" "$1/$TF" "$1/$PROV"; }  # COHERENT two-file swap
 m_o() { sed -i 's|? local.zot_image_arm64 : local.zot_image_amd64|? local.zot_image_amd64 : local.zot_image_arm64|' "$1/$TF"; }  # inverted selector
-m_p() { for f in "$1/$TF" "$1/$PROV" "$1/ci-deploy.sh" "$1/ci-deploy.test.sh" "$1/cloud-init-registry.yml"; do sed -i "s|$VER|v2.1.2|g" "$f"; done; sed -i "s|$AMD|sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71|; s|$ARM|sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30|" "$1/$TF" "$1/$PROV"; }  # COHERENT downgrade
-m_q() { sed -i "s|zot $VER|zot version ${VER#v}|g" "$1/ci-deploy.sh"; }        # claim REWORDED away
+m_p() { for f in "$1/$TF" "$1/$PROV" "$1/ci-deploy.test.sh" "$1/cloud-init-registry.yml"; do sed -i "s|$VER|v2.1.2|g" "$f"; done; sed -i "s|$AMD|sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71|; s|$ARM|sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30|" "$1/$TF" "$1/$PROV"; }  # COHERENT downgrade
+m_q() { sed -i "s|zot $VER|zot version ${VER#v}|g" "$1/ci-deploy.test.sh"; }   # claim REWORDED away at a REQUIRED location
 m_r() { printf '\n## Bump log\n\n| Bump | Capture date (UTC) | **%s** |\n' "$CAPDATE" >> "$1/$PROV"; sed -i "0,/\*\*$CAPDATE\*\*/s@\*\*$CAPDATE\*\*@**2025-01-01**@" "$1/$PROV"; }  # shadowed capture date
+
+# --- #9799 item 2: ci-deploy.sh (a deploy_pipeline_fix trigger file) must carry NO claim ---
+m_s() { printf '# zot %s (a CORRECT, current claim appended to the trigger file)\n' "$VER" >> "$1/ci-deploy.sh"; }
+m_t() { rm -f "$1/ci-deploy.sh"; }
+m_u() { sed -i '/^# --- 11\. ci-deploy\.sh (a trigger file) carries NO/,/^echo "RESULT: /{/^echo "RESULT: /!d}' "$1/$GATE"; }  # check 11 deleted
+m_x() { printf '# pinned zot (%s) -- the parenthesised form, appended to the trigger file\n' "$VER" >> "$1/ci-deploy.sh"; }
+m_y() { sed -i "s|zot $VER|zot version ${VER#v}|g" "$1/cloud-init-registry.yml"; }   # claim REWORDED away at the OTHER required location
+m_A() { sed -i 's|Version-scoped claim register|claim register|' "$1/ci-deploy.sh"; }   # the pointer ci-deploy.sh carries
+m_z() { sed -i 's|^## Version-scoped claim register|## Claim register (renamed)|' "$1/$PROV"; }   # the heading ci-deploy.sh points at
+m_v() { printf '# zot %s (stale claim, only in cloud-init, after a compliant ci-deploy.test.sh)\n' "v2.1.2" >> "$1/cloud-init-registry.yml"; }
+# A COHERENT bump: every non-trigger file moves together, ci-deploy.sh is NOT touched. The pin
+# digests are replaced by fresh synthetic ones, and the version token moves everywhere it is a claim.
+m_w() {
+  local NEWV=v9.9.9 f
+  for f in "$1/$TF" "$1/$PROV" "$1/ci-deploy.test.sh" "$1/cloud-init-registry.yml"; do sed -i "s|$VER|$NEWV|g" "$f"; done
+  sed -i "s|$AMD|sha256:$(printf 'b%.0s' {1..64})|g; s|$ARM|sha256:$(printf 'c%.0s' {1..64})|g" "$1/$TF" "$1/$PROV"
+}
 
 echo "mutations (fresh sandbox copy each; expected rc AND the named check are both asserted):"
 run_mutation a "one arch's digest changed"                  10 "sidecar amd64 digest"        m_a
@@ -142,6 +159,17 @@ run_mutation o "arch selector ternary INVERTED"             10 "selector"       
 run_mutation p "coherent DOWNGRADE to v2.1.2"               10 "BELOW the sidecar"           m_p
 run_mutation q "claim REWORDED so the regex cannot see it"  10 "0 version-scoped claims"     m_q
 run_mutation r "capture date SHADOWED by a '## Bump log'"    2 ""                            m_r
+run_mutation s "CURRENT claim appended to ci-deploy.sh"     10 "carries a version-scoped claim" m_s
+run_mutation t "ci-deploy.sh removed (zero examined)"       10 "ci-deploy.sh missing"        m_t
+run_mutation u "check 11 deleted from the gate (floor fires)" 2 ""                           m_u
+run_mutation v "stale claim in cloud-init only (2nd member)" 10 "name a version we no longer" m_v
+# w is the PROOF that a zot bump no longer requires touching ci-deploy.sh: a coherent bump of
+# every other file stays GREEN while m_w leaves ci-deploy.sh untouched by construction.
+run_mutation w "coherent BUMP, ci-deploy.sh untouched"        0 ""                            m_w
+run_mutation x "PARENTHESISED claim appended to ci-deploy.sh" 10 "carries a version-scoped claim" m_x
+run_mutation y "claim reworded in cloud-init-registry.yml"  10 "0 version-scoped claims"     m_y
+run_mutation z "sidecar register heading renamed"           10 "has no '## Version-scoped claim register'" m_z
+run_mutation A "ci-deploy.sh pointer to the register removed" 10 "no longer points at" m_A
 
 echo
 echo "RESULT: $RED/$N mutations behaved as expected, $GREENFAIL did not"
