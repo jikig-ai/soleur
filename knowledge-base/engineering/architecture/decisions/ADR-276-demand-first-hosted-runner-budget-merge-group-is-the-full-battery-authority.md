@@ -1,6 +1,6 @@
 ---
 title: "Hosted-runner demand is cut before supply is raised; merge_group (and the push-main deploy arm) stay the full-battery authority"
-status: proposed
+status: adopting
 date: 2026-10-07
 issue: 9721
 related_adrs: [ADR-032, ADR-181, ADR-183, ADR-216, ADR-217, ADR-242, ADR-262, ADR-270]
@@ -52,6 +52,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 
 - 2026-10-08 S1 amended (#9727; see `## Amendment 2026-10-08 (S1, #9727)` below)
 - 2026-10-09 S2 amended (#9512; see `## Amendment 2026-10-09 (S2, #9512)` below)
+- 2026-10-09 status flipped `proposed` to `adopting` by operator direction (see `## Amendment 2026-10-09 (status flip to adopting)` below); S3 (#9728) may now be merged; S2 stays `amended` and `S2 live` waits for activation
 
 ## Context
 
@@ -331,3 +332,31 @@ Status stays `proposed`. This amendment records stage 2 BEFORE it can take effec
 - **Consumers of the push-event run (census, grepped on the branch).** Unchanged by an elided `success`: the release workflow's `resolve-target` `workflow_run` arm (reads only conclusion, branch and event), `post-merge-monitor.yml` (`success` verifies), `deploy-arm.sh`. Read and confirmed to fail soft: the release workflow's CI budget step and check B9 (`push-dedupe` lengthens the longest declared `needs:` path from 70 to 73 minutes against the 75-minute budget, which is `DRIFT_SUSTAINED_THRESHOLD_MIN` 225 minus resolve-target 15, migrate 30, verify-migrations 15 and deploy 90; B9 passes at 73 of 223), and the three follow-through probes and the shard-manifest reader that sample push runs (elided runs carry no leg artifacts and drop out of their samples). A `push-dedupe` that failed leaves the run `success` (job-level `continue-on-error`; a cancelled run stays `cancelled`) and runs the full battery, so these consumers see an ordinary full run. The release workflow's CI-duration creep detector will see elided runs of a few minutes and so loses its signal on those SHAs (by design; it keeps its signal on full runs). `pr-battery-gate-saving-9323.sh` uses the push conclusion as the ADR-262 escape detector: an elided `success` hides nothing the full `merge_group` battery did not already see.
 - **Control and its limit.** The `merge_group` run uses the candidate's own `ci.yml`, so a PR that weakens the proof also weakens the run that vouches for it. The control is intended to be CODEOWNERS on `ci.yml`, the proof suite and the probe, but it is not enforced: read from the live rulesets on 2026-10-09, `CI Required` (14145388) carries only `required_status_checks` and `merge_queue`, no ruleset carries a `pull_request` rule, so `require_code_owner_review` is not set anywhere and the Admin and Repository-role bypass actors can merge without review in any case. The residual is therefore detective: the soak probe re-derives every elision and FAILS if the proof suite is deregistered. A PR can also weaken the gate by editing `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh` or the shard manifests without touching an owned file; the probe's registration check covers the first. The repository variable is not managed by Terraform (the AP-001 carve-out).
 - **Evidence ownership.** S1's post-merge census (the `secret-scan.yml` smoke ran, skipped and runner-less split and the 80% net criterion, over a closed window of at least 6 hours starting at or after 2026-10-09T01:11:37Z) is owned by this stage and attached to #9727 and #9512 after this PR merges; the `S1 live` (or `S1 criterion not met`) stage-status line is appended by a docs-only follow-up once that comment exists, as the S1 amendment allows. The follow-through tracker for the S2 soak, not #9512 (closed by the PR), carries the S2 census, as S1 recorded its own deviation.
+
+## Amendment 2026-10-09 (status flip to adopting)
+
+The file `status:` moves `proposed` to `adopting` on 2026-10-09. The authority is the operator's (founder's)
+direction, given in their own words that day: "yes please accept and flip to adopting and start S3" (answering:
+accept ADR-270 and flip ADR-276 to adopting so S3 can start). It is cited here as the CTO approval the Status
+section requires.
+
+The Status text asks for that approval as a review comment on a PR that edits the `status:` line. A chat direction
+is not that comment, so it is recorded here as the approval and the PR that carries this amendment asks the operator
+to confirm it by approving, or commenting on, that PR. Until that confirmation exists, the flip rests on the
+direction quoted above and no later stage PR should treat it as stronger.
+
+Effect, per the Status section: the guardrail decisions (1, 2, 3, 6, 7 and 8) become `adopting`; Decisions 4 and 5
+stay the proposed shape of stages 3 and 4. The earlier Status paragraph and the "Status stays `proposed`" sentence in
+the S2 amendment are historic and unedited; the current state is the frontmatter plus this amendment. The flip
+unblocks S3 (#9728) and S4 (#9729) from merging under the Status rule; each still takes effect only when its own PR
+appends its dated `## Amendment` (Decision 3(g)).
+
+S2 (#9512) is merged (PR #9808, squash 32b2fe2abb) and dark. The `S2 amended` line above is already present and is not
+repeated. `S2 live` waits for activation: the repository variable `CI_PUSH_DEDUPE` set to `on` after the operator's
+explicit go, then the exit criterion of the S2 amendment. This flip does not set the variable. The soak probe
+`scripts/followthroughs/ci-push-dedupe-soak-9512.sh` fails an elided run only while this ADR reads `proposed`; after
+this flip that guard no longer applies, which is intended, and its other checks (voucher per elided SHA, proof-suite
+registration, mean cost, activation marker) are unchanged.
+
+`adopting` moves to `accepted` as the Status section states (S5 closes with the post-merge census for S2 and S3, or
+each closed by its entry gate or stop rule); this amendment does not change that.

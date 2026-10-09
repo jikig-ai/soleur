@@ -270,27 +270,27 @@ use `run_in_background` for polling.
 
 ### Pre-merge (PR)
 
-- [ ] AC1. `git diff "$(git merge-base origin/main HEAD)" -- <ADR-270 file>` has exactly 1 deleted line, `-status: adopting`, and 1 added
+- [x] AC1. `git diff "$(git merge-base origin/main HEAD)" -- <ADR-270 file>` has exactly 1 deleted line, `-status: adopting`, and 1 added
       frontmatter line `+status: accepted`; every other changed line is a `+` line in a block appended after the
       file's previous last line.
-- [ ] AC2. `git diff "$(git merge-base origin/main HEAD)" -- <ADR-276 file>` has exactly 1 deleted line, `-status: proposed`, with
+- [x] AC2. `git diff "$(git merge-base origin/main HEAD)" -- <ADR-276 file>` has exactly 1 deleted line, `-status: proposed`, with
       `+status: adopting`; other added lines are the single dated Stage-status bullet and the appended amendment.
-- [ ] AC3. The ADR-270 amendment contains items 1, 3, 4, 5, 7, 8, 9 and 10 verbatim (a script check: each item's
+- [x] AC3. The ADR-270 amendment contains items 1, 3, 4, 5, 7, 8, 9 and 10 verbatim (a script check: each item's
       first line `grep -F`-matches in the amendment and in the original Canary measurements section), states the
       2026-10-09 operator direction, and names the item-4 wait (next scheduled fire 2026-10-11T06:00Z).
-- [ ] AC4. The ADR-276 amendment cites the operator's direction as the CTO approval, names decisions 1, 2, 3, 6, 7,
+- [x] AC4. The ADR-276 amendment cites the operator's direction as the CTO approval, names decisions 1, 2, 3, 6, 7,
       8 as `adopting` and 4, 5 as the proposed shape of stages 3 and 4, says `S2 live` waits for activation, and
       states plainly that the Status text asks for a review comment on a PR that edits the line.
-- [ ] AC5. The ADR-276 file contains exactly one `S2 amended` Stage-status line (no duplicate) and no Stage-status line
+- [x] AC5. The ADR-276 file contains exactly one `S2 amended` Stage-status line (no duplicate) and no Stage-status line
       matching `^- 2026-.* S2 live` (the phrase `S2 live` already occurs in two body sentences of the S2 amendment, so a bare
       count of the phrase is not the check).
-- [ ] AC6. Phase 3 commands all exit 0 (outputs read from the files they were redirected to).
-- [ ] AC7. The claim sweep `grep -rniE 'ADR-(270|276)[^0-9].{0,60}(adopting|proposed|accepted)'` over
+- [x] AC6. Phase 3 commands all exit 0 (outputs read from the files they were redirected to).
+- [x] AC7. The claim sweep `grep -rniE 'ADR-(270|276)[^0-9].{0,60}(adopting|proposed|accepted)'` over
       `knowledge-base/engineering`, `knowledge-base/legal`, `.github`, `infra` and `scripts` (excluding the two ADRs
       themselves and `project/{plans,specs,learnings}`) finds no statement made false by the flip; any hit is
       listed in the PR body (not edited here unless it is plainly a stale status claim).
-- [ ] AC8. `## Open Code-Review Overlap` check run and its result recorded in the PR notes.
-- [ ] AC9. `git diff --name-only "$(git merge-base origin/main HEAD)" HEAD` contains only: the two ADR files, this plan,
+- [x] AC8. `## Open Code-Review Overlap` check run and its result recorded in the PR notes.
+- [x] AC9. `git diff --name-only "$(git merge-base origin/main HEAD)" HEAD` contains only: the two ADR files, this plan,
       `knowledge-base/project/specs/feat-one-shot-adr-270-276-status-flip/{tasks.md,session-state.md}` and, if the
       pipeline regenerates it, `knowledge-base/INDEX.md`; no path under `.github/`, `scripts/`, `infra/`, `plugins/`
       or any `*.test.*`. (The scope AC lists what the pipeline writes, not only what the plan edits.)
