@@ -28,7 +28,7 @@
 # the bare literal (0 suites). Re-measure before adding any of them.
 #
 # BLIND SPOTS (stated, not hidden): only literal `knowledge-base/` references are seen; one hop into
-# named scripts, not two; the six relevance-gated registrations are outside the population; a suite
+# named scripts, not two; the ten relevance-gated registrations are outside the population; a suite
 # whose argv names neither a code file nor a directory (`python3 -m unittest`) reads nothing here;
 # the directory form scans only `*.test.*` / `*.spec.*` files (the files a runner executes), not
 # every script below the directory. The baseline records the gaps the oracle DOES see.
@@ -36,7 +36,7 @@
 # BASELINE. Uncovered references the oracle sees are recorded in
 # scripts/test-affected-kb-consumers.baseline.txt (no header line; it is plain TSV). An `argv-code` row is
 # `label<TAB>path` and carries NO classification; only a row from another form is
-# `label<TAB>path<TAB>form<TAB>classification` (today the 7 `dir-operand-tests` rows), and its classification must be
+# `label<TAB>path<TAB>form<TAB>classification` (today the 8 `dir-operand-tests` rows), and its classification must be
 # `false-positive: <reason>` (a real read gets a covering edge instead and leaves the baseline). A NEW
 # uncovered reference fails, so does a STALE entry, and so does an unclassified row (`--write-baseline`
 # stamps UNCLASSIFIED on a new non-literal row and carries an existing classification forward). The
