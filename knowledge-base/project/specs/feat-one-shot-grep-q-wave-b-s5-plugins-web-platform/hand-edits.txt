@@ -1,0 +1,5 @@
+# S5 hand edits that are NOT a plain grep -q -> grep -c transform, keyed by BASE-side line: path:OLD[-OLD2]:reason (verify input).
+# Measured on the rehearsal: ZERO entries. All 66 lines are a plain one-token transform (verified: 66, hand-edited: 0, unexplained: 0),
+# including the 14 lines the codemod routes to its data queue (see data-conversions.txt).
+# Re-derive in Phase 0 if origin/main moved. A review-fix edit to any converted file lands HERE in the same commit, or verify goes red
+# (S4 session error 3): add the entry, then append an addendum to evidence.md instead of editing counts in place.

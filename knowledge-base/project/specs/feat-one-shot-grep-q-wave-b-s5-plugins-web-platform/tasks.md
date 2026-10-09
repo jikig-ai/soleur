@@ -1,0 +1,46 @@
+# Tasks: grep -q drain, Item B slice S5 (plugins/soleur/*.test.sh)
+
+Plan: `knowledge-base/project/plans/2026-10-09-chore-grep-q-wave-b-s5-plugins-plan.md`
+
+Scope of this task list: S5 only (one deferral row, `plugins/soleur/*.test.sh`, 66 lines in 13 files, taken to zero and deleted; 66 plain one-token conversions, zero hand edits, zero marker lines; two `SWEEP_CANARIES` roots, seven real-table canaries, an owner-comparison control and a prefix rule added to the guard). The `apps/web-platform/*.test.sh` row is S6 (own plan). Do not edit `plugins/soleur/skills/work/SKILL.md`, `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh` or anything under `apps/web-platform/` or `.github/`.
+
+## Phase 0: re-measure and gate (read-only)
+
+- [ ] 0.1 `git fetch origin main`; if it is ahead of the branch (it was, by two commits touching none of the 14 files, at planning), merge it once now, record `git merge-base HEAD origin/main` as the base SHA for `verify --base`, the pair-run clone and the trigger derivation. Never merge or re-sync mid-flight afterwards.
+- [ ] 0.2 Drain probe on the dev host and inside `docker run --rm ubuntu:24.04` (AC-3 command): expect `q: 141`, `c: 0`, `nomatch: 1`, `neg-q: 0`, `neg-c: 1`. If `c` prints 141, stop.
+- [ ] 0.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh`; keep the `DEFERRED:` lines (expect `plugins/soleur/*.test.sh (66 hits, ceiling 66, mode <=)`, 10 lines, test-shaped total 256).
+- [ ] 0.4 `python3 scripts/grep-q-drain-codemod.py apply --row 'plugins/soleur/*.test.sh'` dry run: expect POPULATION 277 lines in 62 files, `ROW ... T0=33 data=15 suspect=21`, WOULD-CHANGE 31 lines in 10 files, 36 QUEUE entries. Then the same with `--reviewed-suspect` for `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` and `plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh`: WOULD-CHANGE 52 lines in 12 files, QUEUE 15 data entries on 14 lines. Re-read the two files' comment mentions of SIGPIPE and false-fail; any new queue entry stops the plan until read.
+- [ ] 0.5 Trigger derivation over the final diff list against every `push`, `pull_request`, `merge_group` and `pull_request_target` filter (expect `version-bump-and-release` 13 of 16, `web-platform-release` 13 of 16, `deploy-docs` 10 of 16, every other path-filtered workflow 0 of 16; the sanity probe of three known-matching paths must still light six); open-PR intersection with the exact list (`gh pr list --state open --limit 300 --json number,title,isDraft,mergeStateStatus,files`; expect none) and the screen for PRs that add a `*.test.sh` under `plugins/soleur/scripts/` or `plugins/soleur/skills/*/test/`.
+- [ ] 0.6 Fixed-fragment search for the pin class: for each of the 66 lines, `git grep -F` of its `grep -q ...` fragment across tracked files outside `knowledge-base/`; expect only generic lookalikes (42 foreign hits at planning). `git ls-files 'plugins/soleur/*.test.sh'` outside `test/`: expect 46 (8 + 38), any added file is a new candidate.
+- [ ] 0.7 `uptime` (record the load beside every timing); `grep -lE 'vitest|bun test'` over the 13 (expect the two comment/shim mentions only).
+
+## Phase 1: red first
+
+- [ ] 1.1 Edit only the guard row to `'plugins/soleur/*.test.sh | <= | 14 | #9217'`. The guard must go RED (`has 66 hits, ceiling 14`); paste that `deferral ceiling exceeded` line for the PR body (the red state is not committed on its own).
+
+## Phase 2: convert
+
+- [ ] 2.1 Commit 1: `apply --row 'plugins/soleur/*.test.sh' --write` (31 lines, 10 files), then the same with the two `--reviewed-suspect` flags (21 lines, 2 files). The guard is then green at 14 of 14.
+- [ ] 2.2 Commit 2: the 14 data-tier lines listed in `data-conversions.txt` by the throwaway (`alpha-metrics.test.sh 54 62 73 74 75 76 77 78:2 79 87 98 100 111`, `resolve-regenerable-conflicts.test.sh 554`; assert each line changed by the stated token count; check each result with `git diff -U0`); then the idempotency dry run (`WOULD-CHANGE: 0 lines in 0 files`, population 211).
+- [ ] 2.3 As the LAST edit: delete the `plugins/soleur/*.test.sh` row and apply the guard edits (`SWEEP_CANARIES` +2 roots and `SWEEP_CANARY_COUNT` 7; the three probe scratch roots and the `sw_*` literals 5 to 7 and the `sw_roots` regexp; `real_paths` +7 and `REAL_PLANTED` 24; `real_plug_row` / `real_nonplug` in `real-table-control`; `test_globs` / `GATED_TEST_ROWS` pin in `real-table-test-shaped`; the header sentence). Nothing else in the guard. Stage by explicit path. **Commit the guard change before any mutation battery.**
+
+## Phase 3: verify
+
+- [ ] 3.1 `verify --base "$(git merge-base HEAD origin/main)" --hand-edits knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-s5-plugins-web-platform/hand-edits.txt` prints `verified: 66`, `hand-edited: 0`, `unexplained: 0`; the base-side lines changed outside the two codemod passes equal `data-conversions.txt` (14, by command).
+- [ ] 3.2 The guard is rc 0 with 9 `DEFERRED:` lines (none for `plugins/soleur/*.test.sh`; the other nine byte-identical to the merge-base's); test-shaped total 190; `SWEEP_PROBE_CHECKS` still 62.
+- [ ] 3.3 `bash -n` on the 13 files; `git diff --numstat origin/main...HEAD -- plugins/soleur/scripts plugins/soleur/skills` shows 66 and 66; `git diff --name-only origin/main...HEAD` lists no `scripts/test-all.sh`, no `scripts/lib/test-affected-paths.sh`, no baseline file.
+- [ ] 3.4 Pair run: a real clone at the base SHA (detached) with the worktree's `node_modules` AND `apps/web-platform/node_modules` symlinked on both sides (otherwise `boundary` and `bite-proof` SKIP at the toolchain probe), versus the branch, sequential, `ulimit -v 6000000`, per-suite timeout 600 s; the 13 owning suites must read identical rc and final line (`boundary` 37 and `bite-proof` 96 assertions at planning, not the SKIP counts). Record the table in `evidence.md`. Do not start any other heavy gate while it runs.
+- [ ] 3.5 `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`, `bash scripts/guard-vacuity-floor.test.sh`, `bash scripts/lint-orphan-test-suites.sh`, the shellcheck delta over the 13 files, then `bash scripts/pre-push-ratchet-lane.sh` (detached, rc file, in the worktree). No `--affected` run, no `--print-selection`; no runner-parity check unless a runner file entered the diff.
+
+## Phase 4: mutation battery
+
+- [ ] 4.1 Guard 1 matrix rows that exercise S5's own pieces (1, 4, 5, 6, 8, 9, 10a/b, 11, 13, 14, 16, 19, 20; rows 2, 3, 7, 10c to e and 15 were measured at planning; 6j, 10e, 11e, 11f and 12 are the measured surviving mutants, written down, not run; the S3-form, canaries-only and canaries-plus-control controls re-measured) on scratch clones of the COMMITTED guard, after a green control; first red line recorded from printed output; must-PASS rows rc 0 with a `cmp` landing check against a pristine copy of each touched file; the driver's edit helper reads current content and asserts each replacement matches once; restore by `git reset --hard HEAD` and `git clean`, then `git status --porcelain` empty.
+- [ ] 4.2 Observer mutants (`-vc` inversion and `-m 0 -c` never-match) for `resolve-regenerable-conflicts.test.sh:554` only; the planning-time results for the 13 `alpha-metrics` lines and 8 sampled `boundary` lines are carried into `evidence.md`. A survivor is listed as unobserved, not claimed.
+
+## Phase 5: evidence and ship notes
+
+- [ ] 5.1 One learning file under `knowledge-base/project/learnings/test-failures/` if still non-obvious (candidate in AC-10). Pick the date at write time.
+- [ ] 5.2 `markdownlint-cli2` on the plan, this file, `decision-challenges.md` and the learning; re-measure the discoverability command under the 15 s cap, plain and in a Check 10-shaped `bwrap`, with `uptime` beside each figure.
+- [ ] 5.3 Ship notes for `soleur:ship` (also: the plugin-test path-exclusion idea in decision-challenges item 6 needs a tracking issue or an explicit `Filed:` disposition at ship time; use `pair-run.sh` from this directory for the pair run): first PR-body line says merging cuts a plugin release, releases and deploys the web image and deploys the docs site (trigger derivation output pasted), `Ref #9217`, no `[skip-deploy-fix-apply]`, labels `semver:patch`, `type/chore`, `domain/engineering`, a `## Changelog` section, the NOT-fixed list, cite `knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-s5-plugins-web-platform/evidence.md` and never the plan path; avoid the deny tokens and operator-verb bullets.
+- [ ] 5.4 Any review-fix edit to a converted file gets a `hand-edits.txt` entry in the same commit and an append-only addendum in `evidence.md`. S6 is cut only after S5 merges; never re-sync a BEHIND branch mid-flight; on a queue ejection rebase once, re-run Phases 0 and 3, re-enter.
+- [ ] 5.5 After merge: `soleur:postmerge` reads the push runs for the merge SHA (plugin release, web release, docs deploy and the seven unfiltered workflows ran, none of the other path-filtered ones), the new release tags, CI on main, and the files at the merge SHA.

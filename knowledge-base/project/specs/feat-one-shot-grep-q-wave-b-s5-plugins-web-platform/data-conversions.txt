@@ -1,0 +1,19 @@
+# S5: the lines the codemod routes to its data queue that are converted by the same one-token transform, read in context in the plan.
+# Base-side (branch base 4f002e3c33; origin/main ceb1c6c1ba is byte-identical for these two files) path:line:kind.
+# verify counts these as verified (plain transform); it cannot tell code from data, so this list plus the plan's table is the classification evidence.
+# eval-string: an argument of alpha-metrics.test.sh's assert(), run by `eval "$2"` in a shell with pipefail on (set +e -uo pipefail, line 23): executed code, not inert text.
+# stub-heredoc-quoted: the body of a `#!/bin/sh` stub written by <<'EOF' and run as a child; it sets no pipefail, so the shape is inert there today.
+plugins/soleur/scripts/alpha-metrics.test.sh:54:eval-string (negated)
+plugins/soleur/scripts/alpha-metrics.test.sh:62:eval-string (negated)
+plugins/soleur/scripts/alpha-metrics.test.sh:73:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:74:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:75:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:76:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:77:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:78:eval-string (two hits on the line, joined by &&)
+plugins/soleur/scripts/alpha-metrics.test.sh:79:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:87:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:98:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:100:eval-string
+plugins/soleur/scripts/alpha-metrics.test.sh:111:eval-string
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh:554:stub-heredoc-quoted
