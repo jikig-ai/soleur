@@ -647,3 +647,33 @@ describe("buildOuterWrapArgv — .git external-target binds are absent (review P
     }
   });
 });
+
+// Regression for the v0.332.3 deploy canary crash: a module-scope
+// `fileURLToPath(import.meta.url)` threw `ERR_INVALID_ARG_TYPE` inside
+// esbuild's CJS bundle (import.meta.url is undefined there) and took down
+// the whole server at load — canary_health_failed on deploy. Bundling this
+// module to CJS and requiring it reproduces exactly that load; it must not
+// throw.
+describe("bundle-load regression (v0.332.3 canary crash)", () => {
+  it("agent-outer-wrap loads when bundled to CJS (import.meta.url undefined)", async () => {
+    const esbuild = await import("esbuild");
+    // Inside the package so the bundle's external `require` calls resolve
+    // this app's node_modules (a /tmp output leaves them unresolvable).
+    const outDir = mkdtempSync(path.join(__dirname, "..", ".aow-bundle-"));
+    const out = path.join(outDir, "mod.cjs");
+    await esbuild.build({
+      entryPoints: [path.join(__dirname, "..", "server", "agent-outer-wrap.ts")],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      packages: "external",
+      outfile: out,
+      logLevel: "silent",
+    });
+    try {
+      execFileSync(process.execPath, ["-e", `require(${JSON.stringify(out)})`]);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+});
