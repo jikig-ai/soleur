@@ -9,12 +9,12 @@
 #
 # WHAT THIS FILE DOES NOT DO. It creates a passphrase and escrows it. It does
 # NOT recut anything and is inert with respect to the running host until a boot
-# reads the key. (The
-# reviewer-gated `apply_target=inngest-volume-recut` that this paragraph used to
-# name is gone (#8285 PR A converted that job into `inngest-backstop-retire`,
-# which retired the plaintext backstop `hcloud_volume.inngest_redis`, id
-# 106261946; that volume was destroyed 2026-10-09 and the job deleted by PR B).
-# ADR-142's additive byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.)
+# reads the key. (The reviewer-gated `apply_target=inngest-volume-recut` that this
+# paragraph used to name is gone: #8285 PR A converted that job into
+# `inngest-backstop-retire`, which retired the plaintext backstop
+# `hcloud_volume.inngest_redis`, id 106261946; that volume was destroyed 2026-10-09
+# and the job deleted by PR B. ADR-142's additive byte-copy is how the store moved
+# onto `hcloud_volume.inngest_redis_luks`.)
 #
 # SOLE COPY (#9879). The plaintext backstop is gone, so the volume below and the
 # passphrase pair that opens it are the ONLY copy of the Inngest queue and run
@@ -23,7 +23,7 @@
 # `inngest-host-replace`). Why, the loss-mode table, the deliberate two-step unprotect
 # and the read-back recipe: the runbook section "Sole-copy protection and key loss" in
 # knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md and the
-# ADR it links. inngest-luks-sole-copy.test.sh pins every line of this.
+# ADR it links. inngest-luks-sole-copy.test.sh pins the lifecycle/protection attributes of the blocks below.
 #
 # "MERGE IS INERT" IS THE DEFECT HERE, NOT THE SAFETY PROPERTY. Both resources
 # below MUST be in the per-merge `-target=` allowlist in
@@ -159,8 +159,7 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 # ORDERING TRAP when lifting deliberately: lift delete protection first, in its own reviewed change,
 # let it apply, and only then remove `prevent_destroy`. Removing `prevent_destroy` alone lets a destroy
 # apply detach the mounted volume before Hetzner refuses the delete. The runbook section named in the
-# file header carries the two-step route; this comment spells neither attribute literally so the
-# guard suite can pin each as exactly one code line.
+# file header carries the two-step route.
 resource "hcloud_volume" "inngest_redis_luks" {
   name              = "soleur-inngest-redis-store-luks"
   size              = var.inngest_redis_volume_size

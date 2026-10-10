@@ -2,8 +2,9 @@
 # Shared HCL "effective text" lexer and block extractors (#9879; extracted from
 # apps/web-platform/infra/workspaces-luks.test.sh Guard B4, behaviour unchanged).
 #
-# SOURCED, never executed. Consumers (resolve this file from the REPO ROOT, never from the
-# suite's own directory, so a suite that moves cannot silently stop finding it):
+# SOURCED, never executed. Consumers (each resolves this file from the REPO ROOT, via
+# "$DIR/../../.." from its own directory, never from a path next to itself, so the lib has exactly one
+# home and a suite that moves fails loudly instead of silently reading a stale copy):
 #   - apps/web-platform/infra/workspaces-luks.test.sh      (Guard B4, web-1 workspaces volume)
 #   - apps/web-platform/infra/inngest-luks-sole-copy.test.sh (Guard 1, inngest sole-copy store)
 #
@@ -15,6 +16,15 @@
 #
 # Provides: strip_comments, block_of, _b4_block_range, B4_TAIL, _b4_attr_true,
 # _b4_prevent_destroy_of, p_b4_no_override_files. Needs only awk, grep, find.
+#
+# NAMING (historical, do not "fix"): the `_b4_*` helpers and `B4_TAIL` keep the names they had as
+# Guard B4 of workspaces-luks.test.sh (the web-1 workspaces volume). Guard 1 reuses the lexer, block_of,
+# _b4_block_range, B4_TAIL and p_b4_no_override_files. It does NOT reuse `_b4_prevent_destroy_of`:
+# that is the WEAKER web-1 predicate (it needs one `lifecycle {` line somewhere in the block and one
+# `prevent_destroy = true` line, and so accepts shapes such as the attribute sitting in a sibling
+# nested block) and its behaviour is pinned by web-1's own rows, so it stays as is. Guard 1's
+# stricter predicate (depth-aware, blk_scan-based p_prevent_destroy) lives in
+# inngest-luks-sole-copy.test.sh.
 
 # Strip ALL THREE HCL comment forms. This file's entire job is to forbid constructs
 # that workspaces-luks.tf must also DISCUSS in prose, so every predicate that greps
@@ -31,6 +41,9 @@
 #     the ORIGINAL file from this output.
 #   - `/*` opens a block only OUTSIDE a "string" and before any `#` / `//` on the line, so
 #     `"/mnt/*"` or `# see /etc/default/*` does not swallow the rest of the file.
+#   - A heredoc opener is recognised only in the CODE part of a line: `# see <<EOF` or `// see <<-EOT`
+#     in a trailing comment must not start a heredoc, or every later line (a `/* ... */`-wrapped
+#     protection, a commented-out attribute) would be read as literal heredoc body and survive.
 #   - Inside an HCL heredoc (opener: two less-than signs, an optional dash, then a marker word;
 #     closer: the marker alone on its line) the text is literal; only the whole-line `#` / `//`
 #     blanking applies there, as before.
@@ -45,7 +58,7 @@ strip_comments() {
       next
     }
     {
-      line = $0; out = ""; instr = 0; n = length(line); i = 1
+      line = $0; out = ""; instr = 0; hasc = 0; n = length(line); i = 1
       while (i <= n) {
         c = substr(line, i, 1); c2 = substr(line, i, 2)
         if (inblk) { if (c2 == "*/") { inblk = 0; i += 2 } else { i++ }; continue }
@@ -57,11 +70,11 @@ strip_comments() {
         }
         if (c == "\"") { instr = 1; out = out c; i++; continue }
         if (c2 == "/*") { inblk = 1; i += 2; continue }
-        if (c == "#" || c2 == "//") { out = out substr(line, i); break }
+        if (c == "#" || c2 == "//") { hasc = 1; out = out substr(line, i); break }
         out = out c; i++
       }
       if (out ~ /^[[:space:]]*(#|\/\/)/) out = ""
-      if (!inblk && match(out, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
+      if (!inblk && !hasc && match(out, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
         hd = substr(out, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd)
       }
       print out

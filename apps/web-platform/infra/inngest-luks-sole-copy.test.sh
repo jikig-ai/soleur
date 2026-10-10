@@ -14,7 +14,10 @@
 #                                               breaks the sanctioned inngest-host-replace)
 #   the root directory                          no *override.tf, no *.tf.json
 #   every top-level *.tf                        exactly one writer of INNGEST_REDIS_LUKS_KEY on
-#                                               soleur-inngest/prd
+#                                               soleur-inngest/prd; every doppler_secret on that
+#                                               project/config has a plain string-literal `name`;
+#                                               no `change_protection` anywhere in effective text
+#   the six pinned blocks                       no count / for_each / provider / provisioner block
 #
 # Three scans on purpose: block text, directory listing, cross-file census. All reads go through ONE
 # chokepoint, the shared lexer tests/scripts/lib/hcl-effective-text.sh (also sourced by
@@ -29,13 +32,27 @@
 #   R2  volume prevent_destroy line deleted           R8  prevent_destroy removed from a Doppler parent
 #   R3  volume lifecycle wrapped in a multi-line /* */ R9  lifecycle / prevent_destroy ADDED to the attachment
 #   R4  volume prevent_destroy = false                R10 planted *override.tf / *.tf.json
-#   R5  ignore_changes on the volume or either member R11 a second writer of INNGEST_REDIS_LUKS_KEY
-#   R6  prevent_destroy moved into a non-lifecycle block  R12 extractor returns empty (renamed resource)
+#   R5  ignore_changes on the volume or either member R11 a second writer of INNGEST_REDIS_LUKS_KEY (plain,
+#   R6  prevent_destroy moved into a non-lifecycle        referenced, local, and INDENTED)
+#       block                                         R12 extractor returns empty (renamed resource)
+#   R13 a trailing comment holding a heredoc opener (hash or double-slash form) hides a wrapped protection
+#   R14 an inngest doppler_secret whose name is not a plain string literal (local, upper(), each.key)
+#   R15 count / for_each / provider / provisioner on one of the six pinned blocks
+#   R16 `change_protection` (the Hetzner action that lifts delete protection) in any effective .tf text
 # Harness rows: the lexer neutered to the identity function, and block extraction neutered to empty,
 # must each redden THIS suite (run on a scratch tree that sources a neutered copy of the lexer).
+# NEGATIVE CONTROLS (N1-N3, and HX3-HX5 which neuter the helper each one watches): a deliberately wrong
+# expected code must be judged FAIL, a sed that changes nothing must make apply_block_sed refuse, a
+# change outside the block must make `confined` refuse. Without them, neutering has_viol / confined /
+# the landing check left every matrix row green (measured 36/0 each).
+# ACCOUNTING PROOFS (HX6, HX7): a copy that drops one `cases` increment must trip the pass+fail != cases
+# identity, and a copy that runs almost no rows must trip the MIN_CASES floor. MIN_CASES is also pinned
+# EXACTLY to the measured case count, so lowering it (or adding rows without re-measuring) is a FATAL.
 # Must-PASS rows: cosmetic rewrites (spacing, trailing comment), an attachment whose comments
 # mention prevent_destroy / a lifecycle block, the rehearsal sub-root's scratch secret of the same
-# NAME (a different directory, never scanned), and the same NAME on a different Doppler project.
+# NAME (a different directory, never scanned), the same NAME on a different Doppler project, a REAL
+# heredoc whose body holds comment-looking lines, a non-literal secret name on another project, and a
+# comment that mentions change_protection.
 #
 # ANCHOR (stated, not hidden): these pins and this guard land in one diff, so one diff can weaken
 # both. The independent anchors are the census rows (G4h / G4_PROTECTED) in
@@ -48,13 +65,26 @@
 #
 # Run: bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh
 # Presence under apps/web-platform/infra/ IS registration (derived by run-registered-suites.sh).
+# Nested runs (the harness rows that neuter the lexer or a helper in a COPY of this suite) are selected
+# by the suite-private argv flag `--nested <mode>`, never by an environment variable: an ambient export
+# in a developer's shell must not be able to shrink the suite to its control rows.
 #
 # `set -e` is deliberately ABSENT: deliberately-nonzero greps are wrapped so the harness never
 # aborts mid-suite.
 set -uo pipefail
 
+# Suite-private nested-run selector. Anything else on argv is a usage error; the environment is not read.
+NESTED=""
+if [ "$#" -gt 0 ]; then
+  case "$1:${2-}" in
+    --nested:r3|--nested:negctl|--nested:acct|--nested:floor) NESTED="$2" ;;
+    *) printf 'usage: %s [--nested r3|negctl|acct|floor]\n' "$0" >&2; exit 2 ;;
+  esac
+fi
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The shared lexer is resolved from the REPO ROOT, never from this suite's own directory.
+# The shared lexer is resolved from the REPO ROOT (this suite's "$DIR/../../.."), the lib's one home, never
+# from a copy next to this suite.
 REPO_ROOT="$(cd "$DIR/../../.." && pwd)"
 HCL_LIB="$REPO_ROOT/tests/scripts/lib/hcl-effective-text.sh"
 [ -f "$HCL_LIB" ] || { printf 'FATAL: shared HCL lexer not found at %s\n' "$HCL_LIB" >&2; exit 2; }
@@ -65,7 +95,7 @@ RUNBOOK_REL="knowledge-base/engineering/operations/runbooks/inngest-luks-cutover
 RUNBOOK_SECTION="Sole-copy protection and key loss"
 LUKS_TF="inngest-redis-luks.tf"
 HOST_TF="inngest-host.tf"
-EXPECTED_CHECKS=18
+EXPECTED_CHECKS=21
 
 # Counters. `cases` is the INDEPENDENT case counter, incremented at every assert call site and never
 # inside pass()/fail(), so a neutered verdict helper cannot also neuter the accounting that notices it.
@@ -102,6 +132,9 @@ assert_fixture_dir() {
 
 # ONE owning trap for every scratch tree below. Scratch copies live under /var/tmp, never beside the
 # real files.
+# A killed run (SIGKILL skips the EXIT trap) leaves its tree behind: sweep stale ones (older than a day)
+# so /var/tmp does not accumulate them. Real directories only (-type d never follows a symlink).
+[ -n "$NESTED" ] || find /var/tmp -maxdepth 1 -type d -name 'inngest-sole-copy-suite.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
 SUITE_TMP="$(mktemp -d /var/tmp/inngest-sole-copy-suite.XXXXXX)" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
 assert_fixture_dir "$SUITE_TMP"
 trap 'rm -rf "$SUITE_TMP"' EXIT
@@ -162,8 +195,24 @@ p_prevent_destroy() { # <block> : inside a direct lifecycle block, exactly one, 
 }
 
 p_no_ignore_changes() { # <block> : the key-drift detector depends on there being none
+  local c
   [ -n "$1" ] || { echo 0; return; }
-  if code_only <<<"$1" | grep -Eq '(^|[^A-Za-z_])ignore_changes[[:space:]]*='; then echo 0; else echo 1; fi
+  # Capture first: `code_only | grep -q` under pipefail reads a SIGPIPE (141) as "no match" once grep
+  # exits early on a large block.
+  c="$(code_only <<<"$1")"
+  if grep -Eq '(^|[^A-Za-z_])ignore_changes[[:space:]]*=' <<<"$c"; then echo 0; else echo 1; fi
+}
+
+# The four meta-arguments that change WHICH instances exist or HOW they are managed. A `count` or
+# `for_each` re-addresses the resource (the address the pins and the runbook name stops existing), a
+# `provider` alias retargets it, and a `provisioner` block runs arbitrary commands on create or destroy
+# (it is the other way, besides a Terraform resource, to lift a protection). Depth-1 lines only: the
+# same words inside `labels` or `lifecycle` are ordinary attributes.
+p_no_meta_args() { # <block>
+  local d
+  [ -n "$1" ] || { echo 0; return; }
+  d="$(blk_scan direct <<<"$1" | code_only)"
+  if grep -Eq '^[[:space:]]*((count|for_each|provider)[[:space:]]*=|provisioner[[:space:]]*")' <<<"$d"; then echo 0; else echo 1; fi
 }
 
 p_attachment_unpinned() { # <block> : NO lifecycle block and no prevent_destroy assignment, comments excluded
@@ -175,13 +224,13 @@ p_attachment_unpinned() { # <block> : NO lifecycle block and no prevent_destroy 
 
 # Resource block of one address across the root's top-level *.tf. TB_COUNT = number of declarations
 # found (exactly one is required); TB_BLOCK = their comment-stripped text. ONE raw grep per tree
-# (CAND_FILES, set by evaluate_tree) picks the candidate files for all six addresses; a header hidden in
+# (CAND_FILES, an array set by evaluate_tree) picks the candidate files for all six addresses; a header hidden in
 # a comment is still resolved by block_of itself. A header the raw grep cannot see is not a header
 # block_of can see either (both anchor on column 0).
 tree_block() { # <dir> <type> <name>
   local dir="$1" type="$2" name="$3" f b n
   TB_COUNT=0; TB_BLOCK=""
-  for f in $CAND_FILES; do
+  for f in ${CAND_FILES[@]+"${CAND_FILES[@]}"}; do
     grep -Eq "^resource[[:space:]]+\"${type}\"[[:space:]]+\"${name}\"" "$f" || continue
     b="$(block_of "$f" "$type" "$name")"
     [ -n "$b" ] || continue
@@ -195,14 +244,15 @@ tree_block() { # <dir> <type> <name>
 # doppler_secret named so, except one PROVABLY on another project or config by a string literal. A
 # project or config that is a reference or a local counts as a writer.
 count_key_writers() { # <dir> -> number
-  local dir="$1" f total=0 n files
-  files="$(grep -l 'INNGEST_REDIS_LUKS_KEY' "$dir"/*.tf 2>/dev/null)"
-  for f in $files; do
+  local dir="$1" f total=0 n
+  local -a files
+  mapfile -t files < <(grep -l 'INNGEST_REDIS_LUKS_KEY' "$dir"/*.tf 2>/dev/null)
+  for f in ${files[@]+"${files[@]}"}; do
     [ -f "$f" ] || continue
     n="$(strip_comments "$f" | awk '
       function code(s) { sub(/[[:space:]]*(#|\/\/).*$/, "", s); sub(/[[:space:]]+$/, "", s); return s }
       function val(s, key,   r) { r = s; if (sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", r)) return code(r); return "" }
-      /^resource[[:space:]]+"doppler_secret"/ { inb = 1; d = 0; nm = ""; pj = ""; cf = "" }
+      /^[[:space:]]*resource[[:space:]]+"doppler_secret"/ { inb = 1; d = 0; nm = ""; pj = ""; cf = "" }
       inb {
         c = code($0); before = d
         d += gsub(/\{/, "{", c) - gsub(/\}/, "}", c)
@@ -223,6 +273,64 @@ count_key_writers() { # <dir> -> number
     total=$((total + n))
   done
   echo "$total"
+}
+
+# Every doppler_secret in the root that targets the inngest project or its prd environment (by reference
+# to doppler_project.inngest / doppler_environment.inngest_prd, or by the literal soleur-inngest project)
+# must carry a plain string-literal `name`. count_key_writers can only see a writer whose name it can
+# READ; `name = local.k`, `upper("inngest_redis_luks_key")` or `for_each` with `name = each.key` would
+# write the same key invisibly. A literal is a quoted string with no interpolation or template directive.
+# Prints 1 (all literal) or 0.
+p_inngest_secret_names_literal() { # <dir>
+  local dir="$1" f n bad=0
+  # A RAW grep first (it only ever over-selects: the lexer cannot create a token that is not in the file),
+  # so the lexer runs on the handful of files that could matter, not on every file in the root.
+  local -a cand
+  mapfile -t cand < <(grep -lE 'doppler_project\.inngest|doppler_environment\.inngest_prd|soleur-inngest' "$dir"/*.tf 2>/dev/null)
+  for f in ${cand[@]+"${cand[@]}"}; do
+    [ -f "$f" ] || continue
+    grep -Eq '^[[:space:]]*resource[[:space:]]+"doppler_secret"' "$f" || continue
+    n="$(strip_comments "$f" | awk '
+      function code(s) { sub(/[[:space:]]*(#|\/\/).*$/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+      function val(s, key,   r) { r = s; if (sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", r)) return code(r); return "" }
+      /^[[:space:]]*resource[[:space:]]+"doppler_secret"/ { inb = 1; d = 0; nm = ""; pj = ""; cf = "" }
+      inb {
+        c = code($0); before = d
+        d += gsub(/\{/, "{", c) - gsub(/\}/, "}", c)
+        if (before == 1) {
+          v = val($0, "name");    if (v != "") nm = v
+          v = val($0, "project"); if (v != "") pj = v
+          v = val($0, "config");  if (v != "") cf = v
+        }
+        if (d <= 0 && /\}/) {
+          ref = (pj ~ /doppler_project\.inngest([^A-Za-z0-9_]|$)/ || pj == "\"soleur-inngest\"" || cf ~ /doppler_environment\.inngest_prd([^A-Za-z0-9_]|$)/)
+          lit = (nm ~ /^"[^"$%\\]*"$/)
+          if (ref && !lit) bad++
+          inb = 0
+        }
+      }
+      END { print bad + 0 }')"
+    [ "$n" = "0" ] || bad=1
+  done
+  if [ "$bad" = "0" ]; then echo 1; else echo 0; fi
+}
+
+# `change_protection` is the Hetzner volume action that lifts delete protection (hcloud CLI
+# `disable-protection`, API `actions/change_protection`, the provider's own `delete_protection`
+# attribute is NOT this word). It has no business in the root's effective text outside a comment: a
+# terraform_data / local-exec / http that names it is a second, unpinned way to unprotect the volume.
+# Trailing comments are kept by the lexer, so a trailing-comment mention is RED too (fail safe: reword
+# it); whole-line and block comments are blanked and may discuss it freely.
+p_no_change_protection() { # <dir>
+  local f txt
+  local -a cand
+  mapfile -t cand < <(grep -lF 'change_protection' "$1"/*.tf 2>/dev/null)   # raw superset, then the lexer
+  for f in ${cand[@]+"${cand[@]}"}; do
+    [ -f "$f" ] || continue
+    txt="$(strip_comments "$f")"
+    if grep -Fq 'change_protection' <<<"$txt"; then echo 0; return; fi
+  done
+  echo 1
 }
 
 # --- The evaluator ----------------------------------------------------------------
@@ -248,7 +356,7 @@ extract() { # <type> <name> <outvar>
 evaluate_tree() { # <dir>
   local B_VOL B_ATT B_PW B_SEC B_PROJ B_ENV
   TREE="$1"; VIOLS=(); CHECKED=0
-  CAND_FILES="$(grep -lE '^resource[[:space:]]+"[a-z_]+"[[:space:]]+"(inngest_redis_luks|inngest_redis_luks_key|inngest|inngest_prd)"' "$TREE"/*.tf 2>/dev/null)"
+  mapfile -t CAND_FILES < <(grep -lE '^resource[[:space:]]+"[a-z_]+"[[:space:]]+"(inngest_redis_luks|inngest_redis_luks_key|inngest|inngest_prd)"' "$TREE"/*.tf 2>/dev/null)
   extract hcloud_volume inngest_redis_luks B_VOL
   extract hcloud_volume_attachment inngest_redis_luks B_ATT
   extract random_password inngest_redis_luks B_PW
@@ -265,6 +373,13 @@ evaluate_tree() { # <dir>
   check PROJ_PREVENT_DESTROY "$(p_prevent_destroy "$B_PROJ")"
   check ENV_PREVENT_DESTROY "$(p_prevent_destroy "$B_ENV")"
   check ATT_PINNED "$(p_attachment_unpinned "$B_ATT")"
+  local meta=1 mb
+  for mb in "$B_VOL" "$B_ATT" "$B_PW" "$B_SEC" "$B_PROJ" "$B_ENV"; do
+    [ "$(p_no_meta_args "$mb")" = "1" ] || meta=0
+  done
+  check META_ARGS "$meta"
+  check SEC_NAME_NOT_LITERAL "$(p_inngest_secret_names_literal "$TREE")"
+  check CHANGE_PROTECTION "$(p_no_change_protection "$TREE")"
   check OVERRIDE_FILES "$(p_b4_no_override_files "$TREE")"
   if [ "$(count_key_writers "$TREE")" = "1" ]; then check KEY_WRITER_COUNT 1; else check KEY_WRITER_COUNT 0; fi
   if [ "$CHECKED" -ne "$EXPECTED_CHECKS" ]; then
@@ -288,6 +403,9 @@ viol_text() { # <code> -> what is wrong
     ENV_PREVENT_DESTROY)  echo "doppler_environment.inngest_prd does not carry prevent_destroy = true inside a lifecycle block (it cascade-deletes the key)" ;;
     ATT_PINNED)           echo "hcloud_volume_attachment.inngest_redis_luks carries a lifecycle block or prevent_destroy (it would break the sanctioned inngest-host-replace)" ;;
     OVERRIDE_FILES)       echo "the root holds an *override.tf or *.tf.json that can override a protection behind the HCL this suite reads" ;;
+    META_ARGS)            echo "one of the six pinned blocks carries count, for_each, provider or a provisioner block (it re-addresses, retargets or scripts a protected resource)" ;;
+    SEC_NAME_NOT_LITERAL) echo "a doppler_secret on soleur-inngest/prd has a name that is not a plain string literal (the single-writer census cannot read it)" ;;
+    CHANGE_PROTECTION)    echo "a .tf file names change_protection in effective text (a second, unpinned way to lift the Hetzner delete protection)" ;;
     KEY_WRITER_COUNT)     echo "INNGEST_REDIS_LUKS_KEY on soleur-inngest/prd does not have exactly one writer" ;;
     *)                    echo "unknown violation code" ;;
   esac
@@ -404,12 +522,91 @@ assert_plant_green() { # <name> <relpath> <content>
   drop_tree "$tree"
 }
 
+# --- Negative controls for the verdict helpers -----------------------------------------
+# Each body runs inside a command substitution (a subshell), so its counters and ledger roll back
+# exactly like suite_selftest's, and reports through printf only, never through pass()/fail(), the
+# helpers under suspicion. The caller compares the report to the one value an HONEST helper produces.
+
+# N1: a deliberately WRONG expected code must be judged FAIL, the right one PASS: 1 pass, 1 fail.
+nc_wrong_code() {
+  passes=0; fails=0
+  if ! apply_block_sed "nc" "$LUKS_TF" hcloud_volume inngest_redis_luks 's/^([[:space:]]+delete_protection[[:space:]]*=[[:space:]]*)true/\1false/'; then
+    printf 'setup-failed'; return
+  fi
+  assert_red_tree "nc-wrong-code" NO_SUCH_CODE "$MUT_TREE"
+  assert_red_tree "nc-right-code" VOL_DELETE_PROTECTION "$MUT_TREE"
+  drop_tree "$MUT_TREE"
+  printf '%s/%s' "$passes" "$fails"
+}
+# N2: a sed that changes nothing must make apply_block_sed refuse (return non-zero, one fail).
+nc_noop_sed() {
+  passes=0; fails=0
+  if apply_block_sed "nc" "$LUKS_TF" hcloud_volume inngest_redis_luks 's/ZZ_NO_SUCH_TEXT_ZZ/x/'; then
+    printf 'accepted-a-noop-mutation'
+  else
+    printf 'refused/%s' "$fails"
+  fi
+  drop_tree "$MUT_TREE"
+}
+# N3: `confined` accepts a change INSIDE the volume block and refuses one before it and one after it.
+nc_confined() {
+  local t inside before after
+  t="$(new_tree)"
+  assert_fixture_dir "$t"
+  sed -E '/^resource "hcloud_volume" "inngest_redis_luks" \{/,/^\}/ s/^([[:space:]]+delete_protection[[:space:]]*=[[:space:]]*)true/\1false/' "$PRISTINE/$LUKS_TF" > "$t/in.tf"
+  { printf '# stray first line\n'; cat "$PRISTINE/$LUKS_TF"; } > "$t/before.tf"
+  { cat "$PRISTINE/$LUKS_TF"; printf '# stray last line\n'; } > "$t/after.tf"
+  confined "$PRISTINE/$LUKS_TF" "$t/in.tf" hcloud_volume inngest_redis_luks; inside=$?
+  confined "$PRISTINE/$LUKS_TF" "$t/before.tf" hcloud_volume inngest_redis_luks; before=$?
+  confined "$PRISTINE/$LUKS_TF" "$t/after.tf" hcloud_volume inngest_redis_luks; after=$?
+  drop_tree "$t"
+  printf '%s/%s/%s' "$inside" "$((before != 0))" "$((after != 0))"
+}
+negctl_rows() {
+  local got
+  cases=$((cases + 1))
+  got="$(nc_wrong_code 2>/dev/null)"
+  if [ "$got" = "1/1" ]; then pass; else fail "N1 a wrong expected violation code was not judged FAIL (got passes/fails=[$got], want 1/1): has_viol or assert_red_tree is blind"; fi
+  cases=$((cases + 1))
+  got="$(nc_noop_sed 2>/dev/null)"
+  if [ "$got" = "refused/1" ]; then pass; else fail "N2 a no-op sed was not refused by apply_block_sed (got [$got], want refused/1): the landing check is blind"; fi
+  cases=$((cases + 1))
+  got="$(nc_confined 2>/dev/null)"
+  if [ "$got" = "0/1/1" ]; then pass; else fail "N3 confined() did not accept an in-block change and refuse out-of-block ones (got inside/before/after=[$got], want 0/1/1)"; fi
+}
+
+# --- Accounting and floor -----------------------------------------------------------------
+# Reported by printf + exit 1, NEVER through fail(): a neutered fail() must not silence the floor.
+# A function so the nested accounting modes (--nested acct|floor) can run it after only the control row.
+finish() {
+  if [ "$((passes + fails))" -ne "$cases" ]; then
+    printf '[FATAL] accounting identity: passes(%s) + fails(%s) != cases(%s) - a verdict was discarded\n' "$passes" "$fails" "$cases" >&2
+    exit 1
+  fi
+  MIN_CASES=63
+  if [ "$cases" -lt "$MIN_CASES" ]; then
+    printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is %s\n' "$cases" "$MIN_CASES" >&2
+    exit 1
+  fi
+  # The floor is pinned EXACTLY to the measured case count: lowering MIN_CASES (which would let rows be
+  # deleted unnoticed) and adding rows without re-measuring it are both FATAL. Nested runs never get here.
+  [ -n "$NESTED" ] || [ "$cases" -le "$MIN_CASES" ] || { printf '[FATAL] floor drift: %s cases ran but MIN_CASES is %s - re-measure and set MIN_CASES=%s\n' "$cases" "$MIN_CASES" "$cases" >&2; exit 1; }
+  echo "inngest-luks-sole-copy: ${passes} passed, ${fails} failed (${cases} cases)"
+  [ "$fails" -eq 0 ]
+}
+
 # --- Harness rows ---------------------------------------------------------------------
 
 # H0: the unmutated tree is GREEN (the control every RED row is measured against), and the real
 # tree, read in place, agrees with its snapshot.
 assert_green_tree "H0 control: the unmutated root holds every pin" "$PRISTINE"
 assert_green_tree "H0 the real root, read in place, holds every pin" "$DIR"
+# Nested accounting runs (a COPY of this suite, started by HX6/HX7/HX3-HX5 below) stop here: `acct` and
+# `floor` run the accounting block after the control rows alone, `negctl` runs only the negative controls.
+case "$NESTED" in
+  acct|floor) finish; exit $? ;;
+  negctl)     negctl_rows; [ "$fails" -eq 0 ]; exit $? ;;
+esac
 
 # H1: a failure message names the runbook section. Drive one RED tree and read the report text.
 cases=$((cases + 1))
@@ -440,10 +637,19 @@ assert_mut_red "R2 volume prevent_destroy line deleted" VOL_PREVENT_DESTROY "$LU
 # lines, so ONLY a real comment lexer sees the block is gone)
 R3_ML='{ /^$/ { N; /\n[[:space:]]+lifecycle[[:space:]]*\{$/ { N; N; s/^\n/  \/*\n/; s/\n([[:space:]]+\})$/\n\1 *\// } } }'
 assert_mut_red "R3 volume lifecycle wrapped in a multi-line /* */" VOL_PREVENT_DESTROY "$LUKS_TF" $VOL_T $VOL_N "$R3_ML"
-# Nested runs (the lexer-neutering harness rows below) need only the control and R3.
-if [ -n "${SOLE_COPY_NESTED:-}" ]; then
+# The `--nested r3` runs (the lexer-neutering harness rows below) execute only H0, H1 and R3, and exit.
+if [ "$NESTED" = r3 ]; then
   [ "$fails" -eq 0 ]
   exit
+fi
+
+# H1b: the heading the failure messages send the reader to must exist in the runbook. Matched on the
+# heading TEXT (a `##`/`###` line), not its section number, which a reorganisation may change.
+cases=$((cases + 1))
+if grep -Eq "^#{2,3}[[:space:]]+.*${RUNBOOK_SECTION}" "$REPO_ROOT/$RUNBOOK_REL" 2>/dev/null; then
+  pass
+else
+  fail "H1b: $RUNBOOK_REL has no ## or ### heading containing \"$RUNBOOK_SECTION\", which every failure message cites"
 fi
 # R4
 assert_mut_red "R4 volume prevent_destroy = false" VOL_PREVENT_DESTROY "$LUKS_TF" $VOL_T $VOL_N \
@@ -493,11 +699,76 @@ R11B_BODY='resource "doppler_secret" "inngest_redis_luks_key_second" {
   value   = "synthetic-not-a-secret"
 }'
 assert_plant_red "R11b a second writer whose project/config are locals (not provably elsewhere)" KEY_WRITER_COUNT sibling_writer.tf "$R11B_BODY"
+R11C_BODY='  resource "doppler_secret" "inngest_redis_luks_key_indented" {
+    project = doppler_project.inngest.name
+    config  = doppler_environment.inngest_prd.slug
+    name    = "INNGEST_REDIS_LUKS_KEY"
+    value   = "synthetic-not-a-secret"
+  }'
+assert_plant_red "R11c an INDENTED second writer (a header with leading whitespace is still a resource)" KEY_WRITER_COUNT sibling_writer.tf "$R11C_BODY"
+# R14 a doppler_secret on the inngest project whose name the census cannot read. The count is then 1
+# (the real writer) so ONLY the non-literal-name check can see it.
+R14A_BODY='resource "doppler_secret" "indirect" {
+  project = doppler_project.inngest.name
+  config  = doppler_environment.inngest_prd.slug
+  name    = local.k
+  value   = "synthetic-not-a-secret"
+}'
+assert_plant_red "R14a name = local.k on soleur-inngest/prd" SEC_NAME_NOT_LITERAL sibling_indirect.tf "$R14A_BODY"
+R14B_BODY='resource "doppler_secret" "indirect" {
+  project = "soleur-inngest"
+  config  = "prd"
+  name    = upper("inngest_redis_luks_key")
+  value   = "synthetic-not-a-secret"
+}'
+assert_plant_red "R14b name = upper(...) on the literal soleur-inngest/prd" SEC_NAME_NOT_LITERAL sibling_indirect.tf "$R14B_BODY"
+R14C_BODY='resource "doppler_secret" "fan" {
+  for_each = toset(["INNGEST_REDIS_LUKS_KEY"])
+  project  = doppler_project.inngest.name
+  config   = doppler_environment.inngest_prd.slug
+  name     = each.key
+  value    = "synthetic-not-a-secret"
+}'
+assert_plant_red "R14c for_each with name = each.key on soleur-inngest/prd" SEC_NAME_NOT_LITERAL sibling_indirect.tf "$R14C_BODY"
+
 # R12 the extractor returns empty for an address (renamed resource): zero attributes would be checked
 assert_mut_red "R12a volume renamed: the extractor finds nothing" "EXTRACT:hcloud_volume.inngest_redis_luks" "$LUKS_TF" $VOL_T $VOL_N \
   's/^resource "hcloud_volume" "inngest_redis_luks"/resource "hcloud_volume" "gone"/'
 assert_mut_red "R12b attachment renamed: the extractor finds nothing" "EXTRACT:hcloud_volume_attachment.inngest_redis_luks" "$LUKS_TF" hcloud_volume_attachment inngest_redis_luks \
   's/^resource "hcloud_volume_attachment" "inngest_redis_luks"/resource "hcloud_volume_attachment" "gone"/'
+# R13 a trailing comment holding a heredoc opener must NOT start a heredoc: if it did, the text after it
+# would be read as literal body, and a /* */-wrapped protection (or a block-commented attribute) would
+# still look like code. The opener is built from two pieces so this file's own source holds no heredoc
+# opener (scripts/guard-vacuity-floor.test.sh reads `<<WORD` anywhere as a heredoc and would skip lines).
+LT2='<''<'
+R13A_SED="s~^([[:space:]]+location[[:space:]]*=.*)\$~\\1 # see ${LT2}EOF~;${R3_ML}"
+assert_mut_red "R13a trailing # comment with a heredoc opener, then the volume lifecycle wrapped in /* */" VOL_PREVENT_DESTROY "$LUKS_TF" $VOL_T $VOL_N "$R13A_SED"
+R13B_SED="s~^([[:space:]]+location[[:space:]]*=.*)\$~\\1 // see ${LT2}-EOT~;s~^([[:space:]]+)delete_protection[[:space:]]*=.*\$~\\1/*\\n\\1delete_protection = true\\n\\1*/~"
+assert_mut_red "R13b trailing // comment with a -heredoc opener, then delete_protection block-commented out" VOL_DELETE_PROTECTION "$LUKS_TF" $VOL_T $VOL_N "$R13B_SED"
+# R15 a meta-argument on each of the six blocks (every attribute at least once, every block once)
+META_HDR='s/^(resource .*\{)$/\1\n'
+assert_mut_red "R15a count = 1 on the volume" META_ARGS "$LUKS_TF" $VOL_T $VOL_N "${META_HDR}  count = 1/"
+assert_mut_red "R15b for_each on the random_password" META_ARGS "$LUKS_TF" random_password inngest_redis_luks "${META_HDR}  for_each = toset([\"a\"])/"
+assert_mut_red "R15c provider alias on the attachment" META_ARGS "$LUKS_TF" hcloud_volume_attachment inngest_redis_luks "${META_HDR}  provider = hcloud.alt/"
+assert_mut_red "R15d a provisioner block on the doppler_secret" META_ARGS "$LUKS_TF" doppler_secret inngest_redis_luks_key "${META_HDR}  provisioner \"local-exec\" {\\n    command = \"true\"\\n  }/"
+assert_mut_red "R15e count = 0 on doppler_project.inngest" META_ARGS "$HOST_TF" doppler_project inngest "${META_HDR}  count = 0/"
+assert_mut_red "R15f for_each on doppler_environment.inngest_prd" META_ARGS "$HOST_TF" doppler_environment inngest_prd "${META_HDR}  for_each = {}/"
+# R16 a second, unpinned way to lift the volume's delete protection
+R16A_BODY='resource "terraform_data" "lift" {
+  provisioner "local-exec" {
+    command = "curl -sS -X POST https://api.hetzner.cloud/v1/volumes/1/actions/change_protection -d {}"
+  }
+}'
+assert_plant_red "R16a a local-exec that calls the change_protection action" CHANGE_PROTECTION lift.tf "$R16A_BODY"
+R16B_BODY='data "http" "lift" {
+  url    = "https://api.hetzner.cloud/v1/volumes/1/actions/change_protection"
+  method = "POST"
+}'
+assert_plant_red "R16b an http data source that calls the change_protection action" CHANGE_PROTECTION lift.tf "$R16B_BODY"
+R16C_BODY='resource "terraform_data" "lift" {
+  input = "echo # innocent; curl https://api.hetzner.cloud/v1/volumes/1/actions/change_protection"
+}'
+assert_plant_red "R16c the token after a # INSIDE a string is still seen (no comment-stripping of strings)" CHANGE_PROTECTION lift.tf "$R16C_BODY"
 
 # --- Must-PASS rows (variants that differ from the canonical in a permitted way) -------
 
@@ -527,44 +798,70 @@ P6_BODY='resource "doppler_secret" "elsewhere" {
   value   = "synthetic-not-a-secret"
 }'
 assert_plant_green "P6 the same NAME on a different Doppler project, provable by string literal" other_project_secret.tf "$P6_BODY"
+# P7 a REAL heredoc: its body holds comment-looking lines (a /* that must NOT open a comment, a # line).
+# The lifecycle block after it must stay visible, or a lexer that mishandles heredocs is hiding code.
+assert_mut_green "P7 a real heredoc with a /* and a # line in its body before the guarded lines" "$LUKS_TF" $VOL_T $VOL_N \
+  "s~^([[:space:]]+location[[:space:]]*=.*)\$~\\1\\n  note = ${LT2}-EOT\\n  /* literal text, not a comment opener\\n  # also literal\\n  EOT~"
+# P8 a non-literal name is fine on a project that is provably not the inngest one
+P8_BODY='resource "doppler_secret" "elsewhere_indirect" {
+  project = "soleur"
+  config  = "prd"
+  name    = local.k
+  value   = "synthetic-not-a-secret"
+}'
+assert_plant_green "P8 a non-literal secret name on a provably different Doppler project" other_project_indirect.tf "$P8_BODY"
+# P9 comments may discuss change_protection
+P9_BODY='# a whole-line comment about change_protection
+/* a block comment about
+   change_protection */
+resource "terraform_data" "note" {
+  input = "x"
+}'
+assert_plant_green "P9 whole-line and block comments that mention change_protection" comment_only.tf "$P9_BODY"
 
-# --- Harness rows: neutering the shared lexer must redden THIS suite -----------------------
+# --- Negative controls (N1-N3) -------------------------------------------------------------------
+negctl_rows
+
+# --- Harness rows: neutering the shared lexer, a verdict helper, or the accounting must redden THIS suite
 # Run a copy of this suite on a scratch tree that has the same layout (apps/web-platform/infra,
-# tests/scripts/lib) and sources a NEUTERED copy of the lexer. Nested runs (SOLE_COPY_NESTED) execute only
-# H0, H1 and R3 and exit, and must exit 1 (a verdict, never a crash) with the named row failing.
-nested_neutered() { # <name> <function-override> <expected-fail-row-substring>
-  local name="$1" override="$2" expect="$3" root out rc=0
+# tests/scripts/lib) with a NEUTERED copy of the lexer (a function override appended to the lib) and/or a
+# NEUTERED suite (a sed over the copy). Nested runs execute a subset selected by `--nested <mode>` and must
+# exit 1 (a verdict, never a crash) with the named text in the output. Both mutations are asserted to have
+# LANDED (the copy differs from the original), or the row fails as vacuous.
+nested_case() { # <name> <mode> <lib-override|-> <suite-sed|-> <expected-output-substring>
+  local name="$1" mode="$2" override="$3" ssed="$4" expect="$5" root out rc=0 suite
   cases=$((cases + 1))
   root="$(mktemp -d "$SUITE_TMP/nest.XXXXXX")" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
   assert_fixture_dir "$root"
   mkdir -p "$root/apps/web-platform/infra" "$root/tests/scripts/lib" || { printf 'FATAL: mkdir failed\n' >&2; exit 2; }
   cp "$PRISTINE"/*.tf "$root/apps/web-platform/infra/" || { printf 'FATAL: cp failed\n' >&2; exit 2; }
-  cp "${BASH_SOURCE[0]}" "$root/apps/web-platform/infra/inngest-luks-sole-copy.test.sh" || { printf 'FATAL: cp failed\n' >&2; exit 2; }
+  suite="$root/apps/web-platform/infra/inngest-luks-sole-copy.test.sh"
+  cp "${BASH_SOURCE[0]}" "$suite" || { printf 'FATAL: cp failed\n' >&2; exit 2; }
   cp "$HCL_LIB" "$root/tests/scripts/lib/hcl-effective-text.sh" || { printf 'FATAL: cp failed\n' >&2; exit 2; }
-  printf '\n%s\n' "$override" >> "$root/tests/scripts/lib/hcl-effective-text.sh"
-  out="$(SOLE_COPY_NESTED=1 bash "$root/apps/web-platform/infra/inngest-luks-sole-copy.test.sh" 2>&1)"
+  [ "$override" = "-" ] || printf '\n%s\n' "$override" >> "$root/tests/scripts/lib/hcl-effective-text.sh"
+  if [ "$ssed" != "-" ]; then
+    sed "$ssed" "${BASH_SOURCE[0]}" > "$suite"
+    if cmp -s "${BASH_SOURCE[0]}" "$suite"; then
+      fail "$name: the suite mutation changed nothing (vacuous row)"; rm -rf "$root"; return
+    fi
+  fi
+  out="$(bash "$suite" --nested "$mode" 2>&1)"
   rc=$?
   if [ "$rc" -eq 1 ] && grep -Fq "$expect" <<<"$out"; then
     pass
   else
-    fail "$name: the neutered lexer did not redden the suite as expected (rc=$rc, wanted rc=1 with a failing row containing [$expect])"
+    fail "$name: the neutered copy did not redden as expected (rc=$rc, wanted rc=1 with output containing [$expect])"
   fi
   rm -rf "$root"
 }
-nested_neutered "HX1 strip_comments neutered to the identity function" 'strip_comments() { cat "$1"; }' "R3 volume lifecycle wrapped in a multi-line"
-nested_neutered "HX2 block extraction neutered to empty" 'block_of() { :; }' "H0 control: the unmutated root holds every pin"
+nested_case "HX1 strip_comments neutered to the identity function" r3 'strip_comments() { cat "$1"; }' - "R3 volume lifecycle wrapped in a multi-line"
+nested_case "HX2 block extraction neutered to empty" r3 'block_of() { :; }' - "H0 control: the unmutated root holds every pin"
+# The verdict helpers (BRE seds: `(` `)` `{` are literal there; the original body is kept under another name).
+nested_case "HX3 has_viol neutered to always-true" negctl - 's/^has_viol() {/has_viol() { return 0; }\n_has_viol_orig() {/' "N1 a wrong expected violation code"
+nested_case "HX4 confined neutered to always-true" negctl - 's/^confined() {/confined() { return 0; }\n_confined_orig() {/' "N3 confined()"
+nested_case "HX5 the apply_block_sed landing check neutered to if-false" negctl - 's/if cmp -s "\$PRISTINE\/\$file" "\$tree\/\$file"; then/if false; then/' "N2 a no-op sed"
+# The accounting (finish): one `cases` increment dropped must trip the identity; no rows must trip the floor.
+nested_case "HX6 a dropped cases increment trips the pass+fail != cases identity" acct - '/^assert_green_tree() {/,/^}/ s/cases=\$((cases + 1))/:/' "accounting identity"
+nested_case "HX7 a run with almost no rows trips the MIN_CASES floor" floor - - "anti-vacuity floor"
 
-# --- Accounting and floor -----------------------------------------------------------------
-# Reported by printf + exit 1, NEVER through fail(): a neutered fail() must not silence the floor.
-if [ "$((passes + fails))" -ne "$cases" ]; then
-  printf '[FATAL] accounting identity: passes(%s) + fails(%s) != cases(%s) - a verdict was discarded\n' "$passes" "$fails" "$cases" >&2
-  exit 1
-fi
-MIN_CASES=36
-if [ "$cases" -lt "$MIN_CASES" ]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is %s\n' "$cases" "$MIN_CASES" >&2
-  exit 1
-fi
-
-echo "inngest-luks-sole-copy: ${passes} passed, ${fails} failed (${cases} cases)"
-[ "$fails" -eq 0 ]
+finish
