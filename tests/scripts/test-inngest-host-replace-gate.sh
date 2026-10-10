@@ -281,6 +281,27 @@ else
   fi
 fi
 
+# ── #9879 / AC3: the SANCTIONED host replace still passes once the LUKS volume is delete-protected ─────
+# The sole-copy protection pins the volume (prevent_destroy + delete_protection) and deliberately leaves the
+# ATTACHMENT unpinned, because a host replace replaces the attachment (detach, then attach to the new server).
+# This pair replays that exact shape, with the entry detail a real `terraform show -json` carries (before/after
+# objects with ids, as the projection of a real plan keeps only address + action list; every id here is a
+# SYNTHESIZED placeholder, no captured plan, no secret):
+#   server        delete+create   (the replace; after.firewall_ids bound to the deny-all firewall)
+#   network       delete+create   (id-referencing dependent)
+#   attachment    delete+create   (the pair member the pin must NOT block)
+#   LUKS volume   no-op           (preserved; the pin's target)
+# The first row is the PASS counterpart; the second is the PRE-APPLY counterpart: the same plan with the volume
+# `update` (what a plan run BEFORE the merge-apply of delete_protection shows) aborts luks_volume_touched, so the
+# runbook ordering "merge-apply first, replace after" is a tested fact and not an assertion in prose.
+LUKS_VOL_NOOP_ENTRY() { printf '{"address":"hcloud_volume.inngest_redis_luks","change":{"actions":["%s"],"before":{"id":"7000001","delete_protection":%s},"after":{"id":"7000001","delete_protection":true}}}' "$1" "$2"; }
+LUKS_ATT_REPLACE_ENTRY='{"address":"hcloud_volume_attachment.inngest_redis_luks","change":{"actions":["delete","create"],"before":{"id":"7000001","volume_id":7000001,"server_id":7000002},"after":{"volume_id":7000001}}}'
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "$FW_NOOP" "$NET_REPLACE" "$LUKS_ATT_REPLACE_ENTRY" "$(LUKS_VOL_NOOP_ENTRY no-op true)"
+RCHK "AC3a (must-PASS): host replace = server + attachment delete+create, protected LUKS volume no-op => PASS" 0 "inngest_host_replace_gate: PASS"
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "$FW_NOOP" "$NET_REPLACE" "$LUKS_ATT_REPLACE_ENTRY" "$(LUKS_VOL_NOOP_ENTRY update false)"
+RCHK "AC3b (pre-apply): the same plan with the LUKS volume UPDATE (delete_protection not yet applied) => ABORT luks_volume_touched" 1 "reason=luks_volume_touched "
+
+
 
 
 
@@ -301,11 +322,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 40 ]]; then
+if [[ "$_ran" -lt 43 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 40. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 43. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 40)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
 fi
 
 echo ""

@@ -80,6 +80,7 @@ apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	5500	measured
 apps/web-platform/infra/inngest-host.test.sh	500	measured
 apps/web-platform/infra/inngest-inventory.test.sh	7000	measured
 apps/web-platform/infra/inngest-luks-cutover.test.sh	22500	measured
+apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1000	floor
 apps/web-platform/infra/inngest-nic-wait.test.sh	34500	measured
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4000	measured
 apps/web-platform/infra/inngest-redis-luks.test.sh	500	measured

@@ -818,3 +818,15 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 **What is unchanged.** Every other judge and grader arm, the 72 h minimum, the 26 h freshness, the window rule, deletion of the marker on RED, and the #6931 directive. The wording in `scripts/web2-rebirth.sh` and `web2-luks-rebirth.yml` that named the old boot-id proof is corrected in the same PR; the restart step inside the rebirth workflow stays until the cleanup PR retires it together with the `web-host-reboot` workflow (closing row 5 of the rebirth runbook).
 
 **Status of the claim.** The rule is not yet met by graded rows. web-2 remains *provisioned, proof pending* until the #6931 grader reports PASS. Nothing in this addendum is evidence for the encryption-posture ledger, Article 30 or any customer-facing sentence.
+
+## Addendum — 2026-10-10 (#9879, divergence note for the inngest sole copy)
+
+Appended; nothing above is edited. **A deliberate divergence from this ADR's pin set, recorded so it is not mistaken for a
+gap.** ADR-282 gives the Inngest sole-copy volume (`hcloud_volume.inngest_redis_luks`) delete protection plus
+`prevent_destroy` on the volume, its passphrase pair and the two Doppler cascade parents, but **no `prevent_destroy` on its
+attachment**, where this ADR's web-1 pin set puts one on `hcloud_volume_attachment.workspaces_luks`. The reason is
+structural: web-1's host-replace dispatch refuses web-1 by name, so nothing sanctioned replaces that attachment, while the
+sanctioned `inngest-host-replace` replaces the Inngest server and therefore its attachment (ForceNew on `server_id`).
+The Inngest attachment is protected by the dispatch gates and the reachability pins instead. This note changes nothing about
+web-1, web-2 or this ADR's decision. It takes effect on the merge of PR #9925 (adopting until that merge's apply and
+read-back, per ADR-282).
