@@ -3098,8 +3098,8 @@ first_stmt=$(grep -vE '^(--|SET LOCAL |=== )' "$XP" | grep -v '^$' | head -n 1) 
 if [[ -n "$l_set" && -n "$l_lock" && -n "$l_snap" && -n "$l_cas" && -n "$l_post" ]] && (( l_set < l_lock && l_lock < l_snap && l_snap < l_cas && l_lastdown < l_post )) \
   && [[ "$first_stmt" == "LOCK TABLE public._schema_migrations IN SHARE ROW EXCLUSIVE MODE;" ]] \
   && grep -qF "<> '$snap_pre' THEN" "$XP" && grep -qF "<> '$snap_post' THEN" "$XP" \
-  && [[ "$(sed -n "${l_snap},\$p" "$XP" | grep -m1 -F 'RAISE EXCEPTION')" == "    RAISE EXCEPTION 'ledger-discard: the ledger changed after it was read (snapshot mismatch)';" ]] \
-  && [[ "$(sed -n "${l_post},\$p" "$XP" | grep -m1 -F 'RAISE EXCEPTION')" == "    RAISE EXCEPTION 'ledger-discard: ledger rows other than the claimed ones changed inside the unit';" ]] \
+  && [[ "$(grep -m1 -F 'RAISE EXCEPTION' < <(sed -n "${l_snap},\$p" "$XP"))" == "    RAISE EXCEPTION 'ledger-discard: the ledger changed after it was read (snapshot mismatch)';" ]] \
+  && [[ "$(grep -m1 -F 'RAISE EXCEPTION' < <(sed -n "${l_post},\$p" "$XP"))" == "    RAISE EXCEPTION 'ledger-discard: ledger rows other than the claimed ones changed inside the unit';" ]] \
   && grep -qF "string_agg(filename || '|' || COALESCE(content_sha, '') || '|' || COALESCE(to_char(applied_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS'), ''), chr(10) ORDER BY filename)" "$XP" \
   && [[ "$wrap_ok" == "yes" && "$tags" == "2" ]]; then
   pass "the server enforces what the classifier only advises, and the unit asserts the ledger it planned from"

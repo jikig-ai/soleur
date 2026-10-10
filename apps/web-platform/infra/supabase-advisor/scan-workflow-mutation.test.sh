@@ -90,8 +90,8 @@ count_false_negatives() {  # $1 = shape id; echoes the count over N runs
   local n=0 i
   for ((i = 0; i < N; i++)); do
     case "$1" in
-      piped)   ( set -uo pipefail; grep -vE '^\s*#' "$AMP" | grep -qE "$PAT" ) ;;
-      printf)  ( set -uo pipefail; c="$(grep -vE '^\s*#' "$AMP")"; printf '%s' "$c" | grep -qE "$PAT" ) ;;
+      piped)   ( set -uo pipefail; grep -vE '^\s*#' "$AMP" | grep -qE "$PAT" ) ;;  # sigpipe-demo: intentional (D1 demonstration, the unfixed piped shape)
+      printf)  ( set -uo pipefail; c="$(grep -vE '^\s*#' "$AMP")"; printf '%s' "$c" | grep -qE "$PAT" ) ;;  # sigpipe-demo: intentional (D2 demonstration, the printf-fed shape)
       heredoc) ( set -uo pipefail; c="$(grep -vE '^\s*#' "$AMP")"; grep -qE "$PAT" <<<"$c" ) ;;
     esac || n=$((n + 1))
   done
@@ -115,7 +115,7 @@ else
 fi
 # D2 — the issue's own preferred fix is NOT a fix. Pins it against a future revert.
 if [[ "$printf_fn" == "$N" ]]; then
-  pass "D2 'printf \$var | grep -q' false-FAILs $printf_fn/$N too (still a producer feeding a pipe)"
+  pass "D2 the printf-then-grep-q form false-FAILs $printf_fn/$N too (still a producer feeding a pipe)"
 else
   fail "D2 printf form is unsafe" "got $printf_fn/$N — re-verify before anyone 'simplifies' the here-strings back to a pipe"
 fi
@@ -155,7 +155,7 @@ fi
 
 # R1 (RED half) — revert ONE site to the piped form.
 MUT="$PROBE_DIR/reverted.test.sh"
-sed 's|if grep -qF '"'"'\.lints\[\]?'"'"' <<<"\$script_code"; then|if printf '"'"'%s'"'"' "$script_code" \| grep -qF '"'"'.lints[]?'"'"'; then|' "$PRISTINE" > "$MUT"
+sed 's|if grep -qF '"'"'\.lints\[\]?'"'"' <<<"\$script_code"; then|if printf '"'"'%s'"'"' "$script_code" \| grep -qF '"'"'.lints[]?'"'"'; then|' "$PRISTINE" > "$MUT"  # sigpipe-demo: intentional (R1 mutation recipe that restores the piped shape)
 if assert_mutated "$PRISTINE" "$MUT" "R1 residual guard goes RED"; then
   out="$(cd "$REPO_ROOT" && bash "$MUT" 2>&1)"
   if grep -qF 'FAIL no early-exit-pipe form remains' <<<"$out"; then
@@ -175,7 +175,7 @@ echo "== N: each normalisation in the residual guard is necessary =="
 STRIP_STAGE="  | sed 's/\"[^\"]*\"//g' \\"
 FOLD_STAGE="  | sed -E ':b;/\\|[[:space:]]*\$/{N;s/\\|[[:space:]]*\\n[[:space:]]*/| /;bb}' \\"
 PASS_ANCHOR='pass "every check matches a here-string'
-SELF_MATCH_MSG='pass "never write producer | grep -qF x — every check matches a here-string'
+SELF_MATCH_MSG='pass "never write producer | grep -qF x — every check matches a here-string'  # sigpipe-demo: intentional (needle equal to the companion suite message)
 
 mutate() {  # $1 = src, $2 = dst, $3 = exact find, $4 = replace ("" deletes find's line)
   # Non-zero on ANY no-op: anchor absent (2) or output identical to input (3).

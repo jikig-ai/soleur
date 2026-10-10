@@ -164,7 +164,8 @@ if [ -n "$R_MARK" ] && [ "$(grep -c . <<< "$R_LINE")" -eq 1 ] && [ -n "$R_FIELD"
 else
   no "cloud-init-registry.yml no longer has exactly one LINE=\"SOLEUR_ZOT_DISK … ghcr_blocked=\$GHCR_BLOCKED … zot_last_err=\$ZOT_LAST_ERR\" — arm R would silently stop matching"
 fi
-grep -qE '^[[:space:]]*if printf .%s\\n. "\$_gh_addrs" \| grep -qvxE .0\\\.0\\\.0\\\.0\|::.; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi$' "$CR" \
+R_EMIT_RE='^[[:space:]]*if printf .%s\\n. "\$_gh_addrs" \| grep -qvxE .0\\\.0\\\.0\\\.0\|::.; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi$'  # sigpipe-demo: intentional (needle for the registry carrier emitter line; update with that carrier)
+grep -qE "$R_EMIT_RE" "$CR" \
   && ok "the registry emitter yields 0 exactly when ghcr.io resolves to something other than the sinkhole" \
   || no "cloud-init-registry.yml no longer derives GHCR_BLOCKED=0 from a non-sinkhole address — the alert's value-0 literal may mean something else"
 # The cadence the paging windows assume: the heartbeat runs every five minutes (check 300 / query 900 hold ~3 rows).

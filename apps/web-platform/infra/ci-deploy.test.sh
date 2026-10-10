@@ -4181,7 +4181,7 @@ diag_check "#9871 D9a: the real container script, run under sh, prints exactly t
   "$([[ -n "$D9_SCRIPT" && "$D9_SH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_SH"
 diag_check "#9871 D9b: the real container script, run under bash, prints exactly the ten pinned sections" \
   "$([[ -n "$D9_SCRIPT" && "$D9_BASH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_BASH"
-D9_PROC=$(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null | grep -m1 '^proc ' || true)
+D9_PROC=$(grep -m1 '^proc ' < <(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null) || true)
 diag_check "#9871 D9d: the real script's sdk_probe carries the SDK flags and its proc row reports NoNewPrivs and Seccomp" \
   "$(has_f '--unshare-pid --proc /proc' "$(grep '^v=.*--unshare-user' <<<"$D9_SCRIPT" || true)" && has_f 'NoNewPrivs=' "$D9_PROC" && has_f 'Seccomp=' "$D9_PROC" && echo 0 || echo 1)" "proc: $D9_PROC"
 diag_check "#9871 D9c control: a gutted script does NOT satisfy the D9 check (so D9a/D9b can fail)" \
