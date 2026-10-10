@@ -59,11 +59,12 @@
 
 import { describe, test, expect, beforeAll } from "bun:test";
 import { parse as parseYaml } from "yaml";
-import { resolve, join } from "path";
+import { resolve, join, posix } from "path";
 import {
   readFileSync,
   existsSync,
   readdirSync,
+  lstatSync,
   writeFileSync,
   mkdtempSync,
   rmSync,
@@ -82,9 +83,11 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // over the three surviving surfaces, B6, B5): the job those rows graded no longer exists. The floor is exact
 // (grep -cE '^\s*test\(' = 266). Each deleted row's mutation, and what kills it now, is in the PR B plan
 // (knowledge-base/project/plans/archive/20261009-235733-2026-10-09-chore-pr-b-retire-inngest-backstop-wipe-apparatus-plan.md).
-// 266 -> 271 (#9879, +5): Guard 2 (sole-copy reachability census) rows G2 live/mutation/spelling/scripts/harness in the B5/B6 describe.
-// Exact again: grep -cE '^\s*test\(' = 271.
-const TEST_FLOOR = 271;
+// 266 -> 271 (#9879, +5): G2 reachability (sole-copy census) rows G2 live/mutation/spelling/scripts/harness in the B5/B6 describe.
+// 271 -> 277 (#9879 review fixes, +6): G2 destroy spellings + sub-root normalisation, G2 scanner linearity, and the G2e attribute pin
+// (live, mutation matrix, comment-stripper robustness, per-merge edge to the volume).
+// Exact again: grep -cE '^\s*test\(' = 277.
+const TEST_FLOOR = 277;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1466,13 +1469,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // `hcloud_volume_attachment.inngest_redis` are gone: the apparatus is deleted and the volume was destroyed
   // 2026-10-09. A managed address that no longer exists needs no exclusion (Guard 1 below pins that the
   // retired addresses are not targeted by any job).
-  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. Both are
-  // operator-applied via `apply_target=inngest-host`; neither is in the per-merge
-  // allowlist, because creating a volume is a billable resource change that wants
-  // the dispatch gate rather than a merge side effect. They are listed here the
-  // moment the resources exist — check_resource_partition reds on any managed
-  // address that is neither reachable nor excluded, so the coverage test would go
-  // red on the commit that declares the volume if these two lines lagged it.
+  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. They are listed here the moment the
+  // resources exist — check_resource_partition reds on any managed address that is neither reachable nor
+  // excluded, so the coverage test would go red on the commit that declares the volume if these two lines lagged it.
+  //  - The ATTACHMENT is operator-applied via `apply_target=inngest-host` / `inngest-host-replace`; it is not in
+  //    the per-merge allowlist.
+  //  - The VOLUME is not a `-target` of any per-merge step either (this entry is what `-target` coverage reads), but
+  //    it is NOT unreachable from a merge: it rides the per-merge plan as a DEPENDENCY of the per-merge target
+  //    `logtail_exploration.inngest_luks_wrong_volume`, through the alias local that interpolates
+  //    `hcloud_volume.inngest_redis_luks.id` (betterstack-logs-alerts.tf). That edge is how an in-place update
+  //    (delete_protection, #9879) reaches the live volume, and the same edge would carry a create or a replace,
+  //    which prevent_destroy refuses and the G2e attribute pin holds in place. The edge is pinned by the
+  //    "G2e: the per-merge edge to the volume" test (ADR-282); this exclusion does not make the volume operator-only.
   "hcloud_volume.inngest_redis_luks",
   "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
@@ -3474,7 +3482,7 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
   });
 });
 
-// --- Guard 2 (#9879): reachability of the inngest sole-copy addresses -------------------------------------------
+// --- G2 reachability (#9879): reachability of the inngest sole-copy addresses -------------------------------------------
 // Extends B5/B6 (below) with one census over EVERY workflow and tracked script. Built on the existing chokepoints:
 // extractJobBlock (per-job text), extractAllTargets (the job-found non-vacuity check), stripDispatchJobs (the
 // per-merge view), stripShellLineComments and joinContinuations (comment strip, continuation fold).
@@ -3561,6 +3569,37 @@ function g2StateWriteHits(code: string): Array<[string, string]> {
   return out;
 }
 
+// Command position for `terraform [-chdir=X] destroy`: line start, a separator, a shell keyword, a YAML `run:`, an env
+// assignment run, a privilege/exec wrapper (`sudo`, `env`, `time`, ...), `--` (doppler run), or the opening quote of
+// `bash -c "..."`. Prose has a backtick, a quote or ordinary words in front, so it is not the command. Every quantified
+// group below is delimited by whitespace or a metacharacter, so the match is linear (a perf row in the spelling suite pins it).
+const G2_CMD_PREFIX =
+  String.raw`(?:^|[;&|({]|\b(?:then|do|else|elif|if|while|until)\b|!|--|\brun:|\b(?:sudo|exec|time|command|env|nohup|xargs|eval)\b(?:[ \t]+-\S+)*|\b(?:ba|z|da|k)?sh[ \t]+(?:-\w+[ \t]+)*-\w*c[ \t]+["'])`;
+const G2_DESTROY_CMD = new RegExp(
+  String.raw`${G2_CMD_PREFIX}[ \t]*(?:[A-Za-z_]\w*=[^\s;&|()]*[ \t]+)*terraform(?:[ \t]+-chdir[= ]\S+)?[ \t]+destroy(?![\w-])`,
+  "m",
+);
+const G2_DESTROY_FLAG = /(?<![\w-])-destroy(?![\w-])/;
+
+/**
+ * Is this step's `working-directory` a rehearsal SUB-ROOT (its own state)? The path is NORMALISED first: `apps/web-platform/infra/.`
+ * and `.../infra/./` are the main root itself, and `.../infra/sub/..` is too, so none of them is an exemption. `[ \t]*` (never `\s*`)
+ * keeps the scan linear: `\s*` with /m crosses newlines and goes quadratic on a whitespace-only input.
+ */
+function g2IsSubRoot(step: string): boolean {
+  const m = /^[ \t]*(?:-[ \t]+)?working-directory:[ \t]*(.*?)[ \t]*$/m.exec(step);
+  if (!m) return false;
+  const v = m[1].replace(/^(["'])(.*)\1$/, "$2").trim();
+  if (/^\$\{\{\s*env\.REHEARSAL_DIR\s*\}\}$/.test(v)) return true;
+  const root = "apps/web-platform/infra/";
+  const i = v.indexOf(root);
+  if (i < 0) return false;
+  const rest = posix.normalize(v.slice(i));
+  if (!rest.startsWith(root)) return false;
+  const seg = rest.slice(root.length).split("/")[0];
+  return seg !== "" && seg !== "." && seg !== "..";
+}
+
 /** Every (verb, address) a job's code reaches: -target/-replace in `=`/space/quoted/escaped-quote spellings, destroy, state writes. */
 function g2JobVerbs(code: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];
@@ -3571,11 +3610,8 @@ function g2JobVerbs(code: string): Array<[string, string]> {
   // the state-write scan below already see that). Every other destroy is a hit. `[ack-destroy]` has a word char before the
   // dash, and prose `terraform destroy` sits behind a backtick/quote, so neither is the command.
   for (const step of code.split(/\n(?= {6}- )/)) {
-    const isDestroy =
-      /(?<![\w-])-destroy(?![\w-])/.test(step) ||
-      /(?:^|[;&|(]|\bthen\b|\bdo\b|--)[ \t]*terraform(?:[ \t]+-chdir=\S+)?[ \t]+destroy(?![\w-])/m.test(step);
-    const subRoot = /^\s*working-directory:\s*(?:\$\{\{\s*env\.REHEARSAL_DIR\s*\}\}|\S*apps\/web-platform\/infra\/[A-Za-z0-9_.-]+\S*)\s*$/m.test(step);
-    if (isDestroy && !subRoot) out.push(["destroy", "*"]);
+    const isDestroy = G2_DESTROY_FLAG.test(step) || G2_DESTROY_CMD.test(step);
+    if (isDestroy && !g2IsSubRoot(step)) out.push(["destroy", "*"]);
   }
   out.push(...g2StateWriteHits(code));
   return out;
@@ -3621,19 +3657,55 @@ function g2LiveWorkflows(): Record<string, string> {
   return out;
 }
 
-/** Tracked `scripts/**` and `apps/*\/infra/**` shell files that exist on disk. */
+/**
+ * Tracked files the script scan covers: composite actions, CI helper scripts, repo scripts, every app's infra tree and the
+ * web-platform scripts, in the extensions that can drive terraform. A symlink (lstat) is skipped, so a link into the tree
+ * is not scanned twice or followed out of it. Test files and fixtures are skipped by name: they spell the forbidden verbs
+ * on purpose, and nothing in CI runs them as an apply.
+ */
+const G2_SCRIPT_DIRS = /^(?:\.github\/actions\/|\.github\/scripts\/|scripts\/|apps\/[^/]+\/infra\/|apps\/web-platform\/scripts\/)/;
+const G2_SCRIPT_EXT = /\.(?:sh|bash|py|ts|mjs|yml|yaml)$/;
+const G2_TEST_OR_FIXTURE = /(?:^|\/)(?:tests?|fixtures?|__tests__|__fixtures__)\/|(?:^|\/)test[-_][^/]*$|[.-]tests?\.[a-z]+$|[-_]test\.[a-z]+$/;
+/** The scan population among `paths` (repo-relative): in the directories and extensions above, not a test/fixture, a real file (not a symlink) under `root`. */
+function g2ScanPopulation(paths: string[], root: string): string[] {
+  return paths
+    .filter((p) => G2_SCRIPT_DIRS.test(p) && G2_SCRIPT_EXT.test(p) && !G2_TEST_OR_FIXTURE.test(p))
+    .filter((p) => {
+      try {
+        return lstatSync(resolve(root, p)).isFile(); // false for a symlink, a directory or a path deleted in the worktree
+      } catch {
+        return false;
+      }
+    });
+}
+
 function g2TrackedScripts(): string[] {
   const r = spawnSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 1 << 27 });
   if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
-  return r.stdout
-    .split("\0")
-    .filter((p) => /^scripts\/.+\.sh$/.test(p) || /^apps\/[^/]+\/infra\/.+\.sh$/.test(p))
-    .filter((p) => existsSync(resolve(REPO_ROOT, p)));
+  return g2ScanPopulation(r.stdout.split("\0"), REPO_ROOT);
 }
 
-/** `script|verb|address` for a state-write verb in a script that names a sole-copy address anywhere. */
+/** Whole-line comments out: `#` for every extension, `//` as well for ts/mjs. Trailing comments are kept (see the policy note above). */
+const g2ScriptCode = (rel: string, text: string): string => {
+  const code = g2Code(text);
+  return /\.(?:ts|mjs)$/.test(rel) ? code.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n") : code;
+};
+
+// Flag spellings and destroy, as FILE-level verbs: in a script there is no job or step to scope them to, so the rule is the
+// same co-occurrence the state verbs use (verb anywhere x sole-copy address anywhere in the same file).
+const G2_FILE_FLAG_VERBS: Array<[string, RegExp]> = [
+  ["target", /(?<![\w-])-target(?![\w-])/],
+  ["replace", /(?<![\w-])-replace(?![\w-])/],
+  ["destroy", new RegExp(`${G2_DESTROY_FLAG.source}|${G2_DESTROY_CMD.source}`, "m")],
+];
+
+/** `script|verb|address` for any state-write or flag verb in a file that names a sole-copy address anywhere. */
 function g2ScriptHits(rel: string, text: string): string[] {
-  return g2StateWriteHits(g2Code(text)).map(([v, a]) => `${rel}|${v}|${a}`);
+  const code = g2ScriptCode(rel, text);
+  const named = g2Named(code);
+  if (named.length === 0) return [];
+  const verbs = [...G2_STATE_VERBS, ...G2_FILE_FLAG_VERBS];
+  return verbs.flatMap(([v, re]) => (re.test(code) ? named.map((a) => `${rel}|${v}|${a}`) : []));
 }
 
 /** Insert `newLines` (indented like the anchor) BEFORE the first line matching `anchor` inside `jobId` (any job if omitted). */
@@ -3780,7 +3852,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(perMerge.has("doppler_secret.inngest_redis_luks_key")).toBe(true);
   });
 
-  // ---- Guard 2 (#9879): the sole-copy addresses are reachable ONLY through the expected (workflow, job, verb) set ----
+  // ---- G2 reachability (#9879): the sole-copy addresses are reachable ONLY through the expected (workflow, job, verb) set ----
   test("G2: live tree - the (workflow, job, verb, address) census over every workflow equals the expected set", () => {
     const files = g2LiveWorkflows();
     expect(Object.keys(files).length).toBeGreaterThan(10); // non-vacuity: the directory scan reached the workflows
@@ -3874,10 +3946,104 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(g2JobVerbs(g2Code(`echo "$#"; terraform apply -replace=${VOL}`))).toEqual([["replace", VOL]]);
   }, 60_000);
 
-  test("G2: tracked scripts - no state-write verb names a sole-copy address (web2-rebirth.sh stays legal)", () => {
+  test("G2: destroy spellings in a main-root workflow are RED; prose, sub-root steps and non-destroy words stay GREEN", () => {
+    const jobOf = (stepBody: string): string => `name: x\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n${stepBody}\n`;
+    const verdictOf = (stepBody: string): string[] => g2Census({ "zz.yml": jobOf(stepBody) });
+    const RUN = (cmd: string) => `      - run: |\n          ${cmd}`;
+    const wd = (dir: string, cmd = "terraform destroy -auto-approve") => `      - name: t\n        working-directory: ${dir}\n        run: ${cmd}`;
+    const red: Array<[string, string]> = [
+      ["- run: terraform destroy (single-line step)", "      - run: terraform destroy"],
+      ["if terraform destroy ...; then", RUN("if terraform destroy -auto-approve; then echo done; fi")],
+      ["sudo terraform destroy", RUN("sudo terraform destroy -auto-approve")],
+      ["sudo -E terraform destroy", RUN("sudo -E terraform destroy")],
+      ["VAR=x terraform destroy", RUN("TF_VAR_x=1 terraform destroy -auto-approve")],
+      ["two assignments then destroy", RUN("A=1 B=2 terraform destroy")],
+      ['bash -c "terraform destroy"', RUN('bash -c "terraform destroy -auto-approve"')],
+      ["sh -ec 'terraform destroy'", RUN("sh -ec 'terraform destroy'")],
+      ["env X=1 terraform destroy", RUN("env X=1 terraform destroy")],
+      ["terraform -chdir=x destroy", RUN("terraform -chdir=apps/web-platform/infra destroy")],
+      ["a && terraform destroy", RUN("cd x && terraform destroy")],
+      ["wd apps/web-platform/infra/. is the main root", wd("apps/web-platform/infra/.")],
+      ["wd apps/web-platform/infra/ ./ form", wd("apps/web-platform/infra/./")],
+      ["wd ./apps/web-platform/infra/.", wd("./apps/web-platform/infra/.")],
+      ["wd apps/web-platform/infra/sub/.. is the main root", wd("apps/web-platform/infra/sub/..")],
+      ["wd no working-directory", "      - name: t\n        run: terraform destroy"],
+      ["wd quoted main root", wd(`"apps/web-platform/infra/."`)],
+    ];
+    const green: Array<[string, string]> = [
+      ["prose in an echo", RUN('echo "this job never runs terraform destroy"')],
+      ["prose in backticks", RUN("echo 'see `terraform destroy` in the runbook'")],
+      ["::error:: annotation", RUN('echo "::error::terraform destroy refused"')],
+      ["whole-line comment", RUN("# terraform destroy -auto-approve\n          echo ok")],
+      ["a terraform plan", RUN("terraform plan -out tfplan")],
+      ["the [ack-destroy] marker", RUN("echo 'add [ack-destroy] to the commit'")],
+      ["REHEARSAL_DIR sub-root", wd("${{ env.REHEARSAL_DIR }}")],
+      ["a named sub-dir sub-root", wd("apps/web-platform/infra/rehearsal")],
+      ["a ./-prefixed sub-dir sub-root", wd("./apps/web-platform/infra/rehearsal/inner")],
+      ["a workspace-prefixed sub-dir sub-root", wd("${{ github.workspace }}/apps/web-platform/infra/rehearsal")],
+    ];
+    for (const [name, step] of red) {
+      expect(verdictOf(step).filter((t) => t.endsWith("|destroy|*")), `destroy spelling "${name}" stayed GREEN`).not.toEqual([]);
+    }
+    for (const [name, step] of green) {
+      expect(verdictOf(step), `"${name}" must stay GREEN`).toEqual([]);
+    }
+    // g2IsSubRoot directly: the normalisation, not a regex shape, decides.
+    for (const [dir, want] of [
+      ["apps/web-platform/infra/.", false],
+      ["apps/web-platform/infra/./", false],
+      ["apps/web-platform/infra", false],
+      ["apps/web-platform/infra/sub/..", false],
+      ["apps/web-platform/infra/../infra/.", false],
+      ["apps/web-platform/infra/sub", true],
+      ["apps/web-platform/infra/./sub", true],
+      ["${{ env.REHEARSAL_DIR }}", true],
+      ["apps/other/infra/sub", false],
+    ] as const) {
+      expect(g2IsSubRoot(`        working-directory: ${dir}`), `working-directory: ${dir}`).toBe(want);
+    }
+    // The existing per-job path agrees: the same insertion into a live non-expected job is RED for the new spellings.
+    const live = { [G2_WORKFLOW]: wf };
+    for (const line of ["sudo terraform destroy", "if terraform destroy; then", "TF_VAR_x=1 terraform destroy", 'bash -c "terraform destroy"']) {
+      const text = g2InsertBefore(wf, /^\s*set \+e$/, [line], "inngest_host_replace");
+      expect(g2Verdict({ ...live, [G2_WORKFLOW]: text }).join("\n"), line).toMatch(/unexpected: .*\|inngest_host_replace\|destroy\|\*/);
+    }
+  }, 60_000);
+
+  test("G2: scanners are linear - whitespace-only, assignment-run, and separator-run inputs finish in under 2s", () => {
+    const hostile: Array<[string, string]> = [
+      ["300 KB of newline-space-tab", "\n \t".repeat(100_000)],
+      ["300 KB of newline-space-tab after a working-directory key", "      - run: x\n        working-directory:" + "\n \t".repeat(100_000)],
+      ["a run of `;a=` separators", ";a=".repeat(100_000)],
+      ["a run of `;a= ` assignment tokens", ";a= ".repeat(75_000)],
+      ["a long `a=a=a=` token", "a=".repeat(150_000)],
+      ["repeated `terraform ` words", "terraform ".repeat(30_000)],
+      ["repeated `sudo -x ` wrappers", "sudo -x ".repeat(40_000)],
+      ["a run of `-target` and whitespace", "-target \n".repeat(40_000)],
+    ];
+    for (const [name, text] of hostile) {
+      const t0 = performance.now();
+      const verbs = g2JobVerbs(g2Code(text));
+      const hits = g2ScriptHits("h.sh", text);
+      g2IsSubRoot(text);
+      const ms = performance.now() - t0;
+      expect(ms, `${name}: ${ms.toFixed(0)} ms`).toBeLessThan(2000);
+      expect([name, verbs, hits]).toEqual([name, [], []]); // nothing real in the text: the fast path is also the correct path
+    }
+  }, 60_000);
+
+  test("G2: tracked scripts - no state-write or flag verb co-occurs with a sole-copy address (web2-rebirth.sh stays legal)", () => {
     const scripts = g2TrackedScripts();
-    expect(scripts.length).toBeGreaterThan(20); // non-vacuity: the tracked-file listing reached scripts/** and apps/*/infra
+    // MEASURED 2026-10-10: 537 files after the test/fixture skip (1063 before it), zero hits. The floor is a non-vacuity bound, not the count.
+    expect(scripts.length).toBeGreaterThan(400); // the listing reached every directory class below, not just scripts/
     expect(scripts).toContain("scripts/web2-rebirth.sh");
+    for (const dir of [/^\.github\/actions\//, /^\.github\/scripts\//, /^scripts\//, /^apps\/[^/]+\/infra\//]) {
+      expect(scripts.filter((p) => dir.test(p)).length, `no scanned file under ${dir}`).toBeGreaterThan(0);
+    }
+    for (const ext of [".sh", ".py", ".yml"]) expect(scripts.some((p) => p.endsWith(ext)), `no scanned ${ext} file`).toBe(true);
+    // Non-vacuity: the scan can SEE a sole-copy address in this population (three files name one without a verb) - an empty hit list is not a blind scan.
+    const naming = scripts.filter((rel) => g2Named(g2ScriptCode(rel, readFileSync(resolve(REPO_ROOT, rel), "utf8"))).length > 0);
+    expect(naming.length).toBeGreaterThan(0);
     const hits = scripts.flatMap((rel) => g2ScriptHits(rel, readFileSync(resolve(REPO_ROOT, rel), "utf8")));
     expect(hits).toEqual([]);
     // web2-rebirth really runs `terraform state rm` (a verb IS present) and names no sole-copy address: legal by content, not by exemption.
@@ -3885,11 +4051,49 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(G2_STATE_VERBS.some(([v, re]) => v === "state-rm" && re.test(rebirth))).toBe(true);
     expect(g2Named(rebirth)).toEqual([]);
     // Mutations on scratch strings: each spelling in a script is RED; the web-2 pinned form is not.
+    const VOL = "hcloud_volume.inngest_redis_luks";
     expect(g2ScriptHits("s.sh", `terraform state rm 'hcloud_volume.inngest_redis_luks'`)).toEqual(["s.sh|state-rm|hcloud_volume.inngest_redis_luks"]);
     expect(g2ScriptHits("s.sh", `addrs=(doppler_project.inngest)\n(cd x && terraform state rm "\${addrs[@]}")`)).toEqual(["s.sh|state-rm|doppler_project.inngest"]);
     expect(g2ScriptHits("s.sh", `terraform \\\n  import doppler_environment.inngest_prd p/e`)).toEqual(["s.sh|import|doppler_environment.inngest_prd"]);
     expect(g2ScriptHits("s.sh", `# terraform state rm hcloud_volume.inngest_redis_luks`)).toEqual([]);
     expect(g2ScriptHits("s.sh", `terraform state rm 'hcloud_volume.workspaces["web-2"]'`)).toEqual([]);
+    // The flag verbs co-occur the same way, in every extension of the population.
+    for (const [rel, line, verb] of [
+      ["a.sh", `terraform apply -replace=${VOL}`, "replace"],
+      ["a.bash", `terraform apply -target=${VOL}`, "target"],
+      ["a.sh", `terraform plan -destroy -out p # ${VOL}`, "destroy"],
+      ["a.py", `subprocess.run(["terraform", "-replace", "${VOL}"])`, "replace"],
+      ["a.yml", `      - run: terraform destroy\n      - run: echo ${VOL}`, "destroy"],
+      ["a.ts", `await $\`terraform apply -target=\${"${VOL}"}\``, "target"],
+    ] as const) {
+      expect(g2ScriptHits(rel, line), `${rel}: ${line}`).toEqual([`${rel}|${verb}|${VOL}`]);
+    }
+    // Legal by content: a flag or destroy with NO sole-copy address in the file (the rehearsal sub-root teardown, a web-2 replace);
+    // the address with NO verb; a comment-only mention (`#`, and `//` for ts/mjs).
+    expect(g2ScriptHits("r.sh", `cd apps/web-platform/infra/rehearsal && terraform destroy -auto-approve -target=hcloud_server.web2`)).toEqual([]);
+    expect(g2ScriptHits("r.sh", `echo ${VOL}`)).toEqual([]);
+    expect(g2ScriptHits("r.ts", `// terraform apply -replace=${VOL}\nconsole.log(1)`)).toEqual([]);
+    expect(g2ScriptHits("r.sh", `# terraform destroy ${VOL}`)).toEqual([]);
+    // Population filter: a symlink, a test file and a fixture are out; a real file is in; a path outside the directory classes is out.
+    const root = mkdtempSync(join(tmpdir(), "g2-pop-"));
+    try {
+      const mk = (rel: string, body = "x") => {
+        const abs = join(root, rel);
+        spawnSync("mkdir", ["-p", join(abs, "..")]);
+        writeFileSync(abs, body);
+      };
+      mk("scripts/real.sh");
+      mk("scripts/real.test.sh");
+      mk("scripts/test/helper.sh");
+      mk("scripts/fixtures/f.sh");
+      mk("scripts/target.sh");
+      mk("docs/other.sh");
+      spawnSync("ln", ["-s", join(root, "scripts/real.sh"), join(root, "scripts/link.sh")]);
+      const all = ["scripts/real.sh", "scripts/real.test.sh", "scripts/test/helper.sh", "scripts/fixtures/f.sh", "scripts/link.sh", "scripts/gone.sh", "docs/other.sh", "scripts/data.json"];
+      expect(g2ScanPopulation(all, root)).toEqual(["scripts/real.sh"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }, 60_000);
 
   test("G2: harness - superset/subset constants are RED; a comment/continuation/quote-rewritten copy still equals the set", () => {
@@ -3915,6 +4119,344 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     // Control for the same rewrite: add a real flag to it and it goes RED, so GREEN above is not a blind scan.
     expect(g2Verdict({ ...live, [G2_WORKFLOW]: rewritten + `\n      - run: terraform apply -replace=hcloud_volume.inngest_redis_luks\n` }).length).toBeGreaterThan(0);
   }, 60_000);
+});
+
+// --- G2e attribute pin (#9879): the INDEPENDENT anchor for the Guard 1 suite, in a REQUIRED check ---------------------------
+// Guard 1 (apps/web-platform/infra/inngest-luks-sole-copy.test.sh) runs in infra-validation.yml, which is NOT a required check,
+// so one diff could weaken the pins and the guard that pins them together and merge green. This file runs in the required `test`
+// check (ADR-282), so the same attributes are asserted here on EFFECTIVE text (comments removed), with a lexer of its own: a
+// defect shared by both lexers would have to be written twice, in two languages, in one reviewed diff.
+// Fail closed: a block that cannot be found, is found twice, or reads as zero attributes is RED, never "zero checks, green".
+
+/**
+ * HCL with comments removed: whole-line and trailing `#` and `//`, and `/* ... *\/` (newlines kept). Strings are copied whole (a
+ * string never spans a line, so a stray quote cannot blind the rest of the file). A heredoc opener is recognised ONLY in code, so a
+ * trailing comment such as `# see <<EOF` is consumed as a comment first and starts nothing; a real heredoc body is blanked
+ * (`blank`) or kept verbatim (`keep`, for a reader that needs the SQL).
+ */
+function g2eStrip(text: string, heredoc: "blank" | "keep" = "blank"): string {
+  const t = text.replace(/\r\n/g, "\n");
+  const n = t.length;
+  let out = "";
+  let i = 0;
+  while (i < n) {
+    const c = t[i];
+    const c2 = t[i + 1];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n && t[j] !== '"' && t[j] !== "\n") j += t[j] === "\\" ? 2 : 1;
+      const end = j < n && t[j] === '"' ? j + 1 : Math.min(j, n);
+      out += t.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === "#" || (c === "/" && c2 === "/")) {
+      while (i < n && t[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && c2 === "*") {
+      const e = t.indexOf("*/", i + 2);
+      const end = e < 0 ? n : e + 2;
+      out += t.slice(i, end).replace(/[^\n]/g, "");
+      i = end;
+      continue;
+    }
+    if (c === "<" && c2 === "<") {
+      const m = /^<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\n)/.exec(t.slice(i, i + 80));
+      if (m) {
+        const term = new RegExp(`\\n[ \\t]*${m[1]}[ \\t]*(?=\\n|$)`, "g");
+        term.lastIndex = i + m[0].length;
+        const tm = term.exec(t);
+        const end = tm ? tm.index + tm[0].length : n;
+        out += heredoc === "keep" ? t.slice(i, end) : `""${"\n".repeat((t.slice(i, end).match(/\n/g) ?? []).length)}`;
+        i = end;
+        continue;
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/** Index just past the `}` that closes the block whose `{` is at `open`, skipping strings; -1 if it never closes. */
+function g2eClose(s: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"' && s[j] !== "\n") j += s[j] === "\\" ? 2 : 1;
+      i = j;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/** The body of the single `resource "type" "name" { ... }` in comment-stripped HCL, or a defect string. */
+function g2eResource(stripped: string, type: string, name: string): { body: string } | { defect: string } {
+  const re = new RegExp(`(?:^|\\n)[ \\t]*resource[ \\t]+"${type}"[ \\t]+"${name}"[ \\t]*\\{`, "g");
+  const ms = [...stripped.matchAll(re)];
+  if (ms.length === 0) return { defect: "missing" };
+  if (ms.length > 1) return { defect: "duplicate" };
+  const open = ms[0].index! + ms[0][0].length - 1;
+  const close = g2eClose(stripped, open);
+  return close < 0 ? { defect: "unterminated" } : { body: stripped.slice(open + 1, close - 1) };
+}
+
+/** A block body split into its depth-0 text (nested braces emptied, so a nested attribute cannot pass for a top-level one) and its nested blocks. */
+function g2eSplit(body: string): { top: string; nested: Array<{ name: string; body: string }> } | null {
+  let top = "";
+  const nested: Array<{ name: string; body: string }> = [];
+  let depth = 0;
+  let from = 0;
+  let nm = "";
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < body.length && body[j] !== '"' && body[j] !== "\n") j += body[j] === "\\" ? 2 : 1;
+      if (depth === 0) top += body.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    if (c === "{") {
+      if (depth === 0) {
+        nm = /([A-Za-z_][\w-]*)[ \t]*$/.exec(top)?.[1] ?? ""; // `labels = {` ends in `=`, so a map literal has no block name
+        from = i + 1;
+      }
+      depth++;
+    } else if (c === "}") {
+      if (--depth < 0) return null;
+      if (depth === 0) {
+        nested.push({ name: nm, body: body.slice(from, i) });
+        top += "{}";
+      }
+    } else if (depth === 0) top += c;
+  }
+  return depth === 0 ? { top, nested } : null;
+}
+
+/** Values of every depth-0 `key = value` line in `top`. */
+const g2eAttr = (top: string, key: string): string[] =>
+  [...top.matchAll(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(.*?)[ \\t]*$`, "gm"))].map((m) => m[1]);
+
+interface G2ePin {
+  file: "luks" | "host";
+  type: string;
+  name: string;
+  /** "lifecycle": exactly one lifecycle block carrying `prevent_destroy = true`. "none": no lifecycle block and no prevent_destroy at all. */
+  protect: "lifecycle" | "none";
+  deleteProtection?: true;
+}
+const G2E_PINS: readonly G2ePin[] = [
+  { file: "luks", type: "hcloud_volume", name: "inngest_redis_luks", protect: "lifecycle", deleteProtection: true },
+  { file: "luks", type: "random_password", name: "inngest_redis_luks", protect: "lifecycle" },
+  { file: "luks", type: "doppler_secret", name: "inngest_redis_luks_key", protect: "lifecycle" },
+  { file: "host", type: "doppler_project", name: "inngest", protect: "lifecycle" },
+  { file: "host", type: "doppler_environment", name: "inngest_prd", protect: "lifecycle" },
+  { file: "luks", type: "hcloud_volume_attachment", name: "inngest_redis_luks", protect: "none" },
+];
+
+/** Defects (empty = GREEN) and the number of positive checks evaluated (a pass with zero checks is not a pass). */
+function g2eVerdict(src: { luks: string; host: string }, pins: readonly G2ePin[] = G2E_PINS): { defects: string[]; checks: number } {
+  const defects: string[] = [];
+  let checks = 0;
+  const stripped = { luks: g2eStrip(src.luks), host: g2eStrip(src.host) };
+  for (const pin of pins) {
+    const addr = `${pin.type}.${pin.name}`;
+    const r = g2eResource(stripped[pin.file], pin.type, pin.name);
+    if ("defect" in r) {
+      defects.push(`${addr}: ${r.defect} in ${pin.file === "luks" ? "inngest-redis-luks.tf" : "inngest-host.tf"}`);
+      continue;
+    }
+    checks++;
+    const split = g2eSplit(r.body);
+    if (!split) {
+      defects.push(`${addr}: unbalanced braces`);
+      continue;
+    }
+    if (!/^[ \t]*[A-Za-z_]\w*[ \t]*=/m.test(split.top)) {
+      defects.push(`${addr}: extractor read zero attributes`);
+      continue;
+    }
+    checks++;
+    if (pin.deleteProtection) {
+      const dp = g2eAttr(split.top, "delete_protection");
+      if (dp.length !== 1 || dp[0] !== "true") defects.push(`${addr}: delete_protection is not exactly one code line \`= true\` (found ${JSON.stringify(dp)})`);
+      else checks++;
+    }
+    const lifecycles = split.nested.filter((b) => b.name === "lifecycle");
+    if (pin.protect === "lifecycle") {
+      const inner = lifecycles.length === 1 ? g2eSplit(lifecycles[0].body) : null;
+      const pd = inner ? g2eAttr(inner.top, "prevent_destroy") : [];
+      if (pd.length !== 1 || pd[0] !== "true") defects.push(`${addr}: no lifecycle block with exactly one \`prevent_destroy = true\` code line (lifecycle blocks: ${lifecycles.length}, prevent_destroy: ${JSON.stringify(pd)})`);
+      else checks++;
+    } else if (lifecycles.length > 0 || /\bprevent_destroy\b/.test(r.body)) {
+      defects.push(`${addr}: carries a lifecycle block / prevent_destroy (a sanctioned host replace would become a plan error)`);
+    } else checks++;
+  }
+  return { defects, checks };
+}
+
+/** Rewrite the single column-0 `resource "type" "name" { ... }` block of RAW text (closing brace at column 0, as terraform fmt writes it). */
+function g2eMutate(text: string, type: string, name: string, fn: (block: string) => string): string {
+  const m = new RegExp(`^resource "${type}" "${name}" \\{\\n[\\s\\S]*?\\n\\}$`, "m").exec(text);
+  if (!m) throw new Error(`g2eMutate: ${type}.${name} not found`);
+  const out = text.slice(0, m.index) + fn(m[0]) + text.slice(m.index + m[0].length);
+  if (out === text) throw new Error(`g2eMutate: no-op on ${type}.${name}`);
+  return out;
+}
+
+// The alert edge (ADR-282, F1): the volume is NOT a per-merge `-target`. An in-place update of it (delete_protection) reaches the
+// per-merge plan only as a DEPENDENCY of `logtail_exploration.inngest_luks_wrong_volume`, through the alias local that interpolates
+// `hcloud_volume.inngest_redis_luks.id`. Remove the exploration from the list, or stop the alias reading the volume, and the
+// in-place update stops being applied by any merge; the chain below is what keeps that edge from being cut silently.
+const G2E_EDGE_TARGETS = ["logtail_exploration.inngest_luks_wrong_volume", "logtail_exploration_alert.inngest_luks_wrong_volume"];
+function g2eEdgeVerdict(wfText: string, alertsTf: string): string[] {
+  const defects: string[] = [];
+  const applyTargets = extractAllTargets(extractJobBlock(wfText, "apply"));
+  if (applyTargets.size < 50) defects.push(`apply job extracted ${applyTargets.size} targets (job not found?)`);
+  for (const a of G2E_EDGE_TARGETS) if (!applyTargets.has(a)) defects.push(`${a} is not in the per-merge apply job's -target list`);
+  const code = g2eStrip(alertsTf, "keep");
+  if (!/^[ \t]*inngest_luks_wrong_volume_alias[ \t]*=[ \t]*"[^"\n]*\$\{[ \t]*hcloud_volume\.inngest_redis_luks\.id[ \t]*\}[^"\n]*"[ \t]*$/m.test(code)) {
+    defects.push("local.inngest_luks_wrong_volume_alias does not interpolate hcloud_volume.inngest_redis_luks.id");
+  }
+  if (!/^[ \t]*inngest_luks_wrong_volume_sql[ \t]*=[ \t]*<<-?SQL[ \t]*\n[\s\S]*?\$\{[ \t]*local\.inngest_luks_wrong_volume_alias[ \t]*\}[\s\S]*?\n[ \t]*SQL[ \t]*$/m.test(code)) {
+    defects.push("local.inngest_luks_wrong_volume_sql does not interpolate local.inngest_luks_wrong_volume_alias");
+  }
+  const ex = g2eResource(g2eStrip(alertsTf), "logtail_exploration", "inngest_luks_wrong_volume");
+  if ("defect" in ex) defects.push(`logtail_exploration.inngest_luks_wrong_volume: ${ex.defect}`);
+  else if (!/^[ \t]*sql_query[ \t]*=.*\blocal\.inngest_luks_wrong_volume_sql\b/m.test(ex.body)) {
+    defects.push("logtail_exploration.inngest_luks_wrong_volume.sql_query does not read local.inngest_luks_wrong_volume_sql");
+  }
+  return defects;
+}
+
+describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text, in a required check (ADR-282)", () => {
+  const read = (f: string): string => readFileSync(resolve(INFRA_DIR, f), "utf8");
+  const live = { luks: read("inngest-redis-luks.tf"), host: read("inngest-host.tf") };
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const alertsTf = read("betterstack-logs-alerts.tf");
+  const LIVE_CHECKS = 19; // volume 4 (found, attributes read, delete_protection, lifecycle) + four protected blocks x 3 + attachment 3 (found, attributes read, no lifecycle)
+
+  const rmPD = (b: string): string => b.replace(/^[ \t]*prevent_destroy[ \t]*=[ \t]*true[ \t]*\n/m, "");
+  const withLuks = (t: string) => ({ ...live, luks: t });
+  const withHost = (t: string) => ({ ...live, host: t });
+  const VOL: [string, string] = ["hcloud_volume", "inngest_redis_luks"];
+  const PW: [string, string] = ["random_password", "inngest_redis_luks"];
+  const KEY: [string, string] = ["doppler_secret", "inngest_redis_luks_key"];
+  const ATT: [string, string] = ["hcloud_volume_attachment", "inngest_redis_luks"];
+  const PROJ: [string, string] = ["doppler_project", "inngest"];
+  const ENV: [string, string] = ["doppler_environment", "inngest_prd"];
+
+  test("G2e: live tree - all six blocks are found, read as non-empty, and carry exactly the pinned attributes", () => {
+    expect(G2E_PINS.length).toBe(6);
+    const v = g2eVerdict(live);
+    expect(v.defects).toEqual([]);
+    expect(v.checks).toBe(LIVE_CHECKS); // a verdict that evaluated nothing is not GREEN
+    // Non-vacuity of the extractor itself: it reads the volume's real attributes, not an empty body.
+    const vol = g2eResource(g2eStrip(live.luks), "hcloud_volume", "inngest_redis_luks");
+    expect("body" in vol && g2eAttr(g2eSplit(vol.body)!.top, "location")).toEqual(["var.location"]);
+    // Comment prose that spells the attributes is not code: the file's own header says `prevent_destroy` many times.
+    expect(live.luks.match(/prevent_destroy/g)!.length).toBeGreaterThan(4);
+    expect(g2eStrip(live.luks).match(/^[ \t]*prevent_destroy[ \t]*=[ \t]*true[ \t]*$/gm)!.length).toBe(3); // volume, password, secret (the project and environment live in inngest-host.tf)
+    expect(g2eStrip(live.luks).match(/^[ \t]*delete_protection[ \t]*=/gm)!.length).toBe(1);
+  });
+
+  test("G2e: mutation matrix - each weakening turns the verdict RED for the right reason (in-memory copies only)", () => {
+    const sub = (type: string, name: string, fn: (b: string) => string, file: "luks" | "host" = "luks") =>
+      file === "luks" ? withLuks(g2eMutate(live.luks, type, name, fn)) : withHost(g2eMutate(live.host, type, name, fn));
+    const rows: Array<[string, { luks: string; host: string }, RegExp]> = [
+      ["flip delete_protection to false", sub(...VOL, (b) => b.replace(/delete_protection = true/, "delete_protection = false")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["delete the delete_protection line", sub(...VOL, (b) => b.replace(/^[ \t]*delete_protection[ \t]*=.*\n/m, "")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["comment the delete_protection line out", sub(...VOL, (b) => b.replace(/^([ \t]*)delete_protection/m, "$1# delete_protection")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["delete_protection moved into a nested map", sub(...VOL, (b) => b.replace(/^[ \t]*delete_protection[ \t]*=.*\n/m, "").replace(/app = /, "delete_protection = true\n    app = ")), /hcloud_volume\.inngest_redis_luks: delete_protection/],
+      ["delete prevent_destroy: volume", sub(...VOL, rmPD), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["delete prevent_destroy: random_password", sub(...PW, rmPD), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["delete prevent_destroy: doppler_secret", sub(...KEY, rmPD), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
+      ["delete prevent_destroy: doppler_project", sub(...PROJ, rmPD, "host"), /doppler_project\.inngest: no lifecycle block/],
+      ["delete prevent_destroy: doppler_environment", sub(...ENV, rmPD, "host"), /doppler_environment\.inngest_prd: no lifecycle block/],
+      ["prevent_destroy = false", sub(...VOL, (b) => b.replace(/prevent_destroy = true/, "prevent_destroy = false")), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy only in a comment", sub(...PW, (b) => b.replace(/^([ \t]*)prevent_destroy/m, "$1# prevent_destroy")), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy only behind //", sub(...PW, (b) => b.replace(/^([ \t]*)prevent_destroy/m, "$1// prevent_destroy")), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy inside a /* */ comment", sub(...KEY, (b) => b.replace(/^([ \t]*)prevent_destroy = true/m, "$1/* prevent_destroy = true */")), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
+      ["the whole lifecycle wrapped in /* */", sub(...VOL, (b) => b.replace(/lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, (m) => `/* ${m} */`)), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["prevent_destroy moved into a nested map (not a lifecycle)", sub(...PW, (b) => b.replace(/lifecycle \{/, "tags = {")), /random_password\.inngest_redis_luks: no lifecycle block/],
+      ["add a lifecycle with prevent_destroy to the ATTACHMENT", sub(...ATT, (b) => b.replace(/\n\}$/, "\n\n  lifecycle {\n    prevent_destroy = true\n  }\n}")), /hcloud_volume_attachment\.inngest_redis_luks: carries a lifecycle/],
+      ["add any lifecycle block to the ATTACHMENT", sub(...ATT, (b) => b.replace(/\n\}$/, "\n\n  lifecycle {\n    ignore_changes = []\n  }\n}")), /hcloud_volume_attachment\.inngest_redis_luks: carries a lifecycle/],
+      ["rename the volume (extractor must not read zero attributes and pass)", sub(...VOL, (b) => b.replace(/^resource "hcloud_volume" "inngest_redis_luks"/, 'resource "hcloud_volume" "inngest_redis_luks_renamed"')), /hcloud_volume\.inngest_redis_luks: missing/],
+      ["rename the project", sub(...PROJ, (b) => b.replace('"inngest" {', '"inngest_renamed" {'), "host"), /doppler_project\.inngest: missing/],
+      ["rename the attachment", sub(...ATT, (b) => b.replace('"inngest_redis_luks" {', '"inngest_redis_luks_x" {')), /hcloud_volume_attachment\.inngest_redis_luks: missing/],
+      ["a second copy of the volume block", withLuks(live.luks + "\n" + /^resource "hcloud_volume" "inngest_redis_luks" \{\n[\s\S]*?\n\}$/m.exec(live.luks)![0] + "\n"), /hcloud_volume\.inngest_redis_luks: duplicate/],
+      ["an unterminated /* before everything blinds the file: RED, not zero checks", withLuks("/* oops\n" + live.luks), /missing/],
+      ["an empty body (attributes read as zero)", sub(...PW, (b) => 'resource "random_password" "inngest_redis_luks" {\n}'), /random_password\.inngest_redis_luks: extractor read zero attributes/],
+      ["`# see <<EOF` before the lifecycle, prevent_destroy removed", sub(...VOL, (b) => rmPD(b.replace(/\n[ \t]*lifecycle \{/, "\n  # see <<EOF\n  lifecycle {"))), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
+      ["`// see <<-EOT` trailing, the lifecycle commented out", sub(...KEY, (b) => b.replace(/\n([ \t]*)lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, "\n  # x // see <<-EOT\n/*\n$1lifecycle {\n    prevent_destroy = true\n  }\n*/")), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
+      ["trailing `# see <<EOF` on an attribute, then prevent_destroy removed", sub(...PW, (b) => rmPD(b.replace(/^(  length .*)$/m, "$1 # see <<EOF"))), /random_password\.inngest_redis_luks: no lifecycle block/],
+    ];
+    expect(g2eVerdict(live).defects).toEqual([]); // control: the live tree is GREEN, so a RED below is the mutation's doing
+    for (const [name, files, want] of rows) {
+      const v = g2eVerdict(files);
+      expect(v.defects.length, `row "${name}" stayed GREEN`).toBeGreaterThan(0);
+      expect(v.defects.join("\n"), `row "${name}" was RED for the wrong reason`).toMatch(want);
+    }
+  });
+
+  test("G2e: the comment stripper is not blinded - benign comments, heredoc-shaped comments and real heredocs stay GREEN with every check evaluated", () => {
+    const sub = (type: string, name: string, fn: (b: string) => string) => withLuks(g2eMutate(live.luks, type, name, fn));
+    const rows: Array<[string, { luks: string; host: string }]> = [
+      ["`# see <<EOF` on its own line before the lifecycle", sub(...VOL, (b) => b.replace(/\n[ \t]*lifecycle \{/, "\n  # see <<EOF\n  lifecycle {"))],
+      ["`# see <<EOF` trailing on the lifecycle opener", sub(...VOL, (b) => b.replace(/lifecycle \{/, "lifecycle { # see <<EOF"))],
+      ["`// see <<-EOT` trailing on an attribute", sub(...VOL, (b) => b.replace(/^(  size .*)$/m, "$1 // see <<-EOT"))],
+      ["`/* <<EOF */` inline", sub(...VOL, (b) => b.replace(/lifecycle \{/, "/* <<EOF */ lifecycle {"))],
+      ["trailing comments on the two pinned attributes", sub(...VOL, (b) => b.replace(/delete_protection = true/, "delete_protection = true # x").replace(/prevent_destroy = true/, "prevent_destroy = true // y"))],
+      ["a real heredoc holding a lone quote, braces and a comment opener, ahead of the blocks", withLuks("locals {\n  x = <<-EOT\n    it's a \" quote } { /* #\n  EOT\n}\n" + live.luks)],
+      ["a /* */ comment spanning lines that spells the protected blocks", withLuks("/*\nresource \"hcloud_volume\" \"inngest_redis_luks\" {\n  delete_protection = false\n}\n*/\n" + live.luks)],
+    ];
+    for (const [name, files] of rows) {
+      const v = g2eVerdict(files);
+      expect(v.defects, `row "${name}" must stay GREEN`).toEqual([]);
+      expect(v.checks, `row "${name}" evaluated fewer checks`).toBe(LIVE_CHECKS);
+    }
+    // The heredoc opener in a comment starts nothing; in code it does, and its body is blanked/kept as asked.
+    expect(g2eStrip("a = 1 # see <<EOF\nb = 2\n")).toBe("a = 1 \nb = 2\n");
+    expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n')).toContain("b = 2");
+    expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n')).not.toContain("y # z");
+    expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n', "keep")).toContain("y # z");
+  });
+
+  test("G2e: the per-merge edge to the volume - alert in the apply job's -target list AND the alias local interpolates the volume id", () => {
+    expect(g2eEdgeVerdict(wf, alertsTf)).toEqual([]);
+    // Non-vacuity: the volume itself is NOT a per-merge -target (the edge is the only route), and the alias is the sole reader of its id here.
+    expect(extractAllTargets(extractJobBlock(wf, "apply")).has("hcloud_volume.inngest_redis_luks")).toBe(false);
+    expect(extractAllTargets(extractJobBlock(wf, "apply")).has("logtail_exploration.inngest_luks_wrong_volume")).toBe(true);
+    expect(alertsTf).toContain("hcloud_volume.inngest_redis_luks.id");
+    const dropTarget = (addr: string): string => {
+      const out = wf.replace(new RegExp(`^[ \\t]*-target=${addr.replace(/\./g, "\\.")} \\\\\\n`, "m"), "");
+      expect(out).not.toBe(wf);
+      return out;
+    };
+    const rows: Array<[string, string, string, RegExp]> = [
+      ["the exploration removed from the per-merge list", dropTarget("logtail_exploration.inngest_luks_wrong_volume"), alertsTf, /logtail_exploration\.inngest_luks_wrong_volume is not in the per-merge apply job/],
+      ["the alert removed from the per-merge list", dropTarget("logtail_exploration_alert.inngest_luks_wrong_volume"), alertsTf, /logtail_exploration_alert\.inngest_luks_wrong_volume is not in the per-merge apply job/],
+      ["the alias no longer reads the volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)\$\{hcloud_volume\.inngest_redis_luks\.id\}/m, "$110626194"), /alias does not interpolate hcloud_volume\.inngest_redis_luks\.id/],
+      ["the alias reads the volume only in a comment", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)$/m, "  # $1\n  inngest_luks_wrong_volume_alias = \"scsi-0HC_Volume_1\""), /alias does not interpolate/],
+      ["the alias reads a sibling volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)hcloud_volume\.inngest_redis_luks\.id/m, "$1hcloud_volume.workspaces_luks.id"), /alias does not interpolate/],
+      ["the sql local stops using the alias", wf, alertsTf.replace("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
+      ["the exploration stops reading the sql local", wf, alertsTf.replace("trimspace(local.inngest_luks_wrong_volume_sql)", "trimspace(\"select 1\")"), /sql_query does not read local\.inngest_luks_wrong_volume_sql/],
+      ["the exploration resource renamed", wf, alertsTf.replace('resource "logtail_exploration" "inngest_luks_wrong_volume"', 'resource "logtail_exploration" "inngest_luks_wrong_volume_x"'), /logtail_exploration\.inngest_luks_wrong_volume: missing/],
+      ["the apply job not found (renamed)", wf.replace(/^ {2}apply:/m, "  apply_renamed:"), alertsTf, /apply job extracted 0 targets/],
+    ];
+    for (const [name, w, tf, want] of rows) {
+      const defects = g2eEdgeVerdict(w, tf);
+      expect(defects.length, `edge row "${name}" stayed GREEN`).toBeGreaterThan(0);
+      expect(defects.join("\n"), `edge row "${name}" was RED for the wrong reason`).toMatch(want);
+    }
+  });
 });
 
 /**
