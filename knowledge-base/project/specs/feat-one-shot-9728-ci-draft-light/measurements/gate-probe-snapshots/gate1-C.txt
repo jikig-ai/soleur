@@ -1,0 +1,9 @@
+## C: second test row pending (queued), older red row still present  2026-10-09T20:19:30Z  pr=9891 sha=e53368af61
+-- gh pr view (mergeStateStatus + rollup rows named test)
+{"isDraft":false,"mergeStateStatus":"BLOCKED","test_rows":[{"completedAt":"2026-10-09T20:13:55Z","conclusion":"FAILURE","startedAt":"2026-10-09T20:13:53Z","status":"COMPLETED"},{"completedAt":"0001-01-01T00:00:00Z","conclusion":"","startedAt":"2026-10-09T20:19:18Z","status":"QUEUED"}]}
+-- raw check-runs named test (filter=all)
+[{"completed_at":null,"conclusion":null,"id":114008648629,"started_at":"2026-10-09T20:19:18Z","status":"queued"},{"completed_at":"2026-10-09T20:13:55Z","conclusion":"failure","id":114005614782,"started_at":"2026-10-09T20:13:53Z","status":"completed"}]
+-- gh pr checks --required
+[{"bucket":"pending","name":"test","state":"QUEUED"},{"bucket":"pass","name":"cla-evidence","state":"SUCCESS"},{"bucket":"pass","name":"cla-check","state":"SUCCESS"}]
+-- ready events
+[{"__typename":"ReadyForReviewEvent","createdAt":"2026-10-09T20:14:26Z"}]

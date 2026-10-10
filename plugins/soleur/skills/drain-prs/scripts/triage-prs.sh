@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Enumerates open remote GitHub PRs and classifies each into one of six drain
-# tiers (ready-green, needs-lockfile-fix, needs-conflict-resolution,
+# Enumerates open remote GitHub PRs and classifies each into one of seven drain
+# tiers (ready-green, ready-unarmed, needs-lockfile-fix, needs-conflict-resolution,
 # needs-review, drafts, broken), emitting a tier-grouped report.
 #
 # Usage:
@@ -15,10 +15,24 @@
 #   2. broken                     CONFLICTING AND >=3 failing checks
 #   3. needs-conflict-resolution  CONFLICTING
 #   4. needs-lockfile-fix         has `dependencies` label AND >0 failing checks
-#   5. needs-review               has `bot-fix/review-required` label
+#   5. ready-unarmed              ready (non-draft) PR whose head verdict is no-run or
+#                                 stalled and nothing else is failing: it was readied but
+#                                 no full CI run exists (ADR-276 S3, #9728). Recovery:
+#                                 `gh pr ready --undo <N>` then `gh pr ready <N>` (user token)
+#   6. needs-review               has `bot-fix/review-required` label
 #                                 OR reviewDecision == REVIEW_REQUIRED
-#   6. ready-green                MERGEABLE AND 0 failing checks
-#   7. needs-review               (fallback: UNKNOWN-mergeable / un-reviewed)
+#   7. ready-green                MERGEABLE AND 0 failing checks (not awaiting-approval)
+#   8. needs-review               (fallback: UNKNOWN-mergeable / un-reviewed)
+#
+# Failing checks are counted from the NEWEST row per check name (a ready PR carries the
+# draft run's rows AND the ready run's rows; counting both reads a decided PR as red). For a
+# ready PR whose newest `test` row is red, plugins/soleur/scripts/ci-head-verdict.sh decides
+# whether that row is the draft-era one: pending-full, no-run, stalled and awaiting-approval
+# never count it failing; full-decided and n/a keep today's reading. A resolver that errors
+# keeps today's reading too. Live mode calls the resolver for each non-draft PR with a failing
+# `test` row; --fixture mode never does unless CI_HEAD_VERDICT_BIN is set (a test seam). A resolver that cannot read prints
+# state=error (exit 3), outside the six whitelisted states, so it is ignored: a real red `test` is never softened by an outage.
+# `no-run` goes to ready-unarmed too, with a recovery that first asks whether another session is still inside wait-ready-run.
 
 set -euo pipefail
 
@@ -60,6 +74,30 @@ else
     --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup)"
 fi
 
+# --- Head verdicts (ADR-276 S3) ------------------------------------------------
+# Candidates: non-draft PRs whose newest `test` row is failing. One resolver call each.
+VERDICT_BIN="${CI_HEAD_VERDICT_BIN:-}"
+if [[ -z "$VERDICT_BIN" && -z "$FIXTURE" ]]; then
+  VERDICT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" 2>/dev/null && pwd -P)" || VERDICT_DIR=""
+  [[ -z "$VERDICT_DIR" ]] || VERDICT_BIN="$VERDICT_DIR/ci-head-verdict.sh"
+fi
+VERDICTS='{}'
+if [[ -n "$VERDICT_BIN" && -r "$VERDICT_BIN" ]]; then
+  CANDIDATES="$(jq -r '
+    [ .[] | select(.isDraft != true) | . as $pr
+      | ([ .statusCheckRollup[]? | select((.name // .context) == "test") ]
+         | sort_by(.startedAt // "9999") | last // null) as $t
+      | select($t != null and (($t.conclusion // $t.state) as $c
+               | $c == "FAILURE" or $c == "ERROR" or $c == "CANCELLED" or $c == "TIMED_OUT"))
+      | $pr.number ] | .[]' <<<"$PR_JSON")"
+  for n in $CANDIDATES; do
+    marker="$(bash "$VERDICT_BIN" verdict "$n" 2>/dev/null)" || true
+    marker="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$marker")" || continue
+    st="${marker#*state=}"; st="${st%% *}"
+    case "$st" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) VERDICTS="$(jq -c --arg n "$n" --arg s "$st" '. + {($n): $s}' <<<"$VERDICTS")" ;; esac
+  done
+fi
+
 # --- Classify ---------------------------------------------------------------
 # Emits a flat array of {number,title,author,mergeable,tier}. Failing/pending
 # check counts are derived from statusCheckRollup (conclusion for check-runs,
@@ -88,13 +126,22 @@ fi
 # Guarded by the argv-ceiling regression test in ../test/ — it drives this script with a
 # synthesized >MAX_ARG_STRLEN fixture and asserts the fixture really exceeds the ceiling,
 # so the test cannot silently degrade to vacuous.
-CLASSIFIED="$(jq '
-  def fails: [ .statusCheckRollup[]? | (.conclusion // .state)
+CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
+  # The NEWEST row per check name: a ready PR lists the draft run rows and the ready run rows.
+  # A queued re-run has no startedAt yet, so a null sorts as the newest.
+  # Keyed on workflow AND name: two workflows may each carry a check called `detect` or `build`, and a newer green in one
+  # must not hide an older red in the other.
+  def newest: [ .statusCheckRollup[]? ] | group_by([.workflowName // "", .name // .context // ""]) | map(sort_by(.startedAt // "9999") | last);
+  # The draft-era `test` row is not a failure while the head verdict says a ready run is coming or missing.
+  def softened($v): ($v == "pending-full" or $v == "no-run" or $v == "stalled" or $v == "awaiting-approval");
+  def counted($v): [ newest[] | select(((.name // .context) == "test" and softened($v)) | not) ];
+  def fails($v): [ counted($v)[] | (.conclusion // .state)
                | select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT") ] | length;
-  def pending: [ .statusCheckRollup[]? | (.status // .state)
+  def pending($v): [ counted($v)[] | (.status // .state)
                | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING") ] | length;
   def haslabel($n): any(.labels[]?; .name == $n);
-  [ .[] | . as $pr | ($pr | fails) as $f | ($pr | pending) as $p |
+  [ .[] | . as $pr | ($verdicts[(.number | tostring)] // "") as $v
+    | ($pr | fails($v)) as $f | ($pr | pending($v)) as $p |
     {
       number: .number,
       title: .title,
@@ -102,22 +149,25 @@ CLASSIFIED="$(jq '
       mergeable: (.mergeable // "UNKNOWN"),
       failing: $f,
       pending: $p,
+      ci: $v,
       tier: (
         if .isDraft == true then "drafts"
         elif .mergeable == "CONFLICTING" and $f >= 3 then "broken"
         elif .mergeable == "CONFLICTING" then "needs-conflict-resolution"
         elif ($pr | haslabel("dependencies")) and $f > 0 then "needs-lockfile-fix"
+        elif ($v == "no-run" or $v == "stalled") and $f == 0 then "ready-unarmed"
         elif ($pr | haslabel("bot-fix/review-required")) or .reviewDecision == "REVIEW_REQUIRED" then "needs-review"
-        elif .mergeable == "MERGEABLE" and $f == 0 then "ready-green"
+        elif .mergeable == "MERGEABLE" and $f == 0 and $v != "awaiting-approval" then "ready-green"
         else "needs-review"
         end
       )
     }
+    | if .tier == "ready-unarmed" then . + { recovery: "if no session is still inside wait-ready-run for it: gh pr ready --undo \(.number) && gh pr ready \(.number)  (user token, never GITHUB_TOKEN), then re-run the whole ship step 6 block (read ready-count first, arm only after wait-ready-run exits 0)" } else . end
   ]' <<<"$PR_JSON")"
 
 # --- Emit -------------------------------------------------------------------
 # Stable tier order for the grouped output.
-TIER_ORDER='["ready-green","needs-lockfile-fix","needs-conflict-resolution","needs-review","broken","drafts"]'
+TIER_ORDER='["ready-green","ready-unarmed","needs-lockfile-fix","needs-conflict-resolution","needs-review","broken","drafts"]'
 
 if [[ "$FORMAT" == "json" ]]; then
   jq -n --argjson prs "$CLASSIFIED" --argjson order "$TIER_ORDER" '
@@ -136,6 +186,7 @@ jq -r --argjson order "$TIER_ORDER" '
   | $order[] as $t
   | ([ $prs[] | select(.tier == $t) ]) as $g
   | "## \($t) (\($g | length))",
-    ( $g[] | "  #\(.number)  \(.title)  [@\(.author), mergeable=\(.mergeable), fail=\(.failing), pending=\(.pending)]" ),
+    ( $g[] | "  #\(.number)  \(.title)  [@\(.author), mergeable=\(.mergeable), fail=\(.failing), pending=\(.pending)\(if .ci != "" then ", ci=\(.ci)" else "" end)]",
+             (if .recovery then "      recovery: \(.recovery)" else empty end) ),
     ""
 ' <<<"$CLASSIFIED"

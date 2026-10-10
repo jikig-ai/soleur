@@ -106,11 +106,36 @@ build_fx "$TMP/b8" 25 40; bash -c 'FX="'"$TMP/b8"'" PATH="'"$TMP/bin"':$PATH" GH
 if grep -q 'created=%3E2026-10-01T00:00:00Z' "$TMP/b8/requests.log" && grep -q 'status=completed' "$TMP/b8/requests.log" && grep -q 'event=pull_request' "$TMP/b8/requests.log"; then
   pass "the runs query is windowed after the merge time, completed and pull_request-only"
 else fail "the runs query lost its created=/status=/event= parameters: $(grep 'ci.yml/runs?event=pull_request' "$TMP/b8/requests.log" | head -1)"; fi
+# --- ADR-276 S3 (#9728): the draft light run must not move this probe -----------------------------------------------
+# With CI_DRAFT_LIGHT on, a draft push's pull_request run concludes `failure` (Option R: the `test` aggregator is red by
+# design) and its four heavy families (test-scripts*, test-webplat, shard-totality-mutations) are SKIPPED. Neither the
+# baseline mean nor the escape count may see such a run: the probe's own rules (conclusion `success` only, a test-scripts*
+# job that actually ran) already exclude it. These rows pin that, so a later edit to either rule cannot turn the soak of
+# #9323 into a measurement of the draft policy. add_light <fx> <n-runs> <conclusion> appends <n> light runs for PRs 101..
+add_light() {
+  local fx="$1" n="$2" conc="$3" i pr
+  for ((i = 1; i <= n; i++)); do
+    pr=$((100 + i))
+    jq -n '{jobs:[
+      {name:"test-scripts (1/7)", conclusion:"skipped", created_at:"2026-10-02T00:00:00Z", started_at:"2026-10-02T00:00:00Z", completed_at:"2026-10-02T00:00:00Z"},
+      {name:"lint", conclusion:"success", created_at:"2026-10-02T00:00:00Z", started_at:"2026-10-02T00:00:00Z", completed_at:"2026-10-02T10:00:00Z"}]}' > "$fx/jobs-$((900 + i)).json"
+    jq --arg c "$conc" --argjson id "$((900 + i))" --argjson pr "$pr" \
+      '.workflow_runs += [{id: $id, conclusion: $c, actor: {type: "User"}, pull_requests: [{number: $pr}]}]' "$fx/runs.json" > "$fx/runs.tmp" && mv "$fx/runs.tmp" "$fx/runs.json"
+  done
+}
+build_fx "$TMP/c1" 25 40; add_light "$TMP/c1" 25 failure
+                                    expect "S3: 25 failed light draft runs (600 runner-min each, heavy families skipped) leave the mean at 40.0 over 25 runs" 0 "qualifying_runs=25 mean_runner_min=40.0" "$TMP/c1"
+build_fx "$TMP/c2" 25 40; add_light "$TMP/c2" 25 success
+                                    expect "S3: even a light run reading success is excluded (no test-scripts job ran): still 25 runs, mean 40.0" 0 "qualifying_runs=25 mean_runner_min=40.0" "$TMP/c2"
+build_fx "$TMP/c3" 25 40 0 0 110; add_light "$TMP/c3" 25 failure
+                                    expect "S3: a real escape (push run red) is still found beside the light runs" 1 "ESCAPE: PR 110" "$TMP/c3"
+build_fx "$TMP/c4" 0 40; add_light "$TMP/c4" 25 failure
+                                    expect "S3: only failed light runs is NOT YET 0 (they are not a saving, not an escape)" 2 "NOT YET: 0" "$TMP/c4"
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
 
 printf 'pr-battery-gate-saving-9323: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
-PBGS_MIN_ASSERTIONS=18
+PBGS_MIN_ASSERTIONS=22
 if (( asserted < PBGS_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < PBGS_MIN_ASSERTIONS=%d\n' "$asserted" "$PBGS_MIN_ASSERTIONS" >&2
   exit 1

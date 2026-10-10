@@ -50,6 +50,10 @@
 # Exit 0 on a merge or an all-green settle; 1 on a red/closed terminal; 2 on timeout;
 # 3 on usage error. The caller's Monitor watch ends when this exits.
 #
+# CI_DRAFT_LIGHT (ADR-276 S3, #9728): a red `test` row is read through ci-head-verdict.sh. pending-full and no-run report it
+# PENDING (`test(ready run <state>)`), stalled and awaiting-approval end the watch (exit 1) with the recovery command, and
+# full-decided / n/a / an unanswered resolver keep the row FAILED exactly as before.
+#
 # Merge queue (#9454): a PR that is IN the merge queue is neither stale nor stuck, so the BEHIND / BLOCKED /
 # auto-merge-off verdicts below (which tell the caller to sync, wait on protection, or merge by hand) would
 # be wrong or dangerous for it — a push dequeues it. Those arms (and every --heartbeat-every'th poll, so a PR that
@@ -188,6 +192,25 @@ in_queue() {
   esac
 }
 
+# ci_verdict — the head verdict from ci-head-verdict.sh (ADR-276 S3, #9728). With CI_DRAFT_LIGHT on, a draft's `test`
+# is red BY DESIGN; after `gh pr ready` that row stays the newest `test` row until the ready run's aggregator posts
+# (38 to 51 minutes), so `gh pr checks` reads `fail` for a PR that is merely waiting. Sets V_STATE to the resolver's
+# state, or "" when it cannot answer (script absent, gh failed): every caller then keeps today's reading, never a
+# softer one. CI_HEAD_VERDICT_BIN is the test seam.
+VERDICT_SH="${CI_HEAD_VERDICT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/ci-head-verdict.sh}"
+V_STATE=""; V_WHY=""
+ci_verdict() {
+  local m
+  V_STATE=""; V_WHY=""
+  [[ -r "$VERDICT_SH" ]] || return 1
+  m="$(bash "$VERDICT_SH" verdict "$PR" "${REPO_ARG[@]}" 2>/dev/null)" || true
+  m="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$m")" || return 1
+  V_WHY="${m#* reason=}"; V_WHY="${V_WHY%% *}"
+  m="${m#*state=}"; m="${m%% *}"
+  # state=error (a resolver that could not read) is outside this set on purpose: today's reading stays.
+  case "$m" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) V_STATE="$m" ;; *) return 1 ;; esac
+}
+
 n=0; prev_sig=""; queue_seen=0
 while :; do
   n=$((n + 1))
@@ -209,6 +232,17 @@ while :; do
   checks="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket 2>"$ERRTMP" || true)"
   checks_err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '\n' ' ')"
   [[ -n "$checks" ]] || { checks='[]'; probe_ok=0; failed_probe="${failed_probe:+$failed_probe + }pr checks"; checks_fail_err="$checks_err"; }
+
+  # A red `test` row on a PR whose ready run is pending (or missing) is the DRAFT run's row: report it PENDING under a
+  # label that says why, never FAILED. full-decided / n/a / an unanswered resolver leave the row exactly as read.
+  V_STATE=""
+  if [[ "$probe_ok" == "1" && "$(jq '[.[]|select(.name=="test" and .bucket=="fail")]|length' <<<"$checks" 2>/dev/null || echo 0)" -gt 0 ]]; then
+    ci_verdict || true
+    case "$V_STATE" in
+      pending-full|no-run|stalled|awaiting-approval)
+        checks="$(jq -c --arg l "test(ready run $V_STATE)" '[.[]|if (.name=="test" and .bucket=="fail") then (.bucket="pending" | .name=$l) else . end]' <<<"$checks")" ;;
+    esac
+  fi
 
   tot=$(jq  'length'                                        <<<"$checks" 2>/dev/null || echo 0)
   pass=$(jq '[.[]|select(.bucket=="pass")]|length'          <<<"$checks" 2>/dev/null || echo 0)
@@ -283,6 +317,17 @@ while :; do
       fi
       exit 0 ;;
     CLOSED) printf 'CLOSED WITHOUT MERGE — PR #%s.\n' "$PR"; exit 1 ;;
+  esac
+
+  # The ready run will never decide on its own: say so and stop. No fix loop on the draft-red row, and a manual re-run of
+  # the draft run is not a recovery (it reuses the cached draft-light output and can cancel the in-flight ready run).
+  case "$V_STATE" in
+    stalled)
+      printf 'READY RUN STALLED — PR #%s was marked ready but no full CI run decided (%s: the stall window counts from the ready event); the red test row is the DRAFT run'"'"'s, by design. Do NOT start a fix loop on it. First confirm in the Actions tab that the ready run is not still in flight; recovery with a user token (never GITHUB_TOKEN): gh pr ready --undo %s ; gh pr ready %s\n' "$PR" "$V_WHY" "$PR" "$PR"
+      exit 1 ;;
+    awaiting-approval)
+      printf 'READY RUN AWAITING APPROVAL — PR #%s: the ready run is waiting for a maintainer to approve a fork workflow run (Actions tab, "Approve and run"); nothing starts until it is approved, and the red test row is the draft run'"'"'s.\n' "$PR"
+      exit 1 ;;
   esac
 
   # Auto-merge silently switching off is a state the operator must hear about: the PR then sits

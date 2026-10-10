@@ -49,7 +49,7 @@ c6e8f0c198680f7e0b7ccbedf03d962b6b7fae861f04c1dcb2a9027ac0745a07  hr-when-in-a-w
 e12cb2306db787d28d82728b3dd3c4bbaa5b6de5e6e694bdd72ce187ff03a62e  hr-when-triaging-a-batch-of-issues-never
 63974361ce7e40472ef7b4c7cf234972ce9fd3a4ffbfeeea14ff424544585d2d  hr-write-boundary-sentinel-sweep-all-write-sites
 5fec24ab593f1ed130c5e663784bf126f66756a1142b6caa3c346a0af5dca83b  wg-after-a-pr-merges-to-main-verify-all
-996dc0695215e6fb6de2582dd7a786bd8eede2ae95ecde91e86e8fd2cf0e59be  wg-after-marking-a-pr-ready-run-gh-pr-merge
+b2a2e3e830e7b4302233019467d17c81918b96e17d0db5a5e504958c75de7d83  wg-after-marking-a-pr-ready-run-gh-pr-merge
 e84867ed5753880b062a1304ef441815423cc3189ffe08572e3bc99af377f529  wg-after-merging-a-pr-that-adds-or-modifies
 71e09900759121816b84c5e2ba85c9f98421103b0188d4a5a7e4b9fbc0da6199  wg-at-session-start-after-cleanup-merged
 eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-start-run-bash-plugins-soleur

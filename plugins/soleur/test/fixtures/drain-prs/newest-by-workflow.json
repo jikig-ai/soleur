@@ -1,0 +1,33 @@
+[
+  {
+    "number": 9201,
+    "title": "same check name in two workflows: the newer green must not hide the older red",
+    "headRefName": "feat-xyz",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [],
+    "author": {"login": "someone"},
+    "createdAt": "2031-01-01T00:00:00Z",
+    "statusCheckRollup": [
+      {"name": "detect", "workflowName": "pr-quality-guards", "status": "COMPLETED", "conclusion": "FAILURE", "startedAt": "2031-01-01T00:00:01Z"},
+      {"name": "detect", "workflowName": "build-inngest-bootstrap-image", "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": "2031-01-01T00:00:09Z"},
+      {"name": "test", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": "2031-01-01T00:00:05Z"}
+    ]
+  },
+  {
+    "number": 9202,
+    "title": "a rerun of the SAME workflow check: the newer green does decide",
+    "headRefName": "feat-abc",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [],
+    "author": {"login": "someone"},
+    "createdAt": "2031-01-01T00:00:00Z",
+    "statusCheckRollup": [
+      {"name": "detect", "workflowName": "pr-quality-guards", "status": "COMPLETED", "conclusion": "FAILURE", "startedAt": "2031-01-01T00:00:01Z"},
+      {"name": "detect", "workflowName": "pr-quality-guards", "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": "2031-01-01T00:00:09Z"}
+    ]
+  }
+]

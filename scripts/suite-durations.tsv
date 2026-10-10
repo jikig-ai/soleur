@@ -143,6 +143,7 @@ plugins/soleur/test/check-deps-adapter-drift.test.sh	2067	measured
 plugins/soleur/test/check-red-on-main.test.sh	1785	measured
 plugins/soleur/test/ci-concurrency-key.test.sh	1843	measured
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	95	measured
+plugins/soleur/test/ci-head-verdict.test.sh	996	floor
 plugins/soleur/test/ci-path-gating.test.sh	204	measured
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	770	measured
 plugins/soleur/test/claude-code-action-auth.test.sh	979	floor
@@ -301,6 +302,8 @@ scripts/check-tom4-rls-posture-live	281	measured
 scripts/check-web-host-escrow-config	61002	measured
 scripts/ci-demand-census	996	floor
 scripts/ci-deploy-sentry-post-fail-6475	105	measured
+scripts/ci-draft-light	996	floor
+scripts/ci-draft-push-census	996	floor
 scripts/ci-leg-balance-9232	5478	measured
 scripts/ci-push-dedupe	996	floor
 scripts/classify-workflow-transitions	2403	measured
@@ -329,6 +332,7 @@ scripts/followthrough-exec-bit	20	measured
 scripts/followthrough-predicate-parity	1887	measured
 scripts/followthrough-varq-ban	23235	measured
 scripts/followthrough-varq-ban-live	1231	measured
+scripts/followthroughs/ci-draft-light-soak-9728	996	floor
 scripts/followthroughs/ci-push-dedupe-soak-9512	996	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	9722	measured
 scripts/followthroughs/t5-skip-persistence-bound-7510	9063	measured

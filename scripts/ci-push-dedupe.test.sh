@@ -83,12 +83,17 @@ passes=$_p0; fails=$_f0; FAILURES=()
 # The condition tail every gated job carries, written ONCE here: chk.py, the parity rows and the mutants all derive from it.
 ELIDE_TAIL="(github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true')"
 GATED_PINNED="e2e shard-totality-mutations test test-bun test-scripts test-scripts-heavy test-webplat web-platform-build"
+# ADR-276 S3 (#9728): four of those eight additionally carry `needs: [push-dedupe, draft-light]` and this clause appended to the
+# condition (the other four, incl. e2e and the `test` aggregator, must NOT: scripts/ci-draft-light.test.sh pins the S3 side in full).
+LIGHT_CLAUSE="needs.draft-light.outputs.light != 'true'"
+DL_GATED_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webplat"
 # sha256 of the `test` aggregator job minus its `needs` and `if`, as json.dumps(sort_keys=True), measured
-# on the unmodified tree before this stage (the aggregator body, env, timeout and runner must not move).
-AGG_DIGEST="12a297030c34e7c1e8b5fa89833f0643857d61a61fef76e0dea016831976cc75"
+# on the unmodified tree before this stage (the aggregator body, env, timeout and runner must not move). Re-measured at ADR-276 S3
+# (#9728), which adds the DRAFT_LIGHT env and the draft arm to the aggregator body (scripts/ci-draft-light.test.sh executes them).
+AGG_DIGEST="a93006d80e2948b175c60eb10d8f3e1480d57af3434da9a594f72d0e6e46690d"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
-UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success no_test_job switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -117,11 +122,14 @@ import hashlib, json, os, re, sys, yaml
 LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 mode, path = sys.argv[1], sys.argv[2]
 GATED = os.environ.get("GATED_PINNED", "").split()
+DLGATED = os.environ.get("DL_GATED_PINNED", "").split()
+CLAUSE = os.environ["LIGHT_CLAUSE"]
 UNGATED = os.environ.get("UNGATED_PINNED", "").split()
 AGG = os.environ.get("AGG_DIGEST", "")
 TAIL = os.environ["ELIDE_TAIL"]
 CANON = {"test": "${{ always() && " + TAIL + " }}"}
 CANON_DEFAULT = "${{ !cancelled() && " + TAIL + " }}"
+CANON_DL = "${{ !cancelled() && " + TAIL + " && " + CLAUSE + " }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "SHA", "EVENT_NAME", "REF", "RUN_ATTEMPT", "SWITCH"}
 
 def load():
@@ -135,17 +143,17 @@ def needs(j):
     n = (j or {}).get("needs", [])
     return [n] if isinstance(n, str) else list(n)
 
-def ev(expr, event, elide, need, cancelled=False):
+def ev(expr, event, elide, need, cancelled=False, light=""):
     e = str(expr).strip()
     if not (e.startswith("${{") and e.endswith("}}")):
         return None
     e = e[3:-2].strip()
     has_status = bool(re.search(r"\b(cancelled|always|success|failure)\(\)", e))
     e = e.replace("!cancelled()", "(not CANC)").replace("always()", "True").replace("success()", "(NEEDOK)")
-    e = e.replace("github.event_name", "EV").replace("needs.push-dedupe.outputs.elide", "EL")
+    e = e.replace("github.event_name", "EV").replace("needs.push-dedupe.outputs.elide", "EL").replace("needs.draft-light.outputs.light", "LT")
     e = e.replace("&&", " and ").replace("||", " or ")
     try:
-        val = bool(eval(e, {"__builtins__": {}}, {"CANC": cancelled, "EV": event, "EL": elide, "NEEDOK": need == "success"}))
+        val = bool(eval(e, {"__builtins__": {}}, {"CANC": cancelled, "EV": event, "EL": elide, "LT": light, "NEEDOK": need == "success"}))
     except Exception:
         return None
     if not has_status:
@@ -230,7 +238,10 @@ if mode == "gated":
         j = jobs.get(n)
         if j is None: tags.append("G-MISSING:" + n); continue
         if "push-dedupe" not in needs(j): tags.append("G-NEEDS:" + n)
-        if j.get("if") != CANON.get(n, CANON_DEFAULT): tags.append("G-COND:" + n)
+        want_if = CANON_DL if n in DLGATED else CANON.get(n, CANON_DEFAULT)
+        if j.get("if") != want_if: tags.append("G-COND:" + n)
+        if n != "test" and (n in DLGATED) != ("draft-light" in needs(j)): tags.append("G-DLNEEDS:" + n)
+        if n == "test" and "draft-light" not in needs(j): tags.append("G-DLNEEDS:" + n)
         if j.get("continue-on-error"): tags.append("G-COE:" + n)
     for n, j in jobs.items():
         if n not in GATED and n != "push-dedupe" and "push-dedupe" in needs(j): tags.append("G-EXTRANEED:" + n)
@@ -248,12 +259,13 @@ if mode == "truth":
         j = jobs.get(n) or {}
         for event in ("push", "pull_request", "merge_group", "workflow_dispatch"):
             for elide in ("", "false", "true"):
+              for light in ("", "false", "true"):
                 needs_ = ("success", "failure") if event == "push" else ("skipped",)
                 for need in needs_:
-                    got = ev(j.get("if"), event, elide, need)
-                    want = not (event == "push" and elide == "true")
+                    got = ev(j.get("if"), event, elide, need, light=light)
+                    want = not (event == "push" and elide == "true") and not (n in DLGATED and light == "true")
                     if got is None: tags.append("TT-ERR:%s" % n)
-                    elif got != want: tags.append("TT:%s:%s:%s:%s" % (n, event, elide or "empty", need))
+                    elif got != want: tags.append("TT:%s:%s:%s:%s:%s" % (n, event, elide or "empty", need, light or "empty"))
         if ev(j.get("if"), "push", "false", "success", cancelled=True) is not False and "always()" not in str(j.get("if")):
             tags.append("TT-CANCEL:" + n)
     print(" ".join(sorted(set(tags)))); sys.exit(0)
@@ -276,7 +288,7 @@ if mode == "aggbody":
 sys.stderr.write("unknown mode\n"); sys.exit(2)
 PY
 
-chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
+chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" python3 "$SANDBOX/chk.py" "$@"; }
 
 # ── Helper: the gh shim ──────────────────────────────────────────────────────
 cat > "$SANDBOX/shim/gh" <<'SH'
@@ -673,16 +685,31 @@ mutate_yml() {
   esac
 }
 COND_DEFAULT="if: \${{ !cancelled() && $ELIDE_TAIL }}"
+# anchors carry the push-dedupe-only line that follows (`SHA:` / `actions: read`) so they stay unique now that draft-light (S3) has the same shape
 mutate_yml y-no-coe "        continue-on-error: true
         timeout-minutes: 2
-" "        timeout-minutes: 2
-" wrapper W-COE
+        env:
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+          SHA:" "        timeout-minutes: 2
+        env:
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+          SHA:" wrapper W-COE
 mutate_yml y-no-step-timeout "        timeout-minutes: 2
-        env:" "        timeout-minutes: 9
-        env:" wrapper W-STEPTIMEOUT
+        env:
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+          SHA:" "        timeout-minutes: 9
+        env:
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+          SHA:" wrapper W-STEPTIMEOUT
 mutate_yml y-job-timeout "    timeout-minutes: 3
-    permissions:" "    timeout-minutes: 5
-    permissions:" wrapper W-JOBTIMEOUT
+    permissions:
+      actions: read" "    timeout-minutes: 5
+    permissions:
+      actions: read" wrapper W-JOBTIMEOUT
 mutate_yml y-no-output "      elide: \${{ steps.proof.outputs.elide }}" "      elide: \${{ steps.proof.outputs.would_elide }}" wrapper W-OUTPUTS
 mutate_yml y-perm "      actions: read" "      actions: write" wrapper W-PERM
 mutate_yml y-success-fn "  test-bun:
@@ -708,9 +735,9 @@ mutate_yml y-extra-gated "    needs: detect-changes
 " "    needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true' || needs.push-dedupe.outputs.elide == 'x'
 " gated G-SET
-mutate_yml y-agg-env "          EVENT_NAME: \${{ github.event_name }}
+mutate_yml y-agg-env "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}
         run: |
-          # NAME THE MEASURED CAUSE" "          EVENT_NAME: \${{ github.event_name }}
+          # NAME THE MEASURED CAUSE" "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}
           ELIDE: \${{ needs.push-dedupe.outputs.elide }}
         run: |
           # NAME THE MEASURED CAUSE" agg A-DIGEST
@@ -722,15 +749,23 @@ mutate_yml y-agg-tolerate "              skipped)
 # reached only through the pristine-tree rows; a tag deleted from chk.py is NOT caught for those: add a row first)
 mutate_yml y-no-job-coe "    continue-on-error: true
     runs-on: ubuntu-latest
-" "    runs-on: ubuntu-latest
-" wrapper W-JOBCOE
+    timeout-minutes: 3
+    permissions:
+      actions: read" "    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read" wrapper W-JOBCOE
 mutate_yml y-runs-on "    runs-on: ubuntu-latest
     timeout-minutes: 3
-" "    runs-on: macos-latest
+    permissions:
+      actions: read" "    runs-on: macos-latest
     timeout-minutes: 3
-" wrapper W-RUNSON
+    permissions:
+      actions: read" wrapper W-RUNSON
 mutate_yml y-xtrace-off-gone "          set +x
-" "" wrapper W-NOXTRACEOFF
+          emit() { printf '%s\\n' \"\$1\" >> \"\$GITHUB_OUTPUT\"; }
+          elide=false" "          emit() { printf '%s\\n' \"\$1\" >> \"\$GITHUB_OUTPUT\"; }
+          elide=false" wrapper W-NOXTRACEOFF
 mutate_yml y-unclassified "
   credential-path-guard:
 " "

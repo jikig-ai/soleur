@@ -1,0 +1,9 @@
+## A: draft run concluded red, no ready run yet  2026-10-09T20:14:11Z  pr=9891 sha=e53368af61
+-- gh pr view (mergeStateStatus + rollup rows named test)
+{"isDraft":true,"mergeStateStatus":"BLOCKED","test_rows":[{"completedAt":"2026-10-09T20:13:55Z","conclusion":"FAILURE","startedAt":"2026-10-09T20:13:53Z","status":"COMPLETED"}]}
+-- raw check-runs named test (filter=all)
+[{"completed_at":"2026-10-09T20:13:55Z","conclusion":"failure","id":114005614782,"started_at":"2026-10-09T20:13:53Z","status":"completed"}]
+-- gh pr checks --required
+[{"bucket":"fail","name":"test","state":"FAILURE"},{"bucket":"pass","name":"cla-evidence","state":"SUCCESS"},{"bucket":"pass","name":"cla-check","state":"SUCCESS"}]
+-- ready events
+[]

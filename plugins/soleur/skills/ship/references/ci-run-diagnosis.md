@@ -4,6 +4,8 @@
 
 Loaded from [ship/SKILL.md](../SKILL.md) Phase 7 when the poll exits on a required-check failure (byte-ceiling extraction, #9403).
 
+**A draft's red `test` is not a failure to diagnose.** With `CI_DRAFT_LIGHT` on, a draft PR's `test` concludes red on purpose and its only failing output is `draft: full battery owed at ready` (the four heavy families are skipped). A ready head therefore carries TWO ci.yml `pull_request` runs: the draft run and the ready run. Take the run id from the verdict marker (`bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" verdict <number>`, field `run=`, the deciding run), never from the newest or the failing line of `gh run list --commit`: that can be the draft run. A `test` job whose only red text is that line, on a head with a later `ready_for_review` run, is not a diagnosis target. See [ready-run-wait.md](./ready-run-wait.md).
+
 The poll loop exits holding a CHECK NAME, not a run id. Derive the run id first —
 `gh pr checks` returns neither, so nothing upstream hands it to you:
 

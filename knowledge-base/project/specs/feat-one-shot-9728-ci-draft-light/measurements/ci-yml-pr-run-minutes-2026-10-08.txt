@@ -1,0 +1,13 @@
+# ci.yml pull_request runs, 2026-10-08T00:00Z..2026-10-09T00:00Z (two 12h censuses, summed minutes); runs per stem max = 178
+gated_family_minutes_total=15987.8 per_run=89.82
+light_set_minutes_total=2538.3 per_run=14.26
+stem test-scripts minutes_per_run=69.75
+stem test-webplat minutes_per_run=8.02
+stem shard-totality-mutations minutes_per_run=7.36
+stem test-scripts-heavy minutes_per_run=4.69
+stem e2e minutes_per_run=3.14
+stem web-platform-build minutes_per_run=2.18
+stem test-bun minutes_per_run=1.81
+stem lint-webplat minutes_per_run=1.39
+test-bun per_run=1.81 (gated only if above 3)
+e2e per_run=3.14

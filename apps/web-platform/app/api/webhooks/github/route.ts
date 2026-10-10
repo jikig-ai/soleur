@@ -63,6 +63,7 @@ import {
   WORKSPACE_RECONCILE_SCHEMA_V,
 } from "@/server/session-sync";
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
+import { isDraftPrCiRun, type WorkflowRunFields } from "@/server/webhook-draft-ci-run";
 
 // Map x-github-event header to the action_class registered in
 // scope_grants. `repository_advisory` and `secret_scanning_alert` both
@@ -221,7 +222,7 @@ export async function POST(request: Request) {
   let body: {
     installation?: { id?: number };
     action?: string;
-    workflow_run?: { conclusion?: string | null };
+    workflow_run?: WorkflowRunFields & { conclusion?: string | null };
     ref?: string;
     before?: string;
     after?: string;
@@ -439,6 +440,38 @@ export async function POST(request: Request) {
       "GitHub webhook: no active scope_grant — skip inngest.send (fail-closed)",
     );
     return NextResponse.json({ received: true });
+  }
+
+  // ADR-276 S3 (#9728) draft-PR CI-run filter. Under Option R every draft
+  // PR's ci.yml `pull_request` run is a LIGHT run that concludes `failure` by
+  // design (the `test` aggregator exits 1: "draft: full battery owed at
+  // ready"); without this drop each draft push would raise an
+  // engineering.ci_failed card. Placed AFTER the founder/grant gates so the
+  // GitHub lookup only runs for deliveries that would otherwise dispatch, and
+  // BEFORE claimDedupRow so a drop writes no dedup row (drop-before-dedup).
+  // Fails OPEN: any lookup failure / ambiguity / non-draft keeps today's
+  // behaviour (card raised) — see server/webhook-draft-ci-run.ts. Known,
+  // accepted gap: a draft readied between the light run and this delivery
+  // reads as non-draft here and still raises the card.
+  if (githubEvent === "workflow_run") {
+    const draftCi = await isDraftPrCiRun({
+      installationId,
+      fullName,
+      run: body.workflow_run,
+    });
+    if (draftCi.drop) {
+      logger.info(
+        {
+          deliveryId,
+          installationId,
+          fullName,
+          prNumber: draftCi.prNumber,
+          headSha: draftCi.headSha,
+        },
+        "GitHub webhook workflow_run: draft PR CI run (light by design) — dropped, no ci_failed card",
+      );
+      return NextResponse.json({ received: true });
+    }
   }
 
   // Step 7-pre: claim the dedup row immediately before dispatch (grant
