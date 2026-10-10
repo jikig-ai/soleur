@@ -196,8 +196,8 @@ entries.
 #### Phase 1: matcher + mint arms (`scripts/test-all.sh`)
 
 - `_affected_add_edge` `glob:*` arm (well-formed→`^glob:`; missing head
-  dir→`^head/`; malformed→`^`; no-metachar→recurse). All probes via
-  `_affected_probe`.
+  dir→`^head/`; malformed→`^glob:<entry verbatim>`; no-metachar→recurse).
+  All probes via `_affected_probe`.
 - `_diff_edge_hit` `glob:*)` arm (malformed→match; head pre-check; line loop
   over `_DEH_N`).
 - Header comments on both functions updated (third kind, degrade ladder).
@@ -221,7 +221,8 @@ entries.
 #### Phase 3: test arms
 
 - `scripts/test-affected-derive.test.sh` — R-rows: `glob:` mint; missing-head
-  degrade `^head/`; malformed mint `^`; no-metachar recurse; dedup of a glob
+  degrade `^head/`; malformed mint `^glob:<entry verbatim>`; no-metachar
+  recurse; dedup of a glob
   edge; `^glob:` appears in `--print-selection` receipts.
 - `scripts/test-all-affected.test.sh` — t-rows over `SANDBOX_DIFF_NAMES`:
   kb `.sh` selects / kb `.md` declines / nested `.sh` selects /
@@ -389,7 +390,9 @@ adopting-window needed.
 
 **Property.** A `glob:` declared entry mints an edge that never narrows below
 the dir-prefix coverage it replaces: well-formed+dir→`^glob:`, missing head
-dir→`^head/`, malformed→`^` (always-match).
+dir→`^head/`, malformed→`^glob:<entry verbatim>` (always-match — the hit
+arm's own malformed rule matches it; a bare `^` would evaluate `*\n\n*` and
+narrow).
 
 **Assembly.** The single mint site `_affected_add_edge` in
 `scripts/test-all.sh`, reached by every classification path (argv/stem
@@ -568,7 +571,7 @@ the ratchet's `violations()` consults for every (suite, ref) pair.
 
 - **unit** — Given `glob:knowledge-base/**.sh` in a declared array, when `_affected_add_edge` runs on a tree where `knowledge-base/` exists, then `_AC_EDGES` gains `^glob:knowledge-base/**.sh` (derive R-row).
 - **unit** — Given head dir absent, when mint runs, then the edge is `^knowledge-base/` (degrade, never narrow).
-- **unit** — Given `glob:x` malformed, when mint runs, then the edge is `^` (always-match).
+- **unit** — Given `glob:x` malformed, when mint runs, then the edge is `^glob:glob:x` (verbatim carry; always-match via the hit arm's malformed rule — a bare `^` would narrow).
 - **unit** — Given `SANDBOX_DIFF_NAMES=knowledge-base/project/specs/foo.md`, when `_diff_edge_hit '^glob:knowledge-base/**.sh'` runs, then miss; `…/x.sh` → hit; `knowledge-base/x.sh` → hit; `a/b/c.sh` under head → hit; `R100\told.sh\tnew` → hit.
 - **integration** — Given the real index, when `--print-selection --paths=<kb .md>` runs, then exactly the six labels unselect; `--paths=<kb .sh>` re-selects them.
 
