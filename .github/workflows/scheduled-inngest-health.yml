@@ -64,6 +64,7 @@ jobs:
       # workflow bash and under scripts/*.test.sh coverage.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - id: probe
+        name: Probe inngest health
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
@@ -109,8 +110,9 @@ jobs:
             # shellcheck disable=SC2034  # read by NAME inside bc_ok_var and bc_curl
             SIG="$(printf '' | bc_hmac_sha256_hex WEBHOOK_SECRET)" || SIG=""
             # PRE-GUARD (ADR-280 decision 3). A refused credential makes NO request and is the watchdog's own
-            # unusable-secret fault: it is recorded as `secret_unset` (the liveness-probe issue class: soft, NO
-            # restart, never seeds the [ci/inngest-down] age gate), never as the 000/403 `probe_unavailable`
+            # unusable-secret fault: it is recorded as `secret_unset` (the liveness-probe issue class: NO
+            # restart, but the Sentry heartbeat is `error` and pages, unlike probe_unavailable; never seeds
+            # the [ci/inngest-down] age gate), never as the 000/403 `probe_unavailable`
             # a transport failure produces and never as `inngest_down`, which would dispatch a restart of a
             # server nobody measured to be down. The marker is value-free and stays visible on the run log.
             for _cv in SIG CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
@@ -491,7 +493,8 @@ jobs:
           #   pool-probe    → [ci/inngest-pool-probe]        the pool probe itself is degraded (401/scope/non-JSON) — NOT pool-hot
           #   liveness-probe→ [ci/inngest-probe-unavailable] the LIVENESS probe path is unavailable (404/000/403 — deploy race /
           #                   CF-Access / webhook.service degrade) OR the watchdog's own secrets are unset (secret_unset).
-          #                   SOFT — NO restart, and a DISTINCT title from [ci/inngest-down] so it never pollutes the
+          #                   NO restart (SOFT for probe_unavailable; secret_unset still pages via the Sentry heartbeat),
+          #                   and a DISTINCT title from [ci/inngest-down] so it never pollutes the
           #                   Defect-3 age gate (#6374). secret_unset routes here (not `down`): the watchdog could not
           #                   probe, so a restart it never dispatched must not be claimed, and this must not seed the age gate.
           #   down          → [ci/inngest-down]              the liveness restart body (down / unhealthy)
@@ -542,9 +545,11 @@ jobs:
             # before /hooks/inngest-liveness lands, or a CF-Access / webhook.service
             # degrade). SOFT — NO restart dispatched, and a title DISTINCT from
             # [ci/inngest-down] so the Defect-3 age gate is never polluted. p2: the probe
-            # is dark, not a confirmed inngest-down. The Sentry heartbeat stays `ok` for
-            # this mode (see the check-in step) so a transient deploy-race window does not
-            # false-page — this issue is the surviving soft signal.
+            # is dark, not a confirmed inngest-down. For `probe_unavailable` the Sentry heartbeat
+            # stays `ok` (see the check-in step) so a transient deploy-race window does not
+            # false-page — this issue is the surviving soft signal. `secret_unset` shares this
+            # issue class but NOT that treatment: no request is made, the heartbeat is `error`
+            # and the Sentry monitor pages (the check-in `ok` arm names probe_unavailable only).
             ISSUE_TITLE="[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"
             gh label create "ci/inngest-probe-unavailable" --repo "$GH_REPO" \
               --description "External watchdog: the inngest LIVENESS probe path is unavailable (deploy race / CF-Access — NOT a confirmed down)" --color "5319E7" 2>/dev/null || true
@@ -554,8 +559,14 @@ jobs:
               printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
               printf -- '- **Detected at:** %s\n' "$NOW"
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
-              printf '### The probe path is unavailable — this is NOT a confirmed inngest-down\n\nThe `/hooks/inngest-liveness` GET returned a non-200 with no well-formed body (404/000/403). Most common cause: the **deploy-race window** right after the #6374 merge — the repointed workflow is live but the on-host hook has not landed yet (it ships async via the infra-config push). It also fires on a Cloudflare Access or `webhook.service` degrade. NO restart is dispatched (a restart cannot fix a broken probe path), and this does NOT open a `[ci/inngest-down]` issue.\n\n'
-              printf '### Remediation\n\n1. If this is right after the #6374 merge, WAIT one infra-config push cycle — `curl https://deploy.soleur.ai/hooks/inngest-liveness` (HMAC + CF-Access) should return the liveness JSON once the hook lands; the watchdog then auto-closes this issue.\n2. Otherwise check CF-Access / `webhook.service` health per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+              # shellcheck disable=SC2016  # literal backticks in the markdown body are intended
+              if [[ "$FAIL_MODE" == "secret_unset" ]]; then
+                printf '### The watchdog could not probe — no request was made\n\nA stored webhook or Cloudflare Access credential (`WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_CLIENT_ID` or `CF_ACCESS_CLIENT_SECRET`) was unset or was refused by the shape guard, so the probe made NO request: nothing was measured about the Inngest server or the hook. Unlike `probe_unavailable`, this mode checks in `error` on the Sentry monitor and pages. NO restart is dispatched and this does NOT open a `[ci/inngest-down]` issue.\n\n'
+                printf '### Remediation\n\n1. Open the probe step log (`Probe inngest health`): the `SOLEUR_CREDENTIAL_REFUSED` line and the adjacent `... unusable` line name the script and the variable (never its value); an unset secret has no refusal line, the Detail above says so.\n2. Re-store that secret (a value with interior whitespace, quotes or a control byte is refused), then re-run the workflow; the watchdog auto-closes this issue once the probe reads healthy.\n'
+              else
+                printf '### The probe path is unavailable — this is NOT a confirmed inngest-down\n\nThe `/hooks/inngest-liveness` GET returned a non-200 with no well-formed body (404/000/403). Most common cause: the **deploy-race window** right after the #6374 merge — the repointed workflow is live but the on-host hook has not landed yet (it ships async via the infra-config push). It also fires on a Cloudflare Access or `webhook.service` degrade. NO restart is dispatched (a restart cannot fix a broken probe path), and this does NOT open a `[ci/inngest-down]` issue.\n\n'
+                printf '### Remediation\n\n1. If this is right after the #6374 merge, WAIT one infra-config push cycle — `curl https://deploy.soleur.ai/hooks/inngest-liveness` (HMAC + CF-Access) should return the liveness JSON once the hook lands; the watchdog then auto-closes this issue.\n2. Otherwise check CF-Access / `webhook.service` health per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+              fi
             } > "$BODY_FILE"
             EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::inngest-probe-unavailable: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
             if [[ -n "$EXISTING" ]]; then

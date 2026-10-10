@@ -66,7 +66,10 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "https://deploy.soleur.ai/hooks/deploy") || { rc=$?; echo "::error::Restart webhook request was not sent or did not complete (rc=${rc}): a credential refusal (the SOLEUR_CREDENTIAL_REFUSED line above names the variable) or a transport failure. Nothing was restarted."; exit "$rc"; }
+            "https://deploy.soleur.ai/hooks/deploy") || { rc=$?
+              echo "::error::Restart webhook call failed (rc=${rc}). If a SOLEUR_CREDENTIAL_REFUSED line is printed above, the credential was refused before any request was made and nothing was sent; otherwise the request may have reached the host (a timeout or reset can follow an accepted POST), so a restart may be in progress: check the restart status before re-running."
+              exit "$rc"
+            }
           if [[ "$HTTP_CODE" != "202" ]]; then
             echo "::error::Restart webhook rejected (HTTP $HTTP_CODE)"
             exit 1

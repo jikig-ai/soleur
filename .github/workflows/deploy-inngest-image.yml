@@ -54,8 +54,8 @@ jobs:
           # sourced): the signature and the Cloudflare Access pair ride curl's stdin config, never its
           # argument list, and the HMAC key rides a python3 child's environment only. A value outside the
           # token alphabet makes zero requests, prints the marker, and returns 2 (a red step, as any failed call).
-          # ADR-280 inline-wrapper clause: trailing whitespace of the Cloudflare Access pair is trimmed as bc_ok does (the HMAC key is never trimmed; interior whitespace is still refused).
-          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; printf -v "$_v" '%s' "${_t%"${_t##*[![:space:]]}"}"; done
+          # ADR-280 inline-wrapper clause: trims leading and trailing ASCII whitespace of the Cloudflare Access pair (same judgement as bc_ok under LC_ALL=C for trailing; tolerant of the leading blank the old argv form tolerated); the HMAC key is never trimmed; interior whitespace and non-ASCII spaces are still refused.
+          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; _t="${_t#"${_t%%[!$' \t\r\n\v\f']*}"}"; _t="${_t%"${_t##*[!$' \t\r\n\v\f']}"}"; printf -v "$_v" '%s' "$_t"; done
           _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           _sig_curl() {
             local _sigvar="${1:-}"
@@ -74,7 +74,10 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "https://deploy.soleur.ai/hooks/deploy") || { rc=$?; echo "::error::Deploy webhook request was not sent or did not complete (rc=${rc}): a credential refusal (the SOLEUR_CREDENTIAL_REFUSED line above names the variable) or a transport failure. Nothing was deployed."; exit "$rc"; }
+            "https://deploy.soleur.ai/hooks/deploy") || { rc=$?
+              echo "::error::Deploy webhook call failed (rc=${rc}). If a SOLEUR_CREDENTIAL_REFUSED line is printed above, the credential was refused before any request was made and nothing was sent; otherwise the request may have reached the host (a timeout or reset can follow an accepted POST), so a deploy may be in progress: check the deploy status before re-running."
+              exit "$rc"
+            }
           if [[ "$HTTP_CODE" != "202" ]]; then
             echo "::error::Deploy webhook rejected (HTTP $HTTP_CODE)"
             exit 1
@@ -96,8 +99,8 @@ jobs:
           # sourced): the signature and the Cloudflare Access pair ride curl's stdin config, never its
           # argument list, and the HMAC key rides a python3 child's environment only. A value outside the
           # token alphabet makes zero requests, prints the marker, and returns 2 (a red step, as any failed call).
-          # ADR-280 inline-wrapper clause: trailing whitespace of the Cloudflare Access pair is trimmed as bc_ok does (the HMAC key is never trimmed; interior whitespace is still refused).
-          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; printf -v "$_v" '%s' "${_t%"${_t##*[![:space:]]}"}"; done
+          # ADR-280 inline-wrapper clause: trims leading and trailing ASCII whitespace of the Cloudflare Access pair (same judgement as bc_ok under LC_ALL=C for trailing; tolerant of the leading blank the old argv form tolerated); the HMAC key is never trimmed; interior whitespace and non-ASCII spaces are still refused.
+          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; _t="${_t#"${_t%%[!$' \t\r\n\v\f']*}"}"; _t="${_t%"${_t##*[!$' \t\r\n\v\f']}"}"; printf -v "$_v" '%s' "$_t"; done
           _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           _sig_curl() {
             local _sigvar="${1:-}"
