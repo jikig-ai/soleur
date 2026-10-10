@@ -24,6 +24,36 @@ honest as new gated suites are added.
 
 *Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).*
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10
+**Sections enhanced:** Proposed Solution (scheduled-substrate check), Encryption
+Posture (skip-form per precedent), Architecture Decision (C4 enumeration)
+**Research agents used:** none — subagent spawning unavailable in this pipeline
+context; all deepen-plan halt gates and quality checks were executed inline.
+
+### Key Improvements
+
+1. Inngest-vs-GH-Actions substrate decision recorded (ADR-033 gate fired: 57
+   `cron-*.ts` exist; GHA justified on repo-scope, no-memoization-benefit, and
+   the prd-container credential boundary).
+2. `discoverability_test.expected_output` pinned to `uncovered=0` — the sentinel
+   summary-line contract is now specified once, in Proposed Solution.
+3. C4 "no impact" claim replaced an unsupported assertion with the mandated
+   actor/system/container/relationship enumeration.
+
+### Gates Run (deepen-plan, inline)
+
+- 4.4 precedent-diff: PASS (`dev-suite-mutex.sh` reused verbatim; scheduled-work
+  check resolved to GHA)
+- 4.6 User-Brand Impact: PASS | 4.7 Observability: PASS | 4.8 PAT shapes: none
+- 4.9 UI-wireframe: N/A | 4.10 Encryption Posture: skipped-form (precedent)
+- 4.11 Guard Contract: `lint-guard-contract.py` rc=0, assembly structural
+- 4.12 Scope Check: PASS (all asks mapped; one inferred item justified)
+- Plan-review standing check: ACs are deterministic over file state/fixtures —
+  the multi-agent review panel could not be spawned here (no Task tool) and is
+  noted as an uncovered lane for the pipeline.
+
 ## Problem Statement / Motivation
 
 A `describe.skipIf(!process.env.<GATE>)` suite that no CI job un-gates passes
@@ -133,6 +163,20 @@ tangential hit: #8800 (lint-orphan fixture inode sharing) — **acknowledge**:
 unrelated file set, no action.
 
 ## Proposed Solution
+
+**Scheduled-work substrate check (deepen-plan Phase 4.4 precedent gate).**
+ADR-033 prefers Inngest crons — 57 `cron-*.ts` functions exist — but this job
+belongs in GitHub Actions on three grounds: (a) the work is purely
+git/repo-scoped test execution requiring a fresh checkout, `npm ci`, vitest,
+`dev-suite-mutex.sh`, and `run-migrations.sh` — the same shape as
+`tenant-integration.yml`, `rls-authz-fuzz.yml`, and `scheduled-realtime-probe.yml`;
+(b) `step.run` memoization/replay buys nothing for a vitest run; (c) the
+decisive boundary: Inngest functions execute inside the deployed web-platform
+container holding **prd** credentials — running dev-scoped service-role writes
+from that environment would plumb dev credentials into the prd runtime, the
+inverse of the isolation ADR-023 exists to guarantee. The
+`new-scheduled-cron-prefer-inngest.sh` PreToolUse hook may flag the new
+`scheduled-*.yml` at write time; this paragraph is the recorded justification.
 
 New workflow `.github/workflows/scheduled-integration-suites.yml`:
 `schedule: cron '30 4 * * *'` (04:30 UTC daily — no collision with the 06:00/07:00
@@ -311,25 +355,33 @@ literal substring, not a description.
 
 ## Encryption Posture
 
-No new persistent store and no new cross-component connection: the leg reuses
-the runner→Doppler, runner→dev-Supabase, and runner→api.github.com edges that
+Skipped per Phase 2.11: the plan introduces no persistent data store and no
+new cross-component or network connection. The leg reuses the
+runner→Doppler, runner→dev-Supabase, and runner→api.github.com edges that
 `tenant-integration.yml` and `scheduled-realtime-probe.yml` already establish
-(TLS with cert verification on, enforced by the hosted clients). MU1 AC-2's
-fixture clone uses `https://github.com/` (the test itself asserts the scheme).
-Nothing here changes the posture; no `## Encryption Posture` block is required
-beyond this statement.
+(TLS with cert verification on, enforced by the hosted clients); MU1 AC-2's
+fixture clone is `https://github.com/` (the test itself asserts the scheme).
+Files checked: no `.tf`, no `supabase/migrations/*.sql`, no
+`cloud-init*.yaml`, no `docker-compose*.yaml` in Files to Create/Edit.
 
 ## Architecture Decision (ADR/C4)
 
-None. No ownership/tenancy move, no new substrate or trust boundary — the
+**No ADR.** No ownership/tenancy move, no new substrate or trust boundary — the
 scheduled leg is a third consumer of the already-decided shared-dev CI substrate
-(ADR-061 substrate, ADR-023 isolation, dev-suite-mutex). The one judgment that
+(ADR-061 substrate, ADR-023 isolation, `dev-suite-mutex`). The one judgment that
 could read as architectural — scheduled-only on shared dev vs. a dedicated
 project — is the alternative ADR-061 already weighed and rejected, and is
 recorded as a deviation note in `test/README.md` (Files to Edit) with the
-dedicated-project revisit trigger. C4 checked conceptually: the leg introduces
-no new external actor, system, container, or access relationship — the dev
-Supabase project, Doppler, and GitHub API edges are all already modeled.
+dedicated-project revisit trigger.
+
+**No C4 impact — enumerated against the three model files**
+(`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`):
+(a) no new external human actor (the leg acts on synthetic `*@soleur-test.invalid`
+identities, not people); (b) no new external system or vendor — dev Supabase,
+Doppler, and the GitHub API/App are all already modeled edges; (c) no new
+container or data store — the workflow runs on GitHub-hosted runners writing to
+the existing dev project; (d) no actor↔surface access relationship changes.
+Derived cardinalities (edge prose counts) are not reached by this rubric.
 
 ## Guard Contract
 
