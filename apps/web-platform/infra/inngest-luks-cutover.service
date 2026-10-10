@@ -2,6 +2,16 @@
 Description=Inngest Redis AOF LUKS blue-green cutover oneshot (FSM: armed->copying->copied->swapped->done / rollback; #6894)
 After=network-online.target mnt-data.mount inngest-luks-open.service
 Wants=network-online.target
+# SKIP-VS-FAIL (#9939). Both EnvironmentFile= paths below are written by runcmd stages late in
+# first boot, and the timer is not the only trigger — [Install] WantedBy=multi-user.target arms
+# this service on every boot, and any future Wants=/Requires= consumer could pull it in before
+# the files exist. An absent file must SKIP the start — one "skipped, unmet condition check"
+# journal notice — never FAIL it: a failed start emits the row plus the ExecStopPost unit-exit
+# phone-home for what is benign staging order, and this channel is the one that must stay
+# meaningful. The fail-closed EnvironmentFile= contract is unchanged: once a start IS
+# attempted, an absent file still fails the unit.
+ConditionPathExists=/etc/default/inngest-server
+ConditionPathExists=/etc/default/inngest-luks-volumes
 
 [Service]
 Type=oneshot

@@ -2564,6 +2564,29 @@ assert "ack list members are exactly the two dedicated-host units" \
   "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service inngest-luks-cutover.service' ]]"
 
 echo ""
+echo "--- #9939: ConditionPathExists skip-vs-fail on the LUKS cutover trio ---"
+#
+# Every EnvironmentFile= a unit declares is written by a runcmd stage late in first boot, so a
+# start attempted before the writer completes (an aborted LUKS stage, the bootstrap-armed timer
+# against never-written files) must SKIP — one "skipped, unmet condition check" notice — never
+# FAIL into the LUKS journal channel. The service carries the condition for its non-timer
+# triggers ([Install] WantedBy=multi-user.target); the timer carries the same pair because a
+# condition on it is evaluated at ACTIVATION, so an abort-host never arms the ~30s tick storm.
+# The EnvironmentFile= lines themselves stay unprefixed — the fail-closed contract is retained.
+LUKS_CUTOVER_SVC="$SCRIPT_DIR/inngest-luks-cutover.service"
+LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
+assert "inngest-luks-cutover.service skips when /etc/default/inngest-server is absent" \
+  "grep -qxF 'ConditionPathExists=/etc/default/inngest-server' '$LUKS_CUTOVER_SVC'"
+assert "inngest-luks-cutover.service skips when /etc/default/inngest-luks-volumes is absent" \
+  "grep -qxF 'ConditionPathExists=/etc/default/inngest-luks-volumes' '$LUKS_CUTOVER_SVC'"
+assert "inngest-luks-cutover.service keeps BOTH EnvironmentFile= lines unprefixed (fail-closed)" \
+  "grep -qxF 'EnvironmentFile=/etc/default/inngest-server' '$LUKS_CUTOVER_SVC' && grep -qxF 'EnvironmentFile=/etc/default/inngest-luks-volumes' '$LUKS_CUTOVER_SVC' && ! grep -qE '^EnvironmentFile=-' '$LUKS_CUTOVER_SVC'"
+assert "inngest-luks-cutover.timer carries BOTH conditions (evaluated at activation, not per-elapse)" \
+  "grep -qxF 'ConditionPathExists=/etc/default/inngest-server' '$LUKS_CUTOVER_TMR' && grep -qxF 'ConditionPathExists=/etc/default/inngest-luks-volumes' '$LUKS_CUTOVER_TMR'"
+assert "inngest-luks-cutover.timer's conditions sit in [Unit] (before the [Timer] section)" \
+  "awk '/^\[Unit\]/{u=1;next} /^\[/{u=0} u&&/ConditionPathExists=/{c++} END{exit !(c>=2)}' '$LUKS_CUTOVER_TMR'"
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # ASSERTION-COUNT FLOOR. A mutation audit deleted the entire #7695 block from this file and the
@@ -2577,7 +2600,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=416
+INNGEST_MIN_ASSERTIONS=424
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2

@@ -452,6 +452,24 @@ if printf '%s\n' "$_RES" | grep -cF '*[!0-9]*)' >/dev/null && printf '%s\n' "$_R
 if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/dev/null || true)"' "$CLOUD_INIT" \
    && grep -qF 'if [ "$_reopen_state" = "active" ]; then' "$CLOUD_INIT"; then ok "G4.f inngest-luks-reopen-armed is emitted only when the unit reads active"; else no "G4.f the reopen arming marker trusts enable --now again — it reported success on 2026-09-17 on a boot where the unit failed"; fi
 
+# T1.15 SKIP-VS-FAIL CONDITIONS on the boot-reopen unit (#9939). Both EnvironmentFile= paths
+# are runcmd writes late in first boot, so an aborted LUKS stage or a pre-write pull-in must
+# SKIP the unit — one "skipped, unmet condition check" journal notice — never FAIL it into
+# the LUKS observability channel the way the observed storm did. The EnvironmentFile= lines
+# stay unprefixed: once a start IS attempted, an absent file still fails the unit — the
+# fail-closed contract is the point of the unit.
+_LUKS_OPEN_UNIT="$(awk '/^  - path: \/etc\/systemd\/system\/inngest-luks-open\.service$/{f=1} f{print} f&&/^  - path: / && !/inngest-luks-open\.service/{exit}' "$CLOUD_INIT")"
+if [ -n "$_LUKS_OPEN_UNIT" ]; then ok "T1.15a the inngest-luks-open.service write_files block extracts"; else no "T1.15a could not extract the inngest-luks-open.service block — T1.15b..e are vacuous"; fi
+if printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -qxF '      ConditionPathExists=/etc/default/inngest-doppler'; then ok "T1.15b the reopen unit condition-skips when /etc/default/inngest-doppler is absent"; else no "T1.15b no ConditionPathExists=/etc/default/inngest-doppler — a pre-write start fails the unit into the journal channel"; fi
+if printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -qxF '      ConditionPathExists=/etc/default/inngest-luks'; then ok "T1.15c the reopen unit condition-skips when /etc/default/inngest-luks is absent"; else no "T1.15c no ConditionPathExists=/etc/default/inngest-luks — a partial stage still fails the unit"; fi
+if printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -qxF '      EnvironmentFile=/etc/default/inngest-doppler' \
+   && printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -qxF '      EnvironmentFile=/etc/default/inngest-luks' \
+   && ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -qE 'EnvironmentFile=-'; then ok "T1.15d both EnvironmentFile= lines stay unprefixed (fail-closed on a real start)"; else no "T1.15d an EnvironmentFile= line is missing or gained the '-' tolerant prefix — the fail-closed contract is gone"; fi
+# T1.15e MUTATION CONTROL: dropping one condition line must fail the T1.15c predicate —
+# a presence grep on a different literal would pass either way and pin nothing.
+_T115_MUT="$(printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -vxF '      ConditionPathExists=/etc/default/inngest-luks')"
+if printf '%s\n' "$_T115_MUT" | grep -qxF '      ConditionPathExists=/etc/default/inngest-luks'; then no "T1.15e mutation control failed — the T1.15c predicate cannot see a dropped condition"; else ok "T1.15e mutation: a unit missing ConditionPathExists=/etc/default/inngest-luks fails the T1.15c predicate"; fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
 # when the cutover FSM became the pointer's writer and the dispatch its second reader (G4.g1-g3/h/i). Derived from
@@ -459,13 +477,14 @@ if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/d
 # #8285 PR B: G4.b2 (the retire dispatch's pointer reader) was deleted with that dispatch, taking the measured count 58 -> 57;
 # the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
 # (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
+# #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 57 ]; then
+if [ "$executed" -lt 62 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 57. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 62. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 57)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 62)\n' "$executed"
 fi
 
 echo ""
