@@ -285,7 +285,7 @@ jobs:
           # The observation window opens BEFORE the apply: the host starts booting the
           # instant ServerCreate lands, so a post-apply timestamp would exclude the
           # earliest (most diagnostic) rows.
-          date -u +%Y-%m-%dT%H:%M:%SZ > "$GITHUB_WORKSPACE/phase-a-since.txt"
+          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-a-since.txt"
           cat "$GITHUB_WORKSPACE/phase-a-since.txt"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan-a
@@ -367,7 +367,7 @@ jobs:
           # The phase-B window bound is taken BEFORE the plan/apply — phase-A's
           # (expected-failure) rows share the host name, and the capture must not count
           # them as recovery evidence.
-          date -u +%Y-%m-%dT%H:%M:%SZ > "$GITHUB_WORKSPACE/phase-b-since.txt"
+          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-b-since.txt"
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
@@ -463,7 +463,7 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          date -u +%Y-%m-%dT%H:%M:%SZ > "$GITHUB_WORKSPACE/reboot-since.txt"
+          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/reboot-since.txt"
           TOKEN="${HCLOUD_TOKEN:-}"
           [[ -n "$TOKEN" ]] || { echo "::error::HCLOUD_TOKEN is empty — the infra-credentials loader exported no Hetzner token."; exit 1; }
           printf '::add-mask::%s\n' "$TOKEN"
