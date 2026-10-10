@@ -326,7 +326,8 @@ def is_upload_err(payload):
     # `func` field, which zot writes immediately before `goroutine` at the END of the row. The end
     # anchor keeps a client header that spells the func text mid-row from counting, and the length
     # bound keeps a row that sanitize() CUT at 800 characters from counting: a client controls how
-    # such a row ends. Informational counter only; it never gates a verdict. Keep in step with the
+    # such a row ends. A real row whose error text exceeds ~550 characters loses its tail in the shipper
+    # and is not counted (a lower bound). Informational counter only; it never gates a verdict. Keep in step with the
     # awk counter in zot-log-channel-7440.sh (T21 pins that both carry the shipper func literal).
     return len(payload) < 800 and UPLOAD_ERR.search(payload) is not None
 def msg_field(payload):

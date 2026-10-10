@@ -513,11 +513,11 @@ hits are counted rather than invisible.
 
 ## Amendment 2026-10-10 — the upload error line is classified on `func`, through the upload sub-quota (#9373)
 
-Append-only; the sections above are unchanged. Two statements above stop being literally true and
+Append-only; the sections above are unchanged. Three statements above stop being literally true and
 are corrected here rather than edited in place.
 
-- **A consumer must anchor on the parsed `message` field** (Decision, the F-5 bypass discussion)
-  remains the rule for the gc classes and the crash classes. It does not hold for the PatchBlobUpload
+- **A consumer must anchor on the parsed `message` field** (Consequences, the "shipped payload is
+  not JSON" bullet) remains the rule for the gc classes and the crash classes. It does not hold for the PatchBlobUpload
   error line: zot's real line carries `message:unexpected error, removing .uploads/ files` and names
   the handler only in the parsed top-level `func`. The earlier `PatchBlobUpload*` message-prefix arm
   (07cf8ebcb0, #7444) matched zero real rows, so the line was rate-capped while the suite stayed
@@ -525,7 +525,8 @@ are corrected here rather than edited in place.
   classifies on the suffix `(*RouteHandler).PatchBlobUpload`. `func` is set by zot on every line, so
   the arm matches its VALUE; request-derived bytes are JSON-escaped into string fields and journald
   fragments do not parse, so they cannot spell a top-level `func` (T21 S6, S7, S9).
-- **"The four classes are cap-exempt against their own 17-per-tick ceiling"** (Consequences) is now:
+- **"The four classes are cap-exempt against their own 17-per-tick ceiling"** and **"the four
+  measured evidence classes cap-exempt"** (both Consequences) are now:
   the gc classes, the crash classes and the boot config dump use the shared 17-slot lane; the
   func-keyed upload error line is admitted through the 8-slot upload sub-quota (#7555) that already
   existed inside that lane, via a tri-state return (0 shared lane, 2 upload sub-quota, 1 ordinary).

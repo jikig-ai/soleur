@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Follow-through for the zot log shipper's cap-exemption gap (filed from PR #9353, probe fix for #7556).
 #
-# The shipper's `is_cap_exempt` used to key on the zerolog `message` prefix (`PatchBlobUpload*`), but the
-# real PatchBlobUpload error line carries `message:unexpected error, removing .uploads/ files` and names
-# the handler only in `func:`, so that line was rate-capped instead of exempt (fixed by #9373). Closing criterion: the
-# `is_cap_exempt` function in cloud-init-registry.yml classifies on the parsed `func` field.
+# The shipper's `is_cap_exempt` used to key on the zerolog `message` prefix (`PatchBlobUpload*`), but
+# the real PatchBlobUpload error line carries `message:unexpected error, removing .uploads/ files`
+# and names the handler only in `func:`, so that line was rate-capped instead of exempt (fixed by
+# #9373). Closing criterion: the `is_cap_exempt` function in cloud-init-registry.yml classifies on
+# the parsed `func` field.
 #
-# Event-grep shape (no secrets, no network): PASS (exit 0) only when the function exists AND its body
-# mentions `func` AND names the `(*RouteHandler).PatchBlobUpload` handler; anything else is TRANSIENT (exit 2), so a quiet or moved function never closes the
+# Event-grep shape (no secrets, no network): PASS (exit 0) only when the function exists AND its
+# body mentions `func` AND carries the arm `*"(*RouteHandler).PatchBlobUpload") return 2`; anything
+# else is TRANSIENT (exit 2), so a quiet or moved function never closes the
 # tracker. This repo-file read says the fix MERGED, not that it was DEPLOYED: delivery is a gated
 # registry-host-replace dispatch (ADR-096/ADR-169), tracked in the issue body.
 #
@@ -35,7 +37,8 @@ if [[ -z "$body" ]]; then
 fi
 # Strip whole-line comments first: the existing prose already says "func" in places.
 code="$(printf '%s\n' "$body" | sed -E 's/^[[:space:]]*#.*$//')"
-if grep -qE '\bfunc\b' <<<"$code" && grep -qF 'RouteHandler).PatchBlobUpload' <<<"$code"; then
+if grep -qE '\bfunc\b' <<<"$code" \
+   && grep -qE '^[[:space:]]*\*"\(\*RouteHandler\)\.PatchBlobUpload"\)[[:space:]]+return[[:space:]]+2' <<<"$code"; then
   echo "zot-shipper-exempt-func[#9353]: PASS is_cap_exempt classifies on the func field (merged; confirm the registry host was replaced)"
   exit 0
 fi

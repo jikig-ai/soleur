@@ -477,17 +477,26 @@ C15B_LOG="$TMP/c15b.log"; : > "$C15B_LOG"
 for _ in $(seq 1 29); do envelope_row >> "$C15B_LOG"; done
 row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {time:2026-01-01T00:00:00.000000000Z,level:error,message:unexpected error, removing .uploads/ files,error:unexpected EOF,caller:zotregistry.dev/zot/v2/pkg/api/routes.go:2190,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:369}" >> "$C15B_LOG"
 row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:HTTP API,headers:{User-Agent:[x,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:1]},caller:zotregistry.dev/zot/v2/pkg/api/x.go:3,func:zotregistry.dev/zot/v2/pkg/api.SessionLogger.func1.1,goroutine:2}" >> "$C15B_LOG"
-# Far-side rows (each shares the real func tail or its spelling but must NOT count): a level:info row,
-# a func that merely STARTS with the handler name, and a row sanitize() cut at 800 characters whose
-# forged tail ends exactly like a real one.
-row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:info,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:7}" >> "$C15B_LOG"
-row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload.func1,goroutine:8}" >> "$C15B_LOG"
-C15B_PAD=$(head -c 820 /dev/zero | tr '\0' x)
-row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:HTTP API,headers:{User-Agent:[$C15B_PAD]},caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:9}" >> "$C15B_LOG"
+# Far-side rows (each shares the real func tail or its spelling but must NOT count): a level:info row, a
+# func that merely STARTS with the handler name, a different receiver whose name ENDS with the handler
+# name, and rows at the sanitize() boundary: a forged row cut at EXACTLY 800 characters (a client controls
+# how a cut row ends, so it must not count) and a real-shaped row of 799 characters (it must count).
+C15B_FUNC='zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload'
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:info,message:note,caller:c,func:$C15B_FUNC,goroutine:7}" >> "$C15B_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:note,caller:c,func:$C15B_FUNC.func1,goroutine:8}" >> "$C15B_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*FooRouteHandler).PatchBlobUpload,goroutine:6}" >> "$C15B_LOG"
+c15b_pre='{level:error,message:HTTP API,headers:{User-Agent:['
+c15b_suf="]},caller:c,func:$C15B_FUNC,goroutine:9}"
+C15B_PAD800=$(head -c $((800 - ${#c15b_pre} - ${#c15b_suf})) /dev/zero | tr '\0' x)
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV ${c15b_pre}${C15B_PAD800}${c15b_suf}" >> "$C15B_LOG"
+c15b_pre2='{level:error,message:note,error:'
+c15b_suf2=",caller:c,func:$C15B_FUNC,goroutine:9}"
+C15B_PAD799=$(head -c $((799 - ${#c15b_pre2} - ${#c15b_suf2})) /dev/zero | tr '\0' x)
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV ${c15b_pre2}${C15B_PAD799}${c15b_suf2}" >> "$C15B_LOG"
 C15B_CTL="$TMP/c15b.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C15B_CTL"
 run_probe "$C15B_LOG" "$C15B_CTL"
-assert "C15b a func-keyed PatchBlobUpload error row IS counted and a header-borne decoy is NOT (patch_upload=1, not 0 or 2)" \
-  "grep -qE 'patch_upload=1( |\\))' <<<\"\$CASE_OUT\""
+assert "C15b the real func-keyed row and a 799-char real-shaped row ARE counted; the decoys, the Foo receiver and the 800-char cut row are NOT (patch_upload=2)" \
+  "grep -qE 'patch_upload=2( |\\))' <<<\"\$CASE_OUT\""
 
 # --- C14: the boot marker flows through the LOG arm; there is NO second query (#8278) ------
 # The old arm read the marker out of a separate 72h archive query — a different span than the

@@ -323,16 +323,25 @@ fi
 #     message-prefix key counted it as 0; a header that spells the func text mid-row must not count.
 GC_UPL="$(gcrow "$ENVP {time:2026-10-10T00:00:00Z,level:error,message:unexpected error, removing .uploads/ files,error:unexpected EOF,caller:zotregistry.dev/zot/v2/pkg/api/routes.go:2190,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:369}")
 $(gcrow "$ENVP {time:2026-10-10T00:00:01Z,level:error,message:HTTP API,headers:{User-Agent:[x,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:1]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/zot/v2/pkg/api.SessionLogger.func1.1,goroutine:2}")"
-GC_UPL_PAD=$(head -c 820 /dev/zero | tr '\0' x)
+# Boundary rows: a forged row cut at EXACTLY 800 characters must not count, a real-shaped 799-character row must.
+GC_FN='zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload'
+gc_pre='{level:error,message:HTTP API,headers:{User-Agent:['
+gc_suf="]},caller:c,func:$GC_FN,goroutine:9}"
+GC_PAD800=$(head -c $((800 - ${#gc_pre} - ${#gc_suf})) /dev/zero | tr '\0' x)
+gc_pre2='{level:error,message:note,error:'
+gc_suf2=",caller:c,func:$GC_FN,goroutine:9}"
+GC_PAD799=$(head -c $((799 - ${#gc_pre2} - ${#gc_suf2})) /dev/zero | tr '\0' x)
 GC_UPL="$GC_UPL
-$(gcrow "$ENVP {time:2026-10-10T00:00:02Z,level:info,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:7}")
-$(gcrow "$ENVP {time:2026-10-10T00:00:03Z,level:error,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload.func1,goroutine:8}")
-$(gcrow "$ENVP {time:2026-10-10T00:00:04Z,level:error,message:HTTP API,headers:{User-Agent:[$GC_UPL_PAD]},caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:9}")"
+$(gcrow "$ENVP {time:2026-10-10T00:00:02Z,level:info,message:note,caller:c,func:$GC_FN,goroutine:7}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:03Z,level:error,message:note,caller:c,func:$GC_FN.func1,goroutine:8}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:05Z,level:error,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*FooRouteHandler).PatchBlobUpload,goroutine:6}")
+$(gcrow "$ENVP ${gc_pre}${GC_PAD800}${gc_suf}")
+$(gcrow "$ENVP ${gc_pre2}${GC_PAD799}${gc_suf2}")"
 run "$FAILSPEC" 0 "" "" "" "$GC_UPL"
 cases=$((cases + 1))
-if [[ "$OUT" == *"patch_blob_upload=1 "* ]]
-then pass "the func-keyed upload error row is counted once and a header-borne decoy is not"
-else fail "expected patch_blob_upload=1 (real row counted, decoy not). Output: $OUT"
+if [[ "$OUT" == *"patch_blob_upload=2 "* ]]
+then pass "the real row and a 799-char real-shaped row count; decoys, a Foo receiver and an 800-char cut row do not"
+else fail "expected patch_blob_upload=2 (real + 799-char counted, decoys and the 800-char cut row not). Output: $OUT"
 fi
 
 # --- Anti-vacuity floor -----------------------------------------------------------------------
