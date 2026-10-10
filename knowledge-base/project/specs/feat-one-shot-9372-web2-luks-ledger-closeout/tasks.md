@@ -17,20 +17,22 @@ separate branch and is not tasked here. This PR carries `Ref #9372`, never a clo
 
 ## Phase 1: Linter commit (tests first)
 
+- 1.0 Scratch prototype (session scratchpad only): the pinned-file scanner arms (unquoted assignment, fstab-shaped line) against the real provisioner, and the flipped ledger copy. Stop and re-plan if the mount-evidence arm cannot stay small and scoped; measure the linter diff size and apply the split rule from the plan.
 - 1.1 Fixtures: web-class repo (indexed volume and attachment sharing a `for_each`, key pair in a sibling file, token and secret
   on one Doppler config, provisioner with unquoted `MAPPER_NAME`, a `variables.tf` host map).
   - 1.1.1 Must-RED cases first, run against the unmodified linter and watched failing.
   - 1.1.2 Must-PASS cases: the canonical web-class fixture, a differently named `for_each` local, a singleton row without the new keys.
 - 1.2 Schema: optional `device_binding.apparatus`, `device_binding.key_chain`, row-level `multiplicity` (names match #8626).
-- 1.3 Linter, each behind a `MUTATION-TARGET: MB-Ln` marker:
-  - 1.3.1 Indexed binding (same `for_each` expression on volume and attachment; every other index form rejected).
+- 1.3 Linter, each behind a `MUTATION-TARGET: MB-Ln` marker (whole statements, never a clause inside a compound condition):
+  - 1.3.0 Minimal comment- and string-aware code view used by every new check and both scanner arms; existing checks keep raw text.
+  - 1.3.1 Indexed binding (exactly one `for_each =` on the code view, same expression on volume and attachment, end-anchored; each address declared once and all in one Terraform root; every other index form rejected).
   - 1.3.2 Key chain (consumer user_data args, token config equals secret config, secret value is the password result).
   - 1.3.3 Uniqueness of a password across luks rows (explicit and implicit claims) and web-1 / web-class separation.
-  - 1.3.4 Apparatus pin and the unquoted-assignment resolver; mount evidence read from the pinned file.
+  - 1.3.4 Apparatus pin: path validation (relative, under `apps/*/infra/`, no `..`, not a symlink), one row per pinned file, the install hop (basename in the consumer's host-script list and the cloud-init invocation), unquoted-assignment resolver, fstab-shaped mount evidence, all on the code view.
   - 1.3.5 Multiplicity (one supported `for_each` shape, fail closed otherwise; key set equals the variable's keys).
   - 1.3.6 An indexed row missing `apparatus`, `key_chain` or `multiplicity` FAILs.
   - 1.3.7 Fail closed on `for_each` or `volume_id` inside a nested block the extractor cannot parse.
-- 1.4 Mutation battery MB-L1..MB-L8 (prefix avoids #8626's MB-14..MB-25); TS-15 and MB-8 untouched.
+- 1.4 Mutation battery MB-L1..MB-L8c (prefix avoids #8626's MB-14..MB-25); L2 and L6 (permissive arms) use an inverse helper with an instrument control, L8 has one marker and one otherwise-valid fixture per key; TS-15 and MB-8 untouched.
 - 1.5 Green: new cases, TS-15, real ledger unchanged and passing.
 
 ## Phase 2: Ledger commit
@@ -55,7 +57,7 @@ separate branch and is not tasked here. This PR carries `Ref #9372`, never a clo
 - 4.1 ADR-140 dated addendum (Layer A contract changes).
 - 4.2 ADR-263 dated addendum, appended after #9925's addendum if it merged; status stays `adopting`.
 - 4.3 Runbook `web2-luks-rebirth-9372.md` closing row 2: dated "done by PR #9941" line.
-- 4.4 `bash plugins/soleur/test/c4-count-parity.test.sh` green; no `.c4` edit.
+- 4.4 Correct the `model.c4` data-store encryption sentence, `bash scripts/regenerate-c4-model.sh`, then `bash plugins/soleur/test/c4-count-parity.test.sh` green. Workflow-retirement edge prose is PR 2's.
 
 ## Phase 5: Tracking and owner surfacing
 
@@ -67,6 +69,6 @@ separate branch and is not tasked here. This PR carries `Ref #9372`, never a clo
 ## Phase 6: Ship
 
 - 6.1 Rollback simulation in a scratch detached worktree (revert commit 2; lint, lint suite, legal lint).
-- 6.2 `git diff --name-only origin/main...HEAD` is inside the allowed set from the plan's acceptance criteria.
+- 6.2 `git diff --name-only origin/main...HEAD` is inside the allowed set from the plan's acceptance criteria; the full `--repo-sweep` stdout (with `--today` pinned) matches `origin/main`'s linter on the real ledger after commit 1.
 - 6.3 `soleur:ship`; PR body `Ref #9372` only.
 - 6.4 After merge: re-run the grader read-only; confirm the CI `encryption-posture` job is green on main.

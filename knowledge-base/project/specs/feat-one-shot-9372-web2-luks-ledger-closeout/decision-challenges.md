@@ -27,9 +27,10 @@ Appended by plan on 2026-10-10 (headless pipeline: not asked, persisted for the 
 ## Taste
 
 3. **One PR with two ordered commits rather than two PRs.** The CTO consult preferred the linter change as its own PR first;
-   #9572 says both "a separate reviewed change" and "in the same change as the two linter fixes". Default taken: one PR (#9941),
-   commit 1 the linter (reviewed as a security-linter change), commit 2 the flip. Split trigger: a second review round on commit 1
-   or more than about 800 changed lines moves commit 1 to its own PR by cherry-pick. Re-evaluate at the first review round.
+   #9572 says both "a separate reviewed change" and "in the same change as the two linter fixes". Default taken (revised after deepening, which raised the estimate to about 1,000 lines):
+   split-ready. Two ordered commits, linter first; Phase 1.0 measures the linter diff, and above about 350 lines or a second review
+   round commit 1 ships as its own PR (#9941) with the flip and legal records as PR 1b cut after it merges. This changes the
+   parent's "this branch is PR 1 (ledger/Article 30)" numbering only if the split triggers; PR 2 is unaffected.
 4. **Brand-survival threshold `aggregate pattern`, not `single-user incident`.** No user data can reach web-2 through this change
    and the anti-pooling gate holds it at weight 0; the over-claim risk is record accuracy (Art. 5(2)). A reviewer who reads the flip
    as the green light for web-2 data should challenge this tier, in which case `requires_cpo_signoff` and the user-impact review apply.

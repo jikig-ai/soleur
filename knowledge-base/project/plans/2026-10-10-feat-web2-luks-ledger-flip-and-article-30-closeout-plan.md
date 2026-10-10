@@ -11,6 +11,27 @@ brand_survival_threshold: aggregate pattern
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10
+**Sections enhanced:** Proposed Solution A (linter), Guard Contract, Observability (added), C4 views, Files, Sibling overlap, Split Assessment, Acceptance Criteria, Test Scenarios
+**Agents used:** CLO and CTO consults (plan time); simplicity, correctness and over-engineering plan review; security-sentinel, architecture-strategist, test-design-reviewer, a verify-the-negative sweep, learnings-researcher
+
+### Key improvements
+
+1. **The linter design had two hard holes** (security review): the "one `for_each` token" rule false-FAILs the real block (a comment contains the token), and a pinned apparatus file was never tied to the host. Fixed with a minimal comment- and string-aware code view for every new check, exact end-anchored hop matching, unique address resolution in one Terraform root, and an install hop (the pinned basename must be in the consumer's host-script list and the cloud-init invocation).
+2. **Mount evidence from the pinned provisioner is unreadable by the scanner** (confirmed twice): a scoped fstab-shaped arm and an unquoted-assignment arm are added, with a Phase 1.0 scratch prototype as the first task and a stop condition.
+3. **A false-PASS construction was reproduced**: pointing the flipped row at web-1's volume and attachment makes the lint pass (the exact #6588 shape). The plan names the binding explicitly and mandatory-when-indexed keeps the repair of deleting a key from re-opening it.
+4. **Test mechanics corrected**: the two permissive scanner arms cannot use the FAIL-to-PASS mutation helper (inverse helper added); the mandatory-key mutation needs one otherwise-valid fixture per key; the parity-table AC was vacuous and is replaced by a full `--repo-sweep` stdout comparison against `origin/main`'s linter with a pinned `--today`.
+5. **The model description of the workspaces store is a false encryption statement today** (architecture review): PR 1 corrects that one sentence and regenerates the C4 JSON once; workflow-retirement prose stays PR 2's.
+6. **Size honesty**: the deepened estimate is about 1,000 lines, over the split threshold; the plan is split-ready (linter as its own PR, then the flip), measured at Phase 1.0.
+
+### New considerations discovered
+
+- `encryption-posture` gates the required `test` check through the aggregator's `needs:`; it is not itself a listed required context.
+- The `web2_marker` job survives PR 2; only its comment naming the rebirth workflow changes there.
+- The multiplicity check reads the variable default only (a `TF_VAR` override is invisible), recorded in the row's `does_not_defend`.
+
 ## Overview
 
 #9372 asked for web-2 to be converted to a LUKS volume and for the record to say so. The conversion happened (rebirth
@@ -79,9 +100,9 @@ apply, no Doppler write.
 | Per-host row split | 1 | Cut: the row is web-2-only already; replaced by `multiplicity` (property 1, future-host safety) |
 | Extending the 2026-10-22 exception | none for this row | Cut: this row's exception expires 2026-12-29 and the flip removes it |
 | Moving the passphrase pair or the attachment between `.tf` files so the existing same-file check passes | 1 | Cut: satisfies the linter by file layout, not by proof; touches `-target` surfaces and tests that pin file anchors |
-| A new ADR for the key-chain check | 1 | Cut: ADR-140 owns the Layer A contract; a dated addendum there is the home (avoids a contested ordinal; siblings are claiming 282+) |
+| A new ADR for the key-chain check | 1 | Cut: the change extends ADR-140's Layer A contract rather than reversing it, and ADR-140 already grows by dated addendum; a new ordinal (next free on any `origin/*` ref is ADR-283, provisional) buys nothing |
 | A web-2 "daily five-step probe" claim | 3 | Cut: the web-1 verify job reads web-1 over SSH; web-2's detector is the `web2_marker` job plus luks-monitor rows, and the row says so in those words |
-| Editing `model.c4` in PR 1 | none | Cut: PR 1 changes no C4 element or edge; the stale rebirth sentence is PR 2's (one regeneration of `model.likec4.json`) |
+| Editing the workflow-retirement wording of `model.c4` in PR 1 | none | Cut: PR 2 owns the edge prose; PR 1 edits only the data-store encryption sentence (one regeneration of `model.likec4.json`) |
 
 ### Value-proposition measurement (Phase 0.6c)
 
@@ -123,14 +144,25 @@ fall back to the name-join and turn the flipped row green over web-1's apparatus
 new refusal must itself be refused). Changes to `scripts/lint-encryption-posture.py`, `scripts/encryption-posture-ledger.schema.json`
 and `scripts/lint-encryption-posture.test.sh`. Design from the CTO consult (2026-10-10), kept minimal:
 
-1. **Indexed binding.** `attachment_binds_volume` also accepts `volume_id = <vtype>.<vname>[each.key].id`, but only when
-   the attachment block and the volume block each carry exactly one `for_each` and the two expressions are textually identical
-   (here `local.plaintext_workspaces_hosts`); a second `for_each` token in either block FAILs. Every other index form
-   (`["web-1"]`, `[0]`, `[each.value.x]`) is rejected. The literal-reference regex for singletons is unchanged. MB-L1 wraps
-   only the equality condition (deleting the whole arm would fail "does not attach", not pass).
-2. **Key chain** (optional `device_binding.key_chain`, mandatory for indexed rows). The linter verifies each hop by literal
-   HCL reference: the consumer `hcloud_server.web`'s `user_data` argument map carries exactly
-   `workspaces_volume_id = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "retired-6604"`
+0. **Code view (deepen-plan security review F1-F5).** The linter has no comment stripping today, and the real
+   `hcloud_volume.workspaces` block carries a comment containing the text "for_each key churn" (so a token count of
+   `for_each` is 2 on the real file and would false-FAIL the row being flipped), while the pinned provisioner's line 14 is a
+   comment containing `cryptsetup luksFormat`. Every NEW structural check and both new scanner arms therefore run on a
+   minimal code view: `#`, `//` and `/* */` comments removed, string-aware, heredoc bodies skipped for HCL. Existing checks
+   keep reading raw text, so no existing row's verdict can move. #8626 carries a fuller `hcl_views`; this stays the small
+   subset the new checks need, and fixtures cover a commented decoy for each check.
+1. **Indexed binding.** `attachment_binds_volume` also accepts `volume_id = <vtype>.<vname>[each.key].id`, end-anchored on
+   the code view (so a trailing ternary or `.id ...` lookalike is refused), but only when the attachment block and the
+   volume block each carry exactly one `for_each =` assignment on the code view and the two expressions are textually
+   identical (here `local.plaintext_workspaces_hosts`). Every other index form (`["web-1"]`, `[0]`, `[each.value.x]`) is
+   rejected. The literal-reference regex for singletons is unchanged. Each resolved address (volume, attachment, consumer
+   server) must be declared exactly once across the scan scope and all three must sit in one Terraform root (one
+   directory): `find_resource_declaration` returns the first match in sorted order today, so a decoy in an earlier
+   directory would otherwise win. MB-L1 is a marker around a whole statement (`if ...: fail/return`), never a clause inside
+   a compound condition, because the suite compiles the mutated copy.
+2. **Key chain** (optional `device_binding.key_chain`, mandatory for indexed rows). Each hop is a literal HCL reference
+   matched on the code view, exact and end-anchored: the consumer `hcloud_server.web`'s `user_data` argument map carries
+   exactly `workspaces_volume_id = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "retired-6604"`
    (the ternary the repo writes today, accepted as that shape and no other) AND
    `workspaces_luks_fresh_boot_token = <token>.key`; the token's `config` equals the secret's `config`
    (`doppler_config.workspaces_luks_web.name` on both); the secret's `value` is `<password>.result`. When present it
@@ -139,20 +171,31 @@ and `scripts/lint-encryption-posture.test.sh`. Design from the CTO consult (2026
    attachment's own file (this single guard also covers "web-2's password differs from web-1's", so no separate separation
    guard exists). MB-L5 uses a dedicated two-row fixture (TS-15 fails at the binding check first and cannot exercise it).
 3. **Apparatus pin** (optional `device_binding.apparatus`, mandatory for indexed rows). Names the file holding this volume's
-   `cryptsetup luksFormat` and `luksOpen`. When present, apparatus and mount evidence are read from that file only, not from
-   any file under `apps/*/infra/` that resolves the same name. Two scanner arms, **scoped to pinned files so no existing row's
-   verdict can move** (AC: the parity table for the real ledger is byte-identical before and after commit 1): (a)
-   `resolve_mapper_operand` accepts an unquoted `VAR=literal` assignment (MB-L6; the provisioner is embedded in cloud-init
-   `user_data`, which is why the line is not quoted); (b) mount evidence accepts an fstab-shaped line,
-   `/dev/mapper/<name> <mountpoint> <fstype> ...`, inside a variable assignment (`FSTAB_LINE='...'`) of the pinned file (MB-L2).
-   Phase 1.0 prototypes both against the real provisioner in scratch before any test is written. The row's mapper becomes
-   `workspaces` (today `workspaces-plain`).
+   `cryptsetup luksFormat` and `luksOpen`.
+   - *Path validation:* relative, under `apps/*/infra/`, no `..`, not a symlink (`lstat`), present in the scanned
+     `infra_files`; at most one row may pin a given file (a file with two `luksOpen` calls cannot serve two rows).
+   - *Install hop (security review F2):* a pinned file proves nothing unless the consumer actually installs it, so the
+     linter also requires the pinned file's basename to appear as an entry in the consumer's host-script list in
+     `server.tf` (`"workspaces-luks-provision.sh",`) and as an invocation in `cloud-init.yml`
+     (`/usr/local/bin/workspaces-luks-provision.sh`), both on the code view.
+   - *Evidence from the pinned file only, on the code view:* the mapper must be in `apparatus[mapper]` for that file, and mount
+     evidence is read from that file, not from any file that resolves the same name.
+   - *Two scanner arms, scoped to pinned files so no existing row's verdict can move:* (a) `resolve_mapper_operand` accepts
+     an unquoted assignment, line-anchored `^\s*(export\s+)?VAR=literal`, exactly one assignment of that name in the file, no
+     `:=` and no spaces around `=` (MB-L6; the provisioner is embedded in cloud-init `user_data`, which is why the line is
+     not quoted); (b) mount evidence accepts an fstab-shaped line, `/dev/mapper/<name> <mountpoint> <fstype> ...`, inside a
+     variable assignment (`FSTAB_LINE='...'`) of the pinned file (MB-L2).
+   - Phase 1.0 prototypes both arms against the real provisioner in scratch before any test is written. The row's mapper
+     becomes `workspaces` (today `workspaces-plain`).
 4. **Multiplicity** (row-level optional `multiplicity: {instances}`, mandatory for indexed rows; the key name matches #8626's).
    `instances` must equal the key set the volume's `for_each` resolves to. Resolution supports exactly one shape,
-   `{ for k, v in var.<map> : k => v [if k != "<key>" ...] }` over the variable's default keys (comments stripped first;
-   `variables.tf` carries a long comment block before the default); any other shape fails closed with a message naming what to
-   declare. Both directions are checked (a new host key; a declared extra key such as `web-1`). Effect: a new key in
-   `var.web_hosts` reds the lint until the row is re-attested.
+   `{ for k, v in var.<map> : k => v [if k != "<key>" [&& k != "<key>"]...] }` over the variable's default keys; `||`, `==`
+   and every other shape fail closed with a message naming what to declare. Comments are stripped string-aware first
+   (`variables.tf` carries a long comment block before the default, and a `#` or `}` inside a string must not cut the map
+   early). Both directions are checked (a new host key; a declared extra key such as `web-1`). Stated limit, recorded in the
+   row's `does_not_defend`: the check reads the variable's default only, so a `TF_VAR` override is not seen, and the static
+   chain describes the declared configuration of new hosts (`user_data` is under `ignore_changes`), not the running web-2,
+   which only the probe rows cover.
 5. **Mandatory-when-indexed.** An indexed row missing `apparatus`, `key_chain` or `multiplicity` FAILs naming the key.
 6. **Validator.** The ledger validator (`_validate_store`, `OPTIONAL_TOP`) is hand-rolled and does not read the JSON schema;
    it gains shape checks for the three new keys so a malformed row FAILs instead of raising a KeyError. The schema file is
@@ -175,7 +218,7 @@ Text, rewritten from measured facts and in these words (CLO guardrails, below):
   38083925201). State what `available` means here and what it does not: "the probe is host-side luks-monitor rows read
   from Better Stack and judged daily by the `web2_marker` job of `workspaces-luks-verify.yml` (the web-1 SSH probe does not
   cover web-2). It establishes that the volume sits on a LUKS container the instance opened; it does not establish that
-  it reopens after a reboot, and web-2 holds no workspace data." Precedent: the `hcloud_volume.registry` row's
+  it reopens after a reboot, and web-2 holds no workspace data. The static chain describes the declared configuration of new hosts (`user_data` is under `ignore_changes`) and the multiplicity check reads the variable default only; the running web-2 is covered by the probe rows alone." Precedent: the `hcloud_volume.registry` row's
   "the two share the word and not the strength" note.
 - `does_not_defend`: a leaked credential; any read on the host while the mapper is open; no verified recovery from loss of
   the passphrase (two copies, Doppler and unversioned state; header restore never exercised, #9948); the escrow has no
@@ -263,7 +306,7 @@ approver, delete step result and timestamps for the audit record. Never an unbou
 1.2 Schema: optional `device_binding.apparatus`, `device_binding.key_chain`, row-level `multiplicity`; `additionalProperties`
 stays false.
 1.3 Implement items A.1 to A.6 in the linter, each behind a `MUTATION-TARGET: MB-Ln start/end` marker.
-1.4 Mutation battery rows MB-L1..MB-L8 (L1 indexed for_each equality, L2 pinned-file mount evidence, L3 token/secret config equality, L4 secret value hop, L5 password uniqueness, L6 unquoted resolver, L7 multiplicity set equality, L8 mandatory-when-indexed; prefix `MB-L` chosen so numbering cannot collide with #8626's MB-14..MB-25).
+1.4 Mutation battery rows MB-L1..MB-L8 (L1 indexed for_each equality, L2 pinned-file mount evidence, L3 token/secret config equality, L4 secret value hop, L5 password uniqueness, L6 unquoted resolver, L7 multiplicity set equality, L8a/b/c mandatory-when-indexed, one marker per key, each fixture otherwise valid so deleting the check flips it; L2 and L6 are permissive arms, so they use the inverse helper (baseline exit 0, mutated exit 1, with an instrument control that the baseline passes), while every other row uses `run_mutation` (baseline 1, mutated 0); prefix `MB-L` chosen so numbering cannot collide with #8626's MB-14..MB-25).
 1.5 Green: baseline, new cases, TS-15 unchanged, real ledger unchanged and passing.
 
 ### Phase 2 - Ledger commit
@@ -277,12 +320,12 @@ suites).
 
 3.1 CLO agent drafts the marker; owner veto is recorded in the PR body (not assumed). 3.2 Apply the seven placements (C).
 3.3 One-off check, not a committed test (the markers are append-only, so nothing remains to guard): verify the three cells carry a byte-identical marker after bold removal, with the span anchored from `IF AND WHEN web-2 has been rebuilt` through `describe it as encrypted.`, which is identical (314 characters) in all three cells today. 3.4 Create the counsel-review
-record. 3.5 Run `bash scripts/lint-legal-registers.sh`. 3.6 Present-tense sweep of the engineering records for sentences the flip falsifies (grep `web-2` near `plaintext` over `knowledge-base/engineering/`, excluding archive, learnings, plans, specs): the `nfr-register.md` sentence gets a dated pointer here; the `web-host-replace.md` "LUKS rebirth" pointer line and the `.tf` comments ("converted by the gated rebirth") belong to PR 2, because editing a `.tf` file, even a comment, fires the push-triggered apply and needs its own apply-gate analysis.
+record. 3.5 Run `bash scripts/lint-legal-registers.sh`. 3.6 Present-tense sweep of the engineering records for sentences the flip falsifies (grep `web-2` near `plaintext` over `knowledge-base/engineering/`, excluding archive, learnings, plans, specs): the `nfr-register.md` sentence gets a dated pointer here, the `model.c4` data-store sentence is corrected in Phase 4.4, the `web-host-replace.md` "LUKS rebirth" pointer line and the `.tf` comments ("converted by the gated rebirth") belong to PR 2, because editing a `.tf` file, even a comment, fires the push-triggered apply and needs its own apply-gate analysis.
 
 ### Phase 4 - ADR / runbook records
 
 4.1 ADR-140 addendum (lands in commit 1 with the linter behaviour it describes, so a commit-2 revert leaves it true). 4.2 ADR-263 addendum (after rebase onto #9925 if merged). 4.3 Runbook row-2 dated line.
-4.4 `bash plugins/soleur/test/c4-count-parity.test.sh`: green (no C4 change; see ADR/C4 section).
+4.4 Correct the `model.c4` data-store encryption sentence, run `bash scripts/regenerate-c4-model.sh`, then `bash plugins/soleur/test/c4-count-parity.test.sh` (green).
 
 ### Phase 5 - Tracking and owner surfacing
 
@@ -308,6 +351,7 @@ table, "Owner decision needed: #9642", and the not-claimed list. After merge: `p
 - `knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md` (dated pointer under "Other copies of workspace data")
 - `knowledge-base/engineering/architecture/nfr-register.md` (dated pointer after "web-2's workspaces volume is knowingly left plaintext-but-empty pre-flip")
 - `knowledge-base/engineering/architecture/decisions/ADR-140-encryption-posture-as-a-design-time-default.md` (addendum; commit 1)
+- `knowledge-base/engineering/architecture/diagrams/model.c4` and the regenerated `model.likec4.json` (the data-store encryption sentence only)
 - `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md` (addendum)
 - `knowledge-base/engineering/operations/runbooks/web2-luks-rebirth-9372.md` (closing row 2 dated line)
 
@@ -318,7 +362,7 @@ table, "Owner decision needed: #9642", and the not-claimed list. After merge: `p
 - `knowledge-base/project/specs/feat-one-shot-9372-web2-luks-ledger-closeout/decision-challenges.md`
 
 Not edited by PR 1 (checked): any `.tf` file (the `[each.key]` binding and the key pair are linter work, not layout work),
-`model.c4` / `model.likec4.json`, `privacy-policy.md` and its mirrors, `AGENTS.md`.
+the workflow-retirement prose of `model.c4`, `privacy-policy.md` and its mirrors, `AGENTS.md`.
 
 ## Open Code-Review Overlap
 
@@ -329,10 +373,10 @@ ADR-140, ADR-263, the runbook, the destruction record): zero matches.
 
 | PR | Overlap with this plan | Plan |
 |---|---|---|
-| #9925 (inngest sole-copy protection; MERGEABLE) | Ledger JSON: a different row (`inngest_redis_luks`, `does_not_defend` text). Article 30: PA-13 cells, different lines. compliance-posture: a different row. **ADR-263: both append at the tail** | Rebase this branch after #9925 merges; on the ADR-263 tail conflict keep both addenda in date order. Do not edit any #9925 hunk. Its ledger edit does not change the `available` count |
+| #9925 (inngest sole-copy protection; MERGEABLE at 2026-10-10) | Ledger JSON: a different row (`inngest_redis_luks`, `does_not_defend` text). Article 30: PA-13 cells, different lines. compliance-posture: a different row. **ADR-263: both append at the tail** | Rebase this branch after #9925 merges and re-check mergeability of all four at merge time, not only in Phase 0 (three read UNKNOWN on 2026-10-10); on the ADR-263 tail conflict keep both addenda in merge order (both are dated 2026-10-10). Check ledger-JSON hunk disjointness explicitly at rebase. Do not edit any #9925 hunk. Its ledger edit does not change the `available` count |
 | #9051 (codex lifecycle) | Adds lines to `article-30-register.md` (hunks at ~69 and ~86, not in the conditional span) and one compliance-posture block at the end | Disjoint; resolve any context shift mechanically |
 | #9529 (open web egress) | Adds one paragraph after line ~85 of `article-30-register.md` | Disjoint; re-anchor the marker by content, never by line |
-| #8626 (stale draft, CONFLICTING) | Rewrites the linter and schema (host root disks, `records`, `multiplicity`) | Not rebased onto and not duplicated. This plan reuses its `multiplicity.instances` key names; its own reconciliation is its owner's, noted in the PR body. Mutation-row prefix `MB-L` avoids its MB-14..MB-25 |
+| #8626 (stale draft, CONFLICTING) | Rewrites the linter, the schema, `scripts/encryption-posture-ledger.json` and ADR-140 (host root disks, `records`, `multiplicity`) | Not rebased onto and not duplicated. This plan reuses its `multiplicity.instances` key names; its own reconciliation is its owner's, noted in the PR body. Mutation-row prefix `MB-L` avoids its MB-14..MB-25 |
 
 ## Alternative Approaches Considered
 
@@ -357,18 +401,23 @@ ADR-140, ADR-263, the runbook, the destruction record): zero matches.
 ### ADR
 
 The Layer A contract of the encryption-posture linter changes (indexed bindings, key chain, apparatus pin, multiplicity):
-amend ADR-140 with a dated addendum (a plan task, Phase 4.1, not a follow-up). The flip's claim boundary is recorded as an
+amend ADR-140 with a dated addendum (a plan task, Phase 4.1, not a follow-up). #8626 also appends to ADR-140 and defines the same `multiplicity` key: on conflict keep both addenda in merge order and make the semantics agree. The flip's claim boundary is recorded as an
 ADR-263 addendum (Phase 4.2). No new ordinal is taken.
 
 ### C4 views
 
-None change. Checked against all three model files (`model.c4`, `views.c4`, `spec.c4`): external human actors involved: none
-new; external systems: Better Stack, Doppler, Hetzner, GitHub already modeled (the `doppler -> hetzner`, `github ->
-betterstack` and `github -> hetzner` edges exist); containers/data stores: the web-2 volume is described inside existing edge
-prose; actor-to-surface access relationships: none change. Derived cardinalities on edge prose are unaffected (no workflow,
-monitor or heartbeat is added or removed), to be confirmed by a green `plugins/soleur/test/c4-count-parity.test.sh`. A stale
-sentence in `model.c4` ("the web-2 volume rebirth (#9372) is the dispatch-only, single-use ... inert until dispatched") is
-PR 2's, with the single `model.likec4.json` regeneration.
+No element, actor or relationship changes, but **two model descriptions are falsified by the flip and PR 1 corrects the
+encryption one** (architecture review 2026-10-10): the `model.c4` description of the workspaces data store (line ~301, "UNTIL ITS LIVE
+CONVERSION that volume is still the empty, Hetzner-formatted PLAINTEXT ext4 volume ..." and "LUKS-backed at boot only after its
+single-use gated rebirth has run ...") is a false encryption statement today and uses the phrase the CLO guardrails forbid. PR 1
+edits that sentence (a dated correction in place, naming the graded evidence and the claim boundary), then runs
+`bash scripts/regenerate-c4-model.sh` once (`ci.yml` byte-diffs `model.likec4.json` against the rendered model) and
+`bash plugins/soleur/test/c4-count-parity.test.sh`. Checked against all three model files (`model.c4`, `views.c4`,
+`spec.c4`): external human actors, external systems (Better Stack, Doppler, Hetzner, GitHub, all modeled), containers and
+actor-to-surface relationships do not change; derived cardinalities do not change (no workflow, monitor or heartbeat is
+added or removed). The stale workflow-retirement wording on the `doppler -> hetzner`, `github -> hetzner` and
+`github -> betterstack` edges ("inert until dispatched") is PR 2's and is regenerated there; until then it is an accepted
+known-stale record. #9925 and #9529 also edit `model.c4` elsewhere: on conflict, regenerate the JSON, never merge it by hand.
 
 ### Sequencing
 
@@ -403,6 +452,38 @@ evidence is RED` (labels `luks/class-web2-red`, `priority/p1-high`), and its Sen
 alarms if the job stops running. PR 2 must keep this job and update only the comment that names the rebirth workflow as the
 other marker-token holder.
 
+## Observability
+
+No new runtime surface ships: the changes are a CI linter, a ledger file and records. The observability that matters is that
+the new claim has a standing detector and that the linter's own verdict is readable without any host access.
+
+```yaml
+liveness_signal:
+  what: the CI `encryption-posture` job runs the linter on every PR (`python3 scripts/lint-encryption-posture.py --repo-sweep`); the daily `web2_marker` job of `workspaces-luks-verify.yml` judges web-2's probe rows and its Sentry check-in `workspaces-luks-verify-web2` alarms if the job stops running
+  cadence: per PR (linter), daily (web2_marker)
+  alert_target: a red a red `encryption-posture` leg fails the aggregated required `test` check (ci.yml `needs:` the leg); a GitHub issue `[ci/luks-verify-web2] web-2 LUKS evidence is RED` with labels `luks/class-web2-red` and `priority/p1-high`, plus the Sentry cron monitor (web2_marker)
+  configured_in: .github/workflows/ci.yml (the encryption-posture step), .github/workflows/workspaces-luks-verify.yml (job web2_marker), apps/web-platform/infra/sentry/cron-monitors.tf (monitor slug workspaces-luks-verify-web2)
+error_reporting:
+  destination: CI job logs (FAIL lines naming the row and the missing or mismatched key); GitHub issue from web2_marker; Sentry cron monitor for a missed run
+  fail_loud: the linter exits 1 and prints `FAIL: <store> ...` then `-> FAIL`; web2_marker removes the soak marker on RED and files the issue
+failure_modes:
+  - mode: a ledger row claims luks but its apparatus, key chain or mapper does not resolve to the claimed volume
+    detection: the linter FAILs the row in CI before merge
+    alert_route: the aggregated required `test` check on the PR (the `encryption-posture` leg is a `needs:` dependency of the aggregator)
+  - mode: web-2's probe rows stop reading crypto_LUKS or stop arriving after the flip
+    detection: web2_marker judges the newest rows daily and goes RED; the Sentry check-in is missed if the job does not run
+    alert_route: the p1 GitHub issue and the Sentry monitor
+  - mode: a new host key is added to var.web_hosts without re-attesting the row
+    detection: the multiplicity check FAILs in CI
+    alert_route: the aggregated required `test` check on the PR (the `encryption-posture` leg is a `needs:` dependency of the aggregator)
+logs:
+  where: GitHub Actions run logs for the two workflows; Better Stack rows (SyslogIdentifier luks-monitor, SOLEUR_FRESH_BOOT_READY) read with scripts/betterstack-query.sh
+  retention: Actions logs per the repository setting; Better Stack hot window about 40 minutes plus the S3 archive arm
+discoverability_test:
+  command: python3 scripts/lint-encryption-posture.py --repo-sweep
+  expected_output: PASS
+```
+
 ## Guard Contract
 
 ### Guard 1 - Indexed volume binding
@@ -424,6 +505,8 @@ other index form. The chokepoint is `check_luks_row`; `run_sweep` is the only pa
 | 3 | Make `check_luks_row` return before the binding check (dispatch) so `0 checked` and exit 0 | RED (existing `check_positive_work_floor` and the parity-table count of resolved luks rows; the suite asserts the count) |
 | 4 | Add a second luks row after a compliant first whose attachment is a sibling's | RED (the loop must check every row, not stop at the first) |
 | 5 | Must-PASS non-canonical: indexed binding with a differently named `for_each` local and the identical expression on both blocks | PASS |
+| 6 | Decoy: the attachment block carries a commented `# for_each = local.other` line, and a string containing the text `for_each` | PASS for the real block (comments and strings are not counted), RED when the live `for_each` expressions differ (MB-L1b strips the code-view step: the commented-decoy fixture then flips) |
+| 7 | A decoy duplicate `hcloud_volume_attachment.workspaces` declared in an earlier directory | RED (an address must resolve exactly once) |
 
 ### Guard 2 - Key chain and password uniqueness
 
@@ -444,6 +527,7 @@ drift (a new token, a new secret); the chokepoint is the chain verifier plus the
 | 3 | Two otherwise-valid luks rows claim one `random_password`, one explicitly through `key_chain`, one implicitly through its own file (MB-L5 deletes the uniqueness check; a dedicated fixture, because TS-15 fails at the binding check first) | RED |
 | 4 | Row claims web-1's password (`workspaces_luks`) for web-2's volume | RED (the same uniqueness guard; no separate separation check exists) |
 | 5 | Remove `key_chain` from the indexed row | RED ("indexed binding requires key_chain"); removing it from web-1's singleton row stays PASS (must-PASS differing from the canonical) |
+| 6 | A canonical copy of the `workspaces_volume_id = ...` line inside a comment while the live line differs | RED (hops match on the code view only) |
 
 ### Guard 3 - Apparatus pinned to the provisioner file
 
@@ -462,6 +546,9 @@ the registry, git-data and inngest cloud-init files). The chokepoint is the per-
 | 2 | Point `apparatus` at web-1's `workspaces-cutover.sh` for web-2's row | RED (mount evidence must come from the pinned file) |
 | 3 | Break the unquoted-assignment arm of the resolver (MB-L6) or the fstab-shaped mount-evidence arm (MB-L2) | RED |
 | 4 | Rename the provisioner's `MAPPER_NAME=workspaces` to another value | RED (mapper mismatch) |
+| 5 | Decoy apparatus: a file under `apps/*/infra/` with a matching `luksFormat`, `luksOpen` and `FSTAB_LINE` that no host script list or cloud-init invocation names | RED (the install hop) |
+| 6 | Comment-only apparatus: the only `cryptsetup luksFormat` and `FSTAB_LINE` text sits in comments (the real provisioner's line 14 is such a comment) | RED (scanners run on the code view) |
+| 7 | Two rows pin the same apparatus file | RED (one row per pinned file) |
 
 ### Guard 4 - Multiplicity
 
@@ -478,8 +565,9 @@ shape, fail-closed otherwise).
 |---|---|---|
 | 1 | Add a `web-3` key to `var.web_hosts` in a fixture (MB-L7 deletes the set-equality check) | RED |
 | 2 | Change the local to a shape the resolver does not support | RED with the "declare ..." message |
-| 3 | Dispatch: skip the resolver when `multiplicity` is absent on an indexed row | RED (absent declaration is itself a FAIL; MB-L8) |
+| 3 | Dispatch: skip the resolver when `multiplicity` is absent on an indexed row | RED (absent declaration is itself a FAIL; MB-L8c) |
 | 4 | Declare `instances: ["web-2", "web-1"]` | RED |
+| 5 | Fixtures: a `}` inside a string value in the map, and a filter written `if k != "web-1" \|\| k != "web-9"` | RED (a `}` must not hide a key; `\|\|` is refused) |
 
 Anchor (field 5): the ledger value and the code it grades are edited in one diff, so the floor proves consistency, not
 integrity. ADR-141 deliberately rejects an identity pin on the three `available` stores (an honest re-ledgering must not
@@ -544,9 +632,9 @@ No Product/UX surface: no UI file is created or edited. `soleur:gdpr-gate` was n
 ### Split Assessment
 
 - Subsystems touched: 3 - `scripts/`, `knowledge-base/legal/`, `knowledge-base/engineering/`
-- Planned files: 15 | Estimated changed lines: about 750 (linter about 150, tests about 350, schema about 40, legal and ADR text about 200)
+- Planned files: 17 | Estimated changed lines: about 1,000 after deepening (linter about 250 including the code view, tests about 450, schema about 40, legal, ADR and C4 text about 250)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR, two ordered commits (linter first). Split trigger: if the linter commit needs a second review round or the estimate passes 800 lines, cherry-pick commit 1 into its own PR and rebase this one on it.
+- Recommendation: split-ready. The estimate now exceeds the 800-line threshold, so the work is built as two ordered commits and Phase 1.0 (the scratch prototype) measures the linter diff; if it lands above about 350 lines or needs a second review round, commit 1 ships as its own PR (#9941 carries it) and the flip, legal records and ADR-263 addendum follow as PR 1b on a branch cut after it merges. Either way PR 2 stays separate and nothing here carries a closing keyword.
 
 ## Acceptance Criteria
 
@@ -554,11 +642,11 @@ No Product/UX surface: no UI file is created or edited. `soleur:gdpr-gate` was n
 
 - [ ] `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 on the final tree, reports `0 failing checks`, and the real ledger's `hcloud_volume.workspaces` row reads `mechanism: luks`, `live_verification: available`, with no `exception` block.
 - [ ] `live_coverage_floor` is 3 and exactly three rows read `live_verification: available` (`hcloud_volume.registry`, `hcloud_volume.workspaces_luks`, `hcloud_volume.workspaces`).
-- [ ] `bash scripts/lint-encryption-posture.test.sh` passes; TS-15 (plaintext row citing a sibling's apparatus) is unchanged and still FAILs the row; every Guard Contract row above exists as a case or an MB-L mutation, and each MB-L mutation turns the same fixture from FAIL to PASS when its branch is deleted.
+- [ ] `bash scripts/lint-encryption-posture.test.sh` passes; TS-15 (plaintext row citing a sibling's apparatus) is unchanged and still FAILs the row; every Guard Contract row above exists as a case or an MB-L mutation; each restrictive MB-L mutation (L1, L3, L4, L5, L7, L8a-c) turns its fixture from FAIL to PASS when the branch is deleted, and the two permissive arms (L2, L6) turn theirs from PASS to FAIL through the inverse helper.
 - [ ] A fixture reproducing the prototype (indexed binding relaxed, same-file pair removed, no apparatus pin) is RED under the shipped linter.
 - [ ] The three conditional-span cells carry one identical marker (diff over the bold-stripped spans is empty); the added lines contain none of "at boot", "survives a reboot" or "reborn" in an affirmative claim about web-2's volume (a grep over the added lines returns only the marker's own negated sentence "not evidence that the volume reopens after a reboot", reviewed by eye), and the marker's date placeholder is resolved to the real date.
 - [ ] `bash scripts/lint-legal-registers.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass. The new counsel-review record avoids the Art. 33 / Art. 4(12) tokens (`DETERMINATION_PATTERN` in `scripts/lint-legal-registers.sh`), so no breach-register waiver or row is needed; if the lint flags it anyway, the waiver and register row are added in the same PR.
-- [ ] The parity table printed by `python3 scripts/lint-encryption-posture.py --report` is byte-identical before and after commit 1 (no existing row's verdict moves).
+- [ ] A full `--repo-sweep` stdout comparison on the same tree, with `--today "$TODAY"` pinned (the suite's pinned date, so the 2026-10-22 expiries cannot flake it): the commit-1 linter and `git show origin/main:scripts/lint-encryption-posture.py` print identical output for the real ledger (no existing row's verdict moves). The parity table that `--report` prints holds only per-type counts, so it is not the evidence.
 - [ ] `knowledge-base/legal/audits/2026-10-counsel-review-9372.md` exists with the run id, dispatcher, approver and timestamps read from the apply run's log, and the "not discharged" list citing #9948, #9949, #7992.
 - [ ] ADR-140 and ADR-263 carry dated addenda; the ADR-263 addendum sits after #9925's if that merged.
 - [ ] PR body: `Ref #9372` with no closing keyword in body or title; the grader PASS line; the "Owner decision needed: #9642" section (rendered by `ship` from `decision-challenges.md`, which also files the `action-required` issue; the body avoids the ship gate's deny tokens); the not-claimed list.
@@ -579,9 +667,9 @@ No Product/UX surface: no UI file is created or edited. `soleur:gdpr-gate` was n
 - Given two luks rows claiming one `random_password`, then FAIL on the second row (unit).
 - Given the TS-15 fixture (plaintext volume, sibling's pair in another file), then FAIL as before (unit, regression for #6588).
 - Given a fixture adding `web-3` to the host map, then FAIL until `multiplicity` is re-attested (unit).
-- Given the real tree, then `--repo-sweep` passes and the parity table lists `hcloud_volume.workspaces` as luks (integration).
+- Given the real tree and `--today "$TODAY"`, then `--repo-sweep` passes with `0 failing checks` (unit; the real ledger row reads luks and the floor reads 3).
 - Given the three legal cells, then a bold-stripped diff of the marker spans is empty and the forbidden-phrase grep over added lines is empty (unit, shell).
-- Layer for every scenario: unit or integration; no e2e.
+- Layer for every scenario: unit (shell suites over synthesized fixtures); no integration or e2e boundary is crossed.
 
 ## Follow-up: PR 2 (cleanup; not part of this PR's tasks)
 
@@ -599,7 +687,7 @@ in `workspaces-luks-verify-workflow.test.sh`, `infra-credential-tiers-8209.md` r
 in row 5, the runbooks (`web-host-reboot.md`, the reboot section of the rebirth runbook, and the "LUKS rebirth" pointer line in `web-host-replace.md` that says a plain replace of web-2 re-attaches the ext4 volume), and a retirement line in the
 ADR-263 addendum of 2026-10-07 (and the 2026-10-04 addendum as the checklist asks). The escrow-create items are already
 done (verified above); only the census arithmetic needs re-deriving. `scripts/web2-rebirth.sh flip-precondition` is deleted with its test, so its
-"escrow-create stays absent" assertion needs a new home or an explicit drop decision in that PR. PR 2's body carries
+"escrow-create stays absent" assertion needs a new home (a parity-test assertion that the file stays absent) or an explicit drop decision recorded in that PR; the architecture review verified that neither the script nor the parity test reads the ledger row, so PR 1 does not depend on them. PR 2's body carries
 `Closes #9372` (body, not title), and its post-merge step comments the final state on #9372 using only graded rows. Do not
 start PR 2 inside this branch.
 
