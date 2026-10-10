@@ -12,9 +12,9 @@
 # inert with respect to the running host until a boot reads the key. The
 # reviewer-gated `apply_target=inngest-volume-recut` that this paragraph used to
 # name is gone (#8285 PR A converted that job into `inngest-backstop-retire`,
-# which retires the plaintext backstop `hcloud_volume.inngest_redis`, id
-# 106261946, a state-only orphan until its `destroy` phase). ADR-142's additive
-# byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.
+# which retired the plaintext backstop `hcloud_volume.inngest_redis`, id
+# 106261946; that volume was destroyed 2026-10-09 and the job deleted by PR B).
+# ADR-142's additive byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.
 #
 # "MERGE IS INERT" IS THE DEFECT HERE, NOT THE SAFETY PROPERTY. Both resources
 # below MUST be in the per-merge `-target=` allowlist in
@@ -104,12 +104,12 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 # permanently rather than transiently. The recut was not a path that was merely
 # blocked; it was a path this volume never had.
 #
-# THIS VOLUME IS INERT AT MERGE, AND THAT IS THE DESIGN. It is created, attached
-# alongside the live plaintext volume, and mounted at a STAGING path — never at
-# /mnt/data. Nothing copies data here until the reviewer-gated cutover runs. The
-# two-copy state IS the verified-restorable backup (ADR-142), and it beats a
-# snapshot: a live mountable device the cutover rehearses, not a blob nobody has
-# restored.
+# HISTORY (the design this volume was created under, ADR-142): it was INERT AT MERGE
+# — created, attached alongside the then-live plaintext volume, and mounted at a
+# STAGING path, never at /mnt/data — and nothing copied data here until the
+# reviewer-gated cutover ran. The two-copy state was the verified-restorable backup.
+# THAT STATE ENDED 2026-10-09 (#8285): the cutover completed, the plaintext volume
+# was destroyed, and this volume is now the SOLE copy of the Inngest store.
 #
 # NO `format` ATTRIBUTE, AND THAT IS LOAD-BEARING — the same reasoning the retired recut
 # apparatus recorded for the plaintext volume. The device must be born RAW so
@@ -137,18 +137,18 @@ resource "hcloud_volume" "inngest_redis_luks" {
   }
 }
 
-# Attached ALONGSIDE the live plaintext volume — the additive design's two-copy
-# state. The plaintext volume keeps serving /mnt/data throughout; this one receives
-# the byte-copy under a clean-stop freeze and becomes /mnt/data only at the swap.
+# This attachment is the live one: the store is served from this volume, and it is the only copy
+# (the plaintext volume it was copied from was destroyed 2026-10-09, #8285). It was created ALONGSIDE
+# that volume by the additive cutover design (the byte-copy under a clean-stop freeze, then the swap).
 #
 # THE `-target=` SETS ARE NOT THE SAME SET. Both this volume and this attachment
 # join `inngest-host`. Only the ATTACHMENT joins `inngest-host-replace`, because
 # that dispatch preserves the durable AOF by OMISSION — its target set names the
-# server, its network attachment and the plaintext volume's attachment, and
-# deliberately not the plaintext VOLUME. Adding a volume there would break the
-# invariant the workflow states in those words. The attachment must be there,
-# though: inngest-host-replace-gate.sh interpolates the server id, so a replace
-# forces this attachment into the plan and the gate aborts `out_of_scope` without it.
+# server, its network attachment and this attachment, and deliberately not any
+# VOLUME. Adding a volume there would break the invariant the workflow states in
+# those words. The attachment must be there, though: inngest-host-replace-gate.sh
+# interpolates the server id, so a replace forces this attachment into the plan and
+# the gate aborts `out_of_scope` without it.
 resource "hcloud_volume_attachment" "inngest_redis_luks" {
   volume_id = hcloud_volume.inngest_redis_luks.id
   server_id = hcloud_server.inngest.id

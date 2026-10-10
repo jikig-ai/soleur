@@ -127,13 +127,11 @@ scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supa
 scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-server.md
-scripts/inngest-luks-property-8296	knowledge-base/legal/article-30-register.md
 scripts/lib/incidents-roots.test.sh	knowledge-base/project
 scripts/lib/inngest-probe-row.test.sh	knowledge-base
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
-scripts/lib/inngest-probe-row.test.sh	knowledge-base/legal/article-30-register.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings
@@ -213,7 +211,6 @@ tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/r
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings
 tests/scripts/inngest-host-dark-gate	knowledge-base/engineering/operations/runbooks/inngest-server.md
-tests/scripts/inngest-host-dark-gate	knowledge-base/legal/article-30-register.md
 tests/scripts/inngest-host-shape-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs/archive
