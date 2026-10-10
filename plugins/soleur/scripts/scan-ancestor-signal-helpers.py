@@ -110,7 +110,7 @@ CMDPOS = re.compile(
     r"(?:^|[;&|(){`!]|\$\(|\b(?:then|do|else|if|elif|while|until)\b)\s*"
     r"(?:(?:\w+=\S*|sudo|exec|command|builtin|nohup|time|nice|setsid|env)\s+(?:-\S+\s+)*"
     r"|timeout\s+(?:-\S+\s+(?:[A-Z0-9]\S*\s+)?)*\d\S*\s+|\\)*"
-    r"(?:\S*/)?(kill|pkill|killall)(?![\w./-])"
+    r"(?:[\w.+~/-]*/)?(kill|pkill|killall)(?![\w./-])"
 )
 # A -c / eval / trap body: a quoted span that runs as shell text and is masked in the outer line.
 BODY = re.compile(r"(?:\b(?:sh|bash|dash|zsh)\s+-\w*c\w*|\beval|\btrap)\s+(['\"])(.*?)\1")
@@ -118,7 +118,7 @@ BODY = re.compile(r"(?:\b(?:sh|bash|dash|zsh)\s+-\w*c\w*|\beval|\btrap)\s+(['\"]
 LOOSE_SIGNAL = re.compile(r"(?<![\w.-])(?:kill|pkill|killall)(?![\w./-])(?:\s+(?!-0\b|-l\b|-L\b|-s\s+0\b)|$)")
 CURSOR = re.compile(r"(?:^|[\s;&|({])(?:local\s+|export\s+|declare\s+-\w+\s+)?(\w+)=(?:\"?\$\(|`)")
 PPID_ASSIGN = re.compile(
-    r"(?:^|[\s;&|({])(?:local\s+|export\s+|readonly\s+|declare\s+-\w+\s+)?(\w+)=(?:\"?\$\{?PPID\b|\"?\$\([^)]{0,200}\b(?i:ppid)=|`[^`]{0,200}\b(?i:ppid)=)"
+    r"(?:^|[\s;&|({])(?:local\s+|export\s+|readonly\s+|declare\s+-\w+\s+)?(\w+)=(?:\"?\$\{?PPID\b|\"?\$\(.{0,200}?\b(?i:ppid)=|`[^`]{0,200}\b(?i:ppid)=)"
 )
 PPID_USE = re.compile(r"\$\{?PPID\b|\bps\b[^;|&)]*\b(?i:ppid)=")
 TARGET_VAR = re.compile(r"^\$\{?(\w+)\}?$")

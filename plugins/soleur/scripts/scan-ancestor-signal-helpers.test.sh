@@ -58,7 +58,7 @@ passes=0
 fails=0
 cases=0
 skipped=0
-PLANNED_TOTAL=126
+PLANNED_TOTAL=127
 
 pass() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
@@ -458,6 +458,8 @@ list_of negated-derived.txt
 check "H7 a negated derived parent variable (kill -9 -\$up) is a P" has_out "^P${T}-${T}negated-derived.txt${T}"
 list_of ppid-upper.txt
 check "H8 ps with the uppercase PPID header is a P" has_out "^P${T}-${T}ppid-upper.txt${T}"
+list_of ppid-nested.txt
+check "H10 a parent pid taken through a nested command substitution is a P" has_out "^P${T}-${T}ppid-nested.txt${T}"
 awk 'BEGIN{for(i=0;i<60000;i++)print "p=$PPID"; for(i=0;i<60000;i++)print "kill $x"}' > "$TMP/stress.txt"
 run_scan --list "$TMP/stress.txt"
 check "H9 many parent assignments times many kills finish inside the 60 s cap (no quadratic stall)" test "$RC" -eq 0
