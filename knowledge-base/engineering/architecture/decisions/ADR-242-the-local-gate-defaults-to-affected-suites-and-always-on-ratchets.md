@@ -604,3 +604,12 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     (.sh .bash .py .ts .mjs .js + bunfig.toml) reads, so an extension the issue's `*.sh` framing
     never named is not silently under-covered. `scripts/test-affected-kb-consumers` keeps
     `knowledge-base/` — any kb file can be a consumer.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Per-suffix literal edges (one `^`-anchored file edge per corpus member) | A new `.sh` file under kb would silently under-cover until the arrays were re-edited — the exact drift class the glob tail exists to absorb. |
+| Keep `knowledge-base/` and accept the over-selection | The measured cost is ~331 committed seconds per kb-markdown diff — the entire motivation for the ticket. |
+| A regex edge kind instead of the bash-pattern glob | Bash `[[ == ]]` patterns are already the runner's grammar (`*.test.sh` glob registration, anchored edge matching); a second matcher family adds a semantics to keep consistent at the mint/hit/census sites for zero measured need. |
+| Malformed `glob:` mints a bare `^` | A bare `^` evaluates `*\n\n*` against the normalized blob — it matches only diffs containing an EMPTY line, which narrows instead of widening. `^glob:<verbatim>` is the always-match shape the hit arm recognizes by rule. |
