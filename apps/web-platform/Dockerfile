@@ -270,7 +270,7 @@ COPY --from=builder /app/test/vitest.canary.config.ts ./test/vitest.canary.confi
 # probe dies at "failed to load config" before collecting a single test
 # (v0.335.5 prod verdict, #9860). Must come after `npm ci --omit=dev`, which
 # recreates node_modules/ wholesale.
-RUN install -d -o 1001 -g 1001 -m 0755 node_modules/.vite-temp
+RUN install -d -o 1001 -g 1001 -m 0755 /app/node_modules/.vite-temp
 
 # #5863 outer-wrap canary arm: the self-authored outer mount-table fixture
 # (pinned to buildOuterWrapArgv output by the Guard-2 test) plus the shared

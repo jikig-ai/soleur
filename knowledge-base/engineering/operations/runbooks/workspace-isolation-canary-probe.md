@@ -123,9 +123,11 @@ before `import()`ing it — falling back to the config's own directory when the
 EACCES and the probe reports `reason=vitest_rc_1: … failed to load config
 from /app/test/vitest.canary.config.ts` (the v0.335.5 prod verdict — the
 error line under the banner is truncated in the deploy-status state). The
-Dockerfile bakes `RUN install -d -o 1001 -g 1001 node_modules/.vite-temp`
-after `npm ci --omit=dev` (npm ci recreates node_modules/ wholesale, so
-order matters); the pin test asserts its presence, ownership, and ordering.
+Dockerfile bakes `RUN install -d -o 1001 -g 1001 -m 0755
+/app/node_modules/.vite-temp` after `npm ci --omit=dev` (npm ci recreates
+node_modules/ wholesale, so order matters); the pin test asserts the bake
+exists exactly once, carries `-o 1001` and an owner-writable mode, uses the
+absolute path, and is followed by no node_modules-recreating step.
 Note for repro work: an out-of-image sim must carry `package.json
 {"type":"module"}` AND read-only payload/node_modules dirs — without the
 former the loader takes the in-memory CJS path and the EACCES never fires.
