@@ -2869,7 +2869,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command (`scripts/betterstack-query.sh SOLEUR_IMAGE_CVE_SCAN`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
   // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the per-finding marker is private BY DESIGN (the repository is public, so
   // the job log carries counts only) and lands only in the Logs warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 52;
+  // #9871/#9860 (2026-10-09): +1 (52 -> 53) for `2026-10-09-fix-canary-sandbox-failure-self-diagnosis-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh SOLEUR_CANARY_SANDBOX_DIAG`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the bundle is
+  // emitted only when a canary sandbox probe fails, and lands only in the Logs warehouse, which has no
+  // unauthenticated read path; the deploy-status hook carries the verdict but not the cause. Genuine.
+  const BASELINE_DECLARED_PROBES = 53;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
