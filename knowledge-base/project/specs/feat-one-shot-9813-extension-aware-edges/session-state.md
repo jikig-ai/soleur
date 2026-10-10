@@ -48,3 +48,12 @@
 
 ## Review Phase
 - Class: code (`.sh` present) → 8-seat panel. design-risk SET (new vocabulary three files must learn + economics justification) → design pass first: simplicity + architecture + performance (3 seats, dedup applied).
+
+## Review Findings Applied (design pass + panel, 9 seats)
+- **B1 (blocking, arch+pattern):** path-semantic malformed heads (`..`,`/`,`//`,`/./`,`/../`) minted dead edges the census passed → doctrine extended at all five sites with closed-charset + repo-relative-head clauses; `*/`-terminated tails (dead, unmatchable) added after pattern A3. Rg3 covers 13 malformed shapes; M27 pins `../`,`/`/`*/` census REDs.
+- **agent-runnable (security advisory → disposition change):** Guard-1 `g1_discover` is content-keyed (`git grep --untracked` for the marker on ANY extension) — **.sh would under-cover a kb .md quoting the marker → kept `knowledge-base/` (~16 committed s); tg rows re-structured (_TG_GLOB_WALKERS five / _TG_ALL_SIX six).
+- **GLOBENT superset (3 seats):** qualified at all doctrine comments; `ok_idx_glob_dotdot` pins the `../`-admission as deliberate.
+- **Doc precision:** census error direction per branch; `covers()` dir-ref assumption; ~248s five-walker attribution; ADR frontmatter; stale banners/comments; `_kn`→`_KB`; fnmatchcase; dead-tail wording.
+- **Verdicts:** arch SHIP-WITH-FIXES, simplicity SHIP-WITH-FIXES, performance SHIP-WITH-FIXES, security SHIP, data-integrity SHIP-WITH-FIXES, agent-native SHIP-WITH-FIXES, git-history SHIP, code-quality SHIP-WITH-FIXES, pattern SHIP-WITH-FIXES.
+- **Deferred advisories (not in scope):** pre-existing under-cover siblings repo-write-boundary/guard-vacuity-floor/lint-orphan (kb-less whole-tree corpus — glob kind now makes the fix expressible; follow-up issue candidate); `_affected_glob_split` extraction (deferred to next grammar touch); `|` in verbatim mints (cosmetic); `*bunfig.toml` overmatch (widen-only).
+- Verification pending: final clean battery + orphan + kb-consumers runs.
