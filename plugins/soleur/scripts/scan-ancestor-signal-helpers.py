@@ -109,7 +109,7 @@ PATHSPECS = [
 CMDPOS = re.compile(
     r"(?:^|[;&|(){`!]|\$\(|\b(?:then|do|else|if|elif|while|until)\b)\s*"
     r"(?:(?:\w+=\S*|sudo|exec|command|builtin|nohup|time|nice|setsid|env)\s+(?:-\S+\s+)*"
-    r"|timeout\s+(?:-\S+\s+(?:[A-Z0-9]\S*\s+)?)*\d\S*\s+|\\)*"
+    r"|timeout\s+(?:[-\dA-Z][^\s=]*\s+){1,4}|\\)*"
     r"(?:[\w.+~/-]*/)?(kill|pkill|killall)(?![\w./-])"
 )
 # A -c / eval / trap body: a quoted span that runs as shell text and is masked in the outer line.
