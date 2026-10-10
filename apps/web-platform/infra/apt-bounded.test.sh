@@ -232,7 +232,7 @@ _ia=0
 # shellcheck disable=SC2016  # single-quoted on purpose: expands inside the fresh bash
 env PATH="$STUB:$PATH" GD_STUB_MODE=ok GD_STUB_CALLS="$W/calls2" GD_APT_STATE_DIR="$_ad" GD_APT_LOG="$W/apt2.log" \
   bash --noprofile --norc -c 'set -u; . "$1/apt-bounded.sh" || exit 97; gd_apt_install_bounded curl' _ "$_ad" >/dev/null 2>&1 || _ia=$?
-if printf '%s\n' "$_ao" | grep -qx 'rc2=0 budget=7 spent=3' && printf '%s\n' "$_ao" | grep -qx 'GD_APT: spent=3s of budget=7s across 1 apt attempt(s)' \
+if printf '%s\n' "$_ao" | grep -cx >/dev/null 'rc2=0 budget=7 spent=3' && printf '%s\n' "$_ao" | grep -cx >/dev/null 'GD_APT: spent=3s of budget=7s across 1 apt attempt(s)' \
    && cmp -s "$LIB" "$_ad/apt-bounded.sh" && [ "$_oct" = 8 ] && [ "$_badrc" -eq 2 ] && [ "$_ia" -eq 0 ]; then
   pass "A19: arm is idempotent on disk and keeps spent, copies the lib, normalises 08, rejects abc; the summary reports; the armed dir drives the helper"
 else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')] oct=[$_oct] bad-rc=$_badrc helper-rc=$_ia"; fi

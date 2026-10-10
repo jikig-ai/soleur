@@ -184,7 +184,7 @@ else
     committed_out="$(run_under "$COMMITTED_PROFILE")"; committed_rc=$?
     pre_out="$(run_under "$PRE5874_PROFILE")"; pre_rc=$?
     pre_eperm=no
-    if [[ "$pre_rc" -ne 0 ]] && printf '%s' "$pre_out" | grep -qi 'operation not permitted'; then
+    if [[ "$pre_rc" -ne 0 ]] && printf '%s' "$pre_out" | grep -ci >/dev/null 'operation not permitted'; then
       pre_eperm=yes
     fi
 

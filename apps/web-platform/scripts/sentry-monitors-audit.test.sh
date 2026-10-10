@@ -38,7 +38,7 @@ set +e
 out=$(env -i PATH="$PATH" HOME="$HOME" bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
-if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -qi 'SENTRY_AUTH_TOKEN'; then
+if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -ci >/dev/null 'SENTRY_AUTH_TOKEN'; then
   pass "non-zero exit with token-name in stderr"
 else
   fail "rc=$rc out=$out"
@@ -387,7 +387,7 @@ rc=$?
 set -e
 n_reports=$(ls "$TMP13"/sentry-migration-audit-*.md 2>/dev/null | wc -l)
 if [[ "$rc" == "2" ]] \
-   && printf '%s' "$out" | grep -qE 'residency mismatch — probed=sentry\.io DSN cluster=de' \
+   && printf '%s' "$out" | grep -cE >/dev/null 'residency mismatch — probed=sentry\.io DSN cluster=de' \
    && [[ "$n_reports" == "0" ]]; then
   pass "exit 2, stderr names both sides, no artifact written"
 else
