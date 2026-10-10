@@ -370,6 +370,18 @@ describe("telemetry (AC-8, CLO C5)", () => {
     }
   });
 
+  test("outcome lines are WARN, because the app-container shipper drops INFO and the soak probe counts them", async () => {
+    for (const sel of ["Approve", "Reject"]) {
+      const { ctx, deps } = buildContext();
+      deps.abortableReviewGate.mockResolvedValueOnce(sel);
+      await run(ctx, FORCE_MAIN);
+    }
+    const warned = mockLog.warn.mock.calls.map((c) => c[0]?.decision);
+    const infoed = mockLog.info.mock.calls.map((c) => c[0]?.decision);
+    expect(warned).toEqual(expect.arrayContaining(["destroy-ask", "destroy-ask-approved", "destroy-ask-rejected"]));
+    expect(infoed.filter((d) => typeof d === "string" && d.startsWith("destroy-ask"))).toEqual([]);
+  });
+
   test("near-miss: a destructive keyword with no match emits destroy-classifier-near-miss, deduped per context, with a leading token only", async () => {
     const { ctx } = buildContext();
     for (let i = 0; i < 3; i++) await run(ctx, "make destroy-docs");

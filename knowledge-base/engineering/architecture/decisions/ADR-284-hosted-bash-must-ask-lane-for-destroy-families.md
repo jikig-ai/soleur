@@ -130,6 +130,15 @@ autonomous mode.
   `destroy-classifier-error` is non-zero without a fix inside 24 h. Tune (do not revert) if `git-push-unknown-default` is more than 10
   percent of asks over 7 days (the default-branch lookup is then the defect) or the `fail-closed-keyword` plus `raw-scan` share of
   asks is more than 25 percent.
+  **Measurability, stated plainly.** The ruled storm metric is a share of one workspace's hosted Bash CALLS. The per-call lines
+  (`autonomous-bypass`, `user-approved`) are pino INFO and the app-container shipper keeps WARN and above only, so that denominator is
+  not in the stored telemetry. The probe therefore measures a stand-in: the share of ONE REPO's asks that one rule accounts for, behind
+  a floor of 20 asks in the window. It is a tripwire for "one rule is the whole ask stream", not the ruled metric; a human reading an
+  ACTION REQUIRED reads the Sentry `hosted-destroy-ask` rate for the real one. The lane's own ask and outcome lines
+  (`destroy-ask`, `destroy-ask-approved`, `destroy-ask-rejected`, `destroy-ask-expired`) are emitted at WARN so they ship; near-miss
+  events are Sentry-only. The probe's decode of the stored shape was measured on live app-container rows (a pino WARN line is stored
+  as `raw` = a JSON string whose `.message` is the pino object) but could not be measured on a `destroy-ask` row, which does not
+  exist before the lane ships.
 - **Widening trigger for a versioned acknowledgement (CPO4-R8).** Any change that widens what hosted autonomous mode may do without
   asking (relaxing the lane, adding a flag that bypasses it, enabling the hook's weaker modes) first requires the versioned
   acknowledgement. Smallest design, recorded so it is not re-litigated: one nullable `autonomous_disclosure_ack_version smallint` on

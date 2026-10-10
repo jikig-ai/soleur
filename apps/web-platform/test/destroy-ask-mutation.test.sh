@@ -144,7 +144,7 @@ open(path, "w", encoding="utf-8").write(out)
 PY
 }
 
-MIN_MUTANTS=88
+MIN_MUTANTS=90
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -161,7 +161,7 @@ rc=$?
 check "harness row (a): a mutant whose anchor is missing fails the apply step (rc 3, never a skip)" test "$rc" = 3
 
 # --- Control: the unedited copy, on every distinct test file, must be GREEN with a literal floor of tests.
-declare -A FLOOR=( ["test/destroy-ask-classifier.test.ts"]=200 ["test/permission-callback-destroy-ask.test.ts"]=35 ["test/resolve-protected-branches.test.ts"]=20 ["test/components/chat/autonomous-disclosure-banner.test.tsx"]=6 ["test/components/settings/bash-autonomous-toggle.test.tsx"]=8 )
+declare -A FLOOR=( ["test/destroy-ask-classifier.test.ts"]=200 ["test/permission-callback-destroy-ask.test.ts"]=36 ["test/resolve-protected-branches.test.ts"]=20 ["test/components/chat/autonomous-disclosure-banner.test.tsx"]=6 ["test/components/settings/bash-autonomous-toggle.test.tsx"]=8 )
 for tf in $(jq -r '.[].test' "$MUTANTS" | sort -u); do
   floor="${FLOOR[$tf]:-}"
   [ -n "$floor" ] || { printf 'HALT: no control floor for test file %s\n' "$tf"; exit 1; }

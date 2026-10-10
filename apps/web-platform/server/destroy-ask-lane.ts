@@ -117,13 +117,16 @@ function emitNearMiss(state: LaneState, command: string): void {
   });
 }
 
-/** Outcome line after the card resolves. The approver role is owner or member; never an identity. */
+/**
+ * Outcome line after the card resolves. The approver role is owner or member; never an identity. Emitted at WARN,
+ * not INFO: the app-container shipper keeps WARN and above only, and the soak probe (CPO4-R5) counts these lines.
+ */
 export function logDestroyOutcome(
   outcome: "approved" | "rejected" | "expired",
   match: DestroyMatch,
   isOwner: boolean,
 ): void {
-  log.info(
+  log.warn(
     {
       sec: true,
       decision: `destroy-ask-${outcome}`,

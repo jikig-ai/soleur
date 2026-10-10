@@ -13,3 +13,4 @@ persisted here so `ship` Phase 6 renders them into the PR body. A security or fe
 | 6 | Pre-authorised revert if the post-deploy dev probe (CLO C9) fails | A failed probe means an immediate revert PR, decided by the operator then | Operator |
 | 7 | Trim the mutation matrix | Keep as ruled (cost bound only) | CTO |
 | 8 | Drop the 30 s negative resolver cache | Keep (in the CTO ruling) | CTO |
+| 9 | CPO4-R5 words the storm rule as a share of one workspace's hosted Bash CALLS; that denominator is pino INFO and is not shipped to Better Stack | The soak probe measures a stand-in (share of one repo's asks that one rule accounts for, behind a 20-ask floor) and says so; ADR-284 records it | CPO |

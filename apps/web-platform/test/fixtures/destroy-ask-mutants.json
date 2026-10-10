@@ -988,5 +988,16 @@
   "test": "test/components/settings/bash-autonomous-toggle.test.tsx",
   "detect": "CLO paragraph verbatim",
   "equivalent": null
+ },
+ {
+  "id": "L20-outcome-lines-at-info",
+  "file": "server/destroy-ask-lane.ts",
+  "anchor": "  log.warn(\n    {\n      sec: true,\n      decision: `destroy-ask-${outcome}`,",
+  "replace": "  log.info(\n    {\n      sec: true,\n      decision: `destroy-ask-${outcome}`,",
+  "count": 1,
+  "nth": null,
+  "test": "test/permission-callback-destroy-ask.test.ts",
+  "detect": "outcome lines are WARN",
+  "equivalent": null
  }
 ]
