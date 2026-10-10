@@ -211,6 +211,7 @@ const chatSchema = z.strictObject({
   type: z.literal("chat"),
   content: z.string(),
   attachments: z.array(attachmentRefSchema).optional(),
+  clientTurnId: z.string().uuid().optional(),
 });
 const startSessionSchema = z.strictObject({
   type: z.literal("start_session"),
@@ -221,6 +222,11 @@ const startSessionSchema = z.strictObject({
 const resumeSessionSchema = z.strictObject({
   type: z.literal("resume_session"),
   conversationId: z.string(),
+});
+const codexHistoryTransferAcknowledgeSchema = z.strictObject({
+  type: z.literal("codex_history_transfer_acknowledge"),
+  conversationId: conversationIdSchema,
+  authModeGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 });
 // feat-stream-since-disconnect (#5273) — client→server transient-reconnect
 // reattach control frame. `ackSeq` is the highest `seq` the client already
@@ -271,23 +277,27 @@ const streamSchema = z.strictObject({
   content: z.string(),
   partial: z.boolean(),
   leaderId: domainLeaderIdSchema,
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 const streamStartSchema = z.strictObject({
   type: z.literal("stream_start"),
   leaderId: domainLeaderIdSchema,
   source: z.enum(["auto", "mention"]).optional(),
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 const streamEndSchema = z.strictObject({
   type: z.literal("stream_end"),
   leaderId: domainLeaderIdSchema,
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 const toolUseSchema = z.strictObject({
   type: z.literal("tool_use"),
   leaderId: domainLeaderIdSchema,
   label: z.string().max(512),
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 // feat-concierge-stream-commands — inline Bash command/output stream.
@@ -345,7 +355,7 @@ const reasoningNarrationSchema = z.strictObject({
   message: z.string().max(20000),
   // #9515 — conversation-scoped so the client can drop a frame intended for
   // another tab's conversation before it lands in the trail (security seat).
-  conversationId: z.string().optional(),
+  conversationId: conversationIdSchema.optional(),
 });
 const turnSummarySchema = z.strictObject({
   type: z.literal("turn_summary"),
@@ -391,6 +401,18 @@ const autonomousDisclosureSchema = z.strictObject({
 const autonomousPostureSchema = z.strictObject({
   type: z.literal("autonomous_posture"),
   autonomous: z.boolean(),
+});
+const codexHistoryTransferRequiredSchema = z.strictObject({
+  type: z.literal("codex_history_transfer_required"),
+  conversationId: conversationIdSchema,
+  authModeGeneration: z.number().int().nonnegative(),
+  authMode: z.enum(["api-key", "managed"]).optional(),
+  clientTurnId: z.string().uuid().optional(),
+});
+const codexHistoryTransferAcknowledgedSchema = z.strictObject({
+  type: z.literal("codex_history_transfer_acknowledged"),
+  conversationId: conversationIdSchema,
+  authModeGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 });
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
@@ -486,6 +508,7 @@ const revocationNoticeSchema = z.strictObject({
 const errorSchema = z.strictObject({
   type: z.literal("error"),
   message: z.string(),
+  conversationId: conversationIdSchema.optional(),
   errorCode: z
     .enum([
       "key_invalid",
@@ -507,6 +530,8 @@ const errorSchema = z.strictObject({
       "too_many_files",
       "interactive_prompt_rejected",
       "image_paste_lost",
+      "codex_history_transfer_acknowledgment_failed",
+      "codex_history_transfer_acknowledgment_rejected",
       // #5394 — Concierge dispatch blocked because the active workspace repo
       // setup errored (repo_status === "error"). Client renders the reconnect
       // CTA. The cloning block carries no errorCode.
@@ -633,6 +658,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   chatSchema,
   startSessionSchema,
   resumeSessionSchema,
+  codexHistoryTransferAcknowledgeSchema,
   resumeStreamSchema,
   streamReplaySchema,
   closeConversationSchema,
@@ -652,6 +678,8 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   reviewGateSchema,
   autonomousDisclosureSchema,
   autonomousPostureSchema,
+  codexHistoryTransferRequiredSchema,
+  codexHistoryTransferAcknowledgedSchema,
   sessionStartedSchema,
   sessionResumedSchema,
   sessionEndedSchema,

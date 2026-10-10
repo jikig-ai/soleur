@@ -421,9 +421,19 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     echo "::error::Migration $filename has unsupported transaction commands; refusing non-atomic ledger write"
     exit 1
   fi
+  # Applied migration bytes stay immutable. Admission must hold its lock through
+  # the body and ledger insert; a separate preflight SELECT is not race-safe.
+  codex_guard="$SCRIPT_DIR/sql/codex-auth-mode-pre-migration.sql"
+  if [[ "$filename" == "145_codex_auth_mode_rebind.sql" && ! -r "$codex_guard" ]]; then
+    echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 145"
+    exit 1
+  fi
   # psql's --single-transaction requires -f/-c; plain piped stdin silently
   # disables it. The ledger row carries content_sha when known.
   if ! {
+    if [[ "$filename" == "145_codex_auth_mode_rebind.sql" ]]; then
+      cat "$codex_guard" || exit 1
+    fi
     if [[ "$strip_outer_txn" == "true" ]]; then
       sed -E '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$migration_file"
     else

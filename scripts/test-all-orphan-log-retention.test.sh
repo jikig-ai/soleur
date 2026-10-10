@@ -730,6 +730,27 @@ fi
 SBX_C9="$TMP/sbx-c9"
 build_sandbox "$SBX_C9" sleep || { echo "FATAL: sandbox build failed"; exit 2; }
 out="$TMP/out-c9.log"
+# Ref #9791: keep watchdog-only tracing in this synthetic sandbox. A missing
+# announce previously erased all evidence when the fixture EXIT cleanup ran.
+# The runner under test stays unchanged; only its copied watchdog is traced.
+trace="$TMP/trace-c9.log"
+python3 - "$SBX_C9/test-all.sh" "$trace" <<'PY'
+import shlex
+import sys
+path, trace = sys.argv[1:]
+s = open(path).read()
+anchor = '    _wd_self="${BASHPID:-}"\n'
+if s.count(anchor) != 1:
+    raise SystemExit('C.9 watchdog trace anchor must occur exactly once')
+s = s.replace(anchor, '    exec 9>' + shlex.quote(trace) + '\n'
+              '    BASH_XTRACEFD=9\n    PS4="+ "\n    set -x\n' + anchor)
+open(path, 'w').write(s)
+PY
+if [[ "$?" != "0" ]]; then
+  echo "FATAL: C.9 watchdog tracing setup failed"
+  exit 2
+fi
+c9_fail_before=$FAIL
 ( env -u SOLEUR_SUBAGENT -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable-c9" SOLEUR_TEST_ALL_WD_POLL_S=1 bash "$SBX_C9/test-all.sh" >"$out" 2>&1; wait ) &
 WRAP_PID=$!
 deadline=$(( SECONDS + 15 ))
@@ -745,6 +766,13 @@ done
 # child survives the full grace window (measured on a loaded CI shard).
 sleep 3
 RUNNER_PID="$(pgrep -P "$WRAP_PID" 2>/dev/null | head -1)"
+# Capture identity before SIGKILL reparents the watchdog. Do not enumerate
+# unrelated processes on a shared runner; this row only names fixture pids.
+C9_WD_PID="$(sed -n 's/^+ _wd_self=\([0-9][0-9]*\)$/\1/p' "$trace" 2>/dev/null | head -1)"
+C9_WD_START=""
+if [[ -n "$C9_WD_PID" ]]; then
+  C9_WD_START="$(ps -o lstart= -p "$C9_WD_PID" 2>/dev/null || true)"
+fi
 if [[ -z "$RUNNER_PID" ]]; then
   fail "could not resolve the runner pid for the untrappable-death arm"
 else
@@ -777,6 +805,18 @@ else
     fail "suite child survived an untrappable runner death (pid $leftover) — retained-snapshot reap failed"
     kill -KILL "$leftover" 2>/dev/null || true
   fi
+fi
+if (( FAIL > c9_fail_before )); then
+  printf '\n=== C.9 fixture diagnostics (Ref #9791) ===\n'
+  printf 'wrapper=%s runner=%s watchdog=%s\n' "$WRAP_PID" "${RUNNER_PID:-unresolved}" "${C9_WD_PID:-unresolved}"
+  if [[ -n "$C9_WD_PID" && -n "$C9_WD_START" \
+        && "$(ps -o lstart= -p "$C9_WD_PID" 2>/dev/null || true)" == "$C9_WD_START" ]]; then
+    ps -o pid=,ppid=,stat=,wchan= -p "$C9_WD_PID" 2>/dev/null || true
+  fi
+  printf '%s\n' '--- runner output (last 80 lines) ---'
+  tail -n 80 "$out" 2>/dev/null | tail -c 32768 || true
+  printf '%s\n' '--- watchdog trace (last 160 lines) ---'
+  tail -n 160 "$trace" 2>/dev/null | tail -c 32768 || true
 fi
 wait "$WRAP_PID" 2>/dev/null || true
 pkill -f "sleep $SLEEPTOK" 2>/dev/null || true

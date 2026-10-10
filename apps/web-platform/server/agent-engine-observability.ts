@@ -6,6 +6,7 @@ export type EngineObservabilityEvent =
   | "engine_dispatch_completed"
   | "engine_dispatch_failed"
   | "engine_session_reconciled"
+  | "engine_cancel_failed"
   | "engine_replay_item_dropped"
   | "engine_replay_failed";
 

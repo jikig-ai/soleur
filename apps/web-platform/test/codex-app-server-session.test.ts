@@ -2,6 +2,28 @@ import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerSession } from "@/server/codex-app-server-session";
 
 describe("Codex App Server session coordinator", () => {
+  it("does not start a turn when cancellation arrives while the thread is starting", async () => {
+    const controller = new AbortController();
+    const client = {
+      request: vi.fn(async (request: { method: string }) => {
+        if (request.method === "initialize") return { serverInfo: { name: "codex" } };
+        if (request.method === "thread/start") {
+          controller.abort("member-stopped-turn");
+          return { thread: { id: "synthetic-thread", sessionId: null } };
+        }
+        return { turn: { id: "synthetic-turn" } };
+      }),
+      notify: vi.fn(async () => undefined),
+      respond: vi.fn(async () => undefined),
+    };
+    const session = createCodexAppServerSession(client, { nextRequestId: () => "rpc" });
+
+    await expect(session.start("Synthetic prompt", controller.signal))
+      .rejects.toMatchObject({ code: "codex_turn_cancelled" });
+    expect(client.request.mock.calls.map(([request]) => request.method))
+      .toEqual(["initialize", "thread/start"]);
+  });
+
   it("initializes once, starts a thread, and starts a turn", async () => {
     const client = {
       request: vi.fn()

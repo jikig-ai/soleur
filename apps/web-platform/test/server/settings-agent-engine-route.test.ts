@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUser, getDefault, getAuthMode, setDefault, workspace, identity } = vi.hoisted(() => ({
+const { getUser, getDefault, getAuthMode, getCodexMode, setDefault, workspace, identity, rollout, countRebinds } = vi.hoisted(() => ({
   getUser: vi.fn(),
   getDefault: vi.fn(),
   getAuthMode: vi.fn(),
+  getCodexMode: vi.fn(),
   setDefault: vi.fn(),
   workspace: vi.fn(),
   identity: vi.fn(),
+  rollout: vi.fn(),
+  countRebinds: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -14,11 +17,14 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 vi.mock("@/server/workspace-resolver", () => ({ readWorkspaceIdFromDb: workspace }));
 vi.mock("@/lib/feature-flags/identity", () => ({ resolveIdentity: identity }));
+vi.mock("@/lib/feature-flags/server", () => ({ isEngineRolloutEnabled: rollout }));
 vi.mock("@/server/agent-engine-persistence", () => ({
   AgentEnginePersistenceRepository: class {
     getDefaultEngine = getDefault;
     getDefaultAuthMode = getAuthMode;
+    getCodexAuthMode = getCodexMode;
     setDefaultEngine = setDefault;
+    countCodexConversationRebinds = countRebinds;
   },
 }));
 
@@ -36,15 +42,21 @@ beforeEach(() => {
   getUser.mockReset();
   getDefault.mockReset();
   getAuthMode.mockReset();
+  getCodexMode.mockReset();
   setDefault.mockReset();
   workspace.mockReset();
   identity.mockReset();
+  rollout.mockReset();
+  countRebinds.mockReset();
   getUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
   workspace.mockResolvedValue("ws-1");
   identity.mockResolvedValue({ userId: "user-1", role: "prd", orgId: "org-1" });
+  rollout.mockImplementation(async (engineId: string) => engineId !== "codex");
   getDefault.mockResolvedValue("claude-code");
   getAuthMode.mockResolvedValue("managed");
+  getCodexMode.mockResolvedValue("api-key");
   setDefault.mockResolvedValue({ id: "setting-1" });
+  countRebinds.mockResolvedValue(0);
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -61,17 +73,71 @@ describe("agent engine settings route", () => {
     await expect(response!.json()).resolves.toEqual(expect.objectContaining({
       workspaceId: "ws-1", defaultEngineId: "claude-code",
       defaultAuthMode: "managed",
+      codexAuthMode: "api-key",
       engines: expect.arrayContaining([
         expect.objectContaining({ id: "claude-code", rolloutEnabled: true }),
-        expect.objectContaining({ id: "codex", rolloutEnabled: false }),
+        expect.objectContaining({ id: "codex", rolloutEnabled: false, settingsSelectable: true }),
       ]),
     }));
+  });
+
+  it("returns an owner-scoped count for the auth-mode confirmation", async () => {
+    countRebinds.mockResolvedValue(3);
+    const response = await GET(new Request("https://soleur.ai/api/dashboard/settings/agent-engine?previewAuthMode=api-key"));
+    expect(response!.status).toBe(200);
+    expect(countRebinds).toHaveBeenCalledWith("ws-1", "api-key");
+    await expect(response!.json()).resolves.toEqual(expect.objectContaining({ affectedConversationCount: 3 }));
   });
 
   it("writes a validated auth mode with the owner default", async () => {
     const response = await PUT(request({ engineId: "claude-code", authMode: "api-key" }));
     expect(response!.status).toBe(200);
     expect(setDefault).toHaveBeenCalledWith("ws-1", "claude-code", "api-key");
+  });
+
+  it("forwards explicit existing-conversation intent and returns the affected count", async () => {
+    rollout.mockResolvedValue(true);
+    const { reviewedEngineRegistry } = await import("@/server/agent-engine-reviewed-definitions");
+    const originalGet = reviewedEngineRegistry.get.bind(reviewedEngineRegistry);
+    vi.spyOn(reviewedEngineRegistry, "get").mockImplementation((engineId) =>
+      engineId === "codex"
+        ? {
+            id: "codex",
+            version: "codex-v1",
+            transport: "remote",
+            enabledForNewRuns: true,
+            enabledForExistingRuns: true,
+            authModes: ["managed", "api-key"],
+            qualifications: [],
+          }
+        : originalGet(engineId),
+    );
+    setDefault.mockResolvedValue({
+      defaultEngineId: "codex",
+      defaultAuthMode: "api-key",
+      affectedConversationCount: 4,
+    });
+    const response = await PUT(request({
+      engineId: "codex",
+      authMode: "api-key",
+      applyToExistingCodexConversations: true,
+      expectedAffectedConversationCount: 4,
+    }));
+    expect(response!.status).toBe(200);
+    expect(setDefault).toHaveBeenCalledWith("ws-1", "codex", "api-key", true, 4);
+    await expect(response!.json()).resolves.toEqual(expect.objectContaining({
+      affectedConversationCount: 4,
+    }));
+  });
+
+  it("rejects non-boolean existing-conversation intent before the RPC", async () => {
+    const response = await PUT(request({
+      engineId: "claude-code",
+      authMode: "managed",
+      applyToExistingCodexConversations: "true",
+    }));
+    expect(response!.status).toBe(400);
+    expect(setDefault).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported auth modes before the RPC", async () => {
@@ -93,9 +159,69 @@ describe("agent engine settings route", () => {
   });
 
   it("rejects disabled engines before the RPC", async () => {
+    const { reviewedEngineRegistry } = await import("@/server/agent-engine-reviewed-definitions");
+    const originalGet = reviewedEngineRegistry.get.bind(reviewedEngineRegistry);
+    vi.spyOn(reviewedEngineRegistry, "get").mockImplementation((engineId) =>
+      engineId === "codex"
+        ? { ...originalGet(engineId), settingsSelectable: false }
+        : originalGet(engineId),
+    );
     const response = await PUT(request({ engineId: "codex" }));
     expect(response!.status).toBe(409);
     expect(setDefault).not.toHaveBeenCalled();
+  });
+
+  it("rejects settings-only engine selection without explicit auth-mode rebind intent", async () => {
+    const { reviewedEngineRegistry } = await import("@/server/agent-engine-reviewed-definitions");
+    const originalGet = reviewedEngineRegistry.get.bind(reviewedEngineRegistry);
+    vi.spyOn(reviewedEngineRegistry, "get").mockImplementation((engineId) =>
+      engineId === "codex"
+        ? { ...originalGet(engineId), settingsSelectable: true }
+        : originalGet(engineId),
+    );
+    const response = await PUT(request({ engineId: "codex", authMode: "api-key" }));
+    expect(response!.status).toBe(409);
+    await expect(response!.json()).resolves.toEqual({ error: "engine_execution_disabled" });
+    expect(setDefault).not.toHaveBeenCalled();
+  });
+
+  it("rebinds Codex mode without reading workspace defaults outside the owner transaction", async () => {
+    const { reviewedEngineRegistry } = await import("@/server/agent-engine-reviewed-definitions");
+    const originalGet = reviewedEngineRegistry.get.bind(reviewedEngineRegistry);
+    vi.spyOn(reviewedEngineRegistry, "get").mockImplementation((engineId) =>
+      engineId === "codex"
+        ? {
+            id: "codex",
+            version: "codex-v1",
+            transport: "remote",
+            enabledForNewRuns: false,
+            enabledForExistingRuns: false,
+            settingsSelectable: true,
+            authModes: ["managed", "api-key"],
+            qualifications: [],
+          }
+        : originalGet(engineId),
+    );
+    setDefault.mockResolvedValue({
+      defaultEngineId: "claude-code",
+      defaultAuthMode: "api-key",
+      affectedConversationCount: 0,
+    });
+    const response = await PUT(request({
+      engineId: "codex",
+      authMode: "api-key",
+      applyToExistingCodexConversations: true,
+      expectedAffectedConversationCount: 0,
+    }));
+    expect(response!.status).toBe(200);
+    expect(getDefault).not.toHaveBeenCalled();
+    expect(getAuthMode).not.toHaveBeenCalled();
+    expect(setDefault).toHaveBeenCalledWith("ws-1", "codex", "api-key", true, 0);
+    await expect(response!.json()).resolves.toEqual(expect.objectContaining({
+      defaultEngineId: "claude-code",
+      defaultAuthMode: "api-key",
+      codexAuthMode: "api-key",
+    }));
   });
 
   it("keeps Codex blocked by the rollout flag when a reviewed definition is enabled", async () => {

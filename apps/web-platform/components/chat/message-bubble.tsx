@@ -2,6 +2,7 @@
 
 import React, { memo } from "react";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { Button } from "@/components/ui/button";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_COLORS } from "@/components/chat/leader-colors";
@@ -107,6 +108,9 @@ export const MessageBubble = memo(function MessageBubble({
   variant = "full",
   status,
   usage,
+  delivery,
+  onResend,
+  resendDisabled = false,
   activity,
   currentActivityStartedAt,
   interrupted = false,
@@ -116,6 +120,9 @@ export const MessageBubble = memo(function MessageBubble({
 }: {
   role: "user" | "assistant";
   content: string;
+  delivery?: "unsent" | "retryable";
+  onResend?: () => void;
+  resendDisabled?: boolean;
   leaderId?: DomainLeaderId;
   showFullTitle?: boolean;
   messageState?: MessageState;
@@ -299,6 +306,22 @@ export const MessageBubble = memo(function MessageBubble({
 
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
+          )}
+          {isUser && delivery === "unsent" && (
+            <p role="status" aria-live="polite" className="mt-2 text-xs text-amber-400">
+              Message not sent
+            </p>
+          )}
+          {isUser && delivery === "retryable" && onResend && (
+            <Button
+              type="button"
+              onClick={onResend}
+              disabled={resendDisabled}
+              className="mt-2 rounded-md border border-soleur-border-default px-3 py-1 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-soleur-accent"
+              aria-label="Resend message"
+            >
+              Resend
+            </Button>
           )}
         </div>
       </div>

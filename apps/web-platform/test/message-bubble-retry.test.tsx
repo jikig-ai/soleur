@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 
 // Mock client observability so formatAssistantText's fallthrough path (invoked
 // on every render) does not attempt to initialize Sentry in the component
@@ -18,6 +18,28 @@ import { MessageBubble } from "../components/chat/message-bubble";
 // ---------------------------------------------------------------------------
 
 describe("MessageBubble retry + error render (FR5 #2861)", () => {
+  test("retains an unsent user message and announces its delivery state", () => {
+    const view = render(<MessageBubble role="user" content="Keep this draft for resend" delivery="unsent" />);
+    expect(view.getByText("Keep this draft for resend")).toBeVisible();
+    expect(view.getByRole("status")).toHaveTextContent("Message not sent");
+  });
+
+  test("does not label ordinary user messages as unsent", () => {
+    const view = render(<MessageBubble role="user" content="Already sent" />);
+    expect(view.queryByText("Message not sent")).toBeNull();
+  });
+
+  test("shows an explicit resend action only for an acknowledged held turn", () => {
+    const onResend = vi.fn();
+    const view = render(
+      <MessageBubble role="user" content="Keep this draft" delivery="retryable" onResend={onResend} />,
+    );
+
+    fireEvent.click(view.getByRole("button", { name: "Resend message" }));
+    expect(onResend).toHaveBeenCalledOnce();
+    expect(view.queryByText("Message not sent")).toBeNull();
+  });
+
   test("tool_use bubble with retrying=true shows an honest 'No response yet' chip, never the 'Retrying…' lie (FR4 #5240)", () => {
     const { container, getByTestId } = render(
       <MessageBubble
@@ -87,7 +109,7 @@ describe("MessageBubble retry + error render (FR5 #2861)", () => {
     );
     const link = getByTestId("file-issue-link");
     expect(link.getAttribute("href")).toBeTruthy();
-    expect((link.getAttribute("href") ?? "").startsWith("https://github.com/")).toBe(true);
+    expect(link.getAttribute("href")).toMatch(/^https:\/\/github\.com\//);
     expect(link.getAttribute("target")).toBe("_blank");
     // Rel includes security tokens
     expect(link.getAttribute("rel")).toContain("noopener");
