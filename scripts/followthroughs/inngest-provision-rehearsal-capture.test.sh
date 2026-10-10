@@ -60,7 +60,9 @@ if "count()" in sql and "AS n" in sql and "position(" in sql:
     sys.exit(0)
 
 def cutoff(sql):
-    m = re.search(r"parseDateTime64BestEffort\('([0-9:\-T]+)'\)", sql)
+    # 3-arg form (s, precision, tz): arg 2 is PRECISION — a 2-arg (s, 'UTC') call is a
+    # server-side Code 43, which is why the SUT emits the explicit precision.
+    m = re.search(r"parseDateTime64BestEffort\('([0-9:\-T]+)'", sql)
     if m: return m.group(1)
     m = re.search(r"now\(\) - INTERVAL ([0-9]+) (MINUTE|HOUR|DAY|WEEK|MONTH)", sql)
     if not m: return "1970-01-01T00:00:00"

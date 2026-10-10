@@ -210,6 +210,8 @@ yes "the in-workflow orphan assertion lists all four hcloud kinds" \
   "grep -qF 'servers volumes ssh_keys firewalls' '$WF'"
 yes "since-file writers emit the capture's contract (YYYY-MM-DDTHH:MM:SS — no zone suffix; a trailing Z is a rc=64 refusal)" \
   "[[ \$(grep -c 'date -u +%Y-%m-%dT%H:%M:%S > .*-since.txt' '$WF') -ge 3 ]] && ! grep -q 'date -u +%Y-%m-%dT%H:%M:%SZ' '$WF'"
+yes "every parseDateTime64BestEffort call carries the precision arg (the 2-arg (s,'UTC') form is Code 43 — proven live)" \
+  "! grep -qE \"parseDateTime64BestEffort\\([^,]+, 'UTC'\\)\" < <(grep -oE 'parseDateTime64BestEffort\\([^)]*\\)' '$ROOT/scripts/followthroughs/inngest-provision-rehearsal-capture.sh') && [[ \$(grep -cE 'parseDateTime64BestEffort.*, 3, .UTC.' '$ROOT/scripts/followthroughs/inngest-provision-rehearsal-capture.sh') -ge 2 ]]"
 no "no comment line sits inside a doppler run -- backslash-continuation (a # there is an argv word — proven by the first teardown run)" \
   "awk '/doppler run.*--[[:space:]]*\\\\$/{n=NR} n && NR>n && /^[[:space:]]*#/{print; found=1} n && NR>n && !/^[[:space:]]*#/{n=0} END{exit found?0:1}' '$WF'"
 
