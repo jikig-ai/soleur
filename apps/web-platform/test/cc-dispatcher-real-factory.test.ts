@@ -1784,7 +1784,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
 });
 
 // ---------------------------------------------------------------------------
-// #9776 / ADR-282 — hosted must-ask lane: factory wiring (AC-14, AC-23).
+// #9776 / ADR-284 — hosted must-ask lane: factory wiring (AC-14, AC-23).
 //
 // This does NOT claim runtime proof that the real SDK still calls `canUseTool`
 // under `autoAllowBashIfSandboxed` (the SDK is mocked here, as everywhere in this

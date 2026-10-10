@@ -2764,7 +2764,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // ws-handler on a successful ack) so command #2 after an ack is friction-free
     // instead of re-holding on the frozen cold-start snapshot.
     resolveAckPosture: () => autonomousAckPosture,
-    // #9776 / ADR-282 — hosted must-ask lane inputs. The resolver reads the connected repo's default
+    // #9776 / ADR-284 — hosted must-ask lane inputs. The resolver reads the connected repo's default
     // branch with the SELF-HEALED installation id (`effectiveInstallationId`), the repo owner/name that
     // `parseConnectedRepo` validated from the server-resolved repoUrl, and the user's workspace path (never
     // `ctx.repoOwner`/`ctx.repoName`, which this dispatcher passes as empty strings). One resolver per session

@@ -34,7 +34,7 @@ Rulings: `cto-ruling.md`, `cpo-signoff.md`, `clo-ruling.md` in this directory.
 - 4.3 Confirm `docs/legal/**`, mirrors, `TC_VERSION`, `TC_DOCUMENT_SHA`, `LEGAL_DOC_SHAS`, migrations have an empty diff
 
 ## Phase 5 — ADR and C4
-- 5.1 `soleur:architecture` create ADR-282 (re-derive ordinal over `refs/remotes/origin/*`)
+- 5.1 `soleur:architecture` create ADR-284 (re-derive ordinal over `refs/remotes/origin/*`)
 - 5.2 ADR-277 addendum (hosted ask, CPO3-R2, verify-migrations finding #9825); ADR-093 sentence; `agent-env.ts` comment
 - 5.3 `model.c4` hosted-posture descriptions (three sites); regenerate `model.likec4.json`; run C4 tests
 

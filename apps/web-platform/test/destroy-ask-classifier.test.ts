@@ -142,6 +142,17 @@ describe("destroy-ask classifier — resolver laziness and degradation", () => {
     expect(m).not.toBeNull();
   });
 
+  test("nesting past the depth bound is unparseable even when no layer names a destroy command: the keyword rule asks (bound is load-bearing)", async () => {
+    let cmd = "echo push";
+    for (let i = 0; i < 7; i++) cmd = `bash -lc '${cmd.replace(/'/g, `'\\''`)}'`;
+    const m = await classifyDestroyFamily(cmd, async () => ({ names: new Set(["main"]), authoritative: true }));
+    expect(m?.ruleId).toBe(`${DESTROY_RULE_PREFIX}fail-closed-keyword`);
+    // And the same nesting four deep still parses structurally: no keyword ask for a harmless `echo push`.
+    let shallow = "echo push";
+    for (let i = 0; i < 2; i++) shallow = `bash -lc '${shallow.replace(/'/g, `'\\''`)}'`;
+    expect(await classifyDestroyFamily(shallow, async () => ({ names: new Set(["main"]), authoritative: true }))).toBeNull();
+  });
+
   test("a NUL byte is unparseable", async () => {
     const m = await classifyDestroyFamily("git push -f origin main\u0000", async () => ({ names: new Set(["main"]), authoritative: true }));
     expect(m?.ruleId).toBe(`${DESTROY_RULE_PREFIX}fail-closed-keyword`);

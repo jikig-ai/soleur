@@ -35,7 +35,7 @@ re-acceptance, no feature flag.
 
 | Claim in the brief or issue | Reality (verified on `origin/main` 8e69bd5f4b) | Plan response |
 |---|---|---|
-| "a copy-versioned acknowledgement so no bulk reset or deploy-order window is needed again" (brief, recommended) | CLO Q2 (2026-10 audit) rules a narrowing needs no re-ack; this PR only narrows. CTO RULING 2: out of scope, separate PR, no issue now. | Not built. Smallest design and the widening trigger are recorded in ADR-282 (CPO4-R8). |
+| "a copy-versioned acknowledgement so no bulk reset or deploy-order window is needed again" (brief, recommended) | CLO Q2 (2026-10 audit) rules a narrowing needs no re-ack; this PR only narrows. CTO RULING 2: out of scope, separate PR, no issue now. | Not built. Smallest design and the widening trigger are recorded in ADR-284 (CPO4-R8). |
 | "Route the AUP/Terms parenthetical to CLO; bump `TC_VERSION` only if the policy says so" (brief) | CLO ruling 3: leave AUP 5.7, T&C 3a.7/10.4 and both mirrors untouched; deleting the parenthetical is Tier 2 and forces every user to re-accept Terms. Verbatim replacement text is drafted for the next bump. | No legal-doc edit, `TC_VERSION` stays 2.6.0. One tracking issue with a dated trigger is filed before merge (CLO C6). |
 | "the addendum still lists CPO3-R2 as open (closed by #9792)" (brief) | CPO4-R7 says CPO3-R2 closes through the CLO-signed copy. #9792 added the exposure statement; this PR's copy supersedes it. | ADR-277 addendum records both: opened by the CPO third pass, satisfied by #9792, superseded by this PR's copy. |
 | Issue size "380 lines / 6 files" | CTO estimate: about 250 lines classifier, 80 resolver, 60 wiring, about 700 lines of tests and corpus, about 14 files. | Sized below (wc -l of touched files measured at work time, per `wg` filing rules). |
@@ -100,7 +100,7 @@ locally. Review-gate round trip: `review_gate` frame, `abortableReviewGate`, `Re
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-- **Create ADR-282** (ordinal provisional: CTO found 282 free at base; re-derive over `refs/remotes/origin/*` at ship time and sweep
+- **Create ADR-284** (ordinal provisional: CTO found 282 free at base; re-derive over `refs/remotes/origin/*` at ship time and sweep
   this plan, `tasks.md` and ACs for the old ordinal if renumbered; 278-280 are claimed by other branches) via
   `soleur:architecture create "Hosted Bash must-ask lane in canUseTool for destroy families"`. Content: lane precedence over
   bypass, hold and cache; fail-toward-ask; default-branch union rule; the superset-of-hook corpus binding; ADR-264/#9388 as the
@@ -110,7 +110,7 @@ locally. Review-gate round trip: `review_gate` frame, `abortableReviewGate`, `Re
   force-push to non-default branches, GraphQL `deleteRef`/`deleteRepository`/`updateRef`, non-owner approval); CPO4-R5 revert/tune thresholds; CPO4-R8 widening trigger
   for the versioned acknowledgement; the CLO parenthetical follow-up.
 - **Amend ADR-277** (addendum, not supersede): D8 stands (hook off in hosted); replace "hosted Bash is not gated for these
-  commands in the default mode" with a pointer to ADR-282; update the "Enabling the guard in hosted sessions" follow-up (recorded
+  commands in the default mode" with a pointer to ADR-284; update the "Enabling the guard in hosted sessions" follow-up (recorded
   as the later consolidation, conditional on a measured hosted ask); mark CPO3-R2 per Research Reconciliation; keep CPO3-R1 open
   until post-merge verification passes (CPO4-R7); record the verify-migrations finding: `verify-migrations` is skipped on every
   `workflow_run` deploy where `migrate` succeeds, cause inferred from the job expressions and unconfirmed, tracked as #9825.
@@ -155,7 +155,7 @@ CPO4-R4 `gh` family:
   delete); `gh repo delete`. Protected-branch comparison reuses the same union rule. Rule ids `hosted-destroy-ask:gh-ref-delete-default`
   and `hosted-destroy-ask:gh-repo-delete`.
 - Keyword-only near-miss telemetry (no ask) for `gh` plus `delete`, and for `gh api graphql` / `--input` commands containing `deleteRef`,
-  `updateRef`, `deleteRepository` (CPO4-R4). GraphQL mutations are a named residual in ADR-282 until the CPO widens scope (CPO4-R1); see
+  `updateRef`, `deleteRepository` (CPO4-R4). GraphQL mutations are a named residual in ADR-284 until the CPO widens scope (CPO4-R1); see
   "Decisions held for the operator" below.
 - Implicit-destination force pushes (`git push -f`, `... origin HEAD`, `... .`, bare `--force-with-lease`) ask, with their own sub-rule id
   `hosted-destroy-ask:git-force-implicit` so the R5 tuning can isolate them (telemetry only; behaviour is as ruled).
@@ -216,7 +216,7 @@ Create `knowledge-base/legal/audits/2026-10-counsel-review-9776-ask-gate.md` (CL
 supersede marker under the "Until a stricter check ships" row of `2026-10-counsel-review-9776.md`.
 
 ### Phase 5 — ADR and C4
-ADR-282 create, ADR-277 and ADR-093 addenda, `agent-env.ts` comment, `model.c4` description plus regenerated `model.likec4.json`.
+ADR-284 create, ADR-277 and ADR-093 addenda, `agent-env.ts` comment, `model.c4` description plus regenerated `model.likec4.json`.
 ADRs and C4 text must not say the hosted gate is complete (CLO C8).
 
 ### Phase 6 — post-deploy soak enrollment (CPO4-R5, R7; plan Phase 2.9.1)
@@ -228,7 +228,7 @@ outcomes, prints the R5 percentages, and exits 3 when a revert or tune threshold
 `.github/workflows/scheduled-followthrough-sweeper.yml`. Read `knowledge-base/engineering/operations/runbooks/followthrough-convention.md` first.
 The probe takes a `--window 24h|7d` argument and is enrolled twice (earliest deploy + 1 d and deploy + 7 d), because the 24 h revert rule
 cannot be evaluated by a 7-day directive. The 25 percent rule carries a minimum-call floor (at least 20 hosted Bash calls from that
-workspace in the window) so 1 call in 4 is not a storm; the floor is recorded in ADR-282 with the thresholds.
+workspace in the window) so 1 call in 4 is not a storm; the floor is recorded in ADR-284 with the thresholds.
 
 ## Files to Create
 - `apps/web-platform/server/destroy-ask-classifier.ts`
@@ -240,7 +240,7 @@ workspace in the window) so 1 call in 4 is not a storm; the floor is recorded in
 - `apps/web-platform/test/resolve-protected-branches.test.ts`
 - `apps/web-platform/test/destroy-ask-mutation.test.sh`
 - `scripts/followthroughs/hosted-destroy-ask-window-9776.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-282-hosted-bash-must-ask-lane-for-destroy-families.md` (ordinal provisional)
+- `knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md` (ordinal provisional)
 - `knowledge-base/legal/audits/2026-10-counsel-review-9776-ask-gate.md`
 
 ## Files to Edit
@@ -273,7 +273,7 @@ touch the decomposition or the tool_use event; folding either in would enlarge a
 |---|---------------------|-----------|--------|
 | 1 | "hosted autonomous mode must ASK before default-branch force-push/delete and terraform\|tofu destroy" | Phases 1-2, AC-1..AC-9 | mapped |
 | 2 | "Route the design fork (extend the hosted gate in apps/web-platform/server/permission-callback.ts vs enable the plugin hook in hosted sessions) to soleur:engineering:cto for a binding ruling" | `cto-ruling.md`, Architecture Decision | mapped |
-| 3 | "a copy-versioned acknowledgement so no bulk reset or deploy-order window is needed again" | Research Reconciliation row 1, Non-Goals | descoped — justification: CTO RULING 2 and CLO Q2 (narrowing needs no re-ack); trigger recorded in ADR-282 |
+| 3 | "a copy-versioned acknowledgement so no bulk reset or deploy-order window is needed again" | Research Reconciliation row 1, Non-Goals | descoped — justification: CTO RULING 2 and CLO Q2 (narrowing needs no re-ack); trigger recorded in ADR-284 |
 | 4 | "Revise banner/toggle copy in the same PR" | Phase 4, AC-11 | mapped |
 | 5 | "Route the AUP/Terms \"(and at the date of this version it does not)\" parenthetical to soleur:legal:clo" | `clo-ruling.md`, Non-Goals, tracking issue (C6) | mapped |
 | 6 | "bump TC_VERSION only if knowledge-base/legal/tc-version-bump-policy.md says so" | CLO ruling 3; AC-12 asserts empty legal diff | mapped |
@@ -290,7 +290,7 @@ touch the decomposition or the tool_use event; folding either in would enlarge a
 | `gh` ref-delete and repo-delete family | "make hosted autonomous mode ask for the D1 destroy families" is the CPO's rule; the brief's ask 1 plus CPO4-R4 reachability evidence | inferred — justification: CPO4-R4 makes it a merge blocker when reachable, and it is (cc-dispatcher unscoped token); without it the approved copy would imply coverage it lacks |
 | Hook-parity and mutation tests | CTO AC-9 and AC-10 in `cto-ruling.md`, requested by ask 2 | ruled |
 | Follow-through probe (Phase 6) | — | inferred — justification: CPO4-R5/R7 time-gated close criteria must be automated or the tracker rots (plan Phase 2.9.1) |
-| ADR-282, ADR-277/093 addenda, `model.c4` | ask 9 and the CTO ruling | asked |
+| ADR-284, ADR-277/093 addenda, `model.c4` | ask 9 and the CTO ruling | asked |
 | Audit file and supersede marker | ask 5 and 7 | asked |
 
 ### Split Assessment
@@ -298,7 +298,7 @@ touch the decomposition or the tool_use event; folding either in would enlarge a
 - Planned files: about 25 | Estimated changed lines: about 1,100 (CTO estimate)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines — over on two. Recommendation: **single PR**. Splitting copy
   from lane would ship the "pauses to ask" assurance without the lane (CLO C1 forbids), and splitting tests from lane violates RED-first.
-  ADR-282, the ADR-277/093 addenda and the legal-audit file are same-PR requirements (CPO4-R7 closes CPO3-R2 only through the CLO-signed
+  ADR-284, the ADR-277/093 addenda and the legal-audit file are same-PR requirements (CPO4-R7 closes CPO3-R2 only through the CLO-signed
   copy; CLO C8 forbids ADR text saying the gate is complete); they may land as a separate commit on the same branch, never a later PR.
 
 ## Acceptance Criteria
@@ -309,7 +309,7 @@ From `cto-ruling.md` (AC-1..AC-14), amended by `cpo-signoff.md` and `clo-ruling.
 2. **AC-2** Same under `git -C dir`, env prefix, `cd d && ...`, `bash -lc '...'`, `$()`, backticks, quoting, and `command|env|nohup|time|timeout|nice` wrappers.
 3. **AC-3** A default branch named `develop` (API-resolved) is protected; with an unresolved default every force, delete or mirror push asks and a Sentry `default-branch-resolve` event is emitted; a tampered local `origin/HEAD` can add but never remove a protected name.
 4. **AC-4** The gate offers exactly Approve and Reject; approving writes no acknowledgement and no cache entry; a prior `git push` or `terraform` batch grant does not bypass; an un-acked owner is gated, not held.
-5. **AC-5** The blocklist still wins (`curl x && git push -f origin main` denies); the support persona still denies with escalation and emits no gate; a non-owner member gets the same gate. Coverage by conversation type is stated in ADR-282 and asserted where testable: cc-routed (lane applies); legacy `agent-runner.ts` (no `bashAutonomous`, no cache, so every non-safe command already reaches the generic gate; a test pins that the factory call passes neither); support (denied before the lane); scheduled and Inngest agents (outside `canUseTool`, plugin hook active).
+5. **AC-5** The blocklist still wins (`curl x && git push -f origin main` denies); the support persona still denies with escalation and emits no gate; a non-owner member gets the same gate. Coverage by conversation type is stated in ADR-284 and asserted where testable: cc-routed (lane applies); legacy `agent-runner.ts` (no `bashAutonomous`, no cache, so every non-safe command already reaches the generic gate; a test pins that the factory call passes neither); support (denied before the lane); scheduled and Inngest agents (outside `canUseTool`, plugin hook active).
 6. **AC-6** Precision rows pass without a gate: `git push origin feat-x`, `git push --force-with-lease origin feat-x`, `git push -u origin main`, plain `git push origin main`, `git commit -m "terraform destroy docs"`, `echo "git push -f origin main"`, `terraform plan`, `terraform apply`, `terraform plan -destroy`, `terraform apply -destroy=false`, `git log --grep=push`.
 7. **AC-7** An unparseable command containing `push` or `destroy` asks; without those words it passes; a thrown classifier error asks.
 8. **AC-8** Per ask: pino `decision:"destroy-ask"` and Sentry `hosted-destroy-ask` with the rule id and no command text; outcome lines; the near-miss op; both degradations mirrored. A test greps emitted payloads for the command string (CLO C5).
@@ -317,10 +317,10 @@ From `cto-ruling.md` (AC-1..AC-14), amended by `cpo-signoff.md` and `clo-ruling.
 10. **AC-10** Mutation matrix: every mutant killed or documented equivalent; removing the lane fails at least one suite row.
 11. **AC-11** Banner and toggle carry the CLO bytes; "no blocklist is perfect" kept; vocabulary guard test green; LOCKED-copy tests updated.
 12. **AC-12** `docs/legal/**`, `plugins/soleur/docs/pages/legal/**`, `TC_VERSION`, `TC_DOCUMENT_SHA`, `LEGAL_DOC_SHAS`, `supabase/migrations/**` and every RPC have an empty diff (asserted with `git diff --stat origin/main -- <paths>` in the PR body); no write to production.
-13. **AC-13** ADR-282 created; ADR-277 and ADR-093 addenda; `agent-env.ts` comment; `model.c4` description; C4 tests green.
-14. **AC-14** A factory-wiring test asserts `canUseTool` and `autoAllowBashIfSandboxed` sit in the same options object handed to the SDK and that `permissions.allow` stays empty. It does NOT claim runtime proof: the existing gate test mocks the SDK, and whether the real SDK still calls `canUseTool` under `autoAllowBashIfSandboxed` rests on the #3252 behaviour. The runtime proof is the post-deploy dev probe (CLO C9), stated as such in ADR-282; a gate test must use the API-key path or it passes vacuously.
+13. **AC-13** ADR-284 created; ADR-277 and ADR-093 addenda; `agent-env.ts` comment; `model.c4` description; C4 tests green.
+14. **AC-14** A factory-wiring test asserts `canUseTool` and `autoAllowBashIfSandboxed` sit in the same options object handed to the SDK and that `permissions.allow` stays empty. It does NOT claim runtime proof: the existing gate test mocks the SDK, and whether the real SDK still calls `canUseTool` under `autoAllowBashIfSandboxed` rests on the #3252 behaviour. The runtime proof is the post-deploy dev probe (CLO C9), stated as such in ADR-284; a gate test must use the API-key path or it passes vacuously.
 15. **AC-15** Reject, timeout and abort deny, and the deny text instructs the agent not to retry or respell (CPO4-R2).
-16. **AC-16** The R5 thresholds (revert at more than 25 percent of one workspace's hosted Bash calls from one rule in 24 h, or `destroy-classifier-error` non-zero past 24 h; tune on `git-push-unknown-default` above 10 percent of asks over 7 days or fail-closed-keyword plus raw-scan above 25 percent) are written into ADR-282 before merge.
+16. **AC-16** The R5 thresholds (revert at more than 25 percent of one workspace's hosted Bash calls from one rule in 24 h, or `destroy-classifier-error` non-zero past 24 h; tune on `git-push-unknown-default` above 10 percent of asks over 7 days or fail-closed-keyword plus raw-scan above 25 percent) are written into ADR-284 before merge.
 17. **AC-17** The tracking issue for the legal parenthetical (CLO C6) exists, linked from the PR body and the audit; the follow-through probe and tracker directive exist (Phase 6).
 18. **AC-18** PR body AND the changelog entry state: no `TC_VERSION` bump, no re-acceptance, no acknowledgement reset, and that a previously granted "Approve all git push" or "terraform" no longer covers the destroy forms (CPO4-R6).
 19. **AC-19** Gate lifecycle, each a test: a late Approve after expiry is ignored and the card renders as expired; a WS disconnect mid-card leaves the gate pending and the card is replayed on reconnect (or the plan records the existing behaviour if replay does not exist); offline-notify fires for this card; a container restart orphaning a pending gate denies the command rather than running it; two cards back to back and a destroy card alongside a different pending gate resolve independently by `gateId` (approving A never releases B).
@@ -376,7 +376,7 @@ From `cto-ruling.md` (AC-1..AC-14), amended by `cpo-signoff.md` and `clo-ruling.
 
 ### Engineering (CTO)
 **Status:** reviewed
-**Assessment:** Binding ruling C (lane now, hook consolidation later); no migration, no flag; ADR-282 plus ADR-277 addendum; C4 description edit only. `cto-ruling.md`.
+**Assessment:** Binding ruling C (lane now, hook consolidation later); no migration, no flag; ADR-284 plus ADR-277 addendum; C4 description edit only. `cto-ruling.md`.
 
 ### Product (CPO)
 **Status:** reviewed
@@ -439,10 +439,10 @@ not an acknowledgement); default-branch resolver (API name, tampered `origin/HEA
 
 ## Non-Goals
 
-- Versioned acknowledgement (trigger: any change that widens what hosted autonomous mode may do without asking; design in ADR-282; CPO4-R8). No issue filed now.
+- Versioned acknowledgement (trigger: any change that widens what hosted autonomous mode may do without asking; design in ADR-284; CPO4-R8). No issue filed now.
 - Legal text edits and `TC_VERSION` (CLO ruling 3). Deferred with a dated trigger and a tracking issue (CLO C6): revise the AUP 5.7 and T&C 3a.7 parenthetical at the earliest of the next `TC_VERSION` bump, publication of #9603's hosted-coverage claim, the first arms-length workspace owner, 2027-01-08.
 - Enabling the plugin hook in hosted sessions (D8 stands; later consolidation conditional on a measured hosted `ask`).
-- Residuals recorded in ADR-282: variable-built command names, aliases, scripts written then run, terragrunt/pulumi, `git update-ref`, recursive `rm`, force-push to non-default branches, owner-only approval.
+- Residuals recorded in ADR-284: variable-built command names, aliases, scripts written then run, terragrunt/pulumi, `git update-ref`, recursive `rm`, force-push to non-default branches, owner-only approval.
 - #9825 (verify-migrations skip) is recorded in the ADR-277 addendum only; its fix is its own work.
 - CPO3-R3 (ask-rate measurement of the 4b classes on real transcripts) and #9603 (control page) are separate items.
 
@@ -454,11 +454,11 @@ Applied above: every mechanical finding. The following change scope or product b
    Better Stack query at 24 h and 7 d would do). Plan default: keep, with the two windows and the call-count floor, because an unautomated
    tracker is the failure mode `plan` Phase 2.9.1 exists to prevent.
 2. **GraphQL equivalents of the `gh` family** (`gh api graphql` `deleteRef`, `deleteRepository`, `updateRef` with force): same token, same
-   harm. Plan default: near-miss telemetry and a named ADR-282 residual only, because CPO4-R1 sends any widening back to the CPO. The CPO
+   harm. Plan default: near-miss telemetry and a named ADR-284 residual only, because CPO4-R1 sends any widening back to the CPO. The CPO
    needs to say whether they join the classifier in this PR.
 3. **Down-scope the hosted installation token** (DHH: the token is minted unscoped, so it carries `administration: write`; dropping it
    would remove `gh repo delete` and repo-level API deletion with no classifier). Plan default: not in this PR (other hosted consumers may
-   need it; not verified); recorded in ADR-282 as an alternative worth measuring.
+   need it; not verified); recorded in ADR-284 as an alternative worth measuring.
 4. **Per-turn auto-deny after a Reject** (spec-flow: a retrying agent produces a card per respelling and inflates the R5 numerator).
    Plan default: not built; the deny text tells the agent not to retry (CPO4-R2). Revisit if the telemetry shows retry loops.
 5. **Card sentence "this is not the autonomous-mode acknowledgement"** for the un-acked owner (spec-flow). Plan default: not added, because
@@ -483,7 +483,8 @@ Separate open item, not part of this PR: the C2 follow-through from PR #9792 (a 
 
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan` Phase 4.6; this one carries all four lines.
 - `BLOCKED_BASH_PATTERNS` does not match `bash -lc` or `zsh|dash|ksh -c`; the classifier unwraps those itself and the corpus has rows for them. Do not widen the blocklist in this PR (CPO4-R1).
-- The ADR-282 ordinal is provisional; re-derive over `refs/remotes/origin/*` at ship time and sweep this plan, `tasks.md` and the ACs for the old number.
+- **Ordinal changed at work time (2026-10-10):** the plan and the three rulings were written against ADR-282; over `refs/remotes/origin/*` 282 (sole-copy LUKS) and 283 (git-data liveness heartbeat) are claimed on sibling branches, so the record is ADR-284. The rulings in this directory keep their original wording (dated, binding records) and read as ADR-284. The plan, tasks and code comments are swept.
+- The ADR-284 ordinal is provisional; re-derive over `refs/remotes/origin/*` at ship time and sweep this plan, `tasks.md` and the ACs for the old number.
 - Scanner ratchets (fixture-relative-assert, guard-vacuity-floor, lint-shell-capture-exit, and the rest) walk `git ls-files`: run them on the committed tree.
 - The new copy contains "without asking" and "terraform destroy"; the old LOCKED tests that asserted those strings must be rewritten, not deleted, and the vocabulary guard test must not reintroduce the assumption.
 - Rule ids carry no section prefix (`hosted-destroy-ask:*`, ADR-205 namespace) and never include command text.

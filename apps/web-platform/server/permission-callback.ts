@@ -264,7 +264,7 @@ export interface CanUseToolDeps {
    */
   repoConnected?: boolean;
   /**
-   * #9776 / ADR-282 — the hosted must-ask lane's protected-branch resolver (union of the API default branch, the
+   * #9776 / ADR-284 — the hosted must-ask lane's protected-branch resolver (union of the API default branch, the
    * local origin/HEAD and main/master; memoised per session record). Awaited only after a force, delete or mirror
    * push with a named destination is found. Unwired (legacy runner, tests) the lane fails toward ask: every such
    * push asks.
@@ -653,7 +653,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         });
       }
 
-      // #9776 / ADR-282 — HOSTED MUST-ASK LANE. One chokepoint, placed AFTER the
+      // #9776 / ADR-284 — HOSTED MUST-ASK LANE. One chokepoint, placed AFTER the
       // blocklist deny (curl x && git push -f origin main still denies), the safe-bash
       // allow (no ask row is safe-bash: corpus invariant) and the support-persona deny,
       // and BEFORE the autonomous bypass, the first-run disclosure hold, the existing-

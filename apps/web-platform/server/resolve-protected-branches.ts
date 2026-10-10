@@ -1,5 +1,5 @@
 /**
- * #9776 / ADR-282 — the protected-branch set for the hosted must-ask lane. The lane's only I/O.
+ * #9776 / ADR-284 — the protected-branch set for the hosted must-ask lane. The lane's only I/O.
  *
  * Union of:
  *   (a) the GitHub API `default_branch`, read with the server-held installation token (the agent cannot tamper

@@ -149,6 +149,13 @@ describe("local origin/HEAD read is hardened (AC-23)", () => {
 });
 
 describe("memoisation (AC-23)", () => {
+  test("the TTLs are the ruled values: 10 minutes positive, 30 seconds negative, 3 seconds lookup", async () => {
+    const mod = await import("../server/resolve-protected-branches");
+    expect(POSITIVE_TTL_MS).toBe(600_000);
+    expect(NEGATIVE_TTL_MS).toBe(30_000);
+    expect(mod.RESOLVE_TIMEOUT_MS).toBe(3_000);
+  });
+
   test("a positive result is memoised for the TTL and re-resolved after it (a rename must not stay stale)", async () => {
     let t = 1_000;
     const fetchDefaultBranch = vi.fn().mockResolvedValueOnce("main").mockResolvedValueOnce("develop");

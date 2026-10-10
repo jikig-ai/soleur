@@ -1,5 +1,5 @@
 /**
- * #9776 / ADR-282 — the hosted must-ask lane, the helpers `permission-callback.ts` calls.
+ * #9776 / ADR-284 — the hosted must-ask lane, the helpers `permission-callback.ts` calls.
  *
  * The lane itself is ONE call site in the Bash branch of `createCanUseTool` (placed after the support-persona deny
  * and before the autonomous bypass, the first-run disclosure hold and the batched-approval cache): a match returns

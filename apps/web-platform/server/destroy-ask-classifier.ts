@@ -1,5 +1,5 @@
 /**
- * #9776 / ADR-282 — hosted must-ask lane: the pure destroy-family classifier.
+ * #9776 / ADR-284 — hosted must-ask lane: the pure destroy-family classifier.
  *
  * PROPERTY. A hosted Bash command that force-pushes over, deletes or mirror-pushes a protected branch, runs
  * `terraform|tofu destroy` (or `apply -destroy`), or deletes a ref or repository through `gh`, is reported as a
@@ -9,7 +9,7 @@
  * PURE: no I/O, no clock, no logging. The one dependency, `resolveProtected`, is injected and awaited lazily,
  * only after a force, delete or mirror push with a named destination (or a gh ref delete) is found.
  *
- * NOT DECIDED (named residuals, ADR-282): variable-built command names, aliases (`git -c alias.p=push p`),
+ * NOT DECIDED (named residuals, ADR-284): variable-built command names, aliases (`git -c alias.p=push p`),
  * scripts written then run, `make`/`npm run` indirection, `terragrunt|pulumi destroy`, `git update-ref`,
  * recursive `rm`, force-pushes to non-default branches, GraphQL `deleteRef`/`deleteRepository`/`updateRef`
  * (near-miss telemetry only), non-owner approval. The corpus (`test/fixtures/destroy-ask-corpus.json`) is the
