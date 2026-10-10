@@ -21,6 +21,15 @@
 # token). Names only are read; no secret VALUE is ever fetched.
 set -euo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${DOPPLER_TOKEN:+x}${SUPABASE_ACCESS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
   echo "::error::DOPPLER_TOKEN is not set; this job cannot reach dev and refuses to guess another config."
   exit 1
