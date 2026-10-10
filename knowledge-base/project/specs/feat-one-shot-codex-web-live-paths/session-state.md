@@ -889,3 +889,29 @@
   routine/Web/CLO/full-review/promotion holds persist. Account-read and the
   persistent selected30 local-suite authorization remain distinct from the
   consumed image-build and synthetic-rehearsal authorizations.
+
+## Continuation update — 2026-10-11 archive and shell-fixture sync
+
+- Main advanced through `514ec3cd0e54cee38c130f7842e1c75bb97c8da9` with
+  five byte-identical KB archive renames, merged and pushed at
+  `1b947b48d66f1249b947f792a89720cccb400216`. It then advanced through
+  `6a86eae0ec2cdb8c758bf06f1b38c2ec45c459e1` with 38 shell-test files and
+  nine KB artifacts, merged cleanly at `4a30eb8fda13a9b56941720f789bd743bdcae77b`.
+  Incoming and feature-range whitespace checks passed. The overlapping
+  migration-ledger shell fixture retained the feature changes on auto-merge.
+- Neither delta changes the selected30 fixture set, its imported application
+  source, normal Vitest setup/helpers, dependencies or tsconfig. The 321-test
+  result at `ce2be17417` retains those unchanged inputs; no additional selected
+  rerun occurred. Broader shell/local suites remain held.
+- Superseded head `d87b52a11b` RLS `38091236010` and head `1b947b48d6` RLS
+  `38092041972` each passed 187 migrations / zero skipped and 11 files /
+  155 tests. Production catalog parity was skipped in both. The latter head's
+  CI `38092041939` Dockerfile builder and CLI-tools checks and final guards
+  `38092041998` passed; its full test aggregate and tenant integration were
+  still pending at the latest main advance. These partial verdicts are
+  historical and do not establish the next pushed head's complete CI result.
+- The approved full-production image remains bound to `a2ff13ca8d`; its
+  authorization and the earlier build/rehearsal authorizations are consumed.
+  No image rebuild, application startup, recovery, provider/browser operation,
+  shared production write, deployment or flag/cohort promotion occurred.
+  All existing qualification, review and promotion holds persist.

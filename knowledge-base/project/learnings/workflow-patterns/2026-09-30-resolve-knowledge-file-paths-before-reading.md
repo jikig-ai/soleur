@@ -198,3 +198,11 @@ load-timing assumption. The unit log also exposed an incomplete observability
 mock: missing `hashUserId` caused the real logger formatter to fall back to raw
 data. Supply a deterministic synthetic hash mock and assert the rejection
 path uses it; a green test count alone must not conceal that warning.
+
+Later maintenance probes combined merge statistics, long skill paragraphs and
+fixture diffs in one output budget, truncating the display despite bounded
+line counts. Read the required tail separately, keep long paragraph matches
+out of the main transcript, and delegate multi-file inspection before
+collecting full diffs. GitHub's log output also represents some ANSI markers
+as literal `^[[` sequences; normalize both actual escapes and that rendered
+form before displaying the final migration/test summary.
