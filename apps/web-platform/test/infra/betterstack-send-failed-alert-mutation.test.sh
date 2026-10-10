@@ -156,7 +156,10 @@ expect_green_added() {
 # 65 -> 66 at #7777: NON_PAGING_MARKERS gains SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED — a bare
 # `logger -t` user.notice evidence-validation refusal (same class as the SEAM_REFUSED entry),
 # adding one census row. The case count is unchanged.
-BASELINE_PASSES=66
+# 66 -> 67 at #9597 (S4): NON_PAGING_MARKERS gains SOLEUR_CREDENTIAL_REFUSED — infra-config-verify.sh prints
+# it to stderr inside the apply-deploy-pipeline-fix job, so it never reaches web-1 journald. One census row;
+# the case count is unchanged.
+BASELINE_PASSES=67
 BASELINE_CASES=9
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
