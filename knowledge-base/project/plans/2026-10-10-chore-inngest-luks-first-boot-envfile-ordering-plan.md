@@ -16,6 +16,24 @@ lane: cross-domain
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10
+**Sections enhanced:** Proposed Solution (file-staging topology), Acceptance Criteria (pre-merge/post-merge split + ratchet AC), Files to Edit (BASELINE_DECLARED_PROBES ratchet), new Downtime & Cutover + Network-Outage Deep-Dive sections
+**Research agents used:** none available — no Task/subagent tool in this environment; all gates, verify-the-negative checks, and review passes ran inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claimed as independent review)
+
+### Key Improvements
+
+1. Added the delivery-chain analysis: the trio files are image-baked carriers (`cp`-staged in `build-inngest-bootstrap-image.yml`), so the fix reaches the host via the auto-minted `vinngest-v*` tag → build/sign → `bump-cloud-init-pin` chain, and the cloud-init edit via `user_data` ForceNew replace.
+2. Confirmed by journal read (not hypothesis) that the observed storm was a LUKS-stage abort cascade — no static early pull-in exists — and chose `ConditionPathExists=` over both the `-` prefix (rejected by the issue) and a bootstrap-side `[ -f ]` gate (does not self-heal, misses non-timer triggers).
+3. Made the acceptance mechanical: the rehearsal capture script gains a `Failed to start inngest-luks` forbidden row so the evidence artifact carries the property on every future run.
+
+### New Considerations Discovered
+
+- `discoverability_test.credentials_required` moves `BASELINE_DECLARED_PROBES` (53 → 54) in `plugins/soleur/test/preflight-discoverability-test.test.ts` — same-PR bump required.
+- The cloud-init edit forces a `hcloud_server.inngest` replace on the next apply → `## Downtime & Cutover` added; `closes: []` + `Ref #9939` because the acceptance evidence is post-merge (the #9175 plan's disposition for the identical shape).
+- Phase 4.5 triggered on the literal `SSH` (the plan's "no-SSH" assertions) — the deep-dive resolves clean: the host has no SSH surface by design and no TF root on this path carries `provisioner`/`connection` blocks.
+
 ## Overview
 
 On a fresh inngest provision, two LUKS-related systemd units attempt their first start before the `runcmd:` stages that write their `EnvironmentFile=` files have run — or after the LUKS stage aborts and never writes them at all. `inngest-luks-cutover.service` (fired by `inngest-luks-cutover.timer` at `OnBootSec=30s`) and `inngest-luks-open.service` each declare env files without the `-` tolerance prefix — a deliberate fail-closed contract — so a start attempted while a file is absent produces a `Failed to start` journal row (plus, on the cutover unit, an `ExecStopPost` `unit-exit` phone-home) for what is benign ordering/enablement noise. The noise trains the LUKS boot/cutover observability channel to carry false failures, masking real first-boot failures. The fix is ordering and enablement — `ConditionPathExists=` on the env files so a start attempted too early (or after a stage abort) skips instead of fails — while keeping the fail-closed `EnvironmentFile` semantics for the runs that matter.
@@ -190,6 +208,22 @@ None — no `.tf` files change. All delivery is through existing IaC carriers: `
 
 None — no new vendor resources (Hetzner/Doppler/Better Stack all within existing usage).
 
+## Network-Outage Deep-Dive (Phase 4.5)
+
+Fired on the literal `SSH` trigger (the plan's "no-SSH" assertions); resolved clean:
+
+- **L3 firewall allow-list:** not applicable — the plan changes no firewall resources and the host has no inbound path by design (ADR-225). Verified: `inngest-host.tf`, `inngest.tf`, and the rehearsal root carry no `provisioner "file"`/`remote-exec` or `connection` blocks — `terraform apply` on this path has no SSH dependency.
+- **L3 DNS/routing:** unchanged — no network resources touched; the rehearsal host exercises the same egress path.
+- **L7 TLS/proxy:** unchanged — the only network calls the units make are the existing outbound HTTPS (Doppler, Better Stack ingest).
+- **L7 application:** the change is unit-activation conditions; the phone-home emitter's path is untouched.
+
+## Downtime & Cutover (Phase 4.55)
+
+- **Offline-inducing operation:** `hcloud_server.inngest` replace — `user_data` is ForceNew and carries no `ignore_changes`, so the cloud-init edit takes the host down for one replace window on the next `terraform apply` (the same window every cloud-init change on this host takes).
+- **Surface affected:** `soleur-inngest-prd` — the dedicated scheduler host. During the replace window the self-hosted Inngest scheduler is offline; Inngest jobs and Concierge work pause until the new host provisions (boot + provision minutes, per prior replace/rehearsal timings).
+- **Zero-downtime path evaluated:** blue-green (a second inngest host, drain, cut over) — rejected: the host is a deliberate singleton with no blue-green machinery, and the issue's acceptance is itself "a fresh `terraform apply` provision"; building a second-host path for a chore would invert the scope. The merge itself induces **zero** downtime — the change is dormant until the next apply, whose timing is operator-chosen (replace-on-apply is the standing delivery contract for this host: in-place edits are banned by `hr-prod-host-config-change-immutable-redeploy`, and every prior cloud-init change paid the same window — #9787's parameterization shipped the identical shape the day before).
+- **Residual downtime justification:** one bounded replace window, operator-timed; the `inngest-provision-rehearsal.yml` `dry_run=false` run exercises the exact cloud-init on a throwaway host first, so the replace's risk is measured before it is spent.
+
 ## Guard Contract
 
 ### Guard 1 — no-luks-failed-start evidence rule + suite pins
@@ -215,7 +249,7 @@ None — no new vendor resources (Hetzner/Doppler/Better Stack all within existi
 
 | # | User ask (verbatim) | Plan item | Status |
 |---|---|---|---|
-| 1 | "A fresh `terraform apply` provision produces zero `Failed to start` rows for `inngest-luks-cutover` / `inngest-luks-open` (verify via the Better Stack journal channel or the rehearsal workflow's evidence artifact — no SSH)." [issue #9939] | Phase 1 unit conditions + Phase 2 capture `viol` check + AC1/AC2/AC4 | mapped |
+| 1 | "A fresh `terraform apply` provision produces zero `Failed to start` rows for `inngest-luks-cutover` / `inngest-luks-open` (verify via the Better Stack journal channel or the rehearsal workflow's evidence artifact — no SSH)." [issue #9939] | Phase 1 unit conditions + Phase 2 capture `viol` check + AC1/AC2/AC6/AC8 | mapped |
 | 2 | "the fix is ordering/enablement, not prefixing with `-` — except where a tolerant read is genuinely safe" [issue #9939] | Phase 1 keeps unprefixed `EnvironmentFile=`; suite pins assert the unprefixed form survives | mapped |
 | 3 | "gate the cutover timer's enable on the env files existing (bootstrap already stages them)" [issue #9939, candidate shape] | Phase 1 `ConditionPathExists=` on `inngest-luks-cutover.timer` (the stronger form of the same idea — evaluated per activation, self-healing) | mapped |
 | 4 | "add an `ExecCondition=`/`ConditionPathExists=` on the env files" [issue #9939, candidate shape] | Phase 1 `ConditionPathExists=` on all three units | mapped |
@@ -244,14 +278,14 @@ None — no new vendor resources (Hetzner/Doppler/Better Stack all within existi
 ### Pre-merge (PR)
 
 - [ ] AC1: `inngest-luks-cutover.service`, `inngest-luks-cutover.timer`, and `inngest-luks-open.service` each declare `ConditionPathExists=` for **every** path in their `EnvironmentFile=` set, and every `EnvironmentFile=` line remains unprefixed (fail-closed contract retained).
-- [ ] AC3: `scripts/followthroughs/inngest-provision-rehearsal-capture.sh` reports `viol`/FAIL when a `Failed to start inngest-luks*` row exists in the host's row set for the mode's window, in every mode the script supports.
-- [ ] AC4: The `inngest-luks-reopen-armed`/`ARM-FAILED` marker logic is unchanged (`is-active` driven), the timer still polls ~30 s on a healthy host, and a legitimately-started service failure still emits the `unit-exit` ExecStopPost row.
-- [ ] AC5: `inngest-redis-luks.test.sh`, `inngest.test.sh`, and `inngest-provision-rehearsal-capture.test.sh` carry the new asserts and pass, including at least one mutation row per new check that drives the suite RED when the condition or the forbidden rule is removed.
-- [ ] AC6: `BASELINE_DECLARED_PROBES` in `plugins/soleur/test/preflight-discoverability-test.test.ts` is 54 (bumped in this PR with the required PLACEMENT/TRUTH/NO SUBSTITUTE comment).
+- [ ] AC2: `scripts/followthroughs/inngest-provision-rehearsal-capture.sh` reports `viol`/FAIL when a `Failed to start inngest-luks*` row exists in the host's row set for the mode's window, in every mode the script supports.
+- [ ] AC3: The `inngest-luks-reopen-armed`/`ARM-FAILED` marker logic is unchanged (`is-active` driven), the timer still polls ~30 s on a healthy host, and a legitimately-started service failure still emits the `unit-exit` ExecStopPost row.
+- [ ] AC4: `inngest-redis-luks.test.sh`, `inngest.test.sh`, and `inngest-provision-rehearsal-capture.test.sh` carry the new asserts and pass, including at least one mutation row per new check that drives the suite RED when the condition or the forbidden rule is removed.
+- [ ] AC5: `BASELINE_DECLARED_PROBES` in `plugins/soleur/test/preflight-discoverability-test.test.ts` is 54 (bumped in this PR with the required PLACEMENT/TRUTH/NO SUBSTITUTE comment).
 
 ### Post-merge (evidence — issue stays open until these land; PR body says `Ref #9939`, not `Closes`)
 
-- [ ] AC2: A fresh `terraform apply` provision produces zero `Failed to start` rows for `inngest-luks-cutover` / `inngest-luks-open`, verified via the Better Stack journal channel or the rehearsal workflow's evidence artifact — including under a LUKS-stage abort (the shape that produced the observed storm), where the arming markers (`inngest-luks-FAILED`, `inngest-luks-reopen-ARM-FAILED`) still fire.
+- [ ] AC6: A fresh `terraform apply` provision produces zero `Failed to start` rows for `inngest-luks-cutover` / `inngest-luks-open`, verified via the Better Stack journal channel or the rehearsal workflow's evidence artifact — including under a LUKS-stage abort (the shape that produced the observed storm), where the arming markers (`inngest-luks-FAILED`, `inngest-luks-reopen-ARM-FAILED`) still fire.
 - [ ] AC7: The mint → build → pin-bump chain delivered: `cloud-init-inngest.yml`'s `IREF`/`ZIREF` pins on main name a `vinngest-v*` tag whose carriers are byte-identical to the merged files (the advisory GuardA leg is green on main after the bump lands).
 - [ ] AC8: The next `inngest-provision-rehearsal.yml` `dry_run=false` run's evidence artifact carries `REHEARSAL_PHASE_B_RECOVERY=PASS` + `REHEARSAL_POST_REBOOT_LATCH=PASS` with the new forbidden rule enforced (zero `Failed to start inngest-luks*` rows in the host's row set).
 
