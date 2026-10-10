@@ -1176,7 +1176,7 @@ t_luks_passphrase_first_create_halts() {
 # is needed: the password create ALONE halts; the Doppler copy create ALONE stays legal (the documented recovery for a
 # lost Doppler copy, restoring the same state-held value); an UPDATE of either member still halts; and the pair as
 # no-op (the per-merge plan shape, Phase 0 evidence plan: no creates) reads 0.
-_inngest_pair_plan() { # <password-actions-json|-> <key-actions-json|-> -> plan JSON on stdout (a '-' omits that entry)
+_inngest_pair_plan() { # <password-actions-json|null> <key-actions-json|null> -> plan JSON on stdout (a `null` omits that entry)
   jq --argjson p "${1:-null}" --argjson k "${2:-null}" '
     .resource_changes |= [ .[]
       | if .address == "random_password.inngest_redis_luks" then (if $p == null then empty else .change.actions = $p end)

@@ -126,7 +126,7 @@ resource "doppler_project" "inngest" {
   # scripts/lint-doppler-description-length.py enforces it at PR time.
   description = "Isolated boot-credential project for the dedicated Inngest singleton (#6178, ADR-100). Its prd root config holds ONLY the inngest secret set (signing/event keys, Redis password, out-of-band Postgres URI); cross-project isolation from soleur/prd."
 
-  # Cascade parent of INNGEST_REDIS_LUKS_KEY, the sole opener of the sole-copy store (#9879): a
+  # Cascade parent of INNGEST_REDIS_LUKS_KEY, the only opener the host reads for the sole-copy store (#9879): a
   # targeted replace of the project or its environment deletes the secret without planning the
   # secret's own destroy, so `prevent_destroy` on the secret alone would never fire. A deliberate
   # recreate of the whole project needs a reviewed lift first (runbook: "Sole-copy protection and key loss").
@@ -147,7 +147,7 @@ resource "doppler_environment" "inngest_prd" {
   slug    = "prd"
   name    = "Production"
 
-  # Cascade parent of the sole opener (#9879); see the note on doppler_project.inngest.
+  # Cascade parent of the host-read opener (#9879); see the note on doppler_project.inngest.
   lifecycle {
     prevent_destroy = true
   }

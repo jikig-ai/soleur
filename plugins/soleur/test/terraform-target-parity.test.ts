@@ -86,8 +86,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 266 -> 271 (#9879, +5): G2 reachability (sole-copy census) rows G2 live/mutation/spelling/scripts/harness in the B5/B6 describe.
 // 271 -> 277 (#9879 review fixes, +6): G2 destroy spellings + sub-root normalisation, G2 scanner linearity, and the G2e attribute pin
 // (live, mutation matrix, comment-stripper robustness, per-merge edge to the volume).
-// Exact again: grep -cE '^\s*test\(' = 277.
-const TEST_FLOOR = 277;
+// 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
+// Exact again: grep -cE '^\s*test\(' = 278.
+const TEST_FLOOR = 278;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -3570,13 +3571,22 @@ function g2StateWriteHits(code: string): Array<[string, string]> {
 }
 
 // Command position for `terraform [-chdir=X] destroy`: line start, a separator, a shell keyword, a YAML `run:`, an env
-// assignment run, a privilege/exec wrapper (`sudo`, `env`, `time`, ...), `--` (doppler run), or the opening quote of
-// `bash -c "..."`. Prose has a backtick, a quote or ordinary words in front, so it is not the command. Every quantified
-// group below is delimited by whitespace or a metacharacter, so the match is linear (a perf row in the spelling suite pins it).
+// assignment run, a privilege/exec wrapper (`sudo`, `env`, `time`, `timeout N`, `nice`, `flock x`, ...) with its options,
+// `--` (doppler run), or the opening quote of `bash -c "..."`. The binary may be path-qualified (`/usr/bin/terraform`,
+// `./terraform`), `$VAR` or `$(... terraform ...)`. Prose has a backtick, a quote or ordinary words in front, so it is not
+// the command. STATED NON-GOALS (defence in depth only; prevent_destroy and the Hetzner lock are the real controls): `flock x
+// -c '...'`, a binary renamed through a symlink, a destroy assembled at run time (`terraform "$verb"`), and a test-named
+// driver script (skipped by G2_TEST_OR_FIXTURE: nothing in CI runs it as an apply; making it one is an edit to that script
+// that a reviewer sees, and the destroy still meets prevent_destroy). This is a spelling list, not "every spelling".
+// LINEARITY: a bare `{`, `!` or `--` is a prefix only when followed by whitespace (a long `{a={a=` token has no start per
+// character), a keyword is a start only at a word boundary, and every repeated group is BOUNDED, so one start costs a
+// constant number of tokens and the match is linear (two perf rows in the spelling suite pin it).
+const G2_OPTS = String.raw`(?:[ \t]+-\S+(?!\S)(?:[ \t]+[\w./@:=+][^\s;&|()]*(?![^\s;&|()]))?){0,16}`;
 const G2_CMD_PREFIX =
-  String.raw`(?:^|[;&|({]|\b(?:then|do|else|elif|if|while|until)\b|!|--|\brun:|\b(?:sudo|exec|time|command|env|nohup|xargs|eval)\b(?:[ \t]+-\S+)*|\b(?:ba|z|da|k)?sh[ \t]+(?:-\w+[ \t]+)*-\w*c[ \t]+["'])`;
+  String.raw`(?:^|[;&|(]|\{(?=[ \t])|!(?=[ \t])|--(?=[ \t])|\b(?:then|do|else|elif|if|while|until)\b|\brun:|\b(?:sudo|exec|time|command|env|nohup|xargs|eval|nice|ionice|setsid)\b${G2_OPTS}|\btimeout\b${G2_OPTS}[ \t]+\d[\w.]*|\bflock\b${G2_OPTS}[ \t]+\S+|\b(?:ba|z|da|k)?sh[ \t]+(?:-\w+[ \t]+)*-\w*c[ \t]+["'])`;
+const G2_TERRAFORM_BIN = String.raw`(?:\$(?:\{\w+\}|\w+)|\$\([^()]*\bterraform\b[^()]*\)|(?:[\w.-]*/){0,8}terraform)`;
 const G2_DESTROY_CMD = new RegExp(
-  String.raw`${G2_CMD_PREFIX}[ \t]*(?:[A-Za-z_]\w*=[^\s;&|()]*[ \t]+)*terraform(?:[ \t]+-chdir[= ]\S+)?[ \t]+destroy(?![\w-])`,
+  String.raw`${G2_CMD_PREFIX}[ \t]*(?:[A-Za-z_]\w*=[^\s;&|()]*[ \t]+){0,64}${G2_TERRAFORM_BIN}(?:[ \t]+-chdir[= ]\S+)?[ \t]+destroy(?![\w-])`,
   "m",
 );
 const G2_DESTROY_FLAG = /(?<![\w-])-destroy(?![\w-])/;
@@ -3587,7 +3597,7 @@ const G2_DESTROY_FLAG = /(?<![\w-])-destroy(?![\w-])/;
  * keeps the scan linear: `\s*` with /m crosses newlines and goes quadratic on a whitespace-only input.
  */
 function g2IsSubRoot(step: string): boolean {
-  const m = /^[ \t]*(?:-[ \t]+)?working-directory:[ \t]*(.*?)[ \t]*$/m.exec(step);
+  const m = /^[ \t]*(?:-[ \t]+)?working-directory:[ \t]*(.*)$/m.exec(step); // greedy then trim: a lazy `(.*?)[ \t]*$` is quadratic on a long whitespace run
   if (!m) return false;
   const v = m[1].replace(/^(["'])(.*)\1$/, "$2").trim();
   if (/^\$\{\{\s*env\.REHEARSAL_DIR\s*\}\}$/.test(v)) return true;
@@ -3597,7 +3607,7 @@ function g2IsSubRoot(step: string): boolean {
   const rest = posix.normalize(v.slice(i));
   if (!rest.startsWith(root)) return false;
   const seg = rest.slice(root.length).split("/")[0];
-  return seg !== "" && seg !== "." && seg !== "..";
+  return seg !== ""; // `.`/`..` cannot survive posix.normalize behind the root prefix (fuzzed: 0 of 200k), so no further check
 }
 
 /** Every (verb, address) a job's code reaches: -target/-replace in `=`/space/quoted/escaped-quote spellings, destroy, state writes. */
@@ -3981,9 +3991,69 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       ["a named sub-dir sub-root", wd("apps/web-platform/infra/rehearsal")],
       ["a ./-prefixed sub-dir sub-root", wd("./apps/web-platform/infra/rehearsal/inner")],
       ["a workspace-prefixed sub-dir sub-root", wd("${{ github.workspace }}/apps/web-platform/infra/rehearsal")],
+      ["a binary that merely ends in terraform", RUN("my-terraform destroy")],
+      ["a path segment that merely ends in terraform", RUN("./xterraform destroy")],
+      ["a variable that is an argument, not the command", RUN("echo $TF destroy")],
+      ["prose behind sudo and an option value", RUN("sudo -u root echo terraform destroy")],
+      ["terraform destroys (a longer word)", RUN("terraform destroys")],
+      ["a quoted $TF in prose", RUN('echo "run $TF destroy later"')],
+    ];
+    // TABLE: one row per alternative of G2_CMD_PREFIX (and per binary spelling). Each line reaches `terraform` ONLY through the
+    // named alternative (line start + whitespace cannot skip the leading word), so dropping any one alternative reds its row.
+    const table: Array<[string, string]> = [
+      [";", "echo a; terraform destroy"],
+      ["&", "echo a & terraform destroy"],
+      ["|", "echo a | terraform destroy"],
+      ["(", "(terraform destroy)"],
+      ["{ ", "{ terraform destroy; }"],
+      ["! ", "! terraform destroy"],
+      ["-- ", "doppler run -- terraform destroy"],
+      ["then", "then terraform destroy"],
+      ["do", "do terraform destroy"],
+      ["else", "else terraform destroy"],
+      ["elif", "elif terraform destroy; then"],
+      ["if", "if terraform destroy; then"],
+      ["while", "while terraform destroy; do"],
+      ["until", "until terraform destroy; do"],
+      ["sudo", "sudo terraform destroy"],
+      ["exec", "exec terraform destroy"],
+      ["time", "time terraform destroy"],
+      ["command", "command terraform destroy"],
+      ["env", "env terraform destroy"],
+      ["nohup", "nohup terraform destroy"],
+      ["xargs", "xargs terraform destroy"],
+      ["eval", "eval terraform destroy"],
+      ["nice", "nice terraform destroy"],
+      ["ionice", "ionice -c3 terraform destroy"],
+      ["setsid", "setsid terraform destroy"],
+      ["timeout N", "timeout 60 terraform destroy"],
+      ["timeout -k N D", "timeout -k 5 60s terraform destroy"],
+      ["flock FILE", "flock /tmp/l terraform destroy"],
+      ["flock -w N FILE", "flock -w 5 /tmp/l terraform destroy"],
+      ["bash -c", 'bash -c "terraform destroy"'],
+      ["sh -c", "sh -c 'terraform destroy'"],
+      ["zsh -c", 'zsh -c "terraform destroy"'],
+      ["dash -ec", "dash -ec 'terraform destroy'"],
+      ["ksh -c", "ksh -c 'terraform destroy'"],
+      ["run:", "      - run: terraform destroy"],
+      ["assignment run", "TF_LOG=1 TF_IN_AUTOMATION=1 terraform destroy"],
+      ["sudo -u root", "sudo -u root terraform destroy"],
+      ["sudo -n -E -u root", "sudo -n -E -u root terraform destroy"],
+      ["nice -n 10", "nice -n 10 terraform destroy"],
+      ["env -u A B=1", "env -u A B=1 terraform destroy"],
+      ["path /usr/bin/terraform", "/usr/bin/terraform destroy"],
+      ["path ./terraform", "./terraform destroy"],
+      ["path + -chdir", "sudo /usr/local/bin/terraform -chdir=x destroy"],
+      ["$TF", "$TF destroy"],
+      ["${TF}", "${TERRAFORM} destroy"],
+      ["$(which terraform)", "$(which terraform) destroy"],
     ];
     for (const [name, step] of red) {
       expect(verdictOf(step).filter((t) => t.endsWith("|destroy|*")), `destroy spelling "${name}" stayed GREEN`).not.toEqual([]);
+    }
+    for (const [name, cmd] of table) {
+      const step = cmd.startsWith("      - run:") ? cmd : RUN(cmd);
+      expect(verdictOf(step).filter((t) => t.endsWith("|destroy|*")), `prefix alternative "${name}" stayed GREEN: ${cmd}`).not.toEqual([]);
     }
     for (const [name, step] of green) {
       expect(verdictOf(step), `"${name}" must stay GREEN`).toEqual([]);
@@ -4020,6 +4090,18 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
       ["repeated `terraform ` words", "terraform ".repeat(30_000)],
       ["repeated `sudo -x ` wrappers", "sudo -x ".repeat(40_000)],
       ["a run of `-target` and whitespace", "-target \n".repeat(40_000)],
+      // the prefix alternatives that start a scan at every occurrence: a bare `{`, `!`, `--` and keywords inside assignment values
+      ["a run of `{a=` tokens", "{a=".repeat(100_000)],
+      ["a run of `!a=` tokens", "!a=".repeat(100_000)],
+      ["a run of `--a=` tokens", "--a=".repeat(100_000)],
+      ["a run of `a=sudo ` assignment values", "a=sudo ".repeat(40_000)],
+      ["a run of `a=then ` assignment values", "a=then ".repeat(40_000)],
+      ["a run of `sudo -sudo ` wrappers", "sudo -sudo ".repeat(30_000)],
+      ["`sudo -` and one 300 KB option word", "sudo -" + "a".repeat(300_000)],
+      ["repeated `timeout 5 ` and `flock x ` wrappers", "timeout 5 flock x ".repeat(20_000)],
+      ["a run of `;$(a` command substitutions", ";$(a".repeat(60_000)],
+      ["one 300 KB path-shaped word", "; " + "a/".repeat(150_000)],
+      ["a long whitespace run inside a working-directory value", "      - run: x\n        working-directory: a" + " ".repeat(100_000) + "y"],
     ];
     for (const [name, text] of hostile) {
       const t0 = performance.now();
@@ -4127,6 +4209,9 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
 // check (ADR-282), so the same attributes are asserted here on EFFECTIVE text (comments removed), with a lexer of its own: a
 // defect shared by both lexers would have to be written twice, in two languages, in one reviewed diff.
 // Fail closed: a block that cannot be found, is found twice, or reads as zero attributes is RED, never "zero checks, green".
+// SUNSET: fold G2e into Guard 1 when Guard 1 becomes a required check (#9927). Until then G2e must not become a superset of it:
+// it holds what one diff must not weaken (delete_protection, prevent_destroy, no ignore_changes, no depth-0 count/for_each/provider/
+// provisioner, the attachment unpinned), over exactly the six addresses G2 and census G4h name (tied below).
 
 /**
  * HCL with comments removed: whole-line and trailing `#` and `//`, and `/* ... *\/` (newlines kept). Strings are copied whole (a
@@ -4225,7 +4310,7 @@ function g2eSplit(body: string): { top: string; nested: Array<{ name: string; bo
     }
     if (c === "{") {
       if (depth === 0) {
-        nm = /([A-Za-z_][\w-]*)[ \t]*$/.exec(top)?.[1] ?? ""; // `labels = {` ends in `=`, so a map literal has no block name
+        nm = /([A-Za-z_][\w-]*)[ \t]*$/.exec(body.slice(Math.max(0, i - 128), i))?.[1] ?? ""; // `labels = {` ends in `=`, so a map literal has no block name; a 128-char tail of the FLAT body (not of the growing `top` rope) keeps the scan linear
         from = i + 1;
       }
       depth++;
@@ -4242,8 +4327,9 @@ function g2eSplit(body: string): { top: string; nested: Array<{ name: string; bo
 
 /** Values of every depth-0 `key = value` line in `top`. */
 const g2eAttr = (top: string, key: string): string[] =>
-  [...top.matchAll(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(.*?)[ \\t]*$`, "gm"))].map((m) => m[1]);
+  [...top.matchAll(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(.*)$`, "gm"))].map((m) => m[1].trim()); // greedy then trim: a lazy `(.*?)[ \t]*$` is quadratic on a long whitespace run
 
+const G2E_META = ["count", "for_each", "provider"] as const;
 interface G2ePin {
   file: "luks" | "host";
   type: string;
@@ -4284,6 +4370,11 @@ function g2eVerdict(src: { luks: string; host: string }, pins: readonly G2ePin[]
       continue;
     }
     checks++;
+    // Depth-0 meta-arguments rewrite WHAT the block is (count = 0 removes it from state without a destroy plan, for_each/provider
+    // move it to another instance or provider, a provisioner runs code on it). A nested `count` word (a labels map) is not depth 0.
+    const meta = [...G2E_META.filter((k) => g2eAttr(split.top, k).length > 0), ...(/^[ \t]*provisioner\b/m.test(split.top) ? ["provisioner"] : [])];
+    if (meta.length > 0) defects.push(`${addr}: depth-0 meta-argument ${meta.join(", ")} (the sole-copy block must be one plain instance)`);
+    else checks++;
     if (pin.deleteProtection) {
       const dp = g2eAttr(split.top, "delete_protection");
       if (dp.length !== 1 || dp[0] !== "true") defects.push(`${addr}: delete_protection is not exactly one code line \`= true\` (found ${JSON.stringify(dp)})`);
@@ -4294,6 +4385,9 @@ function g2eVerdict(src: { luks: string; host: string }, pins: readonly G2ePin[]
       const inner = lifecycles.length === 1 ? g2eSplit(lifecycles[0].body) : null;
       const pd = inner ? g2eAttr(inner.top, "prevent_destroy") : [];
       if (pd.length !== 1 || pd[0] !== "true") defects.push(`${addr}: no lifecycle block with exactly one \`prevent_destroy = true\` code line (lifecycle blocks: ${lifecycles.length}, prevent_destroy: ${JSON.stringify(pd)})`);
+      else checks++;
+      // ignore_changes stops Terraform delivering or re-asserting an attribute (delete_protection) and hides an out-of-band lift from the plan.
+      if (/\bignore_changes\b/.test(lifecycles.map((b) => b.body.replace(/"[^"\n]*"/g, '""')).join("\n"))) defects.push(`${addr}: lifecycle carries ignore_changes (the pinned attributes must stay managed)`);
       else checks++;
     } else if (lifecycles.length > 0 || /\bprevent_destroy\b/.test(r.body)) {
       defects.push(`${addr}: carries a lifecycle block / prevent_destroy (a sanctioned host replace would become a plan error)`);
@@ -4341,8 +4435,14 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
   const live = { luks: read("inngest-redis-luks.tf"), host: read("inngest-host.tf") };
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
   const alertsTf = read("betterstack-logs-alerts.tf");
-  const LIVE_CHECKS = 19; // volume 4 (found, attributes read, delete_protection, lifecycle) + four protected blocks x 3 + attachment 3 (found, attributes read, no lifecycle)
+  // volume 6 (found, attributes read, meta-arguments, delete_protection, prevent_destroy, no ignore_changes) + four protected blocks x 5
+  // + attachment 4 (found, attributes read, meta-arguments, no lifecycle)
+  const LIVE_CHECKS = 30;
 
+  /** Insert `line` as a depth-0 attribute right after the opening line of a block. */
+  const addTop = (b: string, line: string): string => b.replace("{\n", `{\n  ${line}\n`);
+  /** Insert `line` inside the block's lifecycle, right after its opening line. */
+  const addToLifecycle = (b: string, line: string): string => b.replace(/^([ \t]*)lifecycle \{\n/m, `$&$1  ${line}\n`);
   const rmPD = (b: string): string => b.replace(/^[ \t]*prevent_destroy[ \t]*=[ \t]*true[ \t]*\n/m, "");
   const withLuks = (t: string) => ({ ...live, luks: t });
   const withHost = (t: string) => ({ ...live, host: t });
@@ -4355,6 +4455,13 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
 
   test("G2e: live tree - all six blocks are found, read as non-empty, and carry exactly the pinned attributes", () => {
     expect(G2E_PINS.length).toBe(6);
+    // Tie: the pinned set IS the G2 sole-copy address set and the inngest half of census G4H_EXPECTED, so a seventh address added to
+    // either side without a pin here is RED (it would otherwise get no attribute pin in the required check).
+    expect(G2E_PINS.map((p) => `${p.type}.${p.name}`).sort()).toEqual([...SOLE_COPY_ADDRS].sort());
+    const census = readFileSync(resolve(REPO_ROOT, "tests/scripts/test-infra-privileged-tier-census.sh"), "utf8");
+    const g4h = [...(/G4H_EXPECTED = frozenset\(\{([^}]*)\}\)/.exec(census)?.[1] ?? "").matchAll(/"([a-z_]+\.[a-z_]+)"/g)].map((m) => m[1]);
+    expect(g4h.length, "G4H_EXPECTED is not found, not parsed or not the eight addresses (six inngest + two workspaces_luks) in the census suite").toBe(8); // six inngest + the two workspaces_luks entries
+    expect(g4h.filter((a) => !a.endsWith(".workspaces_luks")).sort()).toEqual([...SOLE_COPY_ADDRS].sort());
     const v = g2eVerdict(live);
     expect(v.defects).toEqual([]);
     expect(v.checks).toBe(LIVE_CHECKS); // a verdict that evaluated nothing is not GREEN
@@ -4397,6 +4504,30 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
       ["`# see <<EOF` before the lifecycle, prevent_destroy removed", sub(...VOL, (b) => rmPD(b.replace(/\n[ \t]*lifecycle \{/, "\n  # see <<EOF\n  lifecycle {"))), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
       ["`// see <<-EOT` trailing, the lifecycle commented out", sub(...KEY, (b) => b.replace(/\n([ \t]*)lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, "\n  # x // see <<-EOT\n/*\n$1lifecycle {\n    prevent_destroy = true\n  }\n*/")), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
       ["trailing `# see <<EOF` on an attribute, then prevent_destroy removed", sub(...PW, (b) => rmPD(b.replace(/^(  length .*)$/m, "$1 # see <<EOF"))), /random_password\.inngest_redis_luks: no lifecycle block/],
+      // ignore_changes beside prevent_destroy: Terraform stops delivering / re-asserting the attribute (and hides an out-of-band lift)
+      ["ignore_changes = [delete_protection] in the volume lifecycle", sub(...VOL, (b) => addToLifecycle(b, "ignore_changes = [delete_protection]")), /hcloud_volume\.inngest_redis_luks: lifecycle carries ignore_changes/],
+      ["ignore_changes = all in the passphrase lifecycle", sub(...PW, (b) => addToLifecycle(b, "ignore_changes = all")), /random_password\.inngest_redis_luks: lifecycle carries ignore_changes/],
+      ["ignore_changes in the secret lifecycle", sub(...KEY, (b) => addToLifecycle(b, "ignore_changes = [value]")), /doppler_secret\.inngest_redis_luks_key: lifecycle carries ignore_changes/],
+      ["ignore_changes in the project lifecycle", sub(...PROJ, (b) => addToLifecycle(b, "ignore_changes = [description]"), "host"), /doppler_project\.inngest: lifecycle carries ignore_changes/],
+      ["ignore_changes in the environment lifecycle", sub(...ENV, (b) => addToLifecycle(b, "ignore_changes = [name]"), "host"), /doppler_environment\.inngest_prd: lifecycle carries ignore_changes/],
+      // depth-0 meta-arguments, one row per argument and per block family (volume, passphrase pair, the host pair, the attachment)
+      ["count = 0 on the volume", sub(...VOL, (b) => addTop(b, "count = 0")), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument count/],
+      ["count = 0 on the passphrase", sub(...PW, (b) => addTop(b, "count = 0")), /random_password\.inngest_redis_luks: depth-0 meta-argument count/],
+      ["count = 0 on the secret", sub(...KEY, (b) => addTop(b, "count = var.on ? 1 : 0")), /doppler_secret\.inngest_redis_luks_key: depth-0 meta-argument count/],
+      ["count = 0 on the project", sub(...PROJ, (b) => addTop(b, "count = 0"), "host"), /doppler_project\.inngest: depth-0 meta-argument count/],
+      ["count = 0 on the environment", sub(...ENV, (b) => addTop(b, "count = 0"), "host"), /doppler_environment\.inngest_prd: depth-0 meta-argument count/],
+      ["count = 0 on the attachment", sub(...ATT, (b) => addTop(b, "count = 0")), /hcloud_volume_attachment\.inngest_redis_luks: depth-0 meta-argument count/],
+      ["for_each on the volume", sub(...VOL, (b) => addTop(b, 'for_each = toset(["a"])')), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument for_each/],
+      ["for_each on the passphrase", sub(...PW, (b) => addTop(b, 'for_each = toset(["a"])')), /random_password\.inngest_redis_luks: depth-0 meta-argument for_each/],
+      ["provider alias on the volume", sub(...VOL, (b) => addTop(b, "provider = hcloud.other")), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument provider/],
+      ["provider alias on the secret", sub(...KEY, (b) => addTop(b, "provider = doppler.other")), /doppler_secret\.inngest_redis_luks_key: depth-0 meta-argument provider/],
+      ["provisioner on the volume", sub(...VOL, (b) => addTop(b, 'provisioner "local-exec" {\n    command = "true"\n  }')), /hcloud_volume\.inngest_redis_luks: depth-0 meta-argument provisioner/],
+      ["provisioner on the passphrase", sub(...PW, (b) => addTop(b, 'provisioner "local-exec" {\n    command = "true"\n  }')), /random_password\.inngest_redis_luks: depth-0 meta-argument provisioner/],
+      // lexer: a brace the lexer must NOT count. The passphrase block's `# {` would run it into the secret block in a lexer that
+      // counts trailing-comment braces, and the secret's `prevent_destroy = true` would then stand in for the passphrase's own.
+      ["brace in a trailing comment runs the passphrase block into the secret block", withLuks(g2eMutate(g2eMutate(live.luks, ...PW, (b) => b.replace(/^(  length .*)$/m, "$1 # {").replace(/prevent_destroy = true/, "create_before_destroy = false")), ...KEY, (b) => b.replace(/\n\}$/, "\n} # }"))), /random_password\.inngest_redis_luks: no lifecycle block/],
+      // lexer: a heredoc body is data. A fake `lifecycle { prevent_destroy = true }` in `format = <<-EOT` must not satisfy the pin.
+      ["a fake lifecycle inside a heredoc stands in for the real one", sub(...VOL, (b) => b.replace(/\n[ \t]*lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, '\n  format = <<-EOT\n  lifecycle {\n    prevent_destroy = true\n  }\n  EOT')), /hcloud_volume\.inngest_redis_luks: no lifecycle block with exactly one `prevent_destroy = true` code line \(lifecycle blocks: 0/],
     ];
     expect(g2eVerdict(live).defects).toEqual([]); // control: the live tree is GREEN, so a RED below is the mutation's doing
     for (const [name, files, want] of rows) {
@@ -4416,6 +4547,14 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
       ["trailing comments on the two pinned attributes", sub(...VOL, (b) => b.replace(/delete_protection = true/, "delete_protection = true # x").replace(/prevent_destroy = true/, "prevent_destroy = true // y"))],
       ["a real heredoc holding a lone quote, braces and a comment opener, ahead of the blocks", withLuks("locals {\n  x = <<-EOT\n    it's a \" quote } { /* #\n  EOT\n}\n" + live.luks)],
       ["a /* */ comment spanning lines that spells the protected blocks", withLuks("/*\nresource \"hcloud_volume\" \"inngest_redis_luks\" {\n  delete_protection = false\n}\n*/\n" + live.luks)],
+      // meta-argument words that are NOT depth-0 attributes: a nested map, a comment, a heredoc body, a string (must not trip the new check)
+      ["count/for_each/provider words inside the labels map", sub(...VOL, (b) => b.replace(/app = /, "count = 1\n    for_each = 2\n    provider = x\n    provisioner = y\n    app = "))],
+      ["count/provider spelled in comments", sub(...VOL, (b) => b.replace(/^(  size .*)$/m, "  # count = 0\n  // provider = x\n  /* for_each = {} */\n$1 # provisioner \"x\" {"))],
+      ["count/provider/ignore_changes inside a heredoc body", sub(...VOL, (b) => addTop(b, "x_note = <<-EOT\n  count = 0\n  provider = x\n  lifecycle {\n    ignore_changes = all\n  }\n  EOT"))],
+      ["a brace in a trailing comment", sub(...PW, (b) => b.replace(/^(  length .*)$/m, "$1 # {{").replace(/special = false/, "special = false # }"))],
+      ["a lone `}` inside a string (each lexer must skip strings on its own)", sub(...PW, (b) => addTop(b, 'keepers = { a = "}" }'))],
+      ["a lone `{` inside a string", sub(...PW, (b) => addTop(b, 'keepers = { a = "{" }'))],
+      ["ignore_changes spelled only in a comment of the lifecycle", sub(...VOL, (b) => addToLifecycle(b, "# ignore_changes = [delete_protection]"))],
     ];
     for (const [name, files] of rows) {
       const v = g2eVerdict(files);
@@ -4427,6 +4566,27 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
     expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n')).toContain("b = 2");
     expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n')).not.toContain("y # z");
     expect(g2eStrip('x = <<-SQL\n  y # z\nSQL\nb = 2\n', "keep")).toContain("y # z");
+  });
+
+  test("G2e: the lexer and attribute scanners are linear - long word, whitespace and sibling-block runs finish in under 2s", () => {
+    const hostile: Array<[string, () => unknown, unknown]> = [
+      ["g2eSplit: a 100 KB word run then `={`", () => g2eSplit("a".repeat(100_000) + "={\n  x = 1\n}\n")?.nested.length, 1],
+      ["g2eSplit: 20000 sibling blocks", () => g2eSplit("blk {\n  x = 1\n}\n".repeat(20_000))?.nested.length, 20_000],
+      ["g2eSplit: 100 KB of `a-` words then a block", () => g2eSplit("a-".repeat(50_000) + " {\n}\n")?.nested.length, 1],
+      ["g2eAttr: a 100 KB whitespace run inside a value", () => g2eAttr("key = x" + " ".repeat(100_000) + "y\n", "key"), ["x" + " ".repeat(100_000) + "y"]],
+      ["g2eAttr: a 100 KB whitespace run after a value", () => g2eAttr("key = x" + " ".repeat(100_000) + "\n", "key"), ["x"]],
+      ["g2eAttr: 20000 near-miss lines", () => g2eAttr("  keyx = 1\n".repeat(20_000), "key"), []],
+      ["g2eStrip: 30000 unterminated heredoc openers", () => g2eStrip("<<-A\n".repeat(30_000)).length > 0, true],
+      ["g2eStrip: 100000 quotes", () => g2eStrip('"'.repeat(100_000)).length, 100_000],
+      ["g2eResource: a 100 KB run of braces", () => "defect" in g2eResource('resource "a" "b" {' + "{".repeat(100_000), "a", "b"), true],
+    ];
+    for (const [name, run, want] of hostile) {
+      const t0 = performance.now();
+      const got = run();
+      const ms = performance.now() - t0;
+      expect(ms, `${name}: ${ms.toFixed(0)} ms`).toBeLessThan(2000);
+      expect(got, `${name}: wrong result`).toEqual(want);
+    }
   });
 
   test("G2e: the per-merge edge to the volume - alert in the apply job's -target list AND the alias local interpolates the volume id", () => {
