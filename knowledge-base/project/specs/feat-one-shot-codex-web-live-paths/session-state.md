@@ -794,3 +794,72 @@
   and promotion remain held. The source-bound rehearsal authorization remains
   consumed; no recovery retry, credential inspection, provider invocation,
   shared-production write, deployment or flag/cohort change occurred.
+
+## Continuation update — 2026-10-10 production candidate and egress sync
+
+- Exact source `a2ff13ca8d567b30db1afd261c0ad31d51442a9a` passed all 25 required
+  checks: CI `38084153918` and test aggregate, tenant `38084153892` and required
+  aggregate, RLS `38084153889`, final description guards `38084195005`.
+  Watch exited zero: 85 passes, seven skips, no failures/effective cancellations/
+  pending. RLS applied 186 migrations with none skipped and passed 11 files /
+  153 tests; production catalog parity was skipped.
+- After presenting the exact source/digest-bound command, the user's `continue`
+  approved one production-Dockerfile image build with public downloads/install
+  scripts, a dedicated privileged builder and filesystem-only admission probes.
+  It passed in 10m40s. [Executed result](production-image-build-a2ff13ca-2026-10-10.md)
+  records the immutable runner/image/artifact/tool provenance, 1,345-file plugin
+  admission, UID 1001, warnings and complete owned cleanup. The image remains
+  labeled `a2ff13ca8d`; authorization is consumed and cannot be retried/repinned.
+- Main advanced through `3ef5aa6e12c3f3c35db84d828441907cb6358646`, changing
+  GitHub webhook draft-CI handling and 23 filtered plugin files, then through
+  `149a5d3b4e10c1b62232004035185fd8ce66a87c`, adding default-off open-web-egress
+  runtime/gateway/Dockerfile/compiler contracts and migration 158. The built
+  image cannot establish parity with either synced source. Source inspection
+  found `CI_DRAFT_LIGHT` absent; the next draft head still owes a full battery.
+  No repository variable or account setting was changed.
+- The egress sync conflicted only in the canonical/mirrored privacy bullet and
+  legal hash map. Both Codex and web-access disclosures were preserved and
+  canonical hashes regenerated; legal hash guard and final feature whitespace
+  passed. Main's dispatcher, environment, sandbox and egress implementations
+  were preserved. RLS cases retain both web-egress attacks and Codex generation/
+  history-ack seeding within retried transactions and transient propagation.
+- A pre-existing-main forwarder/default-path packaging mismatch is tracked as
+  [Ref #9952](https://github.com/jikig-ai/soleur/issues/9952), verified OPEN.
+  Source predicts zero-egress degradation for an entitled session; no runtime
+  failure was observed. No payload fix, image rebuild or startup was performed.
+  Existing Ref #9791 remains unresolved; green retries do not establish the
+  watchdog root cause. Included #9793 addresses the closed #9779 tracker.
+- The persistent selected30 local-suite authorization was recovered. Those
+  fixture files were unchanged on main sync, but shared imports and tsconfig
+  changed, so they were rerun. At `c1856ee92e8ff4ffd91db51ea91d506d7e693edc`,
+  all 255 unit tests passed, but one component test dispatched before its
+  selector's initial load completed; a missing observability hash mock also
+  made the real logger print a formatter warning. Both fixture defects were
+  fixed at `ce2be174179358eb44cacfc0d5e24c0eaa9546ad`, retaining the failed-save
+  rollback assertions and asserting synthetic user-hash use.
+- At that corrected source, the complete same 30-file set passed: 25 unit files /
+  255 tests and five component files / 66 tests, exact file sets matched, no
+  failures, skips, TODOs, timeouts or unhandled-runtime warnings. Focused checks
+  of both changed fixtures passed first. Local Node v22.22.1 was recovered from
+  the already-built image via one created-but-never-started container, removed
+  before testing; no download/install/build ran. Node binary SHA-256:
+  `243fd8938011479f41b3de101842150fa990f33fbbb3f7aabd330857f2d79e1d`.
+  Sanitized environment, env-file loading disabled, fake adapters/processes,
+  one fork worker, no file parallelism and 2 GiB heap remain. Broader local,
+  database integration and authenticated browser suites were not run.
+- Corrected local record:
+  `.soleur/codex9051-local-fixtures-20261010T215600Z/verdict.json`, SHA-256
+  `0033aeafadb415e3efdd48e744c4bae5edc1d1f4c5a0c66ecb0d166a131acaac`.
+  The initial failing record remains separately preserved. Staged path-aware
+  redacted secret scan passed; main's existing wireframe waiver is unchanged.
+  Existing hooks remain disabled; no hook verdict is claimed. The following
+  evidence change is documentation-only; fresh pushed-head CI remains required.
+- Keep PR #9051 draft/disarmed and Codex default-off/customer content blocked.
+  Current-source/full-production recovery, authenticated screenshots, eligible
+  routine consumer, permitted Web matrices/mode-specific CLO, full review and
+  promotion remain held. API-key mode PENDING, managed hosted-auth BLOCKED.
+  Account-read persists; sharing/retention/inheritance/regions remain unresolved.
+  Cloudflare retries stopped, admin alternatives unexecuted and support unsent.
+  Credential/provider/browser-auth/shared-write/deployment/flag/cohort/image-
+  publication restrictions persist. Both earlier one-use build/rehearsal
+  authorizations and this production build authorization are consumed.
