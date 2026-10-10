@@ -100,7 +100,7 @@ Known, deliberate blind spot (already documented as F15): un-doubling a `$${x}` 
 
 Filters were read from the files on `origin/main` (via `yaml.safe_load` of each `on:` block plus a read of every `-target` list that could reach the registry or a web host). "Fires" means the push/pull_request path filter matches at least one changed path.
 
-**Diff A — what ships (this PR):** `.github/scripts/test/fixtures-validate-infra-templates.sh` (edit), `plugins/soleur/test/fixture-relative-assert.baseline.txt` (regenerated in-commit), `knowledge-base/project/plans/…` and `knowledge-base/project/specs/…` (plan artifacts).
+**Diff A — what ships (this PR):** `.github/scripts/test/fixtures-validate-infra-templates.sh` (edit), `plugins/soleur/test/fixture-relative-assert.baseline.txt` (NOT edited, see Addendum), `knowledge-base/project/plans/…` and `knowledge-base/project/specs/…` (plan artifacts).
 
 | Workflow | Filter (relevant) | Diff A fires? |
 |---|---|---|
@@ -201,7 +201,7 @@ Verification target: the arms run in CI's `deploy-script-tests-fixed` job (terra
 
 ### Phase 3 — Ratchet and registration checks (targeted, local)
 
-1. `bash plugins/soleur/test/fixture-relative-assert.test.sh`. Expect to REGENERATE the baseline: `plugins/soleur/test/fixture-relative-assert.baseline.txt` row 268 holds 58 sites for this very file (all `redirect, root=never-bound` on `newdir`-derived `$D/...`), and the scan is row-by-row equality, so any new `newdir`-rooted write changes the row. Minimise new redirects (use `cp`/`python3`), then run `bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline` in the SAME commit and state the row delta in the commit message.
+1. `bash plugins/soleur/test/fixture-relative-assert.test.sh`. (Superseded at implementation, see Addendum: regeneration was avoided.) Planned expectation was to REGENERATE the baseline: `plugins/soleur/test/fixture-relative-assert.baseline.txt` row 268 holds 58 sites for this very file (all `redirect, root=never-bound` on `newdir`-derived `$D/...`), and the scan is row-by-row equality, so any new `newdir`-rooted write changes the row. Minimise new redirects (use `cp`/`python3`), then run `bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline` in the SAME commit and state the row delta in the commit message.
 2. `bash .github/scripts/test/run-all.sh` is NOT used (the fixtures file stays out of its glob by name; see its contract note). `shellcheck` the edited file.
 3. `python3 scripts/lint-guard-contract.py` on this plan (Guard Contract below).
 4. Do not run the full battery locally; CI carries it (machine contention).
@@ -344,3 +344,8 @@ No cross-domain implications detected — infrastructure/tooling change confined
 - **Mid-run baseline drift.** `origin/main` moved during planning (three infra commits, none touching the registry template); re-run the baseline arm after the Phase 7 sync.
 - **User-Brand Impact must stay filled.** A plan whose `## User-Brand Impact` section is empty, boilerplate, or omits the threshold fails `deepen-plan` Phase 4.6; it is filled above.
 - **Held half, not dropped.** #7258's unblock path edits a web-1 SSH apply trigger; it must not be folded into any PR that is merged during the registry observation window.
+
+## Addendum — 2026-10-10 (implementation and review, #6509)
+
+- **Baseline not regenerated.** The copy goes through python and `reg_root` binds the root under `$TMP`, so the P1b row for the fixtures file stays at 58 sites; `fixture-relative-assert` is green with no baseline edit. Earlier sentences in this plan that expect a regeneration (Diff A, the review record, Phase 3 step 1) are superseded by this. Measured record: `evidence.md` in the spec directory.
+- **Review round (3 seats: test-design, security, simplicity; reduced from the class baseline, disclosed in the PR).** Applied inline: an anti-vacuity floor (`MIN_ASSERTIONS=68`, `printf` + `exit 1`, accepted by `guard-vacuity-floor.test.sh`) so deleting F23 arms cannot read green; the extra-key arm now refuses to write unless the key lands inside the map; `F23a-render-strip-applied` pins the call site's `replace(...)` strip; stale comments, header, last-element expansion and the `read -d ''` return fixed. Not applied (technical taste): collapsing the 7-mode python helper into sed one-liners (one helper keeps landing semantics uniform and keeps the ratchet row unchanged); asserting the mutated line number in F23c (render fault attribution is covered by F23b/F23d naming the key). Disclosed, not filed: `map_keys_at` in the validator harvests keys after `,`/`{` inside map comments (a documented "bias permissive" choice in the validator); a commented `key =` can mask a dropped key. Today's map carries no such comment.

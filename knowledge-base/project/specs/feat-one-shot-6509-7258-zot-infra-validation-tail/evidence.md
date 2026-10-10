@@ -36,3 +36,8 @@ collapses is caught by `F23-populations-derived`, not mutation-tested here).
 but routing the copy through python and binding the root under `$TMP` kept the row identical, which is the ratchet's
 preferred outcome. `fixture-dir-operand-assert` green; `lint-shell-capture-exit` 0 new findings; shellcheck at
 warning level clean (one pre-existing SC2016 info on the F19c printf).
+
+## Review round (post-F23, 3 seats)
+
+Floor proof: deleting the whole F23 block on a sandbox copy reports `[FATAL] anti-vacuity floor: only 47 assertions ran, expected >= 68` (exit 1); the control run is 64 pass / 4 shim reds = 68. `guard-vacuity-floor.test.sh` 23/23, `fixture-relative-assert` 62/62 (row unchanged), shellcheck warning level clean. Reviewer-run sweeps: 18/18 dropped keys (the 16 template vars plus `zot_asset_sha256`, `doppler_sha256`) and 28/28 un-doubled tokens, 0 survivors.
+

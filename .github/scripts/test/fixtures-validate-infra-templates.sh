@@ -2,8 +2,8 @@
 # Fixture tests for validate-infra-templates.sh (#6454).
 #
 # Drives the REAL executor against SYNTHETIC templates built in a mktemp -d
-# (cq-test-fixtures-synthesized-only) — never the repo's real infra corpus, so
-# the suite stays deterministic as apps/*/infra/ grows.
+# (cq-test-fixtures-synthesized-only) — never the repo's real infra corpus (except
+# F23, below), so the suite stays deterministic as apps/*/infra/ grows.
 #
 # Each fixture asserts a DISTINCT exit code. A fixture asserting merely
 # "non-zero" passes when the script crashes for an unrelated reason, which is
@@ -772,17 +772,20 @@ assert_out "F22-emits-summary-line" "rendered+validated 0/0"
 # F23 — the REAL registry template stays inside what the gate renders (#6509).
 # Real corpus copy, mutated copy. Populations are derived from the template:
 # distinct `${var}` references and distinct `$${TOKEN` escapes. The suite samples
-# the FIRST and LAST member of each; the one-time full sweeps are Phase 2
-# evidence in the PR that added this arm, not CI cost.
+# the FIRST and LAST member of each; the full 16-var / 28-token sweeps were run
+# once at authoring (see the spec's evidence.md), not on every CI pass.
 # ---------------------------------------------------------------------------
 REPO_ROOT=$(cd "$DIR/../../.." && pwd)
 REG_SRC="$REPO_ROOT/apps/web-platform/infra"
 
-read -r -d '' REG_MUT_PY <<'PY'
+# `read -d ''` returns 1 at EOF by design; harmless here (no `set -e`), `|| true` keeps it so.
+read -r -d '' REG_MUT_PY <<'PY' || true
 import re, sys
 mode, path = sys.argv[1], sys.argv[2]
 arg = sys.argv[3] if len(sys.argv) > 3 else ""
 s = open(path).read()
+# Assumes the call and the map's opening `{` share one line (as terraform fmt leaves them);
+# a reformat makes F23b/F23e report "mutation was a no-op" rather than a verdict.
 CALL = 'templatefile("${path.module}/cloud-init-registry.yml"'
 if mode == "vars":
     seen = []
@@ -812,12 +815,17 @@ elif mode == "addvar":
 elif mode == "extrakey":
     i = s.index(CALL)
     j = s.index("\n", i) + 1
-    open(path, "w").write(s[:j] + '    zz_unused_key = "x"\n' + s[j:])
+    # Land the key INSIDE the map: the call line must open the map, else leave the copy
+    # untouched so the no-op guard reports it (an out-of-map key would pass F23e vacuously).
+    if s[i:j].rstrip().endswith("{"):
+        open(path, "w").write(s[:j] + '    zz_unused_key = "x"\n' + s[j:])
 PY
 
 reg_mut() { python3 -I -c "$REG_MUT_PY" "$@"; }
 
-# reg_root <name>: isolated root holding exactly the real registry pair.
+# reg_root <name>: isolated root holding exactly the real registry pair. The copy goes
+# through python, not cp, and the root is bound under $TMP: both keep the P1b
+# relative-operand ratchet row for this file unchanged (see fixture-relative-assert).
 reg_root() {
   local d="$TMP/$1"
   mkdir -p "$d"
@@ -826,8 +834,8 @@ reg_root() {
   echo "$d"
 }
 
-# reg_check <arm> <root> <srcfile> <mutated-file>: run the gate; a mutation that
-# left the copy byte-identical to its source is a named failure, never a pass.
+# reg_noop_guard <arm> <file> <src>: a mutation that left the copy byte-identical to
+# its source is a named failure, never a pass.
 reg_noop_guard() { # arm file src -> 0 if the mutation landed
   if cmp -s "$2" "$3"; then
     RC=0
@@ -844,6 +852,8 @@ run_check "$D"
 assert_rc "F23a-registry-baseline-renders" 0
 assert_out "F23a-registry-named-ok" "ok  cloud-init-registry.yml"
 assert_out "F23a-registry-counted" "rendered+validated 1/1 file"
+# The real call site wraps templatefile() in replace(...): pin that the strip is applied.
+assert_out "F23a-render-strip-applied" "applied the call site's render strip"
 
 mapfile -t REG_VARS < <(reg_mut vars "$REG_SRC/cloud-init-registry.yml")
 mapfile -t REG_TOKS < <(reg_mut tokens "$REG_SRC/cloud-init-registry.yml")
@@ -856,7 +866,7 @@ else
 fi
 
 # F23b — a dropped map key reds. FIRST and LAST derived var.
-for v in "${REG_VARS[0]:-}" "${REG_VARS[${#REG_VARS[@]}-1]:-}"; do
+for v in "${REG_VARS[0]:-}" "${REG_VARS[@]: -1}"; do
   [[ -n "$v" ]] || continue
   D=$(reg_root "f23b-$v")
   reg_mut dropkey "$D/zot-registry.tf" "$v"
@@ -868,7 +878,7 @@ for v in "${REG_VARS[0]:-}" "${REG_VARS[${#REG_VARS[@]}-1]:-}"; do
 done
 
 # F23c — an un-doubled escape reds. FIRST and LAST derived token, plus %%{.
-for t in "${REG_TOKS[0]:-}" "${REG_TOKS[${#REG_TOKS[@]}-1]:-}" "%%{http_code}"; do
+for t in "${REG_TOKS[0]:-}" "${REG_TOKS[@]: -1}" "%%{http_code}"; do
   [[ -n "$t" ]] || continue
   D=$(reg_root "f23c-${t//[^A-Za-z0-9_]/_}")
   if [[ "$t" == "%%{http_code}" ]]; then
@@ -900,6 +910,17 @@ reg_noop_guard "F23e-extra-key" "$D/zot-registry.tf" "$REG_SRC/zot-registry.tf" 
   run_check "$D"
   assert_rc "F23e-unused-extra-key-passes" 0
 }
+
+# Anti-vacuity floor: deleting arms (or the whole F23 block) must not read as green.
+# Reported by printf + exit, never through bad(). Ratchet MIN_ASSERTIONS in the same
+# commit as any added or removed assertion; slack in a floor is attack budget.
+ASSERTED=$((PASS + FAIL))
+MIN_ASSERTIONS=68
+if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %d assertions ran, expected >= %d - the suite was stranded, not clean.\n' \
+    "$ASSERTED" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 echo ""
 echo "Results: $PASS pass, $FAIL fail"
