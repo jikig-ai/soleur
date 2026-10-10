@@ -1692,7 +1692,8 @@ _canary_diag_emit() {
 # absent (127) | timeout (124/137) | error. The ladder is journal, then dmesg only when the journal is not ok.
 # deploy runs unprivileged (no sudo grant covers the kernel log; kernel.dmesg_restrict=1 is the host
 # baseline), so `noaccess`/`empty` is the EXPECTED outcome and the row says so rather than hiding it.
-# Counts: `hits` = real lines carrying apparmor="DENIED" or audit type 1400/1326; `mproc` = the hits that are a
+# Counts: `hits` = real lines carrying apparmor="DENIED" or the seccomp audit type 1326 (NOT type 1400 alone: that
+# type also carries complain-mode ALLOWED/AUDIT records, which are not refusals); `mproc` = the hits that are a
 # procfs MOUNT denial (operation="mount" AND fstype="proc"). A bare profile name or comm="bwrap" is NOT a hit
 # test: the production container shares the soleur-bwrap profile and generates unrelated denials. `fields`
 # come from a CLOSED key allowlist with no name/comm/pid key, so no tenant file name can reach the row by
@@ -1713,7 +1714,7 @@ _canary_kdeny_read() {
       /^[[:space:]]+(Users in groups .* can see all messages\.|Pass -q to turn off this notice\.)$/ { next }
       /^-- / || /^[[:space:]]*$/ { next }
       { total++
-        if ($0 ~ /apparmor="DENIED"|type=1400|type=1326/) {
+        if ($0 ~ /apparmor="DENIED"|type=1326/) {
           hits++
           if ($0 ~ /operation="mount"/ && $0 ~ /fstype="proc"/) { mproc++; if (mline == "") mline = $0 }
           else if (hline == "") hline = $0

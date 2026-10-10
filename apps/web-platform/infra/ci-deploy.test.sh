@@ -107,7 +107,8 @@ MOCK
 #   MOCK_KLOG_<J|D>_OUT  stdout (unset => a few benign synthesized kernel lines; set-but-empty => the SILENT-EMPTY
 #                        shape measured on systemd 261: rc 0, no hint, no lines)
 #   MOCK_KLOG_<J|D>_RC   exit code (127 models "binary absent"); _SLEEP seconds via /bin/sleep (the PATH sleep is a
-#                        no-op); _BIG=1 prepends 40000 benign lines (~4 MB) BEFORE the OUT text; _REP=<n> repeats OUT n times
+#                        no-op); _BIG=1 prepends 40000 benign lines (~4 MB) BEFORE the OUT text; _PAD=<n> sets the
+#                        benign line length (default ~100 bytes); _REP=<n> repeats OUT n times
 # The journalctl arm answers only an argv that carries -k AND -n 400 (exit 64 otherwise): a fake that answers
 # every request would let a rung that dropped its own bound still read as green.
 create_mock_kernlog() {
@@ -121,10 +122,15 @@ if [[ "$name" == journalctl ]]; then
 else
   p=D
 fi
-sleep_v="MOCK_KLOG_${p}_SLEEP"; out_v="MOCK_KLOG_${p}_OUT"; rc_v="MOCK_KLOG_${p}_RC"; big_v="MOCK_KLOG_${p}_BIG"; rep_v="MOCK_KLOG_${p}_REP"
+sleep_v="MOCK_KLOG_${p}_SLEEP"; out_v="MOCK_KLOG_${p}_OUT"; rc_v="MOCK_KLOG_${p}_RC"; big_v="MOCK_KLOG_${p}_BIG"; rep_v="MOCK_KLOG_${p}_REP"; pad_v="MOCK_KLOG_${p}_PAD"
 if [[ -n "${!sleep_v:-}" ]]; then /bin/sleep "${!sleep_v}"; fi
 if [[ "${!big_v:-}" == "1" ]]; then
-  yes 'kernel: benign synthesized line padding padding padding padding padding padding padding padding pad' | head -n 40000
+  if [[ -n "${!pad_v:-}" ]]; then
+    pad_line="kernel: $(head -c "${!pad_v}" /dev/zero | tr '\0' 'p')"
+  else
+    pad_line='kernel: benign synthesized line padding padding padding padding padding padding padding padding pad'
+  fi
+  yes "$pad_line" | head -n 40000
 fi
 if [[ -n "${!out_v+x}" ]]; then
   reps="${!rep_v:-1}"
@@ -4248,6 +4254,16 @@ d10c "readable, nothing denied" '^src=journal j=ok d=skip total=[1-9][0-9]* hits
 d10c "journal hint-only, dmesg answers" '^src=dmesg j=noaccess d=ok total=[1-9][0-9]* hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J"
 d10c "journal SILENT-EMPTY (rc 0, no hint, no lines: the systemd 261 shape), dmesg answers" '^src=dmesg j=empty d=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT=
 d10c "both rungs hint-only" '^src=none j=noaccess d=noaccess total=0 hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_RC=1
+d10c "journalctl's own '-- No entries --' banner is not a kernel line: the journal reads empty, not ok" '^src=dmesg j=empty d=ok total=[1-9][0-9]* hits=0 mproc=0$' 'MOCK_KLOG_J_OUT=-- No entries --'
+d10c "a mount denial for a NON-procfs filesystem is a hit but not a procfs-mount denial" \
+  "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' fstype='tmpfs' error=-13\$" \
+  'MOCK_KLOG_J_OUT=audit: type=1400 apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="tmpfs"'
+d10c "a seccomp audit record (type 1326) counts as a hit, with only its allowlisted syscall field" \
+  '^src=journal j=ok d=skip total=1 hits=1 mproc=0 syscall=165$' \
+  'MOCK_KLOG_J_OUT=audit: type=1326 audit(1760000002.1:458): auid=4294967295 uid=1001 pid=4244 comm="bwrap" exe="/usr/bin/bwrap" sig=0 arch=c000003e syscall=165 compat=0 ip=0x7f code=0x50000'
+d10c "a complain-mode ALLOWED record (type 1400) is not a denial: it must not count as a hit" \
+  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000003.1:459): apparmor="ALLOWED" operation="mount" profile="soleur-bwrap" fstype="proc"'
 d10c "journal silent-empty and dmesg refused" '^src=none j=empty d=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_RC=1
 d10c "both binaries absent (rc 127)" '^src=none j=absent d=absent total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=127 MOCK_KLOG_D_OUT= MOCK_KLOG_D_RC=127
 d10c "an unrelated profile denial is a hit but NOT a procfs-mount denial, and the tenant file name stays out" \
@@ -4265,6 +4281,11 @@ run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_D_BIG=1 "MOCK_KLO
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 diag_check "#9860 D10e3: a 4 MB dmesg stream is cut to its newest 400 lines: src=dmesg total=400 and the final denial still counts" \
   "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d=ok total=400 hits=1 mproc=1 '* ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
+
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_D_BIG=1 MOCK_KLOG_D_PAD=400 "MOCK_KLOG_D_OUT=$D10_DENY_MOUNT"
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")"); D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL")
+diag_check "#9860 D10e4: when the newest 400 dmesg lines exceed the 64 KiB cap the cut keeps the NEWEST (the final denial still counts) rather than the oldest" \
+  "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d=ok total='* && "$D10_VAL" == *' hits=1 mproc=1 '* && "${D10_TOTAL:-0}" -ge 100 && "${D10_TOTAL:-0}" -lt 400 ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
 
 D10F_DP='dp.st.''prd.Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5Jp'
 D10F_SK='sk_''live_Fx9aQ2mZ7vTbL4nKc8RdYw'
