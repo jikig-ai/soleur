@@ -17,3 +17,10 @@ None. A read-only registry-replace-preflight.sh run was left in its P3 drain-wai
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; agents learnings-researcher, repo-research-analyst, dhh/kieran/code-simplicity reviewers, cto.
+
+## Work Phase
+- Status: complete (implementation + local verification); review, QA, ship follow.
+- RED set recorded before the shipper edit (zot-log-shipper.test.sh): T9 x2, T19 floor, T21 S1, S2, S3 x2, S8 (8 failed / 178 passed); GREEN after: 186 passed, 0 failed.
+- Guard Contract mutation rows 1-5 (+ raw-line widening variant) each went RED; counters' new cases RED on the old probes (7440 C15b, 7341 case 28).
+- user_data: stored 20,944 B -> 21,012 B (+68 B); REGISTRY_GZIP_BUDGET 21,000 -> 21,600; headroom 11,756 B under the 32,768 B cap.
+- Local lane disclosure: scripts/pre-push-ratchet-lane.sh REDs only on alarm-issue-filing-guard and lint-workflow-step-env-refs, both ModuleNotFoundError yaml (no PyYAML in the lane env); both pass when run directly with PyYAML on PYTHONPATH. cloud-init is not installed locally, so validate-infra-templates.sh fails closed (rc=6); registry-userdata-budget.sh renders the template through terraform and passed. typecheck, vitest (incl. cloud-init-user-data-size.test.ts) and the broad battery are left to CI (stale node_modules, contended machine).
