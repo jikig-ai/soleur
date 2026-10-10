@@ -390,9 +390,32 @@ m7="$SANDBOX/m7.md"; cp "$REPO_ROOT/$REF_REL" "$m7"; edit "$m7" '```bash
    SHA=<the 40-hex'
 if extract "$m7" >/dev/null; then fail "M7 (extraction succeeded on a reference with no merge block)"; else pass "M7"; fi
 
+# ── S3 (#9728): the readiness gate consults the head-verdict resolver, and the reference says so ──────────
+# The gate may only move a FAILED `test` to PENDING/ABSENT through plugins/soleur/scripts/ci-head-verdict.sh. These rows pin
+# the call site (a refactor that drops it silently returns --wait to ending on the draft row's red) and the reference's
+# pointer line; each is paired with a mutant of the real file that must make the row fail.
+gate_calls_resolver() { # <admin-merge-ready.sh path>
+  grep -Fq 'ci-head-verdict.sh' "$1" && grep -Fq 'verdict "$PR"' "$1" && grep -Fq 'resolve_head_verdict' "$1" \
+    && grep -Eq '\[\[ "\$CHECK_SHA" == "\$SHA" \]\] && jq -e .*resolve_head_verdict' "$1"
+}
+ref_points_at_resolver() { grep -Fq 'ci-head-verdict.sh' "$1" && grep -Fq 'gh pr ready --undo' "$1"; }
+CASES_RUN=$((CASES_RUN + 1))
+if gate_calls_resolver "$REPO_ROOT/plugins/soleur/scripts/admin-merge-ready.sh"; then pass "S3-gate-calls-resolver"; else fail "S3-gate-calls-resolver"; fi
+CASES_RUN=$((CASES_RUN + 1))
+if [[ -r "$REPO_ROOT/plugins/soleur/scripts/ci-head-verdict.sh" ]] && bash -n "$REPO_ROOT/plugins/soleur/scripts/ci-head-verdict.sh"; then pass "S3-resolver-present"; else fail "S3-resolver-present"; fi
+CASES_RUN=$((CASES_RUN + 1))
+if ref_points_at_resolver "$REPO_ROOT/$REF_REL"; then pass "S3-reference-pointer"; else fail "S3-reference-pointer"; fi
+CASES_RUN=$((CASES_RUN + 1))
+s3m="$SANDBOX/s3-gate.sh"; sed 's/resolve_head_verdict && *$/true/; s/ \&\& resolve_head_verdict; then/; then/' "$REPO_ROOT/plugins/soleur/scripts/admin-merge-ready.sh" > "$s3m"
+if cmp -s "$s3m" "$REPO_ROOT/plugins/soleur/scripts/admin-merge-ready.sh"; then fail "S3-M1 (mutation did not land)"
+elif gate_calls_resolver "$s3m"; then fail "S3-M1 (the row still passes with the resolver call removed)"; else pass "S3-M1-resolver-call-removed-is-caught"; fi
+CASES_RUN=$((CASES_RUN + 1))
+s3r="$SANDBOX/s3-ref.md"; sed 's/ci-head-verdict\.sh/the-resolver/g' "$REPO_ROOT/$REF_REL" > "$s3r"
+if ref_points_at_resolver "$s3r"; then fail "S3-M2 (the row still passes with the pointer removed)"; else pass "S3-M2-pointer-removed-is-caught"; fi
+
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=39
+_min_cases=44
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

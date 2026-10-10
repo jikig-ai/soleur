@@ -270,7 +270,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
     if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
         ssh_resources[name] = body
 
-FLOOR_RESOURCES = 19  # +1 #9151: terraform_data.deploy_pipeline_fix_web2
+FLOOR_RESOURCES = 21  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -305,14 +305,18 @@ else:
        "CI genuinely gained another route, the forward, the firewall and the -target lists "
        "must change FIRST, and this check with them.")
 
-# The web-2 sibling class (#9151 / #7103-B4). Exactly one resource may dial web-2 today:
-# deploy_pipeline_fix_web2. A web-2 dialer MUST pin local.web_2_ssh_host_key (Guard 2's
-# per-host rule asserts the twin from the connection side; this side pins it from the
-# resource census, so deleting EITHER local reference reds here). It must NEVER carry the
-# credential material web-1 receives: the full-prd Doppler token, its .tmpl, or the push
-# plumbing. A copy-pasted infra_config_handler_bootstrap carries all three — the failure
-# that puts the prd credential on a host the issue explicitly scopes out of this change.
+# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly two
+# resources today: deploy_pipeline_fix_web2 and (#9534) egress_gateway_web2 — the latter
+# delivers the squid gateway to the RUNNING web-2 (replace-only delivery would leave an
+# entitled session on web-2 fail-closed until its next -replace). A web-2 dialer MUST pin
+# local.web_2_ssh_host_key (Guard 2's per-host rule asserts the twin from the connection
+# side; this side pins it from the resource census, so deleting EITHER local reference reds
+# here). It must NEVER carry the credential material web-1 receives: the full-prd Doppler
+# token, its .tmpl, or the push plumbing. A copy-pasted infra_config_handler_bootstrap
+# carries all three — the failure that puts the prd credential on a host the issue
+# explicitly scopes out of this change.
 W2_DIALERS = [n for n, b in ssh_resources.items() if re.search(DIAL_W2, b)]
+W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2"}
 w2_bad_key = [n for n in W2_DIALERS
               if not re.search(r'host_key\s*=\s*local\.web_2_ssh_host_key', ssh_resources[n])]
 # Credential-boundary token set, widened at review: a bare `doppler_token` covers
@@ -325,17 +329,99 @@ w2_bad_key = [n for n in W2_DIALERS
 W2_CRED_RE = r'doppler_token|DOPPLER_TOKEN|soleur-doppler-token|push-infra-config'
 w2_creds = [n for n in W2_DIALERS if re.search(W2_CRED_RE, ssh_resources[n])]
 w2_named = "deploy_pipeline_fix_web2" in W2_DIALERS
-if w2_named and not w2_bad_key and not w2_creds and len(W2_DIALERS) == 1:
-    ok(f"1: web-2 sibling deploy_pipeline_fix_web2 pins local.web_2_ssh_host_key and carries no credential material "
-       f"(exactly one web-2 dialer)")
+if w2_named and not w2_bad_key and not w2_creds and set(W2_DIALERS) == W2_ALLOWED:
+    ok(f"1: web-2 siblings {sorted(W2_ALLOWED)} pin local.web_2_ssh_host_key and carry no credential material "
+       f"(exactly {len(W2_ALLOWED)} web-2 dialers)")
 else:
-    no(f"1: web-2 sibling class broken: deploy_pipeline_fix_web2 present={w2_named}, "
+    no(f"1: web-2 sibling class broken: vetted={sorted(W2_ALLOWED)}, "
        f"web-2 dialers={sorted(W2_DIALERS)}, wrong-or-missing web_2 host_key={sorted(w2_bad_key)}, "
        f"credential-material references={sorted(w2_creds)}. "
-       "The sibling must be the ONLY web-2 dialer, must pin local.web_2_ssh_host_key, and must "
+       "Web-2 dialers must be exactly the vetted set, must pin local.web_2_ssh_host_key, and must "
        "never reference the prd credential under any spelling "
        "(var.doppler_token / webhook_doppler_token_env / soleur_doppler_token_env_b64 / "
        "SOLEUR_DOPPLER_TOKEN / soleur-doppler-token / push-infra-config).")
+# ── #9534: running-host delivery classification (fleet-generic) ─────────────────────
+# Every SSH-connected terraform_data must answer "does each OTHER running web host get
+# this?". The failure class this prevents: an artifact added to cloud-init is baked for
+# the NEXT birth, but a live host's cloud-init is frozen (ignore_changes), so anything
+# introduced since its last -replace never reaches it — and a codepath landing there
+# fails dark on part of the fleet.
+#
+# N-HOST CONTRACT. `FLEET_SSH_HOSTS` is the declared sibling roster — adding web-3 to
+# var.web_hosts means adding it HERE too (a fleet host no literal `web["web-N"]` ref
+# exists until a provisioner dials it, so the roster is declared, not discovered). Once
+# a host is in the roster, EVERY web-1-scoped provisioner must declare a story per
+# uncovered sibling host — a `<name>_web<N>` twin or a `<name>@<host>` entry in
+# ONLY_JUSTIFIED — so a fleet grow reds every unclassified resource at once rather
+# than one-by-one. Classes:
+#   twin          — `<name>_web<N>` resource exists (deploy_pipeline_fix_web2,
+#                   egress_gateway_web2)
+#   role-only     — meaningless on that host (its own host-key probe, the web-1
+#                   webhook receiver plumbing)
+#   birth-covered — the artifact predates that host's last -replace and rode its birth
+#                   cloud-init; the web-1 SSH provisioner exists only because web-1
+#                   predates the bake. An artifact INTRODUCED after the host's birth
+#                   may NOT claim this — the entry must name the introduction PR so a
+#                   reviewer can check the date.
+FLEET_SSH_HOSTS = {"web-1", "web-2"}
+_DIAL_HOST_RE = re.compile(r'hcloud_server\.web\["(web-\d+)"\]')
+_dialed_hosts = {n: set(_DIAL_HOST_RE.findall(b)) for n, b in ssh_resources.items()}
+# All terraform_data names (any provisioner type): a <base>_web<N> twin's web-1
+# half can ride a NON-SSH delivery channel — deploy_pipeline_fix is local-exec
+# because the webhook bridge delivers server-side, which is coverage all the
+# same (and web-1 is what local-exec deploys act on by construction).
+_all_tf_names = set(re.findall(r'resource "terraform_data" "([^"]+)"', srv))
+_fleet_extra = {h for hs in _dialed_hosts.values() for h in hs} - FLEET_SSH_HOSTS
+ONLY_JUSTIFIED = {
+    "apparmor_bwrap_profile@web-2": "birth-covered: predates web-2 birth",
+    "container_restart_monitor_install@web-2": "birth-covered: predates web-2 birth (#5417)",
+    "cosign_trusted_root@web-2": "birth-covered: predates web-2 birth",
+    "cron_egress_firewall@web-2": "birth-covered (loader/units/allowlist) + partial twin: the three cron-egress files hot-deliver via deploy_pipeline_fix_web2 (#9393)",
+    "disk_monitor_install@web-2": "birth-covered: predates web-2 birth",
+    "docker_seccomp_config@web-2": "birth-covered: predates web-2 birth",
+    "fail2ban_tuning@web-2": "birth-covered: predates web-2 birth",
+    "git_data_probe_install@web-2": "birth-covered: predates web-2 birth",
+    "infra_config_handler_bootstrap@web-2": "role-only: webhook receiver plumbing lives on web-1",
+    "inngest_consumer_probe_install@web-2": "birth-covered: predates web-2 birth",
+    "journald_persistent@web-2": "birth-covered: predates web-2 birth",
+    "orphan_reaper_install@web-2": "birth-covered: predates web-2 birth",
+    "private_nic_guard_install@web-2": "birth-covered: predates web-2 birth",
+    "registry_insecure_config@web-2": "birth-covered: predates web-2 birth",
+    "resource_monitor_install@web-2": "birth-covered: predates web-2 birth",
+    "send_failed_alert_probe@web-2": "birth-covered: predates web-2 birth",
+    "web_1_host_key_probe@web-2": "role-only: probes web-1's own committed host key; web-2's is local.web_2_ssh_host_key",
+    "zot_consumer_probe_install@web-2": "birth-covered: predates web-2 birth",
+}
+_sib_suffix = {h: h.replace("-", "") for h in FLEET_SSH_HOSTS}  # web-2 -> _web2
+_uncovered = []
+for _n, _hosts in _dialed_hosts.items():
+    # A <base>_web<N> twin is itself covered on its base's host(s) when <base>
+    # exists and dials them — coverage is symmetric over the sibling pair.
+    _base = re.sub(r'_web\d+$', '', _n)
+    for _sib in FLEET_SSH_HOSTS - _hosts:
+        if f"{_n}_{_sib_suffix[_sib]}" in ssh_resources:
+            continue
+        if _base != _n and _base in _all_tf_names and (
+            _sib in _dialed_hosts.get(_base, set())
+            or (_sib == "web-1" and _base not in ssh_resources)
+        ):
+            continue
+        if f"{_n}@{_sib}" in ONLY_JUSTIFIED:
+            continue
+        _uncovered.append(f"{_n}@{_sib}")
+_stale_class = [k for k in ONLY_JUSTIFIED
+                if k.rsplit("@", 1)[0] not in ssh_resources
+                or k.rsplit("@", 1)[1] not in FLEET_SSH_HOSTS]
+if not _uncovered and not _stale_class and not _fleet_extra:
+    ok(f"1: every SSH provisioner declares a story per fleet sibling "
+       f"({sum(len(FLEET_SSH_HOSTS - h) for h in _dialed_hosts.values())} covered, "
+       f"{len(ONLY_JUSTIFIED)} justified)")
+else:
+    no(f"1: fleet delivery classification broken: uncovered={sorted(_uncovered)} "
+       f"(add a <name>_web<N> twin or an ONLY_JUSTIFIED '<name>@<host>' entry naming "
+       f"the class + introduction PR), stale entries={sorted(_stale_class)} "
+       f"(resource or fleet host no longer exists), dialers on undeclared hosts={sorted(_fleet_extra)}")
+
 # #8609 (plan 1.4): the GitHub App key read token rides the SAME credential file web-2 does not
 # receive in place, so the denylist above needs no change — but only while every spelling of the
 # new credential falls inside it. Pinned: the pattern is byte-unchanged and matches each spelling
@@ -726,7 +812,7 @@ for dest in sorted(all_dests):
 # extractor is fail-closed by over-extraction by design, and the path is genuinely installed
 # on the fresh-boot path by soleur-host-bootstrap.sh, so it clears §2 truthfully rather than
 # needing an exception. Measured, not assumed: origin/main sweeps 57, this tree sweeps 59.
-FLOOR_DESTS = 75  # +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero)
+FLOOR_DESTS = 79  # +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero); +4 #9534: egress_gateway writes (squid.conf, auth helper, deny CIDRs, bootstrap script)
 if len(all_dests) >= FLOOR_DESTS:
     if not uncovered:
         ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "

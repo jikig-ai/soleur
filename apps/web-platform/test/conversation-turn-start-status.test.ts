@@ -175,7 +175,30 @@ vi.mock("../server/tool-path-checker", () => ({
   isFileTool: vi.fn(() => false),
   isSafeTool: vi.fn(() => false),
 }));
-vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})) }));
+vi.mock("../server/agent-env", async () => {
+  // feat-open-web-egress (#9534): keep the REAL exports —
+  // agent-runner-sandbox-config derives the web-egress deny census
+  // from ALLOWED_SERVICE_ENV_VARS at module init; a bare stub drops
+  // it and crashes every transitive importer.
+  const actual =
+    await vi.importActual<typeof import("../server/agent-env")>("../server/agent-env");
+  return { ...actual, buildAgentEnv: vi.fn(() => ({})) };
+});
+// feat-open-web-egress (#9534): entitlement read + forwarder lifecycle —
+// default off; the factory must resolve the module (mocked) on every
+// dispatch even when the grant is false.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: vi.fn(async () => false),
+  resolveWebEgressStrict: vi.fn(async () => false),
+}));
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: vi.fn(),
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
+}));
+
 vi.mock("../server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => vi.fn()),
 }));
@@ -229,6 +252,11 @@ import {
   __setCcRunnerForTests,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
+import {
+  egressForwarderWorkspaceId,
+  teardownEgressForwarder,
+} from "@/server/egress-forwarder";
+import { resolveWebEgressStrict } from "@/server/resolve-web-egress";
 import { sendUserMessage } from "../server/agent-runner";
 import { createSupabaseMockImpl } from "./helpers/agent-runner-mocks";
 
@@ -376,6 +404,45 @@ describe("dispatchSoleurGo — turn-start status='active' write", () => {
 // ---------------------------------------------------------------------------
 // legacy path (sendUserMessage / startAgentSession lineage)
 // ---------------------------------------------------------------------------
+
+describe("dispatchSoleurGo — warm-path web-egress re-resolution (#9534)", () => {
+  // The strict resolver distinguishes off-grant (teardown) from read-fault
+  // (preserve): a Supabase blip must not kill a legitimately-entitled
+  // session's forwarder — there is no mid-session re-spawn path.
+  it("a definitive false tears the live forwarder down", async () => {
+    __setCcRunnerForTests(stubRunner());
+    vi.mocked(egressForwarderWorkspaceId).mockReturnValue("ws-entitled");
+    vi.mocked(resolveWebEgressStrict).mockResolvedValue(false);
+    await dispatchSoleurGo(ccDispatchArgs());
+    await vi.waitFor(() =>
+      expect(teardownEgressForwarder).toHaveBeenCalledWith("conv-existing"),
+    );
+    // keyed on the FORWARDER's workspace, not the active one
+    expect(resolveWebEgressStrict).toHaveBeenCalledWith(
+      "u-turn-status",
+      "ws-entitled",
+    );
+  });
+
+  it("a resolver fault preserves the live forwarder (blip ≠ revocation)", async () => {
+    __setCcRunnerForTests(stubRunner());
+    vi.mocked(egressForwarderWorkspaceId).mockReturnValue("ws-entitled");
+    vi.mocked(resolveWebEgressStrict).mockRejectedValue(
+      new Error("PostgREST blip"),
+    );
+    await dispatchSoleurGo(ccDispatchArgs());
+    // give the fire-and-forget chain a tick to settle
+    await new Promise((r) => setTimeout(r, 50));
+    expect(teardownEgressForwarder).not.toHaveBeenCalledWith("conv-existing");
+  });
+
+  it("no registered forwarder → no resolve call at all", async () => {
+    __setCcRunnerForTests(stubRunner());
+    vi.mocked(egressForwarderWorkspaceId).mockReturnValue(undefined);
+    await dispatchSoleurGo(ccDispatchArgs());
+    expect(resolveWebEgressStrict).not.toHaveBeenCalled();
+  });
+});
 
 describe("sendUserMessage — turn-start status='active' write", () => {
   it("writes { status: 'active', last_active } via updateConversationFor on the turn-start path", async () => {

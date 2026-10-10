@@ -177,7 +177,11 @@ const HETZNER_CAP = 32_768;
 // took the local render to 23,584 B, 4 B over. Same derivation as the lower above: CI ~= local + 32
 // = ~23,616; 23,800 restores ~184 B of headroom and stays ~9.0 KB below HETZNER_CAP. If CI reds,
 // re-derive from its failure line.
-const WEB_GZIP_BUDGET = 23_800;
+// #9534: +300 B modest re-baseline (23,800 → 24,100). Measured 23,908 B local for the
+// egress-gateway runcmd call-site, the SOLEUR_EGRESS_REAPER env flag and the token-dir mount
+// on the web container — boot-time call-sites (the bootstrap script body is baked, #5921
+// pattern), so irreducibly inline. Comments trimmed first. ~8.7 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 24_100;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -1724,7 +1728,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files + 4 inngest consumer-probe files + 9 guest-side fresh-boot LUKS files", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files + 4 inngest consumer-probe files + 9 guest-side fresh-boot LUKS files + 5 egress-gateway files", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -1763,7 +1767,10 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // (workspaces-luks-reopen.{sh,service,timer} + -failure.service) and the daily probe
     // (luks-monitor.{sh,service,timer} + workspaces-luks-emit.sh). A fresh host never receives web-1's SSH
     // installers, so without baking them a born web-2 mounts a plaintext volume and cannot survive a reboot.
-    expect(serverTfBakedSet().length).toBe(58);
+    // +5 (=63): egress gateway (#9534) — squid.conf + auth-helper + shared deny
+    // set + bootstrap, installed by soleur-host-bootstrap.sh and mounted :ro into
+    // soleur-egress-gw; the forwarder rides the image for the PR-B dispatcher.
+    expect(serverTfBakedSet().length).toBe(63);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over
