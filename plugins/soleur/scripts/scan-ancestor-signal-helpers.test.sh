@@ -395,8 +395,8 @@ for root in apps plugins scripts tests; do
 done
 check "F6 live run well inside the 15 s probe cap" test "$((LIVE_US / 1000))" -lt 15000
 run_scan --list --root "$REPO_ROOT"
-check "F7 the S5 helper is found as W bounded=yes" has_out "^W${T}yes${T}plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh${T}"
-check "F7b the roadmap-reconcile walker is found as W bounded=yes" has_out "^W${T}yes${T}plugins/soleur/test/roadmap-reconcile.test.sh${T}"
+check "F7 the S5 helper is found as W bounded=yes" has_out "^W${T}yes${T}plugins/soleur/scripts/resolve-regenerable-conflicts\.test\.sh${T}"
+check "F7b the roadmap-reconcile walker is found as W bounded=yes" has_out "^W${T}yes${T}plugins/soleur/test/roadmap-reconcile\.test\.sh${T}"
 check "F7c no walker anywhere in the tree reads bounded=no" test "$(awk -F'\t' '$1=="W" && $2=="no"{n++} END{print n+0}' "$TMP/out")" -eq 0
 check "F8 the listed-only class L is part of the listing" test "$(ncls L)" -ge 1
 check "F9 this suite and the scanner are not findings of their own" test "$(awk -F'\t' '$3 ~ /scan-ancestor-signal-helpers/{n++} END{print n+0}' "$TMP/out")" -eq 0

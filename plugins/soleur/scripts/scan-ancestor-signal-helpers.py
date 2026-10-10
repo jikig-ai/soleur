@@ -6,8 +6,8 @@ WHY THIS EXISTS
 A helper that walks `$PPID` upwards and signals the outermost ancestor whose argv matches is bounded
 only by its own predicate. Mutate the predicate (invert it, drop it, make it a catch-all) and every
 ancestor matches: the walk reaches the top of the user's desktop session. That happened four times on
-2026-10-09 (knowledge-base/project/learnings/test-failures/2026-10-09-an-inverted-match-mutant-of-an-
-ancestor-walking-helper-ended-the-desktop-session-four-times.md). This scan lists the suites that
+2026-10-09 (the learning recorded that day under the learnings test-failures category: "an inverted-match
+mutant of an ancestor-walking helper ended the desktop session four times"). This scan lists the suites that
 contain such a helper, and the other signal-to-ancestors patterns, BEFORE anyone mutates them, and
 fails the full battery when a new one lands unbaselined or an unbounded walker is baselined.
 
