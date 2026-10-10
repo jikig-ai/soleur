@@ -26,6 +26,8 @@
 /scripts/ci-draft-push-census.sh                       @deruelle
 /scripts/ci-draft-push-census.test.sh                  @deruelle
 /scripts/ci-push-dedupe.test.sh                         @deruelle
+/scripts/followthroughs/ci-draft-light-soak-9728.sh      @deruelle
+/scripts/followthroughs/ci-draft-light-soak-9728.test.sh @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.sh     @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh @deruelle
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle

@@ -332,6 +332,7 @@ scripts/followthrough-exec-bit	20	measured
 scripts/followthrough-predicate-parity	1887	measured
 scripts/followthrough-varq-ban	23235	measured
 scripts/followthrough-varq-ban-live	1231	measured
+scripts/followthroughs/ci-draft-light-soak-9728	996	floor
 scripts/followthroughs/ci-push-dedupe-soak-9512	996	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	9722	measured
 scripts/followthroughs/t5-skip-persistence-bound-7510	9063	measured
