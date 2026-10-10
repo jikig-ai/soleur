@@ -155,24 +155,34 @@ fi
 # So the sweep is now the same allow-list the library gets, from the same shared scanner. The
 # three names above are no longer enumerated because they no longer need to be: anything not on
 # the list is a hit, including shapes nobody predicted.
-# THE ONE PROGRAM THIS SCRIPT MAY RUN OUTSIDE THE ALLOW-LIST BELOW (#9597, ADR-280): the canonical HMAC
+# THE HMAC LINE IS THE ONE LINE THIS SCRIPT MAY CARRY AN INTERPRETER ON (#9597, ADR-280): the canonical HMAC
 # snippet (byte-identical to the inline copies in the workflows and to scripts/lib/bearer-curl.sh), on the
-# ONE line that wraps it. The scanner below cannot see it (it reads a command after a `VAR=value` prefix as
-# no command at all), so the pin is a line-equality check, not an allow-list entry: `python3` is NOT on the
-# allow-list, so a second interpreter invocation (`python3 -c ...`, where a scanner CAN see it) is a hit too.
+# ONE line that wraps it. THE SCANNER BELOW CANNOT SEE IT, and cannot see any other program written the same
+# way: it returns NO command token for a program after a `VAR=value` prefix (`X=1 perl -e ...`,
+# `K=1 python -c ...`) or inside a `$( ... | VAR=v prog ...)` pipeline stage (the canonical line's own shape),
+# so the allow-list says nothing about them and `python3` being off the allow-list closes nothing there.
+# What closes it is a scanner-independent pin by LINE EQUALITY over an interpreter-word set: every non-comment
+# line of the script that contains any word of VERIFY_INTERP_RE must be EXACTLY the canonical line, and there
+# must be exactly one. That covers the interpreters the allow-list does not name (python*, perl, ruby, node,
+# php, lua, openssl, deno, bun) wherever they sit on a line. It does NOT cover a program outside that word set
+# written behind an assignment prefix (`X=1 busybox sh -c ...`): that stays a known gap of the scanner,
+# pre-existing, and out of this pin's scope. `awk` and `sed` stay governed by the allow-list below, unchanged.
 VERIFY_HMAC_SNIPPET="$(cat <<'HM_EOF'
 HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())'
 HM_EOF
 )"
 VERIFY_HMAC_LINE="HMAC=\$(printf '' | ${VERIFY_HMAC_SNIPPET}) || HMAC=\"\""
+# The interpreter-word set the line-equality pin quantifies over. One literal, used by the in-function sweep
+# (Python `re`) and by the direct row below (grep -E); both accept this ERE subset identically.
+VERIFY_INTERP_RE='\b(python[0-9.]*|pypy[0-9.]*|perl|ruby|node|nodejs|php|lua|luajit|openssl|deno|bun)\b'
 
 # verify_actuation_sweep <verify-script-path>: prints OK, or HITS=... / SWEEP-ERROR. A function of the path so
 # the mutation rows below judge a scratch copy with the SAME code that judges the real file.
 verify_actuation_sweep() {
-  python3 - "$1" "$GATE_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" "$VERIFY_HMAC_LINE" <<'PYEOF'
+  python3 - "$1" "$GATE_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" "$VERIFY_HMAC_LINE" "$VERIFY_INTERP_RE" <<'PYEOF'
 import importlib.util, re, sys
 
-verify_path, gate_path, scanner, canon_line = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+verify_path, gate_path, scanner, canon_line, interp_re = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 _spec = importlib.util.spec_from_file_location('shellscan', scanner)
 _m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m)
@@ -216,17 +226,20 @@ for line, tok, raw in _m.raw_command_tokens(_m.strip_noise(src)):
         continue
     hits.append((line, raw))
 
-# THE HMAC LINE. Every non-comment line that names `python3` must be EXACTLY the canonical line, and there
-# must be exactly one. A second invocation, or the canonical snippet with one byte changed (`-I` dropped,
-# the key moved to argv), is a hit; a comment may still mention the word.
+# THE HMAC LINE, BY LINE EQUALITY AND INDEPENDENT OF THE SCANNER ABOVE (which returns no command token for
+# `X=1 perl -e ...`, `K=1 python -c ...` or a `$(printf '' | K=v prog ...)` stage). Every non-comment line that
+# contains an interpreter word (interp_re) must be EXACTLY the canonical line, and there must be exactly one.
+# A second invocation in any spelling, or the canonical snippet with one byte changed (`-I` dropped, the key
+# moved to argv), is a hit; a comment may still mention the words.
 py_lines = [(i + 1, l) for i, l in enumerate(src.split('\n'))
-            if not l.lstrip().startswith('#') and re.search(r'\bpython3\b', l)]
+            if not l.lstrip().startswith('#') and re.search(interp_re, l)]
 for n, l in py_lines:
     if l != canon_line:
-        hits.append((n, 'python3 on a line that is not the canonical HMAC line (the one interpreter '
-                        'invocation this script may carry)'))
+        w = re.search(interp_re, l).group(0)
+        hits.append((n, '%s on a line that is not the canonical HMAC line (the one interpreter '
+                        'invocation this script may carry)' % w))
 if len(py_lines) != 1:
-    hits.append((0, 'python3 appears on %d non-comment line(s); exactly 1 (the canonical HMAC line) is '
+    hits.append((0, 'interpreter words appear on %d non-comment line(s); exactly 1 (the canonical HMAC line) is '
                     'expected — zero means the signature is computed another way and this pin is '
                     'vacuous' % len(py_lines)))
 
@@ -348,6 +361,40 @@ PYEOF
     pass "#9597 mutation: \`openssl dgst -hmac\` put back in a scratch copy turns the actuation sweep RED (openssl is no longer allow-listed)"
   else
     fail "#9597 mutation: a reintroduced openssl invocation was not caught (verdict='${r3m:0:120}')"
+  fi
+  # SCANNER-INDEPENDENT PIN (round 2). The scanner returns NO command token for a program behind a `VAR=value`
+  # prefix or inside a `$( ... | VAR=v prog)` stage, so the three mutants below are invisible to the allow-list
+  # and are caught ONLY by the interpreter-word line-equality pin. First the real file, judged directly with grep
+  # (no Python, no scanner): the set of non-comment lines carrying an interpreter word is exactly the canonical line.
+  interp_set=$(grep -vE '^[[:space:]]*#' "$VERIFY_SH" | grep -E "$VERIFY_INTERP_RE" || true)
+  if [[ "$interp_set" == "$VERIFY_HMAC_LINE" ]]; then
+    pass "#9597 the non-comment lines of infra-config-verify.sh carrying ANY interpreter word (python*, perl, ruby, node, php, lua, openssl, deno, bun) are exactly the canonical HMAC line (scanner-independent)"
+  else
+    fail "#9597 interpreter-word line set differs from the canonical HMAC line (lines=$(grep -c . <<<"$interp_set"))"
+  fi
+  # m4: an interpreter behind a VAR=value prefix at the head of a line (scanner: no token).
+  sed "/^EXIT_CODE=\"\"\$/i X=1 perl -e 'system(\"id\")'" "$VERIFY_SH" > "$PY_TMP/m4.sh"
+  r4m="$(verify_actuation_sweep "$PY_TMP/m4.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m4.sh" && [[ "$r4m" == HITS=* && "$r4m" == *"perl on a line that is not the canonical HMAC line"* ]]; then
+    pass "#9597 mutation: \`X=1 perl -e 'system(...)'\` (an assignment-prefixed interpreter the scanner cannot see) turns the sweep RED by line equality"
+  else
+    fail "#9597 mutation: an assignment-prefixed perl line was not caught (landed=$(cmp -s "$VERIFY_SH" "$PY_TMP/m4.sh" && echo no || echo yes) verdict='${r4m:0:140}')"
+  fi
+  # m5: the same with python (not python3), the shape the old \bpython3\b pin let through.
+  sed "/^EXIT_CODE=\"\"\$/i K=1 python -c 'import os'" "$VERIFY_SH" > "$PY_TMP/m5.sh"
+  r5m="$(verify_actuation_sweep "$PY_TMP/m5.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m5.sh" && [[ "$r5m" == HITS=* && "$r5m" == *"python on a line that is not the canonical HMAC line"* ]]; then
+    pass "#9597 mutation: \`K=1 python -c ...\` (a python that is not python3) turns the sweep RED by line equality"
+  else
+    fail "#9597 mutation: an assignment-prefixed python line was not caught (landed=$(cmp -s "$VERIFY_SH" "$PY_TMP/m5.sh" && echo no || echo yes) verdict='${r5m:0:140}')"
+  fi
+  # m6: the canonical line's own shape with another interpreter: `$(printf '' | K=v perl ...)`, where the scanner sees only printf.
+  sed "/^EXIT_CODE=\"\"\$/i OUT=\$(printf '' | K=1 perl -e 'print 1')" "$VERIFY_SH" > "$PY_TMP/m6.sh"
+  r6m="$(verify_actuation_sweep "$PY_TMP/m6.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m6.sh" && [[ "$r6m" == HITS=* && "$r6m" == *"perl on a line that is not the canonical HMAC line"* ]]; then
+    pass "#9597 mutation: a \`\$(printf '' | K=1 perl ...)\` pipeline stage (the canonical line's shape) turns the sweep RED by line equality"
+  else
+    fail "#9597 mutation: a pipeline-stage perl line was not caught (landed=$(cmp -s "$VERIFY_SH" "$PY_TMP/m6.sh" && echo no || echo yes) verdict='${r6m:0:140}')"
   fi
 fi
 
@@ -998,6 +1045,8 @@ fi
 # 41 -> 48 (#9597): two refusal rows (I12: an unusable CF Access id / secret is refused before any request and recorded
 # as `credential_refused`), and five rows pinning the one python3 line (exactly one, equal to the canonical HMAC line, plus an
 # unmutated control and three mutants: a second python3, a one-byte change to the line, openssl put back).
+# 48 -> 52 (round 2): the scanner-independent interpreter-word pin (a direct grep row over the real file, plus three mutants the
+# scanner cannot see: `X=1 perl -e`, `K=1 python -c`, a `$(printf '' | K=1 perl ...)` stage).
 echo ""
 echo "  $PASS passed, $FAIL failed"
 close_stdout_capture
@@ -1052,7 +1101,7 @@ else
   exit 1
 fi
 
-VERIFY_MIN_ASSERTIONS=48
+VERIFY_MIN_ASSERTIONS=52
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then
   printf '  FAIL: assertion-count floor: only %d assertions ran, expected >= %d — arms were deleted or skipped\n' \
     "$PASS" "$VERIFY_MIN_ASSERTIONS" >&2
