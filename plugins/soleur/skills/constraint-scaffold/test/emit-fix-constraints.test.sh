@@ -154,7 +154,7 @@ else
   pass "forbidden: Stage B has no actions/checkout step (Git Data API only)"
 fi
 for tok in 'bun install' 'setup-bun' 'git apply'; do
-  if printf '%s\n' "$B_CODE" | grep -qF "$tok" 2>/dev/null; then
+  if printf '%s\n' "$B_CODE" | grep -cF >/dev/null "$tok" 2>/dev/null; then
     fail "forbidden: Stage B executable body contains '$tok' (must never run it)"
   else
     pass "forbidden: Stage B executable body has no '$tok'"
@@ -182,7 +182,7 @@ set +e
 REFUSE_OUT="$(CONSTRAINT_SCAFFOLD_REPO_ROOT="$FX2" bash "$GEN" 2>&1)"
 REFUSE_RC=$?
 set -e
-if [[ "$REFUSE_RC" == "66" ]] && printf '%s' "$REFUSE_OUT" | grep -q 'fix-constraints-stage-a.yml already present'; then
+if [[ "$REFUSE_RC" == "66" ]] && printf '%s' "$REFUSE_OUT" | grep -c >/dev/null 'fix-constraints-stage-a.yml already present'; then
   pass "refuse: pre-existing fix-constraints-stage-a.yml triggers refuse-if-exists (exit 66)"
 else
   fail "refuse: expected exit 66 naming fix-constraints-stage-a.yml, got rc=$REFUSE_RC: $REFUSE_OUT"

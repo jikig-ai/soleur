@@ -186,7 +186,9 @@ host_where() {
   if [[ -n "$SINCE" ]]; then
     # 'UTC' pins the session timezone — a naive datetime parses in the ClickHouse session
     # TZ, and a shifted bound would re-admit a previous life's rows on a same-run-id re-run.
-    printf "dt > parseDateTime64BestEffort('%s', 'UTC') AND" "$SINCE"
+    # parseDateTime64BestEffort(s, precision, tz) — arg 2 is PRECISION, not the zone
+    # ('UTC' there is Code 43 ILLEGAL_TYPE_OF_ARGUMENT, proven live against Better Stack).
+    printf "dt > parseDateTime64BestEffort('%s', 3, 'UTC') AND" "$SINCE"
   else
     printf "dt > now() - INTERVAL %s AND" "$WINDOW"
   fi
@@ -198,7 +200,10 @@ echo "capture: mode=${MODE} host=${HOST_NAME} window=${WINDOW}${SINCE:+ since=${
 # NOT keyed on this host (see header). A zero-row answer means the instrument is dead, not
 # the host — TRANSIENT, never FAIL.
 ANCHOR_SQL="SELECT count() AS n FROM ${BS_SRC} WHERE $(host_where) raw != '' LIMIT 1 FORMAT JSONEachRow"
-ANCHOR_ROWS="$(bs_query "$ANCHOR_SQL" 2>/dev/null)" || {
+# NOT 2>/dev/null: a suppressed transport error is an undiagnosable TRANSIENT loop —
+# the first real run polled an ILLEGAL_TYPE_OF_ARGUMENT for 20 minutes and the only
+# diagnostic was 'anchor query failed'. Exceptions go to stderr where the run log sees them.
+ANCHOR_ROWS="$(bs_query "$ANCHOR_SQL")" || {
   echo "TRANSIENT: the anchor query itself failed — the instrument cannot be trusted right now." >&2
   exit 2
 }
@@ -211,7 +216,7 @@ echo "  anchor: source is answering (${ANCHOR_N} rows in window)"
 
 # ── Host rows ────────────────────────────────────────────────────────────────
 HOST_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE $(host_where) position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow"
-HOST_ROWS="$(bs_query "$HOST_SQL" 2>/dev/null)" || {
+HOST_ROWS="$(bs_query "$HOST_SQL")" || {
   echo "TRANSIENT: the host-row query failed after a live anchor — transport fault." >&2
   exit 2
 }
@@ -319,7 +324,7 @@ case "$MODE" in
     # property this leg exists to prove. The boundary timestamp is recorded BEFORE the API
     # call and `dt` is ingest-time, so a delayed pre-boundary row can read post-boundary —
     # that direction errs conservative (false FAIL, never false PASS).
-    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}') AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow" 2>/dev/null)" \
+    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}', 3, 'UTC') AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow")" \
       || { echo "TRANSIENT: the post-reboot query failed after a live anchor." >&2; exit 2; }
     n_restage="$(printf '%s\n' "$POST_ROWS" | grep -cE 'stage=bs-token-restaged' 2>/dev/null || true)"
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"

@@ -1,0 +1,4 @@
+# fixture data, never executed: kill -l listings; no finding
+kill -l 0
+kill -l "$rc"
+kill -L

@@ -355,3 +355,5 @@ is not weakened by that: the retire job never touches the live LUKS volume, and 
 store is provably healthy. The dark-host gate library
 (`tests/scripts/lib/inngest-host-dark-gate.sh`) is kept for `scripts/cutover-inngest.sh`. See the
 ADR-142 addendum of 2026-10-08 and 2026-10-09.
+
+**Appended 2026-10-09 (#8285 PR B).** `apply_target=inngest-backstop-retire` and `tests/scripts/lib/inngest-backstop-retire-gate.sh`, named above, were deleted by PR B after the dispatch ran to completion (volume 106261946 answered 404 at 2026-10-09T16:21:26Z). The invariant of this ADR is unchanged and still enforced by `tests/scripts/lib/inngest-host-dark-gate.sh` for `scripts/cutover-inngest.sh`. See the ADR-142 addendum of 2026-10-09.

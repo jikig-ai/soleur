@@ -80,8 +80,9 @@ resource "github_repository_environment" "inngest_cutover" {
   # #7695. THE REVIEWER RULE ALONE DOES NOT GATE THE CODE THAT RUNS. `workflow_dispatch` executes
   # the SELECTED REF's workflow and the scripts that workflow sources, and the reviewer prompt
   # shows a branch NAME, not a diff. The destructive `inngest_volume_recut` job added under this
-  # environment (converted into `inngest_backstop_retire` by #8285, which sources its gate the same
-  # way) sources BOTH of its guards from `${GITHUB_WORKSPACE}` — so without a branch pin,
+  # environment (later converted into `inngest_backstop_retire` by #8285, which sourced its gate the
+  # same way, and deleted by #8285 PR B once the backstop volume was destroyed) sourced BOTH of its
+  # guards from `${GITHUB_WORKSPACE}` — so without a branch pin,
   # anyone who can dispatch can point the run at a branch carrying neutered guards and ask the
   # reviewer to approve what reads as a routine recut.
   #
@@ -121,9 +122,10 @@ resource "github_repository_environment_deployment_policy" "inngest_cutover_main
 #   1. cutover-inngest.yml:123 — conditional injection
 #      (`(op == 'arm' || 'rollback' || 'resume') && secrets.… || ''`), and those jobs declare
 #      `environment: inngest-cutover` (cutover-inngest.yml:78), so they hold for the reviewer.
-#   2. apply-web-platform-infra.yml, job `inngest_backstop_retire` (converted from
-#      `inngest_volume_recut` by #8285) — unconditional injection, but that job declares
-#      `environment: inngest-cutover`, so the human ack still gates it.
+#   2. (RETIRED by #8285 PR B) apply-web-platform-infra.yml, job `inngest_backstop_retire` (converted
+#      from `inngest_volume_recut` by #8285) — unconditional injection, but that job declared
+#      `environment: inngest-cutover`, so the human ack gated it. The job no longer exists; the item
+#      keeps its number so the references below stay valid.
 #   3. apply-web-platform-infra.yml, job `inngest_host_replace`, the #7228 inherited-`done`
 #      preflight (added 2026-09-17) — UNCONDITIONAL injection. Still the FIRST resolution site
 #      with neither of the two bounds above, and still the residual this comment is about.

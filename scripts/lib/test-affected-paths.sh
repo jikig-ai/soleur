@@ -344,6 +344,13 @@ AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
 AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
   ".github/workflows/apply-github-infra.yml"
   ".github/actions/mint-infra-app-token/"
+  "scripts/verify-ruleset-required-checks.sh"             # #9362: the gate it drives
+  "scripts/lib/canonicalize-required-status-checks.sh"    # #9362: the projection the gate shares
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"      # #9362: gate input
+  "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"  # #9362: gate input
+  "tests/scripts/fixtures/tfplan-real-ruleset-baseline.json"               # #9362: the real plan capture the rows are built from
+  ".github/actions/infra-credentials/"                    # #9362: the loader that supplies every Terraform input the apply now takes
+  "infra/github/"                                         # #9362: the rulesets the gated addresses must cover (G2c)
   "tests/scripts/test-apply-github-infra-mint-shape.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
@@ -445,6 +452,17 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
 AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_PATHS=(
   "scripts/test-affected-derive.test.sh"
   "scripts/affected-prepass-bench.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+# scripts/test-affected-derive-cache (#9812) — the cross-run derive cache lib and its runner
+# integration. Declared rather than always-on for the same reason as its sibling: the SUT is the
+# cache lib plus the runner's derive span (extracted by content anchor), and nothing else can move
+# its verdict. test-all.sh is a closure leaf, so a lib-only diff reaches this suite ONLY through
+# this declaration.
+AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_CACHE_PATHS=(
+  "scripts/test-affected-derive-cache.test.sh"
+  "scripts/lib/test-affected-derive-cache.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )

@@ -97,7 +97,7 @@ canonical_set=$(printf '%s\n' "${CANONICAL_HOSTS[@]}" | sort -u)
 orphan=""
 while IFS= read -r wh; do
   [[ -z "$wh" ]] && continue
-  if ! printf '%s\n' "$canonical_set" | grep -qFx "$wh"; then
+  if ! printf '%s\n' "$canonical_set" | grep -cFx >/dev/null "$wh"; then
     orphan+="$wh "
   fi
 done <<< "$workflow_hosts"

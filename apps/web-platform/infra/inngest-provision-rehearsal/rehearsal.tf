@@ -180,6 +180,24 @@ resource "doppler_secret" "rehearsal_diagnostic_boot" {
   visibility = "masked"
 }
 
+# INNGEST_REDIS_LUKS_KEY is NOT optional on this codebase: cloud-init-inngest.yml's LUKS
+# stage treats an empty key as "refusing an unencrypted mount" and FATALs — which is
+# exactly what attempt-3's host showed (SOLEUR_INNGEST_LUKS_STAGE stage=privilege rc=1,
+# /mnt/data never mounted, redis down, bootstrap-done-DEGRADED). The scratch env must
+# seed a FRESH key of its own; the prd key is never read.
+resource "random_password" "rehearsal_luks" {
+  length  = 64
+  special = false
+}
+
+resource "doppler_secret" "rehearsal_luks_key" {
+  project    = doppler_environment.rehearsal.project
+  config     = doppler_environment.rehearsal.slug
+  name       = "INNGEST_REDIS_LUKS_KEY"
+  value      = random_password.rehearsal_luks.result
+  visibility = "masked"
+}
+
 resource "doppler_secret" "rehearsal_betterstack_logs_token" {
   project    = doppler_environment.rehearsal.project
   config     = doppler_environment.rehearsal.slug
@@ -269,6 +287,7 @@ resource "hcloud_server" "rehearsal" {
     doppler_secret.rehearsal_event_key,
     doppler_secret.rehearsal_redis_password,
     doppler_secret.rehearsal_diagnostic_boot,
+    doppler_secret.rehearsal_luks_key,
     doppler_secret.rehearsal_betterstack_logs_token,
   ]
 
