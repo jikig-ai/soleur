@@ -482,9 +482,14 @@ if printf '%s\n' "$_T115_MUT" | grep -cxF "$_T115_NEEDLE_LUKS" >/dev/null; then 
 # T1.15f SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal
 # the sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair
 # or a directive on any path outside /etc/default/ fails where a count comparison would pass.
-_T115_EF_SET="$(printf '%s\n' "$_LUKS_OPEN_SVCSEC" | sed -n 's/^      EnvironmentFile=//p' | tr ' ' '\n' | sed '/^$/d' | sort -u)"
-_T115_CX_SET="$(printf '%s\n' "$_LUKS_OPEN_UNITSEC" | sed -n 's/^      ConditionPathExists=//p' | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+_T115_EF_SET="$(printf '%s\n' "$_LUKS_OPEN_SVCSEC" | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
+_T115_CX_SET="$(printf '%s\n' "$_LUKS_OPEN_UNITSEC" | sed -n 's/^[[:space:]]*ConditionPathExists=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
 if [ -n "$_T115_EF_SET" ] && [ "$_T115_EF_SET" = "$_T115_CX_SET" ]; then ok "T1.15f the [Unit] condition path-set equals the [Service] EnvironmentFile path-set"; else no "T1.15f EF set={${_T115_EF_SET}} vs condition set={${_T115_CX_SET}} — an unconditioned env file can fail a start"; fi
+# T1.15g RESET LINES: a bare `Directive=` empties the list wholesale (EnvironmentFile= clears
+# the env set, ConditionPathExists= erases every condition) — the set extractors drop the
+# empty token and the literal pins keep matching the surviving lines, so the check is
+# file-wide against the write_files block, not section-scoped.
+if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' >/dev/null; then ok "T1.15g no bare EnvironmentFile=/ConditionPathExists= reset lines in the reopen unit"; else no "T1.15g a bare reset line empties the env set or erases every condition — systemd reset semantics make it invisible to the other arms"; fi
 
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
@@ -493,14 +498,14 @@ if [ -n "$_T115_EF_SET" ] && [ "$_T115_EF_SET" = "$_T115_CX_SET" ]; then ok "T1.
 # #8285 PR B: G4.b2 (the retire dispatch's pointer reader) was deleted with that dispatch, taking the measured count 58 -> 57;
 # the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
 # (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
-# #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review round 1 added T1.15f set-parity (62 -> 63).
+# #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 63 ]; then
+if [ "$executed" -lt 64 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 63. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 64. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 63)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 64)\n' "$executed"
 fi
 
 echo ""

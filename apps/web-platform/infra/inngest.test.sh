@@ -2585,13 +2585,19 @@ LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
 # [Unit] respectively); each assert scopes to its directive's own section so a misplaced line
 # reads as absent.
 _luks_sec()      { awk -v sec="$2" '$0=="["sec"]"{u=1;next} /^\[/{u=0} u' "$1"; }
-_luks_sec_vals() { _luks_sec "$1" "$2" | sed -n "s/^$3=//p" | tr ' ' '\n' | sed '/^$/d' | sort -u; }
+_luks_sec_vals() { _luks_sec "$1" "$2" | sed -n "s/^[[:space:]]*$3=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
 assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-server is absent" \
   "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
 assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-luks-volumes is absent" \
   "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
 assert "inngest-luks-cutover.service keeps BOTH EnvironmentFile= lines unprefixed in [Service] (fail-closed)" \
-  "_luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-luks-volumes' >/dev/null && ! _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cE '^EnvironmentFile=-' >/dev/null"
+  "_luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-luks-volumes' >/dev/null && ! _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+# Bare `Directive=` resets the list wholesale in systemd (EnvironmentFile= empties the env
+# set, ConditionPathExists= erases every condition) — invisible to the literal pins and to the
+# set extractors, which drop empty tokens. Checked file-wide: a reset line is never legitimate
+# here, in any section, at any indent.
+assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the cutover units" \
+  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$LUKS_CUTOVER_SVC' '$LUKS_CUTOVER_TMR' >/dev/null"
 # SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal the
 # sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair or a
 # non-/etc/default/ path fails where a count comparison would pass.
@@ -2599,9 +2605,9 @@ assert "inngest-luks-cutover.service's [Unit] condition path-set equals its [Ser
   "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
 assert "inngest-luks-cutover.timer carries the inngest-server condition in [Unit] (evaluated at activation, not per-elapse)" \
   "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
-assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in [Unit]" \
+assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in [Unit] (evaluated at activation, not per-elapse)" \
   "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
-assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's EnvironmentFile path-set" \
+assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's [Service] EnvironmentFile path-set" \
   "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
 
 echo ""
@@ -2618,7 +2624,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=426
+INNGEST_MIN_ASSERTIONS=427
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
