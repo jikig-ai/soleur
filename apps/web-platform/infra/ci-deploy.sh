@@ -1666,6 +1666,8 @@ v=$(timeout 5 /usr/bin/bwrap --new-session --dev /dev --unshare-pid --bind / / -
 p direct_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
 v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --proc /proc --dev /dev --bind / / -- true 2>&1); r=$?
 p sdk_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --dev /dev --bind / / -- true 2>&1); r=$?
+p sdk_noproc "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
 p kernel_ns "restrict=$(k /proc/sys/kernel/apparmor_restrict_unprivileged_userns) clone=$(k /proc/sys/kernel/unprivileged_userns_clone) max=$(k /proc/sys/user/max_user_namespaces)"'
 
 # _canary_diag_emit <trigger> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
@@ -1679,9 +1681,89 @@ _canary_diag_emit() {
   return 0
 }
 
+# _canary_kdeny_read: one bounded, scrubbed read of the HOST kernel stream, printed as ONE status line.
+#   src=<journal|dmesg|none> j=<state> d=<skip|state> total=<n> hits=<n> mproc=<n> [fields]
+# Why it exists: the first real bundle (#9860) narrowed the failure to `sdk_probe` ("Can't mount proc ...
+# Operation not permitted") and ruled out the image, file caps, exec and the legacy probe. What is left is
+# a kernel-side refusal, and the only host-side witness would be an AppArmor/audit line. "Could not read the
+# stream" and "read it, nothing there" are DIFFERENT facts and only the second is evidence, so each rung
+# reports its own state: ok | empty (rc 0, no hint, no lines: what journalctl prints on systemd 261 for a
+# user outside adm/systemd-journal) | noaccess (journalctl's or dmesg's own hint line and no real lines) |
+# absent (127) | timeout (124/137) | error. The ladder is journal, then dmesg only when the journal is not ok.
+# deploy runs unprivileged (no sudo grant covers the kernel log; kernel.dmesg_restrict=1 is the host
+# baseline), so `noaccess`/`empty` is the EXPECTED outcome and the row says so rather than hiding it.
+# Counts: `hits` = real lines carrying apparmor="DENIED" or audit type 1400/1326; `mproc` = the hits that are a
+# procfs MOUNT denial (operation="mount" AND fstype="proc"). A bare profile name or comm="bwrap" is NOT a hit
+# test: the production container shares the soleur-bwrap profile and generates unrelated denials. `fields`
+# come from a CLOSED key allowlist with no name/comm/pid key, so no tenant file name can reach the row by
+# construction. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
+# denial that happened seconds ago. No sudo, no /var/log, no follow flag: every read is `timeout -k 1 3`.
+# SOLEUR-DEBT: one-incident diagnostic row for the #9860 sandbox failure; remove or demote it once the issue closes with the cause named
+_canary_kdeny_read() {
+  local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
+  for rung in journal dmesg; do
+    rc=0
+    if [[ "$rung" == journal ]]; then
+      raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+    else
+      raw="$(timeout -k 1 3 dmesg 2>&1 | tail -n 400 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+    fi
+    counts="$(printf '%s\n' "$raw" | awk '
+      /^Hint: You are currently not seeing messages/ || /^No journal files were opened due to insufficient permissions/ || /^dmesg: read kernel buffer failed:/ || /^Failed to .*(Permission denied|Operation not permitted)/ { hint++; next }
+      /^[[:space:]]+(Users in groups .* can see all messages\.|Pass -q to turn off this notice\.)$/ { next }
+      /^-- / || /^[[:space:]]*$/ { next }
+      { total++
+        if ($0 ~ /apparmor="DENIED"|type=1400|type=1326/) {
+          hits++
+          if ($0 ~ /operation="mount"/ && $0 ~ /fstype="proc"/) { mproc++; if (mline == "") mline = $0 }
+          else if (hline == "") hline = $0
+        }
+      }
+      END { printf "%d %d %d %d\n%s\n", total + 0, hits + 0, mproc + 0, hint + 0, (mline != "" ? mline : hline) }')" || counts=""
+    first="${counts%%$'\n'*}"; line=""
+    if [[ "$counts" == *$'\n'* ]]; then line="${counts#*$'\n'}"; fi
+    IFS=' ' read -r t h m hint <<< "$first" || true
+    [[ "${t:-}" =~ ^[0-9]+$ ]] || t=0
+    [[ "${h:-}" =~ ^[0-9]+$ ]] || h=0
+    [[ "${m:-}" =~ ^[0-9]+$ ]] || m=0
+    [[ "${hint:-}" =~ ^[0-9]+$ ]] || hint=0
+    if (( t > 9999 )); then t=9999; fi
+    if (( h > 9999 )); then h=9999; fi
+    if (( m > 9999 )); then m=9999; fi
+    state=ok
+    if (( rc == 127 )); then state=absent
+    elif (( rc == 124 || rc == 137 )); then state=timeout
+    elif (( t == 0 )); then
+      if (( hint > 0 )); then state=noaccess
+      elif (( rc == 0 || rc == 141 )); then state=empty
+      else state=error
+      fi
+    fi
+    if [[ "$rung" == journal ]]; then j="$state"; else d="$state"; fi
+    if [[ "$state" == ok ]]; then
+      if [[ "$rung" == journal ]]; then src=journal; else src=dmesg; fi
+      total=$t; hits=$h; mproc=$m
+      if [[ -n "$line" ]]; then
+        fields="$(printf '%s\n' "$line" | awk '
+          BEGIN { q = "\""; n = split("operation profile fstype error info requested_mask denied_mask syscall", K, " ") }
+          { for (i = 1; i <= n; i++) {
+              k = K[i]
+              if (match($0, "(^| )" k "=" q "[^" q "]*" q) || match($0, "(^| )" k "=[^ ]+")) {
+                v = substr($0, RSTART, RLENGTH); sub(/^ /, "", v); out = out v " "
+              } } }
+          END { printf "%s", out }')" || fields=""
+        fields="${fields% }"; fields="${fields:0:130}"
+      fi
+      break
+    fi
+  done
+  printf 'src=%s j=%s d=%s total=%s hits=%s mproc=%s%s' "$src" "$j" "$d" "$total" "$hits" "$mproc" "${fields:+ $fields}"
+  return 0
+}
+
 # emit_canary_sandbox_diag <legacy|faithful>: always returns 0. In-container section names are an
 # allowlist -- anything else the exec prints (a daemon error, a forged first word) is `raw`, so only
-# this function can mint host/hostsec/kernel/done.
+# this function can mint host/hostsec/kernel/kdeny/done.
 emit_canary_sandbox_diag() {
   local trigger="${1:-legacy}" out line sec rest n=0 capped=0 exec_rc=0
   out="$(timeout -k 3 "$CANARY_DIAG_TIMEOUT" docker exec soleur-web-platform-canary /bin/sh -c "$CANARY_DIAG_SCRIPT" soleur-canary-diag 2>&1 | head -c 8192; exit "${PIPESTATUS[0]}")" || exec_rc=$?
@@ -1690,12 +1772,13 @@ emit_canary_sandbox_diag() {
     if (( n >= 16 )); then capped=1; break; fi
     n=$(( n + 1 ))
     sec="${line%% *}"; rest="${line#* }"
-    if ! [[ "$sec" =~ ^(id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|kernel_ns)$ && "$line" == *" "* ]]; then sec="raw"; rest="$line"; fi
+    if ! [[ "$sec" =~ ^(id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|sdk_noproc|kernel_ns)$ && "$line" == *" "* ]]; then sec="raw"; rest="$line"; fi
     _canary_diag_emit "$trigger" "$sec" "$rest"
   done <<< "$out"
   _canary_diag_emit "$trigger" host "$(timeout 3 docker inspect -f 'capadd={{.HostConfig.CapAdd}} capdrop={{.HostConfig.CapDrop}} priv={{.HostConfig.Privileged}} aa={{.AppArmorProfile}}' soleur-web-platform-canary 2>&1 | head -c 400)"
   _canary_diag_emit "$trigger" hostsec "$(timeout 3 docker inspect -f '{{range .HostConfig.SecurityOpt}}{{printf "%.40s" .}} {{end}}' soleur-web-platform-canary 2>&1 | head -c 400)"
   _canary_diag_emit "$trigger" kernel "kernel=$(uname -r 2>&1) docker=$(timeout 3 docker version --format '{{.Server.Version}}' 2>&1 | head -c 60)"
+  _canary_diag_emit "$trigger" kdeny "$(_canary_kdeny_read)"
   _canary_diag_emit "$trigger" "done" "exec_rc=$exec_rc lines=$n capped=$capped bytes=${#out}"
   return 0
 }
