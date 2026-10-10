@@ -193,6 +193,15 @@ locals {
     "cron-egress-resolve.timer",
     "cron-egress-alarm@.service",
     "cron-egress-postapply-assert.sh",
+    # Egress gateway artifacts (#9534): Squid conf + token auth helper + the
+    # shared deny set + bring-up script, installed by soleur-host-bootstrap.sh
+    # and mounted :ro into soleur-egress-gw. The forwarder rides the app image
+    # (same COPY set) — it executes in-container, not on the host.
+    "egress-gateway-squid.conf",
+    "egress-auth-helper.sh",
+    "egress-deny-cidrs.txt",
+    "egress-gateway-bootstrap.sh",
+    "egress-forwarder.mjs",
     # Fresh-host POST-CONTAINER egress-enforcement probe (#5933 item 3). The SSH
     # provisioner's cron-egress-postapply-assert.sh SKIPS the container probes on a
     # fresh host (no container yet); this baked script runs them at boot AFTER the app
@@ -2665,6 +2674,153 @@ resource "terraform_data" "cron_egress_firewall" {
       "set -e",
       "chmod +x /usr/local/bin/cron-egress-postapply-assert.sh",
       "bash /usr/local/bin/cron-egress-postapply-assert.sh",
+    ]
+  }
+}
+
+# Egress gateway delivery to the RUNNING web-1 (#9534). Fresh hosts get the
+# gateway via the baked set + cloud-init runcmd; web-1's cloud-init is frozen
+# (ignore_changes = [user_data]), so this provisioner is the sanctioned path.
+# Shape mirrors terraform_data.cron_egress_firewall: config_hash folds every
+# delivered artifact, server_id re-provisions a replaced VM.
+resource "terraform_data" "egress_gateway" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/egress-gateway-squid.conf"),
+      file("${path.module}/egress-auth-helper.sh"),
+      file("${path.module}/egress-deny-cidrs.txt"),
+      file("${path.module}/egress-gateway-bootstrap.sh"),
+    ]))
+    server_id = hcloud_server.web["web-1"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-squid.conf"
+    destination = "/usr/local/bin/egress-gateway-squid.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-auth-helper.sh"
+    destination = "/usr/local/bin/egress-auth-helper.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-bootstrap.sh"
+    destination = "/usr/local/bin/egress-gateway-bootstrap.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/egress-gateway-bootstrap.sh /usr/local/bin/egress-auth-helper.sh",
+      "bash /usr/local/bin/egress-gateway-bootstrap.sh",
+      # Re-run the nftables loader so the three gateway legs (forward accept,
+      # reply accept, SOLEUR-EGRESS-GW deny chain) install on the live host.
+      "systemctl restart cron-egress-firewall.service",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (#9534). Without this a running web-2
+# waits for its next -replace for the baked set, and an entitled session
+# landing there fails closed — safe, but silently dark on half the fleet.
+# Identical artifact set + order; only the host identity differs (web-2's
+# host key local is the #9393 deploy_pipeline_fix_web2 one).
+#
+# RUNNING-WEB-2 DELIVERY CENSUS (frozen cloud-init → these are the only
+# hot-delivery channels today; update when adding one):
+#   terraform_data.deploy_pipeline_fix_web2 — the full deploy-pipeline set
+#     (ci-deploy, webhook.service, infra-config, inngest-*, service drop-ins)
+#     + the three cron-egress artifacts (resolver, allowlist-cidr,
+#     post-apply assert) (#9151, #9393)
+#   terraform_data.egress_gateway_web2    — four gateway artifacts
+#     (squid.conf, auth helper, deny CIDRs, bootstrap) (#9534)
+# Everything else reaches a running web-2 only via -replace (birth set) or
+# not at all by role. web-host-provisioner-parity.test.sh forces every new
+# web-1 SSH provisioner through this classification — add the twin here or
+# record the W1_ONLY_JUSTIFIED reason.
+resource "terraform_data" "egress_gateway_web2" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/egress-gateway-squid.conf"),
+      file("${path.module}/egress-auth-helper.sh"),
+      file("${path.module}/egress-deny-cidrs.txt"),
+      file("${path.module}/egress-gateway-bootstrap.sh"),
+    ]))
+    server_id = hcloud_server.web["web-2"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-egress-gateway-web2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-squid.conf"
+    destination = "/usr/local/bin/egress-gateway-squid.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-auth-helper.sh"
+    destination = "/usr/local/bin/egress-auth-helper.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-bootstrap.sh"
+    destination = "/usr/local/bin/egress-gateway-bootstrap.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/egress-gateway-bootstrap.sh /usr/local/bin/egress-auth-helper.sh",
+      "bash /usr/local/bin/egress-gateway-bootstrap.sh",
+      # Re-run the nftables loader so the three gateway legs (forward accept,
+      # reply accept, SOLEUR-EGRESS-GW deny chain) install on the live host.
+      "systemctl restart cron-egress-firewall.service",
     ]
   }
 }

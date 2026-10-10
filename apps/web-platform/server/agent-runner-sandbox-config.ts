@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
 import {
   getWorkspacesRoot,
@@ -7,9 +7,10 @@ import {
   workspaceTenantDenyRoots,
 } from "./workspace-resolver";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
-import { basename, delimiter, join } from "path";
+import { basename, delimiter, dirname, join, resolve } from "path";
 import * as Sentry from "@sentry/nextjs";
 
+import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -100,7 +101,7 @@ export type AgentSandboxConfig = {
   // sandboxed Bash command. Typed (not left to the index signature) so a test
   // reads the entries as data, not `unknown`.
   credentials: {
-    envVars: { name: (typeof AGENT_AUTH_ENV_VARS)[number]; mode: "deny" }[];
+    envVars: { name: string; mode: "deny" }[];
   };
 } & { [x: string]: unknown };
 
@@ -237,6 +238,144 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
   ...GITHUB_ACTIONS_LOG_ACCOUNTS,
 ] as const);
 
+// feat-open-web-egress (#9534) — Phase-A credential quarantine for sessions
+// whose workspace enabled open web egress. With an open egress path, ANY
+// secret readable inside the sandbox is one prompt-injected `curl` away
+// from an attacker host — so the entitled session runs with NO readable
+// credentials in-sandbox (the UI copy promises "sessions run without stored
+// credentials in sandboxed commands"; the Phase-B broker #9543 restores
+// credentialed push). This census lives HERE (next to the deny emission) so
+// a new credential-bearing env var lands in the deny set the moment it is
+// added — derived from ALLOWED_SERVICE_ENV_VARS (the injection allowlist),
+// never hand-copied.
+//
+// Fixed names:
+//   - `GH_TOKEN`, `GIT_ASKPASS`, `GIT_INSTALLATION_TOKEN`, `GIT_USERNAME` —
+//     the in-sandbox gh/raw-git auth set (the askpass pair is deliberately
+//     injected for non-entitled sessions; under open egress it becomes an
+//     exfiltratable secret, so ALL four go — the both-or-nothing env pair
+//     is denied as a unit).
+//   - `GIT_TERMINAL_PROMPT` — not a secret, but denying the whole GIT_*
+//     auth surface keeps the census one rule ("no GIT_* auth plumbing
+//     readable") rather than a per-name judgment call. The `0` value only
+//     suppresses credential prompts — irrelevant once the credential set
+//     itself is denied.
+//   - the two CLI auth vars — denied for EVERY session by the W1 baseline
+//     (#9601); the census omits them because the CWE-526 sentinel pins even
+//     the identifiers to agent-env.ts and denies-reference right is reserved
+//     to AGENT_AUTH_ENV_VARS below.
+//     `deny` unsets for SANDBOXED COMMANDS ONLY (the CLI process keeps
+//     them; model calls unaffected — see plan §corrections).
+//   - every ALLOWED_SERVICE_ENV_VARS name — the full BYOK service-token
+//     census (STRIPE_SECRET_KEY, GITHUB_TOKEN, DOPPLER_TOKEN, …).
+// `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL` are deliberately ABSENT: they
+// are `/dev/null` neutralizations, and denying them would undo the
+// neutralization (plan review correction (a)).
+// Deduped: GITHUB_TOKEN appears in BOTH the fixed list and
+// ALLOWED_SERVICE_ENV_VARS (plan review correction (b)). The two Anthropic
+// auth vars are absent on purpose — the W1 baseline denies them for every
+// session and the credentials block unions both lists.
+const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
+  Array.from(
+    new Set([
+      "GH_TOKEN",
+      "GH_ENTERPRISE_TOKEN",
+      "GIT_ASKPASS",
+      "GIT_INSTALLATION_TOKEN",
+      "GIT_USERNAME",
+      "GIT_TERMINAL_PROMPT",
+      "GIT_SSH_COMMAND",
+      "SSH_AUTH_SOCK",
+      "SSH_AGENT_PID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      // Proxy steering is denied too — a *sandboxed* override could point
+      // traffic at an attacker listener; the sanctioned proxy path is the
+      // CLI-process env, outside sandbox reach.
+      "ALL_PROXY",
+      "all_proxy",
+      ...ALLOWED_SERVICE_ENV_VARS,
+    ]),
+  ),
+);
+
+/** Absolute paths denied to the entitled session's sandboxed commands:
+ *  the conventional credential file locations
+ *  (`GOOGLE_APPLICATION_CREDENTIALS` holds a PATH, so its target is a file
+ *  deny, not an env deny). `~` resolves against the container HOME.
+ *  The token dir is denied SEPARATELY — for EVERY session, not only the
+ *  entitled one: the dir holds every CONCURRENT session's live token (the
+ *  file's existence is the gateway credential), so an unentitled session
+ *  under `--ro-bind / /` could otherwise harvest a neighbor's bearer. */
+function webEgressDenyReadPaths(): string[] {
+  // Resolve against every plausible child HOME — the sandboxed process's
+  // effective HOME can diverge from the dispatcher's env under bwrap.
+  const homes = Array.from(
+    new Set([process.env.HOME ?? "/root", "/root", "/home/soleur"]),
+  );
+  const relDirs = [
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".docker",
+    ".doppler",
+    ".azure",
+    ".kube",
+    ".config/gh",
+    ".config/git",
+    ".config/gcloud",
+    ".claude",
+  ];
+  const relFiles = [
+    ".netrc",
+    ".git-credentials",
+    ".gitconfig",
+    ".npmrc",
+    ".pypirc",
+    ".config/git/credentials",
+    ".claude/.credentials.json",
+    ".claude.json",
+  ];
+  const paths = homes.flatMap((home) =>
+    [...relDirs, ...relFiles].map((r) => join(home, r)),
+  );
+  // A GOOGLE_APPLICATION_CREDENTIALS path (when set) is a credential FILE —
+  // deny its target too (resolve first: a relative value is a dead deny).
+  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (gac) paths.push(resolve(gac));
+  // Late-create hole: the SDK SKIPS non-existent deny paths, so a credential
+  // file materialized after sandbox start would be readable. Pre-create the
+  // denied paths (0700 dirs / 0600 files — inert to any real consumer).
+  for (const home of homes) {
+    for (const r of relDirs) {
+      try {
+        mkdirSync(join(home, r), { recursive: true, mode: 0o700 });
+      } catch {
+        /* best-effort */
+      }
+    }
+    for (const r of relFiles) {
+      try {
+        const fp = join(home, r);
+        mkdirSync(dirname(fp), { recursive: true, mode: 0o700 });
+        // "{}" not "" for JSON config files — an empty .claude.json would
+        // crash the CLI's startup parse before the sandbox even mattered.
+        // `flag: "wx"` — exclusive create, atomic: no existsSync-then-write
+        // TOCTOU (a same-uid process could swap the path for a symlink and
+        // make this write clobber an arbitrary file — CodeQL
+        // js/file-system-race).
+        writeFileSync(fp, r.endsWith(".json") ? "{}" : "", {
+          mode: 0o600,
+          flag: "wx",
+        });
+      } catch {
+        /* best-effort — EEXIST means the path is already there (deny applies) */
+      }
+    }
+  }
+  return paths;
+}
+
 
 /**
  * Build the canonical sandbox options block. Drift here propagates to BOTH
@@ -252,7 +391,20 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
  */
 export function buildAgentSandboxConfig(
   workspacePath: string,
-  opts?: { allowGithubEgress?: boolean; readOnly?: boolean; denyReadExtra?: readonly string[] },
+  opts?: {
+    allowGithubEgress?: boolean;
+    readOnly?: boolean;
+    denyReadExtra?: readonly string[];
+    /** feat-open-web-egress (#9534) — the workspace's `web_egress` grant is
+     *  ON for this dispatch AND the forwarder is live (fail-closed: the
+     *  dispatcher passes false when spawn fails). Phase-A quarantine:
+     *  `credentials.envVars` deny census unsets every secret var for
+     *  sandboxed commands and `denyRead` gains the credential-file + token-
+     *  dir paths. Open egress NEEDS no `httpProxyPort` here — the spawned
+     *  CLI's env proxy URL already steers both the in-process and the
+     *  SRT-chained sandboxed paths (Phase-0 spike, spec TR7). */
+    allowWebEgress?: boolean;
+  },
 ): AgentSandboxConfig {
   // ADR-113 — support-persona containment: additional absolute paths to obscure
   // (`--tmpfs`) from the read-only support session. The support agent runs under
@@ -353,7 +505,20 @@ export function buildAgentSandboxConfig(
   // which changes heap sizing for sandboxed subprocesses (no visible cgroup
   // limit → they size off host RAM); the kernel cgroup still enforces.
   const denyRead = Array.from(
-    new Set([...denyRoots, c4StagingRoot, "/proc", "/sys", ...(opts?.denyReadExtra ?? [])]),
+    new Set([
+      ...denyRoots,
+      c4StagingRoot,
+      "/proc",
+      "/sys",
+      ...(opts?.denyReadExtra ?? []),
+      // feat-open-web-egress (#9534): the shared session-token dir is denied
+      // for EVERY session — a file's existence IS a live gateway credential,
+      // so no session may read another's bearer. Credential files are denied
+      // ONLY for the entitled session (the extra denies would be dead config
+      // where no gateway exists — tracked as a hardening follow-up).
+      process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...(opts?.allowWebEgress ? webEgressDenyReadPaths() : []),
+    ]),
   );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
@@ -439,20 +604,39 @@ export function buildAgentSandboxConfig(
       // root-resident read-only caller doesn't silently blank.
       ...(opts?.readOnly ? { allowRead: [workspacePath] } : {}),
     },
-    // W1 (#9601, ADR-272): a prompt-injected session cannot read the owner's
-    // Anthropic key out of its shell. `deny` unsets the variable for
-    // every sandboxed command; the CLI process keeps it for its own API calls.
-    // Deliberately NOT denied: connected-service tokens (the agent is told they
-    // are available — `## Connected Services`), GH_TOKEN and
-    // GIT_INSTALLATION_TOKEN (`gh`/`git` need the short-lived App token). Those
-    // stay readable until the credential broker (#9543). Measured on SDK
-    // 0.3.284: the API key reaches Bash by default; the OAuth token is already
-    // withheld by the CLI, so its entry is defense in depth.
+    // feat-open-web-egress (#9534) — Phase-A credential quarantine. The W1
+    // baseline denies the two Anthropic auth vars to sandboxed Bash for EVERY
+    // session (#9601, ADR-272). For a web-egress-entitled session the deny
+    // widens to the full secret census: service tokens, GH_* auth vars, the
+    // GIT_* auth surface — the CLI process keeps them all (in-process tools
+    // unaffected). No `mask` entries: masking would re-inject the real value
+    // at the SRT proxy for allowedDomains hosts, and under open egress the
+    // whole point is that NOTHING credential-shaped leaves the box through
+    // the agent's channel.
     credentials: {
-      envVars: AGENT_AUTH_ENV_VARS.map((name) => ({
-        name,
-        mode: "deny" as const,
-      })),
+      // envVars: AGENT_AUTH_ENV_VARS.map(...) is the slice1-security pinned
+      // shape — the shared constant must lead the expression, so the egress
+      // census joins via concat rather than a Set-wrapped spread.
+      envVars: AGENT_AUTH_ENV_VARS.map(
+        // The widened return type ({name: string}) is required so .concat can
+        // take the census entries — AGENT_AUTH_ENV_VARS.map alone yields the
+        // literal-union name type. `mode: "deny" as const` on its own line is
+        // the slice1-security pinned denial marker.
+        (name): { name: string; mode: "deny" } => ({
+          name,
+          mode: "deny" as const,
+        }),
+      ).concat(
+        // filter, not concat-dupes: the census spreads ALLOWED_SERVICE_ENV_VARS,
+        // which already contains ANTHROPIC_API_KEY (the provider envVar) — a
+        // second deny row for it would break the dedup invariant the tests pin.
+        (opts?.allowWebEgress ? WEB_EGRESS_ENV_DENY_CENSUS : [])
+          .filter((n) => !(AGENT_AUTH_ENV_VARS as readonly string[]).includes(n))
+          .map((name) => ({
+            name,
+            mode: "deny" as const,
+          })),
+      ),
     },
   };
 }

@@ -1,0 +1,42 @@
+# Shared egress deny set — SINGLE SOURCE for the Squid `dst` ACL AND the
+# nftables SOLEUR-EGRESS-GW drop (#9534 / feat-open-web-egress).
+#
+# The gateway's CONNECT targets must never reach private/reserved space:
+# container bridges (docker0's 172.17.0.0/16 lives inside 172.16/12), the
+# cluster-private network (10.0.1.0/24 — inside 10/8), and the instance
+# metadata endpoint 169.254.169.254 (cloud-init user_data carries a Doppler
+# read token, #9378).
+#
+# Format: one CIDR per line, `#` comments allowed (full-line and trailing).
+# BOTH consumers read the bare-CIDR form: Squid's `dst` ACL parses v4 and v6
+# natively; the nftables loader (table ip filter) skips lines containing `:`.
+# Parity is enforced by egress-gateway.test.sh.
+10.0.0.0/8        # RFC1918 (incl. cluster-private 10.0.1.0/24)
+172.16.0.0/12     # RFC1918 (incl. docker0 172.17.0.0/16 + soleur-egress0)
+192.168.0.0/16    # RFC1918
+100.64.0.0/10     # CGNAT
+169.254.0.0/16    # link-local (instance metadata, #9378)
+127.0.0.0/8       # loopback
+0.0.0.0/8         # "this host" source range
+224.0.0.0/4       # multicast
+240.0.0.0/4       # reserved (incl. 255.255.255.255)
+192.0.0.0/24      # IANA protocol assignments
+192.0.2.0/24      # TEST-NET-1
+198.51.100.0/24   # TEST-NET-2
+203.0.113.0/24    # TEST-NET-3
+198.18.0.0/15     # benchmarking (RFC2544)
+192.88.99.0/24    # 6to4 relay anycast (deprecated)
+192.175.48.0/24   # AS112 sinkhole
+fc00::/7      # ULA
+fe80::/10     # v6 link-local
+::1/128       # v6 loopback
+::/128        # v6 unspecified
+::ffff:0:0/96  # v4-mapped v6
+64:ff9b::/96  # NAT64 well-known prefix
+64:ff9b:1::/48 # NAT64 local-use
+2002::/16     # 6to4
+2001::/32     # Teredo (embeds v4 exit addressing)
+ff00::/8      # v6 multicast
+fec0::/10     # v6 site-local (deprecated)
+2001:db8::/32 # v6 documentation
+100::/64      # discard-only (RFC6666)
