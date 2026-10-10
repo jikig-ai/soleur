@@ -462,12 +462,14 @@ describe("POST /api/webhooks/github — repo-scoped founder resolution (BUG 1)",
 // ---------------------------------------------------------------------------
 describe("POST /api/webhooks/github — draft-PR CI-run filter (ADR-276 S3)", () => {
   const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
-  const LOOKUP_PATH = `/repos/octo/repo/commits/${HEAD_SHA}/pulls?per_page=100`;
+  // The filter is scoped to the repository whose ci.yml carries the draft-light job.
+  const SCOPED_REPO = "jikig-ai/soleur";
+  const LOOKUP_PATH = `/repos/${SCOPED_REPO}/commits/${HEAD_SHA}/pulls?per_page=100`;
 
   function ciRunBody(run: Record<string, unknown> = {}): object {
     return {
       installation: { id: 42 },
-      repository: { full_name: "octo/repo" },
+      repository: { full_name: SCOPED_REPO },
       workflow_run: {
         name: "CI",
         path: ".github/workflows/ci.yml",
@@ -503,7 +505,12 @@ describe("POST /api/webhooks/github — draft-PR CI-run filter (ADR-276 S3)", ()
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ received: true });
     expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
-    expect(mockGithubApiGet).toHaveBeenCalledWith(42, LOOKUP_PATH, expect.anything());
+    // The call carries the deadline signal: without it a hung lookup could outlive GitHub's 10 s delivery window.
+    expect(mockGithubApiGet).toHaveBeenCalledWith(
+      42,
+      LOOKUP_PATH,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(mockInsert).not.toHaveBeenCalled();
     expect(mockInngestSend).not.toHaveBeenCalled();
     expect(mockSentryCaptureException).not.toHaveBeenCalled();
@@ -628,6 +635,63 @@ describe("POST /api/webhooks/github — draft-PR CI-run filter (ADR-276 S3)", ()
       expect.objectContaining({ feature: "github-webhook", op: "draft-ci-ambiguous" }),
     );
   });
+
+  it("another repository's draft CI failure (a customer installation with its own `CI` workflow): unchanged, NO lookup, card raised", async () => {
+    const res = await post({ ...ciRunBody(), repository: { full_name: "octo/repo" } });
+    expect(res.status).toBe(200);
+    expect(mockGithubApiGet).not.toHaveBeenCalled();
+    expectCardRaised();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("a lookup that never answers is abandoned at 5 s: fails OPEN (card raised) and is mirrored as draft-ci-lookup", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      mockGithubApiGet.mockReturnValueOnce(new Promise(() => {}));
+      let settled = false;
+      const pending = post(ciRunBody()).then((r) => {
+        settled = true;
+        return r;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const res = await pending;
+      expect(res.status).toBe(200);
+      expectCardRaised();
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("exceeded 5000 ms") }),
+        expect.objectContaining({ feature: "github-webhook", op: "draft-ci-lookup" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an aborted fetch (AbortError from the shared helper) fails OPEN and is mirrored", async () => {
+    mockGithubApiGet.mockRejectedValueOnce(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }));
+    const res = await post(ciRunBody());
+    expect(res.status).toBe(200);
+    expectCardRaised();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "AbortError" }),
+      expect.objectContaining({ op: "draft-ci-lookup" }),
+    );
+  });
+
+  it.each([["39 hex", "a".repeat(39)], ["65 hex", "a".repeat(65)], ["upper-case", "A".repeat(40)], ["empty", ""]])(
+    "head_sha of the wrong shape (%s): no lookup, fails OPEN, mirrored",
+    async (_label, sha) => {
+      const res = await post(ciRunBody({ head_sha: sha }));
+      expect(res.status).toBe(200);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expectCardRaised();
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({ op: "draft-ci-input" }),
+      );
+    },
+  );
 
   it("malformed head_sha: no lookup (nothing unvalidated reaches the API path), fails OPEN, mirrored", async () => {
     const res = await post(ciRunBody({ head_sha: "../../x?y=1" }));

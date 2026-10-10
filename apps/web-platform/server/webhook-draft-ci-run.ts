@@ -18,6 +18,20 @@
 // (cq-silent-fallback-must-mirror-to-sentry); "no matching open PR" and
 // "not a draft" are expected steady-state outcomes and are not.
 //
+// SCOPE. The light draft mode exists only in this repository's ci.yml, so the
+// filter applies to DRAFT_LIGHT_REPOS and nothing else: a customer installation
+// whose own workflow is also named `CI` at `.github/workflows/ci.yml` keeps its
+// card for a failing draft run (it has no light mode, and its default triggers
+// never re-run CI on ready, so a dropped card would never be re-raised).
+//
+// NOT governed by CI_DRAFT_LIGHT: the App cannot read the variable. From the
+// deploy of this filter, a genuinely failing ci.yml run on a draft PR of the
+// scoped repo raises no card whether or not the switch is on (it surfaces at the
+// ready run, and `test` still blocks the merge). Rollback of the switch does not
+// restore the card; reverting this filter does (ADR-276 S3 amendment, "How to
+// roll back"). A write collaborator can also convert a PR to draft before the
+// lookup to suppress a card for a genuine failure; the failing `test` still blocks.
+//
 // Known, accepted gap: a draft PR can be marked ready between the light run
 // and the webhook delivery. That run was a light draft run but its PR now
 // looks non-draft, so today's flow raises the card for it. Deliberately not
@@ -39,18 +53,23 @@ export type DraftCiRunVerdict =
   | { drop: true; prNumber: number; headSha: string }
   | { drop: false; reason: string };
 
-// Bounded wall-clock for the lookup. GitHub times a delivery out at 10 s; the
-// shared GET helper retries 5xx with 1 s / 2 s backoff, so cap the whole
-// attempt well inside that window and fail open on abort.
+// Bounded wall-clock for the WHOLE lookup, installation-token mint included.
+// GitHub times a delivery out at 10 s; the shared GET helper mints a token and
+// retries 5xx with 1 s / 2 s backoff, none of which the fetch signal covers on
+// its own, so the call is raced against the same deadline and fails open on it.
 const LOOKUP_TIMEOUT_MS = 5_000;
+
+// Repositories whose ci.yml carries the draft-light job (see SCOPE above).
+const DRAFT_LIGHT_REPOS: ReadonlySet<string> = new Set(["jikig-ai/soleur"]);
 
 const CI_WORKFLOW_NAME = "CI";
 const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 
-// Strict shapes: these values are interpolated into an API path, so anything
-// outside the expected alphabet is refused (fail open) instead of requested.
+// Strict shape: the SHA is interpolated into an API path, so anything outside
+// the expected alphabet is refused (fail open) instead of requested. The
+// repository name needs no pattern: it is looked up in DRAFT_LIGHT_REPOS, a
+// constant, before it can reach the path.
 const SHA_RE = /^[0-9a-f]{40,64}$/;
-const FULL_NAME_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 type CommitPull = {
   number?: number;
@@ -77,29 +96,41 @@ export async function isDraftPrCiRun(args: {
   const { installationId, fullName, run } = args;
   if (!run || !isCiWorkflowRun(run)) return { drop: false, reason: "not-ci-workflow" };
   if (run.event !== "pull_request") return { drop: false, reason: "not-pull-request-event" };
+  if (!DRAFT_LIGHT_REPOS.has(fullName)) return { drop: false, reason: "repo-not-in-scope" };
 
   const headSha = run.head_sha;
-  if (typeof headSha !== "string" || !SHA_RE.test(headSha) || !FULL_NAME_RE.test(fullName)) {
+  if (typeof headSha !== "string" || !SHA_RE.test(headSha)) {
     reportSilentFallback(null, {
       feature: "github-webhook",
       op: "draft-ci-input",
-      message: "draft-PR CI-run filter: malformed head_sha or repository.full_name — failing open",
+      message: "draft-PR CI-run filter: malformed head_sha — failing open",
       extra: { installationId, hasHeadSha: typeof headSha === "string" },
     });
     return { drop: false, reason: "invalid-input" };
   }
 
   let pulls: unknown;
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), LOOKUP_TIMEOUT_MS);
   try {
     // Dynamic import: keeps the GitHub App / key-material module graph out of
     // every delivery that never reaches this point (only CI pull_request
     // failures do), mirroring how the route loads the Inngest client.
     const { githubApiGet } = await import("@/server/github-api");
-    pulls = await githubApiGet<unknown>(
-      installationId,
-      `/repos/${fullName}/commits/${headSha}/pulls?per_page=100`,
-      { signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS) },
-    );
+    pulls = await Promise.race([
+      githubApiGet<unknown>(
+        installationId,
+        `/repos/${fullName}/commits/${headSha}/pulls?per_page=100`,
+        { signal: deadline.signal },
+      ),
+      new Promise<never>((_, reject) => {
+        deadline.signal.addEventListener(
+          "abort",
+          () => reject(new Error(`draft-ci head-SHA lookup exceeded ${LOOKUP_TIMEOUT_MS} ms`)),
+          { once: true },
+        );
+      }),
+    ]);
     if (!Array.isArray(pulls)) throw new Error("commit pulls lookup returned a non-array body");
   } catch (err) {
     reportSilentFallback(err, {
@@ -109,6 +140,8 @@ export async function isDraftPrCiRun(args: {
       extra: { installationId, fullName, headSha },
     });
     return { drop: false, reason: "lookup-failed" };
+  } finally {
+    clearTimeout(timer);
   }
 
   const matches = (pulls as CommitPull[]).filter(
