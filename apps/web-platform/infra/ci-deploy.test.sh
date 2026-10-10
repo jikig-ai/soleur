@@ -8246,7 +8246,7 @@ if (( ${#T3_PAY} > 200 )); then
   T3_BAD="${T3_BAD}\n    err payload is ${#T3_PAY} bytes, bound is 200"
 fi
 # NEGATIVE 2 — no control characters anywhere in the payload (TAB and BEL were both injected).
-if printf '%s' "$T3_PAY" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+if printf '%s' "$T3_PAY" | LC_ALL=C grep -c >/dev/null '[[:cntrl:]]'; then
   T3_BAD="${T3_BAD}\n    err payload still carries control characters"
 fi
 # NEGATIVE 3 — the dp.st. secret is redacted, checked against the WHOLE sink and not just the
@@ -10302,7 +10302,7 @@ _gak_static() {  # <ci-file> <boot-file>
   # The emitter must be CALLED from code, not merely named in a comment (test-design F14): comment
   # lines are stripped and the call shape (a classification and a level) is required.
   if ! grep -qx 'overlay_github_app_key() {' "$b1" || ! grep -qx 'github_app_key_present() {' "$b1" \
-     || ! grep -v '^[[:space:]]*#' "$b1" | grep -qE '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
+     || ! grep -v '^[[:space:]]*#' "$b1" | grep -cE >/dev/null '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
     GAK_WHY="the ci-deploy block does not define the overlay/presence functions or never calls the emitter"; rm -f "$b1" "$b2"; return 1
   fi
   if ! cmp -s "$b1" "$b2"; then GAK_WHY="the two blocks differ ($(cmp "$b1" "$b2" 2>&1 | head -1))"; rm -f "$b1" "$b2"; return 1; fi

@@ -127,7 +127,7 @@ else
 fi
 
 # S6b: the bootstrap splices the Terraform host name into the marker, and tolerates it unspliced.
-if grep -qF 'sed -i "s|@@SOLEUR_HOST_NAME@@|${SOLEUR_HOST_NAME:-}|" /usr/local/bin/soleur-fresh-boot-ready' "$BOOT" && printf '%s\n' "$HELPER" | grep -qF "HOST='@@SOLEUR_HOST_NAME@@'"; then
+if grep -qF 'sed -i "s|@@SOLEUR_HOST_NAME@@|${SOLEUR_HOST_NAME:-}|" /usr/local/bin/soleur-fresh-boot-ready' "$BOOT" && printf '%s\n' "$HELPER" | grep -cF >/dev/null "HOST='@@SOLEUR_HOST_NAME@@'"; then
   ok "S6b: the readiness marker carries the spliced Terraform host name sentinel and the bootstrap resolves it"
 else
   no "S6b: the readiness marker must splice @@SOLEUR_HOST_NAME@@ (the verify leg joins on the exact Terraform name)"
@@ -291,7 +291,7 @@ run_case() {
   local label="$1" expect="$2" emits="$3"
   run_helper
   if [ -n "$R_REFUSED" ]; then verdict "$label" no "a stub refused unexpected argv: $R_REFUSED"; return; fi
-  if ! printf '%s' "$R_ROW" | grep -qF -- "$expect"; then verdict "$label" no "row: expected '$expect', got '${R_ROW:-<no marker emitted>}'"; return; fi
+  if ! printf '%s' "$R_ROW" | grep -cF >/dev/null -- "$expect"; then verdict "$label" no "row: expected '$expect', got '${R_ROW:-<no marker emitted>}'"; return; fi
   if [ "$R_EMITS" != "$emits" ]; then verdict "$label" no "emits: expected '$emits', got '$R_EMITS'"; return; fi
   verdict "$label (row + emits '$emits')" ok ""
 }
@@ -341,7 +341,7 @@ case_prec_tv; case_prec_vv; case_bootid_bound; case_arm_vocab
 # The unreadable-boot-id case must also be SILENT on stderr (the redirect has to precede the `<`, else the
 # shell reports the open failure before the 2>/dev/null applies).
 case_bootid_silent() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_BOOT_ID='' run_helper
-  if printf '%s' "$R_ERR" | grep -qF 'No such file'; then verdict "boot-id-unreadable is silent on stderr" no "stderr: $R_ERR"; else verdict "boot-id-unreadable is silent on stderr" ok ""; fi; }
+  if printf '%s' "$R_ERR" | grep -cF >/dev/null 'No such file'; then verdict "boot-id-unreadable is silent on stderr" no "stderr: $R_ERR"; else verdict "boot-id-unreadable is silent on stderr" ok ""; fi; }
 case_bootid_silent
 
 # --- The Better Stack channel: success, skipped (no token / no url / unpinned), failed ---
@@ -354,7 +354,7 @@ bs_check() { # <label> <expected-emits> <expected-curl-count> <expected-detail-r
   if [ "$R_CURL" != "$ncurl" ]; then verdict "$label" no "curl invocations: expected $ncurl, got $R_CURL"; return; fi
   if [ -z "$detre" ]; then
     if [ -n "$det" ]; then verdict "$label" no "a bs_egress detail was written on a healthy channel: $det"; return; fi
-  elif ! printf '%s' "$det" | grep -qE "$detre"; then verdict "$label" no "detail: expected /$detre/, got '$det'"; return; fi
+  elif ! printf '%s' "$det" | grep -cE >/dev/null "$detre"; then verdict "$label" no "detail: expected /$detre/, got '$det'"; return; fi
   if [ -n "$btok" ]; then
     # (#9597) the bearer rides curl's stdin config, never its argument list.
     case "$R_CURL_ARGV" in *"$btok"*) verdict "$label" no "the token is on curl's argv: $R_CURL_ARGV"; return ;; esac

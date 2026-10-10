@@ -626,7 +626,7 @@ if [[ -f "$RUNBOOK" ]]; then
   TABLE="$(grep -E '^  \| ' "$RUNBOOK")"
   for k in jump_present drop_present log_present rc_jump rc_drop read_failed read_retried docker_since loader_since loader_rc host; do
     RUNBOOK_KEYS=$((RUNBOOK_KEYS + 1))
-    printf '%s\n' "$TABLE" | grep -qF "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
+    printf '%s\n' "$TABLE" | grep -cF >/dev/null "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
   done
 fi
 if [[ "$RUNBOOK_KEYS" -ne 11 ]]; then printf '[FATAL] runbook parity ran %d rows, expected 11 (is the runbook missing?).\n' "$RUNBOOK_KEYS" >&2; exit 1; fi

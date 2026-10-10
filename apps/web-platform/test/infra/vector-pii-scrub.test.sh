@@ -326,7 +326,7 @@ FILTER_PROG=$(extract_filter_condition | sed '0,/^if /s//.keep = if /')
 # invisible to the conservation identity below (a case with no verdict, or a verdict with no
 # case, depending on where the increment sat). Every counted case records exactly one verdict.
 CASES=$((CASES + 1))
-if [[ -z "$FILTER_PROG" ]] || ! echo "$FILTER_PROG" | grep -q '\.keep = if '; then
+if [[ -z "$FILTER_PROG" ]] || ! echo "$FILTER_PROG" | grep -c >/dev/null '\.keep = if '; then
   fail "app_container_warn_filter: condition extraction/rewrite failed"
 else
   pass "app_container_warn_filter condition extracted and rewritten for evaluation"
@@ -395,7 +395,7 @@ HOST_SCRIPTS_BLOCK=$(awk '
 
 # AC1: the dedicated source exists and is a journald source.
 CASES=$((CASES + 1))   # ADR-193 #2 — inline CALL SITE increment, never inside pass()/fail().
-if [[ -n "$HOST_SCRIPTS_BLOCK" ]] && echo "$HOST_SCRIPTS_BLOCK" | grep -qE '^type = "journald"$'; then
+if [[ -n "$HOST_SCRIPTS_BLOCK" ]] && echo "$HOST_SCRIPTS_BLOCK" | grep -cE >/dev/null '^type = "journald"$'; then
   pass "host_scripts_journald source exists (type=journald)"
 else
   fail "AC1: [sources.host_scripts_journald] with type=\"journald\" not found"
@@ -413,7 +413,7 @@ fi
 # token grep makes the guard and its own documentation mutually exclusive: it false-FAILS on
 # the prose. A comment line cannot produce `include_matches.PRIORITY =`.
 CASES=$((CASES + 1))
-if echo "$HOST_SCRIPTS_BLOCK" | grep -qE '^[[:space:]]*include_matches\.PRIORITY[[:space:]]*='; then
+if echo "$HOST_SCRIPTS_BLOCK" | grep -cE >/dev/null '^[[:space:]]*include_matches\.PRIORITY[[:space:]]*='; then
   fail "AC2: host_scripts_journald must NOT carry an include_matches.PRIORITY line (would drop PRIORITY 4-5 host-script lines)"
 else
   pass "host_scripts_journald has no PRIORITY filter (captures PRIORITY 4-5)"
@@ -529,7 +529,7 @@ fi
 # on its own, with no reference to any logger call.
 SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u)
 CASES=$((CASES + 1))
-if printf '%s\n' "$SYSLOG_ID_DERIVED" | grep -qx 'inngest-heartbeat'; then
+if printf '%s\n' "$SYSLOG_ID_DERIVED" | grep -cx >/dev/null 'inngest-heartbeat'; then
   pass "inngest-heartbeat derives from the unit's SyslogIdentifier= alone (independent of the dark arm)"
 else
   fail "AC3b: inngest-heartbeat is no longer derivable from a SyslogIdentifier= line in infra/*.sh.
@@ -595,7 +595,7 @@ for svc in "$INFRA_DIR"/*.service; do
   SERVICE_BASENAMES+="$tag"$'\n'
   BN_DERIVED=$((BN_DERIVED+1))
   # Covered if shipped (in the allowlist) OR excluded-with-reason.
-  printf '%s\n' "$ACTUAL_TAGS" | grep -qxF "$tag" && continue
+  printf '%s\n' "$ACTUAL_TAGS" | grep -cxF >/dev/null "$tag" && continue
   [[ -n "${SYSLOG_TAG_EXCLUSIONS[$tag]+x}" ]] && continue
   SERVICE_BASENAME_VIOLATORS+="$(basename "$svc") tags as '$tag' (ExecStart basename) — add SyslogIdentifier= + a Source 4 entry, or exclude '$tag' with a reason"$'\n'
 done
@@ -613,7 +613,7 @@ fi
 # AC3c-disjoint: an exclusion must NOT also be a shipped tag (a tag is shipped OR excluded, never both).
 EXCL_SHIPPED=""
 for k in "${!SYSLOG_TAG_EXCLUSIONS[@]}"; do
-  printf '%s\n' "$ACTUAL_TAGS" | grep -qxF "$k" && EXCL_SHIPPED+="$k "
+  printf '%s\n' "$ACTUAL_TAGS" | grep -cxF >/dev/null "$k" && EXCL_SHIPPED+="$k "
 done
 CASES=$((CASES + 1))
 if [[ -n "$EXCL_SHIPPED" ]]; then
@@ -626,7 +626,7 @@ fi
 # a dead exclusion for a non-existent emitter is drift the guard should surface.
 STALE_EXCL=""
 for k in "${!SYSLOG_TAG_EXCLUSIONS[@]}"; do
-  printf '%s\n' "$SERVICE_BASENAMES" | grep -qxF "$k" || STALE_EXCL+="$k "
+  printf '%s\n' "$SERVICE_BASENAMES" | grep -cxF >/dev/null "$k" || STALE_EXCL+="$k "
 done
 CASES=$((CASES + 1))
 if [[ -n "$STALE_EXCL" ]]; then

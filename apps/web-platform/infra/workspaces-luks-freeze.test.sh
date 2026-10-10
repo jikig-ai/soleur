@@ -620,7 +620,7 @@ t41_violations() {  # <seed-text> <defs-text> -> count of arm/disarm calls in se
   local n=0 fn
   n=$(grep -cE '(^|[^A-Za-z0-9_])(arm_dead_man|disarm_dead_man)([^A-Za-z0-9_]|$)' <<<"$1" || true)
   for fn in $(t41_reach "$1" "$2"); do
-    t41_body "$fn" "$2" | sed -E "1s/^${fn}\(\) *\{//" | grep -qE '(^|[^A-Za-z0-9_])(arm_dead_man|disarm_dead_man)([^A-Za-z0-9_]|$)' && n=$((n + 1))
+    t41_body "$fn" "$2" | sed -E "1s/^${fn}\(\) *\{//" | grep -cE >/dev/null '(^|[^A-Za-z0-9_])(arm_dead_man|disarm_dead_man)([^A-Za-z0-9_]|$)' && n=$((n + 1))
   done
   printf '%s' "$n"
 }

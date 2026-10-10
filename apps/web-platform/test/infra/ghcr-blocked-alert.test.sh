@@ -134,7 +134,7 @@ SINK_N="$(grep -nE '^logger -t "\$LOG_TAG" "GHCR_DENY ghcr_blocked=\$_ghcr_block
 SHA_N="$(grep -nE '^logger -t "\$LOG_TAG" "DEPLOY_SCRIPT_SHA ' "$CI" | head -1 | cut -d: -f1)"
 LOCK_N="$(grep -nE '^LOCK_FILE=' "$CI" | head -1 | cut -d: -f1)"
 if [[ "$SINK_N" =~ ^[0-9]+$ && "$SHA_N" =~ ^[0-9]+$ && "$LOCK_N" =~ ^[0-9]+$ ]] && [ "$SHA_N" -lt "$SINK_N" ] && [ "$SINK_N" -lt "$LOCK_N" ] \
-   && ! sed -n "${SHA_N},${LOCK_N}p" "$CI" | grep -vE '^[[:space:]]*#' | grep -qE '\b(exit|return)\b'; then
+   && ! sed -n "${SHA_N},${LOCK_N}p" "$CI" | grep -vE '^[[:space:]]*#' | grep -cE >/dev/null '\b(exit|return)\b'; then
   ok "the web sink sits after the DEPLOY_SCRIPT_SHA logger and before the lock, with no exit or return (any indentation, comments stripped) anywhere between those two anchors, so nothing there can skip it"
 else
   no "the GHCR_DENY sink is no longer between the DEPLOY_SCRIPT_SHA logger and LOCK_FILE=, or an exit/return now sits between those anchors — a validated invocation could skip it"
@@ -147,7 +147,7 @@ grep -qxF 'readonly LOG_TAG="ci-deploy"' "$CI" \
   || no "ci-deploy.sh no longer clamps _ghcr_blocked to 1 | 0 | unknown — the alert's value-0 literal may no longer be reachable"
 # The DIRECTION of the derivation: 0 must be printed on the branch where a NON-sinkhole address resolves.
 # Swapping the two echoes keeps every literal intact and pages on the healthy state / goes silent on a loss.
-if grep -A1 -xF "  elif grep -qvxE '0\.0\.0\.0|::' <<<\"\$addrs\"; then" "$CI" | grep -qxF '    echo 0'; then
+if grep -A1 -xF "  elif grep -qvxE '0\.0\.0\.0|::' <<<\"\$addrs\"; then" "$CI" | grep -cxF >/dev/null '    echo 0'; then
   ok "the web emitter derives 0 on the branch where a non-sinkhole address resolves (the deny is NOT in force)"
 else
   no "ci-deploy.sh no longer prints 0 on the non-sinkhole branch of _ghcr_blocked_state — the alert's value-0 literal may mean the opposite"
