@@ -1113,21 +1113,26 @@ else
       case "$p" in
         glob:*)
           # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
-          # malformed-shape invariant — ONE doctrine, THREE sites: the mint arm
+          # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
           # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
-          # and this census arm must classify a shape identically. Here a
-          # malformed or dead declared glob is a static RED, not a runtime
-          # narrow: a bad entry mints an always-match edge, which WIDENS every
-          # diff's selection — the silent-widening this census exists to catch.
+          # this census arm, the covers() oracle in
+          # scripts/test-affected-kb-consumers.test.sh, and the GLOBENT shape in
+          # the registration-only classifier must classify a shape identically.
+          # Here a malformed or dead declared glob is a static RED, not a
+          # runtime narrow: a bad entry degrades WIDER than declared — and a
+          # `..`/`/`-headed glob can pass the -d probe while matching no
+          # repo-relative diff line ever (a dead edge that narrows).
           _cg="${p#glob:}"
           _cg_why=""
           case "$_cg" in
             *[\*?[]*)
               case "$_cg" in
                 *[?[]*) _cg_why="contains ? or [ (outside the grammar)" ;;
+                *[!A-Za-z0-9_./*-]*) _cg_why="contains a byte outside the grammar charset" ;;
                 *)
                   _cgh="${_cg%%[*?[]*}"
                   case "$_cgh" in
+                    /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _cg_why="its head is not a repo-relative prefix" ;;
                     */)
                       _cgt="${_cg#$_cgh}"
                       case "$_cgt" in
@@ -1151,7 +1156,7 @@ else
               ;;
           esac
           if [[ -n "$_cg_why" ]]; then
-            echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why} -- it mints an always-match edge and would widen every diff's selection." >&2
+            echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why} -- it degrades wider than declared and would silently widen every diff's selection." >&2
             fails=$((fails + 1))
           fi
           ;;

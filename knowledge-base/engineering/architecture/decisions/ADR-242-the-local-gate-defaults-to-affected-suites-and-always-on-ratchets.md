@@ -583,20 +583,25 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     walkers whose read set is narrower than a directory.** Six `*.sh` corpus walkers declared
     `knowledge-base/` — honest at prefix granularity (generated operator scripts ship under
     `knowledge-base/project/specs/`) but over-broad in practice: a `.md`-only kb diff could never
-    move their verdict yet selected all six for ~331 committed seconds. A `glob:` entry mints
-    `^glob:<pattern>`; a diff line under the literal head matching the tail under bash `[[ == ]]`
-    semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers both `x.sh` and `a/b/c.sh`)
-    selects the suite. The degrade ladder always fails toward coverage: a missing head dir mints
-    `^<head>/` (the dir-prefix edge the entry replaced), a malformed entry mints
+    move their verdict yet selected all six for ~264 committed seconds (the issue's ~331 s figure
+    counted `test-affected-kb-consumers` too, which still selects on any kb path by design). A
+    `glob:` entry mints `^glob:<pattern>`; a diff line under the literal head matching the tail
+    under bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers both `x.sh`
+    and `a/b/c.sh`) selects the suite. The degrade ladder always fails toward coverage: a missing
+    head dir mints `^<head>/` (the dir-prefix edge the entry replaced), a malformed entry mints
     `^glob:<entry verbatim>` — an always-match shape, since a bare `^` would evaluate `*\n\n*` and
     narrow — and a `glob:` with no metachar recurses as a literal path entry. `glob:` is
-    declaration-array-only: never emitted by the token extractors, and the consumed/relevance
-    arrays stay verbatim substring edges. The malformed-shape doctrine is pinned identical at
-    three sites — the mint arm in `_affected_add_edge`, the in-flight revalidation in
-    `_diff_edge_hit`, and the census arm in `scripts/lint-orphan-test-suites.sh`, which flags a
-    malformed or dead declared glob as a static RED (a bad entry widens every diff's selection).
-    The registration-only classifier's closed grammar admits the shape as `GLOBENT`; every other
-    added line stays semantic. The two real `.md` reads under kb the consumer ratchet surfaced —
+    declaration-array-only by intent: the token extractors never emit it on purpose (a
+    `glob:`-spelled literal in scanned content still hits the same mint arm — widen-only), and the
+    relevance arrays stay verbatim substring edges. The malformed-shape doctrine — a closed
+    charset (`[-A-Za-z0-9_./]` plus `*` in the tail) and a repo-relative head (a `..`/`/`/`//`
+    head can pass a `-d` probe while matching no diff line ever — review B1) — is pinned
+    identical at five sites: the mint arm in `_affected_add_edge`, the in-flight revalidation in
+    `_diff_edge_hit`, the census arm in `scripts/lint-orphan-test-suites.sh` (a static RED, since
+    a bad entry widens every diff's selection), the `covers()` oracle in
+    `scripts/test-affected-kb-consumers.test.sh`, and the `GLOBENT` shape in the
+    registration-only classifier, which admits the shape as registration-only; every other added
+    line stays semantic. The two real `.md` reads under kb the consumer ratchet surfaced —
     the provision-script `DPA_FILE` closure for `operator-ack-guard`, the ADR-207 path for
     `operator-agent-runnable` — are literal file edges: the issue's `.md`-only-decline contract
     holds for the corpus scan, not for reads a suite actually has. And

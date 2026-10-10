@@ -38,12 +38,14 @@
 # corpus walkers: a diff line under <literal-head> matching <glob-tail> under
 # bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers
 # `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike). `glob:` is
-# DECLARED-ARRAY-ONLY — it is never emitted by the token extractors, and
-# AFFECTED_CONSUMED_EDGES / the relevance arrays stay verbatim substring
-# edges. Malformed entries fail toward coverage: they mint an always-match
-# edge (the malformed-shape invariant in scripts/test-all.sh
-# _affected_add_edge), and the census linter flags them statically. Keep
-# entries repo-relative. Matching is ANCHORED (#9307): a directory entry
+# DECLARED-ARRAY-ONLY: the token extractors never emit it on purpose (a
+# `glob:`-spelled literal in scanned content still hits the same mint arm —
+# widen-only). The relevance arrays DO stay verbatim substring edges — a
+# `glob:` member there is a dead edge the relevance census catches.
+# Malformed entries fail toward coverage: they mint an always-match
+# `^glob:<verbatim>` edge (the malformed-shape invariant — closed charset +
+# repo-relative head — in scripts/test-all.sh _affected_add_edge), and the
+# census linter flags them statically. Keep entries repo-relative. Matching is ANCHORED (#9307): a directory entry
 # selects a suite only when a diff path STARTS with it, a file entry only
 # when a diff path EQUALS it, and a directory written without the trailing
 # "/" is normalised to one. So `test/` does not match

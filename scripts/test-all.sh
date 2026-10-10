@@ -2113,23 +2113,29 @@ _diff_edge_hit() {
       # _affected_add_edge. A diff line under <literal-head> matching <glob-tail>
       # (bash [[ == ]] semantics — `*` crosses `/`, so `knowledge-base/**.sh`
       # covers `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike).
-      # malformed-shape invariant — ONE doctrine, THREE sites: the mint arm in
-      # _affected_add_edge, this in-flight revalidation, and the census arm in
-      # scripts/lint-orphan-test-suites.sh must classify a shape identically.
+      # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm in
+      # _affected_add_edge, this in-flight revalidation, the census arm in
+      # scripts/lint-orphan-test-suites.sh, the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh, and the GLOBENT shape in the
+      # registration-only classifier must classify a shape identically.
       # Every malformed shape returns MATCH here — a glob edge can only widen a
       # selection, never narrow it.
       local _g="${e#glob:}" _gh _gt _line
       case "$_g" in
-        *[?[]*) return 0 ;;
+        *[!A-Za-z0-9_./*-]*) return 0 ;;    # byte outside the grammar charset → match
       esac
       _gh="${_g%%[*?[]*}"
-      case "$_gh" in */) ;; *) return 0 ;; esac
+      case "$_gh" in
+        /*|./*|../*|*"//"*|*"/./"*|*"/../"*) return 0 ;;  # not repo-relative → match
+        */) ;;
+        *) return 0 ;;
+      esac
       _gt="${_g#$_gh}"
       case "$_gt" in *\**) ;; *) return 0 ;; esac
       # Cheap head pre-check — no line under the head means no line can match.
       [[ "$_n" == *"${_NL}${_gh}"* ]] || return 1
       while IFS= read -r _line; do
-        [[ -n "$_line" ]] && [[ "$_line" == $_g ]] && return 0
+        [[ -n "$_line" && "$_line" == "$_gh"* && "$_line" == $_g ]] && return 0
       done <<< "$_DEH_N"
       return 1
       ;;
@@ -2758,14 +2764,24 @@ _affected_add_edge() {
         *[\*?[]*) : ;;                      # a metachar is present — the glob grammar applies
         *) _affected_add_edge "$_g"; return 0 ;;   # none: a literal path entry
       esac
-      # malformed-shape invariant — ONE doctrine, THREE sites: this mint arm, the
-      # in-flight revalidation in _diff_edge_hit's glob:* arm, and the census arm
-      # in scripts/lint-orphan-test-suites.sh must classify a shape identically.
+      # malformed-shape invariant — ONE doctrine, FIVE sites: this mint arm, the
+      # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
+      # scripts/lint-orphan-test-suites.sh, the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh, and the GLOBENT shape in the
+      # registration-only classifier below must classify a shape identically.
+      # The grammar is a CLOSED charset (any byte outside [-A-Za-z0-9_./:*]'s
+      # entry set is malformed — ? [ \ space : are all outside it) and the head
+      # must be a clean repo-relative prefix: a `..` or `/`-headed glob can pass
+      # a -d probe while matching no diff line ever — a dead edge that narrows.
+      # Note the arm also intercepts `glob:`-spelled tokens minted from file
+      # CONTENT (not only declared arrays): those mint malformed → always-match,
+      # which is widen-only by design.
       case "$_g" in
-        *[?[]*) _p="^glob:${_p}" ;;         # ? or [ anywhere → malformed → verbatim
+        *[!A-Za-z0-9_./*-]*) _p="^glob:${_p}" ;;   # byte outside the grammar charset → verbatim
         *)
           _gh="${_g%%[*?[]*}"               # longest leading metachar-free run
           case "$_gh" in
+            /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _p="^glob:${_p}" ;;  # not repo-relative → verbatim
             */)
               _gt="${_g#$_gh}"
               case "$_gt" in
@@ -5252,13 +5268,13 @@ if want_scripts; then
   # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
     run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-26
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
       "bash scripts/lint-orphan-test-suites.test.sh --rows 1-13"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 14-26"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 14-27"
   fi
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a

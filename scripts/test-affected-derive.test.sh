@@ -1133,16 +1133,20 @@ else
 fi
 
 # Malformed, metachar-bearing: no `*/` head (`a*/b`), an empty head (`*.sh`), `?`,
-# `[` — each mints ^glob:<entry verbatim>. `glob:x` is NOT here: with no metachar it
-# is a literal, which Rg4 drives.
+# `[`, a byte outside the grammar charset (`\`, space, `:`), and a head that is not
+# a clean repo-relative prefix (`../`, `/`, `//`, `/./`, `/../`) — each mints
+# ^glob:<entry verbatim>. `glob:x` is NOT here: with no metachar it is a literal,
+# which Rg4 drives.
 cases=$((cases + 1))
 _rg3="$(derive_run "$FXG" '_affected_reset_edges
-  for _e in "glob:a*/b" "glob:*.sh" "glob:'"${_KB}"'/?a" "glob:'"${_KB}"'/[a]"; do _affected_add_edge "$_e"; done
+  for _e in "glob:a*/b" "glob:*.sh" "glob:'"${_KB}"'/?a" "glob:'"${_KB}"'/[a]" \
+            "glob:../x/*.sh" "glob:/x/*.sh" "glob:a//b/*.sh" "glob:a/./b/*.sh" "glob:a/../b/*.sh" \
+            "glob:a\\b/*.sh" "glob:a b/*.sh" "glob:x:y/*.sh"; do _affected_add_edge "$_e"; done
   printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
-if [[ "$_rg3" == "^glob:glob:a*/b ^glob:glob:*.sh ^glob:glob:${_KB}/?a ^glob:glob:${_KB}/[a]" ]]; then
-  pass "Rg3: every metachar-bearing malformed shape mints ^glob:<entry verbatim>"
+if [[ "$_rg3" == "^glob:glob:a*/b ^glob:glob:*.sh ^glob:glob:${_KB}/?a ^glob:glob:${_KB}/[a] ^glob:glob:../x/*.sh ^glob:glob:/x/*.sh ^glob:glob:a//b/*.sh ^glob:glob:a/./b/*.sh ^glob:glob:a/../b/*.sh ^glob:glob:a\\b/*.sh ^glob:glob:a b/*.sh ^glob:glob:x:y/*.sh" ]]; then
+  pass "Rg3: every metachar-bearing malformed shape mints ^glob:<entry verbatim> (charset + repo-relative head)"
 else
-  fail "Rg3: got '${_rg3:0:300}'"
+  fail "Rg3: got '${_rg3:0:600}'"
 fi
 
 # No metachar at all: a literal path entry — file mints ^file, dir mints ^dir/,

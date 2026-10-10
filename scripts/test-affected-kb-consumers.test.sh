@@ -270,13 +270,18 @@ def covers(edge, p):
         e = edge[1:]
         if e.startswith("glob:"):
             # Third edge kind (#9813) — malformed-shape invariant: this predicate
-            # classifies the same shapes as the mint arm in _affected_add_edge and
-            # the in-flight revalidation in _diff_edge_hit. A malformed minted edge
-            # always-matches, so it covers by construction (never a narrowing).
+            # classifies the same shapes as the mint arm in _affected_add_edge, the
+            # in-flight revalidation in _diff_edge_hit, the census arm in
+            # lint-orphan-test-suites.sh, and the GLOBENT classifier shape. A
+            # malformed minted edge always-matches, so it covers by construction.
             g = e[5:]
             head = re.match(r'[^*?\[\]]*', g).group(0)
-            if ("?" in g or "[" in g or not head.endswith("/")
-                    or "*" not in g[len(head):]):
+            tail = g[len(head):]
+            if (re.search(r'[^A-Za-z0-9_./*-]', g)
+                    or not head.endswith("/")
+                    or head.startswith(("/", "./", "../"))
+                    or "//" in head or "/./" in head or "/../" in head
+                    or "*" not in tail):
                 return True
             if os.path.isdir(p):
                 # A dir ref is covered iff p/head nest — the glob's reach intersects it.
@@ -681,6 +686,35 @@ if [[ "$_k4_real" == "1 0 1" && "$_k4_n" == "1" && "$_k4_mut" == "1 1 1" ]]; the
   pass "k4: ^knowledge-base/legal/ covers legal/x and legal itself but not legal-x/f; without the trailing slash it would cover the sibling (mutation landed once)"
 else
   fail "k4: real='${_k4_real}' (want 1 0 1) mutation landed=${_k4_n} mutant='${_k4_mut}' (want 1 1 1)"
+fi
+
+# k5: the ^glob: arm — a valid glob covers .sh under its head at any depth and no
+# other file; every malformed minted edge covers by construction (never narrows);
+# a dir ref under or equal to the head is covered via the nest clause. The kb
+# literal is COMPOSED — a bare token here would be charged to this suite as a read.
+cases=$((cases + 1))
+_k5=$(cd "$REPO_ROOT" && python3 - "$ORACLE" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+tests = [
+    ("^glob:" + KB + "/**.sh", KB + "/x.sh"),
+    ("^glob:" + KB + "/**.sh", KB + "/a/b/c.sh"),
+    ("^glob:" + KB + "/**.sh", KB + "/x.md"),
+    ("^glob:" + KB + "/**.sh", "plugins/x.sh"),
+    ("^glob:glob:a*/b", "anywhere/file"),           # malformed mint: always-cover
+    ("^glob:glob:../x/*.sh", KB + "/x.sh"),         # ../-head verbatim: always-cover
+    ("^glob:glob:x:y/*.sh", KB + "/x.sh"),          # charset verbatim: always-cover
+    ("^glob:" + KB + "/**.sh", KB),                 # dir ref equal to head → nest
+    ("^glob:" + KB + "/**.sh", KB + "/project"),    # dir ref under head → nest
+]
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
+COVPY
+)
+if [[ "$_k5" == "1 1 0 0 1 1 1 1 1" ]]; then
+  pass "k5: ^glob: covers .sh at any depth, declines .md and out-of-head paths, always-covers malformed mints, and nests dir refs"
+else
+  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 1 1)"
 fi
 
 # u1: the c1 predicate (the SAME function) flags UNCLASSIFIED, empty, unprefixed and reason-less classifications, and accepts a
