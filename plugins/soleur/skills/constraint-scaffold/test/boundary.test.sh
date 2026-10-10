@@ -151,13 +151,13 @@ check_value_safe_drift() {  # returns 0 = value-safe, 1 = drift detected
   # A mixed `import { type A, realX }` opener begins with `import ` (not `import type`),
   # so its value half is still flagged.
   if grep -E '^[[:space:]]*import[[:space:]]' "$f" \
-       | grep -vE '^[[:space:]]*import[[:space:]]+type[[:space:]]' | grep -q .; then
+       | grep -vE '^[[:space:]]*import[[:space:]]+type[[:space:]]' | grep -c >/dev/null .; then
     return 1
   fi
   # (b2) a value RE-EXPORT edge: `export ... from "..."` that is NOT `export type ... from`.
   # (Plain `export const/function/type X = …` declarations carry no `from` and are safe.)
   if grep -E '^[[:space:]]*export[[:space:]].*[[:space:]]from[[:space:]]*["'\''`]' "$f" \
-       | grep -vE '^[[:space:]]*export[[:space:]]+type[[:space:]]' | grep -q .; then
+       | grep -vE '^[[:space:]]*export[[:space:]]+type[[:space:]]' | grep -c >/dev/null .; then
     return 1
   fi
   # (b3) dynamic `import(...)` / `require(...)` edge.
@@ -420,7 +420,7 @@ fi
 ERR_OUT="$( cd "$FX" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type err components server 2>&1 )"
 
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/leak.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/leakdir/leak.tsx'; then
   ok "AC3: value import of server/** via @/server alias is flagged"
 else
   bad "AC3: value import of server/** via @/server alias was NOT flagged"
@@ -428,14 +428,14 @@ else
 fi
 
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/typeonly.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/leakdir/typeonly.tsx'; then
   bad "AC3: import type of server/** was flagged (type-only must be allowed)"
 else
   ok "AC3: import type of server/** is allowed (not flagged)"
 fi
 
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -qF 'components/(a|b)/parenleak.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -cF >/dev/null 'components/(a|b)/parenleak.tsx'; then
   ok "AC6b: regex-metacharacter route-group path matched (regex-escaping works)"
 else
   bad "AC6b: parenthesized-path client file NOT matched — regex-escaping is broken"
@@ -444,21 +444,21 @@ fi
 
 # --- #2: directive preceded by a leading comment banner is still client -------
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/bannerleak.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/leakdir/bannerleak.tsx'; then
   ok "#2: leading line-comment before \"use client\" still classified client (flagged)"
 else
   bad "#2: leading line-comment banner client file NOT flagged (fail-open misclassification)"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/blockbannerleak.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/leakdir/blockbannerleak.tsx'; then
   ok "#2: leading block-comment before \"use client\" still classified client (flagged)"
 else
   bad "#2: leading block-comment banner client file NOT flagged (fail-open misclassification)"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/trailingleak.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/leakdir/trailingleak.tsx'; then
   ok "#2: \"use client\"; // trailing-comment form still classified client (flagged)"
 else
   bad "#2: trailing-comment directive form client file NOT flagged (fail-open misclassification)"
@@ -471,7 +471,7 @@ fi
 # MUST execute and MUST fail (not skip) if a negative fixture is not flagged.
 # 4.1 NEGATIVE transitive via lib/ helper -> MUST FLAG
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/trans/transitive.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/trans/transitive.tsx'; then
   ok "4.1: transitive value chain (client -> lib helper -> server/secret) is flagged"
 else
   bad "4.1: transitive value chain NOT flagged (the #5777 gap is still open)"
@@ -479,14 +479,14 @@ else
 fi
 # 4.2 POSITIVE first-hop type-only -> MUST NOT FLAG (type-only edge elided globally)
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/trans/typeonly-firsthop.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/trans/typeonly-firsthop.tsx'; then
   bad "4.2: first-hop import-type chain was FLAGGED (type-only must be elided -> false positive)"
 else
   ok "4.2: first-hop import-type chain is not flagged (type-only elided, position-independent)"
 fi
 # 4.3 NEGATIVE mixed import { type A, realValue } -> value edge survives -> MUST FLAG
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/trans/mixed.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/trans/mixed.tsx'; then
   ok "4.3: mixed { type A, realValue } chain is flagged (value edge survives the flip)"
 else
   bad "4.3: mixed-import chain NOT flagged — a value edge was wrongly elided as type-only (silent fail-open)"
@@ -494,14 +494,14 @@ else
 fi
 # 4.4 NEGATIVE barrel (export *) + named export-from -> MUST FLAG
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/trans/barrel.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/trans/barrel.tsx'; then
   ok "4.4a: barrel re-export (export * from) chain is flagged"
 else
   bad "4.4a: barrel (export *) chain NOT flagged"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/trans/named-barrel.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/trans/named-barrel.tsx'; then
   ok "4.4b: named export-from re-export chain is flagged"
 else
   bad "4.4b: named export-from chain NOT flagged"
@@ -509,7 +509,7 @@ else
 fi
 # 4.5 NEGATIVE dynamic import() -> MUST FLAG
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/trans/dynamic.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/trans/dynamic.tsx'; then
   ok "4.5: dynamic import() chain is flagged (reachability traverses dynamic edges)"
 else
   bad "4.5: dynamic import() chain NOT flagged"
@@ -517,7 +517,7 @@ else
 fi
 # 4.6 POSITIVE pathNot target (server/domain-leaders) -> MUST NOT FLAG by transitive rule
 cases=$((cases + 1))
-if printf '%s' "$ERR_OUT" | grep -q 'components/trans/safe-target.tsx'; then
+if printf '%s' "$ERR_OUT" | grep -c >/dev/null 'components/trans/safe-target.tsx'; then
   bad "4.6: pathNot-target chain (client -> helper -> server/domain-leaders) was FLAGGED (pathNot broken)"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 else
@@ -559,7 +559,7 @@ fi
 EMPTY_OUT="$( cd "$FX" && CONSTRAINT_SCAFFOLD_TEST_FORCE_EMPTY=1 node -e 'require("./.dependency-cruiser.cjs")' 2>&1 )"
 EMPTY_RC=$?
 cases=$((cases + 1))
-if [[ "$EMPTY_RC" -ne 0 ]] && printf '%s' "$EMPTY_OUT" | grep -q 'from-set is empty'; then
+if [[ "$EMPTY_RC" -ne 0 ]] && printf '%s' "$EMPTY_OUT" | grep -c >/dev/null 'from-set is empty'; then
   ok "AC6b: empty from-set while client files exist throws (not silently disabled)"
 else
   bad "AC6b: empty from-set did NOT hard-fail (rc=$EMPTY_RC): $EMPTY_OUT"
@@ -573,7 +573,7 @@ cp "$CFG" "$EMPTYDIR/.dependency-cruiser.cjs"
 NOINPUT_OUT="$( cd "$EMPTYDIR" && node -e 'require("./.dependency-cruiser.cjs")' 2>&1 )"
 NOINPUT_RC=$?
 cases=$((cases + 1))
-if [[ "$NOINPUT_RC" -ne 0 ]] && printf '%s' "$NOINPUT_OUT" | grep -qE 'neither app/ nor components/'; then
+if [[ "$NOINPUT_RC" -ne 0 ]] && printf '%s' "$NOINPUT_OUT" | grep -cE >/dev/null 'neither app/ nor components/'; then
   ok "AC5: empty input (no client dirs) fails closed (distinct from 'no client modules')"
 else
   bad "AC5: empty input did NOT fail closed (rc=$NOINPUT_RC): $NOINPUT_OUT"
@@ -588,7 +588,7 @@ printf '[]\n' > "$BROKEN/.dependency-cruiser-known-violations.json"
 BROKEN_OUT="$( CONSTRAINT_GATES_DIR="$BROKEN" bash "$RUNNER" 2>&1 )"
 BROKEN_RC=$?
 cases=$((cases + 1))
-if [[ "$BROKEN_RC" -ne 0 ]] && printf '%s' "$BROKEN_OUT" | grep -q 'config/binary error'; then
+if [[ "$BROKEN_RC" -ne 0 ]] && printf '%s' "$BROKEN_OUT" | grep -c >/dev/null 'config/binary error'; then
   ok "AC5: broken .cjs makes the shared runner fail closed (rc=$BROKEN_RC)"
 else
   bad "AC5: broken .cjs did NOT fail the runner closed (rc=$BROKEN_RC): $BROKEN_OUT"
@@ -639,7 +639,7 @@ printf '[]\n' > "$LEAKY/.dependency-cruiser-known-violations.json"
 LEAKY_OUT="$( CONSTRAINT_GATES_DIR="$LEAKY" bash "$RUNNER" 2>&1 )"
 LEAKY_RC=$?
 cases=$((cases + 1))
-if [[ "$LEAKY_RC" -ne 0 ]] && printf '%s' "$LEAKY_OUT" | grep -q 'import-boundary violation'; then
+if [[ "$LEAKY_RC" -ne 0 ]] && printf '%s' "$LEAKY_OUT" | grep -c >/dev/null 'import-boundary violation'; then
   ok "4.8: real runner fails closed (rc=$LEAKY_RC) on an un-baselined transitive leak"
 else
   bad "4.8: real runner did NOT fail on a transitive leak (rc=$LEAKY_RC): $LEAKY_OUT"
@@ -661,7 +661,7 @@ JSON
 MODENTRY_OUT="$( CONSTRAINT_GATES_DIR="$MODENTRY" bash "$RUNNER" 2>&1 )"
 MODENTRY_RC=$?
 cases=$((cases + 1))
-if [[ "$MODENTRY_RC" -ne 0 ]] && printf '%s' "$MODENTRY_OUT" | grep -q 'suppress the transitive rule'; then
+if [[ "$MODENTRY_RC" -ne 0 ]] && printf '%s' "$MODENTRY_OUT" | grep -c >/dev/null 'suppress the transitive rule'; then
   ok "4.10: runner rejects a type:\"module\" baseline entry naming the transitive rule (rc=$MODENTRY_RC)"
 else
   bad "4.10: runner did NOT reject a type:\"module\" transitive-suppressing baseline entry (rc=$MODENTRY_RC) — P1 bypass open: $MODENTRY_OUT"

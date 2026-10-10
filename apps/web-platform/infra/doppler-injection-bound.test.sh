@@ -951,7 +951,7 @@ import re, sys
 p = sys.argv[1]
 s = open(p).read()
 s = s.replace('  --only-secrets INNGEST_CUTOVER_FLIP \\\n', '  --only-secrets "" \\\n')
-s = re.sub(r'^  --only-secrets INNGEST_REDIS_PASSWORD \\\n', '', s, flags=re.M)
+s = re.sub(r'^  --only-secrets (INNGEST_REDIS_PASSWORD|DOPPLER_CONFIG) \\\n', '', s, flags=re.M)
 open(p, 'w').write(s)
 PY
 }

@@ -42,11 +42,12 @@ EnvironmentFile=/etc/default/inngest-luks-volumes
 # un-armed, pre-cutover host; without it the 30s poll would fail on exactly those hosts. The script
 # compensates for the quiet degradation this buys: it refuses (luks-key-absent, t1-unreadable)
 # before stopping anything when a name it needs did not arrive.
-ExecStart=/usr/bin/doppler run --config prd \
+ExecStart=/usr/bin/doppler run --config ${DOPPLER_CONFIG} \
   --only-secrets INNGEST_LUKS_CUTOVER \
   --only-secrets INNGEST_LUKS_ACTIVE_VOLUME_ID \
   --only-secrets INNGEST_REDIS_LUKS_KEY \
   --only-secrets INNGEST_REDIS_PASSWORD \
+  --only-secrets DOPPLER_CONFIG \
   --no-exit-on-missing-only-secrets \
   -- /usr/local/bin/inngest-luks-cutover.sh
 

@@ -448,6 +448,17 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_PATHS=(
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# scripts/test-affected-derive-cache (#9812) — the cross-run derive cache lib and its runner
+# integration. Declared rather than always-on for the same reason as its sibling: the SUT is the
+# cache lib plus the runner's derive span (extracted by content anchor), and nothing else can move
+# its verdict. test-all.sh is a closure leaf, so a lib-only diff reaches this suite ONLY through
+# this declaration.
+AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_CACHE_PATHS=(
+  "scripts/test-affected-derive-cache.test.sh"
+  "scripts/lib/test-affected-derive-cache.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # #9400 — the pre-push ratchet lane's Guard Contract suite. The edge set covers
 # the lane's own pair, every member argv's file (a member whose semantics move
 # must re-run the dispatch battery that invokes it), the hook wiring the lane is

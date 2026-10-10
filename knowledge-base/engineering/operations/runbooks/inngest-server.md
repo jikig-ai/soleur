@@ -336,6 +336,16 @@ apart, and the probe refuses it.
 state through journald → Vector → Better Stack, and Vector is installed by the bootstrap this unit
 runs. The readers for provision stages are the follow-through probe and the queries below.
 
+**On-demand rehearsal (#9175, ADR-279).** This whole path is rehearsed end-to-end by the
+dispatch-only `inngest-provision-rehearsal.yml` workflow: it births a throwaway host without its
+private NIC (Phase A — the NIC-absent failure is observed, not assumed), attaches the NIC in a
+second apply (Phase B — recovery to `bootstrap-done`), then reboots and asserts no provision
+markers re-emit (the latch holds). It renders the SAME `cloud-init-inngest.yml` with only
+identity-class divergences: the scratch `rehearsal_<runid>` Doppler environment (a non-inheriting
+root config), a read-scoped token, `INNGEST_DIAGNOSTIC_BOOT=true`, loopback `sdk_url`, and
+`10.0.1.60` on the real private subnet. See
+[runbook inngest-provision-rehearsal.md](inngest-provision-rehearsal.md).
+
 ### Stages
 
 | Stage (channel) | Meaning |

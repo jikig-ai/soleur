@@ -1,3 +1,6 @@
+// pyramid-justified: runs in the authenticated project (storageState +
+// injected session) and asserts rail DOM (aria-current, seeded titles,
+// sign-out redirect) on a real page — needs a real browser.
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import {
