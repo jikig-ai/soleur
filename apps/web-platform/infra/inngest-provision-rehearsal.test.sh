@@ -208,6 +208,8 @@ yes "the evidence is uploaded as an ARTIFACT (never committed)" \
   "grep -qF 'actions/upload-artifact' '$WF' && ! grep -qE 'git (add|commit|push)' '$WF'"
 yes "the in-workflow orphan assertion lists all four hcloud kinds" \
   "grep -qF 'servers volumes ssh_keys firewalls' '$WF'"
+no "no comment line sits inside a doppler run -- backslash-continuation (a # there is an argv word — proven by the first teardown run)" \
+  "awk '/doppler run.*--[[:space:]]*\\\\$/{n=NR} n && NR>n && /^[[:space:]]*#/{print; found=1} n && NR>n && !/^[[:space:]]*#/{n=0} END{exit found?0:1}' '$WF'"
 
 # ── 7. The push-path exclusion ────────────────────────────────────────────────
 yes "apply-web-platform-infra.yml excludes this root from its push trigger" \
