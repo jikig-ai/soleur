@@ -65,7 +65,7 @@ import re
 import shlex
 import sys
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # --- Shared constants --------------------------------------------------------
 
@@ -345,36 +345,16 @@ def scan_mount_evidence(
     return result
 
 
-def check_luks_row(
-    row: dict,
-    tf_files: list[Path],
-    infra_files: list[Path],
-    cache: dict[Path, str],
+def check_singleton_binding(
+    store_addr: str,
+    db: dict,
+    attach_block: str,
+    attach_file_text: str,
+    cache: dict,
     fails: list[str],
-) -> None:
-    store_addr = row["store"]
-    db = row.get("device_binding")
-    if not db:
-        fails.append(
-            f"FAIL: {store_addr} mechanism:luks requires device_binding"
-            "{volume,attachment,mapper} -> add device_binding to the stores[] row"
-        )
-        return
+) -> bool:
     vol_addr = db["volume"]
     attach_addr = db["attachment"]
-    mapper = db["mapper"]
-
-    attach_found = find_resource_declaration(tf_files, attach_addr, cache)
-    vol_found = find_resource_declaration(tf_files, vol_addr, cache)
-    if not attach_found or not vol_found:
-        fails.append(
-            f"FAIL: {store_addr} device_binding volume/attachment "
-            f"({vol_addr}/{attach_addr}) does not resolve to a real Terraform "
-            "resource -> fix device_binding to reference real resources"
-        )
-        return
-    attach_file, attach_block = attach_found
-
     # MUTATION-TARGET: MB-8 start (R1 volume-identity binding — the false-PASS
     # blocker. Both sub-checks below are what stops a plaintext row from
     # citing a sibling volume's LUKS apparatus.)
@@ -384,18 +364,28 @@ def check_luks_row(
             f"not attach device_binding.volume {vol_addr} -> fix device_binding "
             "to a real, matching volume/attachment pair"
         )
-        return
-    attach_file_text = cache[attach_file]
-    if not file_has_secret_pair(attach_file_text):
+        return False
+    if not db.get("key_chain") and not file_has_secret_pair(attach_file_text):
         fails.append(
             f"FAIL: {store_addr} device_binding.attachment {attach_addr} has no "
             "co-located random_password+doppler_secret pair -> citation belongs "
             f"to a different volume; fix device_binding or provision the LUKS "
             f"apparatus for {vol_addr}"
         )
-        return
+        return False
     # MUTATION-TARGET: MB-8 end
+    return True
 
+
+def check_global_apparatus(
+    store_addr: str,
+    mapper: str,
+    infra_files: list[Path],
+    cache: dict[Path, str],
+    fails: list[str],
+) -> bool:
+    """The generic citation resolution: any file under apps/*/infra/ that opens the mapper, and any
+    file that mounts it. Used for rows that pin no apparatus (every singleton row today)."""
     # MUTATION-TARGET: MB-2 start (citation resolution: apparatus + mount
     # evidence — accepting the row's word instead of resolving it.)
     apparatus = scan_apparatus(infra_files, cache)
@@ -406,7 +396,7 @@ def check_luks_row(
             "apps/*/infra/ -> verify the luksOpen operand (after <=1 level of "
             "${VAR:-default} resolution) equals device_binding.mapper"
         )
-        return
+        return False
 
     evidence = scan_mount_evidence(infra_files, cache)
     if mapper not in evidence:
@@ -425,8 +415,623 @@ def check_luks_row(
                 "apps/*/infra/ -> add an fstab line or a "
                 f"MAPPER=/dev/mapper/{mapper} + MOUNT=<path> gate pair"
             )
-        return
+        return False
     # MUTATION-TARGET: MB-2 end
+    return True
+
+
+def check_luks_row(
+    row: dict,
+    tf_files: list[Path],
+    infra_files: list[Path],
+    cache: dict[Path, str],
+    fails: list[str],
+    repo_root: Path | None = None,
+) -> None:
+    store_addr = row["store"]
+    db = row.get("device_binding")
+    if not db:
+        fails.append(
+            f"FAIL: {store_addr} mechanism:luks requires device_binding"
+            "{volume,attachment,mapper} -> add device_binding to the stores[] row"
+        )
+        return
+    vol_addr = db["volume"]
+    attach_addr = db["attachment"]
+    mapper = db["mapper"]
+
+    # The row's volume IS the store it ledgers: a row for one volume cannot cite a sibling volume's
+    # binding (the #6588 shape, one level up). No mutation row: with the sibling's own luks row in the
+    # ledger the password-claim guard (MB-L5) fires on the same input, so deleting this check is an
+    # equivalent mutant on every fixture that can reach it; WC-25 pins the message.
+    if vol_addr != store_addr:
+        fails.append(
+            f"FAIL: {store_addr} device_binding.volume {vol_addr} must equal the store "
+            f"{store_addr} -> a luks row binds its own volume, never a sibling's"
+        )
+        return
+
+    attach_found = find_resource_declaration(tf_files, attach_addr, cache)
+    vol_found = find_resource_declaration(tf_files, vol_addr, cache)
+    if not attach_found or not vol_found:
+        fails.append(
+            f"FAIL: {store_addr} device_binding volume/attachment "
+            f"({vol_addr}/{attach_addr}) does not resolve to a real Terraform "
+            "resource -> fix device_binding to reference real resources"
+        )
+        return
+    attach_file, attach_block = attach_found
+
+    vparsed = parse_address(vol_addr) or ("", "")
+    indexed = bool(
+        re.search(
+            rf"volume_id\s*=\s*{re.escape(vparsed[0])}\.{re.escape(vparsed[1])}\s*\[",
+            hcl_views(attach_block)[0],
+        )
+    )
+    ctx: dict | None = None
+    if indexed:
+        ctx = check_indexed_binding(store_addr, db, tf_files, cache, fails)
+        if ctx is None:
+            return
+        missing = False
+        # MUTATION-TARGET: MB-L8a start (an indexed row names the apparatus it relies on)
+        if not db.get("apparatus"):
+            fails.append(
+                f"FAIL: {store_addr} indexed binding requires apparatus -> pin the file that "
+                "holds this volume's cryptsetup luksFormat and luksOpen"
+            )
+            missing = True
+        # MUTATION-TARGET: MB-L8a end
+        # MUTATION-TARGET: MB-L8b start (an indexed row names its passphrase custody)
+        if not db.get("key_chain"):
+            fails.append(
+                f"FAIL: {store_addr} indexed binding requires key_chain -> name the consumer, "
+                "token, secret and password the host reads the key through"
+            )
+            missing = True
+        # MUTATION-TARGET: MB-L8b end
+        if missing:
+            return
+    elif not check_singleton_binding(
+        store_addr, db, attach_block, cache[attach_file], cache, fails
+    ):
+        return
+
+    kc_ctx: dict | None = None
+    if db.get("key_chain"):
+        kc_ctx = check_key_chain(store_addr, db, ctx, tf_files, cache, fails)
+        if kc_ctx is None:
+            return
+
+    if db.get("apparatus"):
+        if not check_pinned_apparatus(
+            store_addr, db, kc_ctx, infra_files, repo_root or Path("."), cache, fails
+        ):
+            return
+    elif not check_global_apparatus(store_addr, mapper, infra_files, cache, fails):
+        return
+
+
+# --- #9372 / #9572: web-class (indexed) luks rows ----------------------------
+#
+# A row whose volume is a `for_each` set (the web hosts' /workspaces) cannot be proven by the
+# singleton checks above: its attachment is indexed by [each.key], its passphrase reaches the host
+# through a fresh-boot token rather than a same-file pair, and its apparatus is a file the generic
+# scan would otherwise resolve through a SIBLING volume's cutover script (the #6588 class). The checks
+# below run for a row only when its attachment is indexed, or when the row carries the optional keys
+# `device_binding.key_chain` / `device_binding.apparatus`, so no existing singleton
+# row's verdict moves. Every new structural check reads a code view (comments, and for the skeleton the
+# string contents, removed); the existing checks keep reading raw text.
+
+
+def _skip_hcl_string(text: str, i: int) -> int:
+    """text[i] is a double quote; return the index just past its closing quote.
+    Interpolations `${...}` / directives `%{...}` may nest quotes and braces."""
+    n = len(text)
+    j = i + 1
+    depth = 0
+    while j < n:
+        c = text[j]
+        if depth == 0:
+            if c == "\\":
+                j += 2
+                continue
+            if c == '"':
+                return j + 1
+            if text.startswith("$${", j) or text.startswith("%%{", j):
+                j += 3
+                continue
+            if text.startswith("${", j) or text.startswith("%{", j):
+                depth = 1
+                j += 2
+                continue
+            j += 1
+        else:
+            if c == '"':
+                j = _skip_hcl_string(text, j)
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            j += 1
+    return n
+
+
+def hcl_views(text: str) -> tuple[str, str]:
+    """(code, skeleton), both exactly as long as `text`. `code` has `#` `//` and `/* */` comments
+    and heredoc bodies blanked and keeps strings; `skeleton` additionally blanks string contents
+    (interpolations included), so brace matching and attribute counting never read a string."""
+    n = len(text)
+    code = list(text)
+    skel = list(text)
+
+    def blank(lo: int, hi: int, arrs: tuple) -> None:
+        for a in arrs:
+            for k in range(lo, hi):
+                if text[k] != "\n":
+                    a[k] = " "
+
+    heredoc = re.compile(r"<<-?[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\n")
+    i = 0
+    while i < n:
+        c = text[i]
+        if c == "#" or text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            blank(i, j, (code, skel))
+            i = j
+            continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            blank(i, j, (code, skel))
+            i = j
+            continue
+        if c == "<":
+            m = heredoc.match(text, i)
+            if m:
+                tag = m.group(1)
+                pos = m.end()
+                body_end = n
+                resume = n
+                for lm in re.finditer(r"^[ \t]*" + re.escape(tag) + r"[ \t]*$", text[pos:], re.M):
+                    body_end = pos + lm.start()
+                    resume = pos + lm.end()
+                    break
+                blank(pos, body_end, (code, skel))
+                i = resume
+                continue
+        if c == '"':
+            j = _skip_hcl_string(text, i)
+            blank(i + 1, max(i + 1, j - 1), (skel,))
+            i = j
+            continue
+        i += 1
+    return "".join(code), "".join(skel)
+
+
+def line_comment_view(text: str) -> str:
+    """Shell / YAML code view: a `#` that starts a word (outside quotes) comments the rest of the
+    line, and a line whose first non-blank character is `#` is a comment whatever the quote state
+    (a mis-tracked quote can therefore only SHOW more text, never hide a real line). Length is kept."""
+    out: list[str] = []
+    n = len(text)
+    i = 0
+    st = "n"
+    line_start = 0
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line_start = i + 1
+        starts_comment = c == "#" and (
+            (st == "n" and (i == 0 or text[i - 1] in " \t\n;|&("))
+            or text[line_start:i].strip() == ""
+        )
+        if starts_comment:
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        if st == "n":
+            if c == "'":
+                st = "s"
+            elif c == '"':
+                st = "d"
+            elif c == "\\" and i + 1 < n:
+                out.append(c)
+                out.append(text[i + 1])
+                i += 2
+                continue
+        elif st == "s":
+            if c == "'":
+                st = "n"
+        else:
+            if c == "\\" and i + 1 < n:
+                out.append(c)
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                st = "n"
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def decl_blocks(f: Path, cache: dict) -> list[tuple[str, str, str, str]]:
+    """[(type, name, code_block, skeleton_block)] for one .tf file; headers are matched on the
+    comment-free code view and braces on the string-free skeleton."""
+    key = (f, "decl")
+    if key in cache:
+        return cache[key]
+    text = cache.get(f)
+    if text is None:
+        text = read_text(f)
+        cache[f] = text
+    code, skel = hcl_views(text)
+    blocks: list[tuple[str, str, str, str]] = []
+    for m in RESOURCE_RE.finditer(code):
+        start = m.end() - 1
+        depth = 0
+        i = start
+        n = len(skel)
+        while i < n:
+            if skel[i] == "{":
+                depth += 1
+            elif skel[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        blocks.append((m.group(1), m.group(2), code[start : i + 1], skel[start : i + 1]))
+    cache[key] = blocks
+    return blocks
+
+
+def find_declarations(
+    tf_files: list[Path], addr: str, cache: dict
+) -> list[tuple[Path, str, str]]:
+    """EVERY declaration of an address across the scan scope (find_resource_declaration returns the
+    first one in sorted order, so a decoy in an earlier directory would win)."""
+    parsed = parse_address(addr)
+    if not parsed:
+        return []
+    type_, name = parsed
+    found: list[tuple[Path, str, str]] = []
+    for f in tf_files:
+        for t2, n2, code, skel in decl_blocks(f, cache):
+            if t2 == type_ and n2 == name:
+                found.append((f, code, skel))
+    return found
+
+
+def attr_sites(code: str, skel: str, attr: str) -> list[tuple[int, str]]:
+    """[(brace depth, value text to end of line)] for every `attr =` assignment of a block. Depth 1
+    is a top-level argument; anything deeper sits in a nested block."""
+    sites: list[tuple[int, str]] = []
+    for m in re.finditer(rf"(?<![\w.]){attr}\s*=(?!=)", skel):
+        depth = skel.count("{", 0, m.start()) - skel.count("}", 0, m.start())
+        eol = code.find("\n", m.end())
+        eol = len(code) if eol < 0 else eol
+        sites.append((depth, code[m.end() : eol].strip()))
+    return sites
+
+
+def _unique_decl(
+    store: str, what: str, addr: str, tf_files: list[Path], cache: dict, fails: list[str]
+) -> tuple[Path, str, str] | None:
+    found = find_declarations(tf_files, addr, cache)
+    if len(found) != 1:
+        fails.append(
+            f"FAIL: {store} {what} {addr} is declared more than once or not at all across the "
+            f"scan scope ({len(found)} declaration(s)) -> an address must resolve exactly once"
+        )
+        return None
+    return found[0]
+
+
+def check_indexed_binding(
+    store: str, db: dict, tf_files: list[Path], cache: dict, fails: list[str]
+) -> dict | None:
+    """The indexed arm of the volume binding: `volume_id = <vtype>.<vname>[each.key].id`, accepted
+    only when the volume and the attachment each carry exactly one `for_each` and the two
+    expressions are identical. Returns what later checks need, or None after appending a FAIL."""
+    vol_addr, att_addr = db["volume"], db["attachment"]
+    vtype, vname = parse_address(vol_addr) or ("", "")
+    vol = _unique_decl(store, "indexed binding: volume", vol_addr, tf_files, cache, fails)
+    att = _unique_decl(store, "indexed binding: attachment", att_addr, tf_files, cache, fails)
+    if not vol or not att:
+        return None
+    (vf, vcode, vskel), (af, acode, askel) = vol, att
+    if vf.parent != af.parent:
+        fails.append(
+            f"FAIL: {store} indexed binding: volume {vol_addr} and attachment {att_addr} must sit "
+            "in one Terraform root (one directory) -> a for_each pair split across roots is two "
+            "different sets"
+        )
+        return None
+    exprs: dict[str, str] = {}
+    for label, code, skel in (("volume", vcode, vskel), ("attachment", acode, askel)):
+        sites = attr_sites(code, skel, "for_each")
+        nested = any(d > 1 for d, _ in sites)
+        if label == "attachment":
+            nested = nested or any(d > 1 for d, _ in attr_sites(code, skel, "volume_id"))
+        if nested:
+            fails.append(
+                f"FAIL: {store} indexed binding: for_each or volume_id inside a nested block of "
+                f"the {label} -> the extractor cannot read it, so the row fails closed"
+            )
+            return None
+        if len(sites) != 1:
+            fails.append(
+                f"FAIL: {store} indexed binding requires one identical for_each on the volume and "
+                f"the attachment; the {label} carries {len(sites)} -> declare exactly one"
+            )
+            return None
+        exprs[label] = sites[0][1]
+    # MUTATION-TARGET: MB-L1 start (the two for_each expressions must be the same set)
+    if exprs["volume"] != exprs["attachment"]:
+        fails.append(
+            f"FAIL: {store} indexed binding requires one identical for_each on the volume and the "
+            f"attachment: {exprs['volume']!r} vs {exprs['attachment']!r} -> make them the same "
+            "expression"
+        )
+        return None
+    # MUTATION-TARGET: MB-L1 end
+    vid = attr_sites(acode, askel, "volume_id")
+    if len(vid) != 1 or not re.fullmatch(
+        rf"{re.escape(vtype)}\.{re.escape(vname)}\[each\.key\]\.id", vid[0][1]
+    ):
+        fails.append(
+            f"FAIL: {store} device_binding.attachment {att_addr} does not attach "
+            f"device_binding.volume {vol_addr} -> the only indexed form accepted is "
+            f"volume_id = {vol_addr}[each.key].id"
+        )
+        return None
+    return {"root": vf.parent, "for_each": exprs["volume"], "volume_file": vf, "attach_file": af}
+
+
+def _top_attr(code: str, skel: str, attr: str) -> str | None:
+    sites = [v for d, v in attr_sites(code, skel, attr) if d == 1]
+    return sites[0] if len(sites) == 1 else None
+
+
+def check_key_chain(
+    store: str, db: dict, ctx: dict | None, tf_files: list[Path], cache: dict, fails: list[str]
+) -> dict | None:
+    """Passphrase custody for a row whose host reads the key through a fresh-boot token: the
+    consumer's user_data carries the volume id and the token; the token and the secret live on one
+    Doppler config; the secret's value is the named password. Each hop is a literal reference
+    matched on the code view. Returns the consumer's declaration for the install hop."""
+    kc = db["key_chain"]
+    consumer = _unique_decl(store, "key_chain consumer", kc["consumer"], tf_files, cache, fails)
+    token = _unique_decl(store, "key_chain token", kc["token"], tf_files, cache, fails)
+    secret = _unique_decl(store, "key_chain secret", kc["secret"], tf_files, cache, fails)
+    if not consumer or not token or not secret:
+        return None
+    if ctx is not None:
+        vtype, vname = parse_address(db["volume"]) or ("", "")
+        fe = re.escape(ctx["for_each"])
+        vol_line = re.compile(
+            rf"^\s*workspaces_volume_id\s*=\s*contains\(\s*keys\(\s*{fe}\s*\)\s*,\s*each\.key\s*\)"
+            rf"\s*\?\s*{re.escape(vtype)}\.{re.escape(vname)}\[each\.key\]\.id\s*:\s*\"retired-6604\"\s*$",
+            re.M,
+        )
+        tok_line = re.compile(
+            rf"^\s*workspaces_luks_fresh_boot_token\s*=\s*{re.escape(kc['token'])}\.key\s*$", re.M
+        )
+        if not vol_line.search(consumer[1]) or not tok_line.search(consumer[1]):
+            fails.append(
+                f"FAIL: {store} key_chain consumer {kc['consumer']} user_data does not carry the "
+                f"volume id line (workspaces_volume_id for {db['volume']}[each.key]) and the token "
+                f"line (workspaces_luks_fresh_boot_token = {kc['token']}.key) the row names -> the "
+                "host that reads the key is not the host the volume is attached to"
+            )
+            return None
+    # MUTATION-TARGET: MB-L3 start (the token reads the config the secret is written to)
+    tok_cfg = _top_attr(token[1], token[2], "config")
+    sec_cfg = _top_attr(secret[1], secret[2], "config")
+    if not tok_cfg or tok_cfg != sec_cfg:
+        fails.append(
+            f"FAIL: {store} key_chain token config {tok_cfg!r} differs from the secret config "
+            f"{sec_cfg!r} -> the token must read the Doppler config the passphrase is written to"
+        )
+        return None
+    # MUTATION-TARGET: MB-L3 end
+    # MUTATION-TARGET: MB-L4 start (the secret's value is the named password)
+    if _top_attr(secret[1], secret[2], "value") != f"{kc['password']}.result":
+        fails.append(
+            f"FAIL: {store} key_chain secret value is not {kc['password']}.result -> the secret "
+            "must be written from the password the row claims"
+        )
+        return None
+    # MUTATION-TARGET: MB-L4 end
+    return {"consumer_file": consumer[0], "consumer_code": consumer[1]}
+
+
+def check_password_claims(
+    ledger: dict, tf_files: list[Path], cache: dict, fails: list[str]
+) -> None:
+    """No random_password may be claimed by two luks rows. A row's claim is its key_chain.password,
+    or - for a row with no key_chain - every random_password declared in its attachment's own file.
+    Keyed by (Terraform root, address): two roots may reuse a name."""
+    claims: dict[tuple[Path, str], list[str]] = {}
+    for row in ledger["stores"]:
+        if row["at_rest"]["mechanism"] != "luks" or not row.get("device_binding"):
+            continue
+        db = row["device_binding"]
+        att = find_declarations(tf_files, db["attachment"], cache)
+        if not att:
+            continue
+        root = att[0][0].parent
+        if db.get("key_chain"):
+            addrs = [db["key_chain"]["password"]]
+        else:
+            addrs = [
+                f"random_password.{n}"
+                for t, n, _c, _s in decl_blocks(att[0][0], cache)
+                if t == "random_password"
+            ]
+        for a in addrs:
+            claims.setdefault((root, a), []).append(row["store"])
+    conflicts = {k: v for k, v in claims.items() if len(set(v)) > 1}
+    # MUTATION-TARGET: MB-L5 start (one passphrase, one luks row)
+    for (_root, addr), rows in conflicts.items():
+        fails.append(
+            f"FAIL: {addr} is claimed by more than one luks row ({', '.join(sorted(set(rows)))}) "
+            "-> each luks row needs its own passphrase"
+        )
+    # MUTATION-TARGET: MB-L5 end
+
+
+def check_apparatus_pins(ledger: dict, fails: list[str]) -> None:
+    pins: dict[str, list[str]] = {}
+    for row in ledger["stores"]:
+        db = row.get("device_binding") or {}
+        if row["at_rest"]["mechanism"] == "luks" and db.get("apparatus"):
+            pins.setdefault(db["apparatus"], []).append(row["store"])
+    for path, rows in sorted(pins.items()):
+        if len(rows) > 1:
+            fails.append(
+                f"FAIL: apparatus {path} is pinned by more than one row ({', '.join(rows)}) -> a "
+                "file with one luksOpen cannot serve two volumes"
+            )
+
+
+_UNQUOTED_ASSIGN = r"^\s*(?:export\s+)?{var}=([A-Za-z0-9_.-]+)\s*$"
+_FSTAB_SHAPED = re.compile(
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*=(['\"])/dev/mapper/([\w-]+)\s+/\S+\s+\S+\s+\S+(?:\s+\d+\s+\d+)?\1\s*$"
+)
+
+
+def _pinned_mapper(view: str, raw_token: str) -> str | None:
+    """resolve_mapper_operand, then - for a PINNED file only - one unquoted `VAR=literal`
+    assignment (exactly one of that name, no `:=`)."""
+    got = resolve_mapper_operand(view, raw_token)
+    tok = raw_token.strip().strip('"')
+    if got is not None or not tok.startswith("$"):
+        return got
+    var = tok[1:].strip("{}")
+    # MUTATION-TARGET: MB-L6 start (the provisioner's own unquoted MAPPER_NAME=literal)
+    hits = re.findall(_UNQUOTED_ASSIGN.format(var=re.escape(var)), view, re.M)
+    if len(hits) == 1:
+        return hits[0]
+    # MUTATION-TARGET: MB-L6 end
+    return None
+
+
+def scan_pinned_apparatus(view: str) -> set[str]:
+    mappers: set[str] = set()
+    if not re.search(r"cryptsetup\s+luksFormat\b", view):
+        return mappers
+    for m in re.finditer(r"cryptsetup\s+luksOpen\b([^\n]*)", view):
+        pos = _luksopen_positionals(m.group(1))
+        if len(pos) < 2:
+            continue
+        mapper = _pinned_mapper(view, pos[-1])
+        if mapper is not None:
+            mappers.add(mapper)
+    return mappers
+
+
+def scan_pinned_mount_evidence(view: str) -> set[str]:
+    """Mount evidence from the pinned file only: the two arms scan_mount_evidence reads, plus an
+    fstab-shaped line held in a variable assignment (FSTAB_LINE='/dev/mapper/<n> <mnt> <fs> ...')."""
+    names: set[str] = set()
+    lines = view.splitlines()
+    has_mount_line = any(re.match(r"\s*MOUNT=", ln) for ln in lines)
+    for ln in lines:
+        for m in re.finditer(r"/dev/mapper/([\w-]+)", ln):
+            if "fstab" in ln:
+                names.add(m.group(1))
+            elif re.match(r"\s*MAPPER=/dev/mapper/", ln) and has_mount_line:
+                names.add(m.group(1))
+        # MUTATION-TARGET: MB-L2 start (fstab-shaped mount evidence in a variable assignment)
+        fm = _FSTAB_SHAPED.match(ln)
+        if fm:
+            names.add(fm.group(2))
+        # MUTATION-TARGET: MB-L2 end
+    return names
+
+
+def check_pinned_apparatus(
+    store: str,
+    db: dict,
+    kc_ctx: dict | None,
+    infra_files: list[Path],
+    repo_root: Path,
+    cache: dict,
+    fails: list[str],
+) -> bool:
+    path = db["apparatus"]
+    mapper = db["mapper"]
+    pp = PurePosixPath(path)
+    if (
+        pp.is_absolute()
+        or ".." in pp.parts
+        or not re.match(r"^apps/[^/]+/infra/.+", path)
+    ):
+        fails.append(
+            f"FAIL: {store} device_binding.apparatus '{path}' must be a relative path under "
+            "apps/*/infra/ with no '..' -> fix the pin"
+        )
+        return False
+    target = repo_root / path
+    if target.is_symlink() or target not in set(infra_files):
+        fails.append(
+            f"FAIL: {store} device_binding.apparatus '{path}' is not a regular file under "
+            "apps/*/infra/ -> fix the pin"
+        )
+        return False
+    base = pp.name
+    # The install hop needs the consumer that carries the file, which only key_chain names; an
+    # indexed row cannot omit key_chain (MB-L8b), so for it the hop always runs.
+    if kc_ctx is not None:
+        consumer_text = kc_ctx["consumer_code"]
+        consumer_file: Path = kc_ctx["consumer_file"]
+        ci = re.search(r'templatefile\(\s*"\$\{path\.module\}/([^"]+)"', consumer_text)
+        list_ok = bool(
+            re.search(
+                rf'^\s*"{re.escape(base)}",?\s*$',
+                hcl_views(cache.get(consumer_file) or read_text(consumer_file))[0],
+                re.M,
+            )
+        )
+        init_ok = False
+        if ci:
+            ci_path = consumer_file.parent / ci.group(1)
+            if ci_path.is_file():
+                init_ok = bool(
+                    re.search(
+                        rf"^\s*-\s*/usr/local/bin/{re.escape(base)}\s*$",
+                        line_comment_view(read_text(ci_path)),
+                        re.M,
+                    )
+                )
+        if not (list_ok and init_ok):
+            fails.append(
+                f"FAIL: {store} apparatus {path} is not installed by the consumer "
+                f"{db['key_chain']['consumer']} (host-script list entry: {list_ok}, cloud-init "
+                f"invocation: {init_ok}) -> a file no host installs proves nothing about the volume"
+            )
+            return False
+    view = line_comment_view(cache.get(target) or read_text(target))
+    if mapper not in scan_pinned_apparatus(view):
+        fails.append(
+            f"FAIL: {store} pinned apparatus {path} does not resolve a cryptsetup "
+            f"luksFormat+luksOpen site for mapper '{mapper}' -> the mapper must be opened by the "
+            "file the row pins"
+        )
+        return False
+    if mapper not in scan_pinned_mount_evidence(view):
+        fails.append(
+            f"FAIL: {store} has no mount evidence in the pinned apparatus {path} for mapper "
+            f"'{mapper}' -> the pinned file must carry its own fstab line or MAPPER=/MOUNT= pair"
+        )
+        return False
+    return True
 
 
 # --- R7: three-way resource-type partition + unledgered stores --------------
@@ -749,6 +1354,9 @@ REQUIRED_TOP = (
 OPTIONAL_TOP = ("live_coverage_floor",)
 
 
+KEY_CHAIN_FIELDS = ("consumer", "token", "secret", "password")
+
+
 def _validate_exception(exc: dict, prefix: str) -> list[str]:
     # Deliberately shallow: only the STRUCTURAL "is this an object" shape is a
     # schema concern here. The exception's substantive required-ness
@@ -806,6 +1414,22 @@ def _validate_store(s: dict, i: int) -> list[str]:
             for f in ("volume", "attachment", "mapper"):
                 if f not in db:
                     errs.append(f"{prefix}.device_binding missing '{f}'")
+            if "apparatus" in db and not (
+                isinstance(db["apparatus"], str) and db["apparatus"].strip()
+            ):
+                errs.append(f"{prefix}.device_binding.apparatus must be a non-empty string")
+            if "key_chain" in db:
+                kc = db["key_chain"]
+                if not isinstance(kc, dict):
+                    errs.append(f"{prefix}.device_binding.key_chain must be an object")
+                else:
+                    for f in KEY_CHAIN_FIELDS:
+                        if not (isinstance(kc.get(f), str) and kc.get(f)):
+                            errs.append(
+                                f"{prefix}.device_binding.key_chain.{f} must be a non-empty string"
+                            )
+                    for f in sorted(set(kc) - set(KEY_CHAIN_FIELDS)):
+                        errs.append(f"{prefix}.device_binding.key_chain has unexpected key '{f}'")
     return errs
 
 
@@ -931,11 +1555,13 @@ def run_sweep(
     tf_store_count = check_resource_partition(ledger, tf_inventory, fails)
     check_positive_work_floor(ledger, tf_store_count, fails)
     check_live_coverage_floor(ledger, fails)
+    check_password_claims(ledger, tf_files, cache, fails)
+    check_apparatus_pins(ledger, fails)
 
     for row in ledger["stores"]:
         mech = row["at_rest"]["mechanism"]
         if mech == "luks":
-            check_luks_row(row, tf_files, infra_files, cache, fails)
+            check_luks_row(row, tf_files, infra_files, cache, fails, repo_root)
         check_at_rest(row, today, repo_root, fails)
 
     for conn in ledger["connections"]:

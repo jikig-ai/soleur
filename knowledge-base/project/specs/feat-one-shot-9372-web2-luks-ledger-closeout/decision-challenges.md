@@ -53,3 +53,17 @@ Appended by plan on 2026-10-10 (headless pipeline: not asked, persisted for the 
 7. **Fewer records.** The simplicity lens would cut the runbook row-2 line and the nfr-register pointer (PR 2 rewrites the runbook;
    the nfr sentence is already scoped "pre-flip") and de-duplicate the not-discharged list across four places. Default taken: keep
    both lines (they stop a later reader acting on a falsified sentence) and keep the repetition (each cell is read alone).
+
+## Resolved during work (2026-10-11)
+
+8. **The plan's own re-evaluation trigger fired twice at Phase 1.0; both defaults taken as the plan prescribed.** (a) The
+   multiplicity resolver measured over 100 lines against the 40-line budget, so the slim form was applied for it: `multiplicity`
+   is not a linter key; a new web host key turns the lint suite red through case WC-29 (with a positive control, WC-28) until the
+   `hcloud_volume.workspaces` row is re-attested. The token/secret config-equality hop was kept (task 3 above names its reason).
+   (b) The linter diff measured about 575 code lines, over the 350-line split trigger (decision 3), so #9941 is the linter
+   prerequisite alone and the flip, legal records and ADR-263 addendum follow as PR 1b. PR 2 is unaffected.
+   - *What the linter now does not catch:* a new web host key is caught by a test, not by the ledger linter, and a `TF_VAR`
+     override of the host map is invisible to both.
+9. **`device_binding.volume` must equal `store` (not in the plan).** Found while reproducing the false-PASS construction: a row for
+   one volume could cite a sibling volume's volume and attachment and pass. Added as one check with its own case (WC-25); no
+   mutation row because the password-claim guard (MB-L5) fires on the same input, so deleting it is an equivalent mutant.

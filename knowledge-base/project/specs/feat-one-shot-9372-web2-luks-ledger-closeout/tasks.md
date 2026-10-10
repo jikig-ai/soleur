@@ -2,8 +2,15 @@
 
 Plan: `knowledge-base/project/plans/2026-10-10-feat-web2-luks-ledger-flip-and-article-30-closeout-plan.md`
 
-Branch `feat-one-shot-9372-web2-luks-ledger-closeout`, draft PR #9941. PR 2 (retire the rebirth and reboot workflows) is a
-separate branch and is not tasked here. This PR carries `Ref #9372`, never a closing keyword.
+Branch `feat-one-shot-9372-web2-luks-ledger-closeout`, draft PR #9941.
+
+**Split taken (plan trigger fired at Phase 1.0, 2026-10-10):** the linter diff measured about 575 code lines after the slim form,
+over the 350-line trigger, so #9941 ships Phases 0 and 1 (linter, schema, tests, ADR-140 addendum) as the prerequisite PR and
+Phases 2 to 5 (ledger flip, legal markers, ADR-263 addendum, runbook line, C4 sentence) become PR 1b on a branch cut after it
+merges. PR 2 (retire the rebirth and reboot workflows) is a separate branch. #9941 carries `Ref #9372`, never a closing keyword.
+
+**Slim form taken:** `multiplicity` (task 1.3.5, MB-L7, MB-L8c) was replaced by a suite assertion (cases WC-27 to WC-29) because the
+resolver exceeded its 40-line budget; the config-equality hops (MB-L3) stay.
 
 ## Phase 0: Re-verify before writing (no writes)
 
