@@ -16,6 +16,21 @@ Ref #9860. This PR is diagnostics only. It does NOT fix the sandbox failure and 
 
 Spec lacks a valid `lane:` - defaulted to cross-domain (fail-closed, TR2).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10
+**Sections enhanced:** Design (`kdeny` classification), Research Insights, Hypotheses decision rows
+**Research agents used:** none spawned in the deepen pass (every claim verified inline with read-only `gh`, `git`, `jq`, `grep`, a local docker repro and Better Stack reads; command per claim in the tables above); the plan-review pass already ran four seats (DHH, Kieran, code-simplicity, CTO devex).
+
+### Key Improvements
+1. Silent-empty `journalctl -k` is a measured third state on systemd 261 (rc 0, no hint, no lines), added as `j=empty` with its own test state, so an unreadable stream can never read as "healthy and quiet".
+2. Repo precedent that `dmesg_restrict=1` is the deliberate host baseline raises the expected `noaccess` outcome; stated as the expected result in the Overview.
+3. Mechanical gates re-run: 4.6 user-brand (aggregate pattern), 4.7 observability (allowlisted `bash` probe, literal `section=kdeny`, declared credentials), 4.8 no PAT shapes, 4.11 guard-contract lint green (1 guard, 11 mutation rows), 4.12 scope check (1 live section, 3 subsections, Recommendation line, no `unmapped`), rule IDs all active, every cited PR/issue resolved live.
+
+### New Considerations Discovered
+- `cat-deploy-state.sh`'s `oom_journal_tail` runs as the same unprivileged user and may be silently empty (secondary finding, to confirm from the first `kdeny` result).
+- #9723 is a closed issue (the cross-tenant `/proc` leak), #9768 the PR that carries the shim splice; the plan cites each in the right role.
+
 ## Overview
 
 PR #9884 (merged 2026-10-10, `6a86bad36e`, v0.335.13) made a failed canary sandbox emit a bounded 14-row
@@ -66,6 +81,17 @@ the read-only check that confirms or refutes that, before anything ships.
   `2026-06-04 cron-silence-was-bwrap-userns-drift` (never gate a deploy on a synthetic probe validated only
   against a mock; read the specific root-cause value; dark-launch anything new).
 - Better Stack read (read-only, Doppler `prd_terraform`): the first bundle rows, quoted above.
+- Deepen-pass measurements (read-only, local): `journalctl -k -n 400 --since=-5min --no-pager -o cat` as a `wheel`
+  user without `adm`/`systemd-journal` on systemd 261 prints nothing and exits 0; `dmesg` prints `dmesg: read kernel
+  buffer failed: Operation not permitted`, rc 1, with `kernel.dmesg_restrict=1`. The repo already treats
+  `dmesg_restrict=1` as the deliberate host baseline (`cloud-init-git-data.yml` comment on the LUKS detail file),
+  which raises the prior that both rungs report `noaccess`/`empty` on the web host.
+- Precedents (4.4 precedent-diff): the bounded-read-with-exit-status shape is the existing exec read in
+  `emit_canary_sandbox_diag` (`$(timeout -k 3 ... | head -c 8192; exit "${PIPESTATUS[0]}")`); `journalctl -k` is already
+  used by `container-restart-monitor.sh` (runs as root via its systemd unit) and `cat-deploy-state.sh` (runs as the
+  webhook user, `2>/dev/null || true`, so its `oom_journal_tail` may be silently empty for the same reason - a
+  secondary finding for the Phase 6 read, not fixed here). The `kdeny` ladder deviates by classifying instead of
+  discarding stderr.
 - Prior art for the test shape: the #9871 plan `2026-10-09-fix-canary-sandbox-failure-self-diagnosis-plan.md`
   (NOT archived: moving it would drop the discoverability baseline of 53) and its Review Round 1 Amendments.
 - Plan review (4 seats: DHH, Kieran, code-simplicity, CTO devex) changed this plan: `procmask` replaced by
@@ -124,7 +150,7 @@ One new function `_canary_kdeny_read`, inside the `CANARY_DIAG_BEGIN..END` regio
 printing exactly one line:
 
 ```text
-src=<journal|dmesg|none> j=<ok|noaccess|absent|timeout|error> d=<same|skip> total=<n> hits=<n> mproc=<n> <fields>
+src=<journal|dmesg|none> j=<ok|empty|noaccess|absent|timeout|error> d=<same|skip> total=<n> hits=<n> mproc=<n> <fields>
 ```
 
 Ladder. Each rung is `timeout -k 1 3 <cmd> 2>&1 | head -c 65536` inside a command substitution that exits with
@@ -132,14 +158,17 @@ Ladder. Each rung is `timeout -k 1 3 <cmd> 2>&1 | head -c 65536` inside a comman
 `head -c` on an oldest-first stream keeps the oldest 64 KiB and drops the denial that happened seconds ago:
 
 1. `journalctl -k -n 400 --since=-5min --no-pager -o cat`.
-2. Only when rung 1 is not `ok` OR returned zero real lines: `dmesg | tail -n 400` (the `tail` sits before `head -c`).
+2. Only when rung 1 is not `ok` (that includes `empty`): `dmesg | tail -n 400` (the `tail` sits before `head -c`).
 3. Neither usable: `src=none`.
 
 Classification works on the output AFTER removing journalctl/dmesg's own hint lines, matched by anchored patterns
 (`^Hint: You are currently not seeing messages`, `^No journal files were opened due to insufficient permissions`,
 `^dmesg: read kernel buffer failed:`, `^Failed to ... (Permission denied|Operation not permitted)`). `total` and
 `hits` are computed on the remaining REAL lines. A rung is `noaccess` only when a hint matched AND zero real lines
-remain; it is never overridden by the words `denied`/`permission` appearing inside real kernel lines (an AppArmor
+remain; a rung that exits 0 with no hint and zero real lines is `empty` (measured locally on systemd 261 as a user
+in `wheel` but not `adm`/`systemd-journal`: `journalctl -k` prints NOTHING, rc 0, no hint, so silent-empty is
+indistinguishable from "quiet window" and from "unreadable" and must not be reported as `ok`/healthy; Ubuntu 24.04's
+systemd 255 prints the Hint line, which is why both shapes are classified). A rung is never overridden by the words `denied`/`permission` appearing inside real kernel lines (an AppArmor
 line carries `apparmor="DENIED"` and `denied_mask=`, and a broad regex would class the readable stream that holds
 the very denial as `noaccess`). Status by exit code: 127 -> `absent`; 124/137 -> `timeout`; 141 (SIGPIPE from
 `head -c` closing the pipe) -> `ok`; other non-zero with no real lines and no hint -> `error`; else `ok`.
@@ -262,8 +291,10 @@ In `ci-deploy.test.sh`, all RED before any `ci-deploy.sh` edit:
      `noaccess`: the line contains `denied`), `hits=1 mproc=1`, fields carry `operation='mount'`,
      `profile='soleur-bwrap'`, `fstype='proc'`, and carry no `name`, no `comm`, no `pid`, no timestamp.
    - D10c the ladder states in one table-driven row: readable with zero hits (`j=ok hits=0 mproc=0 total>0`);
-     journal hint-only then dmesg answers (`src=dmesg j=noaccess d=ok`); journal readable but empty then dmesg
-     answers; both hint-only (`src=none j=noaccess d=noaccess`); both rc 127 (`absent`); an unrelated
+     journal hint-only then dmesg answers (`src=dmesg j=noaccess d=ok`); journal silent-empty (rc 0, no hint, no
+     lines: the shape measured on systemd 261) then dmesg answers (`src=dmesg j=empty d=ok`); both hint-only
+     (`src=none j=noaccess d=noaccess`); silent-empty journal plus dmesg `read kernel buffer failed` (`src=none
+     j=empty d=noaccess`); both rc 127 (`absent`); an unrelated
      `profile="soleur-bwrap"` denial for a non-mount operation (`hits=1 mproc=0`). Each state asserts the deploy
      verdict is unchanged.
    - D10d both rungs hang (`MOCK_KLOG_SLEEP=60`): each cut at 3 s plus kill-after, `j=timeout d=timeout`, via
@@ -540,7 +571,7 @@ sanitiser's integrity.
 - `CANARY_DIAG_SCRIPT` is a single-quoted shell variable: no single quote may appear in the new `sdk_noproc` line. D9 executes the real script under `sh` and `bash`, which is what catches a quoting slip. D9's extraction stops at the first line ending in `'`, so the closing quote must stay on the last script line.
 - The existing census bans bare `env`, `export`, `declare`, `set` and `printenv` outside two literal names inside the region; the new function and its comments must not trip it (comments are exempt only on whole-line comments).
 - `_cred_err_tail` keeps the LAST 200 characters. The `kdeny` prefix (61 characters worst case) plus the 130-byte fields cap is sized to fit; any longer prefix silently eats the discriminating head. D10h pins it.
-- `journalctl -k` as an unprivileged user usually exits 0 with a hint and no lines; classify on the hint lines, never on bare words inside real kernel lines, and never use `grep -c` under `pipefail` for the counts.
+- `journalctl -k` as an unprivileged user exits 0 with a hint and no lines on systemd 255 and with NOTHING at all on systemd 261 (measured); classify on the hint lines AND treat silent-empty as `empty`, never on bare words inside real kernel lines, and never use `grep -c` under `pipefail` for the counts.
 - `head -c` closing the pipe makes `PIPESTATUS[0]` 141, which is truncation, not an error.
 - Do not "fix" H6 in this PR by touching the proc mask or the docker flags: it is the cross-tenant control from #9723, and the fix needs CTO and CLO review.
 
