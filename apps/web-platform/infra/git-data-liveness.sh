@@ -8,7 +8,7 @@
 # monitor is armed and a flapping monitor can be diagnosed afterwards.
 #
 # WHAT IT PROVES, AND WHAT IT DOES NOT. It proves host and store health: sshd answers on loopback,
-# the store is mounted read-write from the LUKS mapper and its root directory lists, bytes and
+# the store is mounted read-write from the LUKS mapper and its root directory reads, bytes and
 # inodes are below threshold, and the two security units are loaded and have not failed. It does
 # NOT prove that a particular git operation or erasure call succeeds on a healthy host; the erasure
 # path keeps its own reporting. The web-fed probe (web-git-data-probe) proves only that some web
@@ -169,9 +169,10 @@ run_checks() {
         # check here still reads healthy; the volume is then up and refusing every push.
         case ",$opts," in *,rw,*) : ;; *) miss store_readonly ;; esac
       fi
-      # A directory listing is a device READ (no write, so no mtime moves): a detached or
-      # erroring volume behind a still-present mount fails here while statfs still answers.
-      _i ls -f "$STORE_ROOT" >/dev/null 2>&1 || miss store_unreadable
+      # Reading the FIRST directory entry is a device READ (no write, so no mtime moves, and O(1)
+      # however many repositories the root holds, unlike a full listing): a detached or erroring
+      # volume behind a still-present mount fails here while statfs still answers.
+      _i find "$STORE_ROOT" -maxdepth 1 -mindepth 1 -print -quit >/dev/null 2>&1 || miss store_unreadable
       if v="$(_pct pcent "$STORE_ROOT")"; then
         [ "$v" -ge "$DISK_PCT_LIMIT" ] && miss disk_full
       else miss unmeasured:df_bytes; fi

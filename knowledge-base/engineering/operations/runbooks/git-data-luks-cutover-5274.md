@@ -1166,7 +1166,7 @@ Decision record: ADR-283.
 **What each signal proves.** `soleur-git-data-prd` (fed by the web hosts) proves only that some web
 host can open a TCP connection to the port; it stays green while the disk is full or the store is
 closed. `soleur-git-data-host-prd` proves host and store health: sshd answers on loopback, the store
-is mounted read-write from the LUKS mapper and its root directory lists, bytes and inodes are under
+is mounted read-write from the LUKS mapper and its root directory reads, bytes and inodes are under
 90 %, and the LUKS reopen and nftables units are loaded and have not failed. Neither proves that a
 particular git operation or an erasure call succeeds on a healthy host: the erasure path keeps its
 own `unreachable` and `erasure_outcome` reporting. The live reconcile
@@ -1254,7 +1254,7 @@ comma-joined list (`ssh_no_banner,disk_full`): read each element on its own.
 | `miss` / `store_unmounted` | `/mnt/git-data` is an existing directory but not a mountpoint (`mountpoint` exits 32; the dependent store checks are skipped) | read the reopen section for `stage:luks_reopen` |
 | `miss` / `store_not_mapper` | the store is not served from `/dev/mapper/git-data` | treat as a plaintext-serving fault: stop, do not flip |
 | `miss` / `store_readonly` | the store is mounted without `rw` (a journal abort or `errors=remount-ro`) | the volume is up and refusing every push and erasure: replace is the remedy; do not flip |
-| `miss` / `store_unreadable` | the store root cannot be listed (the device read fails behind a present mount) | as `store_readonly` |
+| `miss` / `store_unreadable` | the first entry of the store root cannot be read (the device read fails behind a present mount) | as `store_readonly` |
 | `miss` / `disk_full` | bytes used at or above 90 % | growing the volume is a Terraform change through the normal apply path; reclaim is the weekly gc timer |
 | `miss` / `inodes_full` | inodes used at or above 90 % (the binding limit, about 55 to 60 % of bytes) | as above |
 | `miss` / `unit_failed:<name>` | the LUKS reopen or the nftables unit is `failed` | a failed unit stays `failed` until its next successful run: about 17 minutes after a transient failure, and up to about 1h15 after an exhausted reopen ladder (the unit's start-limit window refuses timer ticks). The miss is real for that whole time |

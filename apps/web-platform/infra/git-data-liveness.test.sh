@@ -144,11 +144,12 @@ if [ -e "$f" ]; then v="$(cat "$f")"; else v=active; fi
 if [ "$v" = not-found ]; then printf 'LoadState=not-found\nActiveState=inactive\n'; exit 0; fi
 printf 'LoadState=loaded\nActiveState=%s\n' "$v"
 EOS
-cat > "$FAKES/ls" <<'EOS'
+cat > "$FAKES/find" <<'EOS'
 #!/bin/bash
-[ "${*: -1}" = "$GDL_FX/store" ] || exec /usr/bin/ls "$@"
-[ ! -e "$GDL_FX/ls_rc" ] || exit "$(cat "$GDL_FX/ls_rc")"
-exec /usr/bin/ls "$@"
+[ "$1" = "$GDL_FX/store" ] || exec /usr/bin/find "$@"
+[ "$*" = "$GDL_FX/store -maxdepth 1 -mindepth 1 -print -quit" ] || { echo "find $*" >> "$GDL_FX/fake.refused"; exit 97; }
+[ ! -e "$GDL_FX/find_rc" ] || exit "$(cat "$GDL_FX/find_rc")"
+exec /usr/bin/find "$@"
 EOS
 cat > "$FAKES/curl" <<'EOS'
 #!/bin/bash
@@ -273,8 +274,8 @@ ok "$(( $(pings) != 0 ))" "T3r a store mounted read-only withholds the ping"
 ok "$(grep -qF 'code=store_readonly' <<<"$(last_emit)"; echo $?)" "T3r …and names store_readonly"
 new_fixture t3r2; echo rw,errors=remount-ro,relatime > "$FX/findmnt_opts"; run_feeder
 ok "$(( $(pings) != 1 ))" "T3r an option list that merely CONTAINS ro-looking text but carries rw pings (token match, not substring)"
-new_fixture t3r3; echo 5 > "$FX/ls_rc"; run_feeder
-ok "$(( $(pings) != 0 ))" "T3r a store root that cannot be listed (a device read fails behind a present mount) withholds the ping"
+new_fixture t3r3; echo 5 > "$FX/find_rc"; run_feeder
+ok "$(( $(pings) != 0 ))" "T3r a store root whose first entry cannot be read (a device read fails behind a present mount) withholds the ping"
 ok "$(grep -qF 'code=store_unreadable' <<<"$(last_emit)"; echo $?)" "T3r …and names store_unreadable"
 
 new_fixture t3e; echo /dev/sda1 > "$FX/findmnt_out"; run_feeder
@@ -518,7 +519,7 @@ n_exec=$((n_sites + 3))
 path_a=$(( ${c_banner:-99} + ${c_fetch:-99} + 2 * ${c_ping:-99} + ${c_pause:-99} + ${c_emit:-99} ))
 path_b=$(( ${c_banner:-99} + n_exec * ${c_instr:-99} + ${c_emit:-99} ))
 ok "$(( !( ${tstart:-0} > 0 && path_a <= ${tstart:-0} && path_b <= ${tstart:-0} && ${tstart:-0} < 60 ) ))" "S6 the tick budget derived from the script's own constants holds: healthy path ${path_a} s and hung-instrument path ${path_b} s (${n_exec} instrument runs) fit TimeoutStartSec=${tstart:-?} and stay inside the 60 s tick"
-ok "$((n_sites != 5))" "S6 the instrument call sites are exactly the five the budget assumes (mountpoint, findmnt, ls, df, systemctl; got $n_sites)"
+ok "$((n_sites != 5))" "S6 the instrument call sites are exactly the five the budget assumes (mountpoint, findmnt, find, df, systemctl; got $n_sites)"
 ok "$(grep -qxF 'readonly OK_SUMMARY_S=600' "$SCRIPT_BODY" && grep -qxF 'readonly MISS_REEMIT_S=1800' "$SCRIPT_BODY" && grep -qxF 'readonly PING_PAUSE=1' "$SCRIPT_BODY" && grep -qxF 'readonly BANNER_TIMEOUT=5' "$SCRIPT_BODY" && grep -qxF 'readonly INSTR_TIMEOUT=3' "$SCRIPT_BODY" && grep -qxF 'readonly PING_TIMEOUT=10' "$SCRIPT_BODY"; echo $?)" "S6 the cadence and bound constants are pinned (10 min summary, 30 min re-emit, 1 s pause, 5 s banner, 3 s instrument, 10 s ping)"
 n=$(grep -cE '(^|[^[:alnum:]_/-])(wget|nc|ncat|socat|openssl|python3?)([^[:alnum:]_-]|$)' "$SCRIPT_BODY" || true)
 ok "$((n != 0))" "S11 no other network-capable tool appears in the script (curl in _ping is the only sender; got $n)"
@@ -752,7 +753,7 @@ p_last_good() {  # 23: a vendor blip then a Doppler outage still pings from the 
 p_store_read() {  # 24: an unreadable store root withholds the ping
   local SUT="$1"
   new_fixture p24a; run_feeder; [ "$(pings)" -eq 1 ] || return 1
-  new_fixture p24b; echo 5 > "$FX/ls_rc"; run_feeder; [ "$(pings)" -eq 0 ]
+  new_fixture p24b; echo 5 > "$FX/find_rc"; run_feeder; [ "$(pings)" -eq 0 ]
 }
 p_instr_bound() {  # 25: a hung instrument is cut and recorded
   local SUT="$1"
@@ -764,7 +765,7 @@ assert_red 20 p_readonly script          's@case ",\$opts," in \*,rw,\*\) : ;; \
 assert_red 21 p_unit_missing script      's@not-found/\*\|masked/\*\|error/\*\)@masked/*|error/*)@'
 assert_red 22 p_state_octal script       's@LAST_TS=\$\(\(10#\$v\)\)@LAST_TS=$v@'
 assert_red 23 p_last_good script         's@\[ -s "\$\{RUN_DIR:\?\}/url\.last" \]@false@'
-assert_red 24 p_store_read script        's@^      _i ls -f "\$STORE_ROOT" >/dev/null 2>&1 \|\| miss store_unreadable$@      :@'
+assert_red 24 p_store_read script        's@^      _i find "\$STORE_ROOT" -maxdepth 1 -mindepth 1 -print -quit >/dev/null 2>&1 \|\| miss store_unreadable$@      :@'
 assert_red 25 p_instr_bound script       's#^_i\(\) \{ timeout "\$INSTR_TIMEOUT" "\$@"; \}$#_i() { "$@"; }#'
 
 # Harness rows: the suite's own instruments must notice a broken instrument.
