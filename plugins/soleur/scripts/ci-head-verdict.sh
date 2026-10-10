@@ -14,9 +14,10 @@
 # `draft-light` step reads the PR LIVE and runs full for ACTION == ready_for_review and for a non-draft PR.
 #
 # APPLICABILITY. The mechanism exists only in a repo whose default-branch `.github/workflows/ci.yml` carries the
-# `draft-light` job. Any other repo (a customer repo the plugin is installed in) never produces a ready run, so
+# `draft-light` job (the key may carry a trailing comment or quotes; a 200 body without a top-level `jobs:` key is an API
+# error, never "not applicable"). Any other repo (a customer repo the plugin is installed in) never produces a ready run, so
 # `verdict` answers n/a (reason no-draft-light) and `wait-ready-run` answers ok (reason not-applicable): its ship and
-# merge flow is byte-identical to a world without this script. A 404 on that file is "not applicable"; any other
+# merge flow is the one it had without this script, plus one timeline read and one contents read. A 404 on that file is "not applicable"; any other
 # read failure is an API error (exit 3), never a guess.
 #
 # `verdict` prints exactly one marker as the last stdout line and exits 0 (a decision was made) or 3 (it could not be):
@@ -46,7 +47,8 @@
 # the local clock.
 #
 # `wait-ready-run` is the arm-after-ready gate. The caller reads K with `ready-count` BEFORE `gh pr ready`; the wait
-# polls (every 10 s plus the calls themselves, budget --timeout, default 300; give the calling tool a timeout above it)
+# polls (every 10 s plus the calls themselves, budget --timeout, default 300: the real elapsed time is up to ~365 s, so
+# give the calling tool a timeout of 420 s)
 # until the PR's ReadyForReviewEvent count exceeds K AND a live read says it is not a draft (read-after-write lag
 # guard: the previous event is never taken as T), takes the newest event's server time as T, then polls for a
 # pull_request run at H created at or after T. Last stdout line:
@@ -127,6 +129,8 @@ fail_api() {
   echo "ci-head-verdict: $1" >&2
   if [[ "$CMD" == verdict ]]; then
     printf '%s state=error pr=%s sha=%s run=none reason=%s\n' "$MARKER" "$PR" "$SHA_OUT" "$reason"
+  elif [[ "$CMD" == wait-ready-run ]]; then
+    printf '%s result=fail pr=%s sha=unknown run=none reason=api-error\n' "$WAIT_MARKER" "$PR"
   fi
   exit 3
 }
@@ -202,11 +206,14 @@ read_newest_run() { # <sha> <floor-epoch>
 APPLICABLE=""
 read_applicable() {
   gh api -H 'Accept: application/vnd.github.raw+json' "repos/{owner}/{repo}/contents/.github/workflows/ci.yml" > "$WORK/ci.yml" 2> "$WORK/err" || {
-    if grep -qE 'HTTP 404|Not Found' "$WORK/err"; then APPLICABLE=0; return 0; fi
+    if grep -qE 'HTTP 404' "$WORK/err"; then APPLICABLE=0; return 0; fi
     ERRMSG="reading the default branch's ci.yml failed: $(head -c 200 "$WORK/err" | tr '\n' ' ')"; return 1
   }
   [[ -s "$WORK/ci.yml" ]] || { ERRMSG="empty ci.yml body"; return 1; }
-  if grep -qE '^  draft-light:[[:space:]]*$' "$WORK/ci.yml"; then APPLICABLE=1; else APPLICABLE=0; fi
+  # A 200 that is not a workflow file (an HTML error page, a truncated body) is an error, never "not applicable": that
+  # answer would switch the wait gate off. The job key may carry a trailing comment or quotes.
+  grep -qE '^jobs:' "$WORK/ci.yml" || { ERRMSG="the default branch's ci.yml body has no top-level jobs: key"; return 1; }
+  if grep -qE "^  ['\"]?draft-light['\"]?:[[:space:]]*(#.*)?$" "$WORK/ci.yml"; then APPLICABLE=1; else APPLICABLE=0; fi
 }
 
 # <status> <conclusion> -> "<state> <reason>" (the closed mapping of rule 4)
@@ -230,7 +237,7 @@ classify_run() {
 # script runs without GNU `date -d`. Prints digits and returns 0, or returns 1.
 epoch_of() {
   local out
-  out="$(jq -rn --arg s "$1" 'if ($s | test("^[A-Za-z]{3}, ")) then ($s | strptime("%a, %d %b %Y %H:%M:%S GMT") | mktime) else ($s | fromdateiso8601) end' 2>/dev/null)" || return 1
+  out="$(LC_ALL=C jq -rn --arg s "$1" 'if ($s | test("^[A-Za-z]{3}, ")) then ($s | strptime("%a, %d %b %Y %H:%M:%S GMT") | mktime) else ($s | fromdateiso8601) end' 2>/dev/null)" || return 1
   [[ "$out" =~ ^[0-9]+$ ]] || return 1
   printf '%s\n' "$out"
 }

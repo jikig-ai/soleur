@@ -1972,7 +1972,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
 
-6. If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming. One Bash call, `timeout: 330000`:
+6. If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming. One Bash call, `timeout: 420000`:
 
    ```bash
    K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER) && gh pr ready PR_NUMBER \

@@ -303,6 +303,18 @@ row_V22() { local d
   vrun "$d" wait-ready-run "$PR" --before-count 1; ok V22.wait.rc rc_is 0; ok V22.wait.marker w_is ok not-applicable none; ok V22.wait.no-polling polls "$d" 0; ok V22.wait.nomiss nomiss "$d"
   d=$(mkrow V22-waitjob); setready "$d" "$(iso_at -3600)" "$T_ISO"; addrun "$d" 8 queued null 2; vrun "$d" wait-ready-run "$PR" --before-count 1
   ok V22.wait-applicable.marker w_is ok run-created 8
+  # the job key may carry a trailing comment or quotes; a quoted/commented key is still the mechanism
+  d=$(mkrow V22-comment); printf 'jobs:\n  "draft-light":   # the cost lever\n    runs-on: ubuntu-latest\n' > "$d/ciyml.yml"; addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2
+  vrun "$d" verdict "$PR"; ok V22.commented-quoted-key-is-applicable state_is pending-full run-in-progress 8
+  # the REAL workflow in this checkout is applicable: a regex that drifts from ci.yml would silently switch the wait gate off
+  d=$(mkrow V22-real); cp "$REPO_ROOT/.github/workflows/ci.yml" "$d/ciyml.yml"; addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2
+  vrun "$d" verdict "$PR"; ok V22.the-real-ci-yml-is-applicable state_is pending-full run-in-progress 8
+  # a 200 body that is not a workflow file is an ERROR (exit 3), never "not applicable" (which would arm unguarded)
+  d=$(mkrow V22-html); printf '<html><body>502 Bad Gateway</body></html>\n' > "$d/ciyml.yml"; vrun "$d" verdict "$PR"
+  ok V22.html-200-is-an-error.rc rc_is 3; ok V22.html-200-is-an-error.state state_is error api-error
+  vrun "$d" wait-ready-run "$PR" --before-count 1; ok V22.html-200-wait.rc rc_is 3; ok V22.html-200-wait.marker w_is fail api-error none
+  # only an HTTP 404 means "no such file"; a bare "Not Found" in other text is an error
+  d=$(mkrow V22-nf); touch "$d/ciyml.fail"; vrun "$d" verdict "$PR"; ok V22.generic-failure-is-an-error rc_is 3
   d=$(mkrow V22-waiterr); touch "$d/ciyml.fail"; vrun "$d" wait-ready-run "$PR" --before-count 1; ok V22.wait-read-error.rc rc_is 3; ok V22.wait-read-error.marker w_is fail api-error none; }
 # V16: every gh call returning an EMPTY body must fail the resolver, not pass it (harness row a).
 row_V16() { local d; d=$(mkrow V16); addrun "$d" 8 completed success 2
@@ -402,6 +414,10 @@ row_W13() { local d; d=$(mkrow W13); setready "$d" "$(iso_at -3600)" "$T_ISO"; j
   addrun "$d" 8 queued null 2
   vrun "$d" wait-ready-run "$PR" --before-count 1 --timeout 10; ok W13.wait-rc rc_is 3; ok W13.wait-marker w_is fail api-error none
   vrun "$d" ready-count "$PR"; ok W13.count-rc rc_is 3; ok W13.count-no-number eq "$OUT" ""; }
+# W15: a missing tool still ends wait-ready-run with a marker (exit 3), so the caller can classify it
+row_W15() { local d emp; d=$(mkrow W15); emp="$SANDBOX/emptybin"; mkdir -p "$emp"
+  : > "$d/log"; env -u CI_HEAD_VERDICT_NOW PATH="$emp" FX="$d" "$(command -v bash)" "$SUT" wait-ready-run "$PR" --before-count 0 > "$d/out" 2> "$d/err"; RC=$?; OUT=$(cat "$d/out"); ERR=$(cat "$d/err")
+  ok W15.rc rc_is 3; ok W15.marker w_is fail api-error none; ok W15.stderr-names-the-tool eq "$(grep -c 'not found on PATH' <<<"$ERR")" 1; }
 # W14: ready-count prints the number of ReadyForReviewEvents (NOT the timeline totalCount) and nothing else.
 row_W14() { local d; d=$(mkrow W14); setready "$d" "$(iso_at -3600)" "$(iso_at -1800)" "$T_ISO"
   vrun "$d" ready-count "$PR"; ok W14.rc rc_is 0; ok W14.count eq "$OUT" 3; ok W14.nomiss nomiss "$d"
@@ -522,14 +538,17 @@ mutant() {
 }
 # Harness controls: the helper must be able to report BOTH a survivor and a crash, or its green verdicts mean nothing.
 mutant_selftest() {
-  VERDICTS_EXPECTED=$((VERDICTS_EXPECTED + 1)); ASSERTED=$((ASSERTED + 2))
+  VERDICTS_EXPECTED=$((VERDICTS_EXPECTED + 1)); ASSERTED=$((ASSERTED + 3))
+  local surv_ok=0 crash_ok=0 rt_ok=0
   mutant_run SELF-EQUIV 'readonly MARKER="SOLEUR_CI_HEAD_VERDICT"' "readonly MARKER='SOLEUR_CI_HEAD_VERDICT'" row_V3 row_V15
-  local surv_ok=0 crash_ok=0
   [[ "$MUT_LANDED" -eq 1 && -n "$MUT_SURV" && "$MUT_CRASH" -eq 0 ]] && surv_ok=1
   mutant_run SELF-CRASH 'set -uo pipefail' 'set -uo pipefail; readonly MARKER=(' row_V3
   [[ "$MUT_LANDED" -eq 1 && "$MUT_CRASH" -eq 1 ]] && crash_ok=1
-  if [[ "$surv_ok" -eq 1 && "$crash_ok" -eq 1 ]]; then pass "harness controls (an equivalent mutant survives, a crashing mutant is flagged)"
-  else fail "harness controls (survivor reported: $surv_ok, crash flagged: $crash_ok)"; fi
+  # the stderr detector itself: a mutant that PARSES (bash -n passes) but fails at runtime must still be flagged
+  mutant_run SELF-CRASH-RT 'set -uo pipefail' 'set -uo pipefail; no_such_command_zz' row_V3
+  if [[ "$MUT_LANDED" -eq 1 && "$MUT_CRASH" -eq 1 ]] && bash -n "$SANDBOX/mut-SELF-CRASH-RT.sh" 2>/dev/null; then rt_ok=1; fi
+  if [[ "$surv_ok" -eq 1 && "$crash_ok" -eq 1 && "$rt_ok" -eq 1 ]]; then pass "harness controls (an equivalent mutant survives, a non-parsing and a runtime-failing mutant are flagged)"
+  else fail "harness controls (survivor reported: $surv_ok, parse crash flagged: $crash_ok, runtime crash flagged: $rt_ok)"; fi
 }
 
 run_row() { # <fn> <label>
@@ -576,6 +595,7 @@ run_row row_W11 "W11 erroring polls: api-error exit 3, never a measured negative
 run_row row_W12 "W12 newest event is T; no skew allowance"
 run_row row_W13 "W13 uncountable timeline fails closed (api-error)"
 run_row row_W14 "W14 ready-count counts ReadyForReviewEvents"
+run_row row_W15 "W15 a missing tool still prints the wait marker (exit 3)"
 echo "== reader-bypass lint =="
 run_row row_L1 "L1  every reader of a PR's CI state reaches the resolver"
 run_row row_L2 "L2  arm-after-ready order: ready-count, gh pr ready, wait-ready-run (known negatives rejected)"
@@ -603,7 +623,7 @@ mutant M19 'state=error pr=%s' 'state=no-run pr=%s' row_V15 row_V16
 mutant M20 '[[ "$APPLICABLE" == 1 ]] || emit n/a "" no-draft-light' ':' row_V22
 mutant M21 '(( WAIT_API_ERR == 1 ))' '(( WAIT_API_ERR == 7 ))' row_W11 row_W13
 mutant M22 '[[ -z "$RUN_ID" || "$RUN_ID" =~ ^[0-9]+$ ]]' ':' row_V15
-mutant M23 "HTTP 404|Not Found" "HTTP 4040" row_V22
+mutant M23 "grep -qE 'HTTP 404' \"\$WORK/err\"" "grep -qE 'HTTP 4040' \"\$WORK/err\"" row_V22
 mutant M24 '%S GMT")' '%S GMTX")' row_V17
 mutant M25 '"$TEST_CONCLUSION" == success' '"$TEST_CONCLUSION" != failure' row_V21
 mutant M26 'sort_by([.ts, .id])' 'sort_by(.ts)' row_V12
@@ -612,18 +632,21 @@ mutant M28 ' and (.head.sha | test("^[0-9a-f]{40}$"))' '' row_V15
 mutant M29 'WAIT_API_ERR=0
   if [[ "$READY_COUNT"' 'WAIT_API_ERR=1
   if [[ "$READY_COUNT"' row_W2
+mutant M31 "grep -qE '^jobs:' \"\$WORK/ci.yml\"" "grep -qE '.' \"\$WORK/ci.yml\"" row_V22
+mutant M32 "(#.*)?\$\" \"\$WORK/ci.yml\"" "\$\" \"\$WORK/ci.yml\"" row_V22
+mutant M33 "elif [[ \"\$CMD\" == wait-ready-run ]]; then" "elif false; then" row_W15
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
-MIN_ASSERTIONS=343
+MIN_ASSERTIONS=357
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=29
+MIN_MUTANTS=32
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi

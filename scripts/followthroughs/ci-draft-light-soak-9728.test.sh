@@ -569,7 +569,15 @@ else fail "harness control: the equivalent mutant was not reported as a survivor
 mutant_probe c-crash 'MAX_RUNS=100' 'MAX_RUNS=100; readonly X=(' r_pass
 if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that does not parse is flagged as crashed"
 else fail "harness control: the crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
-if [ "$CTRL_OK" -ne 2 ]; then fail "harness controls: $CTRL_OK of 2 held"; fi
+# the stderr detector itself: a mutant that PARSES but fails at runtime must be flagged too
+mutant_probe c-crash-rt 'MAX_RUNS=100' 'MAX_RUNS=100; no_such_command_zz' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-rt.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that parses but fails at runtime is flagged as crashed"
+else fail "harness control: the runtime-crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+if [ "$CTRL_OK" -ne 3 ]; then fail "harness controls: $CTRL_OK of 3 held"; fi
+# the probe quotes the resolver's stall window: the two must not drift
+_rs="$(sed -n 's/^STALL_MINUTES=\([0-9]*\).*/\1/p' "$REPO_ROOT/plugins/soleur/scripts/ci-head-verdict.sh" | head -n 1)"
+_ps="$(sed -n 's/^STALL_MIN=\([0-9]*\).*/\1/p' "$PROBE" | head -n 1)"
+if [ -n "$_rs" ] && [ "$_rs" = "$_ps" ]; then pass "STALL_MIN in the probe ($_ps) equals STALL_MINUTES in the resolver ($_rs)"; else fail "STALL_MIN drift: probe '$_ps', resolver '$_rs'"; fi
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 45 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 45)"; fi
 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
@@ -580,7 +588,7 @@ if [ "$MUT_REDS" -ge 60 ]; then pass "HARNESS: an always-PASS probe turns $MUT_R
 printf 'ci-draft-light-soak-9728: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=160
+_FLOOR=162
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1

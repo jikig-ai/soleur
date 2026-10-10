@@ -247,7 +247,7 @@ resolve_head_verdict() {
 RECOVERY=""
 soften_test_row() {
   local out="$1" last_run=""
-  RECOVERY="gh pr ready --undo $PR, then gh pr ready $PR with a user token (never GITHUB_TOKEN; a manual re-run of the draft run is NOT a recovery)"
+  RECOVERY="after confirming in the Actions tab that no ready run is still in flight (the undo cancels it): gh pr ready --undo $PR, then gh pr ready $PR with a user token (never GITHUB_TOKEN; a manual re-run of the draft run is NOT a recovery)"
   case "$V_STATE" in
     pending-full)
       jq -c '.failed -= ["test"] | .pending += ["test"]

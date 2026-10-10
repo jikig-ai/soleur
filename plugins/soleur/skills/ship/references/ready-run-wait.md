@@ -11,7 +11,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
   && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
 ```
 
-Run it as one Bash call with `timeout: 330000`: the wait budget is 300 s plus the API calls. A tool timeout kills it before it prints its marker and leaves the PR readied with the arm decision unrecorded; then run `ci-head-verdict.sh verdict PR_NUMBER`. `gh pr ready` needs a user token: `GITHUB_TOKEN` cannot ready a PR.
+Run it as one Bash call with `timeout: 420000`: the wait budget is 300 s of polling plus the calls themselves (up to about 365 s). A tool timeout kills it before it prints its marker and leaves the PR readied with the arm decision unrecorded; then run `ci-head-verdict.sh verdict PR_NUMBER`. `gh pr ready` needs a user token: `GITHUB_TOKEN` cannot ready a PR.
 
 ## Outcomes (last stdout line `SOLEUR_CI_WAIT_READY_RUN result=… reason=…`, plus the exit code)
 
@@ -22,10 +22,10 @@ Run it as one Bash call with `timeout: 330000`: the wait budget is 300 s plus th
 | `ready-count` exits 3 (no number) | nothing was readied; the PR is still a draft | fix the read (rate limit?) and re-run the whole block; never `--undo` |
 | exit 1, `no-ready-event` | the ready event was not visible within the budget | `gh pr view PR_NUMBER --json isDraft`: still a draft, re-run the whole block; readied, run `ci-head-verdict.sh verdict PR_NUMBER` |
 | exit 1, `no-run` | readied, but no ci.yml run followed | `gh pr ready --undo PR_NUMBER`, then re-run the WHOLE block (it re-reads `K`; a stale `K` makes the wait pass on the first ready event) |
-| exit 1, `awaiting-approval` | a fork's run needs a maintainer to click "Approve and run" in the Actions tab | approve it; `--undo` and ready again do not clear an approval gate |
+| exit 1, `awaiting-approval` | a fork's run needs a maintainer to click "Approve and run" in the Actions tab | approve it, then run `ci-head-verdict.sh verdict PR_NUMBER`; `--undo` and ready again do not clear an approval gate |
 | exit 3, `api-error` | a read failed on the last poll: the ready state is UNKNOWN | run `ci-head-verdict.sh verdict PR_NUMBER`; do not undo anything on a guess |
 
-Never arm on any non-zero outcome: report "readied but unarmed" with the marker line.
+Never arm on the wait's own non-zero outcome: report "readied but unarmed" with the marker line. After a recovery step, the way back to arming is the verdict, not the wait: `ci-head-verdict.sh verdict PR_NUMBER` answering `pending-full` or `full-decided` means a ready run exists, and only then run `gh pr merge --squash --auto`. `no-run` or `stalled` goes back to the `--undo` row, `awaiting-approval` back to the approval row, and `state=error` (exit 3) means retry later. A `no-run` that is only minutes old may belong to another session still inside its own wait: look before undoing.
 
 ## Reading a ready PR's red `test` (Phase 7 poll, monitor, triage, admin-merge)
 

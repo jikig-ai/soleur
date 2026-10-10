@@ -75,7 +75,7 @@ type CommitPull = {
   number?: number;
   state?: string;
   draft?: boolean;
-  head?: { sha?: string };
+  head?: { sha?: string; repo?: { full_name?: string } | null };
 };
 
 /** True iff the run is the repository's ci.yml (`name: CI`). `path` is checked
@@ -110,13 +110,16 @@ export async function isDraftPrCiRun(args: {
   }
 
   let pulls: unknown;
-  const deadline = new AbortController();
-  const timer = setTimeout(() => deadline.abort(), LOOKUP_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // Dynamic import: keeps the GitHub App / key-material module graph out of
     // every delivery that never reaches this point (only CI pull_request
-    // failures do), mirroring how the route loads the Inngest client.
+    // failures do), mirroring how the route loads the Inngest client. The
+    // deadline starts AFTER it: a slow module load must not leave the signal
+    // already aborted when the listener below is attached.
     const { githubApiGet } = await import("@/server/github-api");
+    const deadline = new AbortController();
+    timer = setTimeout(() => deadline.abort(), LOOKUP_TIMEOUT_MS);
     pulls = await Promise.race([
       githubApiGet<unknown>(
         installationId,
@@ -141,7 +144,7 @@ export async function isDraftPrCiRun(args: {
     });
     return { drop: false, reason: "lookup-failed" };
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 
   const matches = (pulls as CommitPull[]).filter(
@@ -166,5 +169,8 @@ export async function isDraftPrCiRun(args: {
   if (only.draft !== true || typeof only.number !== "number") {
     return { drop: false, reason: "not-draft" };
   }
+  // ci.yml runs the FULL battery for a fork head (the light mode is same-repository only), so a fork draft's failure is a
+  // real one: keep its card. A missing head repository fails open the same way.
+  if (only.head?.repo?.full_name !== fullName) return { drop: false, reason: "fork-or-unknown-head-repo" };
   return { drop: true, prNumber: only.number, headSha };
 }

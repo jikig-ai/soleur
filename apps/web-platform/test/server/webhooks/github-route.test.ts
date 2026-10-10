@@ -485,7 +485,7 @@ describe("POST /api/webhooks/github — draft-PR CI-run filter (ADR-276 S3)", ()
   }
 
   function pr(over: Record<string, unknown> = {}): Record<string, unknown> {
-    return { number: 7, state: "open", draft: true, head: { sha: HEAD_SHA }, ...over };
+    return { number: 7, state: "open", draft: true, head: { sha: HEAD_SHA, repo: { full_name: SCOPED_REPO } }, ...over };
   }
 
   function post(body: object) {
@@ -520,6 +520,17 @@ describe("POST /api/webhooks/github — draft-PR CI-run filter (ADR-276 S3)", ()
       expect.objectContaining({ deliveryId: "delivery-abc-123", prNumber: 7, headSha: HEAD_SHA }),
       expect.stringContaining("draft PR CI run"),
     );
+  });
+
+  it.each([
+    ["a fork head", { repo: { full_name: "someone/soleur" } }],
+    ["a deleted fork (null head repo)", { repo: null }],
+    ["no head repo field", {}],
+  ])("a draft PR from %s still raises the card (ci.yml runs the full battery there): fails OPEN, NO drop", async (_l, headExtra) => {
+    mockGithubApiGet.mockResolvedValueOnce([pr({ head: { sha: HEAD_SHA, ...(headExtra as object) } })]);
+    const res = await post(ciRunBody());
+    expect(res.status).toBe(200);
+    expectCardRaised();
   });
 
   it("matches on head.sha among several PRs of the commit (an unrelated PR does not make it ambiguous)", async () => {
