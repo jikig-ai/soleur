@@ -32,3 +32,19 @@
 - Verdict: **APPROVED with conditions** (soleur:product:cpo consult, 2026-10-10).
 - Condition 1 (blocking, APPLIED): five plan sites said malformed mints bare `^` — a bare `^` is select-nothing (`e=""` → `*\n\n*`), not always-match. Amended lines ~199, ~225, ~392, ~571 to `^glob:<entry verbatim>` before `soleur:work`.
 - Condition 2 (advisory, for work phase): pin the malformed-shape invariant with a cross-site comment at mint arm / hit-arm revalidation / census arm (one invariant, three sites).
+
+## Work Phase (Tier C — sequential)
+- RED→GREEN derive rows Rg1-5 (121/121). Hit arm `glob:*)` + mint arm landed; header comments pin the malformed-shape invariant at three sites (CPO cond 2 satisfied).
+- Lib swap: six arrays → `glob:`; trap-tempfile 7-entry set; +2 literal `.md` edges the consumer oracle surfaced as REAL reads (provision-* DPA_FILE for ack-guard; ADR-207 for agent-runnable via battery-tag-authorship hop).
+- Oracle discipline: fixture kb literals composed via `${_KB}`/`${_kn}`/`"knowledge""-base/…"` or renamed to carry `sandbox`/`fixture` tokens — the oracle's FIXTURE regex charges a bare `knowledge-base/<path>` token as a real read.
+- G3 awk `GLOBENT` admitted at three sites; 7 new RC_TABLE rows (90 classifier rows pass).
+- Census arm + M21-26 (92 passed, 26 gated rows).
+- kb-consumers oracle `covers()` `^glob:` arm (22/22).
+- Verification: kb-md declines all six (kb-consumers still selects); kb-sh selects all six at 3 depths; rename-source selects; .py/.bash/.ts/.mjs/.js/bunfig.toml → trap-tempfile only; malformed → still selects; receipt carries `^glob:` verbatim.
+- Stream-diff vs merge-base: ZERO sel-bit flips on both bench probes; 18 rows differ in edge text only (six declared + ~12 closure-minted `^glob:`/literal edges on runner-fixture suites — widening only, fail-safe).
+- fanout-suite-scope 53/53; c4-model-freshness 4/4; markdownlint clean.
+- Flakes: two rc=143 arm kills (p4, tg4-.py) — external tmp reaper deleted TESTROOT mid-run; tg4 .py row passed in the sibling run.
+- Commits: bd2a6df306 (impl), 480a43c8e6 (pin fixes), dd3c331706 (ADR + tasks). Force-with-lease push synced the rebased history to PR #9945.
+
+## Review Phase
+- Class: code (`.sh` present) → 8-seat panel. design-risk SET (new vocabulary three files must learn + economics justification) → design pass first: simplicity + architecture + performance (3 seats, dedup applied).
