@@ -246,3 +246,8 @@
 /scripts/probe-merge-group-coverage.sh                  @deruelle
 /plugins/soleur/scripts/sync-pr-behind.sh               @deruelle
 /.claude/hooks/pre-merge-rebase.sh                      @deruelle
+/plugins/soleur/scripts/ci-head-verdict.sh              @deruelle
+/plugins/soleur/test/ci-head-verdict.test.sh            @deruelle
+/plugins/soleur/scripts/admin-merge-ready.sh            @deruelle
+/plugins/soleur/scripts/monitor-pr-checks.sh            @deruelle
+/apps/web-platform/server/webhook-draft-ci-run.ts       @deruelle

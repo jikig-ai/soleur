@@ -35,3 +35,15 @@
 ### Not Yet Specified candidates
 
 None.
+
+## Review round (2026-10-10, PR #9885): challenges applied, declined and recorded
+
+Applied (fixes): the resolver's API-error marker is `state=error` outside the closed set (every consumer stub now prints the real shape); `verdict` and `wait-ready-run` answer n/a / ok when the repo's default-branch ci.yml has no `draft-light` job (customer repos keep today's flow); no skew allowance; stall window 120 minutes; `wait-ready-run` exits 3 with reason `api-error` when the last poll could not read; jq epochs instead of GNU `date`; triage keys the newest row on workflow and name; the webhook filter is scoped to `jikig-ai/soleur` and its whole lookup is deadline-raced; AGENTS rule `wg-after-marking-a-pr-ready-run-gh-pr-merge` now says arm after `wait-ready-run` exits 0 (ack recorded); the protocol lives once in `ship/references/ready-run-wait.md`; test harnesses tell a crash from a catch and have known positives.
+
+Declined, with the reason (none files an issue: each is a design preference on code that is built, tested and pinned, not a defect):
+- Cut the soak probe's `S3-CONFIRMED` ordering, the `bad_ready` GraphQL join and the merge_group sweep (design-simplicity). The probe is the only detective control the ADR names for a setting no code path can refuse; removing checks now would remove the evidence the exit census is judged on. The API-budget concern is real: the open-PR list is not paginated (stated in the probe header) and the sweep is bounded per run; a pre-filter on a single `statusCheckRollup` read is a follow-up if the sweeper token starves.
+- Fold `awaiting-approval` into `no-run` (design-simplicity). No fork PRs exist today, but a fork run waiting for approval is the one human-only recovery in the flow, and folding it would tell a maintainer to undo and re-ready a PR that needs a click; the cost is one state in a closed set that every consumer and test already enumerates.
+- Replace `ready-count` + `--before-count` with one `ready` verb (design-simplicity). The ordering hazard is real and is now pinned by the L2 row (known negatives for K-after-ready and a deleted wait); a single verb would also run `gh pr ready`, which the resolver, being read-only, deliberately never does.
+- Stall only on `no-run` (design-architecture alternative to a larger N). Kept `pending-full` stalling too, at 120 minutes: a run in flight for two hours is not healthy, and the soak criterion is "zero queue stalls".
+- Billed-minute baseline and one-day sample (design-performance). Recorded in the ADR as the unit and denominator of the criteria; the exit census measures against its own run set.
+- Restoring the ~1.8 KB of "Why" prose trimmed from `ship/SKILL.md` to fit the byte ceiling (agent-native). The ceiling is exact (274,000 bytes) after this round; the structural fix is already taken (the protocol moved to a reference), and restoring the unrelated prose needs its own PR that extracts something else.

@@ -82,3 +82,12 @@ families cost 89.82 job-minutes a run and the rest of the run 14.26, so a light 
 pushes per drafted-then-readied PR the saving is about 7.85 x 75.6 = 593 minutes against one extra full ready run
 (about 104 minutes), a net of about 490 minutes per drafted-then-readied PR. `test-bun` is 1.81 minutes a run (not above 3,
 so not gated) and `e2e` 3.14 (untouched).
+
+## Erratum 2026-10-10 (review of #9885): the Gate 6 minutes line
+
+Appended, not edited: the paragraph above is left as written.
+
+- "a light run saves about 75.6 minutes" subtracts the light-set cost (14.26) from the gated cost (89.82), but the light set is paid in BOTH the full and the light run, so it must not be subtracted. The saving per push is the gated-family cost less the `draft-light` job, about 89.7 on the same basis. ADR-276 S3 Decision 3(e) uses the correct form (7.85 x 104.08 before against 7.85 x 14.4 plus one 104.08 ready run after).
+- Denominator: the per-run figures divide minutes of all 209 runs by the 178 that had jobs. On the 209-run basis the figures are full 88.6, gated 76.5, light 12.1, break-even near 1.4 pushes and a net near 496 job-minutes per drafted-then-readied PR at 7.85 pushes. The 7.85 x 75.6 = 593 minus 104 = 490 figure above is right only by coincidence.
+- "12.8% of draft pushes failing (census: 414 of 3,203)": 414 / 3,203 is 12.9%; 12.8% is the planning-pilot figure (448 of 3,501).
+- No verdict changes: Gate 6 turns on pushes per PR, not minutes. The unit is job-minutes (not billing-rounded); a billed estimate puts the saving per push near 79%, recorded beside the 80% criterion in the ADR.

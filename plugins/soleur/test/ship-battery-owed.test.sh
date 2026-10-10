@@ -840,4 +840,4 @@ mut17 M17c 'elif ($rows | any(.status != "completed")) then "NOT-GREEN"' 'elif f
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 62
+print_results 63

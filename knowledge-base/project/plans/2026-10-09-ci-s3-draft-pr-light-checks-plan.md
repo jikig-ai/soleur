@@ -579,3 +579,13 @@ Panel (headless, brand-survival threshold `aggregate pattern`): DHH, Kieran, cod
 | Guard matrices wider than the unique risk | DHH | taste | Declined: the matrices are the Guard Contract gate's required shape; duplicated rows are annotated |
 | Reconciliation of the footprint in the ADR rollback section | DHH | user-challenge (informational) | Applied (Phase 4) |
 
+## Review amendments (2026-10-10, PR #9885)
+
+Appended; the sections above are left as written. Superseded by review: the stall threshold is 120 minutes (was 75: 73 declared + 14 p90 queue wait = 87), the resolver has no clock-skew allowance (a draft push's light run created just before the ready call must never be adopted as the ready run), and the API-error marker is `state=error`, outside the closed state set. The resolver also answers n/a / ok when the repo's default-branch ci.yml has no `draft-light` job, and the webhook filter is scoped to `jikig-ai/soleur`.
+
+### User-Brand Impact (amended; this supersedes the section above for review purposes)
+
+- **If this lands broken, the user experiences:** (1) a Soleur user in a CUSTOMER repository whose ship/merge flow now calls `ci-head-verdict.sh`: without the applicability probe, `wait-ready-run` would wait 300 s for a ready run that never comes and tell them not to arm (`plugins/soleur/scripts/ci-head-verdict.sh`, `plugins/soleur/skills/ship/SKILL.md` step 6); (2) a genuinely failing `test` on a ready PR read as pending during an API outage (the old `state=no-run reason=api-error` marker), so no one is told; (3) a founder's `engineering.ci_failed` card for a failing draft run silently dropped (`apps/web-platform/server/webhook-draft-ci-run.ts`, in force from deploy whether or not `CI_DRAFT_LIGHT` is set; a customer installation's own `CI` workflow is out of scope of the filter); (4) a regression a skipped heavy family should have caught reaching `main`: bounded by `merge_group` running the full battery, the red `test` on a light draft, and the ruleset.
+- **If this leaks, the user's workflow is exposed via:** no data, credential, billing or user-table surface is touched. The exposure vectors are the variable `CI_DRAFT_LIGHT` (a mis-set value fails closed to full CI), the resolver's read-only `gh api` calls, and the webhook lookup (installation token, 5 s deadline, fail-open).
+- **Brand-survival threshold:** `aggregate pattern` (unchanged: nothing here is a single-user incident without a data or credential surface; the merge line is held by `test` + `e2e` + the queue, not by the readers).
+- **Rollback completeness:** deleting the variable restores full draft CI; the webhook filter, the `ready_for_review` type, the wait step and the readers need a revert (ADR-276 S3 amendment, "How to roll back").
