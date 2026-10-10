@@ -469,7 +469,7 @@ run_check_g() {  # same, against an explicit guard file ($1)
   rc=$?
   set -e
 }
-has() { printf '%s' "$out" | grep -qF -- "$1"; }
+has() { printf '%s' "$out" | grep -cF >/dev/null -- "$1"; }
 
 poison_origin() { git -C "$WORK" remote set-url origin "file://$tmp/does-not-exist.git"; }
 heal_origin() { git -C "$WORK" remote set-url origin "$ORIGIN_URL"; }
@@ -498,7 +498,7 @@ CASES=$((CASES + 1))
 feat_case 141_f1.sql="F1" 142_f2.sql="F2-v2"
 ledger "141_f1.sql|$(blob_of F1)" "142_f2.sql|$(blob_of F2-v1)"
 run_check --head-branch feat
-if [[ "$rc" == "1" ]] && has "142_f2.sql" && ! printf '%s' "$out" | grep -q '::error::141_f1.sql' && has "ledgered-match=1"; then
+if [[ "$rc" == "1" ]] && has "142_f2.sql" && ! printf '%s' "$out" | grep -c >/dev/null '::error::141_f1.sql' && has "ledgered-match=1"; then
   pass "second member caught, first member matched"
 else
   fail "expected rc=1 naming only 142_f2.sql, ledgered-match=1; got rc=$rc out=$out"
@@ -577,7 +577,7 @@ rc_upper=$rc; out_upper=$out
 ledger "147_e.sql|$(blob_of E | cut -c1-12)"
 run_check --head-branch feat
 if [[ "$rc_upper" == "1" && "$rc" == "1" ]] && has "carries no verifiable content_sha" \
-  && printf '%s' "$out_upper" | grep -qF "carries no verifiable content_sha"; then
+  && printf '%s' "$out_upper" | grep -cF >/dev/null "carries no verifiable content_sha"; then
   pass "uppercase and short SHAs are not verifiable"
 else
   fail "expected rc=1 for both; got upper=$rc_upper short=$rc out=$out"
@@ -608,7 +608,7 @@ rc_u=$rc; out_u=$out
 git -C "$WORK" switch -q -C feat origin/main
 run_check
 if [[ "$rc_u" == "2" && "$rc" == "2" ]] && has "a re-run will not help" \
-  && printf '%s' "$out_u" | grep -qF "a re-run will not help"; then
+  && printf '%s' "$out_u" | grep -cF >/dev/null "a re-run will not help"; then
   pass "empty ledger fails closed even when there is nothing to compare"
 else
   fail "expected rc=2 config twice; got U=$rc_u empty=$rc out=$out"
@@ -652,7 +652,7 @@ mkdir -p "$tmp/not-a-root"
 out=$(DATABASE_URL_POOLER="postgres://p" bash "$GUARD" check --base origin/main --repo "$tmp/not-a-root" 2>&1); rc=$?
 out3=$(timeout 10 bash "$GUARD" check --repo 2>&1); rc3=$?
 set -e
-if [[ "$rc1" == "2" && "$rc" == "2" && "$rc3" == "2" ]] && has "migrations" && printf '%s' "$out3" | grep -q 'requires a value'; then
+if [[ "$rc1" == "2" && "$rc" == "2" && "$rc3" == "2" ]] && has "migrations" && printf '%s' "$out3" | grep -c >/dev/null 'requires a value'; then
   pass "missing --repo, wrong root and a dangling flag all fail closed"
 else
   fail "expected rc=2 x3; got $rc1/$rc/$rc3 out=$out1 | $out | $out3"
@@ -1065,7 +1065,7 @@ set +e
 out=$(DLP_GUARD="$tmp/absent-guard.sh" bash "${BASH_SOURCE[0]}" 2>&1)
 rc=$?
 set -e
-if [[ "$rc" != "0" ]] && has "guard not found" && ! printf '%s' "$out" | grep -qE '^dev-ledger-parity\.test\.sh: [0-9]+ passed'; then
+if [[ "$rc" != "0" ]] && has "guard not found" && ! printf '%s' "$out" | grep -cE >/dev/null '^dev-ledger-parity\.test\.sh: [0-9]+ passed'; then
   pass "absent guard is RED, never '0 passed, 0 failed'"
 else
   fail "suite did not refuse an absent guard: rc=$rc out=$out"
@@ -1958,7 +1958,7 @@ CASES=$((CASES + 1))
 ledger "150_inflight.sql|$(blob_of IF)"
 run_probe true
 if [[ "$rc" == "0" ]] && has "::warning::  - 150_inflight.sql (in-flight: unmerged on live branch inflight-a via exact" \
-  && ! printf '%s\n' "$out" | grep -q '^::error::' \
+  && ! printf '%s\n' "$out" | grep -c >/dev/null '^::error::' \
   && grep -qxF "ledger-classify: in-flight=1 stale=0 merged=0 orphan=0 closed-grace=0 closed=0 closed-tracked=0" <<<"$out" && ! has "Missing-on-main:" \
   && grep -qx 'drift-detected=true' "$tmp/gho"; then
   pass "an open PR's applied row no longer reds main (ADR-061 per-ref)"
@@ -1981,7 +1981,7 @@ fi
 # ----------------------------------------------------------------------
 echo "G2-P12: Missing-on-main lists filenames only (no |sha)"
 CASES=$((CASES + 1))
-if ! printf '%s' "$out" | grep -qE '::error::  - 199_gone\.sql\|' && ! has "$(blob_of GONE)"; then
+if ! printf '%s' "$out" | grep -cE >/dev/null '::error::  - 199_gone\.sql\|' && ! has "$(blob_of GONE)"; then
   pass "display unchanged: bare filenames"
 else
   fail "the pair format leaked into the display: $out"
@@ -2031,7 +2031,7 @@ with_stub_classifier 'mapfile -t l; printf "orphan\t%s\n" "${l[0]%%|*}"'
 run_probe true
 restore_classifier
 if [[ "$rc_order" == "1" && "$rc" == "1" ]] && has "UNCLASSIFIED" \
-  && printf '%s' "$out_order" | grep -qF "UNCLASSIFIED"; then
+  && printf '%s' "$out_order" | grep -cF >/dev/null "UNCLASSIFIED"; then
   pass "per-line identity check, not a count match"
 else
   fail "expected UNCLASSIFIED twice; got order=$rc_order ($out_order) short=$rc ($out)"
@@ -2081,7 +2081,7 @@ with_stub_classifier 'cat >/dev/null; echo "::error::boom" >&2; exit 2'
 ledger "199_gone.sql|$(blob_of GONE)"
 run_probe true
 restore_classifier
-if [[ "$rc" == "1" ]] && has "  classifier: ::error::boom" && ! printf '%s\n' "$out" | grep -qx '::error::boom'; then
+if [[ "$rc" == "1" ]] && has "  classifier: ::error::boom" && ! printf '%s\n' "$out" | grep -cx >/dev/null '::error::boom'; then
   pass "classifier stderr is neutralised"
 else
   fail "expected prefixed classifier stderr; got rc=$rc out=$out"
@@ -2169,7 +2169,7 @@ ledger
 export DLP_DOPPLER_LOG="$DOPLOG" DLP_PSQL_LOG="$PSQLLOG"
 run_probe true
 unset DLP_DOPPLER_LOG DLP_PSQL_LOG
-if grep -qE '(^| )-c dev_scheduled( |$)' "$DOPLOG" && tr '\0' '\n' < "$PSQLLOG" | grep -qF 'COALESCE(content_sha'; then
+if grep -qE '(^| )-c dev_scheduled( |$)' "$DOPLOG" && tr '\0' '\n' < "$PSQLLOG" | grep -cF >/dev/null 'COALESCE(content_sha'; then
   pass "doppler config and SQL column pinned"
 else
   fail "probe read the wrong config or column: doppler=[$(cat "$DOPLOG")]"
@@ -3894,7 +3894,7 @@ echo "G3-unit-backslash: the ASSEMBLED unit is checked for a backslash after ass
 CASES=$((CASES + 1))
 ub=$(awk '/^POST_START=/ { a = 1 } a && /has_backslash "\$UNIT"/ { print NR; exit }' "$WRITER_SRC")
 ua=$(grep -n '^apply_discard_unit$' "$WRITER_SRC" | cut -d: -f1) || true
-if [[ -n "$ub" && -n "$ua" ]] && (( ub < ua )) && sed -n "${ub},$((ub + 3))p" "$WRITER_SRC" | grep -qF 'refused backslash'; then
+if [[ -n "$ub" && -n "$ua" ]] && (( ub < ua )) && sed -n "${ub},$((ub + 3))p" "$WRITER_SRC" | grep -cF >/dev/null 'refused backslash'; then
   pass "defense in depth on the unit itself"
 else
   fail "the unit backslash check is missing or misplaced (at=$ub apply=$ua)"

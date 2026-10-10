@@ -44,7 +44,7 @@ out=$(bash "$LINT" "$tmp/099_unguarded.sql" 2>&1)
 rc=$?
 set -e
 
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q 't1_parent_in_another_mig'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null 't1_parent_in_another_mig'; then
   pass "exit 1 with referenced table name in error"
 else
   fail "expected rc=1 + table name; got rc=$rc, out=$out"

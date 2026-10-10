@@ -107,19 +107,19 @@ line_is "$TF" 'inngest_luks_wrong_volume_alias[[:space:]]*=[[:space:]]*"scsi-0HC
   && ok "the watched alias is built from hcloud_volume.inngest_redis_luks.id, never a literal id" \
   || no "the alias is not derived from the resource id — a re-created volume would silence the rule"
 
-printf '%s' "$LOCAL_SQL" | grep -qF "data_mount_devid=\${local.inngest_luks_wrong_volume_alias} " \
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "data_mount_devid=\${local.inngest_luks_wrong_volume_alias} " \
   && ok "the field is matched WITH its key and a trailing space (…_1234 is a prefix of …_12345)" \
   || no "the devid match is not key-anchored and space-terminated"
 
-printf '%s' "$LOCAL_SQL" | grep -qE "position\(JSONExtractString\(raw, 'message'\), 'data_mount_devid=[^']*'\) = 0" \
+printf '%s' "$LOCAL_SQL" | grep -cE >/dev/null "position\(JSONExtractString\(raw, 'message'\), 'data_mount_devid=[^']*'\) = 0" \
   && ok "the devid predicate is a NEGATION: a row whose field is missing or renamed FIRES" \
   || no "the devid predicate is not '= 0' — a schema change would make this rule go quiet"
 
-printf '%s' "$LOCAL_SQL" | grep -qF "position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1" \
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1" \
   && ok "scoped to the probe marker, anchored at position 1 (not a substring anywhere in the row)" \
   || no "the marker scope is missing or unanchored"
 
-printf '%s' "$LOCAL_SQL" | grep -qF "host_role=dedicated " \
+printf '%s' "$LOCAL_SQL" | grep -cF >/dev/null "host_role=dedicated " \
   && ok "scoped to host_role=dedicated — the co-located web host emits the same marker" \
   || no "no host_role=dedicated scope: web-1 rows would drive this alert"
 
@@ -132,7 +132,7 @@ line_is "$TF" 'paused[[:space:]]*=[[:space:]]*!var\.inngest_luks_cutover_complet
 # by a commented-out `# default = true` inside it.
 VAR_BLOCK="$(awk '/^[[:space:]]*variable "inngest_luks_cutover_complete"[[:space:]]*\{/{f=1} f{print} f&&/^[[:space:]]*\}/{exit}' "$VARS")"
 [ -n "$VAR_BLOCK" ] \
-  && printf '%s\n' "$VAR_BLOCK" | grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$' \
+  && printf '%s\n' "$VAR_BLOCK" | grep -cE >/dev/null '^[[:space:]]*default[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$' \
   && ok "the arming variable exists and defaults to TRUE (post-cutover, the PLAINTEXT alias is the regression)" \
   || no "variable inngest_luks_cutover_complete is absent or does not default to true"
 

@@ -431,7 +431,7 @@ begin() {
 # sleeps of the retry ladders. Anything else (a cryptsetup verb that is not status/luksUUID, a mkfs, a
 # mount, a chattr, a systemctl, a TRAP) is a write and reds the case.
 READONLY='^(flock -w [0-9]+ 9$|sync( |$)|blkid |lsblk |findmnt |mountpoint |blockdev --getsize64 |lsattr |sleep |logger |boot-emit |doppler secrets get |wipefs [^ -][^ ]*$|cryptsetup (status|luksUUID) |cryptsetup-verb (status|luksUUID)$|apt-get install -y -o DPkg::Lock::Timeout=300 cryptsetup-bin$)'
-no_writes() { ! grep -vE -- "$READONLY" "$FX/calls" | grep -q .; }
+no_writes() { ! grep -vE -- "$READONLY" "$FX/calls" | grep -c >/dev/null .; }
 files_untouched() { [ "$(cat "$FX/root/etc/fstab")" = "# fstab" ] && [ ! -s "$FX/root/etc/crypttab" ] && [ ! -e "$FX/root/etc/systemd/system/docker.service.d" ]; }
 
 # Static handles on the provisioner CODE. scode is the comment-stripped source with line numbers preserved;
@@ -447,7 +447,7 @@ mk_core() { # $FX/core: symlinks to ONLY the tools the script needs (no flock, n
   for t in $CORE_TOOLS; do ln -s "$(command -v "$t")" "$FX/core/$t" 2>/dev/null || true; done
 }
 open_fx() { new_fx; printf 'crypto_LUKS' > "$FX/st/dev.type"; printf 'ext4' > "$FX/st/map.type"; printf '%s' "$LBL_R" > "$FX/st/dev.label"; } # a LUKS volume with a filesystem: the open arm, so only the wire step writes
-no_tmp_left() { ! find "$FX/root" -name '*.provision.tmp' 2>/dev/null | grep -q .; }
+no_tmp_left() { ! find "$FX/root" -name '*.provision.tmp' 2>/dev/null | grep -c >/dev/null .; }
 victims_intact() { local t; for t in fstab crypttab dropin intent; do [ "$(cat "$FX/victim.$t" 2>/dev/null)" = "VICTIM-$t" ] || return 1; done; }
 LOCKF() { printf '%s' "$FX/root/run/workspaces-luks-provision.lock"; }
 hold_lock() { # a REAL flock holder on the provisioner's lock file, in the background; sets HOLDER; waits until it holds
@@ -863,7 +863,7 @@ r2_pair() { # <kid> <sec>: a fresh birth whose R2 pair reads back as the given v
 shape_refused() { # a refused pair: boot continues, escrow=missing (creds_shape, ANCHORED: `creds` and `shape` are prefixes of it), no curl call, nothing streamed, no byte echoed
   [ "$RC" -eq 0 ] || return 1
   [ "$(arm_line 2)" = escrow=missing ] || return 1
-  detail workspaces_luks_provision_escrow | grep -qx 'arm=escrow reason=creds_shape' || return 1
+  detail workspaces_luks_provision_escrow | grep -cx >/dev/null 'arm=escrow reason=creds_shape' || return 1
   lack '^curl ' || return 1
   [ ! -s "$FX/st/curl.cfg" ] || return 1
   secret_absent "$R2_BADMARK"

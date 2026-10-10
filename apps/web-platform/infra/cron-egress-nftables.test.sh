@@ -242,7 +242,7 @@ for c in 169.254.0.0/16 169.254.169.254/32 169.0.0.0/8 0.0.0.0/0 128.0.0.0/1 160
 done
 cidr_accepted() { # <cidr>
   new_fx; printf '%s\n' "$1" > "$FX/cidr.txt"; run_loader
-  [ "$RC" -eq 0 ] && elems | grep -qF -- "{ $1 }" && ll_clean "$FX"
+  [ "$RC" -eq 0 ] && elems | grep -cF >/dev/null -- "{ $1 }" && ll_clean "$FX"
 }
 for c in 169.253.255.255/32 169.255.0.0/16 203.0.113.0/24 168.0.0.0/8 169.255.255.255/16 168.255.255.255/8; do
   expect "gate: must-pass: $c does not overlap 169.254.0.0/16 and installs normally (rc 0, element rendered, census clean)" cidr_accepted "$c"

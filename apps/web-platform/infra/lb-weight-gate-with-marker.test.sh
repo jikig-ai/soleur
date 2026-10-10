@@ -408,7 +408,7 @@ pinned_path_ok() {
 }
 assert "the pinned PATH holds only absolute entries (no empty or relative element)" pinned_path_ok
 no_write_verbs() { # the wrapper only READS: no secrets set/delete/upload, no API write, no run/download
-  ! grep -vE '^[[:space:]]*#' "$WRAPPER" | grep -qiE 'secrets[^|]*[[:space:]](set|delete|upload|download)\b|doppler[^|]*[[:space:]]run\b|api\.doppler\.com|curl|-X[[:space:]]*(POST|PUT|PATCH|DELETE)'
+  ! grep -vE '^[[:space:]]*#' "$WRAPPER" | grep -ciE >/dev/null 'secrets[^|]*[[:space:]](set|delete|upload|download)\b|doppler[^|]*[[:space:]]run\b|api\.doppler\.com|curl|-X[[:space:]]*(POST|PUT|PATCH|DELETE)'
 }
 assert "the wrapper carries no Doppler write verb, no doppler run, no secrets download, no HTTP write" no_write_verbs
 one_doppler_site() { # exactly the two read forms, both through the single doppler_ro helper

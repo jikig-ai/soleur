@@ -51,7 +51,7 @@ assert_refuses() { # <description> <expected-substring> <KEY=VAL>...
     fail=1
     return
   fi
-  if ! printf '%s' "$out" | grep -qF "$expect"; then
+  if ! printf '%s' "$out" | grep -cF >/dev/null "$expect"; then
     echo "  FAIL: $desc — output missing expected substring: $expect" >&2
     fail=1
     return
@@ -113,7 +113,7 @@ fi
 
 # Belt-and-suspenders: none of the refusal-path outputs above leaked the
 # constructed JWT bodies verbatim.
-if printf '%s' "$SERVICE_JWT$ANON_JWT$WRONGREF_JWT" | grep -qF "placeholder-not-reached"; then
+if printf '%s' "$SERVICE_JWT$ANON_JWT$WRONGREF_JWT" | grep -cF >/dev/null "placeholder-not-reached"; then
   : # impossible; keeps shellcheck quiet about the var
 fi
 
