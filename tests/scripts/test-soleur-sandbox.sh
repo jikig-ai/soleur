@@ -424,6 +424,63 @@ cases=$((cases + 1)); rc=0
 bash "$CLI" rm "$UNMARKED" >/dev/null 2>&1 || rc=$?
 if [[ "$rc" -ne 0 && -e "$UNMARKED" ]]; then pass "CLI rm refuses an unmarked path"; else fail "CLI rm accepted an unmarked path (rc=$rc)"; fi
 
+echo "== run-isolated: the PID-namespace verb (helper plugins/soleur/scripts/run-in-pid-namespace.sh) =="
+# A recording stub unshare on a private PATH makes "the command was started" observable even where no
+# real namespace exists: the stub logs every call (and its own cwd); a refusal must leave NO call log.
+RI_BIN="$TESTROOT/ri-bin"; RI_LOG="$TESTROOT/ri-calls"
+assert_fixture_dir "$RI_BIN"; mkdir -p "$RI_BIN"
+printf '#!/bin/sh\nprintf "%%s\\n" "$PWD" >> "%s"\nexit 0\n' "$RI_LOG" > "$RI_BIN/unshare"; chmod +x "$RI_BIN/unshare"
+ri_run() { # path-arg... ; sets RI_RC RI_OUT; PATH puts the recording stub first
+  RI_RC=0; rm -f "$RI_LOG"
+  RI_OUT="$(PATH="$RI_BIN:$PATH" bash "$CLI" run-isolated "$@" 2>&1)" || RI_RC=$?
+}
+ri_refused() { # description ; expects rc 2, no helper marker, no unshare call
+  cases=$((cases + 1))
+  if [[ "$RI_RC" -eq 2 && "$RI_OUT" != *RUN_IN_PID_NAMESPACE_REFUSED* && ! -e "$RI_LOG" ]]; then pass "$1"; else fail "$1 (rc=$RI_RC out='$RI_OUT' called=$([[ -e "$RI_LOG" ]] && echo yes || echo no))"; fi
+}
+RIS="$(new_sbx runiso)"
+cases=$((cases + 1))
+ri_run "$RIS" -- pwd
+if [[ "$RI_RC" -eq 0 && "$(head -n 1 "$RI_LOG" 2>/dev/null)" == "$RIS" && "$(grep -c . "$RI_LOG")" -ge 2 ]]; then pass "run-isolated starts the helper with the sandbox as cwd (probe and run both observed)"; else fail "run-isolated valid sandbox (rc=$RI_RC log=$(cat "$RI_LOG" 2>/dev/null | tr '\n' ' '))"; fi
+cases=$((cases + 1))
+ri_run "$RIS/" -- pwd
+if [[ "$RI_RC" -eq 0 && "$(head -n 1 "$RI_LOG" 2>/dev/null)" == "$RIS" ]]; then pass "run-isolated accepts a trailing slash"; else fail "run-isolated trailing slash (rc=$RI_RC)"; fi
+cases=$((cases + 1))
+RI_RC=0; RI_OUT="$(cd "$RIS" && bash "$CLI" run-isolated "$RIS" -- sh -c 'echo "$$:$(pwd)"' 2>&1)" || RI_RC=$?
+if [[ "$RI_RC" -eq 0 && "$RI_OUT" == "1:$RIS" ]]; then pass "run-isolated (real namespace): the command is PID 1 with the sandbox as cwd"
+elif [[ "$RI_RC" -eq 125 && "$RI_OUT" == RUN_IN_PID_NAMESPACE_REFUSED* ]]; then pass "run-isolated (no namespace here): refuses 125 with the helper's marker"
+else fail "run-isolated real helper (rc=$RI_RC out='$RI_OUT')"; fi
+ri_run "relative/soleur-sbx.x.AAAAAAAA" -- true;   ri_refused "run-isolated refuses a relative path"
+ri_run "$DISK_BASE/soleur-sbx.nonexistent.AAAAAAAA" -- true; ri_refused "run-isolated refuses a path that does not exist"
+ln -s "$RIS" "$DISK_BASE/soleur-sbx.lnk.AAAAAAAA"
+ri_run "$DISK_BASE/soleur-sbx.lnk.AAAAAAAA" -- true; ri_refused "run-isolated refuses a symlink to a sandbox (pwd -P disagrees)"
+ln -s "$DISK_BASE" "$TESTROOT/linkdir"
+ri_run "$TESTROOT/linkdir/$(basename "$RIS")" -- true; ri_refused "run-isolated refuses a symlinked directory component"
+mkdir -p "$DISK_BASE/notasandbox.AAAAAAAA"; cp "$RIS/.soleur-owned" "$DISK_BASE/notasandbox.AAAAAAAA/.soleur-owned"
+ri_run "$DISK_BASE/notasandbox.AAAAAAAA" -- true;  ri_refused "run-isolated refuses a wrong basename even with a marker"
+mkdir -p "$DISK_BASE/soleur-sbx.nomarker.AAAAAAAA"
+ri_run "$DISK_BASE/soleur-sbx.nomarker.AAAAAAAA" -- true; ri_refused "run-isolated refuses a directory with no marker"
+mkdir -p "$DISK_BASE/soleur-sbx.mdir.AAAAAAAA/.soleur-owned"
+ri_run "$DISK_BASE/soleur-sbx.mdir.AAAAAAAA" -- true; ri_refused "run-isolated refuses a marker that is a directory"
+mkdir -p "$DISK_BASE/soleur-sbx.mlnk.AAAAAAAA"; ln -s "$RIS/.soleur-owned" "$DISK_BASE/soleur-sbx.mlnk.AAAAAAAA/.soleur-owned"
+ri_run "$DISK_BASE/soleur-sbx.mlnk.AAAAAAAA" -- true; ri_refused "run-isolated refuses a marker that is a symlink"
+ri_run "$RIS" true; ri_refused "run-isolated refuses a missing -- separator"
+ri_run "$RIS" --; ri_refused "run-isolated refuses an empty command"
+# A checkout without the helper: the verb must refuse and the command must not run.
+NOHELP="$TESTROOT/nohelper"; assert_fixture_dir "$NOHELP"
+mkdir -p "$NOHELP/scripts/lib"; cp "$REPO_ROOT/scripts/soleur-sandbox.sh" "$NOHELP/scripts/"; cp "$LIB" "$NOHELP/scripts/lib/"
+RI_RC=0; rm -f "$RI_LOG"
+RI_OUT="$(PATH="$RI_BIN:$PATH" bash "$NOHELP/scripts/soleur-sandbox.sh" run-isolated "$RIS" -- true 2>&1)" || RI_RC=$?
+ri_refused "run-isolated refuses when the helper is missing (rc 2, command not started)"
+cases=$((cases + 1)); rc=0
+USAGE_OUT="$(bash "$CLI" 2>&1)" || true
+if [[ "$USAGE_OUT" == *"run-isolated <path> -- <cmd>"* ]]; then pass "usage text lists run-isolated"; else fail "usage text does not list run-isolated"; fi
+for doc in plugins/soleur/skills/work/references/work-scratch-sandboxes.md plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md plugins/soleur/agents/engineering/review/test-design-reviewer.md; do
+  cases=$((cases + 1))
+  if [[ "$(grep -cF 'run-isolated' "$REPO_ROOT/$doc")" -ge 1 && "$(grep -cF 'RUN_IN_PID_NAMESPACE_REFUSED' "$REPO_ROOT/$doc")" -ge 1 ]]; then pass "$doc names run-isolated and the refusal marker"; else fail "$doc must name run-isolated and RUN_IN_PID_NAMESPACE_REFUSED"; fi
+done
+bash "$CLI" rm "$RIS" >/dev/null 2>&1 || true
+
 echo "== skip policy: no disk-backed base FAILS on CI and skips loudly (rc 0, never silent) elsewhere =="
 cases=$((cases + 1)); rc=0
 env CI=1 SBX_TEST_CANDIDATES="$TESTROOT/no-such-dir" bash "${BASH_SOURCE[0]}" >/dev/null 2>"$TESTROOT/skip-ci.err" || rc=$?
@@ -436,7 +493,7 @@ echo
 # Case floor: the EXACT expected count, compared and exited on directly — deliberately NOT through
 # pass()/fail(), so a deleted/short-circuited arm cannot hide behind a green helper tally. Bump in
 # lockstep when an arm is added or removed.
-EXPECTED_CASES=57
+EXPECTED_CASES=75
 printf 'cases=%s expected=%s\n' "$cases" "$EXPECTED_CASES"
 if [[ "$cases" -ne "$EXPECTED_CASES" ]]; then
   printf 'FAIL: ran %s cases, expected exactly %s (an arm was dropped or added without updating EXPECTED_CASES)\n' "$cases" "$EXPECTED_CASES" >&2
