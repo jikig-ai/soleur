@@ -24,6 +24,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MODULE="$REPO_ROOT/plugins/soleur/skills/product-roadmap/scripts/roadmap-reconcile.sh"
+export SOLEUR_TEST_SUITE_PID=$$   # read by the fake gh `term` walker below; unset or non-numeric means it signals nothing
 
 PASS=0
 FAIL=0
@@ -270,8 +271,13 @@ case "$1 $2" in
       neterr) echo 'error connecting to api.github.com' >&2; exit 1 ;;
       term)   # Signal the script itself: walk up past the command-substitution
               # subshell to the topmost ancestor running the module.
+              # HAZARD: this walk TERMs the outermost ancestor whose argv matches the pattern below. A MUTANT of that match (-v, a dropped
+              # pattern, a catch-all) matches every ancestor and walks up to the top of the user's session. The walk is bounded at this suite's
+              # own PID (SOLEUR_TEST_SUITE_PID) and at pid 1, and signals nothing when that variable is unset; run any mutant of this block
+              # ONLY through plugins/soleur/scripts/run-in-pid-namespace.sh (the namespace makes the test shell PID 1, so the walk stops there).
+              [[ "${SOLEUR_TEST_SUITE_PID:-}" =~ ^[0-9]+$ ]] || { sleep 5; exit 1; }
               p=$PPID; top=""
-              while [[ -r "/proc/$p/cmdline" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -c 'roadmap-reconcile.sh' >/dev/null; do
+              while [[ -r "/proc/$p/cmdline" ]] && [[ "$p" -gt 1 ]] && [[ "$p" != "$SOLEUR_TEST_SUITE_PID" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -c 'roadmap-reconcile.sh' >/dev/null; do
                 top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
               done
               [[ -n "$top" ]] && kill -TERM "$top"; sleep 5; exit 1 ;;
@@ -448,6 +454,13 @@ FAKE_GH_ISSUES=term run_main next
 assert_eq "143" "$RC" "SIGTERM mid-fetch ends the run"
 assert_eq "1" "$(cat "$FAKE_DIR/tmpcount" 2>/dev/null || echo missing)" "the capture file existed when the kill landed"
 assert_eq "" "$(ls -A "$TMP_SANDBOX")" "EXIT trap removed the capture file after SIGTERM"
+
+echo "TS15f: the fake gh term walker is bounded: unset guard, suite-PID comparison and pid-1 bound, trailing comments stripped, anchored on the loop condition"
+_term_body="$(awk '/^      term\)/{f=1} f{print} f && /sleep 5; exit 1 ;;/{exit}' "${BASH_SOURCE[0]}" | grep -v '^[[:space:]]*#' | sed 's/[[:space:]]#.*$//' || true)"
+_term_while="$(printf '%s\n' "$_term_body" | grep '^[[:space:]]*while ' | head -n 1 || true)"
+assert_contains "$_term_body" '=~ ^[0-9]+$ ]] || { sleep 5; exit 1; }' "term walker returns without signalling when the suite PID is unset or non-numeric"
+assert_contains "$_term_while" '&& [[ "$p" != "$SOLEUR_TEST_SUITE_PID" ]] &&' "term walker's loop condition stops at the suite's own PID (and-joined)"
+assert_contains "$_term_while" '[[ "$p" -gt 1 ]] && [[ "$p" !=' "term walker's loop condition stops at pid 1 (and-joined)"
 
 echo "TS16: unknown arguments -> exit 64 before any fetch"
 FAKE_ISSUES="$ISSUES_MIXED" FAKE_GH_ISSUES=ok run_main next --bogus

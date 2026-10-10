@@ -1,0 +1,7 @@
+# fixture data, never executed: the token is only validated as a number (=~), never compared with the walk; one W, bounded=no
+[[ "${SOLEUR_TEST_SUITE_PID:-}" =~ ^[0-9]+$ ]] || { sleep 5; exit 1; }
+p=$1; top=""
+while [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"
