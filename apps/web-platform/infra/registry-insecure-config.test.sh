@@ -99,7 +99,7 @@ assert "every remote-exec inline opens with 'set -e'" \
 # Post-reload probe DERIVES the endpoint — it interpolates \${local.registry_endpoint}, NOT a
 # hardcoded literal. Anchor on the interpolation token so a re-hardcoded literal fails.
 assert "post-reload probe interpolates \${local.registry_endpoint} (not a hardcoded literal)" \
-  "printf '%s' \"\$BLOCK\" | grep -cF 'docker info' >/dev/null && printf '%s' \"\$BLOCK\" | grep -qF \"\$PROBE_TOKEN\""
+  "printf '%s' \"\$BLOCK\" | grep -cF 'docker info' >/dev/null && printf '%s' \"\$BLOCK\" | grep -cF >/dev/null \"\$PROBE_TOKEN\""
 
 # --- #6448 template shape: the .tmpl derives its allowlist value; the rendered doc is valid JSON ---
 assert "docker-daemon.json.tmpl exists (renamed from the static docker-daemon.json)" \

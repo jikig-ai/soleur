@@ -1810,7 +1810,7 @@ assert "#7695 never-zero invariant covered 6 logs x 7 fields" \
 assert "#7695 presence list minus never-zero list == the four fields whose 0 is a MEASUREMENT" \
   "[[ \$(( \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) - \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) )) -eq 4 ]]"
 assert "#7695 those four are exactly redis_keys, redis_expires, redis_key_patterns, registry_fns" \
-  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -qx \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -qx \"\$f\" && exit 1; done; true"
+  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -cx >/dev/null \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -cx >/dev/null \"\$f\" && exit 1; done; true"
 
 # redis_key_patterns must never render as the empty string: the emit is unconditional, so an
 # unbound variable would drop the field entirely and G14 downstream would read the row as
@@ -1846,7 +1846,7 @@ assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings
 assert "#7695 the emitted payload carries EXACTLY the presence list's field count (a new field must be classified)" \
   "[[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$' | wc -l) -eq \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]] || [[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$[a-z_]+' | wc -l) -ge \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]]"
 assert "#7695 every field in the presence list appears in the shared payload" \
-  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q \"\$f=\\\$\$f\" || exit 1; done"
+  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -c >/dev/null \"\$f=\\\$\$f\" || exit 1; done"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
 # #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing
