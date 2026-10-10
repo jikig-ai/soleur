@@ -13,6 +13,15 @@ requires_cpo_signoff: true
 
 # Plan: close the tf-var rebind path in apply-github-infra (Refs #9362, #8209, #8609)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10. **Method:** the seven-reviewer plan-review panel already ran on this plan, so the deepen pass was spent on verification rather than a second fan-out: the halt gates (4.6 to 4.12) were run mechanically, and the forward direction the review flagged as "argued, not run" was run in a scratch clone.
+
+- Wrapper deletion applied to a scratch clone of this branch (four `doppler run` prefixes removed): `tests/scripts/test-infra-privileged-tier-census.sh` 296 passed 0 failed; `tests/scripts/test-apply-github-infra-mint-shape.sh` 9 passed 0 failed; `test-destroy-guard-regex-parity.sh`, `test-destroy-guard-counter.sh` and `test-audit-ruleset-bypass.sh` rc 0; `lint-shell-trace-credential-refusal.py` OK with the rule-E baseline unchanged.
+- Gates: User-Brand Impact present with a valid threshold; Observability present, probe verb allowlisted with no shell-active character; PAT-shape sweep none; Guard Contract lint green (2 entries); Scope Check exactly one unfenced section; no encryption-posture trigger (no `.tf` in the file lists); no UI surface; no downtime-class operation.
+- Citations: the one rule id cited is active; #9360 is merged, #9893, #9361, #9466, #8609, #9394, #9791, #8800, #8659, #7942 are open; no SHA or version is cited.
+- No contradictions found between the Decision table, Phase 3, Guard 2 and the tasks file.
+
 ## Overview
 
 `apply-github-infra.yml` wraps four Terraform invocations in
@@ -269,7 +278,7 @@ Same PR; nothing deferred except the follow-up issue above.
 - [ ] AC1 Trigger proof: `git diff --name-only origin/main...HEAD | grep -E '^(infra/|tests/scripts/lib/destroy-guard-filter\.jq|apps/web-platform/infra/)'` prints nothing, and `.github/workflows/apply-github-infra.yml` appears in no workflow's push `paths:`.
 - [ ] AC2 `bash tests/scripts/test-apply-github-infra-mint-shape.sh` passes with every Guard 1 and Guard 2 row present, each mutant row RED before the fix landed, and `MIN_ASSERTIONS` raised accordingly.
 - [ ] AC3 `grep -c -e '--name-transformer' .github/workflows/apply-github-infra.yml` prints `0`; the two `doppler secrets get` reads remain.
-- [ ] AC4 `bash tests/scripts/test-infra-privileged-tier-census.sh` passes, run against the actual edit (the forward direction; review flagged that the census claim was argued, not run).
+- [ ] AC4 `bash tests/scripts/test-infra-privileged-tier-census.sh` passes, run against the actual edit (the deepen pass already ran it on a scratch clone with the four prefixes removed: 296 passed, 0 failed; repeat on the real tree).
 - [ ] AC5 `bash tests/scripts/test-destroy-guard-regex-parity.sh` and `bash tests/scripts/test-destroy-guard-counter.sh` pass.
 - [ ] AC6 `bash plugins/soleur/test/required-checks-canonical-parity.test.sh` and `bash tests/scripts/test-audit-ruleset-bypass.sh` pass; `bash scripts/marketplace-drift-check.test.sh` passes.
 - [ ] AC7 The shell-trace credential lint reports no new finding (the workflow's rule-E count stays 1).
