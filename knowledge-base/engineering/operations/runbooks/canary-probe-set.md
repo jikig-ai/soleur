@@ -205,7 +205,7 @@ doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --si
   | jq -r '.raw | fromjson? | select(.SYSLOG_IDENTIFIER=="ci-deploy") | .message'
 ```
 
-A complete bundle is fourteen rows: ten in-container sections, then `host`, `hostsec`, `kernel` and `done`.
+A complete bundle is sixteen rows: eleven in-container sections, then `host`, `hostsec`, `kernel`, `kdeny` and `done`.
 
 | section | what it shows | reads as |
 |---|---|---|
@@ -217,14 +217,16 @@ A complete bundle is fourteen rows: ten in-container sections, then `host`, `hos
 | `prov` | `BUILD_SHA` / `BUILD_VERSION` baked into the image | differs from the tag's commit = a stale image behind a newer tag (#9886) |
 | `direct_version` | `/usr/bin/bwrap --version` with the shim bypassed | `rc=126` = execve refused (file caps vs. bounding set, LSM, seccomp); a version line = exec is fine |
 | `direct_probe` | the blocking (legacy) probe argv run against `/usr/bin/bwrap` directly | passes while the shimmed probe fails = the shim; fails the same = kernel/LSM posture. Under `trigger=faithful` it always passes (the legacy probe already did): read `sdk_probe` instead |
-| `sdk_probe` | the SDK's split-unshare argv (`--unshare-user --unshare-pid --proc /proc`) against `/usr/bin/bwrap` directly | corroborating evidence only. Its healthy-canary baseline is UNMEASURED (a healthy deploy emits no bundle, and the #4932 note in `ci-deploy.sh` records that adding these flags to the BLOCKING probe rolled back deploys), so a `Can't mount proc on /newroot/proc: Operation not permitted` line here may be an artifact of running the SDK argv under `docker exec`. Read it as H3 only together with `direct_version rc=0`, a `kernel_ns` userns restriction (`restrict=1` or `max=0`) and the faithful canary's own `reason`. The first bundle that carries a pass on a healthy canary should be recorded here as the baseline |
+| `sdk_probe` | the SDK's split-unshare argv (`--unshare-user --unshare-pid --proc /proc`) against `/usr/bin/bwrap` directly | corroborating evidence only. Its healthy-canary baseline is UNMEASURED (a healthy deploy emits no bundle, and the #4932 note in `ci-deploy.sh` records that adding these flags to the BLOCKING probe rolled back deploys), so a `Can't mount proc on /newroot/proc: Operation not permitted` line here may be an artifact of running the SDK argv under `docker exec`. Read it as H3 only together with `direct_version rc=0`, a `kernel_ns` userns restriction (`restrict=1` or `max=0`) and the faithful canary's own `reason`. The first bundle that carries a pass on a healthy canary should be recorded here as the baseline. **Measured contrast (2026-10-10, local docker, same image digest, bubblewrap 0.8.0, uid 1001, the repo seccomp profile):** this argv prints `Can't mount proc on /newroot/proc: Operation not permitted` under docker's DEFAULT masked `/proc` and passes with `--security-opt systempaths=unconfined`; read `sdk_noproc` next to it |
+| `sdk_noproc` | `sdk_probe`'s argv with `--proc /proc` removed (`--unshare-user --unshare-pid --dev /dev --bind / /`), same binary, same event | the control for `sdk_probe`. `sdk_noproc rc=0` with `sdk_probe rc=1` isolates the fresh-procfs mount as the failing operation on the real host kernel (H6). Both failing = the failure is not the procfs mount (H3 beyond `--proc`, H7, H8). It is also the first measurement of a procfs-free argv, the shape one candidate fix would take |
 | `kernel_ns` | userns sysctls as the container sees them | `restrict=1` or `max=0` = host userns policy |
 | `host` | the canary's `HostConfig`: `capadd`, `capdrop`, `priv`, `aa` (AppArmor profile) | a `SYS_ADMIN` cap-add or `priv=true` is a host-script defect |
 | `hostsec` | the `SecurityOpt` entries, each cut to 40 characters | expect `apparmor=soleur-bwrap` and a `seccomp={...` entry. docker inlines the whole seccomp profile here, so it is cut; a missing `seccomp=` entry means the profile was not applied |
 | `kernel` | host kernel and docker server version | version drift context |
-| `done` | `exec_rc=<n> lines=<n> capped=<0\|1> bytes=<n>` | emitted even when the exec failed. `exec_rc=0 lines=10 capped=0` = the bundle completed (`lines` > 10 with `exec_rc=0` = a multi-line value spilled into `raw` rows; still complete). `124` = the exec timed out and the LAST sections (the probes) are missing; `137` = it ignored the TERM and the 3 s kill-after fired; `127` = `docker` or `timeout` missing; `141` (or `1`) with `bytes` near 8192 = OUR 8 KiB read cap, not an exec failure (`capped=1` alone is the separate 16-row cap and says nothing about `exec_rc`); any other non-zero = `docker exec` itself failed |
+| `kdeny` | one bounded, credential-scrubbed read of the HOST kernel stream: `src=<journal\|dmesg\|none> j=<state> d=<skip\|state> total=<n> hits=<n> mproc=<n> [fields]` | see "Reading `kdeny`" below. `mproc>=1` with `operation='mount'` and `fstype='proc'` = the AppArmor profile denied the mount (H7); `mproc=0` with `j=ok` is evidence the kernel logged no procfs-mount denial, not proof of absence |
+| `done` | `exec_rc=<n> lines=<n> capped=<0\|1> bytes=<n>` | emitted even when the exec failed. `exec_rc=0 lines=11 capped=0` = the bundle completed (`lines` > 11 with `exec_rc=0` = a multi-line value spilled into `raw` rows; still complete). `124` = the exec timed out and the LAST sections (the probes) are missing; `137` = it ignored the TERM and the 3 s kill-after fired; `127` = `docker` or `timeout` missing; `141` (or `1`) with `bytes` near 8192 = OUR 8 KiB read cap, not an exec failure (`capped=1` alone is the separate 16-row cap and says nothing about `exec_rc`); any other non-zero = `docker exec` itself failed |
 
-### Which hypothesis holds (H1-H5, from the plan)
+### Which hypothesis holds (H1-H8, from the plans)
 
 | H | Hypothesis | Rows that decide it |
 |---|---|---|
@@ -233,8 +235,24 @@ A complete bundle is fourteen rows: ten in-container sections, then `host`, `hos
 | H3 | Exec works; namespace/mount creation is denied (the `Can't mount proc` shape, #9860) | `direct_version rc=0` AND `sdk_probe` (or `direct_probe` under `trigger=legacy`) failing with a namespace/mount error, AND `kernel_ns` shows a restrictive userns policy or the faithful canary's `reason` names the mount (`sdk_probe` alone cannot decide it: see its row) |
 | H4 | The shim, not bwrap, is the culprit | `direct_probe rc=0` while the shimmed probe failed (`trigger=legacy` only) |
 | H5 | Container posture drift | `host` (`capadd`/`capdrop`/`priv`/`aa`) and `hostsec` differ from the `docker run` in `ci-deploy.sh` |
+| H6 | docker's masked `/proc` makes the kernel refuse a fresh procfs inside the user namespace (a silent EPERM: no kernel log line). Became fatal when the shim started requiring `--proc /proc` on every SDK argv (#9768) | `sdk_noproc rc=0` AND `sdk_probe rc=1` in the same event, no `systempaths=` entry in `hostsec`, and `kdeny` `mproc=0` (or unreadable: weaker). Corroborated by the local repro in the `sdk_probe` row. A different subsystem (agent sandbox shim, ADR-075/272): open a separate issue, do not weaken the `/proc` mask here (it is the cross-tenant control from #9723) |
+| H7 | The `soleur-bwrap` AppArmor profile denies the mount | `kdeny` `mproc>=1` with `operation='mount'` and `fstype='proc'` in its fields |
+| H8 | Seccomp denies an unlisted syscall (a newer bwrap/glibc path) | not decidable from the kernel stream: the profile's default action is ERRNO and silent unless it logs, in which case a `type=1326` record raises `hits` (its `syscall=` field names it). The static profile reading (`seccomp-bwrap.json`) is the evidence: `mount`, `umount2`, `pivot_root` are unconditionally allowed |
 
 H1 is excluded only when `caps` is `bwrap=none`; `done` must read `exec_rc=0` first, or the rows that decide H2-H4 may be missing.
+
+### Reading `kdeny`
+
+The deploy user is unprivileged, so the kernel stream may be unreadable, and "could not read" is a different fact from "read it, nothing there". The row names which, per rung (`j=` journal, `d=` dmesg; `d=skip` when the journal answered):
+
+| state | meaning |
+|---|---|
+| `ok` | the rung returned real kernel lines; `total`/`hits`/`mproc` describe them |
+| `empty` | rc 0, no hint, no lines. systemd 261 prints NOTHING for a user outside `adm`/`systemd-journal`, so this is indistinguishable from a quiet window: it is NOT a healthy reading |
+| `noaccess` | the tool's own hint (`Hint: You are currently not seeing messages`, `No journal files were opened`, `dmesg: read kernel buffer failed`) and no real lines |
+| `absent` / `timeout` / `error` | rc 127 / rc 124 or 137 (each rung is cut at 3 s) / any other failure with no lines |
+
+`src=none j=noaccess d=noaccess` (the expected outcome while `kernel.dmesg_restrict=1`) means H6/H7 are undecided by the kernel log and `sdk_noproc`, `hostsec` and the local repro carry the diagnosis. Only then is a least-privilege read grant for the deploy user worth a separate plan. `hits` counts `apparmor="DENIED"` and seccomp `type=1326` records among the newest 400 lines of the last 5 minutes (journal) or of the ring buffer (dmesg), capped at 64 KiB, newest first. A bare `profile="soleur-bwrap"` is NOT a hit test: the production container shares that profile. The fields come from a closed key set (`operation profile fstype error info requested_mask denied_mask syscall`) with no `name`, `comm` or `pid`, so no tenant file name reaches Better Stack. printk ratelimiting can drop records, and a silent ERRNO leaves none, so `mproc=0` narrows the field and never closes it.
 
 **Reading absence.** The anchor for "a bundle should exist" is `trigger=legacy`: a `DEPLOY_ROLLBACK: bwrap sandbox
 non-functional` row; `trigger=faithful` has no rollback row, its anchor is the `sandbox-canary` Sentry event or the
