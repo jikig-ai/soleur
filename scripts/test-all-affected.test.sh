@@ -728,11 +728,15 @@ m_s_idx_nested()   { m_ok_single "$1"; rc_lib_ins "$1" '  "a/two.test.sh"' $'AFF
 # every malformed variant stays semantic — the closed grammar must never carry a bad shape
 # into a bounded selection.
 m_ok_idx_glob()    { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/**.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
+# Deliberate superset pin: GLOBENT admits a `../`-headed glob the semantic doctrine
+# calls malformed — admission only marks the diff registration-only (the malformed
+# member still mints always-match and the census REDs it; it can never narrow).
+m_ok_idx_glob_dotdot() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:../x/*.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
 m_ok_idx_glob_anchor() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/**.sh"\n\n  "x/new.test.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
 m_s_idx_glob_qmark() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x?y"\n)'; }
 m_s_idx_glob_bracket() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x[y]"\n)'; }
 m_s_idx_glob_badhead() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:a*/b"\n)'; }
-m_s_idx_glob_tailstar() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x"\n)'; }
+m_s_idx_glob_nostar() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x"\n)'; }
 m_s_idx_glob_always() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' '  "glob:knowledge-base/**.sh"'; }
 m_s_idx_comment_alone() { rc_lib_append "$1" '# a note'; }
 m_s_idx_removed()  { local d="$1"; assert_fixture_dir "$d"; grep -v 'THIS FILE' "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
@@ -802,7 +806,8 @@ RC_TABLE=(
   's_idx_glob_qmark|m_s_idx_glob_qmark|semantic:INDEX-SHAPE|'
   's_idx_glob_bracket|m_s_idx_glob_bracket|semantic:INDEX-SHAPE|'
   's_idx_glob_badhead|m_s_idx_glob_badhead|semantic:INDEX-SHAPE|'
-  's_idx_glob_tailstar|m_s_idx_glob_tailstar|semantic:INDEX-SHAPE|'
+  's_idx_glob_nostar|m_s_idx_glob_nostar|semantic:INDEX-SHAPE|'
+  'ok_idx_glob_dotdot|m_ok_idx_glob_dotdot|registration-only:x/new|'
   's_idx_glob_always|m_s_idx_glob_always|semantic:INDEX-SHAPE|'
   'ok_two_groups|m_ok_two_groups|registration-only:x/new,x/new3|'
   'ok_idx_dotslash|m_ok_idx_dotslash|registration-only:./x|'
@@ -2837,27 +2842,32 @@ else
 fi
 
 # ---- tg rows (Guard 2, #9813): the `glob:` hit arm ---------------------------------------
-# The six kb-corpus walkers carry `glob:` kb edges — a kb .md line can never move their
-# verdict. Their labels sit in the sandbox keep-list, so "absent from RAN" is a real
-# decline, never a trim artifact.
-_TG_WALKERS=(
+# The five extension-bounded kb-corpus walkers carry `glob:` kb edges — a kb .md
+# line can never move their verdict. operator-agent-runnable keeps `^knowledge-base/`:
+# its Guard-1 corpus is content-keyed (g1_discover scans ANY extension for the
+# generated-script marker), so **.sh would under-cover it — the review's honest
+# disposition, at ~16 committed seconds per kb-md diff. Labels sit in the sandbox
+# keep-list, so "absent from RAN" is a real decline, never a trim artifact.
+_TG_GLOB_WALKERS=(
   'plugins/soleur/test/operator-ack-guard.test.sh'
   'plugins/soleur/test/operator-script.test.sh'
-  'plugins/soleur/test/operator-agent-runnable.test.sh'
   'scripts/lint-trap-tempfile-ownership'
   'scripts/lint-shell-capture-exit-live'
   'scripts/lint-shell-trace-credential-refusal'
 )
-_tg_all_ran() { local _l; for _l in "${_TG_WALKERS[@]}"; do ran_exact "$_l" || return 1; done; }
-_tg_none_ran() { local _l; for _l in "${_TG_WALKERS[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+_TG_ALL_SIX=("${_TG_GLOB_WALKERS[@]}" 'plugins/soleur/test/operator-agent-runnable.test.sh')
+_tg_all_ran() { local _l; for _l in "${_TG_ALL_SIX[@]}"; do ran_exact "$_l" || return 1; done; }
+_tg_none_ran() { local _l; for _l in "${_TG_GLOB_WALKERS[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
 
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=knowledge-base/project/specs/feat-x/spec.md' \
   -- --affected
 _rc=$ARM_RC
-if [[ "$_rc" == "0" ]] && _tg_none_ran && ran_exact 'scripts/test-affected-kb-consumers'; then
-  pass "tg1: a kb .md line declines all six glob: walkers (test-affected-kb-consumers still selects)"
+if [[ "$_rc" == "0" ]] && _tg_none_ran \
+  && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh' \
+  && ran_exact 'scripts/test-affected-kb-consumers'; then
+  pass "tg1: a kb .md line declines the five glob: walkers (agent-runnable + kb-consumers still select)"
 else
   fail "tg1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
@@ -2872,7 +2882,7 @@ for _sandbox_probe in 'knowledge-base/x.sh' 'knowledge-base/a/b/c.sh' 'knowledge
     -- --affected
   _rc=$ARM_RC
   if [[ "$_rc" == "0" ]] && _tg_all_ran; then
-    pass "tg2: ${_sandbox_probe} selects all six glob: walkers"
+    pass "tg2: ${_sandbox_probe} selects all six kb-corpus walkers"
   else
     fail "tg2 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
   fi
@@ -2886,19 +2896,19 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && _tg_all_ran; then
-  pass "tg3: a rename line whose SOURCE is a kb .sh selects all six glob: walkers"
+  pass "tg3: a rename line whose SOURCE is a kb .sh selects all six kb-corpus walkers"
 else
   fail "tg3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
 
-# Extension completeness (#9813): lint-trap-tempfile-ownership is the one walker whose
-# kb read set is wider than .sh — ALL_EXT (.sh .bash .py .ts .mjs .js) + bunfig.toml.
-# Each non-.sh extension selects ONLY it; a miss here is the silent-narrowing the
-# 7-entry set exists to close.
+# Extension completeness (#9813): lint-trap-tempfile-ownership is the one glob:
+# walker whose kb read set is wider than .sh — ALL_EXT (.sh .bash .py .ts .mjs .js)
+# + bunfig.toml. Each non-.sh extension selects it among the glob: walkers
+# (agent-runnable also selects — its `^knowledge-base/` matches every kb line);
+# a miss here is the silent-narrowing the 7-entry set exists to close.
 _TG_TRAP_ONLY=(
   'plugins/soleur/test/operator-ack-guard.test.sh'
   'plugins/soleur/test/operator-script.test.sh'
-  'plugins/soleur/test/operator-agent-runnable.test.sh'
   'scripts/lint-shell-capture-exit-live'
   'scripts/lint-shell-trace-credential-refusal'
 )
@@ -2910,8 +2920,9 @@ for _ext in py bash ts mjs js; do
   _rc=$ARM_RC
   _tg_bad=""
   for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
-  if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership'; then
-    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership"
+  if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
+    && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
+    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership among the glob: walkers"
   else
     fail "tg4 (.${_ext}): rc=$_rc extras:${_tg_bad:-none} trap_ran=$(awk -F'\t' -v l='scripts/lint-trap-tempfile-ownership' '$1=="RAN"&&$2==l{f=1}END{print f+0}' <<<"$ARM_RECORD")"
   fi
@@ -2923,8 +2934,9 @@ SANDBOX_LIB=with-lib run_arm \
 _rc=$ARM_RC
 _tg_bad=""
 for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
-if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership'; then
-  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership"
+if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
+  && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
+  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership among the glob: walkers"
 else
   fail "tg4b: rc=$_rc extras:${_tg_bad:-none}"
 fi
@@ -2966,10 +2978,10 @@ cases=$((cases + 1))
 _tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
   bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
   | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
-if [[ "$_tg_rcpt_n" == "6" ]]; then
-  pass "tg6: the six walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+if [[ "$_tg_rcpt_n" == "5" ]]; then
+  pass "tg6: the five glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
 else
-  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 6)"
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 5)"
 fi
 
 echo ""

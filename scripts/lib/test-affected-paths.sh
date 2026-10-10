@@ -2067,8 +2067,10 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "glob:knowledge-base/**.sh"
-  "knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md"
+  # NOT a glob: the Guard-1 corpus is content-keyed, not extension-bounded —
+  # g1_discover scans the whole tree for the generated-script marker on ANY
+  # extension (a kb .md quoting it is in scope), so **.sh would under-cover.
+  "knowledge-base/"
   "plugins/"
   "scripts/"
   "test/"

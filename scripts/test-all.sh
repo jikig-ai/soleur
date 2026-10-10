@@ -2115,11 +2115,15 @@ _diff_edge_hit() {
       # covers `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike).
       # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm in
       # _affected_add_edge, this in-flight revalidation, the census arm in
-      # scripts/lint-orphan-test-suites.sh, the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh, and the GLOBENT shape in the
-      # registration-only classifier must classify a shape identically.
+      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh must classify a shape
+      # identically; GLOBENT (registration-only classifier) is a deliberate
+      # superset — admission can only widen, never narrow (see the mint arm).
       # Every malformed shape returns MATCH here — a glob edge can only widen a
-      # selection, never narrow it.
+      # selection, never narrow it. The deeper arms (non-repo-relative head,
+      # non-`/` head, `*`-less tail) are unreachable from minted edges (their
+      # `:` trips the charset arm first) but ARE reachable via hand-placed
+      # `^glob:` entries in relevance arrays — defense-in-depth for that channel.
       local _g="${e#glob:}" _gh _gt _line
       case "$_g" in
         *[!A-Za-z0-9_./*-]*) return 0 ;;    # byte outside the grammar charset → match
@@ -2766,9 +2770,12 @@ _affected_add_edge() {
       esac
       # malformed-shape invariant — ONE doctrine, FIVE sites: this mint arm, the
       # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
-      # scripts/lint-orphan-test-suites.sh, the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh, and the GLOBENT shape in the
-      # registration-only classifier below must classify a shape identically.
+      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh must classify a shape
+      # identically. Site five — the GLOBENT line shape in the registration-only
+      # classifier — is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
+      # only marks a diff registration-only, a malformed member still mints
+      # always-match here, and the census REDs it — the superset can never narrow.
       # The grammar is a CLOSED charset (any byte outside [-A-Za-z0-9_./:*]'s
       # entry set is malformed — ? [ \ space : are all outside it) and the head
       # must be a clean repo-relative prefix: a `..` or `/`-headed glob can pass

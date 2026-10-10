@@ -107,7 +107,8 @@ tracked_n=$(wc -l < "$WORK/tracked" | tr -d ' ')
 # live — arrays here carry both shapes (`apps/web-platform/` and
 # `plugins/soleur` style bare dirs), so the helper checks both. The one residual
 # difference is glob metacharacters in the declared path itself (pathspec vs
-# [[ == ]] pattern semantics), which these arrays never carry.
+# [[ == ]] pattern semantics) — `glob:` members carry `*` in their tails, but the
+# declared-member census's `glob:*` arm handles them before this helper sees them.
 _TRACKED_SET=$'\n'"$(git -C "$REPO_ROOT" ls-files)"$'\n'
 _tracked_member() {
   [[ "$1" == "." ]] && { [[ "$_TRACKED_SET" != $'\n'$'\n' ]]; return; }
@@ -1115,10 +1116,12 @@ else
           # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
           # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
           # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
-          # this census arm, the covers() oracle in
-          # scripts/test-affected-kb-consumers.test.sh, and the GLOBENT shape in
-          # the registration-only classifier must classify a shape identically.
-          # Here a malformed or dead declared glob is a static RED, not a
+          # this census arm, and the covers() oracle in
+          # scripts/test-affected-kb-consumers.test.sh must classify a shape
+          # identically; GLOBENT (registration-only classifier) is a deliberate
+          # superset — admission can only widen, never narrow (the census is
+          # where a bad shape becomes loud). Here a malformed or dead declared
+          # glob is a static RED, not a
           # runtime narrow: a bad entry degrades WIDER than declared — and a
           # `..`/`/`-headed glob can pass the -d probe while matching no
           # repo-relative diff line ever (a dead edge that narrows).
@@ -1147,16 +1150,22 @@ else
               ;;
             *)
               # No metachar: the mint recurses it as a literal path entry —
-              # the census checks it as one.
+              # the census checks it as one. A miss here mints NOTHING — the
+              # entry is dead, which narrows (the opposite direction from the
+              # malformed branch's degrade-wider).
               if [[ "$_cg" == */ ]]; then
-                [[ -d "$REPO_ROOT/$_cg" ]] || _cg_why="a literal dir entry that does not exist"
+                [[ -d "$REPO_ROOT/$_cg" ]] || _cg_why="a literal dir entry that does not exist -- a dead edge that can never match a diff"
               elif ! _tracked_member "$_cg"; then
-                _cg_why="a literal entry that is not a tracked file"
+                _cg_why="a literal entry that is not a tracked file -- a dead edge that can never match a diff"
               fi
               ;;
           esac
           if [[ -n "$_cg_why" ]]; then
-            echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why} -- it degrades wider than declared and would silently widen every diff's selection." >&2
+            if [[ "$_cg_why" == *"dead edge"* ]]; then
+              echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why}." >&2
+            else
+              echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why} -- it degrades wider than declared and would silently widen every diff's selection." >&2
+            fi
             fails=$((fails + 1))
           fi
           ;;

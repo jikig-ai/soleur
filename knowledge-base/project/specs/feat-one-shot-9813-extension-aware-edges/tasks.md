@@ -35,7 +35,7 @@ names which matrix it lands.
 - [x] 4.1 `bash scripts/test-all.sh --print-selection --paths=knowledge-base/project/specs/foo.md` → `selected=112`, six walker labels absent from selected rows, `scripts/test-affected-kb-consumers` present (FR-1, FR-3).
 - [x] 4.2 `--paths=knowledge-base/project/specs/feat-sdd-implementation-mirror-guard/bootstrap.sh` → the six walkers select (FR-2).
 - [x] 4.3 Stream-diff `AFFECTED_SELECTED` origin/main vs HEAD per FR-5: non-six rows byte-identical on every probe; six rows differ only in the kb-edge token + selected-bit on kb-md only.
-- [ ] 4.4 `bash scripts/affected-prepass-bench.sh --base origin/main --runs 1` for interleaved timing + walker fidelity line.
-- [ ] 4.5 Amend `knowledge-base/engineering/architecture/decisions/ADR-242-the-local-gate-defaults-to-affected-suites-and-always-on-ratchets.md`: new decision 22 (`glob:` kind, degrade ladder, G3 `GLOBENT`, per-suite dispositions) + alternatives rows; add `#9813` to the related-issues line.
+- [x] 4.4 `bash scripts/affected-prepass-bench.sh --base origin/main --runs 1` for interleaved timing + walker fidelity line.
+- [x] 4.5 Amend `knowledge-base/engineering/architecture/decisions/ADR-242-the-local-gate-defaults-to-affected-suites-and-always-on-ratchets.md`: new decision 22 (`glob:` kind, degrade ladder, G3 `GLOBENT`, per-suite dispositions) + alternatives rows; add `#9813` to the related-issues line.
 - [ ] 4.6 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts` after the ADR edit; run the touched suites + `bash scripts/lint-orphan-test-suites.sh`; the full battery runs because runner+index are touched (`runner-changed` — expected, budgeted).
 - [ ] 4.7 PR body: `Closes #9813`; record that the local full battery ran (runner touched → degraded-full) and that `git diff --quiet origin/main...HEAD -- .github/workflows/` is clean (NFR-1).

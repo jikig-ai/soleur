@@ -779,7 +779,7 @@ assert_has "M20 — the unexplained entry is refused" "has no written reason"
 }
 
 # =============================================================================================
-# M21-M26 — Guard 3 (#9813): the declared-member census admits `glob:<head>/<tail>` entries, and
+# M21-M27 — Guard 3 (#9813): the declared-member census admits `glob:<head>/<tail>` entries, and
 # a malformed or dead declared glob is a static RED — the mint degrades bad shapes to
 # always-match edges, so a bad DECLARED glob is a silent widening of every diff's selection.
 # =============================================================================================
@@ -801,21 +801,21 @@ open(path, "w").write(s)
 PY
 }
 
-# kb literals below are COMPOSED (`${_kn}`), never spelled out: the kb-consumers
+# kb literals below are COMPOSED (`${_KB}`), never spelled out: the kb-consumers
 # oracle scans this file for `knowledge-base/<path>` tokens and would charge the
 # fixture strings as real reads. The mutated values land in the sandbox lib
 # byte-identical — composition only changes how the SOURCE spells them.
-_kn='knowledge-base'
+_KB='knowledge-base'
 run_M21() {
 EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M21 "Guard 3: a declared glob: carrying ? or [ is malformed — static RED"
 new_sandbox m21
 mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
-  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_kn}/x?[y].sh"
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_KB}/x?[y].sh"
 run_lint "$SB"; rc=$?
 assert_red "M21" "$rc"
 assert_has "M21 — names the malformed entry and the grammar reason" \
-  "declares glob: edge 'glob:${_kn}/x?[y].sh', contains ? or ["
+  "declares glob: edge 'glob:${_KB}/x?[y].sh', contains ? or ["
 }
 
 run_M22() {
@@ -847,11 +847,11 @@ EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a
 row M24 "Guard 3: a declared glob: with no metachar recurses literal — an untracked target REDs"
 new_sandbox m24
 mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
-  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_kn}/no-such-file.md"
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_KB}/no-such-file.md"
 run_lint "$SB"; rc=$?
 assert_red "M24" "$rc"
 assert_has "M24 — names the entry and the literal-miss reason" \
-  "declares glob: edge 'glob:${_kn}/no-such-file.md', a literal entry that is not a tracked file"
+  "declares glob: edge 'glob:${_KB}/no-such-file.md', a literal entry that is not a tracked file"
 }
 
 run_M25() {
@@ -872,8 +872,8 @@ run_M26() {
 EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M26 "Guard 3: the real glob: declarations pass — and the walk demonstrably reached them"
 new_sandbox m26
-_n=$(grep -c "\"glob:${_kn}/" "$SB/scripts/lib/test-affected-paths.sh")
-(( _n >= 12 )) || harness_die "M26: sandbox lib carries ${_n} glob: kb entries (want >=12 — the walk would be vacuous)"
+_n=$(grep -c "\"glob:${_KB}/" "$SB/scripts/lib/test-affected-paths.sh")
+(( _n >= 11 )) || harness_die "M26: sandbox lib carries ${_n} glob: kb entries (want >=11 — the walk would be vacuous)"
 pass "M26 precondition: ${_n} declared glob: kb entries are in the walk's domain"
 run_lint "$SB"; rc=$?
 if (( rc == 0 )); then pass "M26 — every declared glob: edge validates (exit 0)"; else
@@ -884,7 +884,7 @@ fi
 
 run_M27() {
 EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
-row M27 "Guard 3: a glob: head that is not repo-relative (.., leading /, //, /./) is malformed — static RED"
+row M27 "Guard 3: a glob: head that is not repo-relative (e.g. .., leading /) is malformed — static RED"
 # The head classes the -d probe can resolve while no repo-relative diff line can
 # ever match: a dead edge that narrows while every static guard reads green (B1).
 new_sandbox m27a

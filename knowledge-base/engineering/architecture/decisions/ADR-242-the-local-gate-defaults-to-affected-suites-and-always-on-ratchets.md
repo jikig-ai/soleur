@@ -10,6 +10,7 @@ amended_by:
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
+  - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -584,7 +585,8 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     `knowledge-base/` — honest at prefix granularity (generated operator scripts ship under
     `knowledge-base/project/specs/`) but over-broad in practice: a `.md`-only kb diff could never
     move their verdict yet selected all six for ~264 committed seconds (the issue's ~331 s figure
-    counted `test-affected-kb-consumers` too, which still selects on any kb path by design). A
+    counted `test-affected-kb-consumers` too, which still selects on any kb path by design; the
+    five extension-bounded walkers that took the glob account for ~248 s of it). A
     `glob:` entry mints `^glob:<pattern>`; a diff line under the literal head matching the tail
     under bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers both `x.sh`
     and `a/b/c.sh`) selects the suite. The degrade ladder always fails toward coverage: a missing
@@ -601,14 +603,18 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     a bad entry widens every diff's selection), the `covers()` oracle in
     `scripts/test-affected-kb-consumers.test.sh`, and the `GLOBENT` shape in the
     registration-only classifier, which admits the shape as registration-only; every other added
-    line stays semantic. The two real `.md` reads under kb the consumer ratchet surfaced —
-    the provision-script `DPA_FILE` closure for `operator-ack-guard`, the ADR-207 path for
-    `operator-agent-runnable` — are literal file edges: the issue's `.md`-only-decline contract
-    holds for the corpus scan, not for reads a suite actually has. And
-    `lint-trap-tempfile-ownership` carries the wider seven-entry set its `ALL_EXT` corpus
-    (.sh .bash .py .ts .mjs .js + bunfig.toml) reads, so an extension the issue's `*.sh` framing
-    never named is not silently under-covered. `scripts/test-affected-kb-consumers` keeps
-    `knowledge-base/` — any kb file can be a consumer.
+    line stays semantic. The real `.md` read under kb the consumer ratchet surfaced —
+    the provision-script `DPA_FILE` closure for `operator-ack-guard` — is a literal file edge:
+    the issue's `.md`-only-decline contract holds for the corpus scan, not for reads a suite
+    actually has. `lint-trap-tempfile-ownership` carries the wider seven-entry set its
+    `ALL_EXT` corpus (.sh .bash .py .ts .mjs .js + bunfig.toml) reads, so an extension the
+    issue's `*.sh` framing never named is not silently under-covered. Two suites keep
+    `knowledge-base/` because their corpora are NOT extension-bounded:
+    `scripts/test-affected-kb-consumers` (any kb file can be a consumer) and
+    `plugins/soleur/test/operator-agent-runnable` — its Guard-1 discovery is `git grep
+    --untracked` for the generated-script marker on ANY extension, a content-keyed read the
+    review surfaced (a kb `.md` quoting the marker is in its corpus; `**.sh` would
+    under-cover, ~16 committed seconds is the price of honesty).
 
 Alternatives added by this amendment:
 
