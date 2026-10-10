@@ -304,10 +304,10 @@ One open code-review issue names a file in this plan: #8659 ("33 test suites rep
 
 ## Workflows fired by a merge
 
-Derived, not assumed: every `.github/workflows/*.yml` with a `push`, `pull_request`, `merge_group` or `pull_request_target` trigger (88 workflows in the directory; 38 carry one of those triggers) was parsed and GitHub filter semantics applied (`*` stays within a segment, `**` crosses `/`, `!` negates, later patterns override) to the 17 planned paths. Result:
+Derived, not assumed: every `.github/workflows/*.yml` with a `push`, `pull_request`, `merge_group` or `pull_request_target` trigger (88 workflows in the directory; 38 carry one of those triggers) was parsed and GitHub filter semantics applied (`*` stays within a segment, `**` crosses `/`, `!` negates, later patterns override) to the 37 planned paths (final list, about 20 of them fixture files). Result:
 
-- Path-filtered push workflows that match: `version-bump-and-release.yml` (`plugins/soleur/**`) 11 of 17 (a plugin patch release), `web-platform-release.yml` (`apps/web-platform/**` and `plugins/soleur/**`, minus `plugins/soleur/docs/**` and `plugins/soleur/test/**`) 10 of 17 (a web image release and, as in S5, a deploy of it), `deploy-docs.yml` 5 of 17 (a docs-site deploy).
-- No other path-filtered push or pull_request workflow matches (0 of 17 for each).
+- Path-filtered push workflows that match: `version-bump-and-release.yml` (`plugins/soleur/**`) 31 of 37 (a plugin patch release), `web-platform-release.yml` (`apps/web-platform/**` and `plugins/soleur/**`, minus `plugins/soleur/docs/**` and `plugins/soleur/test/**`) 10 of 37 (a web image release and, as in S5, a deploy of it), `deploy-docs.yml` 5 of 37 (a docs-site deploy).
+- No other path-filtered push or pull_request workflow matches (0 of 37 for each).
 - Unfiltered, as on every merge: `ci.yml` (the required `test` check, full battery), `codeql-main-alert-gate`, `secret-scan`, `skill-security-scan-corpus`, `skill-security-scan-postmerge`, `tenant-integration`, `vendor-pin-verify`, plus the PR-time unfiltered set (`pr-quality-guards`, `claude-code-review`, `cla`, ...).
 - `scripts/soleur-sandbox.sh` and `tests/scripts/test-soleur-sandbox.sh` match no filter; `plugins/soleur/test/roadmap-reconcile.test.sh` matches only the plugin-release filter (the web release excludes `plugins/soleur/test/`).
 - Sanity probe for the matcher: adding `apps/web-platform/infra/server.tf`, `plugins/soleur/docs/x.md` and `scripts/test-all.sh` to the list lights further filtered workflows, so the matcher is not vacuous (re-run in Phase 6 on the final diff).
