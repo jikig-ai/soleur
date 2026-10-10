@@ -170,6 +170,10 @@ yes "the reviewer-gated environment is bound" \
   "grep -qF 'environment: web-platform-infra-apply' '$WF'"
 yes "the workflow joins the parent's widest apply concurrency group" \
   "grep -qF 'group: terraform-apply-web-platform-host' '$WF'"
+yes "every ZOT_PULL_TOKEN read pairs soleur/prd with the DOPPLER_TOKEN_PRD override (the default token is prd_terraform-scoped)" \
+  "[[ \$(grep -c 'DOPPLER_TOKEN=.\$DOPPLER_TOKEN_PRD. doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd' '$WF') -ge 4 ]] && [[ \$(grep 'secrets get ZOT_PULL_TOKEN' '$WF' | grep -vc 'DOPPLER_TOKEN_PRD') -eq 0 ]]"
+no "no ZOT_PULL_TOKEN read targets the wrong project (soleur-registry is the mirror, not the root)" \
+  "grep -qF 'get ZOT_PULL_TOKEN -p soleur-registry' '$WF'"
 yes "contents: read (the workflow cannot commit its own evidence)" \
   "grep -qE '^\s+contents: read' '$WF'"
 yes "the confirm token is REHEARSE-INNGEST-PROVISION" \
@@ -204,6 +208,8 @@ yes "the evidence is uploaded as an ARTIFACT (never committed)" \
   "grep -qF 'actions/upload-artifact' '$WF' && ! grep -qE 'git (add|commit|push)' '$WF'"
 yes "the in-workflow orphan assertion lists all four hcloud kinds" \
   "grep -qF 'servers volumes ssh_keys firewalls' '$WF'"
+no "no comment line sits inside a doppler run -- backslash-continuation (a # there is an argv word — proven by the first teardown run)" \
+  "awk '/doppler run.*--[[:space:]]*\\\\$/{n=NR} n && NR>n && /^[[:space:]]*#/{print; found=1} n && NR>n && !/^[[:space:]]*#/{n=0} END{exit found?0:1}' '$WF'"
 
 # ── 7. The push-path exclusion ────────────────────────────────────────────────
 yes "apply-web-platform-infra.yml excludes this root from its push trigger" \
