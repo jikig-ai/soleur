@@ -210,9 +210,10 @@ jobs:
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
-          ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             # nic_attached=false: destroy is state-driven (the flag's value does not decide
@@ -227,7 +228,10 @@ jobs:
       # `nic_attached` has no default, so a run that forgot it fails at plan time rather
       # than silently rehearsing an attached host. The zot pull token is a parent-root
       # random_password — not reachable across roots — so it is READ from Doppler prd and
-      # passed explicitly (the parent root publishes it as soleur/prd ZOT_PULL_TOKEN).
+      # passed explicitly (the parent root mirrors it to soleur-registry/prd AND keeps it in
+      # soleur/prd — measured by registry-zot-inventory.yml; but THAT read needs
+      # DOPPLER_TOKEN_PRD: secrets.DOPPLER_TOKEN is prd_terraform-scoped and 403s on soleur/prd,
+      # which is what the first dry run proved).
       - name: Terraform plan (phase A — NIC absent)
         id: plan_a
         if: '!inputs.teardown_only'
@@ -235,9 +239,10 @@ jobs:
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
-          ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-a \
@@ -356,13 +361,14 @@ jobs:
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
           # The phase-B window bound is taken BEFORE the plan/apply — phase-A's
           # (expected-failure) rows share the host name, and the capture must not count
           # them as recovery evidence.
           date -u +%Y-%m-%dT%H:%M:%SZ > "$GITHUB_WORKSPACE/phase-b-since.txt"
-          ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-b \
@@ -623,12 +629,13 @@ jobs:
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
           # zot_pull_token is REQUIRED (no default) and is validated even on destroy —
           # without it this step dies on `No value for required variable`, the orphan
           # assertion below is skipped, and a real run leaks the paid stack.
-          ZOT_PULL="$(doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             # nic_attached=false: destroy is state-driven (the flag's value does not decide
