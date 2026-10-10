@@ -15,19 +15,22 @@ USAGE
 -----
   scan-ancestor-signal-helpers.py [--root DIR] [--baseline FILE] [--list] [--write-baseline FILE] [PATH ...]
 
-  * Population: the tracked files matching the two pathspecs `*.test.sh` and `:(glob)**/test-*.sh`,
+  * Population: the tracked files matching the pathspecs in PATHSPECS (`*.test.sh`, `test-*.sh`,
+    `test_*.sh` and the mutation-run names `*-mutation-battery.sh`, `*.mutation.sh`, `*-mutations.sh`),
     read from ONE git listing (NUL separated) made with every GIT_* variable removed from the child
     environment, or the explicit PATHs given (paths are used as given and shown as given).
   * Without --baseline the scan is list-only: rc 0 and the notice `no baseline: listing only`, so a
     plugin consumer running it on their own repository does not see every site as new.
   * With --baseline the verdict is gated on classes W, P and G (below). Exit 0 clean, 1 findings,
     3 UNRESOLVED (empty population, failed git, unreadable or malformed baseline, a listed member that
-    is missing, or ANY uncaught exception: a traceback can never read as rc 1 "findings").
+    is missing or was skipped (symlink, special file, over 2 MB: an unread file is an unchecked file), or
+    ANY uncaught exception: a traceback can never read as rc 1 "findings"). A usage error is argparse's rc 2.
   * --list prints `class TAB bounded TAB path TAB text` for every finding of every class (bounded is
     yes or no for W and a dash for the others); `--list PATH...` scopes it to the given files, which is
     how a mutation seat checks the one file it is about to mutate.
-  * --write-baseline FILE writes the gated rows (overwrites the whole file: review the diff) and
-    refuses while any W is unbounded.
+  * --write-baseline FILE writes the gated rows of the tracked population (overwrites the whole file:
+    review the diff). It refuses (rc 2) with PATHs or --list, refuses while any W is unbounded, and refuses
+    (rc 3) while any member was skipped.
   * In explicit-PATH mode only baseline rows whose path is among the given PATHs are judged stale.
 
 CLASSES (a finding is one source line, content-keyed)
@@ -36,9 +39,10 @@ CLASSES (a finding is one source line, content-keyed)
              ...), v=$(ps -o ppid= -p $v), v=$(... $v ... PPid ...)) with kill, pkill or killall within
              40 lines either side (raw text, so heredoc and string-embedded helpers count). Reported
              bounded=yes only when a NON-COMMENT line from 15 lines above to 3 lines below the cursor
-             line mentions SOLEUR_TEST_SUITE_PID in a comparison (!=, ==, =, =~, -ne, -eq, [ -n, [ -z)
+             line mentions SOLEUR_TEST_SUITE_PID in a comparison (!=, ==, =, -ne, -eq, -lt, -le, -gt, -ge)
              together with exit, break or return on that line, or in a while/until loop condition. A
-             mention only in a comment, an echo or a printf reads bounded=no. bounded=yes is a LEXICAL
+             mention only in a comment, an echo or a printf, or a presence, emptiness or numeric-validation
+             test ([ -n ], [ -z ], =~), reads bounded=no. bounded=yes is a LEXICAL
              check: it cannot see that an unset variable means "signal nothing" or that a trailing
              `|| true` defeats the comparison.
   P (gated)  a signal to the parent: kill and $PPID (or ps -o ppid=) on one line, or a variable assigned
@@ -47,7 +51,9 @@ CLASSES (a finding is one source line, content-keyed)
              A line over 4 KB that contains a signal verb is reported here too (fail closed).
   L (listed) targeted group signals (kill -- -<pgid>) and name-pattern signals (pkill, killall). Never
              gated, no baseline: they are not signals to ancestors.
-  Never findings: comment lines, signal verbs inside quoted spans, kill -0, kill -l.
+  Never findings: comment lines, signal verbs inside quoted spans (except the body of sh -c, bash -c,
+  eval and trap strings, which are scanned as code), kill -0, kill -l. A verb may carry an absolute path
+  and the usual prefixes (sudo, env, VAR=x, time, nice, setsid, timeout with options).
 
 READING MODEL
 -------------
@@ -66,15 +72,19 @@ bounded=no is red (an unbounded walker cannot be baselined).
 DOCUMENTED BLIND SPOTS
 ----------------------
 Multi-line quoted strings and backslash-newline continuations (kill \\ then -1); a walk written in
-another language (os.getppid); a two-step cursor (parent=$(...); cur=$parent); a kill more than 40 lines
-from the cursor or reached through a function; kill $(...) and xargs kill; helpers sourced from a
-non-suite file; suites that match neither name shape; fixtures stored under another extension; signal
-verbs inside a single-quoted printf that writes a helper (masked as quoted text). The scan is a finding
-aid plus a ratchet on the lines it can see, not a proof of absence. The producer lists tracked files
-only: an untracked suite is not scanned until it is added.
+another language (os.getppid, os.kill) or through read, printf -v, pgrep -P, a function or $PROC_ROOT; a
+two-step cursor (parent=$(...); cur=$parent); a kill more than 40 lines from the cursor, a cursor line
+over 4 KB, or a kill reached through a function, a variable verb ($K), kill $(...) or xargs kill; a
+parent held in a variable made by read, printf -v or let, or more than 20 lines above its kill; helpers
+sourced from a non-suite file; scripts that match none of the name shapes (a helper in a lib or a hook);
+fixtures stored under another extension; signal-delivering programs other than kill, pkill and killall
+(systemctl --user, loginctl, tmux kill-server, fuser -k, docker kill, killall5). The scan is a finding
+aid plus a ratchet on the lines it can see, not a proof of absence, and class L is listed but never
+gated. The producer lists tracked files only: an untracked suite is not scanned until it is added.
 """
 
 import argparse
+import bisect
 import collections
 import os
 import re
@@ -90,23 +100,29 @@ DERIVED_WINDOW = 20     # parent variable assigned within this many lines above 
 MAX_LINE = 4096
 MAX_FILE = 2 * 1024 * 1024
 GATED = ("W", "P", "G")
-PATHSPECS = ["*.test.sh", ":(glob)**/test-*.sh"]
+PATHSPECS = [
+    "*.test.sh", ":(glob)**/test-*.sh", ":(glob)**/test_*.sh",
+    ":(glob)**/*-mutation-battery.sh", ":(glob)**/*.mutation.sh", ":(glob)**/*-mutations.sh",
+]
 
 # A signal verb at command position (the text is quote-masked first).
 CMDPOS = re.compile(
     r"(?:^|[;&|(){`!]|\$\(|\b(?:then|do|else|if|elif|while|until)\b)\s*"
-    r"(?:(?:sudo|exec|command|builtin|nohup|env|timeout\s+\S+)\s+|\\)*"
-    r"(kill|pkill|killall)(?![\w./-])"
+    r"(?:(?:\w+=\S*|sudo|exec|command|builtin|nohup|time|nice|setsid|env)\s+(?:-\S+\s+)*"
+    r"|timeout\s+(?:-\S+\s+(?:[A-Z0-9]\S*\s+)?)*\d\S*\s+|\\)*"
+    r"(?:\S*/)?(kill|pkill|killall)(?![\w./-])"
 )
+# A -c / eval / trap body: a quoted span that runs as shell text and is masked in the outer line.
+BODY = re.compile(r"(?:\b(?:sh|bash|dash|zsh)\s+-\w*c\w*|\beval|\btrap)\s+(['\"])(.*?)\1")
 # A signal word anywhere in raw code (used only for the W window; string-embedded helpers count).
-LOOSE_SIGNAL = re.compile(r"(?<![\w./-])(?:kill|pkill|killall)(?![\w./-])(?:\s+(?!-0\b|-l\b|-L\b|-s\s+0\b)|$)")
-CURSOR = re.compile(r"(?:^|[\s;&|({])(?:local\s+|export\s+|declare\s+-\w+\s+)?(\w+)=(?:\$\(|`)")
+LOOSE_SIGNAL = re.compile(r"(?<![\w.-])(?:kill|pkill|killall)(?![\w./-])(?:\s+(?!-0\b|-l\b|-L\b|-s\s+0\b)|$)")
+CURSOR = re.compile(r"(?:^|[\s;&|({])(?:local\s+|export\s+|declare\s+-\w+\s+)?(\w+)=(?:\"?\$\(|`)")
 PPID_ASSIGN = re.compile(
-    r"(?:^|[\s;&|({])(?:local\s+|export\s+|readonly\s+|declare\s+-\w+\s+)?(\w+)=(?:\"?\$\{?PPID\b|\$\(.*\bppid=|`.*\bppid=)"
+    r"(?:^|[\s;&|({])(?:local\s+|export\s+|readonly\s+|declare\s+-\w+\s+)?(\w+)=(?:\"?\$\{?PPID\b|\"?\$\([^)]{0,200}\b(?i:ppid)=|`[^`]{0,200}\b(?i:ppid)=)"
 )
-PPID_USE = re.compile(r"\$\{?PPID\b|\bps\b[^;|&)]*\bppid=")
+PPID_USE = re.compile(r"\$\{?PPID\b|\bps\b[^;|&)]*\b(?i:ppid)=")
 TARGET_VAR = re.compile(r"^\$\{?(\w+)\}?$")
-CMP = re.compile(r"(?:^|\s)(?:!=|==|=~|=|-ne|-eq)(?:\s|$)|\[\[?\s+-[nz]\s")
+CMP = re.compile(r"(?:^|\s)(?:!=|==|=|-ne|-eq|-lt|-le|-gt|-ge)(?:\s|$)")
 EXIT_WORD = re.compile(r"\b(?:exit|break|return)\b")
 LOOP_WORD = re.compile(r"\b(?:while|until)\b")
 # Only lines that carry one of these can matter to a detector or a window: the rest are never analysed.
@@ -177,8 +193,9 @@ def arg_tokens(code, masked, start):
     return toks
 
 
-def classify_kill(toks, derived_vars):
-    """The class of one kill invocation, or None (a probe, a listing, or a plain pid)."""
+def classify_kill(toks, is_derived):
+    """The class of one kill invocation, or None (a probe, a listing, or a plain pid). is_derived(var) says
+    whether var was assigned from the parent pid within DERIVED_WINDOW lines above this kill."""
     if not toks:
         return None
     first = toks[0]
@@ -204,12 +221,20 @@ def classify_kill(toks, derived_vars):
     for t in targets:
         if t in ("0", "-1"):
             return "G"
-        m = TARGET_VAR.match(t)
-        if m and m.group(1) in derived_vars:
+        m = TARGET_VAR.match(t) or (TARGET_VAR.match(t[1:]) if t.startswith("-") else None)
+        if m and is_derived(m.group(1)):
             return "P"
         if t.startswith("-") and kind is None:
             kind = "L"
     return kind
+
+
+def derived_at(assigns, var, i):
+    idxs = assigns.get(var)
+    if not idxs:
+        return False
+    k = bisect.bisect_left(idxs, i - DERIVED_WINDOW)
+    return k < len(idxs) and idxs[k] <= i
 
 
 def is_bound_line(code):
@@ -243,7 +268,7 @@ def scan_text(path, text, counters):
 
     assigns = collections.defaultdict(list)
     for i in range(n):
-        if "PPID" in code[i] or "ppid=" in code[i]:
+        if "PPID" in code[i] or "ppid=" in code[i].lower():
             for m in PPID_ASSIGN.finditer(code[i]):
                 assigns[m.group(1)].append(i)
 
@@ -257,12 +282,23 @@ def scan_text(path, text, counters):
             if verb in ("pkill", "killall"):
                 cls = "L"
             else:
-                derived = {v for v, idxs in assigns.items() if any(i - DERIVED_WINDOW <= j <= i for j in idxs)}
-                cls = classify_kill(toks, derived)
+                cls = classify_kill(toks, lambda v, i=i: derived_at(assigns, v, i))
             if cls:
                 findings.append(Finding(path, cls, normalise(code[i]), "-", i + 1))
+        # the same detectors over the body of sh -c '...', eval "..." and trap '...' (masked in the outer line)
+        for bm in BODY.finditer(code[i]):
+            bcode, bmasked = analyse(bm.group(2))
+            for m in CMDPOS.finditer(bmasked):
+                verb = m.group(1)
+                toks = arg_tokens(bcode, bmasked, m.end())
+                if verb in ("pkill", "killall"):
+                    cls = "L"
+                else:
+                    cls = classify_kill(toks, lambda v, i=i: derived_at(assigns, v, i))
+                if cls:
+                    findings.append(Finding(path, cls, normalise(code[i]), "-", i + 1))
         # W cursor: a self-referential assignment, with a signal nearby
-        if ("/proc/" in code[i] or "ppid" in code[i].lower()) and ("=$(" in code[i] or "=`" in code[i]):
+        if ("/proc/" in code[i] or "ppid" in code[i].lower()) and ("=$(" in code[i] or '="$(' in code[i] or "=`" in code[i]):
             for m in CURSOR.finditer(code[i]):
                 v = m.group(1)
                 tail = code[i][m.end():]
@@ -351,7 +387,7 @@ BASELINE_HEADER = """\
 
 REMEDY = (
     "remedy: new W: bound the walk with a non-comment test such as [ \"$p\" = \"$SOLEUR_TEST_SUITE_PID\" ] plus exit, break or return "
-    "on that line, then add one baseline row ($$ comparisons read bounded=no). "
+    "on that line, then add one baseline row ($$ comparisons read bounded=no; the suite's F10 floor is a minimum, not a pin). "
     "new P or G: rewrite to a nonce-scoped target, or baseline it with a reviewer's read. "
     "stale: delete or swap the row. unbounded: bounding is mandatory, baselining is refused. "
     "--write-baseline overwrites the whole file, so review the diff; untracked files are not scanned "
@@ -396,6 +432,11 @@ def run(argv):
     skipped = counters["skipped"]
 
     if args.write_baseline:
+        if explicit or args.list:
+            sys.stderr.write("ancestor-signal scan: --write-baseline rewrites the whole file from the tracked population: pass no PATH and no --list (a partial write would drop every other row)\n")
+            return 2
+        if skipped:
+            raise Unresolved("%d listed member(s) were skipped: refusing to write a baseline that silently drops their rows" % skipped)
         bad = [f for f in gated if f.cls == "W" and f.bounded == "no"]
         if bad:
             for f in bad:
@@ -405,11 +446,15 @@ def run(argv):
             return 1
         rows = sorted((f.path, f.cls, f.text) for f in gated)
         tmp = args.write_baseline + ".tmp-%d" % os.getpid()
-        with open(tmp, "wb") as fh:
-            fh.write(BASELINE_HEADER.encode("utf-8", "surrogateescape"))
-            for r in rows:
-                fh.write(("\t".join(r) + "\n").encode("utf-8", "surrogateescape"))
-        os.replace(tmp, args.write_baseline)
+        try:
+            with open(tmp, "wb") as fh:
+                fh.write(BASELINE_HEADER.encode("utf-8", "surrogateescape"))
+                for r in rows:
+                    fh.write(("\t".join(r) + "\n").encode("utf-8", "surrogateescape"))
+            os.replace(tmp, args.write_baseline)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
         out("ancestor-signal scan: wrote %d baseline rows to %s" % (len(rows), args.write_baseline))
         return 0
 
@@ -422,6 +467,8 @@ def run(argv):
         out("ancestor-signal scan: %d files, %d findings, no baseline: listing only, %d skipped" % (nfiles, len(findings), skipped))
         return 0
 
+    if skipped:
+        raise Unresolved("%d listed member(s) were skipped (a symlink, a special file or over %d bytes): a skipped file is an unchecked file, so no verdict" % (skipped, MAX_FILE))
     base = read_baseline(args.baseline)
     live = collections.Counter((f.path, f.cls, f.text) for f in gated)
     if explicit:
@@ -436,7 +483,7 @@ def run(argv):
     for f in gated:
         key = (f.path, f.cls, f.text)
         seen[key] += 1
-        if seen[key] > matched_of(base, key):
+        if seen[key] > base.get(key, 0):
             out("NEW %s %s:%d: %s" % (f.cls, f.path, f.lineno, f.text))
             out("  row: %s" % "\t".join(key))
     for key, cnt in sorted(stale.items()):
@@ -459,8 +506,11 @@ def run(argv):
     return 0
 
 
-def matched_of(base, key):
-    return base.get(key, 0)
+def flush_stdout():
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        pass  # a full or closed stdout must not hide the verdict line on stderr
 
 
 def main():
@@ -476,11 +526,13 @@ def main():
     except SystemExit:
         raise
     except Unresolved as exc:
+        flush_stdout()
         sys.stderr.write("ancestor-signal scan: UNRESOLVED: %s\n" % exc)
         sys.stderr.flush()
         os._exit(3)
     except BaseException as exc:  # an uncaught exception must read as rc 3, never as rc 1 "findings"
         try:
+            flush_stdout()
             import traceback
             traceback.print_exc()
             sys.stderr.write("ancestor-signal scan: UNRESOLVED: uncaught %s: %s\n" % (type(exc).__name__, exc))

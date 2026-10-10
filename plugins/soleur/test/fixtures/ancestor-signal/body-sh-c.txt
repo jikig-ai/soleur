@@ -1,0 +1,2 @@
+# fixture data, never executed: the signal is inside the body of a sh -c string; one P
+sh -c 'kill -9 $PPID'

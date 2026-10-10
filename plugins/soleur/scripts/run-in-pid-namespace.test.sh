@@ -50,7 +50,7 @@ ok "selftest" >/dev/null; bad "selftest" >/dev/null
 if [[ $passes -ne $((_p0 + 1)) || $fails -ne $((_f0 + 1)) ]]; then
   printf 'FATAL: ok()/bad() do not record verdicts\n' >&2; exit 1
 fi
-passes=$_p0; fails=$_f0; cases=$_c0; FAILURES=("${FAILURES[@]:0:$_l0}")
+passes=$_p0; fails=$_f0; cases=$_c0; FAILURES=()
 
 # --- private PATHs ------------------------------------------------------------
 mkdir -p "$FIX/nobin" "$FIX/stub"
@@ -120,10 +120,11 @@ for f in -U -r -p -f --kill-child --mount-proc; do
   fi
 done
 check "R4b all of -U -r -p -f --kill-child --mount-proc precede -- in the run call" "$flags_ok"
-tail -n 4 "$FIX/argv.2" > "$FIX/argv.tail"
-expect_tail=$'x\n\n-n\na b'
-[[ "$(cat "$FIX/argv.tail")" == "$expect_tail" ]]
-check "R4c the command's arguments arrive verbatim (spaces, an empty argument, a leading -n)" $?
+mapfile -t AV < "$FIX/argv.2"
+di=-1; for i in "${!AV[@]}"; do [[ "${AV[$i]}" == "--" ]] && { di=$i; break; }; done
+rest=""; if [[ "$di" -ge 0 ]]; then for ((i = di + 5; i < ${#AV[@]}; i++)); do rest+="${AV[$i]}|"; done; fi
+[[ "$di" -ge 0 && "${AV[$((di + 1))]:-}" == "sh" && "${AV[$((di + 2))]:-}" == "-c" && "${AV[$((di + 3))]:-}" == *'exec -- "$@"' && "${AV[$((di + 4))]:-}" == "sh" && "$rest" == 'sh|-c|echo hi|x||-n|a b|' ]]
+check "R4c the whole argv after -- is sh -c <RUN ending exec -- \"\$@\"> sh then the command verbatim (spaces, an empty argument, a leading -n)" $?
 
 # R5 usage.
 run_helper "$FIX/nobin"
@@ -139,11 +140,14 @@ check "R7 the check inside the namespace refuses when the run is not isolated: r
 [[ "$(cat "$FIX/log7" 2>/dev/null | tr '\n' ' ')" == "probe-isolated run-in-place " ]]
 check "R7b positive control: the stub took the isolated branch on the probe and the in-place branch on the run" $?
 
-# R9 an exported function named unshare must not decide the probe.
+# R9 an exported function named unshare must not decide the probe: a failing unshare is on PATH, the function
+# would succeed, and the refusal must come from the PATH binary.
 rm -f "$W"
-RC=0; OUT="$(unshare() { return 0; }; export -f unshare; PATH="$FIX/nobin" "$BASH_BIN" "$SUT" "${witness_cmd[@]}" 2>&1)" || RC=$?
-[[ "$RC" -eq 125 && "$OUT" == "RUN_IN_PID_NAMESPACE_REFUSED reason=missing-unshare"* && ! -e "$W" ]]
-check "R9 an exported shell function unshare does not satisfy the probe" $?
+RC=0; OUT="$(unshare() { return 0; }; export -f unshare; PATH="$FIX/stub/fail" "$BASH_BIN" "$SUT" "${witness_cmd[@]}" 2>&1)" || RC=$?
+[[ "$RC" -eq 125 && "$OUT" == "RUN_IN_PID_NAMESPACE_REFUSED reason=userns-unavailable"* && ! -e "$W" ]]
+check "R9 an exported shell function unshare does not decide the probe (the PATH binary does)" $?
+
+# R10 below: the helper must not refuse where the host itself can create the namespace.
 
 # --- probe decides the real-namespace branch ---------------------------------
 REAL_NS=no; REAL_WHY="no unshare on PATH"
@@ -152,6 +156,16 @@ if [[ -n "$REAL_UNSHARE" ]]; then
   if [[ "$PROBE_RC" -eq 0 && "$PROBE_OUT" == "ok" ]]; then REAL_NS=yes
   else REAL_WHY="$(first_line "$PROBE_OUT" | cut -c1-120)"; fi
 fi
+
+# An INDEPENDENT host probe (the SUT is not involved): where the host can create the namespace and the helper
+# still refuses, the helper is broken, and that must be a FAIL, never a SKIP.
+HOST_NS=no
+if [[ -n "$REAL_UNSHARE" ]]; then
+  HOST_OUT="$("$REAL_UNSHARE" -Urpf --kill-child --mount-proc -- sh -c 'echo ok' 2>&1)"; HOST_RC=$?
+  [[ "$HOST_RC" -eq 0 && "$HOST_OUT" == "ok" ]] && HOST_NS=yes
+fi
+[[ "$HOST_NS" != "yes" || "$REAL_NS" == "yes" ]]
+check "R10 the helper does not refuse where the host itself can create the namespace (host=$HOST_NS, helper=$REAL_NS)" $?
 
 if [[ "$REAL_NS" == "yes" ]]; then
   echo "=== real-namespace rows ==="
@@ -206,20 +220,15 @@ EOS
       nonhex-nonce) n="zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"; sp=$$ ;;
       unset-suite) n="$NONCE"; sp="" ;;
     esac
-    O="$(WALKER_KILL=echo WALKER_NONCE="$n" SOLEUR_TEST_SUITE_PID="$sp" "$BASH_BIN" -c 'sh "$1"' "carrier-$NONCE" "$WALKER" 2>&1)"
+    O="$(WALKER_KILL=echo WALKER_NONCE="$n" SOLEUR_TEST_SUITE_PID="$sp" "$BASH_BIN" -c 'sh "$1"' "carrier-$n" "$WALKER" 2>&1)"
     [[ -z "$O" ]]; check "N4d the fixture walker signals nothing: $pre" $?
   done
   O="$(WALKER_KILL=echo WALKER_NONCE="$NONCE" SOLEUR_TEST_SUITE_PID=$$ "$BASH_BIN" -c 'echo $$ > "$2"; sh "$1"; :' "carrier-$NONCE" "$WALKER" "$FIX/carrier.pid" 2>&1)"
   [[ "$O" == "-TERM $(cat "$FIX/carrier.pid" 2>/dev/null)" ]]
   check "N4e rehearsal with kill replaced by echo targets exactly the nonce-carrying ancestor, nothing above it" $?
   # N5 a backgrounded child is gone after the helper returns; N5b the same after the helper is SIGKILLed.
-  has_proc() { # tag -> 0 when some process cmdline carries the tag
-    local c
-    for c in /proc/[0-9]*/cmdline; do
-      [[ -r "$c" ]] || continue
-      if { tr '\0' ' ' < "$c" | grep -cF >/dev/null -- "$1"; } 2>/dev/null; then return 0; fi
-    done
-    return 1
+  has_proc() { # tag -> 0 when some process cmdline carries the tag (the bracket keeps this grep's own argv from matching)
+    grep -alqE -- "[${1:0:1}]${1:1}" /proc/[0-9]*/cmdline 2>/dev/null
   }
   T5="bgtag-$NONCE"
   "$BASH_BIN" "$SUT" "$BASH_BIN" -c 'exec -a "$1" sleep 40 & exit 0' sh "$T5" >/dev/null 2>&1
@@ -251,7 +260,7 @@ EOS
 else
   # R8: where namespaces are unavailable the REAL helper must still refuse.
   echo "SKIP real-namespace rows: user namespaces unavailable here ($REAL_WHY)"
-  skipped=$((skipped + 18))
+  skipped=$((skipped + 18))  # the 18 real-namespace rows: N1 N2 N2b N3 N3b N4 N4b N4c N4d x4 N4e N5 N5b N5c N6 N7
   rm -f "$W"; RC=0; OUT="$("$BASH_BIN" "$SUT" "${witness_cmd[@]}" 2>&1)" || RC=$?
   [[ "$RC" -eq 125 && "$(first_line "$OUT")" == "RUN_IN_PID_NAMESPACE_REFUSED reason="* && ! -e "$W" ]]
   check "R8 the real helper refuses (rc 125, marker, command never started) where namespaces are unavailable" $?
@@ -262,13 +271,14 @@ fi
 echo ""
 printf '=== run-in-pid-namespace: %d passed, %d failed (%d cases, %d skipped, real-namespace=%s) ===\n' "$passes" "$fails" "$cases" "$skipped" "$REAL_NS"
 if [[ "$REAL_NS" != "yes" ]]; then printf 'SKIP: %d real-namespace rows (%s)\n' "$skipped" "$REAL_WHY"; fi
-for f in "${FAILURES[@]}"; do printf '  - %s\n' "$f"; done
+for f in ${FAILURES[@]+"${FAILURES[@]}"}; do printf '  - %s\n' "$f"; done
 # Anti-vacuity floors: literal thresholds on the line above each test, reported by printf, appended to the ledger the verdict reads.
-if [[ "$cases" -lt 14 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 14 always-run rows expected, R8 counted when namespaces are unavailable)\n' "$cases" >&2; FAILURES+=("always-run floor"); fi
+if [[ "$cases" -lt 15 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 15 always-run rows expected, R8 counted when namespaces are unavailable)\n' "$cases" >&2; FAILURES+=("always-run floor"); fi
 if [[ "$REAL_NS" == "yes" ]]; then
-  if [[ "$cases" -lt 31 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 31 expected with real namespaces)\n' "$cases" >&2; FAILURES+=("real-namespace floor"); fi
+  if [[ "$cases" -lt 32 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 32 expected with real namespaces)\n' "$cases" >&2; FAILURES+=("real-namespace floor"); fi
+  if [[ "$cases" -ne 32 ]]; then printf 'FAIL: conservation: %d cases ran, 32 planned with real namespaces\n' "$cases" >&2; FAILURES+=("planned total"); fi
 else
-  if [[ "$((cases + skipped))" -ne 32 ]]; then printf 'FAIL: conservation: %d cases + %d skipped != 32 planned\n' "$cases" "$skipped" >&2; FAILURES+=("planned total"); fi
+  if [[ "$((cases + skipped))" -ne 33 ]]; then printf 'FAIL: conservation: %d cases + %d skipped != 33 planned\n' "$cases" "$skipped" >&2; FAILURES+=("planned total"); fi
 fi
 if [[ "$((passes + fails))" -ne "$cases" ]]; then printf 'FAIL: verdict conservation: %d passes + %d fails != %d cases\n' "$passes" "$fails" "$cases" >&2; FAILURES+=("conservation"); fi
 [[ "${#FAILURES[@]}" -eq 0 ]]

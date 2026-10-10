@@ -2,4 +2,4 @@
 p=$(awk '{print $4}' "/proc/$p/stat")
 kill -TERM "$target"
 : filler
-[ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || exit 0
+[ "$p" != "$SOLEUR_TEST_SUITE_PID" ] || exit 0

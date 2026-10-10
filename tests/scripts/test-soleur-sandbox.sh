@@ -429,9 +429,9 @@ echo "== run-isolated: the PID-namespace verb (helper plugins/soleur/scripts/run
 # real namespace exists: the stub logs every call (and its own cwd); a refusal must leave NO call log.
 RI_BIN="$TESTROOT/ri-bin"; RI_LOG="$TESTROOT/ri-calls"
 assert_fixture_dir "$RI_BIN"; mkdir -p "$RI_BIN"
-printf '#!/bin/sh\nprintf "%%s\\n" "$PWD" >> "%s"\nexit 0\n' "$RI_LOG" > "$RI_BIN/unshare"; chmod +x "$RI_BIN/unshare"
+printf '#!/bin/sh\nprintf "%%s\\n" "$PWD" >> "%s"\nprintf "%%s\\n" "$@" > "%s.argv"\nexit 0\n' "$RI_LOG" "$RI_LOG" > "$RI_BIN/unshare"; chmod +x "$RI_BIN/unshare"
 ri_run() { # path-arg... ; sets RI_RC RI_OUT; PATH puts the recording stub first
-  RI_RC=0; rm -f "$RI_LOG"
+  RI_RC=0; rm -f "$RI_LOG" "$RI_LOG.argv"
   RI_OUT="$(PATH="$RI_BIN:$PATH" bash "$CLI" run-isolated "$@" 2>&1)" || RI_RC=$?
 }
 ri_refused() { # description ; expects rc 2, no helper marker, no unshare call
@@ -446,10 +446,19 @@ cases=$((cases + 1))
 ri_run "$RIS/" -- pwd
 if [[ "$RI_RC" -eq 0 && "$(head -n 1 "$RI_LOG" 2>/dev/null)" == "$RIS" ]]; then pass "run-isolated accepts a trailing slash"; else fail "run-isolated trailing slash (rc=$RI_RC)"; fi
 cases=$((cases + 1))
+ri_run "$RIS" -- printf %s 'a b' '' -n
+if [[ "$RI_RC" -eq 0 && "$(tail -n 5 "$RI_LOG.argv" 2>/dev/null | tr '\n' '|')" == "printf|%s|a b||-n|" ]]; then pass "run-isolated forwards the command words verbatim (no -- leaked, none dropped)"; else fail "run-isolated forwarding (rc=$RI_RC argv=$(tail -n 6 "$RI_LOG.argv" 2>/dev/null | tr '\n' '|'))"; fi
+cases=$((cases + 1))
+# The expectation comes from an INDEPENDENT host probe, never from the verb's own outcome: a host that can
+# create the namespace must run the command (a refusal there is a failure); one that cannot must refuse 125.
+HOST_NS=no
+if HOST_PROBE="$(unshare -Urpf --kill-child --mount-proc -- sh -c 'echo ok' 2>/dev/null)" && [[ "$HOST_PROBE" == "ok" ]]; then HOST_NS=yes; fi
 RI_RC=0; RI_OUT="$(cd "$RIS" && bash "$CLI" run-isolated "$RIS" -- sh -c 'echo "$$:$(pwd)"' 2>&1)" || RI_RC=$?
-if [[ "$RI_RC" -eq 0 && "$RI_OUT" == "1:$RIS" ]]; then pass "run-isolated (real namespace): the command is PID 1 with the sandbox as cwd"
-elif [[ "$RI_RC" -eq 125 && "$RI_OUT" == RUN_IN_PID_NAMESPACE_REFUSED* ]]; then pass "run-isolated (no namespace here): refuses 125 with the helper's marker"
-else fail "run-isolated real helper (rc=$RI_RC out='$RI_OUT')"; fi
+if [[ "$HOST_NS" == yes ]]; then
+  if [[ "$RI_RC" -eq 0 && "$RI_OUT" == "1:$RIS" ]]; then pass "run-isolated (real namespace): the command is PID 1 with the sandbox as cwd"; else fail "run-isolated real namespace (rc=$RI_RC out='$RI_OUT')"; fi
+else
+  if [[ "$RI_RC" -eq 125 && "$RI_OUT" == RUN_IN_PID_NAMESPACE_REFUSED* ]]; then pass "run-isolated (no namespace on this host): refuses 125 with the helper's marker"; else fail "run-isolated without a namespace (rc=$RI_RC out='$RI_OUT')"; fi
+fi
 RIS_DIR="$(dirname "$RIS")"; assert_fixture_dir "$RIS_DIR"
 RI_RC=0; rm -f "$RI_LOG"; RI_OUT="$(cd "$RIS_DIR" && PATH="$RI_BIN:$PATH" bash "$CLI" run-isolated "$(basename "$RIS")" -- true 2>&1)" || RI_RC=$?
 ri_refused "run-isolated refuses a relative path that does resolve to a sandbox (cwd-dependent)"
@@ -468,6 +477,16 @@ ri_run "$DISK_BASE/soleur-sbx.mdir.AAAAAAAA" -- true; ri_refused "run-isolated r
 mkdir -p "$DISK_BASE/soleur-sbx.mlnk.AAAAAAAA"; ln -s "$RIS/.soleur-owned" "$DISK_BASE/soleur-sbx.mlnk.AAAAAAAA/.soleur-owned"
 ri_run "$DISK_BASE/soleur-sbx.mlnk.AAAAAAAA" -- true; ri_refused "run-isolated refuses a marker that is a symlink"
 ri_run "$RIS" true; ri_refused "run-isolated refuses a missing -- separator"
+ri_run "$RIS" true x; ri_refused "run-isolated refuses a second word that is not -- (three arguments)"
+mkdir -p "$DISK_BASE/soleur-sbx.forged.AAAAAAAA"; : > "$DISK_BASE/soleur-sbx.forged.AAAAAAAA/.soleur-owned"
+ri_run "$DISK_BASE/soleur-sbx.forged.AAAAAAAA" -- true; ri_refused "run-isolated refuses an empty (forged) marker: pid=, schema=1 and ns= are required as the allocator's rm requires"
+for miss in pid schema ns; do
+  mkdir -p "$DISK_BASE/soleur-sbx.miss$miss.AAAAAAAA"
+  grep -v "^$miss" "$RIS/.soleur-owned" > "$DISK_BASE/soleur-sbx.miss$miss.AAAAAAAA/.soleur-owned"
+  ri_run "$DISK_BASE/soleur-sbx.miss$miss.AAAAAAAA" -- true; ri_refused "run-isolated refuses a marker that lacks its $miss= line (each conjunct stands alone)"
+done
+mkdir -p "$TESTROOT/soleur-sbx.nobase.AAAAAAAA"; cp "$RIS/.soleur-owned" "$TESTROOT/soleur-sbx.nobase.AAAAAAAA/.soleur-owned"
+ri_run "$TESTROOT/soleur-sbx.nobase.AAAAAAAA" -- true; ri_refused "run-isolated refuses a valid marker in a directory that is not directly under a scratch base"
 ri_run "$RIS" --; ri_refused "run-isolated refuses an empty command"
 # A checkout without the helper: the verb must refuse and the command must not run.
 NOHELP="$TESTROOT/nohelper"; assert_fixture_dir "$NOHELP"
@@ -496,7 +515,7 @@ echo
 # Case floor: the EXACT expected count, compared and exited on directly — deliberately NOT through
 # pass()/fail(), so a deleted/short-circuited arm cannot hide behind a green helper tally. Bump in
 # lockstep when an arm is added or removed.
-EXPECTED_CASES=75
+EXPECTED_CASES=82
 printf 'cases=%s expected=%s\n' "$cases" "$EXPECTED_CASES"
 if [[ "$cases" -ne "$EXPECTED_CASES" ]]; then
   printf 'FAIL: ran %s cases, expected exactly %s (an arm was dropped or added without updating EXPECTED_CASES)\n' "$cases" "$EXPECTED_CASES" >&2

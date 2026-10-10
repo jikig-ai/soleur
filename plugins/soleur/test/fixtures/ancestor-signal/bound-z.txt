@@ -1,4 +1,4 @@
-# fixture data, never executed: a bound written as the z form; one W, bounded=yes
+# fixture data, never executed: a bound written as the z form; one W, bounded=no (a presence or emptiness test is not a comparison with the walk)
 [ -z "${SOLEUR_TEST_SUITE_PID:-}" ] && exit 0
 p=$1; top=""
 while [ -r "/proc/$p/cmdline" ]; do

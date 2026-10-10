@@ -58,7 +58,7 @@ passes=0
 fails=0
 cases=0
 skipped=0
-PLANNED_TOTAL=112
+PLANNED_TOTAL=126
 
 pass() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
@@ -149,9 +149,13 @@ check "B3b a bound token only in a trailing comment reads bounded=no" has_out "^
 list_of walker-echo-bound.txt
 check "B4 a bound token only in echo and printf reads bounded=no" has_out "^W${T}no${T}walker-echo-bound.txt${T}"
 
-for form in neq dbl-eq sgl-eq ne eq n z loop-cond; do
+for form in neq dbl-eq sgl-eq ne eq lt loop-cond; do
   list_of "bound-$form.txt"
   check "B5 bound form $form reads bounded=yes" has_out "^W${T}yes${T}bound-$form.txt${T}"
+done
+for form in n z regex-only; do
+  list_of "bound-$form.txt"
+  check "B5b a presence, emptiness or numeric-validation test ($form) is not a comparison: bounded=no" has_out "^W${T}no${T}bound-$form.txt${T}"
 done
 list_of bound-no-exit.txt
 check "B6 a comparison with no exit/break/return reads bounded=no" has_out "^W${T}no${T}bound-no-exit.txt${T}"
@@ -265,16 +269,38 @@ run_scan walker-bounded.txt
 check "C10 without a baseline the scan is list-only: rc 0 and the notice" test "$RC" -eq 0 -a "$(has_out 'no baseline: listing only' && echo y || echo n)" = y
 check "C10b list-only mode never prints CLEAN" test "$(has_out '^ancestor-signal scan: CLEAN$' && echo y || echo n)" = n
 
-# --write-baseline: round trip, header, and the admissibility refusal
-run_scan --write-baseline "$TMP/wb.txt" parent-direct.txt group-all.txt walker-bounded.txt
+# --write-baseline: refused with PATHs, a round trip over a tracked population, and the admissibility refusals
+run_scan --write-baseline "$TMP/wb0.txt" parent-direct.txt
+check "C11e --write-baseline with a PATH is refused: rc 2, nothing written" test "$RC" -eq 2 -a ! -e "$TMP/wb0.txt"
+WBR="$TMP/wbrepo"
+assert_fixture_dir "$WBR"
+mkdir -p "$WBR"
+cp "$FIX/parent-direct.txt" "$WBR/a.test.sh"
+cp "$FIX/group-all.txt" "$WBR/b.test.sh"
+cp "$FIX/walker-bounded.txt" "$WBR/c.test.sh"
+( git_fixture_env "$WBR" && git -C "$WBR" init -q && git -C "$WBR" add -A && git -C "$WBR" commit -q -m seed ) >/dev/null 2>&1
+run_scan --root "$WBR" --write-baseline "$TMP/wb.txt"
 check "C11 --write-baseline succeeds: rc 0" test "$RC" -eq 0
 check "C11b it wrote nine rows (3 P, 5 G, 1 W) beside its comment header" test "$(grep -cEv '^(#|$)' "$TMP/wb.txt")" -eq 9
 check "C11c the header states that bounded=yes is lexical" test "$(grep -ci 'lexical' "$TMP/wb.txt")" -ge 1
-run_scan --baseline "$TMP/wb.txt" parent-direct.txt group-all.txt walker-bounded.txt
+run_scan --root "$WBR" --baseline "$TMP/wb.txt"
 check "C11d the written baseline reads clean against the same files" test "$RC" -eq 0 -a "$(has_out '^ancestor-signal scan: CLEAN$' && echo y || echo n)" = y
-run_scan --write-baseline "$TMP/wb2.txt" walker-unbounded.txt
+WBR2="$TMP/wbrepo2"
+assert_fixture_dir "$WBR2"
+mkdir -p "$WBR2"
+cp "$FIX/walker-unbounded.txt" "$WBR2/u.test.sh"
+( git_fixture_env "$WBR2" && git -C "$WBR2" init -q && git -C "$WBR2" add -A && git -C "$WBR2" commit -q -m seed ) >/dev/null 2>&1
+run_scan --root "$WBR2" --write-baseline "$TMP/wb2.txt"
 check "C12 --write-baseline refuses an unbounded W: rc 1, no file" test "$RC" -eq 1 -a ! -e "$TMP/wb2.txt"
 check "C12b the refusal says why (UNBOUNDED)" has_out "UNBOUNDED"
+WBR3="$TMP/wbrepo3"
+assert_fixture_dir "$WBR3"
+mkdir -p "$WBR3"
+cp "$FIX/parent-direct.txt" "$WBR3/a.test.sh"
+ln -s a.test.sh "$WBR3/l.test.sh"
+( git_fixture_env "$WBR3" && git -C "$WBR3" init -q && git -C "$WBR3" add -A && git -C "$WBR3" commit -q -m seed ) >/dev/null 2>&1
+run_scan --root "$WBR3" --write-baseline "$TMP/wb3.txt"
+check "C11f --write-baseline with a skipped member is refused: rc 3, no file" test "$RC" -eq 3 -a ! -e "$TMP/wb3.txt"
 
 # --list scoped to one path names only that path
 run_scan --list parent-direct.txt group-all.txt
@@ -308,6 +334,8 @@ N="$TMP/no-such-dir"
 assert_fixture_dir "$N"
 run_scan --root "$N" --baseline "$FIX/site-base.txt"
 check "D2 a root git cannot enter (the listing fails): rc 3 UNRESOLVED" test "$RC" -eq 3 -a "$(has_err 'UNRESOLVED' && echo y || echo n)" = y
+run_scan --root "$WBR3" --baseline "$TMP/wb.txt"
+check "D8 a skipped (symlinked) member under a baseline gate: rc 3 UNRESOLVED naming the skip, never CLEAN" test "$RC" -eq 3 -a "$(has_err 'UNRESOLVED: 1 listed member.*skipped' && echo y || echo n)" = y -a "$(has_out '^ancestor-signal scan: CLEAN$' && echo y || echo n)" = n
 run_scan --baseline "$TMP/does-not-exist.txt" site-base.txt
 check "D3 an unreadable (missing) baseline: rc 3 UNRESOLVED" test "$RC" -eq 3 -a "$(has_err 'UNRESOLVED' && echo y || echo n)" = y
 run_scan --baseline "$TMP" site-base.txt
@@ -401,7 +429,7 @@ check "F7c no walker anywhere in the tree reads bounded=no" test "$(awk -F'\t' '
 check "F8 the listed-only class L is part of the listing" test "$(ncls L)" -ge 1
 check "F9 this suite and the scanner are not findings of their own" test "$(awk -F'\t' '$3 ~ /scan-ancestor-signal-helpers/{n++} END{print n+0}' "$TMP/out")" -eq 0
 BL_ROWS="$(grep -cEv '^(#|$)' "$BASELINE")"
-check "F10 the committed baseline has rows and each W row is one of the two known walkers" test "${BL_ROWS:-0}" -ge 1 -a "$(awk -F'\t' '$2=="W"{n++} END{print n+0}' "$BASELINE")" -eq 2
+check "F10 the committed baseline has rows and at least the two known walkers (F7 and F7b name them)" test "${BL_ROWS:-0}" -ge 1 -a "$(awk -F'\t' '$2=="W"{n++} END{print n+0}' "$BASELINE")" -ge 2
 
 # Row 18: the original roadmap-reconcile walker must read unbounded, the bounded edit bounded
 SCAN_CWD="$FIX"
@@ -411,10 +439,34 @@ list_of roadmap-walker-fixed.txt
 check "G2 the bounded roadmap-reconcile walker reads bounded=yes" has_out "^W${T}yes${T}roadmap-walker-fixed.txt${T}"
 
 # ============================================================================================
+# H. Reading gaps closed after review (one fixture per shape)
+# ============================================================================================
+SCAN_CWD="$FIX"
+list_of q-cursor.txt
+check "H1 a double-quoted cursor substitution still reads W" has_out "^W${T}no${T}q-cursor.txt${T}"
+list_of path-kill.txt
+check "H2 kill invoked by absolute path is a P" has_out "^P${T}-${T}path-kill.txt${T}"
+list_of prefix-env.txt
+check "H3 kill behind env and an assignment prefix: two P" test "$(ncls P)" -eq 2
+list_of prefix-timeout.txt
+check "H4 kill behind timeout with an option is a P" has_out "^P${T}-${T}prefix-timeout.txt${T}"
+list_of body-sh-c.txt
+check "H5 a signal inside sh -c '...' is a P" has_out "^P${T}-${T}body-sh-c.txt${T}"
+list_of body-trap.txt
+check "H6 a signal inside trap '...' is a G" has_out "^G${T}-${T}body-trap.txt${T}"
+list_of negated-derived.txt
+check "H7 a negated derived parent variable (kill -9 -\$up) is a P" has_out "^P${T}-${T}negated-derived.txt${T}"
+list_of ppid-upper.txt
+check "H8 ps with the uppercase PPID header is a P" has_out "^P${T}-${T}ppid-upper.txt${T}"
+awk 'BEGIN{for(i=0;i<60000;i++)print "p=$PPID"; for(i=0;i<60000;i++)print "kill $x"}' > "$TMP/stress.txt"
+run_scan --list "$TMP/stress.txt"
+check "H9 many parent assignments times many kills finish inside the 60 s cap (no quadratic stall)" test "$RC" -eq 0
+
+# ============================================================================================
 # Anti-vacuity and accounting (direct printf + exit, never through fail())
 # ============================================================================================
-if [[ "$cases" -lt 110 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 110\n' "$cases" >&2
+if [[ "$cases" -lt 124 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 124\n' "$cases" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then

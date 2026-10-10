@@ -1,5 +1,5 @@
 # fixture data, never executed: bound token 16 lines above the cursor; W bounded=no
-[ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || exit 0
+[ "$p" != "$SOLEUR_TEST_SUITE_PID" ] || exit 0
 : filler
 : filler
 : filler

@@ -16,9 +16,12 @@
 # not-isolating> ..."; a wrapped command that itself exits 125 prints no such line, so a caller
 # tells them apart by the marker, not the code); 2 = usage error.
 #
+# Trust anchor: PATH. The probe and the run use one absolute unshare, but sh, awk and the other tools
+# resolve through the caller's PATH, so a caller who controls PATH controls them.
+#
 # What a PID namespace does NOT bound: filesystem writes (the mount namespace is created for
-# /proc only), network, IPC, abstract unix sockets, the D-Bus session bus and the session
-# manager (loginctl terminate-session still reaches the host). The caller is mapped to uid 0
+# /proc only), network, IPC, abstract unix sockets, the D-Bus session bus, path-based sockets under XDG_RUNTIME_DIR (hyprctl,
+# tmux, sway/i3 IPC) and the session manager (loginctl terminate-session still reaches the host). The caller is mapped to uid 0
 # inside, so id -u and root-guard branches differ. The command is PID 1 there, so a signal it
 # sends ITSELF is ignored: bound a run with `timeout -k <grace> <secs> <this script> ...`, never
 # a plain `timeout`. A backgrounded child does not outlive the command (--kill-child).
@@ -48,9 +51,9 @@ refuse() { # reason cause remedy
   exit 125
 }
 
-# Resolve unshare ONCE to an absolute path: an exported shell function or a relative PATH entry
-# must not decide the probe, and the probe and the run must resolve the same binary.
-unset -f unshare 2>/dev/null || true
+# Resolve unshare ONCE to an absolute path: `type -P` consults PATH only, so a shell function or alias
+# named unshare cannot decide the probe, a relative PATH entry is refused, and the probe and the run use
+# the same binary.
 u="$(type -P unshare 2>/dev/null || true)"
 if [[ -z "$u" || "$u" != /* ]]; then
   refuse missing-unshare "unshare (util-linux) was not found on PATH as an absolute path" \
@@ -63,11 +66,11 @@ if [[ "$probe_rc" -ne 0 ]]; then
   # One line, control characters stripped, cut short: the text comes from whatever unshare is.
   first="$(printf '%s\n' "$probe_err" | head -n 1 | tr -d '\000-\037\177' | cut -c1-200)"
   if [[ "$probe_rc" -eq 97 ]]; then
-    refuse not-isolating "the unshare on PATH ran the command without a fresh PID namespace and its own /proc" \
+    refuse not-isolating "the unshare on PATH ran the command without a fresh PID namespace and its own /proc (or awk or /proc/self/status was unusable inside it)" \
       "check which unshare resolves first on PATH and that it is util-linux unshare"
   fi
   refuse userns-unavailable "unshare failed (rc $probe_rc): ${first:-no message}" \
-    "enable unprivileged user namespaces (sysctl kernel.unprivileged_userns_clone, kernel.apparmor_restrict_unprivileged_userns, user.max_user_namespaces) or, in a container, allow unshare in its seccomp profile; on a restricted CI runner every seat on a signalling helper refuses until the runner relaxes the sysctl"
+    "run the mutant on a disposable VM or container that allows unprivileged user namespaces; enabling them on a workstation (sysctl kernel.unprivileged_userns_clone, kernel.apparmor_restrict_unprivileged_userns, user.max_user_namespaces) or allowing unshare in a container seccomp profile weakens that host, so do it only on a throwaway host. On a restricted CI runner every seat on a signalling helper refuses until the runner relaxes the sysctl"
 fi
 
 # The same check runs again inside the namespace right before the command (it keeps the property
