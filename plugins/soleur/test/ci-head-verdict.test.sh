@@ -294,7 +294,10 @@ row_V23() { local d; d=$(mkrow V23); addtest "$d" 11 completed failure 6; jqf "$
   d=$(mkrow V23c); addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2; jqf "$d" pr.json '.mergeable_state = "dirty"'; setnow "$d" 7800
   vrun "$d" verdict "$PR"; ok V23.dirty-but-a-run-exists-still-stalls state_is stalled undecided-after-120m 8
   d=$(mkrow V23d); addtest "$d" 11 completed failure 6; jqf "$d" pr.json '.mergeable_state = 7'; setnow "$d" 7800
-  vrun "$d" verdict "$PR"; ok V23.non-string-mergeable-state-is-ignored state_is stalled undecided-after-120m none; }
+  vrun "$d" verdict "$PR"; ok V23.non-string-mergeable-state-is-ignored state_is stalled undecided-after-120m none
+  # a dirty PR whose ready run was CANCELLED is not the "no run can ever appear" case: it still stalls
+  d=$(mkrow V23e); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed cancelled 2; jqf "$d" pr.json '.mergeable_state = "dirty"'; setnow "$d" 7800
+  vrun "$d" verdict "$PR"; ok V23.dirty-with-a-cancelled-run-still-stalls state_is stalled undecided-after-120m 8; }
 # V21: only a COMPLETED + success `test` row short-circuits to green; every other status/conclusion falls through to the
 # run lookup (a cancelled/neutral/skipped/timed_out/action_required/stale/failure row is not green).
 row_V21() { local d c
@@ -647,19 +650,20 @@ mutant M31 "grep -qE '^jobs:' \"\$WORK/ci.yml\"" "grep -qE '.' \"\$WORK/ci.yml\"
 mutant M32 "(#.*)?\$\" \"\$WORK/ci.yml\"" "\$\" \"\$WORK/ci.yml\"" row_V22
 mutant M33 "elif [[ \"\$CMD\" == wait-ready-run ]]; then" "elif false; then" row_W15
 mutant M34 'rs="conflicting"' 'rs="no-run-after-ready"' row_V23
+mutant M36 '"$rs" == no-run-after-ready && "$PR_MSTATE"' '"$PR_MSTATE"' row_V23
 mutant M35 '"$PR_MSTATE" == dirty ]]; then rs=' '"$PR_MSTATE" == clean ]]; then rs=' row_V23
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
-MIN_ASSERTIONS=364
+MIN_ASSERTIONS=366
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=34
+MIN_MUTANTS=35
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi

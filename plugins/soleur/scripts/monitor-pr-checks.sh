@@ -325,6 +325,13 @@ while :; do
     stalled)
       printf 'READY RUN STALLED — PR #%s was marked ready but no full CI run decided (%s: the stall window counts from the ready event); the red test row is the DRAFT run'"'"'s, by design. Do NOT start a fix loop on it. First confirm in the Actions tab that the ready run is not still in flight; recovery with a user token (never GITHUB_TOKEN): gh pr ready --undo %s ; gh pr ready %s\n' "$PR" "$V_WHY" "$PR" "$PR"
       exit 1 ;;
+    no-run)
+      # A conflicting PR gets no pull_request run (GitHub builds no merge ref), so the PENDING relabel above would watch it
+      # for the whole poll budget: say what it is and stop. Any other no-run reason keeps waiting (a ready run may register).
+      if [[ "$V_WHY" == conflicting ]]; then
+        printf 'CONFLICTING — PR #%s has a merge conflict, so GitHub builds no merge ref and no CI run can appear for it; the red test row is the DRAFT run'"'"'s. Resolve the conflict (git merge origin/main), never gh pr ready --undo.\n' "$PR"
+        exit 1
+      fi ;;
     awaiting-approval)
       printf 'READY RUN AWAITING APPROVAL — PR #%s: the ready run is waiting for a maintainer to approve a fork workflow run (Actions tab, "Approve and run"); nothing starts until it is approved, and the red test row is the draft run'"'"'s.\n' "$PR"
       exit 1 ;;

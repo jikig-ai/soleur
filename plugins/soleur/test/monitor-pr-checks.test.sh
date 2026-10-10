@@ -592,7 +592,9 @@ cat > "$STUB/verdict.sh" <<'EOF'
 printf '%s\n' "$*" >> "$STUB_VLOG"
 # The REAL error shape: a state=error marker (outside the six-state set) AND exit 3, as ci-head-verdict.sh prints it.
 [[ -f "$STUB_VSTATE.fail" ]] && { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=api-error\n'; exit 3; }
-printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=%s\n' "$(cat "$STUB_VSTATE")" "$([[ "$(cat "$STUB_VSTATE")" == stalled ]] && echo undecided-after-120m || echo stub)"
+st="$(cat "$STUB_VSTATE")"; why=stub; [[ "$st" == stalled ]] && why=undecided-after-120m
+[[ "$st" == no-run-conflicting ]] && { st=no-run; why=conflicting; }
+printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=%s\n' "$st" "$why"
 EOF
 chmod +x "$STUB/verdict.sh"
 export STUB_VLOG="$STUB/verdict-calls" STUB_VSTATE="$STUB/verdict-state" CI_HEAD_VERDICT_BIN="$STUB/verdict.sh"
@@ -622,6 +624,14 @@ out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"READY RUN STALLED"* && "$out" == *"undecided-after-120m"* && "$out" != *"75 minutes"* && "$out" == *"gh pr ready --undo 7778"* && "$out" == *"gh pr ready 7778"* && "$out" != *"SETTLED WITH NON-PASS"* ]]; then
   ok "T30d stalled: the watch ends rc=1 with the recovery command and no fix loop on the draft-red row"
 else no "T30d stalled" "rc=$rc out=[$out]"; fi
+setv no-run-conflicting
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"CONFLICTING"* && "$out" == *"git merge origin/main"* && "$out" != *"gh pr ready 7778"* && "$out" != *"SETTLED WITH NON-PASS"* ]]; then
+  ok "T30i a conflicting PR (no-run, reason conflicting) ends the watch rc=1 naming the conflict, never the undo/ready advice"
+else no "T30i conflicting no-run" "rc=$rc out=[$out]"; fi
+setv no-run
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 2 && "$out" != *"CONFLICTING"* ]] && ok "T30j a plain no-run (not conflicting) keeps watching" || no "T30j plain no-run" "rc=$rc out=[$out]"
 setv awaiting-approval
 out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"READY RUN AWAITING APPROVAL"* && "$out" == *"approve"* ]]; then
@@ -678,9 +688,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 67 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 67.\n' "$_ran" >&2
+if [[ "$_ran" -lt 69 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 69.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 67)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 69)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1
