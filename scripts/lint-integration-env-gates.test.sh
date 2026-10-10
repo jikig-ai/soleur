@@ -329,6 +329,12 @@ cat >> "$D/.github/workflows/pad.yml" <<'YAML'
       - run: env CONJ_B=1 npm run test:ci -- test/pad/
 YAML
 expect_red "M14 conjunction -- all_set across ONE workflow" "$D" "conj.test.ts"
+# Discriminating guard: the red must be the UNCOVERED conjunction arm, never a
+# var-level UNWIRED-VAR -- if env CONJ_B=1 stops matching, this row would
+# still print conj.test.ts while pinning nothing.
+if grep -q 'UNWIRED-VAR' "$WORK/out"; then
+  notok "M14 fired via UNWIRED-VAR, not the conjunction arm"; cat "$WORK/out" >&2
+fi
 
 # --- M15 (must-PASS): the idiom in a .md under test/ is prose, not a gate -----
 D="$WORK/m15"; mkrepo "$D"
@@ -445,27 +451,62 @@ cat >> "$D/.github/workflows/lc.yml" <<'YAML'
 YAML
 expect_green "M22b explicit lib file token collects" "$D"
 
-# --- M23: non-zero census below the floor -> RED -------------------------------
+# --- M23: a space inside a string literal is not an env boundary -> RED --------
+# `env` must sit in command position; `echo " env X=1 ..."` has whitespace
+# before env inside quotes -- the original [space] boundary certified it.
+D="$WORK/m23"; mkrepo "$D"
+printf 'const G = process.env.SPACE_GATE === "1";\n' > "$D/apps/web-platform/test/space.test.ts"
+( cd "$D" && git add -A )
+cat > "$D/.github/workflows/space.yml" <<'YAML'
+name: space
+on: [push]
+jobs:
+  s:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo " env SPACE_GATE=1 npm run test:ci -- test/space.test.ts"
+YAML
+expect_red "M23 space-in-string env is not wiring" "$D" "SPACE_GATE"
+
+# --- M24 (must-PASS): all_set via a multi-var env prefix ------------------------
+# The positive conjunction arm: ONE workflow sets BOTH gates in one env prefix
+# and collects the file -- green only if the intersection sees it.
+D="$WORK/m24"; mkrepo "$D"
+mkdir -p "$D/apps/web-platform/test/server"
+printf 'const A = process.env.PAIR_A === "1";\nconst B = process.env.PAIR_B === "1";\n' > "$D/apps/web-platform/test/server/pair.test.ts"
+( cd "$D" && git add -A )
+cat > "$D/.github/workflows/pair.yml" <<'YAML'
+name: pair
+on: [push]
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - run: env PAIR_A=1 PAIR_B=1 npm run test:ci -- test/server/pair.test.ts
+YAML
+expect_green "M24 multi-var env prefix sets the whole conjunction" "$D"
+
+# --- M25: non-zero census below the floor -> RED -------------------------------
 # M2 exercises only the == 0 arm; the `<` arm needed its own row (a floor
 # loosened to admit a shrunken census, or `<=`, must still fire).
-D="$WORK/m23"; mkrepo "$D"
-cp "$SUT" "$WORK/sut-m23.sh"
-mutate "$WORK/sut-m23.sh" "MIN_GATED_FILES=50" "MIN_GATED_FILES=999"
-SOLEUR_LINT_GATES_ROOT="$D" bash "$WORK/sut-m23.sh" > "$WORK/out" 2>&1; rc=$?
+D="$WORK/m25"; mkrepo "$D"
+cp "$SUT" "$WORK/sut-m25.sh"
+mutate "$WORK/sut-m25.sh" "MIN_GATED_FILES=50" "MIN_GATED_FILES=999"
+SOLEUR_LINT_GATES_ROOT="$D" bash "$WORK/sut-m25.sh" > "$WORK/out" 2>&1; rc=$?
 rows_run=$((rows_run + 1))
 if [[ "$rc" == "0" ]]; then
-  notok "M23 sub-floor census -- expected RED, got 0"; cat "$WORK/out" >&2
+  notok "M25 sub-floor census -- expected RED, got 0"; cat "$WORK/out" >&2
 elif ! grep -q "below the floor" "$WORK/out"; then
-  notok "M23 sub-floor census -- RED but missing the floor arm's own error"; cat "$WORK/out" >&2
+  notok "M25 sub-floor census -- RED but missing the floor arm's own error"; cat "$WORK/out" >&2
 else
-  ok "M23 sub-floor census"
+  ok "M25 sub-floor census"
 fi
 
 # --- M6: harness self-check -- deleting a row must red the battery -------------
 # EXACT count, not a floor: a `>=` bound admits deleting rows unnoticed, which
 # is the defect this row exists to make visible. Bump DECLARED_ROWS in the same
 # edit that adds or removes a row.
-DECLARED_ROWS=28
+DECLARED_ROWS=30
 rows_run=$((rows_run + 1))
 if (( rows_run == DECLARED_ROWS )); then
   ok "M6 battery executed ${rows_run}/${DECLARED_ROWS} rows (anti-vacuity)"

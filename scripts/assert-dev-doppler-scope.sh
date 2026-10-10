@@ -58,8 +58,13 @@ case "$jrc" in
     echo "::error::SUPABASE_ACCESS_TOKEN is present in Doppler dev_scheduled -- a dev-scoped CI job must not hold a Management-API token (#8028 DC-1)."
     exit 1 ;;
   1)
-    # false or null: only a JSON object that lacks the key is proof of absence.
-    if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$names_json"; then
+    # false or null: only a JSON object of NAME-KEYED entries lacking the
+    # token is proof of absence. The all-uppercase-key shape check also
+    # fails closed on a future envelope shape {"names": [...], "success":
+    # true} — an envelope's lowercase keys are not secret names, so an
+    # upstream format change cannot drift this check into "verified absent"
+    # while the token is present inside.
+    if ! jq -e 'type == "object" and (keys | all(test("^[A-Z0-9_]+$")))' >/dev/null 2>&1 <<<"$names_json"; then
       echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled did not return a JSON object; cannot verify the token's absence; failing closed."
       exit 1
     fi ;;

@@ -99,24 +99,32 @@ _in_allowlist_files() {
 # grammar. Two forms, both deliberately narrow:
 #
 #   (a) `env <VAR>=1` (or `env A=1 <VAR>=1 cmd`) run-prefix, where `env` must
-#       be preceded by line-start, whitespace, `;`, or `-- `. A quote before
-#       `env` (echo "env X=1 …", JSON bodies) is NOT a boundary -- a
-#       string-literal mention is not a setting. A BARE `X=1 cmd` prefix with
-#       no `env` keyword is deliberately NOT a setting form -- `env` is the
-#       required spelling; 100% of live wiring uses it (measured 2026-10-10).
+#       sit in COMMAND position: first token on a (possibly `- run:`-headed)
+#       line, or after `&&`, `||`, `;`, or `-- `. A whitespace-preceded `env`
+#       inside a string literal (echo " env X=1 …") is NOT a boundary -- the
+#       original [space]-boundary accepted exactly that, which certifies
+#       string mentions as wiring. A BARE `X=1 cmd` prefix with no `env`
+#       keyword is deliberately NOT a setting form -- `env` is the required
+#       spelling; 100% of live wiring uses it (measured 2026-10-10).
 #   (b) `<VAR>: ["']?1` env-MAPPING, anchored to line start (optional `- `):
 #       a `VAR: 1` token mid-line in a run: body (echo "VAR: 1", a curl JSON
 #       body) is not an env-mapping and must not certify wiring.
 #
-# Accepted residual, documented: `env X="1"` quoted values and flow-map
-# `env: {X: "1"}` spellings are NOT matched -- a maintainer who wires a gate
-# that way gets a loud UNWIRED/UNCOVERED red, never a silent pass, and
-# rewrites in the canonical form. package.json script prefixes
-# (`RLS_FUZZ_LOCAL=1 vitest …` via `test:rls-fuzz`) are the known-blind
-# wiring surface -- that class is allowlist territory.
+# Accepted residuals, documented (ERE cannot see quote scope):
+#   - `env` preceded by `;`/`&&`/`|` INSIDE a string ('a;env X=1') still
+#     certifies -- bounded by how unlikely a gate var name is inside one.
+#   - A `<VAR>: 1` line under a `with:`/`strategy.matrix:` block (vs `env:`)
+#     certifies -- no block-context tracking; gated on the var name being a
+#     real gate name.
+#   - `env X="1"` quoted values and flow-map `env: {X: "1"}` spellings are
+#     NOT matched -- a maintainer who wires that way gets a loud red, never
+#     a silent pass, and rewrites in the canonical form.
+#   - package.json script prefixes (`RLS_FUZZ_LOCAL=1 vitest …` via
+#     test:rls-fuzz) are the known-blind wiring surface -- allowlist
+#     territory.
 _var_set_in() {
   local v="$1" stripped="$2"
-  grep -qE "(^|[[:space:];]|--[[:space:]])env([[:space:]]+[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+)*[[:space:]]+${v}=1([[:space:]]|$)|^[[:space:]]*(-[[:space:]]*)?${v}:[[:space:]]*[\"']?1[\"']?[[:space:]]*($|#)" \
+  grep -qE "(^[[:space:]]*(-[[:space:]]*)?run:[[:space:]]+|^[[:space:]]*|&&[[:space:]]*|\|\|[[:space:]]*|;[[:space:]]*|--[[:space:]]+)env([[:space:]]+[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+)*[[:space:]]+${v}=1([[:space:]]|$)|^[[:space:]]*(-[[:space:]]*)?${v}:[[:space:]]*[\"']?1[\"']?[[:space:]]*($|#)" \
     "$stripped"
 }
 

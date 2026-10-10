@@ -421,10 +421,11 @@ jobs:
 
       # The env=dev + DC-1 (SUPABASE_ACCESS_TOKEN-absence) assertions live in
       # scripts/assert-dev-doppler-scope.sh — the ONE copy, shared with
-      # scheduled-integration-suites.yml, so a hardening edit cannot drift
-      # between the two dev-scoped consumers (#9947 review). The pull_request
-      # hazard it guards is unchanged: PR-authored SQL/shell must never reach
-      # prd through a Management-API token (#8028).
+      # scheduled-integration-suites.yml and dev-ledger-reconcile.yml, so a
+      # hardening edit cannot drift between the three dev-scoped consumers
+      # (#9947 review). The pull_request hazard it guards is unchanged:
+      # PR-authored SQL/shell must never reach prd through a Management-API
+      # token (#8028).
       - name: Assert Doppler config resolves to environment=dev
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}

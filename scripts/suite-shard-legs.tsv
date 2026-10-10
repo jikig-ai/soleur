@@ -1,12 +1,12 @@
-# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
-# n=8
-# generated-from-run=incremental
-# generated-from-runs=incremental
 # default-weight-ms=994
 # generated-at=2026-10-10T21:58:05Z
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # generator=regenerate-shard-manifest.py v3
+# n=8
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
+# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
 .claude/hooks/brand-hex-commit-gate.test.sh	8
@@ -519,6 +519,7 @@ tests/hooks/emissions	1
 tests/hooks/incidents	1
 tests/scripts/apply-github-infra-mint-shape	2
 tests/scripts/argv-bearer-sweep	3
+tests/scripts/assert-dev-doppler-scope-wiring	0
 tests/scripts/audit-bot-codeql-coverage	8
 tests/scripts/audit-ruleset-bypass	1
 tests/scripts/betterstack-absence-classifier	8

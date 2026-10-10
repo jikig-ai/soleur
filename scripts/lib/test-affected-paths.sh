@@ -1626,10 +1626,23 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TICKET_TRIAGE_CLAUSES_TEST_SH_PATHS=(
 AFFECTED_TESTS_SCRIPTS_DEV_SUITE_MUTEX_WIRING_PATHS=(
   ".github/actions/dev-migration-drift-probe/action.yml"
   ".github/workflows/scheduled-dev-migration-drift.yml"
+  ".github/workflows/scheduled-integration-suites.yml"
   ".github/workflows/tenant-integration.yml"
   "scripts/dev-suite-mutex.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-dev-suite-mutex-wiring.sh"
+)
+
+# tests/scripts/assert-dev-doppler-scope-wiring — the wiring gate for the
+# shared dev-Doppler boundary script (#9947): its SUT is the script plus the
+# three workflow consumers it pins.
+AFFECTED_TESTS_SCRIPTS_ASSERT_DEV_DOPPLER_SCOPE_WIRING_PATHS=(
+  ".github/workflows/dev-ledger-reconcile.yml"
+  ".github/workflows/scheduled-integration-suites.yml"
+  ".github/workflows/tenant-integration.yml"
+  "scripts/assert-dev-doppler-scope.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-assert-dev-doppler-scope-wiring.sh"
 )
 
 # tests/scripts/no-tofu-ssh-mutation — mutation harness for the no-tofu-ssh

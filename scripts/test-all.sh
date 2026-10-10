@@ -5954,6 +5954,10 @@ if want_scripts; then
   # gate is separate: the unit suite stubs psql and cannot see YAML — only
   # this file asserts the workflow actually wires acquire/release/anchors.
   run_suite "tests/scripts/dev-suite-mutex-wiring" bash tests/scripts/test-dev-suite-mutex-wiring.sh
+  # Same wiring-gate shape for the shared dev-Doppler boundary script
+  # (#9947): three workflows consume it, and a consumer that drops the call
+  # fails silently — dev writes would run unasserted.
+  run_suite "tests/scripts/assert-dev-doppler-scope-wiring" bash tests/scripts/test-assert-dev-doppler-scope-wiring.sh
   # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
   # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
   # under tests/scripts/ is auto-discovered, and an unregistered verdict suite

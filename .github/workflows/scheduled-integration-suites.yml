@@ -116,6 +116,9 @@ jobs:
       # seed-step comment).
       - name: Seed bot fixtures (pre-migration)
         working-directory: apps/web-platform
+        # Soft-fail covers exit codes, not hangs — bound it so a wedged seed
+        # cannot silently burn the ~9-min budget margin.
+        timeout-minutes: 5
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
         run: |
@@ -357,6 +360,10 @@ jobs:
           set -uo pipefail
           status=ok
           failed_md=""
+          # Vacuity floor: if the OUT_* env block is ever deleted, compgen
+          # yields zero names and the loop would read status=ok on ZERO
+          # producers — a missing enumeration must never heartbeat green.
+          [[ -n "$(compgen -v 'OUT_')" ]] || status=error
           for v in $(compgen -v 'OUT_'); do
             step="${v#OUT_}"; step="${step//_/-}"
             outcome="${!v:-skipped}"
