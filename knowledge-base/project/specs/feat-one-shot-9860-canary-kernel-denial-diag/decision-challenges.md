@@ -18,3 +18,9 @@
 ## 4. Prod-equivalent repro and a throwaway-container A/B (Taste, not in this PR)
 
 - CTO review suggested (a) a CI or workflow_dispatch job on an ubuntu-24.04 runner that replays the shipped image with the exact docker flags, loaded AppArmor profile and real SDK argv through the shim, as a permanent regression gate for the "dev host is not the shipped posture" class (the second time this class bit), and (b) a diagnostic-only second `docker run --rm` with `systempaths=unconfined` in the failure arm to turn H6 into a direct measurement. Both add machinery beyond the asked scope (a new workflow, or a container lifecycle inside the deploy script) and are left as follow-up candidates for the operator to prioritise.
+
+## Work-phase deviations (2026-10-10)
+
+- **Hit test narrowed (Mechanical).** The plan counted `apparmor="DENIED"|type=1400|type=1326` as hits. Audit type 1400 also carries complain-mode `ALLOWED`/`AUDIT` records, which are not refusals, so a bare `type=1400` would inflate `hits`. The shipped test is `apparmor="DENIED"|type=1326`, with a fixture that proves an ALLOWED record does not count (mutation 17 kills the regression).
+- **Newest-first reads use `tac` (Mechanical).** The plan's `head -c` on an oldest-first stream would keep the oldest 64 KiB of 400 audit lines (about 350 bytes each, so about 140 KB) and drop the denial that happened seconds ago. Both rungs now reverse before `head -c`; mutations 4d/4e kill removing it.
+- **Mutation-battery result:** 31 mutants (27 SUT, 1 duplicate-axis, 3 harness), 29 killed outright; 20 (no fixture reached the 9999 cap) and H-b (census control tripped two rules at once) survived, were fixed with fixtures and re-killed; H-c (the mock's own `-k -n 400` argv check) is equivalent by redundancy, because D10g pins `journalctl -k -n 400` textually and kills mutation 4b on its own. The mock check stays as the "fake exits 64 on a missing flag" defense.

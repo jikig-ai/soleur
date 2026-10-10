@@ -540,13 +540,13 @@ sanitiser's integrity.
 
 ### Pre-merge (PR)
 
-- [ ] `bash apps/web-platform/infra/ci-deploy.test.sh` passes in the allocated sandbox with the raised floor (the measured count; expected 577), every assertion counted.
-- [ ] The #8016 Scenario 1-4 and Guard 1/2 blocks, and the probe statement, `BWRAP_RC` capture, `DEPLOY_ROLLBACK` line and teardown order in `ci-deploy.sh`, are byte-identical in `git diff origin/main` (the diff only adds the two rows and updates the existing section-list rows and strings).
-- [ ] Every row of the Guard Contract matrix was driven in the sandbox and went RED with the named killing assertion (recorded in the PR body); `python3 scripts/lint-guard-contract.py` on this plan passes.
-- [ ] `python3 scripts/lint-shell-capture-exit.py`, `bash scripts/lint-orphan-test-suites.sh` and `cd plugins/soleur/test && bun test preflight-discoverability-test.test.ts` pass with `BASELINE_DECLARED_PROBES` at the re-measured count (54 expected).
-- [ ] The runbook documents `sdk_noproc`, `kdeny`, H6-H8 and the sixteen-row / eleven-in-container bundle, with no SSH step (`hr-no-ssh-fallback-in-runbooks`).
+- [x] `bash apps/web-platform/infra/ci-deploy.test.sh` passes in the allocated sandbox with the raised floor (the measured count; expected 577), every assertion counted.
+- [x] The #8016 Scenario 1-4 and Guard 1/2 blocks, and the probe statement, `BWRAP_RC` capture, `DEPLOY_ROLLBACK` line and teardown order in `ci-deploy.sh`, are byte-identical in `git diff origin/main` (the diff only adds the two rows and updates the existing section-list rows and strings).
+- [x] Every row of the Guard Contract matrix was driven in the sandbox and went RED with the named killing assertion (recorded in the PR body); `python3 scripts/lint-guard-contract.py` on this plan passes.
+- [x] `python3 scripts/lint-shell-capture-exit.py`, `bash scripts/lint-orphan-test-suites.sh` and `cd plugins/soleur/test && bun test preflight-discoverability-test.test.ts` pass with `BASELINE_DECLARED_PROBES` at the re-measured count (54 expected).
+- [x] The runbook documents `sdk_noproc`, `kdeny`, H6-H8 and the sixteen-row / eleven-in-container bundle, with no SSH step (`hr-no-ssh-fallback-in-runbooks`).
 - [ ] The Phase 0 user-impact read and the local repro result are recorded in the PR body.
-- [ ] The plan and spec of PR #9884 are untouched (`git diff origin/main --name-status` shows no rename or delete under `knowledge-base/project/plans/` or `specs/`).
+- [x] The plan and spec of PR #9884 are untouched (`git diff origin/main --name-status` shows no rename or delete under `knowledge-base/project/plans/` or `specs/`).
 - [ ] PR body says `Ref #9860`, never `Closes`.
 
 ### Post-merge (automatable; each production-touching step sits behind its gate)
