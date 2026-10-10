@@ -326,7 +326,7 @@ EOF
   mkstub "$d" curl <<'EOF'
 _L "curl $*"
 st="$FX/st"
-cfg=""; if printf '%s ' "$@" | grep -q -- '--config -'; then cfg=$(cat); [ -n "${WLP_STUB_NOCFG:-}" ] || printf '%s\n' "$cfg" >> "$st/curl.cfg"; fi
+cfg=""; if printf '%s ' "$@" | grep -c >/dev/null -- '--config -'; then cfg=$(cat); [ -n "${WLP_STUB_NOCFG:-}" ] || printf '%s\n' "$cfg" >> "$st/curl.cfg"; fi
 method=GET; dfile=""; up=""; code_out=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -846,9 +846,9 @@ case_wire() {
   expect "the reopen units do not read back as enabled: FATAL wire (16)" all 'test "$RC" -eq 16' "has '^boot-emit workspaces_luks_provision_wire fatal'"
   # Non-fatal warns are never local-only: each emits a warning stage with a detail.
   new_fx; : > "$FX/st/fail.monitor"; run_sut
-  expect "the probe timer fails to enable: boot continues (rc 0, escrow ok) and a wire_warn WARNING stage is emitted" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=ok' "has '^boot-emit workspaces_luks_provision_wire_warn warning'" 'detail workspaces_luks_provision_wire_warn | grep -q luks_monitor_timer_not_enabled'
+  expect "the probe timer fails to enable: boot continues (rc 0, escrow ok) and a wire_warn WARNING stage is emitted" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=ok' "has '^boot-emit workspaces_luks_provision_wire_warn warning'" 'detail workspaces_luks_provision_wire_warn | grep -c >/dev/null luks_monitor_timer_not_enabled'
   new_fx; mkdir -p "$FX/root/run/soleur/workspaces-luks-arm"; run_sut
-  expect "the arm file is unwritable: boot continues (rc 0) and a result WARNING stage is emitted" all 'test "$RC" -eq 0' "has '^boot-emit workspaces_luks_provision_result warning'" 'detail workspaces_luks_provision_result | grep -q arm_file_unwritable'
+  expect "the arm file is unwritable: boot continues (rc 0) and a result WARNING stage is emitted" all 'test "$RC" -eq 0' "has '^boot-emit workspaces_luks_provision_result warning'" 'detail workspaces_luks_provision_result | grep -c >/dev/null arm_file_unwritable'
 }
 
 # Guard 5 helpers (#9377). The curl stub records its stdin config to st/curl.cfg, so an assertion reads exactly
@@ -882,7 +882,7 @@ case_escrow() {
   new_fx; : > "$FX/st/fail.put"; run_sut
   expect "escrow PUT fails: boot continues (rc 0)" test "$RC" -eq 0
   expect "escrow PUT fails: escrow=missing is recorded" test "$(arm_line 2)" = escrow=missing
-  expect "escrow PUT fails: the stage is emitted with its reason" all "has '^boot-emit workspaces_luks_provision_escrow warning'" 'detail workspaces_luks_provision_escrow | grep -qx "arm=escrow reason=put"'
+  expect "escrow PUT fails: the stage is emitted with its reason" all "has '^boot-emit workspaces_luks_provision_escrow warning'" 'detail workspaces_luks_provision_escrow | grep -cx >/dev/null "arm=escrow reason=put"'
   expect "escrow PUT fails: /mnt/data is nevertheless mounted" test -s "$FX/st/mounted"
   rm -f "$FX/st/fail.put"; : > "$FX/calls"; run_sut
   expect "escrow is NOT retried by the boot path; a manual re-run of the idempotent provisioner uploads and now succeeds" all 'test "$(arm_line 2)" = escrow=ok' "has '^curl .*-T '"
@@ -896,14 +896,14 @@ case_escrow() {
   new_fx; printf '4096\n' > "$FX/st/s3.len"; printf 'deadbeefdeadbeefdeadbeefdeadbeef\n' > "$FX/st/s3.etag"; run_sut
   expect "a same-size object with a stale ETag is re-uploaded, and the stored ETag is then the header's md5" all 'test "$RC" -eq 0' "has '^curl .*-T '" 'test "$(arm_line 2)" = escrow=ok' 'test "$(cat "$FX/st/s3.etag")" = "$(head -c 4096 /dev/zero | md5sum | cut -d" " -f1)"'
   new_fx; printf '4096\n' > "$FX/st/s3.len"; printf 'deadbeefdeadbeefdeadbeefdeadbeef\n' > "$FX/st/s3.etag"; : > "$FX/st/put.noop"; run_sut
-  expect "a PUT that stores nothing is caught by the ETag read-back: escrow=missing (readback)" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -qx "arm=escrow reason=readback"'
+  expect "a PUT that stores nothing is caught by the ETag read-back: escrow=missing (readback)" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -cx >/dev/null "arm=escrow reason=readback"'
   local ep
   for ep in 'https://example.invalid' "https://${ACCT}.r2.cloudflarestorage.com.evil.example" "https://${ACCT:1}.r2.cloudflarestorage.com" "https://${ACCT^^}.r2.cloudflarestorage.com" "http://${ACCT}.r2.cloudflarestorage.com"; do
     new_fx; printf '%s\n' "$ep" > "$FX/st/doppler.WORKSPACES_HEADER_R2_ENDPOINT"; run_sut
-    expect "escrow: the endpoint '$ep' is not the pinned R2 account shape: escrow=missing (shape), no request is made, boot continues" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -qx "arm=escrow reason=shape"' "lack '^curl '"
+    expect "escrow: the endpoint '$ep' is not the pinned R2 account shape: escrow=missing (shape), no request is made, boot continues" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -cx >/dev/null "arm=escrow reason=shape"' "lack '^curl '"
   done
   new_fx; printf 'Bad_Bucket\n' > "$FX/st/doppler.WORKSPACES_HEADER_BUCKET"; run_sut
-  expect "escrow: a bucket outside the DNS-label class is refused as shape (not creds_shape), no request is made, boot continues" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -qx "arm=escrow reason=shape"' "lack '^curl '"
+  expect "escrow: a bucket outside the DNS-label class is refused as shape (not creds_shape), no request is made, boot continues" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -cx >/dev/null "arm=escrow reason=shape"' "lack '^curl '"
   new_fx; run_sut
   expect "escrow: the R2 secret reaches curl on stdin config only, never argv" all 'test "$(grep -c -- "$SECVAL" "$FX/calls")" -eq 0' 'test "$(grep -c -- "$SECVAL" "$FX/st/curl.cfg")" -ge 1'
   expect "escrow: SigV4 signing is requested with the R2 form" has "aws-sigv4 aws:amz:auto:s3"
@@ -939,7 +939,7 @@ case_escrow() {
   r2_pair "$KIDVAL" "${SECVAL:0:20}:${R2_BADMARK}"
   expect "escrow shape: a secret outside its class (a colon) is refused" shape_refused
   r2_pair "$KIDVAL" ""
-  expect "escrow shape: an empty secret is still the creds reason, no curl call" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -qx "arm=escrow reason=creds"' "lack '^curl '"
+  expect "escrow shape: an empty secret is still the creds reason, no curl call" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -cx >/dev/null "arm=escrow reason=creds"' "lack '^curl '"
   # Must-pass: the check is wider than the vendor's current 32/64 hex so a format change does not turn escrow off.
   _inj="$(rep_char b 64)"
   r2_pair "$KIDVAL" "$_inj"

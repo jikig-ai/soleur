@@ -537,14 +537,14 @@ if [[ -n "${MOCK_GAK_LOG:-}" && "${1:-}" == "run" ]]; then
   done
   if [[ -n "$_gn" ]]; then
     _gtok=0
-    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
     printf 'run:%s env_token=%s\n' "$_gn" "$_gtok" >> "$MOCK_GAK_LOG"
     if [[ -n "$_gef" && -f "$_gef" ]]; then cp "$_gef" "$(dirname "$MOCK_GAK_LOG")/envfile.$_gn"; fi
   fi
 fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -9792,7 +9792,7 @@ gak_run_boot() {
 if [[ "${1:-}" == "inspect" ]]; then echo "${MOCK_BOOT_RUNNING:-true}"; exit 0; fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -9806,14 +9806,14 @@ MOCK
   cat > "$d/bin/soleur-boot-emit" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 printf 'emit:%s env_token=%s\n' "$1" "$_t" >> "$MOCK_GAK_LOG"
 printf '%s %s %s\n' "$1" "$2" "$(cat "$SOLEUR_STAGE_DETAIL_DIR/$1" 2>/dev/null)" >> "$MOCK_BOOT_EMITS"
 MOCK
   cat > "$d/bin/systemd-run" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 if [[ "${MOCK_SYSTEMD_RUN_FAIL:-}" == "1" ]]; then printf 'systemd-run-failed env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"; exit 1; fi
 printf 'systemd-run env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"
 exit 0
