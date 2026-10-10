@@ -1,0 +1,6 @@
+# fixture data, never executed: the bound sits in the loop condition; one W, bounded=yes
+p=$1; top=""
+while [ "$p" != "$SOLEUR_TEST_SUITE_PID" ] && [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

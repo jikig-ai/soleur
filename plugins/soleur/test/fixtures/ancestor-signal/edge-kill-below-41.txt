@@ -1,0 +1,43 @@
+# fixture data, never executed: kill 41 lines below the cursor; no finding
+p=$(awk '{print $4}' "/proc/$p/stat")
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+kill -TERM "$target"

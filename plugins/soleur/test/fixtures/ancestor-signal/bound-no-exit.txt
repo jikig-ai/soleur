@@ -1,0 +1,7 @@
+# fixture data, never executed: a comparison with no exit, break or return on its line; bounded=no
+ok=$([ "$p" != "$SOLEUR_TEST_SUITE_PID" ] && echo y)
+p=$1; top=""
+while [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

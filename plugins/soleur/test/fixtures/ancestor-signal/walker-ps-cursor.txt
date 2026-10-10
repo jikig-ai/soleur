@@ -1,0 +1,6 @@
+# fixture data, never executed: an ancestor walker whose cursor is a ps -o ppid= call; one W, bounded=no
+p=$1; top=""
+while [ -n "$p" ]; do
+  top=$p; p=$(ps -o ppid= -p "$p" | tr -d ' ')
+done
+[ -n "$top" ] && kill -TERM "$top"
