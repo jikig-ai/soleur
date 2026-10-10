@@ -45,9 +45,9 @@
 #
 # Delivered by a host replace (cloud-init) only — never by a git-uid channel (the hook
 # directory is root:git 0750, the hook root:root, #8043 F9; the "deploy payload" this header
-# once named was never built — ADR-149) and no longer by an operator root path (the cutover
-# script's write body was deleted in #8189; the real modes are rebuilt in #8211). This hook
-# ships at birth, so no placeholder stands in front of it.
+# once named was never built — ADR-149) and no longer by an out-of-band operator copy (a copy
+# not delivered by a replace is reverted by the next one). This hook ships at birth, so no
+# placeholder stands in front of it.
 
 set -euo pipefail
 # (#7797) this hook handles a live credential; -x would print it.
@@ -70,10 +70,10 @@ reject() {
 ref_lines="$(cat 2>/dev/null || true)"
 
 # --- Cutover write-freeze gate (epic #5274 Sub-PR 3.D) ------------------------------
-# The write-freeze that planted this sentinel (git-data-cutover.sh) was deleted in #8189 and its
-# real modes are rebuilt under #8211, so today NOTHING plants it; the check below stays as the
-# fail-closed backstop those modes will write to. When the LUKS cutover holds its write-freeze
-# it writes a sentinel at $GIT_DATA_ROOT/.cutover-freeze (`writer=<lineage> at=<epoch>`).
+# #8189 deleted the original cutover write body; #8211 PR2 rebuilt the real modes, and
+# git-data-cutover.sh `mode_freeze` plants this sentinel again (dispatched by git-data-cutover.yml).
+# When the LUKS cutover holds its write-freeze it writes a sentinel at
+# $GIT_DATA_ROOT/.cutover-freeze (`writer=<lineage> at=<epoch>`).
 # Every receive-pack is DENIED fail-closed while it exists, so a straggler push (an
 # in-flight turn finishing during the freeze window) is rejected LOUD and retried
 # after release — never silently landed mid-flip. The freeze's other half is the

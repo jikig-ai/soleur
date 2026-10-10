@@ -528,6 +528,13 @@ discoverability_test:
   credentials_required: BETTERSTACK_API_TOKEN (Better Stack uptime API read) - the live monitor's existence has no unauthenticated substitute; the offline wiring is covered by heartbeat-reprovision-parity and terraform-target-parity
 ```
 
+**Layer citation (`hr-observability-layer-citation`).** Observability layers 1 to 5 (the Vector-fed logs, the Sentry middleware
+layers) are N/A on this host: git-data has no log shipper and no Sentry middleware (ADR-198 rejects a shipper for quota reasons).
+Coverage here is the Better Stack heartbeat's absence (the page, closest to the `inngest-heartbeat` class) plus the async
+`git-data-emit` info events (the explanation). The `discoverability_test` command proves only that the monitor EXISTS (it never
+reads `status`, and `arming_pending` exempts `fed-but-paused`); that the feeder is alive is the runbook's soak read, which queries the
+git-data Better Stack source.
+
 ## Infrastructure (IaC)
 
 ### Terraform changes

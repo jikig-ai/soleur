@@ -8,22 +8,25 @@
 # monitor is armed and a flapping monitor can be diagnosed afterwards.
 #
 # WHAT IT PROVES, AND WHAT IT DOES NOT. It proves host and store health: sshd answers on loopback,
-# the store is mounted from the LUKS mapper, bytes and inodes are below threshold, and the two
-# security units have not failed. It does NOT prove that a particular git operation or erasure
-# call succeeds on a healthy host; the erasure path keeps its own reporting. The web-fed probe
-# (web-git-data-probe) proves only that some web host can open a TCP connection to the port.
+# the store is mounted read-write from the LUKS mapper and its root directory lists, bytes and
+# inodes are below threshold, and the two security units are loaded and have not failed. It does
+# NOT prove that a particular git operation or erasure call succeeds on a healthy host; the erasure
+# path keeps its own reporting. The web-fed probe (web-git-data-probe) proves only that some web
+# host can open a TCP connection to the port. The store is never WRITTEN to: a probe write would
+# move the mtime the cutover's quiescence check reads.
 #
 # THE URL NEVER TOUCHES user_data. It is read at runtime from the scoped read-only Doppler config
 # this host already holds a token for, so a rehearsal host (whose scratch config does not carry
 # the secret) is structurally unable to ping the production monitor, and rotation is a replace.
 #
-# EXIT 0 ON EVERY PATH EXCEPT THE TRACE REFUSAL (and a refused run-dir seam, below). A feeder that cannot run produces no beat, and
-# the missing beat IS the alert; a non-zero exit would only add a second, redundant failure.
+# EXIT 0 ON EVERY PATH EXCEPT THE TRACE REFUSAL (and a refused run-dir seam, below).
 #
-# ORDER INSIDE ONE TICK, and its budget: checks, then ping (the primary signal), then persist and
-# emit. The emit is bounded because git-data-emit alone can take 40 to 50 s when egress is
-# degraded. Worst case: a 10 s cache fetch, two 10 s pings and a 1 s sleep, a 20 s emit = 51 s,
-# inside TimeoutStartSec=55, inside the 60 s tick. A failed emit never changes the ping decision.
+# TICK BUDGET (the suite derives these sums from the constants below, never from this prose).
+#   Healthy path:   banner 5 + fetch 10 + two pings 2x10 + pause 1 + emit 20 = 56 s.
+#   Hung-instrument path: banner 5 + every instrument at its 3 s cap + emit 20. A hang is a MISS,
+#   and a miss skips the fetch and the ping, so the two paths never add up.
+#   Both sit inside TimeoutStartSec=58 and the 60 s period. An instrument either answers in
+#   milliseconds or hangs; nothing here is sized for "every instrument just under its cap".
 set -uo pipefail
 if [[ $- == *x* ]]; then
   printf '[FATAL] refusing to run under xtrace: the heartbeat URL is a credential\n' >&2
@@ -36,7 +39,9 @@ PATH="${GIT_DATA_LIVENESS_PATH_PREPEND:+${GIT_DATA_LIVENESS_PATH_PREPEND}:}/usr/
 export PATH
 umask 077
 
-# Seams exist ONLY so the suite can drive the real script; production sets none of them.
+# Seams exist ONLY so the suite can drive the real script; production sets none of them, and the
+# unit, the timer, cloud-init and the module are asserted to name none. The Doppler child below
+# runs with every seam but the run dir stripped.
 _num() { case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 STORE_ROOT="${GIT_DATA_LIVENESS_ROOT:-/mnt/git-data}"
 RUN_DIR="${GIT_DATA_LIVENESS_RUN:-/run/git-data-liveness}"
@@ -47,13 +52,14 @@ FETCH_TIMEOUT="$(_num "${GIT_DATA_LIVENESS_FETCH_TIMEOUT:-}" 10)"
 EMIT_TIMEOUT="$(_num "${GIT_DATA_LIVENESS_EMIT_TIMEOUT:-}" 20)"
 NOW="$(_num "${GIT_DATA_LIVENESS_NOW:-}" "$(date +%s)")"
 # The run dir is the only seam this script WRITES under, so it is refused unless provably absolute
-# (an empty or relative value would retarget every write below). Production never sets it; this is
-# the one non-zero exit besides the trace refusal, and it is a misconfiguration, not a runtime state.
+# and off the store (an empty or relative value would retarget every write below). Production never
+# sets it; this is the one non-zero exit besides the trace refusal, and it is a misconfiguration,
+# not a runtime state.
 case "$RUN_DIR" in
   "")            printf '[FATAL] GIT_DATA_LIVENESS_RUN is EMPTY; refusing to write to /\n' >&2; exit 2 ;;
   */../*|*/..)   printf '[FATAL] run dir %s contains ..; refusing\n' "$RUN_DIR" >&2; exit 2 ;;
   /|//|/.)       printf '[FATAL] run dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
-  /proc/*|/sys/*|/dev/*) printf '[FATAL] run dir %s is a synthetic-fs path; refusing\n' "$RUN_DIR" >&2; exit 2 ;;
+  /proc/*|/sys/*|/dev/*|/mnt/*|/media/*) printf '[FATAL] run dir %s is a synthetic-fs or mounted-volume path; refusing\n' "$RUN_DIR" >&2; exit 2 ;;
   /*)            : ;;
   *)             printf '[FATAL] run dir %s is RELATIVE; refusing\n' "$RUN_DIR" >&2; exit 2 ;;
 esac
@@ -70,11 +76,19 @@ readonly DISK_PCT_LIMIT=90
 readonly INODE_PCT_LIMIT=90
 readonly OK_SUMMARY_S=600
 readonly MISS_REEMIT_S=1800
+readonly BANNER_TIMEOUT=5
+readonly INSTR_TIMEOUT=3
+readonly PING_TIMEOUT=10
+readonly PING_PAUSE=1
 readonly PRODUCTION_CONFIG=prd_git_data
 readonly URL_FILE="$RUN_DIR/url"
 readonly STATE_FILE="$RUN_DIR/state"
 SELF="${BASH_SOURCE[0]}"
 readonly SELF
+
+# Every instrument read goes through this: a hung statfs, mount-table read or D-Bus call must end
+# in a recorded miss, not in the unit being killed with nothing said.
+_i() { timeout "$INSTR_TIMEOUT" "$@"; }
 
 # The accepted URL shape. A newline or a quote would inject a directive into the curl config the
 # URL is handed to, so the whole value must be one heartbeat path segment of safe characters.
@@ -107,7 +121,7 @@ miss() { MISSES+=("$1"); }
 # Percent used from a `df --output=<field>` read; empty output or a non-number is UNMEASURED.
 _pct() {  # <field> <path>
   local out="" rc=0 v
-  out="$(df --output="$1" "$2" 2>/dev/null)" || rc=$?
+  out="$(_i df --output="$1" "$2" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] || return 1
   v="$(printf '%s\n' "$out" | tail -n 1 | tr -d ' %')"
   case "$v" in ''|*[!0-9]*) return 1 ;; esac
@@ -116,33 +130,48 @@ _pct() {  # <field> <path>
 
 _banner() {
   local line="" rc=0
-  line="$(timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2" || exit 1; IFS= read -r -t 4 -u 3 l; printf "%s" "$l"' _ "$SSH_HOST" "$SSH_PORT" 2>/dev/null)" || rc=$?
+  line="$(timeout "$BANNER_TIMEOUT" bash -c 'exec 3<>"/dev/tcp/$1/$2" || exit 1; IFS= read -r -t 4 -u 3 l; printf "%s" "$l"' _ "$SSH_HOST" "$SSH_PORT" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] || return 1
   case "$line" in SSH-*) return 0 ;; esac
   return 1
 }
 
-_unit_state() {  # prints ActiveState; non-zero when unreadable
-  local out="" rc=0
-  out="$(systemctl show --value -p ActiveState "$1" 2>/dev/null)" || rc=$?
+# Prints "<LoadState>/<ActiveState>"; non-zero when the service manager cannot be read. A unit
+# that does not exist reads ActiveState=inactive with rc 0, so the load state is read too.
+_unit_state() {
+  local out="" rc=0 l a
+  out="$(_i systemctl show -p LoadState -p ActiveState "$1" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] || return 1
-  case "$out" in ''|*[!a-z-]*) return 1 ;; esac
-  printf '%s' "$out"
+  l="$(printf '%s\n' "$out" | sed -n 's/^LoadState=//p' | head -n 1)"
+  a="$(printf '%s\n' "$out" | sed -n 's/^ActiveState=//p' | head -n 1)"
+  case "$l$a" in ''|*[!a-z-]*) return 1 ;; esac
+  [ -n "$l" ] && [ -n "$a" ] || return 1
+  printf '%s/%s' "$l" "$a"
 }
 
 run_checks() {
-  local mrc=0 src="" rc=0 v st u
+  local mrc=0 line="" src="" opts="" rc=0 v st u bad_units=0
   # sshd answers: a banner read, NOT a unit-state check. Ubuntu 24.04 is socket-activated, so
   # ssh.service can be inactive on a healthy idle host and a unit check would false-fail.
   _banner || miss ssh_no_banner
 
-  mountpoint -q "$STORE_ROOT" 2>/dev/null || mrc=$?
+  # mountpoint(1) exits 32 for an existing directory that is not a mountpoint, and 1 for an
+  # error such as a missing path; 0 is mounted. Anything else is an unreadable instrument.
+  _i mountpoint -q "$STORE_ROOT" 2>/dev/null || mrc=$?
   case "$mrc" in
     0)
-      src="$(findmnt -n -o SOURCE --target "$STORE_ROOT" 2>/dev/null)" || rc=$?
-      src="$(printf '%s\n' "$src" | head -n 1 | tr -d ' ')"
+      line="$(_i findmnt -n -o SOURCE,OPTIONS --target "$STORE_ROOT" 2>/dev/null | head -n 1)" || rc=$?
+      src="${line%% *}"; opts="${line#* }"; opts="${opts%% *}"
       if [ "$rc" -ne 0 ] || [ -z "$src" ]; then miss unmeasured:mount_source
-      elif [ "$src" != "$STORE_MAPPER" ]; then miss store_not_mapper; fi
+      else
+        [ "$src" = "$STORE_MAPPER" ] || miss store_not_mapper
+        # A journal abort or errors=remount-ro flips the mount read-only while every other
+        # check here still reads healthy; the volume is then up and refusing every push.
+        case ",$opts," in *,rw,*) : ;; *) miss store_readonly ;; esac
+      fi
+      # A directory listing is a device READ (no write, so no mtime moves): a detached or
+      # erroring volume behind a still-present mount fails here while statfs still answers.
+      _i ls -f "$STORE_ROOT" >/dev/null 2>&1 || miss store_unreadable
       if v="$(_pct pcent "$STORE_ROOT")"; then
         [ "$v" -ge "$DISK_PCT_LIMIT" ] && miss disk_full
       else miss unmeasured:df_bytes; fi
@@ -150,21 +179,28 @@ run_checks() {
         [ "$v" -ge "$INODE_PCT_LIMIT" ] && miss inodes_full
       else miss unmeasured:df_inodes; fi
       ;;
-    1) miss store_unmounted ;;
+    32) miss store_unmounted ;;
     *) miss unmeasured:mountpoint ;;
   esac
 
   # git-data-gc.service is deliberately NOT in this set: whether a failed weekly maintenance run
   # should page is a policy the owner has not decided (#8093), and this feeder neither makes it
-  # nor hides it. A failed reopen unit stays failed until its next successful run (up to ~17 min).
+  # nor hides it. A failed reopen unit stays failed until its next successful run: about 17 min
+  # after a transient failure, and up to about 1h15 after an exhausted restart ladder (the unit's
+  # start-limit window refuses timer ticks). The miss is real for that whole time.
   for u in git-data-luks-reopen git-data-nftables; do
     if st="$(_unit_state "$u.service")"; then
-      [ "$st" = failed ] && miss "unit_failed:$u"
-    else miss unmeasured:units; fi
+      case "$st" in
+        not-found/*|masked/*|error/*) miss "unit_missing:$u" ;;
+        */failed) miss "unit_failed:$u" ;;
+      esac
+    else bad_units=1; fi
   done
+  [ "$bad_units" -eq 0 ] || miss unmeasured:units
+  return 0
 }
 
-STATE=""; CODE=""; URL=""
+STATE=""; CODE=""; URL=""; FROM_LAST=0
 _load_url() {
   local u=""
   if [ -s "$URL_FILE" ]; then
@@ -175,12 +211,22 @@ _load_url() {
   [[ "${GIT_DATA_DOPPLER_CONFIG:-}" =~ ^[a-z0-9_]+$ ]] || return 1
   # While the cache is empty every tick retries (no throttle), so a host replaced before its
   # secret existed heals on the next tick without a second replace. A doppler that exits 0 with
-  # empty output leaves no cache and is therefore an absent secret, never a valid URL.
-  timeout "$FETCH_TIMEOUT" doppler run --project soleur --config "$GIT_DATA_DOPPLER_CONFIG" --only-secrets GIT_DATA_HOST_HEARTBEAT_URL --no-fallback -- "$SELF" --write-cache >/dev/null 2>&1 || true
-  [ -s "$URL_FILE" ] || return 1
-  u="$(head -n 1 "$URL_FILE" 2>/dev/null)"
-  _url_ok "$u" || { rm -f "$URL_FILE"; return 1; }
-  URL="$u"
+  # empty output leaves no cache and is therefore an absent secret, never a valid URL. The child
+  # runs with every test seam but the run dir stripped.
+  timeout "$FETCH_TIMEOUT" doppler run --project soleur --config "$GIT_DATA_DOPPLER_CONFIG" --only-secrets GIT_DATA_HOST_HEARTBEAT_URL --no-fallback -- /usr/bin/env -u GIT_DATA_LIVENESS_PATH_PREPEND -u GIT_DATA_LIVENESS_EMIT -u GIT_DATA_LIVENESS_ROOT -u GIT_DATA_LIVENESS_SSH_HOST -u GIT_DATA_LIVENESS_SSH_PORT -u GIT_DATA_LIVENESS_NOW "$SELF" --write-cache >/dev/null 2>&1 || true
+  if [ -s "$URL_FILE" ]; then
+    u="$(head -n 1 "$URL_FILE" 2>/dev/null)"
+    if _url_ok "$u"; then rm -f "${RUN_DIR:?}/url.last"; URL="$u"; return 0; fi
+    rm -f "$URL_FILE"
+  fi
+  # The fetch gave nothing. A URL the vendor accepted last time is still the best evidence we
+  # have: dropping it on a vendor 5xx and then meeting a Doppler outage would page a healthy host.
+  if [ -s "${RUN_DIR:?}/url.last" ]; then
+    u="$(head -n 1 "${RUN_DIR:?}/url.last" 2>/dev/null)"
+    if _url_ok "$u"; then URL="$u"; FROM_LAST=1; return 0; fi
+    rm -f "${RUN_DIR:?}/url.last"
+  fi
+  return 1
 }
 
 # THE ONLY curl CALL SITE. The URL rides curl's stdin config channel, fed by a process
@@ -191,26 +237,31 @@ _ping() {
   local n=0
   _url_ok "$URL" || return 2
   while [ "$n" -lt 2 ]; do
-    if curl --disable --noproxy '*' -fsS -m 10 -o /dev/null --config - 2>/dev/null < <(printf 'url = "%s"\n' "$URL"); then return 0; fi
+    if curl --disable --noproxy '*' -fsS -m "$PING_TIMEOUT" -o /dev/null --config - 2>/dev/null < <(printf 'url = "%s"\n' "$URL"); then return 0; fi
     n=$((n + 1))
-    [ "$n" -ge 2 ] || sleep 1
+    [ "$n" -ge 2 ] || sleep "$PING_PAUSE"
   done
   return 1
 }
 
 LAST_STATE=none; LAST_CODE=""; LAST_TS=0
 read_state() {
-  local line="" k v
+  local line="" k v kv
+  local -a kvs=()
   [ -r "$STATE_FILE" ] || return 0
   line="$(head -n 1 "$STATE_FILE" 2>/dev/null)"
-  for kv in $line; do
+  read -ra kvs <<<"$line"
+  for kv in "${kvs[@]}"; do
     k="${kv%%=*}"; v="${kv#*=}"
     case "$k" in
       s) case "$v" in ok|miss|ping_fail|url_unavailable|disarmed) LAST_STATE="$v" ;; esac ;;
       c) case "$v" in *[!a-z0-9_:.,-]*) : ;; *) LAST_CODE="$v" ;; esac ;;
-      t) case "$v" in ''|*[!0-9]*) : ;; *) LAST_TS="$v" ;; esac ;;
+      t) case "$v" in ''|*[!0-9]*) : ;; *) [ "${#v}" -le 12 ] && LAST_TS=$((10#$v)) ;; esac ;;
     esac
   done
+  # A stamp from the future (a clock that stepped back) would make the cadence test negative
+  # forever, so it counts as "never emitted".
+  [ "$LAST_TS" -le "$NOW" ] || LAST_TS=0
 }
 
 main() {
@@ -226,12 +277,21 @@ main() {
     STATE=miss
     old_ifs="$IFS"; IFS=,; CODE="${MISSES[*]}"; IFS="$old_ifs"
   elif _load_url; then
-    if _ping; then STATE=ok; CODE=ok
-    else STATE=ping_fail; CODE=ping_fail; rm -f "$URL_FILE"; fi
+    if _ping; then
+      STATE=ok; CODE=ok
+      # A last-good URL that just worked is the live one again.
+      [ "$FROM_LAST" -eq 0 ] || mv -f "${RUN_DIR:?}/url.last" "${RUN_DIR:?}/url" 2>/dev/null || true
+    else
+      STATE=ping_fail; CODE=ping_fail
+      # Keep the rejected URL as the last-good fallback; the next tick re-reads the secret first,
+      # which is the whole rotation story.
+      if [ "$FROM_LAST" -eq 0 ]; then mv -f "${RUN_DIR:?}/url" "${RUN_DIR:?}/url.last" 2>/dev/null || rm -f "$URL_FILE"; fi
+    fi
   else
     # EXACT equality: the rehearsal's scratch config name shares a prefix with the production
     # one, so a prefix match would misclassify it and a rehearsal host would page as production.
-    if [ "$cfg" = "$PRODUCTION_CONFIG" ]; then STATE=url_unavailable; else STATE=disarmed; fi
+    # An unreadable config name is a broken production host, never a rehearsal one.
+    if [ "$cfg" = "$PRODUCTION_CONFIG" ] || [ "$cfg" = unset ]; then STATE=url_unavailable; else STATE=disarmed; fi
     CODE="$STATE"
   fi
 

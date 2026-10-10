@@ -70,13 +70,24 @@ inode table, a closed or unmounted LUKS store, a failed security unit, or a dead
 
 ## Consequences
 
-- One more recurring emitter on a host that already has two: the cost is about 3 KB of stored `user_data` (measured with
+- One more recurring emitter on a host that already has two: the cost is about 3.8 KB of stored `user_data` (measured with
   `git-data-userdata-budget.sh`, recorded in the PR body) against the 32 KB cap.
 - A known-benign `miss` on a healthy fresh host is a payload defect fixed forward through the two-PR sequence; the thresholds are hash-bound
   and there is no agent waiver.
 - Between merge and replace there is a paused-yet-fed gap that the nightly `fed-but-paused` alarm is told to expect (`arming_pending`); it
   does not suppress `absent-live`.
 - Until #9943 lands, the precondition is a runbook item with a re-read, not a workflow gate.
+- A rehearsal host can never exercise the armed path (Doppler fetch, curl, ping): its scratch config lacks the secret by construction,
+  and the suite drives the real script against fakes. A defect in the real ping path therefore first shows during the production soak,
+  and fixing it costs another payload PR, rehearsal and replace.
+- The URL also reaches the environment of the other `prd_git_data` consumers that run `doppler run` without `--only-secrets` (the gc
+  unit and the bootstrap stages). Its ceiling is forging one "alive" ping, no code dumps an environment, and the claim above is therefore
+  "never baked and never on an argument list", not "present nowhere else on the host".
+- The checks read the mount table, `statfs`, the mount options and a directory listing; the store is never written (a probe write would
+  move the mtime the cutover's quiescence check reads). `mountpoint` exits 32, not 1, for an existing directory that is not a mountpoint,
+  and a unit that does not exist reads `inactive` with exit 0, so the feeder reads the load state too. Every instrument runs under a 3 s cap.
+- The emitted event can flap: a changed code re-emits at once, so a value hovering at a threshold can emit every tick (at most 1440 a day).
+  Accepted: the page is the heartbeat, and the event is unrouted.
 
 ## Credential rule applied to the new URL
 

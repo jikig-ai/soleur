@@ -656,8 +656,10 @@ resource "doppler_secret" "git_data_heartbeat_url_prd" {
 # carries the row with arming_pending so the nightly fed-but-paused alarm does not fire meanwhile.
 #
 # grace 300 against a 60 s feeder tick: the page lands about six minutes after the last good beat,
-# which absorbs the reopen unit's up-to-17-minute `failed` latch being a MISS rather than an outage
-# of this signal, and a vendor blip, without paging on a single dropped tick.
+# which absorbs a vendor blip and a few dropped ticks without paging. It does NOT absorb the reopen
+# unit's `failed` latch (about 17 minutes after a transient failure, up to about 1h15 after an
+# exhausted ladder): while that unit reads failed the feeder withholds on purpose, so the page is
+# real for that whole time.
 resource "betteruptime_heartbeat" "git_data_host_prd" {
   name      = "soleur-git-data-host-prd"
   period    = 60

@@ -8,8 +8,8 @@
 # file remains for the fixture suites that synthesize it by name; nothing ships it.
 #
 # Shipped in cloud-init as the git-data fence hook UNTIL the real CAS fence
-# (git-data-pre-receive.sh) was delivered by a host replace (cloud-init); no operator root
-# path exists any more (the cutover script's write body was deleted in #8189). NOT by a
+# (git-data-pre-receive.sh) was delivered by a host replace (cloud-init); an out-of-band
+# operator copy is no longer a delivery path (the next replace reverts it). NOT by a
 # git-uid channel: the hook directory is
 # root:git 0750 and this file root:root (#8043 F9), and the "web-platform deploy
 # pipeline" this header once named was never built (ADR-149, F9 disposition).
