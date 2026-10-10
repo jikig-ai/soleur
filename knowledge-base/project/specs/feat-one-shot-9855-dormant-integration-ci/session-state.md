@@ -26,3 +26,13 @@
 - All findings classified Mechanical → auto-applied to the plan (see plan §Plan-Review Consolidation). No Taste/User-Challenge.
 - Key additions: mutex HOLD_S invariant, timeout→cancelled filer + per-step timeouts, sentry-heartbeat dead-man arm + monitor IaC (adds apps/web-platform/infra/sentry/*.tf to scope), sentinel anchored consumer + lib/ scope + file-level arm, dsar-departed-member wiring (8th step), auto-close tracker, gate-override marker.
 - Status: complete
+
+## Review pass (2026-10-10)
+
+- Panel: 8 seats (floor 5 + triggered performance/test-design/shellcheck + 2-seat design pass; architecture deduped). Verdicts: 8× APPROVE-WITH-CHANGES, 0 REJECT.
+- Fix-round 1 (faa8b6836d): producer scoping, aggregate single-enumeration, DC-1 extraction→script (3 consumers), bash-3.2 arrays, mutate literal surgery, 60→70/3900→4500 headroom, worm-gated suites (substrate fail → skipped not un-mutexed), Sentry five-ledger, bot-fixture $GITHUB_WORKSPACE, battery rows → 28.
+- Fix-round 2 (116c9fc1a0): env-arm command-position boundary + M23, envelope shape proof, test-assert-dev-doppler-scope-wiring.sh (10 pins) + W9 HOLD_S pin in mutex wiring (15 pins), compgen vacuity floor, seed timeout, M24 multi-var row, battery → 30 rows.
+- Sentinel: 1m24s → 3.2s (distinct-var dedupe + wired_map). Verified: found=59 wired=8 allowlisted=4 uncovered=0; battery 30/30; wiring 10/10+15/15; SC clean.
+- semgrep seat: void (local binary broken, 2 attempts); CodeQL covers the lane in CI.
+- Trailers: Reviewed-By-Soleur full 8/8 (8202feaa72); Reviewed-Fix-Round (bcdcf59a53).
+- Merge: origin/main merged + model.likec4.json regenerated via resolve-regenerable-conflicts.sh (merge-tree rc=0). PR BEHIND again post-push — ship handles sync.
