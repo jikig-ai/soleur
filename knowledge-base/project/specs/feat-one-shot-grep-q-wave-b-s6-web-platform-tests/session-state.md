@@ -33,5 +33,5 @@ soleur:plan, rehearsal and mutation clones (codemod passes, converter, hand edit
 
 ## Compound Phase
 
-- Learning: `knowledge-base/project/learnings/test-failures/2026-10-10-three-of-fourteen-kept-line-reasons-were-inherited-and-wrong-and-my-baseline-ran-outside-the-repo.md`; route-to-definition: one bullet in `plugins/soleur/skills/work/references/work-scratch-sandboxes.md` (disk headroom for panel sandboxes). Archival of the spec dir is deliberately deferred (the PR body cites `evidence.md` at its live path; S1 to S5 spec dirs also stay live).
+- Learning: `knowledge-base/project/learnings/test-failures/2026-10-10-three-of-fourteen-kept-line-reasons-were-inherited-and-wrong-and-my-baseline-ran-outside-the-repo.md`; route-to-definition: the disk-headroom lesson for panel sandboxes stays in the learning only (a plugin reference edit would fire the docs deploy and plugin release workflows for a tests-only PR). Archival of the spec dir is deliberately deferred (the PR body cites `evidence.md` at its live path; S1 to S5 spec dirs also stay live).
 - Remaining: soleur:ship (PR title/body, labels, CI incl. non-required infra-validation and validate-vector-config, merge queue), soleur:postmerge, tracker comment on #9217.
