@@ -2135,7 +2135,7 @@ _diff_edge_hit() {
         *) return 0 ;;
       esac
       _gt="${_g#$_gh}"
-      case "$_gt" in *\**) ;; *) return 0 ;; esac
+      case "$_gt" in */) return 0 ;; *\**) ;; *) return 0 ;; esac
       # Cheap head pre-check — no line under the head means no line can match.
       [[ "$_n" == *"${_NL}${_gh}"* ]] || return 1
       while IFS= read -r _line; do
@@ -2792,6 +2792,7 @@ _affected_add_edge() {
             */)
               _gt="${_g#$_gh}"
               case "$_gt" in
+                */) _p="^glob:${_p}" ;;     # tail ends / — no path can match it → verbatim
                 *\**)                       # tail carries a *
                   if _affected_probe d "$_gh"; then _p="^glob:${_g}"; else _p="^${_gh}"; fi ;;
                 *) _p="^glob:${_p}" ;;      # tail without * → malformed → verbatim

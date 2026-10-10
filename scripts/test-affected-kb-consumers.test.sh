@@ -282,12 +282,17 @@ def covers(edge, p):
                     or not head.endswith("/")
                     or head.startswith(("/", "./", "../"))
                     or "//" in head or "/./" in head or "/../" in head
-                    or "*" not in tail):
+                    or "*" not in tail or tail.endswith("/")):
                 return True
             if os.path.isdir(p):
                 # A dir ref is covered iff p/head nest — the glob's reach intersects it.
+                # This is an optimistic approximation: declared globs scope by
+                # extension-class, and a dir ref under the head may carry file
+                # classes the tail declines. Correct-by-construction today (the
+                # glob carriers' kb reads are confined to their tail extensions);
+                # a deeper head (`kb/legal/**.sh`) would need the tighter read.
                 return p.startswith(head) or head.startswith(p.rstrip("/") + "/")
-            return fnmatch.fnmatch(p, g)
+            return fnmatch.fnmatchcase(p, g)
         if e.endswith("/"):
             return p.startswith(e) or (p + "/") == e
         return p == e

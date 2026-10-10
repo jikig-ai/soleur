@@ -883,8 +883,8 @@ fi
 }
 
 run_M27() {
-EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
-row M27 "Guard 3: a glob: head that is not repo-relative (e.g. .., leading /) is malformed — static RED"
+EXPECTED_ASSERTIONS=6   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M27 "Guard 3: a glob: head that is not repo-relative, or a tail that can never match, is malformed — static RED"
 # The head classes the -d probe can resolve while no repo-relative diff line can
 # ever match: a dead edge that narrows while every static guard reads green (B1).
 new_sandbox m27a
@@ -901,6 +901,13 @@ run_lint "$SB"; rc=$?
 assert_red "M27b" "$rc"
 assert_has "M27b — a leading-/ head reds identically" \
   "declares glob: edge 'glob:/x/*.sh', its head is not a repo-relative prefix"
+new_sandbox m27c
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'x/*/'
+run_lint "$SB"; rc=$?
+assert_red "M27c" "$rc"
+assert_has "M27c — a /-terminated tail is well-formed but unmatchable" \
+  "declares glob: edge 'glob:x/*/', its tail ends in /"
 }
 
 # --- Row dispatch: bounded-parallel -----------------------------------------------------------

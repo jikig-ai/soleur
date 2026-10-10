@@ -1141,9 +1141,9 @@ cases=$((cases + 1))
 _rg3="$(derive_run "$FXG" '_affected_reset_edges
   for _e in "glob:a*/b" "glob:*.sh" "glob:'"${_KB}"'/?a" "glob:'"${_KB}"'/[a]" \
             "glob:../x/*.sh" "glob:/x/*.sh" "glob:a//b/*.sh" "glob:a/./b/*.sh" "glob:a/../b/*.sh" \
-            "glob:a\\b/*.sh" "glob:a b/*.sh" "glob:x:y/*.sh"; do _affected_add_edge "$_e"; done
+            "glob:a\\b/*.sh" "glob:a b/*.sh" "glob:x:y/*.sh" "glob:a/b/*/"; do _affected_add_edge "$_e"; done
   printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
-if [[ "$_rg3" == "^glob:glob:a*/b ^glob:glob:*.sh ^glob:glob:${_KB}/?a ^glob:glob:${_KB}/[a] ^glob:glob:../x/*.sh ^glob:glob:/x/*.sh ^glob:glob:a//b/*.sh ^glob:glob:a/./b/*.sh ^glob:glob:a/../b/*.sh ^glob:glob:a\\b/*.sh ^glob:glob:a b/*.sh ^glob:glob:x:y/*.sh" ]]; then
+if [[ "$_rg3" == "^glob:glob:a*/b ^glob:glob:*.sh ^glob:glob:${_KB}/?a ^glob:glob:${_KB}/[a] ^glob:glob:../x/*.sh ^glob:glob:/x/*.sh ^glob:glob:a//b/*.sh ^glob:glob:a/./b/*.sh ^glob:glob:a/../b/*.sh ^glob:glob:a\\b/*.sh ^glob:glob:a b/*.sh ^glob:glob:x:y/*.sh ^glob:glob:a/b/*/" ]]; then
   pass "Rg3: every metachar-bearing malformed shape mints ^glob:<entry verbatim> (charset + repo-relative head)"
 else
   fail "Rg3: got '${_rg3:0:600}'"

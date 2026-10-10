@@ -1139,6 +1139,7 @@ else
                     */)
                       _cgt="${_cg#$_cgh}"
                       case "$_cgt" in
+                        */) _cg_why="its tail ends in / — no path can match it" ;;
                         *\**) [[ -d "$REPO_ROOT/${_cgh%/}" ]] || _cg_why="its head dir ${_cgh} does not exist" ;;
                         *) _cg_why="its tail carries no *" ;;
                       esac
