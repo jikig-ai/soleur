@@ -81,6 +81,15 @@ need("installation/token" in str(last.get("run", "")) and "DELETE" in str(last.g
 import re
 need(len(steps) > 0, "g2:no-steps")
 BACKEND = "Extract backend credentials"
+def code_of(run):  # comment lines dropped, continuations joined: what the shell actually runs
+    return re.sub(r"\s*\\\n\s*", " ", re.sub(r"(?m)^\s*#.*$", "", run))
+TFSUB = r"(?:terraform|tofu)(?:\s+-\S+)*\s+"
+# Dangerous channels on every level: shell-startup and loader variables, and a replaced shell.
+BADENV = re.compile(r"^(BASH_ENV|ENV|PATH|SHELLOPTS|BASHOPTS|PS4|IFS|CDPATH|LD_[A-Z_]+|NODE_OPTIONS|GITHUB_ENV)$")
+need("defaults" not in doc and "defaults" not in job, "g2:defaults-shell")
+for st in steps:
+    if "shell" in st:
+        bad.append("g2:step-shell:%s" % st.get("name", "?"))
 GATE = "Gate planned required-check bindings (by value, pre-apply)"
 for st in steps:
     run, nm = str(st.get("run", "")), st.get("name", "?")
@@ -100,6 +109,8 @@ def env_keys(d):
     return [str(k) for k in ((d or {}).get("env") or {})]
 for where, keys in [("workflow", env_keys(doc)), ("job", env_keys(job))] + [("step:%s" % st.get("name", "?"), env_keys(st)) for st in steps]:
     for k in keys:
+        if BADENV.match(k):
+            bad.append("g2:env-dangerous:%s:%s" % (where, k))
         if k.startswith("TF_"):
             bad.append("g2:env-tf-channel:%s:%s" % (where, k))
         if k.startswith("DOPPLER_") and not where.startswith("step:"):
@@ -112,12 +123,24 @@ for st in steps:
         bad.append("g2:uses-not-allowed:%s" % u)
 # `-var` / `-var-file` / `-refresh=false` on any terraform plan, apply or import: an inline value or a stale plan.
 for st in steps:
-    for ln in re.sub(r"\s*\\\n\s*", " ", str(st.get("run", ""))).splitlines():
-        if re.search(r"terraform\s+(plan|apply|import)\b", ln) and re.search(r"\s-(var|var-file|refresh=false|target)\b", ln):
+    for ln in code_of(str(st.get("run", ""))).splitlines():
+        if re.search(TFSUB + r"(plan|apply|import)\b", ln) and re.search(r"\s--?(var|var-file|refresh=false|target)\b", ln):
             bad.append("g2:terraform-flag:%s" % st.get("name", "?"))
 bk = [st for st in steps if st.get("name") == BACKEND]
 bkrun = str(bk[0].get("run", "")) if len(bk) == 1 else ""
 need(len(bk) == 1 and bkrun.count("^[A-Za-z0-9/+=_.-]+$") == 2 and "=~" in bkrun and bkrun.index("=~") < bkrun.index('>> "$GITHUB_ENV"'), "g2:backend-shape-check")
+# The backend step may write exactly its two credentials to $GITHUB_ENV, and nothing else. The shape check's
+# EFFECT (it exits before any write) is executed further down, against both workflows' copies of the step.
+bkw = [l.strip() for l in code_of(bkrun).split("\n") if "GITHUB_ENV" in l]
+need(len(bkw) == 2 and all(re.fullmatch(r"printf 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=%s\\n' \"\$(KEY_ID|SECRET)\" >> \"\$GITHUB_ENV\"", l) for l in bkw) and "export " not in bkrun, "g2:backend-env-writes")
+# The tree-equals-main assertion must keep covering the gate's own inputs (a replay must not run a stale gate).
+TREE = "Assert the tree being applied is main's current tree"
+tr = [st for st in steps if st.get("name") == TREE]
+trcode = code_of(str(tr[0].get("run", ""))) if len(tr) == 1 else ""
+TREE_PATHS = ("$INFRA_DIR", "tests/scripts/lib/destroy-guard-filter.jq", "scripts/verify-ruleset-required-checks.sh",
+              "scripts/lib/canonicalize-required-status-checks.sh", "scripts/ci-required-ruleset-canonical-required-status-checks.json",
+              "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json")
+need(len(tr) == 1 and "git diff --quiet FETCH_HEAD" in trcode and all(x in trcode for x in TREE_PATHS), "g2:tree-paths")
 got = set(re.findall(r"doppler secrets get ([A-Za-z0-9_]+)", "\n".join(str(st.get("run", "")) for st in steps)))
 need(got == {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}, "g2:secrets-get-names=%s" % sorted(got))
 gi = [i for i, st in enumerate(steps) if st.get("name") == GATE]
@@ -131,7 +154,8 @@ if len(gi) == 1 and len(pi) == 1 and len(ai) == 1:
     ap = steps[ai[0]]
     need("continue-on-error" not in ap and "if" not in ap, "g2:apply-may-be-skipped-or-tolerated")
     need("terraform apply -auto-approve -input=false tfplan " in str(ap.get("run", "")), "g2:apply-not-the-gated-plan")
-    need(sum(1 for st in steps if "terraform apply" in re.sub(r"(?m)^\s*#.*$", "", str(st.get("run", "")))) == 1, "g2:apply-count")
+    need(sum(len(re.findall(TFSUB + r"apply\b", code_of(str(st.get("run", ""))))) for st in steps) == 1, "g2:apply-count")
+    need(len(re.findall(r"\b(?:terraform|tofu)\b", code_of(str(ap.get("run", ""))))) == 1, "g2:apply-step-body")
     need(gs.get("working-directory") == "${{ env.INFRA_DIR }}", "g2:gate-working-directory")
     need("continue-on-error" not in gs and "if" not in gs, "g2:gate-may-be-skipped")
     code = [l.strip() for l in re.sub(r"\s*\\\n\s*", " ", grun).splitlines() if l.strip() and not l.strip().startswith("#")]
@@ -299,6 +323,21 @@ row g2-uses-fetch-action "g2:uses-not-allowed" "      - name: Terraform init
       - name: Terraform init
 '
 row g2-plan-var-flag     "g2:terraform-flag"   "terraform plan -no-color -input=false -out=tfplan" "terraform plan -no-color -input=false -var=actions_integration_id=57789 -out=tfplan"
+row g2-apply-replan-in-step "g2:apply-step-body" 'terraform apply -auto-approve -input=false tfplan 2>&1 | tee' 'terraform plan --var=actions_integration_id=1 -out=tfplan; terraform apply -auto-approve -input=false tfplan 2>&1 | tee'
+row g2-chdir-apply-step  "g2:apply-count"     "      - name: Terraform init
+" '      - name: Other apply
+        run: terraform -chdir=infra/github apply -auto-approve
+      - name: Terraform init
+'
+row g2-job-bash-env      "g2:env-dangerous"    "    timeout-minutes: 10
+" "    timeout-minutes: 10
+    env:
+      BASH_ENV: /tmp/x.sh
+"
+row g2-backend-extra-env-write "g2:backend-env-writes" 'printf '"'"'AWS_SECRET_ACCESS_KEY=%s\n'"'"' "$SECRET" >> "$GITHUB_ENV"' 'printf '"'"'AWS_SECRET_ACCESS_KEY=%s\n'"'"' "$SECRET" >> "$GITHUB_ENV"
+          printf '"'"'BASH_ENV=/tmp/x\n'"'"' >> "$GITHUB_ENV"'
+row g2-tree-path-dropped "g2:tree-paths"       "            scripts/verify-ruleset-required-checks.sh scripts/lib/canonicalize-required-status-checks.sh
+" ""
 row g2-backend-unchecked "g2:backend-shape-check" 'if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then' 'if false; then'
 # Must-PASS: a harmless comment added to the real workflow leaves every pin satisfied.
 cp "$WF" "$T/m.yml"; printf '\n# harmless trailing comment\n' >> "$T/m.yml"
@@ -346,13 +385,15 @@ gate_rows() { # <script>  -> prints "ok|FAIL <name>" lines
     mkplan "$d/in" "$addr" "$can" "reverse" update;           chk "$cfg: rows reordered pass" 0 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "map(. + {extra:\"x\"})" update; chk "$cfg: extra provider fields pass" 0 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "." no-op;                  chk "$cfg: no-op plan equal to canonical passes" 0 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" update;  WANT_OUT='^::error title=required-check-bindings::.*no override|^- \{|^\+ \{' chk "$cfg: FIRST row rebound is RED, with annotation and rows" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[-1].integration_id = $REB" update; chk "$cfg: LAST row rebound is RED" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" update;  WANT_OUT='::error title=required-check-bindings::.*no override, by design.*workflow_dispatch' chk "$cfg: FIRST row rebound is RED, and the annotation says there is no override and how to recover" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ".[-1].integration_id = $REB" update; WANT_OUT='^- \{"context"' chk "$cfg: LAST row rebound is RED, the canonical-only row is printed with -" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" ".[0].context = \"renamed\"" update;   chk "$cfg: a context renamed is RED" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "del(.[0])" update;         chk "$cfg: a context dropped is RED" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" ". + [{context:\"extra\",integration_id:15368}]" update; chk "$cfg: a context added is RED" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" ".[0].integration_id = null" update;   chk "$cfg: a null integration_id is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" no-op;   chk "$cfg: a rebound under a no-op action is RED" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" no-op;   WANT_OUT='^\+ \{"context"' chk "$cfg: a rebound under a no-op action is RED, the plan-only row is printed with +" 1 - "$addr" "$can"
+    sed '0,/15368/s//15368.0/' "$can" > "$d/can"; mkplan "$d/in" "$addr" "$can" "." update
+    chk "$cfg: an id spelled 15368.0 equals 15368 by value" 0 - "$addr" "$d/can"
     local n i; n="$(jq length "$can")"
     for ((i = 0; i < n; i++)); do
       mkplan "$d/in" "$addr" "$can" ".[$i].integration_id = $REB" update; chk "$cfg: row $i rebound is RED" 1 - "$addr" "$can"
@@ -383,7 +424,7 @@ gate_rows() { # <script>  -> prints "ok|FAIL <name>" lines
   chk "a two-ruleset plan with an unrelated resource passes for ci" 0 - "$CI_ADDR" "$CI_CAN"
   chk "a two-ruleset plan with an unrelated resource passes for cla" 0 - "$CLA_ADDR" "$CLA_CAN"
   # The unmodified real capture (15 checks incl. a CodeQL row): its provider row shape is read, and it differs from the canonical.
-  cp "$FIX" "$d/in"; WANT_OUT='planned 15, canonical 23' chk "the real capture's row shape is read (exit 1, planned 15)" 1 - "$CI_ADDR" "$CI_CAN"
+  cp "$FIX" "$d/in"; WANT_OUT="planned 15, canonical $(jq length "$CI_CAN")" chk "the real capture's row shape is read (exit 1, planned 15)" 1 - "$CI_ADDR" "$CI_CAN"
   : > "$d/in"; WANT_OUT='required-check-gate-undecided' chk "empty stdin is exit 2" 2 - "$CI_ADDR" "$CI_CAN"
   chk "no arguments is exit 2" 2
 }
@@ -435,6 +476,43 @@ if cmp -s "$T/x/gate-step.sh" "$T/x/gate-step-open.sh"; then fail "H-gate-exec: 
 elif [[ "$(run_gate "$T/x/cirb" "$T/x/gate-step-open.sh")" == 0 ]]; then pass "H-gate-exec: a step with errexit off lets a rebound ci_required through (the executed rows can fail)"
 else fail "H-gate-exec: a step with errexit off still stopped the rebound plan (the executed rows are blind to it)"; fi
 
+# --- Guard 2d (#9362): the backend-credential step EXECUTED, in both workflows ---
+echo "--- Guard 2d: the backend-credential step, executed (apply and drift copies)"
+backend_run() { # <workflow file> <out script>
+  python3 - "$1" > "$2" <<'PY'
+import sys, yaml
+for j in yaml.safe_load(open(sys.argv[1]))["jobs"].values():
+    for st in j.get("steps") or []:
+        if st.get("name") == "Extract backend credentials":
+            print(st["run"]); raise SystemExit
+raise SystemExit("no such step")
+PY
+}
+run_backend() { # <script> <key id> <secret> -> rc ; the environment file lands in $T/x/ghenv
+  local rc=0; : > "$T/x/ghenv"
+  (cd "$T/x" && env -i PATH="$PATH" HOME="$T/x" GITHUB_ENV="$T/x/ghenv" AWS_ACCESS_KEY_ID="$2" AWS_SECRET_ACCESS_KEY="$3" \
+     bash --noprofile --norc -e "$1" > "$T/x/bout" 2>&1) || rc=$?
+  echo "$rc"
+}
+GOODK="AKIAEXAMPLE0123456789"; GOODS="synthetic/Secret+key=0123456789_.-"
+BADV=$'x\nTF_VAR_actions_integration_id=1'
+for wfn in apply:"$WF" drift:"$REPO_ROOT/.github/workflows/scheduled-terraform-drift.yml"; do
+  _n="${wfn%%:*}"; _f="${wfn#*:}"
+  if ! backend_run "$_f" "$T/x/backend-$_n.sh"; then fail "G2d: the $_n workflow has the backend step"; continue; fi
+  [[ "$(run_backend "$T/x/backend-$_n.sh" "$GOODK" "$GOODS")" == 0 && "$(wc -l < "$T/x/ghenv")" == 2 ]] \
+    && pass "G2d: $_n: a single-line credential pair is written (two lines)" || fail "G2d: $_n: a single-line credential pair is written (two lines)" "$(tail -2 "$T/x/bout")"
+  [[ "$(run_backend "$T/x/backend-$_n.sh" "$BADV" "$GOODS")" != 0 && ! -s "$T/x/ghenv" ]] \
+    && pass "G2d: $_n: a multi-line key id stops the step and writes nothing" || fail "G2d: $_n: a multi-line key id stops the step and writes nothing"
+  [[ "$(run_backend "$T/x/backend-$_n.sh" "$GOODK" "$BADV")" != 0 && ! -s "$T/x/ghenv" ]] \
+    && pass "G2d: $_n: a multi-line secret stops the step and writes nothing" || fail "G2d: $_n: a multi-line secret stops the step and writes nothing"
+  [[ "$(run_backend "$T/x/backend-$_n.sh" "$GOODK" "has space")" != 0 && ! -s "$T/x/ghenv" ]] \
+    && pass "G2d: $_n: a value with a space stops the step and writes nothing" || fail "G2d: $_n: a value with a space stops the step and writes nothing"
+  # Harness row: with the `exit 1` lines removed the same bad value must reach the environment file.
+  sed 's/^ *exit 1$/:/' "$T/x/backend-$_n.sh" > "$T/x/backend-$_n-open.sh"
+  run_backend "$T/x/backend-$_n-open.sh" "$BADV" "$GOODS" > /dev/null
+  [[ -s "$T/x/ghenv" ]] && pass "H-backend-$_n: without its exit the step writes the bad value (the rows can fail)" || fail "H-backend-$_n: without its exit the step still wrote nothing (the rows are blind)"
+done
+
 # --- the gated addresses are exactly the rulesets that carry required checks (a new one must be gated or the suite reddens) ---
 _gated="$(python3 - "$REPO_ROOT" <<'PY'
 import glob, re, sys
@@ -443,7 +521,7 @@ for f in glob.glob(sys.argv[1] + "/infra/github/*.tf"):
     t = re.sub(r"(?m)^\s*#.*$", "", open(f).read())
     for part in re.split(r'(?m)^resource "github_repository_ruleset" ', t)[1:]:
         nm = re.match(r'"([a-z_]+)"', part).group(1)
-        if "required_check" in part.split("\nresource ")[0]:
+        if "required_check" in re.split(r"(?m)^(?:resource|data|variable|locals|output|provider|terraform|moved|import|removed)\b", part)[0]:
             names.add(nm)
 print(" ".join(sorted(names)))
 PY
@@ -452,7 +530,7 @@ if [[ "$_gated" == "ci_required cla_required" ]]; then pass "G2c: the rulesets c
 else fail "G2c: the rulesets carrying required checks differ from the two the gate covers" "got [$_gated]; gate the new address in the workflow, the checker's want-map and a canonical"; fi
 
 # Floors (printf + exit, never through fail()): the control, the mutation rows, Guard 2 and Guard 1.
-MIN_ASSERTIONS=121
+MIN_ASSERTIONS=138
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi

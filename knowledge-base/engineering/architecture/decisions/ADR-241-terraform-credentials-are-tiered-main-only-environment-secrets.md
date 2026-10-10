@@ -1014,7 +1014,7 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
 - **Who can plant, and the replay window.** Writing `prd_terraform` is what the gate defends against; it does not defend against a
   PR that edits the `.tf` and the canonical together (CODEOWNERS and review own that). The tree-equals-main assertion now also covers
   the gate script, its projection library and both canonicals, so a replay of a post-merge run cannot use a stale gate. A pre-merge
-  apply run still replays the old workflow if re-run (GitHub allows it for 30 days); deleting those runs is the owner's call.
+  apply run still replays the old workflow if re-run (GitHub allows it for 30 days); deleting those runs is the owner's call. The same assertion has a fail-closed cost: the gate's inputs are not push paths, so a `.tf` apply that is queued or running when a canonical-only or gate-only PR merges sees a diff against `origin/main` and refuses; the `.tf` change then waits for a `workflow_dispatch`. Adding them to the push paths was rejected: it would make this change itself fire an apply on merge.
 - **Pins.** `tests/scripts/test-apply-github-infra-mint-shape.sh` pins both the absence of any Tier-A injection in the apply job and the gate
   (its position, its two invocations, its paths), and drives the script over plans built from a real `terraform show -json` capture. The
   script, the CLA canonical and the suite carry CODEOWNERS rows.
