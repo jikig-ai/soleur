@@ -15,6 +15,39 @@ requires_cpo_signoff: false
 
 # fix(infra): zot log shipper cap-exempts the real PatchBlobUpload error line
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10
+**Method:** the mechanical halt gates (4.6 user-brand, 4.7 observability, 4.8 PAT, 4.11 guard contract via
+`lint-guard-contract.py`, 4.12 scope check: one unfenced section) all pass; every cited issue/PR state and every cited rule id was
+verified live; and, instead of a broad agent fan-out (a 25-line classifier change on one file), the design was PROTOTYPED against a
+scratch copy of `apps/web-platform/infra/` (the repo tree is untouched) and measured. The four plan-review agents already supplied the
+independent reads.
+
+### Measured results from the prototype (scratch copy, not committed)
+
+- The edit as specified (jq field, `read -r` var, `local func="$2"` + rc-2 arm, call-site restructure, message arm removed) makes the
+  existing suite read `172 passed, 2 failed`; the 2 failures are exactly the T9 assertions on the retired message-prefix fixture,
+  confirming T9 belongs in the RED set and nothing else regresses.
+- Prototype T21 rows all PASS: S1 (real line under flood), S3 (exactly 8 func rows shipped, `exempt_cap` accounted), S4 (panic ships
+  behind 17 func rows), S6 (header-borne forgery capped at the ordinary cap), S7 (forged journald fragments capped, panic ships), S8
+  (plaintext + empty-func lines do not shift the record).
+- Mutation rc 2 -> rc 0 reddens S3 and S4, as the Guard Contract row 5 predicts.
+- The 9353 closing probe's own awk extracts a 28-line `is_cap_exempt` body and `\bfunc\b` matches 2 lines in it (the `local func`
+  binding and the `case "$func"`), so the probe goes PASS with the `func` variable name; with a bare `"$2"` it would not.
+- `registry-userdata-budget.sh --json`: stored 20,944 B -> **21,016 B (+72 B)**. That exceeds `REGISTRY_GZIP_BUDGET = 21_000`, so the
+  tripwire bump is REQUIRED (not conditional). Real headroom after the edit: 11,752 B under the 32,768 B cap, far from the 24,767 B
+  policy ceiling. Size the new constant at ~21,600 (measured 21,016 + ~500 B, the #8714 precedent), and record that the node-zlib
+  model in the vitest arm is a separate number checked in CI.
+
+### New considerations discovered
+
+- Phase 0.7-style skeleton ordering was not needed: the research fan-out completed in one pass and the plan was written once.
+- Expected RED set before implementation: T9 (two assertions), S1, S2, S3 and the raised T19 floor; S4-S8 are green-by-construction
+  guards (RED only under a named mutation), labelled as such.
+- Post-merge: the first stored size above is the figure the dispatcher's head-render gate will measure; it must stay under 32,768 B
+  (it does, by 11.7 KB).
+
 ## Overview
 
 The registry host's log shipper (`/usr/local/bin/zot-log-shipper.sh`, rendered from
@@ -199,9 +232,9 @@ the probes.
 - Hetzner cap 32,768 B; `registry-userdata-budget.sh --json` today: stored 20,944 B, headroom 11,824 B
   (measured in this planning run). Test tripwire `REGISTRY_GZIP_BUDGET = 21_000` in
   `plugins/soleur/test/cloud-init-user-data-size.test.ts`.
-- Estimated delta: +~70 raw B of code (jq field, read var, call arg, new case arm) minus the removed
-  arm (~45 B): net +20-40 B raw, ~+15-35 B gzipped. Likely fits in the ~56 B slack; MUST be measured, not
-  assumed. If the model exceeds 21,000, raise the constant to the measured value plus a small margin with
+- Measured by prototype (deepen pass): the specified edit stores 21,016 B (+72 B over 20,944), which is over the 21,000
+  tripwire, so the bump below is required. (Planning-time estimate was +15-35 B gzipped; the call-site restructure and
+  `local func` cost more than estimated.) Re-measure on the real edit. If the model exceeds 21,000, raise the constant to the measured value plus a small margin with
   a dated comment in the established style (precedent: 20_000 -> 21_000 in #8714). Do not touch the 8,000 B
   headroom policy.
 - Note the dispatcher's delta gate decides on RENDERED bytes: this PR is a real code change so it delivers.
