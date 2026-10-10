@@ -20,8 +20,8 @@ hasnt() { CHECKED=$((CHECKED + 1)); case "$2" in *"$3"*) bad "$1" "unexpected [$
 row() {
   local rule="-"
   [ "$2" != "-" ] && rule="hosted-destroy-ask:$2"
-  jq -nc --arg d "$1" --arg r "$rule" --arg repo "$3" \
-    '{dt:"2026-10-11 10:00:00.000000", raw:({message:({level:40,msg:"x",sec:true,decision:$d,ruleId:$r,repo:$repo}),source_kind:"app_container"}|tojson)}'
+  jq -nc --arg d "$1" --arg r "$rule" --arg repo "$3" --arg role "${4:-owner}" \
+    '{dt:"2026-10-11 10:00:00.000000", raw:({message:({level:40,msg:"x",sec:true,decision:$d,ruleId:$r,repo:$repo,approverRole:$role}),source_kind:"app_container"}|tojson)}'
 }
 rows_of() { local n="$1"; shift; local i; for ((i = 0; i < n; i++)); do row "$@"; done; }
 
@@ -84,6 +84,22 @@ out_rc 7d "$ROOT/s3"; check "7d, unknown-default 20 percent: TUNE" 5 "$RC"; has 
 out_rc 7d "$ROOT/s4"; check "7d, keyword plus raw 30 percent: TUNE" 5 "$RC"; has "...names it" "$OUT" "TUNE:keyword_plus_raw(3/10)"
 out_rc 7d "$ROOT/s4"; has "the same rows are NOT a 24h revert" "$(run 24h "$ROOT/s4")" "NOT YET"
 
+# --- a result that cannot be trusted is CANNOT ESTABLISH, never a quiet window
+printf '%s\n' '{"error":"unauthorized"}' > "$ROOT/errbody"
+out_rc 24h "$ROOT/errbody"; check "an error body with exit 0 is not a quiet window: exit 3" 3 "$RC"
+row destroy-ask git-force-default r/r > "$ROOT/one"; yes "$(cat "$ROOT/one")" | head -5000 > "$ROOT/full"
+out_rc 24h "$ROOT/full"; check "a result at the 5000-row limit is truncated: exit 3" 3 "$RC"; has "...says truncated" "$OUT" "truncated"
+{ rows_of 3 destroy-ask-approved git-force-default alice/app; } > "$ROOT/o1"
+out_rc 24h "$ROOT/o1"; check "outcome lines with no ask lines: exit 3" 3 "$RC"
+{ rows_of 1 destroy-ask git-force-default alice/app; rows_of 2 destroy-ask-approved git-force-default alice/app; } > "$ROOT/o2"
+out_rc 24h "$ROOT/o2"; check "more outcomes than asks: exit 3" 3 "$RC"
+
+# --- every repo is evaluated, not only the busiest
+{ rows_of 21 destroy-ask git-force-implicit a/a; rows_of 40 destroy-ask git-force-default b/b; rows_of 40 destroy-ask terraform-destroy b/b; rows_of 30 destroy-ask git-force-implicit b/b; } > "$ROOT/m1"
+out_rc 24h "$ROOT/m1"; check "24h, the busiest repo is spread but a smaller qualifying repo is all one rule: trips" 5 "$RC"
+{ rows_of 12 destroy-ask git-force-default alice/app; rows_of 2 destroy-ask-approved git-force-default alice/app member; row destroy-ask-approved git-force-default alice/app owner; } > "$ROOT/m2"
+out_rc 24h "$ROOT/m2"; has "member approvals are reported" "$OUT" "member_approvals=2"; has "implicit-force share is reported" "$OUT" "implicit_force=0"
+
 # --- exit vocabulary and xtrace
 for f in r1 r2 r3 s1 s3 drift empty; do
   w=24h; case "$f" in s*) w=7d ;; esac
@@ -94,8 +110,11 @@ OUT="$(STUB_ROWS="$ROOT/r1" STUB_ARGS="$ROOT/args" DESTROY_ASK_QUERY_SCRIPT="$QU
 check "xtrace with a live credential: refuses (78)" 78 "$RC"
 
 # Anti-vacuity floor: a literal directly above its `if`, reported by printf + exit, never through the helpers.
-MIN_CHECKS=40
-if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then printf 'HALT: only %s checks ran, floor %s\n' "$CHECKED" "$MIN_CHECKS"; exit 1; fi
+MIN_CHECKS=49
+if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, floor %s\n' "$CHECKED" "$MIN_CHECKS" >&2
+  exit 1
+fi
 if [ $((PASS + FAIL)) -ne "$CHECKED" ]; then printf 'HALT: pass+fail (%s) != checks (%s)\n' "$((PASS + FAIL))" "$CHECKED"; exit 1; fi
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -428,6 +428,19 @@ describe("telemetry (AC-8, CLO C5)", () => {
     expect(mockWarnSilentFallback.mock.calls.filter((c) => c[1]?.op === "destroy-classifier-near-miss").length).toBeGreaterThanOrEqual(1);
   });
 
+  test("the lane's own modules have no telemetry sink the mocked scan cannot see (console, stdout, network)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    for (const f of ["destroy-ask-lane.ts", "destroy-ask-classifier.ts", "resolve-protected-branches.ts"]) {
+      const src = readFileSync(join(__dirname, "..", "server", f), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      for (const sink of [/\bconsole\s*\./, /\bprocess\.(stdout|stderr)\b/, /\bfetch\s*\(/, /\bXMLHttpRequest\b/, /\bnavigator\.sendBeacon\b/]) {
+        expect(src, `${f} must not contain ${sink}`).not.toMatch(sink);
+      }
+    }
+  });
+
   test("telemetry sources are enumerated: the scan above covers every emitter in the lane", async () => {
     const { readdirSync, readFileSync } = await import("node:fs");
     const { join } = await import("node:path");

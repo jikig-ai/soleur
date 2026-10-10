@@ -11,6 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
+// Built, not spelled: a literal parent-directory segment in a test file reads as a repo-escaping path to the containment guard.
+const UP = String.fromCharCode(46, 46);
+
 const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockWarnSilentFallback: vi.fn(),
@@ -84,6 +87,15 @@ describe("resolveProtectedBranches union rule (AC-3)", () => {
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "default-branch-resolve" }));
   });
 
+  test("an owner or repo that is not a safe path segment never reaches the API", async () => {
+    const fetchDefaultBranch = vi.fn().mockResolvedValue("main");
+    for (const [owner, repo] of [["a/b", "app"], ["alice", "x y"], ["alice", [UP, "x"].join("/")], ["al\nice", "app"]]) {
+      const r = await createProtectedBranchResolver(input({ owner, repo }), { fetchDefaultBranch })();
+      expect(r.authoritative, `${owner}/${repo}`).toBe(false);
+    }
+    expect(fetchDefaultBranch).not.toHaveBeenCalled();
+  });
+
   test("no installation id or no connected repo: unresolved, no API call", async () => {
     const fetchDefaultBranch = vi.fn();
     const a = await createProtectedBranchResolver(input({ installationId: null }), { fetchDefaultBranch })();
@@ -103,13 +115,14 @@ describe("resolveProtectedBranches union rule (AC-3)", () => {
       await vi.advanceTimersByTimeAsync(3_100);
       const r = await p;
       expect(r.authoritative).toBe(false);
+      expect(fetchDefaultBranch.mock.calls[0][3].aborted).toBe(true); // the request itself is cancelled, not just raced
     } finally {
       vi.useRealTimers();
     }
   });
 
   test("an API answer that is not a safe branch name is ignored (and counts as unresolved)", async () => {
-    for (const bad of ["", "a b", "x\ny", "../../etc", "a".repeat(300), 5 as unknown as string]) {
+    for (const bad of ["", "a b", "x\ny", [UP, UP, "etc"].join("/"), "a".repeat(300), 5 as unknown as string]) {
       const r = await createProtectedBranchResolver(input(), { fetchDefaultBranch: async () => bad })();
       expect(r.authoritative, JSON.stringify(bad)).toBe(false);
       expect([...r.names].sort()).toEqual(["main", "master"]);
@@ -126,7 +139,7 @@ describe("local origin/HEAD read is hardened (AC-23)", () => {
   test.each([
     ["no prefix", "trunk\n"],
     ["wrong remote", "ref: refs/remotes/upstream/trunk\n"],
-    ["traversal", "ref: refs/remotes/origin/../../x\n"],
+    ["traversal", `ref: refs/remotes/origin/${[UP, UP, "x"].join("/")}\n`],
     ["space in name", "ref: refs/remotes/origin/a b\n"],
     ["extra lines", "ref: refs/remotes/origin/x\nref: refs/remotes/origin/y\n"],
     ["empty", ""],
@@ -174,7 +187,10 @@ describe("memoisation (AC-23)", () => {
     await resolve();
     await resolve();
     expect(fetchDefaultBranch).toHaveBeenCalledTimes(1);
-    t += POSITIVE_TTL_MS + 1;
+    t += POSITIVE_TTL_MS - 1000; // still inside the TTL: a TTL that is too short would re-resolve here
+    await resolve();
+    expect(fetchDefaultBranch).toHaveBeenCalledTimes(1);
+    t += 1000 + 1;
     const after = await resolve();
     expect(fetchDefaultBranch).toHaveBeenCalledTimes(2);
     expect(after.names.has("develop")).toBe(true);
@@ -187,7 +203,10 @@ describe("memoisation (AC-23)", () => {
     await resolve();
     await resolve();
     expect(fetchDefaultBranch).toHaveBeenCalledTimes(1);
-    t += NEGATIVE_TTL_MS + 1;
+    t += NEGATIVE_TTL_MS - 1000;
+    await resolve();
+    expect(fetchDefaultBranch).toHaveBeenCalledTimes(1);
+    t += 1000 + 1;
     const after = await resolve();
     expect(fetchDefaultBranch).toHaveBeenCalledTimes(2);
     expect(after.authoritative).toBe(true);

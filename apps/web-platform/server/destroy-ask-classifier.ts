@@ -558,7 +558,9 @@ async function analyzeGit(args: Words, words: Words, lazy: Lazy): Promise<Destro
   let implicit = refspecs.length === 0;
   for (const r of refspecs) {
     const spec = r.startsWith("+") ? r.slice(1) : r;
-    const colon = spec.lastIndexOf(":");
+    // A colon inside `${B:-main}` / `$(…:…)` belongs to the expansion, not to the src:dst split: mask those groups first.
+    const masked = spec.replace(/\$\{[^}]*\}|\$\([^)]*\)/g, (m) => "\0".repeat(m.length));
+    const colon = masked.lastIndexOf(":");
     const dest = colon < 0 ? spec : spec.slice(colon + 1);
     const isDel = deleteSpec(r);
     if (dest === "") {

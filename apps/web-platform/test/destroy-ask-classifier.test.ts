@@ -186,3 +186,51 @@ describe("destroy near-miss", () => {
     expect(destroyNearMiss("git push origin feat-x")).toBeNull();
   });
 });
+
+// Set-member pins (test-design review, #9776): each member of a classifier set is pinned by behaviour, so deleting one
+// member, or adding a wrapper to the non-executing list, turns a named row red.
+describe("destroy-ask classifier — set members", () => {
+  const FORCE_MAIN = "git push -f origin main";
+  const ruleOf = async (cmd: string) => (await classifyDestroyFamily(cmd, resolverFor({}).resolve))?.ruleId.slice(DESTROY_RULE_PREFIX.length) ?? null;
+
+  test.each(["env", "time", "nohup", "command", "timeout 5", "nice", "doas", "exec", "xargs", "sudo", "watch", "stdbuf -o0", "setsid", "busybox", "flock /tmp/l", "parallel", "builtin", "ssh host", "docker run x", "nsenter -t 1"])(
+    "wrapper `%s` does not hide a force-push to the default branch",
+    async (w) => {
+      expect(await ruleOf(`${w} ${FORCE_MAIN}`), w).toBe("git-force-default");
+    },
+  );
+
+  test.each(["sh", "bash", "zsh", "dash", "ksh", "ash"])("shell `%s -c` is unwrapped", async (sh) => {
+    expect(await ruleOf(`${sh} -c '${FORCE_MAIN}'`), sh).toBe("git-force-default");
+  });
+
+  const NON_EXEC_WORDS = [
+    "echo", "printf", "cat", "grep", "egrep", "fgrep", "rg", "ag", "man", "less", "more", "head", "tail", "ls", "cd", "pushd", "popd",
+    "mkdir", "cp", "mv", "touch", "wc", "sort", "uniq", "diff", "cmp", "stat", "file", "which", "whereis", "type", "test", "[",
+    "basename", "dirname", "realpath", "readlink",
+  ];
+  test.each(NON_EXEC_WORDS)("`%s` only names its arguments: a destroy-shaped argument is not a command", async (w) => {
+    expect(await ruleOf(`${w} ${FORCE_MAIN}`), w).toBeNull();
+  });
+
+  test.each(["0", "f", "F", "false", "FALSE", "False"])("terraform apply -destroy=%s is an apply, not a destroy", async (v) => {
+    expect(await ruleOf(`terraform apply -destroy=${v}`), v).toBeNull();
+  });
+  test.each(["true", "1", "yes", "TRUE"])("terraform apply -destroy=%s destroys", async (v) => {
+    expect(await ruleOf(`terraform apply -destroy=${v}`), v).toBe("terraform-destroy");
+  });
+
+  test.each(["header", "jq", "template", "hostname", "cache", "preview"])("gh api --%s consumes its value, so the endpoint is still read", async (o) => {
+    expect(await ruleOf(`gh api --${o} val -X DELETE repos/o/r/git/refs/heads/main`), o).toBe("gh-ref-delete-default");
+  });
+  test("gh api -q consumes its value", async () => {
+    expect(await ruleOf("gh api -q .x -X DELETE repos/o/r/git/refs/heads/main")).toBe("gh-ref-delete-default");
+  });
+
+  test.each(["receive-pack", "exec", "push-option"])("git push --%s takes a separate value that is not the remote", async (o) => {
+    expect(await ruleOf(`git push -f --${o} x origin`), o).toBe("git-force-implicit");
+  });
+  test("git push --repo takes a separate value that is not a refspec", async () => {
+    expect(await ruleOf("git push -f --repo r")).toBe("git-force-implicit");
+  });
+});

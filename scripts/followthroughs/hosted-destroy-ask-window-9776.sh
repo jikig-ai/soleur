@@ -13,13 +13,15 @@
 # The per-call lines (`autonomous-bypass`, `user-approved`) are pino INFO and the app-container shipper drops INFO (WARN
 # and above only, betterstack-log-query.md), so the denominator is not in the stored telemetry. The proxy used here is
 # the share of ONE REPO's ASKS that one rule accounts for, behind a minimum-asks floor; it is a tripwire for "one rule is
-# the whole ask stream", not the ruled metric, and the human reading an ACTION REQUIRED reads the Sentry
-# `hosted-destroy-ask` rate for the real one. Outcome lines (approved, rejected, expired) are shipped at WARN for the
-# same reason. Near-miss events are Sentry-only and are not read here.
+# the whole ask stream", not the ruled metric. The ruled metric is NOT MEASURED anywhere (no Sentry rate stands in for
+# it: the Sentry events are also capped per context). Outcome lines (approved, rejected, expired) are shipped at WARN for
+# the same reason. Near-miss events are Sentry-only and are not read here. LIVENESS is not checked either: a lane that
+# stopped emitting reads as a quiet window (the dev probe, CLO C9, is the liveness check).
 #
 # NOTIFY-ONLY probe: nothing here exits 0 or 1 (the sweeper's TRANSIENT sub-vocabulary, followthrough-convention.md):
 #   2 = NOT YET           no threshold tripped (or no ask rows: a quiet window is expected at low volume)
-#   3 = CANNOT ESTABLISH  bad argument, missing credential, failed query, or a stored-shape drift
+#   3 = CANNOT ESTABLISH  bad argument, missing credential, failed query, an unparseable or truncated result, outcome
+#                         lines with no matching ask lines, or a stored-shape drift
 #   5 = ACTION REQUIRED   a revert or tune threshold tripped, or the clean 7d measurement is ready to record
 #  78 = xtrace refusal while a credential is set (#7797)
 #
@@ -52,6 +54,7 @@ readonly STORM_SHARE_PCT=25
 readonly UNKNOWN_DEFAULT_PCT=10
 readonly KEYWORD_RAW_PCT=25
 readonly MARKER="destroy-ask"
+readonly ROW_LIMIT=5000
 
 WINDOW=""
 while [ $# -gt 0 ]; do
@@ -79,7 +82,7 @@ for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PAS
   fi
 done
 
-OUT="$(bash "$QUERY" --since "$WINDOW" --grep "$MARKER" --limit 5000 2>&1)"
+OUT="$(bash "$QUERY" --since "$WINDOW" --grep "$MARKER" --limit "$ROW_LIMIT" 2>&1)"
 RC=$?
 if (( RC != 0 )); then
   echo "CANNOT ESTABLISH: the Better Stack query exited $RC (output withheld — may contain credentials)"
@@ -87,14 +90,27 @@ if (( RC != 0 )); then
 fi
 
 # One jq pass: decode `raw`, require the pino object under `.message` with a `decision` that starts with the marker.
-# Output: decision <TAB> ruleId <TAB> repo (a sentinel, never empty: tab is IFS whitespace).
+# Output: decision <TAB> ruleId <TAB> repo <TAB> approverRole (sentinels, never empty: tab is IFS whitespace).
 ROWS="$(printf '%s\n' "$OUT" \
   | jq -R -r --arg m "$MARKER" '
       fromjson? | (.raw // empty | fromjson? | .message | select(type == "object")) as $p
       | select(($p.decision // "") | startswith($m))
       | select(($p.level // 40) >= 40)
-      | "\($p.decision)\t\($p.ruleId // "-")\t\($p.repo // "-")"' 2>/dev/null \
+      | "\($p.decision)\t\($p.ruleId // "-")\t\($p.repo // "-")\t\($p.approverRole // "-")"' 2>/dev/null \
   | LC_ALL=C sort || true)"
+
+# A body that is not stored rows (an error object with exit 0, an HTML page) must not read as a quiet window, and a
+# result at the row limit is truncated: either way the counts below would describe the wrong population.
+OUT_LINES="$(printf '%s\n' "$OUT" | grep -c . || true)"
+DECODABLE="$(printf '%s\n' "$OUT" | jq -R -r 'fromjson? | select(type == "object" and has("raw")) | 1' 2>/dev/null | grep -c . || true)"
+if (( OUT_LINES > 0 && DECODABLE == 0 )); then
+  echo "CANNOT ESTABLISH: the Better Stack query returned ${OUT_LINES} line(s) and none is a stored row (output withheld)."
+  exit 3
+fi
+if (( OUT_LINES >= ROW_LIMIT )); then
+  echo "CANNOT ESTABLISH: the result reached the ${ROW_LIMIT}-row limit, so the window is truncated and the counts are not trustworthy."
+  exit 3
+fi
 
 TOTAL="$(printf '%s' "$ROWS" | grep -c . || true)"
 MENTIONS="$(printf '%s\n' "$OUT" | grep -c "$MARKER" || true)"
@@ -113,22 +129,28 @@ ASKS="$(count destroy-ask)"
 APPROVED="$(count destroy-ask-approved)"
 REJECTED="$(count destroy-ask-rejected)"
 EXPIRED="$(count destroy-ask-expired)"
+OUTCOMES=$(( APPROVED + REJECTED + EXPIRED ))
+if (( ASKS == 0 && OUTCOMES > 0 )) || (( OUTCOMES > ASKS )); then
+  echo "CANNOT ESTABLISH: ${OUTCOMES} outcome line(s) against ${ASKS} ask line(s): ask lines are missing from the stored telemetry, so every share below would be wrong."
+  exit 3
+fi
+MEMBER_APPROVALS="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "destroy-ask-approved" && $4 == "member"' | grep -c . || true)"
 rule_asks() { printf '%s\n' "$ROWS" | awk -F'\t' -v r="hosted-destroy-ask:$1" '$1 == "destroy-ask" && $2 == r' | grep -c . || true; }
 CLASSIFIER_ERRORS="$(rule_asks classifier-error)"
 UNKNOWN_DEFAULT="$(rule_asks git-push-unknown-default)"
+IMPLICIT_FORCE="$(rule_asks git-force-implicit)"
 KEYWORD_RAW=$(( $(rule_asks fail-closed-keyword) + $(rule_asks raw-scan) ))
 
-# Per-repo storm proxy: the repo with the most asks, and the largest single-rule share of that repo's asks.
-TOP="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "destroy-ask" {n[$3]++; r[$3 SUBSEP $2]++}
-  END {best=""; bn=0; for (k in n) if (n[k] > bn) {bn=n[k]; best=k}
-       m=0; for (j in r) {split(j, a, SUBSEP); if (a[1] == best && r[j] > m) m=r[j]}
-       printf "%d\t%d\n", bn, m}')"
+# Per-repo storm proxy, over EVERY repo (not only the busiest): for each repo with at least MIN_REPO_ASKS asks, the
+# largest single-rule share of its asks. TOP_* is the worst qualifying repo; zero when none qualifies.
+TOP="$(printf '%s\n' "$ROWS" | awk -F'\t' -v min="$MIN_REPO_ASKS" '$1 == "destroy-ask" {n[$3]++; r[$3 SUBSEP $2]++}
+  END {wn=0; ws=0
+       for (j in r) {split(j, a, SUBSEP); if (n[a[1]] >= min) {sh=int(r[j] * 100 / n[a[1]]); if (sh > ws || (sh == ws && n[a[1]] > wn)) {ws=sh; wn=n[a[1]]}}}
+       printf "%d\t%d\n", wn, ws}')"
 TOP_REPO_ASKS="${TOP%%$'\t'*}"
-TOP_RULE_ASKS="${TOP##*$'\t'}"
-TOP_SHARE=0
-(( TOP_REPO_ASKS > 0 )) && TOP_SHARE=$(( TOP_RULE_ASKS * 100 / TOP_REPO_ASKS ))
+TOP_SHARE="${TOP##*$'\t'}"
 
-echo "hosted destroy-ask window ${WINDOW}: asks=${ASKS} approved=${APPROVED} rejected=${REJECTED} expired=${EXPIRED} classifier_errors=${CLASSIFIER_ERRORS} unknown_default=${UNKNOWN_DEFAULT} keyword_plus_raw=${KEYWORD_RAW} top_repo_asks=${TOP_REPO_ASKS} top_rule_share_pct=${TOP_SHARE}"
+echo "hosted destroy-ask window ${WINDOW}: asks=${ASKS} approved=${APPROVED} rejected=${REJECTED} expired=${EXPIRED} classifier_errors=${CLASSIFIER_ERRORS} unknown_default=${UNKNOWN_DEFAULT} keyword_plus_raw=${KEYWORD_RAW} top_repo_asks=${TOP_REPO_ASKS} top_rule_share_pct=${TOP_SHARE} implicit_force=${IMPLICIT_FORCE} member_approvals=${MEMBER_APPROVALS}"
 
 TRIPPED=""
 if [[ "$WINDOW" == "24h" ]]; then

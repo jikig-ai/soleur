@@ -1569,6 +1569,27 @@
    "nearMiss": true,
    "note": "PR body containing the word destroy",
    "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin ${B:-main}",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: a colon inside a parameter expansion is not the src:dst split; the destination is unknowable, fail toward ask"
+  },
+  {
+   "cmd": "git push --force origin ${X:+a:b}",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: a colon inside a parameter expansion is not the src:dst split; the destination is unknowable, fail toward ask"
+  },
+  {
+   "cmd": "git push -f origin HEAD:${BR:-main}",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: a colon inside a parameter expansion is not the src:dst split; the destination is unknowable, fail toward ask"
   }
  ]
 }

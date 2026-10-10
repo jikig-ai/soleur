@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2015  # `A && B || C` is the row idiom; the anchors live in destroy-ask-mutants.json and are LITERAL text, never expanded
-# Guard 1 and Guard 2 of the #9776 plan, mutation half (plan "Guard Contract"; ADR-282):
+# Guard 1 and Guard 2 of the #9776 plan, mutation half (plan "Guard Contract"; ADR-284):
 # anchor-asserted textual mutants of the hosted must-ask lane, applied to a COPY of the app tree, each judged by ONE
 # targeted vitest file (never the full battery). The mutant table is test/fixtures/destroy-ask-mutants.json.
 #
@@ -63,6 +63,7 @@ if [ $((PASS - p0)) -ne 1 ] || [ $((FAIL - f0)) -ne 1 ]; then printf 'HALT: the 
 PASS=$p0 FAIL=$f0
 
 SB="$(mktemp -d "${TMPDIR:-/var/tmp}/destroy-ask-mut.XXXXXXXX")" || exit 2
+[[ "$SB" == /* ]] || exit 2
 cleanup() { rm -rf "$SB"; }
 trap cleanup EXIT
 PRISTINE="$SB/.pristine"
@@ -241,9 +242,19 @@ ELAPSED=$(( $(date +%s) - START ))
 [ "$ELAPSED" -le "$WALL_BUDGET_S" ] || printf '[WARN] wall time %ss exceeds the %ss budget (a slow runner is not a defect)\n' "$ELAPSED" "$WALL_BUDGET_S"
 printf '\nmutants selected=%s killed=%s equivalent-survivors=%s unresolved=%s; checks=%s pass=%s fail=%s; %ss\n' "$SELECTED" "$KILLED" "$SURVIVED_EQ" "$UNRESOLVED" "$CHECKED" "$PASS" "$FAIL" "$ELAPSED"
 
+# A --only run is a partial battery: it has its own verdict and never reaches the full-run floor below.
+if [ -n "$ONLY" ]; then
+  if [ "$UNRESOLVED" -gt 0 ]; then exit 3; fi
+  if [ "$FAIL" -gt 0 ]; then exit 1; fi
+  exit 0
+fi
+
 # Anti-vacuity: the floor is a literal directly above its `if`, and reported by printf + exit, never through ok/bad.
 MIN_CHECKS=95
-if [ -z "$ONLY" ] && [ "$CHECKED" -lt "$MIN_CHECKS" ]; then printf 'HALT: only %s checks ran, floor %s: the battery is vacuous\n' "$CHECKED" "$MIN_CHECKS"; exit 1; fi
+if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, floor %s: the battery is vacuous\n' "$CHECKED" "$MIN_CHECKS" >&2
+  exit 1
+fi
 if [ $((PASS + FAIL)) -lt "$CHECKED" ]; then printf 'HALT: pass+fail (%s) is below the checks counted (%s)\n' "$((PASS + FAIL))" "$CHECKED"; exit 1; fi
 if [ "$UNRESOLVED" -gt 0 ]; then exit 3; fi
 if [ "$FAIL" -gt 0 ]; then exit 1; fi
