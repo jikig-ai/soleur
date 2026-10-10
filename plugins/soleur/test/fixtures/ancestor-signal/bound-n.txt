@@ -1,0 +1,7 @@
+# fixture data, never executed: a bound written as the n form; one W, bounded=no (a presence or emptiness test is not a comparison with the walk)
+[ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || exit 0
+p=$1; top=""
+while [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

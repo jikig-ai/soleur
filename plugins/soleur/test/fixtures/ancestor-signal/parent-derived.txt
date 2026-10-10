@@ -1,0 +1,4 @@
+# fixture data, never executed: a parent pid held in a variable then killed; one P (the kill line)
+shim=$PPID
+[ -n "${SOLEUR_TIMEOUT_BIN:-}" ] && shim=$(ps -o ppid= -p "$PPID" | tr -d " ")
+kill -9 "$shim" 2>/dev/null

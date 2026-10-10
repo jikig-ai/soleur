@@ -1,0 +1,8 @@
+# fixture data, never executed: the bound token only in an echo and a printf; must read bounded=no
+echo "bound at $SOLEUR_TEST_SUITE_PID != x exit"
+printf "%s\n" "$SOLEUR_TEST_SUITE_PID -ne 0 return"
+p=$1; top=""
+while [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

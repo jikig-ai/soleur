@@ -1,0 +1,3 @@
+# fixture data, never executed: the parent pid taken through a nested command substitution; one P
+par=$(ps -p $(cat "$f") -o ppid= | tr -d ' ')
+kill -9 $par

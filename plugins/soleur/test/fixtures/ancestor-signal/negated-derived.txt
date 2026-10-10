@@ -1,0 +1,3 @@
+# fixture data, never executed: the parent group through a negated derived variable; one P
+up=$PPID
+kill -9 -$up
