@@ -4,7 +4,7 @@
 # Runs the env-gated vitest integration suites that otherwise skip on EVERY run
 # while reporting green (#9855 PR 2): a `describe.skipIf(!process.env.<GATE>)`
 # suite whose gate no CI job ever sets passes vacuously forever. Thirteen files
-# across eight gates ran nowhere before this file existed.
+# across eight gates skipped on every run before this file existed.
 #
 # Why GitHub Actions and not Inngest (ADR-033 prefers Inngest crons; the
 # new-scheduled-cron-prefer-inngest hook requires this justification + the
@@ -46,9 +46,13 @@ jobs:
     runs-on: ubuntu-latest
     # Job ceiling DOMINATES THE SUM of step ceilings (the repo's timeout rule):
     # ~8 min setup+apply + ~4 min max mutex wait + 8 × timeout-minutes:6 suite
-    # steps ≈ 60. A STEP timeout is a step failure the filer reports; a job
-    # timeout records `cancelled` and cannot report in-band.
-    timeout-minutes: 60
+    # steps ≈ 60, plus ~1 min of aggregate/filer/heartbeat tail — 70 leaves
+    # real headroom for the all-suites-timeout night the filer exists for.
+    # A STEP timeout is a step failure the filer reports; a job timeout
+    # records `cancelled` and cannot report in-band. Keep timeout-minutes,
+    # the per-step ceilings, and DEV_SUITE_MUTEX_HOLD_S coupled (the mutex
+    # script requires HOLD_S > job timeout).
+    timeout-minutes: 70
     concurrency:
       group: dev-supabase-${{ github.ref }}
       cancel-in-progress: false
@@ -99,7 +103,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
           DEV_SUITE_MUTEX_IDENTITY: di-${{ github.run_id }}-${{ github.ref_name }}
-          DEV_SUITE_MUTEX_HOLD_S: "3900"
+          DEV_SUITE_MUTEX_HOLD_S: "4500"
         run: |
           set -uo pipefail
           doppler run -p soleur -c dev_scheduled -- \
@@ -116,8 +120,12 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
         run: |
           set -uo pipefail
+          # $GITHUB_WORKSPACE, not a relative path: plugins/ is repo-root-only
+          # and this step runs from apps/web-platform — a relative
+          # `plugins/...` can never resolve and silently hit the `||` arm on
+          # every run (#9947 review).
           doppler run -p soleur -c dev_scheduled -- \
-            bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed \
+            bun "$GITHUB_WORKSPACE/plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts" seed \
             || echo "::warning::bot-fixture.ts seed failed — migrations will degrade gracefully"
 
       # Live-state guards (not PR-unmerged-apply artifacts): on a poisoned
@@ -153,7 +161,14 @@ jobs:
       # PR-context drift classes the probe catches cannot originate here.
       # Residual drift this leg leaves is caught unattributed by
       # cron-dev-migration-drift's 6h fire; that is the detection layer.
+      # id: worm is the substrate gate for every suite step below: it is the
+      # LAST step of the mutex+migrations chain, so `steps.worm.outcome ==
+      # 'success'` implies the whole substrate ran. Gating suites on it is
+      # load-bearing — `!cancelled()` alone would let suites run UN-MUTEXED
+      # after an acquire timeout, executing dev traffic while the real lock
+      # holder is mid-run (the exact class the mutex exists to prevent).
       - name: Preflight WORM-vs-cascade contradiction check
+        id: worm
         working-directory: apps/web-platform
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
@@ -167,15 +182,18 @@ jobs:
       # without log-parsing; (b) process isolation — a hard crash in one
       # vitest invocation loses the remaining files' results entirely.
       # `if: !cancelled()` keeps later gates running after an early red so
-      # one failure does not starve the night's evidence. timeout-minutes:6
-      # per step: a hung suite is a step FAILURE (reported), never a job
-      # cancel (unreportable). `--project unit` only is correct — explicit
-      # file lists, zero gated files in test/repo-wide-suites.ts; a future
-      # repo-wide gated file fails loudly and the lint-integration-env-gates
-      # sentinel flags it uncovered at lint time.
+      # one failure does not starve the night's evidence; the steps.worm
+      # conjunction additionally requires the mutex+migrations chain to have
+      # run (a substrate failure skips the suites rather than running them
+      # un-mutexed). timeout-minutes:6 per step: a hung suite is a step
+      # FAILURE (reported), never a job cancel (unreportable). `--project
+      # unit` only is correct — explicit file lists, zero gated files in
+      # test/repo-wide-suites.ts today (verified 2026-10-10; a repo-wide
+      # gated file would need its own leg — the sentinel is token-based and
+      # cannot see project membership).
       - name: Run SUPABASE_DEV_INTEGRATION suites
         id: supabase-dev
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -195,7 +213,7 @@ jobs:
 
       - name: Run WORKTREE_LEASE_INTEGRATION_TEST suites
         id: worktree-lease
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -210,7 +228,7 @@ jobs:
 
       - name: Run ACQUIRE_SLOT_WS_INTEGRATION_TEST suites
         id: acquire-slot
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -225,7 +243,7 @@ jobs:
 
       - name: Run BYOK_INTEGRATION_TEST suites
         id: byok
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -240,7 +258,7 @@ jobs:
 
       - name: Run SLOT_TRIGGER_INTEGRATION_TEST suites
         id: slot-trigger
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -255,7 +273,7 @@ jobs:
 
       - name: Run WORKSPACE_BINDING_INTEGRATION_TEST suites
         id: workspace-binding
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -270,7 +288,7 @@ jobs:
 
       - name: Run MU1_INTEGRATION suites
         id: mu1
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -293,7 +311,7 @@ jobs:
       # in CI. Wired here.
       - name: Run dsar-departed-member (TENANT_INTEGRATION_TEST)
         id: departed-member
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.worm.outcome == 'success' }}
         working-directory: apps/web-platform
         timeout-minutes: 6
         env:
@@ -341,7 +359,7 @@ jobs:
           failed_md=""
           for v in $(compgen -v 'OUT_'); do
             step="${v#OUT_}"; step="${step//_/-}"
-            outcome="${!v}"
+            outcome="${!v:-skipped}"
             if [[ "$outcome" != "success" && "$outcome" != "skipped" ]]; then
               failed_md+="- \`${step}\` → **${outcome}**"$'\n'
             fi
@@ -349,7 +367,6 @@ jobs:
             # producer is not coverage (the #7138 producer-outcome rule).
             [[ "$outcome" == "success" ]] || status=error
           done
-          [[ -n "$failed_md" ]] || failed_md="- (no suite-step outcome recorded — failure before suite steps; see run log)"$'\n'
           {
             echo "status=$status"
             echo "failed_md<<SOLEUR_EOF"

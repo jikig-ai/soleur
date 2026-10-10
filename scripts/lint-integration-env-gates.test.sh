@@ -108,6 +108,14 @@ expect_red() {
   rows_run=$((rows_run + 1))
   local rc
   rc="$(run_sut "$dir")"
+  # rc must be exactly 1 -- the sentinel's verdict exit. Any other non-zero
+  # (2, 126, 127, 141) is instrument failure masquerading as a caught
+  # mutation: abort the harness, do not count it as a kill.
+  if [[ "$rc" != "0" && "$rc" != "1" ]]; then
+    printf 'FATAL(harness): %s -- SUT exited %s, neither verdict rc (0|1)\n' "$name" "$rc" >&2
+    cat "$WORK/out" >&2
+    exit 3
+  fi
   if [[ "$rc" == "0" ]]; then
     notok "$name -- expected RED, got exit 0"; cat "$WORK/out" >&2; return
   fi
@@ -150,9 +158,18 @@ expect_red "M1 unwired var" "$D" "T1_GATE"
 D="$WORK/m2"; mkrepo "$D"
 cp "$SUT" "$WORK/sut-m2.sh"
 mutate "$WORK/sut-m2.sh" 'apps/web-platform/test apps/web-platform/lib' 'apps/web-platform/nonexistent-dir'
+# LINT_GATES_TARGET_OVERRIDE is a battery-side TEST-ONLY seam (read at this
+# script's start to repoint $SUT); the sentinel itself reads only
+# SOLEUR_LINT_GATES_ROOT. M2 runs the mutated copy directly.
 SOLEUR_LINT_GATES_ROOT="$D" bash "$WORK/sut-m2.sh" > "$WORK/out" 2>&1; rc=$?
 rows_run=$((rows_run + 1))
-if [[ "$rc" == "0" ]]; then notok "M2 zero-census -- expected RED, got 0"; cat "$WORK/out" >&2; else ok "M2 zero-census"; fi
+if [[ "$rc" == "0" ]]; then
+  notok "M2 zero-census -- expected RED, got 0"; cat "$WORK/out" >&2
+elif ! grep -q "ZERO files" "$WORK/out"; then
+  notok "M2 zero-census -- RED but missing the anti-vacuity arm's own error"; cat "$WORK/out" >&2
+else
+  ok "M2 zero-census"
+fi
 
 # --- M3: new gate, no wiring -> RED -------------------------------------------
 D="$WORK/m3"; mkrepo "$D"
@@ -189,9 +206,13 @@ mutate "$D/apps/web-platform/test/server/drift.test.ts" 'process.env.DRIFT_GATE 
 expect_red "M5 test/workflow spelling drift" "$D" "DRIFT_GATE_TYPO"
 
 # --- M7 (must-PASS): env-mapping form `FOO: "1"` counts as wired --------------
+# All three live spellings of a "1" mapping value: double-quoted, single-
+# quoted (SENTRY_DEPRECATION_FAIL), and bare (INNGEST_ENVS_FLOOR).
 D="$WORK/m7"; mkrepo "$D"
 mkdir -p "$D/apps/web-platform/test/server"
 printf 'const G = process.env.MAP_GATE === "1";\n' > "$D/apps/web-platform/test/server/map.test.ts"
+printf 'const G = process.env.MAP_GATE_SQ === "1";\n' > "$D/apps/web-platform/test/server/map-sq.test.ts"
+printf 'const G = process.env.MAP_GATE_BARE === "1";\n' > "$D/apps/web-platform/test/server/map-bare.test.ts"
 ( cd "$D" && git add -A )
 cat > "$D/.github/workflows/map.yml" <<'YAML'
 name: map
@@ -201,12 +222,20 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MAP_GATE: "1"
+      MAP_GATE_SQ: '1'
+      MAP_GATE_BARE: 1
     steps:
       - run: npm run test:ci -- test/server/map.test.ts --project unit
+      - run: npm run test:ci -- test/server/map-sq.test.ts --project unit
+      - run: npm run test:ci -- test/server/map-bare.test.ts --project unit
 YAML
-expect_green "M7 env-mapping wiring" "$D"
+expect_green "M7 env-mapping wiring (all three value spellings)" "$D"
 
 # --- M8: gate var only inside a workflow comment -> RED ------------------------
+# The comment must be SETTING-SHAPED (`# env X=1 …`): without the strip the
+# line wires AND collects the file, so the strip is the only thing standing
+# between this fixture and a green. A bare `# X=1` would red through the
+# grammar, not the strip, and pin nothing.
 D="$WORK/m8"; mkrepo "$D"
 printf 'const G = process.env.COMMENT_GATE === "1";\n' > "$D/apps/web-platform/test/commented.test.ts"
 ( cd "$D" && git add -A )
@@ -217,10 +246,10 @@ jobs:
   c:
     runs-on: ubuntu-latest
     steps:
-      # COMMENT_GATE=1 intentionally unset -- the tenant-integration.yml:4 shape
+      # env COMMENT_GATE=1 npm run test:ci -- test/commented.test.ts
       - run: npm run test:ci -- test/commented.test.ts
 YAML
-expect_red "M8 comment-only mention is not wiring" "$D" "COMMENT_GATE"
+expect_red "M8 commented-out setting is not wiring" "$D" "COMMENT_GATE"
 
 # --- M9: gate planted under lib/ is in producer scope -> RED -------------------
 D="$WORK/m9"; mkrepo "$D"
@@ -279,6 +308,10 @@ YAML
 expect_green "M13 ancestor-dir coverage" "$D"
 
 # --- M14: two gates on one file, only one set in the collecting workflow -> RED
+# CONJ_B is wired in a NON-COLLECTING workflow (pad.yml's test/pad/ token), so
+# the var-level arm is green for BOTH vars and the ONLY possible red is the
+# per-workflow all_set conjunction. Assert on the uncovered FILE token, not
+# CONJ_B -- an UNWIRED-VAR red would mean the row is pinning the wrong arm.
 D="$WORK/m14"; mkrepo "$D"
 mkdir -p "$D/apps/web-platform/test/server"
 printf 'const A = process.env.CONJ_A === "1";\nconst B = process.env.CONJ_B === "1";\n' > "$D/apps/web-platform/test/server/conj.test.ts"
@@ -292,7 +325,10 @@ jobs:
     steps:
       - run: env CONJ_A=1 npm run test:ci -- test/server/conj.test.ts
 YAML
-expect_red "M14 conjunction -- one of two gates set" "$D" "CONJ_B"
+cat >> "$D/.github/workflows/pad.yml" <<'YAML'
+      - run: env CONJ_B=1 npm run test:ci -- test/pad/
+YAML
+expect_red "M14 conjunction -- all_set across ONE workflow" "$D" "conj.test.ts"
 
 # --- M15 (must-PASS): the idiom in a .md under test/ is prose, not a gate -----
 D="$WORK/m15"; mkrepo "$D"
@@ -316,11 +352,120 @@ cat >> "$D/.github/workflows/pad.yml" <<'YAML'
 YAML
 expect_green "M16b wired helper gate needs no path coverage" "$D"
 
+# --- M17: `!==` polarity is a live grammar arm -> RED when unwired ------------
+# mu1.integration.test.ts uses `process.env.MU1_INTEGRATION !== "1"` -- a
+# producer narrowing to `===` would silently drop it below the count floor's
+# blind spot (a SUBSTITUTION, not a narrowing, is invisible to the floor).
+D="$WORK/m17"; mkrepo "$D"
+printf 'const G = process.env.NEQ_GATE !== "1";\n' > "$D/apps/web-platform/test/neq.test.ts"
+( cd "$D" && git add -A )
+expect_red "M17 unwired !== polarity" "$D" "NEQ_GATE"
+
+# --- M18: a depth-1 dir token must NOT cover ----------------------------------
+# `test/` alone collects nothing in the grammar (the sibling-dir hazard: a
+# `test/` filter over test/server/x.test.ts would false-cover every root file
+# too). Pin the deliberate rejection.
+D="$WORK/m18"; mkrepo "$D"
+mkdir -p "$D/apps/web-platform/test/server"
+printf 'const G = process.env.DEPTH1_GATE === "1";\n' > "$D/apps/web-platform/test/server/depth1.test.ts"
+( cd "$D" && git add -A )
+cat > "$D/.github/workflows/d1.yml" <<'YAML'
+name: d1
+on: [push]
+jobs:
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - run: env DEPTH1_GATE=1 npm run test:ci -- test/
+YAML
+expect_red "M18 depth-1 test/ token does not collect" "$D" "depth1.test.ts"
+
+# --- M19 (must-PASS): wiring lands in a *.yaml workflow ------------------------
+D="$WORK/m19"; mkrepo "$D"
+printf 'const G = process.env.YAML_GATE === "1";\n' > "$D/apps/web-platform/test/yaml-gated.test.ts"
+( cd "$D" && git add -A )
+cat > "$D/.github/workflows/wired.yaml" <<'YAML'
+name: wired-yaml
+on: [push]
+jobs:
+  y:
+    runs-on: ubuntu-latest
+    steps:
+      - run: env YAML_GATE=1 npm run test:ci -- test/yaml-gated.test.ts
+YAML
+expect_green "M19 .yaml workflow file is a wiring surface" "$D"
+
+# --- M20: string-literal `env X=1` in a run line is not a setting --------------
+D="$WORK/m20"; mkrepo "$D"
+printf 'const G = process.env.STR_GATE === "1";\n' > "$D/apps/web-platform/test/str.test.ts"
+( cd "$D" && git add -A )
+cat > "$D/.github/workflows/str.yml" <<'YAML'
+name: str
+on: [push]
+jobs:
+  s:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "env STR_GATE=1 npm run test:ci -- test/str.test.ts"
+YAML
+expect_red "M20 quoted env X=1 is not wiring" "$D" "STR_GATE"
+
+# --- M21: mid-line `X: 1` in a run line is not a setting -----------------------
+D="$WORK/m21"; mkrepo "$D"
+printf 'const G = process.env.MID_GATE === "1";\n' > "$D/apps/web-platform/test/mid.test.ts"
+( cd "$D" && git add -A )
+cat > "$D/.github/workflows/mid.yml" <<'YAML'
+name: mid
+on: [push]
+jobs:
+  s:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "MID_GATE: 1"; npm run test:ci -- test/mid.test.ts
+YAML
+expect_red "M21 mid-line mapping token is not wiring" "$D" "MID_GATE"
+
+# --- M22: lib/ collection semantics -- dir token rejected, file token ok ------
+D="$WORK/m22"; mkrepo "$D"
+mkdir -p "$D/apps/web-platform/lib"
+printf 'const G = process.env.LIBCOL_GATE === "1";\n' > "$D/apps/web-platform/lib/lc.test.ts"
+( cd "$D" && git add -A )
+cat > "$D/.github/workflows/lc.yml" <<'YAML'
+name: lc
+on: [push]
+jobs:
+  l:
+    runs-on: ubuntu-latest
+    steps:
+      - run: env LIBCOL_GATE=1 npm run test:ci -- lib/
+YAML
+expect_red "M22a depth-1 lib/ token does not collect" "$D" "lc.test.ts"
+cat >> "$D/.github/workflows/lc.yml" <<'YAML'
+      - run: npm run test:ci -- lib/lc.test.ts
+YAML
+expect_green "M22b explicit lib file token collects" "$D"
+
+# --- M23: non-zero census below the floor -> RED -------------------------------
+# M2 exercises only the == 0 arm; the `<` arm needed its own row (a floor
+# loosened to admit a shrunken census, or `<=`, must still fire).
+D="$WORK/m23"; mkrepo "$D"
+cp "$SUT" "$WORK/sut-m23.sh"
+mutate "$WORK/sut-m23.sh" "MIN_GATED_FILES=50" "MIN_GATED_FILES=999"
+SOLEUR_LINT_GATES_ROOT="$D" bash "$WORK/sut-m23.sh" > "$WORK/out" 2>&1; rc=$?
+rows_run=$((rows_run + 1))
+if [[ "$rc" == "0" ]]; then
+  notok "M23 sub-floor census -- expected RED, got 0"; cat "$WORK/out" >&2
+elif ! grep -q "below the floor" "$WORK/out"; then
+  notok "M23 sub-floor census -- RED but missing the floor arm's own error"; cat "$WORK/out" >&2
+else
+  ok "M23 sub-floor census"
+fi
+
 # --- M6: harness self-check -- deleting a row must red the battery -------------
 # EXACT count, not a floor: a `>=` bound admits deleting rows unnoticed, which
 # is the defect this row exists to make visible. Bump DECLARED_ROWS in the same
 # edit that adds or removes a row.
-DECLARED_ROWS=20
+DECLARED_ROWS=28
 rows_run=$((rows_run + 1))
 if (( rows_run == DECLARED_ROWS )); then
   ok "M6 battery executed ${rows_run}/${DECLARED_ROWS} rows (anti-vacuity)"

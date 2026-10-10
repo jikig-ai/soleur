@@ -62,7 +62,7 @@ GATE_IDIOM='process\.env\.[A-Z0-9_]+ *(===|!==) *"1"'
 # var | reason -- the single chokepoint for exemptions. Every entry cites #9855,
 # the issue that records why these vars are deliberate non-CI arms.
 ALLOWLIST_VARS=(
-  "RLS_FUZZ_LOCAL|local disposable-Postgres arm only; CI arm runs via RLS_FUZZ_DATABASE_URL in rls-authz-fuzz.yml (#9855)"
+  "RLS_FUZZ_LOCAL|wired via package.json test:rls-fuzz script prefix (RLS_FUZZ_LOCAL=1 vitest …), a wiring surface this grammar cannot see — allowlisted rather than grammar-widened (#9855)"
   "SOLEUR_ISOLATION_IN_IMAGE|in-image arm of test/sandbox-isolation.test.ts -- runs inside the runtime image, not GitHub CI (#9855)"
   "SOLEUR_ISOLATION_TEST_HOST|deliberate fail-loud host-capability opt-in; CI must not satisfy it (#9855)"
   "ANTHROPIC_ISOLATION_TEST_OK|manual opt-in for a host-level destructive arm (#9855)"
@@ -96,27 +96,45 @@ _in_allowlist_files() {
 }
 
 # _var_set_in <var> <stripped-file> -- the ONE copy of the setting-position
-# grammar. Two forms: `env <VAR>=1` run-prefix, and `<VAR>: ["']?1` env-mapping.
-# The mapping arm needs a left boundary on the name -- `FOO_<VAR>: "1"` is not
-# a setting of `<VAR>`.
+# grammar. Two forms, both deliberately narrow:
+#
+#   (a) `env <VAR>=1` (or `env A=1 <VAR>=1 cmd`) run-prefix, where `env` must
+#       be preceded by line-start, whitespace, `;`, or `-- `. A quote before
+#       `env` (echo "env X=1 …", JSON bodies) is NOT a boundary -- a
+#       string-literal mention is not a setting. A BARE `X=1 cmd` prefix with
+#       no `env` keyword is deliberately NOT a setting form -- `env` is the
+#       required spelling; 100% of live wiring uses it (measured 2026-10-10).
+#   (b) `<VAR>: ["']?1` env-MAPPING, anchored to line start (optional `- `):
+#       a `VAR: 1` token mid-line in a run: body (echo "VAR: 1", a curl JSON
+#       body) is not an env-mapping and must not certify wiring.
+#
+# Accepted residual, documented: `env X="1"` quoted values and flow-map
+# `env: {X: "1"}` spellings are NOT matched -- a maintainer who wires a gate
+# that way gets a loud UNWIRED/UNCOVERED red, never a silent pass, and
+# rewrites in the canonical form. package.json script prefixes
+# (`RLS_FUZZ_LOCAL=1 vitest …` via `test:rls-fuzz`) are the known-blind
+# wiring surface -- that class is allowlist territory.
 _var_set_in() {
   local v="$1" stripped="$2"
-  grep -qE "(^|[[:space:]])env[[:space:]]+${v}=1([[:space:]]|$)|(^|[^A-Za-z0-9_])${v}:[[:space:]]*[\"']?1[\"']?[[:space:]]*($|#)" \
+  grep -qE "(^|[[:space:];]|--[[:space:]])env([[:space:]]+[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+)*[[:space:]]+${v}=1([[:space:]]|$)|^[[:space:]]*(-[[:space:]]*)?${v}:[[:space:]]*[\"']?1[\"']?[[:space:]]*($|#)" \
     "$stripped"
 }
 
-# _path_token_in <path-token> <stripped-file> -- whitespace/EOL-bounded token
-# match (optional surrounding quotes). The ONE copy of the collection grammar.
+# _path_token_in <path-token> <stripped-file> -- bounded-token match: the path
+# must be preceded by line-start/whitespace (optional quote) and followed by
+# whitespace, EOL, optional quote, or a YAML flow-list close `,` `)` `]`.
 _path_token_in() {
   local tok="$1" stripped="$2" esc
-  esc="$(printf '%s' "$tok" | sed 's/[.[\*^$]/\\&/g')"
-  grep -qE "(^|[[:space:]])[\"']?${esc}[\"']?([[:space:]]|$)" "$stripped"
+  # Escape the FULL ERE metachar class -- a filename containing `|` or `+`
+  # would otherwise WIDEN the match (alternation/quantifier) and false-cover.
+  esc="$(printf '%s' "$tok" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+  grep -qE "(^|[[:space:]])[\"']?${esc}[\"']?([[:space:]]|$|[,\)\]])" "$stripped"
 }
 
 # _workflow_files -- every workflow file, listed once. Keeping the file list
 # explicit (not a recursive glob over the whole .github/) is deliberate: only
 # this dir is a CI registration surface.
-find "$WORKFLOW_DIR" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) \
+find "$WORKFLOW_DIR" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) \
   | LC_ALL=C sort -u > "$WORK/workflows" || true
 
 # Comment-stripped bodies, computed ONCE per file. Consumers grep the stripped
@@ -139,7 +157,7 @@ _var_wired_in() {
   local v="$1" f
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    if _var_set_in "$v" "$WORK/stripped/$(basename "$f")"; then
+    if _var_set_in "$v" "$WORK/stripped/${f##*/}"; then
       printf '%s\n' "$f"
     fi
   done < "$WORK/workflows"
@@ -149,7 +167,7 @@ _var_wired_in() {
 # depth>=2 parent dir, trailing slash) appears whitespace/EOL-bounded.
 _file_collected_in() {
   local app_rel="$1" wf="$2" parent stripped
-  stripped="$WORK/stripped/$(basename "$wf")"
+  stripped="$WORK/stripped/${wf##*/}"
   _path_token_in "$app_rel" "$stripped" && return 0
   # Walk ANCESTOR dirs, deepest first: a file under test/server/scope-grants/
   # IS collected by a `test/server/` filter. Depth >= 2 only (a dir token must
@@ -177,7 +195,7 @@ _file_collected_in() {
 # is exercised through its importers, and "no workflow path-filter names this
 # helper" is the CORRECT shape, not a defect.
 git -C "$REPO_ROOT" grep -lE "$GATE_IDIOM" -- "${PRODUCER_PATHS[@]}" \
-  | grep -E '\.(ts|tsx|js|jsx|mjs|cjs)$' \
+  | grep -E '\.(ts|tsx)$' \
   | LC_ALL=C sort -u > "$WORK/gated_files" || true
 found_files=$(wc -l < "$WORK/gated_files" | tr -d ' ')
 COLLECTABLE_RE='\.test\.'
@@ -205,28 +223,37 @@ allowlisted_vars=0
 : > "$WORK/file_vars"
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  vars="$(git -C "$REPO_ROOT" grep -hoE "$GATE_IDIOM" -- "$f" \
-    | sed -E 's/.*process\.env\.([A-Z0-9_]+).*/\1/' | LC_ALL=C sort -u | tr '\n' ' ')"
+  # `|| true`: a file deleted between the census and this pass (TOCTOU) makes
+  # the second git grep exit 1; skip the file rather than die mid-loop.
+  vars="$(git -C "$REPO_ROOT" grep -hoE "$GATE_IDIOM" -- "$f" 2>/dev/null \
+    | sed -E 's/.*process\.env\.([A-Z0-9_]+).*/\1/' | LC_ALL=C sort -u | tr '\n' ' ' || true)"
   vars="${vars% }"
+  [[ -n "$vars" ]] || continue
   printf '%s\t%s\n' "$f" "$vars" >> "$WORK/file_vars"
 done < "$WORK/gated_files"
 
-# Var-level pass: which vars are wired (needed before the file pass -- a file's
-# coverage is judged only against workflows that SET its var).
-: > "$WORK/var_wired"
-while IFS=$'\t' read -r f vars; do
-  for v in $vars; do
-    _in_allowlist_vars "$v" && continue
-    # $(...) capture, never `| head -1`: head closes the pipe early and the
-    # function dies on SIGPIPE writing a SECOND match (rc 141 -> pipefail ->
-    # reads UNWIRED). Deterministic once a var gains a second wiring file.
-    if [[ -n "$(_var_wired_in "$v")" ]]; then
-      printf '%s\n' "$v" >> "$WORK/var_wired"
-    else
-      printf 'UNWIRED\t%s\n' "$v" >> "$WORK/var_wired"
-    fi
-  done
-done < "$WORK/file_vars"
+# Var-level pass over DISTINCT vars once (TENANT_INTEGRATION_TEST alone sits
+# on ~38 files — per-file evaluation re-scanned every workflow ~38x for the
+# same answer). Persists wired_map as `var<TAB>workflow` rows; the file-level
+# pass consumes the map instead of re-scanning all workflows per file.
+: > "$WORK/var_wired"; : > "$WORK/wired_map"
+cut -f2- "$WORK/file_vars" | tr ' ' '\n' | LC_ALL=C sort -u > "$WORK/distinct_vars"
+while IFS= read -r v; do
+  [[ -n "$v" ]] || continue
+  _in_allowlist_vars "$v" && continue
+  # $(...) capture, never `| head -1`: head closes the pipe early and the
+  # function dies on SIGPIPE writing a SECOND match (rc 141 -> pipefail ->
+  # reads UNWIRED). Deterministic once a var gains a second wiring file.
+  wfs="$(_var_wired_in "$v")"
+  if [[ -n "$wfs" ]]; then
+    printf '%s\n' "$v" >> "$WORK/var_wired"
+    while IFS= read -r wf; do
+      [[ -n "$wf" ]] && printf '%s\t%s\n' "$v" "$wf" >> "$WORK/wired_map"
+    done <<< "$wfs"
+  else
+    printf 'UNWIRED\t%s\n' "$v" >> "$WORK/var_wired"
+  fi
+done < "$WORK/distinct_vars"
 LC_ALL=C sort -u -o "$WORK/var_wired" "$WORK/var_wired"
 
 allowlisted_vars=$(printf '%s\n' "${ALLOWLIST_VARS[@]}" | wc -l | tr -d ' ')
@@ -251,16 +278,32 @@ while IFS=$'\t' read -r f vars; do
   if (( all_allowlisted == 1 )); then
     covered=1
   else
+    # Candidates = workflows setting EVERY non-allowlisted var on this file
+    # (intersection of wired_map rows); collection is then checked on the
+    # intersection only -- the conjunction is already enforced by membership.
+    candidates=""
+    first=1
+    for v in $vars; do
+      _in_allowlist_vars "$v" && continue
+      vws="$(awk -F'\t' -v v="$v" '$1 == v { print $2 }' "$WORK/wired_map")"
+      if [[ -z "$vws" ]]; then
+        candidates=""
+        break
+      fi
+      if (( first == 1 )); then
+        candidates="$vws"
+        first=0
+      else
+        candidates="$(comm -12 \
+          <(printf '%s\n' "$candidates" | LC_ALL=C sort -u) \
+          <(printf '%s\n' "$vws" | LC_ALL=C sort -u))"
+        [[ -n "$candidates" ]] || break
+      fi
+    done
     while IFS= read -r wf; do
       [[ -n "$wf" ]] || continue
-      _file_collected_in "$app_rel" "$wf" || continue
-      all_set=1
-      for v in $vars; do
-        _in_allowlist_vars "$v" && continue
-        _var_set_in "$v" "$WORK/stripped/$(basename "$wf")" || { all_set=0; break; }
-      done
-      (( all_set == 1 )) && { covered=1; break; }
-    done < "$WORK/workflows"
+      _file_collected_in "$app_rel" "$wf" && { covered=1; break; }
+    done <<< "$candidates"
   fi
   if (( covered == 0 )); then
     uncovered=$((uncovered + 1))
