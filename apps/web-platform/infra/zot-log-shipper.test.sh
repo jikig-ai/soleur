@@ -1187,20 +1187,22 @@ assert "T20 an ordinary row is still truncated at MAXLEN (the longer budget is c
 # Every assertion anchors on substrings only the SHIPPED func-keyed row carries, never on the bare
 # token (the heartbeat's zot_last_err echo carries it too). Values synthesized; shape is the real one.
 T21_PFX='zotregistry.dev/zot/v2/pkg/api'
-t21_ord() {   # file, count, marker — ordinary HTTP API rows (func is SessionLogger, status 200)
-  local f="$1" n="$2" m="$3" i
+# Both helpers WRITE TO STDOUT and every caller redirects into a $TMP-rooted path, so each write
+# window stays provably absolute for the fixture-relative-assert ratchet (`>> "$param"` is not).
+t21_ord() {   # count, marker — ordinary HTTP API rows (func is SessionLogger, status 200)
+  local n="$1" m="$2" i
   for i in $(seq 1 "$n"); do
-    printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/${m}-$i\",\"statusCode\":200,\"caller\":\"c\",\"func\":\"${T21_PFX}.SessionLogger.func1.1\",\"goroutine\":$i}" >> "$f"
+    printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/${m}-$i\",\"statusCode\":200,\"caller\":\"c\",\"func\":\"${T21_PFX}.SessionLogger.func1.1\",\"goroutine\":$i}"
   done
 }
-t21_upl() {   # file, error text, caller line, goroutine, module prefix
-  printf '%s\n' "{\"time\":\"2026-01-01T00:00:00.000000000Z\",\"level\":\"error\",\"message\":\"unexpected error, removing .uploads/ files\",\"error\":\"$2\",\"caller\":\"zotregistry.dev/zot/v2/pkg/api/routes.go:$3\",\"func\":\"${5:-$T21_PFX}.(*RouteHandler).PatchBlobUpload\",\"goroutine\":$4}" >> "$1"
+t21_upl() {   # error text, caller line, goroutine, module prefix (optional)
+  printf '%s\n' "{\"time\":\"2026-01-01T00:00:00.000000000Z\",\"level\":\"error\",\"message\":\"unexpected error, removing .uploads/ files\",\"error\":\"$1\",\"caller\":\"zotregistry.dev/zot/v2/pkg/api/routes.go:$2\",\"func\":\"${4:-$T21_PFX}.(*RouteHandler).PatchBlobUpload\",\"goroutine\":$3}"
 }
 
 # S1 — the real EOF error line survives an ordinary flood (RED before the func arm exists).
 J_S1="$TMP/j_s1"; : > "$J_S1"
-t21_ord "$J_S1" 40 s1ord
-t21_upl "$J_S1" 'unexpected EOF' 2190 369
+t21_ord 40 s1ord >> "$J_S1"
+t21_upl 'unexpected EOF' 2190 369 >> "$J_S1"
 run_shipper "$J_S1" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
 assert "T21 S1 the ordinary cap bit under the flood (else this row proves nothing)" \
   "[[ \$(grep -c 's1ord-' '$STUB_POSTS') -lt 40 ]]"
@@ -1210,8 +1212,8 @@ assert "T21 S1 the real func-keyed EOF error line survived the flood (exactly on
 # S2 — MUST-PASS non-canonical: i/o timeout error, another caller line, a v3 module path.
 # A guard that rejects everything but the canonical bytes would pass every RED row and fail this.
 J_S2="$TMP/j_s2"; : > "$J_S2"
-t21_ord "$J_S2" 40 s2ord
-t21_upl "$J_S2" 'read tcp 10.0.0.1:5000->10.0.0.2:52888: i/o timeout' 2222 777 'zotregistry.dev/zot/v3/pkg/api'
+t21_ord 40 s2ord >> "$J_S2"
+t21_upl 'read tcp 10.0.0.1:5000->10.0.0.2:52888: i/o timeout' 2222 777 'zotregistry.dev/zot/v3/pkg/api' >> "$J_S2"
 run_shipper "$J_S2" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
 assert "T21 S2 a non-canonical func-keyed row (i/o timeout, v3 module path, other caller) still ships" \
   "grep -qF 'routes.go:2222' '$STUB_POSTS' && grep -qF 'PatchBlobUpload,goroutine:777' '$STUB_POSTS'"
@@ -1221,9 +1223,9 @@ assert "T21 S2 a non-canonical func-keyed row (i/o timeout, v3 module path, othe
 # result that ships it means the fixture is not what drives the verdict. It is placed AFTER at least
 # CAP ordinary rows, otherwise it would ship under the cap and prove nothing.
 J_S3="$TMP/j_s3"; : > "$J_S3"
-t21_ord "$J_S3" 20 s3ord
+t21_ord 20 s3ord >> "$J_S3"
 printf '%s\n' "{\"level\":\"error\",\"message\":\"unexpected error, removing .uploads/ files\",\"error\":\"unexpected EOF\",\"caller\":\"c\",\"func\":\"${T21_PFX}.(*RouteHandler).GetBlob\",\"goroutine\":4242}" >> "$J_S3"
-for i in $(seq 1 40); do t21_upl "$J_S3" 'unexpected EOF' 2190 "$((1000 + i))"; done
+for i in $(seq 1 40); do t21_upl 'unexpected EOF' 2190 "$((1000 + i))" >> "$J_S3"; done
 run_shipper "$J_S3"
 assert "T21 S3 exactly the sub-quota (8) of func-keyed rows shipped from 40 offered" \
   "[[ \$(grep -c 'PatchBlobUpload,goroutine' '$STUB_POSTS') -eq 8 ]]"
@@ -1235,7 +1237,7 @@ assert "T21 S3 a non-matching handler's error row (GetBlob) is capped, not exemp
 # S4 — crash evidence is not starved (the #7444 R12 inversion): 17 func-keyed lines, then a panic.
 # Mutation row 5 (rc 2 -> rc 0, i.e. routing the class through the shared lane) reds this.
 J_S4="$TMP/j_s4"; : > "$J_S4"
-for i in $(seq 1 17); do t21_upl "$J_S4" 'unexpected EOF' 2190 "$((2000 + i))"; done
+for i in $(seq 1 17); do t21_upl 'unexpected EOF' 2190 "$((2000 + i))" >> "$J_S4"; done
 printf '%s\n' 'panic: runtime error: T21SENTINEL_S4' >> "$J_S4"
 run_shipper "$J_S4" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1
 assert "T21 S4 a panic still ships behind 17 func-keyed upload error lines" \
@@ -1270,8 +1272,8 @@ J_S8="$TMP/j_s8"; : > "$J_S8"
 printf '%s\n' 'S8PLAIN plaintext line from the docker daemon' >> "$J_S8"
 printf '%s\n' '{"level":"info","message":"S8NOFUNC","path":"/v2/s8-nofunc","statusCode":200,"caller":"c"}' >> "$J_S8"
 printf '%s\n' '{"level":"info","message":"S8EMPTYFUNC","path":"/v2/s8-emptyfunc","statusCode":200,"caller":"c","func":""}' >> "$J_S8"
-t21_ord "$J_S8" 10 s8ord
-t21_upl "$J_S8" 'unexpected EOF' 2190 888
+t21_ord 10 s8ord >> "$J_S8"
+t21_upl 'unexpected EOF' 2190 888 >> "$J_S8"
 run_shipper "$J_S8" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=2
 assert "T21 S8 the ordinary cap bit (rows without a func are classified ordinary, not exempt)" \
   "[[ \$(grep -c 's8ord-' '$STUB_POSTS') -eq 0 ]]"
