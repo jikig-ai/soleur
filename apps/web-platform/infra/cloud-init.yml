@@ -615,6 +615,8 @@ runcmd:
   # Enable container restart/OOM churn monitor timer (#5417)
   - systemctl enable --now container-restart-monitor.timer
 
+  # Egress gateway (#9534): before the firewall loader so the derived docker0→gw accept lands first-run.
+  - /usr/local/bin/egress-gateway-bootstrap.sh
   # Container egress firewall + allowlist re-resolve (#5046 PR-2). The
   # firewall unit is After=docker.service and tolerates a not-yet-running
   # container (probes live in the SSH provisioner, not here).
@@ -794,6 +796,8 @@ runcmd:
       -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+      -e SOLEUR_EGRESS_REAPER=1 \
+      -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
       -p 0.0.0.0:80:3000 \
       -p 0.0.0.0:3000:3000 \
       "$(cat /run/soleur-image-ref)"

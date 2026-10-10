@@ -52,6 +52,15 @@ vi.mock("../server/cc-dispatcher", () => ({
   startCcIdleReaper: vi.fn(),
 }));
 vi.mock("../server/api-messages", () => ({ handleConversationMessages: vi.fn() }));
+// The real egress-forwarder's boot reaper scans /proc and deletes token
+// files on a live host — a unit test must never touch it.
+vi.mock("../server/egress-forwarder", () => ({
+  reapOrphanEgressForwarders: vi.fn(),
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
+}));
 vi.mock("../server/worktree-write-lease", () => ({ releaseAllHeldLeases: vi.fn() }));
 vi.mock("../server/logger", () => {
   const child = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child });
