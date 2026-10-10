@@ -80,7 +80,10 @@ because that job exports only `TENANT_INTEGRATION_TEST`.
 - P1 — every gate var in the issue's set is exported by a CI workflow, so its suites execute rather than skip.
 - P2 — dev-Supabase writes from the new leg serialize against all other dev writers.
 - P3 — a suite failure is loud (red run + tracked issue), never silent.
-- P4 — no new secrets or infra provisioning; no path to prd credentials.
+- P4 — no new secrets or credential provisioning; no path to prd credentials.
+  (One Terraform resource IS added — the `sentry_cron_monitor` for the dead-man
+  arm — a config-plane object the existing Sentry provider applies at merge,
+  carrying no secret.)
 - P5 — a NEW env-gated suite cannot silently re-create the dormancy class.
 - P6 — cost and flake bounded to a scheduled cadence, not per-PR.
 
@@ -105,9 +108,13 @@ because that job exports only `TENANT_INTEGRATION_TEST`.
   already rejected an ephemeral throwaway DB per run as heavyweight. The plan
   adopts shared dev + apply-migrations + mutex — the substrate ~55
   tenant-isolation suites already run on — and records the residual below.
-- Copy the drift probes / ledger parity / WORM preflight into the new leg → they
-  guard the PR *unmerged-apply* path; a cron leg applies merged migrations only,
-  and `scheduled-dev-migration-drift.yml` already owns drift. CUT.
+- Copy the drift probes / ledger parity into the new leg → they guard the PR
+  *unmerged-apply* path; a cron leg applies merged migrations only, and
+  `scheduled-dev-migration-drift.yml` already owns drift. CUT — except the two
+  *live-state* preflights (`preflight-schema-vs-ledger.sh`,
+  `preflight-worm-cascade-contradiction.sh`), which plan review reinstated:
+  equally relevant nightly, and they name the offending relation instead of an
+  opaque GoTrue 500.
 - Terraform `doppler_secret` for `MU1_FIXTURE_*` → unneeded: live-verified
   `dev_scheduled` already carries `MU1_FIXTURE_REPO_URL`,
   `MU1_FIXTURE_INSTALLATION_ID`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and
@@ -178,39 +185,91 @@ inverse of the isolation ADR-023 exists to guarantee. The
 `new-scheduled-cron-prefer-inngest.sh` PreToolUse hook may flag the new
 `scheduled-*.yml` at write time; this paragraph is the recorded justification.
 
-New workflow `.github/workflows/scheduled-integration-suites.yml`:
-`schedule: cron '30 4 * * *'` (04:30 UTC daily — no collision with the 06:00/07:00
-probe fleet) + `workflow_dispatch`. One job, `timeout-minutes: 30`,
-`permissions: {contents: read, issues: write}`, `concurrency.group:
-dev-supabase-${{ github.ref }}` (same per-ref key as tenant-integration;
-serialized further by the advisory mutex for cross-ref coverage).
+New workflow `.github/workflows/scheduled-integration-suites.yml`. **Line 1
+carries the literal `<!-- gate-override: new-scheduled-cron-prefer-inngest -->`
+comment** — the `new-scheduled-cron-prefer-inngest.sh` PreToolUse hook DENIES any
+new `scheduled-*.yml` containing a `schedule:`/`cron:` token without it (the
+ADR-033 justification paragraph above is the companion documentation; the hook
+reads the YAML, not the plan — `scheduled-supabase-watchdog.yml:1-11` is the
+precedent shape). Header comment then carries `name: "Scheduled: integration
+suites"`, the 3-point Inngest-vs-GHA justification, and the
+concurrency-eviction edge note below.
+
+`schedule: cron '30 4 * * *'` (04:30 UTC — neighbors surveyed: `apply-inngest-rls`
+04:17, `workspaces-luks-verify` 04:41, `kb-drift-walker` 03:00, the congested
+probe fleet at 06:00–07:00; Inngest-dispatched `cron-dev-migration-drift` fires
+every 6h at HH:15 and does not take the dev-suite mutex — no dev-Supabase
+contention) + `workflow_dispatch`. One job, `timeout-minutes: 60` (the repo's
+timeout rule: the job ceiling dominates the SUM of step ceilings — ~8min
+setup+apply + ~4min max mutex wait + 8×6min suite steps ≈ 60; a step timeout is
+a step *failure* the filer reports, so the arithmetic self-tunes), 
+`permissions: {contents: read, issues: write}`, `concurrency` declared at JOB
+level per the tenant-integration precedent with
+`group: dev-supabase-${{ github.ref }}` and `cancel-in-progress: false` (same
+per-ref key as tenant-integration; serialized further by the advisory mutex for
+cross-ref coverage). **Concurrency-edge comment (required in the file):** on
+`schedule` the group resolves to `refs/heads/main` — the same group as
+push-to-main `tenant-integration` runs; with `cancel-in-progress: false` and
+GitHub's one-pending-per-group limit, the cron arrival can evict a *pending*
+main run → `cancelled`. Rare at 04:30 UTC and the shared key is deliberate
+(GHA-level serialization the advisory mutex cannot give); the comment names the
+edge so nobody "fixes" it later.
 
 Step order, mirroring `tenant-integration.yml`'s heavy job minus its PR-only
 guards:
 
-1. checkout (`fetch-depth: 2` is enough — no PR-diff steps)
+1. checkout (default `fetch-depth` — no PR-diff steps; the precedent's
+   `fetch-depth: 2` exists for diff context this job lacks)
 2. Setup Bun (`.bun-version`) + Node 22 (`cache: npm`,
    `cache-dependency-path: apps/web-platform/package-lock.json`)
 3. `npm ci --ignore-scripts` in `apps/web-platform`
-4. Install Doppler CLI
+4. Install Doppler CLI via `DopplerHQ/cli-action` pinned to the SAME v4 SHA
+   `tenant-integration.yml` uses (`@5351693…` — not the realtime probe's older
+   v3 pin)
 5. Verify `DOPPLER_TOKEN_DEV_SCHEDULED` non-empty — fail, never silent-skip
    (the gate trap this whole issue exists to close)
 6. Assert `dev_scheduled` → `environment=dev` and absent
    `SUPABASE_ACCESS_TOKEN` (verbatim copy of the tenant-integration assertion
    block, incl. `strip_log_injection` on the env name — `hr-dev-prd-distinct-supabase-projects` + #8028 DC-1)
 7. `scripts/dev-suite-mutex.sh acquire` under `doppler run -c dev_scheduled`,
-   `DEV_SUITE_MUTEX_IDENTITY: di-${{ github.run_id }}-${{ github.ref_name }}`
-8. Seed bot fixtures (soft-fail `::warning::`, same as tenant-integration — needed
-   only so the apply below behaves identically)
-9. `run-migrations.sh --bootstrap=skip` under Doppler, with
-   `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` and **without**
-   `ALLOW_UNMERGED_DEV_APPLY` — a scheduled main-ref checkout applies merged
-   migrations only; the unmerged-apply gate stays armed so a feature-branch
-   dispatch refuses in-flight files.
-10. Seven suite steps, each `if: ${{ !cancelled() }}` so one red gate does not
-    starve the rest of the night's evidence, each
+   `DEV_SUITE_MUTEX_IDENTITY: di-${{ github.run_id }}-${{ github.ref_name }}`,
+   **`DEV_SUITE_MUTEX_HOLD_S: "3900"`** — the script's own invariant
+   (`dev-suite-mutex.sh` › header) requires the hold ceiling to EXCEED the job
+   timeout; default 1170s was sized for tenant-integration's 15-minute job and
+   would release the lock ~40min early under this job's 60-minute ceiling.
+8. Seed bot fixtures (soft-fail `::warning::`). Real dependency, not parity
+   cargo: merged migrations such as `071_ux_audit_artifacts_bucket.sql`
+   reference `auth.users` rows that `bot-fixture.ts` creates
+   (`tenant-integration.yml` seed-step comment) — without the seed the apply
+   degrades gracefully but defers RLS policy.
+9. `preflight-schema-vs-ledger.sh` + `preflight-worm-cascade-contradiction.sh`
+   — live-state guards, NOT PR-unmerged-apply artifacts (the earlier draft of
+   this plan mischaracterized them): on a poisoned shared-dev they name the
+   offending relation instead of surfacing an opaque GoTrue 500 three layers
+   deep.
+10. `run-migrations.sh --bootstrap=skip` under Doppler, with
+    `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` and **without**
+    `ALLOW_UNMERGED_DEV_APPLY` — a scheduled main-ref checkout applies merged
+    migrations only; the unmerged-apply gate stays armed so a feature-branch
+    dispatch refuses in-flight files.
+11. Eight suite steps, each `working-directory: apps/web-platform`,
+    `timeout-minutes: 6` (a step timeout = step *failure*: `!cancelled()`
+    siblings still run and the filer fires — a job-level timeout is
+    `cancelled`, which cannot be reported in-band), each
+    `if: ${{ !cancelled() }}` (kept for pre-step aborts), each
     `doppler run -p soleur -c dev_scheduled -- env <GATE>=1 \
-    npm run test:ci -- <files> --project unit --reporter=verbose`:
+    npm run test:ci -- <files> --project unit --reporter=verbose`.
+    The 8-step split is deliberate (and the honest justification, replacing
+    the earlier "starve the evidence" overclaim — a single vitest invocation
+    also runs every file): (a) `steps.<id>.outcome` gives the filed issue
+    structured per-suite attribution without log-parsing, and (b) process
+    isolation — a hard crash in one vitest invocation loses the remaining
+    files' results entirely.
+    `--project unit` only is correct today (explicit file lists; zero gated
+    files in `test/repo-wide-suites.ts` — verified): a future repo-wide gated
+    file would fail loudly ("no test files found" → red step → filed issue),
+    and the sentinel's file-level arm (below) flags it as uncovered at
+    lint time.
 
     | Step | Gate | Files |
     |---|---|---|
@@ -221,74 +280,146 @@ guards:
     | `slot-trigger` | `SLOT_TRIGGER_INTEGRATION_TEST` | `test/conversation-archive-release-slot.integration.test.ts` |
     | `workspace-binding` | `WORKSPACE_BINDING_INTEGRATION_TEST` | `test/workspace-binding-restart-survival.integration.test.ts` |
     | `mu1` | `MU1_INTEGRATION` | `test/mu1.integration.test.ts` |
+    | `departed-member` | `TENANT_INTEGRATION_TEST` | `test/dsar-departed-member.integration.test.ts` |
+
+    The `departed-member` step wires a file-level dormancy found at plan
+    review: `test/dsar-departed-member.integration.test.ts:66` gates on
+    `TENANT_INTEGRATION_TEST` — a *wired* var — but lives at `test/` root while
+    `tenant-integration.yml` collects only `test/server/`; it has never run in
+    CI. This is the live instance that motivates the sentinel's file-level arm.
 
     MU1 AC-2 *will* engage — `dev_scheduled` carries `MU1_FIXTURE_*` +
     `GITHUB_APP_*` — minting a live installation token and cloning the fixture
     repo into a `mkdtemp` root. Intended: it verifies the signup→clone path
     nightly. The partial-set canary in the test file stays useful (fails loudly
     on a half-provisioned config).
-11. `scripts/dev-suite-mutex.sh release`, `if: always()` (local-only, no Doppler
-    needed — same comment block as tenant-integration).
-12. File-or-comment tracking issue on `failure()` — verbatim pattern from
+12. `scripts/dev-suite-mutex.sh release`, `if: always()` (local-only, no Doppler
+    needed — same comment block as tenant-integration; on a job-level cancel
+    even this cannot run, which the HOLD_S ceiling covers by auto-expiry).
+13. File-or-comment tracking issue on `${{ (failure() || cancelled()) &&
+    github.ref == 'refs/heads/main' }}` — a job timeout records `cancelled`,
+    never `failure` (repo-measured: `main-health-monitor.yml` header defect A,
+    19/30 runs silent until fixed), and the ref gate keeps a feature-branch
+    `workflow_dispatch` refusal from filing noise. Pattern from
     `scheduled-realtime-probe.yml`: label `ci/integration-suites`, title
     `[ci/integration-suites] Nightly integration suites failed`, body names the
-    failing step(s) via `steps.<id>.outcome`, run URL, UTC timestamp.
+    failing step(s) via `steps.<id>.outcome` (earliest failure first), run URL,
+    UTC timestamp. **Include the stale-issue auto-close arm**
+    (`scheduled-realtime-probe.yml` › "Auto-close stale issue (probe green)"):
+    on a green main run, close the open tracker — otherwise one transient
+    flake leaves a permanently open issue and trains the label to be ignored.
+    The probe's email-notify arm is deliberately not copied (issue + heartbeat
+    is enough).
+14. Sentry check-in, terminal `if: always()` step via
+    `./.github/actions/sentry-heartbeat`, `monitor-slug:
+    scheduled-integration-suites`, status keyed on job outcome per the
+    producer-outcome-first formula in `scheduled-realtime-probe.yml`'s
+    heartbeat comment (#7138). This is the dead-man arm for the plan's own
+    worst case — a `schedule:` that never fires produces no run and nothing to
+    file (GitHub has measured-dropped scheduled runs; `cron-monitors.tf`
+    records the 2026-05-26 realtime-probe drop) — a missed check-in pages the
+    monitor instead.
 
 New sentinel `scripts/lint-integration-env-gates.sh` (P5): censuses every
 `process\.env\.[A-Z0-9_]+ *(===|!==) *"1"` gate under `apps/web-platform/test/`
-via `git grep -hoE` on the tracked tree (no directory list — the same
-whole-repo producer discipline as `lint-orphan-test-suites.sh`), and asserts each
-gate var is either referenced in `.github/workflows/*.yml` or listed in the
-script's allowlist with a non-empty `reason: #N`. Zero gates found → error
-(anti-vacuity, not a pass). Seed allowlist:
+**and `apps/web-platform/lib/`** (the `unit` project collects
+`lib/**/*.test.ts` too — `vitest.config.ts`; a gate planted there would be
+dormant *and* sentinel-invisible under a `test/`-only census — the
+`lint-orphan-test-suites.sh` header already records the "one directory over"
+lesson) via `git grep -hoE` on the tracked tree, and asserts each gate var
+passes **both** arms:
+
+- **Var-level wiring (anchored):** the var appears in a *setting position* in
+  a `.github/workflows/*.yml` file — `env <VAR>=1` (run-prefix form) or
+  `<VAR>: ["']?1` (env-mapping form) — matched on comment-stripped content.
+  A bare-token match is vacuous: `tenant-integration.yml:4` today contains
+  `# TENANT_INTEGRATION_TEST=1 …` *inside a comment*, so a comment-only
+  reference would certify unwired while the suite still skips — the exact
+  defect this sentinel exists to kill (cq-assert-anchor-not-bare-token).
+- **File-level collection:** for every file containing a gate, the file is
+  *collected* by a workflow that wires its var — its app-relative path
+  (`test/…` / `lib/…`, prefix `apps/web-platform/` stripped for comparison)
+  OR its parent directory at depth ≥ 2 (`test/server/`, trailing slash)
+  appears as a whitespace/EOL-bounded token in that workflow. Bounded matching
+  is load-bearing: `test/server/` must not satisfy a file whose parent is
+  `test/`. A file may instead carry a per-file `collect:` allowlist entry
+  (for gates collected via a non-path mechanism).
+
+…or the var/file is listed in the script's allowlist with a non-empty `reason:
+#N` — seed entries cite `#9855` (this issue documents why each is exempt).
+Zero gates found → error (anti-vacuity, not a pass). Seed allowlist:
 
 | Var | Reason |
 |---|---|
-| `RLS_FUZZ_LOCAL` | local disposable-Postgres arm only; CI arm runs via `RLS_FUZZ_DATABASE_URL` in `rls-authz-fuzz.yml` |
-| `SOLEUR_ISOLATION_IN_IMAGE` | in-image arm of `test/sandbox-isolation.test.ts` — runs inside the runtime image, not GitHub CI |
-| `SOLEUR_ISOLATION_TEST_HOST` | deliberate fail-loud host-capability opt-in; CI must not satisfy it |
-| `ANTHROPIC_ISOLATION_TEST_OK` | manual opt-in for a host-level destructive arm |
+| `RLS_FUZZ_LOCAL` | local disposable-Postgres arm only; CI arm runs via `RLS_FUZZ_DATABASE_URL` in `rls-authz-fuzz.yml` (#9855) |
+| `SOLEUR_ISOLATION_IN_IMAGE` | in-image arm of `test/sandbox-isolation.test.ts` — runs inside the runtime image, not GitHub CI (#9855) |
+| `SOLEUR_ISOLATION_TEST_HOST` | deliberate fail-loud host-capability opt-in; CI must not satisfy it (#9855) |
+| `ANTHROPIC_ISOLATION_TEST_OK` | manual opt-in for a host-level destructive arm (#9855) |
 
 The sentinel prints a stable summary line — exactly
 `env-gates: found=<N> wired=<W> allowlisted=<A> uncovered=<U>` — with
 `uncovered=0` as the success contract (this literal is also the
 Observability `discoverability_test.expected_output` below, so it is pinned
-here, once).
+here, once). `found` counts gated *files*; a file whose var is wired but whose
+path is uncollected counts as uncovered.
+
+Companion battery `scripts/lint-integration-env-gates.test.sh` runs the
+mutation matrix over a scratch fixture tree. Fixture mechanism: the sentinel
+takes a `SOLEUR_LINT_GATES_ROOT` env override for producer/consumer roots
+(`lint-orphan-test-suites.sh`'s `BASH_SOURCE`-derived `REPO_ROOT` does not
+port to a fixture — spec, don't improvise).
 
 Registration: `run_suite` lines in `scripts/test-all.sh` for the sentinel and
-its companion `scripts/lint-integration-env-gates.test.sh` (mutation battery
-over a scratch fixture tree), plus one advisory step in ci.yml's
+its companion battery (unconditional — seconds on a scratch tree; interact
+with `suite-shard-legs{,-heavy}.tsv` via `scripts/regenerate-shard-manifest.py`
+and `scripts-shard-totality.test.sh` `--rows` pinning per the orphan battery's
+registration shape), plus one advisory step in ci.yml's
 `lint-bot-statuses` job next to `lint-orphan-test-suites.sh` — born-advisory,
 same promotion path (`required-checks.txt` + ruleset) the existing lints use.
+The dual registration (test-all.sh *and* the ci.yml step, so the sentinel runs
+twice per PR) is deliberate, matching `lint-orphan-test-suites.sh`.
 "Advisory" names the branch-protection contract only: a red sentinel still
-reds the ci.yml run `conclusion`, which `post-merge-monitor.yml` watches —
-that is intended, because the sentinel is deterministic (pure `git grep` on
-the tracked tree, no network), so its red means a real uncovered gate or a
+reds the ci.yml run `conclusion`, and its `run_suite` registration lands it in
+the `main-health-monitor.yml` sweep (Inngest-dispatched every 6h, files a
+`ci/main-broken` P1 on red) — *that* is the post-merge watcher
+(`post-merge-monitor.yml` filters `[bot-fix]` commits only and does not see
+ordinary merges; an earlier draft of this plan misattributed the alarm).
+Intended, because the sentinel is deterministic (pure `git grep` on the
+tracked tree, no network), so its red means a real uncovered gate or a
 sentinel bug, never a flake worth suppressing.
 
 Docs: `apps/web-platform/test/README.md` gains a "CI wiring" paragraph naming the
-new workflow, the seven gates it sets, and the shared-dev caveat.
+new workflow, the eight gates it sets (incl. `TENANT_INTEGRATION_TEST` for the
+departed-member file), and the shared-dev caveat — **and the flag table at the
+top is completed** (it currently lists only 3 of the 8+ gated suites, already
+stale). Also fix the now-false comment at `test/mu1.integration.test.ts:220`
+("CI never sets MU1_FIXTURE_*…" — false the night this merges).
 
 ## Implementation Phases
 
 **Phase 1 — sentinel first (failing-test-first).** Author
 `scripts/lint-integration-env-gates.sh` + companion battery. It MUST go red on
-the current tree (7 uncovered gates) — that red is the failing-test proof. Wire
-its `run_suite` registrations but do not commit a green yet.
+the current tree (7 unwired vars + the departed-member uncollected file) — that
+red is the failing-test proof. Wire its `run_suite` registrations but do not
+commit a green yet.
 
 **Phase 2 — the workflow.** Author
-`.github/workflows/scheduled-integration-suites.yml` per Proposed Solution. The
-sentinel flips green only once every non-allowlisted gate appears in a workflow
-file.
+`.github/workflows/scheduled-integration-suites.yml` per Proposed Solution
+(marker line 1, HOLD_S, per-step timeouts, 8 suite steps, filer + auto-close +
+heartbeat). The sentinel flips green only once every non-allowlisted gate
+appears in a setting position AND every gated file is collected.
 
-**Phase 3 — CI wiring + docs.** Add the advisory lint step to
-`lint-bot-statuses`; README paragraph.
+**Phase 3 — monitor IaC + CI wiring + docs.** `sentry_cron_monitor` +
+unrouted alert entry (same PR as the heartbeat step — parity test enforces it);
+advisory lint step in `lint-bot-statuses`; README paragraph + flag-table
+completion + mu1 comment fix; shard-manifest regeneration if the battery's
+registration requires it.
 
 ## Files to Create
 
-- `.github/workflows/scheduled-integration-suites.yml` (~200 lines)
-- `scripts/lint-integration-env-gates.sh` (~120 lines)
-- `scripts/lint-integration-env-gates.test.sh` (~160 lines)
+- `.github/workflows/scheduled-integration-suites.yml` (~260 lines)
+- `scripts/lint-integration-env-gates.sh` (~160 lines)
+- `scripts/lint-integration-env-gates.test.sh` (~200 lines)
 
 ## Files to Edit
 
@@ -296,7 +427,19 @@ file.
   `lint-orphan-test-suites*` block (~:5157-5188)
 - `.github/workflows/ci.yml` — one step in the `lint-bot-statuses` job beside
   "Lint orphan test suites" (~:344)
-- `apps/web-platform/test/README.md` — new "CI wiring" paragraph
+- `apps/web-platform/test/README.md` — "CI wiring" paragraph + complete the
+  stale flag table
+- `apps/web-platform/test/mu1.integration.test.ts` — fix the stale
+  "CI never sets MU1_FIXTURE_*" comment at :220
+- `apps/web-platform/infra/sentry/cron-monitors.tf` — new
+  `sentry_cron_monitor` `scheduled-integration-suites`
+  (`checkin_margin_minutes = 1440`, the realtime-probe's measured
+  false-alarm-free margin for daily GHA crons; `sentry-monitor-iac-parity.test.ts`
+  enforces slug parity — resource + workflow step land in the SAME PR, and a
+  typo'd slug pages "missed check-in" forever per `cron-monitors.tf`)
+- `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` — unrouted entry
+  per the two-PR convention (#8630, README §186-199; the routed alert is the
+  follow-up)
 
 ## User-Brand Impact
 
@@ -320,10 +463,10 @@ file.
 
 ```yaml
 liveness_signal:
-  what: "GitHub Actions nightly run 'Scheduled: integration suites' + ci/integration-suites tracking issue on failure"
+  what: "GitHub Actions nightly run 'Scheduled: integration suites' + Sentry cron-monitor check-in (dead-man arm: a never-fired or killed run misses its check-in and pages) + ci/integration-suites tracking issue on failure"
   cadence: "daily 04:30 UTC (cron '30 4 * * *') + workflow_dispatch"
-  alert_target: "GitHub issue labeled ci/integration-suites (created-or-commented on failure)"
-  configured_in: ".github/workflows/scheduled-integration-suites.yml (on.schedule + issue-filing step)"
+  alert_target: "GitHub issue labeled ci/integration-suites (created/commented/closed) + Sentry cron monitor 'scheduled-integration-suites' (missed check-in)"
+  configured_in: ".github/workflows/scheduled-integration-suites.yml (on.schedule + issue-filing + sentry-heartbeat steps) + apps/web-platform/infra/sentry/cron-monitors.tf (sentry_cron_monitor resource)"
 error_reporting:
   destination: "the tracking issue + the Actions run log; each suite step's outcome surfaces per-gate attribution"
   fail_loud: "run conclusion failure + ::error:: annotations + issue body naming steps.<id>.outcome"
@@ -340,6 +483,12 @@ failure_modes:
   - mode: "MU1 AC-2 fires and cannot mint an installation token (fixture creds drift)"
     detection: "the test's own partial-set canary + hard failure"
     alert_route: "mu1 step outcome in the filed issue"
+  - mode: "job-level timeout or runner cancellation (records cancelled, never failure)"
+    detection: "filer gated on failure() || cancelled(); per-step timeout-minutes keep a single hung suite a step failure, not a job cancel"
+    alert_route: "tracking issue (main-ref runs only) + missed Sentry check-in if the job dies before it"
+  - mode: "schedule never fires (disabled workflow, on: drift, GitHub dropped run — measured 2026-05-26 on the realtime probe)"
+    detection: "sentry-heartbeat terminal if: always() step; missed check-in pages the cron monitor"
+    alert_route: "Sentry cron monitor 'scheduled-integration-suites' missed-check-in alert"
 logs:
   where: "GitHub Actions run logs, 90-day retention (repo default)"
   retention: "90 days"
@@ -361,7 +510,9 @@ runner→Doppler, runner→dev-Supabase, and runner→api.github.com edges that
 `tenant-integration.yml` and `scheduled-realtime-probe.yml` already establish
 (TLS with cert verification on, enforced by the hosted clients); MU1 AC-2's
 fixture clone is `https://github.com/` (the test itself asserts the scheme).
-Files checked: no `.tf`, no `supabase/migrations/*.sql`, no
+Files checked: the two `.tf` edits are Sentry-monitor config-plane objects
+(no data store, no network edge — the runner→Sentry check-in edge already
+exists in 16 workflows); no `supabase/migrations/*.sql`, no
 `cloud-init*.yaml`, no `docker-compose*.yaml` in Files to Create/Edit.
 
 ## Architecture Decision (ADR/C4)
@@ -388,11 +539,13 @@ Derived cardinalities (edge prose counts) are not reached by this rubric.
 ### Guard 1 — `scripts/lint-integration-env-gates.sh`
 
 **Property.** Every `process.env.<VAR> ===|!== "1"` integration-test gate in the
-tracked `apps/web-platform/test/` tree is either referenced by a
-`.github/workflows/*.yml` file or allowlisted with a non-empty reason + issue ref
-— so no gated suite can report green while never running in CI.
+tracked `apps/web-platform/test/` + `apps/web-platform/lib/` trees is either
+(a) *set* by a `.github/workflows/*.yml` file AND every file carrying it is
+*collected* by a workflow that sets it, or (b) allowlisted with a non-empty
+reason + issue ref — so no gated suite can report green while never running in
+CI, at either the var level or the file level.
 
-**Assembly.** Producer: `git grep -hoE 'process\.env\.[A-Z0-9_]+ *(===|!==) *"1"' -- apps/web-platform/test/` (whole tracked tree — the canonical gate idiom only; non-`"1"` gates like `RLS_FUZZ_DATABASE_URL` presence checks are outside the idiom by design, same scope-boundary discipline as lint-orphan-test-suites' suffix keying). Consumer set: every file under `.github/workflows/` (the only CI registration surface) plus the script's own allowlist table — the single chokepoint for exemptions, each entry forced to carry `reason: #N`.
+**Assembly.** Producer: `git grep -hoE 'process\.env\.[A-Z0-9_]+ *(===|!==) *"1"' -- apps/web-platform/test/ apps/web-platform/lib/` (whole tracked tree — the canonical gate idiom only; non-`"1"` gates like `RLS_FUZZ_DATABASE_URL` presence checks are outside the idiom by design, same scope-boundary discipline as lint-orphan-test-suites' suffix keying; `lib/` is in scope because the `unit` project collects `lib/**/*.test.ts`). Consumer set: every file under `.github/workflows/` — comment-stripped — matching only *setting positions* `env <VAR>=1` or `<VAR>: ["']?1` (a bare-token or comment match does NOT count as wired; `tenant-integration.yml:4` is the live counterexample), plus the script's own allowlist table — the single chokepoint for exemptions, each entry forced to carry `reason: #N`. File-level arm: for each gated file, its app-relative path (`apps/web-platform/` stripped) OR its depth-≥2 parent dir with trailing slash must appear whitespace/EOL-bounded in a workflow that sets the gate; per-file `collect:` allowlist entries cover non-path collection mechanisms. `SOLEUR_LINT_GATES_ROOT` env override redirects producer+consumer roots for the fixture battery.
 
 **Mutation matrix:**
 
@@ -405,6 +558,10 @@ tracked `apps/web-platform/test/` tree is either referenced by a
 | 5 | Rename the gate var in the test file only (test/workflow spelling drift) | RED |
 | 6 | (harness) Delete one mutation row from `lint-integration-env-gates.test.sh` — remaining rows still exercise the sentinel, and the battery itself fails if the sentinel reports "0 checked" | RED on the battery's own anti-vacuity assertion |
 | 7 | (must-PASS, non-canonical input) Gate referenced as `FOO: "1"` in `env:` mapping form instead of `env FOO=1` prefix form — both spellings count as wired | PASS |
+| 8 | Gate var present only inside a workflow `#` comment (`# FOO=1` — the `tenant-integration.yml:4` shape) | RED |
+| 9 | Gate planted in `apps/web-platform/lib/` (collected by `unit`, outside a `test/`-only census) | RED |
+| 10 | Gated file whose var IS wired but whose path is collected by no workflow (the `dsar-departed-member` shape — var-level green, file-level dormant) | RED |
+| 11 | (must-PASS) Gated file under `test/server/` covered by the `test/server/` dir-filter token in the wiring workflow | PASS |
 
 **Anchor.** The allowlist lives in-repo, so a PR could add a gate AND exempt it
 in one diff — the sentinel cannot see motive, only that every exemption carries a
@@ -434,23 +591,46 @@ be narrowed by editing a manifest.
 
 ### Split Assessment
 
-- Subsystems touched: 3 — `.github`, `scripts`, `apps/web-platform/test`
-- Planned files: 6 | Estimated changed lines: ~540
+- Subsystems touched: 4 — `.github`, `scripts`, `apps/web-platform/test`,
+  `apps/web-platform/infra/sentry`
+- Planned files: 9 | Estimated changed lines: ~900
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR
+- Recommendation: single PR — one cohesive feature (the monitor IaC is the
+  dead-man arm of the same liveness contract; splitting it would break the
+  `sentry-monitor-iac-parity` invariant the PR itself relies on)
 
 ## Acceptance Criteria
 
-- [ ] `.github/workflows/scheduled-integration-suites.yml` exists with `schedule:` (`30 4 * * *`) + `workflow_dispatch`, no `pull_request`/`merge_group` triggers, `permissions: {contents: read, issues: write}`, `concurrency.group: dev-supabase-${{ github.ref }}`, `timeout-minutes: 30`.
+- [ ] `.github/workflows/scheduled-integration-suites.yml` exists with the literal `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` comment near the top, `schedule:` (`30 4 * * *`) + `workflow_dispatch`, no `pull_request`/`merge_group` triggers, `permissions: {contents: read, issues: write}`, job-level `concurrency.group: dev-supabase-${{ github.ref }}` with `cancel-in-progress: false`, `timeout-minutes: 60`.
 - [ ] The workflow asserts `dev_scheduled` resolves `environment=dev` and holds no `SUPABASE_ACCESS_TOKEN` before any Supabase secret is touched (block copied from `tenant-integration.yml` semantics, incl. `strip_log_injection`).
-- [ ] `scripts/dev-suite-mutex.sh` acquire precedes all dev-touching steps and `release` runs `if: always()`; identity `di-${{ github.run_id }}-${{ github.ref_name }}`.
-- [ ] `run-migrations.sh --bootstrap=skip` runs under `doppler run -c dev_scheduled` with `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` and NO `ALLOW_UNMERGED_DEV_APPLY`.
-- [ ] Seven steps export the seven gate vars `=1` over the twelve files enumerated in Proposed Solution (6 under `SUPABASE_DEV_INTEGRATION`, incl. `server/conversation-visibility.tenant-isolation.test.ts`), each `if: ${{ !cancelled() }}`, each `npm run test:ci -- … --project unit --reporter=verbose` under `doppler run`.
-- [ ] A failure-path step files-or-comments a `ci/integration-suites`-labeled issue naming the failing step outcome(s) and run URL (mirrors `scheduled-realtime-probe.yml` shape).
-- [ ] `scripts/lint-integration-env-gates.sh` exits non-zero listing ≥1 uncovered gate on a tree where a `process.env.X === "1"` gate has no workflow reference; exits non-zero when its own census finds 0 gates; on `origin/main` after this PR it prints `env-gates: found=<N> wired=<W> allowlisted=<A> uncovered=0` and exits 0.
-- [ ] `scripts/lint-integration-env-gates.test.sh` implements the Guard Contract mutation rows in a scratch fixture tree; both files registered via `run_suite` in `scripts/test-all.sh`; sentinel step added to ci.yml `lint-bot-statuses` (advisory — NOT added to `scripts/required-checks.txt` or the ruleset); `bash scripts/lint-orphan-test-suites.sh` passes with the new files tracked (registration proven by the census, not assumed).
-- [ ] `apps/web-platform/test/README.md` names the new workflow, lists the seven gates it sets, and records the shared-dev substrate decision with the dedicated-project revisit trigger.
+- [ ] `scripts/dev-suite-mutex.sh` acquire precedes all dev-touching steps with `DEV_SUITE_MUTEX_HOLD_S` set > the job timeout (3900) and `release` runs `if: always()`; identity `di-${{ github.run_id }}-${{ github.ref_name }}`.
+- [ ] `run-migrations.sh --bootstrap=skip` runs under `doppler run -c dev_scheduled` with `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` and NO `ALLOW_UNMERGED_DEV_APPLY`, preceded by the two live-state preflights.
+- [ ] Eight suite steps export the gate vars `=1` over the thirteen files enumerated in Proposed Solution (6 under `SUPABASE_DEV_INTEGRATION` incl. `server/conversation-visibility.tenant-isolation.test.ts`; `test/dsar-departed-member.integration.test.ts` under `TENANT_INTEGRATION_TEST`), each `working-directory: apps/web-platform`, `timeout-minutes: 6`, `if: ${{ !cancelled() }}`, `npm run test:ci -- … --project unit --reporter=verbose` under `doppler run`.
+- [ ] A reporting step files-or-comments a `ci/integration-suites`-labeled issue on `${{ (failure() || cancelled()) && github.ref == 'refs/heads/main' }}` naming the failing step outcome(s) and run URL, and a sibling step auto-closes the stale tracker on a green main run (both per `scheduled-realtime-probe.yml` shape).
+- [ ] A terminal `if: always()` `sentry-heartbeat` step with `monitor-slug: scheduled-integration-suites` exists, and `apps/web-platform/infra/sentry/cron-monitors.tf` declares the matching `sentry_cron_monitor` (+ unrouted `cron-monitor-alerts.tf` entry) in the same PR — `sentry-monitor-iac-parity.test.ts` green.
+- [ ] `scripts/lint-integration-env-gates.sh` exits non-zero listing ≥1 uncovered gate on a tree where a `process.env.X === "1"` gate has no workflow reference; exits non-zero when its own census finds 0 gates; a comment-only workflow mention does NOT satisfy wiring; an uncollected gated file does NOT satisfy coverage; on `origin/main` after this PR it prints `env-gates: found=<N> wired=<W> allowlisted=<A> uncovered=0` and exits 0.
+- [ ] `scripts/lint-integration-env-gates.test.sh` implements all Guard Contract mutation rows (incl. rows 8-11) in a scratch fixture tree via `SOLEUR_LINT_GATES_ROOT`; both files registered via `run_suite` in `scripts/test-all.sh`; sentinel step added to ci.yml `lint-bot-statuses` (advisory — NOT added to `scripts/required-checks.txt` or the ruleset); `bash scripts/lint-orphan-test-suites.sh` passes with the new files tracked (registration proven by the census, not assumed).
+- [ ] `apps/web-platform/test/README.md` names the new workflow, lists the eight gates it sets, completes the stale flag table, and records the shared-dev substrate decision with the dedicated-project revisit trigger; `test/mu1.integration.test.ts:220`'s stale comment is fixed.
 - [ ] Post-merge, one `gh workflow run scheduled-integration-suites.yml` dispatch on `main` reaches the suite steps and files or comments a `ci/integration-suites` issue on any red — verified by `gh run watch` (pipeline post-merge step; no live dev writes are performed inside the planning/implementing session beyond this dispatch).
+
+## Plan-Review Consolidation
+
+Four-seat panel (DHH / Kieran / code-simplicity / CTO-devex) — 4×
+APPROVE-WITH-CHANGES. All consolidated findings classified **Mechanical** (one
+right answer each: spec-vs-precedent drift, guard vacuity, missing repo-convention
+arms) and auto-applied above; **no Taste/User-Challenge findings** — the
+scheduled-vs-per-PR, sibling-file, and shared-dev decisions survive intact.
+Applied: mutex `HOLD_S` invariant; timeout→`cancelled` filer gap + per-step
+timeouts; dead-man heartbeat + monitor IaC; sentinel anchored consumer (comment
+false-positive at `tenant-integration.yml:4`), `lib/` producer scope, and
+file-level collection arm (live instance: `dsar-departed-member`); auto-close
+stale tracker; gate-override marker; `main-health-monitor` (not
+`post-merge-monitor`) watcher correction; `reason: #N` seed contract; Doppler v4
+pin; `working-directory`/`cancel-in-progress`/job-level-concurrency pins;
+live-state preflights; README table + mu1 comment; fetch-depth and
+7-vs-8-steps justification corrections. Deliberately not applied (documented):
+probe's email-notify arm (issue+heartbeat sufficient); culprit-PR attribution in
+the issue body (step-outcome attribution + run URL suffice at nightly cadence).
 
 ## Test Scenarios
 
