@@ -54,6 +54,14 @@ import { isSupportAllowedSkill } from "./support-directive";
 import { denySupport } from "./support-escalation";
 import { SUPPORT_AGENT_SESSION_HINT } from "@/lib/support-handoff";
 import type { Persona } from "./workspace-mode";
+import type { ProtectedBranches } from "./destroy-ask-classifier";
+import {
+  detectDestroyAsk,
+  buildDestroyAskQuestion,
+  logDestroyOutcome,
+  destroyRejectedMessage,
+  destroyExpiredMessage,
+} from "./destroy-ask-lane";
 
 // Write-class file tools denied (with escalation record) on support personas —
 // the read-class file tools (Read/Glob/Grep/LS/NotebookRead) stay on the normal
@@ -255,6 +263,18 @@ export interface CanUseToolDeps {
    * a support deny at all.)
    */
   repoConnected?: boolean;
+  /**
+   * #9776 / ADR-282 — the hosted must-ask lane's protected-branch resolver (union of the API default branch, the
+   * local origin/HEAD and main/master; memoised per session record). Awaited only after a force, delete or mirror
+   * push with a named destination is found. Unwired (legacy runner, tests) the lane fails toward ask: every such
+   * push asks.
+   */
+  resolveProtectedBranches?: () => Promise<ProtectedBranches>;
+  /**
+   * #9776 — `owner/name` of the connected repo, from `parseConnectedRepo(repoUrl)` at dispatch. `ctx.repoOwner` /
+   * `ctx.repoName` are empty strings on the cc path, so the lane's telemetry reads this instead. Pino only.
+   */
+  connectedRepoSlug?: string;
 }
 
 export interface CanUseToolContext {
@@ -631,6 +651,116 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           source: "bash",
           message: SUPPORT_BASH_DENY_MESSAGE,
         });
+      }
+
+      // #9776 / ADR-282 — HOSTED MUST-ASK LANE. One chokepoint, placed AFTER the
+      // blocklist deny (curl x && git push -f origin main still denies), the safe-bash
+      // allow (no ask row is safe-bash: corpus invariant) and the support-persona deny,
+      // and BEFORE the autonomous bypass, the first-run disclosure hold, the existing-
+      // workspace opt-out hold and the batched-approval cache. A match RETURNS from here,
+      // so none of those four routes can stand in for the Approve. The gate offers exactly
+      // Approve and Reject; approval is this command only (no ack, no cache entry, no
+      // `grant`); any selection other than the exact string `Approve` denies, so a forged
+      // `Approve all <prefix>` frame cannot reach the cache. Reject, timeout and abort deny
+      // and tell the agent not to retry or respell. A classifier error is itself a match.
+      {
+        const laneAckPosture = deps.resolveAckPosture
+          ? deps.resolveAckPosture()
+          : deps.autonomousAckAt;
+        const destroyMatch = await detectDestroyAsk(
+          {
+            key: ctx,
+            autonomous: Boolean(deps.bashAutonomous),
+            isOwner: Boolean(deps.isOwner),
+            acked: laneAckPosture != null,
+            repo: deps.connectedRepoSlug ?? "",
+            resolveProtectedBranches: deps.resolveProtectedBranches,
+          },
+          command,
+        );
+        if (destroyMatch) {
+          const destroyGateId = randomUUID();
+          const destroyQuestion = buildDestroyAskQuestion(destroyMatch, command);
+          const destroyOptions = ["Approve", "Reject"];
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "deny",
+            "hosted-destroy-ask",
+          );
+          const destroyDelivered = deps.sendToClient(ctx.userId, {
+            type: "review_gate",
+            gateId: destroyGateId,
+            question: destroyQuestion,
+            options: destroyOptions,
+          });
+          if (!destroyDelivered) {
+            deps.notifyOfflineUser(ctx.userId, {
+              type: "review_gate",
+              conversationId: ctx.conversationId,
+              agentName: ctx.leaderId ?? "Agent",
+              question: destroyQuestion,
+            }).catch((err) =>
+              log.error(
+                { userId: ctx.userId, err },
+                "Offline notification failed (destroy gate)",
+              ),
+            );
+          }
+          await deps.updateConversationStatus(
+            ctx.conversationId,
+            "waiting_for_user",
+          );
+          let destroySelection: string | null = null;
+          try {
+            destroySelection = await deps.abortableReviewGate(
+              ctx.session,
+              destroyGateId,
+              options.signal,
+              undefined,
+              destroyOptions,
+            );
+          } catch {
+            // Timeout or abort: fail closed (deny), never an allow.
+            destroySelection = null;
+          } finally {
+            await deps.updateConversationStatus(ctx.conversationId, "active");
+          }
+          if (destroySelection === null) {
+            logDestroyOutcome("expired", destroyMatch, Boolean(deps.isOwner));
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "deny",
+              "destroy-ask-expired",
+            );
+            return {
+              behavior: "deny" as const,
+              message: destroyExpiredMessage(),
+            };
+          }
+          if (destroySelection !== "Approve") {
+            logDestroyOutcome("rejected", destroyMatch, Boolean(deps.isOwner));
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "deny",
+              "destroy-ask-rejected",
+            );
+            return {
+              behavior: "deny" as const,
+              message: destroyRejectedMessage(),
+            };
+          }
+          logDestroyOutcome("approved", destroyMatch, Boolean(deps.isOwner));
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "allow",
+            "destroy-ask-approved",
+          );
+          return allow(toolInput);
+        }
       }
 
       // Issue B part 2 — autonomous/trusted bypass. Placed AFTER the

@@ -47,6 +47,8 @@ export interface DestroyMatch {
   segment?: string;
   /** Set only on `classifier-error`; the caller mirrors it to Sentry (`destroy-classifier-error`). */
   error?: unknown;
+  /** Whether the default branch was authoritatively resolved; null when the resolver was never consulted. */
+  authoritative?: boolean | null;
 }
 
 export interface ProtectedBranches {
@@ -643,20 +645,23 @@ async function rawScan(command: string, lazy: Lazy): Promise<boolean> {
   return false;
 }
 
-function memoise(resolve: ResolveProtected): Lazy {
+function memoise(resolve: ResolveProtected, seen: { authoritative: boolean | null }): Lazy {
   let p: Promise<ProtectedBranches> | null = null;
   return () => {
     if (!p) {
       p = (async () => {
+        let out: ProtectedBranches;
         try {
           const v = await resolve();
           const names = new Set<string>();
           for (const x of v.names) names.add(String(x).toLowerCase());
-          return { names, authoritative: v.authoritative === true };
+          out = { names, authoritative: v.authoritative === true };
         } catch {
           // A throwing resolver degrades to "unresolved": every force/delete push asks.
-          return { names: new Set(FALLBACK_NAMES), authoritative: false };
+          out = { names: new Set(FALLBACK_NAMES), authoritative: false };
         }
+        seen.authoritative = out.authoritative;
+        return out;
       })();
     }
     return p;
@@ -690,7 +695,8 @@ export async function classifyDestroyFamily(
   let src = "";
   try {
     src = typeof command === "string" ? command : String(command);
-    const lazy = memoise(resolveProtected);
+    const seen: { authoritative: boolean | null } = { authoritative: null };
+    const lazy = memoise(resolveProtected, seen);
     let simples: Words[];
     try {
       if (src.length > MAX_LEN) throw new Unparseable("size");
@@ -699,19 +705,19 @@ export async function classifyDestroyFamily(
       if (!(err instanceof Unparseable)) throw err;
       const stripped = src.replace(/['"\\]/g, "").toLowerCase();
       if (stripped.includes("destroy") || stripped.includes("push")) {
-        return { ruleId: `${DESTROY_RULE_PREFIX}fail-closed-keyword`, family: "fail-closed" };
+        return { ruleId: `${DESTROY_RULE_PREFIX}fail-closed-keyword`, family: "fail-closed", authoritative: null };
       }
       return null;
     }
     for (const words of simples) {
       const m = await analyzeSimple(words, lazy);
-      if (m) return m;
+      if (m) return { ...m, authoritative: seen.authoritative };
     }
     if (await rawScan(src, lazy)) {
-      return { ruleId: `${DESTROY_RULE_PREFIX}raw-scan`, family: "fail-closed" };
+      return { ruleId: `${DESTROY_RULE_PREFIX}raw-scan`, family: "fail-closed", authoritative: seen.authoritative };
     }
     return null;
   } catch (error) {
-    return { ruleId: `${DESTROY_RULE_PREFIX}classifier-error`, family: "fail-closed", error };
+    return { ruleId: `${DESTROY_RULE_PREFIX}classifier-error`, family: "fail-closed", error, authoritative: null };
   }
 }
