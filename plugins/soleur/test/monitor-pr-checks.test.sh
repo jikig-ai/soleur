@@ -590,8 +590,9 @@ out="$(PATH="$STUB:$PATH" timeout 30 bash "$SUT" 7778 --interval 10 --max-polls 
 cat > "$STUB/verdict.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_VLOG"
-[[ -f "$STUB_VSTATE.fail" ]] && exit 3
-printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=stub\n' "$(cat "$STUB_VSTATE")"
+# The REAL error shape: a state=error marker (outside the six-state set) AND exit 3, as ci-head-verdict.sh prints it.
+[[ -f "$STUB_VSTATE.fail" ]] && { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=api-error\n'; exit 3; }
+printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=%s\n' "$(cat "$STUB_VSTATE")" "$([[ "$(cat "$STUB_VSTATE")" == stalled ]] && echo undecided-after-120m || echo stub)"
 EOF
 chmod +x "$STUB/verdict.sh"
 export STUB_VLOG="$STUB/verdict-calls" STUB_VSTATE="$STUB/verdict-state" CI_HEAD_VERDICT_BIN="$STUB/verdict.sh"
@@ -618,7 +619,7 @@ if [[ "$rc" -eq 2 && "$out" != *"SETTLED"* && "$out" == *"test(ready run no-run)
 else no "T30c no-run" "rc=$rc out=[$out]"; fi
 setv stalled
 out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
-if [[ "$rc" -eq 1 && "$out" == *"READY RUN STALLED"* && "$out" == *"gh pr ready --undo 7778"* && "$out" == *"gh pr ready 7778"* && "$out" != *"SETTLED WITH NON-PASS"* ]]; then
+if [[ "$rc" -eq 1 && "$out" == *"READY RUN STALLED"* && "$out" == *"undecided-after-120m"* && "$out" != *"75 minutes"* && "$out" == *"gh pr ready --undo 7778"* && "$out" == *"gh pr ready 7778"* && "$out" != *"SETTLED WITH NON-PASS"* ]]; then
   ok "T30d stalled: the watch ends rc=1 with the recovery command and no fix loop on the draft-red row"
 else no "T30d stalled" "rc=$rc out=[$out]"; fi
 setv awaiting-approval
@@ -636,7 +637,7 @@ out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 [[ "$rc" -eq 1 && "$out" == *"fail:test"* ]] && ok "T30g n/a: today's reading (a red test on a never-draft PR is FAILED)" || no "T30g n/a" "rc=$rc out=[$out]"
 setv pending-full; touch "$STUB_VSTATE.fail"
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
-[[ "$rc" -eq 1 && "$out" == *"fail:test"* ]] && ok "T30h a resolver that errors keeps today's reading (fail toward FAILED, never toward PENDING)" || no "T30h resolver error" "rc=$rc out=[$out]"
+[[ "$rc" -eq 1 && "$out" == *"fail:test"* && "$out" != *"test(ready run"* ]] && ok "T30h a resolver that errors (state=error marker, exit 3) keeps today's reading (fail toward FAILED, never toward PENDING)" || no "T30h resolver error" "rc=$rc out=[$out]"
 mkstub 'OPEN|BLOCKED|true' "$RED_CHECKS"
 setv pending-full
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?

@@ -198,14 +198,16 @@ in_queue() {
 # state, or "" when it cannot answer (script absent, gh failed): every caller then keeps today's reading, never a
 # softer one. CI_HEAD_VERDICT_BIN is the test seam.
 VERDICT_SH="${CI_HEAD_VERDICT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/ci-head-verdict.sh}"
-V_STATE=""
+V_STATE=""; V_WHY=""
 ci_verdict() {
   local m
-  V_STATE=""
+  V_STATE=""; V_WHY=""
   [[ -r "$VERDICT_SH" ]] || return 1
   m="$(bash "$VERDICT_SH" verdict "$PR" "${REPO_ARG[@]}" 2>/dev/null)" || true
   m="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$m")" || return 1
+  V_WHY="${m#* reason=}"; V_WHY="${V_WHY%% *}"
   m="${m#*state=}"; m="${m%% *}"
+  # state=error (a resolver that could not read) is outside this set on purpose: today's reading stays.
   case "$m" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) V_STATE="$m" ;; *) return 1 ;; esac
 }
 
@@ -321,7 +323,7 @@ while :; do
   # the draft run is not a recovery (it reuses the cached draft-light output and can cancel the in-flight ready run).
   case "$V_STATE" in
     stalled)
-      printf 'READY RUN STALLED — PR #%s was marked ready but no full CI run decided within 75 minutes of the ready event; the red test row is the DRAFT run'"'"'s, by design. Do NOT start a fix loop on it. Recovery with a user token (never GITHUB_TOKEN): gh pr ready --undo %s ; gh pr ready %s\n' "$PR" "$PR" "$PR"
+      printf 'READY RUN STALLED — PR #%s was marked ready but no full CI run decided (%s: the stall window counts from the ready event); the red test row is the DRAFT run'"'"'s, by design. Do NOT start a fix loop on it. First confirm in the Actions tab that the ready run is not still in flight; recovery with a user token (never GITHUB_TOKEN): gh pr ready --undo %s ; gh pr ready %s\n' "$PR" "$V_WHY" "$PR" "$PR"
       exit 1 ;;
     awaiting-approval)
       printf 'READY RUN AWAITING APPROVAL — PR #%s: the ready run is waiting for a maintainer to approve a fork workflow run (Actions tab, "Approve and run"); nothing starts until it is approved, and the red test row is the draft run'"'"'s.\n' "$PR"

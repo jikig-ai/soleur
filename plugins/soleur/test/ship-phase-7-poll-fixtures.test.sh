@@ -127,7 +127,7 @@ rm -f "$PLUGIN_COPY/scripts/resolve-regenerable-conflicts.sh"
 # unmodelled. Every row that does not ask about it runs a resolver that cannot answer (exit 3), which is the
 # production shape of an API outage and must keep today's `required_failed` behaviour (V6 pins that). The real
 # resolver has its own suite (plugins/soleur/test/ci-head-verdict.test.sh); the V rows install a stub that answers.
-printf '#!/usr/bin/env bash\nexit 3\n' > "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
+printf '#!/usr/bin/env bash\nprintf "SOLEUR_CI_HEAD_VERDICT state=error pr=%%s sha=unknown run=none reason=api-error\\n" "$2"\nexit 3\n' > "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
 chmod +x "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
 
 # ---------------------------------------------------------------------------
@@ -1991,7 +1991,8 @@ cat > "$VROOT/scripts/ci-head-verdict.sh" <<'VSTUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MOCK_STATE/vcalls"
 st="$(cat "$MOCK_STATE/vstate" 2>/dev/null)"
-[[ -n "$st" ]] || exit 3
+# The REAL error shape: a state=error marker (outside the six-state set) AND exit 3, as ci-head-verdict.sh prints it.
+[[ -n "$st" ]] || { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=%s sha=x run=none reason=api-error\n' "$2"; exit 3; }
 printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=%s sha=x run=none reason=stub\n' "$st" "$2"
 VSTUB
 chmod +x "$VROOT/scripts/ci-head-verdict.sh"
@@ -2010,7 +2011,7 @@ rm -f "$QF"
 q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo stalled > "$MOCK_STATE/vstate"'
 run_scenario_both "V3-stalled-stops-with-the-recovery-command" "$QF" \
   "\[1/90\] \[ship\.phase7\.ready_unarmed\] .*stalled
-gh pr ready --undo 4387 ; gh pr ready 4387" \
+Start no fix loop\. Recovery: .*ready-run-wait\.md" \
   "required_failed|MERGED|$V_FORBID"
 rm -f "$QF"
 q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo awaiting-approval > "$MOCK_STATE/vstate"'

@@ -65,7 +65,7 @@ The helper runs `gh pr list --state open --json number,title,headRefName,isDraft
 | `needs-lockfile-fix` | deps PR (`labels` has `dependencies`) failing `lockfile-sync` / `test-webplat` / `e2e` on a frozen-install step | fix-recipe (a) → merge |
 | `needs-conflict-resolution` | `mergeable=CONFLICTING`, few/no other failures | fix-recipe (b) → merge |
 | `needs-review` | `bot-fix/review-required` label, or a feature PR with no review | review (delegate or inline) → merge |
-| `ready-unarmed` | ready PR whose head verdict (`ci-head-verdict.sh`) is `no-run` or `stalled`: no full CI run exists, the red `test` row is the draft run's | **recover, never arm**: `gh pr ready --undo <N>` then `gh pr ready <N>` (user token), then re-triage |
+| `ready-unarmed` | ready PR whose head verdict (`ci-head-verdict.sh`) is `no-run` or `stalled`: no full CI run exists, the red `test` row is the draft run's. `awaiting-approval` is not here: it lands in `needs-review` (the line shows `ci=awaiting-approval`; a maintainer must approve the fork run) | **recover, never arm**, unless another session is still inside `wait-ready-run` for it: `gh pr ready --undo <N>`, then the whole ready block ([ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md)), then re-triage |
 | `drafts` | `isDraft=true` | **skip** — author-owned WIP, never merged |
 | `broken` | `CONFLICTING` **and** many failing checks | surface; fix only if in explicit scope |
 
@@ -77,7 +77,7 @@ Present the tier table via `AskUserQuestion`. The operator selects which tiers t
 
 ### 4. Per in-scope PR — ensure green, then merge
 
-For each selected PR: bring it to green via the fix-recipes below if needed, then arm it (under the merge queue this ENQUEUES the PR; it is not yet merged). A `ready-unarmed` PR (readied, but no full CI run exists) is NOT armed: recover it first with a user token (`GITHUB_TOKEN` cannot ready a PR) via `gh pr ready --undo <N>` then `gh pr ready <N>`. A draft the operator authorizes is readied the same way and armed only once `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <N>) && gh pr ready <N> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <N> --before-count "$K"` exits 0; on non-zero report "readied but unarmed" with the reason and arm nothing:
+For each selected PR: bring it to green via the fix-recipes below if needed, then arm it (under the merge queue this ENQUEUES the PR; it is not yet merged). A `ready-unarmed` PR (readied, but no full CI run exists) is NOT armed: recover it first (`gh pr ready --undo <N>` with a user token, then the whole block below; `GITHUB_TOKEN` cannot ready a PR). A draft the operator authorizes is readied the same way and armed only once `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <N>) && gh pr ready <N> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <N> --before-count "$K"` exits 0 (one Bash call, `timeout: 330000`; reasons and recoveries: [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md)); on non-zero report "readied but unarmed" with the last stdout line and arm nothing:
 
 ```bash
 gh pr merge <N> --squash --auto
@@ -124,7 +124,7 @@ If `$ARGUMENTS` contains a `RETURN CONTRACT` section (i.e., this skill is being 
 
 ## Sharp edges
 
-- **Drafts are always skipped.** A draft PR is author-owned WIP; merging it would ship incomplete work. No flag overrides this.
+- **Drafts are skipped unless the operator names one.** A draft PR is author-owned WIP; merging it would ship incomplete work. The only exception is a draft the operator explicitly authorizes in the request (readied and armed through the block above); no flag selects drafts.
 - **`gh pr merge --squash --auto` cannot bypass server-side required checks.** Branch protection enforces `CI Required` and the merge queue re-runs the checks on its own candidate, so a mis-triaged red PR never lands — but under the queue it does not fail at merge time: a red candidate is a SILENT dequeue (the PR stays OPEN, auto-merge disarmed). See it with the dequeue arm in step 4 (`gh run list --event merge_group`, or `gh pr view <N> --json state,autoMergeRequest`); the triage is an optimization, not the safety boundary.
 - **An operator-authorized admin merge removes the server-side check the bullet above relies on.** It goes through [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) step 2 (`"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`, which must exit 0) and that file's merge block, never through a `gh pr checks --required` watch (#8458, #8500). For a PR that is BEHIND with the new head's checks unsettled, "CI was green" is encoded as `--green-sha <prior-green-sha>`: it certifies the current head only when that head is GitHub's own verified merge of the green sha and the base — see the reference's "was-green carryover" section.
 - **The two `2026-06-30-*` learnings and ADR-033 §Registration checklist** referenced in the fix-recipes landed in PR #5808 — they are on `main`. If a future reorg moves them, update the paths here.

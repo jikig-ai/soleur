@@ -1972,14 +1972,14 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
 
-6. If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming:
+6. If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming. One Bash call, `timeout: 330000`:
 
    ```bash
    K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER) && gh pr ready PR_NUMBER \
      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
    ```
 
-   On non-zero (`no-ready-event`, `no-run`, `awaiting-approval`) do NOT run `gh pr merge --squash --auto`: report "readied but unarmed" with the reason and the recovery `gh pr ready --undo PR_NUMBER` then `gh pr ready PR_NUMBER`.
+   Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo).
 
    If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
@@ -2312,12 +2312,13 @@ while true; do
       vstate=""
       for n in "${failed_names[@]}"; do
         [[ "$n" == test && -n "$SYNC_SNAP" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] || continue
-        vline="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null | grep -m1 '^SOLEUR_CI_HEAD_VERDICT ')" || vline=""
+        vout="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || vout=""
+        vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
         vstate="${vline#*state=}"; vstate="${vstate%% *}"; break
       done
       case "$vstate" in
         stalled|awaiting-approval)
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.ready_unarmed] PR $PR was marked ready but its ready run is ${vstate}; the red test row is the draft run's. Start no fix loop. Recovery (user token): gh pr ready --undo $PR ; gh pr ready $PR"
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.ready_unarmed] PR $PR was marked ready but its ready run is ${vstate}; the red test row is the draft run's. Start no fix loop. Recovery: ready-run-wait.md"
           break ;;
       esac
       required_failed=""

@@ -30,7 +30,9 @@
 # whether that row is the draft-era one: pending-full, no-run, stalled and awaiting-approval
 # never count it failing; full-decided and n/a keep today's reading. A resolver that errors
 # keeps today's reading too. Live mode calls the resolver for each non-draft PR with a failing
-# `test` row; --fixture mode never does unless CI_HEAD_VERDICT_BIN is set (a test seam).
+# `test` row; --fixture mode never does unless CI_HEAD_VERDICT_BIN is set (a test seam). A resolver that cannot read prints
+# state=error (exit 3), outside the six whitelisted states, so it is ignored: a real red `test` is never softened by an outage.
+# `no-run` goes to ready-unarmed too, with a recovery that first asks whether another session is still inside wait-ready-run.
 
 set -euo pipefail
 
@@ -76,7 +78,8 @@ fi
 # Candidates: non-draft PRs whose newest `test` row is failing. One resolver call each.
 VERDICT_BIN="${CI_HEAD_VERDICT_BIN:-}"
 if [[ -z "$VERDICT_BIN" && -z "$FIXTURE" ]]; then
-  VERDICT_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" 2>/dev/null && pwd -P)/ci-head-verdict.sh"
+  VERDICT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" 2>/dev/null && pwd -P)" || VERDICT_DIR=""
+  [[ -z "$VERDICT_DIR" ]] || VERDICT_BIN="$VERDICT_DIR/ci-head-verdict.sh"
 fi
 VERDICTS='{}'
 if [[ -n "$VERDICT_BIN" && -r "$VERDICT_BIN" ]]; then
@@ -126,7 +129,9 @@ fi
 CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
   # The NEWEST row per check name: a ready PR lists the draft run rows and the ready run rows.
   # A queued re-run has no startedAt yet, so a null sorts as the newest.
-  def newest: [ .statusCheckRollup[]? ] | group_by(.name // .context // "") | map(sort_by(.startedAt // "9999") | last);
+  # Keyed on workflow AND name: two workflows may each carry a check called `detect` or `build`, and a newer green in one
+  # must not hide an older red in the other.
+  def newest: [ .statusCheckRollup[]? ] | group_by([.workflowName // "", .name // .context // ""]) | map(sort_by(.startedAt // "9999") | last);
   # The draft-era `test` row is not a failure while the head verdict says a ready run is coming or missing.
   def softened($v): ($v == "pending-full" or $v == "no-run" or $v == "stalled" or $v == "awaiting-approval");
   def counted($v): [ newest[] | select(((.name // .context) == "test" and softened($v)) | not) ];
@@ -157,7 +162,7 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
         end
       )
     }
-    | if .tier == "ready-unarmed" then . + { recovery: "gh pr ready --undo \(.number) && gh pr ready \(.number)  (user token, never GITHUB_TOKEN)" } else . end
+    | if .tier == "ready-unarmed" then . + { recovery: "if no session is still inside wait-ready-run for it: gh pr ready --undo \(.number) && gh pr ready \(.number)  (user token, never GITHUB_TOKEN), then re-run the whole ship step 6 block (read ready-count first, arm only after wait-ready-run exits 0)" } else . end
   ]' <<<"$PR_JSON")"
 
 # --- Emit -------------------------------------------------------------------

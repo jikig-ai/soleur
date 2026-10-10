@@ -137,7 +137,8 @@ SLP
 cat > "$BIN/verdict.sh" <<'VS'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FX/vlog"
-[[ -f "$FX/vstate.fail" ]] && exit 3
+# The REAL error shape: a state=error marker (outside the six-state set) AND exit 3, carrying the real sha like the resolver does.
+[[ -f "$FX/vstate.fail" ]] && { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=%s sha=%s run=none reason=api-error\n' "$STUB_PR" "$STUB_SHA"; exit 3; }
 st=n/a; rn=none; sh="$STUB_SHA"
 [[ -f "$FX/vstate" ]] && read -r st rn sh < "$FX/vstate"
 printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=%s sha=%s run=%s reason=stub\n' "${st:-n/a}" "$STUB_PR" "${sh:-$STUB_SHA}" "${rn:-none}"

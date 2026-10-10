@@ -444,6 +444,47 @@ row_L1() { local f bad="" hits skills
     ok "L1.$f-gates-arming-on-wait-ready-run" grep -q 'wait-ready-run' "$REPO_ROOT/plugins/soleur/skills/$f/SKILL.md"
   done; }
 
+# L2: the arm-after-ready ORDER in the prose a model executes. Substring greps ("the file mentions wait-ready-run") cannot see
+# the order, so extract the chain and match it as a whole: `K=$(… ready-count N) && gh pr ready N && … wait-ready-run N
+# --before-count "$K"`, in ship's fenced block, the inline spans of merge-pr and drain-prs, and the shared reference. Known
+# negatives: K read AFTER the ready call, and the wait deleted, must both be rejected (a SKILL.md that merely mentions the
+# verb a second time in other prose satisfied the old grep).
+chain_ok() { python3 - "$1" <<'PY2'
+import re, sys
+t = open(sys.argv[1]).read()
+rc = r'K=\$\(bash "[^"\n]*ci-head-verdict\.sh" ready-count (?:PR_NUMBER|<number>|<N>)\)'
+rd = r'gh pr ready (?:PR_NUMBER|<number>|<N>)'
+wt = r'bash "[^"\n]*ci-head-verdict\.sh" wait-ready-run (?:PR_NUMBER|<number>|<N>) --before-count "\$K"'
+pat = rc + r'\s*&&\s*' + rd + r'\s*(?:\\\n\s*)?&&\s*' + wt
+sys.exit(0 if re.search(pat, t) else 1)
+PY2
+}
+row_L2() { local f c ship="$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md" cp="$SANDBOX/chain" m
+  for f in plugins/soleur/skills/ship/SKILL.md plugins/soleur/skills/merge-pr/SKILL.md plugins/soleur/skills/drain-prs/SKILL.md plugins/soleur/skills/ship/references/ready-run-wait.md; do
+    ok "L2.$f.order-ready-count-then-ready-then-wait" chain_ok "$REPO_ROOT/$f"
+  done
+  mkdir -p "$cp"
+  # known negative 1: K is read AFTER gh pr ready (a stale K lets the wait pass on the first ready event)
+  python3 - "$ship" "$cp/k-after.md" <<'PY2'
+import sys
+t = open(sys.argv[1]).read()
+a = 'K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER) && gh pr ready PR_NUMBER'
+assert t.count(a) == 1
+open(sys.argv[2], 'w').write(t.replace(a, 'gh pr ready PR_NUMBER && K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER)'))
+PY2
+  ok L2.known-negative-K-after-ready-is-rejected test "$(chain_ok "$cp/k-after.md" && echo accepted || echo rejected)" = rejected
+  # known negative 2: the wait is deleted from the chain
+  python3 - "$ship" "$cp/no-wait.md" <<'PY2'
+import re, sys
+t = open(sys.argv[1]).read()
+n = re.sub(r' \\\n\s*&& bash "[^"\n]*ci-head-verdict\.sh" wait-ready-run PR_NUMBER --before-count "\$K"', '', t)
+assert n != t
+open(sys.argv[2], 'w').write(n)
+PY2
+  ok L2.known-negative-wait-deleted-is-rejected test "$(chain_ok "$cp/no-wait.md" && echo accepted || echo rejected)" = rejected
+  # the old grep is satisfied by a second mention of the verb elsewhere: prove the new row is not
+  ok L2.the-old-substring-check-would-have-passed grep -q 'wait-ready-run' "$cp/no-wait.md"; }
+
 # ── mutation rows ───────────────────────────────────────────────────────────────────────────
 MUT_PASS=0; MUT_RUN=0; VERDICTS_EXPECTED=0
 # mutant_run <id> <python-old> <python-new> <kill-row...>: apply ONE edit, run the kill rows against the mutant. Sets
@@ -537,6 +578,7 @@ run_row row_W13 "W13 uncountable timeline fails closed (api-error)"
 run_row row_W14 "W14 ready-count counts ReadyForReviewEvents"
 echo "== reader-bypass lint =="
 run_row row_L1 "L1  every reader of a PR's CI state reaches the resolver"
+run_row row_L2 "L2  arm-after-ready order: ready-count, gh pr ready, wait-ready-run (known negatives rejected)"
 
 echo "== mutation rows =="
 mutant M1  'select(.head_sha == $h and .event == "pull_request")' 'select(.head_sha == $h and .event == "pull_request" and ([.pull_requests[]?.number] | index(4242)) != null)' row_V11 row_V4
@@ -574,7 +616,7 @@ mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
-MIN_ASSERTIONS=336
+MIN_ASSERTIONS=343
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi

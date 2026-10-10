@@ -228,16 +228,16 @@ fail3() { MSG="ERROR: $1"; REASON="$2"; return 3; }
 
 # resolve_head_verdict: V_STATE / V_RUN from ci-head-verdict.sh for THIS PR at THIS head ($SHA). Returns 1 (and leaves
 # V_STATE empty) when it cannot answer: the caller then keeps today's reading. CI_HEAD_VERDICT_BIN is the test seam.
-V_STATE=""; V_RUN="none"
+V_STATE=""; V_RUN="none"; V_WHY=""
 resolve_head_verdict() {
   local bin m
-  V_STATE=""; V_RUN="none"
+  V_STATE=""; V_RUN="none"; V_WHY=""
   bin="${CI_HEAD_VERDICT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/ci-head-verdict.sh}"
   [[ -r "$bin" ]] || return 1
   m="$(bash "$bin" verdict "$PR" 2>/dev/null)" || true
   m="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$m")" || return 1
   [[ "$m" == *" sha=$SHA "* ]] || return 1
-  V_RUN="${m#* run=}"; V_RUN="${V_RUN%% *}"
+  V_RUN="${m#* run=}"; V_RUN="${V_RUN%% *}"; V_WHY="${m#* reason=}"; V_WHY="${V_WHY%% *}"
   m="${m#*state=}"; m="${m%% *}"
   case "$m" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) V_STATE="$m" ;; *) return 1 ;; esac
 }
@@ -262,7 +262,7 @@ soften_test_row() {
              | .lines |= map(if startswith("FAILED  test (") then "PENDING test (awaiting-approval: a maintainer must approve the fork workflow run)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
     stalled)
       REASON_OVERRIDE="stalled"
-      MSG="STALLED: this PR was marked ready but no full CI run decided within 75 minutes of the ready event. Recovery: $RECOVERY"
+      MSG="STALLED: this PR was marked ready but no full CI run decided ($V_WHY: the stall window counts from the ready event). Recovery: $RECOVERY"
       jq -c '.failed -= ["test"] | .absent += ["test"]
              | .lines |= map(if startswith("FAILED  test (") then "ABSENT  test (stalled: no full CI run decided after the ready event)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
     full-decided)
