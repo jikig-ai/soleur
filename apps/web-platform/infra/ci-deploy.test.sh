@@ -447,6 +447,8 @@ if [[ "${1:-}" == "inspect" ]]; then
   for _a in "$@"; do
     if [[ "$_a" == *HostConfig.CapAdd* || "$_a" == *HostConfig.SecurityOpt* ]]; then
       if [[ -n "${MOCK_INSPECT_SLEEP:-}" ]]; then /bin/sleep "$MOCK_INSPECT_SLEEP"; fi
+      _re='^\{\{range \.HostConfig\.SecurityOpt\}\}\{\{printf "%\.([0-9]+)s" \.\}\} \{\{end\}\}$'
+      if [[ "$_a" == *printf* && ! "$_a" =~ $_re ]]; then echo "template parsing error: printf outside the SecurityOpt range form" >&2; exit 1; fi
       _rest="$_a"
       while [[ "$_rest" =~ \{\{([^}]*)\}\} ]]; do
         _f="${BASH_REMATCH[1]}"
@@ -462,7 +464,6 @@ if [[ "${1:-}" == "inspect" ]]; then
       [[ "$_a" == *HostConfig.CapDrop* ]] && _out+="capdrop=[ALL] "
       if [[ "$_a" == *HostConfig.SecurityOpt* ]]; then
         _prof="{\"defaultAction\":\"SCMP_ACT_ERRNO\",\"syscalls\":[{\"names\":[\"$(head -c 12000 /dev/zero | tr '\0' 'x')\"]}]}"
-        _re='^\{\{range \.HostConfig\.SecurityOpt\}\}\{\{printf "%\.([0-9]+)s" \.\}\} \{\{end\}\}$'
         if [[ "$_a" =~ $_re ]]; then
           _w="${BASH_REMATCH[1]}"; _e1="apparmor=soleur-bwrap"; _e2="seccomp=$_prof"
           _out+="${_e1:0:_w} ${_e2:0:_w} "
