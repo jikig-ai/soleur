@@ -109,6 +109,8 @@ yes "the environment lives on the soleur-inngest project" \
   "grep -qF 'project = \"soleur-inngest\"' < <(grep -A4 'resource \"doppler_environment\" \"rehearsal\"' '$REH_CODE' )"
 yes "the service token is READ-scoped (the provision path only reads)" \
   "grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"' < <(awk '/resource \"doppler_service_token\" \"rehearsal\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
+yes "INNGEST_REDIS_LUKS_KEY is seeded in the scratch env (the LUKS stage FATALs on an empty key — 'refusing an unencrypted mount', attempt-3)" \
+  "grep -qF 'name       = \"INNGEST_REDIS_LUKS_KEY\"' '$REH_CODE'"
 yes "INNGEST_DIAGNOSTIC_BOOT is staged true (the rehearsal can never run a live scheduler)" \
   "grep -qE 'value[[:space:]]*=[[:space:]]*\"true\"' < <(awk '/resource \"doppler_secret\" \"rehearsal_diagnostic_boot\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
 
