@@ -537,14 +537,14 @@ if [[ -n "${MOCK_GAK_LOG:-}" && "${1:-}" == "run" ]]; then
   done
   if [[ -n "$_gn" ]]; then
     _gtok=0
-    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
     printf 'run:%s env_token=%s\n' "$_gn" "$_gtok" >> "$MOCK_GAK_LOG"
     if [[ -n "$_gef" && -f "$_gef" ]]; then cp "$_gef" "$(dirname "$MOCK_GAK_LOG")/envfile.$_gn"; fi
   fi
 fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -4181,7 +4181,7 @@ diag_check "#9871 D9a: the real container script, run under sh, prints exactly t
   "$([[ -n "$D9_SCRIPT" && "$D9_SH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_SH"
 diag_check "#9871 D9b: the real container script, run under bash, prints exactly the ten pinned sections" \
   "$([[ -n "$D9_SCRIPT" && "$D9_BASH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_BASH"
-D9_PROC=$(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null | grep -m1 '^proc ' || true)
+D9_PROC=$(grep -m1 '^proc ' < <(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null) || true)
 diag_check "#9871 D9d: the real script's sdk_probe carries the SDK flags and its proc row reports NoNewPrivs and Seccomp" \
   "$(has_f '--unshare-pid --proc /proc' "$(grep '^v=.*--unshare-user' <<<"$D9_SCRIPT" || true)" && has_f 'NoNewPrivs=' "$D9_PROC" && has_f 'Seccomp=' "$D9_PROC" && echo 0 || echo 1)" "proc: $D9_PROC"
 diag_check "#9871 D9c control: a gutted script does NOT satisfy the D9 check (so D9a/D9b can fail)" \
@@ -8246,7 +8246,7 @@ if (( ${#T3_PAY} > 200 )); then
   T3_BAD="${T3_BAD}\n    err payload is ${#T3_PAY} bytes, bound is 200"
 fi
 # NEGATIVE 2 — no control characters anywhere in the payload (TAB and BEL were both injected).
-if printf '%s' "$T3_PAY" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+if printf '%s' "$T3_PAY" | LC_ALL=C grep -c >/dev/null '[[:cntrl:]]'; then
   T3_BAD="${T3_BAD}\n    err payload still carries control characters"
 fi
 # NEGATIVE 3 — the dp.st. secret is redacted, checked against the WHOLE sink and not just the
@@ -9792,7 +9792,7 @@ gak_run_boot() {
 if [[ "${1:-}" == "inspect" ]]; then echo "${MOCK_BOOT_RUNNING:-true}"; exit 0; fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -9806,14 +9806,14 @@ MOCK
   cat > "$d/bin/soleur-boot-emit" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 printf 'emit:%s env_token=%s\n' "$1" "$_t" >> "$MOCK_GAK_LOG"
 printf '%s %s %s\n' "$1" "$2" "$(cat "$SOLEUR_STAGE_DETAIL_DIR/$1" 2>/dev/null)" >> "$MOCK_BOOT_EMITS"
 MOCK
   cat > "$d/bin/systemd-run" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 if [[ "${MOCK_SYSTEMD_RUN_FAIL:-}" == "1" ]]; then printf 'systemd-run-failed env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"; exit 1; fi
 printf 'systemd-run env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"
 exit 0
@@ -10302,7 +10302,7 @@ _gak_static() {  # <ci-file> <boot-file>
   # The emitter must be CALLED from code, not merely named in a comment (test-design F14): comment
   # lines are stripped and the call shape (a classification and a level) is required.
   if ! grep -qx 'overlay_github_app_key() {' "$b1" || ! grep -qx 'github_app_key_present() {' "$b1" \
-     || ! grep -v '^[[:space:]]*#' "$b1" | grep -qE '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
+     || ! grep -v '^[[:space:]]*#' "$b1" | grep -cE >/dev/null '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
     GAK_WHY="the ci-deploy block does not define the overlay/presence functions or never calls the emitter"; rm -f "$b1" "$b2"; return 1
   fi
   if ! cmp -s "$b1" "$b2"; then GAK_WHY="the two blocks differ ($(cmp "$b1" "$b2" 2>&1 | head -1))"; rm -f "$b1" "$b2"; return 1; fi

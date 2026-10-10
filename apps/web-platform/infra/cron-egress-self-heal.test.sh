@@ -326,8 +326,8 @@ check "the suite runs with the default SIGPIPE disposition (the reproducer's pre
 # Control: the reproducer really reproduces. The OLD form on the SAME shim reads rc 141 under pipefail.
 d="$(scenario control "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 old_rc=0
-env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?
-check "control: the OLD 'nft | grep -q' form on the reproducer shim returns 141 (SIGPIPE read as missing)" "141" "$old_rc"
+env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?  # sigpipe-demo: intentional (the OLD pipeline form the SIGPIPE control must reproduce)
+check "control: the OLD nft-piped-into-grep-q form on the reproducer shim returns 141 (SIGPIPE read as missing)" "141" "$old_rc"
 
 # SIGPIPE disposition forced on entry, not left to the ambient: the CI runner's (ignored) AND a developer
 # shell's (default) are both reproduced on any machine, and each forcing is proven (canary, recorder, routing).
@@ -336,8 +336,8 @@ check "harness canary: with_sigpipe_ignored really runs with SIGPIPE ignored" "i
 check "harness canary negative control: ignoring only SIGINT does not read as SIGPIPE ignored" "default" "$(bash -c "trap '' INT; $SIGPIPE_PROBE")"
 d="$(scenario control-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 old_rc=0
-with_sigpipe_ignored env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?
-check "control, SIGPIPE ignored (forced): the OLD 'nft | grep -q' form on the reproducer shim returns 141 (the shim's EPIPE failure, read as missing)" "141" "$old_rc"
+with_sigpipe_ignored env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?  # sigpipe-demo: intentional (the same control with SIGPIPE forced ignored)
+check "control, SIGPIPE ignored (forced): the OLD nft-piped-into-grep-q form on the reproducer shim returns 141 (the shim's EPIPE failure, read as missing)" "141" "$old_rc"
 check "routing: the forced-ignored control ran the shim with SIGPIPE ignored" "ignored" "$(cat "$d/shim.sigign" 2>/dev/null || echo missing)"
 cap="$(scenario capture-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 check "SIGPIPE ignored: the capture form on the reproducer shim still reads all three rules present" \
@@ -530,11 +530,12 @@ mut_probe "the retry is removed (a one-off read failure is no longer absorbed)" 
 mut_probe "the retry runs a third attempt (the bound is gone)" \
   "for attempt in 1 2; do" "for attempt in 1 2 3; do" \
   "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL" 2 0 0 0
+MUT_EARLY_PIPE='ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"'  # sigpipe-demo: intentional (the early-exiting capture the mutants below re-introduce)
 mut_probe "the capture is re-introduced as an early-exiting pipeline (SIGPIPE row changes)" \
-  'ip filter DOCKER-USER 2>&1)"' 'ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"' \
+  'ip filter DOCKER-USER 2>&1)"' "$MUT_EARLY_PIPE" \
   "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
 MUT_SIGPIPE_IGNORED=1 mut_probe "SIGPIPE ignored: the capture is re-introduced as an early-exiting pipeline (SIGPIPE row changes)" \
-  'ip filter DOCKER-USER 2>&1)"' 'ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"' \
+  'ip filter DOCKER-USER 2>&1)"' "$MUT_EARLY_PIPE" \
   "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
 mut_probe "ENOENT is no longer an absent object (a deleted table reads as contention)" \
   'if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi' ':' \
@@ -626,7 +627,7 @@ if [[ -f "$RUNBOOK" ]]; then
   TABLE="$(grep -E '^  \| ' "$RUNBOOK")"
   for k in jump_present drop_present log_present rc_jump rc_drop read_failed read_retried docker_since loader_since loader_rc host; do
     RUNBOOK_KEYS=$((RUNBOOK_KEYS + 1))
-    printf '%s\n' "$TABLE" | grep -qF "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
+    printf '%s\n' "$TABLE" | grep -cF >/dev/null "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
   done
 fi
 if [[ "$RUNBOOK_KEYS" -ne 11 ]]; then printf '[FATAL] runbook parity ran %d rows, expected 11 (is the runbook missing?).\n' "$RUNBOOK_KEYS" >&2; exit 1; fi

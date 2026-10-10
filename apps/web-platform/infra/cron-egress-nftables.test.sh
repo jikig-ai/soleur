@@ -193,7 +193,7 @@ expect "happy: rc 0 and the stub recorded the run (a loader that never ran must 
 expect "happy: transaction order: the CIDR elements, then the resolver, then the Phase 3 rules, then the DOCKER-USER probe" all 'test "$(grep -n "add element" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^nft list chain ip filter DOCKER-USER" "$FX/log" | head -1 | cut -d: -f1)"'
 expect "happy: the resolver ran under the loader guard (CRON_EGRESS_FROM_LOADER=1), so loader -> resolver -> loader cannot recurse" grep -qx 'resolver from_loader=1' "$FX/log"
 expect "happy: the Phase 3 chain starts with the link-local log then the link-local drop, then return traffic, then the pinned DNS accept" all 'test "$r_llog" = 1' 'test "$r_ll" = 2' 'test "$r_ret" = 3' 'test -n "$r_dns" -a "$r_dns" -gt "$r_ret"'
-expect "happy: the default-drop log then the default drop are the LAST two rules" all 'test -n "$r_log"' 'test "$r_log" -eq "$((r_last - 1))"' 'chain | tail -n 1 | grep -q "^counter drop comment \"soleur-egress: default drop\"$"'
+expect "happy: the default-drop log then the default drop are the LAST two rules" all 'test -n "$r_log"' 'test "$r_log" -eq "$((r_last - 1))"' 'chain | tail -n 1 | grep -c >/dev/null "^counter drop comment \"soleur-egress: default drop\"$"'
 expect "happy: the CIDR elements reached nft as one flush+add transaction before the rules" all 'test "$(elems | grep -c "^add element ip filter soleur_egress_allow_cidr { 203.0.113.0/24,198.51.100.7/32 }$")" -eq 1' 'grep -q "^flush set ip filter soleur_egress_allow_cidr$" "$HAPPY"/txn.2'
 expect "happy: census: exactly one DROP names 169.254 (before every accept) and exactly one LOG names it, immediately before that drop" ll_clean "$HAPPY"
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0
@@ -242,7 +242,7 @@ for c in 169.254.0.0/16 169.254.169.254/32 169.0.0.0/8 0.0.0.0/0 128.0.0.0/1 160
 done
 cidr_accepted() { # <cidr>
   new_fx; printf '%s\n' "$1" > "$FX/cidr.txt"; run_loader
-  [ "$RC" -eq 0 ] && elems | grep -qF -- "{ $1 }" && ll_clean "$FX"
+  [ "$RC" -eq 0 ] && elems | grep -cF >/dev/null -- "{ $1 }" && ll_clean "$FX"
 }
 for c in 169.253.255.255/32 169.255.0.0/16 203.0.113.0/24 168.0.0.0/8 169.255.255.255/16 168.255.255.255/8; do
   expect "gate: must-pass: $c does not overlap 169.254.0.0/16 and installs normally (rc 0, element rendered, census clean)" cidr_accepted "$c"
@@ -286,13 +286,13 @@ no_ll_added() { [ -z "$(adds soleur_egress_allow | grep '^169\.254\.')" ] && [ -
 ticked() { [ "$RC" -eq 0 ] && grep -q 'OK: allow=' "$FX/out"; } # the tick completed (so an empty add-list is not a crash)
 
 new_rfx; run_resolver
-expect "resolver: must-pass: an ordinary tick installs the answer 203.0.113.7, prunes the stale element, and posts no link-local event" all 'ticked' 'adds soleur_egress_allow | grep -qx 203.0.113.7' 'dels soleur_egress_allow | grep -qx 198.51.100.250' 'no_ll_added' 'test "$(ll_events)" -eq 0'
+expect "resolver: must-pass: an ordinary tick installs the answer 203.0.113.7, prunes the stale element, and posts no link-local event" all 'ticked' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.7' 'dels soleur_egress_allow | grep -cx >/dev/null 198.51.100.250' 'no_ll_added' 'test "$(ll_events)" -eq 0'
 new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: a host whose ONLY answer is 169.254.169.254: nothing link-local is added, the tick counts it as a failure (additive-only: the stale element is NOT pruned), one Sentry event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -q .' 'grep -q "every record was link-local" "$FX/out"' 'grep -q "ADDITIVE-ONLY" "$FX/out"' 'test "$(ll_events)" -eq 1'
+expect "resolver: a host whose ONLY answer is 169.254.169.254: nothing link-local is added, the tick counts it as a failure (additive-only: the stale element is NOT pruned), one Sentry event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -c >/dev/null .' 'grep -q "every record was link-local" "$FX/out"' 'grep -q "ADDITIVE-ONLY" "$FX/out"' 'test "$(ll_events)" -eq 1'
 cp "$FX/out" "$FX/out.tick1"; run_resolver
 expect "resolver: the Sentry event is posted once per source, not once per tick (a second identical tick adds none)" test "$(ll_events)" -eq 1
 printf '203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: once the host answers clean the marker clears: the next tick prunes again and the next link-local answer would post again" all 'ticked' 'test ! -e "$FX/fc/.ll-a.example.test"' 'dels soleur_egress_allow | grep -qx 198.51.100.250'
+expect "resolver: once the host answers clean the marker clears: the next tick prunes again and the next link-local answer would post again" all 'ticked' 'test ! -e "$FX/fc/.ll-a.example.test"' 'dels soleur_egress_allow | grep -cx >/dev/null 198.51.100.250'
 # (#9377 review) The once-per-source marker is written only AFTER a successful POST: the Sentry event is the ONLY no-SSH
 # signal (the stdout line is journal-only), so one transient POST failure, or an unset Sentry env, must not suppress it.
 new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_STUB_CURL_RC=7 run_resolver
@@ -304,19 +304,19 @@ expect "resolver: after the successful POST no further event is posted for that 
 new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_R_PROJECT='' run_resolver
 expect "resolver: an unset Sentry env posts nothing and leaves no marker (the event is retried on the next tick)" all 'ticked' '! grep -q resolve_link_local "$FX/curl.log" 2>/dev/null' 'grep -q "Sentry env unset or refused" "$FX/out"' 'test ! -e "$FX/fc/.ll-a.example.test"'
 new_rfx; printf '169.254.169.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: a host with one link-local and one good record keeps the good one, drops the other, and is NOT a failure (the stale element is pruned)" all 'ticked' 'adds soleur_egress_allow | grep -qx 203.0.113.7' 'no_ll_added' 'dels soleur_egress_allow | grep -qx 198.51.100.250' 'test "$(ll_events)" -eq 1'
+expect "resolver: a host with one link-local and one good record keeps the good one, drops the other, and is NOT a failure (the stale element is pruned)" all 'ticked' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.7' 'no_ll_added' 'dels soleur_egress_allow | grep -cx >/dev/null 198.51.100.250' 'test "$(ll_events)" -eq 1'
 new_rfx; printf '169.254.0.7\n169.254.255.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: the whole /16 is refused, not just the metadata address (169.254.0.7 and 169.254.255.254)" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.7'
+expect "resolver: the whole /16 is refused, not just the metadata address (169.254.0.7 and 169.254.255.254)" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.7'
 new_rfx; printf '::ffff:169.254.169.254\n' > "$FX/dns/a.example.test"; run_resolver
-expect "resolver: the v4-mapped spelling ::ffff:169.254.169.254 is link-local too: nothing added, counted as a failure (additive-only), one event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -q .' 'test "$(ll_events)" -eq 1'
+expect "resolver: the v4-mapped spelling ::ffff:169.254.169.254 is link-local too: nothing added, counted as a failure (additive-only), one event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -c >/dev/null .' 'test "$(ll_events)" -eq 1'
 new_rfx; printf '%s %s\n' 169.254.169.254 x > /dev/null; now=$(date +%s); printf '%s\n' "$now" > "$FX/seen/169.254.169.254"; printf '%s\n' "$now" > "$FX/seen/203.0.113.50"; run_resolver
-expect "resolver: a planted seen/169.254.169.254 (inside the 24 h grace window) is PURGED, never re-added; a legitimate seen entry is still retained" all 'ticked' 'test ! -e "$FX/seen/169.254.169.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
+expect "resolver: a planted seen/169.254.169.254 (inside the 24 h grace window) is PURGED, never re-added; a legitimate seen entry is still retained" all 'ticked' 'test ! -e "$FX/seen/169.254.169.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
 new_rfx; now=$(date +%s); for a in 169.254.0.7 169.254.255.254; do printf '%s\n' "$now" > "$FX/seen/$a"; done; printf '%s\n' "$now" > "$FX/seen/203.0.113.50"; run_resolver
-expect "resolver: planted seen/169.254.0.7 and seen/169.254.255.254 (link-local /16 addresses that are NOT the metadata address, inside the grace window) are PURGED and never re-added; a legitimate entry is retained" all 'ticked' 'test ! -e "$FX/seen/169.254.0.7"' 'test ! -e "$FX/seen/169.254.255.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
+expect "resolver: planted seen/169.254.0.7 and seen/169.254.255.254 (link-local /16 addresses that are NOT the metadata address, inside the grace window) are PURGED and never re-added; a legitimate entry is retained" all 'ticked' 'test ! -e "$FX/seen/169.254.0.7"' 'test ! -e "$FX/seen/169.254.255.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
 new_rfx; : > "$FX/container.up"; printf '169.254.169.254\n203.0.113.77\n' > "$FX/cview"; run_resolver
-expect "resolver: the container's own getent view is a feeder too: its link-local answer is dropped and never recorded, its good answer is added, one event" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.77' 'test ! -e "$FX/seen/169.254.169.254"' 'test "$(ll_events)" -eq 1'
+expect "resolver: the container's own getent view is a feeder too: its link-local answer is dropped and never recorded, its good answer is added, one event" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -cx >/dev/null 203.0.113.77' 'test ! -e "$FX/seen/169.254.169.254"' 'test "$(ll_events)" -eq 1'
 new_rfx; : > "$FX/container.up"; printf 'nameserver 169.254.169.253\nnameserver 203.0.113.53\n' > "$FX/resolv.conf"; run_resolver
-expect "resolver: a link-local nameserver in the container's resolv.conf never reaches the DNS pin set (203.0.113.53 and Docker's 8.8.8.8 do)" all 'ticked' 'no_ll_added' 'adds soleur_egress_dns | grep -qx 203.0.113.53' 'adds soleur_egress_dns | grep -qx 8.8.8.8'
+expect "resolver: a link-local nameserver in the container's resolv.conf never reaches the DNS pin set (203.0.113.53 and Docker's 8.8.8.8 do)" all 'ticked' 'no_ll_added' 'adds soleur_egress_dns | grep -cx >/dev/null 203.0.113.53' 'adds soleur_egress_dns | grep -cx >/dev/null 8.8.8.8'
 
 # ── 5. harness rows: the instrument must be able to fail ──────────────────────────────────────
 SEED="$SCRATCH/seeded"; mkdir -p "$SEED"

@@ -143,7 +143,7 @@ out=$(env -i PATH="$tmp1/bin:/usr/bin:/bin" HOME="$HOME" \
 rc=$?
 set -e
 
-if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -q 'nonexistent_xyz_4338'; then
+if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'nonexistent_xyz_4338'; then
   pass "exit $rc with nonexistent_xyz_4338 in error"
 else
   fail "expected non-zero exit + table name in error; got rc=$rc, out=$out"
@@ -171,7 +171,7 @@ set -e
 # When probe is OFF, the runner reaches the apply phase. Our fake psql
 # accepts stdin and returns 0, so the apply succeeds. The probe-emitted
 # error string must NOT appear.
-if [[ "$rc" == "0" ]] && ! printf '%s' "$out" | grep -q 'references tables that do not exist'; then
+if [[ "$rc" == "0" ]] && ! printf '%s' "$out" | grep -c >/dev/null 'references tables that do not exist'; then
   pass "exit 0; probe error message absent"
 else
   fail "expected rc=0 + no probe error; got rc=$rc, out=$out"
@@ -198,7 +198,7 @@ out=$(env -i PATH="$tmp2b/bin:/usr/bin:/bin" HOME="$HOME" \
 rc=$?
 set -e
 
-if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -q 'nonexistent_xyz_4338'; then
+if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'nonexistent_xyz_4338'; then
   pass "exit $rc with nonexistent_xyz_4338 in error (default-on)"
 else
   fail "expected non-zero exit + table name; got rc=$rc, out=$out"
@@ -261,7 +261,7 @@ set -e
 
 # parent_4338 is self-referenced — probe must SUBTRACT it. Apply
 # proceeds, exit 0, probe error absent.
-if [[ "$rc" == "0" ]] && ! printf '%s' "$out" | grep -q 'parent_4338'; then
+if [[ "$rc" == "0" ]] && ! printf '%s' "$out" | grep -c >/dev/null 'parent_4338'; then
   pass "exit 0; self-reference subtracted (parent_4338 not in error)"
 else
   fail "expected rc=0 + no parent_4338 error; got rc=$rc, out=$out"
@@ -290,7 +290,7 @@ rc=$?
 set -e
 # The argv pin is load-bearing: dropping `--best-effort` from the runner's
 # call would red every dev CI run (no token there), and nothing else sees it.
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qF 'reload-stub: ran args=[--best-effort]' && ! printf '%s' "$out" | grep -q '::error'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cF >/dev/null 'reload-stub: ran args=[--best-effort]' && ! printf '%s' "$out" | grep -c >/dev/null '::error'; then
   pass "exit 0, hook ran with exactly --best-effort, no ::error"
 else
   fail "expected rc=0 + 'reload-stub: ran args=[--best-effort]' + no ::error; got rc=$rc out=$out"
@@ -307,7 +307,7 @@ out=$(env -i PATH="$tmpr2/bin:/usr/bin:/bin" HOME="$HOME" \
         bash "$tmpr2/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qF '::error title=PostgREST schema reload refused (credential or config, rc=2)::'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -cF >/dev/null '::error title=PostgREST schema reload refused (credential or config, rc=2)::'; then
   pass "exit 2 with the refused title (credential OR config — the hook line names which)"
 else
   fail "expected rc=2 + titled error; got rc=$rc out=$out"
@@ -324,7 +324,7 @@ out=$(env -i PATH="$tmpr3/bin:/usr/bin:/bin" HOME="$HOME" \
         bash "$tmpr3/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "127" ]] && printf '%s' "$out" | grep -qF '::error title=Schema reload hook failed (rc=127)::'; then
+if [[ "$rc" == "127" ]] && printf '%s' "$out" | grep -cF >/dev/null '::error title=Schema reload hook failed (rc=127)::'; then
   pass "exit 127 propagated with the rc in the title"
 else
   fail "expected rc=127 + titled error; got rc=$rc out=$out"
@@ -342,7 +342,7 @@ out=$(env -i PATH="$tmpr4/bin:/usr/bin:/bin" HOME="$HOME" \
         bash "$tmpr4/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qF 'reload-stub: ran' && printf '%s' "$out" | grep -qF 'Migration run complete: 0 applied, 1 skipped.'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -cF >/dev/null 'reload-stub: ran' && printf '%s' "$out" | grep -cF >/dev/null 'Migration run complete: 0 applied, 1 skipped.'; then
   pass "hook ran at applied=0 and its rc 2 failed the run"
 else
   fail "expected rc=2 + stub marker + 'Migration run complete: 0 applied, 1 skipped.'; got rc=$rc out=$out"

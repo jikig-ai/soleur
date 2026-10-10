@@ -633,7 +633,7 @@ fi
 FAIL=$((FAIL - 1))
 echo "  (nolive harness canary OK — deliberate FAIL above is expected and subtracted)"
 assert "#8077 the no-live-scheduler issue step keys on steps.nolive.outputs.alarm == 'true' and labels action-required" \
-  "awk '/^      - name: File or comment no-live-scheduler issue/{f=1} f&&/^      - name: /&&!/no-live-scheduler issue/{exit} f' '$WF_NC' | grep -qF \"if: always() && steps.nolive.outputs.alarm == 'true'\" && grep -qF '[ci/inngest-no-live-scheduler]' '$WF_NC'"
+  "awk '/^      - name: File or comment no-live-scheduler issue/{f=1} f&&/^      - name: /&&!/no-live-scheduler issue/{exit} f' '$WF_NC' | grep -cF >/dev/null \"if: always() && steps.nolive.outputs.alarm == 'true'\" && grep -qF '[ci/inngest-no-live-scheduler]' '$WF_NC'"
 assert "#8077 a close step closes [ci/inngest-no-live-scheduler] on alarm == 'false'" \
   "grep -qF \"steps.nolive.outputs.alarm == 'false'\" '$WF_NC'"
 

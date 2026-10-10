@@ -1003,7 +1003,7 @@ if grep -qE 'detected dubious ownership' "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/n
     ok "L6k-CAP: this host CAN produce H1, and real git's refusal still matches _FSCK_SETUP_FATAL_RE — the synthesized arm (i) is faithful to git's actual wording"
   else
     no "L6k-CAP: real git refused but _FSCK_SETUP_FATAL_RE did NOT match it — the regex has drifted from git's wording, so every real H1 now demotes to unclassified and arm (i) is testing a string git no longer emits"
-    note "real refusal: $(head -n1 "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null | grep -m1 fatal:)"
+    note "real refusal: $(grep -m1 fatal: < <(head -n1 "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null))"
   fi
 else
   note "L6k-CAP: this host CANNOT produce H1 — arm (ii) (safe.directory is load-bearing) is UNPROVEN in CI, and the regex-vs-reality check above is vacuous here"

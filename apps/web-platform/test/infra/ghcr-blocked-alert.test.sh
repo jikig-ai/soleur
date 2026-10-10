@@ -134,7 +134,7 @@ SINK_N="$(grep -nE '^logger -t "\$LOG_TAG" "GHCR_DENY ghcr_blocked=\$_ghcr_block
 SHA_N="$(grep -nE '^logger -t "\$LOG_TAG" "DEPLOY_SCRIPT_SHA ' "$CI" | head -1 | cut -d: -f1)"
 LOCK_N="$(grep -nE '^LOCK_FILE=' "$CI" | head -1 | cut -d: -f1)"
 if [[ "$SINK_N" =~ ^[0-9]+$ && "$SHA_N" =~ ^[0-9]+$ && "$LOCK_N" =~ ^[0-9]+$ ]] && [ "$SHA_N" -lt "$SINK_N" ] && [ "$SINK_N" -lt "$LOCK_N" ] \
-   && ! sed -n "${SHA_N},${LOCK_N}p" "$CI" | grep -vE '^[[:space:]]*#' | grep -qE '\b(exit|return)\b'; then
+   && ! sed -n "${SHA_N},${LOCK_N}p" "$CI" | grep -vE '^[[:space:]]*#' | grep -cE >/dev/null '\b(exit|return)\b'; then
   ok "the web sink sits after the DEPLOY_SCRIPT_SHA logger and before the lock, with no exit or return (any indentation, comments stripped) anywhere between those two anchors, so nothing there can skip it"
 else
   no "the GHCR_DENY sink is no longer between the DEPLOY_SCRIPT_SHA logger and LOCK_FILE=, or an exit/return now sits between those anchors — a validated invocation could skip it"
@@ -147,7 +147,7 @@ grep -qxF 'readonly LOG_TAG="ci-deploy"' "$CI" \
   || no "ci-deploy.sh no longer clamps _ghcr_blocked to 1 | 0 | unknown — the alert's value-0 literal may no longer be reachable"
 # The DIRECTION of the derivation: 0 must be printed on the branch where a NON-sinkhole address resolves.
 # Swapping the two echoes keeps every literal intact and pages on the healthy state / goes silent on a loss.
-if grep -A1 -xF "  elif grep -qvxE '0\.0\.0\.0|::' <<<\"\$addrs\"; then" "$CI" | grep -qxF '    echo 0'; then
+if grep -A1 -xF "  elif grep -qvxE '0\.0\.0\.0|::' <<<\"\$addrs\"; then" "$CI" | grep -cxF >/dev/null '    echo 0'; then
   ok "the web emitter derives 0 on the branch where a non-sinkhole address resolves (the deny is NOT in force)"
 else
   no "ci-deploy.sh no longer prints 0 on the non-sinkhole branch of _ghcr_blocked_state — the alert's value-0 literal may mean the opposite"
@@ -164,7 +164,8 @@ if [ -n "$R_MARK" ] && [ "$(grep -c . <<< "$R_LINE")" -eq 1 ] && [ -n "$R_FIELD"
 else
   no "cloud-init-registry.yml no longer has exactly one LINE=\"SOLEUR_ZOT_DISK … ghcr_blocked=\$GHCR_BLOCKED … zot_last_err=\$ZOT_LAST_ERR\" — arm R would silently stop matching"
 fi
-grep -qE '^[[:space:]]*if printf .%s\\n. "\$_gh_addrs" \| grep -qvxE .0\\\.0\\\.0\\\.0\|::.; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi$' "$CR" \
+R_EMIT_RE='^[[:space:]]*if printf .%s\\n. "\$_gh_addrs" \| grep -qvxE .0\\\.0\\\.0\\\.0\|::.; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi$'  # sigpipe-demo: intentional (needle for the registry carrier emitter line; update with that carrier)
+grep -qE "$R_EMIT_RE" "$CR" \
   && ok "the registry emitter yields 0 exactly when ghcr.io resolves to something other than the sinkhole" \
   || no "cloud-init-registry.yml no longer derives GHCR_BLOCKED=0 from a non-sinkhole address — the alert's value-0 literal may mean something else"
 # The cadence the paging windows assume: the heartbeat runs every five minutes (check 300 / query 900 hold ~3 rows).

@@ -620,7 +620,7 @@ t41_violations() {  # <seed-text> <defs-text> -> count of arm/disarm calls in se
   local n=0 fn
   n=$(grep -cE '(^|[^A-Za-z0-9_])(arm_dead_man|disarm_dead_man)([^A-Za-z0-9_]|$)' <<<"$1" || true)
   for fn in $(t41_reach "$1" "$2"); do
-    t41_body "$fn" "$2" | sed -E "1s/^${fn}\(\) *\{//" | grep -qE '(^|[^A-Za-z0-9_])(arm_dead_man|disarm_dead_man)([^A-Za-z0-9_]|$)' && n=$((n + 1))
+    t41_body "$fn" "$2" | sed -E "1s/^${fn}\(\) *\{//" | grep -cE >/dev/null '(^|[^A-Za-z0-9_])(arm_dead_man|disarm_dead_man)([^A-Za-z0-9_]|$)' && n=$((n + 1))
   done
   printf '%s' "$n"
 }
@@ -1497,8 +1497,8 @@ else
 fi
 rm -f "$MUT2"
 
-MUT3="$(mutate 's|^ *lsof +D "\$MOUNT" 9<&- >"\$lout" 2>"\$lerr"; rc=\$?$|  holders=""; lsof +D "$MOUNT" 2>/dev/null \| grep -q . \&\& holders=x; rc=0; : >"$lout"; : >"$lerr"; printf "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME\\nbash %s root 9r DIR 0,50 40 1 %s\\n" "$$" "$wsdir" >>"$lout"|')"
-if ! grep -qF 'lsof +D "$MOUNT" 2>/dev/null | grep -q . && holders=x' "$MUT3"; then
+MUT3="$(mutate 's|^ *lsof +D "\$MOUNT" 9<&- >"\$lout" 2>"\$lerr"; rc=\$?$|  holders=""; lsof +D "$MOUNT" 2>/dev/null \| grep -q . \&\& holders=x; rc=0; : >"$lout"; : >"$lerr"; printf "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME\\nbash %s root 9r DIR 0,50 40 1 %s\\n" "$$" "$wsdir" >>"$lout"|')"  # sigpipe-demo: intentional (M3 mutation recipe that re-introduces a piped predicate)
+if ! grep -qF 'lsof +D "$MOUNT" 2>/dev/null | grep -q . && holders=x' "$MUT3"; then  # sigpipe-demo: intentional (M3 landing check)
   no "mutation M3 sed did NOT land — treat as un-run, not evidence"
 else
   run_case "$MUT3" 'freeze_writers' 'freeze_writers' LSOF_OUT_FILE="$BIGF"
