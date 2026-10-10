@@ -530,7 +530,7 @@ sweep_verdict() {
     if (( n == 0 )); then
       SWEEP_FAIL=1; echo "FAIL: stale deferral: ${r_glob[i]} has no hits left — delete its row from SWEEP_DEFERRALS in the PR that converted it"
     elif (( n > ceil )); then
-      SWEEP_FAIL=1; echo "FAIL: deferral ceiling exceeded: ${r_glob[i]} has $n hits, ceiling $ceil — a new early-exit pipe landed in a deferred subtree; use the forms in this file's header (a file-exact apps/web-platform/infra row feeds a host user_data: read the comment above SWEEP_DEFERRALS before converting it)"
+      SWEEP_FAIL=1; echo "FAIL: deferral ceiling exceeded: ${r_glob[i]} has $n hits, ceiling $ceil — a new early-exit pipe landed in a deferred subtree; use the forms in this file's header (some file-exact apps/web-platform/infra rows feed a host user_data or a pinned artifact: read the comment above SWEEP_DEFERRALS before converting one)"
     elif [[ "$mode" == "=" ]] && (( n < ceil )); then
       SWEEP_FAIL=1; echo "FAIL: deferral ceiling is loose: ${r_glob[i]} has $n hits, ceiling $ceil — lower the ceiling to $n"
     fi

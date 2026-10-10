@@ -1,5 +1,7 @@
 # Session State
 
+> Review-round note: `data_convert.py`, `hand_apply.py`, `guard_edit.py` and `trigger-derive.py` named below were removed from this directory in the review-fix commit; they are readable at `787bbc944f` (`git show 787bbc944f:knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-s6-web-platform-tests/<name>`). See decision-challenges item 29.
+
 ## Plan Phase
 
 - Plan file: knowledge-base/project/plans/2026-10-10-chore-grep-q-wave-b-s6-web-platform-tests-plan.md

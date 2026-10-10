@@ -1,5 +1,7 @@
 # Tasks: grep -q drain, Item B slice S6 (apps/web-platform/*.test.sh)
 
+> Review-round note: `data_convert.py`, `hand_apply.py`, `guard_edit.py` and `trigger-derive.py` named below were removed from this directory in the review-fix commit; they are readable at `787bbc944f` (`git show 787bbc944f:knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-s6-web-platform-tests/<name>`). See decision-challenges item 29.
+
 Plan: `knowledge-base/project/plans/2026-10-10-chore-grep-q-wave-b-s6-web-platform-tests-plan.md`
 
 Scope of this task list: S6 only (one deferral row, `apps/web-platform/*.test.sh`, 178 lines in 37 files at planning, taken to zero and deleted; 156 plain one-token conversions plus 22 base lines by hand, 15 of the hand lines kept (14 marker lines), two `SWEEP_CANARIES` roots, seven real-table canaries and a pin edit in the guard). Do not edit `plugins/soleur/skills/work/SKILL.md`, `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`, `scripts/grep-q-drain-codemod.py`, `scripts/lib/scratch-root.sh`, `plugins/soleur/test/skill-body-budget.json`, `plugins/soleur/skills/plan/SKILL.md`, anything under `.github/`, or `AGENTS*.md`. Do not stage the pre-staged `scripts/followthroughs/watchdog-debounce-*-9686.sh` if present. Leave the main checkout's `.mcp.json` and the untracked `apps/web-platform/1000:` and `500` files alone; do not run the session-start `.mcp.json` restore. No `test-all.sh`, no `--affected`, no `--print-selection`. One heavy gate at a time; `uptime` beside every timing.

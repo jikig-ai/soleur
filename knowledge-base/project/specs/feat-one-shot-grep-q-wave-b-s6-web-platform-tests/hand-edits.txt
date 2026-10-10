@@ -24,5 +24,5 @@ apps/web-platform/infra/workspaces-luks-freeze.test.sh:1500-1501:kept-and-marked
 apps/web-platform/infra/registry-luks-launch-gate.test.sh:83:kept-and-marked: needle for a line of cloud-init-registry.yml, a file-exact carrier that stays unconverted
 apps/web-platform/infra/registry-luks.test.sh:181:kept-and-marked: needle for the same carrier line
 apps/web-platform/infra/registry-luks.test.sh:278:kept-and-marked: mutation recipe that deletes the same carrier line
-apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh:461:kept-and-marked: pass-message text named in a historical comment at run-registered-suites.test.sh:828; convertible by rewording (no assertion reads it), kept so that citation stays byte-true
+apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh:461:kept-and-marked: the only live line holding the nested `'| grep -q'` fragment that the payload-start extractor checks at run-registered-suites.test.sh:828 sweep over the corpus; no assertion reads the message itself, but rewording it would silently stop that corpus run exercising the trap
 apps/web-platform/test/infra/ghcr-blocked-alert.test.sh:167:restructured: needle for the cloud-init-registry.yml emitter line (carrier bytes) moved into one marked variable (R_EMIT_RE)

@@ -458,7 +458,7 @@ fi
 if grep -qE '\|[[:space:]]*grep -q' "$FUNC_NC"; then
   fail "A3-nopipe: assert_mount_quiesced pipes into 'grep -q' — under pipefail an early match SIGPIPEs the producer to 141 and a negative assertion fails OPEN (property (b))"
 else
-  ok "A3-nopipe: no '| grep -q' predicate in assert_mount_quiesced — property (b) holds"  # sigpipe-demo: intentional (message text named in a historical comment at run-registered-suites.test.sh; kept so that citation stays byte-true, not an assertion)
+  ok "A3-nopipe: no '| grep -q' predicate in assert_mount_quiesced — property (b) holds"  # sigpipe-demo: intentional (the live sample of the nested-fragment extractor trap that run-registered-suites.test.sh exercises over the corpus; no assertion reads the message itself)
 fi
 
 # --- The child-inheritance guard ------------------------------------------------------------------
