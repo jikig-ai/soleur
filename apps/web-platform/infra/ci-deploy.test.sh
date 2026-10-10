@@ -11066,7 +11066,12 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # timeout source pin). (Guard 1: recorded-argv + ordering +
 #   green/no-page + FAIL/infra/timeout classification + soak accumulate-hold-reset
 #   + ledger-alias skip).
-CI_DEPLOY_ASSERT_FLOOR=568
+# #9860 (2026-10-10): raised 568 -> 595 (measured on the live tree) with the 27 kernel-denial rows: D10a (placement, shape,
+# recorder), D10b (a realistic AppArmor mount denial, closed key set), D10c x12 (ladder states: readable, journal hint,
+# silent-empty, both hint-only, empty + refused, both absent, unrelated denial, banner, non-procfs mount, seccomp 1326,
+# ALLOWED not a hit, 9999 cap), D10d/d2 (both rungs hang), D10e/e2/e3/e4 (4 MB streams, newest kept), D10f + control
+# (credential scrub), D10g control + census + D10g2, D10h (200-char tail boundary) and D11 (sdk_noproc argv).
+CI_DEPLOY_ASSERT_FLOOR=595
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
