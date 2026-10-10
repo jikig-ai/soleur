@@ -289,12 +289,14 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 # carry UNIT=/JOB_RESULT=failed) or the journald console form systemd[N]:. grep -c consumes
 # all input, so no SIGPIPE.
 count_luks_failed() {
-  # The {0,8} gap tolerates the JSONEachRow-serialized escape (\"SYSLOG_IDENTIFIER\":\"
-  # is 4 chars on the wire) as well as the unescaped ":"/= forms; a doppler/inngest row
-  # carries a non-systemd identifier and no systemd[N]: console prefix, so it cannot match.
+  # The {0,N} gaps tolerate the JSONEachRow-serialized escape (\" is a wire char) as well as
+  # the unescaped ":"/= forms; a doppler/inngest row carries a non-systemd identifier, no
+  # UNIT=inngest-luks* field, and no systemd[N]: console prefix, so it cannot match. The
+  # UNIT arm covers a wire shape that drops SYSLOG_IDENTIFIER but keeps the journald
+  # job-done fields (measured storm rows carry both).
   printf '%s\n' "$1" |
     grep -F 'Failed to start inngest-luks' |
-    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd|systemd\[[0-9]+\]' 2>/dev/null || true
+    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd|UNIT.{0,12}inngest-luks|systemd\[[0-9]+\]' 2>/dev/null || true
 }
 luks_failed_check() { # <row-set> — viol on any `Failed to start inngest-luks*` row
   local n_luks_failed
