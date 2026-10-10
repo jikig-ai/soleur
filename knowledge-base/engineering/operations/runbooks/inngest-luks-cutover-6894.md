@@ -467,11 +467,21 @@ Two recipes; both are to be executed once in a scratch detached worktree before 
   `suite-durations.tsv`, the `test-all.sh` line and the `BASELINE_DECLARED_PROBES` bump) in the same commit, or the orphan
   census and the baseline test go red. Lifting protection deliberately is never a revert of only `prevent_destroy`.
 
-Recorded scratch-run output (to be pasted here by the lead once the scratch run has been executed; until then this slot is
-the open acceptance item AC10):
+Recorded scratch-run output (executed 2026-10-10 in a scratch detached worktree at the head of the #9879 branch; the three feature
+commits were reverted with `git revert --no-commit`, 21 files, and the suites below were run in that tree):
 
 ```
-PENDING: scratch detached-worktree revert run not yet recorded
+git revert --no-commit <records, guards, evidence commits>   rc=0   (21 files, the .tf pins and the new suite and library gone)
+guard-vacuity-floor           rc=0  23 passed, 0 failed
+lint-orphan-test-suites       rc=0
+workspaces-luks               rc=0  61 passed, 0 failed (same count as before the lexer extraction)
+infra-privileged-tier-census  rc=0  314 passed, 0 failed (336 with the pins)
+inngest-host-replace-gate     rc=0  41 passed, 0 failed
+inngest-host-shape-gate       rc=0  76 passed, 0 failed
+inngest-redis-luks            rc=0  57 passed, 0 failed
+inngest-host                  rc=0  101 passed, 0 failed
+lint-encryption-posture       rc=0
+Not run in the scratch tree: the bun parity test (no node_modules there); CI covers it.
 ```
 
 ---
