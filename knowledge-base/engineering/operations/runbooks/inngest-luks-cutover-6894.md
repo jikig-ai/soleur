@@ -341,7 +341,8 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 ### Rules that stay in force
 
 - After retirement the live LUKS volume is the only copy of the store and `INNGEST_REDIS_LUKS_KEY` in Doppler
-  `soleur-inngest/prd` is its sole opener (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
+  `soleur-inngest/prd` is the only opener the host reads; an independent copy of the passphrase exists in Terraform state
+  (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
   effect on the merge of PR #9925 and its apply).
 - **Do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` until the dead-probe heartbeat feeder (#9703) is
   armed.** That script is the only reporter that says "CANNOT ESTABLISH" for a silent probe pipeline; the wrong-volume
@@ -365,21 +366,47 @@ the sanctioned host replace replaces it. The pin set, the reasoning, the accepte
 table (detection and recovery stance per mode)** are in
 [ADR-282](../../architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md); this section does not restate
 them. Protection defends against mistaken deletes (a console click, a wrong id, a pasted recipe); it does not defend
-against a holder of the read/write Hetzner token, which can lift it.
+against a holder of the read/write Hetzner token, which can lift it (until the next per-merge apply re-protects).
 
-### Read-back (read-only; run by `soleur:postmerge`, re-runnable)
+### Read-back (read-only; run by `soleur:postmerge` Phase 5.7, re-runnable)
+
+Order matters. The merge's own apply delivers the protection, so the read-back is only meaningful after that run ends:
+
+1. Find the per-merge run for the merge commit and poll it until `completed`:
+   `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --json databaseId,status,conclusion`.
+2. Only then run the read-back:
 
 ```
-doppler run -p soleur -c prd_terraform -- sh -c ': "${HCLOUD_TOKEN_READONLY:?absent from prd_terraform: stop, never fall back to HCLOUD_TOKEN}"; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - https://api.hetzner.cloud/v1/volumes/106903269 | jq -e ".volume.protection.delete == true" >/dev/null && echo protected || { echo not-protected; exit 1; }'
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS -f --config - https://api.hetzner.cloud/v1/volumes/106903269 | jq -r ".volume.protection.delete | tostring" | { IFS= read -r w; case "$w" in true) echo protected;; false) echo not-protected; exit 1;; *) echo read-failed; exit 2;; esac; }'
 ```
 
-The wrapper is quoted so the variable expands after Doppler sets it, not in the caller's shell. The command asserts the
-read-only token and fails rather than falling back to the read/write one; the token goes to curl as a config on stdin,
-never on argv; there is no `-v` and no `set -x`; the output is one word. `protected` is the pass. `not-protected` (or a
-failure) is a red post-merge status: deliver the update through the route below, then re-run. This read is a proxy for
-"Hetzner refuses a delete"; the refusal itself is not exercised. A drift run after the apply must also show no pending
-change at `hcloud_volume.inngest_redis_luks` or the two key addresses (the drift run as a whole may stay red for the
-unrelated pending server replace until #9786).
+3. Route on the result:
+   - `protected` is the pass.
+   - `not-protected` (exit 1) after a run that ended `success`, and a run that ended `skipped` or `failure`: deliver the
+     update through the `manual-rerun` dispatch (see "Delivery route"), then re-run the read-back.
+   - `read-failed` (exit 2: an HTTP error such as a 401, a network error, or a body without the field) and
+     `missing-token` (exit 3) are NOT a lifted protection; they mean the read did not happen. Fix the read, do not
+     dispatch an apply on their account.
+   - Any word other than `protected` is a red post-merge status.
+
+The wrapper is single-quoted so the variable expands after Doppler sets it, not in the caller's shell. `--only-secrets`
+injects only the read-only token, so the read/write `HCLOUD_TOKEN` in the same config never enters the process, and the
+command stops rather than falling back to it. This asserts presence of the read-only token; its scope is not verified
+here. The token goes to curl as a config on stdin, never on argv; there is no `-v` and no `set -x`; the output is one
+word. This read is a proxy for "Hetzner refuses a delete"; the refusal itself is not exercised. The command was tested
+against a stubbed `curl` for the protected, unprotected, HTTP 401, network-failure, non-JSON, missing-field and
+missing-token cases (no network).
+
+**Drift check after the apply.** Dispatch the drift workflow and read its plan for the three addresses:
+
+```
+gh workflow run scheduled-terraform-drift.yml
+gh run list --workflow scheduled-terraform-drift.yml --limit 1 --json databaseId,status
+gh run view <id> --log | grep -E 'hcloud_volume.inngest_redis_luks|doppler_secret.inngest_redis_luks_key|random_password.inngest_redis_luks' | grep -E 'will be|must be' | head -20
+```
+
+Expect no output: no `will be updated` or `replaced` line naming them. The drift plan as a whole is already non-empty for the
+unrelated pending server replace until #9786, so a red drift run is not by itself a failure of this check.
 
 ### Delivery route and ordering
 
@@ -387,8 +414,11 @@ unrelated pending server replace until #9786).
   or `inngest-host-replace` dispatch aborts with `reason=luks_volume_touched`: that is the intended fail-closed behaviour,
   not a defect, and it is not widened. Do not replace the host in that window; land the apply, read back, then replace.
 - **If the apply was skipped or failed**, the only delivery route is a `manual-rerun` dispatch of the same per-merge job:
-  `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun`. The `inngest-host` dispatch is not
-  a delivery route (its shape gate refuses an update on the volume).
+  `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason='deliver sole-copy protection'`
+  (`reason` is a required input). The `inngest-host` dispatch is not a delivery route (its shape gate refuses an update on the volume).
+- **If the per-merge job is wedged by another halt** (`destroy_count`, `host_creates`, the rotation HALT, an apply error),
+  both host-replace gates abort and `manual-rerun` runs the same wedged job, so it does not help. There is no faster
+  data-safe route. The owner resolves the halt, or takes the reviewed PR route in "Break-glass" below.
 - **Never an untargeted apply.** The live host's `user_data` is stale until #9786, so a full-root plan shows a pending
   server replace, and an untargeted apply would replace the server and its attachment with no gate running. Every plan and
   apply for this store is targeted and goes through CI.
@@ -397,31 +427,50 @@ unrelated pending server replace until #9786).
   and there is no SSH step anywhere on this path (`hr-no-ssh-fallback-in-runbooks`). A drift reason at a sole-copy address
   is read from the plan text for that address and resolved through a reviewed change or the `manual-rerun` route.
 - The drift workflow's own output prints runnable `DELETE` recipes for other resources. Those recipes must never be pointed
-  at this volume or its Doppler secret; the break-glass below is the only sanctioned out-of-band API use here.
+  at this volume or its Doppler secret.
 
 ### Per-loss-mode owner and procedure
 
 The detection and recovery stance of each mode is in the ADR table. The owner of every mode below is the repository owner
-(the founder, who is also the sole CODEOWNER); there is no second on-call.
+(the founder, who is also the sole CODEOWNER); there is no second on-call. The passphrase has TWO independent copies (the
+Doppler secret and the Terraform state value `random_password.inngest_redis_luks.result`); its writers are the arm token,
+`DOPPLER_TOKEN_TF` and the host boot token `inngest-boot`.
 
 | Mode (ADR table row) | Procedure |
 | --- | --- |
 | Doppler secret deleted | Stop. Deliver a `manual-rerun` of the per-merge apply (the create of the Doppler copy alone is legal there and restores the value held in state). Confirm the next drift run shows no pending change at `doppler_secret.inngest_redis_luks_key`. |
-| Doppler secret overwritten | Stop; do not dispatch any apply (the per-merge guard HALTs on an update of the pair by design). Restore the previous value from Doppler version history. The plan tier and the rollback scope are not measured (#9927); never print values or diffs. If rollback is unavailable, escalate as total loss of the opener. |
-| Terraform state entry lost | Stop; do not apply (a create of the passphrase is blocked by the per-merge HALT, and re-import is not a claimed recovery for this resource class). The repository owner decides the repair in a reviewed change. |
+| Doppler secret overwritten | Stop; do not dispatch any apply (a repair is a secret update with `random_password` a no-op, and the per-merge HALT blocks an update of the pair unattended, correctly). Route A: restore the previous value from Doppler version history (plan tier and rollback scope not measured, #9927; never print values or diffs). Route B, when history is unavailable: the Terraform state value is an independent third copy, so this is NOT total loss; the owner writes it back (below). Total loss only if both copies are gone. |
+| Terraform state entry lost | Stop; do not apply. The per-merge HALT blocks a create of `random_password.inngest_redis_luks` (alone or with the Doppler copy); a create of the Doppler copy alone stays legal. State-loss recovery is UNVERIFIED: importing the `random_password` and planning showed `special true -> false`, a replacement that `prevent_destroy` turns into a hard error (an accidental apply cannot mint a new key); editing `special = false` into the imported state gives "No changes". That edit is a CANDIDATE recipe, NOT rehearsed and not claimed. The repository owner decides the repair in a reviewed change. |
 | Both copies lost | Total loss of the store. Follow "After a total loss" below. |
 | LUKS header corrupted | No recovery; the host fails to open the volume. Incident (`soleur:incident`); follow "After a total loss" if the data is unreadable. Detection lags to the first Redis failure. |
 | Volume deleted despite protection, or project loss | No recovery. Incident; follow "After a total loss". |
 
+**Route B: write the state value back to the Doppler secret (owner-run; per-command go-ahead; NOT executed or rehearsed).**
+Get the owner's explicit go-ahead for each command (a menu answer is not one). The value is piped, never printed, never on
+argv, never in a file; both stdout of `doppler secrets set` (it prints the remaining secrets) and the state are kept off the
+terminal. Run from the infra root with the backend credentials injected the way CI does:
+
+```
+terraform -chdir=apps/web-platform/infra state pull | jq -j '.resources[] | select(.mode=="managed" and .type=="random_password" and .name=="inngest_redis_luks") | .instances[0].attributes.result' | doppler secrets set INNGEST_REDIS_LUKS_KEY -p soleur-inngest -c prd --no-interactive > /dev/null
+```
+
+The `jq` selector was checked against a synthetic state document (it emits the value with no trailing newline); the full
+pipeline was not run. Then dispatch nothing: confirm with the next drift run that no change is planned at
+`doppler_secret.inngest_redis_luks_key`.
+
 ### After a total loss: who tells affected users
 
-The repository owner is the incident owner and sends the user notice, using `soleur:incident` to scaffold the report.
-Before sending, consult counsel on whether the loss of availability of personal data held in the store triggers a
-notification duty (Art. 4(12) and 33); the breach register is `knowledge-base/legal/breach-register.md`. Affected users are
-those with reminders or agent runs in flight at the time. The claim that armed reminders can be re-armed from Postgres is
-**unconfirmed** (ADR-282, "What losing the store costs"): the enumeration script reads the live store, and the route that
-arms a reminder persists nothing app-side. After a loss the platform comes back empty with functions re-registered; do not
-tell users their reminders will be restored.
+The repository owner is the incident owner and sends the user notice as a product notice, using `soleur:incident` to
+scaffold the report. Who is affected is **unknowable from surviving data**: `schedule-reminder` persists nothing app-side
+(ADR-282, "What losing the store costs"), so no record survives that says whose reminders or runs were in the store. The
+default is to treat every user with scheduling activity as potentially affected. Whether a surviving source exists (Inngest
+Postgres run history, application logs) is open and tracked in #9927; until it is verified, do not state a narrower set.
+Before sending, assess with counsel whether the loss of availability of personal data held in the store is a
+personal-data breach (Art. 4(12), 33 and 34; total loss of availability is not necessarily one, so the step is to assess).
+If any limb is a personal-data breach, the 72-hour clock of Art. 33 runs from awareness. The breach register is
+`knowledge-base/legal/breach-register.md`. The claim that armed reminders can be re-armed from Postgres is **unconfirmed**
+(the enumeration script reads the live store, and the route that arms a reminder persists nothing app-side). After a loss
+the platform comes back empty with functions re-registered; do not tell users their reminders will be restored.
 
 ### Deliberate unprotect (two reviewed changes; no sanctioned erase path)
 
@@ -433,27 +482,30 @@ Lifting protection is two reviewed PRs, in this order, never one:
 
 Removing `prevent_destroy` alone is the trap: a destroy apply detaches the mounted volume before Hetzner refuses the
 delete. Each PR edits the guards it trips (the Guard 1 rows in `inngest-luks-sole-copy.test.sh`, census row G4h and
-`G4_PROTECTED`, the Guard 2 expected set in `terraform-target-parity.test.ts`), so the weakening is visible in review. A
-key rotation (a header `luksChangeKey`) needs `prevent_destroy` lifted on the pair in the same reviewed change.
-**No sanctioned erase path exists for this volume since PR B of #8285** (the wipe and destroy dispatch was deleted), so a
-whole-volume Art. 17 erasure needs a new, separately designed and reviewed path; none is built.
+`G4_PROTECTED`, the Guard 2 expected set and the effective-text pin in `terraform-target-parity.test.ts`), so the
+weakening is visible in review. **No key-rotation route exists today.** The per-merge rotation HALT cannot be
+acknowledged and its text names no automated route, so lifting `prevent_destroy` on the pair is not a rotation procedure; a
+leaked-key response is an escalation to the owner, carried by #9927. **No sanctioned erase path exists for this volume
+since PR B of #8285** (the wipe and destroy dispatch was deleted), so a whole-volume Art. 17 erasure needs a new,
+separately designed and reviewed path; none is built.
 
-### Break-glass: a sanctioned host replace is refused because detach is rejected under delete protection
+### Break-glass: a sanctioned host replace is blocked by the protection (the reviewed two-step route)
 
 That Hetzner allows detach of a delete-protected volume is documented only indirectly; the first sanctioned replace is the
-live proof. If a replace is refused for that reason, the outage must not outlast the data-loss risk the protection prevents:
+live proof. If a replace is refused for that reason, the data-safe route is the reviewed two-step route, and **it takes
+several merge cycles; there is no faster data-safe route**:
 
-1. Get the repository owner's explicit per-command go-ahead (a menu answer is not one). Time-box the window.
-2. Lift protection with ONE `change_protection` call using the read/write token, token on stdin, no argv, no `-v`:
+1. A PR sets the volume's delete-protection attribute to false in `inngest-redis-luks.tf` and edits what it trips (the
+   Guard 1 rows, the parity-test pin, the census rows). The per-merge apply lands it, so live state equals the HCL.
+   Read back `not-protected`.
+2. Dispatch `inngest-host-replace` (the volume now plans as a no-op, which both gates accept), then `op=resume` per #7228.
+3. A re-protect PR restores the attribute and the guards; the per-merge apply lands it; read back `protected`.
 
-   ```
-   doppler run -p soleur -c prd_terraform -- sh -c ': "${HCLOUD_TOKEN:?absent from prd_terraform}"; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN" | curl -sS --config - -X POST -H "Content-Type: application/json" -d "{\"delete\":false}" -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/106903269/actions/change_protection'
-   ```
-
-3. Complete the sanctioned replace (`inngest-host-replace`, then `op=resume` per #7228).
-4. Re-protect in the same session: the same call with the body `{"delete":true}`, then run the read-back above and expect `protected`.
-5. Record the lift and the re-protect in the incident record. The next drift run is the check that Terraform still reads
-   protection as true.
+**Why a one-call out-of-band lift is not a route.** A single Hetzner `change_protection` call makes the next dispatch plan
+show the attribute going from false back to true on the volume, an in-place update; both host-replace gates abort
+`luks_volume_touched` on any volume action other than no-op or create, so step 2 is refused by construction. A merge in that
+window runs the per-merge apply and re-protects. Any out-of-band lift is reverted by the next per-merge apply. Do not use
+one to try to complete a replace.
 
 ### Revert recipe
 
@@ -463,9 +515,9 @@ Two recipes; both are to be executed once in a scratch detached worktree before 
   a record names a commit id.
 - **Full revert:** in a scratch detached worktree, `git revert --no-commit` the feature commits, then run the suites the
   revert PR must pass. The revert plans the inverse in-place update (protection true to false) through the same per-merge
-  path, and it must remove the new suite together with its registrations (`suite-shard-legs.tsv`,
-  `suite-durations.tsv`, the `test-all.sh` line and the `BASELINE_DECLARED_PROBES` bump) in the same commit, or the orphan
-  census and the baseline test go red. Lifting protection deliberately is never a revert of only `prevent_destroy`.
+  path, and it must remove the new suite together with its registrations (the `PROMOTED_FILES` entry in
+  `scripts/guard-vacuity-floor.test.sh`, plus the rows in `apps/web-platform/infra/suite-shard-legs.tsv` and
+  `apps/web-platform/infra/suite-durations.tsv`) in the same commit, or the orphan census and the vacuity-floor test go red. Lifting protection deliberately is never a revert of only `prevent_destroy`.
 
 Recorded scratch-run output (executed 2026-10-10 in a scratch detached worktree at the head of the #9879 branch; the three feature
 commits were reverted with `git revert --no-commit`, 21 files, and the suites below were run in that tree):
@@ -483,6 +535,11 @@ inngest-host                  rc=0  101 passed, 0 failed
 lint-encryption-posture       rc=0
 Not run in the scratch tree: the bun parity test (no node_modules there); CI covers it.
 ```
+
+*Note, 2026-10-10 (#9879 review):* the list of registrations to remove in the revert recipe above was corrected after this
+scratch run was recorded; the run's output block is unchanged. The registrations this PR actually created are the
+`PROMOTED_FILES` entry in `scripts/guard-vacuity-floor.test.sh` and the rows in the two `*.tsv` files. No `test-all.sh` line
+and no `BASELINE_DECLARED_PROBES` bump were created.
 
 ---
 

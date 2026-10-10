@@ -80,7 +80,7 @@ in-flight step state, retries, armed reminders) exactly — strictly more comple
 re-arm. The retained plaintext volume is the rollback backstop, mirroring the workspaces/git-data
 two-copy design.
 
-**No key escrow (git-data-lean shape).** The AOF is transient and self-healing (its contents churn
+**No key escrow (git-data-lean shape).** *[superseded in part — see the 2026-10-10 addendum / ADR-282]* The AOF is transient and self-healing (its contents churn
 as jobs complete and reminders fire), and its total-loss recovery is already built and proven
 (`inngest-wiped-volume-verify.sh`: functions re-sync from Postgres, the SDK re-registers, and the
 sole-copy reminder subset can be enumerated/re-armed). Escrow's specific job — surviving LUKS-header
@@ -428,7 +428,7 @@ phase accepts either a `wipe_run_id` (evidence) or `erasure=provider-only` with 
   `soleur-inngest/prd` its sole opener.** Losing that key is then total loss (counsel review O4,
   `knowledge-base/legal/audits/2026-09-counsel-review-8248.md`). This sharpens the "No key escrow"
   stance above, which rests on the AOF being transient and self-healing while armed reminders can
-  carry unbounded future fire-times.
+  carry unbounded future fire-times. *[superseded in part — see the 2026-10-10 addendum / ADR-282]*
 - **AP-009 (never delete user data) tension.** The deleted object is a stale second copy, not the live
   data. The live copy is evidenced before every phase (Doppler flag `done`, the pointer naming
   106903269, that volume attached, a fresh probe row on it) and the destroy is gated on it, which is

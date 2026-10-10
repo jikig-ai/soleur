@@ -3,7 +3,7 @@ title: A sole-copy LUKS volume gets delete protection plus prevent_destroy on th
 status: adopting
 date: 2026-10-10
 supersedes: none
-amends: none
+amends: [ADR-142]
 issue: 9879
 related: [9879, 9927, 8285, 6894, 9786, 9703, 8316, 9348, 9925]
 related_adrs: [ADR-142, ADR-263, ADR-119, ADR-006]
@@ -18,7 +18,11 @@ brand_survival_threshold: single-user incident
 **Adopting - 2026-10-10 (#9879, PR #9925).** This ADR describes the state the decision reaches when PR #9925 is merged,
 the merge's per-merge apply (`apply-web-platform-infra.yml`) has landed one in-place update on
 `hcloud_volume.inngest_redis_luks`, and the post-apply read-back (runbook section "Sole-copy protection and key loss") has
-returned `protection.delete=true`. It flips to accepted only after that read-back passes. Until then every sentence below
+returned `protection.delete=true`. It flips to accepted only after that read-back passes. **Who flips it:** the post-merge
+verification step runs the read-back (`soleur:postmerge`, a path-triggered report-only phase, not the merge itself), and the
+owner of PR #9925 adds the follow-up commit that changes this status from adopting to accepted once the read-back has
+returned `protected`; if the read-back fails or is skipped the status stays adopting and the route is the `manual-rerun`
+dispatch. Until then every sentence below
 that says a protection "is in force" is a plan, not a fact: merging does not by itself prove the live Hetzner object changed.
 If the apply is skipped or fails, the delivery route is a `manual-rerun` dispatch of the same workflow, never an
 untargeted apply.
@@ -31,13 +35,15 @@ re-probed immediately before merge.
 
 The 2026-10-09 retirement of the plaintext backstop (#8285; ADR-142 addendum "PR B: the retirement landed") made
 `hcloud_volume.inngest_redis_luks` (Hetzner id 106903269) the only copy of the Inngest queue and run state, and the Doppler
-secret `INNGEST_REDIS_LUKS_KEY` in `soleur-inngest/prd` its sole opener. Before this decision nothing at Hetzner or in
+secret `INNGEST_REDIS_LUKS_KEY` in `soleur-inngest/prd` the only opener the host reads (an independent copy of the passphrase
+exists in Terraform state; see Key-loss posture). Before this decision nothing at Hetzner or in
 Terraform refused the volume's deletion, and ADR-142's "No key escrow" stance rested on the AOF being "transient and
 self-healing", a premise its own 2026-10-08 addendum had already sharpened (armed reminders carry unbounded future
 fire-times; counsel review item O4).
 
-Web-1's workspaces volume got the equivalent protection after the fact (#9348; ADR-119, ADR-263). This store gets it before
-anything goes wrong, with one structural difference: its volume attachment must stay replaceable.
+Web-1's workspaces volume got the equivalent protection after the fact (#9348; the pin set is ADR-119 D1, declared in
+`apps/web-platform/infra/workspaces-luks.tf`). This store gets it before anything goes wrong, with one structural
+difference: its volume attachment must stay replaceable.
 
 ## Decision
 
@@ -57,12 +63,17 @@ Terraform text (`apps/web-platform/infra/inngest-luks-sole-copy.test.sh`, "Guard
 workflow and tracked script in `plugins/soleur/test/terraform-target-parity.test.ts` ("Guard 2"), and census row G4h plus
 the extended `G4_PROTECTED` list in `tests/scripts/test-infra-privileged-tier-census.sh` ("Guard 3": no `removed {}` or
 `moved {}` block names a sole-copy address). The three guards are referenced by name here; their rows and mutation
-matrices live in the plan and the suites.
+matrices live in the plan and the suites. Two further pins sit in the required `test` check inside the parity test: an
+independent effective-text pin of the volume's delete-protection and `prevent_destroy` lines and of the pair and its
+parents, and a pin of the dependency edge by which the volume update reaches the per-merge plan (the alert target
+`logtail_exploration.inngest_luks_wrong_volume` and the alias local in `betterstack-logs-alerts.tf`). Guard 1 is advisory
+until it is promoted to a required check (#9927).
 
 ### Why the attachment stays unpinned (contrast ADR-263 and ADR-119)
 
-Web-1's attachment carries `prevent_destroy` because web-1's host-replace dispatch refuses web-1 by name, so nothing
-sanctioned ever replaces that attachment. This store is the opposite: the sanctioned `inngest-host-replace` dispatch
+Web-1's attachment carries `prevent_destroy` (ADR-119 D1; `hcloud_volume_attachment.workspaces_luks` in
+`apps/web-platform/infra/workspaces-luks.tf`; ADR-263 only records the divergence from it) because web-1's host-replace
+dispatch refuses web-1 by name, so nothing sanctioned ever replaces that attachment. This store is the opposite: the sanctioned `inngest-host-replace` dispatch
 replaces the server and therefore, through a ForceNew on `server_id`, this attachment. A `prevent_destroy` there would turn
 the legitimate replace into a plan error and force an engineer toward the unsafe repair (deleting the lifecycle block).
 The attachment's protection is therefore the existing gate rows (a replace is permitted only together with the server;
@@ -79,11 +90,35 @@ the delete (the provider detaches, then deletes). Each PR edits the guards it tr
 and PR B of #8285 deleted the wipe and destroy dispatch, so **no sanctioned erase path exists for this volume**.
 Designing one is a separate issue and is relevant to Art. 17 whole-volume erasure (see the Article 30 register).
 
+**When a sanctioned replace is blocked by the protection** (for example Hetzner rejecting the detach of a delete-protected
+volume; see the residual on the first sanctioned host replace below), the only data-safe route is the same reviewed
+two-step route, not an out-of-band call:
+
+1. A PR sets the volume's delete-protection attribute to false (and edits the Guard 1 rows, the parity-test pin and the
+   census rows it trips); the per-merge apply lands it, so live state equals the HCL again.
+2. Then dispatch `inngest-host-replace`: the volume now plans as a no-op, which both dispatch gates accept.
+3. Then a re-protect PR restores the attribute and the guards.
+
+This takes several merge cycles and there is no faster data-safe route. An out-of-band lift alone does not help: one
+`change_protection` call makes the next plan show the attribute going from false back to true on the volume, which is an
+in-place update, and both host-replace gates abort `luks_volume_touched` on any volume action other than no-op or create
+(`inngest-host-replace-gate.sh`), so the dispatch is refused by construction; and any merge landing in that window runs the
+per-merge apply, which re-protects. Any out-of-band lift is reverted by the next per-merge apply. If the per-merge job is
+wedged by another halt (`destroy_count`, `host_creates`, the rotation HALT, an apply error), both gates abort and a
+`manual-rerun` dispatch runs the same wedged job: there is no faster data-safe route then either, and the owner resolves
+the halt or takes the reviewed route above.
+
+**Key rotation has no route today.** The per-merge rotation HALT cannot be acknowledged and its text names no automated
+route, so lifting `prevent_destroy` on the pair is not enough. A leaked-key response is therefore an escalation to the
+owner, carried by #9927, not a reviewed edit.
+
 ### Key-loss posture
 
-No new escrow artifact is created. Independent copies of the opener today: the Doppler secret (`soleur-inngest/prd`) and
+No new escrow artifact is created. The passphrase has TWO independent copies today, so the Doppler copy is the only copy
+the host reads, not the only copy that exists: the Doppler secret (`soleur-inngest/prd`) and
 the Terraform state value `random_password.inngest_redis_luks.result` (R2 backend, no versioning and no point-in-time
-recovery; ADR-006 correction). The LUKS header has no off-host copy. Escrow of the header or passphrase to a third store
+recovery; ADR-006 correction). The writing credentials for the Doppler copy are the arm token, `DOPPLER_TOKEN_TF` and the
+host boot token `inngest-boot` (all three). The LUKS header has no off-host copy. Escrow of the header or passphrase to a third store
 was rejected on confidentiality grounds (ADR-142; the destruction record) and stays rejected; reopening it is a legal
 decision, not an engineering default.
 
@@ -92,9 +127,9 @@ decision, not an engineering default.
 | Loss mode | Detection | Recovery stance |
 |---|---|---|
 | Doppler secret deleted | 12h drift plan (create planned) | A create of the Doppler copy alone is legal on the per-merge path and restores the state value; the next merge apply or a `manual-rerun` dispatch re-creates it. |
-| Doppler secret overwritten with another value | 12h drift plan (update planned) | The per-merge guard HALTs on any update of the pair (correctly: it cannot tell repair from rotation), so there is no automated repair route. Recovery is Doppler version history (retained per secret on paid tiers; the plan tier and the rollback scope are NOT measured here and are carried by #9927; never print diffs, they carry plaintext). Owner: the repository owner; procedure in the runbook section. Automated repair dispatch is DEFERRED (#9927). |
-| Terraform state entry lost | next plan shows a create of the passphrase | Re-import is unverified for this resource class (ADR-006 caveat: `special=false` import plans a replacement). The Doppler copy is the only live opener; the per-merge HALT blocks the create. Owner: the repository owner, who decides the repair; do not apply. The import rehearsal in the rehearsal root is DEFERRED (#9927) and re-import is not claimed as a recovery until it passes. |
-| Both copies lost | none possible | Total loss of the store; accepted residual, recited in the Article 30 register. |
+| Doppler secret overwritten with another value | 12h drift plan (update planned) | A repair is a secret update with `random_password` a no-op; the per-merge HALT is still correct to block it unattended (an update of the pair is also what a rotation looks like), and the owner repairs it via the documented route. Two independent recoveries: Doppler version history (retained per secret on paid tiers; the plan tier and the rollback scope are NOT measured here and are carried by #9927; never print diffs, they carry plaintext), and a third copy, the Terraform state value `random_password.inngest_redis_luks.result`, which the owner can write back to the Doppler secret without printing it (runbook section; per-command go-ahead; NOT executed or rehearsed). It is total loss only when both copies are gone. Automated repair dispatch is DEFERRED (#9927). |
+| Terraform state entry lost | next plan shows a create of the passphrase | With the jq create-halt in this PR, the per-merge HALT blocks a create of either or both members of the pair (`random_password.inngest_redis_luks` and the Doppler copy together); a create of the Doppler copy alone stays legal and restores a lost Doppler copy. State-loss recovery remains UNVERIFIED. An offline measurement showed that importing the `random_password` and then planning gives `special true -> false`, a replacement, which `prevent_destroy` turns into a hard error, so an accidental apply cannot mint a new key; editing `special = false` into the imported state gives "No changes". That edit is recorded as a CANDIDATE recipe only: it was NOT rehearsed and is not claimed. Owner: the repository owner, who decides the repair; do not apply. The import rehearsal in the rehearsal root is DEFERRED (#9927). |
+| Both copies lost (Doppler secret and Terraform state value) | none possible | Total loss of the store; accepted residual, recited in the Article 30 register. Reserve this label for both copies lost; one surviving copy is a recovery, not a total loss. |
 | LUKS header corrupted | the hourly probe row proves device binding, not the cipher, so detection lags to the first Redis failure (existing wrong-volume alert; dead-man's switch #9703, not yet armed) | No recovery. Header backup is DEFERRED to the planned host-replace window with a dated trigger (#9927: 2027-01-08 or the next planned host replace, whichever comes first). |
 | Hetzner volume deleted despite protection, or project loss | none | No recovery; residual. |
 
@@ -120,10 +155,15 @@ reminders after a total loss**:
 
 **Confirmed:** after a total loss the platform comes back empty, functions re-register, and new reminders arm normally.
 **Not confirmed, and not to be relied on:** that previously armed reminders and in-flight job payloads can be rebuilt. The
-working assumption for the posture is that they are lost, and the affected users are the people whose reminders were armed
-at the time. Who tells them: the repository owner (the founder, the single CODEOWNER) is the incident owner and sends the
-user notice, after consulting counsel on whether a loss of availability of personal data in the store triggers a
-notification duty (Art. 4(12) and 33; the breach register is `knowledge-base/legal/breach-register.md`). The runbook names
+working assumption for the posture is that they are lost. **Who is affected is unknowable from surviving data:**
+`schedule-reminder` persists nothing app-side, so after a total loss no surviving record says whose reminders or in-flight
+jobs were in the store. The default is to treat every user with scheduling activity as potentially affected. Whether a
+surviving source exists (Inngest Postgres run history, application logs) is open and tracked in #9927; until that is
+verified no one may state a narrower affected set. Who tells them: the repository owner (the founder, the single CODEOWNER) is the incident owner and sends the
+user notice, as a product notice via the owner, after assessing with counsel whether a loss of availability of personal
+data in the store triggers a notification duty (Art. 4(12), 33 and 34; the breach register is
+`knowledge-base/legal/breach-register.md`). Total loss of availability is not necessarily a personal-data breach, so the
+word is assess; if any limb is a personal-data breach, the 72-hour clock of Art. 33 runs from the owner's awareness. The runbook names
 the same owner and the `soleur:incident` skill as the route.
 
 ### Residuals recorded, not mitigated
@@ -133,9 +173,14 @@ the same owner and the `soleur:incident` skill as the route.
 - **A holder of the read/write Hetzner token can lift protection.** Protection defends against mistaken deletes (a console
   click, a wrong id, a pasted recipe, the drift workflow's runnable DELETE recipes), not against a leaked read/write token.
   That token is also the silent fallback of the read-only loader; a no-fallback loader is carried by #9927.
-- **Other credentials can overwrite or delete the key:** the inngest cutover arm token
-  `doppler_service_token.inngest_arm_write` (read/write on `soleur-inngest/prd`, published as `DOPPLER_TOKEN_INNGEST_ARM`)
-  and the workplace Doppler token `DOPPLER_TOKEN_TF`. Scoping or revoking the arm token after cutover is carried by #9927.
+- **Other credentials can overwrite or delete the key:** the three writers of the Doppler copy are the inngest cutover arm
+  token `doppler_service_token.inngest_arm_write` (read/write on `soleur-inngest/prd`, published as
+  `DOPPLER_TOKEN_INNGEST_ARM`), the workplace Doppler token `DOPPLER_TOKEN_TF`, and the host boot token `inngest-boot`
+  (below). Scoping or revoking the arm token after cutover is carried by #9927.
+- **Not guarded: the R2 state-backend credentials and the script writers.** A read of the R2 state backend exposes the
+  passphrase held in state (the second copy); a write there can delete the state entry (loss mode 3 above). Scripts that
+  write to `soleur-inngest/prd` are also outside the guards: `scripts/cutover-inngest.sh` (with the arm token) and the host
+  scripts `inngest-luks-cutover.sh` and `inngest-cutover-flip.sh`.
 - **The ciphertext has no backup.** The volume is the only copy of the data; there is no snapshot, replica or export.
 - **The host token `inngest-boot` is `read/write`** on the same Doppler config. Downgrading it is a ForceNew host replace
   (the token's `.key` feeds `user_data`), so it rides #9927. Revoking or replacing `doppler_service_token.inngest` is also a
@@ -147,7 +192,9 @@ the same owner and the `soleur:incident` skill as the route.
   read-back is the only distinct check.
 - **The first sanctioned host replace is the live proof** that Hetzner allows detach of a delete-protected volume (the
   client documentation lists no such precondition; the repo's web-1 note cites provider source). This ADR's PR performs no
-  replace. A failure there is not this PR's regression; the runbook carries the break-glass.
+  replace. A failure there is not this PR's regression; the route is the reviewed two-step route in "Deliberate unprotect"
+  above, which takes several merge cycles (the runbook carries the same text). A one-call out-of-band lift does not
+  complete a replace.
 
 ### Enforcement posture of the guards (read-only record, 2026-10-10)
 
@@ -170,9 +217,11 @@ nothing was changed.
   follow-up), so CODEOWNERS is a routing hint here, not an independent second reviewer. Adding explicit rows for the guard
   files, and the second-reviewer enforcement, go to #9927.
 - **Consequence for the anchor.** The pins and Guards 1 and 2 land in the same commit, so one diff can weaken both. The
-  independent anchors are the census rows (a different file, required), the merge-base diff the census computes for G4c
-  (a deleted resource block), and the live read (the post-apply read-back and the drift plan), which a weakening of text
-  alone cannot change. They are as strong as those being required checks, which is the measurement above.
+  census rows do not pin the attribute lines; they pin the `removed {}`/`moved {}` blocks and a deleted resource block (the
+  merge-base diff the census computes for G4c). The independent anchor for the attribute lines is the effective-text pin in
+  the parity test, which runs in the required `test` check, plus the live read (the post-apply read-back and the drift
+  plan), which a weakening of text alone cannot change. Guard 1 remains non-required. The anchors are as strong as those
+  being required checks, which is the measurement above.
 
 ## Considered options
 
@@ -183,7 +232,7 @@ nothing was changed.
 | A reviewer-gated dispatch for lifting protection | Rejected | A new path to the very edge being closed; lifting is a reviewed PR. |
 | Escrow the passphrase or header to a third store | Rejected | Confidentiality (ADR-142, destruction record); a legal decision, not an engineering default. |
 | On-host header backup or `luksOpen --test-passphrase` continuity probe | Deferred (#9927) | Both edit cloud-init `user_data`, which force-replaces the sole scheduler. |
-| Add a per-merge `-target` on the volume | Rejected | Makes the per-merge job a third writer of the sole copy; edits a workflow at its byte limit; a design change, not an inline branch. |
+| Add a per-merge `-target` on the volume | Rejected | The per-merge job is already an implicit writer of the volume, through the dependency edge of the alert target `logtail_exploration.inngest_luks_wrong_volume`; that edge is now pinned by a test in the required check. An explicit `-target` would edit a workflow at its byte limit; a design change, not an inline branch. |
 
 ## Consequences
 
@@ -193,12 +242,14 @@ nothing was changed.
   pre-apply plan aborts with a named reason.
 - (-) Between a merge and its apply, or after a skipped or failed apply, a host-replace dispatch aborts
   `luks_volume_touched`; the delivery route is a `manual-rerun` dispatch.
-- (-) A legitimate rename (`moved`) or an unrelated volume update (for example a size grow) is blocked or aborted until the
-  guards are edited in a reviewed change. This is the intended friction.
+- (-) A legitimate rename (`moved`), a region migration (`location` is ForceNew) or a change of `format` is blocked or
+  aborted until the guards are edited in a reviewed change. This is the intended friction. A size grow is different: it
+  plans as an in-place update, so the per-merge apply would land it unattended (only the existing halts stop an apply)
+  while the dispatch gates abort `luks_volume_touched` until it has landed.
 - (-) The residuals above are accepted, not mitigated. The policy defends against mistaken deletes, not against a leaked
   read/write credential, and not against loss of the key.
 
 ## What this ADR does not change
 
-ADR-142's mechanism, the additive cutover, or the destruction records (attested; never edited). ADR-142 and ADR-263 carry
-dated pointer notes to this ADR; the records under `knowledge-base/legal/audits/` are untouched.
+ADR-142's mechanism, the additive cutover, or the destruction records (attested; never edited). ADR-142 (which this ADR amends in part), ADR-263
+and ADR-119 carry dated pointer notes to this ADR; the records under `knowledge-base/legal/audits/` are untouched.

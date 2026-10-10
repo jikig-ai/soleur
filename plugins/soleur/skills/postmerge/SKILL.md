@@ -472,6 +472,29 @@ the expected case. Any `kind=` other than none is reported verbatim with the run
 action (`knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`);
 this phase reports, it does not block "done".
 
+## Phase 5.7: Sole-copy protection read-back (path-triggered, REPORT-ONLY)
+
+When the merged PR touched `apps/web-platform/infra/inngest-redis-luks.tf` (`gh pr diff <number> --name-only`), the merge's
+per-merge apply is what delivers the Hetzner delete protection on the Inngest sole-copy volume (#9879, ADR-282), so a green
+merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (no triggering paths)` and continue.
+
+1. Find the merge-SHA run and poll it until it is `completed` (Monitor, not a blind sleep):
+   `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --json databaseId,status,conclusion`.
+2. Run the read-back from runbook `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` §5c (read-only,
+   token on stdin, output is one word). Run exactly:
+
+```bash
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS -f --config - https://api.hetzner.cloud/v1/volumes/106903269 | jq -r ".volume.protection.delete | tostring" | { IFS= read -r w; case "$w" in true) echo protected;; false) echo not-protected; exit 1;; *) echo read-failed; exit 2;; esac; }'
+```
+
+3. `protected` passes. If the run ended `skipped` or `failure`, or it ended `success` and the read-back says `not-protected`,
+   route to the `manual-rerun` dispatch the runbook names, then re-run the read-back. `read-failed` and `missing-token` mean
+   the read did not happen, not that protection was lifted: report them, never dispatch on their account.
+
+A failed or unrun read-back is a **red post-merge status**: report it verbatim as `Sole-copy read-back: <word>` in the
+Phase 7 summary. It does not itself block "done" (report-only, like Phases 5.5 and 5.6). When it returns `protected`, the
+PR owner adds the follow-up commit that flips ADR-282 from adopting to accepted.
+
 ## Phase 6: Update Issue and Compound
 
 If the PR body contained `Closes #N`, update the linked issue with verification results:

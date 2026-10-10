@@ -61,3 +61,12 @@ Proved: the volume rides the per-merge plan as a dependency of a targeted resour
 else, so the merge's own apply delivers delete protection. Not proved: that Hetzner refuses a delete (read-back after apply
 does that), that the 22 excluded GitHub resources are unchanged (not influenced by this change), or that detach works under
 protection (first sanctioned host replace is the live proof).
+
+## Limits (appended 2026-10-10, review fixes)
+
+- A delta at apply time is NOT mechanically an abort for the volume update. Only the existing halts stop the per-merge apply
+  (`destroy_count`, `host_creates`, the rotation HALT, an undecidable entry, a plan error); a plan that differs from the
+  projection above, including one extra in-place update on the volume, is applied unless one of those fires.
+- The 22 excluded `github_*` targets are asserted, not proven, independent of the volume: the projection above ran 166 of
+  the 188 targets, and the claim that the excluded ones do not depend on the volume rests on reading the configuration, not
+  on a plan that included them.
