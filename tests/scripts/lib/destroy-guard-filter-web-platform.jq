@@ -450,7 +450,8 @@ def destroyed_at($addr):
   # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace
   # there mints a new passphrase while the LUKS header on the live volume is still cut from the
   # OLD one — the store is then unopenable, on a host with no SSH and no console, and the AOF it
-  # holds is user prompts and agent output. There is no recovery: the header key is the only copy.
+  # holds is user prompts and agent output. There is no recovery: the OLD value is not
+  # recoverable once state is overwritten (the state copy is the second copy).
   #
   # WHY IT NEEDS ITS OWN COUNTER RATHER THAN resource_deletes. A replace trips resource_deletes,
   # and the destroy gate then prints "Add [ack-destroy] to acknowledge" — so an author acking a
@@ -469,8 +470,8 @@ def destroyed_at($addr):
   #     {"resource_deletes":0,"luks_passphrase_rotations":0}
   # That address is in the per-merge `-target=` list, so an unattended merge apply reaches it. The
   # result is a Doppler passphrase the live LUKS header was never cut from: the store is
-  # unopenable on the next boot, on a host with no SSH and no console, and the header key is the
-  # only copy. The parity claim below is now true rather than aspirational. A CREATE of the inngest passphrase HALTS
+  # unopenable on the next boot, on a host with no SSH and no console, and the OLD value is not
+  # recoverable once state is overwritten (the state copy is the second copy). The parity claim below is now true rather than aspirational. A CREATE of the inngest passphrase HALTS
   # (#9879): the volume is already cut to LUKS and the recut route that made a first create legal is retired (#8285),
   # so a planned create means state lost the entry; a create of the Doppler copy alone stays legal (see
   # luks_passphrase_create_halt_addrs). `forget` IS counted: a Terraform 1.7+ state-drop

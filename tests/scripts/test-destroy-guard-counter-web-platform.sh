@@ -1163,6 +1163,7 @@ t_luks_passphrase_forget_halts() {
 # once made a first create legal is retired (#8285) and the volume is already cut to LUKS, so create+create (state
 # lost BOTH members) would mint a new passphrase over the live Doppler key while the header is cut from the old one.
 # The fixture holds the password create AND the key-copy create; only the password counts, so it reads 1, rc=1.
+# (The fixture's name predates the halt: tfplan-inngest-luks-passphrase-first-create.json is now the must-HALT fixture.)
 t_luks_passphrase_first_create_halts() {
   local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-inngest-luks-passphrase-first-create.json")
   if [[ "$out" == "1:1" ]]; then
@@ -1527,7 +1528,7 @@ t_workspaces_passphrase_every_address_counted() {
     d="$(_wl_shape_check "$FILTER" "$a" "$(_wl_create_want "$a")")"; detail="${detail}${d}"
   done
   if [[ -z "$detail" ]]; then
-    _report "T64e each of the four workspaces passphrase addresses scores on update/delete/forget/unreadable, a create counts at the web-class passphrase address only, and no-op never counts" ok
+    _report "T64e each of the four workspaces passphrase addresses scores on update/delete/forget/unreadable, a create counts at the web-class and the inngest passphrase addresses only (never the key copy), and no-op never counts" ok
   else
     _report "T64e each of the four workspaces passphrase addresses is counted" fail "$detail"
   fi
