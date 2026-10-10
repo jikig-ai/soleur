@@ -574,6 +574,8 @@ while [ $# -gt 0 ]; do
     -w) wfmt="$2"; shift 2 ;;
     --data) data="$2"; shift 2 ;;
     -H) shift 2 ;;
+    --disable) shift ;;
+    --noproxy) shift 2 ;;
     --config) [ "$2" = - ] && cfg=1; shift 2 ;;
     --max-time) shift 2 ;;
     -sS|-s|-S) shift ;;

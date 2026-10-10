@@ -140,7 +140,7 @@ CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET "${DOPPLER_ARGS[@
 [[ -n "$WEBHOOK_SECRET" ]] && echo "::add-mask::$WEBHOOK_SECRET"
 [[ -n "$CF_ACCESS_SECRET" ]] && echo "::add-mask::$CF_ACCESS_SECRET"
 
-HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || HMAC=""
 if ! { _cfg_ok "$HMAC" && _cfg_ok "$CF_ACCESS_ID" && _cfg_ok "$CF_ACCESS_SECRET"; }; then
   echo "::error::a deploy-status credential (webhook HMAC, CF Access id or secret) failed the header-value check — the data-plane verification could NOT run. This is a gate failure, not a skip."
   exit 1

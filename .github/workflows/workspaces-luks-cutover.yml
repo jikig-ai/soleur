@@ -453,8 +453,26 @@ jobs:
             if [[ -z "$HCLOUD_TOKEN" ]]; then
               HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
             fi
-            VOL_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer $HCLOUD_TOKEN" \
-              'https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data-luks')"
+            # The token reaches curl on its stdin config channel, never its argument list (every local user
+            # can read /proc/<pid>/cmdline; ADR-280, #9597). INLINE wrapper, not the sourced library: this
+            # step may execute no repo script on the runner (the B3 census in
+            # workspaces-luks-cutover-workflow.test.sh). The shape guard judges whichever value was read above
+            # (the read-only token, or the read/write fallback until ADR-241 O10). An unusable token makes
+            # NO request and stops the step here, before the device is resolved or anything is delivered;
+            # the marker is value-free (it names only the variable).
+            _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+            if ! _bearer_ok "$HCLOUD_TOKEN"; then
+              echo "workspaces-luks-cutover: HCLOUD_TOKEN unusable" >&2
+              echo "SOLEUR_CREDENTIAL_REFUSED script=workspaces-luks-cutover reason=token_shape" >&2
+              echo "::error::the Hetzner token failed the shape check — the LUKS volume lookup could NOT run, no request was made and nothing was delivered to web-1."
+              exit 1
+            fi
+            # --disable FIRST (it aborts ~/.curlrc parsing; later is too late), then --noproxy '*': without them
+            # a runner-level ~/.curlrc or ALL_PROXY redirects this request, token intact, to a host of the
+            # attacker's choosing.
+            VOL_JSON="$(curl --disable --noproxy '*' -fsS --max-time 15 --config - \
+              'https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data-luks' \
+              < <(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN"))"
             # Assert EXACTLY ONE volume matched before taking [0] — an ambiguous/zero match must NOT
             # silently pick a wrong device (the real arm luksFormats WORKSPACES_LUKS_DEV; a wrong id is
             # data-destructive on that device). Belt for the blkid-signature backstop in prepare_luks_target.

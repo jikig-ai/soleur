@@ -546,11 +546,15 @@ jobs:
         env:
           REVOKE_TOKEN: ${{ steps.mint.outputs.token }}
         run: |
-          code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -X DELETE \
-            -H "Authorization: Bearer $REVOKE_TOKEN" \
+          # The token reaches curl on its stdin config through the shared library, sourced from the job's own
+          # checkout (ADR-280), never an argument of the transfer process. Best-effort step: a library that cannot
+          # be loaded warns and ends the step, it never fails the job and never falls back to argv.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::warning title=app-token-revoke::scripts/lib/bearer-curl.sh could not be loaded from the job checkout; the soleur-infra token was NOT revoked and expires on its own within the hour."; exit 0; }
+          code=$(bc_curl apply-github-infra 'Authorization:Bearer :REVOKE_TOKEN' -- \
+            -sS --max-time 10 -o /dev/null -w '%{http_code}' -X DELETE \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/installation/token" 2>/dev/null) || code=000
+            "https://api.github.com/installation/token") || code=000
           if [[ "$code" != "204" ]]; then
             echo "::warning title=app-token-revoke::revoking the soleur-infra token returned HTTP ${code}; it expires on its own within the hour."
           fi

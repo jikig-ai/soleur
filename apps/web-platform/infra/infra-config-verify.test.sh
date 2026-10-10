@@ -155,11 +155,34 @@ fi
 # So the sweep is now the same allow-list the library gets, from the same shared scanner. The
 # three names above are no longer enumerated because they no longer need to be: anything not on
 # the list is a hit, including shapes nobody predicted.
-if [[ -f "$VERIFY_SH" ]]; then
-  VERIFY_SWEEP=$(python3 - "$VERIFY_SH" "$GATE_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" <<'PYEOF'
+# THE HMAC LINE IS THE ONE LINE THIS SCRIPT MAY CARRY AN INTERPRETER ON (#9597, ADR-280): the canonical HMAC
+# snippet (byte-identical to the inline copies in the workflows and to scripts/lib/bearer-curl.sh), on the
+# ONE line that wraps it. THE SCANNER BELOW CANNOT SEE IT, and cannot see any other program written the same
+# way: it returns NO command token for a program after a `VAR=value` prefix (`X=1 perl -e ...`,
+# `K=1 python -c ...`) or inside a `$( ... | VAR=v prog ...)` pipeline stage (the canonical line's own shape),
+# so the allow-list says nothing about them and `python3` being off the allow-list closes nothing there.
+# What closes it is a scanner-independent pin by LINE EQUALITY over an interpreter-word set: every non-comment
+# line of the script that contains any word of VERIFY_INTERP_RE must be EXACTLY the canonical line, and there
+# must be exactly one. That covers the interpreters the allow-list does not name (python*, perl, ruby, node,
+# php, lua, openssl, deno, bun) wherever they sit on a line. It does NOT cover a program outside that word set
+# written behind an assignment prefix (`X=1 busybox sh -c ...`): that stays a known gap of the scanner,
+# pre-existing, and out of this pin's scope. `awk` and `sed` stay governed by the allow-list below, unchanged.
+VERIFY_HMAC_SNIPPET="$(cat <<'HM_EOF'
+HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())'
+HM_EOF
+)"
+VERIFY_HMAC_LINE="HMAC=\$(printf '' | ${VERIFY_HMAC_SNIPPET}) || HMAC=\"\""
+# The interpreter-word set the line-equality pin quantifies over. One literal, used by the in-function sweep
+# (Python `re`) and by the direct row below (grep -E); both accept this ERE subset identically.
+VERIFY_INTERP_RE='\b(python[0-9.]*|pypy[0-9.]*|perl|ruby|node|nodejs|php|lua|luajit|openssl|deno|bun)\b'
+
+# verify_actuation_sweep <verify-script-path>: prints OK, or HITS=... / SWEEP-ERROR. A function of the path so
+# the mutation rows below judge a scratch copy with the SAME code that judges the real file.
+verify_actuation_sweep() {
+  python3 - "$1" "$GATE_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" "$VERIFY_HMAC_LINE" "$VERIFY_INTERP_RE" <<'PYEOF'
 import importlib.util, re, sys
 
-verify_path, gate_path, scanner = sys.argv[1], sys.argv[2], sys.argv[3]
+verify_path, gate_path, scanner, canon_line, interp_re = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 _spec = importlib.util.spec_from_file_location('shellscan', scanner)
 _m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m)
@@ -181,7 +204,7 @@ BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','uns
 # `ssh`, `systemctl` and `gh` are absent by omission rather than by enumeration, which is the
 # point of the inversion.
 ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
-           'openssl','sleep','source'}
+           'sleep','source'}
 
 # The gate library's function names, DERIVED from the library rather than listed here, so a
 # newly added adjudicator is covered the moment it exists instead of reading as an escape.
@@ -202,6 +225,23 @@ for line, tok, raw in _m.raw_command_tokens(_m.strip_noise(src)):
                            'cannot resolve)' % raw))
         continue
     hits.append((line, raw))
+
+# THE HMAC LINE, BY LINE EQUALITY AND INDEPENDENT OF THE SCANNER ABOVE (which returns no command token for
+# `X=1 perl -e ...`, `K=1 python -c ...` or a `$(printf '' | K=v prog ...)` stage). Every non-comment line that
+# contains an interpreter word (interp_re) must be EXACTLY the canonical line, and there must be exactly one.
+# A second invocation in any spelling, or the canonical snippet with one byte changed (`-I` dropped, the key
+# moved to argv), is a hit; a comment may still mention the words.
+py_lines = [(i + 1, l) for i, l in enumerate(src.split('\n'))
+            if not l.lstrip().startswith('#') and re.search(interp_re, l)]
+for n, l in py_lines:
+    if l != canon_line:
+        w = re.search(interp_re, l).group(0)
+        hits.append((n, '%s on a line that is not the canonical HMAC line (the one interpreter '
+                        'invocation this script may carry)' % w))
+if len(py_lines) != 1:
+    hits.append((0, 'interpreter words appear on %d non-comment line(s); exactly 1 (the canonical HMAC line) is '
+                    'expected — zero means the signature is computed another way and this pin is '
+                    'vacuous' % len(py_lines)))
 
 for line, kind, detail in _m.find_trampolines(src):
     # `redirect-variable` is ALLOWED HERE and nowhere else: this gate legitimately writes
@@ -225,7 +265,10 @@ if not sourced:
 
 print('OK' if not hits else 'HITS=' + '; '.join('L%d %s' % h for h in hits))
 PYEOF
-) || VERIFY_SWEEP="SWEEP-ERROR (python3 unavailable)"
+}
+
+if [[ -f "$VERIFY_SH" ]]; then
+  VERIFY_SWEEP=$(verify_actuation_sweep "$VERIFY_SH") || VERIFY_SWEEP="SWEEP-ERROR (python3 unavailable)"
   if [[ "$VERIFY_SWEEP" == "OK" ]]; then
     pass "infra-config-verify.sh runs ONLY allow-listed inert commands plus the derived gate-library functions, sources only ./infra-config-gate.sh, and writes no literal path — it verifies; it does not actuate"
   else
@@ -240,7 +283,7 @@ _spec = importlib.util.spec_from_file_location('shellscan', sys.argv[2])
 _m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m)
 ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
-           'openssl','sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
+           'sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
 SHAPES = {
     'bare-binary':   'f() {\n  terraform apply -auto-approve\n}\n',
     'abs-path':      'f() {\n  /usr/bin/terraform apply -auto-approve\n}\n',
@@ -276,6 +319,82 @@ PYEOF
     pass "infra-config-verify.sh runs no \`gh issue\` (escalation stays out of the verdict step)"
   else
     fail "infra-config-verify.sh runs \`gh issue\` at $ghn site(s) — escalation credentials do not belong in the verdict step"
+  fi
+
+  # THE HMAC PIN'S OWN ROWS (#9597). The real file carries exactly one python3 line and it is the canonical one, and the sweep goes RED on
+  # each way of widening it. Mutants live in a scratch dir under TMPDIR (never the real script); the
+  # unmutated copy runs through the same function first, and `cmp` proves each mutation landed.
+  py_total=$(grep -v '^[[:space:]]*#' "$VERIFY_SH" | grep -cE '\bpython3\b' || true)
+  py_canon=$(grep -cxF -- "$VERIFY_HMAC_LINE" "$VERIFY_SH" || true)
+  if [[ "$py_total" -eq 1 && "$py_canon" -eq 1 ]]; then
+    pass "#9597 infra-config-verify.sh carries exactly ONE non-comment python3 line and it equals the canonical HMAC line"
+  else
+    fail "#9597 python3 non-comment lines=$py_total canonical-equal lines=$py_canon (both must be 1)"
+  fi
+  PY_TMP="$(mktemp -d)"
+  cp "$VERIFY_SH" "$PY_TMP/control.sh"
+  if [[ "$(verify_actuation_sweep "$PY_TMP/control.sh")" == "OK" ]] && cmp -s "$VERIFY_SH" "$PY_TMP/control.sh"; then
+    pass "#9597 mutation control: the unmutated scratch copy is judged OK by the same sweep function"
+  else
+    fail "#9597 mutation control: the unmutated scratch copy is not judged OK — the mutation rows below prove nothing"
+  fi
+  # m1: a second interpreter invocation at the head of a line (a form the scanner can see).
+  sed "/^EXIT_CODE=\"\"\$/i python3 -c 'import os'" "$VERIFY_SH" > "$PY_TMP/m1.sh"
+  r1m="$(verify_actuation_sweep "$PY_TMP/m1.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m1.sh" && [[ "$r1m" == HITS=* && "$r1m" == *python3* ]]; then
+    pass "#9597 mutation: a second \`python3 -c 'import os'\` invocation in a scratch copy turns the actuation sweep RED"
+  else
+    fail "#9597 mutation: a second python3 invocation was not caught (landed=$(cmp -s "$VERIFY_SH" "$PY_TMP/m1.sh" && echo no || echo yes) verdict='${r1m:0:120}')"
+  fi
+  # m2: the canonical line with one byte changed (`-I` dropped): equal-line, not mere presence.
+  sed 's/python3 -I -c /python3 -c /' "$VERIFY_SH" > "$PY_TMP/m2.sh"
+  r2m="$(verify_actuation_sweep "$PY_TMP/m2.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m2.sh" && [[ "$r2m" == HITS=* ]]; then
+    pass "#9597 mutation: the canonical HMAC line with \`-I\` dropped turns the actuation sweep RED (the pin is line equality)"
+  else
+    fail "#9597 mutation: a one-byte change to the canonical HMAC line was not caught (verdict='${r2m:0:120}')"
+  fi
+  # m3: the retired openssl form put back (the key on openssl's argument list): openssl is off the allow-list.
+  sed "/^EXIT_CODE=\"\"\$/i openssl dgst -sha256 -hmac x" "$VERIFY_SH" > "$PY_TMP/m3.sh"
+  r3m="$(verify_actuation_sweep "$PY_TMP/m3.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m3.sh" && [[ "$r3m" == HITS=* && "$r3m" == *openssl* ]]; then
+    pass "#9597 mutation: \`openssl dgst -hmac\` put back in a scratch copy turns the actuation sweep RED (openssl is no longer allow-listed)"
+  else
+    fail "#9597 mutation: a reintroduced openssl invocation was not caught (verdict='${r3m:0:120}')"
+  fi
+  # SCANNER-INDEPENDENT PIN (round 2). The scanner returns NO command token for a program behind a `VAR=value`
+  # prefix or inside a `$( ... | VAR=v prog)` stage, so the three mutants below are invisible to the allow-list
+  # and are caught ONLY by the interpreter-word line-equality pin. First the real file, judged directly with grep
+  # (no Python, no scanner): the set of non-comment lines carrying an interpreter word is exactly the canonical line.
+  interp_set=$(grep -vE '^[[:space:]]*#' "$VERIFY_SH" | grep -E "$VERIFY_INTERP_RE" || true)
+  if [[ "$interp_set" == "$VERIFY_HMAC_LINE" ]]; then
+    pass "#9597 the non-comment lines of infra-config-verify.sh carrying ANY interpreter word (python*, perl, ruby, node, php, lua, openssl, deno, bun) are exactly the canonical HMAC line (scanner-independent)"
+  else
+    fail "#9597 interpreter-word line set differs from the canonical HMAC line (lines=$(grep -c . <<<"$interp_set"))"
+  fi
+  # m4: an interpreter behind a VAR=value prefix at the head of a line (scanner: no token).
+  sed "/^EXIT_CODE=\"\"\$/i X=1 perl -e 'system(\"id\")'" "$VERIFY_SH" > "$PY_TMP/m4.sh"
+  r4m="$(verify_actuation_sweep "$PY_TMP/m4.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m4.sh" && [[ "$r4m" == HITS=* && "$r4m" == *"perl on a line that is not the canonical HMAC line"* ]]; then
+    pass "#9597 mutation: \`X=1 perl -e 'system(...)'\` (an assignment-prefixed interpreter the scanner cannot see) turns the sweep RED by line equality"
+  else
+    fail "#9597 mutation: an assignment-prefixed perl line was not caught (landed=$(cmp -s "$VERIFY_SH" "$PY_TMP/m4.sh" && echo no || echo yes) verdict='${r4m:0:140}')"
+  fi
+  # m5: the same with python (not python3), the shape the old \bpython3\b pin let through.
+  sed "/^EXIT_CODE=\"\"\$/i K=1 python -c 'import os'" "$VERIFY_SH" > "$PY_TMP/m5.sh"
+  r5m="$(verify_actuation_sweep "$PY_TMP/m5.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m5.sh" && [[ "$r5m" == HITS=* && "$r5m" == *"python on a line that is not the canonical HMAC line"* ]]; then
+    pass "#9597 mutation: \`K=1 python -c ...\` (a python that is not python3) turns the sweep RED by line equality"
+  else
+    fail "#9597 mutation: an assignment-prefixed python line was not caught (landed=$(cmp -s "$VERIFY_SH" "$PY_TMP/m5.sh" && echo no || echo yes) verdict='${r5m:0:140}')"
+  fi
+  # m6: the canonical line's own shape with another interpreter: `$(printf '' | K=v perl ...)`, where the scanner sees only printf.
+  sed "/^EXIT_CODE=\"\"\$/i OUT=\$(printf '' | K=1 perl -e 'print 1')" "$VERIFY_SH" > "$PY_TMP/m6.sh"
+  r6m="$(verify_actuation_sweep "$PY_TMP/m6.sh")"
+  if ! cmp -s "$VERIFY_SH" "$PY_TMP/m6.sh" && [[ "$r6m" == HITS=* && "$r6m" == *"perl on a line that is not the canonical HMAC line"* ]]; then
+    pass "#9597 mutation: a \`\$(printf '' | K=1 perl ...)\` pipeline stage (the canonical line's shape) turns the sweep RED by line equality"
+  else
+    fail "#9597 mutation: a pipeline-stage perl line was not caught (landed=$(cmp -s "$VERIFY_SH" "$PY_TMP/m6.sh" && echo no || echo yes) verdict='${r6m:0:140}')"
   fi
 fi
 
@@ -362,7 +481,7 @@ fi
 # documented 8 s settle preamble plus 5 s inter-attempt waits, and a suite that actually slept
 # would take ~20 s per case and get skipped by whoever is iterating.
 I_TMP="$(mktemp -d)"
-trap 'rm -rf "$I_TMP"' EXIT
+trap 'rm -rf "$I_TMP" "${PY_TMP:-}"' EXIT
 
 mkstubs() {
   mkdir -p "$I_TMP/bin"
@@ -388,6 +507,8 @@ case "$name" in
   *) echo "doppler-stub: unexpected secret name '$name'" >&2; exit 64 ;;
 esac
 [[ "$name" == "APP_DOMAIN_BASE" ]] && { echo "example.test"; exit 0; }
+# A case may make ONE secret unusable (a value outside the token alphabet) to drive the refusal arm.
+[[ -n "${STUB_DOPPLER_BAD:-}" && "$name" == "$STUB_DOPPLER_BAD" ]] && { echo "bad value"; exit 0; }
 echo "stub-secret-value"
 EOS
   # SLEEP IS RECORDED, NOT JUST SUPPRESSED (#7104 PR-B review).
@@ -410,17 +531,39 @@ EOS
   # body's own `|| echo "000"` turns into a transport-failure verdict — loud, and attributable.
   cat > "$I_TMP/bin/curl" <<'EOS'
 #!/usr/bin/env bash
+# The body hands curl its credentials on the STDIN config channel (`--config -`, #9597/ADR-280),
+# never on argv: this stub reads that channel (and always drains it, so the writer is never
+# SIGPIPEd), takes the signature from the `header = "X-Signature-256: ..."` directive, and
+# `exit 64`s if a credential header is on argv or the transport confinement (`--disable` first,
+# `--noproxy '*'`) is missing.
 out=""
 prev=""
-have_w=0; have_maxtime=0; have_sig=0; have_url=0; sigval=""; url=""
+have_w=0; have_maxtime=0; have_sig=0; have_url=0; have_cfg=0; have_noproxy=0; sigval=""; url=""
+first="${1:-}"
 for a in "$@"; do
   [[ "$prev" == "-o" ]] && out="$a"
+  [[ "$prev" == "--config" && "$a" == "-" ]] && have_cfg=1
+  [[ "$prev" == "--noproxy" && "$a" == "*" ]] && have_noproxy=1
   [[ "$a" == "-w" || "$a" == "--write-out" ]] && have_w=1
   [[ "$a" == "--max-time" ]] && have_maxtime=1
-  [[ "$a" == X-Signature-256:* ]] && { have_sig=1; sigval="${a#X-Signature-256:}"; }
   [[ "$a" == */hooks/infra-config-status ]] && { have_url=1; url="$a"; }
+  case "$a" in
+    X-Signature-256:*|CF-Access-Client-*|[Xx]-[Ss]ignature*|[Cc][Ff]-[Aa]ccess-*)
+      echo "curl-stub: a credential header is on argv — it must ride the stdin config channel (#9597)" >&2; cat > /dev/null; exit 64 ;;
+  esac
   prev="$a"
 done
+cfg=""
+[[ "$have_cfg" -eq 1 ]] && cfg="$(cat)"
+while IFS= read -r line; do
+  if [[ "$line" == 'header = "X-Signature-256: '* ]]; then
+    have_sig=1; sigval="${line#header = \"X-Signature-256: }"; sigval="${sigval%\"}"
+  fi
+done <<<"$cfg"
+if [[ "$first" != "--disable" || "$have_noproxy" -ne 1 || "$have_cfg" -ne 1 ]]; then
+  echo "curl-stub: transport confinement missing (first='${first}' noproxy=$have_noproxy config-stdin=$have_cfg)" >&2
+  exit 64
+fi
 if [[ -z "$out" || "$have_w" -ne 1 || "$have_maxtime" -ne 1 || "$have_sig" -ne 1 || "$have_url" -ne 1 ]]; then
   echo "curl-stub: required argv missing (o='${out:-}' w=$have_w max-time=$have_maxtime sig=$have_sig url=$have_url)" >&2
   exit 64
@@ -486,7 +629,7 @@ drive() { # $1 = pass, $2 = frame, $3 = GITHUB_OUTPUT path, $4 = baseline (pass 
     export DPF_REPLACED=true
     export APPLY_START_EPOCH=2000
     [[ -n "${4:-}" ]] && export REPUSH_BASELINE_TS="$4"
-    bash ./infra-config-verify.sh >/dev/null 2>&1 )
+    bash ./infra-config-verify.sh >"${5:-/dev/null}" 2>&1 )
 }
 
 # PASS-2 DRIVER WITH THE CLOCK OPERANDS EXPOSED, AND A CAPTURED LOG (#7104 P0-A).
@@ -868,6 +1011,25 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   else
     fail "#7104 I7: could not build the absolute-freshness-pin fixtures — the whole P0-A arm is vacuous"
   fi
+  # --- I12 (#9597): a REFUSED credential is its own recorded outcome, never a listener outage ---
+  # The refusal truncates the status file and exits 1, so the red-gate alert step reads an EMPTY frame —
+  # which it files as "the webhook listener may be down" unless told otherwise. The script therefore
+  # writes `credential_refused=true` (the output the alert maps to its `ungraded` arm), prints the marker
+  # and a ::error:: that disclaims a listener outage, makes ZERO requests, and never emits a verdict.
+  for badname in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+    o12="$I_TMP/o12-$badname"; : > "$o12"; l12="$I_TMP/l12-$badname"; : > "$l12"
+    rc12=0; ( export STUB_DOPPLER_BAD="$badname" STUB_CURL_LOG="$I_TMP/curl12-$badname"; drive 1 "$STALE" "$o12" "" "$l12" ) || rc12=$?
+    cr12=$(grep -c '^credential_refused=true$' "$o12" || true)
+    vd12=$(grep -c '^verdict=' "$o12" || true)
+    mk12=$(grep -c '^SOLEUR_CREDENTIAL_REFUSED script=infra-config-verify reason=token_shape$' "$l12" || true)
+    ls12=$(grep -c 'says nothing about the listener' "$l12" || true)
+    leak12=$(grep -c 'bad value' "$l12" || true)
+    if [[ "$rc12" -ne 0 && "$cr12" -eq 1 && "$vd12" -eq 0 && "$mk12" -eq 1 && "$ls12" -ge 1 && "$leak12" -eq 0 && ! -e "$I_TMP/curl12-$badname" ]]; then
+      pass "#9597 I12: an unusable $badname is REFUSED before any request (rc!=0, credential_refused=true, marker once, no verdict, value not echoed)"
+    else
+      fail "#9597 I12/$badname: rc=$rc12 credential_refused=$cr12 verdict-lines=$vd12 marker=$mk12 disclaimer=$ls12 value-echo=$leak12 curl-called=$([[ -e "$I_TMP/curl12-$badname" ]] && echo yes || echo no)"
+    fi
+  done
 else
   fail "#7104 AC17: could not build fixtures from the live FILE_MAP — the integration cases are vacuous"
 fi
@@ -880,6 +1042,11 @@ fi
 # assertions covering strictly more shapes — D3 measured the deny-list as evaded 8 ways out of 9.
 # 33 -> 38 for the `unadjudicated` arm (I8/I8b/I8c), which had ZERO coverage: STUB_HTTP_CODE was
 # 200 at every drive site, so the 404/000/502/503 branches were unreachable from this suite.
+# 41 -> 48 (#9597): two refusal rows (I12: an unusable CF Access id / secret is refused before any request and recorded
+# as `credential_refused`), and five rows pinning the one python3 line (exactly one, equal to the canonical HMAC line, plus an
+# unmutated control and three mutants: a second python3, a one-byte change to the line, openssl put back).
+# 48 -> 52 (round 2): the scanner-independent interpreter-word pin (a direct grep row over the real file, plus three mutants the
+# scanner cannot see: `X=1 perl -e`, `K=1 python -c`, a `$(printf '' | K=1 perl ...)` stage).
 echo ""
 echo "  $PASS passed, $FAIL failed"
 close_stdout_capture
@@ -934,7 +1101,7 @@ else
   exit 1
 fi
 
-VERIFY_MIN_ASSERTIONS=41
+VERIFY_MIN_ASSERTIONS=52
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then
   printf '  FAIL: assertion-count floor: only %d assertions ran, expected >= %d — arms were deleted or skipped\n' \
     "$PASS" "$VERIFY_MIN_ASSERTIONS" >&2

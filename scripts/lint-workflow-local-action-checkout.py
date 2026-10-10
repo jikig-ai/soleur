@@ -66,11 +66,29 @@ NAMED NON-PROPERTIES (so the claim is not overstated). `if:` is compared as a st
 evaluated — a `./` step whose `if:` legitimately narrows its checkout's is a loud false positive
 with an obvious fix. Whether the checkout ref is pinned (`@v4` vs `@<sha>`) is a separate property.
 Job-level `uses:` (a reusable-workflow call) is not a step and is skipped. A job that checks out
-via `run: git clone` is not recognised as checked out (0 such jobs today). For the library surface: a script that
-itself sources the library and is merely CALLED by a step is not detected (only a step or composite whose own `run:`
-text names `bearer-curl.sh` is); a composite that only calls another library composite is not derived; and a
-reusable workflow's callers' triggers are invisible to the `pull_request_target` and untrusted-ref checks
-(`workflow_call` is not a trigger the lint can judge). A `run: gh pr checkout` after the checkout is not seen either.
+via `run: git clone` is not recognised as checked out (0 such jobs today). For the library surface: a composite that only calls
+another library composite is not derived; and a reusable workflow's callers' triggers are invisible to the
+`pull_request_target` and untrusted-ref checks (`workflow_call` is not a trigger the lint can judge). A `run: gh pr
+checkout` after the checkout is not seen either. A script that sources the library and is CALLED by a step IS detected
+(next paragraph), but only by name: a `run:` that reaches the script through a variable that never spells its directory
+and its basename together, or through a command substitution, is not.
+
+SCRIPT CONSUMERS (S4, Guard 3). A tracked `.sh` file that itself names `bearer-curl.sh` (anywhere in its text, comments
+included: fail closed) outside `scripts/lib/` is a SCRIPT CONSUMER, and a `run:` step that names one is a library
+consumer exactly like a step that names the library: same checkout, sparse-cone, `pull_request_target` and untrusted-ref
+rules, same messages (each finding gains a trailing `[script consumer: <path>]`). The set is DERIVED from the tree, never
+listed: `git ls-files` (cached + untracked-not-ignored) when the repository root holds a `.git`, otherwise a walk of that
+root (a fixture tree or a `git ls-files | tar` copy). The repository root is `<dir>/../..` when `<dir>` is
+`.github/workflows`, else `<dir>/..`. A `run:` names a script by its repo-relative path (a path boundary on both sides,
+so `./.github/actions/x/track.sh` and `$GITHUB_WORKSPACE/.github/actions/x/track.sh` count), or by its directory and its
+basename together (`cd .github/actions/x && bash track.sh`); a composite's own `run:` also names a script that sits in the
+composite's directory by basename (`${{ github.action_path }}/track.sh`). The derived-set size is printed on its own
+line (`script-consumers: N derived (...), M step(s) run one`) and is INFORMATIONAL here: an empty set is a legitimate
+tree (before the S4 conversions land there is none outside `scripts/lib/` that a workflow runs), so the lint never fails
+on it. The set-size FLOOR lives where the set is known not to be empty: the suite's fixture rows assert the exact count
+for a tree built with known consumers (so a derivation emptied by a mutation turns them red), and the argv-bearer
+battery (tests/scripts/test-argv-bearer-sweep.sh, stage S4) runs this lint on the REAL tree and asserts floors on both
+numbers of the `script-consumers:` line (the fixture trees carry no `.git`, so the `git ls-files` arm runs nowhere else).
 
 THE FLOOR. `MIN_SAME_REPO_STEPS` counts `./` and `$/` steps TOGETHER, so a future `./` → `$/`
 migration cannot drive this guard to "scanning nothing": 54 today, floor 30. Below it is rc 2.
@@ -91,7 +109,9 @@ POSTURE. `./` + `actions/checkout` stays canonical for jobs that already check o
 Usage: python3 scripts/lint-workflow-local-action-checkout.py [<dir>]   (default .github/workflows)
 Exit: 0 clean, 1 findings, 2 usage/parse
 """
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -211,10 +231,74 @@ def checkout_ref_untrusted(checkout: dict, strict: bool = False) -> bool:
     return not (isinstance(ref, str) and ok.match(ref.strip()))
 
 
-def lib_composites(actions_root: Path) -> set:
-    """Composites whose steps source the library: the always-included pair plus every action.yml that names it.
-    A composite is keyed by its path under the actions root (`a` or `group/a`). A file that cannot be read, or whose
-    `runs` is not a mapping, is skipped here: the second surface reports it by name."""
+def repo_root_of(root: Path) -> Path:
+    """The repository root the script set is derived from: `<dir>/../..` for `.github/workflows`, else `<dir>/..`
+    (a fixture tree keeps its scripts next to its `workflows` and `actions` directories)."""
+    r = root.resolve()
+    return r.parent.parent if r.parent.name == ".github" else r.parent
+
+
+def tracked_shell_files(repo: Path):
+    """(files, how): repo-relative posix paths of every `.sh` file. `git ls-files` when the root is a git checkout,
+    else a walk (a tree copied out with `git ls-files | tar` has no `.git`; neither does a fixture)."""
+    if (repo / ".git").exists():
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.sh"],
+                capture_output=True, check=True, timeout=60,
+            ).stdout
+            return sorted({f for f in out.decode("utf8", "replace").split("\0") if f}), "git ls-files"
+        except (OSError, subprocess.SubprocessError):
+            pass  # fall through to the walk: a failed derivation must not become an empty set
+    found = []
+    for dirpath, dirnames, filenames in os.walk(repo):
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules")]
+        for fn in filenames:
+            if fn.endswith(".sh"):
+                found.append((Path(dirpath) / fn).relative_to(repo).as_posix())
+    return sorted(found), "tree walk"
+
+
+def lib_scripts(repo: Path):
+    """The script consumers: tracked `.sh` files OUTSIDE `scripts/lib/` whose text names the library."""
+    files, how = tracked_shell_files(repo)
+    found = []
+    for rel in files:
+        if rel.startswith("scripts/lib/"):
+            continue
+        f = repo / rel
+        try:
+            if f.is_file() and LIB_NEEDLE in f.read_bytes().decode("utf8", "replace"):
+                found.append(rel)
+        except OSError:
+            continue
+    return found, how
+
+
+def _bounded(path: str) -> "re.Pattern":
+    """`path` as a whole path: not glued to a longer name on the left (a `/` or `.` before it is fine: `./x`,
+    `$WS/x`), not followed by a name character on the right."""
+    return re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(path) + r"(?![A-Za-z0-9_.-])")
+
+
+def run_names_script(run: str, scripts: list, action_dir: str = "") -> str:
+    """The first script consumer a `run:` text names: by repo-relative path, by directory plus basename together, or
+    (inside a composite, whose `action_dir` is its repo-relative directory) by basename of a script in that directory."""
+    for rel in scripts:
+        if _bounded(rel).search(run):
+            return rel
+        d, _, base = rel.rpartition("/")
+        if d and _bounded(d).search(run) and _bounded(base).search(run):
+            return rel
+        if action_dir and d == action_dir and _bounded(base).search(run):
+            return rel
+    return ""
+
+
+def lib_composites(actions_root: Path, repo: Path, scripts: list) -> set:
+    """Composites whose steps source the library: the always-included pair plus every action.yml that names it, or
+    that runs a script consumer. A composite is keyed by its path under the actions root (`a` or `group/a`). A file that
+    cannot be read, or whose `runs` is not a mapping, is skipped here: the second surface reports it by name."""
     names = set(LIB_COMPOSITE_DEFAULT)
     if actions_root.is_dir():
         for action in list(actions_root.rglob("action.yml")) + list(actions_root.rglob("action.yaml")):
@@ -224,21 +308,35 @@ def lib_composites(actions_root: Path) -> set:
                 continue
             runs = doc.get("runs") if isinstance(doc, dict) else None
             steps = runs.get("steps") if isinstance(runs, dict) else None
-            if isinstance(steps, list) and any(
-                isinstance(st, dict) and isinstance(st.get("run"), str) and LIB_NEEDLE in st["run"] for st in steps
-            ):
-                names.add(action.parent.relative_to(actions_root).as_posix())
+            if not isinstance(steps, list):
+                continue
+            key = action.parent.relative_to(actions_root).as_posix()
+            try:
+                action_dir = action.parent.resolve().relative_to(repo.resolve()).as_posix()
+            except ValueError:
+                action_dir = ""  # the actions tree lies outside the repository root: no directory to match against
+            for st in steps:
+                run = st.get("run") if isinstance(st, dict) else None
+                if isinstance(run, str) and (LIB_NEEDLE in run or run_names_script(run, scripts, action_dir)):
+                    names.add(key)
+                    break
     return names
 
 
-def consumes_lib(step: dict, composites: set) -> bool:
+def consumes_lib(step: dict, composites: set, scripts: list) -> str:
+    """"" when the step does not consume the library; else a label: "lib" (the composite, or a `run:` naming the
+    library) or the repo-relative path of the script consumer the `run:` names."""
     uses = step.get("uses")
     if isinstance(uses, str):
         m = re.match(r"^(\./|\$/)\.github/actions/([A-Za-z0-9._/-]+?)/?$", uses)
         if m and m.group(2) in composites:
-            return True
+            return "lib"
     run = step.get("run")
-    return isinstance(run, str) and LIB_NEEDLE in run
+    if isinstance(run, str):
+        if LIB_NEEDLE in run:
+            return "lib"
+        return run_names_script(run, scripts)
+    return ""
 
 
 def triggers(doc: dict) -> set:
@@ -260,7 +358,9 @@ def main(argv: list[str]) -> int:
     if not root.is_dir():
         return usage_error(f"{root} is not a directory")
     actions_root = root.parent / "actions"
-    composites = lib_composites(actions_root)
+    repo = repo_root_of(root)
+    scripts, scripts_how = lib_scripts(repo)
+    composites = lib_composites(actions_root, repo, scripts)
 
     findings: list[str] = []
     scanned = 0
@@ -268,6 +368,7 @@ def main(argv: list[str]) -> int:
     self_steps = 0
     actions_scanned = 0
     lib_steps = 0
+    script_steps = 0
     references_actions_dir = False
 
     try:
@@ -290,8 +391,13 @@ def main(argv: list[str]) -> int:
                     if not isinstance(step, dict):
                         return usage_error(f"{wf}: job {job_name!r} step[{idx}] is not a mapping")
                     uses = step.get("uses")
-                    if consumes_lib(step, composites):
+                    consumer = consumes_lib(step, composites, scripts)
+                    if consumer:
                         lib_steps += 1
+                        via = ""
+                        if consumer != "lib":
+                            script_steps += 1
+                            via = f" [script consumer: {consumer}]"
                         lib_label = step.get("name") or f"step[{idx}]"
                         if not any(checkout_has_lib(c, step) for c in checkouts):
                             findings.append(
@@ -299,7 +405,7 @@ def main(argv: list[str]) -> int:
                                 f"credential through {LIB_PATH} but no earlier usable actions/checkout in this "
                                 f"job materialises scripts/lib/ (no path:, no foreign repository:, and a "
                                 f"sparse-checkout cone must name scripts) — the library is sourced from the "
-                                f"job's own workspace and there is no argv fallback"
+                                f"job's own workspace and there is no argv fallback{via}"
                             )
                         if wf_triggers & UNTRUSTED_REF_TRIGGERS and any(
                             checkout_ref_untrusted(c, bool(wf_triggers & PR_TREE_TRIGGERS)) for c in checkouts if checkout_usable(c, step)
@@ -308,13 +414,13 @@ def main(argv: list[str]) -> int:
                                 f"::error file={wf}::{wf.name}: job '{job_name}', step '{lib_label}' sends a "
                                 f"credential through {LIB_PATH} in a job triggered by {sorted(wf_triggers & UNTRUSTED_REF_TRIGGERS)} "
                                 f"that checks out a ref other than the default branch's own (a head sha, refs/pull/N/merge, a step output) — "
-                                f"the library would be sourced from a tree the author controls"
+                                f"the library would be sourced from a tree the author controls{via}"
                             )
                         if "pull_request_target" in wf_triggers:
                             findings.append(
                                 f"::error file={wf}::{wf.name}: job '{job_name}', step '{lib_label}' sends a "
                                 f"credential through {LIB_PATH} in a workflow triggered by pull_request_target "
-                                f"— that trigger runs with secrets against a ref the author controls"
+                                f"— that trigger runs with secrets against a ref the author controls{via}"
                             )
                     if uses is None:
                         continue
@@ -403,10 +509,15 @@ def main(argv: list[str]) -> int:
             f"MIN_SAME_REPO_STEPS={MIN_SAME_REPO_STEPS} — the guard is scanning nothing; wrong tree?"
         )
 
+    # Informational, never a gate (see SCRIPT CONSUMERS): the size of the derived set and how many steps run one.
+    script_info = (
+        f"{NAME}: script-consumers: {len(scripts)} derived ({scripts_how}), {script_steps} step(s) run one"
+    )
     if findings:
         for line in findings:
             print(line, file=sys.stderr)
         print(f"{NAME}: {len(findings)} violation(s) across {scanned} workflow(s)", file=sys.stderr)
+        print(script_info)
         return 1
 
     print(
@@ -415,6 +526,7 @@ def main(argv: list[str]) -> int:
         f"every local-action step is preceded by actions/checkout in its job; "
         f"{lib_steps} library-consuming step(s) each have a checkout that materialises scripts/lib/"
     )
+    print(script_info)
     return 0
 
 

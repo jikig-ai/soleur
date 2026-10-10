@@ -36,7 +36,18 @@
 # narrow soleur-infra-app project (ADR-241 D11, #9321), scoped to
 # contents+pull_requests write — #9262,
 # hr-github-app-auth-not-pat). The commit identity is that App's bot user.
-# The push remote is https://x-access-token:${GH_TOKEN}@github.com/<repo>.git —
+# The push remote is https://github.com/<repo>.git with NO userinfo; the token
+# reaches `git ls-remote` / `git push` as an extra HTTP header carried in those
+# two commands' per-command ENVIRONMENT (GIT_CONFIG_COUNT/KEY_0/VALUE_0 with
+# http.https://github.com/.extraheader, the form actions/checkout uses; git
+# >= 2.31) — never on git's or git-remote-https's argument list (#9597, ADR-280).
+# A child's environment is readable only by the same uid and root, a reduction
+# from the world-readable /proc/<pid>/cmdline the URL form occupied; it is not
+# invisible to code running as the same user. The token passes a shape guard
+# ([A-Za-z0-9_], the ghs_ class) BEFORE the header is built; a refused value
+# prints SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin
+# reason=<token_shape|control_char> and dies at `args`, before any git network
+# call. BUMP_PUSH_URL (the fixture seam) gets no header.
 # GITHUB_TOKEN pushes don't fire pull_request events, so required checks would
 # never run on the bump PR and auto-merge could never release it.
 #
@@ -72,7 +83,7 @@
 set -uo pipefail
 
 # xtrace refusal (#7797): GH_TOKEN is a live installation token — a traced run
-# would print it inside the push URL. Must be the FIRST thing after `set`
+# would print it inside the push Authorization header value. Must be the FIRST thing after `set`
 # (lint-shell-trace-credential-refusal Rule A: nothing traced may precede it,
 # which is why `export LC_ALL=C` sits BELOW this block, not above).
 case "$-" in
@@ -88,13 +99,22 @@ case "$-" in
 esac
 export LC_ALL=C
 
-# Same leak class as the xtrace refusal: git's own trace channels print the
-# credential-bearing push URL to stderr (anonymization covers error messages
-# only — verified: GIT_TRACE=1 echoes the full x-access-token URL). Scrub them
+# Same leak class as the xtrace refusal: git's trace channels print the
+# request to stderr. Measured (synthetic header, loopback server, count-only): GIT_TRACE
+# prints command and remote lines only (the header rides the environment, not
+# argv), GIT_TRACE_CURL redacts the Authorization header unless GIT_TRACE_REDACT=0,
+# and with GIT_TRACE_REDACT=0 it prints the header value in full (formerly the
+# full x-access-token URL appeared on the command lines too). Scrub them
 # unconditionally so a debugging `env:` line cannot land the live token in logs.
 unset GIT_TRACE GIT_TRACE_PACKET GIT_TRACE_PERFORMANCE GIT_TRACE_SETUP \
   GIT_TRACE_CURL GIT_TRACE_CURL_NO_DATA GIT_TRACE_REDACT GIT_TRACE2 \
   GIT_TRACE2_PERF GIT_TRACE2_EVENT GIT_CURL_VERBOSE GIT_HTTP_TRACE_AUTH_HEADER
+
+# AUTH_HDR (the push credential's header, built below) must be a shell variable only. A plain `AUTH_HDR=""`
+# would KEEP the export attribute of an AUTH_HDR the caller's environment already carries (an assignment does
+# not unexport), and every child (git, gh, crane) would then hold the base64 in its environment. Unset here,
+# before the first child process, so the later assignments create a fresh, unexported variable.
+unset AUTH_HDR
 
 # The soleur-infra App's bot user (id 335404629), switched in place from
 # soleur-ai[bot] in #9262. BOT_NAME/BOT_EMAIL are the commit identity and the
@@ -206,13 +226,38 @@ REPO_DIR=$(cd "$REPO_DIR" 2>/dev/null && pwd) \
 git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 \
   || die args "BUMP_REPO_DIR '$REPO_DIR' is not a git repository"
 REPO="${REPO:-${GITHUB_REPOSITORY:-jikig-ai/soleur}}"
+AUTH_HDR=""   # a shell variable, never exported and never read from the caller's environment (unset up top, see there)
 if [[ -n "${BUMP_PUSH_URL:-}" ]]; then
   PUSH_URL="$BUMP_PUSH_URL"
 else
-  [[ -n "${GH_TOKEN:-}" ]] \
-    || die args "GH_TOKEN (soleur-infra installation token) is required for the push remote"
-  PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+  # Judge the credential BEFORE the header is built or any git network call.
+  # Empty/unset, or a byte outside the installation-token alphabet (the ghs_
+  # class), is refused with the value-free marker; the value is never printed.
+  case "${GH_TOKEN:-}" in
+    ''|*[!A-Za-z0-9_]*)
+      _refuse_reason=token_shape
+      case "${GH_TOKEN:-}" in *[[:cntrl:]]*) _refuse_reason=control_char ;; esac
+      printf 'SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=%s\n' "$_refuse_reason" >&2
+      die args "GH_TOKEN (soleur-infra installation token) is required for the push remote and must match [A-Za-z0-9_]+ (value not shown)"
+      ;;
+  esac
+  PUSH_URL="https://github.com/${REPO}.git"
+  # base64 of x-access-token:TOKEN. printf is a builtin and the pipe is stdin, so
+  # the token is on no process's argument list (base64's own argv is empty).
+  AUTH_HDR="Authorization: basic $(printf '%s' "x-access-token:${GH_TOKEN}" | base64 | tr -d '\n')"
 fi
+
+# git_remote <git args...> — `git`, with the push credential as a per-command
+# environment prefix (never argv). Used ONLY for the two calls that talk to the
+# remote. AUTH_HDR is empty on the BUMP_PUSH_URL fixture path: plain git.
+git_remote() {
+  if [[ -n "$AUTH_HDR" ]]; then
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+      GIT_CONFIG_VALUE_0="$AUTH_HDR" git "$@"
+  else
+    git "$@"
+  fi
+}
 
 # --- ancestry (history visibility): refuse a shallow checkout first ----------
 # `git tag --merged HEAD` exits 0 on a shallow checkout and silently drops every
@@ -407,7 +452,7 @@ git -C "$REPO_DIR" commit -qm \
   "chore(infra): bump inngest-bootstrap pin ${OLD_TAG} -> ${TARGET} (vinngest-${TARGET})" \
   || die push "git commit failed"
 
-remote_tip=$(git -C "$REPO_DIR" ls-remote "$PUSH_URL" "refs/heads/${BRANCH}" 2>/dev/null | awk '{print $1}')
+remote_tip=$(git_remote -C "$REPO_DIR" ls-remote "$PUSH_URL" "refs/heads/${BRANCH}" 2>/dev/null | awk '{print $1}')
 if [[ -n "$remote_tip" ]]; then
   # Never force-push over HUMAN work on a bot branch (fix-constraints-stage-b
   # rule): a maintainer's review-fix commit must not be clobbered. The commits
@@ -431,7 +476,7 @@ if [[ -n "$remote_tip" ]]; then
 else
   lease="--force-with-lease=refs/heads/${BRANCH}:"
 fi
-git -C "$REPO_DIR" push "$lease" "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" \
+git_remote -C "$REPO_DIR" push "$lease" "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" \
   || die push "git push of ${BRANCH} failed"
 
 # --- pr: create or reuse ------------------------------------------------------

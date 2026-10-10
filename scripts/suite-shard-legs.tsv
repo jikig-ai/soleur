@@ -288,6 +288,7 @@ scripts/assert-dependabot-drain-unit	2
 scripts/audit-suite-reads	8
 scripts/battery-ref-guard	5
 scripts/battery-tag-authorship	1
+scripts/bearer-curl-s4-first-runs-9905	3
 scripts/betterstack-assert-absence	7
 scripts/betterstack-ingest-parity	1
 scripts/board/set-board-status	1

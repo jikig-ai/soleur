@@ -5,7 +5,7 @@ date: 2026-10-09
 supersedes: none
 issue: 9597
 related: [7797, 9757]
-related_adrs: [ADR-241]
+related_adrs: [ADR-241, ADR-072, ADR-217]
 tags: [security, ci, credentials, curl, argv, workflow, composite-action]
 brand_survival_threshold: single-user incident
 ---
@@ -111,3 +111,232 @@ S3 needs one tested place for the pattern that the 26 alert-path composite call 
 `scripts/lib/bearer-curl.test.sh` (shim calibrated against `curl --libcurl`, a loopback real-curl end-to-end row, a 0x01-0x7f byte sweep,
 hostile/empty/unset values at every spec position, the HMAC oracle, a negative canary, the chokepoint census), the S3 stage of
 `tests/scripts/test-argv-bearer-sweep.sh`, and Rule E baseline equality.
+
+## Addendum — 2026-10-09 (#9597 S4)
+
+Slice S4 applies this contract to the push-triggered, production-class files: the deploy-webhook callers (HMAC signature plus the Cloudflare
+Access pair), the Supabase, GitHub App, Resend and Hetzner bearer sites, the `openssl dgst -hmac` keys on the same calls, one push URL that
+carried a token, and the two sites the Consequences above hold back. Status stays `adopting`; the sections above are unchanged and dated, and
+this addendum records what S4 changed relative to them. No new ADR ordinal: the decision is the same contract on a new population. ADR-241 is
+not amended: S4 names no new `secrets.*` reference and changes no tier classification.
+
+### What S4 closes
+
+- **The held-back sites.** `scheduled-inngest-health.yml` `probe` now uses the library (sourced inside the arm that uses it, so the three
+  "secrets unset" paths never need it; a missing library is a visible `::error::`), and the infra suite that executes the step copies
+  `scripts/lib/bearer-curl.sh` into its fake workspace. `workspaces-luks-cutover.yml` reads the volume through the inline wrapper (below), and
+  its suite's curl stub gained `--disable` and `--noproxy` arms. The step keeps `HCLOUD_TOKEN_READONLY` first with the read/write fallback until
+  ADR-241 O10; the shape guard judges whichever value was read.
+- **The S4 obligation named in decision 3 is delivered.** The restart-mapping pre-guard of the `probe` step runs before the retry loop: the
+  signature and both Access values are judged with `bc_ok_var`, a refusal is announced through `bc_refuse`, and the step records `secret_unset`
+  (the liveness-probe issue class: no restart, no seed for the `[ci/inngest-down]` age gate). A credential fault is therefore never read as a
+  transport failure or as a server that needs a restart.
+- **Other pre-guards where a bare rc 2 would land in the wrong verdict arm**, each written beside its site:
+  the post-re-push liveness probe in `apply-deploy-pipeline-fix.yml` (a refusal records `listener_state=probe_error`, never `down`), its
+  `pre_frame` step (`secret_unavailable`, never `unreachable`; the `PRE_DETAIL` wording for that status was reworded to cover an unusable value
+  as well as an unreadable one), `apply-inngest-rls.yml` (`secret_unset`, with `2>/dev/null` dropped from the converted calls so the marker is
+  visible), `track.sh` (the existing `redeploy_credential_absent` verdict, exit 2; `openssl` leaves its tool list, `python3` joins it) and
+  `infra-config-verify.sh` (below). The poll loops (`restart-inngest-server.yml`, `deploy-inngest-image.yml`, the release verify step) carry no
+  pre-guard: the verdict is the old terminal red either way and the marker repeats per attempt.
+- **`infra-config-verify.sh` pre-guard.** Its `HTTP_CODE=000` arm tells the operator the webhook listener itself is down. A refused credential
+  must not print that sentence, so the three credential values are judged once before the poll loop, the verdict is held in a variable, and the
+  first attempt acts on it right after truncating the status file: its own `::error::` (the credential is unusable, this says nothing about the listener, do not read it as an outage),
+  the marker, and exit 1. The script also gained the xtrace refusal (Rule A) with the touch.
+
+### The inline-wrapper clause
+
+Decision 3's cost, "a step whose suite executes it in a library-less fake workspace cannot adopt a sourced library", generalizes. **The S2
+inline wrapper (a step-local shape guard and `curl --disable --noproxy '*' ... --config -` fed by a process substitution) is allowed only where
+a pinned property of the job or its suite rules out sourcing a repo file, and the exception is bounded mechanically by the HMAC parity audit
+(`hm_audit`) in `tests/scripts/test-argv-bearer-sweep.sh`** (every inline copy of the HMAC snippet is pinned byte-equal to the canonical one;
+read the audit for the current copy count, which is not restated here). Everywhere else the library is the form. The exceptions S4 takes, each
+with its pinned property:
+
+| Site | Why the library is not sourced |
+|---|---|
+| `web-platform-release.yml` `deploy` and `release-outcome`, `deploy-inngest-image.yml` `deploy` (seven guard copies across the three jobs) | The jobs are checkout-free by documented design (the lock-holding deploy runner and the silent-alert composite; ADR-072, ADR-217 and the workflow-run deploy invariants pin that area). |
+| `workspaces-luks-cutover.yml` Hetzner read | Its suite's census of the token-holding step forbids any repo script executed on the runner there. |
+| `infra-config-verify.sh` | Its suite's actuation sweep pins the script to a read-only command allow-list (it sources only its own gate file), and its mutation harness builds a skeleton with no `scripts/lib`. |
+| `verify-tunnel-ingress-origin.sh` | Already inline since S2; only its HMAC line moved to the canonical snippet. |
+
+An inline copy is weaker than the library in three stated ways: it does not run `_bc_tail_ok` (decision 8), it does not trim a trailing newline
+(decision 7: an inline copy refuses such a value rather than sending it trimmed) and it does not unset the curl-redirecting environment variables
+(decision 6), and its marker always carries `reason=token_shape` (it does not distinguish `control_char`). The marker is otherwise the same line,
+with `script=<name>` set to the workflow or script name. The accepted residual is more inline guard copies, the drift the Context names, bounded
+by the parity audit.
+
+### HMAC keys leave openssl's argv
+
+The decision's first item named `bc_hmac_sha256_hex` for the signature; S4 moves the key on every production `openssl dgst -sha256 -hmac "$KEY"`
+site in the converted files: **20 sites** (`track.sh` 2, `apply-deploy-pipeline-fix.yml` 5, `deploy-inngest-image.yml` 2,
+`restart-inngest-server.yml` 3, `scheduled-inngest-health.yml` 1, `web-platform-release.yml` 3, `infra-config-verify.sh` 1,
+`push-infra-config.sh` 1, `verify-tunnel-ingress-origin.sh` 1, `github-app-key-status.sh` 1). Library sites sign with
+`SIG="$(... | bc_hmac_sha256_hex KEY)" || SIG=""`, so an empty key or a missing `python3` reaches the call's shape check and the marker instead of
+aborting mute under `set -e`; inline sites use the canonical `python3 -I` snippet with the key in the child's environment only. Rule E does not
+see these (the key is on openssl's argv, not curl's), so the guard is a battery stage whose population is derived from the tree: every tracked
+non-test, non-Markdown file with an `openssl dgst ... -hmac` operand must be in an allow-list of exactly what remains:
+
+- two arms in `scripts/cutover-inngest.sh` (the registry-probe and doublefire-probe signatures), held back because converting them edits the
+  census regexes of `cutover-inngest-workflow.test.sh`, a file an open draft PR already edits. Owner: #9757 item 1, taken once that draft merges.
+- two agent-executed Markdown files that teach the argv form (`ship/SKILL.md`, the postmerge `deploy-status-debugging.md` reference): plugin
+  files, tracked under #9757 and not edited here.
+
+### The git credential by environment
+
+`bump-inngest-bootstrap-pin.sh` built `https://x-access-token:${GH_TOKEN}@github.com/<repo>.git` and passed it to `git ls-remote` and
+`git push`, so the token was on the argument lists of `git` and `git-remote-https`. The remote is now `https://github.com/<repo>.git` and the
+credential reaches those two commands only, as a per-command environment prefix: `GIT_CONFIG_COUNT=1`,
+`GIT_CONFIG_KEY_0=http.https://github.com/.extraheader`, `GIT_CONFIG_VALUE_0="Authorization: basic <base64 of x-access-token:TOKEN>"` (the form
+`actions/checkout` uses; git 2.31 or later). The token passes a shape guard (`[A-Za-z0-9_]`, the installation-token class) before the header is
+built, refusing with the same marker (`script=bump-inngest-bootstrap-pin`) and dying before any git network call; the header string is a plain
+shell variable, never exported, and `BUMP_PUSH_URL` (the fixture seam) takes no header. **Residual:** the environment of a child is readable by
+the same uid and by root (the same class as the HMAC key above), and base64 is an encoding, not protection. This is a reduction from the
+world-readable `cmdline`, not elimination. The suite drives the real header path against a loopback HTTP server that judges the
+`Authorization` header; the first live run against github.com is the first proof against the real remote.
+
+### Where the library runs
+
+- Under `workflow_run`, decision 4's checkout is of the default branch's own ref, so the sourced library is the default branch's head at the
+  time the job runs. It can be newer than the SHA the run deploys. That is the intent (the pipeline code, not the release, owns the credential
+  path), and it means the library is not pinned to the deployed commit.
+- Decision 4 named "a script that sources the library on a step's behalf" as not covered. S4 covers it: a tracked `.sh` file outside
+  `scripts/lib/` that names the library is a script consumer, derived from the tree, and a `run:` step that names one is judged like a step that
+  names the library. `track.sh` (called from composites and workflow steps) and `push-infra-config.sh` are the first consumers.
+
+### Considered options (S4)
+
+| Option | Verdict |
+|---|---|
+| Inline wrapper at the checkout-free sites | **Adopted as the default.** No checkout is added to the lock-holding deploy job, so the job's documented shape and its `superseded` ordering are untouched. Cost: the inline copies above. |
+| One-file sparse checkout at the checkout-free sites (`actions/checkout` pinned, `persist-credentials: false`, `sparse-checkout: scripts/lib/bearer-curl.sh`, cone mode off; a shape the lint already accepts), as an unconditional first step before the ordering guard | **Recorded, not taken.** It would let those jobs use the library and drop the copies, at a higher blast radius: a checkout outage would fail the deploy job at its first step even for a run that would have exited as `superseded`, and a `release-outcome` checkout failure would suppress that job's operator email. Revisit if the inline copies drift. |
+| Convert the two `cutover-inngest.sh` arms in this slice | Rejected: the conversion edits a suite another open draft owns (above). |
+| Rotate the exposed credentials in this slice | Rejected: S4 reduces argv exposure and does not rotate; rotation stays with ADR-241 O13 and its tracker. Past exposure is not remediated here. |
+
+### Verification (S4)
+
+The S4 stage of `tests/scripts/test-argv-bearer-sweep.sh` (population-derived HMAC guard, the pre-guard rows, the S3 stage's manifest and
+held-back expectations updated one for one), the extended `scripts/lint-workflow-local-action-checkout.test.sh`, the bump script's suite (the
+header form against a loopback HTTP server that judges the `Authorization` header value-free), the two infra suites, and Rule E
+baseline equality after the baseline-only change.
+
+## Addendum — 2026-10-10 (#9597 S4 review corrections)
+
+The review of the S4 pull request falsified or sharpened several sentences of the 2026-10-09 addendum and of the sections above. The earlier text is
+left as written; where it conflicts with this addendum, this addendum governs. `related_adrs` now also lists ADR-072 and ADR-217, which the 2026-10-09
+addendum already relied on.
+
+### Curl's stderr is intentionally NOT silenced on converted calls (reverses an old rule)
+
+Two learnings carry the rule "suppress curl stderr (`2>/dev/null`) on a request with an auth header so debug output cannot leak the token":
+`2026-02-18-token-env-var-not-cli-arg.md` ("Additional measures") and `2026-03-09-shell-api-wrapper-hardening-patterns.md` (Fix 2, "curl stderr
+suppression"). **For a call made through `bc_curl` the rule is reversed, and the half of the argument that depends on the argument guard holds for `bc_curl` only.**
+Decision 8 makes `_bc_tail_ok` refuse `--verbose`, `--trace*` and every spelling of them before any request, so a `bc_curl` call has no mode in which curl echoes the
+request headers; and the refusal marker `SOLEUR_CREDENTIAL_REFUSED` is printed to stderr from inside the command substitution (`code=$(bc_curl ... )`), so a
+`2>/dev/null` on the call discards the only line that distinguishes a refused credential from a transport failure. The battery therefore asserts that no `bc_curl`
+statement discards stderr (the S3 stage for workflow steps, an S4 row for scripts), and the converted RLS calls had theirs removed.
+**The inline wrappers (`_sig_curl`, `_bearer_curl`) do not run `_bc_tail_ok`** (the 2026-10-09 addendum, "weaker in three stated ways"), so nothing at runtime refuses a
+`-v` or `--trace` argument there; the marker argument (do not discard stderr) applies to them equally. What stands in their place is the fixed argument list of each inline
+call plus two battery facts: the dynamic replay feeds every call a well-formed run records, inline calls included, through the library's `_bc_tail_ok`, so a header-printing
+flag added to an EXECUTED inline call turns that row red; and no `_sig_curl` or `_bearer_curl` call carries a `2>/dev/null` today (checked by a repository grep), but the no-stderr-discard row
+covers `bc_curl` statements only, so one added to an inline call is not asserted. A curl call that does NOT go through the chokepoint or an inline wrapper keeps the old
+advice. (The `2>/dev/null` on a `doppler secrets get` or a `jq` stays: those are not the transfer.)
+
+### `deploy-inngest-image.yml` `deploy` is inline by choice, not by a pinned property
+
+The 2026-10-09 table gives one reason for three jobs: "the jobs are checkout-free by documented design (... ADR-072, ADR-217 and the workflow-run
+deploy invariants pin that area)". That is true of `web-platform-release.yml` `deploy` and `release-outcome` only. `deploy-inngest-image.yml` is a
+`workflow_dispatch`-only job (its `if:` skips every other event): it has no `workflow_run` ordering, no `superseded` arm and no comment or suite that
+pins the absence of a checkout, and its sibling `restart-inngest-server.yml` (same concurrency group `deploy-inngest-restart`, same shape) uses the
+library with a checkout. Its no-checkout state is incidental. It stays inline in this slice so that a merge that already fires four production applies
+does not also add a checkout step to a deploy path, and **converting its two sites (the trigger and the verify poll) to the library, with a checkout step, is a tracked
+follow-up on #9757 (the argv-credential follow-up list)**, which removes two guard copies, two `_sig_curl` copies and two HMAC copies from the parity audit. Until then the
+inline-wrapper clause is met for the release jobs and the luks and verify-tunnel sites, and NOT for this one: it is the clause's one honest
+exception, not a precedent.
+
+### Slips in the 2026-10-09 addendum
+
+- `verify-tunnel-ingress-origin.sh` was inline since Tier 2 (#9654), not "already inline since S2"; S4 only moved its HMAC line to the canonical snippet.
+- The `ci-deploy.sh` fan-out signer conversion was PR #9805 (`8729cc0dfa`); #9799 is the issue it closed.
+- The inline guard copies do not print the same marker as the library. `verify-tunnel-ingress-origin.sh` prints no `SOLEUR_CREDENTIAL_REFUSED`
+  line at all (a `::error::` and exit 1), and every other inline copy prints `reason=token_shape` whatever the cause: a control byte, a missing
+  `python3` or an empty HMAC key reads as `token_shape` too. That is a lossy label, an AP-021 (ADR-166) diagnostic-honesty residual, not a measurement
+  of the credential's shape; read the variable named on the line above the marker, and the library sites for `control_char`.
+- "Bounded mechanically by the HMAC parity audit" overstated the bound. The parity audit bounds the HMAC-signing copies. The guard copies are bounded by
+  a separate derived pin in the battery: every tracked file that defines `_bearer_ok` (outside knowledge-base and the tests) must equal the canonical
+  text byte for byte and the count must equal what `git grep` finds, and the files defining `_sig_curl` or `_bearer_curl` must equal an explicit set
+  (a new inline wrapper elsewhere is an unclassified member). The pattern-only copy in `infra-config-verify.sh` is pinned by its own row.
+- The HMAC census is no longer one spelling. It reads statements, not lines: continuation lines are joined and any `openssl` statement carrying
+  `-hmac` or `-macopt` is a member, whatever the subcommand (`dgst`, `sha256`, `mac`) or the layout. The real tree's set is unchanged (the two
+  `scripts/cutover-inngest.sh` arms and the two Markdown exceptions).
+
+### The library does not run only in GitHub Actions steps
+
+Consequences says "the library runs only in GitHub Actions steps, so `SOLEUR_CREDENTIAL_REFUSED` lines are found in the workflow run log". After S4 that
+is no longer true. `apps/web-platform/scripts/github-app-key-status.sh` is a script an operator or an agent runs (`doppler run -p soleur -c
+prd_terraform -- bash ...`), so its marker is in that terminal, and `apps/web-platform/infra/push-infra-config.sh` is run by the `local-exec`
+provisioner of `terraform_data.deploy_pipeline_fix`, so its marker is in the terraform apply output (the apply workflow's log when CI applies, the
+operator's terminal when a person does). The library needs `python3` for `bc_hmac_sha256_hex`, so a machine that runs `terraform apply` without it
+gets the refusal marker (an empty signature reaches the shape check), not a push. Layer-6 retrieval still holds for the workflow sites; for these two
+scripts the retrieval surface is whoever ran them.
+
+### Residual: git hooks inherit the header
+
+`bump-inngest-bootstrap-pin.sh` passes the push credential as `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0` in the environment of
+`git ls-remote` and `git push`. Git runs its hooks (for example `pre-push`) with its own environment, so a repository hook sees those three variables
+and with them the `Authorization` header. Same class as the `/proc/<pid>/environ` residual above: a reduction from the world-readable `cmdline`, not
+elimination, and a hook is code the checkout already controls.
+
+### Library gaps seen by the reviewers (not changed in this pull request)
+
+Recorded so the next change to `scripts/lib/bearer-curl.sh` starts from them; none is exploitable by the converted call sites, which pass fixed
+argument lists:
+
+- `--proto =https` is not pinned: a caller that passes a non-https URL is not refused.
+- `--expand-header`, `--expand-user`, `--expand-oauth2-bearer` and `--head` are not covered by the argument guard.
+- A refusal at rc 64 (the argument guard) prints a class line but no `SOLEUR_CREDENTIAL_REFUSED` marker; only the credential refusal (rc 2) does.
+- `--url` prefix-matches `--url-query` in `_BC_LONG_BODY`, so a `--url VALUE` whose VALUE contains `/proc/`, `/dev/stdin`, `/dev/fd/` or `/dev/.`, or ends in `=-`
+  or `@-`, is judged a request body that reads stdin and is refused (a false positive, never a pass).
+- Credentials in a URL **path** are not on the config channel and remain on argv: the Slack webhook URL in `web-platform-release.yml`, the `psql`
+  connection URIs and the seed scripts' password. They are tracked on the #9757 follow-up list.
+
+### Inline sites now trim leading and trailing ASCII whitespace at the call site (supersedes "an inline copy refuses such a value")
+
+The 2026-10-09 addendum says an inline copy "does not trim a trailing newline (decision 7: an inline copy refuses such a value rather than sending it
+trimmed)". The review measured the consequence: a GitHub secret stored with a trailing newline (the commonest storage accident, which decision 7 exists for)
+would have turned the release deploy this merge itself fires red, and silenced its failure email, while the 22 library sites accepted the same value. In the
+seven inline-using steps (`web-platform-release.yml`: the lock probe, "Deploy via webhook", "Verify deploy script completion", the deploy-failure email and the
+release-outcome email; `deploy-inngest-image.yml`: the trigger and the verify poll) a one-line loop now trims the **leading and trailing** ASCII whitespace of
+`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the two email steps: `RESEND_API_KEY`) before the guard. The pinned function text is unchanged, so the inline
+`_bearer_ok` itself still refuses whitespace; the trim sits at the call site, in front of it, which is also why the byte-equal pin on the `_bearer_ok` copies did not have to move.
+
+- **Both ends, unlike the library.** `bc_ok` trims trailing whitespace only. The inline loop also trims leading whitespace because the argv form these sites replace
+  tolerated a leading blank (curl 8.5.0 sent `CF-Access-Client-Id:  value` and the Cloudflare edge discards leading whitespace of a field value): refusing it would have
+  turned a value that worked yesterday into a red release deploy on the merge. The library keeps refusing a leading blank; this is a stated divergence, in the lenient
+  direction, limited to the seven steps.
+- **ASCII only, locale-independent.** The class is spelled out as bytes (`$' \t\r\n\v\f'`: space, tab, CR, LF, VT, FF), never `[[:space:]]`, so the judgement does not follow
+  the runner's ambient locale: a trailing U+2003 is NOT trimmed and is then refused by the guard, under a UTF-8 locale as under `C`. It equals the library's judgement,
+  which runs under `LC_ALL=C`, for the ASCII whitespace the two share.
+- **The HMAC key (`WEBHOOK_SECRET`) is never trimmed**: it signs as the exact key it was given. Interior whitespace, any control byte, an all-whitespace value and a
+  non-ASCII space are still refused.
+- **Why the other inline sites do not need it.** `workspaces-luks-cutover.yml` (Hetzner read), `verify-tunnel-ingress-origin.sh` and `infra-config-verify.sh` take their
+  values from `doppler secrets get ...`, inside `$(...)`, which strips trailing newlines before the guard sees the value; the accident the trim exists for (a stored
+  trailing newline) cannot reach them. A trailing space or a leading blank in a Doppler value would still be refused there, which is the stricter, pre-existing
+  behaviour of those sites and is not changed here.
+- **The loop's presence is pinned.** The battery DERIVES the population (every workflow step that defines the inline `_bearer_ok() {` and declares a `secrets.*` value for
+  one of the three names must carry exactly the canonical loop for exactly those names before the definition, and the executed rows must be exactly that set), so a new
+  inline step copied from a donor without the loop turns a row red instead of shipping a stored-newline failure. The executed rows discriminate the shape: both ends,
+  every whitespace byte, interior space and LF refused (a strip-all implementation sends a different credential), U+2003 refused under a UTF-8 locale (a `[[:space:]]`
+  implementation is seen), all-whitespace refused, and the key untrimmed; mutants of the loop (removed, trailing-only, leading-only, strip-all, locale-class, applied
+  to the key) are each judged red by name.
+
+### A refused credential at the infra-config gate pages as `ungraded` (the `credential_refused` output)
+
+`infra-config-verify.sh` runs in `apply-deploy-pipeline-fix.yml` as the step with id `infra_config_gate`. When a credential fails the shape check it makes zero requests,
+prints the marker and exits 1; it now also writes `credential_refused=true` to `$GITHUB_OUTPUT`. The alert step "Alert on a red infra-config gate (#7220)" reads that output
+ahead of its frame-derived arms: with no request made the status file is empty, so without the output the ladder would have classified the failure `unreachable` and told
+the operator the listener may be down, a cause nobody measured. With it the class is `ungraded`: the check never ran, and the text says so and names the verify step's log (the
+variable is on the `... unusable` line beside the marker, never its value). Two honest limits. The wiring covers pass 1 (`steps.infra_config_gate`); the second verify pass
+(`infra_config_gate_pass2`, which runs the same script) writes its own output under its own step id and is not read, so a pass-2 refusal would reach the
+`PASS2_OUTCOME == failure` arm and read as a failed re-push. That is not wired because the secrets cannot change between the two steps of one job, so a credential that passed
+pass 1 cannot be refused in pass 2. And `ungraded` is a quieter class than `unreachable` (it carries no `action-required` label), although a refused Cloudflare Access or HMAC
+secret is shared by every webhook caller; the marker in the run log and the step annotation are what name it, which is a conscious trade of loudness for a true statement.

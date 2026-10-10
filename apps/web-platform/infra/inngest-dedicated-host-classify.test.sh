@@ -506,6 +506,7 @@ assert "#8077 the probe body names its /tmp/health-body scratch (>=2 uses, got $
 sed -i "s#/tmp/health-body#$PROBE_WS/health-body#g" "$PROBE_BODY"
 mkdir -p "$PROBE_WS/scripts" "$PROBE_WS/bin"
 cp "$REPO_ROOT/scripts/inngest-liveness-classify.sh" "$PROBE_WS/scripts/"
+mkdir -p "$PROBE_WS/scripts/lib" && cp "$REPO_ROOT/scripts/lib/bearer-curl.sh" "$PROBE_WS/scripts/lib/"  # the probe step sources it from $GITHUB_WORKSPACE (ADR-280)
 cat > "$PROBE_WS/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 # Serve the Nth scripted response (or the last one) — $SEQ_DIR/<n>.code + <n>.body.
