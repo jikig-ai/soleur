@@ -987,6 +987,31 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 
 What the same slice did change for this consumer: the token is masked before first use and shape-checked, the HTTP code is the only response data printed, and the action-error branch no longer prints the action body.
 
+### 2026-10-10 (#9362): `apply-github-infra.yml` injects nothing from `prd_terraform`, and a pre-apply gate checks the required checks by value
+
+This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the apply path (the earlier entry is kept as written).
+
+- **The injection is gone.** The job's four Terraform invocations (the two imports, the plan, the apply) no longer run under
+  `doppler run` over `prd_terraform` with the tf-var name transformer, and the now-unused step `DOPPLER_TOKEN` env is removed from
+  those three steps. Every `infra/github/variables.tf` input has a default and every provider input arrives from the Tier-B loader, so the
+  set this root needs from `prd_terraform` is empty; the only Tier-A reads left in the job are the two backend keys in
+  `Extract backend credentials`. A value planted in that config can therefore no longer change `ACTIONS_INTEGRATION_ID`,
+  `CODEQL_INTEGRATION_ID`, `GH_OWNER` or `GH_REPO`. An `--only-secrets` allowlist was rejected: the set is empty, and
+  `knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md` records that it fails with the tf-var transformer.
+- **O11 does not cover it.** O11 ran on 2026-10-04 and removed repo secrets and revoked two tokens; `prd_terraform` stays Tier A by D1
+  because the PR plan jobs need it, so no O-step removes this path.
+- **A pre-apply by-value gate.** A step between plan and apply pipes `terraform show -json tfplan` into
+  `scripts/verify-ruleset-required-checks.sh`, once per ruleset, comparing the planned `{context, integration_id}` set with the committed
+  canonical files. A mismatch fails the job before any write. The gate checks required-check bindings only; the destroy guard still owns
+  deletes and the daily ruleset audit still owns after-the-fact drift. **Intended behaviour, not to be removed under pressure:** the
+  gate has no override. A legitimate change to a required check updates the canonical file in the same reviewed PR; the
+  `[skip-github-apply]` kill switch skips the whole job.
+- **Pins.** `tests/scripts/test-apply-github-infra-mint-shape.sh` pins both the absence of any Tier-A injection in the apply job and the gate
+  (its position, its two invocations, its paths), and drives the script over plans built from a real `terraform show -json` capture. The
+  script, the CLA canonical and the suite carry CODEOWNERS rows.
+- **Left open, tracked separately.** The scheduled drift plan and the PR plan job still read `prd_terraform` under the tf-var layer. They
+  cannot write, and a planted value shows up there as a drift plan.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -1011,3 +1036,4 @@ What the same slice did change for this consumer: the token is masked before fir
 - D11 (2026-10-01, switch 2026-10-03, `accepted` 2026-10-04): #9321, #9462
 - D2 note (2026-10-04): #9377, #9461
 - `op=backup` tier note (2026-10-08): #8767, #9755
+- Apply-path injection removed and by-value gate (2026-10-10): #9362

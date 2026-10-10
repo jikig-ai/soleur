@@ -10,9 +10,12 @@
 #     its key from the infra-credentials loader (soleur-infra-privileged/prd,
 #     environment infra-privileged); the post-apply verify uses a scoped token
 #     from .github/actions/mint-infra-app-token. Since #9360 no step consumes the
-#     soleur-ai pair; the prd_terraform tf-var layer still injects it (the #8209
-#     sentinel), inert because infra mode wins (ADR-241 D5). PAT auth was retired
-#     in #4384 per AGENTS.rules.md hr-github-app-auth-not-pat.
+#     soleur-ai pair. Since #9362 the job injects NOTHING from prd_terraform into
+#     Terraform (the only Tier-A reads left are the two backend keys), so a value
+#     planted in that config cannot rebind a required check; the by-value gate
+#     before the apply compares the planned bindings with the committed canonical
+#     files (ADR-241). PAT auth was retired in #4384 per AGENTS.rules.md
+#     hr-github-app-auth-not-pat.
 #   - First-apply import: if state does not yet contain
 #     github_repository_ruleset.ci_required, the workflow imports it before
 #     plan. Idempotent — subsequent runs no-op the import.
@@ -216,8 +219,6 @@ jobs:
 
       - name: First-apply import (idempotent, per-address)
         working-directory: ${{ env.INFRA_DIR }}
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
           # Per-address import so BOTH rulesets import independently. A blanket
@@ -233,8 +234,7 @@ jobs:
               echo "Resource $addr already in state, skipping import."
             else
               echo "Importing ruleset $id as $addr (one-time bootstrap)."
-              doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-                terraform import "$addr" "soleur:$id"
+              terraform import "$addr" "soleur:$id"
               state_list=$(terraform state list 2>/dev/null || true)  # refresh
             fi
           }
@@ -252,8 +252,7 @@ jobs:
               echo "Resource $addr already in state, skipping import."
             else
               echo "Importing repository $name as $addr (one-time bootstrap)."
-              doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-                terraform import "$addr" "$name"
+              terraform import "$addr" "$name"
               state_list=$(terraform state list 2>/dev/null || true)  # refresh
             fi
           }
@@ -276,7 +275,6 @@ jobs:
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
@@ -293,8 +291,7 @@ jobs:
           # apply-web-platform-infra.yml's plan_pr step.
           set -uo pipefail
           set +e
-          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform plan -no-color -input=false -out=tfplan
+          terraform plan -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan failed (exit $rc)."
@@ -335,15 +332,31 @@ jobs:
             exit 1
           fi
 
+      # A pre-apply by-value gate on the two rulesets' required checks (#9362). The destroy
+      # guard above counts deletes only, so a rebound integration id (an in-place update) passes
+      # it. This step compares each ruleset's planned {context, integration_id} set with its
+      # committed canonical file and fails the job BEFORE `terraform apply` writes anything.
+      # The plan document carries input-variable values (including the Tier-B App key), so it
+      # is piped into the script and never written to disk. There is no override: a legitimate
+      # change to a required check updates the canonical file in the same reviewed PR.
+      - name: Gate planned required-check bindings (by value, pre-apply)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          # Pre-apply by-value gate (Refs #9362). Absolute paths: this step runs in infra/github.
+          terraform show -json tfplan | bash "${GITHUB_WORKSPACE}/scripts/verify-ruleset-required-checks.sh" \
+            - github_repository_ruleset.ci_required \
+            "${GITHUB_WORKSPACE}/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+          terraform show -json tfplan | bash "${GITHUB_WORKSPACE}/scripts/verify-ruleset-required-checks.sh" \
+            - github_repository_ruleset.cla_required \
+            "${GITHUB_WORKSPACE}/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
+
       - name: Terraform apply
         working-directory: ${{ env.INFRA_DIR }}
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
           rc=0
-          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -auto-approve -input=false tfplan 2>&1 | tee "${RUNNER_TEMP}/apply.log" || rc=$?
+          terraform apply -auto-approve -input=false tfplan 2>&1 | tee "${RUNNER_TEMP}/apply.log" || rc=$?
           # Known gap until #9361: the marketplace ruleset's App bypass actor is still
           # soleur-ai, so a manifest write as soleur-infra is refused. Name it, so the red
           # run is not chased as a credential fault.

@@ -344,6 +344,10 @@ AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
 AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
   ".github/workflows/apply-github-infra.yml"
   ".github/actions/mint-infra-app-token/"
+  "scripts/verify-ruleset-required-checks.sh"             # #9362: the gate it drives
+  "scripts/lib/canonicalize-required-status-checks.sh"    # #9362: the projection the gate shares
+  "scripts/ci-required-ruleset-canonical-required-status-checks.json"      # #9362: gate input
+  "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"  # #9362: gate input
   "tests/scripts/test-apply-github-infra-mint-shape.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
