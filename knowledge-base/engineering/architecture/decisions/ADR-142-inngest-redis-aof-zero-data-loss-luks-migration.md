@@ -683,3 +683,29 @@ addendum (the dispatch, its gate library and `op=luks-rollback` deleted) take ef
 ### What this addendum does NOT change
 
 The decision, its encryption mechanism, the additive-cutover design, or any earlier amendment.
+
+## Addendum — 2026-10-10 (#9879, pointer to ADR-282)
+
+Appended; nothing above is edited. This addendum only marks two statements above as superseded and points to the decision
+that replaces them. Ref #9879.
+
+**Status of this addendum: adopting.** It becomes true of the live store when PR #9925 is merged, the merge's per-merge
+apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, and the post-apply read-back returns
+`protection.delete=true` (ADR-282, Status). Until then each mark below describes the target state, not a fact.
+
+> **Superseded 2026-10-10 (#9879), in part:** the "No key escrow (git-data-lean shape)" rationale in the Decision section
+> ("The AOF is transient and self-healing ... its total-loss recovery is already built and proven ... the sole-copy reminder
+> subset can be enumerated/re-armed"). The 2026-10-08 addendum had already sharpened it; ADR-282 now carries the key-loss
+> posture and the canonical loss-mode table, and records that the "re-armable" claim is unconfirmed for armed reminders after
+> a total loss (the enumeration reads the live store, not Postgres). The decision not to create a new escrow artifact
+> stands; the premise that the store is transient does not.
+
+> **Superseded 2026-10-10 (#9879), in part, from the merge of PR #9925 and its apply:** the bullet in the 2026-10-09 addendum
+> ("PR B: the retirement landed", "Consequences now in force") that reads "Delete protection, edge pins and key-loss posture
+> are NOT built here; they are tracked in #9879 (open)". They are built there: ADR-282 records delete protection and
+> `prevent_destroy` on the volume, the passphrase pair and the two Doppler cascade parents, the guards that pin them, the
+> accepted residuals and the key-loss posture. The remaining deferred items (header backup, key-continuity probe, repair
+> dispatch, token downgrade, import rehearsal) are tracked in #9927.
+
+**What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier
+amendment or addendum.

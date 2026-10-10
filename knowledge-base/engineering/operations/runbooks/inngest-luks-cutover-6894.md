@@ -1,7 +1,7 @@
 ---
 title: Cutting the Inngest Redis AOF store over to the encrypted volume (#6894 / ADR-142)
 audience: operator
-related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879]
+related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879, 9927]
 ---
 
 # Inngest LUKS cutover (#6894)
@@ -271,8 +271,9 @@ copy has nowhere to land. The dated history of the verb stays in ADR-142.
 
 **The live LUKS volume `hcloud_volume.inngest_redis_luks` (id 106903269) is now the only copy of the Inngest queue and run
 state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener.** Losing either is data loss
-with no second copy to restore from. Protection for that (delete protection, edge pins, key-loss posture) is tracked
-in #9879; do not assume it exists.
+with no second copy to restore from. Protection for that (delete protection, edge pins, key-loss posture) is built by
+#9879 (PR #9925, ADR-282) and described in §5c; it is in force only once that PR is merged, its apply has landed and the
+§5c read-back returns `protected`, so do not assume it exists before then.
 
 **Signals that used to mean "the store went back to plaintext" are now incidents, not rollbacks.** The wrong-volume
 alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose `data_mount_src` is not
@@ -340,7 +341,8 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 ### Rules that stay in force
 
 - After retirement the live LUKS volume is the only copy of the store and `INNGEST_REDIS_LUKS_KEY` in Doppler
-  `soleur-inngest/prd` is its sole opener (ADR-142 addendum 2026-10-08; protection tracked in #9879).
+  `soleur-inngest/prd` is its sole opener (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
+  effect on the merge of PR #9925 and its apply).
 - **Do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` until the dead-probe heartbeat feeder (#9703) is
   armed.** That script is the only reporter that says "CANNOT ESTABLISH" for a silent probe pipeline; the wrong-volume
   alert reads a silent probe as healthy until the feeder is wired. Its deletion sites are the probe, its test, the
@@ -348,6 +350,129 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
   5a pointer; the list is posted on #9703 when #8285 is closed.
 - The dead on-host `rollback)` arm in `inngest-luks-cutover.sh`, its FSM comments and fixtures, and the dead
   plaintext-resolver arm in `cloud-init-inngest.yml` leave at the next planned Inngest host replace (#9786).
+
+---
+
+## 5c. Sole-copy protection and key loss
+
+**Status: adopting (#9879, PR #9925, ADR-282).** Everything below that says a protection "is in force" becomes true only
+when the PR is merged, the merge's per-merge apply has landed one in-place update on `hcloud_volume.inngest_redis_luks`,
+and the read-back below has returned `protected`. Until then treat the live volume as unprotected (as §5a said).
+
+**What is pinned, and what is not.** The volume, the passphrase pair and the two Doppler cascade parents carry
+`prevent_destroy`; the volume also carries Hetzner delete protection. The attachment is deliberately NOT pinned, because
+the sanctioned host replace replaces it. The pin set, the reasoning, the accepted residuals and the **canonical loss-mode
+table (detection and recovery stance per mode)** are in
+[ADR-282](../../architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md); this section does not restate
+them. Protection defends against mistaken deletes (a console click, a wrong id, a pasted recipe); it does not defend
+against a holder of the read/write Hetzner token, which can lift it.
+
+### Read-back (read-only; run by `soleur:postmerge`, re-runnable)
+
+```
+doppler run -p soleur -c prd_terraform -- sh -c ': "${HCLOUD_TOKEN_READONLY:?absent from prd_terraform: stop, never fall back to HCLOUD_TOKEN}"; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - https://api.hetzner.cloud/v1/volumes/106903269 | jq -e ".volume.protection.delete == true" >/dev/null && echo protected || { echo not-protected; exit 1; }'
+```
+
+The wrapper is quoted so the variable expands after Doppler sets it, not in the caller's shell. The command asserts the
+read-only token and fails rather than falling back to the read/write one; the token goes to curl as a config on stdin,
+never on argv; there is no `-v` and no `set -x`; the output is one word. `protected` is the pass. `not-protected` (or a
+failure) is a red post-merge status: deliver the update through the route below, then re-run. This read is a proxy for
+"Hetzner refuses a delete"; the refusal itself is not exercised. A drift run after the apply must also show no pending
+change at `hcloud_volume.inngest_redis_luks` or the two key addresses (the drift run as a whole may stay red for the
+unrelated pending server replace until #9786).
+
+### Delivery route and ordering
+
+- **Merge-apply first, replace second.** The per-merge apply delivers the update. Until it lands, an `inngest-host`
+  or `inngest-host-replace` dispatch aborts with `reason=luks_volume_touched`: that is the intended fail-closed behaviour,
+  not a defect, and it is not widened. Do not replace the host in that window; land the apply, read back, then replace.
+- **If the apply was skipped or failed**, the only delivery route is a `manual-rerun` dispatch of the same per-merge job:
+  `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun`. The `inngest-host` dispatch is not
+  a delivery route (its shape gate refuses an update on the volume).
+- **Never an untargeted apply.** The live host's `user_data` is stale until #9786, so a full-root plan shows a pending
+  server replace, and an untargeted apply would replace the server and its attachment with no gate running. Every plan and
+  apply for this store is targeted and goes through CI.
+- **This overrides the drift issue's generic text.** The scheduled drift filer tells a reader that intentional drift
+  means applying locally to update state. For the sole-copy addresses that is wrong: never apply locally, never untargeted,
+  and there is no SSH step anywhere on this path (`hr-no-ssh-fallback-in-runbooks`). A drift reason at a sole-copy address
+  is read from the plan text for that address and resolved through a reviewed change or the `manual-rerun` route.
+- The drift workflow's own output prints runnable `DELETE` recipes for other resources. Those recipes must never be pointed
+  at this volume or its Doppler secret; the break-glass below is the only sanctioned out-of-band API use here.
+
+### Per-loss-mode owner and procedure
+
+The detection and recovery stance of each mode is in the ADR table. The owner of every mode below is the repository owner
+(the founder, who is also the sole CODEOWNER); there is no second on-call.
+
+| Mode (ADR table row) | Procedure |
+| --- | --- |
+| Doppler secret deleted | Stop. Deliver a `manual-rerun` of the per-merge apply (the create of the Doppler copy alone is legal there and restores the value held in state). Confirm the next drift run shows no pending change at `doppler_secret.inngest_redis_luks_key`. |
+| Doppler secret overwritten | Stop; do not dispatch any apply (the per-merge guard HALTs on an update of the pair by design). Restore the previous value from Doppler version history. The plan tier and the rollback scope are not measured (#9927); never print values or diffs. If rollback is unavailable, escalate as total loss of the opener. |
+| Terraform state entry lost | Stop; do not apply (a create of the passphrase is blocked by the per-merge HALT, and re-import is not a claimed recovery for this resource class). The repository owner decides the repair in a reviewed change. |
+| Both copies lost | Total loss of the store. Follow "After a total loss" below. |
+| LUKS header corrupted | No recovery; the host fails to open the volume. Incident (`soleur:incident`); follow "After a total loss" if the data is unreadable. Detection lags to the first Redis failure. |
+| Volume deleted despite protection, or project loss | No recovery. Incident; follow "After a total loss". |
+
+### After a total loss: who tells affected users
+
+The repository owner is the incident owner and sends the user notice, using `soleur:incident` to scaffold the report.
+Before sending, consult counsel on whether the loss of availability of personal data held in the store triggers a
+notification duty (Art. 4(12) and 33); the breach register is `knowledge-base/legal/breach-register.md`. Affected users are
+those with reminders or agent runs in flight at the time. The claim that armed reminders can be re-armed from Postgres is
+**unconfirmed** (ADR-282, "What losing the store costs"): the enumeration script reads the live store, and the route that
+arms a reminder persists nothing app-side. After a loss the platform comes back empty with functions re-registered; do not
+tell users their reminders will be restored.
+
+### Deliberate unprotect (two reviewed changes; no sanctioned erase path)
+
+Lifting protection is two reviewed PRs, in this order, never one:
+
+1. Lift Hetzner delete protection on the volume in its own PR and let the per-merge apply land it. Read back
+   `not-protected` (the wrapped command above, expecting the opposite result).
+2. Only then remove `prevent_destroy` in a second PR.
+
+Removing `prevent_destroy` alone is the trap: a destroy apply detaches the mounted volume before Hetzner refuses the
+delete. Each PR edits the guards it trips (the Guard 1 rows in `inngest-luks-sole-copy.test.sh`, census row G4h and
+`G4_PROTECTED`, the Guard 2 expected set in `terraform-target-parity.test.ts`), so the weakening is visible in review. A
+key rotation (a header `luksChangeKey`) needs `prevent_destroy` lifted on the pair in the same reviewed change.
+**No sanctioned erase path exists for this volume since PR B of #8285** (the wipe and destroy dispatch was deleted), so a
+whole-volume Art. 17 erasure needs a new, separately designed and reviewed path; none is built.
+
+### Break-glass: a sanctioned host replace is refused because detach is rejected under delete protection
+
+That Hetzner allows detach of a delete-protected volume is documented only indirectly; the first sanctioned replace is the
+live proof. If a replace is refused for that reason, the outage must not outlast the data-loss risk the protection prevents:
+
+1. Get the repository owner's explicit per-command go-ahead (a menu answer is not one). Time-box the window.
+2. Lift protection with ONE `change_protection` call using the read/write token, token on stdin, no argv, no `-v`:
+
+   ```
+   doppler run -p soleur -c prd_terraform -- sh -c ': "${HCLOUD_TOKEN:?absent from prd_terraform}"; printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN" | curl -sS --config - -X POST -H "Content-Type: application/json" -d "{\"delete\":false}" -o /dev/null -w "%{http_code}\n" https://api.hetzner.cloud/v1/volumes/106903269/actions/change_protection'
+   ```
+
+3. Complete the sanctioned replace (`inngest-host-replace`, then `op=resume` per #7228).
+4. Re-protect in the same session: the same call with the body `{"delete":true}`, then run the read-back above and expect `protected`.
+5. Record the lift and the re-protect in the incident record. The next drift run is the check that Terraform still reads
+   protection as true.
+
+### Revert recipe
+
+Two recipes; both are to be executed once in a scratch detached worktree before the PR leaves draft.
+
+- **Partial (preferred):** keep the protections and revert only a misbehaving guard row or record edit. Never rebase after
+  a record names a commit id.
+- **Full revert:** in a scratch detached worktree, `git revert --no-commit` the feature commits, then run the suites the
+  revert PR must pass. The revert plans the inverse in-place update (protection true to false) through the same per-merge
+  path, and it must remove the new suite together with its registrations (`suite-shard-legs.tsv`,
+  `suite-durations.tsv`, the `test-all.sh` line and the `BASELINE_DECLARED_PROBES` bump) in the same commit, or the orphan
+  census and the baseline test go red. Lifting protection deliberately is never a revert of only `prevent_destroy`.
+
+Recorded scratch-run output (to be pasted here by the lead once the scratch run has been executed; until then this slot is
+the open acceptance item AC10):
+
+```
+PENDING: scratch detached-worktree revert run not yet recorded
+```
 
 ---
 

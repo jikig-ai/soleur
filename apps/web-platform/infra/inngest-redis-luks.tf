@@ -8,13 +8,22 @@
 # do not "tidy" these into the sibling files their names suggest.
 #
 # WHAT THIS FILE DOES NOT DO. It creates a passphrase and escrows it. It does
-# NOT change the plaintext backstop volume, does NOT recut anything, and is
-# inert with respect to the running host until a boot reads the key. The
+# NOT recut anything and is inert with respect to the running host until a boot
+# reads the key. (The
 # reviewer-gated `apply_target=inngest-volume-recut` that this paragraph used to
 # name is gone (#8285 PR A converted that job into `inngest-backstop-retire`,
 # which retired the plaintext backstop `hcloud_volume.inngest_redis`, id
 # 106261946; that volume was destroyed 2026-10-09 and the job deleted by PR B).
-# ADR-142's additive byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.
+# ADR-142's additive byte-copy is how the store moved onto `hcloud_volume.inngest_redis_luks`.)
+#
+# SOLE COPY (#9879). The plaintext backstop is gone, so the volume below and the
+# passphrase pair that opens it are the ONLY copy of the Inngest queue and run
+# state. They carry delete protection at Hetzner and `prevent_destroy` in
+# Terraform; the attachment deliberately does NOT (it is replaced by the sanctioned
+# `inngest-host-replace`). Why, the loss-mode table, the deliberate two-step unprotect
+# and the read-back recipe: the runbook section "Sole-copy protection and key loss" in
+# knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md and the
+# ADR it links. inngest-luks-sole-copy.test.sh pins every line of this.
 #
 # "MERGE IS INERT" IS THE DEFECT HERE, NOT THE SAFETY PROPERTY. Both resources
 # below MUST be in the per-merge `-target=` allowlist in
@@ -36,9 +45,17 @@
 # NO `lifecycle { ignore_changes = ... }`, deliberately. A regenerated passphrase
 # must cascade — a drifted key that Terraform declines to notice is a volume
 # nobody can open, discovered at the next boot rather than at plan time.
+#
+# SOLE OPENER (#9879): `prevent_destroy` on this pair makes a destroy or replace plan an
+# error. A deliberate key rotation (a header `luksChangeKey`) needs it lifted on the pair
+# in the same reviewed change; see the runbook section named in the file header.
 resource "random_password" "inngest_redis_luks" {
   length  = 40
   special = false
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # --- Key escrow -------------------------------------------------------------
@@ -82,6 +99,11 @@ resource "doppler_secret" "inngest_redis_luks_key" {
   name       = "INNGEST_REDIS_LUKS_KEY"
   value      = random_password.inngest_redis_luks.result
   visibility = "masked"
+
+  # Sole opener of the sole copy (#9879); see the note on random_password above.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -127,13 +149,30 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 # by #8285 PR A), so the target was never born smaller than the volume whose bytes it
 # had to hold. `location` must match the server's for the
 # attachment to be legal.
+#
+# SOLE COPY, PINNED TWICE (#9879). Hetzner refuses a delete while delete protection is on, and
+# `prevent_destroy` makes any Terraform plan that would destroy or replace this volume an error. They
+# cover different edges (a console or API delete versus a plan), so neither replaces the other.
+# Protection defends against mistaken deletes; it does not defend against a holder of the read/write
+# Hetzner token, which can lift it.
+#
+# ORDERING TRAP when lifting deliberately: lift delete protection first, in its own reviewed change,
+# let it apply, and only then remove `prevent_destroy`. Removing `prevent_destroy` alone lets a destroy
+# apply detach the mounted volume before Hetzner refuses the delete. The runbook section named in the
+# file header carries the two-step route; this comment spells neither attribute literally so the
+# guard suite can pin each as exactly one code line.
 resource "hcloud_volume" "inngest_redis_luks" {
-  name     = "soleur-inngest-redis-store-luks"
-  size     = var.inngest_redis_volume_size
-  location = var.location
+  name              = "soleur-inngest-redis-store-luks"
+  size              = var.inngest_redis_volume_size
+  location          = var.location
+  delete_protection = true
 
   labels = {
     app = "soleur-web-platform"
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -149,6 +188,13 @@ resource "hcloud_volume" "inngest_redis_luks" {
 # those words. The attachment must be there, though: inngest-host-replace-gate.sh
 # interpolates the server id, so a replace forces this attachment into the plan and
 # the gate aborts `out_of_scope` without it.
+#
+# NO `prevent_destroy` HERE, DELIBERATELY (#9879). Unlike web-1's attachment, this one is replaced by a
+# sanctioned dispatch: `inngest-host-replace` replaces the server and therefore this attachment
+# (ForceNew on server_id), and a pin would turn that into a plan error. Its protection is the existing
+# gate rows (replace only together with the server, shape gate no-op or create only) and the
+# reachability pins in plugins/soleur/test/terraform-target-parity.test.ts. The guard suite pins the
+# ABSENCE of a lifecycle block here, so adding one is a red row and not a quiet breakage of host replace.
 resource "hcloud_volume_attachment" "inngest_redis_luks" {
   volume_id = hcloud_volume.inngest_redis_luks.id
   server_id = hcloud_server.inngest.id
