@@ -301,10 +301,6 @@ RCHK "AC3a (must-PASS): host replace = server + attachment delete+create, protec
 rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "$FW_NOOP" "$NET_REPLACE" "$LUKS_ATT_REPLACE_ENTRY" "$(LUKS_VOL_NOOP_ENTRY update false)"
 RCHK "AC3b (pre-apply): the same plan with the LUKS volume UPDATE (delete_protection not yet applied) => ABORT luks_volume_touched" 1 "reason=luks_volume_touched "
 
-
-
-
-
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
