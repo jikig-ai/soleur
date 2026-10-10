@@ -272,12 +272,12 @@ exception, not a precedent.
 ### The library does not run only in GitHub Actions steps
 
 Consequences says "the library runs only in GitHub Actions steps, so `SOLEUR_CREDENTIAL_REFUSED` lines are found in the workflow run log". After S4 that
-is no longer true. `apps/web-platform/scripts/github-app-key-status.sh` is a script an operator or an agent runs (`doppler run -p soleur -c
-prd_terraform -- bash ...`), so its marker is in that terminal, and `apps/web-platform/infra/push-infra-config.sh` is run by the `local-exec`
-provisioner of `terraform_data.deploy_pipeline_fix`, so its marker is in the terraform apply output (the apply workflow's log when CI applies, the
-operator's terminal when a person does). The library needs `python3` for `bc_hmac_sha256_hex`, so a machine that runs `terraform apply` without it
-gets the refusal marker (an empty signature reaches the shape check), not a push. Layer-6 retrieval still holds for the workflow sites; for these two
-scripts the retrieval surface is whoever ran them.
+is no longer true. `apps/web-platform/scripts/github-app-key-status.sh` is a script invoked under `doppler run -p soleur -c prd_terraform`, so its
+marker is in the invoking terminal, and `apps/web-platform/infra/push-infra-config.sh` is invoked by the `local-exec` provisioner of
+`terraform_data.deploy_pipeline_fix`, so its marker is in the Terraform output (the apply workflow's log under CI, the local terminal for a local
+apply). The library needs `python3` for `bc_hmac_sha256_hex`, so a machine without it reaches the refusal marker (an empty signature reaches the
+shape check), not a push. Layer-6 retrieval still holds for the workflow sites; for these two scripts the retrieval surface is whichever process
+invoked them.
 
 ### Residual: git hooks inherit the header
 
