@@ -3,14 +3,17 @@ Description=Inngest Redis AOF LUKS blue-green cutover oneshot (FSM: armed->copyi
 After=network-online.target mnt-data.mount inngest-luks-open.service
 Wants=network-online.target
 # SKIP-VS-FAIL (#9939). Both EnvironmentFile= paths below are written by runcmd stages late in
-# first boot, and the timer is not the only possible trigger — its [Install]
+# first boot, and the timer is not the only possible trigger — this unit's [Install]
 # WantedBy=multi-user.target arm fires if the service is ever enabled, a manual `systemctl
 # start` runs any time, and any future Wants=/Requires= consumer could pull it in before the
 # files exist. An absent file must SKIP the start — one "skipped, unmet condition check"
-# journal notice — never FAIL it into the LUKS channel, which must stay meaningful (the
-# ExecStopPost unit-exit phone-home fires on failures after ExecStart, so keeping start
-# failures rare keeps it that way too). The fail-closed EnvironmentFile= contract is
-# unchanged: once a start IS attempted, an absent file still fails the unit.
+# journal notice — never FAIL it into the LUKS channel (the ExecStopPost unit-exit phone-home
+# fires on every exit once a start is attempted, success ticks included, so keeping attempted
+# starts rare is what keeps the channel meaningful). The fail-closed EnvironmentFile= contract
+# is unchanged: once a start IS attempted, an absent file still fails the unit. Post-provision
+# these files persist, so an absent file on a later boot is a real anomaly — it still skips
+# (a NOTICE the capture needle does not see); the dispatch-side no-terminal-flag timeout is
+# the compensating detector for that case.
 ConditionPathExists=/etc/default/inngest-server
 ConditionPathExists=/etc/default/inngest-luks-volumes
 

@@ -459,28 +459,32 @@ if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/d
 # stay unprefixed: once a start IS attempted, an absent file still fails the unit — the
 # fail-closed contract is the point of the unit.
 _LUKS_OPEN_UNIT="$(awk 'f&&/^  - path:/{exit} /^  - path: \/etc\/systemd\/system\/inngest-luks-open\.service$/{f=1} f' "$CLOUD_INIT")"
-# The condition directives are [Unit]-section only — in [Service]/[Install] systemd ignores
-# them ("unknown lvalue") and the unit starts unconditionally, so every needle below is scoped
-# to the [Unit]..[Service] region, never the whole block.
+# Both directive kinds are section-scoped — ConditionPathExists= is valid in [Unit] only and
+# EnvironmentFile= in [Service] only; anywhere else systemd logs an unknown lvalue and the
+# property silently dies — so every needle below scopes to its directive's own section.
 _LUKS_OPEN_UNITSEC="$(printf '%s\n' "$_LUKS_OPEN_UNIT" | awk '/^      \[Unit\]/{u=1;next} /^      \[/{u=0} u')"
-if [ -n "$_LUKS_OPEN_UNIT" ] && [ -n "$_LUKS_OPEN_UNITSEC" ]; then ok "T1.15a the inngest-luks-open.service write_files block and its [Unit] section extract"; else no "T1.15a could not extract the inngest-luks-open.service [Unit] section — T1.15b..f are vacuous"; fi
+# EnvironmentFile= is valid in [Service] only — in [Unit] it is the same inert lvalue the
+# conditions would be elsewhere, so the EF needles scope to the [Service] region the same way.
+_LUKS_OPEN_SVCSEC="$(printf '%s\n' "$_LUKS_OPEN_UNIT" | awk '/^      \[Service\]/{s=1;next} /^      \[/{s=0} s')"
+if [ -n "$_LUKS_OPEN_UNIT" ] && [ -n "$_LUKS_OPEN_UNITSEC" ] && [ -n "$_LUKS_OPEN_SVCSEC" ]; then ok "T1.15a the inngest-luks-open.service write_files block and its [Unit]/[Service] sections extract"; else no "T1.15a could not extract the inngest-luks-open.service [Unit]/[Service] sections — T1.15b..f are vacuous"; fi
 _T115_NEEDLE_DOPPLER='      ConditionPathExists=/etc/default/inngest-doppler'
 _T115_NEEDLE_LUKS='      ConditionPathExists=/etc/default/inngest-luks'
 if printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -cxF "$_T115_NEEDLE_DOPPLER" >/dev/null; then ok "T1.15b the reopen unit condition-skips in [Unit] when /etc/default/inngest-doppler is absent"; else no "T1.15b no [Unit]-section ConditionPathExists=/etc/default/inngest-doppler — a pre-write start fails the unit into the journal channel"; fi
 if printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -cxF "$_T115_NEEDLE_LUKS" >/dev/null; then ok "T1.15c the reopen unit condition-skips in [Unit] when /etc/default/inngest-luks is absent"; else no "T1.15c no [Unit]-section ConditionPathExists=/etc/default/inngest-luks — a partial stage still fails the unit"; fi
-if printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cxF '      EnvironmentFile=/etc/default/inngest-doppler' >/dev/null \
-   && printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cxF '      EnvironmentFile=/etc/default/inngest-luks' >/dev/null \
-   && ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null; then ok "T1.15d both EnvironmentFile= lines stay unprefixed (fail-closed on a real start)"; else no "T1.15d an EnvironmentFile= line is missing or gained the '-' tolerant prefix — the fail-closed contract is gone"; fi
+if printf '%s\n' "$_LUKS_OPEN_SVCSEC" | grep -cxF '      EnvironmentFile=/etc/default/inngest-doppler' >/dev/null \
+   && printf '%s\n' "$_LUKS_OPEN_SVCSEC" | grep -cxF '      EnvironmentFile=/etc/default/inngest-luks' >/dev/null \
+   && ! printf '%s\n' "$_LUKS_OPEN_SVCSEC" | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null; then ok "T1.15d both EnvironmentFile= lines stay unprefixed in [Service] (fail-closed on a real start)"; else no "T1.15d an EnvironmentFile= line is missing, misplaced, or gained the '-' tolerant prefix — the fail-closed contract is gone"; fi
 # T1.15e MUTATION CONTROL: dropping one condition line must fail T1.15c's own needle —
 # the mutated block is driven through the SAME literal and the SAME count-predicate, so a
 # drifted needle or a laxer predicate breaks this arm too.
 _T115_MUT="$(printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -vxF "$_T115_NEEDLE_LUKS")"
 if printf '%s\n' "$_T115_MUT" | grep -cxF "$_T115_NEEDLE_LUKS" >/dev/null; then no "T1.15e mutation control failed — the T1.15c predicate cannot see a dropped condition"; else ok "T1.15e mutation: a unit missing ConditionPathExists=/etc/default/inngest-luks fails the T1.15c predicate"; fi
-# T1.15f SET PARITY: the condition set must equal the EnvironmentFile= set — a third
-# EnvironmentFile= without a matching condition silently reintroduces the storm.
-_T115_N_EF="$(printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cxE '      EnvironmentFile=/etc/default/[^ ]+' || true)"
-_T115_N_CX="$(printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -cxE '      ConditionPathExists=/etc/default/[^ ]+' || true)"
-if [ "$_T115_N_EF" -gt 0 ] && [ "$_T115_N_EF" = "$_T115_N_CX" ]; then ok "T1.15f every EnvironmentFile= path has a matching [Unit]-section ConditionPathExists (${_T115_N_EF} both ways)"; else no "T1.15f EnvironmentFile=${_T115_N_EF} vs [Unit] ConditionPathExists=${_T115_N_CX} — set parity broken, an unconditioned env file can fail a start"; fi
+# T1.15f SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal
+# the sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair
+# or a directive on any path outside /etc/default/ fails where a count comparison would pass.
+_T115_EF_SET="$(printf '%s\n' "$_LUKS_OPEN_SVCSEC" | sed -n 's/^      EnvironmentFile=//p' | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+_T115_CX_SET="$(printf '%s\n' "$_LUKS_OPEN_UNITSEC" | sed -n 's/^      ConditionPathExists=//p' | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+if [ -n "$_T115_EF_SET" ] && [ "$_T115_EF_SET" = "$_T115_CX_SET" ]; then ok "T1.15f the [Unit] condition path-set equals the [Service] EnvironmentFile path-set"; else no "T1.15f EF set={${_T115_EF_SET}} vs condition set={${_T115_CX_SET}} — an unconditioned env file can fail a start"; fi
 
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
