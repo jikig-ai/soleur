@@ -24,6 +24,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MODULE="$REPO_ROOT/plugins/soleur/skills/product-roadmap/scripts/roadmap-reconcile.sh"
+export SOLEUR_TEST_SUITE_PID=$$   # read by the fake gh `term` walker below; unset or non-numeric means it signals nothing
 
 PASS=0
 FAIL=0
@@ -270,8 +271,13 @@ case "$1 $2" in
       neterr) echo 'error connecting to api.github.com' >&2; exit 1 ;;
       term)   # Signal the script itself: walk up past the command-substitution
               # subshell to the topmost ancestor running the module.
+              # HAZARD: this walk TERMs the outermost ancestor whose argv matches the pattern below. A MUTANT of that match (-v, a dropped
+              # pattern, a catch-all) matches every ancestor and walks up to the top of the user's session. The walk is bounded at this suite's
+              # own PID (SOLEUR_TEST_SUITE_PID) and at pid 1, and signals nothing when that variable is unset; run any mutant of this block
+              # ONLY through plugins/soleur/scripts/run-in-pid-namespace.sh (the namespace makes the test shell PID 1, so the walk stops there).
+              [[ "${SOLEUR_TEST_SUITE_PID:-}" =~ ^[0-9]+$ ]] || { sleep 5; exit 1; }
               p=$PPID; top=""
-              while [[ -r "/proc/$p/cmdline" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -c 'roadmap-reconcile.sh' >/dev/null; do
+              while [[ -r "/proc/$p/cmdline" ]] && [[ "$p" -gt 1 ]] && [[ "$p" != "$SOLEUR_TEST_SUITE_PID" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -c 'roadmap-reconcile.sh' >/dev/null; do
                 top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
               done
               [[ -n "$top" ]] && kill -TERM "$top"; sleep 5; exit 1 ;;
