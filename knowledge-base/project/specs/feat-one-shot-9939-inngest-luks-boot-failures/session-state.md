@@ -22,3 +22,13 @@
 - `soleur:plan` skill (inline agent fallbacks, sequential-fallback disclosure)
 - `soleur:deepen-plan` skill (halt gates 4.5/4.55/4.6-4.12, `lint-guard-contract.py` RC=0)
 - `scripts/betterstack-query.sh`, `scripts/betterstack-assert-absence.sh`, `npx markdownlint-cli2`, `gh`, systemd condition harness
+
+## Review phase (session resumed 2026-10-11)
+
+- Work phase: TDD — RED on all 3 suites, GREEN after impl; commits 27a7fa7, c22c3ab, c7d6e68.
+- Panel: 9 seats (tier none, plan-declared scope-out; design-risk no). PANEL_SHA=9fc3f8d071.
+- Panel findings: 2 P2 + ~15 P3. Fix round 1 = 772c63d379 ([Unit]-scoping, SIGPIPE-safe predicates, parity asserts, comment accuracy). 7-seat targeted round.
+- Fix round 1 findings: 1 new P2 (timer alternation counted either needle) + convergent P3s (EF [Service]-scoping, cardinality-vs-identity, /etc/default infix, vacuity guard, MIN slack). Fix round 2 = 1a59a4b529 (path-set identity via _luks_sec/_luks_sec_vals, per-literal c==1, SVCSEC extraction, MIN=30).
+- Follow-ups filed: #9962 (sibling same-class units), #9963 (unexplained systemd-row shipping path), #9964 (ensure-semgrep broken-binary blind spot).
+- Affected-gate `test-all.sh --affected` queued on repo-global flock behind sibling worktree runs (position 3; measured >1h).
+- Suites green after round 2: 426/426 inngest, 63/63 redis-luks, 30/30 capture (floors exact).
