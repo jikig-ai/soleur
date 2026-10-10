@@ -1469,20 +1469,33 @@ write_files:
       # completion lines would make "gc never ran", "gc ran fine" and "the shipper filtered it"
       # indistinguishable — the lower-bound defect reproduced one layer up.
       #
-      # MATCHED ON THE PARSED `message` FIELD, never the whole line (#7444 F-5). The parse now
-      # happens once per tick inside JQ_TICK (the $z field), not in a per-line helper — the
-      # standalone zerolog_message() the single-jq rewrite orphaned has been deleted. Measured, zot
-      # emits {"level":"info","message":"executing gc","component":"gc","caller":"…"} and
-      # {"level":"error","message":"PatchBlobUpload i/o timeout","caller":"…"}, so all four classes
+      # MATCHED ON PARSED FIELDS, never the whole line (#7444 F-5). The parse happens once per tick
+      # inside JQ_TICK, not in a per-line helper. Measured, zot emits
+      # {"level":"info","message":"executing gc","component":"gc","caller":"…"}, so the gc classes
       # are message-field prefixes. A whole-line substring test instead lets any private-net client
       # send `User-Agent: executing gc` and make EVERY one of its request lines cap-exempt — those
       # lines carry message "HTTP API", so field-anchoring closes the bypass by construction.
+      #
+      # THE UPLOAD ERROR LINE IS CLASSIFIED ON THE PARSED `func` FIELD, not on its message (#9373).
+      # Measured against 7 days of shipped rows and the live heartbeat echo, the real line is
+      # {"level":"error","message":"unexpected error, removing .uploads/ files","error":"unexpected
+      # EOF","caller":"…/routes.go:2190","func":"…/pkg/api.(*RouteHandler).PatchBlobUpload"}: the
+      # message is NOT a PatchBlobUpload prefix, and the earlier message-prefix arm matched zero
+      # rows, so the line was rate-capped while the suite stayed green over a dead arm. `func` is set
+      # by zot on every line, so the arm matches the handler VALUE, suffix-anchored so a module-path
+      # bump still matches. It returns 2, not 0: the line is admitted through the upload sub-quota
+      # (see the call site), because a failing push can emit one per chunk and sharing the 17-slot
+      # lane would starve a panic (the #7444 R12 inversion). $2 is zot's own parsed field; client
+      # bytes in a header, path or journald fragment sit inside strings or do not parse at all.
       is_cap_exempt() {
+        local func="$2"
+        case "$func" in
+          *"(*RouteHandler).PatchBlobUpload") return 2 ;;
+        esac
         case "$1" in
           "executing gc"*)              return 0 ;;
           "gc successfully completed"*) return 0 ;;
           "garbage collected blobs"*)   return 0 ;;
-          PatchBlobUpload*)             return 0 ;;
           # CRASH evidence, not just GROWTH evidence (#7444 R12). The four classes above are all
           # gc/blob-upload — so under a crash loop, which is BOTH the flood the exemption was
           # sized against AND the incident class that motivated this whole change, the rows the
@@ -1503,7 +1516,7 @@ write_files:
         return 1
       }
       # The HTTP-API HALF of an upload-failure PAIRING is cap-exempt too (#7555). zot reports a
-      # failed blob upload as TWO rows: the `PatchBlobUpload` error line (already exempt above)
+      # failed blob upload as TWO rows: the `PatchBlobUpload` error line (exempt above, keyed on func)
       # and an ordinary HTTP-API row carrying `statusCode`, `latency` and `Content-Length`. Only
       # the pairing carries the numbers that distinguish a DEADLINE from an origin fault, and
       # only the first half was surviving the cap. Measured in the 2026-08-13 failure tick:
@@ -1646,9 +1659,11 @@ write_files:
       #
       # statusCode and path are appended AFTER zmsg so existing positional reads keep their
       # meaning; the `read -r` arity below is widened IN THE SAME EDIT, because a field list and
-      # an arity that disagree is exactly the corruption described above.
-      JQ_TICK='def s: if (. == null or . == "") then "-" else (. | tostring) end; (.MESSAGE // "") as $m | (($m | fromjson?) // {}) as $j | [((.__CURSOR // null) | s), (($m // null) | s), ((($j.message?) // null) | s), ((($j.statusCode?) // null) | s), ((($j.path?) // null) | s)] | @tsv'
-      while IFS=$'\t' read -r cur msg zmsg zstatus zpath; do
+      # an arity that disagree is exactly the corruption described above. `func` (#9373) is the
+      # sixth field, appended the same way: zot sets it on EVERY line, so is_cap_exempt matches its
+      # VALUE (the handler), never its presence.
+      JQ_TICK='def s: if (. == null or . == "") then "-" else (. | tostring) end; (.MESSAGE // "") as $m | (($m | fromjson?) // {}) as $j | [((.__CURSOR // null) | s), (($m // null) | s), ((($j.message?) // null) | s), ((($j.statusCode?) // null) | s), ((($j.path?) // null) | s), ((($j.func?) // null) | s)] | @tsv'
+      while IFS=$'\t' read -r cur msg zmsg zstatus zpath zfunc; do
         # Translate sentinels back to the empty string the downstream code expects. Done here,
         # once, so no consumer has to know about the wire representation.
         [ "$cur" = "-" ] && cur=""
@@ -1704,10 +1719,14 @@ write_files:
             panic:*|"fatal error"*|"runtime error"*|\[signal*) _zclass="$msg" ;;
           esac
         fi
+        # zfunc arrives sentinelled (`-` when absent), which matches no arm. is_cap_exempt is
+        # TRI-STATE: 0 = shared exempt lane, 2 = the func-keyed upload error line (sub-quota),
+        # 1 = ordinary. rc 2 is FALSE inside a bare `if`, so its status is read explicitly.
         _upload_only=0
-        if is_cap_exempt "$_zclass"; then
+        is_cap_exempt "$_zclass" "$zfunc"; _cx=$?
+        if [ "$_cx" = "0" ]; then
           _exempt=1
-        elif is_upload_failure_evidence "$zstatus" "$zpath"; then
+        elif [ "$_cx" = "2" ] || is_upload_failure_evidence "$zstatus" "$zpath"; then
           _exempt=1; _upload_only=1
         else
           _exempt=0
