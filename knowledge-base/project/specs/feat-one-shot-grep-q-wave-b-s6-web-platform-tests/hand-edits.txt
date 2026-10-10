@@ -1,6 +1,6 @@
 # S6 hand edits that are NOT a plain grep -q -> grep -c transform, keyed by BASE-side line: path:OLD[-OLD2]:reason, or path:OLD+:reason for lines inserted after base line OLD (verify input).
 # Measured on the planning rehearsal (clone of this branch after the one planning merge of origin/main df1891cbbb): verify prints verified: 156, hand-edited: 24, unexplained: 0
-# (22 base lines plus 2 inserted lines; 156 + 22 = 178). Re-derive in Phase 0 if origin/main moved: line numbers are base-side and the entries must be re-keyed.
+# (22 base lines changed; 24 hand-edited added lines: one true insertion at self-heal 532+ and ghcr 167 turning into two lines; 156 + 22 = 178). Re-derive in Phase 0 if origin/main moved: line numbers are base-side and the entries must be re-keyed.
 # Kinds: -m (output-bearing early exit moved into a process substitution), label (display text only), kept-and-marked (the line must show the shape:
 # a demonstration, a mutation recipe or a needle for bytes of a file-exact carrier; marker "# sigpipe-demo: intentional" appended), restructured (a marker cannot follow a
 # line-continuation backslash, so the text moves into one marked variable).
@@ -19,10 +19,10 @@ apps/web-platform/infra/cron-egress-self-heal.test.sh:537:restructured: uses the
 apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:93-94:kept-and-marked: the D1/D2 differential demonstrations (the unfixed shapes must stay piped to false-FAIL)
 apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:118:label: the quoted shape named in the pass label reworded (display text only)
 apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:158:kept-and-marked: the R1 mutation recipe that re-introduces the piped shape
-apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:178:kept-and-marked: a needle that must equal the companion suite's message byte for byte
+apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:178:kept-and-marked: the replacement payload mutate() injects into a guard copy (lines 210 and 226); it must itself contain the piped shape so the N1a self-match is armed (converting it reds N1a; the companion suite's real message is a different string)
 apps/web-platform/infra/workspaces-luks-freeze.test.sh:1500-1501:kept-and-marked: mutation M3 (re-introduce a piped predicate) and its landing check
 apps/web-platform/infra/registry-luks-launch-gate.test.sh:83:kept-and-marked: needle for a line of cloud-init-registry.yml, a file-exact carrier that stays unconverted
 apps/web-platform/infra/registry-luks.test.sh:181:kept-and-marked: needle for the same carrier line
 apps/web-platform/infra/registry-luks.test.sh:278:kept-and-marked: mutation recipe that deletes the same carrier line
-apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh:461:kept-and-marked: message text that run-registered-suites.test.sh cites as the nested-fragment sample
-apps/web-platform/test/infra/ghcr-blocked-alert.test.sh:167:restructured: needle for the registry carrier's emitter line moved into one marked variable (R_EMIT_RE)
+apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh:461:kept-and-marked: pass-message text named in a historical comment at run-registered-suites.test.sh:828; convertible by rewording (no assertion reads it), kept so that citation stays byte-true
+apps/web-platform/test/infra/ghcr-blocked-alert.test.sh:167:restructured: needle for the cloud-init-registry.yml emitter line (carrier bytes) moved into one marked variable (R_EMIT_RE)

@@ -191,7 +191,7 @@ hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh'
 #      `yes | grep -q y` positive control that proves the environment can exhibit SIGPIPE
 #      at all. A test that demonstrates a bug must be allowed to contain it. The marker is
 #      per-LINE and must be typed out, so it cannot be applied by accident or by a glob.
-# A TRAILING comment on the line (whitespace before the `#`, and nothing but whitespace or end of line after the words), so a
+# A TRAILING comment on the line (whitespace before the `#`, and the words followed by whitespace or end of line, so a trailing reason in parentheses after them is accepted), so a
 # `; echo "# sigpipe-demo: intentional"` tail does not exempt the line. KNOWN HOLE (Item F, measured in the S4 review): a string that
 # contains the words followed by a space (`"a # sigpipe-demo: intentional b"`) still matches, and the marker is not capped per file.
 ALLOW_MARKER='[[:space:]]#[[:space:]]*sigpipe-demo:[[:space:]]*intentional([[:space:]]|$)'
@@ -438,7 +438,7 @@ SWEEP_CANARY_COUNT=9   # pinned beside SWEEP_CANARIES: the probe compares agains
 # KNOWN HOLE (named, not covered): a glob row at slack 0 (either mode) pins the COUNT per row, not the sites, so moving one hit between two files under
 # the same glob (add one, delete one) stays green. File-exact `=` rows would close it, but `_ts_re` below classifies a file-exact test path as
 # a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
-# S6 took apps/web-platform/ (all but the six file-exact carrier rows below) to zero; its marked lines are demonstrations, mutation recipes and needles for carrier bytes, and the
+# S6 took apps/web-platform/ (all but the six file-exact carrier rows below) to zero; its marked lines are demonstrations, mutation recipes and their landing checks, needles for carrier bytes, and two message or payload strings, and the
 # apps/web-platform/infra/ root canary is witnessed today by those six rows going stale (not ablation-proved), so it matters once they convert.
 # S3 (scripts/) and S4 (tests/) took their subtrees to zero and deleted their rows; S5 did the same for the plugins/soleur/ test files outside
 # plugins/soleur/test/ (its five counted pins stay). The test-shaped row globs are pinned (GATED_TEST_ROWS), so a new or widened one, however it is
@@ -530,7 +530,7 @@ sweep_verdict() {
     if (( n == 0 )); then
       SWEEP_FAIL=1; echo "FAIL: stale deferral: ${r_glob[i]} has no hits left — delete its row from SWEEP_DEFERRALS in the PR that converted it"
     elif (( n > ceil )); then
-      SWEEP_FAIL=1; echo "FAIL: deferral ceiling exceeded: ${r_glob[i]} has $n hits, ceiling $ceil — a new early-exit pipe landed in a deferred subtree; use the forms in this file's header"
+      SWEEP_FAIL=1; echo "FAIL: deferral ceiling exceeded: ${r_glob[i]} has $n hits, ceiling $ceil — a new early-exit pipe landed in a deferred subtree; use the forms in this file's header (a file-exact apps/web-platform/infra row feeds a host user_data: read the comment above SWEEP_DEFERRALS before converting it)"
     elif [[ "$mode" == "=" ]] && (( n < ceil )); then
       SWEEP_FAIL=1; echo "FAIL: deferral ceiling is loose: ${r_glob[i]} has $n hits, ceiling $ceil — lower the ceiling to $n"
     fi
@@ -549,6 +549,7 @@ sweep_verdict() {
     echo "           a bare pipeline under set -e      ->  out=\$(producer); grep -q P <<<\"\$out\"   (keeps the producer's status)"
     echo "           POSIX sh, Terraform inline, runcmd, or a value that may be empty  ->  producer | grep -cE P >/dev/null   (same exit status as -q, reads all input, no newline added)"
     echo "           an output-bearing  | grep -m1 P  in bash, with a value that is never empty  ->  grep -m1 P <<<\"\$V\" | ..."
+    echo "           an output-bearing  producer | grep -m1 P  (value may be empty, or a producer)  ->  grep -m1 P < <(producer)"
     echo "           an intentional demo of the shape  ->  append  # sigpipe-demo: intentional  to that line"
     echo "  A subtree that reached zero stays at zero: do NOT add a deferral row for it (the test-shaped and production row sets are pinned); rewrite the hit."
   fi
@@ -868,7 +869,7 @@ own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2');
 # The REAL table (Waves A2 and B). The synthetic rows above prove the arithmetic; these prove the table this file SHIPS still owns what it
 # must and nothing it must not. The scan runs scan_sweep on a scratch root (so SWEEP_PATHSPEC and PATTERN_V2 are exercised, not
 # only the verdict) and the verdict reads the live SWEEP_DEFERRALS. Planted: one violating line under each subtree a wave took
-# to zero (S3: scripts/, S4: tests/ at two depths and in a non-.sh extension, S5: plugins/soleur/ at seven depths and shapes), plus a compliant file under the four roots no violator satisfies (scripts/, plugins/soleur/, apps/web-platform/scripts/, apps/cla-evidence/; the tests/ and plugins/soleur/{scripts,skills}/ violators cover the rest) so the
+# to zero (S3: scripts/, S4: tests/ at two depths and in a non-.sh extension, S5: plugins/soleur/ at seven depths and shapes, S6: apps/web-platform/ at seven depths and shapes), plus a compliant file under the roots no violator satisfies (scripts/, plugins/soleur/, apps/cla-evidence/; the apps/web-platform/scripts/ plant below is now redundant with its violator and kept as a harmless control; the tests/ and plugins/soleur/{scripts,skills}/ violators cover the rest) so the
 # population is not UNRESOLVED. To add a canary: append its path to real_paths and bump REAL_PLANTED; nothing else moves.
 _real_undeferred() { # <scan root> -> each path the CURRENT SWEEP_DEFERRALS leaves outside every row, one per line
   local v

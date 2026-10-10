@@ -175,7 +175,7 @@ echo "== N: each normalisation in the residual guard is necessary =="
 STRIP_STAGE="  | sed 's/\"[^\"]*\"//g' \\"
 FOLD_STAGE="  | sed -E ':b;/\\|[[:space:]]*\$/{N;s/\\|[[:space:]]*\\n[[:space:]]*/| /;bb}' \\"
 PASS_ANCHOR='pass "every check matches a here-string'
-SELF_MATCH_MSG='pass "never write producer | grep -qF x — every check matches a here-string'  # sigpipe-demo: intentional (needle equal to the companion suite message)
+SELF_MATCH_MSG='pass "never write producer | grep -qF x — every check matches a here-string'  # sigpipe-demo: intentional (payload injected into a guard copy; it must itself contain the piped shape so N1a self-match is armed)
 
 mutate() {  # $1 = src, $2 = dst, $3 = exact find, $4 = replace ("" deletes find's line)
   # Non-zero on ANY no-op: anchor absent (2) or output identical to input (3).
