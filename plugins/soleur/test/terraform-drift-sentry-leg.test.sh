@@ -371,14 +371,15 @@ row B4 "empty SENTRY_IAC_AUTH_TOKEN: exit_code=1, named ::error::, terraform nev
 
 b5() {
   local bad=0 d want_rc want_stack
-  for spec in "apps/web-platform/infra:2:web-platform" "infra/github:0:infra/github"; do
+  for spec in "apps/web-platform/infra:2:web-platform" "infra/github:0:infra/github" "infra/github:2:infra/github" "infra/github:1:infra/github"; do
     IFS=: read -r d want_rc want_stack <<<"$spec"
     run_plan "$TMP/bin" "$d" "$REPO_ROOT/$d" "STUB_TF_RC=$want_rc"
     if [[ "$d" == "infra/github" ]]; then
       # (#9362) the github leg injects nothing from prd_terraform: terraform runs directly, doppler never.
       grep -q '^DOPPLER_ARGV' "$RUN_LOG" && { echo "    $d: doppler was invoked (a prd_terraform injection is back)"; bad=1; }
       [[ "$(tf_calls)" -eq 1 ]] || { echo "    $d: terraform plan was not invoked exactly once"; bad=1; }
-      grep -q '^TF_ARGV plan -detailed-exitcode' "$RUN_LOG" || { echo "    $d: plan -detailed-exitcode not run"; bad=1; }
+      # Exact argv, as the sentry leg pins it: -refresh=false or -target would blind the drift check.
+      [[ "$(sed -n 's/^TF_ARGV //p' "$RUN_LOG" | head -1)" == "$EXACT_ARGV" ]] || { echo "    $d: argv is not exactly '$EXACT_ARGV'"; bad=1; }
     else
       grep -q '^DOPPLER_ARGV run --preserve-env --name-transformer tf-var -- terraform plan -detailed-exitcode' "$RUN_LOG" \
         || { echo "    $d: doppler tf-var path not taken"; bad=1; }

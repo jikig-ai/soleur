@@ -94,6 +94,30 @@ for st in steps:
         bad.append("g2:github-env-write:%s" % nm)
     if "DOPPLER_TOKEN" in (st.get("env") or {}) and nm != BACKEND:
         bad.append("g2:doppler-token-env:%s" % nm)
+# Every env: at workflow, job and step level: no Terraform variable or CLI-args channel, and the Tier-A
+# DOPPLER_TOKEN only on the backend-key step. The `run:` scan above cannot see these.
+def env_keys(d):
+    return [str(k) for k in ((d or {}).get("env") or {})]
+for where, keys in [("workflow", env_keys(doc)), ("job", env_keys(job))] + [("step:%s" % st.get("name", "?"), env_keys(st)) for st in steps]:
+    for k in keys:
+        if k.startswith("TF_"):
+            bad.append("g2:env-tf-channel:%s:%s" % (where, k))
+        if k.startswith("DOPPLER_") and not where.startswith("step:"):
+            bad.append("g2:env-doppler-above-step:%s:%s" % (where, k))
+# `uses:` is an allow-list: a Doppler fetch action (inject-env-vars) is a second injection channel.
+USES_OK = ("actions/checkout@", "hashicorp/setup-terraform@", "./.github/actions/infra-credentials", "./.github/actions/mint-infra-app-token")
+for st in steps:
+    u = str(st.get("uses", ""))
+    if u and not u.startswith(USES_OK):
+        bad.append("g2:uses-not-allowed:%s" % u)
+# `-var` / `-var-file` / `-refresh=false` on any terraform plan, apply or import: an inline value or a stale plan.
+for st in steps:
+    for ln in re.sub(r"\s*\\\n\s*", " ", str(st.get("run", ""))).splitlines():
+        if re.search(r"terraform\s+(plan|apply|import)\b", ln) and re.search(r"\s-(var|var-file|refresh=false|target)\b", ln):
+            bad.append("g2:terraform-flag:%s" % st.get("name", "?"))
+bk = [st for st in steps if st.get("name") == BACKEND]
+bkrun = str(bk[0].get("run", "")) if len(bk) == 1 else ""
+need(len(bk) == 1 and bkrun.count("^[A-Za-z0-9/+=_.-]+$") == 2 and "=~" in bkrun and bkrun.index("=~") < bkrun.index('>> "$GITHUB_ENV"'), "g2:backend-shape-check")
 got = set(re.findall(r"doppler secrets get ([A-Za-z0-9_]+)", "\n".join(str(st.get("run", "")) for st in steps)))
 need(got == {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}, "g2:secrets-get-names=%s" % sorted(got))
 gi = [i for i, st in enumerate(steps) if st.get("name") == GATE]
@@ -103,14 +127,22 @@ need(len(gi) == 1 and len(pi) == 1 and len(ai) == 1, "g2:gate-missing")
 if len(gi) == 1 and len(pi) == 1 and len(ai) == 1:
     gs = steps[gi[0]]; grun = str(gs.get("run", ""))
     need(pi[0] < gi[0] < ai[0], "g2:gate-order")
+    need(ai[0] == gi[0] + 1, "g2:gate-not-adjacent-to-apply")
+    ap = steps[ai[0]]
+    need("continue-on-error" not in ap and "if" not in ap, "g2:apply-may-be-skipped-or-tolerated")
+    need("terraform apply -auto-approve -input=false tfplan " in str(ap.get("run", "")), "g2:apply-not-the-gated-plan")
+    need(sum(1 for st in steps if "terraform apply" in re.sub(r"(?m)^\s*#.*$", "", str(st.get("run", "")))) == 1, "g2:apply-count")
     need(gs.get("working-directory") == "${{ env.INFRA_DIR }}", "g2:gate-working-directory")
     need("continue-on-error" not in gs and "if" not in gs, "g2:gate-may-be-skipped")
-    need("set -euo pipefail" in grun, "g2:gate-pipefail")
+    code = [l.strip() for l in re.sub(r"\s*\\\n\s*", " ", grun).splitlines() if l.strip() and not l.strip().startswith("#")]
+    need(len(code) == 3 and code[0] == "set -euo pipefail", "g2:gate-pipefail")
+    need(all(l.startswith("terraform show -json tfplan | bash ") for l in code[1:]), "g2:gate-body-allowlist")
+    need("shell" not in gs and "env" not in gs, "g2:gate-shell-or-env")
     need("set -x" not in grun and "xtrace" not in grun, "g2:gate-xtrace")
     flat = re.sub(r"\s*\\\n\s*", " ", grun)
     lines = [l for l in flat.splitlines() if "verify-ruleset-required-checks.sh" in l]
-    pat = re.compile(r'terraform show -json tfplan \| bash "(\$\{GITHUB_WORKSPACE\}/scripts/verify-ruleset-required-checks\.sh)" - (github_repository_ruleset\.[a-z_]+) "(\$\{GITHUB_WORKSPACE\}/scripts/[A-Za-z0-9_.-]+\.json)"\s*$')
-    ms = [pat.search(l) for l in lines]
+    pat = re.compile(r'^\s*terraform show -json tfplan \| bash "(\$\{GITHUB_WORKSPACE\}/scripts/verify-ruleset-required-checks\.sh)" - (github_repository_ruleset\.[a-z_]+) "(\$\{GITHUB_WORKSPACE\}/scripts/[A-Za-z0-9_.-]+\.json)"\s*$')
+    ms = [pat.match(l) for l in lines]
     need(len(lines) == 2, "g2:gate-invocations=%d" % len(lines))
     need(all(ms), "g2:gate-path-or-shape")
     want = {"github_repository_ruleset.ci_required": "${GITHUB_WORKSPACE}/scripts/ci-required-ruleset-canonical-required-status-checks.json",
@@ -230,6 +262,44 @@ row g2-gate-relative-path "g2:gate-path-or-shape" 'bash "${GITHUB_WORKSPACE}/scr
 row g2-gate-no-pipefail  "g2:gate-pipefail"    "set -euo pipefail
           # Pre-apply by-value gate" "set -eu
           # Pre-apply by-value gate"
+# The gate's EFFECT, not only its text (review #9913): each of these leaves the gate step present and would
+# let a rebound apply through, so each must name its own reason.
+row g2-apply-always      "g2:apply-may-be-skipped-or-tolerated" "      - name: Terraform apply
+        working-directory: \${{ env.INFRA_DIR }}
+" "      - name: Terraform apply
+        if: always()
+        working-directory: \${{ env.INFRA_DIR }}
+"
+row g2-apply-not-gated-plan "g2:apply-not-the-gated-plan" 'terraform apply -auto-approve -input=false tfplan 2>&1 | tee' 'terraform apply -auto-approve -input=false 2>&1 | tee'
+row g2-second-apply      "g2:apply-count"      "      - name: Terraform init
+" '      - name: Other apply
+        run: terraform apply -auto-approve -replace=github_repository_ruleset.ci_required
+      - name: Terraform init
+'
+row g2-step-before-apply "g2:gate-not-adjacent-to-apply" "      - name: Terraform apply
+" '      - name: Interlude
+        run: echo hi
+
+      - name: Terraform apply
+'
+row g2-gate-set-plus-e   "g2:gate-pipefail"    "set -euo pipefail
+          # Pre-apply by-value gate" "set -euo pipefail
+          set +e
+          # Pre-apply by-value gate"
+row g2-gate-prefix-or    "g2:gate-body-allowlist" '          terraform show -json tfplan | bash "${GITHUB_WORKSPACE}/scripts/verify-ruleset-required-checks.sh" \
+            - github_repository_ruleset.ci_required' '          true || terraform show -json tfplan | bash "${GITHUB_WORKSPACE}/scripts/verify-ruleset-required-checks.sh" \
+            - github_repository_ruleset.ci_required'
+row g2-job-env-tf-var    "g2:env-tf-channel"   "    timeout-minutes: 10
+" "    timeout-minutes: 10
+    env:
+      TF_VAR_actions_integration_id: \${{ vars.ACTIONS_INTEGRATION_ID }}
+"
+row g2-uses-fetch-action "g2:uses-not-allowed" "      - name: Terraform init
+" '      - uses: dopplerhq/secrets-fetch-action@v1
+      - name: Terraform init
+'
+row g2-plan-var-flag     "g2:terraform-flag"   "terraform plan -no-color -input=false -out=tfplan" "terraform plan -no-color -input=false -var=actions_integration_id=57789 -out=tfplan"
+row g2-backend-unchecked "g2:backend-shape-check" 'if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then' 'if false; then'
 # Must-PASS: a harmless comment added to the real workflow leaves every pin satisfied.
 cp "$WF" "$T/m.yml"; printf '\n# harmless trailing comment\n' >> "$T/m.yml"
 out="$(python3 "$T/check.py" "$T/m.yml")"
@@ -243,14 +313,18 @@ CI_CAN="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.
 CLA_CAN="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
 CI_ADDR=github_repository_ruleset.ci_required
 CLA_ADDR=github_repository_ruleset.cla_required
+CANARY="CANARY-SECRET-9362"   # planted in .variables: it must never appear in any output of the gate
+# A rebound id that is guaranteed to differ from every canonical row.
+REB=$(( $(jq -s '[.[][].integration_id] | max' "$CI_CAN" "$CLA_CAN") + 1 ))
 mkplan() { # <out> <addr> <canonical> [jq filter over the required_check array] [action]
   local out="$1" addr="$2" can="$3" edit="${4:-.}" action="${5:-update}"
-  jq --arg addr "$addr" --arg action "$action" --slurpfile can "$can" "
+  jq -c --arg addr "$addr" --arg action "$action" --slurpfile can "$can" "
     .resource_changes[0] as \$rc
     | .resource_changes = [\$rc
         | .address = \$addr
         | .change.actions = [\$action]
-        | .change.after.rules[0].required_status_checks[0].required_check = (\$can[0] | $edit)]" "$FIX" > "$out"
+        | .change.after.rules[0].required_status_checks[0].required_check = (\$can[0] | $edit)]
+    | .variables = {github_infra_app_private_key: {value: \"$CANARY\"}}" "$FIX" > "$out"
 }
 # A gate-rows run reports its own tally; it never touches the suite's ledger, so a stub run can be scored.
 gate_rows() { # <script>  -> prints "ok|FAIL <name>" lines
@@ -258,7 +332,12 @@ gate_rows() { # <script>  -> prints "ok|FAIL <name>" lines
   chk() { # <name> <want rc> <script args...>   (stdin from $d/in)
     local name="$1" want="$2" rc=0; shift 2
     bash "$sh" "$@" < "$d/in" > "$d/out" 2>&1 || rc=$?
-    if [[ "$rc" == "$want" ]]; then echo "ok $name"; else echo "FAIL $name (want rc=$want got rc=$rc)"; fi
+    if [[ "$rc" != "$want" ]]; then echo "FAIL $name (want rc=$want got rc=$rc)"
+    elif grep -q "$CANARY" "$d/out"; then echo "FAIL $name (the plan's variable value reached the output)"
+    elif [[ -n "${WANT_OUT:-}" ]] && ! grep -qE "$WANT_OUT" "$d/out"; then echo "FAIL $name (output lacks /$WANT_OUT/)"
+    elif [[ -n "${NOT_OUT:-}" ]] && grep -qE "$NOT_OUT" "$d/out"; then echo "FAIL $name (output has /$NOT_OUT/)"
+    else echo "ok $name"; fi
+    WANT_OUT=""; NOT_OUT=""
   }
   local cfg addr can
   for cfg in "ci|$CI_ADDR|$CI_CAN" "cla|$CLA_ADDR|$CLA_CAN"; do
@@ -267,24 +346,45 @@ gate_rows() { # <script>  -> prints "ok|FAIL <name>" lines
     mkplan "$d/in" "$addr" "$can" "reverse" update;           chk "$cfg: rows reordered pass" 0 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "map(. + {extra:\"x\"})" update; chk "$cfg: extra provider fields pass" 0 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "." no-op;                  chk "$cfg: no-op plan equal to canonical passes" 0 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = 57789" update;  chk "$cfg: FIRST row rebound is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[-1].integration_id = 57789" update; chk "$cfg: LAST row rebound is RED" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" update;  WANT_OUT='^::error title=required-check-bindings::.*no override|^- \{|^\+ \{' chk "$cfg: FIRST row rebound is RED, with annotation and rows" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ".[-1].integration_id = $REB" update; chk "$cfg: LAST row rebound is RED" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" ".[0].context = \"renamed\"" update;   chk "$cfg: a context renamed is RED" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "del(.[0])" update;         chk "$cfg: a context dropped is RED" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" ". + [{context:\"extra\",integration_id:15368}]" update; chk "$cfg: a context added is RED" 1 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" ".[0].integration_id = null" update;   chk "$cfg: a null integration_id is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = 57789" no-op;   chk "$cfg: a rebound under a no-op action is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "[]" update;                chk "$cfg: an empty required set is exit 2" 2 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" no-op;   chk "$cfg: a rebound under a no-op action is RED" 1 - "$addr" "$can"
+    local n i; n="$(jq length "$can")"
+    for ((i = 0; i < n; i++)); do
+      mkplan "$d/in" "$addr" "$can" ".[$i].integration_id = $REB" update; chk "$cfg: row $i rebound is RED" 1 - "$addr" "$can"
+    done
+    mkplan "$d/in" "$addr" "$can" ".[0].integration_id |= empty" update; chk "$cfg: an ABSENT integration_id is RED" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ". + [.[0] + {integration_id: $REB}]" update; chk "$cfg: a duplicated context with another id is RED" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" ".[0].context = \"x\\n::error::forged\"" update; NOT_OUT='^::error::forged' WANT_OUT='::error title=required-check-bindings::' chk "$cfg: a control character in a context cannot forge a command" 1 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" "." replace; jq -c '.resource_changes[0].change.actions = ["delete","create"]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
+    WANT_OUT='^OK: ' chk "$cfg: a replace (delete+create) is judged on its planned end state" 0 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" "." update; WANT_OUT='^OK: ' chk "$cfg: the OK line is greppable; file mode reads the same plan" 0 "$d/in" "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" "." update; jq -c '.resource_changes += [.resource_changes[0]]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
+    WANT_OUT='required-check-gate-undecided' chk "$cfg: a duplicated address is exit 2, with its annotation" 2 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" "." update; chk "$cfg: a prefix of the address matches nothing (exit 2)" 2 - "${addr%_required}" "$can"
+    chk "$cfg: an address with odd characters is exit 2" 2 - "$addr x" "$can"
+    mkplan "$d/in" "$addr" "$can" "[]" update;                WANT_OUT='required-check-gate-undecided' chk "$cfg: an empty required set is exit 2" 2 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "." update;                 chk "$cfg: an absent address is exit 2" 2 - github_repository_ruleset.nope "$can"
-    mkplan "$d/in" "$addr" "$can" "." update; jq '.resource_changes[0].change.after = null | .resource_changes[0].change.actions = ["delete"]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
-    chk "$cfg: a delete (after null) is exit 2" 2 - "$addr" "$can"
+    mkplan "$d/in" "$addr" "$can" "." update; jq -c '.resource_changes[0].change.after = null | .resource_changes[0].change.actions = ["delete"]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
+    WANT_OUT='being deleted' chk "$cfg: a delete (after null) is exit 2, named as a delete" 2 - "$addr" "$can"
     mkplan "$d/in" "$addr" "$can" "." update
     printf '[]' > "$d/can"; chk "$cfg: an empty canonical is exit 2" 2 - "$addr" "$d/can"
     printf '{}' > "$d/can"; chk "$cfg: a non-array canonical is exit 2" 2 - "$addr" "$d/can"
     jq '. + [.[0]]' "$can" > "$d/can"; chk "$cfg: a duplicate-context canonical is exit 2" 2 - "$addr" "$d/can"
     jq '.[0].integration_id = "15368"' "$can" > "$d/can"; chk "$cfg: a string-id canonical is exit 2" 2 - "$addr" "$d/can"
   done
-  : > "$d/in"; chk "empty stdin is exit 2" 2 - "$CI_ADDR" "$CI_CAN"
+  # A plan of both rulesets plus an unrelated resource, as the real run feeds it.
+  mkplan "$d/a" "$CI_ADDR" "$CI_CAN" "." update; mkplan "$d/b" "$CLA_ADDR" "$CLA_CAN" "." update
+  jq -c -s '.[0] as $a | .[1] as $b | $a | .resource_changes = [$a.resource_changes[0], $b.resource_changes[0], {address:"github_repository.soleur_marketplace",change:{actions:["no-op"],after:{name:"x"}}}]' "$d/a" "$d/b" > "$d/in"
+  chk "a two-ruleset plan with an unrelated resource passes for ci" 0 - "$CI_ADDR" "$CI_CAN"
+  chk "a two-ruleset plan with an unrelated resource passes for cla" 0 - "$CLA_ADDR" "$CLA_CAN"
+  # The unmodified real capture (15 checks incl. a CodeQL row): its provider row shape is read, and it differs from the canonical.
+  cp "$FIX" "$d/in"; WANT_OUT='planned 15, canonical 23' chk "the real capture's row shape is read (exit 1, planned 15)" 1 - "$CI_ADDR" "$CI_CAN"
+  : > "$d/in"; WANT_OUT='required-check-gate-undecided' chk "empty stdin is exit 2" 2 - "$CI_ADDR" "$CI_CAN"
   chk "no arguments is exit 2" 2
 }
 echo "--- Guard 1: by-value gate script"
@@ -306,8 +406,53 @@ else
   else fail "H-gate-stub: an always-exit-0 script passed every gate row (the rows cannot fail)"; fi
 fi
 
+# --- Guard 2b (#9362): the gate step EXECUTED, so a text pin cannot be satisfied by a step that no longer gates ---
+echo "--- Guard 2b: the gate step, executed against a stub terraform"
+mkdir -p "$T/x/bin" "$T/x/infra"
+python3 - "$WF" > "$T/x/gate-step.sh" <<'PY'
+import sys, yaml
+steps = yaml.safe_load(open(sys.argv[1]))["jobs"]["apply"]["steps"]
+print([s for s in steps if s.get("name") == "Gate planned required-check bindings (by value, pre-apply)"][0]["run"])
+PY
+printf '#!/usr/bin/env bash\n[[ "$1 $2 $3" == "show -json tfplan" ]] || exit 99\ncat "$STUB_PLAN"\n' > "$T/x/bin/terraform"; chmod +x "$T/x/bin/terraform"
+mk2() { # <out> <ci edit> <cla edit>
+  mkplan "$T/x/a" "$CI_ADDR" "$CI_CAN" "$2" update; mkplan "$T/x/b" "$CLA_ADDR" "$CLA_CAN" "$3" update
+  jq -c -s '.[0] | .resource_changes = [.resource_changes[0]]' "$T/x/a" > "$T/x/a1"
+  jq -c -s '.[0].resource_changes += [.[1].resource_changes[0]] | .[0]' "$T/x/a1" "$T/x/b" > "$1"
+}
+run_gate() { # <plan> [step script] -> the step's exit code
+  local rc=0
+  (cd "$T/x/infra" && PATH="$T/x/bin:$PATH" GITHUB_WORKSPACE="$REPO_ROOT" STUB_PLAN="$1" bash --noprofile --norc -e "${2:-$T/x/gate-step.sh}" > "$T/x/out" 2>&1) || rc=$?
+  echo "$rc"
+}
+mk2 "$T/x/clean" . .;                               [[ "$(run_gate "$T/x/clean")" == 0 ]] && pass "G2b: clean plans pass the executed gate step" || fail "G2b: clean plans pass the executed gate step" "$(tail -3 "$T/x/out")"
+mk2 "$T/x/cirb" ".[0].integration_id = $REB" .;     [[ "$(run_gate "$T/x/cirb")" != 0 ]] && pass "G2b: a rebound ci_required id stops the executed gate step" || fail "G2b: a rebound ci_required id stops the executed gate step"
+mk2 "$T/x/clarb" . ".[0].integration_id = $REB";    [[ "$(run_gate "$T/x/clarb")" != 0 ]] && pass "G2b: a rebound cla_required id stops the executed gate step" || fail "G2b: a rebound cla_required id stops the executed gate step"
+: > "$T/x/empty";                                   [[ "$(run_gate "$T/x/empty")" != 0 ]] && pass "G2b: a terraform show that prints nothing stops the executed gate step" || fail "G2b: a terraform show that prints nothing stops the executed gate step"
+# Harness row: the same rebound plan must pass a step whose `set -e` is switched off, so the rows above can fail.
+sed 's/^set -euo pipefail$/set +e/' "$T/x/gate-step.sh" > "$T/x/gate-step-open.sh"
+if cmp -s "$T/x/gate-step.sh" "$T/x/gate-step-open.sh"; then fail "H-gate-exec: the mutant step did not differ"
+elif [[ "$(run_gate "$T/x/cirb" "$T/x/gate-step-open.sh")" == 0 ]]; then pass "H-gate-exec: a step with errexit off lets a rebound ci_required through (the executed rows can fail)"
+else fail "H-gate-exec: a step with errexit off still stopped the rebound plan (the executed rows are blind to it)"; fi
+
+# --- the gated addresses are exactly the rulesets that carry required checks (a new one must be gated or the suite reddens) ---
+_gated="$(python3 - "$REPO_ROOT" <<'PY'
+import glob, re, sys
+names = set()
+for f in glob.glob(sys.argv[1] + "/infra/github/*.tf"):
+    t = re.sub(r"(?m)^\s*#.*$", "", open(f).read())
+    for part in re.split(r'(?m)^resource "github_repository_ruleset" ', t)[1:]:
+        nm = re.match(r'"([a-z_]+)"', part).group(1)
+        if "required_check" in part.split("\nresource ")[0]:
+            names.add(nm)
+print(" ".join(sorted(names)))
+PY
+)"
+if [[ "$_gated" == "ci_required cla_required" ]]; then pass "G2c: the rulesets carrying required checks are exactly the two the gate covers"
+else fail "G2c: the rulesets carrying required checks differ from the two the gate covers" "got [$_gated]; gate the new address in the workflow, the checker's want-map and a canonical"; fi
+
 # Floors (printf + exit, never through fail()): the control, the mutation rows, Guard 2 and Guard 1.
-MIN_ASSERTIONS=61
+MIN_ASSERTIONS=121
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi

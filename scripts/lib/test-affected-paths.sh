@@ -348,6 +348,9 @@ AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
   "scripts/lib/canonicalize-required-status-checks.sh"    # #9362: the projection the gate shares
   "scripts/ci-required-ruleset-canonical-required-status-checks.json"      # #9362: gate input
   "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"  # #9362: gate input
+  "tests/scripts/fixtures/tfplan-real-ruleset-baseline.json"               # #9362: the real plan capture the rows are built from
+  ".github/actions/infra-credentials/"                    # #9362: the loader that supplies every Terraform input the apply now takes
+  "infra/github/"                                         # #9362: the rulesets the gated addresses must cover (G2c)
   "tests/scripts/test-apply-github-infra-mint-shape.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )

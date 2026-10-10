@@ -2,7 +2,7 @@
 # via `doppler run --name-transformer tf-var` — except on the apps/web-platform/infra/sentry
 # leg, which binds the SENTRY_IAC_AUTH_TOKEN repository secret as the raw
 # `SENTRY_AUTH_TOKEN` and runs no `doppler run` (#6612), and on the infra/github leg, which
-# injects nothing from prd_terraform (#9362). R2 backend credentials are extracted
+# feeds no Terraform variable from prd_terraform (#9362). R2 backend credentials are extracted
 # separately via `doppler secrets get --plain` (not through --name-transformer,
 # which would convert them to TF_VAR_* format and break S3 auth).
 # Plan output is sanitized before posting to GitHub issues.
@@ -52,9 +52,10 @@ jobs:
           # Authenticates as apply-github-infra.yml's Terraform does:
           # the soleur-infra App key from the infra-credentials loader (infra
           # mode, ADR-241 D5; the soleur-ai pair in prd_terraform is the #8209
-          # eviction sentinel). Since #9362 this leg injects NOTHING from
-          # prd_terraform (no doppler run, no tf-var transformer), the same inputs
-          # as the apply: every root variable has a default and the App key comes
+          # eviction sentinel). Since #9362 no Terraform variable on this leg
+          # is fed from prd_terraform (no doppler run, no tf-var transformer; the
+          # step env below still names the Doppler config, inert on this leg), the
+          # same variable inputs as the apply: every root variable has a default and the App key comes
           # from the loader. A value planted in prd_terraform therefore cannot
           # change what this plan measures.
           - infra/github
@@ -99,6 +100,11 @@ jobs:
         run: |
           KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
           SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
+          # Single-line credentials only: a multi-line value would write more $GITHUB_ENV lines (#9362).
+          if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::the AWS R2 backend credentials do not have the shape of a single-line credential; refusing to write them to the job environment."
+            exit 1
+          fi
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
@@ -149,7 +155,7 @@ jobs:
               PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}
             fi
           elif [[ "$MATRIX_DIR" == "infra/github" ]]; then
-            # (#9362) The same inputs as apply-github-infra.yml: no doppler run, no tf-var
+            # (#9362) The same variable inputs as apply-github-infra.yml: no doppler run, no tf-var
             # transformer. Every root variable defaults; the soleur-infra App credentials
             # arrive from the infra-credentials loader through $GITHUB_ENV, and the backend
             # keys from the extract step. infra/github declares no ssh_key_path variable.

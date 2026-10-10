@@ -987,15 +987,17 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 
 What the same slice did change for this consumer: the token is masked before first use and shape-checked, the HTTP code is the only response data printed, and the action-error branch no longer prints the action body.
 
-### 2026-10-10 (#9362): `apply-github-infra.yml` injects nothing from `prd_terraform`, and a pre-apply gate checks the required checks by value
+### 2026-10-10 (#9362): `apply-github-infra.yml` feeds no Terraform variable from `prd_terraform`, and a pre-apply gate checks the required checks by value
 
-This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the apply path (the earlier entry is kept as written).
+This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the apply path (the earlier entry is kept as written). It changes no decision's status. It also qualifies D6: "the loader's values win by construction" holds only for names that also exist in the Tier-B project, and `ACTIONS_INTEGRATION_ID`, `CODEQL_INTEGRATION_ID`, `GH_OWNER` and `GH_REPO` were never shadowed, which is why removing the injection, not shadowing it, was the fix.
 
 - **The injection is gone.** The job's four Terraform invocations (the two imports, the plan, the apply) no longer run under
   `doppler run` over `prd_terraform` with the tf-var name transformer, and the now-unused step `DOPPLER_TOKEN` env is removed from
   those three steps. Every `infra/github/variables.tf` input has a default and every provider input arrives from the Tier-B loader, so the
   set this root needs from `prd_terraform` is empty; the only Tier-A reads left in the job are the two backend keys in
-  `Extract backend credentials`. A value planted in that config can therefore no longer change `ACTIONS_INTEGRATION_ID`,
+  `Extract backend credentials`. Those two reach `$GITHUB_ENV` as `K=V` lines, so the step now refuses a value that is not a
+  single-line credential (a multi-line value would otherwise write further environment lines); the drift workflow's copy of the step
+  has the same check. A value planted in that config can therefore no longer change `ACTIONS_INTEGRATION_ID`,
   `CODEQL_INTEGRATION_ID`, `GH_OWNER` or `GH_REPO`. An `--only-secrets` allowlist was rejected: the set is empty, and
   `knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md` records that it fails with the tf-var transformer.
 - **O11 does not cover it.** O11 ran on 2026-10-04 and removed repo secrets and revoked two tokens; `prd_terraform` stays Tier A by D1
@@ -1005,7 +1007,14 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
   canonical files. A mismatch fails the job before any write. The gate checks required-check bindings only; the destroy guard still owns
   deletes and the daily ruleset audit still owns after-the-fact drift. **Intended behaviour, not to be removed under pressure:** the
   gate has no override. A legitimate change to a required check updates the canonical file in the same reviewed PR; the
-  `[skip-github-apply]` kill switch skips the whole job.
+  `[skip-github-apply]` kill switch skips the whole job. A canonical-only fix matches none of the workflow's push paths, so after it
+  merges the apply is re-run by `workflow_dispatch`; a re-run of the red run replays its own canonical. The two addresses are the
+  only gated ones: a new ruleset resource with required checks is ungated until the workflow lists it, and retiring one of the two
+  needs the workflow edited in the same PR. Enforcement, bypass actors and the target repository are outside the gate.
+- **Who can plant, and the replay window.** Writing `prd_terraform` is what the gate defends against; it does not defend against a
+  PR that edits the `.tf` and the canonical together (CODEOWNERS and review own that). The tree-equals-main assertion now also covers
+  the gate script, its projection library and both canonicals, so a replay of a post-merge run cannot use a stale gate. A pre-merge
+  apply run still replays the old workflow if re-run (GitHub allows it for 30 days); deleting those runs is the owner's call.
 - **Pins.** `tests/scripts/test-apply-github-infra-mint-shape.sh` pins both the absence of any Tier-A injection in the apply job and the gate
   (its position, its two invocations, its paths), and drives the script over plans built from a real `terraform show -json` capture. The
   script, the CLA canonical and the suite carry CODEOWNERS rows.

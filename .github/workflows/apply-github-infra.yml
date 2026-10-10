@@ -10,11 +10,11 @@
 #     its key from the infra-credentials loader (soleur-infra-privileged/prd,
 #     environment infra-privileged); the post-apply verify uses a scoped token
 #     from .github/actions/mint-infra-app-token. Since #9360 no step consumes the
-#     soleur-ai pair. Since #9362 the job injects NOTHING from prd_terraform into
-#     Terraform (the only Tier-A reads left are the two backend keys), so a value
-#     planted in that config cannot rebind a required check; the by-value gate
-#     before the apply compares the planned bindings with the committed canonical
-#     files (ADR-241). PAT auth was retired in #4384 per AGENTS.rules.md
+#     soleur-ai pair. Since #9362 no Terraform variable is fed from prd_terraform
+#     (the only Tier-A reads left are the two backend keys, shape-checked before they
+#     reach $GITHUB_ENV), so a value planted in that config cannot rebind a required
+#     check; the by-value gate before the apply compares the planned bindings with the
+#     committed canonical files (ADR-241). PAT auth was retired in #4384 per AGENTS.rules.md
 #     hr-github-app-auth-not-pat.
 #   - First-apply import: if state does not yet contain
 #     github_repository_ruleset.ci_required, the workflow imports it before
@@ -132,7 +132,12 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin main
-          PATHS=("$INFRA_DIR" tests/scripts/lib/destroy-guard-filter.jq)
+          # The gate's own inputs are part of the tree being applied (#9362): a replay of a
+          # post-merge run must not run a stale gate or canonical.
+          PATHS=("$INFRA_DIR" tests/scripts/lib/destroy-guard-filter.jq
+            scripts/verify-ruleset-required-checks.sh scripts/lib/canonicalize-required-status-checks.sh
+            scripts/ci-required-ruleset-canonical-required-status-checks.json
+            scripts/ci-cla-required-ruleset-canonical-required-status-checks.json)
           if ! git diff --quiet FETCH_HEAD -- "${PATHS[@]}"; then
             echo "::error::Refusing to apply: the checked-out infra inputs differ from origin/main. This run would publish content that never passed marketplace-manifest-guard, CODEOWNERS or review."
             git diff --stat FETCH_HEAD -- "${PATHS[@]}" >&2
@@ -206,6 +211,13 @@ jobs:
           }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          # A Tier-A value reaches $GITHUB_ENV below, one `K=V` line per printf. A multi-line value
+          # would write further lines (TF_VAR_*, BASH_ENV, ...), so refuse anything that is not a
+          # single-line credential before it is written (#9362).
+          if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::the AWS R2 backend credentials do not have the shape of a single-line credential; refusing to write them to the job environment."
             exit 1
           fi
           printf '::add-mask::%s\n' "$KEY_ID"
@@ -337,8 +349,9 @@ jobs:
       # it. This step compares each ruleset's planned {context, integration_id} set with its
       # committed canonical file and fails the job BEFORE `terraform apply` writes anything.
       # The plan document carries input-variable values (including the Tier-B App key), so it
-      # is piped into the script and never written to disk. There is no override: a legitimate
-      # change to a required check updates the canonical file in the same reviewed PR.
+      # is piped into the script, which never echoes it. There is no override: a legitimate
+      # change to a required check updates the canonical file in the same reviewed PR, and a
+      # canonical-only fix (which matches no push path) is re-applied by workflow_dispatch.
       - name: Gate planned required-check bindings (by value, pre-apply)
         working-directory: ${{ env.INFRA_DIR }}
         run: |

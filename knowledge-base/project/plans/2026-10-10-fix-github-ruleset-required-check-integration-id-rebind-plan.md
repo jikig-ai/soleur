@@ -299,9 +299,9 @@ Revert the squash commit: it restores the four wrappers and removes the gate ste
 
 ## Risks and Sharp Edges
 
-- The plan JSON carries variable values: never written to disk by the gate, never `set -x`. The runner's binary `tfplan` and `tfplan.txt` already exist there today (pre-existing, not new).
+- The plan JSON carries variable values: never echoed by the gate, never `set -x`, handed to jq through pipes (review corrected the first draft's "never written to disk": bash backs a large here-string with a temp file). The runner's binary `tfplan` and `tfplan.txt` already exist there today (pre-existing, not new).
 - The gate's first run on a real apply is on a plan shape the suite only knows from one real fixture and the read-only live comparison above; a false red blocks that apply and has no override, by design. The real-fixture-derived rows are the mitigation.
-- Scheduled drift (read-only `plan`) and the PR plan job keep the injection: a planted value there shows as a drift plan, which is the detector, and they cannot write. Apply and drift now differ in effective inputs by design; the follow-up issue tracks unwrapping them.
+- (Review correction) The scheduled drift workflow's `infra/github` leg no longer injects either (it runs plain `terraform plan`); only the PR plan job keeps the injection: a planted value there shows as a drift plan, which is the detector, and they cannot write. Apply and drift now differ in effective inputs by design; the follow-up issue tracks unwrapping them.
 - A plan whose `## User-Brand Impact` is empty fails deepen-plan; it is filled here.
 - The `terraform import` calls run without `-input=false`; every `variables.tf` variable has a default, so none prompts. A future no-default variable would hang there, which the existing plan step (`-input=false`) would surface first.
 
