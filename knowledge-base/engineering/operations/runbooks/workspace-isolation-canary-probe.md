@@ -132,6 +132,17 @@ Note for repro work: an out-of-image sim must carry `package.json
 {"type":"module"}` AND read-only payload/node_modules dirs — without the
 former the loader takes the in-memory CJS path and the EACCES never fires.
 
+**Plain-output constraint (#9860):** with a loadable config the third
+failure surfaced — vitest emits ANSI escapes even under `env -i` + `CI=true`,
+so stdout carries `Tests  \e[1m\e[32m13 passed` with escapes BETWEEN the
+tokens the vacuous-green `=~` greps. A 13-pass run then records
+`vacuous_green_no_tests_passed`. The argv carries `--no-color` (pinned by
+CWI-1) and the function additionally strips residual escapes from captured
+stdout before any marker grep — the summary counters and the `FAIL`/
+`AssertionError` reason-fold are all colored in the same shape. CWI-10b pins
+the resilience arm: an ANSI-colored pass summary must still read
+`verdict=pass`.
+
 ## Gate vs report — report-only (chosen)
 
 The probe ships **report-only**: it is invoked `|| true` inside the
