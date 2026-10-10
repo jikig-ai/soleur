@@ -784,7 +784,60 @@ else
   assert_eq "MISSING" "ok" "T16d the 42-only-skip branch vanished — every failure would now run OR skip wrongly"
 fi
 
+# =============================================================================
+# T17 — ADR-276 S3 (#9728): a draft-era red `test` on a READY head.
+#
+# With CI_DRAFT_LIGHT on, a draft's `test` concludes red BY DESIGN ("draft: full battery owed at ready"). Option R is what
+# keeps this gate correct without a code change: the newest `test` row per name must be completed+success, so a draft's red
+# row is NOT-GREEN and the gate returns OWED. These rows PIN that (no edit to battery-owed.sh) and are each paired with a
+# mutation of a COPY of the gate that must turn them RED, so the rows are shown able to fail:
+#   T17a  draft red test, the ready run never started          -> OWED
+#   T17b  draft red test, then the ready run's row CANCELLED    -> OWED
+#   T17c  draft red test, then a ready-run row still running    -> OWED
+#   T17d  control: draft red test, then the ready run's row GREEN -> SKIPPABLE (newest wins; the pin is not reject-everything)
+# =============================================================================
+DRAFT_RED='{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}'
+READY_CANCELLED='{"name":"test","status":"completed","conclusion":"cancelled","started_at":"2026-01-01T01:00:00Z","app":{"id":15368}}'
+READY_RUNNING='{"name":"test","status":"in_progress","conclusion":null,"started_at":"2026-01-01T01:00:00Z","app":{"id":15368}}'
+READY_GREEN='{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T01:00:00Z","app":{"id":15368}}'
+new_fixture_root R17
+W17="$(build_fixture "$R17")"
+S17="$R17/stub"
+t17() { # <label> <expected-rc> <checks-json>
+  make_stub "$S17" "$PINNED_REQUIRED" "$3" "$(head_sha_of "$W17")"
+  assert_eq "$2" "$(run_gate "$W17" "$S17")" "$1"
+}
+t17 "T17a draft-era red test, ready run never started -> OWED" "$OWED" "[$DRAFT_RED]"
+t17 "T17b draft-era red test then a CANCELLED ready row -> OWED" "$OWED" "[$DRAFT_RED,$READY_CANCELLED]"
+t17 "T17c draft-era red test then a ready row still running -> OWED" "$OWED" "[$DRAFT_RED,$READY_RUNNING]"
+t17 "T17d draft-era red test then a GREEN ready row -> SKIPPABLE (newest row wins)" "$SKIPPABLE" "[$DRAFT_RED,$READY_GREEN]"
+# Mutants of a COPY (the real gate is never touched): each lets a draft-era row read as verified, so the matching row must go RED.
+mut17() { # <id> <python-old> <python-new> <row-label> <expected-rc-of-the-real-gate> <checks-json>
+  local m="$R17/mut-$1.sh" got
+  cp "$GATE" "$m"
+  # <7>/<8> (optional) is a SECOND edit: T17c is guarded twice (the in-flight refusal AND the final success test), so one site
+  # alone cannot redden it.
+  if ! OLD="$2" NEW="$3" OLD2="${7:-}" NEW2="${8:-}" python3 -c '
+import os, sys
+p = sys.argv[1]; s = open(p).read()
+for o, n in ((os.environ["OLD"], os.environ["NEW"]), (os.environ["OLD2"], os.environ["NEW2"])):
+    if not o: continue
+    if s.count(o) != 1: sys.exit(1)
+    s = s.replace(o, n)
+open(p, "w").write(s)' "$m"; then
+    assert_eq "landed" "mutation did not land" "T17 $1 mutation lands exactly once"; return 0
+  fi
+  make_stub "$S17" "$PINNED_REQUIRED" "$6" "$(head_sha_of "$W17")"
+  local saved="$GATE"; GATE="$m"; got="$(run_gate "$W17" "$S17")"; GATE="$saved"
+  if [[ "$got" != "$5" ]]; then assert_eq "red" "red" "T17 $1: $4 goes RED against the mutant (rc $got, the real gate gives $5)"
+  else assert_eq "red" "still-green:$got" "T17 $1: $4 goes RED against the mutant"; fi
+}
+mut17 M17a 'if .conclusion == "success" then "ok" else "NOT-GREEN" end' 'if .conclusion != null then "ok" else "NOT-GREEN" end' "T17a (draft red test)" "$OWED" "[$DRAFT_RED]"
+mut17 M17b 'if .conclusion == "success" then "ok" else "NOT-GREEN" end' 'if (.conclusion == "success" or .conclusion == "cancelled") then "ok" else "NOT-GREEN" end' "T17b (cancelled ready row)" "$OWED" "[$DRAFT_RED,$READY_CANCELLED]"
+mut17 M17c 'elif ($rows | any(.status != "completed")) then "NOT-GREEN"' 'elif false then "NOT-GREEN"' "T17c (ready row still running)" "$OWED" "[$DRAFT_RED,$READY_RUNNING]" \
+  'if .conclusion == "success" then "ok" else "NOT-GREEN" end' 'if .conclusion != "failure" then "ok" else "NOT-GREEN" end'
+
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 55
+print_results 62

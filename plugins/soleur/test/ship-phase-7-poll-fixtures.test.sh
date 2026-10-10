@@ -123,6 +123,12 @@ assert_fixture_dir "$PLUGIN_COPY"
 # The default root carries NO regenerable-conflict resolver, so a DIRTY scenario reaches
 # the DIRTY exit exactly as before ADR-235. Scenario 4r supplies a stub resolver.
 rm -f "$PLUGIN_COPY/scripts/resolve-regenerable-conflicts.sh"
+# The head-verdict resolver (ADR-276 S3) reads GitHub itself: under this harness's `gh` mocks every request is
+# unmodelled. Every row that does not ask about it runs a resolver that cannot answer (exit 3), which is the
+# production shape of an API outage and must keep today's `required_failed` behaviour (V6 pins that). The real
+# resolver has its own suite (plugins/soleur/test/ci-head-verdict.test.sh); the V rows install a stub that answers.
+printf '#!/usr/bin/env bash\nexit 3\n' > "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
+chmod +x "$PLUGIN_COPY/scripts/ci-head-verdict.sh"
 
 # ---------------------------------------------------------------------------
 # Extract the Phase 7 bash block. Two anchors:
@@ -222,7 +228,8 @@ else
                'select(.type == "merge_queue")' 'QUEUE_GRACE_TICKS=5' '.autoMergeRequest != null' \
                'real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1' \
                '(( qwait == 1 )) || qidle=0' \
-               '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]'; do
+               '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]' \
+               '[ship.phase7.ready_unarmed]' 'ci-head-verdict.sh" verdict "$PR"' '"$vstate" == pending-full || "$vstate" == no-run'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
@@ -1704,12 +1711,14 @@ gh() {
         green)            data='[{"name":"test","bucket":"pass"}]' ;;
         none)             data='[]' ;;
         required_fail)    data='[{"name":"test","bucket":"fail"}]' ;;
+        test_e2e_fail)    data='[{"name":"test","bucket":"fail"},{"name":"e2e","bucket":"fail"}]' ;;
         *) echo "gh: HTTP 502 from fixture (pr checks)" >&2; return 1 ;;
       esac
       jq -r "$(_q_jqx "$@")" <<<"$data" ;;
     "api repos/{owner}/{repo}/rules/branches/main")
       case "${MOCK_RULES:-noqueue}" in
         queue)   data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]' ;;
+        queue2)  data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"},{"context":"e2e"}]}}]' ;;
         queue_nochecks) data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}}]' ;;
         noqueue) data='[{"type":"deletion"},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]' ;;
         *) echo "gh: HTTP 502 from fixture (rules)" >&2; return 1 ;;
@@ -1966,6 +1975,72 @@ q_both "Q11-queue-rule-with-sync-disabled-keeps-the-named-stop" "$QF" \
   "queue_wait|BEHIND detected|auto-sync [0-9/]+ pushed|$Q_FORBID"
 rm -f "$QF"
 Q_TAIL=""
+
+# ── V rows — ADR-276 S3 (#9728): a red `test` on a PR that was marked ready ────────────────────────────────────────────
+# With CI_DRAFT_LIGHT on, a draft's `test` is red by design, and after `gh pr ready` that row is the newest `test` row for the
+# 38 to 51 minutes the ready run takes: `gh pr checks` says `fail`, and the intersection scan used to end the poll on it. The block
+# now asks ci-head-verdict.sh (the real script has its own suite; here a STUB root answers from $MOCK_STATE/vstate, and a missing
+# answer exits 3) and ignores the `test` failure while the verdict is pending-full or no-run; stalled and awaiting-approval stop
+# the poll with `[ship.phase7.ready_unarmed]` and the recovery command; full-decided, n/a and an unanswered resolver keep
+# `required_failed`. Another failing required check is never softened. Every row runs against BOTH the ship block and the mirror.
+VROOT="$(mktemp -d)"
+_TMP_OWNED+=("$VROOT")
+assert_fixture_dir "$VROOT"
+cp -R "$PLUGIN_COPY/." "$VROOT/" || { printf 'FATAL: could not copy the plugin copy into %s\n' "$VROOT" >&2; exit 1; }
+cat > "$VROOT/scripts/ci-head-verdict.sh" <<'VSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_STATE/vcalls"
+st="$(cat "$MOCK_STATE/vstate" 2>/dev/null)"
+[[ -n "$st" ]] || exit 3
+printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=%s sha=x run=none reason=stub\n' "$st" "$2"
+VSTUB
+chmod +x "$VROOT/scripts/ci-head-verdict.sh"
+SCEN_ROOT="$VROOT"
+V_FORBID="$Q_FORBID"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail MOCK_MERGED_AT=3 'echo pending-full > "$MOCK_STATE/vstate"'
+run_scenario_both "V1-pending-full-ignores-the-draft-red-test" "$QF" \
+  "MERGED CLEAN" \
+  "required_failed|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail MOCK_MERGED_AT=3 'echo no-run > "$MOCK_STATE/vstate"'
+run_scenario_both "V2-no-run-keeps-polling-never-required_failed" "$QF" \
+  "MERGED CLEAN" \
+  "required_failed|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo stalled > "$MOCK_STATE/vstate"'
+run_scenario_both "V3-stalled-stops-with-the-recovery-command" "$QF" \
+  "\[1/90\] \[ship\.phase7\.ready_unarmed\] .*stalled
+gh pr ready --undo 4387 ; gh pr ready 4387" \
+  "required_failed|MERGED|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo awaiting-approval > "$MOCK_STATE/vstate"'
+run_scenario_both "V4-awaiting-approval-stops-and-names-it" "$QF" \
+  "\[1/90\] \[ship\.phase7\.ready_unarmed\] .*awaiting-approval" \
+  "required_failed|MERGED|$V_FORBID"
+rm -f "$QF"
+for vs in full-decided n/a; do
+  q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail "echo $vs > \"\$MOCK_STATE/vstate\""
+  run_scenario_both "V5-$vs-keeps-required_failed" "$QF" \
+    "\[1/90\] \[ship\.phase7\.required_failed\] check='test'" \
+    "ready_unarmed|$V_FORBID"
+  rm -f "$QF"
+done
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail
+run_scenario_both "V6-an-unanswered-resolver-keeps-required_failed" "$QF" \
+  "\[1/90\] \[ship\.phase7\.required_failed\] check='test'" \
+  "ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue2 MOCK_ARMED=true MOCK_CHECKS=test_e2e_fail 'echo pending-full > "$MOCK_STATE/vstate"'
+run_scenario_both "V7-pending-full-softens-only-test-another-required-failure-still-exits" "$QF" \
+  "\[1/90\] \[ship\.phase7\.required_failed\] check='e2e'" \
+  "check='test'|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending 'echo stalled > "$MOCK_STATE/vstate"'
+run_scenario_both "V8-no-test-failure-no-resolver-call" "$QF" \
+  "\[1/90\]" \
+  "ready_unarmed|required_failed"
+rm -f "$QF"
+SCEN_ROOT=""
 
 WANTQ="Q1-queue-armed-pending-waits-no-sync Q1e-queue-wait-under-errexit Q1m-mixed-members-pending-required-holds-the-wait Q1n-queue-rule-without-required-checks-syncs-as-today Q2-no-queue-rule-syncs-as-today Q2e-no-queue-rule-under-errexit Q3-rules-api-error-syncs-as-today Q3b-rules-error-with-a-queued-pr-prints-no-queued-line Q4-queue-but-armed-is-false-syncs-as-today Q4-queue-but-armed-is-error-syncs-as-today Q6-settled-green-expires-and-syncs Q6-settled-none-expires-and-syncs Q6-settled-error-expires-and-syncs Q6e-expiry-under-errexit Q6b-expiry-latches-then-budget-exhausts Q6c-idle-count-is-consecutive Q6d-pending-then-settled-expires-six-idle-ticks-after-the-last-pending Q6g-idle-then-pending-then-idle-resets-the-count Q6h-armed-flap-restarts-the-idle-count Q6f-pending-advisory-check-does-not-hold-the-wait Q12-absent-required-check-while-a-shard-runs-holds-the-wait Q12b-absent-required-check-with-nothing-running-expires Q7-dirty-derived-behind-still-syncs Q8-dequeue-while-waiting-stops Q9-queued-pr-reported-once-and-never-expired Q9b-expiry-with-an-unreadable-queue-read-stops-and-never-pushes Q10-required-check-failure-exits Q11-queue-rule-with-sync-disabled-keeps-the-named-stop"
 if [[ "${RANQ[*]}" == "$WANTQ" ]]; then
@@ -2232,7 +2307,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=1001
+MIN_VERDICTS=1093
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

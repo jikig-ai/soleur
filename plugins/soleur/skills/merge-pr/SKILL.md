@@ -325,6 +325,8 @@ Announce the PR URL.
 
 ### 5.1 Queue Auto-Merge
 
+**A draft PR is readied first, with a user token (`GITHUB_TOKEN` cannot ready a PR), and armed only after its ready run exists (ADR-276 S3):** `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <number>) && gh pr ready <number> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <number> --before-count "$K"`. On non-zero (`no-ready-event`, `no-run`, `awaiting-approval`) do NOT run `gh pr merge --squash --auto`: report "readied but unarmed" with the reason; recovery `gh pr ready --undo <number>` then `gh pr ready <number>`. The 5.2 poll reads a red `test` through the same resolver (`ready_unarmed` stops it).
+
 **Never arm (enqueue) a cross-repository (fork) PR, or one touching `.github/**`, without explicit operator confirmation.** `merge_group` runs the candidate's workflows in the base-repo context with repo secrets, so a pre-queue-green fork or workflow edit can exfiltrate them before anyone reads a run. Check first: `gh pr view <number> --json isCrossRepository --jq .isCrossRepository` and `gh api repos/{owner}/{repo}/pulls/<number>/files --paginate --jq '.[].filename | select(startswith(".github/"))'` (not `gh pr view --json files`: it stops at 100 files); a `true` or any output means stop and ask.
 
 ```bash
@@ -439,8 +441,21 @@ while true; do
     mapfile -t failed_names < <(gh pr checks "$PR" --json name,bucket \
       --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
     if (( ${#failed_names[@]} > 0 )); then
+      # ADR-276 S3: a ready PR's red `test` may be the DRAFT run's row; ask the resolver.
+      vstate=""
+      for n in "${failed_names[@]}"; do
+        [[ "$n" == test && -n "$SYNC_SNAP" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] || continue
+        vline="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null | grep -m1 '^SOLEUR_CI_HEAD_VERDICT ')" || vline=""
+        vstate="${vline#*state=}"; vstate="${vstate%% *}"; break
+      done
+      case "$vstate" in
+        stalled|awaiting-approval)
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.ready_unarmed] PR $PR was marked ready but its ready run is ${vstate}; the red test row is the draft run's. Start no fix loop. Recovery (user token): gh pr ready --undo $PR ; gh pr ready $PR"
+          break ;;
+      esac
       required_failed=""
       for n in "${failed_names[@]}"; do
+        [[ "$n" == test && ( "$vstate" == pending-full || "$vstate" == no-run ) ]] && continue
         for r in "${REQUIRED_CHECKS[@]}"; do
           [[ "$n" == "$r" ]] && { required_failed="$n"; break 2; }
         done

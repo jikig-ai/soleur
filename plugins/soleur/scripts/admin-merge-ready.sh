@@ -52,6 +52,16 @@
 #   * Ready is decided POSITIVELY: every required context must be counted green. "No non-green
 #     line was printed" is not readiness -- an empty or unparseable API body would satisfy it.
 #
+#   * The draft-era `test` row (ADR-276 S3, #9728). With CI_DRAFT_LIGHT on, a draft PR's `test` concludes red BY DESIGN,
+#     and after `gh pr ready` that row is the latest `test` row until the ready run's aggregator posts (38 to 51 minutes).
+#     Only when `test` is FAILED at the graded head does this script ask plugins/soleur/scripts/ci-head-verdict.sh, and the
+#     answer can only move `test` from FAILED to PENDING or ABSENT, never to green: pending-full and no-run -> PENDING (a
+#     `--wait` keeps waiting; no-run times out, never READY); stalled -> ABSENT, reason=stalled (terminal); awaiting-approval
+#     -> PENDING, reason=awaiting-approval (terminal); full-decided whose deciding run is not the run the newest `test` row
+#     belongs to (a manual re-run of a pre-ready run) -> FAILED, reason=stale-row (terminal); every other answer, an
+#     unreadable one, and a verdict for another head leave FAILED untouched. The recovery for stalled / stale-row is
+#     `gh pr ready --undo <PR>` then `gh pr ready <PR>` with a user token, never a re-run of the draft run.
+#
 # KNOWN LIMITS (stated, not silent).
 #   (a) A re-run started between this script's read and `gh pr merge` is not seen:
 #       `--match-head-commit` pins the head, not the checks. settle-then-admin-merge.md's merge
@@ -155,7 +165,7 @@ Last stdout line, on every path except --help:
 EOF
 }
 
-PR_OUT="?"; SHA_OUT="?"; BASE="?"; REASON="none"
+PR_OUT="?"; SHA_OUT="?"; BASE="?"; REASON="none"; REASON_OVERRIDE=""
 N_REQ=0; J_ABSENT="[]"; J_PENDING="[]"; J_FAILED="[]"
 
 marker() {
@@ -216,8 +226,63 @@ trap 'REASON=interrupted; marker error; exit 130' INT TERM HUP
 # Returns 0 ready | 1 not-ready | 4 stale | 3 error.
 fail3() { MSG="ERROR: $1"; REASON="$2"; return 3; }
 
+# resolve_head_verdict: V_STATE / V_RUN from ci-head-verdict.sh for THIS PR at THIS head ($SHA). Returns 1 (and leaves
+# V_STATE empty) when it cannot answer: the caller then keeps today's reading. CI_HEAD_VERDICT_BIN is the test seam.
+V_STATE=""; V_RUN="none"
+resolve_head_verdict() {
+  local bin m
+  V_STATE=""; V_RUN="none"
+  bin="${CI_HEAD_VERDICT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/ci-head-verdict.sh}"
+  [[ -r "$bin" ]] || return 1
+  m="$(bash "$bin" verdict "$PR" 2>/dev/null)" || true
+  m="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$m")" || return 1
+  [[ "$m" == *" sha=$SHA "* ]] || return 1
+  V_RUN="${m#* run=}"; V_RUN="${V_RUN%% *}"
+  m="${m#*state=}"; m="${m%% *}"
+  case "$m" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) V_STATE="$m" ;; *) return 1 ;; esac
+}
+
+# soften_test_row <classifier-json>: apply the head verdict to a FAILED `test` (see the header). Prints the adjusted JSON;
+# sets REASON_OVERRIDE and MSG when the answer is terminal. Never produces a green context.
+RECOVERY=""
+soften_test_row() {
+  local out="$1" last_run=""
+  RECOVERY="gh pr ready --undo $PR, then gh pr ready $PR with a user token (never GITHUB_TOKEN; a manual re-run of the draft run is NOT a recovery)"
+  case "$V_STATE" in
+    pending-full)
+      jq -c '.failed -= ["test"] | .pending += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "PENDING test (draft-era-row-while-ready-run-pending)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    no-run)
+      jq -c '.failed -= ["test"] | .pending += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "PENDING test (no-ready-run)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    awaiting-approval)
+      REASON_OVERRIDE="awaiting-approval"
+      MSG="AWAITING-APPROVAL: the ready run is waiting for a maintainer to approve a fork workflow run; nothing starts until it is approved"
+      jq -c '.failed -= ["test"] | .pending += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "PENDING test (awaiting-approval: a maintainer must approve the fork workflow run)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    stalled)
+      REASON_OVERRIDE="stalled"
+      MSG="STALLED: this PR was marked ready but no full CI run decided within 75 minutes of the ready event. Recovery: $RECOVERY"
+      jq -c '.failed -= ["test"] | .absent += ["test"]
+             | .lines |= map(if startswith("FAILED  test (") then "ABSENT  test (stalled: no full CI run decided after the ready event)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
+    full-decided)
+      last_run="$(jq -r --arg sha "$CHECK_SHA" '
+        [.[] | .check_runs[] | select(.head_sha == $sha and .name == "test" and .app.id == 15368)]
+        | if length == 0 then "" else (max_by(.id | tonumber) | (.details_url // "") | (capture("/actions/runs/(?<id>[0-9]+)(/|$)")? // {id: ""}) | .id) end' "$WORK/runs.json" 2>/dev/null)" || last_run=""
+      if [[ -n "$last_run" && "$V_RUN" != none && "$last_run" != "$V_RUN" ]]; then
+        REASON_OVERRIDE="stale-row"
+        MSG="STALE-ROW: the newest test row belongs to run $last_run, not the deciding run $V_RUN (a manual re-run of a pre-ready run). Recovery: $RECOVERY"
+        jq -c --arg l "$last_run" --arg r "$V_RUN" \
+          '.lines |= map(if startswith("FAILED  test (") then "FAILED  test (stale-row: the newest test row belongs to run \($l), not the deciding run \($r))" else . end)' <<<"$out" > "$WORK/soft.json"
+      else
+        printf '%s\n' "$out" > "$WORK/soft.json"
+      fi ;;
+    *) printf '%s\n' "$out" > "$WORK/soft.json" ;;
+  esac
+}
+
 check_once() {
-  LINES=""; MSG=""; REASON="none"; N_REQ=0; J_ABSENT="[]"; J_PENDING="[]"; J_FAILED="[]"
+  LINES=""; MSG=""; REASON="none"; REASON_OVERRIDE=""; N_REQ=0; J_ABSENT="[]"; J_PENDING="[]"; J_FAILED="[]"
   rm -f "$WORK"/*.json
   local state head changed enc
 
@@ -412,6 +477,12 @@ check_once() {
   if jq -e 'has("error")' <<<"$out" >/dev/null; then
     MSG="ERROR: $(jq -r '.error' <<<"$out")"; REASON=$(jq -r '.reason' <<<"$out"); return 3
   fi
+  # ADR-276 S3: a FAILED `test` at the graded head may be the draft run's row. Ask the resolver, only then.
+  if [[ "$CHECK_SHA" == "$SHA" ]] && jq -e '.failed | index("test") != null' <<<"$out" >/dev/null 2>&1 && resolve_head_verdict; then
+    soften_test_row "$out"; out="$(cat "$WORK/soft.json" 2>/dev/null)"
+    jq -e 'type == "object" and (.lines | type) == "array"' <<<"$out" >/dev/null 2>&1 \
+      || { fail3 "adjusting the test verdict failed" api-error; return; }
+  fi
   N_REQ=$(jq -r '.req' <<<"$out")
   J_ABSENT=$(jq -c '.absent' <<<"$out")
   J_PENDING=$(jq -c '.pending' <<<"$out")
@@ -424,7 +495,7 @@ check_once() {
     return 0
   fi
   if [[ -z "$LINES" ]]; then fail3 "classifier counted $(jq -r '.green' <<<"$out") of $N_REQ green but named no culprit" api-error; return; fi
-  REASON="not-green"; return 1
+  REASON="${REASON_OVERRIDE:-not-green}"; return 1
 }
 
 finish() { # <rc> <verdict>

@@ -39,7 +39,7 @@ Use `merge-pr` for a single named PR. Use `drain-labeled-backlog` for labeled *i
 
 Optional flags (any subset):
 
-- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`. Drafts are always excluded.
+- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`, plus `ready-unarmed` (recover-only, never armed). Drafts are always excluded.
 - `--pr <N,…>` — restrict the whole run to an explicit set of PR numbers (still triaged + still gated).
 - `--dry-run` — print the full tier table and exit with zero merges and zero delegation. More valuable here than in the sibling because this skill *merges*.
 
@@ -57,7 +57,7 @@ Delegate to the helper [triage-prs.sh](./scripts/triage-prs.sh):
 bash "${CLAUDE_PLUGIN_ROOT}/skills/drain-prs/scripts/triage-prs.sh"
 ```
 
-The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **six tiers**:
+The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **seven tiers**:
 
 | Tier | Signal | Default handling |
 |------|--------|------------------|
@@ -65,6 +65,7 @@ The helper runs `gh pr list --state open --json number,title,headRefName,isDraft
 | `needs-lockfile-fix` | deps PR (`labels` has `dependencies`) failing `lockfile-sync` / `test-webplat` / `e2e` on a frozen-install step | fix-recipe (a) → merge |
 | `needs-conflict-resolution` | `mergeable=CONFLICTING`, few/no other failures | fix-recipe (b) → merge |
 | `needs-review` | `bot-fix/review-required` label, or a feature PR with no review | review (delegate or inline) → merge |
+| `ready-unarmed` | ready PR whose head verdict (`ci-head-verdict.sh`) is `no-run` or `stalled`: no full CI run exists, the red `test` row is the draft run's | **recover, never arm**: `gh pr ready --undo <N>` then `gh pr ready <N>` (user token), then re-triage |
 | `drafts` | `isDraft=true` | **skip** — author-owned WIP, never merged |
 | `broken` | `CONFLICTING` **and** many failing checks | surface; fix only if in explicit scope |
 
@@ -76,7 +77,7 @@ Present the tier table via `AskUserQuestion`. The operator selects which tiers t
 
 ### 4. Per in-scope PR — ensure green, then merge
 
-For each selected PR: bring it to green via the fix-recipes below if needed, then arm it (under the merge queue this ENQUEUES the PR; it is not yet merged):
+For each selected PR: bring it to green via the fix-recipes below if needed, then arm it (under the merge queue this ENQUEUES the PR; it is not yet merged). A `ready-unarmed` PR (readied, but no full CI run exists) is NOT armed: recover it first with a user token (`GITHUB_TOKEN` cannot ready a PR) via `gh pr ready --undo <N>` then `gh pr ready <N>`. A draft the operator authorizes is readied the same way and armed only once `K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count <N>) && gh pr ready <N> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run <N> --before-count "$K"` exits 0; on non-zero report "readied but unarmed" with the reason and arm nothing:
 
 ```bash
 gh pr merge <N> --squash --auto
@@ -138,4 +139,4 @@ Unit tests live at [drain-prs.test.sh](../../test/drain-prs.test.sh). Run them w
 bash plugins/soleur/test/drain-prs.test.sh
 ```
 
-Covers: one synthetic PR per tier (ready-green, lockfile-fail, conflicting, review-required, draft, broken), an empty-list case, and the tier-grouped JSON output shape.
+Covers: one synthetic PR per tier (ready-green, lockfile-fail, conflicting, review-required, draft, broken), the head-verdict rows (`ready-unarmed`, pending-full / decided / awaiting-approval, resolver error), an empty-list case, and the tier-grouped JSON output shape.
