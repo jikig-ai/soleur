@@ -1,7 +1,8 @@
 # Security: DOPPLER_TOKEN from repository secrets provides Terraform credentials
 # via `doppler run --name-transformer tf-var` — except on the apps/web-platform/infra/sentry
 # leg, which binds the SENTRY_IAC_AUTH_TOKEN repository secret as the raw
-# `SENTRY_AUTH_TOKEN` and runs no `doppler run` (#6612). R2 backend credentials are extracted
+# `SENTRY_AUTH_TOKEN` and runs no `doppler run` (#6612), and on the infra/github leg, which
+# injects nothing from prd_terraform (#9362). R2 backend credentials are extracted
 # separately via `doppler secrets get --plain` (not through --name-transformer,
 # which would convert them to TF_VAR_* format and break S3 auth).
 # Plan output is sanitized before posting to GitHub issues.
@@ -51,10 +52,11 @@ jobs:
           # Authenticates as apply-github-infra.yml's Terraform does:
           # the soleur-infra App key from the infra-credentials loader (infra
           # mode, ADR-241 D5; the soleur-ai pair in prd_terraform is the #8209
-          # eviction sentinel), plus Doppler prd_terraform tf-var for the
-          # remaining inputs. infra/github declares no
-          # ssh_key_path variable, so the CI-SSH-key VAR_ARGS guard below skips
-          # it automatically.
+          # eviction sentinel). Since #9362 this leg injects NOTHING from
+          # prd_terraform (no doppler run, no tf-var transformer), the same inputs
+          # as the apply: every root variable has a default and the App key comes
+          # from the loader. A value planted in prd_terraform therefore cannot
+          # change what this plan measures.
           - infra/github
           # apps/web-platform/infra/sentry (#6612, ADR-031): the Sentry root's
           # "declared == applied" monitor. It authenticates exactly as
@@ -146,6 +148,13 @@ jobs:
               # Masking only covers the Actions log, not an issue body posted through the API.
               PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}
             fi
+          elif [[ "$MATRIX_DIR" == "infra/github" ]]; then
+            # (#9362) The same inputs as apply-github-infra.yml: no doppler run, no tf-var
+            # transformer. Every root variable defaults; the soleur-infra App credentials
+            # arrive from the infra-credentials loader through $GITHUB_ENV, and the backend
+            # keys from the extract step. infra/github declares no ssh_key_path variable.
+            PLAN_OUTPUT=$(terraform plan -detailed-exitcode -no-color -input=false 2>&1)
+            EXIT_CODE=$?
           else
             VAR_ARGS=()
             if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then

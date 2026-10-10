@@ -1009,8 +1009,11 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
 - **Pins.** `tests/scripts/test-apply-github-infra-mint-shape.sh` pins both the absence of any Tier-A injection in the apply job and the gate
   (its position, its two invocations, its paths), and drives the script over plans built from a real `terraform show -json` capture. The
   script, the CLA canonical and the suite carry CODEOWNERS rows.
-- **Left open, tracked separately.** The scheduled drift plan and the PR plan job still read `prd_terraform` under the tf-var layer. They
-  cannot write, and a planted value shows up there as a drift plan.
+- **The drift detector matches the apply.** The scheduled drift workflow's `infra/github` leg runs its read-only plan with the same
+  inputs as the apply (no `doppler run`, no tf-var transformer), so a planted value cannot change what the detector measures.
+- **Left open, tracked in #9914.** The PR plan job (`infra-validation.yml`) still reads `prd_terraform` under the tf-var layer for the
+  `infra/github` root, and the root's README still carries stale local-apply recipes. Neither can write; a planted value shows up there as a
+  plan difference.
 
 ## References
 
@@ -1036,4 +1039,4 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
 - D11 (2026-10-01, switch 2026-10-03, `accepted` 2026-10-04): #9321, #9462
 - D2 note (2026-10-04): #9377, #9461
 - `op=backup` tier note (2026-10-08): #8767, #9755
-- Apply-path injection removed and by-value gate (2026-10-10): #9362
+- Apply-path injection removed and by-value gate (2026-10-10): #9362, #9914

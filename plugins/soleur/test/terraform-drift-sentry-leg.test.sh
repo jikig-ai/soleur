@@ -374,14 +374,21 @@ b5() {
   for spec in "apps/web-platform/infra:2:web-platform" "infra/github:0:infra/github"; do
     IFS=: read -r d want_rc want_stack <<<"$spec"
     run_plan "$TMP/bin" "$d" "$REPO_ROOT/$d" "STUB_TF_RC=$want_rc"
-    grep -q '^DOPPLER_ARGV run --preserve-env --name-transformer tf-var -- terraform plan -detailed-exitcode' "$RUN_LOG" \
-      || { echo "    $d: doppler tf-var path not taken"; bad=1; }
+    if [[ "$d" == "infra/github" ]]; then
+      # (#9362) the github leg injects nothing from prd_terraform: terraform runs directly, doppler never.
+      grep -q '^DOPPLER_ARGV' "$RUN_LOG" && { echo "    $d: doppler was invoked (a prd_terraform injection is back)"; bad=1; }
+      [[ "$(tf_calls)" -eq 1 ]] || { echo "    $d: terraform plan was not invoked exactly once"; bad=1; }
+      grep -q '^TF_ARGV plan -detailed-exitcode' "$RUN_LOG" || { echo "    $d: plan -detailed-exitcode not run"; bad=1; }
+    else
+      grep -q '^DOPPLER_ARGV run --preserve-env --name-transformer tf-var -- terraform plan -detailed-exitcode' "$RUN_LOG" \
+        || { echo "    $d: doppler tf-var path not taken"; bad=1; }
+    fi
     [[ "$(out_val exit_code)" == "$want_rc" ]] || { echo "    $d: exit_code=$(out_val exit_code), want $want_rc"; bad=1; }
     [[ "$(out_val stack_name)" == "$want_stack" ]] || { echo "    $d: stack_name=$(out_val stack_name)"; bad=1; }
   done
   return "$bad"
 }
-row B5 "the main and github legs keep their doppler tf-var plan and stack names" b5
+row B5 "the main leg keeps its doppler tf-var plan; the github leg runs terraform directly (#9362); both keep their stack names" b5
 
 b7() {
   run_plan "$TMP/bin" "$SENTRY_DIR" "$TMP" "STUB_TF_RC=0 EXPECT_SENTRY_TOKEN=iac-y" \
