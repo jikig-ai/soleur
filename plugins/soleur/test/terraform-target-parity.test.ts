@@ -82,7 +82,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // over the three surviving surfaces, B6, B5): the job those rows graded no longer exists. The floor is exact
 // (grep -cE '^\s*test\(' = 266). Each deleted row's mutation, and what kills it now, is in the PR B plan
 // (knowledge-base/project/plans/archive/20261009-235733-2026-10-09-chore-pr-b-retire-inngest-backstop-wipe-apparatus-plan.md).
-const TEST_FLOOR = 266;
+// 266 -> 271 (#9879, +5): Guard 2 (sole-copy reachability census) rows G2 live/mutation/spelling/scripts/harness in the B5/B6 describe.
+// Exact again: grep -cE '^\s*test\(' = 271.
+const TEST_FLOOR = 271;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -3472,6 +3474,186 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
   });
 });
 
+// --- Guard 2 (#9879): reachability of the inngest sole-copy addresses -------------------------------------------
+// Extends B5/B6 (below) with one census over EVERY workflow and tracked script. Built on the existing chokepoints:
+// extractJobBlock (per-job text), extractAllTargets (the job-found non-vacuity check), stripDispatchJobs (the
+// per-merge view), stripShellLineComments and joinContinuations (comment strip, continuation fold).
+//
+// Comment policy: ONLY whole-line `#` comments are removed. A trailing `# ...` is KEPT: shell has `$#`, `${#a[@]}`
+// and `"a #b"`, so a quote-unaware trailing-comment strip (stripComments) would let `echo "$#"; terraform ... -replace=X`
+// hide its own flag. The cost is a conservative false RED on a trailing comment that spells a flag, which is fixable
+// in review; the alternative is a fail-open scan.
+const SOLE_COPY_ADDRS = [
+  "hcloud_volume.inngest_redis_luks",
+  "hcloud_volume_attachment.inngest_redis_luks",
+  "random_password.inngest_redis_luks",
+  "doppler_secret.inngest_redis_luks_key",
+  "doppler_project.inngest",
+  "doppler_environment.inngest_prd",
+];
+const G2_ADDR_ALT = SOLE_COPY_ADDRS.map((a) => a.replace(/\./g, "\\.")).join("|");
+const G2_WORKFLOW = "apply-web-platform-infra.yml";
+// MEASURED 2026-10-10 on the live tree with
+//   grep -nE "^[^#]*-(target|replace)[= ]+['\"]?(<the six addresses>)\b" .github/workflows/*.yml
+// = seven lines, all in apply-web-platform-infra.yml (657-658 per-merge `apply`; 1673/1674/1680/1681 `inngest_host`;
+// 1975 `inngest_host_replace`), zero -replace, zero -destroy. Entry shape: workflow|job|verb|address.
+// Edited only with a reviewer reading it: the workflow is the other side of the comparison.
+const SOLE_COPY_EXPECTED: readonly string[] = [
+  `${G2_WORKFLOW}|apply|target|random_password.inngest_redis_luks`,
+  `${G2_WORKFLOW}|apply|target|doppler_secret.inngest_redis_luks_key`,
+  `${G2_WORKFLOW}|inngest_host|target|hcloud_volume.inngest_redis_luks`,
+  `${G2_WORKFLOW}|inngest_host|target|hcloud_volume_attachment.inngest_redis_luks`,
+  `${G2_WORKFLOW}|inngest_host|target|doppler_project.inngest`,
+  `${G2_WORKFLOW}|inngest_host|target|doppler_environment.inngest_prd`,
+  `${G2_WORKFLOW}|inngest_host_replace|target|hcloud_volume_attachment.inngest_redis_luks`,
+];
+const G2_TOP = "<top-level>";
+
+/** Comment-stripped (whole-line), continuation-folded, LF-normalised code. */
+const g2Code = (text: string): string => joinContinuations(stripShellLineComments(text.replace(/\r\n/g, "\n")));
+
+/** job id -> block (via extractJobBlock); the text outside `jobs:` is keyed G2_TOP. Throws on a header it cannot parse. */
+function g2Jobs(text: string): Map<string, string> {
+  const lf = text.replace(/\r\n/g, "\n");
+  const out = new Map<string, string>();
+  const m = /^jobs:[ \t]*(?:#.*)?$/m.exec(lf);
+  if (!m) {
+    out.set(G2_TOP, lf);
+    return out;
+  }
+  let body = lf.slice(m.index + m[0].length);
+  const tail = /\n(?=[A-Za-z_][^\n]*:)/.exec(body); // a column-0 key after `jobs:` ends the section
+  let rest = "";
+  if (tail) {
+    rest = body.slice(tail.index);
+    body = body.slice(0, tail.index);
+  }
+  out.set(G2_TOP, lf.slice(0, m.index) + rest);
+  const ids = new Set<string>();
+  for (const line of body.split("\n")) {
+    if (/^ {2}\S/.test(line) && !/^ {2}#/.test(line)) {
+      const h = /^ {2}([A-Za-z0-9_-]+):/.exec(line);
+      if (!h) throw new Error(`g2Jobs: unparseable job header ${JSON.stringify(line)}`);
+      ids.add(h[1]);
+    }
+  }
+  if (ids.size === 0) throw new Error("g2Jobs: no jobs found under jobs:");
+  for (const id of ids) out.set(id, extractJobBlock(body, id));
+  return out;
+}
+
+const g2Named = (code: string): string[] =>
+  SOLE_COPY_ADDRS.filter((a) => new RegExp(`(?<![A-Za-z0-9_])${a.replace(/\./g, "\\.")}(?![A-Za-z0-9_])`).test(code));
+
+const G2_STATE_VERBS: Array<[string, RegExp]> = [
+  ["state-rm", /(?<![\w-])state\s+rm(?![\w-])/],
+  ["state-mv", /(?<![\w-])state\s+mv(?![\w-])/],
+  ["state-push", /(?<![\w-])state\s+push(?![\w-])/],
+  ["import", /\bterraform(?:\s+-chdir=\S+)?\s+import(?![\w-])/],
+  ["taint", /\bterraform(?:\s+-chdir=\S+)?\s+taint(?![\w-])/],
+];
+
+/** A state-write verb in `code` x every sole-copy address `code` names (co-occurrence: a loop or variable cannot hide it). */
+function g2StateWriteHits(code: string): Array<[string, string]> {
+  const named = g2Named(code);
+  const out: Array<[string, string]> = [];
+  for (const [verb, re] of G2_STATE_VERBS) if (re.test(code)) for (const a of named) out.push([verb, a]);
+  return out;
+}
+
+/** Every (verb, address) a job's code reaches: -target/-replace in `=`/space/quoted/escaped-quote spellings, destroy, state writes. */
+function g2JobVerbs(code: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const flag = new RegExp(`-(target|replace)(?:=|\\s+)[\\\\'"]*(?:module\\.[A-Za-z0-9_-]+\\.)*(${G2_ADDR_ALT})(?![A-Za-z0-9_])`, "g");
+  for (const m of code.matchAll(flag)) out.push([m[1], m[2]]);
+  // Destroy, judged per STEP: a step whose `working-directory` is a rehearsal SUB-ROOT (its own state; the two rehearsal
+  // workflows and their teardown steps) is out of scope unless it also names a sole-copy address (the flag scan above and
+  // the state-write scan below already see that). Every other destroy is a hit. `[ack-destroy]` has a word char before the
+  // dash, and prose `terraform destroy` sits behind a backtick/quote, so neither is the command.
+  for (const step of code.split(/\n(?= {6}- )/)) {
+    const isDestroy =
+      /(?<![\w-])-destroy(?![\w-])/.test(step) ||
+      /(?:^|[;&|(]|\bthen\b|\bdo\b|--)[ \t]*terraform(?:[ \t]+-chdir=\S+)?[ \t]+destroy(?![\w-])/m.test(step);
+    const subRoot = /^\s*working-directory:\s*(?:\$\{\{\s*env\.REHEARSAL_DIR\s*\}\}|\S*apps\/web-platform\/infra\/[A-Za-z0-9_.-]+\S*)\s*$/m.test(step);
+    if (isDestroy && !subRoot) out.push(["destroy", "*"]);
+  }
+  out.push(...g2StateWriteHits(code));
+  return out;
+}
+
+/** Sorted unique `workflow|job|verb|address` over a {workflow filename: text} map. */
+function g2Census(files: Record<string, string>): string[] {
+  const set = new Set<string>();
+  for (const [name, text] of Object.entries(files)) {
+    for (const [job, block] of g2Jobs(text)) {
+      for (const [verb, addr] of g2JobVerbs(g2Code(block))) set.add(`${name}|${job}|${verb}|${addr}`);
+    }
+  }
+  return [...set].sort();
+}
+
+/** Non-vacuity: every (workflow, job) the expected set names must exist and still carry a -target flag. */
+function g2MissingJobs(files: Record<string, string>, expected: readonly string[]): string[] {
+  const missing: string[] = [];
+  for (const key of new Set(expected.map((e) => e.split("|").slice(0, 2).join("|")))) {
+    const [file, job] = key.split("|");
+    const block = files[file] === undefined ? "" : (g2Jobs(files[file]).get(job) ?? "");
+    if (!/-target(?:=|\s)/.test(g2Code(block))) missing.push(key);
+  }
+  return missing;
+}
+
+/** Empty array = GREEN. Anything else names the defect. */
+function g2Verdict(files: Record<string, string>, expected: readonly string[] = SOLE_COPY_EXPECTED): string[] {
+  const got = g2Census(files);
+  const want = new Set(expected);
+  return [
+    ...g2MissingJobs(files, expected).map((k) => `job-not-found: ${k}`),
+    ...got.filter((t) => !want.has(t)).map((t) => `unexpected: ${t}`),
+    ...[...want].filter((t) => !got.includes(t)).map((t) => `absent: ${t}`),
+  ];
+}
+
+function g2LiveWorkflows(): Record<string, string> {
+  const dir = resolve(REPO_ROOT, ".github/workflows");
+  const out: Record<string, string> = {};
+  for (const f of readdirSync(dir).filter((n) => /\.ya?ml$/.test(n)).sort()) out[f] = readFileSync(resolve(dir, f), "utf8");
+  return out;
+}
+
+/** Tracked `scripts/**` and `apps/*\/infra/**` shell files that exist on disk. */
+function g2TrackedScripts(): string[] {
+  const r = spawnSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 1 << 27 });
+  if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
+  return r.stdout
+    .split("\0")
+    .filter((p) => /^scripts\/.+\.sh$/.test(p) || /^apps\/[^/]+\/infra\/.+\.sh$/.test(p))
+    .filter((p) => existsSync(resolve(REPO_ROOT, p)));
+}
+
+/** `script|verb|address` for a state-write verb in a script that names a sole-copy address anywhere. */
+function g2ScriptHits(rel: string, text: string): string[] {
+  return g2StateWriteHits(g2Code(text)).map(([v, a]) => `${rel}|${v}|${a}`);
+}
+
+/** Insert `newLines` (indented like the anchor) BEFORE the first line matching `anchor` inside `jobId` (any job if omitted). */
+function g2InsertBefore(text: string, anchor: RegExp, newLines: string[], jobId?: string): string {
+  const out: string[] = [];
+  let inJob = jobId === undefined;
+  let done = false;
+  for (const line of text.split("\n")) {
+    if (jobId !== undefined && /^ {2}[A-Za-z0-9_-]+:/.test(line)) inJob = new RegExp(`^ {2}${jobId}:`).test(line);
+    if (inJob && !done && anchor.test(line)) {
+      const indent = /^\s*/.exec(line)![0];
+      for (const n of newLines) out.push(indent + n);
+      done = true;
+    }
+    out.push(line);
+  }
+  if (!done) throw new Error(`g2InsertBefore: anchor ${anchor} not found${jobId ? ` in job ${jobId}` : ""}`);
+  return out.join("\n");
+}
+
 /**
  * The inngest dispatch surfaces after the plaintext-backstop retirement (#8285 PR B).
  *
@@ -3597,6 +3779,142 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(perMerge.has("random_password.inngest_redis_luks")).toBe(true);
     expect(perMerge.has("doppler_secret.inngest_redis_luks_key")).toBe(true);
   });
+
+  // ---- Guard 2 (#9879): the sole-copy addresses are reachable ONLY through the expected (workflow, job, verb) set ----
+  test("G2: live tree - the (workflow, job, verb, address) census over every workflow equals the expected set", () => {
+    const files = g2LiveWorkflows();
+    expect(Object.keys(files).length).toBeGreaterThan(10); // non-vacuity: the directory scan reached the workflows
+    expect(Object.keys(files)).toContain(G2_WORKFLOW);
+    expect(SOLE_COPY_EXPECTED.length).toBe(7);
+    expect(g2Verdict(files)).toEqual([]);
+    expect(g2Census(files)).toEqual([...SOLE_COPY_EXPECTED].sort());
+    // Zero -replace and zero destroy of any of them, anywhere.
+    expect(g2Census(files).filter((t) => /\|(replace|destroy)\|/.test(t))).toEqual([]);
+    // Non-vacuity through the EXISTING chokepoints: the three expected jobs are found and carry -targets.
+    for (const job of ["apply", "inngest_host", "inngest_host_replace"]) {
+      expect(extractAllTargets(extractJobBlock(wf, job)).size, `${job} extracted empty`).toBeGreaterThan(0);
+      expect(g2Jobs(wf).get(job)).toBe(extractJobBlock(wf.slice(wf.indexOf("\njobs:\n") + 6), job));
+    }
+    // The per-merge view after stripDispatchJobs: the inngest_host job is gone from it, the other two expected jobs remain.
+    const perMerge = g2Census({ [G2_WORKFLOW]: stripDispatchJobs(wf) });
+    expect(perMerge).toEqual(SOLE_COPY_EXPECTED.filter((t) => !t.includes("|inngest_host|")).sort());
+    // The two Doppler parents are targeted (never replaced or destroyed) and only by inngest_host.
+    for (const parent of ["doppler_project.inngest", "doppler_environment.inngest_prd"]) {
+      expect(g2Census(files).filter((t) => t.endsWith(`|${parent}`))).toEqual([`${G2_WORKFLOW}|inngest_host|target|${parent}`]);
+    }
+  }, 60_000);
+
+  test("G2: mutation matrix rows 1-7 each turn the verdict RED (scratch copies only)", () => {
+    const live = g2LiveWorkflows();
+    const VOL = "hcloud_volume.inngest_redis_luks";
+    const ATT = "hcloud_volume_attachment.inngest_redis_luks";
+    const att = /-target='hcloud_volume_attachment\.inngest_redis_luks' \\$/;
+    const withWf = (text: string, extra: Record<string, string> = {}) => ({ ...live, [G2_WORKFLOW]: text, ...extra });
+    const rows: Array<[string, Record<string, string>, RegExp]> = [
+      ["1 -replace of the volume in inngest_host_replace",
+        withWf(g2InsertBefore(wf, att, [`-replace='${VOL}' \\`], "inngest_host_replace")), /unexpected: .*\|inngest_host_replace\|replace\|hcloud_volume\.inngest_redis_luks/],
+      ["2 -target of the volume in inngest_host_replace",
+        withWf(g2InsertBefore(wf, att, [`-target='${VOL}' \\`], "inngest_host_replace")), /unexpected: .*\|inngest_host_replace\|target\|hcloud_volume\.inngest_redis_luks/],
+      ["3 the attachment target in a third job (both legal ones intact)",
+        withWf(g2InsertBefore(wf, /^\s*-target=/, [`-target='${ATT}' \\`], "registry_host_replace")), /unexpected: .*\|registry_host_replace\|target\|hcloud_volume_attachment\.inngest_redis_luks/],
+      ["4 a terraform destroy step in a main-root workflow",
+        withWf(wf, { "apply-deploy-pipeline-fix.yml": g2InsertBefore(live["apply-deploy-pipeline-fix.yml"], /^\s+terraform plan -target=/, ["terraform destroy -auto-approve"]) }), /unexpected: apply-deploy-pipeline-fix\.yml\|.*\|destroy\|\*/],
+      ["5 -target X spelled with a space and a line continuation",
+        withWf(g2InsertBefore(wf, att, ["-target \\", `  ${VOL} \\`], "inngest_host_replace")), /unexpected: .*\|inngest_host_replace\|target\|hcloud_volume\.inngest_redis_luks/],
+      ["6 renamed job (expected job not found)",
+        withWf(wf.replace(/^ {2}inngest_host_replace:/m, "  inngest_host_replace_renamed:")), /job-not-found: .*\|inngest_host_replace/],
+      ["7 a new workflow file naming the pair in -target",
+        withWf(wf, { "zz-new.yml": `name: x\njobs:\n  j:\n    steps:\n      - run: |\n          terraform apply \\\n            -target=random_password.inngest_redis_luks \\\n            -target=doppler_secret.inngest_redis_luks_key\n` }), /unexpected: zz-new\.yml\|j\|target\|random_password\.inngest_redis_luks/],
+    ];
+    expect(g2Verdict(live)).toEqual([]); // control: the unmutated tree is GREEN, so a RED below is the mutation's doing
+    for (const [name, files, want] of rows) {
+      if (name.startsWith("6")) expect(files[G2_WORKFLOW]).not.toBe(wf);
+      const verdict = g2Verdict(files);
+      expect(verdict.length, `row ${name} stayed GREEN`).toBeGreaterThan(0);
+      expect(verdict.join("\n"), `row ${name} was RED for the wrong reason`).toMatch(want);
+    }
+  }, 60_000);
+
+  test("G2: every spelling is seen - flags, destroy, taint, state write, import (in a non-expected job)", () => {
+    const live = { [G2_WORKFLOW]: wf }; // one file is enough for a per-spelling verdict and keeps the loop fast
+    const VOL = "hcloud_volume.inngest_redis_luks";
+    const PW = "random_password.inngest_redis_luks";
+    const anchor = /-target='hcloud_volume_attachment\.inngest_redis_luks' \\$/;
+    const spellings: Array<[string, string[], string, RegExp?]> = [
+      ["-target=X", [`-target=${VOL} \\`], "target"],
+      ["-target X", [`-target ${VOL} \\`], "target"],
+      ["-target 'X'", [`-target '${VOL}' \\`], "target"],
+      ['-target="X"', [`-target="${VOL}" \\`], "target"],
+      ['-target=\\"X\\"', [`-target=\\"${VOL}\\" \\`], "target"],
+      ["-replace=X", [`-replace=${VOL} \\`], "replace"],
+      ["-replace X", [`-replace ${VOL} \\`], "replace"],
+      ["-replace 'X'", [`-replace '${VOL}' \\`], "replace"],
+      ["-destroy", ["-destroy \\"], "destroy"],
+      ["terraform destroy (own line)", ["terraform destroy -auto-approve"], "destroy", /^\s*set \+e$/],
+      ["doppler run -- terraform destroy", ["doppler run -p soleur -c prd_terraform -- terraform destroy -auto-approve"], "destroy", /^\s*set \+e$/],
+      ["cd x && terraform destroy", ["cd x && terraform destroy -auto-approve"], "destroy", /^\s*set \+e$/],
+      ["terraform taint", [`terraform taint ${PW}`], "taint"],
+      ["state rm", [`terraform state rm ${PW}`], "state-rm"],
+      ["state mv", [`terraform state mv ${PW} random_password.elsewhere`], "state-mv"],
+      ["state push (job also names an address)", ["terraform state push errored.tfstate"], "state-push"],
+      ["import", [`terraform import ${PW} id`], "import"],
+    ];
+    for (const [name, lines, verb, own] of spellings) {
+      const text = g2InsertBefore(wf, own ?? anchor, lines, "inngest_host_replace");
+      const census = g2Census({ ...live, [G2_WORKFLOW]: text });
+      expect(census.filter((t) => t.includes(`|inngest_host_replace|${verb}|`)), `spelling "${name}" was not seen`).not.toEqual([]);
+      expect(g2Verdict({ ...live, [G2_WORKFLOW]: text }).length, `spelling "${name}" stayed GREEN`).toBeGreaterThan(0);
+    }
+    // The scanner's own non-vacuity: `[ack-destroy]` prose is not the -destroy flag, and a sibling address is not a sole-copy one.
+    expect(g2JobVerbs(g2Code("echo 'add [ack-destroy] to the commit'"))).toEqual([]);
+    expect(g2JobVerbs(g2Code("terraform plan -target=hcloud_volume.inngest_redis_luks_other -target=doppler_project.inngest_x"))).toEqual([]);
+    // Comments are stripped: a whole-line comment naming a flag is not a hit.
+    expect(g2JobVerbs(g2Code(`# -replace=${VOL}\n  # terraform destroy`))).toEqual([]);
+    // A `#` inside a string or `$#` cannot hide a flag behind it (trailing comments are deliberately NOT stripped).
+    expect(g2JobVerbs(g2Code(`echo "$#"; terraform apply -replace=${VOL}`))).toEqual([["replace", VOL]]);
+  }, 60_000);
+
+  test("G2: tracked scripts - no state-write verb names a sole-copy address (web2-rebirth.sh stays legal)", () => {
+    const scripts = g2TrackedScripts();
+    expect(scripts.length).toBeGreaterThan(20); // non-vacuity: the tracked-file listing reached scripts/** and apps/*/infra
+    expect(scripts).toContain("scripts/web2-rebirth.sh");
+    const hits = scripts.flatMap((rel) => g2ScriptHits(rel, readFileSync(resolve(REPO_ROOT, rel), "utf8")));
+    expect(hits).toEqual([]);
+    // web2-rebirth really runs `terraform state rm` (a verb IS present) and names no sole-copy address: legal by content, not by exemption.
+    const rebirth = g2Code(readFileSync(resolve(REPO_ROOT, "scripts/web2-rebirth.sh"), "utf8"));
+    expect(G2_STATE_VERBS.some(([v, re]) => v === "state-rm" && re.test(rebirth))).toBe(true);
+    expect(g2Named(rebirth)).toEqual([]);
+    // Mutations on scratch strings: each spelling in a script is RED; the web-2 pinned form is not.
+    expect(g2ScriptHits("s.sh", `terraform state rm 'hcloud_volume.inngest_redis_luks'`)).toEqual(["s.sh|state-rm|hcloud_volume.inngest_redis_luks"]);
+    expect(g2ScriptHits("s.sh", `addrs=(doppler_project.inngest)\n(cd x && terraform state rm "\${addrs[@]}")`)).toEqual(["s.sh|state-rm|doppler_project.inngest"]);
+    expect(g2ScriptHits("s.sh", `terraform \\\n  import doppler_environment.inngest_prd p/e`)).toEqual(["s.sh|import|doppler_environment.inngest_prd"]);
+    expect(g2ScriptHits("s.sh", `# terraform state rm hcloud_volume.inngest_redis_luks`)).toEqual([]);
+    expect(g2ScriptHits("s.sh", `terraform state rm 'hcloud_volume.workspaces["web-2"]'`)).toEqual([]);
+  }, 60_000);
+
+  test("G2: harness - superset/subset constants are RED; a comment/continuation/quote-rewritten copy still equals the set", () => {
+    const live = g2LiveWorkflows();
+    // SUITE edit: a superset constant (one extra triple) and a subset constant (one triple dropped) both turn the live tree RED.
+    expect(g2Verdict(live, [...SOLE_COPY_EXPECTED, `${G2_WORKFLOW}|inngest_host_replace|target|hcloud_volume.inngest_redis_luks`]).length).toBeGreaterThan(0);
+    expect(g2Verdict(live, SOLE_COPY_EXPECTED.slice(1)).join("\n")).toMatch(/unexpected: /);
+    // Superset constant naming a job that does not exist: the non-vacuity check, not the diff, catches it.
+    expect(g2Verdict(live, [...SOLE_COPY_EXPECTED, `${G2_WORKFLOW}|no_such_job|target|doppler_project.inngest`]).join("\n")).toMatch(/job-not-found: .*no_such_job/);
+    // Must-PASS: rewrite every sole-copy -target (`=` -> space, re-quoted, folded onto a continuation) and add whole-line
+    // comments that would be hits if they were code. The census must still equal the expected set.
+    let n = 0;
+    const flagRe = new RegExp(`^(\\s*)-target=(['"]?)(${G2_ADDR_ALT})\\2 \\\\$`, "gm");
+    let rewritten = wf.replace(flagRe, (_m, ind: string, _q: string, addr: string) => {
+      const quote = ["", "'", '"'][n++ % 3];
+      return `${ind}# -replace=${addr} \\\n${ind}-target \\\n${ind}  ${quote}${addr}${quote} \\`;
+    });
+    expect(n).toBe(7);
+    expect(rewritten).not.toBe(wf);
+    expect(g2Verdict({ ...live, [G2_WORKFLOW]: rewritten })).toEqual([]);
+    // The rewrite is real: the original spelling no longer appears for any sole-copy address.
+    expect(new RegExp(`-target=['"]?(${G2_ADDR_ALT})\\b`).test(rewritten)).toBe(false);
+    // Control for the same rewrite: add a real flag to it and it goes RED, so GREEN above is not a blind scan.
+    expect(g2Verdict({ ...live, [G2_WORKFLOW]: rewritten + `\n      - run: terraform apply -replace=hcloud_volume.inngest_redis_luks\n` }).length).toBeGreaterThan(0);
+  }, 60_000);
 });
 
 /**

@@ -83,6 +83,7 @@ apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	2
 apps/web-platform/infra/inngest-host.test.sh	1
 apps/web-platform/infra/inngest-inventory.test.sh	3
 apps/web-platform/infra/inngest-luks-cutover.test.sh	1
+apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1
 apps/web-platform/infra/inngest-nic-wait.test.sh	2
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4
 apps/web-platform/infra/inngest-redis-luks.test.sh	2
