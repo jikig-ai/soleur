@@ -1,0 +1,1439 @@
+{
+ "comment": "Rows for the hosted destroy-ask classifier (#9776). hookAsks is verified against the real plugin hook by destroy-ask-hook-parity.test.ts; every ask row the hook does not ask must say hostedOnly in note.",
+ "rows": [
+  {
+   "cmd": "git push --force origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --force-with-lease origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --force-with-lease=main:abc123 origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --force-if-includes origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push origin +main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin master",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push origin master -f",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push origin --force main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -uf origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -fu origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin HEAD:refs/heads/main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin HEAD:main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push origin +HEAD:heads/main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin refs/heads/main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin heads/main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --force-with-lease --force-if-includes origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -o ci.skip -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --push-option=x -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --repo=origin -f main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin ma''in",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --forc origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: ambiguous abbreviation that git itself rejects; the lane asks anyway"
+  },
+  {
+   "cmd": "git push -f origin MAIN",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "note": "hostedOnly: case-insensitive compare; the hook compares branch names case-sensitively",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push origin :main",
+   "expect": "ask",
+   "rule": "git-delete-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --delete origin main",
+   "expect": "ask",
+   "rule": "git-delete-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -d origin main",
+   "expect": "ask",
+   "rule": "git-delete-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push origin --delete master",
+   "expect": "ask",
+   "rule": "git-delete-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push origin :refs/heads/main",
+   "expect": "ask",
+   "rule": "git-delete-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin :main",
+   "expect": "ask",
+   "rule": "git-delete-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --mirror",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "note": "hostedOnly: --mirror overwrites every remote ref; the hook's D1 omits it (CPO4-R1 scope: in)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --mirror origin",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "note": "hostedOnly: --mirror",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --force --all origin",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f --all",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin 'refs/heads/*:refs/heads/*'",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --force origin :",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push --force origin $BRANCH",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "note": "hostedOnly: variable destination",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin \"$(git branch --show-current)\"",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "note": "hostedOnly: substitution destination",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f",
+   "expect": "ask",
+   "rule": "git-force-implicit",
+   "note": "hostedOnly: implicit destination asks unconditionally (CTO)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin HEAD",
+   "expect": "ask",
+   "rule": "git-force-implicit",
+   "note": "hostedOnly: implicit destination asks unconditionally (CTO)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --force-with-lease",
+   "expect": "ask",
+   "rule": "git-force-implicit",
+   "note": "hostedOnly: implicit destination asks unconditionally (CTO)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin .",
+   "expect": "ask",
+   "rule": "git-force-implicit",
+   "note": "hostedOnly: implicit destination asks unconditionally (CTO)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin",
+   "expect": "ask",
+   "rule": "git-force-implicit",
+   "note": "hostedOnly: implicit destination asks unconditionally (CTO)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --force-with-lease origin HEAD",
+   "expect": "ask",
+   "rule": "git-force-implicit",
+   "note": "hostedOnly: implicit destination asks unconditionally (CTO)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git -C /repo push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git -c push.default=current push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "GIT_TRACE=1 git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "cd /repo && git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "cd /repo; git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "echo ok && git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "true || git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git status; git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main | cat",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "echo $(git push -f origin main)",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "echo `git push -f origin main`",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "cat <(git push -f origin main)",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "\"git\" push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "'git' 'push' '-f' 'origin' 'main'",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "/usr/bin/git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "GIT push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "env git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "command git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "nohup git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "time git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "timeout 30 git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "nice -n 5 git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "doas git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "env -i FOO=bar git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main &",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "(git push -f origin main)",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "{ git push -f origin main; }",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "if true; then git push -f origin main; fi",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push \\\n -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main # comment",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main\n",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "ls\ngit push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "doppler run -- git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "bash -lc 'git push -f origin main'",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "zsh -lc 'git push -f origin main'",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "sh -ec 'git push -f origin main'",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "bash -lc \"cd /repo && git push -f origin main\"",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "bash -lc \"bash -lc 'git push -f origin main'\"",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "echo \"$(git push -f origin main)\"",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main 2>&1",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main > /dev/null",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin develop",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "protected": [
+    "develop",
+    "main",
+    "master"
+   ],
+   "note": "hostedOnly: API-resolved default; the hook reads local refs only",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push origin +trunk",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "protected": [
+    "trunk",
+    "main",
+    "master"
+   ],
+   "note": "hostedOnly: API-resolved default",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --force-with-lease origin feat-x",
+   "expect": "ask",
+   "rule": "git-push-unknown-default",
+   "authoritative": false,
+   "note": "hostedOnly: unresolved default asks every force push",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --delete origin feat-x",
+   "expect": "ask",
+   "rule": "git-push-unknown-default",
+   "authoritative": false,
+   "note": "hostedOnly: unresolved default",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "authoritative": false,
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin develop",
+   "expect": "pass",
+   "rule": null,
+   "note": "develop is not protected when the API says the default is main",
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "tofu destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform destroy -auto-approve",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform -chdir=infra destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform -chdir=x apply -destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform apply -destroy -auto-approve",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform apply --destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform apply -destroy=true",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "tofu apply -destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "tofu -chdir=x destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "cd infra && terraform destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "bash -lc 'terraform destroy'",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "env TF_VAR_x=1 terraform destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "/usr/local/bin/terraform destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "TERRAFORM destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "doppler run -p x -c y -- terraform destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform destroy 2>&1 | tee out.log",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform destroy -target=aws_instance.x",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform apply -destroy=1",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform apply -destroy=yes",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "echo y | terraform destroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "TF_CLI_ARGS=-destroy terraform apply",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": false,
+   "note": "hostedOnly: TF_CLI_ARGS env words (CTO ruling); the hook does not read them"
+  },
+  {
+   "cmd": "TF_CLI_ARGS_apply=-destroy tofu apply",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": false,
+   "note": "hostedOnly: TF_CLI_ARGS env words (CTO ruling); the hook does not read them"
+  },
+  {
+   "cmd": "export TF_CLI_ARGS_apply=-destroy; terraform apply",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": false,
+   "note": "hostedOnly: TF_CLI_ARGS env words (CTO ruling); the hook does not read them"
+  },
+  {
+   "cmd": "env TF_CLI_ARGS=-destroy terraform apply",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": false,
+   "note": "hostedOnly: TF_CLI_ARGS env words (CTO ruling); the hook does not read them"
+  },
+  {
+   "cmd": "\"terraform\" 'destroy'",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform\tdestroy",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "nohup terraform destroy &",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r/git/refs/heads/main",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -XDELETE repos/o/r/git/refs/heads/main",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api --method DELETE repos/o/r/git/refs/heads/master",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api --method=DELETE /repos/o/r/git/refs/heads/main",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X delete repos/o/r/git/refs/heads/main",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r/git/refs/heads/$B",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE 'repos/o/r/git/refs/heads/*'",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api repos/o/r/git/refs/heads/main -X DELETE",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X PATCH repos/o/r/git/refs/heads/main -F force=true -f sha=abc",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X PUT repos/o/r/git/refs/heads/main -f force=true -f sha=abc",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api --method PATCH repos/o/r/git/refs/heads/main --raw-field force=true",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X PATCH repos/o/r/git/refs/heads/main --input body.json",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "bash -lc 'gh api -X DELETE repos/o/r/git/refs/heads/main'",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "cd x && gh api -X DELETE repos/o/r/git/refs/heads/main",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r/git/refs/heads/develop",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "protected": [
+    "develop",
+    "main",
+    "master"
+   ],
+   "note": "hostedOnly: API-resolved default",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r/",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE /repos/o/r",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh repo delete o/r --yes",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh repo delete",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh repo delete o/r",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "cd x && gh repo delete o/r --yes",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "bash -lc 'gh repo delete o/r --yes'",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh -R o/r repo delete --yes",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE \"repos/$O/$R\"",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api --input del.json -X DELETE repos/o/r",
+   "expect": "ask",
+   "rule": "gh-repo-delete",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "git push -f \"origin main",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: unparseable command containing push or destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "echo \"unterminated terraform destroy",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: unparseable command containing push or destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push origin $( ",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: unparseable command containing push or destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "terraform destroy 'x",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: unparseable command containing push or destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main`",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: unparseable command containing push or destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main\u0000",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: a NUL byte makes the command unparseable; it names push",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin main $(",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: unparseable command containing push or destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "x=$(terraform destroy",
+   "expect": "ask",
+   "rule": "fail-closed-keyword",
+   "note": "hostedOnly: unparseable command containing push or destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "cat <<EOF | bash\ngit push -f origin main\nEOF",
+   "expect": "ask",
+   "rule": "raw-scan",
+   "note": "hostedOnly: heredoc piped into a shell; raw scan",
+   "hookAsks": false
+  },
+  {
+   "cmd": "bash <<< \"git push -f origin main\"",
+   "expect": "ask",
+   "rule": "raw-scan",
+   "note": "hostedOnly: here-string into a shell; raw scan",
+   "hookAsks": false
+  },
+  {
+   "cmd": "echo \"terraform destroy\" | sh",
+   "expect": "ask",
+   "rule": "raw-scan",
+   "note": "hostedOnly: pipe into a shell; raw scan",
+   "hookAsks": false
+  },
+  {
+   "cmd": "echo 'git push -f origin main' | xargs -I{} sh -c {}",
+   "expect": "ask",
+   "rule": "raw-scan",
+   "note": "hostedOnly: xargs; raw scan",
+   "hookAsks": false
+  },
+  {
+   "cmd": "echo 'unterminated",
+   "expect": "pass",
+   "rule": null,
+   "note": "unparseable without push or destroy: passes",
+   "hookAsks": true,
+   "parityExempt": "the hook asks on every unparseable command; the lane asks only when push or destroy appears (CTO fail-closed rule)"
+  },
+  {
+   "cmd": "echo \"unterminated quote and nothing else",
+   "expect": "pass",
+   "rule": null,
+   "note": "unparseable without push or destroy: passes",
+   "hookAsks": true,
+   "parityExempt": "the hook asks on every unparseable command; the lane asks only when push or destroy appears (CTO fail-closed rule)"
+  },
+  {
+   "cmd": "git push origin feat-x",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --force-with-lease origin feat-x",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin feat-x",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -u origin main",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push origin main",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push origin HEAD",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --delete origin feat-x",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push origin :feat-x",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --all origin",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push --tags",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push origin v1.2.3",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git commit -m \"terraform destroy docs\"",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git commit -m \"git push -f origin main\"",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git commit -m push",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "echo \"git push -f origin main\"",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "echo 'terraform destroy'",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "echo git push -f origin main",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "cat README.md # terraform destroy",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "man git push",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "grep -r \"git push -f\" .",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git log --grep=push",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git log --oneline -5",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git fetch origin",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git status",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git pull origin main",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git rebase origin/main",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git diff --stat",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform plan",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform apply",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform plan -destroy",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform apply -destroy=false",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform apply -destroy=0",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform apply -destroy=False",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform init",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform fmt -check",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform validate",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform workspace list",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "terraform output",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "tofu plan",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "tofu apply -auto-approve",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh pr list",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh pr create --title x --body y",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh issue create --title x",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api repos/o/r",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api repos/o/r/pulls",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api -X GET repos/o/r/git/refs/heads/main",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api repos/o/r/git/refs/heads/main",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r/git/refs/heads/feat-x",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r/issues/comments/5",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh repo view",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh repo clone o/r",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "docker push registry.example/x:tag",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "npm run build",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "ls -la",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "pwd",
+   "expect": "pass",
+   "rule": null,
+   "hookAsks": false
+  },
+  {
+   "cmd": "git push -f origin ma\"\"in-feature",
+   "expect": "pass",
+   "rule": null,
+   "note": "dest is main-feature, not main",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api graphql -f query='mutation { deleteRef(input:{refId:\"x\"}) { clientMutationId } }'",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api graphql -f query='mutation { deleteRepository(input:{repositoryId:\"x\"}) { clientMutationId } }'",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api graphql -f query='mutation { updateRef(input:{refId:\"x\",oid:\"y\",force:true}) { clientMutationId } }'",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh api graphql --input q.json",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh issue delete 5",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh release delete v1 --yes",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh label delete x",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
+   "hookAsks": false
+  }
+ ]
+}
