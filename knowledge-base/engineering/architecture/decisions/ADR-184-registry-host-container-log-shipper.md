@@ -510,3 +510,29 @@ stream), a keyed `k=v` summary in place of a 21-field positional read, per-occur
 substance check on the Doppler-shape run (dot padding cannot post a public FAIL), value clamping
 on producer fields echoed to the public comment, and an `n_other` bucket so unclassifiable grep
 hits are counted rather than invisible.
+
+## Amendment 2026-10-10 — the upload error line is classified on `func`, through the upload sub-quota (#9373)
+
+Append-only; the sections above are unchanged. Two statements above stop being literally true and
+are corrected here rather than edited in place.
+
+- **A consumer must anchor on the parsed `message` field** (Decision, the F-5 bypass discussion)
+  remains the rule for the gc classes and the crash classes. It does not hold for the PatchBlobUpload
+  error line: zot's real line carries `message:unexpected error, removing .uploads/ files` and names
+  the handler only in the parsed top-level `func`. The earlier `PatchBlobUpload*` message-prefix arm
+  (07cf8ebcb0, #7444) matched zero real rows, so the line was rate-capped while the suite stayed
+  green over a dead arm. `is_cap_exempt` now takes the parsed `func` as a second argument and
+  classifies on the suffix `(*RouteHandler).PatchBlobUpload`. `func` is set by zot on every line, so
+  the arm matches its VALUE; request-derived bytes are JSON-escaped into string fields and journald
+  fragments do not parse, so they cannot spell a top-level `func` (T21 S6, S7, S9).
+- **"The four classes are cap-exempt against their own 17-per-tick ceiling"** (Consequences) is now:
+  the gc classes, the crash classes and the boot config dump use the shared 17-slot lane; the
+  func-keyed upload error line is admitted through the 8-slot upload sub-quota (#7555) that already
+  existed inside that lane, via a tri-state return (0 shared lane, 2 upload sub-quota, 1 ordinary).
+  Message arms are tested first, so a crash-class message logged from inside the upload handler
+  keeps the shared lane (T21 S10).
+- **Cost, recorded because it was not before:** a failed upload emits two rows (the error line and
+  the paired HTTP 5xx row) and both draw from the same 8 slots, so about 4 failed uploads in a tick
+  exhaust the sub-quota; the overflow is accounted as `reason=exempt_cap`, never silent, and the
+  #7556 probe reads any non-`rate_cap` drop as TRANSIENT, never PASS (T21 S3b pins the sharing). The
+  caps were deliberately not retuned: each retune is another cloud-init edit and another host replace.

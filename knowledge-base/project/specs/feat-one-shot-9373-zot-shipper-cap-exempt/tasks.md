@@ -35,3 +35,4 @@ Process: every Bash call chains `cd <worktree> &&`; no bare git stash; no proces
 ## 5. Post-merge telemetry (no SSH)
 - 5.1 SOLEUR_ZOT_DISK query: new boot_id, zot_restarts=0, post_fail=0, digest unchanged.
 - 5.2 7556 PASS (or a named TRANSIENT); 7341 not FAIL (TRANSIENT span<24h expected); report "7341 PASS: not yet observable" and "arm live: pending".
+- 5.3 Gating post-boot criterion (added in review): within ~15 min of the new boot_id, a SOLEUR_ZOT_LOG `HTTP API` row for the new host, `zot-log-channel-7440.sh` reporting delivery, and `log_shipper_shipped_cum` rising across two heartbeats. See the plan's Post-Review Amendments.

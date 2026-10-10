@@ -706,3 +706,33 @@ firewall-first L3->L7 checklist has nothing to diagnose; no sshd/fail2ban hypoth
 - `knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`, `betterstack-log-query.md`
 - `scripts/registry-replace-preflight.sh`, `apps/web-platform/infra/registry-userdata-budget.sh`,
   `plugins/soleur/test/cloud-init-user-data-size.test.ts`
+
+## Post-Review Amendments (2026-10-10, review of PR #9942)
+
+Appended, not edited in place; each item corrects or extends a statement above.
+
+- **ADR conflict (corrects "No ADR conflict" in Research Insights and "no ADR/C4 impact" in Domain Review):**
+  ADR-184 pinned consumers to the parsed `message` field and described four cap-exempt classes inside
+  a 17-slot ceiling. This change re-keys one class onto `func` and moves it to the 8-slot sub-quota,
+  so ADR-184 carries an append-only amendment dated 2026-10-10.
+- **Mutation matrix row 3 correction:** a pure substring arm (`*"PatchBlobUpload"*`) is NOT killed by the
+  GetBlob row (GetBlob does not contain the token). The shipped suite adds far-side scenario S9
+  (`CreateBlobUpload`, `PatchBlobUpload.func1`, `(*OtherHandler).PatchBlobUpload`, the retired message
+  shape, a nested key `func`) and S10 (precedence), each shown to redden under its mutation.
+- **Sub-quota sharing:** the error row and the HTTP 5xx row share the same 8 slots, so "4 pairs per tick
+  survive" is the ceiling, and about 4 failed uploads in a tick produce `exempt_cap` drops that hold the
+  #7556 probe at TRANSIENT. Pinned by T21 S3b; recorded in the ADR amendment.
+- **Phase 4 gating evidence:** the shipper suite runs in `infra-validation.yml` (`deploy-script-tests`), which is
+  not a context in `scripts/required-checks.txt`; the merge gates that block are `test` and the dispatcher's
+  render and size gates. The behavioural evidence that blocks delivery is therefore the suite run recorded in
+  the PR body plus the Phase 5 post-boot check below.
+- **Phase 5 gating criterion (added):** within about 15 minutes of the new `boot_id`, require (a) a
+  SOLEUR_ZOT_LOG row for the new host carrying the `HTTP API` marker, (b) `scripts/followthroughs/zot-log-channel-7440.sh`
+  reporting delivery, and (c) `log_shipper_shipped_cum` rising across two consecutive heartbeats while
+  `log_shipper_dropped_cum` does not track it. `post_fail=0` alone is not enough: a shipper that ships nothing
+  satisfies it, and a delivered bad shipper makes the corrective replace refuse (preflight P5 requires a live
+  `HTTP API` row), which is the stuck state this criterion exists to detect early.
+- **Citation fix:** the shipper's origin is fb9939d613 (#7440) and 07cf8ebcb0 (#7444); #7455 is the follow-through
+  that observed the channel, not an origin.
+- **Probe counters:** the 7440 and 7341 counters additionally bound the payload length below 800 characters, since
+  a row cut by `sanitize()` is client-shaped and could otherwise be forged into the count; they stay informational.

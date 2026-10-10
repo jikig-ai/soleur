@@ -1299,7 +1299,8 @@ run_shipper "$J_S3B" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5 ZOT_LOG_SHIPPER_CAP_EXEM
 assert "T21 S3b the error row and the HTTP 5xx upload row share ONE 8-slot sub-quota (6+6 offered, 8 shipped)" \
   "[[ \$(( \$(grep -c 'PatchBlobUpload,goroutine:93' '$STUB_POSTS') + \$(grep -c 's3bhttp-' '$STUB_POSTS') )) -eq 8 ]]"
 
-# S9 — FAR-SIDE fixtures for the func arm: every row below must stay behind the ordinary cap. They pin
+# S9 — FAR-SIDE fixtures for the func arm (the nested-key row carries NO top-level func on purpose: with
+# one, a recursive-descent extraction would still pick the root first and the mutant would be equivalent): every row below must stay behind the ordinary cap. They pin
 # the suffix anchor, the receiver qualifier, top-level-only extraction and the retirement of the old
 # message-prefix arm, none of which a ships-only fixture can see. The canonical row at the end is the
 # positive control (same shape, exempt func), so a deny-everything arm cannot satisfy this scenario.
@@ -1309,7 +1310,7 @@ t21_fn 9101 9101 "${T21_PFX}.(*RouteHandler).CreateBlobUpload" >> "$J_S9"
 t21_fn 9102 9102 "${T21_PFX}.(*RouteHandler).PatchBlobUpload.func1" >> "$J_S9"
 t21_fn 9103 9103 "${T21_PFX}.(*OtherHandler).PatchBlobUpload" >> "$J_S9"
 printf '%s\n' "{\"level\":\"error\",\"message\":\"PatchBlobUpload i/o timeout\",\"caller\":\"c\",\"func\":\"${T21_PFX}.SessionLogger.func1.1\",\"goroutine\":9104}" >> "$J_S9"
-printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/s9nested\",\"statusCode\":200,\"headers\":{\"func\":\"${T21_PFX}.(*RouteHandler).PatchBlobUpload\"},\"caller\":\"c\",\"func\":\"${T21_PFX}.SessionLogger.func1.1\",\"goroutine\":9105}" >> "$J_S9"
+printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/s9nested\",\"statusCode\":200,\"headers\":{\"func\":\"${T21_PFX}.(*RouteHandler).PatchBlobUpload\"},\"caller\":\"c\",\"goroutine\":9105}" >> "$J_S9"
 t21_upl 'unexpected EOF' 2190 9199 >> "$J_S9"
 run_shipper "$J_S9" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5 ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL=17 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=8
 assert "T21 S9 positive control: the canonical func-keyed row in the same flood DOES ship" \
