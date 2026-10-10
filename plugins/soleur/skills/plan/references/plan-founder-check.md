@@ -46,7 +46,11 @@ records nothing. Store the founder's answer **verbatim** as `text`. Do not clean
 ## Proposing the literal check
 
 Propose a `command` (what runs) and an `expected` string (one literal substring of stdout; empty
-means "exit 0 only"), and one plain sentence beside them saying what the command will do. The
+means "exit 0 only"), and one plain sentence beside them saying what the command will do. `expected`
+is a single line by constraint: the validator rejects any control character (`\x00-\x1f`), so a
+YAML block scalar (`expected: |`) or `\n`-escaped multi-line value fails candidate verification —
+to assert "every file marked", check the sorted full `git grep -l` output against a single-file
+substring that only appears when the work is done, or pin a repo script that asserts the set. The
 founder approves the **exact text**, not a paraphrase: print `founder-check.py text approval-ask`
 (`founder-check.py text approval-ask-eyes` for a `kind: judgement` check, where no command runs)
 and record the founder's answer exactly as given in `approved_by`, with today's UTC date in
