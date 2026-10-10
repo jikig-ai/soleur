@@ -113,6 +113,23 @@ builtins / prod `dependencies` / in-payload relatives, since a devDep import
 there fails the same way in-image. All pinned at PR time in
 `apps/web-platform/test/dockerfile-vitest-version-pin.test.ts`.
 
+**Writable-temp constraint (#9860):** zero specifiers is necessary but not
+sufficient. `/app/package.json` is `"type": "module"`, so vitest's
+`configLoader: bundle` (the default) takes the ESM load path: bundle in
+memory, then write `<nearest node_modules>/.vite-temp/<name>.timestamp-*.mjs`
+before `import()`ing it — falling back to the config's own directory when the
+`.vite-temp` mkdir hits EACCES. The canary exec runs as USER soleur with
+`/app`, `/app/test`, and `/app/node_modules` all root-owned, so BOTH targets
+EACCES and the probe reports `reason=vitest_rc_1: … failed to load config
+from /app/test/vitest.canary.config.ts` (the v0.335.5 prod verdict — the
+error line under the banner is truncated in the deploy-status state). The
+Dockerfile bakes `RUN install -d -o 1001 -g 1001 node_modules/.vite-temp`
+after `npm ci --omit=dev` (npm ci recreates node_modules/ wholesale, so
+order matters); the pin test asserts its presence, ownership, and ordering.
+Note for repro work: an out-of-image sim must carry `package.json
+{"type":"module"}` AND read-only payload/node_modules dirs — without the
+former the loader takes the in-memory CJS path and the EACCES never fires.
+
 ## Gate vs report — report-only (chosen)
 
 The probe ships **report-only**: it is invoked `|| true` inside the

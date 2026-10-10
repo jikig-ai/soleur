@@ -141,6 +141,40 @@ describe("Dockerfile vitest global-install pin parity", () => {
     expect("const u = import.meta.url;").not.toMatch(BANNED[0]);
   });
 
+  // Writable-temp pin (#9860): vitest's `configLoader: bundle` (the default)
+  // writes the bundled config to `<nearest node_modules>/.vite-temp`, falling
+  // back to the config's own directory — in-image that is `/app/node_modules`
+  // then `/app/test`, BOTH root-owned while the canary exec runs as USER
+  // soleur. `/app/package.json` is `"type": "module"`, so the ESM path
+  // (temp-file write + `import()`) is taken — the in-memory CJS path does not
+  // apply. Without a baked soleur-owned `.vite-temp`, `vitest run` dies at
+  // "failed to load config" (the v0.335.5 prod verdict shape). `npm ci`
+  // recreates node_modules/ wholesale, so the bake must come after the last
+  // npm install step in the runner stage.
+  it("the runner stage bakes a soleur-owned node_modules/.vite-temp — the config bundler's only writable target", () => {
+    const dockerfile = read("Dockerfile");
+    const line = dockerfile
+      .split("\n")
+      .find((l) => !l.trimStart().startsWith("#") && l.includes(".vite-temp"));
+    expect(
+      line,
+      "Dockerfile must bake node_modules/.vite-temp for the config bundler",
+    ).toBeDefined();
+    expect(
+      line!,
+      ".vite-temp must be owned by the canary exec user (soleur, uid 1001)",
+    ).toMatch(/\b(soleur|1001)\b/);
+    const bakeIdx = dockerfile.indexOf(line!);
+    const lastNpm = Math.max(
+      dockerfile.lastIndexOf("npm ci"),
+      dockerfile.lastIndexOf("npm prune"),
+    );
+    expect(
+      bakeIdx,
+      ".vite-temp bake must come after the last npm ci/prune (which recreates node_modules/)",
+    ).toBeGreaterThan(lastNpm);
+  });
+
   // Exact-shape pin (#9860): dropping `defineConfig` also dropped
   // UserConfig excess-property checking, and config VALUES reach the resolver
   // the same way specifiers do — `environment: "jsdom"`, `coverage.provider`,
