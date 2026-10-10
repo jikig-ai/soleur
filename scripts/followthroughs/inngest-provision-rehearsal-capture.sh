@@ -271,17 +271,22 @@ ok()   { note "PASS: $1"; }
 viol() { note "VIOLATION: $1"; violated=1; }
 want() { note "WAIT: $1"; missing="${missing}$1; "; }
 
-# FORBIDDEN IN EVERY MODE (#9939): a `Failed to start inngest-luks*` journal row means a LUKS
-# unit start was attempted before its EnvironmentFile= files were staged — the benign ordering
-# noise the ConditionPathExists= conditions remove, and the false-failure shape this channel
-# must never carry. The needle is the systemd journal TEXT, not a stage= field: these rows are
+# FORBIDDEN IN EVERY MODE (#9939): a `Failed to start inngest-luks*` journal row is the
+# false-failure shape the ConditionPathExists= conditions remove, and this channel must never
+# carry it. The needle is the systemd journal TEXT, not a stage= field: these rows are
 # journald/systemd rows, not phone-home markers. Counted against the mode's own row set —
 # HOST_ROWS for phase-a/phase-b (this run's window), POST_ROWS for post-reboot (post-boundary).
-luks_failed_count() { printf '%s\n' "$1" | grep -cF 'Failed to start inngest-luks' 2>/dev/null || true; }
+# Journald rows carry no iid=, so the count is host+window scoped by design: the workflow's
+# always-on --since bound is what excludes a prior life's storm rows on a re-capture. This is
+# DETECTION, not prevention — the unit conditions are the preventive layer; the observed
+# storm's rows demonstrably shipped to this source (run 38031062344), though the systemd-tagged
+# delivery path is documented unexplained (vector.toml) — a liveness caveat, tracked separately.
+count_luks_failed() { printf '%s\n' "$1" | grep -cF 'Failed to start inngest-luks' 2>/dev/null || true; }
 luks_failed_check() { # <row-set> — viol on any `Failed to start inngest-luks*` row
-  n_luks_failed="$(luks_failed_count "$1")"
+  local n_luks_failed
+  n_luks_failed="$(count_luks_failed "$1")"
   (( n_luks_failed > 0 )) \
-    && viol "${n_luks_failed} 'Failed to start inngest-luks*' journal row(s) — a LUKS unit start ran before its EnvironmentFile= files existed (#9939)" \
+    && viol "${n_luks_failed} 'Failed to start inngest-luks*' journal row(s) — a LUKS unit failed to start (pre-staging ordering noise or a genuine start failure; both are verdicts, #9939)" \
     || ok "zero 'Failed to start inngest-luks*' journal rows"
 }
 

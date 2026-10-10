@@ -239,7 +239,7 @@ Fired on the literal `SSH` trigger (the plan's "no-SSH" assertions); resolved cl
 | 1 | Delete `ConditionPathExists=/etc/default/inngest-luks` from the luks-open write_files block | RED — the T1.x condition assert in inngest-redis-luks.test.sh fails |
 | 2 | Delete `ConditionPathExists=/etc/default/inngest-luks-volumes` from inngest-luks-cutover.timer (the second env file, after a compliant first) | RED — the trio arm in inngest.test.sh names every file the service declares, not just the first |
 | 3 | Drop the `Failed to start inngest-luks` forbidden check from the capture script | RED — the capture suite's new fixture arm injects such a row and expects the `viol`/FAIL exit |
-| 4 | Neuter the new inngest.test.sh arm to a presence grep on one file only | RED — the arm asserts both files' condition sets; a one-file check cannot satisfy it |
+| 4 | Weaken the new inngest.test.sh arm itself (presence grep on one file only) | test-strength mutation — NOT suite-observable (the floor counts assertions, not discrimination); the shipped arm satisfies the coverage intent by asserting every file's full condition set |
 | 5 | Re-point a `ConditionPathExists=` at a path that always exists (e.g. `/etc`) | RED — the asserts pin the literal env-file paths, not merely the directive's presence |
 | 6 | Must-PASS: a healthy rehearsal host (env files staged, both units active) | PASS — the forbidden check counts only `Failed to start` rows; normal `reopen_ok`/`unit-exit` rows are unaffected, and the capture's positive arms are untouched |
 

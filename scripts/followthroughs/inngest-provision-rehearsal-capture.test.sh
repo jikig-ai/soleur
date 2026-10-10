@@ -264,20 +264,20 @@ rows "$TMP/r-luksfail-a.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
-  "systemd[1]: Failed to start inngest-luks-open.service - Open the LUKS mapper for /mnt/data. \"host\":\"${HOST}\""
+  "systemd[1]: Failed to start inngest-luks-open.service - Open the LUKS mapper for /mnt/data before Redis starts (#7695). \"host\":\"${HOST}\""
 run "phase-a FAIL: a 'Failed to start inngest-luks*' journal row is a violation, not noise" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfail-a.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
 rows "$TMP/r-luksfail-b.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=3 iid=abc123 \"host\":\"${HOST}\"" \
-  "systemd[1]: Failed to start inngest-luks-cutover.service - Inngest Redis AOF LUKS cutover oneshot. \"host\":\"${HOST}\"" \
+  "systemd[1]: Failed to start inngest-luks-cutover.service - Inngest Redis AOF LUKS blue-green cutover oneshot (FSM: armed->copying->copied->swapped->done / rollback; #6894). \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=4 iid=abc123 \"host\":\"${HOST}\""
 run "phase-b FAIL: bootstrap-done does not excuse a 'Failed to start inngest-luks*' row" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfail-b.json" -- "${BASE_ARGS[@]}" --mode phase-b
 
 rows "$TMP/r-luksfail-post.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1 \"host\":\"${HOST}\"" \
-  "systemd[1]: Failed to start inngest-luks-open.service - Open the LUKS mapper for /mnt/data. \"host\":\"${HOST}\""
+  "systemd[1]: Failed to start inngest-luks-open.service - Open the LUKS mapper for /mnt/data before Redis starts (#7695). \"host\":\"${HOST}\""
 run "post-reboot FAIL: a 'Failed to start inngest-luks*' row after the boundary is a violation" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfail-post.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 
