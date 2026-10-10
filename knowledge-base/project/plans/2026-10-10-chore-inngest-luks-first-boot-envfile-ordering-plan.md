@@ -159,9 +159,19 @@ logs:
   retention: Better Stack hot window ~40 min + s3 archive (queried via scripts/betterstack-query.sh union)
 
 discoverability_test:
-  command: bash scripts/betterstack-assert-absence.sh --host soleur-inngest-prd --absence 'Failed to start inngest-luks' --control SOLEUR_INNGEST_LUKS_CUTOVER --since 6h
+  command: bash scripts/betterstack-assert-absence.sh --host soleur-inngest-prd --absence 'Failed to start inngest-luks' --absence-require '"SYSLOG_IDENTIFIER":"systemd"' --absence-require '"host":"soleur-inngest"' --control SOLEUR_INNGEST_LUKS_CUTOVER --since 6h
   expected_output: SOLEUR_ABSENCE_ASSERT outcome=clean
   credentials_required: "doppler soleur/prd_terraform BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} — the journal channel is credential-gated; no unauthenticated read of it exists"
+  note: >-
+    Both requires are load-bearing, measured 2026-10-10 before merge. The bare needle
+    matched 42 rows attributed to host_name=soleur-inngest-prd in 7d, none on the prod
+    machine: 10 were GitHub-webhook payloads under ident=doppler/#9939's own title text
+    inside the inngest-server control-API log, and 32 were the run-38031062344 rehearsal
+    storm (rehearsal hosts ship under the prod host_name; the journald 'host' field, not
+    host_name, names the machine — prod machine host=soleur-inngest). Without the systemd
+    require the probe reads `present` on its own issue's event stream; without the machine
+    require every rehearsal storm attributes to the prod window. The capture script's
+    count_luks_failed carries the same systemd-row scoping.
 ```
 
 ## Encryption Posture

@@ -32,3 +32,16 @@
 - Follow-ups filed: #9962 (sibling same-class units), #9963 (unexplained systemd-row shipping path), #9964 (ensure-semgrep broken-binary blind spot).
 - Affected-gate `test-all.sh --affected` queued on repo-global flock behind sibling worktree runs (position 3; measured >1h).
 - Suites green after round 2: 426/426 inngest, 63/63 redis-luks, 30/30 capture (floors exact).
+
+## Check-10 execution discovery (2026-10-11)
+
+Preflight Check 10 actually EXECUTED the plan's declared absence probe and it read
+`outcome=present` — 10 rows. Investigation: (a) 10 of them are GitHub-webhook payloads
+shipped by the inngest-server control API under ident=doppler (issue #9939's own title
+text IS the needle); (b) 32 in the 7d window are the run-38031062344 rehearsal storm —
+rehearsal hosts ship under `host_name=soleur-inngest-prd`, so machine scoping requires
+the journald `host` field, not `host_name`. Fixes landed: capture's count_luks_failed is
+systemd-row scoped; betterstack-assert-absence gained `--absence-require` (AND terms) —
+probe now needs 'SYSLOG_IDENTIFIER":"systemd' + '"host":"soleur-inngest"'; plan's
+discoverability_test command updated; scoped probe verified `outcome=clean` live
+(absence_rows=0, control_rows=545).

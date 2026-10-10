@@ -281,7 +281,21 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 # DETECTION, not prevention — the unit conditions are the preventive layer; the observed
 # storm's rows demonstrably shipped to this source (run 38031062344), though the systemd-tagged
 # delivery path is documented unexplained (vector.toml) — a liveness caveat, tracked separately.
-count_luks_failed() { printf '%s\n' "$1" | grep -cF 'Failed to start inngest-luks' 2>/dev/null || true; }
+# SYSTEMD-ROW SCOPED, not needle-text alone: the phrase also rides inside unrelated log
+# bodies — the inngest-server control API ships GitHub webhook payloads, and issue #9939's
+# own title IS the needle text (measured 2026-10-10: 10 false matches attributed to
+# host_name=soleur-inngest-prd, ident=doppler, _COMM=inngest). A real failure row carries
+# "SYSLOG_IDENTIFIER":"systemd" (measured on the run-38031062344 storm rows, which also
+# carry UNIT=/JOB_RESULT=failed) or the journald console form systemd[N]:. grep -c consumes
+# all input, so no SIGPIPE.
+count_luks_failed() {
+  # The {0,8} gap tolerates the JSONEachRow-serialized escape (\"SYSLOG_IDENTIFIER\":\"
+  # is 4 chars on the wire) as well as the unescaped ":"/= forms; a doppler/inngest row
+  # carries a non-systemd identifier and no systemd[N]: console prefix, so it cannot match.
+  printf '%s\n' "$1" |
+    grep -F 'Failed to start inngest-luks' |
+    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd|systemd\[[0-9]+\]' 2>/dev/null || true
+}
 luks_failed_check() { # <row-set> — viol on any `Failed to start inngest-luks*` row
   local n_luks_failed
   n_luks_failed="$(count_luks_failed "$1")"
