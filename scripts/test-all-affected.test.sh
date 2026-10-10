@@ -2623,9 +2623,9 @@ _rc=$ARM_RC
 _sel_yes=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $3=="1"{print $2}' <<<"$ARM_OUT" | sort | tr '\n' ' ')
 _sum=$(awk -F'\t|[[:space:]]' '$1=="AFFECTED_SUMMARY"' <<<"$ARM_OUT" | head -1)
 if [[ "$_rc" == "0" ]] \
-  && [[ "$_sel_yes" == "scripts/lint-dual-lockfile test/x-community " ]] \
+  && [[ "$_sel_yes" == "plugins/soleur/test/operator-ack-guard.test.sh plugins/soleur/test/operator-agent-runnable.test.sh plugins/soleur/test/operator-script.test.sh scripts/lint-dual-lockfile scripts/lint-shell-capture-exit-live scripts/lint-shell-trace-credential-refusal scripts/lint-trap-tempfile-ownership test/x-community " ]] \
   && grep -qF $'AFFECTED_SELECTED\tplugins/soleur\t0' <<<"$ARM_OUT" \
-  && grep -qF 'selected=2 of=6 always_on=1 edge=1 fallback=none' <<<"$_sum" \
+  && grep -qF 'selected=8 of=13 always_on=1 edge=7 fallback=none' <<<"$_sum" \
   && [[ "$(ran_count)" == "0" ]]; then
   pass "p1: --print-selection prints the exact selected set + summary and runs nothing"
 else
@@ -2667,7 +2667,7 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
   -- --affected
 if [[ "$ARM_RC" == "0" ]] && grep -qF 'AFFECTED_SUMMARY' <<<"$ARM_OUT" \
-  && grep -qF 'selected=2 of=6' <<<"$ARM_OUT"; then
+  && grep -qF 'selected=8 of=13' <<<"$ARM_OUT"; then
   pass "p4: a real --affected run prints the AFFECTED_SUMMARY line"
 else
   fail "p4: rc=$ARM_RC summary lines=$(grep -c AFFECTED_SUMMARY <<<"$ARM_OUT")"
@@ -2939,9 +2939,10 @@ python3 - "$TESTROOT/sb-$cases/lib/test-affected-paths.sh" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
 anchor = 'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=('
+KB = "knowledge" + "-base/"
 i = s.index(anchor) + len(anchor)
-j = s.index('"knowledge-base/"', i)
-s = s[:j] + '"glob:a*/b"' + s[j + len('"knowledge-base/"'):]
+j = s.index('"glob:' + KB + '**.sh"', i)
+s = s[:j] + '"glob:a*/b"' + s[j + len('"glob:' + KB + '**.sh"'):]
 open(p, 'w').write(s)
 PY
 : > "$TESTROOT/rec-$cases"
