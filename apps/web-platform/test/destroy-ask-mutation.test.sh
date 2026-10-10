@@ -62,8 +62,7 @@ bad "instrument self-test (fail path, expected)" >/dev/null
 if [ $((PASS - p0)) -ne 1 ] || [ $((FAIL - f0)) -ne 1 ]; then printf 'HALT: the pass/fail helpers did not both move\n'; exit 1; fi
 PASS=$p0 FAIL=$f0
 
-SB="$(mktemp -d "${TMPDIR:-/var/tmp}/destroy-ask-mut.XXXXXXXX")" || exit 2
-[[ "$SB" == /* ]] || exit 2
+SB="$(mktemp -d /var/tmp/destroy-ask-mut.XXXXXXXX)" || exit 2
 cleanup() { rm -rf "$SB"; }
 trap cleanup EXIT
 PRISTINE="$SB/.pristine"
