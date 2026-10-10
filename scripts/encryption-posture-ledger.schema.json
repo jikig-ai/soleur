@@ -64,12 +64,12 @@
             "attachment": { "type": "string" },
             "mapper": { "type": "string", "description": "The resolved /dev/mapper/<name> name; must match the luksOpen operand (after one level of ${VAR:-default} resolution) AND the mount/gate." },
             "apparatus": {
-              "description": "#9372/#9572: the repo-relative file under apps/*/infra/ that holds THIS volume's cryptsetup luksFormat and luksOpen. OPTIONAL for a singleton binding; the linter REQUIRES it for an indexed ([each.key]) binding, where resolving the mapper by name would reach a sibling volume's apparatus. At most one row may pin a given file.",
+              "description": "#9372/#9572: the repo-relative file under apps/*/infra/ that holds THIS volume's cryptsetup luksFormat and luksOpen. Only for an indexed ([each.key]) binding, where it is REQUIRED (resolving the mapper by name would reach a sibling volume's apparatus); a singleton row may not carry it. At most one row may pin a given file.",
               "type": "string",
               "minLength": 1
             },
             "key_chain": {
-              "description": "#9372/#9572: passphrase custody for a host that reads the key through a fresh-boot token. OPTIONAL for a singleton binding; REQUIRED for an indexed binding. When present it replaces the same-file random_password+doppler_secret pair check for that row.",
+              "description": "#9372/#9572: passphrase custody for a host that reads the key through a fresh-boot token. Only for an indexed binding, where it is REQUIRED; a singleton row may not carry it. It replaces the same-file random_password+doppler_secret pair check for that row.",
               "type": "object",
               "required": ["consumer", "token", "secret", "password"],
               "additionalProperties": false,

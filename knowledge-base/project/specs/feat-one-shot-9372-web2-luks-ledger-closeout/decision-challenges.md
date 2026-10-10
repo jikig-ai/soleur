@@ -67,3 +67,10 @@ Appended by plan on 2026-10-10 (headless pipeline: not asked, persisted for the 
 9. **`device_binding.volume` must equal `store` (not in the plan).** Found while reproducing the false-PASS construction: a row for
    one volume could cite a sibling volume's volume and attachment and pass. Added as one check with its own case (WC-25); no
    mutation row because the password-claim guard (MB-L5) fires on the same input, so deleting it is an equivalent mutant.
+10. **Design-validity pass applied before the panel (2026-10-11; mechanical, auto-decided).** The simplicity and architecture
+    seats agreed the mechanisms trace to the identified false-PASS and recommended cuts that lose none of it. Applied:
+    singleton `key_chain`/`apparatus` removed (no row uses them), same-root check removed, `retired-6604` sentinel dropped from
+    the volume-id match, one comment view instead of two, shared per-text scanners, canonical-path validation; added: the
+    `server_id` tie between attachment and consumer, the singleton binding read from the code view (a commented decoy could skip
+    the indexed arm), and a real-tree flip case (WC-30). Not applied (judgment calls kept): pin uniqueness (plan Guard 3 row 7,
+    cheap), the token/secret config-equality hop (ADR-263 independence), the host-script-list hop, and WC-27..29.

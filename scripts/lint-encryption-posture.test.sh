@@ -1503,6 +1503,88 @@ else
     "got $HM_REAL -> a web host key was added or removed: re-attest the hcloud_volume.workspaces ledger row (apparatus, key_chain, probe coverage) for it before changing this expectation"
 fi
 
+# --- design-review round: the guards added after the simplicity and architecture seats ------------------
+
+# WC-30 (real tree): the real ledger with the hcloud_volume.workspaces row flipped to luks passes the
+# linter against the REAL Terraform and provisioner. This is the only case that exercises the key-chain
+# seam (server.tf lines, the fresh-boot token, the cloud-init invocation) on the real files, so an
+# innocent rename there turns THIS suite red instead of surprising the flip PR. After the flip it is
+# idempotent (it rewrites the row to the same shape).
+LEDGER_REALFLIP="$TMPDIR_TEST/real-flipped-ledger.json"
+python3 - "$REPO_TRUE_ROOT/scripts/encryption-posture-ledger.json" "$LEDGER_REALFLIP" <<'PY'
+import json, sys
+ledger = json.load(open(sys.argv[1]))
+for row in ledger["stores"]:
+    if row["store"] == "hcloud_volume.workspaces":
+        row["device_binding"] = {
+            "volume": "hcloud_volume.workspaces",
+            "attachment": "hcloud_volume_attachment.workspaces",
+            "mapper": "workspaces",
+            "apparatus": "apps/web-platform/infra/workspaces-luks-provision.sh",
+            "key_chain": {
+                "consumer": "hcloud_server.web",
+                "token": "doppler_service_token.workspaces_luks_fresh_boot_web",
+                "secret": "doppler_secret.workspaces_luks_web_key",
+                "password": "random_password.workspaces_luks_web",
+            },
+        }
+        row["at_rest"]["mechanism"] = "luks"
+        row["at_rest"]["live_verification"] = "available"
+        row["at_rest"]["disclosed_as"] = "not-publicly-claimed"
+        row["at_rest"].pop("exception", None)
+json.dump(ledger, open(sys.argv[2], "w"), indent=2)
+PY
+run_case_reports "WC-30 the real ledger with the web-2 row flipped to luks passes on the REAL tree" 0 \
+  "0 failing checks" --repo-sweep --repo-root "$REPO_TRUE_ROOT" --ledger "$LEDGER_REALFLIP" --today "$TODAY"
+
+# WC-31: the attachment binds a different host than the key chain's consumer.
+V_SID="$(wc_variant server-id)"
+sed -i 's/server_id = hcloud_server.web\[each.key\].id/server_id = hcloud_server.other[each.key].id/' "$V_SID/$INFRA/server.tf"
+run_case_reports "WC-31 the attachment binds a different host than the consumer -> FAIL not the host the attachment binds" 1 \
+  "is not the host the attachment binds" --repo-sweep --repo-root "$V_SID" --ledger "$WC_LEDGER" --today "$TODAY"
+
+# WC-32: a commented-out singleton volume_id above a wrapped live one must not satisfy the singleton
+# binding (the indexed arm is skipped for `try(...)`; the singleton arm reads the CODE view).
+V_DECOY="$(wc_variant comment-volume-id)"
+sed -i 's|^  volume_id = hcloud_volume.workspaces\[each.key\].id$|  # volume_id = hcloud_volume.workspaces.id\n  volume_id = try(hcloud_volume.workspaces[each.key].id, "")|' "$V_DECOY/$INFRA/server.tf"
+assert_fixture_dir "$V_DECOY"
+cat >> "$V_DECOY/$INFRA/server.tf" <<'EOF'
+
+resource "random_password" "decoy" {
+  length = 40
+}
+
+resource "doppler_secret" "decoy" {
+  project = "soleur"
+  config  = "prd_decoy"
+  name    = "DECOY"
+  value   = random_password.decoy.result
+}
+EOF
+LEDGER_DECOY="$TMPDIR_TEST/wc-comment-volume-id-ledger.json"
+mk_webclass_ledger "$LEDGER_DECOY" "" ""
+run_case_reports "WC-32 a commented singleton volume_id above a wrapped live one -> FAIL does not attach" 1 \
+  "does not attach" --repo-sweep --repo-root "$V_DECOY" --ledger "$LEDGER_DECOY" --today "$TODAY"
+
+# WC-33: a singleton (web-1) row may not carry the indexed-only keys.
+LEDGER_SING="$TMPDIR_TEST/wc-singleton-keys-ledger.json"
+mk_webclass_ledger "$LEDGER_SING"
+python3 - "$LEDGER_SING" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["stores"][0]["device_binding"]["key_chain"] = d["stores"][1]["device_binding"]["key_chain"]
+json.dump(d, open(p, "w"), indent=2)
+PY
+run_case_reports "WC-33 a singleton row carrying key_chain -> FAIL indexed binding only" 1 \
+  "apply to an indexed" --repo-sweep --repo-root "$WC" --ledger "$LEDGER_SING" --today "$TODAY"
+
+# WC-34: the same file spelled two ways must not dodge the canonical-path rule.
+LEDGER_SPELL="$TMPDIR_TEST/wc-spelling-ledger.json"
+mk_webclass_ledger "$LEDGER_SPELL" '"apparatus": "apps/web-platform/infra/./workspaces-luks-provision.sh",'
+run_case_reports "WC-34 a non-canonical apparatus spelling -> FAIL canonical relative path" 1 \
+  "canonical relative path" --repo-sweep --repo-root "$WC" --ledger "$LEDGER_SPELL" --today "$TODAY"
+
 # --- mutation rows for the new guards ---------------------------------------
 # run_mutation_inverse: for a PERMISSIVE arm. Baseline must PASS (exit 0) and the mutated
 # SUT must FAIL (exit 1); a control proves the baseline really passes so the row cannot
@@ -1543,11 +1625,12 @@ run_mutation "MB-L5" "MB-L5" "$V_UNI" "$LEDGER_UNI"
 run_mutation_inverse "MB-L6" "MB-L6" "$WC" "$WC_LEDGER"
 run_mutation "MB-L8a" "MB-L8a" "$V_NA" "$LEDGER_NA"
 run_mutation "MB-L8b" "MB-L8b" "$V_NK" "$LEDGER_NK"
+run_mutation "MB-L10" "MB-L10" "$V_SID" "$WC_LEDGER"
 
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=78  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
+MIN_CASES=84  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

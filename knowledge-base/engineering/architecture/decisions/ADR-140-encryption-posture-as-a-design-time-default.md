@@ -267,25 +267,30 @@ The Layer A `luks` contract resolved a row through a literal `volume_id = <volum
 `random_password` + `doppler_secret` pair, and a mapper name found in any file under `apps/*/infra/`. A web-host
 volume (`hcloud_volume.workspaces`, `for_each` over the web hosts, attachment indexed `[each.key]`) fits none of the three,
 and relaxing the first two alone would have produced a green row that proves nothing: the mapper `workspaces` also resolves
-through web-1's cutover script, which is the name-similarity join this ADR rejects. The contract therefore grows, opt-in,
-as follows. A row whose attachment is indexed must carry all of it; a singleton row (every row until now) keeps its verdict
-byte-for-byte (a full `--repo-sweep` over the real ledger prints the same output as the previous linter).
+through web-1's cutover script, which is the name-similarity join this ADR rejects. The contract therefore grows as follows
+(it also relates to ADR-263, whose fresh-boot key custody the key chain mirrors). A full `--repo-sweep` over the CURRENT
+ledger prints the same output as the previous linter; that sentence is about the current ledger, not a guarantee for a
+future row, because three of the checks below apply to every `luks` row and tighten the contract (a store that differs from
+its volume, one passphrase claimed by two rows, one file pinned by two rows). No current row trips them.
 
 - **Indexed binding.** `volume_id = <volume>[each.key].id` is accepted only when the volume and the attachment each carry
   exactly one `for_each`, the two expressions are identical, every other index form is refused, a `for_each` or `volume_id`
-  inside a nested block fails closed, and each address resolves exactly once in one Terraform root. These checks read a
-  comment- and string-aware code view; the existing checks still read raw text.
-- **`device_binding.key_chain`** (`consumer`, `token`, `secret`, `password`). The consumer's `user_data` carries the volume id
-  line and the token line the row names, the token and the secret sit on one Doppler config, and the secret's value is the
-  named password. When present it replaces the same-file pair check for that row, and never relaxes it for a row without it.
+  inside a nested block fails closed, and each address resolves exactly once across the scan scope. These checks read a
+  comment- and string-aware code view; the singleton binding check also reads it, so a commented-out `volume_id` cannot
+  satisfy it while the live line is a wrapped or indexed form. The older raw-text readers keep their behaviour.
+- **`device_binding.key_chain`** (`consumer`, `token`, `secret`, `password`), indexed rows only and mandatory for them. The
+  attachment's `server_id` is `<consumer>[each.key].id`; the consumer's `user_data` carries a `workspaces_volume_id` line
+  referencing the volume's `[each.key].id` and the token line the row names; the token and the secret sit on one Doppler
+  config; the secret's value is the named password. It replaces the same-file pair check for that row.
 - **One passphrase, one row.** No `random_password` may be claimed by two `luks` rows (a row claims its `key_chain.password`,
-  or, with no key chain, every password in its attachment's own file), keyed by Terraform root.
-- **`device_binding.apparatus`.** The file that holds this volume's `luksFormat` and `luksOpen`. It is path-validated
-  (relative, under `apps/*/infra/`, no `..`, not a symlink), pinned by at most one row, and tied to the host: its basename must
-  be in the consumer's host-script list and invoked by the consumer's cloud-init. The mapper and the mount evidence are then
-  read from that file only; two scanner arms exist for it alone (an unquoted `MAPPER_NAME=literal` assignment, and an
-  fstab-shaped line held in a variable such as `FSTAB_LINE='/dev/mapper/<n> /mnt/data ext4 ...'`), because the provisioner is
-  embedded in `user_data` and carries neither as the older arms read them.
+  or, for a singleton row, every password in its attachment's own file), keyed by Terraform root.
+- **`device_binding.apparatus`**, indexed rows only and mandatory for them. The file that holds this volume's `luksFormat` and
+  `luksOpen`. It is spelled canonically (no `.`, `..`, `//`), a regular non-symlink file under `apps/*/infra/`, pinned by at
+  most one row, and tied to the host: its basename must be in the consumer's host-script list and invoked by the consumer's
+  cloud-init. The mapper and the mount evidence are then read from that file only; two scanner arms exist for it alone (an
+  unquoted `MAPPER_NAME=literal` assignment, and an fstab-shaped line held in a variable such as
+  `FSTAB_LINE='/dev/mapper/<n> /mnt/data ext4 ...'`), because the provisioner is embedded in `user_data` and carries neither as
+  the older arms read them.
 - **The row's volume is the store it ledgers.** `device_binding.volume` must equal `store`.
 - **Mandatory when indexed.** An indexed row missing `apparatus` or `key_chain` fails naming the key, so deleting one to
   silence a red lint cannot fall back to the name join.
@@ -294,9 +299,15 @@ byte-for-byte (a full `--repo-sweep` over the real ledger prints the same output
 comprehension and the variable's default) was planned and removed: its resolver was the most fragile parsing in the change and
 exceeded its line budget. The same guarantee, a new web host key turning CI red until the ledger row is re-attested for it, is
 now a suite assertion (`lint-encryption-posture.test.sh`, case WC-29) rather than a linter check, with a positive control that
-the extractor sees a new key.
+the extractor sees a new key. A design review then removed the same-root rule (Terraform cannot reference across roots), the
+`retired-6604` sentinel from the `workspaces_volume_id` match, the singleton form of `key_chain` and `apparatus`, and a
+second comment-stripping view; case WC-30 runs the real ledger row, flipped, against the real tree so a rename in `server.tf`
+turns this suite red rather than the later flip.
 
 **Known limits.** The static chain describes the declared configuration of NEW hosts (`user_data` is under `ignore_changes`),
 not a running instance; a running instance is covered by its probe rows alone. The checks read variable and local text, so a
-`TF_VAR` override is invisible. The `apparatus` pin is review-anchored, like the floor it feeds (ADR-141): a diff can edit the
-row and the code it grades together.
+`TF_VAR` override is invisible. The chain stops at Terraform: it does not read the `WORKSPACES_DOPPLER_CONFIG` literal in
+`cloud-init.yml`, the secret's `name`, or the token's `access`, and it matches the `user_data` lines anywhere in the consumer
+block and the host-script entry anywhere in the consumer's file; a miss there is a boot failure rather than a false
+encryption claim. The `apparatus` pin is review-anchored, like the floor it feeds (ADR-141): a diff can edit the row and the
+code it grades together.
