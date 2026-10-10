@@ -2,7 +2,7 @@
 # Sourced plan-SHAPE gate for the inngest-host dispatch
 # (apply_target=inngest-host in .github/workflows/apply-web-platform-infra.yml, #6894 / ADR-142).
 #
-# EXTRACTED + SOURCED (mirrors inngest-backstop-retire-gate.sh / inngest-host-replace-gate.sh): both
+# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh and, until #8285 PR B deleted it, inngest-backstop-retire-gate.sh): both
 # the workflow's inngest_host plan step AND tests/scripts/test-inngest-host-shape-gate.sh source
 # this file and call inngest_host_shape_gate directly, so the CI decision logic is the SAME bytes
 # the test exercises.
@@ -37,8 +37,8 @@
 #       (rotations reach Doppler by design — inngest-host.tf's "TF owns these three values")
 #
 # RETIRED (#8285): hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis (the plaintext
-# backstop pair) are no longer declared, `-target`ed or in the allow-set. They are state-only orphans
-# until the inngest-backstop-retire dispatch destroys them, so ANY action on either address is an
+# backstop pair) are no longer declared, `-target`ed or in the allow-set. The volume was destroyed
+# 2026-10-09 (the since-deleted inngest-backstop-retire dispatch), so ANY action on either address is an
 # out-of-allow-set change (out_of_scope; a delete trips resource_deletes and a forget forget_present first).
 #
 # GLOBAL:

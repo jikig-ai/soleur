@@ -140,7 +140,8 @@ Nothing was written in any of these cases. The anchor also prints which token it
 the read/write `HCLOUD_TOKEN`, because `HCLOUD_TOKEN_READONLY` is not yet minted
 (`infra-credential-tiers-8209.md` step O5). The same generation scope applies to op=arm G3.7's
 liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
-while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback.
+while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback (retired by #8285 PR B,
+so three ops today; the sentence is kept as written).
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
 it. If the intent is a deliberate SECOND flush on the same host — not a recovery — the verb is
@@ -335,6 +336,16 @@ apart, and the probe refuses it.
 **`scripts/inngest-host-state.sh` does not read these stages.** It reads the served FSM and unit
 state through journald → Vector → Better Stack, and Vector is installed by the bootstrap this unit
 runs. The readers for provision stages are the follow-through probe and the queries below.
+
+**On-demand rehearsal (#9175, ADR-279).** This whole path is rehearsed end-to-end by the
+dispatch-only `inngest-provision-rehearsal.yml` workflow: it births a throwaway host without its
+private NIC (Phase A — the NIC-absent failure is observed, not assumed), attaches the NIC in a
+second apply (Phase B — recovery to `bootstrap-done`), then reboots and asserts no provision
+markers re-emit (the latch holds). It renders the SAME `cloud-init-inngest.yml` with only
+identity-class divergences: the scratch `rehearsal_<runid>` Doppler environment (a non-inheriting
+root config), a read-scoped token, `INNGEST_DIAGNOSTIC_BOOT=true`, loopback `sdk_url`, and
+`10.0.1.60` on the real private subnet. See
+[runbook inngest-provision-rehearsal.md](inngest-provision-rehearsal.md).
 
 ### Stages
 
@@ -2189,6 +2200,12 @@ ADR-100, amendment 2026-09-14.
      > (the dark-gate library `tests/scripts/lib/inngest-host-dark-gate.sh` is kept, because
      > `scripts/cutover-inngest.sh` still uses it). The procedure is in
      > `inngest-luks-cutover-6894.md` §5b. The convergence PR of #8285 deletes the retire job itself.
+     >
+     > **Update (2026-10-09, #8285, PR B).** Appended; nothing above is changed. The retire job and its
+     > dispatch inputs are deleted: the backstop volume `106261946` was destroyed on 2026-10-09 (Hetzner
+     > `GET /v1/volumes/106261946 -> 404` at 16:21:26Z), so there is no dispatch left that touches it. The
+     > dark-gate library stays for `scripts/cutover-inngest.sh`. See `inngest-luks-cutover-6894.md` §5b for the
+     > record of the retirement.
 
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
      set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll

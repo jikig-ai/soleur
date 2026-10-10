@@ -78,6 +78,16 @@ on:
       # three paths, and PR #7094 ran this job only incidentally, because it also touched
       # apps/web-platform/infra/ (already covered by the first glob above).
       - ".github/workflows/git-data-rung2-rehearsal.yml"
+      # (#9175) Same defect class for the inngest provision-race rehearsal route:
+      # inngest-provision-rehearsal.test.sh asserts ~60 properties across the workflow, the
+      # plan-shape guard, the capture script and the probe — none of which matched a glob
+      # above, so a PR editing ONLY one of them would skip the suite that guards it.
+      - ".github/workflows/inngest-provision-rehearsal.yml"
+      - "scripts/inngest-provision-plan-shape.sh"
+      - "scripts/inngest-provision-rehearsal-probe.sh"
+      - "scripts/followthroughs/inngest-provision-rehearsal-capture.sh"
+      - "scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh"
+      - "tests/scripts/test-inngest-provision-plan-shape.sh"
       # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
       # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
       - ".github/workflows/apply-git-data-root-key.yml"
@@ -931,6 +941,17 @@ jobs:
         working-directory: apps/web-platform/infra/git-data-root-key
         env:
           TF_DATA_DIR: ${{ runner.temp }}/git-data-root-key-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
+      # (#9175) Same gap again: the inngest rehearsal root nests under the infra dir, so the
+      # validate matrix never parses it — without this step a syntax error surfaces only at
+      # dispatch, after the environment approval. -backend=false, TF_DATA_DIR out of tree.
+      - name: Terraform validate the inngest provision rehearsal root
+        working-directory: apps/web-platform/infra/inngest-provision-rehearsal
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/inngest-provision-rehearsal-tf
         run: |
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate

@@ -182,9 +182,10 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # landing UNENCRYPTED again, which is the one thing this whole change exists to prevent. Nothing
 # else notices: the scheduler is healthy in every one of those states, so uptime stays green.
 #
-# WHAT IT DELIBERATELY DOES NOT DETECT: the plaintext backstop volume merely staying ATTACHED
-# while the store is correctly on the encrypted one. That is the additive design's rollback route,
-# and retiring it is a Terraform declaration change, tracked with an expiry in issue #8285.
+# WHAT IT DELIBERATELY DID NOT DETECT: the plaintext backstop volume merely staying ATTACHED
+# while the store was correctly on the encrypted one (the additive design's rollback route). That
+# volume was destroyed on 2026-10-09 (#8285), so the state this paragraph excluded no longer exists;
+# the rule's scope (a probe row pinning a non-encrypted alias) is unchanged.
 #
 # WHY IT SHIPPED PAUSED, AND WHY IT NO LONGER IS. Before the cutover the correct value of that
 # field WAS the plaintext alias, so an armed rule would have paged continuously from merge until
@@ -269,11 +270,12 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   #
   # #8516 — the same treat_as_zero also blinds this alert to the probe going SILENT: a dead
   # emitter, a Vector journald-allowlist regression, or a sink outage all read as zero
-  # wrong-volume rows while a rollback onto plaintext hcloud_volume.inngest_redis goes unpaged.
+  # wrong-volume rows while the store sitting on a non-encrypted device goes unpaged (the plaintext
+  # volume hcloud_volume.inngest_redis this once named was destroyed 2026-10-09, #8285).
   # The dead-probe sibling that carries the absence-of-signal case is
   # betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf), born paused pending its
-  # feeder (tracked there); scripts/followthroughs/inngest-luks-property-8296.sh reports the
-  # same silence as a daily CANNOT ESTABLISH on #8285 in the interim.
+  # feeder (tracked there, #9703); scripts/followthroughs/inngest-luks-property-8296.sh reports the
+  # same silence as a daily CANNOT ESTABLISH on that tracker in the interim.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0

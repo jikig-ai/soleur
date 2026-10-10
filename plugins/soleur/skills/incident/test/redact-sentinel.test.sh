@@ -297,7 +297,7 @@ assert_exit "Test 12b: UNMAPPED homoglyph is a version-controlled known gap (exi
 if grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
      "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null \
-     | grep -v '/skills/legal-generate/references/templates/' | grep -q .; then
+     | grep -v '/skills/legal-generate/references/templates/' | grep -c >/dev/null .; then
   echo "FAIL: AC6: literal invisibles committed (must be chr()/escapes only)"
   grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
@@ -1086,7 +1086,7 @@ while IFS= read -r t22_spec; do
             armed = 0
           }
         }')"
-      if printf '%s' "${t22_seg}" | grep -qE '>&[[:space:]]*"?2"?|[0-9]+>&' \
+      if printf '%s' "${t22_seg}" | grep -cE >/dev/null '>&[[:space:]]*"?2"?|[0-9]+>&' \
          || [[ -n "${t22_arm_redir}" ]]; then
         t22_on_stderr="${t22_on_stderr} ${t22_file##*/skills/}:${t22_reason}"
       fi
@@ -1200,7 +1200,7 @@ t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|r
 
 t24_acquirers=()
 while IFS= read -r t24_f; do
-  t24_strip_comments "${t24_f}" | grep -qE "${t24_acq_re}" \
+  t24_strip_comments "${t24_f}" | grep -cE >/dev/null "${t24_acq_re}" \
     && t24_acquirers+=("${t24_f#"${REPO_ROOT}"/plugins/soleur/}")
 done < <(find "${REPO_ROOT}/plugins/soleur" -path '*/scripts/*' -type f \
            \( -name '*.sh' -o -name '*.py' -o -name '*.ts' -o -name '*.mjs' -o -name '*.cjs' \) \
@@ -1252,8 +1252,8 @@ else
       # A path inside a COMMENT is documentation, not an invocation — `audit-flag-flip.sh`
       # lists its four consumers in a comment block, which is a manifest, not a call.
       case "${t24_file}" in
-        *.sh|*.py)        printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*#' && continue ;;
-        *.ts|*.mjs|*.cjs) printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*(//|\*)' && continue ;;
+        *.sh|*.py)        printf '%s' "${t24_line}" | grep -cE >/dev/null '^[[:space:]]*#' && continue ;;
+        *.ts|*.mjs|*.cjs) printf '%s' "${t24_line}" | grep -cE >/dev/null '^[[:space:]]*(//|\*)' && continue ;;
       esac
 
       # EXECUTION context only. The invariant is about reachability FOR EXECUTION, so a path
@@ -1264,11 +1264,11 @@ else
       t24_is_exec=0
       # (1) an explicit verb, or a prose "Run <path>" instruction
       printf '%s' "${t24_line}" \
-        | grep -qE "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+[^[:space:]]*${t24_rel_re}|[Rr]un[[:space:]]+[^[:space:]]*${t24_rel_re}" \
+        | grep -cE >/dev/null "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+[^[:space:]]*${t24_rel_re}|[Rr]un[[:space:]]+[^[:space:]]*${t24_rel_re}" \
         && t24_is_exec=1
       # (2) a BARE quoted-path invocation — `"${CLAUDE_PLUGIN_ROOT}/…/trigger.sh" --list`
       # relies on the file's exec bit and carries no verb at all.
-      printf '%s' "${t24_line}" | grep -qE "^[[:space:]]*\"?[^[:space:]]*${t24_rel_re}\"?[[:space:]]" \
+      printf '%s' "${t24_line}" | grep -cE >/dev/null "^[[:space:]]*\"?[^[:space:]]*${t24_rel_re}\"?[[:space:]]" \
         && t24_is_exec=1
       # (3) ASSIGN-THEN-INVOKE. `TRIGGER="…/trigger.sh"` then `bash "$TRIGGER"` on another
       # line is THE dominant shape in this corpus — it is why Guard 1 needs G2 at all ("the
@@ -1298,7 +1298,7 @@ else
       # whoever hits that next):
       #   ${CLAUDE_PLUGIN_ROOT}/…      loader-substituted at delivery (ADR-179 decision 1)
       #   $SCRIPT_DIR / $BASH_SOURCE   layout-invariant per ADR-178, likewise not CWD-derived
-      printf '%s' "${t24_line}" | grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/' && continue
+      printf '%s' "${t24_line}" | grep -cE >/dev/null '\$\{CLAUDE_PLUGIN_ROOT\}/' && continue
       # The operator-terminal handoff shape of ADR-249 (#8486): a skill tells the agent to PRINT
       # `cd <WORKTREE> && bash <WORKTREE>/…` with <WORKTREE> replaced by the absolute worktree path,
       # for the operator to run in their own terminal. Like ${CLAUDE_PLUGIN_ROOT} (substituted
@@ -1306,8 +1306,8 @@ else
       # into the same absolute root means no working directory chooses the script. Anchored on the
       # WHOLE shape at line start, not on the token, so a bare `bash <WORKTREE>/…` elsewhere still
       # counts. ${CLAUDE_PLUGIN_ROOT} cannot serve here: it is unset in the operator's terminal.
-      printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*cd <WORKTREE> && bash <WORKTREE>/' && continue
-      printf '%s' "${t24_line}" | grep -qE '\$\{?(SCRIPT_DIR|BASH_SOURCE)' && continue
+      printf '%s' "${t24_line}" | grep -cE >/dev/null '^[[:space:]]*cd <WORKTREE> && bash <WORKTREE>/' && continue
+      printf '%s' "${t24_line}" | grep -cE >/dev/null '\$\{?(SCRIPT_DIR|BASH_SOURCE)' && continue
 
       t24_violations="${t24_violations}
     ${t24_file#"${REPO_ROOT}"/}:${t24_lno}"

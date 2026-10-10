@@ -1,3 +1,7 @@
+// pyramid-justified: FR3.3 cross-context isolation asserts two independent
+// browser.newContext surfaces; FR3.1/FR3.4 assert DOM-rendered canaries —
+// needs a real browser.
+//
 // PR-C (#2939) Stage 6 — cc-soleur-go security smoke.
 //
 // Sibling to cc-soleur-go-bubbles.e2e.ts (PR-A) and cc-soleur-go-routing.e2e.ts

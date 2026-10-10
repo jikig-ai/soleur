@@ -109,6 +109,13 @@
 /scripts/marketplace-ruleset-canonical-bypass-actors.json @deruelle
 /scripts/verify-marketplace-ruleset.sh                   @deruelle
 /scripts/marketplace-manifest-validate.sh                @deruelle
+# #9362 — the pre-apply by-value gate on the two rulesets' required checks, the CLA canonical it
+# compares against (the CI canonical is pinned above) and the suite that pins both the gate and the
+# absence of any prd_terraform injection in the apply job. A canonical editable in the same
+# unreviewed commit as its guard proves consistency, not integrity.
+/scripts/verify-ruleset-required-checks.sh              @deruelle
+/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json @deruelle
+/tests/scripts/test-apply-github-infra-mint-shape.sh    @deruelle
 
 # Auto-apply for github branch-protection terraform (#3895/#3896 replacement).
 # The merge IS the human authorization, so CODEOWNERS is the load-bearing

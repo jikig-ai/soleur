@@ -33,8 +33,8 @@
 # guarantee. Do not re-add a pointer to a deleted fixture.
 #
 # RETIRED (#8285): hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis (the plaintext
-# backstop pair) are no longer declared or `-target`ed; they are state-only orphans until the
-# inngest-backstop-retire dispatch destroys them. Both are DELIBERATELY ABSENT from the allow-set, so ANY
+# backstop pair) are no longer declared or `-target`ed; the volume was destroyed 2026-10-09 by the
+# since-deleted inngest-backstop-retire dispatch. Both are DELIBERATELY ABSENT from the allow-set, so ANY
 # action on either trips inngest_out_of_scope_changes; the named redis_volume_* counters below stay as
 # loud backstops. The live store is hcloud_volume.inngest_redis_luks (preserved by omission).
 #

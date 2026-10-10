@@ -4,8 +4,8 @@
 #
 # The wrong-volume alert runs on_missing_data = "treat_as_zero": a dead
 # inngest-server-probe pipeline (emitter / Vector allowlist / sink) reads as ZERO
-# wrong-volume rows — silently healthy while a rollback onto plaintext hcloud_volume.inngest_redis
-# goes unpaged. The remedy is a dead-man's-switch heartbeat mirroring DP-10
+# wrong-volume rows — silently healthy while the store sitting on a non-encrypted device
+# goes unpaged (the plaintext hcloud_volume.inngest_redis this once named was destroyed 2026-10-09). The remedy is a dead-man's-switch heartbeat mirroring DP-10
 # (betteruptime_heartbeat.workspaces_luks) sized to the probe's HOURLY emission cadence
 # (inngest-server-probe.timer: OnUnitActiveSec=1h + AccuracySec=1min), born paused per the
 # recorded DP-10/#6210 discipline, with its URL provisioned in Doppler and BOTH resources riding
