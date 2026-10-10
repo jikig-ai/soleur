@@ -464,8 +464,11 @@ SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
             if (index(m, "message:garbage collected blobs") > 0) n_gcb++
             # The real upload error line (#9373) names the handler only in the parsed `func`
             # field, which zot writes immediately before `goroutine` at the END of the row. The
-            # end-anchor means a client header spelling the func text (mid-row) cannot count.
-            if (index(m, "level:error") > 0 && m ~ /\(\*RouteHandler\)\.PatchBlobUpload,goroutine:[0-9]+\}?[ ]*$/) n_patch++
+            # end anchor keeps a header spelling the func text mid-row from counting, and the
+            # payload-length bound keeps a row sanitize() CUT at 800 characters from counting (a
+            # client controls how such a row ends). Informational counter; it never gates.
+            pi = index(m, "{"); plen = (pi > 0) ? length(m) - pi + 1 : 0
+            if (plen > 0 && plen < 800 && m ~ /level:error,.*\(\*RouteHandler\)\.PatchBlobUpload,goroutine:[0-9]+\}[ ]*$/) n_patch++
             if (authleak(m)) n_auth++
             if (shapeleak(m)) n_shape++
           } else {
@@ -860,15 +863,16 @@ if [[ "$N_ENV" -lt "$FLOOR_ROWS" ]]; then
 fi
 
 # --- PASS ------------------------------------------------------------------------------------
-# The four measured evidence classes are printed as COUNTS because the gc start/complete RATIO is
+# The measured evidence classes are printed as COUNTS because the gc start/complete RATIO is
 # the discriminator the downstream disk-attribution question needs: a stalled gc emits a start with
 # no completion, and that ratio is unreadable from a channel that admits only completions.
-# ANCHORED ON THE PARSED message FIELD, matching the producer (#7444 R33). is_cap_exempt keys on
-# zerolog's `.message`, which is what closed the bypass where any client sending
-# `User-Agent: executing gc` bought cap exemption for every one of its request lines. STAYS
-# FOUR-CLASS DELIBERATELY (#7555): this reader is NOT an exemption census and must not become one.
-# It answers one question — is the #7440 channel delivering, and what is the gc start/complete
-# RATIO — for which these four are the vocabulary.
+# ANCHORED ON THE PARSED FIELDS, matching the producer (#7444 R33). is_cap_exempt keys on
+# zerolog's parsed fields (`.message` for the gc classes, the top-level `func` for the upload error
+# line, #9373), which is what closed the bypass where any client sending `User-Agent: executing gc`
+# bought cap exemption for every one of its request lines. STAYS FOUR-CLASS DELIBERATELY (#7555):
+# this reader is NOT an exemption census and must not become one. It answers one question — is the
+# #7440 channel delivering, and what is the gc start/complete RATIO — for which these four are the
+# vocabulary.
 #
 # The consequence to keep in view: these counts are a lower bound on exempt volume, never a
 # measure of it. Do not read a flat gc count as "the exempt lane is quiet".

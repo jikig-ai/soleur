@@ -117,9 +117,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "174" ]]; then
+  if [[ "$ran" -lt "198" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 174"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 198"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -531,7 +531,7 @@ done
 # Anchored on substrings only the SHIPPED func-keyed row carries: the bare token is also in the
 # heartbeat's zot_last_err echo, so it cannot tell a live arm from a dead one.
 assert "T9 cap-exempt class survived the flood: the real func-keyed PatchBlobUpload error line" \
-  "grep -qF 'removing .uploads/ files' '$STUB_POSTS' && grep -qF 'PatchBlobUpload,goroutine' '$STUB_POSTS'"
+  "grep -q 'removing .uploads/ files.*PatchBlobUpload,goroutine' '$STUB_POSTS'"
 assert "T9 a DROPPED accounting row was emitted" \
   "grep -q 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS'"
 for f in 'n=' 'interval_s=' 'boot_id=' 'seq=' 'cum=' 'reason=rate_cap'; do
@@ -862,8 +862,9 @@ assert "T15 no comment still claims the liveness probe GETs /v2/ 'every 5 min'" 
 
 # --- T16: cap-exempt ceiling + parsed-field matching (#7444 F-5) -------------------------
 # Cap-exempt classes previously faced NO ceiling at all: is_cap_exempt returned before WIN_COUNT
-# was consulted. PatchBlobUpload fires per blob-upload CHUNK, so exempt volume is proportional to
-# push traffic, and the measured crash-loop case (6,912 restarts/day x ~10 repos x ~2 gc lines)
+# was consulted. A failing upload can burst per blob-upload CHUNK, so exempt volume is proportional
+# to push traffic (the PatchBlobUpload error row now rides the 8-slot upload sub-quota inside this
+# ceiling, #9373), and the measured crash-loop case (6,912 restarts/day x ~10 repos x ~2 gc lines)
 # is ~138,000 rows/day against a 5,000/day budget — 28x, in the exact scenario the exemption was
 # sized against. Source 2457081 is shared with the web hosts, the Inngest node and this host's own
 # disk alarms, so the observer can starve the observed.
@@ -969,7 +970,7 @@ assert "T18 the template also re-ensures jq in runcmd (packages: alone is non-fa
 
 # --- T19: GUARD 2 (#7555) — the paired upload-failure row survives the cap ----------------
 # zot reports a failed blob upload as TWO rows: the `PatchBlobUpload` error line (cap-exempt
-# since #7440) and an ordinary HTTP-API row carrying statusCode/latency/Content-Length. Only
+# since #9373, keyed on its parsed func; the earlier arm never matched) and an ordinary HTTP-API row carrying statusCode/latency/Content-Length. Only
 # the PAIRING carries the numbers that separate a DEADLINE from an origin fault, and only the
 # first half was surviving. Measured in the 2026-08-13 failure tick: dropped_cum=5841 vs
 # shipped_cum=5151, so the deciding evidence survived by luck of its class.
@@ -1199,6 +1200,10 @@ t21_upl() {   # error text, caller line, goroutine, module prefix (optional)
   printf '%s\n' "{\"time\":\"2026-01-01T00:00:00.000000000Z\",\"level\":\"error\",\"message\":\"unexpected error, removing .uploads/ files\",\"error\":\"$1\",\"caller\":\"zotregistry.dev/zot/v2/pkg/api/routes.go:$2\",\"func\":\"${4:-$T21_PFX}.(*RouteHandler).PatchBlobUpload\",\"goroutine\":$3}"
 }
 
+t21_fn() {   # caller line, goroutine, FULL func value — an error row with an arbitrary func
+  printf '%s\n' "{\"time\":\"2026-01-01T00:00:00.000000000Z\",\"level\":\"error\",\"message\":\"unexpected error, removing .uploads/ files\",\"error\":\"unexpected EOF\",\"caller\":\"zotregistry.dev/zot/v2/pkg/api/routes.go:$1\",\"func\":\"$3\",\"goroutine\":$2}"
+}
+
 # S1 — the real EOF error line survives an ordinary flood (RED before the func arm exists).
 J_S1="$TMP/j_s1"; : > "$J_S1"
 t21_ord 40 s1ord >> "$J_S1"
@@ -1216,7 +1221,7 @@ t21_ord 40 s2ord >> "$J_S2"
 t21_upl 'read tcp 10.0.0.1:5000->10.0.0.2:52888: i/o timeout' 2222 777 'zotregistry.dev/zot/v3/pkg/api' >> "$J_S2"
 run_shipper "$J_S2" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
 assert "T21 S2 a non-canonical func-keyed row (i/o timeout, v3 module path, other caller) still ships" \
-  "grep -qF 'routes.go:2222' '$STUB_POSTS' && grep -qF 'PatchBlobUpload,goroutine:777' '$STUB_POSTS'"
+  "grep -q 'routes.go:2222,func:[^ ]*PatchBlobUpload,goroutine:777' '$STUB_POSTS'"
 
 # S3 — the sub-quota bounds the class (8 per tick), and other handlers stay behind the ordinary cap.
 # The GetBlob row is the harness differential: same shape, non-matching func, MUST be capped, so a
@@ -1226,11 +1231,11 @@ J_S3="$TMP/j_s3"; : > "$J_S3"
 t21_ord 20 s3ord >> "$J_S3"
 printf '%s\n' "{\"level\":\"error\",\"message\":\"unexpected error, removing .uploads/ files\",\"error\":\"unexpected EOF\",\"caller\":\"c\",\"func\":\"${T21_PFX}.(*RouteHandler).GetBlob\",\"goroutine\":4242}" >> "$J_S3"
 for i in $(seq 1 40); do t21_upl 'unexpected EOF' 2190 "$((1000 + i))" >> "$J_S3"; done
-run_shipper "$J_S3"
+run_shipper "$J_S3" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5 ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL=17 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=8
 assert "T21 S3 exactly the sub-quota (8) of func-keyed rows shipped from 40 offered" \
   "[[ \$(grep -c 'PatchBlobUpload,goroutine' '$STUB_POSTS') -eq 8 ]]"
 assert "T21 S3 the overflow is ACCOUNTED, never silent (reason=exempt_cap, n=32)" \
-  "grep 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS' | grep -F 'reason=exempt_cap' | grep -qF 'n=32'"
+  "grep 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS' | grep -F 'reason=exempt_cap' | grep -qE 'n=32( |\$)'"
 assert "T21 S3 a non-matching handler's error row (GetBlob) is capped, not exempt" \
   "! grep -qF 'goroutine:4242' '$STUB_POSTS'"
 
@@ -1239,7 +1244,7 @@ assert "T21 S3 a non-matching handler's error row (GetBlob) is capped, not exemp
 J_S4="$TMP/j_s4"; : > "$J_S4"
 for i in $(seq 1 17); do t21_upl 'unexpected EOF' 2190 "$((2000 + i))" >> "$J_S4"; done
 printf '%s\n' 'panic: runtime error: T21SENTINEL_S4' >> "$J_S4"
-run_shipper "$J_S4" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1
+run_shipper "$J_S4" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL=17 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=8
 assert "T21 S4 a panic still ships behind 17 func-keyed upload error lines" \
   "grep -qF 'T21SENTINEL_S4' '$STUB_POSTS'"
 
@@ -1274,8 +1279,66 @@ printf '%s\n' '{"level":"info","message":"S8NOFUNC","path":"/v2/s8-nofunc","stat
 printf '%s\n' '{"level":"info","message":"S8EMPTYFUNC","path":"/v2/s8-emptyfunc","statusCode":200,"caller":"c","func":""}' >> "$J_S8"
 t21_ord 10 s8ord >> "$J_S8"
 t21_upl 'unexpected EOF' 2190 888 >> "$J_S8"
-run_shipper "$J_S8" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=2
+run_shipper "$J_S8" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=4
+assert "T21 S8 the plaintext, no-func and empty-func rows are each observed (3 of the 4 ordinary slots)" \
+  "grep -qF 'S8PLAIN' '$STUB_POSTS' && grep -qF 'S8NOFUNC' '$STUB_POSTS' && grep -qF 'S8EMPTYFUNC' '$STUB_POSTS'"
 assert "T21 S8 the ordinary cap bit (rows without a func are classified ordinary, not exempt)" \
-  "[[ \$(grep -c 's8ord-' '$STUB_POSTS') -eq 0 ]]"
+  "[[ \$(grep -c 's8ord-' '$STUB_POSTS') -le 1 ]]"
 assert "T21 S8 the real func-keyed row ships after rows with absent/empty func (no field shift)" \
   "grep -qF 'PatchBlobUpload,goroutine:888' '$STUB_POSTS'"
+
+# S3b — BOTH halves of a failed upload share ONE 8-slot sub-quota (the func-keyed error row and the
+# HTTP 5xx upload row). A separate quota for the error row would let 12 rows ship; the contract is 8.
+J_S3B="$TMP/j_s3b"; : > "$J_S3B"
+t21_ord 40 s3bord >> "$J_S3B"
+for i in $(seq 1 6); do t21_upl 'unexpected EOF' 2190 "$((9300 + i))" >> "$J_S3B"; done
+for i in $(seq 1 6); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"method\":\"PATCH\",\"path\":\"/v2/x/blobs/uploads/s3bhttp-$i\",\"statusCode\":500,\"latency\":\"1m0s\",\"caller\":\"c\"}" >> "$J_S3B"
+done
+run_shipper "$J_S3B" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5 ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL=17 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=8
+assert "T21 S3b the error row and the HTTP 5xx upload row share ONE 8-slot sub-quota (6+6 offered, 8 shipped)" \
+  "[[ \$(( \$(grep -c 'PatchBlobUpload,goroutine:93' '$STUB_POSTS') + \$(grep -c 's3bhttp-' '$STUB_POSTS') )) -eq 8 ]]"
+
+# S9 — FAR-SIDE fixtures for the func arm: every row below must stay behind the ordinary cap. They pin
+# the suffix anchor, the receiver qualifier, top-level-only extraction and the retirement of the old
+# message-prefix arm, none of which a ships-only fixture can see. The canonical row at the end is the
+# positive control (same shape, exempt func), so a deny-everything arm cannot satisfy this scenario.
+J_S9="$TMP/j_s9"; : > "$J_S9"
+t21_ord 10 s9ord >> "$J_S9"
+t21_fn 9101 9101 "${T21_PFX}.(*RouteHandler).CreateBlobUpload" >> "$J_S9"
+t21_fn 9102 9102 "${T21_PFX}.(*RouteHandler).PatchBlobUpload.func1" >> "$J_S9"
+t21_fn 9103 9103 "${T21_PFX}.(*OtherHandler).PatchBlobUpload" >> "$J_S9"
+printf '%s\n' "{\"level\":\"error\",\"message\":\"PatchBlobUpload i/o timeout\",\"caller\":\"c\",\"func\":\"${T21_PFX}.SessionLogger.func1.1\",\"goroutine\":9104}" >> "$J_S9"
+printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/s9nested\",\"statusCode\":200,\"headers\":{\"func\":\"${T21_PFX}.(*RouteHandler).PatchBlobUpload\"},\"caller\":\"c\",\"func\":\"${T21_PFX}.SessionLogger.func1.1\",\"goroutine\":9105}" >> "$J_S9"
+t21_upl 'unexpected EOF' 2190 9199 >> "$J_S9"
+run_shipper "$J_S9" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5 ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL=17 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=8
+assert "T21 S9 positive control: the canonical func-keyed row in the same flood DOES ship" \
+  "grep -qF 'PatchBlobUpload,goroutine:9199' '$STUB_POSTS'"
+for g in 9101 9102 9103 9104 9105; do
+  assert "T21 S9 far-side row $g is capped, not exempt (suffix anchor / receiver / retired message arm / top-level only)" \
+    "! grep -qF 'goroutine:$g' '$STUB_POSTS'"
+done
+
+# S10 — precedence: a crash-class MESSAGE logged from inside the upload handler keeps the SHARED lane
+# (message arms are tested first), so it ships even when the 8-slot sub-quota is already spent.
+J_S10="$TMP/j_s10"; : > "$J_S10"
+for i in $(seq 1 12); do t21_upl 'unexpected EOF' 2190 "$((9200 + i))" >> "$J_S10"; done
+printf '%s\n' "{\"level\":\"error\",\"message\":\"runtime error: invalid memory address or nil pointer dereference\",\"caller\":\"c\",\"func\":\"${T21_PFX}.(*RouteHandler).PatchBlobUpload\",\"goroutine\":9299}" >> "$J_S10"
+run_shipper "$J_S10" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL=17 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=8
+assert "T21 S10 a crash-class message from the upload handler ships via the shared lane after the sub-quota is spent" \
+  "grep -qF 'goroutine:9299' '$STUB_POSTS'"
+
+# T21 parity — the func literal is replicated across the shipper arm and both probe counters. Derive it
+# from the shipper arm and require each probe to carry the same bytes (7440 carries it regex-escaped).
+T21_REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+T21_ARMS=$(grep -cE '^[[:space:]]*\*"\(\*RouteHandler\)\.PatchBlobUpload"\)' "$CI")
+T21_LIT=$(grep -E '^[[:space:]]*\*"\(\*RouteHandler\)\.PatchBlobUpload"\)' "$CI" | sed -E 's/^[[:space:]]*\*"//; s/".*$//')
+assert "T21 parity: exactly one func arm in the shipper, literal derived ('$T21_LIT')" \
+  "[[ '$T21_ARMS' -eq 1 && -n '$T21_LIT' ]]"
+# Both probe counters carry the literal regex-escaped, so strip backslashes before comparing.
+T21_7341_NOESC=$(tr -d '\\' < "$T21_REPO/scripts/followthroughs/zot-fill-rate-7341.sh")
+assert "T21 parity: the 7341 probe counter carries the shipper's func literal (regex-escaped)" \
+  "[[ \$T21_7341_NOESC == *'$T21_LIT'* ]]"
+T21_7440_NOESC=$(tr -d '\\' < "$T21_REPO/scripts/followthroughs/zot-log-channel-7440.sh")
+assert "T21 parity: the 7440 probe counter carries the shipper's func literal (regex-escaped)" \
+  "[[ \$T21_7440_NOESC == *'$T21_LIT'* ]]"

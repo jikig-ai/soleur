@@ -588,7 +588,8 @@ echo "  SCOPE: this grades the DEADLINE sub-mode only. 'unexpected EOF' is a sep
 echo "  SUCCESSFUL run, and is out of scope for #7555 (${other5xx} upload 5xx row(s) at other latencies are not graded)."
 echo "  WEIGHT: the error row is exempt from the shipper's ordinary cap only on a host carrying the func-keyed arm"
 echo "  (#9373), so the absence rests on the paired HTTP-API row, guarded by drop accounting; the error-row count is"
-echo "  corroboration. patch_rows is a lower bound (ordinary"
-echo "  rows are rate-capped; ${long_ok} of them ran 60 s or longer), and a clean week of this size is a tripwire, not"
-echo "  proof: DELIVERY is the causal evidence. It is also not a claim that any particular release succeeded."
+echo "  corroboration. The error row and the HTTP row share one 8-slot sub-quota, so about 4 failed uploads in a tick"
+echo "  produce exempt_cap drops, which hold this probe at TRANSIENT (never PASS). patch_rows is a lower bound"
+echo "  (ordinary rows are rate-capped; ${long_ok} of them ran 60 s or longer), and a clean week of this size is a"
+echo "  tripwire, not proof: DELIVERY is the causal evidence. It is also not a claim that any particular release succeeded."
 exit 0

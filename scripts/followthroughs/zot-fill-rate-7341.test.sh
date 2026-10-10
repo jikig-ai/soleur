@@ -323,6 +323,11 @@ fi
 #     message-prefix key counted it as 0; a header that spells the func text mid-row must not count.
 GC_UPL="$(gcrow "$ENVP {time:2026-10-10T00:00:00Z,level:error,message:unexpected error, removing .uploads/ files,error:unexpected EOF,caller:zotregistry.dev/zot/v2/pkg/api/routes.go:2190,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:369}")
 $(gcrow "$ENVP {time:2026-10-10T00:00:01Z,level:error,message:HTTP API,headers:{User-Agent:[x,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:1]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/zot/v2/pkg/api.SessionLogger.func1.1,goroutine:2}")"
+GC_UPL_PAD=$(head -c 820 /dev/zero | tr '\0' x)
+GC_UPL="$GC_UPL
+$(gcrow "$ENVP {time:2026-10-10T00:00:02Z,level:info,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:7}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:03Z,level:error,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload.func1,goroutine:8}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:04Z,level:error,message:HTTP API,headers:{User-Agent:[$GC_UPL_PAD]},caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:9}")"
 run "$FAILSPEC" 0 "" "" "" "$GC_UPL"
 cases=$((cases + 1))
 if [[ "$OUT" == *"patch_blob_upload=1 "* ]]

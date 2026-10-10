@@ -18,8 +18,8 @@
 # was blocked by #7440 (the registry shipped no zot logs; this heartbeat was its only instrument).
 # UNBLOCKED 2026-08-12 (#7455): the zot container-log channel is LIVE, and it counts
 # the func-keyed PatchBlobUpload error line (#9373) as one of its evidence classes — which is the
-# very discriminator named as missing below. Attribution is now answerable; this script has not yet been rewritten to
-# use it.
+# very discriminator named as missing below. Attribution is now answerable; this script has not
+# yet been rewritten to use it.
 #
 # ── EVERY PARSE STEP BELOW IS A GUARD. DO NOT REGEX THE WHOLE ROW. ───────────────────────────
 #
@@ -320,15 +320,15 @@ ENV = "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=" + os.environ["ZOT_ATTR_HOST
 # positional anchor depends on is not guaranteed to survive.
 START_LIT = "executing gc of orphaned blobs for "
 DONE_LIT  = "gc successfully completed for "
+UPLOAD_ERR = re.compile(r"level:error,.*\(\*RouteHandler\)\.PatchBlobUpload,goroutine:[0-9]+\}\s*$")
 def is_upload_err(payload):
     # The real upload error line (#9373) is level:error with the handler named only in the parsed
-    # `func` field, which zot writes immediately before `goroutine` at the END of the row. Anchoring
-    # on those last two fields means a client-controlled header that spells the func text cannot
-    # satisfy it: header bytes sit mid-row, ahead of the real func and goroutine.
-    fs = payload.lstrip("{").rstrip("}").split(",")
-    return (len(fs) >= 2 and "level:error" in fs
-            and fs[-2].startswith("func:") and fs[-2].endswith("(*RouteHandler).PatchBlobUpload")
-            and fs[-1].startswith("goroutine:"))
+    # `func` field, which zot writes immediately before `goroutine` at the END of the row. The end
+    # anchor keeps a client header that spells the func text mid-row from counting, and the length
+    # bound keeps a row that sanitize() CUT at 800 characters from counting: a client controls how
+    # such a row ends. Informational counter only; it never gates a verdict. Keep in step with the
+    # awk counter in zot-log-channel-7440.sh (T21 pins that both carry the shipper func literal).
+    return len(payload) < 800 and UPLOAD_ERR.search(payload) is not None
 def msg_field(payload):
     for f in payload.lstrip("{").rstrip("}").split(","):
         if f.startswith("message:"):
