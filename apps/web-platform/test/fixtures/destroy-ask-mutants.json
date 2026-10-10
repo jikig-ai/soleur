@@ -200,8 +200,8 @@
  {
   "id": "C19-wrappers-stop-scan",
   "file": "server/destroy-ask-classifier.ts",
-  "anchor": "if (NON_EXEC.has(base)) return null;",
-  "replace": "return null;",
+  "anchor": "if (atCommandWord && NON_EXEC.has(base)) return null;",
+  "replace": "if (atCommandWord) return null;",
   "count": 1,
   "nth": null,
   "test": "test/destroy-ask-classifier.test.ts",
@@ -409,7 +409,7 @@
  {
   "id": "C38-drop-gh-attached-method",
   "file": "server/destroy-ask-classifier.ts",
-  "anchor": "if (ch === \"X\") method = rest || tail[++k] || \"\";",
+  "anchor": "if (ch === \"X\") method = (rest.startsWith(\"=\") ? rest.slice(1) : rest) || tail[++k] || \"\";",
   "replace": "if (ch === \"X\") method = tail[++k] || \"\";",
   "count": 1,
   "nth": null,
@@ -618,8 +618,8 @@
  {
   "id": "L04-classifier-never-matches",
   "file": "server/destroy-ask-lane.ts",
-  "anchor": "const match = await classifyDestroyFamily(command, lane.resolveProtectedBranches ?? (async () => UNRESOLVED));",
-  "replace": "const match: DestroyMatch | null = null as DestroyMatch | null;",
+  "anchor": "match = await classify(command, lane.resolveProtectedBranches ?? (async () => UNRESOLVED));",
+  "replace": "match = null as DestroyMatch | null;",
   "count": 1,
   "nth": null,
   "test": "test/permission-callback-destroy-ask.test.ts",
@@ -998,6 +998,116 @@
   "nth": null,
   "test": "test/permission-callback-destroy-ask.test.ts",
   "detect": "outcome lines are WARN",
+  "equivalent": null
+ },
+ {
+  "id": "C60-colon-inside-expansion",
+  "file": "server/destroy-ask-classifier.ts",
+  "anchor": "const colon = masked.lastIndexOf(\":\");",
+  "replace": "const colon = spec.lastIndexOf(\":\");",
+  "count": 1,
+  "nth": null,
+  "test": "test/destroy-ask-classifier.test.ts",
+  "detect": "git push -f origin ${B:-main}",
+  "equivalent": null
+ },
+ {
+  "id": "C61-brace-not-a-glob",
+  "file": "server/destroy-ask-classifier.ts",
+  "anchor": "const GLOB_OR_VAR_RE = /[*?[{$`]/;",
+  "replace": "const GLOB_OR_VAR_RE = /[*?[$`]/;",
+  "count": 1,
+  "nth": null,
+  "test": "test/destroy-ask-classifier.test.ts",
+  "detect": "git push -f origin {main,x}",
+  "equivalent": null
+ },
+ {
+  "id": "C62-exec-listed-non-exec",
+  "file": "server/destroy-ask-classifier.ts",
+  "anchor": "\"type\", \"test\", \"[\",",
+  "replace": "\"type\", \"test\", \"[\", \"exec\",",
+  "count": 1,
+  "nth": null,
+  "test": "test/destroy-ask-classifier.test.ts",
+  "detect": "wrapper `exec` does not hide",
+  "equivalent": null
+ },
+ {
+  "id": "C63-drop-ksh",
+  "file": "server/destroy-ask-classifier.ts",
+  "anchor": "const SHELLS = new Set([\"sh\", \"bash\", \"zsh\", \"dash\", \"ksh\", \"ash\"]);",
+  "replace": "const SHELLS = new Set([\"sh\", \"bash\", \"zsh\", \"dash\", \"ash\"]);",
+  "count": 1,
+  "nth": null,
+  "test": "test/destroy-ask-classifier.test.ts",
+  "detect": "shell `ksh -c` is unwrapped",
+  "equivalent": null
+ },
+ {
+  "id": "C64-tf-false-FALSE-dropped",
+  "file": "server/destroy-ask-classifier.ts",
+  "anchor": "const TF_FALSE_VALUES = new Set([\"0\", \"f\", \"F\", \"false\", \"FALSE\", \"False\"]);",
+  "replace": "const TF_FALSE_VALUES = new Set([\"0\", \"f\", \"F\", \"false\", \"False\"]);",
+  "count": 1,
+  "nth": null,
+  "test": "test/destroy-ask-classifier.test.ts",
+  "detect": "terraform apply -destroy=FALSE",
+  "equivalent": null
+ },
+ {
+  "id": "C65-gh-header-not-a-value",
+  "file": "server/destroy-ask-classifier.ts",
+  "anchor": "const GH_VALUE_LONG = new Set([\"header\", ",
+  "replace": "const GH_VALUE_LONG = new Set([",
+  "count": 1,
+  "nth": null,
+  "test": "test/destroy-ask-classifier.test.ts",
+  "detect": "gh api --header consumes its value",
+  "equivalent": null
+ },
+ {
+  "id": "L21-token-shaped-first-word-shipped",
+  "file": "server/destroy-ask-lane.ts",
+  "anchor": "return plain && !TOKEN_SHAPED_RE.test(word) ? word : \"<other>\";",
+  "replace": "return plain ? word : \"<other>\";",
+  "count": 1,
+  "nth": null,
+  "test": "test/permission-callback-destroy-ask.test.ts",
+  "detect": "near-miss never ships an env assignment",
+  "equivalent": null
+ },
+ {
+  "id": "R10-unsafe-owner-repo-reach-api",
+  "file": "server/resolve-protected-branches.ts",
+  "anchor": " || !SAFE_SEGMENT_RE.test(owner) || !SAFE_SEGMENT_RE.test(repo)",
+  "replace": "",
+  "count": 1,
+  "nth": null,
+  "test": "test/resolve-protected-branches.test.ts",
+  "detect": "an owner or repo that is not a safe path segment never reaches the API",
+  "equivalent": null
+ },
+ {
+  "id": "R11-timeout-does-not-abort",
+  "file": "server/resolve-protected-branches.ts",
+  "anchor": "          ac.abort();\n",
+  "replace": "",
+  "count": 1,
+  "nth": null,
+  "test": "test/resolve-protected-branches.test.ts",
+  "detect": "a timeout counts as failure",
+  "equivalent": null
+ },
+ {
+  "id": "R12-ttl-one-ms",
+  "file": "server/resolve-protected-branches.ts",
+  "anchor": "expiresAt: now() + (value.authoritative ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS)",
+  "replace": "expiresAt: now() + 1",
+  "count": 1,
+  "nth": null,
+  "test": "test/resolve-protected-branches.test.ts",
+  "detect": "a positive result is memoised",
   "equivalent": null
  }
 ]

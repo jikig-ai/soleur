@@ -33,8 +33,9 @@ product says their work is backed up.
 
 Three further facts shaped the design (all verified against `origin/main` at base):
 
-1. `deriveBashCommandPrefix` maps any `git push ...` to the prefix `git push` and any terraform command to `terraform`, so a prior
-   "Approve all" grant already auto-approves `git push --force origin main` and `terraform destroy`, in non-autonomous mode too.
+1. `deriveBashCommandPrefix` maps a command whose second word is `push` to the prefix `git push` and a terraform command to its first
+   token `terraform`, so a prior "Approve all" grant already auto-approves `git push --force origin main` and `terraform destroy`,
+   in non-autonomous mode too.
 2. A plugin-hook `ask` is delivered to the SDK permission flow, which then calls `canUseTool`; `canUseTool` returns `allow` for
    `autonomous-bypass`. A hook-only fix is therefore a no-op under autonomy unless `canUseTool` also reads the hook's reason.
 3. The hosted agent holds `gh` and an unscoped GitHub App installation token as `GH_TOKEN` (`administration: write`;
@@ -72,10 +73,13 @@ the existing-workspace opt-out hold and the batched-approval cache. A match RETU
   owns the repository, because a non-owner member may be approving. Any selection other than the exact string `Approve` denies, so a
   forged `Approve all <prefix>` frame cannot reach the cache. Approval writes no acknowledgement and no cache entry. Reject, timeout and
   abort deny, and the deny text tells the agent not to retry or respell.
-- **Fail toward ask.** A classifier error is a match (`classifier-error`, mirrored to Sentry). An unparseable command asks iff its
+- **Fail toward ask.** A classifier error is a match (`classifier-error`, mirrored to Sentry with a null first argument and the error
+  class in `extra`, the #8629 pattern). An unparseable command asks iff its
   quote- and backslash-stripped text contains `destroy` or `push`; a raw-text scan runs when the structured pass found nothing and the
-  command has a heredoc, a here-string, a pipe into a shell or `xargs`. When the default branch cannot be resolved, every force, delete
-  or mirror push asks (`git-push-unknown-default`).
+  command has a heredoc, a here-string, a pipe into a shell or `xargs`. When the default branch cannot be resolved, every force or delete
+  push that names a destination asks (`git-push-unknown-default`); a `--mirror` or `--all` force asks as `git-force-default` whatever
+  the default branch is, and a force push with no named destination asks as `git-force-implicit` (CTO ruling: it may overwrite the
+  default branch, so it asks even when the cost is an over-ask on rebase workflows).
 - **Default branch.** The protected set is the union of the GitHub API `default_branch` (installation token, authoritative), the local
   `refs/remotes/origin/HEAD` (agent-writable, so it may add a name and never remove one; read with `lstat`, a size cap, symlinks and
   non-regular files refused, one accepted shape) and the constants `main` and `master`; compared case-insensitively after stripping
@@ -84,10 +88,17 @@ the existing-workspace opt-out hold and the batched-approval cache. A match RETU
   the repository, `gh api` PATCH or PUT with a force field on a ref, `gh repo delete`. Rule ids (`hosted-destroy-ask:` prefix):
   `git-force-default`, `git-delete-default`, `git-push-unknown-default`, `git-force-implicit`, `terraform-destroy`,
   `gh-ref-delete-default`, `gh-repo-delete`, `fail-closed-keyword`, `raw-scan`, `classifier-error`.
-- **The classifier is a superset of the plugin hook's D1 set,** enforced by `destroy-ask-hook-parity.test.ts`, which runs the real hook
-  with the kill switch unset over the stored corpus. Every ask the classifier gives that the hook does not (`--mirror`, an unresolved
-  or API-resolved default, implicit destinations, the raw scan, the `gh` family, `TF_CLI_ARGS`) carries a `hostedOnly` note.
-- **Second consumer.** The lane is a function list; ADR-264 (#9388) adds its must-ask class as the second member.
+- **For the git and terraform rules the classifier is a superset of the plugin hook's D1 set,** enforced by
+  `destroy-ask-hook-parity.test.ts`, which runs the real hook with the kill switch unset over the stored corpus. Every ask the
+  classifier gives that the hook does not (`--mirror`, an unresolved or API-resolved default, implicit destinations, brace and
+  parameter-expansion destinations, `find -exec`, the raw scan, the `gh` family, `TF_CLI_ARGS`) carries a `hostedOnly` note. The
+  hook's recursive-`rm` rows are outside this lane (a residual below) and carry a `parityExempt` note: the superset claim does not
+  extend to them.
+- **Second consumer.** The lane is a function list (`MUST_ASK_CLASSIFIERS`, one member today); ADR-264 (#9388) adds its must-ask
+  class as the second member.
+- **Deviation from the plan's wording: the lane returns early.** A match returns from the Bash branch instead of falling through to
+  the generic gate, so that the autonomous bypass, the disclosure holds and the batch cache cannot stand in for the Approve; the
+  generic gate's own approval handling is not reused.
 - **No feature flag, no migration, no acknowledgement reset, no `TC_VERSION` change.** Rollback is `git revert` of the one commit
   unit (the copy and the lane revert together: the banner's assurance must never outlive the lane, CLO C1).
 
@@ -111,11 +122,14 @@ mocked, and that rests on the #3252 behaviour. The runtime proof is the post-dep
 
 Variable-built command names; aliases, including `git config alias.x '!git push -f'` and `git config remote.origin.push +HEAD:main`
 followed by a plain push; `make`, `npm run` and script indirection, including Write then `bash ./x.sh`; `terragrunt` and `pulumi
-destroy`; `git update-ref`; recursive `rm`; force-push to a non-default branch; GraphQL `deleteRef`, `deleteRepository` and `updateRef`
+destroy`; `git update-ref`; recursive `rm`; force-push to a non-default branch; deleting or force-moving a tag, and deleting a
+branch-protection rule through the API; `gh repo sync --force`; an interpreter that runs git itself (`python -c`, `node -e`) where the
+blocklist has no entry; a default branch that differs per remote; a destination hidden in a nested `${…:-$(…)}` substitution; GraphQL `deleteRef`, `deleteRepository` and `updateRef`
 through `gh api graphql` (near-miss telemetry only; widening goes back to the CPO, CPO4-R1); other `gh ... delete` forms (near-miss
 only); a plain `terraform apply` of a destroy plan; and **owner-only approval**: a non-owner member of the workspace can approve a card
-(the same as every other gate today). Revisit trigger for the last: the first workspace with more than one active member using
-autonomous mode.
+(the same as every other gate today; the outcome line carries `approverRole` so the soak probe reports member approvals). Revisit
+trigger for the last: the first workspace with more than one active member using autonomous mode. The default-branch lookup is a read
+of the repository through the installation token and is not itself audited.
 
 ## Consequences
 
@@ -123,7 +137,11 @@ autonomous mode.
   `terraform` batch grant no longer covers them, in autonomous and non-autonomous mode alike (disclosed in the PR body and the
   changelog, CPO4-R6). The hook consolidation later is a measured swap (the corpus and the parity test already bind the two).
 - **Harder.** Two implementations of the D1 set exist until the consolidation; the corpus is the specification and changes to it are
-  reviewed as such. A force-push to a feature branch asks when the default branch could not be resolved.
+  reviewed as such. A force-push to a feature branch asks when the default branch could not be resolved, and a force push with no
+  named destination always asks (a rebase-and-force-push workflow meets the card on every push; the soak probe reports this share).
+- **Reverting inside the soak window.** A revert removes the lane, and the copy with it. Acknowledgements written while the copy was
+  live remain valid for the narrower claim they acknowledged, so the revert runbook supersedes (not edits) any acknowledgement row
+  written during the window, as the C2 supersede step of PR #9792 does, before the copy is restored.
 - **Revert and tune thresholds (CPO4-R5; the soak probe `scripts/followthroughs/hosted-destroy-ask-window-9776.sh` evaluates them).**
   Revert (not tune) if, in the first 24 h, any one rule id accounts for more than 25 percent of one workspace's hosted Bash calls with
   at least 20 hosted Bash calls from that workspace in the window (a floor, so one call in four is not a storm), or
@@ -133,8 +151,11 @@ autonomous mode.
   **Measurability, stated plainly.** The ruled storm metric is a share of one workspace's hosted Bash CALLS. The per-call lines
   (`autonomous-bypass`, `user-approved`) are pino INFO and the app-container shipper keeps WARN and above only, so that denominator is
   not in the stored telemetry. The probe therefore measures a stand-in: the share of ONE REPO's asks that one rule accounts for, behind
-  a floor of 20 asks in the window. It is a tripwire for "one rule is the whole ask stream", not the ruled metric; a human reading an
-  ACTION REQUIRED reads the Sentry `hosted-destroy-ask` rate for the real one. The lane's own ask and outcome lines
+  a floor of 20 asks in the window, evaluated for every repo that reaches the floor. It is a tripwire for "one rule is the whole ask
+  stream", not the ruled metric, and the ruled metric is not measured anywhere (the Sentry events are capped per context, so they do
+  not stand in for it). The probe also does not check the lane's liveness: a lane that stopped emitting reads as a quiet window, and
+  the dev probe below is the liveness check. It exits 3 on an unparseable or truncated result and on outcome lines with no matching
+  ask lines, and it reports the `git-force-implicit` share and the member approvals. The lane's own ask and outcome lines
   (`destroy-ask`, `destroy-ask-approved`, `destroy-ask-rejected`, `destroy-ask-expired`) are emitted at WARN so they ship; near-miss
   events are Sentry-only. The probe's decode of the stored shape was measured on live app-container rows (a pino WARN line is stored
   as `raw` = a JSON string whose `.message` is the pino object) but could not be measured on a `destroy-ask` row, which does not
@@ -158,8 +179,10 @@ autonomous mode.
 
 ## Cost Impacts
 
-None. No new vendor, no infrastructure change; at most 32 Sentry events per conversation context and one GitHub API read per session
-record, only on a force or delete push.
+None. No new vendor, no infrastructure change; at most 32 `hosted-destroy-ask` and 32 near-miss Sentry events per conversation
+context, plus the `destroy-classifier-error` and `default-branch-resolve` events, which are not capped per context (the resolver
+bounds the second to one per 30 s per session record after a failure; a classifier error is a defect and should be rare). One
+GitHub API read per session record, only on a force or delete push.
 
 ## NFR Impacts
 

@@ -223,7 +223,7 @@ ADRs and C4 text must not say the hosted gate is complete (CLO C8).
 The 24 h revert thresholds and the 7-day measurement are time-gated close criteria for CPO3-R1 and for #9603. Deliverable:
 `scripts/followthroughs/hosted-destroy-ask-window-9776.sh`, notify-only like `image-cve-scan-window-9826.sh` (exit codes 2, 3 or 5,
 never 0 or 1, never closes anything): queries Better Stack through `scripts/betterstack-query.sh` for per-rule `destroy-ask` counts and
-outcomes, prints the R5 percentages, and exits 3 when a revert or tune threshold is tripped. Tracker is #9776 itself with the
+outcomes, prints the R5 percentages, and exits 5 (ACTION REQUIRED) when a revert or tune threshold is tripped (3 is CANNOT ESTABLISH: a failed, unparseable or truncated query, or outcome lines with no ask lines; 2 is NOT YET). The per-workspace call-share metric is not in stored telemetry, so the probe evaluates a stand-in: the largest single-rule share of one repo's asks, for every repo with at least 20 asks. Tracker is #9776 itself with the
 `<!-- soleur:followthrough ... -->` directive and the `follow-through` label; wire any new `secrets=` into
 `.github/workflows/scheduled-followthrough-sweeper.yml`. Read `knowledge-base/engineering/operations/runbooks/followthrough-convention.md` first.
 The probe takes a `--window 24h|7d` argument and is enrolled twice (earliest deploy + 1 d and deploy + 7 d), because the 24 h revert rule
@@ -402,22 +402,26 @@ The edited files match the UI-surface glob (`components/**/*.tsx`), but the chan
 liveness_signal:
   what: "Pino decision:destroy-ask lines (Better Stack) and Sentry hosted-destroy-ask events, emitted once per ask; absence of the stream after deploy plus a dev probe means the lane is not live"
   cadence: "per ask; verified by the dev probe after deploy and the 24 h and 7 d soak probe"
-  alert_target: "Sentry issue for classifier-error and default-branch-resolve; the R5 revert and tune thresholds exit 3 from the follow-through probe on tracker 9776"
+  alert_target: "Sentry issue for classifier-error and default-branch-resolve; the R5 revert and tune thresholds exit 5 from the follow-through probe on tracker 9776 (layer: none of the seven; the probe queries the app-container Better Stack sink directly)"
   configured_in: "apps/web-platform/server/permission-callback.ts (lane), apps/web-platform/server/resolve-protected-branches.ts, scripts/followthroughs/hosted-destroy-ask-window-9776.sh"
 error_reporting:
   destination: "Sentry web-platform via warnSilentFallback/reportSilentFallback (feature cc-permissions), plus Better Stack through the shared pino logger"
   fail_loud: "op destroy-classifier-error and op default-branch-resolve events; a thrown classifier error also forces the ask, so the failure is a card, never a silent allow"
 failure_modes:
   - mode: "Default-branch lookup fails (API outage, no installation)"
+    layer: "2 (pino to Sentry breadcrumb mirror; reportSilentFallback captures the tagged event)"
     detection: "Sentry op default-branch-resolve; ask rate for git-push-unknown-default in the probe"
     alert_route: "Sentry issue; probe tune threshold above 10 percent of asks over 7 days"
   - mode: "Classifier throws on a command shape"
+    layer: "2 (reportSilentFallback with a null first argument; the error class rides in extra)"
     detection: "Sentry op destroy-classifier-error"
     alert_route: "Sentry issue; revert if non-zero past 24 h (CPO4-R5)"
   - mode: "Ask storm from one rule (false-positive class)"
+    layer: "none of the seven: the app-container shipper (WARN and above) to Better Stack, read by the soak probe"
     detection: "per-rule counts from the Better Stack query in the probe"
-    alert_route: "probe exit 3 on tracker 9776; revert above 25 percent of one workspace's hosted Bash calls in 24 h"
+    alert_route: "probe exit 5 on tracker 9776; the stand-in metric is one rule above 25 percent of one repo's asks (20-ask floor) in 24 h, because the ruled per-workspace call share is not in stored telemetry"
   - mode: "A destructive spelling is missed"
+    layer: "2 (warnSilentFallback; Sentry only, deduped per context, leading command word only)"
     detection: "Sentry op destroy-classifier-near-miss (keyword present, no match) and the gh plus delete near-miss"
     alert_route: "Sentry issue; CLO re-evaluation trigger"
 logs:
