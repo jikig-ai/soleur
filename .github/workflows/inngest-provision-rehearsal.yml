@@ -239,6 +239,7 @@ jobs:
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
