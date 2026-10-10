@@ -22,7 +22,12 @@
 /apps/web-platform/scripts/rename-guard.sh              @deruelle
 /apps/web-platform/scripts/allowlist-diff.sh            @deruelle
 /scripts/secret-scan-smoke-gate.test.sh                 @deruelle
+/scripts/ci-draft-light.test.sh                         @deruelle
+/scripts/ci-draft-push-census.sh                       @deruelle
+/scripts/ci-draft-push-census.test.sh                  @deruelle
 /scripts/ci-push-dedupe.test.sh                         @deruelle
+/scripts/followthroughs/ci-draft-light-soak-9728.sh      @deruelle
+/scripts/followthroughs/ci-draft-light-soak-9728.test.sh @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.sh     @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh @deruelle
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
@@ -248,3 +253,8 @@
 /scripts/probe-merge-group-coverage.sh                  @deruelle
 /plugins/soleur/scripts/sync-pr-behind.sh               @deruelle
 /.claude/hooks/pre-merge-rebase.sh                      @deruelle
+/plugins/soleur/scripts/ci-head-verdict.sh              @deruelle
+/plugins/soleur/test/ci-head-verdict.test.sh            @deruelle
+/plugins/soleur/scripts/admin-merge-ready.sh            @deruelle
+/plugins/soleur/scripts/monitor-pr-checks.sh            @deruelle
+/apps/web-platform/server/webhook-draft-ci-run.ts       @deruelle

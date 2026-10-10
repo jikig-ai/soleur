@@ -581,6 +581,78 @@ done
 out="$(PATH="$STUB:$PATH" timeout 30 bash "$SUT" 7778 --interval 10 --max-polls 1 --repo acme/widgets 2>&1)"; rc=$?
 [[ "$rc" -eq 2 ]] && ok "T24k control: --repo acme/widgets is accepted" || no "T24k control --repo" "rc=$rc out=[$out]"
 
+# ── T30 ADR-276 S3 (#9728): a draft-era red `test` row on a PR that was marked ready ─────────────
+# With CI_DRAFT_LIGHT on, a draft PR's `test` concludes red by design. After `gh pr ready` that row stays the newest
+# `test` row for the 38 to 51 minutes the ready run takes, so `gh pr checks` reports `fail` for it. The monitor must
+# read plugins/soleur/scripts/ci-head-verdict.sh (stubbed here through the CI_HEAD_VERDICT_BIN seam) and report
+# PENDING, not FAILED, while the verdict is pending-full or no-run; stalled and awaiting-approval end the watch with
+# the recovery command; full-decided and n/a keep today's reading; a resolver that errors keeps today's reading.
+cat > "$STUB/verdict.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_VLOG"
+# The REAL error shape: a state=error marker (outside the six-state set) AND exit 3, as ci-head-verdict.sh prints it.
+[[ -f "$STUB_VSTATE.fail" ]] && { printf 'SOLEUR_CI_HEAD_VERDICT state=error pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=api-error\n'; exit 3; }
+printf 'SOLEUR_CI_HEAD_VERDICT state=%s pr=7778 sha=0000000000000000000000000000000000000000 run=none reason=%s\n' "$(cat "$STUB_VSTATE")" "$([[ "$(cat "$STUB_VSTATE")" == stalled ]] && echo undecided-after-120m || echo stub)"
+EOF
+chmod +x "$STUB/verdict.sh"
+export STUB_VLOG="$STUB/verdict-calls" STUB_VSTATE="$STUB/verdict-state" CI_HEAD_VERDICT_BIN="$STUB/verdict.sh"
+TEST_RED_CHECKS='[{"name":"a","bucket":"pass"},{"name":"test","bucket":"fail"},{"name":"test-scripts","bucket":"pending"}]'
+TEST_RED_ONLY='[{"name":"a","bucket":"pass"},{"name":"test","bucket":"fail"}]'
+setv() { printf '%s' "$1" > "$STUB_VSTATE"; rm -f "$STUB_VSTATE.fail" "$STUB_VLOG"; }
+mkstub 'OPEN|BLOCKED|true' "$TEST_RED_CHECKS"
+setv pending-full
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"0 fail"* && "$out" != *"NON-PASS"* && "$out" == *"test(ready run pending-full)"* ]]; then
+  ok "T30a pending-full: the draft-era red test is PENDING (0 fail, no NON-PASS line), labelled with why"
+else no "T30a pending-full reports the draft row as FAILED" "rc=$rc out=[$out]"; fi
+[[ "$(cat "$STUB_VLOG" 2>/dev/null)" == "verdict 7778" ]] && ok "T30a the resolver is asked once, for this PR, via the verdict subcommand" || no "T30a resolver call" "log=[$(cat "$STUB_VLOG" 2>/dev/null)]"
+mkstub 'OPEN|BLOCKED|true' "$TEST_RED_ONLY"
+setv pending-full
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" != *"SETTLED"* && "$out" == *"TIMEOUT"* ]]; then
+  ok "T30b pending-full with the red test as the only non-pass row: no settle, no exit 1 (it keeps watching)"
+else no "T30b a red test row alone settled the watch while the ready run is in flight" "rc=$rc out=[$out]"; fi
+setv no-run
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" != *"SETTLED"* && "$out" == *"test(ready run no-run)"* ]]; then
+  ok "T30c no-run: PENDING (a ready run may still register), never settled red"
+else no "T30c no-run" "rc=$rc out=[$out]"; fi
+setv stalled
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"READY RUN STALLED"* && "$out" == *"undecided-after-120m"* && "$out" != *"75 minutes"* && "$out" == *"gh pr ready --undo 7778"* && "$out" == *"gh pr ready 7778"* && "$out" != *"SETTLED WITH NON-PASS"* ]]; then
+  ok "T30d stalled: the watch ends rc=1 with the recovery command and no fix loop on the draft-red row"
+else no "T30d stalled" "rc=$rc out=[$out]"; fi
+setv awaiting-approval
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"READY RUN AWAITING APPROVAL"* && "$out" == *"approve"* ]]; then
+  ok "T30e awaiting-approval: the watch ends rc=1 and names the approval it needs"
+else no "T30e awaiting-approval" "rc=$rc out=[$out]"; fi
+setv full-decided
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"SETTLED WITH NON-PASS"* && "$out" == *"fail:test"* ]]; then
+  ok "T30f full-decided: a real red test is still FAILED (the row is authoritative; never hidden as PENDING)"
+else no "T30f full-decided must report the red test" "rc=$rc out=[$out]"; fi
+setv n/a
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"fail:test"* ]] && ok "T30g n/a: today's reading (a red test on a never-draft PR is FAILED)" || no "T30g n/a" "rc=$rc out=[$out]"
+setv pending-full; touch "$STUB_VSTATE.fail"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"fail:test"* && "$out" != *"test(ready run"* ]] && ok "T30h a resolver that errors (state=error marker, exit 3) keeps today's reading (fail toward FAILED, never toward PENDING)" || no "T30h resolver error" "rc=$rc out=[$out]"
+mkstub 'OPEN|BLOCKED|true' "$RED_CHECKS"
+setv pending-full
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"fail:b"* && ! -e "$STUB_VLOG" ]]; then
+  ok "T30i a red non-test check is untouched and the resolver is not even called"
+else no "T30i non-test red" "rc=$rc out=[$out] calls=$(cat "$STUB_VLOG" 2>/dev/null)"; fi
+mkstub 'OPEN|BLOCKED|true' '[{"name":"b","bucket":"fail"},{"name":"test","bucket":"fail"},{"name":"c","bucket":"pending"}]'
+setv pending-full
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$out" == *"1 fail"* && "$out" == *"fail:b"* && "$out" != *"fail:test"* ]] && ok "T30j pending-full softens ONLY the test row; another red required row is still reported" || no "T30j" "out=[$out]"
+rm -f "$STUB_VLOG"
+out="$(PATH="$STUB:$PATH" timeout 90 bash "$SUT" 7778 --interval 10 --max-polls 1 --repo acme/widgets 2>&1)"
+[[ "$(cat "$STUB_VLOG")" == "verdict 7778 --repo acme/widgets" ]] && ok "T30k --repo is forwarded to the resolver" || no "T30k --repo forwarding" "log=[$(cat "$STUB_VLOG")]"
+unset CI_HEAD_VERDICT_BIN STUB_VLOG STUB_VSTATE
+
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
 printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
 # RE-SCOPED (not deleted): this asserted the OLD rendering, `UNKNOWN|UNKNOWN|automerge=false 0/0`,
@@ -606,9 +678,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 55 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55.\n' "$_ran" >&2
+if [[ "$_ran" -lt 67 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 67.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 67)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1
