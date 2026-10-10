@@ -39,7 +39,9 @@
 #      full-decided (its own rows are authoritative, a failure is never hidden as PENDING); action_required ->
 #      awaiting-approval; cancelled|skipped|stale|neutral|startup_failure|anything else -> no-run (fail closed);
 #      no kept run -> no-run
-#   5. pending-full and no-run become `stalled` once more than N=120 minutes have passed since T (above the declared
+#   5. (a conflicting PR, mergeable_state dirty, with no run stays no-run reason=conflicting: GitHub builds no merge ref
+#      for it, so no run can ever appear and an undo/ready would not help)
+#      pending-full and no-run become `stalled` once more than N=120 minutes have passed since T (above the declared
 #      73-minute path plus a ~14-minute p90 queue wait; a run still in flight at N is not a healthy slow run)
 # `run=` is the DECIDING run: a reader judging `test` must use that run's rows. A newer `test` row that belongs to a
 # different run (a manual re-run of a pre-T run) is stale; the row's run id is the `/actions/runs/<id>/` segment of
@@ -143,7 +145,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 ERRMSG=""
 # ── reads. Each returns 0 on a parsed answer, 1 with ERRMSG set otherwise. ─────────────────────
-PR_DRAFT=""; PR_SHA=""; SERVER_DATE=""
+PR_DRAFT=""; PR_SHA=""; PR_MSTATE=""; SERVER_DATE=""
 read_pr() {
   gh api -i "repos/{owner}/{repo}/pulls/$PR" > "$WORK/pr.http" 2> "$WORK/err" \
     || { ERRMSG="reading PR $PR failed: $(head -c 200 "$WORK/err" | tr '\n' ' ')"; return 1; }
@@ -153,6 +155,7 @@ read_pr() {
     "$WORK/pr.json" >/dev/null 2>&1 || { ERRMSG="unparseable PR $PR body"; return 1; }
   PR_DRAFT="$(jq -r '.draft' "$WORK/pr.json")"
   PR_SHA="$(jq -r '.head.sha' "$WORK/pr.json")"
+  PR_MSTATE="$(jq -r '(.mergeable_state // "") | if type == "string" then . else "" end' "$WORK/pr.json")"
 }
 
 READY_COUNT=0; READY_T=""; READY_TRUNC="false"
@@ -279,7 +282,10 @@ cmd_verdict() {
     read -r st rs <<<"$(classify_run "$RUN_STATUS" "$RUN_CONCLUSION")" || fail_api "run classification failed"
     [[ -n "$st" ]] || fail_api "run classification failed"
   fi
-  if [[ "$st" == pending-full || "$st" == no-run ]] && (( NOW_EPOCH - t_epoch > STALL_MINUTES * 60 )); then
+  # A conflicting PR (mergeable_state dirty) gets NO pull_request run at all: GitHub cannot build the merge ref. That is
+  # the conflict's doing, not a lost ready run, and `stalled` would advise an undo/ready that cannot help: it stays no-run.
+  if [[ "$st" == no-run && "$rs" == no-run-after-ready && "$PR_MSTATE" == dirty ]]; then rs="conflicting"
+  elif [[ "$st" == pending-full || "$st" == no-run ]] && (( NOW_EPOCH - t_epoch > STALL_MINUTES * 60 )); then
     st=stalled; rs="undecided-after-${STALL_MINUTES}m"
   fi
   emit "$st" "$RUN_ID" "$rs"
