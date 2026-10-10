@@ -34,6 +34,50 @@ dropped-consumer ratchet oracle so `^glob:` edges count as coverage.
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10
+**Sections enhanced:** 7 (Observability, Encryption Posture, Proposed Solution,
+Risks, Guard Contract, Scope Check, References)
+**Research agents used:** inline — this environment has no Task/subagent
+spawn; every deepen phase (skills discovery, learnings sweep, per-section
+research, 4.4 precedent-diff, 4.45 verify-the-negative + self-audit,
+4.6–4.12 halt gates) ran sequentially in-process and its gates were executed
+mechanically where a script exists (`lint-guard-contract.py` green on 5
+entries; PAT sweep clean; Scope Check fence-count 1; UI-surface, network,
+downtime triggers absent).
+
+### Key Improvements
+
+1. Malformed-mint corrected: a bare `^` edge is NOT always-match
+   (`e=""` evaluates `*\n\n*`, which narrows on non-empty blobs) — malformed
+   entries mint `^glob:<verbatim>` so the hit arm's own malformed rule
+   matches. Found by reading `_diff_edge_hit`'s actual `case` arms during
+   the 4.45 verify-the-negative pass.
+2. `glob:` semantics pinned to bash `[[ == ]]` (`*` crosses `/`), explicitly
+   distinct from lefthook's gobwas `**` = 1+ dirs
+   (learning `2026-03-21-lefthook-gobwas-glob-double-star`) — the `**/`
+   spelling is self-documentation, not semantics.
+3. Extension-level coverage honesty: the census validates glob *structure*
+   and the kb-consumers ratchet covers dir *reach*, but neither checks
+   extension *completeness* (self-edge lesson,
+   `2026-09-20-a-classified-edge-that-pointed-at-itself-read-as-coverage`) —
+   the disposition table's per-suite verified read set is the pin, cited
+   again in Risks.
+4. Mint-site census: `grep -n '="^' scripts/test-all.sh` shows exactly one
+   `^` minter (`_p="^$_p"` at `_affected_add_edge`) — the "single chokepoint"
+   claim is verified, not asserted.
+
+### New Considerations Discovered
+
+- A `glob:` token in a `test-relevance-paths.sh`/consumed array is a dead
+  unanchored substring, never a glob — limitation documented + risk row.
+- `fanout-suite-scope`'s sandbox may lack `knowledge-base/` — mint degrade
+  and census must agree on what a missing head dir means (Phase 3 task).
+- FR-5 rewritten: the bench's byte-compare flags the six labels' rows on
+  EVERY probe (edge text changes), so identity is asserted by a scripted
+  row-wise stream-diff, not a bare bench exit code.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Issue claim | Reality on this branch (verified) | Plan response |
@@ -76,7 +120,10 @@ A third declared-entry kind, `glob:<literal-head>/<glob-tail>`:
   the `git ls-files '*.sh'` pathspecs the suites themselves use), so
   `glob:knowledge-base/**.sh` matches `knowledge-base/x.sh` and
   `knowledge-base/a/b/c.sh` alike. `**` and `*` are equivalent under bash
-  `[[ == ]]`; the `**` spelling is kept for self-documentation.
+  `[[ == ]]`; the `**` spelling is kept for self-documentation. This is bash
+  pattern semantics only — do NOT confuse with lefthook's gobwas `**`
+  (1+ directories, learning `2026-03-21-lefthook-gobwas-glob-double-star`),
+  which this grammar never invokes.
 - **Mint (`_affected_add_edge`, before the `[[ -e ]]` probe):**
   - well-formed + `<literal-head>` is an existing dir (`_affected_probe d`) →
     mint `^glob:<pattern>`;
@@ -257,6 +304,48 @@ None (test rows live in existing suites; no new suite files).
 CPO sign-off required at plan time before `soleur:work` begins — invoke the
 CPO domain leader or confirm prior coverage; `soleur:engineering:review:user-impact-reviewer`
 is invoked at review time (review skill conditional-agent block).
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: AFFECTED_SELECTED receipt rows carrying ^glob: edges, and the AFFECTED_SUMMARY selected= count on every --affected / --print-selection walk
+  cadence: per local --affected / --print-selection run
+  alert_target: none — local dev tooling; the receipt is operator-visible in run output
+  configured_in: scripts/test-all.sh (the AFFECTED_SELECTED emit loop)
+error_reporting:
+  destination: stderr of the invoking run (repo convention for the runner) plus RED exits from the census linter and the kb-consumers ratchet
+  fail_loud: a malformed glob entry is visible verbatim as ^glob:<entry> in the receipt AND flagged statically by lint-orphan-test-suites; a genuinely uncovered kb read is VIOLATION in test-affected-kb-consumers
+failure_modes:
+  - mode: a glob edge silently narrows (the failure this design exists to prevent)
+    detection: kb-.sh / kb-.md probe arms in scripts/test-all-affected.test.sh assert the selected-bit for each disposition; malformed rows assert match
+    alert_route: suite RED on the diff that introduces the arm
+  - mode: a declared glob head dir is deleted or renamed
+    detection: lint-orphan-test-suites census arm flags the dead head statically; mint degrade mints ^<head>/ so selection never narrows between landing and lint
+    alert_route: census RED at pre-push
+  - mode: the derive cache serves records minted under the old grammar
+    detection: the #9812 derive-code hash covers _affected_add_edge + _diff_edge_hit; new code flushes every record once by design
+    alert_route: none — self-healing on the next run
+logs:
+  where: the AFFECTED_SELECTED / AFFECTED_SUMMARY lines on stdout of the run
+  retention: run lifetime (no persistent log)
+discoverability_test:
+  command: rg -n glob: scripts/lib/test-affected-paths.sh
+  expected_output: glob:knowledge-base/**.sh
+```
+
+## Encryption Posture
+
+```yaml
+# No new store or cross-component connection is introduced. The only store this
+# plan references is the pre-existing #9812 derive cache
+# (.soleur/cache/affected-derive/), whose plaintext-exception posture was
+# declared at
+# knowledge-base/project/plans/2026-10-09-feat-affected-derive-cache-plan.md
+# §Encryption Posture — this change adds no records, fields, or readers to it.
+at_rest: []
+in_transit: []
+```
 
 ## Architecture Decision (ADR/C4)
 
@@ -516,6 +605,21 @@ a surprise).
 | Sibling pins on line-anchored extractions in `test-all-affected.test.sh` (e.g. the `git ls-files` opener+3 pin, the `_AFFECTED` block extraction) drift when lines are inserted nearby | The new code lives in `_affected_add_edge` / `_diff_edge_hit`, not in the pinned blocks; plan instructs re-deriving any pin whose anchor text the diff touches (learning 2026-10-05 Session Error 5) |
 | `fanout-suite-scope` sandbox lacks `knowledge-base/` so mint degrades `^glob:`→`^knowledge-base/` mid-run | Phase 3 verifies; if its linter arm flags missing head dirs the fix is forward (fixture dir or arm ordering), not reverting to substring semantics |
 | A `glob:`-in-`ALWAYS_ON_SUITES` or non-`*` glob in a future bounded diff silently admitted | Guard 4 rows pin `semantic` for both |
+| Extension-level coverage honesty: a structurally-valid glob that misses a scanned extension (the trap-lint `**.py` case) passes every static arm while silently under-covering | The census checks glob *structure*; the kb-consumers ratchet checks dir *reach*; neither sees *extension completeness* (the self-edge lesson, `2026-09-20-…-itself-read-as-coverage`). The pin is the disposition table's per-suite verified read set + the t-rows asserting each extension family selects |
+
+**Precedent-diff (deepen 4.4).** Pattern precedent exists — the
+`^file`/`^dir/` mint+match pair this grammar extends. Side-by-side:
+
+- mint: existing arms probe the full path with `_affected_probe e` then
+  `-d`-normalize to `^<dir>/`; the `glob:` arm probes only `<head>` with
+  `_affected_probe d` (the full pattern is not a filesystem object) and
+  mints `^glob:` / `^<head>/` / `^glob:<verbatim>` per the degrade ladder —
+  same probe-channel, same single minter.
+- match: `*/)` and `*)` arms are one `[[ == ]]` substring test on the
+  memoized blob; the `glob:` arm is a head pre-check plus a per-line
+  `[[ == ]]` — same blob, same anchoring contract, one extra loop.
+- degrade class: same as every `_AFF_LIB` consumer — fail toward match,
+  never narrow, never block the walk.
 
 ## Resource Requirements
 
@@ -572,7 +676,11 @@ needs its own verified read set. #9814 (weight-drift detector) and #9815
   `2026-10-06-one-self-inclusion-claim-hid-three-edge-provenances-…`,
   `2026-10-05-a-guard-built-from-spellings-…` (fixture idiom + TEST_GROUP leak),
   `2026-09-23-a-packed-string-searched-by-glob-is-a-quadratic-map.md` (no
-  packed-glob maps — the line loop is over a memoized blob, not a glob map)
+  packed-glob maps — the line loop is over a memoized blob, not a glob map),
+  `2026-03-21-lefthook-gobwas-glob-double-star.md` (gobwas `**` ≠ bash
+  `[[ == ]]` — semantics pinned in Proposed Solution),
+  `test-failures/2026-09-20-a-classified-edge-that-pointed-at-itself-read-as-coverage.md`
+  (structure-valid ≠ coverage-correct — the extension-completeness risk row)
 
 ### Related Work
 
