@@ -4264,6 +4264,8 @@ d10c "a seccomp audit record (type 1326) counts as a hit, with only its allowlis
 d10c "a complain-mode ALLOWED record (type 1400) is not a denial: it must not count as a hit" \
   '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000003.1:459): apparmor="ALLOWED" operation="mount" profile="soleur-bwrap" fstype="proc"'
+d10c "a flood of 12000 two-byte lines is capped at total=9999 so the counts can never grow the status head" \
+  '^src=journal j=ok d=skip total=9999 hits=0 mproc=0$' MOCK_KLOG_J_OUT=k MOCK_KLOG_J_REP=12000
 d10c "journal silent-empty and dmesg refused" '^src=none j=empty d=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_RC=1
 d10c "both binaries absent (rc 127)" '^src=none j=absent d=absent total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=127 MOCK_KLOG_D_OUT= MOCK_KLOG_D_RC=127
 d10c "an unrelated profile denial is a hit but NOT a procfs-mount denial, and the tenant file name stays out" \
@@ -4317,9 +4319,16 @@ d10g_flags() {  # <region-text>: prints every violation, nothing when clean
   printf '%s' "$out"
 }
 D10G_CLEAN='  r="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")"'
-diag_check "#9860 D10g control: the census predicate flags a sudo'd read, an unbounded -w read and a bare dmesg, and passes the compliant shape" \
-  "$([[ -n "$(d10g_flags '  x=$(sudo journalctl -k -n 400)')" && -n "$(d10g_flags '  x=$(timeout -k 1 3 dmesg -w | head -c 9)')" && -n "$(d10g_flags '  x=$(dmesg | tail -n 400)')" \
+# Each fixture is compliant on EVERY rule except the one it exists to prove, so deleting any single ban leaves exactly
+# one fixture unflagged: a fixture that trips two rules would let the ban under test be removed unnoticed.
+D10G_NOSUDO='  x=$(sudo timeout -k 1 3 journalctl -k -n 400 --since=-5min)'
+D10G_NOFOLLOW='  x=$(timeout -k 1 3 dmesg -w | head -c 9)'
+D10G_NOVARLOG='  x=$(timeout -k 1 3 cat /var/log/audit/audit.log | head -c 9)'
+D10G_NOTIMEOUT='  x=$(dmesg | tail -n 400)'
+diag_check "#9860 D10g control: the census predicate flags a sudo'd read, a -w read, a /var/log read and an unbounded dmesg EACH BY ITS OWN RULE, and passes the compliant shape" \
+  "$([[ -n "$(d10g_flags "$D10G_NOSUDO")" && -n "$(d10g_flags "$D10G_NOFOLLOW")" && -n "$(d10g_flags "$D10G_NOVARLOG")" && -n "$(d10g_flags "$D10G_NOTIMEOUT")" \
       && -z "$(d10g_flags "$D10G_CLEAN")" ]] && echo 0 || echo 1)"
+unset D10G_NOSUDO D10G_NOFOLLOW D10G_NOVARLOG D10G_NOTIMEOUT
 D10G_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT")
 D10G_CODE=$(printf '%s\n' "$D10G_SRC" | grep -vE '^[[:space:]]*#') || true
 D10G_JLINE=$(grep -E 'timeout -k 1 3 journalctl' <<<"$D10G_CODE" || true)
