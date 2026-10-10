@@ -254,6 +254,33 @@ rows "$TMP/r-postdegraded.json" "$NOW" \
 run "post-reboot FAIL: bootstrap-done-DEGRADED after the boundary is still provision re-entry" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-postdegraded.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "2026-06-01T00:00:00"
 
+# ── #9939 forbidden-row arms: `Failed to start inngest-luks*` is a VIOLATION in every mode ──
+# A LUKS unit start attempted before its EnvironmentFile= files existed is the benign ordering
+# noise #9939 removes; the evidence artifact must FAIL on it, not merely carry it. These rows
+# are journald/systemd text — they carry no stage= field — and they ride the same host filter
+# as the phone-home rows.
+rows "$TMP/r-luksfail-a.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "systemd[1]: Failed to start inngest-luks-open.service - Open the LUKS mapper for /mnt/data. \"host\":\"${HOST}\""
+run "phase-a FAIL: a 'Failed to start inngest-luks*' journal row is a violation, not noise" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfail-a.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
+rows "$TMP/r-luksfail-b.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=3 iid=abc123 \"host\":\"${HOST}\"" \
+  "systemd[1]: Failed to start inngest-luks-cutover.service - Inngest Redis AOF LUKS cutover oneshot. \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=4 iid=abc123 \"host\":\"${HOST}\""
+run "phase-b FAIL: bootstrap-done does not excuse a 'Failed to start inngest-luks*' row" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfail-b.json" -- "${BASE_ARGS[@]}" --mode phase-b
+
+rows "$TMP/r-luksfail-post.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1 \"host\":\"${HOST}\"" \
+  "systemd[1]: Failed to start inngest-luks-open.service - Open the LUKS mapper for /mnt/data. \"host\":\"${HOST}\""
+run "post-reboot FAIL: a 'Failed to start inngest-luks*' row after the boundary is a violation" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfail-post.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
+
 # --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
 # excludes it — this arm proves the bound is wired, not just parsed.
@@ -274,7 +301,7 @@ run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=19
+MIN=22
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1

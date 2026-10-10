@@ -271,6 +271,20 @@ ok()   { note "PASS: $1"; }
 viol() { note "VIOLATION: $1"; violated=1; }
 want() { note "WAIT: $1"; missing="${missing}$1; "; }
 
+# FORBIDDEN IN EVERY MODE (#9939): a `Failed to start inngest-luks*` journal row means a LUKS
+# unit start was attempted before its EnvironmentFile= files were staged — the benign ordering
+# noise the ConditionPathExists= conditions remove, and the false-failure shape this channel
+# must never carry. The needle is the systemd journal TEXT, not a stage= field: these rows are
+# journald/systemd rows, not phone-home markers. Counted against the mode's own row set —
+# HOST_ROWS for phase-a/phase-b (this run's window), POST_ROWS for post-reboot (post-boundary).
+luks_failed_count() { printf '%s\n' "$1" | grep -cF 'Failed to start inngest-luks' 2>/dev/null || true; }
+luks_failed_check() { # <row-set> — viol on any `Failed to start inngest-luks*` row
+  n_luks_failed="$(luks_failed_count "$1")"
+  (( n_luks_failed > 0 )) \
+    && viol "${n_luks_failed} 'Failed to start inngest-luks*' journal row(s) — a LUKS unit start ran before its EnvironmentFile= files existed (#9939)" \
+    || ok "zero 'Failed to start inngest-luks*' journal rows"
+}
+
 if [[ -z "$IID" && -z "$(printf '%s' "$HOST_ROWS" | tr -d '[:space:]')" ]]; then
   # Zero host rows with a live anchor is "dark so far", not "dark forever".
   echo "TRANSIENT (${MODE}): the source is answering but this host has emitted nothing yet — keep polling; the poll deadline owns the terminal verdict." >&2
@@ -294,6 +308,7 @@ case "$MODE" in
     n_start_distinct="$(printf '%s\n' "$HOST_ROWS" | grep -oE 'stage=provision-attempt-start.{0,40}attempt=[0-9]+' | sort -u | wc -l | tr -d ' ')"
     (( n_start_distinct >= MIN_ATTEMPTS )) && ok "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
+    luks_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
   phase-b)
@@ -312,6 +327,7 @@ case "$MODE" in
     n_exit="$(count_iid provision-attempt-exit-)"
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
+    luks_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY
     ;;
   post-reboot)
@@ -330,6 +346,7 @@ case "$MODE" in
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"
     (( n_provision > 0 )) && viol "${n_provision} provision marker(s) AFTER the reboot boundary — the latch did not hold (provision re-ran post-reboot)" || ok "zero provision markers after the reboot boundary — the latch held"
     (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot ON THE PHONE-HOME CHANNEL (proves this boot ran AND the measured channel is live)" || want "token-restage anchor re-emitted post-reboot (stage=bs-token-restaged n=${n_restage})"
+    luks_failed_check "$POST_ROWS"
     KEY=REHEARSAL_POST_REBOOT_LATCH
     ;;
 esac
