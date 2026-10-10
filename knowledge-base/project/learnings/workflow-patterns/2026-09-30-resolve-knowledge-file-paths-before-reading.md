@@ -117,3 +117,23 @@ The delegated proposal inspection also guessed `server/soleur-flow.ts` and a
 Directory discovery and the tracked package scripts resolved the actual
 locations. Use the package's declared build command rather than inferring
 script filenames from its purpose.
+
+## Addendum — 2026-10-10 production candidate warnings
+
+The approved production-Dockerfile build requested GitHub CLI 2.96.0, which
+the rolling apt repository no longer carried. Its existing explicit fallback
+installed 2.102.0 and the stage passed. Record the actual installed version;
+do not describe this candidate as exact pinned-tool parity or silently re-pin
+source under a consumed build authorization.
+
+Next's default Turbopack build passed with 28 warnings: SDK externalization,
+a dynamic subprocess path, and 26 dynamic-filesystem tracing warnings.
+Successful compilation does not qualify those runtime paths. npm's install
+audit summaries also remain dependency findings, not a build-failure verdict.
+The unchanged lockfile and existing Dependabot alerts were verified separately.
+
+One bounded log inspection included Next's ANSI coloring in its output.
+Subsequent displays stripped ANSI before showing warnings and source traces.
+Normalize the entire captured log before selecting either warning snippets or
+tail lines; source snippets can contain terminal escapes even when surrounding
+Docker progress lines do not.

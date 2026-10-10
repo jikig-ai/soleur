@@ -2,10 +2,17 @@
 title: Fresh production-Dockerfile candidate build proposal
 date: 2026-10-10
 pr: 9051
-status: prepared-awaiting-explicit-build-authorization
+status: executed-once-candidate-prepared-startup-and-recovery-unqualified
 ---
 
 ## Current source and admission
+
+The user approved the exact source/digest-bound command with `continue`.
+After all 25 required checks passed at `a2ff13ca8d`, the build ran once and
+passed. The exclusive authorization marker is consumed; no retry is authorized.
+See [the executed build result](production-image-build-a2ff13ca-2026-10-10.md)
+for immutable provenance, admission checks, cleanup and qualification limits.
+The proposal below records the scope admitted before execution.
 
 Main through `df1891cbbb7cb32a20e1c5c0bf2403b4b2a2f6cf` merged cleanly at
 `dc506ba2e0f8344317ac59c46928dac154f58674`. Application implementation,
