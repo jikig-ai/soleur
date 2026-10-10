@@ -188,3 +188,13 @@ loses file/line attribution, so main's existing exact `.gitleaksignore`
 fingerprint could not apply. Mapping the diff offset to that file and rerunning
 the supported path-aware `gitleaks git --staged --redact` scan passed with zero
 findings. No new waiver or credential-value inspection was performed.
+
+The authorized selected30 rerun at `c1856ee92e` passed 255 unit tests but
+failed one of 66 component tests: the settings rollback test could find its
+combobox while initial settings were still loading, then dispatch a change
+before the engine catalog was ready. Waiting for the selector to be enabled
+before changing it preserves the rollback assertion and removes that implicit
+load-timing assumption. The unit log also exposed an incomplete observability
+mock: missing `hashUserId` caused the real logger formatter to fall back to raw
+data. Supply a deterministic synthetic hash mock and assert the rejection
+path uses it; a green test count alone must not conceal that warning.

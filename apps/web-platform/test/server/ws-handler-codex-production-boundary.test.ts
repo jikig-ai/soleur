@@ -17,6 +17,7 @@ const fixture = vi.hoisted(() => ({
   from: vi.fn(),
   spawn: vi.fn(() => { throw new Error("Unexpected provider process launch"); }),
   captureException: vi.fn(),
+  hashUserId: vi.fn(() => "synthetic-user-hash"),
   sendUserMessage: vi.fn(),
   startAgentSession: vi.fn(),
   dispatchSoleurGo: vi.fn(),
@@ -60,6 +61,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 vi.mock("@sentry/nextjs", () => ({ captureException: fixture.captureException }));
 vi.mock("@/server/observability", () => ({
+  hashUserId: fixture.hashUserId,
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
 }));
@@ -141,6 +143,7 @@ describe("Codex real production handler boundary", () => {
     assertNoExecution(frames);
     expect(credentialFactory).not.toHaveBeenCalled();
     expect(fixture.captureException).toHaveBeenCalledOnce();
+    expect(fixture.hashUserId).toHaveBeenCalledWith(fixture.userId);
     expect(fixture.captureException).toHaveBeenCalledWith(expect.objectContaining({ code: "engine_disabled" }));
     // Confirm the fixture reached binding lookup rather than an earlier auth gate.
     expect(fixture.from).toHaveBeenCalledWith("agent_engine_runs");

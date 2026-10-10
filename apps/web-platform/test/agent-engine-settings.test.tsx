@@ -38,7 +38,9 @@ describe("AgentEngineSettings", () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
     fetchMock.mockResolvedValueOnce({ ok: false });
     const view = render(<AgentEngineSettings isOwner />);
-    fireEvent.change(await view.findByRole("combobox", { name: "Agent engine" }), { target: { value: "codex" } });
+    const engine = await view.findByRole("combobox", { name: "Agent engine" });
+    await waitFor(() => expect(engine).not.toBeDisabled());
+    fireEvent.change(engine, { target: { value: "codex" } });
     await view.findByRole("alert");
     expect(view.getByRole("combobox", { name: "Agent engine" })).toHaveValue("claude-code");
     expect(view.getByLabelText("Authentication mode")).toHaveValue("managed");
