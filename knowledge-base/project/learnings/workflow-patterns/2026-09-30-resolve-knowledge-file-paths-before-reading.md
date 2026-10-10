@@ -87,3 +87,33 @@ contained terminal escapes. `--allow-escape-sequences` admitted the response
 to a task-owned log file; ANSI/control sequences were stripped before bounded
 display. Keep escape-bearing logs out of the host terminal and investigate the
 underlying job failure from normalized text.
+
+## Addendum — 2026-10-10 maintenance and proposal admission
+
+The clean main sync through `df1891cbbb` reported five inherited whitespace
+findings when checking the incoming range: three Markdown EOF blanks, a shell
+line's trailing whitespace, and a deliberately re-spaced scanner fixture.
+All five files exactly match main. The fixture's C8b assertion requires its
+whitespace normalization case; do not erase that evidence as a formatting fix.
+The feature diff against main passes separately. Report the check's scope
+instead of calling the entire imported range whitespace-clean.
+
+`docker buildx ls --format '{{.Name}} {{.Driver}} {{.Status}}' printed a template
+error: the formatter's top-level context is not one builder record. Bounded
+`--format '{{json .}}'` discovery succeeded. A later optional `rg` query for
+font imports returned its normal no-match status and stopped a `set -e` read
+batch; the remaining files were read separately. Guard expected no-match
+probes and keep required reads independent of optional searches.
+
+The new production-image proposal's preview refused an existing contained
+plugin fixture symlink. Its corrected admission resolves the target chain
+from pinned Git blobs, requires a tracked regular-file target inside the same
+module, bounds traversal and rejects escapes/cycles. The image inventory also
+checks contained targets, target text and content hashes. Preview then passed
+without export, downloads, container actions or authorization consumption.
+
+The delegated proposal inspection also guessed `server/soleur-flow.ts` and a
+`scripts/build-server*` path; both searches printed missing-file errors.
+Directory discovery and the tracked package scripts resolved the actual
+locations. Use the package's declared build command rather than inferring
+script filenames from its purpose.
