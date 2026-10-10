@@ -105,6 +105,17 @@ adding GitHub webhook draft-CI handling and changing baked plugin inputs.
 The image remains bound to `a2ff13ca8d`; it is not current-source parity after
 that sync. No relabel, rebuild or consumed runner repinning is permitted.
 
+A further main advance through `149a5d3b4e10c1b62232004035185fd8ce66a87c`
+adds open-web-egress runtime/gateway wiring, Dockerfile payload changes,
+compiler configuration and migration 158. This changes app, image and retained
+schema inputs again. The 30 selected fixture files are unchanged, but their
+imported implementations and tsconfig changed; their previous 321 passes
+cannot qualify the resulting source. Legal conflicts were resolved by keeping
+both the Codex and web-access disclosures and regenerating canonical hashes.
+Source-only inspection found a forwarder payload/default-path mismatch in
+main, tracked by [Ref #9952](https://github.com/jikig-ai/soleur/issues/9952).
+No runtime failure was observed, and no payload correction or rebuild ran.
+
 No application startup, database/SQL, provider/auth/customer call, browser
 session, recovery rehearsal, deploy script, shared infrastructure write, image
 publication or flag/cohort change ran. Current-source/full-production recovery,

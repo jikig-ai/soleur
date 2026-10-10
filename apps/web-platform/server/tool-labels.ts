@@ -66,6 +66,7 @@ const FALLBACK_LABELS: Record<string, string> = {
   Edit: "Editing file…",
   Write: "Writing file…",
   WebSearch: "Searching web…",
+  WebFetch: "Fetching page…",
   Grep: "Searching code…",
   Glob: "Finding files…",
 };

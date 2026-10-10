@@ -137,3 +137,54 @@ Subsequent displays stripped ANSI before showing warnings and source traces.
 Normalize the entire captured log before selecting either warning snippets or
 tail lines; source snippets can contain terminal escapes even when surrounding
 Docker progress lines do not.
+
+## Addendum — 2026-10-10 open-web-egress sync
+
+The next main merge stopped on three legal disclosure/hash conflicts. Keep
+the feature's expanded engine-record disclosure and main's new web-access
+bullet in both canonical and mirror policies, then regenerate canonical
+privacy and data-protection hashes; selecting either hash side loses merged
+content. The legal-document hash guard passed after resolution.
+
+A follow-up search guessed `check-legal*` globs despite the hash file naming
+the actual `check-tc-document-sha.sh` guard. Both glob reads failed visibly;
+tracked-file discovery found the declared guard. Delegated egress triage also
+guessed a nonexistent `feat-open-web-egress/session-state.md`; discovery
+resolved its existing spec/tasks files instead. Use declared references and
+verified file lists before forming optional search paths.
+
+A recursive `.soleur` report search walked old source exports and installed
+dependencies, producing truncated output. Its identified process finished
+before an attempted termination, which printed `No such process`; the command
+then exited zero. Bound ignored-artifact discovery by directory depth and
+exclude exported source/node_modules rather than recursing all task scratch.
+Recovered GitHub RLS log display was also narrowed from per-migration lines
+to the final migration/test summaries after output truncation.
+
+The pre-existing-main forwarder finding's first issue-create attempt was
+blocked before filing because it omitted a milestone and the hook's explicit
+filing-exit fields. The corrected operational filing uses the verified
+`Post-MVP / Later` milestone and `User-Impact:` / `Fix-Size:` fields in its
+own body. Prose describing impact and size is not the hook's required syntax.
+The next filing was refused because the hook resolves a relative `--body-file`
+from its root CWD. Use the existing worktree file's absolute path. A third
+attempt was refused because estimated guard size did not meet the measured
+`Fix-Size:` syntax. This is a mandatory pre-existing-audit finding, so its
+body now names the actual `Mandated-By:` rule rather than inventing a measured
+future test size or labeling a product defect as verification machinery.
+
+The local-fixture preparation also invoked the historical Node 22 path after
+an existence probe had reported it absent, producing exit 127. Keep dependent
+version probes conditional on successful availability, then discover another
+existing runtime without installing or downloading under this test scope.
+
+The staged incoming-range whitespace check caught one inherited blank line
+at EOF in `cc-dispatcher-real-factory.test.ts`. Removing that final blank line
+preserves every test assertion; it is outside the selected local fixture set.
+
+The full staged merge scanned through `gitleaks stdin` reported one redacted
+generic-key finding in the inherited `agent-web-access.pen` wireframe. stdin
+loses file/line attribution, so main's existing exact `.gitleaksignore`
+fingerprint could not apply. Mapping the diff offset to that file and rerunning
+the supported path-aware `gitleaks git --staged --redact` scan passed with zero
+findings. No new waiver or credential-value inspection was performed.
