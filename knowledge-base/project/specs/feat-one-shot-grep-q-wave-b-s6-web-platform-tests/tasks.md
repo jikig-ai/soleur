@@ -39,7 +39,7 @@ Scope of this task list: S6 only (one deferral row, `apps/web-platform/*.test.sh
 
 ## Phase 4: mutation battery (scratch clone of the COMMITTED guard; one mutant at a time under `ulimit -v 6000000`; green control first; `cmp` landing check against a pristine copy)
 
-- [ ] 4.1 Guard matrix rows of the plan's Guard Contract (all rows were measured at planning on the rehearsal; every row is re-run on the committed guard), and the V0 ablation variant (row deleted, pin edited only); V1 (no owner control) was measured at planning and is not re-run.
+- [ ] 4.1 Guard matrix rows of the plan's Guard Contract (including 13d to 13i, 14c and the per-marker row 14d) (all rows were measured at planning on the rehearsal; every row is re-run on the committed guard), and the V0 ablation variant (row deleted, pin edited only); V1 (no owner control) was measured at planning and is not re-run.
 - [ ] 4.2 Observer mutants for the 38 data-tier lines (inversion `grep -v<flags> >/dev/null` first, never-match `grep -m 0 -<flags> >/dev/null` only for survivors), the protocol and caps in the plan; `ci-deploy` and `workspaces-luks-provision` only through `run-isolated`; a survivor is listed as unobserved, not claimed, and no decision hangs on it.
 
 ## Phase 5: evidence and ship notes

@@ -11,7 +11,10 @@ def rep(old, new):
     s = s.replace(old, new)
 
 
-rep("  'apps/web-platform/*.test.sh | <= | 59 | #9217'\n", "") if s.count("<= | 59 | #9217'") else rep("  'apps/web-platform/*.test.sh | <= | 180 | #9217'\n", "")
+import re
+_rows = re.findall(r"^  'apps/web-platform/\*\.test\.sh \| <= \| [0-9]+ \| #9217'\n", s, flags=re.M)
+assert len(_rows) == 1, _rows   # the apps row at whatever ceiling it carries (180, or the lowered red-step value)
+s = s.replace(_rows[0], "")
 rep("'plugins/soleur/scripts/' 'plugins/soleur/skills/')\nSWEEP_FLOOR", "'plugins/soleur/scripts/' 'plugins/soleur/skills/' 'apps/web-platform/infra/' 'apps/web-platform/test/')\nSWEEP_FLOOR")
 rep("SWEEP_CANARY_COUNT=7 ", "SWEEP_CANARY_COUNT=9 ")
 rep('mkdir -p "$sr/scripts" "$sr/plugins/soleur/scripts" "$sr/plugins/soleur/skills" "$sr/apps/web-platform/scripts" "$sr/apps/cla-evidence" "$sr/tests" "$sr/ignored"',
