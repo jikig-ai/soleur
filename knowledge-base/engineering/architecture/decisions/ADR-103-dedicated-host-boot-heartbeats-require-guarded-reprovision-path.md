@@ -145,3 +145,5 @@ Stack (`model.c4` `betterstack` — already names "Apex + inngest/git-data heart
 Actions (the dispatch runner). Adding a reprovision *dispatch workflow* + a static CI guard changes
 no modeled edge (a CI operation on an existing host, not a new data-flow between elements). Verified
 against all three `.c4` files; no model delta, so no `.c4` validation-test run is required.
+
+See also ADR-283 (#9438): git-data gains a host-originated liveness heartbeat, a `dedicated-host-boot` row that rides `git-data-host-replace`.

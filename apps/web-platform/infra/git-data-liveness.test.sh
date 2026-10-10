@@ -199,7 +199,6 @@ lines() { if [ -e "$FX/$1" ]; then wc -l < "$FX/$1" | tr -d ' '; else echo 0; fi
 pings() { lines curl.calls; }
 emits() { lines emit.calls; }
 last_emit() { tail -n 1 "$FX/emit.calls" 2>/dev/null; }
-healthy_ping_count() { new_fixture "$1"; run_feeder; pings; }
 
 # =====================================================================================
 # BEHAVIOURAL
@@ -208,8 +207,8 @@ new_fixture t1; run_feeder
 ok "$((RC != 0))" "T1 a healthy tick exits 0 (rc=$RC)"
 ok "$(( $(pings) != 1 ))" "T1 a healthy tick sends exactly one ping (got $(pings))"
 ok "$(grep -qF "url = \"$GOOD_URL\"" "$FX/curl.stdin"; echo $?)" "T1 the URL travelled on curl's stdin config"
-ok "$(last_emit | grep -qF 'SOLEUR_GIT_DATA_LIVENESS ok|liveness|info|'; echo $?)" "T1 the first healthy tick emits a liveness info event"
-ok "$(last_emit | grep -qE 'state=ok\|code=ok\|root_pct=20\|config=prd_git_data\|$'; echo $?)" "T1 the event carries state, code, root_pct and config"
+ok "$(grep -qF 'SOLEUR_GIT_DATA_LIVENESS ok|liveness|info|' <<<"$(last_emit)"; echo $?)" "T1 the first healthy tick emits a liveness info event"
+ok "$(grep -qE 'state=ok\|code=ok\|root_pct=20\|config=prd_git_data\|$' <<<"$(last_emit)"; echo $?)" "T1 the event carries state, code, root_pct and config"
 
 # T2: the URL is on no argument list and in no emitted line (ADR-280), with a recorder proof.
 argv_absent_row() {
@@ -222,33 +221,30 @@ new_fixture t2; run_feeder
 ok "$(argv_absent_row; echo $?)" "T2 the URL is on no curl or doppler argv, in no emitted line, and not in the output"
 ok "$(grep -qE 'CALL --disable --noproxy \* -fsS -m 10 -o /dev/null --config -$' "$FX/curl.calls"; echo $?)" "T2 curl carries --disable first, --noproxy, -fsS, -m 10 and a stdin config"
 ok "$(! grep -qE -- '--retry|[[:space:]]-k([[:space:]]|$)|--insecure' "$FX/curl.calls"; echo $?)" "T2 curl uses no --retry and no -k"
-ok "$(stat -c %a "$FX/run" 2>/dev/null | grep -qx 700; echo $?)" "T2 the run dir is mode 0700"
-ok "$(stat -c %a "$FX/run/url" 2>/dev/null | grep -qx 600; echo $?)" "T2 the URL cache is mode 0600"
+ok "$([ "$(stat -c %a "$FX/run" 2>/dev/null)" = 700 ]; echo $?)" "T2 the run dir is mode 0700"
+ok "$([ "$(stat -c %a "$FX/run/url" 2>/dev/null)" = 600 ]; echo $?)" "T2 the URL cache is mode 0600"
 ok "$(grep -qF -- '--project soleur --config prd_git_data --only-secrets GIT_DATA_HOST_HEARTBEAT_URL --no-fallback --' "$FX/doppler.calls"; echo $?)" "T2 doppler is called with the scoped config, one secret and no fallback cache"
 
 # T3: the gating checks. Each negative is paired with the healthy positive control above.
-miss_row() {  # <fixture-name> <expected-code-substring> — no ping, an event naming the code
-  [ "$(pings)" -eq 0 ] && last_emit | grep -qF "state=miss|code=$2" || last_emit | grep -qF "$2"
-}
 new_fixture t3a; run_feeder GIT_DATA_LIVENESS_SSH_PORT="$CLOSED_PORT"
 ok "$(( $(pings) != 0 ))" "T3a a closed sshd port withholds the ping"
-ok "$(last_emit | grep -qF 'code=ssh_no_banner'; echo $?)" "T3a …and the event names ssh_no_banner"
+ok "$(grep -qF 'code=ssh_no_banner' <<<"$(last_emit)"; echo $?)" "T3a …and the event names ssh_no_banner"
 new_fixture t3b; run_feeder GIT_DATA_LIVENESS_SSH_PORT="$BAD_PORT"
 ok "$(( $(pings) != 0 ))" "T3b a listener that answers without an SSH- banner withholds the ping"
-ok "$(last_emit | grep -qF 'code=ssh_no_banner'; echo $?)" "T3b …and names ssh_no_banner"
+ok "$(grep -qF 'code=ssh_no_banner' <<<"$(last_emit)"; echo $?)" "T3b …and names ssh_no_banner"
 new_fixture t3c; echo 1 > "$FX/mp_rc"; run_feeder
 ok "$(( $(pings) != 0 ))" "T3c an unmounted store withholds the ping"
-ok "$(last_emit | grep -qF 'code=store_unmounted'; echo $?)" "T3c …and names store_unmounted"
-ok "$(last_emit | grep -qE 'code=store_unmounted\|' ; echo $?)" "T3c …and ONLY store_unmounted (the dependent store checks are skipped)"
+ok "$(grep -qF 'code=store_unmounted' <<<"$(last_emit)"; echo $?)" "T3c …and names store_unmounted"
+ok "$(grep -qE 'code=store_unmounted\|' <<<"$(last_emit)" ; echo $?)" "T3c …and ONLY store_unmounted (the dependent store checks are skipped)"
 new_fixture t3d; echo 2 > "$FX/mp_rc"; run_feeder
 ok "$(( $(pings) != 0 ))" "T3d an unreadable mountpoint check withholds the ping"
-ok "$(last_emit | grep -qF 'code=unmeasured:mountpoint'; echo $?)" "T3d …and names unmeasured:mountpoint"
+ok "$(grep -qF 'code=unmeasured:mountpoint' <<<"$(last_emit)"; echo $?)" "T3d …and names unmeasured:mountpoint"
 new_fixture t3e; echo /dev/sda1 > "$FX/findmnt_out"; run_feeder
 ok "$(( $(pings) != 0 ))" "T3e a store served from a plaintext device withholds the ping"
-ok "$(last_emit | grep -qF 'code=store_not_mapper'; echo $?)" "T3e …and names store_not_mapper"
+ok "$(grep -qF 'code=store_not_mapper' <<<"$(last_emit)"; echo $?)" "T3e …and names store_not_mapper"
 new_fixture t3f; : > "$FX/findmnt_out"; run_feeder
 ok "$(( $(pings) != 0 ))" "T3f an empty findmnt answer withholds the ping"
-ok "$(last_emit | grep -qF 'code=unmeasured:mount_source'; echo $?)" "T3f …and names unmeasured:mount_source"
+ok "$(grep -qF 'code=unmeasured:mount_source' <<<"$(last_emit)"; echo $?)" "T3f …and names unmeasured:mount_source"
 new_fixture t3g; printf '/dev/mapper/git-data\n/dev/mapper/git-data\n' > "$FX/findmnt_out"; echo 89 > "$FX/df_pcent_store"; echo 89 > "$FX/df_ipcent_store"; run_feeder
 ok "$(( $(pings) != 1 ))" "H3 a healthy host with a multi-line findmnt answer and both thresholds one below pings"
 
@@ -260,34 +256,34 @@ for pair in "89:1" "90:0" "91:0"; do
   ok "$(( $(pings) != want ))" "T4 inodes at $v% -> pings=$want (got $(pings))"
 done
 new_fixture t4c; echo 95 > "$FX/df_pcent_store"; run_feeder
-ok "$(last_emit | grep -qF 'code=disk_full'; echo $?)" "T4 bytes over threshold names disk_full"
+ok "$(grep -qF 'code=disk_full' <<<"$(last_emit)"; echo $?)" "T4 bytes over threshold names disk_full"
 new_fixture t4d; echo 95 > "$FX/df_ipcent_store"; run_feeder
-ok "$(last_emit | grep -qF 'code=inodes_full'; echo $?)" "T4 inodes over threshold names inodes_full"
+ok "$(grep -qF 'code=inodes_full' <<<"$(last_emit)"; echo $?)" "T4 inodes over threshold names inodes_full"
 new_fixture t4e; echo unreadable > "$FX/df_pcent_store"; run_feeder
 ok "$(( $(pings) != 0 ))" "T4 an unreadable bytes measurement withholds the ping"
-ok "$(last_emit | grep -qF 'code=unmeasured:df_bytes'; echo $?)" "T4 …and names unmeasured:df_bytes"
+ok "$(grep -qF 'code=unmeasured:df_bytes' <<<"$(last_emit)"; echo $?)" "T4 …and names unmeasured:df_bytes"
 new_fixture t4f; echo unreadable > "$FX/df_ipcent_store"; run_feeder
-ok "$(last_emit | grep -qF 'code=unmeasured:df_inodes'; echo $?)" "T4 an unreadable inode measurement names unmeasured:df_inodes"
+ok "$(grep -qF 'code=unmeasured:df_inodes' <<<"$(last_emit)"; echo $?)" "T4 an unreadable inode measurement names unmeasured:df_inodes"
 new_fixture t4g; echo 99 > "$FX/df_pcent_root"; run_feeder
 ok "$(( $(pings) != 1 ))" "T4 root usage at 99% does NOT gate the ping (report-only)"
-ok "$(last_emit | grep -qF 'root_pct=99'; echo $?)" "T4 …and is carried on the event as root_pct=99"
+ok "$(grep -qF 'root_pct=99' <<<"$(last_emit)"; echo $?)" "T4 …and is carried on the event as root_pct=99"
 new_fixture t4h; echo unreadable > "$FX/df_pcent_root"; run_feeder
 ok "$(( $(pings) != 1 ))" "T4 an unreadable root measurement does not gate the ping either"
-ok "$(last_emit | grep -qF 'root_pct=?'; echo $?)" "T4 …and reports root_pct=?"
+ok "$(grep -qF 'root_pct=?' <<<"$(last_emit)"; echo $?)" "T4 …and reports root_pct=?"
 
 new_fixture t5a; echo failed > "$FX/unit_git-data-luks-reopen"; run_feeder
 ok "$(( $(pings) != 0 ))" "T5 a failed LUKS reopen unit withholds the ping"
-ok "$(last_emit | grep -qF 'code=unit_failed:git-data-luks-reopen'; echo $?)" "T5 …and names it"
+ok "$(grep -qF 'code=unit_failed:git-data-luks-reopen' <<<"$(last_emit)"; echo $?)" "T5 …and names it"
 new_fixture t5b; echo failed > "$FX/unit_git-data-nftables"; run_feeder
-ok "$(last_emit | grep -qF 'code=unit_failed:git-data-nftables'; echo $?)" "T5 a failed nftables unit names unit_failed:git-data-nftables"
+ok "$(grep -qF 'code=unit_failed:git-data-nftables' <<<"$(last_emit)"; echo $?)" "T5 a failed nftables unit names unit_failed:git-data-nftables"
 new_fixture t5c; echo failed > "$FX/unit_git-data-gc"; run_feeder
 ok "$(( $(pings) != 1 ))" "T5 a failed maintenance (gc) unit does NOT withhold the ping (the paging policy is the owner's)"
 new_fixture t5d; echo 3 > "$FX/systemctl_rc"; run_feeder
-ok "$(last_emit | grep -qF 'code=unmeasured:units'; echo $?)" "T5 an unreadable service manager names unmeasured:units"
+ok "$(grep -qF 'code=unmeasured:units' <<<"$(last_emit)"; echo $?)" "T5 an unreadable service manager names unmeasured:units"
 new_fixture t5e; echo inactive > "$FX/unit_ssh"; run_feeder
 ok "$(( $(pings) != 1 ))" "T5 an inactive ssh.service on a host whose listener answers is HEALTHY (socket activation)"
 new_fixture t5f; echo /dev/sda1 > "$FX/findmnt_out"; echo 95 > "$FX/df_ipcent_store"; echo failed > "$FX/unit_git-data-luks-reopen"; run_feeder
-ok "$(last_emit | grep -qE 'code=store_not_mapper,inodes_full,unit_failed:git-data-luks-reopen\|'; echo $?)" "T5 simultaneous misses are ALL named, in check order"
+ok "$(grep -qE 'code=store_not_mapper,inodes_full,unit_failed:git-data-luks-reopen\|' <<<"$(last_emit)"; echo $?)" "T5 simultaneous misses are ALL named, in check order"
 ok "$(( $(pings) != 0 ))" "T5 …and withhold the ping"
 
 # T6: the URL source.
@@ -296,18 +292,18 @@ url = \"https://evil.example/\"" "https://evil.example/api/v1/heartbeat/abc" "ht
   "https://uptime.betterstack.com/api/v1/heartbeat/ab\"cd" "https://uptime.betterstack.com/api/v1/heartbeat/"; do
   new_fixture t6a; printf '%s' "$badurl" > "$FX/secret"; run_feeder
   ok "$(( $(pings) != 0 ))" "T6 a malformed URL never reaches curl ($(printf '%s' "$badurl" | head -c 40 | tr '\n' ' '))"
-  ok "$(last_emit | grep -qF 'state=url_unavailable'; echo $?)" "T6 …and is reported url_unavailable"
+  ok "$(grep -qF 'state=url_unavailable' <<<"$(last_emit)"; echo $?)" "T6 …and is reported url_unavailable"
 done
 new_fixture t6b; rm -f "$FX/secret"; echo 1 > "$FX/doppler_rc"; run_feeder
 ok "$(( $(pings) != 0 ))" "T6 an absent secret in the production config withholds the ping"
-ok "$(last_emit | grep -qF 'state=url_unavailable'; echo $?)" "T6 …as url_unavailable"
+ok "$(grep -qF 'state=url_unavailable' <<<"$(last_emit)"; echo $?)" "T6 …as url_unavailable"
 new_fixture t6c; CFG=prd_git_data_rehearsal_abc123; rm -f "$FX/secret"; echo 1 > "$FX/doppler_rc"; run_feeder
-ok "$(last_emit | grep -qF 'state=disarmed'; echo $?)" "T6 the rehearsal config with the secret absent is disarmed, never url_unavailable (exact equality)"
+ok "$(grep -qF 'state=disarmed' <<<"$(last_emit)"; echo $?)" "T6 the rehearsal config with the secret absent is disarmed, never url_unavailable (exact equality)"
 ok "$(( $(pings) != 0 ))" "T6 …and sends no ping"
 new_fixture t6d; CFG=prd_git_data_x; rm -f "$FX/secret"; echo 1 > "$FX/doppler_rc"; run_feeder
-ok "$(last_emit | grep -qF 'state=disarmed'; echo $?)" "T6 a config that merely shares the production prefix is disarmed (no prefix match)"
+ok "$(grep -qF 'state=disarmed' <<<"$(last_emit)"; echo $?)" "T6 a config that merely shares the production prefix is disarmed (no prefix match)"
 new_fixture t6e; : > "$FX/secret"; run_feeder
-ok "$(last_emit | grep -qF 'state=url_unavailable'; echo $?)" "T6 a doppler that exits 0 with an EMPTY secret is an absent secret, not a valid URL"
+ok "$(grep -qF 'state=url_unavailable' <<<"$(last_emit)"; echo $?)" "T6 a doppler that exits 0 with an EMPTY secret is an absent secret, not a valid URL"
 ok "$(( $(pings) != 0 ))" "T6 …and sends no ping"
 
 # T7: the cache. Empty -> retried every tick; filled -> not re-read; dropped on a ping failure.
@@ -320,13 +316,13 @@ NOW_T=1000180; run_feeder
 ok "$(( $(lines doppler.calls) != 3 ))" "T7 a filled cache is NOT re-read (fetches stay at 3, got $(lines doppler.calls))"
 ok "$(( $(pings) != 2 ))" "T7 …and the second healthy tick pings again from the cache"
 echo 22 > "$FX/curl_rc"; NOW_T=1000240; run_feeder
-ok "$(last_emit | grep -qF 'state=ping_fail'; echo $?)" "T7 a rejected ping is reported ping_fail, distinct from a host miss"
+ok "$(grep -qF 'state=ping_fail' <<<"$(last_emit)"; echo $?)" "T7 a rejected ping is reported ping_fail, distinct from a host miss"
 ok "$([ ! -e "$FX/run/url" ]; echo $?)" "T7 …and drops the cache"
 rm -f "$FX/curl_rc"; NOW_T=1000300; run_feeder
 ok "$(( $(lines doppler.calls) != 4 ))" "T7 the next tick re-reads the secret (rotation by re-read)"
 new_fixture t7b; echo "22 0" > "$FX/curl_seq"; run_feeder
 ok "$(( $(pings) != 2 ))" "T7 one vendor blip is absorbed by the second attempt (2 curl calls)"
-ok "$(last_emit | grep -qF 'state=ok'; echo $?)" "T7 …and the tick reads ok"
+ok "$(grep -qF 'state=ok' <<<"$(last_emit)"; echo $?)" "T7 …and the tick reads ok"
 new_fixture t7c; echo 22 > "$FX/curl_rc"; run_feeder
 ok "$(( $(pings) != 2 ))" "T7 two failed attempts end the tick at exactly 2 curl calls"
 
@@ -346,7 +342,7 @@ ok "$(( $(emits) != 4 ))" "T8 a persistent miss re-emits after 30 minutes"
 rm -f "$FX/df_ipcent_store"; NOW_T=1002560; run_feeder
 ok "$(( $(emits) != 5 ))" "T8 degraded -> healthy emits the recovery"
 ok "$(( $(pings) != 4 ))" "T8 pings resume on recovery (4 pings over 4 healthy ticks, got $(pings))"
-ok "$(last_emit | grep -qF 'state=ok'; echo $?)" "T8 …and the last event is ok"
+ok "$(grep -qF 'state=ok' <<<"$(last_emit)"; echo $?)" "T8 …and the last event is ok"
 
 new_fixture t9; echo 1 > "$FX/emit_rc"; run_feeder
 ok "$(( RC != 0 ))" "H5 an emit that fails on every call leaves the feeder at exit 0 (rc=$RC)"
@@ -383,7 +379,7 @@ ok "$(( $(emits) != 1 ))" "H4 …the state resets and the transition is emitted"
 ok "$(grep -qE '^s=ok c=ok t=[0-9]+$' "$FX/run/state"; echo $?)" "H4 …and the state file is rewritten in the valid shape"
 
 # T12: one run is deterministic about its own cache path and not about the block device.
-ok "$(stat -c %a "$FX/run/state" 2>/dev/null | grep -qx 600; echo $?)" "T12 the state file is mode 0600"
+ok "$([ "$(stat -c %a "$FX/run/state" 2>/dev/null)" = 600 ]; echo $?)" "T12 the state file is mode 0600"
 ok "$(! grep -qE '^/(mnt|var)/' "$FX/run/state"; echo $?)" "T12 state lives under the run dir only"
 
 # =====================================================================================
@@ -441,14 +437,14 @@ for pair in "script:/usr/local/bin/git-data-liveness.sh:git_data_liveness:0755" 
     f && $0==m {if (c) {ok=1}; exit}
     END {exit ok?0:1}' "$CLOUD_INIT"; echo $?)" "D1 cloud-init writes the $label ($path, $mode) from $var"
 done
-ok "$(grep -c 'systemctl enable --now git-data-liveness.timer' "$CI_BODY" | grep -qx 1; echo $?)" "D2 the timer is armed by exactly one 'systemctl enable --now git-data-liveness.timer' line"
+ok "$([ "$(grep -c 'systemctl enable --now git-data-liveness.timer' "$CI_BODY")" = 1 ]; echo $?)" "D2 the timer is armed by exactly one 'systemctl enable --now git-data-liveness.timer' line"
 la=$(grep -n 'systemctl enable --now git-data-liveness.timer' "$CI_BODY" | head -1 | cut -d: -f1)
 lg=$(grep -n 'systemctl enable --now git-data-gc.timer' "$CI_BODY" | head -1 | cut -d: -f1)
 ok "$(( !( ${la:-0} > 0 && ${lg:-0} > 0 && ${la:-0} > ${lg:-0} ) ))" "D3 the liveness arming item comes AFTER the gc_timer item (which is after boot_complete)"
 arm_item=$(awk '/STAGE=liveness_timer/{f=1} f{print} f&&/^    fi$/{exit}' "$CI_BODY")
-ok "$(printf '%s\n' "$arm_item" | grep -qE 'git-data-emit .* info'; echo $?)" "D4 a failed arm is reported at level info"
-ok "$(! printf '%s\n' "$arm_item" | grep -qE '(warning|fatal)'; echo $?)" "D4 …and never at warning or fatal (no new routed stage)"
-ok "$(printf '%s\n' "$arm_item" | grep -qE '_rc=0' && printf '%s\n' "$arm_item" | grep -qE '"\$\(systemctl enable --now git-data-liveness.timer 2>&1\)" \|\| '; echo $?)" "D5 the arm uses the capture-and-if shape"
+ok "$(grep -qE 'git-data-emit .* info' <<<"$arm_item"; echo $?)" "D4 a failed arm is reported at level info"
+ok "$(! grep -qE '(warning|fatal)' <<<"$arm_item"; echo $?)" "D4 …and never at warning or fatal (no new routed stage)"
+ok "$(grep -qE '_rc=0' <<<"$arm_item" && grep -qE '"\$\(systemctl enable --now git-data-liveness.timer 2>&1\)" \|\| ' <<<"$arm_item"; echo $?)" "D5 the arm uses the capture-and-if shape"
 for pair in "git_data_liveness:git-data-liveness.sh" "git_data_liveness_service:git-data-liveness.service" "git_data_liveness_timer:git-data-liveness.timer"; do
   v="${pair%%:*}"; file="${pair##*:}"
   pat='^[[:space:]]+'"$v"'[[:space:]]+=[[:space:]]+replace\(file\("\$\{path\.module\}/\.\./\.\./'"${file//./\\.}"'"\), local\.git_data_rationale_strip, ""\)$'
@@ -458,14 +454,14 @@ done
 n=$(grep -c 'git-data-liveness' "$BUDGET" || true)
 ok "$((n < 3))" "M2 the budget script mirrors all three payloads (mentions: $n)"
 hb=$(awk '/^resource "betteruptime_heartbeat" "git_data_host_prd" \{/{f=1} f{print} f&&/^}/{exit}' "$GIT_DATA_TF")
-ok "$(printf '%s\n' "$hb" | grep -qE 'name[[:space:]]*=[[:space:]]*"soleur-git-data-host-prd"'; echo $?)" "T-TF1 the heartbeat is named soleur-git-data-host-prd"
-ok "$(printf '%s\n' "$hb" | grep -qE 'period[[:space:]]*=[[:space:]]*60$' && printf '%s\n' "$hb" | grep -qE 'grace[[:space:]]*=[[:space:]]*300$'; echo $?)" "T-TF2 period 60 and grace 300"
-ok "$(printf '%s\n' "$hb" | grep -qE 'paused[[:space:]]*=[[:space:]]*true$' && printf '%s\n' "$hb" | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[paused\]'; echo $?)" "T-TF3 born paused, with ignore_changes=[paused]"
-ok "$(printf '%s\n' "$hb" | grep -qE 'push[[:space:]]*=[[:space:]]*false$'; echo $?)" "T-TF4 push is false (DC-3)"
+ok "$(grep -qE 'name[[:space:]]*=[[:space:]]*"soleur-git-data-host-prd"' <<<"$hb"; echo $?)" "T-TF1 the heartbeat is named soleur-git-data-host-prd"
+ok "$(grep -qE 'period[[:space:]]*=[[:space:]]*60$' <<<"$hb" && grep -qE 'grace[[:space:]]*=[[:space:]]*300$' <<<"$hb"; echo $?)" "T-TF2 period 60 and grace 300"
+ok "$(grep -qE 'paused[[:space:]]*=[[:space:]]*true$' <<<"$hb" && grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[paused\]' <<<"$hb"; echo $?)" "T-TF3 born paused, with ignore_changes=[paused]"
+ok "$(grep -qE 'push[[:space:]]*=[[:space:]]*false$' <<<"$hb"; echo $?)" "T-TF4 push is false (DC-3)"
 sec=$(awk '/^resource "doppler_secret" "git_data_host_heartbeat_url_prd" \{/{f=1} f{print} f&&/^}/{exit}' "$GIT_DATA_TF")
-ok "$(printf '%s\n' "$sec" | grep -qE 'project[[:space:]]*=[[:space:]]*"soleur"$' && printf '%s\n' "$sec" | grep -qE 'config[[:space:]]*=[[:space:]]*"prd_git_data"$'; echo $?)" "T-TF5 the secret's project and config are LITERALS (no doppler_config reference in the closure)"
-ok "$(printf '%s\n' "$sec" | grep -qE 'name[[:space:]]*=[[:space:]]*"GIT_DATA_HOST_HEARTBEAT_URL"$' && printf '%s\n' "$sec" | grep -qE 'value[[:space:]]*=[[:space:]]*betteruptime_heartbeat\.git_data_host_prd\.url$' && printf '%s\n' "$sec" | grep -qE 'visibility[[:space:]]*=[[:space:]]*"masked"$'; echo $?)" "T-TF6 the secret holds the heartbeat URL, masked"
-ok "$(! printf '%s\n' "$sec" | grep -qE 'doppler_config\.|hcloud_server\.'; echo $?)" "T-TF7 the secret references neither doppler_config nor hcloud_server"
+ok "$(grep -qE 'project[[:space:]]*=[[:space:]]*"soleur"$' <<<"$sec" && grep -qE 'config[[:space:]]*=[[:space:]]*"prd_git_data"$' <<<"$sec"; echo $?)" "T-TF5 the secret's project and config are LITERALS (no doppler_config reference in the closure)"
+ok "$(grep -qE 'name[[:space:]]*=[[:space:]]*"GIT_DATA_HOST_HEARTBEAT_URL"$' <<<"$sec" && grep -qE 'value[[:space:]]*=[[:space:]]*betteruptime_heartbeat\.git_data_host_prd\.url$' <<<"$sec" && grep -qE 'visibility[[:space:]]*=[[:space:]]*"masked"$' <<<"$sec"; echo $?)" "T-TF6 the secret holds the heartbeat URL, masked"
+ok "$(! grep -qE 'doppler_config\.|hcloud_server\.' <<<"$sec"; echo $?)" "T-TF7 the secret references neither doppler_config nor hcloud_server"
 ok "$(grep -qE '"\$\{DIR\}/git-data-liveness.sh"' "$LUKS_TEST"; echo $?)" "T-LK1 the feeder is in git-data-luks.test.sh's doppler config-scope census file list"
 
 # =====================================================================================
@@ -510,7 +506,7 @@ p_unconditional() {  # 2/5: store unmounted must not ping, healthy must
 p_second_miss() {  # 3: a second failing condition after a compliant first is still reported
   local SUT="$1"
   new_fixture p3; echo failed > "$FX/unit_git-data-luks-reopen"; run_feeder
-  [ "$(pings)" -eq 0 ] && last_emit | grep -qF 'unit_failed:git-data-luks-reopen'
+  [ "$(pings)" -eq 0 ] && grep -qF 'unit_failed:git-data-luks-reopen' <<<"$(last_emit)"
 }
 p_boundary() {  # 4: exactly at the threshold is a miss
   local SUT="$1"
@@ -534,7 +530,7 @@ p_df_unmeasured() {  # 8: an unreadable df is never read as healthy
 p_config_exact() {  # 9: a prefix-sharing config is disarmed, not production
   local SUT="$1"
   new_fixture p9; CFG=prd_git_data_rehearsal_abc; rm -f "$FX/secret"; echo 1 > "$FX/doppler_rc"; run_feeder
-  last_emit | grep -qF 'state=disarmed'
+  grep -qF 'state=disarmed' <<<"$(last_emit)"
 }
 p_fetch_bound() {  # 12a: a hung fetch is bounded
   local SUT="$1"
@@ -553,7 +549,7 @@ p_banner() {  # 15: a socket-activated host (ssh.service inactive, listener answ
 p_root_report_only() {  # 16: root usage is report-only
   local SUT="$1"
   new_fixture p16; echo 99 > "$FX/df_pcent_root"; run_feeder
-  [ "$(pings)" -eq 1 ] && last_emit | grep -qF 'root_pct=99'
+  [ "$(pings)" -eq 1 ] && grep -qF 'root_pct=99' <<<"$(last_emit)"
 }
 p_emit_retry() {  # 17: a failed emit is retried next tick
   local SUT="$1"
@@ -563,9 +559,9 @@ p_emit_retry() {  # 17: a failed emit is retried next tick
 p_script_config_literal() {  # 18: the doppler call keeps the exact --config "$GIT_DATA_DOPPLER_CONFIG" form
   grep -qF -- '--config "$GIT_DATA_DOPPLER_CONFIG" ' "$1"
 }
-p_unit_no_requires() { ! strip "$1" | grep -qE '^(Requires|RequiresMountsFor|BindsTo|Requisite)='; }
-p_unit_home() { strip "$1" | grep -qxF 'Environment=HOME=/root'; }
-p_arm_line() { strip "$1" | grep -qF 'systemctl enable --now git-data-liveness.timer'; }
+p_unit_no_requires() { ! grep -qE '^(Requires|RequiresMountsFor|BindsTo|Requisite)=' <<<"$(strip "$1")"; }
+p_unit_home() { grep -qxF 'Environment=HOME=/root' <<<"$(strip "$1")"; }
+p_arm_line() { grep -qF 'systemctl enable --now git-data-liveness.timer' <<<"$(strip "$1")"; }
 p_service_name() {
   local f="$1"
   grep -qF -- '  - path: /etc/systemd/system/git-data-liveness.service' "$f" \
@@ -612,7 +608,7 @@ if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
 fi
 passes=$_can_p0; fails=$_can_f0
 
-MIN_ASSERTIONS=150
+MIN_ASSERTIONS=169
 total=$((passes + fails))
 if [ "$cases" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertion call sites (floor %s) — suite did not execute fully\n' "$cases" "$MIN_ASSERTIONS" >&2

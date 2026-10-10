@@ -17,7 +17,7 @@
 # this host already holds a token for, so a rehearsal host (whose scratch config does not carry
 # the secret) is structurally unable to ping the production monitor, and rotation is a replace.
 #
-# EXIT 0 ON EVERY PATH EXCEPT THE TRACE REFUSAL. A feeder that cannot run produces no beat, and
+# EXIT 0 ON EVERY PATH EXCEPT THE TRACE REFUSAL (and a refused run-dir seam, below). A feeder that cannot run produces no beat, and
 # the missing beat IS the alert; a non-zero exit would only add a second, redundant failure.
 #
 # ORDER INSIDE ONE TICK, and its budget: checks, then ping (the primary signal), then persist and
@@ -46,6 +46,17 @@ SSH_PORT="$(_num "${GIT_DATA_LIVENESS_SSH_PORT:-}" 22)"
 FETCH_TIMEOUT="$(_num "${GIT_DATA_LIVENESS_FETCH_TIMEOUT:-}" 10)"
 EMIT_TIMEOUT="$(_num "${GIT_DATA_LIVENESS_EMIT_TIMEOUT:-}" 20)"
 NOW="$(_num "${GIT_DATA_LIVENESS_NOW:-}" "$(date +%s)")"
+# The run dir is the only seam this script WRITES under, so it is refused unless provably absolute
+# (an empty or relative value would retarget every write below). Production never sets it; this is
+# the one non-zero exit besides the trace refusal, and it is a misconfiguration, not a runtime state.
+case "$RUN_DIR" in
+  "")            printf '[FATAL] GIT_DATA_LIVENESS_RUN is EMPTY; refusing to write to /\n' >&2; exit 2 ;;
+  */../*|*/..)   printf '[FATAL] run dir %s contains ..; refusing\n' "$RUN_DIR" >&2; exit 2 ;;
+  /|//|/.)       printf '[FATAL] run dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+  /proc/*|/sys/*|/dev/*) printf '[FATAL] run dir %s is a synthetic-fs path; refusing\n' "$RUN_DIR" >&2; exit 2 ;;
+  /*)            : ;;
+  *)             printf '[FATAL] run dir %s is RELATIVE; refusing\n' "$RUN_DIR" >&2; exit 2 ;;
+esac
 readonly STORE_ROOT RUN_DIR EMIT SSH_HOST SSH_PORT FETCH_TIMEOUT EMIT_TIMEOUT NOW
 
 # THE CONSTANTS. Each threshold is exercised at the boundary (one below, at, one above) by the
@@ -84,8 +95,9 @@ if [ "${1:-}" = "--write-cache" ]; then
   _url_ok "$_u" || exit 0
   mkdir -p "$RUN_DIR" 2>/dev/null || exit 0
   chmod 700 "$RUN_DIR" 2>/dev/null || true
-  _t="$RUN_DIR/url.$$"
-  if printf '%s\n' "$_u" > "$_t" 2>/dev/null; then mv -f "$_t" "$URL_FILE" 2>/dev/null || rm -f "$_t"; else rm -f "$_t"; fi
+  if printf '%s\n' "$_u" > "${RUN_DIR:?run dir unset}/url.$$" 2>/dev/null; then
+    mv -f "${RUN_DIR:?}/url.$$" "${RUN_DIR:?}/url" 2>/dev/null || rm -f "${RUN_DIR:?}/url.$$"
+  else rm -f "${RUN_DIR:?}/url.$$"; fi
   exit 0
 fi
 
@@ -233,9 +245,9 @@ main() {
   # the next tick instead of being recorded as delivered.
   if timeout "$EMIT_TIMEOUT" "$EMIT" "SOLEUR_GIT_DATA_LIVENESS $STATE" liveness info "$detail" \
        "state=$STATE" "code=$CODE" "root_pct=$root_pct" "config=$cfg" >/dev/null 2>&1; then
-    if printf 's=%s c=%s t=%s\n' "$STATE" "$CODE" "$NOW" > "$STATE_FILE.$$" 2>/dev/null; then
-      mv -f "$STATE_FILE.$$" "$STATE_FILE" 2>/dev/null || rm -f "$STATE_FILE.$$"
-    else rm -f "$STATE_FILE.$$"; fi
+    if printf 's=%s c=%s t=%s\n' "$STATE" "$CODE" "$NOW" > "${RUN_DIR:?run dir unset}/state.$$" 2>/dev/null; then
+      mv -f "${RUN_DIR:?}/state.$$" "${RUN_DIR:?}/state" 2>/dev/null || rm -f "${RUN_DIR:?}/state.$$"
+    else rm -f "${RUN_DIR:?}/state.$$"; fi
   fi
 }
 
