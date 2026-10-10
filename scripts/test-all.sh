@@ -5237,6 +5237,10 @@ if want_scripts; then
   # calls). Each FAIL arm is driven by one field; the dark-channel arm (0 markers ⇒ FAIL) pins
   # "could not measure" apart from a clean zero.
   run_suite "scripts/anthropic-double-bill-8611" bash scripts/followthroughs/anthropic-double-bill-8611.test.sh
+  # #9905: first-real-runs probe for the S4 credential conversions. The false-FAIL regression arm
+  # (marker text echoed inside a step's run: source) and the per-step exercised proof are driven
+  # through a stub gh that exits 64 on any request it does not expect.
+  run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
   # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
   # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
   # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`

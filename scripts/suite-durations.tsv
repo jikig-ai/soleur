@@ -285,6 +285,7 @@ scripts/assert-dependabot-drain-unit	1273	measured
 scripts/audit-suite-reads	73102	measured
 scripts/battery-ref-guard	148	measured
 scripts/battery-tag-authorship	23654	measured
+scripts/bearer-curl-s4-first-runs-9905	996	floor
 scripts/betterstack-assert-absence	339	measured
 scripts/betterstack-ingest-parity	159	measured
 scripts/board/set-board-status	736	measured
