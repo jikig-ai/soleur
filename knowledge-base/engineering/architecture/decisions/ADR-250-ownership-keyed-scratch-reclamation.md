@@ -362,6 +362,25 @@ was considered and cut: no local `docker build` call site stamps a worktree labe
 - Phase 7 of the #9677 plan installs the existing timer on the operator host; that is host
   configuration, not plugin behaviour.
 
+## Amendment 3 (2026-10-10)
+
+The allocator CLI gained a third verb, `run-isolated <sandbox-path> -- <cmd>` (A1.3 names `new|rm`). It deletes nothing:
+it refuses (rc 2) unless the path is an allocated sandbox (the conjuncts of `soleur_sandbox_rm`, plus a refusal of any
+symlink component; see `soleur_run_isolated` in `scripts/soleur-sandbox.sh`), then runs the command as PID 1 of a PID namespace through
+`plugins/soleur/scripts/run-in-pid-namespace.sh`. Why a verb and not only prose: the sandbox copy bounds file removal but
+not signals, and a mutant of a helper that walks `$PPID` and signals the outermost matching ancestor reached the user's
+desktop session (see the learning dated 2026-10-09 under the learnings test-failures category). The terminal-delete
+carve-out list is unchanged.
+
+Decisions recorded with it (the plan and evidence of the change that made them are in its spec directory): the wrapper
+fails closed with no fallback (a refusal prints `RUN_IN_PID_NAMESPACE_REFUSED reason=<...>` first on stderr and exits 125,
+the command never starts); a PID namespace was chosen over a process-group or `setsid` bound because it removes the
+ancestors rather than trusting a predicate; an inventory scan with a content-keyed baseline lists the sites before
+anyone mutates one. Residual risk, accepted and named: the rule is prose in the seat briefs, so nothing forces a lead or
+a seat to call the verb; the scan covers tracked suites and mutation-run scripts only, not helpers in libs, hooks or
+non-shell code; the namespace does not bound writes, desktop IPC or the session manager; and the real-namespace test rows
+run only where the runner allows user namespaces.
+
 ## Alternatives Considered
 
 | Alternative | Rejected because |

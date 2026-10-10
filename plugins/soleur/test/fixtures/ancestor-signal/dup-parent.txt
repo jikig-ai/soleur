@@ -1,0 +1,4 @@
+# fixture data, never executed: two identical P lines (multiset)
+[ -f "$FX/x" ] && kill -9 "$PPID"
+echo between
+[ -f "$FX/x" ] && kill -9 "$PPID"

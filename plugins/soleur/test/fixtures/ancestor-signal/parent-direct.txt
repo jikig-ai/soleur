@@ -1,0 +1,4 @@
+# fixture data, never executed: direct signals to the parent; three P
+[ -f "$FX/flag" ] && kill -TERM "$PPID"
+if [ -n "$X" ]; then kill -s TERM ${PPID}; fi
+kill -9 "$PPID" 2>/dev/null; exit 0

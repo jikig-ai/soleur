@@ -1,0 +1,23 @@
+# fixture data, never executed: parent var assigned 21 lines before the kill; no finding
+parent=$PPID
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+kill -TERM "$parent"

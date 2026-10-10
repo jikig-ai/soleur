@@ -1,0 +1,107 @@
+# Evidence: PID-namespace guard for signal-helper mutants
+
+Every figure below was read from command output on this branch. Written from the final state; corrections are appended, never edited in place.
+
+## What was built
+
+| Piece | File | Result |
+|---|---|---|
+| Helper | `plugins/soleur/scripts/run-in-pid-namespace.sh` | rc 125 plus a `RUN_IN_PID_NAMESPACE_REFUSED reason=<missing-unshare\|userns-unavailable\|not-isolating>` first stderr line on every refusal, the command never started, no fallback |
+| Helper suite | `plugins/soleur/scripts/run-in-pid-namespace.test.sh` | real namespaces: `31 passed, 0 failed (31 cases, 0 skipped, real-namespace=yes)`; with a failing `unshare` first on `PATH`: `14 passed, 0 failed (14 cases, 18 skipped, real-namespace=no)` plus the SKIP line and row R8 (the real helper refuses); with `SOLEUR_REQUIRE_REAL_NS=1` and no namespace: rc 1 |
+| Verb | `scripts/soleur-sandbox.sh run-isolated` | `tests/scripts/test-soleur-sandbox.sh`: `PASS: 75 checks across 75 cases` (57 before, 18 new arms) |
+| Scan | `plugins/soleur/scripts/scan-ancestor-signal-helpers.py` + suite + baseline | suite `112 passed, 0 failed (112 cases, 0 skipped, planned 112)`; live scan `773 files, 8 findings, 8 baselined, 0 new, 0 stale, 0 unbounded, 0 skipped` and `ancestor-signal scan: CLEAN` in about 0.5 s; the exact discoverability command under `env -i` and `timeout 15` took 0.47 s |
+| Second walker | `plugins/soleur/test/roadmap-reconcile.test.sh` | `112 passed, 0 failed` (109 before plus the three TS15f rows); the fake gh `term` walker is bounded at `SOLEUR_TEST_SUITE_PID` and pid 1 and signals nothing when the variable is unset |
+| Docs | `work-scratch-sandboxes.md`, `risk-tier-and-fix-rounds.md`, `test-design-reviewer.md`, `plan-sharp-edges.md`, `review/SKILL.md` (one 179-byte pointer), ADR-250 amendment 3 | `review/SKILL.md` 476678 to 476857 bytes (ceiling 477000, ceiling file untouched) |
+
+The baseline has **8 rows (2 W, 6 P)**, not the plan's 7: the sixth P row is `run-registered-suites.test.sh` (`_shim=$PPID`, then `kill -9 "$_shim"` two lines later), the derived-parent shape D3 describes and the prototype count left out. Class L (listed only) is 14, as predicted; class G has no site.
+
+## Measured facts the design rests on
+
+- `unshare -Urpf --kill-child --mount-proc -- sh -c 'echo "pid=$$ ppid=$PPID nspid=..."'` prints `pid=1 ppid=0 nspid=1`; exit codes pass through (7 stays 7); without `--mount-proc` the NSpid line has two fields (`nspid=2`) while `$$` is still 1, which is why the isolation check reads NSpid as well as `$$`.
+- A command run through the helper sees `2 [] [-n]`-style arguments verbatim, including an empty argument and a leading `-n`; a command file whose name begins with a dash runs (`exec --`).
+- Nested use works (`1 0` from a helper inside a helper).
+- A backgrounded child tagged in its argv is gone after the helper returns (N5) and after the helper is SIGKILLed from outside (N5c).
+
+## Mutation batteries (driver run through the helper itself, in a PID namespace)
+
+Driver: a scratch script (not committed) over an allocator sandbox with a `git init` inside. One mutant at a time under `ulimit -v 6000000` and `timeout -k 10`, pristine copy restored by `cp` after every row, landing asserted by content anchor plus a changed-file check, unmutated controls first (helper suite rc 0, 31/0; verb suite rc 0, 75/0). Only rc 1 plus a `FAIL` line counts as a kill.
+
+**Guard 1 (helper), 14 of 14 killed:** exec line replaced by `exec -- "$@"` (R4), probe always succeeds (R2), refusal exits 0 (R1), refusal falls through (R1), no missing-`unshare` arm (R1), no not-isolating arm (R3), each of `-p`, `--kill-child`, `--mount-proc`, `-U` dropped (R4b), in-namespace check deleted (R7), `unshare` resolved by bare name (R2), witness never written (R6), `/proc` half of the check dropped (N7).
+
+**Guard 3 (verb), 12 of 13 killed on the strict discriminator** (a line starting `[FAIL]`; a first pass used a looser match that also hit a section header, so the strict re-run is the record): drop all shape checks, verb dispatches to usage, drop `pwd -P` agreement, drop basename, drop marker-present, drop marker-regular, drop marker-not-symlink, missing helper falls back to a direct run, helper run before `cd`, helper marker printed on a shape refusal, trailing-slash trimming removed. Two rows are labelled, not hidden:
+- Drop the owner check: GREEN as predicted. A directory owned by another user cannot be built without root, so the conjunct has no fixture here; it is exercised by the verb's own text only.
+- Drop the absolute-path check: SURVIVED, and is **equivalent**: a relative path can never equal the result of `pwd -P`, so the `pwd -P` agreement check refuses every relative path first. The relative-path arm was changed to use a relative path that does resolve to a real sandbox (`cd` into its parent, pass the basename), which is the case where the two checks could have differed.
+
+**Guard 2 (scan), by the scan subagent over the final scanner and suite:** 80 mutants, 74 killed, 5 predicted green (`=~` dropped from the comparator regex, the git-failure arm removed because the empty-population arm still returns rc 3, `os.replace` to `os.rename`, git timeout 120 to 121, a widened line pre-filter), 1 equivalent (removing `rstrip("\r")` changes nothing observable because every later step uses `\s` or `str.split()`); earlier rounds found 5 survivors that were fixed with fixtures (trailing-comment cut, quoted verbs after `;` or `&&`, `kill -s 0 $PPID`, a bound token with `exit` but no comparison, the `ps` and PPid-field cursors).
+
+## The incident shape, run only inside the namespace
+
+Through the helper, in the sandbox copy of the roadmap-reconcile suite:
+1. Unmutated suite: `112 passed, 0 failed` inside the namespace.
+2. No-kill rehearsal (catch-all match, `kill` replaced by `echo`): `REHEARSAL-TARGET 2254 suite=1313`. The walk resolved a target above the module and stopped at the suite's own PID (1313), never above it.
+3. Catch-all match with the real `kill` and the bound kept: suite rc 0, `112 passed, 0 failed`. The bound contains the catch-all mutant (it signals only the module), so the mutant is harmless and green by design; this is the S5 bound doing its job.
+4. The incident shape (catch-all match AND the suite-PID bound removed, real `kill`): inside the namespace the walk terminated the suite's own subshell chain (`Terminated`, TS15e not reached) and stopped at pid 1; the host session, and this session's pid, were unaffected afterwards. This is the mutant that ended the desktop session four times, run where it cannot.
+
+## Repo-global gates (each run alone)
+
+- `python3 scripts/lint-shell-capture-exit.py --baseline ...`: `1528 script(s) scanned, 0 new findings, 224 baselined`.
+- `bash scripts/guard-vacuity-floor.test.sh`: `23 passed, 0 failed`.
+- `bash scripts/lint-orphan-test-suites.sh`: `655 covered, 0 orphaned` (the two new suites register through the existing `plugins/soleur/scripts/*.test.sh` glob; no runner edit).
+- `python3 scripts/lint-guard-contract.py <plan>`: 3 guard entries.
+- `bash .claude/hooks/grep-q-pipe-guard.test.sh`: rc 0 (the new files add no early-exit pipe under the swept roots).
+- `scripts/lint-skill-body-budget.py --base <merge-base>` OK; `scripts/lint-skill-body-budget.test.sh` 15/0; `bun test plugins/soleur/test/components.test.ts` 1398 pass, 0 fail; `bun test review-tier-parity.test.ts` 12/0 (docs subagent).
+- `scripts/pre-push-ratchet-lane.sh` first run: RED on two members, both caused by this change and fixed at the source: `fixture-relative-assert` (a relative `cp` operand and a `cd "$(dirname ...)"` in the sandbox suite; now guarded with `assert_fixture_dir`) and `test-affected-kb-consumers` (the scan suite named two files whose text carries `knowledge-base/` paths; the scan docstring no longer spells the learning path and the suite's two regexes escape the file-name dots so the oracle no longer reads them as script tokens). Re-run of the members: `fixture-relative-assert` 62/0, `fixture-dir-operand-assert` 71/0, `test-affected-kb-consumers` 22/0.
+- Shellcheck: the new files carry two intentional info notes (SC2016 on the single-quoted text that runs inside the namespace) and one file-level SC2319 disable with its reason (the suite's `check` consumes the status of the condition above it by design).
+
+## What a merge fires (derived, not assumed)
+
+A matcher over every `.github/workflows/*.yml` with a `push`, `pull_request`, `merge_group` or `pull_request_target` trigger, applied to the 62 files of `git diff --name-only origin/main...HEAD`: `version-bump-and-release.yml` 55 of 62, `web-platform-release.yml` 10 of 62, `deploy-docs.yml` 5 of 62; the other 15 push-filtered workflows and every path-filtered `pull_request` workflow match 0 of 62; the seven unfiltered push workflows run as on every merge.
+
+## Not run here, stated
+
+- `scripts/test-all.sh` in any form (CI's required `test` check is the full battery).
+- A Docker `ubuntu:24.04` userland run: CI's scripts leg is the userland check. In that image the real-namespace rows are expected to SKIP (the default seccomp profile blocks `unshare`), so only the refusal branch runs there.
+- The `REAL_NS=yes` rows may never run in CI: ubuntu-24.04 restricts unprivileged user namespaces and `ci.yml` relaxes the sysctl only best-effort on the scripts leg.
+
+## Review round 1 — corrections and results (appended; nothing above was edited)
+
+**Corrections to the record above.**
+- Guard 3 count: the strict-discriminator paragraph said "12 of 13 killed"; the rows it lists are 11 kills, one owner-check row that stayed green (no fixture without root) and one equivalent row (absolute path), so the figure is 11 of 13 (11 of 12 excluding the equivalent row). The later rounds below supersede it for the verb as rewritten.
+- File count: the "what a merge fires" derivation read 62 files; the branch diff was 63 files at the review head (it includes this file). The percentages are re-derived over the final list at ship, not carried from here.
+- CI reach: the real-namespace rows may never run on a CI runner, so on such a runner only the refusal rows run. After review the helper suite probes the host independently of the helper (row R10): a host that can create the namespace while the helper refuses is a FAIL, not a SKIP.
+
+**Changes made from the panel (12 seats; no P1 in the shipped code).**
+- Scanner: a double-quoted cursor substitution, an absolute-path `kill`, the `VAR=x` / `env` / `time` / `nice` / `setsid` / `timeout -k N` prefixes, the bodies of `sh -c`, `eval` and `trap` strings, a negated derived parent variable and the uppercase `ps -o PPID=` header are now read; the per-kill rebuild of the derived set is a bisect lookup (a 120k-line file took 57 s at 80k lines before, 0.5 s after); a skipped member (symlink, special file, over 2 MB) is rc 3 UNRESOLVED under a baseline gate; `--write-baseline` refuses PATHs and `--list` (rc 2) and a skipped member (rc 3), and unlinks its temp file; a presence, emptiness or numeric-validation test (`[ -n ]`, `[ -z ]`, `=~`) no longer reads as a bound, while `-lt -le -gt -ge` comparisons do; the population gained `test_*.sh` and the mutation-run names (`*-mutation-battery.sh`, `*.mutation.sh`, `*-mutations.sh`): 783 files, still 8 baselined findings, 15 class L.
+- Verb: the marker content (`pid=`, `schema=1`, `ns=`), the scratch-base parent and the owner are checked as `soleur_sandbox_rm` checks them; the directory is entered once with `cd -P` and `$PWD` compared (no gap between check and use); the helper is located through a physical path.
+- Helper and suites: the exported-function row now puts a failing `unshare` on PATH so the refusal can only come from the binary; the argv row compares the whole argv after `--`; R10 and the exact real-namespace total (32) and no-namespace total (33) were added; the nonce rows build the carrier from the row's own nonce; the process sweep is one `grep` (bracket trick against self-match); the empty-array expansion is bash 3.2 safe; refusal text prefers a disposable VM or container to loosening a workstation's sysctl; PATH is named as the trust anchor in the header.
+- Docs: the seat brief is self-contained (variables defined, a bounded run, stderr captured apart from the exit code, any not-started outcome means the same as the marker, timeouts are inconclusive); the plugin-root requirement is scoped to the two commands that need it; class L and desktop IPC (`XDG_RUNTIME_DIR` sockets, `hyprctl`, `tmux`, `systemctl --user`) are named as not contained, with the hand-run memory-backstop battery as the existing example; the restated copies in the risk-tier reference, the plan sharp edge and the agent paragraph are shortened to the trigger and a pointer; ADR-250 amendment 3 records the decisions and the accepted residual risk.
+- Walker bound in `roadmap-reconcile.test.sh`: TS15f now strips trailing comments and anchors on the loop condition (an `&&` turned `||`, the guard turned `|| true`, and the pid-1 bound hidden in a comment each fail it).
+
+**Mutation results for the review round** (driver run through the helper inside a PID namespace, allocator sandbox with a `git init`, pristine copy restored after every row, controls first: helper 32/0, verb 79/0, scan 126/0, roadmap 112/0):
+- Helper, 11 of 11 killed (unquoted `exec -- $@`, the `--` strip dropped, the `$0` token dropped, a false-refusing CHECK killed by R10, exec line replaced, probe always succeeding, refusal exiting 0, bare-name `unshare`, `-p` dropped, `--mount-proc` dropped, in-namespace check deleted). One row (R10's host probe made blind) stays green as predicted: it only matters when the helper is already broken.
+- Verb, 12 of 14 killed after adding arms (forwarding `${@:2}` and `${@:4}`, the `--` check, each marker conjunct on its own line, the scratch-base check, the symlink-component check, the basename, a symlinked marker, a missing-helper fallback, a helper run before `cd`). The first run left the three marker-content conjuncts surviving because one empty marker was refused by all three; three single-line-missing markers killed them. Two rows stay green by construction and are labelled: the marker-regular test (equivalent: `grep` refuses a missing or non-regular marker) and the owner check (no fixture without root).
+- Scan, 13 of 13 killed after one fix each to two weak rows: the skipped-member row first survived because its baseline argument was not a baseline (rc 3 for another reason), so it now uses a valid baseline and requires the skip text; the `-lt` row first survived because its fixture also carried `-ne`; the quadratic row first survived because its stress file finished inside the 60 s cap (57 s), so the stress is 120k lines.
+- Walker bound (TS15f), 3 of 3 killed.
+
+**Not fixed (and why).**
+- Mandatory sentence in the work skill: the brief fences that file; the rule is in the reference the skill already links, and the residual (nothing forces a call) is in the ADR amendment and the reference.
+- One shared validator for the allocator's `rm` and the verb: the library that holds the checks is fenced; the verb mirrors the conjuncts and says why in its header comment.
+- Gating class L (`pkill`, `killall`): 15 listed sites, no baseline; the reference states that a listed L site still takes the verb. Cutting G and L (the simplicity seat) was declined: they cost a few lines and the listing is what a seat reads before mutating.
+- Masking `XDG_RUNTIME_DIR` inside the wrapper: changes what every wrapped command sees; named as not contained instead.
+- A new ADR for the namespace decision: recorded as the amendment to the allocator's ADR, where the verb lives.
+- Adding the scan to the pre-push lane list: it already runs as a branch-tier member of the lane.
+- A `.github` change to set the require-real-namespace variable on a CI leg (fenced): R10 covers the false-refusal direction without it.
+- Scan blind spots recorded in the docstring rather than closed: backtick parent forms, `printf -v` / `read` copies, `$PROC_ROOT` walks, function wrappers, a signal 41 or more lines from the cursor, non-shell signal calls, `systemctl`/`loginctl`/`docker`/`fuser` signallers, helpers in libs and hooks.
+- Low-priority notes left: C1 and U+2028 stripping in the refusal text (the text is `unshare`'s own stderr), the hard-coded 18 skipped rows (derivation commented), the per-fixture scan spawns in the suite, doc-presence arms in the verb suite, and `bounded=yes` staying lexical.
+
+## Review round 1 — verification pass (appended)
+
+One verification seat re-read the fix diff: no P1, and no regression in the verb, the scan population or the suites. Two P2 items in the seat brief (the exit code was never printed; the no-allocator form had lost its `cd`) and one P3 regression (a nested command substitution hid a parent-pid assignment, because the bounded quantifier could not cross a `)`) were fixed: the brief prints `rc=` and removes its temp file, the `cd "$SBX" &&` is part of the form, and `PPID_ASSIGN` uses a bounded lazy quantifier. The new fixture `ppid-nested.txt` read no finding before the fix and one P after it (scan suite 127/0). The path-prefix pattern on the verb is now a bounded character class instead of `\S*`, which removes the backtracking cost the seat measured (8.4 s for 500 adversarial lines against 0.47 s). Left as recorded blind spots, none new: prefixes that take an argument (`sudo -u root kill ...`, `nice -n 5 kill ...`, `env -u FOO kill ...`, a quoted assignment prefix), and an `eval`, `trap` or `sh -c` text quoted inside an outer string (no tracked file triggers it).
+
+## CI round 1 — corrections (appended)
+
+CI's first full run on the review head failed three shards, each from this change, and corrected two statements above.
+
+- **`exec --` is not portable.** The wrapper ran the command with `exec -- "$@"` under `sh -c`; on Debian and Ubuntu `sh` is dash, which answers `exec: --: not found` (rc 127). On the dev host `sh` is bash, so every local run passed. The runner's scripts leg has working user namespaces, so the real-namespace rows DID run there and failed: the helper suite (R8 and R10, because the helper's own probe failed and the independent host probe did not), and the verb suite's real-namespace arm. Two earlier statements are therefore wrong: "the real-namespace rows may never run in CI" (they ran) and the mutation reading that the leading-dash behaviour of `exec --` needed a row (the suite's only dash row passed `./-dashcmd`, which never needed `--`). Fix: the wrapper refuses a command word that begins with a dash (rc 2, a named message, nothing started; row R11) and runs a plain `exec "$@"`. Reproduced red first with the previous helper under a dash `sh` (`exec: --: not found`), then green with the new one under both bash and dash (helper suite 33 of 33, verb suite 82 of 82).
+- **A doc that gains the loader token becomes a "Read-surface doc".** Adding the literal plugin-root token to `work-scratch-sandboxes.md` made nine existing CWD-relative pointers to it (two in the fenced work skill) violate `plugin-root-anchoring` W4b. The doc now uses a `<plugin-root>` placeholder and carries no token (W4 47 of 47 locally).
+- **CodeQL (ReDoS) and markdown-lint (MD038)** findings on the review-round edits, both fixed (see the learning for the mechanism).
