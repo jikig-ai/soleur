@@ -5189,6 +5189,14 @@ if want_scripts; then
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
       "bash scripts/lint-orphan-test-suites.test.sh --rows 11-20"
   fi
+  # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
+  # working tree; the battery builds synthetic fixture repos and proves each
+  # mutation row reddens — same live+unit pairing as the orphan lint above.
+  # Registered unconditionally: seconds on a scratch tree, and the sentinel is
+  # the durability half of the scheduled-integration-suites leg, so a PR that
+  # adds a gated suite must meet it on every run, not only on diff-touch.
+  run_suite "scripts/lint-integration-env-gates-live" bash scripts/lint-integration-env-gates.sh
+  run_suite "scripts/lint-integration-env-gates-battery" bash scripts/lint-integration-env-gates.test.sh
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit

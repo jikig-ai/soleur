@@ -105,6 +105,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
+  "scripts/lint-integration-env-gates-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
   "scripts/lint-legal-registers-live"
   "scripts/lint-legal-scope-block-placement-live"
@@ -1864,6 +1865,17 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "test/"
   "tests/"
   "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-integration-env-gates-battery — mutation battery over the
+# env-gate sentinel + synthetic fixture repos; its verdict moves only with its
+# SUT, itself, or the canonical fixture-dir guard it copies.
+AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
+
+  "scripts/lint-integration-env-gates.sh"
+  "scripts/lint-integration-env-gates.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

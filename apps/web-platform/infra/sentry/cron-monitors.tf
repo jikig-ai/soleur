@@ -318,6 +318,25 @@ resource "sentry_cron_monitor" "scheduled_realtime_probe" {
   timezone                = "UTC"
 }
 
+# scheduled-integration-suites is GHA-fired
+# (.github/workflows/scheduled-integration-suites.yml, on.schedule
+# "30 4 * * *"). Same GHA-scheduler reliability class as
+# scheduled_realtime_probe — checkin_margin 1440 tolerates one wholly dropped
+# daily run (measured on the probe 2026-05-26). max_runtime tracks the job's
+# timeout-minutes: 60. Slug MUST match `monitor-slug` in the workflow's
+# sentry-heartbeat step — a typo pages "missed check-in" forever.
+resource "sentry_cron_monitor" "scheduled_integration_suites" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-integration-suites"
+  schedule                = { crontab = "30 4 * * *" }
+  checkin_margin_minutes  = 1440
+  max_runtime_minutes     = 60
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 resource "sentry_cron_monitor" "scheduled_skill_freshness" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug

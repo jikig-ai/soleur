@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=996
-# generated-at=2026-10-09T11:42:48Z
+# default-weight-ms=994
+# generated-at=2026-10-10T21:58:05Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -93,6 +93,8 @@ plugins/soleur/scripts/emit-decision.test.sh	8
 plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	2
+plugins/soleur/scripts/run-in-pid-namespace.test.sh	3
+plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	8
 plugins/soleur/scripts/sync-pr-behind.test.sh	7
 plugins/soleur/scripts/taste-profile-update.test.sh	3
 plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh	3
@@ -333,6 +335,7 @@ scripts/followthrough-predicate-parity	6
 scripts/followthrough-varq-ban	6
 scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/ci-push-dedupe-soak-9512	1
+scripts/followthroughs/inngest-provision-rehearsal-capture	1
 scripts/followthroughs/pr-battery-gate-saving-9323	1
 scripts/followthroughs/t5-skip-persistence-bound-7510	8
 scripts/followthroughs/tty-ack-migration-9387	7
@@ -342,6 +345,8 @@ scripts/git-data-boot-poll-8178	1
 scripts/git-data-reboot-evidence-landed-8210	6
 scripts/guard-vacuity-floor	3
 scripts/hostname-mislabel-web1-6616	6
+scripts/image-cve-scan	3
+scripts/image-cve-scan-window-9826	2
 scripts/infra-config-activation-7220	5
 scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	8
@@ -358,6 +363,7 @@ scripts/inngest-soak-6178	7
 scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
 scripts/learning-retrieval-bench	7
+scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
@@ -390,6 +396,8 @@ scripts/lint-gh-argv-arg-live	7
 scripts/lint-guard-contract	7
 scripts/lint-guard-contract-live	6
 scripts/lint-infra-no-human-steps	8
+scripts/lint-integration-env-gates-battery	7
+scripts/lint-integration-env-gates-live	1
 scripts/lint-legal-mirror-drift-baseline-live	5
 scripts/lint-legal-mirror-drift-baseline-unit	1
 scripts/lint-legal-registers-live	2
@@ -458,7 +466,9 @@ scripts/supabase-watchdog-classify	5
 scripts/sweep-followthroughs	8
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
+scripts/tenant-outer-wrap-soak-5863	3
 scripts/test-affected-derive	2
+scripts/test-affected-derive-cache	2
 scripts/test-affected-kb-consumers	7
 scripts/test-all-affected	3
 scripts/test-all-capacity-signal	4
@@ -535,6 +545,7 @@ tests/scripts/infra-privileged-tier-census	3
 tests/scripts/inngest-host-dark-gate	8
 tests/scripts/inngest-host-replace-gate	2
 tests/scripts/inngest-host-shape-gate	3
+tests/scripts/inngest-provision-plan-shape	8
 tests/scripts/kb-drift-walker	4
 tests/scripts/lint-rule-bodies	8
 tests/scripts/lint-rule-ids	1

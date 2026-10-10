@@ -56,6 +56,10 @@ locals {
     # monitor cannot be routed in the PR that creates it). Routing it is #9858. Until then a missed or errored
     # check-in (exit 3 = unmeasured posts error) opens a Sentry issue and emails nobody.
     image_cve_scan = "advisory scan; the unrouted monitor opens a Sentry issue on a missed or unmeasured run but emails nobody; routing is the second PR of the two-PR rule (#9858)"
+    # #9855 — the nightly integration-suites leg's dead-man monitor, added under
+    # the two-PR rule: the in-run ci/integration-suites GitHub issue is the
+    # primary channel meanwhile; route after the first measured check-in.
+    scheduled_integration_suites = "in-run ci/integration-suites GitHub issue is the primary channel; route after the first measured check-in (#9855)"
   }
 }
 

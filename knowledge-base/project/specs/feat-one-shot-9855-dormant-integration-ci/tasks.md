@@ -9,39 +9,44 @@ census). Live validation is the post-merge `workflow_dispatch` AC.
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 `gh issue view 9855` — confirm OPEN (this PR closes it).
-- [ ] 0.2 Confirm no plan drift: `git log --oneline origin/main -- .github/workflows/tenant-integration.yml scripts/dev-suite-mutex.sh | head -5` — re-read any post-plan changes to the mirrored blocks before copying them.
-- [ ] 0.3 Re-run the gate census to catch gates added since the plan: `git grep -hoE 'process\.env\.[A-Z0-9_]+ *(===|!==) *"1"' -- apps/web-platform/test/` | sort -u — reconcile against the plan's 12-var table; new vars get wired or allowlisted with reason+#N.
+- [x] 0.1 `gh issue view 9855` — confirm OPEN (this PR closes it).
+- [x] 0.2 Confirm no plan drift: `git log --oneline origin/main -- .github/workflows/tenant-integration.yml scripts/dev-suite-mutex.sh | head -5` — re-read any post-plan changes to the mirrored blocks before copying them.
+- [x] 0.3 Re-run the gate census to catch gates added since the plan: 59 gated files / 12 vars — matches the plan's table (6× SUPABASE_DEV_INTEGRATION, 7 dormant vars, 4 allowlisted).
 
 ## Phase 1 — Sentinel (failing-test-first)
 
-- [ ] 1.1 Create `scripts/lint-integration-env-gates.sh`:
-  - Producer: `git grep -hoE 'process\.env\.[A-Z0-9_]+ *(===|!==) *"1"' -- apps/web-platform/test/` → deduped gate-var set. Zero found = error (anti-vacuity), not pass.
-  - Consumer set: every file under `.github/workflows/` + in-script allowlist (`VAR|reason|#issue` entries).
-  - Seed allowlist: `RLS_FUZZ_LOCAL`, `SOLEUR_ISOLATION_IN_IMAGE`, `SOLEUR_ISOLATION_TEST_HOST`, `ANTHROPIC_ISOLATION_TEST_OK` (reasons per plan §Proposed Solution).
-  - Summary line: `env-gates: found=<N> wired=<W> allowlisted=<A> uncovered=<U>`; exit non-zero iff uncovered>0 or census empty.
-- [ ] 1.2 Create `scripts/lint-integration-env-gates.test.sh` — mutation battery over a scratch fixture tree implementing the plan's Guard Contract rows 1-7 (incl. the `env:`-mapping must-PASS row and the battery's own anti-vacuity row).
-- [ ] 1.3 Run both: sentinel RED on current tree (7 uncovered) = failing-test proof; battery GREEN.
-- [ ] 1.4 Register in `scripts/test-all.sh` beside the `lint-orphan-test-suites*` `run_suite` block (~:5157-5188) — one registration each for the sentinel and the battery.
+- [x] 1.1 Created `scripts/lint-integration-env-gates.sh`:
+  - Producer: `git grep` per-FILE over `apps/web-platform/{test,lib}` (lib is in unit-project scope) → file→vars map. Zero census = error; floor MIN_GATED_FILES=50.
+  - Consumer: every `.github/workflows/*.{yml,yaml}` file, comment-stripped; setting positions = `env <VAR>=1` run-prefix OR `<VAR>: ["']?1` env-mapping.
+  - TWO arms: var-level wiring AND file-level collection (file path or depth>=2 ancestor dir, whitespace/EOL-bounded, in a workflow that sets ALL its non-allowlisted gates — skipIf conjunction).
+  - Seed allowlist: `RLS_FUZZ_LOCAL`, `SOLEUR_ISOLATION_IN_IMAGE`, `SOLEUR_ISOLATION_TEST_HOST`, `ANTHROPIC_ISOLATION_TEST_OK` — all cited to #9855; `ALLOWLIST_FILES` empty.
+  - Summary: `env-gates: found=<F> wired=<W> allowlisted=<A> uncovered=<U>`; non-zero on uncovered>0, unwired var, or census violation.
+  - Fixture seam `SOLEUR_LINT_GATES_ROOT` (real git work tree).
+- [x] 1.2 Created `scripts/lint-integration-env-gates.test.sh` — 17-row mutation battery over synthetic git fixture repos (55-file pad population satisfies the floor without a tunable override): control-green, unwired-var, zero-census, new-gate, two-gates-named, spelling-drift, env-mapping PASS, comment-only, lib/-scope, wired+uncollected (departed-member shape), dir-filter PASS, echo-not-a-setting, ancestor-dir PASS, conjunction, self-vacuity.
+- [x] 1.3 Sentinel RED on pre-workflow tree (13 uncovered = 12 dormant + departed-member; 7 unwired vars) = failing-test proof; battery 17/17 GREEN.
+- [x] 1.4 Registered in `scripts/test-all.sh` beside `lint-orphan-test-suites*` — `scripts/lint-integration-env-gates-live` + `-battery`, unconditional. Classified in `scripts/lib/test-affected-paths.sh` (`-live` → ALWAYS_ON_SUITES; battery → `AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS`). Shard manifests regenerated.
 
 ## Phase 2 — Workflow
 
-- [ ] 2.1 Create `.github/workflows/scheduled-integration-suites.yml` per plan §Proposed Solution:
+- [x] 2.1 Created `.github/workflows/scheduled-integration-suites.yml` per consolidated plan:
+  - `# <!-- gate-override: new-scheduled-cron-prefer-inngest -->` marker line 1 (YAML comment form — actionlint rejects the bare HTML form).
   - `on:` `schedule` `30 4 * * *` + `workflow_dispatch` only. NO `pull_request`/`merge_group`/`push`.
-  - `permissions: {contents: read, issues: write}`; `concurrency.group: dev-supabase-${{ github.ref }}`, `cancel-in-progress: false`; `timeout-minutes: 30`.
-  - Steps: checkout → Bun/Node/`npm ci` → Doppler CLI → token non-empty check → `environment=dev` + `SUPABASE_ACCESS_TOKEN`-absence assertion (verbatim tenant-integration block incl. `strip_log_injection`) → `dev-suite-mutex.sh acquire` (identity `di-${{ github.run_id }}-${{ github.ref_name }}`) → seed bot fixtures (soft-fail) → `run-migrations.sh --bootstrap=skip` with `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` and NO `ALLOW_UNMERGED_DEV_APPLY` → 7 suite steps per the plan's file table, each `if: ${{ !cancelled() }}`, `doppler run -p soleur -c dev_scheduled -- env <GATE>=1 npm run test:ci -- <files> --project unit --reporter=verbose` → mutex release `if: always()` → issue file-or-comment `if: failure()` naming `steps.<id>.outcome` (mirrors `scheduled-realtime-probe.yml` filing shape; label `ci/integration-suites`).
-- [ ] 2.2 Static-verify: `actionlint .github/workflows/scheduled-integration-suites.yml` (workflow — NOT a composite action, so actionlint applies) + `bash -n` is NOT valid for YAML; extract `run:` blocks for `bash -n` syntax check per the repo's workflow-lint convention.
-- [ ] 2.3 Re-run sentinel: now GREEN — every non-allowlisted gate appears in a workflow file (`env-gates: … uncovered=0`).
+  - `permissions: {contents: read, issues: write}`; `concurrency.group: dev-supabase-${{ github.ref }}`, `cancel-in-progress: false`; `timeout-minutes: 60`.
+  - Steps: checkout → Bun/Node/`npm ci` → Doppler CLI (v4 pinned) → token non-empty check → `environment=dev` + `SUPABASE_ACCESS_TOKEN`-absence assertion (verbatim tenant-integration block incl. strip_log_injection) → `dev-suite-mutex.sh acquire` (identity `di-${{ github.run_id }}-${{ github.ref_name }}`, `DEV_SUITE_MUTEX_HOLD_S=3900` > job timeout) → seed bot fixtures (soft-fail) → schema-vs-ledger preflight → `run-migrations.sh --bootstrap=skip` with `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` and NO `ALLOW_UNMERGED_DEV_APPLY` → WORM-cascade preflight → **8** suite steps (supabase-dev ×6 files, worktree-lease, acquire-slot, byok, slot-trigger, workspace-binding, mu1, departed-member), each `if: !cancelled()`, `timeout-minutes: 6`, `working-directory: apps/web-platform` → mutex release `if: always()` → issue file-or-comment `if: failure() || cancelled() && main` with per-step outcome attribution (label `ci/integration-suites` + `priority/p1-high`) → auto-close stale tracker on green main run → terminal sentry-heartbeat `if: always()` (producer-outcome-first status: ok iff all 8 suite steps succeeded).
+- [x] 2.2 Static-verify: `actionlint` clean (except benign SC2016 ratchet class); `lint-workflow-*` lints all pass (issue-write-scope, errexit-capture, install-sites, step-env-refs, local-action-checkout, run-body-syntax).
+- [x] 2.3 Sentinel GREEN: `env-gates: found=59 wired=8 allowlisted=4 uncovered=0`.
 
-## Phase 3 — CI wiring + docs
+## Phase 3 — CI wiring + docs + monitor IaC
 
-- [ ] 3.1 `ci.yml` `lint-bot-statuses` job: add `- name: Lint integration env gates` step `run: bash scripts/lint-integration-env-gates.sh` beside "Lint orphan test suites" (~:344). Advisory — do NOT touch `scripts/required-checks.txt` or `infra/github/ruleset-ci-required.tf`.
-- [ ] 3.2 `apps/web-platform/test/README.md`: add "CI wiring" paragraph — workflow name, the seven gates it sets nightly, the shared-dev substrate decision + dedicated-project revisit trigger (per plan §Risks).
-- [ ] 3.3 `bash scripts/lint-orphan-test-suites.sh` — passes with the new `.test.sh` tracked (registration proven by census).
+- [x] 3.1 `ci.yml` `lint-bot-statuses` job: advisory `- name: Lint integration env gates` step beside "Lint orphan test suites". NOT in `required-checks.txt` / ruleset.
+- [x] 3.2 `apps/web-platform/test/README.md`: flag table completed for all gates + "CI wiring" paragraph — workflow, eight gates, shared-dev substrate decision + two-consecutive-filings revisit trigger.
+- [x] 3.3 `bash scripts/lint-orphan-test-suites.sh` — 655 covered, 0 orphaned.
+- [x] 3.4 `sentry_cron_monitor.scheduled_integration_suites` in `cron-monitors.tf` (crontab `30 4 * * *`, margin 1440, max_runtime 60) + unrouted entry in `cron-monitor-alerts.tf` citing #9855 (two-PR rule). `sentry-monitor-iac-parity.test.ts` 24/24.
+- [x] 3.5 `mu1.integration.test.ts:220` stale comment corrected (AC-2 now runs nightly under `dev_scheduled`).
 
 ## Phase 4 — Verification & ship prep
 
 - [ ] 4.1 AC sweep against the plan's `## Acceptance Criteria` — all pre-merge items static-verifiable.
-- [ ] 4.2 PR body: `Closes #9855` in body (not title) + `## Changelog` section; note PR-1 checkboxes on #9855 may be ticked.
+- [ ] 4.2 PR body: `Closes #9855` in body (not title) + `## Changelog` section.
 - [ ] 4.3 Post-merge (pipeline step, not in-session): `gh workflow run scheduled-integration-suites.yml` on main + `gh run watch` — reaches suite steps; files `ci/integration-suites` issue on red.
 - [ ] 4.4 If first nightly/dispatch fails on shared-dev substrate (grant divergence, cruft — NOT a real regression): file per-suite follow-up; do NOT weaken gates to force green. Two consecutive substrate-cruft filings → reopen dedicated-project evaluation (plan §Risks revisit trigger).

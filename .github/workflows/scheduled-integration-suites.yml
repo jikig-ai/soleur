@@ -1,0 +1,464 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# .github/workflows/scheduled-integration-suites.yml
+#
+# Runs the env-gated vitest integration suites that otherwise skip on EVERY run
+# while reporting green (#9855 PR 2): a `describe.skipIf(!process.env.<GATE>)`
+# suite whose gate no CI job ever sets passes vacuously forever. Thirteen files
+# across eight gates ran nowhere before this file existed.
+#
+# Why GitHub Actions and not Inngest (ADR-033 prefers Inngest crons; the
+# new-scheduled-cron-prefer-inngest hook requires this justification + the
+# marker above):
+#   (a) the work is purely git/repo-scoped test execution — checkout, npm ci,
+#       vitest, dev-suite-mutex.sh, run-migrations.sh — the same shape as
+#       tenant-integration.yml, rls-authz-fuzz.yml, scheduled-realtime-probe.yml;
+#   (b) step.run memoization/replay buys nothing for a vitest run;
+#   (c) Inngest functions execute inside the deployed web-platform container
+#       holding PRD credentials — dev-scoped service-role writes from there
+#       would plumb dev credentials into the prd runtime, the inverse of the
+#       isolation ADR-023 exists to guarantee.
+#
+# Concurrency edge, named so nobody "fixes" it later: on `schedule` the group
+# below resolves to `refs/heads/main` — the SAME group push-to-main
+# tenant-integration runs use. With `cancel-in-progress: false` and GitHub's
+# one-pending-per-group limit, this cron's arrival can evict a PENDING main
+# run → `cancelled`. Rare at 04:30 UTC, and the shared key is deliberate
+# (GHA-level serialization the advisory mutex cannot give).
+
+name: "Scheduled: integration suites"
+
+on:
+  schedule:
+    # 04:30 UTC — neighbors surveyed: apply-inngest-rls 04:17,
+    # workspaces-luks-verify 04:41, kb-drift-walker 03:00, congested probe
+    # fleet 06:00–07:00; Inngest-dispatched cron-dev-migration-drift fires
+    # every 6h at HH:15 and does not take the dev-suite mutex — no
+    # dev-Supabase contention.
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  integration-suites:
+    runs-on: ubuntu-latest
+    # Job ceiling DOMINATES THE SUM of step ceilings (the repo's timeout rule):
+    # ~8 min setup+apply + ~4 min max mutex wait + 8 × timeout-minutes:6 suite
+    # steps ≈ 60. A STEP timeout is a step failure the filer reports; a job
+    # timeout records `cancelled` and cannot report in-band.
+    timeout-minutes: 60
+    concurrency:
+      group: dev-supabase-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v6.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install web-platform dependencies
+        working-directory: apps/web-platform
+        run: npm ci --ignore-scripts
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify DOPPLER_TOKEN_DEV_SCHEDULED is provisioned
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${DOPPLER_TOKEN_CHECK:-}" ]]; then
+            echo "::error::DOPPLER_TOKEN_DEV_SCHEDULED is not set. Provision a dev-scoped Doppler service token and 'gh secret set DOPPLER_TOKEN_DEV_SCHEDULED'. Aborting -- do NOT silent-skip (would re-create the gate trap this workflow closes)."
+            exit 1
+          fi
+
+      - name: Assert Doppler config resolves to environment=dev
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          env_name=$(doppler configs get dev_scheduled -p soleur --json 2>/dev/null \
+            | jq -r '.environment // empty') || env_name=""
+          if [[ -z "$env_name" ]]; then
+            echo "::error::doppler configs get dev_scheduled -p soleur returned empty. Config does not exist or token lacks read access."
+            exit 1
+          fi
+          if [[ "$env_name" != "dev" ]]; then
+            # Strip CR/LF + ASCII control bytes via tr, then multi-byte
+            # UTF-8 separators (U+2028, U+2029, U+200B, U+FEFF) via sed —
+            # mirrors tenant-integration.yml / scheduled-realtime-probe.yml's
+            # strip_log_injection (tr + sed two-stage).
+            env_safe=$(printf '%s' "$env_name" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g')
+            echo "::error::dev_scheduled config resolves to environment=${env_safe} (expected: dev). Token rotated to wrong scope; reset before running integration suites."
+            exit 1
+          fi
+          echo "Doppler config dev_scheduled -> environment=dev (verified)."
+          # DC-1 (#8028): this job must never hold the account-scoped
+          # Supabase Management-API token. Names only; the value is never
+          # read. Capture first, then test (the #8137 advisor-consult fix).
+          names_json=$(doppler secrets --only-names --json -p soleur -c dev_scheduled 2>/dev/null) || names_json=""
+          if [[ -z "$names_json" ]]; then
+            echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled returned empty. Cannot verify the token's absence; failing closed."
+            exit 1
+          fi
+          if printf '%s' "$names_json" | jq -e 'has("SUPABASE_ACCESS_TOKEN")' >/dev/null; then
+            echo "::error::SUPABASE_ACCESS_TOKEN is present in Doppler dev_scheduled — a scheduled job must not hold a Management-API token (#8028 DC-1)."
+            exit 1
+          fi
+          echo "Doppler config dev_scheduled carries no SUPABASE_ACCESS_TOKEN (verified)."
+
+      # Cross-ref advisory mutex on the shared dev-Supabase project — the same
+      # pg_advisory_xact_lock substrate tenant-integration.yml uses. See its
+      # comment block for the fail-open-on-contention rationale (#7964/#7986).
+      # DEV_SUITE_MUTEX_HOLD_S must EXCEED this job's timeout-minutes (the
+      # script's own invariant — its default 1170 was sized for a 15-min job
+      # and would auto-release ~40 min early here).
+      - name: Acquire dev-suite mutex
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          DEV_SUITE_MUTEX_IDENTITY: di-${{ github.run_id }}-${{ github.ref_name }}
+          DEV_SUITE_MUTEX_HOLD_S: "3900"
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/dev-suite-mutex.sh acquire
+
+      # Seed bot fixtures BEFORE migrations — migrations like
+      # 071_ux_audit_artifacts_bucket.sql reference auth.users rows that
+      # bot-fixture.ts creates; without the seed the apply degrades
+      # gracefully (NOTICE) but defers RLS policy (tenant-integration.yml
+      # seed-step comment).
+      - name: Seed bot fixtures (pre-migration)
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed \
+            || echo "::warning::bot-fixture.ts seed failed — migrations will degrade gracefully"
+
+      # Live-state guards (not PR-unmerged-apply artifacts): on a poisoned
+      # shared-dev these name the offending relation instead of surfacing an
+      # opaque GoTrue 500 three layers deep.
+      - name: Preflight schema-vs-ledger consistency check
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/preflight-schema-vs-ledger.sh
+
+      # Scheduled main-ref checkout: applies MERGED migrations only — the
+      # unmerged-apply gate (#4241) stays armed, so a feature-branch
+      # workflow_dispatch refuses in-flight files. `psql` is pre-installed
+      # on github-hosted ubuntu runners. `--bootstrap=skip` is correct for
+      # dev (populated tracking table).
+      - name: Apply migrations to dev
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          MIGRATION_SCHEMA_PRECONDITION_PROBE: "1"
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/run-migrations.sh --bootstrap=skip
+
+      - name: Preflight WORM-vs-cascade contradiction check
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/preflight-worm-cascade-contradiction.sh
+
+      # Eight suite steps — deliberately not one bundled invocation:
+      # (a) steps.<id>.outcome gives the filed issue per-suite attribution
+      # without log-parsing; (b) process isolation — a hard crash in one
+      # vitest invocation loses the remaining files' results entirely.
+      # `if: !cancelled()` keeps later gates running after an early red so
+      # one failure does not starve the night's evidence. timeout-minutes:6
+      # per step: a hung suite is a step FAILURE (reported), never a job
+      # cancel (unreportable). `--project unit` only is correct — explicit
+      # file lists, zero gated files in test/repo-wide-suites.ts; a future
+      # repo-wide gated file fails loudly and the lint-integration-env-gates
+      # sentinel flags it uncovered at lint time.
+      - name: Run SUPABASE_DEV_INTEGRATION suites
+        id: supabase-dev
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            env SUPABASE_DEV_INTEGRATION=1 \
+            npm run test:ci -- \
+            test/beta-crm-dsar.integration.test.ts \
+            test/cc-dispatcher-cross-tenant.integration.test.ts \
+            test/conversations-rail-cross-tenant.integration.test.ts \
+            test/dsar-author-redaction.integration.test.ts \
+            test/dsar-export-cross-tenant.integration.test.ts \
+            test/server/conversation-visibility.tenant-isolation.test.ts \
+            --project unit --reporter=verbose
+
+      - name: Run WORKTREE_LEASE_INTEGRATION_TEST suites
+        id: worktree-lease
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            env WORKTREE_LEASE_INTEGRATION_TEST=1 \
+            npm run test:ci -- \
+            test/worktree-write-lease.integration.test.ts \
+            --project unit --reporter=verbose
+
+      - name: Run ACQUIRE_SLOT_WS_INTEGRATION_TEST suites
+        id: acquire-slot
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            env ACQUIRE_SLOT_WS_INTEGRATION_TEST=1 \
+            npm run test:ci -- \
+            test/concurrency-acquire-slot-workspace-id.integration.test.ts \
+            --project unit --reporter=verbose
+
+      - name: Run BYOK_INTEGRATION_TEST suites
+        id: byok
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            env BYOK_INTEGRATION_TEST=1 \
+            npm run test:ci -- \
+            test/byok.integration.test.ts \
+            --project unit --reporter=verbose
+
+      - name: Run SLOT_TRIGGER_INTEGRATION_TEST suites
+        id: slot-trigger
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            env SLOT_TRIGGER_INTEGRATION_TEST=1 \
+            npm run test:ci -- \
+            test/conversation-archive-release-slot.integration.test.ts \
+            --project unit --reporter=verbose
+
+      - name: Run WORKSPACE_BINDING_INTEGRATION_TEST suites
+        id: workspace-binding
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            env WORKSPACE_BINDING_INTEGRATION_TEST=1 \
+            npm run test:ci -- \
+            test/workspace-binding-restart-survival.integration.test.ts \
+            --project unit --reporter=verbose
+
+      - name: Run MU1_INTEGRATION suites
+        id: mu1
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          # MU1 AC-2 engages here: dev_scheduled carries MU1_FIXTURE_* +
+          # GITHUB_APP_* — the test mints a live installation token and
+          # clones the fixture repo into a mkdtemp root. Intended: verifies
+          # the signup→clone path nightly.
+          doppler run -p soleur -c dev_scheduled -- \
+            env MU1_INTEGRATION=1 \
+            npm run test:ci -- \
+            test/mu1.integration.test.ts \
+            --project unit --reporter=verbose
+
+      # File-level dormancy found at plan review: this file gates on
+      # TENANT_INTEGRATION_TEST — a WIRED var — but lives at test/ root while
+      # tenant-integration.yml collects only test/server/; it has never run
+      # in CI. Wired here.
+      - name: Run dsar-departed-member (TENANT_INTEGRATION_TEST)
+        id: departed-member
+        if: ${{ !cancelled() }}
+        working-directory: apps/web-platform
+        timeout-minutes: 6
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            env TENANT_INTEGRATION_TEST=1 \
+            npm run test:ci -- \
+            test/dsar-departed-member.integration.test.ts \
+            --project unit --reporter=verbose
+
+      # Local-only release (kills this runner's holder psql); on a job-level
+      # cancel even this cannot run — the HOLD_S ceiling auto-expires the
+      # lock (~10-20s socket-death detection via chunked pg_sleep).
+      - name: Release dev-suite mutex
+        if: always()
+        env:
+          DEV_SUITE_MUTEX_IDENTITY: di-${{ github.run_id }}-${{ github.ref_name }}
+        run: |
+          set -uo pipefail
+          bash scripts/dev-suite-mutex.sh release
+
+      # File-or-comment tracking issue. `failure() || cancelled()`: a
+      # step/job timeout records `cancelled`, never `failure`
+      # (repo-measured — main-health-monitor.yml header, 19/30 silent runs).
+      # Ref-gated to main: a feature-branch workflow_dispatch that refuses
+      # at the unmerged-apply gate must not file noise.
+      - name: File or comment tracking issue
+        if: ${{ (failure() || cancelled()) && github.ref == 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OUT_supabase_dev: ${{ steps.supabase-dev.outcome }}
+          OUT_worktree_lease: ${{ steps.worktree-lease.outcome }}
+          OUT_acquire_slot: ${{ steps.acquire-slot.outcome }}
+          OUT_byok: ${{ steps.byok.outcome }}
+          OUT_slot_trigger: ${{ steps.slot-trigger.outcome }}
+          OUT_workspace_binding: ${{ steps.workspace-binding.outcome }}
+          OUT_mu1: ${{ steps.mu1.outcome }}
+          OUT_departed_member: ${{ steps.departed-member.outcome }}
+        run: |
+          set -euo pipefail
+          ISSUE_TITLE='[ci/integration-suites] Nightly integration suites failed'
+          ISSUE_SEARCH='in:title "[ci/integration-suites] Nightly integration suites failed"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          FAILED=""
+          for pair in \
+            "supabase-dev:$OUT_supabase_dev" \
+            "worktree-lease:$OUT_worktree_lease" \
+            "acquire-slot:$OUT_acquire_slot" \
+            "byok:$OUT_byok" \
+            "slot-trigger:$OUT_slot_trigger" \
+            "workspace-binding:$OUT_workspace_binding" \
+            "mu1:$OUT_mu1" \
+            "departed-member:$OUT_departed_member"; do
+            step="${pair%%:*}"; outcome="${pair##*:}"
+            if [[ "$outcome" != "success" && "$outcome" != "skipped" ]]; then
+              FAILED="${FAILED}- \`${step}\` → **${outcome}**\n"
+            fi
+          done
+          [[ -n "$FAILED" ]] || FAILED="- (no suite-step outcome recorded — failure before suite steps; see run log)\n"
+
+          # Label self-heals: the first red on a fresh repo must not 422 on a
+          # missing label (labels are data, not IaC, here).
+          gh label create ci/integration-suites --repo "$GH_REPO" \
+            --color B60205 --description "Nightly scheduled-integration-suites.yml leg red" \
+            2>/dev/null || true
+
+          BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Nightly integration suites failed\n\n'
+            printf 'Detected at: **%s**\n\n' "$NOW"
+            printf 'Failing step(s), earliest first:\n\n'
+            printf '%b' "$FAILED"
+            printf '\n**Run log:** %s\n\n' "$RUN_URL"
+            printf '### What to do\n\n'
+            printf -- '- Step outcomes above name the red gate(s); the run log holds the vitest output.\n'
+            printf -- '- A substrate red (mutex contention, dev-Supabase cruft, Doppler drift) names a step *before* the suite steps — check the pre-suite steps in the run.\n'
+            printf -- '- Two consecutive substrate-cruft filings trigger the dedicated-project re-evaluation recorded in `apps/web-platform/test/README.md`.\n\n'
+            printf '**Tracks:** #9855\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Existing tracking issue #$EXISTING — adding comment."
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Suites failed again at ${NOW}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" \
+              --title "$ISSUE_TITLE" \
+              --label "ci/integration-suites" \
+              --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
+      # Auto-close the stale tracker on a green main run — otherwise one
+      # transient flake leaves a permanently open issue and trains the label
+      # to be ignored (mirrors scheduled-realtime-probe.yml's arm).
+      - name: Auto-close stale issue (suites green)
+        if: ${{ success() && github.ref == 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ISSUE_SEARCH='in:title "[ci/integration-suites] Nightly integration suites failed"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            echo "Closing stale tracking issue #$STALE."
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "Suites green at ${NOW}. Run: ${RUN_URL}"
+          else
+            echo "No stale tracking issue to close."
+          fi
+
+      # Dead-man arm: a schedule that never fires produces no run and nothing
+      # to file (GitHub has measured-dropped scheduled runs — cron-monitors.tf
+      # records the 2026-05-26 realtime-probe drop). The missed check-in pages
+      # the `scheduled-integration-suites` Sentry cron monitor instead. Status
+      # is producer-outcome-first (#7138): 'ok' only when every suite step
+      # succeeded — a red, skipped, or aborted producer reports 'error', and
+      # a killed job never checks in at all.
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-integration-suites
+          status: ${{ (steps.supabase-dev.outcome == 'success' && steps.worktree-lease.outcome == 'success' && steps.acquire-slot.outcome == 'success' && steps.byok.outcome == 'success' && steps.slot-trigger.outcome == 'success' && steps.workspace-binding.outcome == 'success' && steps.mu1.outcome == 'success' && steps.departed-member.outcome == 'success') && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
