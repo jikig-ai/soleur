@@ -521,7 +521,7 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
    (an empty or unchanged id is stale: retry), watch it under Monitor bounded to about 50 min, then read back again.
    `success` is read back; `cancelled`, `timed_out`, `startup_failure`, `skipped` or no run within the bound mean not
    delivered or superseded: read back anyway, and if it is still `not-protected` recommend the dispatch again (go-ahead).
-6. **On a `protected` read-back that matches the expected word, file ONE tracking issue** so the status flip does not depend
+6. **On a `protected` read-back that matches the expected word, and only while ADR-282's status is still `adopting`, file ONE tracking issue** so the status flip does not depend
    on memory (skip if one is already open: `gh issue list --state open --search "flip ADR-282" --json number`):
 
 ```bash

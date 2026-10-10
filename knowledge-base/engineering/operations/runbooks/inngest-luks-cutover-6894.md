@@ -301,7 +301,7 @@ ledger-only edit, `backstop_expired` cannot fire once the backstop row is gone, 
 replace strands the scheduler, whose one-dispatch recovery is `gh workflow run cutover-inngest.yml -f op=resume`).
 
 - A volume that will not open: the key is in Doppler `soleur-inngest/prd` (`INNGEST_REDIS_LUKS_KEY`). There is no SSH
-  route and no second copy; stop and escalate rather than improvise.
+  route; an independent passphrase copy exists in Terraform state (§5c, Route B), otherwise stop and escalate rather than improvise.
 
 **What 5a used to do and why it is gone.** It reverted the ledger row `hcloud_volume.inngest_redis_luks` to
 `plaintext-exception`, answered the three `[2026-09-21 AMENDMENT (#8296)` cells of the Article 30 register, re-paused the

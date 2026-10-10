@@ -46,7 +46,7 @@
 # must cascade — a drifted key that Terraform declines to notice is a volume
 # nobody can open, discovered at the next boot rather than at plan time.
 #
-# SOLE OPENER (#9879): `prevent_destroy` on this pair makes a destroy or replace plan an
+# ONLY HOST-READ OPENER (#9879): `prevent_destroy` on this pair makes a destroy or replace plan an
 # error. A deliberate key rotation (a header `luksChangeKey`) needs it lifted on the pair
 # in the same reviewed change; see the runbook section named in the file header.
 resource "random_password" "inngest_redis_luks" {
@@ -100,7 +100,7 @@ resource "doppler_secret" "inngest_redis_luks_key" {
   value      = random_password.inngest_redis_luks.result
   visibility = "masked"
 
-  # Sole opener of the sole copy (#9879); see the note on random_password above.
+  # Only opener the host reads for the sole copy (#9879); see the note on random_password above.
   lifecycle {
     prevent_destroy = true
   }

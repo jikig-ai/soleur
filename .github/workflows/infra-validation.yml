@@ -182,6 +182,7 @@ on:
       # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
       # the push list above is deliberately narrower.
       - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+      - "plugins/soleur/skills/postmerge/SKILL.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be

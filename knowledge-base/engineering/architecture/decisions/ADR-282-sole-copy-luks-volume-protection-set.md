@@ -228,7 +228,7 @@ nothing was changed.
   pull-request rule with `require_code_owner_review` (the CODEOWNERS header records that enforcing it is an operator
   follow-up), so CODEOWNERS is a routing hint here, not an independent second reviewer. Adding explicit rows for the guard
   files, and the second-reviewer enforcement, go to #9927.
-- **Consequence for the anchor.** The pins and Guards 1 and 2 land in the same commit, so one diff can weaken both. The
+- **Consequence for the anchor.** The pins, Guard 1 and the G2e pin land in the same commit, so one diff can weaken both. The
   census rows do not pin the attribute lines; they pin the `removed {}`/`moved {}` blocks and a deleted resource block (the
   merge-base diff the census computes for G4c). The independent anchor for the attribute lines is the effective-text pin in
   the parity test, which runs in the required `test` check, plus the live read (the post-apply read-back and the drift

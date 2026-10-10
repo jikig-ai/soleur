@@ -425,7 +425,7 @@ phase accepts either a `wipe_run_id` (evidence) or `erasure=provider-only` with 
   the rollback to copy back from. The operator verb stays listed until PR B retires it; the runbook
   carries a banner at §5a.
 - **The live LUKS volume becomes the only copy of the store, and `INNGEST_REDIS_LUKS_KEY` in Doppler
-  `soleur-inngest/prd` its sole opener.** Losing that key is then total loss (counsel review O4,
+  `soleur-inngest/prd` its sole opener.** *[superseded in part — see the 2026-10-10 addendum / ADR-282]* Losing that key is then total loss (counsel review O4,
   `knowledge-base/legal/audits/2026-09-counsel-review-8248.md`). This sharpens the "No key escrow"
   stance above, which rests on the AOF being transient and self-healing while armed reminders can
   carry unbounded future fire-times. *[superseded in part — see the 2026-10-10 addendum / ADR-282]*
@@ -656,7 +656,7 @@ addendum (the dispatch, its gate library and `op=luks-rollback` deleted) take ef
 - **Rollback is gone.** The addendum of 2026-09-21 that kept `op=luks-rollback` listed "until the convergence PR retires
   it" is satisfied: the verb is retired, and "Rollback ends at the `detach` phase" is now simply the state of the world.
 - **The LUKS volume is the only copy.** `hcloud_volume.inngest_redis_luks` (id 106903269) holds the only copy of the Inngest
-  queue and run state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener. Delete protection,
+  queue and run state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener. *[superseded in part — see the 2026-10-10 addendum / ADR-282]* Delete protection,
   edge pins and key-loss posture are NOT built here; they are tracked in #9879 (open).
 - **The erasure is logical, guest-side and self-attested.** Hetzner's action history corroborates that a non-live server
   held the volume; it does not corroborate the overwrite. No physical or secure erasure is claimed.
