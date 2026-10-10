@@ -1272,6 +1272,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
   // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
   // birth route still refuses them (GIT_DATA_BIRTH_REFUSED).
+  // betteruptime_heartbeat.git_data_host_prd + doppler_secret.git_data_host_heartbeat_url_prd (#9438)
+  // are in the same position from birth: per-merge targeted, refused by the birth route.
   // #5274 Phase 3 (ADR-068) — the multi-host cluster's new resources all ride the
   // operator's MAINTENANCE-WINDOW apply, exactly like hcloud_server.web + the
   // git-data keys above, NOT the #5566 per-PR-CI class:
@@ -3775,13 +3777,37 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(readdirSync(INFRA_DIR).filter((f) => f.endsWith(".tf.json"))).toEqual([]);
   });
 
-  test("the git-data heartbeat pair is per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
-    const pair = ["betteruptime_heartbeat.git_data_prd", "doppler_secret.git_data_heartbeat_url_prd"];
+  test("the git-data heartbeat pairs are per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
+    // The web-fed pair (#8754) and the host-originated pair (#9438): the second monitor is born
+    // paused and is NOT in the per-merge arm list, because its feeder reaches the host only
+    // through the owner-authorized replace.
+    const pair = [
+      "betteruptime_heartbeat.git_data_prd",
+      "doppler_secret.git_data_heartbeat_url_prd",
+      "betteruptime_heartbeat.git_data_host_prd",
+      "doppler_secret.git_data_host_heartbeat_url_prd",
+    ];
     const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
     expect(birth.has("hcloud_server.git_data")).toBe(true); // non-vacuity
     expect(missingFrom(pair, planTargets)).toEqual([]);
     expect(pair.filter((a) => OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
     expect(presentIn(pair, birth)).toEqual([]);
+  });
+
+  test("the host heartbeat secret reaches ONLY its heartbeat: project and config are literals, so the per-merge closure cannot pull in doppler_config.git_data_prd or hcloud_server.git_data (#9438)", () => {
+    const src = tf("git-data.tf");
+    const res = block(src, /^resource\s+"doppler_secret"\s+"git_data_host_heartbeat_url_prd"\s*\{/m);
+    expect(res).toMatch(/^\s*project\s*=\s*"soleur"\s*$/m);
+    expect(res).toMatch(/^\s*config\s*=\s*"prd_git_data"\s*$/m);
+    expect(res).toMatch(/^\s*value\s*=\s*betteruptime_heartbeat\.git_data_host_prd\.url\s*$/m);
+    // Every address-shaped token in the block, minus the one heartbeat it must reference.
+    const refs = [...res.matchAll(/\b(?:hcloud|doppler|betteruptime|random|tls|terraform)_[a-z_]+\.[a-z_0-9]+/g)].map((m) => m[0]);
+    expect([...new Set(refs)]).toEqual(["betteruptime_heartbeat.git_data_host_prd"]);
+    // The heartbeat is born paused and its arm is not a per-merge concern.
+    const hb = block(src, /^resource\s+"betteruptime_heartbeat"\s+"git_data_host_prd"\s*\{/m);
+    expect(hb).toMatch(/^\s*paused\s*=\s*true\s*$/m);
+    expect(hb).toMatch(/^\s*push\s*=\s*false\s*$/m);
+    expect(hb).toMatch(/ignore_changes\s*=\s*\[paused\]/);
   });
 
   test("the deployment policy is adopted by import into a NEW, destroy-proof address and the phantom address is forgotten", () => {
@@ -4214,6 +4240,11 @@ const GIT_DATA_BIRTH_REFUSED = [
   // measuring nothing.
   "betteruptime_heartbeat.git_data_prd",
   "doppler_secret.git_data_heartbeat_url_prd",
+  // (#9438) The host-originated pair: its feeder rides the host's own cloud-init, and the URL is
+  // read at runtime from the scoped config, so the birth's exact -target set has no use for it and
+  // must not take a Doppler write into prd_git_data.
+  "betteruptime_heartbeat.git_data_host_prd",
+  "doppler_secret.git_data_host_heartbeat_url_prd",
   // SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY not plan.
   "terraform_data.git_data_probe_install",
 ];

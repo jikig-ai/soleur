@@ -151,11 +151,13 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
 # of the full-prd `var.doppler_token` so a git-data-host compromise reads only this
 # config — restoring the "separate blast radii" property git-data.tf already advertises.
 #
-# CARDINALITY (#6982): this config now holds TWO secrets — GIT_DATA_LUKS_KEY and
-# BETTERSTACK_LOGS_TOKEN (the ingest token added above). It was one until #6982. The
-# blast-radius argument is unchanged in kind: an ingest token is write-only against a
-# log source (git-data's OWN since #7772, not the shared one) and cannot read anything back, so a compromise still yields no
-# service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
+# CARDINALITY (#6982, #9438): this config now holds THREE secrets — GIT_DATA_LUKS_KEY,
+# BETTERSTACK_LOGS_TOKEN (the ingest token added above) and GIT_DATA_HOST_HEARTBEAT_URL (the host's
+# own liveness heartbeat, doppler_secret.git_data_host_heartbeat_url_prd in git-data.tf). It was
+# one until #6982. The blast-radius argument is unchanged in kind: an ingest token is write-only
+# against a log source (git-data's OWN since #7772, not the shared one) and cannot read anything
+# back, and the heartbeat URL can only forge an "alive" ping for one monitor, so a compromise still
+# yields no service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
 # doppler_service_token.write / .kb_drift); rotate via
 # `terraform apply -replace=doppler_service_token.git_data`.
 resource "doppler_service_token" "git_data" {

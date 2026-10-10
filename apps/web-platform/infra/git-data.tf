@@ -576,11 +576,15 @@ resource "hcloud_firewall_attachment" "git_data" {
   server_ids  = [hcloud_server.git_data.id]
 }
 
-# --- Liveness (PUSH heartbeat) -----------------------------------------------
+# --- Liveness (PUSH heartbeats) ----------------------------------------------
 # Better Stack cannot PULL a deny-all-public-ingress host, so liveness is a PUSH
-# heartbeat: a web-host cron probes git-data over the private net (git ls-remote /
-# ssh) and pings this heartbeat URL on success; absence-of-ping alerts. Shape
-# mirrors resource "betteruptime_heartbeat" "inngest_prd" (inngest.tf).
+# heartbeat: absence-of-ping alerts. TWO monitors, deliberately separate (a shared URL would let
+# either feeder's beat mask the other's silence):
+#   * git_data_prd (below): a web-host cron probes git-data over the private net and pings on a
+#     reachable run. It proves only that SOME web host can open a TCP connection to the port.
+#   * git_data_host_prd (further below, #9438): the git-data HOST pings it itself, only when its
+#     own checks pass (git-data-liveness.sh). It proves host and store health.
+# Shape mirrors resource "betteruptime_heartbeat" "inngest_prd" (inngest.tf).
 #
 # paused = true at birth (same rationale as inngest_prd): the gap between apply
 # (Better Stack starts expecting a ping within `grace`) and the first ping would
@@ -635,5 +639,58 @@ resource "doppler_secret" "git_data_heartbeat_url_prd" {
   config     = "prd"
   name       = "GIT_DATA_HEARTBEAT_URL"
   value      = betteruptime_heartbeat.git_data_prd.url
+  visibility = "masked"
+}
+
+# --- Liveness, host-originated (#9438) ----------------------------------------
+# The git-data HOST's own feeder (git-data-liveness.timer, delivered by git-data-userdata and armed
+# by cloud-init-git-data.yml) pings this heartbeat every 60 s, ONLY when the loopback sshd answers,
+# the store is mounted from the LUKS mapper, bytes and inodes are under threshold, and neither the
+# LUKS reopen nor the nftables unit has failed. Its absence is the page; the feeder also says why
+# through git-data-emit (stage liveness, level info). Flip precondition: see the cutover runbook.
+#
+# Born paused, exactly like git_data_prd and for the same reason, and NOT armed by the per-merge
+# arm step: the feeder reaches the host only through the owner-authorized replace, so an arm line
+# here would unpause, wait out the deadline, roll back and return rc=1 on every merge until then.
+# Arming is a separate, measured, owner-authorized step (ADR-117, ADR-283); heartbeat-manifest.ts
+# carries the row with arming_pending so the nightly fed-but-paused alarm does not fire meanwhile.
+#
+# grace 300 against a 60 s feeder tick: the page lands about six minutes after the last good beat,
+# which absorbs the reopen unit's up-to-17-minute `failed` latch being a MISS rather than an outage
+# of this signal, and a vendor blip, without paging on a single dropped tick.
+resource "betteruptime_heartbeat" "git_data_host_prd" {
+  name      = "soleur-git-data-host-prd"
+  period    = 60
+  grace     = 300
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  # Literal name of the only team in this Better Stack workplace (case-sensitive provider lookup).
+  team_name  = "Your team"
+  policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
+  paused     = true
+  sort_index = 0
+
+  lifecycle {
+    # The arm gate's live unpause MUST NOT be reverted by subsequent applies.
+    ignore_changes = [paused]
+  }
+}
+
+# The URL the host reads at runtime from the git-data scoped Doppler config. `project` and `config`
+# are LITERALS on purpose: a reference to doppler_config.git_data_prd would pull that excluded
+# resource into the per-merge -target closure, and if it were ever absent from state the plan would
+# try to create it and Doppler would answer 400 "Name is already in use" on every merge. With
+# literals an absent config makes THIS write fail loudly instead. The URL is not in user_data, so
+# the rung-2 rehearsal render carries no production monitor and a rehearsal host (whose scratch
+# config lacks this secret by construction) cannot ping it. It rides the per-merge -target list
+# beside git_data_prd and is refused by the git-data birth route (GIT_DATA_BIRTH_REFUSED).
+resource "doppler_secret" "git_data_host_heartbeat_url_prd" {
+  project    = "soleur"
+  config     = "prd_git_data"
+  name       = "GIT_DATA_HOST_HEARTBEAT_URL"
+  value      = betteruptime_heartbeat.git_data_host_prd.url
   visibility = "masked"
 }
