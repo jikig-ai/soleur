@@ -63,7 +63,13 @@ mutate() {
     exit 3
   fi
   local tmp="$f.mut"
-  awk -v lit="$lit" -v rep="$rep" '{ if (index($0, lit)) { sub(lit, rep) } print }' "$f" > "$tmp"
+  # index()+substr() surgery, never sub(): sub() re-matches the anchor as an
+  # ERE and can replace a different occurrence than the literal index() found.
+  awk -v lit="$lit" -v rep="$rep" '{
+    i = index($0, lit)
+    if (i) $0 = substr($0, 1, i - 1) rep substr($0, i + length(lit))
+    print
+  }' "$f" > "$tmp"
   mv "$tmp" "$f"
   grep -qF "$rep" "$f" || { printf 'FATAL: mutation did not land: %s\n' "$rep" >&2; exit 3; }
 }
@@ -288,12 +294,38 @@ jobs:
 YAML
 expect_red "M14 conjunction -- one of two gates set" "$D" "CONJ_B"
 
+# --- M15 (must-PASS): the idiom in a .md under test/ is prose, not a gate -----
+D="$WORK/m15"; mkrepo "$D"
+cat > "$D/apps/web-platform/test/README.md" <<'MD'
+Gates use the `process.env.PROSE_GATE === "1"` idiom.
+MD
+( cd "$D" && git add -A )
+expect_green "M15 doc mention is not a gate" "$D"
+
+# --- M16: helper file (non-.test source) is var-level, not file-level ----------
+D="$WORK/m16"; mkrepo "$D"
+mkdir -p "$D/apps/web-platform/test/helpers"
+printf 'export const G = process.env.HELPER_GATE === "1";\n' > "$D/apps/web-platform/test/helpers/x.ts"
+( cd "$D" && git add -A )
+# Unwired helper gate -> RED at VAR level (dormant through every importer).
+expect_red "M16a unwired helper gate" "$D" "HELPER_GATE"
+# Wired helper gate -> GREEN: a helper is never a path-filter target, and
+# flagging it UNCOVERED is the false positive this arm's exemption exists for.
+cat >> "$D/.github/workflows/pad.yml" <<'YAML'
+      - run: env HELPER_GATE=1 npm run test:ci -- test/server/
+YAML
+expect_green "M16b wired helper gate needs no path coverage" "$D"
+
 # --- M6: harness self-check -- deleting a row must red the battery -------------
+# EXACT count, not a floor: a `>=` bound admits deleting rows unnoticed, which
+# is the defect this row exists to make visible. Bump DECLARED_ROWS in the same
+# edit that adds or removes a row.
+DECLARED_ROWS=20
 rows_run=$((rows_run + 1))
-if (( rows_run >= 14 )); then
-  ok "M6 battery executed ${rows_run} rows (anti-vacuity)"
+if (( rows_run == DECLARED_ROWS )); then
+  ok "M6 battery executed ${rows_run}/${DECLARED_ROWS} rows (anti-vacuity)"
 else
-  notok "M6 battery executed only ${rows_run} rows -- a deleted row went unnoticed"
+  notok "M6 battery executed ${rows_run} rows, expected ${DECLARED_ROWS} -- a deleted or added row went unrecorded"
 fi
 
 echo "integration-env-gates battery: ${passed} passed, ${failed} failed"

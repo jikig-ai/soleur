@@ -78,7 +78,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 _in_allowlist_vars() {
   local v="$1" row
-  for row in "${ALLOWLIST_VARS[@]}"; do
+  for row in ${ALLOWLIST_VARS[@]+"${ALLOWLIST_VARS[@]}"}; do
     [[ "${row%%|*}" == "$v" ]] && return 0
   done
   return 1
@@ -86,16 +86,37 @@ _in_allowlist_vars() {
 
 _in_allowlist_files() {
   local f="$1" row
-  for row in "${ALLOWLIST_FILES[@]}"; do
+  # ${a[@]+...} is load-bearing, not style: on bash <=4.3 (stock macOS bash
+  # 3.2, the local lefthook/test-all.sh path) `"${EMPTY[@]}"` under `set -u` is
+  # an unbound-variable abort -- and ALLOWLIST_FILES' goal state IS empty.
+  for row in ${ALLOWLIST_FILES[@]+"${ALLOWLIST_FILES[@]}"}; do
     [[ "${row%%|*}" == "$f" ]] && return 0
   done
   return 1
 }
 
+# _var_set_in <var> <stripped-file> -- the ONE copy of the setting-position
+# grammar. Two forms: `env <VAR>=1` run-prefix, and `<VAR>: ["']?1` env-mapping.
+# The mapping arm needs a left boundary on the name -- `FOO_<VAR>: "1"` is not
+# a setting of `<VAR>`.
+_var_set_in() {
+  local v="$1" stripped="$2"
+  grep -qE "(^|[[:space:]])env[[:space:]]+${v}=1([[:space:]]|$)|(^|[^A-Za-z0-9_])${v}:[[:space:]]*[\"']?1[\"']?[[:space:]]*($|#)" \
+    "$stripped"
+}
+
+# _path_token_in <path-token> <stripped-file> -- whitespace/EOL-bounded token
+# match (optional surrounding quotes). The ONE copy of the collection grammar.
+_path_token_in() {
+  local tok="$1" stripped="$2" esc
+  esc="$(printf '%s' "$tok" | sed 's/[.[\*^$]/\\&/g')"
+  grep -qE "(^|[[:space:]])[\"']?${esc}[\"']?([[:space:]]|$)" "$stripped"
+}
+
 # _workflow_files -- every workflow file, listed once. Keeping the file list
 # explicit (not a recursive glob over the whole .github/) is deliberate: only
 # this dir is a CI registration surface.
-find "$WORKFLOW_DIR" -maxdepth 1 -name '*.yml' -o -maxdepth 1 -name '*.yaml' \
+find "$WORKFLOW_DIR" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) \
   | LC_ALL=C sort -u > "$WORK/workflows" || true
 
 # Comment-stripped bodies, computed ONCE per file. Consumers grep the stripped
@@ -109,7 +130,7 @@ mkdir -p "$WORK/stripped"
 while IFS= read -r _wf; do
   [[ -n "$_wf" ]] || continue
   _b="$WORK/stripped/$(basename "$_wf")"
-  grep -vE '^[[:space:]]*#' "$_wf" > "$_b" 2>/dev/null || : > "$_b"
+  grep -vE '^[[:space:]]*#' "$_wf" > "$_b" 2>/dev/null || true
 done < "$WORK/workflows"
 
 # _var_wired_in <var> -- prints the workflow files that SET <var> in a setting
@@ -118,8 +139,7 @@ _var_wired_in() {
   local v="$1" f
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    if grep -qE "(^|[[:space:]])env[[:space:]]+${v}=1([[:space:]]|$)|${v}:[[:space:]]*[\"']?1[\"']?[[:space:]]*($|#)" \
-        "$WORK/stripped/$(basename "$f")"; then
+    if _var_set_in "$v" "$WORK/stripped/$(basename "$f")"; then
       printf '%s\n' "$f"
     fi
   done < "$WORK/workflows"
@@ -128,10 +148,9 @@ _var_wired_in() {
 # _file_collected_in <app_rel_path> <workflow-file> -- the file (or its
 # depth>=2 parent dir, trailing slash) appears whitespace/EOL-bounded.
 _file_collected_in() {
-  local app_rel="$1" wf="$2" parent esc stripped
+  local app_rel="$1" wf="$2" parent stripped
   stripped="$WORK/stripped/$(basename "$wf")"
-  esc="$(printf '%s' "$app_rel" | sed 's/[.[\*^$]/\\&/g')"
-  grep -qE "(^|[[:space:]])[\"']?${esc}[\"']?([[:space:]]|$)" "$stripped" && return 0
+  _path_token_in "$app_rel" "$stripped" && return 0
   # Walk ANCESTOR dirs, deepest first: a file under test/server/scope-grants/
   # IS collected by a `test/server/` filter. Depth >= 2 only (a dir token must
   # contain a `/` after its leading segment): `test/` alone must NOT satisfy a
@@ -140,8 +159,7 @@ _file_collected_in() {
   # directory filter.
   parent="$(dirname "$app_rel")"
   while [[ "$parent" == */* ]]; do
-    esc="$(printf '%s' "$parent/" | sed 's/[.[\*^$]/\\&/g')"
-    grep -qE "(^|[[:space:]])[\"']?${esc}[\"']?([[:space:]]|$)" "$stripped" && return 0
+    _path_token_in "$parent/" "$stripped" && return 0
     parent="$(dirname "$parent")"
   done
   return 1
@@ -150,13 +168,23 @@ _file_collected_in() {
 # --- The producer -------------------------------------------------------------
 # Per-file, not per-var: the census that feeds BOTH arms. `-l` first, then the
 # var names per file -- a file can carry more than one gate (MU1 carries the
-# partial-set canary).
+# partial-set canary). Source extensions ONLY: a `process.env.X === "1"`
+# literal in prose (test/README.md documents the idiom) can never gate a
+# suite, and counting it is a false UNCOVERED. NON-.test source files
+# (helpers/fixtures) stay in the census -- a gate inside test/helpers/*.ts is
+# vacuous exactly as much as one in a suite -- but they are exempt from the
+# file-level collection arm below: vitest collects *.test.* only, so a helper
+# is exercised through its importers, and "no workflow path-filter names this
+# helper" is the CORRECT shape, not a defect.
 git -C "$REPO_ROOT" grep -lE "$GATE_IDIOM" -- "${PRODUCER_PATHS[@]}" \
-  | LC_ALL=C sort -u > "$WORK/gated_files"
+  | grep -E '\.(ts|tsx|js|jsx|mjs|cjs)$' \
+  | LC_ALL=C sort -u > "$WORK/gated_files" || true
 found_files=$(wc -l < "$WORK/gated_files" | tr -d ' ')
+COLLECTABLE_RE='\.test\.'
 
-# PRODUCER FLOOR (anti-vacuity). 59 files measured 2026-10-10 on the adding
-# commit. A count floor cannot see a SUBSTITUTION, only a narrowing -- that is
+# PRODUCER FLOOR (anti-vacuity). 59 source files measured 2026-10-10 on the
+# adding commit (60 pre-source-filter incl. test/README.md, which quotes the
+# idiom). A count floor cannot see a SUBSTITUTION, only a narrowing -- that is
 # what the zero-check and the companion battery's row-2 mutation cover. Slack
 # deliberately tight: a floor is attack budget, not padding.
 MIN_GATED_FILES=50
@@ -211,6 +239,10 @@ wired_vars=$(grep -vc '^UNWIRED' "$WORK/var_wired" || true)
 while IFS=$'\t' read -r f vars; do
   app_rel="${f#apps/web-platform/}"
   _in_allowlist_files "$f" && continue
+  # Non-collectable source files (helpers, fixtures -- anything that is not a
+  # *.test.* vitest target) are var-level-only: no path filter can name them,
+  # and their coverage runs through the suites that import them.
+  grep -qE "$COLLECTABLE_RE" <<<"$app_rel" || continue
   covered=0
   all_allowlisted=1
   for v in $vars; do
@@ -225,8 +257,7 @@ while IFS=$'\t' read -r f vars; do
       all_set=1
       for v in $vars; do
         _in_allowlist_vars "$v" && continue
-        grep -qE "(^|[[:space:]])env[[:space:]]+${v}=1([[:space:]]|$)|${v}:[[:space:]]*[\"']?1[\"']?[[:space:]]*($|#)" \
-          "$WORK/stripped/$(basename "$wf")" || { all_set=0; break; }
+        _var_set_in "$v" "$WORK/stripped/$(basename "$wf")" || { all_set=0; break; }
       done
       (( all_set == 1 )) && { covered=1; break; }
     done < "$WORK/workflows"

@@ -223,7 +223,7 @@ const INSTALLATION_ID_RE = /^[1-9][0-9]{0,9}$/;
 // there by design; per-PR CI does not set the gate and skips. The
 // partial-set canary above still guards the
 // one-var-set misconfig. See #4663. Run the live check with:
-//   MU1_INTEGRATION=1 doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 \
+//   MU1_INTEGRATION=1 doppler run -p soleur -c dev -- \
 //     npm run test:ci -- test/mu1.integration.test.ts --project unit
 const AC2_OPTED_IN = process.env.MU1_INTEGRATION === "1";
 
