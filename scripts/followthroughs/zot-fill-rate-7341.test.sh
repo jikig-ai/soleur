@@ -318,6 +318,18 @@ then pass "a repo completing 1 of 3 started cycles is reported, not called healt
 else fail "the intermittent under-completion shape read as healthy. Output: $OUT"
 fi
 
+# 28. THE UPLOAD-ERROR COUNTER (#9373). The real line is level:error with the handler named only in
+#     the parsed `func` field (written at the END of the row, just before `goroutine`). The retired
+#     message-prefix key counted it as 0; a header that spells the func text mid-row must not count.
+GC_UPL="$(gcrow "$ENVP {time:2026-10-10T00:00:00Z,level:error,message:unexpected error, removing .uploads/ files,error:unexpected EOF,caller:zotregistry.dev/zot/v2/pkg/api/routes.go:2190,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:369}")
+$(gcrow "$ENVP {time:2026-10-10T00:00:01Z,level:error,message:HTTP API,headers:{User-Agent:[x,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:1]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/zot/v2/pkg/api.SessionLogger.func1.1,goroutine:2}")"
+run "$FAILSPEC" 0 "" "" "" "$GC_UPL"
+cases=$((cases + 1))
+if [[ "$OUT" == *"patch_blob_upload=1 "* ]]
+then pass "the func-keyed upload error row is counted once and a header-borne decoy is not"
+else fail "expected patch_blob_upload=1 (real row counted, decoy not). Output: $OUT"
+fi
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This harness's own dispatch. A stub that stops emitting, a `run()` that stops invoking the
 # probe, an early `return` — any of these leaves the suite asserting nothing about a probe whose
@@ -328,9 +340,9 @@ fi
 # neutering the verdict machinery silenced the rows AND the floor that exists to notice the
 # silence. A floor enforced through the suspect cannot witness the suspect.
 #
-# Measured from a green run with ZERO slack: 29 assertions (22 expect() rows + 7 inline
+# Measured from a green run with ZERO slack: 30 assertions (22 expect() rows + 8 inline
 # if/else rows). Ratchet upward only.
-MIN_CHECKS=29
+MIN_CHECKS=30
 if (( cases < MIN_CHECKS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CHECKS" >&2

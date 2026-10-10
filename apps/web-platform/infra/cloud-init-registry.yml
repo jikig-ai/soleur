@@ -1551,6 +1551,8 @@ write_files:
       # concurrent panic trace was dropped -- REPRODUCED, and it is the #7444 R12 priority
       # inversion one layer down, inside the change that claims to bound against it. Capping the
       # upload class below the lane's size reserves the remainder for is_cap_exempt (gc + crash).
+      # The func-keyed PatchBlobUpload ERROR row (#9373) draws from this same sub-quota (rc 2 at the
+      # call site), so both halves of a failed upload share the 8 slots and neither can starve a panic.
       CAP_UPLOAD_EVIDENCE_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL:-8}"
       WIN_UPLOAD_EVIDENCE=0
       WIN_COUNT=0

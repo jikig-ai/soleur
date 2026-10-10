@@ -469,6 +469,19 @@ assert "C15 a header-borne 'executing gc' is NOT counted as gc evidence (gc_star
 assert "C15 the genuine gc row IS counted (non-vacuity: the count is not simply zero)" \
   "! grep -qE 'gc_start=0( |\\))' <<<\"\$CASE_OUT\""
 
+# C15b (#9373) — the upload-error counter keys on the parsed `func` field, which zot writes
+# immediately before `goroutine` at the END of the row. One real func-keyed error row and one
+# header-borne decoy that spells the func text mid-row: the count must be 1, not 2. The former
+# message-prefix key counted neither, so the real row read as 0 while the suite stayed green.
+C15B_LOG="$TMP/c15b.log"; : > "$C15B_LOG"
+for _ in $(seq 1 29); do envelope_row >> "$C15B_LOG"; done
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {time:2026-01-01T00:00:00.000000000Z,level:error,message:unexpected error, removing .uploads/ files,error:unexpected EOF,caller:zotregistry.dev/zot/v2/pkg/api/routes.go:2190,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:369}" >> "$C15B_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:HTTP API,headers:{User-Agent:[x,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:1]},caller:zotregistry.dev/zot/v2/pkg/api/x.go:3,func:zotregistry.dev/zot/v2/pkg/api.SessionLogger.func1.1,goroutine:2}" >> "$C15B_LOG"
+C15B_CTL="$TMP/c15b.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C15B_CTL"
+run_probe "$C15B_LOG" "$C15B_CTL"
+assert "C15b a func-keyed PatchBlobUpload error row IS counted and a header-borne decoy is NOT (patch_upload=1, not 0 or 2)" \
+  "grep -qE 'patch_upload=1( |\\))' <<<\"\$CASE_OUT\""
+
 # --- C14: the boot marker flows through the LOG arm; there is NO second query (#8278) ------
 # The old arm read the marker out of a separate 72h archive query — a different span than the
 # rows being graded, which was the defect this fix removes. In-window marker rows now arrive in

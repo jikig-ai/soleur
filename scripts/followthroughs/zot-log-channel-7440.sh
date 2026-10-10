@@ -462,7 +462,10 @@ SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
             if (index(m, "message:executing gc") > 0) n_gcs++
             if (index(m, "message:gc successfully completed") > 0) n_gcd++
             if (index(m, "message:garbage collected blobs") > 0) n_gcb++
-            if (index(m, "message:PatchBlobUpload") > 0) n_patch++
+            # The real upload error line (#9373) names the handler only in the parsed `func`
+            # field, which zot writes immediately before `goroutine` at the END of the row. The
+            # end-anchor means a client header spelling the func text (mid-row) cannot count.
+            if (index(m, "level:error") > 0 && m ~ /\(\*RouteHandler\)\.PatchBlobUpload,goroutine:[0-9]+\}?[ ]*$/) n_patch++
             if (authleak(m)) n_auth++
             if (shapeleak(m)) n_shape++
           } else {
