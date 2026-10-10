@@ -170,6 +170,10 @@ yes "the reviewer-gated environment is bound" \
   "grep -qF 'environment: web-platform-infra-apply' '$WF'"
 yes "the workflow joins the parent's widest apply concurrency group" \
   "grep -qF 'group: terraform-apply-web-platform-host' '$WF'"
+yes "every ZOT_PULL_TOKEN read pairs soleur/prd with the DOPPLER_TOKEN_PRD override (the default token is prd_terraform-scoped)" \
+  "[[ \$(grep -c 'DOPPLER_TOKEN=.\$DOPPLER_TOKEN_PRD. doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd' '$WF') -ge 4 ]] && [[ \$(grep 'secrets get ZOT_PULL_TOKEN' '$WF' | grep -vc 'DOPPLER_TOKEN_PRD') -eq 0 ]]"
+no "no ZOT_PULL_TOKEN read targets the wrong project (soleur-registry is the mirror, not the root)" \
+  "grep -qF 'get ZOT_PULL_TOKEN -p soleur-registry' '$WF'"
 yes "contents: read (the workflow cannot commit its own evidence)" \
   "grep -qE '^\s+contents: read' '$WF'"
 yes "the confirm token is REHEARSE-INNGEST-PROVISION" \
