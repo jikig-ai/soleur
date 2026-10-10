@@ -925,7 +925,14 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "apps/web-platform/infra/infra-config-gate.sh"
   "apps/web-platform/infra/infra-config-verify.sh"
   "apps/web-platform/infra/push-infra-config.sh"
+  "apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
   "apps/web-platform/scripts/github-app-key-status.sh"
+  # The census allow-list and the parity audit pin the cutover script (two held-back argv HMAC arms, 17 converted copies); the live
+  # lint row runs the checkout lint on the real tree; the redeploy row sources the seccomp alert emitter and hashes the profile.
+  "scripts/cutover-inngest.sh"
+  "scripts/lint-workflow-local-action-checkout.py"
+  "scripts/seccomp-unenforced-alert.sh"
+  "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
   "scripts/inngest-restart-poll-classify.sh"
   "plugins/soleur/skills/ship/SKILL.md"

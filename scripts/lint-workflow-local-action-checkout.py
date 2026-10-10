@@ -87,7 +87,8 @@ line (`script-consumers: N derived (...), M step(s) run one`) and is INFORMATION
 tree (before the S4 conversions land there is none outside `scripts/lib/` that a workflow runs), so the lint never fails
 on it. The set-size FLOOR lives where the set is known not to be empty: the suite's fixture rows assert the exact count
 for a tree built with known consumers (so a derivation emptied by a mutation turns them red), and the argv-bearer
-battery asserts the real tree's count once the conversions have landed.
+battery (tests/scripts/test-argv-bearer-sweep.sh, stage S4) runs this lint on the REAL tree and asserts floors on both
+numbers of the `script-consumers:` line (the fixture trees carry no `.git`, so the `git ls-files` arm runs nowhere else).
 
 THE FLOOR. `MIN_SAME_REPO_STEPS` counts `./` and `$/` steps TOGETHER, so a future `./` → `$/`
 migration cannot drive this guard to "scanning nothing": 54 today, floor 30. Below it is rc 2.
@@ -230,26 +231,6 @@ def checkout_ref_untrusted(checkout: dict, strict: bool = False) -> bool:
     return not (isinstance(ref, str) and ok.match(ref.strip()))
 
 
-def lib_composites(actions_root: Path) -> set:
-    """Composites whose steps source the library: the always-included pair plus every action.yml that names it.
-    A composite is keyed by its path under the actions root (`a` or `group/a`). A file that cannot be read, or whose
-    `runs` is not a mapping, is skipped here: the second surface reports it by name."""
-    names = set(LIB_COMPOSITE_DEFAULT)
-    if actions_root.is_dir():
-        for action in list(actions_root.rglob("action.yml")) + list(actions_root.rglob("action.yaml")):
-            try:
-                doc = yaml.safe_load(action.read_text(encoding="utf8"))
-            except (OSError, UnicodeDecodeError, RecursionError, yaml.YAMLError):
-                continue
-            runs = doc.get("runs") if isinstance(doc, dict) else None
-            steps = runs.get("steps") if isinstance(runs, dict) else None
-            if isinstance(steps, list) and any(
-                isinstance(st, dict) and isinstance(st.get("run"), str) and LIB_NEEDLE in st["run"] for st in steps
-            ):
-                names.add(action.parent.relative_to(actions_root).as_posix())
-    return names
-
-
 def repo_root_of(root: Path) -> Path:
     """The repository root the script set is derived from: `<dir>/../..` for `.github/workflows`, else `<dir>/..`
     (a fixture tree keeps its scripts next to its `workflows` and `actions` directories)."""
@@ -314,7 +295,7 @@ def run_names_script(run: str, scripts: list, action_dir: str = "") -> str:
     return ""
 
 
-def lib_composites(actions_root: Path, repo: Path, scripts: list = ()) -> set:
+def lib_composites(actions_root: Path, repo: Path, scripts: list) -> set:
     """Composites whose steps source the library: the always-included pair plus every action.yml that names it, or
     that runs a script consumer. A composite is keyed by its path under the actions root (`a` or `group/a`). A file that
     cannot be read, or whose `runs` is not a mapping, is skipped here: the second surface reports it by name."""
@@ -336,13 +317,13 @@ def lib_composites(actions_root: Path, repo: Path, scripts: list = ()) -> set:
                 action_dir = ""  # the actions tree lies outside the repository root: no directory to match against
             for st in steps:
                 run = st.get("run") if isinstance(st, dict) else None
-                if isinstance(run, str) and (LIB_NEEDLE in run or run_names_script(run, list(scripts), action_dir)):
+                if isinstance(run, str) and (LIB_NEEDLE in run or run_names_script(run, scripts, action_dir)):
                     names.add(key)
                     break
     return names
 
 
-def consumes_lib(step: dict, composites: set, scripts: list = ()) -> str:
+def consumes_lib(step: dict, composites: set, scripts: list) -> str:
     """"" when the step does not consume the library; else a label: "lib" (the composite, or a `run:` naming the
     library) or the repo-relative path of the script consumer the `run:` names."""
     uses = step.get("uses")
@@ -354,7 +335,7 @@ def consumes_lib(step: dict, composites: set, scripts: list = ()) -> str:
     if isinstance(run, str):
         if LIB_NEEDLE in run:
             return "lib"
-        return run_names_script(run, list(scripts))
+        return run_names_script(run, scripts)
     return ""
 
 

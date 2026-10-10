@@ -1577,8 +1577,9 @@ else
   fail "S4-10 an empty derived set failed the lint or the line is missing: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
 fi
 
-# S4-11: the live tree's set size is REPORTED (parsed here, asserted nowhere): its floor belongs to the argv-bearer battery, once the
-# conversions that make the set non-empty have landed. The row proves the line exists and is numeric on the real tree.
+# S4-11: the live tree's set size is REPORTED here (parsed, asserted to be numeric); its FLOORS (derived >= 9, steps >= 4) are asserted by the
+# argv-bearer battery (tests/scripts/test-argv-bearer-sweep.sh, stage S4, the row that runs this lint on the real tree). The tracked-file-listing (git) arm
+# is reached by the live tree and by S4-13 below, nowhere else: every other fixture has no `.git`.
 live_info="$(sed -nE 's/^lint-workflow-local-action-checkout: script-consumers: ([0-9]+) derived \(([a-z .-]+)\), ([0-9]+) step\(s\) run one$/\1 \3/p' "$TMP/live.out")"
 if [[ "$LIVE_RC" -eq 0 && "$live_info" =~ ^[0-9]+\ [0-9]+$ ]]; then
   pass "S4-11 the live tree reports its script-consumer set size ('$live_info': derived, steps) and is clean"
@@ -1602,6 +1603,28 @@ else
   fail "S4-12 .github/workflows layout: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
 fi
 rm -rf "$TMP/rt"
+
+# S4-13: the tracked-file-listing (git) arm of the derivation. Every fixture above has no `.git`, so the walk arm is the only one they reach; a pathspec
+# that stopped matching (`*.sh` -> `*.shx`) would leave them all green. Here the root holds a `.git`: a TRACKED consumer is derived through git,
+# an ignored one is not (`--exclude-standard`), and the printed line names the arm that ran.
+reset
+S4_GIT_ARM="git ls""-files"   # the arm's name as the lint prints it, spelled so that this file is not mistaken for a corpus walker
+mkdir -p "$TMP/gt/.github" "$TMP/gt/tools"
+cp -r "$TMP/filler" "$TMP/gt/.github/workflows"
+cp -r "$TMP/filler-actions" "$TMP/gt/.github/actions"
+printf '%s\n' '#!/usr/bin/env bash' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/gt/tools/run.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/gt/tools/ignored.sh"
+printf '%s\n' 'tools/ignored.sh' > "$TMP/gt/.gitignore"
+printf '%s\n' "name: s4-gt" "jobs:" "  j:" "    runs-on: ubuntu-24.04" "    steps:" "      - name: tool" "        run: bash tools/run.sh" > "$TMP/gt/.github/workflows/s4-gt.yml"
+git -C "$TMP/gt" init -q 2>/dev/null && git -C "$TMP/gt" add .gitignore tools .github 2>/dev/null
+python3 "$SUT" "$TMP/gt/.github/workflows" >"$TMP/out" 2>"$TMP/err"; RC=$?
+if [[ "$RC" -eq 1 && "$(s4_info)" == "1 1" ]] && grep -q "script-consumers: 1 derived ($S4_GIT_ARM), 1 step(s) run one" "$TMP/out" \
+   && grep -q "s4-gt.yml: job 'j', step 'tool'.*\[script consumer: tools/run.sh\]" "$TMP/err"; then
+  pass "S4-13 with a .git at the repository root the set is derived through the git listing (a tracked consumer is judged, an ignored one is not derived)"
+else
+  fail "S4-13 git arm: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err") out='$(tail -1 "$TMP/out")'"
+fi
+rm -rf "$TMP/gt"
 
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
@@ -1635,7 +1658,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=123
+FAIL_FLOOR_MIN=124
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

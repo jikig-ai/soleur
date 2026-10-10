@@ -601,3 +601,38 @@ Not edited (constraints): `scripts/lib/bearer-curl.sh`, `apps/web-platform/infra
 - The probe's `source` placement inside the `if [[ -z "$fail_mode" ]]` arm keeps the three "secrets unset" suite rows green but means a missing library is only discovered when secrets are present; the `::error::` on source failure is mandatory, and Phase 0 checks which placement the suite's rows need.
 - Do not run ratchets during an unresolved merge (the 2026-10-09 learning); regenerate baselines only after the merge-from-main commit exists.
 - No repository writes while a background gate run is reading the battery.
+
+## Addendum — 2026-10-10 (review corrections)
+
+The review of the pull request falsified the following claims of this plan. The body above is left as written; where it conflicts with this addendum, this
+addendum governs. Each item was checked against the committed files (or the live run) on 2026-10-10.
+
+1. **`apply-deploy-pipeline-fix.yml` has six converted sites, not seven.** `grep -c bc_curl` finds six statements: `pre_frame`, the post-apply "Verify webhook
+   is alive", `webhook_liveness`, the redeploy step's `get_status` and its POST (two statements), and the `journald_storage` probe. Phase 4.1 ("Seven sites per
+   rows 13 to 17") counted one too many; the seven in D4 and the Census are the checkout-free INLINE sites of the three jobs, a different population.
+2. **The `8729cc0dfa` apply was SKIPPED, so it is not the evidence run.** That squash commit's body carries the exact lines `[skip-web-platform-apply]` and
+   `[skip-deploy-fix-apply]`, which the apply workflows read as "skip". The real production evidence of the pre-slice deploy path is run **37976212395**
+   (`Apply deploy-pipeline-fix`, `workflow_dispatch`, head `79482dab59`, conclusion `success`), not a run of the `8729cc0dfa` push. The "has fired since,
+   repeatedly" claim in the premise table needs that run, not that commit.
+3. **D12's "commits revert separably" is false.** Reverting the whole series is clean (after a squash merge, one `git revert <sha>`). Reverting only the
+   infra-path commits (6 and 7) is NOT: it needs follow-up edits to the battery (a 162-line hand edit), the baseline and ceiling rows, the followthrough list and
+   the affected-test edges, and the faithful `--changed --base` lint is red for any revert that restores the three baselined scripts. **Any** revert re-fires the same
+   production applies (`push-infra-config.sh` changes hash, so `terraform_data.deploy_pipeline_fix` is replaced again). The sentence "reverting either leaves 1 to 5
+   coherent" and the "commits 3 to 8 are separable" revert trigger in the Observability block must not be repeated in the PR body.
+4. **The Observability block's "not paged (stated)" is false in two places.** (a) `scheduled-inngest-health.yml`: a refused credential records
+   `failure_mode=secret_unset`, which is not one of the soft modes of the final Sentry check-in's `status:` expression, so the check-in is `error` and the Sentry
+   monitor pages (the liveness-probe GitHub issue is filed as well). (b) The apply workflow's own failure surface files an issue (the "Alert on a red infra-config
+   gate (#7220)" step and the re-push ledger issue). A refusal is paged wherever it lands in a red verdict class that already pages; it is "not paged" only where the
+   old class was not.
+5. **"ops email for apply workflow" does not exist.** The `alert_route:` line that lists "apply workflow failure issue and ops email" is wrong for
+   `apply-deploy-pipeline-fix.yml`: it has no Resend or `notify-ops-email` step. The ops email is a property of the release workflows only
+   (`web-platform-release.yml`).
+6. **The LUKS step runs `set +e`.** `workspaces-luks-cutover.yml`'s "Run workspaces-luks cutover" step begins `set +e` (so its own `rc=$?` diagnostic can print), so
+   a refused Hetzner token aborts through the **explicit `exit 1`** of the inline guard, before the volume id is resolved, before any `ssh` call and before any device
+   write; it does not rely on `set -e`. The battery's row 19 executes the real step body and asserts zero requests and zero ssh invocations.
+7. **The Risks line "The sparse-checkout default (D4) adds a step-0 dependency to the deploy job" is stale.** The adopted default is the INLINE wrapper (ADR-280
+   addendum, "Considered options (S4)": the sparse checkout is recorded, not taken), so no step-0 dependency was added to any deploy job. The same addendum records
+   that `deploy-inngest-image.yml` `deploy` is inline by choice, with conversion to the library as a follow-up.
+8. **PR #9877 is no longer a draft.** It is merged (`mergedAt` 2026-10-10T01:56:43Z, state MERGED, `isDraft` false). The Collision paragraph, D10 and the stop
+   conditions that say "an open draft PR also edits" `cutover-inngest-workflow.test.sh` and `scripts/cutover-inngest.sh` are stale: the two held-back HMAC arms are
+   owned by #9757 item 1 and are no longer blocked by that draft, but they stay out of this slice (the held-back set is unchanged and the census still allow-lists it).

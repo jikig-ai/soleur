@@ -1226,17 +1226,16 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # (a value on jq's argv); `openssl dgst -hmac "$KEY"` (the key is on openssl's argv, which Rule E does not see:
 # it reads curl's argument list). After S4 no production signer in a converted file does this: S4 moved the key to a
 # python3 child's environment (`bc_hmac_sha256_hex`, or the canonical inline snippet at the sites that cannot source
-# the library) at 20 sites, on top of ci-deploy.sh's fan-out signer and the converted copies in
-# scripts/cutover-inngest.sh. WHAT REMAINS, measured 2026-10-09 with `git grep -nE 'dgst .*-hmac'` minus `*.test.sh`,
-# fixtures, `tests/`, knowledge-base/ and this file (and no hit is a `#` comment line): TWO sites in
-# scripts/cutover-inngest.sh (the registry-probe and doublefire-probe signatures), HELD BACK deliberately because
-# converting them edits the census regexes of cutover-inngest-workflow.test.sh, a suite an open draft PR also edits;
-# owner #9757 item 1, taken after that draft merges. And two Markdown files that agents EXECUTE and that teach the argv
-# form (plugins/soleur/skills/ship/SKILL.md and the postmerge skill's deploy-status-debugging.md reference): plugin
-# files, outside S4, tracked under #9757. A stdin or env form EXISTS (the library, the converted signers in
-# scripts/cutover-inngest.sh, the community skill's lib/hmac-sha1-b64.sh and the Python signers) and is not detected
-# here: the population-derived guard that bounds the remainder to exactly those two arms is a stage of
-# tests/scripts/test-argv-bearer-sweep.sh, not this lint);
+# the library). WHAT REMAINS is NOT counted here (a count in a comment rots): the population is DERIVED, and compared to
+# an explicit allow-list by set identity, by the HMAC census of stage S4 in tests/scripts/test-argv-bearer-sweep.sh
+# (a tracked `openssl` statement carrying `-hmac` or `-macopt`, continuation lines joined, minus `*.test.sh`, fixtures,
+# `tests/`, knowledge-base/, this file and comment lines). Today: the registry-probe and doublefire-probe arms of
+# scripts/cutover-inngest.sh, HELD BACK deliberately because converting them edits the census regexes of
+# cutover-inngest-workflow.test.sh (owner #9757 item 1), and two Markdown files that agents EXECUTE and that teach the
+# argv form (the ship skill's SKILL.md and the postmerge skill's deploy-status-debugging.md reference; plugin files,
+# tracked under #9757). A stdin or env form EXISTS (the library, the converted signers in scripts/cutover-inngest.sh,
+# the community skill's lib/hmac-sha1-b64.sh and the Python signers) and is not detected here: the guard that bounds the
+# remainder is that census, not this lint);
 # header VALUES held in `env:` and passed as `-H "$H"` (the assignment is not in the scanned
 # body); `env -i`; `wget`; `gh api -H`; `-K file` configs written with the default umask;
 # cookies (`-b`, `Cookie:`) and vendor-specific custom headers (`x-gitlab-token`), pinned by
