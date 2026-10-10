@@ -455,6 +455,12 @@ assert_eq "143" "$RC" "SIGTERM mid-fetch ends the run"
 assert_eq "1" "$(cat "$FAKE_DIR/tmpcount" 2>/dev/null || echo missing)" "the capture file existed when the kill landed"
 assert_eq "" "$(ls -A "$TMP_SANDBOX")" "EXIT trap removed the capture file after SIGTERM"
 
+echo "TS15f: the fake gh term walker is bounded: unset guard, suite-PID comparison and pid-1 bound on non-comment lines"
+_term_body="$(awk '/^      term\)/{f=1} f{print} f && /sleep 5; exit 1 ;;/{exit}' "${BASH_SOURCE[0]}" | grep -v '^[[:space:]]*#' || true)"
+assert_contains "$_term_body" '=~ ^[0-9]+$' "term walker returns without signalling when the suite PID is unset or non-numeric"
+assert_contains "$_term_body" '"$p" != "$SOLEUR_TEST_SUITE_PID"' "term walker stops at the suite's own PID"
+assert_contains "$_term_body" '"$p" -gt 1' "term walker stops at pid 1"
+
 echo "TS16: unknown arguments -> exit 64 before any fetch"
 FAKE_ISSUES="$ISSUES_MIXED" FAKE_GH_ISSUES=ok run_main next --bogus
 assert_eq "64" "$RC" "next --bogus exits 64"
