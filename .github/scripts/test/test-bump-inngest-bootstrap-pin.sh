@@ -65,7 +65,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=692   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=697   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -397,7 +397,10 @@ run_bump() {
   # RB_PUSH_URL / RB_GH_TOKEN (S4, #9597) let a row take the REAL-remote path:
   # RB_PUSH_URL="" is an empty BUMP_PUSH_URL (the script treats it as unset),
   # and RB_GH_TOKEN picks the credential the shape guard judges.
-  env BUMP_REPO_DIR="$F_REPO" BUMP_PUSH_URL="${RB_PUSH_URL-$F_ORIGIN}" \
+  # RB_INHERIT_AUTH_HDR puts an EXPORTED AUTH_HDR in the SCRIPT's environment only (not in this harness's own git calls above).
+  local -a inh=()
+  [[ -n "${RB_INHERIT_AUTH_HDR:-}" ]] && inh=(AUTH_HDR="$RB_INHERIT_AUTH_HDR")
+  env "${inh[@]}" BUMP_REPO_DIR="$F_REPO" BUMP_PUSH_URL="${RB_PUSH_URL-$F_ORIGIN}" \
       GH_TOKEN="${RB_GH_TOKEN-fixture-installation-token}" \
       MOCK_CRANE_MAP="$MOCK_CRANE_MAP" MOCK_CRANE_LOG="$MOCK_CRANE_LOG" \
       MOCK_CRANE_CONFIG="$MOCK_CRANE_CONFIG" \
@@ -1205,6 +1208,8 @@ if [[ -n "${GIT_CONFIG_VALUE_0+x}" && "${GIT_CONFIG_KEY_0:-}" != commit.gpgsign 
   fi
 fi
 printf 'sub=%s net=%s argv=%s url=%s env=%s\n' "${sub:-none}" "$net" "$argv" "$url" "$env" >> "${SHIM_LOG:?}"
+# Whether the script's own AUTH_HDR variable is in the child's ENVIRONMENT (a verdict word, never the value).
+if [[ -n "${AUTH_HDR+x}" ]]; then echo set; else echo unset; fi >> "${SHIM_LOG}.ah"
 args=("$@")
 if [[ "$net" == 1 ]]; then
   for i in "${!args[@]}"; do
@@ -1279,6 +1284,26 @@ assert_origin_branch 'g1.argv:branch' 'soleur/inngest-pin-v1.1.38' present
   || fail 'g1.argv:header-only-on-remote-calls' "a non-remote git call carried the header"
 out_lacks 'g1.argv:no-token-in-output' "$SYN_TOK"
 out_lacks 'g1.argv:no-b64-in-output'   "$SYN_B64"
+# AUTH_HDR is a shell variable, never exported: not in any git child's environment...
+[[ "$(wc -l < "$SHIM_LOG_F.ah")" -ge 2 && "$(grep -c '^set$' "$SHIM_LOG_F.ah")" == 0 ]] && pass 'g1.argv:AUTH_HDR-not-in-child-env' \
+  || fail 'g1.argv:AUTH_HDR-not-in-child-env' "git children saw AUTH_HDR=$(sort "$SHIM_LOG_F.ah" | uniq -c | tr '\n' ' ')"
+# ...even when the CALLER's environment already exports a variable of that name: `AUTH_HDR=""` alone would keep the
+# inherited export attribute and hand the base64 to every child, so the script unsets it before assigning it.
+new_fixture_repo inherit
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+RB_INHERIT_AUTH_HDR="inherited-synthetic-value"
+run_shimmed inherit local "$SYN_TOK" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+unset RB_INHERIT_AUTH_HDR
+assert_rc     'g1.inherit:exit' 0
+assert_result 'g1.inherit:result' opened
+[[ "$(shim_count 'net=1 .*env=header-ok')" == 2 ]] && pass 'g1.inherit:header-still-built-for-both-remote-calls' \
+  || fail 'g1.inherit:header-still-built-for-both-remote-calls' "the script did not build its own header: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
+[[ "$(wc -l < "$SHIM_LOG_F.ah")" -ge 2 && "$(grep -c '^set$' "$SHIM_LOG_F.ah")" == 0 ]] && pass 'g1.inherit:inherited-AUTH_HDR-not-passed-to-children' \
+  || fail 'g1.inherit:inherited-AUTH_HDR-not-passed-to-children' "git children saw AUTH_HDR=$(sort "$SHIM_LOG_F.ah" | uniq -c | tr '\n' ' ')"
 
 # --- wire rows: the header is actually SENT, and judged by a loopback server ---
 # A python3 loopback server answers every request 404 and appends one verdict

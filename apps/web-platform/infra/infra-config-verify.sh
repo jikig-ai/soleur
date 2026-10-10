@@ -124,8 +124,9 @@ HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac
 # HTTP_CODE=000 arm below: that arm says "the webhook LISTENER ITSELF IS DOWN ... P1", a cause nobody
 # measured when the request was never sent. The verdict is recorded here and ACTED ON at the top of the
 # first attempt (right after that attempt's truncation of the status file, so the red-gate alert step
-# reads no frame); it has its own message and exit 1 (the same red the old argv form produced), so the
-# refusal cannot read as a listener outage. Value-free: it names only the variable.
+# reads no frame and is told why by the `credential_refused` output); it has its own message and exit 1
+# (the same red the old argv form produced), so the refusal cannot read as a listener outage.
+# Value-free: it names only the variable.
 _REFUSED=""
 for _cred in HMAC CF_ACCESS_ID CF_ACCESS_SECRET; do
   # The token alphabet of the library and the other inline copies, judged in the C locale (a subshell:
@@ -150,6 +151,10 @@ for attempt in 1 2 3; do
     echo "infra-config-verify: ${_REFUSED} unusable" >&2
     echo "SOLEUR_CREDENTIAL_REFUSED script=infra-config-verify reason=token_shape" >&2
     echo "::error::a deploy-webhook credential (the request signature, the CF Access id or secret) failed the shape check — the status poll could NOT run and NO request was made. The credential is unusable; this says nothing about the listener, so do not read it as a listener outage and do not re-run with allow_missing_status_endpoint."
+    # The status file was just truncated, so the red-gate alert step would read an EMPTY frame and file
+    # "the listener may be down". This output is its own class there: the alert maps it to the existing
+    # `ungraded` arm (nothing was measured) ahead of the frame-derived arms.
+    echo "credential_refused=true" >> "$GITHUB_OUTPUT"
     exit 1
   fi
   # `--disable` FIRST (position is load-bearing: it aborts ~/.curlrc parsing), then `--noproxy '*'`

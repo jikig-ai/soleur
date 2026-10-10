@@ -100,9 +100,9 @@ jobs:
           if [[ -z "$fail_mode" ]]; then
             # The webhook signature and the Cloudflare Access pair reach curl on its stdin config (ADR-280),
             # and the HMAC key reaches a python3 child in its environment: none of the four is on any
-            # argument list. The library is sourced HERE, inside the arm that uses it, so the three
-            # "secrets unset" paths above never need it; a missing library is a hard, visible failure
-            # (never an argv fallback).
+            # argument list. The library is sourced HERE, inside the arm that uses it, so the "secrets
+            # unset" path above (one condition over the three variables) never needs it; a missing
+            # library is a hard, visible failure (never an argv fallback).
             # shellcheck source=/dev/null
             source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
             # `|| SIG=""` sends an empty key or a missing python3 to the pre-guard below, not to a mute abort.

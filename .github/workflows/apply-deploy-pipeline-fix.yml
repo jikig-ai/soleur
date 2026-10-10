@@ -598,7 +598,9 @@ jobs:
           # DEGRADES LOUDLY, NEVER BLOCKS — same contract as `rendered_digest` below, for the
           # same reason: this step STRENGTHENS verification, it is not the verification. Failing
           # the apply because an optional pre-reading could not be taken would add a new failure
-          # mode to the sole no-SSH remediation path.
+          # mode to the sole no-SSH remediation path. The single exception is the library load
+          # below (`source ... || exit 1`): it can block, but the job has a full checkout, so a
+          # missing library is unreachable in practice, and a loud failure beats an argv fallback.
           #
           # `set +e` is REQUIRED, not redundant: GitHub runs `run:` blocks as `bash -e {0}`, so
           # errexit is ON before the first line executes and `set -uo pipefail` does not turn it
@@ -829,11 +831,15 @@ jobs:
           # same red as any failed read, after 3 attempts), never a green.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
 
           for attempt in 1 2 3; do
+            # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
             HMAC="$(printf '' | bc_hmac_sha256_hex WEBHOOK_SECRET)" || HMAC=""
             HTTP_CODE=$(bc_curl apply-deploy-pipeline-fix 'X-Signature-256:sha256=:HMAC' 'CF-Access-Client-Id::CF_ACCESS_ID' 'CF-Access-Client-Secret::CF_ACCESS_SECRET' -- \
               -s -o /tmp/deploy-status-response.txt -w '%{http_code}' \
@@ -1845,6 +1851,10 @@ jobs:
           # frame that looks healthy on exactly these failures. Empty on every other red path,
           # which is what selects the pre-existing frame-derived branches.
           STABILITY_VERDICT: ${{ steps.infra_config_gate.outputs.stability_verdict }}
+          # #9597 — set by the verify script when a deploy-webhook credential failed the shape check and
+          # NO request was made: the status file is empty by construction, which the frame-derived arms
+          # below would misread as a dead listener. Handled as `ungraded`, before them.
+          CREDENTIAL_REFUSED: ${{ steps.infra_config_gate.outputs.credential_refused }}
           # #7104 P0-B — pass 1's verdict, read by the "gate ran and did not fail" arm so it can
           # name `unadjudicated` explicitly instead of describing a delivery failure that the gate
           # never reported.
@@ -1999,6 +2009,15 @@ jobs:
             exit 0
           fi
 
+          # A REFUSED CREDENTIAL IS NOT A LISTENER OUTAGE (#9597, ADR-280). The verify script made zero
+          # requests and truncated the status file, so the parse check below would read an empty frame
+          # and file "the listener may be down" (a P1 with the opposite remedy). Nothing was measured:
+          # the same `ungraded` class as the gate-never-ran arm, ahead of every frame-derived arm.
+          if [[ "${CREDENTIAL_REFUSED:-}" == "true" ]]; then
+            infra_config_red_alert "The infra-config gate REFUSED a deploy-webhook credential (the request signature, the Cloudflare Access id or the Cloudflare Access secret failed the shape check) and made NO request, so nothing has graded whether the config activated on the host. The webhook listener was never probed: do not read this as an outage, a delivery failure or an activation failure — it is ungraded. The verify step's log names the variable (never its value); fix that secret and re-run." "ungraded" || true
+            exit 0
+          fi
+
           # REACHABILITY FIRST. This step fires on ANY failure of the gate, and the gate has a
           # branch (000/502/503) whose recovery guidance is the OPPOSITE of the normal one: there,
           # the webhook LISTENER is down, `-replace` on the handler bootstrap IS the documented
@@ -2137,8 +2156,11 @@ jobs:
           # existing red arms below already treat as a failed read or a rejected webhook.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
 
           # #6512 Fix 2a: source the actionable-alert emitter (fail-open) called at every terminal
@@ -2155,6 +2177,7 @@ jobs:
           # GET /hooks/deploy-status (HMAC over empty body + CF-Access).
           get_status() {
             local sig
+            # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
             sig="$(printf '' | bc_hmac_sha256_hex WEBHOOK_SECRET)" || sig=""
             bc_curl apply-deploy-pipeline-fix 'X-Signature-256:sha256=:sig' 'CF-Access-Client-Id::CF_ACCESS_ID' 'CF-Access-Client-Secret::CF_ACCESS_SECRET' -- \
               -s --max-time 15 -o /tmp/redeploy-status.json -w '%{http_code}' \
@@ -2271,6 +2294,7 @@ jobs:
           # (single-host reload; fan-out is a dormant no-op at single-host, ADR-068).
           # ci-deploy.sh's flock dedupes any concurrent web-platform-release deploy.
           PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s"}' "$TARGET_TAG")
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
           POST_SIG="$(printf '%s' "$PAYLOAD" | bc_hmac_sha256_hex WEBHOOK_SECRET)" || POST_SIG=""
           POST_CODE=$(bc_curl apply-deploy-pipeline-fix 'X-Signature-256:sha256=:POST_SIG' 'CF-Access-Client-Id::CF_ACCESS_ID' 'CF-Access-Client-Secret::CF_ACCESS_SECRET' -- \
             -s -o /dev/null -w '%{http_code}' --max-time 30 \
@@ -2428,12 +2452,16 @@ jobs:
           # same terminal red as any other failed read.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
 
           PERSISTENT=""
           for attempt in 1 2 3; do
+            # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
             HMAC="$(printf '' | bc_hmac_sha256_hex WEBHOOK_SECRET)" || HMAC=""
             HTTP_CODE=$(bc_curl apply-deploy-pipeline-fix 'X-Signature-256:sha256=:HMAC' 'CF-Access-Client-Id::CF_ACCESS_ID' 'CF-Access-Client-Secret::CF_ACCESS_SECRET' -- \
               -s -o /tmp/deploy-status-journald.txt -w '%{http_code}' \

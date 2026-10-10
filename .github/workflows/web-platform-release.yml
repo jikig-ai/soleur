@@ -1343,6 +1343,8 @@ jobs:
           # sourced): the signature and the Cloudflare Access pair ride curl's stdin config, never its
           # argument list. A value outside the token alphabet makes zero requests, prints the marker,
           # and returns 2, which `|| echo "000"` folds into the degraded-permissive arm below.
+          # ADR-280 inline-wrapper clause: trailing whitespace of the Cloudflare Access pair is trimmed as bc_ok does (the HMAC key is never trimmed; interior whitespace is still refused).
+          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; printf -v "$_v" '%s' "${_t%"${_t##*[![:space:]]}"}"; done
           _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           _sig_curl() {
             local _sigvar="${1:-}"
@@ -1352,6 +1354,7 @@ jobs:
             _bearer_ok "${CF_ACCESS_CLIENT_SECRET:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_SECRET unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape" >&2; return 2; }
             curl --disable --noproxy '*' "$@" --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "${!_sigvar}" "${CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET}")
           }
+          # shellcheck disable=SC2034  # read by NAME inside _sig_curl (indirect expansion)
           SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
           HTTP_CODE=$(_sig_curl SIG -s --max-time 10 \
             -o /tmp/preflight-body \
@@ -1520,6 +1523,8 @@ jobs:
           # Cloudflare Access pair ride curl's stdin config, never its argument list. A refused value
           # makes zero requests and returns 2, so the assignment below aborts the step red before
           # anything is sent (production stays on the previous build).
+          # ADR-280 inline-wrapper clause: trailing whitespace of the Cloudflare Access pair is trimmed as bc_ok does (the HMAC key is never trimmed; interior whitespace is still refused).
+          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; printf -v "$_v" '%s' "${_t%"${_t##*[![:space:]]}"}"; done
           _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           _sig_curl() {
             local _sigvar="${1:-}"
@@ -1529,13 +1534,14 @@ jobs:
             _bearer_ok "${CF_ACCESS_CLIENT_SECRET:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_SECRET unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape" >&2; return 2; }
             curl --disable --noproxy '*' "$@" --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "${!_sigvar}" "${CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET}")
           }
+          # shellcheck disable=SC2034  # read by NAME inside _sig_curl (indirect expansion)
           SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
           HTTP_CODE=$(_sig_curl SIG -s -o /dev/null -w '%{http_code}' \
             --max-time 30 \
             -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "https://deploy.soleur.ai/hooks/deploy")
+            "https://deploy.soleur.ai/hooks/deploy") || { rc=$?; echo "::error::Deploy webhook request was not sent or did not complete (rc=${rc}): a credential refusal (the SOLEUR_CREDENTIAL_REFUSED line above names the variable) or a transport failure. Production stays on the previous build."; exit "$rc"; }
           if [[ "$HTTP_CODE" != "202" ]]; then
             echo "::error::Deploy webhook rejected (HTTP $HTTP_CODE)"
             exit 1
@@ -1559,6 +1565,8 @@ jobs:
           # Cloudflare Access pair ride curl's stdin config, never its argument list. A refused value
           # makes zero requests and prints the marker on every attempt; the loop then ends at the
           # poll-budget error below, the same terminal red as any other failed read.
+          # ADR-280 inline-wrapper clause: trailing whitespace of the Cloudflare Access pair is trimmed as bc_ok does (the HMAC key is never trimmed; interior whitespace is still refused).
+          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; printf -v "$_v" '%s' "${_t%"${_t##*[![:space:]]}"}"; done
           _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           _sig_curl() {
             local _sigvar="${1:-}"
@@ -1568,6 +1576,7 @@ jobs:
             _bearer_ok "${CF_ACCESS_CLIENT_SECRET:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_SECRET unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape" >&2; return 2; }
             curl --disable --noproxy '*' "$@" --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "${!_sigvar}" "${CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET}")
           }
+          # shellcheck disable=SC2034  # read by NAME inside _sig_curl (indirect expansion)
           SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
           for i in $(seq 1 "$STATUS_POLL_MAX_ATTEMPTS"); do
             # Capture HTTP code alongside body for easier triage (#2205).
@@ -1780,6 +1789,8 @@ jobs:
           # ADR-280 inline wrapper (this job has no checkout by design): the key rides curl's stdin
           # config, never its argument list. A key outside the token alphabet makes zero requests,
           # prints the marker, and returns 2, which `|| echo "000"` folds into the failure line below.
+          # ADR-280 inline-wrapper clause: trailing whitespace of the Resend key is trimmed as bc_ok does (interior whitespace is still refused).
+          for _v in RESEND_API_KEY; do _t="${!_v:-}"; printf -v "$_v" '%s' "${_t%"${_t##*[![:space:]]}"}"; done
           _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           _bearer_curl() {
             local _tokvar="${1:-}"
@@ -2591,6 +2602,8 @@ jobs:
           # config, never its argument list. A key outside the token alphabet makes zero requests,
           # prints the marker, and returns 2, which `|| echo "000"` folds into the failure arm below
           # (delivered=0, so the Sentry mirror step still fires).
+          # ADR-280 inline-wrapper clause: trailing whitespace of the Resend key is trimmed as bc_ok does (interior whitespace is still refused).
+          for _v in RESEND_API_KEY; do _t="${!_v:-}"; printf -v "$_v" '%s' "${_t%"${_t##*[![:space:]]}"}"; done
           _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           _bearer_curl() {
             local _tokvar="${1:-}"

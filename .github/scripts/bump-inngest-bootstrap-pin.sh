@@ -99,13 +99,22 @@ case "$-" in
 esac
 export LC_ALL=C
 
-# Same leak class as the xtrace refusal: git's own trace channels print the
-# request (the Authorization header of the push; formerly the full
-# x-access-token URL) to stderr. Scrub them unconditionally so a debugging
-# `env:` line cannot land the live token in logs.
+# Same leak class as the xtrace refusal: git's trace channels print the
+# request to stderr. Measured (synthetic header, loopback server, count-only): GIT_TRACE
+# prints command and remote lines only (the header rides the environment, not
+# argv), GIT_TRACE_CURL redacts the Authorization header unless GIT_TRACE_REDACT=0,
+# and with GIT_TRACE_REDACT=0 it prints the header value in full (formerly the
+# full x-access-token URL appeared on the command lines too). Scrub them
+# unconditionally so a debugging `env:` line cannot land the live token in logs.
 unset GIT_TRACE GIT_TRACE_PACKET GIT_TRACE_PERFORMANCE GIT_TRACE_SETUP \
   GIT_TRACE_CURL GIT_TRACE_CURL_NO_DATA GIT_TRACE_REDACT GIT_TRACE2 \
   GIT_TRACE2_PERF GIT_TRACE2_EVENT GIT_CURL_VERBOSE GIT_HTTP_TRACE_AUTH_HEADER
+
+# AUTH_HDR (the push credential's header, built below) must be a shell variable only. A plain `AUTH_HDR=""`
+# would KEEP the export attribute of an AUTH_HDR the caller's environment already carries (an assignment does
+# not unexport), and every child (git, gh, crane) would then hold the base64 in its environment. Unset here,
+# before the first child process, so the later assignments create a fresh, unexported variable.
+unset AUTH_HDR
 
 # The soleur-infra App's bot user (id 335404629), switched in place from
 # soleur-ai[bot] in #9262. BOT_NAME/BOT_EMAIL are the commit identity and the
@@ -217,7 +226,7 @@ REPO_DIR=$(cd "$REPO_DIR" 2>/dev/null && pwd) \
 git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 \
   || die args "BUMP_REPO_DIR '$REPO_DIR' is not a git repository"
 REPO="${REPO:-${GITHUB_REPOSITORY:-jikig-ai/soleur}}"
-AUTH_HDR=""   # a shell variable, never exported and never read from the caller's environment
+AUTH_HDR=""   # a shell variable, never exported and never read from the caller's environment (unset up top, see there)
 if [[ -n "${BUMP_PUSH_URL:-}" ]]; then
   PUSH_URL="$BUMP_PUSH_URL"
 else
