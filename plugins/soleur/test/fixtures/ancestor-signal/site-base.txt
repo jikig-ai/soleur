@@ -1,0 +1,3 @@
+# fixture data, never executed: one P line (identity reference)
+echo before
+[ -f "$FX/x" ] && kill -9 "$PPID"

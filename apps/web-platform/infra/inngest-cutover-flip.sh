@@ -251,7 +251,7 @@ flag_set() {
     "$CUTOVER_FLAG_SET_CMD" "$value"
   else
     doppler secrets set INNGEST_CUTOVER_FLIP "$value" \
-      --project soleur-inngest --config prd --silent
+      --project soleur-inngest --config "${DOPPLER_CONFIG:-prd}" --silent
   fi
 }
 

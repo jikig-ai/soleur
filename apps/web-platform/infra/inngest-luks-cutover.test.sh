@@ -830,6 +830,10 @@ if [ "$_ms" -eq 0 ]; then ok "mounted_from does NOT match the SHADOWED mapper ro
 _dw_total="$(grep -cE '^[^#]*doppler secrets (set|delete) ' "$SUT")"
 _dw_bad="$(grep -E '^[^#]*doppler secrets (set|delete) ' "$SUT" | grep -cv '>/dev/null' || true)"
 if [ "$_dw_total" -ge 3 ] && [ "$_dw_bad" -eq 0 ]; then ok "structural: all ${_dw_total} Doppler writes discard stdout (it lists every secret, and stdout is shipped off-box)"; else no "structural: ${_dw_bad} of ${_dw_total} Doppler writes leak stdout"; fi
+# #9175: every Doppler call resolves the config name from DOPPLER_CONFIG (env-defaulted prd) —
+# never a literal name — so the rehearsal host's scratch config reaches the flag/pointer writes.
+_dcfg_bad="$(grep -E '^[^#]*doppler secrets ' "$SUT" | grep -cv -- '--config "${DOPPLER_CONFIG:-prd}"' || true)"
+if [ "$_dcfg_bad" -eq 0 ]; then ok "structural: every doppler secrets call is --config \"\${DOPPLER_CONFIG:-prd}\" (#9175)"; else no "structural: ${_dcfg_bad} doppler secrets call(s) carry a literal --config"; fi
 # The seam list is DERIVED, not trusted: every LUKS_* read in the body is in the gate's unset list.
 # A name the script ASSIGNS is not a seam (the environment value is overwritten), so it is excluded.
 _assigned="$(grep -oE '^[[:space:]]*LUKS_[A-Z_]+=' "$SUT" | tr -d ' =' | LC_ALL=C sort -u)"

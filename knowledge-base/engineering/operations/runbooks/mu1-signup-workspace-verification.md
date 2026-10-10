@@ -14,7 +14,7 @@ Multi-User Readiness Gate item MU1 (issue [#1448][i1448]). Run it:
   `server/sandbox.ts`, `supabase/migrations/`, or `infra/ci-deploy.sh`.
 - On demand when the audit script at
   `apps/web-platform/infra/audit-bwrap-uid.sh` or the integration test
-  at `apps/web-platform/test/mu1-integration.test.ts` changes.
+  at `apps/web-platform/test/mu1.integration.test.ts` changes.
 
 The enforcing roadmap entry is `knowledge-base/product/roadmap.md`
 "Pre-Phase 4: Multi-User Readiness Gate", row MU1.
@@ -25,8 +25,8 @@ The enforcing roadmap entry is `knowledge-base/product/roadmap.md`
 
 | # | Criterion | Primary evidence |
 |---|-----------|------------------|
-| AC-1 | Signup triggers automatic workspace-row creation | `MU1 AC-1` describe block in `mu1-integration.test.ts` (requires `MU1_INTEGRATION=1`) |
-| AC-2 | Workspace clones the user's connected GitHub repo | `MU1 AC-2` describe block in `mu1-integration.test.ts` (requires `MU1_FIXTURE_REPO_URL` + `MU1_FIXTURE_INSTALLATION_ID` + `MU1_INTEGRATION=1` for the full `doppler run` wrap). Manual staging fallback retained in step 4 below. |
+| AC-1 | Signup triggers automatic workspace-row creation | `MU1 AC-1` describe block in `mu1.integration.test.ts` (requires `MU1_INTEGRATION=1`) |
+| AC-2 | Workspace clones the user's connected GitHub repo | `MU1 AC-2` describe block in `mu1.integration.test.ts` (requires `MU1_FIXTURE_REPO_URL` + `MU1_FIXTURE_INSTALLATION_ID` + `MU1_INTEGRATION=1` for the full `doppler run` wrap). Manual staging fallback retained in step 4 below. |
 | AC-3 | Latest Soleur plugin is installed in the workspace | `MU1 AC-3` describe block (always runs) |
 | AC-4 | Workspace is isolated per user | `MU1 AC-4` describe block (always runs) + `audit-bwrap-uid.sh` |
 
@@ -62,7 +62,7 @@ Runs from any worktree. No secrets, no network.
 
 ```bash
 cd apps/web-platform
-./node_modules/.bin/vitest run test/mu1-integration.test.ts
+./node_modules/.bin/vitest run test/mu1.integration.test.ts
 ```
 
 Expected output: 4 passed, 2 skipped (AC-1 gated, AC-2 gated).
@@ -76,7 +76,7 @@ enforces; do not run this with production credentials.
 ```bash
 cd apps/web-platform
 MU1_INTEGRATION=1 doppler run -p soleur -c dev -- \
-  ./node_modules/.bin/vitest run test/mu1-integration.test.ts
+  ./node_modules/.bin/vitest run test/mu1.integration.test.ts
 ```
 
 Expected output:

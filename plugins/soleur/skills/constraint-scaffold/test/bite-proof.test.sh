@@ -147,7 +147,7 @@ fi
 # Pin: the INT/TERM arm clears EXIT inside itself and exits 143 (cleanup runs once; a TERM is a
 # property, not an accident).
 cases=$((cases + 1))
-if printf '%s\n' "$WT_BODY" | grep -qF "trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM"; then
+if printf '%s\n' "$WT_BODY" | grep -cF >/dev/null "trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM"; then
   ok "pin: INT/TERM arm is '_wt_cleanup interrupted; trap - EXIT; exit 143'"
 else
   bad "pin: INT/TERM arm missing or not the prescribed shape"
@@ -497,7 +497,7 @@ else
   bad "C3a: pointer count=$(count_marker "$FX_A/CLAUDE.md" "$POINTER_MARKER") AGENTS.md exists=$([[ -e "$FX_A/AGENTS.md" ]] && echo yes || echo no)"
 fi
 cases=$((cases + 1))
-if head -1 "$FX_A/CLAUDE.md" | grep -qF '# Fixture project' && grep -qF 'Prior instructions.' "$FX_A/CLAUDE.md"; then
+if head -1 "$FX_A/CLAUDE.md" | grep -cF >/dev/null '# Fixture project' && grep -qF 'Prior instructions.' "$FX_A/CLAUDE.md"; then
   ok "C3a: prior CLAUDE.md content preserved (append, not replace)"
 else
   bad "C3a: prior CLAUDE.md content lost"

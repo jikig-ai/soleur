@@ -1,0 +1,2 @@
+# fixture data, never executed: kill invoked by absolute path; one P
+/bin/kill -9 "$PPID"

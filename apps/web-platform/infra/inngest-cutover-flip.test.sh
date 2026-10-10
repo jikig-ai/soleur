@@ -1102,6 +1102,10 @@ assert_contains "the unit sets SyslogIdentifier (else journald tags it 'doppler'
 UNIT_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$UNIT_SRC" | sed 's/\\$//' | tr -d '\n')"
 assert_absent "the SHIPPED unit does not pass --fixture-seams (that would disable the gate)" \
   "$UNIT_EXEC" "--fixture-seams"
+# #9175: the script's real Doppler write path resolves the config name from DOPPLER_CONFIG
+# (env-defaulted to prd) — never a literal name — so the rehearsal host's scratch config reaches it.
+assert_contains "flag_set's doppler write is --config \"\${DOPPLER_CONFIG:-prd}\" (#9175)" \
+  "$(sed -n '/doppler secrets set INNGEST_CUTOVER_FLIP/,/[^\\]$/p' "$TARGET" | tr -d '\n')" '--config "${DOPPLER_CONFIG:-prd}"'
 
 # --- #7761 REVIEW ROUND 2: what the sandboxing block can still break at runtime ---------------
 #

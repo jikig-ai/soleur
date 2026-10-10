@@ -90,7 +90,7 @@ run_case neither   no  no  0   # nothing discovered — the pre-existing message
 d="$ROOT/spec-only"
 out="$( cd "$d" && bash "$SUT" --dry-run demo 2>&1 )"
 cases=$((cases + 1))
-if printf '%s' "$out" | grep -q 'but NO plan\.'; then
+if printf '%s' "$out" | grep -c >/dev/null 'but NO plan\.'; then
   pass "spec-only warning names the missing class (plan)"
 else
   fail "spec-only warning does not name the missing class: '$out'"
@@ -98,7 +98,7 @@ fi
 d="$ROOT/plan-only"
 out="$( cd "$d" && bash "$SUT" --dry-run demo 2>&1 )"
 cases=$((cases + 1))
-if printf '%s' "$out" | grep -q 'but NO spec\.'; then
+if printf '%s' "$out" | grep -c >/dev/null 'but NO spec\.'; then
   pass "plan-only warning names the missing class (spec)"
 else
   fail "plan-only warning does not name the missing class: '$out'"

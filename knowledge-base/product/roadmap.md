@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-08
+last_updated: 2026-10-09
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -435,7 +435,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L28 | Reconcile /ai-cmo/ cost figure ($240K title vs $290K meta vs ~$294K table) — growth audit 2026-10-05 | P2 | [#9499](https://github.com/jikig-ai/soleur/issues/9499) | Not started |
 | L29 | One model-support claim across homepage, pricing, getting-started and vision (Claude-only vs Grok Build vs "model-agnostic") — growth audit 2026-10-05 | P2 | [#9500](https://github.com/jikig-ai/soleur/issues/9500) | Not started |
 | L30 | One canonical Company-as-a-Service origin line across glossary, pillar and vision; replace weak glossary citation — growth audit 2026-10-05 | P2 | [#9501](https://github.com/jikig-ai/soleur/issues/9501) | Not started |
-| L31 | Retire the plaintext Redis AOF backstop volume `hcloud_volume.inngest_redis` (encryption at rest, #6894 / ADR-142) before its non-extendable ledger exception expires 2026-10-22: detach, zero with read-back, destroy via a reviewer-gated dispatch; records converge only after the Hetzner API shows the volume gone | P2 | [#8285](https://github.com/jikig-ai/soleur/issues/8285), [#6894](https://github.com/jikig-ai/soleur/issues/6894) | In progress |
+| L31 | Retire the plaintext Redis AOF backstop volume `hcloud_volume.inngest_redis` (encryption at rest, #6894 / ADR-142) before its non-extendable ledger exception expires 2026-10-22: detach, zero with read-back, destroy via a reviewer-gated dispatch; records converge only after the Hetzner API shows the volume gone | P2 | [#8285](https://github.com/jikig-ai/soleur/issues/8285), [#6894](https://github.com/jikig-ai/soleur/issues/6894) | Done — volume destroyed 2026-10-09 (PR A [#9784](https://github.com/jikig-ai/soleur/pull/9784), PR B [#9877](https://github.com/jikig-ai/soleur/pull/9877)) |
 
 #### Competitive-Parity Bets (vs Viktor)
 

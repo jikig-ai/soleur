@@ -2559,7 +2559,7 @@ cases=$((cases + 1))
 _mut_src=$(python3 -c '
 import sys
 s = sys.stdin.read()
-old = "if [[ -d \"$_p\" ]]; then _p=\"${_p%/}/\"; fi"
+old = "if _affected_probe d \"$_p\"; then _p=\"${_p%/}/\"; fi"
 assert s.count(old) == 1, s.count(old)
 sys.stdout.write(s.replace(old, ":"))
 ' <<<"$_edge_src") || _mut_src=""

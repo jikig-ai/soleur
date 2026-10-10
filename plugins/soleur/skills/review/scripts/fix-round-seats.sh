@@ -91,7 +91,7 @@ MIGRATION_RE='(/migrations/|/migrate/|\.sql$)'
 PERSIST_RE='(apps/web-platform/(server|supabase|lib)/)'
 PERF_RE='(apps/web-platform/(server|supabase)/|inngest|cron|queue|worker|bench|perf)'
 AGENT_SURFACE_RE='(apps/web-platform/(app|components)/|plugins/soleur/(agents|skills|commands|docs)/)'
-TEST_RE='(\.test\.|\.spec\.|_test\.|_spec\.|(^|/)test_[^/]*\.py$|__tests__/|(^|/)tests?/|(^|/)spec/|Tests\.swift$|\.e2e|(^|/)e2e/|\.cy\.)'
+TEST_RE='(\.test\.|\.spec\.|_test\.|_spec\.|(^|/)test_[^/]*\.py$|__tests__/|(^|/)tests?/|(^|/)spec/|Tests\.swift$|\.e2e\.[jt]sx?$|(^|/)e2e/|\.cy\.)'
 SHELL_RE='\.(sh|bash|zsh)$'
 ANTISLOP_RE='(apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$|apps/web-platform/server/.*\.(ts|tsx)$|plugins/soleur/docs/.*\.(njk|css)$)'
 

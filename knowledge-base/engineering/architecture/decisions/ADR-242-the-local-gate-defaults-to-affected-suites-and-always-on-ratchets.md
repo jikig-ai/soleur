@@ -535,3 +535,44 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     is a reviewed act" is a property worth keeping). Index declarations (G3/G5) ship in their own commit and are separable: dropping them changes no
     runner-only line. They serve about 3.5% of the measured demand (5 of the commits that fit the grammar touched the index at all: 4 array blocks, 1 entry) and
     were kept because the operator named "a new AFFECTED_*_PATHS array" as registration-only.
+
+## Amendment — 2026-10-09 (#9812)
+
+21. **The derive's per-registration classification is a cacheable pure function; verdicts are not.** The
+    `_aff_stream` walk paid one fresh `_affected_classify` per registration on every local run (~150 s CPU
+    measured on a contended host — the dominant cost of the local fast tier, #9763 arc). A classify is a pure
+    function of (label, argv, the derive code, the environment channels that reach it, and the file contents +
+    existence probes it consults), so `scripts/lib/test-affected-derive-cache.sh` caches its OUTPUT — class,
+    ordered edge set, suite file — as one record per registration under
+    `.soleur/cache/affected-derive/v<schema>/`, keyed on schema + derive-code hash (the EXTRACTED derive span,
+    not the whole runner — an unrelated `test-all.sh` edit no longer flushes every record; both anchor legs
+    must extract non-empty or the whole file hashes, a flush never a stale serve) + environment fingerprint
+    (BASH_VERSION, the locale set, glob/case shell options, IFS — a record minted under one semantics cannot
+    replay under another) + label + length-prefixed argv, and validates a hit by re-hashing every recorded read
+    (`git hash-object --no-filters --stdin-paths`, one batched fork per record) and re-running every recorded
+    `-e`/`-f`/`-d` probe. Any drift, a malformed or corrupted record (an `end` trailer plus a `sum` cksum over
+    the body — a cut file can never serve a partial edge set and an in-body bit-flip cannot ride structure
+    checks alone), a schema or worktree or cwd mismatch, an unwritable cache dir, or a missing git re-derives
+    that record only — the cache is advisory and can never narrow a selection.
+    `SOLEUR_AFFECTED_DERIVE_CACHE=0` is the kill switch. The runner instruments the derive span
+    (`_affected_probe`, `_affected_rec_read`, inside the extraction anchors so the derive suite carries them)
+    rather than duplicating the algorithm, so the recorded input set is the real one; the `[[ -d "$PWD" ]]`
+    `_wt_missing_die` liveness probe is named-exempt, and the `-c` payload word-split is `set -f` so glob
+    tokens can never pathname-expand into an unrecordable directory listing. The `_FE_FILES` memo carries a
+    parallel `_FE_PROBESETS` slice so a memo consumer's record inherits the extractor's probes — without it a
+    created-at-recorded-miss path inside a shared helper invalidated only the extractor (review P1). What is
+    cached is selection METADATA only — `_diff_touches` still runs fresh per record and suite verdicts are
+    never memoised (the twice-rejected suite-result shape, #7454 / #9804 Proposal 2). The walk emits
+    `AFFECTED_DERIVE_CACHE state=/hits=/misses=/derived=` on stderr (stdout is the bench's machine-compared
+    surface) so a dead cache is visible rather than silent. Identity gate: `affected-prepass-bench
+    --added-edges` exits 0 with byte-identical `AFFECTED_SELECTED` cold AND warm (the bench's own second probe
+    serves the warm arm); measured warm derive ~11–20 s CPU vs ~88–126 s base (6.3–7.8x) on probe 2, ~9 s wall
+    vs ~2 min locally, cold arm ~27–71 s slower once per record per tree-state under contention. Per-record
+    files (not one JSON) keep a single corrupt record's blast radius at one registration; `.soleur/`
+    (gitignored, per-worktree) over XDG because a record is meaningless outside its worktree and the
+    `worktree`+`cwd` fields refuse a moved checkout or a subdirectory invocation. The input-site census row in
+    `scripts/test-affected-derive-cache.test.sh` fails on any future probe, file read, or out-of-span
+    derive-family helper added to the derive span without recording — the standing guard against a silent
+    invalidation weakening. Residual accepted and documented: a file edited mid-walk can mint a torn record
+    (edges of content v1 keyed to hash v2, sticky until the next change) — hashing at read time would cost the
+    per-file forks the design exists to avoid.

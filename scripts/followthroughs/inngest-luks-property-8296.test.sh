@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Harness for inngest-luks-property-8296.sh (#8296 PR-2, Guard 3) and the rollback-NEXT placement
-# check for scripts/cutover-inngest.sh (AC-32).
+# Harness for inngest-luks-property-8296.sh (#8296 PR-2, Guard 3). (The rollback-NEXT placement check
+# for scripts/cutover-inngest.sh, AC-32, was deleted with op=luks-rollback by #8285 PR B.)
 #
 # WHAT THE PROBE IS. A NOTIFY-ONLY daily check enrolled on tracker #8285: the ledger's claim for
 # hcloud_volume.inngest_redis_luks must agree with the device the Inngest store is measured on.
@@ -42,7 +42,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PROBE_NAME="inngest-luks-property-8296.sh"
 PROBE_SRC="$HERE/$PROBE_NAME"
-CUTOVER_SRC="$REPO/scripts/cutover-inngest.sh"
 # The shared probe-row predicate (#8846). The sandbox copies it next to the probe copy, exactly as
 # the probe resolves it from its own repo root; a case can skip the copy (C_LIB=__none__).
 LIB_SRC="$REPO/scripts/lib/inngest-probe-row.sh"
@@ -54,7 +53,6 @@ pass() { printf '  PASS: %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
 [[ -f "$PROBE_SRC" ]] || { echo "FATAL: probe not found at $PROBE_SRC" >&2; exit 1; }
-[[ -f "$CUTOVER_SRC" ]] || { echo "FATAL: cutover script not found at $CUTOVER_SRC" >&2; exit 1; }
 [[ -f "$LIB_SRC" ]] || { echo "FATAL: probe-row lib not found at $LIB_SRC" >&2; exit 1; }
 
 # Canonical guard, copied byte-for-byte from plugins/soleur/test/test-helpers.sh: every scratch
@@ -88,7 +86,7 @@ EXP_FUTURE="2026-10-02"                 # NOW is a day BEFORE expiry
 EXP_PAST="2026-09-30"                   # NOW is a day AFTER expiry
 LUKS_SRC="/dev/mapper/inngest-redis"
 PLAIN_SRC="/dev/sdb"
-LEAD="backstop is the LIVE store — do NOT destroy hcloud_volume.inngest_redis"
+LEAD="the LUKS volume is the ONLY copy of the Inngest store"
 
 # ── fixture builders ──────────────────────────────────────────────────────────────────────────
 msg() { # <host_role> <data_mount_src> <data_mount_devid> [tail]
@@ -231,7 +229,7 @@ expect() { # <name> <rc> <marker>
     ok=0; printf '        | missing required text: %s\n' "$C_REQUIRE" >&2
   fi
   if [[ "$C_LEAD" == "1" ]] && [[ "$(grep -v '^inngest-luks-property\[' "$OUT" | head -1)" != "ACTION REQUIRED: $LEAD"* ]]; then
-    ok=0; printf '        | the first human-readable line does not LEAD with the backstop warning\n' >&2
+    ok=0; printf '        | the first human-readable line does not LEAD with the sole-copy warning\n' >&2
   fi
   if (( ok )); then
     pass "$name (status $got, verdict $marker)"
@@ -383,7 +381,7 @@ expect "row6 device_binding.mapper missing" 3 ledger_unreadable
 # Row 7: claims luks, store not on the mapper.
 reset_case; C_ROWS="$(ded "$DT_FRESH" "$PLAIN_SRC" | fx plain)"; C_LEAD=1
 C_REQUIRE="inngest-luks-cutover-6894.md"
-expect "row7 claims luks, store on /dev/sdb (leads with the backstop warning, cites the runbook)" 5 rollback_inversion
+expect "row7 claims luks, store on /dev/sdb (leads with the sole-copy incident warning, cites the runbook)" 5 rollback_inversion
 reset_case; C_ROWS="$(ded "$DT_FRESH" "/dev/mapper/inngest-redis-plain" | fx prefix)"; C_LEAD=1
 expect "mut1 src /dev/mapper/inngest-redis-plain vs mapper inngest-redis (no prefix match)" 5 rollback_inversion
 reset_case; C_ROWS="$(ded "$DT_FRESH" "$PLAIN_SRC" "$VOL" "data_mount_src=$LUKS_SRC" | fx firstwins)"
@@ -396,6 +394,7 @@ expect "mut4b newest-by-dt is plaintext even when listed first" 5 rollback_inver
 
 # Row 8: does not claim luks, store on the mapper. (Mutation row 2.)
 reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="plaintext-exception inngest-redis $EXP_FUTURE"
+C_REQUIRE="inngest-luks-cutover-6894.md"
 expect "row8 / mut2 ledger plaintext-exception, store on LUKS" 5 under_claim
 
 # Row 9: encrypted and agreeing, backstop past its expiry.
@@ -725,115 +724,6 @@ assert_landed H1h "$M" "$MEASURE_R"
 reset_case; C_ROWS="$_h1h"; C_PROBE="$M"
 expect_red H1h "probe's host pin removed" 2 agree
 
-echo "== rollback NEXT placement (AC-32) =="
-# placement_check <file>: prints a reason and returns 1 on any violation.
-placement_check() {
-  local f="$1" label_re='^([[:space:]]*)luks-cutover\|luks-rollback\)[[:space:]]*$' n start indent end body
-  n="$(grep -cE "$label_re" "$f" || true)"
-  [[ "$n" == 1 ]] || { echo "case label found $n times (want exactly 1)"; return 1; }
-  start="$(grep -nE "$label_re" "$f" | cut -d: -f1)"
-  indent="$(sed -n "${start}p" "$f" | sed -E 's/^([[:space:]]*).*/\1/')"
-  end="$(awk -v s="$start" -v t="${indent}  ;;" 'NR > s && ($0 == t || $0 ~ ("^" t "[[:space:]]*$")) { print NR; exit }' "$f")"
-  [[ -n "$end" ]] || { echo "no ';;' terminator for the arm"; return 1; }
-  body="$(sed -n "$((start + 1)),$((end - 1))p" "$f")"
-  [[ -n "$(grep -vE '^[[:space:]]*(#.*)?$' <<<"$body")" ]] || { echo "extracted arm body is empty"; return 1; }
-  [[ "$(grep -cF 'NEXT (not automatic)' "$f" || true)" == 1 ]] || { echo "file-wide 'NEXT (not automatic)' count is not 1"; return 1; }
-  local nl cl el gl
-  [[ "$(grep -cF 'NEXT (not automatic)' <<<"$body" || true)" == 1 ]] || { echo "the NEXT line is not inside the arm"; return 1; }
-  nl="$(grep -nF 'NEXT (not automatic)' <<<"$body" | cut -d: -f1)"
-  [[ "$(grep -cF "FSM confirmed '\$LK_EXPECT'" <<<"$body" || true)" == 1 ]] || { echo "confirm notice not found exactly once"; return 1; }
-  cl="$(grep -nF "FSM confirmed '\$LK_EXPECT'" <<<"$body" | cut -d: -f1)"
-  [[ "$(grep -cE 'if \[\[ "\$LK_STATE" == "\$LK_EXPECT" \]\]; then' <<<"$body" || true)" == 1 ]] || { echo "LK_STATE==LK_EXPECT branch not found exactly once"; return 1; }
-  el="$(grep -nE 'if \[\[ "\$LK_STATE" == "\$LK_EXPECT" \]\]; then' <<<"$body" | cut -d: -f1)"
-  gl="$(head -n "$((nl - 1))" <<<"$body" | grep -nE '^[[:space:]]*(el)?if[[:space:]]' | tail -1 | cut -d: -f1)"
-  [[ -n "$gl" ]] || { echo "no enclosing if above the NEXT line"; return 1; }
-  sed -n "${gl}p" <<<"$body" | grep -cE >/dev/null '^[[:space:]]*if \[\[ "?\$OP"? == "?luks-rollback"? \]\]; then[[:space:]]*$' \
-    || { echo "the nearest guard above NEXT is not the luks-rollback guard: $(sed -n "${gl}p" <<<"$body")"; return 1; }
-  (( el < cl && cl < gl && gl < nl )) || { echo "order violated (success-branch $el, confirm $cl, guard $gl, NEXT $nl)"; return 1; }
-  if sed -n "$((el + 1)),$((nl - 1))p" <<<"$body" | grep -vE '^[[:space:]]*#' \
-      | grep -cE >/dev/null '^[[:space:]]*(else|elif|fi|esac)\b|;;|REFUSING|::error::|\bexit\b'; then
-    echo "a branch boundary or refusal sits between the success branch and NEXT"; return 1
-  fi
-  sed -n "${nl}p" <<<"$body" | grep -cE >/dev/null '^[[:space:]]*echo "::notice::NEXT \(not automatic\):[^"]*"$' \
-    || { echo "NEXT is not a bare echo \"::notice::NEXT (not automatic): ...\" line (redirected, conditional or reshaped)"; return 1; }
-  if (( gl + 1 <= nl - 1 )) && sed -n "$((gl + 1)),$((nl - 1))p" <<<"$body" | grep -cvE >/dev/null '^[[:space:]]*(#.*)?$'; then
-    echo "something other than comments sits between the luks-rollback guard and NEXT (a loop, heredoc or function would make it dead)"; return 1
-  fi
-  if sed -n "${nl}p" <<<"$body" | grep -cE >/dev/null 'REFUSING|::error::'; then echo "NEXT sits on a refusal line"; return 1; fi
-  return 0
-}
-
-cases=$((cases + 1))
-_nx="$(grep -F 'NEXT (not automatic)' "$CUTOVER_SRC")"
-if grep -qF 'scripts/encryption-posture-ledger.json' <<<"$_nx" && grep -qF 'knowledge-base/legal/article-30-register.md' <<<"$_nx" \
-   && grep -qF 'inngest-luks-cutover-6894.md section 5a' <<<"$_nx" && grep -qF 'do NOT destroy' <<<"$_nx"; then
-  pass "AC-32 the NEXT line names the ledger, the register, runbook section 5a and the do-not-destroy warning"
-else fail "AC-32 the NEXT line lacks a required anchor: $_nx"; fi
-for _dead in 'while false; do' '_next_unused() {'; do
-  _m="$WORK/mut/cut-dead-$RANDOM.sh"
-  awk -v nl="$(grep -nF 'NEXT (not automatic)' "$CUTOVER_SRC" | cut -d: -f1)" -v w="$_dead" 'NR == nl { print "      " w } { print }' "$CUTOVER_SRC" > "$_m"
-  cases=$((cases + 1))
-  if [[ -n "$(placement_check "$_m")" ]]; then pass "placement check reds when '$_dead' wraps the NEXT line"
-  else fail "placement check PASSED with '$_dead' above the NEXT line"; fi
-done
-
-cases=$((cases + 1))
-_why="$(placement_check "$CUTOVER_SRC")"
-if [[ -z "$_why" ]]; then pass "AC-32 the real cutover-inngest.sh places NEXT under the luks-rollback guard after the confirm"
-else fail "AC-32 real cutover-inngest.sh: $_why"; fi
-
-# Extraction self-tests: a missing and a doubled label must both fail, never pass vacuously.
-grep -vE '^[[:space:]]*luks-cutover\|luks-rollback\)[[:space:]]*$' "$CUTOVER_SRC" > "$WORK/mut/cut-nolabel.sh"
-cases=$((cases + 1))
-_why="$(placement_check "$WORK/mut/cut-nolabel.sh")"
-if [[ -n "$_why" ]]; then pass "placement check reds when the case label is missing ($_why)"
-else fail "placement check PASSED with no case label"; fi
-awk '{ print } /^[[:space:]]*luks-cutover\|luks-rollback\)[[:space:]]*$/ && !d { print; d = 1 }' "$CUTOVER_SRC" > "$WORK/mut/cut-twolabel.sh"
-cases=$((cases + 1))
-_why="$(placement_check "$WORK/mut/cut-twolabel.sh")"
-if [[ -n "$_why" ]]; then pass "placement check reds when the case label appears twice ($_why)"
-else fail "placement check PASSED with a doubled case label"; fi
-
-# Row 10: move the NEXT line on scratch copies.
-_arm_s="$(grep -nE '^[[:space:]]*luks-cutover\|luks-rollback\)[[:space:]]*$' "$CUTOVER_SRC" | cut -d: -f1)"
-_arm_e="$(awk -v s="${_arm_s:-0}" 'NR > s && $0 ~ /^    ;;[[:space:]]*$/ { print NR; exit }' "$CUTOVER_SRC")"
-_nl="$(grep -nF 'NEXT (not automatic)' "$CUTOVER_SRC" | cut -d: -f1)"
-_cl="$(grep -nF "FSM confirmed '\$LK_EXPECT'" "$CUTOVER_SRC" | cut -d: -f1)"
-_rb="$(awk -v s="${_arm_s:-0}" -v e="${_arm_e:-0}" 'NR > s && NR < e && $0 ~ /^[[:space:]]*rolled-back\)[[:space:]]*$/ { r = NR } END { if (r) print r }' "$CUTOVER_SRC")"
-cases=$((cases + 1))
-if [[ -n "$_arm_s" && -n "$_arm_e" && -n "$_nl" && -n "$_cl" && -n "$_rb" && "$_nl" =~ ^[0-9]+$ ]]; then
-  pass "row 10 seams located (arm $_arm_s-$_arm_e, confirm $_cl, NEXT $_nl, rolled-back $_rb)"
-else
-  fail "row 10 seams not found (arm '$_arm_s'-'$_arm_e' confirm '$_cl' NEXT '$_nl' rolled-back '$_rb')"
-fi
-move_next() { # <out> <mode: after-confirm | before-confirm | rolled-back>
-  NEXT_TEXT="$(sed -n "${_nl}p" "$CUTOVER_SRC")" awk -v nl="$_nl" -v cl="$_cl" -v rb="$_rb" -v mode="$2" '
-    NR == nl { next }
-    mode == "before-confirm" && NR == cl { print ENVIRON["NEXT_TEXT"] }
-    { print }
-    mode == "after-confirm" && NR == cl { print ENVIRON["NEXT_TEXT"] }
-    mode == "rolled-back" && NR == rb { print ENVIRON["NEXT_TEXT"] }' "$CUTOVER_SRC" > "$1"
-}
-row10() { # <mode> <expected new NEXT line>
-  local m="$WORK/mut/cut-$1.sh" at why
-  move_next "$m" "$1"
-  cases=$((cases + 1))
-  at="$(grep -nF 'NEXT (not automatic)' "$m" | cut -d: -f1 | paste -sd, -)"
-  if [[ "$at" == "$2" ]] && landed_within "$CUTOVER_SRC" "$m" "$_arm_s-$_arm_e"; then
-    pass "mutation row 10 ($1) landed: NEXT now at line $at, inside the arm"
-  else
-    fail "mutation row 10 ($1) did not land (NEXT at '$at', want $2)"; return
-  fi
-  cases=$((cases + 1))
-  why="$(placement_check "$m")"
-  printf '10\t%s\tplacement:%s\tn/a\n' "$1" "${why:-PASSED}" >> "$MUT_TABLE"
-  if [[ -n "$why" ]]; then pass "mutation row 10 ($1) is RED: $why"
-  else fail "mutation row 10 ($1) SURVIVED the placement check"; fi
-}
-row10 after-confirm "$((_cl + 1))"
-row10 before-confirm "$_cl"
-row10 rolled-back "$_rb"
-
 echo
 echo "== measured mutation verdicts (row, edit, verdicts seen, status) =="
 sed 's/^/  /' "$MUT_TABLE"
@@ -850,7 +740,12 @@ fi
 # honoured, override missing, selector jq failure) = 120.
 # + 2 at the #8873 review round (inherited permissive def with the lib missing, and with a lib that
 # defines nothing) = 122.
-MIN_PASSES=122
+# 122 -> 109 (-13) at #8285 PR B, measured: the AC-32 block went with op=luks-rollback (the NEXT line it placed no
+# longer exists): the NEXT-anchor row (1), the two mutation-of-the-checker rows (2), the real-file placement row (1),
+# the no-label and doubled-label rows (2), the row-10 seams row (1) and the three row-10 landing + RED pairs (6).
+# Each mutation it killed has no live target now; the verb's return is killed by the Guard 1 rows in
+# cutover-inngest-workflow.test.sh. The 5a runbook-heading row stays: the probe's ACTION text still points at 5a.
+MIN_PASSES=109
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

@@ -1,0 +1,4 @@
+# fixture data, never executed: two different P lines (first baselined, second not)
+kill -9 "$PPID"
+echo between
+kill -TERM "$PPID"
