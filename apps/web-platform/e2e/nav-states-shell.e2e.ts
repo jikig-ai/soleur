@@ -1,3 +1,6 @@
+// pyramid-justified: asserts CSS layout invariants (scrollWidth vs
+// clientWidth on the collapsed rail) that jsdom structurally cannot compute —
+// needs a real browser.
 import { test, expect } from "@playwright/test";
 import type { Page, Response } from "@playwright/test";
 import {

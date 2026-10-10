@@ -1,0 +1,6 @@
+# fixture data, never executed: the same P line shifted by inserted blank lines
+echo before
+
+
+
+[ -f "$FX/x" ] && kill -9 "$PPID"

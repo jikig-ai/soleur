@@ -21,7 +21,7 @@
 //   (c) a NON-LITERAL value (starts with `$`: `$VAR`, `${VAR}`, `$(cmd)`, `${ARR[@]}`), anywhere in the job text, because
 //       a variable can hold any address including (a)/(b), and an array built on one line and applied on another is
 //       the same route. This over-flags, deliberately: the cost of a false match is one extra preflight line.
-// A bare mention is NOT enough: three jobs (`inngest_backstop_retire`, `workspaces_luks_cutover`, `workspaces_luks_recut`)
+// A bare mention is NOT enough: two jobs (`workspaces_luks_cutover`, `workspaces_luks_recut`; `inngest_backstop_retire` was the third until #8285 PR B deleted it)
 // loop over that address in `jq` state-presence checks and create nothing. Still outside the predicate (the floor and
 // review of any new workflow are the backstop, recorded in the plan's Risks): a plan/apply SPLIT across two jobs where the
 // apply job names no target, a birth wrapped in a script file or nested composite, a dependency pull (`-target` of a
@@ -329,9 +329,9 @@ describe("Guard 3: the real tree", () => {
     expect(ids).toContain("web_host_replace");
   });
 
-  test("the predicate is a -target/-replace ARGUMENT: the three state-presence jq loops are NOT host-creating", () => {
+  test("the predicate is a -target/-replace ARGUMENT: the two state-presence jq loops are NOT host-creating", () => {
     const ids = hostCreatingJobIds(WEB, realReadAction);
-    for (const notCreator of ["inngest_backstop_retire", "workspaces_luks_cutover", "workspaces_luks_recut"]) {
+    for (const notCreator of ["workspaces_luks_cutover", "workspaces_luks_recut"]) {
       expect(WEB.jobs![notCreator], `${notCreator} must exist (a renamed job would make this row vacuous)`).toBeDefined();
       expect(jobText(WEB.jobs![notCreator], realReadAction)).toContain("hcloud_server.web[");
       expect(ids).not.toContain(notCreator);

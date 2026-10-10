@@ -170,6 +170,7 @@ locals {
     inngest_luks_volume_id = "100000005"
     inngest_expect_luks    = "false"
     doppler_token          = join(".", ["dp", "st", "prd", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
+    inngest_doppler_config = "prd"
     sdk_url                = "http://10.0.1.10:3000/api/inngest"
     inngest_cli_arch       = "amd64"
     inngest_cli_sha256     = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"

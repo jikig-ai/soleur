@@ -1,0 +1,7 @@
+# fixture data, never executed: a bound written as the eq form; one W, bounded=yes
+[ "$p" -eq "$SOLEUR_TEST_SUITE_PID" ] && exit 0
+p=$1; top=""
+while [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

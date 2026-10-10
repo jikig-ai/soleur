@@ -1,0 +1,672 @@
+# (#9175) THE INNGEST-PROVISION FORCED-RACE REHEARSAL ROUTE — build it, do not fire it.
+#
+# WHAT THIS PRODUCES. Off-box evidence that the inngest provision unit survives the #8539
+# race on demand: a throwaway host is born WITHOUT its private NIC (Phase A), the provision
+# unit's NIC wait exhausts and retries (observed, not assumed), the NIC is attached (Phase
+# B), provisioning runs to bootstrap-done, and a post-reboot boot does NOT re-run
+# provisioning (the latch + OnBootSec re-entry refusal holds). The evidence file lands as a
+# workflow ARTIFACT; the operator attaches it to #9175 per the runbook. This workflow NEVER
+# commits its own evidence — `permissions: contents: read` makes that structural.
+#
+# THIS WORKFLOW SHIPS UNFIRED, AND THAT IS THE DESIGN. A PR merges atomically, so evidence
+# committed in the same PR that builds the harness would be evidence from a rehearsal that
+# never ran. The harness merges; the post-merge dispatch produces the artifact; #9175 stays
+# OPEN until that artifact is attached (ADR-084 single-shot closure — the PR body says
+# "Ref #9175", never "Closes #9175").
+#
+# THE FORCED RACE IS A TWO-PHASE APPLY, NOT A TIMING HOPE. `var.nic_attached` gates exactly
+# one resource (`hcloud_server_network.rehearsal`); the plan-shape guard
+# (scripts/inngest-provision-plan-shape.sh) is the single chokepoint that decides whether
+# either plan may be applied: Phase A must be additive-only and rehearsal-scoped, Phase B's
+# delta must be exactly the NIC attachment.
+#
+# DEPENDENCY, stated before the code so a premature dispatch fails named rather than
+# mysteriously: the rehearsal host's user_data pins the same `vinngest-v*` bootstrap image
+# as prod, and its secrets reads resolve through `inngest_doppler_config`. A dispatch BEFORE
+# the image carrying this PR's parameterization is minted AND pin-bumped will exercise the
+# pre-parameterization bytes (DOPPLER_CONFIG ignored, literal --config prd) and Phase A/B
+# will fail against a scratch config that exists but is never read. The runbook's dispatch
+# checklist gates on that pin landing first.
+#
+# Rationale: knowledge-base/project/plans/2026-10-08-infra-inngest-provision-forced-race-
+# rehearsal-plan.md; runbook: runbooks/inngest-provision-rehearsal.md (ADR-231).
+name: inngest provision forced-race rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type REHEARSE-INNGEST-PROVISION to confirm. Typo-guard only — the environment reviewer is the authorization."
+        required: true
+        type: string
+      dry_run:
+        description: "true = plan only, assert the Phase-A plan creates ONLY rehearsal addresses and destroys nothing, then stop. Leave true unless you intend to spend a real host."
+        required: true
+        type: boolean
+        default: true
+      teardown_only:
+        description: "true = skip plan/apply/capture and destroy whatever this root still owns. The recovery arm for a rehearsal whose teardown failed."
+        required: false
+        type: boolean
+        default: false
+
+# JOIN THE PARENT'S WIDEST APPLY GROUP, do not declare a new one. A DISTINCT group would
+# PERMIT a rehearsal and an inngest-host-replace to run concurrently — and this root
+# mutates prod-adjacent objects (the prod private network's member set, the prod
+# soleur-inngest project's environment list). The backend has no state lock (R2 lacks
+# conditional writes; `use_lockfile = false` in both roots), so serialization is the only
+# protection against last-writer-wins. GitHub does not error on divergent group strings;
+# they silently fail to serialize.
+concurrency:
+  group: terraform-apply-web-platform-host
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  REHEARSAL_DIR: apps/web-platform/infra/inngest-provision-rehearsal
+  # The trailing hyphen is LOAD-BEARING: `soleur-inngest` is a PREFIX of
+  # `soleur-inngest-rehearsal-…`, so a prefix match written without it would also match the
+  # PRODUCTION host. The same literal is pinned in the orphan sweep in
+  # scheduled-terraform-drift.yml and in the rehearsal root's locals.
+  REHEARSAL_PREFIX: soleur-inngest-rehearsal-
+  RUNBOOK: knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md
+  CAPTURE: scripts/followthroughs/inngest-provision-rehearsal-capture.sh
+  PLAN_SHAPE: scripts/inngest-provision-plan-shape.sh
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-24.04
+    # REUSED, never re-declared — the web-platform-infra-apply environment carries the
+    # reviewer set and the main-only deployment_branch_policy (the branch pin matters: this
+    # job sources repo scripts, and without the pin a branch dispatch could run a neutered
+    # plan-shape guard that approves itself).
+    environment: web-platform-infra-apply
+    # Budget = the SUM OF EVERY STEP'S OWN `timeout-minutes` plus a runner margin —
+    # the sentinel suite (inngest-provision-rehearsal.test.sh) REDs a step without a bound
+    # and a ceiling below the step sum. Teardown is its OWN job (`needs: rehearse`,
+    # `if: always()`), so a ceiling reached here does not starve it.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        timeout-minutes: 3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        timeout-minutes: 3
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # The typo-guard. Checkout, setup-terraform, and the credential LOAD have already run —
+      # this is not the authorization (the environment reviewer is); it exists so a mistyped
+      # confirm does not burn a paid host before failing. Every untrusted input is routed
+      # through `env:` and never interpolated into the shell body — an input is
+      # attacker-controlled text as far as this runner is concerned.
+      - name: Validate dispatch inputs (confirm token)
+        timeout-minutes: 1
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "REHEARSE-INNGEST-PROVISION" ]]; then
+            echo "::error::confirm must be exactly 'REHEARSE-INNGEST-PROVISION' (got '${CONFIRM_RAW}'). Typo-guard only — the environment reviewer is the authorization."
+            exit 1
+          fi
+          echo "dispatch validated"
+
+      # THE INVARIANT THIS WORKFLOW MUST NEVER VIOLATE, asserted before anything is planned.
+      # The whole safety argument is a SEPARATE Terraform root; if it ever grew a reference
+      # to a prod address, a rehearsal apply's closure could touch the production scheduler.
+      # Comments are STRIPPED FIRST — this root's rationale legitimately NAMES the prod
+      # addresses it must not reference, and a bare grep would refuse the sentences that make
+      # it reviewable (cq-assert-anchor-not-bare-token). `data.hcloud_network.private` is the
+      # ONE permitted prod read — a data source reads, it cannot manage.
+      - name: Assert the rehearsal root references no production address
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          # FILE INVENTORY FIRST — Terraform also loads *.tf.json, *.auto.tfvars (which
+          # override TF_VAR_* env!), and anything under a module dir. A file-shape escape
+          # carries real config outside every grep below.
+          extra="$(ls -A "${REHEARSAL_DIR}" | grep -vE '^(main|variables|rehearsal)\.tf$|^\.terraform\.lock\.hcl$|^\.terraform$' || true)"
+          if [[ -n "$extra" ]]; then
+            echo "::error::${REHEARSAL_DIR} contains unexpected files/dirs: ${extra} — only the three .tf files and the lockfile are sanctioned. Refusing to plan."
+            exit 1
+          fi
+          STRIPPED="$(mktemp)"
+          for f in "${REHEARSAL_DIR}"/*.tf; do sed 's/^[[:space:]]*#.*$//' "$f"; done > "$STRIPPED"
+          hits="$(grep -cE 'hcloud_(server|volume|firewall|network|ssh_key)\.inngest\b|doppler_(environment|project|config|service_token|secret)\.inngest|terraform_remote_state|data\.hcloud_server\.' "$STRIPPED" || true)"
+          if [[ "$hits" -ne 0 ]]; then
+            echo "::error::${REHEARSAL_DIR} references ${hits} production inngest address(es) or a remote state. -target is TRANSITIVE ON DEPENDENCIES, so a rehearsal apply could pull hcloud_server.inngest into its plan closure. Refusing to plan."
+            exit 1
+          fi
+          # `hcloud_network.private` may appear ONLY behind `data.` — a resource-style
+          # reference would bind the prod network's state object into this root's graph.
+          if grep -nE '(^|[^.a-z_])hcloud_network\.private\b' "$STRIPPED" | grep -v 'data\.hcloud_network\.private'; then
+            echo "::error::${REHEARSAL_DIR} references the prod hcloud_network.private as a resource (not a data source). Refusing to plan."
+            exit 1
+          fi
+          # DECLARATION-syntax census: `data "TYPE" "NAME"` — the only permitted read is
+          # the private network. data.doppler_*, data.external, data.http would pull prod
+          # values (or execute) under this job's credentials at plan time.
+          extra_ds="$(grep -oE 'data "[a-z_]+" "[a-z_]+"' "$STRIPPED" | grep -vc 'hcloud_network.*private' || true)"
+          if [[ "$extra_ds" -ne 0 ]]; then
+            echo "::error::${REHEARSAL_DIR} declares data sources beyond data.hcloud_network.private: $(grep -oE 'data \"[a-z_]+\" \"[a-z_]+\"' "$STRIPPED" | grep -v 'hcloud_network.*private' | tr '\n' ' '). Refusing to plan."
+            exit 1
+          fi
+          # Provisioners execute under this environment's credentials at apply and leave no
+          # footprint in .change.actions — the plan-shape guard cannot see them.
+          if grep -qE '(provisioner|local-exec|remote-exec)[[:space:]]*\{|module[[:space:]]+"|output[[:space:]]+"' "$STRIPPED"; then
+            echo "::error::${REHEARSAL_DIR} carries a provisioner/exec/module/output surface the plan-shape guard cannot see. Refusing to plan."
+            exit 1
+          fi
+          echo "rehearsal root is clean: file inventory pinned, 0 production references, reads confined to data.hcloud_network.private"
+
+      - name: Extract R2 backend credentials
+        timeout-minutes: 2
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          # Heredoc-delimited writes, never K=V: a value carrying a newline would plant
+          # arbitrary NAME=value lines into every later step's environment.
+          {
+            printf 'AWS_ACCESS_KEY_ID<<GH_EOF\n%s\nGH_EOF\n' "$KEY_ID"
+            printf 'AWS_SECRET_ACCESS_KEY<<GH_EOF\n%s\nGH_EOF\n' "$SECRET"
+          } >> "$GITHUB_ENV"
+
+      # `-lockfile=readonly`, matching every other init in apply-web-platform-infra.yml. The
+      # rehearsal's entire claim is that it boots the bytes production would; without the
+      # flag, `init` silently UPDATES .terraform.lock.hcl to whatever the registry serves.
+      - name: Terraform init (rehearsal root — DISTINCT state key)
+        timeout-minutes: 5
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      # ── TEARDOWN-ONLY ARM (recovery) ─────────────────────────────────────────────
+      # A failed real run leaves a paying host running with nothing to run against it; this
+      # arm is the recovery. rehearsal_run_id is required by the root but irrelevant to a
+      # destroy — every address is already in state.
+      - name: Teardown only (recovery arm)
+        if: inputs.teardown_only
+        timeout-minutes: 15
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          set -euo pipefail
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          printf '::add-mask::%s\n' "$ZOT_PULL"
+          # nic_attached=false: destroy is state-driven (the flag's value does not decide
+          # what is destroyed), and false keeps the conditional NIC resource out of the
+          # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform destroy -auto-approve -input=false \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
+              -var "zot_pull_token=${ZOT_PULL}"
+          echo "teardown-only complete"
+
+      # ── PHASE A: birth WITHOUT the private NIC ────────────────────────────────────
+      # `nic_attached` has no default, so a run that forgot it fails at plan time rather
+      # than silently rehearsing an attached host. The zot pull token is a parent-root
+      # random_password — not reachable across roots — so it is READ from Doppler prd and
+      # passed explicitly (the parent root mirrors it to soleur-registry/prd AND keeps it in
+      # soleur/prd — measured by registry-zot-inventory.yml; but THAT read needs
+      # DOPPLER_TOKEN_PRD: secrets.DOPPLER_TOKEN is prd_terraform-scoped and 403s on soleur/prd,
+      # which is what the first dry run proved).
+      - name: Terraform plan (phase A — NIC absent)
+        id: plan_a
+        if: '!inputs.teardown_only'
+        timeout-minutes: 8
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          set -euo pipefail
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          printf '::add-mask::%s\n' "$ZOT_PULL"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan-a \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
+              -var "zot_pull_token=${ZOT_PULL}"
+
+      # THE PLAN-SHAPE GUARD RUNS ON THE REAL ARM TOO, not only dry_run: the dangerous
+      # dispatch is precisely the one with dry_run=false. The shape step reads EXACTLY the
+      # saved plan its plan step wrote, runs whenever its paired apply runs, and the apply
+      # applies that same saved plan with no status function to outlive a refusal. The plan
+      # JSON embeds sensitive variables verbatim, so it is read and never uploaded.
+      - name: Assert the phase-A plan is additive-only (plan-shape additive)
+        if: '!inputs.teardown_only'
+        timeout-minutes: 2
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan-a > /tmp/plan-a.json
+          rc=0; bash "${GITHUB_WORKSPACE}/${PLAN_SHAPE}" /tmp/plan-a.json additive || rc=$?
+          rm -f /tmp/plan-a.json
+          exit "$rc"
+
+      - name: Dry run complete — stopping here
+        if: ${{ !inputs.teardown_only && inputs.dry_run }}
+        timeout-minutes: 1
+        run: |
+          echo "dry_run=true: the phase-A plan was rendered and asserted clean. NOTHING was"
+          echo "applied, no host was created, and no evidence was captured. Re-dispatch with"
+          echo "dry_run=false to spend a real host and produce the rehearsal evidence."
+
+      - name: Terraform apply (phase A — NIC absent)
+        id: apply_a
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 12
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The observation window opens BEFORE the apply: the host starts booting the
+          # instant ServerCreate lands, so a post-apply timestamp would exclude the
+          # earliest (most diagnostic) rows.
+          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-a-since.txt"
+          cat "$GITHUB_WORKSPACE/phase-a-since.txt"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan-a
+
+      # THE PHASE-A EVIDENCE GATE. Phase B may not start until the EXPECTED failure is
+      # observed: provision-unit-armed, >=2 provision-attempt-start, and a NIC-absent marker
+      # (private_nic_timeout or provision-nic-ABSENT), all for this host — the miss is
+      # observed, then healed. TRANSIENT keeps polling; FAIL (a violation row) aborts now.
+      - name: Observe the NIC-absent provisioning failures (capture phase-a)
+        id: cap_a
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 25
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          HOST="${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
+          RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/${GITHUB_RUN_ID}"
+          # --since binds the window to THIS run's apply: a re-run reuses the same run id
+          # (same host name), and the previous life's rows must not satisfy this gate.
+          SINCE="$(cat "$GITHUB_WORKSPACE/phase-a-since.txt")"
+          # `doppler run` EXITS 1 ON ITS OWN FAILURES — the same code the capture script uses
+          # for a FAIL verdict. The script's terminal sentinel disambiguates: no
+          # INNGEST_PROVISION_CAPTURE_VERDICT line means the script never got to speak, and
+          # reporting that as a host failure blames the host for a credential problem. Two
+          # consecutive wrapper failures stop the poll; the second one self-probes the token
+          # (--only-names prints NAMES, never values) so the error names the fault instead of
+          # instructing a dashboard look.
+          wrapper_fails=0
+          deadline=$(( SECONDS + 20 * 60 ))
+          while (( SECONDS < deadline )); do
+            set +e
+            doppler run --preserve-env -p soleur -c prd_terraform \
+              --only-secrets BETTERSTACK_QUERY_HOST --only-secrets BETTERSTACK_QUERY_USERNAME \
+              --only-secrets BETTERSTACK_QUERY_PASSWORD -- \
+              bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
+                --mode phase-a --since "$SINCE" \
+                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-a.log
+            rc=${PIPESTATUS[0]}
+            set -e
+            if [[ "$rc" -eq 1 ]] && ! grep -q 'INNGEST_PROVISION_CAPTURE_VERDICT=' /tmp/capture-a.log; then
+              wrapper_fails=$(( wrapper_fails + 1 ))
+              if [[ "$wrapper_fails" -ge 2 ]]; then
+                probe_out="$(doppler secrets --only-names -p soleur -c prd_terraform 2>&1)" || true
+                if [[ -n "$probe_out" ]]; then
+                  echo "::error::doppler run failed twice with no capture verdict, but DOPPLER_TOKEN CAN read soleur/prd_terraform — NOT a token-scope fault; read the step log for what the wrapper did. This says nothing about the rehearsal host."
+                else
+                  echo "::error::doppler run failed twice with no capture verdict and DOPPLER_TOKEN CANNOT read soleur/prd_terraform — the token is the fault. This says nothing about the rehearsal host."
+                fi
+                exit 1
+              fi
+              echo "::warning::doppler run exited 1 with no capture verdict — wrapper fault (auth/config), not a host verdict. Retrying once."
+              sleep 15; continue
+            fi
+            wrapper_fails=0
+            case "$rc" in
+              0) echo "phase-a evidence: PASS"; exit 0 ;;
+              1) echo "::error::phase-a evidence: FAIL — a forbidden marker exists (see capture output above). The rehearsal is stopped before phase B."; exit 1 ;;
+              2) sleep 30 ;;
+              *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
+            esac
+          done
+          echo "::error::phase-a evidence gate timed out after 20 min — the expected NIC-absent failure was never observed. HALT: teardown still runs; read the Better Stack rows for host ${HOST}."
+          exit 1
+
+      # ── PHASE B: attach the private NIC ───────────────────────────────────────────
+      # The timestamp BEFORE the plan bounds the phase-B window — a re-run attempt shares
+      # the run id, so the capture must not count phase-A's (expected-failure) rows.
+      - name: Terraform plan (phase B — NIC attach)
+        id: plan_b
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 8
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          set -euo pipefail
+          # The phase-B window bound is taken BEFORE the plan/apply — phase-A's
+          # (expected-failure) rows share the host name, and the capture must not count
+          # them as recovery evidence.
+          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-b-since.txt"
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          printf '::add-mask::%s\n' "$ZOT_PULL"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan-b \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true \
+              -var "zot_pull_token=${ZOT_PULL}"
+
+      - name: Assert the phase-B delta is exactly the NIC attachment (plan-shape nic-attach)
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 2
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan-b > /tmp/plan-b.json
+          rc=0; bash "${GITHUB_WORKSPACE}/${PLAN_SHAPE}" /tmp/plan-b.json nic-attach || rc=$?
+          rm -f /tmp/plan-b.json
+          exit "$rc"
+
+      - name: Terraform apply (phase B — NIC attach)
+        id: apply_b
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 8
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan-b
+
+      # RECOVERY OBSERVED, not assumed: private_nic_ok + bootstrap-done for this host. The
+      # unit's next retry after the attach runs the full zot-login -> pull -> Doppler
+      # isolation -> bootstrap chain, which is exactly what the rehearsal exists to prove.
+      - name: Observe the recovery to bootstrap-done (capture phase-b)
+        id: cap_b
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 20
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          HOST="${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
+          RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/${GITHUB_RUN_ID}"
+          SINCE="$(cat "$GITHUB_WORKSPACE/phase-b-since.txt")"
+          wrapper_fails=0
+          deadline=$(( SECONDS + 15 * 60 ))
+          while (( SECONDS < deadline )); do
+            set +e
+            doppler run --preserve-env -p soleur -c prd_terraform \
+              --only-secrets BETTERSTACK_QUERY_HOST --only-secrets BETTERSTACK_QUERY_USERNAME \
+              --only-secrets BETTERSTACK_QUERY_PASSWORD -- \
+              bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
+                --mode phase-b --since "$SINCE" \
+                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-b.log
+            rc=${PIPESTATUS[0]}
+            set -e
+            if [[ "$rc" -eq 1 ]] && ! grep -q 'INNGEST_PROVISION_CAPTURE_VERDICT=' /tmp/capture-b.log; then
+              wrapper_fails=$(( wrapper_fails + 1 ))
+              if [[ "$wrapper_fails" -ge 2 ]]; then
+                echo "::error::doppler run failed twice with no capture verdict — wrapper fault (auth/config), not a host verdict. This says nothing about the rehearsal host."
+                exit 1
+              fi
+              echo "::warning::doppler run exited 1 with no capture verdict — wrapper fault. Retrying once."
+              sleep 15; continue
+            fi
+            wrapper_fails=0
+            case "$rc" in
+              0) echo "phase-b evidence: PASS"; exit 0 ;;
+              1) echo "::error::phase-b evidence: FAIL (see capture output above)."; exit 1 ;;
+              2) sleep 30 ;;
+              *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
+            esac
+          done
+          echo "::error::phase-b recovery gate timed out after 15 min — bootstrap-done never arrived for ${HOST}. HALT: teardown still runs. See ${RUNBOOK}."
+          exit 1
+
+      # SETTLE before the boundary (mirrors git-data-rung2's settle step): bootstrap-done is
+      # emitted ~34 s before the provision unit exits, and a reboot POST landing inside that
+      # tail produces provision-attempt-exit-143 AFTER the boundary — indistinguishable from
+      # a broken latch and a false FAIL on the exact property this leg proves.
+      - name: Settle — let the provision unit's post-done tail drain
+        id: settle
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 3
+        run: sleep 90
+
+      # THE LATCH LEG. The reboot is the Hetzner API (control plane, never SSH — same shape
+      # as web-host-reboot.yml's #9372 job). The boundary timestamp is recorded FIRST so the
+      # post-reboot capture's "no provision rows after this instant" has its boundary.
+      - name: Reboot the rehearsal host (Hetzner API)
+        id: reboot
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/reboot-since.txt"
+          TOKEN="${HCLOUD_TOKEN:-}"
+          [[ -n "$TOKEN" ]] || { echo "::error::HCLOUD_TOKEN is empty — the infra-credentials loader exported no Hetzner token."; exit 1; }
+          printf '::add-mask::%s\n' "$TOKEN"
+          host="${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
+          sid="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+                | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - \
+                    "https://api.hetzner.cloud/v1/servers?name=${host}" \
+                | jq -r --arg n "$host" '[.servers[]? | select(.name == $n) | .id] | if length == 1 then .[0] else "ambiguous" end')" \
+            || { echo "::error::server-id lookup for ${host} failed at the Hetzner API. Failing closed."; exit 1; }
+          [[ "$sid" =~ ^[0-9]+$ ]] || { echo "::error::could not resolve a unique server id for ${host} (got '${sid}')."; exit 1; }
+          aid="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+                | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - -X POST \
+                    "https://api.hetzner.cloud/v1/servers/${sid}/actions/reboot" \
+                | jq -r '.action.id // empty')" \
+            || { echo "::error::the reboot POST for ${host} failed at the Hetzner API."; exit 1; }
+          [[ -n "$aid" ]] || { echo "::error::the reboot POST returned no action id for ${host}."; exit 1; }
+          # Verify the action lands — a refused/error reboot otherwise surfaces as the
+          # cap_c deadline with the least actionable diagnosis.
+          for i in $(seq 1 12); do
+            st="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+                  | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - \
+                      "https://api.hetzner.cloud/v1/servers/${sid}/actions/${aid}" \
+                  | jq -r '.action.status // "unknown"')" || st=unknown
+            [[ "$st" == success ]] && break
+            [[ "$st" == error ]] && { echo "::error::Hetzner reports the reboot action for ${host} ERRORED."; exit 1; }
+            sleep 10
+          done
+          echo "reboot ${st:-unknown} for ${host} (id ${sid}, action ${aid}) at $(cat "$GITHUB_WORKSPACE/reboot-since.txt")"
+
+      # POST-REBOOT EVIDENCE = the restage anchor (SOLEUR_INNGEST_BS_TOKEN_RESTAGED, emitted
+      # every boot — itself a successful scratch-Doppler read) PLUS zero provision markers
+      # after the reboot boundary. Absence of the anchor polls; a provision row FAILS now.
+      - name: Observe the latch holding across the reboot (capture post-reboot)
+        id: cap_c
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        timeout-minutes: 12
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          HOST="${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
+          RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/${GITHUB_RUN_ID}"
+          SINCE="$(cat "$GITHUB_WORKSPACE/phase-a-since.txt")"
+          RB="$(cat "$GITHUB_WORKSPACE/reboot-since.txt")"
+          wrapper_fails=0
+          deadline=$(( SECONDS + 8 * 60 ))
+          while (( SECONDS < deadline )); do
+            set +e
+            doppler run --preserve-env -p soleur -c prd_terraform \
+              --only-secrets BETTERSTACK_QUERY_HOST --only-secrets BETTERSTACK_QUERY_USERNAME \
+              --only-secrets BETTERSTACK_QUERY_PASSWORD -- \
+              bash "$CAPTURE" --host-name "$HOST" --evidence-url "$RUN_URL" \
+                --mode post-reboot --since "$SINCE" --reboot-since "$RB" \
+                --out "$GITHUB_WORKSPACE/inngest-provision-rehearsal-evidence.env" 2>&1 | tee /tmp/capture-c.log
+            rc=${PIPESTATUS[0]}
+            set -e
+            if [[ "$rc" -eq 1 ]] && ! grep -q 'INNGEST_PROVISION_CAPTURE_VERDICT=' /tmp/capture-c.log; then
+              wrapper_fails=$(( wrapper_fails + 1 ))
+              if [[ "$wrapper_fails" -ge 2 ]]; then
+                echo "::error::doppler run failed twice with no capture verdict — wrapper fault (auth/config), not a host verdict. This says nothing about the rehearsal host."
+                exit 1
+              fi
+              echo "::warning::doppler run exited 1 with no capture verdict — wrapper fault. Retrying once."
+              sleep 15; continue
+            fi
+            wrapper_fails=0
+            case "$rc" in
+              0) echo "post-reboot evidence: PASS"; exit 0 ;;
+              1) echo "::error::post-reboot evidence: FAIL — provision markers appeared after the reboot boundary; the latch did not hold."; exit 1 ;;
+              2) sleep 20 ;;
+              *) echo "::error::capture exited rc=${rc} — outside the 0/1/2 contract (usage or refusal). Not retrying a permanent failure."; exit 1 ;;
+            esac
+          done
+          echo "::error::post-reboot gate timed out after 8 min — the restage anchor never re-emitted for ${HOST}. HALT: teardown still runs. See ${RUNBOOK}."
+          exit 1
+
+      # Persist the capture logs so a non-PASS run is diagnosable without Doppler access —
+      # the evidence file only exists on PASS (write-on-PASS is load-bearing), but every
+      # poll's stage table + the doppler-run stderr are what a triager needs on FAIL.
+      - name: Persist capture logs for the artifact
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && always() }}
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/capture-logs"
+          for f in /tmp/capture-a.log /tmp/capture-b.log /tmp/capture-c.log; do
+            [[ -f "$f" ]] && cp "$f" "$GITHUB_WORKSPACE/capture-logs/" || true
+          done
+
+      # ARTIFACT, never a commit: the operator attaches it to #9175 per the runbook. A route
+      # that wrote its own evidence to main would convert the reviewer gate into a rubber
+      # stamp — `contents: read` is what makes "never commits" structural. run_attempt is in
+      # the name because v4 artifacts are immutable per name — a re-run's upload 409s
+      # without it, losing exactly the retry evidence that mattered.
+      - name: Upload the evidence artifact
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && always() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: inngest-provision-rehearsal-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: |
+            inngest-provision-rehearsal-evidence.env
+            capture-logs/
+
+  # Teardown is its OWN job so a ceiling or failure above can never starve it. It destroys
+  # whatever this root owns — including a half-created stack — then asserts nothing is left.
+  teardown:
+    runs-on: ubuntu-24.04
+    needs: rehearse
+    # `environment: infra-privileged` (#8209, ADR-241), NOT the rehearse job's reviewer-gated
+    # environment — teardown needs the credential tier, not the approval gate (same split as
+    # git-data-rung2-rehearsal.yml::teardown). A destroy writes the same state object an apply
+    # does and needs the same credentials.
+    environment: infra-privileged
+    # ALWAYS. The orphan assertion is the point: on a dry_run nothing exists and destroy is
+    # a no-op, but skipping the assert would leave a leak invisible to the run that made it.
+    if: always()
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        timeout-minutes: 3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        timeout-minutes: 3
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Extract R2 backend credentials
+        timeout-minutes: 2
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}"
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}"
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::AWS R2 backend credentials missing."; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          # Heredoc-delimited writes, never K=V: a value carrying a newline would plant
+          # arbitrary NAME=value lines into every later step's environment.
+          {
+            printf 'AWS_ACCESS_KEY_ID<<GH_EOF\n%s\nGH_EOF\n' "$KEY_ID"
+            printf 'AWS_SECRET_ACCESS_KEY<<GH_EOF\n%s\nGH_EOF\n' "$SECRET"
+          } >> "$GITHUB_ENV"
+
+      - name: Terraform init (rehearsal root)
+        timeout-minutes: 5
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform destroy (everything this root owns)
+        timeout-minutes: 15
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          set -euo pipefail
+          # zot_pull_token is REQUIRED (no default) and is validated even on destroy —
+          # without it this step dies on `No value for required variable`, the orphan
+          # assertion below is skipped, and a real run leaks the paid stack.
+          ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
+          printf '::add-mask::%s\n' "$ZOT_PULL"
+          # nic_attached=false: destroy is state-driven (the flag's value does not decide
+          # what is destroyed), and false keeps the conditional NIC resource out of the
+          # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform destroy -auto-approve -input=false \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
+              -var "zot_pull_token=${ZOT_PULL}"
+
+      # THE ORPHAN ASSERTION, IN-WORKFLOW. `terraform destroy` acts only on state, so a
+      # destroy that half-ran leaves paying objects behind — the drift sweep DETECTS those
+      # later, but this step makes a leaked host fail loudly in the run that leaked it.
+      # Query by LABEL (the sweep's axis), and the trailing hyphen prefix by name.
+      - name: Assert no rehearsal orphans remain (Hetzner API)
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          TOKEN="${HCLOUD_TOKEN:-}"
+          [[ -n "$TOKEN" ]] || { echo "::error::HCLOUD_TOKEN is empty."; exit 1; }
+          printf '::add-mask::%s\n' "$TOKEN"
+          orphans=0
+          for kind in servers volumes ssh_keys firewalls; do
+            n="$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+                 | curl --disable --noproxy '*' --connect-timeout 5 -m 20 -sS -f -K - \
+                     "https://api.hetzner.cloud/v1/${kind}?label_selector=app%3Dsoleur-inngest-provision-rehearsal&per_page=50" \
+                 | jq -r --arg k "$kind" 'if (.meta.pagination.next_page != null) then "unreadable" else (.[$k] | length) end' 2>/dev/null || echo unreadable)"
+            echo "${kind}: ${n} remaining"
+            if [[ "$n" == unreadable || "$n" -gt 0 ]]; then orphans=1; fi
+          done
+          if [[ "$orphans" -ne 0 ]]; then
+            echo "::error::rehearsal orphans remain after destroy (see counts above). The drift sweep will also catch them; destroy the objects named ${REHEARSAL_PREFIX}* / app=soleur-inngest-provision-rehearsal."
+            exit 1
+          fi
+          echo "no rehearsal orphans"

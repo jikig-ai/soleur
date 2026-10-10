@@ -224,7 +224,11 @@ case "$c" in
       *)  printf '%s\n' "${SHIM_GC_STATE}"; exit 0 ;;
     esac ;;
   "systemctl stop "*)   exit "${SHIM_GC_STOP_RC:-0}" ;;
-  "systemctl start "*)  exit "${SHIM_GC_START_RC:-0}" ;;
+  "systemctl start "*)
+    # SHIM_GC_START_FIRST_RC fails ONLY the first start of a case (a marker beside the case's timeline),
+    # so the unfreeze's one immediate retry can be driven to success.
+    if [ -n "${SHIM_GC_START_FIRST_RC:-}" ] && [ ! -e "$TL.gcstart" ]; then : > "$TL.gcstart"; exit "$SHIM_GC_START_FIRST_RC"; fi
+    exit "${SHIM_GC_START_RC:-0}" ;;
   "fz="*)
     # The freeze provenance session: absent | ours/foreign (writer + at) | rc 2 unattributed.
     case "${SHIM_FREEZE:-absent}" in
@@ -357,6 +361,7 @@ run_case() {
   local name="$1"; shift
   TLF="$T/$name.tl"; OUT="$T/$name.out"
   : > "$TLF" || { printf 'FAIL SETUP: cannot write %s\n' "$TLF" >&2; exit 1; }
+  rm -f "$TLF.gcstart"   # the shim's SHIM_GC_START_FIRST_RC fail-once marker: a reused case name must not inherit it
   "$REAL_TIMEOUT" -k 3 "${CASE_TIMEOUT:-60}" env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$T" TL="$TLF" "$@" \
     bash "${CASE_SCRIPT:-$SCRIPT}" > "$OUT" 2>&1
   RC=$?
@@ -1580,7 +1585,7 @@ else fail "MZ-F7: a held legacy lock was not refused" "$(ctx)"; fi
 
 # MZ-U1: unfreeze on our sentinel — cleared, gc.timer restarted.
 run_mode mz-u1-ours unfreeze SHIM_FREEZE=ours
-if [ "$RC" = 0 ] && has_store unfreeze ok && grep -q 'rm -f --' "$TLF" && grep -q 'systemctl start git-data-gc.timer' "$TLF"; then
+if [ "$RC" = 0 ] && has_store unfreeze ok && grep -q 'rm -f --' "$TLF" && [ "$(grep -c 'systemctl start git-data-gc.timer' "$TLF" || true)" = 1 ]; then
   pass "MZ-U1: same-lineage unfreeze clears the sentinel and restarts gc.timer"
 else fail "MZ-U1: same-lineage unfreeze failed" "$(ctx)"; fi
 
@@ -1612,6 +1617,26 @@ run_mode mz-u6-unread unfreeze SHIM_FREEZE=r3
 if [ "$RC" = 5 ] && has_store unfreeze frozen_unreadable && ! grep -q 'rm -f --' "$TLF"; then
   pass "MZ-U6: an unreadable sentinel on unfreeze -> verdict=frozen_unreadable"
 else fail "MZ-U6: an unreadable sentinel was misclassified" "$(ctx)"; fi
+
+# MZ-U7/U8/U9 (#9439 item 8, CTO ruling): a gc.timer that will not restart after the sentinel is cleared is a
+# FAILED unfreeze (exit 6, not 5: the sentinel is already gone, so the workflow must not read it as a stranded
+# freeze), after ONE immediate retry. U7: our sentinel cleared, both starts fail. U8: no sentinel, same.
+# U9: the first start fails, the retry succeeds -> clean exit. The case functions are shared with the mutants.
+case_mz_u7() { run_mode "${1:-mz-u7-gcstart}" unfreeze SHIM_FREEZE=ours SHIM_GC_START_RC=1
+  [ "$RC" = 6 ] && has_store unfreeze-gc-timer gc_timer_restart_failed && grep -qF 'verdict=gc_timer_restart_failed rc=1' "$OUT" && grep -q 'rm -f --' "$TLF" \
+    && [ "$(grep -c 'systemctl start git-data-gc.timer' "$TLF" || true)" = 2 ]; }
+case_mz_u8() { run_mode "${1:-mz-u8-gcstart-absent}" unfreeze SHIM_FREEZE=absent SHIM_GC_START_RC=255
+  [ "$RC" = 6 ] && has_store unfreeze-gc-timer gc_timer_restart_failed && grep -qF 'verdict=gc_timer_restart_failed rc=255' "$OUT" && ! grep -q 'rm -f --' "$TLF" \
+    && [ "$(grep -c 'systemctl start git-data-gc.timer' "$TLF" || true)" = 2 ]; }
+case_mz_u9() { run_mode "${1:-mz-u9-gcstart-retry}" unfreeze SHIM_FREEZE=ours SHIM_GC_START_FIRST_RC=1
+  [ "$RC" = 0 ] && has_store unfreeze ok && ! grep -q 'gc_timer_restart_failed' "$OUT" \
+    && [ "$(grep -c 'systemctl start git-data-gc.timer' "$TLF" || true)" = 2 ]; }
+if case_mz_u7; then pass "MZ-U7: a gc.timer that will not start after the sentinel was cleared -> verdict=gc_timer_restart_failed, exit 6, after one immediate retry"
+else fail "MZ-U7: a failed gc.timer restart did not fail the unfreeze with exit 6" "$(ctx)"; fi
+if case_mz_u8; then pass "MZ-U8: no sentinel and a gc.timer that will not start -> verdict=gc_timer_restart_failed, exit 6, nothing removed"
+else fail "MZ-U8: the convergent re-dispatch swallowed a failed gc.timer restart" "$(ctx)"; fi
+if case_mz_u9; then pass "MZ-U9: the first gc.timer start fails and the immediate retry succeeds -> exit 0, no failure verdict"
+else fail "MZ-U9: the immediate retry did not absorb a transient start failure" "$(ctx)"; fi
 run_mode mz-f8-unread freeze SHIM_GC_STATE=inactive SHIM_FREEZE=r3
 if [ "$RC" = 5 ] && has_store freeze frozen_unreadable; then
   pass "MZ-F8: an unreadable sentinel on freeze -> verdict=frozen_unreadable"
@@ -1674,6 +1699,73 @@ run_mode mz-p8-noref probe SHIM_PROBE=noref
 if [ "$RC" = 5 ] && has_store probe probe_failed && grep -q 'reason=ref_not_landed' "$OUT"; then
   pass "MZ-P8: a push whose ref never landed -> probe_failed reason=ref_not_landed"
 else fail "MZ-P8: an unlanded ref was not attributed" "$(ctx)"; fi
+
+# MZ-P10..P13 (#9439 item 5): the probe verifies the store BEFORE it provisions, so a git-data host that
+# is still booting (no mount, a wrong device, an unbound marker, a held sentinel) reads as the store
+# verdict it is, never as probe_failed reason=provision, and no push or remove runs against it.
+no_probe_session() { ! grep -qE '^ssh .* 10\.0\.1\.20 id=' "$TLF" && ! grep -q 'git-data-provision.sh' "$TLF" && ! grep -q 'git-data-remove.sh' "$TLF"; }
+case_mz_p10() { run_mode "${1:-mz-p10-unverified}" probe SHIM_PROBE=ok SHIM_VERIFY=r21
+  [ "$RC" = 5 ] && has_store store-verified store_unverified && grep -q 'reason=marker_absent' "$OUT" && no_probe_session; }
+case_mz_p11() { run_mode "${1:-mz-p11-frozen-ours}" probe SHIM_PROBE=ok SHIM_VERIFY=r23 SHIM_FREEZE=ours
+  [ "$RC" = 5 ] && has_store store-verified cutover_frozen && ! grep -q 'resume_same_lineage' "$OUT" && no_probe_session; }
+if case_mz_p10; then pass "MZ-P10: an unbound store marker -> probe refuses store_unverified, and no provision/push/remove session ran"
+else fail "MZ-P10: the probe ran against an unverified store" "$(ctx)"; fi
+if case_mz_p11; then pass "MZ-P11: a held sentinel (even this lineage's) -> probe refuses cutover_frozen, never the proof's resume tolerance"
+else fail "MZ-P11: the probe tolerated a held sentinel" "$(ctx)"; fi
+run_mode mz-p11b-frozen-foreign probe SHIM_PROBE=ok SHIM_VERIFY=r23 SHIM_FREEZE=foreign
+if [ "$RC" = 5 ] && has_store store-verified cutover_frozen && no_probe_session; then
+  pass "MZ-P11b: a foreign sentinel -> probe refuses cutover_frozen before any provision session"
+else fail "MZ-P11b: the probe ran under a foreign sentinel" "$(ctx)"; fi
+run_mode mz-p12-unmounted probe SHIM_PROBE=ok SHIM_FINDMNT=empty
+if [ "$RC" = 5 ] && has_store store-mounted old_store_unmounted && no_probe_session; then
+  pass "MZ-P12: a booting host with no device mounted at the store root -> old_store_unmounted, not probe_failed rc=5"
+else fail "MZ-P12: an unmounted store was not named" "$(ctx)"; fi
+run_mode mz-p12b-notmapper probe SHIM_PROBE=ok SHIM_FINDMNT=plain
+if [ "$RC" = 5 ] && has_store store-on-mapper store_not_on_mapper && no_probe_session; then
+  pass "MZ-P12b: the store root on a plain device -> store_not_on_mapper, not probe_failed rc=6"
+else fail "MZ-P12b: a wrong device was not named" "$(ctx)"; fi
+run_mode mz-p13-order probe SHIM_PROBE=ok
+_p13_m="$(tl_line '10\.0\.1\.20 findmnt -n -o SOURCE')"; _p13_s="$(tl_line '10\.0\.1\.20 r=')"; _p13_i="$(tl_line '10\.0\.1\.20 id=')"
+if [ "$RC" = 0 ] && has_store probe ok && [ -n "$_p13_m" ] && [ -n "$_p13_s" ] && [ -n "$_p13_i" ] && [ "$_p13_m" -lt "$_p13_s" ] && [ "$_p13_s" -lt "$_p13_i" ]; then
+  pass "MZ-P13: the happy probe reads the mount source, then the store session, THEN provisions (pre-flight strictly before the erasure steps)"
+else fail "MZ-P13: the probe pre-flight is missing or out of order" "m=$_p13_m s=$_p13_s i=$_p13_i $(ctx)"; fi
+
+# MZ-VO1..VO3 (#9439 item 5 review): the verified-only session EXECUTED against a synthesized store (SHIM_VERIFY=exec runs the
+# remote bytes locally, as the VX rows do), so the named verified-facts array is driven, not only canned. Refusal rows prove the
+# facts are read (marker, UUID, sentinel); the MUST-PASS rows prove the repositories-directory checks are NOT part of the pre-flight
+# (a rollback probes a store a live flip has filled); the garbage row proves an unreadable answer is refused, not accepted.
+vo_run() { # <name> <expect-rc> <pattern|-> <root> [VAR=value ...]
+  local nm="$1" want="$2" pat="$3" root="$4"; shift 4
+  run_mode "$nm" probe SHIM_PROBE=ok SHIM_VERIFY=exec OLD_ROOT="$root" STORE_VERIFIED="$root/store-verified" "$@"
+  [ "$RC" = "$want" ] || return 1
+  [ "$pat" = - ] || grep -qE "$pat" "$OUT" || return 1
+  if [ "$want" = 5 ]; then no_probe_session; else has_store probe ok && ! has_store store-empty ok && grep -qE '^ssh .* 10\.0\.1\.20 id=' "$TLF"; fi
+}
+case_vo_valid() { local r; r="$(_vxroot "vo1-${1:-x}")"; assert_fixture_dir "$r"; printf '%s\n' "$FIX_UUID" > "$r/store-verified"; vo_run "${1:-vo1}" 0 - "$r"; }
+case_vo_mismatch() { local r; r="$(_vxroot "vo2-${1:-x}")"; assert_fixture_dir "$r"; printf '%s\n' 0b3e9f71-5c2d-4a8e-8f16-7d4c2a9e1b05 > "$r/store-verified"
+  vo_run "${1:-vo2}" 5 'verdict=store_unverified reason=marker_mismatch' "$r"; }
+case_vo_sentinel() { local r; r="$(_vxroot "vo3-${1:-x}")"; assert_fixture_dir "$r"; printf '%s\n' "$FIX_UUID" > "$r/store-verified"; : > "$r/.cutover-freeze"
+  vo_run "${1:-vo3}" 5 'probe=store-verified verdict=cutover_frozen' "$r" SHIM_FREEZE=ours; }
+case_vo_nonempty() { local r; r="$(_vxroot "vo4-${1:-x}")"; assert_fixture_dir "$r"; printf '%s\n' "$FIX_UUID" > "$r/store-verified"; mkdir -p "$r/repositories/ws-1.git" && : > "$r/repositories/ws-1.git/HEAD"
+  vo_run "${1:-vo4}" 0 - "$r"; }
+case_vo_missing() { local r; r="$(_vxroot "vo5-${1:-x}")"; assert_fixture_dir "$r"; printf '%s\n' "$FIX_UUID" > "$r/store-verified"; rmdir "$r/repositories"
+  vo_run "${1:-vo5}" 0 - "$r"; }
+case_vo_dangling() { local r; r="$(_vxroot "vo6-${1:-x}")"; assert_fixture_dir "$r"; printf '%s\n' "$FIX_UUID" > "$r/store-verified"; rmdir "$r/repositories" && ln -s "$r/nowhere" "$r/repositories"
+  vo_run "${1:-vo6}" 0 - "$r"; }
+case_vo_nomarker() { local r; r="$(_vxroot "vo7-${1:-x}")"; assert_fixture_dir "$r"; vo_run "${1:-vo7}" 5 'verdict=store_unverified reason=marker_absent' "$r"; }
+case_vo_garbage() { local v; for v in empty notok x0 line2; do
+  run_mode "${1:-vo8}-$v" probe SHIM_PROBE=ok SHIM_VERIFY=$v
+  { [ "$RC" = 5 ] && has_store store-verified probe_failed && grep -q 'rc=96' "$OUT" && no_probe_session; } || return 1
+  done; }
+VO_FAIL=""
+case_vo_mustpass() { local c; VO_FAIL=""; for c in case_vo_valid case_vo_nonempty case_vo_missing case_vo_dangling; do "$c" || { VO_FAIL="$c"; return 1; }; done; }
+case_vo_refuse() { local c; VO_FAIL=""; for c in case_vo_mismatch case_vo_sentinel case_vo_nomarker; do "$c" || { VO_FAIL="$c"; return 1; }; done; }
+if case_vo_mustpass; then pass "MZ-VO1 (must-pass): the verified-only session executed against a valid empty store, a POPULATED one, one with NO repositories directory and one with a dangling repositories symlink -> the probe proceeds (a rollback probes a filled store; provision then names a missing directory), and the pre-flight never claims the emptiness verdict"
+else fail "MZ-VO1: the verified-only pre-flight refused a store it must clear (failing member: ${VO_FAIL:-?})" "$(ctx)"; fi
+if case_vo_refuse; then pass "MZ-VO2: the executed verified-only session refuses a marker naming another filesystem (store_unverified marker_mismatch), a held sentinel even when it is this lineage's (cutover_frozen) and an absent marker (marker_absent), with nothing provisioned"
+else fail "MZ-VO2: an unverified or frozen store reached the provision session (failing member: ${VO_FAIL:-?})" "$(ctx)"; fi
+if case_vo_garbage; then pass "MZ-VO3: an rc-0 answer that is empty, not a count, or carries extra lines is refused as probe_failed rc=96 (unreadable proves nothing held)"
+else fail "MZ-VO3: a garbage verified-only answer was accepted" "$(ctx)"; fi
 
 # MZ-L: an unsafe probe id (bad lineage -> id shape) refuses arg_probe_id.
 run_mode mz-l-badid probe CUTOVER_LINEAGE='bad;id'
@@ -1836,6 +1928,38 @@ check("WF-finalizer: the finalizer unwinds flag off (write seam), redeploys via 
       and "dispatch-web-redeploy/track.sh" in fzcode and "MODE=unfreeze" in fzcode
       and "git-data-cutover.sh" in fzcode and "flag_written" in fzcode,
       fzcode[:400])
+# #9439 item 6: the flag-write step marks that a write MAY have landed BEFORE the precheck script runs (a write that
+# lands and then fails its read-back dies before flag_written, and the finalizer's flip arm keys on the markers).
+# Anchored on the touch CALL FORM (a comment cannot produce it) in the comment-stripped body, in order, once each.
+fw = step("flag_write")
+fwcode = "\n".join(l for l in (fw.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+_xt = fwcode.find('case "$-" in *x*)')
+_ma = fwcode.find('touch "$RUNNER_TEMP/cutover-progress/flag_write_attempted"')
+_pc = fwcode.find("bash apps/web-platform/infra/git-data-flag-precheck.sh")
+_wr = fwcode.find('touch "$RUNNER_TEMP/cutover-progress/flag_written"')
+check("WF-flagmark: the flag-write step touches flag_write_attempted once, after the xtrace guard and BEFORE the precheck script, and flag_written stays after it",
+      0 <= _xt < _ma < _pc < _wr and re.findall(r'^\s*touch "\$RUNNER_TEMP/cutover-progress/(\w+)"$', fwcode, re.M) == ["flag_write_attempted", "flag_written"]
+      and fwcode.count("flag_write_attempted") == 1,
+      [_xt, _ma, _pc, _wr])
+# #9439 CTO ruling (item 8): a gc.timer that will not start (exit 6) fails the unfreeze step RED but publishes
+# gc_timer_failed, so the probe and the stamp (which run only on a CLEARED sentinel) are not skipped. Anchored on the
+# call forms, comment-stripped; the stamp must additionally require the probe's success explicitly.
+_un = step("unfreeze"); _uncode = "\n".join(l for l in (_un.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+_stamp = next((x for x in steps if "GIT_DATA_LUKS_CUTOVER_AT" in str(x.get("name", ""))), {})
+_pri = _uncode.find('bash apps/web-platform/infra/git-data-cutover.sh || rc=$?'); _echo = _uncode.find('if [ "$rc" = 6 ]; then echo "gc_timer_failed=1" >> "$GITHUB_OUTPUT"; fi'); _ex = _uncode.find('exit "$rc"')
+check("WF-gcgate: the unfreeze step captures the script's rc with `|| rc=$?`, exports gc_timer_failed=1 on exit 6 only, then re-raises the rc; the probe and stamp `if:` expressions are EXACTLY the ruled ones (the probe runs on a cleared sentinel: unfreeze success or gc_timer_failed; the stamp is flip-only and needs the probe's success)",
+      _uncode.lstrip().startswith("rc=0") and 0 < _pri < _echo < _ex and _uncode.count("gc_timer_failed") == 1
+      and str(_stamp.get("if")) == "steps.confirm.outputs.mode == 'flip' && steps.flag_precheck.outputs.nothing_to_rollback != '1' && steps.probe.outcome == 'success' && !cancelled()"
+      and str(step("probe").get("if")) == "(steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback') && steps.flag_precheck.outputs.nothing_to_rollback != '1' && (steps.unfreeze.outcome == 'success' || steps.unfreeze.outputs.gc_timer_failed == '1') && !cancelled()",
+      [_pri, _echo, _ex, _stamp.get("if"), step("probe").get("if")])
+# The progress markers the finalizer reconciles from have ONE writer each; nothing else reads a missing marker as "nothing to unwind".
+_frz = step("freeze"); _frzcode = "\n".join(l for l in (_frz.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+_stcode = "\n".join(l for l in (_stamp.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+_cf = step("confirm"); _cfcode = "\n".join(l for l in (_cf.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+_fm = _frzcode.find('touch "$RUNNER_TEMP/cutover-progress/freeze_held"'); _fs = _frzcode.find("bash apps/web-platform/infra/git-data-cutover.sh")
+check("WF-markers: the progress dir is created by the confirm step, freeze_held is touched BEFORE the freeze script runs, and cutover_at_written is touched by the stamp step",
+      'mkdir -p "$RUNNER_TEMP/cutover-progress"' in _cfcode and 0 <= _fm < _fs and 'touch "$RUNNER_TEMP/cutover-progress/cutover_at_written"' in _stcode,
+      [_fm, _fs])
 check("WF-finalizer: the finalizer binds BOTH tokens it needs (write seam + prd_terraform read) and no other secret",
       fz.get("env") and fz["env"].get("DOPPLER_TOKEN_GIT_DATA_FLAG") == "${{ secrets.DOPPLER_TOKEN_GIT_DATA_FLAG }}" and fz["env"].get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN }}",
       fz.get("env"))
@@ -1930,18 +2054,18 @@ bodies = [x.get("run") or "" for x in nsteps]
 check("N-body: no notify run: body interpolates a ${{ }} expression and the job never references inputs.* in any spelling (inputs.x, inputs['x'], github.event) — every value arrives through env:",
       bool(notify) and not any("${{" in b for b in bodies)
       and not re.search(r"\binputs\b|github\.event|toJSON|vars\.", json.dumps(notify)), [b[:60] for b in bodies if "${{" in b])
-EXPR_OK = [r"needs\.cutover\.result", r"needs\.cutover\.outputs\.(mode|finalizer_ran|freeze_held|recovery_failed|probe_failed|started)",
+EXPR_OK = [r"needs\.cutover\.result", r"needs\.cutover\.outputs\.(mode|finalizer_ran|freeze_held|recovery_failed|probe_failed|gc_timer_stopped|started)",
            r"github\.(run_id|server_url|repository)", r"secrets\.(GITHUB_TOKEN|RESEND_API_KEY)",
            r"steps\.body\.outputs\.(subject|body)", r"steps\.email\.outcome"]
 exprs = [e.strip() for e in re.findall(r"\$\{\{(.*?)\}\}", json.dumps(nsteps))]
 bad_exprs = [e for e in exprs if not any(re.fullmatch(p_, e) for p_ in EXPR_OK)]
 body_env = (next((x for x in nsteps if x.get("id") == "body"), {}).get("env")) or {}
-check("N-exprs: every ${{ }} expression in the notify steps is on the allowlist (the needs.cutover verdict outputs, run id/url, the two secrets, the body step's own outputs and the email outcome), and the body step's env is EXACTLY the nine verdict inputs with their canonical sources",
+check("N-exprs: every ${{ }} expression in the notify steps is on the allowlist (the needs.cutover verdict outputs, run id/url, the two secrets, the body step's own outputs and the email outcome), and the body step's env is EXACTLY the nine inputs (the seven verdict inputs plus the run id and url) with their canonical sources",
       bool(exprs) and not bad_exprs and body_env == {
           "MODE": "${{ needs.cutover.outputs.mode }}", "RESULT": "${{ needs.cutover.result }}",
           "FINALIZER_RAN": "${{ needs.cutover.outputs.finalizer_ran }}", "FREEZE_HELD": "${{ needs.cutover.outputs.freeze_held }}",
           "RECOVERY_FAILED": "${{ needs.cutover.outputs.recovery_failed }}", "PROBE_FAILED": "${{ needs.cutover.outputs.probe_failed }}",
-          "RUN_ID": "${{ github.run_id }}", "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"},
+          "GC_TIMER_STOPPED": "${{ needs.cutover.outputs.gc_timer_stopped }}", "RUN_ID": "${{ github.run_id }}", "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"},
       (bad_exprs, sorted(body_env)))
 # every steps.<id>.outputs / steps.<id>.outcome reference must resolve to a declared step id in ITS job
 def ref_ok(jname, jobd):
@@ -1951,20 +2075,26 @@ def ref_ok(jname, jobd):
 check("N-refs: every steps.<id>.outputs/outcome reference in either job resolves to a step id declared in that same job (a renamed id would otherwise read empty and still pass every substring row)",
       not ref_ok("cutover", job) and not ref_ok("notify-failure", notify), (ref_ok("cutover", job), ref_ok("notify-failure", notify)))
 oc = job.get("outputs") or {}
-check("N-outputs: the cutover job exports exactly {mode, started, finalizer_ran, freeze_held, recovery_failed, probe_failed} with these exact expressions",
+check("N-outputs: the cutover job exports exactly {mode, started, finalizer_ran, freeze_held, recovery_failed, probe_failed, gc_timer_stopped} with these exact expressions",
       oc == {"mode": "${{ steps.confirm.outputs.mode }}", "started": "${{ steps.confirm.outputs.mode != '' }}",
              "finalizer_ran": "${{ steps.finalizer.outputs.ran }}", "freeze_held": "${{ steps.finalizer.outputs.freeze_held }}",
              "recovery_failed": "${{ steps.finalizer.outputs.recovery_failed }}",
-             "probe_failed": "${{ steps.probe.outcome == 'failure' && '1' || '' }}"}, oc)
-check("N-finalizer: the finalizer step has id finalizer and is fed the unfreeze step's outcome (its behaviour is pinned by the executed FZ rows)",
+             "probe_failed": "${{ steps.probe.outcome == 'failure' && '1' || '' }}",
+             "gc_timer_stopped": "${{ steps.finalizer.outputs.gc_timer_stopped }}"}, oc)
+check("N-finalizer: the finalizer step has id finalizer and is fed the unfreeze step's outcome AND its gc_timer_failed output (its behaviour is pinned by the executed FZ rows)",
       step("finalizer").get("id") == "finalizer" and (step("finalizer").get("env") or {}).get("UNFREEZE_OUTCOME") == "${{ steps.unfreeze.outcome }}"
+      and (step("finalizer").get("env") or {}).get("GC_TIMER_FAILED") == "${{ steps.unfreeze.outputs.gc_timer_failed }}"
       and (step("unfreeze").get("id") == "unfreeze"), (step("finalizer").get("env"), step("unfreeze").get("id")))
 pr = step("probe")
 check("N-probe: the single MODE=probe step carries id probe, runs after the unfreeze step, is gated to flip OR rollback, and has no continue-on-error (a failed probe fails the run red after the unwind)",
       pr.get("id") == "probe" and pos["probe"][0] > pos["unfreeze"][0] and "'flip'" in str(pr.get("if")) and "'rollback'" in str(pr.get("if"))
-      and "continue-on-error" not in pr and "always()" not in str(pr.get("if")), pr.get("if"))
+      and "continue-on-error" not in pr and "always()" not in str(pr.get("if"))
+      and "steps.unfreeze.outputs.gc_timer_failed == '1'" in str(pr.get("if")) and str(pr.get("if")).rstrip().endswith("&& !cancelled()"), pr.get("if"))
+_nbstep = next((x for x in nsteps if x.get("id") == "body"), {}); _nbcode = _nbstep.get("run") or ""
+check("WF-notify-plain: the notify body step's source has no backtick and no command substitution (a backtick in its double-quoted verdict strings would run as a command under set -e and kill the one job that must not fail)",
+      bool(_nbcode) and "`" not in _nbcode and "$(" not in _nbcode, [("`" in _nbcode), ("$(" in _nbcode)])
 # Step bodies for the executed rows.
-for k in ("key_fetch", "ssh_config", "secrets_check", "teardown", "finalizer"):
+for k in ("key_fetch", "ssh_config", "secrets_check", "teardown", "finalizer", "flag_write", "unfreeze"):
     s = step(k)
     if isinstance(s.get("run"), str):
         open("%s/%s.sh" % (steps_dir, k), "w").write(s["run"])
@@ -1992,7 +2122,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -eq 50 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 50) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 54 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 54) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -2260,13 +2390,13 @@ else fail "TD: the executed teardown left key material or the bridge behind" "$T
 # and the two scripts the finalizer calls are PATH/cwd stubs that log their calls. Every case compares the
 # WHOLE $GITHUB_OUTPUT content and the exit code, so a missing, extra or misplaced output write is a red case.
 mkdir -p "$T/nbfz" || { printf 'FAIL SETUP: mkdir nbfz\n' >&2; exit 1; }
-nb_run() { # <body-file> <MODE> <RESULT> <FINALIZER_RAN> <FREEZE_HELD> <RECOVERY_FAILED> <PROBE_FAILED> [RUN_ID]
+nb_run() { # <body-file> <MODE> <RESULT> <FINALIZER_RAN> <FREEZE_HELD> <RECOVERY_FAILED> <PROBE_FAILED> [RUN_ID] [GC_TIMER_STOPPED]
   local body="$1" d="$T/nbfz/nb"
   assert_fixture_dir "$d"
   rm -rf "$d"; mkdir -p "$d" || { printf 'FAIL SETUP: mkdir nb\n' >&2; exit 1; }
   : > "$d/out"
   env -i PATH=/usr/bin:/bin RUNNER_TEMP="$d" GITHUB_OUTPUT="$d/out" RUN_ID="${8-12345}" RUN_URL=https://example.invalid/run \
-    MODE="$2" RESULT="$3" FINALIZER_RAN="$4" FREEZE_HELD="$5" RECOVERY_FAILED="$6" PROBE_FAILED="$7" \
+    MODE="$2" RESULT="$3" FINALIZER_RAN="$4" FREEZE_HELD="$5" RECOVERY_FAILED="$6" PROBE_FAILED="$7" GC_TIMER_STOPPED="${9-}" \
     bash --noprofile --norc -eo pipefail "$body" > "$d/stdout" 2>&1
   NB_RC=$?
   NB_SUBJ="$(sed -n 's/^subject=//p' "$d/out")"; NB_HTML="$(sed -n 's/^body=//p' "$d/out")"; NB_LINES="$(wc -l < "$d/out")"
@@ -2279,6 +2409,15 @@ case_nb() { # <body-file> — every NB row; returns non-zero on the first miss (
   nb_run "$body" flip failure 1 1 "" ""
   [ "$NB_RC" = 0 ] && [ "$NB_LINES" = 2 ] && [[ "$NB_SUBJ" == *"[git-data-cutover flip failure] FREEZE_HELD" ]] && [[ "$NB_TXT" == *"mode=unfreeze"* ]] && [[ "$NB_TXT" == *"--ref main"* ]] \
     && [[ "$NB_TXT" == *"confirm=UNFREEZE-GIT-DATA"* ]] && [[ "$NB_HTML" == *"mode=unfreeze"* ]] || { NB_WHY="NB1 freeze_held: $NB_DETAIL"; return 1; }
+  # NB1b (#9439 item 8): FREEZE_HELD means a stranded SENTINEL only; a stopped gc timer has its own word (NB1c).
+  [[ "$NB_TXT" != *"gc_timer_restart_failed"* ]] && [[ "$NB_SUBJ" != *"GC_TIMER_STOPPED"* ]] || { NB_WHY="NB1b freeze_held text mentions the gc timer: $NB_DETAIL"; return 1; }
+  # NB1c: a timer-only failure (the finalizer's gc_timer_stopped output) is its own word with its own remedy, never a freeze,
+  # and the generic sentence that claims no stranded state does not replace it.
+  nb_run "$body" flip failure 1 "" "" "" 12345 1
+  [ "$NB_RC" = 0 ] && [ "$NB_LINES" = 2 ] && [[ "$NB_SUBJ" == *"[git-data-cutover flip failure] GC_TIMER_STOPPED" ]] && [[ "$NB_TXT" == *"gc_timer_restart_failed"* ]] \
+    && [[ "$NB_TXT" == *"mode=unfreeze -f confirm=UNFREEZE-GIT-DATA"* ]] && [[ "$NB_TXT" != *"If the freeze sentinel is stranded"* ]] \
+    && [[ "$NB_TXT" != *"no stranded freeze"* ]] && [[ "$NB_TXT" != *"STATE UNKNOWN"* ]] && [[ "$NB_SUBJ" != *"FREEZE_HELD"* ]] \
+    || { NB_WHY="NB1c gc_timer_stopped: $NB_DETAIL | $NB_TXT"; return 1; }
   nb_run "$body" flip failure 1 1 1 ""
   [[ "$NB_SUBJ" == *"FREEZE_HELD RECOVERY_FAILED" ]] || { NB_WHY="NB2 both verdicts: $NB_DETAIL"; return 1; }
   nb_run "$body" "" cancelled "" "" "" ""
@@ -2288,7 +2427,12 @@ case_nb() { # <body-file> — every NB row; returns non-zero on the first miss (
   nb_run "$body" proof failure 1 "" "" ""
   [[ "$NB_TXT" == *"read-only"* ]] && [[ "$NB_TXT" != *"STATE UNKNOWN"* ]] || { NB_WHY="NB5 proof: $NB_DETAIL"; return 1; }
   nb_run "$body" rollback failure 1 "" "" 1
-  [[ "$NB_SUBJ" == *"PROBE_FAILED" ]] && [[ "$NB_TXT" != *"mode=unfreeze"* ]] || { NB_WHY="NB6 probe failed alone: $NB_DETAIL"; return 1; }
+  [[ "$NB_SUBJ" == *"PROBE_FAILED" ]] && [[ "$NB_TXT" != *"confirm=UNFREEZE-GIT-DATA"* ]] || { NB_WHY="NB6 probe failed alone: $NB_DETAIL"; return 1; }
+  # NB6b (#9439 item 5): the text names every store verdict a booting host reads as, sends cutover_frozen to mode=unfreeze (the proof
+  # refuses it too), and says no mode re-runs the erasure probe. The backtick/dollar hazard lives in the SOURCE and is pinned by the
+  # WF-notify-plain census row, not here: a rendered backtick would already have run as a command.
+  [[ "$NB_TXT" == *"old_store_unmounted"* ]] && [[ "$NB_TXT" == *"store_not_on_mapper"* ]] && [[ "$NB_TXT" == *"store_unverified"* ]] && [[ "$NB_TXT" == *"cutover_frozen"* ]] \
+    && [[ "$NB_TXT" == *"residue_left"* ]] && [[ "$NB_TXT" == *"mode=unfreeze"* ]] && [[ "$NB_TXT" == *"No mode re-runs the erasure probe"* ]] || { NB_WHY="NB6b probe failed text: $NB_DETAIL | $NB_TXT"; return 1; }
   nb_run "$body" 'x;rm -rf y' failure 1 1 "" ""
   [[ "$NB_SUBJ" == *"[git-data-cutover unknown failure]"* ]] && [ "$NB_LINES" = 2 ] || { NB_WHY="NB7 hostile MODE: $NB_DETAIL"; return 1; }
   nb_run "$body" flip failure 1 1 "" "" '1; echo x'
@@ -2321,6 +2465,8 @@ fz_run() { # <body-file> <MODE> <UNFREEZE_OUTCOME> <markers: space list> [STUB_E
   cat > "$d/apps/web-platform/infra/git-data-cutover.sh" <<'STUB'
 #!/usr/bin/env bash
 printf 'git-data-cutover MODE=%s\n' "${MODE:-}" >> "$FZ_LOG"
+n=$(cat "$FZ_LOG.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$FZ_LOG.n"
+[ "$n" -ge 2 ] && [ -n "${STUB_UNFREEZE_RC2:-}" ] && exit "$STUB_UNFREEZE_RC2"
 exit "${STUB_UNFREEZE_RC:-0}"
 STUB
   cat > "$d/.github/actions/dispatch-web-redeploy/track.sh" <<'STUB'
@@ -2366,13 +2512,108 @@ case_fz() { # <finalizer-body-file>
   fz_expect "FZ9 proof mode" 0 "ran=1 " 0 || return 1
   fz_run "$body" flip failure ""
   fz_expect "FZ10 flip, nothing to unwind (a precheck failure)" 0 "ran=1 " 0 || return 1
+  # FZ11 (#9439 item 6): the flag write MAY have landed (the step marks BEFORE the script runs) but the step
+  # died before flag_written — the unwind must still write the flag off, redeploy and unfreeze.
+  fz_run "$body" flip failure "freeze_held flag_write_attempted"
+  fz_expect "FZ11 flip, flag write attempted but never marked written: still a total unwind" 0 "ran=1 " 1 || return 1
+  [[ "$FZ_LOGTXT" == *"flagwrite"* ]] && [[ "$FZ_LOGTXT" == *"track"* ]] || { FZ_WHY="FZ11 the unwind did not write the flag off and redeploy: $FZ_DETAIL"; return 1; }
+  # FZ12: the marker is flip-only. A rollback whose flag-off write failed holds only the attempted marker:
+  # nothing to unwind, no host dialed (a regression pin — it must stay true after the flip condition widens).
+  fz_run "$body" rollback failure "flag_write_attempted"
+  fz_expect "FZ12 rollback, only the attempted marker: nothing to unwind" 0 "ran=1 " 0 || return 1
+  [[ "$FZ_LOGTXT" != *"flagwrite"* ]] && [[ "$FZ_LOGTXT" != *"track"* ]] || { FZ_WHY="FZ12 a rollback dialed the host: $FZ_DETAIL"; return 1; }
+  # FZ13..FZ17 (#9439 item 8, CTO ruling): a gc.timer that will not start AFTER the sentinel was cleared (the unfreeze step's exit 6 ->
+  # GC_TIMER_FAILED) is exported as gc_timer_stopped by the EXIT trap, is never a freeze_held / recovery_failed, and never unwinds a flip
+  # that otherwise concluded. FZ13: concluded flip. FZ14: standalone unfreeze mode. FZ15/FZ16: rollback, the finalizer's own unfreeze
+  # retries once (still 6 -> stopped; healed -> silent). FZ17: a flip that failed LATER (probe) is still unwound, but the timer is no freeze.
+  fz_run "$body" flip failure "flag_written freeze_held cutover_at_written" GC_TIMER_FAILED=1
+  fz_expect "FZ13 concluded flip, gc timer stopped: exported, no unwind" 0 "gc_timer_stopped=1 ran=1 " 0 || return 1
+  [[ "$FZ_LOGTXT" != *"flagwrite"* ]] && [[ "$FZ_LOGTXT" != *"track"* ]] || { FZ_WHY="FZ13 a timer-only failure unwound a concluded flip: $FZ_DETAIL"; return 1; }
+  fz_run "$body" unfreeze failure "" GC_TIMER_FAILED=1
+  fz_expect "FZ14 unfreeze mode, gc timer stopped: no freeze_held" 0 "gc_timer_stopped=1 ran=1 " 0 || return 1
+  fz_run "$body" rollback failure "flag_written" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=6
+  fz_expect "FZ15 rollback, timer still stopped after the finalizer's retry" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
+  fz_run "$body" rollback failure "flag_written" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=0
+  fz_expect "FZ16 rollback, the finalizer's retry heals the timer: silent" 0 "ran=1 " 1 || return 1
+  fz_run "$body" flip failure "flag_written freeze_held" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=6
+  fz_expect "FZ17 flip failed later with the timer stopped: unwound, but no freeze_held / recovery_failed" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
+  [[ "$FZ_LOGTXT" == *"flagwrite"* ]] && [[ "$FZ_LOGTXT" == *"track"* ]] || { FZ_WHY="FZ17 the later failure was not unwound: $FZ_DETAIL"; return 1; }
+  # FZ18: a failed unwind redeploy is RECOVERY_FAILED (a pre-existing line the suite never drove; STUB_TRACK_RC existed unused).
+  fz_run "$body" flip failure "flag_written freeze_held" STUB_TRACK_RC=1
+  fz_expect "FZ18 flip, the unwind redeploy fails: recovery_failed" 1 "ran=1 recovery_failed=1 " 1 || return 1
+  # FZ19: a held sentinel after a timer failure is reported as FROZEN only — never a stopped-timer word beside it.
+  fz_run "$body" flip failure "flag_written freeze_held" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=1
+  fz_expect "FZ19 flip, timer stopped then the finalizer's unfreeze is refused: freeze_held + recovery_failed, no gc word" 1 "freeze_held=1 ran=1 recovery_failed=1 " 1 || return 1
+  # FZ20/FZ21: the finalizer's OWN child unfreeze exiting 6 (no step flag: a flip/rollback that failed before the unfreeze step).
+  fz_run "$body" flip failure "flag_written freeze_held" STUB_UNFREEZE_RC=6
+  fz_expect "FZ20 flip failed early, the finalizer's own unfreeze finds the timer stuck: gc word, not a freeze" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
+  fz_run "$body" rollback failure "flag_written" STUB_UNFREEZE_RC=6
+  fz_expect "FZ21 rollback failed early, the finalizer's own unfreeze finds the timer stuck: gc word, not a freeze" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
+  # FZ22: two child unfreezes in one finalizer (rollback + a freeze_held marker): a held sentinel on the FIRST must not be re-labelled
+  # a timer-only failure by a rc-6 SECOND (the word invariant holds across calls, not only within one).
+  fz_run "$body" rollback failure "flag_written freeze_held" STUB_UNFREEZE_RC=5 STUB_UNFREEZE_RC2=6
+  fz_expect "FZ22 rollback, first unfreeze held then the second finds the timer stuck: freeze_held + recovery_failed, no gc word" 1 "freeze_held=1 ran=1 recovery_failed=1 " 2 || return 1
   return 0
 }
 if [ ! -s "$T/steps/finalizer.sh" ]; then
   fail "FZ: the finalizer step body was not extracted" "never a pass on zero"
 elif case_fz "$T/steps/finalizer.sh"; then
-  pass "FZ: the finalizer, EXECUTED over 11 mode x outcome x marker cases — freeze_held and recovery_failed are exported only from the failed-unfreeze and failed-unwind branches, a clean unwind or a concluded rollback exports only ran=1 and never re-runs unfreeze, a failed unfreeze MODE exports freeze_held, and the exit code carries RECOVERY_FAILED"
+  pass "FZ: the finalizer, EXECUTED over 22 mode x outcome x marker cases — freeze_held and recovery_failed are exported only from the failed-unfreeze and failed-unwind branches, a clean unwind or a concluded rollback exports only ran=1 and never re-runs unfreeze, a failed unfreeze MODE exports freeze_held, and the exit code carries RECOVERY_FAILED"
 else fail "FZ: the executed finalizer diverged" "$FZ_WHY"; fi
+
+# ── FW — the flag_write step body, EXECUTED (#9439 item 6). WF-flagmark pins the touch's POSITION in the text; this runs the real bytes
+# against a stub precheck, because `false && touch ...` (and `: touch ...`) keep the text and the order and never write the marker — and
+# FZ11/FZ12 only prove the finalizer reads a marker the fixture creates itself. A precheck that FAILS after the write may have landed
+# must still leave flag_write_attempted and no flag_written; one that succeeds leaves both.
+mkdir -p "$T/nbfz/fw" || { printf 'FAIL SETUP: mkdir fw\n' >&2; exit 1; }
+case_fw() { # <flag_write-body-file>
+  local body="$1" d="$T/nbfz/fw"
+  assert_fixture_dir "$d"
+  FW_WHY=""
+  [ -s "$body" ] || { FW_WHY="no flag_write body extracted"; return 1; }
+  rm -rf "$d"; mkdir -p "$d/rt/cutover-progress" "$d/apps/web-platform/infra" || { printf 'FAIL SETUP: mkdir fw run\n' >&2; exit 1; }
+  printf '#!/usr/bin/env bash\nexit "${STUB_PRECHECK_RC:-0}"\n' > "$d/apps/web-platform/infra/git-data-flag-precheck.sh"
+  ( cd "$d" && env -i PATH=/usr/bin:/bin RUNNER_TEMP="$d/rt" STUB_PRECHECK_RC=1 bash --noprofile --norc -eo pipefail "$body" > "$d/stdout1" 2>&1 ); FW_RC1=$?
+  [ "$FW_RC1" != 0 ] && [ -e "$d/rt/cutover-progress/flag_write_attempted" ] && [ ! -e "$d/rt/cutover-progress/flag_written" ] \
+    || { FW_WHY="failing precheck: rc=$FW_RC1 markers=[$(ls "$d/rt/cutover-progress" | tr '\n' ' ')]"; return 1; }
+  rm -f "$d/rt/cutover-progress/"*
+  ( cd "$d" && env -i PATH=/usr/bin:/bin RUNNER_TEMP="$d/rt" STUB_PRECHECK_RC=0 bash --noprofile --norc -eo pipefail "$body" > "$d/stdout2" 2>&1 ); FW_RC2=$?
+  [ "$FW_RC2" = 0 ] && [ -e "$d/rt/cutover-progress/flag_write_attempted" ] && [ -e "$d/rt/cutover-progress/flag_written" ] \
+    || { FW_WHY="passing precheck: rc=$FW_RC2 markers=[$(ls "$d/rt/cutover-progress" | tr '\n' ' ')]"; return 1; }
+  return 0
+}
+if [ ! -s "$T/steps/flag_write.sh" ]; then
+  fail "FW: the flag_write step body was not extracted" "never a pass on zero"
+elif case_fw "$T/steps/flag_write.sh"; then
+  pass "FW: the flag_write body, EXECUTED — a precheck that fails leaves flag_write_attempted and NO flag_written (so the finalizer unwinds a write that may have landed), a precheck that passes leaves both"
+else fail "FW: the executed flag_write body wrote the wrong markers" "$FW_WHY"; fi
+
+# ── FU — the unfreeze step body, EXECUTED (#9439 CTO ruling). It is the ONLY producer of gc_timer_failed and the only place the script's rc
+# is re-raised, so WF-gcgate's text pins cannot see `rc=0` slipped in before `exit "$rc"` (the step would then never go red) nor an echo that fires
+# on the wrong rc. Stub script exits 0 / 6 / 5: exit 0 and no output; exit 6 and gc_timer_failed=1; exit 5 and NO output (a held sentinel is not a timer fault).
+mkdir -p "$T/nbfz/fu" || { printf 'FAIL SETUP: mkdir fu\n' >&2; exit 1; }
+case_fu() { # <unfreeze-body-file>
+  local body="$1" d="$T/nbfz/fu" want out
+  assert_fixture_dir "$d"
+  FU_WHY=""
+  [ -s "$body" ] || { FU_WHY="no unfreeze body extracted"; return 1; }
+  for want in 0 6 5; do
+    rm -rf "$d"; mkdir -p "$d/apps/web-platform/infra" || { printf 'FAIL SETUP: mkdir fu run\n' >&2; exit 1; }
+    printf '#!/usr/bin/env bash\nexit "${STUB_RC:-0}"\n' > "$d/apps/web-platform/infra/git-data-cutover.sh"
+    : > "$d/out"
+    ( cd "$d" && env -i PATH=/usr/bin:/bin GITHUB_OUTPUT="$d/out" STUB_RC="$want" bash --noprofile --norc -eo pipefail "$body" > "$d/stdout" 2>&1 ); FU_RC=$?
+    out="$(tr '\n' ' ' < "$d/out")"
+    [ "$FU_RC" = "$want" ] || { FU_WHY="stub rc $want: step exited $FU_RC (the rc must be re-raised)"; return 1; }
+    if [ "$want" = 6 ]; then [ "$out" = "gc_timer_failed=1 " ] || { FU_WHY="stub rc 6: output [$out]"; return 1; }
+    else [ -z "$out" ] || { FU_WHY="stub rc $want: unexpected output [$out]"; return 1; }; fi
+  done
+  return 0
+}
+if [ ! -s "$T/steps/unfreeze.sh" ]; then
+  fail "FU: the unfreeze step body was not extracted" "never a pass on zero"
+elif case_fu "$T/steps/unfreeze.sh"; then
+  pass "FU: the unfreeze step body, EXECUTED — exit 0 stays 0 with no output, exit 6 stays 6 and publishes gc_timer_failed=1, exit 5 stays 5 and publishes nothing"
+else fail "FU: the executed unfreeze step misreported the script's rc" "$FU_WHY"; fi
 
 # ── RB — every store-probe word has a runbook row, and every verdict-map row names a live word ──
 # Scope: the store and fence probes' verdict and reason words (everything through _store_*). The
@@ -2538,20 +2779,22 @@ g2n_row g3p-2-probe-coe 1 's#^        id: probe$#&\n        continue-on-error: t
 # 11 — executed-behaviour mutants: each edits ONE line of the finalizer or the notify body and the EXECUTED
 # NB/FZ cases (not a spelling row) must go RED. exec_row extracts the mutant's bodies with wf.py and runs
 # case_fz / case_nb over them.
-exec_row() { # <name> <diff-lines> <sed -E program> <fz|nb>
+exec_row() { # <name> <diff-lines> <sed -E program> <fz|nb|fw|fu>
   local name="$1" want="$2" expr="$3" kind="$4" sd
   if mutate "$name" "$WF" "$want" "$expr"; then
     sd="$T/mut/steps-$name"; mkdir -p "$sd"
     python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$sd" > "$T/mut/wf-$name.tsv" 2>&1
     if [ "$kind" = fz ] && [ -s "$sd/finalizer.sh" ]; then mutant_red "$name" case_fz "$sd/finalizer.sh"
     elif [ "$kind" = nb ] && [ -s "$sd/notify_body.sh" ]; then mutant_red "$name" case_nb "$sd/notify_body.sh"
+    elif [ "$kind" = fw ] && [ -s "$sd/flag_write.sh" ]; then mutant_red "$name" case_fw "$sd/flag_write.sh"
+    elif [ "$kind" = fu ] && [ -s "$sd/unfreeze.sh" ]; then mutant_red "$name" case_fu "$sd/unfreeze.sh"
     else fail "M-$name: no $kind body was extracted from the mutant" "$(head -c 200 "$T/mut/wf-$name.tsv")"; fi
   fi
 }
 exec_row fz1-recovery-exit-deleted 2 '/echo "recovery_failed=1" >> "\$GITHUB_OUTPUT"/{n;s#^( +)exit 1$#\1:#}' fz
 exec_row fz2-freeze-marker-inverted 2 's#if \[\[ -f "\$prog/freeze_held" \]\]; then#if [[ ! -f "$prog/freeze_held" ]]; then#' fz
 exec_row fz3-rollback-always-retries 2 's#if \[\[ "\$MODE" == "rollback" && "\$\{UNFREEZE_OUTCOME:-\}" == "success" \]\]; then#if [[ "$MODE" == "rollback" \&\& "${UNFREEZE_OUTCOME:-}" == "never" ]]; then#' fz
-exec_row fz4-clean-unwind-exports-freeze-held 1 's#^(              echo "finalizer: freeze cleared, gc\.timer restarted")$#\1\n              echo "freeze_held=1" >> "$GITHUB_OUTPUT"#' fz
+exec_row fz4-clean-unwind-exports-freeze-held 2 's#^( +if \[\[ \$r == 0 \]\]; then gcw=""; echo "finalizer: \$1: sentinel clear, gc\.timer started")$#\1; echo "freeze_held=1" >> "$GITHUB_OUTPUT"#' fz
 exec_row fz5-ran-output-deleted 1 '/^          echo "ran=1" >> "\$GITHUB_OUTPUT"$/d' fz
 exec_row nb1-state-unknown-inverted 2 's#^          if \[ -z "\$words" \]; then$#          if [ -n "$words" ]; then#' nb
 exec_row nb2-remedy-line-dropped 2 "s#^            if \[ -n \"\\\$remedy\" \]; then printf '%s\\\\n' \"\\\$remedy\"; fi\$#            :#" nb
@@ -2564,6 +2807,63 @@ g2n_row g2n-11-cutover-job-continue-on-error 1 's#^    timeout-minutes: 120$#&\n
 g2n_row g2n-12-event-json-in-body-env 1 's#^          RUN_ID: \$\{\{ github\.run_id \}\}$#&\n          EV: ${{ toJSON(github.event) }}#' "N-body:"
 g2n_row g2n-13-email-step-not-best-effort 1 '/^        id: email$/{n;/continue-on-error: true/d}' "N-order:"
 g2n_row g2n-14-body-id-renamed 2 's#^        id: body$#        id: bodz#' "N-refs:"
+# #9439 — mutants over the runner-side changes (item 8 gc timer + CTO ruling, item 5 probe pre-flight, item 6 unwind marker).
+# The case functions are the SAME ones the MZ rows call (a tightened row tightens its mutant), run against $MUTANT (CASE_SCRIPT).
+# m9439-1: the old warn-and-continue branch is back (a failed restart no longer fails the verb).
+if mutate m9439-1-gc-warn-only "$SCRIPT" 2 's#^    exit 6$#    echo "::warning::gc.timer restart failed"#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-1-gc-warn-only case_mz_u7 mz-m-u7
+fi
+# m9439-2: the immediate retry is gone (a single transient start failure fails the verb).
+if mutate m9439-2-gc-no-retry "$SCRIPT" 2 's#(gd_exec .systemctl start git-data-gc\.timer.) \|\| gd_exec .systemctl start git-data-gc\.timer. \|\| trc#\1 || trc#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-2-gc-no-retry case_mz_u9 mz-m-u9
+fi
+# m9439-3: the probe's verified-only pre-flight is deleted (a booting host reaches the provision session again).
+if mutate m9439-3-no-preflight "$SCRIPT" 1 '/^  refuse_if_store_unverified_or_not_empty verified-only$/d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-3-no-preflight case_mz_p10 mz-m-p10
+fi
+# m9439-4: verified-only loses its refuse-any-sentinel line (the proof's same-lineage tolerance leaks into the probe).
+if mutate m9439-4-frozen-tolerated "$SCRIPT" 1 '/^      if \[ "\$\{1:-\}" = verified-only \]; then _store_refuse store-verified cutover_frozen; fi$/d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-4-frozen-tolerated case_mz_p11 mz-m-p11
+fi
+# m9439-10: the exit code collapses back into 5 (the workflow can no longer tell a stopped timer from a stranded freeze).
+if mutate m9439-10-exit6-collapsed "$SCRIPT" 2 's#^    exit 6$#    exit 5#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-10-exit6-collapsed case_mz_u8 mz-m-u8
+fi
+# m9439-11: verified-only accepts the rc values only the truncated-away stages emit (and an unreadable answer).
+if mutate m9439-11-vo-accepts-rc "$SCRIPT" 2 's#\|\| _store_refuse store-verified probe_failed "\$rc" ;;$#|| : ;;#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-11-vo-accepts-rc case_vo_garbage mz-m-vo8
+fi
+# m9439-12: verified-only sends the FULL session again (the repositories-directory checks fail a rollback's populated/missing store).
+if mutate m9439-12-vo-full-session "$SCRIPT" 2 "s#c=\(\"\\$\{facts\[@\]\}\" 'echo 0'\); else#c=(\"\${facts[@]}\" \"\${repos_checks[@]}\"); else#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red m9439-12-vo-full-session case_vo_missing mz-m-vo5
+fi
+# The finalizer flip arm keys on flag_written alone again (an attempted write that never marked is not unwound).
+exec_row fz6-flip-ignores-attempted 2 's#\( -f "\$prog/flag_written" \|\| -f "\$prog/flag_write_attempted" \)#-f "$prog/flag_written"#' fz
+# The early exit also honours the attempted marker, so a rollback with only that marker dials the host.
+exec_row fz7-early-exit-honours-attempted 2 's#(if \[\[ ! -f "\$prog/flag_written" && ! -f "\$prog/freeze_held") \]\]; then#\1 \&\& ! -f "$prog/flag_write_attempted" ]]; then#' fz
+# The EXIT trap that exports gc_timer_stopped is deleted (a stopped timer on a concluded flip is silent in notify).
+exec_row fz8-gc-trap-deleted 1 '/^          trap .\[\[ -z "\$gcw" \]\] \|\| echo "gc_timer_stopped=1"/d' fz
+# A child unfreeze that exits 6 is classified as a held sentinel again (FREEZE_HELD + RECOVERY_FAILED for a stopped timer).
+exec_row fz9-child-6-is-held 2 's#elif \[\[ \$r == 6 \]\]; then gcw=1; echo#elif [[ $r == 99 ]]; then gcw=1; echo#' fz
+# A child unfreeze that exits 6 no longer sets gcw (the stopped timer is not exported when the step flag was absent).
+exec_row fz10-child-6-does-not-set-gcw 2 's#(elif \[\[ \$r == 6 \]\]; then )gcw=1; #\1#' fz
+exec_row fz11-held-latch-dropped 2 's#\[\[ -z "\$\{heldseen:-\}" \]\] \|\| gcw=""#:#' fz
+# The notify text loses a store verdict the owner is pointed at / the GC word loses its verdict.
+exec_row nb5-probe-text-drops-store-verdicts 2 's# or store_unverified mean# mean#' nb
+exec_row nb7-gc-word-dropped 1 '/if \[ "\$\{GC_TIMER_STOPPED:-\}" = 1 \]; then words=/d' nb
+# The attempted marker is written AFTER the precheck / never written under set -e: the EXECUTED body must still leave it.
+g2n_row wf-flagmark-after-precheck 2 '/touch .*flag_write_attempted"$/d;s#^( +)touch "\$RUNNER_TEMP/cutover-progress/flag_written"$#&\n\1touch "$RUNNER_TEMP/cutover-progress/flag_write_attempted"#' "WF-flagmark:"
+# The unfreeze step swallows the script's rc (it never goes red) — the EXECUTED step body must re-raise it.
+exec_row fu1-rc-swallowed 1 '/gc_timer_failed=1/{n;s#^( +)exit "\$rc"$#\1rc=0\n\1exit "$rc"#}' fu
+exec_row fw1-marker-conditional-false 2 's#^( +)touch "\$RUNNER_TEMP/cutover-progress/flag_write_attempted"$#\1false \&\& touch "$RUNNER_TEMP/cutover-progress/flag_write_attempted"#' fw
+# The probe is skipped on a gc-timer-only unfreeze failure / the stamp no longer needs the probe's success.
+g2n_row g3p-3-probe-skipped-on-gc 2 "s# && \(steps\.unfreeze\.outcome == 'success' \|\| steps\.unfreeze\.outputs\.gc_timer_failed == '1'\) && !cancelled\(\)\$##" "N-probe:"
+# The probe no longer runs after a SUCCESSFUL unfreeze / the stamp is no longer flip-only (a rollback's passing probe would write it).
+g2n_row g3p-5-probe-needs-failed-unfreeze 2 "s#\(steps\.unfreeze\.outcome == 'success' \|\| #(steps.unfreeze.outcome == 'failure' || #" "WF-gcgate:"
+g2n_row g3p-6-stamp-not-flip-only 2 "s#steps\.confirm\.outputs\.mode == 'flip' && (steps\.flag_precheck\.outputs\.nothing_to_rollback != '1' && steps\.probe\.outcome)#\1#" "WF-gcgate:"
+g2n_row g3p-4-stamp-needs-unfreeze-success 2 "s# && steps\.probe\.outcome == 'success' && !cancelled\(\)\$##" "WF-gcgate:"
+g2n_row wf-unfreeze-no-gc-output 1 '/if \[ "\$rc" = 6 \]; then echo "gc_timer_failed=1"/d' "WF-gcgate:"
+g2n_row g2n-15-gc-output-dropped 1 '/^      gc_timer_stopped: /d' "N-outputs:"
 # H4 (#7226) — host-identity classifier rows.
 # HK-M1 — drop the alg branch: an algorithm mismatch falls through to failed/unknown.
 if mutate hk-m1-no-alg "$SCRIPT" 1 '/^  elif \[ "\$1" = 255 \] && grep -qE .\^Unable to negotiate with /d'; then
@@ -2793,7 +3093,7 @@ if mutate g2v-11-unanchored "$SCRIPT" 2 "${_G2R}s#^  gd_capture '\\^\\[0-9\\]\\+
   CASE_SCRIPT="$MUTANT" mutant_red g2v-11-unanchored case_vx0
 fi
 # G2-12 — a count-stage rc attributed to the verify stage.
-if mutate g2v-12-stage-attribution "$SCRIPT" 2 "${_G2R}s#^    0\\|3\\|4\\|7\\|8\\|9\\|96\\) ;;\$#    0|3|4|7|9|96) ;;#"; then
+if mutate g2v-12-stage-attribution "$SCRIPT" 2 "${_G2R}s#^    3\\|4\\|7\\|8\\|9\\|96\\) #    3|4|7|9|96) #"; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-12-stage-attribution case_v8
 fi
 # G2-13 — the containing-mount check dropped: a count over a second mount would read.
@@ -3193,8 +3493,14 @@ fi
 # Total 91, measured 91 on the first run after the runtime arm was final. Guard 3's four rows live
 # with the census in tests/scripts/test-git-data-root-token-census.sh. #8211 (notify-failure plan):
 # plus g2n-1..6, 8 (the notify job, 7 rows), g3p-1..2 (the probe step) and fz1-5, nb1-4 (the EXECUTED finalizer
-# and notify body) and g2n-9..14 (the notify wiring) = 24, so exactly 115.
-MUTANT_FLOOR=115
+# and notify body) and g2n-9..14 (the notify wiring) = 24, so exactly 115. #9439: plus m9439-1..4 (script: gc timer
+# warn-only, no retry, probe pre-flight deleted, sentinel tolerated), fz6-7 and nb5-6 (finalizer and notify text) and
+# wf-flagmark-after-precheck = 9, so exactly 124 (measured). Review round (CTO ruling on item 8 + the verified-only pins):
+# plus m9439-10..13 (exit 6 collapsed; verified-only accepts the truncated-away rcs / sends the full session / drops the marker
+# test), fz8-gc-trap-deleted, fz9-child-6-is-held, nb6-gc-word-drops-verdict, nb7-gc-word-dropped (the previous nb6 was retargeted
+# onto the new word, m9439-5..8 became fz6/fz7/nb5 and kept), fw1-marker-conditional-false, g3p-3, g3p-4, wf-unfreeze-no-gc-output
+# and g2n-15-gc-output-dropped = 12, so exactly 136. Fix pass: -m9439-13 and -nb6 (both still killed: MZ-VO2/VX rows and NB1c), +fz10, fu1, g3p-5, g3p-6 = 138. Ship: plus fz11-held-latch-dropped (the cross-call word invariant) = 139 (measured).
+MUTANT_FLOOR=139
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3208,7 +3514,16 @@ fi
 # #8211 (notify-failure plan) after code review: 115 mutants x 2 = 230 (the base above counted 91 x 2), the
 # workflow YAML verdicts 38 -> 50 (N-if, N-jobkeys, N-secrets, N-secrets-form, N-order, N-body, N-exprs,
 # N-refs, N-outputs, N-finalizer, N-probe), plus the executed NB and FZ rows (2): 517 -> 549, measured.
-FLOOR=549
+# #9439: 124 mutants x 2 = 248 (+18 over 115 x 2); ten new standalone rows (MZ-U7, U8, U9, P10, P11, P11b, P12, P12b, P13
+# and the WF-flagmark verdict, which also moves the workflow verdict count 50 -> 51) = +10; the NB1b/NB6b and FZ11/FZ12
+# checks sit inside case_nb/case_fz and add none: 549 -> 577, measured.
+# Review round: 136 mutants x 2 = 272 (+24 over 124 x 2); twelve new standalone rows (MZ-VO1..VO8, the executed FW row, and the
+# WF-gcgate / WF-markers / WF-notify-plain census verdicts, which also move the workflow verdict count 51 -> 54) = +12; the new FZ13..FZ18
+# and NB1c checks sit inside case_fz / case_nb and add none: 577 -> 613.
+# Fix pass: 138 mutants x 2 = 276 (+4 over 136 x 2); the MZ-VO rows now share case_vo_* members with their mutants, which
+# nets the standalone rows down by 5 (8 rows to 3), and the new FU row adds 1: -4, so 613 (measured).
+# Ship: 139 mutants x 2 = 278 (+2); FZ22 and the MZ-VO failing-member loops sit inside case_fz / the existing rows and add none: 615.
+FLOOR=615
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

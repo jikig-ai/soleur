@@ -635,3 +635,51 @@ amendments. Nothing here states that the volume has been wiped, detached or dest
 > not independent evidence; the independent evidence is Hetzner's action history. Also: an untargeted
 > plan now refuses on pending drift of the web-1 set or the LUKS key pair (`named_live_touched`), and
 > the wipe attachment create is pinned off the live server like its delete.
+
+## Addendum — 2026-10-09 (#8285, PR B: the retirement landed)
+
+Appended; nothing above is edited. This addendum records the outcome of the 2026-10-08 and 2026-10-09 addenda and closes
+the questions they left marked unmeasured. Ref #8285, Ref #6894.
+
+### What landed
+
+The plaintext backstop `hcloud_volume.inngest_redis` (Hetzner id 106261946) was detached (run 37950928039), zeroed and
+read back (run 37955244979) and destroyed (run 37958051426) on 2026-10-09; Hetzner answered `GET /v1/volumes/106261946 -> 404`
+at 16:21:26Z. The evidence-path variant was used; the provider-only variant (D4 of the 2026-10-08 addendum) was not. The
+four-phase job (dispatched three times), its wipe host, its gate library and the `op=luks-rollback` verb were deleted by PR B once the 404 was
+read back. The destruction record `knowledge-base/legal/audits/inngest-aof-backstop-destruction-record.md` carries the
+evidence and the attestation. The destruction facts do not depend on PR #9877; the code-retirement statements in this
+addendum (the dispatch, its gate library and `op=luks-rollback` deleted) take effect on that PR's merge.
+
+### Consequences now in force
+
+- **Rollback is gone.** The addendum of 2026-09-21 that kept `op=luks-rollback` listed "until the convergence PR retires
+  it" is satisfied: the verb is retired, and "Rollback ends at the `detach` phase" is now simply the state of the world.
+- **The LUKS volume is the only copy.** `hcloud_volume.inngest_redis_luks` (id 106903269) holds the only copy of the Inngest
+  queue and run state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener. Delete protection,
+  edge pins and key-loss posture are NOT built here; they are tracked in #9879 (open).
+- **The erasure is logical, guest-side and self-attested.** Hetzner's action history corroborates that a non-live server
+  held the volume; it does not corroborate the overwrite. No physical or secure erasure is claimed.
+- **Two dead on-host surfaces remain until the next planned host replace**: the `rollback)` arm in
+  `inngest-luks-cutover.sh` (with its FSM comments and fixtures) and the plaintext resolver arm in `cloud-init-inngest.yml`.
+  `cloud-init-inngest.yml` feeds `user_data` and `hcloud_server.inngest` carries no `ignore_changes = [user_data]`, so editing
+  it force-replaces the sole scheduler; the rollback arm in `inngest-luks-cutover.sh` and its fixtures are removed in the same
+  planned change, so the on-host surface changes once (#9786).
+
+### Measured, where earlier addenda said unmeasured
+
+- The wipe row's top-level `dt` is the **sender's clock**, not Better Stack's receive time; `ingest_time` is the receipt
+  time. The round-2 wording "ingest time" in E9 should be read as `ingest_time`, and the window check holds on it (the
+  verification-seat clarification above is resolved).
+- The 10 GiB size and the 300 s device wait held on the first real run, and the device naming is inferred to have held (the
+  wipe completed inside the 300 s wait); the by-id name itself was not recorded. The on-host duration was 69 s. The guest hostname equalled the pinned `soleur-inngest-backstop-wipe`.
+- The orphan-address `-target` chain on Terraform 1.10.5 matches 1.9.8.
+
+### C4 note, closed
+
+`model.c4` (`inngestRedis`) was rewritten in PR B and `model.likec4.json` regenerated: it no longer says the plaintext backstop
+"stays attached and intact".
+
+### What this addendum does NOT change
+
+The decision, its encryption mechanism, the additive-cutover design, or any earlier amendment.

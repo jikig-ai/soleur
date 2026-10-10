@@ -3606,10 +3606,11 @@ case "$OP" in
     echo "::notice::op=reflush complete — authorized clear recorded + FSM confirmed done. The store is empty again and the latch stands against any further flush. NO secret value was echoed (AC-NOBODY)."
     ;;
 
-  luks-cutover|luks-rollback)
+  luks-cutover)
     # --- #6894 / ADR-142: the additive blue-green cutover of the Redis AOF store onto the LUKS
-    # volume, and its reverse. Both are ONE Doppler write to INNGEST_LUKS_CUTOVER on
-    # soleur-inngest/prd; every byte of work happens on-host, in inngest-luks-cutover.service.
+    # volume. It is ONE Doppler write to INNGEST_LUKS_CUTOVER on soleur-inngest/prd; every byte of
+    # work happens on-host, in inngest-luks-cutover.service. (Its reverse, op=luks-rollback, was
+    # retired by #8285 PR B: the plaintext volume it would have copied back to no longer exists.)
     #
     # THE FLAG IS NOT THE FLIP'S. INNGEST_CUTOVER_FLIP owns the one authorized FLUSHALL; this flag
     # owns a copy that PRESERVES data. Sharing them would put a destructive verb and a preserving
@@ -3617,8 +3618,7 @@ case "$OP" in
     #
     # Four guards, in this order, every one fail-closed and every one BEFORE the write:
     #   G1 the flag is not in-flight and not already `done`
-    #   G2 the durable pointer says whether this host is already cut over — required ABSENT for
-    #      luks-cutover and PRESENT for luks-rollback
+    #   G2 the durable pointer says whether this host is already cut over — required ABSENT
     #   G3 the host is audible ON THIS UNIT'S OWN TAG, so the write can actually be acted on
     #   G4 the write itself is stdin-fed and stdout-discarded
     # then a Better Stack confirm that the on-host FSM reached the expected terminal flag.
@@ -3639,35 +3639,16 @@ case "$OP" in
       LK_CUR=""
     fi
     LK_WANT=armed;      LK_EXPECT=done
-    [[ "$OP" == "luks-rollback" ]] && { LK_WANT=rollback; LK_EXPECT=rolled-back; }
-    if [[ "$OP" == "luks-cutover" ]]; then
-      case "$LK_CUR" in
-        ''|aborted|rolled-back)
-          echo "::notice::op=luks-cutover: G1 — flag is '${LK_CUR:-unset}', a non-terminal-for-this-verb state; arming is permitted." ;;
-        done)
-          echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'done': this host has ALREADY been cut over to the encrypted volume. Re-arming would re-copy the live store over itself. If you meant to go back, dispatch op=luks-rollback."; exit 1 ;;
-        *)
-          echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is '$LK_CUR', an IN-FLIGHT state. The on-host FSM is mid-cutover (it re-fires every 30s and resumes from its own state); writing 'armed' now would race it. Wait for a terminal flag on the inngest-luks-cutover Better Stack rows, then re-dispatch. Do NOT SSH the host."; exit 1 ;;
-      esac
-    else
-      case "$LK_CUR" in
-        done)
-          echo "::notice::op=luks-rollback: G1 — flag is 'done', which evidences a COMPLETED cutover; the reverse is permitted." ;;
-        rolled-back)
-          echo "::error::op=luks-rollback: G1 REFUSING — INNGEST_LUKS_CUTOVER is already 'rolled-back'; this host is on the plaintext volume. Nothing to roll back."; exit 1 ;;
-        aborted)
-          # An abort BEFORE the swap leaves the host on plaintext with the pointer ABSENT, and G2
-          # refuses that below. An abort DURING A ROLLBACK (the reverse copy refused — a detached
-          # backstop, a T2 mismatch, a mapper that survived luksClose) leaves the host on the
-          # ENCRYPTED store with the pointer PRESENT and no other verb able to reach it: the FSM does
-          # not re-drive a rollback on its own, because the condition that refused it may need the
-          # operator (re-attach the backstop). The pointer is the declared authority for where the
-          # store is, so G2 decides — the flag alone says only that something stopped.
-          echo "::notice::op=luks-rollback: G1 — flag is 'aborted'. Permitted PROVISIONALLY: if the pointer is PRESENT (G2) the encrypted store is live and a rollback was interrupted, so the reverse is the way back; if it is absent, G2 refuses." ;;
-        *)
-          echo "::error::op=luks-rollback: G1 REFUSING — INNGEST_LUKS_CUTOVER is '${LK_CUR:-unset}', not 'done' (nor 'aborted'). An IN-FLIGHT flag means the on-host FSM is still driving — 'copied' re-drives the swap's bookkeeping forward every 30s, 'rollback' is a rollback already in progress — and writing over it would race it. Wait for a terminal flag on the inngest-luks-cutover Better Stack rows and read the reason field. Do NOT SSH the host."; exit 1 ;;
-      esac
-    fi
+    case "$LK_CUR" in
+      ''|aborted)
+        echo "::notice::op=luks-cutover: G1 — flag is '${LK_CUR:-unset}', a non-terminal-for-this-verb state; arming is permitted." ;;
+      rolled-back)
+        echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'rolled-back', a state the on-host FSM can no longer reach (the plaintext volume it reverse-copied to was destroyed 2026-10-09, #8285). Treat the flag as a production incident and follow runbook inngest-luks-cutover-6894.md section 5a. Nothing was written."; exit 1 ;;
+      done)
+        echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'done': this host has ALREADY been cut over to the encrypted volume. Re-arming would re-copy the live store over itself. There is no reverse verb: op=luks-rollback was retired by #8285 PR B along with the plaintext volume it copied back to."; exit 1 ;;
+      *)
+        echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is '$LK_CUR', an IN-FLIGHT state. The on-host FSM is mid-cutover (it re-fires every 30s and resumes from its own state); writing 'armed' now would race it. Wait for a terminal flag on the inngest-luks-cutover Better Stack rows, then re-dispatch. Do NOT SSH the host."; exit 1 ;;
+    esac
     # G2 — the DURABLE pointer. It outlives the host (Doppler), unlike the root-disk marker whose
     # loss on a replace is #7228, so it is the authority on "which volume holds the store".
     LK_PTR="$(_luks_pointer_state)"
@@ -3676,8 +3657,6 @@ case "$OP" in
         echo "::error::op=$OP: G2 REFUSING FAIL-CLOSED — the INNGEST_LUKS_ACTIVE_VOLUME_ID pointer could not be read. Nothing was written."; exit 1 ;;
       present:luks-cutover)
         echo "::error::op=luks-cutover: G2 REFUSING — the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID is SET, so this host already serves from the encrypted volume, whatever the flag says. Arming would copy the live encrypted store onto the staging volume and swap again."; exit 1 ;;
-      absent:luks-rollback)
-        echo "::error::op=luks-rollback: G2 REFUSING — the durable pointer is ABSENT, so no swap is recorded and there is nothing to roll back. (The on-host arm refuses this too; refusing here means the flag is not parked in a state the operator then has to clear.)"; exit 1 ;;
       *)
         echo "::notice::op=$OP: G2 — pointer is $LK_PTR, as this verb requires." ;;
     esac
@@ -3700,26 +3679,18 @@ case "$OP" in
     # discarded (`doppler secrets set` prints every remaining secret of the config).
     LK_TS=$(date -u +%s)
     printf '%s' "$LK_WANT" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=$OP: writing INNGEST_LUKS_CUTOVER=$LK_WANT FAILED. Nothing on the host has changed — re-dispatch. Do NOT SSH the host."; exit 1; }
-    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify, rolling back automatically if the verification fails."
+    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify. On this host the plaintext backstop no longer exists (destroyed 2026-10-09), so a failed post-swap verification leaves the swap landed: the on-host rollback refuses with rollback-no-backstop and the flag ends aborted with the pointer set (runbook section 5a)."
     LK_ISO=$(date -u -d "@$LK_TS" +'%Y-%m-%d %H:%M:%S')
     LK_STATE=$(confirm_luks_state "$LK_ISO")
     if [[ "$LK_STATE" == "$LK_EXPECT" ]]; then
-      echo "::notice::op=$OP: FSM confirmed '$LK_EXPECT' via Better Stack (since $LK_ISO). The store is on $( [[ "$OP" == luks-cutover ]] && echo 'the ENCRYPTED volume' || echo 'the PLAINTEXT volume' ), proven byte-identical before the swap."
-      # The notice above is SHARED with luks-cutover; this line is rollback-only (#8296). A rollback
-      # makes no commit, so the record it falsifies must be reverted in a PR (runbook section 5a).
-      if [[ "$OP" == luks-rollback ]]; then
-        echo "::notice::NEXT (not automatic): the store is on the plaintext volume, so if scripts/encryption-posture-ledger.json claims luks for hcloud_volume.inngest_redis_luks the record is now false. Revert that row and the PA-21/PA-22/PA-13 #8296 amendments in knowledge-base/legal/article-30-register.md in one PR (agent or operator), and re-pause the wrong-volume alert, per runbook inngest-luks-cutover-6894.md section 5a. The backstop hcloud_volume.inngest_redis is now the LIVE store: do NOT destroy it."
-      fi
+      echo "::notice::op=$OP: FSM confirmed '$LK_EXPECT' via Better Stack (since $LK_ISO). The store is on the ENCRYPTED volume, proven byte-identical before the swap."
     else
       case "$LK_STATE" in
         rolled-back)
-          echo "::error::op=luks-cutover: the FSM rolled back. The post-swap verification failed, so the host reverse-copied to the plaintext volume and cleared the pointer — THE STORE IS INTACT and the scheduler is running on it. Read the reason field (t3-failed-rc*) on the inngest-luks-cutover rows before re-dispatching. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::op=luks-cutover: the FSM reported rolled-back. This was written for the pre-2026-10-09 layout, where a failed post-swap verification reverse-copied to the plaintext volume; that volume no longer exists, so on this host treat the row as a production incident (the on-host rollback refuses with rollback-no-backstop) and follow runbook inngest-luks-cutover-6894.md section 5a. Read the reason field on the inngest-luks-cutover rows. Do NOT SSH the host."; exit 1 ;;
         aborted)
-          echo "::error::op=$OP: the FSM aborted. Every refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::op=$OP: the FSM aborted. A pre-swap refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch; an abort with the pointer SET is a post-swap failure (the swap stayed landed, the on-host rollback refuses with rollback-no-backstop): treat it as an incident, runbook section 5a. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
         *)
-          if [[ "$OP" == luks-rollback ]]; then
-            echo "::warning::op=luks-rollback: if this rollback does complete, the store lands on the plaintext volume and the encryption record must be reverted: runbook inngest-luks-cutover-6894.md section 5a."
-          fi
           echo "::error::op=$OP: no terminal LUKS FSM flag within 900s since $LK_ISO (the write DID land). That is not itself a statement about the store: the confirm path may have failed (a betterstack-query.sh ::warning:: above names that case). The on-host FSM holds a flock and resumes from its own state on the next 30s tick, so do NOT re-dispatch blind — read the inngest-luks-cutover rows first. Do NOT SSH the host."; exit 1 ;;
       esac
     fi

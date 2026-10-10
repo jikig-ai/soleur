@@ -109,7 +109,7 @@ fi
 # T1.7 No `|| true` / `|| :` / `set +e` on a mount. The whole apparatus is defeated by one of them:
 # a swallowed mount failure leaves /mnt/data as a plain directory on the root disk while every
 # downstream check that reads the STRING "/mnt/data" still passes.
-LUKS_BLOCK="$(awk '/doppler run --project soleur-inngest --config prd -- bash -s <<.LUKSEOF.$/,/^    LUKSEOF$/' "$CLOUD_INIT")"
+LUKS_BLOCK="$(awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s <<.LUKSEOF.$/,/^    LUKSEOF$/' "$CLOUD_INIT")"
 if [ -n "$LUKS_BLOCK" ]; then ok "T1.7a the LUKS stage block extracts"; else no "T1.7a could not extract the LUKS stage from $CLOUD_INIT — every assertion below it would be vacuous"; fi
 # A POSITIVE CONTROL ON WHAT THE RANGE ACTUALLY CAPTURED. `-n` is satisfied by a range that
 # stopped after two harmless lines AND by one that swallowed half the file because its terminator
@@ -324,7 +324,7 @@ if [ -z "$_t14" ]; then ok "T1.14 no doubled-dollar expansion in any delivered l
 # captured into a variable, and that variable checked against exactly 0-or-2 on the next statement.
 # An unclassified site is a RED, which is what makes "a second reader that skips the probe" visible
 # (mutation row 3). The site count here is a floor, never the definition.
-_G1_STAGE="$(awk '/doppler run --project soleur-inngest --config prd -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT")"
+_G1_STAGE="$(awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT")"
 _G1_REOPEN="$(awk '/^  - path: \/usr\/local\/bin\/inngest-luks-open\.sh$/{f=1;next} f&&/^    content: \|$/{c=1;next} c&&/^    owner:/{exit} c' "$CLOUD_INIT")"
 _g1_sites=0; _g1_bad=""
 _g1_classify() {  # _g1_classify <label> <text>
@@ -381,7 +381,7 @@ if printf '%s\n' "$_stg_region" | grep -cE 'cryptsetup luksOpen .* inngest-redis
 # stale — a draft that named two sites was written before the cutover became the pointer's writer.
 _REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 _g4_bad=""; _g4_reads_stage=0; _g4_reads_reopen=0; _g4_total=0
-_g4_stager_count=0; _g4_unit_inject=0; _g4_write_set=0; _g4_write_clear=0; _g4_fsm_read=0; _g4_dispatch_read=0; _g4_retire_read=0
+_g4_stager_count=0; _g4_unit_inject=0; _g4_write_set=0; _g4_write_clear=0; _g4_fsm_read=0; _g4_dispatch_read=0
 while IFS= read -r _hit; do
   _f="${_hit%%:*}"; _rest="${_hit#*:}"; _ln="${_rest%%:*}"; _txt="${_rest#*:}"
   [[ "$_txt" =~ ^[[:space:]]*# ]] && continue
@@ -410,17 +410,12 @@ while IFS= read -r _hit; do
     *"! grep -q '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) : ;;                              # FSM stager: removed check
     *'jq -e '"'"'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")'"'"''*) _g4_dispatch_read=$((_g4_dispatch_read + 1)) ;; # dispatch pre-write READ
     *'::error::op='*'INNGEST_LUKS_ACTIVE_VOLUME_ID'*) : ;;                                        # operator-facing refusal text
-    # #8285. The inngest-backstop-retire dispatch's live-store gate READS the pointer (it must still name
-    # the encrypted volume before any phase may touch the plaintext one). A reader, never a writer: the
-    # G4.g2 scan below already fails any dispatch-side `secrets set`/`delete`.
-    *'ACT="$(dget INNGEST_LUKS_ACTIVE_VOLUME_ID)"'*) _g4_retire_read=$((_g4_retire_read + 1)) ;;  # retire dispatch live-store READ
     *) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:UNCLASSIFIED" ;;
   esac
 done < <(cd "$_REPO" && git grep -nF 'INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github/workflows \
           ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null | sed "s|^|$_REPO/|")
 if [ "$_g4_total" -ge 5 ]; then ok "G4.a found ${_g4_total} pointer sites in delivered artifacts (floor 5)"; else no "G4.a found only ${_g4_total} pointer sites — the walk is not reaching the tree"; fi
 if [ -z "$_g4_bad" ]; then ok "G4.b every pointer site in a delivered artifact is classified (no reader the guard has never seen)"; else no "G4.b unclassified pointer sites:${_g4_bad} — classify each, or it is a reader nothing grades"; fi
-if [ "$_g4_retire_read" -eq 1 ]; then ok "G4.b2 the retire dispatch's live-store gate reads the pointer exactly once (a reader only)"; else no "G4.b2 retire-dispatch pointer reads: ${_g4_retire_read} (expected exactly 1 — a second reader is a site nothing grades)"; fi
 if [ "$_g4_reads_stage" -eq 1 ] && [ "$_g4_reads_reopen" -eq 1 ]; then ok "G4.c the pointer is read by BOTH device readers exactly once (first-boot resolver and boot-reopen)"; else no "G4.c pointer reads: first-boot=${_g4_reads_stage} reopen=${_g4_reads_reopen} — each reader must apply it exactly once (mutation row 4)"; fi
 # G4.g THE POINTER HAS EXACTLY ONE WRITER, and it is the on-host FSM. Two writers on a value that
 # decides which device holds the store is the shape where a race decides where user data lives — and
@@ -461,6 +456,9 @@ if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/d
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
 # when the cutover FSM became the pointer's writer and the dispatch its second reader (G4.g1-g3/h/i). Derived from
 # the measured count after the arms were final, not written ahead of them.
+# #8285 PR B: G4.b2 (the retire dispatch's pointer reader) was deleted with that dispatch, taking the measured count 58 -> 57;
+# the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
+# (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
 if [ "$executed" -lt 57 ]; then

@@ -15,7 +15,7 @@
 # that stops landing reds the run instead of silently deleting its row.
 # An "absent" observable is only ever asserted together with a positive proof
 # that the thing which would have produced it ran. `grep -q` reads herestrings or
-# files only, never a producer pipe (SIGPIPE under pipefail is a false negative).
+# files only; a producer pipe is drained, `grep -c ... >/dev/null` (SIGPIPE under pipefail is a false negative).
 #
 # Three proxy paths: PROXY_SHIPPED (the file under test, and the source of every
 # mutant), PROXY (what the rows drive; PROXY_UNDER_TEST points it at
@@ -67,7 +67,7 @@ MUT="$WORK/mutants"; mkdir -p "$MUT"; cp "$REDACTOR" "$MUT/"   # every mutant lo
 # does no teardown (the passthrough, a teardown mutant) leaves it alive; reap_all SIGKILLs each
 # recorded group that still holds a stub process, at the hygiene row and again on EXIT.
 PGIDS="$WORK/pgids"
-stub_groups() { local pg; [[ -s "$PGIDS" ]] || return 0; while read -r pg; do if [[ -n "$pg" ]] && pgrep -g "$pg" -a 2>/dev/null | grep -qF -e "$STUB" -e 'sleep 300'; then printf '%s\n' "$pg"; fi; done < <(sort -u "$PGIDS"); }
+stub_groups() { local pg; [[ -s "$PGIDS" ]] || return 0; while read -r pg; do if [[ -n "$pg" ]] && pgrep -g "$pg" -a 2>/dev/null | grep -cF >/dev/null -e "$STUB" -e 'sleep 300'; then printf '%s\n' "$pg"; fi; done < <(sort -u "$PGIDS"); }
 reap_all() { local pg; while read -r pg; do pkill -KILL -g "$pg" 2>/dev/null || true; done < <(stub_groups); }
 trap 'reap_all; rm -rf "$WORK"' EXIT
 

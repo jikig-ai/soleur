@@ -1,0 +1,6 @@
+# fixture data, never executed: a bound written with -gt against the token; one W, bounded=yes
+p=$1; top=""
+while [ -r "/proc/$p/cmdline" ] && [ "$p" -gt "$SOLEUR_TEST_SUITE_PID" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

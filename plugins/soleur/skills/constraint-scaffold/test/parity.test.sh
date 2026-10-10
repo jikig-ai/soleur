@@ -153,7 +153,7 @@ B_CODE="$(grep -vE '^[[:space:]]*#' "$B_ROOT" || true)"
 bfail=0
 if grep -qE '(^|[[:space:]-])uses:[[:space:]]*actions/checkout' "$B_ROOT"; then bfail=1; fi
 for tok in 'bun install' 'setup-bun' 'git apply'; do
-  if printf '%s\n' "$B_CODE" | grep -qF "$tok"; then bfail=1; fi
+  if printf '%s\n' "$B_CODE" | grep -cF >/dev/null "$tok"; then bfail=1; fi
 done
 cases=$((cases + 1))
 if [[ "$bfail" -eq 0 ]]; then
@@ -190,7 +190,7 @@ elif [[ ! -s "$README_DOG" ]]; then
   D="dogfood $README_DOG is missing or empty"
 elif [[ "$STRIP_PIN" != "1" ]]; then
   D="strip expression pin: the script contains the literal emitter expression $STRIP_PIN time(s), expected exactly 1"
-elif ! head -1 "$README_TMPL" | grep -q '^<!-- Inspired by '; then
+elif ! head -1 "$README_TMPL" | grep -c >/dev/null '^<!-- Inspired by '; then
   D="template line 1 is not the attribution comment (the emitter strips exactly that line)"
 else
   EXPECTED_README="$(sed -e '1{/^<!-- Inspired by /d;}' -e "s|__TARGET_DIR__|$TARGET_DIR|g" "$README_TMPL")"

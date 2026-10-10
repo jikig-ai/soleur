@@ -1,3 +1,7 @@
+// pyramid-justified: drives the production reducer through the real
+// useWebSocket hook with WS frames injected via attachWsInjector (page.route
+// `**/ws`) and asserts bubble rendering in the DOM — needs a real browser.
+//
 // PR-A (#2939) Stage 6 — cc-soleur-go bubble regression net.
 //
 // Four per-bubble Playwright assertions against the production reducer

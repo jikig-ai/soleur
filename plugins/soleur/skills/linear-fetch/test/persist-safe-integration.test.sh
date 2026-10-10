@@ -118,7 +118,7 @@ os_residue=$({ grep -oE 'uploads\.linear\.app' <<<"$ONE_SHOT_RENDERED" || true; 
 [[ "$os_residue" == "0" ]] && pass "one-shot rendered prompt has zero CDN URLs" || fail "os_residue=$os_residue"
 
 # Sanity: rendered prompt should still contain the redacted placeholder marker
-if printf '%s' "$ONE_SHOT_RENDERED" | grep -q '\[linear-image: REDACTED\]'; then
+if printf '%s' "$ONE_SHOT_RENDERED" | grep -c >/dev/null '\[linear-image: REDACTED\]'; then
   pass "one-shot rendered prompt retains REDACTED markers"
 else
   fail "one-shot rendered prompt lost REDACTED markers — substitution corrupt"
@@ -138,7 +138,7 @@ N_total=3
 M_with_comments=2
 DISCLOSURE="Detected ${SYNTH_ID} — fetched issue + ${N_total} images from description and ${M_with_comments} comments."
 expected_pattern='^Detected [A-Z]+-[0-9]+ — fetched issue \+ [0-9]+ images from description and [0-9]+ comments\.$'
-if printf '%s' "$DISCLOSURE" | grep -qE "$expected_pattern"; then
+if printf '%s' "$DISCLOSURE" | grep -cE >/dev/null "$expected_pattern"; then
   pass "disclosure matches spec shape"
 else
   fail "disclosure mismatch: '$DISCLOSURE'"
@@ -173,13 +173,13 @@ set -e
 # the redaction is surgical (URLs only) not destructive.
 # --------------------------------------------------------------------
 echo "Test 8: structural integrity of persist_safe_summary"
-if printf '%s' "$PERSIST_SAFE" | grep -q 'comment by alice'; then
+if printf '%s' "$PERSIST_SAFE" | grep -c >/dev/null 'comment by alice'; then
   pass "comment-by-alice delimiter preserved"
 else
   fail "delimiter lost — redaction is too aggressive"
 fi
 
-if printf '%s' "$PERSIST_SAFE" | grep -q '\[linear-image: REDACTED\]'; then
+if printf '%s' "$PERSIST_SAFE" | grep -c >/dev/null '\[linear-image: REDACTED\]'; then
   pass "REDACTED placeholder present"
 else
   fail "REDACTED placeholder missing"
