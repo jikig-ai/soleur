@@ -355,15 +355,15 @@ CLA_ADDR=github_repository_ruleset.cla_required
 CANARY="CANARY-SECRET-9362"   # planted in .variables: it must never appear in any output of the gate
 # A rebound id that is guaranteed to differ from every canonical row.
 REB=$(( $(jq -s '[.[][].integration_id] | max' "$CI_CAN" "$CLA_CAN") + 1 ))
-mkplan() { # <out> <addr> <canonical> [jq filter over the required_check array] [action]
-  local out="$1" addr="$2" can="$3" edit="${4:-.}" action="${5:-update}"
+mkplan() { # <addr> <canonical> [jq filter over the required_check array] [action]  -> the plan on stdout
+  local addr="$1" can="$2" edit="${3:-.}" action="${4:-update}"
   jq -c --arg addr "$addr" --arg action "$action" --slurpfile can "$can" "
     .resource_changes[0] as \$rc
     | .resource_changes = [\$rc
         | .address = \$addr
         | .change.actions = [\$action]
         | .change.after.rules[0].required_status_checks[0].required_check = (\$can[0] | $edit)]
-    | .variables = {github_infra_app_private_key: {value: \"$CANARY\"}}" "$FIX" > "$out"
+    | .variables = {github_infra_app_private_key: {value: \"$CANARY\"}}" "$FIX"
 }
 # A gate-rows run reports its own tally; it never touches the suite's ledger, so a stub run can be scored.
 gate_rows() { # <script>  -> prints "ok|FAIL <name>" lines
@@ -381,45 +381,45 @@ gate_rows() { # <script>  -> prints "ok|FAIL <name>" lines
   local cfg addr can
   for cfg in "ci|$CI_ADDR|$CI_CAN" "cla|$CLA_ADDR|$CLA_CAN"; do
     IFS='|' read -r cfg addr can <<<"$cfg"
-    mkplan "$d/in" "$addr" "$can" "." update;                 chk "$cfg: canonical as-is (update) passes" 0 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "reverse" update;           chk "$cfg: rows reordered pass" 0 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "map(. + {extra:\"x\"})" update; chk "$cfg: extra provider fields pass" 0 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "." no-op;                  chk "$cfg: no-op plan equal to canonical passes" 0 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" update;  WANT_OUT='::error title=required-check-bindings::.*no override, by design.*workflow_dispatch' chk "$cfg: FIRST row rebound is RED, and the annotation says there is no override and how to recover" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[-1].integration_id = $REB" update; WANT_OUT='^- \{"context"' chk "$cfg: LAST row rebound is RED, the canonical-only row is printed with -" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].context = \"renamed\"" update;   chk "$cfg: a context renamed is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "del(.[0])" update;         chk "$cfg: a context dropped is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ". + [{context:\"extra\",integration_id:15368}]" update; chk "$cfg: a context added is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = null" update;   chk "$cfg: a null integration_id is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id = $REB" no-op;   WANT_OUT='^\+ \{"context"' chk "$cfg: a rebound under a no-op action is RED, the plan-only row is printed with +" 1 - "$addr" "$can"
-    sed '0,/15368/s//15368.0/' "$can" > "$d/can"; mkplan "$d/in" "$addr" "$can" "." update
+    mkplan "$addr" "$can" "." update > "$d/in";                 chk "$cfg: canonical as-is (update) passes" 0 - "$addr" "$can"
+    mkplan "$addr" "$can" "reverse" update > "$d/in";           chk "$cfg: rows reordered pass" 0 - "$addr" "$can"
+    mkplan "$addr" "$can" "map(. + {extra:\"x\"})" update > "$d/in"; chk "$cfg: extra provider fields pass" 0 - "$addr" "$can"
+    mkplan "$addr" "$can" "." no-op > "$d/in";                  chk "$cfg: no-op plan equal to canonical passes" 0 - "$addr" "$can"
+    mkplan "$addr" "$can" ".[0].integration_id = $REB" update > "$d/in";  WANT_OUT='::error title=required-check-bindings::.*no override, by design.*workflow_dispatch' chk "$cfg: FIRST row rebound is RED, and the annotation says there is no override and how to recover" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" ".[-1].integration_id = $REB" update > "$d/in"; WANT_OUT='^- \{"context"' chk "$cfg: LAST row rebound is RED, the canonical-only row is printed with -" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" ".[0].context = \"renamed\"" update > "$d/in";   chk "$cfg: a context renamed is RED" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" "del(.[0])" update > "$d/in";         chk "$cfg: a context dropped is RED" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" ". + [{context:\"extra\",integration_id:15368}]" update > "$d/in"; chk "$cfg: a context added is RED" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" ".[0].integration_id = null" update > "$d/in";   chk "$cfg: a null integration_id is RED" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" ".[0].integration_id = $REB" no-op > "$d/in";   WANT_OUT='^\+ \{"context"' chk "$cfg: a rebound under a no-op action is RED, the plan-only row is printed with +" 1 - "$addr" "$can"
+    sed '0,/15368/s//15368.0/' "$can" > "$d/can"; mkplan "$addr" "$can" "." update > "$d/in"
     chk "$cfg: an id spelled 15368.0 equals 15368 by value" 0 - "$addr" "$d/can"
     local n i; n="$(jq length "$can")"
     for ((i = 0; i < n; i++)); do
-      mkplan "$d/in" "$addr" "$can" ".[$i].integration_id = $REB" update; chk "$cfg: row $i rebound is RED" 1 - "$addr" "$can"
+      mkplan "$addr" "$can" ".[$i].integration_id = $REB" update > "$d/in"; chk "$cfg: row $i rebound is RED" 1 - "$addr" "$can"
     done
-    mkplan "$d/in" "$addr" "$can" ".[0].integration_id |= empty" update; chk "$cfg: an ABSENT integration_id is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ". + [.[0] + {integration_id: $REB}]" update; chk "$cfg: a duplicated context with another id is RED" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" ".[0].context = \"x\\n::error::forged\"" update; NOT_OUT='^::error::forged' WANT_OUT='::error title=required-check-bindings::' chk "$cfg: a control character in a context cannot forge a command" 1 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "." replace; jq -c '.resource_changes[0].change.actions = ["delete","create"]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
+    mkplan "$addr" "$can" ".[0].integration_id |= empty" update > "$d/in"; chk "$cfg: an ABSENT integration_id is RED" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" ". + [.[0] + {integration_id: $REB}]" update > "$d/in"; chk "$cfg: a duplicated context with another id is RED" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" ".[0].context = \"x\\n::error::forged\"" update > "$d/in"; NOT_OUT='^::error::forged' WANT_OUT='::error title=required-check-bindings::' chk "$cfg: a control character in a context cannot forge a command" 1 - "$addr" "$can"
+    mkplan "$addr" "$can" "." replace > "$d/in"; jq -c '.resource_changes[0].change.actions = ["delete","create"]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
     WANT_OUT='^OK: ' chk "$cfg: a replace (delete+create) is judged on its planned end state" 0 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "." update; WANT_OUT='^OK: ' chk "$cfg: the OK line is greppable; file mode reads the same plan" 0 "$d/in" "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "." update; jq -c '.resource_changes += [.resource_changes[0]]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
+    mkplan "$addr" "$can" "." update > "$d/in"; WANT_OUT='^OK: ' chk "$cfg: the OK line is greppable; file mode reads the same plan" 0 "$d/in" "$addr" "$can"
+    mkplan "$addr" "$can" "." update > "$d/in"; jq -c '.resource_changes += [.resource_changes[0]]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
     WANT_OUT='required-check-gate-undecided' chk "$cfg: a duplicated address is exit 2, with its annotation" 2 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "." update; chk "$cfg: a prefix of the address matches nothing (exit 2)" 2 - "${addr%_required}" "$can"
+    mkplan "$addr" "$can" "." update > "$d/in"; chk "$cfg: a prefix of the address matches nothing (exit 2)" 2 - "${addr%_required}" "$can"
     chk "$cfg: an address with odd characters is exit 2" 2 - "$addr x" "$can"
-    mkplan "$d/in" "$addr" "$can" "[]" update;                WANT_OUT='required-check-gate-undecided' chk "$cfg: an empty required set is exit 2" 2 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "." update;                 chk "$cfg: an absent address is exit 2" 2 - github_repository_ruleset.nope "$can"
-    mkplan "$d/in" "$addr" "$can" "." update; jq -c '.resource_changes[0].change.after = null | .resource_changes[0].change.actions = ["delete"]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
+    mkplan "$addr" "$can" "[]" update > "$d/in";                WANT_OUT='required-check-gate-undecided' chk "$cfg: an empty required set is exit 2" 2 - "$addr" "$can"
+    mkplan "$addr" "$can" "." update > "$d/in";                 chk "$cfg: an absent address is exit 2" 2 - github_repository_ruleset.nope "$can"
+    mkplan "$addr" "$can" "." update > "$d/in"; jq -c '.resource_changes[0].change.after = null | .resource_changes[0].change.actions = ["delete"]' "$d/in" > "$d/in2"; mv "$d/in2" "$d/in"
     WANT_OUT='being deleted' chk "$cfg: a delete (after null) is exit 2, named as a delete" 2 - "$addr" "$can"
-    mkplan "$d/in" "$addr" "$can" "." update
+    mkplan "$addr" "$can" "." update > "$d/in"
     printf '[]' > "$d/can"; chk "$cfg: an empty canonical is exit 2" 2 - "$addr" "$d/can"
     printf '{}' > "$d/can"; chk "$cfg: a non-array canonical is exit 2" 2 - "$addr" "$d/can"
     jq '. + [.[0]]' "$can" > "$d/can"; chk "$cfg: a duplicate-context canonical is exit 2" 2 - "$addr" "$d/can"
     jq '.[0].integration_id = "15368"' "$can" > "$d/can"; chk "$cfg: a string-id canonical is exit 2" 2 - "$addr" "$d/can"
   done
   # A plan of both rulesets plus an unrelated resource, as the real run feeds it.
-  mkplan "$d/a" "$CI_ADDR" "$CI_CAN" "." update; mkplan "$d/b" "$CLA_ADDR" "$CLA_CAN" "." update
+  mkplan "$CI_ADDR" "$CI_CAN" "." update > "$d/a"; mkplan "$CLA_ADDR" "$CLA_CAN" "." update > "$d/b"
   jq -c -s '.[0] as $a | .[1] as $b | $a | .resource_changes = [$a.resource_changes[0], $b.resource_changes[0], {address:"github_repository.soleur_marketplace",change:{actions:["no-op"],after:{name:"x"}}}]' "$d/a" "$d/b" > "$d/in"
   chk "a two-ruleset plan with an unrelated resource passes for ci" 0 - "$CI_ADDR" "$CI_CAN"
   chk "a two-ruleset plan with an unrelated resource passes for cla" 0 - "$CLA_ADDR" "$CLA_CAN"
@@ -457,7 +457,7 @@ print([s for s in steps if s.get("name") == "Gate planned required-check binding
 PY
 printf '#!/usr/bin/env bash\n[[ "$1 $2 $3" == "show -json tfplan" ]] || exit 99\ncat "$STUB_PLAN"\n' > "$T/x/bin/terraform"; chmod +x "$T/x/bin/terraform"
 mk2() { # <out> <ci edit> <cla edit>
-  mkplan "$T/x/a" "$CI_ADDR" "$CI_CAN" "$2" update; mkplan "$T/x/b" "$CLA_ADDR" "$CLA_CAN" "$3" update
+  mkplan "$CI_ADDR" "$CI_CAN" "$2" update > "$T/x/a"; mkplan "$CLA_ADDR" "$CLA_CAN" "$3" update > "$T/x/b"
   jq -c -s '.[0] | .resource_changes = [.resource_changes[0]]' "$T/x/a" > "$T/x/a1"
   jq -c -s '.[0].resource_changes += [.[1].resource_changes[0]] | .[0]' "$T/x/a1" "$T/x/b" > "$1"
 }
