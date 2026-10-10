@@ -362,6 +362,16 @@ was considered and cut: no local `docker build` call site stamps a worktree labe
 - Phase 7 of the #9677 plan installs the existing timer on the operator host; that is host
   configuration, not plugin behaviour.
 
+## Amendment 3 (2026-10-10)
+
+The allocator CLI gained a third verb, `run-isolated <sandbox-path> -- <cmd>` (A1.3 names `new|rm`). It deletes nothing:
+it refuses (rc 2) unless the path is an allocated sandbox (absolute, no symlink component, `soleur-sbx.*` name, a regular
+non-symlink `.soleur-owned`, owned by the caller), then runs the command as PID 1 of a PID namespace through
+`plugins/soleur/scripts/run-in-pid-namespace.sh`. Why a verb and not only prose: the sandbox copy bounds file removal but
+not signals, and a mutant of a helper that walks `$PPID` and signals the outermost matching ancestor reached the user's
+desktop session (see the learning dated 2026-10-09 under the learnings test-failures category). The terminal-delete
+carve-out list is unchanged.
+
 ## Alternatives Considered
 
 | Alternative | Rejected because |
