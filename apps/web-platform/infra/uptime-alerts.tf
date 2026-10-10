@@ -513,8 +513,9 @@ resource "doppler_secret" "workspaces_luks_heartbeat_url" {
 # #8516 — the HOURLY dead-probe switch for the dedicated-host Inngest server probe, sibling of
 # logtail_exploration_alert.inngest_luks_wrong_volume (betterstack-logs-alerts.tf): that alert's
 # on_missing_data = "treat_as_zero" reads a silent probe pipeline as zero wrong-volume rows, so
-# a dead emitter / Vector allowlist regression / sink outage would let a rollback onto the
-# plaintext backstop hcloud_volume.inngest_redis go unpaged. This heartbeat watches the EMISSION
+# a dead emitter / Vector allowlist regression / sink outage would let the store sit on a
+# non-encrypted device unpaged (the plaintext backstop hcloud_volume.inngest_redis this once
+# named was destroyed 2026-10-09, #8285). This heartbeat watches the EMISSION
 # cadence (inngest-server-probe.timer: OnUnitActiveSec=1h + AccuracySec=1min), not the log rows.
 #
 # period 3600 = one emission interval; grace 1800 ⇒ the switch pages 5400 s after the last beat —

@@ -61,6 +61,11 @@ SDK_URL="${SDK_URL:-http://127.0.0.1:3000/api/inngest}"
 # /hooks/deploy-status. #6555 removed the RUNTIME `--project` surface (units resolve the project
 # from the env-file) but NOT this render-time default. Ref #6555.
 export DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"
+# #9175: same env-defaulted contract for the CONFIG name — `prd` on prod (the correct name in
+# BOTH projects: soleur/prd and soleur-inngest/prd), the scratch `rehearsal_<runid>` config on
+# the provision rehearsal host (delivered through the provision unit's explicit env list).
+# Emitted units substitute @@DOPPLER_CONFIG@@ from this normalized value at provision time.
+export DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd}"
 
 if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
   echo "ERROR: INNGEST_CLI_VERSION and INNGEST_CLI_SHA256 must be set (templated at build/cloud-init time)" >&2
@@ -414,7 +419,7 @@ RuntimeDirectoryPreserve=yes
 # This line is what made the PrivateTmp defect above diagnosable in 2 minutes, off-box,
 # after 3 days of a blind 60s storm. It earned its keep before the fix it shipped with did.
 SyslogIdentifier=inngest-heartbeat
-ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@
+ExecStart=@@DOPPLER_BIN@@ run --config @@DOPPLER_CONFIG@@ -- @@HEARTBEAT_SCRIPT@@
 HEARTBEATEOF
 
 # #7695: the delimiter above is QUOTED, so nothing in the unit body is expanded or
@@ -424,7 +429,7 @@ HEARTBEATEOF
 # @@DARK_ARM@@ line above it cannot be ^...$-anchored) and use | as the delimiter because both
 # values are absolute paths. The @@ residual check below is not ceremony: an & in a substituted
 # path expands to the whole match and corrupts it at exit 0, which set -e does not catch.
-sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@HEARTBEAT_SCRIPT@@|${HEARTBEAT_SCRIPT}|" "$HEARTBEAT_UNIT"
+sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@HEARTBEAT_SCRIPT@@|${HEARTBEAT_SCRIPT}|; s|@@DOPPLER_CONFIG@@|${DOPPLER_CONFIG}|" "$HEARTBEAT_UNIT"
 # Refuse to install a unit still carrying an unsubstituted sentinel: a half-rendered
 # ExecStart= would fail at systemd start with a message about a literal @@ path, which is
 # exactly the class this file already learned to make diagnosable off-box.
@@ -615,7 +620,7 @@ cli_version="$(timeout 10 /usr/local/bin/inngest version 2>/dev/null | head -1 |
 # itself reads; the slot records the FSM's last write, which is a different question.
 # doppler's stderr is discarded, never shipped: this row's tag is allowlisted, so raw stderr
 # from a credentialed CLI would be a route from the token's own error text to Better Stack.
-cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config "$DOPPLER_CONFIG" --plain 2>/dev/null || true)"
 cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 [ -n "$cutover_flag" ] || cutover_flag=unknown
 
@@ -1306,6 +1311,13 @@ if [[ -f /etc/default/inngest-server ]] && grep -q '^DOPPLER_TOKEN=dp\.' /etc/de
     printf 'DOPPLER_PROJECT=%s\n' "$DOPPLER_PROJECT" >> /etc/default/inngest-server
     log "/etc/default/inngest-server: appended DOPPLER_PROJECT=$DOPPLER_PROJECT (#6555 in-place augment)"
   fi
+  # #9175: same preserve-augment for DOPPLER_CONFIG — a pre-#9175 env file lacks it, and the
+  # committed units' `doppler run --config ${DOPPLER_CONFIG}` would substitute an EMPTY flag
+  # value (systemd has no `:-` default syntax), which makes doppler consume the next token.
+  if ! grep -qE '^DOPPLER_CONFIG=' /etc/default/inngest-server; then
+    printf 'DOPPLER_CONFIG=%s\n' "$DOPPLER_CONFIG" >> /etc/default/inngest-server
+    log "/etc/default/inngest-server: appended DOPPLER_CONFIG=$DOPPLER_CONFIG (#9175 in-place augment)"
+  fi
 else
   # Pull token from the sibling webhook-deploy env file (same Doppler scope
   # — both run as `deploy` user against the `prd` config).
@@ -1327,6 +1339,7 @@ DOPPLER_TOKEN=$TOKEN
 DOPPLER_CONFIG_DIR=/tmp/.doppler
 DOPPLER_ENABLE_VERSION_CHECK=false
 DOPPLER_PROJECT=$DOPPLER_PROJECT
+DOPPLER_CONFIG=$DOPPLER_CONFIG
 DOPPLEREOF
   )
   chown root:deploy /etc/default/inngest-server
@@ -1554,7 +1567,7 @@ EnvironmentFile=/etc/default/inngest-server
 # inngest-server-flip-guard.test.sh derives both sets from source so the pair cannot drift again
 # without a suite failure.
 @@FLIP_GUARD_EXECSTARTPRE@@
-ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
+ExecStart=/usr/bin/doppler run --config @@DOPPLER_CONFIG@@ -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -1654,13 +1667,17 @@ unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
 # missing binary. Runs under doppler run so the guard sees INNGEST_POSTGRES_URI +
 # INNGEST_CUTOVER_FLIP (P1-5).
 if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
-  FLIP_GUARD_LINE="ExecStartPre=/usr/bin/doppler run --config prd -- /usr/local/bin/inngest-server-flip-guard.sh"
+  FLIP_GUARD_LINE="ExecStartPre=/usr/bin/doppler run --config $DOPPLER_CONFIG -- /usr/local/bin/inngest-server-flip-guard.sh"
 else
   FLIP_GUARD_LINE=""
 fi
 unit_content="${unit_content//@@FLIP_GUARD_EXECSTARTPRE@@/$FLIP_GUARD_LINE}"
 # #6178: same bash-parameter-expansion mechanism (NOT sed — SDK_URL contains `/`).
 unit_content="${unit_content//@@SDK_URL@@/$SDK_URL}"
+# #9175: the Doppler config name is a provision-time sentinel too — prod renders `prd`
+# (the normalized env value from the export above), the rehearsal host renders its
+# scratch `rehearsal_<runid>` config.
+unit_content="${unit_content//@@DOPPLER_CONFIG@@/$DOPPLER_CONFIG}"
 # #6555: no @@DOPPLER_PROJECT@@ substitution — the unit dropped `--project` and resolves the
 # project from EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime.
 printf '%s\n' "$unit_content" > "$UNIT_FILE"
@@ -1870,7 +1887,7 @@ EnvironmentFile=/etc/default/inngest-server
 # Vector needs Doppler-injected BETTERSTACK_LOGS_TOKEN (and any other
 # secrets the config references). doppler run resolves them at
 # ExecStart time.
-ExecStart=/usr/bin/doppler run --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
+ExecStart=/usr/bin/doppler run --config @@DOPPLER_CONFIG@@ -- /usr/local/bin/vector --config /etc/vector/vector.toml
 Restart=on-failure
 RestartSec=10
 User=deploy
@@ -1888,6 +1905,14 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 VECTOREOF
+      # #9175: @@DOPPLER_CONFIG@@ resolves at provision time from the normalized env
+      # export — prod emits `prd`, the rehearsal host emits its scratch config name.
+      # Same sentinel+sed pattern as @@DOPPLER_BIN@@ in the heartbeat unit.
+      sed -i "s|@@DOPPLER_CONFIG@@|${DOPPLER_CONFIG}|g" "$VECTOR_UNIT"
+      if grep -qF '@@' "$VECTOR_UNIT"; then
+        log "ERROR: vector.service still carries an unsubstituted sentinel after render"
+        exit 1
+      fi
       # #6555: the vector unit dropped `--project` and resolves the project from
       # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime — no
       # @@DOPPLER_PROJECT@@ sentinel remains, so the re-read/substitute/rewrite round-trip that

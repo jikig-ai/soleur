@@ -1,0 +1,9 @@
+# fixture data, never executed: the roadmap-reconcile term walker after the bound; one W, bounded=yes
+term)   # Signal the script itself: walk up past the command-substitution
+        # HAZARD: this walk bounded at the suite pid; run mutants only in a namespace
+        [[ "${SOLEUR_TEST_SUITE_PID:-}" =~ ^[0-9]+$ ]] || { sleep 5; exit 1; }
+        p=$PPID; top=""
+        while [[ -r "/proc/$p/cmdline" ]] && [[ "$p" -gt 1 ]] && [[ "$p" != "$SOLEUR_TEST_SUITE_PID" ]] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -c 'roadmap-reconcile.sh' >/dev/null; do
+          top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+        done
+        [[ -n "$top" ]] && kill -TERM "$top"; sleep 5; exit 1 ;;

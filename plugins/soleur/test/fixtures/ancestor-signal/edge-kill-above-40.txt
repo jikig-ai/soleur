@@ -1,0 +1,42 @@
+# fixture data, never executed: kill 40 lines above the cursor; one W
+kill -TERM "$target"
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+: filler
+p=$(awk '{print $4}' "/proc/$p/stat")

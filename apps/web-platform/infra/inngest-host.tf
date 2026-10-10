@@ -349,6 +349,12 @@ locals {
     # isolated secret set, never a foreign project. NEVER baked into user_data directly beyond
     # this scoped token (which is itself minimal-blast-radius by construction).
     doppler_token = doppler_service_token.inngest.key
+    # #9175: the Doppler CONFIG NAME the boot surface resolves (`--config`, the env-file
+    # DOPPLER_CONFIG= lines) — rendered literally at every site. Prod is "prd", stated at
+    # the call site rather than defaulted so the prod resolution is visible here; the
+    # inngest-provision-rehearsal root passes its scratch `rehearsal_<runid>` config so a
+    # throwaway host never resolves the real prd. Mirroring git-data's doppler_config_name.
+    inngest_doppler_config = "prd"
     # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
     # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
     # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
@@ -550,10 +556,9 @@ resource "hcloud_server" "inngest" {
 
 # ---------------- Retired plaintext AOF backstop (#8285) ----------------
 # hcloud_volume.inngest_redis (the pre-cutover ext4 copy of the Redis AOF) and its attachment are
-# no longer declared: they are being retired by the reviewer-gated `inngest-backstop-retire`
-# dispatch (runbook inngest-luks-cutover-6894.md, "Retiring the backstop"). Until that dispatch
-# completes, state still holds both addresses as orphans; the per-merge `-target` apply never
-# names them, so nothing auto-destroys them.
+# no longer declared. They were retired on 2026-10-09 by the reviewer-gated `inngest-backstop-retire`
+# dispatch (since deleted; runbook inngest-luks-cutover-6894.md, "Retiring the backstop"): the volume is
+# gone from Hetzner (GET -> 404 at 2026-10-09T16:21:26Z) and from state. Only the id below remains.
 locals {
   inngest_retired_plaintext_volume_id = "106261946"
 }

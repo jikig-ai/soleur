@@ -1,0 +1,9 @@
+# fixture data, never executed: an ancestor walker bounded at the suite pid (the S5 shape); one W, bounded=yes
+p=$PPID; target=""
+[ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || exit 0
+while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$p" != "$SOLEUR_TEST_SUITE_PID" ]; do
+  if tr '\0' '\n' < "/proc/$p/cmdline" | grep -cx >/dev/null 'x'; then target=$p; fi
+  p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
+done
+[ -n "$target" ] && kill -TERM "$target"
+exit 0

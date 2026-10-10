@@ -1,0 +1,6 @@
+# fixture data, never executed: signal verbs only in comments; no finding
+# kill -TERM "$PPID"
+    # pkill -f x
+#   kill -9 0
+: nothing here # && kill -9 "$PPID"
+true   # ; pkill -g 1

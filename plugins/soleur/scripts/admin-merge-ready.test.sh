@@ -203,8 +203,8 @@ rc_is()   { [[ "$(cat "$1/rc")" == "$2" ]] || why "rc=$(cat "$1/rc"), want $2; o
 line()    { grep -Fxq -- "$2" "$1/out" || why "missing stdout line: $2"; }
 noline()  { ! grep -Fq -- "$2" "$1/out" || why "unexpected stdout text: $2"; }
 tailis()  { local l; l=$(tail -1 "$1/out"); [[ "$l" == *" $2" ]] || why "marker tail is '$l', want '* $2'"; }
-verdict() { tail -1 "$1/out" | grep -q "^SOLEUR_ADMIN_MERGE_READY verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
-reason()  { tail -1 "$1/out" | grep -q " reason=$2 " || why "last line lacks reason=$2: $(tail -1 "$1/out")"; }
+verdict() { tail -1 "$1/out" | grep -c >/dev/null "^SOLEUR_ADMIN_MERGE_READY verdict=$2 " || why "last line is not verdict=$2: $(tail -1 "$1/out")"; }
+reason()  { tail -1 "$1/out" | grep -c >/dev/null " reason=$2 " || why "last line lacks reason=$2: $(tail -1 "$1/out")"; }
 nomiss()  { ! grep -q '^STUB-MISS' "$1/log" || why "stub refused: $(grep '^STUB-MISS' "$1/log" | head -1)"; }
 polls()   { [[ "$(cat "$1/.polls" 2>/dev/null || echo 0)" == "$2" ]] || why "polls=$(cat "$1/.polls" 2>/dev/null), want $2"; }
 sleeps()  { [[ "$(cat "$1/sleeps" 2>/dev/null | wc -l)" == "$2" ]] || why "sleeps=$(cat "$1/sleeps" 2>/dev/null | wc -l), want $2"; }

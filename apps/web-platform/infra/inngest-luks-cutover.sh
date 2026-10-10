@@ -188,7 +188,7 @@ read_flag() {
 }
 flag_set() {
   if [[ -n "${LUKS_FLAG_SET_CMD:-}" ]]; then "$LUKS_FLAG_SET_CMD" "$1"
-  else doppler secrets set INNGEST_LUKS_CUTOVER "$1" --project soleur-inngest --config prd --silent >/dev/null; fi
+  else doppler secrets set INNGEST_LUKS_CUTOVER "$1" --project soleur-inngest --config "${DOPPLER_CONFIG:-prd}" --silent >/dev/null; fi
 }
 # pointer_cmd set <id> | clear — the DURABLE pointer (Doppler outlives the host; the root disk does not).
 # EVERY Doppler write here ends `>/dev/null`: `doppler secrets set|delete` prints ALL remaining secrets
@@ -197,8 +197,8 @@ flag_set() {
 pointer_cmd() {
   if [[ -n "${LUKS_POINTER_CMD:-}" ]]; then "$LUKS_POINTER_CMD" "$@"; return; fi
   case "$1" in
-    set)   doppler secrets set INNGEST_LUKS_ACTIVE_VOLUME_ID "$2" --project soleur-inngest --config prd --silent >/dev/null ;;
-    clear) doppler secrets delete INNGEST_LUKS_ACTIVE_VOLUME_ID --project soleur-inngest --config prd --yes --silent >/dev/null ;;
+    set)   doppler secrets set INNGEST_LUKS_ACTIVE_VOLUME_ID "$2" --project soleur-inngest --config "${DOPPLER_CONFIG:-prd}" --silent >/dev/null ;;
+    clear) doppler secrets delete INNGEST_LUKS_ACTIVE_VOLUME_ID --project soleur-inngest --config "${DOPPLER_CONFIG:-prd}" --yes --silent >/dev/null ;;
   esac
 }
 current_pointer() { printf '%s' "${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}" | tr -d '[:space:]'; }

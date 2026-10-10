@@ -536,7 +536,6 @@ tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/git-data-rung2-plan-shape	7
 tests/scripts/host-image-coherence-preflight	5
 tests/scripts/infra-privileged-tier-census	3
-tests/scripts/inngest-backstop-retire-gate	7
 tests/scripts/inngest-host-dark-gate	8
 tests/scripts/inngest-host-replace-gate	2
 tests/scripts/inngest-host-shape-gate	3

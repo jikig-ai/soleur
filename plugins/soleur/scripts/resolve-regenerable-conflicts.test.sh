@@ -488,8 +488,8 @@ fi
 r="$(mkrepo stageduring)"; assert_fixture_dir "$r"
 res="$(_slow_run "$r" _act_stage)"
 CASES_RUN=$((CASES_RUN + 1))
-if [[ "$(sut_rc "$res")" != "0" ]] && ! _git "$r" log -1 --name-only --format= | grep -q staged.txt \
-     && _git "$r" diff --cached --name-only | grep -qx staged.txt; then
+if [[ "$(sut_rc "$res")" != "0" ]] && ! _git "$r" log -1 --name-only --format= | grep -c >/dev/null staged.txt \
+     && _git "$r" diff --cached --name-only | grep -cx >/dev/null staged.txt; then
   pass "a file staged during the render is never committed and stays staged"
 else
   fail "a mid-render staged file was committed or lost: $(sut_out "$res")"
@@ -542,16 +542,23 @@ fi
 
 # Signals that land after the merge started. The helper TERMs the OUTERMOST ancestor running the
 # resolver (a command substitution forks a copy with the same argv). Linux /proc only.
+# HAZARD: the helper TERMs the outermost ancestor whose argv matches its pattern. A MUTANT of the match line (-v, a dropped -x, a catch-all
+# pattern) matches every ancestor and walks up to the top of the user's session. The walk is bounded at this suite's own PID, but run any
+# mutant of this block ONLY as `unshare -Urpf --kill-child --mount-proc bash <this file>` (the test shell becomes PID 1; the walk stops there).
 if [[ -r /proc/self/stat ]]; then
+  export SOLEUR_TEST_SUITE_PID=$$   # read by the helper below; unset or empty means the helper signals nothing (the mid-merge row then fails; the commit row cannot tell)
   _killer="$SANDBOX/kill-resolver.sh"; assert_fixture_dir "$SANDBOX"
   cat > "$_killer" <<'EOF'
 #!/bin/sh
 # Walk up to the TOP of the contiguous run of ancestors whose argv holds the resolver script as a
 # whole argument, and stop at the first non-matching ancestor above it — never further, or any
 # outer shell whose command line merely mentions the path would be signalled too.
+# The walk is also bounded at SOLEUR_TEST_SUITE_PID. A mutant of the grep line below (-v, no -x, a catch-all) matches every ancestor:
+# run such a mutant ONLY under `unshare -Urpf --kill-child --mount-proc` (see the HAZARD note above the block).
 p=$PPID; target=""
-while [ -n "$p" ] && [ "$p" -gt 1 ]; do
-  if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -qx '.*/scripts/resolve-regenerable-conflicts\.sh'; then
+[ -n "${SOLEUR_TEST_SUITE_PID:-}" ] || exit 0
+while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$p" != "$SOLEUR_TEST_SUITE_PID" ]; do
+  if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -cx >/dev/null '.*/scripts/resolve-regenerable-conflicts\.sh'; then
     target=$p
   elif [ -n "$target" ]; then
     break
@@ -711,7 +718,7 @@ CASES_RUN=$((CASES_RUN + 1))
 # The resolver must NEVER push — in any git spelling (options before the subcommand count).
 _PUSH_RE='(^|[^-[:alnum:]])git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|--?[[:alnum:]-]+(=[^[:space:]]+)?))*[[:space:]]+push([[:space:]]|$)'
 CASES_RUN=$((CASES_RUN + 1))
-if grep -v '^[[:space:]]*#' "$SUT" | grep -qE "$_PUSH_RE"; then
+if grep -v '^[[:space:]]*#' "$SUT" | grep -cE >/dev/null "$_PUSH_RE"; then
   fail "the resolver contains a git push — callers own the push"
 else
   pass "the resolver never pushes"

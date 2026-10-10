@@ -137,16 +137,16 @@ declare -A ALLOW=(
   ["scripts/encryption-posture-ledger.json"]="prose in a ledger entry"
   ["scripts/test-all.sh"]="comment only"
   ["scripts/inngest-dedicated-host-classify.sh"]="pure classifier; selection lives in the workflow step that sources it"
-  ["tests/scripts/lib/inngest-backstop-retire-gate.sh"]="pure gate over a probe TSV (#8285); the workflow step selects with the shared def and passes --probe-file"
   ["apps/web-platform/infra/betterstack-logs-alerts.tf"]="SQL alert, already anchored; emitter check deferred to #8874"
   [".github/workflows/infra-validation.yml"]="pull_request paths: filter naming the lib"
 )
 
 # Files that MUST be discovered (#8873 review: a `>= N` count floor let the discovery drop the
 # watchdog workflow — the consumer that caused the incident — and stay green).
+# (#8285 PR B: apply-web-platform-infra.yml left this list; its only probe-row reader was the retired
+# inngest_backstop_retire live-store gate, deleted with that job.)
 MUST_FIND=(
   ".github/workflows/scheduled-inngest-health.yml"
-  ".github/workflows/apply-web-platform-infra.yml"
   "scripts/cutover-inngest.sh"
   "tests/scripts/lib/inngest-host-dark-gate.sh"
   "scripts/followthroughs/inngest-host-not-serving-7674.sh"
