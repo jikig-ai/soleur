@@ -43,6 +43,8 @@ const {
   mockResolveInstallationId,
   mockGenerateInstallationToken,
   mockResolveBashAutonomous,
+  mockResolveWebEgress,
+  mockResolveWebEgressStrict,
   mockResolveAutonomousAck,
   mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
@@ -66,6 +68,8 @@ const {
   mockResolveInstallationId: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
   mockResolveBashAutonomous: vi.fn(),
+  mockResolveWebEgress: vi.fn(),
+  mockResolveWebEgressStrict: vi.fn(),
   mockResolveAutonomousAck: vi.fn(),
   mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
@@ -96,6 +100,9 @@ vi.mock("@/server/agent-runner-sandbox-config", () => ({
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: mockBuildAgentEnv,
+  // feat-open-web-egress (#9534): the sandbox-config deny census derives
+  // from this set at module load — keep it non-empty.
+  ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
 }));
 
 vi.mock("@/server/sandbox-hook", () => ({
@@ -119,6 +126,24 @@ vi.mock("@/server/git-auth", () => ({
 
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: mockResolveBashAutonomous,
+}));
+
+// feat-open-web-egress (#9534) — default off (false): entitlement
+// wiring is tested in web-egress.test.ts / dedicated factory cases;
+// factory-shape tests dispatch with no forwarder spawn.
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: mockResolveWebEgress,
+  resolveWebEgressStrict: mockResolveWebEgressStrict,
+}));
+
+// feat-open-web-egress (#9534) — never spawn a real forwarder in
+// unit tests; the module lifecycle is covered by web-egress.test.ts.
+vi.mock("@/server/egress-forwarder", () => ({
+  spawnEgressForwarder: vi.fn(),
+  teardownEgressForwarder: vi.fn(),
+  reapOrphanEgressForwarders: vi.fn(),
+  hasEgressForwarder: vi.fn(() => false),
+  egressForwarderWorkspaceId: vi.fn(() => undefined),
 }));
 
 vi.mock("@/server/resolve-autonomous-ack", () => ({
@@ -326,6 +351,7 @@ describe("realSdkQueryFactory — unconditional pre-sandbox workspace-dir guaran
     mockGetCurrentRepoUrl.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    mockResolveWebEgress.mockResolvedValue(false);
     mockResolveAutonomousAck.mockResolvedValue(null);
     mockResolveIsWorkspaceOwner.mockResolvedValue(false);
     mockGetInstallationAccount.mockResolvedValue({ login: "owner", id: 1, type: "Organization" });

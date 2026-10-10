@@ -81,6 +81,7 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
          inngest-consumer-probe.sh inngest-registry-probe.sh \
          web-probe-envwrite.sh \
+         egress-gateway-bootstrap.sh egress-auth-helper.sh \
          workspaces-luks-provision.sh workspaces-luks-reopen.sh workspaces-luks-emit.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
@@ -104,7 +105,7 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
          luks-monitor.service luks-monitor.timer; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/systemd/system/$f"
 done
-for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do
+for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt egress-deny-cidrs.txt; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/soleur/$f"
 done
 # Pinned cosign trusted root (#6005) — public trust material mounted :ro into the
@@ -112,6 +113,9 @@ done
 # reads the mount source, so deploy-user readability is not required.
 FAILED_FILE=cosign-trusted-root.json
 install -D -m 0644 -o root -g root "$SEED/cosign-trusted-root.json" /etc/soleur/cosign-trusted-root.json
+# Squid gateway config (#9534) — mounted :ro into soleur-egress-gw; the deny
+# list lives at /etc/soleur (loop above) so nftables reads the same copy.
+install -D -m 0644 -o root -g root "$SEED/egress-gateway-squid.conf" /usr/local/bin/egress-gateway-squid.conf
 # journald persistent+bounded drop-in (baked #5921). Installed here (post-extraction) and
 # applied below — before the terminal app container (--log-driver journald) starts. Was
 # previously an inline write_files: base64 blob (2.4 KB), the single biggest remaining
@@ -189,6 +193,10 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
 done
 FAILED_FILE=cron-egress-allowlist.txt; test -f /etc/soleur/cron-egress-allowlist.txt
 FAILED_FILE=cron-egress-allowlist-cidr.txt; test -f /etc/soleur/cron-egress-allowlist-cidr.txt
+FAILED_FILE=egress-deny-cidrs.txt; test -f /etc/soleur/egress-deny-cidrs.txt
+FAILED_FILE=egress-gateway-squid.conf; test -f /usr/local/bin/egress-gateway-squid.conf
+FAILED_FILE=egress-gateway-bootstrap.sh; test -x /usr/local/bin/egress-gateway-bootstrap.sh
+FAILED_FILE=egress-auth-helper.sh; test -x /usr/local/bin/egress-auth-helper.sh
 FAILED_FILE=cosign-trusted-root.json; test -f /etc/soleur/cosign-trusted-root.json
 FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur.conf
 # (#6629) sandbox profiles present on-host AND the AppArmor profile is kernel-loaded — the
