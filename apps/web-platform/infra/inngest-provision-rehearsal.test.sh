@@ -109,6 +109,8 @@ yes "the environment lives on the soleur-inngest project" \
   "grep -qF 'project = \"soleur-inngest\"' < <(grep -A4 'resource \"doppler_environment\" \"rehearsal\"' '$REH_CODE' )"
 yes "the service token is READ-scoped (the provision path only reads)" \
   "grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"' < <(awk '/resource \"doppler_service_token\" \"rehearsal\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
+yes "INNGEST_REDIS_LUKS_KEY is seeded in the scratch env (the LUKS stage FATALs on an empty key — 'refusing an unencrypted mount', attempt-3)" \
+  "grep -qF 'name       = \"INNGEST_REDIS_LUKS_KEY\"' '$REH_CODE'"
 yes "INNGEST_DIAGNOSTIC_BOOT is staged true (the rehearsal can never run a live scheduler)" \
   "grep -qE 'value[[:space:]]*=[[:space:]]*\"true\"' < <(awk '/resource \"doppler_secret\" \"rehearsal_diagnostic_boot\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
 
@@ -170,6 +172,10 @@ yes "the reviewer-gated environment is bound" \
   "grep -qF 'environment: web-platform-infra-apply' '$WF'"
 yes "the workflow joins the parent's widest apply concurrency group" \
   "grep -qF 'group: terraform-apply-web-platform-host' '$WF'"
+yes "every ZOT_PULL_TOKEN read pairs soleur/prd with the DOPPLER_TOKEN_PRD override (the default token is prd_terraform-scoped)" \
+  "[[ \$(grep -c 'DOPPLER_TOKEN=.\$DOPPLER_TOKEN_PRD. doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd' '$WF') -ge 4 ]] && [[ \$(grep 'secrets get ZOT_PULL_TOKEN' '$WF' | grep -vc 'DOPPLER_TOKEN_PRD') -eq 0 ]]"
+no "no ZOT_PULL_TOKEN read targets the wrong project (soleur-registry is the mirror, not the root)" \
+  "grep -qF 'get ZOT_PULL_TOKEN -p soleur-registry' '$WF'"
 yes "contents: read (the workflow cannot commit its own evidence)" \
   "grep -qE '^\s+contents: read' '$WF'"
 yes "the confirm token is REHEARSE-INNGEST-PROVISION" \
@@ -204,6 +210,12 @@ yes "the evidence is uploaded as an ARTIFACT (never committed)" \
   "grep -qF 'actions/upload-artifact' '$WF' && ! grep -qE 'git (add|commit|push)' '$WF'"
 yes "the in-workflow orphan assertion lists all four hcloud kinds" \
   "grep -qF 'servers volumes ssh_keys firewalls' '$WF'"
+yes "since-file writers emit the capture's contract (YYYY-MM-DDTHH:MM:SS — no zone suffix; a trailing Z is a rc=64 refusal)" \
+  "[[ \$(grep -c 'date -u +%Y-%m-%dT%H:%M:%S > .*-since.txt' '$WF') -ge 3 ]] && ! grep -q 'date -u +%Y-%m-%dT%H:%M:%SZ' '$WF'"
+yes "every parseDateTime64BestEffort call carries the precision arg (the 2-arg (s,'UTC') form is Code 43 — proven live)" \
+  "! grep -qE \"parseDateTime64BestEffort\\([^,]+, 'UTC'\\)\" < <(grep -oE 'parseDateTime64BestEffort\\([^)]*\\)' '$ROOT/scripts/followthroughs/inngest-provision-rehearsal-capture.sh') && [[ \$(grep -cE 'parseDateTime64BestEffort.*, 3, .UTC.' '$ROOT/scripts/followthroughs/inngest-provision-rehearsal-capture.sh') -ge 2 ]]"
+no "no comment line sits inside a doppler run -- backslash-continuation (a # there is an argv word — proven by the first teardown run)" \
+  "awk '/doppler run.*--[[:space:]]*\\\\$/{n=NR} n && NR>n && /^[[:space:]]*#/{print; found=1} n && NR>n && !/^[[:space:]]*#/{n=0} END{exit found?0:1}' '$WF'"
 
 # ── 7. The push-path exclusion ────────────────────────────────────────────────
 yes "apply-web-platform-infra.yml excludes this root from its push trigger" \

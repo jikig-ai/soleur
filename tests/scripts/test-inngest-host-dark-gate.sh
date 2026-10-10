@@ -867,9 +867,8 @@ fi
 # These rows graded the workflow's use of this gate: that apply-web-platform-infra.yml SOURCED it and
 # CALLED it under `if !`, that G17-G20 were bound from variables (not literals), that the two probe
 # windows stayed `--since 90m`, and the operator-facing recovery prose of the recut dispatch. That job was
-# converted into inngest_backstop_retire, which grades the live store through
-# tests/scripts/lib/inngest-backstop-retire-gate.sh (its own suite, test-inngest-backstop-retire-gate.sh)
-# and does not use this gate. The gate's remaining consumer is scripts/cutover-inngest.sh, whose wiring is
+# converted into inngest_backstop_retire, which graded the live store through its own gate library and
+# suite (both deleted by #8285 PR B with that job) and did not use this gate. The gate's remaining consumer is scripts/cutover-inngest.sh, whose wiring is
 # pinned below (the cq-assert-anchor-not-bare-token form: the `source` keyword at the start of a line,
 # comments stripped), and the workflow is pinned NOT to re-acquire an unreviewed copy of the call.
 WF="${REPO_ROOT}/.github/workflows/apply-web-platform-infra.yml"
