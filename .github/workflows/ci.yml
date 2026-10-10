@@ -242,7 +242,9 @@ jobs:
   # only: any unknown (variable not exactly `on`, a `ready_for_review` event, a fork or deleted-fork head, any API error, a
   # timeout, a null or non-boolean `draft`) runs the full battery. It emits `light=true` LAST and only when ALL of those hold,
   # and the decision rests on a bounded LIVE read of the pull request: the event payload's draft flag is deliberately NOT an
-  # input (a re-run reuses a stale payload), and the `ready_for_review` run is excluded by its action.
+  # input (a re-run reuses a stale payload), and the `ready_for_review` run is excluded by its action. A NEW run or "Re-run
+  # all jobs" re-reads live; "Re-run failed jobs" reuses this job's CACHED output (`light=true`), which fails safe: that
+  # re-run concludes red again (the aggregator arm below), never green, and a ready PR then needs a fresh ready run.
   #
   # DARK UNTIL ACTIVATED: with the repository variable CI_DRAFT_LIGHT unset the job only annotates `would_light` and every gated
   # job runs. Activation is a separate, authorized step (see the ADR-276 S3 amendment). A NEW HEAVY JOB MUST JOIN THE GATED SET

@@ -373,6 +373,10 @@ set_env_defaults() {
 BAT_N=0
 BAT_LINES=""
 ROWS_SEEN_REASONS=""
+# A bash-level error in a row's stderr (a syntax error, a missing command, an unbound variable) means the body CRASHED:
+# every row then reads red, which must never be credited as a mutant being caught.
+BAT_CRASH=0
+CRASH_RE='syntax error|command not found|unbound variable|bad substitution|unexpected EOF'
 # row <id> <expect_light> <expect_would> <expect_reason> <expect_live_reads>   (fixture already built in $FXD, env in E)
 row() {
   local id="${1//[^[:alnum:]_.-]/_}" xl="$2" xw="$3" xr="$4" xc="$5" out so rc why="" k
@@ -417,6 +421,9 @@ row() {
   calls=$(grep -c '^api ' "$FXD/calls.log" || true)
   [ "$calls" = "$xc" ] || why="$why live-reads=$calls(want $xc)"
   if grep -q 'STUB-MISS' "$FXD/calls.log" 2>/dev/null; then why="$why stub-miss"; fi
+  # the step summary is an observable: one line naming reason, would_light and light, written beside the annotation
+  grep -qxF "draft-light: reason=$xr would_light=$xw light=$xl" "$FXD/summary" 2>/dev/null || why="$why summary-line"
+  if grep -qE "$CRASH_RE" "$FXD/stderr" 2>/dev/null; then BAT_CRASH=1; fi
   ROWS_SEEN_REASONS="$ROWS_SEEN_REASONS $reason"
   if [ -z "$why" ]; then BAT_LINES="$BAT_LINES"$'\n'"ROW $id ok"; else BAT_LINES="$BAT_LINES"$'\n'"ROW $id bad:$why"; fi
 }
@@ -424,7 +431,7 @@ row() {
 # battery <body> : fills BAT_LINES, BAT_N, ROWS_SEEN_REASONS
 battery() {
   BODY="$1"; RB_SHIMPATH=""
-  BAT_N=0; BAT_LINES=""; ROWS_SEEN_REASONS=""
+  BAT_N=0; BAT_LINES=""; ROWS_SEEN_REASONS=""; BAT_CRASH=0
   local d="$SANDBOX/bat" v a
   # R01 canonical: draft, same repo, switch on, a push to the draft
   fx_new "$d"; fx_pull true; set_env_defaults; row R01-canonical true true ok 1
@@ -511,14 +518,28 @@ fi
 cp "$LIVE/body.sh" "$SANDBOX/pristine-body.sh"
 bash -n "$LIVE/body.sh" 2>/dev/null && pass || fail "SYNTAX: the extracted body does not parse under bash -n"
 
+# classify_row_line <prefix> <line> -> ok | bad | skip : the ONE reading of a verdict line, used by the live loops AND by
+# the known-positive rows beside them (a loop that ignored bad rows would otherwise be unobservable).
+classify_row_line() {
+  case "$2" in
+    "$1 "*" ok") echo ok ;;
+    "$1 "*) echo bad ;;
+    *) echo skip ;;
+  esac
+}
+[ "$(classify_row_line ROW "ROW x ok")" = ok ] && [ "$(classify_row_line ROW "ROW x bad: rc=1")" = bad ] \
+  && [ "$(classify_row_line ROW "")" = skip ] && [ "$(classify_row_line AROW "AROW y bad:z")" = bad ] && [ "$(classify_row_line AROW "ROW y ok")" = skip ] \
+  && pass || fail "CLASSIFY: the verdict-line reader does not tell ok / bad / blank apart (a loop built on it could ignore bad rows)"
+
 # ── Control run of the battery on the live body ──────────────────────────────
 battery "$LIVE/body.sh"
+[ "$BAT_CRASH" = 0 ] && pass || fail "CRASH DETECTOR: the PRISTINE body's rows printed a bash error, so the detector would credit every mutant as caught"
 CTRL_N=$BAT_N; CTRL_LINES="$BAT_LINES"; CTRL_REASONS="$ROWS_SEEN_REASONS"
 _ok=0; _bad=0
 while IFS= read -r ln; do
-  case "$ln" in
-    "ROW "*" ok") _ok=$((_ok + 1)); pass ;;
-    "ROW "*) _bad=$((_bad + 1)); fail "BATTERY ${ln#ROW }" ;;
+  case "$(classify_row_line ROW "$ln")" in
+    ok) _ok=$((_ok + 1)); pass ;;
+    bad) _bad=$((_bad + 1)); fail "BATTERY ${ln#ROW }" ;;
   esac
 done <<<"$CTRL_LINES"
 # independent producer count: the rows executed (counter in row()) must equal the verdict lines read back
@@ -533,12 +554,22 @@ if [ -z "$_missing" ]; then pass; else fail "REASONS: never reached:$_missing"; 
 
 # ── Wrapper, trigger, gated set, truth table, aggregator wiring ──────────────
 # A checker that CRASHES prints nothing to stdout; its exit status is part of its verdict.
-live_check() { # <label> <mode>
+# live_verdict <mode> <file> -> prints "CLEAN", "TAGS:<tags>" or "CRASH:<rc>"; the verdict is separate from the pass/fail
+# bookkeeping so a MUTATED workflow can be driven through the very code the live rows use.
+live_verdict() {
   local out rc
-  out=$(chk "$2" "$WF" 2>"$SANDBOX/chk.err"); rc=$?
-  if [ "$rc" -ne 0 ]; then fail "$1: the checker crashed (rc=$rc: $(head -c 160 "$SANDBOX/chk.err"))"
-  elif [ -n "$out" ]; then fail "$1 tags: $out"
-  else pass; fi
+  out=$(chk "$1" "$2" 2>"$SANDBOX/chk.err"); rc=$?
+  if [ "$rc" -ne 0 ]; then printf 'CRASH:%s' "$rc"
+  elif [ -n "$out" ]; then printf 'TAGS:%s' "$out"
+  else printf 'CLEAN'; fi
+}
+live_check() { # <label> <mode>
+  local v; v=$(live_verdict "$2" "$WF")
+  case "$v" in
+    CLEAN) pass ;;
+    CRASH:*) fail "$1: the checker crashed (${v#CRASH:}: $(head -c 160 "$SANDBOX/chk.err"))" ;;
+    *) fail "$1 tags: ${v#TAGS:}" ;;
+  esac
 }
 live_check WRAPPER wrapper
 live_check TRIGGER trigger
@@ -578,6 +609,7 @@ arow() {
   for k in "${!A[@]}"; do [ "${A[$k]}" = __UNSET__ ] || envs+=("$k=${A[$k]}"); done
   ( env -i PATH=/usr/bin:/bin "${envs[@]}" bash --noprofile --norc -eo pipefail "$ABODY" >"$so" 2>"$se" )
   rc=$?
+  if grep -qE "$CRASH_RE" "$se" 2>/dev/null; then BAT_CRASH=1; fi
   [ "$rc" -eq "$wrc" ] || why="$why rc=$rc(want $wrc)"
   if grep -qF -- "$DRAFT_MSG" "$se"; then [ "$wmsg" = 1 ] || why="$why msg-printed"; else [ "$wmsg" = 0 ] || why="$why msg-missing"; fi
   grep -qF -- "$DRAFT_MSG" "$so" && why="$why msg-on-stdout"
@@ -586,7 +618,7 @@ arow() {
   if [ -z "$why" ]; then AGG_LINES="$AGG_LINES"$'\n'"AROW $id ok"; else AGG_LINES="$AGG_LINES"$'\n'"AROW $id bad:$why"; fi
 }
 agg_battery() { # <body>
-  ABODY="$1"; AGG_N=0; AGG_LINES=""
+  ABODY="$1"; AGG_N=0; AGG_LINES=""; BAT_CRASH=0
   # a light draft: the four heavy legs skipped (the shard-totality leg is not an aggregator leg), the light legs green
   set_agg_defaults; A[DRAFT_LIGHT]=true; A[WEBPLAT_RESULT]=skipped; A[SCRIPTS_RESULT]=skipped; A[SCRIPTS_HEAVY_RESULT]=skipped
   arow D1-light-draft-skipped-legs 1 1 0
@@ -623,11 +655,12 @@ agg_battery() { # <body>
 agg_battery "$SANDBOX/pristine-agg.sh"
 _aok=0; _abad=0
 while IFS= read -r ln; do
-  case "$ln" in
-    "AROW "*" ok") _aok=$((_aok + 1)); pass ;;
-    "AROW "*) _abad=$((_abad + 1)); fail "AGGREGATOR ${ln#AROW }" ;;
+  case "$(classify_row_line AROW "$ln")" in
+    ok) _aok=$((_aok + 1)); pass ;;
+    bad) _abad=$((_abad + 1)); fail "AGGREGATOR ${ln#AROW }" ;;
   esac
 done <<<"$AGG_LINES"
+[ "$BAT_CRASH" = 0 ] && pass || fail "CRASH DETECTOR: the PRISTINE aggregator rows printed a bash error"
 AGG_CTRL_N=$AGG_N
 if [ "$AGG_CTRL_N" -eq $((_aok + _abad)) ] && [ "$AGG_CTRL_N" -ge 23 ]; then pass
 else fail "AGGREGATOR COUNT: arow() ran $AGG_CTRL_N rows but $((_aok + _abad)) verdict lines were read (floor 23)"; fi
@@ -664,6 +697,7 @@ mutate_body() {
   fi
   if cmp -s "$f" "$SANDBOX/pristine-body.sh"; then fail "MUTANT $name: mutant is byte-identical to the pristine body"; return; fi
   battery "$f"
+  if [ "$BAT_CRASH" = 1 ]; then fail "MUTANT $name: the mutant CRASHED (bash error on a row), which proves nothing"; return; fi
   if [ "$want" = NONE ]; then # known-negative control: a harmless edit must leave EVERY row green
     got=$(grep -E "^ROW .* bad:" <<<"$BAT_LINES" | head -n 1)
     if [ -z "$got" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass; else fail "CONTROL $name: a harmless edit turned a row red ($got)"; fi
@@ -686,7 +720,6 @@ mutate_body m-light-before-draft-check 'reason=not_draft' 'reason=not_draft; [ "
 mutate_body m-light-first 'would=false' 'would=false; [ "$SWITCH" = on ] && emit "light=true"' R0
 # the action and the repository
 mutate_body m-no-ready-check '[ "$ACTION" != ready_for_review ] || finish' 'true' R03-action-ready
-mutate_body m-ready-after-read '[ "$ACTION" != ready_for_review ] || finish' 'true; : ' R04
 mutate_body m-no-fork-check '{ [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" = "$GH_REPO" ]; } || finish' 'true' R05
 mutate_body m-no-empty-head '[ -n "$HEAD_REPO" ] && ' '' R05-both-empty
 mutate_body m-fork-nocase '[ "$HEAD_REPO" = "$GH_REPO" ]' '[ "${HEAD_REPO,,}" = "${GH_REPO,,}" ]' R05
@@ -712,20 +745,21 @@ mutate_body m-exit-nonzero '  exit 0
 }' '  exit 3
 }' R0
 
-# EQUIVALENT mutants, recorded rather than hidden: a guard that a LATER guard repeats, so no verdict changes.
-EQUIV_RUN=0; EQUIV_OK=0
-mutate_body_equiv() {
-  local name="$1" old="$2" new="$3" f
-  f="$SANDBOX/mut/$name.sh"; EQUIV_RUN=$((EQUIV_RUN + 1))
-  if ! python3 "$SANDBOX/mut.py" "$SANDBOX/pristine-body.sh" "$f" "$old" "$new" 2>"$SANDBOX/mut.err"; then
-    fail "EQUIVALENT $name: mutation did NOT land"; return
-  fi
+# the step summary line is an observable (row() asserts it): dropping it must turn a row red
+mutate_body m-summary-dropped "printf 'draft-light: reason=%s would_light=%s light=%s\\n' \"\$reason\" \"\$would\" \"\$light\" >> \"\${GITHUB_STEP_SUMMARY:-/dev/null}\"" ':' R01-canonical
+
+# harness controls for the crash detector: a body that does not parse must be FLAGGED as a crash, never credited as caught
+CRASH_CTRL_OK=0
+f="$SANDBOX/mut/c-crash.sh"
+if python3 "$SANDBOX/mut.py" "$SANDBOX/pristine-body.sh" "$f" 'note=invalid' 'note=invalid; readonly X=(' 2>"$SANDBOX/mut.err"; then
   battery "$f"
-  if [ -z "$(grep -E '^ROW .* bad:' <<<"$BAT_LINES")" ]; then EQUIV_OK=$((EQUIV_OK + 1)); pass
-  else fail "EQUIVALENT $name: expected no row to go red, but one did (not equivalent: add a killing row)"; fi
-}
-# the summary line is observability only; dropping it changes no verdict
-mutate_body_equiv e-summary-dropped "printf 'draft-light: reason=%s would_light=%s light=%s\\n' \"\$reason\" \"\$would\" \"\$light\" >> \"\${GITHUB_STEP_SUMMARY:-/dev/null}\"" ':'
+  if [ "$BAT_CRASH" = 1 ]; then CRASH_CTRL_OK=$((CRASH_CTRL_OK + 1)); pass; else fail "CRASH CONTROL: a body with a syntax error was not flagged as crashed"; fi
+else fail "CRASH CONTROL: the mutation did not land"; fi
+f="$SANDBOX/mut/c-crash-agg.sh"
+if python3 "$SANDBOX/mut.py" "$SANDBOX/pristine-agg.sh" "$f" 'set -e' 'readonly X=(' 2>"$SANDBOX/mut.err" || python3 "$SANDBOX/mut.py" "$SANDBOX/pristine-agg.sh" "$f" 'fail=0' 'fail=0; readonly X=(' 2>"$SANDBOX/mut.err"; then
+  agg_battery "$f"
+  if [ "$BAT_CRASH" = 1 ]; then CRASH_CTRL_OK=$((CRASH_CTRL_OK + 1)); pass; else fail "CRASH CONTROL: an aggregator body with a syntax error was not flagged as crashed"; fi
+else fail "CRASH CONTROL: the aggregator mutation did not land"; fi
 
 # harness (b): a stub body that always lights, and one that never emits anything, must be refused by the battery
 printf '%s\n' 'printf "would_light=true\nlight=true\n" >> "$GITHUB_OUTPUT"; printf "::notice title=ci-draft-light::pr=invalid would_light=true light=true reason=ok\n"; exit 0' > "$SANDBOX/mut/stub-always.sh"
@@ -762,6 +796,7 @@ mutate_agg() { # <name> <old> <new> <expected-AROW-prefix>
     fail "MUTANT agg-$name: mutation did NOT land ($(head -c 120 "$SANDBOX/mut.err"))"; return
   fi
   agg_battery "$f"
+  if [ "$BAT_CRASH" = 1 ]; then fail "MUTANT agg-$name: the mutant CRASHED (bash error on a row), which proves nothing"; return; fi
   got=$(grep -E "^AROW $want.* bad:" <<<"$AGG_LINES" | head -n 1)
   if [ -n "$got" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass
   else fail "MUTANT agg-$name: no row with prefix $want went red"; fi
@@ -975,11 +1010,49 @@ for _f in scripts/required-checks.txt scripts/ci-required-ruleset-canonical-requ
   if [ -n "$(names_clean "$_mr")" ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass; else fail "MUTANT required-names-$(basename "$_f"): draft-light appended to $_f went unnoticed"; fi
 done
 
+# ── Known-positive controls for the LIVE verdict sites ───────────────────────
+# live_check / names_clean / the bash -n row / the reasons row grade the REAL tree, where everything is green, so a version
+# of them that never failed would look identical. Drive each through a doctored input and require it to go red.
+live_control() { # <label> <mode> <old> <new> <want-prefix: TAGS:… | CRASH>
+  local label="$1" mode="$2" old="$3" new="$4" want="$5" f v
+  f="$SANDBOX/mut/live-$label.yml"
+  if ! python3 "$SANDBOX/mut.py" "$WF" "$f" "$old" "$new" 2>"$SANDBOX/mut.err"; then fail "LIVE CONTROL $label: mutation did NOT land"; return; fi
+  v=$(live_verdict "$mode" "$f")
+  case "$v" in "$want"*) pass ;; *) fail "LIVE CONTROL $label: live_verdict said '${v:0:120}', wanted $want" ;; esac
+}
+live_control wrapper wrapper "      pull-requests: read" "      pull-requests: write" "TAGS:"
+live_control trigger trigger "    types: [opened, synchronize, reopened, ready_for_review]" "    types: [opened, synchronize, reopened]" "TAGS:T-TYPES"
+live_control gated gated "  e2e:
+    needs: [push-dedupe]" "  e2e:
+    needs: [push-dedupe, draft-light]" "TAGS:G-"
+live_control truth truth "  test-webplat:
+    needs: [push-dedupe, draft-light]
+    $HEAVY_IF" "  test-webplat:
+    needs: [push-dedupe, draft-light]
+    $S2_IF" "TAGS:TT:"
+live_control agg agg "web-platform-build, encryption-posture, push-dedupe, draft-light]" "web-platform-build, encryption-posture, push-dedupe]" "TAGS:A-"
+case "$(live_verdict wrapper "$SANDBOX/does-not-exist.yml")" in CRASH:*) pass ;; *) fail "LIVE CONTROL: a missing workflow file did not read as a checker crash" ;; esac
+# names_clean: a doctored required-set file must be reported, a missing one must be reported as MISSING
+_nr="$SANDBOX/mut/nc-root"; rm -rf "$_nr"; mkdir -p "$_nr"
+for _g in scripts/required-checks.txt scripts/ci-required-ruleset-canonical-required-status-checks.json infra/github/ruleset-ci-required.tf \
+          .github/actions/bot-pr-with-synthetic-checks/action.yml apps/web-platform/server/inngest/functions/_cron-safe-commit.ts; do
+  mkdir -p "$_nr/$(dirname "$_g")"; cp "$REPO_ROOT/$_g" "$_nr/$_g"
+done
+[ -z "$(names_clean "$_nr")" ] && pass || fail "NAMES CONTROL: a pristine copy of the five surfaces was reported dirty"
+rm -f "$_nr/scripts/required-checks.txt"
+case "$(names_clean "$_nr")" in *MISSING:scripts/required-checks.txt*) pass ;; *) fail "NAMES CONTROL: a missing required-checks.txt was not reported" ;; esac
+# the syntax row and the reasons row: a body that does not parse, and a battery that never reached a reason, must both read red
+printf 'if then\n' > "$SANDBOX/mut/broken-syntax.sh"
+bash -n "$SANDBOX/mut/broken-syntax.sh" 2>/dev/null && fail "SYNTAX CONTROL: bash -n accepted a broken body" || pass
+_missing=""; for r in $REASONS; do case " $CTRL_REASONS " in *" $r "*) ;; *) _missing="$_missing $r" ;; esac; done
+_seen_none=""; _miss_none=""; for r in $REASONS; do case " $_seen_none " in *" $r "*) ;; *) _miss_none="$_miss_none $r" ;; esac; done
+[ -n "$_miss_none" ] && [ -z "$_missing" ] && pass || fail "REASONS CONTROL: an empty set of seen reasons did not list every reason as missing"
+
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 79 ] && [ "$EQUIV_RUN" -eq 1 ] && [ "$EQUIV_OK" -eq 1 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 79), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 1 of 1)"; fi
+if [ "$MUT_RUN" -ge 79 ] && [ "$CRASH_CTRL_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 79), $CRASH_CTRL_OK of 2 crash controls flagged"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -988,7 +1061,7 @@ else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 79), $EQUIV_OK
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=197
+_FLOOR=211
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
