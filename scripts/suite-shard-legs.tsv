@@ -146,6 +146,7 @@ plugins/soleur/test/check-deps-adapter-drift.test.sh	3
 plugins/soleur/test/check-red-on-main.test.sh	2
 plugins/soleur/test/ci-concurrency-key.test.sh	8
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
+plugins/soleur/test/ci-head-verdict.test.sh	4
 plugins/soleur/test/ci-path-gating.test.sh	5
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/claude-code-action-auth.test.sh	5
@@ -304,6 +305,8 @@ scripts/check-tom4-rls-posture-live	1
 scripts/check-web-host-escrow-config	4
 scripts/ci-demand-census	7
 scripts/ci-deploy-sentry-post-fail-6475	6
+scripts/ci-draft-light	7
+scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
 scripts/ci-push-dedupe	7
 scripts/classify-workflow-transitions	5
@@ -332,6 +335,7 @@ scripts/followthrough-exec-bit	4
 scripts/followthrough-predicate-parity	6
 scripts/followthrough-varq-ban	6
 scripts/followthrough-varq-ban-live	2
+scripts/followthroughs/ci-draft-light-soak-9728	1
 scripts/followthroughs/ci-push-dedupe-soak-9512	1
 scripts/followthroughs/pr-battery-gate-saving-9323	1
 scripts/followthroughs/t5-skip-persistence-bound-7510	8

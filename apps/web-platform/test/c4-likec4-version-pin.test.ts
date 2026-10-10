@@ -250,6 +250,9 @@ const VITEST_RUN = /^RUN npm install -g vitest@\d+\.\d+\.\d+ --before=\d{4}-\d{2
 const PACKAGE_MANAGER = /\b(?:npm|npx|pnpm|yarn|bunx?|corepack)(?![a-z])/i;
 // The ADR-276 S2 (#9512) condition every gated ci.yml job carries; scripts/ci-push-dedupe.test.sh pins the same string against ci.yml.
 const PUSH_DEDUPE_IF = "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}";
+// ADR-276 S3 (#9728): the four heavy jobs (test-webplat and test-scripts carry the likec4 install) append the draft-light clause to
+// that condition; scripts/ci-draft-light.test.sh pins the same string against ci.yml. web-platform-build does NOT take it.
+const DRAFT_LIGHT_IF = PUSH_DEDUPE_IF.replace(" }}", " && needs.draft-light.outputs.light != 'true' }}");
 const RUNNER_PM_ALLOWED = [/^RUN npm ci --omit=dev$/, /^RUN npx playwright@\S+ install --with-deps chromium$/];
 
 function checkImageStructure(dockerfile: string, ci: string): string[] {
@@ -376,7 +379,7 @@ function checkLikec4InstallJobs(src: string, name: string, expected: string[]): 
       found.push(jobId);
       // A job-level `if` or `continue-on-error` skips or masks every step in it, install included.
       // Exception: the ADR-276 S2 (#9512) condition, exact, which is true on every event except an elided push to main.
-      if (("if" in job && job.if !== PUSH_DEDUPE_IF) || "continue-on-error" in job) violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
+      if (("if" in job && job.if !== PUSH_DEDUPE_IF && job.if !== DRAFT_LIGHT_IF) || "continue-on-error" in job) violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
       if ("if" in s || "continue-on-error" in s) violations.push(`${name}: the likec4 install step in ${jobId} must not be conditional or non-blocking`);
     }
   }
@@ -1028,6 +1031,8 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
     expect(checkCiLikec4Jobs(withJobKey("if: false")).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
     // The one sanctioned condition (ADR-276 S2) passes; a near-miss does not.
     expect(checkCiLikec4Jobs(withJobKey(`if: ${PUSH_DEDUPE_IF}`)).join("\n")).toBe("");
+    expect(checkCiLikec4Jobs(withJobKey(`if: ${DRAFT_LIGHT_IF}`)).join("\n")).toBe("");
+    expect(checkCiLikec4Jobs(withJobKey(`if: ${DRAFT_LIGHT_IF.replace("!= 'true' }}", "== 'true' }}")}`)).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(withJobKey(`if: ${PUSH_DEDUPE_IF.replace("!cancelled()", "success()")}`)).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(withJobKey("continue-on-error: true")).join("\n")).toMatch(/job test-scripts carries/);
   });

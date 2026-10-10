@@ -6098,6 +6098,17 @@ if want_scripts; then
   # #9512: the push-dedupe soak probe's exit-code contract (a fake gh, an injected clock, and mutation rows over
   # copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/ci-push-dedupe-soak-9512" bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
+  # #9728 (ADR-276 S3, entry gate 6): the draft-push census instrument (synthesized fixtures, the verdict table by
+  # integer cross-multiplication, the REFUSED mutation matrix and a gh-shim round trip; offline). Same
+  # explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-draft-push-census" bash scripts/ci-draft-push-census.test.sh
+  # #9728 (ADR-276 S3): the draft-light proof. Extracts the draft-light step body, the four gated conditions and the
+  # test aggregator's draft arm from ci.yml and EXECUTES them under the Actions shell; mutation rows over copies.
+  # Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-draft-light" bash scripts/ci-draft-light.test.sh
+  # #9728 (ADR-276 S3): the soak probe's exit-code contract (a fake gh, an injected clock, a stub resolver and mutation
+  # rows over copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/ci-draft-light-soak-9728" bash scripts/followthroughs/ci-draft-light-soak-9728.test.sh
   # (#9812) the derive cache lib and the runner's recording/dispatch instrumentation. Explicit
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
