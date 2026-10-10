@@ -32,13 +32,23 @@
 #     coverage) and the census linter flags it RED. Never leave a suite
 #     unclassified on purpose; never classify it wrong to silence the census.
 #
-# AN ENTRY IS A PATH OR A DIRECTORY PREFIX. A trailing "/" denotes a directory
-# prefix match; anything else is a literal path. Keep entries repo-relative.
-# Matching is ANCHORED (#9307): a directory entry selects a suite only when a
-# diff path STARTS with it, a file entry only when a diff path EQUALS it, and a
-# directory written without the trailing "/" is normalised to one. So `test/`
-# does not match `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`.
-# Entries rooted at `.` or `..` keep the legacy substring match.
+# AN ENTRY IS A PATH, A DIRECTORY PREFIX, OR A `glob:` PATTERN. A trailing "/"
+# denotes a directory prefix match; anything else is a literal path — except
+# `glob:<literal-head>/<glob-tail>` (#9813), the extension-aware edge for
+# corpus walkers: a diff line under <literal-head> matching <glob-tail> under
+# bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers
+# `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike). `glob:` is
+# DECLARED-ARRAY-ONLY — it is never emitted by the token extractors, and
+# AFFECTED_CONSUMED_EDGES / the relevance arrays stay verbatim substring
+# edges. Malformed entries fail toward coverage: they mint an always-match
+# edge (the malformed-shape invariant in scripts/test-all.sh
+# _affected_add_edge), and the census linter flags them statically. Keep
+# entries repo-relative. Matching is ANCHORED (#9307): a directory entry
+# selects a suite only when a diff path STARTS with it, a file entry only
+# when a diff path EQUALS it, and a directory written without the trailing
+# "/" is normalised to one. So `test/` does not match
+# `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`. Entries
+# rooted at `.` or `..` keep the legacy substring match.
 #
 # BASH 3.2. No `declare -A`. The runner indexes selection by registration
 # ORDINAL and resolves per-label arrays by name (`eval`/indirection idiom).
@@ -1823,7 +1833,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
+  "knowledge-base/legal/tenant-dpa-register.md"
   "plugins/"
   "scripts/"
   "test/"
@@ -1840,7 +1851,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
   "plugins/"
   "scripts/"
   "test/"
@@ -1857,7 +1868,7 @@ AFFECTED_SCRIPTS_LINT_SHELL_CAPTURE_EXIT_LIVE_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
   "plugins/"
   "scripts/"
   "test/"
@@ -1933,7 +1944,13 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.py"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/*bunfig.toml"
   "plugins/"
   "scripts/"
   "test/"
@@ -2021,7 +2038,7 @@ AFFECTED_SCRIPTS_LINT_SHELL_TRACE_CREDENTIAL_REFUSAL_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
   "plugins/"
   "scripts/"
   "test/"
@@ -2048,7 +2065,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
+  "knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md"
   "plugins/"
   "scripts/"
   "test/"

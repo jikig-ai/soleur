@@ -99,7 +99,7 @@ ORACLE="$TESTROOT/oracle.py"
 cat > "$ORACLE" <<'PY'
 #!/usr/bin/env python3
 """check <rows.tsv> <cmds.tsv> <baseline> | refs <rows.tsv> <cmds.tsv>"""
-import os, re, sys
+import os, re, sys, fnmatch
 
 CODE = (".sh", ".py", ".ts", ".tsx", ".mjs", ".js")
 FIXTURE = re.compile(r'mktemp|\$\{?(?:tmp|work|sandbox|fixture)|fixture|sandbox|tmpdir', re.I)
@@ -268,6 +268,20 @@ def suite_refs(argv):
 def covers(edge, p):
     if edge.startswith("^"):
         e = edge[1:]
+        if e.startswith("glob:"):
+            # Third edge kind (#9813) — malformed-shape invariant: this predicate
+            # classifies the same shapes as the mint arm in _affected_add_edge and
+            # the in-flight revalidation in _diff_edge_hit. A malformed minted edge
+            # always-matches, so it covers by construction (never a narrowing).
+            g = e[5:]
+            head = re.match(r'[^*?\[\]]*', g).group(0)
+            if ("?" in g or "[" in g or not head.endswith("/")
+                    or "*" not in g[len(head):]):
+                return True
+            if os.path.isdir(p):
+                # A dir ref is covered iff p/head nest — the glob's reach intersects it.
+                return p.startswith(head) or head.startswith(p.rstrip("/") + "/")
+            return fnmatch.fnmatch(p, g)
         if e.endswith("/"):
             return p.startswith(e) or (p + "/") == e
         return p == e

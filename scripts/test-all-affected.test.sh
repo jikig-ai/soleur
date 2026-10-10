@@ -231,7 +231,14 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     tests/commands/sync-domain-model|\\
     plugins/soleur/test/c4-model-freshness.test.sh|\\
     test/x-community|plugins/soleur|zz/new-suite|scripts/lint-dual_lockfile|\\
-    tests/hooks/drop_sentinel-parity) : ;;
+    tests/hooks/drop_sentinel-parity|\\
+    plugins/soleur/test/operator-ack-guard.test.sh|\\
+    plugins/soleur/test/operator-script.test.sh|\\
+    plugins/soleur/test/operator-agent-runnable.test.sh|\\
+    scripts/lint-trap-tempfile-ownership|\\
+    scripts/lint-shell-capture-exit-live|\\
+    scripts/lint-shell-trace-credential-refusal|\\
+    scripts/test-affected-kb-consumers) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -717,6 +724,16 @@ m_s_path_dotdot_mid() { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a/../b.s
 m_ok_python_pytest() { rc_ins "$1" "$RC_TWO" '  run_suite "x/pt" python3 -m pytest tests/x'; }
 m_ok_node()        { rc_ins "$1" "$RC_TWO" '  run_suite "x/nd" node scripts/x.mjs --flag=1'; }
 m_s_idx_nested()   { m_ok_single "$1"; rc_lib_ins "$1" '  "a/two.test.sh"' $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n)'; }
+# GLOBENT (#9813): a well-formed `glob:` member is a declared-entry shape the grammar admits;
+# every malformed variant stays semantic — the closed grammar must never carry a bad shape
+# into a bounded selection.
+m_ok_idx_glob()    { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/**.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
+m_ok_idx_glob_anchor() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/**.sh"\n\n  "x/new.test.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
+m_s_idx_glob_qmark() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x?y"\n)'; }
+m_s_idx_glob_bracket() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x[y]"\n)'; }
+m_s_idx_glob_badhead() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:a*/b"\n)'; }
+m_s_idx_glob_tailstar() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x"\n)'; }
+m_s_idx_glob_always() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' '  "glob:knowledge-base/**.sh"'; }
 m_s_idx_comment_alone() { rc_lib_append "$1" '# a note'; }
 m_s_idx_removed()  { local d="$1"; assert_fixture_dir "$d"; grep -v 'THIS FILE' "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
 m_s_committed()    { assert_fixture_dir "$1"; rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; rc_g -C "$1" commit -q -am semantic; m_ok_single "$1"; }
@@ -780,6 +797,13 @@ RC_TABLE=(
   's_idx_edges_target|m_s_idx_edges_target|semantic:INDEX-ARRAY-NAME|edges-pair'
   's_idx_dup_def|m_s_idx_dup_def|semantic:INDEX-ARRAY-NAME|has-x-new'
   's_idx_nested|m_s_idx_nested|semantic:G4-syntax|'
+  'ok_idx_glob|m_ok_idx_glob|registration-only:x/new|'
+  'ok_idx_glob_anchor|m_ok_idx_glob_anchor|registration-only:x/new|'
+  's_idx_glob_qmark|m_s_idx_glob_qmark|semantic:INDEX-SHAPE|'
+  's_idx_glob_bracket|m_s_idx_glob_bracket|semantic:INDEX-SHAPE|'
+  's_idx_glob_badhead|m_s_idx_glob_badhead|semantic:INDEX-SHAPE|'
+  's_idx_glob_tailstar|m_s_idx_glob_tailstar|semantic:INDEX-SHAPE|'
+  's_idx_glob_always|m_s_idx_glob_always|semantic:INDEX-SHAPE|'
   'ok_two_groups|m_ok_two_groups|registration-only:x/new,x/new3|'
   'ok_idx_dotslash|m_ok_idx_dotslash|registration-only:./x|'
   's_idx_two_blocks|m_s_idx_two_blocks|semantic:INDEX-UNBOUND|'
@@ -2810,6 +2834,141 @@ if [[ "$_q6_n" == "1" && "$_q6_set" == "1" ]]; then
   pass "q6: the pre-pass forwards --paths to its enumerate child (one call site, one assignment)"
 else
   fail "q6: enumerate call carries _aff_child_paths x${_q6_n}, assignment x${_q6_set} (expected 1 and 1)"
+fi
+
+# ---- tg rows (Guard 2, #9813): the `glob:` hit arm ---------------------------------------
+# The six kb-corpus walkers carry `glob:` kb edges — a kb .md line can never move their
+# verdict. Their labels sit in the sandbox keep-list, so "absent from RAN" is a real
+# decline, never a trim artifact.
+_TG_WALKERS=(
+  'plugins/soleur/test/operator-ack-guard.test.sh'
+  'plugins/soleur/test/operator-script.test.sh'
+  'plugins/soleur/test/operator-agent-runnable.test.sh'
+  'scripts/lint-trap-tempfile-ownership'
+  'scripts/lint-shell-capture-exit-live'
+  'scripts/lint-shell-trace-credential-refusal'
+)
+_tg_all_ran() { local _l; for _l in "${_TG_WALKERS[@]}"; do ran_exact "$_l" || return 1; done; }
+_tg_none_ran() { local _l; for _l in "${_TG_WALKERS[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/project/specs/feat-x/spec.md' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _tg_none_ran && ran_exact 'scripts/test-affected-kb-consumers'; then
+  pass "tg1: a kb .md line declines all six glob: walkers (test-affected-kb-consumers still selects)"
+else
+  fail "tg1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# kb .sh selects at head-root, nested and real-spec depths — `*` crosses `/` under [[ == ]].
+# (`_sandbox_probe` names the fixture word the kb-consumers oracle keys on — a bare
+# `knowledge-base/<path>` literal here would be charged to this suite as a real read.)
+for _sandbox_probe in 'knowledge-base/x.sh' 'knowledge-base/a/b/c.sh' 'knowledge-base/project/specs/feat-sdd-implementation-mirror-guard/bootstrap.sh'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _tg_all_ran; then
+    pass "tg2: ${_sandbox_probe} selects all six glob: walkers"
+  else
+    fail "tg2 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done
+
+# The rename-source line: `R100<TAB>old.sh<TAB>new` is TAB-split before the match, so the
+# OLD path of a rename into/out of kb still selects.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  "SANDBOX_DIFF_NAMES=R100"$'\t'"knowledge-base/old.sh"$'\t'"knowledge-base/new" \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _tg_all_ran; then
+  pass "tg3: a rename line whose SOURCE is a kb .sh selects all six glob: walkers"
+else
+  fail "tg3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# Extension completeness (#9813): lint-trap-tempfile-ownership is the one walker whose
+# kb read set is wider than .sh — ALL_EXT (.sh .bash .py .ts .mjs .js) + bunfig.toml.
+# Each non-.sh extension selects ONLY it; a miss here is the silent-narrowing the
+# 7-entry set exists to close.
+_TG_TRAP_ONLY=(
+  'plugins/soleur/test/operator-ack-guard.test.sh'
+  'plugins/soleur/test/operator-script.test.sh'
+  'plugins/soleur/test/operator-agent-runnable.test.sh'
+  'scripts/lint-shell-capture-exit-live'
+  'scripts/lint-shell-trace-credential-refusal'
+)
+for _ext in py bash ts mjs js; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=knowledge-base/x.${_ext}" \
+    -- --affected
+  _rc=$ARM_RC
+  _tg_bad=""
+  for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
+  if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership'; then
+    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership"
+  else
+    fail "tg4 (.${_ext}): rc=$_rc extras:${_tg_bad:-none} trap_ran=$(awk -F'\t' -v l='scripts/lint-trap-tempfile-ownership' '$1=="RAN"&&$2==l{f=1}END{print f+0}' <<<"$ARM_RECORD")"
+  fi
+done
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/project/sub/bunfig.toml' \
+  -- --affected
+_rc=$ARM_RC
+_tg_bad=""
+for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
+if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership'; then
+  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership"
+else
+  fail "tg4b: rc=$_rc extras:${_tg_bad:-none}"
+fi
+
+# Malformed declared entry → always-match (Guard 2's never-narrow arm, end to end):
+# mutate ONE array's kb entry in the sandbox's lib copy to `glob:a*/b` (a head that
+# does not end in /). A kb .md line must STILL select the suite.
+cases=$((cases + 1))
+_tg_sb="$TESTROOT/sb-$cases/test-all.sh"
+build_sandbox "$_tg_sb" with-lib > /dev/null
+python3 - "$TESTROOT/sb-$cases/lib/test-affected-paths.sh" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+anchor = 'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=('
+i = s.index(anchor) + len(anchor)
+j = s.index('"knowledge-base/"', i)
+s = s[:j] + '"glob:a*/b"' + s[j + len('"knowledge-base/"'):]
+open(p, 'w').write(s)
+PY
+: > "$TESTROOT/rec-$cases"
+_rc=0
+( cd "$REPO_ROOT" && env $ENV_SCRUB \
+    SOLEUR_DISABLE_SESSION_STATE=1 SANDBOX_RECORD="$TESTROOT/rec-$cases" \
+    TEST_TIMING_LOG="$TESTROOT/timing-$cases" \
+    SANDBOX_DIFF_NAMES='knowledge-base/project/specs/feat-x/spec.md' \
+    bash "$_tg_sb" --affected ) > "$TESTROOT/out-$cases" 2>&1 || _rc=$?
+ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
+if [[ "$_rc" == "0" ]] && ran_exact 'plugins/soleur/test/operator-ack-guard.test.sh'; then
+  pass "tg5: a malformed declared glob: still selects — ^glob:<verbatim> matches, never narrows"
+else
+  fail "tg5: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# The receipt carries the minted edge verbatim (real index, print arm).
+# The probe and needle are COMPOSED — a literal `knowledge-base/<path>` here is a
+# fixture the kb-consumers oracle would otherwise charge to this suite as a read.
+cases=$((cases + 1))
+_tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
+  bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
+  | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
+if [[ "$_tg_rcpt_n" == "6" ]]; then
+  pass "tg6: the six walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+else
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 6)"
 fi
 
 echo ""

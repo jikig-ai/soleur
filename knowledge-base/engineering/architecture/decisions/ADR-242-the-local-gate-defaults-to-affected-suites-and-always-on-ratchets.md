@@ -576,3 +576,31 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     invalidation weakening. Residual accepted and documented: a file edited mid-walk can mint a torn record
     (edges of content v1 keyed to hash v2, sticky until the next change) — hashing at read time would cost the
     per-file forks the design exists to avoid.
+
+## Amendment — 2026-10-10 (#9813)
+
+22. **The declared-edge grammar has a third kind, `glob:<literal-head>/<glob-tail>`, for corpus
+    walkers whose read set is narrower than a directory.** Six `*.sh` corpus walkers declared
+    `knowledge-base/` — honest at prefix granularity (generated operator scripts ship under
+    `knowledge-base/project/specs/`) but over-broad in practice: a `.md`-only kb diff could never
+    move their verdict yet selected all six for ~331 committed seconds. A `glob:` entry mints
+    `^glob:<pattern>`; a diff line under the literal head matching the tail under bash `[[ == ]]`
+    semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers both `x.sh` and `a/b/c.sh`)
+    selects the suite. The degrade ladder always fails toward coverage: a missing head dir mints
+    `^<head>/` (the dir-prefix edge the entry replaced), a malformed entry mints
+    `^glob:<entry verbatim>` — an always-match shape, since a bare `^` would evaluate `*\n\n*` and
+    narrow — and a `glob:` with no metachar recurses as a literal path entry. `glob:` is
+    declaration-array-only: never emitted by the token extractors, and the consumed/relevance
+    arrays stay verbatim substring edges. The malformed-shape doctrine is pinned identical at
+    three sites — the mint arm in `_affected_add_edge`, the in-flight revalidation in
+    `_diff_edge_hit`, and the census arm in `scripts/lint-orphan-test-suites.sh`, which flags a
+    malformed or dead declared glob as a static RED (a bad entry widens every diff's selection).
+    The registration-only classifier's closed grammar admits the shape as `GLOBENT`; every other
+    added line stays semantic. The two real `.md` reads under kb the consumer ratchet surfaced —
+    the provision-script `DPA_FILE` closure for `operator-ack-guard`, the ADR-207 path for
+    `operator-agent-runnable` — are literal file edges: the issue's `.md`-only-decline contract
+    holds for the corpus scan, not for reads a suite actually has. And
+    `lint-trap-tempfile-ownership` carries the wider seven-entry set its `ALL_EXT` corpus
+    (.sh .bash .py .ts .mjs .js + bunfig.toml) reads, so an extension the issue's `*.sh` framing
+    never named is not silently under-covered. `scripts/test-affected-kb-consumers` keeps
+    `knowledge-base/` — any kb file can be a consumer.

@@ -77,7 +77,7 @@ export LC_ALL=C
 # the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
 # One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
 # the last flag win — the tiling extractor would then assert a coverage the battery ignores.
-DECLARED_TOTAL=20   # the gated mutation rows M1..M20; C0/R1/R1b are unconditional
+DECLARED_TOTAL=26   # the gated mutation rows M1..M26; C0/R1/R1b are unconditional
 ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
 _seen_rows_flag=0
 while (( $# )); do
@@ -153,9 +153,20 @@ materialise() {
   # `git ls-files --error-unmatch`, which is satisfied by any tracked file BENEATH the path.
   # Writing a file AT that path instead fails with "Is a directory" the moment a sibling entry
   # has already created it — order-dependently, which is the worst way for a fixture to break.
-  local p
+  local p _mp
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
+    case "$p" in
+      glob:*)
+        # Third declared kind (#9813): materialise the head dir only — the census
+        # arm probes [[ -d ]] on it; the pattern tail is not a path.
+        _mp="${p#glob:}"; _mp="${_mp%%[*?[]*}"
+        [[ "$_mp" == */ ]] || continue
+        mkdir -p "$PRISTINE/${_mp%/}" || return 1
+        : > "$PRISTINE/${_mp%/}/.keep" || return 1
+        continue
+        ;;
+    esac
     if [[ -d "$REPO_ROOT/$p" ]]; then
       mkdir -p "$PRISTINE/$p" || return 1
       : > "$PRISTINE/$p/.keep" || return 1
@@ -767,6 +778,110 @@ assert_red "M20 (empty reason)" "$rc"
 assert_has "M20 — the unexplained entry is refused" "has no written reason"
 }
 
+# =============================================================================================
+# M21-M26 — Guard 3 (#9813): the declared-member census admits `glob:<head>/<tail>` entries, and
+# a malformed or dead declared glob is a static RED — the mint degrades bad shapes to
+# always-match edges, so a bad DECLARED glob is a silent widening of every diff's selection.
+# =============================================================================================
+# Replace the N-th glob: member of declared array $2 in file $1 with glob:$4...$3 — anchored at
+# the array name, so the five `glob:knowledge-base/**.sh` siblings don't collide the anchor.
+mutate_glob_entry() {
+  python3 - "$1" "$2" "$3" "${4:-1}" <<'PY' || harness_die "glob-entry mutator did not land"
+import sys
+path, arr, new, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+s = open(path).read()
+i = s.index(arr + "=(")
+pos = i
+for _ in range(n):
+    pos = s.index('"glob:', pos) + 1
+j = pos - 1
+k = s.index('"', j + 1) + 1
+s = s[:j] + '"glob:' + new + '"' + s[k:]
+open(path, "w").write(s)
+PY
+}
+
+# kb literals below are COMPOSED (`${_kn}`), never spelled out: the kb-consumers
+# oracle scans this file for `knowledge-base/<path>` tokens and would charge the
+# fixture strings as real reads. The mutated values land in the sandbox lib
+# byte-identical — composition only changes how the SOURCE spells them.
+_kn='knowledge-base'
+run_M21() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M21 "Guard 3: a declared glob: carrying ? or [ is malformed — static RED"
+new_sandbox m21
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_kn}/x?[y].sh"
+run_lint "$SB"; rc=$?
+assert_red "M21" "$rc"
+assert_has "M21 — names the malformed entry and the grammar reason" \
+  "declares glob: edge 'glob:${_kn}/x?[y].sh', contains ? or ["
+}
+
+run_M22() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M22 "Guard 3: a declared glob: whose head does not end in / is malformed — static RED"
+new_sandbox m22
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'a*/b'
+run_lint "$SB"; rc=$?
+assert_red "M22" "$rc"
+assert_has "M22 — names the malformed entry and the grammar reason" \
+  "declares glob: edge 'glob:a*/b', its head does not end in /"
+}
+
+run_M23() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M23 "Guard 3: a declared glob: with a dead head dir is a dead edge — static RED"
+new_sandbox m23
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'nowhere-xyz/**.sh'
+run_lint "$SB"; rc=$?
+assert_red "M23" "$rc"
+assert_has "M23 — names the entry and the dead head" \
+  "declares glob: edge 'glob:nowhere-xyz/**.sh', its head dir nowhere-xyz/ does not exist"
+}
+
+run_M24() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M24 "Guard 3: a declared glob: with no metachar recurses literal — an untracked target REDs"
+new_sandbox m24
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' "${_kn}/no-such-file.md"
+run_lint "$SB"; rc=$?
+assert_red "M24" "$rc"
+assert_has "M24 — names the entry and the literal-miss reason" \
+  "declares glob: edge 'glob:${_kn}/no-such-file.md', a literal entry that is not a tracked file"
+}
+
+run_M25() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M25 "Guard 3: a bad glob: entry AFTER a compliant first still reds (the walk reaches it)"
+new_sandbox m25
+# lint-trap-tempfile-ownership is the one array carrying several glob: members —
+# mutate its SECOND, leaving the first compliant.
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS' 'nowhere-xyz/**.sh' 2
+run_lint "$SB"; rc=$?
+assert_red "M25" "$rc"
+assert_has "M25 — the second (bad) member is named" \
+  "declares glob: edge 'glob:nowhere-xyz/**.sh', its head dir nowhere-xyz/ does not exist"
+}
+
+run_M26() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M26 "Guard 3: the real glob: declarations pass — and the walk demonstrably reached them"
+new_sandbox m26
+_n=$(grep -c "\"glob:${_kn}/" "$SB/scripts/lib/test-affected-paths.sh")
+(( _n >= 12 )) || harness_die "M26: sandbox lib carries ${_n} glob: kb entries (want >=12 — the walk would be vacuous)"
+pass "M26 precondition: ${_n} declared glob: kb entries are in the walk's domain"
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M26 — every declared glob: edge validates (exit 0)"; else
+  fail "M26 — a valid glob: declaration was REJECTED (exit ${rc})"
+  sed 's/^/    /' "$OUT" | head -10
+fi
+}
+
 # --- Row dispatch: bounded-parallel -----------------------------------------------------------
 # Every row builds its own sandbox from PRISTINE (read-only once the harness is built) and
 # asserts against its own .lint-out — the matrix is order-free by construction. Serial cost was
@@ -784,7 +899,7 @@ assert_has "M20 — the unexplained entry is refused" "has no written reason"
 #   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
 #     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
-ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20"
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 # JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
 # the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
