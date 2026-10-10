@@ -1646,7 +1646,7 @@ _cred_err_tail() {
 # from "timed out" (124) or "never ran". Section meanings: runbook canary-probe-set.md, "Canary
 # sandbox DIAG bundle".
 CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-25}"
-[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]*$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=25
+[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=25
 CANARY_DIAG_SCRIPT='p() { printf "%s %s\n" "$1" "$2"; }
 k() { cat "$1" 2>/dev/null || echo n/a; }
 p id "uid=$(id -u) gid=$(id -g)"
@@ -1696,7 +1696,7 @@ emit_canary_sandbox_diag() {
   _canary_diag_emit "$trigger" host "$(timeout 3 docker inspect -f 'capadd={{.HostConfig.CapAdd}} capdrop={{.HostConfig.CapDrop}} priv={{.HostConfig.Privileged}} aa={{.AppArmorProfile}}' soleur-web-platform-canary 2>&1 | head -c 400)"
   _canary_diag_emit "$trigger" hostsec "$(timeout 3 docker inspect -f '{{range .HostConfig.SecurityOpt}}{{printf "%.40s" .}} {{end}}' soleur-web-platform-canary 2>&1 | head -c 400)"
   _canary_diag_emit "$trigger" kernel "kernel=$(uname -r 2>&1) docker=$(timeout 3 docker version --format '{{.Server.Version}}' 2>&1 | head -c 60)"
-  _canary_diag_emit "$trigger" done "exec_rc=$exec_rc lines=$n capped=$capped"
+  _canary_diag_emit "$trigger" "done" "exec_rc=$exec_rc lines=$n capped=$capped bytes=${#out}"
   return 0
 }
 # CANARY_DIAG_END

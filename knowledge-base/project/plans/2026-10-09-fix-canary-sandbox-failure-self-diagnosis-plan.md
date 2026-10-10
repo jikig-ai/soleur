@@ -11,6 +11,13 @@ lane: cross-domain
 
 # fix: canary_sandbox_failed rollback arm self-reports why bwrap failed
 
+> **Superseded in part by review round 1 (PR #9884).** Where this plan names the `CANARY_DIAG_EMITTED` latch, the
+> `others_in_usr` count, a single `host` row carrying `secopt`/`img`, `/proc/self/status`, a `>= 8` line floor or a
+> nine-section bundle, the shipped design is the one in `## Review Round 1 Amendments` at the end of this file
+> (ten in-container sections plus `host`, `hostsec`, `kernel`, `done`; no latch). The Observability block below has
+> been updated in place.
+
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-09
@@ -285,7 +292,7 @@ write, so it needs the operator's explicit go for this specific dispatch, not a 
 
 ```yaml
 liveness_signal:
-  what: "journald marker SOLEUR_CANARY_SANDBOX_DIAG (one line per section, section=proc|lsm|files|caps|prov|direct_version|direct_probe|kernel_ns|host|kernel) on every canary sandbox failure; SANDBOX_PROBE_OK on every pass"
+  what: "journald marker SOLEUR_CANARY_SANDBOX_DIAG (one line per section, section=id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|kernel_ns, then host|hostsec|kernel|done) on every canary sandbox failure; SANDBOX_PROBE_OK on every pass"
   cadence: "per failed deploy (diag) / per deploy (OK marker)"
   alert_target: "Better Stack log query via scripts/betterstack-query.sh; the deploy job already fails the release run and files its failure issue"
   configured_in: "apps/web-platform/infra/ci-deploy.sh (emit_canary_sandbox_diag); shipping path apps/web-platform/infra/vector.toml allowlists SYSLOG_IDENTIFIER ci-deploy"
@@ -294,16 +301,16 @@ error_reporting:
   fail_loud: "DEPLOY_ROLLBACK: bwrap sandbox non-functional (existing) followed by SOLEUR_CANARY_SANDBOX_DIAG lines; a diag that itself fails leaves the rollback line intact and, if logger is down, the existing printf fallback keeps the record on the webhook leg"
 failure_modes:
   - mode: "image carries file caps on /usr/bin/bwrap (stale or mis-built image) - H1"
-    detection: "section=caps non-empty and section=prov BUILD_SHA differs from the release tag's commit"
+    detection: "section=caps carries a cap_ token and section=prov BUILD_SHA differs from the release tag's commit"
     alert_route: "layer 3 (Vector journald to Better Stack); read with betterstack-query.sh"
   - mode: "exec denied by AppArmor or seccomp - H2"
-    detection: "section=lsm profile and mode, section=proc Seccomp, section=direct_version rc=126 with empty caps"
+    detection: "section=lsm profile and mode, section=proc Seccomp, section=direct_version rc=126 with caps bwrap=none"
     alert_route: "layer 3"
   - mode: "namespace or mount creation denied, kernel posture drift - H3 / #9860"
-    detection: "section=direct_version rc=0 and section=direct_probe rc!=0; section=kernel_ns and section=kernel values"
+    detection: "section=direct_version rc=0 and section=sdk_probe (or section=direct_probe under trigger=legacy) failing with a namespace/mount error; section=kernel_ns and section=kernel values"
     alert_route: "layer 3; also the faithful-canary sandbox_broken verdict now carries the same bundle (trigger=faithful)"
   - mode: "the diagnostic itself hangs, floods or fails"
-    detection: "the exec timeout (25 s) bounds it; D3 tests pin that rollback, state and exit code are unchanged; a missing DIAG block after a DEPLOY_ROLLBACK line is itself the signal"
+    detection: "the exec timeout (25 s) bounds it; D3 tests pin that rollback, state and exit code are unchanged; the closing section=done row (exec_rc, lines, capped, bytes) is emitted even when the exec failed, so a missing done row after a DEPLOY_ROLLBACK line means the host script is stale (check DEPLOY_SCRIPT_SHA parity) or the shipping path failed"
     alert_route: "layer 3 (absence query: DEPLOY_ROLLBACK present, SOLEUR_CANARY_SANDBOX_DIAG absent for the same image tag)"
   - mode: "credential-shaped string reaches the marker"
     detection: "D4 and D5 in CI before merge; _cred_err_tail at runtime"
