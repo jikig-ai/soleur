@@ -357,8 +357,9 @@ PR body: `Ref #9860`, never `Closes`. Do not archive the #9871 plan or spec.
 
 Time-box: if no bundle exists 3 days after G1's merge (every web-platform merge triggers a release deploy, and the
 faithful canary has failed on every deploy since 2026-10-09), take gate G3 or the decision-challenge repro path
-instead of waiting. Owner of the outcome: the operator (the availability-versus-isolation call below is a business
-decision, not a diagnostic one).
+instead of waiting. The agent names the cause (it pulls the bundle itself); the OPERATOR owns only the availability-versus-isolation call below,
+which is a business decision and not a diagnostic one. The watch below lives inside one session, so re-arm it on each
+expiry or restart it from the resume prompt: a Monitor does not survive the session.
 
 1. Parity first (read-only): `bash scripts/check-deploy-script-parity.sh --bs-only`. The release deploy that carries
    this merge can still run the previous host script; a bundle without `kdeny` on that deploy means "script not yet
@@ -366,13 +367,15 @@ decision, not a diagnostic one).
 2. Arm a watch with the Monitor tool (never `sleep` in the foreground; `hr-monitor-not-run-in-background-for-polling`):
    an until-loop over
    `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --limit 200 --grep SOLEUR_CANARY_SANDBOX_DIAG | jq -r '.raw | fromjson? | select(.SYSLOG_IDENTIFIER=="ci-deploy") | .message'`
-   that exits when a `section=kdeny` row appears.
+   that exits when a `section=done` row appears for the same host, image and trigger as a `section=kdeny` row (Vector lag can
+   surface `kdeny` before `sdk_probe`, `sdk_noproc` and `hostsec`, so exiting on `kdeny` alone can decide on a partial bundle),
+   and treats exit 3 from the query script (credentials not injected) as an error, not as 'no bundle yet'.
 3. Decide, then act:
 
 | Evidence in the one event | Conclusion | Action |
 |---|---|---|
 | `kdeny mproc>=1` (`operation='mount'`, `fstype='proc'`) | H7: the AppArmor profile denies the mount | fix `apparmor-soleur-bwrap.profile` (same host-infra subsystem as this PR): new plan, host-file delivery, gate G1 again |
-| `sdk_noproc rc=0`, `sdk_probe rc=1`, no `systempaths=` in `hostsec`, `kdeny` `mproc=0` or unreadable | H6: the shim's required fresh procfs cannot mount under docker's default masked `/proc` | DIFFERENT subsystem (agent sandbox shim, ADR-075/272, container posture): open a separate issue with the local repro commands and this bundle; threshold from the Phase 0 user-impact read |
+| `sdk_noproc rc=0`, `sdk_probe rc=1`, no `systempaths=` in `hostsec`, `kdeny` `mproc=0` or unreadable | H6 PROBABLE: the shim's required fresh procfs cannot mount under docker's default masked `/proc`. H7 is not excluded while `kdeny` is unreadable or `src=dmesg` (an AppArmor denial is EACCES, `error=-13`; bwrap reported EPERM, which favours H6) | DIFFERENT subsystem (agent sandbox shim, ADR-075/272, container posture): open a separate issue with the local repro commands and this bundle; threshold from the Phase 0 user-impact read |
 | none of the above (`sdk_noproc` also fails, or H8 signs) | an unmodelled cause | keep #9860 open, widen the bundle in a new plan |
 
 4. Guardrails for the H6 issue, so the fix is not made here by reflex: the `/proc` mask is the cross-tenant control
@@ -412,7 +415,7 @@ failure_modes:
     alert_route: "layer 3 (absence query: DEPLOY_ROLLBACK present, SOLEUR_CANARY_SANDBOX_DIAG absent, per the runbook's Reading absence table)"
   - mode: "a credential or a tenant file name reaches the marker"
     detection: "D10f (credential shapes) and D10b (no name/comm/pid in the fields) in CI before merge; _cred_err_tail at runtime; the closed key allowlist has no path-valued key"
-    alert_route: "CI failure of infra-validation.yml"
+    alert_route: "CI failure of infra-validation.yml before merge; at runtime layer 3 (Vector pii_scrub_string, a second-line scrub of the same marker)"
 logs:
   where: "journald SYSLOG_IDENTIFIER=ci-deploy on the host, shipped to Better Stack"
   retention: "Better Stack source retention (hot window about 40 minutes plus archive arm; query without --no-archive)"
@@ -598,7 +601,8 @@ ran during plan-review and its findings are applied above.)
   Vector. Mitigation by construction: a closed key allowlist with no `name`/`comm`/`pid` key, `_cred_err_tail`
   through the single emitter, and rows D10b/D10f.
 - **Brand-survival threshold:** `aggregate pattern`
+- **Phase 0 evidence (recorded at review, 2026-10-11):** Sentry `feature:agent-sandbox` since 2026-10-09T04:52Z holds 53 rows, all canary reports (zero runtime `sandbox required but unavailable`); Better Stack since 48 h holds zero `Can't mount proc` rows from `CONTAINER_NAME=soleur-web-platform` (that container's journald IS shipped, `vector.toml` Source 3) and only canary deploy rows. Limit: this is evidence of absence only if the app logs a failed bwrap spawn's stderr at a shipped level, which is unverified, and the SDK availability check is just `bwrap --version`. So tenant impact of H6 is UNRESOLVED, not ruled out.
 - **Threshold decision (challengeable):** aggregate, not single-user: the change touches no user data path and
   cannot affect a user session; the exposure is bounded by construction and by test. The underlying #9860 bug is
   different: if the Phase 0 read shows agent sessions failing for real users, the follow-up issue is re-thresholded
-  to `single-user incident` there.
+  to `single-user incident` there. Until a live read settles it, treat H6 as presumed tenant-impacting.

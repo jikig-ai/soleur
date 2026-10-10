@@ -1634,7 +1634,7 @@ _cred_err_tail() {
 # Contract: it can never change the deploy's verdict. Callers invoke it only as `... || true`; it touches
 # no global, never BWRAP_RC/BWRAP_ERR/CANARY_HEALTHY or the state file; the exec is bounded by
 # CANARY_DIAG_TIMEOUT (+3 s kill-after) and its output by `head -c`, every host-side docker call by
-# `timeout 3`; and every value passes through _cred_err_tail (shape + env-value redaction, 200-char
+# `timeout 3` and each host kernel-log read by `timeout -k 1 3` (_canary_kdeny_read; census D10g); and every value passes through _cred_err_tail (shape + env-value redaction, 200-char
 # tail) before it reaches a sink. It prints derived facts only -- no environment dump: the only
 # printenv calls name BUILD_SHA / BUILD_VERSION. Run as the image USER, the same uid and caps the
 # failing probe had. The two call sites are mutually exclusive in one run (a legacy failure exits
@@ -1645,8 +1645,9 @@ _cred_err_tail() {
 # a `done` row carrying the exec's own exit status, so "ran and found nothing" is distinguishable
 # from "timed out" (124) or "never ran". Section meanings: runbook canary-probe-set.md, "Canary
 # sandbox DIAG bundle".
-CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-25}"
-[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=25
+# Default 30: the in-container script runs five `timeout 5` probes (25 s worst case), so a 25 s cap left no margin for the last row.
+CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-30}"
+[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=30
 CANARY_DIAG_SCRIPT='p() { printf "%s %s\n" "$1" "$2"; }
 k() { cat "$1" 2>/dev/null || echo n/a; }
 p id "uid=$(id -u) gid=$(id -g)"
@@ -1687,17 +1688,23 @@ _canary_diag_emit() {
 # Operation not permitted") and ruled out the image, file caps, exec and the legacy probe. What is left is
 # a kernel-side refusal, and the only host-side witness would be an AppArmor/audit line. "Could not read the
 # stream" and "read it, nothing there" are DIFFERENT facts and only the second is evidence, so each rung
-# reports its own state: ok | empty (rc 0, no hint, no lines: what journalctl prints on systemd 261 for a
-# user outside adm/systemd-journal) | noaccess (journalctl's or dmesg's own hint line and no real lines) |
-# absent (127) | timeout (124/137) | error. The ladder is journal, then dmesg only when the journal is not ok.
+# reports its own state: ok (rc 0 AND at least one real line: readable text, NOT proof that audit records
+# reach this stream) | empty (rc 0, no hint, no lines: what journalctl prints on systemd 261 for a user outside
+# adm/systemd-journal) | noaccess (journalctl's or dmesg's own hint line and no real lines) | absent (127) |
+# timeout (124/137) | error (any other rc, including a rc with lines: error text is not a kernel line).
+# The ladder is journal, then dmesg only when the journal is not ok.
 # deploy runs unprivileged (no sudo grant covers the kernel log; kernel.dmesg_restrict=1 is the host
 # baseline), so `noaccess`/`empty` is the EXPECTED outcome and the row says so rather than hiding it.
-# Counts: `hits` = real lines carrying apparmor="DENIED" or the seccomp audit type 1326 (NOT type 1400 alone: that
-# type also carries complain-mode ALLOWED/AUDIT records, which are not refusals); `mproc` = the hits that are a
-# procfs MOUNT denial (operation="mount" AND fstype="proc"). A bare profile name or comm="bwrap" is NOT a hit
-# test: the production container shares the soleur-bwrap profile and generates unrelated denials. `fields`
-# come from a CLOSED key allowlist with no name/comm/pid key, so no tenant file name can reach the row by
-# construction. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
+# Counts: a hit is an AUDIT RECORD (the line starts, after dmesg's optional `[ts] `, with `audit: type=1400|1326
+# audit(<ts>:<n>): `) that carries apparmor="DENIED" or is the seccomp type 1326. Anchoring matters: printk
+# lines that merely echo tenant-chosen text (a segfault line naming a mapped file) must not be able to carry the
+# markers. Type 1400 alone is not enough (it also carries complain-mode ALLOWED/AUDIT records); `mproc` = the
+# hits that are a procfs MOUNT denial (operation="mount" AND fstype="proc"). A bare profile name or comm="bwrap"
+# is NOT a hit test: the production container shares the soleur-bwrap profile, so a hit is HOST-wide, and the
+# dmesg rung is not time-bound. `fields` come from a CLOSED key allowlist with no name/comm/pid key and are cut
+# from anchored records only, with `fstype` limited to a short token (mount(2) lets a tenant pick that string).
+# This is the sanctioned exception to git-data-bootstrap.sh's "never raw kernel lines" rule: values of a fixed key
+# set, not lines. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
 # denial that happened seconds ago. No sudo, no /var/log, no follow flag: every read is `timeout -k 1 3`.
 # SOLEUR-DEBT: one-incident diagnostic row for the #9860 sandbox failure; remove or demote it once the issue closes with the cause named
 _canary_kdeny_read() {
@@ -1714,7 +1721,7 @@ _canary_kdeny_read() {
       /^[[:space:]]+(Users in groups .* can see all messages\.|Pass -q to turn off this notice\.)$/ { next }
       /^-- / || /^[[:space:]]*$/ { next }
       { total++
-        if ($0 ~ /apparmor="DENIED"|type=1326/) {
+        if ($0 ~ /^(\[[ 0-9.]+\] )?audit: type=(1400|1326) audit\([0-9.]+:[0-9]+\): / && ($0 ~ /apparmor="DENIED"/ || $0 ~ /type=1326 audit\(/)) {
           hits++
           if ($0 ~ /operation="mount"/ && $0 ~ /fstype="proc"/) { mproc++; if (mline == "") mline = $0 }
           else if (hline == "") hline = $0
@@ -1736,9 +1743,10 @@ _canary_kdeny_read() {
     elif (( rc == 124 || rc == 137 )); then state=timeout
     elif (( t == 0 )); then
       if (( hint > 0 )); then state=noaccess
-      elif (( rc == 0 || rc == 141 )); then state=empty
+      elif (( rc == 0 )); then state=empty
       else state=error
       fi
+    elif (( rc != 0 )); then state=error
     fi
     if [[ "$rung" == journal ]]; then j="$state"; else d="$state"; fi
     if [[ "$state" == ok ]]; then
@@ -1750,7 +1758,9 @@ _canary_kdeny_read() {
           { for (i = 1; i <= n; i++) {
               k = K[i]
               if (match($0, "(^| )" k "=" q "[^" q "]*" q) || match($0, "(^| )" k "=[^ ]+")) {
-                v = substr($0, RSTART, RLENGTH); sub(/^ /, "", v); out = out v " "
+                v = substr($0, RSTART, RLENGTH); sub(/^ /, "", v)
+                if (k == "fstype" && v !~ /^fstype="?[A-Za-z0-9_.-]+"?$/) continue
+                out = out v " "
               } } }
           END { printf "%s", out }')" || fields=""
         fields="${fields% }"; fields="${fields:0:130}"

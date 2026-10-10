@@ -109,6 +109,9 @@ MOCK
 #   MOCK_KLOG_<J|D>_RC   exit code (127 models "binary absent"); _SLEEP seconds via /bin/sleep (the PATH sleep is a
 #                        no-op); _BIG=1 prepends 40000 benign lines (~4 MB) BEFORE the OUT text; _PAD=<n> sets the
 #                        benign line length (default ~100 bytes); _REP=<n> repeats OUT n times
+# PROVENANCE: the hint and silent-empty bodies are modelled on systemd 255's documented hint block and on journalctl
+# 261's measured silent-empty output (a dev host, kernel 7.2.5), NOT on the production host (6.8.0-90); the first real
+# `kdeny` row is what grounds them. An awk-dialect check ran the function under mawk (prod) and gawk (dev): identical.
 # The journalctl arm answers only an argv that carries -k AND -n 400 (exit 64 otherwise): a fake that answers
 # every request would let a rung that dropped its own bound still read as green.
 create_mock_kernlog() {
@@ -4167,8 +4170,8 @@ unset D4G_OUT D4G_SECS
 
 # D5 -- source census over the bundle region.
 D5_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT")
-diag_check "#9871 D5a: the census region is found and holds both functions and the script (positive control)" \
-  "$(has_e '^CANARY_DIAG_SCRIPT=' "$D5_SRC" && has_e '^_canary_diag_emit\(\)' "$D5_SRC" && has_e '^emit_canary_sandbox_diag\(\)' "$D5_SRC" && echo 0 || echo 1)"
+diag_check "#9871 D5a: the census region is found and holds the three functions and the script (positive control)" \
+  "$(has_e '^CANARY_DIAG_SCRIPT=' "$D5_SRC" && has_e '^_canary_diag_emit\(\)' "$D5_SRC" && has_e '^emit_canary_sandbox_diag\(\)' "$D5_SRC" && has_e '^_canary_kdeny_read\(\)' "$D5_SRC" && echo 0 || echo 1)"
 D5_BAD=$(printf '%s\n' "$D5_SRC" | grep -vE '^[[:space:]]*#' | grep -nE '(^|[^A-Za-z0-9_.-])env([[:space:]]|$)|environ|export[[:space:]]|\.Config|\{\{[[:space:]]*json|die-with-parent|^[[:space:]]*set[[:space:]]|cmdline|compgen|declare[[:space:]]|printenv[[:space:]]+[^B[:space:]]' || true)
 # Allowlist, not only a denylist: the printenv calls are EXACTLY the two literal names.
 D5_PE=$(printf '%s\n' "$D5_SRC" | grep -vE '^[[:space:]]*#' | grep -oE 'printenv [A-Za-z_]+' | sort | tr '\n' ' ') || true
@@ -4189,8 +4192,8 @@ D5_EXEC_UNB=$(printf '%s\n' "$D5_CODE" | grep -E 'docker exec' | grep -vF 'timeo
 D5_HOST_N=$(printf '%s\n' "$D5_CODE" | grep -cE 'timeout 3 docker (inspect|version)' || true)
 diag_check "#9871 D5e: every docker call in the bundle is bounded (3 host-side timeout-3 calls, exec under timeout -k 3) and the exec read is capped at 8192 bytes" \
   "$([[ -z "$D5_HOST_UNB" && -z "$D5_EXEC_UNB" && "$D5_HOST_N" == 3 ]] && has_f '| head -c 8192; exit "${PIPESTATUS[0]}")"' "$D5_CODE" && echo 0 || echo 1)" "unbounded: $D5_HOST_UNB $D5_EXEC_UNB (host-side bounded: $D5_HOST_N)"
-diag_check "#9871 D5f: CANARY_DIAG_TIMEOUT is length-bounded and clamped to 60 s with a 25 s fallback (no 64-bit wraparound), and the container shell reads its OWN /proc/\$\$/status, not the sed child's" \
-  "$(has_f '(( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=25' "$D5_SRC" && has_f '=~ ^[1-9][0-9]?$ ]]' "$D5_SRC" && has_f '/proc/$$/status' "$D5_SRC" && ! has_f '/proc/self/status' "$D5_SRC" && echo 0 || echo 1)"
+diag_check "#9871 D5f: CANARY_DIAG_TIMEOUT is length-bounded and clamped to 60 s with a 30 s fallback (no 64-bit wraparound), and the container shell reads its OWN /proc/\$\$/status, not the sed child's" \
+  "$(has_f 'CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-30}"' "$D5_SRC" && has_f '(( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=30' "$D5_SRC" && has_f '=~ ^[1-9][0-9]?$ ]]' "$D5_SRC" && has_f '/proc/$$/status' "$D5_SRC" && ! has_f '/proc/self/status' "$D5_SRC" && echo 0 || echo 1)"
 unset D5_SRC D5_BAD D5_PE D5_LOGGERS D5_CALLS D5_CALLS_BAD D5_CODE D5_HOST_UNB D5_EXEC_UNB D5_HOST_N
 
 # D6 -- the faithful canary's sandbox_broken verdict emits the same bundle (the two triggers are mutually exclusive in one run), never gating.
@@ -4257,7 +4260,7 @@ d10c "both rungs hint-only" '^src=none j=noaccess d=noaccess total=0 hits=0 mpro
 d10c "journalctl's own '-- No entries --' banner is not a kernel line: the journal reads empty, not ok" '^src=dmesg j=empty d=ok total=[1-9][0-9]* hits=0 mproc=0$' 'MOCK_KLOG_J_OUT=-- No entries --'
 d10c "a mount denial for a NON-procfs filesystem is a hit but not a procfs-mount denial" \
   "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' fstype='tmpfs' error=-13\$" \
-  'MOCK_KLOG_J_OUT=audit: type=1400 apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="tmpfs"'
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000004.1:460): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="tmpfs"'
 d10c "a seccomp audit record (type 1326) counts as a hit, with only its allowlisted syscall field" \
   '^src=journal j=ok d=skip total=1 hits=1 mproc=0 syscall=165$' \
   'MOCK_KLOG_J_OUT=audit: type=1326 audit(1760000002.1:458): auid=4294967295 uid=1001 pid=4244 comm="bwrap" exe="/usr/bin/bwrap" sig=0 arch=c000003e syscall=165 compat=0 ip=0x7f code=0x50000'
@@ -4266,6 +4269,18 @@ d10c "a complain-mode ALLOWED record (type 1400) is not a denial: it must not co
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000003.1:459): apparmor="ALLOWED" operation="mount" profile="soleur-bwrap" fstype="proc"'
 d10c "a flood of 12000 two-byte lines is capped at total=9999 so the counts can never grow the status head" \
   '^src=journal j=ok d=skip total=9999 hits=0 mproc=0$' MOCK_KLOG_J_OUT=k MOCK_KLOG_J_REP=12000
+d10c "a printk line that merely ECHOES tenant text carrying the markers is not an audit record: no hit, no fields" \
+  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=bwrap[4242]: segfault at 0 ip 0 sp 0 error 4 in x apparmor="DENIED" operation="mount" info="TENANT TEXT" fstype="proc"'
+d10c "an audit-looking line that is not at the start of the record (prefixed text) is not a hit either" \
+  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=kernel: audit: type=1400 audit(1760000005.1:461): apparmor="DENIED" operation="mount" fstype="proc"'
+d10c "a journal that prints error text and exits non-zero reads error (not ok), and the dmesg rung is still tried" \
+  '^src=dmesg j=error d=ok total=[1-9][0-9]* hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=Failed to add match: Invalid argument' MOCK_KLOG_J_RC=1
+d10c "a tenant-chosen fstype that is not a short token is dropped from the fields (the rest of the record still reads)" \
+  "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000006.1:462): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="/srv/tenants/acme"'
 d10c "journal silent-empty and dmesg refused" '^src=none j=empty d=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_RC=1
 d10c "both binaries absent (rc 127)" '^src=none j=absent d=absent total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=127 MOCK_KLOG_D_OUT= MOCK_KLOG_D_RC=127
 d10c "an unrelated profile denial is a hit but NOT a procfs-mount denial, and the tenant file name stays out" \
@@ -4292,7 +4307,7 @@ diag_check "#9860 D10e4: when the newest 400 dmesg lines exceed the 64 KiB cap t
 D10F_DP='dp.st.''prd.Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5Jp'
 D10F_SK='sk_''live_Fx9aQ2mZ7vTbL4nKc8RdYw'
 D10F_JWT='ey''Jhbgcioijiuzi1nirx9.eyJzdWIiOiJmaXh0dXJlIn0.Fx9aQ2mZ7vTbL4nKc8RdYw'
-D10F_LINE="audit: type=1400 apparmor=\"DENIED\" operation=\"mount\" info=\"$D10F_DP $D10F_SK\" error=-13 profile=\"$D10F_JWT\" fstype=\"proc\""
+D10F_LINE="audit: type=1400 audit(1760000007.1:463): apparmor=\"DENIED\" operation=\"mount\" info=\"$D10F_DP $D10F_SK\" error=-13 profile=\"$D10F_JWT\" fstype=\"proc\""
 run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10F_LINE"
 D10F_LEAK=0
 for _f in "$D10F_DP" "$D10F_SK" "$D10F_JWT"; do
@@ -4301,7 +4316,7 @@ done
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 diag_check "#9860 D10f: credential shapes inside the kernel line's extracted fields reach neither the journald capture nor the deploy stdout, and REDACTED is on the kdeny row itself (the fixture arrived and was scrubbed)" \
   "$([[ "$D10F_LEAK" == 0 && "$D10_VAL" == *REDACTED* && "$D10_VAL" == *' hits=1 mproc=1 '* ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
-run_diag_case "$DIAGD" 'MOCK_KLOG_J_OUT=audit: type=1400 apparmor="DENIED" operation="mount" info="plain words here" error=-13 profile="soleur-bwrap" fstype="proc"'
+run_diag_case "$DIAGD" 'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000008.1:464): apparmor="DENIED" operation="mount" info="plain words here" error=-13 profile="soleur-bwrap" fstype="proc"'
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 diag_check "#9860 D10f control: the same line with a benign info value arrives verbatim (so the REDACTED assertion above measures the scrub, not an extraction that drops the field)" \
   "$(has_f "info='plain words here'" "$D10_VAL" && echo 0 || echo 1)" "kdeny: $D10_VAL"
@@ -4335,17 +4350,23 @@ D10G_JLINE=$(grep -E 'timeout -k 1 3 journalctl' <<<"$D10G_CODE" || true)
 D10G_DLINE=$(grep -E 'timeout -k 1 3 dmesg' <<<"$D10G_CODE" || true)
 diag_check "#9860 D10g: the region has exactly two kernel reads, each bounded by timeout -k 1 3; journal carries -n 400 and is read newest-first; dmesg takes tail -n 400 BEFORE head -c 65536; no sudo, /var/log, audit log, -f/-w/--follow" \
   "$([[ -z "$(d10g_flags "$D10G_SRC")" && "$(grep -c . <<<"$D10G_JLINE" || true)" == 1 && "$(grep -c . <<<"$D10G_DLINE" || true)" == 1 \
-      && "$D10G_JLINE" == *'journalctl -k -n 400 '* && "$D10G_JLINE" == *'head -c 65536'* \
+      && "$D10G_JLINE" == *'journalctl -k -n 400 --since=-5min --no-pager -o cat '* && "$D10G_JLINE" == *'head -c 65536'* \
       && "$(awk '{ a = index($0, "tail -n 400"); b = index($0, "head -c 65536"); print (a > 0 && b > a) ? 1 : 0 }' <<<"$D10G_DLINE")" == 1 ]] && echo 0 || echo 1)" \
   "violations: $(d10g_flags "$D10G_SRC") | journal: $D10G_JLINE | dmesg: $D10G_DLINE"
 diag_check "#9860 D10g2: kdeny is emitted from exactly one _canary_diag_emit call, through the single scrubbing emitter, and kdeny is not in the in-container allowlist" \
   "$([[ "$(grep -cF '_canary_diag_emit "$trigger" kdeny "$(_canary_kdeny_read)"' <<<"$D10G_CODE" || true)" == 1 && "$(grep -cE '_canary_diag_emit "\$trigger" kdeny' <<<"$D10G_CODE" || true)" == 1 ]] \
       && ! has_e '\^\(id\|[^)]*kdeny' "$D10G_CODE" && echo 0 || echo 1)"
-unset D10G_CLEAN D10G_SRC D10G_CODE D10G_JLINE D10G_DLINE
+# The closed key list is a claim made in THREE places (the awk, the runbook, and what the rows above exercise). Pin the code
+# literal to the expected set AND to the runbook's spelling, so appending a key (a path-valued one, say) is a visible edit.
+D10G_KEYS=$(sed -nE 's/.*split\("([a-z_ ]+)", K, " "\).*/\1/p' <<<"$D10G_CODE")
+D10G_RB="$SCRIPT_DIR/../../../knowledge-base/engineering/operations/runbooks/canary-probe-set.md"
+diag_check "#9860 D10g3: the kdeny field-key allowlist is exactly the documented closed set, spelled identically in the runbook" \
+  "$([[ "$D10G_KEYS" == 'operation profile fstype error info requested_mask denied_mask syscall' && -f "$D10G_RB" ]] && has_f "(\`$D10G_KEYS\`)" "$(cat "$D10G_RB")" && echo 0 || echo 1)" "code keys: $D10G_KEYS"
+unset D10G_CLEAN D10G_SRC D10G_CODE D10G_JLINE D10G_DLINE D10G_KEYS D10G_RB
 
 # D10h -- boundary: the status head must survive _cred_err_tail's 200-character tail even when the counts are
 # multi-digit and every allowlisted field is at its longest.
-D10H_LINE='audit: type=1400 apparmor="DENIED" operation="mount" info="'"$(printf 'i%.0s' $(seq 1 100))"'" error=-13 profile="'"$(printf 'p%.0s' $(seq 1 60))"'" fstype="proc" requested_mask="rw" denied_mask="rw" syscall=165'
+D10H_LINE='audit: type=1400 audit(1760000009.1:465): apparmor="DENIED" operation="mount" info="'"$(printf 'i%.0s' $(seq 1 100))"'" error=-13 profile="'"$(printf 'p%.0s' $(seq 1 60))"'" fstype="proc" requested_mask="rw" denied_mask="rw" syscall=165'
 run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10H_LINE" MOCK_KLOG_J_REP=400
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 diag_check "#9860 D10h: with 3-digit counts and every field at its longest the row still begins src= (the 200-char tail does not eat the status head) and never exceeds 200 characters" \
@@ -11071,7 +11092,10 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # silent-empty, both hint-only, empty + refused, both absent, unrelated denial, banner, non-procfs mount, seccomp 1326,
 # ALLOWED not a hit, 9999 cap), D10d/d2 (both rungs hang), D10e/e2/e3/e4 (4 MB streams, newest kept), D10f + control
 # (credential scrub), D10g control + census + D10g2, D10h (200-char tail boundary) and D11 (sdk_noproc argv).
-CI_DEPLOY_ASSERT_FLOOR=595
+# #9860 review (2026-10-11): raised 595 -> 600 with the five review-round rows: D10c x4 (printk echo is not an audit record, an
+# unanchored audit-looking prefix, a non-zero rc with lines reads error, a path-shaped fstype is dropped) and D10g3 (the field-key
+# allowlist spelled identically in code and runbook).
+CI_DEPLOY_ASSERT_FLOOR=600
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
