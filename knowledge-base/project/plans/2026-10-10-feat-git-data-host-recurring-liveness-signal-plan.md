@@ -14,6 +14,32 @@ lane: cross-domain
 
 # git-data host: recurring off-host liveness signal (flip precondition)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10
+**Sections enhanced:** 4 (Downtime & Cutover added, Network-Outage Deep-Dive added, verification record added, no content removed)
+**Agents and passes used:** the plan-phase fan-out already ran 2 research agents (repo, learnings), 3 domain leaders (CTO, COO, CPO)
+and a 5-seat eng panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow). This pass added the mandatory halts
+(user-brand, observability, PAT, encryption posture, guard contract, scope check, downtime) and a citation and consistency sweep rather
+than a second blanket fan-out over a plan that had just absorbed ten reviews.
+
+### Key improvements
+
+1. A `## Downtime & Cutover` section: the plan makes a pending `hcloud_server.git_data` replace necessary, so the gate fires; it
+   records why no zero-downtime path exists for this single-host store and why the plan adds no downtime of its own.
+2. A Network-Outage Deep-Dive for the new egress dependencies (Better Stack heartbeat host, Doppler API) with verified and
+   not-verified layers named.
+3. A verification record: every cited issue and PR resolved live, every rule id resolved, all section literals checked for drift after
+   the review rewrite.
+
+### New considerations discovered
+
+- The deepen sweep found no stale literal (`TimeoutStartSec=55`, `state=ok`, `GIT_DATA_HOST_HEARTBEAT_URL`, `push = false` agree across
+  every section) and no fabricated or retired rule id (the one `wg-architecture-decision-is-a-plan-deliverable` is migrated and active).
+- The uptime heartbeat host is not yet verified reachable from the git-data host; only the Better Stack ingest host is (a
+  `boot_complete` row exists since the 2026-09-25 replace). The first measured beat is the verification, and the soak read shows
+  `ping_fail` if it is not.
+
 ## Overview
 
 The git-data host emits no recurring signal of its own between boots. Its only recurring signal
@@ -816,6 +842,56 @@ does not latch beyond the documented window; that the URL never appears in a log
 rehearsal host cannot reach the production monitor; that nothing in the PR performs or schedules an arm or a replace.
 
 No Product/UX Gate: the Files lists contain no UI-surface path (`components/**`, `app/**/page.tsx`, `app/**/layout.tsx`).
+
+## Downtime & Cutover
+
+**Offline-inducing operation.** Every edit to `cloud-init-git-data.yml` or a `file()`-bound payload is ForceNew on
+`hcloud_server.git_data` (it has no `ignore_changes = [user_data]`), so this change makes the already-pending replace carry the
+feeder. The replace is the operation; this plan adds no new one and does not perform it.
+
+**Surface affected.** The git-data host only: the shared bare-repo store (empty and flag-off until the cutover flip, ADR-239) and the
+Art. 17 erasure path, which reports `unreachable` rather than succeeding while the host is down. The web app keeps serving; git-data is
+a fail-soft overlay (`ensure-workspace-repo.ts`).
+
+**Zero-downtime path, evaluated.** Blue-green is not available: the host is a singleton whose private NIC address (`10.0.1.20`), its two
+volumes and its pinned SSH host key are bound to one instance, and ADR-237 rotates the key on every replace by design. The volumes
+survive by omission from the scoped recreate, so no data moves. A rolling or expand-contract shape does not apply to a one-host store
+with an empty dataset. Residual downtime is therefore accepted as the bounded window of one scoped replace, already described in the
+runbook ("What users see, During a replace"), already required before the real cutover (ADR-220 D6), and gated on the owner's explicit
+per-step authorization. The feeder adds no extra reboot: it is armed by first-boot cloud-init and the monitor is paused, so the window
+pages nothing until arming.
+
+**Per-stage verification and rollback.** Verification is the pre-arm read (PR sequence step 5) and the flip-time re-read (step 8);
+rollback of the payload is forward-only through the two-PR sequence (a reverted payload voids the evidence again), and rollback of the
+monitor is the arm gate's own re-pause on a missing beat.
+
+### Network-Outage Deep-Dive
+
+The trigger words appear because the plan discusses SSH banners and unreachable erasures, not because it diagnoses an outage; the
+deep-dive is applied to the NEW egress dependencies the feeder introduces.
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list | verified by construction | `hcloud_firewall.git_data` declares zero rules (inbound deny, egress open) per ADR-198; the only host-local drop is the metadata endpoint for non-root UIDs, and the feeder runs as root |
+| L3 DNS / routing to `uptime.betterstack.com` and the Doppler API | not verified from this host | The host's emitter already reaches Better Stack ingest and Doppler (a `boot_complete` row exists since the 2026-09-25 replace; the LUKS reopen reads Doppler every boot). The heartbeat host is a different name; the first measured beat verifies it, and `ping_fail` names the failure |
+| L7 TLS | verified by construction | curl default verification, https only, no `-k` (Encryption Posture) |
+| L7 application | designed | the beat is a GET that must return success; `-f` makes a non-2xx a `ping_fail`, with the cache dropped so a rotated URL is re-read |
+
+Service-layer hypotheses (feeder bug, vendor outage) are only entertained after those layers, in that order.
+
+## Verification record (deepen pass)
+
+- Every `#N` in this plan resolved live with `gh issue view` or `gh pr view`; states match the narrative (#9438, #8211, #8093, #9943,
+  #9936, #9925 and #9466 open; #9440 and #8128 merged; #5914, #6537, #6548, #7855, #8043 closed).
+- Every rule id resolved against `AGENTS.md` or `scripts/migrated-rule-ids.txt`; none missing, none retired.
+- Labels used on #9943 (`domain/engineering`, `type/chore`, `priority/p3-low`, `deferred-automation`) exist.
+- ADR ordinal 283: `ls decisions` on a freshly fetched tree and a sweep of all 117 `origin/*` refs show 282 claimed by
+  `feat-one-shot-9879-luks-sole-copy-protection` and nothing at 283.
+- Section literals (`TimeoutStartSec=55`, `state=ok`, `SOLEUR_GIT_DATA_LIVENESS`, `GIT_DATA_HOST_HEARTBEAT_URL`,
+  `soleur-git-data-host-prd`, `push = false`) are identical across Proposed Solution, Observability, Guard Contract, Acceptance Criteria
+  and tasks.md.
+- Lints green at this commit: `lint-guard-contract.py`, `lint-infra-no-human-steps.py`, `lint-encryption-posture.py`,
+  `c4-count-parity.test.sh`, `lint-orphan-test-suites.sh`, markdownlint on the plan, tasks and decision-challenges.
 
 ## Test Scenarios
 
