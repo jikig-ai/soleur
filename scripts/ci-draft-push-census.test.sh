@@ -332,6 +332,20 @@ chk_not M3 "clipped window 105 is not in the cohort" grep -q '^105	' "$T/rows.ts
 chk_not M3 "window 107 closing after the period is not in the cohort" grep -q '^107	' "$T/rows.tsv"
 chk M3 "PR 106 closed while draft IS in the cohort" has "106	1	1	1	0" "$T/rows.tsv"
 
+# E1 the period must be CLOSED: an --end after today would contain today's partial day (right-censored open drafts bias the mean)
+run_census "$CENSUS" --fixture "$BASE" --end "$(date -u -d tomorrow +%F)" --days "$DAYS_N"
+chk E1 "--end tomorrow is refused (exit 2)" rc_is 2
+chk E1 "--end tomorrow names the reason" has "in the future" "$ERR"
+run_census "$CENSUS" --fixture "$BASE" --end "$(date -u -d '2 days' +%F)" --days "$DAYS_N"
+chk E1 "--end in two days is refused too" rc_is 2
+# E2 the environment knobs are validated (a typo must not become a silent hang or a bash arithmetic error)
+census_run TMPDIR="$T/ftmp" CENSUS_GH_TIMEOUT=abc bash "$CENSUS" --fixture "$BASE" --end "$END_DAY" --days "$DAYS_N" >"$OUT" 2>"$ERR"; RC=$?
+chk E2 "a non-numeric CENSUS_GH_TIMEOUT is refused (exit 2)" rc_is 2
+census_run TMPDIR="$T/ftmp" CENSUS_RETRY_SLEEP=-1 bash "$CENSUS" --fixture "$BASE" --end "$END_DAY" --days "$DAYS_N" >"$OUT" 2>"$ERR"; RC=$?
+chk E2 "a negative CENSUS_RETRY_SLEEP is refused (exit 2)" rc_is 2
+run_census "$CENSUS" --fixture "$BASE" --end "$END_DAY" --days "$DAYS_N" --summary
+chk E2 "the removed --summary flag is now an unknown argument" rc_is 2
+
 # M4 a draft PR's ready run is not a draft push: PR 101's SHA C (created after the ready event) stays out
 chk M4 "PR 101 has 2 pushes, not 3" has "101	1	2	3	1" "$T/rows.tsv"
 
@@ -510,7 +524,7 @@ chk Z "no census run hit the ${CENSUS_TO} s timeout" [ ! -e "$DEADLINE_FILE" ]
 # DELIBERATELY NOT ROUTED THROUGH fail(): literal comparison and a direct exit.
 # KEEP THE TWO ASSIGNMENTS AND THE `if` CONTIGUOUS (no comment between them).
 _total=$((passes + fails))
-_FLOOR=128
+_FLOOR=134
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d - the suite lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

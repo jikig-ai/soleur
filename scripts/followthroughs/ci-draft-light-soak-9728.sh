@@ -9,7 +9,7 @@
 # Is the light draft set safe and does it pay? Checks, in the order they decide:
 #  (a) STALL, every sweep: any OPEN non-draft PR whose verdict (plugins/soleur/scripts/ci-head-verdict.sh
 #      `verdict <pr>`, closed state set n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) is `stalled`
-#      (N=75 minutes with no deciding CI run after the ready event) is a FAIL naming the PR. `n/a` and `full-decided`
+#      (no deciding CI run within the resolver's stall window after the ready event, 120 minutes) is a FAIL naming the PR. `n/a` and `full-decided`
 #      are never flagged. A resolver error, a missing verdict line, a PR mismatch or a state outside the closed set
 #      is CANNOT ESTABLISH: an unreadable PR is never read as healthy. Draft PRs are not consulted.
 #  (c) DETECTIVE ACTIVATION CHECK, every sweep: a repository variable is a setting, and no code path can refuse a
@@ -43,10 +43,13 @@
 # ACTIVATED. A light run created after a recorded deactivation is a FAIL (the variable removal did not take effect).
 #
 # SAMPLE (bounds API use, the sweeper token allows ~1000 requests/hour/repo shared by every probe): the newest MAX_RUNS
-# (100) completed success/failure pull_request runs since the merge (cancelled runs leave skipped jobs and are not
-# observations), only IDLE_RUNS (40) while nothing is active; the newest MG_MAX (30) merge_group runs since the
-# activation; at most 100 open PRs. A violation is a persistent flow (every draft push is light), not a one-off, so a
-# bounded sample sees it within a sweep.
+# (100) completed success/failure pull_request runs since the merge (a cancelled run's gated jobs are `cancelled`, not
+# `skipped`, so it is never light; it is excluded as not an observation), only IDLE_RUNS (40) while nothing is active;
+# the newest MG_MAX (30) merge_group runs since the activation; at most 100 open PRs (not paginated: a PR beyond the first
+# page is not consulted). A violation is a persistent flow (every draft push is light), not a one-off, so a bounded sample
+# sees it within a sweep. The SAME bound applies to the exit count: "at least 20 distinct light head SHAs" is counted
+# inside the newest MAX_RUNS runs, so a burst can reach it early, and the 30-day "fewer than 20" FAIL means fewer than 20
+# in the newest MAX_RUNS runs, which at about 200 pull_request runs a day is the last few hours, not 30 days of evidence.
 #
 # Exit semantics (sweep-followthroughs.sh contract):
 #   0 = PASS    1 = FAIL (a stalled PR, an unrecorded or unconfirmed activation, a light run whose test did not fail
@@ -58,6 +61,8 @@
 #
 # RETIREMENT: when #9728's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
 # the rows in scripts/suite-shard-legs.tsv and scripts/suite-durations.tsv, and the CODEOWNERS lines.
+# The push census (scripts/ci-draft-push-census.sh and its .test.sh, with the same registrations) is the instrument for the
+# entry gate and the exit census: retire it the same way once `S3-EXIT-CENSUS` is posted.
 set -uo pipefail
 
 case "$-" in
@@ -76,13 +81,13 @@ MIN_PUSHES=20
 MIN_DAYS=7
 DEADLINE_DAYS=30
 DARK_DAYS=1
-STALL_MIN=75         # the resolver's threshold, quoted in the FAIL text only
+STALL_MIN=120        # the resolver's threshold, quoted in the FAIL text only (ci-head-verdict.sh STALL_MINUTES)
 MAX_RUNS=100
 IDLE_RUNS=40
 MG_MAX=30
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test seam (the sweeper runs this under env -i, so it is inert in production)
-VERDICT_CMD="${CI_HEAD_VERDICT_CMD:-$HERE/../../plugins/soleur/scripts/ci-head-verdict.sh}"
+VERDICT_CMD="${CI_HEAD_VERDICT_BIN:-$HERE/../../plugins/soleur/scripts/ci-head-verdict.sh}"
 
 for need in gh jq timeout; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
@@ -130,7 +135,7 @@ open_prs="$(api "repos/$REPO/pulls?state=open&per_page=100" --jq '[.[] | select(
 npr=0; stalled_list=""
 for pr in $open_prs; do
   [[ "$pr" =~ ^[0-9]+$ ]] || fail_api "open PR number $pr"
-  vout="$(timeout 120 bash "$VERDICT_CMD" verdict "$pr" 2>/dev/null)" || fail_api "verdict for PR $pr"
+  vout="$(timeout 120 bash "$VERDICT_CMD" verdict "$pr" --repo "$REPO" 2>/dev/null)" || fail_api "verdict for PR $pr"
   vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
   [ -n "$vline" ] || fail_api "verdict for PR $pr (no verdict line)"
   vstate="$(sed -n 's/.* state=\([^ ]*\).*/\1/p' <<<"$vline")"
@@ -214,7 +219,7 @@ while IFS=$'\t' read -r id sha branch created; do
     ready) bad_ready=$((bad_ready + 1)); bad_ready_list="$bad_ready_list run=$id sha=${sha:0:10}" ;;
     none|unknown) unjoined=$((unjoined + 1)) ;;
   esac
-done < <(jq -r '.[] | [.id, .head_sha, .head_branch, .created] | @tsv' <<<"$runs_json")
+done < <(jq -r '.[] | [.id, .head_sha, (if (.head_branch // "") == "" then "-" else .head_branch end), .created] | @tsv' <<<"$runs_json")
 light_pushes="${#LSHA[@]}"
 
 # --- merge_group entries since the activation: was the PR head's NEWEST pull_request run light? ---------------------------------

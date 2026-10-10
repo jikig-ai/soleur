@@ -4,7 +4,7 @@
 # 78 xtrace refusal), with mutation rows against mutated COPIES of the probe. An exit-code contract nothing
 # drives is a comment.
 #
-# The clock is injected (SOAK_NOW_EPOCH) and the resolver is a stub (CI_HEAD_VERDICT_CMD) that prints the exact
+# The clock is injected (SOAK_NOW_EPOCH) and the resolver is a stub (CI_HEAD_VERDICT_BIN) that prints the exact
 # `SOLEUR_CI_HEAD_VERDICT state=... pr=... sha=... run=... reason=...` line, so no row sleeps and none depends on
 # the wall clock, the live repo or the real resolver. Fixtures are synthesized (shas are `L###`/`F###`/`H###`,
 # PR numbers are 6xx-8xx, the tracker is the real #9728 only because the probe names it); nothing is written
@@ -51,6 +51,8 @@ isoof() { printf -v "$2" '%(%Y-%m-%dT%H:%M:%SZ)T' "$1"; }   # isoof <epoch> <var
 cat > "$TMP/verdict-stub.sh" <<'STUB'
 #!/usr/bin/env bash
 [ "$1" = "verdict" ] || exit 64
+# the probe must pin the repository: a resolver run from another cwd would otherwise read another repo's PR of the same number
+[ "$3" = "--repo" ] && [ "$4" = "jikig-ai/soleur" ] || { echo "resolver: no --repo jikig-ai/soleur" >&2; exit 66; }
 [ -f "$FX/verdict-fail-$2" ] && { echo "resolver: HTTP 500" >&2; exit 1; }
 [ -f "$FX/verdict-$2.txt" ] || exit 65
 cat "$FX/verdict-$2.txt"
@@ -73,11 +75,13 @@ mk_jobs "$TMP/tpl/jobs-fullred.json" success failure
 mk_jobs "$TMP/tpl/jobs-light.json" skipped failure
 mk_jobs "$TMP/tpl/jobs-lightok.json" skipped success      # a light run whose `test` went green: Option R broken
 mk_jobs "$TMP/tpl/jobs-lightnotest.json" skipped -        # a light run with no `test` row at all
-# decoys that are NOT light: one gated job ran, one family absent, the `test-scripts` family absent with only -heavy skipped
+# decoys that are NOT light (a gated family that FAILED or was CANCELLED is an outage, not a light run): one gated job ran, one family absent, the `test-scripts` family absent with only -heavy skipped
 jq '.jobs |= map(if .name == "test-scripts (2/8)" then .conclusion = "success" else . end)' "$TMP/tpl/jobs-light.json" > "$TMP/tpl/jobs-mixed.json"
 jq '.jobs |= map(if .name == "test-scripts (1/8)" or .name == "test-scripts (2/8)" then .conclusion = "success" else . end)' "$TMP/tpl/jobs-light.json" > "$TMP/tpl/jobs-heavyonly.json"
 jq '.jobs |= map(select(.name != "shard-totality-mutations"))' "$TMP/tpl/jobs-light.json" > "$TMP/tpl/jobs-nofam.json"
 jq '.jobs |= map(select(.name | startswith("test-scripts (") | not))' "$TMP/tpl/jobs-light.json" > "$TMP/tpl/jobs-noscripts.json"
+mk_jobs "$TMP/tpl/jobs-failedheavy.json" failure failure       # all four gated families FAILED (a CI outage)
+mk_jobs "$TMP/tpl/jobs-cancelledjobs.json" cancelled failure   # all four gated families CANCELLED
 
 # --- the fake gh: answers the endpoints the probe reads from $FX/*.json, applying --jq with real jq ---------------------------
 cat > "$TMP/bin/gh" <<'FAKE'
@@ -200,10 +204,11 @@ build_fx() {
     case "$k" in
       lightsuccess) tk=lightok; conc=success ;; lightnotest) tk=lightnotest ;; lightready) gv=ready ;; lightconverted) gv=converted ;;
       lightbeforeready) gv=beforeready ;; lightnever) gv=never ;; lightconvfirst) gv=convfirst ;; lightnopr) gv=nopr ;;
-      lightmultipr) gv=multipr ;; tltrunc) gv=trunc ;; mixed|heavyonly|noscripts|nofam) tk="$k" ;;
+      lightmultipr) gv=multipr ;; tltrunc) gv=trunc ;; mixed|heavyonly|noscripts|nofam|failedheavy|cancelledjobs) tk="$k" ;; nobranch) tk=full; conc=success ;;
       cancelskip) conc=cancelled; gv=ready ;; lightafteroff) : ;;
     esac
-    add_run "$c" "$id" "$sha" "br-$sha" "$conc" "$tk"
+    local br="br-$sha"; [ "$k" = nobranch ] && br=""
+    add_run "$c" "$id" "$sha" "$br" "$conc" "$tk"
     gql "$sha" "$((id + 100))" "br-$sha" "$gv" "$c"
   }
   if (( between )); then   # a light run between the first and the latest activation: legitimate
@@ -305,22 +310,25 @@ build_fx() {
 
 # expect <label> <want-rc> <want-text> <fx> [env...]  — runs $PROBE_UNDER (default the live probe)
 PROBE_UNDER="$PROBE"
+CRASH_RE='syntax error|command not found|unbound variable|bad substitution|unexpected EOF'
+note_crash() { if grep -qE "$CRASH_RE" <<<"$1"; then : > "$TMP/crashed"; fi; }
 expect() {
   local label="$1" want="$2" text="$3" fx="$4"; shift 4
   local out rc
-  out="$(env FX="$fx" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_CMD="$TMP/verdict-stub.sh" "$@" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+  out="$(env FX="$fx" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" "$@" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+  note_crash "$out"
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 # the same run, returning the output (for assertions on the request log or the info line)
 LAST_OUT=""
-expect_out() { LAST_OUT="$(env FX="$1" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_CMD="$TMP/verdict-stub.sh" bash "$PROBE_UNDER" 2>&1)"; }
+expect_out() { LAST_OUT="$(env FX="$1" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" bash "$PROBE_UNDER" 2>&1)"; note_crash "$LAST_OUT"; }
 
 # A lean PASS fixture is 20 light pushes + 6 full runs, active 8 days, confirmed before the activation, census attached.
 # --- baseline and the info line ------------------------------------------------------------------------------------------
 r_pass()      { build_fx "$TMP/c1" 20 6;                                   expect "PASS: 20 distinct draft pushes light over 8 days, confirmed, census attached, a draft PR with a stalled stub line ignored" 0 "PASS" "$TMP/c1"; }
 r_info()      { build_fx "$TMP/c2" 20 6;                                   expect "the info line reports the counts" 0 "light_pushes=20 " "$TMP/c2"; }
 # --- (a) STALL --------------------------------------------------------------------------------------------------------------
-r_stall()     { build_fx "$TMP/a1" 20 6 stalled=707;                       expect "FAIL: an open ready PR whose verdict is stalled is named" 1 "#707" "$TMP/a1"; }
+r_stall()     { build_fx "$TMP/a1" 20 6 stalled=707;                       expect "FAIL: an open ready PR whose verdict is stalled is named, with the resolver's 120-minute window" 1 "no deciding CI run 120 minutes after the ready event" "$TMP/a1"; }
 r_stall2()    { build_fx "$TMP/a2" 20 6 stalled=707,708;                   expect "FAIL: two stalled PRs are both named" 1 "#707 #708" "$TMP/a2"; }
 r_stall_dark(){ build_fx "$TMP/a3" 0 6 noact stalled=707 merged=$((NOW_EPOCH - 3600)); expect "FAIL: a stalled PR is reported while still dark (no activation, merged an hour ago)" 1 "#707" "$TMP/a3"; }
 r_stall_prec(){ build_fx "$TMP/a4" 5 6 actdays=2 stalled=707;              expect "FAIL takes precedence over NOT YET (a stalled PR with too few days and pushes)" 1 "#707" "$TMP/a4"; }
@@ -361,6 +369,9 @@ r_decoy_mixed(){ build_fx "$TMP/c14" 0 6 noact extra=mixed merged=$((NOW_EPOCH -
 r_decoy_heavy(){ build_fx "$TMP/c15" 0 6 noact extra=heavyonly merged=$((NOW_EPOCH - 3600));   expect "NOT YET: test-scripts-heavy skipped but test-scripts ran is not light" 2 "not activated" "$TMP/c15"; }
 r_decoy_nofam(){ build_fx "$TMP/c16" 0 6 noact extra=nofam merged=$((NOW_EPOCH - 3600));       expect "NOT YET: a run missing a gated family is not light" 2 "not activated" "$TMP/c16"; }
 r_decoy_prefix(){ build_fx "$TMP/c17" 0 6 noact extra=noscripts merged=$((NOW_EPOCH - 3600));  expect "NOT YET: only test-scripts-heavy skipped, no test-scripts job (the family match is not a bare prefix)" 2 "not activated" "$TMP/c17"; }
+r_decoy_failed(){ build_fx "$TMP/c19" 0 6 noact extra=failedheavy merged=$((NOW_EPOCH - 3600));    expect "NOT YET: all four gated families FAILED (an outage) is not a light run" 2 "not activated" "$TMP/c19"; }
+r_decoy_cancjobs(){ build_fx "$TMP/c20" 0 6 noact extra=cancelledjobs merged=$((NOW_EPOCH - 3600)); expect "NOT YET: all four gated families CANCELLED is not a light run" 2 "not activated" "$TMP/c20"; }
+r_nobranch(){ build_fx "$TMP/c21" 0 6 noact extra=nobranch merged=$((NOW_EPOCH - 3600));          expect "a run with no head_branch (a deleted fork) does not collapse the tab-separated read: NOT YET, not CANNOT ESTABLISH" 2 "not activated" "$TMP/c21"; }
 r_decoy_cancel(){ build_fx "$TMP/c18" 0 6 noact extra=cancelskip merged=$((NOW_EPOCH - 3600)); expect "NOT YET: a CANCELLED run with skipped gated jobs is not an observation" 2 "not activated" "$TMP/c18"; }
 # --- (d) LIVE INVARIANTS -----------------------------------------------------------------------------------------------------
 r_inv1_success(){ build_fx "$TMP/d1" 20 6 extra=lightsuccess;              expect "FAIL: a light run whose test concluded success" 1 "did not fail" "$TMP/d1"; }
@@ -426,7 +437,7 @@ r_shapes() {
 ALL_ROWS=(r_pass r_info r_stall r_stall2 r_stall_dark r_stall_prec r_vfail r_vgarbage r_vunknown r_vmismatch r_vnoise r_noopen r_openfail
           r_deadline r_deadline_edge r_dark_young r_untrusted_act r_unmerged r_deact r_page2 r_badts r_midact r_crlf r_twoact
           r_light_noact r_light_untrusted r_light_early r_noconf r_conf_untrusted r_conf_placeholder r_conf_bare r_conf_mid r_conf_late
-          r_conf_quote r_nolight_noconf r_decoy_mixed r_decoy_heavy r_decoy_nofam r_decoy_prefix r_decoy_cancel
+          r_conf_quote r_nolight_noconf r_decoy_mixed r_decoy_heavy r_decoy_nofam r_decoy_prefix r_decoy_cancel r_decoy_failed r_decoy_cancjobs r_nobranch
           r_inv1_success r_inv1_notest r_inv2_ready r_inv2_converted r_inv2_beforeready r_inv2_never r_inv2_convfirst r_inv2_nopr
           r_inv2_multipr r_inv2_trunc r_gqlfail r_mgbad r_mgolder r_mgnonqueue r_mgfail r_mgprfail r_mgrunfail r_mgcap r_mg_dark
           r_light_after_off r_six r_seven r_nineteen r_rerun r_stuck29 r_stuck30 r_nomarker r_untrusted_marker r_nonurl_marker
@@ -438,16 +449,20 @@ run_rows "${ALL_ROWS[@]}"
 # --- the rest of the contract (not mutated below) ------------------------------------------------------------------------------
 build_fx "$TMP/z1" 20 6
 expect "an unset GH_TOKEN is CANNOT ESTABLISH, never a pass" 3 "GH_TOKEN is not set" "$TMP/z1" GH_TOKEN=
-out="$(env FX="$TMP/z1" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_CMD="$TMP/verdict-stub.sh" bash -x "$PROBE" 2>&1)"; rc=$?
+out="$(env FX="$TMP/z1" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
 expect "a non-epoch SOAK_NOW_EPOCH is CANNOT ESTABLISH" 3 "not an epoch" "$TMP/z1" SOAK_NOW_EPOCH=soon
-expect "a missing resolver script is CANNOT ESTABLISH, never a pass" 3 "CANNOT ESTABLISH" "$TMP/z1" CI_HEAD_VERDICT_CMD="$TMP/none.sh"
+expect "a missing resolver script is CANNOT ESTABLISH, never a pass" 3 "CANNOT ESTABLISH" "$TMP/z1" CI_HEAD_VERDICT_BIN="$TMP/none.sh"
 # --- mutation rows: each mutated COPY of the probe must turn at least one named row red ----------------------------------------
 MUT_RUN=0; MUT_CAUGHT=0
-mutant() { # <name> <old> <new> <row ids...>
+# mutant_probe <name> <old> <new> <row ids...>: build the mutated copy and run the rows against it. Sets MUT_LANDED, MUT_CRASHED
+# and (through core_rows_quiet) MUT_REDS. A bash-level error in the mutant's output means it CRASHED: every row then reads red,
+# which proves nothing about the guard that was removed.
+MUT_LANDED=1; MUT_CRASHED=0
+mutant_probe() {
   local name="$1" old="$2" new="$3"; shift 3
-  MUT_RUN=$((MUT_RUN + 1))
   local f="$TMP/mut-$name.sh"
+  MUT_LANDED=1; MUT_CRASHED=0; MUT_REDS=0; rm -f "$TMP/crashed"
   if ! python3 - "$PROBE" "$f" "$old" "$new" <<'PY'
 import sys
 src, dst, old, new = sys.argv[1:5]
@@ -456,12 +471,22 @@ if s.count(old) != 1:
     sys.stderr.write("anchor count %d for %r\n" % (s.count(old), old)); sys.exit(3)
 open(dst, "w").write(s.replace(old, new))
 PY
-  then fail "MUTANT $name: mutation did NOT land"; return; fi
-  cmp -s "$f" "$PROBE" && { fail "MUTANT $name: byte-identical to the probe"; return; }
+  then MUT_LANDED=0; return 0; fi
+  cmp -s "$f" "$PROBE" && { MUT_LANDED=0; return 0; }
   chmod +x "$f"
+  bash -n "$f" 2>/dev/null || MUT_CRASHED=1
   PROBE_UNDER="$f"; core_rows_quiet "$@"; PROBE_UNDER="$PROBE"
+  [ -f "$TMP/crashed" ] && MUT_CRASHED=1
+  return 0
+}
+mutant() { # <name> <old> <new> <row ids...>
+  local name="$1"
+  MUT_RUN=$((MUT_RUN + 1))
+  mutant_probe "$@"
+  if [ "$MUT_LANDED" -eq 0 ]; then fail "MUTANT $name: mutation did NOT land (or is byte-identical to the probe)"; return; fi
+  if [ "$MUT_CRASHED" -eq 1 ]; then fail "MUTANT $name: the mutant CRASHED (a bash error), which proves nothing"; return; fi
   if [ "$MUT_REDS" -gt 0 ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "MUTANT $name turned $MUT_REDS named row(s) red"
-  else fail "MUTANT $name: none of rows [$*] went red"; fi
+  else fail "MUTANT $name: none of rows [${*:4}] went red"; fi
 }
 core_rows_quiet() { # run the named rows against $PROBE_UNDER, counting reds without recording them as this suite's failures
   local p0=$passes f0=$fails a0=$asserted n0=${#FAILURES[@]}
@@ -527,11 +552,25 @@ mutant m-unmerged '[ -n "$merged_at" ] || { echo "NOT YET: PR $S3_PR is not merg
 mutant m-api-quiet 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }' 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 0; }' r_jobsfail r_commentsfail r_gqlfail
 mutant m-idle-cap '(( active )) || cap="$IDLE_RUNS"' ':' r_idle_cap
 mutant m-max-cap 'MAX_RUNS=100' 'MAX_RUNS=200' r_max_cap
-mutant m-crlf "tr -d '\\r')\"" ')"' r_crlf
+mutant m-crlf " | tr -d '\\r')\"" ')"' r_crlf
 mutant m-ts-loose "TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'" "TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z?'" r_badts
 mutant m-act-anchor 'first_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S3-ACTIVATED' 'first_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "S3-ACTIVATED' r_midact
 
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 40 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 40)"; fi
+mutant m-light-failure 'all(.conclusion == "skipped")))) as $light' 'all(.conclusion == "skipped" or .conclusion == "failure")))) as $light' r_decoy_failed
+mutant m-light-cancelled 'all(.conclusion == "skipped")))) as $light' 'all(.conclusion == "skipped" or .conclusion == "cancelled")))) as $light' r_decoy_cancjobs
+mutant m-tsv-placeholder '(if (.head_branch // "") == "" then "-" else .head_branch end)' '.head_branch' r_nobranch
+mutant m-repo-flag 'verdict "$pr" --repo "$REPO" 2>/dev/null' 'verdict "$pr" 2>/dev/null' r_pass r_stall
+mutant m-stall-text 'STALL_MIN=120 ' 'STALL_MIN=75 ' r_stall
+# harness controls: the helper must be able to report a SURVIVOR and a CRASH, or its verdicts mean nothing
+CTRL_OK=0
+mutant_probe c-equivalent 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 0 ] && [ "$MUT_REDS" -eq 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an equivalent mutant survives (no row red, no crash)"
+else fail "harness control: the equivalent mutant was not reported as a survivor (landed=$MUT_LANDED crashed=$MUT_CRASHED reds=$MUT_REDS)"; fi
+mutant_probe c-crash 'MAX_RUNS=100' 'MAX_RUNS=100; readonly X=(' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that does not parse is flagged as crashed"
+else fail "harness control: the crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+if [ "$CTRL_OK" -ne 2 ]; then fail "harness controls: $CTRL_OK of 2 held"; fi
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 45 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 45)"; fi
 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
@@ -541,7 +580,7 @@ if [ "$MUT_REDS" -ge 60 ]; then pass "HARNESS: an always-PASS probe turns $MUT_R
 printf 'ci-draft-light-soak-9728: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=150
+_FLOOR=160
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1

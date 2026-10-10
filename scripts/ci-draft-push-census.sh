@@ -72,7 +72,6 @@ while [ $# -gt 0 ]; do
         --end) END="$2" ;; --days) DAYS_N="$2" ;; --repo) REPO="$2" ;; --fixture) FIXTURE="$2" ;; --rows) ROWS="$2" ;;
       esac
       shift 2 ;;
-    --summary) shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -84,7 +83,7 @@ command -v date >/dev/null 2>&1 || die "date is required"
 [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "--repo must be OWNER/NAME"
 END_S=$(date -u -d "${END} 00:00:00" +%s 2>/dev/null) || die "--end is not a valid date: ${END}"
 TODAY_S=$(date -u -d "$(date -u +%F) 00:00:00" +%s)
-[ "$END_S" -le $((TODAY_S + 86400)) ] || die "--end ${END} is in the future: the period must be closed"
+[ "$END_S" -le "$TODAY_S" ] || die "--end ${END} is in the future: the period must be closed"
 
 DAYS=()
 for ((i = DAYS_N; i >= 1; i--)); do DAYS+=("$(date -u -d "${END} 00:00:00 UTC -${i} days" +%F)"); done
@@ -106,6 +105,8 @@ fi
 
 GH_TO="${CENSUS_GH_TIMEOUT:-120}"
 RETRY_SLEEP="${CENSUS_RETRY_SLEEP:-5}"
+[[ "$GH_TO" =~ ^[0-9]+$ ]] && [ "$GH_TO" -gt 0 ] || die "CENSUS_GH_TIMEOUT must be a positive whole number of seconds"
+[[ "$RETRY_SLEEP" =~ ^[0-9]+$ ]] || die "CENSUS_RETRY_SLEEP must be a whole number of seconds"
 ghcall() { # <outfile> <gh args...>: bounded, retried twice, aborts naming the call
   local out="$1" a rc msg
   shift
