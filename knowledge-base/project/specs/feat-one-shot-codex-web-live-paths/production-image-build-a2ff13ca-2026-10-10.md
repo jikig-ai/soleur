@@ -108,13 +108,21 @@ that sync. No relabel, rebuild or consumed runner repinning is permitted.
 A further main advance through `149a5d3b4e10c1b62232004035185fd8ce66a87c`
 adds open-web-egress runtime/gateway wiring, Dockerfile payload changes,
 compiler configuration and migration 158. This changes app, image and retained
-schema inputs again. The 30 selected fixture files are unchanged, but their
-imported implementations and tsconfig changed; their previous 321 passes
-cannot qualify the resulting source. Legal conflicts were resolved by keeping
+schema inputs again. At that sync, the 30 selected fixture files were unchanged,
+but imported implementations and tsconfig changed; their earlier 321 passes
+could not qualify the resulting source. The subsequent corrected selected
+suite passed at `ce2be17417`, recorded in the session artifact. Legal conflicts
+were resolved by keeping
 both the Codex and web-access disclosures and regenerating canonical hashes.
 Source-only inspection found a forwarder payload/default-path mismatch in
 main, tracked by [Ref #9952](https://github.com/jikig-ai/soleur/issues/9952).
 No runtime failure was observed, and no payload correction or rebuild ran.
+
+Main through `5da9ad060e1c12037f17785971184c0630b98c93` also bakes the
+soleur-owned `node_modules/.vite-temp` target for Vitest's ESM config loader.
+The approved image predates that ownership contract and cannot qualify the
+current canary. No selected test or its normal imported source changed in
+this last delta; no further selected-suite rerun was warranted for it.
 
 No application startup, database/SQL, provider/auth/customer call, browser
 session, recovery rehearsal, deploy script, shared infrastructure write, image

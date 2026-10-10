@@ -863,3 +863,29 @@
   Credential/provider/browser-auth/shared-write/deployment/flag/cohort/image-
   publication restrictions persist. Both earlier one-use build/rehearsal
   authorizations and this production build authorization are consumed.
+
+## Continuation update — 2026-10-11 canary image ownership sync
+
+- Main through `5da9ad060e1c12037f17785971184c0630b98c93` merged cleanly at
+  `9ef652dad922a90f06ef29a5678e24b692e1a063`. Its four-file delta creates
+  soleur-owned `/app/node_modules/.vite-temp`, adds image ownership assertions,
+  and updates standalone canary comments/runbook. Incoming and feature-range
+  whitespace checks passed. This is source inspection, not canary execution.
+- The delta changes no selected30 files, normal Vitest setup/helpers, imported
+  app implementation, dependency or TypeScript inputs. The 321-test result at
+  `ce2be17417` remains attributable to those unchanged inputs; it was not rerun
+  for this delta. The image at `a2ff13ca8d` predates the new ownership contract,
+  so it remains source-bound and cannot qualify current-source recovery or
+  the current canary. No rebuild or application startup occurred.
+- At superseded pushed head `278b51a154`, RLS `38089699223` succeeded:
+  187 migrations applied, zero skipped, 11 files / 155 tests passed; production
+  catalog parity skipped. Its CI image check also passed, but the full CI/test
+  aggregate and remaining guards were still pending when main advanced.
+  This does not establish a complete green verdict for the next synced head.
+- Ref #9952 remained OPEN on the scoped source inspection; its forwarder
+  payload/default-path mismatch remains present. No runtime failure or fix
+  was observed. All draft/default-off/customer-content, credential/provider,
+  account-write/browser-auth/shared-write/deployment/cohort and recovery/QA/
+  routine/Web/CLO/full-review/promotion holds persist. Account-read and the
+  persistent selected30 local-suite authorization remain distinct from the
+  consumed image-build and synthetic-rehearsal authorizations.
