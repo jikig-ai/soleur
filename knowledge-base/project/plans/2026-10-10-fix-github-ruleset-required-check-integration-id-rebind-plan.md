@@ -94,6 +94,7 @@ verify-ruleset-required-checks.sh <plan.json|-> <resource-address> <canonical.js
 - `.github/CODEOWNERS`, R15 trust-loop block: add `/scripts/verify-ruleset-required-checks.sh`, `/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json` and `/tests/scripts/test-apply-github-infra-mint-shape.sh` (the guard's pins now live there; a stored canonical editable in the same unreviewed commit as its guard proves consistency, not integrity).
 - `scripts/lib/test-affected-paths.sh`: add the new script, the shared lib and both canonicals to `AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS` (consumer: `test-all.sh --affected` reads it to select this suite; `lint-orphan-test-suites.sh` reds an unclassified suite). No `test-all.sh` or `.tsv` edit: the suite is already registered.
 - ADR-241: a short dated amendment-log entry (see Architecture Decision).
+- **Scope change at work (CONCUR gate, 2026-10-10):** the scheduled drift workflow's `infra/github` leg was unwrapped inline (workflow_dispatch only, no apply trigger; harness row B5, 24/24), so only the PR plan job and the README recipes were deferred, as #9914.
 - Follow-up tracking (a deferral without an issue is invisible): file one issue at work time for the two Tier-A tf-var readers left on this root, `scheduled-terraform-drift.yml` (infra/github leg, read-only plan, its comment still says it mirrors the apply's Doppler injection) and the PR plan job, plus the stale local-apply recipe in `infra/github/README.md`. That README is deliberately not edited here: `infra/**` matches `infra-validation.yml`'s push filter.
 
 ## Files to Edit
@@ -275,18 +276,18 @@ Same PR; nothing deferred except the follow-up issue above.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 Trigger proof: `git diff --name-only origin/main...HEAD | grep -E '^(infra/|tests/scripts/lib/destroy-guard-filter\.jq|apps/web-platform/infra/)'` prints nothing, and `.github/workflows/apply-github-infra.yml` appears in no workflow's push `paths:`.
-- [ ] AC2 `bash tests/scripts/test-apply-github-infra-mint-shape.sh` passes with every Guard 1 and Guard 2 row present, each mutant row RED before the fix landed, and `MIN_ASSERTIONS` raised accordingly.
-- [ ] AC3 `grep -c -e '--name-transformer' .github/workflows/apply-github-infra.yml` prints `0`; the two `doppler secrets get` reads remain.
-- [ ] AC4 `bash tests/scripts/test-infra-privileged-tier-census.sh` passes, run against the actual edit (the deepen pass already ran it on a scratch clone with the four prefixes removed: 296 passed, 0 failed; repeat on the real tree).
-- [ ] AC5 `bash tests/scripts/test-destroy-guard-regex-parity.sh` and `bash tests/scripts/test-destroy-guard-counter.sh` pass.
-- [ ] AC6 `bash plugins/soleur/test/required-checks-canonical-parity.test.sh` and `bash tests/scripts/test-audit-ruleset-bypass.sh` pass; `bash scripts/marketplace-drift-check.test.sh` passes.
-- [ ] AC7 The shell-trace credential lint reports no new finding (the workflow's rule-E count stays 1).
-- [ ] AC8 With the new file tracked, `bash scripts/lint-orphan-test-suites.sh` reports the suite classified.
-- [ ] AC9 `bash plugins/soleur/test/c4-count-parity.test.sh` passes.
-- [ ] AC10 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` is clean; ADR-241 carries the dated #9362 entry.
+- [x] AC1 Trigger proof: `git diff --name-only origin/main...HEAD | grep -E '^(infra/|tests/scripts/lib/destroy-guard-filter\.jq|apps/web-platform/infra/)'` prints nothing, and `.github/workflows/apply-github-infra.yml` appears in no workflow's push `paths:`.
+- [x] AC2 `bash tests/scripts/test-apply-github-infra-mint-shape.sh` passes with every Guard 1 and Guard 2 row present, each mutant row RED before the fix landed, and `MIN_ASSERTIONS` raised accordingly.
+- [x] AC3 `grep -c -e '--name-transformer' .github/workflows/apply-github-infra.yml` prints `0`; the two `doppler secrets get` reads remain.
+- [x] AC4 `bash tests/scripts/test-infra-privileged-tier-census.sh` passes, run against the actual edit (the deepen pass already ran it on a scratch clone with the four prefixes removed: 296 passed, 0 failed; repeat on the real tree).
+- [x] AC5 `bash tests/scripts/test-destroy-guard-regex-parity.sh` and `bash tests/scripts/test-destroy-guard-counter.sh` pass.
+- [x] AC6 `bash plugins/soleur/test/required-checks-canonical-parity.test.sh` and `bash tests/scripts/test-audit-ruleset-bypass.sh` pass; `bash scripts/marketplace-drift-check.test.sh` passes.
+- [x] AC7 The shell-trace credential lint reports no new finding (the workflow's rule-E count stays 1).
+- [x] AC8 With the new file tracked, `bash scripts/lint-orphan-test-suites.sh` reports the suite classified.
+- [x] AC9 `bash plugins/soleur/test/c4-count-parity.test.sh` passes.
+- [x] AC10 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` is clean; ADR-241 carries the dated #9362 entry.
 - [ ] AC11 PR body first line is the "No apply runs on merge" sentence; trailers `Refs #9362`, `Refs #8209`, `Refs #8609`; no `Closes`.
-- [ ] AC12 The follow-up issue for the remaining Tier-A tf-var readers is filed and linked in the PR body.
+- [x] AC12 The follow-up issue for the remaining Tier-A tf-var readers is filed and linked in the PR body.
 
 ### Post-merge
 
