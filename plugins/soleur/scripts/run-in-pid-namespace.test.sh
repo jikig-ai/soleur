@@ -123,8 +123,14 @@ check "R4b all of -U -r -p -f --kill-child --mount-proc precede -- in the run ca
 mapfile -t AV < "$FIX/argv.2"
 di=-1; for i in "${!AV[@]}"; do [[ "${AV[$i]}" == "--" ]] && { di=$i; break; }; done
 rest=""; if [[ "$di" -ge 0 ]]; then for ((i = di + 5; i < ${#AV[@]}; i++)); do rest+="${AV[$i]}|"; done; fi
-[[ "$di" -ge 0 && "${AV[$((di + 1))]:-}" == "sh" && "${AV[$((di + 2))]:-}" == "-c" && "${AV[$((di + 3))]:-}" == *'exec -- "$@"' && "${AV[$((di + 4))]:-}" == "sh" && "$rest" == 'sh|-c|echo hi|x||-n|a b|' ]]
-check "R4c the whole argv after -- is sh -c <RUN ending exec -- \"\$@\"> sh then the command verbatim (spaces, an empty argument, a leading -n)" $?
+[[ "$di" -ge 0 && "${AV[$((di + 1))]:-}" == "sh" && "${AV[$((di + 2))]:-}" == "-c" && "${AV[$((di + 3))]:-}" == *'; exec "$@"' && "${AV[$((di + 4))]:-}" == "sh" && "$rest" == 'sh|-c|echo hi|x||-n|a b|' ]]
+check "R4c the whole argv after -- is sh -c <RUN ending exec \"\$@\"> sh then the command verbatim (spaces, an empty argument, a leading -n)" $?
+
+# R11 a command word that begins with a dash is refused before anything starts (exec would read it as an
+# option, and dash rejects exec --): rc 2, named message, no unshare call, command never started.
+rm -f "$W" "$FIX"/calln "$FIX"/argv.*; run_helper "$FIX/stub/rec" -touch "$W"
+[[ "$RC" -eq 2 && "$OUT" == *'must not begin with "-"'* && ! -e "$W" && ! -e "$FIX/calln" ]]
+check "R11 a command beginning with a dash is refused: rc 2, no unshare call, never started" $?
 
 # R5 usage.
 run_helper "$FIX/nobin"
@@ -188,7 +194,7 @@ echo dash-ran
 EOS
   chmod +x "$FIX/-dashcmd"
   OUT="$(cd "$FIX" && "$BASH_BIN" "$SUT" -- ./-dashcmd 2>&1)"
-  [[ "$OUT" == "dash-ran" ]]; check "N3b a command whose file name begins with a dash runs (exec --)" $?
+  [[ "$OUT" == "dash-ran" ]]; check "N3b a command whose file name begins with a dash runs when given as a path (./-name)" $?
   # N4 containment: victim (outside, argv carries the nonce) -> helper -> top (PID 1, nonce) -> mid (nonce) -> walker.
   NONCE="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
   [[ "$NONCE" =~ ^[0-9a-f]{32}$ ]]; check "N4 precondition: the nonce is 32 hex characters" $?
@@ -273,12 +279,12 @@ printf '=== run-in-pid-namespace: %d passed, %d failed (%d cases, %d skipped, re
 if [[ "$REAL_NS" != "yes" ]]; then printf 'SKIP: %d real-namespace rows (%s)\n' "$skipped" "$REAL_WHY"; fi
 for f in ${FAILURES[@]+"${FAILURES[@]}"}; do printf '  - %s\n' "$f"; done
 # Anti-vacuity floors: literal thresholds on the line above each test, reported by printf, appended to the ledger the verdict reads.
-if [[ "$cases" -lt 15 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 15 always-run rows expected, R8 counted when namespaces are unavailable)\n' "$cases" >&2; FAILURES+=("always-run floor"); fi
+if [[ "$cases" -lt 16 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 16 always-run rows expected, R8 counted when namespaces are unavailable)\n' "$cases" >&2; FAILURES+=("always-run floor"); fi
 if [[ "$REAL_NS" == "yes" ]]; then
-  if [[ "$cases" -lt 32 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 32 expected with real namespaces)\n' "$cases" >&2; FAILURES+=("real-namespace floor"); fi
-  if [[ "$cases" -ne 32 ]]; then printf 'FAIL: conservation: %d cases ran, 32 planned with real namespaces\n' "$cases" >&2; FAILURES+=("planned total"); fi
+  if [[ "$cases" -lt 33 ]]; then printf 'FAIL: vacuity floor: only %d cases ran (>= 33 expected with real namespaces)\n' "$cases" >&2; FAILURES+=("real-namespace floor"); fi
+  if [[ "$cases" -ne 33 ]]; then printf 'FAIL: conservation: %d cases ran, 33 planned with real namespaces\n' "$cases" >&2; FAILURES+=("planned total"); fi
 else
-  if [[ "$((cases + skipped))" -ne 33 ]]; then printf 'FAIL: conservation: %d cases + %d skipped != 33 planned\n' "$cases" "$skipped" >&2; FAILURES+=("planned total"); fi
+  if [[ "$((cases + skipped))" -ne 34 ]]; then printf 'FAIL: conservation: %d cases + %d skipped != 34 planned\n' "$cases" "$skipped" >&2; FAILURES+=("planned total"); fi
 fi
 if [[ "$((passes + fails))" -ne "$cases" ]]; then printf 'FAIL: verdict conservation: %d passes + %d fails != %d cases\n' "$passes" "$fails" "$cases" >&2; FAILURES+=("conservation"); fi
 [[ "${#FAILURES[@]}" -eq 0 ]]

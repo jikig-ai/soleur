@@ -34,6 +34,13 @@ if [[ $# -eq 0 ]]; then
   printf 'usage: %s [--] <command> [args...]\n' "${0##*/}" >&2
   exit 2
 fi
+# `exec` reads a leading dash as an option, and `exec --` is not portable (dash, the sh of Debian and
+# Ubuntu, rejects it), so a command word that begins with a dash is refused here, before anything
+# starts. A file whose name begins with a dash runs when given as a path (./-name).
+if [[ "$1" == -* ]]; then
+  printf '%s: the command must not begin with "-" (give a path such as ./%s)\n' "${0##*/}" "$1" >&2
+  exit 2
+fi
 
 # The isolation property, written ONCE and used by the probe and by the run: this shell is PID 1
 # and /proc is the namespace's own (NSpid has exactly one field; a wrapper that drops
@@ -74,8 +81,8 @@ if [[ "$probe_rc" -ne 0 ]]; then
 fi
 
 # The same check runs again inside the namespace right before the command (it keeps the property
-# true at the instant of the exec even if the probe and this run disagreed), and `exec --` keeps a
-# command whose name begins with a dash from being read as an option. exec leaves the command as
-# PID 1 with no ancestor.
-RUN="$CHECK || { printf '%s\\n' '$MARKER reason=not-isolating (re-check inside the namespace failed)' >&2; exit 125; }; exec -- \"\$@\""
+# true at the instant of the exec even if the probe and this run disagreed). A plain `exec` (never
+# `exec --`, which dash rejects) leaves the command as PID 1 with no ancestor; a command word that
+# begins with a dash was refused above, so exec cannot read it as an option.
+RUN="$CHECK || { printf '%s\\n' '$MARKER reason=not-isolating (re-check inside the namespace failed)' >&2; exit 125; }; exec \"\$@\""
 exec "$u" -Urpf --kill-child --mount-proc -- sh -c "$RUN" sh "$@"
