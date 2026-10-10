@@ -14,7 +14,7 @@
 # consuming suites: Guard B4 rows 8a-8c in workspaces-luks.test.sh, row 3 plus the library-neutering
 # harness rows in inngest-luks-sole-copy.test.sh.
 #
-# Provides: strip_comments, block_of, _b4_block_range, B4_TAIL, _b4_attr_true,
+# Provides: strip_comments, blank_heredocs, HCL_AWK_FUNCS, block_of, _b4_block_range, B4_TAIL, _b4_attr_true,
 # _b4_prevent_destroy_of, p_b4_no_override_files. Needs only awk, grep, find.
 #
 # NAMING (historical, do not "fix"): the `_b4_*` helpers and `B4_TAIL` keep the names they had as
@@ -82,6 +82,34 @@ strip_comments() {
   ' "$1"
 }
 
+# CODE-ONLY VIEW for brace counting (#9879 fix round). strip_comments deliberately KEEPS trailing
+# `# ...` / `// ...` comments and string contents (the attribute predicates tolerate a trailing comment),
+# so a depth counter reading its output sees a `{` or `}` that is only comment or string text: `length = 40 # {`
+# on one resource plus `} # }` on a later one made block_of run the first block into the second and let the
+# second's `prevent_destroy = true` stand in for the first's (a measured Guard 1 false-GREEN). Every brace
+# counter below therefore counts on cv(): "strings" emptied, then the trailing comment cut. A HEREDOC BODY is
+# literal text, never code: `in_heredoc(line)` is 1 for a body or closer line (and records an opener), with the
+# SAME opener rule strip_comments uses (code part only, so an opener in a trailing comment or a string opens
+# nothing). Counters skip those lines; so does a header match, so a fake `resource ... {` or `lifecycle {` in a
+# heredoc is not read as code.
+# Consumers splice this text in front of their own awk program: awk -v ... "$HCL_AWK_FUNCS"' ...'.
+HCL_AWK_FUNCS='
+  function cv(s) { gsub(/"([^"\\]|\\.)*"/, "\"\"", s); sub(/[[:space:]]*(#|\/\/).*$/, "", s); return s }
+  function in_heredoc(line,   s) {
+    if (hdm != "") { if (line ~ ("^[[:space:]]*" hdm "[[:space:]]*$")) hdm = ""; return 1 }
+    s = line; gsub(/"([^"\\]|\\.)*"/, "\"\"", s)
+    if (s !~ /(#|\/\/)/ && match(s, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
+      hdm = substr(s, RSTART); sub(/^<<-?/, "", hdm); sub(/[[:space:]]+$/, "", hdm)
+    }
+    return 0
+  }
+'
+# stdin -> stdout: the strip_comments output with every heredoc BODY and CLOSER line blanked (the opener line and
+# the line count are kept). For the reads that ask "is this attribute / lifecycle block CODE".
+blank_heredocs() {
+  awk "$HCL_AWK_FUNCS"'{ if (in_heredoc($0)) print ""; else print }'
+}
+
 # Extract one resource block by BRACE DEPTH, not by an `awk /^}/` range.
 # The range form terminates at the first column-0 `}`, so a nested block closed at
 # column 0 truncates the extraction and hides everything after it — a proven
@@ -92,13 +120,15 @@ strip_comments() {
 # Brace depth removes the coupling.
 block_of() {
   local file="$1" type="$2" name="$3"
-  strip_comments "$file" | awk -v t="$type" -v n="$name" '
-    $0 ~ "^resource[[:space:]]+\"" t "\"[[:space:]]+\"" n "\"" { inb = 1 }
+  strip_comments "$file" | awk -v t="$type" -v n="$name" "$HCL_AWK_FUNCS"'
+    { hdl = in_heredoc($0) }
+    !hdl && $0 ~ "^resource[[:space:]]+\"" t "\"[[:space:]]+\"" n "\"" { inb = 1; d = 0 }
     inb {
       print
-      d += gsub(/\{/, "{")
-      d -= gsub(/\}/, "}")
-      if (d <= 0 && NR > 1 && /\}/) { inb = 0 }
+      if (!hdl) {
+        c = cv($0); d += gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d -= x
+        if (d <= 0 && NR > 1 && x > 0) { inb = 0 }
+      }
     }
   '
 }
@@ -143,12 +173,12 @@ p_b4_no_override_files() {
 # line count, so its line numbers are the file's).
 _b4_block_range() {
   local file="$1" type="$2" name="$3"
-  strip_comments "$file" | awk -v t="$type" -v n="$name" '
-    !inb && $0 ~ "^resource[[:space:]]+\"" t "\"[[:space:]]+\"" n "\"" { inb = 1; s = NR }
-    inb {
-      d += gsub(/\{/, "{")
-      d -= gsub(/\}/, "}")
-      if (d <= 0 && /\}/) { print s, NR; exit }
+  strip_comments "$file" | awk -v t="$type" -v n="$name" "$HCL_AWK_FUNCS"'
+    { hdl = in_heredoc($0) }
+    !inb && !hdl && $0 ~ "^resource[[:space:]]+\"" t "\"[[:space:]]+\"" n "\"" { inb = 1; s = NR }
+    inb && !hdl {
+      c = cv($0); d += gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d -= x
+      if (d <= 0 && x > 0) { print s, NR; exit }
     }
   '
 }

@@ -34,8 +34,6 @@ on:
       # (#8097) Suites under apps/web-platform/test/infra/ run inside deploy-script-tests-fixed
       # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
       - "apps/web-platform/test/infra/**"
-      # (#9879) The shared HCL lexer the two LUKS guard suites source; a lexer-only push re-runs them.
-      - "tests/scripts/lib/hcl-effective-text.sh"
       # The gate itself. What this actually buys, stated precisely: `detect-changes` maps only
       # the two content globs to directories, so a workflow-ONLY push yields DIRS=[] and both
       # `validate` and `registry-userdata-budget` skip. What still runs is `deploy-script-tests`
@@ -179,6 +177,11 @@ on:
       # inngest-luks-sole-copy.test.sh (Guard 1). It sits under tests/scripts/lib/, outside every glob
       # above, so a lexer-ONLY edit (weakening strip_comments, say) would skip both consuming suites.
       - "tests/scripts/lib/hcl-effective-text.sh"
+      # (#9879) inngest-luks-sole-copy.test.sh (under apps/*/infra/**) asserts that the runbook heading every
+      # failure message cites exists (H1b) and that the read-back command it carries matches the postmerge
+      # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
+      # the push list above is deliberately narrower.
+      - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be

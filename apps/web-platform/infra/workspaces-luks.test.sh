@@ -548,6 +548,24 @@ assert_holds "B4 no *override.tf / *.tf.json in apps/web-platform/infra" p_b4_no
 assert_b4_dir_mutation "B4-10a (zz_override.tf planted)" p_b4_no_override_files zz_override.tf
 assert_b4_dir_mutation "B4-10b (extra.tf.json planted)" p_b4_no_override_files extra.tf.json
 
+# B4-11: a heredoc opener inside a TRAILING comment opens no heredoc. If the lexer read it as one, the
+# `/* ... */` that wraps delete_protection below it would be literal "heredoc body" and the protection would
+# still look like code. Same attack as rows 3 and R13 of inngest-luks-sole-copy.test.sh, run here because this
+# suite is the lib's second consumer (the opener is built from two pieces so this file holds no heredoc opener).
+LT2='<''<'
+assert_b4_mutation "B4-11 (trailing # comment with a heredoc opener, then delete_protection block-commented out)" p_b4_delete_protection "$TF" \
+  "/^resource \"hcloud_volume\" \"workspaces_luks\"/,/^}/ s~^([[:space:]]+location[[:space:]]*=.*)\$~\\1 # see ${LT2}EOF~;"'/^resource "hcloud_volume" "workspaces_luks"/,/^}/ { /^$/ { N; /\n[[:space:]]+delete_protection[[:space:]]*=[[:space:]]*true$/ { N; s/^\n/  \/*\n/; s/\n$/\n  *\// } } }' \
+  hcloud_volume workspaces_luks
+# B4-12: the lexer is in infra-validation.yml's pull_request.paths, or a lexer-only edit skips this suite
+# (the sibling suite inngest-luks-sole-copy.test.sh carries the same row plus its negative control).
+b4_lexer_in_paths="$(python3 -c '
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1])) or {}
+on = wf.get("on", wf.get(True)) or {}
+print("yes" if sys.argv[2] in list((on.get("pull_request") or {}).get("paths") or []) else "no")
+' "$REPO_ROOT/.github/workflows/infra-validation.yml" "tests/scripts/lib/hcl-effective-text.sh" 2>/dev/null)"
+if [ "$b4_lexer_in_paths" = "yes" ]; then pass; else fail "B4-12: tests/scripts/lib/hcl-effective-text.sh is not in infra-validation.yml pull_request.paths (a lexer-only edit would skip this suite)"; fi
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---------
 # Reported by printf + exit 1, NEVER through fail(): a neutered fail() must not silence the floor.
 # A1: 1 holds + 2 mutations. A5: 1 + 2. A11: 1 + 3. A2/A3/A4/A6/A7/A8/A9/A10: 1 + 1 each.
@@ -555,10 +573,11 @@ assert_b4_dir_mutation "B4-10b (extra.tf.json planted)" p_b4_no_override_files e
 # Guard B4: for_each 1 + 4, local 1 + 2, sentinel 1 + 2, prevent_destroy 1 + 2,
 # delete_protection 1 + 2, H1 5 → 5 + 3 + 3 + 3 + 3 + 5 = 22.
 # Guard B4 (review fix-forward): attachment 1 + 2 + H1 1 = 4, multi-line 8a/8b/8c 3, H2 3,
-# override 1 + 2 = 3 → 13. 26 + 22 + 13 = 61.
+# override 1 + 2 = 3 → 13. Guard B4 (#9879 fix round): B4-11 heredoc-opener-in-comment 1, B4-12
+# lexer path in pull_request.paths 1 → 2. 26 + 22 + 13 + 2 = 63.
 total=$((passes + fails))
-if [ "$total" -lt 61 ]; then
-  printf 'FAIL: ran only %s assertions (<61) — suite did not execute fully\n' "$total" >&2
+if [ "$total" -lt 63 ]; then
+  printf 'FAIL: ran only %s assertions (<63) — suite did not execute fully\n' "$total" >&2
   exit 1
 fi
 
