@@ -108,7 +108,7 @@ DEADLINE_FILE="$T/deadline-hit"
 census_run() {
   local rc
   if [ -e "$DEADLINE_FILE" ]; then return 124; fi
-  timeout "$CENSUS_TO" env -u CENSUS_GH_TIMEOUT -u CENSUS_RETRY_SLEEP "$@"; rc=$?
+  timeout "$CENSUS_TO" env -u CENSUS_GH_TIMEOUT -u CENSUS_RETRY_SLEEP -u GITHUB_ACTIONS "$@"; rc=$?
   if [ "$rc" -eq 124 ]; then : >"$DEADLINE_FILE"; fi
   return "$rc"
 }

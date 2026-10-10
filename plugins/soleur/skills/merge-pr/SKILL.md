@@ -451,7 +451,7 @@ while true; do
       done
       case "$vstate" in
         stalled|awaiting-approval)
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.ready_unarmed] PR $PR was marked ready but its ready run is ${vstate}; the red test row is the draft run's. Start no fix loop. Recovery: ship/references/ready-run-wait.md"
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.ready_unarmed] PR $PR was marked ready but its ready run is ${vstate}; the red test row is the draft run's. Start no fix loop. Recovery: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md"
           break ;;
       esac
       required_failed=""
