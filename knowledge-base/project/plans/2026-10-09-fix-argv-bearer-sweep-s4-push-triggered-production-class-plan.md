@@ -636,3 +636,15 @@ addendum governs. Each item was checked against the committed files (or the live
 8. **PR #9877 is no longer a draft.** It is merged (`mergedAt` 2026-10-10T01:56:43Z, state MERGED, `isDraft` false). The Collision paragraph, D10 and the stop
    conditions that say "an open draft PR also edits" `cutover-inngest-workflow.test.sh` and `scripts/cutover-inngest.sh` are stale: the two held-back HMAC arms are
    owned by #9757 item 1 and are no longer blocked by that draft, but they stay out of this slice (the held-back set is unchanged and the census still allow-lists it).
+9. **Item 1's own evidence was wrong: `grep -c bc_curl` is not a statement count.** `grep -c bc_curl` over `apply-deploy-pipeline-fix.yml` returns 19 lines (the call
+   statements plus comments, `bc_curl:` messages and `shellcheck` notes). The number six is the CALL-STATEMENT count the battery derives: non-comment statements, with
+   continuation lines joined, matching `(^|[^_A-Za-z])bc_curl [A-Za-z]` (the S3 structure row's `S3_CALLS`, floor 36 over the whole library-user population). Over this
+   workflow that count is six (`pre_frame`, the post-apply verify, `webhook_liveness`, the redeploy step's `get_status` and POST, the `journald_storage` probe), which is
+   what item 1 lists.
+10. **The `scheduled-inngest-health` probe step is now named.** The converted step (`id: probe`) used to be unnamed, so the follow-through probe tracked it as `Run set -uo
+    pipefail` (the jobs API's name for an unnamed step) and the probe suite could only check that some script line equalled that text. It is named `Probe inngest health`
+    in this pull request, the probe's table row and the suite's concrete table use that name, and the suite now reads each table pair through the workflow's YAML (a step
+    inside a job whose displayed name matches), so the exception is gone.
+11. **Item 4(b) over-lists a surface.** For a refusal at the infra-config gate (no request made) only the "Alert on a red infra-config gate (#7220)" issue is filed, in the
+    `ungraded` class via the `credential_refused` output (ADR-280, 2026-10-10 addendum). The "re-push ledger" issue is a counter written when a re-push happened (its own
+    comment says "the COUNTER, not the notification"), so a pre-request refusal does not reach it.

@@ -23,7 +23,14 @@
 #               Scope note: the dispatch-only jobs of apply-web-platform-infra (the host replace and
 #               create jobs) are not tracked; its push-triggered `apply` job is.
 #
-#   MARKER      no credential-refusal line anywhere in the scanned logs. A GitHub log line is
+#   MARKER      no credential-refusal line anywhere in the scanned logs. Not every conversion can emit
+#               one: the library (`bc_curl`) and the inline `_sig_curl` / `_bearer_curl` wrappers print
+#               the `SOLEUR_CREDENTIAL_REFUSED` line (the library names the variable on a
+#               `bc_curl: <VAR> unusable` line beside it, the inline wrappers on `_sig_curl: <VAR>
+#               unusable` or `_bearer_curl: <VAR> unusable`), but `verify-tunnel-ingress-origin.sh`
+#               (tracked through apply-web-platform-infra's tunnel-verify step) prints NO marker: a
+#               refusal there shows only as that step not concluding `success`, so the workflow stays
+#               `wait` and ends at ACTION REQUIRED after the wait budget, never at FAIL. A GitHub log line is
 #               `<job>TAB<step>TAB<ISO-8601Z timestamp> <text>`, and the library emits the marker as
 #               the WHOLE text of its own line. The pattern is anchored on that emitted shape
 #               (timestamp, then the marker, then end of line) because the inline wrappers also
@@ -35,8 +42,11 @@
 #
 # VERDICTS (exit codes; 2/3/5 are the registered notify-only sub-vocabulary of the sweeper):
 #   0 PASS             every workflow exercised AND no marker in any scanned log. Closes the tracker.
-#   1 FAIL             a marker line was found: a stored credential was refused (its alphabet or a
-#                      stray control byte), a rotation or storage problem the suites cannot see.
+#   1 FAIL             a marker line was found: a conversion refused a credential before any request
+#                      (a value outside the token alphabet or with a stray control byte; the inline
+#                      copies print the same marker for a missing python3 or an empty HMAC key
+#                      too, so read the `... unusable` line beside it), a rotation or storage problem
+#                      the suites cannot see.
 #                      The marker, not a run conclusion, is the failure: a dispatch-only workflow
 #                      may fail for reasons that have nothing to do with this change. After fixing a
 #                      refused credential the operator closes the tracker AND removes its
@@ -47,8 +57,9 @@
 #   3 CANNOT ESTABLISH a gh call failed, timed out or returned an unexpected shape, or the probe's
 #                      own time budget ran out (the sweeper retries next sweep).
 #   5 ACTION REQUIRED  the wait budget is spent and some workflow was never exercised. An operator
-#                      then exercises it with a sanctioned read-only dispatch or accepts it on the
-#                      tracker; this probe never closes the tracker in that state.
+#                      then exercises it with a sanctioned dispatch (a dispatch that writes needs its
+#                      own approval; not every tracked workflow has a read-only one) or accepts it
+#                      explicitly on the tracker; this probe never closes the tracker in that state.
 #
 # COST (bounded, worst case stated). List: 1 PR read + 12 run lists (limit 100, newest first).
 # MARKER: logs are downloaded for the newest SCAN_RUNS=6 runs per workflow, only for a workflow that
@@ -56,8 +67,14 @@
 # refusal shows in recent runs, and a refusal that stopped recurring is fixed. EXERCISED: the jobs
 # JSON (small, no log) of at most EXERCISE_RUNS=20 runs per workflow, stopping at the first run that
 # satisfies the workflow: at most 12 x 20 = 240 reads. Worst case about 325 gh calls; each runs under
-# `timeout 120`, and the whole probe stops with CANNOT ESTABLISH after a 720 s budget, so one hang
-# cannot eat the sweeper's 15-minute job budget.
+# `timeout 60`, and the whole probe stops with CANNOT ESTABLISH once a 420 s budget is spent
+# (checked before each call, so one in-flight call can overrun it by up to 60 s). THIS PROBE ALONE
+# is therefore bounded by 480 s worst case. The sweeper job has no per-probe cap and about 50
+# trackers share its 900 s `timeout-minutes`, so a degraded GitHub day can still starve the probes
+# after this one; the budget keeps this probe from being the one that does it, it does not
+# guarantee the others finish. A healthy sweep makes calls of 1 to 4 s (measured 2026-10-10), so a
+# cold worst-case sweep (325 calls) can reach the budget; it then exits 3 and the stateless probe
+# retries next sweep.
 #
 # TEST SEAMS (read only when set; the sweeper runs probes under `env -i`, so production never sets
 # them): BC_S4_NOW_EPOCH overrides "now" for the wait-deadline arm; BC_S4_GH_TIMEOUT overrides the
@@ -86,17 +103,17 @@ LIST_LIMIT=100
 SCAN_RUNS=6
 EXERCISE_RUNS=20
 
-GH_TIMEOUT="${BC_S4_GH_TIMEOUT:-120}"
-BUDGET_S="${BC_S4_BUDGET_S:-720}"
-[[ "$GH_TIMEOUT" =~ ^[0-9]+$ && "$GH_TIMEOUT" -gt 0 ]] || GH_TIMEOUT=120
-[[ "$BUDGET_S" =~ ^[0-9]+$ ]] || BUDGET_S=720
+GH_TIMEOUT="${BC_S4_GH_TIMEOUT:-60}"
+BUDGET_S="${BC_S4_BUDGET_S:-420}"
+[[ "$GH_TIMEOUT" =~ ^[0-9]+$ && "$GH_TIMEOUT" -gt 0 ]] || GH_TIMEOUT=60
+[[ "$BUDGET_S" =~ ^[0-9]+$ ]] || BUDGET_S=420
 
 # workflow-file @@ job-name regex @@ step-name regex. Step names are the committed workflows' own
-# (`git grep -n 'name:' .github/workflows/<wf>`). The one exception is scheduled-inngest-health's
-# converted step, which is UNNAMED (id: probe): the jobs API reports an unnamed `run:` step as
-# "Run <first line of the script>", here "Run set -uo pipefail" (measured on a real run).
+# (`git grep -n 'name:' .github/workflows/<wf>`). scheduled-inngest-health's converted step used to
+# be UNNAMED (the jobs API then reports "Run <first line of the script>", which the suite could not
+# tie to the file); it is named `Probe inngest health` now, so every pair is a real step name.
 REQUIRED=(
-  'scheduled-inngest-health.yml@@^probe$@@^Run set -uo pipefail$'
+  'scheduled-inngest-health.yml@@^probe$@@^Probe inngest health$'
   'apply-inngest-rls.yml@@^apply$@@^Apply lockdown \+ authoritative verification$'
   'apply-deploy-pipeline-fix.yml@@^apply$@@^Capture pre-apply infra-config frame'
   'apply-deploy-pipeline-fix.yml@@^apply$@@^Verify webhook is alive post-apply$'
@@ -233,7 +250,7 @@ if (( ${#unexercised[@]} == 0 )); then
   exit 0
 fi
 if (( now_epoch >= deadline_epoch )); then
-  echo "ACTION REQUIRED: the ${WAIT_DAYS}-day wait budget since the merge is spent and these never exercised their converted step(s): ${unexercised[*]}. Exercise each with a sanctioned read-only dispatch (a dispatch that writes needs its own approval) or accept it explicitly on the tracker, then close it and remove the follow-through label."
+  echo "ACTION REQUIRED: the ${WAIT_DAYS}-day wait budget since the merge is spent and these never exercised their converted step(s): ${unexercised[*]}. Exercise each with a sanctioned dispatch (a dispatch that writes needs its own approval) or accept it explicitly on the tracker, then close it and remove the follow-through label."
   exit 5
 fi
 echo "NOT YET: ${#unexercised[@]} workflow(s) have not exercised their converted step(s) yet: ${unexercised[*]}"

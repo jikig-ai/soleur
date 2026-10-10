@@ -229,11 +229,16 @@ addendum already relied on.
 
 Two learnings carry the rule "suppress curl stderr (`2>/dev/null`) on a request with an auth header so debug output cannot leak the token":
 `2026-02-18-token-env-var-not-cli-arg.md` ("Additional measures") and `2026-03-09-shell-api-wrapper-hardening-patterns.md` (Fix 2, "curl stderr
-suppression"). **For a call made through `bc_curl` (and the inline wrappers) the rule is reversed.** Decision 8 makes `_bc_tail_ok` refuse
-`--verbose`, `--trace*` and every spelling of them before any request, so curl has no mode in which it echoes the request headers; and the refusal
-marker `SOLEUR_CREDENTIAL_REFUSED` is printed to stderr from inside the command substitution (`code=$(bc_curl ... )`), so a `2>/dev/null` on the call
-discards the only line that distinguishes a refused credential from a transport failure. The battery therefore asserts that no `bc_curl` statement
-discards stderr (the S3 stage for workflow steps, an S4 row for scripts), and the converted RLS calls had theirs removed. A curl call that does NOT go through the chokepoint keeps the old
+suppression"). **For a call made through `bc_curl` the rule is reversed, and the half of the argument that depends on the argument guard holds for `bc_curl` only.**
+Decision 8 makes `_bc_tail_ok` refuse `--verbose`, `--trace*` and every spelling of them before any request, so a `bc_curl` call has no mode in which curl echoes the
+request headers; and the refusal marker `SOLEUR_CREDENTIAL_REFUSED` is printed to stderr from inside the command substitution (`code=$(bc_curl ... )`), so a
+`2>/dev/null` on the call discards the only line that distinguishes a refused credential from a transport failure. The battery therefore asserts that no `bc_curl`
+statement discards stderr (the S3 stage for workflow steps, an S4 row for scripts), and the converted RLS calls had theirs removed.
+**The inline wrappers (`_sig_curl`, `_bearer_curl`) do not run `_bc_tail_ok`** (the 2026-10-09 addendum, "weaker in three stated ways"), so nothing at runtime refuses a
+`-v` or `--trace` argument there; the marker argument (do not discard stderr) applies to them equally. What stands in their place is the fixed argument list of each inline
+call plus two battery facts: the dynamic replay feeds every call a well-formed run records, inline calls included, through the library's `_bc_tail_ok`, so a header-printing
+flag added to an EXECUTED inline call turns that row red; and no `_sig_curl` or `_bearer_curl` call carries a `2>/dev/null` today (checked by a repository grep), but the no-stderr-discard row
+covers `bc_curl` statements only, so one added to an inline call is not asserted. A curl call that does NOT go through the chokepoint or an inline wrapper keeps the old
 advice. (The `2>/dev/null` on a `doppler secrets get` or a `jq` stays: those are not the transfer.)
 
 ### `deploy-inngest-image.yml` `deploy` is inline by choice, not by a pinned property
@@ -243,8 +248,8 @@ deploy invariants pin that area)". That is true of `web-platform-release.yml` `d
 `workflow_dispatch`-only job (its `if:` skips every other event): it has no `workflow_run` ordering, no `superseded` arm and no comment or suite that
 pins the absence of a checkout, and its sibling `restart-inngest-server.yml` (same concurrency group `deploy-inngest-restart`, same shape) uses the
 library with a checkout. Its no-checkout state is incidental. It stays inline in this slice so that a merge that already fires four production applies
-does not also add a checkout step to a deploy path, and **converting its two sites (the trigger and the verify poll) to the library is a recorded
-follow-up (S5 or a chore)**, which removes two guard copies, two `_sig_curl` copies and two HMAC copies from the parity audit. Until then the
+does not also add a checkout step to a deploy path, and **converting its two sites (the trigger and the verify poll) to the library, with a checkout step, is a tracked
+follow-up on #9757 (the argv-credential follow-up list)**, which removes two guard copies, two `_sig_curl` copies and two HMAC copies from the parity audit. Until then the
 inline-wrapper clause is met for the release jobs and the luks and verify-tunnel sites, and NOT for this one: it is the clause's one honest
 exception, not a precedent.
 
@@ -294,16 +299,44 @@ argument lists:
 - Credentials in a URL **path** are not on the config channel and remain on argv: the Slack webhook URL in `web-platform-release.yml`, the `psql`
   connection URIs and the seed scripts' password. They are tracked on the #9757 follow-up list.
 
-### Inline sites now trim trailing whitespace at the call site (supersedes "an inline copy refuses such a value")
+### Inline sites now trim leading and trailing ASCII whitespace at the call site (supersedes "an inline copy refuses such a value")
 
 The 2026-10-09 addendum says an inline copy "does not trim a trailing newline (decision 7: an inline copy refuses such a value rather than sending it
 trimmed)". The review measured the consequence: a GitHub secret stored with a trailing newline (the commonest storage accident, which decision 7 exists for)
 would have turned the release deploy this merge itself fires red, and silenced its failure email, while the 22 library sites accepted the same value. In the
 seven inline-using steps (`web-platform-release.yml`: the lock probe, "Deploy via webhook", "Verify deploy script completion", the deploy-failure email and the
-release-outcome email; `deploy-inngest-image.yml`: the trigger and the verify poll) a one-line loop now trims the **trailing** whitespace of
-`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the two email steps: `RESEND_API_KEY`) before the guard, as `bc_ok` does. The pinned function text is
-unchanged, so the inline `_bearer_ok` itself still refuses trailing whitespace; the trim sits at the call site, in front of it. Interior whitespace and any
-control byte are still refused, and **the HMAC key (`WEBHOOK_SECRET`) is never trimmed**: it signs as the exact key it was given. The battery executes each
-of the seven steps with a trailing newline and space (trimmed value sent, signature unchanged), an interior control byte (refused) and a key with a trailing
-newline (signs as that exact key). The other inline guards (`workspaces-luks-cutover.yml`, `verify-tunnel-ingress-origin.sh`, `infra-config-verify.sh`) do
-not trim and still refuse a trailing newline.
+release-outcome email; `deploy-inngest-image.yml`: the trigger and the verify poll) a one-line loop now trims the **leading and trailing** ASCII whitespace of
+`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the two email steps: `RESEND_API_KEY`) before the guard. The pinned function text is unchanged, so the inline
+`_bearer_ok` itself still refuses whitespace; the trim sits at the call site, in front of it, which is also why the byte-equal pin on the `_bearer_ok` copies did not have to move.
+
+- **Both ends, unlike the library.** `bc_ok` trims trailing whitespace only. The inline loop also trims leading whitespace because the argv form these sites replace
+  tolerated a leading blank (curl 8.5.0 sent `CF-Access-Client-Id:  value` and the Cloudflare edge discards leading whitespace of a field value): refusing it would have
+  turned a value that worked yesterday into a red release deploy on the merge. The library keeps refusing a leading blank; this is a stated divergence, in the lenient
+  direction, limited to the seven steps.
+- **ASCII only, locale-independent.** The class is spelled out as bytes (`$' \t\r\n\v\f'`: space, tab, CR, LF, VT, FF), never `[[:space:]]`, so the judgement does not follow
+  the runner's ambient locale: a trailing U+2003 is NOT trimmed and is then refused by the guard, under a UTF-8 locale as under `C`. It equals the library's judgement,
+  which runs under `LC_ALL=C`, for the ASCII whitespace the two share.
+- **The HMAC key (`WEBHOOK_SECRET`) is never trimmed**: it signs as the exact key it was given. Interior whitespace, any control byte, an all-whitespace value and a
+  non-ASCII space are still refused.
+- **Why the other inline sites do not need it.** `workspaces-luks-cutover.yml` (Hetzner read), `verify-tunnel-ingress-origin.sh` and `infra-config-verify.sh` take their
+  values from `doppler secrets get ...`, inside `$(...)`, which strips trailing newlines before the guard sees the value; the accident the trim exists for (a stored
+  trailing newline) cannot reach them. A trailing space or a leading blank in a Doppler value would still be refused there, which is the stricter, pre-existing
+  behaviour of those sites and is not changed here.
+- **The loop's presence is pinned.** The battery DERIVES the population (every workflow step that defines the inline `_bearer_ok() {` and declares a `secrets.*` value for
+  one of the three names must carry exactly the canonical loop for exactly those names before the definition, and the executed rows must be exactly that set), so a new
+  inline step copied from a donor without the loop turns a row red instead of shipping a stored-newline failure. The executed rows discriminate the shape: both ends,
+  every whitespace byte, interior space and LF refused (a strip-all implementation sends a different credential), U+2003 refused under a UTF-8 locale (a `[[:space:]]`
+  implementation is seen), all-whitespace refused, and the key untrimmed; mutants of the loop (removed, trailing-only, leading-only, strip-all, locale-class, applied
+  to the key) are each judged red by name.
+
+### A refused credential at the infra-config gate pages as `ungraded` (the `credential_refused` output)
+
+`infra-config-verify.sh` runs in `apply-deploy-pipeline-fix.yml` as the step with id `infra_config_gate`. When a credential fails the shape check it makes zero requests,
+prints the marker and exits 1; it now also writes `credential_refused=true` to `$GITHUB_OUTPUT`. The alert step "Alert on a red infra-config gate (#7220)" reads that output
+ahead of its frame-derived arms: with no request made the status file is empty, so without the output the ladder would have classified the failure `unreachable` and told
+the operator the listener may be down, a cause nobody measured. With it the class is `ungraded`: the check never ran, and the text says so and names the verify step's log (the
+variable is on the `... unusable` line beside the marker, never its value). Two honest limits. The wiring covers pass 1 (`steps.infra_config_gate`); the second verify pass
+(`infra_config_gate_pass2`, which runs the same script) writes its own output under its own step id and is not read, so a pass-2 refusal would reach the
+`PASS2_OUTCOME == failure` arm and read as a failed re-push. That is not wired because the secrets cannot change between the two steps of one job, so a credential that passed
+pass 1 cannot be refused in pass 2. And `ungraded` is a quieter class than `unreachable` (it carries no `action-required` label), although a refused Cloudflare Access or HMAC
+secret is shared by every webhook caller; the marker in the run log and the step annotation are what name it, which is a conscious trade of loudness for a true statement.

@@ -1577,7 +1577,7 @@ else
   fail "S4-10 an empty derived set failed the lint or the line is missing: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err")"
 fi
 
-# S4-11: the live tree's set size is REPORTED here (parsed, asserted to be numeric); its FLOORS (derived >= 9, steps >= 4) are asserted by the
+# S4-11: the live tree's set size is REPORTED here (parsed, asserted to be numeric); its FLOORS (derived >= 10, steps >= 4) are asserted by the
 # argv-bearer battery (tests/scripts/test-argv-bearer-sweep.sh, stage S4, the row that runs this lint on the real tree). The tracked-file-listing (git) arm
 # is reached by the live tree and by S4-13 below, nowhere else: every other fixture has no `.git`.
 live_info="$(sed -nE 's/^lint-workflow-local-action-checkout: script-consumers: ([0-9]+) derived \(([a-z .-]+)\), ([0-9]+) step\(s\) run one$/\1 \3/p' "$TMP/live.out")"
@@ -1626,6 +1626,25 @@ else
 fi
 rm -rf "$TMP/gt"
 
+# S4-14: the third clause of the git arm's listing, UNTRACKED-and-not-ignored (`--others`). S4-13 stages everything, so a listing that dropped `--others` (cached files only) passes it;
+# a consumer script written after the last `git add` is the shape a developer has before committing, and it must still be derived and judged.
+reset
+mkdir -p "$TMP/gu/.github" "$TMP/gu/tools"
+cp -r "$TMP/filler" "$TMP/gu/.github/workflows"
+cp -r "$TMP/filler-actions" "$TMP/gu/.github/actions"
+printf '%s\n' '#!/usr/bin/env bash' 'true' > "$TMP/gu/tools/tracked.sh"
+printf '%s\n' "name: s4-gu" "jobs:" "  j:" "    runs-on: ubuntu-24.04" "    steps:" "      - name: tool" "        run: bash tools/fresh.sh" > "$TMP/gu/.github/workflows/s4-gu.yml"
+git -C "$TMP/gu" init -q 2>/dev/null && git -C "$TMP/gu" add tools .github 2>/dev/null
+printf '%s\n' '#!/usr/bin/env bash' 'source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"' > "$TMP/gu/tools/fresh.sh"
+python3 "$SUT" "$TMP/gu/.github/workflows" >"$TMP/out" 2>"$TMP/err"; RC=$?
+if [[ "$RC" -eq 1 && "$(s4_info)" == "1 1" ]] && grep -q "script-consumers: 1 derived ($S4_GIT_ARM), 1 step(s) run one" "$TMP/out" \
+   && grep -q "s4-gu.yml: job 'j', step 'tool'.*\[script consumer: tools/fresh.sh\]" "$TMP/err"; then
+  pass "S4-14 an UNTRACKED, not-ignored consumer (written after the last git add) is derived through the git listing and judged (a listing without --others would miss it)"
+else
+  fail "S4-14 untracked consumer: rc=$RC info='$(s4_info)': $(head -1 "$TMP/err") out='$(tail -1 "$TMP/out")'"
+fi
+rm -rf "$TMP/gu"
+
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
 pass "canary: a true condition registers as PASS"
@@ -1658,7 +1677,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=124
+FAIL_FLOOR_MIN=125
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

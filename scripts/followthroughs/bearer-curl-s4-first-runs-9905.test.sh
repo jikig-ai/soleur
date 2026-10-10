@@ -15,7 +15,13 @@
 #   * the wait-deadline arm (NOT YET before it, ACTION REQUIRED at or after it), the sampling bounds
 #     (newest 6 logs, newest 20 jobs reads), the CANNOT ESTABLISH arms (gh failure, hang, budget,
 #     unexpected shape), the xtrace refusal, and the table's agreement with the committed workflows;
-#   * each rule is MUTATED out of a scratch copy of the probe and a row must go red.
+#   * five rules are MUTATED out of a scratch copy of the probe and a row must go red (M1 the marker's
+#     anchor start, M2 the step-conclusion test, M3 the deadline arm, M4 the job-name test, M5 the
+#     marker's end anchor), each after an unmutated control. The other rules (the 6-log and 20-jobs
+#     bounds, the newest-first ordering, the per-call timeout, the budget arms, the xtrace refusal) are
+#     pinned by direct fixtures that count the calls the stub saw, not by mutants;
+#   * the budget arithmetic the header states (this probe alone: budget + one in-flight call = 480 s,
+#     against the sweeper's shared 900 s job) is read back from the probe's own defaults.
 #
 # Values are synthesized (cq-test-fixtures-synthesized-only): every run id and timestamp is made up.
 set -uo pipefail
@@ -76,7 +82,7 @@ mkdir -p "$STUBDIR" "$ROOT/home" "$ROOT/tmp"
 #                                               -> $FX/list/WF
 #   run view ID --log                           -> $FX/log/ID
 #   run view ID --json jobs                     -> $FX/jobs/ID.json
-# Switches: $FX/gh_hang (sleep), $FX/gh_fail_on (fail when the argument line contains its content).
+# Switches: $FX/gh_hang (sleep), $FX/gh_slow (every call first sleeps that many seconds, then answers), $FX/gh_fail_on (fail when the argument line contains its content).
 # ---------------------------------------------------------------------------------------------
 cat > "$STUBDIR/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -84,6 +90,7 @@ FX="${FX:?}"
 printf '%s\n' "$*" >> "$FX/calls.log"
 unexpected() { printf '%s\n' "$*" >> "$FX/unexpected"; echo "stub gh: unexpected request: $*" >&2; exit 64; }
 if [[ -f "$FX/gh_hang" ]]; then sleep 30; exit 0; fi
+if [[ -f "$FX/gh_slow" ]]; then sleep "$(<"$FX/gh_slow")"; fi
 if [[ -f "$FX/gh_fail_on" ]]; then
   needle="$(<"$FX/gh_fail_on")"
   if [[ "$*" == *"$needle"* ]]; then echo "stub gh: injected failure" >&2; exit 1; fi
@@ -145,7 +152,7 @@ ESC=$'\033'
 # Concrete names, as `gh run view --json jobs` reports them for the committed workflows (measured on
 # real runs 2026-10-10). Independent of the probe's regex table: if the probe's table stops matching
 # these, the all-exercised rows go red.
-CONC='scheduled-inngest-health.yml|probe|Run set -uo pipefail
+CONC='scheduled-inngest-health.yml|probe|Probe inngest health
 apply-inngest-rls.yml|apply|Apply lockdown + authoritative verification
 apply-deploy-pipeline-fix.yml|apply|Capture pre-apply infra-config frame (#7104)
 apply-deploy-pipeline-fix.yml|apply|Verify webhook is alive post-apply
@@ -201,7 +208,7 @@ fx_clear_rows() { local r="$FX/rows/$1"; assert_fixture_dir "$r"; : > "$r"; }
 line() { printf '%s\t%s\t%s %s\n' "$1" "$2" "$TS" "$3"; }
 
 # mk_log <file> <mode>. Modes: plain | echo (echoed source only) | marker | marker-cr | marker-cc
-#   | decoy-indent | decoy-mid | decoy-raw.
+#   | decoy-indent | decoy-mid | decoy-raw | decoy-trail.
 mk_log() {
   local f="$1" mode="$2" j="deploy" s="Deploy via webhook" bom=$'\xef\xbb\xbf'
   assert_fixture_dir "$f"
@@ -213,6 +220,7 @@ mk_log() {
       decoy-indent) line "$j" "$s" '  echo "SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape" >&2' ;;
       decoy-mid) line "$j" "$s" '::error::mint: the exchange did not complete (a SOLEUR_CREDENTIAL_REFUSED script=mint reason=token_shape line above means the JWT was refused)' ;;
       decoy-raw) printf 'SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape\n' ;;
+      decoy-trail) line "$j" "$s" 'SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape (quoted in a longer message)' ;;
       *)
         # The echoed `run:` source: colourised and indented, exactly as GitHub prints it.
         line "$j" "$s" "${ESC}[36;1m  echo \"SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape\" >&2${ESC}[0m"
@@ -349,7 +357,7 @@ run_probe
 expect_rc "healthy runs whose logs echo the marker in their run source: PASS, never FAIL" 0
 expect_out "the PASS line is printed" "PASS:"
 
-for decoy in decoy-indent decoy-mid decoy-raw; do
+for decoy in decoy-indent decoy-mid decoy-raw decoy-trail; do
   fx_all_ok
   mk_log "$FX/log/$LAST_ID" "$decoy"
   run_probe
@@ -576,6 +584,23 @@ run_probe BC_S4_BUDGET_S=0
 expect_rc "a spent total budget is CANNOT ESTABLISH" 3
 expect_out "the budget message names itself" "budget"
 
+# A budget that runs out MID-sweep (the BUDGET_S=0 row is always spent on the first call): every gh call takes ~1 s, the budget is 3 s, so the probe makes a few calls and then stops
+# with CANNOT ESTABLISH instead of finishing the ~30 calls a healthy sweep of this fixture needs.
+fx_all_ok
+fx_put gh_slow 1
+SECONDS=0
+run_probe BC_S4_BUDGET_S=3
+mid_calls="$(count_matching '.')"
+expect_rc "a budget that runs out mid-sweep is CANNOT ESTABLISH" 3
+expect_out "the mid-sweep budget message names the budget" "budget is spent"
+cases=$((cases + 1))
+if (( mid_calls >= 2 && mid_calls <= 5 && SECONDS < 12 )); then pass "the mid-sweep stop made $mid_calls calls in ${SECONDS}s, not the full sweep"; else fail "the mid-sweep budget did not stop the probe promptly (calls=$mid_calls, ${SECONDS}s)"; fi
+# The header's worst-case arithmetic is read from the defaults: 420 s budget + one in-flight 60 s call = 480 s, stated as such, and well inside the sweeper's 900 s job.
+b_def="$(sed -nE 's/^BUDGET_S="\$\{BC_S4_BUDGET_S:-([0-9]+)\}"$/\1/p' "$PROBE")"; g_def="$(sed -nE 's/^GH_TIMEOUT="\$\{BC_S4_GH_TIMEOUT:-([0-9]+)\}"$/\1/p' "$PROBE")"
+cases=$((cases + 1))
+if [[ "$b_def" =~ ^[0-9]+$ && "$g_def" =~ ^[0-9]+$ ]] && (( b_def + g_def == 480 && b_def + g_def < 900 )) && grep -qF 'bounded by 480 s worst case' "$PROBE"; then pass "the probe's defaults (budget ${b_def} s, per-call ${g_def} s) sum to the 480 s its header states, inside the sweeper's 900 s job"
+else fail "the budget defaults and the header's worst-case claim disagree (budget='$b_def' call='$g_def')"; fi
+
 fx_all_ok
 run_probe BC_S4_NOW_EPOCH=abc
 expect_rc "a non-numeric BC_S4_NOW_EPOCH is CANNOT ESTABLISH" 3
@@ -591,6 +616,25 @@ expect_rc "running under xtrace is refused (EX_CONFIG)" 78
 expect_num "the refused run made no gh call" "$(count_matching '.')" "0"
 
 # --- 9. the probe's table agrees with the committed workflows --------------------------------------------
+# JOB-scoped: the step name must exist in a job whose displayed name (its `name:`, else its key, which is what the jobs API reports) matches the job regex, not merely somewhere in the
+# file. A step moved to another job, or a job given a `name:`, must turn a row red while the probe would wait forever. The reader is fed a known positive and three known negatives first.
+S9PY='import sys, re, yaml
+f, job_re, step_re = sys.argv[1:4]
+d = yaml.safe_load(open(f))
+for key, j in (d.get("jobs") or {}).items():
+    if not isinstance(j, dict): continue
+    if not re.search(job_re, str(j.get("name") or key)): continue
+    for s in j.get("steps") or []:
+        if isinstance(s, dict) and re.search(step_re, str(s.get("name") or "")):
+            print("found"); sys.exit(0)
+print("none")'
+s9_has() { python3 -I -c "$S9PY" "$1" "$2" "$3" 2>/dev/null; }
+S9FIX="$ROOT/s9fix.yml"; assert_fixture_dir "$S9FIX"
+printf '%s\n' 'name: x' 'jobs:' '  probe:' '    steps:' '      - name: Alpha' '  other:' '    steps:' '      - name: Beta' '  key1:' '    name: shown' '    steps:' '      - name: Gamma' > "$S9FIX"
+expect_num "table reader control: a step in its own job is found" "$(s9_has "$S9FIX" '^probe$' '^Alpha$')" "found"
+expect_num "table reader control: a step that lives in ANOTHER job is not found" "$(s9_has "$S9FIX" '^probe$' '^Beta$')" "none"
+expect_num "table reader control: a job is matched by its displayed name" "$(s9_has "$S9FIX" '^shown$' '^Gamma$')" "found"
+expect_num "table reader control: a job's key is not its name once it has a name: override" "$(s9_has "$S9FIX" '^key1$' '^Gamma$')" "none"
 eval "$(sed -n '/^REQUIRED=(/,/^)/p' "$PROBE")"
 expect_num "the probe tracks the same number of pairs as the suite's concrete table" "${#REQUIRED[@]}" "$(grep -c . <<<"$CONC")"
 for req in "${REQUIRED[@]}"; do
@@ -598,25 +642,10 @@ for req in "${REQUIRED[@]}"; do
   rest="${req#*@@}"
   job_re="${rest%%@@*}"
   step_re="${rest#*@@}"
-  job_name="${job_re#^}"; job_name="${job_name%\$}"
   wf_file="$REPO_ROOT/.github/workflows/$wf"
   cases=$((cases + 1))
   if [[ ! -f "$wf_file" ]]; then fail "$wf: the workflow file does not exist"; continue; fi
-  # the job key exists
-  jobs_hit="$(grep -cE "^  ${job_name}:[[:space:]]*$" "$wf_file")" || true
-  if [[ "${jobs_hit:-0}" -lt 1 ]]; then fail "$wf: no job key '$job_name'"; continue; fi
-  # the step name exists; failing that, for an unnamed run step ("Run <first script line>"), the line does
-  found=0
-  while IFS= read -r nm; do
-    nm="${nm#\"}"; nm="${nm%\"}"; nm="${nm#\'}"; nm="${nm%\'}"
-    if [[ "$nm" =~ $step_re ]]; then found=1; break; fi
-  done < <(sed -nE 's/^[[:space:]]*(- )?name:[[:space:]]*//p' "$wf_file")
-  if (( found == 0 )) && [[ "$step_re" == '^Run '* ]]; then
-    first_line="${step_re#^Run }"; first_line="${first_line%\$}"
-    hit="$(grep -cE "^[[:space:]]+${first_line}[[:space:]]*$" "$wf_file")" || true
-    if [[ "${hit:-0}" -ge 1 ]]; then found=1; fi
-  fi
-  if (( found == 1 )); then pass "$wf: '$job_name' / '$step_re' exists in the committed workflow"; else fail "$wf: no step matches $step_re (the workflow renamed it?)"; fi
+  if [[ "$(s9_has "$wf_file" "$job_re" "$step_re")" == found ]]; then pass "$wf: a job named '${job_re}' has a step matching '$step_re' in the committed workflow"; else fail "$wf: no step matches $step_re inside a job named $job_re (the workflow renamed or moved it?)"; fi
 done
 
 # --- 10. mutation checks: each probe rule, mutated out of a scratch copy, must turn a row red ---------------
@@ -681,6 +710,13 @@ fx_all_ok
 fx_reset_wf web-platform-release.yml
 add_run web-platform-release.yml "2026-10-13T01:00:00Z" wrongjob plain
 run_probe;                                                                  expect_rc "M4 goes red: the wrong job now counts as exercised" 0
+# M5: drop the marker's END anchor (a timestamped line that merely QUOTES the marker followed by more text would then match)
+M5="$ROOT/m5.sh"
+if mutate "$M5" 'reason=[a-z_]+[[:space:]]*$'"'" 'reason=[a-z_]+'"'"; then landed "M5 no end anchor" "$M5"; else cases=$((cases + 1)); fail "M5: the end anchor was not found to mutate"; fi
+PROBE_UNDER_TEST="$PRISTINE"
+fx_all_ok; mk_log "$FX/log/$LAST_ID" decoy-trail; run_probe;                expect_rc "control: the trailing-text decoy is not a marker" 0
+PROBE_UNDER_TEST="$M5"
+fx_all_ok; mk_log "$FX/log/$LAST_ID" decoy-trail; run_probe;                expect_rc "M5 goes red: a timestamped line quoting the marker with more text now false-FAILs" 1
 PROBE_UNDER_TEST=""
 
 # --- 11. exit-code vocabulary ---------------------------------------------------------------------------------
@@ -700,7 +736,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
     "$((passes + fails))" "$cases" >&2
   exit 1
 fi
-MIN_ASSERTIONS=90
+MIN_ASSERTIONS=102
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1
