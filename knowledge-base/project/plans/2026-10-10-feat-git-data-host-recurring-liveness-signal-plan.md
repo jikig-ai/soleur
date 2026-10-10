@@ -733,56 +733,56 @@ are pinned by boundary rows, so a one-line threshold relaxation fails a row it d
 
 ### Functional Requirements
 
-- [ ] `git-data-liveness.sh` exists, is bound in `modules/git-data-userdata/main.tf` with the `file("${path.module}/../../...")` spelling and
+- [x] `git-data-liveness.sh` exists, is bound in `modules/git-data-userdata/main.tf` with the `file("${path.module}/../../...")` spelling and
   `local.git_data_rationale_strip`, mirrored in `git-data-userdata-budget.sh`, and written by `cloud-init-git-data.yml` with its service
   and timer.
-- [ ] The feeder pings only when every gating check passes, withholds otherwise, and emits a `liveness` `info` event with the miss code
+- [x] The feeder pings only when every gating check passes, withholds otherwise, and emits a `liveness` `info` event with the miss code
   on a state change and a `state=ok` summary every 10 minutes while healthy (suite rows, Guard Contract rows 1 to 18, H1 to H5).
-- [ ] The URL is never on any argument list and never in an emitted line (suite rows; ADR-280 shape).
-- [ ] In a config other than the production one (exact equality) an absent secret yields `disarmed` and no ping; in the production
+- [x] The URL is never on any argument list and never in an emitted line (suite rows; ADR-280 shape).
+- [x] In a config other than the production one (exact equality) an absent secret yields `disarmed` and no ping; in the production
   config it yields `url_unavailable`. An empty cache is retried every tick; a ping failure drops the cache.
-- [ ] `betteruptime_heartbeat.git_data_host_prd` (paused, `ignore_changes=[paused]`, `push = false`) and
+- [x] `betteruptime_heartbeat.git_data_host_prd` (paused, `ignore_changes=[paused]`, `push = false`) and
   `doppler_secret.git_data_host_heartbeat_url_prd` exist in `git-data.tf`; no new variable; the secret's `project` and `config` are literals.
-- [ ] The manifest row exists with `arming: "dedicated-host-boot"`, `replace_target` `git-data-host-replace`, executable evidence pointing at
+- [x] The manifest row exists with `arming: "dedicated-host-boot"`, `replace_target` `git-data-host-replace`, executable evidence pointing at
   the timer-arming line, and `arming_pending: { tracking_issue: 9438 }`; the new address is in no `arm_one` line.
-- [ ] The pair rides the per-merge `-target` list and is in `GIT_DATA_BIRTH_REFUSED`; the new secret's direct references are pinned.
-- [ ] `git-data-rung2-boot-evidence.env` is deleted in this PR and no other change in the PR re-creates it.
-- [ ] The runbook carries a hard flip precondition naming the signal, the read-only status command, the pre-arm soak read (at least
+- [x] The pair rides the per-merge `-target` list and is in `GIT_DATA_BIRTH_REFUSED`; the new secret's direct references are pinned.
+- [x] `git-data-rung2-boot-evidence.env` is deleted in this PR and no other change in the PR re-creates it.
+- [x] The runbook carries a hard flip precondition naming the signal, the read-only status command, the pre-arm soak read (at least
   four consecutive `state=ok` events spanning at least 30 minutes after the current host's `boot_complete`, no other state after the
   first), the failure branch, what "satisfied" means (monitor armed after a measured `up` transition, `arming_pending` removed, and the
   whole check RE-READ at flip time: `up` and a `state=ok` event under 15 minutes old and later than the current `boot_complete`), the
   expected page before and during a planned replace (announce it; page then auto-resolve is the normal shape; an incident still open
   after boot plus two ticks is a failed replace), the pre-replace read-only check, the rung-2 window with its owner and recommended
   two-working-day cap, and a decision table for every emitted state and code. No SSH step.
-- [ ] The stale pre-receive comments are corrected (comment-only; only the `git-data-pre-receive.sh` edit touches a hash-bound file).
+- [x] The stale pre-receive comments are corrected (comment-only; only the `git-data-pre-receive.sh` edit touches a hash-bound file).
 
 ### Non-Functional Requirements
 
 - [ ] Stored `user_data` stays under the cap with headroom recorded in the PR body (`git-data-userdata-budget.sh --json`); the sub-cap
   model in `cloud-init-user-data-size.test.ts` is updated only if its own assertion requires it, with the measured number.
-- [ ] Merge-time apply adds no arm line and no feeder dependency, so the new monitor cannot redden it while paused; a refused create
+- [x] Merge-time apply adds no arm line and no feeder dependency, so the new monitor cannot redden it while paused; a refused create
   (vendor object cap) or an absent `prd_git_data` config fails that apply loudly by design (R5), not silently.
-- [ ] No production write, host replace, key rotation, ruleset change, or workflow dispatch is performed or scheduled by this PR.
-- [ ] No Doppler read or write is made by the agent in this PR's work phase; any Better Stack or Doppler read the owner wants is a
+- [x] No production write, host replace, key rotation, ruleset change, or workflow dispatch is performed or scheduled by this PR.
+- [x] No Doppler read or write is made by the agent in this PR's work phase; any Better Stack or Doppler read the owner wants is a
   separate, explicitly authorized step.
-- [ ] Diff scope, measured against the merge base: `git diff --name-only origin/main...HEAD` lists no `git-data-gc.sh`, no `.gc-cursor`
+- [x] Diff scope, measured against the merge base: `git diff --name-only origin/main...HEAD` lists no `git-data-gc.sh`, no `.gc-cursor`
   path, nothing under `.worktrees/feat-one-shot-9361-marketplace-ruleset-bypass-swap`, no `.mcp.json`, and neither `arm-heartbeats.sh`
   nor its test (PR 1b); it may list the pipeline's own writes (`knowledge-base/INDEX.md`, `specs/<branch>/session-state.md`).
-- [ ] The feeder script and its unit contain the xtrace refusal as `[[ $- == *x* ]]` and the literal text `set -x` appears in neither
+- [x] The feeder script and its unit contain the xtrace refusal as `[[ $- == *x* ]]` and the literal text `set -x` appears in neither
   (`git-data-luks.test.sh` A28a); `GIT_DATA_REPO_ROOT` appears in neither; the unit has `Environment=HOME=/root`, no `Requires=`,
   `RequiresMountsFor=` or `BindsTo=`, and `TimeoutStartSec=55`; no `RuntimeDirectory=`.
 
 ### Quality Gates (targeted suites only)
 
-- [ ] `bash apps/web-platform/infra/git-data-liveness.test.sh`
-- [ ] `bash apps/web-platform/infra/git-data-luks.test.sh` and `bash apps/web-platform/infra/git-data-render-strip-parity.test.sh`
-- [ ] `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` (rung 1 against the pinned image)
-- [ ] `bash apps/web-platform/infra/git-data-userdata-budget.sh` (exit 0) and `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`
-- [ ] `bun test plugins/soleur/test/heartbeat-reprovision-parity.test.ts plugins/soleur/test/terraform-target-parity.test.ts`
-- [ ] `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` (the ratchet bump) and `actionlint` on the two edited workflows
-- [ ] `bash scripts/lint-orphan-test-suites.sh` reports no orphan after the new suite is tracked
-- [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` and the C4 syntax and render tests
-- [ ] `python3 -I scripts/lint-guard-contract.py` on this plan; `python3 -I scripts/lint-encryption-posture.py` on the change
+- [x] `bash apps/web-platform/infra/git-data-liveness.test.sh`
+- [x] `bash apps/web-platform/infra/git-data-luks.test.sh` and `bash apps/web-platform/infra/git-data-render-strip-parity.test.sh`
+- [x] `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` (rung 1 against the pinned image)
+- [x] `bash apps/web-platform/infra/git-data-userdata-budget.sh` (exit 0) and `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`
+- [x] `bun test plugins/soleur/test/heartbeat-reprovision-parity.test.ts plugins/soleur/test/terraform-target-parity.test.ts`
+- [x] `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` (the ratchet bump) and `actionlint` on the two edited workflows
+- [x] `bash scripts/lint-orphan-test-suites.sh` reports no orphan after the new suite is tracked
+- [x] `bash plugins/soleur/test/c4-count-parity.test.sh` and the C4 syntax and render tests
+- [x] `python3 -I scripts/lint-guard-contract.py` on this plan; `python3 -I scripts/lint-encryption-posture.py` on the change
 - [ ] ADR ordinal re-verified against every `origin/*` ref and open PR at ship; `soleur:archive-kb` (ship step 5.5, `archive-kb.sh`)
   runs BEFORE auto-merge is armed
 - [ ] The PR body says: `Refs #9438`, `Refs #8211`, `Refs #8093` (never `Closes`); lists the two merge-time production writes; states the
