@@ -1104,7 +1104,7 @@ PY
     fi
     if [[ "$want" == 1 ]]; then
       if [[ -z "$exp" ]]; then no "mutation $label: no expected [FAIL] name registered (instrument)"; return; fi
-      if ! grep -F '[FAIL]' "$log" | grep -qF -- "$exp"; then
+      if ! grep -F '[FAIL]' "$log" | grep -cF >/dev/null -- "$exp"; then
         no "mutation $label: rc 1 but not through the named check [$exp]"; return
       fi
       # ONLY rows: the named check must be the SOLE failure (it proves no other row sees the edit).

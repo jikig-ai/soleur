@@ -141,6 +141,53 @@ describe("Dockerfile vitest global-install pin parity", () => {
     expect("const u = import.meta.url;").not.toMatch(BANNED[0]);
   });
 
+  // Writable-temp pin (#9860): vitest's `configLoader: bundle` (the default)
+  // writes the bundled config to `<nearest node_modules>/.vite-temp`, falling
+  // back to the config's own directory — in-image that is `/app/node_modules`
+  // then `/app/test`, BOTH root-owned while the canary exec runs as USER
+  // soleur. `/app/package.json` is `"type": "module"`, so the ESM path
+  // (temp-file write + `import()`) is taken — the in-memory CJS path does not
+  // apply. Without a baked uid-1001-writable `.vite-temp`, `vitest run` dies
+  // at "failed to load config" (the v0.335.5 prod verdict shape). Every
+  // predicate is anchored to the flag/value, never a bare token: `-g 1001`
+  // without `-o`, a comment-arg `1001`, `-m 0555`, or a bake in the wrong
+  // dir all satisfy a loose grep while the EACCES persists.
+  it("the runner stage bakes a uid-1001-owned /app/node_modules/.vite-temp — the config bundler's only writable target", () => {
+    const dockerfile = read("Dockerfile");
+    const directives = dockerfile
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("#") && l.trim() !== "");
+    const bakes = directives.filter((l) => l.includes(".vite-temp"));
+    expect(
+      bakes,
+      "exactly one directive must bake .vite-temp (a second/destructive line is a drift RED)",
+    ).toHaveLength(1);
+    const bake = bakes[0];
+    // `soleur` is NOT an acceptable arm: useradd lands later in the file, so
+    // a named owner fails the build — only the numeric uid works here.
+    expect(
+      bake,
+      "bake must chown by uid 1001 via an owner flag (-o/--owner/--chown)",
+    ).toMatch(/(?:-o|--owner(?:=|\s)|--chown=)\s*1001\b/);
+    expect(
+      bake,
+      "bake must target /app/node_modules/.vite-temp (absolute — WORKDIR drift must not relocate it silently)",
+    ).toMatch(/\/app\/node_modules\/\.vite-temp\b/);
+    expect(
+      bake,
+      "bake must grant the owner write (install -d … -m 0[2367]xx, or rely on install's 0755 default)",
+    ).toMatch(/\binstall\b.*-d.*-m\s*0?[2367][0-7][0-7]|\binstall\b.*-d(?!.*-m)/);
+    // Ordering: nothing that wholesale-recreates node_modules may come AFTER
+    // the bake — npm ci/prune, rm -rf node_modules, or a COPY of node_modules.
+    const codeOnly = directives.join("\n");
+    const bakeIdx = codeOnly.indexOf(bake);
+    const tail = codeOnly.slice(bakeIdx);
+    expect(
+      tail,
+      "no node_modules-recreating step may follow the .vite-temp bake",
+    ).not.toMatch(/\b(?:npm (?:ci|prune)\b|rm\s+-rf?[^\n]*node_modules|COPY\b[^\n]*node_modules)/);
+  });
+
   // Exact-shape pin (#9860): dropping `defineConfig` also dropped
   // UserConfig excess-property checking, and config VALUES reach the resolver
   // the same way specifiers do — `environment: "jsdom"`, `coverage.provider`,
