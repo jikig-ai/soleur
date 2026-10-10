@@ -33,3 +33,18 @@ unless the user says otherwise. None of them changes the stated scope (a), (b), 
 
 - Plan default: executed once in a scratch detached worktree and recorded (the plan-skill rule for a plan's rollback section).
 - Counter-view (DHH, simplicity): the revert is mechanical; write the recipe without rehearsing it.
+
+## Taste 6 — in-workflow sole-copy drift step and a scheduled read-only protection check
+
+- Plan default: NOT built in this PR. The plan states plainly that distinct detection of lifted protection or a changed key
+  copy is degraded until #9786 (the drift issue is already open, new reasons arrive as comments, the Sentry check-in reports ok on
+  exit 2) and relies on the post-merge read-back as the only distinct check; recorded in #9927.
+- Counter-view (observability and user-impact reviewers): add a step to `scheduled-terraform-drift.yml` that greps the full plan
+  (before the 60000-byte truncation) for the six sole-copy addresses, emits `::error::sole_copy_drift address=<addr>` and files a
+  separate `action-required` issue, or a small scheduled read-only GET of `protection.delete`. A new workflow edit plus a test; the
+  apply-workflow byte limit does not apply to the drift workflow. For a single-user-incident threshold this is arguably in scope.
+
+## Taste 7 — scratch-volume proof promoted from deferral to pre-merge
+
+- Duplicate of Taste 2, strengthened by the user-impact review (P0): if detach is refused under protection the incident path
+  is two PRs plus CI. The plan adds a break-glass (one `change_protection` call, per-command go-ahead) as the default mitigation instead.

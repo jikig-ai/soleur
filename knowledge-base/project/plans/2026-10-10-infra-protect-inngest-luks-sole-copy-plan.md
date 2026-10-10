@@ -12,6 +12,39 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-10 (after plan review). **Gates run:** user-brand (4.6), observability (4.7), PAT sweep (4.8), encryption
+posture (4.10), guard contract (4.11, lint green, 3 entries), scope check (4.12); downtime gate (4.55) not triggered (one in-place
+update, no detach, no reboot). **Agents:** security-sentinel, observability-coverage-reviewer, user-impact-reviewer; learnings,
+CTO, CLO, CPO and the five-seat plan review earlier. **Live probes:** read-only Hetzner GET of volume 106903269 and server
+169426216; Terraform 1.10.5 downloaded (checksum verified) and `init` run; a plan attempt against the real per-merge target set
+stopped at two missing Tier-B variables (not run further, see Phase 0); every cited issue and PR re-read live; every cited rule id
+active.
+
+### Key improvements
+
+1. **Evidence artifacts must never carry plan JSON.** `terraform show -json` is not redacted and a targeted plan includes the
+   passphrase pair, so a committed JSON would publish the LUKS key in a public repo. Only a jq projection is committed.
+2. **Phase 0 prerequisites were wrong in the draft.** The per-merge target list is 188 entries (not about 70); CI uses Terraform
+   1.10.5 (the local default is 1.9.8, which refuses a 1.10 state); two required variables (`cf_api_token_r2`, `doppler_token_tf`)
+   live in the privileged tier `soleur-infra-privileged/prd`, not in `prd_terraform`, so the evidence plan needs the user's
+   decision to pull privileged credentials, in the same go-ahead as the evidence run.
+3. **Residual credentials named.** The inngest cutover arm token and the workplace Doppler token can overwrite or delete the key;
+   the read/write Hetzner token can lift protection and is the fallback of the read-only loader; the drift workflow prints a
+   runnable DELETE recipe. Protection defends against mistaken deletes, not against a leaked read/write token.
+4. **Detection claims corrected.** The drift plan already alerts on exit 2 but dedupes by title, so a new reason is a comment
+   on an open issue; the plan no longer claims distinct detection and puts the in-workflow sole-copy drift step on the decision list.
+
+### New considerations discovered
+
+- Reachability scan must include tracked scripts, not only workflows (`scripts/web2-rebirth.sh` runs `terraform state rm` against
+  the main root, pinned to web-2 addresses).
+- The read-back must pass the token on stdin or a config file, assert the read-only token (no silent fallback to the read/write
+  token), and print a boolean only.
+- Whether the guard checks are required checks, and whether CODEOWNERS covers the pin files, decides how strong "one diff can
+  weaken both" really is; AC added to measure it.
+
 ## Overview
 
 The Inngest Redis AOF now lives only on the LUKS volume `hcloud_volume.inngest_redis_luks`, opened by
@@ -41,8 +74,8 @@ here is a rejected alternative.
 
 **Property List (Phase 0.6b).**
 
-- P1. Hetzner refuses a DELETE of volume 106903269 from every client until protection is lifted in a reviewed apply.
-- P2. No Terraform plan on any path can destroy or replace the volume or the passphrase pair.
+- P1. Hetzner refuses a DELETE of volume 106903269 until protection is lifted; this defends against mistaken deletes (console, wrong id, a pasted recipe), NOT against a holder of the read/write Hetzner token, which can lift it.
+- P2. No Terraform plan on any CI path can destroy or replace the volume or the passphrase pair (a local `terraform state rm` is outside `prevent_destroy`; the only tracked script that runs one is pinned to web-2).
 - P3. The attachment can be replaced ONLY as part of a gated server replace (the sanctioned `inngest-host-replace`), never alone.
 - P4. No dispatch, workflow step, `removed {}` or `moved {}` block can reach the sole-copy addresses by a spelling the guards do not normalize.
 - P5. The loss modes of the opener (INNGEST_REDIS_LUKS_KEY) are enumerated with a recovery stance each, and the claims are mechanically checked where a check exists without a host change (pins, single-writer row, drift plan, post-merge read-back).
@@ -152,6 +185,7 @@ unreachable, pin each, guard the effective text).
 | 11 | A retired dispatch still reaching the addresses | stale `apply_target` option or job | reachability census names the only legal (job, verb, address) triples | CI |
 | 12 | Hetzner project deletion / account loss | provider side | NOT covered; stated as residual (CTO: whether protection blocks project deletion is unverified) | residual |
 | 13 | Detach through an untargeted full apply | a local or dispatched full-root apply replaces the server and its attachment (the live host's user_data is stale, so a full plan shows a server replace) with no gate running | runbook: never untargeted; residual (the volume itself stays pinned by `prevent_destroy` and delete protection) | residual |
+| 15 | Other credentials that can overwrite or delete the key or lift protection | the inngest cutover arm token `doppler_service_token.inngest_arm_write` (read/write on `soleur-inngest/prd`, published as `DOPPLER_TOKEN_INNGEST_ARM`), the workplace Doppler token `DOPPLER_TOKEN_TF`, the read/write `HCLOUD_TOKEN` (also the silent fallback of the read-only loader), and the runnable DELETE recipes the drift workflow prints | cannot be pinned by this PR; recited as residual; scoping or revoking the arm token post-cutover and a no-fallback loader are carried by #9927 | residual |
 | 14 | Revoke the opener's access path | revoking or replacing `doppler_service_token.inngest` (the host's read/write boot token) strands a reboot until the replace flow re-delivers it | not pinned here (replacing it is part of the sanctioned replace flow); recited as residual | residual |
 
 ### Key-loss posture (decision, with recovery stance per mode)
@@ -212,13 +246,20 @@ merge's per-merge apply. The PR is NOT merged, and is not put through the merge 
 
 1. **Evidence plan built from the REAL per-merge target set.** A read-only plan (`-lock=false`, state read only, read-only
    Hetzner token as `TF_VAR_hcloud_token`, throwaway ssh public key for `var.ssh_key_path`) whose `-target` list is extracted
-   mechanically from the per-merge `plan` step of `apply-web-platform-infra.yml` (the same list CI will use, ~70 targets) and
+   mechanically from the per-merge `plan` step of `apply-web-platform-infra.yml` (the same list CI will use: 188 `-target` entries measured 2026-10-10) and
    carries NO `-target` on the volume, so the volume update appears only if the dependency closure really delivers it. Saved as
-   `knowledge-base/project/specs/feat-one-shot-9879-luks-sole-copy-protection/apply-plan-output.md` (human plan + JSON) and
-   showing exactly: one `hcloud_volume.inngest_redis_luks` in-place update (`delete_protection: false -> true`), zero other
+   `knowledge-base/project/specs/feat-one-shot-9879-luks-sole-copy-protection/apply-plan-output.md`, which carries ONLY a jq
+   projection (resource address, action list, and the `delete_protection` before/after booleans) plus the redacted human plan
+   summary lines. The raw plan file and `terraform show -json` stay in the scratchpad and are deleted after use: the JSON is not
+   redacted, includes the passphrase pair in `prior_state` and `before`/`after`, and the repository is public. The artifact shows exactly: one `hcloud_volume.inngest_redis_luks` in-place update (`delete_protection: false -> true`), zero other
    in-place updates, zero adds, zero destroys, nothing at web-1's volume 106443278, and `hcloud_server.inngest` ABSENT from the
    plan (its pending user_data replace is not in the per-merge closure; assert that explicitly).
-2. The per-merge guard logic is replayed over the saved JSON: `destroy-guard-filter-web-platform.jq` prints every counter 0 and
+   **Prerequisites measured while deepening:** run it with Terraform 1.10.5 (the workflow's `TERRAFORM_VERSION`; the local
+   default 1.9.8 refuses a newer state), and note that two required variables, `cf_api_token_r2` and `doppler_token_tf`, are
+   NOT in `prd_terraform` — they live in the privileged tier `soleur-infra-privileged/prd`. Pulling privileged-tier credentials
+   into a session is the user's call, so the request for the evidence run states it explicitly and the go-ahead covers it. A
+   read-only Hetzner token is mandatory: the run asserts it and fails instead of falling back to the read/write token.
+2. The per-merge guard logic is replayed over the saved JSON (in the scratchpad): `destroy-guard-filter-web-platform.jq` prints every counter 0 and
    the workflow's own halt conditions (rotation HALT, host-creates HALT, destroy count) evaluate to pass.
 3. The exact command and output are quoted to the user, who gives an explicit per-command go-ahead for the merge. A menu
    answer is not an authorization (`hr-menu-option-ack-not-prod-write-auth`). Because state and main can move through the merge
@@ -228,8 +269,11 @@ merge's per-merge apply. The PR is NOT merged, and is not put through the merge 
 5. Read-back after the apply (executor: the `soleur:postmerge` verification step; a failed read-back is a red post-merge
    status, not a note): a read-only Hetzner GET of volume 106903269 returns `protection.delete=true`, run as
    `doppler run -p soleur -c prd_terraform -- sh -c '<curl with the read-only token>'` (the quoted wrapper form: a bare
-   `"$VAR"` argument expands in the caller's shell before Doppler sets it). That read is a proxy for "Hetzner refuses a
-   delete"; the refusal itself is not exercised here.
+   `"$VAR"` argument expands in the caller's shell before Doppler sets it). The token goes to curl on stdin or through a config
+   read from stdin, never on argv; no `-v`, no `set -x`; the output is reduced to the boolean (`jq -e`), and the command asserts
+   the read-only token and fails rather than using the read/write one. That read is a proxy for "Hetzner refuses a delete";
+   the refusal itself is not exercised here. Protection is lifted by the same read/write token Terraform uses, so it defends
+   against mistaken deletes (console, wrong id, a pasted recipe), not against a leaked read/write token.
 
 **If the apply is skipped or fails mid-merge:** the sanctioned delivery route is a `manual-rerun` dispatch of
 `apply-web-platform-infra.yml` (the same per-merge job). The `inngest-host` dispatch is NOT a delivery route (its shape gate
@@ -252,11 +296,16 @@ user decision (it is a billable production write), recorded in `decision-challen
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** a stalled or late host replacement (the sanctioned dispatch plan-fails or
-  aborts), so scheduled reminders and agent runs fire late; worst case, protection is stripped in a hurry and the original
-  exposure returns. Nothing is lost by this change itself.
-- **If this leaks, the user's workflow data is exposed via:** nothing new. The volume stays LUKS-encrypted; no secret is
-  printed, copied or escrowed by this change; the read-back probe prints a boolean only.
+- **If this lands broken, the user experiences:** (a) a failed or half-applied merge leaves protection unset while the
+  dispatch gates abort `luks_volume_touched`, so a needed host replacement stalls and the user's scheduled reminders and
+  in-flight agent runs fire late or not at all until the apply is re-run through `manual-rerun`; (b) a guard refusal at
+  the wrong moment blocks the owner during an incident, the same stall; (c) protection stripped in a hurry returns the original
+  exposure, where one mistaken delete silently drops every user's armed reminders with no notice; (d) key loss makes the same
+  drop permanent. Nothing is lost by this change itself.
+- **If this leaks, the user's workflow data is exposed via:** the evidence artifacts: a committed plan JSON would carry the
+  LUKS passphrase of the store that holds users' prompts and agent output, and the repository is public. The plan therefore
+  commits only an address/action projection, keeps raw plan files in the scratchpad, greps for the key before every commit, and
+  passes the read-back token on stdin with boolean-only output.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one lost queue silently drops one user's armed reminders and in-flight work with
   no notice, which is a per-user trust failure; CPO assessed and agreed, and did not go higher because this is a durability
@@ -277,19 +326,19 @@ error_reporting:
 
 failure_modes:
   - mode:          "protection lifted at Hetzner outside Terraform"
-    detection:     "drift plan shows delete_protection true -> false pending at hcloud_volume.inngest_redis_luks. CAVEAT: the live host still runs stale user_data, so the full-root drift plan is already non-empty (pending server replace) until the next planned replace (#9786); the detector for THIS mode is therefore a diff of the named addresses in the drift plan output, and a new reason is not distinguishable from the existing issue by exit code alone"
-    alert_route:   "drift tracking issue (read the plan text for the address)"
+    detection:     "drift workflow run log (layer 6): the 12h full-root plan shows delete_protection true -> false pending at hcloud_volume.inngest_redis_luks. HONEST LIMIT: the live host still runs stale user_data, so the drift issue is already open until #9786 and a new reason arrives as one more comment on it (the filer dedupes by title; the Sentry check-in reports ok on exit 2). This plan therefore does NOT claim distinct detection for this mode; the in-workflow sole-copy drift step is a recorded decision (decision-challenges.md) and the post-merge read-back is the only distinct check"
+    alert_route:   "existing drift tracking issue and email (generic 'drift detected'); not distinct until the decision is taken"
   - mode:          "Doppler key copy deleted or overwritten"
-    detection:     "drift plan shows create/update at doppler_secret.inngest_redis_luks_key (same caveat)"
-    alert_route:   "drift tracking issue"
+    detection:     "drift workflow run log (layer 6): create/update at doppler_secret.inngest_redis_luks_key in the 12h plan (same honest limit); Guard 1 pins that neither pair member carries ignore_changes, which would silence exactly this drift"
+    alert_route:   "existing drift tracking issue (same limit)"
   - mode:          "a plan, removed/moved block or workflow flag targets a pinned address"
-    detection:     "plan-time prevent_destroy error; census G4h; reachability census in terraform-target-parity.test.ts"
+    detection:     "workflow run log: plan-time prevent_destroy error (::error:: from the apply job), census G4h and the reachability pins fail the PR check run (CI layer, not a runtime layer)"
     alert_route:   "red PR check / red apply job"
   - mode:          "host-replace dispatch aborts luks_volume_touched because the update is not yet applied"
-    detection:     "reason=luks_volume_touched in the dispatch gate output"
+    detection:     "workflow run log: reason=luks_volume_touched printed by the gate library in the dispatch step; confirm at work time that the step wraps it in ::error::"
     alert_route:   "dispatch run summary; the runbook section names the ordering and the manual-rerun delivery route"
   - mode:          "LUKS header corrupted or key divergent"
-    detection:     "the hourly probe row proves device binding, not the cipher, so detection lags to the first Redis failure; the real detectors are the existing wrong-volume alert and the dead-man's switch (#9703, not yet armed)"
+    detection:     "vector (journald to Better Stack) plus the host probe row: the hourly SOLEUR_INNGEST_SERVER_PROBE row proves device binding, not the cipher, so detection lags to the first Redis failure; the paging detectors are the existing wrong-volume logtail_exploration alert and the dead-man's switch (#9703, not yet armed)"
     alert_route:   "existing Better Stack alerts"
 
 logs:
@@ -301,8 +350,9 @@ discoverability_test:
   expected_output: 1
 ```
 
-The discoverability command reads the DECLARED pin (the single code line; comments in the file must not spell the literal
-`delete_protection = true`, which the guard suite also asserts). The LIVE property is read by the post-merge read-back in the
+The discoverability command verifies the DECLARED pin only (the single code line; comments in the file must not spell the literal
+`delete_protection = true`, which the guard suite also asserts); it prints 0 until the Phase 1 edit lands and passes while
+protection is lifted at Hetzner, which is why it is not the live check. The LIVE property is read by the post-merge read-back in the
 Production Write Gate and by the runbook's one-line recipe.
 
 ## Encryption Posture
@@ -433,11 +483,13 @@ protection on. No UI surface: Product/UX tier is none and no wireframe applies.
 
 1. With the Phase 1 edit applied in the worktree, run the evidence plan described in Production Write Gate item 1: the
    per-merge `-target` list extracted from the workflow, NO volume target, `-lock=false`, read-only Hetzner token. Save the
-   human and JSON plan, assert the server is absent and exactly one volume update is present, replay the per-merge guard logic
-   (item 2), write `apply-plan-output.md`. Never print secret values (`doppler run` injection only).
+   plan (scratchpad only), assert the server is absent and exactly one volume update is present, replay the per-merge guard logic
+   (item 2), write the projection-only `apply-plan-output.md`. Never print secret values (`doppler run` injection only); before
+   committing, grep the staged files for the live key (fetched at run time, compared by hash, never printed) and for
+   `prior_state`, `sensitive_values`, `dp.st.` and 64-character tokens.
 2. Outcome A (expected): one in-place update, nothing else. Continue. Outcome B: STOP and re-plan (see contingency).
-3. Build the Phase 3 gate-replay fixture from this real plan JSON (volume, attachment and server entries), not from a
-   hand-made document.
+3. Build the Phase 3 gate-replay fixture from the real plan's PROJECTION (address and action list only, volume, attachment and
+   server entries), re-synthesized into the gate's expected document shape; never commit raw plan JSON (`cq-test-fixtures-synthesized-only`).
 
 ### Phase 1 — Terraform pins (apps/web-platform/infra)
 
@@ -475,7 +527,7 @@ protection on. No UI surface: Product/UX tier is none and no wireframe applies.
 
 ### Phase 3 — Prove the sanctioned path still works
 
-- Replay a host replace built from the real Phase 0 JSON through `inngest_host_replace_gate` with the volume at `no-op` and
+- Replay a host replace built from the Phase 0 projection (synthesized document shape) through `inngest_host_replace_gate` with the volume at `no-op` and
   the attachment replaced (add a row to `test-inngest-host-replace-gate.sh`, floor raised) — PASS. Add the pre-apply
   counterpart (volume `update`) asserting the named abort `luks_volume_touched`, so the ordering in the runbook is a tested fact.
 - Run the existing gate suites unchanged and green.
@@ -487,6 +539,12 @@ protection on. No UI surface: Product/UX tier is none and no wireframe applies.
   the deliberate unprotect path (below), replace-after-apply ordering, `manual-rerun` as the delivery route, the owner and
   procedure for each loss mode, no SSH, no untargeted apply (a full untargeted apply today would replace the server and its
   attachment with no gate running), and the scratch-worktree revert recipe.
+  The section also overrides the drift issue's generic "run terraform apply locally" text (never untargeted here; no SSH), and
+  carries a **break-glass for an incident**: if a sanctioned host replace is refused because detach is rejected under delete
+  protection (R2 proven false), the repository owner lifts delete protection with ONE Hetzner `change_protection` call using the
+  read/write token (per-command go-ahead, time-boxed), completes the replace, and re-protects in the same session; the lift and
+  re-protect are recorded in the incident record and the next drift run is the check. This is the only sanctioned out-of-band
+  use of the API and exists precisely so a failed replace is not a longer outage than the data loss it prevents.
 - **Unprotect path, stated honestly.** Lifting is two reviewed PRs (delete protection first, apply, then `prevent_destroy`),
   and each must edit the guards it trips (Guard 1 rows, G4h/G4_PROTECTED, the Guard 2 expected set). No workflow can
   destroy the volume today and PR B deleted the wipe/destroy dispatch, so NO sanctioned erase path exists for this volume;
@@ -550,7 +608,7 @@ None. (Queried open `code-review` issues for every path above; no body names any
 | 2 | volume `prevent_destroy` line deleted from its lifecycle block | RED |
 | 3 | the volume's whole lifecycle block wrapped in a multi-line block comment | RED |
 | 4 | volume `prevent_destroy = false` | RED |
-| 5 | `ignore_changes = [delete_protection]` (and `= all`) added on the volume | RED |
+| 5 | `ignore_changes = [delete_protection]` (and `= all`) added on the volume, or `ignore_changes = [value]` on either pair member (the key-drift detector depends on there being none) | RED |
 | 6 | `prevent_destroy = true` moved into a nested non-lifecycle block of the volume | RED |
 | 7 | `prevent_destroy` removed from the pair member that comes SECOND in the file after the first stays compliant (second-member row) | RED |
 | 8 | `prevent_destroy` removed from `doppler_environment.inngest_prd` | RED |
@@ -567,7 +625,7 @@ None. (Queried open `code-review` issues for every path above; no body names any
 
 **Property.** The only (workflow, job, verb) triples that name `hcloud_volume.inngest_redis_luks`, `hcloud_volume_attachment.inngest_redis_luks`, `random_password.inngest_redis_luks`, `doppler_secret.inngest_redis_luks_key`, `doppler_project.inngest` or `doppler_environment.inngest_prd` in a Terraform flag are the exact expected set.
 
-**Assembly.** Every `.github/workflows/*.y(a)ml`, comments stripped and line continuations folded, over every spelling: `-target=X`, `-target X`, quoted forms, `-replace=X`, `-replace X`, `-destroy`, `terraform destroy`, `taint`, `state rm|mv|push`, `import`; per-job extraction through the existing `extractJobBlock` / `extractAllTargets` chokepoints; plus the per-merge job after `stripDispatchJobs`. Three call-site classes exist: per-merge apply, `inngest_host`, `inngest_host_replace`; a flag spelled in any other job, or any `-replace`/`-destroy` of these addresses anywhere, is the defect. **Measured on the live tree 2026-10-10** with `grep -nE "^[^#]*-(target|replace)[= ]+['\"]?(<the six addresses>)\b" .github/workflows/*.yml`: seven lines, all in `apply-web-platform-infra.yml` — per-merge job `-target` the passphrase pair (2), `inngest_host` `-target` volume, attachment, `doppler_project.inngest`, `doppler_environment.inngest_prd` (4), `inngest_host_replace` `-target` attachment (1), and zero `-replace`/`-destroy` of any of them. That is the expected set.
+**Assembly.** Every `.github/workflows/*.y(a)ml`, comments stripped and line continuations folded, over every spelling: `-target=X`, `-target X`, quoted forms, `-replace=X`, `-replace X`, `-destroy`, `terraform destroy`, `taint`, `state rm|mv|push`, `import`; per-job extraction through the existing `extractJobBlock` / `extractAllTargets` chokepoints; plus the per-merge job after `stripDispatchJobs`. Tracked scripts are in the assembly too (`scripts/**`, `apps/*/infra/**/*.sh`): a state-write verb (`state rm|mv|push`, `import`, `taint`) naming a sole-copy address anywhere outside the expected set is the defect (today `scripts/web2-rebirth.sh` runs `terraform state rm`, pinned to web-2 addresses, and is not in the expected set). Three call-site classes exist: per-merge apply, `inngest_host`, `inngest_host_replace`; a flag spelled in any other job, or any `-replace`/`-destroy` of these addresses anywhere, is the defect. **Measured on the live tree 2026-10-10** with `grep -nE "^[^#]*-(target|replace)[= ]+['\"]?(<the six addresses>)\b" .github/workflows/*.yml`: seven lines, all in `apply-web-platform-infra.yml` — per-merge job `-target` the passphrase pair (2), `inngest_host` `-target` volume, attachment, `doppler_project.inngest`, `doppler_environment.inngest_prd` (4), `inngest_host_replace` `-target` attachment (1), and zero `-replace`/`-destroy` of any of them. That is the expected set.
 
 **Mutation matrix:**
 
@@ -611,13 +669,14 @@ None. (Queried open `code-review` issues for every path above; no body names any
 
 - [ ] AC1. `inngest-redis-luks.tf`: volume has `delete_protection = true` (one code line; no comment spells the literal) and `prevent_destroy = true`; both pair members and both Doppler parents have `prevent_destroy = true`; the attachment has no `lifecycle` block; `grep -c -e 'delete_protection = true' apps/web-platform/infra/inngest-redis-luks.tf` prints `1` (the observability discoverability command, run once before finalizing).
 - [ ] AC2. `bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh` green with every Guard 1 mutation row RED and every must-PASS row green; `bash apps/web-platform/infra/workspaces-luks.test.sh` green with the SAME pass count and floor as before the library extraction.
-- [ ] AC3. A gate-library replay of a host replace built from the real Phase 0 JSON (attachment `delete`+`create`, volume `no-op`, server replaced) PASSes `inngest_host_replace_gate`; the same plan with the volume `update` aborts `reason=luks_volume_touched`.
-- [ ] AC4. `apply-plan-output.md` exists, was produced with the real per-merge `-target` list and no volume target, and shows one in-place update of the volume (`delete_protection`), zero other updates, zero adds, zero destroys, nothing at 106443278, and no `hcloud_server.inngest` entry; the destroy-guard counters and the per-merge halt logic evaluate to pass over its JSON.
+- [ ] AC3. A gate-library replay of a host replace built from the Phase 0 projection (attachment `delete`+`create`, volume `no-op`, server replaced) PASSes `inngest_host_replace_gate`; the same plan with the volume `update` aborts `reason=luks_volume_touched`.
+- [ ] AC4. `apply-plan-output.md` exists, carries no raw plan JSON (the key-hash grep and the `prior_state`/`sensitive_values` grep are clean), was produced with the real per-merge `-target` list and no volume target, and shows one in-place update of the volume (`delete_protection`), zero other updates, zero adds, zero destroys, nothing at 106443278, and no `hcloud_server.inngest` entry; the destroy-guard counters and the per-merge halt logic evaluate to pass over its JSON.
 - [ ] AC5. The user's explicit per-command go-ahead for the merge is recorded in the PR before it is marked ready; the squash message and PR body carry no `[skip-web-platform-apply]` marker; the PR body's first line says merging applies one in-place production update.
 - [ ] AC6. `bun test plugins/soleur/test/terraform-target-parity.test.ts`, `bash tests/scripts/test-infra-privileged-tier-census.sh`, `bash tests/scripts/test-inngest-host-replace-gate.sh`, `bash tests/scripts/test-inngest-host-shape-gate.sh`, `bash apps/web-platform/infra/inngest-host.test.sh`, `bash apps/web-platform/infra/inngest-redis-luks.test.sh`, `bash scripts/guard-vacuity-floor.test.sh`, the C4 count-parity and syntax/render tests, `python3 scripts/lint-encryption-posture.py`, `python3 scripts/lint-guard-contract.py`, `bash scripts/lint-orphan-test-suites.sh` and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` (the gate's own invocation, not a hand-listed path set) are all green (`TEST_GROUP=affected` locally; CI is the authority). G4h's live-tree count of `removed`/`moved` blocks over `G4H_SOLE_COPY` is 0.
 - [ ] AC7. New ADR, ADR-142 pointer addendum, ADR-263 divergence note, runbook section, ledger row, C4 description, Article 30 TOM and compliance-posture bracket are written with merge-dependent sentences conditional; `git diff --quiet origin/main...HEAD -- knowledge-base/legal/audits` exits 0 (the attested destruction and counsel files are untouched).
 - [ ] AC8. `git diff --quiet origin/main...HEAD -- 'apps/web-platform/infra/workspaces-luks*.tf' apps/web-platform/infra/server.tf 'apps/web-platform/infra/git-data*.tf' apps/web-platform/infra/inngest-provision-rehearsal` exits 0 (merge-base form, so a sibling merge cannot redden it); no ADR-198 credential file is edited; the Phase 0 plan names no web-1, web-2, git_data or rehearsal address. The diff-scope allowance for files the pipeline itself writes: `knowledge-base/INDEX.md`, `specs/feat-one-shot-9879-luks-sole-copy-protection/session-state.md` and `tasks.md`.
 - [ ] AC9. Deferral issue #9927 (header backup, continuity probe, repair dispatch, token downgrade, import rehearsal, version-history measurement, scratch-volume proof) exists with the dated trigger and `Mandated-By` line and matches the plan; PR body carries `Closes #9879` and only `Ref` for others.
+- [ ] AC10a. The posture's claims are verified or marked unverified before they are restated: the "reminders re-armable from Postgres" claim (read `inngest-wiped-volume-verify.sh` and the re-arm scripts) is confirmed or the ADR says it is unconfirmed, and the runbook names who tells affected users after a total loss. The read-only record of whether the guard suites run as required checks (`infra/github/ruleset-ci-required.tf`) and whether CODEOWNERS covers `inngest-redis-luks.tf` and the guard files is written into the ADR; if they are not covered, that gap goes to #9927.
 - [ ] AC10. The revert recipe was executed once in a scratch detached worktree (`git revert --no-commit`, then the registered suite and baseline checks) and its output is recorded in the runbook section.
 
 ### Post-merge (automated read-back; no human step)
@@ -628,13 +687,13 @@ None. (Queried open `code-review` issues for every path above; no body names any
 
 - Given the HCL with all pins, when the new suite runs, then every must-PASS row is green (unit).
 - Given any Guard 1-3 mutation, when the suite runs, then the named row goes RED (unit).
-- Given a host-replace plan built from the real Phase 0 JSON with the volume at no-op, when the gate library is replayed, then PASS (unit).
+- Given a host-replace plan built from the Phase 0 projection with the volume at no-op, when the gate library is replayed, then PASS (unit).
 - Given the same plan with the volume `update`, when replayed, then ABORT luks_volume_touched (unit).
 - API verify (read-only, post-apply): the wrapped GET of `/v1/volumes/106903269` with the read-only token expects `protection.delete` true (it reads false today, verified 2026-10-10).
 
 ## Success Metrics
 
-Zero plans on any path can destroy, replace or forget the four addresses or the two parents; the sanctioned replace still plans; the live volume reads `protection.delete=true`; the register and ADR no longer say protection is future work.
+Zero CI plans can destroy, replace or forget the sole-copy addresses or the two parents; the sanctioned replace still plans; the live volume reads `protection.delete=true` (a defence against mistaken deletes, not against a holder of the read/write token); the register and ADR no longer say protection is future work.
 
 ## Rollback
 
