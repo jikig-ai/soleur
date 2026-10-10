@@ -683,6 +683,81 @@ STUB
   if grep -qF 'REACH=recovered' <<<"$STEP_OUT"; then
     ok "#7104 P0-B: a genuine self-heal still reaches the recovered arm (the new arms did not steal it)"
   else bad "#7104 P0-B: the recovered path now alerts as '${STEP_OUT//$'\n'/ }'"; fi
+
+  # --- #9597 / ADR-280: A REFUSED CREDENTIAL IS NOT A LISTENER OUTAGE -----------------------
+  #
+  # infra-config-verify.sh refuses a malformed deploy-webhook credential BEFORE any request: it makes
+  # zero requests, truncates the status file and writes `credential_refused=true`. The alert step
+  # would then read an EMPTY frame and file the `unreachable` P1 ("the listener may be down", whose
+  # remedy is the OPPOSITE: -replace the handler bootstrap). The step maps the output to the
+  # `ungraded` class ahead of the empty-frame arm. The producer side is pinned by the I12 rows of
+  # the verify suite and the reference count by G1_EXPECTED_REFERENCES; this is the only place the
+  # CONSUMER arm is executed. Mutants measured on a scratch workflow copy: arm deleted, the literal
+  # compared against "yes", the arm moved after the empty-frame arm -- each must fail rows (1)-(4)
+  # below by name.
+  #
+  # (1)-(4) The refusal, with NO frame (the state the producer leaves): ungraded, with the refusal's
+  # own text, and not the listener-down class.
+  drive_step failure success "" CREDENTIAL_REFUSED=true
+  CASES=$((CASES + 1))
+  if grep -qF 'REACH=ungraded' <<<"$STEP_OUT"; then
+    ok "#9597 (1): a refused credential with no frame alerts in the UNGRADED mode"
+  else bad "#9597 (1): a refused credential alerted as '${STEP_OUT//$'\n'/ }' — it must be ungraded"; fi
+  CASES=$((CASES + 1))
+  if grep -qF 'REACH=unreachable' <<<"$STEP_OUT" || grep -qF 'listener may be down' <<<"$STEP_OUT"; then
+    bad "#9597 (2): a refused credential was filed as a listener outage — the original misfile, whose remedy is the opposite one (log=${STEP_OUT//$'\n'/ })"
+  else ok "#9597 (2): a refused credential is not filed as a listener outage"; fi
+  CASES=$((CASES + 1))
+  if grep -qF 'REFUSED a deploy-webhook credential' <<<"$STEP_OUT" && grep -qF 'made NO request' <<<"$STEP_OUT"; then
+    ok "#9597 (3): the detail is the refusal's own text (names the refusal and that no request was made)"
+  else bad "#9597 (3): the refusal detail is not the credential-refused text (log=${STEP_OUT//$'\n'/ })"; fi
+  CASES=$((CASES + 1))
+  if [[ "$STEP_RC" -eq 0 ]] && ! grep -qF 'never ran' <<<"$STEP_OUT"; then
+    ok "#9597 (4): the refusal arm exits 0 and does not borrow the gate-never-ran story"
+  else bad "#9597 (4): the refusal arm exited rc=$STEP_RC or claimed the gate never ran (log=${STEP_OUT//$'\n'/ })"; fi
+
+  # (5) CONVERSE: the arm is not "always ungraded". The same no-frame state with the output empty
+  # (every run that did not refuse) or false still files the listener-down class.
+  drive_step failure success "" CREDENTIAL_REFUSED=
+  CASES=$((CASES + 1))
+  if grep -qF 'REACH=unreachable' <<<"$STEP_OUT" && ! grep -qF 'REFUSED a deploy-webhook credential' <<<"$STEP_OUT"; then
+    ok "#9597 (5a): an EMPTY credential_refused output with no frame still files the unreachable class"
+  else bad "#9597 (5a): empty CREDENTIAL_REFUSED with no frame alerted as '${STEP_OUT//$'\n'/ }'"; fi
+  drive_step failure success "" CREDENTIAL_REFUSED=false
+  CASES=$((CASES + 1))
+  if grep -qF 'REACH=unreachable' <<<"$STEP_OUT" && ! grep -qF 'REFUSED a deploy-webhook credential' <<<"$STEP_OUT"; then
+    ok "#9597 (5b): CREDENTIAL_REFUSED=false with no frame still files the unreachable class"
+  else bad "#9597 (5b): CREDENTIAL_REFUSED=false with no frame alerted as '${STEP_OUT//$'\n'/ }'"; fi
+
+  # (6) The compare is the LITERAL the producer emits (`credential_refused=true`): any other spelling
+  # does not take the arm, so a comparison widened to a truthy-looking set, or a producer drifting to
+  # another literal, is caught by (1) and (6) from the two sides.
+  for _cr in True TRUE yes 1 " true" "true "; do
+    drive_step failure success "" "CREDENTIAL_REFUSED=$_cr"
+    CASES=$((CASES + 1))
+    if grep -qF 'REACH=unreachable' <<<"$STEP_OUT" && ! grep -qF 'REFUSED a deploy-webhook credential' <<<"$STEP_OUT"; then
+      ok "#9597 (6): CREDENTIAL_REFUSED='$_cr' does not take the refusal arm (literal compare against \"true\")"
+    else bad "#9597 (6): CREDENTIAL_REFUSED='$_cr' took the refusal arm or alerted as '${STEP_OUT//$'\n'/ }'"; fi
+  done
+
+  # (7) PRECEDENCE, asserted as found: the refusal arm sits ahead of the frame-parse arm and ahead of
+  # every frame-derived arm, so `true` wins even over a parseable frame with a failed file. That is
+  # not a defect: the output is written only by the verify run that REFUSED, in the same attempt
+  # that truncated the status file and made no request, and that step exits 1 (pass 2 is then
+  # skipped), so a refusal and a real frame cannot coexist in one job. Pinning it makes the
+  # ordering explicit: a reorder that lets a frame outrank the refusal is a decision to take, not an
+  # accident to make.
+  drive_step failure success '{"fatal_line":0,"fatal_rc":0,"fatal_cmd":"","files_written":18,"files_total":19,"files":[{"file":"/etc/webhook/hooks.json","status":"failed","reason":"hooks_json_unparseable"}],"restarts":[]}' CREDENTIAL_REFUSED=true
+  CASES=$((CASES + 1))
+  if grep -qF 'REACH=ungraded' <<<"$STEP_OUT" && ! grep -qF 'REACH=reachable' <<<"$STEP_OUT" && ! grep -qF 'hooks_json_unparseable' <<<"$STEP_OUT"; then
+    ok "#9597 (7): the refusal outranks a parseable frame (ordering pinned: ungraded, no frame-derived text)"
+  else bad "#9597 (7): with credential_refused=true AND a parseable frame the step alerted as '${STEP_OUT//$'\n'/ }'"; fi
+  # and the same parseable frame WITHOUT the refusal still reaches the frame-derived arms.
+  drive_step failure success '{"fatal_line":0,"fatal_rc":0,"fatal_cmd":"","files_written":18,"files_total":19,"files":[{"file":"/etc/webhook/hooks.json","status":"failed","reason":"hooks_json_unparseable"}],"restarts":[]}' CREDENTIAL_REFUSED=
+  CASES=$((CASES + 1))
+  if grep -qF 'REACH=reachable' <<<"$STEP_OUT" && grep -qF 'hooks_json_unparseable' <<<"$STEP_OUT"; then
+    ok "#9597 (7b): the same frame without the refusal still reaches the frame-derived reachable arm"
+  else bad "#9597 (7b): the parseable frame without the refusal alerted as '${STEP_OUT//$'\n'/ }'"; fi
 fi
 
 # --- ACCOUNTING CONSERVATION (from #7575, kept through this merge) ------------------------
@@ -747,7 +822,7 @@ else
   bad "action-required routing is wrong:$ar_problems — a p1 without it reaches neither the operator digest nor the SLA clock, and the issue body's own 'reply on this issue' promise is addressed to a surface nobody reads"
 fi
 
-ALERT_MIN_ASSERTIONS=67
+ALERT_MIN_ASSERTIONS=81
 if [[ "$CASES" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$ALERT_MIN_ASSERTIONS" >&2

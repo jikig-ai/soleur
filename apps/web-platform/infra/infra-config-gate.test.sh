@@ -2077,7 +2077,10 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # and the backstop, the alert step and the post-apply summary each consume it so that
 # "the probe could not run" stops being indistinguishable from "the channel is down".
 # Three new env: refs on the gate chain, re-derived deliberately as this pin demands.
-G1_EXPECTED_REFERENCES=22
+# 22 -> 23 (#9597): the alert step reads the verify script's `credential_refused` output, so a refused
+# credential (which truncates the status file and made the alert read an empty frame as a dead
+# listener) maps to its `ungraded` arm. One new env: ref on the gate chain, re-derived deliberately.
+G1_EXPECTED_REFERENCES=23
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then
