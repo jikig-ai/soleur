@@ -69,12 +69,51 @@ type Words = string[];
 // ---------------------------------------------------------------- lexer
 
 function findParen(src: string, open: number): number {
-  // `src[open]` is "(". Returns the index of its matching ")", honouring quotes and backslashes.
+  // `src[open]` is "(". Returns the index of its matching ")", honouring quotes, backslashes and heredoc bodies
+  // (the apostrophe in `fix: handle user's flow` inside `$(cat <<'EOF' ... EOF)` must not unbalance the quotes).
   let depth = 0;
+  const pending: { delim: string; strip: boolean }[] = [];
   for (let i = open; i < src.length; i++) {
     const c = src[i];
     if (c === "\\") {
       i++;
+    } else if (c === "<" && src.startsWith("<<", i) && !src.startsWith("<<<", i)) {
+      let j = i + 2;
+      let strip = false;
+      if (src[j] === "-") {
+        strip = true;
+        j++;
+      }
+      while (src[j] === " " || src[j] === "\t") j++;
+      let delim = "";
+      const q = src[j];
+      if (q === "'" || q === '"') {
+        const e = src.indexOf(q, j + 1);
+        if (e < 0) throw new Unparseable("heredoc-delim");
+        delim = src.slice(j + 1, e);
+        j = e + 1;
+      } else {
+        const m = /^[A-Za-z0-9_.-]+/.exec(src.slice(j));
+        delim = m ? m[0] : "";
+        j += delim.length;
+      }
+      if (delim) pending.push({ delim, strip });
+      i = j - 1;
+    } else if (c === "\n" && pending.length) {
+      i++;
+      while (pending.length) {
+        const h = pending.shift()!;
+        for (;;) {
+          if (i >= src.length) break;
+          let e = src.indexOf("\n", i);
+          if (e < 0) e = src.length;
+          let line = src.slice(i, e);
+          i = Math.min(e + 1, src.length);
+          if (h.strip) line = line.replace(/^\t+/, "");
+          if (line === h.delim) break;
+        }
+      }
+      i--;
     } else if (c === "'") {
       const e = src.indexOf("'", i + 1);
       if (e < 0) throw new Unparseable("sq");
@@ -119,9 +158,9 @@ function findBrace(src: string, open: number): number {
 }
 
 function decodeAnsiC(raw: string): string {
-  return raw.replace(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{1,4}|.)/g, (_m, g: string) => {
+  return raw.replace(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|.)/g, (_m, g: string) => {
     if (g[0] === "x" && g.length > 1) return String.fromCharCode(parseInt(g.slice(1), 16));
-    if (g[0] === "u" && g.length > 1) return String.fromCharCode(parseInt(g.slice(1), 16));
+    if ((g[0] === "u" || g[0] === "U") && g.length > 1) return String.fromCodePoint(parseInt(g.slice(1), 16));
     if (/^[0-7]+$/.test(g)) return String.fromCharCode(parseInt(g, 8));
     switch (g) {
       case "n":
@@ -375,6 +414,24 @@ function nestedScripts(words: Words): string[] {
       scripts.push(words.slice(i + 1).join(" "));
       continue;
     }
+    if (base === "env") {
+      // `env -S 'git push -f origin main'` splits its operand into a command line (the hook asks `unparsed-wrapper`).
+      for (let j = i + 1; j < words.length; j++) {
+        const a = words[j];
+        if (a === "--split-string") {
+          if (j + 1 < words.length) scripts.push(words[j + 1]);
+        } else if (a.startsWith("--split-string=")) {
+          scripts.push(a.slice("--split-string=".length));
+        } else {
+          const m = /^-[iv0]*S(.*)$/.exec(a);
+          if (m) {
+            if (m[1]) scripts.push(m[1]);
+            else if (j + 1 < words.length) scripts.push(words[j + 1]);
+          }
+        }
+      }
+      continue;
+    }
     if (!SHELLS.has(base)) continue;
     let sawC = false;
     for (let j = i + 1; j < words.length; j++) {
@@ -414,12 +471,15 @@ type Lazy = () => Promise<ProtectedBranches>;
 
 const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const TF_ENV_RE = /^TF_CLI_ARGS[A-Za-z0-9_]*=.*destroy/i;
-const GLOB_OR_VAR_RE = /[*?[$`]/;
-// Commands that print or search text: a `git`/`terraform` word after them is data, not a command.
+const GLOB_OR_VAR_RE = /[*?[{$`]/;
+// Commands that print or search text: a `git`/`terraform` word after them is data, not a command. Applied ONLY to the
+// command word itself (the first non-assignment word): the same word as a wrapper's option value (`env -C test git ...`,
+// `sudo -u file git ...`) is skipped, not a stop. Exec-capable commands (`find -exec`, `sed .../e`, `awk system()`,
+// `tee >(...)`) are deliberately NOT in this set.
 const NON_EXEC = new Set([
   "echo", "printf", "cat", "grep", "egrep", "fgrep", "rg", "ag", "man", "less", "more", "head", "tail", "ls", "cd",
   "pushd", "popd", "mkdir", "cp", "mv", "touch", "wc", "sort", "uniq", "diff", "cmp", "stat", "file", "which", "whereis",
-  "type", "test", "[", "sed", "awk", "find", "tee", "basename", "dirname", "realpath", "readlink",
+  "type", "test", "[", "basename", "dirname", "realpath", "readlink",
 ]);
 
 function match(ruleSuffix: string, family: DestroyFamily, words: Words): DestroyMatch {
@@ -581,7 +641,7 @@ async function analyzeGh(args: Words, words: Words, lazy: Lazy): Promise<Destroy
     } else if (a.startsWith("-") && a.length > 1) {
       const ch = a[1];
       const rest = a.slice(2);
-      if (ch === "X") method = rest || tail[++k] || "";
+      if (ch === "X") method = (rest.startsWith("=") ? rest.slice(1) : rest) || tail[++k] || "";
       else if (ch === "f" || ch === "F") {
         const v = rest || tail[++k] || "";
         if (GH_FORCE_FIELD_RE.test(v)) forceField = true;
@@ -591,7 +651,10 @@ async function analyzeGh(args: Words, words: Words, lazy: Lazy): Promise<Destroy
     }
   }
   method = method.toUpperCase();
-  const path = endpoint.replace(/^\/+/, "").replace(/\?.*$/, "");
+  const path = endpoint
+    .replace(/^https?:\/\/[^/]+\/(?:api\/v3\/)?/i, "")
+    .replace(/^\/+/, "")
+    .replace(/\?.*$/, "");
   const refMatch = /^repos\/[^/]+\/[^/]+\/git\/refs\/(.*)$/i.exec(path);
   const repoMatch = /^repos\/[^/]+\/[^/]+\/?$/i.test(path);
   if (method === "DELETE" && repoMatch) return match("gh-repo-delete", "gh-destroy", words);
@@ -615,6 +678,7 @@ async function analyzeGh(args: Words, words: Words, lazy: Lazy): Promise<Destroy
 
 async function analyzeSimple(words: Words, lazy: Lazy): Promise<DestroyMatch | null> {
   if (words.some((w) => TF_ENV_RE.test(w))) return match("terraform-destroy", "terraform-destroy", words);
+  let atCommandWord = true;
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     if (ASSIGN_RE.test(w)) continue;
@@ -622,17 +686,21 @@ async function analyzeSimple(words: Words, lazy: Lazy): Promise<DestroyMatch | n
     if (base === "git") return analyzeGit(words.slice(i + 1), words, lazy);
     if (base === "terraform" || base === "tofu") return analyzeTerraform(words.slice(i + 1), words);
     if (base === "gh") return analyzeGh(words.slice(i + 1), words, lazy);
-    if (NON_EXEC.has(base)) return null;
+    if (atCommandWord && NON_EXEC.has(base)) return null;
+    atCommandWord = false;
   }
   return null;
 }
 
+// Raw-scan `destroy` must sit after a terraform/tofu word (no pipe, `;` or `&` between): a PR body or a source file that
+// merely says `destroy` (session.destroy(), a Rails action) is not a teardown, and a card for it trains click-through.
+const TF_DESTROY_NEAR_RE = /\b(?:terraform|tofu)\b[^|;&]*\bdestroy\b/i;
 const RAW_SCAN_TRIGGER_RE = /<<|\|&?\s*(?:sudo\s+)?(?:ba|z|da|k|a)?sh\b|\bxargs\b/i;
 const FORCE_MARK_RE = /(?:^|\s)(?:-[A-Za-z]*[fd][A-Za-z]*|--force\S*|--delete|--mirror|\+\S+|:\S+)(?=\s|$)/;
 
 async function rawScan(command: string, lazy: Lazy): Promise<boolean> {
   if (!RAW_SCAN_TRIGGER_RE.test(command)) return false;
-  if (/\bdestroy\b/i.test(command)) return true;
+  if (TF_DESTROY_NEAR_RE.test(command)) return true;
   if (/\bpush\b/i.test(command) && FORCE_MARK_RE.test(command)) {
     const resolved = await lazy();
     if (!resolved.authoritative) return true;

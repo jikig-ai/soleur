@@ -278,6 +278,24 @@ describe("card text (CPO4-R2, CLO C3/C4, AC-20)", () => {
     expect(q).toMatch(/runs the whole command/i);
   });
 
+  test("a default-branch match says the history cannot be recovered; an unreadable command is titled as such and shows the keyword it matched", async () => {
+    const a = buildContext();
+    await run(a.ctx, FORCE_MAIN);
+    expect(gateFrames(a.deps)[0].question).toMatch(/cannot be undone/);
+    const b = buildContext();
+    await run(b.ctx, `git push -f "origin ${"x".repeat(400)} main`); // unterminated quote: fail-closed-keyword, no segment
+    const q: string = gateFrames(b.deps)[0].question;
+    expect(q.startsWith("Command paused for your approval")).toBe(true);
+    expect(q).not.toMatch(/^Destructive command/);
+    expect(q).toMatch(/Around the word that triggered this: `.*push/);
+  });
+
+  test("MUST_ASK_CLASSIFIERS is the lane's one-member classifier list (ruling; #9388 is the second consumer)", async () => {
+    const lane = await import("../server/destroy-ask-lane");
+    const cls = await import("../server/destroy-ask-classifier");
+    expect(lane.MUST_ASK_CLASSIFIERS).toEqual([cls.classifyDestroyFamily]);
+  });
+
   test("the card is neutral about who owns the repository", async () => {
     const { ctx, deps } = buildContext({ isOwner: false });
     await run(ctx, FORCE_MAIN);
@@ -389,6 +407,17 @@ describe("telemetry (AC-8, CLO C5)", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0][1].extra.leadingToken.length).toBeLessThanOrEqual(32);
     expect(JSON.stringify(calls[0][1])).not.toContain("make destroy-docs");
+  });
+
+  test("near-miss never ships an env assignment, a path or a token-shaped first word (CLO C5)", async () => {
+    const { ctx } = buildContext();
+    for (const cmd of [`GH_TOKEN=${CANARY} make destroy`, `/home/alice/secret-project/run destroy`, `${CANARY}-tool destroy`]) await run(ctx, cmd);
+    const calls = mockWarnSilentFallback.mock.calls.filter((c) => c[1]?.op === "destroy-classifier-near-miss");
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const shipped = JSON.stringify(calls);
+    expect(shipped).not.toContain(CANARY);
+    expect(shipped).not.toContain("alice");
+    expect(calls.map((c) => c[1].extra.leadingToken)).toEqual(expect.arrayContaining(["make", "<other>"]));
   });
 
   test("a gh delete and a graphql mutation are near-miss only: no card", async () => {

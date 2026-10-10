@@ -11,10 +11,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-const { mockReportSilentFallback } = vi.hoisted(() => ({ mockReportSilentFallback: vi.fn() }));
+const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+  mockWarnSilentFallback: vi.fn(),
+}));
 vi.mock("../server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
-  warnSilentFallback: vi.fn(),
+  warnSilentFallback: mockWarnSilentFallback,
 }));
 
 import {
@@ -67,10 +70,18 @@ describe("resolveProtectedBranches union rule (AC-3)", () => {
     })();
     expect(r.authoritative).toBe(false);
     expect([...r.names].sort()).toEqual(["main", "master"]);
+    // null first arg, never the Error (#8629: the pino mirror would capture a passed Error first and Sentry would drop
+    // the tagged capture); the error class rides in `extra`.
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ feature: "cc-permissions", op: "default-branch-resolve" }),
+      null,
+      expect.objectContaining({ feature: "cc-permissions", op: "default-branch-resolve", extra: expect.objectContaining({ reason: "api-error", errName: "Error" }) }),
     );
+  });
+
+  test("no installation is an expected state: warned, not reported as an error", async () => {
+    await createProtectedBranchResolver(input({ installationId: null }), { fetchDefaultBranch: vi.fn() })();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "default-branch-resolve" }));
   });
 
   test("no installation id or no connected repo: unresolved, no API call", async () => {

@@ -76,7 +76,9 @@ describe("a thrown classifier error is an ask (AC-7)", () => {
     expect(deps.abortableReviewGate.mock.calls[0][4]).toEqual(["Approve", "Reject"]);
     const call = mockReportSilentFallback.mock.calls.find((c) => c[1]?.op === "destroy-classifier-error");
     expect(call).toBeDefined();
-    expect(call![1]).toMatchObject({ feature: "cc-permissions", extra: { ruleId: "hosted-destroy-ask:classifier-error" } });
+    // null first arg, never the Error (#8629): the pino mirror would capture a passed Error first and drop this tagged event.
+    expect(call![0]).toBeNull();
+    expect(call![1]).toMatchObject({ feature: "cc-permissions", extra: { ruleId: "hosted-destroy-ask:classifier-error", errName: "Error" } });
     expect(JSON.stringify([mockReportSilentFallback.mock.calls, mockWarnSilentFallback.mock.calls, mockLog.warn.mock.calls])).not.toContain("SECRET_ARG_77");
   });
 });

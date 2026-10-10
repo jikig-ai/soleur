@@ -16,7 +16,7 @@
 import { constants as fsConstants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 import type { ProtectedBranches } from "./destroy-ask-classifier";
 
 export const POSITIVE_TTL_MS = 10 * 60_000;
@@ -131,12 +131,16 @@ export function createProtectedBranchResolver(
       }
     }
     if (!authoritative) {
-      // Never the branch name, the command or a path: only the failure class.
-      reportSilentFallback(failure, {
+      // Never the branch name, the command or a path: only the failure class. null first arg, never the Error: the pino
+      // mirror captures a passed Error first and Sentry drops the tagged second capture (#8629); an API error's message
+      // can also carry the `/repos/<owner>/<repo>` path. A workspace with no GitHub installation is an expected state
+      // (warn); an API failure is not (error).
+      const report = failure === null ? warnSilentFallback : reportSilentFallback;
+      report(null, {
         feature: "cc-permissions",
         op: "default-branch-resolve",
         message: `default branch unresolved (${reason}); every force, delete or mirror push will ask`,
-        extra: { reason },
+        extra: { reason, errName: failure instanceof Error ? failure.name : undefined },
       });
     }
     return { names, authoritative };

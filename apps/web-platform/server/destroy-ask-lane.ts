@@ -23,8 +23,18 @@ import {
 
 const log = createChildLogger("permission");
 
+/**
+ * The lane's classifier list (CTO ruling, "Where the code goes" item 5): this classifier is its only member, and
+ * ADR-264 / #9388 adds a second. The match type is `DestroyMatch`; a second member must either return the same shape or
+ * generalise `DestroyMatch`, `causeLine` and the `hosted-destroy-ask` telemetry op together (they are destroy-specific).
+ */
+type MustAskClassifier = (command: string, resolve: ResolveProtected) => Promise<DestroyMatch | null>;
+export const MUST_ASK_CLASSIFIERS: readonly MustAskClassifier[] = [classifyDestroyFamily];
+
 const PER_CTX_BUDGET = 32;
 const LEADING_TOKEN_MAX = 32;
+/** A word that looks like a credential (vendor prefix, or a long digit run) is never shipped as a command name. */
+const TOKEN_SHAPED_RE = /^(gh[pousr]_|github_pat_|sk-|xox[a-z]-|AKIA|eyJ)|\d{6,}/i;
 const PREVIEW_MAX = 200;
 
 type LaneState = { askEmitted: number; nearSeen: Set<string>; nearEmitted: number };
@@ -57,18 +67,24 @@ export interface DestroyLaneContext {
  * near-miss event). Never throws.
  */
 export async function detectDestroyAsk(lane: DestroyLaneContext, command: string): Promise<DestroyMatch | null> {
-  const match = await classifyDestroyFamily(command, lane.resolveProtectedBranches ?? (async () => UNRESOLVED));
+  let match: DestroyMatch | null = null;
+  for (const classify of MUST_ASK_CLASSIFIERS) {
+    match = await classify(command, lane.resolveProtectedBranches ?? (async () => UNRESOLVED));
+    if (match) break;
+  }
   const state = stateFor(lane.key);
   if (!match) {
     emitNearMiss(state, command);
     return null;
   }
   if (match.error !== undefined) {
-    reportSilentFallback(match.error, {
+    // null first arg, never the Error: the pino mirror captures a passed Error first and Sentry drops the tagged second
+    // capture (#8629), which would leave `op:destroy-classifier-error` unfindable. The error class lives in `extra`.
+    reportSilentFallback(null, {
       feature: "cc-permissions",
       op: "destroy-classifier-error",
       message: "destroy classifier threw; failing toward ask",
-      extra: { ruleId: match.ruleId },
+      extra: { ruleId: match.ruleId, errName: match.error instanceof Error ? match.error.name : "unknown" },
     });
   }
   log.warn(
@@ -102,10 +118,23 @@ export async function detectDestroyAsk(lane: DestroyLaneContext, command: string
   return match;
 }
 
+/**
+ * The command word only, never an env assignment (`GH_TOKEN=ghp_...`) or a path: the first token of an agent's command
+ * routinely carries a credential or a username (CLO C5). Anything that is not a plain command name is `<other>`.
+ */
+function safeLeadingToken(command: string): string {
+  for (const word of command.trim().split(/\s+/)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+    const plain = /^[a-z0-9._-]+$/i.test(word) && word.length <= LEADING_TOKEN_MAX;
+    return plain && !TOKEN_SHAPED_RE.test(word) ? word : "<other>";
+  }
+  return "<other>";
+}
+
 function emitNearMiss(state: LaneState, command: string): void {
   const kind = destroyNearMiss(command);
   if (!kind) return;
-  const leadingToken = command.trim().split(/\s+/)[0].slice(0, LEADING_TOKEN_MAX);
+  const leadingToken = safeLeadingToken(command);
   const key = `${kind}:${leadingToken}`;
   if (state.nearEmitted >= PER_CTX_BUDGET || state.nearSeen.has(key)) return;
   state.nearSeen.add(key);
@@ -158,6 +187,13 @@ function causeLine(match: DestroyMatch): string {
   }
 }
 
+/** A window around the first `destroy` or `push` so a keyword past character 200 is still on the card. */
+function keywordWindow(command: string): string {
+  const at = command.search(/destroy|push/i);
+  const start = Math.max(0, (at < 0 ? 0 : at) - PREVIEW_MAX / 2);
+  return `${start > 0 ? "…" : ""}${preview(command.slice(start, start + PREVIEW_MAX))}`;
+}
+
 function preview(text: string): string {
   const redacted = redactCommandForDisplay(text);
   return redacted.length > PREVIEW_MAX ? `${redacted.slice(0, PREVIEW_MAX)}…` : redacted;
@@ -169,8 +205,18 @@ function preview(text: string): string {
  * and nothing about other commands (CLO C4).
  */
 export function buildDestroyAskQuestion(match: DestroyMatch, command: string): string {
-  const lines = ["Destructive command - paused for your approval", "", causeLine(match), ""];
+  const unreadable = match.family === "fail-closed";
+  const lines = [
+    unreadable ? "Command paused for your approval" : "Destructive command - paused for your approval",
+    "",
+    causeLine(match),
+  ];
+  if (match.family === "git-default-branch" || match.ruleId.endsWith("gh-ref-delete-default")) {
+    lines.push("This can erase the branch's history on GitHub and cannot be undone.");
+  }
+  lines.push("");
   if (match.segment) lines.push(`Matched: \`${preview(match.segment)}\``);
+  else if (command.length > PREVIEW_MAX) lines.push(`Around the word that triggered this: \`${keywordWindow(command)}\``);
   if (!match.segment || match.segment !== command) lines.push(`Full command (first ${PREVIEW_MAX} characters): \`${preview(command)}\``);
   lines.push(
     "",

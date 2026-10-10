@@ -1434,6 +1434,141 @@
    "nearMiss": true,
    "note": "residual: GraphQL / other gh deletes are near-miss telemetry only (CPO4-R1 scope lock)",
    "hookAsks": false
+  },
+  {
+   "cmd": "env -C test git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "env -u cat git push -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "env -S 'git push -f origin main'",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "env -iS \"git push --force origin master\"",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "git push -f origin {main,x}",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: brace expansion in the destination (the hook does not decide git destinations spelled with braces); fail toward ask"
+  },
+  {
+   "cmd": "git push --force origin ma{in,}",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: brace expansion in the destination (the hook does not decide git destinations spelled with braces); fail toward ask"
+  },
+  {
+   "cmd": "git push origin +{main,dev}",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: brace expansion in the destination (the hook does not decide git destinations spelled with braces); fail toward ask"
+  },
+  {
+   "cmd": "find . -exec git push -f origin main \\;",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: find -exec (exec-capable wrapper; the hook does not unwrap find)"
+  },
+  {
+   "cmd": "find . -maxdepth 0 -execdir git push --force origin main \\;",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": false,
+   "note": "hostedOnly: find -exec (exec-capable wrapper; the hook does not unwrap find)"
+  },
+  {
+   "cmd": "git $'\\U00000070ush' -f origin main",
+   "expect": "ask",
+   "rule": "git-force-default",
+   "hookAsks": true
+  },
+  {
+   "cmd": "env --split-string='terraform destroy'",
+   "expect": "ask",
+   "rule": "terraform-destroy",
+   "hookAsks": true
+  },
+  {
+   "cmd": "gh api -X=DELETE repos/o/r/git/refs/heads/main",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "gh api -X DELETE repos/o/r/git/refs/heads/{main,x}",
+   "expect": "ask",
+   "rule": "gh-ref-delete-default",
+   "hookAsks": false,
+   "note": "hostedOnly: gh family (CPO4-R4); outside the hook's D1"
+  },
+  {
+   "cmd": "git commit -m \"$(cat <<'EOF'\nfix: handle user's destroy flow\nEOF\n)\" && git push -u origin feat-x",
+   "expect": "pass",
+   "rule": null,
+   "note": "routine commit/PR/file-write: heredoc bodies are data (an odd apostrophe or the word destroy must not ask)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh pr create --title 'x' --body \"$(cat <<'EOF'\n## Summary\n- push the branch; handle the user's token\nEOF\n)\"",
+   "expect": "pass",
+   "rule": null,
+   "note": "routine commit/PR/file-write: heredoc bodies are data (an odd apostrophe or the word destroy must not ask)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "cat > app/x.ts <<'EOF'\nexport function destroy(){}\nEOF",
+   "expect": "pass",
+   "rule": null,
+   "note": "routine commit/PR/file-write: heredoc bodies are data (an odd apostrophe or the word destroy must not ask)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "grep -rl destroy src | xargs wc -l",
+   "expect": "pass",
+   "rule": null,
+   "note": "routine commit/PR/file-write: heredoc bodies are data (an odd apostrophe or the word destroy must not ask)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "git commit -F- <<'EOF'\nfix: the user's push flow\nEOF",
+   "expect": "pass",
+   "rule": null,
+   "note": "routine commit/PR/file-write: heredoc bodies are data (an odd apostrophe or the word destroy must not ask)",
+   "hookAsks": false
+  },
+  {
+   "cmd": "gh pr create --body \"$(cat <<'EOF'\n- adds a destroy endpoint\nEOF\n)\"",
+   "expect": "pass",
+   "rule": null,
+   "nearMiss": true,
+   "note": "PR body containing the word destroy",
+   "hookAsks": false
   }
  ]
 }

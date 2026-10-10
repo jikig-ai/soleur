@@ -721,7 +721,8 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
               destroyOptions,
             );
           } catch {
-            // Timeout or abort: fail closed (deny), never an allow.
+            // review: swallowed — abortableReviewGate rejects ONLY on timeout or abort (review-gate.ts), so every rejection
+            // here is an expiry. Fail closed (deny), never an allow; the outcome line below records it.
             destroySelection = null;
           } finally {
             await deps.updateConversationStatus(ctx.conversationId, "active");
