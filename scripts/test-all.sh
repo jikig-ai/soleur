@@ -5656,6 +5656,7 @@ if want_scripts; then
   # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
   run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh
   run_suite "scripts/dogfood/grok-measure" bash scripts/dogfood/grok-measure.test.sh
+  run_suite "scripts/dogfood/mistral-measure" bash scripts/dogfood/mistral-measure.test.sh
   # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
   # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
   # infra-validation.yml dispatches only apps/web-platform/infra/*.test.sh (via the runner glob). Without this line
