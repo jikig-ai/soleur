@@ -733,7 +733,7 @@ ok "$([ -n "$_l_mi" ] && [ -n "$_l_wbu" ] && [ "$_l_wbu" -gt "$_l_mi" ]; echo $?
 VEC_BLOCK=$(awk '/^\[sources\.host_scripts_journald\]/{f=1} f{print} f&&/^include_matches\.SYSLOG_IDENTIFIER/{l=1} l&&/\]/{exit}' "$WBU_VECTOR")
 n=$(printf '%s\n' "$VEC_BLOCK" | grep -c '"workspaces-luks-reopen"' || true)
 ok "$([ "$n" -eq 1 ]; echo $?)" "V1 vector.toml include_matches.SYSLOG_IDENTIFIER carries \"workspaces-luks-reopen\" exactly once ($n)"
-ok "$(printf '%s\n' "$VEC_BLOCK" | grep -q '"luks-monitor"'; echo $?)" "V2 the same list still carries the sibling luks-monitor tag (extraction sanity)"
+ok "$(printf '%s\n' "$VEC_BLOCK" | grep -c >/dev/null '"luks-monitor"'; echo $?)" "V2 the same list still carries the sibling luks-monitor tag (extraction sanity)"
 
 # systemd-analyze verify (present on systemd hosts; a failure here is a verdict, not a skip).
 # The verify rc is checked SEPARATELY from the filtered output — a nonzero rc with
@@ -1191,7 +1191,7 @@ for c in $STUB_NAMES; do
   r=$(PATH="$SCRATCH/bin:/usr/bin:/bin" command -v "$c" 2>/dev/null || true)
   [ "$r" = "$SCRATCH/bin/$c" ] || { printf '[FATAL] instrument: %s resolves to %s, not the stub — refusing to run (rc 2)\n' "$c" "${r:-nothing}" >&2; exit 2; }
 done
-ok "$(PATH="$SCRATCH/bin:/usr/bin:/bin" command -v systemd-escape | grep -qx '/usr/bin/systemd-escape'; echo $?)" \
+ok "$(PATH="$SCRATCH/bin:/usr/bin:/bin" command -v systemd-escape | grep -cx >/dev/null '/usr/bin/systemd-escape'; echo $?)" \
   "H1 systemd-escape resolves to the REAL binary (deliberately unstubbed — a stub would test itself)"
 
 # Fixture runner. run_script copies the script-under-test into the fixture dir so the

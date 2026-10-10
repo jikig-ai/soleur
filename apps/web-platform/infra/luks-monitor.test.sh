@@ -872,7 +872,7 @@ if have '^\[ "\$\{LUKS_MONITOR_TEST_SEAM:-0\}" = "1" \] && BOOT_ENV_FILE="\$\{LU
 else
   no "K11b the boot env file override is not gated on the test seam"
 fi
-if ! grep -vE '^[[:space:]]*#' "$PROBE" | grep -qE '(^|[[:space:];&|(])(source|\.)[[:space:]]+"?\$\{?BOOT_ENV_FILE'; then
+if ! grep -vE '^[[:space:]]*#' "$PROBE" | grep -cE >/dev/null '(^|[[:space:];&|(])(source|\.)[[:space:]]+"?\$\{?BOOT_ENV_FILE'; then
   ok "K11c the monitor never sources the boot env file"
 else
   no "K11c the monitor sources the boot env file"
