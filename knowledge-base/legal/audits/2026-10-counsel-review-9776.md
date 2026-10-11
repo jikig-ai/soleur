@@ -43,6 +43,11 @@ Under the Soleur-as-tenant-zero v1 posture the CLO agent performs this review; t
 | "always blocks clearly dangerous commands" (old banner) | Force-push and `terraform destroy` are dangerous and not blocked | FALSE — removed |
 | "Until a stricter check ships" | The #9776 ask-gate has not shipped at the date of this version | TRUE at date, time-bound (C4 follow-up) |
 
+> **Superseded in part on the merge of the #9776 ask-gate PR (see `2026-10-counsel-review-9776-ask-gate.md`):** the row above ("Until a stricter check
+> ships") is superseded by the 2026-10-10 CLO ruling. The ask-gate ships in that PR, the banner and the enable-confirm paragraph lose the "Until a stricter
+> check ships ... without asking" sentence, and the row's verdict changes from "TRUE at date" to "no longer the shipped state". This marker is
+> conditional: it takes effect on the merge of that PR, not before. Every other row, and the 2026-10-08 ack reset, are unchanged.
+
 ## Questions 1-6
 
 1. **Tier 1 MINOR (2.5.1 -> 2.6.0) — PASS.** AUP §5.7 and T&C §3a.7/§10.4 add a disclaimer that the command-safety layer will not stop, or ask first about, a destructive remote or infrastructure command, and withdraw a mitigation claim. That is new disclaimer text and a narrowing of the user's expectations under `tc-version-bump-policy.md` Tier 1; it is consistent with the prior direction of the document, so MINOR. The bump forces `/accept-terms` re-acceptance.

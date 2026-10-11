@@ -118,14 +118,17 @@ export function BashAutonomousToggle({
             Turn autonomous mode back on?
           </span>
           <p className="text-xs text-soleur-text-secondary">
-            The Concierge will run any non-blocked command without asking. The
-            blocklist (curl, wget, sudo, …) still applies, but no blocklist is
-            perfect. Until a stricter check ships, that includes a force-push
-            over your repository&apos;s default branch (which can erase its
-            history on GitHub) and infrastructure teardown such as terraform
-            destroy. Other commands that look safe could still change or delete
-            files in this workspace. You can watch each step in the chat. Only
-            turn this on for repos and accounts you trust.
+            The Concierge will run non-blocked commands without asking, except
+            that it pauses to ask before common forms of a force-push over, or
+            deletion of, your repository&apos;s default branch (which can erase
+            its history on GitHub), and before terraform destroy. The blocklist
+            (curl, wget, sudo, …) still applies, but no blocklist is perfect.
+            The pauses do not recognise every way of writing those commands, or
+            every other way to delete a repository or tear down infrastructure,
+            so such a command can still run without asking. Other commands that
+            look safe could still change or delete files in this workspace. You
+            can watch each step in the chat. Only turn this on for repos and
+            accounts you trust.
           </p>
           <div className="flex justify-end gap-2">
             <Button

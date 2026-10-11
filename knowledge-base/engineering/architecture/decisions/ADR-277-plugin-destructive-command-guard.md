@@ -73,7 +73,7 @@ Each rejected option is rejected once, here. Other sites point at this list.
 | A local decision log with rotation and a notice marker | Cut at plan review: it writes into the customer's home directory, records no command text (so a false positive cannot be diagnosed from it) and buys none of P1-P4. The harness transcript on the customer's machine records each PreToolUse hook's stdout, stderr and exit code as `hook_success` rows (Measurements); the record of an answered Yes/No prompt is unmeasured |
 | `exec` (Devin) coverage with ask-as-deny | Ships a behaviour nobody measured and a dead end for a legitimate `terraform destroy` where the person has no shell to set the kill switch. Devin's `ask` is unmeasured and its envelopes carry no `.cwd` |
 | A `drop database` / `dropdb` SQL rule | A fourth class neither the spec nor the charter names, with its own stubs, rows and raw-scan patterns. A follow-up candidate |
-| Enabling the guard in hosted sessions | The hosted `ask` path is unmeasured, and hosted Bash is not gated for these commands in the default mode (D8 states what it is gated by). Disabled there by D8; enablement is a follow-up |
+| Enabling the guard in hosted sessions | The hosted `ask` path is unmeasured, and hosted Bash is not gated for these commands in the default mode (D8 states what it is gated by). Disabled there by D8; enablement is a follow-up. *Superseded 2026-10-10 (#9776, [ADR-284](./ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md)): hosted Bash now asks for the recognised destroy forms through a must-ask lane in `canUseTool`; enabling this hook there stays a later consolidation (ADR-284, Option B).* |
 | A keyword-only (or quote-normalised) substring prefilter | Buys latency but opens a gap for spellings it cannot see. Replaced by the gap-free prefilter in D7 |
 | Reading `permission_mode` to special-case `bypassPermissions` | Buys nothing: `ask` is measured to hold under it |
 
@@ -160,6 +160,10 @@ reference for the rule table; this section records the decisions and why.
   `sudo` and the `sh -c` family; it does NOT match `terraform destroy`, `rm -rf` or `git push -f`. The earlier wording that hosted
   sessions "rely on the sandbox and the review gate" was therefore false for the default and was corrected on 2026-10-07 (PR
   review). The hosted `ask` path is unmeasured, which is why the guard is off there rather than on.
+  > **Superseded 2026-10-10 (#9776, [ADR-284](./ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md)):** the sentence "hosted
+  > Bash is not gated for these commands in the default mode" is no longer true for the recognised forms: hosted `canUseTool` now asks,
+  > through a must-ask lane, before a default-branch force-push or delete, `terraform|tofu destroy` and a `gh` ref or repository
+  > delete. D8 itself stands (the plugin hook stays off in hosted sessions). The hosted `ask` path of THIS hook is still unmeasured.
 - **D9 — Harness scope.** Registered only in `plugins/soleur/hooks/hooks.json`; one `soleur-plugin` ledger row with disposition `skip`
   (Devin's `ask` is unmeasured and its envelopes carry no `.cwd`), no `.claude/settings.json` entry (the parity dry run showed none is
   demanded, and a second registration would double-prompt contributors). This repository's contributor sessions that load the plugin
@@ -451,7 +455,36 @@ autonomous mode asks for the D1 destroy families only.
 Process note from the CPO: a post-review change to a signed decision should reopen the sign-off by default, whether or not the round cap
 is spent.
 
+## Addendum: hosted ask (2026-10-10, #9776, [ADR-284](./ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md))
+
+Binding rulings: `knowledge-base/project/specs/archive/20261011-050138-feat-9776-hosted-autonomous-ask/` (`cto-ruling.md`, `cpo-signoff.md`, `clo-ruling.md`).
+
+- **What changed.** Hosted autonomous mode asks before a default-branch force-push or delete (and `--mirror`), `terraform|tofu destroy`
+  and `apply -destroy`, and a `gh` ref or repository delete, through one must-ask lane in `canUseTool` placed above the autonomous
+  bypass, the first-run disclosure hold and the batched-approval cache. Approve and Reject only; approval is this command only. The
+  decision, the families, the default-branch rule, the coverage table and the residual list are in ADR-284; they are not repeated here.
+- **D8 stands.** The plugin hook stays off in hosted sessions (`AGENT_ENV_OVERRIDES` is unchanged). Enabling it is a later
+  consolidation, conditional on a measured hosted `ask`.
+- **CPO3-R1 (P1): still OPEN** until the post-merge verification in ADR-284 has passed on dev and the 24 h and 7 d numbers are recorded
+  below (CPO4-R7). **Measured numbers: not yet recorded.**
+- **CPO3-R2: opened by the CPO third pass; satisfied in part by #9792** (it added the exposure statement to the copy); **superseded by
+  this PR's CLO-signed copy**, which removes "Until a stricter check ships ... without asking" and adds one hedged assurance
+  (`knowledge-base/legal/audits/2026-10-counsel-review-9776-ask-gate.md`). Existing acknowledgements stay valid (a narrowing; CLO Q2).
+- **CPO3-R3: unchanged, still open.** Measuring the ask rate of the hook's 4b classes on real transcripts is not part of this work.
+- **A finding recorded here, not fixed here (#9825).** `verify-migrations` in `web-platform-release.yml` is skipped on every
+  `workflow_run` deploy in which `migrate` succeeds (15 of 15 such runs in the last 40, measured 2026-10-09), so the
+  `apps/web-platform/supabase/verify/*.sql` sentinels never run in the pipeline, including the one for migration 159. The cause is
+  inferred from the job expressions (`verify-migrations` has no status function, so an implicit `success()` fails on a skipped ancestor)
+  and is not confirmed by a fix. Its fix is its own work.
+- **Open operator item, not part of this PR:** the C2 follow-through from PR #9792 (a scoped re-run of the supersede UPDATE after the
+  new build served, under an explicit go-ahead). Its status is not recorded in the PR or the repository.
+
 ## Open follow-ups (recorded here; no roll-up tracking issue by operator decision, see C3; #9776 is filed)
+
+> **Updated 2026-10-10 (#9776, [ADR-284](./ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md)):** the narrower autonomous-mode ask
+> for the D1 destroy families shipped as a lane in `permission-callback.ts`, not as this hook. "Enabling the guard in hosted sessions"
+> stays a follow-up and is recorded as a LATER CONSOLIDATION, conditional on a measured hosted `ask` path (the lane's corpus is
+> already bound to this hook by `destroy-ask-hook-parity.test.ts`, so the swap would be measured, not a rewrite).
 
 Enabling the guard in hosted sessions (needs a measured hosted `ask` path; the narrower autonomous-mode ask for the D1 destroy
 families is #9776); Devin `exec` coverage and Devin `ask` measurement; a
