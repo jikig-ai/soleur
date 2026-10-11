@@ -7,8 +7,8 @@ pr: 10014
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1) — CONDITIONAL, effective only if PR #10014 merges; the owner retains an optional veto, not yet exercised
 signed_off_at: 2026-10-11
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the owner retains an optional veto)"
-reviewed_commit: "CLO pass at the working tree of commit 5f81147782 (its six corrections applied in 1ccdab0a80); panel pass at 3b71c0ce5b (its findings applied in the commit that follows)"
-disposition: "DISCHARGED for the bounded claims in section 2 (formatted/opened plus green probes on a volume that holds no personal data); two open conditions below"
+reviewed_commit: "CLO pass at the working tree of commit 5f81147782 (its six corrections applied in 1ccdab0a80); panel pass at 3b71c0ce5b (its findings applied in 8eb89db42b; the CLO re-review of that delta, with six further precision corrections, is applied in the commit after it)"
+disposition: "DISCHARGED for the bounded claims in section 2 (formatted/opened plus green probes on a volume that web-2 is not routed any personal data on, its contents not probed); two open conditions below"
 blocking_findings: []
 applied_in_review:
   - "CLO pass (2026-10-11), six corrections: lead-ins naming the falsified present-tense sentences; each marker disclaims the boot-time consequent; the recovery sentence corrected where a cell has none; routing statement narrowed; reopen wording narrowed; ledger defends_against and does_not_defend narrowed."
@@ -56,7 +56,7 @@ Marker (as inserted; the lead-in varies per placement):
 | probe rows read `crypto_LUKS` on three distinct days | host-side luks-monitor rows `device_type=crypto_LUKS mount_source=/dev/mapper/workspaces`; the grader reported three distinct green days at its 2026-10-10 PASS, and four distinct days when re-run on 2026-10-11 (`scripts/followthroughs/web2-luks-live-6931.sh`, exit 0, newest probe row about 12 hours old) |
 | grader PASS 2026-10-10 | sweeper run 38083925201 |
 | web-2's volume was formatted by one instance and later opened by others | Better Stack readiness rows (read 2026-10-11): boot 77985247 `luks_arm=formatted` (2026-10-06T18:24Z); boots 479cd3f3 (2026-10-06T19:36Z) and dd08ac9d (2026-10-07T20:07Z) `luks_arm=opened`. Run logs: the rebirth run requested a reboot of server 169085156 at 2026-10-06T18:26Z; run 37671563967 requested a reboot of server 169095540 (created 2026-10-06T19:32Z) at 2026-10-07T19:04Z and its observer reported NOT YET. Hetzner read 2026-10-11: the volume is attached to server 169271252 | the rows are self-reported and instance identity is a weak anchor (ADR-263 addendum 2026-10-08); this record does not treat them as a reopen test, does not claim boot dd08ac9d as one, and does not establish which action caused each boot |
-| holds no personal data, serving weight 0 | unchanged premise; the anti-pooling gate (`lb-weight-gate.sh`) keeps web-2 out of the pool; not re-measured by this change |
+| is not routed any personal data (serving weight 0) | `dns.tf` has a web-1-only A record, `web_tunnel_connector` is web-1 only, no load balancer exists (declared configuration; live DNS not re-read); `lb-weight-gate.sh` is shape-only (#9358) and is not weight evidence | not re-measured by this change; the volume's contents were never probed |
 
 ## 3. Bounded Art. 5(2) statement for web-2's deleted plaintext volume
 
@@ -74,7 +74,7 @@ Marker (as inserted; the lead-in varies per placement):
 - `escrow=missing` has no re-escrow step (#9949; related #9472, an owner-gated fail-closed decision).
 - State restore substrate: Terraform state is one of the two passphrase copies and its R2 backend has no object versioning (#7992; condition C6 of the 2026-10-04 record).
 - Condition C3 of the 2026-10-04 record (#9372 items): item 1 (escrow preflight before the first destructive step) is verified done in the workflow step order and its census test; items 2 and 3 are tracked as #9948 and #9949 above.
-- Reopen after a host restart: not exercised and not claimed (ADR-263 addendum 2026-10-08).
+- Reopen after a host restart: not graded and not claimed (ADR-263 addendum 2026-10-08).
 - The volume has no Hetzner delete protection.
 - A future web host key is covered by static evidence only until its own probe exists.
 
@@ -84,6 +84,10 @@ Marker (as inserted; the lead-in varies per placement):
 
 ## 6. Attestation
 
-On 2026-10-11 the CLO agent, as v1 internal attestation authority, reviewed the append-only supersession markers, the destruction-record pointer and the `hcloud_volume.workspaces` ledger flip against the evidence table, and attests them as bounded to formatted/opened plus green probes on a volume that holds no personal data, with reopen after a host restart, passphrase-loss recovery and the emptiness of the deleted volume expressly not claimed, subject to corrections 1 to 6 being applied; external counsel re-review stays reserved for the frontmatter triggers.
+On 2026-10-11 the CLO agent, as v1 internal attestation authority, reviewed the append-only supersession markers, the destruction-record pointer and the `hcloud_volume.workspaces` ledger flip against the evidence table, and attests them as bounded to formatted/opened plus green probes on a volume that web-2 is not routed any personal data on (contents not probed), with reopen after a host restart, passphrase-loss recovery and the emptiness of the deleted volume expressly not claimed, subject to corrections 1 to 6 being applied; external counsel re-review stays reserved for the frontmatter triggers.
 
 Corrections applied after that review (2026-10-11): (1) the lead-ins of the cross-host replication row and the Hetzner DPA-scope row now name the present-tense sentences they supersede; (2) every marker states that it records the condition's two limbs as met and does not adopt the boot-time consequent of the superseded sentence; (3) the recovery sentence wording was corrected in the five placements that carry no recovery sentence; (4) the routing statement in section 3 was narrowed to what is recorded; (5) "has not been exercised" became "no controlled test has exercised", with an evidence row for the three readiness rows (one `formatted` boot, two later `opened` boots) that this record does not treat as a reopen test; (6) the ledger row's `defends_against` and `does_not_defend` now say web-2 holds no workspace data and that no at-rest claim is made for workspace data on it. Bold nesting in three compliance-posture markers was also corrected. The owner's veto is not assumed: it is surfaced in the pull request.
+
+> **Superseded 2026-10-11 (#9372):** items (5) and (6) above were narrowed again by the panel pass, to 'has not been graded' and 'is not routed any'; see `applied_in_review`.
+
+**Re-attestation of the panel-fix delta (2026-10-11).** On 2026-10-11 the CLO agent re-reviewed the panel-fix delta (3b71c0ce5b..8eb89db42b). Every change narrows a claim and none weakens a disclaimer. The agent re-attests the bounded claims: formatted/opened plus green probes; web-2 not routed any personal data, contents unprobed; reopen not graded; recovery and emptiness not claimed. The re-attestation was subject to six precision corrections (the frontmatter and section 6 wording, the section 2 routing row now citing declared configuration only, the section 4 reopen bullet, a supersession note under the corrections paragraph, the pinned commit, and the ADR-263 addendum no longer tying the formatting boot to a server id), all applied; it stays conditional on the merge of PR #10014.
