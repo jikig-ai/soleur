@@ -1,5 +1,7 @@
 # Cursor CLI repository settings — 2026-10-11
 
+<!-- markdownlint-disable MD010 -->
+
 This note records which commands in the repository `.claude/settings.json` already fire when the Cursor CLI workspace is this repository. It does not replace `2026-10-07-cli-hook-shape.md`, `2026-10-08-cli-hook-shape.md`, or `2026-10-11-cli-hook-shape.md`.
 
 No email was stored. The trace recorded process arguments and did not record the environment.

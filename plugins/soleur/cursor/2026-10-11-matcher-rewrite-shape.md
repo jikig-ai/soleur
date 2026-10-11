@@ -1,5 +1,7 @@
 # Cursor CLI matcher rewrite — 2026-10-11
 
+<!-- markdownlint-disable MD010 -->
+
 This note records how Cursor CLI `2026.10.01-e373342` rewrites Claude hook matchers, and which repository rows that separates. It does not replace `2026-10-07-cli-hook-shape.md`, `2026-10-08-cli-hook-shape.md`, `2026-10-11-cli-hook-shape.md`, `2026-10-11-repo-settings-shape.md`, or `2026-10-11-edit-tool-shape.md`.
 
 No email was stored.

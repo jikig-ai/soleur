@@ -1,5 +1,7 @@
 # Cursor CLI edit tool — 2026-10-11
 
+<!-- markdownlint-disable MD010 -->
+
 This note records a Cursor CLI session that classified `/go`, refused one agent in words, and wrote one file outside the repository. It does not replace `2026-10-07-cli-hook-shape.md`, `2026-10-08-cli-hook-shape.md`, `2026-10-11-cli-hook-shape.md`, or `2026-10-11-repo-settings-shape.md`.
 
 No email was stored. The trace recorded process arguments and did not record the environment.
