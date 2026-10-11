@@ -34,6 +34,12 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
+# Owning trap for the marker-capture tempfile (ADR-129): one allocation site
+# in narrow_or_full, one owner here — a die between mktemp and its rm lines
+# still cleans up.
+_cap=""
+trap 'rm -f "$_cap"' EXIT
+
 MODE="${1:-}"
 case "$MODE" in
   unit|bundle) ;;
@@ -61,7 +67,6 @@ narrow_or_full() {
   while IFS= read -r _l; do
     [[ -n "$_l" ]] && _files+=("$_l")
   done <<<"${WEBPLAT_RELATED:-}"
-  local _cap
   _cap="$(mktemp)"
   "$VITEST" related "${_files[@]+"${_files[@]}"}" --run --project "$_p" 2>&1 | tee "$_cap"
   local _rc="${PIPESTATUS[0]}"
