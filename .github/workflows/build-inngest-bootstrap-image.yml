@@ -972,10 +972,10 @@ jobs:
         #
         # This step keeps `!cancelled() &&` for the reason stated just above. reusable-release.yml
         # now has a failure-gated sibling, `Post to Slack (release BLOCKED)`
-        # (`!cancelled() && failure()` plus a released-or-draft-exists condition, #7256), so
-        # once a draft exists a blocking mirror failure reaches Slack in both workflows; its
-        # `Post to Slack (release)` step keeps a plain-expression `if:` and does not run on a
-        # blocked release, by design.
+        # (`!cancelled() && failure()` plus a changed-and-(released-or-draft-exists) condition,
+        # #7256), so once a draft exists a blocking mirror failure reaches Slack in both
+        # workflows; its `Post to Slack (release)` step keeps a plain-expression `if:` and
+        # does not run on a blocked release, by design.
         if: ${{ !cancelled() && steps.zot_mirror.outputs.mirror_status == 'degraded' }}
         continue-on-error: true
         env:

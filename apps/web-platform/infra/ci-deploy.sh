@@ -1409,7 +1409,8 @@ _docker_login_capture() {
 #        and the failure surfaces later at pull time. The login probe is the wrong layer for it;
 #        `web-zot-consumer-probe.sh` is the layer meant to see it: a 403 on its `tags/list` read
 #        with the pull credential lands in its unexpected-code arm (`SUPPRESS ping`). Only the
-#        manifest-read 403 is measured (#9252); the `tags/list` 403 is not.
+#        manifest-read 403 is measured (zot-image.provenance.md, claim register row 1); the
+#        `tags/list` 403 is not.
 # ghcr.io: UNMEASURED. Do NOT inherit zot's finding — GHCR can and does answer 403 (SAML/SSO
 #   enforcement, org package policy, IP allow-lists), so for GHCR `authz_denied` is a LIVE arm,
 #   not a tripwire, and consequence 2 above has no GHCR meaning. This paragraph says `unmeasured`
