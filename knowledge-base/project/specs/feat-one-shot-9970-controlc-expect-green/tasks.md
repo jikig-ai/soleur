@@ -36,8 +36,10 @@ Do NOT modify `apps/web-platform/infra/web-host-provisioner-parity.test.sh`. Do 
   '
   ```
 
-- [x] 1.4 Append `; ±0 #9970: control-C moved to expect_green (-1) and M4j added (+1)` to the
-  `FLOOR=57` derivation comment (count unchanged: 57).
+- [x] 1.4 Update the `FLOOR` derivation comment — amended at review: `+1 net #9970:
+  control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green
+  control (+0)`; `FLOOR` bumped 57→58 to keep the running tally consistent (still
+  ~18 below the ~76 landed count).
 
 ## Phase 2 — Verification
 
@@ -47,5 +49,6 @@ Do NOT modify `apps/web-platform/infra/web-host-provisioner-parity.test.sh`. Do 
   background-poll — run it in the foreground per `hr-monitor-not-run-in-background-for-polling`.)
 - [x] 2.3 AC sweep — every item in the plan's `## Acceptance Criteria`, including
   `git diff --quiet origin/main...HEAD -- apps/web-platform/infra/web-host-provisioner-parity.test.sh`
-  (guard untouched) and `grep -n '^FLOOR='` still `FLOOR=57`.
+  (guard untouched) and `grep -n '^FLOOR='` = `FLOOR=58` (bumped per fix-round
+  recommendation to keep the tally convention self-consistent).
 - [x] 2.4 PR body: `Closes #9970` in body (not title) + `## Changelog` section.

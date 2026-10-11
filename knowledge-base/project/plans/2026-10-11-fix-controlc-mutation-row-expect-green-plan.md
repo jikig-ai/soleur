@@ -80,11 +80,12 @@ A replication of the battery's own sandbox (scratch `TF_REPO` + `git_fixture_env
    `expect_red` rationale.
 3. The battery pins that normalization did not swallow detection: a rename landing on a
    normalized-unique name still produces `uncovered` + `stale` RED.
-4. The `mutations_run` anti-vacuity count stays at `FLOOR=57` — no floor weakening.
+4. The `mutations_run` anti-vacuity floor is not weakened — amended post-review to
+   `FLOOR=58` (+1 net arm; still ~18 below the ~76 landed count).
 
 ### Cut List
 
-- **Lower `FLOOR=57` to 56 instead of adding M4j** → buys property 4 only by weakening it; rejected —
+- **Lower `FLOOR=57` instead of adding M4j** → buys property 4 only by weakening it; rejected —
   the sibling row buys properties 3 and 4 together for one row.
 - **Name the sibling `control-D`** → controls A/B/C are the must-stay-green family; a red arm
   belongs to the M-series. Cut in favor of `M4j` (the §1 sibling/dialer series ends at `M4i`).

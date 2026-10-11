@@ -18,12 +18,12 @@
 ### Decisions
 
 - Sibling `expect_red` row: YES (evaluated per the ask). Rationale CORRECTED at review
-  (git-history seat): `mutations_run` is also incremented at inline sites (:947 M33b,
-  :1388 `_g2_json_row`, :1412 G2-C2), so the landed count is ~75 on main — a bare flip
-  leaves ~74, nowhere near `FLOOR=57`. M4j stands on its primary reason alone: it pins
-  that normalization did not swallow detection (normalized-unique rename →
-  uncovered+stale). The `expect_green`-does-not-increment fact is true; the floor-trip
-  conclusion drawn from it was not.
+  (git-history seat): `mutations_run` is also incremented at inline sites — the M33b
+  inline arm, `_g2_json_row` (×3 calls), and G2-C2 — so the landed count is ~75 on
+  main — a bare flip leaves ~74, nowhere near `FLOOR`. M4j stands on its primary
+  reason alone: it pins that normalization did not swallow detection
+  (normalized-unique rename → uncovered+stale). The `expect_green`-does-not-increment
+  fact is true; the floor-trip conclusion drawn from it was not.
 - Sibling anchor verified verbatim against a harness-faithful sandbox run of the real guard:
   `uncovered=['cosign_trusted_root_v2@web-2']` (plus `stale entries=['cosign_trusted_root@web-2']`).
 - Sibling label `M4j` (the §1 sibling/dialer M-series), not `control-D` — controls A/B/C are the
@@ -60,9 +60,12 @@
 
 ## Work Phase
 
-- Status: complete. Implementation commit `04eeaf2` (control-C flip + M4j + FLOOR note),
-  fix-round commit (review findings applied: comment corrections, extra-needle harness
-  arg, M4k collision row, control-D `_all_tf_names` row, stale needle on M4j).
+- Status: complete. Implementation commit `04eeaf2159` (control-C flip + M4j + FLOOR
+  note), fix-round commit `8cb4258ab7` (review findings applied: comment corrections,
+  extra-needle harness arg, M4k collision row, control-D `_all_tf_names` row, stale
+  needle on M4j), second fix-round commit folding the panel's P3s (FLOOR 57→58 for
+  tally-consistency, "collision emit" wording + co-fire disclosure, "SSH" casing,
+  symbol anchors).
 - Battery: 94 passed, 0 failed locally; shellcheck clean; `bash -n` clean.
 
 ## Review Phase
