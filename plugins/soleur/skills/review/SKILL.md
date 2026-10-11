@@ -866,27 +866,7 @@ Remove duplicates, prioritize by severity and impact.
     3. **Close as wontfix** — polish-only, low-value noise, or concern already
        covered by existing code. Close immediately (do not file) with a
        1-sentence rationale in the summary report.
-    4. **Route to the domain agent for a BINDING ruling** — the finding is not an
-       edit but a *decision* in a domain with an owner. Engineering/architecture
-       forks go to `soleur:engineering:cto`; legal-posture calls (published-claim
-       scope adequacy, lawful basis / balancing test / Art. 30 entry, Art. 13-14
-       notice adequacy, retraction-vs-scoping, notice-vs-instrument asymmetry,
-       whether a compliance condition can be discharged) go to `soleur:legal:clo`.
-       Hand the agent the finding, the governing records, and the binding
-       constraints, and require **drafted replacement wording** back — then
-       implement exactly what it returns. Do NOT surface these to the operator via
-       `AskUserQuestion`, and do NOT file them as scope-outs to defer the decision:
-       the operator is non-technical, and a decision with a domain owner is not a
-       scope question. Prompt the domain leader with "do NOT use AskUserQuestion"
-       (leaders default to orchestrator mode and would hang a headless run).
-       **Weight is not a routing signal** — a finding feeling consequential is the
-       reason to route it to the owner, never past it. Reserve external escalation
-       (qualified counsel, a vendor, a regulator) for what genuinely cannot be
-       decided in-house, via the threshold catalog plus a tracked issue — never as
-       an inline operator question. **Why:** #7347 — three legal decisions from a
-       ten-P1 review were offered to the operator, who asked why the CLO was not
-       taking ownership. See
-       `knowledge-base/project/learnings/workflow-patterns/2026-08-09-legal-decisions-route-to-clo-not-operator.md`.
+    4. **Route to the domain agent for a BINDING ruling** — the finding is not an edit but a *decision* (an architecture fork, a threshold or evidence bar, design A-vs-B, a legal-posture call): spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`, requiring drafted replacement wording) per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md), implement exactly what it returns, and never surface it via `AskUserQuestion` or file it as a scope-out. **Weight is not a routing signal.** **Why:** #7347 — three legal decisions from a ten-P1 review were offered to the operator.
 
 The `pr-introduced → fix inline` rule is the mechanical version of rule
 `rf-review-finding-default-fix-inline`: it removes the judgment loophole ("is

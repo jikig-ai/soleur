@@ -66,3 +66,7 @@ Each consult ≈ curated payload in + short advice out, once per gate. Executed 
 - A new SKILL.md-prose **upgrade-pin** surface (fable at judgment gates), kept discoverable via the extended grep above; changing the gate set is a model-policy edit.
 - Lower catch-rate than a full-transcript advisor on context-dependent problems (loops/dead-ends) — the deliberate cost of the saving.
 - Fully reversible: delete the two gate blocks. No settings or global state to unwind.
+
+## Addendum — 2026-10-11 (#10055)
+
+> **Superseded 2026-10-11 (#10055), in part:** "`one-shot` ... is deliberately **not** edited" (Decision, and the "Edit `one-shot` too" row of Alternatives) no longer holds for two narrow changes recorded in ADR-084's 2026-10-11 addendum: an inline technical-ruling rule in one-shot's plan-subagent prompt, and a technical-ruling gate step after the plan phase. The consult gates themselves still sit in `plan` Step 4.5 and `ship` Phase 5.5 and one-shot still inherits them transitively; the text above is kept as the dated record.

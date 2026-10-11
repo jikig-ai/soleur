@@ -6,9 +6,10 @@
 #
 # WHAT IS AND IS NOT THE OPERATOR'S CALL — the distinction this hook encodes:
 #
-#   THEIRS (allow):     an irreversible or production-mutating action (merge, replace, destroy,
-#                       arm, flip, delete, force-push, deploy, rotate, revoke), money, scope,
-#                       priority, or schedule. These need authority the agent does not have.
+#   THEIRS (allow):     the CLOSED list: money, scope, priority, schedule, irreversible,
+#                       production-mutating (merge, replace, destroy, arm, flip, delete, force-push,
+#                       deploy, rotate, revoke), legal-risk, brand. These need authority the agent
+#                       does not have.
 #   NOT THEIRS (deny):  which file to read, which hypothesis to chase, whether to consult the
 #                       runbook/ADR/issue, who to ask. These need only effort the agent has.
 #
@@ -35,6 +36,32 @@
 # carries the reason (an accountant question always carries cost/scope/schedule, so behind the
 # authority arm it is unreachable), its residual, and the `AUTHZ_VERB_RE` conjunct that returns real
 # authorizations to the permitting side. Test D4 pins the ordering behaviourally.
+#
+# THE SECOND CARVE-OUT: the TECHNICAL-RULING arm below (after the expert arm, ahead of the authority
+# short-circuit) inverts the same polarity a second time. It is a NARROW BACKSTOP for AskUserQuestion
+# only (the observed 2026-10-11 carrier was an artifact pipeline, which ship's Technical-Ruling Gate
+# covers), and the hook is repo-local: it protects this repository's sessions, not a downstream user's.
+# A WRONGLY DENIED operator question is the worse failure, so the arm is deliberately small:
+#   - EVERY cue reads the QUESTION TEXT only, never an option label or description;
+#   - STRONG cues fire on their own, with or without a `?`: an evidence/proof/emptiness bar, threshold,
+#     ceiling, floor or standard; "is the evidence enough/sufficient/adequate" (not when the question names
+#     money: charging, paying, refund, invoice, price, cost, spend, revenue, contract, vendor); "adopting ...
+#     accepted";
+#   - WEAK cues need an INTERROGATIVE sentence (the question text holds a `?`, and the cue sits in a sentence
+#     that ends in one) and a technical co-signal: "how strict/rigorous", "strictness", "stricter",
+#     "stringent" AND an evidence noun; "status flip/move/change" AND an ADR word (adopting, accepted,
+#     decision record); "approach/variant/option A|B" or "A or B" AND an engineering noun (architecture,
+#     schema, algorithm, substrate, data model, retry, queue, refactor; never design, api, index, library,
+#     migration, implementation, cache: those are pricing, brand and schedule words as often);
+#   - an OPERATOR-VOCABULARY VETO silences the weak cues when the question names price, plan, tier, launch,
+#     date, deadline, license, vendor, logo, copy, landing, budget, cost, spend, revenue, invoice, refund,
+#     schedule, priority, brand, hero, merge, deploy, ship, release, delete, prod or production.
+# The arm needs no investigative signal and is reachable ahead of AUTHORITY_RE for the same reason the expert
+# arm is: a ruling question carries "dispatched", "deleted" or a money word in the same breath. Its exemption is
+# a PERMISSION shape ("may I", "ok to", "approve", "ack-destroy"), evaluated PER QUESTION over that question's
+# TEXT only; "can I/we", "may we" and "should I/we" are ruling shapes and do not exempt. The residual is stated
+# at the arm (appending "Approve ...?" exempts a question). Tests R, Z, Q, K, N, M, C, E, F, P, O, T, V4 and V5
+# pin the ordering, the per-question scope, the vocabulary, the veto and the exemption members.
 #
 # Escape hatch: SOLEUR_ACK_TECHNICAL_FORK=1 — announced, never silent.
 #
@@ -235,7 +262,7 @@ Write them the questions instead: soleur:questionnaire-generate.
 
 That skill interviews the founder about the SEND only — who receives it, what has to come back, by when — and emits one document they send from their own mail client. It never asks the founder about the subject matter, because not knowing the subject matter is why it is being used.
 
-Ask the founder ONLY for: authorization for an irreversible or production-mutating action, money, scope, priority, or schedule.
+Ask the founder ONLY for a decision in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand.
 
 If this question genuinely carries an authorization and the wording tripped the classifier, re-word it to name the action being authorized — or re-run with SOLEUR_ACK_TECHNICAL_FORK=1.
 
@@ -246,6 +273,131 @@ See hr-technical-fork-is-not-an-operator-question."
 
   jq -n --arg r "$EXPERT_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
+fi
+
+# TECHNICAL-RULING signal — a question whose answer is a TECHNICAL RULING: how strict an evidence bar
+# must be, whether evidence suffices, whether an ADR status moves, which of two named technical designs.
+# The operator is non-technical by design and cannot rule on it; the CTO agent can. The deny names
+# soleur:engineering:cto and the shared reference, and tells the asker to SPLIT the item and put the
+# operator only the authorization that remains.
+#
+# THIS ARM IS EVALUATED AHEAD OF `AUTHORITY_RE` FOR THE SAME REASON THE EXPERT ARM IS. A ruling question
+# arrives carrying "dispatched", "deleted" or a money word ("one more run costs ..."), and
+# `AUTHORITY_RE` matches those and wins outright; behind it this arm is unreachable (suite row R1/R3).
+#
+# THE ARM'S WORSE FAILURE MODE IS A WRONG DENY of an operator-class question, so every cue that also
+# reads as an ordinary word needs a co-signal, and every cue reads the QUESTION TEXT only (suite rows W and Q
+# measured the bare cues, the option-text reads and the broad technical-noun list wrongly denying pricing,
+# scope, schedule, brand and merge questions):
+#   RULING_STRICT_RE  strictness words (C1, C2) AND RULING_EVID_NOUN_RE, both inside the INTERROGATIVE
+#                     sentences (so "Merge PR 9628 now? It adds the stricter evidence gate." is a merge ask);
+#   RULING_STATUS_RE  a status flip AND RULING_ADR_RE (C6), in the interrogative sentences: "close issue 123
+#                     (status change)" is not an ADR, and a bare `adr` is not an ADR word;
+#   RULING_AB_RE      approach/variant/option A|B or "A or B" AND RULING_TECH_RE (C7), in the interrogative
+#                     sentences, over engineering nouns only;
+#   RULING_OPVOCAB_RE vetoes those three weak cues when the question names operator vocabulary;
+#   RULING_BAR_RE     an evidence/proof/emptiness bar, "adopting ... accepted" (C3, C5): technical on their own;
+#   RULING_SUFF_RE    "is the evidence enough/sufficient/adequate" (C4): technical unless RULING_MONEY_RE
+#                     names a money ask ("is the evidence enough to start charging").
+# A bare `thresholds?` and a bare `ceiling` are not cues ("raise the spend ceiling" is a money ask).
+#
+# EVERY QUESTION IS JUDGED ALONE, over its text only. The exemption reads that question's TEXT only. Over a
+# concatenation of questions, question 1's "Approve ..." would exempt question 2's ruling (R4); an option
+# label is a button, never read (R7, P1-P3). An empty question has nothing to judge, and a non-string
+# question is skipped with a stderr announcement; the `header` field is never read.
+#
+# THE EXEMPTION IS A PERMISSION SHAPE, NOT AN ACTION VERB. "May I ...", "ok to", "approve", "ack-destroy"
+# ask for consent; a bare `dispatch`/`delete`/`deploy`/`flip`/`apply` would exempt every ruling that
+# merely MENTIONS the action it gates (R1), so V4 refuses any such member. `can I`, `can we`, `may we` and
+# `should I|we` are deliberately absent: "Can we tighten the evidence threshold?" and "Should I use
+# approach A or approach B" are the exact ruling shapes (F1-F4, Z2). `is it ok to` needs no member of its
+# own, `ok(ay)? to` covers it.
+#
+# THE RESIDUAL, STATED. Appending "Approve the stricter threshold?" to a ruling question exempts the
+# whole question (R6 pins it): wrongly blocking an authorization is the failure this header calls
+# worse, so the arm judges the question, not the sentence. The ship gate and the skill text are the
+# primary defence; this arm is the backstop at the moment of asking.
+RULING_STRICT_RE='(\bhow (strict|rigorous)|\b(strictness|stricter|stringen[a-z]*))'
+RULING_EVID_NOUN_RE='\b(evidence|proof|check|gate|guard|validation|verification|criteria|assertion|test|lint)\b'
+RULING_BAR_RE='(\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\badopting\b.*\baccepted\b)'
+RULING_SUFF_RE='\b(is|are) (the )?(evidence|proof) (enough|sufficient|adequate)'
+RULING_STATUS_RE='\bstatus (flip|move|change)'
+RULING_ADR_RE='\b(adopting|accepted|decision record)\b'
+RULING_AB_RE='(\b(approach|variant|option) [ab]\b|\b[ab] (or|vs) [ab]\b)'
+RULING_TECH_RE='\b(architecture|schema|algorithm|substrate|data model|retry|queue|refactor)\b'
+RULING_PERM_RE='(\bmay i\b|\bis it fine to\b|\bok(ay)? to\b|\bgo-ahead\b|\bapprove[ds]?\b|\bauthori[sz]e|\back-destroy)'
+# Operator vocabulary: a question that NAMES money, scope, priority, schedule, brand, or a production action is the
+# operator's call however it is phrased. It vetoes the WEAK cues (C1 C2 C6 C7) only. Whole words, plural-tolerant, so
+# "deleted" and "dispatched" (the R1 incident question) do not veto it.
+RULING_OPVOCAB_RE='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
+# A money ask that carries an evidence-sufficiency phrase ("is the evidence enough to start charging") vetoes C4.
+RULING_MONEY_RE='\b(charging|paying|refunds?|invoices?|price|pricing|costs?|spend|revenue|contract|vendors?)\b'
+# One row per question: its lowercased TEXT only (every cue reads the question text, never an option label or
+# description). Whitespace is mapped to a plain space by code point (linear), never by a jq regex gsub (quadratic: a
+# 32 KB question took 9.5 s), and runs of spaces are squeezed by tr. An absent question yields an empty row; one that
+# is not a string yields a \001 marker row, announced and skipped below. A non-zero jq status means the shape is
+# unreadable: announce, skip the arm (permit), never judge a partial question.
+__RQS_RC=0
+RULING_ROWS="$(printf '%s' "$__HI_RAW" | jq -r '
+  def ws: explode | map(if . >= 9 and . <= 13 then 32 else . end) | implode;
+  ( .tool_input.questions // [] )[]
+  | if (.question | type) == "string" then (.question | ascii_downcase | ws)
+    elif .question == null then ""
+    else "\u0001" end
+' 2>/dev/null | tr -s ' ')" || __RQS_RC=$?
+if [[ "$__RQS_RC" -ne 0 ]]; then
+  printf 'pre-ask-technical-fork-gate: technical-ruling parse skipped (jq rc=%s) — unrecognised questions shape, allowing without ruling classification.\n' \
+    "$__RQS_RC" >&2
+elif [[ -n "$RULING_ROWS" ]]; then
+  while IFS= read -r __rq; do
+    if [[ "$__rq" == $'\001' ]]; then
+      printf 'pre-ask-technical-fork-gate: technical-ruling parse skipped for a question whose text is not a string — that question was not classified.\n' >&2
+      continue
+    fi
+    [[ -n "$__rq" ]] || continue
+    __hit=0
+    # WEAK cues (C1 strictness+evidence noun, C6 status flip+ADR word, C7 approach A|B+technical noun) read the
+    # INTERROGATIVE sentences only, so a question with no `?` has none, and a declarative sentence ("Merge PR 9628
+    # now. It adds the stricter evidence gate.") never fires them. The operator-vocabulary veto reads the whole
+    # question. Extraction is linear: awk splits on `?` and keeps, per segment, the text after the last sentence
+    # boundary ("! " or ". "; " vs. " is rewritten to " vs " first, so the A/B cue needs no optional period). A regex with a nested quantifier here cost ~13 s on a 32 KB question.
+    if [[ "$__rq" == *"?"* ]] && ! grep -qE "$RULING_OPVOCAB_RE" <<<"$__rq"; then
+      __ends=0; [[ "$__rq" == *"?" ]] && __ends=1
+      __asked="$(printf '%s' "$__rq" | awk -v ends="$__ends" 'BEGIN { RS = "?"; ORS = "" }
+        function emit(t) { gsub(/ vs\. /, " vs ", t); sub(/^.*(!|\. )/, "", t); print t "? " }
+        NR > 1 { emit(prev) }
+        { prev = $0 }
+        END { if (ends) emit(prev) }')"
+      if grep -qE "$RULING_STRICT_RE" <<<"$__asked" && grep -qE "$RULING_EVID_NOUN_RE" <<<"$__asked"; then __hit=1; fi
+      if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_STATUS_RE" <<<"$__asked" && grep -qE "$RULING_ADR_RE" <<<"$__asked"; then __hit=1; fi
+      if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_AB_RE" <<<"$__asked" && grep -qE "$RULING_TECH_RE" <<<"$__asked"; then __hit=1; fi
+    fi
+    # STRONG cues (C3 bar, C5 adopting...accepted, C4 sufficiency): technical on their own, no `?` needed. C4 alone
+    # yields to a money phrase.
+    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_BAR_RE" <<<"$__rq"; then __hit=1; fi
+    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_SUFF_RE" <<<"$__rq" && ! grep -qE "$RULING_MONEY_RE" <<<"$__rq"; then __hit=1; fi
+    [[ "$__hit" -eq 1 ]] || continue
+    grep -qE "$RULING_PERM_RE" <<<"$__rq" && continue
+    RULING_REASON="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
+
+How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses.
+
+Delegate it: spawn soleur:engineering:cto with the question and the facts, and act on its ruling. The procedure and the closed list of rulings that do NOT go to the CTO are in technical-ruling-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
+
+If the criterion is already stated in the ADR or plan, the flip is mechanical: run the grader, cite it, flip. Otherwise the CTO rules.
+
+Then split the item; ask the operator only the authorization — the decision left once the ruling is made, and only if it is in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand.
+
+If this question is really an authorization, reword it as a permission ask (\"May I ...?\" / \"Approve ...?\") so it reaches the operator. Otherwise have the CTO rule via the delegation reference above. There is no override to set from a tool call.
+
+See hr-technical-fork-is-not-an-operator-question."
+
+    declare -f emit_incident >/dev/null 2>&1 && \
+      emit_incident pre-ask-technical-fork-gate deny "technical ruling put to a non-technical operator" "$__rq" 2>/dev/null || true
+
+    jq -n --arg r "$RULING_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+    exit 0
+  done <<<"$RULING_ROWS"
 fi
 
 # AUTHORITY signal — a real operator decision. Checked FIRST among the remaining arms and wins
@@ -282,7 +434,7 @@ Resolve it yourself, in this order, before asking anything:
 
 Then ACT on what you find.
 
-Ask the operator ONLY for: authorization for an irreversible or production-mutating action, money, scope, priority, or schedule.
+Ask the operator ONLY for a decision in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand.
 
 If this question genuinely carries an authorization and the wording tripped the classifier, re-word it to name the action being authorized — or re-run with SOLEUR_ACK_TECHNICAL_FORK=1.
 
