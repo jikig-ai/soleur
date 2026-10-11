@@ -298,7 +298,7 @@ OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" BASH_ENV="$SB/xtrace-env.sh" 
 echo "== the environment-secret census (G7d) still accepts the re-cut script =="
 census_out="$(cd "$REPO_ROOT" && bash tests/scripts/test-infra-privileged-tier-census.sh 2>&1)"; census_rc=$?
 # The census has many checks and some compare against the base ref (G4c resolves the merge-base
-# since #9956 — a merely-BEHIND branch greens; only deletions relative to the fork point red), so
+# since #10053 — a merely-BEHIND branch greens; only deletions relative to the fork point red), so
 # this row asserts the ONE check that reads this script line by line (G7d), by its own
 # verdict line, never the census's overall exit status.
 if grep -qE '^[[:space:]]*ok[[:space:]]+G7d' <<<"$census_out" && ! grep -qE '^[[:space:]]*FAIL[[:space:]]+G7d' <<<"$census_out"; then
