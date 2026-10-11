@@ -65,7 +65,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=699   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + fixture self-check + bc_ok-parity row net of the removed refuse-dot row); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=699   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1211,8 +1211,9 @@ if [[ -n "${GIT_CONFIG_VALUE_0+x}" && "${GIT_CONFIG_KEY_0:-}" != commit.gpgsign 
         && "$GIT_CONFIG_VALUE_0" == "Authorization: basic "* && "$dec" == "x-access-token:${SHIM_TOKEN:-}" \
         && "$GIT_CONFIG_VALUE_0" == "Authorization: basic ${SHIM_B64:-}" ]]; then
     # The SHIM_B64 conjunct pins the run_shimmed derivation: a SHIM_B64 reverted
-    # to a sibling token's encoding reds every accept row instead of silently
-    # vacuous on argv=b64 alone (the unpinned-wire class, #9972 review).
+    # to a sibling token's encoding reds every accept row carrying a DIFFERENT
+    # token instead of silently vacuous on argv=b64 alone (the unpinned-wire
+    # class, #9972 review).
     env=header-ok
   else
     env=header-bad
@@ -2029,9 +2030,14 @@ accept_row newshape "$SYN_TOK_V2"
 # _bearer_ok copy to _CANON_BODY — copy-vs-copy only. If bc_ok's judged class
 # is ever amended, every inline copy silently stays narrow (the #9972 shape
 # again). Compare the case-class span on each file's definition line as text;
-# bc_ok's line also carries *[![:space:]] trims, so take the LAST match.
+# bc_ok's line also carries *[![:space:]] trims, so take the LAST match. The
+# bump-side pattern is SPLIT — this file is inside the census's pathspec, and
+# a literal `_bearer_ok`+`() {` in its text would itself be swept up as an
+# off-canonical copy (verified: 74/1 red), so nothing here may spell the
+# contiguous form — comment included.
 _bc_src=$(sed -n '/^bc_ok()/p' "$REPO_ROOT/scripts/lib/bearer-curl.sh" | grep -oE '\*\[![^]]+\]' | tail -1)
-_bc_bump=$(sed -n '/_bearer_ok() {/p' "$SCRIPT" | grep -oE '\*\[![^]]+\]' | tail -1)
+_bc_bump_pat='_bearer_''ok() {'
+_bc_bump=$(sed -n "/^${_bc_bump_pat}/p" "$SCRIPT" | grep -oE '\*\[![^]]+\]' | tail -1)
 [[ -n "$_bc_src" && "$_bc_src" == "$_bc_bump" ]] \
   && pass 'g1.bc-parity:alphabet-match' \
   || fail 'g1.bc-parity:alphabet-match' "bump guard class '$_bc_bump' diverged from bc_ok's '$_bc_src'"

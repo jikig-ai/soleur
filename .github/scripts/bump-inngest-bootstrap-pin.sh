@@ -181,8 +181,8 @@ die() { # die <stage> <msg...>
 # bc_ok judges), so the canonical-body parity row in
 # scripts/lint-shell-trace-credential-refusal.test.sh pins it and a future
 # alphabet amendment cannot silently re-narrow this guard (#9972). Top-level
-# definition, same as all sibling copies. Bare rc 1: the token_shape vs
-# control_char split lives at the call site.
+# definition, the placement most sibling copies share. Bare rc 1: the
+# token_shape vs control_char split lives at the call site.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
 # --- args -------------------------------------------------------------------
