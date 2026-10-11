@@ -2902,7 +2902,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // unauthenticated read verifies the runtime stream; the static `git grep` in the same block proves only that the emitter exists. Genuine.
   // #7258 Step A (2026-10-11): +1 (57 -> 58) for `2026-10-11-chore-zot-consumer-probe-covers-inngest-bootstrap-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
-  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_PROBE_REPO`) reads
+  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_PROBE_VERDICT`) reads
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is
   // the per-repository marker rows web-1's probe emits (journald -> vector Source 4 -> the Logs warehouse),
   // which have no unauthenticated read path; the host itself is no-SSH. Genuine.

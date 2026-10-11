@@ -25,9 +25,9 @@ locals {
   # The second repository a fresh host pulls at first boot (#7258): the repository path of the ZIREF
   # pins in cloud-init.yml and cloud-init-inngest.yml. A literal here, NOT a root variable:
   # variables.tf is a registry-host-replace trigger path (and server.tf a deploy-pipeline-fix one), so
-  # a new variable would fire a registry replace for a one-line probe change. The suite
-  # (web-zot-consumer-probe.test.sh, T7) derives the expected path from those pins and fails if this
-  # constant drifts from them.
+  # a new variable would wake the registry-replace gate (a no-op unless a render input changes) for a
+  # one-line probe change. The suite (web-zot-consumer-probe.test.sh, T7) derives the expected path
+  # from those pins and fails if this constant drifts from them.
   zot_probe_repo_inngest_bootstrap = "jikig-ai/soleur-inngest-bootstrap"
 
   # The comma-separated list the probe takes. The local KEEPS its name, so every consumer (the env

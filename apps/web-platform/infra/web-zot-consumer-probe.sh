@@ -45,13 +45,17 @@ esac
 # (the web image and the inngest bootstrap image), so a probe of one repo certifies only that repo.
 # Each element is classified by the table above; the heartbeat is pinged ONLY when EVERY element is
 # 200 (all-must-pass: a conjunction cannot mask a faulting repo, and one heartbeat per host is kept).
-#   - empty elements are skipped (a trailing comma is permitted); an element containing whitespace,
-#     or a list with no non-empty element, is FATAL exit 1 before any curl, ping or marker;
+#   - empty elements are skipped (a trailing comma is permitted); a newline anywhere in the value, an
+#     element outside the OCI repository-name alphabet (lowercase a-z 0-9 and . _ / -, no `..`, no leading
+#     or trailing separator), or a list with no non-empty element, is FATAL exit 1 before any curl, ping or
+#     marker (a newline would otherwise let `read` drop every later element and silently shrink the
+#     conjunction; a `?`, `#`, `[` or `..` would alter the request path rather than name a repository);
 #   - a 401 on ANY element exits 3 (HARD), and the other elements are still probed, so no repo's
 #     line is lost to an early exit;
-#   - every fault line ends with repo=<path>; a rate-limited (30 min) SOLEUR_ZOT_PROBE_REPO marker
+#   - every fault line ends with repo=<path>; a rate-limited (30 min) SOLEUR_ZOT_PROBE_VERDICT marker
 #     per repo (code, verdict) proves a HEALTHY run per repo from telemetry, because a healthy probe
-#     is otherwise silent;
+#     is otherwise silent. Fault lines are NOT rate-limited (one per faulting repo per 60 s run, at most
+#     2880 rows/day on a full outage against 1440 for one repo, inside the Better Stack headroom);
 #   - worst case is 10 s per repo (curl -m 10): two repos is 20 s against the 60 s timer cadence.
 #
 # TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a CODE (a comma list is positional over the
@@ -86,7 +90,7 @@ _canary() {
   # luks-#6604 pattern). The probes are otherwise SILENT-ON-SUCCESS, and the heartbeats + the NIC
   # guard's SOLEUR_PRIVATE_NIC line ship by DIRECT curl (independent of vector) — so a dead vector
   # agent on web-1 (the exact gap this fix repairs) would be INVISIBLE. This emits a benign tagged
-  # stderr row on EVERY run (called before the HTTP-code classification), which journald ships under
+  # stderr row on EVERY run (called after the per-repo verdicts are emitted, before the exit decision), which journald ships under
   # SyslogIdentifier=web-zot-consumer-probe via Source 4 — making Source-4 liveness a STEADY-STATE
   # signal (its ABSENCE = the recurrence). It is deliberately INDEPENDENT of zot serviceability: a
   # true positive control must not vanish when the thing it monitors alongside (zot) is itself down,
@@ -109,17 +113,23 @@ _stamp() {  # <marker-file> <epoch>
 }
 
 # One rate-limit window shared by the canary and the per-repo markers (#7258): true (return 0) when a
-# new emit is due, i.e. the marker file is missing, empty, non-numeric, DATED IN THE FUTURE, or older
-# than 1800 s. Every doubtful state fails toward EMITTING. The future-dated case is a deliberate change
-# from the canary's old inline test, where `now - last` went negative and the canary stayed silent until
-# the clock caught up (a latent silent-canary defect). The marker lives in /run (tmpfs), so a reboot
-# resets it, which is intended.
+# new emit is due, i.e. the marker file is missing, empty, non-numeric, wider than 10 digits (not a
+# plausible epoch, and a guard against integer overflow), DATED IN THE FUTURE, or older than 1800 s, or
+# the clock is unreadable. Every doubtful state fails toward EMITTING. The future-dated case is a
+# deliberate change from the canary's old inline test, where `now - last` went negative and the canary
+# stayed silent until the clock caught up (a latent silent-canary defect; the sibling
+# inngest-consumer-probe.sh `_fault` still has that shape and is a separate script on a separate host,
+# deliberately not touched here). The marker lives in /run (tmpfs), so a reboot resets it, which is
+# intended.
 _window_open() {  # <marker-file>
   local m="$1" now last
   now=$(date +%s 2>/dev/null || echo 0)
+  [ "$now" -gt 0 ] 2>/dev/null || return 0
   last=0
   [ -f "$m" ] && last=$(cat "$m" 2>/dev/null || echo 0)
   case "$last" in ''|*[!0-9]*) return 0 ;; esac
+  [ "${#last}" -le 10 ] || return 0
+  last=$((10#$last))
   [ "$last" -gt "$now" ] && return 0
   [ $((now - last)) -ge 1800 ]
 }
@@ -128,12 +138,11 @@ _window_open() {  # <marker-file>
 # positive observation rather than the absence of a fault line. Reads the R_NAME/R_CODE/R_VERDICT
 # arrays the probe loop fills, and runs BEFORE the exit decision so the 401 path emits it too.
 _repo_markers() {
-  local m="${SOLEUR_PROBE_REPOS_MARKER:-/run/web-zot-consumer-probe.repos}" now i=0
+  local m="${SOLEUR_PROBE_REPOS_MARKER:-/run/web-zot-consumer-probe.repos}" now i
   _window_open "$m" || return 0
   now=$(date +%s 2>/dev/null || echo 0)
-  while [ "$i" -lt "${#R_NAME[@]}" ]; do
-    echo "[zot-probe] SOLEUR_ZOT_PROBE_REPO repo=${R_NAME[$i]} code=${R_CODE[$i]} verdict=${R_VERDICT[$i]} ts=$now" >&2
-    i=$((i + 1))
+  for i in "${!R_NAME[@]}"; do
+    echo "[zot-probe] SOLEUR_ZOT_PROBE_VERDICT repo=${R_NAME[$i]} code=${R_CODE[$i]} verdict=${R_VERDICT[$i]} ts=$now" >&2
   done
   _stamp "$m" "$now"
 }
@@ -165,12 +174,26 @@ fi
 # Split the list. Empty elements are skipped; an element that holds whitespace cannot be put in a URL
 # and a list with nothing in it probes nothing, so both are FATAL here, before any curl, ping or marker.
 R_NAME=(); R_CODE=(); R_VERDICT=()
+# `read` takes only the first line: a newline in the value would drop every later element and silently
+# shrink the all-must-pass conjunction, so refuse it before the split.
+case "$REPO" in
+  *$'\n'*)
+    echo "[zot-probe] FATAL: ZOT_PROBE_REPO contains a newline — a later repository would be silently dropped from the probe; probe NOT run." >&2
+    exit 1
+    ;;
+esac
 IFS=',' read -r -a _RAW <<<"$REPO"
 for _e in "${_RAW[@]}"; do
   [ -n "$_e" ] || continue
   case "$_e" in
     *[[:space:]]*)
       echo "[zot-probe] FATAL: ZOT_PROBE_REPO element contains whitespace — refusing to build a URL from it; probe NOT run." >&2
+      exit 1
+      ;;
+    # OCI repository-name alphabet only (the web element derives from var.image_name, an operator value):
+    # a `?`, `#`, `[`, `{` or `..` would change the request path or make curl glob, not name a repository.
+    *[!a-z0-9._/-]*|*..*|/*|*/|.*|-*|*//*)
+      echo "[zot-probe] FATAL: ZOT_PROBE_REPO element is not a valid repository name (lowercase a-z 0-9 . _ / - only) — refusing to build a URL from it; probe NOT run." >&2
       exit 1
       ;;
   esac
@@ -201,8 +224,8 @@ _OVR=()
 
 unservable=0
 auth_broke=0
-_i=0
-for r in "${R_NAME[@]}"; do
+for _i in "${!R_NAME[@]}"; do
+  r="${R_NAME[$_i]}"
   if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
     CODE="${_OVR[$_i]:-000}"
     [ -n "$CODE" ] || CODE=000
@@ -248,7 +271,6 @@ for r in "${R_NAME[@]}"; do
       echo "[zot-probe] SUPPRESS ping: unexpected code ${CODE} for ${ENDPOINT}/v2/${r}/tags/list. Absence-of-ping will alarm. repo=${r}" >&2
       ;;
   esac
-  _i=$((_i + 1))
 done
 
 # Source-4 liveness beacon — fires on EVERY run (rate-limited), independent of the zot verdicts above,

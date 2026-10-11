@@ -17,6 +17,12 @@
 #      load-bearing: strip `-u` => 401 => exit 3; inject `-f` => the 404 code capture is
 #      corrupted (`404` + `|| echo 000` => `404000`) => the 404 classification is destroyed.
 #
+# #7258: ZOT_PROBE_REPO is a COMMA-SEPARATED LIST. The T1-T16 rows below cover all-must-pass
+# aggregation (one ping per host, only when every repo is 200), the fault-line repo= suffix, the
+# per-repo SOLEUR_ZOT_PROBE_VERDICT marker and its 30 min window, list parsing (empty elements, a newline,
+# an OCI-name alphabet), and Guard 2: the probed list equals the repos the hosts pull AND the value
+# reaches the probe through every writer unchanged (server.tf, cloud-init.yml, web-probe-envwrite.sh).
+#
 # ENV-DRIVEN plain bash: we EXECUTE the real .sh directly. Pure bash + python3 + a loopback
 # HTTP server — no docker, network egress, or root.
 #
@@ -34,6 +40,13 @@ assert() {
   if eval "$cond"; then PASS=$((PASS + 1)); echo "  PASS: $desc"
   else FAIL=$((FAIL + 1)); echo "  FAIL: $desc"; echo "        condition: $cond"; fi
 }
+
+# Instrument self-test (ADR-193): drive assert() with a condition that must FAIL and refuse to continue
+# unless the FAIL counter moved; a disarmed assert() would otherwise report every row green. Reported with
+# printf and exit, never through assert(), and the counters are restored so the totals are unaffected.
+_PF=$FAIL; assert "instrument self-test (expected FAIL, discarded)" "false" >/dev/null
+if [[ "$FAIL" -ne $((_PF + 1)) ]]; then printf 'FAIL: assert() cannot fail — the suite is disarmed\n'; exit 1; fi
+FAIL=$_PF
 
 TMP="$(mktemp -d)"
 SRV_PID=""
@@ -54,7 +67,7 @@ run_override() {  # <injected http code>
   local code="$1" pinglog ec=0
   pinglog="$(mktemp "$TMP/ping.XXXXXX")"
   SOLEUR_ZOT_PROBE_STATUS_OVERRIDE="$code" SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" \
-    SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" \
+    SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
     ZOT_PROBE_REPO=known/repo ZUSER=u ZTOK=t \
     bash "$SUT" >/dev/null 2>&1 || ec=$?
   EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes
@@ -124,7 +137,7 @@ run_probe() {  # <script> <repo>
   local script="$1" repo="$2" pinglog outf ec=0
   pinglog="$(mktemp "$TMP/ping.XXXXXX")"; outf="$(mktemp "$TMP/out.XXXXXX")"
   SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" SOLEUR_PROBE_VERBOSE=1 \
-    SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" \
+    SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
     ZOT_ENDPOINT="127.0.0.1:$PORT" ZOT_PROBE_REPO="$repo" ZUSER=zuser ZTOK=ztok \
     timeout 20 bash "$script" >"$outf" 2>&1 || ec=$?
   EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes; OUT="$(cat "$outf")"
@@ -150,7 +163,7 @@ assert "(d) => reports the #6400-inside-the-probe 404 case"       "grep -q 'EMPT
 # listener (binding it needs root), so the connect is refused immediately. Only this
 # behavioural row reaches the live capture; the seam override bypasses it.
 DEAD_PING="$(mktemp "$TMP/ping.XXXXXX")"; DEAD_OUT="$(mktemp "$TMP/out.XXXXXX")"; DEAD_EC=0
-SOLEUR_ZOT_PROBE_PING_LOG="$DEAD_PING" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" \
+SOLEUR_ZOT_PROBE_PING_LOG="$DEAD_PING" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
   ZOT_ENDPOINT="127.0.0.1:1" ZOT_PROBE_REPO=known/repo \
   ZUSER=zuser ZTOK=ztok timeout 20 bash "$SUT" >"$DEAD_OUT" 2>&1 || DEAD_EC=$?
 assert "(e) dead endpoint => the 000 UNREACHABLE verdict (private-net path down)" \
@@ -204,7 +217,7 @@ run_stub() {  # <ZUSER> <ZTOK> [repo list] -> EC / PINGED / OUT / SARGV / SSTDIN
   SARGV="$(mktemp "$TMP/sargv.XXXXXX")"; SSTDIN="$(mktemp "$TMP/sstdin.XXXXXX")"
   pinglog="$(mktemp "$TMP/ping.XXXXXX")"; outf="$(mktemp "$TMP/out.XXXXXX")"
   STUB_ARGV="$SARGV" STUB_STDIN="$SSTDIN" PATH="$TMP/stubbin:$PATH" \
-    SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" \
+    SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$((++MARKER_N))" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
     ZOT_ENDPOINT="127.0.0.1:9" ZOT_PROBE_REPO="${3:-known/repo}" ZUSER="$1" ZTOK="$2" \
     timeout 20 bash "$SUT" >"$outf" 2>&1 || ec=$?
   EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes; OUT="$(cat "$outf")"
@@ -349,9 +362,9 @@ run_override_multi() {  # <repo list> <positional codes> [marker file] -> EC / P
 # Marker lines name BOTH repos on every run, so fault-line assertions read FAULTS (SUPPRESS / HARD
 # FAILURE lines only), never MOUT; marker assertions read MOUT.
 has_marker() {  # <repo> <code> <verdict>
-  grep -qE "SOLEUR_ZOT_PROBE_REPO repo=$1 code=$2 verdict=$3 ts=[0-9]+\$" "$MOUT"
+  grep -qE "SOLEUR_ZOT_PROBE_VERDICT repo=$1 code=$2 verdict=$3 ts=[0-9]+\$" "$MOUT"
 }
-count_markers() { local n; n=$(grep -c 'SOLEUR_ZOT_PROBE_REPO ' "$MOUT" || true); printf '%s' "$n"; }
+count_markers() { local n; n=$(grep -c 'SOLEUR_ZOT_PROBE_VERDICT ' "$MOUT" || true); printf '%s' "$n"; }
 faults_name() { grep -qF "repo=$1" "$FAULTS"; }
 
 # T1 — both servable => ping, exit 0, a marker per repo.
@@ -444,8 +457,40 @@ assert "T7 the web repo is still derived from var.image_name" \
   "grep -qE '^[[:space:]]*zot_probe_repo_web[[:space:]]*=[[:space:]]*regex\\(\"\\^\\[\\^:@\\]\\+\", replace\\(var\\.image_name' '$PROBE_TF'"
 assert "T7 local.zot_probe_repo is EXACTLY the comma join of those two (a two-element set, not a floor)" \
   "grep -qE '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*join\\(\",\", \\[local\\.zot_probe_repo_web, local\\.zot_probe_repo_inngest_bootstrap\\]\\)[[:space:]]*\$' '$PROBE_TF'"
-assert "T7 no new root variable carries the repo (variables.tf is a registry-replace trigger path)" \
+assert "T7 the one guessed variable name is absent from variables.tf (the real guard: variables.tf is not in the diff, AC5)" \
   "! grep -qF 'variable \"inngest_bootstrap_repo\"' '$SCRIPT_DIR/variables.tf'"
+# Guard 2, the WIRE: the list the probe is HANDED, not only the list web-probe.tf builds. Each writer must
+# pass the joined local through unchanged; truncating, narrowing or dropping it at any one of them leaves the
+# probe covering one repo while the heartbeat stays green.
+SERVER_TF="$SCRIPT_DIR/server.tf"
+ENVWRITE="$SCRIPT_DIR/web-probe-envwrite.sh"
+assert "T7 server.tf hands the joined local to the cloud-init template (zot_probe_repo = local.zot_probe_repo)" \
+  "grep -qE '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*local\\.zot_probe_repo[[:space:]]*\$' '$SERVER_TF'"
+assert "T7 server.tf's triggers_replace hashes the joined local (a change to the list re-runs the SSH provisioner)" \
+  "grep -qE '^[[:space:]]*local\\.zot_probe_repo,[[:space:]]*\$' '$SERVER_TF'"
+# shellcheck disable=SC2016  # the literal ${local.zot_probe_repo} is the HCL text under test
+LOCAL_REF="$(printf "'%s'" '${local.zot_probe_repo}')"
+ssh_writer_ok() {  # the printf line that writes ZOT_PROBE_REPO hands it the joined local (not a narrower one)
+  grep -E '^[[:space:]]*"\( umask' "$SERVER_TF" | grep -E 'ZOT_PROBE_REPO=%s' | grep -cF -- "$LOCAL_REF" >/dev/null
+}
+assert "T7 server.tf's SSH provisioner writes ZOT_PROBE_REPO from the joined local (the only live path on web-1)" "ssh_writer_ok"
+# shellcheck disable=SC2016  # the literal ${zot_probe_repo} is the template text under test
+CI_LINE="$(printf "    SOLEUR_ZOT_PROBE_REPO='%s'" '${zot_probe_repo}')"
+ci_line_ok() { grep -qxF -- "$CI_LINE" "$CLOUD_INIT_WEB"; }
+assert "T7 cloud-init.yml bakes the templated list into SOLEUR_ZOT_PROBE_REPO verbatim" "ci_line_ok"
+assert "T7 web-probe-envwrite.sh passes SOLEUR_ZOT_PROBE_REPO to the ZOT_PROBE_REPO printf slot unmodified" \
+  "grep -qF '\"\$SOLEUR_ZOT_ENDPOINT\" \"\$SOLEUR_ZOT_PROBE_REPO\" \"WEB_ZOT_CONSUMER_URL_' '$ENVWRITE'"
+# The pull side, completely: EVERY registry-prefixed pin in the two cloud-init files, and the deploy-time
+# ALLOWED_IMAGES set, name only repositories the probe covers (a third pin or a third image is a repository
+# the probe would not see).
+all_pins() {  # <file...> -> every NAME=REF pin path, one per line, sorted unique
+  sed -n 's|^[[:space:]]*[A-Z]*REF="\$[A-Za-z_{}]*/\([^:@"]*\)[:@].*|\1|p' "$@" | sort -u
+}
+assert "T7 every registry-prefixed pin in both cloud-init files names the one bootstrap repository (a third pin fails here)" \
+  "[[ \"\$(all_pins '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST')\" == '$TF_BOOT' ]]"
+ALLOWED_PATHS="$(sed -n '/^declare -A ALLOWED_IMAGES=(/,/^)/p' "$SCRIPT_DIR/ci-deploy.sh" | sed -n 's|.*="ghcr\.io/\([^"]*\)".*|\1|p' | sort)"
+assert "T7 ci-deploy.sh ALLOWED_IMAGES holds exactly two images (web + bootstrap) and the bootstrap one is the probed constant" \
+  "[[ \"\$(wc -l <<<'$ALLOWED_PATHS')\" -eq 2 ]] && grep -qxF '$TF_BOOT' <<<'$ALLOWED_PATHS'"
 # H3 — the extraction helper is driven against a synthetic fixture whose pin names a DIFFERENT, consistent
 # repo: it must return THAT path (so the check cannot be a self-comparison with the constant).
 PIN_FIXTURE="$(mktemp "$TMP/pinfix.XXXXXX")"
@@ -511,6 +556,89 @@ SOLEUR_ZOT_PROBE_STATUS_OVERRIDE=200 SOLEUR_ZOT_PROBE_PING_LOG="$FUT_PL" \
 assert "T9 a FUTURE-dated canary marker emits the canary (the latent silent-canary defect)" \
   "grep -qF 'SOLEUR_PROBE_CANARY' '$FUT_OUT'"
 
+# T10 — TWO faulting repos: the aggregation is a conjunction over the whole list, not a "one fault" flag.
+echo "--- #7258: aggregation under multiple faults, fault-line attribution ---"
+for pair in 404,404 000,000 503,404 000,302; do
+  run_override_multi "$WEB_R,$BOOT_R" "$pair"
+  assert "T10 $pair (both faulting) => NO ping, exit 0" "[[ '$PINGED' == no && '$EC' -eq 0 ]]"
+  assert "T10 $pair => one fault line per faulting repo, each naming its own repo" \
+    "[[ \"\$(wc -l < '$FAULTS')\" -eq 2 ]] && faults_name $WEB_R && faults_name $BOOT_R"
+done
+run_override_multi "$WEB_R,$BOOT_R" 401,401
+assert "T10 401,401 (both auth-broke) => exit 3, NO ping" "[[ '$EC' -eq 3 && '$PINGED' == no ]]"
+assert "T10 401,401 => a HARD FAILURE line per repo" "[[ \"\$(grep -cF 'HARD FAILURE: 401' '$FAULTS')\" -eq 2 ]] && faults_name $WEB_R && faults_name $BOOT_R"
+# A fault line names ONLY the faulting repo and ends with it, for every fault class.
+for c in 000 503 302 404 401; do
+  run_override_multi "$WEB_R,$BOOT_R" "200,$c"
+  assert "T10 200,$c => exactly one fault line, naming only the bootstrap repo, ending with it" \
+    "[[ \"\$(wc -l < '$FAULTS')\" -eq 1 ]] && faults_name $BOOT_R && ! faults_name $WEB_R && grep -qE 'repo=$BOOT_R\$' '$FAULTS'"
+  run_override_multi "$WEB_R,$BOOT_R" "$c,200"
+  assert "T10 $c,200 => exactly one fault line, naming only the web repo, ending with it" \
+    "[[ \"\$(wc -l < '$FAULTS')\" -eq 1 ]] && faults_name $WEB_R && ! faults_name $BOOT_R && grep -qE 'repo=$WEB_R\$' '$FAULTS'"
+done
+
+# T11 — the list is NOT capped at two: a third element is probed, marked and gates the ping.
+run_override_multi "a/x,b/y,c/z" 200,200,200
+assert "T11 three repos, all 200 => ping, a marker per repo" "[[ '$PINGED' == yes && \"\$(count_markers)\" -eq 3 ]] && has_marker c/z 200 servable"
+run_override_multi "a/x,b/y,c/z" 200,200,404
+assert "T11 the THIRD repo faulting => NO ping, fault line naming only it" "[[ '$PINGED' == no ]] && faults_name c/z && ! faults_name a/x && ! faults_name b/y"
+
+# T12 — a newline in the value would let `read` drop every later element and silently shrink the conjunction.
+echo "--- #7258: list parsing guards ---"
+run_override_multi $'a/b\nc/d' 200,200
+assert "T12 a newline in ZOT_PROBE_REPO => FATAL exit 1 before any curl, ping or marker" \
+  "[[ '$EC' -eq 1 && '$PINGED' == no && \"\$(count_markers)\" -eq 0 ]] && grep -qF 'newline' '$MOUT'"
+
+# T13 — an element outside the OCI repository-name alphabet changes the request path (or makes curl glob)
+# rather than naming a repository: FATAL exit 1, no ping, no marker. The control row must PING.
+for bad in 'a/b?c' 'a/b#c' 'a/../b' 'a[1-2]' 'a{b,c}' 'Upper/Case' '/abs/x' 'trail/' 'a//b' '-flag/x' '.hidden/x' 'a/b:tag' 'a/b@sha'; do
+  run_override_multi "$bad" 200
+  assert "T13 element '$bad' => FATAL exit 1, no ping, no marker" \
+    "[[ '$EC' -eq 1 && '$PINGED' == no && \"\$(count_markers)\" -eq 0 ]]"
+done
+run_override_multi "a-b/c_d.e,f/g-h" 200,200
+assert "T13 control: a name using every permitted separator (. _ - /) pings" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
+
+# T14 — the window length and the doubtful marker contents. A 60 s window would defeat the quota rationale;
+# a >10-digit or zero-padded value must never silence the markers for good.
+echo "--- #7258: marker window length and hardened doubtful states ---"
+printf '%s\n' "$(( $(date +%s) - 600 ))" > "$MK"
+run_override_multi "$WEB_R,$BOOT_R" 200,200 "$MK"
+assert "T14 a 10-minute-old marker => still inside the 30-minute window: NO markers" "[[ \"\$(count_markers)\" -eq 0 ]]"
+marker_row "31 minutes old (just past the window)" "$(( $(date +%s) - 1860 ))"
+marker_row "a 20-digit number (overflows integer compares)" "99999999999999999999"
+marker_row "zero-padded and old (would read as invalid octal)" "0000000008"
+# 2^64 + now wraps to a FRESH epoch under 64-bit arithmetic: without the width guard it would read as "just
+# written" and silence the markers for good.
+marker_row "2^64 + now (wraps to a fresh epoch)" "$(python3 -c "print(2**64 + $(date +%s))")"
+# A clock that cannot be read must emit, never silence (a missing marker would otherwise read 0 - 0 < 1800).
+mkdir -p "$TMP/nodate"; printf '#!/bin/sh\nexit 1\n' > "$TMP/nodate/date"; chmod +x "$TMP/nodate/date"
+rm -f "$MK"
+PATH="$TMP/nodate:$PATH" run_override_multi "$WEB_R,$BOOT_R" 200,200 "$MK"
+assert "T14 an unreadable clock (date fails) with no marker => the markers ARE emitted" "[[ \"\$(count_markers)\" -eq 2 ]]"
+
+# T15 — the two markers must not share a default path: the canary stamps first in the same run, which
+# would close the window for every repo marker for good (the telemetry meant to prove a healthy run).
+def_of() { sed -n "s|.*[$]{$1:-\([^}]*\)}.*|\1|p" "$SUT" | head -1; }
+DEF_CANARY="$(def_of SOLEUR_PROBE_CANARY_MARKER)"
+DEF_REPOS="$(def_of SOLEUR_PROBE_REPOS_MARKER)"
+assert "T15 both default marker paths were extracted (non-empty)" "[[ -n '$DEF_CANARY' && -n '$DEF_REPOS' ]]"
+assert "T15 the canary and per-repo marker default paths DIFFER" "[[ '$DEF_CANARY' != '$DEF_REPOS' ]]"
+
+# T16 — instrument controls. has_marker must be able to FAIL (a stub that always returned true would
+# otherwise pass every positive row), and the run must have executed at least the floor of assertions.
+run_override_multi "$WEB_R,$BOOT_R" 200,404
+assert "T16 has_marker is strict: the wrong code is not a match"    "! has_marker $WEB_R 404 servable"
+assert "T16 has_marker is strict: the wrong verdict is not a match" "! has_marker $BOOT_R 404 servable && ! has_marker $BOOT_R 200 empty"
+assert "T16 has_marker is strict: an unlisted repo is not a match"  "! has_marker nobody/here 200 servable"
+
 echo
 echo "=== $PASS passed, $FAIL failed ==="
+# Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
+# the SAME edit that adds rows; it is reported with printf, never through assert().
+MIN_ASSERTS=183
+if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
+  printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

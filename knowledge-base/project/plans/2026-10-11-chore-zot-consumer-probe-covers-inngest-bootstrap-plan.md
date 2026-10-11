@@ -69,7 +69,7 @@ comment on #7258 (see `## Step B follow-up`).
 | Claim (issue #7258 / brief) | Reality (verified 2026-10-11) | Plan response |
 |---|---|---|
 | #7258: the probe "now takes a comma-separated repo list covering both platform repos (authored on `feat-one-shot-resend-inbound-webhook-500`, currently held)" | False on `main`: single `ZOT_PROBE_REPO`, no list parsing. The work exists only as commit `f6279068df` on `origin/feat-one-shot-resend-inbound-webhook-500` (PR #7158 closed unmerged) | Build it here. Salvage the DESIGN only: that commit's curl line is the pre-#9597 `-u "$ZUSER:$ZTOK"` argv form and predates the `000000` normalization and `--canary-only`, so a cherry-pick would regress three shipped fixes |
-| That commit added `variable "inngest_bootstrap_repo"` in `variables.tf` | `registry-host-replace-dispatch.yml` lists `apps/web-platform/infra/variables.tf` in its push `paths:` — a variables.tf edit would fire a registry HOST REPLACE | Use new `locals` in `web-probe.tf` only. `variables.tf` and `server.tf` stay untouched (`apply-deploy-pipeline-fix.yml` fires on `server.tf`) |
+| That commit added `variable "inngest_bootstrap_repo"` in `variables.tf` | `registry-host-replace-dispatch.yml` lists `apps/web-platform/infra/variables.tf` in its push `paths:` — a variables.tf edit WAKES the registry-host-replace gate, which is a cheap no-op unless a render input changes (so the avoidance is blast-radius hygiene, not a host-replace risk) | Use new `locals` in `web-probe.tf` only. `variables.tf` and `server.tf` stay untouched (`apply-deploy-pipeline-fix.yml` fires on `server.tf`) |
 | Brief: heartbeat is "per host" via `betteruptime_heartbeat.web_zot_consumer` | Confirmed (`for_each = var.web_hosts`). Live (Better Stack API, 2026-10-11): `soleur-web-zot-consumer-web-1` (id 473113) and `-web-2` (id 475781) are `up`, `paused=false`, period 180 / grace 60; no incident on either since 2026-10-08 | Keep both; add no resource |
 | Brief: the apply workflow "applies ssh-provisioned resources over the bridge to web-1" | True for web-1. The bridge (`.github/actions/cf-tunnel-ssh-bridge`) installs an iptables REDIRECT for web-1's `SERVER_IP:22` only. The SAME post-bridge apply step also targets `terraform_data.egress_gateway_web2` (web-2 public IP), which times out (`dial tcp 204.168.189.200:22: i/o timeout`) | See `## Hypotheses` and Decision D5: independent of this change; web-1 resources run concurrently and complete (evidence in D5) |
 | Brief: "the previous PR #9942 and its apply finished" | Its push apply (run 38106710993) CONCLUDED `failure` at that web-2 step; every push apply since 2026-10-10 21:43Z (PR #9529) is red the same way; a later dispatch (run 38107265749, `registry_host_replace`) succeeded | Treat "finished" as "nothing in flight". Phase 0 re-checks. Observation is telemetry-based, never job-colour-based |
@@ -194,7 +194,7 @@ Consequence: the post-bridge apply step is RED on web-2 independent of this chan
 - [ ] AC1. `web-zot-consumer-probe.sh` accepts `ZOT_PROBE_REPO` as a comma-separated list. For a single-element value, the ping decision, exit code and every pre-existing fault-line prefix are unchanged: the existing suite rows (a)-(h) and the canary rows pass UNCHANGED. (The new per-repo marker line is additional output, not a change to those.)
 - [ ] AC2. With two repos, the heartbeat ping is logged iff both classify `200`; any other combination (`200,404`, `404,200`, `200,000`, `200,503`, `200,<unexpected>`) logs NO ping; a `401` on either position exits 3 with no ping; the OTHER repo's line is still emitted; every fault line contains `repo=<path>` and keeps its pre-change prefix.
 - [ ] AC3. A list with no non-empty element (`,,`) exits 1 (FATAL) with no ping and no marker; a trailing comma with all other elements `200` still pings; an element containing whitespace exits 1 (FATAL), never builds a URL from it.
-- [ ] AC4. A marker line `SOLEUR_ZOT_PROBE_REPO repo=<path> code=<n> verdict=<v> ts=<epoch>` is emitted once per repo per rate-limit window (1800 s) regardless of verdict (including the 401 path, before the exit), and a missing, empty, non-numeric or FUTURE-dated marker file causes an emit (never silence).
+- [ ] AC4. A marker line `SOLEUR_ZOT_PROBE_VERDICT repo=<path> code=<n> verdict=<v> ts=<epoch>` is emitted once per repo per rate-limit window (1800 s) regardless of verdict (including the 401 path, before the exit), and a missing, empty, non-numeric or FUTURE-dated marker file causes an emit (never silence).
 - [ ] AC5. `web-probe.tf` derives `local.zot_probe_repo` as the comma join of the image-derived web repo and a `locals` constant for the bootstrap repo; `variables.tf` and `server.tf` are byte-unchanged (`git diff --stat origin/main -- apps/web-platform/infra/variables.tf apps/web-platform/infra/server.tf` is empty).
 - [ ] AC6. A static test asserts the bootstrap-repo constant equals the repository path component of the `ZIREF` pins in `cloud-init.yml` AND `cloud-init-inngest.yml` (derived from those files with a non-empty assertion, not restated) and that the join is exactly the two-element set.
 - [ ] AC7. `BASELINE_DECLARED_PROBES` is bumped by exactly one over the value re-read at work time (55 -> 56 on today's main) with a dated ledger comment naming this plan.
@@ -233,7 +233,7 @@ Other domains: no cross-domain implications. Product/UX: none (no user-facing su
 
 ```yaml
 liveness_signal:
-  what: Better Stack heartbeat soleur-web-zot-consumer-web-1 (id 473113), pinged by the probe only when EVERY repository in ZOT_PROBE_REPO is HTTP 200; plus per-repo SOLEUR_ZOT_PROBE_REPO marker rows and the existing SOLEUR_PROBE_CANARY positive control; a missing ping IS the alert
+  what: Better Stack heartbeat soleur-web-zot-consumer-web-1 (id 473113), pinged by the probe only when EVERY repository in ZOT_PROBE_REPO is HTTP 200; plus per-repo SOLEUR_ZOT_PROBE_VERDICT marker rows and the existing SOLEUR_PROBE_CANARY positive control; a missing ping IS the alert
   cadence: 60 s timer; heartbeat period 180 s with 60 s grace; marker rows at most once per 30 min
   alert_target: Better Stack heartbeat email escalation (betterstack_paid_tier stays false)
   configured_in: apps/web-platform/infra/web-probe.tf (betteruptime_heartbeat.web_zot_consumer, local.zot_probe_repo) and apps/web-platform/infra/web-zot-consumer-probe.sh
@@ -242,29 +242,29 @@ error_reporting:
   fail_loud: a 401 on any repo exits 3 (unit failed) and logs HARD FAILURE with repo=<path>; every other fault logs a SUPPRESS line with repo=<path> on every faulting run; an empty or whitespace list exits 1 with FATAL
 failure_modes:
   - mode: bootstrap repo unservable to the host pull credential (404 empty/detached, 401 auth, 000 unreachable, 5xx wedged)
-    detection: Better Stack Logs layer (vector journald Source 4) fault line naming repo=jikig-ai/soleur-inngest-bootstrap with the code, and the heartbeat goes absent
+    detection: Better Stack Logs layer 3 (vector journald Source 4) fault line naming repo=jikig-ai/soleur-inngest-bootstrap with the code, and the heartbeat goes absent
     alert_route: Better Stack heartbeat email on absence; the fault line is read with scripts/betterstack-query.sh
   - mode: aggregation defect masks a faulting repo (any-of, first-only, 401 demoted)
-    detection: CI layer, web-zot-consumer-probe.test.sh rows T1-T4 plus the mutation battery in the Guard Contract
+    detection: CI layer (build-time defect, no runtime layer applies), web-zot-consumer-probe.test.sh rows T1-T4 and T10 plus the mutation batteries in the Guard Contract and the PR body
     alert_route: required CI check red on the PR
   - mode: Source 4 / vector dead so fault and marker lines never leave the host
     detection: Better Stack Logs layer, SOLEUR_PROBE_CANARY absence (existing positive control, emitted outside the doppler wrapper); the Step B recipe treats an absent canary as not-gradable
     alert_route: existing canary absence assertions; the recipe's output on #7258
   - mode: rate-limit marker file lost, corrupt or future-dated
-    detection: the probe emits MORE (fail toward emitting); asserted in test T9
+    detection: CI layer (build-time defect, no runtime layer applies): the probe emits MORE (fail toward emitting, including a >10-digit or zero-padded value); asserted in tests T9 and T14
     alert_route: CI layer (suite), no runtime alert needed because the failure direction is louder
   - mode: delivery to web-1 does not land (post-bridge apply step red or skipped)
     detection: workflow run log layer, the apply run log line for terraform_data.zot_consumer_probe_install, and marker-row absence 15 minutes after it
     alert_route: existing notify-apply-failure ops email; AC12 fails the post-merge observation
   - mode: new env list reaches an old probe script on a fresh host (skew)
-    detection: Better Stack Logs layer, a 404 or unexpected-code fault line whose repo= value contains a comma; prevented upstream by the host-scripts coherence preflight on the host create and replace jobs
+    detection: Better Stack Logs layer 3 (vector journald Source 4), an OLD-script fault line that carries NO `repo=` token and shows the comma-joined path, i.e. `SUPPRESS ping: 404 ... for <web>,<bootstrap>` or `unexpected code ... /v2/<a>,<b>/tags/list` (the new script splits on commas, so it can never print a comma-valued `repo=`); prevented upstream by the host-scripts coherence preflight on the host create and replace jobs
     alert_route: heartbeat email on absence for that host
 logs:
   where: Better Stack Logs (source shared with the web hosts; host_name soleur-web-platform for web-1, soleur-web-2 for web-2), journald on the host (not read)
   retention: Better Stack warehouse retention (archive arm included by scripts/betterstack-query.sh mode 2 unless --no-archive)
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_PROBE_REPO --limit 5
-  expected_output: SOLEUR_ZOT_PROBE_REPO
+  command: bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_PROBE_VERDICT --limit 5
+  expected_output: SOLEUR_ZOT_PROBE_VERDICT
   credentials_required: BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD via Doppler soleur/prd_terraform — the Logs warehouse read connection is credential-gated; the property (per-repo marker rows from web-1) lands only in that warehouse, which has no unauthenticated read path
 ```
 
@@ -389,7 +389,7 @@ Extend `apps/web-platform/infra/web-zot-consumer-probe.test.sh` (no new suite fi
 - Per repo, keep the curl line byte-identical to today except `${r}` for `${REPO}` (the suite's sed mutants (b) and (c) key on its text), and keep the `000000` normalization inside the loop.
 - Keep per-repo fault lines with their existing prefixes, appending `repo=<path>` where the text did not already name it. No early exit inside the loop: a 401 sets `auth_broke`, other faults set `unservable`, so every repo's line is emitted.
 - Extract the window check from `_canary` into one helper `_window_open <marker-file>` (true when the file is missing, empty, non-numeric, in the future, or older than 1800 s) and call it from both `_canary` (existing marker, unchanged behaviour) and the new `_repo_markers` (`SOLEUR_PROBE_REPOS_MARKER`, default `/run/web-zot-consumer-probe.repos`). The canary rows (existing suite) must pass unchanged. One deliberate behaviour change: the current `_canary` treats a numeric FUTURE-dated marker as fresh (`now - last` is negative, so it never emits), a latent silent-canary defect; the shared helper emits in that case, which fixes the canary as well and is asserted once in T9.
-- After the loop: emit the markers (`SOLEUR_ZOT_PROBE_REPO repo= code= verdict= ts=`, one per repo, any verdict), then aggregate: any 401 -> exit 3; else any fault -> exit 0 without ping; else `_ping` and the VERBOSE line, exit 0.
+- After the loop: emit the markers (`SOLEUR_ZOT_PROBE_VERDICT repo= code= verdict= ts=`, one per repo, any verdict), then aggregate: any 401 -> exit 3; else any fault -> exit 0 without ping; else `_ping` and the VERBOSE line, exit 0.
 - Seam: `SOLEUR_ZOT_PROBE_STATUS_OVERRIDE` is a positional comma list over the NON-EMPTY elements in order (a single code is the one-repo case; missing positions read `000`).
 - `--canary-only` mode and the refuse-to-trace guard are untouched; update the header comment to describe the list contract and the 20 s worst case.
 
@@ -420,7 +420,7 @@ Bump `BASELINE_DECLARED_PROBES` by exactly one in `plugins/soleur/test/preflight
 R1. Delivery anchor T0: `gh run list --workflow apply-web-platform-infra.yml --branch main --limit 5 --json databaseId,headSha,createdAt,conclusion`, then for the merge commit's run: `gh run view <id> --log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -F 'terraform_data.zot_consumer_probe_install: Creation complete' | head -3` (the log timestamp is T0; AC12).
 
 R2. Marker, fault and control rows (Logs warehouse; decode `.raw | fromjson`, keep rows with `.host_name == "soleur-web-platform"` and `.SYSLOG_IDENTIFIER == "web-zot-consumer-probe"`, text in `.MESSAGE // .message`):
-`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_PROBE_REPO --limit 200 > "$SCRATCH/m.jsonl"`; the same with `--grep 'SUPPRESS ping' --grep 'HARD FAILURE'` (faults) and `--grep SOLEUR_PROBE_CANARY` (control). Use separate queries with an explicit high `--limit` so a fault flood cannot truncate the marker rows out of one OR query. Grade only rows after T0.
+`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_PROBE_VERDICT --limit 200 > "$SCRATCH/m.jsonl"`; the same with `--grep 'SUPPRESS ping' --grep 'HARD FAILURE'` (faults) and `--grep SOLEUR_PROBE_CANARY` (control). Use separate queries with an explicit high `--limit` so a fault flood cannot truncate the marker rows out of one OR query. Grade only rows after T0.
 
 R3. Heartbeat and incidents (credential on curl's stdin config, never argv): look the heartbeat up by NAME `soleur-web-zot-consumer-web-1` in `GET /api/v2/heartbeats?per_page=100` (`status`, `paused`), and `GET /api/v2/incidents?from=<T0 date>&to=<tomorrow>&per_page=100` filtered to that name (zero rows after T0).
 
@@ -496,3 +496,13 @@ Gate: AC13 holds and its recipe output is posted on #7258 (AC14), and `git grep 
 - Test fixtures are synthesized (`cq-test-fixtures-synthesized-only`); never paste real telemetry rows into a suite.
 - A web-host create or replace dispatch before this merge's release has deployed will fail the host-scripts coherence preflight — by design.
 - The recipe's bucket arithmetic is `floor(ts/1800)` over the marker `ts=` field, not arrival time: two rows 1800 s apart can share a bucket, so wait for a third marker if needed.
+
+## Review Amendments (2026-10-11, PR #9979 review panel at a2dd5b5996) — appended; nothing above is rewritten except the one false mechanism sentence in the Research Reconciliation table and the observability detection layers
+
+- **Held-branch gate, named.** The held `feat-one-shot-resend-inbound-webhook-500` branch's own review notes carry a PROMOTION CRITERION ("MUST NOT merge until observed green on a real run"), warning that a merge would install a probe that suppresses its own heartbeat if the bootstrap repo is not yet mirrored. This plan REORDERS that: Step A merges first and is observed afterwards (Phase 7), with Step B (the delete) as the gated step. The reordering rests on the operator decision recorded 2026-10-10 ("Go: probe PR, then delete"); the accepted risk is a heartbeat that goes absent for web-1 if the bootstrap repo is unservable to the pull credential on the first real run, visible within one heartbeat period plus grace (240 s) and read from telemetry, never from SSH.
+- **Marker renamed `SOLEUR_ZOT_PROBE_VERDICT`.** The first name collided with the existing env-var name `SOLEUR_ZOT_PROBE_REPO` (cloud-init.yml, web-probe-envwrite.sh), which now carries the comma list; a `--grep SOLEUR_ZOT_PROBE_REPO` would be ambiguous the day any boot output is shipped. Nothing queried the old name yet.
+- **Guard 2 is the WIRE as well as the build.** The structural-enumeration seat showed five mutations of the value's delivery path (server.tf SSH printf, the cloud-init template var, the baked cloud-init line, the env writer, `triggers_replace`) left the suite green. T7 now asserts each site, plus every registry-prefixed pin in both cloud-init files and the `ci-deploy.sh` `ALLOWED_IMAGES` set (exactly two, the bootstrap one equal to the probed constant). D1 note: the `ZIREF` pin in `cloud-init.yml` sits inside `%{ if web_colocate_inngest }` (default false), so a default-rendered web host does not pull the bootstrap image at first boot; T7 compares the pin TEXT, by design (D1), not a render.
+- **List parsing hardened.** A newline in `ZOT_PROBE_REPO` is FATAL (a newline would let `read` drop later elements and silently shrink the conjunction); an element outside the OCI repository-name alphabet is FATAL (`?`, `#`, `[`, `..` alter the request path or make curl glob). `_window_open` treats a >10-digit, zero-padded or clock-less state as doubtful and emits.
+- **Quota, stated.** Fault lines are not rate-limited: one per faulting repo per 60 s run, so a bootstrap repo that stays unservable adds up to 1440 rows/day and a full outage doubles 1440 to 2880 rows/day, inside the 25k/day headroom. The marker adds about 96 rows/day (two per 30 min). Worst case per run is 20 s (no-ping) and 40 s to a ping, against a 60 s timer and a 240 s alarm threshold.
+- **Phase 7 grading rule.** `server.tf` lands the script first and the env file second, so a tick between them runs the new script on the old single-repo env, emits a web-only marker and stamps the 30-minute window; the bootstrap marker then arrives about 30 minutes later. A first bucket carrying only the web repo is UNGRADABLE: grade from the first bucket that carries both repos. That reads late or red, never falsely green.
+- **Known and accepted, not fixed here.** `server.tf` carries a stale cite (`web-probe.tf:22`) in a comment; `server.tf` is a deploy-pipeline-fix trigger path, so the next PR that touches it should repair the comment. The sibling `inngest-consumer-probe.sh` `_fault` keeps the old future-dated-marker shape (a separate script on a separate host); `SOLEUR_ZOT_PROBE_STATUS_OVERRIDE` is honoured without the ping-log seam (pre-existing; abusing it needs Doppler prd write access).
