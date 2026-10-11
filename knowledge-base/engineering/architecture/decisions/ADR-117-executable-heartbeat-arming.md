@@ -436,6 +436,35 @@ error is read back and rolled back, because the reply can be lost after the chan
 the apply workflow. Nothing here narrows its scope. The first user is the
 git-data host liveness heartbeat ([ADR-283](./ADR-283-git-data-host-originated-liveness-heartbeat.md)).
 
+### Amendment (2026-10-11, #9703): a clock-dispatched workflow is a third feeder evidence class
+
+The two legal feeder shapes were an on-host timer enabled by a `systemctl enable --now` construct, and a
+`/etc/cron.d` drop-in, both under `apps/web-platform/infra/`. `betteruptime_heartbeat.inngest_server_probe`
+cannot use either: its property is "a fresh `host_role=dedicated` probe row is confirmed in the Logs
+warehouse", and a host-side push inside the probe cannot see a Vector journald-allowlist regression or a
+sink outage. Its feeder is a repo-side verifier run by a GitHub Actions workflow.
+
+A heartbeat's feeder may therefore be a **clock-dispatched workflow**: `kind: "cron"` with
+`evidence.file` a workflow under `.github/workflows/` and `evidence.pattern` the `bash scripts/<x>.sh`
+run line. This is a third evidence class, not a relaxed regex: the evidence-shape assertion in
+`heartbeat-reprovision-parity.test.ts` is a two-arm alternation, each arm bound on both file and
+pattern, and the new arm admits only a workflow path and a `bash scripts/<name>.sh` pattern. `checkFeeders` also requires, for the workflow arm, that the workflow carry a `schedule:` trigger or a
+`WATCHDOG_DISPATCH_TABLE` row and that the script it names exist, so a workflow that nothing starts cannot
+be declared a feeder. The
+verifier's harness binds the claim to the heartbeat (the verifier's heartbeat name equals the `.tf`
+`name`, the pattern sits on a parsed `run:` line, the Sentry status expression reads the verifier's exit
+code), and the workflow must be a `WATCHDOG_DISPATCH_TABLE` row (ADR-248) or carry a `schedule:`
+trigger.
+
+**"Fed" is not "armed".** This verifier deliberately beats nothing while the heartbeat is paused (it
+reports `fresh_heartbeat_paused` and exits 0): the response to a beat sent to a paused heartbeat is
+undocumented, and `updated_at` does not move on a beat while paused. So the row ships with
+`arming_pending` and the arming is a separately authorized, trap-rolled-back unpause described in
+`knowledge-base/engineering/operations/runbooks/inngest-server.md`. Nothing in this record states that
+the heartbeat is armed. Dropping `arming_pending` after the arm's read-back re-arms the nightly
+reconcile's `fed-but-paused` class, which is the net for a re-pause (the feeder itself exits 0 on a
+paused heartbeat and would not alert).
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`
