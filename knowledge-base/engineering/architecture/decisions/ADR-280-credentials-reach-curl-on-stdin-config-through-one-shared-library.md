@@ -340,3 +340,61 @@ variable is on the `... unusable` line beside the marker, never its value). Two 
 `PASS2_OUTCOME == failure` arm and read as a failed re-push. That is not wired because the secrets cannot change between the two steps of one job, so a credential that passed
 pass 1 cannot be refused in pass 2. And `ungraded` is a quieter class than `unreachable` (it carries no `action-required` label), although a refused Cloudflare Access or HMAC
 secret is shared by every webhook caller; the marker in the run log and the step annotation are what name it, which is a conscious trade of loudness for a true statement.
+
+## Addendum — 2026-10-11 (#9597 S5)
+
+Slice S5, the last, converts what Rule E still baselined after S4. Status stays `adopting`; the sections above are unchanged and dated, and this addendum records what S5 changed
+relative to them. No new ADR ordinal, and ADR-241 is not amended: S5 names no new `secrets.*` reference and changes no tier classification.
+
+### The apply workflow
+
+- **Five sites, the library form.** The three best-effort Better Stack heartbeat-status reads and the two Hetzner volume probes of the recovery-posture step in
+  `apply-web-platform-infra.yml` send their credential on curl's stdin config through `scripts/lib/bearer-curl.sh`, sourced from the job's own checkout (all four jobs carry
+  one). Curl's stderr is not silenced on these calls, so a refusal marker is visible in the run log. The sweep battery judges the order (the `source` line before the first call in
+  each step, which the lint cannot decide statically) and executes the real step bodies.
+- **A refusal lands in the verdict class of the failure it replaces.** The heartbeat reads stay non-gating: a refused token makes no request, prints the marker, and the step
+  summary reads "unavailable" exactly as an unreadable token did. In the posture step a refused token makes both probes return rc 2, which the existing folds turn into
+  `unknown-000` and `unknown`. No consumer treats `unknown-*` as a licence to proceed: the `absent` verdict needs a 404 on the pinned id AND a name count of 0, and the recut
+  gate aborts a resume arm unless the probe said `absent`. A refusal therefore cannot manufacture the verdict that admits a bare create.
+- **Three operator hints printed the argv form.** The `::error::` texts of the recovery-posture step and the registry-recut step (and the PROVENANCE comment above the id pin) told the operator to
+  run `curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" ...`, which puts the Hetzner token on the process command line of whatever machine they paste it into. They now print the stdin-config
+  form (`printf 'Authorization: Bearer %s' "$HCLOUD_TOKEN" | curl -s -H @- ...`: a header file read from stdin, so the token is on no argument list). Rule E does not read echo text, so nothing but review pins this.
+- **Two claims of the tracker were stale at planning time.** No `doppler secrets ... --token` call exists (the three occurrences in the file are comments; every call uses
+  `DOPPLER_TOKEN` in the environment), and the file is well under the 490,000-byte gate, so no comment prose was relocated.
+
+### Final state of baseline E
+
+The target is that baseline E holds only rows owned by other tracked work: the two `apps/cla-evidence` rows (the R2 SigV4 `--user` pair on the legal-evidence upload path), owned by #9756.
+That is the tracker's own close condition ("baseline E holds only entries owned by other tracked work"). It is reached when the registry commit of this slice is delivered; if that commit
+is carved out, the registry row stays listed and must carry its own owner (a `#N` comment line directly above it, which the battery requires) before `Closes #9597` is claimed.
+The owner of the cla-evidence rows is named in a header comment of the baseline and of the census ceiling table (the baseline writer emits it), not in a column, so the file format is
+unchanged and `--write-baseline-e` reproduces the header. A row removed by a conversion leaves the ceiling table in the same change. The battery pins set identity with the rows still
+owned by tracked work, not a count.
+
+### The registry host: an inline form with a pinned property, delivered by a host replace
+
+- **Four scripts, the inline form.** The Better Stack Logs posting scripts of `cloud-init-registry.yml` (the disk heartbeat, the container-log shipper, the private-NIC guard and the
+  boot block) carry an inline form of the library: the stored value's trailing whitespace is trimmed (as `bc_ok` does, because a value with a trailing newline worked on the old argv
+  form and curl sent the trimmed header), a judge (`_bs_ok`, byte-identical to the canonical inline `_bearer_ok` apart from the template escape; the library's alphabet
+  `[A-Za-z0-9._~+/=-]`) runs before any request, then `curl --disable --noproxy '*' ... --config -` is fed by a process substitution that is a PER-COMMAND redirect (the boot block is
+  fed to `bash -s` on stdin, so a bare `--config -` would read the rest of the script). It is not the whole library: the inline copies omit its `env -u` scrub of the variables that
+  redirect TLS trust or load libraries and its xtrace refusal.
+- **Why inline, and what the pinned property is.** The host has no checkout (cloud-init only, ADR-096), so it cannot source `scripts/lib/bearer-curl.sh`. A cloud-init-written helper was
+  the first design and was dropped because the three suites that execute these scripts extract them standalone (a helper at an absolute path would need a path rewrite in each), which is
+  the property ADR-280's inline-wrapper clause names ("a pinned property of the job or its suite"), and because a missing helper is a silent not-shipped on a host whose only signal is
+  absent rows. The user_data budget is a secondary reason and a movable one: `REGISTRY_GZIP_BUDGET` (21,600 B, ADR-185) is a tripwire below the 24,767 B policy ceiling, and the four
+  inline copies cost about 490 B stored (21,012 to 21,500 B), leaving about 100 B under the constant. The four copies of the judge, the trim and the refusal marker, and the three `post()`
+  copies, are pinned byte-equal by a parity audit in the battery, which also derives the posting population from the template by set identity per script and requires exactly one raw read
+  of the token per script.
+- **A refusal is the not-shipped branch, never the egress-FAILED branch.** A refused token prints `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>` to stderr
+  (`zot-disk-heartbeat`, `zot-log-shipper`, `soleur-private-nic-guard`, `zot-log-boot`), makes no request and keeps the script's exit status; the shipper judges once per run, before its
+  batch loop, so a refusal is one marker per five-minute run. The marker is NOT observable from Better Stack on this host: the disk-heartbeat and NIC-guard cron lines have no stderr
+  redirect and cron has no MTA, the boot block's output goes to `cloud-init-output.log`, and the shipper's cron line pipes stderr to `logger -t zot-log-shipper` (journald, `user.notice`)
+  but the shipper ships only the zot container, so it never reaches Better Stack either. A refused token therefore shows as the ABSENCE of the rows. The detector is the hourly
+  `scheduled-zot-restart-loop.yml` (a producer silent for 3 h files a `[ci/zot-telemetry-silent]` issue, which does not page, and which decays to a transient reading after 24 h of
+  silence); the positive-match Better Stack alerts read silence as healthy, and the token-free disk ping keeps its monitor green. That is why the live token's shape is read before
+  merge and why the new host's first rows are read after it. The marker stays NON_PAGING in the Better Stack drift guard, whose pin moved 67 to 71 for the four emitters.
+- **Delivery is an automatic replace.** `hcloud_server.registry` carries no `ignore_changes` on `user_data`, so merging a change to the rendered registry user_data makes
+  `registry-host-replace-dispatch.yml` dispatch `-replace=hcloud_server.registry` with no reviewer gate (ADR-096, ADR-190, and the runbook `registry-host-replace-dispatch.md`). The running
+  host keeps the argv form until that replace is delivered; the new host boots the converted scripts. The registry changes sit in their own commits (the template, the suites that execute it,
+  the battery's registry rows and this section) so that declining the replace is reverting those commits, after which the registry row stays in baseline E and needs its own owner line.

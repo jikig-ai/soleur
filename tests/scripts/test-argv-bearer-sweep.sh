@@ -3383,7 +3383,7 @@ S3_MANIFEST="$(printf '%s\n' \
   .github/workflows/scheduled-terraform-drift.yml .github/workflows/sentry-audit-gate.yml \
   .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml \
   .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml \
-  .github/workflows/restart-inngest-server.yml | sort)"
+  .github/workflows/restart-inngest-server.yml .github/workflows/apply-web-platform-infra.yml | sort)"
 S3_UNCLASS="$(comm -23 <(printf '%s\n' "$S3_POP") <(printf '%s\n' "$S3_MANIFEST"))"
 S3_STALE="$(comm -13 <(printf '%s\n' "$S3_POP") <(printf '%s\n' "$S3_MANIFEST"))"
 if [[ -z "$S3_UNCLASS" && -z "$S3_STALE" && -n "$S3_POP" ]]; then
@@ -3481,7 +3481,7 @@ done
 [[ -z "$S3_HMAC_BAD" ]] && row "S3 structure: no converted file computes an HMAC with the key on openssl's argv" ok || row "S3 structure: openssl -hmac remains" fail "$S3_HMAC_BAD"
 [[ -z "$S3_RC2_BAD" ]] && row "S3 structure: no converted statement branches on rc == 2 (the marker is the discriminator)" ok || row "S3 structure: a site branches on rc 2" fail "$S3_RC2_BAD"
 # The floor is the realized count (the YAML population after S4 converted the five more files and the inngest-health probe). BOTH operands are literals above the `if`.
-S3_CALLS_FLOOR=36
+S3_CALLS_FLOOR=41
 if [[ "$S3_CALLS" -ge "$S3_CALLS_FLOOR" ]]; then row "S3 structure: the derived population holds >= $S3_CALLS_FLOOR bc_curl call statements ($S3_CALLS)" ok; else row "S3 structure: population floor" fail "only $S3_CALLS bc_curl statements derived (floor $S3_CALLS_FLOOR)"; fi
 
 # ---- anthropic-preflight (the soft-skip trap: a refusal must stay RED) ----
@@ -3844,12 +3844,12 @@ s4_run() {
   # step (s4_body wrote <body>.decl: the workflow-level, job-level and step-level `env:` names, plus every name an earlier step of the job
   # writes to $GITHUB_ENV), an injected NAME=value whose NAME nobody declares is DROPPED (and logged), so a step that reads a variable its
   # YAML no longer declares sees it unset and the row goes red. Harness plumbing (SHIM_*, D_* for the doppler stub) and runner-provided
-  # names (GITHUB_*, RUNNER_*) and the runner's ambient LC_ALL (the locale rows) are not step env; WEB_HOST_SSH is exported by the cf-tunnel-ssh-bridge composite, not by the workflow file.
+  # names (GITHUB_*, RUNNER_*) and the runner's ambient LC_ALL (the locale rows) are not step env; WEB_HOST_SSH is exported by the cf-tunnel-ssh-bridge composite and HCLOUD_TOKEN by the infra-credentials composite, not by the workflow file.
   if [[ -r "$body.decl" ]]; then
     local -a kept=(); local a nm
     for a in "$@"; do
       nm="${a%%=*}"
-      case "$nm" in SHIM_*|D_*|GITHUB_*|RUNNER_*|WEB_HOST_SSH|LC_ALL) kept+=("$a"); continue ;; esac
+      case "$nm" in SHIM_*|D_*|GITHUB_*|RUNNER_*|WEB_HOST_SSH|HCLOUD_TOKEN|LC_ALL) kept+=("$a"); continue ;; esac
       if grep -qxF -- "$nm" "$body.decl"; then kept+=("$a"); else printf '%s %s\n' "$label" "$nm" >> "$S4/dropped.log"; fi
     done
     set -- ${kept[@]+"${kept[@]}"}
@@ -4150,7 +4150,7 @@ S4_YML_NEW=".github/actions/mint-infra-app-token/action.yml .github/workflows/ap
 S4_YML_MISS=""; for f in $S4_YML_NEW; do grep -qxF -- "$f" <<<"$S3_POP" || S4_YML_MISS+=" $f"; done
 [[ -z "$S4_YML_MISS" ]] && row "S4 population: the five newly converted YAML files and the converted inngest-health probe are all in the derived library-user set ($(printf '%s\n' "$S3_POP" | grep -c .) YAML members in all, judged by the S3 structure rows)" ok || row "S4 population: a converted YAML file is not a derived library user" fail "$S4_YML_MISS"
 # Anti-vacuity floor on the two derived populations (BOTH operands are literals on the lines IMMEDIATELY above the `if`).
-S4_POP_FLOOR=20
+S4_POP_FLOOR=21
 S4_POP_N=$(( $(printf '%s\n' "$S3_POP" | grep -c .) + $(printf '%s\n' "$S4_SCRIPT_POP" | grep -c .) ))
 if [[ "$S4_POP_N" -ge "$S4_POP_FLOOR" ]]; then row "S4 population: the derived library-user population holds $S4_POP_N members (anti-vacuity floor $S4_POP_FLOOR)" ok
 else row "S4 population: the derived library-user population is below its anti-vacuity floor" fail "n=$S4_POP_N floor=$S4_POP_FLOOR"; fi
@@ -5351,6 +5351,280 @@ else row "S4 negative canary: the refusal population is below its anti-vacuity f
 echo "=== stage S4: Guard 2 rows 13 to 24, shapes and replay done ==="
 
 # =====================================================================================
+# STAGE S5 (argv-bearer sweep S5, ADR-280): the last slice. `apply-web-platform-infra.yml` (five sites: three best-effort Better Stack
+# heartbeat-status reads and the two Hetzner existence probes of the recovery-posture step) and, in the registry commit, the four
+# Better Stack posting scripts of `cloud-init-registry.yml`, leave the process command line. Baseline E then holds only the rows owned
+# by #9756. Population and the manifests are DERIVED from the tree; the real step bodies are EXECUTED under the S4 recording curl.
+#
+#   GUARD 1  no curl of either converted file carries a credential header on its own argument list, and the baseline and the ceiling
+#            table hold exactly the rows still owned by tracked work (set identity, not a count); every library call of the apply
+#            workflow sits after its `source` line inside its own step (an ORDER row, which the lint cannot decide statically).
+#   GUARD 2  a refused credential reaches the SAME verdict class as the failure it replaces: the heartbeat reads stay non-gating
+#            ("unavailable", exit 0), the gating volume-existence probe reads `unknown-*` and can never read `absent`.
+# All credentials are synthesized. A fixture credential is built from pieces, never a contiguous token literal.
+# =====================================================================================
+S5_WF=".github/workflows/apply-web-platform-infra.yml"
+S5_REG="apps/web-platform/infra/cloud-init-registry.yml"
+S5_CANARY="S5CANARYsecret0123"
+S5_HZ="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"                   # the shape of a Hetzner Cloud token: 64 alphanumerics
+S5_BS="synth_s5-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')-tok_en"   # a Better Stack token with `_` and `-`
+S5_BAD="${S5_CANARY}\" x"                                                  # a quote and a space: outside the alphabet, so refused
+S5_HB_JSON='{"data":[{"attributes":{"name":"some-other-heartbeat","status":"down"}},{"attributes":{"name":"soleur-registry-disk-prd","status":"up"}}]}'
+S5_REFUSALS=0; S5_CANARY_RUNS=0
+# A run counts toward the negative-canary floors only when the planted canary is in its arguments (a run that plants none searches for nothing).
+s5_run() { [[ "$*" == *"$S5_CANARY"* ]] && S5_CANARY_RUNS=$((S5_CANARY_RUNS + 1)); s4_run "$@"; }
+s5_canary_clean() { ! grep -qaF -- "$S5_CANARY" < <(grep -rahv '^::add-mask::' "$S4_ROW" 2>/dev/null); }
+# The step body of ONE job (a step name is not unique across the dispatch-only jobs): a copy of the workflow holding only that job.
+s5_job_body() { # <job> <step name prefix> <out> [<from> <to>]...
+  local job="$1" sel="$2" out="$3"; shift 3
+  assert_fixture_dir "$out"
+  python3 -I -c 'import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+yaml.safe_dump({"env": d.get("env"), "jobs": {sys.argv[2]: d["jobs"][sys.argv[2]]}}, open(sys.argv[3], "w"))' "$REPO_ROOT/$S5_WF" "$job" "$out.yml" \
+    || fatal "S5 could not isolate the job '$job' of $S5_WF"
+  s4_body "$out.yml" "$sel" "$out" "$@"
+}
+S5_B_HB1="$S4/b-s5-hb1.sh"; S5_B_HB2="$S4/b-s5-hb2.sh"; S5_B_HB3="$S4/b-s5-hb3.sh"; S5_B_PST="$S4/b-s5-pst.sh"
+s5_job_body registry_host_replace "Best-effort heartbeat status" "$S5_B_HB1"
+s5_job_body registry_region_migrate "Best-effort heartbeat status" "$S5_B_HB2"
+s5_job_body registry_luks_recut "Best-effort registry disk heartbeat status" "$S5_B_HB3"
+s5_job_body registry_pull_path_gate "Resolve recovery posture" "$S5_B_PST"
+
+# ---- Guard 1: the apply workflow ----
+S5_LINT_OUT="$(python3 scripts/lint-shell-trace-credential-refusal.py "$S5_WF" 2>&1)"; S5_LINT_RC=$?
+if [[ "$S5_LINT_RC" == 0 && "$S5_LINT_OUT" == OK:* ]]; then row "S5 Guard 1: Rule E on the explicit path of the apply workflow reports no curl with a credential header of its own (the explicit path bypasses the baseline)" ok
+else row "S5 Guard 1: the apply workflow still has curl commands that carry a credential header" fail "rc=$S5_LINT_RC $(tail -1 <<<"$S5_LINT_OUT")"; fi
+# The ORDER rule the lint cannot decide: in every step that calls the library, the `source` line comes BEFORE the first call.
+s5_order_ok() { # <body file> -> rc 0 when a `source ...bearer-curl.sh` line precedes the first bc_curl statement and both exist (comment lines do not count)
+  local t src call
+  t="$(grep -vn '^[[:space:]]*#' "$1" || true)"
+  src="$(grep -m1 'source .*scripts/lib/bearer-curl\.sh' <<<"$t" | cut -d: -f1)"
+  call="$(grep -m1 'bc_curl [a-z]' <<<"$t" | cut -d: -f1)"
+  [[ -n "$src" && -n "$call" && "$src" -lt "$call" ]]
+}
+S5_ORDER_BAD=""; S5_BCN=0
+for b in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3" "$S5_B_PST"; do
+  s5_order_ok "$b" || S5_ORDER_BAD+=" ${b##*/}"
+  S5_BCN=$((S5_BCN + $(grep -v '^[[:space:]]*#' "$b" | grep -c 'bc_curl [a-z-]* ' || true)))
+done
+# The derived population: every step of the workflow that calls the library is one of the four bodies built above (a fifth call site that
+# nothing here judges is a defect); BOTH operands of the floor are literals on the lines IMMEDIATELY above the `if`.
+S5_STEPS_WITH_BC="$(python3 -I -c 'import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+n = 0
+for j in d["jobs"].values():
+    for s in (j.get("steps") or []):
+        if isinstance(s.get("run"), str) and "bc_curl " in s["run"]: n += 1
+print(n)' "$REPO_ROOT/$S5_WF")"
+S5_BC_FLOOR=5
+S5_STEPS_WANT=4
+if [[ -z "$S5_ORDER_BAD" && "$S5_BCN" -ge "$S5_BC_FLOOR" && "$S5_STEPS_WITH_BC" == "$S5_STEPS_WANT" ]]; then row "S5 Guard 1 order: in each of the four steps the library is sourced before its first call ($S5_BCN bc_curl statements, $S5_STEPS_WITH_BC steps derived from the workflow; anti-vacuity floor $S5_BC_FLOOR)" ok
+else row "S5 Guard 1 order: a step calls the library before sourcing it, or the derived population is empty or unjudged" fail "bad='${S5_ORDER_BAD# }' statements=$S5_BCN steps=$S5_STEPS_WITH_BC floor=$S5_BC_FLOOR"; fi
+# Mutation 3 (reorder): move the `source` line below the first call in one step; the order predicate must judge it RED.
+python3 -I -c 'import sys, re
+t = open(sys.argv[1]).read().split("\n")
+code = lambda l: not l.lstrip().startswith("#")
+i = next(k for k, l in enumerate(t) if code(l) and re.search(r"source .*scripts/lib/bearer-curl\.sh", l))
+line = t.pop(i)
+j = next(k for k, l in enumerate(t) if code(l) and re.search(r"bc_curl [a-z]", l))
+t.insert(j + 1, line)
+open(sys.argv[2], "w").write("\n".join(t))' "$S5_B_HB1" "$S4/b-s5-reorder.sh" || fatal "S5 could not build the reorder mutant"
+if ! cmp -s "$S5_B_HB1" "$S4/b-s5-reorder.sh" && s5_order_ok "$S5_B_HB1" && ! s5_order_ok "$S4/b-s5-reorder.sh"; then row "S5 Guard 1 mutation 3: a heartbeat step whose source line is moved below its first call is judged RED by the order predicate (the unmutated step is green)" ok
+else row "S5 Guard 1 mutation 3: the order predicate is blind to a reordered step" fail "landed=$(cmp -s "$S5_B_HB1" "$S4/b-s5-reorder.sh" && echo no || echo yes)"; fi
+
+# ---- baseline E and the ceiling table: SET IDENTITY with the rows still owned by tracked work (parametrized on the registry commit) ----
+S5_CEIL="scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv"
+S5_REG_OFFENDS=0; python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1 | grep -q '^OK:' || S5_REG_OFFENDS=1
+S5_WANT_ROWS="$(printf '%s\n' apps/cla-evidence/infra/bootstrap.sh apps/cla-evidence/scripts/r2-conditional-put.sh; (( S5_REG_OFFENDS )) && printf '%s\n' "$S5_REG"; true)"
+S5_WANT_ROWS="$(sort <<<"$S5_WANT_ROWS")"
+S5_GOT_BASE="$(grep -v '^#' "$BASE_E" | cut -f1 | sort)"; S5_GOT_CEIL="$(grep -v '^#' "$S5_CEIL" | cut -f1 | sort)"
+if [[ "$S5_GOT_BASE" == "$S5_WANT_ROWS" && "$S5_GOT_CEIL" == "$S5_WANT_ROWS" ]]; then row "S5 Guard 1: baseline E and the census ceiling each hold exactly the rows still owned by tracked work (the two #9756 files$( (( S5_REG_OFFENDS )) && echo ' and the registry file, which still carries its argv form'))" ok
+else row "S5 Guard 1: baseline E or the ceiling table differs from the rows still owned by tracked work" fail "want='${S5_WANT_ROWS//$'\n'/,}' base='${S5_GOT_BASE//$'\n'/,}' ceil='${S5_GOT_CEIL//$'\n'/,}'"; fi
+if grep -q '#9756' < <(sed -n '1,/^[^#]/p' "$BASE_E") && grep -q '#9756' < <(sed -n '1,/^[^#]/p' "$S5_CEIL"); then row "S5 Guard 1: the header of baseline E and of the ceiling table names #9756 as the owner of the cla-evidence rows" ok
+else row "S5 Guard 1: the baseline or the ceiling table does not name its owner" fail "missing #9756 in a header"; fi
+
+# ---- Guard 2: the heartbeat reads (three steps, non-gating) ----
+s5_hb_valid_ok() { # <token>: rc 0 when the valid-credential contract holds for the row just run
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 1 \
+    && [[ "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $1\"" ]] \
+    && s4_nowhere_on_argv "$1" && grep -qF -- '**up**' "$S4_ROW/summary" && s5_canary_clean \
+    && [[ "$(grep -cxF -- "::add-mask::$1" "$S4_ROW/stdout")" == 1 ]]   # the runner is told to mask THIS token, once
+}
+s5_hb_refused_ok() { # rc 0 when a refused credential made no request, printed ONE visible marker and left the step green and "unavailable"
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 1 ]] \
+    && s4_said 'SOLEUR_CREDENTIAL_REFUSED script=apply-web-platform-infra reason=token_shape' && s4_said 'bc_curl: TOKEN unusable' \
+    && grep -qF -- 'unavailable' "$S4_ROW/summary" && ! grep -qF -- '**up**' "$S4_ROW/summary" && s5_canary_clean
+}
+s5_hb_unset_ok() { # an unset or empty credential: the existing arm (no request, no marker), same verdict
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 0 ]] && grep -qF -- 'unavailable' "$S4_ROW/summary"
+}
+S5_HBN=0
+for hb in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3"; do
+  S5_HBN=$((S5_HBN + 1)); n="hb$S5_HBN"
+  s5_run "s5-$n-hz-shape" "$hb" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_HZ" SHIM_BODY="$S5_HB_JSON"
+  if s5_hb_valid_ok "$S5_HZ"; then row "S5 Guard 2 ($n): a 64-character alphanumeric credential is sent once, on curl's stdin config and on no argv, and the step summary reads the heartbeat status" ok
+  else row "S5 Guard 2 ($n): a valid credential is not sent on stdin only, or the status is not read" fail "rc=$S4_RC calls=$(s4_ncalls) stdin='$(s4_stdin_line 1 1 | cut -c1-24)...'"; fi
+  s5_run "s5-$n-bs-shape" "$hb" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_BS" SHIM_BODY="$S5_HB_JSON"
+  if s5_hb_valid_ok "$S5_BS"; then row "S5 Guard 2 ($n): a Better Stack-shaped credential holding an underscore and hyphens is accepted (the guard's alphabet matches what the vendor issues)" ok
+  else row "S5 Guard 2 ($n): a realistic Better Stack credential is refused or mis-sent" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+  s5_run "s5-$n-hostile" "$hb" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_BAD" SHIM_BODY="$S5_HB_JSON"; S5_REFUSALS=$((S5_REFUSALS + 1))
+  if s5_hb_refused_ok; then row "S5 Guard 2 ($n): a credential holding a quote and a space makes no request, prints one visible refusal marker and leaves the non-gating step green and \"unavailable\" (the old failure class)" ok
+  else row "S5 Guard 2 ($n): a refused credential does not land in the old verdict class" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+  s5_run "s5-$n-unset" "$hb" "$S4/real"; S5_REFUSALS=$((S5_REFUSALS + 1))
+  if s5_hb_unset_ok && s5_canary_clean; then row "S5 Guard 2 ($n): a credential that cannot be read (doppler fails) keeps the existing arm: no request, no marker, \"unavailable\"" ok
+  else row "S5 Guard 2 ($n): an unreadable credential changed verdict" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+done
+# Harness row (a): a recording curl that ignores `--config -` is judged RED by the same predicate (the harness cannot be satisfied by a blind shim).
+s5_run s5-hb1-blind "$S5_B_HB1" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_HZ" SHIM_BODY="$S5_HB_JSON" SHIM_NOSTDIN=1
+if [[ "$(s4_ncalls)" == 1 ]] && ! s5_hb_valid_ok "$S5_HZ"; then row "S5 harness: a curl that never reads --config - is judged RED by the heartbeat contract (the predicate is not satisfiable by a blind shim)" ok
+else row "S5 harness: a blind curl satisfied the heartbeat contract" fail "calls=$(s4_ncalls)"; fi
+# Mutation 1 (Guard 1): the argv header restored in a heartbeat step goes RED on the nowhere-on-argv clause.
+s5_job_body registry_host_replace "Best-effort heartbeat status" "$S4/b-s5-mut-argv.sh" \
+  "bc_curl apply-web-platform-infra 'Authorization:Bearer :TOKEN' -- " 'curl -H "Authorization: Bearer ${TOKEN}" '
+s5_run s5-mut-argv "$S4/b-s5-mut-argv.sh" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_HZ" SHIM_BODY="$S5_HB_JSON"
+if ! s5_hb_valid_ok "$S5_HZ" && s4_argv_has "$S5_HZ"; then row "S5 Guard 1 mutation 1: a heartbeat step that puts the header back on curl's argument list is judged RED (token on a recorded argv)" ok
+else row "S5 Guard 1 mutation 1: an argv credential header in a heartbeat step is not caught" fail "argv=$(s4_argv_has "$S5_HZ" && echo seen || echo missed)"; fi
+# Mutation 6 (Guard 2): silencing a converted call hides the marker; the marker-visible clause must go RED.
+s5_job_body registry_host_replace "Best-effort heartbeat status" "$S4/b-s5-mut-silent.sh" \
+  'https://uptime.betterstack.com/api/v2/heartbeats)' 'https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)'
+s5_run s5-mut-silent "$S4/b-s5-mut-silent.sh" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_BAD" SHIM_BODY="$S5_HB_JSON"; S5_REFUSALS=$((S5_REFUSALS + 1))
+if [[ "$(s4_ncalls)" == 0 ]] && ! s5_hb_refused_ok; then row "S5 Guard 2 mutation 6: a converted call silenced with 2>/dev/null is judged RED by the marker-visible clause (the refusal marker never appears)" ok
+else row "S5 Guard 2 mutation 6: a silenced converted call is not caught" fail "markers=$(s4_markers) calls=$(s4_ncalls)"; fi
+
+# ---- Guard 2: the gating volume-existence probe (two curls, one step) ----
+s5_pst_run() { s5_run "$1" "$2" "$S4/real" EXPECTED_VOLUME_ID=4242 "${@:3}"; }
+s5_pst_valid_ok() { # <expected probe_result>
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 2 ]] && s4_calls_ok 1 && s4_gho_has "probe_result=$1" \
+    && [[ "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $S5_HZ\"" && "$(s4_stdin_line 2 1)" == "header = \"Authorization: Bearer $S5_HZ\"" ]] \
+    && s4_nowhere_on_argv "$S5_HZ" && s5_canary_clean \
+    && [[ "$(grep -cxF -- "::add-mask::$S5_HZ" "$S4_ROW/stdout")" == 1 ]]
+}
+s5_pst_refused_ok() { # a refused credential: no request, a visible marker per call, the step green, and the result is NEVER `absent`
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 2 ]] && s4_gho_has 'probe_result=unknown-000' && ! s4_gho_has 'probe_result=absent' \
+    && s4_said 'SOLEUR_CREDENTIAL_REFUSED script=apply-web-platform-infra reason=token_shape' && s5_canary_clean
+}
+s5_pst_run s5-pst-present "$S5_B_PST" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=200 SHIM_BODY='{"volumes":[{"id":4242}]}'
+if s5_pst_valid_ok present; then row "S5 Guard 2 (posture): a pinned volume that exists reads \`present\`; both probes send the credential on stdin only and on no argv" ok
+else row "S5 Guard 2 (posture): the existing-volume probe changed verdict or leaks the credential" fail "rc=$S4_RC calls=$(s4_ncalls) gho=$(tr '\n' ' ' < "$S4_ROW/gho")"; fi
+s5_pst_run s5-pst-absent "$S5_B_PST" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=404 SHIM_BODY='{"volumes":[]}'
+if s5_pst_valid_ok absent; then row "S5 Guard 2 (posture): a 404 on the pinned id with no volume of that name reads \`absent\` (both signals agree)" ok
+else row "S5 Guard 2 (posture): the absent verdict changed" fail "rc=$S4_RC calls=$(s4_ncalls) gho=$(tr '\n' ' ' < "$S4_ROW/gho")"; fi
+s5_pst_run s5-pst-wrongid "$S5_B_PST" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=404 SHIM_BODY='{"volumes":[{"id":1}]}'
+if [[ "$S4_RC" == 1 ]] && s4_said 'the pinned volume id 4242 returned 404, but a volume named soleur-registry-store still exists'; then row "S5 Guard 2 (posture): a 404 on the pinned id while a volume of that name exists still aborts (the mistyped-id guard is unchanged)" ok
+else row "S5 Guard 2 (posture): the mistyped-id abort changed" fail "rc=$S4_RC"; fi
+s5_pst_run s5-pst-bs "$S5_B_PST" HCLOUD_TOKEN="$S5_BS" SHIM_CODE=200 SHIM_BODY='{"volumes":[{"id":4242}]}'
+[[ "$S4_RC" == 0 && "$(s4_ncalls)" == 2 ]] && row "S5 Guard 2 (posture): a credential holding an underscore and hyphens is accepted by the guard (realistic shape)" ok || row "S5 Guard 2 (posture): a realistic credential shape was refused" fail "rc=$S4_RC calls=$(s4_ncalls)"
+# A stub that would answer 404 with an empty name list (the shape that reads `absent`) is never reached by a refused credential.
+s5_pst_run s5-pst-hostile "$S5_B_PST" HCLOUD_TOKEN="$S5_BAD" SHIM_CODE=404 SHIM_BODY='{"volumes":[]}'; S5_REFUSALS=$((S5_REFUSALS + 1))
+if s5_pst_refused_ok; then row "S5 Guard 2 (posture): a refused credential makes no request, prints a visible marker per call and reads \`unknown-000\`, never \`absent\` (a refusal cannot manufacture the verdict that admits a bare create)" ok
+else row "S5 Guard 2 (posture): a refused credential reaches a verdict other than unknown-000" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers) gho=$(tr '\n' ' ' < "$S4_ROW/gho")"; fi
+s5_pst_run s5-pst-empty "$S5_B_PST" HCLOUD_TOKEN=; S5_REFUSALS=$((S5_REFUSALS + 1))
+if [[ "$S4_RC" == 1 && "$(s4_ncalls)" == 0 ]] && s4_said 'cannot read HCLOUD_TOKEN from Doppler'; then row "S5 Guard 2 (posture): an empty credential keeps the existing fail-closed abort (no request)" ok
+else row "S5 Guard 2 (posture): the unreadable-credential abort changed" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+# Mutation 1 (Guard 2): fold a refusal into the verdict that admits a create. Both folds are applied (a transport failure to 404 and an
+# unreadable count to 0), so the refused run reaches `absent`; the refused-verdict clause must go RED.
+s5_job_body registry_pull_path_gate "Resolve recovery posture" "$S4/b-s5-mut-absent.sh" \
+  '|| PROBE_STATUS="000"' '|| PROBE_STATUS="404"' 'NAME_COUNT="unknown"' 'NAME_COUNT="0"'
+s5_pst_run s5-pst-mut-absent "$S4/b-s5-mut-absent.sh" HCLOUD_TOKEN="$S5_BAD" SHIM_CODE=404 SHIM_BODY='{"volumes":[]}'; S5_REFUSALS=$((S5_REFUSALS + 1))
+if ! s5_pst_refused_ok; then row "S5 Guard 2 mutation 1: a posture step that maps a refusal to a 404 and an unreadable count to zero is judged RED by the refused-verdict clause" ok
+else row "S5 Guard 2 mutation 1: a refusal folded into \`absent\` is not caught" fail "gho=$(tr '\n' ' ' < "$S4_ROW/gho")"; fi
+# ---- review-round rows (workflow side): mask before the call, library-absent behaviour, an unreadable name count, owners ----
+# The ::add-mask:: line must precede the first call in every step (the canary filter above ignores add-mask lines, so only an ORDER row can pin it).
+s5_mask_ok() { # <body file> -> rc 0 when a non-comment ::add-mask:: line precedes the first bc_curl call
+  local t m c
+  t="$(grep -vn '^[[:space:]]*#' "$1" || true)"
+  m="$(grep -m1 'add-mask' <<<"$t" | cut -d: -f1)"
+  c="$(grep -m1 'bc_curl [a-z]' <<<"$t" | cut -d: -f1)"
+  [[ -n "$m" && -n "$c" && "$m" -lt "$c" ]]
+}
+S5_MASK_BAD=""
+for b in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3" "$S5_B_PST"; do s5_mask_ok "$b" || S5_MASK_BAD+=" ${b##*/}"; done
+grep -v 'add-mask' "$S5_B_HB1" > "$S4/b-s5-nomask.sh" || true
+if [[ -z "$S5_MASK_BAD" ]] && ! s5_mask_ok "$S4/b-s5-nomask.sh"; then row "S5 Guard 1 order: every converted step masks its token before its first call, and a step with the mask line deleted is judged RED" ok
+else row "S5 Guard 1 order: a converted step does not mask its token before the call, or the mask predicate is blind" fail "bad='${S5_MASK_BAD# }'"; fi
+s5_run s5-hb1-nomask "$S4/b-s5-nomask.sh" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_HZ" SHIM_BODY="$S5_HB_JSON"
+if ! s5_hb_valid_ok "$S5_HZ"; then row "S5 Guard 2 mutation: a heartbeat step with the ::add-mask:: line deleted is judged RED by the valid-credential row (the runner must be told to mask this token, once)" ok
+else row "S5 Guard 2 mutation: a deleted ::add-mask:: line is not caught by the executed row" fail "rc=$S4_RC"; fi
+# Library absent (an empty workspace): the heartbeat reads skip and stay green and "unavailable"; the gating posture step aborts. Neither falls back to argv.
+S5_NOLIB_BAD=""; n=0
+for hb in "$S5_B_HB1" "$S5_B_HB2" "$S5_B_HB3"; do
+  n=$((n + 1))
+  s5_run "s5-hb$n-nolib" "$hb" "$S4/real" D_BETTERSTACK_API_TOKEN="$S5_HZ" SHIM_BODY="$S5_HB_JSON" GITHUB_WORKSPACE="$S4_EMPTYWS"
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 0 ]] && grep -qF -- 'unavailable' "$S4_ROW/summary" && s4_said 'could not be loaded' || S5_NOLIB_BAD+=" hb$n"
+done
+s5_pst_run s5-pst-nolib "$S5_B_PST" HCLOUD_TOKEN="$S5_HZ" GITHUB_WORKSPACE="$S4_EMPTYWS" SHIM_CODE=200 SHIM_BODY='{"volumes":[{"id":4242}]}'
+[[ "$S4_RC" == 1 && "$(s4_ncalls)" == 0 ]] && s4_said 'could not be loaded' || S5_NOLIB_BAD+=" posture"
+if [[ -z "$S5_NOLIB_BAD" ]]; then row "S5 Guard 2: with the library absent the three heartbeat reads make no request and stay green and \"unavailable\", and the posture step aborts with no request (no argv fallback)" ok
+else row "S5 Guard 2: a converted step behaves wrongly with the library absent" fail "bad='${S5_NOLIB_BAD# }'"; fi
+s5_job_body registry_pull_path_gate "Resolve recovery posture" "$S4/b-s5-mut-nolib.sh" 'an unsent probe is not evidence of absence."; exit 1; }' 'an unsent probe is not evidence of absence."; }'
+s5_pst_run s5-pst-mut-nolib "$S4/b-s5-mut-nolib.sh" HCLOUD_TOKEN="$S5_HZ" GITHUB_WORKSPACE="$S4_EMPTYWS" SHIM_CODE=200 SHIM_BODY='{"volumes":[{"id":4242}]}'
+if [[ "$S4_RC" != 1 ]]; then row "S5 Guard 2 mutation: a posture step whose missing-library arm no longer exits is judged RED by the library-absent row" ok
+else row "S5 Guard 2 mutation: dropping the exit of the posture step's missing-library arm is not caught" fail "rc=$S4_RC"; fi
+# An unreadable name count must read UNKNOWN, never zero: a 404 on the pinned id with a body the count cannot parse still aborts (it never reads `absent`).
+S5_NJ_BAD=""
+for nb in 'not-json' '{"error":{"code":"rate_limit_exceeded"}}' '{"volumes":null}' '[]'; do
+  s5_pst_run s5-pst-nj "$S5_B_PST" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=404 SHIM_BODY="$nb"
+  [[ "$S4_RC" == 1 ]] && ! s4_gho_has 'probe_result=absent' && s4_said 'name_count=unknown' || S5_NJ_BAD+=" $nb"
+done
+S5_NJ_OK=0; [[ -z "$S5_NJ_BAD" ]] && S5_NJ_OK=1
+s5_job_body registry_pull_path_gate "Resolve recovery posture" "$S4/b-s5-mut-count.sh" 'NAME_COUNT="unknown"' 'NAME_COUNT="0"'
+s5_pst_run s5-pst-mut-count "$S4/b-s5-mut-count.sh" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=404 SHIM_BODY='not-json'
+s5_job_body registry_pull_path_gate "Resolve recovery posture" "$S4/b-s5-mut-else.sh" 'else "unknown" end' 'else 0 end'
+s5_pst_run s5-pst-mut-else "$S4/b-s5-mut-else.sh" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=404 SHIM_BODY='{"volumes":null}'
+if [[ "$S4_RC" == 0 ]] && s4_gho_has 'probe_result=absent'; then row "S5 Guard 2 mutation (posture): a name lookup whose JSON has no volumes array (an error envelope, null) read as zero admits \`absent\` and is judged RED by the error-envelope rows" ok
+else row "S5 Guard 2 mutation (posture): an error-envelope name lookup read as zero is not caught" fail "rc=$S4_RC"; fi
+if [[ "$S5_NJ_OK" == 1 && "$S4_RC" == 0 ]]; then row "S5 Guard 2 (posture): a 404 on the pinned id with an unparseable, error-envelope, null or array-shaped name lookup aborts as unknown (never absent)" ok
+else row "S5 Guard 2 (posture): an unreadable name count is not held at unknown" fail "bad='${S5_NJ_BAD# }'"; fi
+s5_pst_run s5-pst-mut-count2 "$S4/b-s5-mut-count.sh" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=404 SHIM_BODY='not-json'
+if [[ "$S4_RC" == 0 ]] && s4_gho_has 'probe_result=absent'; then row "S5 Guard 2 mutation (posture): folding the unreadable count to zero reaches \`absent\` and is judged RED" ok
+else row "S5 Guard 2 mutation (posture): the fold of an unreadable count to zero is not caught" fail "rc=$S4_RC"; fi
+# Owners: a baseline row for any file other than the cla-evidence rows (#9756) carries an owner line (a `#N` comment) directly above it, and the header's
+# OWNERS lines are the same text the writer emits (so the committed header cannot drift from `--write-baseline-e`).
+s5_owner_bad() { # <baseline file> -> prints the paths of rows (outside apps/cla-evidence) with no `#N` owner comment directly above
+  local line prev="" p bad=""
+  while IFS= read -r line; do
+    case "$line" in
+      '#'*) prev="$line" ;;
+      '') prev="" ;;
+      *) p="${line%%$'\t'*}"
+         case "$p" in apps/cla-evidence/*) : ;; *) [[ "$prev" =~ \#[0-9]+ ]] || bad+=" $p" ;; esac
+         prev="" ;;
+    esac
+  done < "$1"
+  printf '%s' "${bad# }"
+}
+printf '# header\napps/web-platform/infra/x.yml\t1\n' > "$S4/own-bad.txt"
+printf '# header\n# #9757 owner of the row below\napps/web-platform/infra/x.yml\t1\n' > "$S4/own-ok.txt"
+S5_OWNER_BAD="$(s5_owner_bad "$REPO_ROOT/$BASE_E")"
+S5_OWNER_CTL=0; [[ "$(s5_owner_bad "$S4/own-bad.txt")" == apps/web-platform/infra/x.yml && -z "$(s5_owner_bad "$S4/own-ok.txt")" ]] && S5_OWNER_CTL=1
+S5_HDR_BAD="$(python3 -I -c '
+import sys
+base = open(sys.argv[1]).read().split("\n")
+src = open(sys.argv[2]).read()
+i = next((k for k, l in enumerate(base) if l.startswith("# OWNERS")), None)
+if i is None:
+    print("anchor-missing"); sys.exit(0)
+bad = []
+while i < len(base) and base[i].startswith("#"):
+    txt = base[i][2:]
+    if txt not in src: bad.append(txt[:40])
+    i += 1
+print(";".join(bad))' "$REPO_ROOT/$BASE_E" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.py")"
+if [[ -z "$S5_OWNER_BAD" && -z "$S5_HDR_BAD" && "$S5_OWNER_CTL" == 1 ]]; then row "S5 Guard 1: every baseline E row outside apps/cla-evidence carries an owner line above it, and the header's OWNERS text is the text the lint's writer emits" ok
+else row "S5 Guard 1: a baseline E row has no owner, or the header drifted from the writer" fail "unowned='${S5_OWNER_BAD# }' header-drift='$S5_HDR_BAD' owner-control=$S5_OWNER_CTL"; fi
+# The operator hints that used to print the argv `curl -H "Authorization: Bearer ..."` form (echo text and the comment above the id pin) stay off argv: Rule E does not read echo text.
+S5_HINT_RE="(-H|--header)[ =]*\\\\*[\"']?authorization:? *bearer"
+S5_HINT_CTL="$(printf '%s\n' 'x curl -s -H \"Authorization: Bearer y\"' "x curl -H 'Authorization: Bearer y'" 'x curl --header "Authorization: Bearer y"' 'x curl -H "authorization:bearer y"' | grep -ciE -- "$S5_HINT_RE" || true)"
+S5_HINTS="$(grep -ciE -- "$S5_HINT_RE" "$REPO_ROOT/$S5_WF" || true)"
+if [[ "$S5_HINT_CTL" == 4 && "$S5_HINTS" == 0 ]]; then row "S5 Guard 1: no operator hint or comment in the apply workflow tells the operator to put the token on a curl argument list (the pattern fires on a planted positive)" ok
+else row "S5 Guard 1: the apply workflow still prints the argv curl form to the operator" fail "hints=$S5_HINTS control=$S5_HINT_CTL"; fi
+S5_REFUSAL_FLOOR=6
+if [[ "$S5_CANARY_RUNS" -ge "$S5_REFUSAL_FLOOR" ]]; then row "S5 negative canary: $S5_CANARY_RUNS runs planted the canary and had every captured stream searched for it (anti-vacuity floor $S5_REFUSAL_FLOOR)" ok
+else row "S5 negative canary: the planted-canary run population is below its anti-vacuity floor" fail "runs=$S5_CANARY_RUNS floor=$S5_REFUSAL_FLOOR"; fi
+
+echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow done ==="
+
+# =====================================================================================
 # CONTROLS FOR THE VERDICT-OWNING HELPERS. Every helper that names failed checks (bk_check, bs_refusal, bs_ok_call, hmx_refused, evaluate_hmac,
 # evaluate_body) is driven here with a FABRICATED row directory that is green except for exactly ONE doctored fact, and the row requires the helper's
 # output to be exactly that one check's name. A clause with several alternatives (a regex `a|b|c`, a loop over values, an `||` of two files) gets one
@@ -5597,7 +5871,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=651
+EXPECTED_TESTS=688
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
