@@ -473,21 +473,28 @@ s = s.replace(old, """resource "terraform_data" "phantom_w3_probe" {
 """ + old, 1)
 '
 
-# Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
-# a resource was skipped by every section at once -- and because all floors are `>=`, invisibly.
-# This arm pins the width through the fleet-classification clause (added in the
-# same commit): a rename MUST red there, because `ONLY_JUSTIFIED` is keyed on the
-# exact resource name — the old key goes stale and the new name is uncovered.
-# Expected-RED, not green: the `uncovered=['Cosign-Trusted_Root@web-2']` token
-# only appears when the widened sweep actually matched the renamed resource —
-# a `[a-z_0-9]+`-only regression would emit the stale entry but no uncovered
-# entry for it. (The original expect_green shape was authored incompatible
-# with the classification clause and went RED on main; #9860.)
-expect_red "control-C (uppercase/hyphen rename is swept by the classification)" server.tf \
-  "uncovered=['Cosign-Trusted_Root@web-2']" '
+# Terraform identifiers legally contain uppercase and hyphens. Since `_norm()` at the
+# classification boundary (lower + hyphen->underscore), `Cosign-Trusted_Root` and
+# `cosign_trusted_root` resolve to ONE resource identity — this rename is swept AND stays
+# justified, so the correct verdict is GREEN. The row pins that transparency: deleting
+# `_norm` re-breaks it via `uncovered` + `stale`, and narrowing either `([^"]+)` name
+# capture to `[a-z_0-9]+` re-breaks it via `stale` alone (an unswept resource can never
+# be `uncovered`).
+expect_green "control-C (uppercase/hyphen rename is swept by the classification)" server.tf '
 old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
 assert old in s
 s = s.replace(old, "resource \"terraform_data\" \"Cosign-Trusted_Root\" {", 1)
+'
+
+# Normalization must not swallow detection: a rename landing on a normalized-UNIQUE name
+# stays swept (the `([^"]+)` capture is case/hyphen-tolerant) but loses its `ONLY_JUSTIFIED`
+# key, so the classification must still RED it — `uncovered` for the new name plus `stale`
+# for the vacated one.
+expect_red "M4j (§1: a normalized-unique rename is uncovered+stale)" server.tf \
+  "uncovered=['cosign_trusted_root_v2@web-2']" '
+old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"cosign_trusted_root_v2\" {", 1)
 '
 
 # ── §2: the destination sweep (the load-bearing invariant) ───────────────────────────
@@ -1441,7 +1448,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18). Re-derive from the battery log when adding rows.
+FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); ±0 #9970: control-C moved to expect_green (-1) and M4j added (+1). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
