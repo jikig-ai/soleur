@@ -335,23 +335,23 @@ All paths were checked with `git ls-files`; `tests/scripts/test-weakness-miner.s
 
 ### Pre-merge (PR)
 
-- [ ] `weakness-miner.yml` has three jobs. `mine` has no `environment:` and no secret reference, uploads only `knowledge-base/project/weakness-digest.md`. `open-pr` has `needs: mine`, `if: github.ref == 'refs/heads/main'`,
+- [x] `weakness-miner.yml` has three jobs. `mine` has no `environment:` and no secret reference, uploads only `knowledge-base/project/weakness-digest.md`. `open-pr` has `needs: mine`, `if: github.ref == 'refs/heads/main'`,
       `environment: infra-privileged`, a `timeout-minutes` greater than the sum of its step caps, a fresh checkout with `persist-credentials: false`, the artifact download, and the mint step in the narrow shape with permissions
       exactly `{"contents":"write","pull_requests":"write"}`, repositories `soleur`, before the composite step; the composite receives `pr-token` from that step's `token` output and `gh-token: ${{ github.token }}`;
       workflow-token `permissions:` are `contents: read` and `checks: write` only. `notify` (`if: failure()`, `needs: [mine, open-pr]`) is the only job referencing the email secret.
-- [ ] The composite declares `pr-token`; its first statement is the xtrace refusal; before the no-change exit it refuses an empty, non-canonical or `gh-token`-equal `PR_TOKEN` (quoted comparison, no value printed) and a non-main ref;
+- [x] The composite declares `pr-token`; its first statement is the xtrace refusal; before the no-change exit it refuses an empty, non-canonical or `gh-token`-equal `PR_TOKEN` (quoted comparison, no value printed) and a non-main ref;
       it copies both tokens into unexported variables and unsets `PR_TOKEN GATE_TOKEN GH_TOKEN`; it has no step-level `GH_TOKEN`; every `gh pr` write runs through `gh_app` and the `check-runs` POST through `gh_gate`; no bare `gh`
       invocation remains; `git push` carries the header via the per-command `GIT_CONFIG_*` environment with a `base64 -w0` (or newline-stripped) header and the trace-variable unset list from the bump script. Command (nothing
       deleted from the protected blocks): `git diff -U0 origin/main -- .github/actions/bot-pr-with-synthetic-checks/action.yml | grep -E '^-[^-].*(GITLEAKS_|lint-fixture-content|lint-credential-path-literals|ALLOWED_PATHS|GITHUB_REF)'` prints nothing.
-- [ ] `bash tests/scripts/test-weakness-miner.sh` is green on the branch, and each Guard Contract mutation row turns it RED (battery output in the PR).
+- [x] `bash tests/scripts/test-weakness-miner.sh` is green on the branch, and each Guard Contract mutation row turns it RED (battery output in the PR).
 - [ ] The census, `required-checks-canonical-parity.test.sh`, `lint-bot-synthetic-completeness.test.sh`, `c4-model-freshness.test.sh`, `c4-count-parity.test.sh`, `c4-canonical.test.ts`, `lint-shell-trace-credential-refusal.test.sh`
       and `test-argv-bearer-sweep.sh` are green; `bash scripts/lint-orphan-test-suites.sh` reports no orphan.
-- [ ] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-11-fix-bot-digest-pr-ci-runs-held-for-approval-plan.md` exits 0 and reports one entry.
-- [ ] The new ADR exists, its wording states the evidence and the confound (not a proven rule), and it states the key-level exposure; ADR-241's amendment log carries one line; ADR-232 carries only a one-line pointer;
+- [x] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-11-fix-bot-digest-pr-ci-runs-held-for-approval-plan.md` exits 0 and reports one entry.
+- [x] The new ADR exists, its wording states the evidence and the confound (not a proven rule), and it states the key-level exposure; ADR-241's amendment log carries one line; ADR-232 carries only a one-line pointer;
       `git diff --stat origin/main -- knowledge-base/engineering/architecture/decisions/ADR-270* knowledge-base/engineering/operations/runbooks/merge-queue-canary-log.md` is empty.
 - [ ] `gh pr view --json body --jq .body | grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#(9454|10019)'` prints nothing, and the body contains `Ref #9454`.
-- [ ] No change to `.github/workflows/ci.yml`, to repository variables `CI_PUSH_DEDUPE` or `CI_DRAFT_LIGHT`, or to any Actions repo setting.
-- [ ] The two deferral issues exist and are linked from the PR body.
+- [x] No change to `.github/workflows/ci.yml`, to repository variables `CI_PUSH_DEDUPE` or `CI_DRAFT_LIGHT`, or to any Actions repo setting.
+- [x] One deferral tracker exists (#10068, covers the synthetic-check retirement, the lower-grant App and the other-workflow census); the CodeQL audit author filter was inlined in this PR instead of filed (<=100 lines, 2 files, same subsystem). Linked from the PR body as prose.
 
 ### Post-merge (measured on the first run that produces a PR; recorded as facts on #9454)
 
