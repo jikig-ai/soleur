@@ -1137,3 +1137,17 @@
   recovery → authenticated screenshots → eligible routine consumer → permitted
   Web matrices and attributable mode-specific CLO → full review/promotion.
   Project sharing, retention/inheritance and configured regions remain unknown.
+
+## Continuation update — 2026-10-11 maintenance CI verdict
+
+- Exact pushed head `51ee6225f4d2c02d1a6c95d0a1b3204fd74ff9cc`, including
+  main `ac26dd4ff796318b95e81229bccef553b28b520a`, settled with 69 passes,
+  11 skips, zero pending/cancelled and only required `test` red in
+  [CI 38170644077](https://github.com/jikig-ai/soleur/actions/runs/38170644077).
+  The aggregate's executed log confirms Web and both scripts legs skipped
+  with `draft: full battery owed at ready`. All other exact-head workflow
+  conclusions were successful, including RLS, tenant integration and guards.
+- This is draft maintenance evidence, not C.9 verification, full-suite
+  validation or recovery qualification. The ensuing documentation-only push
+  requires its own exact-head and final-description watches. Every execution
+  and promotion hold remains in force; PR #9051 stays draft and disarmed.

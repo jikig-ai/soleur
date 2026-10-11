@@ -66,6 +66,13 @@ Session errors and prevention:
    finished; the final restore wrote it again. Awaited the gate's completion,
    reversed the generated diff again and verified the branch bytes. Future
    repairs of a gate's output must follow its completion, never a partial log.
+6. A saved-description comparison looked in the feature worktree after its
+   writer had omitted `workdir`. Used a fresh authoritative PR-description read
+   in the feature worktree; every scratch writer and reader must share an
+   explicit absolute working directory.
+7. A repeated sentence placed the new verdict before an older dated section.
+   The post-edit tail check caught it; moved it to the end using unique adjacent
+   context. Append-only records require an end-of-file placement check.
 
 These were visible failures or local execution mistakes; no new cross-cutting
 rule or runtime qualification claim follows from this maintenance.
