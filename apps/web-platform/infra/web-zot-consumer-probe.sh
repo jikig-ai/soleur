@@ -271,24 +271,24 @@ _OVR=()
 unservable=0
 auth_broke=0
 
-# The ONE request site (#10004), used by tags/list (GET) and by the pinned-manifest HEAD (-I passed as its own
-# leading argument, never an empty-array expansion). NO -f (see header), NO --retry (a probe whose absence is
-# the alarm must not retry its way to green). `user = ...` on the stdin config presents Basic auth (the -u
-# equivalent, kept off argv); -w captures the HTTP code; -m bounds it; a transport failure (unreachable private
-# net) yields the curl default 000.
-_req() {  # <path under /v2/> [-I]
-  curl --disable --noproxy '*' ${2:+"$2"} -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${1}" \
-    < <(printf 'user = "%s:%s"\n' "$ZUSER" "$ZTOK") 2>/dev/null || echo 000
-}
-# Sets CODE. (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the fallback in
-# _req appends a second one and CODE is `000000`, which would miss the `000)` arm in _classify. Normalize ONLY
-# that exact value: an HTTP code followed by a curl failure (e.g. `404000` when -f is injected) must stay in
-# the catch-all, because zot did answer.
-_fetch() {  # <path under /v2/> [-I]
-  CODE=$(_req "$@")
+# The ONE request site (#10004), used by tags/list (GET, via _get) and by the pinned-manifest HEAD (-I, via _head).
+# NO -f (see header), NO --retry (a probe whose absence is the alarm must not retry its way to green).
+# `user = ...` on the stdin config presents Basic auth (the -u equivalent, kept off argv); -w captures the HTTP
+# code; -m bounds it; a transport failure (unreachable private net) yields the curl default 000.
+# The request reads its two inputs from globals (_RP = path under /v2/, _RI = `-I` for a HEAD, empty for a GET),
+# set by _get / _head, so the curl line forwards no positional argument.
+_fetch() {  # reads _RP and _RI -> sets CODE
+  CODE=$(curl --disable --noproxy '*' ${_RI:+-I} -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${_RP}" \
+    < <(printf 'user = "%s:%s"\n' "$ZUSER" "$ZTOK") 2>/dev/null || echo 000)
   [ -n "$CODE" ] || CODE=000
+  # (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the `|| echo 000` above
+  # appends a second one and CODE is `000000`, which would miss the `000)` arm in _classify. Normalize ONLY
+  # that exact value: an HTTP code followed by a curl failure (e.g. `404000` when -f is injected) must stay
+  # in the catch-all, because zot did answer.
   case "$CODE" in 000000) CODE=000 ;; esac
 }
+_get()  { _RP="$1"; _RI="";   _fetch; }
+_head() { _RP="$1"; _RI="-I"; _fetch; }
 
 # One classification for both requests. Args: <code> <what: tags|pin> <repo> <ref|empty>. Sets VERDICT and the
 # SAME unservable/auth_broke accumulators for either request, so a pin fault can never be a parallel flag the
@@ -337,7 +337,7 @@ for _i in "${!R_NAME[@]}"; do
     CODE="${_OVR[$_i]:-000}"
     [ -n "$CODE" ] || CODE=000
   else
-    _fetch "${r}/tags/list"
+    _get "${r}/tags/list"
   fi
   R_CODE+=("$CODE")
 
@@ -354,7 +354,7 @@ for _i in "${!R_NAME[@]}"; do
   elif [ "$CODE" != 200 ]; then
     R_PINV+=(skipped)
   else
-    _fetch "${r}/manifests/${_dig}" -I
+    _head "${r}/manifests/${_dig}"
     _classify "$CODE" pin "$r" "${r}@${_dig}"
     R_PINV+=("$VERDICT")
   fi
