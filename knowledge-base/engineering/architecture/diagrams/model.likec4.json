@@ -2622,8 +2622,8 @@
 "id": "1z97r6"
 },
 "shq6xn": {
-"title": "CONSUMER serviceability probe (#6438 §1): web-zot-consumer-probe.sh GETs /v2/<repo>/tags/list over the private net (authenticated htpasswd Basic auth) for EACH platform repository (the web image and the inngest bootstrap image, #7258) and pings the per-host web_zot_consumer heartbeat only when EVERY repository answers 200; 404 (empty/detached store) suppresses the ping so absence alarms; 401 is a HARD auth failure, not 'alive'; 000 (no HTTP answer: the private-net path is down) suppresses it as `UNREACHABLE` (#7262; before that fix curl's doubled 000000 mislabelled every such run `unexpected code`). Distinct from the pull edge above — this proves the store SERVES, not just that the auth gate answers",
-"technology": "curl -u (private-net, plain-HTTP GET /v2/<repo>/tags/list)",
+"title": "CONSUMER serviceability probe (#6438 §1): web-zot-consumer-probe.sh GETs /v2/<repo>/tags/list over the private net (authenticated htpasswd Basic auth) for EACH platform repository (the web image and the inngest bootstrap image, #7258) and pings the per-host web_zot_consumer heartbeat only when EVERY repository answers 200 AND, on web-1, every pinned manifest HEAD answers 200 (#10004: today only the inngest bootstrap image has a committed digest pin, the ZIREF line; a pin evicted by retention suppresses the ping while tags/list still answers 200; the web image is unpinned, #10044, and a host born later keeps the bare list); 404 (empty/detached store) suppresses the ping so absence alarms; 401 is a HARD auth failure, not 'alive'; 000 (no HTTP answer: the private-net path is down) suppresses it as `UNREACHABLE` (#7262; before that fix curl's doubled 000000 mislabelled every such run `unexpected code`). Distinct from the pull edge above — this proves the store SERVES, not just that the auth gate answers",
+"technology": "curl -u (private-net, plain-HTTP GET /v2/<repo>/tags/list; web-1 also HEAD /v2/<repo>/manifests/<digest>)",
 "source": {
 "model": "platform.infra.hetzner"
 },
