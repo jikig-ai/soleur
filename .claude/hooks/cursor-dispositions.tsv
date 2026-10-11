@@ -1,11 +1,14 @@
 # Cursor hook disposition ledger — issue #9608 slice 2
 #
-# The 2026-10-07 note is the authentication exit. This ledger is the
-# 2026-10-08 authenticated session in
+# The 2026-10-07 note is the authentication exit. The 2026-10-08 rows are
+# the scratch-workspace session in
 # plugins/soleur/cursor/2026-10-08-cli-hook-shape.md.
-# The repository .claude/settings.json guard file was not the workspace.
-# It is not already-fires and it is not dead. No guard command was copied.
-# Do not store user_email.
+# The repo-claude-project rows are the 2026-10-11 session whose workspace
+# was this repository, in
+# plugins/soleur/cursor/2026-10-11-repo-settings-shape.md.
+# SessionStart commands and Bash matchers are already-fires.
+# Matchers that session did not exercise stay unmeasured. They are not dead.
+# No guard command was copied. Do not store user_email.
 #
 # Schema: registry<TAB>hook_path<TAB>event<TAB>matcher_or_tool<TAB>disposition<TAB>reason<TAB>evidence
 enterprise	/etc/cursor/hooks.json	(none)	(none)	absent	file-absent	shape-note-2026-10-08
@@ -19,4 +22,63 @@ claude-project	.claude/settings.json	SessionStart	.*	ran	probe-command-ran	shape
 claude-project-local	.claude/settings.local.json	SessionStart	.*	ran	probe-command-ran	shape-note-2026-10-08
 plugin-manifest	./cursor/hooks-empty.json	sessionStart	(none)	ran	probe-command-ran	shape-note-2026-10-08
 plugin-default	hooks/hooks.json	sessionStart	(none)	ran	probe-command-ran	shape-note-2026-10-08
-repo-claude-project	.claude/settings.json	(none)	(none)	unmeasured	session-workspace-was-not-the-repo	shape-note-2026-10-08
+repo-claude-project	.claude/hooks/session-rules-loader.sh	SessionStart	startup|resume|clear|compact	already-fires	session-start-command-execd	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/supabase-loopback-warn.sh	SessionStart	startup|resume|clear|compact	already-fires	session-start-command-execd	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/memory-backstop-resolve.sh	SessionStart	startup|resume|clear|compact	already-fires	session-start-command-execd	shape-note-2026-10-11-repo-settings
+repo-claude-project	scripts/ensure-kb-index.sh	SessionStart	startup|resume|clear|compact	already-fires	session-start-command-execd	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/guardrails.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/pre-merge-rebase.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/pre-merge-auto-close-scan.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/ship-unpushed-commits-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/ship-operator-step-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/ship-soak-followthrough-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/ship-net-issue-flow-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/follow-through-directive-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/context-reviewed-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/cla-signed-author-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/ship-runbook-ssh-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/prod-write-defer-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/git-commit-secret-scan.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/brand-hex-commit-gate.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/doppler-secrets-delete-redirect.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/background-poll-prefer-monitor.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/pkill-self-match-guard.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/guardrails.sh	PreToolUse	Monitor	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/monitor-supersede-guard.sh	PreToolUse	Monitor	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/prod-write-defer-gate.sh	PreToolUse	Monitor	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/worktree-write-guard.sh	PreToolUse	Write|Edit	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/worktree-write-guard.sh	PreToolUse	^write$	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/guardrails.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/guardrails.sh	PreToolUse	^write$	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/security_reminder_hook.py	PreToolUse	Edit	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/skill-security-scan-write.sh	PreToolUse	Write	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/skill-security-scan-write.sh	PreToolUse	^write$	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/iac-plan-write-guard.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/iac-plan-write-guard.sh	PreToolUse	^write$	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/new-scheduled-cron-prefer-inngest.sh	PreToolUse	Write|Edit	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/new-scheduled-cron-prefer-inngest.sh	PreToolUse	^write$	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/durable-reminder-prefer-inngest.sh	PreToolUse	CronCreate	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/pencil-open-guard.sh	PreToolUse	mcp__pencil__open_document	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/skill-invocation-logger.sh	PreToolUse	Skill	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/no-memory-write.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/no-memory-write.sh	PreToolUse	^write$	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/no-memory-write.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/kb-domain-allowlist-guard.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/kb-domain-allowlist-guard.sh	PreToolUse	^write$	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/kb-domain-allowlist-guard.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/grep-rewrite.sh	PreToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/guardrails.sh	PreToolUse	AskUserQuestion	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/pre-ask-technical-fork-gate.sh	PreToolUse	AskUserQuestion	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/guardrails.sh	PreToolUse	^ask_user_question$	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/pre-ask-technical-fork-gate.sh	PreToolUse	^ask_user_question$	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/docs-cli-verification.sh	PostToolUse	Write|Edit	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/docs-cli-verification.sh	PostToolUse	^write$	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/agent-token-tee.sh	PostToolUse	Task	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/pencil-collapse-guard.sh	PostToolUse	mcp__pencil__open_document	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/phase-surface-hint.sh	PostToolUse	Skill	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/skill-context-queries.sh	PostToolUse	Skill	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/rule-incident-marker-capture.sh	PostToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/post-dispatch-watch-gate.sh	PostToolUse	Bash	already-fires	bash-matcher-execd-on-shell-tool	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/post-dispatch-watch-gate.sh	PostToolUse	Monitor	unmeasured	script-ran-via-another-matcher	shape-note-2026-10-11-repo-settings
+repo-claude-project	.claude/hooks/monitor-arm-recorder.sh	PostToolUse	Monitor|TaskStop	unmeasured	matcher-not-exercised	shape-note-2026-10-11-repo-settings

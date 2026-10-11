@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Cursor hook-matcher parity — issue #9608 slice 2.
 #
-# Pins two captures:
+# Pins three captures:
 #   2026-10-07 exited at authentication. That note has no loaded: line.
-#   2026-10-08 ran scratch probes. The ledger rows below are that session.
-# The repository guard file stays unmeasured. hooks-empty.json stays empty.
-# detectHarness does not read CURSOR_INVOKED_AS or CURSOR_AGENT.
+#   2026-10-08 ran scratch probes. The historical ledger rows below are that session.
+#   2026-10-11 measured this repository's .claude/settings.json.
+# SessionStart commands and Bash matchers are already-fires.
+# Matchers that session did not exercise stay unmeasured. They are not dead.
+# hooks-empty.json stays empty.
+# detectHarness returns cursor for nonempty CURSOR_INVOKED_AS.
+# CURSOR_AGENT is not the predicate.
 #
 # Run: bash .claude/hooks/cursor-matcher-parity.test.sh
 
@@ -17,6 +21,7 @@ HOOKS_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd -P)"
 SHAPE_AUTH="$REPO_ROOT/plugins/soleur/cursor/2026-10-07-cli-hook-shape.md"
 SHAPE="$REPO_ROOT/plugins/soleur/cursor/2026-10-08-cli-hook-shape.md"
+SHAPE_REPO="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-repo-settings-shape.md"
 LEDGER="$HOOKS_DIR/cursor-dispositions.tsv"
 EMPTY="$REPO_ROOT/plugins/soleur/cursor/hooks-empty.json"
 HARNESS="$REPO_ROOT/plugins/soleur/lib/harness.ts"
@@ -72,6 +77,21 @@ else
   pass "2026-10-08 does not store an email"
 fi
 
+if [ -f "$SHAPE_REPO" ]; then pass "2026-10-11 settings note exists"; else fail "2026-10-11 settings note missing"; fi
+note_has "$SHAPE_REPO" "2026-10-11 settings note quotes the support bar" "The plugin is called supported only when a Cursor CLI session shows"
+note_has "$SHAPE_REPO" "2026-10-11 settings note does not call the plugin supported" "The plugin is not supported"
+note_lacks "$SHAPE_REPO" "2026-10-11 settings note has no loaded: line" "^loaded:"
+note_lacks "$SHAPE_REPO" "2026-10-11 settings note does not close #9608" "Closes #9608"
+note_has "$SHAPE_REPO" "2026-10-11 settings note keeps the hooks object empty" 'hooks-empty.json` stays `{ "hooks": {} }`'
+note_has "$SHAPE_REPO" "2026-10-11 settings note refuses a dead mark" "They are not \`dead\`."
+note_has "$SHAPE_REPO" "2026-10-11 settings note records the plugin SessionStart exec" "codex-session-start.sh"
+note_has "$SHAPE_REPO" "2026-10-11 settings note records the home command" "herdr-agent-state.sh"
+if [ -f "$SHAPE_REPO" ] && grep -E -q 'user_email[[:space:]]*[:=][[:space:]]*[^[:space:]]+@' "$SHAPE_REPO"; then
+  fail "2026-10-11 settings note stores an email"
+else
+  pass "2026-10-11 settings note does not store an email"
+fi
+
 expected=$'enterprise\t/etc/cursor/hooks.json\t(none)\t(none)\tabsent\tfile-absent\tshape-note-2026-10-08
 team\t.cursor/managed/active-team-hooks/hooks.json\tsessionStart\t(none)\tnot-opened\tpresent-file-not-opened\tshape-note-2026-10-08
 user\t~/.cursor/hooks.json\t(none)\t(none)\tabsent\tfile-absent\tshape-note-2026-10-08
@@ -82,10 +102,11 @@ claude-user\t~/.claude/settings.json\tSessionStart\t(none)\topened\thome-setting
 claude-project\t.claude/settings.json\tSessionStart\t.*\tran\tprobe-command-ran\tshape-note-2026-10-08
 claude-project-local\t.claude/settings.local.json\tSessionStart\t.*\tran\tprobe-command-ran\tshape-note-2026-10-08
 plugin-manifest\t./cursor/hooks-empty.json\tsessionStart\t(none)\tran\tprobe-command-ran\tshape-note-2026-10-08
-plugin-default\thooks/hooks.json\tsessionStart\t(none)\tran\tprobe-command-ran\tshape-note-2026-10-08
-repo-claude-project\t.claude/settings.json\t(none)\t(none)\tunmeasured\tsession-workspace-was-not-the-repo\tshape-note-2026-10-08'
+plugin-default\thooks/hooks.json\tsessionStart\t(none)\tran\tprobe-command-ran\tshape-note-2026-10-08'
 
 rows=0
+repo_af=0
+repo_um=0
 if [ -f "$LEDGER" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
@@ -99,15 +120,30 @@ if [ -f "$LEDGER" ]; then
       fail "ledger row does not have 7 fields: $registry $event"
       continue
     fi
+    disp=$(printf '%s' "$line" | awk -F '\t' '{ print $5 }')
+    reason=$(printf '%s' "$line" | awk -F '\t' '{ print $6 }')
+    evidence=$(printf '%s' "$line" | awk -F '\t' '{ print $7 }')
     if printf '%s\n' "$expected" | grep -F -x -q -- "$line"; then
       pass "ledger row $registry $event"
+    elif [ "$registry" = "repo-claude-project" ] && [ "$evidence" = "shape-note-2026-10-11-repo-settings" ] && grep -F -x -q -- "$line" "$SHAPE_REPO"; then
+      pass "ledger row $registry $event"
+      case "$disp:$reason" in
+        already-fires:session-start-command-execd|already-fires:bash-matcher-execd-on-shell-tool)
+          repo_af=$((repo_af + 1))
+          ;;
+        unmeasured:matcher-not-exercised|unmeasured:script-ran-via-another-matcher)
+          repo_um=$((repo_um + 1))
+          ;;
+        *)
+          fail "repo disposition is not backed: $disp $reason"
+          ;;
+      esac
     else
-      fail "ledger row is not in the 2026-10-08 capture: $registry $event"
+      fail "ledger row is not in a pinned capture: $registry $event"
     fi
-    disp=$(printf '%s' "$line" | awk -F '\t' '{ print $5 }')
     case "$disp" in
-      already-fires|dead)
-        fail "disposition $disp is not backed by this capture"
+      dead)
+        fail "disposition dead is not backed by a capture"
         ;;
     esac
   done < "$LEDGER"
@@ -115,10 +151,22 @@ else
   fail "ledger missing"
 fi
 
-if [ "$rows" -eq 12 ]; then
-  pass "ledger has the twelve 2026-10-08 rows"
+if [ "$rows" -eq 71 ]; then
+  pass "ledger has 71 rows"
 else
-  fail "ledger row count is $rows, want 12"
+  fail "ledger row count is $rows, want 71"
+fi
+
+if [ "$repo_af" -eq 27 ]; then
+  pass "27 repository commands are already-fires"
+else
+  fail "already-fires repository rows are $repo_af, want 27"
+fi
+
+if [ "$repo_um" -eq 33 ]; then
+  pass "33 repository matchers stay unmeasured"
+else
+  fail "unmeasured repository rows are $repo_um, want 33"
 fi
 
 if [ -f "$EMPTY" ] && grep -q '"hooks"[[:space:]]*:[[:space:]]*{[[:space:]]*}' "$EMPTY"; then
@@ -133,24 +181,99 @@ else
   pass "no repo-level .cursor/hooks.json"
 fi
 
-if grep -q 'CURSOR_INVOKED_AS\|CURSOR_AGENT' "$HARNESS"; then
-  fail "harness.ts reads a Cursor marker this capture did not adopt"
+if grep -q 'if (env.CURSOR_INVOKED_AS)' "$HARNESS"; then
+  pass "harness.ts returns cursor for nonempty CURSOR_INVOKED_AS"
 else
-  pass "harness.ts does not read CURSOR_INVOKED_AS or CURSOR_AGENT"
+  fail "harness.ts does not read nonempty CURSOR_INVOKED_AS"
 fi
 
-if grep -q 'CURSOR_' "$EMIT"; then
-  fail "emit-decision.sh reads a CURSOR_ marker"
+if grep -q 'if (env.CURSOR_AGENT)' "$HARNESS"; then
+  fail "harness.ts uses CURSOR_AGENT as a predicate"
 else
-  pass "emit-decision.sh does not read a CURSOR_ marker"
+  pass "harness.ts does not use CURSOR_AGENT as a predicate"
 fi
+
+if grep -q 'CURSOR_INVOKED_AS' "$EMIT"; then
+  pass "emit-decision.sh reads CURSOR_INVOKED_AS"
+else
+  fail "emit-decision.sh does not read CURSOR_INVOKED_AS"
+fi
+
+if grep -q 'CURSOR_AGENT' "$EMIT"; then
+  fail "emit-decision.sh reads CURSOR_AGENT"
+else
+  pass "emit-decision.sh does not read CURSOR_AGENT"
+fi
+
+while IFS= read -r base; do
+  [ -n "$base" ] || continue
+  if awk -F '\t' -v b="$base" '$1=="repo-claude-project" && $5=="already-fires" && $2 ~ ("/" b "$") { found=1 } END { exit !found }' "$LEDGER"; then
+    pass "already-fires script $base"
+  else
+    fail "missing already-fires script $base"
+  fi
+done <<'EOF'
+session-rules-loader.sh
+supabase-loopback-warn.sh
+memory-backstop-resolve.sh
+ensure-kb-index.sh
+guardrails.sh
+pre-merge-rebase.sh
+pre-merge-auto-close-scan.sh
+ship-unpushed-commits-gate.sh
+ship-operator-step-gate.sh
+ship-soak-followthrough-gate.sh
+ship-net-issue-flow-gate.sh
+follow-through-directive-gate.sh
+context-reviewed-gate.sh
+cla-signed-author-gate.sh
+ship-runbook-ssh-gate.sh
+prod-write-defer-gate.sh
+git-commit-secret-scan.sh
+brand-hex-commit-gate.sh
+doppler-secrets-delete-redirect.sh
+background-poll-prefer-monitor.sh
+pkill-self-match-guard.sh
+browser-snapshot-credential-guard.sh
+no-memory-write.sh
+kb-domain-allowlist-guard.sh
+grep-rewrite.sh
+rule-incident-marker-capture.sh
+post-dispatch-watch-gate.sh
+EOF
+
+while IFS= read -r base; do
+  [ -n "$base" ] || continue
+  if awk -F '\t' -v b="$base" '$1=="repo-claude-project" && $5=="already-fires" && $2 ~ ("/" b "$") { found=1 } END { exit found }' "$LEDGER" \
+    && awk -F '\t' -v b="$base" '$1=="repo-claude-project" && $5=="unmeasured" && $2 ~ ("/" b "$") { found=1 } END { exit !found }' "$LEDGER"; then
+    pass "unmeasured script $base"
+  else
+    fail "script $base is not an unmeasured matcher"
+  fi
+done <<'EOF'
+monitor-supersede-guard.sh
+worktree-write-guard.sh
+security_reminder_hook.py
+skill-security-scan-write.sh
+iac-plan-write-guard.sh
+new-scheduled-cron-prefer-inngest.sh
+durable-reminder-prefer-inngest.sh
+pencil-open-guard.sh
+skill-invocation-logger.sh
+pre-ask-technical-fork-gate.sh
+docs-cli-verification.sh
+agent-token-tee.sh
+pencil-collapse-guard.sh
+phase-surface-hint.sh
+skill-context-queries.sh
+monitor-arm-recorder.sh
+EOF
 
 # Anti-vacuity floor. pass() and fail() are the assertion machinery. Neutering
 # them leaves PASS and FAIL at 0, and this bound exits 1 without calling fail().
-# 34 is the measured count for the 2026-10-08 capture: twenty-two fixed checks
-# plus one pass for each of the twelve ledger rows.
+# 150 is the measured count after the 2026-10-11 repository settings rows.
 ASSERTED=$((PASS + FAIL))
-if [ "$ASSERTED" -lt 34 ]; then
+if [ "$ASSERTED" -lt 150 ]; then
   printf '[FATAL] assertion floor: only %s assertion(s) ran\n' "$ASSERTED" >&2
   exit 1
 fi

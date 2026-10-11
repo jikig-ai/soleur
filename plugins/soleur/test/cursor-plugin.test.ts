@@ -23,7 +23,8 @@ describe("Cursor CLI plugin package", () => {
     expect(instructions).toContain("registers no hook events");
     expect(instructions).toContain("classifies the session as `cursor`");
     expect(instructions).not.toContain("does not classify");
-    expect(instructions).toContain("`.claude/settings.json` is unmeasured");
+    expect(instructions).toContain("SessionStart commands and Bash matchers already fire");
+    expect(instructions).not.toContain("`.claude/settings.json` is unmeasured");
     expect(instructions).not.toContain("## Tools");
     expect(instructions).toContain("If a canonical file tells you to call those tools, stop.");
     expect(instructions).toContain(
