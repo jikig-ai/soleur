@@ -182,12 +182,15 @@ echo "$*" >> "$SC/sleep.calls"
 SHIM_EOF
 cat > "$SHIM/docker" <<'SHIM_EOF'
 #!/usr/bin/env bash
-# The scope gate calls `docker ps --format '{{.Names}}'`; $SC/docker.names is the
-# container list. An absent file reads identically to a stopped container or a
-# daemon refusal — empty stdout under the caller's 2>/dev/null, so grep -qx
-# fails and the markers stay `skip` (the gw-down posture).
+# The scope gate calls `docker ps --format '{{.Names}}'` and `docker inspect
+# soleur-egress-gw -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'`;
+# $SC/docker.names is the container list and $SC/docker.ip the inspect answer.
+# An absent file reads identically to a stopped container, an IP-less inspect,
+# or a daemon refusal — empty stdout under the caller's 2>/dev/null, so the
+# regex/grep gates fail and the markers stay `skip` (the gw-down posture).
 case "$*" in
   "ps --format {{.Names}}") cat "$SC/docker.names" 2>/dev/null || true ;;
+  "inspect soleur-egress-gw -f {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}") cat "$SC/docker.ip" 2>/dev/null || true ;;
   *) echo "docker shim: unhandled: $*" >&2; exit 99 ;;
 esac
 SHIM_EOF
@@ -280,7 +283,7 @@ CHAIN_GW_OK='table ip filter {
 }'
 CHAIN_NOISY="$(printf 'table ip filter {\n\tchain SOLEUR-EGRESS {\n'; for i in $(seq 1 400); do printf '\t\tip daddr 10.%d.%d.1 tcp dport 443 accept comment "soleur-egress: noise"\n' "$((i / 250))" "$((i % 250))"; done; printf '\t\tlimit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"\n\t\tcounter packets 3 bytes 180 drop comment "soleur-egress: default drop"\n\t}\n}')"
 
-# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump enoent2-chain ruleerr-chain lib127-chain gw-enoent gw-unscoped gw-scoped gw-running]
+# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump enoent2-chain ruleerr-chain lib127-chain gw-enoent gw-unscoped gw-scoped gw-running gw-noip gw-stale-ip gw-ip-only gw-busy]
 scenario() {
   local d="$WORK/sc.$1"
   assert_fixture_dir "$WORK"
@@ -305,11 +308,20 @@ scenario() {
   printf '%s\n' "${GW_OUT:-$GW_FULL}" > "$d/gw.out"
   [[ " ${8:-} " == *" gw-enoent "* ]] && : > "$d/gw.enoent"
   # Scope check (#9534): gw-unscoped/gw-scoped select the member-drop form;
-  # `gw-running` writes docker.names so the docker shim reports the gateway —
-  # the scope markers are only probed while it runs.
+  # `gw-running` reports a live gateway (name + the canonical .100.2 inspect IP —
+  # the needles bind THAT address); `gw-stale-ip` reports the gateway on a
+  # different address than the baked fixtures (the stale-bake blind spot);
+  # `gw-noip` is a docker-ps-visible but IP-less gateway (the loader would bake
+  # unscoped — the probe must stay skip); `gw-ip-only` is the mirror (a derivable
+  # IP but the container not in docker ps — probes like gw-running); `gw-busy`
+  # fails every gw-chain read.
   [[ " ${8:-} " == *" gw-unscoped "* ]] && printf '%s\n' "$GW_UNSCOPED" > "$d/gw.out"
   [[ " ${8:-} " == *" gw-scoped "* ]] && printf '%s\n' "$GW_SCOPED" > "$d/gw.out"
-  [[ " ${8:-} " == *" gw-running "* ]] && printf 'soleur-egress-gw\n' > "$d/docker.names"
+  [[ " ${8:-} " == *" gw-running "* ]] && { printf 'soleur-egress-gw\n' > "$d/docker.names"; printf '172.31.100.2\n' > "$d/docker.ip"; }
+  [[ " ${8:-} " == *" gw-stale-ip "* ]] && { printf 'soleur-egress-gw\n' > "$d/docker.names"; printf '172.31.100.9\n' > "$d/docker.ip"; }
+  [[ " ${8:-} " == *" gw-noip "* ]] && printf 'soleur-egress-gw\n' > "$d/docker.names"
+  [[ " ${8:-} " == *" gw-ip-only "* ]] && printf '172.31.100.2\n' > "$d/docker.ip"
+  [[ " ${8:-} " == *" gw-busy "* ]] && echo 9 > "$d/gw.failfirst"
   echo "$d"
 }
 # probe_out <lib> <scenario-dir>  -> "J|D|L|rcj|rcd|read_failed|read_retried|heal|gwaccept|gwmember"
@@ -351,6 +363,14 @@ row "gw running, gw accept present but the member drop unscoped: heal" \
                                                             "present|present|present|0|0|false|false|true|present|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-running gw-unscoped"
 row "gw down with the SAME unscoped drop: the correct fail-closed posture, never a heal" \
                                                             "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-unscoped"
+row "gw in docker ps but no derivable IP (the loader's own gate fails): markers skip, never a heal-loop" \
+                                                            "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-noip"
+row "gw renumbered after the bake (ruleset scoped .2, gw now .9 — the stale-IP blind spot): heal" \
+                                                            "present|present|present|0|0|false|false|true|absent|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-scoped gw-stale-ip"
+row "gw running but the GW-chain read keeps failing: gw_member_scoped is unreadable, never absent" \
+                                                            "present|present|present|0|0|false|false|true|absent|unreadable" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-running gw-unscoped gw-busy"
+row "gw running but the SOLEUR-EGRESS read keeps failing: gw_accept is unreadable, never absent" \
+                                                            "present|unreadable|unreadable|0|1|true|true|true|unreadable|absent" "$JUMP_PRESENT" "$CHAIN_FULL"   0 9 0 1 "gw-running gw-unscoped"
 row "a jump to SOLEUR-EGRESS-OLD (and a comment naming SOLEUR-EGRESS) is not our jump" \
                                                             "absent|present|present|0|0|false|false|true|skip|skip"   "$JUMP_NEAR"    "$CHAIN_FULL"   0 0 0 0
 row "nft fails persistently (rc 1, netlink busy): unreadable, never absent" \
@@ -655,16 +675,29 @@ mut_probe "the jump needle is a bare prefix (SOLEUR-EGRESS-OLD counts as ours)" 
 mut_probe "a lost default-drop LOG rule no longer heals" \
   ' || "$ENF_LOG" != present' '' \
   "present|present|absent|0|0|false|false|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_NOLOG" 0 0 0 0
-# #9534 scope-check mutants: the gate, the needle, and each marker's heal edge.
-mut_probe "the scope check is no longer gated on the gw running (a gw-down host heal-loops)" \
-  '  if grep -qx soleur-egress-gw < <(docker ps' '  if true || grep -qx soleur-egress-gw < <(docker ps' \
-  "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-unscoped"
+# #9534 scope-check mutants: both gate arms, the live-IP binding, the
+# unreadable contract, the gw-read status capture, and each marker's heal edge.
+mut_probe "the inspect-IP arm is dropped (a name-only gate heal-loops an IP-less gateway)" \
+  '[[ "$enfgw_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]' 'true' \
+  "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-noip"
+mut_probe "the running-name arm is dropped (a gw-down host heal-loops)" \
+  '&& grep -qx soleur-egress-gw' '&& true' \
+  "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-unscoped gw-ip-only"
 mut_probe "the scope markers default to absent instead of skip (a gw-down host heal-loops)" \
   'ENF_GWACCEPT=skip; ENF_GWMEMBER=skip' 'ENF_GWACCEPT=absent; ENF_GWMEMBER=absent' \
   "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-unscoped"
-mut_probe "the member-scope needle always matches (an unscoped member drop reads healthy)" \
-  "== *'saddr != '*" "== *" \
-  "present|present|present|0|0|false|false|true|present|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-running gw-unscoped"
+mut_probe "the member-scope needle drops the live-IP binding (a stale-IP bake reads healthy)" \
+  '"saddr != $enfgw_ip "' '"saddr != "' \
+  "present|present|present|0|0|false|false|true|absent|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-scoped gw-stale-ip"
+mut_probe "the gw-accept needle drops the live-IP binding (a stale-IP accept reads healthy)" \
+  '"ip daddr $enfgw_ip tcp dport 8443 accept"' '"ip daddr "' \
+  "present|present|present|0|0|false|false|true|absent|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-scoped gw-stale-ip"
+mut_probe "the scope markers default to absent instead of unreadable (a failed read reads as poison)" \
+  'ENF_GWACCEPT=unreadable; ENF_GWMEMBER=unreadable' 'ENF_GWACCEPT=absent; ENF_GWMEMBER=absent' \
+  "present|present|present|0|0|false|false|true|absent|unreadable" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-running gw-unscoped gw-busy"
+mut_probe "the gw read's status is discarded (a failed gw-chain read reads as absent, not unreadable)" \
+  '|| gw_rc=$?' '|| true' \
+  "present|present|present|0|0|false|false|true|absent|unreadable" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-running gw-unscoped gw-busy"
 mut_probe "the gw-accept marker is dropped from the heal condition (a missing accept never heals)" \
   ' || "$ENF_GWACCEPT" == absent' '' \
   "present|present|present|0|0|false|false|true|absent|present" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-running gw-scoped"
